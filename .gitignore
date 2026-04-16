@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+relay/node_modules/
+
+# Build output
+dist/
+out/
+build/
+*.dmg
+*.blockmap
+*.zip
+
+# Electron builder cache
+.cache/
+mac-arm64/
+mac/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Temp
+tmp/
+*.tmp
+app.asar.bak
+*.bak
+*.md

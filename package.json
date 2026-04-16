@@ -1,0 +1,133 @@
+{
+  "name": "fauna",
+  "version": "1.0.0",
+  "description": "Fauna — AI desktop assistant",
+  "author": {
+    "name": "Solomon Abey",
+    "email": "solomonoabey@gmail.com",
+    "url": "https://github.com/howmon"
+  },
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --inspect",
+    "build": "electron-builder --mac --dir",
+    "dist": "electron-builder --mac",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "dist:all": "electron-builder --mac --win"
+  },
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "express": "^4.19.2",
+    "multer": "^2.1.1",
+    "openai": "^4.67.0",
+    "playwright-core": "^1.58.2",
+    "turndown": "^7.2.2",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "electron": "^41.0.3",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "com.fauna.app",
+    "productName": "Fauna",
+    "copyright": "Copyright © 2026 Solomon Abey",
+    "icon": "assets/icon.icns",
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "darkModeSupport": true,
+      "minimumSystemVersion": "12.0",
+      "icon": "assets/icon.icns",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "entitlements": "assets/entitlements.mac.plist",
+      "entitlementsInherit": "assets/entitlements.mac.plist",
+      "hardenedRuntime": true
+    },
+    "win": {
+      "icon": "assets/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Fauna"
+    },
+    "dmg": {
+      "title": "Fauna",
+      "icon": "assets/icon.icns",
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 540,
+        "height": 380
+      }
+    },
+    "files": [
+      "main.js",
+      "server.js",
+      "agent-*.js",
+      "public/**",
+      "assets/**",
+      "node_modules/**",
+      "package.json"
+    ],
+    "electronVersion": "41.0.3",
+    "extraResources": [
+      {
+        "from": "assets/figma-plugin",
+        "to": "figma-plugin",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "relay/server",
+        "to": "mcp-server/server",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "relay/node_modules",
+        "to": "mcp-server/node_modules",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "relay/package.json",
+        "to": "mcp-server/package.json"
+      }
+    ]
+  }
+}

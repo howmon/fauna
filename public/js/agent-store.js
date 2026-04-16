@@ -1,0 +1,1488 @@
+// ── Agent Store — In-App Store Browser, Install, Publish ─────────────────
+// Provides the slide-out store panel, search, categories, install/uninstall,
+// publish flow, and developer account management.
+
+var storeState = {
+  open: false,
+  view: 'browse',        // 'browse' | 'detail' | 'publish' | 'account'
+  agents: [],
+  categories: [],
+  query: '',
+  category: '',
+  page: 1,
+  totalPages: 1,
+  selectedAgent: null,   // full detail object
+  loading: false,
+  publishStatus: null,   // null | 'uploading' | 'submitted' | 'error'
+  account: null,          // { email, name, verified, role } or null
+  browseTab: 'store',     // 'store' | 'myagents'
+  unreadCount: 0,         // notification badge count
+  notifications: [],      // notification list
+  notifOpen: false,        // notification panel open
+  reviewQueue: [],         // admin review queue
+  reviewStatus: 'pending',  // current review filter
+  myPublishedSlugs: []      // slugs of user's published agents (for ownership check)
+};
+
+var STORE_BASE = '/api/store'; // Proxy through our Express server
+
+// ── Store API helpers ────────────────────────────────────────────────────
+
+async function storeApi(endpoint, options) {
+  var url = STORE_BASE + endpoint;
+  var opts = Object.assign({ headers: { 'Content-Type': 'application/json' } }, options || {});
+  // Attach auth token if available
+  var token = localStorage.getItem('store-token');
+  if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+  var r = await fetch(url, opts);
+  if (!r.ok) {
+    var err = await r.json().catch(function() { return { error: 'Request failed' }; });
+    throw new Error(err.error || 'Request failed');
+  }
+  return r;
+}
+
+// ── Open / close store panel ─────────────────────────────────────────────
+
+function openAgentStore() {
+  storeState.open = true;
+  storeState.view = 'browse';
+  var panel = document.getElementById('agent-store-panel');
+  if (panel) {
+    panel.style.display = 'flex';
+    requestAnimationFrame(function() { panel.classList.add('open'); });
+  }
+  loadStoreCategories();
+  searchStoreAgents();
+  loadUnreadCount();
+}
+
+function closeAgentStore() {
+  storeState.open = false;
+  var panel = document.getElementById('agent-store-panel');
+  if (panel) {
+    panel.classList.remove('open');
+    setTimeout(function() { panel.style.display = 'none'; }, 250);
+  }
+}
+
+// ── Store panel renderer ─────────────────────────────────────────────────
+
+function renderStorePanel() {
+  var panel = document.getElementById('agent-store-panel');
+  if (!panel) return;
+
+  var isReviewer = storeState.account && ['superadmin','admin','reviewer'].indexOf(storeState.account.role) !== -1;
+
+  var headerHtml =
+    '<div class="store-header">' +
+      '<span class="store-title"><i class="ti ti-package"></i> Agent Store</span>' +
+      '<div class="store-header-actions">' +
+        '<button class="store-nav-btn' + (storeState.view === 'browse' ? ' active' : '') + '" onclick="storeNavigate(\'browse\')"><i class="ti ti-grid-dots"></i> Browse</button>' +
+        (isReviewer ? '<button class="store-nav-btn' + (storeState.view === 'review' ? ' active' : '') + '" onclick="storeNavigate(\'review\')"><i class="ti ti-shield-check"></i> Review</button>' : '') +
+        '<button class="store-nav-btn' + (storeState.view === 'publish' ? ' active' : '') + '" onclick="storeNavigate(\'publish\')"><i class="ti ti-upload"></i> Publish</button>' +
+        '<button class="store-nav-btn' + (storeState.view === 'account' ? ' active' : '') + '" onclick="storeNavigate(\'account\')"><i class="ti ti-user"></i> Account</button>' +
+        (storeState.account ? '<button class="store-notif-btn" onclick="toggleNotificationPanel()" title="Notifications"><i class="ti ti-bell"></i>' + (storeState.unreadCount > 0 ? '<span class="store-notif-badge">' + storeState.unreadCount + '</span>' : '') + '</button>' : '') +
+      '</div>' +
+      '<button class="store-close-btn" onclick="closeAgentStore()" title="Close"><i class="ti ti-x"></i></button>' +
+    '</div>';
+
+  var bodyHtml = '';
+  switch (storeState.view) {
+    case 'browse': bodyHtml = renderStoreBrowse(); break;
+    case 'detail': bodyHtml = renderStoreDetail(); break;
+    case 'review': bodyHtml = renderStoreReview(); break;
+    case 'publish': bodyHtml = renderStorePublish(); break;
+    case 'account': bodyHtml = renderStoreAccount(); break;
+  }
+
+  var notifHtml = storeState.notifOpen ? renderNotificationPanel() : '';
+
+  panel.innerHTML = headerHtml + notifHtml + '<div class="store-body">' + bodyHtml + '</div>';
+}
+
+function storeNavigate(view) {
+  if (view === 'myagents') {
+    storeState.view = 'browse';
+    storeState.browseTab = 'myagents';
+  } else {
+    storeState.view = view;
+    if (view === 'browse') storeState.browseTab = 'store';
+  }
+  storeState.notifOpen = false;
+  renderStorePanel();
+  if (view === 'browse') searchStoreAgents();
+  if (view === 'review') loadReviewQueue();
+}
+
+// ── Browse view ──────────────────────────────────────────────────────────
+
+function switchBrowseTab(tab) {
+  storeState.browseTab = tab;
+  renderStorePanel();
+  if (tab === 'store') searchStoreAgents();
+}
+
+function renderStoreBrowse() {
+  var tabBar =
+    '<div class="browse-tabs">' +
+      '<button class="browse-tab' + (storeState.browseTab === 'store' ? ' active' : '') + '" onclick="switchBrowseTab(\'store\')">' +
+        '<i class="ti ti-grid-dots"></i> Agent Store</button>' +
+      '<button class="browse-tab' + (storeState.browseTab === 'myagents' ? ' active' : '') + '" onclick="switchBrowseTab(\'myagents\')">' +
+        '<i class="ti ti-apps"></i> My Agents</button>' +
+    '</div>';
+
+  if (storeState.browseTab === 'myagents') {
+    return tabBar + renderStoreMyAgents();
+  }
+
+  var catOptions = '<option value="">All Categories</option>' +
+    storeState.categories.map(function(c) {
+      return '<option value="' + escHtml(c.slug) + '"' + (storeState.category === c.slug ? ' selected' : '') + '>' + escHtml(c.name) + '</option>';
+    }).join('');
+
+  var searchBar =
+    '<div class="store-search-bar">' +
+      '<div class="store-search-wrap">' +
+        '<i class="ti ti-search"></i>' +
+        '<input class="store-search-input" id="store-search" value="' + escHtml(storeState.query) + '" placeholder="Search agents…" oninput="storeState.query=this.value" onkeydown="if(event.key===\'Enter\')searchStoreAgents()">' +
+      '</div>' +
+      '<select class="store-cat-select" onchange="storeState.category=this.value;searchStoreAgents()">' + catOptions + '</select>' +
+    '</div>';
+
+  var agentGrid = '';
+  if (storeState.loading) {
+    agentGrid = '<div class="store-loading"><div class="builder-loading"><i class="ti ti-loader"></i> Loading agents…</div></div>';
+  } else if (!storeState.agents.length) {
+    agentGrid = '<div class="store-empty"><i class="ti ti-package-off"></i><p>No agents found</p></div>';
+  } else {
+    agentGrid = '<div class="store-grid">' +
+      storeState.agents.map(function(a) {
+        var scoreBadge = a.scanScore >= 90 ? '<i class="ti ti-circle-check" style="color:#22c55e"></i>' : a.scanScore >= 80 ? '<i class="ti ti-alert-triangle" style="color:#eab308"></i>' : '<i class="ti ti-circle-x" style="color:#ef4444"></i>';
+        var installed = isAgentInstalled(a.slug);
+        var deprecatedBadge = a.deprecated ? '<span class="store-deprecated-badge"><i class="ti ti-alert-triangle"></i> Deprecated</span>' : '';
+        var installBtn = installed ?
+          '<button class="store-card-btn installed" onclick="event.stopPropagation();uninstallStoreAgent(\'' + escHtml(a.slug) + '\')"><i class="ti ti-circle-check"></i> Installed</button>' :
+          '<button class="store-card-btn" onclick="event.stopPropagation();installStoreAgent(\'' + escHtml(a.slug) + '\')">Install</button>';
+
+        return '<div class="store-card" onclick="viewStoreAgent(\'' + escHtml(a.slug) + '\')">' +
+          '<div class="store-card-icon"><i class="ti ' + escHtml(a.icon || 'ti-robot') + '"></i></div>' +
+          '<div class="store-card-info">' +
+            '<div class="store-card-name">' + escHtml(a.displayName) + deprecatedBadge + '</div>' +
+            '<div class="store-card-author">by ' + escHtml(a.author ? a.author.name : 'Unknown') + (a.author && a.author.verified ? ' <i class="ti ti-rosette-discount-check" style="color:var(--accent)"></i>' : '') + '</div>' +
+            '<div class="store-card-meta">' +
+              '<span>' + scoreBadge + ' ' + (a.scanScore || '—') + '</span>' +
+              '<span>v' + escHtml(a.version || '1.0.0') + '</span>' +
+              '<span>' + formatDownloads(a.downloads || 0) + ' installs</span>' +
+              (a.rating > 0 ? '<span><i class="ti ti-star-filled" style="color:#eab308;font-size:12px"></i> ' + Number(a.rating).toFixed(1) + ' <span style="opacity:0.6">(' + (a.ratingCount || 0) + ')</span></span>' : '') +
+            '</div>' +
+            '<div class="store-card-desc">' + escHtml((a.description || '').substring(0, 80)) + '</div>' +
+          '</div>' +
+          '<div class="store-card-actions">' + installBtn + '</div>' +
+        '</div>';
+      }).join('') +
+    '</div>';
+  }
+
+  // Pagination
+  var pagHtml = '';
+  if (storeState.totalPages > 1) {
+    pagHtml = '<div class="store-pagination">';
+    if (storeState.page > 1) pagHtml += '<button class="store-pag-btn" onclick="storeState.page--;searchStoreAgents()"><i class="ti ti-arrow-left"></i></button>';
+    pagHtml += '<span class="store-pag-info">Page ' + storeState.page + ' of ' + storeState.totalPages + '</span>';
+    if (storeState.page < storeState.totalPages) pagHtml += '<button class="store-pag-btn" onclick="storeState.page++;searchStoreAgents()"><i class="ti ti-arrow-right"></i></button>';
+    pagHtml += '</div>';
+  }
+
+  return tabBar + searchBar + agentGrid + pagHtml;
+}
+
+function formatDownloads(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n);
+}
+
+function isAgentInstalled(slug) {
+  return installedAgents.some(function(a) { return a.name === slug; });
+}
+
+// ── Detail view ──────────────────────────────────────────────────────────
+
+function renderStoreDetail() {
+  var a = storeState.selectedAgent;
+  if (!a) return '<div class="store-loading"><div class="builder-loading"><i class="ti ti-loader"></i> Loading…</div></div>';
+
+  var scoreBadge = a.scanScore >= 90 ? '<i class="ti ti-circle-check" style="color:#22c55e"></i>' : a.scanScore >= 80 ? '<i class="ti ti-alert-triangle" style="color:#eab308"></i>' : '<i class="ti ti-circle-x" style="color:#ef4444"></i>';
+  var installed = isAgentInstalled(a.slug);
+
+  var permsHtml = '';
+  if (a.permissions) {
+    var permItems = [];
+    if (a.permissions.shell) permItems.push('<span class="store-perm"><i class="ti ti-terminal-2"></i> Shell</span>');
+    if (a.permissions.browser) permItems.push('<span class="store-perm"><i class="ti ti-world-www"></i> Browser</span>');
+    if (a.permissions.figma) permItems.push('<span class="store-perm"><i class="ti ti-vector-triangle"></i> Figma</span>');
+    if (a.permissions.fileRead && a.permissions.fileRead.length) permItems.push('<span class="store-perm"><i class="ti ti-folder"></i> Read: ' + escHtml(a.permissions.fileRead.join(', ')) + '</span>');
+    if (a.permissions.fileWrite && a.permissions.fileWrite.length) permItems.push('<span class="store-perm"><i class="ti ti-file-pencil"></i> Write: ' + escHtml(a.permissions.fileWrite.join(', ')) + '</span>');
+    if (a.permissions.network && !a.permissions.network.blockAll) permItems.push('<span class="store-perm"><i class="ti ti-world"></i> Network: ' + escHtml((a.permissions.network.allowedDomains || []).join(', ') || 'all') + '</span>');
+    if (permItems.length) permsHtml = '<div class="store-detail-section"><h4>Permissions</h4><div class="store-perms">' + permItems.join('') + '</div></div>';
+  }
+
+  var scanHtml = '';
+  if (a.scanDetails) {
+    var checks = Object.entries(a.scanDetails);
+    scanHtml = '<div class="store-detail-section"><h4>Security Scan</h4><div class="store-scan-details">' +
+      checks.map(function(entry) {
+        var icon = entry[1] === 'pass' ? '<i class="ti ti-circle-check" style="color:#22c55e"></i>' : entry[1] === 'warning' ? '<i class="ti ti-alert-triangle" style="color:#eab308"></i>' : '<i class="ti ti-circle-x" style="color:#ef4444"></i>';
+        return '<div class="store-scan-row">' + icon + ' ' + escHtml(entry[0]) + '</div>';
+      }).join('') +
+    '</div></div>';
+  }
+
+  var canEdit = storeState.selectedAgentOwnership &&
+    (storeState.selectedAgentOwnership.isOwner || storeState.selectedAgentOwnership.isAdmin);
+
+  var isSuperAdmin = storeState.account && storeState.account.role === 'superadmin';
+
+  var subAgentsHtml = '';
+  if (a.subAgents && a.subAgents.length) {
+    subAgentsHtml = '<div class="store-detail-section"><h4><i class="ti ti-git-branch"></i> Sub-Agents (' + a.subAgents.length + ')</h4>' +
+      '<div class="store-subagents-list">' +
+      a.subAgents.map(function(s) {
+        return '<div class="store-subagent-row">' +
+          '<i class="ti ' + escHtml(s.icon || 'ti-robot') + '"></i>' +
+          '<div class="store-subagent-info">' +
+            '<span class="store-subagent-name">' + escHtml(s.displayName || s.name) + '</span>' +
+            '<span class="store-subagent-desc">' + escHtml(s.description || '') + '</span>' +
+          '</div>' +
+        '</div>';
+      }).join('') +
+      '</div></div>';
+  }
+
+  var deprecationWarning = '';
+  if (a.deprecated) {
+    deprecationWarning = '<div class="store-deprecation-banner">' +
+      '<i class="ti ti-alert-triangle"></i>' +
+      '<div><strong>Deprecated</strong>' +
+        (a.deprecationReason ? '<span> — ' + escHtml(a.deprecationReason) + '</span>' : '') +
+      '</div>' +
+    '</div>';
+  }
+
+  var adminActionsHtml = '';
+  if (isSuperAdmin) {
+    adminActionsHtml = '<div class="store-admin-actions">' +
+      '<h4><i class="ti ti-shield-lock"></i> Admin Actions</h4>' +
+      '<div class="store-admin-btns">' +
+        (a.status === 'approved' ? '<button class="builder-btn secondary small" onclick="adminUnpublish(\'' + escHtml(a.slug) + '\')"><i class="ti ti-eye-off"></i> Unpublish</button>' : '') +
+        (!a.deprecated ? '<button class="builder-btn secondary small" onclick="adminDeprecate(\'' + escHtml(a.slug) + '\')"><i class="ti ti-alert-triangle"></i> Deprecate</button>' : '') +
+        '<button class="builder-btn secondary small admin-danger" onclick="adminDeleteAgent(\'' + escHtml(a.slug) + '\')"><i class="ti ti-trash"></i> Delete</button>' +
+      '</div>' +
+      '<div id="admin-action-reason"></div>' +
+    '</div>';
+  }
+
+  return '<div class="store-detail">' +
+    '<button class="store-back-btn" onclick="storeNavigate(\'browse\')"><i class="ti ti-arrow-left"></i> Back to Browse</button>' +
+    deprecationWarning +
+    '<div class="store-detail-header">' +
+      '<div class="store-detail-icon"><i class="ti ' + escHtml(a.icon || 'ti-robot') + '"></i></div>' +
+      '<div class="store-detail-info">' +
+        '<div class="store-detail-name">' + escHtml(a.displayName) + '</div>' +
+        '<div class="store-detail-author">by ' + escHtml(a.author ? a.author.name : 'Unknown') + (a.author && a.author.verified ? ' <span class="store-verified"><i class="ti ti-rosette-discount-check"></i> Verified</span>' : '') + '</div>' +
+        '<div class="store-detail-meta">' +
+          '<span>' + scoreBadge + ' ' + (a.scanScore || '—') + '/100</span>' +
+          '<span>v' + escHtml(a.version || '1.0.0') + '</span>' +
+          '<span>' + formatDownloads(a.downloads || 0) + ' installs</span>' +
+          (a.rating > 0 ? '<span><i class="ti ti-star-filled" style="color:#eab308"></i> ' + Number(a.rating).toFixed(1) + ' (' + (a.ratingCount || 0) + ' reviews)</span>' : '') +
+          '<span>' + escHtml(a.category || '') + '</span>' +
+        '</div>' +
+      '</div>' +
+      '<div class="store-detail-actions">' +
+        (canEdit ? '<button class="builder-btn secondary" onclick="editPublishedAgent(\'' + escHtml(a.slug) + '\')"><i class="ti ti-pencil"></i> Edit</button>' : '') +
+        (installed ?
+          '<button class="builder-btn secondary" onclick="uninstallStoreAgent(\'' + escHtml(a.slug) + '\')"><i class="ti ti-trash"></i> Uninstall</button>' :
+          '<button class="builder-btn primary" onclick="installStoreAgent(\'' + escHtml(a.slug) + '\')"><i class="ti ti-download"></i> Install</button>') +
+      '</div>' +
+    '</div>' +
+    '<div class="store-detail-section"><h4>Description</h4><p>' + escHtml(a.description || 'No description') + '</p></div>' +
+    permsHtml + subAgentsHtml + scanHtml +
+    (a.changelog ? '<div class="store-detail-section"><h4>Changelog</h4><p>' + escHtml(a.changelog) + '</p></div>' : '') +
+    (a.publishedAt ? '<div class="store-detail-section store-detail-footer">Published ' + new Date(a.publishedAt).toLocaleDateString() + '</div>' : '') +
+    adminActionsHtml +
+  '</div>';
+}
+
+// ── Publish view ─────────────────────────────────────────────────────────
+
+function renderStorePublish() {
+  if (!storeState.account) {
+    return '<div class="store-publish">' +
+      '<div class="builder-empty-state"><i class="ti ti-lock"></i><p>Sign in to your developer account to publish agents.</p></div>' +
+      '<button class="builder-btn primary" onclick="storeNavigate(\'account\')"><i class="ti ti-user"></i> Sign In / Register</button>' +
+    '</div>';
+  }
+
+  if (storeState.publishStatus === 'submitted') {
+    var vMsg = storeState.publishedVersion ? ' (v' + escHtml(storeState.publishedVersion) + ')' : '';
+    return '<div class="store-publish">' +
+      '<div class="import-result"><i class="ti ti-circle-check" style="font-size:36px;color:#4ade80"></i>' +
+      '<div class="import-result-msg">Agent' + vMsg + ' submitted for review!<br>You\'ll be notified when it\'s approved.</div>' +
+      '<button class="builder-btn primary" onclick="storeState.publishStatus=null;storeState.publishedVersion=null;renderStorePanel()">OK</button></div>' +
+    '</div>';
+  }
+
+  // List installed agents available for publishing (only user-created, not store-installed)
+  var publishable = installedAgents.filter(function(a) {
+    return !(a._meta && a._meta.installedFromStore);
+  });
+
+  var agentList = publishable.length ?
+    publishable.map(function(a) {
+      var scanBadge = getScanBadgeHtml(a.name) || '<span class="scan-badge"><i class="ti ti-circle" style="color:#9ca3af"></i></span>';
+      return '<div class="store-publish-item">' +
+        '<i class="ti ' + escHtml(a.icon || 'ti-robot') + '"></i>' +
+        '<div class="store-publish-info">' +
+          '<span class="store-publish-name">' + escHtml(a.displayName || a.name) + '</span>' +
+          '<span class="store-publish-desc">' + escHtml(a.description || '') + '</span>' +
+        '</div>' +
+        scanBadge +        '<button class="builder-btn secondary small" onclick="closeAgentStore();openAgentBuilder(\'' + escHtml(a.name) + '\')" title="Edit agent"><i class="ti ti-pencil"></i></button>' +        '<button class="builder-btn primary small" onclick="publishAgent(\'' + escHtml(a.name) + '\')"><i class="ti ti-upload"></i> Publish</button>' +
+      '</div>';
+    }).join('') :
+    '<div class="builder-empty-state"><i class="ti ti-package"></i><p>No agents to publish. Create one first!</p></div>';
+
+  return '<div class="store-publish">' +
+    '<p class="builder-hint-block">Select an agent to publish to the store. It will be scanned and submitted for admin review. Minimum security score: 80/100.</p>' +
+    '<div class="store-publish-list">' + agentList + '</div>' +
+  '</div>';
+}
+
+// ── Account view ─────────────────────────────────────────────────────────
+
+function renderStoreAccount() {
+  if (storeState.account) {
+    return '<div class="store-account">' +
+      '<div class="store-account-card">' +
+        '<i class="ti ti-user-circle" style="font-size:36px;color:var(--accent)"></i>' +
+        '<div class="store-account-info">' +
+          '<div class="store-account-name">' + escHtml(storeState.account.name) + '</div>' +
+          '<div class="store-account-email">' + escHtml(storeState.account.email) + '</div>' +
+          (storeState.account.verified ? '<span class="store-verified"><i class="ti ti-rosette-discount-check"></i> Verified Developer</span>' : '<span class="store-unverified">Pending verification</span>') +
+        '</div>' +
+      '</div>' +
+      '<button class="builder-btn secondary" onclick="storeLogout()"><i class="ti ti-logout"></i> Sign Out</button>' +
+    '</div>';
+  }
+
+  return '<div class="store-account">' +
+    '<div class="store-account-tabs">' +
+      '<button class="store-tab-btn active" id="store-login-tab" onclick="storeShowTab(\'login\')">Sign In</button>' +
+      '<button class="store-tab-btn" id="store-register-tab" onclick="storeShowTab(\'register\')">Register</button>' +
+    '</div>' +
+    '<div id="store-login-form" class="store-auth-form">' +
+      '<input class="builder-input" id="store-login-email" type="email" placeholder="Email">' +
+      '<input class="builder-input" id="store-login-password" type="password" placeholder="Password">' +
+      '<button class="builder-btn primary" onclick="storeLogin()"><i class="ti ti-login"></i> Sign In</button>' +
+      '<div id="store-login-error" class="store-auth-error"></div>' +
+    '</div>' +
+    '<div id="store-register-form" class="store-auth-form" style="display:none">' +
+      '<input class="builder-input" id="store-register-name" placeholder="Developer Name">' +
+      '<input class="builder-input" id="store-register-email" type="email" placeholder="Email">' +
+      '<input class="builder-input" id="store-register-password" type="password" placeholder="Password">' +
+      '<button class="builder-btn primary" onclick="storeRegister()"><i class="ti ti-user-plus"></i> Create Account</button>' +
+      '<div id="store-register-error" class="store-auth-error"></div>' +
+    '</div>' +
+  '</div>';
+}
+
+function storeShowTab(tab) {
+  document.getElementById('store-login-form').style.display = tab === 'login' ? 'flex' : 'none';
+  document.getElementById('store-register-form').style.display = tab === 'register' ? 'flex' : 'none';
+  document.getElementById('store-login-tab').classList.toggle('active', tab === 'login');
+  document.getElementById('store-register-tab').classList.toggle('active', tab === 'register');
+}
+
+// ── Store API calls ──────────────────────────────────────────────────────
+
+async function loadStoreCategories() {
+  try {
+    var r = await storeApi('/categories');
+    var d = await r.json();
+    storeState.categories = d.categories || d || [];
+  } catch (_) {
+    storeState.categories = [
+      { slug: 'productivity', name: 'Productivity', icon: 'ti-stars' },
+      { slug: 'development', name: 'Development', icon: 'ti-code' },
+      { slug: 'design', name: 'Design', icon: 'ti-palette' },
+      { slug: 'research', name: 'Research', icon: 'ti-search' },
+      { slug: 'writing', name: 'Writing', icon: 'ti-pencil' },
+      { slug: 'data', name: 'Data & Analysis', icon: 'ti-chart-bar' },
+      { slug: 'other', name: 'Other', icon: 'ti-dots' }
+    ];
+  }
+}
+
+async function searchStoreAgents() {
+  storeState.loading = true;
+  renderStorePanel();
+
+  try {
+    var params = '?page=' + storeState.page;
+    if (storeState.query) params += '&q=' + encodeURIComponent(storeState.query);
+    if (storeState.category) params += '&category=' + encodeURIComponent(storeState.category);
+
+    var r = await storeApi('/agents' + params);
+    var d = await r.json();
+
+    storeState.agents = d.agents || d.data || [];
+    storeState.totalPages = d.totalPages || d.last_page || 1;
+  } catch (_) {
+    storeState.agents = [];
+    storeState.totalPages = 1;
+  }
+
+  storeState.loading = false;
+  renderStorePanel();
+}
+
+async function viewStoreAgent(slug) {
+  storeState.view = 'detail';
+  storeState.selectedAgent = null;
+  storeState.selectedAgentOwnership = null;
+  renderStorePanel();
+
+  try {
+    var r = await storeApi('/agents/' + encodeURIComponent(slug));
+    storeState.selectedAgent = await r.json();
+  } catch (e) {
+    storeState.selectedAgent = { slug: slug, displayName: slug, description: 'Failed to load: ' + e.message, scanScore: 0 };
+  }
+  renderStorePanel();
+
+  // Check ownership in background if signed in
+  if (storeState.account && localStorage.getItem('store-token')) {
+    try {
+      var ow = await storeApi('/agents/' + encodeURIComponent(slug) + '/ownership');
+      storeState.selectedAgentOwnership = await ow.json();
+      renderStorePanel(); // Re-render with edit button if owner/admin
+    } catch (_) {}
+  }
+}
+
+async function installStoreAgent(slug) {
+  showToast('Installing ' + slug + '…');
+  try {
+    // Download zip directly through proxy
+    var zipR = await fetch('/api/store/agents/' + encodeURIComponent(slug) + '/zip');
+    if (!zipR.ok) {
+      var errText = await zipR.text();
+      showToast('Download failed: ' + (errText || zipR.status)); return;
+    }
+    var buf = await zipR.arrayBuffer();
+
+    // Import the zip (force overwrite if already installed locally)
+    var alreadyInstalled = isAgentInstalled(slug);
+    var importUrl = '/api/agents/import' + (alreadyInstalled ? '?force=1' : '');
+    var importR = await fetch(importUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/zip' },
+      body: buf
+    });
+    var result = await importR.json();
+    if (result.error) {
+      // 409 conflict: agent with same name already exists locally — offer to overwrite
+      if (importR.status === 409 || (result.error && result.error.includes('already exists'))) {
+        if (confirm(result.error + '\n\nReinstall and overwrite the existing agent?')) {
+          var forceR = await fetch('/api/agents/import?force=1', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/zip' },
+            body: buf
+          });
+          var forceResult = await forceR.json();
+          if (forceResult.error) { showToast('Import failed: ' + forceResult.error); return; }
+          result = forceResult;
+        } else {
+          return;
+        }
+      } else {
+        showToast('Import failed: ' + result.error); return;
+      }
+    }
+
+    var authorEmail = storeState.account ? storeState.account.email : '';
+
+    // Save meta
+    await fetch('/api/agents/' + encodeURIComponent(result.name) + '/meta', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        storeSlug: slug,
+        installedFromStore: true,
+        installedAt: new Date().toISOString(),
+        storeVersion: '1.0',
+        installedBy: authorEmail
+      })
+    });
+
+    await loadInstalledAgents();
+    renderAgentList();
+    renderStorePanel();
+    showToast(slug + ' installed successfully!');
+  } catch (e) {
+    showToast('Install failed: ' + e.message);
+  }
+}
+
+async function uninstallStoreAgent(slug) {
+  if (!confirm('Uninstall "' + slug + '"?')) return;
+  try {
+    var r = await fetch('/api/agents/' + encodeURIComponent(slug), { method: 'DELETE' });
+    var d = await r.json();
+    if (d.error) { showToast('Uninstall failed: ' + d.error); return; }
+
+    // Deactivate if active
+    if (activeAgent && activeAgent.name === slug) {
+      deactivateAgent(null);
+    }
+
+    await loadInstalledAgents();
+    renderAgentList();
+    renderStorePanel();
+    showToast(slug + ' uninstalled');
+  } catch (e) {
+    showToast('Uninstall failed: ' + e.message);
+  }
+}
+
+// ── Publish flow ─────────────────────────────────────────────────────────
+
+async function publishAgent(agentName) {
+  if (!storeState.account) {
+    showToast('Sign in to publish');
+    storeNavigate('account');
+    return;
+  }
+
+  // First scan
+  showToast('Scanning ' + agentName + ' before publish…');
+  var scanR = await fetch('/api/agents/' + encodeURIComponent(agentName) + '/scan', { method: 'POST' });
+  var scanReport = await scanR.json();
+
+  if (scanReport.score < 80) {
+    showToast('Security score ' + scanReport.score + '/100 — minimum 80 required to publish');
+    showScanReport(scanReport);
+    return;
+  }
+
+  // Export zip
+  storeState.publishStatus = 'uploading';
+  renderStorePanel();
+
+  try {
+    // Get agent data
+    var ar = await fetch('/api/agents/' + encodeURIComponent(agentName));
+    var agentData = await ar.json();
+
+    var exportR = await fetch('/api/agent-builder/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(agentData)
+    });
+
+    if (!exportR.ok) throw new Error('Export failed');
+    var zipBlob = await exportR.blob();
+
+    // Upload to store
+    var form = new FormData();
+    form.append('agent', zipBlob, agentName + '.zip');
+    form.append('scanScore', String(scanReport.score));
+
+    var uploadR = await storeApi('/publish', {
+      method: 'POST',
+      headers: {}, // Let browser set multipart boundary
+      body: form
+    });
+
+    var result = await uploadR.json();
+    if (result.error) throw new Error(result.error);
+
+    storeState.publishStatus = 'submitted';
+    storeState.publishedVersion = result.version || null;
+    renderStorePanel();
+  } catch (e) {
+    storeState.publishStatus = 'error';
+    renderStorePanel();
+    showToast('Publish failed: ' + e.message);
+  }
+}
+
+// ── Edit Published Agent (owner / admin inline form) ─────────────────────
+
+function editPublishedAgent(slug) {
+  var a = storeState.selectedAgent;
+  if (!a) return;
+
+  var panel = document.querySelector('.store-detail');
+  if (!panel) return;
+
+  // Replace description section with editable form
+  var editHtml =
+    '<div class="store-edit-form">' +
+      '<h4>Edit Published Agent</h4>' +
+      '<label class="builder-label">Display Name</label>' +
+      '<input class="builder-input" id="edit-pub-name" value="' + escHtml(a.displayName || '') + '">' +
+      '<label class="builder-label">Description</label>' +
+      '<textarea class="builder-textarea" id="edit-pub-desc" rows="3">' + escHtml(a.description || '') + '</textarea>' +
+      '<label class="builder-label">Icon (ti-* class)</label>' +
+      '<input class="builder-input" id="edit-pub-icon" value="' + escHtml(a.icon || 'ti-robot') + '">' +
+      '<div class="store-edit-actions">' +
+        '<button class="builder-btn primary" onclick="savePublishedAgent(\'' + escHtml(slug) + '\')"><i class="ti ti-check"></i> Save</button>' +
+        '<button class="builder-btn secondary" onclick="viewStoreAgent(\'' + escHtml(slug) + '\')"><i class="ti ti-x"></i> Cancel</button>' +
+      '</div>' +
+    '</div>';
+
+  // Insert below the header
+  var existingForm = panel.querySelector('.store-edit-form');
+  if (existingForm) { existingForm.remove(); }
+  var header = panel.querySelector('.store-detail-header');
+  if (header) { header.insertAdjacentHTML('afterend', editHtml); }
+}
+
+async function savePublishedAgent(slug) {
+  var nameEl = document.getElementById('edit-pub-name');
+  var descEl = document.getElementById('edit-pub-desc');
+  var iconEl = document.getElementById('edit-pub-icon');
+  if (!nameEl || !descEl) return;
+
+  try {
+    var r = await storeApi('/agents/' + encodeURIComponent(slug), {
+      method: 'PUT',
+      body: JSON.stringify({
+        display_name: nameEl.value,
+        description: descEl.value,
+        icon: iconEl ? iconEl.value : undefined
+      })
+    });
+    var result = await r.json();
+    if (result.error) throw new Error(result.error);
+
+    showToast('Agent updated successfully');
+    // Refresh detail view
+    viewStoreAgent(slug);
+  } catch (e) {
+    showToast('Update failed: ' + e.message);
+  }
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────
+
+async function storeLogin() {
+  var email = document.getElementById('store-login-email');
+  var password = document.getElementById('store-login-password');
+  var errorEl = document.getElementById('store-login-error');
+  if (!email || !password) return;
+  if (!email.value || !password.value) { if (errorEl) errorEl.textContent = 'Email and password required'; return; }
+
+  try {
+    var r = await storeApi('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: email.value, password: password.value })
+    });
+    var d = await r.json();
+    if (d.token) localStorage.setItem('store-token', d.token);
+    storeState.account = { name: d.name || d.user?.name || email.value, email: email.value, verified: d.verified || d.user?.verified || false, role: d.role || d.user?.role || 'developer' };
+    localStorage.setItem('store-account', JSON.stringify(storeState.account));
+    updateTopbarAccount();
+    renderStorePanel();
+  } catch (e) {
+    if (errorEl) errorEl.textContent = e.message;
+  }
+}
+
+async function storeRegister() {
+  var name = document.getElementById('store-register-name');
+  var email = document.getElementById('store-register-email');
+  var password = document.getElementById('store-register-password');
+  var errorEl = document.getElementById('store-register-error');
+  if (!name || !email || !password) return;
+  if (!name.value || !email.value || !password.value) { if (errorEl) errorEl.textContent = 'All fields required'; return; }
+
+  try {
+    var r = await storeApi('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ name: name.value, email: email.value, password: password.value })
+    });
+    var d = await r.json();
+    if (d.token) localStorage.setItem('store-token', d.token);
+    storeState.account = { name: name.value, email: email.value, verified: false, role: 'developer' };
+    localStorage.setItem('store-account', JSON.stringify(storeState.account));
+    updateTopbarAccount();
+    renderStorePanel();
+    showToast('Account created! Check your email for verification.');
+  } catch (e) {
+    if (errorEl) errorEl.textContent = e.message;
+  }
+}
+
+function storeLogout() {
+  localStorage.removeItem('store-token');
+  localStorage.removeItem('store-account');
+  storeState.account = null;
+  updateTopbarAccount();
+  renderStorePanel();
+}
+
+// ── My Agents view (analytics + installed + published agents) ────────────
+
+function renderStoreMyAgents() {
+  var agents = getAllAgents();
+  var data = typeof getAnalytics === 'function' ? getAnalytics() : { totalInvocations: 0, agents: {}, sessions: [] };
+  var agentStats = data.agents || {};
+  var analyticsOn = typeof analyticsEnabled !== 'undefined' ? analyticsEnabled : false;
+
+  var html = '<div class="store-myagents">';
+
+  // Toggle row
+  html += '<div class="myagents-toggle-row">' +
+    '<label class="builder-toggle"><input type="checkbox"' + (analyticsOn ? ' checked' : '') + ' onchange="toggleAnalytics(this.checked)"><span class="builder-toggle-slider"></span></label>' +
+    '<span>Usage analytics</span>' +
+  '</div>';
+
+  // Compact stats row
+  html += '<div class="myagents-stats-row">' +
+    '<div class="myagents-stat"><span class="myagents-stat-num">' + data.totalInvocations + '</span><span class="myagents-stat-lbl">Calls</span></div>' +
+    '<div class="myagents-stat"><span class="myagents-stat-num">' + Object.keys(agentStats).length + '</span><span class="myagents-stat-lbl">Used</span></div>' +
+    '<div class="myagents-stat"><span class="myagents-stat-num">' + (data.sessions || []).length + '</span><span class="myagents-stat-lbl">Sessions</span></div>' +
+  '</div>';
+
+  // Split agents into local (user-created) vs store-installed
+  var localAgents = agents.filter(function(a) { return !(a._meta && a._meta.installedFromStore); });
+  var storeAgents = agents.filter(function(a) { return a._meta && a._meta.installedFromStore; });
+
+  // ── Local agents section ──
+  html += '<div class="myagents-section-title"><i class="ti ti-device-laptop"></i> Local (' + localAgents.length + ')</div>';
+
+  if (!localAgents.length) {
+    html += '<div class="store-empty" style="padding:16px 0"><i class="ti ti-code-plus"></i><p>No local agents yet — build one in the Agent Builder</p></div>';
+  } else {
+    html += '<div class="myagents-list">';
+    for (var li = 0; li < localAgents.length; li++) {
+      var la = localAgents[li];
+      var lst = agentStats[la.name] || { invocations: 0, totalDuration: 0 };
+      var lavg = lst.invocations > 0 ? (lst.totalDuration / lst.invocations / 1000).toFixed(1) : '—';
+      var llast = lst.lastUsed ? new Date(lst.lastUsed).toLocaleDateString() : '—';
+      var liconHtml = typeof agentIconHtml === 'function' ? agentIconHtml(la) : '<i class="ti ' + (la.icon || 'ti-robot') + '"></i>';
+      var isPublished = storeState.myPublishedSlugs.indexOf(la.name) !== -1;
+
+      html += '<div class="myagent-row">' +
+        '<div class="myagent-icon">' + liconHtml + '</div>' +
+        '<div class="myagent-info">' +
+          '<div class="myagent-name">' + escHtml(la.displayName) +
+            (isPublished
+              ? '<span class="myagent-badge published"><i class="ti ti-world"></i> Published</span>'
+              : '<span class="myagent-badge local"><i class="ti ti-device-laptop"></i> Local</span>') +
+          '</div>' +
+          '<div class="myagent-desc">' + escHtml((la.description || '').substring(0, 60)) + '</div>' +
+        '</div>' +
+        '<div class="myagent-metrics">' +
+          '<div class="myagent-metric"><span class="myagent-metric-num">' + lst.invocations + '</span><span class="myagent-metric-lbl">calls</span></div>' +
+          '<div class="myagent-metric"><span class="myagent-metric-num">' + lavg + 's</span><span class="myagent-metric-lbl">avg</span></div>' +
+          '<div class="myagent-metric"><span class="myagent-metric-num">' + llast + '</span><span class="myagent-metric-lbl">last</span></div>' +
+        '</div>' +
+        '<div class="myagent-actions">' +
+          '<button class="builder-btn secondary small" onclick="closeAgentStore();openAgentBuilder(\'' + escHtml(la.name) + '\')" title="Edit agent"><i class="ti ti-pencil"></i></button>' +
+          (!isPublished && storeState.account ? '<button class="builder-btn primary small" onclick="publishAgent(\'' + escHtml(la.name) + '\')" title="Publish to store"><i class="ti ti-upload"></i></button>' : '') +
+        '</div>' +
+      '</div>';
+    }
+    html += '</div>';
+  }
+
+  // ── Store-installed agents section ──
+  if (storeAgents.length) {
+    html += '<div class="myagents-section-title"><i class="ti ti-download"></i> From Store (' + storeAgents.length + ')</div>';
+    html += '<div class="myagents-list">';
+    for (var si = 0; si < storeAgents.length; si++) {
+      var sa = storeAgents[si];
+      var sst = agentStats[sa.name] || { invocations: 0, totalDuration: 0 };
+      var savg = sst.invocations > 0 ? (sst.totalDuration / sst.invocations / 1000).toFixed(1) : '—';
+      var slast = sst.lastUsed ? new Date(sst.lastUsed).toLocaleDateString() : '—';
+      var siconHtml = typeof agentIconHtml === 'function' ? agentIconHtml(sa) : '<i class="ti ' + (sa.icon || 'ti-robot') + '"></i>';
+      var isMine = (storeState.account && sa._meta && sa._meta.installedBy === storeState.account.email)
+        || storeState.myPublishedSlugs.indexOf(sa.name) !== -1;
+
+      html += '<div class="myagent-row">' +
+        '<div class="myagent-icon">' + siconHtml + '</div>' +
+        '<div class="myagent-info">' +
+          '<div class="myagent-name">' + escHtml(sa.displayName) +
+            '<span class="myagent-badge store"><i class="ti ti-building-store"></i> Store</span>' +
+          '</div>' +
+          '<div class="myagent-desc">' + escHtml((sa.description || '').substring(0, 60)) + '</div>' +
+        '</div>' +
+        '<div class="myagent-metrics">' +
+          '<div class="myagent-metric"><span class="myagent-metric-num">' + sst.invocations + '</span><span class="myagent-metric-lbl">calls</span></div>' +
+          '<div class="myagent-metric"><span class="myagent-metric-num">' + savg + 's</span><span class="myagent-metric-lbl">avg</span></div>' +
+          '<div class="myagent-metric"><span class="myagent-metric-num">' + slast + '</span><span class="myagent-metric-lbl">last</span></div>' +
+        '</div>' +
+        '<div class="myagent-actions">' +
+          (isMine ? '<button class="builder-btn secondary small" onclick="closeAgentStore();openAgentBuilder(\'' + escHtml(sa.name) + '\')" title="Edit agent"><i class="ti ti-pencil"></i></button>' : '') +
+        '</div>' +
+      '</div>';
+    }
+    html += '</div>';
+  }
+
+  // Published agents section (loaded async)
+  html += '<div id="myagents-published-section"></div>';
+
+  // Footer
+  html += '<div class="myagents-footer">' +
+    '<button class="builder-btn secondary" onclick="clearAnalytics();switchBrowseTab(\'myagents\')"><i class="ti ti-trash"></i> Clear Analytics</button>' +
+  '</div>';
+
+  html += '</div>';
+
+  // Fetch published agents in background
+  if (storeState.account && localStorage.getItem('store-token')) {
+    loadMyPublishedAgents();
+  }
+
+  return html;
+}
+
+async function loadMyPublishedAgents() {
+  try {
+    var r = await storeApi('/dashboard/agents');
+    var data = await r.json();
+    var published = data.agents || [];
+    storeState.myPublishedSlugs = published.map(function(pa) { return pa.slug; });
+    if (!published.length) return;
+
+    // Split into installed vs not-installed
+    var notInstalled = published.filter(function(pa) { return !isAgentInstalled(pa.slug); });
+    var installedPublished = published.filter(function(pa) { return isAgentInstalled(pa.slug); });
+
+    var container = document.getElementById('myagents-published-section');
+    if (!container) return;
+
+    var html = '';
+
+    // Show published + installed (with store stats)
+    if (installedPublished.length) {
+      html += '<div class="myagents-section-title">Published &amp; Installed (' + installedPublished.length + ')</div>';
+      html += '<div class="myagents-list">';
+      for (var i = 0; i < installedPublished.length; i++) {
+        html += renderPublishedAgentRow(installedPublished[i], true);
+      }
+      html += '</div>';
+    }
+
+    // Show published but not installed
+    if (notInstalled.length) {
+      html += '<div class="myagents-section-title">Published — Not Installed (' + notInstalled.length + ')</div>';
+      html += '<div class="myagents-list">';
+      for (var j = 0; j < notInstalled.length; j++) {
+        html += renderPublishedAgentRow(notInstalled[j], false);
+      }
+      html += '</div>';
+    }
+
+    container.innerHTML = html;
+
+    // Update badges on local agent rows now that myPublishedSlugs is populated
+    document.querySelectorAll('.myagent-row:not(.myagent-published)').forEach(function(row) {
+      var nameEl = row.querySelector('.myagent-name');
+      if (!nameEl) return;
+      var badge = nameEl.querySelector('.myagent-badge.local');
+      if (!badge) return; // only update local badges
+      var agents = getAllAgents();
+      var agent = agents.find(function(a) { return a.displayName === nameEl.textContent.replace(/Local|Published/g, '').trim(); });
+      if (agent && storeState.myPublishedSlugs.indexOf(agent.name) !== -1) {
+        badge.className = 'myagent-badge published';
+        badge.innerHTML = '<i class="ti ti-world"></i> Published';
+        // Remove publish button if present
+        var pubBtn = row.querySelector('.myagent-actions .builder-btn.primary');
+        if (pubBtn) pubBtn.remove();
+      }
+    });
+  } catch (_) {
+    // Silently ignore — user might not be authenticated or backend is down
+  }
+}
+
+function renderPublishedAgentRow(pa, installed) {
+  var statusClass = pa.status === 'approved' ? 'approved' : pa.status === 'pending' ? 'pending' : 'rejected';
+  var statusLabel = pa.status === 'approved' ? 'Live' : pa.status === 'pending' ? 'In Review' : pa.status === 'rejected' ? 'Rejected' : pa.status;
+  var statusIcon = pa.status === 'approved' ? 'ti-circle-check' : pa.status === 'pending' ? 'ti-clock' : 'ti-circle-x';
+
+  return '<div class="myagent-row myagent-published">' +
+    '<div class="myagent-icon"><i class="ti ' + escHtml(pa.icon || 'ti-robot') + '"></i></div>' +
+    '<div class="myagent-info">' +
+      '<div class="myagent-name">' + escHtml(pa.displayName) + '</div>' +
+      '<div class="myagent-pub-meta">' +
+        '<span class="myagent-status ' + statusClass + '"><i class="ti ' + statusIcon + '"></i> ' + statusLabel + '</span>' +
+        '<span class="myagent-pub-stat"><i class="ti ti-download"></i> ' + (pa.downloads || 0) + '</span>' +
+        (pa.rating > 0 ? '<span class="myagent-pub-stat"><i class="ti ti-star-filled" style="color:#eab308"></i> ' + Number(pa.rating).toFixed(1) + '</span>' : '') +
+        '<span class="myagent-pub-stat">v' + escHtml(pa.currentVersion || '1.0') + '</span>' +
+      '</div>' +
+      (pa.status === 'rejected' && pa.rejectionReason ? '<div class="myagent-rejection"><i class="ti ti-alert-triangle"></i> ' + escHtml(pa.rejectionReason) + '</div>' : '') +
+    '</div>' +
+    '<div class="myagent-actions">' +
+      (installed ? '<button class="builder-btn secondary small" onclick="closeAgentStore();openAgentBuilder(\'' + escHtml(pa.slug) + '\')" title="Edit agent"><i class="ti ti-pencil"></i></button>' : '') +
+      '<button class="builder-btn secondary small" onclick="viewStoreAgent(\'' + escHtml(pa.slug) + '\')" title="View in store"><i class="ti ti-eye"></i></button>' +
+      (!installed ? '<button class="builder-btn primary small" onclick="installStoreAgent(\'' + escHtml(pa.slug) + '\')" title="Install locally"><i class="ti ti-download"></i></button>' : '') +
+    '</div>' +
+  '</div>';
+}
+
+// ── Review queue (reviewer/admin) ─────────────────────────────────────────
+
+function renderStoreReview() {
+  var isSuperAdmin = storeState.account && storeState.account.role === 'superadmin';
+  var html = '<div class="store-review">';
+  html += '<div class="review-filters">' +
+    '<button class="builder-btn small' + (storeState.reviewStatus === 'pending' ? ' primary' : ' secondary') + '" onclick="filterReviewQueue(\'pending\')">Pending</button>' +
+    '<button class="builder-btn small' + (storeState.reviewStatus === 'in_review' ? ' primary' : ' secondary') + '" onclick="filterReviewQueue(\'in_review\')">In Review</button>' +
+    '<button class="builder-btn small' + (storeState.reviewStatus === 'needs_changes' ? ' primary' : ' secondary') + '" onclick="filterReviewQueue(\'needs_changes\')">Needs Changes</button>' +
+    '<button class="builder-btn small' + (storeState.reviewStatus === 'approved' ? ' primary' : ' secondary') + '" onclick="filterReviewQueue(\'approved\')">Approved</button>' +
+    '<button class="builder-btn small' + (storeState.reviewStatus === 'rejected' ? ' primary' : ' secondary') + '" onclick="filterReviewQueue(\'rejected\')">Rejected</button>' +
+    (isSuperAdmin ? '<button class="builder-btn small' + (storeState.reviewStatus === 'unpublished' ? ' primary' : ' secondary') + '" onclick="filterReviewQueue(\'unpublished\')">Unpublished</button>' : '') +
+    (isSuperAdmin ? '<button class="builder-btn small' + (storeState.reviewStatus === 'suspended' ? ' primary' : ' secondary') + '" onclick="filterReviewQueue(\'suspended\')">Suspended</button>' : '') +
+  '</div>';
+
+  if (storeState.loading) {
+    html += '<div class="store-loading"><div class="loading-spinner"></div></div>';
+  } else if (storeState.reviewQueue.length === 0) {
+    html += '<div class="store-empty"><i class="ti ti-inbox-off"></i><div>No agents with this status</div></div>';
+  } else {
+    html += '<div class="review-list">';
+    storeState.reviewQueue.forEach(function(agent) {
+      html += renderReviewCard(agent);
+    });
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function renderReviewCard(agent) {
+  var user = agent.user || {};
+  var ver = agent.latest_version || agent.latestVersion || {};
+  var submitted = agent.created_at ? new Date(agent.created_at).toLocaleDateString() : '';
+  return '<div class="review-card" data-agent-id="' + agent.id + '">' +
+    '<div class="review-card-top">' +
+      '<div class="review-card-icon"><i class="ti ti-robot"></i></div>' +
+      '<div class="review-card-info">' +
+        '<div class="review-card-name">' + escHtml(agent.name || agent.slug) + '</div>' +
+        '<div class="review-card-meta">by ' + escHtml(user.name || 'Unknown') + ' &middot; v' + escHtml(ver.version || '1.0.0') + ' &middot; ' + submitted + '</div>' +
+        '<div class="review-card-desc">' + escHtml(agent.short_description || agent.description || '') + '</div>' +
+      '</div>' +
+      '<div class="myagent-status ' + (agent.status || 'pending') + '">' + escHtml(agent.status || 'pending') + '</div>' +
+    '</div>' +
+    '<div class="review-card-actions">' +
+      (agent.status !== 'approved' ? '<button class="builder-btn small" style="background:#4ade80;color:#000;border:none" onclick="reviewApprove(' + agent.id + ')"><i class="ti ti-check"></i> Approve</button>' : '') +
+      (agent.status !== 'rejected' ? '<button class="builder-btn small" style="background:#ef4444;color:#fff;border:none" onclick="reviewReject(' + agent.id + ')"><i class="ti ti-x"></i> Reject</button>' : '') +
+      (agent.status !== 'needs_changes' && agent.status !== 'approved' ? '<button class="builder-btn small secondary" onclick="reviewRequestChanges(' + agent.id + ')"><i class="ti ti-message-dots"></i> Request Changes</button>' : '') +
+      (agent.status === 'approved' ? '<button class="builder-btn small secondary" onclick="reviewManageAccess(' + agent.id + ')"><i class="ti ti-lock"></i> Access</button>' : '') +
+    '</div>' +
+  '</div>';
+}
+
+async function loadReviewQueue() {
+  storeState.loading = true;
+  renderStorePanel();
+  try {
+    var r = await storeApi('/admin/agents?status=' + encodeURIComponent(storeState.reviewStatus));
+    var d = await r.json();
+    storeState.reviewQueue = d.data || d || [];
+  } catch (e) {
+    storeState.reviewQueue = [];
+    showToast('Failed to load review queue: ' + e.message);
+  }
+  storeState.loading = false;
+  renderStorePanel();
+}
+
+function filterReviewQueue(status) {
+  storeState.reviewStatus = status;
+  loadReviewQueue();
+}
+
+async function reviewApprove(agentId) {
+  showApproveAccessDialog(agentId);
+}
+
+// Show approve dialog with visibility + access rules
+function showApproveAccessDialog(agentId) {
+  var card = document.querySelector('.review-card[data-agent-id="' + agentId + '"]');
+  if (!card) return;
+  var existing = card.querySelector('.review-approve-panel');
+  if (existing) { existing.remove(); return; }
+
+  var panel = document.createElement('div');
+  panel.className = 'review-approve-panel review-reason-row';
+  panel.innerHTML =
+    '<div style="font-size:12px;margin-bottom:6px;opacity:0.8">Visibility</div>' +
+    '<div class="review-approve-vis" style="display:flex;gap:6px;margin-bottom:8px">' +
+      '<button type="button" class="builder-btn small primary" data-vis="public"><i class="ti ti-world"></i> Public</button>' +
+      '<button type="button" class="builder-btn small secondary" data-vis="restricted"><i class="ti ti-lock"></i> Restricted</button>' +
+    '</div>' +
+    '<div class="review-approve-rules" style="display:none">' +
+      '<div style="font-size:12px;margin-bottom:6px;opacity:0.8">Allowed users / domains</div>' +
+      '<div class="review-approve-rules-list"></div>' +
+      '<button type="button" class="builder-btn small secondary" id="review-approve-add-rule"><i class="ti ti-plus"></i> Add rule</button>' +
+    '</div>' +
+    '<div class="review-reason-btns" style="margin-top:10px">' +
+      '<button type="button" class="builder-btn small primary" id="review-approve-submit"><i class="ti ti-check"></i> Approve</button>' +
+      '<button type="button" class="builder-btn small secondary" id="review-approve-cancel">Cancel</button>' +
+    '</div>';
+  card.appendChild(panel);
+
+  var state = { visibility: 'public', rules: [] };
+
+  function renderRules() {
+    var container = panel.querySelector('.review-approve-rules-list');
+    container.innerHTML = state.rules.map(function(r, i) {
+      return '<div class="review-approve-rule" style="display:flex;gap:6px;margin-bottom:6px">' +
+        '<select class="builder-input" data-i="' + i + '" data-field="type" style="flex:0 0 100px">' +
+          '<option value="domain"' + (r.type === 'domain' ? ' selected' : '') + '>Domain</option>' +
+          '<option value="email"' + (r.type === 'email' ? ' selected' : '') + '>Email</option>' +
+          '<option value="user_id"' + (r.type === 'user_id' ? ' selected' : '') + '>User ID</option>' +
+        '</select>' +
+        '<input class="builder-input" data-i="' + i + '" data-field="value" value="' + escHtml(r.value) + '" placeholder="' + (r.type === 'domain' ? 'example.com' : r.type === 'email' ? 'user@example.com' : 'user id') + '" style="flex:1">' +
+        '<button type="button" class="builder-btn small secondary" data-i="' + i + '" data-action="remove"><i class="ti ti-trash"></i></button>' +
+      '</div>';
+    }).join('');
+    container.querySelectorAll('select, input').forEach(function(el) {
+      el.onchange = el.oninput = function() {
+        var i = parseInt(el.dataset.i, 10);
+        state.rules[i][el.dataset.field] = el.value;
+      };
+    });
+    container.querySelectorAll('button[data-action="remove"]').forEach(function(btn) {
+      btn.onclick = function() {
+        state.rules.splice(parseInt(btn.dataset.i, 10), 1);
+        renderRules();
+      };
+    });
+  }
+
+  function setVisibility(vis) {
+    state.visibility = vis;
+    panel.querySelectorAll('[data-vis]').forEach(function(b) {
+      b.classList.toggle('primary', b.dataset.vis === vis);
+      b.classList.toggle('secondary', b.dataset.vis !== vis);
+    });
+    panel.querySelector('.review-approve-rules').style.display = vis === 'restricted' ? '' : 'none';
+  }
+
+  panel.querySelectorAll('[data-vis]').forEach(function(b) {
+    b.onclick = function() { setVisibility(b.dataset.vis); };
+  });
+  panel.querySelector('#review-approve-add-rule').onclick = function() {
+    state.rules.push({ type: 'domain', value: '' });
+    renderRules();
+  };
+  panel.querySelector('#review-approve-cancel').onclick = function() { panel.remove(); };
+  panel.querySelector('#review-approve-submit').onclick = async function() {
+    var body = { visibility: state.visibility };
+    if (state.visibility === 'restricted') {
+      var clean = state.rules
+        .map(function(r) { return { type: r.type, value: (r.value || '').trim() }; })
+        .filter(function(r) { return r.value; });
+      if (clean.length === 0) {
+        showToast('Add at least one rule, or choose Public');
+        return;
+      }
+      body.access_rules = clean;
+    }
+    try {
+      await storeApi('/admin/agents/' + agentId + '/approve', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      showToast('Agent approved');
+      loadReviewQueue();
+    } catch (e) {
+      showToast('Approve failed: ' + e.message);
+    }
+  };
+
+  setVisibility('public');
+}
+
+// Manage access rules on already-approved agents
+async function reviewManageAccess(agentId) {
+  var card = document.querySelector('.review-card[data-agent-id="' + agentId + '"]');
+  if (!card) return;
+  var existing = card.querySelector('.review-access-panel');
+  if (existing) { existing.remove(); return; }
+
+  var panel = document.createElement('div');
+  panel.className = 'review-access-panel review-reason-row';
+  panel.innerHTML = '<div style="opacity:0.7;font-size:12px">Loading access rules…</div>';
+  card.appendChild(panel);
+
+  async function refresh() {
+    try {
+      var r = await storeApi('/admin/agents/' + agentId + '/access-rules');
+      var d = await r.json();
+      render(d.visibility || 'public', d.rules || []);
+    } catch (e) {
+      panel.innerHTML = '<div style="color:#ef4444">Failed: ' + escHtml(e.message) + '</div>';
+    }
+  }
+
+  function render(visibility, rules) {
+    panel.innerHTML =
+      '<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">' +
+        '<span style="font-size:12px;opacity:0.8">Visibility:</span>' +
+        '<button type="button" class="builder-btn small ' + (visibility === 'public' ? 'primary' : 'secondary') + '" data-vis="public"><i class="ti ti-world"></i> Public</button>' +
+        '<button type="button" class="builder-btn small ' + (visibility === 'restricted' ? 'primary' : 'secondary') + '" data-vis="restricted"><i class="ti ti-lock"></i> Restricted</button>' +
+      '</div>' +
+      (rules.length === 0
+        ? '<div style="opacity:0.6;font-size:12px;margin-bottom:8px">No access rules. Add one to restrict visibility.</div>'
+        : '<div style="margin-bottom:8px">' + rules.map(function(r) {
+            return '<div style="display:flex;gap:6px;align-items:center;padding:4px 0">' +
+              '<span class="myagent-status" style="font-size:11px">' + escHtml(r.type) + '</span>' +
+              '<span style="font-family:monospace;flex:1">' + escHtml(r.value) + '</span>' +
+              (r.addedBy ? '<span style="font-size:11px;opacity:0.6">by ' + escHtml(r.addedBy.name) + '</span>' : '') +
+              '<button type="button" class="builder-btn small secondary" data-rule-id="' + r.id + '"><i class="ti ti-trash"></i></button>' +
+            '</div>';
+          }).join('') + '</div>') +
+      '<div style="display:flex;gap:6px;margin-bottom:8px">' +
+        '<select class="builder-input" id="new-rule-type" style="flex:0 0 100px">' +
+          '<option value="domain">Domain</option>' +
+          '<option value="email">Email</option>' +
+          '<option value="user_id">User ID</option>' +
+        '</select>' +
+        '<input class="builder-input" id="new-rule-value" placeholder="example.com" style="flex:1">' +
+        '<button type="button" class="builder-btn small primary" id="new-rule-add"><i class="ti ti-plus"></i> Add</button>' +
+      '</div>' +
+      '<div class="review-reason-btns">' +
+        '<button type="button" class="builder-btn small secondary" id="access-close">Close</button>' +
+      '</div>';
+
+    panel.querySelectorAll('[data-vis]').forEach(function(b) {
+      b.onclick = async function() {
+        try {
+          await storeApi('/admin/agents/' + agentId + '/visibility', {
+            method: 'PUT',
+            body: JSON.stringify({ visibility: b.dataset.vis }),
+          });
+          showToast('Visibility updated');
+          refresh();
+        } catch (e) { showToast('Failed: ' + e.message); }
+      };
+    });
+    panel.querySelectorAll('button[data-rule-id]').forEach(function(btn) {
+      btn.onclick = async function() {
+        try {
+          await storeApi('/admin/agents/' + agentId + '/access-rules/' + btn.dataset.ruleId, { method: 'DELETE' });
+          showToast('Rule removed');
+          refresh();
+        } catch (e) { showToast('Failed: ' + e.message); }
+      };
+    });
+    panel.querySelector('#new-rule-add').onclick = async function() {
+      var t = panel.querySelector('#new-rule-type').value;
+      var v = panel.querySelector('#new-rule-value').value.trim();
+      if (!v) return;
+      try {
+        await storeApi('/admin/agents/' + agentId + '/access-rules', {
+          method: 'POST',
+          body: JSON.stringify({ rules: [{ type: t, value: v }] }),
+        });
+        showToast('Rule added');
+        refresh();
+      } catch (e) { showToast('Failed: ' + e.message); }
+    };
+    panel.querySelector('#access-close').onclick = function() { panel.remove(); };
+  }
+
+  refresh();
+}
+
+function reviewReject(agentId) {
+  showReviewReasonInput(agentId, 'reject', 'Rejection reason…', async function(reason) {
+    try {
+      await storeApi('/admin/agents/' + agentId + '/reject', { method: 'POST', body: JSON.stringify({ reason: reason }) });
+      showToast('Agent rejected');
+      loadReviewQueue();
+    } catch (e) {
+      showToast('Reject failed: ' + e.message);
+    }
+  });
+}
+
+function reviewRequestChanges(agentId) {
+  showReviewReasonInput(agentId, 'changes', 'What changes are needed?', async function(reason) {
+    try {
+      await storeApi('/admin/agents/' + agentId + '/request-changes', { method: 'POST', body: JSON.stringify({ reason: reason }) });
+      showToast('Changes requested');
+      loadReviewQueue();
+    } catch (e) {
+      showToast('Request failed: ' + e.message);
+    }
+  });
+}
+
+function showReviewReasonInput(agentId, action, placeholder, onSubmit) {
+  // Remove any existing reason input
+  var existing = document.querySelector('.review-reason-row');
+  if (existing) existing.remove();
+
+  var card = document.querySelector('.review-card[data-agent-id="' + agentId + '"]');
+  if (!card) return;
+
+  var row = document.createElement('div');
+  row.className = 'review-reason-row';
+  row.innerHTML =
+    '<textarea class="builder-input review-reason-input" placeholder="' + placeholder + '" rows="2"></textarea>' +
+    '<div class="review-reason-btns">' +
+      '<button class="builder-btn small primary" id="review-reason-submit">Submit</button>' +
+      '<button class="builder-btn small secondary" id="review-reason-cancel">Cancel</button>' +
+    '</div>';
+  card.appendChild(row);
+
+  var input = row.querySelector('.review-reason-input');
+  input.focus();
+
+  row.querySelector('#review-reason-submit').onclick = function() {
+    var val = input.value.trim();
+    if (!val) { input.style.borderColor = '#ef4444'; return; }
+    row.remove();
+    onSubmit(val);
+  };
+  row.querySelector('#review-reason-cancel').onclick = function() {
+    row.remove();
+  };
+}
+
+// ── Notifications ─────────────────────────────────────────────────────────
+
+async function loadUnreadCount() {
+  if (!storeState.account) return;
+  try {
+    var r = await storeApi('/notifications/unread-count');
+    var d = await r.json();
+    storeState.unreadCount = d.count || 0;
+    // Update badge without full re-render
+    var badge = document.querySelector('.store-notif-badge');
+    var btn = document.querySelector('.store-notif-btn');
+    if (btn) {
+      if (storeState.unreadCount > 0) {
+        if (badge) badge.textContent = storeState.unreadCount;
+        else btn.insertAdjacentHTML('beforeend', '<span class="store-notif-badge">' + storeState.unreadCount + '</span>');
+      } else if (badge) {
+        badge.remove();
+      }
+    }
+  } catch (_) {}
+}
+
+function toggleNotificationPanel() {
+  storeState.notifOpen = !storeState.notifOpen;
+  if (storeState.notifOpen) loadNotifications();
+  else renderStorePanel();
+}
+
+async function loadNotifications() {
+  try {
+    var r = await storeApi('/notifications');
+    var d = await r.json();
+    storeState.notifications = d.data || d || [];
+  } catch (_) {
+    storeState.notifications = [];
+  }
+  renderStorePanel();
+}
+
+function renderNotificationPanel() {
+  var items = storeState.notifications;
+  var html = '<div class="store-notif-panel">' +
+    '<div class="store-notif-header">' +
+      '<span>Notifications</span>' +
+      (items.length > 0 ? '<button class="store-notif-markall" onclick="markAllNotificationsRead()">Mark all read</button>' : '') +
+    '</div>';
+
+  if (items.length === 0) {
+    html += '<div class="store-notif-empty"><i class="ti ti-bell-off"></i> No notifications</div>';
+  } else {
+    html += '<div class="store-notif-list">';
+    items.forEach(function(n) {
+      var icon = n.type === 'agent_approved' ? 'ti-circle-check' :
+                 n.type === 'agent_rejected' ? 'ti-circle-x' :
+                 n.type === 'agent_changes_requested' ? 'ti-message-dots' :
+                 n.type === 'agent_suspended' ? 'ti-ban' :
+                 n.type === 'agent_update_available' ? 'ti-cloud-download' :
+                 n.type === 'agent_unpublished' ? 'ti-eye-off' :
+                 n.type === 'agent_deprecated' ? 'ti-alert-triangle' :
+                 n.type === 'agent_deleted' ? 'ti-trash' : 'ti-bell';
+      var colorCls = n.type === 'agent_approved' || n.type === 'agent_update_available' ? 'notif-success' :
+                     n.type === 'agent_rejected' || n.type === 'agent_suspended' || n.type === 'agent_unpublished' || n.type === 'agent_deleted' ? 'notif-error' :
+                     n.type === 'agent_deprecated' ? 'notif-warn' : 'notif-warn';
+      var unread = !n.read_at ? ' unread' : '';
+      var ago = timeAgo(n.created_at);
+      html += '<div class="store-notif-item' + unread + '" onclick="markNotificationRead(' + n.id + ')">' +
+        '<i class="ti ' + icon + ' ' + colorCls + '"></i>' +
+        '<div class="store-notif-content">' +
+          '<div class="store-notif-title">' + escHtml(n.title) + '</div>' +
+          '<div class="store-notif-body">' + escHtml(n.body || '') + '</div>' +
+          '<div class="store-notif-time">' + ago + '</div>' +
+        '</div>' +
+      '</div>';
+    });
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function timeAgo(dateStr) {
+  if (!dateStr) return '';
+  var d = new Date(dateStr);
+  var now = new Date();
+  var diff = Math.floor((now - d) / 1000);
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  if (diff < 604800) return Math.floor(diff / 86400) + 'd ago';
+  return d.toLocaleDateString();
+}
+
+async function markNotificationRead(id) {
+  try {
+    await storeApi('/notifications/' + id + '/read', { method: 'POST', body: '{}' });
+  } catch (_) {}
+  storeState.unreadCount = Math.max(0, storeState.unreadCount - 1);
+  // Mark locally
+  storeState.notifications.forEach(function(n) { if (n.id === id) n.read_at = new Date().toISOString(); });
+  renderStorePanel();
+}
+
+async function markAllNotificationsRead() {
+  try {
+    await storeApi('/notifications/read-all', { method: 'POST', body: '{}' });
+  } catch (_) {}
+  storeState.unreadCount = 0;
+  storeState.notifications.forEach(function(n) { n.read_at = n.read_at || new Date().toISOString(); });
+  renderStorePanel();
+}
+
+// ── Superadmin actions ────────────────────────────────────────────────────
+
+function adminUnpublish(slug) {
+  showAdminReasonInput('Unpublish reason…', async function(reason) {
+    try {
+      // Need agent ID — look it up from selectedAgent
+      var a = storeState.selectedAgent;
+      if (!a || !a.id) { showToast('Agent not loaded'); return; }
+      await storeApi('/admin/agents/' + a.id + '/unpublish', { method: 'POST', body: JSON.stringify({ reason: reason }) });
+      showToast('"' + (a.displayName || slug) + '" has been unpublished');
+      storeNavigate('browse');
+    } catch (e) {
+      showToast('Unpublish failed: ' + e.message);
+    }
+  });
+}
+
+function adminDeprecate(slug) {
+  showAdminReasonInput('Deprecation reason…', async function(reason) {
+    try {
+      var a = storeState.selectedAgent;
+      if (!a || !a.id) { showToast('Agent not loaded'); return; }
+      await storeApi('/admin/agents/' + a.id + '/deprecate', { method: 'POST', body: JSON.stringify({ reason: reason }) });
+      showToast('"' + (a.displayName || slug) + '" has been deprecated');
+      viewStoreAgent(slug);
+    } catch (e) {
+      showToast('Deprecate failed: ' + e.message);
+    }
+  });
+}
+
+function adminDeleteAgent(slug) {
+  if (!confirm('Permanently delete "' + slug + '" and all its versions? This cannot be undone.')) return;
+  showAdminReasonInput('Deletion reason…', async function(reason) {
+    try {
+      var a = storeState.selectedAgent;
+      if (!a || !a.id) { showToast('Agent not loaded'); return; }
+      var url = STORE_BASE + '/admin/agents/' + a.id;
+      var token = localStorage.getItem('store-token');
+      var headers = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = 'Bearer ' + token;
+      var r = await fetch(url, { method: 'DELETE', headers: headers, body: JSON.stringify({ reason: reason }) });
+      if (!r.ok) { var err = await r.json().catch(function() { return {}; }); throw new Error(err.error || 'Delete failed'); }
+      showToast('"' + (a.displayName || slug) + '" has been permanently deleted');
+      storeNavigate('browse');
+    } catch (e) {
+      showToast('Delete failed: ' + e.message);
+    }
+  });
+}
+
+function showAdminReasonInput(placeholder, onSubmit) {
+  var container = document.getElementById('admin-action-reason');
+  if (!container) return;
+
+  container.innerHTML =
+    '<div class="admin-reason-row">' +
+      '<textarea class="builder-input admin-reason-input" placeholder="' + placeholder + '" rows="2"></textarea>' +
+      '<div class="admin-reason-btns">' +
+        '<button class="builder-btn small primary" id="admin-reason-submit">Submit</button>' +
+        '<button class="builder-btn small secondary" id="admin-reason-cancel">Cancel</button>' +
+      '</div>' +
+    '</div>';
+
+  var input = container.querySelector('.admin-reason-input');
+  input.focus();
+
+  container.querySelector('#admin-reason-submit').onclick = function() {
+    var val = input.value.trim();
+    if (!val) { input.style.borderColor = '#ef4444'; return; }
+    container.innerHTML = '';
+    onSubmit(val);
+  };
+  container.querySelector('#admin-reason-cancel').onclick = function() {
+    container.innerHTML = '';
+  };
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────
+
+function openStoreAccount() {
+  storeState.view = 'account';
+  openAgentStore();
+  // If already open, just navigate
+  var panel = document.getElementById('agent-store-panel');
+  if (panel && panel.classList.contains('open')) {
+    storeState.view = 'account';
+    renderStorePanel();
+  }
+}
+
+function updateTopbarAccount() {
+  var label = document.getElementById('topbar-account-label');
+  var btn = document.getElementById('topbar-account-btn');
+  if (!label) return;
+  if (storeState.account) {
+    label.textContent = storeState.account.name || 'Account';
+    if (btn) btn.classList.add('logged-in');
+  } else {
+    label.textContent = 'Account';
+    if (btn) btn.classList.remove('logged-in');
+  }
+}
+
+function initAgentStore() {
+  // Restore cached account
+  try {
+    var cached = localStorage.getItem('store-account');
+    if (cached) storeState.account = JSON.parse(cached);
+  } catch (_) {}
+  // Fetch unread notification count if logged in
+  loadUnreadCount();
+  // Update topbar account label
+  updateTopbarAccount();
+}

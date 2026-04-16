@@ -1,0 +1,17 @@
+{
+  "name": "figma-fauna-mcp",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "MCP server that drives Figma via pluggable design-system component registries",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.9.0",
+    "openai": "^4.28.0",
+    "ws": "^8.16.0",
+    "zod": "^3.22.4"
+  }
+}

@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fauna</title>
+<link id="hljs-theme" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.10.0/dist/tabler-icons.min.css">
+<script src="https://cdn.jsdelivr.net/npm/marked@13/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Sidebar ──────────────────────────────────────────────────── -->
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <span id="sidebar-logo"><img src="img/logo.svg" alt="" width="20" height="20"></span>
+      <span id="sidebar-title">Fauna</span>
+    </div>
+    <!-- ── Scrollable middle area ──────────────────────────────── -->
+    <div id="sidebar-scroll">
+
+    <!-- ── Conversations section ───────────────────────────────── -->
+    <div id="conv-section">
+      <div id="conv-section-header">
+        <i class="ti ti-messages"></i>
+        <span>Conversations</span>
+        <span style="flex:1"></span>
+        <button class="section-plus-btn" onclick="newConversation()" title="New conversation"><i class="ti ti-plus"></i></button>
+        <i class="ti ti-chevron-down section-chevron" onclick="toggleSidebarSection('conv')"></i>
+      </div>
+      <div id="conv-section-body">
+        <div id="conv-list"></div>
+        <div id="conv-show-all" class="sidebar-show-all" onclick="openAllConversations()" style="display:none">All conversations</div>
+      </div>
+    </div>
+
+    <!-- ── Agents section ───────────────────────────────────────── -->
+    <div id="agents-section">
+      <div id="agents-section-header">
+        <i class="ti ti-robot" onclick="toggleAgentsAccordion()" style="cursor:pointer"></i>
+        <span onclick="toggleAgentsAccordion()" style="cursor:pointer">Agents</span>
+        <span id="agent-update-badge" class="agent-update-count" style="display:none"></span>
+        <span style="flex:1"></span>
+        <button id="agents-plus-btn" class="section-plus-btn" onclick="event.stopPropagation();openAgentActionsPage()" title="Create or import agent"><i class="ti ti-plus"></i></button>
+        <i class="ti ti-chevron-down section-chevron" onclick="toggleSidebarSection('agents')"></i>
+      </div>
+      <div id="agents-section-body">
+        <div id="agent-list"></div>
+        <div id="agents-show-all" class="sidebar-show-all" onclick="openAllAgents()" style="display:none">All agents</div>
+        <div id="agent-store-btn" onclick="openAgentStore()" title="Browse the Agent Store">
+          <i class="ti ti-package"></i> <span>Agent Store</span>
+        </div>
+      </div>
+    </div>
+
+    </div><!-- /sidebar-scroll -->
+
+    <!-- ── Fixed bottom area ────────────────────────────────────── -->
+    <div id="sidebar-bottom">
+      <!-- ── Figma status section ───────────────────────────────── -->
+      <div id="figma-section">
+        <div id="figma-section-header" onclick="toggleFigmaMCP()" title="Click to enable/disable Figma MCP">
+          <span id="figma-dot" class="figma-dot off"></span>
+          <span id="figma-section-label">Figma MCP</span>
+          <span id="figma-mcp-section-status" style="margin-left:4px;font-size:10px;opacity:.6"></span>
+          <span id="figma-section-chevron"><i class="ti ti-chevron-right"></i></span>
+        </div>
+        <div id="figma-section-body" style="display:none">
+          <div id="figma-server-row">
+            <span id="figma-server-dot" class="figma-dot off" style="width:6px;height:6px"></span>
+            <span id="figma-server-label">MCP Server</span>
+            <button id="figma-server-btn" class="figma-btn figma-server-toggle" onclick="toggleMcpServer()">Start</button>
+          </div>
+          <div id="figma-file-info">
+            <div id="figma-file-name">Open FaunaMCP in Figma</div>
+            <div id="figma-file-meta"></div>
+          </div>
+          <div id="figma-system-row">
+            <span id="figma-system-badge" style="display:none"></span>
+          </div>
+          <div id="figma-action-row">
+            <button class="figma-btn" onclick="figmaWsConnect()"><i class="ti ti-refresh"></i> Reconnect</button>
+            <button class="figma-btn" onclick="toggleFigmaSetup()" title="Setup &amp; Help"><i class="ti ti-help-circle"></i> Help</button>
+            <button class="figma-btn" onclick="toggleMcpLogs()" id="figma-logs-btn"><i class="ti ti-terminal-2"></i> Logs</button>
+          </div>
+          <div id="figma-logs-box" style="display:none"></div>
+        </div>
+      </div>
+
+      <div id="sidebar-footer">
+        <div id="sidebar-footer-icons">
+          <button class="footer-icon-btn" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle light/dark mode">
+            <i class="ti ti-moon"></i>
+          </button>
+          <button class="footer-icon-btn" onclick="openOnboarding()" title="Permissions &amp; Setup">
+            <i class="ti ti-shield-lock"></i>
+          </button>
+          <button class="footer-icon-btn" onclick="toggleAgentRules()" title="Agent Rules">
+            <i class="ti ti-robot"></i>
+          </button>
+          <button class="footer-icon-btn" onclick="openAgentBuilder()" title="Agent Builder (Ctrl+Shift+B)">
+            <i class="ti ti-wand"></i>
+          </button>
+          <button class="footer-icon-btn" onclick="togglePlaybook()" title="Playbook — Learned Instructions">
+            <i class="ti ti-notebook"></i>
+          </button>
+          <button class="footer-icon-btn" onclick="toggleFigmaSetup()" title="Figma Plugin Help">
+            <i class="ti ti-plug"></i>
+          </button>
+          <button class="footer-icon-btn" onclick="toggleHelp()" title="Help &amp; Reference">
+            <i class="ti ti-help-circle"></i>
+          </button>
+          <button class="footer-icon-btn" onclick="toggleSettings()" title="Settings">
+            <i class="ti ti-settings"></i>
+          </button>
+          <button class="footer-icon-btn footer-pat-btn" onclick="toggleSettings()" title="PAT status">
+            <span id="auth-pill" class="dim">…</span>
+          </button>
+        </div>
+      </div>
+    </div><!-- /sidebar-bottom -->
+    <div id="sidebar-resize-handle" title="Drag to resize"></div>
+  </div>
+
+  <!-- ── Main ─────────────────────────────────────────────────────── -->
+  <div id="main">
+
+    <!-- Top bar -->
+    <div id="topbar">
+      <button id="toggle-sidebar" onclick="toggleSidebar()" title="Toggle sidebar"><i class="ti ti-menu-2"></i></button>
+      <span id="topbar-title">New conversation</span>
+      <span id="agent-badge" style="display:none" onclick="deactivateAgent(getConv(state.currentId))"></span>
+      <select id="model-select" onchange="onModelChange(this.value)"></select>
+      <button class="topbar-btn" onclick="clearConversation()" title="Clear messages"><i class="ti ti-trash"></i> Clear</button>
+      <button class="topbar-btn" onclick="toggleDebugLog()" id="debug-btn" title="Debug log"><i class="ti ti-bug"></i></button>
+      <button class="topbar-btn topbar-account-btn" id="topbar-account-btn" onclick="openStoreAccount()" title="Agent Store Account"><i class="ti ti-user-circle"></i> <span id="topbar-account-label">Account</span></button>
+      <!-- Windows-only title bar controls (shown via JS on win32) -->
+      <div id="win-controls">
+        <button class="win-ctrl" title="Minimize" onclick="winCtrl('minimize')"><i class="ti ti-minus"></i></button>
+        <button class="win-ctrl" title="Maximize" onclick="winCtrl('maximize')"><i class="ti ti-square"></i></button>
+        <button class="win-ctrl close" title="Close" onclick="winCtrl('close')"><i class="ti ti-x"></i></button>
+      </div>
+    </div>
+
+    <!-- Debug log panel -->
+    <div id="debug-panel" style="display:none;position:fixed;bottom:0;right:0;width:520px;height:320px;background:#0d1117;border:1px solid #30363d;border-radius:8px 0 0 0;z-index:9999;display:none;flex-direction:column;font-family:monospace;font-size:11px;">
+      <div style="display:flex;align-items:center;padding:6px 10px;border-bottom:1px solid #30363d;gap:8px;">
+        <span style="color:#58a6ff;font-weight:600;"><i class="ti ti-bug"></i> Debug Log</span>
+        <span style="flex:1"></span>
+        <button onclick="copyDebugLog()" style="background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px;">Copy</button>
+        <button onclick="clearDebugLog()" style="background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px;">Clear</button>
+        <button onclick="toggleDebugLog()" style="background:none;border:none;color:#6e7681;cursor:pointer;font-size:14px;"><i class="ti ti-x"></i></button>
+      </div>
+      <div id="debug-log" style="flex:1;overflow-y:auto;padding:6px 10px;color:#8b949e;line-height:1.6;"></div>
+    </div>
+
+    <!-- Empty state -->
+    <div id="empty-state">
+      <div class="empty-logo"><img src="/img/logo.svg" alt="Fauna" width="56" height="56"></div>
+      <div class="empty-title">Fauna</div>
+      <div class="empty-sub">Your AI desktop agent — code, shell, web, forms, Figma, and more.</div>
+      <div class="empty-grid">
+        <div class="empty-card" onclick="usePrompt(this)"><strong>What's using my disk?</strong>Find large files and free up space</div>
+        <div class="empty-card" onclick="usePrompt(this)"><strong>Open a website</strong>Browse any URL in the browser panel</div>
+        <div class="empty-card" onclick="usePrompt(this)"><strong>Register on a site</strong>AI fills the form, you handle passwords</div>
+        <div class="empty-card" onclick="usePrompt(this)"><strong>Build a dashboard</strong>Generate an interactive HTML artifact</div>
+        <div class="empty-card" onclick="usePrompt(this)"><strong>Explain code</strong>Paste code and get a clear explanation</div>
+        <div class="empty-card" onclick="usePrompt(this)"><strong>Write a script</strong>Describe it and run it right here</div>
+        <div class="empty-card" onclick="usePrompt(this)"><strong>Search the web</strong>Research any topic with live browsing</div>
+        <div class="empty-card" onclick="usePrompt(this)"><strong>Debug an error</strong>Share a stack trace, get a fix</div>
+      </div>
+    </div>
+
+    <!-- Messages area -->
+    <div id="messages" style="display:none">
+      <div id="messages-inner"></div>
+    </div>
+
+    <!-- Pending attachments bar -->
+    <div id="attach-bar"></div>
+
+    <!-- Input area -->
+    <div id="input-area">
+      <div id="input-wrap">
+        <!-- Agent autocomplete dropdown -->
+        <div id="agent-autocomplete" style="display:none"></div>
+        <!-- Slash command autocomplete dropdown -->
+        <div id="slash-autocomplete" style="display:none"></div>
+        <div id="drag-overlay"><i class="ti ti-file-upload"></i> Drop files to attach</div>
+        <!-- Active agent chip -->
+        <div id="agent-chip-bar" style="display:none"></div>
+        <div id="textarea-row">
+          <textarea id="msg-input" placeholder="Ask Fauna anything… (paste or drop files to attach)" rows="1"></textarea>
+          <button id="stop-btn" onclick="stopGeneration()" title="Stop generation">■</button>
+          <button id="send-btn" onclick="sendMessage()" title="Send (⌘↵ or ⏎)"><i class="ti ti-send"></i></button>
+        </div>
+        <div id="shell-running-pills" style="display:none;gap:4px;padding:3px 6px 0;flex-wrap:wrap"></div>
+        <div id="figma-mode-banner" style="display:none;align-items:center;gap:6px;padding:4px 10px;margin:0 0 2px;background:rgba(98,215,148,.1);border:1px solid rgba(98,215,148,.25);border-radius:6px;font-size:11px;color:#62d794">
+          <i class="ti ti-vector-triangle"></i>
+          <span>Figma MCP active — AI will read &amp; write your Figma file</span>
+          <button onclick="toggleFigmaMCP()" style="margin-left:auto;background:none;border:none;color:#62d794;cursor:pointer;font-size:11px;opacity:.8" title="Disable Figma MCP"><i class="ti ti-x" style="font-size:10px"></i> disable</button>
+        </div>
+        <div id="input-toolbar">
+          <button class="toolbar-btn" onclick="openFileAttach()" title="Attach file or image (or paste / drag &amp; drop)"><i class="ti ti-paperclip"></i> Attach file</button>
+          <div class="toolbar-sep"></div>
+          <button class="toolbar-btn" onclick="openUrlModal()" title="Add URL context"><i class="ti ti-link"></i> Add URL</button>
+          <div class="toolbar-sep"></div>
+          <button class="toolbar-btn" id="browser-toolbar-btn" onclick="openBrowserPane()" title="Open browser panel"><i class="ti ti-world-www"></i> Browser</button>
+          <div class="toolbar-sep"></div>
+          <span id="figma-mcp-badge" style="display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--surface2);color:var(--text-muted);border:1px solid var(--border);cursor:default;transition:all .2s" title="Checking Figma MCP…">◌ Figma</span>
+          <span id="hint-text">⏎ send · ⇧⏎ newline</span>
+        </div>
+        <div id="ctx-meter" style="display:none">
+          <div id="ctx-meter-bar"><div id="ctx-meter-fill"></div></div>
+          <span id="ctx-meter-label"></span>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /main -->
+
+  <!-- ── Artifact Pane ───────────────────────────────────────────────── -->
+  <div id="artifact-pane">
+    <div id="artifact-resize-handle" title="Drag to resize"></div>
+    <div id="artifact-header">
+      <span id="artifact-label"><i class="ti ti-layers-intersect"></i> Artifacts</span>
+      <div id="artifact-tabs"></div>
+      <button id="artifact-close" onclick="closeArtifactPane()" title="Close pane"><i class="ti ti-x"></i></button>
+    </div>
+    <div id="artifact-body">
+      <div class="artifact-empty"><i class="ti ti-layers-intersect"></i><span>Nothing to preview</span></div>
+    </div>
+  </div>
+
+  <!-- ── Browser Pane ─────────────────────────────────────────────────── -->
+  <div id="browser-pane">
+    <div id="browser-resize-handle" title="Drag to resize"></div>
+    <div id="browser-pane-header">
+      <i class="ti ti-world-www" style="color:var(--accent2);font-size:14px"></i>
+      <span style="font-size:11.5px;font-weight:600;color:var(--text-dim);flex:1">Browser</span>
+      <button class="bpnav" onclick="closeBrowserPane()" title="Close browser pane"><i class="ti ti-x"></i></button>
+    </div>
+    <div id="browser-tab-bar">
+      <button id="browser-tab-add" onclick="browserAddTab()" title="New tab"><i class="ti ti-plus"></i></button>
+    </div>
+    <div id="browser-url-row">
+      <button class="bpnav" id="bp-back" onclick="browserBack()" title="Back" disabled><i class="ti ti-arrow-left"></i></button>
+      <button class="bpnav" id="bp-fwd"  onclick="browserForward()" title="Forward" disabled><i class="ti ti-arrow-right"></i></button>
+      <button class="bpnav" id="bp-ref"  onclick="browserRefresh()" title="Refresh"><i class="ti ti-refresh"></i></button>
+      <input id="browser-url-input" type="url" placeholder="Enter URL and press Enter…"
+             onkeydown="if(event.key==='Enter'){event.preventDefault();browserGo()}" spellcheck="false">
+      <button class="bpnav" onclick="browserGo()" title="Go" style="color:var(--accent)"><i class="ti ti-arrow-right-circle"></i></button>
+    </div>
+    <div id="browser-loading-bar"></div>
+    <div id="antibot-banner">
+      <i class="ti ti-shield-exclamation" style="flex-shrink:0;font-size:14px"></i>
+      <span style="flex:1">Anti-bot challenge detected — solve it in the browser below, then click <strong>Done</strong></span>
+      <button onclick="antibotDone()"
+        style="background:rgba(34,197,94,.15);border:1px solid rgba(34,197,94,.4);color:#4ade80;border-radius:5px;padding:3px 10px;font-size:11px;cursor:pointer;flex-shrink:0;white-space:nowrap">
+        <i class="ti ti-check"></i> Done
+      </button>
+    </div>
+    <div id="browser-action-bar">
+      <button class="code-run" onclick="feedBrowserToAI()" title="Extract page content and send to AI">
+        <i class="ti ti-robot"></i> Feed to AI
+      </button>
+      <button class="code-run" onclick="browserScreenshot()" title="Take screenshot and send to AI"
+        style="background:rgba(99,102,241,.12);border-color:rgba(99,102,241,.35);color:#818cf8">
+        <i class="ti ti-camera"></i> Screenshot
+      </button>
+      <span id="browser-page-title"></span>
+      <span id="browser-status"></span>
+    </div>
+    <div id="browser-webview-wrap">
+      <!-- webviews are created dynamically by browserAddTab() -->
+    </div>
+  </div>
+
+</div>
+
+<!-- ── System prompt panel ─────────────────────────────────────── -->
+<div id="sys-panel">
+  <div id="sys-panel-header">
+    <span><i class="ti ti-adjustments-horizontal"></i></span>
+    <span id="sys-panel-title">System Prompt</span>
+    <button id="sys-panel-close" onclick="toggleSysPanel()"><i class="ti ti-x"></i></button>
+  </div>
+  <div id="sys-scope-hint"></div>
+  <textarea id="sys-prompt-input" oninput="updateSysScopeHint()" placeholder="Enter a system prompt to guide the AI's behavior…
+
+Examples:
+• You are a senior TypeScript engineer. Always use strict types.
+• You are a concise assistant. Keep responses short.
+• You are an expert in React and Figma plugin development."></textarea>
+  <div id="sys-panel-footer">
+    <div class="sys-footer-row">
+      <button class="panel-btn secondary" style="flex:0;padding:7px 12px" onclick="clearSysPrompt()">Clear</button>
+      <button class="panel-btn secondary" style="flex:1" onclick="saveSysPromptForConv()" title="Apply only to this conversation"><i class="ti ti-message-circle"></i> This chat</button>
+      <button class="panel-btn primary" style="flex:1" onclick="saveSysPromptGlobal()" title="Apply to every new and existing chat"><i class="ti ti-world"></i> All chats</button>
+    </div>
+    <button class="panel-btn rule-btn" onclick="addPromptAsRule()"><i class="ti ti-list-check"></i> Add as global rule</button>
+  </div>
+</div>
+
+<!-- ── Settings panel ─────────────────────────────────────────────── -->
+<div id="settings-panel">
+  <div id="sys-panel-header" style="display:flex;align-items:center;gap:8px;padding:14px 16px;border-bottom:1px solid var(--border)">
+    <span><i class="ti ti-settings"></i></span>
+    <span style="font-size:13px;font-weight:600;flex:1">Settings</span>
+    <button id="sys-panel-close" onclick="toggleSettings()"><i class="ti ti-x"></i></button>
+  </div>
+
+  <div class="settings-scroll">
+
+  <!-- Model Settings -->
+  <div class="settings-section">
+    <div class="settings-section-title">Model Settings</div>
+
+    <label class="settings-label">
+      <span>Thinking Budget</span>
+      <select id="thinking-budget-select" class="settings-input" onchange="setThinkingBudget(this.value)" style="cursor:pointer">
+        <option value="off">Off — no extended thinking</option>
+        <option value="low">Low — quick reasoning (~1K tokens)</option>
+        <option value="medium">Medium — balanced (~5K tokens)</option>
+        <option value="high" selected>High — deep analysis (~10K tokens)</option>
+        <option value="max">Max — exhaustive (~32K tokens)</option>
+      </select>
+      <span style="font-size:11px;color:var(--text-muted)" id="thinking-budget-hint">Extended thinking for complex problems requiring deep analysis.</span>
+    </label>
+
+    <label class="settings-label" style="margin-top:10px">
+      <span>Maximum context turns</span>
+      <div style="display:flex;align-items:center;gap:8px">
+        <input type="range" id="max-turns-range" min="4" max="100" step="2" value="20"
+          oninput="setMaxTurns(+this.value)"
+          style="flex:1;accent-color:var(--accent);cursor:pointer">
+        <span id="max-turns-label" style="font-size:12px;color:var(--text);min-width:32px;text-align:right">20</span>
+      </div>
+      <span style="font-size:11px;color:var(--text-muted)">How many past messages to include in each request. Higher = more context, more cost.</span>
+    </label>
+  </div>
+
+  <!-- Agent Behaviour -->
+  <div class="settings-section">
+    <div class="settings-section-title">Agent Behaviour</div>
+    <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none">
+      <input type="checkbox" id="autorun-toggle"
+        onchange="setAutoRunShell(this.checked)"
+        style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+      <span style="font-size:12.5px;color:var(--text)">Auto-run shell commands</span>
+    </label>
+    <div class="settings-hint" style="margin-top:4px">
+      When enabled, <code>shell-exec</code> blocks in AI responses execute automatically.
+      Results appear inline; click <strong>Feed to AI</strong> to let the AI continue based on output.
+    </div>
+  </div>
+
+  <!-- Authentication (tabbed) -->
+  <div class="settings-section">
+    <div class="settings-section-title">Authentication</div>
+    <div class="auth-tabs">
+      <button class="auth-tab active" onclick="switchAuthTab('cli')">GitHub CLI</button>
+      <button class="auth-tab" onclick="switchAuthTab('keys')">API Keys</button>
+    </div>
+
+    <!-- Tab: GitHub CLI -->
+    <div id="auth-tab-cli" class="auth-tab-pane">
+      <div>
+        <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px;">Current status:</div>
+        <span id="auth-badge" class="auth-source-badge"><i class="ti ti-circle-dot"></i> Checking…</span>
+      </div>
+
+      <div class="settings-label">
+        <span>GitHub Personal Access Token</span>
+        Enter a PAT to override the auto-detected token. Required if you're not logged in via the <code style="font-size:11px;background:var(--surface3);padding:1px 4px;border-radius:3px">gh</code> CLI.
+      </div>
+      <div class="settings-input-row">
+        <input id="pat-input" class="settings-input" type="password" placeholder="ghp_… or github_pat_…" autocomplete="off" spellcheck="false">
+        <button class="settings-row-btn" onclick="togglePatVisibility()" id="pat-toggle" title="Show/hide token"><i class="ti ti-eye"></i></button>
+      </div>
+      <div id="pat-status" class="settings-status"></div>
+      <div style="display:flex;gap:6px">
+        <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="savePat()">Save Token</button>
+        <button class="settings-row-btn danger" onclick="clearPat()" id="clear-pat-btn" style="display:none">Remove</button>
+      </div>
+      <div class="settings-hint">
+        Generate a PAT at <a href="#" onclick="openGithubTokenPage(); return false">github.com/settings/tokens</a> with the <strong>copilot</strong> scope (or use a token that already has Copilot access).
+      </div>
+    </div>
+
+    <!-- Tab: API Keys -->
+    <div id="auth-tab-keys" class="auth-tab-pane" style="display:none">
+      <div class="settings-hint" style="margin-bottom:12px">
+        Bring your own API keys to use models directly — no GitHub Copilot subscription needed.
+      </div>
+
+      <!-- OpenAI -->
+      <div class="settings-label"><span>OpenAI</span></div>
+      <div class="settings-input-row">
+        <input id="provider-openai-input" class="settings-input" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false"
+          onkeydown="if(event.key==='Enter')saveProviderKey('openai')">
+        <button class="settings-row-btn" onclick="toggleProviderKeyVisibility('openai')" title="Show/hide"><i class="ti ti-eye"></i></button>
+      </div>
+      <div id="provider-openai-status" class="settings-status"></div>
+      <div style="display:flex;gap:6px">
+        <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('openai')">Save</button>
+        <button class="settings-row-btn danger" onclick="clearProviderKey('openai')" id="provider-openai-clear" style="display:none">Remove</button>
+      </div>
+
+      <!-- Anthropic -->
+      <div class="settings-label" style="margin-top:12px"><span>Anthropic</span></div>
+      <div class="settings-input-row">
+        <input id="provider-anthropic-input" class="settings-input" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"
+          onkeydown="if(event.key==='Enter')saveProviderKey('anthropic')">
+        <button class="settings-row-btn" onclick="toggleProviderKeyVisibility('anthropic')" title="Show/hide"><i class="ti ti-eye"></i></button>
+      </div>
+      <div id="provider-anthropic-status" class="settings-status"></div>
+      <div style="display:flex;gap:6px">
+        <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('anthropic')">Save</button>
+        <button class="settings-row-btn danger" onclick="clearProviderKey('anthropic')" id="provider-anthropic-clear" style="display:none">Remove</button>
+      </div>
+
+      <!-- Google AI -->
+      <div class="settings-label" style="margin-top:12px"><span>Google AI</span></div>
+      <div class="settings-input-row">
+        <input id="provider-google-input" class="settings-input" type="password" placeholder="AIza…" autocomplete="off" spellcheck="false"
+          onkeydown="if(event.key==='Enter')saveProviderKey('google')">
+        <button class="settings-row-btn" onclick="toggleProviderKeyVisibility('google')" title="Show/hide"><i class="ti ti-eye"></i></button>
+      </div>
+      <div id="provider-google-status" class="settings-status"></div>
+      <div style="display:flex;gap:6px">
+        <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('google')">Save</button>
+        <button class="settings-row-btn danger" onclick="clearProviderKey('google')" id="provider-google-clear" style="display:none">Remove</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- About -->
+  <div class="settings-section" style="flex:1">
+    <div class="settings-section-title">About</div>
+    <div class="settings-hint" style="line-height:1.7">
+      <strong style="color:var(--text)">Fauna</strong> v1.0.0<br>
+      Multi-provider AI assistant — use GitHub Copilot, OpenAI, Anthropic, or Google models.<br><br>
+      <strong style="color:var(--text)">Model routing:</strong><br>
+      • Models from API Keys → sent directly to that provider<br>
+      • All other models → routed through GitHub Copilot<br><br>
+      <strong style="color:var(--text)">GitHub token priority:</strong><br>
+      1. Saved PAT &nbsp; 2. <code style="background:var(--surface3);padding:1px 4px;border-radius:3px">GH_TOKEN</code> env &nbsp; 3. <code style="background:var(--surface3);padding:1px 4px;border-radius:3px">gh auth token</code> &nbsp; 4. Keychain<br><br>
+      API key models are fetched dynamically from each provider.<br><br>
+      <span style="color:var(--text-dim);font-size:11px">by Solomon Abey · <a href="https://github.com/howmon" style="color:var(--accent)" target="_blank">@howmon</a></span>
+    </div>
+  </div>
+  </div><!-- /.settings-scroll -->
+</div>
+
+<!-- ── URL modal ───────────────────────────────────────────────── -->
+<div id="url-modal" onclick="closeUrlModal(event)">
+  <div id="url-modal-box">
+    <div id="url-modal-title"><i class="ti ti-link"></i> Add URL context</div>
+    <input id="url-input" type="url" placeholder="https://…" autocomplete="off">
+    <div id="url-modal-status"></div>
+    <div id="url-modal-btns">
+      <button class="panel-btn secondary" style="flex:0;padding:7px 14px" onclick="closeUrlModal()">Cancel</button>
+      <button class="panel-btn primary"   style="flex:0;padding:7px 14px" onclick="fetchUrl()">Fetch & Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Generic dialog modal ─────────────────────────────────────── -->
+<div id="dlg-modal" onclick="if(event.target===this)_dlgResolve(null)">
+  <div id="dlg-modal-box">
+    <div id="dlg-modal-title"></div>
+    <div id="dlg-modal-msg" style="display:none;font-size:13px;color:var(--text-dim)"></div>
+    <input id="dlg-modal-input" style="display:none" autocomplete="off">
+    <div id="dlg-modal-btns">
+      <button class="panel-btn secondary" style="flex:0;padding:7px 14px" onclick="_dlgResolve(null)">Cancel</button>
+      <button class="panel-btn primary" id="dlg-modal-ok" style="flex:0;padding:7px 14px" onclick="_dlgOk()">OK</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Agent Builder Panel ──────────────────────────────────────── -->
+<div id="agent-builder-panel" style="display:none"></div>
+
+<!-- Agent Code View overlay -->
+<div id="agent-code-view" class="acv-overlay" style="display:none">
+  <div class="acv-header">
+    <div class="acv-title">
+      <i class="ti ti-code"></i>
+      <span id="acv-agent-name">Agent Code</span>
+    </div>
+    <div class="acv-actions">
+      <label class="acv-sandbox-toggle" title="Run in isolation without affecting live agent">
+        <input type="checkbox" id="acv-sandbox-cb">
+        <span>Sandbox</span>
+      </label>
+      <button class="builder-btn secondary" onclick="applyCodeViewChanges()"><i class="ti ti-check"></i> Apply</button>
+      <button class="builder-btn primary" onclick="saveFromCodeView()"><i class="ti ti-device-floppy"></i> Save</button>
+      <button class="builder-btn accent" onclick="publishFromCodeView()"><i class="ti ti-upload"></i> Publish</button>
+      <button class="builder-close" onclick="closeAgentCodeView()"><i class="ti ti-x"></i></button>
+    </div>
+  </div>
+  <div id="acv-editor" class="acv-editor"></div>
+</div>
+
+<!-- ── Agent Store Panel ───────────────────────────────────────── -->
+<div id="agent-store-panel" style="display:none"></div>
+
+
+
+<!-- ── Agent Import Modal ─────────────────────────────────────── -->
+<div id="import-modal" style="display:none" onclick="if(event.target===this){closeImportModal()}">
+  <div id="import-modal-box">
+    <div id="import-modal-header"><i class="ti ti-file-import"></i> Import Agent</div>
+    <div id="import-modal-body"></div>
+  </div>
+</div>
+
+<!-- Hidden file inputs -->
+<input type="file" id="agent-import-input" style="display:none" accept=".zip" onchange="handleAgentImportFiles(this.files);this.value=''">
+<input type="file" id="file-input" multiple style="display:none" accept=".txt,.md,.js,.ts,.jsx,.tsx,.py,.go,.rs,.java,.c,.cpp,.h,.css,.html,.json,.yaml,.yml,.toml,.sh,.env,.gitignore,.sql,.graphql,.xml,.csv,.log,image/*" onchange="handleFiles(this.files)">
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script src="js/state.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/markdown.js"></script>
+<script src="js/artifacts.js"></script>
+<script src="js/capabilities.js"></script>
+<script src="js/conversations.js"></script>
+<script src="js/figma.js"></script>
+<script src="js/browser.js"></script>
+<script src="js/shell.js"></script>
+<script src="js/writefile.js"></script>
+<script src="js/playbook.js"></script>
+<script src="js/smart-features.js"></script>
+<script src="js/agents.js"></script>
+<script src="js/agent-system.js"></script>
+<script src="js/agent-builder.js"></script>
+<script src="js/agent-store.js"></script>
+<script src="js/agent-polish.js"></script>
+<script src="js/chat.js"></script>
+<script src="js/app.js"></script>
+
+<!-- ── Playbook panel ──────────────────────────────────────────── -->
+<div id="playbook-panel">
+  <div id="playbook-header">
+    <span><i class="ti ti-notebook" style="font-size:16px;color:#f0a030"></i></span>
+    <span class="title">Playbook</span>
+    <span style="font-size:11px;color:var(--text-dim);flex:1"></span>
+    <button style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;padding:0 2px" onclick="togglePlaybook()"><i class="ti ti-x"></i></button>
+  </div>
+  <!-- Tabs: Learned | Memory -->
+  <div id="playbook-tabs">
+    <button class="pb-tab active" data-tab="learned" onclick="switchPlaybookTab('learned')">Learned Instructions</button>
+    <button class="pb-tab" data-tab="memory" onclick="switchPlaybookTab('memory')">Spec Memory</button>
+  </div>
+  <!-- Learned tab -->
+  <div id="pb-tab-learned" class="pb-tab-body active">
+    <div style="font-size:11.5px;color:var(--text-dim);padding:10px 16px 8px;border-bottom:1px solid var(--border);line-height:1.5">
+      Instructions the AI has learned from successful approaches.<br>
+      Auto-saved entries come from the AI; you can also add your own. All enabled entries are injected into the system prompt.
+    </div>
+    <div id="playbook-list" style="flex:1;overflow-y:auto;padding:8px 10px">
+    </div>
+    <div id="playbook-add">
+      <input type="text" id="pb-title-input" placeholder="Title (e.g. Figma Audit Strategy)">
+      <textarea id="pb-body-input" rows="3" placeholder="Instruction body..."
+        onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))addPlaybookEntry()"></textarea>
+      <button id="pb-add-btn" onclick="addPlaybookEntry()"><i class="ti ti-plus"></i> Add Entry</button>
+    </div>
+  </div>
+  <!-- Memory tab -->
+  <div id="pb-tab-memory" class="pb-tab-body">
+    <div style="font-size:11.5px;color:var(--text-dim);padding:10px 16px 8px;border-bottom:1px solid var(--border);line-height:1.5">
+      Skill categories for different tools. Each category contains skill groups that are injected into the AI system prompt when enabled.
+    </div>
+    <div id="memory-actions" style="padding:6px 10px;display:flex;gap:6px;border-bottom:1px solid var(--border)">
+      <button class="mem-action-btn" onclick="addMemoryCategory()" title="Create a new skill category"><i class="ti ti-plus"></i> New Category</button>
+      <button class="mem-action-btn" onclick="resetMemoryToDefaults()" title="Reset built-in categories to defaults"><i class="ti ti-refresh"></i> Reset Built-in</button>
+      <button class="mem-action-btn" onclick="exportMemory()" title="Export all as JSON"><i class="ti ti-download"></i> Export</button>
+      <button class="mem-action-btn" onclick="document.getElementById('mem-import-file').click()" title="Import from JSON"><i class="ti ti-upload"></i> Import</button>
+      <input type="file" id="mem-import-file" accept=".json" style="display:none" onchange="importMemory(event)">
+    </div>
+    <div id="memory-list" style="flex:1;overflow-y:auto;padding:8px 10px">
+    </div>
+  </div>
+</div>
+
+<!-- ── Figma Rules panel ──────────────────────────────────────────── -->
+<!-- ── Agent Rules panel ──────────────────────────────────────────── -->
+<div id="agent-rules-panel">
+  <div id="agent-rules-header">
+    <span><i class="ti ti-robot" style="font-size:16px;color:var(--accent2)"></i></span>
+    <span class="title">Agent Rules</span>
+    <button style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;padding:0 2px" onclick="toggleAgentRules()"><i class="ti ti-x"></i></button>
+  </div>
+  <div style="font-size:11.5px;color:var(--text-dim);padding:10px 16px 8px;border-bottom:1px solid var(--border);line-height:1.5">
+    Rules injected into <strong>every</strong> AI message as hard constraints.<br>
+    Use them to control how the AI behaves, formats responses, or uses tools.
+  </div>
+  <div id="agent-rules-list" style="flex:1;overflow-y:auto;padding:8px 10px">
+    <!-- Populated by renderAgentRules() -->
+  </div>
+  <div id="agent-rules-add">
+    <textarea id="agent-rule-input" rows="3"
+      placeholder="e.g. Always write complete shell commands — never leave code blocks empty&#10;e.g. Reply in British English&#10;e.g. Always explain what each command does before running it"
+      onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))addAgentRule()"></textarea>
+    <button id="agent-rule-add-btn" onclick="addAgentRule()"><i class="ti ti-plus"></i> Add Rule</button>
+  </div>
+</div>
+
+<div id="figma-rules-panel">
+  <div id="figma-rules-header">
+    <span><i class="ti ti-list-check" style="font-size:16px"></i></span>
+    <span class="title">Figma Rules</span>
+    <button id="figma-rules-close" onclick="toggleFigmaRules()"><i class="ti ti-x"></i></button>
+  </div>
+  <div id="figma-rules-hint">
+    Rules are injected into the AI's system context when Figma is connected.<br>
+    Use them to enforce design system guidelines, naming conventions, and constraints.
+  </div>
+  <div id="figma-rules-list">
+    <!-- Populated by renderFigmaRules() -->
+  </div>
+  <div id="figma-rules-add">
+    <textarea id="figma-rule-input" rows="2" placeholder="e.g. Always use Security AI UI Kit components — never raw HTML elements"></textarea>
+    <button id="figma-rule-add-btn" onclick="addFigmaRule()"><i class="ti ti-plus"></i> Add Rule</button>
+  </div>
+</div>
+
+<!-- ── Figma Setup / Help panel ───────────────────────────────────── -->
+<div id="figma-setup-panel">
+  <div class="side-panel-header">
+    <span><i class="ti ti-plug" style="font-size:16px"></i></span>
+    <span class="title">Figma Plugin Setup</span>
+    <button class="side-panel-close" onclick="toggleFigmaSetup()"><i class="ti ti-x"></i></button>
+  </div>
+
+  <div class="side-panel-body">
+
+    <!-- Install card -->
+    <div class="setup-card">
+      <div class="setup-card-title">1 · Install the plugin files</div>
+      <p class="setup-card-desc">The Fauna MCP Figma plugin is bundled with this app. Click below to copy it to a folder on your Mac.</p>
+      <div id="figma-plugin-status" class="setup-status-row">
+        <span id="figma-plugin-status-icon">…</span>
+        <span id="figma-plugin-status-text">Checking…</span>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <button class="setup-btn primary" id="figma-install-btn" onclick="installFigmaPlugin()"><i class="ti ti-download"></i> Install Plugin Files</button>
+        <button class="setup-btn" id="figma-open-folder-btn" onclick="openPluginFolder()" style="display:none"><i class="ti ti-folder-open"></i> Open Folder</button>
+      </div>
+      <div style="margin-top:6px">
+        <button class="setup-btn" id="figma-download-btn" onclick="downloadFigmaPlugin()"><i class="ti ti-file-download"></i> Save Plugin to Folder…</button>
+      </div>
+      <div id="figma-install-result" class="setup-inline-result"></div>
+    </div>
+
+    <!-- Load in Figma card -->
+    <div class="setup-card">
+      <div class="setup-card-title">2 · Load the plugin in Figma</div>
+      <ol class="setup-steps">
+        <li>Open <strong>Figma desktop app</strong></li>
+        <li>Click the Figma logo (top-left) → <strong>Plugins</strong></li>
+        <li>Select <strong>Development → Import plugin from manifest…</strong></li>
+        <li>Navigate to the folder below and select <code>manifest.json</code></li>
+      </ol>
+      <div class="setup-path-row">
+        <code id="figma-plugin-path">~/.config/fauna/figma-plugin/manifest.json</code>
+        <button class="setup-copy-btn" onclick="copyPluginPath()" title="Copy path"><i class="ti ti-copy"></i></button>
+      </div>
+    </div>
+
+    <!-- Run the plugin card -->
+    <div class="setup-card">
+      <div class="setup-card-title">3 · Run the plugin</div>
+      <ol class="setup-steps">
+        <li>In Figma: <strong>Plugins → Development → Fauna MCP</strong></li>
+        <li>The plugin panel opens — it auto-connects to the MCP server</li>
+        <li>The Figma dot in this app turns <span style="color:var(--success)">green ●</span></li>
+        <li>Start chatting — the AI can now read and modify your Figma file</li>
+      </ol>
+    </div>
+
+    <!-- MCP Server card -->
+    <div class="setup-card">
+      <div class="setup-card-title">4 · Keep the MCP server running</div>
+      <p class="setup-card-desc">The MCP server starts automatically when Fauna opens. Check its status in the <strong>Figma sidebar panel</strong>. If it's stopped, click <strong>Start</strong>.</p>
+      <div id="setup-mcp-status-row" class="setup-status-row">
+        <span id="setup-mcp-icon">…</span>
+        <span id="setup-mcp-text">Checking…</span>
+      </div>
+    </div>
+
+    <!-- Tips -->
+    <div class="setup-card tips-card">
+      <div class="setup-card-title"><i class="ti ti-bulb"></i> Tips</div>
+      <ul class="setup-steps">
+        <li>The plugin reconnects automatically if the server restarts</li>
+        <li>Add <strong>Figma Rules</strong> to guide the AI's design decisions</li>
+        <li>Use <code>figma-exec</code> blocks in chat to run code directly in Figma</li>
+        <li>The plugin works with any open Figma file</li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── Onboarding overlay ──────────────────────────────────────────── -->
+<div id="onboarding-overlay" style="display:none">
+  <div id="onboarding-card">
+
+    <div id="onboarding-header">
+      <div class="ob-icon"><img src="/img/logo.svg" alt="Fauna" width="56" height="56"></div>
+      <h1>Set up Fauna</h1>
+      <p>Grant the permissions below to unlock all capabilities.<br>You can revisit this screen anytime from <strong>Fauna → Permissions &amp; Setup</strong>.</p>
+    </div>
+
+    <div id="permission-list">
+      <!-- Populated by renderPermissions() -->
+      <div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px">Checking permissions…</div>
+    </div>
+
+    <div id="onboarding-footer">
+      <span id="ob-checking-hint"></span>
+      <button id="ob-check-again" onclick="refreshPermissions()"><i class="ti ti-refresh"></i> Check again</button>
+      <button id="ob-continue" onclick="closeOnboarding()">Continue to Chat <i class="ti ti-arrow-right"></i></button>
+    </div>
+
+  </div>
+</div>
+<!-- ── All Conversations Page (full overlay) ──────────────────── -->
+<div id="all-convs-page" style="display:none"></div>
+<!-- ── All Agents Page (full overlay) ──────────────────────────── -->
+<div id="all-agents-page" style="display:none"></div>
+<!-- ── Agent Actions Page (Create / Import overlay) ───────────── -->
+<div id="agent-actions-page" style="display:none"></div>
+
+<!-- ── Help Panel ────────────────────────────────────────────────── -->
+<div id="help-panel">
+  <div class="side-panel-header">
+    <span><i class="ti ti-help-circle" style="font-size:16px;color:var(--accent)"></i></span>
+    <span class="title">Help &amp; Reference</span>
+    <button class="side-panel-close" onclick="toggleHelp()"><i class="ti ti-x"></i></button>
+  </div>
+
+  <nav id="help-toc">
+    <a href="#help-chat">Chat</a>
+    <a href="#help-agents">Agents</a>
+    <a href="#help-builder">Agent Builder</a>
+    <a href="#help-orchestrator">Orchestration</a>
+    <a href="#help-shell">Shell Execution</a>
+    <a href="#help-files">File Operations</a>
+    <a href="#help-artifacts">Artifacts</a>
+    <a href="#help-browser">Browser</a>
+    <a href="#help-figma">Figma</a>
+    <a href="#help-playbook">Playbook</a>
+    <a href="#help-memory">Spec Memory</a>
+    <a href="#help-rules">Agent Rules</a>
+    <a href="#help-settings">Settings</a>
+    <a href="#help-shortcuts">Shortcuts</a>
+  </nav>
+
+  <div id="help-body">
+
+    <!-- ── Chat ── -->
+    <section class="help-section" id="help-chat">
+      <h2 class="help-h2">Chat</h2>
+      <p>Type a message in the input box and press <kbd>Enter</kbd> to send. Press <kbd>Shift+Enter</kbd> for a newline.</p>
+      <p>Attach files by dragging them onto the chat window or clicking the attachment icon in the toolbar. Paste a file path or image directly from the clipboard. Click <strong>Add URL</strong> to attach web page content as context.</p>
+      <p>The context meter (bottom of input) shows how much of the model's context window the conversation is using. When it fills, older messages are automatically trimmed.</p>
+      <h3 class="help-h3">Model selection</h3>
+      <p>Choose the active model from the dropdown in the top bar. The list is populated from your account subscription.</p>
+    </section>
+
+    <!-- ── Agents ── -->
+    <section class="help-section" id="help-agents">
+      <h2 class="help-h2">Agents &amp; Agent Chips</h2>
+      <p>Agents are AI personas with custom system prompts, tools, and permissions. Type <strong>@agent-name</strong> in the input box to activate one. An autocomplete dropdown appears as you type.</p>
+      <p>Once an agent is active, a badge appears in the top bar showing its name. Press <kbd>Esc</kbd> (with an empty input) to deactivate the current agent.</p>
+      <h3 class="help-h3">Agent Store</h3>
+      <p>Open the Agent Store (<kbd>Ctrl/Cmd+Shift+P</kbd>) to browse, install, and manage agents from the registry. Installed agents appear as chips in the sidebar.</p>
+      <h3 class="help-h3">Create an agent from chat</h3>
+      <p>Ask the AI to "create an agent for…" and it will emit a structured agent definition. An <strong>Open in Agent Builder</strong> card will appear in the response — click it to pre-fill the builder with the generated config.</p>
+    </section>
+
+    <!-- ── Agent Builder ── -->
+    <section class="help-section" id="help-builder">
+      <h2 class="help-h2">Agent Builder</h2>
+      <p>Open the builder with <kbd>Ctrl/Cmd+Shift+B</kbd> or from the Agent Store. The builder lets you create and edit agents with:</p>
+      <ul class="help-list">
+        <li><strong>Name &amp; icon</strong> — display name and emoji icon shown in chips and store</li>
+        <li><strong>Description</strong> — short summary shown in autocomplete</li>
+        <li><strong>System prompt</strong> — full instructions given to the AI when the agent is active</li>
+        <li><strong>Permissions</strong> — which tools the agent can use (shell, browser, Figma, file write)</li>
+        <li><strong>Model override</strong> — force a specific model for this agent</li>
+        <li><strong>Shared prompt</strong> — (orchestrators only) context injected into every sub-agent</li>
+      </ul>
+      <h3 class="help-h3">AI Generate</h3>
+      <p>Click <strong>Generate with AI</strong> in the builder to describe what you want and have the model fill in the name, description, system prompt, and permissions automatically.</p>
+    </section>
+
+    <!-- ── Orchestrator ── -->
+    <section class="help-section" id="help-orchestrator">
+      <h2 class="help-h2">Orchestration &amp; Delegation</h2>
+      <p>An orchestrator agent coordinates a team of sub-agents. When the orchestrator runs, it emits delegation blocks that route subtasks to named sub-agents, each with its own system prompt and tools.</p>
+      <p>Sub-agent calls appear in a delegation panel below the orchestrator's response. Each delegate runs sequentially; results are fed back into context.</p>
+      <h3 class="help-h3">Stopping a delegation</h3>
+      <p>Click the <strong>Stop</strong> button that appears in the delegation header while agents are running. Any in-progress sub-agent is cancelled and subsequent delegates are skipped.</p>
+      <h3 class="help-h3">Shared prompt</h3>
+      <p>Content from the agent's <strong>Shared Prompt</strong> field is automatically prepended to every sub-agent's system prompt — useful for project context, shared conventions, or component docs.</p>
+    </section>
+
+    <!-- ── Shell ── -->
+    <section class="help-section" id="help-shell">
+      <h2 class="help-h2">Shell Execution</h2>
+      <p>When the AI writes a <code>bash</code> code block, it renders as a runnable shell widget with a <strong>Run</strong> button. Output is displayed inline.</p>
+      <h3 class="help-h3">Auto-run mode</h3>
+      <p>Enable <strong>Auto-run shell commands</strong> in Settings to execute bash blocks immediately without clicking Run. A badge on each block indicates it will run automatically.</p>
+      <h3 class="help-h3">Feed to AI</h3>
+      <p>After a command runs, click <strong>Feed to AI</strong> to send the output back into the conversation so the model can continue working.</p>
+      <h3 class="help-h3">Stopping a command</h3>
+      <p>A running command shows a <strong>Kill</strong> button. Click it to terminate the process.</p>
+    </section>
+
+    <!-- ── File Operations ── -->
+    <section class="help-section" id="help-files">
+      <h2 class="help-h2">File Operations</h2>
+      <p>The AI has three structured block types for writing files — no shell required:</p>
+      <dl class="help-dl">
+        <dt><code>write-file</code></dt>
+        <dd>Creates or overwrites a file at the given path. Relative paths resolve against the conversation workspace under <code>~/.copilot/workspaces/</code>.</dd>
+        <dt><code>append-file</code></dt>
+        <dd>Appends content to an existing file without overwriting.</dd>
+        <dt><code>replace-string</code></dt>
+        <dd>Targeted find-and-replace inside an existing file. Includes a SEARCH block (exact text to find) and a REPLACE block. Safer than full rewrites.</dd>
+        <dt><code>apply-patch</code></dt>
+        <dd>Applies a unified diff across one or more files — suitable for multi-file changes or renames.</dd>
+      </dl>
+      <p>Each block renders a confirmation widget. Click <strong>Write</strong> to apply, or <strong>Diff</strong> to preview changes first.</p>
+    </section>
+
+    <!-- ── Artifacts ── -->
+    <section class="help-section" id="help-artifacts">
+      <h2 class="help-h2">Artifacts</h2>
+      <p>The artifact pane (right side) previews rich content produced by the AI:</p>
+      <ul class="help-list">
+        <li><strong>HTML</strong> — rendered in a sandboxed iframe; interactive dashboards, tools, games</li>
+        <li><strong>SVG</strong> — rendered as vector graphics</li>
+        <li><strong>Image</strong> — screenshots or generated images produced by shell commands</li>
+        <li><strong>Markdown</strong> — formatted document preview</li>
+        <li><strong>JSON / CSV</strong> — structured data viewer</li>
+        <li><strong>Code</strong> — syntax-highlighted source</li>
+      </ul>
+      <p>Each artifact appears as a card in the chat; click <strong>Open</strong> to show it in the pane. Tabs at the top let you switch between multiple artifacts.</p>
+    </section>
+
+    <!-- ── Browser ── -->
+    <section class="help-section" id="help-browser">
+      <h2 class="help-h2">Browser Panel</h2>
+      <p>The built-in browser panel lets the AI — and you — navigate any URL without leaving the app. It uses a full Electron WebView with a realistic browser user-agent.</p>
+      <p>Each conversation has its own set of browser tabs. The AI can open URLs, read page content, click links, fill forms, and take screenshots via tool calls.</p>
+      <p>You can also type in the URL bar manually and browse independently of the active conversation.</p>
+    </section>
+
+    <!-- ── Figma ── -->
+    <section class="help-section" id="help-figma">
+      <h2 class="help-h2">Figma Integration</h2>
+      <p>Two integration modes are available:</p>
+      <dl class="help-dl">
+        <dt>Figma MCP (recommended)</dt>
+        <dd>Connects via the Model Context Protocol. The AI gets live read and write access to your Figma file — components, layers, variables, and more. Enable it by toggling the <strong>Figma MCP</strong> section in the sidebar.</dd>
+        <dt>FaunaMCP Plugin</dt>
+        <dd>A Figma plugin bundled with this app that runs a local relay. The AI writes <code>figma-exec</code> blocks containing Figma Plugin API JavaScript; the plugin executes them inside Figma. Use <strong>Figma Plugin Setup</strong> (plug icon in sidebar) to install it.</dd>
+      </dl>
+      <h3 class="help-h3">Figma Rules</h3>
+      <p>Add rules (e.g. "always use design system tokens") that are injected into the AI's context whenever Figma is connected. Access them via the Figma section header in the sidebar.</p>
+    </section>
+
+    <!-- ── Playbook ── -->
+    <section class="help-section" id="help-playbook">
+      <h2 class="help-h2">Playbook</h2>
+      <p>The Playbook (<kbd>notebook icon</kbd> in the sidebar footer) stores <strong>Learned Instructions</strong> — short rules the AI has discovered from successful approaches.</p>
+      <p>Entries are auto-saved when the AI identifies a reusable pattern, or you can add them manually. All enabled entries are injected into the system prompt on every request.</p>
+      <p>Toggle individual entries on/off with the checkbox. Delete entries with the trash icon. Dragging is not required — use the toggle to temporarily suppress an instruction without deleting it.</p>
+    </section>
+
+    <!-- ── Spec Memory ── -->
+    <section class="help-section" id="help-memory">
+      <h2 class="help-h2">Spec Memory</h2>
+      <p>The <strong>Spec Memory</strong> tab (inside Playbook) organises knowledge into categories and groups. Each group is a block of text that gets injected into the AI's system prompt when enabled.</p>
+      <p>Use it to store component specs, API documentation, design system rules, or any reusable reference the AI should know about. Categories can be exported and imported as JSON.</p>
+      <ul class="help-list">
+        <li>Click <strong>New Category</strong> to create a top-level namespace</li>
+        <li>Add groups inside a category to hold specific knowledge blocks</li>
+        <li>Toggle a group on/off to include or exclude it from the system context</li>
+        <li>Click <strong>Reset Built-in</strong> to restore the default categories without affecting custom ones</li>
+      </ul>
+    </section>
+
+    <!-- ── Agent Rules ── -->
+    <section class="help-section" id="help-rules">
+      <h2 class="help-h2">Agent Rules</h2>
+      <p>Agent Rules (<i class="ti ti-robot" style="font-size:12px"></i> in the sidebar footer) are hard constraints injected into <em>every</em> AI message, regardless of which agent or model is active.</p>
+      <p>Use them for global formatting preferences, safety guardrails, or behavioral overrides that should always apply, such as:</p>
+      <ul class="help-list">
+        <li>Always write complete commands — never leave code blocks empty</li>
+        <li>Reply in a specific language</li>
+        <li>Never include caveats or disclaimers</li>
+      </ul>
+      <p>Rules are persisted locally and survive app restarts.</p>
+    </section>
+
+    <!-- ── Settings ── -->
+    <section class="help-section" id="help-settings">
+      <h2 class="help-h2">Settings</h2>
+      <p>Open Settings from the bottom of the sidebar (<i class="ti ti-settings" style="font-size:12px"></i> Settings button).</p>
+      <dl class="help-dl">
+        <dt>Personal Access Token</dt>
+        <dd>Override the auto-detected Copilot token. Required if you are not signed into the <code>gh</code> CLI. Generate one at github.com/settings/tokens with the <code>copilot</code> scope.</dd>
+        <dt>Thinking Budget</dt>
+        <dd>Controls extended thinking for supported models (Claude, o-series). Higher budgets allow deeper analysis at the cost of more tokens: Off / Low (~1K) / Medium (~5K) / High (~10K) / Max (~32K).</dd>
+        <dt>Maximum Context Turns</dt>
+        <dd>How many past conversation messages to include in each request. Higher values increase accuracy for long tasks but also cost more tokens.</dd>
+        <dt>Auto-run Shell Commands</dt>
+        <dd>When enabled, bash blocks execute automatically without a click. Use with caution.</dd>
+        <dt>System Prompt</dt>
+        <dd>Override the default system prompt for all conversations. Changes take effect on the next message.</dd>
+      </dl>
+    </section>
+
+    <!-- ── Shortcuts ── -->
+    <section class="help-section" id="help-shortcuts">
+      <h2 class="help-h2">Keyboard Shortcuts</h2>
+      <table class="help-table">
+        <thead>
+          <tr><th>Action</th><th>Shortcut</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Send message</td><td><kbd>Enter</kbd></td></tr>
+          <tr><td>Insert newline</td><td><kbd>Shift+Enter</kbd></td></tr>
+          <tr><td>Open Agent Store</td><td><kbd>Ctrl/Cmd+Shift+P</kbd></td></tr>
+          <tr><td>Open Agent Builder</td><td><kbd>Ctrl/Cmd+Shift+B</kbd></td></tr>
+          <tr><td>Open Analytics</td><td><kbd>Ctrl/Cmd+Shift+A</kbd></td></tr>
+          <tr><td>Deactivate agent (empty input)</td><td><kbd>Esc</kbd></td></tr>
+          <tr><td>Close any panel</td><td><kbd>Esc</kbd></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+  </div><!-- /help-body -->
+</div><!-- /help-panel -->
+
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/loader.js"></script>
+</body>
+</html>
