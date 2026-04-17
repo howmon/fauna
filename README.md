@@ -201,16 +201,18 @@ The app requests and uses:
 ## Project Structure
 
 ```
-Fauna/
+fauna/
 ├── main.js                  # Electron main process
 ├── server.js                # Express server — multi-provider AI, shell exec, browse, Figma MCP
 ├── agent-sandbox.js         # Server-side security enforcement for agent operations
 ├── agent-scanner.js         # Static vulnerability analysis for agent code
 ├── agent-tools.js           # Built-in agent tools (shell, file, fetch) with permission checks
+├── package.json
 ├── public/
 │   ├── index.html           # SPA shell — loads modular JS/CSS
 │   ├── css/
 │   │   └── styles.css       # All styles
+│   ├── img/
 │   └── js/
 │       ├── app.js           # Boot, keyboard shortcuts, drag-drop
 │       ├── state.js         # Global state management
@@ -225,26 +227,34 @@ Fauna/
 │       ├── markdown.js      # Markdown → HTML with code block handling
 │       ├── writefile.js     # File write/replace/patch execution
 │       ├── playbook.js      # Learned instructions CRUD
+│       ├── smart-features.js# Context-aware suggestions and smart completions
 │       ├── agents.js        # Agent activation, chip UI, delegation parsing
 │       ├── agent-builder.js # 7-step agent creation wizard
 │       ├── agent-store.js   # Store browse, install, publish, update
 │       ├── agent-polish.js  # Auto-update checks, composition parsing
 │       └── agent-system.js  # Built-in agents, orchestrator prompt injection
 ├── assets/
-│   ├── figma-plugin/        # Bundled Figma plugin
+│   ├── figma-plugin/        # Bundled Figma plugin (assets/figma-plugin/)
 │   │   ├── manifest.json
 │   │   ├── code.js          # Plugin sandbox — executes figma_execute
 │   │   └── ui.html          # Plugin panel — WebSocket relay + log
+│   ├── entitlements.mac.plist
 │   ├── icon.icns
-│   └── icon.png
-├── relay/                   # Standalone WebSocket relay for Figma plugin
+│   ├── icon.png
+│   └── logo.svg
+├── relay/                   # Standalone Figma plugin + WebSocket relay server
 │   ├── server/
-│   │   ├── index.js         # WebSocket relay server (port 3335)
-│   │   └── a11y-spec.js     # A11y spec Figma renderer
-│   ├── manifest.json
-│   ├── code.js
-│   └── ui.html
-└── package.json
+│   │   ├── index.js         # WebSocket relay server (port 3335) + MCP tools
+│   │   ├── index-tokens.js  # Design token indexer
+│   │   └── systems.json     # Registered design system configurations
+│   ├── manifest.json        # Figma plugin manifest
+│   ├── code.js              # Plugin sandbox code
+│   ├── ui.html              # Plugin panel UI
+│   └── package.json
+├── CODE_OF_CONDUCT.md
+├── CONTRIBUTING.md
+├── LICENSE
+└── SECURITY.md
 ```
 
 ---
