@@ -597,9 +597,21 @@ mcp.tool('figma_execute',
   },
   async ({ code, timeout_ms, file_key }) => {
     const timeout = Math.min(timeout_ms || 15000, 30000);
-    // Prepend a loadFont helper so agents can call await loadFont(textNode)
-    // without needing to define it — handles reversed style names and fallbacks.
+    // Prepend font pre-loading + a loadFont helper so agents never hit
+    // "unloaded font in appendChild" errors for common design-system fonts.
     const fontHelper = `
+// Pre-load common Segoe Sans variants used by design system components
+await Promise.allSettled([
+  figma.loadFontAsync({ family: 'Segoe Sans', style: 'Regular' }),
+  figma.loadFontAsync({ family: 'Segoe Sans', style: 'Text Regular' }),
+  figma.loadFontAsync({ family: 'Segoe Sans', style: 'Bold' }),
+  figma.loadFontAsync({ family: 'Segoe Sans', style: 'Semibold' }),
+  figma.loadFontAsync({ family: 'Segoe Sans', style: 'Text Bold' }),
+  figma.loadFontAsync({ family: 'Segoe Sans', style: 'Text Semibold' }),
+  figma.loadFontAsync({ family: 'Segoe UI', style: 'Regular' }),
+  figma.loadFontAsync({ family: 'Segoe UI', style: 'Bold' }),
+  figma.loadFontAsync({ family: 'Segoe UI', style: 'Semibold' }),
+]);
 async function loadFont(textNode) {
   const fn = textNode.fontName;
   try { await figma.loadFontAsync(fn); return; } catch(_) {}
