@@ -137,6 +137,7 @@
       <select id="model-select" onchange="onModelChange(this.value)"></select>
       <button class="topbar-btn" onclick="clearConversation()" title="Clear messages"><i class="ti ti-trash"></i> Clear</button>
       <button class="topbar-btn" onclick="toggleDebugLog()" id="debug-btn" title="Debug log"><i class="ti ti-bug"></i></button>
+      <button class="topbar-btn voice-mic-btn" id="voice-mic-btn" data-voice-state="off" title="Voice control — click to toggle, say wake word to activate"><i class="ti ti-microphone-off"></i></button>
       <button class="topbar-btn topbar-account-btn" id="topbar-account-btn" onclick="openStoreAccount()" title="Agent Store Account"><i class="ti ti-user-circle"></i> <span id="topbar-account-label">Account</span></button>
       <!-- Windows-only title bar controls (shown via JS on win32) -->
       <div id="win-controls">
@@ -144,6 +145,13 @@
         <button class="win-ctrl" title="Maximize" onclick="winCtrl('maximize')"><i class="ti ti-square"></i></button>
         <button class="win-ctrl close" title="Close" onclick="winCtrl('close')"><i class="ti ti-x"></i></button>
       </div>
+    </div>
+
+    <!-- Voice overlay -->
+    <div id="voice-overlay">
+      <div id="voice-overlay-ring"></div>
+      <div id="voice-overlay-text">Listening…</div>
+      <div id="voice-overlay-hint">Speak your command</div>
     </div>
 
     <!-- Debug log panel -->
@@ -439,6 +447,31 @@ Examples:
     </div>
   </div>
 
+  <!-- Voice Control -->
+  <div class="settings-section">
+    <div class="settings-section-title">Voice Control</div>
+    <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none">
+      <input type="checkbox" id="voice-toggle"
+        onchange="setVoiceEnabled(this.checked)"
+        style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+      <span style="font-size:12.5px;color:var(--text)">Enable voice control</span>
+    </label>
+    <div class="settings-hint" style="margin-top:4px">
+      Say the wake word to activate — Fauna will listen for your command and route it automatically.
+      Requires microphone permission. Runs entirely on-device via Chromium's speech recognition.
+    </div>
+    <div id="voice-wake-row" style="margin-top:10px;display:none">
+      <label class="settings-label"><span>Wake word</span></label>
+      <div class="settings-input-row">
+        <input id="voice-wake-input" class="settings-input" type="text" placeholder="fauna"
+          spellcheck="false" autocomplete="off"
+          onkeydown="if(event.key==='Enter')saveVoiceWakeWord()">
+        <button class="settings-row-btn" onclick="saveVoiceWakeWord()">Save</button>
+      </div>
+      <div class="settings-hint">Default: <strong>fauna</strong>. Speak this word to activate voice input.</div>
+    </div>
+  </div>
+
   <!-- About -->
   <div class="settings-section" style="flex:1">
     <div class="settings-section-title">About</div>
@@ -545,6 +578,7 @@ Examples:
 <script src="js/agent-store.js"></script>
 <script src="js/agent-polish.js"></script>
 <script src="js/chat.js"></script>
+<script src="js/voice.js"></script>
 <script src="js/app.js"></script>
 
 <!-- ── Playbook panel ──────────────────────────────────────────── -->

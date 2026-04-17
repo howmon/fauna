@@ -276,6 +276,49 @@ button .ti, label .ti { pointer-events: none; }
 .topbar-btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent2); }
 .topbar-account-btn .ti-user-circle { font-size: 14px; }
 .topbar-account-btn.logged-in { border-color: var(--accent); color: var(--accent); }
+
+/* ── Voice mic button ──────────────────────────────────────────────── */
+.voice-mic-btn { position: relative; padding: 5px 9px; }
+.voice-mic-btn[data-voice-state="off"]       { color: var(--text-muted); }
+.voice-mic-btn[data-voice-state="listening"] { color: var(--accent); border-color: var(--accent); }
+.voice-mic-btn[data-voice-state="active"]    {
+  color: #fff; background: var(--accent); border-color: var(--accent);
+  animation: voice-pulse 1s ease-in-out infinite;
+}
+@keyframes voice-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
+  50%       { box-shadow: 0 0 0 5px transparent; }
+}
+
+/* ── Voice overlay ─────────────────────────────────────────────────── */
+#voice-overlay {
+  position: fixed; inset: 0; z-index: 10000;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 16px;
+  background: rgba(0,0,0,.72); backdrop-filter: blur(6px);
+  opacity: 0; pointer-events: none;
+  transition: opacity .2s ease;
+}
+#voice-overlay.visible { opacity: 1; pointer-events: auto; }
+
+#voice-overlay-ring {
+  width: 72px; height: 72px; border-radius: 50%;
+  border: 3px solid var(--accent);
+  animation: voice-ring 1.2s ease-in-out infinite;
+}
+@keyframes voice-ring {
+  0%, 100% { transform: scale(1);   opacity: 1; }
+  50%       { transform: scale(1.2); opacity: .5; }
+}
+
+#voice-overlay-text {
+  font-size: 22px; font-family: var(--font); color: #fff;
+  font-weight: 500; max-width: 560px; text-align: center;
+  min-height: 32px;
+}
+#voice-overlay-hint {
+  font-size: 12px; color: var(--text-muted); letter-spacing: .04em;
+}
 #model-select {
   background: var(--surface2); border: 1px solid var(--border);
   color: var(--text); border-radius: var(--radius-sm); padding: 5px 8px;
