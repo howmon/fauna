@@ -44,6 +44,27 @@ async function storeApi(endpoint, options) {
 
 // ── Open / close store panel ─────────────────────────────────────────────
 
+// Re-fetch account from backend to pick up verified status changes
+async function refreshStoreAccount() {
+  if (!localStorage.getItem('store-token')) return;
+  try {
+    var r = await storeApi('/auth/me');
+    var d = await r.json();
+    if (storeState.account) {
+      var wasVerified = storeState.account.verified;
+      storeState.account.verified = d.verified || false;
+      storeState.account.role = d.role || storeState.account.role;
+      storeState.account.name = d.name || storeState.account.name;
+      localStorage.setItem('store-account', JSON.stringify(storeState.account));
+      // Re-render if verified status changed
+      if (!wasVerified && storeState.account.verified) {
+        renderStorePanel();
+        updateTopbarAccount();
+      }
+    }
+  } catch (_) {}
+}
+
 function openAgentStore() {
   storeState.open = true;
   storeState.view = 'browse';
@@ -55,6 +76,7 @@ function openAgentStore() {
   loadStoreCategories();
   searchStoreAgents();
   loadUnreadCount();
+  refreshStoreAccount();
 }
 
 function closeAgentStore() {
@@ -1492,6 +1514,8 @@ function openStoreAccount() {
     storeState.view = 'account';
     renderStorePanel();
   }
+  // Always refresh to pick up latest verified status
+  refreshStoreAccount().then(function() { renderStorePanel(); });
 }
 
 function updateTopbarAccount() {
@@ -1513,6 +1537,8 @@ function initAgentStore() {
     var cached = localStorage.getItem('store-account');
     if (cached) storeState.account = JSON.parse(cached);
   } catch (_) {}
+  // Refresh account in background to pick up verified status changes
+  refreshStoreAccount();
   // Fetch unread notification count if logged in
   loadUnreadCount();
   // Update topbar account label

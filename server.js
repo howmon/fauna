@@ -4091,6 +4091,9 @@ app.post('/api/store/auth/login', express.json(), (req, res) => {
 app.post('/api/store/auth/register', express.json(), (req, res) => {
   storeProxy(req, res, 'POST', '/auth/register', req.body);
 });
+app.get('/api/store/auth/me', (req, res) => {
+  storeProxy(req, res, 'GET', '/auth/me');
+});
 
 // Developer dashboard — user's published agents
 app.get('/api/store/dashboard/agents', (req, res) => {
@@ -4122,6 +4125,15 @@ app.post('/api/store/admin/agents/:id/deprecate', express.json(), (req, res) => 
 });
 app.delete('/api/store/admin/agents/:id', express.json(), (req, res) => {
   storeProxy(req, res, 'DELETE', '/admin/agents/' + req.params.id, req.body);
+});
+app.get('/api/store/admin/agents/:id/access-rules', (req, res) => {
+  storeProxy(req, res, 'GET', '/admin/agents/' + req.params.id + '/access-rules');
+});
+app.post('/api/store/admin/agents/:id/access-rules', express.json(), (req, res) => {
+  storeProxy(req, res, 'POST', '/admin/agents/' + req.params.id + '/access-rules', req.body);
+});
+app.delete('/api/store/admin/agents/:id/access-rules/:rule', (req, res) => {
+  storeProxy(req, res, 'DELETE', '/admin/agents/' + req.params.id + '/access-rules/' + req.params.rule);
 });
 
 // ── Notification routes ──────────────────────────────────────────────────
