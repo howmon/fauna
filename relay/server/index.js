@@ -22,7 +22,6 @@ import fs                       from 'fs';
 import path                     from 'path';
 import https                    from 'https';
 import { fileURLToPath }        from 'url';
-import { generateA11ySpec }      from './a11y-spec.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -753,26 +752,6 @@ mcp.tool('list_pages', 'List all pages in the Figma document', {},
   async () => {
     const result = await sendToFigma({ type: 'list-pages' });
     return { content: [{ type: 'text', text: (result.pages || []).join('\n') || 'No pages' }] };
-  }
-);
-
-// ── A11y Spec generation ──────────────────────────────────────────────────
-
-mcp.tool('generate_a11y_spec',
-  'Generate a complete A11y design spec for the selected (or specified) Figma component. ' +
-  'Creates a new page with horizontal section columns: Overview, Usage, Examples, Accessibility, Content, RAI. ' +
-  'Each section uses design-system guidance components and includes live component instance previews with toggled properties.',
-  {
-    node_id:     z.string().optional().describe('Figma node ID of the component to document (defaults to current selection)'),
-    description: z.string().optional().describe('Optional description override for the component'),
-  },
-  async ({ node_id, description }) => {
-    try {
-      const pageName = await generateA11ySpec(sendToFigma, { node_id, description });
-      return { content: [{ type: 'text', text: `✅ A11y Spec created: "${pageName}"\n\nThe spec page includes:\n• Splash cover card\n• Overview (anatomy + live preview)\n• Usage (best practices, dos/don\'ts, placement)\n• Examples (live component instances per state)\n• Accessibility (keyboard, tab order, narration)\n• Content guidance (text strings)\n• RAI principles` }] };
-    } catch (err) {
-      return { content: [{ type: 'text', text: `❌ Failed to generate A11y spec: ${err.message}` }] };
-    }
   }
 );
 
