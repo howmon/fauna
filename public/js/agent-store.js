@@ -1017,7 +1017,7 @@ async function reviewApprove(agentId) {
 }
 
 // Show approve dialog with visibility + access rules
-function showApproveAccessDialog(agentId) {
+async function showApproveAccessDialog(agentId) {
   var card = document.querySelector('.review-card[data-agent-id="' + agentId + '"]');
   if (!card) return;
   var existing = card.querySelector('.review-approve-panel');
@@ -1025,14 +1025,29 @@ function showApproveAccessDialog(agentId) {
 
   var panel = document.createElement('div');
   panel.className = 'review-approve-panel review-reason-row';
+  panel.innerHTML = '<div style="opacity:0.7;font-size:12px"><i class="ti ti-loader"></i> Loading…</div>';
+  card.appendChild(panel);
+
+  // Fetch existing visibility + rules so we don't ask again for what's already set
+  var existingVisibility = 'public';
+  var existingRules = [];
+  try {
+    var ar = await storeApi('/admin/agents/' + agentId + '/access-rules');
+    var ad = await ar.json();
+    existingVisibility = ad.visibility || 'public';
+    existingRules = ad.rules || [];
+  } catch (_) {}
+
   panel.innerHTML =
     '<div style="font-size:12px;margin-bottom:6px;opacity:0.8">Visibility</div>' +
     '<div class="review-approve-vis" style="display:flex;gap:6px;margin-bottom:8px">' +
-      '<button type="button" class="builder-btn small primary" data-vis="public"><i class="ti ti-world"></i> Public</button>' +
-      '<button type="button" class="builder-btn small secondary" data-vis="restricted"><i class="ti ti-lock"></i> Restricted</button>' +
+      '<button type="button" class="builder-btn small" data-vis="public"><i class="ti ti-world"></i> Public</button>' +
+      '<button type="button" class="builder-btn small" data-vis="restricted"><i class="ti ti-lock"></i> Restricted</button>' +
     '</div>' +
     '<div class="review-approve-rules" style="display:none">' +
-      '<div style="font-size:12px;margin-bottom:6px;opacity:0.8">Allowed users / domains</div>' +
+      '<div style="font-size:12px;margin-bottom:4px;opacity:0.8">Existing rules (carried over automatically)</div>' +
+      '<div class="review-approve-existing-rules" style="margin-bottom:6px"></div>' +
+      '<div style="font-size:12px;margin-bottom:4px;opacity:0.8">New rules to add</div>' +
       '<div class="review-approve-rules-list"></div>' +
       '<button type="button" class="builder-btn small secondary" id="review-approve-add-rule"><i class="ti ti-plus"></i> Add rule</button>' +
     '</div>' +
@@ -1042,7 +1057,20 @@ function showApproveAccessDialog(agentId) {
     '</div>';
   card.appendChild(panel);
 
-  var state = { visibility: 'public', rules: [] };
+  // Render existing rules read-only
+  var existingContainer = panel.querySelector('.review-approve-existing-rules');
+  if (existingRules.length) {
+    existingContainer.innerHTML = existingRules.map(function(r) {
+      return '<div style="display:flex;gap:6px;align-items:center;padding:2px 0;font-size:12px">' +
+        '<span style="background:var(--surface2);border-radius:4px;padding:1px 6px">' + escHtml(r.type) + '</span>' +
+        '<span style="font-family:monospace;flex:1">' + escHtml(r.value) + '</span>' +
+      '</div>';
+    }).join('');
+  } else {
+    existingContainer.innerHTML = '<div style="opacity:0.5;font-size:12px;font-style:italic">None</div>';
+  }
+
+  var state = { visibility: existingVisibility, rules: [] };
 
   function renderRules() {
     var container = panel.querySelector('.review-approve-rules-list');
@@ -1094,11 +1122,12 @@ function showApproveAccessDialog(agentId) {
       var clean = state.rules
         .map(function(r) { return { type: r.type, value: (r.value || '').trim() }; })
         .filter(function(r) { return r.value; });
-      if (clean.length === 0) {
+      // Only require rules if there are no existing rules already covering it
+      if (clean.length === 0 && existingRules.length === 0) {
         showToast('Add at least one rule, or choose Public');
         return;
       }
-      body.access_rules = clean;
+      if (clean.length > 0) body.access_rules = clean;
     }
     try {
       await storeApi('/admin/agents/' + agentId + '/approve', {
@@ -1112,7 +1141,7 @@ function showApproveAccessDialog(agentId) {
     }
   };
 
-  setVisibility('public');
+  setVisibility(existingVisibility);
 }
 
 // Manage access rules on already-approved agents
