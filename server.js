@@ -3927,11 +3927,11 @@ app.get('/api/store/agents/:slug/zip', async (req, res) => {
     const zipRes = await fetch(STORE_BACKEND_URL + '/agents/' + slug + '/download', {
       method: 'POST',
       headers: {
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/zip, application/octet-stream, */*',
+        'Content-Type': 'application/json',
         ...(token ? { 'Authorization': token } : {})
       },
-      body: ''
+      body: '{}'
     });
     if (!zipRes.ok) {
       const text = await zipRes.text();

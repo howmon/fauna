@@ -474,7 +474,10 @@ async function installStoreAgent(slug) {
   showToast('Installing ' + slug + '…');
   try {
     // Download zip directly through proxy
-    var zipR = await fetch('/api/store/agents/' + encodeURIComponent(slug) + '/zip');
+    var _zipToken = localStorage.getItem('store-token');
+    var zipR = await fetch('/api/store/agents/' + encodeURIComponent(slug) + '/zip', {
+      headers: _zipToken ? { 'Authorization': 'Bearer ' + _zipToken } : {}
+    });
     if (!zipR.ok) {
       var errText = await zipR.text();
       showToast('Download failed: ' + (errText || zipR.status)); return;
