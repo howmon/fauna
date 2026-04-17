@@ -597,7 +597,32 @@ mcp.tool('figma_execute',
   },
   async ({ code, timeout_ms, file_key }) => {
     const timeout = Math.min(timeout_ms || 15000, 30000);
-    const result  = await sendToFigma({ type: 'execute-code', code }, timeout, file_key || null);
+    // Prepend a loadFont helper so agents can call await loadFont(textNode)
+    // without needing to define it — handles reversed style names and fallbacks.
+    const fontHelper = `
+async function loadFont(textNode) {
+  const fn = textNode.fontName;
+  try { await figma.loadFontAsync(fn); return; } catch(_) {}
+  const parts = fn.style.split(' ');
+  if (parts.length >= 2) {
+    const rev = { family: fn.family, style: parts.slice().reverse().join(' ') };
+    try { await figma.loadFontAsync(rev); textNode.fontName = rev; return; } catch(_) {}
+  }
+  const synonyms = {Demibold:'Semibold',Semibold:'Demibold',Medium:'Regular',Heavy:'Bold',Black:'Bold',ExtraBold:'Bold'};
+  for (const [from, to] of Object.entries(synonyms)) {
+    if (fn.style.includes(from)) {
+      const alt = { family: fn.family, style: fn.style.replace(from, to) };
+      try { await figma.loadFontAsync(alt); textNode.fontName = alt; return; } catch(_) {}
+    }
+  }
+  const s = fn.style.toLowerCase();
+  const w = s.includes('bold') ? 'Bold' : (s.includes('semi') || s.includes('demi')) ? 'Semibold' : 'Regular';
+  const fb = { family: 'Segoe UI', style: w };
+  await figma.loadFontAsync(fb); textNode.fontName = fb;
+}
+`;
+    const wrappedCode = fontHelper + code;
+    const result  = await sendToFigma({ type: 'execute-code', code: wrappedCode }, timeout, file_key || null);
     if (result.success) {
       const out = result.result !== null && result.result !== undefined
         ? (typeof result.result === 'object' ? JSON.stringify(result.result, null, 2) : String(result.result))
