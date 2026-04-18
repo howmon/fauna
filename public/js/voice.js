@@ -10,6 +10,7 @@ var _whisperWorker    = null;   // Web Worker running Whisper
 var _whisperReady     = false;  // model loaded and ready
 var _micStream        = null;   // MediaStream from getUserMedia
 var _audioCtx         = null;   // AudioContext for VAD analyser
+var _micSource        = null;   // MediaStreamSourceNode — must stay referenced (GC breaks graph)
 var _analyserNode     = null;   // AnalyserNode for energy detection
 var _mediaRecorder    = null;   // MediaRecorder for audio chunks
 var _recordChunks     = [];     // Blob chunks from current recording
@@ -534,10 +535,10 @@ function _startWakeListener() {
     .then(function(stream) {
       _micStream    = stream;
       _audioCtx     = new (window.AudioContext || window.webkitAudioContext)();
-      var src       = _audioCtx.createMediaStreamSource(stream);
+      _micSource    = _audioCtx.createMediaStreamSource(stream);  // keep ref — prevents GC disconnect
       _analyserNode = _audioCtx.createAnalyser();
       _analyserNode.fftSize = 2048;
-      src.connect(_analyserNode);
+      _micSource.connect(_analyserNode);
       // NOT connected to destination — avoids mic feedback
       _startVADLoop();
       _setVoicePillState('listening');
@@ -561,6 +562,10 @@ function _stopVoiceListeners() {
   if (_micStream) {
     _micStream.getTracks().forEach(function(t) { t.stop(); });
     _micStream = null;
+  }
+  if (_micSource) {
+    try { _micSource.disconnect(); } catch (_) {}
+    _micSource = null;
   }
   if (_audioCtx) {
     try { _audioCtx.close(); } catch (_) {}
