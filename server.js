@@ -1533,7 +1533,8 @@ function validateExternalUrl(raw) {
 // Accepts raw audio bytes (webm/ogg/wav) as application/octet-stream.
 // Writes to a temp file, transcribes via whisper.cpp, returns { text }.
 app.post('/api/transcribe', async (req, res) => {
-  let tmpFile = null;
+  let tmpInput = null;
+  let tmpWav   = null;
   try {
     const _nodewhisper = _require('nodejs-whisper');
     const nodewhisper  = _nodewhisper.nodewhisper || _nodewhisper.default || _nodewhisper;
@@ -1546,12 +1547,27 @@ app.post('/api/transcribe', async (req, res) => {
     });
     if (!chunks.length) return res.status(400).json({ error: 'Empty audio' });
 
-    const buf  = Buffer.concat(chunks);
-    const ext  = (req.headers['content-type'] || '').includes('wav') ? '.wav' : '.webm';
-    tmpFile    = path.join(os.tmpdir(), `fauna-stt-${Date.now()}${ext}`);
-    fs.writeFileSync(tmpFile, buf);
+    const buf       = Buffer.concat(chunks);
+    const isWav     = (req.headers['content-type'] || '').includes('wav');
+    const ext       = isWav ? '.wav' : '.webm';
+    const base      = `fauna-stt-${Date.now()}`;
+    tmpInput        = path.join(os.tmpdir(), base + ext);
+    tmpWav          = path.join(os.tmpdir(), base + '.wav');
+    fs.writeFileSync(tmpInput, buf);
 
-    const transcript = await nodewhisper(tmpFile, {
+    // Convert to 16kHz mono PCM WAV — whisper.cpp requires this format
+    if (!isWav) {
+      const { execFileSync } = _require('child_process');
+      execFileSync('ffmpeg', [
+        '-y', '-i', tmpInput,
+        '-ar', '16000', '-ac', '1', '-f', 'wav',
+        tmpWav,
+      ], { stdio: 'pipe' });
+    } else {
+      fs.copyFileSync(tmpInput, tmpWav);
+    }
+
+    const transcript = await nodewhisper(tmpWav, {
       modelName: 'tiny.en',
       removeWavFileAfterTranscription: true,
       withCuda: false,
@@ -1565,7 +1581,7 @@ app.post('/api/transcribe', async (req, res) => {
       },
     });
 
-    // transcript is raw stdout — grab just plain text (strip timestamps if any)
+    // transcript is raw stdout — strip timestamps and blank audio markers
     const text = (transcript || '')
       .replace(/\[\d+:\d+:\d+\.\d+ --> \d+:\d+:\d+\.\d+\]\s*/g, '')
       .replace(/\[BLANK_AUDIO\]/gi, '')
@@ -1576,9 +1592,8 @@ app.post('/api/transcribe', async (req, res) => {
     console.error('[transcribe]', err.message);
     res.status(500).json({ error: err.message });
   } finally {
-    if (tmpFile && fs.existsSync(tmpFile)) {
-      try { fs.unlinkSync(tmpFile); } catch (_) {}
-    }
+    if (tmpInput && fs.existsSync(tmpInput)) try { fs.unlinkSync(tmpInput); } catch (_) {}
+    if (tmpWav   && fs.existsSync(tmpWav))   try { fs.unlinkSync(tmpWav);   } catch (_) {}
   }
 });
 
