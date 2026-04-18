@@ -286,7 +286,7 @@ function browserRefresh() {
 function _checkAntibotChallenge() {
   var wv = getActiveWebview();
   if (!wv) return;
-  wv.executeJavaScript('JSON.stringify({t:document.title,b:(document.body||{}).innerText||""})').then(function(json) {
+  wvExec(wv, 'JSON.stringify({t:document.title,b:(document.body||{}).innerText||""})').then(function(json) {
     try {
       var d = JSON.parse(json);
       var combined = (d.t + ' ' + d.b).toLowerCase();
@@ -415,6 +415,17 @@ async function browserScreenshot() {
 // executeJavaScript wrapper with timeout + retry.
 // Timeout prevents hangs when the webview JS never resolves (e.g. infinite loop, stuck page).
 // Retry handles GUEST_VIEW_MANAGER_CALL errors when the renderer is mid-navigation.
+function _waitForDomReady(wv) {
+  return new Promise(function(resolve) {
+    wv.addEventListener('dom-ready', function onReady() {
+      wv.removeEventListener('dom-ready', onReady);
+      resolve();
+    });
+    // Resolve immediately if already loaded (dom-ready won't fire again)
+    setTimeout(resolve, 5000);
+  });
+}
+
 async function wvExec(wv, js, retries) {
   retries = retries === undefined ? 3 : retries;
   var TIMEOUT_MS = 8000;
@@ -428,8 +439,13 @@ async function wvExec(wv, js, retries) {
       ]);
       return result;
     } catch(e) {
-      if (attempt === retries) throw e;
-      await new Promise(function(r) { setTimeout(r, 600 + attempt * 400); });
+      if (/must be attached|dom-ready|dom_ready/i.test(e.message)) {
+        // WebView not ready yet — wait for dom-ready then retry
+        await _waitForDomReady(wv);
+      } else {
+        if (attempt === retries) throw e;
+        await new Promise(function(r) { setTimeout(r, 600 + attempt * 400); });
+      }
     }
   }
 }
