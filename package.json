@@ -107,7 +107,11 @@
       "node_modules/@xenova/transformers/dist/ort-wasm-simd-threaded.wasm",
       "node_modules/@xenova/transformers/dist/ort-wasm-simd.wasm",
       "node_modules/@xenova/transformers/dist/ort-wasm.wasm",
-      "node_modules/@xenova/transformers/dist/ort-wasm-threaded.wasm"
+      "node_modules/@xenova/transformers/dist/ort-wasm-threaded.wasm",
+      "node_modules/nodejs-whisper/dist/**",
+      "node_modules/nodejs-whisper/cpp/whisper.cpp/build/**",
+      "node_modules/nodejs-whisper/cpp/whisper.cpp/models/**",
+      "!node_modules/nodejs-whisper/cpp/whisper.cpp/models/ggml-tiny.en.bin"
     ],
     "electronVersion": "41.0.3",
     "extraResources": [

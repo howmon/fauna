@@ -375,34 +375,15 @@ function _routeVoiceCommand(transcript) {
   }
 }
 
-// ── Whisper worker ────────────────────────────────────────────────────────
+// ── Whisper via server-side whisper.cpp ──────────────────────────────────
+// No ONNX worker needed — audio blob is POSTed to /api/transcribe which runs
+// whisper.cpp natively (4-8× faster than WASM, Metal-accelerated on Apple Silicon).
 
 function _initWhisperWorker() {
-  if (_whisperWorker) return;
-  _whisperWorker = new Worker('/js/whisper-worker.js', { type: 'module' });
-  _whisperWorker.onmessage = function(e) {
-    var d = e.data;
-    if (d.type === 'ready') {
-      _whisperReady = true;
-      if (typeof showToast === 'function') showToast('Voice ready — say "' + getWakeWord() + '" to activate');
-    } else if (d.type === 'status') {
-      console.log('[whisper]', d.msg);
-      if (typeof showToast === 'function') showToast(d.msg);
-    } else if (d.type === 'result') {
-      _onWhisperResult(d.text);
-    } else if (d.type === 'error') {
-      console.error('[whisper] error:', d.error);
-      _vadState    = 'idle';
-      _voiceActive = false;
-      _hideVoiceOverlay();
-      _setVoicePillState(_voiceEnabled ? 'listening' : 'off');
-    }
-  };
-  _whisperWorker.onerror = function(err) {
-    console.error('[whisper] Worker crashed:', err);
-    _whisperReady  = false;
-    _whisperWorker = null;
-  };
+  // Signal ready immediately — no model download needed, inference is server-side
+  if (_whisperReady) return;
+  _whisperReady = true;
+  if (typeof showToast === 'function') showToast('Voice ready — say "' + getWakeWord() + '" to activate');
 }
 
 // ── Audio pipeline ────────────────────────────────────────────────────────
@@ -429,33 +410,30 @@ function _bestMime() {
 }
 
 async function _transcribeBlobs(chunks, mode) {
-  if (!chunks.length || !_whisperWorker || !_whisperReady) {
+  if (!chunks.length) {
     _vadState    = 'idle';
     _voiceActive = false;
     _hideVoiceOverlay();
     _setVoicePillState(_voiceEnabled ? 'listening' : 'off');
     return;
   }
-  console.log('[voice] transcribing', chunks.length, 'chunks, total bytes:', chunks.reduce(function(s,c){return s+c.size;},0), 'mode:', mode);
+  var blobType = (chunks[0] && chunks[0].type) || 'audio/webm';
+  var blob = new Blob(chunks, { type: blobType });
+  console.log('[voice] POSTing', blob.size, 'bytes to /api/transcribe, mode:', mode);
+  _vadState = 'transcribing';
   try {
-    var blobType = (chunks[0] && chunks[0].type) || 'audio/webm';
-    var blob     = new Blob(chunks, { type: blobType });
-    console.log('[voice] blob type:', blobType, 'size:', blob.size);
-    var arrayBuf = await blob.arrayBuffer();
-    var audioBuf = await _audioCtx.decodeAudioData(arrayBuf);
-    console.log('[voice] decoded audio — duration:', audioBuf.duration.toFixed(3) + 's', 'sampleRate:', audioBuf.sampleRate, 'channels:', audioBuf.numberOfChannels);
-    var float32  = await _resampleTo16k(audioBuf);
-    var maxAmp = 0; for (var i = 0; i < float32.length; i++) { var a = Math.abs(float32[i]); if (a > maxAmp) maxAmp = a; }
-    console.log('[voice] resampled float32 — length:', float32.length, 'maxAmplitude:', maxAmp.toFixed(4));
-    if (float32.length < 1600) {        // < 0.1s — noise, ignore
-      _vadState = 'idle';
-      if (mode === 'cmd') { _voiceActive = false; _hideVoiceOverlay(); _setVoicePillState(_voiceEnabled ? 'listening' : 'off'); }
-      return;
-    }
-    _vadState = 'transcribing';
-    _whisperWorker.postMessage({ type: 'transcribe', audio: float32 }, [float32.buffer]);
+    var resp = await fetch('/api/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': blobType },
+      body: blob,
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    var data = await resp.json();
+    var text = (data.text || '').replace(WHISPER_NOISE_TOKENS, '').trim();
+    console.log('[voice] transcribed:', JSON.stringify(text));
+    _onWhisperResult(text);
   } catch (err) {
-    console.warn('[voice] audio decode error:', err);
+    console.warn('[voice] transcribe error:', err);
     _vadState    = 'idle';
     _voiceActive = false;
     _hideVoiceOverlay();

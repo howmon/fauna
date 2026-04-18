@@ -1529,6 +1529,59 @@ function validateExternalUrl(raw) {
   return parsed.href;
 }
 
+// ── Whisper transcription (nodejs-whisper / whisper.cpp) ─────────────────
+// Accepts raw audio bytes (webm/ogg/wav) as application/octet-stream.
+// Writes to a temp file, transcribes via whisper.cpp, returns { text }.
+app.post('/api/transcribe', async (req, res) => {
+  let tmpFile = null;
+  try {
+    const _nodewhisper = _require('nodejs-whisper');
+    const nodewhisper  = _nodewhisper.nodewhisper || _nodewhisper.default || _nodewhisper;
+
+    const chunks = [];
+    await new Promise((resolve, reject) => {
+      req.on('data', c => chunks.push(c));
+      req.on('end', resolve);
+      req.on('error', reject);
+    });
+    if (!chunks.length) return res.status(400).json({ error: 'Empty audio' });
+
+    const buf  = Buffer.concat(chunks);
+    const ext  = (req.headers['content-type'] || '').includes('wav') ? '.wav' : '.webm';
+    tmpFile    = path.join(os.tmpdir(), `fauna-stt-${Date.now()}${ext}`);
+    fs.writeFileSync(tmpFile, buf);
+
+    const transcript = await nodewhisper(tmpFile, {
+      modelName: 'tiny.en',
+      removeWavFileAfterTranscription: true,
+      withCuda: false,
+      logger: { debug: () => {}, error: console.error },
+      whisperOptions: {
+        outputInText: false,
+        outputInSrt:  false,
+        outputInJson: false,
+        wordTimestamps: false,
+        noGpu: false,  // Metal on Apple Silicon is auto-detected
+      },
+    });
+
+    // transcript is raw stdout — grab just plain text (strip timestamps if any)
+    const text = (transcript || '')
+      .replace(/\[\d+:\d+:\d+\.\d+ --> \d+:\d+:\d+\.\d+\]\s*/g, '')
+      .replace(/\[BLANK_AUDIO\]/gi, '')
+      .trim();
+
+    res.json({ text });
+  } catch (err) {
+    console.error('[transcribe]', err.message);
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (tmpFile && fs.existsSync(tmpFile)) {
+      try { fs.unlinkSync(tmpFile); } catch (_) {}
+    }
+  }
+});
+
 app.post('/api/fetch-url', async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'URL required' });
