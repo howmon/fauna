@@ -38,6 +38,9 @@
     "productName": "Fauna",
     "copyright": "Copyright © 2026 Solomon Abey",
     "icon": "assets/icon.icns",
+    "asarUnpack": [
+      "node_modules/nodejs-whisper/**"
+    ],
     "mac": {
       "category": "public.app-category.developer-tools",
       "darkModeSupport": true,
