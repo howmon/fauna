@@ -360,7 +360,10 @@ async function _transcribeBlobs(chunks, mode) {
     console.log('[voice] blob type:', blobType, 'size:', blob.size);
     var arrayBuf = await blob.arrayBuffer();
     var audioBuf = await _audioCtx.decodeAudioData(arrayBuf);
+    console.log('[voice] decoded audio — duration:', audioBuf.duration.toFixed(3) + 's', 'sampleRate:', audioBuf.sampleRate, 'channels:', audioBuf.numberOfChannels);
     var float32  = await _resampleTo16k(audioBuf);
+    var maxAmp = 0; for (var i = 0; i < float32.length; i++) { var a = Math.abs(float32[i]); if (a > maxAmp) maxAmp = a; }
+    console.log('[voice] resampled float32 — length:', float32.length, 'maxAmplitude:', maxAmp.toFixed(4));
     if (float32.length < 1600) {        // < 0.1s — noise, ignore
       _vadState = 'idle';
       if (mode === 'cmd') { _voiceActive = false; _hideVoiceOverlay(); _setVoicePillState(_voiceEnabled ? 'listening' : 'off'); }

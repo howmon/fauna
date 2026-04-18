@@ -38,6 +38,7 @@ self.onmessage = async function(e) {
         task: 'transcribe',
         sampling_rate: 16000,
       });
+      console.log('[whisper-worker] raw result:', JSON.stringify(result));
       self.postMessage({ type: 'result', text: (result.text || '').trim() });
     } catch (err) {
       self.postMessage({ type: 'error', error: err.message });
