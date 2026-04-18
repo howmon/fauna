@@ -4,23 +4,23 @@
 /* ── Design Tokens — Dark (default) ─────────────────────────────────── */
 :root, [data-theme="dark"] {
   --bg:          #1b1b1b;
-  --sidebar:     #1f1f1f;
+  --sidebar: #1f1f1f;
   --surface:     #242424;
   --surface2:    #2e2e2e;
   --surface3:    #383838;
   --border:      #404040;
   --border2:     rgba(255,255,255,.07);
-  --accent:      #14B8A6;
-  --accent2:     #2DD4BF;
-  --accent-dim:  rgba(71, 236, 245, 0.12);
-  --accent-glow: rgba(71, 236, 245, 0.22);
+  --accent: #cbdfdd;
+  --accent2: #cccccc;
+  --accent-dim: rgba(71, 236, 245, 0.12);
+  --accent-glow: rgb(105 111 111 / 22%);
   --text:        #f5f5f5;
   --text-dim:    #b4b4b4;
-  --text-muted:  #787878;
+  --text-muted: #7a7a7a;
   --success:     #6ccb5f;
   --error:       #f36e6e;
   --warn:        #f2c661;
-  --user-bg:     #2a4a4e;
+  --user-bg: #303435;
   --ai-bg:       #1f1f1f;
   --radius:      8px;
   --radius-sm:   4px;
@@ -33,9 +33,10 @@
   --shadow-28:   0 14px 28px rgba(0,0,0,.32);
   --code-bg:     #161616;
   --code-header: #1c1c1c;
-  --code-inline-color: #5EEAD4;
+  --code-inline-color: #c6e8e2;
   color-scheme: dark;
 }
+
 
 /* ── Design Tokens — Light ──────────────────────────────────────────── */
 [data-theme="light"] {
