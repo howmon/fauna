@@ -775,7 +775,10 @@ function initVoice() {
 
 // ── Inline dictation — webkitSpeechRecognition (SFSpeechRecognizer on macOS) ──
 
-var _dictRec   = null;  // SpeechRecognition instance
+var _dictMediaRecorder = null;  // MediaRecorder for dictation
+var _dictStream        = null;  // MediaStream for dictation
+var _dictAudioCtx      = null;  // AudioContext for dictation VAD
+var _dictChunks        = [];    // recorded audio chunks
 var _dictState = 'idle'; // 'idle' | 'listening' | 'processing'
 
 var _DICTATION_CONV_CMDS = [
@@ -795,6 +798,10 @@ function _dictSetState(s) {
     btn.classList.add('recording');
     btn.title = 'Listening\u2026 (silence stops automatically)';
     btn.innerHTML = '<i class="ti ti-microphone-off"></i>';
+  } else if (s === 'processing') {
+    btn.classList.add('processing');
+    btn.title = 'Transcribing\u2026';
+    btn.innerHTML = '<i class="ti ti-loader"></i>';
   } else {
     btn.title = 'Dictate message';
     btn.innerHTML = '<i class="ti ti-microphone"></i>';
@@ -864,61 +871,104 @@ function _speakConvNavigate(dir) {
   if (typeof loadConversation === 'function') loadConversation(convs[next].id);
 }
 
+var DICT_SILENCE_MS    = 1500;  // ms of silence before auto-stop
+var DICT_MAX_MS        = 30000; // absolute max recording length
+var DICT_RMS_THRESHOLD = 0.004; // energy floor (same as wake word VAD)
+
 function startDictation() {
-  // If already listening, stop
-  if (_dictState === 'listening') {
-    if (_dictRec) { try { _dictRec.stop(); } catch (_) {} }
-    _dictSetState('idle');
+  // Toggle off if already running
+  if (_dictState === 'listening' || _dictState === 'processing') {
+    _dictStopRecording();
     return;
   }
 
-  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) {
-    if (typeof showToast === 'function') showToast('Speech recognition not available in this build');
-    return;
-  }
+  navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+    .then(function(stream) {
+      _dictStream   = stream;
+      _dictChunks   = [];
+      _dictAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-  var ta = document.getElementById('msg-input');
-  if (ta) ta._dictBase = ta.value; // snapshot baseline before session
+      // Route through silent gain so Chromium doesn't cull the graph
+      var source    = _dictAudioCtx.createMediaStreamSource(stream);
+      var analyser  = _dictAudioCtx.createAnalyser();
+      analyser.fftSize = 2048;
+      var silentGain = _dictAudioCtx.createGain();
+      silentGain.gain.value = 0;
+      source.connect(analyser);
+      analyser.connect(silentGain);
+      silentGain.connect(_dictAudioCtx.destination);
 
-  var rec = new SR();
-  _dictRec           = rec;
-  rec.continuous     = true;   // keep listening; VAD/silence handled by the engine
-  rec.interimResults = true;   // stream words live into the textarea
-  rec.lang           = 'en-US';
-  rec.maxAlternatives = 1;
+      var mime = _bestMime();
+      _dictMediaRecorder = new MediaRecorder(stream, { mimeType: mime });
+      _dictMediaRecorder.ondataavailable = function(e) {
+        if (e.data && e.data.size > 0) _dictChunks.push(e.data);
+      };
+      _dictMediaRecorder.onstop = function() { _dictTranscribe(); };
+      _dictMediaRecorder.start(100);
+      _dictSetState('listening');
 
-  rec.onstart = function() { _dictSetState('listening'); };
-
-  rec.onresult = function(e) {
-    var interim = '';
-    var finalText = '';
-    for (var i = e.resultIndex; i < e.results.length; i++) {
-      var t = e.results[i][0].transcript;
-      if (e.results[i].isFinal) { finalText += t; }
-      else                       { interim   += t; }
-    }
-    // Show interim words live
-    if (interim) _dictApplyInterim(interim);
-    // Commit each final segment immediately
-    if (finalText) _dictHandleTranscript(finalText);
-  };
-
-  rec.onerror = function(e) {
-    console.warn('[dictate] speech error', e.error);
-    _dictSetState('idle');
-    if (e.error === 'not-allowed') {
+      // VAD: stop on silence after speech detected
+      var buf       = new Float32Array(analyser.fftSize);
+      var hadSpeech = false;
+      var silenceMs = 0;
+      var maxTimer  = setTimeout(function() { _dictStopRecording(); }, DICT_MAX_MS);
+      var vadTimer  = setInterval(function() {
+        if (_dictState !== 'listening') { clearInterval(vadTimer); clearTimeout(maxTimer); return; }
+        analyser.getFloatTimeDomainData(buf);
+        var rms = _rms(buf);
+        if (rms > DICT_RMS_THRESHOLD) {
+          hadSpeech = true;
+          silenceMs = 0;
+        } else if (hadSpeech) {
+          silenceMs += 100;
+          if (silenceMs >= DICT_SILENCE_MS) {
+            clearInterval(vadTimer);
+            clearTimeout(maxTimer);
+            _dictStopRecording();
+          }
+        }
+      }, 100);
+    })
+    .catch(function(err) {
+      console.error('[dictate] getUserMedia error:', err);
       if (typeof showToast === 'function') showToast('Microphone access denied');
-    }
-  };
+    });
+}
 
-  rec.onend = function() {
-    // Clear any dangling interim text and finalise
-    var ta2 = document.getElementById('msg-input');
-    if (ta2) ta2._dictBase = undefined;
+function _dictStopRecording() {
+  if (_dictMediaRecorder && _dictMediaRecorder.state !== 'inactive') {
+    _dictMediaRecorder.stop();
+  }
+  if (_dictStream) {
+    _dictStream.getTracks().forEach(function(t) { t.stop(); });
+    _dictStream = null;
+  }
+  if (_dictAudioCtx) {
+    try { _dictAudioCtx.close(); } catch (_) {}
+    _dictAudioCtx = null;
+  }
+  _dictSetState('processing');
+}
+
+async function _dictTranscribe() {
+  if (!_dictChunks.length) { _dictSetState('idle'); return; }
+  var blobType = (_dictChunks[0] && _dictChunks[0].type) || 'audio/webm';
+  var blob = new Blob(_dictChunks, { type: blobType });
+  _dictChunks = [];
+  try {
+    var resp = await fetch('/api/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': blobType },
+      body: blob,
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    var data = await resp.json();
+    var text = (data.text || '').replace(WHISPER_NOISE_TOKENS, '').trim();
+    if (text) _dictHandleTranscript(text);
+  } catch (err) {
+    console.warn('[dictate] transcribe error:', err);
+    if (typeof showToast === 'function') showToast('Dictation failed — try again');
+  } finally {
     _dictSetState('idle');
-    _dictRec = null;
-  };
-
-  rec.start();
+  }
 }
