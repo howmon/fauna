@@ -23,11 +23,20 @@ figma.showUI(__html__, { width: 320, height: 200, title: "Fauna MCP" });
 })();
 
 // ── Announce file identity to the relay (sent on startup + reconnect) ─────
+// Stable local key derived from the root name so reconnects hit the same map slot
+var _stableLocalKey = null;
+function getFileKey() {
+  if (figma.fileKey) return figma.fileKey;
+  if (!_stableLocalKey) {
+    _stableLocalKey = 'local-' + figma.root.name.replace(/\s+/g, '-').toLowerCase().slice(0, 40);
+  }
+  return _stableLocalKey;
+}
 function sendFileInfo() {
   figma.ui.postMessage({
     type: 'FILE_INFO',
     fileName:      figma.root.name,
-    fileKey:       figma.fileKey || ('local-' + Date.now()),
+    fileKey:       getFileKey(),
     currentPage:   figma.currentPage.name,
     currentPageId: figma.currentPage.id
   });
@@ -66,7 +75,7 @@ figma.on('selectionchange', function() {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-// Section component key (Security Fluent Extension UI Kit)
+// Section component key
 var SECTION_KEY = 'ec55e1cf42855ce08a89e90ba302bb531dcda8d1';
 
 // LayoutGrid_Section variant keys — used when placing multi-column rows inside a Section

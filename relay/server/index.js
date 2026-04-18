@@ -263,9 +263,17 @@ wss.on('connection', ws => {
     // ── Controller connection (Fauna standalone app) ────────────────
     if (msg.type === 'client-hello') {
       clearTimeout(identifyTimer);
-      fileKey = 'controller-' + Date.now();
-      conn = createConnection(ws, true); // isController = true
-      conn.fileInfo = { fileName: msg.clientName || 'Fauna App', fileKey, currentPage: '', currentPageId: '' };
+      const clientName = msg.clientName || 'Fauna App';
+      fileKey = 'controller-' + clientName.replace(/\s+/g, '-').toLowerCase();
+      const existing = clients.get(fileKey);
+      if (existing && existing.gracePeriodTimer) {
+        clearTimeout(existing.gracePeriodTimer);
+        conn = existing; conn.ws = ws; conn.gracePeriodTimer = null;
+        process.stderr.write(`[MCP] Controller "${clientName}" reconnected within grace period\n`);
+      } else {
+        conn = createConnection(ws, true); // isController = true
+      }
+      conn.fileInfo = { fileName: clientName, fileKey, currentPage: '', currentPageId: '' };
       clients.set(fileKey, conn);
       // Controllers do NOT become the activeFileKey — Figma plugins have priority
       process.stderr.write(`[MCP] Controller connected: "${conn.fileInfo.fileName}" [${fileKey}]\n`);
