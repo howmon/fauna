@@ -379,10 +379,11 @@ async function _transcribeBlobs(chunks, mode) {
 
 // ── VAD (Voice Activity Detection) ───────────────────────────────────────
 
-var VAD_RMS_THRESHOLD       = 0.015;  // energy floor: speech vs ambient
+var VAD_RMS_THRESHOLD       = 0.004;  // energy floor: speech vs ambient (tuned to mic — logs show speech peaks ~0.003)
 var VAD_SPEECH_FRAMES_START = 3;      // consecutive loud frames to start recording (~300ms)
 var VAD_SILENCE_FRAMES_WAKE = 6;      // silence frames to end wake chunk (~600ms)
 var VAD_SILENCE_FRAMES_CMD  = 8;      // silence frames to end command chunk (~800ms)
+var _vadPeakRms             = 0;      // peak RMS during current recording (for threshold tuning)
 
 function _rms(data) {
   var sum = 0;
@@ -408,10 +409,14 @@ function _startVADLoop() {
     if (level > VAD_RMS_THRESHOLD) {
       _vadSilenceFrames = 0;
       _vadSpeechFrames++;
+      if (_vadState === 'recording_wake' || _vadState === 'recording_cmd') {
+        if (level > _vadPeakRms) _vadPeakRms = level;
+      }
       if (_vadSpeechFrames >= VAD_SPEECH_FRAMES_START && _vadState === 'idle') {
         var nextState    = _voiceActive ? 'recording_cmd' : 'recording_wake';
         _vadState        = nextState;
         _vadSpeechFrames = 0;
+        _vadPeakRms      = 0;
         _recordChunks    = [];
         try {
           var mime = _bestMime();
@@ -433,8 +438,10 @@ function _startVADLoop() {
         _vadSilenceFrames++;
         if (_vadSilenceFrames >= silenceFrames) {
           var capturedMode   = (_vadState === 'recording_cmd') ? 'cmd' : 'wake';
+          console.log('[vad] end of speech — peak rms during recording:', _vadPeakRms.toFixed(4));
           _vadSpeechFrames   = 0;
           _vadSilenceFrames  = 0;
+          _vadPeakRms        = 0;
           _vadState          = 'transcribing';  // block VAD from starting a new recording before onstop fires
           if (_mediaRecorder && _mediaRecorder.state !== 'inactive') {
             var mr = _mediaRecorder;
