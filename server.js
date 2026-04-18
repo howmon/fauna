@@ -637,65 +637,7 @@ if (sel && sel.type === 'INSTANCE') {
 \`\`\`
 
 ---
-### 5. Section + LayoutGrid keys (Security AI UI Kit)
-**Section wrapper** (content container with optional header):
-- \`ec55e1cf42855ce08a89e90ba302bb531dcda8d1\`
-
-**LayoutGrid_Section variants** (swap into Section's content slot):
-| Layout       | Key |
-|---|---|
-| 1-col        | \`cd3267e90f83d7487d7f2976fb9ea3599aa48ff4\` |
-| 2-col equal  | \`399160f011bf1cade3c078cf7b8df3abc1889176\` |
-| 2-col 1:3    | \`c268d614669496370f588f1a432432da70871032\` |
-| 2-col 3:1    | \`fadfc8ba7bea951815c228aa28b3fe1303fe612d\` |
-| 3-col equal  | \`b27e456a69e7f81710fb82dd5635cd5abd1ee27d\` |
-| 3-col 2:1:1  | \`14ac2eb8a0173da1509c9a880c659b47c3a1bc2d\` |
-| 3-col 1:1:2  | \`b19eb1c9135bbdbc582c567ef47b6d9a37bc25a7\` |
-| 4-col equal  | \`b7c46dd6c84ecd6e80f1cb020c49ddab7e8e8d1e\` |
-
-**Navigation**:
-- SideNav: \`2249c2b1fb655e82e5b9fe5a9dfe2b797f2064cc\`
-- TopNav: \`e6b6b1b7c1f80aa538f4542ba66f59da03e9b606\`
-
-**Cards / content blocks**:
-- Recommendation (general): \`8d0a2578a95681d39205a030c28cc31df89b7e3d\`
-- Recommendation (spotlight): \`22ede7aa59eebe9595c1592f6e0e734d74b5c532\`
-- Recommendation (contextual): \`7c56e6dd7668d23315bfab10169c209cec544bdb\`
-- Metric group: \`c4a57f63e0e8aa4a495482b88bd7c4ed750ac09c\`
-- Card (filled): \`5594f2616c702b4afe82f7addfc11a6f4daab5da\`
-
----
-### 6. Build a full content row (Section + LayoutGrid + content)
-\`\`\`javascript
-// 1. Import Section and a 2-column LayoutGrid
-const sectionComp = await figma.importComponentByKeyAsync('ec55e1cf42855ce08a89e90ba302bb531dcda8d1');
-const lgComp      = await figma.importComponentByKeyAsync('399160f011bf1cade3c078cf7b8df3abc1889176'); // 2-col
-
-// 2. Create Section instance, add to page layout
-const section = sectionComp.createInstance();
-pageLayout.appendChild(section);
-section.layoutAlign = 'STRETCH';
-section.layoutSizingVertical = 'HUG';
-
-// 3. Swap the LayoutGrid into the Section's content INSTANCE_SWAP slot
-const sectionSwapKeys = getSwapSlots(section);
-if (sectionSwapKeys.length > 0) {
-  section.setProperties({ [sectionSwapKeys[0]]: lgComp.id });
-}
-
-// 4. Find the LayoutGrid instance inside Section and fill its slots
-const lgInst = section.findAll(n => n.type === 'INSTANCE' && /LayoutGrid/i.test(n.name))[0];
-if (lgInst) {
-  const slots = getSwapSlots(lgInst);  // ['Item 1 content#...', 'Item 2 content#...']
-  const metricComp = await figma.importComponentByKeyAsync('c4a57f63e0e8aa4a495482b88bd7c4ed750ac09c');
-  const cardComp   = await figma.importComponentByKeyAsync('5594f2616c702b4afe82f7addfc11a6f4daab5da');
-  if (slots[0]) lgInst.setProperties({ [slots[0]]: metricComp.id });
-  if (slots[1]) lgInst.setProperties({ [slots[1]]: cardComp.id });
-}
-\`\`\`
-
----
-### 7. Text overrides
+### 5. Text overrides
 ⚠️ ALWAYS load fonts before setting .characters on ANY text node — even existing ones.
   Batch all loadFontAsync calls with Promise.all BEFORE any text edits:
 \`\`\`javascript
@@ -719,7 +661,7 @@ if (textNode) {
 \`\`\`
 
 ---
-### 8. Scan for existing instances to swap
+### 6. Scan for existing instances to swap
 \`\`\`javascript
 // Find all instances of a specific component on the current page
 const instances = figma.currentPage.findAll(n =>
@@ -733,7 +675,7 @@ const sections = figma.currentPage.findAll(n =>
 \`\`\`
 
 ---
-### 9. Hide / show layers
+### 7. Hide / show layers
 \`\`\`javascript
 node.visible = false;   // hide
 node.visible = true;    // show
@@ -755,7 +697,7 @@ figma.currentPage.findAll(n => n.type === 'TEXT')
 \`\`\`
 
 ---
-### 10. Edit ALL text in an existing node tree (applyTextOverrides pattern)
+### 8. Edit ALL text in an existing node tree (applyTextOverrides pattern)
 Use this to update text in nav items, section headers, card labels — anything already in the file:
 \`\`\`javascript
 async function applyTextOverrides(instance, overrides) {
