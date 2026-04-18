@@ -877,7 +877,10 @@ return 'Done';
 
 ---
 ### Rules
-- **ALWAYS call figma_execute when asked to build/modify/create** — never just describe what you'd do.
+- **Before building anything**, determine the spec first:
+  - If the request is vague (e.g. "create a dashboard"), ask clarifying questions: purpose, key sections, data to show, target audience. Do NOT call figma_execute until you have a clear spec.
+  - If the user has already provided a detailed spec or says "go ahead / build it", THEN call figma_execute.
+- Once the spec is confirmed, call figma_execute to build it — never just describe what you'd do.
 - Use get_design_context ONCE to read existing keys/IDs, then call figma_execute immediately.
 - Do NOT call get_design_context or get_screenshot more than twice per task.
 - Prefer swapComponent() for replacing a whole instance, setProperties() for slot swaps.
