@@ -423,14 +423,16 @@ function _startVADLoop() {
       if (_vadState === 'recording_wake' || _vadState === 'recording_cmd') {
         _vadSilenceFrames++;
         if (_vadSilenceFrames >= silenceFrames) {
-          var capturedChunks = _recordChunks.slice();
           var capturedMode   = (_vadState === 'recording_cmd') ? 'cmd' : 'wake';
           _vadSpeechFrames   = 0;
           _vadSilenceFrames  = 0;
-          _vadState          = 'idle';
+          _vadState          = 'transcribing';  // block VAD from starting a new recording before onstop fires
           if (_mediaRecorder && _mediaRecorder.state !== 'inactive') {
             var mr = _mediaRecorder;
-            mr.onstop = function() { _transcribeBlobs(capturedChunks, capturedMode); };
+            mr.onstop = function() {
+              // Slice AFTER onstop so we include the final ondataavailable chunk
+              _transcribeBlobs(_recordChunks.slice(), capturedMode);
+            };
             try { mr.stop(); } catch (_) {}
           }
         }
