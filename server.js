@@ -1570,7 +1570,7 @@ app.post('/api/transcribe', async (req, res) => {
       ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'nodejs-whisper', 'cpp', 'whisper.cpp')
       : path.join(__dirname, 'node_modules', 'nodejs-whisper', 'cpp', 'whisper.cpp');
     const whisperBin = path.join(whisperCpp, 'build', 'bin', 'whisper-cli');
-    const modelFile  = path.join(whisperCpp, 'models', 'ggml-tiny.en.bin');
+    const modelFile  = path.join(whisperCpp, 'models', 'ggml-small.en.bin');
 
     // execFileSync captures stdout (transcript); stderr (Metal init noise) goes to parent console
     const stdout = execFileSync(whisperBin, [

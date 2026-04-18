@@ -114,7 +114,7 @@
       "node_modules/nodejs-whisper/dist/**",
       "node_modules/nodejs-whisper/cpp/whisper.cpp/build/**",
       "!node_modules/nodejs-whisper/cpp/whisper.cpp/models/**",
-      "node_modules/nodejs-whisper/cpp/whisper.cpp/models/ggml-tiny.en.bin"
+      "node_modules/nodejs-whisper/cpp/whisper.cpp/models/ggml-small.en.bin"
     ],
     "electronVersion": "41.0.3",
     "extraResources": [
