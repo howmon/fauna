@@ -46,11 +46,8 @@ async function createWindow() {
 
   // Grant microphone permission for localhost (required for Web Speech API / voice control)
   mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
-    if (permission === 'media' || permission === 'microphone' || permission === 'audioCapture') {
-      callback(true);
-    } else {
-      callback(false);
-    }
+    const allowed = ['media', 'microphone', 'audioCapture', 'clipboard-read', 'clipboard-write', 'clipboard-sanitized-write'];
+    callback(allowed.includes(permission));
   });
 
   mainWindow.loadURL(`http://localhost:${PORT}`);
