@@ -397,7 +397,11 @@ function _startVADLoop() {
   var buf = new Float32Array(_analyserNode.fftSize);
   _vadTimer = setInterval(function() {
     if (!_voiceEnabled || !_analyserNode) { clearInterval(_vadTimer); return; }
-    if (_audioCtx.state === 'suspended') { console.log('[vad] AudioContext suspended — resuming'); _audioCtx.resume(); return; }
+    if (_audioCtx.state === 'suspended' || _audioCtx.state === 'interrupted') {
+      console.log('[vad] AudioContext', _audioCtx.state, '— resuming');
+      _audioCtx.resume().catch(function(){});
+      // don't return — keep polling; reads will be zero until resumed
+    }
     if (_vadState === 'transcribing') return;
 
     _analyserNode.getFloatTimeDomainData(buf);
@@ -542,6 +546,7 @@ function _startWakeListener() {
     .then(function(stream) {
       _micStream    = stream;
       _audioCtx     = new (window.AudioContext || window.webkitAudioContext)();
+      _audioCtx.resume().catch(function(){});  // unblock autoplay suspension immediately
       _micSource    = _audioCtx.createMediaStreamSource(stream);  // keep ref — prevents GC disconnect
       _analyserNode = _audioCtx.createAnalyser();
       _analyserNode.fftSize = 2048;
