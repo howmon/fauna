@@ -13,6 +13,7 @@ var _voiceRestart       = true;   // should the wake listener auto-restart
 var _finalTranscript    = '';
 var _wakeNetworkErrors  = 0;      // consecutive network errors — for backoff
 var _wakeRestartTimer   = null;   // pending restart timeout
+var _wakeBackoffCycles  = 0;      // how many 30s pause cycles have elapsed
 
 // ── Persistence ───────────────────────────────────────────────────────────
 
@@ -373,13 +374,24 @@ function _startWakeListener() {
 
   _wakeRecog.onend = function() {
     if (!_voiceRestart || !_voiceEnabled || _voiceActive) return;
-    // Backoff delays: 350ms, 1s, 3s, then stop after 3 consecutive network errors
+    // Backoff: 350ms → 1s → 3s → 30s pause; give up after 2 x 30s cycles
     var delay = 350;
     if (_wakeNetworkErrors >= 3) {
-      console.warn('[voice] Too many consecutive network errors — voice recognition paused. Retrying in 30s.');
-      if (typeof showToast === 'function') showToast('Voice recognition needs internet access (Google STT). Retrying in 30s…');
+      _wakeBackoffCycles++;
+      _wakeNetworkErrors = 0;
+      if (_wakeBackoffCycles >= 2) {
+        // Give up — webkitSpeechRecognition needs Google cloud (not available in this build)
+        console.error('[voice] Giving up — Google STT unavailable in this Electron build.');
+        _voiceEnabled = false;
+        _setVoicePillState('off');
+        _syncVoiceToggleUI(false);
+        var s = _loadVoiceSettings(); s.enabled = false; _saveVoiceSettings(s);
+        if (typeof showToast === 'function') showToast('Voice recognition unavailable — Google STT is not supported in this build. Voice control disabled.');
+        return;
+      }
+      console.warn('[voice] Network errors — pausing 30s before retry.');
+      if (typeof showToast === 'function') showToast('Voice recognition needs internet. Retrying in 30s…');
       delay = 30000;
-      _wakeNetworkErrors = 0; // reset so next attempt gets a clean slate
     } else if (_wakeNetworkErrors === 2) {
       delay = 3000;
     } else if (_wakeNetworkErrors === 1) {
@@ -387,7 +399,7 @@ function _startWakeListener() {
     }
     if (_wakeRestartTimer) clearTimeout(_wakeRestartTimer);
     _wakeRestartTimer = setTimeout(function() {
-      if (_voiceEnabled && !_voiceActive) _startWakeListener(); // create fresh instance
+      if (_voiceEnabled && !_voiceActive) _startWakeListener();
     }, delay);
   };
 
@@ -418,6 +430,7 @@ function _startWakeListener() {
 function _stopVoiceListeners() {
   _voiceRestart = false;
   _wakeNetworkErrors = 0;
+  _wakeBackoffCycles = 0;
   if (_wakeRestartTimer) { clearTimeout(_wakeRestartTimer); _wakeRestartTimer = null; }
   if (_wakeRecog) { try { _wakeRecog.abort(); } catch (_) {} _wakeRecog = null; }
   if (_cmdRecog)  { try { _cmdRecog.abort();  } catch (_) {} _cmdRecog  = null; }
@@ -453,6 +466,8 @@ function setVoiceEnabled(enabled) {
   if (enabled) {
     _voiceEnabled = true;
     _voiceRestart = true;
+    _wakeNetworkErrors = 0;
+    _wakeBackoffCycles = 0;
     _startWakeListener();
     // Voices load asynchronously — wait briefly before speaking
     setTimeout(function() {

@@ -10,6 +10,9 @@ const IS_WIN    = process.platform === 'win32';
 
 nativeTheme.themeSource = 'dark';
 
+// Enable Web Speech API features in Electron's Chromium
+app.commandLine.appendSwitch('enable-features', 'WebSpeechAPI,SpeechRecognition');
+
 // On Windows, hardware acceleration can prevent the renderer from starting
 // (ICU data file-descriptor handoff to the GPU process fails).
 if (IS_WIN) app.disableHardwareAcceleration();
