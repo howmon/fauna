@@ -46,6 +46,7 @@
       "darkModeSupport": true,
       "minimumSystemVersion": "12.0",
       "icon": "assets/icon.icns",
+      "identity": null,
       "target": [
         {
           "target": "dmg",
