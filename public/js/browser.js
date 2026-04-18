@@ -130,8 +130,9 @@ function browserAddTab(url, convId) {
   else { b.activeTabId = tabId; wv.style.display = 'none'; }
   if (url) {
     if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
-    wv.loadURL(url).catch(function() {});
     tab.url = url;
+    // Wait for dom-ready before loadURL — calling it before dom-ready throws
+    _waitForDomReady(wv).then(function() { wv.loadURL(url).catch(function() {}); });
   }
   return tabId;
 }
@@ -262,7 +263,7 @@ function browserNavigateTo(url) {
   var wv = getActiveWebview();
   if (!wv) return;
   document.getElementById('browser-url-input').value = url;
-  wv.loadURL(url).catch(function() {});
+  _waitForDomReady(wv).then(function() { wv.loadURL(url).catch(function() {}); });
 }
 
 function browserGo() {
@@ -417,11 +418,13 @@ async function browserScreenshot() {
 // Retry handles GUEST_VIEW_MANAGER_CALL errors when the renderer is mid-navigation.
 function _waitForDomReady(wv) {
   return new Promise(function(resolve) {
+    // If already ready (has a URL loaded), resolve immediately
+    try { if (wv.getURL && wv.getURL() !== '') { resolve(); return; } } catch(_) {}
     wv.addEventListener('dom-ready', function onReady() {
       wv.removeEventListener('dom-ready', onReady);
       resolve();
     });
-    // Resolve immediately if already loaded (dom-ready won't fire again)
+    // Safety fallback — resolve after 5s regardless
     setTimeout(resolve, 5000);
   });
 }
