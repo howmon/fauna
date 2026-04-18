@@ -10,6 +10,10 @@ const IS_WIN    = process.platform === 'win32';
 
 nativeTheme.themeSource = 'dark';
 
+// Enable Web Speech API (backed by SFSpeechRecognizer on macOS)
+app.commandLine.appendSwitch('enable-features', 'WebSpeechAPI');
+app.commandLine.appendSwitch('auto-select-desktop-capture-source', 'Entire screen');
+
 // On Windows, hardware acceleration can prevent the renderer from starting
 // (ICU data file-descriptor handoff to the GPU process fails).
 if (IS_WIN) app.disableHardwareAcceleration();
