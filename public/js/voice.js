@@ -641,8 +641,14 @@ function _startWakeListener() {
       _micSource    = _audioCtx.createMediaStreamSource(stream);  // keep ref — prevents GC disconnect
       _analyserNode = _audioCtx.createAnalyser();
       _analyserNode.fftSize = 2048;
+      // Connect through a silent gain node to destination — Chromium optimizes away
+      // audio graphs that don't reach the destination, causing getFloatTimeDomainData
+      // to return all zeros even with a live mic stream.
+      var _silentGain = _audioCtx.createGain();
+      _silentGain.gain.value = 0;
       _micSource.connect(_analyserNode);
-      // NOT connected to destination — avoids mic feedback
+      _analyserNode.connect(_silentGain);
+      _silentGain.connect(_audioCtx.destination);
       _startVADLoop();
       _setVoicePillState('listening');
     })
