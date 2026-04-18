@@ -1558,7 +1558,14 @@ app.post('/api/transcribe', async (req, res) => {
     // Convert to 16kHz mono PCM WAV — whisper.cpp requires this format
     if (!isWav) {
       const { execFileSync } = _require('child_process');
-      execFileSync('ffmpeg', [
+      // Use absolute path — Electron's PATH may not include /opt/homebrew/bin
+      const ffmpegBin = (() => {
+        for (const p of ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg']) {
+          try { if (fs.existsSync(p)) return p; } catch (_) {}
+        }
+        return 'ffmpeg'; // fallback — will fail loudly if not found
+      })();
+      execFileSync(ffmpegBin, [
         '-y', '-i', tmpInput,
         '-ar', '16000', '-ac', '1', '-f', 'wav',
         tmpWav,
