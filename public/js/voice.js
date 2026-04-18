@@ -559,16 +559,24 @@ function _startWakeListener() {
 
   if (_micStream) {
     // Mic already open — restart VAD loop
+    // Ensure AudioContext is running (may have been suspended)
+    if (_audioCtx && _audioCtx.state !== 'running') _audioCtx.resume().catch(function(){});
     _startVADLoop();
     _setVoicePillState('listening');
     return;
   }
 
+  // Create AudioContext NOW — synchronously — while still in the user gesture call stack.
+  // Creating it inside the async .then() puts it outside the gesture context and Chromium
+  // auto-suspends it, causing getFloatTimeDomainData to return all zeros.
+  if (!_audioCtx || _audioCtx.state === 'closed') {
+    _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  _audioCtx.resume().catch(function(){});
+
   navigator.mediaDevices.getUserMedia({ audio: true, video: false })
     .then(function(stream) {
       _micStream    = stream;
-      _audioCtx     = new (window.AudioContext || window.webkitAudioContext)();
-      _audioCtx.resume().catch(function(){});  // unblock autoplay suspension immediately
       _micSource    = _audioCtx.createMediaStreamSource(stream);  // keep ref — prevents GC disconnect
       _analyserNode = _audioCtx.createAnalyser();
       _analyserNode.fftSize = 2048;
@@ -672,7 +680,11 @@ function initVoice() {
 
   if (_voiceEnabled) {
     _initWhisperWorker();
-    _startWakeListener();
+    // Don't call _startWakeListener() on auto-restore — AudioContext must be
+    // created from a user gesture. We'll start it on the first mic-btn click instead.
+    _setVoicePillState('listening');
+    // Attempt start after a short delay in case page was loaded by a gesture (e.g. reload)
+    setTimeout(function() { if (_voiceEnabled && !_micStream) _startWakeListener(); }, 300);
   } else {
     _setVoicePillState('off');
   }
