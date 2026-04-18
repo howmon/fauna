@@ -382,11 +382,13 @@ async function _transcribeBlobs(chunks, mode) {
 
 // ── VAD (Voice Activity Detection) ───────────────────────────────────────
 
-var VAD_RMS_THRESHOLD       = 0.004;  // energy floor: speech vs ambient (tuned to mic — logs show speech peaks ~0.003)
+var VAD_RMS_THRESHOLD       = 0.004;  // energy floor: speech vs ambient
 var VAD_SPEECH_FRAMES_START = 3;      // consecutive loud frames to start recording (~300ms)
-var VAD_SILENCE_FRAMES_WAKE = 6;      // silence frames to end wake chunk (~600ms)
-var VAD_SILENCE_FRAMES_CMD  = 8;      // silence frames to end command chunk (~800ms)
+var VAD_SILENCE_FRAMES_WAKE = 10;     // silence frames to end wake chunk (~1s)
+var VAD_SILENCE_FRAMES_CMD  = 12;     // silence frames to end command chunk (~1.2s)
+var VAD_MAX_WAKE_FRAMES     = 30;     // max frames before force-stopping wake recording (~3s)
 var _vadPeakRms             = 0;      // peak RMS during current recording (for threshold tuning)
+var _vadRecordFrames        = 0;      // frames elapsed since recording started
 
 function _rms(data) {
   var sum = 0;
@@ -418,12 +420,14 @@ function _startVADLoop() {
       _vadSpeechFrames++;
       if (_vadState === 'recording_wake' || _vadState === 'recording_cmd') {
         if (level > _vadPeakRms) _vadPeakRms = level;
+        _vadRecordFrames++;
       }
       if (_vadSpeechFrames >= VAD_SPEECH_FRAMES_START && _vadState === 'idle') {
         var nextState    = _voiceActive ? 'recording_cmd' : 'recording_wake';
         _vadState        = nextState;
         _vadSpeechFrames = 0;
         _vadPeakRms      = 0;
+        _vadRecordFrames = 0;
         _recordChunks    = [];
         try {
           var mime = _bestMime();
@@ -442,13 +446,17 @@ function _startVADLoop() {
     } else {
       _vadSpeechFrames = 0;
       if (_vadState === 'recording_wake' || _vadState === 'recording_cmd') {
+        _vadRecordFrames++;
         _vadSilenceFrames++;
-        if (_vadSilenceFrames >= silenceFrames) {
+        var forceStop = (_vadState === 'recording_wake' && _vadRecordFrames >= VAD_MAX_WAKE_FRAMES);
+        if (_vadSilenceFrames >= silenceFrames || forceStop) {
+          if (forceStop) console.log('[vad] force-stopping wake recording after', _vadRecordFrames, 'frames');
           var capturedMode   = (_vadState === 'recording_cmd') ? 'cmd' : 'wake';
           console.log('[vad] end of speech — peak rms during recording:', _vadPeakRms.toFixed(4));
           _vadSpeechFrames   = 0;
           _vadSilenceFrames  = 0;
           _vadPeakRms        = 0;
+          _vadRecordFrames   = 0;
           _vadState          = 'transcribing';  // block VAD from starting a new recording before onstop fires
           if (_mediaRecorder && _mediaRecorder.state !== 'inactive') {
             var mr = _mediaRecorder;
@@ -466,9 +474,18 @@ function _startVADLoop() {
 
 // ── Whisper result handler ────────────────────────────────────────────────
 
+// Whisper hallucination tokens to ignore
+var WHISPER_NOISE_TOKENS = /^\s*\*?(?:unintelligible|inaudible|silence|music|noise|applause|laughter|\[.*?\])\*?\s*$/i;
+
 function _onWhisperResult(text) {
   var lower = (text || '').toLowerCase().trim();
   console.log('[whisper] (' + (_voiceActive ? 'cmd' : 'wake') + '):', lower);
+
+  // Ignore hallucination/noise tokens
+  if (!lower || WHISPER_NOISE_TOKENS.test(lower)) {
+    _vadState = 'idle';
+    return;
+  }
 
   if (!_voiceActive) {
     // Wake word scan
