@@ -1536,8 +1536,7 @@ app.post('/api/transcribe', async (req, res) => {
   let tmpInput = null;
   let tmpWav   = null;
   try {
-    const _nodewhisper = _require('nodejs-whisper');
-    const nodewhisper  = _nodewhisper.nodewhisper || _nodewhisper.default || _nodewhisper;
+    const { execFileSync } = _require('child_process');
 
     const chunks = [];
     await new Promise((resolve, reject) => {
@@ -1547,50 +1546,43 @@ app.post('/api/transcribe', async (req, res) => {
     });
     if (!chunks.length) return res.status(400).json({ error: 'Empty audio' });
 
-    const buf       = Buffer.concat(chunks);
-    const isWav     = (req.headers['content-type'] || '').includes('wav');
-    const ext       = isWav ? '.wav' : '.webm';
-    const base      = `fauna-stt-${Date.now()}`;
-    tmpInput        = path.join(os.tmpdir(), base + ext);
-    tmpWav          = path.join(os.tmpdir(), base + '.wav');
+    const buf   = Buffer.concat(chunks);
+    const isWav = (req.headers['content-type'] || '').includes('wav');
+    const base  = `fauna-stt-${Date.now()}`;
+    tmpInput    = path.join(os.tmpdir(), base + (isWav ? '.wav' : '.webm'));
+    tmpWav      = path.join(os.tmpdir(), base + '-16k.wav');
     fs.writeFileSync(tmpInput, buf);
 
-    // Convert to 16kHz mono PCM WAV — whisper.cpp requires this format
+    // Convert to 16kHz mono PCM WAV — whisper-cli requires this
     if (!isWav) {
-      const { execFileSync } = _require('child_process');
-      // Use absolute path — Electron's PATH may not include /opt/homebrew/bin
-      const ffmpegBin = (() => {
-        for (const p of ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg']) {
-          try { if (fs.existsSync(p)) return p; } catch (_) {}
-        }
-        return 'ffmpeg'; // fallback — will fail loudly if not found
-      })();
+      const ffmpegBin = ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg']
+        .find(p => { try { return fs.existsSync(p); } catch (_) { return false; } }) || 'ffmpeg';
       execFileSync(ffmpegBin, [
-        '-y', '-i', tmpInput,
-        '-ar', '16000', '-ac', '1', '-f', 'wav',
-        tmpWav,
+        '-y', '-i', tmpInput, '-ar', '16000', '-ac', '1', '-f', 'wav', tmpWav,
       ], { stdio: 'pipe' });
     } else {
       fs.copyFileSync(tmpInput, tmpWav);
     }
 
-    const transcript = await nodewhisper(tmpWav, {
-      modelName: 'tiny.en',
-      removeWavFileAfterTranscription: true,
-      withCuda: false,
-      logger: { debug: () => {}, error: console.error },
-      whisperOptions: {
-        outputInText: false,
-        outputInSrt:  false,
-        outputInJson: false,
-        wordTimestamps: false,
-        noGpu: false,  // Metal on Apple Silicon is auto-detected
-      },
-    });
+    // Resolve whisper-cli and model — works in dev (__dirname = project root)
+    // and in packaged Electron (asarUnpack puts nodejs-whisper in app.asar.unpacked)
+    const whisperCpp = process.resourcesPath
+      ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'nodejs-whisper', 'cpp', 'whisper.cpp')
+      : path.join(__dirname, 'node_modules', 'nodejs-whisper', 'cpp', 'whisper.cpp');
+    const whisperBin = path.join(whisperCpp, 'build', 'bin', 'whisper-cli');
+    const modelFile  = path.join(whisperCpp, 'models', 'ggml-tiny.en.bin');
 
-    // transcript is raw stdout — strip timestamps and blank audio markers
-    const text = (transcript || '')
-      .replace(/\[\d+:\d+:\d+\.\d+ --> \d+:\d+:\d+\.\d+\]\s*/g, '')
+    // execFileSync captures stdout (transcript); stderr (Metal init noise) goes to parent console
+    const stdout = execFileSync(whisperBin, [
+      '-m', modelFile, '-f', tmpWav, '-l', 'en',
+    ], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+
+    // Only keep timestamp lines, then strip timestamps and blank audio
+    const text = (stdout || '')
+      .split('\n')
+      .filter(l => /^\s*\[/.test(l))
+      .map(l => l.replace(/^\s*\[\d+:\d+:\d+\.\d+ --> \d+:\d+:\d+\.\d+\]\s*/, ''))
+      .join(' ')
       .replace(/\[BLANK_AUDIO\]/gi, '')
       .trim();
 
