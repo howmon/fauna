@@ -713,7 +713,7 @@ mcp.tool('apply_token',
 mcp.tool('create_page_layout',
   'Create a full page layout in Figma from a natural language description',
   {
-    description:  z.string().describe('What to create, e.g. "Security dashboard with nav, metric cards, data grid"'),
+    description:  z.string().describe('What to create, e.g. "Dashboard with nav, metric cards, and data grid"'),
     frame_width:  z.number().optional(),
     frame_height: z.number().optional(),
     system_id:    z.string().optional().describe('Design system to use (defaults to active)')
