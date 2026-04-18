@@ -288,7 +288,7 @@ function setArtifactView(codeMode) {
 
 function copyArtifact(id) {
   var a = state.artifacts.find(function(x) { return x.id === id; });
-  if (a && a.content != null) navigator.clipboard.writeText(a.content);
+  if (a && a.content != null) navigator.clipboard.writeText(a.content).catch(function() {});
 }
 
 function downloadArtifact(id, filename) {
