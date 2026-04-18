@@ -567,17 +567,6 @@ safeChildSizing(inst, 'FILL', 'HUG');
 **Rule: always call \`parent.appendChild(child)\` BEFORE setting child sizing on it.**
 
 ---
-### Dashboard Frame Structure
-\`\`\`
-App frame (VERTICAL, 1920×1080)
-  ├─ Header [STRETCH]
-  └─ Main (HORIZONTAL, grow=1, gap=24)
-      ├─ SideNav [STRETCH]  — key: 2249c2b1fb655e82e5b9fe5a9dfe2b797f2064cc
-      └─ PageLayout (VERTICAL, grow=1, gap=24, pad=12)
-          └─ Section rows (Section wrapper → LayoutGrid → content slots)
-\`\`\`
-
----
 ### 1. Create auto-layout frames
 \`\`\`javascript
 const f = figma.createFrame();
@@ -807,70 +796,9 @@ async function applyTextOverrides(instance, overrides) {
 // Usage — edit existing nav instance on the page:
 const nav = figma.currentPage.findAll(n => n.type === 'INSTANCE' && /nav/i.test(n.name))[0];
 await applyTextOverrides(nav, {
-  'Dashboard': 'Threat Center',
-  'Overview': 'Incidents',
-  'Analytics': 'Threat Intel',
+  'Home': 'My Home Label',
+  'Overview': 'My Overview Label',
 });
-\`\`\`
-
----
-### 11. Edit text found by current content (rename existing labels)
-\`\`\`javascript
-// Find text nodes by what they currently say and change them
-const allText = figma.currentPage.findAll(n => n.type === 'TEXT');
-const renames = {
-  'Dashboard': 'Threat Center',
-  'Overview':  'Active Incidents',
-  'Reports':   'Threat Reports',
-  'Users':     'Affected Assets',
-};
-for (const t of allText) {
-  const newVal = renames[t.characters];
-  if (newVal) {
-    try { await figma.loadFontAsync(t.fontName); t.characters = newVal; } catch(_) {}
-  }
-}
-\`\`\`
-
----
-### 12. Practical workflow — "Make this a Threat Dashboard"
-1. Call \`get_design_context\` ONCE to get node IDs and existing text
-2. Use \`figma_execute\` to do ALL edits in one call:
-   - Rename text nodes (nav labels, section titles, card headings)
-   - Hide unused nav items / layers
-   - Swap placeholder cards for threat-specific components
-   - Update section titles & descriptions via \`setProperties\`
-\`\`\`javascript
-// All in ONE figma_execute call — batch everything
-const page = figma.currentPage;
-
-// 1. Rename all nav text
-const renames = { 'Home': 'Threat Center', 'Analytics': 'Threat Intel', 'Users': 'Assets' };
-for (const t of page.findAll(n => n.type === 'TEXT')) {
-  if (renames[t.characters]) {
-    try { await figma.loadFontAsync(t.fontName); t.characters = renames[t.characters]; } catch(_) {}
-  }
-}
-
-// 2. Hide nav items not relevant to threat dashboard
-const hideLabels = new Set(['Settings', 'Help', 'Billing', 'Integrations']);
-for (const t of page.findAll(n => n.type === 'TEXT' && hideLabels.has(n.characters))) {
-  let p = t.parent;
-  while (p && p.type !== 'FRAME' && p.type !== 'INSTANCE') p = p.parent;
-  if (p) p.visible = false;
-}
-
-// 3. Update section component properties by name
-for (const n of page.findAll(n => n.type === 'INSTANCE')) {
-  const defs = n.componentPropertyDefinitions || {};
-  const titleKey = Object.keys(defs).find(k => /title/i.test(k) && defs[k].type === 'TEXT');
-  if (titleKey && /section/i.test(n.name)) {
-    try { n.setProperties({ [titleKey]: 'Active Threats' }); } catch(_) {}
-    break;
-  }
-}
-
-return 'Done';
 \`\`\`
 
 ---
