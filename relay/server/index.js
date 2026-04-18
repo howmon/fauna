@@ -169,16 +169,6 @@ EDIT LAYOUT FORMAT:
 COMPONENT PLACEMENT FORMAT:
 { "mode": "components", "components": [{ "key":"...", "name":"...", "x":100, "y":100 }], "explanation":"..." }
 
-FIXED KEYS:
-- SideNav:         2249c2b1fb655e82e5b9fe5a9dfe2b797f2064cc
-- Nav:             e6b6b1b7c1f80aa538f4542ba66f59da03e9b606
-- CompositeDataGrid: d761a0e766473adb07c0a6d565557dcece060a94
-
-CARDS:
-- Recommendation card General:    8d0a2578a95681d39205a030c28cc31df89b7e3d
-- Recommendation card Contextual: 7c56e6dd7668d23315bfab10169c209cec544bdb
-- MetricGroupCard Metric:         c4a57f63e0e8aa4a495482b88bd7c4ed750ac09c
-
 Respond with ONLY valid JSON — no markdown.
 
 META-COMMANDS (for chat interface only):
