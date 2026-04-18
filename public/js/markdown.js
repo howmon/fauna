@@ -39,7 +39,7 @@ marked.use({
         return '<pre data-special-lang="write-file"><code class="language-write-file" data-wf-id="' + escHtml(wfId) + '" data-wf-path="' + escHtml(wfPath) + '"></code></pre>';
       }
       // Runnable script langs — treat as shell-exec so they auto-run when autoRunShell is on
-      var RUNNABLE_LANGS = { bash:1, sh:1, zsh:1, shell:1, python:1, python3:1, node:1, nodejs:1, ruby:1, perl:1, console:1, plaintext:1, text:1 };
+      var RUNNABLE_LANGS = { bash:1, sh:1, zsh:1, shell:1, python:1, python3:1, node:1, nodejs:1, ruby:1, perl:1, console:1 };
       if (RUNNABLE_LANGS[lang]) {
         return '<pre data-special-lang="shell-exec"><code class="language-shell-exec">' + escHtml(rawText) + '</code></pre>';
       }
