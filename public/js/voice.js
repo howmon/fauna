@@ -186,7 +186,7 @@ var _VOICE_ROUTES = [
   {
     pattern: /\bwhat\s+(?:can\s+you|do\s+you)\s+(?:do|understand|support)\b/i,
     action: function() {
-      _speak('You can say: install agent, uninstall agent, open store, new conversation, open settings, build an agent, switch to a conversation, or ask me a status question like what model or how many agents.');
+      _speak('You can say: install agent, uninstall agent, open store, new conversation, open settings, build an agent, switch to a conversation, next or previous conversation, status of a conversation, progress of a conversation, list conversations, or summarize a conversation.');
     }
   },
 
@@ -267,6 +267,89 @@ var _VOICE_ROUTES = [
         _speak('No conversation found matching ' + name + '.');
         if (typeof showToast === 'function') showToast('No conversation matching "' + name + '"');
       }
+    }
+  },
+
+  // ── Conversation context & progress ───────────────────────────────────
+  {
+    // "what's the status of X" / "check status of X" / "status of X"
+    pattern: /\b(?:what(?:'s|\s+is)\s+(?:the\s+)?status\s+of|check\s+(?:the\s+)?status\s+of|status\s+of)\s+(.+)/i,
+    action: function(m) {
+      var name = m[1].trim();
+      var convs = (typeof state !== 'undefined' && state.conversations) ? state.conversations : [];
+      var found = convs.find(function(c) {
+        return (c.title || '').toLowerCase().includes(name.toLowerCase());
+      });
+      if (!found) { _speak('No conversation found matching ' + name + '.'); return; }
+      var msgs = found.messages || [];
+      var n = msgs.length;
+      if (n === 0) { _speak(found.title + ' has no messages yet.'); return; }
+      // Find the last assistant message as the "status"
+      var last = null;
+      for (var i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === 'assistant') { last = msgs[i]; break; }
+      }
+      var preview = last ? (last.content || '').replace(/[#*`]/g, '').trim().slice(0, 200) : '';
+      if (preview.length === 200) preview += '…';
+      _speak(found.title + ' has ' + n + ' message' + (n === 1 ? '' : 's') + '. Last reply: ' + (preview || 'no reply yet.'));
+    }
+  },
+  {
+    // "what's the progress of X" / "check progress on X" / "how is X going"
+    pattern: /\b(?:what(?:'s|\s+is)\s+(?:the\s+)?progress\s+(?:of|on)|check\s+progress\s+(?:of|on)|how\s+is\s+)\s*(.+?)\s*(?:going|doing|coming along)?\b/i,
+    action: function(m) {
+      var name = m[1].trim();
+      var convs = (typeof state !== 'undefined' && state.conversations) ? state.conversations : [];
+      var found = convs.find(function(c) {
+        return (c.title || '').toLowerCase().includes(name.toLowerCase());
+      });
+      if (!found) { _speak('No conversation found matching ' + name + '.'); return; }
+      var msgs = found.messages || [];
+      var userCount = msgs.filter(function(x) { return x.role === 'user'; }).length;
+      var asstCount = msgs.filter(function(x) { return x.role === 'assistant'; }).length;
+      if (msgs.length === 0) { _speak(found.title + ' hasn\'t started yet.'); return; }
+      _speak(found.title + ': ' + userCount + ' prompt' + (userCount === 1 ? '' : 's') + ' sent, ' + asstCount + ' repl' + (asstCount === 1 ? 'y' : 'ies') + ' received.');
+    }
+  },
+  {
+    // "list all conversations" / "what conversations do I have" / "show my conversations"
+    pattern: /\b(?:list|show|what)\s+(?:all\s+)?(?:my\s+)?conversations?\b/i,
+    action: function() {
+      var convs = (typeof state !== 'undefined' && state.conversations) ? state.conversations : [];
+      if (convs.length === 0) { _speak('You have no conversations.'); return; }
+      var names = convs.slice(0, 5).map(function(c, i) { return (i + 1) + ': ' + (c.title || 'Untitled'); }).join('. ');
+      _speak('You have ' + convs.length + ' conversation' + (convs.length === 1 ? '' : 's') + '. ' + names + (convs.length > 5 ? ', and more.' : '.'));
+    }
+  },
+  {
+    // "go to next conversation" / "next conversation" / "previous conversation"
+    pattern: /\b(next|previous|prev|go\s+(?:to\s+)?(?:next|previous|prev))\s+conversation\b/i,
+    action: function(m) {
+      var dir = /prev/i.test(m[1]) ? -1 : 1;
+      var convs = (typeof state !== 'undefined' && state.conversations) ? state.conversations : [];
+      if (convs.length < 2) { _speak('You only have one conversation.'); return; }
+      var idx = convs.findIndex(function(c) { return c.id === state.currentId; });
+      var next = convs[(idx + dir + convs.length) % convs.length];
+      _speak('Switching to ' + (next.title || 'Untitled') + '.');
+      if (typeof loadConversation === 'function') loadConversation(next.id);
+    }
+  },
+  {
+    // "summarize this conversation" / "summarize X"
+    pattern: /\bsummariz(?:e|ing)\s+(?:this\s+)?(?:conversation|chat)?(?:\s+(.+))?\b/i,
+    action: function(m) {
+      var name = m[1] ? m[1].trim() : null;
+      var convs = (typeof state !== 'undefined' && state.conversations) ? state.conversations : [];
+      var conv = name
+        ? convs.find(function(c) { return (c.title || '').toLowerCase().includes(name.toLowerCase()); })
+        : (typeof state !== 'undefined' && state.currentId ? convs.find(function(c) { return c.id === state.currentId; }) : null);
+      if (!conv) { _speak(name ? 'No conversation found matching ' + name + '.' : 'No active conversation.'); return; }
+      var msgs = (conv.messages || []).filter(function(x) { return x.role === 'user' || x.role === 'assistant'; });
+      if (msgs.length === 0) { _speak(conv.title + ' has no messages to summarize.'); return; }
+      // Grab last 3 user messages as a quick spoken summary
+      var userMsgs = msgs.filter(function(x) { return x.role === 'user'; }).slice(-3);
+      var topics = userMsgs.map(function(x) { return (x.content || '').replace(/\n/g, ' ').trim().slice(0, 60); }).join('; ');
+      _speak(conv.title + ' — last ' + userMsgs.length + ' topic' + (userMsgs.length === 1 ? '' : 's') + ': ' + topics + '.');
     }
   }
 ];
