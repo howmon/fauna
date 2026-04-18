@@ -788,3 +788,220 @@ function initVoice() {
     obs.observe(settingsPanel, { attributes: true, attributeFilter: ['class'] });
   }
 }
+
+// ── Inline dictation (mic button inside textarea row) ────────────────────
+
+var _dictState    = 'idle'; // 'idle' | 'recording' | 'processing'
+var _dictStream   = null;
+var _dictChunks   = [];
+var _dictRecorder = null;
+
+// Inline voice commands that act on conversations instead of inserting text
+var _DICTATION_CONV_CMDS = [
+  { re: /\bnew\s+conv(ersation)?\b/i,         action: 'new' },
+  { re: /\bcreate\s+(a\s+)?conv(ersation)?\b/i, action: 'new' },
+  { re: /\bstart\s+(a\s+)?conv(ersation)?\b/i,  action: 'new' },
+  { re: /\bnext\s+conv(ersation)?\b/i,         action: 'next' },
+  { re: /\bprev(ious)?\s+conv(ersation)?\b/i,  action: 'prev' },
+];
+
+function _dictSetState(s) {
+  _dictState = s;
+  var btn = document.getElementById('dictate-btn');
+  if (!btn) return;
+  btn.classList.remove('recording', 'processing');
+  if (s === 'recording') {
+    btn.classList.add('recording');
+    btn.title = 'Recording\u2026 click to stop';
+    btn.innerHTML = '<i class="ti ti-microphone-off"></i>';
+  } else if (s === 'processing') {
+    btn.classList.add('processing');
+    btn.title = 'Transcribing\u2026';
+    btn.innerHTML = '<i class="ti ti-loader-2" style="animation:spin .7s linear infinite"></i>';
+  } else {
+    btn.title = 'Dictate message (click to speak, click again to stop)';
+    btn.innerHTML = '<i class="ti ti-microphone"></i>';
+  }
+}
+
+function _dictCleanup() {
+  if (_dictRecorder && _dictRecorder.state !== 'inactive') {
+    try { _dictRecorder.stop(); } catch (_) {}
+  }
+  if (_dictStream) { _dictStream.getTracks().forEach(function(t) { t.stop(); }); _dictStream = null; }
+  _dictRecorder = null;
+  _dictChunks   = [];
+}
+
+function _dictHandleTranscript(text) {
+  text = text.trim();
+  _dictSetState('idle');
+  if (!text) return;
+
+  // Check for conversation commands first
+  for (var i = 0; i < _DICTATION_CONV_CMDS.length; i++) {
+    if (_DICTATION_CONV_CMDS[i].re.test(text)) {
+      var action = _DICTATION_CONV_CMDS[i].action;
+      if (action === 'new') {
+        if (typeof newConversation === 'function') newConversation();
+        else if (typeof startNewConversation === 'function') startNewConversation();
+        if (typeof showToast === 'function') showToast('New conversation started');
+      } else if (action === 'next') {
+        _speakConvNavigate(1);
+      } else if (action === 'prev') {
+        _speakConvNavigate(-1);
+      }
+      return;
+    }
+  }
+
+  // Otherwise insert into textarea
+  var ta = document.getElementById('msg-input');
+  if (!ta) return;
+  var cur = ta.value;
+  var sep = (cur && !cur.endsWith(' ')) ? ' ' : '';
+  ta.value = cur + sep + text;
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+  ta.focus();
+  ta.selectionStart = ta.selectionEnd = ta.value.length;
+}
+
+function _speakConvNavigate(dir) {
+  if (typeof state === 'undefined' || !state.conversations) return;
+  var convs = state.conversations;
+  var idx = convs.findIndex(function(c) { return c.id === state.activeConversationId; });
+  var next = idx + dir;
+  if (next < 0 || next >= convs.length) {
+    _speak(dir > 0 ? 'Already at the last conversation.' : 'Already at the first conversation.');
+    return;
+  }
+  if (typeof loadConversation === 'function') loadConversation(convs[next].id);
+}
+
+async function _dictTranscribeChunks(chunks) {
+  var blob = new Blob(chunks, { type: (chunks[0] && chunks[0].type) || 'audio/webm' });
+  var arrayBuf = await blob.arrayBuffer();
+
+  var decoded;
+  try {
+    decoded = await new Promise(function(resolve, reject) {
+      var ac = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      ac.decodeAudioData(arrayBuf, function(buf) { ac.close(); resolve(buf); }, reject);
+    });
+  } catch (e) {
+    console.warn('[dictate] decode failed', e);
+    _dictSetState('idle');
+    return;
+  }
+
+  if (decoded.duration < 0.5) { _dictSetState('idle'); return; }
+
+  // Resample to 16kHz float32
+  var offCtx = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
+  var src = offCtx.createBufferSource();
+  src.buffer = decoded;
+  src.connect(offCtx.destination);
+  src.start(0);
+  var rendered = await offCtx.startRendering();
+  var float32 = rendered.getChannelData(0);
+
+  // Reuse existing Whisper worker if available, else spin one up
+  var worker = _whisperWorker || new Worker('/js/whisper-worker.js');
+  var settled = false;
+  worker.onmessage = function(e) {
+    if (settled) return;
+    var d = e.data || {};
+    if (d.status === 'ready') return;
+    if (d.status === 'error') { settled = true; _dictSetState('idle'); return; }
+    if (d.text !== undefined) {
+      settled = true;
+      var clean = (d.text || '').replace(WHISPER_NOISE_TOKENS, '').trim();
+      _dictHandleTranscript(clean);
+    }
+  };
+  worker.postMessage({ audio: float32 }, [float32.buffer]);
+}
+
+function _dictStopRecording() {
+  if (_dictState !== 'recording' || !_dictRecorder) return;
+  _dictSetState('processing');
+  var mr = _dictRecorder;
+  mr.onstop = function() {
+    var chunks = _dictChunks.slice();
+    _dictCleanup();
+    if (chunks.length) _dictTranscribeChunks(chunks);
+    else _dictSetState('idle');
+  };
+  if (mr.state !== 'inactive') mr.stop();
+}
+
+var _dictSilenceTimer = null;
+var _dictAutoStop     = null;
+var _dictSilenceCtx   = null;
+var _dictLoudFrames   = 0;
+var _dictSilFrames    = 0;
+
+function _dictClearTimers() {
+  if (_dictSilenceTimer) { clearInterval(_dictSilenceTimer); _dictSilenceTimer = null; }
+  if (_dictAutoStop)     { clearTimeout(_dictAutoStop);      _dictAutoStop     = null; }
+  if (_dictSilenceCtx)   { try { _dictSilenceCtx.close(); } catch(_){} _dictSilenceCtx = null; }
+}
+
+function startDictation() {
+  // Toggle: click again to stop
+  if (_dictState === 'recording') { _dictClearTimers(); _dictStopRecording(); return; }
+  if (_dictState === 'processing') return;
+
+  _dictChunks     = [];
+  _dictLoudFrames = 0;
+  _dictSilFrames  = 0;
+
+  // Reuse open mic stream from wake word system if available
+  if (_micStream) {
+    _beginDictationRecording(_micStream);
+    return;
+  }
+
+  navigator.mediaDevices.getUserMedia({ audio: true, video: false }).then(function(stream) {
+    _dictStream = stream;
+    _beginDictationRecording(stream);
+  }).catch(function(err) {
+    console.warn('[dictate] mic denied', err);
+    _dictSetState('idle');
+    if (typeof showToast === 'function') showToast('Microphone access denied');
+  });
+}
+
+function _beginDictationRecording(stream) {
+  _dictSetState('recording');
+
+  var mr = new MediaRecorder(stream);
+  _dictRecorder = mr;
+  mr.ondataavailable = function(e) { if (e.data && e.data.size > 0) _dictChunks.push(e.data); };
+  mr.start(100);
+
+  // 15s hard cap
+  _dictAutoStop = setTimeout(function() { _dictClearTimers(); _dictStopRecording(); }, 15000);
+
+  // Silence detection: stop 2s after speech onset quiets
+  _dictSilenceCtx = new (window.AudioContext || window.webkitAudioContext)();
+  var dictSrc = _dictSilenceCtx.createMediaStreamSource(stream);
+  var analyser = _dictSilenceCtx.createAnalyser();
+  analyser.fftSize = 2048;
+  dictSrc.connect(analyser);
+  var buf = new Float32Array(analyser.fftSize);
+
+  _dictSilenceTimer = setInterval(function() {
+    if (_dictState !== 'recording') { _dictClearTimers(); return; }
+    analyser.getFloatTimeDomainData(buf);
+    var rms = 0;
+    for (var i = 0; i < buf.length; i++) rms += buf[i] * buf[i];
+    rms = Math.sqrt(rms / buf.length);
+    if (rms > VAD_RMS_THRESHOLD) { _dictLoudFrames++; _dictSilFrames = 0; }
+    else if (_dictLoudFrames > 5) { _dictSilFrames++; }
+    if (_dictSilFrames >= 20) {       // ~2s silence after speech
+      _dictClearTimers();
+      _dictStopRecording();
+    }
+  }, 100);
+}
