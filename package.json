@@ -99,8 +99,14 @@
       "agent-*.js",
       "public/**",
       "assets/**",
+      "package.json",
       "node_modules/**",
-      "package.json"
+      "!node_modules/@xenova/transformers/**",
+      "node_modules/@xenova/transformers/dist/transformers.min.js",
+      "node_modules/@xenova/transformers/dist/ort-wasm-simd-threaded.wasm",
+      "node_modules/@xenova/transformers/dist/ort-wasm-simd.wasm",
+      "node_modules/@xenova/transformers/dist/ort-wasm.wasm",
+      "node_modules/@xenova/transformers/dist/ort-wasm-threaded.wasm"
     ],
     "electronVersion": "41.0.3",
     "extraResources": [
