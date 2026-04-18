@@ -377,16 +377,18 @@ function _startWakeListener() {
   };
 
   _wakeRecog.onerror = function(e) {
-    if (e.error === 'not-allowed') {
+    console.warn('[voice] wake recognition error:', e.error);
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
       _voiceEnabled = false;
       _setVoicePillState('off');
       _syncVoiceToggleUI(false);
       var s = _loadVoiceSettings();
       s.enabled = false;
       _saveVoiceSettings(s);
-      if (typeof showToast === 'function') showToast('Microphone access denied — voice control disabled');
+      if (typeof showToast === 'function') showToast('Microphone access denied — check Fauna permissions in System Settings');
+      _speak('Microphone access denied. Please allow microphone access in System Settings.');
     }
-    // 'no-speech' and 'audio-capture' errors: the onend handler will restart
+    // 'no-speech' / 'audio-capture' / 'network': onend will restart automatically
   };
 
   try {

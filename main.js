@@ -40,6 +40,15 @@ async function createWindow() {
     show: false,
   });
 
+  // Grant microphone permission for localhost (required for Web Speech API / voice control)
+  mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
+    if (permission === 'media' || permission === 'microphone' || permission === 'audioCapture') {
+      callback(true);
+    } else {
+      callback(false);
+    }
+  });
+
   mainWindow.loadURL(`http://localhost:${PORT}`);
 
   mainWindow.once('ready-to-show', () => {
