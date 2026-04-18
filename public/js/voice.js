@@ -383,10 +383,11 @@ async function _transcribeBlobs(chunks, mode) {
 // ── VAD (Voice Activity Detection) ───────────────────────────────────────
 
 var VAD_RMS_THRESHOLD       = 0.004;  // energy floor: speech vs ambient
-var VAD_SPEECH_FRAMES_START = 3;      // consecutive loud frames to start recording (~300ms)
-var VAD_SILENCE_FRAMES_WAKE = 10;     // silence frames to end wake chunk (~1s)
+var VAD_SPEECH_FRAMES_START = 1;      // loud frames to start recording (1 = capture word from onset)
+var VAD_MIN_RECORD_FRAMES   = 15;     // minimum frames before silence can end recording (~1.5s)
+var VAD_SILENCE_FRAMES_WAKE = 10;     // silence frames to end wake chunk (~1s, after min duration)
 var VAD_SILENCE_FRAMES_CMD  = 12;     // silence frames to end command chunk (~1.2s)
-var VAD_MAX_WAKE_FRAMES     = 30;     // max frames before force-stopping wake recording (~3s)
+var VAD_MAX_WAKE_FRAMES     = 35;     // max frames before force-stopping wake recording (~3.5s)
 var _vadPeakRms             = 0;      // peak RMS during current recording (for threshold tuning)
 var _vadRecordFrames        = 0;      // frames elapsed since recording started
 
@@ -449,7 +450,8 @@ function _startVADLoop() {
         _vadRecordFrames++;
         _vadSilenceFrames++;
         var forceStop = (_vadState === 'recording_wake' && _vadRecordFrames >= VAD_MAX_WAKE_FRAMES);
-        if (_vadSilenceFrames >= silenceFrames || forceStop) {
+        var minMet    = (_vadRecordFrames >= VAD_MIN_RECORD_FRAMES);
+        if ((minMet && _vadSilenceFrames >= silenceFrames) || forceStop) {
           if (forceStop) console.log('[vad] force-stopping wake recording after', _vadRecordFrames, 'frames');
           var capturedMode   = (_vadState === 'recording_cmd') ? 'cmd' : 'wake';
           console.log('[vad] end of speech — peak rms during recording:', _vadPeakRms.toFixed(4));
