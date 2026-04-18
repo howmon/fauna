@@ -491,14 +491,23 @@ async function executeBrowserAction(action) {
     return { ok: true, result: r };
 
   } else if (action.action === 'click') {
-    // Use a JS snippet that never throws inside the webview — returns a status string instead
+    // Use a JS snippet that never throws inside the webview — returns a status string instead.
+    // Falls back to text-content match if the CSS selector finds nothing.
+    var clickSel = JSON.stringify(action.selector);
+    var clickText = JSON.stringify((action.text || action.selector || '').toLowerCase());
     var js2 =
       '(function(){' +
-        'var el=document.querySelector(' + JSON.stringify(action.selector) + ');' +
+        'var el=null;' +
+        // Primary: CSS selector (querySelector handles comma-separated fallback lists natively)
+        'try{el=document.querySelector(' + clickSel + ');}catch(_){}' +
+        // Secondary: visible text match across all clickable elements
+        'if(!el){' +
+          'var txt=' + clickText + ';' +
+          'var cands=Array.from(document.querySelectorAll("a,button,[role=button],[role=tab],[role=menuitem],[role=option],[role=listitem],[data-slug],[data-id]"));' +
+          'el=cands.find(function(c){return (c.innerText||c.textContent||"").toLowerCase().includes(txt);});' +
+        '}' +
         'if(!el) return "NOT_FOUND";' +
         'el.scrollIntoView();' +
-        // If it's a plain link and caller didn't explicitly want a JS click, return the href
-        // so the caller can decide to navigate instead of click (avoids page-unload race)
         'if(el.tagName==="A"&&el.href&&!el.href.startsWith("javascript")) return "HREF:"+el.href;' +
         'el.focus();el.click();' +
         'return "ok";' +
@@ -509,7 +518,28 @@ async function executeBrowserAction(action) {
     } catch(e) {
       throw new Error('Click script error: ' + e.message);
     }
-    if (clickResult === 'NOT_FOUND') throw new Error('Element not found: ' + action.selector);
+    if (clickResult === 'NOT_FOUND') {
+      // Collect a list of interactive elements so the error message gives the AI
+      // enough info to pick a corrected selector without an extra round-trip.
+      var interactiveJs =
+        'JSON.stringify(Array.from(document.querySelectorAll(' +
+          '"a[href],button,[role=button],[role=tab],[data-slug],[data-id],[role=menuitem],[role=option]"' +
+        ')).slice(0,60).map(function(el){' +
+          'var attrs={};' +
+          'for(var i=0;i<el.attributes.length;i++){var a=el.attributes[i];if(a.name!=="class"&&a.name!=="style")attrs[a.name]=a.value;}' +
+          'return {tag:el.tagName.toLowerCase(),text:(el.innerText||el.textContent||"").trim().slice(0,60),attrs:attrs};' +
+        '}))';
+      var interactive = '';
+      try { interactive = await wvExec(wv, interactiveJs); } catch(_) {}
+      var msg = 'Element not found: ' + action.selector;
+      if (interactive) {
+        try { msg += '\n\nInteractive elements on page:\n' + JSON.parse(interactive).map(function(e) {
+          var attrStr = Object.entries(e.attrs).map(function(kv){return kv[0]+'="'+kv[1]+'"';}).join(' ');
+          return '<' + e.tag + (attrStr?' '+attrStr:'') + '> ' + e.text;
+        }).join('\n'); } catch(_) {}
+      }
+      throw new Error(msg);
+    }
     // If click target was a real link, navigate properly instead of relying on the click
     if (typeof clickResult === 'string' && clickResult.startsWith('HREF:')) {
       var href = clickResult.slice(5);
