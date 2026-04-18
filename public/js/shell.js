@@ -215,9 +215,9 @@ async function runShellExec(execId, opts) {
       detectShellArtifacts(code, d.stdout, widget.closest('.msg-body') || resultEl);
     }
 
-    // Auto-feed output back to AI — also feed if screenshot taken (even with no stdout)
-    // Always feed on failure so the AI knows the command failed (even with suppressed stderr)
-    if (opts.autoFeed && (d.stdout || d.stderr || d._screenshot || exitCode !== 0)) {
+    // Auto-feed output back to AI always when autoFeed is set —
+    // the AI needs to know about empty results and failures, not just successes
+    if (opts.autoFeed) {
       dbg('  ↳ auto-feeding output to AI' + (d._screenshot ? ' with screenshot' : ''), 'info');
       setTimeout(function() { feedShellResultToAI(execId, { silent: true }); }, 600);
     }
