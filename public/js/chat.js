@@ -650,7 +650,6 @@ async function streamResponse(conv) {
     conv.messages.push(aiMsg);
     conv._streaming = false;
     conv._abortController = null;
-    conv._autoFeedDepth = 0; // reset chain depth after each AI turn
     saveConversations();
     renderConvList(); // remove streaming spinner from sidebar
 
