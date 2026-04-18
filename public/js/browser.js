@@ -760,8 +760,13 @@ function extractAndRenderBrowserActions(html, messageEl, isHistoryLoad, convId) 
     var pre = code.parentElement;
     var raw = code.textContent.trim();
 
-    // Support JSONL (multiple JSON objects, one per line) as well as single JSON
-    var lines = raw.split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+    // Support JSONL (multiple JSON objects, one per line) as well as single JSON.
+    // When the LLM emits adjacent fenced blocks the closing ``` of block N and
+    // opening ``` of block N+1 merge into ``````browser-action — marked.js treats
+    // that as a non-closing fence and collapses everything into one code block.
+    // Strip those fence-separator lines before parsing.
+    var lines = raw.split('\n').map(function(l) { return l.trim(); })
+      .filter(function(l) { return l && !/^`{3,}/.test(l); });
     var parsedLines = [];
     var allJsonl = lines.length > 1 && lines.every(function(l) {
       try { JSON.parse(l); return true; } catch(_) { return false; }
