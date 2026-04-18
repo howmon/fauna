@@ -216,7 +216,8 @@ async function runShellExec(execId, opts) {
     }
 
     // Auto-feed output back to AI — also feed if screenshot taken (even with no stdout)
-    if (opts.autoFeed && (d.stdout || d.stderr || d._screenshot)) {
+    // Always feed on failure so the AI knows the command failed (even with suppressed stderr)
+    if (opts.autoFeed && (d.stdout || d.stderr || d._screenshot || exitCode !== 0)) {
       dbg('  ↳ auto-feeding output to AI' + (d._screenshot ? ' with screenshot' : ''), 'info');
       setTimeout(function() { feedShellResultToAI(execId, { silent: true }); }, 600);
     }
@@ -254,6 +255,7 @@ async function feedShellResultToAI(execId, opts) {
   if (d.stdout && d.stdout.trim()) lines.push(d.stdout.trimEnd());
   if (d.stderr && d.stderr.trim()) lines.push('[stderr] ' + d.stderr.trimEnd());
   if (!d.stdout && !d.stderr && d._screenshot) lines.push('(no stdout — screenshot captured)');
+  if (!d.stdout && !d.stderr && !d._screenshot && d.exitCode !== 0) lines.push('(no output — command not found or path does not exist)');
   lines.push('exit ' + d.exitCode);
   lines.push('```');
   lines.push('Continue working on the task. If more steps are needed, run the next command. If done, summarize.');
