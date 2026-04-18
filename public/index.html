@@ -147,11 +147,33 @@
       </div>
     </div>
 
-    <!-- Voice overlay -->
+    <!-- Voice overlay (listening mode) -->
     <div id="voice-overlay">
-      <div id="voice-overlay-ring"></div>
+      <div id="voice-overlay-avatar">
+        <i class="ti ti-microphone"></i>
+      </div>
+      <div id="voice-waveform">
+        <span class="vw-bar"></span><span class="vw-bar"></span><span class="vw-bar"></span>
+        <span class="vw-bar"></span><span class="vw-bar"></span><span class="vw-bar"></span>
+        <span class="vw-bar"></span>
+      </div>
       <div id="voice-overlay-text">Listening…</div>
       <div id="voice-overlay-hint">Speak your command</div>
+    </div>
+
+    <!-- Voice response card (Fauna speaking back) -->
+    <div id="voice-response-card">
+      <div id="voice-response-avatar">
+        <img src="img/logo.svg" alt="" width="18" height="18">
+      </div>
+      <div id="voice-response-body">
+        <div id="voice-response-label">Fauna</div>
+        <div id="voice-response-text"></div>
+        <div id="voice-response-bars">
+          <span class="vr-bar"></span><span class="vr-bar"></span><span class="vr-bar"></span>
+          <span class="vr-bar"></span><span class="vr-bar"></span>
+        </div>
+      </div>
     </div>
 
     <!-- Debug log panel -->

@@ -59,21 +59,45 @@ function _playVoiceChime(type) {
 
 // ── Text-to-speech ────────────────────────────────────────────────────────
 
+var _speakTimer = null;
+
 function _speak(text) {
   if (!window.speechSynthesis || !text) return;
-  // Cancel any in-flight speech so responses don't queue up
   window.speechSynthesis.cancel();
   var utt = new SpeechSynthesisUtterance(text);
   utt.rate   = 1.05;
   utt.pitch  = 1.0;
   utt.volume = 0.9;
-  // Prefer a natural-sounding voice if available
   var voices = window.speechSynthesis.getVoices();
   var preferred = voices.find(function(v) {
     return /samantha|karen|daniel|google us|zira/i.test(v.name);
   }) || voices.find(function(v) { return v.lang === 'en-US'; });
   if (preferred) utt.voice = preferred;
+
+  // Show response card
+  _showResponseCard(text);
+
+  utt.onend = function() { _hideResponseCard(); };
+  utt.onerror = function() { _hideResponseCard(); };
+
   window.speechSynthesis.speak(utt);
+}
+
+function _showResponseCard(text) {
+  var card = document.getElementById('voice-response-card');
+  var textEl = document.getElementById('voice-response-text');
+  if (!card) return;
+  if (textEl) textEl.textContent = text;
+  card.classList.add('visible');
+  // Safety auto-hide after 12s in case onend never fires
+  if (_speakTimer) clearTimeout(_speakTimer);
+  _speakTimer = setTimeout(_hideResponseCard, 12000);
+}
+
+function _hideResponseCard() {
+  if (_speakTimer) { clearTimeout(_speakTimer); _speakTimer = null; }
+  var card = document.getElementById('voice-response-card');
+  if (card) card.classList.remove('visible');
 }
 
 // ── Mic pill state ────────────────────────────────────────────────────────
