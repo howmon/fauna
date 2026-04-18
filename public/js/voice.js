@@ -57,6 +57,25 @@ function _playVoiceChime(type) {
   } catch (_) {}
 }
 
+// ── Text-to-speech ────────────────────────────────────────────────────────
+
+function _speak(text) {
+  if (!window.speechSynthesis || !text) return;
+  // Cancel any in-flight speech so responses don't queue up
+  window.speechSynthesis.cancel();
+  var utt = new SpeechSynthesisUtterance(text);
+  utt.rate   = 1.05;
+  utt.pitch  = 1.0;
+  utt.volume = 0.9;
+  // Prefer a natural-sounding voice if available
+  var voices = window.speechSynthesis.getVoices();
+  var preferred = voices.find(function(v) {
+    return /samantha|karen|daniel|google us|zira/i.test(v.name);
+  }) || voices.find(function(v) { return v.lang === 'en-US'; });
+  if (preferred) utt.voice = preferred;
+  window.speechSynthesis.speak(utt);
+}
+
 // ── Mic pill state ────────────────────────────────────────────────────────
 // data-voice-state: 'off' | 'listening' | 'active'
 
@@ -87,7 +106,59 @@ function _hideVoiceOverlay() {
 // ── Command routing ───────────────────────────────────────────────────────
 
 var _VOICE_ROUTES = [
-  // Install / add agent (searches the store)
+  // ── Status queries (always speak the answer) ───────────────────────────
+  {
+    pattern: /\b(how many|list|what|show)\s+(?:my\s+)?agents?\b/i,
+    action: function() {
+      var agents = typeof getAllAgents === 'function' ? getAllAgents() : [];
+      var n = agents.length;
+      if (n === 0) {
+        _speak('You have no agents installed.');
+      } else {
+        var names = agents.slice(0, 4).map(function(a) { return a.displayName || a.name; }).join(', ');
+        _speak('You have ' + n + ' agent' + (n === 1 ? '' : 's') + ': ' + names + (n > 4 ? ', and more.' : '.'));
+      }
+    }
+  },
+  {
+    pattern: /\b(what|which)\s+model\b/i,
+    action: function() {
+      var sel = document.getElementById('model-select');
+      var model = sel ? (sel.options[sel.selectedIndex] || {}).text || sel.value : 'unknown';
+      _speak('You are using ' + model + '.');
+    }
+  },
+  {
+    pattern: /\b(are you|is\s+(?:the\s+)?figma)\s+(?:connected|online|running|active)\b/i,
+    action: function() {
+      var dot = document.getElementById('figma-dot');
+      var connected = dot && dot.classList.contains('on');
+      _speak(connected ? 'Yes, Figma MCP is connected.' : 'No, Figma MCP is not connected.');
+    }
+  },
+  {
+    pattern: /\b(what(?:'s|\s+is)\s+(?:my\s+)?(?:current\s+)?conversation|what\s+(?:am\s+i|are\s+we)\s+(?:working\s+on|talking\s+about))\b/i,
+    action: function() {
+      var title = document.getElementById('topbar-title');
+      var t = title ? title.textContent.trim() : '';
+      _speak(t && t !== 'New conversation' ? 'Current conversation: ' + t : 'You have no active conversation.');
+    }
+  },
+  {
+    pattern: /\b(how many|how\s+much)\s+(?:conversations?|chats?)\b/i,
+    action: function() {
+      var n = (typeof state !== 'undefined' && state.conversations) ? state.conversations.length : 0;
+      _speak('You have ' + n + ' conversation' + (n === 1 ? '.' : 's.'));
+    }
+  },
+  {
+    pattern: /\bwhat\s+(?:can\s+you|do\s+you)\s+(?:do|understand|support)\b/i,
+    action: function() {
+      _speak('You can say: install agent, uninstall agent, open store, new conversation, open settings, build an agent, switch to a conversation, or ask me a status question like what model or how many agents.');
+    }
+  },
+
+  // ── Actions (speak a confirmation after performing) ────────────────────
   {
     pattern: /\b(install|add|get)\s+(?:the\s+)?(?:agent\s+)?(.+)/i,
     action: function(m) {
@@ -100,9 +171,9 @@ var _VOICE_ROUTES = [
           search.dispatchEvent(new Event('input'));
         }
       }, 600);
+      _speak('Searching for ' + name + ' in the agent store.');
     }
   },
-  // Uninstall / remove / delete agent
   {
     pattern: /\b(uninstall|remove|delete)\s+(?:the\s+)?(?:agent\s+)?(.+)/i,
     action: function(m) {
@@ -113,41 +184,42 @@ var _VOICE_ROUTES = [
                (a.displayName || '').toLowerCase().includes(name.toLowerCase());
       });
       if (found) {
+        _speak('Removing ' + (found.displayName || found.name) + '.');
         if (typeof deleteAgent === 'function') deleteAgent(found.name);
       } else {
+        _speak('No agent found matching ' + name + '.');
         if (typeof showToast === 'function') showToast('No agent found matching "' + name + '"');
       }
     }
   },
-  // Open agent store
   {
     pattern: /\b(open|show)\s+(?:the\s+)?(?:agent\s+)?store\b/i,
     action: function() {
+      _speak('Opening the agent store.');
       if (typeof openAgentStore === 'function') openAgentStore();
     }
   },
-  // New conversation
   {
     pattern: /\b(new|start)\s+(?:a\s+)?(?:conversation|chat)\b/i,
     action: function() {
+      _speak('Starting a new conversation.');
       if (typeof newConversation === 'function') newConversation();
     }
   },
-  // Open settings
   {
     pattern: /\b(?:open\s+)?settings\b/i,
     action: function() {
+      _speak('Opening settings.');
       if (typeof toggleSettings === 'function') toggleSettings();
     }
   },
-  // Build / create an agent
   {
     pattern: /\b(?:build|create|make)\s+(?:an?\s+)?agent\b/i,
     action: function() {
+      _speak('Opening the agent builder.');
       if (typeof openAgentBuilder === 'function') openAgentBuilder();
     }
   },
-  // Switch to / open a conversation by name
   {
     pattern: /\b(?:switch\s+to|open)\s+(?:conversation\s+)?(.+)/i,
     action: function(m) {
@@ -157,8 +229,10 @@ var _VOICE_ROUTES = [
         return (c.title || '').toLowerCase().includes(name.toLowerCase());
       });
       if (found) {
+        _speak('Switching to ' + found.title + '.');
         if (typeof loadConversation === 'function') loadConversation(found.id);
       } else {
+        _speak('No conversation found matching ' + name + '.');
         if (typeof showToast === 'function') showToast('No conversation matching "' + name + '"');
       }
     }
@@ -334,11 +408,14 @@ function setVoiceEnabled(enabled) {
     _voiceEnabled = true;
     _voiceRestart = true;
     _startWakeListener();
-    if (typeof showToast === 'function') showToast('Voice on — say "' + getWakeWord() + '" to activate');
+    // Voices load asynchronously — wait briefly before speaking
+    setTimeout(function() {
+      _speak('Voice control on. Say ' + getWakeWord() + ' to activate.');
+    }, 500);
   } else {
     _voiceEnabled = false;
     _stopVoiceListeners();
-    if (typeof showToast === 'function') showToast('Voice control off');
+    _speak('Voice control off.');
   }
 }
 
