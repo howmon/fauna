@@ -302,16 +302,64 @@ button .ti, label .ti { pointer-events: none; }
 #voice-overlay.visible { opacity: 1; pointer-events: auto; }
 
 #voice-overlay-avatar {
-  width: 72px; height: 72px; border-radius: 50%;
-  background: var(--accent-dim); border: 2px solid var(--accent);
+  /* No border/bg — the SVG fills this space */
+  width: 96px; height: 96px;
   display: flex; align-items: center; justify-content: center;
-  font-size: 28px; color: var(--accent);
-  animation: voa-breathe 2s ease-in-out infinite;
-  box-shadow: 0 0 0 0 var(--accent-glow);
+  position: relative;
 }
-@keyframes voa-breathe {
-  0%,100% { box-shadow: 0 0 0 0 var(--accent-glow);   transform: scale(1); }
-  50%      { box-shadow: 0 0 0 14px transparent; transform: scale(1.06); }
+
+/* Outer dark shape — slow counter-rotate drift */
+#vl-outer {
+  transform-origin: 24px 24px;
+  animation: vlo-drift 8s ease-in-out infinite;
+}
+@keyframes vlo-drift {
+  0%,100% { transform: rotate(0deg) scale(1); }
+  33%      { transform: rotate(-4deg) scale(1.02); }
+  66%      { transform: rotate(3deg) scale(0.98); }
+}
+
+/* Mid teal — slow clockwise breathe */
+#vl-mid {
+  transform-origin: 24px 24px;
+  animation: vlm-breathe 5s ease-in-out infinite;
+}
+@keyframes vlm-breathe {
+  0%,100% { transform: rotate(0deg) scale(1);    opacity: 1; }
+  50%      { transform: rotate(5deg) scale(1.04); opacity: .85; }
+}
+
+/* Inner petal — faster independent pulse */
+#vl-inner {
+  transform-origin: 24px 24px;
+  animation: vli-pulse 3.2s ease-in-out infinite;
+}
+@keyframes vli-pulse {
+  0%,100% { transform: scale(1);    opacity: 1; }
+  40%      { transform: scale(1.07); opacity: .9; }
+  70%      { transform: scale(0.96); opacity: 1; }
+}
+
+/* Yellow center — amber glow throb */
+#vl-center {
+  transform-origin: 21px 25.5px;
+  animation: vlc-glow 2s ease-in-out infinite;
+}
+@keyframes vlc-glow {
+  0%,100% { opacity: 1;  filter: url(#vl-glow-yellow) brightness(1); }
+  50%      { opacity: .7; filter: url(#vl-glow-yellow) brightness(1.8); }
+}
+
+/* Response card logo — subtle pulse while speaking */
+#voice-response-logo {
+  animation: none;
+}
+#voice-response-card.visible #voice-response-logo {
+  animation: vrl-pulse 1.8s ease-in-out infinite;
+}
+@keyframes vrl-pulse {
+  0%,100% { opacity: 1;   transform: scale(1); }
+  50%      { opacity: .75; transform: scale(1.12); }
 }
 
 /* Animated waveform bars */
