@@ -5,12 +5,14 @@
 var VOICE_SETTINGS_KEY = 'fauna-voice-settings';
 var VOICE_WAKEWORD_KEY = 'fauna-voice-wakeword';
 
-var _voiceEnabled  = false;
-var _wakeRecog     = null;   // continuous recognition — scanning for wake word
-var _cmdRecog      = null;   // one-shot recognition — capturing the command
-var _voiceActive   = false;  // currently capturing a command
-var _voiceRestart  = true;   // should the wake listener auto-restart
-var _finalTranscript = '';
+var _voiceEnabled       = false;
+var _wakeRecog          = null;   // continuous recognition — scanning for wake word
+var _cmdRecog           = null;   // one-shot recognition — capturing the command
+var _voiceActive        = false;  // currently capturing a command
+var _voiceRestart       = true;   // should the wake listener auto-restart
+var _finalTranscript    = '';
+var _wakeNetworkErrors  = 0;      // consecutive network errors — for backoff
+var _wakeRestartTimer   = null;   // pending restart timeout
 
 // ── Persistence ───────────────────────────────────────────────────────────
 
@@ -345,6 +347,9 @@ function _startCommandCapture() {
 function _startWakeListener() {
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR || !_voiceEnabled || _voiceActive) return;
+  _voiceRestart = true;
+  // Tear down any stale instance before creating a fresh one
+  if (_wakeRecog) { try { _wakeRecog.abort(); } catch (_) {} _wakeRecog = null; }
 
   _wakeRecog = new SR();
   _wakeRecog.lang            = 'en-US';
@@ -354,6 +359,7 @@ function _startWakeListener() {
 
   _wakeRecog.onresult = function(e) {
     if (_voiceActive) return;
+    _wakeNetworkErrors = 0; // successful audio — reset backoff
     var wakeWord = getWakeWord();
     for (var i = e.resultIndex; i < e.results.length; i++) {
       var t = (e.results[i][0].transcript || '').toLowerCase();
@@ -366,14 +372,23 @@ function _startWakeListener() {
   };
 
   _wakeRecog.onend = function() {
-    // Auto-restart so it stays perpetually alive
-    if (_voiceRestart && _voiceEnabled && !_voiceActive) {
-      setTimeout(function() {
-        if (_voiceEnabled && !_voiceActive) {
-          try { _wakeRecog.start(); } catch (_) {}
-        }
-      }, 350);
+    if (!_voiceRestart || !_voiceEnabled || _voiceActive) return;
+    // Backoff delays: 350ms, 1s, 3s, then stop after 3 consecutive network errors
+    var delay = 350;
+    if (_wakeNetworkErrors >= 3) {
+      console.warn('[voice] Too many consecutive network errors — voice recognition paused. Retrying in 30s.');
+      if (typeof showToast === 'function') showToast('Voice recognition needs internet access (Google STT). Retrying in 30s…');
+      delay = 30000;
+      _wakeNetworkErrors = 0; // reset so next attempt gets a clean slate
+    } else if (_wakeNetworkErrors === 2) {
+      delay = 3000;
+    } else if (_wakeNetworkErrors === 1) {
+      delay = 1000;
     }
+    if (_wakeRestartTimer) clearTimeout(_wakeRestartTimer);
+    _wakeRestartTimer = setTimeout(function() {
+      if (_voiceEnabled && !_voiceActive) _startWakeListener(); // create fresh instance
+    }, delay);
   };
 
   _wakeRecog.onerror = function(e) {
@@ -387,8 +402,11 @@ function _startWakeListener() {
       _saveVoiceSettings(s);
       if (typeof showToast === 'function') showToast('Microphone access denied — check Fauna permissions in System Settings');
       _speak('Microphone access denied. Please allow microphone access in System Settings.');
+    } else if (e.error === 'network') {
+      _wakeNetworkErrors++;
+      // onend fires next and schedules the backoff restart
     }
-    // 'no-speech' / 'audio-capture' / 'network': onend will restart automatically
+    // 'no-speech' / 'audio-capture' / 'aborted': onend handles restart normally
   };
 
   try {
@@ -399,6 +417,8 @@ function _startWakeListener() {
 
 function _stopVoiceListeners() {
   _voiceRestart = false;
+  _wakeNetworkErrors = 0;
+  if (_wakeRestartTimer) { clearTimeout(_wakeRestartTimer); _wakeRestartTimer = null; }
   if (_wakeRecog) { try { _wakeRecog.abort(); } catch (_) {} _wakeRecog = null; }
   if (_cmdRecog)  { try { _cmdRecog.abort();  } catch (_) {} _cmdRecog  = null; }
   _voiceActive = false;
