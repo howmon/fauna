@@ -352,8 +352,11 @@ async function _transcribeBlobs(chunks, mode) {
     _setVoicePillState(_voiceEnabled ? 'listening' : 'off');
     return;
   }
+  console.log('[voice] transcribing', chunks.length, 'chunks, total bytes:', chunks.reduce(function(s,c){return s+c.size;},0), 'mode:', mode);
   try {
-    var blob     = new Blob(chunks, { type: chunks[0].type || 'audio/webm' });
+    var blobType = (chunks[0] && chunks[0].type) || 'audio/webm';
+    var blob     = new Blob(chunks, { type: blobType });
+    console.log('[voice] blob type:', blobType, 'size:', blob.size);
     var arrayBuf = await blob.arrayBuffer();
     var audioBuf = await _audioCtx.decodeAudioData(arrayBuf);
     var float32  = await _resampleTo16k(audioBuf);
@@ -386,16 +389,19 @@ function _rms(data) {
   return Math.sqrt(sum / data.length);
 }
 
+var _vadRmsLogTimer = 0;
 function _startVADLoop() {
   if (_vadTimer) clearInterval(_vadTimer);
   var buf = new Float32Array(_analyserNode.fftSize);
   _vadTimer = setInterval(function() {
     if (!_voiceEnabled || !_analyserNode) { clearInterval(_vadTimer); return; }
-    if (_audioCtx.state === 'suspended') { _audioCtx.resume(); return; }
+    if (_audioCtx.state === 'suspended') { console.log('[vad] AudioContext suspended — resuming'); _audioCtx.resume(); return; }
     if (_vadState === 'transcribing') return;
 
     _analyserNode.getFloatTimeDomainData(buf);
     var level         = _rms(buf);
+    var now = Date.now();
+    if (now - _vadRmsLogTimer > 2000) { _vadRmsLogTimer = now; console.log('[vad] rms:', level.toFixed(4), '| threshold:', VAD_RMS_THRESHOLD, '| state:', _vadState); }
     var silenceFrames = (_vadState === 'recording_cmd') ? VAD_SILENCE_FRAMES_CMD : VAD_SILENCE_FRAMES_WAKE;
 
     if (level > VAD_RMS_THRESHOLD) {
@@ -407,7 +413,9 @@ function _startVADLoop() {
         _vadSpeechFrames = 0;
         _recordChunks    = [];
         try {
-          _mediaRecorder = new MediaRecorder(_micStream, { mimeType: _bestMime() });
+          var mime = _bestMime();
+          console.log('[vad] speech detected — starting MediaRecorder, mode:', nextState, 'mime:', mime || '(default)');
+          _mediaRecorder = new MediaRecorder(_micStream, mime ? { mimeType: mime } : {});
           _mediaRecorder.ondataavailable = function(ev) {
             if (ev.data && ev.data.size > 0) _recordChunks.push(ev.data);
           };
