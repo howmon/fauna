@@ -5,15 +5,19 @@
 var VOICE_SETTINGS_KEY = 'fauna-voice-settings';
 var VOICE_WAKEWORD_KEY = 'fauna-voice-wakeword';
 
-var _voiceEnabled       = false;
-var _wakeRecog          = null;   // continuous recognition — scanning for wake word
-var _cmdRecog           = null;   // one-shot recognition — capturing the command
-var _voiceActive        = false;  // currently capturing a command
-var _voiceRestart       = true;   // should the wake listener auto-restart
-var _finalTranscript    = '';
-var _wakeNetworkErrors  = 0;      // consecutive network errors — for backoff
-var _wakeRestartTimer   = null;   // pending restart timeout
-var _wakeBackoffCycles  = 0;      // how many 30s pause cycles have elapsed
+var _voiceEnabled     = false;
+var _whisperWorker    = null;   // Web Worker running Whisper
+var _whisperReady     = false;  // model loaded and ready
+var _micStream        = null;   // MediaStream from getUserMedia
+var _audioCtx         = null;   // AudioContext for VAD analyser
+var _analyserNode     = null;   // AnalyserNode for energy detection
+var _mediaRecorder    = null;   // MediaRecorder for audio chunks
+var _recordChunks     = [];     // Blob chunks from current recording
+var _voiceActive      = false;  // in command capture mode
+var _vadState         = 'idle'; // 'idle'|'recording_wake'|'recording_cmd'|'transcribing'
+var _vadSpeechFrames  = 0;      // consecutive frames above energy threshold
+var _vadSilenceFrames = 0;      // consecutive frames below threshold
+var _vadTimer         = null;   // setInterval id for VAD loop
 
 // ── Persistence ───────────────────────────────────────────────────────────
 
@@ -287,154 +291,277 @@ function _routeVoiceCommand(transcript) {
   }
 }
 
-// ── Command capture ───────────────────────────────────────────────────────
+// ── Whisper worker ────────────────────────────────────────────────────────
 
-function _startCommandCapture() {
-  if (_voiceActive) return;
-  _voiceActive   = true;
-  _finalTranscript = '';
-
-  _playVoiceChime('activate');
-  _setVoicePillState('active');
-  _showVoiceOverlay('');
-
-  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  _cmdRecog = new SR();
-  _cmdRecog.lang             = 'en-US';
-  _cmdRecog.continuous       = false;
-  _cmdRecog.interimResults   = true;
-  _cmdRecog.maxAlternatives  = 1;
-
-  _cmdRecog.onresult = function(e) {
-    var transcript = '';
-    for (var i = e.resultIndex; i < e.results.length; i++) {
-      transcript += e.results[i][0].transcript;
-    }
-    _showVoiceOverlay(transcript);
-    if (e.results[e.results.length - 1].isFinal) {
-      _finalTranscript = transcript;
+function _initWhisperWorker() {
+  if (_whisperWorker) return;
+  _whisperWorker = new Worker('/js/whisper-worker.js', { type: 'module' });
+  _whisperWorker.onmessage = function(e) {
+    var d = e.data;
+    if (d.type === 'ready') {
+      _whisperReady = true;
+      if (typeof showToast === 'function') showToast('Voice ready — say "' + getWakeWord() + '" to activate');
+    } else if (d.type === 'status') {
+      console.log('[whisper]', d.msg);
+      if (typeof showToast === 'function') showToast(d.msg);
+    } else if (d.type === 'result') {
+      _onWhisperResult(d.text);
+    } else if (d.type === 'error') {
+      console.error('[whisper] error:', d.error);
+      _vadState    = 'idle';
+      _voiceActive = false;
+      _hideVoiceOverlay();
+      _setVoicePillState(_voiceEnabled ? 'listening' : 'off');
     }
   };
+  _whisperWorker.onerror = function(err) {
+    console.error('[whisper] Worker crashed:', err);
+    _whisperReady  = false;
+    _whisperWorker = null;
+  };
+}
 
-  _cmdRecog.onend = function() {
+// ── Audio pipeline ────────────────────────────────────────────────────────
+
+async function _resampleTo16k(audioBuffer) {
+  var targetRate = 16000;
+  var numFrames  = Math.ceil(audioBuffer.duration * targetRate);
+  if (numFrames < 1) return new Float32Array(0);
+  var offCtx = new OfflineAudioContext(1, numFrames, targetRate);
+  var src    = offCtx.createBufferSource();
+  src.buffer = audioBuffer;
+  src.connect(offCtx.destination);
+  src.start(0);
+  var rendered = await offCtx.startRendering();
+  return rendered.getChannelData(0);
+}
+
+function _bestMime() {
+  var types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+  for (var i = 0; i < types.length; i++) {
+    if (MediaRecorder.isTypeSupported(types[i])) return types[i];
+  }
+  return '';
+}
+
+async function _transcribeBlobs(chunks, mode) {
+  if (!chunks.length || !_whisperWorker || !_whisperReady) {
+    _vadState    = 'idle';
     _voiceActive = false;
-    _playVoiceChime('dismiss');
     _hideVoiceOverlay();
     _setVoicePillState(_voiceEnabled ? 'listening' : 'off');
-    if (_finalTranscript.trim()) {
-      _routeVoiceCommand(_finalTranscript.trim());
+    return;
+  }
+  try {
+    var blob     = new Blob(chunks, { type: chunks[0].type || 'audio/webm' });
+    var arrayBuf = await blob.arrayBuffer();
+    var audioBuf = await _audioCtx.decodeAudioData(arrayBuf);
+    var float32  = await _resampleTo16k(audioBuf);
+    if (float32.length < 1600) {        // < 0.1s — noise, ignore
+      _vadState = 'idle';
+      if (mode === 'cmd') { _voiceActive = false; _hideVoiceOverlay(); _setVoicePillState(_voiceEnabled ? 'listening' : 'off'); }
+      return;
     }
-    // Restart wake word listener
-    if (_voiceEnabled) {
-      _voiceRestart = true;
-      setTimeout(_startWakeListener, 300);
-    }
-  };
-
-  _cmdRecog.onerror = function() {
+    _vadState = 'transcribing';
+    _whisperWorker.postMessage({ type: 'transcribe', audio: float32 }, [float32.buffer]);
+  } catch (err) {
+    console.warn('[voice] audio decode error:', err);
+    _vadState    = 'idle';
     _voiceActive = false;
     _hideVoiceOverlay();
-    _setVoicePillState(_voiceEnabled ? 'listening' : 'off');
-  };
-
-  try { _cmdRecog.start(); } catch (_) {
-    _voiceActive = false;
     _setVoicePillState(_voiceEnabled ? 'listening' : 'off');
   }
 }
 
-// ── Wake word listener ────────────────────────────────────────────────────
+// ── VAD (Voice Activity Detection) ───────────────────────────────────────
+
+var VAD_RMS_THRESHOLD       = 0.015;  // energy floor: speech vs ambient
+var VAD_SPEECH_FRAMES_START = 3;      // consecutive loud frames to start recording (~300ms)
+var VAD_SILENCE_FRAMES_WAKE = 6;      // silence frames to end wake chunk (~600ms)
+var VAD_SILENCE_FRAMES_CMD  = 8;      // silence frames to end command chunk (~800ms)
+
+function _rms(data) {
+  var sum = 0;
+  for (var i = 0; i < data.length; i++) sum += data[i] * data[i];
+  return Math.sqrt(sum / data.length);
+}
+
+function _startVADLoop() {
+  if (_vadTimer) clearInterval(_vadTimer);
+  var buf = new Float32Array(_analyserNode.fftSize);
+  _vadTimer = setInterval(function() {
+    if (!_voiceEnabled || !_analyserNode) { clearInterval(_vadTimer); return; }
+    if (_audioCtx.state === 'suspended') { _audioCtx.resume(); return; }
+    if (_vadState === 'transcribing') return;
+
+    _analyserNode.getFloatTimeDomainData(buf);
+    var level         = _rms(buf);
+    var silenceFrames = (_vadState === 'recording_cmd') ? VAD_SILENCE_FRAMES_CMD : VAD_SILENCE_FRAMES_WAKE;
+
+    if (level > VAD_RMS_THRESHOLD) {
+      _vadSilenceFrames = 0;
+      _vadSpeechFrames++;
+      if (_vadSpeechFrames >= VAD_SPEECH_FRAMES_START && _vadState === 'idle') {
+        var nextState    = _voiceActive ? 'recording_cmd' : 'recording_wake';
+        _vadState        = nextState;
+        _vadSpeechFrames = 0;
+        _recordChunks    = [];
+        try {
+          _mediaRecorder = new MediaRecorder(_micStream, { mimeType: _bestMime() });
+          _mediaRecorder.ondataavailable = function(ev) {
+            if (ev.data && ev.data.size > 0) _recordChunks.push(ev.data);
+          };
+          _mediaRecorder.start(100);
+          if (nextState === 'recording_cmd') _showVoiceOverlay('Listening…');
+        } catch (err) {
+          console.warn('[voice] MediaRecorder start error:', err);
+          _vadState = 'idle';
+        }
+      }
+    } else {
+      _vadSpeechFrames = 0;
+      if (_vadState === 'recording_wake' || _vadState === 'recording_cmd') {
+        _vadSilenceFrames++;
+        if (_vadSilenceFrames >= silenceFrames) {
+          var capturedChunks = _recordChunks.slice();
+          var capturedMode   = (_vadState === 'recording_cmd') ? 'cmd' : 'wake';
+          _vadSpeechFrames   = 0;
+          _vadSilenceFrames  = 0;
+          _vadState          = 'idle';
+          if (_mediaRecorder && _mediaRecorder.state !== 'inactive') {
+            var mr = _mediaRecorder;
+            mr.onstop = function() { _transcribeBlobs(capturedChunks, capturedMode); };
+            try { mr.stop(); } catch (_) {}
+          }
+        }
+      }
+    }
+  }, 100);
+}
+
+// ── Whisper result handler ────────────────────────────────────────────────
+
+function _onWhisperResult(text) {
+  var lower = (text || '').toLowerCase().trim();
+  console.log('[whisper] (' + (_voiceActive ? 'cmd' : 'wake') + '):', lower);
+
+  if (!_voiceActive) {
+    // Wake word scan
+    _vadState = 'idle';
+    if (lower.includes(getWakeWord())) {
+      var ww        = getWakeWord();
+      var idx       = lower.indexOf(ww);
+      var afterWake = text.slice(idx + ww.length).replace(/^[\s,.!?]+/, '').trim();
+      if (afterWake.length > 2) {
+        // Inline command: "fauna new conversation"
+        _playVoiceChime('activate');
+        setTimeout(function() { _playVoiceChime('dismiss'); }, 300);
+        _routeVoiceCommand(afterWake);
+      } else {
+        _enterCommandMode();
+      }
+    }
+    // No wake word found: VAD continues scanning
+  } else {
+    // Command result
+    _exitCommandMode(lower);
+  }
+}
+
+// ── Command mode ──────────────────────────────────────────────────────────
+
+function _enterCommandMode() {
+  if (_voiceActive) return;
+  _voiceActive      = true;
+  _vadState         = 'idle';   // let VAD pick up command speech
+  _vadSpeechFrames  = 0;
+  _vadSilenceFrames = 0;
+  _playVoiceChime('activate');
+  _setVoicePillState('active');
+  _showVoiceOverlay('');
+  // Guard: auto-exit after 8s
+  setTimeout(function() {
+    if (!_voiceActive) return;
+    if (_mediaRecorder && _mediaRecorder.state !== 'inactive') {
+      var chunks = _recordChunks.slice();
+      var mr = _mediaRecorder;
+      mr.onstop = function() {
+        if (chunks.length) _transcribeBlobs(chunks, 'cmd');
+        else _exitCommandMode('');
+      };
+      try { mr.stop(); } catch (_) { _exitCommandMode(''); }
+    } else {
+      _exitCommandMode('');
+    }
+  }, 8000);
+}
+
+function _exitCommandMode(transcript) {
+  _voiceActive = false;
+  _vadState    = 'idle';
+  _playVoiceChime('dismiss');
+  _hideVoiceOverlay();
+  _setVoicePillState(_voiceEnabled ? 'listening' : 'off');
+  if ((transcript || '').trim()) _routeVoiceCommand(transcript.trim());
+}
+
+// ── Wake word listener (VAD + Whisper) ───────────────────────────────────
 
 function _startWakeListener() {
-  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR || !_voiceEnabled || _voiceActive) return;
-  _voiceRestart = true;
-  // Tear down any stale instance before creating a fresh one
-  if (_wakeRecog) { try { _wakeRecog.abort(); } catch (_) {} _wakeRecog = null; }
+  if (!_voiceEnabled) return;
+  _vadState         = 'idle';
+  _vadSpeechFrames  = 0;
+  _vadSilenceFrames = 0;
 
-  _wakeRecog = new SR();
-  _wakeRecog.lang            = 'en-US';
-  _wakeRecog.continuous      = true;
-  _wakeRecog.interimResults  = true;
-  _wakeRecog.maxAlternatives = 1;
+  if (_micStream) {
+    // Mic already open — restart VAD loop
+    _startVADLoop();
+    _setVoicePillState('listening');
+    return;
+  }
 
-  _wakeRecog.onresult = function(e) {
-    if (_voiceActive) return;
-    _wakeNetworkErrors = 0; // successful audio — reset backoff
-    var wakeWord = getWakeWord();
-    for (var i = e.resultIndex; i < e.results.length; i++) {
-      var t = (e.results[i][0].transcript || '').toLowerCase();
-      if (t.includes(wakeWord)) {
-        try { _wakeRecog.abort(); } catch (_) {}
-        _startCommandCapture();
-        return;
-      }
-    }
-  };
-
-  _wakeRecog.onend = function() {
-    if (!_voiceRestart || !_voiceEnabled || _voiceActive) return;
-    // Backoff: 350ms → 1s → 3s → 30s pause; give up after 2 x 30s cycles
-    var delay = 350;
-    if (_wakeNetworkErrors >= 3) {
-      _wakeBackoffCycles++;
-      _wakeNetworkErrors = 0;
-      if (_wakeBackoffCycles >= 2) {
-        // Give up — webkitSpeechRecognition needs Google cloud (not available in this build)
-        console.error('[voice] Giving up — Google STT unavailable in this Electron build.');
-        _voiceEnabled = false;
-        _setVoicePillState('off');
-        _syncVoiceToggleUI(false);
-        var s = _loadVoiceSettings(); s.enabled = false; _saveVoiceSettings(s);
-        if (typeof showToast === 'function') showToast('Voice recognition unavailable — Google STT is not supported in this build. Voice control disabled.');
-        return;
-      }
-      console.warn('[voice] Network errors — pausing 30s before retry.');
-      if (typeof showToast === 'function') showToast('Voice recognition needs internet. Retrying in 30s…');
-      delay = 30000;
-    } else if (_wakeNetworkErrors === 2) {
-      delay = 3000;
-    } else if (_wakeNetworkErrors === 1) {
-      delay = 1000;
-    }
-    if (_wakeRestartTimer) clearTimeout(_wakeRestartTimer);
-    _wakeRestartTimer = setTimeout(function() {
-      if (_voiceEnabled && !_voiceActive) _startWakeListener();
-    }, delay);
-  };
-
-  _wakeRecog.onerror = function(e) {
-    console.warn('[voice] wake recognition error:', e.error);
-    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+  navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+    .then(function(stream) {
+      _micStream    = stream;
+      _audioCtx     = new (window.AudioContext || window.webkitAudioContext)();
+      var src       = _audioCtx.createMediaStreamSource(stream);
+      _analyserNode = _audioCtx.createAnalyser();
+      _analyserNode.fftSize = 2048;
+      src.connect(_analyserNode);
+      // NOT connected to destination — avoids mic feedback
+      _startVADLoop();
+      _setVoicePillState('listening');
+    })
+    .catch(function(err) {
+      console.error('[voice] getUserMedia error:', err);
       _voiceEnabled = false;
       _setVoicePillState('off');
       _syncVoiceToggleUI(false);
-      var s = _loadVoiceSettings();
-      s.enabled = false;
-      _saveVoiceSettings(s);
+      var s = _loadVoiceSettings(); s.enabled = false; _saveVoiceSettings(s);
       if (typeof showToast === 'function') showToast('Microphone access denied — check Fauna permissions in System Settings');
-      _speak('Microphone access denied. Please allow microphone access in System Settings.');
-    } else if (e.error === 'network') {
-      _wakeNetworkErrors++;
-      // onend fires next and schedules the backoff restart
-    }
-    // 'no-speech' / 'audio-capture' / 'aborted': onend handles restart normally
-  };
-
-  try {
-    _wakeRecog.start();
-    _setVoicePillState('listening');
-  } catch (_) {}
+    });
 }
 
 function _stopVoiceListeners() {
-  _voiceRestart = false;
-  _wakeNetworkErrors = 0;
-  _wakeBackoffCycles = 0;
-  if (_wakeRestartTimer) { clearTimeout(_wakeRestartTimer); _wakeRestartTimer = null; }
-  if (_wakeRecog) { try { _wakeRecog.abort(); } catch (_) {} _wakeRecog = null; }
-  if (_cmdRecog)  { try { _cmdRecog.abort();  } catch (_) {} _cmdRecog  = null; }
-  _voiceActive = false;
+  if (_vadTimer) { clearInterval(_vadTimer); _vadTimer = null; }
+  if (_mediaRecorder && _mediaRecorder.state !== 'inactive') {
+    try { _mediaRecorder.stop(); } catch (_) {}
+    _mediaRecorder = null;
+  }
+  if (_micStream) {
+    _micStream.getTracks().forEach(function(t) { t.stop(); });
+    _micStream = null;
+  }
+  if (_audioCtx) {
+    try { _audioCtx.close(); } catch (_) {}
+    _audioCtx     = null;
+    _analyserNode = null;
+  }
+  _vadState         = 'idle';
+  _vadSpeechFrames  = 0;
+  _vadSilenceFrames = 0;
+  _voiceActive      = false;
+  _recordChunks     = [];
   _hideVoiceOverlay();
   _setVoicePillState('off');
 }
@@ -465,11 +592,8 @@ function setVoiceEnabled(enabled) {
 
   if (enabled) {
     _voiceEnabled = true;
-    _voiceRestart = true;
-    _wakeNetworkErrors = 0;
-    _wakeBackoffCycles = 0;
+    _initWhisperWorker();
     _startWakeListener();
-    // Voices load asynchronously — wait briefly before speaking
     setTimeout(function() {
       _speak('Voice control on. Say ' + getWakeWord() + ' to activate.');
     }, 500);
@@ -487,31 +611,18 @@ function saveVoiceWakeWord() {
   if (!w) return;
   _setWakeWord(w);
   if (typeof showToast === 'function') showToast('Wake word set to "' + w + '"');
-  // Restart listener to pick up new word
-  if (_voiceEnabled) {
-    _stopVoiceListeners();
-    _voiceEnabled = true;
-    _voiceRestart = true;
-    _startWakeListener();
-  }
+  // No restart needed — wake word is checked at transcription time
 }
 
 function initVoice() {
-  var SR  = window.SpeechRecognition || window.webkitSpeechRecognition;
   var btn = document.getElementById('voice-mic-btn');
-
-  if (!SR) {
-    // Speech API unavailable — hide mic button
-    if (btn) btn.style.display = 'none';
-    return;
-  }
 
   // Restore saved enabled state
   var s = _loadVoiceSettings();
   _voiceEnabled = s.enabled || false;
 
   if (_voiceEnabled) {
-    _voiceRestart = true;
+    _initWhisperWorker();
     _startWakeListener();
   } else {
     _setVoicePillState('off');

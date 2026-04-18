@@ -19,6 +19,7 @@
     "dist:all": "electron-builder --mac --win"
   },
   "dependencies": {
+    "@xenova/transformers": "^2.17.2",
     "archiver": "^7.0.1",
     "express": "^4.19.2",
     "multer": "^2.1.1",

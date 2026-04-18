@@ -50,6 +50,8 @@ const PATH_SEP = IS_WIN ? ';' : ':';
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ limit: '25mb', extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
+// Serve @xenova/transformers dist for the Whisper Web Worker
+app.use('/transformers', express.static(path.join(__dirname, 'node_modules', '@xenova', 'transformers', 'dist')));
 
 // ── Token resolution ──────────────────────────────────────────────────────
 // Electron runs with a stripped PATH so `gh` may not be found.
