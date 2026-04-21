@@ -1513,6 +1513,104 @@ app.post('/api/fetch-url', async (req, res) => {
   }
 });
 
+// ── Attachment text extraction ───────────────────────────────────────────
+
+const ATTACHMENT_TEXT_LIMIT = 80000;
+
+function _execFileAsync(file, args, opts) {
+  return new Promise((resolve, reject) => {
+    _execFile(file, args, opts || {}, (err, stdout, stderr) => {
+      if (err) {
+        err.stdout = stdout;
+        err.stderr = stderr;
+        reject(err);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+function normalizeAttachmentText(text) {
+  return String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\u0000/g, '')
+    .trim();
+}
+
+function buildAttachmentRef(name) {
+  return 'attachment://' + encodeURIComponent(name || ('file-' + Date.now()));
+}
+
+app.post('/api/extract-attachment', async (req, res) => {
+  const { name = '', mime = '', base64 = '' } = req.body || {};
+  if (!base64) return res.status(400).json({ error: 'Attachment payload required' });
+
+  let tmpPath = null;
+  try {
+    const buffer = Buffer.from(base64, 'base64');
+    if (!buffer.length) return res.status(400).json({ error: 'Attachment is empty' });
+
+    const ext = path.extname(name || '').toLowerCase();
+    const ref = buildAttachmentRef(name);
+    let extracted = '';
+    let warning = '';
+    let method = 'none';
+
+    const textLikeExts = new Set([
+      '.txt', '.md', '.js', '.jsx', '.ts', '.tsx', '.py', '.go', '.rs', '.java', '.c', '.cpp', '.h',
+      '.css', '.html', '.htm', '.json', '.yaml', '.yml', '.toml', '.xml', '.csv', '.log', '.sql',
+      '.graphql', '.env', '.gitignore', '.sh'
+    ]);
+    const textutilExts = new Set(['.doc', '.docx', '.rtf', '.odt', '.pages']);
+
+    if ((mime && mime.startsWith('text/')) || textLikeExts.has(ext)) {
+      extracted = normalizeAttachmentText(buffer.toString('utf8'));
+      method = 'utf8';
+    } else if (process.platform === 'darwin' && textutilExts.has(ext)) {
+      const tmpName = 'fauna-attach-' + Date.now() + '-' + Math.random().toString(36).slice(2) + (ext || '.bin');
+      tmpPath = path.join(os.tmpdir(), tmpName);
+      fs.writeFileSync(tmpPath, buffer);
+      const out = await _execFileAsync('/usr/bin/textutil', ['-convert', 'txt', '-stdout', tmpPath], { maxBuffer: 15 * 1024 * 1024 });
+      extracted = normalizeAttachmentText(out.stdout);
+      method = 'textutil';
+    } else if (process.platform === 'darwin' && ext === '.pdf') {
+      const tmpName = 'fauna-attach-' + Date.now() + '-' + Math.random().toString(36).slice(2) + '.pdf';
+      tmpPath = path.join(os.tmpdir(), tmpName);
+      fs.writeFileSync(tmpPath, buffer);
+      const out = await _execFileAsync('/usr/bin/mdls', ['-name', 'kMDItemTextContent', '-raw', tmpPath], { maxBuffer: 15 * 1024 * 1024 });
+      extracted = normalizeAttachmentText(out.stdout).replace(/^\(null\)$/i, '');
+      method = 'mdls';
+    } else {
+      warning = 'Unsupported document format for text extraction in this build.';
+    }
+
+    if (!extracted && !warning) {
+      warning = 'No readable text could be extracted from this attachment.';
+    }
+
+    const truncated = extracted.length > ATTACHMENT_TEXT_LIMIT;
+    if (truncated) extracted = extracted.slice(0, ATTACHMENT_TEXT_LIMIT);
+
+    res.json({
+      name,
+      mime,
+      size: buffer.length,
+      ref,
+      method,
+      text: extracted,
+      truncated,
+      warning
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to extract attachment text' });
+  } finally {
+    if (tmpPath && fs.existsSync(tmpPath)) {
+      try { fs.unlinkSync(tmpPath); } catch (_) {}
+    }
+  }
+});
+
 // ── Browser (Playwright) — full JS-rendered page browsing ─────────────────
 // Uses the installed Google Chrome to load pages with full JS execution,
 // bypassing anti-bot measures that block simple fetch requests.
