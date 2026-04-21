@@ -4907,7 +4907,13 @@ app.post('/api/ext/snapshot', async (req, res) => {
 
     res.json(result);
   } catch (e) {
-    res.status(503).json({ ok: false, error: e.message });
+    const isTimeout = e.message && e.message.includes('timed out');
+    res.status(503).json({
+      ok: false,
+      error: isTimeout
+        ? 'Snapshot timed out — Chrome window may not have OS focus. Ask the user to click into Chrome, then retry the snapshot.'
+        : e.message
+    });
   }
 });
 

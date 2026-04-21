@@ -114,7 +114,12 @@ async function handleServerMessage(msg) {
 
   // Command dispatch
   if (type === 'cmd') {
-    const result = await dispatchCommand(msg);
+    let result;
+    try {
+      result = await dispatchCommand(msg);
+    } catch (err) {
+      result = { ok: false, error: err.message || String(err) };
+    }
     send({ type: 'result', id, ...result });
     return;
   }
@@ -340,12 +345,37 @@ async function cmdWait({ ms = 1000 } = {}) {
 
 async function cmdSnapshot({} = {}, tab) {
   if (!tab) return { ok: false, error: 'No active tab' };
-  await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
-  // Small delay so the focused window is on screen
-  await new Promise(r => setTimeout(r, 150));
-  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
-  const base64 = dataUrl.replace(/^data:image\/png;base64,/, '');
-  return { ok: true, base64, mime: 'image/png', type: 'viewport' };
+
+  // Helper: capture with a hard timeout so we never hang indefinitely.
+  // captureVisibleTab can block forever when another app has OS focus.
+  function captureWithTimeout(windowId, timeoutMs = 8000) {
+    return Promise.race([
+      chrome.tabs.captureVisibleTab(windowId, { format: 'png' }),
+      new Promise((_, rej) =>
+        setTimeout(() => rej(new Error('captureVisibleTab timed out')), timeoutMs)
+      )
+    ]);
+  }
+
+  // Attempt 1: capture without forcing focus (works in Chrome 116+ from service worker)
+  try {
+    const dataUrl = await captureWithTimeout(tab.windowId, 6000);
+    const base64 = dataUrl.replace(/^data:image\/png;base64,/, '');
+    return { ok: true, base64, mime: 'image/png', type: 'viewport' };
+  } catch (_) {}
+
+  // Attempt 2: bring Chrome window to front, wait for OS to honour it, then capture
+  try {
+    await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+    await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+    await new Promise(r => setTimeout(r, 600));
+    const dataUrl = await captureWithTimeout(tab.windowId, 8000);
+    const base64 = dataUrl.replace(/^data:image\/png;base64,/, '');
+    return { ok: true, base64, mime: 'image/png', type: 'viewport' };
+  } catch (err) {
+    return { ok: false, error: 'Snapshot failed: ' + err.message +
+      '. Try clicking into the Chrome window first so it has OS focus.' };
+  }
 }
 
 async function cmdSnapshotFull({} = {}, tab) {
