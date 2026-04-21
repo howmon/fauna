@@ -15,7 +15,8 @@
     "storage",
     "contextMenus",
     "alarms",
-    "sidePanel"
+    "sidePanel",
+    "debugger"
   ],
   "host_permissions": [
     "<all_urls>"
