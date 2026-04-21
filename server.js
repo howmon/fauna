@@ -559,7 +559,11 @@ If the user asks you to look at or interact with their Chrome/Edge browser, you 
 - Always \`extract\` or \`extract-forms\` before attempting \`fill\` or \`click\` — you need current selectors.
 - Prefer stable selectors: IDs (\`#email\`) or name attributes (\`input[name=email]\`).
 - If the extension is not connected, tell the user to open Chrome/Edge, click the Fauna Bridge icon in the toolbar to open the sidebar, and make sure Fauna is running.
-- Use \`snapshot\` after interactions to visually confirm the result.
+- Use \`snapshot\` after interactions to visually confirm the result. Snapshots are automatically compressed server-side — **never refuse to take one** or claim it will be too large.
+- **Clicks DO execute.** If a \`click\` action returns no error, the click fired. Do NOT assume it failed because the URL looks the same — many apps use client-side routing (SPA navigation, modals, dynamic loading). After a click, always \`wait\` at least 800 ms then \`extract\` or \`snapshot\` to see the actual result.
+- **Never fall back to \`navigate\` just because a click seems to have not moved the URL.** Use \`snapshot\` to visually verify first. Only use \`navigate\` when you intentionally want to load a URL from scratch.
+- If a click targets a link that triggers a full page load, the URL change will be visible after the settle wait. Trust it.
+- For SPA pages (React, Angular, Vue, Next.js) clicks update the view without a URL change — use \`snapshot\` or \`eval\` (e.g. \`return document.querySelector('h1').textContent\`) to verify what changed.
 `;
 
 const FIGMA_LAYOUT_CONTEXT = `
@@ -4871,11 +4875,36 @@ app.post('/api/ext/command', async (req, res) => {
 
 // POST /api/ext/snapshot — convenience: take a viewport screenshot via the extension
 // Body: { tabId?, full?: true }
+// The raw PNG from captureVisibleTab can be 2-4 MB on retina screens.
+// We compress it to JPEG 1280px wide (quality 75) via sips before returning.
 app.post('/api/ext/snapshot', async (req, res) => {
   const { tabId = null, full = false } = req.body || {};
   try {
     const action = full ? 'snapshot-full' : 'snapshot';
     const result = await extCommand(action, {}, tabId, 45000);
+    if (!result.ok || !result.base64) return res.json(result);
+
+    // Compress PNG → JPEG using sips (available on macOS)
+    const tmpPng  = `/tmp/fauna_ext_snap_${Date.now()}.png`;
+    const tmpJpeg = tmpPng.replace('.png', '.jpg');
+    try {
+      fs.writeFileSync(tmpPng, Buffer.from(result.base64, 'base64'));
+      await new Promise((resolve, reject) => {
+        _exec(
+          `sips -s format jpeg -s formatOptions 75 --resampleWidth 1280 ${JSON.stringify(tmpPng)} --out ${JSON.stringify(tmpJpeg)}`,
+          (err) => { err ? reject(err) : resolve(); }
+        );
+      });
+      const compressed = fs.readFileSync(tmpJpeg);
+      result.base64 = compressed.toString('base64');
+      result.mime   = 'image/jpeg';
+    } catch (_) {
+      // sips failed — return original PNG uncompressed
+    } finally {
+      try { fs.unlinkSync(tmpPng);  } catch (_) {}
+      try { fs.unlinkSync(tmpJpeg); } catch (_) {}
+    }
+
     res.json(result);
   } catch (e) {
     res.status(503).json({ ok: false, error: e.message });

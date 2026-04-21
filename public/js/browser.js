@@ -887,7 +887,7 @@ async function _runBrowserActionSequence(widgets, convId) {
                 }
               }
             }
-            navFeed += '\n\n⚡ Continue your task immediately — emit the next browser-action blocks now.';
+            navFeed += '\n\nContinue your task immediately — emit the next browser-action blocks now.';
             await browserFeedAI(navFeed, convId);
           } catch(_) {}
         }
@@ -898,13 +898,13 @@ async function _runBrowserActionSequence(widgets, convId) {
         var feedContent = (result.text
           ? 'Extracted page from browser panel:\n\n**Title:** ' + result.title + '\n**URL:** ' + result.url + '\n\n' + result.text
           : 'Page loaded in browser panel (no text content):\n**Title:** ' + result.title + '\n**URL:** ' + result.url)
-          + '\n\n⚡ Continue your task immediately — emit the next browser-action blocks now.';
+          + '\n\nContinue your task immediately — emit the next browser-action blocks now.';
         await browserFeedAI(feedContent, convId);
       }
       // If it was an eval, feed result back too
       if (w.action.action === 'eval') {
         var evalFeed = 'Eval result from browser panel:\n```\n' + (result.result || '(empty)').slice(0, 8000) + '\n```'
-          + '\n\n⚡ Use this information and continue your task immediately — emit the next browser-action blocks now.';
+          + '\n\nUse this information and continue your task immediately — emit the next browser-action blocks now.';
         await browserFeedAI(evalFeed, convId);
       }
       // If it was a click or wait and this is the last action (or no following extract),
@@ -917,7 +917,7 @@ async function _runBrowserActionSequence(widgets, convId) {
             var clickFeed = (clickExtract.text
               ? 'Page after ' + w.action.action + ' in browser panel:\n\n**Title:** ' + clickExtract.title + '\n**URL:** ' + clickExtract.url + '\n\n' + clickExtract.text
               : 'Page after ' + w.action.action + ' in browser panel (no text content):\n**URL:** ' + clickExtract.url)
-              + '\n\n⚡ Continue your task immediately — emit the next browser-action blocks now.';
+              + '\n\nContinue your task immediately — emit the next browser-action blocks now.';
             await browserFeedAI(clickFeed, convId);
           } catch(_) {}
         }
@@ -927,7 +927,7 @@ async function _runBrowserActionSequence(widgets, convId) {
         try {
           var ntExtract = await executeBrowserAction({ action: 'extract' });
           var ntFeed = 'Opened new tab and extracted page:\n\n**Title:** ' + (ntExtract.title||'') + '\n**URL:** ' + (ntExtract.url||'') + '\n\n' + (ntExtract.text||'').slice(0, 10000)
-            + '\n\n⚡ Continue your task — emit the next browser-action blocks now.';
+            + '\n\nContinue your task — emit the next browser-action blocks now.';
           await browserFeedAI(ntFeed, convId);
         } catch(_) {}
       }
@@ -936,7 +936,7 @@ async function _runBrowserActionSequence(widgets, convId) {
         try {
           var stExtract = await executeBrowserAction({ action: 'extract' });
           var stFeed = 'Switched to tab: **' + (result.title||'') + '** (' + (result.url||'') + ')\n\n' + (stExtract.text||'').slice(0, 10000)
-            + '\n\n⚡ Continue your task — emit the next browser-action blocks now.';
+            + '\n\nContinue your task — emit the next browser-action blocks now.';
           await browserFeedAI(stFeed, convId);
         } catch(_) {}
       }
@@ -946,7 +946,7 @@ async function _runBrowserActionSequence(widgets, convId) {
           return '  [' + t.index + '] ' + (t.active ? '→ ' : '  ') + t.title + ' — ' + t.url;
         });
         var ltFeed = 'Browser tabs (' + result.totalTabs + '):\n' + ltLines.join('\n')
-          + '\n\n⚡ Continue your task — emit the next browser-action blocks now.';
+          + '\n\nContinue your task — emit the next browser-action blocks now.';
         await browserFeedAI(ltFeed, convId);
       }
       // extract-all — feed all tab contents back
@@ -955,13 +955,13 @@ async function _runBrowserActionSequence(widgets, convId) {
           return '### Tab ' + t.index + ': ' + t.title + '\n**URL:** ' + t.url + '\n\n' + t.text;
         });
         var eaFeed = 'Extracted content from ' + result.totalTabs + ' tab(s):\n\n' + eaLines.join('\n\n---\n\n')
-          + '\n\n⚡ Continue your task — emit the next browser-action blocks now.';
+          + '\n\nContinue your task — emit the next browser-action blocks now.';
         await browserFeedAI(eaFeed, convId);
       }
       // console-logs — feed console output back to AI
       if (w.action.action === 'console-logs') {
         var clFeed = 'Console logs (' + result.returned + ' of ' + result.totalLogs + ' entries):\n```\n' + (result.logs||[]).join('\n') + '\n```'
-          + '\n\n⚡ Use these logs to diagnose issues — emit the next browser-action blocks or fix the code now.';
+          + '\n\nUse these logs to diagnose issues — emit the next browser-action blocks or fix the code now.';
         await browserFeedAI(clFeed, convId);
       }
       // If ask-user, show message in chat and stop sequence for manual step
@@ -986,7 +986,7 @@ async function _runBrowserActionSequence(widgets, convId) {
             : 'browser-action `' + w.action.action + '` failed (' + e.message + ').\n\nAuto-extracted current page:\n\n';
           var errFeed = errIntro +
             '**Title:** ' + errD.title + '\n**URL:** ' + errD.url + '\n\n' + errD.text.slice(0, 10000) +
-            '\n\n⚡ Try a different approach — emit the next browser-action blocks now.';
+            '\n\nTry a different approach — emit the next browser-action blocks now.';
           await browserFeedAI(errFeed, convId);
         } catch(_) {}
       }
@@ -1146,14 +1146,14 @@ async function _runExtActionSequence(widgets, convId) {
       if (w.action.action === 'extract') {
         var exFeed = 'Extracted real browser tab:\n\n**Title:** ' + (result.title||'') +
           '\n**URL:** ' + (result.url||'') + '\n\n' + (result.text||'').slice(0, 12000) +
-          '\n\n⚡ Continue your task — emit the next browser-ext-action blocks now.';
+          '\n\nContinue your task — emit the next browser-ext-action blocks now.';
         await browserFeedAI(exFeed, convId);
       }
 
       if (w.action.action === 'extract-forms') {
         var frmFeed = 'Form fields extracted from real browser tab (' + (result.fields||[]).length + ' fields):\n\n```json\n' +
           JSON.stringify(result.forms || result, null, 2).slice(0, 10000) + '\n```' +
-          '\n\n⚡ Use the selector values from the above to fill fields with browser-ext-action fill blocks.';
+          '\n\nUse the selector values from the above to fill fields with browser-ext-action fill blocks.';
         await browserFeedAI(frmFeed, convId);
       }
 
@@ -1161,7 +1161,7 @@ async function _runExtActionSequence(widgets, convId) {
         var failedFills = (result.filled||[]).filter(function(f) { return !f.ok; });
         var fillFeed = 'Fill result — ' + (result.filled||[]).length + ' field(s) processed' +
           (failedFills.length ? ', ' + failedFills.length + ' failed: ' + JSON.stringify(failedFills) : ', all ok') +
-          '\n\n⚡ Continue your task — emit the next browser-ext-action blocks now.';
+          '\n\nContinue your task — emit the next browser-ext-action blocks now.';
         await browserFeedAI(fillFeed, convId);
       }
 
@@ -1172,20 +1172,28 @@ async function _runExtActionSequence(widgets, convId) {
             var navRes = await executeExtAction({ action: 'extract' });
             var navFeed = 'Navigated (ext) and extracted page:\n\n**Title:** ' + (navRes.title||'') +
               '\n**URL:** ' + (navRes.url||'') + '\n\n' + (navRes.text||'').slice(0, 12000) +
-              '\n\n⚡ Continue your task — emit the next browser-ext-action blocks now.';
+              '\n\nContinue your task — emit the next browser-ext-action blocks now.';
             await browserFeedAI(navFeed, convId);
           } catch(_) {}
         }
       }
 
       if (w.action.action === 'click') {
-        var hasFollowClick = widgets.slice(i + 1).some(function(fw) { return fw.action.action === 'extract'; });
+        var hasFollowClick = widgets.slice(i + 1).some(function(fw) {
+          return fw.action.action === 'extract' || fw.action.action === 'snapshot';
+        });
         if (!hasFollowClick) {
           try {
+            // Wait for the page to settle before checking — SPA routes and full-page
+            // navigations both need time; 1000 ms covers most cases.
+            await new Promise(function(r) { setTimeout(r, 1000); });
             var clkRes = await executeExtAction({ action: 'extract' });
-            var clkFeed = 'After click (ext) — current page:\n\n**Title:** ' + (clkRes.title||'') +
-              '\n**URL:** ' + (clkRes.url||'') + '\n\n' + (clkRes.text||'').slice(0, 12000) +
-              '\n\n⚡ Continue your task — emit the next browser-ext-action blocks now.';
+            var clkFeed = 'After click (ext) — page state (waited 1 s for navigation/SPA update):\n\n' +
+              '**Title:** ' + (clkRes.title||'') + '\n**URL:** ' + (clkRes.url||'') +
+              '\n\n' + (clkRes.text||'').slice(0, 12000) +
+              '\n\nNote: if the URL is unchanged the click may have triggered a client-side ' +
+              'action (modal, SPA transition, dynamic load). Use snapshot or eval to visually verify.' +
+              '\n\nContinue your task — emit the next browser-ext-action blocks now.';
             await browserFeedAI(clkFeed, convId);
           } catch(_) {}
         }
@@ -1193,7 +1201,7 @@ async function _runExtActionSequence(widgets, convId) {
 
       if (w.action.action === 'eval') {
         var evalFeed = 'Eval result from real browser tab:\n```\n' + (result.result||'(empty)').slice(0, 8000) + '\n```' +
-          '\n\n⚡ Use this information and continue your task immediately.';
+          '\n\nUse this information and continue your task immediately.';
         await browserFeedAI(evalFeed, convId);
       }
 
@@ -1214,7 +1222,7 @@ async function _runExtActionSequence(widgets, convId) {
           return '  [id:' + t.id + '] ' + (t.active ? '→ ' : '  ') + t.title + ' — ' + t.url;
         });
         var tlFeed = 'Browser tabs in real browser (' + (result.tabs||[]).length + '):\n' + tlLines.join('\n') +
-          '\n\n⚡ Continue your task — emit the next browser-ext-action blocks now.';
+          '\n\nContinue your task — emit the next browser-ext-action blocks now.';
         await browserFeedAI(tlFeed, convId);
       }
 
@@ -1223,7 +1231,7 @@ async function _runExtActionSequence(widgets, convId) {
           var swRes = await executeExtAction({ action: 'extract' });
           var swFeed = (w.action.action === 'tab:switch' ? 'Switched to tab (ext)' : 'Opened new tab (ext)') +
             ':\n\n**Title:** ' + (swRes.title||'') + '\n**URL:** ' + (swRes.url||'') + '\n\n' + (swRes.text||'').slice(0, 12000) +
-            '\n\n⚡ Continue your task — emit the next browser-ext-action blocks now.';
+            '\n\nContinue your task — emit the next browser-ext-action blocks now.';
           await browserFeedAI(swFeed, convId);
         } catch(_) {}
       }
@@ -1233,7 +1241,7 @@ async function _runExtActionSequence(widgets, convId) {
       if (blockEl)  { blockEl.classList.remove('running'); }
       dbg('browser-ext-action error: ' + e.message, 'err');
       var errFeed = 'browser-ext-action `' + w.action.action + '` failed: ' + e.message +
-        '\n\n⚡ Try a different approach — emit corrected browser-ext-action blocks now.';
+        '\n\nTry a different approach — emit corrected browser-ext-action blocks now.';
       try { await browserFeedAI(errFeed, convId); } catch(_) {}
       break;
     }
