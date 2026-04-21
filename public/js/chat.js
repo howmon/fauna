@@ -211,8 +211,14 @@ async function sendMessage(opts) {
       if (att.type === 'image') {
         pendingImages.push({ base64: att.base64, mime: att.mime, name: att.name });
       } else {
-        var label = att.type === 'url' ? `URL: ${att.name}` : `File: ${att.name}`;
-        content += '\n\n' + '```\n// ' + label + '\n' + att.content + '\n```';
+        var label = att.type === 'url' ? 'URL: ' + att.name : 'File: ' + att.name;
+        var ref = att.sourceUri || ('attachment://' + encodeURIComponent(att.name || 'file'));
+        var meta = [];
+        if (att.mime) meta.push('mime=' + att.mime);
+        if (att.size) meta.push('bytes=' + att.size);
+        if (att.warning) meta.push('warning=' + att.warning);
+        var header = '// ' + label + '\n// Ref: ' + ref + (meta.length ? '\n// Meta: ' + meta.join(', ') : '');
+        content += '\n\n```\n' + header + '\n' + (att.content || '') + '\n```';
       }
     });
   }
@@ -221,7 +227,23 @@ async function sendMessage(opts) {
   var sysContext = await gatherSystemContext(text);
   var apiContent = sysContext ? content + sysContext : content;
 
-  var userMsg = { role: 'user', content: apiContent, images: pendingImages.length ? pendingImages : undefined, attachments: state.pendingAttachments.map(a => ({ type: a.type, name: a.name, base64: a.type === 'image' ? a.base64 : undefined, mime: a.type === 'image' ? a.mime : undefined })) };
+  var userMsg = {
+    role: 'user',
+    content: apiContent,
+    images: pendingImages.length ? pendingImages : undefined,
+    attachments: state.pendingAttachments.map(function(a) {
+      return {
+        type: a.type,
+        name: a.name,
+        content: a.type === 'image' ? undefined : a.content,
+        sourceUri: a.sourceUri,
+        size: a.size,
+        warning: a.warning,
+        base64: a.type === 'image' ? a.base64 : undefined,
+        mime: a.mime
+      };
+    })
+  };
   conv.messages.push(userMsg);
 
   // Auto-title from first message
@@ -259,7 +281,13 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
       pendingImages.push({ base64: att.base64, mime: att.mime, name: att.name });
     } else {
       var label = att.type === 'url' ? 'URL: ' + att.name : 'File: ' + att.name;
-      content += '\n\n```\n// ' + label + '\n' + att.content + '\n```';
+      var ref = att.sourceUri || ('attachment://' + encodeURIComponent(att.name || 'file'));
+      var meta = [];
+      if (att.mime) meta.push('mime=' + att.mime);
+      if (att.size) meta.push('bytes=' + att.size);
+      if (att.warning) meta.push('warning=' + att.warning);
+      var header = '// ' + label + '\n// Ref: ' + ref + (meta.length ? '\n// Meta: ' + meta.join(', ') : '');
+      content += '\n\n```\n' + header + '\n' + (att.content || '') + '\n```';
     }
   });
 
