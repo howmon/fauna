@@ -509,6 +509,53 @@ When building a web app for the user, follow this workflow:
 - **If your output was cut off**, you will be automatically asked to continue. Just pick up exactly where you left off.
 - The browser keeps login sessions across pages (cookies persist). No need to re-authenticate.
 - Each conversation has its own browser tabs — they don't interfere with other conversations.
+
+## Browser Extension (Chrome / Edge)
+
+When the Fauna Browser Bridge extension is installed and connected, you can also control the user's **real browser** (including any page they're viewing) using \`\`\`browser-ext-action code blocks.
+
+The extension exposes every tab in the user's browser — not just the built-in panel. Use it to fill forms, scrape pages behind authentication, take full-page screenshots, and interact with sites that require a real logged-in browser session.
+
+### Available browser-ext-action actions:
+
+**Navigation & tabs**
+- \`{"action":"navigate","url":"..."}\` — navigate the active tab to a URL
+- \`{"action":"tab:list"}\` — list all open tabs (returns id, url, title, active flag)
+- \`{"action":"tab:new","url":"..."}\` — open a new tab (optionally with URL)
+- \`{"action":"tab:switch","tabId":123}\` or \`{"action":"tab:switch","index":0}\` — switch to tab
+- \`{"action":"tab:close","tabId":123}\` — close a tab
+- \`{"action":"tab:info"}\` — get active tab url + title
+
+**Extraction**
+- \`{"action":"extract"}\` — get page text, links, headings, images (up to 12 000 chars)
+- \`{"action":"extract","maxChars":5000}\` — same with custom limit
+- \`{"action":"extract-forms"}\` — map every form field on the page (label, selector, type, current value, options)
+
+**Interaction**
+- \`{"action":"fill","fields":[{"selector":"#email","value":"..."},{"selector":"#pass","value":"..."}]}\` — fill form fields (handles React/Vue controlled inputs)
+- \`{"action":"fill","selector":"#name","value":"Alice"}\` — single-field shorthand
+- \`{"action":"click","selector":"button.submit"}\` — click by CSS selector
+- \`{"action":"click","text":"Sign in"}\` — click by visible text
+- \`{"action":"select","selector":"#country","value":"US"}\` — pick a \`<select>\` option
+- \`{"action":"hover","selector":".dropdown-trigger"}\` — hover to reveal menus
+- \`{"action":"keyboard","key":"Enter","selector":"#search"}\` — fire keyboard event
+- \`{"action":"scroll","direction":"down"}\` — scroll page (down/up/left/right/top/bottom)
+- \`{"action":"scroll","direction":"down","px":500}\` — scroll by exact pixels
+- \`{"action":"wait","ms":1500}\` — wait N milliseconds (max 15 000)
+
+**Screenshots**
+- \`{"action":"snapshot"}\` — capture the visible viewport as PNG (base64 returned)
+- \`{"action":"snapshot-full"}\` — stitch a full-page screenshot by scrolling and compositing
+
+**Eval**
+- \`{"action":"eval","js":"return document.querySelector('h1').textContent"}\` — run JS and return result
+
+### Browser-ext-action rules:
+- Always \`extract\` or \`extract-forms\` first before attempting to fill or click — you need to know the current page state and valid selectors.
+- For fill actions, prefer IDs (\`#email\`) or \`name\` attributes (\`input[name=email]\`) — they're stable.
+- The extension operates on whichever tab is currently active in the user's browser unless you specify \`"tabId"\`.
+- If the extension is not connected, the action will return an error telling the user to install it.
+- Use \`snapshot\` after filling a form or clicking to visually confirm the state.
 `;
 
 const FIGMA_LAYOUT_CONTEXT = `
@@ -2064,6 +2111,124 @@ app.get('/api/figma/mcp-logs', (req, res) => {
 
 let figmaWs      = null;
 let figmaState   = { connected: false, fileInfo: null, activeSystem: null, pendingReconnect: null };
+
+// ── Browser Extension WebSocket server ───────────────────────────────────
+// The extension connects to ws://localhost:3737/ext. The server acts as the
+// WS host (unlike the Figma relay where the server is a client).
+
+let _extWss      = null;  // WebSocket.Server instance
+let _extSocket   = null;  // single connected extension socket
+let _extCmdSeq   = 0;
+const _extPending = new Map(); // cmdId → { resolve, reject, timeoutId }
+
+/** Send a message to the connected extension. Returns false if not connected. */
+function extSend(obj) {
+  if (!_extSocket || _extSocket.readyState !== 1 /* OPEN */) return false;
+  _extSocket.send(JSON.stringify(obj));
+  return true;
+}
+
+/**
+ * Send a command to the extension and wait for its result.
+ * @param {string} action  - e.g. 'extract', 'click'
+ * @param {object} params  - action params
+ * @param {number|null} tabId - optional target tab id
+ * @param {number} timeoutMs
+ */
+function extCommand(action, params = {}, tabId = null, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    if (!_extSocket || _extSocket.readyState !== 1) {
+      return reject(new Error('Browser extension not connected — install the Fauna Browser Bridge extension and make sure Fauna is running'));
+    }
+    const id = 'ec-' + (++_extCmdSeq);
+    const timeoutId = setTimeout(() => {
+      _extPending.delete(id);
+      reject(new Error('Extension command timed out: ' + action));
+    }, timeoutMs);
+    _extPending.set(id, { resolve, reject, timeoutId });
+    extSend({ type: 'cmd', id, action, params, tabId });
+  });
+}
+
+function startExtWebSocketServer(httpServer) {
+  try {
+    const WS = _require('ws');
+    _extWss = new WS.Server({ noServer: true });
+
+    // Upgrade only /ext path requests
+    httpServer.on('upgrade', (req, socket, head) => {
+      const pathname = new URL(req.url, 'http://localhost').pathname;
+      if (pathname !== '/ext') { socket.destroy(); return; }
+      _extWss.handleUpgrade(req, socket, head, (ws) => {
+        _extWss.emit('connection', ws, req);
+      });
+    });
+
+    _extWss.on('connection', (ws) => {
+      // Only one extension at a time — close any previous connection
+      if (_extSocket && _extSocket.readyState < 2) {
+        try { _extSocket.close(1000, 'Replaced by new connection'); } catch (_) {}
+      }
+      _extSocket = ws;
+      console.log('[Ext] Browser extension connected');
+
+      ws.on('message', (raw) => {
+        let msg;
+        try { msg = JSON.parse(raw.toString()); } catch (_) { return; }
+
+        if (msg.type === 'ping') {
+          try { ws.send(JSON.stringify({ type: 'pong' })); } catch (_) {}
+          return;
+        }
+
+        if (msg.type === 'ext:hello') {
+          console.log('[Ext] Extension hello — version', msg.version, 'tab:', msg.activeTab?.url || 'none');
+          return;
+        }
+
+        // Command result resolution
+        if (msg.type === 'result' && msg.id && _extPending.has(msg.id)) {
+          const { resolve, timeoutId } = _extPending.get(msg.id);
+          clearTimeout(timeoutId);
+          _extPending.delete(msg.id);
+          resolve(msg);
+          return;
+        }
+
+        // Push events from extension (navigation, selection, user actions)
+        if (msg.type === 'event') {
+          // Emit on process so frontend SSE can pick it up if needed
+          process.emit('ext:event', msg);
+          return;
+        }
+      });
+
+      ws.on('close', () => {
+        console.log('[Ext] Browser extension disconnected');
+        if (_extSocket === ws) _extSocket = null;
+        // Reject all pending commands
+        for (const [id, { reject, timeoutId }] of _extPending) {
+          clearTimeout(timeoutId);
+          _extPending.delete(id);
+          reject(new Error('Extension disconnected'));
+        }
+      });
+
+      ws.on('error', () => { /* handled in close */ });
+
+      // Heartbeat
+      const pingInterval = setInterval(() => {
+        if (!_extSocket || _extSocket.readyState !== 1) { clearInterval(pingInterval); return; }
+        try { _extSocket.send(JSON.stringify({ type: 'ping' })); } catch (_) {}
+      }, 20000);
+      ws.once('close', () => clearInterval(pingInterval));
+    });
+
+    console.log('[Ext] Extension WS endpoint ready at ws://localhost:3737/ext');
+  } catch (e) {
+    console.log('[Ext] WS module not available:', e.message);
+  }
+}
 const figmaPending = new Map(); // id → { resolve, reject, timer }
 
 function readFigmaRules() {
@@ -4680,12 +4845,47 @@ app.post('/api/permissions/request-accessibility', (req, res) => {
   }
 });
 
+// ── Browser Extension REST API ────────────────────────────────────────────
+
+// GET /api/ext/status — is an extension connected?
+app.get('/api/ext/status', (_req, res) => {
+  res.json({ connected: !!(_extSocket && _extSocket.readyState === 1) });
+});
+
+// POST /api/ext/command — send an arbitrary command to the extension and return its result
+// Body: { action, params, tabId }
+app.post('/api/ext/command', async (req, res) => {
+  const { action, params = {}, tabId = null, timeout = 30000 } = req.body || {};
+  if (!action) return res.status(400).json({ ok: false, error: 'action required' });
+  try {
+    const result = await extCommand(action, params, tabId, Math.min(timeout, 60000));
+    res.json(result);
+  } catch (e) {
+    res.status(503).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/ext/snapshot — convenience: take a viewport screenshot via the extension
+// Body: { tabId?, full?: true }
+app.post('/api/ext/snapshot', async (req, res) => {
+  const { tabId = null, full = false } = req.body || {};
+  try {
+    const action = full ? 'snapshot-full' : 'snapshot';
+    const result = await extCommand(action, {}, tabId, 45000);
+    res.json(result);
+  } catch (e) {
+    res.status(503).json({ ok: false, error: e.message });
+  }
+});
+
 // ── Start ─────────────────────────────────────────────────────────────────
 
 export function startServer(port) {
   return new Promise((resolve, reject) => {
     const server = app.listen(port, '127.0.0.1', () => {
       console.log(`\n  ✦ Fauna  →  http://127.0.0.1:${port}\n`);
+      // Boot the browser-extension WebSocket endpoint on the same HTTP server
+      startExtWebSocketServer(server);
       resolve(server);
     });
     server.on('error', reject);
@@ -4701,6 +4901,15 @@ export function startServer(port) {
       if (figmaWs) {
         try { figmaWs.terminate(); } catch (_) {}
         figmaWs = null;
+      }
+      // Close extension WS server
+      if (_extSocket) {
+        try { _extSocket.terminate(); } catch (_) {}
+        _extSocket = null;
+      }
+      if (_extWss) {
+        try { _extWss.close(); } catch (_) {}
+        _extWss = null;
       }
       // Kill MCP child
       if (isMcpRunning()) mcpProcess.kill('SIGKILL');

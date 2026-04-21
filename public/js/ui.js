@@ -394,6 +394,7 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
     extractAndRenderFigmaExec(content, el);
     extractAndRenderShellExec(content, el, true); // history load — never auto-run old commands
     extractAndRenderBrowserActions(content, el, true);
+    if (typeof extractAndRenderBrowserExtActions === 'function') extractAndRenderBrowserExtActions(content, el, true);
     extractAndRenderWriteFile(el, true);
     extractAndRenderSaveInstruction(content, el, true);
     extractArtifactsFromBuffer(content, el, false);
