@@ -365,6 +365,28 @@ async function captureViaDebugger(tabId) {
   }
 }
 
+// Compress a raw PNG base64 string to a smaller JPEG using OffscreenCanvas.
+// Runs entirely inside the service worker — no server-side sips needed.
+async function compressToJpeg(base64png, maxWidth = 1280, quality = 0.75) {
+  try {
+    const blob = await fetch('data:image/png;base64,' + base64png).then(r => r.blob());
+    const bitmap = await createImageBitmap(blob);
+    const w = Math.min(bitmap.width, maxWidth);
+    const h = Math.round(bitmap.height * (w / bitmap.width));
+    const canvas = new OffscreenCanvas(w, h);
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+    bitmap.close();
+    const outBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality });
+    const buf = await outBlob.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  } catch (_) {
+    return base64png; // fallback: return original if compression fails
+  }
+}
+
 async function cmdSnapshot({} = {}, tab) {
   if (!tab) return { ok: false, error: 'No active tab' };
 
@@ -381,8 +403,9 @@ async function cmdSnapshot({} = {}, tab) {
   // Attempt 1: captureVisibleTab without touching focus (fast path, Chrome 116+)
   try {
     const dataUrl = await captureWithTimeout(tab.windowId, 4000);
-    const base64 = dataUrl.replace(/^data:image\/png;base64,/, '');
-    return { ok: true, base64, mime: 'image/png', type: 'viewport' };
+    const png = dataUrl.replace(/^data:image\/png;base64,/, '');
+    const base64 = await compressToJpeg(png);
+    return { ok: true, base64, mime: 'image/jpeg', type: 'viewport' };
   } catch (_) {}
 
   // Attempt 2: bring Chrome window to front then captureVisibleTab
@@ -391,11 +414,13 @@ async function cmdSnapshot({} = {}, tab) {
     await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
     await new Promise(r => setTimeout(r, 500));
     const dataUrl = await captureWithTimeout(tab.windowId, 5000);
-    const base64 = dataUrl.replace(/^data:image\/png;base64,/, '');
-    return { ok: true, base64, mime: 'image/png', type: 'viewport' };
+    const png = dataUrl.replace(/^data:image\/png;base64,/, '');
+    const base64 = await compressToJpeg(png);
+    return { ok: true, base64, mime: 'image/jpeg', type: 'viewport' };
   } catch (_) {}
 
   // Attempt 3: chrome.debugger DevTools Protocol — works regardless of OS focus
+  // Already returns JPEG at quality 75 from the DevTools protocol.
   try {
     const base64 = await captureViaDebugger(tab.id);
     return { ok: true, base64, mime: 'image/jpeg', type: 'viewport' };

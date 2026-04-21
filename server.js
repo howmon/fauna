@@ -4875,36 +4875,13 @@ app.post('/api/ext/command', async (req, res) => {
 
 // POST /api/ext/snapshot — convenience: take a viewport screenshot via the extension
 // Body: { tabId?, full?: true }
-// The raw PNG from captureVisibleTab can be 2-4 MB on retina screens.
-// We compress it to JPEG 1280px wide (quality 75) via sips before returning.
+// Compression is done inside the extension via OffscreenCanvas before the
+// base64 travels over the WebSocket, so no server-side processing is needed.
 app.post('/api/ext/snapshot', async (req, res) => {
   const { tabId = null, full = false } = req.body || {};
   try {
     const action = full ? 'snapshot-full' : 'snapshot';
     const result = await extCommand(action, {}, tabId, 45000);
-    if (!result.ok || !result.base64) return res.json(result);
-
-    // Compress PNG → JPEG using sips (available on macOS)
-    const tmpPng  = `/tmp/fauna_ext_snap_${Date.now()}.png`;
-    const tmpJpeg = tmpPng.replace('.png', '.jpg');
-    try {
-      fs.writeFileSync(tmpPng, Buffer.from(result.base64, 'base64'));
-      await new Promise((resolve, reject) => {
-        _exec(
-          `sips -s format jpeg -s formatOptions 75 --resampleWidth 1280 ${JSON.stringify(tmpPng)} --out ${JSON.stringify(tmpJpeg)}`,
-          (err) => { err ? reject(err) : resolve(); }
-        );
-      });
-      const compressed = fs.readFileSync(tmpJpeg);
-      result.base64 = compressed.toString('base64');
-      result.mime   = 'image/jpeg';
-    } catch (_) {
-      // sips failed — return original PNG uncompressed
-    } finally {
-      try { fs.unlinkSync(tmpPng);  } catch (_) {}
-      try { fs.unlinkSync(tmpJpeg); } catch (_) {}
-    }
-
     res.json(result);
   } catch (e) {
     const isTimeout = e.message && e.message.includes('timed out');
