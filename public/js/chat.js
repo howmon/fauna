@@ -739,6 +739,7 @@ async function streamResponse(conv) {
         extractAndRenderFigmaExec(buffer, msgEl);
         extractAndRenderShellExec(buffer, msgEl, false, convId);
         extractAndRenderBrowserActions(buffer, msgEl, false, convId);
+        if (typeof extractAndRenderBrowserExtActions === 'function') extractAndRenderBrowserExtActions(buffer, msgEl, false, convId);
         extractAndRenderWriteFile(msgEl, false, convId);
         extractAndRenderSaveInstruction(buffer, msgEl, false);
         extractArtifactsFromBuffer(buffer, msgEl);
@@ -762,6 +763,7 @@ async function streamResponse(conv) {
       extractAndRenderFigmaExec(buffer, msgEl);
       extractAndRenderShellExec(buffer, msgEl, false, convId);  // auto-run continues in background
       extractAndRenderBrowserActions(buffer, msgEl, false, convId);
+      if (typeof extractAndRenderBrowserExtActions === 'function') extractAndRenderBrowserExtActions(buffer, msgEl, false, convId);
       extractAndRenderWriteFile(msgEl, false, convId);
       extractAndRenderSaveInstruction(buffer, msgEl, false);
       extractArtifactsFromBuffer(buffer, msgEl, true);

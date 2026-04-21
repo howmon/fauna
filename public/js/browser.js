@@ -1010,3 +1010,280 @@ async function browserFeedAI(content, convId) {
   await sendDirectMessage(content, { targetConvId: targetId, isBrowserFeed: true });
 }
 
+// ── browser-ext-action: execute an action via the Browser Extension ────────
+
+/**
+ * Send a browser-ext-action command to Fauna's backend, which relays it to
+ * the connected Chrome/Edge extension via WebSocket.
+ * @param {object} action - the parsed action object from the code block
+ * @returns {object} result from extension
+ */
+async function executeExtAction(action) {
+  var endpoint;
+  if (action.action === 'snapshot' || action.action === 'snapshot-full') {
+    endpoint = '/api/ext/snapshot';
+    var snapR = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full: action.action === 'snapshot-full', tabId: action.tabId || null })
+    });
+    var snapD = await snapR.json();
+    if (!snapR.ok || !snapD.ok) throw new Error(snapD.error || 'Snapshot failed');
+    return snapD;
+  }
+
+  // All other actions go through /api/ext/command
+  var r = await fetch('/api/ext/command', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: action.action, params: action, tabId: action.tabId || null })
+  });
+  var d = await r.json();
+  if (!r.ok) throw new Error(d.error || 'Extension command failed');
+  return d;
+}
+
+function extractAndRenderBrowserExtActions(html, messageEl, isHistoryLoad, convId) {
+  var container = messageEl.querySelector('.prose') || messageEl;
+  var codeBlocks = container.querySelectorAll('code.language-browser-ext-action, code.language-browser_ext_action');
+  if (!codeBlocks.length) return;
+  dbg('extractAndRenderBrowserExtActions: ' + codeBlocks.length + ' block(s)', 'info');
+
+  var actions = [];
+  var widgets = [];
+
+  var iconMap = {
+    navigate:'ti-world-www', extract:'ti-text-scan-2', 'extract-forms':'ti-forms',
+    fill:'ti-edit', click:'ti-cursor-text', scroll:'ti-arrows-down-up', hover:'ti-hand-finger',
+    select:'ti-list', keyboard:'ti-keyboard', wait:'ti-clock', eval:'ti-terminal-2',
+    snapshot:'ti-camera', 'snapshot-full':'ti-camera-plus',
+    'tab:list':'ti-list', 'tab:new':'ti-plus', 'tab:switch':'ti-arrow-right',
+    'tab:close':'ti-x', 'tab:info':'ti-info-circle'
+  };
+  var labelMap = {
+    navigate:'Navigate (ext)', extract:'Extract (ext)', 'extract-forms':'Extract Forms (ext)',
+    fill:'Fill Form (ext)', click:'Click (ext)', scroll:'Scroll (ext)', hover:'Hover (ext)',
+    select:'Select (ext)', keyboard:'Keyboard (ext)', wait:'Wait', eval:'Eval (ext)',
+    snapshot:'Snapshot (ext)', 'snapshot-full':'Full-Page Snapshot (ext)',
+    'tab:list':'List Tabs', 'tab:new':'New Tab', 'tab:switch':'Switch Tab',
+    'tab:close':'Close Tab', 'tab:info':'Tab Info'
+  };
+
+  function makeWidgetEl(action, rawLine) {
+    var baId  = 'bea-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    var icon  = iconMap[action.action]  || 'ti-browser';
+    var label = labelMap[action.action] || action.action;
+    var desc  = action.url || action.selector || (action.text||'').slice(0,40) || (typeof action.tabId==='number'?'Tab '+action.tabId:'') || '';
+    var el = document.createElement('div');
+    el.className = 'ba-block ba-ext';
+    el.id = baId;
+    el.dataset.action = rawLine;
+    el.innerHTML =
+      '<div class="ba-header">' +
+        '<i class="ti ' + icon + '"></i>' +
+        '<span class="ba-label">' + escHtml(label) + '</span>' +
+        (desc ? '<span class="ba-desc">' + escHtml(desc) + '</span>' : '') +
+        '<span class="ba-status" id="' + baId + '-status"></span>' +
+      '</div>';
+    return { el: el, id: baId, action: action };
+  }
+
+  codeBlocks.forEach(function(code) {
+    var pre  = code.parentElement;
+    var raw  = code.textContent.trim();
+    var lines = raw.split('\n').map(function(l) { return l.trim(); })
+      .filter(function(l) { return l && !/^`{3,}/.test(l); });
+    var parsedLines = [];
+    var allJsonl = lines.length > 1 && lines.every(function(l) {
+      try { JSON.parse(l); return true; } catch(_) { return false; }
+    });
+    if (allJsonl) {
+      lines.forEach(function(l) {
+        try { parsedLines.push({ raw: l, action: JSON.parse(l) }); } catch(_) {}
+      });
+    } else {
+      try { parsedLines.push({ raw: raw, action: JSON.parse(raw) }); } catch(e) {
+        dbg('browser-ext-action parse error: ' + e.message, 'err');
+        pre.remove(); return;
+      }
+    }
+
+    var insertAfter = null;
+    parsedLines.forEach(function(entry, idx) {
+      var w = makeWidgetEl(entry.action, entry.raw);
+      if (idx === 0) {
+        pre.parentNode.replaceChild(w.el, pre);
+      } else {
+        insertAfter.el.parentNode.insertBefore(w.el, insertAfter.el.nextSibling);
+      }
+      insertAfter = w;
+      actions.push(entry.action);
+      widgets.push({ id: w.id, action: entry.action });
+    });
+  });
+
+  if (!actions.length || isHistoryLoad) return;
+  _runExtActionSequence(widgets, convId);
+}
+
+async function _runExtActionSequence(widgets, convId) {
+  for (var i = 0; i < widgets.length; i++) {
+    var w        = widgets[i];
+    var statusEl = document.getElementById(w.id + '-status');
+    var blockEl  = document.getElementById(w.id);
+
+    if (statusEl) { statusEl.className = 'ba-status running'; statusEl.textContent = '⏳ Running…'; }
+    if (blockEl)  { blockEl.classList.add('running'); }
+
+    try {
+      var result = await executeExtAction(w.action);
+
+      if (statusEl) { statusEl.className = 'ba-status ok'; statusEl.textContent = 'Done'; }
+      if (blockEl)  { blockEl.classList.remove('running'); }
+
+      // ── Auto-feed results back to AI ──────────────────────────────────
+
+      if (w.action.action === 'extract') {
+        var exFeed = 'Extracted real browser tab:\n\n**Title:** ' + (result.title||'') +
+          '\n**URL:** ' + (result.url||'') + '\n\n' + (result.text||'').slice(0, 12000) +
+          '\n\n⚡ Continue your task — emit the next browser-ext-action blocks now.';
+        await browserFeedAI(exFeed, convId);
+      }
+
+      if (w.action.action === 'extract-forms') {
+        var frmFeed = 'Form fields extracted from real browser tab (' + (result.fields||[]).length + ' fields):\n\n```json\n' +
+          JSON.stringify(result.forms || result, null, 2).slice(0, 10000) + '\n```' +
+          '\n\n⚡ Use the selector values from the above to fill fields with browser-ext-action fill blocks.';
+        await browserFeedAI(frmFeed, convId);
+      }
+
+      if (w.action.action === 'fill') {
+        var failedFills = (result.filled||[]).filter(function(f) { return !f.ok; });
+        var fillFeed = 'Fill result — ' + (result.filled||[]).length + ' field(s) processed' +
+          (failedFills.length ? ', ' + failedFills.length + ' failed: ' + JSON.stringify(failedFills) : ', all ok') +
+          '\n\n⚡ Continue your task — emit the next browser-ext-action blocks now.';
+        await browserFeedAI(fillFeed, convId);
+      }
+
+      if (w.action.action === 'navigate') {
+        var hasFollowExt = widgets.slice(i + 1).some(function(fw) { return fw.action.action === 'extract'; });
+        if (!hasFollowExt) {
+          try {
+            var navRes = await executeExtAction({ action: 'extract' });
+            var navFeed = 'Navigated (ext) and extracted page:\n\n**Title:** ' + (navRes.title||'') +
+              '\n**URL:** ' + (navRes.url||'') + '\n\n' + (navRes.text||'').slice(0, 12000) +
+              '\n\n⚡ Continue your task — emit the next browser-ext-action blocks now.';
+            await browserFeedAI(navFeed, convId);
+          } catch(_) {}
+        }
+      }
+
+      if (w.action.action === 'click') {
+        var hasFollowClick = widgets.slice(i + 1).some(function(fw) { return fw.action.action === 'extract'; });
+        if (!hasFollowClick) {
+          try {
+            var clkRes = await executeExtAction({ action: 'extract' });
+            var clkFeed = 'After click (ext) — current page:\n\n**Title:** ' + (clkRes.title||'') +
+              '\n**URL:** ' + (clkRes.url||'') + '\n\n' + (clkRes.text||'').slice(0, 12000) +
+              '\n\n⚡ Continue your task — emit the next browser-ext-action blocks now.';
+            await browserFeedAI(clkFeed, convId);
+          } catch(_) {}
+        }
+      }
+
+      if (w.action.action === 'eval') {
+        var evalFeed = 'Eval result from real browser tab:\n```\n' + (result.result||'(empty)').slice(0, 8000) + '\n```' +
+          '\n\n⚡ Use this information and continue your task immediately.';
+        await browserFeedAI(evalFeed, convId);
+      }
+
+      // snapshot — inject image into AI
+      if (w.action.action === 'snapshot' || w.action.action === 'snapshot-full') {
+        if (result.base64) {
+          var snapTabInfo = await executeExtAction({ action: 'tab:info' }).catch(function() { return {}; });
+          await sendDirectMessage(
+            '[Browser extension snapshot' + (w.action.action === 'snapshot-full' ? ' (full page)' : '') +
+            '] from: ' + (snapTabInfo.url || 'browser'),
+            { image: 'data:image/png;base64,' + result.base64 }
+          );
+        }
+      }
+
+      if (w.action.action === 'tab:list') {
+        var tlLines = (result.tabs||[]).map(function(t) {
+          return '  [id:' + t.id + '] ' + (t.active ? '→ ' : '  ') + t.title + ' — ' + t.url;
+        });
+        var tlFeed = 'Browser tabs in real browser (' + (result.tabs||[]).length + '):\n' + tlLines.join('\n') +
+          '\n\n⚡ Continue your task — emit the next browser-ext-action blocks now.';
+        await browserFeedAI(tlFeed, convId);
+      }
+
+      if (w.action.action === 'tab:switch' || w.action.action === 'tab:new') {
+        try {
+          var swRes = await executeExtAction({ action: 'extract' });
+          var swFeed = (w.action.action === 'tab:switch' ? 'Switched to tab (ext)' : 'Opened new tab (ext)') +
+            ':\n\n**Title:** ' + (swRes.title||'') + '\n**URL:** ' + (swRes.url||'') + '\n\n' + (swRes.text||'').slice(0, 12000) +
+            '\n\n⚡ Continue your task — emit the next browser-ext-action blocks now.';
+          await browserFeedAI(swFeed, convId);
+        } catch(_) {}
+      }
+
+    } catch(e) {
+      if (statusEl) { statusEl.className = 'ba-status err'; statusEl.textContent = 'Error: ' + e.message; }
+      if (blockEl)  { blockEl.classList.remove('running'); }
+      dbg('browser-ext-action error: ' + e.message, 'err');
+      var errFeed = 'browser-ext-action `' + w.action.action + '` failed: ' + e.message +
+        '\n\n⚡ Try a different approach — emit corrected browser-ext-action blocks now.';
+      try { await browserFeedAI(errFeed, convId); } catch(_) {}
+      break;
+    }
+  }
+}
+
+// ── Extension connection badge ─────────────────────────────────────────────
+// Polls /api/ext/status every 5 s and updates the badge in the browser action bar.
+
+(function() {
+  var _extConnected = false;
+
+  function _updateExtBadge(connected) {
+    if (_extConnected === connected) return;
+    _extConnected = connected;
+    var dot   = document.getElementById('browser-ext-dot');
+    var lbl   = document.getElementById('browser-ext-label');
+    var badge = document.getElementById('browser-ext-badge');
+    if (!dot || !lbl || !badge) return;
+    if (connected) {
+      dot.style.background = '#10b981';
+      dot.style.boxShadow  = '0 0 5px #10b98166';
+      lbl.textContent = 'Ext connected';
+      badge.style.color       = '#10b981';
+      badge.style.borderColor = '#10b98133';
+      badge.style.background  = '#0d2b1f';
+      badge.title = 'Browser extension connected';
+    } else {
+      dot.style.background = '#444';
+      dot.style.boxShadow  = 'none';
+      lbl.textContent = 'Ext offline';
+      badge.style.color       = '#555';
+      badge.style.borderColor = '#2a2a2a';
+      badge.style.background  = '#111';
+      badge.title = 'Browser extension not connected — install the Fauna Browser Bridge extension';
+    }
+  }
+
+  async function _pollExtStatus() {
+    try {
+      var r = await fetch('/api/ext/status');
+      var d = await r.json();
+      _updateExtBadge(!!d.connected);
+    } catch (_) {
+      _updateExtBadge(false);
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', function() {
+    _pollExtStatus();
+    setInterval(_pollExtStatus, 5000);
+  });
+}());
