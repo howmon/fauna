@@ -1242,6 +1242,8 @@ async function _runExtActionSequence(widgets, convId) {
 
 // ── Extension connection badge ─────────────────────────────────────────────
 // Polls /api/ext/status every 5 s and updates the badge in the browser action bar.
+// Also opens an SSE channel to /api/ext/events so push events (send-page, snapshot,
+// selection) from the extension arrive as pending attachment chips in the input bar.
 
 (function() {
   var _extConnected = false;
@@ -1282,8 +1284,77 @@ async function _runExtActionSequence(widgets, convId) {
     }
   }
 
+  // ── Extension push events → pending attachment chips ──────────────────
+
+  function _showExtToast(msg) {
+    var toast = document.createElement('div');
+    toast.className = 'ext-toast';
+    toast.textContent = msg;
+    document.body.appendChild(toast);
+    requestAnimationFrame(function() { toast.classList.add('ext-toast-show'); });
+    setTimeout(function() {
+      toast.classList.remove('ext-toast-show');
+      setTimeout(function() { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 300);
+    }, 3000);
+  }
+
+  function _handleExtEvent(evt) {
+    var msg;
+    try { msg = JSON.parse(evt.data); } catch (_) { return; }
+    var d = msg.data || {};
+
+    if (msg.event === 'user:send-page') {
+      var title   = d.title || d.url || 'Chrome page';
+      var short   = title.length > 45 ? title.slice(0, 42) + '…' : title;
+      var content = (d.url   ? 'Source: ' + d.url + '\n' : '') +
+                    (d.title ? 'Title: '  + d.title + '\n\n' : '') +
+                    (d.text  || '');
+      if (typeof addAttachment === 'function') {
+        addAttachment({ type: 'url', extSource: 'page', name: 'Chrome: ' + short,
+                        content: content, sourceUri: d.url });
+      }
+      _showExtToast('Page from Chrome added — type your question');
+    }
+
+    if (msg.event === 'user:snapshot') {
+      if (!d.base64) return;
+      var snapTitle = d.title || d.url || 'Chrome tab';
+      var shortSnap = snapTitle.length > 40 ? snapTitle.slice(0, 37) + '…' : snapTitle;
+      if (typeof addAttachment === 'function') {
+        addAttachment({ type: 'image', extSource: 'snapshot', name: 'Snapshot — ' + shortSnap,
+                        base64: d.base64, mime: d.mime || 'image/png' });
+      }
+      _showExtToast('Snapshot from Chrome added');
+    }
+
+    if (msg.event === 'user:selection') {
+      if (!d.text) return;
+      var domain = '';
+      try { domain = ' · ' + new URL(d.url).hostname; } catch (_) {}
+      var selContent = (d.url   ? 'Source: ' + d.url + '\n' : '') +
+                       (d.title ? 'Page: '   + d.title + '\n\n' : '') +
+                       'Selected text:\n' + d.text;
+      if (typeof addAttachment === 'function') {
+        addAttachment({ type: 'url', extSource: 'selection',
+                        name: 'Selection from Chrome' + domain,
+                        content: selContent, sourceUri: d.url });
+      }
+      _showExtToast('Selection from Chrome added');
+    }
+  }
+
+  function _connectExtEvents() {
+    var es = new EventSource('/api/ext/events');
+    es.onmessage = _handleExtEvent;
+    es.onerror = function() {
+      es.close();
+      setTimeout(_connectExtEvents, 5000);
+    };
+  }
+
   document.addEventListener('DOMContentLoaded', function() {
     _pollExtStatus();
     setInterval(_pollExtStatus, 5000);
+    _connectExtEvents();
   });
 }());

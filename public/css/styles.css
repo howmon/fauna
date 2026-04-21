@@ -609,6 +609,38 @@ button .ti, label .ti { pointer-events: none; }
 }
 .pending-chip .chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip-icon { font-size: 12px; }
+/* Extension context chips — purple tint */
+.pending-chip-ext {
+  border-color: #6366f133;
+  background: #16152a;
+  color: #a5b4fc;
+}
+.pending-chip-ext .chip-icon { color: #818cf8; }
+.pending-chip-ext .chip-remove:hover { color: var(--error); }
+/* Extension push-event toast */
+.ext-toast {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%) translateY(8px);
+  background: #16152a;
+  border: 1px solid #6366f155;
+  color: #a5b4fc;
+  font-size: 12px;
+  font-family: var(--font);
+  padding: 7px 16px;
+  border-radius: 20px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .2s ease, transform .2s ease;
+  z-index: 99999;
+  white-space: nowrap;
+  box-shadow: 0 4px 16px rgba(0,0,0,.4);
+}
+.ext-toast.ext-toast-show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
 .chip-remove {
   background: none; border: none; color: var(--text-muted); cursor: pointer;
   font-size: 14px; line-height: 1; padding: 0 3px; transition: color .12s;

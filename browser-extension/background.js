@@ -411,6 +411,8 @@ function broadcastStatus() {
 
 function pushEvent(eventType, data) {
   send({ type: 'event', event: eventType, data });
+  // Also broadcast to the sidebar so it can update its activity feed
+  chrome.runtime.sendMessage({ type: 'fauna:event', event: eventType, data }).catch(() => {});
 }
 
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
@@ -428,6 +430,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 // ── Context menu ──────────────────────────────────────────────────────────
+
+// Open the side panel when the toolbar icon is clicked
+chrome.action.onClicked.addListener((tab) => {
+  chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
+});
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
