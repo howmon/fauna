@@ -5,7 +5,7 @@
 
 import express    from 'express';
 import OpenAI     from 'openai';
-import { execSync, exec as _exec, execFile as _execFile } from 'child_process';
+import { execSync, exec as _exec, execFile as _execFile, spawn as _spawn } from 'child_process';
 import crypto     from 'crypto';
 import path       from 'path';
 import os         from 'os';
@@ -1072,7 +1072,10 @@ app.post('/api/chat', async (req, res) => {
             // Route to agent tool handler if available, otherwise Figma MCP
             if (agentToolHandlers?.has(toolName)) {
               console.log(`[chat] Agent tool: ${toolName}`);
-              result = await agentToolHandlers.get(toolName)(args);
+              const onOutput = toolName === 'agent_shell_exec'
+                ? (chunk) => send({ type: 'tool_output', name: toolName, output: chunk })
+                : undefined;
+              result = await agentToolHandlers.get(toolName)(args, onOutput);
             } else {
               figmaLog('🔧 ' + toolName + (toolName === 'figma_execute' ? ': ' + (args.code || '').slice(0, 80).replace(/\n/g,' ') + '…' : ''), 'cmd');
               result = await figmaMCP.callTool(toolName, args);
@@ -2739,7 +2742,7 @@ const AUGMENTED_PATH = IS_WIN
 const SHELL_BIN = IS_WIN ? 'powershell.exe' : '/bin/zsh';
 
 app.post('/api/shell-exec', (req, res) => {
-  const { command, cwd, killId } = req.body;
+  const { command, cwd, killId, stream: wantStream } = req.body;
   if (!command) return res.status(400).json({ error: 'command required' });
 
   const workDir = cwd || os.homedir();
@@ -2751,6 +2754,65 @@ app.post('/api/shell-exec', (req, res) => {
     ...(IS_WIN ? {} : { SHELL: '/bin/zsh', TERM: 'xterm-256color' }),
   };
 
+  if (wantStream) {
+    // ── Streaming mode: SSE with real-time output + interactive stdin ──
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+    const shellFlag = IS_WIN ? '-Command' : '-c';
+    const child = _spawn(SHELL_BIN, [shellFlag, command], { cwd: workDir, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    if (killId) _shellProcs.set(killId, child);
+
+    // Track last output time for idle detection
+    let lastOutputTime = Date.now();
+    let idleTimer = null;
+    let lastChunk = '';
+    const IDLE_MS = 3000; // 3s of silence = might be waiting for input
+
+    function resetIdleTimer() {
+      lastOutputTime = Date.now();
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        // Process is alive but hasn't produced output — likely waiting for input
+        if (!child.killed && child.exitCode === null) {
+          res.write(`data: ${JSON.stringify({ type: 'waiting_for_input', hint: lastChunk.trim().split('\n').pop() })}\n\n`);
+        }
+      }, IDLE_MS);
+    }
+
+    resetIdleTimer();
+
+    child.stdout.on('data', (chunk) => {
+      lastChunk = chunk.toString();
+      res.write(`data: ${JSON.stringify({ type: 'stdout', text: lastChunk })}\n\n`);
+      resetIdleTimer();
+    });
+    child.stderr.on('data', (chunk) => {
+      lastChunk = chunk.toString();
+      res.write(`data: ${JSON.stringify({ type: 'stderr', text: lastChunk })}\n\n`);
+      resetIdleTimer();
+    });
+
+    const timeout = setTimeout(() => { try { child.kill('SIGTERM'); } catch (_) {} }, 300000);
+
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      if (idleTimer) clearTimeout(idleTimer);
+      if (killId) _shellProcs.delete(killId);
+      res.write(`data: ${JSON.stringify({ type: 'exit', exitCode: code ?? 0 })}\n\n`);
+      res.end();
+    });
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      if (idleTimer) clearTimeout(idleTimer);
+      if (killId) _shellProcs.delete(killId);
+      res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
+      res.end();
+    });
+
+    req.on('close', () => { if (idleTimer) clearTimeout(idleTimer); try { child.kill('SIGTERM'); } catch (_) {} });
+    return;
+  }
+
+  // ── Buffered mode (original) ──
   const child = _exec(command, { cwd: workDir, env, timeout: 300000, maxBuffer: 10 * 1024 * 1024, shell: SHELL_BIN },
     (err, stdout, stderr) => {
       if (killId) _shellProcs.delete(killId);
@@ -2780,6 +2842,21 @@ app.post('/api/shell-kill', (req, res) => {
     res.json({ ok: true });
   } else {
     res.json({ ok: false, error: 'process not found or already done' });
+  }
+});
+
+// Send stdin to a running shell process
+app.post('/api/shell-stdin', (req, res) => {
+  const { killId, input } = req.body;
+  if (!killId) return res.status(400).json({ error: 'killId required' });
+  if (input == null) return res.status(400).json({ error: 'input required' });
+  const child = _shellProcs.get(killId);
+  if (!child) return res.status(404).json({ error: 'process not found or already done' });
+  try {
+    child.stdin.write(input + (IS_WIN ? '\r\n' : '\n'));
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 

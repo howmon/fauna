@@ -645,6 +645,14 @@ async function streamResponse(conv) {
         if (raw === '[DONE]') continue;
         try {
           var evt = JSON.parse(raw);
+
+          // Close any open shell-output fence before non-output events
+          if (evt.type !== 'tool_output' && buffer.includes('```shell-output\n')) {
+            var lastOpen = buffer.lastIndexOf('```shell-output\n');
+            var lastClose = buffer.indexOf('\n```', lastOpen + 16);
+            if (lastClose === -1) buffer += '\n```\n';
+          }
+
           if (evt.type === 'content')   { buffer += evt.content; tokenCount++; if (tokenCount === 1) dbg('first token received', 'ok'); scheduleRender(); }
           if (evt.type === 'error')     { dbg('SSE error: ' + evt.error, 'err'); buffer += '\n\nError: ' + evt.error; scheduleRender(); }
           if (evt.type === 'tool_call') {
@@ -654,6 +662,20 @@ async function streamResponse(conv) {
             var isFigma = /figma/i.test(toolLabel);
             var toolPrefix = isFigma ? 'Calling Figma tool' : 'Calling tool';
             buffer += '\n\n*' + toolPrefix + ': `' + toolLabel + '`…*\n\n';
+            scheduleRender();
+          }
+          if (evt.type === 'tool_output') {
+            // Live shell output — append to a collapsible output block
+            if (!buffer.includes('```shell-output\n')) {
+              buffer += '```shell-output\n';
+            }
+            // Insert before the closing ``` if present, otherwise just append
+            var closingIdx = buffer.lastIndexOf('\n```\n');
+            if (closingIdx > buffer.lastIndexOf('```shell-output\n')) {
+              buffer = buffer.slice(0, closingIdx) + evt.output + buffer.slice(closingIdx);
+            } else {
+              buffer += evt.output;
+            }
             scheduleRender();
           }
           if (evt.type === 'done') {
