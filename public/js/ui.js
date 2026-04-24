@@ -582,30 +582,56 @@ function removeAttachment(idx) {
 
 function clearAttachments() {
   state.pendingAttachments = [];
+  _attachBarExpanded = false;
   renderAttachBar();
 }
 
+var _attachBarExpanded = false;
+var ATTACH_BAR_MAX = 3;
+
 function renderAttachBar() {
   var bar = document.getElementById('attach-bar');
-  bar.innerHTML = state.pendingAttachments.map((att, i) => {
-    var extCls = att.extSource ? ' pending-chip-ext' : '';
-    if (att.type === 'image') {
-      return '<div class="pending-chip pending-chip-image' + extCls + '">' +
-        '<img class="pending-img-thumb" src="data:' + att.mime + ';base64,' + att.base64 + '" title="' + escHtml(att.name) + '">' +
-        '<span class="chip-name" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(att.name) + '</span>' +
-        '<button class="chip-remove" onclick="removeAttachment(' + i + ')"><i class="ti ti-x"></i></button>' +
-      '</div>';
-    }
-    var icon = att.extSource === 'page'      ? '<i class="ti ti-world-www"></i>'
-             : att.extSource === 'selection' ? '<i class="ti ti-text-scan-2"></i>'
-             : att.type === 'url'            ? '<i class="ti ti-link"></i>'
-             : '<i class="ti ti-paperclip"></i>';
-    return '<div class="pending-chip' + extCls + '">' +
-      '<span class="chip-icon">' + icon + '</span>' +
-      '<span class="chip-name">' + escHtml(att.name) + '</span>' +
+  var atts = state.pendingAttachments;
+  if (!atts.length) { bar.innerHTML = ''; return; }
+
+  var showAll = _attachBarExpanded || atts.length <= ATTACH_BAR_MAX;
+  var visible = showAll ? atts : atts.slice(0, ATTACH_BAR_MAX);
+  var html = visible.map(function(att, i) {
+    return _renderChip(att, i);
+  }).join('');
+
+  if (!showAll) {
+    var remaining = atts.length - ATTACH_BAR_MAX;
+    html += '<button class="attach-overflow-btn" onclick="_attachBarExpanded=true;renderAttachBar()" title="Show all ' + atts.length + ' attachments">+' + remaining + ' more</button>';
+  } else if (atts.length > ATTACH_BAR_MAX) {
+    html += '<button class="attach-overflow-btn" onclick="_attachBarExpanded=false;renderAttachBar()" title="Collapse">show less</button>';
+  }
+
+  if (atts.length > 1) {
+    html += '<button class="attach-clear-btn" onclick="clearAttachments()" title="Remove all"><i class="ti ti-x"></i> Clear all</button>';
+  }
+
+  bar.innerHTML = html;
+}
+
+function _renderChip(att, i) {
+  var extCls = att.extSource ? ' pending-chip-ext' : '';
+  if (att.type === 'image') {
+    return '<div class="pending-chip pending-chip-image' + extCls + '">' +
+      '<img class="pending-img-thumb" src="data:' + att.mime + ';base64,' + att.base64 + '" title="' + escHtml(att.name) + '">' +
+      '<span class="chip-name" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(att.name) + '</span>' +
       '<button class="chip-remove" onclick="removeAttachment(' + i + ')"><i class="ti ti-x"></i></button>' +
     '</div>';
-  }).join('');
+  }
+  var icon = att.extSource === 'page'      ? '<i class="ti ti-world-www"></i>'
+           : att.extSource === 'selection' ? '<i class="ti ti-text-scan-2"></i>'
+           : att.type === 'url'            ? '<i class="ti ti-link"></i>'
+           : '<i class="ti ti-paperclip"></i>';
+  return '<div class="pending-chip' + extCls + '">' +
+    '<span class="chip-icon">' + icon + '</span>' +
+    '<span class="chip-name">' + escHtml(att.name) + '</span>' +
+    '<button class="chip-remove" onclick="removeAttachment(' + i + ')"><i class="ti ti-x"></i></button>' +
+  '</div>';
 }
 
 // ── URL modal ─────────────────────────────────────────────────────────────

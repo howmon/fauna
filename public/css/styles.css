@@ -599,8 +599,18 @@ button .ti, label .ti { pointer-events: none; }
 #input-wrap.drag-over #drag-overlay { display: flex; }
 #attach-bar {
   padding: 6px 16px 0; max-width: 820px; margin: 0 auto; width: 100%;
-  display: flex; flex-wrap: wrap; gap: 6px;
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
 }
+.attach-overflow-btn, .attach-clear-btn {
+  background: none; border: 1px solid var(--border); border-radius: 14px;
+  padding: 3px 10px; font-size: 10.5px; color: var(--text-dim);
+  cursor: pointer; transition: all .12s; white-space: nowrap;
+}
+.attach-overflow-btn:hover, .attach-clear-btn:hover {
+  background: var(--surface2); color: var(--text);
+}
+.attach-clear-btn { border-color: transparent; color: var(--text-muted); gap: 3px; display: inline-flex; align-items: center; }
+.attach-clear-btn:hover { color: var(--error); border-color: var(--error); }
 .pending-chip {
   display: inline-flex; align-items: center; gap: 5px;
   background: var(--surface2); border: 1px solid var(--border);
@@ -641,6 +651,61 @@ button .ti, label .ti { pointer-events: none; }
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
+
+/* ── Extension toolbar badge & tab menu ──────────────────────────── */
+#ext-toolbar-badge.ext-connected {
+  color: #10b981; border-color: #10b98133; background: #0d2b1f;
+}
+#ext-toolbar-badge.ext-connected #ext-toolbar-dot {
+  background: #10b981; box-shadow: 0 0 5px #10b98166;
+}
+#ext-toolbar-badge:hover { opacity: .85; }
+
+#ext-tab-menu {
+  position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+  min-width: 280px; max-width: 360px; max-height: 340px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.5); z-index: 800;
+  padding: 6px 0; font-size: 12px;
+}
+#ext-tab-menu .ext-menu-header {
+  padding: 6px 12px; font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--text-muted);
+}
+#ext-tab-menu .ext-menu-empty {
+  padding: 14px 12px; color: var(--text-dim); text-align: center; font-size: 11.5px;
+}
+#ext-tab-menu .ext-tab-item {
+  display: flex; align-items: center; gap: 8px; padding: 6px 12px; cursor: default;
+  transition: background .1s;
+}
+#ext-tab-menu .ext-tab-item:hover { background: var(--surface2); }
+#ext-tab-menu .ext-tab-item .ext-tab-title {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text); font-size: 11.5px;
+}
+#ext-tab-menu .ext-tab-item .ext-tab-url {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-dim); font-size: 10px;
+}
+#ext-tab-menu .ext-tab-item .ext-tab-info {
+  flex: 1; min-width: 0;
+}
+#ext-tab-menu .ext-tab-actions {
+  display: flex; gap: 2px; flex-shrink: 0;
+}
+#ext-tab-menu .ext-tab-actions button {
+  background: none; border: 1px solid var(--border); border-radius: 5px;
+  color: var(--text-dim); cursor: pointer; font-size: 12px;
+  padding: 2px 6px; transition: all .12s; line-height: 1;
+}
+#ext-tab-menu .ext-tab-actions button:hover {
+  background: var(--accent); color: #fff; border-color: var(--accent);
+}
+#ext-tab-menu .ext-tab-active-dot {
+  width: 5px; height: 5px; border-radius: 50%; background: #10b981; flex-shrink: 0;
+}
+
 .chip-remove {
   background: none; border: none; color: var(--text-muted); cursor: pointer;
   font-size: 14px; line-height: 1; padding: 0 3px; transition: color .12s;
@@ -1499,6 +1564,26 @@ body { animation: none; }
 .setup-inline-result { font-size: 11.5px; margin-top: 6px; min-height: 16px; }
 .setup-inline-result.ok  { color: var(--success); }
 .setup-inline-result.err { color: var(--error); }
+
+/* Section labels in plugins panel */
+.setup-section-label {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-muted); padding: 8px 2px 2px; display: flex; align-items: center; gap: 6px;
+}
+.setup-section-label i { font-size: 14px; }
+
+/* Collapsible instructions cards */
+.collapsed-card { padding: 0; }
+.setup-collapse-toggle {
+  width: 100%; background: none; border: none; cursor: pointer;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; color: var(--text-dim);
+  padding: 10px 14px; text-align: left;
+}
+.setup-collapse-toggle:hover { color: var(--text); }
+.setup-collapse-toggle i { font-size: 12px; transition: transform .15s; }
+.collapsed-card.expanded .setup-collapse-toggle i { transform: rotate(90deg); }
+.setup-collapse-body { padding: 0 14px 14px; }
 
 /* ── Onboarding overlay ────────────────────────────────────────────── */
 #onboarding-overlay {

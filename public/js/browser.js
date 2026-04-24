@@ -327,24 +327,13 @@ async function browserScreenshot() {
   statusEl.textContent = 'Screenshotting…';
   try {
     var url = wv.getURL ? wv.getURL() : '';
-    // Use macOS screencapture to grab the screen — no Playwright dependency,
-    // works even on JS-heavy SPAs that are already rendered in the webview.
-    var snapPath = '/tmp/fauna-browser-snap-' + Date.now() + '.png';
-    var r = await fetch('/api/shell-exec', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command: 'screencapture -x ' + snapPath + ' && echo ok' })
-    });
-    var d = await r.json();
-    if (d.exitCode !== 0) throw new Error(d.stderr || 'screencapture failed');
-    // Read file as base64 via server
-    var r2 = await fetch('/api/read-image?path=' + encodeURIComponent(snapPath));
-    var img = await r2.json();
-    if (!img.base64) throw new Error('Could not read screenshot file');
+    // Use Electron webview capturePage — works cross-platform, captures just the webview content
+    var nativeImage = await wv.capturePage();
+    var pngDataUrl = nativeImage.toDataURL();
+    // pngDataUrl is "data:image/png;base64,..."
+    if (!pngDataUrl || !pngDataUrl.includes(',')) throw new Error('capturePage returned empty image');
     sendDirectMessage('[Browser screenshot from: ' + (url || 'browser panel') + ']',
-      { image: 'data:' + img.mime + ';base64,' + img.base64 });
-    // Clean up temp file
-    fetch('/api/shell-exec', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command: 'rm -f ' + snapPath }) });
+      { image: pngDataUrl });
     statusEl.textContent = '';
   } catch(e) {
     statusEl.textContent = 'Failed';
@@ -1247,46 +1236,71 @@ async function _runExtActionSequence(widgets, convId) {
 }
 
 // ── Extension connection badge ─────────────────────────────────────────────
-// Polls /api/ext/status every 5 s and updates the badge in the browser action bar.
+// Polls /api/ext/status every 5 s and updates the badge in the browser action bar
+// + the input toolbar badge. Supports multiple simultaneous browsers.
 // Also opens an SSE channel to /api/ext/events so push events (send-page, snapshot,
 // selection) from the extension arrive as pending attachment chips in the input bar.
 
-(function() {
-  var _extConnected = false;
+var _extConnectedBrowsers = []; // [{id, browser, version, connectedAt}]
 
-  function _updateExtBadge(connected) {
-    if (_extConnected === connected) return;
-    _extConnected = connected;
+(function() {
+  var _wasConnected = false;
+
+  function _updateExtBadge(browsers) {
+    _extConnectedBrowsers = browsers || [];
+    var connected = _extConnectedBrowsers.length > 0;
+    var browserNames = _extConnectedBrowsers.map(function(b) { return b.browser; });
+    var label = connected ? browserNames.join(' · ') : 'Ext offline';
+
+    // Browser action bar badge (inside browser pane)
     var dot   = document.getElementById('browser-ext-dot');
     var lbl   = document.getElementById('browser-ext-label');
     var badge = document.getElementById('browser-ext-badge');
-    if (!dot || !lbl || !badge) return;
-    if (connected) {
-      dot.style.background = '#10b981';
-      dot.style.boxShadow  = '0 0 5px #10b98166';
-      lbl.textContent = 'Ext connected';
-      badge.style.color       = '#10b981';
-      badge.style.borderColor = '#10b98133';
-      badge.style.background  = '#0d2b1f';
-      badge.title = 'Browser extension connected';
-    } else {
-      dot.style.background = '#444';
-      dot.style.boxShadow  = 'none';
-      lbl.textContent = 'Ext offline';
-      badge.style.color       = '#555';
-      badge.style.borderColor = '#2a2a2a';
-      badge.style.background  = '#111';
-      badge.title = 'Browser extension not connected — install the Fauna Browser Bridge extension';
+    if (dot && lbl && badge) {
+      if (connected) {
+        dot.style.background = '#10b981';
+        dot.style.boxShadow  = '0 0 5px #10b98166';
+        lbl.textContent = label;
+        badge.style.color       = '#10b981';
+        badge.style.borderColor = '#10b98133';
+        badge.style.background  = '#0d2b1f';
+        badge.title = 'Connected: ' + label;
+      } else {
+        dot.style.background = '#444';
+        dot.style.boxShadow  = 'none';
+        lbl.textContent = 'Ext offline';
+        badge.style.color       = '#555';
+        badge.style.borderColor = '#2a2a2a';
+        badge.style.background  = '#111';
+        badge.title = 'Browser extension not connected';
+      }
     }
+
+    // Input toolbar badge
+    var tbBadge = document.getElementById('ext-toolbar-badge');
+    var tbLabel = document.getElementById('ext-toolbar-label');
+    if (tbBadge) {
+      if (connected) {
+        tbBadge.classList.add('ext-connected');
+        tbBadge.title = 'Connected: ' + label + ' — click to insert page context';
+        if (tbLabel) tbLabel.textContent = browserNames.length > 1 ? browserNames.length + ' browsers' : browserNames[0];
+      } else {
+        tbBadge.classList.remove('ext-connected');
+        tbBadge.title = 'Browser extension offline';
+        if (tbLabel) tbLabel.textContent = 'Ext';
+      }
+    }
+
+    _wasConnected = connected;
   }
 
   async function _pollExtStatus() {
     try {
       var r = await fetch('/api/ext/status');
       var d = await r.json();
-      _updateExtBadge(!!d.connected);
+      _updateExtBadge(d.browsers || []);
     } catch (_) {
-      _updateExtBadge(false);
+      _updateExtBadge([]);
     }
   }
 
@@ -1308,29 +1322,36 @@ async function _runExtActionSequence(widgets, convId) {
     var msg;
     try { msg = JSON.parse(evt.data); } catch (_) { return; }
     var d = msg.data || {};
+    var bName = msg.browser || 'Browser';
+
+    // Server pushes status-changed when a browser connects/disconnects
+    if (msg.event === 'ext:status-changed') {
+      _pollExtStatus();
+      return;
+    }
 
     if (msg.event === 'user:send-page') {
-      var title   = d.title || d.url || 'Chrome page';
+      var title   = d.title || d.url || bName + ' page';
       var short   = title.length > 45 ? title.slice(0, 42) + '…' : title;
       var content = (d.url   ? 'Source: ' + d.url + '\n' : '') +
                     (d.title ? 'Title: '  + d.title + '\n\n' : '') +
                     (d.text  || '');
       if (typeof addAttachment === 'function') {
-        addAttachment({ type: 'url', extSource: 'page', name: 'Chrome: ' + short,
+        addAttachment({ type: 'url', extSource: 'page', name: bName + ': ' + short,
                         content: content, sourceUri: d.url });
       }
-      _showExtToast('Page from Chrome added — type your question');
+      _showExtToast('Page from ' + bName + ' added — type your question');
     }
 
     if (msg.event === 'user:snapshot') {
       if (!d.base64) return;
-      var snapTitle = d.title || d.url || 'Chrome tab';
+      var snapTitle = d.title || d.url || bName + ' tab';
       var shortSnap = snapTitle.length > 40 ? snapTitle.slice(0, 37) + '…' : snapTitle;
       if (typeof addAttachment === 'function') {
         addAttachment({ type: 'image', extSource: 'snapshot', name: 'Snapshot — ' + shortSnap,
                         base64: d.base64, mime: d.mime || 'image/png' });
       }
-      _showExtToast('Snapshot from Chrome added');
+      _showExtToast('Snapshot from ' + bName + ' added');
     }
 
     if (msg.event === 'user:selection') {
@@ -1342,10 +1363,10 @@ async function _runExtActionSequence(widgets, convId) {
                        'Selected text:\n' + d.text;
       if (typeof addAttachment === 'function') {
         addAttachment({ type: 'url', extSource: 'selection',
-                        name: 'Selection from Chrome' + domain,
+                        name: 'Selection from ' + bName + domain,
                         content: selContent, sourceUri: d.url });
       }
-      _showExtToast('Selection from Chrome added');
+      _showExtToast('Selection from ' + bName + ' added');
     }
   }
 
@@ -1364,3 +1385,170 @@ async function _runExtActionSequence(widgets, convId) {
     _connectExtEvents();
   });
 }());
+
+// ── Extension tab menu (input toolbar) ────────────────────────────────────
+
+var _extTabMenuOpen = false;
+
+function toggleExtTabMenu() {
+  _extTabMenuOpen = !_extTabMenuOpen;
+  var menu = document.getElementById('ext-tab-menu');
+  if (!menu) return;
+  if (_extTabMenuOpen) {
+    menu.style.display = '';
+    _loadExtTabs();
+    // Close on outside click
+    setTimeout(function() {
+      document.addEventListener('click', _closeExtTabMenuOutside, { once: true, capture: true });
+    }, 0);
+  } else {
+    menu.style.display = 'none';
+  }
+}
+
+function _closeExtTabMenuOutside(e) {
+  var menu = document.getElementById('ext-tab-menu');
+  var badge = document.getElementById('ext-toolbar-badge');
+  if (menu && !menu.contains(e.target) && badge && !badge.contains(e.target)) {
+    _extTabMenuOpen = false;
+    menu.style.display = 'none';
+  } else if (_extTabMenuOpen) {
+    setTimeout(function() {
+      document.addEventListener('click', _closeExtTabMenuOutside, { once: true, capture: true });
+    }, 0);
+  }
+}
+
+async function _loadExtTabs() {
+  var menu = document.getElementById('ext-tab-menu');
+  if (!menu) return;
+
+  if (!_extConnectedBrowsers.length) {
+    menu.innerHTML = '<div class="ext-menu-header">Browser Extension</div>' +
+      '<div class="ext-menu-empty"><i class="ti ti-plug-off" style="font-size:16px;display:block;margin-bottom:4px"></i>' +
+      'Extension not connected<br><span style="font-size:10px;color:var(--text-muted)">Install from Plugins &amp; Extensions panel</span></div>';
+    return;
+  }
+
+  menu.innerHTML = '<div class="ext-menu-header">Loading tabs…</div>' +
+    '<div class="ext-menu-empty" style="padding:10px"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i></div>';
+
+  try {
+    // Fetch tabs from all connected browsers in parallel
+    var results = await Promise.all(_extConnectedBrowsers.map(function(b) {
+      return fetch('/api/ext/command', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'tab:list', browser: b.browser })
+      }).then(function(r) { return r.json(); }).then(function(d) {
+        return { browser: b.browser, tabs: (d.ok && d.tabs) ? d.tabs : [] };
+      }).catch(function() { return { browser: b.browser, tabs: [] }; });
+    }));
+
+    var totalTabs = results.reduce(function(sum, r) { return sum + r.tabs.length; }, 0);
+    if (totalTabs === 0) {
+      menu.innerHTML = '<div class="ext-menu-header">Browser Tabs</div>' +
+        '<div class="ext-menu-empty">No tabs found</div>';
+      return;
+    }
+
+    var multiBrowser = results.length > 1;
+    var html = '';
+
+    results.forEach(function(res) {
+      if (!res.tabs.length) return;
+      html += '<div class="ext-menu-header">' +
+        '<i class="ti ti-brand-' + res.browser.toLowerCase() + '" style="font-size:11px"></i> ' +
+        escHtml(res.browser) + (multiBrowser ? ' (' + res.tabs.length + ')' : ' — ' + res.tabs.length + ' tabs') +
+      '</div>';
+      res.tabs.forEach(function(tab) {
+        var title = tab.title || 'Untitled';
+        var shortTitle = title.length > 38 ? title.slice(0, 35) + '…' : title;
+        var domain = '';
+        try { domain = new URL(tab.url).hostname; } catch (_) { domain = tab.url || ''; }
+        var shortDomain = domain.length > 35 ? domain.slice(0, 32) + '…' : domain;
+        var bAttr = ' data-browser="' + escHtml(res.browser) + '"';
+
+        html += '<div class="ext-tab-item"' + bAttr + '>' +
+          (tab.active ? '<span class="ext-tab-active-dot" title="Active tab"></span>' : '<span style="width:5px;flex-shrink:0"></span>') +
+          '<div class="ext-tab-info">' +
+            '<div class="ext-tab-title">' + escHtml(shortTitle) + '</div>' +
+            '<div class="ext-tab-url">' + escHtml(shortDomain) + '</div>' +
+          '</div>' +
+          '<div class="ext-tab-actions">' +
+            '<button onclick="extGrabPage(' + tab.id + ',\'' + escHtml(res.browser) + '\')" title="Insert page content"><i class="ti ti-file-text"></i></button>' +
+            '<button onclick="extGrabSnapshot(' + tab.id + ',\'' + escHtml(res.browser) + '\')" title="Insert screenshot"><i class="ti ti-camera"></i></button>' +
+          '</div>' +
+        '</div>';
+      });
+    });
+
+    menu.innerHTML = html;
+  } catch (e) {
+    menu.innerHTML = '<div class="ext-menu-header">Browser Tabs</div>' +
+      '<div class="ext-menu-empty" style="color:var(--error)">Error: ' + escHtml(e.message) + '</div>';
+  }
+}
+
+async function extGrabPage(tabId, browser) {
+  _extTabMenuOpen = false;
+  var menu = document.getElementById('ext-tab-menu');
+  if (menu) menu.style.display = 'none';
+
+  try {
+    var body = { action: 'extract' };
+    if (tabId) body.tabId = tabId;
+    if (browser) body.browser = browser;
+    var r = await fetch('/api/ext/command', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    var d = await r.json();
+    if (!d.ok && d.error) throw new Error(d.error);
+
+    var title   = d.title || d.url || 'Browser page';
+    var short   = title.length > 45 ? title.slice(0, 42) + '…' : title;
+    var prefix  = browser ? browser + ': ' : '';
+    var content = (d.url   ? 'Source: ' + d.url + '\n' : '') +
+                  (d.title ? 'Title: '  + d.title + '\n\n' : '') +
+                  (d.content || d.text || '');
+
+    if (typeof addAttachment === 'function') {
+      addAttachment({ type: 'url', extSource: 'page', name: prefix + short, content: content, sourceUri: d.url });
+    }
+    if (typeof showToast === 'function') showToast('Page content added to context');
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('Failed: ' + e.message);
+  }
+}
+
+async function extGrabSnapshot(tabId, browser) {
+  _extTabMenuOpen = false;
+  var menu = document.getElementById('ext-tab-menu');
+  if (menu) menu.style.display = 'none';
+
+  try {
+    var body = { full: false };
+    if (tabId) body.tabId = tabId;
+    if (browser) body.browser = browser;
+    var r = await fetch('/api/ext/snapshot', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    var d = await r.json();
+    if (!d.ok && d.error) throw new Error(d.error);
+
+    var b64 = d.screenshot || d.base64;
+    var mime = d.mime || 'image/png';
+    if (!b64) throw new Error('No image data returned');
+
+    var snapTitle = d.title || d.url || 'Browser tab';
+    var shortSnap = snapTitle.length > 40 ? snapTitle.slice(0, 37) + '…' : snapTitle;
+
+    if (typeof addAttachment === 'function') {
+      addAttachment({ type: 'image', extSource: 'snapshot', name: 'Snapshot — ' + shortSnap, base64: b64, mime: mime });
+    }
+    if (typeof showToast === 'function') showToast('Screenshot added to context');
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('Failed: ' + e.message);
+  }
+}

@@ -84,7 +84,7 @@
           </div>
           <div id="figma-action-row">
             <button class="figma-btn" onclick="figmaWsConnect()"><i class="ti ti-refresh"></i> Reconnect</button>
-            <button class="figma-btn" onclick="toggleFigmaSetup()" title="Setup &amp; Help"><i class="ti ti-help-circle"></i> Help</button>
+            <button class="figma-btn" onclick="toggleFigmaSetup()" title="Plugins &amp; Extensions"><i class="ti ti-puzzle"></i> Plugins</button>
             <button class="figma-btn" onclick="toggleMcpLogs()" id="figma-logs-btn"><i class="ti ti-terminal-2"></i> Logs</button>
           </div>
           <div id="figma-logs-box" style="display:none"></div>
@@ -108,7 +108,7 @@
           <button class="footer-icon-btn" onclick="togglePlaybook()" title="Playbook — Learned Instructions">
             <i class="ti ti-notebook"></i>
           </button>
-          <button class="footer-icon-btn" onclick="toggleFigmaSetup()" title="Figma Plugin Help">
+          <button class="footer-icon-btn" onclick="toggleFigmaSetup()" title="Plugins &amp; Extensions">
             <i class="ti ti-plug"></i>
           </button>
           <button class="footer-icon-btn" onclick="toggleHelp()" title="Help &amp; Reference">
@@ -290,9 +290,15 @@
           <div class="toolbar-sep"></div>
           <button class="toolbar-btn" onclick="openUrlModal()" title="Add URL context"><i class="ti ti-link"></i> Add URL</button>
           <div class="toolbar-sep"></div>
-          <button class="toolbar-btn" id="browser-toolbar-btn" onclick="openBrowserPane()" title="Open browser panel"><i class="ti ti-world-www"></i> Browser</button>
-          <div class="toolbar-sep"></div>
           <span id="figma-mcp-badge" style="display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--surface2);color:var(--text-muted);border:1px solid var(--border);cursor:default;transition:all .2s" title="Checking Figma MCP…">◌ Figma</span>
+          <div style="position:relative;display:inline-flex">
+            <span id="ext-toolbar-badge" onclick="toggleExtTabMenu()" title="Browser extension — click to insert page context"
+              style="display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--surface2);color:var(--text-muted);border:1px solid var(--border);cursor:pointer;transition:all .2s;user-select:none">
+              <span id="ext-toolbar-dot" style="width:5px;height:5px;border-radius:50%;background:#444;flex-shrink:0"></span>
+              <i class="ti ti-browser" style="font-size:11px"></i> <span id="ext-toolbar-label">Ext</span>
+            </span>
+            <div id="ext-tab-menu" style="display:none"></div>
+          </div>
           <span id="hint-text">⏎ send · ⇧⏎ newline</span>
         </div>
         <div id="ctx-meter" style="display:none">
@@ -746,64 +752,93 @@ Examples:
   </div>
 </div>
 
-<!-- ── Figma Setup / Help panel ───────────────────────────────────── -->
+<!-- ── Plugins & Extensions panel ─────────────────────────────────── -->
 <div id="figma-setup-panel">
   <div class="side-panel-header">
     <span><i class="ti ti-plug" style="font-size:16px"></i></span>
-    <span class="title">Figma Plugin Setup</span>
+    <span class="title">Plugins &amp; Extensions</span>
     <button class="side-panel-close" onclick="toggleFigmaSetup()"><i class="ti ti-x"></i></button>
   </div>
 
   <div class="side-panel-body">
 
-    <!-- Install card -->
+    <!-- ─── Figma Plugin ──────────────────────────────── -->
+    <div class="setup-section-label"><i class="ti ti-brand-figma"></i> Figma Plugin</div>
+
     <div class="setup-card">
-      <div class="setup-card-title">1 · Install the plugin files</div>
-      <p class="setup-card-desc">The Fauna MCP Figma plugin is bundled with this app. Click below to copy it to a folder on your Mac.</p>
+      <p class="setup-card-desc">Connects Figma to Fauna so the AI can read and modify your designs in real time.</p>
       <div id="figma-plugin-status" class="setup-status-row">
         <span id="figma-plugin-status-icon">…</span>
         <span id="figma-plugin-status-text">Checking…</span>
       </div>
-      <div style="display:flex;gap:6px;margin-top:8px">
-        <button class="setup-btn primary" id="figma-install-btn" onclick="installFigmaPlugin()"><i class="ti ti-download"></i> Install Plugin Files</button>
+      <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+        <button class="setup-btn primary" id="figma-install-btn" onclick="installFigmaPlugin()"><i class="ti ti-download"></i> Install Plugin</button>
         <button class="setup-btn" id="figma-open-folder-btn" onclick="openPluginFolder()" style="display:none"><i class="ti ti-folder-open"></i> Open Folder</button>
-      </div>
-      <div style="margin-top:6px">
-        <button class="setup-btn" id="figma-download-btn" onclick="downloadFigmaPlugin()"><i class="ti ti-file-download"></i> Save Plugin to Folder…</button>
+        <button class="setup-btn" id="figma-download-btn" onclick="downloadFigmaPlugin()"><i class="ti ti-file-download"></i> Save to Folder…</button>
       </div>
       <div id="figma-install-result" class="setup-inline-result"></div>
     </div>
 
-    <!-- Load in Figma card -->
-    <div class="setup-card">
-      <div class="setup-card-title">2 · Load the plugin in Figma</div>
-      <ol class="setup-steps">
-        <li>Open <strong>Figma desktop app</strong></li>
-        <li>Click the Figma logo (top-left) → <strong>Plugins</strong></li>
-        <li>Select <strong>Development → Import plugin from manifest…</strong></li>
-        <li>Navigate to the folder below and select <code>manifest.json</code></li>
-      </ol>
-      <div class="setup-path-row">
-        <code id="figma-plugin-path">~/.config/fauna/figma-plugin/manifest.json</code>
-        <button class="setup-copy-btn" onclick="copyPluginPath()" title="Copy path"><i class="ti ti-copy"></i></button>
+    <div class="setup-card collapsed-card" id="figma-instructions-card">
+      <button class="setup-collapse-toggle" onclick="toggleSetupInstructions('figma')">
+        <i class="ti ti-chevron-right"></i> Setup Instructions
+      </button>
+      <div class="setup-collapse-body" id="figma-instructions-body">
+        <ol class="setup-steps">
+          <li>Open <strong>Figma desktop app</strong></li>
+          <li>Click the Figma logo → <strong>Plugins → Development → Import plugin from manifest…</strong></li>
+          <li>Select <code>manifest.json</code> from the installed folder</li>
+          <li>Run: <strong>Plugins → Development → Fauna MCP</strong></li>
+          <li>The Figma dot in Fauna turns <span style="color:var(--success)">green ●</span> when connected</li>
+        </ol>
+        <div class="setup-path-row">
+          <code id="figma-plugin-path">~/.config/fauna/figma-plugin/manifest.json</code>
+          <button class="setup-copy-btn" onclick="copyPluginPath()" title="Copy path"><i class="ti ti-copy"></i></button>
+        </div>
       </div>
     </div>
 
-    <!-- Run the plugin card -->
+    <!-- ─── Browser Extension ─────────────────────────── -->
+    <div class="setup-section-label"><i class="ti ti-browser"></i> Browser Extension</div>
+
     <div class="setup-card">
-      <div class="setup-card-title">3 · Run the plugin</div>
-      <ol class="setup-steps">
-        <li>In Figma: <strong>Plugins → Development → Fauna MCP</strong></li>
-        <li>The plugin panel opens — it auto-connects to the MCP server</li>
-        <li>The Figma dot in this app turns <span style="color:var(--success)">green ●</span></li>
-        <li>Start chatting — the AI can now read and modify your Figma file</li>
-      </ol>
+      <p class="setup-card-desc">Bridges Chrome or Edge to Fauna — lets the AI see and interact with pages in your external browser.</p>
+      <div id="browser-ext-status" class="setup-status-row">
+        <span id="browser-ext-status-icon">…</span>
+        <span id="browser-ext-status-text">Checking…</span>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+        <button class="setup-btn primary" id="browser-ext-install-btn" onclick="installBrowserExt()"><i class="ti ti-download"></i> Install Extension</button>
+        <button class="setup-btn" id="browser-ext-open-folder-btn" onclick="openBrowserExtFolder()" style="display:none"><i class="ti ti-folder-open"></i> Open Folder</button>
+        <button class="setup-btn" id="browser-ext-download-btn" onclick="downloadBrowserExt()"><i class="ti ti-file-download"></i> Save to Folder…</button>
+      </div>
+      <div id="browser-ext-install-result" class="setup-inline-result"></div>
     </div>
 
-    <!-- MCP Server card -->
+    <div class="setup-card collapsed-card" id="browser-ext-instructions-card">
+      <button class="setup-collapse-toggle" onclick="toggleSetupInstructions('browser')">
+        <i class="ti ti-chevron-right"></i> Setup Instructions
+      </button>
+      <div class="setup-collapse-body" id="browser-ext-instructions-body">
+        <ol class="setup-steps">
+          <li>Open <strong>Chrome</strong> or <strong>Edge</strong> and go to <code>chrome://extensions</code></li>
+          <li>Enable <strong>Developer mode</strong> (top-right toggle)</li>
+          <li>Click <strong>Load unpacked</strong></li>
+          <li>Select the installed extension folder</li>
+          <li>The browser icon appears — click it and verify the connection to Fauna</li>
+        </ol>
+        <div class="setup-path-row">
+          <code id="browser-ext-path">~/.config/fauna/browser-extension</code>
+          <button class="setup-copy-btn" onclick="copyBrowserExtPath()" title="Copy path"><i class="ti ti-copy"></i></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── MCP Server Status ─────────────────────────── -->
+    <div class="setup-section-label"><i class="ti ti-server"></i> MCP Server</div>
+
     <div class="setup-card">
-      <div class="setup-card-title">4 · Keep the MCP server running</div>
-      <p class="setup-card-desc">The MCP server starts automatically when Fauna opens. Check its status in the <strong>Figma sidebar panel</strong>. If it's stopped, click <strong>Start</strong>.</p>
+      <p class="setup-card-desc">The Figma MCP server runs automatically when Fauna opens. Both the plugin and extension connect through it.</p>
       <div id="setup-mcp-status-row" class="setup-status-row">
         <span id="setup-mcp-icon">…</span>
         <span id="setup-mcp-text">Checking…</span>
@@ -814,10 +849,10 @@ Examples:
     <div class="setup-card tips-card">
       <div class="setup-card-title"><i class="ti ti-bulb"></i> Tips</div>
       <ul class="setup-steps">
-        <li>The plugin reconnects automatically if the server restarts</li>
-        <li>Add <strong>Figma Rules</strong> to guide the AI's design decisions</li>
+        <li>Both plugins reconnect automatically if the server restarts</li>
+        <li>The Figma plugin works with any open Figma file</li>
+        <li>The browser extension supports Chrome and Edge</li>
         <li>Use <code>figma-exec</code> blocks in chat to run code directly in Figma</li>
-        <li>The plugin works with any open Figma file</li>
       </ul>
     </div>
 

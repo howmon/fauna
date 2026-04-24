@@ -142,6 +142,13 @@
       {
         "from": "relay/package.json",
         "to": "mcp-server/package.json"
+      },
+      {
+        "from": "browser-extension",
+        "to": "browser-extension",
+        "filter": [
+          "**/*"
+        ]
       }
     ]
   }

@@ -472,6 +472,15 @@ async function loadFigmaSetupState() {
       mcpIcon.innerHTML = '<i class="ti ti-circle-x" style="color:var(--warn)"></i>'; mcpText.textContent = 'MCP server not running — expand Figma panel and click Start';
     }
   } catch (_) {}
+
+  // Browser extension status
+  loadBrowserExtState();
+
+  // Collapse instruction sections by default
+  var fb = document.getElementById('figma-instructions-body');
+  var bb = document.getElementById('browser-ext-instructions-body');
+  if (fb) fb.style.display = 'none';
+  if (bb) bb.style.display = 'none';
 }
 
 async function installFigmaPlugin() {
@@ -540,5 +549,117 @@ async function downloadFigmaPlugin() {
     result.className = 'setup-inline-result err';
     result.innerHTML = '<i class="ti ti-x"></i> ' + e.message;
   }
-  btn.disabled = false; btn.innerHTML = '<i class="ti ti-file-download"></i> Save Plugin to Folder…';
+  btn.disabled = false; btn.innerHTML = '<i class="ti ti-file-download"></i> Save to Folder…';
+}
+
+// ── Browser Extension install / download ──────────────────────────────────
+
+var browserExtState = { installed: false, installDir: null };
+
+async function loadBrowserExtState() {
+  try {
+    var r = await fetch('/api/browser-ext/info');
+    var d = await r.json();
+    browserExtState = d;
+    var icon = document.getElementById('browser-ext-status-icon');
+    var text = document.getElementById('browser-ext-status-text');
+    var installBtn = document.getElementById('browser-ext-install-btn');
+    var openBtn = document.getElementById('browser-ext-open-folder-btn');
+    var pathEl = document.getElementById('browser-ext-path');
+
+    if (d.installed) {
+      icon.innerHTML = '<i class="ti ti-circle-check" style="color:var(--success)"></i>';
+      text.textContent = 'Extension installed at ' + d.installDir;
+      installBtn.innerHTML = '<i class="ti ti-refresh"></i> Reinstall';
+      openBtn.style.display = '';
+      if (pathEl) pathEl.textContent = d.installDir;
+    } else {
+      icon.innerHTML = '<i class="ti ti-circle-x" style="color:var(--warn)"></i>';
+      text.textContent = 'Not yet installed — click Install below';
+      openBtn.style.display = 'none';
+    }
+  } catch (_) {}
+}
+
+async function installBrowserExt() {
+  var btn = document.getElementById('browser-ext-install-btn');
+  var result = document.getElementById('browser-ext-install-result');
+  btn.disabled = true; btn.textContent = 'Installing…';
+  result.className = 'setup-inline-result'; result.textContent = '';
+  try {
+    var r = await fetch('/api/browser-ext/install', { method: 'POST' });
+    var d = await r.json();
+    if (d.ok) {
+      result.className = 'setup-inline-result ok';
+      result.innerHTML = '<i class="ti ti-check"></i> Installed to ' + d.installDir;
+      document.getElementById('browser-ext-open-folder-btn').style.display = '';
+      document.getElementById('browser-ext-path').textContent = d.installDir;
+      browserExtState = { installed: true, installDir: d.installDir };
+      showToast('Browser extension installed');
+      loadBrowserExtState();
+    } else {
+      result.className = 'setup-inline-result err';
+      result.innerHTML = '<i class="ti ti-x"></i> ' + d.error;
+    }
+  } catch (e) {
+    result.className = 'setup-inline-result err';
+    result.innerHTML = '<i class="ti ti-x"></i> ' + e.message;
+  }
+  btn.disabled = false; btn.innerHTML = '<i class="ti ti-refresh"></i> Reinstall';
+}
+
+async function openBrowserExtFolder() {
+  var dir = browserExtState.installDir;
+  if (!dir) return;
+  await fetch('/api/open-folder', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderPath: dir })
+  }).catch(function() {});
+}
+
+function copyBrowserExtPath() {
+  var pathEl = document.getElementById('browser-ext-path');
+  navigator.clipboard.writeText(pathEl.textContent).then(function() {
+    showToast('Path copied');
+  });
+}
+
+async function downloadBrowserExt() {
+  var btn = document.getElementById('browser-ext-download-btn');
+  var result = document.getElementById('browser-ext-install-result');
+  btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader"></i> Choosing folder…';
+  result.className = 'setup-inline-result'; result.textContent = '';
+  try {
+    var r = await fetch('/api/browser-ext/download', { method: 'POST' });
+    var d = await r.json();
+    if (d.ok) {
+      result.className = 'setup-inline-result ok';
+      result.innerHTML = '<i class="ti ti-check"></i> Saved to ' + d.downloadDir;
+      document.getElementById('browser-ext-path').textContent = d.downloadDir;
+      showToast('Extension saved to ' + d.downloadDir);
+    } else if (d.cancelled) {
+      // user cancelled
+    } else {
+      result.className = 'setup-inline-result err';
+      result.innerHTML = '<i class="ti ti-x"></i> ' + (d.error || 'Unknown error');
+    }
+  } catch (e) {
+    result.className = 'setup-inline-result err';
+    result.innerHTML = '<i class="ti ti-x"></i> ' + e.message;
+  }
+  btn.disabled = false; btn.innerHTML = '<i class="ti ti-file-download"></i> Save to Folder…';
+}
+
+// ── Collapsible setup instructions toggle ─────────────────────────────────
+
+function toggleSetupInstructions(which) {
+  var bodyId = which === 'figma' ? 'figma-instructions-body' : 'browser-ext-instructions-body';
+  var cardId = which === 'figma' ? 'figma-instructions-card' : 'browser-ext-instructions-card';
+  var body = document.getElementById(bodyId);
+  var card = document.getElementById(cardId);
+  if (!body || !card) return;
+  var open = card.classList.toggle('expanded');
+  body.style.display = open ? '' : 'none';
+  var icon = card.querySelector('.setup-collapse-toggle i');
+  if (icon) icon.className = open ? 'ti ti-chevron-down' : 'ti ti-chevron-right';
 }

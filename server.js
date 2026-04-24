@@ -2209,29 +2209,66 @@ let figmaState   = { connected: false, fileInfo: null, activeSystem: null, pendi
 // ── Browser Extension WebSocket server ───────────────────────────────────
 // The extension connects to ws://localhost:3737/ext. The server acts as the
 // WS host (unlike the Figma relay where the server is a client).
+// Supports multiple simultaneous browsers (Chrome + Edge etc.).
 
 let _extWss      = null;  // WebSocket.Server instance
-let _extSocket   = null;  // single connected extension socket
+const _extSockets = new Map(); // socketId → { ws, browser, version, connectedAt }
+let _extIdSeq    = 0;
 let _extCmdSeq   = 0;
-const _extPending = new Map(); // cmdId → { resolve, reject, timeoutId }
+const _extPending = new Map(); // cmdId → { resolve, reject, timeoutId, socketId }
 
-/** Send a message to the connected extension. Returns false if not connected. */
-function extSend(obj) {
-  if (!_extSocket || _extSocket.readyState !== 1 /* OPEN */) return false;
-  _extSocket.send(JSON.stringify(obj));
+/** Derive browser name from userAgent string. */
+function _parseBrowser(ua) {
+  if (!ua) return 'Browser';
+  if (/Edg\//i.test(ua)) return 'Edge';
+  if (/OPR\//i.test(ua)) return 'Opera';
+  if (/Brave\//i.test(ua)) return 'Brave';
+  if (/Vivaldi\//i.test(ua)) return 'Vivaldi';
+  if (/Chrome\//i.test(ua)) return 'Chrome';
+  if (/Firefox\//i.test(ua)) return 'Firefox';
+  if (/Safari\//i.test(ua)) return 'Safari';
+  return 'Browser';
+}
+
+/** Find the best socket: by browser name, or most recent. */
+function _pickExtSocket(browser) {
+  if (_extSockets.size === 0) return null;
+  if (browser) {
+    for (const [, info] of _extSockets) {
+      if (info.browser === browser && info.ws.readyState === 1) return info;
+    }
+    return null; // requested browser not connected
+  }
+  // Default: most recently connected open socket
+  let best = null;
+  for (const [, info] of _extSockets) {
+    if (info.ws.readyState === 1) {
+      if (!best || info.connectedAt > best.connectedAt) best = info;
+    }
+  }
+  return best;
+}
+
+/** Send a message to a specific socket or the best available one. */
+function extSend(obj, browser) {
+  const info = _pickExtSocket(browser);
+  if (!info) return false;
+  info.ws.send(JSON.stringify(obj));
   return true;
 }
 
 /**
- * Send a command to the extension and wait for its result.
+ * Send a command to an extension and wait for its result.
  * @param {string} action  - e.g. 'extract', 'click'
  * @param {object} params  - action params
  * @param {number|null} tabId - optional target tab id
  * @param {number} timeoutMs
+ * @param {string|null} browser - optional target browser name (e.g. 'Chrome', 'Edge')
  */
-function extCommand(action, params = {}, tabId = null, timeoutMs = 30000) {
+function extCommand(action, params = {}, tabId = null, timeoutMs = 30000, browser = null) {
   return new Promise((resolve, reject) => {
-    if (!_extSocket || _extSocket.readyState !== 1) {
+    const info = _pickExtSocket(browser);
+    if (!info) {
       return reject(new Error('Browser extension not connected — install the Fauna Browser Bridge extension and make sure Fauna is running'));
     }
     const id = 'ec-' + (++_extCmdSeq);
@@ -2239,8 +2276,8 @@ function extCommand(action, params = {}, tabId = null, timeoutMs = 30000) {
       _extPending.delete(id);
       reject(new Error('Extension command timed out: ' + action));
     }, timeoutMs);
-    _extPending.set(id, { resolve, reject, timeoutId });
-    extSend({ type: 'cmd', id, action, params, tabId });
+    _extPending.set(id, { resolve, reject, timeoutId, socketId: info.socketId });
+    info.ws.send(JSON.stringify({ type: 'cmd', id, action, params, tabId }));
   });
 }
 
@@ -2259,12 +2296,10 @@ function startExtWebSocketServer(httpServer) {
     });
 
     _extWss.on('connection', (ws) => {
-      // Only one extension at a time — close any previous connection
-      if (_extSocket && _extSocket.readyState < 2) {
-        try { _extSocket.close(1000, 'Replaced by new connection'); } catch (_) {}
-      }
-      _extSocket = ws;
-      console.log('[Ext] Browser extension connected');
+      const socketId = 'ext-' + (++_extIdSeq);
+      const entry = { ws, browser: 'Browser', version: null, connectedAt: Date.now(), socketId };
+      _extSockets.set(socketId, entry);
+      console.log('[Ext] Browser extension connected (id=' + socketId + ')');
 
       ws.on('message', (raw) => {
         let msg;
@@ -2276,7 +2311,18 @@ function startExtWebSocketServer(httpServer) {
         }
 
         if (msg.type === 'ext:hello') {
-          console.log('[Ext] Extension hello — version', msg.version, 'tab:', msg.activeTab?.url || 'none');
+          entry.browser = _parseBrowser(msg.userAgent);
+          entry.version = msg.version;
+          // If another socket for the same browser exists, close the old one
+          for (const [otherId, other] of _extSockets) {
+            if (otherId !== socketId && other.browser === entry.browser && other.ws.readyState < 2) {
+              console.log('[Ext] Replacing older ' + entry.browser + ' connection (id=' + otherId + ')');
+              try { other.ws.close(1000, 'Replaced by newer ' + entry.browser + ' connection'); } catch (_) {}
+            }
+          }
+          console.log('[Ext] Extension hello — ' + entry.browser + ' v' + msg.version + ' tab:', msg.activeTab?.url || 'none');
+          // Notify frontend about the new browser
+          process.emit('ext:event', { type: 'event', event: 'ext:status-changed' });
           return;
         }
 
@@ -2291,29 +2337,34 @@ function startExtWebSocketServer(httpServer) {
 
         // Push events from extension (navigation, selection, user actions)
         if (msg.type === 'event') {
-          // Emit on process so frontend SSE can pick it up if needed
+          // Tag with the browser name so the UI can show it
+          msg.browser = entry.browser;
           process.emit('ext:event', msg);
           return;
         }
       });
 
       ws.on('close', () => {
-        console.log('[Ext] Browser extension disconnected');
-        if (_extSocket === ws) _extSocket = null;
-        // Reject all pending commands
-        for (const [id, { reject, timeoutId }] of _extPending) {
-          clearTimeout(timeoutId);
-          _extPending.delete(id);
-          reject(new Error('Extension disconnected'));
+        console.log('[Ext] Browser extension disconnected (' + entry.browser + ', id=' + socketId + ')');
+        _extSockets.delete(socketId);
+        // Reject pending commands that targeted this socket
+        for (const [id, pending] of _extPending) {
+          if (pending.socketId === socketId) {
+            clearTimeout(pending.timeoutId);
+            _extPending.delete(id);
+            pending.reject(new Error('Extension disconnected'));
+          }
         }
+        // Notify frontend
+        process.emit('ext:event', { type: 'event', event: 'ext:status-changed' });
       });
 
       ws.on('error', () => { /* handled in close */ });
 
       // Heartbeat
       const pingInterval = setInterval(() => {
-        if (!_extSocket || _extSocket.readyState !== 1) { clearInterval(pingInterval); return; }
-        try { _extSocket.send(JSON.stringify({ type: 'ping' })); } catch (_) {}
+        if (ws.readyState !== 1) { clearInterval(pingInterval); return; }
+        try { ws.send(JSON.stringify({ type: 'ping' })); } catch (_) {}
       }, 20000);
       ws.once('close', () => clearInterval(pingInterval));
     });
@@ -2656,6 +2707,86 @@ app.post('/api/figma/plugin-download', (req, res) => {
     for (const file of fs.readdirSync(src)) {
       fs.copyFileSync(path.join(src, file), path.join(destDir, file));
     }
+    res.json({ ok: true, downloadDir: destDir });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Browser Extension install / download ──────────────────────────────────
+
+const BROWSER_EXT_INSTALL_DIR = path.join(CONFIG_DIR, 'browser-extension');
+
+function getBundledBrowserExtDir() {
+  const packed = path.join(process.resourcesPath || '', 'browser-extension');
+  if (fs.existsSync(packed)) return packed;
+  return path.join(__dirname, 'browser-extension');
+}
+
+app.get('/api/browser-ext/info', (req, res) => {
+  const installed = fs.existsSync(path.join(BROWSER_EXT_INSTALL_DIR, 'manifest.json'));
+  res.json({
+    installed,
+    installDir: installed ? BROWSER_EXT_INSTALL_DIR : null,
+    bundledDir: getBundledBrowserExtDir(),
+  });
+});
+
+app.post('/api/browser-ext/install', (req, res) => {
+  try {
+    const src = getBundledBrowserExtDir();
+    if (!fs.existsSync(src)) return res.status(404).json({ error: 'Bundled browser extension not found' });
+
+    fs.mkdirSync(BROWSER_EXT_INSTALL_DIR, { recursive: true });
+    // Copy all files recursively
+    function copyDir(from, to) {
+      fs.mkdirSync(to, { recursive: true });
+      for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+        const s = path.join(from, entry.name), d = path.join(to, entry.name);
+        if (entry.isDirectory()) copyDir(s, d);
+        else fs.copyFileSync(s, d);
+      }
+    }
+    copyDir(src, BROWSER_EXT_INSTALL_DIR);
+    res.json({ ok: true, installDir: BROWSER_EXT_INSTALL_DIR });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/browser-ext/download', (req, res) => {
+  try {
+    const src = getBundledBrowserExtDir();
+    if (!fs.existsSync(src)) return res.status(404).json({ error: 'Bundled browser extension not found' });
+
+    let chosenDir;
+    if (process.platform === 'darwin') {
+      try {
+        chosenDir = execSync(
+          `osascript -e 'set f to choose folder with prompt "Choose where to save the Browser Extension"' -e 'POSIX path of f'`,
+          { encoding: 'utf8', timeout: 60000 }
+        ).trim();
+      } catch (_) { return res.json({ ok: false, cancelled: true }); }
+    } else {
+      try {
+        chosenDir = execSync(
+          `powershell -Command "[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = 'Choose where to save the Browser Extension'; if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath } else { throw 'cancelled' }"`,
+          { encoding: 'utf8', timeout: 60000 }
+        ).trim();
+      } catch (_) { return res.json({ ok: false, cancelled: true }); }
+    }
+    if (!chosenDir) return res.json({ ok: false, cancelled: true });
+
+    const destDir = path.join(chosenDir, 'FaunaBrowserBridge');
+    function copyDir(from, to) {
+      fs.mkdirSync(to, { recursive: true });
+      for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+        const s = path.join(from, entry.name), d = path.join(to, entry.name);
+        if (entry.isDirectory()) copyDir(s, d);
+        else fs.copyFileSync(s, d);
+      }
+    }
+    copyDir(src, destDir);
     res.json({ ok: true, downloadDir: destDir });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -5015,42 +5146,60 @@ app.post('/api/permissions/request-accessibility', (req, res) => {
 
 // ── Browser Extension REST API ────────────────────────────────────────────
 
-// GET /api/ext/status — is an extension connected?
+// GET /api/ext/status — which extensions are connected?
 app.get('/api/ext/status', (_req, res) => {
-  res.json({ connected: !!(_extSocket && _extSocket.readyState === 1) });
+  const browsers = [];
+  for (const [id, info] of _extSockets) {
+    if (info.ws.readyState === 1) {
+      browsers.push({ id, browser: info.browser, version: info.version, connectedAt: info.connectedAt });
+    }
+  }
+  res.json({ connected: browsers.length > 0, browsers });
 });
 
 // POST /api/ext/command — send an arbitrary command to the extension and return its result
-// Body: { action, params, tabId }
+// Body: { action, params, tabId, browser? }
 app.post('/api/ext/command', async (req, res) => {
-  const { action, params = {}, tabId = null, timeout = 30000 } = req.body || {};
+  const { action, params = {}, tabId = null, timeout = 30000, browser = null } = req.body || {};
   if (!action) return res.status(400).json({ ok: false, error: 'action required' });
   try {
-    const result = await extCommand(action, params, tabId, Math.min(timeout, 60000));
+    const result = await extCommand(action, params, tabId, Math.min(timeout, 60000), browser);
     res.json(result);
   } catch (e) {
     res.status(503).json({ ok: false, error: e.message });
   }
 });
 
-// POST /api/ext/snapshot — convenience: take a viewport screenshot via the extension
-// Body: { tabId?, full?: true }
-// Compression is done inside the extension via OffscreenCanvas before the
-// base64 travels over the WebSocket, so no server-side processing is needed.
+// POST /api/ext/snapshot — take a viewport screenshot via the extension,
+// or fall back to the built-in Playwright browser if the extension isn't connected.
 app.post('/api/ext/snapshot', async (req, res) => {
-  const { tabId = null, full = false } = req.body || {};
+  const { tabId = null, full = false, browser = null } = req.body || {};
+
+  // Try extension first
+  const info = _pickExtSocket(browser);
+  if (info) {
+    try {
+      const action = full ? 'snapshot-full' : 'snapshot';
+      const result = await extCommand(action, {}, tabId, 45000, browser);
+      return res.json(result);
+    } catch (e) {
+      const isTimeout = e.message && e.message.includes('timed out');
+      return res.status(503).json({
+        ok: false,
+        error: isTimeout
+          ? 'Snapshot timed out — browser window may not have OS focus. Click into the browser, then retry.'
+          : e.message
+      });
+    }
+  }
+
+  // Fallback: use built-in Playwright browser
   try {
-    const action = full ? 'snapshot-full' : 'snapshot';
-    const result = await extCommand(action, {}, tabId, 45000);
-    res.json(result);
+    const page = await getBrowsePage();
+    const buf = await page.screenshot({ type: 'jpeg', quality: 70, fullPage: !!full });
+    res.json({ ok: true, screenshot: buf.toString('base64'), mime: 'image/jpeg', url: page.url(), source: 'built-in' });
   } catch (e) {
-    const isTimeout = e.message && e.message.includes('timed out');
-    res.status(503).json({
-      ok: false,
-      error: isTimeout
-        ? 'Snapshot timed out — Chrome window may not have OS focus. Ask the user to click into Chrome, then retry the snapshot.'
-        : e.message
-    });
+    res.status(503).json({ ok: false, error: 'Browser extension not connected and built-in browser unavailable: ' + e.message });
   }
 });
 
@@ -5097,11 +5246,11 @@ export function startServer(port) {
         try { figmaWs.terminate(); } catch (_) {}
         figmaWs = null;
       }
-      // Close extension WS server
-      if (_extSocket) {
-        try { _extSocket.terminate(); } catch (_) {}
-        _extSocket = null;
+      // Close extension WS connections
+      for (const [, info] of _extSockets) {
+        try { info.ws.terminate(); } catch (_) {}
       }
+      _extSockets.clear();
       if (_extWss) {
         try { _extWss.close(); } catch (_) {}
         _extWss = null;
