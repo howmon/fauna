@@ -1212,11 +1212,12 @@ async function _runExtActionSequence(widgets, convId) {
       // snapshot — inject image into AI
       if (w.action.action === 'snapshot' || w.action.action === 'snapshot-full') {
         if (result.base64) {
+          var snapMime = result.mime || 'image/jpeg';
           var snapTabInfo = await executeExtAction({ action: 'tab:info' }).catch(function() { return {}; });
           await sendDirectMessage(
             '[Browser extension snapshot' + (w.action.action === 'snapshot-full' ? ' (full page)' : '') +
             '] from: ' + (snapTabInfo.url || 'browser'),
-            { image: 'data:image/png;base64,' + result.base64 }
+            { image: 'data:' + snapMime + ';base64,' + result.base64 }
           );
         }
       }

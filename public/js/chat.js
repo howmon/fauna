@@ -94,6 +94,17 @@ async function sendDirectMessage(content, opts) {
     : (content.find(function(c){ return c.type === 'text'; }) || {}).text || '';
 
   var userMsg = { role: 'user', content: content };
+  // Attach inline image if provided (e.g. browser extension snapshot)
+  if (opts.image) {
+    var imgDataUrl = opts.image;
+    var imgMime = 'image/png';
+    var imgBase64 = imgDataUrl;
+    if (imgDataUrl.startsWith('data:')) {
+      var parts = imgDataUrl.match(/^data:([^;]+);base64,(.+)$/);
+      if (parts) { imgMime = parts[1]; imgBase64 = parts[2]; }
+    }
+    userMsg.images = [{ base64: imgBase64, mime: imgMime, name: 'snapshot' }];
+  }
   conv.messages.push(userMsg);
 
   if (isCurrentConv) {
