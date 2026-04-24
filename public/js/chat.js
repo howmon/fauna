@@ -211,7 +211,10 @@ async function sendMessage(opts) {
       if (att.type === 'image') {
         pendingImages.push({ base64: att.base64, mime: att.mime, name: att.name });
       } else {
-        var label = att.type === 'url' ? 'URL: ' + att.name : 'File: ' + att.name;
+        var label = att.extSource === 'page'      ? 'Browser page: '      + att.name
+                  : att.extSource === 'selection' ? 'Browser selection from ' + (att.sourceUri || att.name)
+                  : att.type === 'url'            ? 'URL: ' + att.name
+                  : 'File: ' + att.name;
         var ref = att.sourceUri || ('attachment://' + encodeURIComponent(att.name || 'file'));
         var meta = [];
         if (att.mime) meta.push('mime=' + att.mime);

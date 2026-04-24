@@ -588,15 +588,20 @@ function clearAttachments() {
 function renderAttachBar() {
   var bar = document.getElementById('attach-bar');
   bar.innerHTML = state.pendingAttachments.map((att, i) => {
+    var extCls = att.extSource ? ' pending-chip-ext' : '';
     if (att.type === 'image') {
-      return '<div class="pending-chip pending-chip-image">' +
+      return '<div class="pending-chip pending-chip-image' + extCls + '">' +
         '<img class="pending-img-thumb" src="data:' + att.mime + ';base64,' + att.base64 + '" title="' + escHtml(att.name) + '">' +
         '<span class="chip-name" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(att.name) + '</span>' +
         '<button class="chip-remove" onclick="removeAttachment(' + i + ')"><i class="ti ti-x"></i></button>' +
       '</div>';
     }
-    return '<div class="pending-chip">' +
-      '<span class="chip-icon">' + (att.type === 'url' ? '<i class="ti ti-link"></i>' : '<i class="ti ti-paperclip"></i>') + '</span>' +
+    var icon = att.extSource === 'page'      ? '<i class="ti ti-world-www"></i>'
+             : att.extSource === 'selection' ? '<i class="ti ti-text-scan-2"></i>'
+             : att.type === 'url'            ? '<i class="ti ti-link"></i>'
+             : '<i class="ti ti-paperclip"></i>';
+    return '<div class="pending-chip' + extCls + '">' +
+      '<span class="chip-icon">' + icon + '</span>' +
       '<span class="chip-name">' + escHtml(att.name) + '</span>' +
       '<button class="chip-remove" onclick="removeAttachment(' + i + ')"><i class="ti ti-x"></i></button>' +
     '</div>';

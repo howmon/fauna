@@ -252,7 +252,7 @@ function getBuiltInToolDefinitions(permissions) {
       type: 'function',
       function: {
         name: 'agent_shell_exec',
-        description: 'Execute a shell command. The command will be filtered by the security sandbox. Environment variables are stripped and system info is masked.',
+        description: 'Execute a shell command in a zsh shell. Subprocess spawning is fully supported — npx, node, python, pip, brew, etc. all work and can spawn their own subprocesses. Commands are checked against a security allowlist; sensitive env vars are sanitised but npm/node tooling env vars are preserved so package managers work correctly.',
         parameters: {
           type: 'object',
           properties: {

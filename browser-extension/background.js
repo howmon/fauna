@@ -114,7 +114,12 @@ async function handleServerMessage(msg) {
 
   // Command dispatch
   if (type === 'cmd') {
-    const result = await dispatchCommand(msg);
+    let result;
+    try {
+      result = await dispatchCommand(msg);
+    } catch (err) {
+      result = { ok: false, error: err.message || String(err) };
+    }
     send({ type: 'result', id, ...result });
     return;
   }
@@ -338,14 +343,90 @@ async function cmdWait({ ms = 1000 } = {}) {
 
 // ── Screenshots ───────────────────────────────────────────────────────────
 
+// ── chrome.debugger screenshot (focus-independent) ──────────────────────
+// Uses the DevTools Protocol to capture a JPEG regardless of which app has
+// OS focus.  Attaches, captures, detaches.  Chrome shows a brief infobar
+// during the capture but it is the only reliable headless-friendly method.
+async function captureViaDebugger(tabId) {
+  const target = { tabId };
+  try {
+    await chrome.debugger.attach(target, '1.3');
+  } catch (attachErr) {
+    // Already attached by another caller — proceed anyway
+    if (!String(attachErr.message).includes('already')) throw attachErr;
+  }
+  try {
+    const { data } = await chrome.debugger.sendCommand(
+      target, 'Page.captureScreenshot', { format: 'jpeg', quality: 75 }
+    );
+    return data; // base64 JPEG
+  } finally {
+    chrome.debugger.detach(target).catch(() => {});
+  }
+}
+
+// Compress a raw PNG base64 string to a smaller JPEG using OffscreenCanvas.
+// Runs entirely inside the service worker — no server-side sips needed.
+async function compressToJpeg(base64png, maxWidth = 1280, quality = 0.75) {
+  try {
+    const blob = await fetch('data:image/png;base64,' + base64png).then(r => r.blob());
+    const bitmap = await createImageBitmap(blob);
+    const w = Math.min(bitmap.width, maxWidth);
+    const h = Math.round(bitmap.height * (w / bitmap.width));
+    const canvas = new OffscreenCanvas(w, h);
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+    bitmap.close();
+    const outBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality });
+    const buf = await outBlob.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  } catch (_) {
+    return base64png; // fallback: return original if compression fails
+  }
+}
+
 async function cmdSnapshot({} = {}, tab) {
   if (!tab) return { ok: false, error: 'No active tab' };
-  await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
-  // Small delay so the focused window is on screen
-  await new Promise(r => setTimeout(r, 150));
-  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
-  const base64 = dataUrl.replace(/^data:image\/png;base64,/, '');
-  return { ok: true, base64, mime: 'image/png', type: 'viewport' };
+
+  // Helper: captureVisibleTab with hard timeout — hangs when OS focus is elsewhere
+  function captureWithTimeout(windowId, timeoutMs) {
+    return Promise.race([
+      chrome.tabs.captureVisibleTab(windowId, { format: 'png' }),
+      new Promise((_, rej) =>
+        setTimeout(() => rej(new Error('captureVisibleTab timed out')), timeoutMs)
+      )
+    ]);
+  }
+
+  // Attempt 1: captureVisibleTab without touching focus (fast path, Chrome 116+)
+  try {
+    const dataUrl = await captureWithTimeout(tab.windowId, 4000);
+    const png = dataUrl.replace(/^data:image\/png;base64,/, '');
+    const base64 = await compressToJpeg(png);
+    return { ok: true, base64, mime: 'image/jpeg', type: 'viewport' };
+  } catch (_) {}
+
+  // Attempt 2: bring Chrome window to front then captureVisibleTab
+  try {
+    await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+    await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+    await new Promise(r => setTimeout(r, 500));
+    const dataUrl = await captureWithTimeout(tab.windowId, 5000);
+    const png = dataUrl.replace(/^data:image\/png;base64,/, '');
+    const base64 = await compressToJpeg(png);
+    return { ok: true, base64, mime: 'image/jpeg', type: 'viewport' };
+  } catch (_) {}
+
+  // Attempt 3: chrome.debugger DevTools Protocol — works regardless of OS focus
+  // Already returns JPEG at quality 75 from the DevTools protocol.
+  try {
+    const base64 = await captureViaDebugger(tab.id);
+    return { ok: true, base64, mime: 'image/jpeg', type: 'viewport' };
+  } catch (err) {
+    return { ok: false, error: 'Snapshot failed: ' + err.message };
+  }
 }
 
 async function cmdSnapshotFull({} = {}, tab) {
@@ -375,9 +456,16 @@ async function cmdSnapshotFull({} = {}, tab) {
     await msgTab(tab, { action: 'scroll-to', y: scrollY });
     await new Promise(r => setTimeout(r, 200));
 
-    // Capture viewport
-    await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+    // Capture viewport — use debugger API so focus doesn't matter
+    let dataUrl;
+    try {
+      const b64 = await captureViaDebugger(tab.id);
+      dataUrl = 'data:image/jpeg;base64,' + b64;
+    } catch (_) {
+      // fall back to captureVisibleTab
+      await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+      dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+    }
     strips.push({ dataUrl, scrollY, height: Math.min(step, scrollHeight - scrollY) });
     scrollY += step;
   }
@@ -411,6 +499,8 @@ function broadcastStatus() {
 
 function pushEvent(eventType, data) {
   send({ type: 'event', event: eventType, data });
+  // Also broadcast to the sidebar so it can update its activity feed
+  chrome.runtime.sendMessage({ type: 'fauna:event', event: eventType, data }).catch(() => {});
 }
 
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
@@ -428,6 +518,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 // ── Context menu ──────────────────────────────────────────────────────────
+
+// Open the side panel when the toolbar icon is clicked
+chrome.action.onClicked.addListener((tab) => {
+  chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
+});
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({

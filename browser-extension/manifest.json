@@ -14,7 +14,9 @@
     "scripting",
     "storage",
     "contextMenus",
-    "alarms"
+    "alarms",
+    "sidePanel",
+    "debugger"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -22,6 +24,9 @@
   "background": {
     "service_worker": "background.js",
     "type": "module"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
   },
   "content_scripts": [
     {
@@ -32,13 +37,12 @@
     }
   ],
   "action": {
-    "default_popup": "popup.html",
     "default_icon": {
       "16":  "icons/icon16.png",
       "48":  "icons/icon48.png",
       "128": "icons/icon128.png"
     },
-    "default_title": "Fauna Browser Bridge"
+    "default_title": "Open Fauna Sidebar"
   },
   "web_accessible_resources": [
     {

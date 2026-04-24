@@ -512,50 +512,58 @@ When building a web app for the user, follow this workflow:
 
 ## Browser Extension (Chrome / Edge)
 
-When the Fauna Browser Bridge extension is installed and connected, you can also control the user's **real browser** (including any page they're viewing) using \`\`\`browser-ext-action code blocks.
+The user may have the **Fauna Browser Bridge** extension installed in Chrome or Edge. Its primary purpose is to bring context from those external browsers **into Fauna** — so you can see and reason about pages the user has open outside the Fauna app. The extension also supports optional two-way actions when the user explicitly asks you to interact with their external browser.
 
-The extension exposes every tab in the user's browser — not just the built-in panel. Use it to fill forms, scrape pages behind authentication, take full-page screenshots, and interact with sites that require a real logged-in browser session.
+### How context arrives from the extension
 
-### Available browser-ext-action actions:
+The user (or the extension's sidebar) can push any of these into the conversation:
+- **Send page** — the full text, links, and headings of the active Chrome/Edge tab
+- **Snapshot** — a screenshot of whatever the user is looking at
+- **Extract forms** — a map of every form field on the page (label, type, selector, current value)
+- **Selection** — text the user highlighted and sent via the right-click context menu
+- **Tab events** — automatic notifications when the user navigates or switches tabs (if the extension is connected)
 
-**Navigation & tabs**
-- \`{"action":"navigate","url":"..."}\` — navigate the active tab to a URL
-- \`{"action":"tab:list"}\` — list all open tabs (returns id, url, title, active flag)
-- \`{"action":"tab:new","url":"..."}\` — open a new tab (optionally with URL)
-- \`{"action":"tab:switch","tabId":123}\` or \`{"action":"tab:switch","index":0}\` — switch to tab
-- \`{"action":"tab:close","tabId":123}\` — close a tab
-- \`{"action":"tab:info"}\` — get active tab url + title
+When the user shares page context this way, treat it as the current state of their **external browser** (not the built-in Fauna panel). Reference the page content, answer questions about it, suggest edits, fill in values, summarise, etc.
 
-**Extraction**
-- \`{"action":"extract"}\` — get page text, links, headings, images (up to 12 000 chars)
-- \`{"action":"extract","maxChars":5000}\` — same with custom limit
-- \`{"action":"extract-forms"}\` — map every form field on the page (label, selector, type, current value, options)
+### Requesting context from the extension (use sparingly, only when asked)
 
-**Interaction**
-- \`{"action":"fill","fields":[{"selector":"#email","value":"..."},{"selector":"#pass","value":"..."}]}\` — fill form fields (handles React/Vue controlled inputs)
+If the user asks you to look at or interact with their Chrome/Edge browser, you can use \`\`\`browser-ext-action blocks. Do **not** use these unprompted — the user's external browser is theirs; only act on it when explicitly asked.
+
+**Read context from the active tab**
+- \`{"action":"extract"}\` — page text, links, headings (up to 12 000 chars)
+- \`{"action":"extract","maxChars":5000}\` — with custom limit
+- \`{"action":"extract-forms"}\` — all form fields with labels, types, selectors, current values
+- \`{"action":"snapshot"}\` — viewport screenshot (PNG, base64)
+- \`{"action":"snapshot-full"}\` — full-page screenshot (scroll-stitched)
+- \`{"action":"tab:info"}\` — current tab URL + title
+- \`{"action":"tab:list"}\` — all open tabs
+
+**Interact (only when the user explicitly asks)**
+- \`{"action":"navigate","url":"..."}\` — navigate the active tab
+- \`{"action":"tab:new","url":"..."}\` — open a new tab
+- \`{"action":"tab:switch","tabId":123}\` or \`{"action":"tab:switch","index":0}\`
+- \`{"action":"tab:close","tabId":123}\`
+- \`{"action":"fill","fields":[{"selector":"#email","value":"..."}]}\` — fill form inputs
 - \`{"action":"fill","selector":"#name","value":"Alice"}\` — single-field shorthand
-- \`{"action":"click","selector":"button.submit"}\` — click by CSS selector
-- \`{"action":"click","text":"Sign in"}\` — click by visible text
-- \`{"action":"select","selector":"#country","value":"US"}\` — pick a \`<select>\` option
-- \`{"action":"hover","selector":".dropdown-trigger"}\` — hover to reveal menus
-- \`{"action":"keyboard","key":"Enter","selector":"#search"}\` — fire keyboard event
-- \`{"action":"scroll","direction":"down"}\` — scroll page (down/up/left/right/top/bottom)
-- \`{"action":"scroll","direction":"down","px":500}\` — scroll by exact pixels
-- \`{"action":"wait","ms":1500}\` — wait N milliseconds (max 15 000)
+- \`{"action":"click","selector":"button.submit"}\` or \`{"action":"click","text":"Sign in"}\`
+- \`{"action":"select","selector":"#country","value":"US"}\`
+- \`{"action":"hover","selector":".menu"}\`
+- \`{"action":"keyboard","key":"Enter","selector":"#search"}\`
+- \`{"action":"scroll","direction":"down"}\` or with \`"px":500\`
+- \`{"action":"wait","ms":1500}\` — max 15 000 ms
+- \`{"action":"eval","js":"return document.title"}\` — run JS and return result
 
-**Screenshots**
-- \`{"action":"snapshot"}\` — capture the visible viewport as PNG (base64 returned)
-- \`{"action":"snapshot-full"}\` — stitch a full-page screenshot by scrolling and compositing
-
-**Eval**
-- \`{"action":"eval","js":"return document.querySelector('h1').textContent"}\` — run JS and return result
-
-### Browser-ext-action rules:
-- Always \`extract\` or \`extract-forms\` first before attempting to fill or click — you need to know the current page state and valid selectors.
-- For fill actions, prefer IDs (\`#email\`) or \`name\` attributes (\`input[name=email]\`) — they're stable.
-- The extension operates on whichever tab is currently active in the user's browser unless you specify \`"tabId"\`.
-- If the extension is not connected, the action will return an error telling the user to install it.
-- Use \`snapshot\` after filling a form or clicking to visually confirm the state.
+### Rules
+- **Prioritise context the user already pushed** (sent page, snapshot, selection) before requesting more via extract.
+- When the user says "look at my Chrome tab / Edge / browser" — use \`extract\` or \`snapshot\` to pull context in first, then reason about it.
+- Always \`extract\` or \`extract-forms\` before attempting \`fill\` or \`click\` — you need current selectors.
+- Prefer stable selectors: IDs (\`#email\`) or name attributes (\`input[name=email]\`).
+- If the extension is not connected, tell the user to open Chrome/Edge, click the Fauna Bridge icon in the toolbar to open the sidebar, and make sure Fauna is running.
+- Use \`snapshot\` after interactions to visually confirm the result. Snapshots are automatically compressed server-side — **never refuse to take one** or claim it will be too large.
+- **Clicks DO execute.** If a \`click\` action returns no error, the click fired. Do NOT assume it failed because the URL looks the same — many apps use client-side routing (SPA navigation, modals, dynamic loading). After a click, always \`wait\` at least 800 ms then \`extract\` or \`snapshot\` to see the actual result.
+- **Never fall back to \`navigate\` just because a click seems to have not moved the URL.** Use \`snapshot\` to visually verify first. Only use \`navigate\` when you intentionally want to load a URL from scratch.
+- If a click targets a link that triggers a full page load, the URL change will be visible after the settle wait. Trust it.
+- For SPA pages (React, Angular, Vue, Next.js) clicks update the view without a URL change — use \`snapshot\` or \`eval\` (e.g. \`return document.querySelector('h1').textContent\`) to verify what changed.
 `;
 
 const FIGMA_LAYOUT_CONTEXT = `
@@ -4867,6 +4875,8 @@ app.post('/api/ext/command', async (req, res) => {
 
 // POST /api/ext/snapshot — convenience: take a viewport screenshot via the extension
 // Body: { tabId?, full?: true }
+// Compression is done inside the extension via OffscreenCanvas before the
+// base64 travels over the WebSocket, so no server-side processing is needed.
 app.post('/api/ext/snapshot', async (req, res) => {
   const { tabId = null, full = false } = req.body || {};
   try {
@@ -4874,8 +4884,33 @@ app.post('/api/ext/snapshot', async (req, res) => {
     const result = await extCommand(action, {}, tabId, 45000);
     res.json(result);
   } catch (e) {
-    res.status(503).json({ ok: false, error: e.message });
+    const isTimeout = e.message && e.message.includes('timed out');
+    res.status(503).json({
+      ok: false,
+      error: isTimeout
+        ? 'Snapshot timed out — Chrome window may not have OS focus. Ask the user to click into Chrome, then retry the snapshot.'
+        : e.message
+    });
   }
+});
+
+// GET /api/ext/events — SSE stream forwarding push events from the browser extension to the UI
+// The frontend opens an EventSource here; whenever the extension emits user:send-page,
+// user:snapshot or user:selection the event is forwarded and the UI turns it into an attachment chip.
+app.get('/api/ext/events', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type':      'text/event-stream',
+    'Cache-Control':     'no-cache',
+    'Connection':        'keep-alive',
+    'X-Accel-Buffering': 'no',
+    'Access-Control-Allow-Origin': 'http://localhost:3737'
+  });
+  res.write(':ok\n\n');
+  function handler(msg) {
+    try { res.write(`data: ${JSON.stringify(msg)}\n\n`); } catch (_) {}
+  }
+  process.on('ext:event', handler);
+  req.on('close', () => process.off('ext:event', handler));
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────
