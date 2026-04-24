@@ -1186,6 +1186,23 @@ async function _runExtActionSequence(widgets, convId) {
         }
       }
 
+      if (w.action.action === 'scroll' || w.action.action === 'hover' || w.action.action === 'select' || w.action.action === 'keyboard') {
+        var hasFollowScroll = widgets.slice(i + 1).some(function(fw) {
+          return fw.action.action === 'extract' || fw.action.action === 'snapshot';
+        });
+        if (!hasFollowScroll) {
+          try {
+            await new Promise(function(r) { setTimeout(r, 500); });
+            var scrRes = await executeExtAction({ action: 'extract' });
+            var scrFeed = 'After ' + w.action.action + ' (ext) — page state:\n\n' +
+              '**Title:** ' + (scrRes.title||'') + '\n**URL:** ' + (scrRes.url||'') +
+              '\n\n' + (scrRes.text||'').slice(0, 12000) +
+              '\n\nContinue your task — emit the next browser-ext-action blocks now.';
+            await browserFeedAI(scrFeed, convId);
+          } catch(_) {}
+        }
+      }
+
       if (w.action.action === 'eval') {
         var evalFeed = 'Eval result from real browser tab:\n```\n' + (result.result||'(empty)').slice(0, 8000) + '\n```' +
           '\n\nUse this information and continue your task immediately.';
@@ -1221,6 +1238,28 @@ async function _runExtActionSequence(widgets, convId) {
             '\n\nContinue your task — emit the next browser-ext-action blocks now.';
           await browserFeedAI(swFeed, convId);
         } catch(_) {}
+      }
+
+      if (w.action.action === 'tab:close') {
+        var closeFeed = 'Tab closed (ext). ' + (result.error ? 'Error: ' + result.error : 'OK.') +
+          '\n\nContinue your task — emit the next browser-ext-action blocks now.';
+        await browserFeedAI(closeFeed, convId);
+      }
+
+      if (w.action.action === 'wait') {
+        var hasFollowWait = widgets.slice(i + 1).some(function(fw) {
+          return fw.action.action === 'extract' || fw.action.action === 'snapshot';
+        });
+        if (!hasFollowWait) {
+          try {
+            var waitRes = await executeExtAction({ action: 'extract' });
+            var waitFeed = 'After wait (ext) — page state:\n\n' +
+              '**Title:** ' + (waitRes.title||'') + '\n**URL:** ' + (waitRes.url||'') +
+              '\n\n' + (waitRes.text||'').slice(0, 12000) +
+              '\n\nContinue your task — emit the next browser-ext-action blocks now.';
+            await browserFeedAI(waitFeed, convId);
+          } catch(_) {}
+        }
       }
 
     } catch(e) {

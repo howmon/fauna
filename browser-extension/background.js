@@ -347,26 +347,90 @@ async function cmdWait({ ms = 1000 } = {}) {
 // Uses the DevTools Protocol to capture a JPEG regardless of which app has
 // OS focus.  Attaches, captures, detaches.  Chrome shows a brief infobar
 // during the capture but it is the only reliable headless-friendly method.
-async function captureViaDebugger(tabId) {
+async function captureViaDebugger(tabId, timeoutMs = 5000) {
   const target = { tabId };
+  let attached = false;
   try {
-    await chrome.debugger.attach(target, '1.3');
+    await Promise.race([
+      chrome.debugger.attach(target, '1.3').then(() => { attached = true; }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('debugger attach timed out')), timeoutMs))
+    ]);
   } catch (attachErr) {
     // Already attached by another caller — proceed anyway
     if (!String(attachErr.message).includes('already')) throw attachErr;
+    attached = true;
   }
   try {
-    const { data } = await chrome.debugger.sendCommand(
-      target, 'Page.captureScreenshot', { format: 'jpeg', quality: 75 }
-    );
-    return data; // base64 JPEG
+    const result = await Promise.race([
+      chrome.debugger.sendCommand(target, 'Page.captureScreenshot', { format: 'jpeg', quality: 75 }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('debugger captureScreenshot timed out')), timeoutMs))
+    ]);
+    return result.data; // base64 JPEG
   } finally {
-    chrome.debugger.detach(target).catch(() => {});
+    if (attached) chrome.debugger.detach(target).catch(() => {});
   }
 }
 
+async function cmdSnapshot({} = {}, tab) {
+  if (!tab) return { ok: false, error: 'No active tab' };
+  const errors = [];
+
+  // Helper: captureVisibleTab with hard timeout — hangs when OS focus is elsewhere
+  function captureWithTimeout(windowId, timeoutMs) {
+    return Promise.race([
+      chrome.tabs.captureVisibleTab(windowId, { format: 'png' }),
+      new Promise((_, rej) =>
+        setTimeout(() => rej(new Error('captureVisibleTab timed out')), timeoutMs)
+      )
+    ]);
+  }
+
+  console.log('[Fauna] cmdSnapshot starting for tab', tab.id, tab.url);
+
+  // Attempt 1: chrome.debugger DevTools Protocol — most reliable, works without OS focus
+  try {
+    const base64 = await captureViaDebugger(tab.id, 5000);
+    if (base64) {
+      console.log('[Fauna] cmdSnapshot succeeded via debugger');
+      return { ok: true, base64, mime: 'image/jpeg', type: 'viewport', method: 'debugger' };
+    }
+  } catch (e) {
+    console.log('[Fauna] debugger attempt failed:', e.message);
+    errors.push('debugger: ' + e.message);
+  }
+
+  // Attempt 2: captureVisibleTab without touching focus
+  try {
+    const dataUrl = await captureWithTimeout(tab.windowId, 3000);
+    const png = dataUrl.replace(/^data:image\/png;base64,/, '');
+    const base64 = await compressToJpeg(png);
+    console.log('[Fauna] cmdSnapshot succeeded via captureVisibleTab');
+    return { ok: true, base64, mime: 'image/jpeg', type: 'viewport', method: 'captureVisibleTab' };
+  } catch (e) {
+    console.log('[Fauna] captureVisibleTab attempt failed:', e.message);
+    errors.push('capture: ' + e.message);
+  }
+
+  // Attempt 3: bring window to front then captureVisibleTab
+  try {
+    await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+    await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+    await new Promise(r => setTimeout(r, 400));
+    const dataUrl = await captureWithTimeout(tab.windowId, 4000);
+    const png = dataUrl.replace(/^data:image\/png;base64,/, '');
+    const base64 = await compressToJpeg(png);
+    console.log('[Fauna] cmdSnapshot succeeded via focused captureVisibleTab');
+    return { ok: true, base64, mime: 'image/jpeg', type: 'viewport', method: 'captureVisibleTab-focused' };
+  } catch (e) {
+    console.log('[Fauna] focused captureVisibleTab attempt failed:', e.message);
+    errors.push('focused: ' + e.message);
+  }
+
+  return { ok: false, error: 'All snapshot methods failed: ' + errors.join('; ') };
+}
+
 // Compress a raw PNG base64 string to a smaller JPEG using OffscreenCanvas.
-// Runs entirely inside the service worker — no server-side sips needed.
+// Runs entirely inside the service worker — no server-side deps needed.
 async function compressToJpeg(base64png, maxWidth = 1280, quality = 0.75) {
   try {
     const blob = await fetch('data:image/png;base64,' + base64png).then(r => r.blob());
@@ -384,48 +448,6 @@ async function compressToJpeg(base64png, maxWidth = 1280, quality = 0.75) {
     return btoa(binary);
   } catch (_) {
     return base64png; // fallback: return original if compression fails
-  }
-}
-
-async function cmdSnapshot({} = {}, tab) {
-  if (!tab) return { ok: false, error: 'No active tab' };
-
-  // Helper: captureVisibleTab with hard timeout — hangs when OS focus is elsewhere
-  function captureWithTimeout(windowId, timeoutMs) {
-    return Promise.race([
-      chrome.tabs.captureVisibleTab(windowId, { format: 'png' }),
-      new Promise((_, rej) =>
-        setTimeout(() => rej(new Error('captureVisibleTab timed out')), timeoutMs)
-      )
-    ]);
-  }
-
-  // Attempt 1: captureVisibleTab without touching focus (fast path, Chrome 116+)
-  try {
-    const dataUrl = await captureWithTimeout(tab.windowId, 4000);
-    const png = dataUrl.replace(/^data:image\/png;base64,/, '');
-    const base64 = await compressToJpeg(png);
-    return { ok: true, base64, mime: 'image/jpeg', type: 'viewport' };
-  } catch (_) {}
-
-  // Attempt 2: bring Chrome window to front then captureVisibleTab
-  try {
-    await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
-    await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
-    await new Promise(r => setTimeout(r, 500));
-    const dataUrl = await captureWithTimeout(tab.windowId, 5000);
-    const png = dataUrl.replace(/^data:image\/png;base64,/, '');
-    const base64 = await compressToJpeg(png);
-    return { ok: true, base64, mime: 'image/jpeg', type: 'viewport' };
-  } catch (_) {}
-
-  // Attempt 3: chrome.debugger DevTools Protocol — works regardless of OS focus
-  // Already returns JPEG at quality 75 from the DevTools protocol.
-  try {
-    const base64 = await captureViaDebugger(tab.id);
-    return { ok: true, base64, mime: 'image/jpeg', type: 'viewport' };
-  } catch (err) {
-    return { ok: false, error: 'Snapshot failed: ' + err.message };
   }
 }
 

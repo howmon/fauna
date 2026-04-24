@@ -5180,26 +5180,27 @@ app.post('/api/ext/snapshot', async (req, res) => {
   if (info) {
     try {
       const action = full ? 'snapshot-full' : 'snapshot';
-      const result = await extCommand(action, {}, tabId, 45000, browser);
-      return res.json(result);
+      const result = await extCommand(action, {}, tabId, 15000, browser);
+      // Extension may return ok:false if all capture methods failed
+      if (result.ok) return res.json(result);
+      // Extension is connected but capture failed — do NOT launch a new browser.
+      // Return the error so the user can fix the issue (e.g. grant debugger permission).
+      console.log('[Ext] Snapshot failed via extension:', result.error || 'unknown');
+      return res.status(503).json({ ok: false, error: result.error || 'Extension snapshot failed', source: 'extension' });
     } catch (e) {
-      const isTimeout = e.message && e.message.includes('timed out');
-      return res.status(503).json({
-        ok: false,
-        error: isTimeout
-          ? 'Snapshot timed out — browser window may not have OS focus. Click into the browser, then retry.'
-          : e.message
-      });
+      // Timeout or disconnect — extension is connected but not responding
+      console.log('[Ext] Snapshot command error:', e.message);
+      return res.status(503).json({ ok: false, error: 'Extension snapshot timed out: ' + e.message, source: 'extension' });
     }
   }
 
-  // Fallback: use built-in Playwright browser
+  // No extension connected — fallback to built-in Playwright browser
   try {
     const page = await getBrowsePage();
     const buf = await page.screenshot({ type: 'jpeg', quality: 70, fullPage: !!full });
     res.json({ ok: true, screenshot: buf.toString('base64'), mime: 'image/jpeg', url: page.url(), source: 'built-in' });
   } catch (e) {
-    res.status(503).json({ ok: false, error: 'Browser extension not connected and built-in browser unavailable: ' + e.message });
+    res.status(503).json({ ok: false, error: 'No extension connected and built-in browser unavailable.' });
   }
 });
 
