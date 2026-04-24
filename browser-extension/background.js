@@ -120,7 +120,7 @@ async function handleServerMessage(msg) {
     } catch (err) {
       result = { ok: false, error: err.message || String(err) };
     }
-    send({ type: 'result', id, ...result });
+    send({ ...result, type: 'result', id });
     return;
   }
 
@@ -347,7 +347,7 @@ async function cmdWait({ ms = 1000 } = {}) {
 // Uses the DevTools Protocol to capture a JPEG regardless of which app has
 // OS focus.  Attaches, captures, detaches.  Chrome shows a brief infobar
 // during the capture but it is the only reliable headless-friendly method.
-async function captureViaDebugger(tabId, timeoutMs = 5000) {
+async function captureViaDebugger(tabId, timeoutMs = 3000) {
   const target = { tabId };
   let attached = false;
   try {
@@ -388,8 +388,9 @@ async function cmdSnapshot({} = {}, tab) {
   console.log('[Fauna] cmdSnapshot starting for tab', tab.id, tab.url);
 
   // Attempt 1: chrome.debugger DevTools Protocol — most reliable, works without OS focus
+  // 3s attach + 3s capture = 6s max
   try {
-    const base64 = await captureViaDebugger(tab.id, 5000);
+    const base64 = await captureViaDebugger(tab.id, 3000);
     if (base64) {
       console.log('[Fauna] cmdSnapshot succeeded via debugger');
       return { ok: true, base64, mime: 'image/jpeg', type: 'viewport', method: 'debugger' };
@@ -399,9 +400,9 @@ async function cmdSnapshot({} = {}, tab) {
     errors.push('debugger: ' + e.message);
   }
 
-  // Attempt 2: captureVisibleTab without touching focus
+  // Attempt 2: captureVisibleTab without touching focus (2s)
   try {
-    const dataUrl = await captureWithTimeout(tab.windowId, 3000);
+    const dataUrl = await captureWithTimeout(tab.windowId, 2000);
     const png = dataUrl.replace(/^data:image\/png;base64,/, '');
     const base64 = await compressToJpeg(png);
     console.log('[Fauna] cmdSnapshot succeeded via captureVisibleTab');
@@ -411,12 +412,12 @@ async function cmdSnapshot({} = {}, tab) {
     errors.push('capture: ' + e.message);
   }
 
-  // Attempt 3: bring window to front then captureVisibleTab
+  // Attempt 3: bring window to front then captureVisibleTab (0.3s + 2s = 2.3s)
   try {
     await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
     await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
-    await new Promise(r => setTimeout(r, 400));
-    const dataUrl = await captureWithTimeout(tab.windowId, 4000);
+    await new Promise(r => setTimeout(r, 300));
+    const dataUrl = await captureWithTimeout(tab.windowId, 2000);
     const png = dataUrl.replace(/^data:image\/png;base64,/, '');
     const base64 = await compressToJpeg(png);
     console.log('[Fauna] cmdSnapshot succeeded via focused captureVisibleTab');
@@ -426,6 +427,7 @@ async function cmdSnapshot({} = {}, tab) {
     errors.push('focused: ' + e.message);
   }
 
+  console.log('[Fauna] cmdSnapshot ALL attempts failed:', errors.join('; '));
   return { ok: false, error: 'All snapshot methods failed: ' + errors.join('; ') };
 }
 
