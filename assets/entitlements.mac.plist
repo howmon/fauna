@@ -21,5 +21,9 @@
     <!-- Send Apple Events to other apps (Finder, app switching, AppleScript automation) -->
     <key>com.apple.security.automation.apple-events</key>
     <true/>
+
+    <!-- Microphone access — required for VAD / wake word / dictation -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
   </dict>
 </plist>

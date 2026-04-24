@@ -297,6 +297,22 @@ function getSandboxedEnv(permissions) {
       '/usr/local/bin', '/usr/local/sbin',
       '/usr/bin', '/usr/sbin', '/bin', '/sbin',
     ].join(':');
+
+    // Pass through npm/node/python tooling env vars so npx, pip, etc. work
+    const toolingPassthrough = [
+      'npm_config_cache', 'npm_config_prefix', 'npm_config_userconfig',
+      'npm_config_globalconfig', 'NPM_CONFIG_CACHE',
+      'NVM_DIR', 'NVM_BIN', 'NVM_INC',
+      'PYENV_ROOT', 'PYENV_VERSION',
+      'VOLTA_HOME',
+      'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME',
+      'TMPDIR', 'TEMP', 'TMP',
+    ];
+    for (const key of toolingPassthrough) {
+      if (process.env[key]) safeEnv[key] = process.env[key];
+    }
+    // Use real USER so npm temp dirs resolve correctly
+    safeEnv.USER = os.userInfo().username;
   }
 
   return safeEnv;

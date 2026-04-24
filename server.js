@@ -5,7 +5,7 @@
 
 import express    from 'express';
 import OpenAI     from 'openai';
-import { execSync, exec as _exec, execFile as _execFile } from 'child_process';
+import { execSync, exec as _exec, execFile as _execFile, spawn as _spawn } from 'child_process';
 import crypto     from 'crypto';
 import path       from 'path';
 import os         from 'os';
@@ -50,6 +50,8 @@ const PATH_SEP = IS_WIN ? ';' : ':';
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ limit: '25mb', extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
+// Serve @xenova/transformers dist for the Whisper Web Worker
+app.use('/transformers', express.static(path.join(__dirname, 'node_modules', '@xenova', 'transformers', 'dist')));
 
 // ── Token resolution ──────────────────────────────────────────────────────
 // Electron runs with a stripped PATH so `gh` may not be found.
@@ -507,6 +509,61 @@ When building a web app for the user, follow this workflow:
 - **If your output was cut off**, you will be automatically asked to continue. Just pick up exactly where you left off.
 - The browser keeps login sessions across pages (cookies persist). No need to re-authenticate.
 - Each conversation has its own browser tabs — they don't interfere with other conversations.
+
+## Browser Extension (Chrome / Edge)
+
+The user may have the **Fauna Browser Bridge** extension installed in Chrome or Edge. Its primary purpose is to bring context from those external browsers **into Fauna** — so you can see and reason about pages the user has open outside the Fauna app. The extension also supports optional two-way actions when the user explicitly asks you to interact with their external browser.
+
+### How context arrives from the extension
+
+The user (or the extension's sidebar) can push any of these into the conversation:
+- **Send page** — the full text, links, and headings of the active Chrome/Edge tab
+- **Snapshot** — a screenshot of whatever the user is looking at
+- **Extract forms** — a map of every form field on the page (label, type, selector, current value)
+- **Selection** — text the user highlighted and sent via the right-click context menu
+- **Tab events** — automatic notifications when the user navigates or switches tabs (if the extension is connected)
+
+When the user shares page context this way, treat it as the current state of their **external browser** (not the built-in Fauna panel). Reference the page content, answer questions about it, suggest edits, fill in values, summarise, etc.
+
+### Requesting context from the extension (use sparingly, only when asked)
+
+If the user asks you to look at or interact with their Chrome/Edge browser, you can use \`\`\`browser-ext-action blocks. Do **not** use these unprompted — the user's external browser is theirs; only act on it when explicitly asked.
+
+**Read context from the active tab**
+- \`{"action":"extract"}\` — page text, links, headings (up to 12 000 chars)
+- \`{"action":"extract","maxChars":5000}\` — with custom limit
+- \`{"action":"extract-forms"}\` — all form fields with labels, types, selectors, current values
+- \`{"action":"snapshot"}\` — viewport screenshot (PNG, base64)
+- \`{"action":"snapshot-full"}\` — full-page screenshot (scroll-stitched)
+- \`{"action":"tab:info"}\` — current tab URL + title
+- \`{"action":"tab:list"}\` — all open tabs
+
+**Interact (only when the user explicitly asks)**
+- \`{"action":"navigate","url":"..."}\` — navigate the active tab
+- \`{"action":"tab:new","url":"..."}\` — open a new tab
+- \`{"action":"tab:switch","tabId":123}\` or \`{"action":"tab:switch","index":0}\`
+- \`{"action":"tab:close","tabId":123}\`
+- \`{"action":"fill","fields":[{"selector":"#email","value":"..."}]}\` — fill form inputs
+- \`{"action":"fill","selector":"#name","value":"Alice"}\` — single-field shorthand
+- \`{"action":"click","selector":"button.submit"}\` or \`{"action":"click","text":"Sign in"}\`
+- \`{"action":"select","selector":"#country","value":"US"}\`
+- \`{"action":"hover","selector":".menu"}\`
+- \`{"action":"keyboard","key":"Enter","selector":"#search"}\`
+- \`{"action":"scroll","direction":"down"}\` or with \`"px":500\`
+- \`{"action":"wait","ms":1500}\` — max 15 000 ms
+- \`{"action":"eval","js":"return document.title"}\` — run JS and return result
+
+### Rules
+- **Prioritise context the user already pushed** (sent page, snapshot, selection) before requesting more via extract.
+- When the user says "look at my Chrome tab / Edge / browser" — use \`extract\` or \`snapshot\` to pull context in first, then reason about it.
+- Always \`extract\` or \`extract-forms\` before attempting \`fill\` or \`click\` — you need current selectors.
+- Prefer stable selectors: IDs (\`#email\`) or name attributes (\`input[name=email]\`).
+- If the extension is not connected, tell the user to open Chrome/Edge, click the Fauna Bridge icon in the toolbar to open the sidebar, and make sure Fauna is running.
+- Use \`snapshot\` after interactions to visually confirm the result. Snapshots are automatically compressed server-side — **never refuse to take one** or claim it will be too large.
+- **Clicks DO execute.** If a \`click\` action returns no error, the click fired. Do NOT assume it failed because the URL looks the same — many apps use client-side routing (SPA navigation, modals, dynamic loading). After a click, always \`wait\` at least 800 ms then \`extract\` or \`snapshot\` to see the actual result.
+- **Never fall back to \`navigate\` just because a click seems to have not moved the URL.** Use \`snapshot\` to visually verify first. Only use \`navigate\` when you intentionally want to load a URL from scratch.
+- If a click targets a link that triggers a full page load, the URL change will be visible after the settle wait. Trust it.
+- For SPA pages (React, Angular, Vue, Next.js) clicks update the view without a URL change — use \`snapshot\` or \`eval\` (e.g. \`return document.querySelector('h1').textContent\`) to verify what changed.
 `;
 
 const FIGMA_LAYOUT_CONTEXT = `
@@ -1015,7 +1072,10 @@ app.post('/api/chat', async (req, res) => {
             // Route to agent tool handler if available, otherwise Figma MCP
             if (agentToolHandlers?.has(toolName)) {
               console.log(`[chat] Agent tool: ${toolName}`);
-              result = await agentToolHandlers.get(toolName)(args);
+              const onOutput = toolName === 'agent_shell_exec'
+                ? (chunk) => send({ type: 'tool_output', name: toolName, output: chunk })
+                : undefined;
+              result = await agentToolHandlers.get(toolName)(args, onOutput);
             } else {
               figmaLog('🔧 ' + toolName + (toolName === 'figma_execute' ? ': ' + (args.code || '').slice(0, 80).replace(/\n/g,' ') + '…' : ''), 'cmd');
               result = await figmaMCP.callTool(toolName, args);
@@ -1400,6 +1460,156 @@ function validateExternalUrl(raw) {
   return parsed.href;
 }
 
+// ── Whisper transcription (nodejs-whisper / whisper.cpp) ─────────────────
+
+const WHISPER_MODEL_NAME = 'ggml-small.en.bin';
+const WHISPER_MODEL_URL  = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin';
+const WHISPER_MODEL_SIZE = 487_601_233; // ~465 MB
+
+function _whisperPaths() {
+  const whisperCpp = process.resourcesPath
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'nodejs-whisper', 'cpp', 'whisper.cpp')
+    : path.join(__dirname, 'node_modules', 'nodejs-whisper', 'cpp', 'whisper.cpp');
+  return {
+    whisperCpp,
+    whisperBin: path.join(whisperCpp, 'build', 'bin', 'whisper-cli'),
+    modelsDir:  path.join(whisperCpp, 'models'),
+    modelFile:  path.join(whisperCpp, 'models', WHISPER_MODEL_NAME),
+  };
+}
+
+let _modelDownloading = false;
+
+// Check if model is present / download status
+app.get('/api/whisper-model-status', (req, res) => {
+  const { modelFile } = _whisperPaths();
+  if (fs.existsSync(modelFile)) {
+    const stat = fs.statSync(modelFile);
+    return res.json({ ready: stat.size >= WHISPER_MODEL_SIZE, size: stat.size, expected: WHISPER_MODEL_SIZE, downloading: false });
+  }
+  res.json({ ready: false, size: 0, expected: WHISPER_MODEL_SIZE, downloading: _modelDownloading });
+});
+
+// Stream model download with progress (SSE)
+app.get('/api/whisper-model-download', async (req, res) => {
+  const { modelsDir, modelFile } = _whisperPaths();
+
+  if (fs.existsSync(modelFile) && fs.statSync(modelFile).size >= WHISPER_MODEL_SIZE) {
+    return res.json({ ready: true });
+  }
+  if (_modelDownloading) {
+    return res.status(409).json({ error: 'Download already in progress' });
+  }
+
+  _modelDownloading = true;
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+  });
+
+  try {
+    fs.mkdirSync(modelsDir, { recursive: true });
+    const tmpFile = modelFile + '.downloading';
+
+    const response = await fetch(WHISPER_MODEL_URL, { redirect: 'follow' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const contentLength = parseInt(response.headers.get('content-length') || '0', 10) || WHISPER_MODEL_SIZE;
+    const writer = fs.createWriteStream(tmpFile);
+    let downloaded = 0;
+    let lastPct = -1;
+
+    for await (const chunk of response.body) {
+      writer.write(chunk);
+      downloaded += chunk.length;
+      const pct = Math.floor((downloaded / contentLength) * 100);
+      if (pct !== lastPct) {
+        lastPct = pct;
+        res.write(`data: ${JSON.stringify({ pct, downloaded, total: contentLength })}\n\n`);
+      }
+    }
+
+    await new Promise((resolve, reject) => {
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+      writer.end();
+    });
+
+    fs.renameSync(tmpFile, modelFile);
+    res.write(`data: ${JSON.stringify({ pct: 100, ready: true })}\n\n`);
+  } catch (err) {
+    console.error('[whisper-model-download]', err.message);
+    res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+  } finally {
+    _modelDownloading = false;
+    res.end();
+  }
+});
+
+// Accepts raw audio bytes (webm/ogg/wav) as application/octet-stream.
+// Writes to a temp file, transcribes via whisper.cpp, returns { text }.
+app.post('/api/transcribe', async (req, res) => {
+  let tmpInput = null;
+  let tmpWav   = null;
+  try {
+    const { execFileSync } = _require('child_process');
+    const { whisperBin, modelFile } = _whisperPaths();
+
+    if (!fs.existsSync(modelFile)) {
+      return res.status(503).json({ error: 'model_not_ready', message: 'Whisper model not downloaded yet' });
+    }
+
+    const chunks = [];
+    await new Promise((resolve, reject) => {
+      req.on('data', c => chunks.push(c));
+      req.on('end', resolve);
+      req.on('error', reject);
+    });
+    if (!chunks.length) return res.status(400).json({ error: 'Empty audio' });
+
+    const buf   = Buffer.concat(chunks);
+    const isWav = (req.headers['content-type'] || '').includes('wav');
+    const base  = `fauna-stt-${Date.now()}`;
+    tmpInput    = path.join(os.tmpdir(), base + (isWav ? '.wav' : '.webm'));
+    tmpWav      = path.join(os.tmpdir(), base + '-16k.wav');
+    fs.writeFileSync(tmpInput, buf);
+
+    // Convert to 16kHz mono PCM WAV — whisper-cli requires this
+    if (!isWav) {
+      const ffmpegBin = ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg']
+        .find(p => { try { return fs.existsSync(p); } catch (_) { return false; } }) || 'ffmpeg';
+      execFileSync(ffmpegBin, [
+        '-y', '-i', tmpInput, '-ar', '16000', '-ac', '1', '-f', 'wav', tmpWav,
+      ], { stdio: 'pipe' });
+    } else {
+      fs.copyFileSync(tmpInput, tmpWav);
+    }
+
+    // execFileSync captures stdout (transcript); stderr (Metal init noise) goes to parent console
+    const stdout = execFileSync(whisperBin, [
+      '-m', modelFile, '-f', tmpWav, '-l', 'en',
+    ], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+
+    // Only keep timestamp lines, then strip timestamps and blank audio
+    const text = (stdout || '')
+      .split('\n')
+      .filter(l => /^\s*\[/.test(l))
+      .map(l => l.replace(/^\s*\[\d+:\d+:\d+\.\d+ --> \d+:\d+:\d+\.\d+\]\s*/, ''))
+      .join(' ')
+      .replace(/\[BLANK_AUDIO\]/gi, '')
+      .trim();
+
+    res.json({ text });
+  } catch (err) {
+    console.error('[transcribe]', err.message);
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (tmpInput && fs.existsSync(tmpInput)) try { fs.unlinkSync(tmpInput); } catch (_) {}
+    if (tmpWav   && fs.existsSync(tmpWav))   try { fs.unlinkSync(tmpWav);   } catch (_) {}
+  }
+});
+
 app.post('/api/fetch-url', async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'URL required' });
@@ -1441,6 +1651,104 @@ app.post('/api/fetch-url', async (req, res) => {
     res.json({ url, title, content, chars: content.length });
   } catch (err) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// ── Attachment text extraction ───────────────────────────────────────────
+
+const ATTACHMENT_TEXT_LIMIT = 80000;
+
+function _execFileAsync(file, args, opts) {
+  return new Promise((resolve, reject) => {
+    _execFile(file, args, opts || {}, (err, stdout, stderr) => {
+      if (err) {
+        err.stdout = stdout;
+        err.stderr = stderr;
+        reject(err);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+function normalizeAttachmentText(text) {
+  return String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\u0000/g, '')
+    .trim();
+}
+
+function buildAttachmentRef(name) {
+  return 'attachment://' + encodeURIComponent(name || ('file-' + Date.now()));
+}
+
+app.post('/api/extract-attachment', async (req, res) => {
+  const { name = '', mime = '', base64 = '' } = req.body || {};
+  if (!base64) return res.status(400).json({ error: 'Attachment payload required' });
+
+  let tmpPath = null;
+  try {
+    const buffer = Buffer.from(base64, 'base64');
+    if (!buffer.length) return res.status(400).json({ error: 'Attachment is empty' });
+
+    const ext = path.extname(name || '').toLowerCase();
+    const ref = buildAttachmentRef(name);
+    let extracted = '';
+    let warning = '';
+    let method = 'none';
+
+    const textLikeExts = new Set([
+      '.txt', '.md', '.js', '.jsx', '.ts', '.tsx', '.py', '.go', '.rs', '.java', '.c', '.cpp', '.h',
+      '.css', '.html', '.htm', '.json', '.yaml', '.yml', '.toml', '.xml', '.csv', '.log', '.sql',
+      '.graphql', '.env', '.gitignore', '.sh'
+    ]);
+    const textutilExts = new Set(['.doc', '.docx', '.rtf', '.odt', '.pages']);
+
+    if ((mime && mime.startsWith('text/')) || textLikeExts.has(ext)) {
+      extracted = normalizeAttachmentText(buffer.toString('utf8'));
+      method = 'utf8';
+    } else if (process.platform === 'darwin' && textutilExts.has(ext)) {
+      const tmpName = 'fauna-attach-' + Date.now() + '-' + Math.random().toString(36).slice(2) + (ext || '.bin');
+      tmpPath = path.join(os.tmpdir(), tmpName);
+      fs.writeFileSync(tmpPath, buffer);
+      const out = await _execFileAsync('/usr/bin/textutil', ['-convert', 'txt', '-stdout', tmpPath], { maxBuffer: 15 * 1024 * 1024 });
+      extracted = normalizeAttachmentText(out.stdout);
+      method = 'textutil';
+    } else if (process.platform === 'darwin' && ext === '.pdf') {
+      const tmpName = 'fauna-attach-' + Date.now() + '-' + Math.random().toString(36).slice(2) + '.pdf';
+      tmpPath = path.join(os.tmpdir(), tmpName);
+      fs.writeFileSync(tmpPath, buffer);
+      const out = await _execFileAsync('/usr/bin/mdls', ['-name', 'kMDItemTextContent', '-raw', tmpPath], { maxBuffer: 15 * 1024 * 1024 });
+      extracted = normalizeAttachmentText(out.stdout).replace(/^\(null\)$/i, '');
+      method = 'mdls';
+    } else {
+      warning = 'Unsupported document format for text extraction in this build.';
+    }
+
+    if (!extracted && !warning) {
+      warning = 'No readable text could be extracted from this attachment.';
+    }
+
+    const truncated = extracted.length > ATTACHMENT_TEXT_LIMIT;
+    if (truncated) extracted = extracted.slice(0, ATTACHMENT_TEXT_LIMIT);
+
+    res.json({
+      name,
+      mime,
+      size: buffer.length,
+      ref,
+      method,
+      text: extracted,
+      truncated,
+      warning
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to extract attachment text' });
+  } finally {
+    if (tmpPath && fs.existsSync(tmpPath)) {
+      try { fs.unlinkSync(tmpPath); } catch (_) {}
+    }
   }
 });
 
@@ -1897,6 +2205,124 @@ app.get('/api/figma/mcp-logs', (req, res) => {
 
 let figmaWs      = null;
 let figmaState   = { connected: false, fileInfo: null, activeSystem: null, pendingReconnect: null };
+
+// ── Browser Extension WebSocket server ───────────────────────────────────
+// The extension connects to ws://localhost:3737/ext. The server acts as the
+// WS host (unlike the Figma relay where the server is a client).
+
+let _extWss      = null;  // WebSocket.Server instance
+let _extSocket   = null;  // single connected extension socket
+let _extCmdSeq   = 0;
+const _extPending = new Map(); // cmdId → { resolve, reject, timeoutId }
+
+/** Send a message to the connected extension. Returns false if not connected. */
+function extSend(obj) {
+  if (!_extSocket || _extSocket.readyState !== 1 /* OPEN */) return false;
+  _extSocket.send(JSON.stringify(obj));
+  return true;
+}
+
+/**
+ * Send a command to the extension and wait for its result.
+ * @param {string} action  - e.g. 'extract', 'click'
+ * @param {object} params  - action params
+ * @param {number|null} tabId - optional target tab id
+ * @param {number} timeoutMs
+ */
+function extCommand(action, params = {}, tabId = null, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    if (!_extSocket || _extSocket.readyState !== 1) {
+      return reject(new Error('Browser extension not connected — install the Fauna Browser Bridge extension and make sure Fauna is running'));
+    }
+    const id = 'ec-' + (++_extCmdSeq);
+    const timeoutId = setTimeout(() => {
+      _extPending.delete(id);
+      reject(new Error('Extension command timed out: ' + action));
+    }, timeoutMs);
+    _extPending.set(id, { resolve, reject, timeoutId });
+    extSend({ type: 'cmd', id, action, params, tabId });
+  });
+}
+
+function startExtWebSocketServer(httpServer) {
+  try {
+    const WS = _require('ws');
+    _extWss = new WS.Server({ noServer: true });
+
+    // Upgrade only /ext path requests
+    httpServer.on('upgrade', (req, socket, head) => {
+      const pathname = new URL(req.url, 'http://localhost').pathname;
+      if (pathname !== '/ext') { socket.destroy(); return; }
+      _extWss.handleUpgrade(req, socket, head, (ws) => {
+        _extWss.emit('connection', ws, req);
+      });
+    });
+
+    _extWss.on('connection', (ws) => {
+      // Only one extension at a time — close any previous connection
+      if (_extSocket && _extSocket.readyState < 2) {
+        try { _extSocket.close(1000, 'Replaced by new connection'); } catch (_) {}
+      }
+      _extSocket = ws;
+      console.log('[Ext] Browser extension connected');
+
+      ws.on('message', (raw) => {
+        let msg;
+        try { msg = JSON.parse(raw.toString()); } catch (_) { return; }
+
+        if (msg.type === 'ping') {
+          try { ws.send(JSON.stringify({ type: 'pong' })); } catch (_) {}
+          return;
+        }
+
+        if (msg.type === 'ext:hello') {
+          console.log('[Ext] Extension hello — version', msg.version, 'tab:', msg.activeTab?.url || 'none');
+          return;
+        }
+
+        // Command result resolution
+        if (msg.type === 'result' && msg.id && _extPending.has(msg.id)) {
+          const { resolve, timeoutId } = _extPending.get(msg.id);
+          clearTimeout(timeoutId);
+          _extPending.delete(msg.id);
+          resolve(msg);
+          return;
+        }
+
+        // Push events from extension (navigation, selection, user actions)
+        if (msg.type === 'event') {
+          // Emit on process so frontend SSE can pick it up if needed
+          process.emit('ext:event', msg);
+          return;
+        }
+      });
+
+      ws.on('close', () => {
+        console.log('[Ext] Browser extension disconnected');
+        if (_extSocket === ws) _extSocket = null;
+        // Reject all pending commands
+        for (const [id, { reject, timeoutId }] of _extPending) {
+          clearTimeout(timeoutId);
+          _extPending.delete(id);
+          reject(new Error('Extension disconnected'));
+        }
+      });
+
+      ws.on('error', () => { /* handled in close */ });
+
+      // Heartbeat
+      const pingInterval = setInterval(() => {
+        if (!_extSocket || _extSocket.readyState !== 1) { clearInterval(pingInterval); return; }
+        try { _extSocket.send(JSON.stringify({ type: 'ping' })); } catch (_) {}
+      }, 20000);
+      ws.once('close', () => clearInterval(pingInterval));
+    });
+
+    console.log('[Ext] Extension WS endpoint ready at ws://localhost:3737/ext');
+  } catch (e) {
+    console.log('[Ext] WS module not available:', e.message);
+  }
+}
 const figmaPending = new Map(); // id → { resolve, reject, timer }
 
 function readFigmaRules() {
@@ -2316,7 +2742,7 @@ const AUGMENTED_PATH = IS_WIN
 const SHELL_BIN = IS_WIN ? 'powershell.exe' : '/bin/zsh';
 
 app.post('/api/shell-exec', (req, res) => {
-  const { command, cwd, killId } = req.body;
+  const { command, cwd, killId, stream: wantStream } = req.body;
   if (!command) return res.status(400).json({ error: 'command required' });
 
   const workDir = cwd || os.homedir();
@@ -2328,6 +2754,65 @@ app.post('/api/shell-exec', (req, res) => {
     ...(IS_WIN ? {} : { SHELL: '/bin/zsh', TERM: 'xterm-256color' }),
   };
 
+  if (wantStream) {
+    // ── Streaming mode: SSE with real-time output + interactive stdin ──
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+    const shellFlag = IS_WIN ? '-Command' : '-c';
+    const child = _spawn(SHELL_BIN, [shellFlag, command], { cwd: workDir, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    if (killId) _shellProcs.set(killId, child);
+
+    // Track last output time for idle detection
+    let lastOutputTime = Date.now();
+    let idleTimer = null;
+    let lastChunk = '';
+    const IDLE_MS = 3000; // 3s of silence = might be waiting for input
+
+    function resetIdleTimer() {
+      lastOutputTime = Date.now();
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        // Process is alive but hasn't produced output — likely waiting for input
+        if (!child.killed && child.exitCode === null) {
+          res.write(`data: ${JSON.stringify({ type: 'waiting_for_input', hint: lastChunk.trim().split('\n').pop() })}\n\n`);
+        }
+      }, IDLE_MS);
+    }
+
+    resetIdleTimer();
+
+    child.stdout.on('data', (chunk) => {
+      lastChunk = chunk.toString();
+      res.write(`data: ${JSON.stringify({ type: 'stdout', text: lastChunk })}\n\n`);
+      resetIdleTimer();
+    });
+    child.stderr.on('data', (chunk) => {
+      lastChunk = chunk.toString();
+      res.write(`data: ${JSON.stringify({ type: 'stderr', text: lastChunk })}\n\n`);
+      resetIdleTimer();
+    });
+
+    const timeout = setTimeout(() => { try { child.kill('SIGTERM'); } catch (_) {} }, 300000);
+
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      if (idleTimer) clearTimeout(idleTimer);
+      if (killId) _shellProcs.delete(killId);
+      res.write(`data: ${JSON.stringify({ type: 'exit', exitCode: code ?? 0 })}\n\n`);
+      res.end();
+    });
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      if (idleTimer) clearTimeout(idleTimer);
+      if (killId) _shellProcs.delete(killId);
+      res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
+      res.end();
+    });
+
+    req.on('close', () => { if (idleTimer) clearTimeout(idleTimer); try { child.kill('SIGTERM'); } catch (_) {} });
+    return;
+  }
+
+  // ── Buffered mode (original) ──
   const child = _exec(command, { cwd: workDir, env, timeout: 300000, maxBuffer: 10 * 1024 * 1024, shell: SHELL_BIN },
     (err, stdout, stderr) => {
       if (killId) _shellProcs.delete(killId);
@@ -2357,6 +2842,21 @@ app.post('/api/shell-kill', (req, res) => {
     res.json({ ok: true });
   } else {
     res.json({ ok: false, error: 'process not found or already done' });
+  }
+});
+
+// Send stdin to a running shell process
+app.post('/api/shell-stdin', (req, res) => {
+  const { killId, input } = req.body;
+  if (!killId) return res.status(400).json({ error: 'killId required' });
+  if (input == null) return res.status(400).json({ error: 'input required' });
+  const child = _shellProcs.get(killId);
+  if (!child) return res.status(404).json({ error: 'process not found or already done' });
+  try {
+    child.stdin.write(input + (IS_WIN ? '\r\n' : '\n'));
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -4513,12 +5013,74 @@ app.post('/api/permissions/request-accessibility', (req, res) => {
   }
 });
 
+// ── Browser Extension REST API ────────────────────────────────────────────
+
+// GET /api/ext/status — is an extension connected?
+app.get('/api/ext/status', (_req, res) => {
+  res.json({ connected: !!(_extSocket && _extSocket.readyState === 1) });
+});
+
+// POST /api/ext/command — send an arbitrary command to the extension and return its result
+// Body: { action, params, tabId }
+app.post('/api/ext/command', async (req, res) => {
+  const { action, params = {}, tabId = null, timeout = 30000 } = req.body || {};
+  if (!action) return res.status(400).json({ ok: false, error: 'action required' });
+  try {
+    const result = await extCommand(action, params, tabId, Math.min(timeout, 60000));
+    res.json(result);
+  } catch (e) {
+    res.status(503).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/ext/snapshot — convenience: take a viewport screenshot via the extension
+// Body: { tabId?, full?: true }
+// Compression is done inside the extension via OffscreenCanvas before the
+// base64 travels over the WebSocket, so no server-side processing is needed.
+app.post('/api/ext/snapshot', async (req, res) => {
+  const { tabId = null, full = false } = req.body || {};
+  try {
+    const action = full ? 'snapshot-full' : 'snapshot';
+    const result = await extCommand(action, {}, tabId, 45000);
+    res.json(result);
+  } catch (e) {
+    const isTimeout = e.message && e.message.includes('timed out');
+    res.status(503).json({
+      ok: false,
+      error: isTimeout
+        ? 'Snapshot timed out — Chrome window may not have OS focus. Ask the user to click into Chrome, then retry the snapshot.'
+        : e.message
+    });
+  }
+});
+
+// GET /api/ext/events — SSE stream forwarding push events from the browser extension to the UI
+// The frontend opens an EventSource here; whenever the extension emits user:send-page,
+// user:snapshot or user:selection the event is forwarded and the UI turns it into an attachment chip.
+app.get('/api/ext/events', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type':      'text/event-stream',
+    'Cache-Control':     'no-cache',
+    'Connection':        'keep-alive',
+    'X-Accel-Buffering': 'no',
+    'Access-Control-Allow-Origin': 'http://localhost:3737'
+  });
+  res.write(':ok\n\n');
+  function handler(msg) {
+    try { res.write(`data: ${JSON.stringify(msg)}\n\n`); } catch (_) {}
+  }
+  process.on('ext:event', handler);
+  req.on('close', () => process.off('ext:event', handler));
+});
+
 // ── Start ─────────────────────────────────────────────────────────────────
 
 export function startServer(port) {
   return new Promise((resolve, reject) => {
     const server = app.listen(port, '127.0.0.1', () => {
       console.log(`\n  ✦ Fauna  →  http://127.0.0.1:${port}\n`);
+      // Boot the browser-extension WebSocket endpoint on the same HTTP server
+      startExtWebSocketServer(server);
       resolve(server);
     });
     server.on('error', reject);
@@ -4534,6 +5096,15 @@ export function startServer(port) {
       if (figmaWs) {
         try { figmaWs.terminate(); } catch (_) {}
         figmaWs = null;
+      }
+      // Close extension WS server
+      if (_extSocket) {
+        try { _extSocket.terminate(); } catch (_) {}
+        _extSocket = null;
+      }
+      if (_extWss) {
+        try { _extWss.close(); } catch (_) {}
+        _extWss = null;
       }
       // Kill MCP child
       if (isMcpRunning()) mcpProcess.kill('SIGKILL');

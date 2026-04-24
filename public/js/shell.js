@@ -132,7 +132,7 @@ async function runShellExec(execId, opts) {
   try {
     // Route through sandbox endpoint when an agent is active
     var endpoint = '/api/shell-exec';
-    var bodyObj = { command: code, killId: killId };
+    var bodyObj = { command: code, killId: killId, stream: true };
     if (typeof isAgentActive === 'function' && isAgentActive()) {
       var sb = getSandboxedEndpoint('/api/shell-exec');
       endpoint = sb.url;
@@ -143,16 +143,68 @@ async function runShellExec(execId, opts) {
       body: JSON.stringify(bodyObj),
       signal: abortCtrl.signal
     });
-    var d = await r.json();
+
+    // ── Streaming mode: parse SSE events ──
+    var stdoutBuf = '';
+    var stderrBuf = '';
+    var exitCode = 0;
+    var errMsg = '';
+
+    var reader = r.body.getReader();
+    var decoder = new TextDecoder();
+    var sseBuf = '';
+
+    while (true) {
+      var chunk = await reader.read();
+      if (chunk.done) break;
+      sseBuf += decoder.decode(chunk.value, { stream: true });
+
+      var sseLines = sseBuf.split('\n');
+      sseBuf = sseLines.pop(); // keep incomplete line
+
+      for (var si = 0; si < sseLines.length; si++) {
+        var sseLine = sseLines[si];
+        if (!sseLine.startsWith('data: ')) continue;
+        try {
+          var sseEvt = JSON.parse(sseLine.slice(6));
+          if (sseEvt.type === 'stdout') {
+            stdoutBuf += sseEvt.text;
+            resultEl.textContent = stdoutBuf + stderrBuf;
+            resultEl.scrollTop = resultEl.scrollHeight;
+            _removeShellInput(execId); // clear any input prompt on new output
+          } else if (sseEvt.type === 'stderr') {
+            stderrBuf += sseEvt.text;
+            resultEl.textContent = stdoutBuf + stderrBuf;
+            resultEl.scrollTop = resultEl.scrollHeight;
+            _removeShellInput(execId);
+          } else if (sseEvt.type === 'waiting_for_input') {
+            _showShellInput(execId, killId, sseEvt.hint, resultEl);
+          } else if (sseEvt.type === 'exit') {
+            exitCode = sseEvt.exitCode || 0;
+            _removeShellInput(execId);
+          } else if (sseEvt.type === 'error') {
+            errMsg = sseEvt.error || 'Unknown error';
+          }
+        } catch (_) {}
+      }
+    }
+
+    // Build a compat result object matching the old JSON response shape
+    var d = {
+      ok: exitCode === 0,
+      exitCode: exitCode,
+      stdout: stdoutBuf,
+      stderr: stderrBuf,
+      error: errMsg || undefined,
+      command: code,
+      cwd: bodyObj.cwd || ''
+    };
 
     clearInterval(timerInterval);
     hideShellRunningPill(execId);
     delete _shellAbortControllers[execId];
     delete _shellKillIds[execId];
 
-    // Normalise — server may return {error} on 400
-    var exitCode = d.exitCode != null ? d.exitCode : (r.ok ? 0 : 1);
-    d.exitCode = exitCode;
     dbg('◀ shell exit=' + exitCode + ' stdout=' + (d.stdout||'').length + 'ch stderr=' + (d.stderr||'').length + 'ch', exitCode === 0 ? 'ok' : 'warn');
 
     // Auto-track CWD from successful shell commands (for chat-first repo detection)
@@ -356,5 +408,64 @@ async function _executeCommand(btn, resultEl, command) {
 
   if (btn) { btn.classList.remove('running'); btn.innerHTML = '<i class="ti ti-refresh"></i>'; }
   scrollBottom();
+}
+
+// ── Interactive stdin input for waiting processes ────────────────────────
+
+function _showShellInput(execId, killId, hint, resultEl) {
+  if (document.getElementById('shell-input-' + execId)) return; // already showing
+
+  var wrapper = document.createElement('div');
+  wrapper.id = 'shell-input-' + execId;
+  wrapper.className = 'shell-stdin-prompt';
+  wrapper.innerHTML =
+    '<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding:8px 10px;background:var(--bg-tertiary,#2a2a2a);border-radius:8px;border:1px solid var(--border,#3a3a3a)">' +
+      '<span style="color:var(--text-secondary,#aaa);font-size:12px;white-space:nowrap">' +
+        '<i class="ti ti-terminal-2"></i> ' + escHtml(hint || 'Waiting for input…') +
+      '</span>' +
+      '<input type="text" id="shell-input-field-' + execId + '" ' +
+        'style="flex:1;background:var(--bg-secondary,#1e1e1e);border:1px solid var(--border,#444);border-radius:4px;padding:4px 8px;color:var(--text-primary,#eee);font-family:var(--font-mono,monospace);font-size:13px;outline:none" ' +
+        'placeholder="Type response and press Enter…" autocomplete="off">' +
+      '<button onclick="_sendShellInput(\'' + execId + '\',\'' + killId + '\')" ' +
+        'style="background:var(--accent,#7c5cff);color:#fff;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px">' +
+        '<i class="ti ti-send"></i>' +
+      '</button>' +
+    '</div>';
+
+  resultEl.parentNode.insertBefore(wrapper, resultEl.nextSibling);
+
+  var inputField = document.getElementById('shell-input-field-' + execId);
+  if (inputField) {
+    inputField.focus();
+    inputField.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') { e.preventDefault(); _sendShellInput(execId, killId); }
+    });
+  }
+}
+
+function _removeShellInput(execId) {
+  var el = document.getElementById('shell-input-' + execId);
+  if (el) el.remove();
+}
+
+async function _sendShellInput(execId, killId) {
+  var field = document.getElementById('shell-input-field-' + execId);
+  if (!field) return;
+  var input = field.value;
+  field.value = '';
+  field.placeholder = 'Sending…';
+  field.disabled = true;
+
+  try {
+    await fetch('/api/shell-stdin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ killId: killId, input: input })
+    });
+    _removeShellInput(execId);
+  } catch (e) {
+    field.placeholder = 'Failed — try again';
+    field.disabled = false;
+  }
 }
 

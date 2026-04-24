@@ -17,6 +17,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Initialize agent system
   initAgentSystem();
 
+  // Initialize voice control
+  initVoice();
+
   // Agent @mention detection on input
   var msgInput = document.getElementById('msg-input');
   msgInput.addEventListener('input', function(e) { handleAgentInput(e); if (typeof handleSlashInput === 'function') handleSlashInput(e); });

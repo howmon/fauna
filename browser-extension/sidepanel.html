@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fauna Browser Bridge</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px;
+      background: #0f0f0f;
+      color: #e8e8e8;
+      user-select: none;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 16px 12px;
+      border-bottom: 1px solid #1e1e1e;
+      flex-shrink: 0;
+    }
+
+    .logo {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      overflow: hidden;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    }
+    .logo img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .header-text { flex: 1; min-width: 0; }
+    .header-title { font-weight: 600; font-size: 14px; color: #f0f0f0; }
+    .header-subtitle { color: #666; font-size: 11px; margin-top: 1px; }
+
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      font-weight: 500;
+      padding: 3px 9px;
+      border-radius: 99px;
+      border: 1px solid transparent;
+      transition: all 0.2s;
+      flex-shrink: 0;
+    }
+    .status-pill.online  { background: #0d2b1f; border-color: #10b98133; color: #10b981; }
+    .status-pill.offline { background: #1a1a1a;  border-color: #2e2e2e;   color: #888; }
+
+    .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    .online  .dot { background: #10b981; box-shadow: 0 0 5px #10b98166; }
+    .offline .dot { background: #555; }
+
+    /* ── Scrollable body ── */
+    .body {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding-bottom: 8px;
+    }
+    .body::-webkit-scrollbar { width: 4px; }
+    .body::-webkit-scrollbar-track { background: transparent; }
+    .body::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 2px; }
+
+    /* ── Sections ── */
+    .section {
+      padding: 12px 14px;
+      border-bottom: 1px solid #181818;
+    }
+    .section:last-child { border-bottom: none; }
+
+    .section-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: #484848;
+      margin-bottom: 8px;
+    }
+
+    /* ── Tab info ── */
+    .tab-info {
+      background: #141414;
+      border: 1px solid #1e1e1e;
+      border-radius: 7px;
+      padding: 9px 11px;
+    }
+    .tab-title { color: #ccc; font-size: 12px; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tab-url   { color: #5b5fc7; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* ── Buttons ── */
+    .btn {
+      width: 100%;
+      padding: 8px 12px;
+      border-radius: 7px;
+      border: 1px solid #232323;
+      background: #161616;
+      color: #ddd;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      text-align: left;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: background 0.12s, border-color 0.12s;
+      margin-bottom: 6px;
+    }
+    .btn:last-child { margin-bottom: 0; }
+    .btn:hover  { background: #1e1e1e; border-color: #303030; }
+    .btn:active { background: #252525; }
+    .btn.primary { background: #191740; border-color: #4338ca44; color: #a5b4fc; }
+    .btn.primary:hover { background: #1e1c50; border-color: #6366f1aa; }
+    .btn:disabled { opacity: 0.38; pointer-events: none; }
+    .btn-icon { font-size: 14px; width: 17px; text-align: center; flex-shrink: 0; }
+    .btn-label { flex: 1; }
+    .btn-badge {
+      font-size: 10px;
+      background: #6366f133;
+      color: #a5b4fc;
+      border-radius: 99px;
+      padding: 1px 6px;
+    }
+
+    /* ── Grid (2-col) ── */
+    .btn-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+    .btn-grid .btn { margin-bottom: 0; }
+
+    /* ── Feedback strip ── */
+    .feedback {
+      padding: 7px 14px;
+      font-size: 11px;
+      color: #666;
+      min-height: 30px;
+      display: flex;
+      align-items: center;
+      border-bottom: 1px solid #181818;
+      flex-shrink: 0;
+      transition: color 0.2s;
+    }
+    .feedback.ok  { color: #10b981; }
+    .feedback.err { color: #f87171; }
+
+    /* ── Activity log ── */
+    .log-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    .log-list::-webkit-scrollbar { width: 3px; }
+    .log-list::-webkit-scrollbar-thumb { background: #252525; border-radius: 2px; }
+
+    .log-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 7px;
+      padding: 6px 8px;
+      background: #131313;
+      border: 1px solid #1c1c1c;
+      border-radius: 6px;
+      font-size: 11px;
+      line-height: 1.35;
+      animation: fadeIn 0.18s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+
+    .log-icon { flex-shrink: 0; font-size: 12px; padding-top: 1px; }
+    .log-body  { flex: 1; min-width: 0; }
+    .log-event { color: #888; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+    .log-detail { color: #bbb; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+    .log-time { color: #444; font-size: 10px; flex-shrink: 0; padding-top: 1px; }
+
+    .log-empty {
+      font-size: 11px;
+      color: #3a3a3a;
+      text-align: center;
+      padding: 20px 0;
+    }
+
+    /* ── Connection section ── */
+    .reconnect-row { display: flex; gap: 6px; }
+    .reconnect-btn {
+      flex: 1;
+      padding: 7px 12px;
+      border-radius: 7px;
+      border: 1px solid #252525;
+      background: #161616;
+      color: #ccc;
+      font-size: 12px;
+      cursor: pointer;
+      text-align: center;
+      transition: background 0.12s;
+    }
+    .reconnect-btn:hover { background: #1e1e1e; }
+
+    .conn-hint {
+      color: #444;
+      font-size: 11px;
+      margin-top: 8px;
+      line-height: 1.45;
+    }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <div class="header">
+    <div class="logo">
+      <img src="icons/icon48.png" alt="Fauna">
+    </div>
+    <div class="header-text">
+      <div class="header-title">Fauna Bridge</div>
+      <div class="header-subtitle">Browser extension</div>
+    </div>
+    <div class="status-pill offline" id="status-pill">
+      <span class="dot"></span>
+      <span id="status-text">Offline</span>
+    </div>
+  </div>
+
+  <!-- Scrollable content -->
+  <div class="body">
+
+    <!-- Active Tab -->
+    <div class="section">
+      <div class="section-label">Active Tab</div>
+      <div class="tab-info">
+        <div class="tab-title" id="tab-title">—</div>
+        <div class="tab-url"   id="tab-url">—</div>
+      </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="section">
+      <div class="section-label">Quick Actions</div>
+      <button class="btn primary" id="btn-send-page">
+        <span class="btn-icon">&#8594;</span>
+        <span class="btn-label">Send page to Fauna</span>
+      </button>
+      <div class="btn-grid">
+        <button class="btn" id="btn-snapshot">
+          <span class="btn-icon">&#9632;</span>
+          <span class="btn-label">Snapshot</span>
+        </button>
+        <button class="btn" id="btn-extract-forms">
+          <span class="btn-icon">&#8801;</span>
+          <span class="btn-label">Extract forms</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Activity Log -->
+    <div class="section">
+      <div class="section-label">Activity</div>
+      <div class="log-list" id="log-list">
+        <div class="log-empty" id="log-empty">No activity yet</div>
+      </div>
+    </div>
+
+    <!-- Offline reconnect (only shown when disconnected) -->
+    <div id="offline-section" class="section" style="display:none">
+      <div class="section-label">Connection</div>
+      <div class="reconnect-row">
+        <button class="reconnect-btn" id="btn-reconnect">↻ Reconnect to Fauna</button>
+      </div>
+      <div class="conn-hint">Make sure Fauna is running on your Mac.</div>
+    </div>
+
+  </div>
+
+  <!-- Feedback strip -->
+  <div class="feedback" id="feedback"></div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

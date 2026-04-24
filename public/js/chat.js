@@ -211,8 +211,17 @@ async function sendMessage(opts) {
       if (att.type === 'image') {
         pendingImages.push({ base64: att.base64, mime: att.mime, name: att.name });
       } else {
-        var label = att.type === 'url' ? `URL: ${att.name}` : `File: ${att.name}`;
-        content += '\n\n' + '```\n// ' + label + '\n' + att.content + '\n```';
+        var label = att.extSource === 'page'      ? 'Browser page: '      + att.name
+                  : att.extSource === 'selection' ? 'Browser selection from ' + (att.sourceUri || att.name)
+                  : att.type === 'url'            ? 'URL: ' + att.name
+                  : 'File: ' + att.name;
+        var ref = att.sourceUri || ('attachment://' + encodeURIComponent(att.name || 'file'));
+        var meta = [];
+        if (att.mime) meta.push('mime=' + att.mime);
+        if (att.size) meta.push('bytes=' + att.size);
+        if (att.warning) meta.push('warning=' + att.warning);
+        var header = '// ' + label + '\n// Ref: ' + ref + (meta.length ? '\n// Meta: ' + meta.join(', ') : '');
+        content += '\n\n```\n' + header + '\n' + (att.content || '') + '\n```';
       }
     });
   }
@@ -221,7 +230,23 @@ async function sendMessage(opts) {
   var sysContext = await gatherSystemContext(text);
   var apiContent = sysContext ? content + sysContext : content;
 
-  var userMsg = { role: 'user', content: apiContent, images: pendingImages.length ? pendingImages : undefined, attachments: state.pendingAttachments.map(a => ({ type: a.type, name: a.name, base64: a.type === 'image' ? a.base64 : undefined, mime: a.type === 'image' ? a.mime : undefined })) };
+  var userMsg = {
+    role: 'user',
+    content: apiContent,
+    images: pendingImages.length ? pendingImages : undefined,
+    attachments: state.pendingAttachments.map(function(a) {
+      return {
+        type: a.type,
+        name: a.name,
+        content: a.type === 'image' ? undefined : a.content,
+        sourceUri: a.sourceUri,
+        size: a.size,
+        warning: a.warning,
+        base64: a.type === 'image' ? a.base64 : undefined,
+        mime: a.mime
+      };
+    })
+  };
   conv.messages.push(userMsg);
 
   // Auto-title from first message
@@ -259,7 +284,13 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
       pendingImages.push({ base64: att.base64, mime: att.mime, name: att.name });
     } else {
       var label = att.type === 'url' ? 'URL: ' + att.name : 'File: ' + att.name;
-      content += '\n\n```\n// ' + label + '\n' + att.content + '\n```';
+      var ref = att.sourceUri || ('attachment://' + encodeURIComponent(att.name || 'file'));
+      var meta = [];
+      if (att.mime) meta.push('mime=' + att.mime);
+      if (att.size) meta.push('bytes=' + att.size);
+      if (att.warning) meta.push('warning=' + att.warning);
+      var header = '// ' + label + '\n// Ref: ' + ref + (meta.length ? '\n// Meta: ' + meta.join(', ') : '');
+      content += '\n\n```\n' + header + '\n' + (att.content || '') + '\n```';
     }
   });
 
@@ -614,6 +645,14 @@ async function streamResponse(conv) {
         if (raw === '[DONE]') continue;
         try {
           var evt = JSON.parse(raw);
+
+          // Close any open shell-output fence before non-output events
+          if (evt.type !== 'tool_output' && buffer.includes('```shell-output\n')) {
+            var lastOpen = buffer.lastIndexOf('```shell-output\n');
+            var lastClose = buffer.indexOf('\n```', lastOpen + 16);
+            if (lastClose === -1) buffer += '\n```\n';
+          }
+
           if (evt.type === 'content')   { buffer += evt.content; tokenCount++; if (tokenCount === 1) dbg('first token received', 'ok'); scheduleRender(); }
           if (evt.type === 'error')     { dbg('SSE error: ' + evt.error, 'err'); buffer += '\n\nError: ' + evt.error; scheduleRender(); }
           if (evt.type === 'tool_call') {
@@ -623,6 +662,20 @@ async function streamResponse(conv) {
             var isFigma = /figma/i.test(toolLabel);
             var toolPrefix = isFigma ? 'Calling Figma tool' : 'Calling tool';
             buffer += '\n\n*' + toolPrefix + ': `' + toolLabel + '`…*\n\n';
+            scheduleRender();
+          }
+          if (evt.type === 'tool_output') {
+            // Live shell output — append to a collapsible output block
+            if (!buffer.includes('```shell-output\n')) {
+              buffer += '```shell-output\n';
+            }
+            // Insert before the closing ``` if present, otherwise just append
+            var closingIdx = buffer.lastIndexOf('\n```\n');
+            if (closingIdx > buffer.lastIndexOf('```shell-output\n')) {
+              buffer = buffer.slice(0, closingIdx) + evt.output + buffer.slice(closingIdx);
+            } else {
+              buffer += evt.output;
+            }
             scheduleRender();
           }
           if (evt.type === 'done') {
@@ -711,6 +764,7 @@ async function streamResponse(conv) {
         extractAndRenderFigmaExec(buffer, msgEl);
         extractAndRenderShellExec(buffer, msgEl, false, convId);
         extractAndRenderBrowserActions(buffer, msgEl, false, convId);
+        if (typeof extractAndRenderBrowserExtActions === 'function') extractAndRenderBrowserExtActions(buffer, msgEl, false, convId);
         extractAndRenderWriteFile(msgEl, false, convId);
         extractAndRenderSaveInstruction(buffer, msgEl, false);
         extractArtifactsFromBuffer(buffer, msgEl);
@@ -734,6 +788,7 @@ async function streamResponse(conv) {
       extractAndRenderFigmaExec(buffer, msgEl);
       extractAndRenderShellExec(buffer, msgEl, false, convId);  // auto-run continues in background
       extractAndRenderBrowserActions(buffer, msgEl, false, convId);
+      if (typeof extractAndRenderBrowserExtActions === 'function') extractAndRenderBrowserExtActions(buffer, msgEl, false, convId);
       extractAndRenderWriteFile(msgEl, false, convId);
       extractAndRenderSaveInstruction(buffer, msgEl, false);
       extractArtifactsFromBuffer(buffer, msgEl, true);

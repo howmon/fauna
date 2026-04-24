@@ -19,9 +19,11 @@
     "dist:all": "electron-builder --mac --win"
   },
   "dependencies": {
+    "@xenova/transformers": "^2.17.2",
     "archiver": "^7.0.1",
     "express": "^4.19.2",
     "multer": "^2.1.1",
+    "nodejs-whisper": "^0.3.0",
     "openai": "^4.67.0",
     "playwright-core": "^1.58.2",
     "turndown": "^7.2.2",
@@ -36,6 +38,9 @@
     "productName": "Fauna",
     "copyright": "Copyright © 2026 Solomon Abey",
     "icon": "assets/icon.icns",
+    "asarUnpack": [
+      "node_modules/nodejs-whisper/**"
+    ],
     "mac": {
       "category": "public.app-category.developer-tools",
       "darkModeSupport": true,
@@ -99,8 +104,17 @@
       "agent-*.js",
       "public/**",
       "assets/**",
+      "package.json",
       "node_modules/**",
-      "package.json"
+      "!node_modules/@xenova/transformers/**",
+      "node_modules/@xenova/transformers/dist/transformers.min.js",
+      "node_modules/@xenova/transformers/dist/ort-wasm-simd-threaded.wasm",
+      "node_modules/@xenova/transformers/dist/ort-wasm-simd.wasm",
+      "node_modules/@xenova/transformers/dist/ort-wasm.wasm",
+      "node_modules/@xenova/transformers/dist/ort-wasm-threaded.wasm",
+      "node_modules/nodejs-whisper/dist/**",
+      "node_modules/nodejs-whisper/cpp/whisper.cpp/build/**",
+      "!node_modules/nodejs-whisper/cpp/whisper.cpp/models/**"
     ],
     "electronVersion": "41.0.3",
     "extraResources": [

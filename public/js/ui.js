@@ -394,6 +394,7 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
     extractAndRenderFigmaExec(content, el);
     extractAndRenderShellExec(content, el, true); // history load — never auto-run old commands
     extractAndRenderBrowserActions(content, el, true);
+    if (typeof extractAndRenderBrowserExtActions === 'function') extractAndRenderBrowserExtActions(content, el, true);
     extractAndRenderWriteFile(el, true);
     extractAndRenderSaveInstruction(content, el, true);
     extractArtifactsFromBuffer(content, el, false);
@@ -466,25 +467,106 @@ function copyCode(btn) {
 
 function openFileAttach() { document.getElementById('file-input').click(); }
 
-function handleFiles(files) {
-  Array.from(files).forEach(file => {
-    if (file.type && file.type.startsWith('image/')) {
-      var mime = file.type || 'image/png';
-      var name = file.name || ('image-' + Date.now() + '.png');
-      var reader = new FileReader();
-      reader.onload = function(ev) {
-        var base64 = ev.target.result.split(',')[1];
-        addAttachment({ type: 'image', name: name, base64: base64, mime: mime });
-      };
-      reader.readAsDataURL(file);
-    } else {
-      var reader = new FileReader();
-      reader.onload = function(e) {
-        addAttachment({ type: 'file', name: file.name, content: e.target.result.slice(0, 80000) });
-      };
-      reader.readAsText(file);
-    }
+function _toBase64(buffer) {
+  var bytes = new Uint8Array(buffer);
+  var chunk = 0x8000;
+  var binary = '';
+  for (var i = 0; i < bytes.length; i += chunk) {
+    var part = bytes.subarray(i, i + chunk);
+    binary += String.fromCharCode.apply(null, part);
+  }
+  return btoa(binary);
+}
+
+function _readTextFile(file) {
+  return new Promise(function(resolve, reject) {
+    var reader = new FileReader();
+    reader.onload = function(e) { resolve((e.target.result || '').slice(0, 80000)); };
+    reader.onerror = function() { reject(reader.error || new Error('Failed to read file')); };
+    reader.readAsText(file);
   });
+}
+
+async function _extractDocumentText(file) {
+  var name = file.name || ('document-' + Date.now());
+  var mime = file.type || 'application/octet-stream';
+  var ref = 'attachment://' + encodeURIComponent(name);
+
+  // Fast path for plain text files
+  if ((mime && mime.indexOf('text/') === 0) || /\.(txt|md|js|jsx|ts|tsx|py|go|rs|java|c|cpp|h|css|html|htm|json|yaml|yml|toml|xml|csv|log|sql|graphql|sh|env)$/i.test(name)) {
+    var text = await _readTextFile(file);
+    return { text: text, ref: ref, mime: mime, size: file.size || 0, warning: '' };
+  }
+
+  var ab = await file.arrayBuffer();
+  var payload = {
+    name: name,
+    mime: mime,
+    base64: _toBase64(ab)
+  };
+
+  var r = await fetch('/api/extract-attachment', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  var d = await r.json();
+  if (!r.ok || d.error) throw new Error(d.error || 'Failed to extract document');
+  return {
+    text: d.text || '',
+    ref: d.ref || ref,
+    mime: d.mime || mime,
+    size: d.size || file.size || 0,
+    warning: d.warning || ''
+  };
+}
+
+async function _processSingleAttachment(file) {
+  if (file.type && file.type.startsWith('image/')) {
+    var mime = file.type || 'image/png';
+    var name = file.name || ('image-' + Date.now() + '.png');
+    var reader = new FileReader();
+    reader.onload = function(ev) {
+      var base64 = ev.target.result.split(',')[1];
+      addAttachment({ type: 'image', name: name, base64: base64, mime: mime });
+    };
+    reader.readAsDataURL(file);
+    return;
+  }
+
+  try {
+    var extracted = await _extractDocumentText(file);
+    var body = extracted.text;
+    if (!body && extracted.warning) {
+      body = '[Attachment note] ' + extracted.warning;
+    }
+    addAttachment({
+      type: 'file',
+      name: file.name,
+      content: body,
+      sourceUri: extracted.ref,
+      size: extracted.size,
+      mime: extracted.mime,
+      warning: extracted.warning
+    });
+  } catch (err) {
+    addAttachment({
+      type: 'file',
+      name: file.name,
+      content: '[Attachment note] Failed to extract text: ' + err.message,
+      sourceUri: 'attachment://' + encodeURIComponent(file.name || ('file-' + Date.now())),
+      size: file.size || 0,
+      mime: file.type || 'application/octet-stream',
+      warning: err.message
+    });
+  }
+}
+
+async function handleFiles(files) {
+  var list = Array.from(files || []);
+  for (var i = 0; i < list.length; i++) {
+    await _processSingleAttachment(list[i]);
+  }
   document.getElementById('file-input').value = '';
 }
 
@@ -506,15 +588,20 @@ function clearAttachments() {
 function renderAttachBar() {
   var bar = document.getElementById('attach-bar');
   bar.innerHTML = state.pendingAttachments.map((att, i) => {
+    var extCls = att.extSource ? ' pending-chip-ext' : '';
     if (att.type === 'image') {
-      return '<div class="pending-chip pending-chip-image">' +
+      return '<div class="pending-chip pending-chip-image' + extCls + '">' +
         '<img class="pending-img-thumb" src="data:' + att.mime + ';base64,' + att.base64 + '" title="' + escHtml(att.name) + '">' +
         '<span class="chip-name" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(att.name) + '</span>' +
         '<button class="chip-remove" onclick="removeAttachment(' + i + ')"><i class="ti ti-x"></i></button>' +
       '</div>';
     }
-    return '<div class="pending-chip">' +
-      '<span class="chip-icon">' + (att.type === 'url' ? '<i class="ti ti-link"></i>' : '<i class="ti ti-paperclip"></i>') + '</span>' +
+    var icon = att.extSource === 'page'      ? '<i class="ti ti-world-www"></i>'
+             : att.extSource === 'selection' ? '<i class="ti ti-text-scan-2"></i>'
+             : att.type === 'url'            ? '<i class="ti ti-link"></i>'
+             : '<i class="ti ti-paperclip"></i>';
+    return '<div class="pending-chip' + extCls + '">' +
+      '<span class="chip-icon">' + icon + '</span>' +
       '<span class="chip-name">' + escHtml(att.name) + '</span>' +
       '<button class="chip-remove" onclick="removeAttachment(' + i + ')"><i class="ti ti-x"></i></button>' +
     '</div>';
@@ -903,28 +990,7 @@ input.addEventListener('paste', function(e) {
     e.preventDefault();
     dragCounter = 0;
     wrap.classList.remove('drag-over');
-    var files = e.dataTransfer.files;
-    for (var i = 0; i < files.length; i++) {
-      (function(file) {
-        if (file.type.startsWith('image/')) {
-          var mime = file.type;
-          var name = file.name || ('image-' + Date.now() + '.png');
-          var reader = new FileReader();
-          reader.onload = function(ev) {
-            var base64 = ev.target.result.split(',')[1];
-            addAttachment({ type: 'image', name: name, base64: base64, mime: mime });
-          };
-          reader.readAsDataURL(file);
-        } else {
-          var name = file.name;
-          var reader = new FileReader();
-          reader.onload = function(ev) {
-            addAttachment({ type: 'file', name: name, content: ev.target.result.slice(0, 80000) });
-          };
-          reader.readAsText(file);
-        }
-      })(files[i]);
-    }
+    handleFiles(e.dataTransfer.files);
   });
 })();
 
@@ -1030,7 +1096,16 @@ function _restoreHistoryAttachments(attachments) {
   state.pendingAttachments = [];
   if (attachments && attachments.length) {
     attachments.forEach(function(a) {
-      state.pendingAttachments.push({ type: a.type, name: a.name, base64: a.base64 || undefined, mime: a.mime || undefined, content: a.content || undefined });
+      state.pendingAttachments.push({
+        type: a.type,
+        name: a.name,
+        base64: a.base64 || undefined,
+        mime: a.mime || undefined,
+        content: a.content || undefined,
+        sourceUri: a.sourceUri || undefined,
+        size: a.size || undefined,
+        warning: a.warning || undefined
+      });
     });
   }
   renderAttachBar();

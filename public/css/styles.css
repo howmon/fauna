@@ -277,6 +277,174 @@ button .ti, label .ti { pointer-events: none; }
 .topbar-btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent2); }
 .topbar-account-btn .ti-user-circle { font-size: 14px; }
 .topbar-account-btn.logged-in { border-color: var(--accent); color: var(--accent); }
+
+/* ── Voice mic button ──────────────────────────────────────────────── */
+.voice-mic-btn { position: relative; padding: 5px 9px; }
+.voice-mic-btn[data-voice-state="off"]       { color: var(--text-muted); }
+.voice-mic-btn[data-voice-state="listening"] { color: var(--accent); border-color: var(--accent); }
+.voice-mic-btn[data-voice-state="active"]    {
+  color: #fff; background: var(--accent); border-color: var(--accent);
+  animation: voice-pulse 1s ease-in-out infinite;
+}
+@keyframes voice-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
+  50%       { box-shadow: 0 0 0 5px transparent; }
+}
+
+/* ── Voice overlay (listening mode) ───────────────────────────────── */
+#voice-overlay {
+  position: fixed; inset: 0; z-index: 10000;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 20px;
+  background: rgba(0,0,0,.78); backdrop-filter: blur(10px) saturate(1.4);
+  opacity: 0; pointer-events: none;
+  transition: opacity .22s ease;
+}
+#voice-overlay.visible { opacity: 1; pointer-events: auto; }
+
+#voice-overlay-avatar {
+  /* No border/bg — the SVG fills this space */
+  width: 96px; height: 96px;
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+}
+
+/* Outer dark shape — slow counter-rotate drift */
+#vl-outer {
+  transform-origin: 24px 24px;
+  animation: vlo-drift 8s ease-in-out infinite;
+}
+@keyframes vlo-drift {
+  0%,100% { transform: rotate(0deg) scale(1); }
+  33%      { transform: rotate(-4deg) scale(1.02); }
+  66%      { transform: rotate(3deg) scale(0.98); }
+}
+
+/* Mid teal — slow clockwise breathe */
+#vl-mid {
+  transform-origin: 24px 24px;
+  animation: vlm-breathe 5s ease-in-out infinite;
+}
+@keyframes vlm-breathe {
+  0%,100% { transform: rotate(0deg) scale(1);    opacity: 1; }
+  50%      { transform: rotate(5deg) scale(1.04); opacity: .85; }
+}
+
+/* Inner petal — faster independent pulse */
+#vl-inner {
+  transform-origin: 24px 24px;
+  animation: vli-pulse 3.2s ease-in-out infinite;
+}
+@keyframes vli-pulse {
+  0%,100% { transform: scale(1);    opacity: 1; }
+  40%      { transform: scale(1.07); opacity: .9; }
+  70%      { transform: scale(0.96); opacity: 1; }
+}
+
+/* Yellow center — amber glow throb */
+#vl-center {
+  transform-origin: 21px 25.5px;
+  animation: vlc-glow 2s ease-in-out infinite;
+}
+@keyframes vlc-glow {
+  0%,100% { opacity: 1;  filter: url(#vl-glow-yellow) brightness(1); }
+  50%      { opacity: .7; filter: url(#vl-glow-yellow) brightness(1.8); }
+}
+
+/* Response card logo — subtle pulse while speaking */
+#voice-response-logo {
+  animation: none;
+}
+#voice-response-card.visible #voice-response-logo {
+  animation: vrl-pulse 1.8s ease-in-out infinite;
+}
+@keyframes vrl-pulse {
+  0%,100% { opacity: 1;   transform: scale(1); }
+  50%      { opacity: .75; transform: scale(1.12); }
+}
+
+/* Animated waveform bars */
+#voice-waveform {
+  display: flex; align-items: center; gap: 4px; height: 40px;
+}
+.vw-bar {
+  display: block; width: 4px; border-radius: 2px;
+  background: var(--accent); min-height: 6px;
+  animation: vwb 1.1s ease-in-out infinite;
+}
+.vw-bar:nth-child(1) { animation-delay: 0s;    }
+.vw-bar:nth-child(2) { animation-delay: .12s;  }
+.vw-bar:nth-child(3) { animation-delay: .24s;  }
+.vw-bar:nth-child(4) { animation-delay: .06s;  }
+.vw-bar:nth-child(5) { animation-delay: .18s;  }
+.vw-bar:nth-child(6) { animation-delay: .30s;  }
+.vw-bar:nth-child(7) { animation-delay: .08s;  }
+@keyframes vwb {
+  0%,100% { height: 8px;  opacity: .5; }
+  50%      { height: 36px; opacity: 1;  }
+}
+
+#voice-overlay-text {
+  font-size: 22px; font-family: var(--font); color: #fff;
+  font-weight: 500; max-width: 560px; text-align: center; min-height: 32px;
+}
+#voice-overlay-hint {
+  font-size: 12px; color: rgba(255,255,255,.38); letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+/* ── Voice response card (Fauna speaking) ─────────────────────────── */
+#voice-response-card {
+  position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+  z-index: 9999; min-width: 280px; max-width: 520px;
+  background: var(--surface); border: 1px solid var(--accent);
+  border-radius: 16px; padding: 14px 18px;
+  display: flex; align-items: flex-start; gap: 12px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.45), 0 0 0 1px var(--accent-dim);
+  opacity: 0; pointer-events: none;
+  transition: opacity .2s ease, transform .2s ease;
+  transform: translateX(-50%) translateY(10px);
+}
+#voice-response-card.visible {
+  opacity: 1; pointer-events: auto;
+  transform: translateX(-50%) translateY(0);
+}
+
+#voice-response-avatar {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: var(--accent-dim); border: 1px solid var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+
+#voice-response-body { flex: 1; min-width: 0; }
+#voice-response-label {
+  font-size: 11px; font-weight: 600; color: var(--accent);
+  text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px;
+}
+#voice-response-text {
+  font-size: 14px; color: var(--text); line-height: 1.5;
+  word-break: break-word;
+}
+
+/* Speaking bars inside the response card */
+#voice-response-bars {
+  display: flex; align-items: center; gap: 3px; height: 16px; margin-top: 8px;
+}
+.vr-bar {
+  display: block; width: 3px; border-radius: 2px;
+  background: var(--accent); min-height: 4px;
+  animation: vrb 0.9s ease-in-out infinite;
+}
+.vr-bar:nth-child(1) { animation-delay: 0s;   }
+.vr-bar:nth-child(2) { animation-delay: .15s; }
+.vr-bar:nth-child(3) { animation-delay: .05s; }
+.vr-bar:nth-child(4) { animation-delay: .20s; }
+.vr-bar:nth-child(5) { animation-delay: .10s; }
+@keyframes vrb {
+  0%,100% { height: 4px;  opacity: .4; }
+  50%      { height: 14px; opacity: 1; }
+}
 #model-select {
   background: var(--surface2); border: 1px solid var(--border);
   color: var(--text); border-radius: var(--radius-sm); padding: 5px 8px;
@@ -441,6 +609,38 @@ button .ti, label .ti { pointer-events: none; }
 }
 .pending-chip .chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip-icon { font-size: 12px; }
+/* Extension context chips — purple tint */
+.pending-chip-ext {
+  border-color: #6366f133;
+  background: #16152a;
+  color: #a5b4fc;
+}
+.pending-chip-ext .chip-icon { color: #818cf8; }
+.pending-chip-ext .chip-remove:hover { color: var(--error); }
+/* Extension push-event toast */
+.ext-toast {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%) translateY(8px);
+  background: #16152a;
+  border: 1px solid #6366f155;
+  color: #a5b4fc;
+  font-size: 12px;
+  font-family: var(--font);
+  padding: 7px 16px;
+  border-radius: 20px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .2s ease, transform .2s ease;
+  z-index: 99999;
+  white-space: nowrap;
+  box-shadow: 0 4px 16px rgba(0,0,0,.4);
+}
+.ext-toast.ext-toast-show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
 .chip-remove {
   background: none; border: none; color: var(--text-muted); cursor: pointer;
   font-size: 14px; line-height: 1; padding: 0 3px; transition: color .12s;
@@ -466,6 +666,24 @@ button .ti, label .ti { pointer-events: none; }
   min-height: 24px; max-height: 200px; line-height: 1.5; outline: none;
 }
 #msg-input::placeholder { color: var(--text-muted); }
+#dictate-btn {
+  width: 34px; height: 34px; border-radius: 8px; background: var(--surface3);
+  border: 1px solid var(--border); color: var(--text-muted); cursor: pointer;
+  font-size: 15px; flex-shrink: 0; display: flex; align-items: center;
+  justify-content: center; transition: all .15s; margin-bottom: 2px;
+}
+#dictate-btn:hover { border-color: var(--accent); color: var(--accent); }
+#dictate-btn.recording {
+  background: rgba(239,68,68,.12); border-color: var(--error);
+  color: var(--error); animation: dictate-pulse .9s ease-in-out infinite;
+}
+#dictate-btn.processing {
+  background: rgba(251,191,36,.1); border-color: var(--warn); color: var(--warn);
+}
+@keyframes dictate-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,.4); }
+  50%       { box-shadow: 0 0 0 5px rgba(239,68,68,0); }
+}
 #send-btn {
   width: 34px; height: 34px; border-radius: 8px; background: var(--accent);
   border: none; color: #fff; cursor: pointer; font-size: 16px; flex-shrink: 0;

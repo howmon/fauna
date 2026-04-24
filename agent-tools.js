@@ -13,7 +13,7 @@ import fs from 'fs';
 import { checkFilePath, checkNetworkAccess, checkShellCommand, getSandboxedEnv, getResourceLimits, audit } from './agent-sandbox.js';
 
 const _require = createRequire(import.meta.url);
-const { exec: _exec } = _require('child_process');
+const { exec: _exec, spawn: _spawn } = _require('child_process');
 
 const HOME = os.homedir();
 
@@ -252,7 +252,7 @@ function getBuiltInToolDefinitions(permissions) {
       type: 'function',
       function: {
         name: 'agent_shell_exec',
-        description: 'Execute a shell command. The command will be filtered by the security sandbox. Environment variables are stripped and system info is masked.',
+        description: 'Execute a shell command in a zsh shell. Subprocess spawning is fully supported — npx, node, python, pip, brew, etc. all work and can spawn their own subprocesses. Commands are checked against a security allowlist; sensitive env vars are sanitised but npm/node tooling env vars are preserved so package managers work correctly.',
         parameters: {
           type: 'object',
           properties: {
@@ -322,29 +322,83 @@ function getBuiltInToolDefinitions(permissions) {
 
 /**
  * Execute a built-in agent tool call. Routes through the sandbox.
+ * @param {Function} [onOutput] - optional callback(chunk) for streaming shell output
  */
-async function executeBuiltInTool(toolName, args, permissions, agentName) {
+async function executeBuiltInTool(toolName, args, permissions, agentName, onOutput) {
   switch (toolName) {
     case 'agent_shell_exec': {
       const check = checkShellCommand(args.command, permissions, agentName);
       if (!check.allowed) return 'BLOCKED: ' + check.reason;
 
       const env = getSandboxedEnv(permissions);
+      const shell = process.platform === 'win32' ? 'powershell.exe' : '/bin/zsh';
+      const cwd = args.cwd || HOME;
+
       return new Promise((resolve) => {
-        _exec(args.command, {
-          cwd: args.cwd || HOME,
+        const shellFlag = process.platform === 'win32' ? '-Command' : '-c';
+        const child = _spawn(shell, [shellFlag, args.command], {
+          cwd,
           env,
-          timeout: 300000,
-          maxBuffer: 10 * 1024 * 1024,
-          shell: process.platform === 'win32' ? 'powershell.exe' : '/bin/zsh',
-        }, (err, stdout, stderr) => {
-          const exitCode = err?.code ?? 0;
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+
+        let stdout = '';
+        let stderr = '';
+        let lastChunk = '';
+        let idleTimer = null;
+        const MAX_BUF = 10 * 1024 * 1024;
+        const IDLE_MS = 4000;
+
+        function resetIdleTimer() {
+          if (idleTimer) clearTimeout(idleTimer);
+          idleTimer = setTimeout(() => {
+            if (!child.killed && child.exitCode === null && onOutput) {
+              const hint = lastChunk.trim().split('\n').pop();
+              onOutput('\n⏳ Process appears to be waiting for input: ' + hint + '\n');
+            }
+          }, IDLE_MS);
+        }
+
+        child.stdout.on('data', (chunk) => {
+          const text = chunk.toString();
+          lastChunk = text;
+          if (stdout.length < MAX_BUF) stdout += text;
+          if (onOutput) onOutput(text);
+          resetIdleTimer();
+        });
+
+        child.stderr.on('data', (chunk) => {
+          const text = chunk.toString();
+          lastChunk = text;
+          if (stderr.length < MAX_BUF) stderr += text;
+          if (onOutput) onOutput(text);
+          resetIdleTimer();
+        });
+
+        resetIdleTimer();
+
+        const timeout = setTimeout(() => {
+          if (idleTimer) clearTimeout(idleTimer);
+          try { child.kill('SIGTERM'); } catch (_) {}
+          setTimeout(() => { try { child.kill('SIGKILL'); } catch (_) {} }, 2000);
+        }, 300000);
+
+        child.on('close', (code) => {
+          clearTimeout(timeout);
+          if (idleTimer) clearTimeout(idleTimer);
+          const exitCode = code ?? 0;
           let result = '';
           if (stdout) result += stdout;
           if (stderr) result += (result ? '\n\nSTDERR:\n' : '') + stderr;
-          if (err && !stdout && !stderr) result = 'Error: ' + err.message;
+          if (!stdout && !stderr) result = exitCode === 0 ? '(no output)' : 'Process exited with no output';
           result += '\n\n[exit code: ' + exitCode + ']';
           resolve(result);
+        });
+
+        child.on('error', (err) => {
+          clearTimeout(timeout);
+          if (idleTimer) clearTimeout(idleTimer);
+          resolve('Error: ' + err.message + '\n\n[exit code: 1]');
         });
       });
     }
@@ -508,7 +562,7 @@ function getAgentTools(agentDir, manifest, agentName) {
   // Built-in handlers
   for (const def of builtInDefs) {
     const name = def.function.name;
-    handlers.set(name, (args) => executeBuiltInTool(name, args, permissions, agentName));
+    handlers.set(name, (args, onOutput) => executeBuiltInTool(name, args, permissions, agentName, onOutput));
   }
   // Custom tool handlers
   for (const tool of customTools) {
