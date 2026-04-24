@@ -418,13 +418,11 @@ async function browserScreenshot() {
 // Retry handles GUEST_VIEW_MANAGER_CALL errors when the renderer is mid-navigation.
 function _waitForDomReady(wv) {
   return new Promise(function(resolve) {
-    // If already ready (has a URL loaded), resolve immediately
-    try { if (wv.getURL && wv.getURL() !== '') { resolve(); return; } } catch(_) {}
     wv.addEventListener('dom-ready', function onReady() {
       wv.removeEventListener('dom-ready', onReady);
       resolve();
     });
-    // Safety fallback — resolve after 5s regardless
+    // Resolve immediately if already loaded (dom-ready won't fire again) — safety fallback 5s
     setTimeout(resolve, 5000);
   });
 }
