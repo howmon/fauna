@@ -379,10 +379,88 @@ function _routeVoiceCommand(transcript) {
 // No ONNX worker needed — audio blob is POSTed to /api/transcribe which runs
 // whisper.cpp natively (4-8× faster than WASM, Metal-accelerated on Apple Silicon).
 
+var _whisperModelReady = false;
+
+async function _checkWhisperModel() {
+  try {
+    var resp = await fetch('/api/whisper-model-status');
+    var data = await resp.json();
+    return data.ready;
+  } catch (_) { return false; }
+}
+
+async function _downloadWhisperModel() {
+  return new Promise(function(resolve, reject) {
+    if (typeof showToast === 'function') showToast('Downloading voice model (~465 MB)…', 'info', 0);
+
+    // Show a progress bar in the toast area
+    var bar = document.getElementById('whisper-download-bar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'whisper-download-bar';
+      bar.innerHTML =
+        '<div style="margin:12px auto;max-width:340px;text-align:center;font-size:13px;color:var(--text-secondary,#aaa)">' +
+          '<div style="margin-bottom:6px" id="whisper-dl-label">Downloading voice model… 0%</div>' +
+          '<div style="background:var(--bg-tertiary,#333);border-radius:6px;height:8px;overflow:hidden">' +
+            '<div id="whisper-dl-fill" style="width:0%;height:100%;background:var(--accent,#7c5cff);border-radius:6px;transition:width .2s"></div>' +
+          '</div>' +
+        '</div>';
+      var chatArea = document.querySelector('.chat-messages') || document.body;
+      chatArea.appendChild(bar);
+    }
+
+    var label = document.getElementById('whisper-dl-label');
+    var fill  = document.getElementById('whisper-dl-fill');
+    var es = new EventSource('/api/whisper-model-download');
+
+    es.onmessage = function(ev) {
+      try {
+        var d = JSON.parse(ev.data);
+        if (d.error) {
+          es.close();
+          if (bar) bar.remove();
+          if (typeof showToast === 'function') showToast('Voice model download failed: ' + d.error, 'error');
+          reject(new Error(d.error));
+          return;
+        }
+        if (label) label.textContent = 'Downloading voice model… ' + (d.pct || 0) + '%';
+        if (fill)  fill.style.width  = (d.pct || 0) + '%';
+        if (d.ready) {
+          es.close();
+          if (bar) bar.remove();
+          if (typeof showToast === 'function') showToast('Voice model ready!', 'success');
+          resolve(true);
+        }
+      } catch (_) {}
+    };
+
+    es.onerror = function() {
+      es.close();
+      if (bar) bar.remove();
+      if (typeof showToast === 'function') showToast('Voice model download interrupted', 'error');
+      reject(new Error('Download interrupted'));
+    };
+  });
+}
+
+async function _ensureWhisperModel() {
+  if (_whisperModelReady) return true;
+  var ready = await _checkWhisperModel();
+  if (ready) { _whisperModelReady = true; return true; }
+  try {
+    await _downloadWhisperModel();
+    _whisperModelReady = true;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function _initWhisperWorker() {
-  // Signal ready immediately — no model download needed, inference is server-side
   if (_whisperReady) return;
   _whisperReady = true;
+  // Check model in background — don't block init, download happens on first voice use
+  _checkWhisperModel().then(function(ready) { _whisperModelReady = ready; });
   if (typeof showToast === 'function') showToast('Voice ready — say "' + getWakeWord() + '" to activate');
 }
 
@@ -417,6 +495,19 @@ async function _transcribeBlobs(chunks, mode) {
     _setVoicePillState(_voiceEnabled ? 'listening' : 'off');
     return;
   }
+
+  // Ensure model is downloaded before first transcription
+  if (!_whisperModelReady) {
+    var modelOk = await _ensureWhisperModel();
+    if (!modelOk) {
+      _vadState    = 'idle';
+      _voiceActive = false;
+      _hideVoiceOverlay();
+      _setVoicePillState(_voiceEnabled ? 'listening' : 'off');
+      return;
+    }
+  }
+
   var blobType = (chunks[0] && chunks[0].type) || 'audio/webm';
   var blob = new Blob(chunks, { type: blobType });
   console.log('[voice] POSTing', blob.size, 'bytes to /api/transcribe, mode:', mode);
@@ -952,6 +1043,13 @@ function _dictStopRecording() {
 
 async function _dictTranscribe() {
   if (!_dictChunks.length) { _dictSetState('idle'); return; }
+
+  // Ensure model is downloaded before first transcription
+  if (!_whisperModelReady) {
+    var modelOk = await _ensureWhisperModel();
+    if (!modelOk) { _dictSetState('idle'); return; }
+  }
+
   var blobType = (_dictChunks[0] && _dictChunks[0].type) || 'audio/webm';
   var blob = new Blob(_dictChunks, { type: blobType });
   _dictChunks = [];

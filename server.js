@@ -1458,6 +1458,92 @@ function validateExternalUrl(raw) {
 }
 
 // ── Whisper transcription (nodejs-whisper / whisper.cpp) ─────────────────
+
+const WHISPER_MODEL_NAME = 'ggml-small.en.bin';
+const WHISPER_MODEL_URL  = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin';
+const WHISPER_MODEL_SIZE = 487_601_233; // ~465 MB
+
+function _whisperPaths() {
+  const whisperCpp = process.resourcesPath
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'nodejs-whisper', 'cpp', 'whisper.cpp')
+    : path.join(__dirname, 'node_modules', 'nodejs-whisper', 'cpp', 'whisper.cpp');
+  return {
+    whisperCpp,
+    whisperBin: path.join(whisperCpp, 'build', 'bin', 'whisper-cli'),
+    modelsDir:  path.join(whisperCpp, 'models'),
+    modelFile:  path.join(whisperCpp, 'models', WHISPER_MODEL_NAME),
+  };
+}
+
+let _modelDownloading = false;
+
+// Check if model is present / download status
+app.get('/api/whisper-model-status', (req, res) => {
+  const { modelFile } = _whisperPaths();
+  if (fs.existsSync(modelFile)) {
+    const stat = fs.statSync(modelFile);
+    return res.json({ ready: stat.size >= WHISPER_MODEL_SIZE, size: stat.size, expected: WHISPER_MODEL_SIZE, downloading: false });
+  }
+  res.json({ ready: false, size: 0, expected: WHISPER_MODEL_SIZE, downloading: _modelDownloading });
+});
+
+// Stream model download with progress (SSE)
+app.get('/api/whisper-model-download', async (req, res) => {
+  const { modelsDir, modelFile } = _whisperPaths();
+
+  if (fs.existsSync(modelFile) && fs.statSync(modelFile).size >= WHISPER_MODEL_SIZE) {
+    return res.json({ ready: true });
+  }
+  if (_modelDownloading) {
+    return res.status(409).json({ error: 'Download already in progress' });
+  }
+
+  _modelDownloading = true;
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+  });
+
+  try {
+    fs.mkdirSync(modelsDir, { recursive: true });
+    const tmpFile = modelFile + '.downloading';
+
+    const response = await fetch(WHISPER_MODEL_URL, { redirect: 'follow' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const contentLength = parseInt(response.headers.get('content-length') || '0', 10) || WHISPER_MODEL_SIZE;
+    const writer = fs.createWriteStream(tmpFile);
+    let downloaded = 0;
+    let lastPct = -1;
+
+    for await (const chunk of response.body) {
+      writer.write(chunk);
+      downloaded += chunk.length;
+      const pct = Math.floor((downloaded / contentLength) * 100);
+      if (pct !== lastPct) {
+        lastPct = pct;
+        res.write(`data: ${JSON.stringify({ pct, downloaded, total: contentLength })}\n\n`);
+      }
+    }
+
+    await new Promise((resolve, reject) => {
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+      writer.end();
+    });
+
+    fs.renameSync(tmpFile, modelFile);
+    res.write(`data: ${JSON.stringify({ pct: 100, ready: true })}\n\n`);
+  } catch (err) {
+    console.error('[whisper-model-download]', err.message);
+    res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+  } finally {
+    _modelDownloading = false;
+    res.end();
+  }
+});
+
 // Accepts raw audio bytes (webm/ogg/wav) as application/octet-stream.
 // Writes to a temp file, transcribes via whisper.cpp, returns { text }.
 app.post('/api/transcribe', async (req, res) => {
@@ -1465,6 +1551,11 @@ app.post('/api/transcribe', async (req, res) => {
   let tmpWav   = null;
   try {
     const { execFileSync } = _require('child_process');
+    const { whisperBin, modelFile } = _whisperPaths();
+
+    if (!fs.existsSync(modelFile)) {
+      return res.status(503).json({ error: 'model_not_ready', message: 'Whisper model not downloaded yet' });
+    }
 
     const chunks = [];
     await new Promise((resolve, reject) => {
@@ -1491,14 +1582,6 @@ app.post('/api/transcribe', async (req, res) => {
     } else {
       fs.copyFileSync(tmpInput, tmpWav);
     }
-
-    // Resolve whisper-cli and model — works in dev (__dirname = project root)
-    // and in packaged Electron (asarUnpack puts nodejs-whisper in app.asar.unpacked)
-    const whisperCpp = process.resourcesPath
-      ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'nodejs-whisper', 'cpp', 'whisper.cpp')
-      : path.join(__dirname, 'node_modules', 'nodejs-whisper', 'cpp', 'whisper.cpp');
-    const whisperBin = path.join(whisperCpp, 'build', 'bin', 'whisper-cli');
-    const modelFile  = path.join(whisperCpp, 'models', 'ggml-small.en.bin');
 
     // execFileSync captures stdout (transcript); stderr (Metal init noise) goes to parent console
     const stdout = execFileSync(whisperBin, [

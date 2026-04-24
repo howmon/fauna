@@ -114,8 +114,7 @@
       "node_modules/@xenova/transformers/dist/ort-wasm-threaded.wasm",
       "node_modules/nodejs-whisper/dist/**",
       "node_modules/nodejs-whisper/cpp/whisper.cpp/build/**",
-      "!node_modules/nodejs-whisper/cpp/whisper.cpp/models/**",
-      "node_modules/nodejs-whisper/cpp/whisper.cpp/models/ggml-small.en.bin"
+      "!node_modules/nodejs-whisper/cpp/whisper.cpp/models/**"
     ],
     "electronVersion": "41.0.3",
     "extraResources": [
