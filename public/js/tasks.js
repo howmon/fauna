@@ -176,18 +176,18 @@ function taskEdit(id) {
   form.dataset.editId = id;
   document.getElementById('task-create-btn').innerHTML = '<i class="ti ti-check"></i> Update Task';
   // Show form
-  form.style.display = 'block';
+  form.style.display = 'flex';
 }
 
 // ── Create / Update ──────────────────────────────────────────────────────
 
 function toggleTaskCreateForm() {
   var form = document.getElementById('task-create-form');
-  if (form.style.display === 'block') {
+  if (form.style.display === 'flex') {
     form.style.display = 'none';
     _resetTaskForm();
   } else {
-    form.style.display = 'block';
+    form.style.display = 'flex';
     document.getElementById('task-title-input').focus();
   }
 }
