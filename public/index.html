@@ -695,6 +695,30 @@ Examples:
     <div class="task-form-row">
       <input type="text" id="task-agent-input" placeholder="Agents (comma-separated, leave empty for default)">
     </div>
+    <div class="task-form-row task-perms-row">
+      <label>Permissions</label>
+      <div class="task-perm-toggles">
+        <label class="task-perm-toggle" title="Allow shell/terminal commands">
+          <input type="checkbox" id="task-perm-shell" checked>
+          <i class="ti ti-terminal-2"></i> Shell
+        </label>
+        <label class="task-perm-toggle" title="Allow browser extension interaction">
+          <input type="checkbox" id="task-perm-browser" onchange="_onBrowserPermChange()">
+          <i class="ti ti-world-www"></i> Browser
+        </label>
+        <label class="task-perm-toggle" title="Allow Figma MCP tools">
+          <input type="checkbox" id="task-perm-figma">
+          <i class="ti ti-brand-figma"></i> Figma
+        </label>
+      </div>
+    </div>
+    <div class="task-form-row" id="task-browser-tabs-row" style="display:none">
+      <label>Target tabs <button type="button" class="task-tab-refresh-btn" onclick="_refreshExtTabs()" title="Refresh tabs"><i class="ti ti-refresh"></i></button></label>
+      <div id="task-tab-picker" class="task-tab-picker">
+        <div class="task-tab-picker-empty">Enable Browser above to pick tabs</div>
+      </div>
+      <input type="text" id="task-browser-tabs" placeholder="Or type URLs manually (comma-separated)" style="font-size:11px">
+    </div>
     <div class="task-form-row">
       <label>Schedule</label>
       <select id="task-schedule-type" onchange="_onScheduleTypeChange()">

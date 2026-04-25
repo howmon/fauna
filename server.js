@@ -16,7 +16,7 @@ import { checkFilePath, checkNetworkAccess, checkShellCommand, getSandboxedEnv, 
 import { getAgentTools, startAgentMCPServers, stopAgentMCPServers, executeBuiltInTool, executeCustomTool } from './agent-tools.js';
 import { scanAgent, formatScanReport } from './agent-scanner.js';
 import { createTask, getTask, getAllTasks, updateTask, deleteTask, startScheduler, stopScheduler, completeTask, failTask } from './task-manager.js';
-import { runTask, pauseTask, isTaskRunning, getRunningTaskInfo, getRunningTasks, subscribe as subscribeTask } from './task-runner.js';
+import { runTask, pauseTask, steerTask, isTaskRunning, getRunningTaskInfo, getRunningTasks, subscribe as subscribeTask } from './task-runner.js';
 
 // Electron APIs — available when server runs inside the Electron main process.
 // Gracefully degrade if run standalone (e.g. during testing).
@@ -551,7 +551,7 @@ If the user asks you to look at or interact with their Chrome/Edge browser, you 
 - \`{"action":"fill","selector":"#name","value":"Alice"}\` — single-field shorthand
 - \`{"action":"click","selector":"button.submit"}\` or \`{"action":"click","text":"Sign in"}\`
 - \`{"action":"type","selector":"#search","text":"react hooks"}\` — type char-by-char (triggers autocomplete/suggestions). Use \`"delay":60\` to slow down, \`"pressEnter":true\` to submit after typing. Click the field first if it needs focus.
-- \`{"action":"select","selector":"#country","value":"US"}\`
+- \`{"action":"select","selector":"#country","value":"US"}\` — single select. For multi-select: \`{"action":"select","selector":"#tags","values":["React","Vue"]}\`
 - \`{"action":"hover","selector":".menu"}\`
 - \`{"action":"drag","source":"#item-1","target":"#dropzone"}\` — drag and drop between elements. Also supports coordinate-based: \`"sourceX":100,"sourceY":200,"targetX":400,"targetY":300\`
 - \`{"action":"keyboard","key":"Enter","selector":"#search"}\`
@@ -586,7 +586,12 @@ You can create scheduled tasks for the user. When the user asks you to schedule,
     "type": "recurring",
     "cron": "0 9 * * 1"
   },
-  "context": "The team mailing list is team@example.com"
+  "context": "The team mailing list is team@example.com",
+  "permissions": {
+    "browser": { "tabs": ["https://mail.google.com"] },
+    "shell": false,
+    "figma": false
+  }
 }
 \`\`\`
 
@@ -598,6 +603,17 @@ Fields:
 - **schedule.at**: ISO datetime for one-time tasks (e.g. "2026-04-25T09:00:00")
 - **schedule.cron**: Cron expression for recurring (minute hour dom month dow, e.g. "0 9 * * 1" = Mon 9am)
 - **context**: Extra information the AI needs when executing
+- **permissions**: Object controlling what tools the task can use:
+  - **permissions.shell**: true (default) to allow shell/terminal commands, false to disallow, or { "cwd": "/path" } to restrict to a directory
+  - **permissions.browser**: false (default), true to allow browser extension interaction with any tab, or { "tabs": ["url-or-title", ...] } to restrict to specific tabs
+  - **permissions.figma**: false (default), true to allow Figma MCP tools
+
+**Permission inference**: Always include a \`permissions\` field. Infer the required permissions from the task description:
+- Tasks involving websites, forms, email (Gmail/Outlook web), social media, web scraping → set \`browser: true\` or \`browser: { tabs: ["relevant-url"] }\`
+- Tasks involving design, layout, components, prototyping → set \`figma: true\`
+- Tasks involving code, builds, scripts, file operations, git → set \`shell: true\`
+- Tasks that are purely browser-based (no local files) → set \`shell: false\`
+- When in doubt, enable shell + the relevant tool
 
 The task will appear in the user's Tasks panel and run autonomously at the scheduled time.
 `;
@@ -5072,6 +5088,17 @@ app.post('/api/tasks/:id/pause', (req, res) => {
   if (!isTaskRunning(req.params.id)) return res.status(400).json({ error: 'Task not running' });
   pauseTask(req.params.id);
   res.json({ ok: true });
+});
+
+// Steer running task — inject a user message into the running conversation
+app.post('/api/tasks/:id/steer', (req, res) => {
+  const { message } = req.body;
+  if (!message || typeof message !== 'string' || !message.trim()) {
+    return res.status(400).json({ error: 'Message is required' });
+  }
+  if (!isTaskRunning(req.params.id)) return res.status(400).json({ error: 'Task not running' });
+  const ok = steerTask(req.params.id, message.trim());
+  res.json({ ok });
 });
 
 // SSE stream for a single task

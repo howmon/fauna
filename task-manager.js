@@ -39,6 +39,11 @@ function createTask(opts) {
     agents:      _normalizeAgents(opts.agents || opts.agent),  // array of agent names (empty = default)
     actions:     opts.actions || [],                    // pre-planned action steps
     context:     opts.context || '',                    // extra context for the AI
+    permissions: {
+      browser:  opts.permissions?.browser || false,     // false | true | { tabs: [url,...], tabGroups: [name,...] }
+      figma:    opts.permissions?.figma || false,       // true = enable Figma MCP tools
+      shell:    opts.permissions?.shell ?? true,        // true | { cwd: '/path' } | false
+    },
     model:       opts.model || null,                    // override model or null = use default
     maxRetries:  opts.maxRetries ?? 2,
     timeout:     opts.timeout ?? 300000,                // 5 min default
@@ -99,8 +104,8 @@ function updateTask(id, updates) {
   const idx = tasks.findIndex(t => t.id === id);
   if (idx === -1) return null;
 
-  const allowed = ['title', 'description', 'status', 'schedule', 'agent', 'actions',
-                   'context', 'model', 'maxRetries', 'timeout', 'maxSteps', 'result', 'convId'];
+  const allowed = ['title', 'description', 'status', 'schedule', 'agents', 'actions',
+                   'context', 'permissions', 'model', 'maxRetries', 'timeout', 'maxSteps', 'result', 'convId'];
   for (const key of allowed) {
     if (key in updates) tasks[idx][key] = updates[key];
   }
@@ -263,6 +268,12 @@ function completeTask(id, result) {
   return task;
 }
 
+// Strip code blocks and truncate error text for history display
+function _truncateError(err) {
+  if (!err || typeof err !== 'string') return err || '';
+  return err.replace(/```[\s\S]*?```/g, '[code block]').replace(/\s+/g, ' ').trim().slice(0, 200);
+}
+
 function failTask(id, error) {
   const task = getTask(id);
   if (!task) return null;
@@ -274,7 +285,7 @@ function failTask(id, error) {
       status: 'scheduled',
       schedule: { ...task.schedule, at: new Date(Date.now() + 60000).toISOString() }, // retry in 1 min
       _historyEvent: 'retry',
-      _historyDetail: error,
+      _historyDetail: _truncateError(error),
     });
     return getTask(id);
   }
@@ -284,7 +295,7 @@ function failTask(id, error) {
     status: 'failed',
     result: { ok: false, error: error, completedAt: new Date().toISOString() },
     _historyEvent: 'failed',
-    _historyDetail: error,
+    _historyDetail: _truncateError(error),
   };
   const updated = updateTask(id, updates);
 

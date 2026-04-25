@@ -415,10 +415,24 @@
 
   // ── Select (dropdown) ───────────────────────────────────────────────────
 
-  async function doSelect({ selector, value, label } = {}) {
+  async function doSelect({ selector, value, values, label } = {}) {
     const el = resolveElement(selector);
     if (!el) return { ok: false, error: 'Element not found: ' + selector };
     if (el.tagName !== 'SELECT') return { ok: false, error: 'Element is not a <select>' };
+
+    // Multi-select: values array
+    if (values && Array.isArray(values) && el.multiple) {
+      const selected = [];
+      Array.from(el.options).forEach(o => { o.selected = false; });
+      for (const v of values) {
+        let opt = Array.from(el.options).find(o => o.value === v);
+        if (!opt) opt = Array.from(el.options).find(o => o.text.toLowerCase().includes(String(v).toLowerCase()));
+        if (opt) { opt.selected = true; selected.push(opt.value); }
+      }
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return { ok: true, selected };
+    }
+
     setSelectValue(el, value || label || '');
     return { ok: true };
   }

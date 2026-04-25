@@ -54,21 +54,21 @@ function renderTasks() {
     var statusClass = 'task-status-' + t.status;
     var agents = t.agents || (t.agent ? [t.agent] : []);
     var agentLabel = agents.length ? agents.map(function(a) { return '<span class="task-agent">' + escHtml(a) + '</span>'; }).join(' ') : '';
+    var permBadges = _permBadges(t.permissions);
     var schedLabel = _scheduleLabel(t);
     var runningInfo = '';
     if (t._running) {
-      var pct = Math.min(100, Math.round((t._running.step / (t.maxSteps || 20)) * 100));
       runningInfo = '<div class="task-progress">' +
-        '<div class="task-progress-bar" style="width:' + pct + '%"></div>' +
+        '<div class="task-progress-bar task-progress-indeterminate"></div>' +
         '</div>' +
-        '<div class="task-step">Step ' + t._running.step + '/' + (t.maxSteps || 20) + '</div>';
+        '<div class="task-step">Step ' + t._running.step + '</div>';
     }
     var resultInfo = '';
     if (t.status === 'completed' && t.result) {
-      resultInfo = '<div class="task-result ok">' + escHtml((t.result.summary || '').slice(0, 100)) + '</div>';
+      resultInfo = '<div class="task-result ok">' + escHtml(_cleanResultText(t.result.summary || '')) + '</div>';
     }
     if (t.status === 'failed' && t.result) {
-      resultInfo = '<div class="task-result fail">' + escHtml((t.result.error || '').slice(0, 100)) + '</div>';
+      resultInfo = '<div class="task-result fail">' + escHtml(_cleanResultText(t.result.error || '')) + '</div>';
     }
     var timeAgo = t.updatedAt ? _timeAgo(new Date(t.updatedAt)) : '';
 
@@ -79,10 +79,12 @@ function renderTasks() {
         '<span class="task-time">' + timeAgo + '</span>' +
       '</div>' +
       '<div class="task-row-meta">' +
-        agentLabel + schedLabel +
+        agentLabel + permBadges + schedLabel +
       '</div>' +
       runningInfo +
       resultInfo +
+      _renderSteerInput(t) +
+      _renderTaskLog(t) +
       '<div class="task-row-actions">' +
         _taskActions(t) +
       '</div>' +
@@ -117,15 +119,51 @@ function _scheduleLabel(t) {
 
 function _taskActions(t) {
   var btns = [];
-  if (t.status === 'pending' || t.status === 'scheduled' || t.status === 'paused' || t.status === 'failed') {
-    btns.push('<button class="task-btn run" onclick="taskRun(\'' + t.id + '\')" title="Run now"><i class="ti ti-player-play"></i></button>');
+  if (t.status === 'pending' || t.status === 'scheduled' || t.status === 'paused' || t.status === 'failed' || t.status === 'completed') {
+    btns.push('<button class="task-btn run" onclick="taskRun(\'' + t.id + '\')" title="' + (t.status === 'completed' ? 'Re-run' : 'Run now') + '"><i class="ti ti-player-play"></i></button>');
   }
   if (t.status === 'running') {
     btns.push('<button class="task-btn pause" onclick="taskPause(\'' + t.id + '\')" title="Pause"><i class="ti ti-player-pause"></i></button>');
   }
+  if (t.history && t.history.length) {
+    btns.push('<button class="task-btn" onclick="taskToggleLog(\'' + t.id + '\')" title="Toggle log"><i class="ti ti-list-details"></i></button>');
+  }
   btns.push('<button class="task-btn edit" onclick="taskEdit(\'' + t.id + '\')" title="Edit"><i class="ti ti-pencil"></i></button>');
   btns.push('<button class="task-btn del" onclick="taskDelete(\'' + t.id + '\')" title="Delete"><i class="ti ti-trash"></i></button>');
   return btns.join('');
+}
+
+// ── Steering (inject message into running task) ──────────────────────────
+
+function _renderSteerInput(t) {
+  if (t.status !== 'running') return '';
+  return '<div class="task-steer">' +
+    '<input type="text" class="task-steer-input" placeholder="Steer: add instruction…" ' +
+      'onkeydown="if(event.key===\'Enter\')taskSteer(\'' + t.id + '\',this)">' +
+    '<button class="task-steer-btn" onclick="taskSteer(\'' + t.id + '\',this.previousElementSibling)" title="Send">' +
+      '<i class="ti ti-send-2"></i></button>' +
+  '</div>';
+}
+
+async function taskSteer(id, inputEl) {
+  var msg = inputEl.value.trim();
+  if (!msg) return;
+  inputEl.value = '';
+  inputEl.disabled = true;
+  try {
+    var r = await fetch('/api/tasks/' + id + '/steer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg }),
+    });
+    var data = await r.json();
+    if (!data.ok) showToast('Steer failed: ' + (data.error || 'unknown'));
+    else showToast('Steering sent');
+  } catch (e) {
+    showToast('Failed to steer: ' + e.message);
+  }
+  inputEl.disabled = false;
+  inputEl.focus();
 }
 
 function _timeAgo(d) {
@@ -168,6 +206,19 @@ function taskEdit(id) {
   document.getElementById('task-desc-input').value = t.description || '';
   document.getElementById('task-context-input').value = t.context || '';
   document.getElementById('task-agent-input').value = (t.agents || (t.agent ? [t.agent] : [])).join(', ');
+  // Permissions
+  var perms = t.permissions || {};
+  document.getElementById('task-perm-shell').checked = perms.shell !== false;
+  document.getElementById('task-perm-browser').checked = !!perms.browser;
+  document.getElementById('task-perm-figma').checked = !!perms.figma;
+  _onBrowserPermChange();
+  if (perms.browser && typeof perms.browser === 'object' && perms.browser.tabs) {
+    document.getElementById('task-browser-tabs').value = perms.browser.tabs.join(', ');
+    // Once tabs load from extension, select the matching ones
+    setTimeout(function() { _setTabPickerSelections(perms.browser.tabs); }, 600);
+  } else {
+    document.getElementById('task-browser-tabs').value = '';
+  }
   document.getElementById('task-schedule-type').value = t.schedule?.type || 'manual';
   document.getElementById('task-schedule-at').value = t.schedule?.at ? t.schedule.at.slice(0, 16) : '';
   document.getElementById('task-schedule-cron').value = t.schedule?.cron || '';
@@ -198,6 +249,13 @@ function _resetTaskForm() {
   document.getElementById('task-desc-input').value = '';
   document.getElementById('task-context-input').value = '';
   document.getElementById('task-agent-input').value = '';
+  document.getElementById('task-perm-shell').checked = true;
+  document.getElementById('task-perm-browser').checked = false;
+  document.getElementById('task-perm-figma').checked = false;
+  document.getElementById('task-browser-tabs').value = '';
+  var picker = document.getElementById('task-tab-picker');
+  if (picker) picker.innerHTML = '<div class="task-tab-picker-empty">Enable Browser above to pick tabs</div>';
+  _onBrowserPermChange();
   document.getElementById('task-schedule-type').value = 'manual';
   document.getElementById('task-schedule-at').value = '';
   document.getElementById('task-schedule-cron').value = '';
@@ -222,6 +280,11 @@ async function submitTask() {
     description: document.getElementById('task-desc-input').value.trim(),
     context: document.getElementById('task-context-input').value.trim(),
     agents: document.getElementById('task-agent-input').value.split(',').map(function(s){ return s.trim(); }).filter(Boolean),
+    permissions: {
+      shell: document.getElementById('task-perm-shell').checked,
+      browser: _getBrowserPermission(),
+      figma: document.getElementById('task-perm-figma').checked,
+    },
     schedule: {
       type: document.getElementById('task-schedule-type').value,
       at: document.getElementById('task-schedule-at').value ? new Date(document.getElementById('task-schedule-at').value).toISOString() : null,
@@ -272,15 +335,15 @@ function _connectTaskSSE() {
     _taskSSE.onmessage = function(e) {
       try {
         var evt = JSON.parse(e.data);
-        if (evt.event === 'completed' || evt.event === 'failed' || evt.event === 'started') {
-          fetchTasks(); // refresh list on major events
+        if (evt.event === 'completed' || evt.event === 'failed' || evt.event === 'started') {          // Auto-expand log on failure so user sees what went wrong
+          if (evt.event === 'failed' && evt.taskId) _expandedLogs.add(evt.taskId);          fetchTasks(); // refresh list on major events
         }
         if (evt.event === 'step') {
           // Update progress inline without full refresh
           var row = document.querySelector('[data-task-id="' + evt.taskId + '"]');
           if (row) {
             var stepEl = row.querySelector('.task-step');
-            if (stepEl) stepEl.textContent = 'Step ' + evt.step + '/' + (evt.maxSteps || 20);
+            if (stepEl) stepEl.textContent = 'Step ' + evt.step;
           }
         }
       } catch (_) {}
@@ -309,6 +372,152 @@ function createTaskFromAI(taskData) {
     if (tasksPanelOpen) fetchTasks();
   }).catch(function(e) {
     showToast('Failed to create task: ' + e.message);
+  });
+}
+
+// ── Permission helpers ───────────────────────────────────────────────────
+
+function _getBrowserPermission() {
+  if (!document.getElementById('task-perm-browser').checked) return false;
+  // Collect checked tabs from picker
+  var picked = [];
+  document.querySelectorAll('#task-tab-picker .task-tab-item input:checked').forEach(function(cb) {
+    picked.push(cb.dataset.url);
+  });
+  // Also include manually typed URLs
+  var manual = document.getElementById('task-browser-tabs').value.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+  var tabs = picked.concat(manual);
+  if (tabs.length) return { tabs: tabs };
+  return true; // enabled but no specific tabs = any tab / active tab
+}
+
+function _onBrowserPermChange() {
+  var checked = document.getElementById('task-perm-browser').checked;
+  document.getElementById('task-browser-tabs-row').style.display = checked ? 'flex' : 'none';
+  if (checked) _refreshExtTabs();
+}
+
+function _permBadges(perms) {
+  if (!perms) return '';
+  var badges = [];
+  if (perms.shell !== false) badges.push('<span class="task-perm-badge"><i class="ti ti-terminal-2"></i></span>');
+  if (perms.browser) badges.push('<span class="task-perm-badge"><i class="ti ti-world-www"></i></span>');
+  if (perms.figma) badges.push('<span class="task-perm-badge"><i class="ti ti-brand-figma"></i></span>');
+  return badges.join(' ');
+}
+
+// ── Task log / history rendering ─────────────────────────────────────────
+
+var _expandedLogs = new Set(); // task IDs with log expanded
+
+function taskToggleLog(id) {
+  if (_expandedLogs.has(id)) _expandedLogs.delete(id);
+  else _expandedLogs.add(id);
+  renderTasks();
+}
+
+// Strip fenced code blocks and trim result text for display
+function _cleanResultText(text) {
+  return text.replace(/```[\s\S]*?```/g, '').replace(/\s+/g, ' ').trim().slice(0, 120) || text.slice(0, 120);
+}
+
+function _renderTaskLog(t) {
+  if (!t.history || !t.history.length) return '';
+  if (!_expandedLogs.has(t.id)) return '';
+
+  var entries = t.history.map(function(h) {
+    var time = new Date(h.timestamp);
+    var ts = time.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    var icon = _logEventIcon(h.event);
+    var detail = h.detail ? escHtml(h.detail) : '';
+    // For step events, show truncated AI response
+    if (h.event === 'step' && detail.length > 200) detail = detail.slice(0, 200) + '…';
+    return '<div class="task-log-entry task-log-' + h.event + '">' +
+      '<span class="task-log-ts">' + ts + '</span>' +
+      '<span class="task-log-icon">' + icon + '</span>' +
+      '<span class="task-log-event">' + h.event + '</span>' +
+      (detail ? '<span class="task-log-detail">' + detail + '</span>' : '') +
+    '</div>';
+  });
+
+  return '<div class="task-log">' +
+    '<div class="task-log-header" onclick="taskToggleLog(\'' + t.id + '\')">' +
+      '<i class="ti ti-list-details"></i> Log (' + t.history.length + ' entries)' +
+    '</div>' +
+    '<div class="task-log-entries">' + entries.join('') + '</div>' +
+  '</div>';
+}
+
+function _logEventIcon(event) {
+  switch (event) {
+    case 'created':     return '<i class="ti ti-circle-plus" style="color:var(--text-dim)"></i>';
+    case 'started':     return '<i class="ti ti-player-play" style="color:var(--accent)"></i>';
+    case 'step':        return '<i class="ti ti-arrow-right" style="color:var(--text-muted)"></i>';
+    case 'completed':   return '<i class="ti ti-circle-check" style="color:var(--success)"></i>';
+    case 'failed':      return '<i class="ti ti-circle-x" style="color:var(--error)"></i>';
+    case 'paused':      return '<i class="ti ti-player-pause" style="color:var(--warn)"></i>';
+    case 'scheduled':   return '<i class="ti ti-clock" style="color:var(--warn)"></i>';
+    case 'rescheduled': return '<i class="ti ti-clock-play" style="color:var(--warn)"></i>';
+    case 'retry':       return '<i class="ti ti-reload" style="color:var(--warn)"></i>';
+    case 'steered':     return '<i class="ti ti-message-forward" style="color:var(--accent)"></i>';
+    default:            return '<i class="ti ti-point"></i>';
+  }
+}
+
+// ── Browser tab picker (from Chrome extension) ───────────────────────────
+
+var _extTabsCache = [];
+
+async function _refreshExtTabs() {
+  var picker = document.getElementById('task-tab-picker');
+  if (!picker) return;
+  picker.innerHTML = '<div class="task-tab-picker-empty"><i class="ti ti-loader-2 spin"></i> Loading tabs…</div>';
+  try {
+    var r = await fetch('/api/ext/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'tab:list' }),
+    });
+    var data = await r.json();
+    if (!data.ok || !data.tabs || !data.tabs.length) {
+      picker.innerHTML = '<div class="task-tab-picker-empty">No extension tabs available — is the extension connected?</div>';
+      _extTabsCache = [];
+      return;
+    }
+    _extTabsCache = data.tabs;
+    _renderTabPicker(data.tabs);
+  } catch (e) {
+    picker.innerHTML = '<div class="task-tab-picker-empty">Extension not connected</div>';
+    _extTabsCache = [];
+  }
+}
+
+function _renderTabPicker(tabs) {
+  var picker = document.getElementById('task-tab-picker');
+  if (!picker) return;
+  // Get currently selected URLs (for edit mode)
+  var selectedUrls = new Set();
+  document.querySelectorAll('#task-tab-picker .task-tab-item input:checked').forEach(function(cb) {
+    selectedUrls.add(cb.dataset.url);
+  });
+  picker.innerHTML = tabs.map(function(tab) {
+    var favicon = 'https://www.google.com/s2/favicons?sz=16&domain=' + encodeURIComponent(new URL(tab.url).hostname);
+    var checked = selectedUrls.has(tab.url) ? ' checked' : '';
+    var activeTag = tab.active ? '<span class="task-tab-active">active</span>' : '';
+    return '<label class="task-tab-item" title="' + escHtml(tab.url) + '">' +
+      '<input type="checkbox" data-url="' + escHtml(tab.url) + '" data-tab-id="' + tab.id + '"' + checked + '>' +
+      '<img src="' + favicon + '" width="14" height="14" onerror="this.style.display=\'none\'">' +
+      '<span class="task-tab-title">' + escHtml((tab.title || '').slice(0, 50)) + '</span>' +
+      activeTag +
+    '</label>';
+  }).join('');
+}
+
+function _setTabPickerSelections(urls) {
+  if (!urls || !urls.length) return;
+  var urlSet = new Set(urls);
+  document.querySelectorAll('#task-tab-picker .task-tab-item input').forEach(function(cb) {
+    cb.checked = urlSet.has(cb.dataset.url);
   });
 }
 

@@ -21,6 +21,18 @@
   <div id="quick-add" class="hidden">
     <input id="qa-title" type="text" placeholder="Task title…" autocomplete="off">
     <input id="qa-desc" type="text" placeholder="Description (optional)" autocomplete="off">
+    <input id="qa-context" type="text" placeholder="Context (extra info for AI)" autocomplete="off">
+    <input id="qa-agents" type="text" placeholder="Agents (comma-separated)" autocomplete="off">
+    <div class="qa-perms">
+      <label class="qa-perm" title="Shell"><input type="checkbox" id="qa-perm-shell" checked><span>⌨ Shell</span></label>
+      <label class="qa-perm" title="Browser"><input type="checkbox" id="qa-perm-browser" onchange="onQaBrowserChange()"><span>🌐 Browser</span></label>
+      <label class="qa-perm" title="Figma"><input type="checkbox" id="qa-perm-figma"><span>🎨 Figma</span></label>
+    </div>
+    <div id="qa-tabs-row" class="hidden">
+      <div id="qa-tab-picker" class="qa-tab-picker">
+        <div class="qa-tab-empty">No tabs</div>
+      </div>
+    </div>
     <div class="qa-row">
       <select id="qa-sched">
         <option value="manual">Manual</option>
