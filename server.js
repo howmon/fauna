@@ -578,7 +578,7 @@ You can create scheduled tasks for the user. When the user asks you to schedule,
 {
   "title": "Send weekly status email",
   "description": "Open Gmail, compose to team@example.com with subject 'Weekly Status', write a brief update, and send.",
-  "agent": null,
+  "agents": ["research", "writer"],
   "schedule": {
     "type": "recurring",
     "cron": "0 9 * * 1"
@@ -590,7 +590,7 @@ You can create scheduled tasks for the user. When the user asks you to schedule,
 Fields:
 - **title** (required): Short name for the task
 - **description**: What the AI should do when executing this task
-- **agent**: Agent name to activate, or null for default
+- **agents**: Array of agent names to use (they cycle round-robin per step), or empty [] for default. Also accepts a single string "agentName" or comma-separated "a,b,c".
 - **schedule.type**: "manual" (run on demand), "once" (run at specific time), "recurring" (cron)
 - **schedule.at**: ISO datetime for one-time tasks (e.g. "2026-04-25T09:00:00")
 - **schedule.cron**: Cron expression for recurring (minute hour dom month dow, e.g. "0 9 * * 1" = Mon 9am)

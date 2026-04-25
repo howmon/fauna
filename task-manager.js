@@ -36,7 +36,7 @@ function createTask(opts) {
       cron:     opts.schedule?.cron || null,           // cron expression for recurring
       timezone: opts.schedule?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
     },
-    agent:       opts.agent || null,                   // agent name or null = default
+    agents:      _normalizeAgents(opts.agents || opts.agent),  // array of agent names (empty = default)
     actions:     opts.actions || [],                    // pre-planned action steps
     context:     opts.context || '',                    // extra context for the AI
     model:       opts.model || null,                    // override model or null = use default
@@ -65,12 +65,33 @@ function createTask(opts) {
   return task;
 }
 
+// Normalize agent input: string, array, null → always an array
+function _normalizeAgents(val) {
+  if (!val) return [];
+  if (typeof val === 'string') return val.split(',').map(s => s.trim()).filter(Boolean);
+  if (Array.isArray(val)) return val.flatMap(v => typeof v === 'string' ? v.split(',').map(s => s.trim()).filter(Boolean) : []).filter(Boolean);
+  return [];
+}
+
 function getTask(id) {
-  return readTasks().find(t => t.id === id) || null;
+  const t = readTasks().find(t => t.id === id) || null;
+  // Backward compat: migrate old single `agent` field to `agents` array
+  if (t && !t.agents && t.agent !== undefined) {
+    t.agents = _normalizeAgents(t.agent);
+    delete t.agent;
+  }
+  return t;
 }
 
 function getAllTasks() {
-  return readTasks();
+  return readTasks().map(t => {
+    // Backward compat: migrate old single `agent` field to `agents` array
+    if (!t.agents && t.agent !== undefined) {
+      t.agents = _normalizeAgents(t.agent);
+      delete t.agent;
+    }
+    return t;
+  });
 }
 
 function updateTask(id, updates) {

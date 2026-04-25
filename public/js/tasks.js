@@ -52,7 +52,8 @@ function renderTasks() {
   list.innerHTML = sorted.map(function(t) {
     var icon = _taskStatusIcon(t.status);
     var statusClass = 'task-status-' + t.status;
-    var agentLabel = t.agent ? '<span class="task-agent">' + escHtml(t.agent) + '</span>' : '';
+    var agents = t.agents || (t.agent ? [t.agent] : []);
+    var agentLabel = agents.length ? agents.map(function(a) { return '<span class="task-agent">' + escHtml(a) + '</span>'; }).join(' ') : '';
     var schedLabel = _scheduleLabel(t);
     var runningInfo = '';
     if (t._running) {
@@ -166,7 +167,7 @@ function taskEdit(id) {
   document.getElementById('task-title-input').value = t.title;
   document.getElementById('task-desc-input').value = t.description || '';
   document.getElementById('task-context-input').value = t.context || '';
-  document.getElementById('task-agent-input').value = t.agent || '';
+  document.getElementById('task-agent-input').value = (t.agents || (t.agent ? [t.agent] : [])).join(', ');
   document.getElementById('task-schedule-type').value = t.schedule?.type || 'manual';
   document.getElementById('task-schedule-at').value = t.schedule?.at ? t.schedule.at.slice(0, 16) : '';
   document.getElementById('task-schedule-cron').value = t.schedule?.cron || '';
@@ -220,7 +221,7 @@ async function submitTask() {
     title: title,
     description: document.getElementById('task-desc-input').value.trim(),
     context: document.getElementById('task-context-input').value.trim(),
-    agent: document.getElementById('task-agent-input').value.trim() || null,
+    agents: document.getElementById('task-agent-input').value.split(',').map(function(s){ return s.trim(); }).filter(Boolean),
     schedule: {
       type: document.getElementById('task-schedule-type').value,
       at: document.getElementById('task-schedule-at').value ? new Date(document.getElementById('task-schedule-at').value).toISOString() : null,

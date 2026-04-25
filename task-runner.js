@@ -93,7 +93,7 @@ async function _autonomyLoop(task, state) {
       messages,
       model: task.model || 'claude-sonnet-4.6',
       systemPrompt,
-      agentName: task.agent || null,
+      agentName: _pickAgent(task, state.step),
       thinkingBudget: 'medium',
       maxContextTurns: 100,
     }, state.abortController.signal);
@@ -149,6 +149,15 @@ async function _autonomyLoop(task, state) {
   // Max steps exceeded
   failTask(task.id, 'Max steps (' + maxSteps + ') exceeded');
   _emit(task.id, 'failed', { error: 'max steps exceeded' });
+}
+
+// ── Agent selection — round-robin across assigned agents ─────────────────
+
+function _pickAgent(task, step) {
+  const agents = task.agents || [];
+  if (agents.length === 0) return null;          // use default
+  if (agents.length === 1) return agents[0];
+  return agents[(step - 1) % agents.length];     // round-robin
 }
 
 // ── Call /api/chat via loopback ──────────────────────────────────────────
