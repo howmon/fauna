@@ -554,6 +554,7 @@ If the user asks you to look at or interact with their Chrome/Edge browser, you 
 - \`{"action":"eval","js":"return document.title"}\` — run JS and return result
 
 ### Rules
+- **browser-ext-action is ONLY for interacting with web pages in Chrome/Edge.** Do NOT use it for app-internal tasks like updating agent instructions, editing system prompts, modifying settings, or managing agents. For those, use \`patch-agent\` blocks, the \`update-prompt\` API, or \`shell-exec\` blocks — never navigate anywhere.
 - **Prioritise context the user already pushed** (sent page, snapshot, selection) before requesting more via extract.
 - When the user says "look at my Chrome tab / Edge / browser" — use \`extract\` or \`snapshot\` to pull context in first, then reason about it.
 - Always \`extract\` or \`extract-forms\` before attempting \`fill\` or \`click\` — you need current selectors.
