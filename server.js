@@ -894,7 +894,7 @@ app.post('/api/chat', async (req, res) => {
 
   // Track client disconnect so the tool loop can bail early
   let clientAborted = false;
-  req.on('close', () => { clientAborted = true; });
+  res.on('close', () => { if (!res.writableFinished) clientAborted = true; });
 
   res.writeHead(200, {
     'Content-Type':    'text/event-stream',
