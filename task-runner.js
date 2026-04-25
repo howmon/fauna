@@ -155,37 +155,36 @@ async function _autonomyLoop(task, state) {
     // Update task with step progress
     updateTask(task.id, {
       _historyEvent: 'step',
-      _historyDetail: 'Step ' + state.step + ': ' + aiResponse.slice(0, 120),
+      _historyDetail: 'Step ' + state.step + ': ' + aiResponse.replace(/```[\s\S]*?```/g, '[…]').replace(/\s+/g, ' ').trim().slice(0, 150),
     });
 
-    // Check for completion markers
-    if (/TASK_COMPLETE/i.test(aiResponse)) {
-      const summary = aiResponse.replace(/.*TASK_COMPLETE:?\s*/i, '').trim() || 'Task completed successfully';
-      completeTask(task.id, { summary });
-      _emit(task.id, 'completed', { summary });
-      return;
-    }
-
-    if (/TASK_FAILED/i.test(aiResponse)) {
-      const reason = aiResponse.replace(/.*TASK_FAILED:?\s*/i, '').trim() || 'Task failed (no reason given)';
-      failTask(task.id, reason);
-      _emit(task.id, 'failed', { error: reason });
-      return;
-    }
-
-    // Check if the AI produced actionable blocks (shell-exec, browser-ext-action, etc.)
-    // The /api/chat endpoint handles tool calls server-side, but code blocks in the
-    // response text need the client to execute them. For autonomous mode, we extract
-    // and auto-execute them, then feed results back.
+    // FIRST: execute any action blocks in the response (before checking completion markers)
+    // The AI often emits action blocks alongside TASK_FAILED guesses — we must run
+    // the actions first and feed results back so the AI can make an informed decision.
     const actionResults = await _executeResponseActions(aiResponse, task);
 
     if (actionResults && actionResults.length) {
-      // Feed action results back as user message for next iteration
+      // Feed action results back — the AI decides next step based on real results
       const feedback = actionResults.map((r, i) =>
         `[Action ${i + 1}] ${r.type}: ${r.output.slice(0, 2000)}`
       ).join('\n\n');
-      messages.push({ role: 'user', content: feedback + '\n\nContinue the task based on these results. Say TASK_COMPLETE when done or TASK_FAILED if stuck.' });
+      messages.push({ role: 'user', content: feedback + '\n\nContinue the task based on these results. Say TASK_COMPLETE: <summary> when done, or TASK_FAILED: <reason> if you cannot proceed.' });
     } else {
+      // No action blocks — this is a pure text response, check for completion markers
+      if (/TASK_COMPLETE/i.test(aiResponse)) {
+        const summary = aiResponse.replace(/[\s\S]*TASK_COMPLETE:?\s*/i, '').trim() || 'Task completed successfully';
+        completeTask(task.id, { summary: summary.slice(0, 500) });
+        _emit(task.id, 'completed', { summary: summary.slice(0, 500) });
+        return;
+      }
+
+      if (/TASK_FAILED/i.test(aiResponse)) {
+        const reason = aiResponse.replace(/[\s\S]*TASK_FAILED:?\s*/i, '').trim() || 'Task failed (no reason given)';
+        failTask(task.id, reason.slice(0, 500));
+        _emit(task.id, 'failed', { error: reason.slice(0, 500) });
+        return;
+      }
+
       // No actions and no completion marker — the AI might be explaining or stuck
       // Give it one more nudge
       messages.push({ role: 'user', content: 'Continue executing. Use ```browser-ext-action blocks (one action per block) to take action. Say TASK_COMPLETE when done.' });
@@ -324,9 +323,9 @@ async function _executeResponseActions(response, task) {
         });
         const result = await r.json();
         if (result.ok) {
-          // Summarize result — extract useful fields, cap size
-          const summary = JSON.stringify(result, null, 0).slice(0, 4000);
-          results.push({ type: 'browser-ext-action', output: act.action + ' → ok\n' + summary });
+          // Smart summarize — strip images, cap text, keep useful info
+          const summary = _summarizeActionResult(act.action, result);
+          results.push({ type: 'browser-ext-action', output: summary });
         } else {
           results.push({ type: 'browser-ext-action', output: act.action + ' → error: ' + (result.error || 'unknown') });
         }
@@ -337,6 +336,67 @@ async function _executeResponseActions(response, task) {
   }
 
   return results;
+}
+
+// ── Smart summarize browser action results ───────────────────────────────
+// Strip base64 images, cap extracted text, keep only useful info for the AI
+
+function _summarizeActionResult(action, result) {
+  switch (action) {
+    case 'snapshot':
+    case 'snapshot-full':
+      return action + ' → ok (screenshot captured, ' +
+        (result.width ? result.width + 'x' + result.height : 'image available') + ')';
+    case 'navigate':
+      return 'navigate → ok' + (result.url ? ' — now at: ' + result.url : '');
+    case 'click':
+      return 'click → ok' + (result.clicked ? ' — clicked: ' + String(result.clicked).slice(0, 100) : '');
+    case 'fill':
+    case 'type':
+      return action + ' → ok (filled form field)';
+    case 'wait':
+      return 'wait → ok';
+    case 'hover':
+      return 'hover → ok';
+    case 'select':
+      return 'select → ok';
+    case 'keyboard':
+      return 'keyboard → ok';
+    case 'scroll':
+      return 'scroll → ok';
+    case 'eval': {
+      const val = result.result !== undefined ? String(result.result) : '';
+      return 'eval → ok\n' + val.slice(0, 3000);
+    }
+    case 'extract': {
+      const text = result.text || result.content || JSON.stringify(result).slice(0, 3000);
+      return 'extract → ok\n' + String(text).slice(0, 3000);
+    }
+    case 'extract-forms': {
+      const forms = result.forms || result.fields || result;
+      const txt = typeof forms === 'string' ? forms : JSON.stringify(forms, null, 0);
+      return 'extract-forms → ok\n' + txt.slice(0, 3000);
+    }
+    case 'tab:list': {
+      const tabs = result.tabs || [];
+      return 'tab:list → ok (' + tabs.length + ' tabs)\n' +
+        tabs.map(t => '- ' + (t.title || t.url || t.id)).join('\n').slice(0, 1000);
+    }
+    case 'tab:info':
+      return 'tab:info → ok\n' + JSON.stringify({ id: result.id, title: result.title, url: result.url }).slice(0, 500);
+    case 'console-logs': {
+      const logs = result.logs || result;
+      const txt = typeof logs === 'string' ? logs : JSON.stringify(logs, null, 0);
+      return 'console-logs → ok\n' + txt.slice(0, 2000);
+    }
+    default: {
+      // Generic: strip any image/base64 fields, cap to 2000
+      const clean = { ...result };
+      delete clean.image; delete clean.screenshot; delete clean.base64; delete clean.ok;
+      const txt = JSON.stringify(clean, null, 0);
+      return action + ' → ok\n' + txt.slice(0, 2000);
+    }
+  }
 }
 
 // ── SSE Event Emitter for live monitoring ────────────────────────────────
