@@ -136,7 +136,7 @@
     <div id="topbar">
       <button id="toggle-sidebar" onclick="toggleSidebar()" title="Toggle sidebar"><i class="ti ti-menu-2"></i></button>
       <span id="topbar-title">New conversation</span>
-      <span id="agent-badge" style="display:none" onclick="deactivateAgent(getConv(state.currentId))"></span>
+      <span id="agent-badge" style="display:none !important" onclick="deactivateAgent(getConv(state.currentId))"></span>
       <select id="model-select" onchange="onModelChange(this.value)"></select>
       <button class="topbar-btn" onclick="clearConversation()" title="Clear messages"><i class="ti ti-trash"></i> Clear</button>
       <button class="topbar-btn" onclick="toggleDebugLog()" id="debug-btn" title="Debug log"><i class="ti ti-bug"></i></button>
