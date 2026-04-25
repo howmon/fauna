@@ -27,6 +27,8 @@ try {
 // Power-save blocker — keeps screen/CPU awake while any chat request is active.
 let _psBlockerId = null;
 let _psActiveCount = 0;
+// Models that have rejected thinking params — skip thinking for these going forward
+const _thinkingDisabledModels = new Set();
 function _psAcquire() {
   _psActiveCount++;
   if (_psActiveCount === 1 && powerSaveBlocker && _psBlockerId === null) {
@@ -990,9 +992,10 @@ app.post('/api/chat', async (req, res) => {
       else { params.max_tokens = 16384; }
 
       // Thinking budget — Claude models use `thinking`, o-series use `reasoning_effort`
-      if (thinkingBudget !== 'off') {
+      // Only enable for models known to support it (some proxied models reject thinking params)
+      if (thinkingBudget !== 'off' && !_thinkingDisabledModels.has(model)) {
         const budgetTokens = { low: 1024, medium: 5000, high: 10000, max: 32000 }[thinkingBudget] || 10000;
-        if (model.includes('claude')) {
+        if (model.includes('claude') && /sonnet|opus/.test(model)) {
           params.thinking = { type: 'enabled', budget_tokens: budgetTokens };
           const minTokens = budgetTokens + 4000;
           if (useCompletionTokens) { params.max_completion_tokens = Math.max(params.max_completion_tokens, minTokens); }
@@ -1013,6 +1016,12 @@ app.post('/api/chat', async (req, res) => {
         if (apiErr.message?.includes('max_tokens') && params.max_tokens) {
           params.max_completion_tokens = params.max_tokens;
           delete params.max_tokens;
+          stream = await client.chat.completions.create(params);
+        // Auto-recover: if thinking param is rejected, retry without it
+        } else if (apiErr.message?.includes('thinking') && params.thinking) {
+          console.log('[chat] thinking param rejected for %s, disabling and retrying', model);
+          _thinkingDisabledModels.add(model);
+          delete params.thinking;
           stream = await client.chat.completions.create(params);
         } else {
           throw apiErr;
@@ -1114,7 +1123,29 @@ app.post('/api/chat', async (req, res) => {
       }
     }
   } catch (err) {
-    send({ type: 'error', error: err.message });
+    // Auto-recover: if thinking param caused a stream error, disable and retry
+    if (err.message?.includes('thinking') && !res.writableEnded) {
+      console.log('[chat] thinking param caused stream error for %s, disabling and retrying', model);
+      _thinkingDisabledModels.add(model);
+      try {
+        const retryParams = { model, messages: allMessages, stream: true, stream_options: { include_usage: true } };
+        if (/^(o[1-9]|gpt-5)/.test(model)) { retryParams.max_completion_tokens = 16384; }
+        else { retryParams.max_tokens = 16384; }
+        if (mcpTools?.length) retryParams.tools = mcpTools;
+        const retryStream = await getClientForModel(model).chat.completions.create(retryParams);
+        for await (const chunk of retryStream) {
+          if (res.writableEnded) break;
+          if (chunk.usage) send({ type: 'done', finish_reason: chunk.choices?.[0]?.finish_reason || 'stop', usage: chunk.usage });
+          const delta = chunk.choices?.[0]?.delta;
+          if (delta?.content) send({ type: 'content', content: delta.content });
+        }
+        send({ type: 'done', finish_reason: 'stop', usage: null });
+      } catch (retryErr) {
+        send({ type: 'error', error: retryErr.message });
+      }
+    } else {
+      send({ type: 'error', error: err.message });
+    }
   }
 
   if (!res.writableEnded) res.end();

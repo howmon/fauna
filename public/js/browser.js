@@ -1232,7 +1232,7 @@ async function _runExtActionSequence(widgets, convId) {
           await sendDirectMessage(
             '[Browser extension snapshot' + (w.action.action === 'snapshot-full' ? ' (full page)' : '') +
             '] from: ' + snapUrl,
-            { image: 'data:' + snapMime + ';base64,' + result.base64 }
+            { image: 'data:' + snapMime + ';base64,' + result.base64, isBrowserFeed: true, targetConvId: convId }
           );
         }
       }
