@@ -1209,14 +1209,29 @@ async function _runExtActionSequence(widgets, convId) {
         await browserFeedAI(evalFeed, convId);
       }
 
-      // snapshot — inject image into AI
+      // snapshot — show thumbnail + inject image into AI
       if (w.action.action === 'snapshot' || w.action.action === 'snapshot-full') {
         if (result.base64) {
           var snapMime = result.mime || 'image/jpeg';
           var snapTabInfo = await executeExtAction({ action: 'tab:info' }).catch(function() { return {}; });
+          var snapUrl = snapTabInfo.url || 'browser';
+          var snapLabel = snapUrl.length > 60 ? snapUrl.slice(0, 57) + '…' : snapUrl;
+
+          // Show thumbnail in chat
+          var thumbEl = document.createElement('div');
+          thumbEl.className = 'msg system-msg';
+          thumbEl.innerHTML = '<div class="msg-body" style="display:flex;align-items:center;gap:8px;font-size:11px">' +
+            '<img src="data:' + snapMime + ';base64,' + result.base64 + '" ' +
+            'style="max-width:120px;max-height:80px;border-radius:6px;border:1px solid rgba(255,255,255,.1);cursor:pointer" ' +
+            'onclick="window.open(this.src,\'_blank\')" title="Click to enlarge">' +
+            '<span style="opacity:.7"><i class="ti ti-camera" style="margin-right:4px"></i>Snapshot from ' + escHtml(snapLabel) + '</span>' +
+            '</div>';
+          var convInner = document.getElementById('conv-' + (convId || state.currentId));
+          if (convInner) { convInner.appendChild(thumbEl); scrollBottom(); }
+
           await sendDirectMessage(
             '[Browser extension snapshot' + (w.action.action === 'snapshot-full' ? ' (full page)' : '') +
-            '] from: ' + (snapTabInfo.url || 'browser'),
+            '] from: ' + snapUrl,
             { image: 'data:' + snapMime + ';base64,' + result.base64 }
           );
         }
