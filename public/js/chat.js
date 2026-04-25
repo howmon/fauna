@@ -94,6 +94,8 @@ async function sendDirectMessage(content, opts) {
     : (content.find(function(c){ return c.type === 'text'; }) || {}).text || '';
 
   var userMsg = { role: 'user', content: content };
+  if (opts.isBrowserFeed) userMsg._isBrowserFeed = true;
+  if (opts.isAutoFeed || opts.fromAutoFeed) userMsg._isAutoFeed = true;
   // Attach inline image if provided (e.g. browser extension snapshot)
   if (opts.image) {
     var imgDataUrl = opts.image;
@@ -244,6 +246,7 @@ async function sendMessage(opts) {
   var userMsg = {
     role: 'user',
     content: apiContent,
+    _displayText: text,
     images: pendingImages.length ? pendingImages : undefined,
     attachments: state.pendingAttachments.map(function(a) {
       return {

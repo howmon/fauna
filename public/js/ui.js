@@ -1064,8 +1064,8 @@ function handlePromptHistory(key, input) {
   var conv = getConv(state.currentId);
   if (!conv) return false;
 
-  // Collect user messages in order (oldest first)
-  var userMsgs = conv.messages.filter(function(m) { return m.role === 'user'; });
+  // Collect user messages in order (oldest first) — exclude auto-feed/browser-feed
+  var userMsgs = conv.messages.filter(function(m) { return m.role === 'user' && !m._isBrowserFeed && !m._isAutoFeed; });
   if (!userMsgs.length) return false;
 
   if (key === 'ArrowUp') {
@@ -1100,8 +1100,8 @@ function handlePromptHistory(key, input) {
   }
 
   var msg = userMsgs[_promptHistIdx];
-  // Extract display text (strip appended file/url fences)
-  var displayText = msg.content.split(/\n\n```\n\/\/ (File|URL):/)[0].trim();
+  // Use stored display text if available, else strip appended file/url fences and system context
+  var displayText = msg._displayText || msg.content.split(/\n\n(```\n\/\/ (File|URL):|\[System context)/)[0].trim();
   input.value = displayText;
   resizeTextarea(input);
 

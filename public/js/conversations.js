@@ -104,6 +104,26 @@ function loadConversation(id) {
   if (!convInner.hasChildNodes()) {
     conv.messages.forEach(m => {
       if (m._compositionHandoff) return; // skip internal handoff messages
+      if (m._isBrowserFeed) {
+        var feedNote = document.createElement('div');
+        feedNote.className = 'msg system-msg';
+        feedNote.innerHTML = '<div class="msg-body" style="display:flex;align-items:center;gap:5px;font-size:11px">' +
+          '<i class="ti ti-world-www" style="font-size:12px;opacity:.5"></i>' +
+          '<span>Browser page fed to AI</span>' +
+        '</div>';
+        convInner.appendChild(feedNote);
+        return;
+      }
+      if (m._isAutoFeed) {
+        var autoNote = document.createElement('div');
+        autoNote.className = 'msg system-msg';
+        autoNote.innerHTML = '<div class="msg-body" style="display:flex;align-items:center;gap:5px;font-size:11px">' +
+          '<i class="ti ti-terminal-2" style="font-size:12px;opacity:.5"></i>' +
+          '<span>Shell output fed to AI</span>' +
+        '</div>';
+        convInner.appendChild(autoNote);
+        return;
+      }
       appendMessageDOM(m.role, m.content, m.attachments, false, m.agentInfo || null, m._isHTML || false);
     });
   }
