@@ -692,6 +692,15 @@ async function streamResponse(conv) {
             }
             scheduleRender();
           }
+          if (evt.type === 'tool_waiting_for_input') {
+            dbg('tool waiting for input: killId=' + evt.killId + ' hint=' + evt.hint, 'warn');
+            if (typeof _showShellInput === 'function') {
+              // Create a unique exec ID and show the input widget below the current AI message
+              var stdinId = 'agent-stdin-' + Date.now();
+              var resultEl = bodyEl.querySelector('.shell-output-block') || bodyEl;
+              _showShellInput(stdinId, evt.killId, evt.hint || 'Waiting for input…', resultEl);
+            }
+          }
           if (evt.type === 'done') {
             dbg('done: finish_reason=' + evt.finish_reason + ' usage=' + JSON.stringify(evt.usage), evt.finish_reason ? 'ok' : 'warn');
             if (evt.usage) _ctxUsage = evt.usage;

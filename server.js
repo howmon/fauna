@@ -1085,7 +1085,12 @@ app.post('/api/chat', async (req, res) => {
               const onOutput = toolName === 'agent_shell_exec'
                 ? (chunk) => send({ type: 'tool_output', name: toolName, output: chunk })
                 : undefined;
-              result = await agentToolHandlers.get(toolName)(args, onOutput);
+              const shellOpts = toolName === 'agent_shell_exec' ? {
+                registerProcess: (killId, child) => _shellProcs.set(killId, child),
+                unregisterProcess: (killId) => _shellProcs.delete(killId),
+                onWaitingForInput: (killId, hint) => send({ type: 'tool_waiting_for_input', killId, hint }),
+              } : undefined;
+              result = await agentToolHandlers.get(toolName)(args, onOutput, shellOpts);
             } else {
               figmaLog('🔧 ' + toolName + (toolName === 'figma_execute' ? ': ' + (args.code || '').slice(0, 80).replace(/\n/g,' ') + '…' : ''), 'cmd');
               result = await figmaMCP.callTool(toolName, args);

@@ -323,8 +323,9 @@ function getBuiltInToolDefinitions(permissions) {
 /**
  * Execute a built-in agent tool call. Routes through the sandbox.
  * @param {Function} [onOutput] - optional callback(chunk) for streaming shell output
+ * @param {object} [opts] - optional { onWaitingForInput(killId, hint), registerProcess(killId, child) }
  */
-async function executeBuiltInTool(toolName, args, permissions, agentName, onOutput) {
+async function executeBuiltInTool(toolName, args, permissions, agentName, onOutput, opts) {
   switch (toolName) {
     case 'agent_shell_exec': {
       const check = checkShellCommand(args.command, permissions, agentName);
@@ -342,6 +343,10 @@ async function executeBuiltInTool(toolName, args, permissions, agentName, onOutp
           stdio: ['pipe', 'pipe', 'pipe'],
         });
 
+        // Register process for stdin support
+        const killId = 'agent-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+        if (opts && opts.registerProcess) opts.registerProcess(killId, child);
+
         let stdout = '';
         let stderr = '';
         let lastChunk = '';
@@ -352,9 +357,13 @@ async function executeBuiltInTool(toolName, args, permissions, agentName, onOutp
         function resetIdleTimer() {
           if (idleTimer) clearTimeout(idleTimer);
           idleTimer = setTimeout(() => {
-            if (!child.killed && child.exitCode === null && onOutput) {
+            if (!child.killed && child.exitCode === null) {
               const hint = lastChunk.trim().split('\n').pop();
-              onOutput('\n⏳ Process appears to be waiting for input: ' + hint + '\n');
+              if (opts && opts.onWaitingForInput) {
+                opts.onWaitingForInput(killId, hint);
+              } else if (onOutput) {
+                onOutput('\n⏳ Process appears to be waiting for input: ' + hint + '\n');
+              }
             }
           }, IDLE_MS);
         }
@@ -386,6 +395,7 @@ async function executeBuiltInTool(toolName, args, permissions, agentName, onOutp
         child.on('close', (code) => {
           clearTimeout(timeout);
           if (idleTimer) clearTimeout(idleTimer);
+          if (opts && opts.unregisterProcess) opts.unregisterProcess(killId);
           const exitCode = code ?? 0;
           let result = '';
           if (stdout) result += stdout;
@@ -398,6 +408,7 @@ async function executeBuiltInTool(toolName, args, permissions, agentName, onOutp
         child.on('error', (err) => {
           clearTimeout(timeout);
           if (idleTimer) clearTimeout(idleTimer);
+          if (opts && opts.unregisterProcess) opts.unregisterProcess(killId);
           resolve('Error: ' + err.message + '\n\n[exit code: 1]');
         });
       });
@@ -562,7 +573,7 @@ function getAgentTools(agentDir, manifest, agentName) {
   // Built-in handlers
   for (const def of builtInDefs) {
     const name = def.function.name;
-    handlers.set(name, (args, onOutput) => executeBuiltInTool(name, args, permissions, agentName, onOutput));
+    handlers.set(name, (args, onOutput, opts) => executeBuiltInTool(name, args, permissions, agentName, onOutput, opts));
   }
   // Custom tool handlers
   for (const tool of customTools) {
