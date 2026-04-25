@@ -101,6 +101,9 @@
     "files": [
       "main.js",
       "server.js",
+      "widget-preload.js",
+      "task-manager.js",
+      "task-runner.js",
       "agent-*.js",
       "public/**",
       "assets/**",

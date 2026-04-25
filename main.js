@@ -1,12 +1,14 @@
-import { app, BrowserWindow, Menu, shell, nativeImage, nativeTheme } from 'electron';
+import { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, shell, nativeImage, nativeTheme } from 'electron';
 import path     from 'path';
 import fs       from 'fs';
+import os       from 'os';
 import { fileURLToPath } from 'url';
 import { startServer }   from './server.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT      = 3737;
 const IS_WIN    = process.platform === 'win32';
+const IS_MAC    = process.platform === 'darwin';
 
 nativeTheme.themeSource = 'dark';
 
@@ -19,6 +21,8 @@ app.commandLine.appendSwitch('auto-select-desktop-capture-source', 'Entire scree
 if (IS_WIN) app.disableHardwareAcceleration();
 
 let mainWindow;
+let widgetWindow = null;
+let tray = null;
 
 // ── Window ────────────────────────────────────────────────────────────────
 
@@ -135,6 +139,8 @@ function buildMenu() {
       submenu: [
         { label: 'Toggle Sidebar',      accelerator: 'Cmd+B',     click: () => js('toggleSidebar()') },
         { label: 'System Prompt',       accelerator: 'Cmd+Shift+P', click: () => js('toggleSysPanel()') },
+        { label: 'Tasks',               accelerator: 'Cmd+Shift+T', click: () => js('toggleTasksPanel()') },
+        { label: 'Task Widget',          accelerator: 'Ctrl+Shift+Space', click: () => toggleWidget() },
         { type: 'separator' },
         { label: 'Reload',              role: 'reload' },
         { label: 'Toggle DevTools',     accelerator: 'Alt+Cmd+I', role: 'toggleDevTools' },
@@ -195,6 +201,136 @@ function buildMenu() {
   ]);
 }
 
+// ── Task Widget — Floating BrowserWindow ──────────────────────────────
+
+const WIDGET_PREFS_FILE = path.join(os.homedir(), '.config', 'fauna', 'widget-prefs.json');
+
+function readWidgetPrefs() {
+  try { return JSON.parse(fs.readFileSync(WIDGET_PREFS_FILE, 'utf8')); }
+  catch (_) { return {}; }
+}
+function writeWidgetPrefs(prefs) {
+  const dir = path.dirname(WIDGET_PREFS_FILE);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(WIDGET_PREFS_FILE, JSON.stringify(prefs, null, 2));
+}
+
+function createWidget() {
+  if (widgetWindow && !widgetWindow.isDestroyed()) {
+    widgetWindow.show();
+    widgetWindow.focus();
+    return;
+  }
+
+  const prefs = readWidgetPrefs();
+  const x = prefs.x ?? undefined;
+  const y = prefs.y ?? undefined;
+  const w = prefs.width  ?? 320;
+  const h = prefs.height ?? 420;
+  const pinned = prefs.pinned ?? true;
+
+  widgetWindow = new BrowserWindow({
+    width: w,
+    height: h,
+    ...(x !== undefined && y !== undefined ? { x, y } : {}),
+    minWidth: 240,
+    minHeight: 200,
+    maxWidth: 600,
+    frame: false,
+    transparent: IS_MAC,
+    alwaysOnTop: pinned,
+    skipTaskbar: true,
+    resizable: true,
+    hasShadow: true,
+    backgroundColor: '#1b1b1b',
+    titleBarStyle: 'customButtonsOnHover',
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: path.join(__dirname, 'widget-preload.js'),
+    },
+    show: false,
+  });
+
+  widgetWindow.loadURL(`http://localhost:${PORT}/widget.html`);
+
+  widgetWindow.once('ready-to-show', () => {
+    widgetWindow.show();
+  });
+
+  // Persist position/size on move/resize
+  const savePos = () => {
+    if (!widgetWindow || widgetWindow.isDestroyed()) return;
+    const bounds = widgetWindow.getBounds();
+    const old = readWidgetPrefs();
+    writeWidgetPrefs({ ...old, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
+  };
+  widgetWindow.on('moved', savePos);
+  widgetWindow.on('resized', savePos);
+
+  // Hide instead of close (so it can be toggled quickly)
+  widgetWindow.on('close', (e) => {
+    if (!app.isQuitting) {
+      e.preventDefault();
+      widgetWindow.hide();
+    }
+  });
+
+  widgetWindow.on('closed', () => { widgetWindow = null; });
+
+  // Send initial pin state
+  widgetWindow.webContents.once('did-finish-load', () => {
+    widgetWindow?.webContents.send('widget:pin-changed', pinned);
+  });
+}
+
+function toggleWidget() {
+  if (widgetWindow && !widgetWindow.isDestroyed() && widgetWindow.isVisible()) {
+    widgetWindow.hide();
+  } else {
+    createWidget();
+  }
+}
+
+// Widget IPC handlers
+ipcMain.on('widget:toggle-pin', () => {
+  if (!widgetWindow || widgetWindow.isDestroyed()) return;
+  const current = widgetWindow.isAlwaysOnTop();
+  const next = !current;
+  widgetWindow.setAlwaysOnTop(next);
+  widgetWindow.webContents.send('widget:pin-changed', next);
+  const prefs = readWidgetPrefs();
+  writeWidgetPrefs({ ...prefs, pinned: next });
+});
+
+ipcMain.on('widget:hide', () => {
+  widgetWindow?.hide();
+});
+
+// ── Tray ──────────────────────────────────────────────────────────────────
+
+function createTray() {
+  // Use a small template image for the tray (16x16)
+  const iconPath = path.join(__dirname, 'assets', 'icon.png');
+  let img = nativeImage.createFromPath(iconPath);
+  img = img.resize({ width: 16, height: 16 });
+  if (IS_MAC) img.setTemplateImage(true);
+
+  tray = new Tray(img);
+  tray.setToolTip('Fauna');
+
+  const contextMenu = Menu.buildFromTemplate([
+    { label: 'Show Fauna', click: () => { mainWindow?.show(); mainWindow?.focus(); } },
+    { label: 'Toggle Task Widget', click: () => toggleWidget() },
+    { type: 'separator' },
+    { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } },
+  ]);
+  tray.setContextMenu(contextMenu);
+
+  // Click tray icon to toggle widget
+  tray.on('click', () => toggleWidget());
+}
+
 // ── App lifecycle ─────────────────────────────────────────────────────────
 
 app.whenReady().then(async () => {
@@ -209,6 +345,12 @@ app.whenReady().then(async () => {
   }
 
   await createWindow();
+
+  // Create tray icon and task widget
+  createTray();
+
+  // Global shortcut: Ctrl+Shift+T (Cmd+Shift+T is used by the menu for the in-app panel)
+  globalShortcut.register('Ctrl+Shift+Space', () => toggleWidget());
 
   // macOS: re-open window when dock icon is clicked
   app.on('activate', () => {
@@ -225,6 +367,8 @@ app.on('window-all-closed', () => {
 // Force a clean exit when the user quits so lingering timers (e.g. Figma
 // reconnect loop) cannot keep the process alive and cause a phantom restart.
 app.on('before-quit', () => {
+  app.isQuitting = true;
+  globalShortcut.unregisterAll();
   // Give Electron ~300 ms to close windows, then hard-exit the Node process.
   setTimeout(() => process.exit(0), 300);
 });

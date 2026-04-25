@@ -3,20 +3,20 @@
 <head>
 <meta charset="utf-8">
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; font-family: Inter, system-ui, sans-serif; }
-  body { background: #1e1e1e; color: #e0e0e0; padding: 16px; height: 100vh; display: flex; flex-direction: column; gap: 12px; }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI Variable','Segoe UI',-apple-system,system-ui,sans-serif; }
+  body { background: #1b1b1b; color: #f5f5f5; padding: 16px; height: 100vh; display: flex; flex-direction: column; gap: 12px; }
   .status { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; }
   .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-  .dot.connected    { background: #4ade80; box-shadow: 0 0 6px #4ade80aa; }
-  .dot.disconnected { background: #f87171; }
-  .dot.connecting   { background: #facc15; animation: pulse 1s infinite; }
+  .dot.connected    { background: #6ccb5f; box-shadow: 0 0 6px #6ccb5faa; }
+  .dot.disconnected { background: #f36e6e; }
+  .dot.connecting   { background: #f2c661; animation: pulse 1s infinite; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-  .log { flex: 1; overflow-y: auto; font-size: 11px; font-family: monospace; color: #9ca3af; display: flex; flex-direction: column; gap: 4px; }
-  .log-entry { padding: 3px 6px; border-radius: 4px; background: #2a2a2a; word-break: break-all; }
-  .log-entry.ok  { border-left: 2px solid #4ade80; }
-  .log-entry.err { border-left: 2px solid #f87171; color: #fca5a5; }
-  .log-entry.cmd { border-left: 2px solid #60a5fa; }
-  .hint { font-size: 11px; color: #6b7280; text-align: center; }
+  .log { flex: 1; overflow-y: auto; font-size: 11px; font-family: 'Cascadia Code','JetBrains Mono','Fira Code',monospace; color: #b4b4b4; display: flex; flex-direction: column; gap: 4px; }
+  .log-entry { padding: 3px 6px; border-radius: 4px; background: #242424; word-break: break-all; }
+  .log-entry.ok  { border-left: 2px solid #6ccb5f; }
+  .log-entry.err { border-left: 2px solid #f36e6e; color: #f36e6e; }
+  .log-entry.cmd { border-left: 2px solid #789996; }
+  .hint { font-size: 11px; color: #7a7a7a; text-align: center; }
 </style>
 </head>
 <body>

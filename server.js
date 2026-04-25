@@ -15,6 +15,8 @@ import { fileURLToPath } from 'url';
 import { checkFilePath, checkNetworkAccess, checkShellCommand, getSandboxedEnv, getResourceLimits, audit, getAuditLog } from './agent-sandbox.js';
 import { getAgentTools, startAgentMCPServers, stopAgentMCPServers, executeBuiltInTool, executeCustomTool } from './agent-tools.js';
 import { scanAgent, formatScanReport } from './agent-scanner.js';
+import { createTask, getTask, getAllTasks, updateTask, deleteTask, startScheduler, stopScheduler, completeTask, failTask } from './task-manager.js';
+import { runTask, pauseTask, isTaskRunning, getRunningTaskInfo, getRunningTasks, subscribe as subscribeTask } from './task-runner.js';
 
 // Electron APIs — available when server runs inside the Electron main process.
 // Gracefully degrade if run standalone (e.g. during testing).
@@ -567,6 +569,34 @@ If the user asks you to look at or interact with their Chrome/Edge browser, you 
 - **Never fall back to \`navigate\` just because a click seems to have not moved the URL.** Use \`snapshot\` to visually verify first. Only use \`navigate\` when you intentionally want to load a URL from scratch.
 - If a click targets a link that triggers a full page load, the URL change will be visible after the settle wait. Trust it.
 - For SPA pages (React, Angular, Vue, Next.js) clicks update the view without a URL change — use \`snapshot\` or \`eval\` (e.g. \`return document.querySelector('h1').textContent\`) to verify what changed.
+
+## Task Scheduling
+
+You can create scheduled tasks for the user. When the user asks you to schedule, remind, or automate something (e.g. "send an email every Monday", "remind me to check deployments at 5pm", "run a build script tonight"), emit a \`\`\`task-create fenced block with a JSON object:
+
+\`\`\`task-create
+{
+  "title": "Send weekly status email",
+  "description": "Open Gmail, compose to team@example.com with subject 'Weekly Status', write a brief update, and send.",
+  "agent": null,
+  "schedule": {
+    "type": "recurring",
+    "cron": "0 9 * * 1"
+  },
+  "context": "The team mailing list is team@example.com"
+}
+\`\`\`
+
+Fields:
+- **title** (required): Short name for the task
+- **description**: What the AI should do when executing this task
+- **agent**: Agent name to activate, or null for default
+- **schedule.type**: "manual" (run on demand), "once" (run at specific time), "recurring" (cron)
+- **schedule.at**: ISO datetime for one-time tasks (e.g. "2026-04-25T09:00:00")
+- **schedule.cron**: Cron expression for recurring (minute hour dom month dow, e.g. "0 9 * * 1" = Mon 9am)
+- **context**: Extra information the AI needs when executing
+
+The task will appear in the user's Tasks panel and run autonomously at the scheduled time.
 `;
 
 const FIGMA_LAYOUT_CONTEXT = `
@@ -4954,6 +4984,111 @@ app.get('/api/system-context', (req, res) => {
   });
 });
 
+// ── Task Management ───────────────────────────────────────────────────────
+
+// List all tasks
+app.get('/api/tasks', (req, res) => {
+  const tasks = getAllTasks();
+  // Augment with running info
+  const augmented = tasks.map(t => {
+    const running = getRunningTaskInfo(t.id);
+    return running ? { ...t, _running: running } : t;
+  });
+  res.json(augmented);
+});
+
+// SSE stream for live task updates (must be before :id route)
+app.get('/api/tasks/stream', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+  });
+  const send = (evt) => {
+    try { res.write('data: ' + JSON.stringify(evt) + '\n\n'); } catch (_) {}
+  };
+  const unsub = subscribeTask('*', send);
+  req.on('close', unsub);
+  // Send initial state
+  send({ event: 'connected', running: getRunningTasks() });
+});
+
+// Get single task
+app.get('/api/tasks/:id', (req, res) => {
+  const task = getTask(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  const running = getRunningTaskInfo(task.id);
+  res.json(running ? { ...task, _running: running } : task);
+});
+
+// Create task
+app.post('/api/tasks', (req, res) => {
+  try {
+    const task = createTask(req.body);
+    res.json(task);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Update task
+app.put('/api/tasks/:id', (req, res) => {
+  const task = updateTask(req.params.id, req.body);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  res.json(task);
+});
+
+// Delete task
+app.delete('/api/tasks/:id', (req, res) => {
+  if (isTaskRunning(req.params.id)) {
+    pauseTask(req.params.id);
+  }
+  const ok = deleteTask(req.params.id);
+  res.json({ ok });
+});
+
+// Run task immediately
+app.post('/api/tasks/:id/run', async (req, res) => {
+  const task = getTask(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  if (isTaskRunning(task.id)) return res.status(409).json({ error: 'Task already running' });
+  // Fire and forget — the task runs in the background
+  runTask(task.id, { trigger: 'manual' }).catch(err => {
+    console.error('[tasks] Run failed:', err.message);
+  });
+  res.json({ ok: true, status: 'running' });
+});
+
+// Pause running task
+app.post('/api/tasks/:id/pause', (req, res) => {
+  if (!isTaskRunning(req.params.id)) return res.status(400).json({ error: 'Task not running' });
+  pauseTask(req.params.id);
+  res.json({ ok: true });
+});
+
+// SSE stream for a single task
+app.get('/api/tasks/:id/stream', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+  });
+  const send = (evt) => {
+    try { res.write('data: ' + JSON.stringify(evt) + '\n\n'); } catch (_) {}
+  };
+  const unsub = subscribeTask(req.params.id, send);
+  req.on('close', unsub);
+  const running = getRunningTaskInfo(req.params.id);
+  send({ event: 'connected', running });
+});
+
+// Start the task scheduler
+startScheduler((task) => {
+  runTask(task.id, { trigger: 'scheduler' }).catch(err => {
+    console.error('[tasks] Scheduled run failed:', err.message);
+  });
+});
+
 // ── macOS Permissions check ───────────────────────────────────────────────
 
 function checkFullDiskAccess() {
@@ -5274,6 +5409,8 @@ export function startServer(port) {
 
     // Clean up MCP child process and Figma timers on exit
     function fullCleanup() {
+      // Stop task scheduler
+      stopScheduler();
       // Cancel the Figma reconnect loop so it can't keep the event loop alive
       if (figmaState.pendingReconnect) {
         clearTimeout(figmaState.pendingReconnect);

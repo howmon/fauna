@@ -111,6 +111,9 @@
           <button class="footer-icon-btn" onclick="togglePlaybook()" title="Playbook — Learned Instructions">
             <i class="ti ti-notebook"></i>
           </button>
+          <button class="footer-icon-btn" onclick="toggleTasksPanel()" title="Tasks — Scheduled Actions">
+            <i class="ti ti-checklist"></i>
+          </button>
           <button class="footer-icon-btn" onclick="toggleFigmaSetup()" title="Plugins &amp; Extensions">
             <i class="ti ti-plug"></i>
           </button>
@@ -666,7 +669,55 @@ Examples:
 <script src="js/agent-polish.js"></script>
 <script src="js/chat.js"></script>
 <script src="js/voice.js"></script>
+<script src="js/tasks.js"></script>
 <script src="js/app.js"></script>
+
+<!-- ── Tasks panel ──────────────────────────────────────────────── -->
+<div id="tasks-panel">
+  <div id="tasks-header">
+    <span><i class="ti ti-checklist" style="font-size:16px;color:var(--accent)"></i></span>
+    <span class="title">Tasks</span>
+    <span style="flex:1"></span>
+    <button class="tasks-header-btn" onclick="toggleTaskCreateForm()" title="New task"><i class="ti ti-plus"></i></button>
+    <button class="tasks-header-btn" onclick="fetchTasks()" title="Refresh"><i class="ti ti-refresh"></i></button>
+    <button class="tasks-header-btn" onclick="toggleTasksPanel()" title="Close"><i class="ti ti-x"></i></button>
+  </div>
+  <div id="task-create-form" style="display:none">
+    <div class="task-form-row">
+      <input type="text" id="task-title-input" placeholder="Task title (e.g. Send quarterly email)" onkeydown="if(event.key==='Enter')submitTask()">
+    </div>
+    <div class="task-form-row">
+      <textarea id="task-desc-input" rows="2" placeholder="Description (what should be done)"></textarea>
+    </div>
+    <div class="task-form-row">
+      <textarea id="task-context-input" rows="2" placeholder="Context (extra info for the AI)"></textarea>
+    </div>
+    <div class="task-form-row">
+      <input type="text" id="task-agent-input" placeholder="Agent (leave empty for default)">
+    </div>
+    <div class="task-form-row">
+      <label>Schedule</label>
+      <select id="task-schedule-type" onchange="_onScheduleTypeChange()">
+        <option value="manual">Manual (run on demand)</option>
+        <option value="once">One-time</option>
+        <option value="recurring">Recurring (cron)</option>
+      </select>
+    </div>
+    <div class="task-form-row" id="task-schedule-at-row" style="display:none">
+      <label>Run at</label>
+      <input type="datetime-local" id="task-schedule-at">
+    </div>
+    <div class="task-form-row" id="task-schedule-cron-row" style="display:none">
+      <label>Cron expression</label>
+      <input type="text" id="task-schedule-cron" placeholder="0 9 * * 1  (Mon 9am)">
+    </div>
+    <div class="task-form-row" style="justify-content:flex-end;gap:8px">
+      <button class="task-form-cancel" onclick="toggleTaskCreateForm()">Cancel</button>
+      <button class="task-form-submit" id="task-create-btn" onclick="submitTask()"><i class="ti ti-plus"></i> Create Task</button>
+    </div>
+  </div>
+  <div id="tasks-list"></div>
+</div>
 
 <!-- ── Playbook panel ──────────────────────────────────────────── -->
 <div id="playbook-panel">

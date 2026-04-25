@@ -794,6 +794,7 @@ async function streamResponse(conv) {
         if (typeof extractAndRenderCreateAgent === 'function') extractAndRenderCreateAgent(buffer, msgEl);
         if (typeof extractAndRenderPatchAgent === 'function') extractAndRenderPatchAgent(buffer, msgEl);
         if (typeof extractAndRenderUninstallAgent === 'function') extractAndRenderUninstallAgent(buffer, msgEl);
+        if (typeof extractAndRenderTaskCreate === 'function') extractAndRenderTaskCreate(buffer, msgEl);
         wrapInChainOfThought(msgEl);
         if (state._lastMsgWasDesktopTask) {
           injectOrganizerCard(msgEl, buffer);
@@ -818,6 +819,7 @@ async function streamResponse(conv) {
       if (typeof extractAndRenderCreateAgent === 'function') extractAndRenderCreateAgent(buffer, msgEl);
       if (typeof extractAndRenderPatchAgent === 'function') extractAndRenderPatchAgent(buffer, msgEl);
       if (typeof extractAndRenderUninstallAgent === 'function') extractAndRenderUninstallAgent(buffer, msgEl);
+      if (typeof extractAndRenderTaskCreate === 'function') extractAndRenderTaskCreate(buffer, msgEl);
       wrapInChainOfThought(msgEl);
     }
   }

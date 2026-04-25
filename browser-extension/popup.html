@@ -10,10 +10,10 @@
     body {
       width: 300px;
       min-height: 200px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-family: 'Segoe UI Variable','Segoe UI',-apple-system,system-ui,sans-serif;
       font-size: 13px;
-      background: #0f0f0f;
-      color: #e8e8e8;
+      background: #1b1b1b;
+      color: #f5f5f5;
       user-select: none;
     }
 
@@ -22,13 +22,13 @@
       align-items: center;
       gap: 10px;
       padding: 14px 16px 12px;
-      border-bottom: 1px solid #1e1e1e;
+      border-bottom: 1px solid #404040;
     }
 
     .logo {
       width: 28px;
       height: 28px;
-      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      background: linear-gradient(135deg, #789996, #5a7a77);
       border-radius: 7px;
       display: flex;
       align-items: center;
@@ -38,8 +38,8 @@
     }
 
     .header-text { flex: 1; }
-    .header-title { font-weight: 600; font-size: 14px; color: #f0f0f0; }
-    .header-subtitle { color: #888; font-size: 11px; margin-top: 1px; }
+    .header-title { font-weight: 600; font-size: 14px; color: #f5f5f5; }
+    .header-subtitle { color: #7a7a7a; font-size: 11px; margin-top: 1px; }
 
     .status-pill {
       display: flex;
@@ -52,20 +52,20 @@
       border: 1px solid transparent;
       transition: all 0.2s;
     }
-    .status-pill.online  { background: #0d2b1f; border-color: #10b98133; color: #10b981; }
-    .status-pill.offline { background: #1a1a1a;  border-color: #2e2e2e;   color: #888; }
+    .status-pill.online  { background: #1a2e2a; border-color: #6ccb5f33; color: #6ccb5f; }
+    .status-pill.offline { background: #242424;  border-color: #404040;   color: #7a7a7a; }
 
     .dot {
       width: 6px; height: 6px;
       border-radius: 50%;
       flex-shrink: 0;
     }
-    .online  .dot { background: #10b981; box-shadow: 0 0 5px #10b98166; }
-    .offline .dot { background: #555; }
+    .online  .dot { background: #6ccb5f; box-shadow: 0 0 5px #6ccb5f66; }
+    .offline .dot { background: #7a7a7a; }
 
     .section {
       padding: 12px 16px;
-      border-bottom: 1px solid #1a1a1a;
+      border-bottom: 1px solid #2e2e2e;
     }
     .section:last-child { border-bottom: none; }
 
@@ -74,26 +74,26 @@
       font-weight: 600;
       letter-spacing: 0.06em;
       text-transform: uppercase;
-      color: #555;
+      color: #7a7a7a;
       margin-bottom: 8px;
     }
 
     .tab-info {
-      background: #161616;
-      border: 1px solid #222;
+      background: #242424;
+      border: 1px solid #404040;
       border-radius: 6px;
       padding: 8px 10px;
     }
-    .tab-url  { color: #6366f1; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .tab-title{ color: #ccc; font-size: 12px; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tab-url  { color: #789996; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tab-title{ color: #b4b4b4; font-size: 12px; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
     .btn {
       width: 100%;
       padding: 8px 12px;
       border-radius: 6px;
-      border: 1px solid #2a2a2a;
-      background: #1a1a1a;
-      color: #ddd;
+      border: 1px solid #404040;
+      background: #242424;
+      color: #f5f5f5;
       font-size: 12px;
       font-weight: 500;
       cursor: pointer;
@@ -105,10 +105,10 @@
       margin-bottom: 6px;
     }
     .btn:last-child { margin-bottom: 0; }
-    .btn:hover { background: #242424; border-color: #333; }
-    .btn:active { background: #2a2a2a; }
-    .btn.primary { background: #1e1b4b; border-color: #4338ca55; color: #a5b4fc; }
-    .btn.primary:hover { background: #23206a; border-color: #6366f1aa; }
+    .btn:hover { background: #2e2e2e; border-color: #505050; }
+    .btn:active { background: #383838; }
+    .btn.primary { background: #1a2e2a; border-color: #78999655; color: #789996; }
+    .btn.primary:hover { background: #243a36; border-color: #789996aa; }
     .btn .btn-icon { font-size: 14px; width: 16px; text-align: center; flex-shrink: 0; }
 
     .btn-disabled { opacity: 0.4; pointer-events: none; }
@@ -116,27 +116,27 @@
     .feedback {
       min-height: 24px;
       font-size: 11px;
-      color: #888;
+      color: #7a7a7a;
       padding: 0 16px 10px;
       text-align: center;
       transition: color 0.2s;
     }
-    .feedback.ok  { color: #10b981; }
-    .feedback.err { color: #f87171; }
+    .feedback.ok  { color: #6ccb5f; }
+    .feedback.err { color: #f36e6e; }
 
     .reconnect-row { display: flex; gap: 6px; align-items: center; }
     .reconnect-btn {
       flex: 1;
       padding: 6px 10px;
       border-radius: 6px;
-      border: 1px solid #2a2a2a;
-      background: #1a1a1a;
-      color: #ccc;
+      border: 1px solid #404040;
+      background: #242424;
+      color: #b4b4b4;
       font-size: 11px;
       cursor: pointer;
       text-align: center;
     }
-    .reconnect-btn:hover { background: #242424; }
+    .reconnect-btn:hover { background: #2e2e2e; }
   </style>
 </head>
 <body>
@@ -178,7 +178,7 @@
     <div class="reconnect-row">
       <button class="reconnect-btn" id="btn-reconnect">↻ Reconnect to Fauna</button>
     </div>
-    <div style="color:#555;font-size:11px;margin-top:8px;line-height:1.4">
+    <div style="color:#7a7a7a;font-size:11px;margin-top:8px;line-height:1.4">
       Make sure Fauna is running on your Mac.
     </div>
   </div>
