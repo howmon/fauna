@@ -16,7 +16,7 @@ import { checkFilePath, checkNetworkAccess, checkShellCommand, getSandboxedEnv, 
 import { getAgentTools, startAgentMCPServers, stopAgentMCPServers, executeBuiltInTool, executeCustomTool } from './agent-tools.js';
 import { scanAgent, formatScanReport } from './agent-scanner.js';
 import { createTask, getTask, getAllTasks, updateTask, deleteTask, startScheduler, stopScheduler, completeTask, failTask } from './task-manager.js';
-import { runTask, pauseTask, steerTask, isTaskRunning, getRunningTaskInfo, getRunningTasks, subscribe as subscribeTask } from './task-runner.js';
+import { runTask, pauseTask, stopTask, steerTask, isTaskRunning, getRunningTaskInfo, getRunningTasks, subscribe as subscribeTask } from './task-runner.js';
 
 // Electron APIs — available when server runs inside the Electron main process.
 // Gracefully degrade if run standalone (e.g. during testing).
@@ -5087,6 +5087,13 @@ app.post('/api/tasks/:id/run', async (req, res) => {
 app.post('/api/tasks/:id/pause', (req, res) => {
   if (!isTaskRunning(req.params.id)) return res.status(400).json({ error: 'Task not running' });
   pauseTask(req.params.id);
+  res.json({ ok: true });
+});
+
+// Stop running task (abort + mark failed)
+app.post('/api/tasks/:id/stop', (req, res) => {
+  if (!isTaskRunning(req.params.id)) return res.status(400).json({ error: 'Task not running' });
+  stopTask(req.params.id);
   res.json({ ok: true });
 });
 

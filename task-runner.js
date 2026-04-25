@@ -20,7 +20,11 @@ async function runTask(taskId, opts = {}) {
   }
 
   const ac = new AbortController();
-  const state = { abortController: ac, step: 0, startedAt: Date.now(), log: [], steerQueue: [] };
+  const state = {
+    abortController: ac, step: 0, startedAt: Date.now(), log: [], steerQueue: [],
+    reasoning: [],   // chain-of-reasoning entries: { step, intent, actions[], outcome }
+    stats: { actionsTotal: 0, actionsOk: 0, actionsFailed: 0 },
+  };
   _runningTasks.set(taskId, state);
 
   // Ensure task is marked running — clear previous result on re-run
@@ -36,6 +40,21 @@ async function runTask(taskId, opts = {}) {
     failTask(taskId, err.message);
     _emit(taskId, 'failed', { error: err.message });
   } finally {
+    // Save reasoning and stats to task result
+    const t = getTask(taskId);
+    if (t) {
+      const statsData = state.stats;
+      const reasoning = state.reasoning;
+      updateTask(taskId, {
+        result: {
+          ...(t.result || {}),
+          stats: statsData,
+          reasoning: reasoning,
+          duration: Date.now() - state.startedAt,
+          totalSteps: state.step,
+        },
+      });
+    }
     _runningTasks.delete(taskId);
   }
 }
@@ -152,6 +171,10 @@ async function _autonomyLoop(task, state) {
     messages.push({ role: 'assistant', content: aiResponse });
     state.log.push({ step: state.step, response: aiResponse.slice(0, 500) });
 
+    // Extract reasoning intent — what the AI said it would do (non-code-block text)
+    const intent = aiResponse.replace(/```[\s\S]*?```/g, '').replace(/\s+/g, ' ').trim().slice(0, 300);
+    const reasoningEntry = { step: state.step, intent, actions: [], outcome: null };
+
     // Update task with step progress
     updateTask(task.id, {
       _historyEvent: 'step',
@@ -164,6 +187,17 @@ async function _autonomyLoop(task, state) {
     const actionResults = await _executeResponseActions(aiResponse, task);
 
     if (actionResults && actionResults.length) {
+      // Track stats and reasoning
+      for (const r of actionResults) {
+        state.stats.actionsTotal++;
+        const ok = !r.output.includes('→ error') && !r.output.includes('→ failed');
+        if (ok) state.stats.actionsOk++; else state.stats.actionsFailed++;
+        reasoningEntry.actions.push({ type: r.type, action: r.output.split('\n')[0].slice(0, 100), ok });
+      }
+      reasoningEntry.outcome = 'executed ' + actionResults.length + ' action(s)';
+      state.reasoning.push(reasoningEntry);
+      _emit(task.id, 'reasoning', { entry: reasoningEntry });
+
       // Feed action results back — the AI decides next step based on real results
       const feedback = actionResults.map((r, i) =>
         `[Action ${i + 1}] ${r.type}: ${r.output.slice(0, 2000)}`
@@ -171,6 +205,10 @@ async function _autonomyLoop(task, state) {
       messages.push({ role: 'user', content: feedback + '\n\nContinue the task based on these results. Say TASK_COMPLETE: <summary> when done, or TASK_FAILED: <reason> if you cannot proceed.' });
     } else {
       // No action blocks — this is a pure text response, check for completion markers
+      reasoningEntry.outcome = 'text-only response';
+      state.reasoning.push(reasoningEntry);
+      _emit(task.id, 'reasoning', { entry: reasoningEntry });
+
       if (/TASK_COMPLETE/i.test(aiResponse)) {
         const summary = aiResponse.replace(/[\s\S]*TASK_COMPLETE:?\s*/i, '').trim() || 'Task completed successfully';
         completeTask(task.id, { summary: summary.slice(0, 500) });
@@ -427,6 +465,15 @@ function pauseTask(taskId) {
   if (state) state.abortController.abort();
 }
 
+function stopTask(taskId) {
+  const state = _runningTasks.get(taskId);
+  if (state) {
+    state.abortController.abort();
+    failTask(taskId, 'Stopped by user');
+    _emit(taskId, 'failed', { error: 'Stopped by user' });
+  }
+}
+
 function steerTask(taskId, message) {
   const state = _runningTasks.get(taskId);
   if (!state) return false;
@@ -453,7 +500,7 @@ function getRunningTasks() {
 }
 
 export {
-  runTask, pauseTask, steerTask,
+  runTask, pauseTask, stopTask, steerTask,
   isTaskRunning, getRunningTaskInfo, getRunningTasks,
   subscribe,
 };

@@ -64,11 +64,8 @@ function renderTasks() {
         '<div class="task-step">Step ' + t._running.step + '</div>';
     }
     var resultInfo = '';
-    if (t.status === 'completed' && t.result) {
-      resultInfo = '<div class="task-result ok">' + escHtml(_cleanResultText(t.result.summary || '')) + '</div>';
-    }
-    if (t.status === 'failed' && t.result) {
-      resultInfo = '<div class="task-result fail">' + escHtml(_cleanResultText(t.result.error || '')) + '</div>';
+    if ((t.status === 'completed' || t.status === 'failed') && t.result) {
+      resultInfo = _renderTaskSummary(t);
     }
     var timeAgo = t.updatedAt ? _timeAgo(new Date(t.updatedAt)) : '';
 
@@ -84,6 +81,7 @@ function renderTasks() {
       runningInfo +
       resultInfo +
       _renderSteerInput(t) +
+      _renderReasoning(t) +
       _renderTaskLog(t) +
       '<div class="task-row-actions">' +
         _taskActions(t) +
@@ -123,10 +121,14 @@ function _taskActions(t) {
     btns.push('<button class="task-btn run" onclick="taskRun(\'' + t.id + '\')" title="' + (t.status === 'completed' ? 'Re-run' : 'Run now') + '"><i class="ti ti-player-play"></i></button>');
   }
   if (t.status === 'running') {
+    btns.push('<button class="task-btn stop" onclick="taskStop(\'' + t.id + '\')" title="Stop"><i class="ti ti-player-stop"></i></button>');
     btns.push('<button class="task-btn pause" onclick="taskPause(\'' + t.id + '\')" title="Pause"><i class="ti ti-player-pause"></i></button>');
   }
   if (t.history && t.history.length) {
     btns.push('<button class="task-btn" onclick="taskToggleLog(\'' + t.id + '\')" title="Toggle log"><i class="ti ti-list-details"></i></button>');
+  }
+  if (t.result && t.result.reasoning && t.result.reasoning.length) {
+    btns.push('<button class="task-btn" onclick="taskToggleReasoning(\'' + t.id + '\')" title="Reasoning chain"><i class="ti ti-brain"></i></button>');
   }
   btns.push('<button class="task-btn edit" onclick="taskEdit(\'' + t.id + '\')" title="Edit"><i class="ti ti-pencil"></i></button>');
   btns.push('<button class="task-btn del" onclick="taskDelete(\'' + t.id + '\')" title="Delete"><i class="ti ti-trash"></i></button>');
@@ -188,6 +190,13 @@ async function taskPause(id) {
     await fetch('/api/tasks/' + id + '/pause', { method: 'POST' });
     fetchTasks();
   } catch (e) { showToast('Failed to pause task: ' + e.message); }
+}
+
+async function taskStop(id) {
+  try {
+    await fetch('/api/tasks/' + id + '/stop', { method: 'POST' });
+    fetchTasks();
+  } catch (e) { showToast('Failed to stop task: ' + e.message); }
 }
 
 async function taskDelete(id) {
@@ -419,6 +428,86 @@ function taskToggleLog(id) {
 // Strip fenced code blocks and trim result text for display
 function _cleanResultText(text) {
   return text.replace(/```[\s\S]*?```/g, '').replace(/\s+/g, ' ').trim().slice(0, 120) || text.slice(0, 120);
+}
+
+// ── Task Summary Card (with % success) ───────────────────────────────────
+
+function _renderTaskSummary(t) {
+  var r = t.result || {};
+  var isOk = t.status === 'completed';
+  var stats = r.stats || {};
+  var total = stats.actionsTotal || 0;
+  var ok = stats.actionsOk || 0;
+  var failed = stats.actionsFailed || 0;
+  var pct = total > 0 ? Math.round((ok / total) * 100) : (isOk ? 100 : 0);
+  var duration = r.duration ? _formatDuration(r.duration) : '';
+  var steps = r.totalSteps || 0;
+
+  var pctClass = pct >= 80 ? 'task-pct-good' : (pct >= 50 ? 'task-pct-mid' : 'task-pct-bad');
+  var statusText = isOk
+    ? escHtml(_cleanResultText(r.summary || 'Completed'))
+    : escHtml(_cleanResultText(r.error || 'Failed'));
+
+  return '<div class="task-summary ' + (isOk ? 'ok' : 'fail') + '">' +
+    '<div class="task-summary-head">' +
+      '<span class="task-summary-pct ' + pctClass + '">' + pct + '%</span>' +
+      '<span class="task-summary-text">' + statusText + '</span>' +
+    '</div>' +
+    '<div class="task-summary-stats">' +
+      (steps ? '<span><i class="ti ti-arrow-iteration"></i> ' + steps + ' steps</span>' : '') +
+      (total ? '<span><i class="ti ti-check"></i> ' + ok + '/' + total + ' actions ok</span>' : '') +
+      (failed ? '<span class="task-summary-fail-count"><i class="ti ti-x"></i> ' + failed + ' failed</span>' : '') +
+      (duration ? '<span><i class="ti ti-clock"></i> ' + duration + '</span>' : '') +
+    '</div>' +
+  '</div>';
+}
+
+function _formatDuration(ms) {
+  if (ms < 1000) return ms + 'ms';
+  var s = Math.round(ms / 1000);
+  if (s < 60) return s + 's';
+  var m = Math.floor(s / 60);
+  s = s % 60;
+  return m + 'm ' + s + 's';
+}
+
+// ── Reasoning Chain ──────────────────────────────────────────────────────
+
+var _expandedReasoning = new Set();
+
+function taskToggleReasoning(id) {
+  if (_expandedReasoning.has(id)) _expandedReasoning.delete(id);
+  else _expandedReasoning.add(id);
+  renderTasks();
+}
+
+function _renderReasoning(t) {
+  var r = t.result || {};
+  var reasoning = r.reasoning;
+  if (!reasoning || !reasoning.length) return '';
+
+  var toggleBtn = '<div class="task-reasoning-toggle" onclick="taskToggleReasoning(\'' + t.id + '\')">' +
+    '<i class="ti ti-' + (_expandedReasoning.has(t.id) ? 'chevron-down' : 'chevron-right') + '"></i> ' +
+    '<i class="ti ti-brain"></i> Reasoning (' + reasoning.length + ' steps)' +
+  '</div>';
+
+  if (!_expandedReasoning.has(t.id)) return toggleBtn;
+
+  var entries = reasoning.map(function(entry) {
+    var actionBadges = (entry.actions || []).map(function(a) {
+      return '<span class="task-reason-action ' + (a.ok ? 'ok' : 'fail') + '">' +
+        escHtml(a.action || a.type) + '</span>';
+    }).join('');
+    return '<div class="task-reason-entry">' +
+      '<div class="task-reason-step">Step ' + entry.step + '</div>' +
+      '<div class="task-reason-intent">' + escHtml(entry.intent || '').slice(0, 200) + '</div>' +
+      (actionBadges ? '<div class="task-reason-actions">' + actionBadges + '</div>' : '') +
+      '<div class="task-reason-outcome">' + escHtml(entry.outcome || '') + '</div>' +
+    '</div>';
+  }).join('');
+
+  return toggleBtn +
+    '<div class="task-reasoning-list">' + entries + '</div>';
 }
 
 function _renderTaskLog(t) {

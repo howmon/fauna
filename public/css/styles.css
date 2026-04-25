@@ -1218,8 +1218,63 @@ body { animation: none; }
 }
 .task-btn:hover { color: var(--text); background: var(--surface); border-color: var(--border2); }
 .task-btn.run:hover { color: var(--accent); }
+.task-btn.stop:hover { color: var(--error); }
 .task-btn.del:hover { color: var(--error); }
 .task-status-running { border-color: var(--accent); }
+
+/* Task summary card */
+.task-summary {
+  margin-top: 6px; padding: 8px 10px; border-radius: 8px;
+  font-size: 11.5px; line-height: 1.5;
+}
+.task-summary.ok { background: rgba(80,200,120,.08); border: 1px solid rgba(80,200,120,.2); }
+.task-summary.fail { background: rgba(230,80,80,.08); border: 1px solid rgba(230,80,80,.2); }
+.task-summary-head { display: flex; align-items: center; gap: 8px; }
+.task-summary-pct {
+  font-size: 18px; font-weight: 700; min-width: 42px; text-align: center;
+}
+.task-pct-good { color: var(--success); }
+.task-pct-mid { color: var(--warn); }
+.task-pct-bad { color: var(--error); }
+.task-summary-text { color: var(--text); flex: 1; }
+.task-summary-stats {
+  display: flex; gap: 12px; margin-top: 4px; font-size: 10.5px; color: var(--text-dim);
+  flex-wrap: wrap;
+}
+.task-summary-stats span { display: flex; align-items: center; gap: 3px; }
+.task-summary-fail-count { color: var(--error); }
+
+/* Task reasoning chain */
+.task-reasoning-toggle {
+  font-size: 11px; color: var(--text-muted); cursor: pointer; margin-top: 6px;
+  display: flex; align-items: center; gap: 4px; user-select: none;
+}
+.task-reasoning-toggle:hover { color: var(--accent); }
+.task-reasoning-list {
+  margin-top: 4px; padding-left: 12px;
+  border-left: 2px solid var(--border); max-height: 300px; overflow-y: auto;
+}
+.task-reason-entry {
+  padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,.04);
+}
+.task-reason-entry:last-child { border-bottom: none; }
+.task-reason-step {
+  font-size: 10px; font-weight: 600; color: var(--accent); margin-bottom: 2px;
+}
+.task-reason-intent {
+  font-size: 11px; color: var(--text); line-height: 1.4;
+}
+.task-reason-actions {
+  display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px;
+}
+.task-reason-action {
+  font-size: 9.5px; padding: 1px 6px; border-radius: 3px; font-family: var(--font-mono, monospace);
+}
+.task-reason-action.ok { background: rgba(80,200,120,.12); color: var(--success); }
+.task-reason-action.fail { background: rgba(230,80,80,.12); color: var(--error); }
+.task-reason-outcome {
+  font-size: 10px; color: var(--text-dim); margin-top: 2px; font-style: italic;
+}
 
 /* Task create form */
 #task-create-form {
