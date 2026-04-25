@@ -86,6 +86,7 @@ async function sendDirectMessage(content, opts) {
   if (!targetId) { newConversation(); targetId = state.currentId; }
   var conv = getConv(targetId);
   if (!conv) return;
+  if (conv._cancelled) return;
   if (conv._streaming) return;
   if (!opts.fromAutoFeed && !opts.isBrowserFeed) conv._autoFeedDepth = 0;
   var isCurrentConv = (targetId === state.currentId);
@@ -543,6 +544,7 @@ async function streamResponse(conv) {
 
   conv._streaming = true;
   conv._streamingStart = Date.now();
+  conv._cancelled = false;
   conv._abortController = new AbortController();
   if (isActive()) setBusy(true);
   renderConvList(); // show streaming spinner in sidebar
@@ -893,6 +895,12 @@ function showContextSummary(convId) {
 
 function stopGeneration() {
   var conv = getConv(state.currentId);
-  if (conv && conv._abortController) conv._abortController.abort();
+  if (!conv) return;
+  conv._cancelled = true;
+  if (conv._abortController) conv._abortController.abort();
+  conv._streaming = false;
+  conv._abortController = null;
+  setBusy(false);
+  renderConvList();
   showToast('Generation stopped');
 }

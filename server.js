@@ -892,6 +892,10 @@ app.post('/api/chat', async (req, res) => {
   const { messages = [], model = 'claude-sonnet-4.6', systemPrompt = '', useFigmaMCP = false, contextSummary = '',
           thinkingBudget = 'high', maxContextTurns = 20, agentName = null } = req.body;
 
+  // Track client disconnect so the tool loop can bail early
+  let clientAborted = false;
+  req.on('close', () => { clientAborted = true; });
+
   res.writeHead(200, {
     'Content-Type':    'text/event-stream',
     'Cache-Control':   'no-cache',
@@ -900,7 +904,7 @@ app.post('/api/chat', async (req, res) => {
     'Access-Control-Allow-Origin': 'http://localhost:3737'
   });
 
-  const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+  const send = (obj) => { if (!clientAborted && !res.writableEnded) res.write(`data: ${JSON.stringify(obj)}\n\n`); };
 
   try {
     const client = getClientForModel(model);
@@ -1013,7 +1017,7 @@ app.post('/api/chat', async (req, res) => {
     const toolCallsSeen = new Map(); // deduplicate identical calls
 
     while (continueLoop) {
-      if (res.writableEnded) break;
+      if (res.writableEnded || clientAborted) break;
 
       // o-series and gpt-5+ models require max_completion_tokens instead of max_tokens
       const useCompletionTokens = /^(o[1-9]|gpt-5)/.test(model);
@@ -1064,7 +1068,7 @@ app.post('/api/chat', async (req, res) => {
       let streamUsage = null;
 
       for await (const chunk of stream) {
-        if (res.writableEnded) { continueLoop = false; break; }
+        if (res.writableEnded || clientAborted) { continueLoop = false; break; }
         if (chunk.usage) streamUsage = chunk.usage;
         const delta = chunk.choices?.[0]?.delta;
         finishReason = chunk.choices?.[0]?.finish_reason || finishReason;
@@ -1085,9 +1089,10 @@ app.post('/api/chat', async (req, res) => {
 
       if (finishReason === 'tool_calls' && pendingCalls.length > 0) {
         const calls = pendingCalls.filter(tc => tc && tc.function?.name);
-        if (!calls.length) { send({ type: 'done', finish_reason: finishReason }); continueLoop = false; break; }
+        if (!calls.length || clientAborted) { send({ type: 'done', finish_reason: finishReason }); continueLoop = false; break; }
         allMessages.push({ role: 'assistant', tool_calls: calls });
         for (const tc of calls) {
+          if (clientAborted) { continueLoop = false; break; }
           const toolName = tc.function.name;
           const callKey  = toolName + '|' + tc.function.arguments;
           toolCallCount++;

@@ -826,8 +826,19 @@ function extractAndRenderBrowserActions(html, messageEl, isHistoryLoad, convId) 
   _runBrowserActionSequence(widgets, convId);
 }
 
+function _markRemainingCancelled(widgets, fromIndex) {
+  for (var j = fromIndex; j < widgets.length; j++) {
+    var sEl = document.getElementById(widgets[j].id + '-status');
+    var bEl = document.getElementById(widgets[j].id);
+    if (sEl) { sEl.className = 'ba-status err'; sEl.textContent = 'Cancelled'; }
+    if (bEl) { bEl.classList.remove('running'); }
+  }
+}
+
 async function _runBrowserActionSequence(widgets, convId) {
+  var conv = getConv(convId || state.currentId);
   for (var i = 0; i < widgets.length; i++) {
+    if (conv && conv._cancelled) { _markRemainingCancelled(widgets, i); return; }
     var w = widgets[i];
     var statusEl = document.getElementById(w.id + '-status');
     var blockEl  = document.getElementById(w.id);
@@ -989,11 +1000,14 @@ async function browserFeedAI(content, convId) {
   var targetId = convId || state.currentId;
   var conv = getConv(targetId);
   if (!conv) return;
+  if (conv._cancelled) return;
   // Wait up to 6s for any in-flight stream to finish before we push the next message
   for (var w = 0; w < 12 && conv._streaming; w++) {
+    if (conv._cancelled) return;
     await new Promise(function(r) { setTimeout(r, 500); });
   }
   if (conv._streaming) return; // give up — don't block forever
+  if (conv._cancelled) return;
   await sendDirectMessage(content, { targetConvId: targetId, isBrowserFeed: true });
 }
 
@@ -1114,7 +1128,9 @@ function extractAndRenderBrowserExtActions(html, messageEl, isHistoryLoad, convI
 }
 
 async function _runExtActionSequence(widgets, convId) {
+  var conv = getConv(convId || state.currentId);
   for (var i = 0; i < widgets.length; i++) {
+    if (conv && conv._cancelled) { _markRemainingCancelled(widgets, i); return; }
     var w        = widgets[i];
     var statusEl = document.getElementById(w.id + '-status');
     var blockEl  = document.getElementById(w.id);
