@@ -296,7 +296,8 @@ function getSandboxedEnv(permissions) {
       '/opt/homebrew/bin', '/opt/homebrew/sbin',
       '/usr/local/bin', '/usr/local/sbin',
       '/usr/bin', '/usr/sbin', '/bin', '/sbin',
-    ].join(':');
+      process.env.PATH || '',
+    ].filter(Boolean).join(':');
 
     // Pass through npm/node/python tooling env vars so npx, pip, etc. work
     const toolingPassthrough = [
