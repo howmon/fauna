@@ -26,9 +26,11 @@
           case 'extract-forms': result = await doExtractForms(); break;
           case 'fill':          result = await doFill(msg); break;
           case 'click':         result = await doClick(msg); break;
+          case 'type':          result = await doType(msg); break;
           case 'scroll':        result = await doScroll(msg); break;
           case 'scroll-to':     result = await doScrollTo(msg); break;
           case 'hover':         result = await doHover(msg); break;
+          case 'drag':          result = await doDrag(msg); break;
           case 'select':        result = await doSelect(msg); break;
           case 'keyboard':      result = await doKeyboard(msg); break;
           case 'eval':          result = await doEval(msg); break;
@@ -215,15 +217,15 @@
     if (typeof x === 'number' && typeof y === 'number') {
       // Coordinate click
       const el = document.elementFromPoint(x, y);
-      if (el) { el.click(); return { ok: true, method: 'coordinates' }; }
+      if (el) { _simulateClick(el); return { ok: true, method: 'coordinates' }; }
       return { ok: false, error: 'No element at (' + x + ',' + y + ')' };
     }
 
     const el = resolveElement(selector, text);
     if (!el) {
       // Provide helpful context
-      const cands = Array.from(document.querySelectorAll('a,button,[role=button],[role=tab],[role=menuitem]'))
-        .slice(0, 40).map(e => ({ tag: e.tagName.toLowerCase(), text: (e.innerText || '').trim().slice(0, 60), sel: uniqueSelector(e) }));
+      const cands = Array.from(document.querySelectorAll('a,button,[role=button],[role=tab],[role=menuitem],[role=option],[role=listbox] li,ul[role=listbox] > *,.autocomplete-item,.suggestion-item,.dropdown-item,[data-option],[data-value]'))
+        .slice(0, 60).map(e => ({ tag: e.tagName.toLowerCase(), text: (e.innerText || '').trim().slice(0, 60), sel: uniqueSelector(e) }));
       return { ok: false, error: 'Element not found: ' + (selector || text), candidates: cands };
     }
 
@@ -236,9 +238,72 @@
       return { ok: true, navigated: el.href };
     }
 
-    el.click();
+    _simulateClick(el);
     return { ok: true };
   }
+
+  /**
+   * Type into a field character-by-character, triggering autocomplete/suggestions.
+   * Use after click to focus the field. Optionally pick from the resulting dropdown.
+   */
+  async function doType({ selector, text, delay = 40, clear = true, pressEnter = false } = {}) {
+    const el = selector ? resolveElement(selector) : document.activeElement;
+    if (!el) return { ok: false, error: 'Element not found: ' + (selector || 'activeElement') };
+
+    el.scrollIntoView({ block: 'center' });
+    _simulateClick(el);
+    await _sleep(60);
+
+    // Clear existing value
+    if (clear) {
+      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+      if (desc && desc.set) desc.set.call(el, ''); else el.value = '';
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, data: '' }));
+    }
+
+    // Type character by character
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true }));
+
+      // Use native setter to update value (works with React/Vue)
+      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+      const newVal = (el.value || '') + ch;
+      if (desc && desc.set) desc.set.call(el, newVal); else el.value = newVal;
+
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ch }));
+      el.dispatchEvent(new KeyboardEvent('keyup', { key: ch, bubbles: true }));
+      if (delay > 0) await _sleep(delay);
+    }
+
+    // Fire change
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+
+    if (pressEnter) {
+      await _sleep(100);
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+    }
+
+    return { ok: true, typed: text };
+  }
+
+  /** Dispatch the full mouse event sequence that frameworks expect. */
+  function _simulateClick(el) {
+    const rect = el.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const shared = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy };
+    el.dispatchEvent(new PointerEvent('pointerdown', { ...shared, pointerId: 1 }));
+    el.dispatchEvent(new MouseEvent('mousedown', shared));
+    el.dispatchEvent(new PointerEvent('pointerup', { ...shared, pointerId: 1 }));
+    el.dispatchEvent(new MouseEvent('mouseup', shared));
+    el.dispatchEvent(new MouseEvent('click', shared));
+  }
+
+  function _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
   // ── Scroll ──────────────────────────────────────────────────────────────
 
@@ -278,6 +343,73 @@
     el.scrollIntoView({ block: 'center' });
     el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
     el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    return { ok: true };
+  }
+
+  // ── Drag and Drop ─────────────────────────────────────────────────────
+
+  async function doDrag({ source, target, sourceX, sourceY, targetX, targetY, steps = 10, delay = 15 } = {}) {
+    let srcEl, tgtEl, sx, sy, tx, ty;
+
+    // Resolve source
+    if (typeof sourceX === 'number' && typeof sourceY === 'number') {
+      srcEl = document.elementFromPoint(sourceX, sourceY);
+      sx = sourceX; sy = sourceY;
+    } else if (source) {
+      srcEl = resolveElement(source);
+      if (srcEl) {
+        const r = srcEl.getBoundingClientRect();
+        sx = r.left + r.width / 2; sy = r.top + r.height / 2;
+      }
+    }
+    if (!srcEl) return { ok: false, error: 'Source element not found: ' + (source || sourceX + ',' + sourceY) };
+
+    // Resolve target
+    if (typeof targetX === 'number' && typeof targetY === 'number') {
+      tgtEl = document.elementFromPoint(targetX, targetY);
+      tx = targetX; ty = targetY;
+    } else if (target) {
+      tgtEl = resolveElement(target);
+      if (tgtEl) {
+        const r = tgtEl.getBoundingClientRect();
+        tx = r.left + r.width / 2; ty = r.top + r.height / 2;
+      }
+    }
+    if (!tgtEl) return { ok: false, error: 'Target element not found: ' + (target || targetX + ',' + targetY) };
+
+    srcEl.scrollIntoView({ block: 'center' });
+    await _sleep(50);
+
+    const shared = { bubbles: true, cancelable: true, view: window };
+
+    // Pointer/mouse down on source
+    srcEl.dispatchEvent(new PointerEvent('pointerdown', { ...shared, clientX: sx, clientY: sy, pointerId: 1 }));
+    srcEl.dispatchEvent(new MouseEvent('mousedown', { ...shared, clientX: sx, clientY: sy }));
+
+    // HTML5 drag events on source
+    const dt = new DataTransfer();
+    srcEl.dispatchEvent(new DragEvent('dragstart', { ...shared, clientX: sx, clientY: sy, dataTransfer: dt }));
+
+    // Intermediate move steps
+    for (let i = 1; i <= steps; i++) {
+      const cx = sx + (tx - sx) * (i / steps);
+      const cy = sy + (ty - sy) * (i / steps);
+      const moveTarget = document.elementFromPoint(cx, cy) || tgtEl;
+      moveTarget.dispatchEvent(new DragEvent('dragover', { ...shared, clientX: cx, clientY: cy, dataTransfer: dt }));
+      srcEl.dispatchEvent(new PointerEvent('pointermove', { ...shared, clientX: cx, clientY: cy, pointerId: 1 }));
+      srcEl.dispatchEvent(new MouseEvent('mousemove', { ...shared, clientX: cx, clientY: cy }));
+      if (delay > 0) await _sleep(delay);
+    }
+
+    // Drop on target
+    tgtEl.dispatchEvent(new DragEvent('dragover', { ...shared, clientX: tx, clientY: ty, dataTransfer: dt }));
+    tgtEl.dispatchEvent(new DragEvent('drop', { ...shared, clientX: tx, clientY: ty, dataTransfer: dt }));
+    srcEl.dispatchEvent(new DragEvent('dragend', { ...shared, clientX: tx, clientY: ty, dataTransfer: dt }));
+
+    // Pointer/mouse up on target
+    tgtEl.dispatchEvent(new PointerEvent('pointerup', { ...shared, clientX: tx, clientY: ty, pointerId: 1 }));
+    tgtEl.dispatchEvent(new MouseEvent('mouseup', { ...shared, clientX: tx, clientY: ty }));
+
     return { ok: true };
   }
 
@@ -394,11 +526,16 @@
       } catch (_) {}
     }
     if (text || selector) {
-      // Text content match across common interactive elements
+      // Text content match across interactive elements + dropdown/autocomplete items
       const needle = (text || selector || '').toLowerCase();
-      const cands  = document.querySelectorAll('a,button,[role=button],[role=tab],[role=menuitem],[role=option],input[type=submit],label');
+      const cands  = document.querySelectorAll(
+        'a,button,[role=button],[role=tab],[role=menuitem],[role=option],input[type=submit],label,' +
+        '[role=listbox] > *,[role=listbox] li,.autocomplete-item,.suggestion-item,.dropdown-item,' +
+        '[data-option],[data-value],li[id*=option],li[id*=result],ul.dropdown li,div.dropdown li,' +
+        'div[class*=option],div[class*=suggestion],div[class*=autocomplete] li'
+      );
       for (const el of cands) {
-        const t = (el.innerText || el.textContent || el.value || el.placeholder || '').toLowerCase();
+        const t = (el.innerText || el.textContent || el.value || el.placeholder || el.getAttribute('data-value') || '').toLowerCase();
         if (t.includes(needle)) return el;
       }
     }

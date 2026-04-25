@@ -550,8 +550,10 @@ If the user asks you to look at or interact with their Chrome/Edge browser, you 
 - \`{"action":"fill","fields":[{"selector":"#email","value":"..."}]}\` — fill form inputs
 - \`{"action":"fill","selector":"#name","value":"Alice"}\` — single-field shorthand
 - \`{"action":"click","selector":"button.submit"}\` or \`{"action":"click","text":"Sign in"}\`
+- \`{"action":"type","selector":"#search","text":"react hooks"}\` — type char-by-char (triggers autocomplete/suggestions). Use \`"delay":60\` to slow down, \`"pressEnter":true\` to submit after typing. Click the field first if it needs focus.
 - \`{"action":"select","selector":"#country","value":"US"}\`
 - \`{"action":"hover","selector":".menu"}\`
+- \`{"action":"drag","source":"#item-1","target":"#dropzone"}\` — drag and drop between elements. Also supports coordinate-based: \`"sourceX":100,"sourceY":200,"targetX":400,"targetY":300\`
 - \`{"action":"keyboard","key":"Enter","selector":"#search"}\`
 - \`{"action":"scroll","direction":"down"}\` or with \`"px":500\`
 - \`{"action":"wait","ms":1500}\` — max 15 000 ms
@@ -569,6 +571,7 @@ If the user asks you to look at or interact with their Chrome/Edge browser, you 
 - **Never fall back to \`navigate\` just because a click seems to have not moved the URL.** Use \`snapshot\` to visually verify first. Only use \`navigate\` when you intentionally want to load a URL from scratch.
 - If a click targets a link that triggers a full page load, the URL change will be visible after the settle wait. Trust it.
 - For SPA pages (React, Angular, Vue, Next.js) clicks update the view without a URL change — use \`snapshot\` or \`eval\` (e.g. \`return document.querySelector('h1').textContent\`) to verify what changed.
+- **Autocomplete / combobox / typeahead fields:** Use \`type\` (not \`fill\`) to enter text character-by-character — this triggers the suggestion dropdown. Then \`wait\` 500-1000 ms for suggestions to appear, \`extract\` or \`snapshot\` to see the list, and \`click\` the desired option by its text or selector.
 
 ## Task Scheduling
 

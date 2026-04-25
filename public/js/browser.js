@@ -1055,7 +1055,7 @@ function extractAndRenderBrowserExtActions(html, messageEl, isHistoryLoad, convI
 
   var iconMap = {
     navigate:'ti-world-www', extract:'ti-text-scan-2', 'extract-forms':'ti-forms',
-    fill:'ti-edit', click:'ti-cursor-text', scroll:'ti-arrows-down-up', hover:'ti-hand-finger',
+    fill:'ti-edit', click:'ti-cursor-text', type:'ti-keyboard', drag:'ti-arrows-move', scroll:'ti-arrows-down-up', hover:'ti-hand-finger',
     select:'ti-list', keyboard:'ti-keyboard', wait:'ti-clock', eval:'ti-terminal-2',
     snapshot:'ti-camera', 'snapshot-full':'ti-camera-plus',
     'tab:list':'ti-list', 'tab:new':'ti-plus', 'tab:switch':'ti-arrow-right',
@@ -1063,7 +1063,7 @@ function extractAndRenderBrowserExtActions(html, messageEl, isHistoryLoad, convI
   };
   var labelMap = {
     navigate:'Navigate (ext)', extract:'Extract (ext)', 'extract-forms':'Extract Forms (ext)',
-    fill:'Fill Form (ext)', click:'Click (ext)', scroll:'Scroll (ext)', hover:'Hover (ext)',
+    fill:'Fill Form (ext)', click:'Click (ext)', type:'Type (ext)', drag:'Drag (ext)', scroll:'Scroll (ext)', hover:'Hover (ext)',
     select:'Select (ext)', keyboard:'Keyboard (ext)', wait:'Wait', eval:'Eval (ext)',
     snapshot:'Snapshot (ext)', 'snapshot-full':'Full-Page Snapshot (ext)',
     'tab:list':'List Tabs', 'tab:new':'New Tab', 'tab:switch':'Switch Tab',
@@ -1202,13 +1202,14 @@ async function _runExtActionSequence(widgets, convId) {
         }
       }
 
-      if (w.action.action === 'scroll' || w.action.action === 'hover' || w.action.action === 'select' || w.action.action === 'keyboard') {
+      if (w.action.action === 'scroll' || w.action.action === 'hover' || w.action.action === 'select' || w.action.action === 'keyboard' || w.action.action === 'drag' || w.action.action === 'type') {
         var hasFollowScroll = widgets.slice(i + 1).some(function(fw) {
           return fw.action.action === 'extract' || fw.action.action === 'snapshot';
         });
         if (!hasFollowScroll) {
           try {
-            await new Promise(function(r) { setTimeout(r, 500); });
+            var feedDelay = (w.action.action === 'type') ? 1000 : 500;
+            await new Promise(function(r) { setTimeout(r, feedDelay); });
             var scrRes = await executeExtAction({ action: 'extract' });
             var scrFeed = 'After ' + w.action.action + ' (ext) — page state:\n\n' +
               '**Title:** ' + (scrRes.title||'') + '\n**URL:** ' + (scrRes.url||'') +
