@@ -693,7 +693,12 @@ Examples:
       <textarea id="task-context-input" rows="2" placeholder="Context (extra info for the AI)"></textarea>
     </div>
     <div class="task-form-row">
-      <input type="text" id="task-agent-input" placeholder="Agents (comma-separated, leave empty for default)">
+      <label>Agents</label>
+      <div class="task-agent-picker-wrap">
+        <div id="task-agent-selected" class="task-agent-selected"></div>
+        <input type="text" id="task-agent-search" placeholder="Search agents…" autocomplete="off" oninput="_filterAgentPicker(this.value)" onfocus="_showAgentPicker()">
+        <div id="task-agent-dropdown" class="task-agent-dropdown" style="display:none"></div>
+      </div>
     </div>
     <div class="task-form-row task-perms-row">
       <label>Permissions</label>
@@ -714,6 +719,7 @@ Examples:
     </div>
     <div class="task-form-row" id="task-browser-tabs-row" style="display:none">
       <label>Target tabs <button type="button" class="task-tab-refresh-btn" onclick="_refreshExtTabs()" title="Refresh tabs"><i class="ti ti-refresh"></i></button></label>
+      <input type="text" id="task-tab-search" placeholder="Filter tabs…" autocomplete="off" oninput="_filterTabPicker(this.value)" style="font-size:11px;margin-bottom:4px">
       <div id="task-tab-picker" class="task-tab-picker">
         <div class="task-tab-picker-empty">Enable Browser above to pick tabs</div>
       </div>

@@ -214,7 +214,7 @@ function taskEdit(id) {
   document.getElementById('task-title-input').value = t.title;
   document.getElementById('task-desc-input').value = t.description || '';
   document.getElementById('task-context-input').value = t.context || '';
-  document.getElementById('task-agent-input').value = (t.agents || (t.agent ? [t.agent] : [])).join(', ');
+  _setAgentPickerSelections((t.agents || (t.agent ? [t.agent] : [])));
   // Permissions
   var perms = t.permissions || {};
   document.getElementById('task-perm-shell').checked = perms.shell !== false;
@@ -257,7 +257,7 @@ function _resetTaskForm() {
   document.getElementById('task-title-input').value = '';
   document.getElementById('task-desc-input').value = '';
   document.getElementById('task-context-input').value = '';
-  document.getElementById('task-agent-input').value = '';
+  _clearAgentPicker();
   document.getElementById('task-perm-shell').checked = true;
   document.getElementById('task-perm-browser').checked = false;
   document.getElementById('task-perm-figma').checked = false;
@@ -288,7 +288,7 @@ async function submitTask() {
     title: title,
     description: document.getElementById('task-desc-input').value.trim(),
     context: document.getElementById('task-context-input').value.trim(),
-    agents: document.getElementById('task-agent-input').value.split(',').map(function(s){ return s.trim(); }).filter(Boolean),
+    agents: _getSelectedAgents(),
     permissions: {
       shell: document.getElementById('task-perm-shell').checked,
       browser: _getBrowserPermission(),
@@ -553,9 +553,123 @@ function _logEventIcon(event) {
   }
 }
 
+// ── Agent Picker (searchable multi-select) ───────────────────────────────
+
+var _selectedAgents = []; // array of agent name strings
+
+function _getSelectedAgents() { return _selectedAgents.slice(); }
+
+function _clearAgentPicker() {
+  _selectedAgents = [];
+  _renderAgentSelections();
+  var search = document.getElementById('task-agent-search');
+  if (search) search.value = '';
+  var dd = document.getElementById('task-agent-dropdown');
+  if (dd) dd.style.display = 'none';
+}
+
+function _setAgentPickerSelections(names) {
+  _selectedAgents = (names || []).filter(Boolean);
+  _renderAgentSelections();
+}
+
+function _renderAgentSelections() {
+  var el = document.getElementById('task-agent-selected');
+  if (!el) return;
+  if (!_selectedAgents.length) { el.innerHTML = ''; return; }
+  el.innerHTML = _selectedAgents.map(function(name) {
+    var agent = (typeof getAllAgents === 'function') ? getAllAgents().find(function(a) { return a.name === name; }) : null;
+    var icon = agent ? agent.icon || 'ti-robot' : 'ti-robot';
+    var display = agent ? (agent.displayName || agent.name) : name;
+    return '<span class="task-agent-chip">' +
+      '<i class="ti ' + icon + '"></i> ' + escHtml(display) +
+      '<button type="button" onclick="_removeAgent(\'' + escHtml(name) + '\')" title="Remove">&times;</button>' +
+    '</span>';
+  }).join('');
+}
+
+function _removeAgent(name) {
+  _selectedAgents = _selectedAgents.filter(function(n) { return n !== name; });
+  _renderAgentSelections();
+  _refreshAgentDropdown();
+}
+
+function _showAgentPicker() {
+  _filterAgentPicker(document.getElementById('task-agent-search')?.value || '');
+}
+
+function _filterAgentPicker(query) {
+  var dd = document.getElementById('task-agent-dropdown');
+  if (!dd) return;
+  var agents = (typeof getAllAgents === 'function') ? getAllAgents() : [];
+  var q = query.toLowerCase().trim();
+  var filtered = agents.filter(function(a) {
+    // Exclude already selected
+    if (_selectedAgents.indexOf(a.name) >= 0) return false;
+    if (!q) return true;
+    return (a.name.toLowerCase().indexOf(q) >= 0) ||
+           ((a.displayName || '').toLowerCase().indexOf(q) >= 0) ||
+           ((a.description || '').toLowerCase().indexOf(q) >= 0) ||
+           ((a.category || '').toLowerCase().indexOf(q) >= 0);
+  });
+
+  if (!filtered.length) {
+    dd.innerHTML = '<div class="task-agent-dd-empty">No agents found</div>';
+    dd.style.display = 'block';
+    return;
+  }
+
+  dd.innerHTML = filtered.slice(0, 15).map(function(a) {
+    var icon = a.icon || 'ti-robot';
+    var display = a.displayName || a.name;
+    var cat = a.category ? '<span class="task-agent-dd-cat">' + escHtml(a.category) + '</span>' : '';
+    return '<div class="task-agent-dd-item" onclick="_pickAgent(\'' + escHtml(a.name) + '\')">' +
+      '<i class="ti ' + icon + '"></i>' +
+      '<div class="task-agent-dd-info">' +
+        '<span class="task-agent-dd-name">' + escHtml(display) + '</span>' +
+        '<span class="task-agent-dd-desc">' + escHtml((a.description || '').slice(0, 60)) + '</span>' +
+      '</div>' +
+      cat +
+    '</div>';
+  }).join('');
+  dd.style.display = 'block';
+}
+
+function _refreshAgentDropdown() {
+  var search = document.getElementById('task-agent-search');
+  if (search && document.getElementById('task-agent-dropdown')?.style.display === 'block') {
+    _filterAgentPicker(search.value || '');
+  }
+}
+
+function _pickAgent(name) {
+  if (_selectedAgents.indexOf(name) < 0) _selectedAgents.push(name);
+  _renderAgentSelections();
+  var search = document.getElementById('task-agent-search');
+  if (search) search.value = '';
+  _filterAgentPicker('');
+}
+
+// Close dropdown on outside click
+document.addEventListener('click', function(e) {
+  var wrap = document.querySelector('.task-agent-picker-wrap');
+  var dd = document.getElementById('task-agent-dropdown');
+  if (dd && wrap && !wrap.contains(e.target)) dd.style.display = 'none';
+});
+
 // ── Browser tab picker (from Chrome extension) ───────────────────────────
 
 var _extTabsCache = [];
+
+function _filterTabPicker(query) {
+  var q = query.toLowerCase().trim();
+  var items = document.querySelectorAll('#task-tab-picker .task-tab-item');
+  items.forEach(function(item) {
+    var title = (item.querySelector('.task-tab-title')?.textContent || '').toLowerCase();
+    var url = (item.querySelector('input')?.dataset.url || '').toLowerCase();
+    item.style.display = (!q || title.indexOf(q) >= 0 || url.indexOf(q) >= 0) ? '' : 'none';
+  });
+}
 
 async function _refreshExtTabs() {
   var picker = document.getElementById('task-tab-picker');
