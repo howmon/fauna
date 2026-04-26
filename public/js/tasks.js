@@ -704,12 +704,18 @@ function _renderTabPicker(tabs) {
     selectedUrls.add(cb.dataset.url);
   });
   picker.innerHTML = tabs.map(function(tab) {
-    var favicon = 'https://www.google.com/s2/favicons?sz=16&domain=' + encodeURIComponent(new URL(tab.url).hostname);
+    var faviconImg = '';
+    try {
+      var u = new URL(tab.url);
+      if (u.protocol === 'http:' || u.protocol === 'https:') {
+        faviconImg = '<img src="https://www.google.com/s2/favicons?sz=16&domain=' + encodeURIComponent(u.hostname) + '" width="14" height="14" onerror="this.style.display=\'none\'">';
+      }
+    } catch(_) {}
     var checked = selectedUrls.has(tab.url) ? ' checked' : '';
     var activeTag = tab.active ? '<span class="task-tab-active">active</span>' : '';
     return '<label class="task-tab-item" title="' + escHtml(tab.url) + '">' +
       '<input type="checkbox" data-url="' + escHtml(tab.url) + '" data-tab-id="' + tab.id + '"' + checked + '>' +
-      '<img src="' + favicon + '" width="14" height="14" onerror="this.style.display=\'none\'">' +
+      faviconImg +
       '<span class="task-tab-title">' + escHtml((tab.title || '').slice(0, 50)) + '</span>' +
       activeTag +
     '</label>';

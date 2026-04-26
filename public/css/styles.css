@@ -1280,6 +1280,7 @@ body { animation: none; }
 #task-create-form {
   padding: 12px 16px; border-bottom: 1px solid var(--border);
   display: flex; flex-direction: column; gap: 10px; background: var(--surface);
+  overflow-y: auto; max-height: 60vh;
 }
 .task-form-row { display: flex; flex-direction: column; gap: 4px; }
 .task-form-row label { font-size: 11px; color: var(--text-muted); font-weight: 600; }
