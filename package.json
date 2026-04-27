@@ -1,6 +1,6 @@
 {
   "name": "@eichho/fauna",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Fauna — AI assistant CLI. Chat with LLMs, run autonomous tasks, and control your desktop from the terminal.",
   "author": {
     "name": "Solomon Abey",
