@@ -1,14 +1,38 @@
 {
-  "name": "fauna",
-  "version": "1.0.0",
-  "description": "Fauna — AI desktop assistant",
+  "name": "@eichho/fauna",
+  "version": "1.0.2",
+  "description": "Fauna — AI assistant CLI. Chat with LLMs, run autonomous tasks, and control your desktop from the terminal.",
   "author": {
     "name": "Solomon Abey",
     "email": "solomonoabey@gmail.com",
     "url": "https://github.com/howmon"
   },
+  "license": "MIT",
   "type": "module",
   "main": "main.js",
+  "bin": {
+    "fauna": "./cli.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/howmon/fauna.git"
+  },
+  "homepage": "https://github.com/howmon/fauna#readme",
+  "keywords": [
+    "ai",
+    "cli",
+    "assistant",
+    "llm",
+    "agent",
+    "openai",
+    "gpt",
+    "chat",
+    "tasks",
+    "automation"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "electron .",
     "cli": "node cli.js",

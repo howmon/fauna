@@ -1,0 +1,28 @@
+# Electron desktop app
+main.js
+widget-preload.js
+assets/
+
+# Mobile app
+mobile/
+
+# Browser extension & Figma plugin
+browser-extension/
+assets/figma-plugin/
+relay/
+
+# Build artifacts
+dist/
+out/
+*.dmg
+*.exe
+*.AppImage
+
+# Dev/config
+.git/
+.github/
+.vscode/
+*.md
+!README.md
+.DS_Store
+.env

@@ -1,7 +1,7 @@
 # Fauna — AI Desktop Assistant
 
 <p align="center">
-  <img src="assets/icon.png" alt="Fauna" width="128" height="128">
+  <img src="https://raw.githubusercontent.com/howmon/fauna/main/assets/icon.png" alt="Fauna" width="128" height="128">
 </p>
 
 A cross-platform Electron app that gives you a full AI-powered desktop assistant — streaming GitHub Copilot responses with real shell execution, interactive web browsing, Figma design integration, file editing, artifact previews, design spec generation, and smart context management.
@@ -311,6 +311,27 @@ npm install
 npm start          # development
 npm run dist       # build distributable
 ```
+
+### CLI (npm)
+
+Install the CLI globally from npm — no Electron required:
+
+```bash
+npm install -g @eichho/fauna
+```
+
+Then run it anywhere:
+
+```bash
+fauna                          # interactive REPL + server
+fauna --server                 # server only (API on port 3737)
+fauna -q "summarize this repo" # one-shot query
+fauna --port 4000              # custom port
+fauna -v                       # verbose (show tool calls & token usage)
+echo "explain package.json" | fauna  # pipe mode
+```
+
+Requires Node.js 18+ and a [GitHub Copilot](https://github.com/features/copilot) subscription or an API key from OpenAI, Anthropic, or Google.
 
 ### Authentication
 
