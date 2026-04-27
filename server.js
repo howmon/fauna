@@ -49,6 +49,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app    = express();
 const PORT   = 3737;
 const IS_WIN = process.platform === 'win32';
+const IS_MAC = process.platform === 'darwin';
 const PATH_SEP = IS_WIN ? ';' : ':';
 
 app.use(express.json({ limit: '25mb' }));
@@ -2705,8 +2706,15 @@ app.post('/api/open-folder', async (req, res) => {
     const { shell } = _require('electron');
     await shell.openPath(folderPath);
     res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
+  } catch (_) {
+    // Fallback for CLI / headless mode: use platform open command
+    try {
+      const cmd = IS_WIN ? `start "" "${folderPath}"` : IS_MAC ? `open "${folderPath}"` : `xdg-open "${folderPath}"`;
+      _exec(cmd, { timeout: 5000 }, () => {});
+      res.json({ ok: true, fallback: true });
+    } catch (e2) {
+      res.status(500).json({ error: e2.message });
+    }
   }
 });
 
