@@ -35,7 +35,8 @@
         {
           "cameraPermission": "Allow Fauna to scan QR codes for pairing."
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "extra": {
       "eas": {
