@@ -98,43 +98,52 @@ export function streamChat(
   const controller = new AbortController();
   const body = { messages, ...options };
 
-  fetch(`${_baseUrl}/api/chat`, {
-    method: 'POST',
-    headers: headers(),
-    body: JSON.stringify(body),
-    signal: controller.signal,
-  })
-    .then(async (res) => {
-      if (!res.ok) {
-        onEvent({ type: 'error', error: `${res.status} ${res.statusText}` });
-        return;
-      }
-      const reader = res.body?.getReader();
-      if (!reader) return;
-      const decoder = new TextDecoder();
-      let buffer = '';
+  // Use XMLHttpRequest instead of fetch — React Native's fetch doesn't support
+  // ReadableStream/getReader() on Android, so SSE streaming silently fails.
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', `${_baseUrl}/api/chat`);
+  xhr.setRequestHeader('Content-Type', 'application/json');
+  if (_token) xhr.setRequestHeader('X-Fauna-Token', _token);
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6);
-          if (data === '[DONE]') continue;
-          try {
-            onEvent(JSON.parse(data));
-          } catch {}
-        }
+  let seenBytes = 0;
+  let buffer = '';
+
+  xhr.onprogress = () => {
+    const newData = xhr.responseText.slice(seenBytes);
+    seenBytes = xhr.responseText.length;
+    buffer += newData;
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6);
+      if (data === '[DONE]') continue;
+      try { onEvent(JSON.parse(data)); } catch {}
+    }
+  };
+
+  xhr.onload = () => {
+    // Process any remaining buffer
+    if (buffer.trim()) {
+      const lines = buffer.split('\n');
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6);
+        if (data === '[DONE]') continue;
+        try { onEvent(JSON.parse(data)); } catch {}
       }
-    })
-    .catch((err) => {
-      if (err.name !== 'AbortError') {
-        onEvent({ type: 'error', error: err.message });
-      }
-    });
+    }
+    onEvent({ type: 'done' });
+  };
+
+  xhr.onerror = () => {
+    onEvent({ type: 'error', error: 'Network error' });
+  };
+
+  // Wire up AbortController
+  controller.signal.addEventListener('abort', () => xhr.abort());
+
+  xhr.send(JSON.stringify(body));
 
   return controller;
 }
