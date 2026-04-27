@@ -28,6 +28,7 @@
     "nodejs-whisper": "^0.3.0",
     "openai": "^4.67.0",
     "playwright-core": "^1.58.2",
+    "qrcode": "^1.5.4",
     "turndown": "^7.2.2",
     "ws": "^8.19.0"
   },

@@ -64,7 +64,7 @@ export default function ScanScreen({ onConnected }: Props) {
     setScanned(true);
     try {
       const url = new URL(data);
-      if (url.protocol !== 'fauna:' || url.pathname !== '//pair') throw new Error('Not a Fauna QR code');
+      if (url.protocol !== 'fauna:' || url.hostname !== 'pair') throw new Error('Not a Fauna QR code');
       const host = url.searchParams.get('host') || '';
       const port = parseInt(url.searchParams.get('port') || '3737', 10);
       const token = url.searchParams.get('token') || '';

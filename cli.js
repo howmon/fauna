@@ -22,6 +22,7 @@ import path from 'path';
 import os from 'os';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import QRCode from 'qrcode';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -278,252 +279,37 @@ function duration(ms) {
   return `${Math.floor(ms/60000)}m ${Math.round((ms%60000)/1000)}s`;
 }
 
-// ── Terminal QR code renderer (no deps, uses qrcode-generator algorithm) ─
+// ── Terminal QR code renderer (uses qrcode library) ──────────────────────
 
-function renderTerminalQR(text) {
-  // Minimal QR encoder — generates a version-appropriate QR code in the terminal
-  // using Unicode block characters (▀▄█ ) to render 2 rows per line.
-  // We shell out to a tiny inline Node script to avoid pulling in a dependency.
-  // Uses the simple alphanumeric-safe approach: encode as a data URL via the API.
+async function renderTerminalQR(text) {
+  try {
+    const modules = QRCode.create(text, { errorCorrectionLevel: 'L' }).modules;
+    const size = modules.size;
+    const getData = (r, c) => {
+      if (r < 0 || c < 0 || r >= size || c >= size) return false;
+      return modules.get(r, c);
+    };
 
-  // Actually — use the simplest possible approach: render a text-based QR code
-  // by generating it with the built-in crypto module's randomness + a compact
-  // QR encoding library. Since we can't import one, we'll use a different trick:
-  // call the system's python3 qrcode or use a pure-JS fallback.
-
-  // Best approach: use a compact QR Code generator in pure JS.
-  const modules = qrEncode(text);
-  if (!modules) { console.log(`${DM}  (QR generation failed — connect manually)${R}`); return; }
-
-  const size = modules.length;
-  // Use Unicode half-blocks to fit 2 QR rows into 1 terminal line
-  // ▀ = top black, bottom white   ▄ = top white, bottom black
-  // █ = both black                 ' ' = both white
-  // In terminal: white QR on dark background, with quiet zone
-  const BLK = `${T3}█${R}`;  // teal blocks for the QR
-  const WHT = ' ';
-
-  // Add quiet zone (2 modules)
-  const q = 2;
-  const full = size + q * 2;
-
-  const get = (r, c) => {
-    const rr = r - q, cc = c - q;
-    if (rr < 0 || cc < 0 || rr >= size || cc >= size) return false;
-    return modules[rr][cc];
-  };
-
-  const lines = [];
-  for (let r = 0; r < full; r += 2) {
-    let line = '  '; // left margin
-    for (let c = 0; c < full; c++) {
-      const top = get(r, c);
-      const bot = get(r + 1, c);
-      if (top && bot) line += BLK;
-      else if (top && !bot) line += `${T3}▀${R}`;
-      else if (!top && bot) line += `${T3}▄${R}`;
-      else line += WHT;
-    }
-    lines.push(line);
-  }
-  console.log(lines.join('\n'));
-}
-
-// ── Minimal QR Code encoder (Version 1-6, byte mode, ECC-L) ─────────────
-// Compact implementation sufficient for fauna://pair URLs (~80 chars).
-
-function qrEncode(data) {
-  const bytes = Buffer.from(data, 'utf8');
-  const len = bytes.length;
-
-  // Version capacity table (byte mode, ECC level L)
-  const caps = [0, 17, 32, 53, 78, 106, 134, 154, 192, 230, 271, 321, 367, 425, 458, 520, 586];
-  let ver = 1;
-  while (ver <= 16 && caps[ver] < len) ver++;
-  if (ver > 16) return null; // too long
-
-  const size = ver * 4 + 17;
-  const grid = Array.from({ length: size }, () => new Uint8Array(size));
-  const mask = Array.from({ length: size }, () => new Uint8Array(size)); // 1 = reserved
-
-  // ── Finder patterns ──────────────────────────────────────────────
-  function setFinder(row, col) {
-    for (let r = -1; r <= 7; r++) {
-      for (let c = -1; c <= 7; c++) {
-        const rr = row + r, cc = col + c;
-        if (rr < 0 || cc < 0 || rr >= size || cc >= size) continue;
-        const inOuter = r === 0 || r === 6 || c === 0 || c === 6;
-        const inInner = r >= 2 && r <= 4 && c >= 2 && c <= 4;
-        grid[rr][cc] = (inOuter || inInner) ? 1 : 0;
-        mask[rr][cc] = 1;
+    const BLK = `${T3}█${R}`;
+    const q = 2; // quiet zone
+    const full = size + q * 2;
+    const lines = [];
+    for (let r = 0; r < full; r += 2) {
+      let line = '  ';
+      for (let c = 0; c < full; c++) {
+        const top = getData(r - q, c - q);
+        const bot = getData(r - q + 1, c - q);
+        if (top && bot) line += BLK;
+        else if (top && !bot) line += `${T3}▀${R}`;
+        else if (!top && bot) line += `${T3}▄${R}`;
+        else line += ' ';
       }
+      lines.push(line);
     }
+    console.log(lines.join('\n'));
+  } catch (e) {
+    console.log(`${DM}  (QR generation failed — connect manually)${R}`);
   }
-  setFinder(0, 0);
-  setFinder(0, size - 7);
-  setFinder(size - 7, 0);
-
-  // ── Timing patterns ──────────────────────────────────────────────
-  for (let i = 8; i < size - 8; i++) {
-    grid[6][i] = grid[i][6] = (i % 2 === 0) ? 1 : 0;
-    mask[6][i] = mask[i][6] = 1;
-  }
-
-  // ── Alignment patterns (version >= 2) ────────────────────────────
-  const alignPos = [
-    [], [6,18], [6,22], [6,26], [6,30], [6,34], [6,22,38],
-    [6,24,42], [6,26,46], [6,28,50], [6,30,54], [6,32,58],
-    [6,34,62], [6,26,46,66], [6,26,48,70], [6,26,50,74], [6,30,54,78],
-  ];
-  if (ver >= 2) {
-    const positions = alignPos[ver - 1] || [];
-    for (const r of positions) {
-      for (const c of positions) {
-        if (mask[r][c]) continue; // skip if overlaps finder
-        for (let dr = -2; dr <= 2; dr++) {
-          for (let dc = -2; dc <= 2; dc++) {
-            const inBorder = Math.abs(dr) === 2 || Math.abs(dc) === 2;
-            const isCenter = dr === 0 && dc === 0;
-            grid[r + dr][c + dc] = (inBorder || isCenter) ? 1 : 0;
-            mask[r + dr][c + dc] = 1;
-          }
-        }
-      }
-    }
-  }
-
-  // ── Reserve format info areas ────────────────────────────────────
-  for (let i = 0; i < 8; i++) {
-    mask[8][i] = mask[i][8] = 1;
-    mask[8][size - 1 - i] = mask[size - 1 - i][8] = 1;
-  }
-  mask[8][8] = 1;
-  grid[size - 8][8] = 1; mask[size - 8][8] = 1; // dark module
-
-  // ── Reserve version info (ver >= 7) ──────────────────────────────
-  if (ver >= 7) {
-    for (let i = 0; i < 6; i++) for (let j = 0; j < 3; j++) {
-      mask[i][size - 11 + j] = mask[size - 11 + j][i] = 1;
-    }
-  }
-
-  // ── Data encoding (byte mode, ECC level L) ──────────────────────
-  // ECC codewords per version (level L)
-  const eccL = [0,7,10,15,20,26,18,20,24,30,18,20,24,26,30,22,24];
-  const totalCW = [0,26,44,70,100,134,172,196,242,292,346,404,466,532,581,655,733];
-  const numEcc = eccL[ver];
-  const numData = totalCW[ver] - numEcc;
-
-  // Build data bits
-  let bits = '';
-  // Mode indicator: byte = 0100
-  bits += '0100';
-  // Character count (8 bits for ver 1-9, 16 for 10+)
-  const ccBits = ver <= 9 ? 8 : 16;
-  bits += len.toString(2).padStart(ccBits, '0');
-  for (const b of bytes) bits += b.toString(2).padStart(8, '0');
-  // Terminator
-  bits += '0000'.slice(0, Math.min(4, numData * 8 - bits.length));
-  // Byte-align
-  while (bits.length % 8) bits += '0';
-  // Pad bytes
-  const pads = ['11101100', '00010001'];
-  let pi = 0;
-  while (bits.length < numData * 8) { bits += pads[pi]; pi ^= 1; }
-
-  const dataBytes = [];
-  for (let i = 0; i < bits.length; i += 8) dataBytes.push(parseInt(bits.slice(i, i + 8), 2));
-
-  // ── Reed-Solomon ECC ─────────────────────────────────────────────
-  const eccBytes = rsEncode(dataBytes, numEcc);
-  const allBytes = [...dataBytes, ...eccBytes];
-
-  // ── Place data bits ──────────────────────────────────────────────
-  let bitIdx = 0;
-  const dataBits = allBytes.map(b => b.toString(2).padStart(8, '0')).join('');
-
-  for (let right = size - 1; right >= 1; right -= 2) {
-    if (right === 6) right = 5; // skip timing column
-    for (let vert = 0; vert < size; vert++) {
-      for (let j = 0; j < 2; j++) {
-        const col = right - j;
-        const row = ((Math.floor((size - 1 - right + (right < 6 ? 1 : 0)) / 2)) % 2 === 0)
-          ? size - 1 - vert : vert;
-        if (col < 0 || col >= size || row < 0 || row >= size) continue;
-        if (mask[row][col]) continue;
-        grid[row][col] = (bitIdx < dataBits.length) ? parseInt(dataBits[bitIdx++]) : 0;
-      }
-    }
-  }
-
-  // ── Apply mask pattern 0 (checkerboard: (row + col) % 2 === 0) ──
-  for (let r = 0; r < size; r++) {
-    for (let c = 0; c < size; c++) {
-      if (!mask[r][c] && (r + c) % 2 === 0) grid[r][c] ^= 1;
-    }
-  }
-
-  // ── Format info (ECC L = 01, mask 0 = 000 → 01000, with BCH) ───
-  const fmtBits = [1,0,1,0,1,0,0,0,0,0,1,0,0,1,0]; // pre-computed for L/mask0
-  // Place format info
-  const fmtPos1 = [[8,0],[8,1],[8,2],[8,3],[8,4],[8,5],[8,7],[8,8],[7,8],[5,8],[4,8],[3,8],[2,8],[1,8],[0,8]];
-  const fmtPos2 = [[size-1,8],[size-2,8],[size-3,8],[size-4,8],[size-5,8],[size-6,8],[size-7,8],[8,size-8],[8,size-7],[8,size-6],[8,size-5],[8,size-4],[8,size-3],[8,size-2],[8,size-1]];
-  for (let i = 0; i < 15; i++) {
-    grid[fmtPos1[i][0]][fmtPos1[i][1]] = fmtBits[i];
-    grid[fmtPos2[i][0]][fmtPos2[i][1]] = fmtBits[i];
-  }
-
-  // ── Version info (ver >= 7) ──────────────────────────────────────
-  if (ver >= 7) {
-    const vInfo = computeVersionInfo(ver);
-    let bi = 0;
-    for (let i = 0; i < 6; i++) for (let j = 0; j < 3; j++) {
-      const bit = (vInfo >> bi++) & 1;
-      grid[i][size - 11 + j] = bit;
-      grid[size - 11 + j][i] = bit;
-    }
-  }
-
-  return grid.map(row => Array.from(row));
-}
-
-// GF(256) Reed-Solomon encoder
-function rsEncode(data, numEcc) {
-  // GF(256) with polynomial 0x11d
-  const exp = new Uint8Array(512);
-  const log = new Uint8Array(256);
-  let v = 1;
-  for (let i = 0; i < 255; i++) { exp[i] = v; log[v] = i; v = (v << 1) ^ (v >= 128 ? 0x11d : 0); }
-  for (let i = 255; i < 512; i++) exp[i] = exp[i - 255];
-
-  const gmul = (a, b) => (a === 0 || b === 0) ? 0 : exp[log[a] + log[b]];
-
-  // Generator polynomial
-  let gen = [1];
-  for (let i = 0; i < numEcc; i++) {
-    const ng = new Array(gen.length + 1).fill(0);
-    for (let j = 0; j < gen.length; j++) {
-      ng[j] ^= gen[j];
-      ng[j + 1] ^= gmul(gen[j], exp[i]);
-    }
-    gen = ng;
-  }
-
-  const result = new Uint8Array(numEcc);
-  const work = new Uint8Array(numEcc);
-  for (const b of data) {
-    const fb = b ^ work[0];
-    for (let i = 0; i < numEcc - 1; i++) work[i] = work[i + 1] ^ gmul(fb, gen[i + 1]);
-    work[numEcc - 1] = gmul(fb, gen[numEcc]);
-  }
-  for (let i = 0; i < numEcc; i++) result[i] = work[i];
-  return Array.from(result);
-}
-
-function computeVersionInfo(ver) {
-  let d = ver;
-  for (let i = 0; i < 12; i++) d = (d << 1) ^ ((d >> 11) ? 0x1F25 : 0);
-  return (ver << 12) | d;
 }
 
 // ── REPL commands ────────────────────────────────────────────────────────
@@ -743,7 +529,7 @@ ${B}System${R}
       const qrUrl = data.primaryQr || data.qrData?.[0];
       if (!qrUrl) { console.log(`${RD}No pairing data available${R}`); return; }
       console.log();
-      renderTerminalQR(qrUrl);
+      await renderTerminalQR(qrUrl);
       console.log();
       console.log(`  ${B}Scan this QR code${R} with the Fauna mobile app`);
       console.log(`  ${DM}or connect manually:${R}`);
