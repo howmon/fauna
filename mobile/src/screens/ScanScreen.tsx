@@ -40,14 +40,18 @@ export default function ScanScreen({ onConnected }: Props) {
     return () => loop.stop();
   }, []);
 
-  async function handlePair(host: string, port: number, token: string, name?: string) {
+  async function handlePair(host: string, port: number, token: string, name?: string, tunnelUrl?: string) {
     setConnecting(true);
-    setStatusMsg(`Connecting to ${name || host}…`);
+    setStatusMsg(`Connecting to ${name || tunnelUrl || host}…`);
     try {
-      api.configure(host, port, token);
+      if (tunnelUrl) {
+        api.configureUrl(tunnelUrl, token);
+      } else {
+        api.configure(host, port, token);
+      }
       const ok = await api.verifyConnection();
       if (!ok) throw new Error('Connection failed — server rejected auth');
-      await saveConnection({ host, port, token, serverName: name });
+      await saveConnection({ host, port, token, serverName: name, tunnelUrl });
       setStatusMsg('Connected!');
       onConnected();
     } catch (e: any) {
@@ -65,12 +69,13 @@ export default function ScanScreen({ onConnected }: Props) {
     try {
       const url = new URL(data);
       if (url.protocol !== 'fauna:' || url.hostname !== 'pair') throw new Error('Not a Fauna QR code');
+      const tunnel = url.searchParams.get('tunnel') || '';
       const host = url.searchParams.get('host') || '';
       const port = parseInt(url.searchParams.get('port') || '3737', 10);
       const token = url.searchParams.get('token') || '';
       const name = url.searchParams.get('name') || undefined;
-      if (!host || !token) throw new Error('Incomplete QR data');
-      handlePair(host, port, token, name);
+      if (!token || (!host && !tunnel)) throw new Error('Incomplete QR data');
+      handlePair(host, port, token, name, tunnel || undefined);
     } catch (e: any) {
       Alert.alert('Invalid QR Code', e.message);
       setScanned(false);
@@ -81,9 +86,13 @@ export default function ScanScreen({ onConnected }: Props) {
     Keyboard.dismiss();
     const raw = manualHost.trim();
     if (!raw) return;
-    // Accept "host:port" or just "host"
-    const [h, p] = raw.includes(':') ? raw.split(':') : [raw, '3737'];
-    handlePair(h, parseInt(p, 10) || 3737, manualToken.trim(), h);
+    // Accept full https URL (tunnel), "host:port", or just "host"
+    if (raw.startsWith('https://') || raw.startsWith('http://')) {
+      handlePair('', 0, manualToken.trim(), raw, raw);
+    } else {
+      const [h, p] = raw.includes(':') ? raw.split(':') : [raw, '3737'];
+      handlePair(h, parseInt(p, 10) || 3737, manualToken.trim(), h);
+    }
   }
 
   // ── No permissions yet ──────────────────────────────────────────────
@@ -113,11 +122,11 @@ export default function ScanScreen({ onConnected }: Props) {
       <View style={[s.container, { backgroundColor: t.bg }]}>
         <Text style={[s.title, { color: t.text }]}>Connect by IP</Text>
         <Text style={[s.hint, { color: t.textDim }]}>
-          Enter the IP shown when Fauna starts (e.g. 192.168.1.15:3737)
+          Enter the IP or tunnel URL shown when Fauna starts
         </Text>
         <TextInput
           style={[s.input, { backgroundColor: t.surface, color: t.text, borderColor: t.border }]}
-          placeholder="host:port  (e.g. 192.168.1.15:3737)"
+          placeholder="host:port or https://tunnel-url"
           placeholderTextColor={t.textMuted}
           value={manualHost}
           onChangeText={setManualHost}

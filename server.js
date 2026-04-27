@@ -137,6 +137,68 @@ function readTokenFromConfig() {
   } catch (_) { return null; }
 }
 
+// ── Tunnel (remote access) ────────────────────────────────────────────────
+
+let _tunnelUrl = null;   // e.g. "https://abc123.loca.lt"
+let _tunnelProcess = null;
+
+export function getTunnelUrl() { return _tunnelUrl; }
+
+/**
+ * Start a localtunnel so the server is reachable outside the LAN.
+ * Falls back to cloudflared if available. Returns the public URL.
+ */
+export async function startTunnel(port) {
+  // Try localtunnel first (npm dependency, no binary needed)
+  try {
+    const localtunnel = _require('localtunnel');
+    const tunnel = await localtunnel({ port, allow_invalid_cert: true });
+    _tunnelUrl = tunnel.url;
+    _tunnelProcess = tunnel;
+    tunnel.on('close', () => { _tunnelUrl = null; _tunnelProcess = null; });
+    tunnel.on('error', (err) => { console.error('[Tunnel] Error:', err.message); });
+    console.log(`  ◈ Tunnel  →  ${_tunnelUrl}`);
+    return _tunnelUrl;
+  } catch (_) {}
+
+  // Fallback: cloudflared binary
+  try {
+    const cfBin = execSync('which cloudflared', { encoding: 'utf8', stdio: ['pipe','pipe','pipe'] }).trim();
+    if (cfBin) {
+      return new Promise((resolve, reject) => {
+        const child = _spawn(cfBin, ['tunnel', '--url', `http://localhost:${port}`], { stdio: ['pipe', 'pipe', 'pipe'] });
+        _tunnelProcess = child;
+        let resolved = false;
+        const timeout = setTimeout(() => { if (!resolved) { resolved = true; reject(new Error('Tunnel timed out')); } }, 30000);
+        function parseLine(line) {
+          const m = line.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+          if (m && !resolved) {
+            resolved = true;
+            clearTimeout(timeout);
+            _tunnelUrl = m[0];
+            console.log(`  ◈ Tunnel  →  ${_tunnelUrl}`);
+            resolve(_tunnelUrl);
+          }
+        }
+        child.stdout.on('data', d => String(d).split('\n').forEach(parseLine));
+        child.stderr.on('data', d => String(d).split('\n').forEach(parseLine));
+        child.on('exit', () => { _tunnelUrl = null; _tunnelProcess = null; });
+      });
+    }
+  } catch (_) {}
+
+  throw new Error('No tunnel provider found. Install localtunnel: npm install localtunnel');
+}
+
+export function stopTunnel() {
+  if (_tunnelProcess) {
+    if (typeof _tunnelProcess.close === 'function') _tunnelProcess.close();
+    else if (typeof _tunnelProcess.kill === 'function') _tunnelProcess.kill();
+    _tunnelUrl = null;
+    _tunnelProcess = null;
+  }
+}
+
 // ── PAT config file ───────────────────────────────────────────────────────
 
 const CONFIG_DIR   = path.join(os.homedir(), '.config', 'fauna');
@@ -3008,6 +3070,11 @@ app.get('/api/mobile/pair', async (req, res) => {
   const hostname = os.hostname();
   // The QR code encodes: fauna://pair?host=<ip>&port=<port>&token=<token>&name=<hostname>
   const qrData = ips.map(ip => `fauna://pair?host=${ip}&port=${port}&token=${encodeURIComponent(token)}&name=${encodeURIComponent(hostname)}`);
+  // If tunnel is active, add a tunnel QR as the primary option
+  const tunnelUrl = getTunnelUrl();
+  if (tunnelUrl) {
+    qrData.unshift(`fauna://pair?tunnel=${encodeURIComponent(tunnelUrl)}&token=${encodeURIComponent(token)}&name=${encodeURIComponent(hostname)}`);
+  }
   // Generate QR as data URL for direct use in <img> tags (works offline in Electron)
   let qrImageDataUrl = null;
   if (qrData[0]) {
@@ -3016,7 +3083,7 @@ app.get('/api/mobile/pair', async (req, res) => {
       qrImageDataUrl = await QRCode.toDataURL(qrData[0], { width: 200, margin: 2 });
     } catch (e) { console.error('[QR]', e.message); }
   }
-  res.json({ ips, port, token, hostname, qrData, primaryQr: qrData[0] || null, qrImage: qrImageDataUrl });
+  res.json({ ips, port, token, hostname, qrData, primaryQr: qrData[0] || null, qrImage: qrImageDataUrl, tunnelUrl: tunnelUrl || null });
 });
 
 // Regenerate pairing token (invalidates existing connections)
@@ -3025,6 +3092,27 @@ app.post('/api/mobile/pair/reset', (req, res) => {
   delete cfg.mobilePairToken;
   writeSavedConfig(cfg);
   res.json({ ok: true, token: getMobilePairToken() });
+});
+
+// ── Tunnel management ─────────────────────────────────────────────────────
+app.post('/api/tunnel/start', async (req, res) => {
+  if (_tunnelUrl) return res.json({ ok: true, url: _tunnelUrl, message: 'Tunnel already running' });
+  try {
+    const port = req.socket.localPort || 3737;
+    const url = await startTunnel(port);
+    res.json({ ok: true, url });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/tunnel/stop', (req, res) => {
+  stopTunnel();
+  res.json({ ok: true });
+});
+
+app.get('/api/tunnel/status', (req, res) => {
+  res.json({ active: !!_tunnelUrl, url: _tunnelUrl });
 });
 
 // Mobile app info & install (mirrors browser-ext pattern)
@@ -5705,6 +5793,8 @@ export function startServer(port) {
       }
       // Kill MCP child
       if (isMcpRunning()) mcpProcess.kill('SIGKILL');
+      // Close tunnel
+      stopTunnel();
     }
     process.on('exit',    () => fullCleanup());
     process.on('SIGTERM', () => { fullCleanup(); process.exit(0); });

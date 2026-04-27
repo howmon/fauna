@@ -372,6 +372,8 @@ ${B}Tools${R}
 ${B}Mobile${R}
   ${CY}/pair${R}                 show QR code for mobile app pairing
   ${CY}/pair reset${R}           regenerate pairing token
+  ${CY}/tunnel${R}               start remote access tunnel (outside LAN)
+  ${CY}/tunnel stop${R}          stop tunnel
 
 ${B}System${R}
   ${CY}/status${R}               server & auth status
@@ -600,8 +602,34 @@ ${B}System${R}
       for (const ip of data.ips || []) {
         console.log(`    ${CY}${ip}:${data.port}${R}`);
       }
+      if (data.tunnelUrl) console.log(`    ${CY}${data.tunnelUrl}${R}  ${DM}(tunnel)${R}`);
       console.log(`    ${DM}Token: ${data.token}${R}`);
       console.log();
+    } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
+  },
+
+  '/tunnel': async (arg) => {
+    if (arg === 'stop') {
+      try {
+        await apiPost('/api/tunnel/stop');
+        console.log(`${DM}Tunnel stopped${R}`);
+      } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
+      return;
+    }
+    // Check if already running
+    try {
+      const status = await apiGet('/api/tunnel/status');
+      if (status.active) {
+        console.log(`${GR}Tunnel already running:${R} ${CY}${status.url}${R}`);
+        console.log(`${DM}Use /tunnel stop to stop it${R}`);
+        return;
+      }
+    } catch (_) {}
+    console.log(`${DM}Starting tunnel…${R}`);
+    try {
+      const res = await apiPost('/api/tunnel/start');
+      console.log(`${GR}Tunnel started:${R} ${CY}${res.url}${R}`);
+      console.log(`${DM}Run /pair to get a QR code with the tunnel URL${R}`);
     } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
   },
 

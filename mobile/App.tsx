@@ -139,7 +139,11 @@ export default function App() {
     (async () => {
       const conn = await loadConnection();
       if (conn) {
-        api.configure(conn.host, conn.port, conn.token);
+        if (conn.tunnelUrl) {
+          api.configureUrl(conn.tunnelUrl, conn.token);
+        } else {
+          api.configure(conn.host, conn.port, conn.token);
+        }
         const ok = await api.verifyConnection();
         setConnected(ok);
       } else {

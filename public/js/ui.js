@@ -191,9 +191,12 @@ async function loadMobilePairQR() {
     status.textContent = 'Scan with Fauna mobile app';
     // Show connection info
     var ipList = (data.ips || []).map(function(ip) { return ip + ':' + data.port; }).join(', ');
+    var tunnelLine = data.tunnelUrl ? '<br><strong>Tunnel:</strong> <span style="color:var(--teal)">' + data.tunnelUrl + '</span>' : '';
     info.innerHTML = '<strong>Server:</strong> ' + (data.hostname || 'unknown') + '<br>' +
-      '<strong>Address:</strong> ' + ipList + '<br>' +
+      '<strong>Address:</strong> ' + ipList + tunnelLine + '<br>' +
       '<strong>Token:</strong> <code style="font-size:10px;background:var(--surface3);padding:1px 4px;border-radius:3px">' + data.token.slice(0,8) + '…</code>';
+    // Update tunnel button state
+    _updateTunnelBtn(!!data.tunnelUrl, data.tunnelUrl);
   } catch (e) {
     status.textContent = 'Failed to load pairing info';
   }
@@ -206,6 +209,39 @@ async function resetMobilePairToken() {
     loadMobilePairQR();
   } catch (e) {
     alert('Failed: ' + e.message);
+  }
+}
+
+// ── Tunnel (remote access) ───────────────────────────────────────────────
+function _updateTunnelBtn(active, url) {
+  var label = document.getElementById('tunnel-btn-label');
+  var status = document.getElementById('tunnel-status');
+  if (label) label.textContent = active ? 'Disable Remote Access' : 'Enable Remote Access';
+  if (status) {
+    status.style.display = active ? 'block' : 'none';
+    status.textContent = active ? 'Tunnel active: ' + url : '';
+  }
+}
+
+async function toggleTunnel() {
+  var label = document.getElementById('tunnel-btn-label');
+  var isActive = label && label.textContent.includes('Disable');
+  label.textContent = isActive ? 'Stopping…' : 'Starting…';
+  try {
+    if (isActive) {
+      await fetch('/api/tunnel/stop', { method: 'POST' });
+      _updateTunnelBtn(false);
+    } else {
+      var res = await fetch('/api/tunnel/start', { method: 'POST' });
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to start tunnel');
+      _updateTunnelBtn(true, data.url);
+    }
+    // Refresh QR to include/remove tunnel URL
+    loadMobilePairQR();
+  } catch (e) {
+    alert('Tunnel error: ' + e.message);
+    _updateTunnelBtn(false);
   }
 }
 

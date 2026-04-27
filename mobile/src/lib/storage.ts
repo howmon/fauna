@@ -9,6 +9,7 @@ export interface ConnectionInfo {
   port: number;
   token: string;
   serverName?: string;
+  tunnelUrl?: string;  // e.g. "https://abc123.loca.lt" — used when outside LAN
 }
 
 export async function saveConnection(info: ConnectionInfo) {

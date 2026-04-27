@@ -568,6 +568,10 @@ Examples:
       <button class="settings-row-btn" onclick="loadMobilePairQR()" style="flex:1"><i class="ti ti-refresh"></i> Refresh</button>
       <button class="settings-row-btn danger" onclick="resetMobilePairToken()">Reset Token</button>
     </div>
+    <div style="margin-top:10px;display:flex;gap:6px;align-items:center">
+      <button id="tunnel-toggle-btn" class="settings-row-btn" onclick="toggleTunnel()" style="flex:1"><i class="ti ti-world"></i> <span id="tunnel-btn-label">Enable Remote Access</span></button>
+    </div>
+    <div id="tunnel-status" style="margin-top:6px;font-size:11px;color:var(--text-muted);display:none"></div>
   </div>
 
   <!-- About -->

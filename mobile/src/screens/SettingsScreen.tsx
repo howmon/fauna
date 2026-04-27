@@ -45,7 +45,8 @@ export default function SettingsScreen({ onDisconnect }: Props) {
         {conn && (
           <>
             <Row label="Server" value={conn.serverName || conn.host} t={t} />
-            <Row label="Host" value={`${conn.host}:${conn.port}`} t={t} />
+            <Row label="Host" value={conn.tunnelUrl || `${conn.host}:${conn.port}`} t={t} />
+            {conn.tunnelUrl && <Row label="Mode" value="Tunnel (remote)" t={t} valueColor={t.teal} />}
             <Row label="Auth" value={system?.permissions?.auth === 'granted' ? '✓ Granted' : '✗ Denied'} t={t} valueColor={system?.permissions?.auth === 'granted' ? t.success : t.error} />
           </>
         )}
@@ -69,7 +70,7 @@ export default function SettingsScreen({ onDisconnect }: Props) {
       <View style={[s.card, { backgroundColor: t.surface }]}>
         <Text style={[s.sectionTitle, { color: t.text }]}>About</Text>
         <Row label="App" value="Fauna Mobile v1.0.0" t={t} />
-        <Row label="Protocol" value="HTTP + SSE over LAN" t={t} />
+        <Row label="Protocol" value={conn?.tunnelUrl ? 'HTTPS Tunnel' : 'HTTP + SSE over LAN'} t={t} />
       </View>
 
       <TouchableOpacity style={[s.disconnectBtn, { borderColor: t.error }]} onPress={handleDisconnect}>

@@ -11,6 +11,12 @@ export function configure(host: string, port: number, token: string) {
   _token = token;
 }
 
+// Configure with a full URL (for tunnel connections)
+export function configureUrl(url: string, token: string) {
+  _baseUrl = url.replace(/\/+$/, '');
+  _token = token;
+}
+
 export function isConfigured(): boolean {
   return !!_baseUrl;
 }
