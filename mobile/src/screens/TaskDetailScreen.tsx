@@ -9,7 +9,7 @@ import { dark, light, spacing, radius } from '../lib/theme';
 import * as api from '../lib/api';
 
 interface Props {
-  route: { params: { taskId: string } };
+  route: any;
   navigation: any;
 }
 

@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useColorScheme, StatusBar, Text as RNText } from 'react-native';
 import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createNativeStackNavigator, NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { dark, light } from './src/lib/theme';
@@ -18,8 +18,14 @@ import TaskDetailScreen from './src/screens/TaskDetailScreen';
 import TaskCreateScreen from './src/screens/TaskCreateScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 
+type TasksStackParams = {
+  TasksList: undefined;
+  TaskDetail: { taskId: string };
+  TaskCreate: undefined;
+};
+
 const Tab = createBottomTabNavigator();
-const Stack = createNativeStackNavigator();
+const Stack = createNativeStackNavigator<TasksStackParams>();
 
 // ── Task stack (list → detail / create) ──────────────────────────────────
 
@@ -80,7 +86,7 @@ function MainTabs({ onDisconnect }: { onDisconnect: () => void }) {
   );
 }
 
-function TabIcon({ label }: { label: string; color: string }) {
+function TabIcon({ label }: { label: string; color?: string }) {
   return <RNText style={{ fontSize: 20 }}>{label}</RNText>;
 }
 

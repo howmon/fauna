@@ -19,13 +19,29 @@
     },
     "android": {
       "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1b1b1b"
       },
       "package": "com.fauna.mobile",
-      "permissions": ["CAMERA"]
+      "permissions": [
+        "CAMERA",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "plugins": [
-      ["expo-camera", { "cameraPermission": "Allow Fauna to scan QR codes for pairing." }]
-    ]
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Fauna to scan QR codes for pairing."
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "585cd5a9-4487-4a59-8a1a-2bf043dfc771"
+      }
+    },
+    "owner": "howmon"
   }
 }
