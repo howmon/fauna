@@ -7,7 +7,6 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator, NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useFonts } from 'expo-font';
 
 import { dark, light } from './src/lib/theme';
 import * as api from './src/lib/api';
@@ -113,7 +112,6 @@ export default function App() {
   const scheme = useColorScheme();
   const t = scheme === 'light' ? light : dark;
   const [connected, setConnected] = useState<boolean | null>(null); // null = loading
-  const [fontsLoaded] = useFonts(Ionicons.font);
 
   const navTheme = scheme === 'light' ? {
     ...DefaultTheme,
@@ -139,8 +137,8 @@ export default function App() {
   const handleConnected = useCallback(() => setConnected(true), []);
   const handleDisconnect = useCallback(() => setConnected(false), []);
 
-  if (connected === null || !fontsLoaded) {
-    // Loading splash / fonts
+  if (connected === null) {
+    // Loading splash
     return null;
   }
 
