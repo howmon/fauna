@@ -3,11 +3,18 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList,
-  KeyboardAvoidingView, Platform, useColorScheme, ActivityIndicator,
+  KeyboardAvoidingView, Platform, useColorScheme, ActivityIndicator, Modal, ScrollView,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { dark, light, spacing, radius } from '../lib/theme';
 import * as api from '../lib/api';
+
+// Strip fenced action blocks that are meant for the desktop UI, not for display
+const ACTION_BLOCK_RE = /```(?:browser-ext-action|shell-exec|write-file|task-create|patch-agent|figma-exec|update-prompt)[^]*?```/g;
+
+function cleanContent(text: string): string {
+  return text.replace(ACTION_BLOCK_RE, '').replace(/\n{3,}/g, '\n\n').trim();
+}
 
 interface Message {
   id: string;
@@ -25,11 +32,18 @@ export default function ChatScreen({ loadedConvRef }: { loadedConvRef?: { curren
   const [model, setModel] = useState('');
   const [agent, setAgent] = useState('');
   const [convTitle, setConvTitle] = useState('');
+  const [agents, setAgents] = useState<any[]>([]);
+  const [showAgentPicker, setShowAgentPicker] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const msgIdRef = useRef(0);
 
   const nextId = () => `msg-${++msgIdRef.current}`;
+
+  // Load agents list
+  useEffect(() => {
+    api.getAgents().then(setAgents).catch(() => {});
+  }, []);
 
   // Pick up loaded conversation when Chat tab is focused
   useFocusEffect(
@@ -137,13 +151,14 @@ export default function ChatScreen({ loadedConvRef }: { loadedConvRef?: { curren
       );
     }
 
-    // Skip empty assistant messages
-    if (!isUser && !item.content) return null;
+    const cleaned = isUser ? item.content : cleanContent(item.content);
+    // Skip empty assistant messages (or messages that were only action blocks)
+    if (!isUser && !cleaned) return null;
 
     return (
       <View style={[s.bubble, { backgroundColor: isUser ? t.userBg : t.aiBg, alignSelf: isUser ? 'flex-end' : 'flex-start' }]}>
         {!isUser && <Text style={[s.roleLabel, { color: t.teal }]}>Fauna</Text>}
-        <Text style={[s.msgText, { color: t.text }]} selectable>{item.content}</Text>
+        <Text style={[s.msgText, { color: t.text }]} selectable>{cleaned}</Text>
       </View>
     );
   }
@@ -162,6 +177,20 @@ export default function ChatScreen({ loadedConvRef }: { loadedConvRef?: { curren
         contentContainerStyle={s.list}
         onContentSizeChange={scrollToEnd}
       />
+
+      {/* Agent chip bar */}
+      <View style={[s.chipBar, { backgroundColor: t.surface, borderTopColor: t.border }]}>
+        <TouchableOpacity style={[s.agentChip, { backgroundColor: agent ? t.teal : t.surface2 }]} onPress={() => setShowAgentPicker(true)}>
+          <Text style={[s.agentChipText, { color: agent ? '#fff' : t.textMuted }]}>
+            {agent ? `@ ${agent}` : '@ Agent'}
+          </Text>
+        </TouchableOpacity>
+        {agent ? (
+          <TouchableOpacity onPress={() => setAgent('')}>
+            <Text style={{ color: t.textMuted, fontSize: 16, marginLeft: 6 }}>✕</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
 
       <View style={[s.inputBar, { backgroundColor: t.surface, borderTopColor: t.border }]}>
         <TextInput
@@ -190,6 +219,36 @@ export default function ChatScreen({ loadedConvRef }: { loadedConvRef?: { curren
           </TouchableOpacity>
         )}
       </View>
+
+      {/* Agent picker modal */}
+      <Modal visible={showAgentPicker} transparent animationType="slide">
+        <View style={s.modalOverlay}>
+          <View style={[s.modalContent, { backgroundColor: t.surface }]}>
+            <Text style={[s.modalTitle, { color: t.text }]}>Select Agent</Text>
+            <ScrollView style={{ maxHeight: 400 }}>
+              <TouchableOpacity
+                style={[s.agentItem, agent === '' && { backgroundColor: t.surface2 }]}
+                onPress={() => { setAgent(''); setShowAgentPicker(false); }}
+              >
+                <Text style={[s.agentName, { color: t.text }]}>None (default)</Text>
+              </TouchableOpacity>
+              {agents.map((a) => (
+                <TouchableOpacity
+                  key={a.name}
+                  style={[s.agentItem, agent === a.name && { backgroundColor: t.surface2 }]}
+                  onPress={() => { setAgent(a.name); setShowAgentPicker(false); }}
+                >
+                  <Text style={[s.agentName, { color: t.text }]}>{a.displayName || a.name}</Text>
+                  {a.description ? <Text style={[s.agentDesc, { color: t.textMuted }]} numberOfLines={1}>{a.description}</Text> : null}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity style={[s.modalClose, { borderColor: t.border }]} onPress={() => setShowAgentPicker(false)}>
+              <Text style={{ color: t.textMuted, fontWeight: '600' }}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -202,8 +261,18 @@ const s = StyleSheet.create({
   toolText: { fontSize: 12, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
   roleLabel: { fontSize: 11, fontWeight: '600', marginBottom: 2 },
   msgText: { fontSize: 15, lineHeight: 22 },
+  chipBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.sm, paddingVertical: 4 },
+  agentChip: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  agentChipText: { fontSize: 13, fontWeight: '500' },
   inputBar: { flexDirection: 'row', alignItems: 'flex-end', padding: spacing.sm, borderTopWidth: 1 },
   textInput: { flex: 1, borderRadius: radius.md, padding: spacing.md, fontSize: 15, maxHeight: 120, marginRight: spacing.sm },
   sendBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   sendBtnText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modalContent: { borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: spacing.lg, paddingBottom: 40 },
+  modalTitle: { fontSize: 17, fontWeight: '700', marginBottom: spacing.md },
+  agentItem: { padding: spacing.md, borderRadius: radius.md, marginBottom: 4 },
+  agentName: { fontSize: 15, fontWeight: '600' },
+  agentDesc: { fontSize: 12, marginTop: 2 },
+  modalClose: { borderTopWidth: 1, marginTop: spacing.md, paddingTop: spacing.md, alignItems: 'center' },
 });

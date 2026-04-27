@@ -10,6 +10,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
 <link rel="stylesheet" href="css/styles.css">
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
 </head>
 <body>
 <div id="app">
@@ -96,29 +97,11 @@
           <button class="footer-icon-btn" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle light/dark mode">
             <i class="ti ti-moon"></i>
           </button>
-          <button class="footer-icon-btn" onclick="openOnboarding()" title="Permissions &amp; Setup">
-            <i class="ti ti-shield-lock"></i>
-          </button>
-          <button class="footer-icon-btn" onclick="toggleAgentRules()" title="Agent Rules">
-            <i class="ti ti-robot"></i>
-          </button>
-          <button class="footer-icon-btn" onclick="openAgentBuilder()" title="Agent Builder (Ctrl+Shift+B)">
-            <i class="ti ti-wand"></i>
-          </button>
-          <button class="footer-icon-btn" onclick="openBrowserPane()" title="Open Browser Panel">
-            <i class="ti ti-world-www"></i>
-          </button>
-          <button class="footer-icon-btn" onclick="togglePlaybook()" title="Playbook — Learned Instructions">
-            <i class="ti ti-notebook"></i>
-          </button>
           <button class="footer-icon-btn" onclick="toggleTasksPanel()" title="Tasks — Scheduled Actions">
             <i class="ti ti-checklist"></i>
           </button>
-          <button class="footer-icon-btn" onclick="toggleFigmaSetup()" title="Plugins &amp; Extensions">
-            <i class="ti ti-plug"></i>
-          </button>
-          <button class="footer-icon-btn" onclick="toggleHelp()" title="Help &amp; Reference">
-            <i class="ti ti-help-circle"></i>
+          <button class="footer-icon-btn" id="more-menu-btn" onclick="toggleMoreMenu(event)" title="More">
+            <i class="ti ti-dots"></i>
           </button>
           <button class="footer-icon-btn" onclick="toggleSettings()" title="Settings">
             <i class="ti ti-settings"></i>
@@ -126,6 +109,16 @@
           <button class="footer-icon-btn footer-pat-btn" onclick="toggleSettings()" title="PAT status">
             <span id="auth-pill" class="dim">…</span>
           </button>
+        </div>
+        <!-- More overflow menu -->
+        <div id="more-menu" class="more-menu" style="display:none">
+          <button class="more-menu-item" onclick="openOnboarding();hideMoreMenu()"><i class="ti ti-shield-lock"></i> Permissions &amp; Setup</button>
+          <button class="more-menu-item" onclick="toggleAgentRules();hideMoreMenu()"><i class="ti ti-robot"></i> Agent Rules</button>
+          <button class="more-menu-item" onclick="openAgentBuilder();hideMoreMenu()"><i class="ti ti-wand"></i> Agent Builder</button>
+          <button class="more-menu-item" onclick="openBrowserPane();hideMoreMenu()"><i class="ti ti-world-www"></i> Browser Panel</button>
+          <button class="more-menu-item" onclick="togglePlaybook();hideMoreMenu()"><i class="ti ti-notebook"></i> Playbook</button>
+          <button class="more-menu-item" onclick="toggleFigmaSetup();hideMoreMenu()"><i class="ti ti-plug"></i> Plugins &amp; Extensions</button>
+          <button class="more-menu-item" onclick="toggleHelp();hideMoreMenu()"><i class="ti ti-help-circle"></i> Help &amp; Reference</button>
         </div>
       </div>
     </div><!-- /sidebar-bottom -->
@@ -559,6 +552,21 @@ Examples:
         <button class="settings-row-btn" onclick="saveVoiceWakeWord()">Save</button>
       </div>
       <div class="settings-hint">Default: <strong>fauna</strong>. Speak this word to activate voice input.</div>
+    </div>
+  </div>
+
+  <!-- Mobile App -->
+  <div class="settings-section">
+    <div class="settings-section-title">Mobile App</div>
+    <div class="settings-hint" style="margin-bottom:10px">Scan this QR code with the Fauna mobile app to connect.</div>
+    <div id="mobile-qr-wrap" style="display:flex;flex-direction:column;align-items:center;gap:10px">
+      <canvas id="mobile-qr-canvas" style="border-radius:8px;image-rendering:pixelated"></canvas>
+      <div id="mobile-qr-status" style="font-size:11px;color:var(--text-muted)">Loading…</div>
+    </div>
+    <div id="mobile-pair-info" style="margin-top:10px;font-size:11.5px;color:var(--text-dim);line-height:1.6"></div>
+    <div style="margin-top:8px;display:flex;gap:6px">
+      <button class="settings-row-btn" onclick="loadMobilePairQR()" style="flex:1"><i class="ti ti-refresh"></i> Refresh</button>
+      <button class="settings-row-btn danger" onclick="resetMobilePairToken()">Reset Token</button>
     </div>
   </div>
 

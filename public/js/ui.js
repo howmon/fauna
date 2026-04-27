@@ -139,6 +139,64 @@ function toggleSettings() {
   if (settingsOpen) loadSettingsState();
 }
 
+// ── More overflow menu ────────────────────────────────────────────────────
+function toggleMoreMenu(e) {
+  if (e) e.stopPropagation();
+  var m = document.getElementById('more-menu');
+  var vis = m.style.display !== 'none';
+  m.style.display = vis ? 'none' : '';
+  if (!vis) {
+    // Close on next click anywhere
+    setTimeout(function() {
+      document.addEventListener('click', _closeMoreOnce, { once: true });
+    }, 0);
+  }
+}
+function hideMoreMenu() {
+  document.getElementById('more-menu').style.display = 'none';
+}
+function _closeMoreOnce() { hideMoreMenu(); }
+
+// ── Mobile QR pairing (in Settings panel) ────────────────────────────────
+async function loadMobilePairQR() {
+  var canvas = document.getElementById('mobile-qr-canvas');
+  var status = document.getElementById('mobile-qr-status');
+  var info = document.getElementById('mobile-pair-info');
+  if (!canvas) return;
+  status.textContent = 'Loading…';
+  try {
+    var res = await fetch('/api/mobile/pair');
+    var data = await res.json();
+    var url = data.primaryQr;
+    if (!url) { status.textContent = 'No network interfaces found'; return; }
+    // Render QR code to canvas (QRCode from CDN)
+    if (typeof QRCode !== 'undefined' && QRCode.toCanvas) {
+      await QRCode.toCanvas(canvas, url, { width: 200, margin: 2, color: { dark: '#000', light: '#fff' } });
+    } else {
+      status.textContent = 'QR library not loaded';
+      return;
+    }
+    status.textContent = 'Scan with Fauna mobile app';
+    // Show connection info
+    var ipList = (data.ips || []).map(function(ip) { return ip + ':' + data.port; }).join(', ');
+    info.innerHTML = '<strong>Server:</strong> ' + (data.hostname || 'unknown') + '<br>' +
+      '<strong>Address:</strong> ' + ipList + '<br>' +
+      '<strong>Token:</strong> <code style="font-size:10px;background:var(--surface3);padding:1px 4px;border-radius:3px">' + data.token.slice(0,8) + '…</code>';
+  } catch (e) {
+    status.textContent = 'Failed to load pairing info';
+  }
+}
+
+async function resetMobilePairToken() {
+  if (!confirm('Reset pairing token? All connected mobile devices will need to re-pair.')) return;
+  try {
+    await fetch('/api/mobile/pair/reset', { method: 'POST' });
+    loadMobilePairQR();
+  } catch (e) {
+    alert('Failed: ' + e.message);
+  }
+}
+
 async function loadSettingsState() {
   // Sync auto-run checkbox
   var cb = document.getElementById('autorun-toggle');
@@ -168,6 +226,7 @@ async function loadSettingsState() {
   }
   checkAuth();
   loadProviderStatus();
+  loadMobilePairQR();
 }async function checkAuth() {
   var pill  = document.getElementById('auth-pill');
   var badge = document.getElementById('auth-badge');

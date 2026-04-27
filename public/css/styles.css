@@ -191,6 +191,7 @@ button .ti, label .ti { pointer-events: none; }
 #sidebar-bottom {
   flex-shrink: 0;
   border-top: 1px solid var(--border);
+  position: relative;
 }
 
 /* PAT pill in icon row */
@@ -209,6 +210,7 @@ button .ti, label .ti { pointer-events: none; }
 .all-items-list { display: flex; flex-direction: column; gap: 2px; }
 
 #sidebar-footer {
+  position: relative;
 }
 /* Icon row — small utility buttons */
 #sidebar-footer-icons {
@@ -223,6 +225,24 @@ button .ti, label .ti { pointer-events: none; }
 }
 .footer-icon-btn:hover { background: var(--surface2); color: var(--text); }
 .footer-icon-btn .ti { font-size: 15px; }
+
+/* More overflow menu (popover above footer icons) */
+.more-menu {
+  position: absolute; bottom: 100%; left: 8px; right: 8px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 4px; margin-bottom: 6px;
+  box-shadow: 0 -4px 20px rgba(0,0,0,.18);
+  z-index: 200;
+}
+.more-menu-item {
+  width: 100%; display: flex; align-items: center; gap: 9px;
+  padding: 8px 12px; background: none; border: none;
+  color: var(--text-dim); font-size: 12.5px; font-family: var(--font);
+  border-radius: 7px; cursor: pointer; text-align: left;
+  transition: background .12s, color .12s;
+}
+.more-menu-item:hover { background: var(--surface2); color: var(--text); }
+.more-menu-item .ti { font-size: 15px; width: 18px; text-align: center; color: var(--text-muted); }
 /* Settings entry — full-width prominent button */
 #settings-entry-btn {
   width: 100%; display: flex; align-items: center; gap: 9px;
