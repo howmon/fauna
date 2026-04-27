@@ -22,6 +22,7 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1b1b1b"
       },
+      "usesCleartextTraffic": true,
       "package": "com.fauna.mobile",
       "permissions": [
         "CAMERA",
