@@ -944,7 +944,6 @@ app.post('/api/chat', async (req, res) => {
     'Cache-Control':   'no-cache',
     'Connection':      'keep-alive',
     'X-Accel-Buffering': 'no',
-    'Access-Control-Allow-Origin': 'http://localhost:3737'
   });
 
   const send = (obj) => { if (!clientAborted && !res.writableEnded) res.write(`data: ${JSON.stringify(obj)}\n\n`); };
@@ -5129,6 +5128,52 @@ app.get('/api/system-context', (req, res) => {
   });
 });
 
+// ── Conversations — server-side persistence ───────────────────────────────
+
+const CONVS_FILE = path.join(os.homedir(), '.config', 'fauna', 'conversations.json');
+
+function readConvs() {
+  try { return JSON.parse(fs.readFileSync(CONVS_FILE, 'utf8')); }
+  catch (_) { return []; }
+}
+function writeConvs(convs) {
+  fs.mkdirSync(path.dirname(CONVS_FILE), { recursive: true });
+  fs.writeFileSync(CONVS_FILE, JSON.stringify(convs, null, 2));
+}
+
+// List conversations (returns id, title, createdAt, model — messages omitted for speed)
+app.get('/api/conversations', (req, res) => {
+  const full = req.query.full === '1';
+  const convs = readConvs();
+  if (full) return res.json(convs);
+  res.json(convs.map(c => ({ id: c.id, title: c.title, createdAt: c.createdAt, model: c.model, messageCount: (c.messages || []).length })));
+});
+
+// Get single conversation (with messages)
+app.get('/api/conversations/:id', (req, res) => {
+  const conv = readConvs().find(c => c.id === req.params.id);
+  if (!conv) return res.status(404).json({ error: 'Not found' });
+  res.json(conv);
+});
+
+// Create or update a conversation
+app.put('/api/conversations/:id', (req, res) => {
+  const convs = readConvs();
+  const idx = convs.findIndex(c => c.id === req.params.id);
+  const conv = { ...req.body, id: req.params.id };
+  if (idx >= 0) convs[idx] = conv;
+  else convs.unshift(conv);
+  writeConvs(convs);
+  res.json(conv);
+});
+
+// Delete a conversation
+app.delete('/api/conversations/:id', (req, res) => {
+  const convs = readConvs().filter(c => c.id !== req.params.id);
+  writeConvs(convs);
+  res.json({ ok: true });
+});
+
 // ── Task Management ───────────────────────────────────────────────────────
 
 // List all tasks
@@ -5548,7 +5593,6 @@ app.get('/api/ext/events', (req, res) => {
     'Cache-Control':     'no-cache',
     'Connection':        'keep-alive',
     'X-Accel-Buffering': 'no',
-    'Access-Control-Allow-Origin': 'http://localhost:3737'
   });
   res.write(':ok\n\n');
   function handler(msg) {

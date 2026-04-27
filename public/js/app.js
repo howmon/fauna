@@ -31,6 +31,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Load last conversation or show empty state
   if (state.conversations.length) loadConversation(state.conversations[0].id);
   else showEmpty();
+
+  // One-time migration: sync localStorage conversations to server for CLI/mobile access
+  if (!localStorage.getItem('fauna-convs-synced') && state.conversations.length) {
+    _syncAllConvsToServer();
+    localStorage.setItem('fauna-convs-synced', '1');
+  }
 });
 
 // ── Help panel ────────────────────────────────────────────────────────────

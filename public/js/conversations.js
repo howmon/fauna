@@ -8,6 +8,31 @@ function saveConversations() {
     return c;
   });
   localStorage.setItem('fauna-convs', JSON.stringify(toSave));
+  // Sync current conversation to server (fire-and-forget)
+  _syncConvToServer(state.currentId);
+}
+
+// Debounced per-conversation server sync
+var _syncTimers = {};
+function _syncConvToServer(id) {
+  if (!id) return;
+  clearTimeout(_syncTimers[id]);
+  _syncTimers[id] = setTimeout(function() {
+    var conv = getConv(id);
+    if (!conv) return;
+    var c = {};
+    Object.keys(conv).forEach(function(k) { if (k[0] !== '_') c[k] = conv[k]; });
+    fetch('/api/conversations/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c) }).catch(function() {});
+  }, 2000);
+}
+
+// Sync ALL conversations to server (used on init/migration)
+function _syncAllConvsToServer() {
+  state.conversations.forEach(function(conv) {
+    var c = {};
+    Object.keys(conv).forEach(function(k) { if (k[0] !== '_') c[k] = conv[k]; });
+    fetch('/api/conversations/' + conv.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c) }).catch(function() {});
+  });
 }
 
 function getConv(id) {
@@ -171,6 +196,7 @@ function deleteConversation(id, e) {
   _destroyConvBrowserTabs(id);
   state.conversations = state.conversations.filter(c => c.id !== id);
   saveConversations();
+  fetch('/api/conversations/' + id, { method: 'DELETE' }).catch(function() {});
   if (state.currentId === id) {
     purgeConvDom(id);
     if (state.conversations.length) loadConversation(state.conversations[0].id);
