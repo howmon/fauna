@@ -18,13 +18,29 @@ function _syncConvToServer(id) {
   if (!id) return;
   clearTimeout(_syncTimers[id]);
   _syncTimers[id] = setTimeout(function() {
-    var conv = getConv(id);
-    if (!conv) return;
-    var c = {};
-    Object.keys(conv).forEach(function(k) { if (k[0] !== '_') c[k] = conv[k]; });
-    fetch('/api/conversations/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c) }).catch(function() {});
-  }, 2000);
+    _flushConvToServer(id);
+  }, 500);
 }
+
+function _flushConvToServer(id) {
+  var conv = getConv(id);
+  if (!conv) return;
+  var c = {};
+  Object.keys(conv).forEach(function(k) { if (k[0] !== '_') c[k] = conv[k]; });
+  fetch('/api/conversations/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c) }).catch(function() {});
+}
+
+// Flush pending syncs immediately (called on beforeunload)
+function _flushAllPendingSyncs() {
+  Object.keys(_syncTimers).forEach(function(id) {
+    clearTimeout(_syncTimers[id]);
+    delete _syncTimers[id];
+    _flushConvToServer(id);
+  });
+  // Also sync current conversation directly
+  if (state.currentId) _flushConvToServer(state.currentId);
+}
+window.addEventListener('beforeunload', _flushAllPendingSyncs);
 
 // Sync ALL conversations to server (used on init/migration)
 function _syncAllConvsToServer() {
