@@ -412,24 +412,71 @@ async function _executeCommand(btn, resultEl, command) {
 
 // ── Interactive stdin input for waiting processes ────────────────────────
 
+function _parseQuickOptions(hint) {
+  if (!hint) return [];
+  var options = [];
+  // (Y/n), (y/N), (Yes/No), [y/n], [yes/no/quit]
+  var bracketMatch = hint.match(/[\(\[]([\w]+(?:[\/|][\w]+)+)[\)\]]\s*$/i);
+  if (bracketMatch) {
+    var parts = bracketMatch[1].split(/[\/|]/);
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i].trim();
+      if (p) options.push({ label: p, value: p, isDefault: p === p.toUpperCase() && p.length <= 3 });
+    }
+    return options;
+  }
+  // "Would you like to proceed?" / "Continue?" / "Do you want to..." → yes/no
+  if (/\?\s*$/.test(hint) && /would you|do you|continue|proceed|overwrite|replace|delete|remove|confirm|accept|install|update/i.test(hint)) {
+    options.push({ label: 'Yes', value: 'yes', isDefault: true });
+    options.push({ label: 'No', value: 'no', isDefault: false });
+    return options;
+  }
+  // "Enter password:", "Enter name:", "Type something:" → no quick options, just free text
+  return options;
+}
+
 function _showShellInput(execId, killId, hint, resultEl) {
   if (document.getElementById('shell-input-' + execId)) return; // already showing
 
   var wrapper = document.createElement('div');
   wrapper.id = 'shell-input-' + execId;
   wrapper.className = 'shell-stdin-prompt';
+  var hintText = hint || 'Waiting for input…';
+  var quickOptions = _parseQuickOptions(hintText);
+
+  var quickBtnsHtml = '';
+  if (quickOptions.length > 0) {
+    quickBtnsHtml = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">';
+    for (var i = 0; i < quickOptions.length; i++) {
+      var opt = quickOptions[i];
+      var bg = opt.isDefault ? 'var(--accent,#7c5cff)' : 'var(--bg-secondary,#1e1e1e)';
+      var border = opt.isDefault ? 'var(--accent,#7c5cff)' : 'var(--border,#555)';
+      var color = opt.isDefault ? '#fff' : 'var(--text-primary,#eee)';
+      quickBtnsHtml +=
+        '<button onclick="_sendShellQuickOption(\'' + execId + '\',\'' + killId + '\',\'' + escHtml(opt.value) + '\')" ' +
+          'style="background:' + bg + ';color:' + color + ';border:1px solid ' + border + ';border-radius:6px;padding:5px 14px;cursor:pointer;font-size:13px;font-family:var(--font-mono,monospace);transition:all .15s"' +
+          ' onmouseenter="this.style.opacity=\'0.8\'" onmouseleave="this.style.opacity=\'1\'">' +
+          escHtml(opt.label) +
+        '</button>';
+    }
+    quickBtnsHtml += '</div>';
+  }
+
   wrapper.innerHTML =
-    '<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding:8px 10px;background:var(--bg-tertiary,#2a2a2a);border-radius:8px;border:1px solid var(--border,#3a3a3a)">' +
-      '<span style="color:var(--text-secondary,#aaa);font-size:12px;white-space:nowrap">' +
-        '<i class="ti ti-terminal-2"></i> ' + escHtml(hint || 'Waiting for input…') +
-      '</span>' +
-      '<input type="text" id="shell-input-field-' + execId + '" ' +
-        'style="flex:1;background:var(--bg-secondary,#1e1e1e);border:1px solid var(--border,#444);border-radius:4px;padding:4px 8px;color:var(--text-primary,#eee);font-family:var(--font-mono,monospace);font-size:13px;outline:none" ' +
-        'placeholder="Type response and press Enter…" autocomplete="off">' +
-      '<button onclick="_sendShellInput(\'' + execId + '\',\'' + killId + '\')" ' +
-        'style="background:var(--accent,#7c5cff);color:#fff;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px">' +
-        '<i class="ti ti-send"></i>' +
-      '</button>' +
+    '<div style="margin-top:8px;padding:10px 12px;background:var(--bg-tertiary,#2a2a2a);border-radius:8px;border:1px solid var(--border,#3a3a3a)">' +
+      '<div style="color:var(--text-primary,#eee);font-size:13px;font-family:var(--font-mono,monospace);margin-bottom:8px;white-space:pre-wrap;line-height:1.4">' +
+        '<i class="ti ti-terminal-2" style="color:var(--accent,#7c5cff);margin-right:4px"></i>' + escHtml(hintText) +
+      '</div>' +
+      quickBtnsHtml +
+      '<div style="display:flex;align-items:center;gap:8px">' +
+        '<input type="text" id="shell-input-field-' + execId + '" ' +
+          'style="flex:1;background:var(--bg-secondary,#1e1e1e);border:1px solid var(--border,#444);border-radius:4px;padding:6px 10px;color:var(--text-primary,#eee);font-family:var(--font-mono,monospace);font-size:13px;outline:none" ' +
+          'placeholder="' + (quickOptions.length ? 'Or type a custom response…' : 'Type response and press Enter…') + '" autocomplete="off">' +
+        '<button onclick="_sendShellInput(\'' + execId + '\',\'' + killId + '\')" ' +
+          'style="background:var(--accent,#7c5cff);color:#fff;border:none;border-radius:4px;padding:6px 12px;cursor:pointer;font-size:12px">' +
+          '<i class="ti ti-send"></i>' +
+        '</button>' +
+      '</div>' +
     '</div>';
 
   resultEl.parentNode.insertBefore(wrapper, resultEl.nextSibling);
@@ -465,6 +512,31 @@ async function _sendShellInput(execId, killId) {
     _removeShellInput(execId);
   } catch (e) {
     field.placeholder = 'Failed — try again';
+    field.disabled = false;
+  }
+}
+
+async function _sendShellQuickOption(execId, killId, value) {
+  // Disable all quick buttons to prevent double-click
+  var wrapper = document.getElementById('shell-input-' + execId);
+  if (wrapper) {
+    var btns = wrapper.querySelectorAll('button');
+    for (var i = 0; i < btns.length; i++) btns[i].disabled = true;
+  }
+  try {
+    await fetch('/api/shell-stdin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ killId: killId, input: value })
+    });
+    _removeShellInput(execId);
+  } catch (e) {
+    if (wrapper) {
+      var btns2 = wrapper.querySelectorAll('button');
+      for (var j = 0; j < btns2.length; j++) btns2[j].disabled = false;
+    }
+  }
+}
     field.disabled = false;
   }
 }
