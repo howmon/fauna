@@ -537,7 +537,4 @@ async function _sendShellQuickOption(execId, killId, value) {
     }
   }
 }
-    field.disabled = false;
-  }
-}
 
