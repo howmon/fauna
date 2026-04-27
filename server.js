@@ -63,19 +63,20 @@ app.use((req, res, next) => {
   const ip = req.ip || req.connection?.remoteAddress || '';
   const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
   if (!isLocal) {
+    // CORS for LAN requests (must come before auth check so OPTIONS preflight succeeds)
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, X-Fauna-Token');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
     // Validate mobile auth token for LAN requests
     const token = req.headers['x-fauna-token'];
     if (!token || token !== getMobilePairToken()) {
       // Allow the /api/mobile/pair endpoint without auth (it requires localhost or valid token)
       if (req.path !== '/api/mobile/pair') {
+        console.log(`[Mobile] Auth rejected from ${ip} — path: ${req.path}, token: ${token ? token.slice(0, 6) + '…' : '(none)'}`);
         return res.status(401).json({ error: 'Invalid mobile auth token' });
       }
     }
-    // CORS for LAN requests
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, X-Fauna-Token');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    if (req.method === 'OPTIONS') return res.sendStatus(204);
   }
   next();
 });
