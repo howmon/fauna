@@ -1,8 +1,8 @@
 // Fauna Mobile — App entry point with navigation
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useColorScheme, StatusBar } from 'react-native';
-import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
+import { NavigationContainer, DefaultTheme, DarkTheme, createNavigationContainerRef } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator, NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -14,6 +14,7 @@ import { loadConnection } from './src/lib/storage';
 
 import ScanScreen from './src/screens/ScanScreen';
 import ChatScreen from './src/screens/ChatScreen';
+import ConversationsScreen from './src/screens/ConversationsScreen';
 import TasksScreen from './src/screens/TasksScreen';
 import TaskDetailScreen from './src/screens/TaskDetailScreen';
 import TaskCreateScreen from './src/screens/TaskCreateScreen';
@@ -52,9 +53,20 @@ function TasksStack() {
 
 // ── Main tabs ─────────────────────────────────────────────────────────────
 
+// Shared ref to pass loaded conversation from ConversationsScreen to ChatScreen
+const _loadedConvRef = { current: null as any };
+const navigationRef = createNavigationContainerRef();
+
 function MainTabs({ onDisconnect }: { onDisconnect: () => void }) {
   const scheme = useColorScheme();
   const t = scheme === 'light' ? light : dark;
+
+  const handleLoadConversation = useCallback((conv: any) => {
+    _loadedConvRef.current = conv;
+    if (navigationRef.isReady()) {
+      (navigationRef as any).navigate('Chat');
+    }
+  }, []);
 
   return (
     <Tab.Navigator
@@ -69,9 +81,16 @@ function MainTabs({ onDisconnect }: { onDisconnect: () => void }) {
     >
       <Tab.Screen
         name="Chat"
-        component={ChatScreen}
         options={{ tabBarIcon: ({ color, size }) => <Ionicons name="chatbubble-outline" size={size} color={color} />, title: 'Chat' }}
-      />
+      >
+        {() => <ChatScreen loadedConvRef={_loadedConvRef} />}
+      </Tab.Screen>
+      <Tab.Screen
+        name="History"
+        options={{ tabBarIcon: ({ color, size }) => <Ionicons name="time-outline" size={size} color={color} /> }}
+      >
+        {() => <ConversationsScreen onLoadConversation={handleLoadConversation} />}
+      </Tab.Screen>
       <Tab.Screen
         name="Tasks"
         component={TasksStack}
@@ -126,7 +145,7 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <StatusBar barStyle={scheme === 'light' ? 'dark-content' : 'light-content'} backgroundColor={t.bg} />
-      <NavigationContainer theme={navTheme}>
+      <NavigationContainer ref={navigationRef} theme={navTheme}>
         {connected ? (
           <MainTabs onDisconnect={handleDisconnect} />
         ) : (

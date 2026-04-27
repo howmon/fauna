@@ -244,3 +244,17 @@ export async function verifyConnection(): Promise<boolean> {
     return false;
   }
 }
+
+// ── Conversations ─────────────────────────────────────────────────────────
+
+export async function getConversations() {
+  return apiGet<any[]>('/api/conversations');
+}
+
+export async function getConversation(id: string) {
+  return apiGet(`/api/conversations/${id}`);
+}
+
+export async function deleteConversation(id: string) {
+  return apiDelete(`/api/conversations/${id}`);
+}

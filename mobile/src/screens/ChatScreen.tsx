@@ -5,6 +5,7 @@ import {
   View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList,
   KeyboardAvoidingView, Platform, useColorScheme, ActivityIndicator,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { dark, light, spacing, radius } from '../lib/theme';
 import * as api from '../lib/api';
 
@@ -15,7 +16,7 @@ interface Message {
   toolName?: string;
 }
 
-export default function ChatScreen() {
+export default function ChatScreen({ loadedConvRef }: { loadedConvRef?: { current: any } }) {
   const scheme = useColorScheme();
   const t = scheme === 'light' ? light : dark;
   const [messages, setMessages] = useState<Message[]>([]);
@@ -23,11 +24,28 @@ export default function ChatScreen() {
   const [streaming, setStreaming] = useState(false);
   const [model, setModel] = useState('');
   const [agent, setAgent] = useState('');
+  const [convTitle, setConvTitle] = useState('');
   const abortRef = useRef<AbortController | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const msgIdRef = useRef(0);
 
   const nextId = () => `msg-${++msgIdRef.current}`;
+
+  // Pick up loaded conversation when Chat tab is focused
+  useFocusEffect(
+    useCallback(() => {
+      if (loadedConvRef?.current) {
+        const conv = loadedConvRef.current;
+        loadedConvRef.current = null;
+        const msgs: Message[] = (conv.messages || [])
+          .filter((m: any) => m.role === 'user' || m.role === 'assistant')
+          .map((m: any) => ({ id: nextId(), role: m.role, content: m.content }));
+        setMessages(msgs);
+        setConvTitle(conv.title || '');
+        if (conv.model) setModel(conv.model);
+      }
+    }, [])
+  );
 
   const scrollToEnd = useCallback(() => {
     setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);

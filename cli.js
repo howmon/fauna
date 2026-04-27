@@ -324,6 +324,8 @@ ${B}Chat${R}
   ${CY}/models${R}               list available models
   ${CY}/attach${R} <path>        attach file to next message
   ${CY}/clear${R}                clear conversation history
+  ${CY}/conversations${R}        list saved conversations
+  ${CY}/conv${R} <id>            load a conversation by ID
 
 ${B}Tasks${R}
   ${CY}/tasks${R}                list all tasks
@@ -407,6 +409,33 @@ ${B}System${R}
     _history = [];
     _attachments = [];
     console.log(`${DM}Conversation cleared${R}`);
+  },
+
+  '/conversations': async () => {
+    try {
+      const convs = await apiGet('/api/conversations');
+      if (!convs.length) { console.log(`${DM}No saved conversations${R}`); return; }
+      console.log(`\n  ${B}${'ID'.padEnd(14)} ${'Title'.padEnd(35)} ${'Msgs'.padEnd(6)} Date${R}`);
+      console.log(`  ${DM}${'─'.repeat(70)}${R}`);
+      for (const c of convs) {
+        const date = c.createdAt ? new Date(c.createdAt).toLocaleDateString() : '';
+        console.log(`  ${DM}${(c.id || '').slice(0, 13).padEnd(14)}${R} ${(c.title || '').slice(0, 34).padEnd(35)} ${String(c.messageCount || 0).padEnd(6)} ${GY}${date}${R}`);
+      }
+      console.log();
+    } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
+  },
+
+  '/conv': async (arg) => {
+    if (!arg) { console.log(`${DM}Usage: /conv <id> — load a conversation by ID${R}`); return; }
+    try {
+      const convs = await apiGet('/api/conversations');
+      const match = convs.find(c => c.id === arg || c.id.startsWith(arg));
+      if (!match) { console.log(`${RD}Conversation not found: ${arg}${R}`); return; }
+      const conv = await apiGet('/api/conversations/' + match.id);
+      _history = (conv.messages || []).filter(m => m.role === 'user' || m.role === 'assistant');
+      if (conv.model) _currentModel = conv.model;
+      console.log(`${GR}Loaded "${conv.title}" (${_history.length} messages)${R}`);
+    } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
   },
 
   // ── Task commands ────────────────────────────────────────────────────
