@@ -72,6 +72,40 @@ const MG = '\x1b[35m';     // magenta
 const GY = '\x1b[90m';     // gray
 const BG_DIM = '\x1b[48;5;236m'; // subtle bg for code blocks
 
+// ── True-color helpers (logo) ────────────────────────────────────────────
+
+const rgb = (r, g, b) => `\x1b[38;2;${r};${g};${b}m`;
+const T1 = rgb(15, 118, 110);    // dark teal
+const T2 = rgb(13, 148, 136);    // mid teal
+const T3 = rgb(20, 184, 166);    // bright teal
+const T4 = rgb(45, 212, 191);    // light teal
+const T5 = rgb(94, 234, 212);    // pale teal/highlight
+const AM = rgb(245, 158, 11);    // amber (eye)
+
+const FAUNA_LOGO = [
+  `${T1}            ▄▄${T2}██████${T1}▄▄`,
+  `${T1}         ▄${T2}████████████${T3}██▄`,
+  `${T2}       ▄${T3}██████████████████${T2}█▄`,
+  `${T2}      ${T3}█████████████████████${T1}▀▀`,
+  `${T3}     ███████████████████████`,
+  `${T3}     █████████ ${AM}◉${T3}  ██████████`,
+  `${T3}     ▀${T4}██████████████████████`,
+  `${T2}      ▀▀${T3}█████████████████${T2}▀`,
+  `${T1}         ▀${T2}████████████${T1}█▀`,
+  `${T1}            ▀▀${T2}████${T1}▀▀`,
+];
+
+async function printBanner() {
+  const ver = `${DM}v${_version()}${R}`;
+  const title = `${B}${T4}  Fauna CLI${R}  ${ver}`;
+  const sub = `${DM}  AI assistant · headless mode${R}`;
+  const lines = ['', ...FAUNA_LOGO, '', title, sub, ''];
+  for (const line of lines) {
+    console.log(line);
+    await new Promise(r => setTimeout(r, 35));
+  }
+}
+
 // ── Terminal markdown rendering ──────────────────────────────────────────
 
 function renderMarkdown(text) {
@@ -677,7 +711,7 @@ function startRepl() {
 // ── Main ─────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log(`\n  ${B}${CY}✦ Fauna CLI${R}  ${DM}v${_version()}${R}`);
+  await printBanner();
 
   try {
     await startServer(PORT);

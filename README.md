@@ -339,6 +339,63 @@ When an API key is configured, available models are **fetched dynamically** from
 1. App → Settings → **Reinstall Figma Plugin**
 2. Figma → Plugins → Development → Import from manifest → `~/.config/fauna/figma-plugin/manifest.json`
 
+### CLI Mode (headless)
+
+Fauna can run entirely without Electron as a headless CLI — useful for servers, scripting, CI/CD, or terminal-first workflows.
+
+```bash
+# Interactive REPL + server
+node cli.js
+
+# Server only (API on port 3737, no REPL)
+node cli.js --server
+
+# One-shot query
+node cli.js -q "summarize this repo"
+
+# Pipe mode
+echo "explain package.json" | node cli.js
+
+# Custom port
+node cli.js --port 4000
+
+# Verbose (show tool calls & token usage)
+node cli.js -v
+```
+
+Or use the npm scripts:
+```bash
+npm run cli          # interactive REPL
+npm run serve        # server only
+```
+
+**REPL commands:**
+
+| Command | Description |
+|---------|-------------|
+| `/help` | Show all commands |
+| `/model <name>` | Switch model (e.g. `/model gpt-4o`) |
+| `/agent <name>` | Switch agent (e.g. `/agent research`) |
+| `/agents` | List available agents |
+| `/models` | List available models |
+| `/attach <path>` | Attach a file to the next message |
+| `/tasks` | List all tasks |
+| `/task <id>` | Show task detail, result & reasoning |
+| `/task create <desc>` | Create a new task |
+| `/task run <id>` | Run a task |
+| `/task stop <id>` | Stop a running task |
+| `/task steer <id> <msg>` | Inject guidance into a running task |
+| `/task log <id>` | Show full reasoning chain |
+| `/browse <url>` | Fetch & summarize a URL |
+| `/shell <cmd>` | Run a shell command |
+| `/config` | View config |
+| `/config set <k> <v>` | Set a config value |
+| `/status` | Server & auth status |
+| `/verbose` | Toggle verbose mode |
+| `/quit` | Exit |
+
+The CLI shares the same server, API, auth, agents, tasks, browser extension relay, and Figma MCP as the desktop app — just without the Electron window.
+
 ---
 
 ## Example Prompts
