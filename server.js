@@ -1049,6 +1049,17 @@ app.post('/api/chat', async (req, res) => {
       console.log(`[chat] Agent "${safeAgentName}" active — ${agentToolDefs.length} tools registered`);
     }
 
+    // ── Browser Extension tools (always available when extension is connected) ──
+    if (_extSockets.size > 0) {
+      const extToolDefs = [
+        { type: 'function', function: { name: 'browser_ext_list_tabs', description: 'List all open tabs in the user\'s Chrome/Edge browser (via the connected Fauna Browser Bridge extension).', parameters: { type: 'object', properties: {}, required: [] } } },
+        { type: 'function', function: { name: 'browser_ext_extract_page', description: 'Extract the text content, links, and headings from the active tab in the user\'s Chrome/Edge browser.', parameters: { type: 'object', properties: { tabId: { type: 'number', description: 'Optional tab ID to extract from (from browser_ext_list_tabs). Omit for active tab.' } }, required: [] } } },
+        { type: 'function', function: { name: 'browser_ext_screenshot', description: 'Take a screenshot of the active tab in the user\'s Chrome/Edge browser.', parameters: { type: 'object', properties: { tabId: { type: 'number', description: 'Optional tab ID. Omit for active tab.' } }, required: [] } } },
+        { type: 'function', function: { name: 'browser_ext_tab_info', description: 'Get the URL and title of the active tab in the user\'s Chrome/Edge browser.', parameters: { type: 'object', properties: {}, required: [] } } },
+      ];
+      mcpTools = [...(mcpTools || []), ...extToolDefs];
+    }
+
     // Agentic loop — re-runs if model calls tools (max 12 iterations)
     let continueLoop = true;
     let toolCallCount = 0;
@@ -1156,7 +1167,7 @@ app.post('/api/chat', async (req, res) => {
             const args = JSON.parse(tc.function.arguments || '{}');
             let result;
 
-            // Route to agent tool handler if available, otherwise Figma MCP
+            // Route to agent tool handler if available, then browser ext tools, otherwise Figma MCP
             if (agentToolHandlers?.has(toolName)) {
               console.log(`[chat] Agent tool: ${toolName}`);
               const onOutput = toolName === 'agent_shell_exec'
@@ -1168,6 +1179,32 @@ app.post('/api/chat', async (req, res) => {
                 onWaitingForInput: (killId, hint) => send({ type: 'tool_waiting_for_input', killId, hint }),
               } : undefined;
               result = await agentToolHandlers.get(toolName)(args, onOutput, shellOpts);
+            } else if (toolName === 'browser_ext_list_tabs') {
+              console.log('[chat] Browser ext tool: list-tabs');
+              const r = await extCommand('tab:list', {}, null, 10000);
+              result = JSON.stringify(r);
+            } else if (toolName === 'browser_ext_extract_page') {
+              console.log('[chat] Browser ext tool: extract-page');
+              const r = await extCommand('extract', {}, args.tabId || null, 15000);
+              result = JSON.stringify(r);
+            } else if (toolName === 'browser_ext_screenshot') {
+              console.log('[chat] Browser ext tool: screenshot');
+              const r = await extCommand('snapshot', {}, args.tabId || null, 15000);
+              if (r.ok && r.screenshot) {
+                // Return as a vision-compatible description + inject the image into context
+                result = 'Screenshot captured from ' + (r.url || 'active tab') + '. The image is included in the conversation.';
+                // Add a user message with the image so the model can see it
+                allMessages.push({ role: 'user', content: [
+                  { type: 'text', text: '[Browser extension screenshot of ' + (r.url || 'active tab') + ']' },
+                  { type: 'image_url', image_url: { url: 'data:' + (r.mime || 'image/png') + ';base64,' + r.screenshot, detail: 'high' } }
+                ] });
+              } else {
+                result = 'Screenshot failed: ' + (r.error || 'unknown error');
+              }
+            } else if (toolName === 'browser_ext_tab_info') {
+              console.log('[chat] Browser ext tool: tab-info');
+              const r = await extCommand('tab:info', {}, null, 10000);
+              result = JSON.stringify(r);
             } else {
               figmaLog('🔧 ' + toolName + (toolName === 'figma_execute' ? ': ' + (args.code || '').slice(0, 80).replace(/\n/g,' ') + '…' : ''), 'cmd');
               result = await figmaMCP.callTool(toolName, args);
