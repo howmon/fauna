@@ -1,5 +1,34 @@
 // ── Init ──────────────────────────────────────────────────────────────────
 
+// Hydrate: merge server-side conversations into localStorage
+async function _hydrateServerConvs() {
+  try {
+    var serverRes = await fetch('/api/conversations?full=1');
+    if (!serverRes.ok) return;
+    var serverConvs = await serverRes.json();
+    if (!serverConvs.length) return;
+    var localIds = new Set(state.conversations.map(function(c) { return c.id; }));
+    var merged = false;
+    serverConvs.forEach(function(sc) {
+      if (!localIds.has(sc.id)) {
+        state.conversations.push(sc);
+        merged = true;
+      } else {
+        var local = state.conversations.find(function(c) { return c.id === sc.id; });
+        if (local && (sc.messages || []).length > (local.messages || []).length) {
+          Object.assign(local, sc);
+          merged = true;
+        }
+      }
+    });
+    if (merged) {
+      state.conversations.sort(function(a, b) { return (b.createdAt || 0) - (a.createdAt || 0); });
+      saveConversations();
+      renderConvList();
+    }
+  } catch (_) {}
+}
+
 // Pre-load rules so getFigmaContext() works when chat starts
 loadFigmaRules();
 
@@ -31,36 +60,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Hydrate conversations: merge server-side conversations with localStorage
   // This ensures conversations from CLI/mobile are visible, and standalone app
   // doesn't lose conversations when Electron's localStorage resets (new build, etc.)
-  try {
-    var serverRes = await fetch('/api/conversations?full=1');
-    if (serverRes.ok) {
-      var serverConvs = await serverRes.json();
-      if (serverConvs.length) {
-        var localIds = new Set(state.conversations.map(function(c) { return c.id; }));
-        var merged = false;
-        // Add server conversations not already in localStorage
-        serverConvs.forEach(function(sc) {
-          if (!localIds.has(sc.id)) {
-            state.conversations.push(sc);
-            merged = true;
-          } else {
-            // If server version has more messages, prefer it (e.g. CLI extended the conversation)
-            var local = state.conversations.find(function(c) { return c.id === sc.id; });
-            if (local && (sc.messages || []).length > (local.messages || []).length) {
-              Object.assign(local, sc);
-              merged = true;
-            }
-          }
-        });
-        if (merged) {
-          // Sort by createdAt descending
-          state.conversations.sort(function(a, b) { return (b.createdAt || 0) - (a.createdAt || 0); });
-          saveConversations();
-          renderConvList();
-        }
-      }
-    }
-  } catch (_) {}
+  await _hydrateServerConvs();
+
+  // Re-hydrate when window regains focus (picks up mobile/CLI conversations)
+  window.addEventListener('focus', function() { _hydrateServerConvs(); });
 
   // Load last conversation or show empty state
   if (state.conversations.length) loadConversation(state.conversations[0].id);
