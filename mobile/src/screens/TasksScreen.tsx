@@ -14,7 +14,7 @@ const STATUS_ICONS: Record<string, string> = {
   running: '⟳',
   completed: '✓',
   failed: '✗',
-  paused: '⏸',
+  paused: '||',
 };
 
 const STATUS_COLORS = (t: typeof dark) => ({
@@ -96,7 +96,7 @@ export default function TasksScreen({ navigation }: Props) {
           <Text style={[s.statusText, { color }]}>{status.toUpperCase()}</Text>
           {pct !== undefined && <Text style={[s.pct, { color: t.teal }]}>{pct}%</Text>}
           {item.agents?.length > 0 && (
-            <Text style={[s.agentTag, { color: t.textMuted }]}>🤖 {item.agents.join(', ')}</Text>
+            <Text style={[s.agentTag, { color: t.textMuted }]}>Agent: {item.agents.join(', ')}</Text>
           )}
         </View>
         {isRunning && (

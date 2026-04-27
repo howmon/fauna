@@ -92,13 +92,13 @@ export default function ArtifactPanel({ artifact, onClose }: Props) {
           <Text style={[s.subtitle, { color: t.textMuted }]}>{artifact.type.toUpperCase()} · {artifact.content.length} chars</Text>
         </View>
         <TouchableOpacity style={[s.headerBtn, { backgroundColor: t.surface2 }]} onPress={handleCopy}>
-          <Text style={[s.headerBtnText, { color: t.text }]}>📋</Text>
+          <Text style={[s.headerBtnText, { color: t.text }]}>Copy</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[s.headerBtn, { backgroundColor: t.surface2 }]} onPress={handleShare}>
-          <Text style={[s.headerBtnText, { color: t.text }]}>↗</Text>
+          <Text style={[s.headerBtnText, { color: t.text }]}>Share</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[s.headerBtn, { backgroundColor: t.surface2 }]} onPress={onClose}>
-          <Text style={[s.headerBtnText, { color: t.text }]}>✕</Text>
+          <Text style={[s.headerBtnText, { color: t.text }]}>Close</Text>
         </TouchableOpacity>
       </View>
 

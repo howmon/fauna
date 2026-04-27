@@ -215,7 +215,7 @@ export default function TaskDetailScreen({ route, navigation }: Props) {
               <Text style={s.actionBtnText}>▶ Run</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[s.actionBtnWide, { backgroundColor: t.error }]} onPress={handleDelete}>
-              <Text style={s.actionBtnText}>🗑 Delete</Text>
+              <Text style={s.actionBtnText}>Delete</Text>
             </TouchableOpacity>
           </>
         )}

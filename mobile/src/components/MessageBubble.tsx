@@ -36,31 +36,7 @@ function stripActionBlocks(text: string): string {
   return text.replace(ACTION_BLOCK_RE, '').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-// ── Chain of thought: collapse code fences into pills ────────────────────
-
-interface Segment {
-  type: 'prose' | 'code';
-  text: string;
-  lang?: string;
-  lines?: number;
-}
-
-function parseSegments(text: string): Segment[] {
-  const segments: Segment[] = [];
-  const re = /```(\w*)\n([\s\S]*?)```/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    const prose = text.slice(last, m.index);
-    if (prose.trim()) segments.push({ type: 'prose', text: prose });
-    const lang = m[1] || 'code';
-    segments.push({ type: 'code', text: m[2], lang, lines: m[2].split('\n').length });
-    last = m.index + m[0].length;
-  }
-  const rest = text.slice(last);
-  if (rest.trim()) segments.push({ type: 'prose', text: rest });
-  return segments;
-}
+// Chain-of-thought parsing removed — Markdown handles code blocks natively
 
 // ── Artifact extraction (mirrors web UI) ─────────────────────────────────
 
@@ -90,37 +66,7 @@ function extractArtifacts(text: string): ParsedArtifact[] {
 
 // ── Code block pill (chain of thought style) ─────────────────────────────
 
-function CodePill({ lang, lines, content, t }: { lang: string; lines: number; content: string; t: Theme }) {
-  const [expanded, setExpanded] = useState(false);
-  const labels: Record<string, string> = {
-    bash: 'Shell', sh: 'Shell', zsh: 'Shell', python: 'Python', javascript: 'JavaScript',
-    typescript: 'TypeScript', html: 'HTML', css: 'CSS', json: 'JSON', markdown: 'Markdown',
-    'shell-exec': 'Shell', svg: 'SVG',
-  };
-  const label = labels[lang] || lang.toUpperCase() || 'Code';
-  const lineInfo = lines > 1 ? ` · ${lines} lines` : '';
-
-  return (
-    <View style={{ marginVertical: 4 }}>
-      <TouchableOpacity
-        style={[styles.codePill, { backgroundColor: t.surface3 }]}
-        onPress={() => setExpanded(!expanded)}
-        activeOpacity={0.7}
-      >
-        <Text style={[styles.codePillIcon, { color: t.teal }]}>{'{ }'}</Text>
-        <Text style={[styles.codePillLabel, { color: t.textDim }]}>
-          {label}{lineInfo}
-        </Text>
-        <Text style={{ color: t.textMuted, fontSize: 12 }}>{expanded ? '▾' : '▸'}</Text>
-      </TouchableOpacity>
-      {expanded && (
-        <View style={[styles.codeBlock, { backgroundColor: t.codeBg }]}>
-          <Text style={[styles.codeText, { color: t.text }]} selectable>{content.trim()}</Text>
-        </View>
-      )}
-    </View>
-  );
-}
+// CodePill removed — code blocks are rendered inline by Markdown
 
 // ── Main component ───────────────────────────────────────────────────────
 
@@ -131,25 +77,11 @@ export default function MessageBubble({ role, content, images, agentName, stream
   const isTool = role === 'tool';
   const [showActions, setShowActions] = useState(false);
 
-  // Tool messages — compact mono style
-  if (isTool) {
-    return (
-      <View style={[styles.toolBubble, { backgroundColor: t.surface2 }]}>
-        <Text style={[styles.toolText, { color: t.textDim }]}>{content}</Text>
-      </View>
-    );
-  }
+  const cleaned = isUser ? content : stripActionBlocks(content || '');
 
-  const cleaned = isUser ? content : stripActionBlocks(content);
-  if (!isUser && !cleaned) return null;
+  // ALL hooks must be called unconditionally (React rules of hooks)
+  const artifacts = useMemo(() => (isUser || isTool) ? [] : extractArtifacts(content || ''), [content, isUser, isTool]);
 
-  const segments = useMemo(() => isUser ? [] : parseSegments(cleaned), [cleaned, isUser]);
-  const hasCodeBlocks = segments.some(s => s.type === 'code');
-
-  // Extract artifacts from AI messages
-  const artifacts = useMemo(() => isUser ? [] : extractArtifacts(content), [content, isUser]);
-
-  // Markdown styles
   const mdStyles = useMemo(() => ({
     body: { color: t.text, fontSize: 15, lineHeight: 22 },
     paragraph: { marginTop: 0, marginBottom: 6 },
@@ -176,7 +108,6 @@ export default function MessageBubble({ role, content, images, agentName, stream
     image: { borderRadius: 8 },
   }), [t]);
 
-  // Copy / share handlers
   const handleCopy = async () => {
     await Clipboard.setStringAsync(cleaned);
     setShowActions(false);
@@ -189,6 +120,20 @@ export default function MessageBubble({ role, content, images, agentName, stream
       await Share.share({ message: cleaned });
     } catch {}
   };
+
+  // ── Render ──────────────────────────────────────────────────────────────
+
+  // Tool messages — compact mono style
+  if (isTool) {
+    return (
+      <View style={[styles.toolBubble, { backgroundColor: t.surface2 }]}>
+        <Text style={[styles.toolText, { color: t.textDim }]}>{content}</Text>
+      </View>
+    );
+  }
+
+  // Empty assistant message (still streaming) — show nothing yet
+  if (!isUser && !cleaned) return null;
 
   // User message — render as plain text (with images)
   if (isUser) {
@@ -219,21 +164,10 @@ export default function MessageBubble({ role, content, images, agentName, stream
       style={[styles.bubble, { backgroundColor: t.aiBg, alignSelf: 'flex-start' }]}
     >
       <Text style={[styles.roleLabel, { color: t.teal }]}>
-        {agentName || 'Fauna'}{streaming ? ' ●' : ''}
+        {agentName || 'Fauna'}{streaming ? ' ...' : ''}
       </Text>
 
-      {/* Chain-of-thought rendering: prose → markdown, code → collapsible pills */}
-      {hasCodeBlocks ? (
-        segments.map((seg, i) =>
-          seg.type === 'prose' ? (
-            <Markdown key={i} style={mdStyles}>{seg.text.trim()}</Markdown>
-          ) : (
-            <CodePill key={i} lang={seg.lang!} lines={seg.lines!} content={seg.text} t={t} />
-          )
-        )
-      ) : (
-        <Markdown style={mdStyles}>{cleaned}</Markdown>
-      )}
+      <Markdown style={mdStyles}>{cleaned}</Markdown>
 
       {/* Artifact cards */}
       {artifacts.length > 0 && (
@@ -245,10 +179,10 @@ export default function MessageBubble({ role, content, images, agentName, stream
               onPress={() => onViewArtifact?.(art)}
             >
               <Text style={[styles.artifactIcon, { color: t.teal }]}>
-                {art.type === 'html' ? '◇' : art.type === 'svg' ? '△' : art.type === 'json' ? '{ }' : '▤'}
+                {art.type === 'html' ? 'HTML' : art.type === 'svg' ? 'SVG' : art.type === 'json' ? 'JSON' : 'DOC'}
               </Text>
               <Text style={[styles.artifactLabel, { color: t.text }]} numberOfLines={1}>{art.title}</Text>
-              <Text style={{ color: t.textMuted, fontSize: 11 }}>Open →</Text>
+              <Text style={{ color: t.textMuted, fontSize: 11 }}>Open</Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -265,11 +199,11 @@ function ActionBar({ t, onCopy, onShare }: { t: Theme; onCopy: () => void; onSha
   return (
     <View style={[styles.actionBar, { backgroundColor: t.surface3, borderColor: t.border }]}>
       <TouchableOpacity style={styles.actionBtn} onPress={onCopy}>
-        <Text style={[styles.actionBtnText, { color: t.text }]}>📋 Copy</Text>
+        <Text style={[styles.actionBtnText, { color: t.text }]}>Copy</Text>
       </TouchableOpacity>
       <View style={[styles.actionDivider, { backgroundColor: t.border }]} />
       <TouchableOpacity style={styles.actionBtn} onPress={onShare}>
-        <Text style={[styles.actionBtnText, { color: t.text }]}>↗ Share</Text>
+        <Text style={[styles.actionBtnText, { color: t.text }]}>Share</Text>
       </TouchableOpacity>
     </View>
   );

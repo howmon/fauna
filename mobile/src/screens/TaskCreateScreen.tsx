@@ -80,7 +80,7 @@ export default function TaskCreateScreen({ navigation }: Props) {
 
       <Text style={[s.sectionTitle, { color: t.text }]}>Permissions</Text>
       <View style={[s.permRow, { backgroundColor: t.surface }]}>
-        <Text style={[s.permLabel, { color: t.text }]}>🖥 Shell access</Text>
+        <Text style={[s.permLabel, { color: t.text }]}>Shell access</Text>
         <Switch
           value={shellPerm}
           onValueChange={setShellPerm}
@@ -89,7 +89,7 @@ export default function TaskCreateScreen({ navigation }: Props) {
         />
       </View>
       <View style={[s.permRow, { backgroundColor: t.surface }]}>
-        <Text style={[s.permLabel, { color: t.text }]}>🌐 Browser access</Text>
+        <Text style={[s.permLabel, { color: t.text }]}>Browser access</Text>
         <Switch
           value={browserPerm}
           onValueChange={setBrowserPerm}

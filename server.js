@@ -1162,7 +1162,11 @@ app.post('/api/chat', async (req, res) => {
             continue;
           }
 
-          send({ type: 'tool_call', name: toolName });
+          send({ type: 'tool_call', name: toolName, arguments: tc.function.arguments || '' });
+          // Keepalive heartbeat — prevents mobile XHR from appearing dead during long tool calls
+          const _keepalive = setInterval(() => {
+            if (!clientAborted && !res.writableEnded) res.write(': keepalive\n\n');
+          }, 3000);
           try {
             const args = JSON.parse(tc.function.arguments || '{}');
             let result;
@@ -1211,13 +1215,20 @@ app.post('/api/chat', async (req, res) => {
               figmaLog('✓ ' + toolName + ' done', 'ok');
             }
 
+            clearInterval(_keepalive);
+
             // Truncate oversized results (screenshots, large contexts)
             if (typeof result === 'string' && result.length > MAX_RESULT_CHARS) {
               result = result.slice(0, MAX_RESULT_CHARS) + `\n\n[Truncated — ${result.length} chars total]`;
             }
-            toolCallsSeen.set(callKey, result);
-            allMessages.push({ role: 'tool', tool_call_id: tc.id, content: typeof result === 'string' ? result : JSON.stringify(result) });
+            // Send tool result to client so mobile/web can show progress
+            const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+            send({ type: 'tool_output', name: toolName, output: resultStr.slice(0, 500) });
+            toolCallsSeen.set(callKey, resultStr);
+            allMessages.push({ role: 'tool', tool_call_id: tc.id, content: resultStr });
           } catch (e) {
+            clearInterval(_keepalive);
+            send({ type: 'tool_output', name: toolName, output: `Error: ${e.message}` });
             allMessages.push({ role: 'tool', tool_call_id: tc.id, content: `Error: ${e.message}` });
             figmaLog('✗ ' + toolName + ': ' + e.message, 'err');
           }

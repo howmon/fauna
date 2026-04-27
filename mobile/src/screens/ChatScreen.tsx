@@ -118,12 +118,16 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
 
   // ── Image picker ────────────────────────────────────────────────────────
 
+  // Max dimension for vision API — keeps base64 under ~500KB per image
+  const IMG_MAX_PX = 1024;
+
   async function pickImage() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      quality: 0.7,
+      quality: 0.5,
       base64: true,
       allowsMultipleSelection: true,
+      exif: false,
     });
     if (result.canceled) return;
     const newImages: MessageImage[] = [];
@@ -133,6 +137,21 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
         b64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
       }
       if (b64) {
+        // If image is very large (>800KB base64 ≈ 600KB raw), re-pick with resize
+        if (b64.length > 800_000) {
+          try {
+            const resized = await ImagePicker.launchImageLibraryAsync({
+              mediaTypes: ['images'],
+              quality: 0.4,
+              base64: true,
+              allowsMultipleSelection: false,
+              exif: false,
+            });
+            if (!resized.canceled && resized.assets[0]?.base64) {
+              b64 = resized.assets[0].base64;
+            }
+          } catch {}
+        }
         newImages.push({ uri: asset.uri, base64: b64, mime: asset.mimeType || 'image/jpeg' });
       }
     }
@@ -143,8 +162,9 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
     const perm = await ImagePicker.requestCameraPermissionsAsync();
     if (!perm.granted) return;
     const result = await ImagePicker.launchCameraAsync({
-      quality: 0.7,
+      quality: 0.4,
       base64: true,
+      exif: false,
     });
     if (result.canceled || !result.assets[0]) return;
     const asset = result.assets[0];
@@ -177,29 +197,25 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
     setStreaming(true);
     scrollToEnd();
 
-    // Build history — for messages with images, use multipart vision format
+    // Build history — strip images from older messages to avoid payload bloat
     const history: Array<{ role: string; content: string | any[] }> = messages
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .map((m) => {
+        // Strip old image payloads — server also does this but we avoid the 413 locally
         if (m.images && m.images.length > 0) {
-          const parts: any[] = [];
-          if (m.content) parts.push({ type: 'text', text: m.content });
-          m.images.forEach(img => parts.push({
-            type: 'image_url',
-            image_url: { url: `data:${img.mime};base64,${img.base64}`, detail: 'high' }
-          }));
-          return { role: m.role, content: parts };
+          const textContent = m.content || '';
+          return { role: m.role, content: textContent + (textContent ? '\n' : '') + '[image attached earlier]' };
         }
         return { role: m.role, content: m.content };
       });
 
-    // Build current message content
+    // Build current message content — only the NEW message gets full base64
     if (images.length > 0) {
       const parts: any[] = [];
       if (text) parts.push({ type: 'text', text });
       images.forEach(img => parts.push({
         type: 'image_url',
-        image_url: { url: `data:${img.mime};base64,${img.base64}`, detail: 'high' }
+        image_url: { url: `data:${img.mime};base64,${img.base64}`, detail: 'low' }
       }));
       history.push({ role: 'user', content: parts });
     } else {
@@ -214,9 +230,11 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
           case 'content':
             setMessages((prev) => {
               const updated = [...prev];
-              const last = updated[updated.length - 1];
+              const lastIdx = updated.length - 1;
+              const last = updated[lastIdx];
               if (last?.role === 'assistant') {
-                last.content += evt.content || '';
+                // Create new object so FlatList detects the change
+                updated[lastIdx] = { ...last, content: last.content + (evt.content || '') };
               } else {
                 updated.push({ id: nextId(), role: 'assistant', content: evt.content || '' });
               }
@@ -228,7 +246,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
           case 'tool_call':
             setMessages((prev) => [
               ...prev,
-              { id: nextId(), role: 'tool', content: `⚙ ${evt.name}(${(evt.arguments || '').slice(0, 80)})`, toolName: evt.name },
+              { id: nextId(), role: 'tool', content: `[tool] ${evt.name}(${(evt.arguments || '').slice(0, 80)})`, toolName: evt.name },
             ]);
             scrollToEnd();
             break;
@@ -236,7 +254,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
           case 'tool_output':
             setMessages((prev) => [
               ...prev,
-              { id: nextId(), role: 'tool', content: `→ ${(evt.output || '').slice(0, 200)}` },
+              { id: nextId(), role: 'tool', content: `> ${(evt.output || '').slice(0, 200)}` },
               { id: nextId(), role: 'assistant', content: '' },
             ]);
             scrollToEnd();
@@ -245,7 +263,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
           case 'error':
             setMessages((prev) => [
               ...prev,
-              { id: nextId(), role: 'tool', content: `✗ Error: ${evt.error}` },
+              { id: nextId(), role: 'tool', content: `Error: ${evt.error}` },
             ]);
             setStreaming(false);
             break;
@@ -274,11 +292,12 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
         role={item.role}
         content={item.content}
         images={item.images?.map(img => ({ uri: img.uri, mime: img.mime }))}
+        agentName={agent || undefined}
         streaming={isLastAssistant && streaming}
         onViewArtifact={setActiveArtifact}
       />
     );
-  }, [messages.length, streaming]);
+  }, [messages, streaming]);
 
   return (
     <KeyboardAvoidingView
@@ -303,7 +322,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
               <View key={i} style={s.imagePreviewWrap}>
                 <Image source={{ uri: img.uri }} style={s.imagePreview} />
                 <TouchableOpacity style={s.imageRemoveBtn} onPress={() => removeImage(i)}>
-                  <Text style={s.imageRemoveText}>✕</Text>
+                  <Text style={s.imageRemoveText}>x</Text>
                 </TouchableOpacity>
               </View>
             ))}
@@ -320,15 +339,15 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
         </TouchableOpacity>
         {agent ? (
           <TouchableOpacity onPress={() => setAgent('')}>
-            <Text style={{ color: t.textMuted, fontSize: 16, marginLeft: 6 }}>✕</Text>
+            <Text style={{ color: t.textMuted, fontSize: 14, marginLeft: 6, fontWeight: '600' }}>x</Text>
           </TouchableOpacity>
         ) : null}
         <View style={{ flex: 1 }} />
         <TouchableOpacity style={[s.iconBtn, { backgroundColor: t.surface2 }]} onPress={pickImage}>
-          <Text style={{ fontSize: 16 }}>🖼</Text>
+          <Text style={{ fontSize: 13, color: t.textMuted, fontWeight: '600' }}>IMG</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[s.iconBtn, { backgroundColor: t.surface2 }]} onPress={takePhoto}>
-          <Text style={{ fontSize: 16 }}>📷</Text>
+          <Text style={{ fontSize: 13, color: t.textMuted, fontWeight: '600' }}>CAM</Text>
         </TouchableOpacity>
       </View>
 
