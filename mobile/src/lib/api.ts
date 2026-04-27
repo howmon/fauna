@@ -267,3 +267,7 @@ export async function getConversation(id: string) {
 export async function deleteConversation(id: string) {
   return apiDelete(`/api/conversations/${id}`);
 }
+
+export async function saveConversation(id: string, conv: any) {
+  return apiPut(`/api/conversations/${id}`, conv);
+}

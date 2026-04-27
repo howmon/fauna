@@ -156,6 +156,16 @@ async function apiDelete(path) {
   return res.json();
 }
 
+async function apiPut(path, body) {
+  const res = await fetch(`${API}${path}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
 // ── Chat streaming (calls the local server's SSE endpoint) ───────────────
 
 async function chat(message, { model, agent, userContent } = {}) {
@@ -240,6 +250,8 @@ async function chat(message, { model, agent, userContent } = {}) {
     _history.push({ role: 'user', content: userContent || message });
     _history.push({ role: 'assistant', content: fullContent });
     if (_history.length > 40) _history = _history.slice(-30);
+    // Auto-save conversation to server
+    _saveConv();
   }
 
   // Show usage stats
@@ -257,6 +269,21 @@ let _history = [];
 let _currentModel = null;
 let _currentAgent = null;
 let _attachments = [];  // pending file attachments
+let _convId = 'conv-' + Date.now(); // current conversation ID for auto-save
+
+// Save current conversation to server (non-blocking)
+function _saveConv() {
+  const msgs = _history.filter(m => m.role === 'user' || m.role === 'assistant');
+  if (!msgs.length) return;
+  const title = (typeof msgs[0]?.content === 'string' ? msgs[0].content : '').slice(0, 60) || 'CLI chat';
+  apiPut('/api/conversations/' + _convId, {
+    id: _convId,
+    title,
+    messages: msgs.map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) })),
+    model: _currentModel || undefined,
+    createdAt: parseInt(_convId.replace('conv-', '')) || Date.now(),
+  }).catch(() => {});
+}
 
 // ── Formatting helpers ───────────────────────────────────────────────────
 
@@ -325,8 +352,8 @@ ${B}Chat${R}
   ${CY}/models${R}               list available models
   ${CY}/attach${R} <path>        attach file to next message
   ${CY}/clear${R}                clear conversation history
-  ${CY}/conversations${R}        list saved conversations
-  ${CY}/conv${R} <id>            load a conversation by ID
+  ${CY}/conversations${R}        list saved conversations (alias: /sessions)
+  ${CY}/conv${R} <id>            load a conversation by ID (alias: /session)
 
 ${B}Tasks${R}
   ${CY}/tasks${R}                list all tasks
@@ -409,6 +436,7 @@ ${B}System${R}
   '/clear': () => {
     _history = [];
     _attachments = [];
+    _convId = 'conv-' + Date.now();
     console.log(`${DM}Conversation cleared${R}`);
   },
 
@@ -435,9 +463,14 @@ ${B}System${R}
       const conv = await apiGet('/api/conversations/' + match.id);
       _history = (conv.messages || []).filter(m => m.role === 'user' || m.role === 'assistant');
       if (conv.model) _currentModel = conv.model;
+      _convId = match.id;
       console.log(`${GR}Loaded "${conv.title}" (${_history.length} messages)${R}`);
     } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
   },
+
+  // Aliases
+  '/sessions': async (arg) => { await COMMANDS['/conversations'](arg); },
+  '/session': async (arg) => { await COMMANDS['/conv'](arg); },
 
   // ── Task commands ────────────────────────────────────────────────────
 

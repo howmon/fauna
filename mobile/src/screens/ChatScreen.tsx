@@ -37,23 +37,52 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
   const abortRef = useRef<AbortController | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const msgIdRef = useRef(0);
+  const convIdRef = useRef<string>('conv-' + Date.now());
+  const messagesRef = useRef<Message[]>([]);
 
   const nextId = () => `msg-${++msgIdRef.current}`;
+
+  // Keep messagesRef in sync
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  // Save current conversation to server
+  const saveCurrentConv = useCallback(async (msgs?: Message[], title?: string) => {
+    const id = convIdRef.current;
+    const m = msgs || messages;
+    if (m.length === 0) return;
+    const apiMsgs = m
+      .filter(x => x.role === 'user' || (x.role === 'assistant' && x.content))
+      .map(x => ({ role: x.role, content: x.content }));
+    if (apiMsgs.length === 0) return;
+    const t = title || convTitle || (apiMsgs[0]?.content || '').slice(0, 60) || 'Mobile chat';
+    try {
+      await api.saveConversation(id, {
+        id,
+        title: t,
+        messages: apiMsgs,
+        model: model || undefined,
+        createdAt: parseInt(id.replace('conv-', '')) || Date.now(),
+      });
+    } catch {}
+  }, [messages, convTitle, model]);
 
   // Register new chat handler for header button
   useEffect(() => {
     if (newChatRef) {
       newChatRef.current = () => {
         if (streaming) return;
+        // Save current conversation before clearing
+        saveCurrentConv();
         setMessages([]);
         setInput('');
         setConvTitle('');
         setAgent('');
         msgIdRef.current = 0;
+        convIdRef.current = 'conv-' + Date.now();
       };
     }
     return () => { if (newChatRef) newChatRef.current = null; };
-  }, [streaming]);
+  }, [streaming, saveCurrentConv]);
 
   // Load agents list
   useEffect(() => {
@@ -72,6 +101,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
         setMessages(msgs);
         setConvTitle(conv.title || '');
         if (conv.model) setModel(conv.model);
+        if (conv.id) convIdRef.current = conv.id;
       }
     }, [])
   );
@@ -108,6 +138,9 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
               const last = updated[updated.length - 1];
               if (last?.role === 'assistant') {
                 last.content += evt.content || '';
+              } else {
+                // After a tool_call with no tool_output, create a new assistant message
+                updated.push({ id: nextId(), role: 'assistant', content: evt.content || '' });
               }
               return updated;
             });
@@ -142,6 +175,8 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
 
           case 'done':
             setStreaming(false);
+            // Auto-save conversation after response completes
+            setTimeout(() => saveCurrentConv(messagesRef.current), 300);
             break;
         }
       },
