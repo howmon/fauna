@@ -91,7 +91,7 @@ export interface ChatEvent {
 }
 
 export function streamChat(
-  messages: Array<{ role: string; content: string }>,
+  messages: Array<{ role: string; content: string | any[] }>,
   options: { model?: string; agentName?: string } = {},
   onEvent: (evt: ChatEvent) => void,
 ): AbortController {

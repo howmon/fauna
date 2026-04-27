@@ -14,7 +14,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.fauna.mobile",
       "infoPlist": {
-        "NSCameraUsageDescription": "Fauna needs camera access to scan QR codes for pairing with your desktop server."
+        "NSCameraUsageDescription": "Fauna needs camera access to scan QR codes and take photos for conversations.",
+        "NSPhotoLibraryUsageDescription": "Fauna needs photo library access to attach images to conversations."
       }
     },
     "android": {
@@ -27,7 +28,9 @@
       "permissions": [
         "CAMERA",
         "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_EXTERNAL_STORAGE"
       ]
     },
     "plugins": [
@@ -35,6 +38,13 @@
         "expo-camera",
         {
           "cameraPermission": "Allow Fauna to scan QR codes for pairing."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Fauna to access photos for uploading images to conversations.",
+          "cameraPermission": "Allow Fauna to take photos for uploading to conversations."
         }
       ],
       "expo-asset",
