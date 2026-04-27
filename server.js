@@ -58,6 +58,28 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Serve @xenova/transformers dist for the Whisper Web Worker
 app.use('/transformers', express.static(path.join(__dirname, 'node_modules', '@xenova', 'transformers', 'dist')));
 
+// ── Mobile LAN access: auth + CORS for non-localhost requests ─────────────
+app.use((req, res, next) => {
+  const ip = req.ip || req.connection?.remoteAddress || '';
+  const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+  if (!isLocal) {
+    // Validate mobile auth token for LAN requests
+    const token = req.headers['x-fauna-token'];
+    if (!token || token !== getMobilePairToken()) {
+      // Allow the /api/mobile/pair endpoint without auth (it requires localhost or valid token)
+      if (req.path !== '/api/mobile/pair') {
+        return res.status(401).json({ error: 'Invalid mobile auth token' });
+      }
+    }
+    // CORS for LAN requests
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, X-Fauna-Token');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+  }
+  next();
+});
+
 // ── Token resolution ──────────────────────────────────────────────────────
 // Electron runs with a stripped PATH so `gh` may not be found.
 // Resolution order:
@@ -2892,6 +2914,96 @@ app.post('/api/browser-ext/download', (req, res) => {
   }
 });
 
+// ── Mobile App pairing & install ──────────────────────────────────────────
+
+const MOBILE_APP_INSTALL_DIR = path.join(CONFIG_DIR, 'mobile-app');
+
+// Generate or read a persistent mobile pairing token
+function getMobilePairToken() {
+  const cfg = readSavedConfig();
+  if (cfg.mobilePairToken) return cfg.mobilePairToken;
+  const token = crypto.randomBytes(24).toString('base64url');
+  writeSavedConfig({ ...cfg, mobilePairToken: token });
+  return token;
+}
+
+// Get LAN IP addresses
+function getLanAddresses() {
+  const nets = os.networkInterfaces();
+  const results = [];
+  for (const iface of Object.values(nets)) {
+    for (const net of (iface || [])) {
+      if (net.family === 'IPv4' && !net.internal) results.push(net.address);
+    }
+  }
+  return results;
+}
+
+// Check mobile auth token on incoming requests
+function checkMobileAuth(req) {
+  const token = req.headers['x-fauna-token'];
+  if (!token) return true; // No token sent = localhost request (existing behavior)
+  return token === getMobilePairToken();
+}
+
+// QR pairing data — returns info needed for the mobile app to connect
+app.get('/api/mobile/pair', (req, res) => {
+  const token = getMobilePairToken();
+  const ips = getLanAddresses();
+  const port = req.socket.localPort || 3737;
+  const hostname = os.hostname();
+  // The QR code encodes: fauna://pair?host=<ip>&port=<port>&token=<token>&name=<hostname>
+  const qrData = ips.map(ip => `fauna://pair?host=${ip}&port=${port}&token=${encodeURIComponent(token)}&name=${encodeURIComponent(hostname)}`);
+  res.json({ ips, port, token, hostname, qrData, primaryQr: qrData[0] || null });
+});
+
+// Regenerate pairing token (invalidates existing connections)
+app.post('/api/mobile/pair/reset', (req, res) => {
+  const cfg = readSavedConfig();
+  delete cfg.mobilePairToken;
+  writeSavedConfig(cfg);
+  res.json({ ok: true, token: getMobilePairToken() });
+});
+
+// Mobile app info & install (mirrors browser-ext pattern)
+function getBundledMobileAppDir() {
+  const packed = path.join(process.resourcesPath || '', 'mobile');
+  if (fs.existsSync(packed)) return packed;
+  return path.join(__dirname, 'mobile');
+}
+
+app.get('/api/mobile/app-info', (req, res) => {
+  const installed = fs.existsSync(path.join(MOBILE_APP_INSTALL_DIR, 'package.json'));
+  res.json({
+    installed,
+    installDir: installed ? MOBILE_APP_INSTALL_DIR : null,
+    bundledDir: getBundledMobileAppDir(),
+  });
+});
+
+app.post('/api/mobile/app-install', (req, res) => {
+  try {
+    const src = getBundledMobileAppDir();
+    if (!fs.existsSync(src)) return res.status(404).json({ error: 'Bundled mobile app not found' });
+
+    // Copy the mobile app source to ~/.config/fauna/mobile-app/
+    function copyDir(from, to) {
+      fs.mkdirSync(to, { recursive: true });
+      for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+        const srcPath = path.join(from, entry.name);
+        const destPath = path.join(to, entry.name);
+        if (entry.name === 'node_modules' || entry.name === '.expo') continue;
+        if (entry.isDirectory()) copyDir(srcPath, destPath);
+        else fs.copyFileSync(srcPath, destPath);
+      }
+    }
+    copyDir(src, MOBILE_APP_INSTALL_DIR);
+    res.json({ ok: true, installDir: MOBILE_APP_INSTALL_DIR });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── Figma API endpoints ───────────────────────────────────────────────────
 
 app.get('/api/figma/status', (req, res) => {
@@ -5449,8 +5561,12 @@ app.get('/api/ext/events', (req, res) => {
 
 export function startServer(port) {
   return new Promise((resolve, reject) => {
-    const server = app.listen(port, '127.0.0.1', () => {
-      console.log(`\n  ✦ Fauna  →  http://127.0.0.1:${port}\n`);
+    // Bind to 0.0.0.0 to allow LAN access from mobile app
+    const server = app.listen(port, '0.0.0.0', () => {
+      const ips = getLanAddresses();
+      console.log(`\n  ✦ Fauna  →  http://127.0.0.1:${port}`);
+      if (ips.length) console.log(`  ${ips.map(ip => `http://${ip}:${port}`).join('  ')}`);
+      console.log();
       // Boot the browser-extension WebSocket endpoint on the same HTTP server
       startExtWebSocketServer(server);
       resolve(server);

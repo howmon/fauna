@@ -1,0 +1,245 @@
+// Fauna Mobile — API client for communicating with the Fauna server
+// Connects over LAN using the host + token obtained via QR pairing
+
+import { EventEmitter } from './events';
+
+let _baseUrl = '';
+let _token = '';
+
+export function configure(host: string, port: number, token: string) {
+  _baseUrl = `http://${host}:${port}`;
+  _token = token;
+}
+
+export function isConfigured(): boolean {
+  return !!_baseUrl;
+}
+
+export function getBaseUrl(): string {
+  return _baseUrl;
+}
+
+function headers(extra: Record<string, string> = {}): Record<string, string> {
+  const h: Record<string, string> = { 'Content-Type': 'application/json', ...extra };
+  if (_token) h['X-Fauna-Token'] = _token;
+  return h;
+}
+
+// ── REST helpers ──────────────────────────────────────────────────────────
+
+async function apiGet<T = any>(path: string): Promise<T> {
+  const res = await fetch(`${_baseUrl}${path}`, { headers: headers() });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+async function apiPost<T = any>(path: string, body?: any): Promise<T> {
+  const res = await fetch(`${_baseUrl}${path}`, {
+    method: 'POST',
+    headers: headers(),
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+async function apiPut<T = any>(path: string, body?: any): Promise<T> {
+  const res = await fetch(`${_baseUrl}${path}`, {
+    method: 'PUT',
+    headers: headers(),
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+async function apiDelete<T = any>(path: string): Promise<T> {
+  const res = await fetch(`${_baseUrl}${path}`, {
+    method: 'DELETE',
+    headers: headers(),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+// ── System ────────────────────────────────────────────────────────────────
+
+export async function getSystemContext() {
+  return apiGet('/api/system-context');
+}
+
+export async function getModels() {
+  return apiGet<any[]>('/api/models');
+}
+
+export async function getAgents() {
+  const data = await apiGet<{ agents: any[] }>('/api/agents');
+  return data.agents;
+}
+
+// ── Chat (SSE streaming) ─────────────────────────────────────────────────
+
+export interface ChatEvent {
+  type: 'content' | 'tool_call' | 'tool_output' | 'tool_waiting_for_input' | 'error' | 'done';
+  content?: string;
+  name?: string;
+  arguments?: string;
+  output?: string;
+  error?: string;
+  finish_reason?: string;
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+}
+
+export function streamChat(
+  messages: Array<{ role: string; content: string }>,
+  options: { model?: string; agentName?: string } = {},
+  onEvent: (evt: ChatEvent) => void,
+): AbortController {
+  const controller = new AbortController();
+  const body = { messages, ...options };
+
+  fetch(`${_baseUrl}/api/chat`, {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify(body),
+    signal: controller.signal,
+  })
+    .then(async (res) => {
+      if (!res.ok) {
+        onEvent({ type: 'error', error: `${res.status} ${res.statusText}` });
+        return;
+      }
+      const reader = res.body?.getReader();
+      if (!reader) return;
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6);
+          if (data === '[DONE]') continue;
+          try {
+            onEvent(JSON.parse(data));
+          } catch {}
+        }
+      }
+    })
+    .catch((err) => {
+      if (err.name !== 'AbortError') {
+        onEvent({ type: 'error', error: err.message });
+      }
+    });
+
+  return controller;
+}
+
+// ── Tasks ─────────────────────────────────────────────────────────────────
+
+export async function getTasks() {
+  return apiGet<any[]>('/api/tasks');
+}
+
+export async function getTask(id: string) {
+  return apiGet(`/api/tasks/${id}`);
+}
+
+export async function createTask(task: any) {
+  return apiPost('/api/tasks', task);
+}
+
+export async function updateTask(id: string, updates: any) {
+  return apiPut(`/api/tasks/${id}`, updates);
+}
+
+export async function deleteTask(id: string) {
+  return apiDelete(`/api/tasks/${id}`);
+}
+
+export async function runTask(id: string) {
+  return apiPost(`/api/tasks/${id}/run`);
+}
+
+export async function stopTask(id: string) {
+  return apiPost(`/api/tasks/${id}/stop`);
+}
+
+export async function steerTask(id: string, message: string) {
+  return apiPost(`/api/tasks/${id}/steer`, { message });
+}
+
+// SSE stream for live task updates
+export function streamTasks(onEvent: (evt: any) => void): () => void {
+  const controller = new AbortController();
+
+  fetch(`${_baseUrl}/api/tasks/stream`, {
+    headers: headers(),
+    signal: controller.signal,
+  })
+    .then(async (res) => {
+      const reader = res.body?.getReader();
+      if (!reader) return;
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try { onEvent(JSON.parse(line.slice(6))); } catch {}
+        }
+      }
+    })
+    .catch(() => {});
+
+  return () => controller.abort();
+}
+
+// Single task SSE stream
+export function streamTask(id: string, onEvent: (evt: any) => void): () => void {
+  const controller = new AbortController();
+
+  fetch(`${_baseUrl}/api/tasks/${id}/stream`, {
+    headers: headers(),
+    signal: controller.signal,
+  })
+    .then(async (res) => {
+      const reader = res.body?.getReader();
+      if (!reader) return;
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try { onEvent(JSON.parse(line.slice(6))); } catch {}
+        }
+      }
+    })
+    .catch(() => {});
+
+  return () => controller.abort();
+}
+
+// ── Pairing ───────────────────────────────────────────────────────────────
+
+export async function verifyConnection(): Promise<boolean> {
+  try {
+    const data = await getSystemContext();
+    return data?.permissions?.auth === 'granted';
+  } catch {
+    return false;
+  }
+}
