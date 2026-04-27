@@ -2990,14 +2990,22 @@ function checkMobileAuth(req) {
 }
 
 // QR pairing data — returns info needed for the mobile app to connect
-app.get('/api/mobile/pair', (req, res) => {
+app.get('/api/mobile/pair', async (req, res) => {
   const token = getMobilePairToken();
   const ips = getLanAddresses();
   const port = req.socket.localPort || 3737;
   const hostname = os.hostname();
   // The QR code encodes: fauna://pair?host=<ip>&port=<port>&token=<token>&name=<hostname>
   const qrData = ips.map(ip => `fauna://pair?host=${ip}&port=${port}&token=${encodeURIComponent(token)}&name=${encodeURIComponent(hostname)}`);
-  res.json({ ips, port, token, hostname, qrData, primaryQr: qrData[0] || null });
+  // Generate QR as data URL for direct use in <img> tags (works offline in Electron)
+  let qrImageDataUrl = null;
+  if (qrData[0]) {
+    try {
+      const QRCode = require('qrcode');
+      qrImageDataUrl = await QRCode.toDataURL(qrData[0], { width: 200, margin: 2 });
+    } catch (_) {}
+  }
+  res.json({ ips, port, token, hostname, qrData, primaryQr: qrData[0] || null, qrImage: qrImageDataUrl });
 });
 
 // Regenerate pairing token (invalidates existing connections)

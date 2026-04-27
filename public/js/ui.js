@@ -169,11 +169,23 @@ async function loadMobilePairQR() {
     var data = await res.json();
     var url = data.primaryQr;
     if (!url) { status.textContent = 'No network interfaces found'; return; }
-    // Render QR code to canvas (QRCode from CDN)
-    if (typeof QRCode !== 'undefined' && QRCode.toCanvas) {
+    // Use server-generated QR data URL (works offline in Electron)
+    if (data.qrImage) {
+      // Replace canvas with img if needed
+      var img = document.getElementById('mobile-qr-img');
+      if (!img) {
+        img = document.createElement('img');
+        img.id = 'mobile-qr-img';
+        img.style.cssText = 'width:200px;height:200px;border-radius:8px;image-rendering:pixelated';
+        canvas.parentNode.insertBefore(img, canvas);
+        canvas.style.display = 'none';
+      }
+      img.src = data.qrImage;
+    } else if (typeof QRCode !== 'undefined' && QRCode.toCanvas) {
+      // Fallback to client-side rendering if CDN loaded
       await QRCode.toCanvas(canvas, url, { width: 200, margin: 2, color: { dark: '#000', light: '#fff' } });
     } else {
-      status.textContent = 'QR library not loaded';
+      status.textContent = 'QR generation failed';
       return;
     }
     status.textContent = 'Scan with Fauna mobile app';
