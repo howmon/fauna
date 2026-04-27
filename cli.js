@@ -381,7 +381,8 @@ ${B}System${R}
     try {
       const data = await apiGet('/api/models');
       for (const m of data.models || []) {
-        console.log(`  ${CY}${m}${R}`);
+        const name = typeof m === 'string' ? m : (m.id || m.name || m.model || JSON.stringify(m));
+        console.log(`  ${CY}${name}${R}`);
       }
     } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
   },
