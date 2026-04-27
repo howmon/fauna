@@ -3001,9 +3001,9 @@ app.get('/api/mobile/pair', async (req, res) => {
   let qrImageDataUrl = null;
   if (qrData[0]) {
     try {
-      const QRCode = require('qrcode');
+      const QRCode = _require('qrcode');
       qrImageDataUrl = await QRCode.toDataURL(qrData[0], { width: 200, margin: 2 });
-    } catch (_) {}
+    } catch (e) { console.error('[QR]', e.message); }
   }
   res.json({ ips, port, token, hostname, qrData, primaryQr: qrData[0] || null, qrImage: qrImageDataUrl });
 });
