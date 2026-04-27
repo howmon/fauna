@@ -158,20 +158,20 @@ async function apiDelete(path) {
 
 // ── Chat streaming (calls the local server's SSE endpoint) ───────────────
 
-async function chat(message, { model, agent, attachments } = {}) {
+async function chat(message, { model, agent, userContent } = {}) {
   const url = `${API}/api/chat`;
 
   // Build messages array from history + current message
+  // userContent may be a multipart array (with images) or defaults to plain text
   const messages = [
     ..._history,
-    { role: 'user', content: message },
+    { role: 'user', content: userContent || message },
   ];
 
   const body = {
     messages,
     ...(model && { model }),
     ...(agent && { agentName: agent }),
-    ...(attachments && attachments.length && { attachments }),
   };
 
   const res = await fetch(url, {
@@ -236,7 +236,8 @@ async function chat(message, { model, agent, attachments } = {}) {
 
   if (fullContent) {
     process.stdout.write('\n');
-    _history.push({ role: 'user', content: message });
+    // Store the user content (may be multipart with images) in history
+    _history.push({ role: 'user', content: userContent || message });
     _history.push({ role: 'assistant', content: fullContent });
     if (_history.length > 40) _history = _history.slice(-30);
   }
@@ -750,6 +751,14 @@ function readStdin() {
 
 // ── REPL ─────────────────────────────────────────────────────────────────
 
+var _rl = null;  // module-level ref so server logs can refresh prompt
+
+// Call after any async console.log to redraw the prompt
+function refreshPrompt() {
+  if (_rl) { _rl.prompt(true); }
+}
+process._refreshCliPrompt = refreshPrompt;
+
 function startRepl() {
   const rl = createInterface({
     input: process.stdin,
@@ -761,6 +770,49 @@ function startRepl() {
       const hits = cmds.filter(c => c.startsWith(line));
       return [hits.length ? hits : cmds, line];
     },
+  });
+  _rl = rl;
+
+  // Listen for browser extension push events (snapshot, send-page, selection)
+  process.on('ext:event', (msg) => {
+    const d = msg.data || {};
+    const browser = msg.browser || 'Browser';
+
+    if (msg.event === 'user:send-page') {
+      const title = d.title || d.url || browser + ' page';
+      const short = title.length > 45 ? title.slice(0, 42) + '…' : title;
+      const content = (d.url ? 'Source: ' + d.url + '\n' : '') +
+                      (d.title ? 'Title: ' + d.title + '\n\n' : '') +
+                      (d.text || '');
+      _attachments.push({ type: 'url', name: browser + ': ' + short, content });
+      console.log(`\n${GR}  ✦ Page from ${browser} attached${R} — ${short}`);
+      console.log(`${DM}  Type your question to include it${R}`);
+      refreshPrompt();
+    }
+
+    if (msg.event === 'user:snapshot') {
+      if (!d.base64) return;
+      const snapTitle = d.title || d.url || browser + ' tab';
+      const short = snapTitle.length > 40 ? snapTitle.slice(0, 37) + '…' : snapTitle;
+      // Store as image attachment for the chat API
+      _attachments.push({ type: 'image', name: 'Snapshot — ' + short, base64: d.base64, mime: d.mime || 'image/png' });
+      console.log(`\n${GR}  ✦ Snapshot from ${browser} attached${R} — ${short}`);
+      console.log(`${DM}  Type your question to include it${R}`);
+      refreshPrompt();
+    }
+
+    if (msg.event === 'user:selection') {
+      if (!d.text) return;
+      let domain = '';
+      try { domain = ' · ' + new URL(d.url).hostname; } catch (_) {}
+      const content = (d.url ? 'Source: ' + d.url + '\n' : '') +
+                      (d.title ? 'Page: ' + d.title + '\n\n' : '') +
+                      'Selected text:\n' + d.text;
+      _attachments.push({ type: 'url', name: 'Selection from ' + browser + domain, content });
+      console.log(`\n${GR}  ✦ Selection from ${browser} attached${R}${domain}`);
+      console.log(`${DM}  Type your question to include it${R}`);
+      refreshPrompt();
+    }
   });
 
   rl.prompt();
@@ -783,16 +835,34 @@ function startRepl() {
 
     // Build message with attachments
     let message = input;
+    let pendingImages = [];
     if (_attachments.length) {
-      const atts = _attachments.map(a => `\n\n---\nFile: ${a.name}\n\`\`\`\n${a.content}\n\`\`\``).join('');
-      message = input + atts;
+      const textAtts = _attachments.filter(a => a.type !== 'image');
+      const imgAtts = _attachments.filter(a => a.type === 'image');
+      if (textAtts.length) {
+        const atts = textAtts.map(a => `\n\n---\nFile: ${a.name}\n\`\`\`\n${a.content}\n\`\`\``).join('');
+        message = input + atts;
+      }
+      pendingImages = imgAtts;
       _attachments = [];
     }
+
+    // If there are images, convert the user message to multipart vision format
+    // (same format the web UI uses: [{type:'text', text:...}, {type:'image_url', image_url:{url:'data:...'}}])
+    const userContent = pendingImages.length
+      ? [
+          { type: 'text', text: message },
+          ...pendingImages.map(img => ({
+            type: 'image_url',
+            image_url: { url: `data:${img.mime || 'image/png'};base64,${img.base64}`, detail: 'high' }
+          }))
+        ]
+      : undefined;
 
     // Chat message
     try {
       process.stdout.write(`\n${MG}fauna:${R} `);
-      const response = await chat(message, { model: _currentModel, agent: _currentAgent });
+      const response = await chat(message, { model: _currentModel, agent: _currentAgent, userContent });
     } catch (e) {
       console.log(`${RD}Error: ${e.message}${R}`);
     }

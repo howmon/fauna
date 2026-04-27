@@ -2414,6 +2414,7 @@ function startExtWebSocketServer(httpServer) {
       const entry = { ws, browser: 'Browser', version: null, connectedAt: Date.now(), socketId };
       _extSockets.set(socketId, entry);
       console.log('[Ext] Browser extension connected (id=' + socketId + ')');
+      if (typeof process._refreshCliPrompt === 'function') process._refreshCliPrompt();
 
       ws.on('message', (raw) => {
         let msg;
@@ -2431,10 +2432,12 @@ function startExtWebSocketServer(httpServer) {
           for (const [otherId, other] of _extSockets) {
             if (otherId !== socketId && other.browser === entry.browser && other.ws.readyState < 2) {
               console.log('[Ext] Replacing older ' + entry.browser + ' connection (id=' + otherId + ')');
+              if (typeof process._refreshCliPrompt === 'function') process._refreshCliPrompt();
               try { other.ws.close(1000, 'Replaced by newer ' + entry.browser + ' connection'); } catch (_) {}
             }
           }
           console.log('[Ext] Extension hello — ' + entry.browser + ' v' + msg.version + ' tab:', msg.activeTab?.url || 'none');
+          if (typeof process._refreshCliPrompt === 'function') process._refreshCliPrompt();
           // Notify frontend about the new browser
           process.emit('ext:event', { type: 'event', event: 'ext:status-changed' });
           return;
@@ -2460,6 +2463,7 @@ function startExtWebSocketServer(httpServer) {
 
       ws.on('close', () => {
         console.log('[Ext] Browser extension disconnected (' + entry.browser + ', id=' + socketId + ')');
+        if (typeof process._refreshCliPrompt === 'function') process._refreshCliPrompt();
         _extSockets.delete(socketId);
         // Reject pending commands that targeted this socket
         for (const [id, pending] of _extPending) {
@@ -2510,6 +2514,7 @@ function figmaConnect() {
       figmaState.pendingReconnect = null;
       figmaWs.send(JSON.stringify({ type: 'client-hello', clientName: 'Fauna App' }));
       console.log('[Figma] Controller connected to relay');
+      if (typeof process._refreshCliPrompt === 'function') process._refreshCliPrompt();
     });
 
     figmaWs.on('message', raw => {
@@ -2538,6 +2543,7 @@ function figmaConnect() {
         reject(new Error('Figma relay disconnected — please reconnect the plugin'));
       }
       console.log('[Figma] Relay disconnected — retrying in 5 s');
+      if (typeof process._refreshCliPrompt === 'function') process._refreshCliPrompt();
       figmaState.pendingReconnect = setTimeout(figmaConnect, 5000);
     });
 

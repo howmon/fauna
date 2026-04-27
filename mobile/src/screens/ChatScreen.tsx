@@ -23,7 +23,7 @@ interface Message {
   toolName?: string;
 }
 
-export default function ChatScreen({ loadedConvRef }: { loadedConvRef?: { current: any } }) {
+export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRef?: { current: any }; newChatRef?: { current: (() => void) | null } }) {
   const scheme = useColorScheme();
   const t = scheme === 'light' ? light : dark;
   const [messages, setMessages] = useState<Message[]>([]);
@@ -39,6 +39,21 @@ export default function ChatScreen({ loadedConvRef }: { loadedConvRef?: { curren
   const msgIdRef = useRef(0);
 
   const nextId = () => `msg-${++msgIdRef.current}`;
+
+  // Register new chat handler for header button
+  useEffect(() => {
+    if (newChatRef) {
+      newChatRef.current = () => {
+        if (streaming) return;
+        setMessages([]);
+        setInput('');
+        setConvTitle('');
+        setAgent('');
+        msgIdRef.current = 0;
+      };
+    }
+    return () => { if (newChatRef) newChatRef.current = null; };
+  }, [streaming]);
 
   // Load agents list
   useEffect(() => {

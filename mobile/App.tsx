@@ -1,7 +1,7 @@
 // Fauna Mobile — App entry point with navigation
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useColorScheme, StatusBar, Text as RNText } from 'react-native';
+import { useColorScheme, StatusBar, Text as RNText, TouchableOpacity } from 'react-native';
 import { NavigationContainer, DefaultTheme, DarkTheme, createNavigationContainerRef } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator, NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -54,6 +54,8 @@ function TasksStack() {
 
 // Shared ref to pass loaded conversation from ConversationsScreen to ChatScreen
 const _loadedConvRef = { current: null as any };
+// Ref to trigger new conversation from header button
+const _newChatRef = { current: null as (() => void) | null };
 const navigationRef = createNavigationContainerRef();
 
 // Simple text-based tab icons (no font loading required)
@@ -85,9 +87,17 @@ function MainTabs({ onDisconnect }: { onDisconnect: () => void }) {
     >
       <Tab.Screen
         name="Chat"
-        options={{ tabBarIcon: ({ color }) => <TabIcon label="✦" color={color} />, title: 'Chat' }}
+        options={{
+          tabBarIcon: ({ color }) => <TabIcon label="✦" color={color} />,
+          title: 'Chat',
+          headerRight: () => (
+            <TouchableOpacity onPress={() => _newChatRef.current?.()} style={{ marginRight: 14, padding: 4 }}>
+              <RNText style={{ fontSize: 20, color: t.teal }}>＋</RNText>
+            </TouchableOpacity>
+          ),
+        }}
       >
-        {() => <ChatScreen loadedConvRef={_loadedConvRef} />}
+        {() => <ChatScreen loadedConvRef={_loadedConvRef} newChatRef={_newChatRef} />}
       </Tab.Screen>
       <Tab.Screen
         name="History"
