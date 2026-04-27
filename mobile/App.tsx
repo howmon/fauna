@@ -1,11 +1,12 @@
 // Fauna Mobile — App entry point with navigation
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { useColorScheme, StatusBar, Text as RNText } from 'react-native';
+import { useColorScheme, StatusBar } from 'react-native';
 import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator, NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 
 import { dark, light } from './src/lib/theme';
 import * as api from './src/lib/api';
@@ -69,25 +70,21 @@ function MainTabs({ onDisconnect }: { onDisconnect: () => void }) {
       <Tab.Screen
         name="Chat"
         component={ChatScreen}
-        options={{ tabBarIcon: ({ color }) => <TabIcon label="💬" color={color} />, title: 'Chat' }}
+        options={{ tabBarIcon: ({ color, size }) => <Ionicons name="chatbubble-outline" size={size} color={color} />, title: 'Chat' }}
       />
       <Tab.Screen
         name="Tasks"
         component={TasksStack}
-        options={{ headerShown: false, tabBarIcon: ({ color }) => <TabIcon label="📋" color={color} /> }}
+        options={{ headerShown: false, tabBarIcon: ({ color, size }) => <Ionicons name="list-outline" size={size} color={color} /> }}
       />
       <Tab.Screen
         name="Settings"
-        options={{ tabBarIcon: ({ color }) => <TabIcon label="⚙" color={color} /> }}
+        options={{ tabBarIcon: ({ color, size }) => <Ionicons name="settings-outline" size={size} color={color} /> }}
       >
         {() => <SettingsScreen onDisconnect={onDisconnect} />}
       </Tab.Screen>
     </Tab.Navigator>
   );
-}
-
-function TabIcon({ label }: { label: string; color?: string }) {
-  return <RNText style={{ fontSize: 20 }}>{label}</RNText>;
 }
 
 // ── Root app ──────────────────────────────────────────────────────────────
