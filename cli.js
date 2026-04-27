@@ -159,12 +159,18 @@ async function apiDelete(path) {
 
 async function chat(message, { model, agent, attachments } = {}) {
   const url = `${API}/api/chat`;
+
+  // Build messages array from history + current message
+  const messages = [
+    ..._history,
+    { role: 'user', content: message },
+  ];
+
   const body = {
-    message,
+    messages,
     ...(model && { model }),
-    ...(agent && { agent }),
+    ...(agent && { agentName: agent }),
     ...(attachments && attachments.length && { attachments }),
-    history: _history,
   };
 
   const res = await fetch(url, {
