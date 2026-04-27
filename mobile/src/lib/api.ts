@@ -237,8 +237,9 @@ export function streamTask(id: string, onEvent: (evt: any) => void): () => void 
 
 export async function verifyConnection(): Promise<boolean> {
   try {
-    const data = await getSystemContext();
-    return data?.permissions?.auth === 'granted';
+    // If we get a 200 response, the mobile token was accepted
+    await getSystemContext();
+    return true;
   } catch {
     return false;
   }
