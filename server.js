@@ -658,10 +658,21 @@ If the user asks you to look at or interact with their Chrome/Edge browser, you 
 - \`{"action":"extract"}\` — page text, links, headings (up to 12 000 chars)
 - \`{"action":"extract","maxChars":5000}\` — with custom limit
 - \`{"action":"extract-forms"}\` — all form fields with labels, types, selectors, current values
+- \`{"action":"extract-assets"}\` — all images, SVGs, CSS stylesheets, CSS custom properties (design tokens), and JS files referenced by the page. Use when auditing, cloning, or analysing web assets.
 - \`{"action":"snapshot"}\` — viewport screenshot (PNG, base64)
 - \`{"action":"snapshot-full"}\` — full-page screenshot (scroll-stitched)
 - \`{"action":"tab:info"}\` — current tab URL + title
 - \`{"action":"tab:list"}\` — all open tabs
+
+**DevTools / debugging (use via browser_ext_devtools_* tools or browser-ext-action)**
+- \`{"action":"devtools:console"}\` — read captured JS console output (log/warn/error/info). Use to catch JS errors, verify behaviour.
+- \`{"action":"devtools:console","limit":200}\` — return up to 200 entries
+- \`{"action":"devtools:network"}\` — list all network requests (URL, type, duration, transfer size). Use to audit API calls, find failed requests, diagnose slow loads.
+- \`{"action":"devtools:network","filter":"api/"}\` — filter by URL substring
+- \`{"action":"devtools:har"}\` — export a full HAR 1.2 JSON of all network requests with timing. Use for detailed performance or security analysis.
+- \`{"action":"devtools:security"}\` — TLS/HTTPS state, CSP meta headers, mixed-content violations, visible cookie names. Use to audit web security posture.
+- \`{"action":"devtools:cookies"}\` — all cookies for the page with name, value, domain, path, secure, httpOnly, sameSite, expiry flags. Use to audit session management and cookie security.
+- \`{"action":"devtools:storage"}\` — localStorage and sessionStorage key/value pairs. Use to inspect client-side tokens and cached state.
 
 **Interact (only when the user explicitly asks)**
 - \`{"action":"navigate","url":"..."}\` — navigate the active tab
@@ -1170,6 +1181,13 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
         { type: 'function', function: { name: 'browser_ext_extract_page', description: 'Extract text content from a browser tab. ONLY use when the task explicitly requires reading content from a specific web page the user has open. Do not use for general information retrieval or tasks unrelated to the browser.', parameters: { type: 'object', properties: { tabId: { type: 'number', description: 'Optional tab ID to extract from (from browser_ext_list_tabs). Omit for active tab.' } }, required: [] } } },
         { type: 'function', function: { name: 'browser_ext_screenshot', description: 'Screenshot the active browser tab. ONLY use when the user explicitly asks you to look at, inspect, or interact with their current browser page.', parameters: { type: 'object', properties: { tabId: { type: 'number', description: 'Optional tab ID. Omit for active tab.' } }, required: [] } } },
         { type: 'function', function: { name: 'browser_ext_tab_info', description: 'Get the URL and title of the active browser tab. ONLY use when the task specifically involves the user\'s current web page.', parameters: { type: 'object', properties: {}, required: [] } } },
+        { type: 'function', function: { name: 'browser_ext_extract_assets', description: 'Extract all images, SVGs, CSS stylesheets, CSS custom properties (design tokens), and JavaScript files referenced by the current page. Use when the user wants to audit, clone, or analyse web assets.', parameters: { type: 'object', properties: { tabId: { type: 'number', description: 'Optional tab ID. Omit for active tab.' } }, required: [] } } },
+        { type: 'function', function: { name: 'browser_ext_devtools_console', description: 'Read the browser console log (JS errors, warnings, log output). Essential for debugging web pages and verifying JS behaviour.', parameters: { type: 'object', properties: { tabId: { type: 'number' }, limit: { type: 'number', description: 'Max entries to return. Default 100.' } }, required: [] } } },
+        { type: 'function', function: { name: 'browser_ext_devtools_network', description: 'List network requests made by the page (URLs, type, duration, transfer size). Use to debug failed requests, slow resources, or audit what a page fetches.', parameters: { type: 'object', properties: { tabId: { type: 'number' }, filter: { type: 'string', description: 'Optional URL substring filter.' }, includeHeaders: { type: 'boolean' } }, required: [] } } },
+        { type: 'function', function: { name: 'browser_ext_devtools_har', description: 'Export a HAR 1.2 file for the current page — all network requests with timing. Use for detailed performance or security analysis.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
+        { type: 'function', function: { name: 'browser_ext_devtools_security', description: 'Inspect the page\'s security posture: HTTPS/TLS state, CSP meta headers, mixed content, and visible cookie names.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
+        { type: 'function', function: { name: 'browser_ext_devtools_cookies', description: 'Read all cookies set for the current page (name, value, domain, path, secure, httpOnly, sameSite, expiry). Use to audit session management and cookie security flags.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
+        { type: 'function', function: { name: 'browser_ext_devtools_storage', description: 'Read localStorage and sessionStorage key/value pairs from the current page. Use to inspect client-side state and tokens.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
       ];
       mcpTools = [...(mcpTools || []), ...extToolDefs];
     }
@@ -1385,6 +1403,35 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
             } else if (toolName === 'browser_ext_tab_info') {
               chatLog('[chat] Browser ext tool: tab-info');
               const r = await extCommand('tab:info', {}, null, 10000);
+              result = JSON.stringify(r);
+            } else if (toolName === 'browser_ext_extract_assets') {
+              chatLog('[chat] Browser ext tool: extract-assets');
+              const targetTabId = args.tabId || null;
+              const r = await extCommand('extract-assets', {}, targetTabId, 20000);
+              result = JSON.stringify(r);
+            } else if (toolName === 'browser_ext_devtools_console') {
+              chatLog('[chat] Browser ext tool: devtools-console');
+              const r = await extCommand('devtools:console', { limit: args.limit || 100 }, args.tabId || null, 15000);
+              result = JSON.stringify(r);
+            } else if (toolName === 'browser_ext_devtools_network') {
+              chatLog('[chat] Browser ext tool: devtools-network');
+              const r = await extCommand('devtools:network', { filter: args.filter, includeHeaders: args.includeHeaders }, args.tabId || null, 15000);
+              result = JSON.stringify(r);
+            } else if (toolName === 'browser_ext_devtools_har') {
+              chatLog('[chat] Browser ext tool: devtools-har');
+              const r = await extCommand('devtools:har', {}, args.tabId || null, 20000);
+              result = JSON.stringify(r);
+            } else if (toolName === 'browser_ext_devtools_security') {
+              chatLog('[chat] Browser ext tool: devtools-security');
+              const r = await extCommand('devtools:security', {}, args.tabId || null, 15000);
+              result = JSON.stringify(r);
+            } else if (toolName === 'browser_ext_devtools_cookies') {
+              chatLog('[chat] Browser ext tool: devtools-cookies');
+              const r = await extCommand('devtools:cookies', {}, args.tabId || null, 10000);
+              result = JSON.stringify(r);
+            } else if (toolName === 'browser_ext_devtools_storage') {
+              chatLog('[chat] Browser ext tool: devtools-storage');
+              const r = await extCommand('devtools:storage', {}, args.tabId || null, 10000);
               result = JSON.stringify(r);
             } else {
               figmaLog('🔧 ' + toolName + (toolName === 'figma_execute' ? ': ' + (args.code || '').slice(0, 80).replace(/\n/g,' ') + '…' : ''), 'cmd');

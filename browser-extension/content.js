@@ -22,8 +22,9 @@
       try {
         let result;
         switch (msg.action) {
-          case 'extract':       result = await doExtract(msg); break;
-          case 'extract-forms': result = await doExtractForms(); break;
+          case 'extract':        result = await doExtract(msg); break;
+          case 'extract-forms':  result = await doExtractForms(); break;
+          case 'extract-assets': result = doExtractAssets(); break;
           case 'fill':          result = await doFill(msg); break;
           case 'click':         result = await doClick(msg); break;
           case 'type':          result = await doType(msg); break;
@@ -80,6 +81,103 @@
       links,
       headings,
       images
+    };
+  }
+
+  // ── Asset extraction ────────────────────────────────────────────────────
+
+  function doExtractAssets() {
+    // Images: <img>, <picture source>, srcset, CSS background-image
+    const images = [];
+    document.querySelectorAll('img[src]').forEach(el => {
+      images.push({ type: 'img', src: el.src, alt: el.alt || '', width: el.naturalWidth, height: el.naturalHeight });
+    });
+    document.querySelectorAll('picture source[srcset], img[srcset]').forEach(el => {
+      el.srcset.split(',').forEach(s => {
+        const u = s.trim().split(/\s+/)[0];
+        if (u) images.push({ type: 'srcset', src: u });
+      });
+    });
+    // CSS background images from computed styles (sample first 200 elements)
+    Array.from(document.querySelectorAll('*')).slice(0, 200).forEach(el => {
+      const bg = getComputedStyle(el).backgroundImage;
+      if (bg && bg !== 'none') {
+        const m = bg.match(/url\(["']?([^"')]+)["']?\)/g);
+        if (m) m.forEach(u => {
+          const url = u.replace(/url\(["']?|["']?\)/g, '');
+          if (url && !url.startsWith('data:')) images.push({ type: 'css-bg', src: url });
+        });
+      }
+    });
+
+    // SVGs: inline elements + external <img src="*.svg">
+    const svgs = [];
+    document.querySelectorAll('svg').forEach((el, i) => {
+      svgs.push({ type: 'inline', index: i, outerHTML: el.outerHTML.slice(0, 8000), id: el.id || null, width: el.getAttribute('width'), height: el.getAttribute('height') });
+    });
+    document.querySelectorAll('img[src$=".svg"], img[src*=".svg?"]').forEach(el => {
+      svgs.push({ type: 'external', src: el.src, alt: el.alt || '' });
+    });
+    document.querySelectorAll('use[href], use[xlink\\:href]').forEach(el => {
+      svgs.push({ type: 'sprite-ref', href: el.getAttribute('href') || el.getAttribute('xlink:href') });
+    });
+
+    // Stylesheets: external hrefs + inline <style> content
+    const stylesheets = [];
+    document.querySelectorAll('link[rel~="stylesheet"][href]').forEach(el => {
+      stylesheets.push({ type: 'external', href: el.href, media: el.media || 'all' });
+    });
+    document.querySelectorAll('style').forEach((el, i) => {
+      stylesheets.push({ type: 'inline', index: i, content: el.textContent.slice(0, 20000) });
+    });
+    // Live CSS rules from document.styleSheets (only same-origin sheets)
+    const cssRules = [];
+    Array.from(document.styleSheets).forEach(sheet => {
+      try {
+        if (!sheet.cssRules) return;
+        Array.from(sheet.cssRules).slice(0, 200).forEach(rule => {
+          cssRules.push(rule.cssText.slice(0, 400));
+        });
+      } catch (_) {} // cross-origin sheets throw SecurityError
+    });
+
+    // CSS custom properties on :root
+    const cssVars = {};
+    try {
+      const style = getComputedStyle(document.documentElement);
+      Array.from(document.styleSheets).forEach(sheet => {
+        try {
+          Array.from(sheet.cssRules || []).forEach(rule => {
+            if (rule.style) {
+              Array.from(rule.style).filter(p => p.startsWith('--')).forEach(p => {
+                cssVars[p] = style.getPropertyValue(p).trim();
+              });
+            }
+          });
+        } catch (_) {}
+      });
+    } catch (_) {}
+
+    // Scripts: external src + inline content
+    const scripts = [];
+    document.querySelectorAll('script[src]').forEach(el => {
+      scripts.push({ type: 'external', src: el.src, async: el.async, defer: el.defer, type: el.type || 'text/javascript' });
+    });
+    document.querySelectorAll('script:not([src])').forEach((el, i) => {
+      const content = el.textContent.trim();
+      if (!content) return;
+      scripts.push({ type: 'inline', index: i, content });
+    });
+
+    return {
+      url: location.href,
+      title: document.title,
+      images:       [...new Map(images.map(x => [x.src, x])).values()].slice(0, 200),
+      svgs:         svgs.slice(0, 50),
+      stylesheets,
+      cssRules:     cssRules.slice(0, 500),
+      cssVars,
+      scripts,
     };
   }
 

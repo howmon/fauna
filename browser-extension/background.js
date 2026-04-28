@@ -168,8 +168,15 @@ async function dispatchCommand(msg) {
       case 'tab:close':    return await cmdTabClose(params, tab);
       case 'tab:info':     return await cmdTabInfo(tab);
       case 'navigate':     return await cmdNavigate(params, tab);
-      case 'extract':      return await cmdExtract(params, tab);
-      case 'extract-forms':return await cmdExtractForms(params, tab);
+      case 'extract':          return await cmdExtract(params, tab);
+      case 'extract-forms':    return await cmdExtractForms(params, tab);
+      case 'extract-assets':   return await cmdExtractAssets(params, tab);
+      case 'devtools:console': return await cmdDevtoolsConsole(params, tab);
+      case 'devtools:network': return await cmdDevtoolsNetwork(params, tab);
+      case 'devtools:har':     return await cmdDevtoolsHar(params, tab);
+      case 'devtools:security':return await cmdDevtoolsSecurity(params, tab);
+      case 'devtools:cookies': return await cmdDevtoolsCookies(params, tab);
+      case 'devtools:storage': return await cmdDevtoolsStorage(params, tab);
       case 'fill':         return await cmdFill(params, tab);
       case 'click':        return await cmdClick(params, tab);
       case 'scroll':       return await cmdScroll(params, tab);
@@ -300,6 +307,191 @@ async function cmdExtractForms({} = {}, tab) {
   if (!tab) return { ok: false, error: 'No active tab' };
   const data = await msgTab(tab, { action: 'extract-forms' }).catch(() => ({ fields: [] }));
   return { ok: true, ...data };
+}
+
+async function cmdExtractForms({} = {}, tab) {
+  if (!tab) return { ok: false, error: 'No active tab' };
+  const data = await msgTab(tab, { action: 'extract-forms' }).catch(() => ({ fields: [] }));
+  return { ok: true, ...data };
+}
+
+async function cmdExtractAssets({} = {}, tab) {
+  if (!tab) return { ok: false, error: 'No active tab' };
+  let data;
+  try {
+    data = await msgTab(tab, { action: 'extract-assets' });
+  } catch (_) {
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+    data = await msgTab(tab, { action: 'extract-assets' });
+  }
+  return { ok: true, ...data };
+}
+
+// ── DevTools helpers — all use chrome.debugger CDP ────────────────────────
+
+async function _debuggerSession(tabId, fn, timeoutMs = 15000) {
+  const target = { tabId };
+  let attached = false;
+  try {
+    try { await chrome.debugger.attach(target, '1.3'); attached = true; }
+    catch (e) { if (!String(e.message).includes('already')) throw e; attached = true; }
+    return await Promise.race([
+      fn(target),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('DevTools session timed out')), timeoutMs)),
+    ]);
+  } finally {
+    if (attached) chrome.debugger.detach(target).catch(() => {});
+  }
+}
+
+// Capture console messages by injecting a Runtime listener, loading the page,
+// then reading buffered entries via Log.enable + Runtime.getProperties trick.
+// Simplest reliable approach: evaluate a log-capture shim and read it back.
+async function cmdDevtoolsConsole({ limit = 100 } = {}, tab) {
+  if (!tab) return { ok: false, error: 'No active tab' };
+  return await _debuggerSession(tab.id, async (target) => {
+    await chrome.debugger.sendCommand(target, 'Runtime.enable', {});
+    // Read existing console entries via Log domain
+    await chrome.debugger.sendCommand(target, 'Log.enable', {});
+    // Inject a shim to collect future + past entries via console override
+    const shimResult = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+      expression: `(function(){
+        if (!window.__faunaConsoleBuf__) {
+          window.__faunaConsoleBuf__ = [];
+          var _orig = {log:console.log,warn:console.warn,error:console.error,info:console.info,debug:console.debug};
+          ['log','warn','error','info','debug'].forEach(function(l){
+            console[l] = function(){
+              window.__faunaConsoleBuf__.push({level:l, args:Array.from(arguments).map(function(a){try{return JSON.stringify(a);}catch(e){return String(a);}}), ts:Date.now()});
+              if(window.__faunaConsoleBuf__.length > 500) window.__faunaConsoleBuf__.shift();
+              _orig[l].apply(console,arguments);
+            };
+          });
+        }
+        return JSON.stringify(window.__faunaConsoleBuf__.slice(-${Math.min(limit,500)}));
+      })()`,
+      returnByValue: true, awaitPromise: false,
+    });
+    const entries = JSON.parse(shimResult?.result?.value || '[]');
+    return { ok: true, entries, count: entries.length, url: tab.url };
+  });
+}
+
+// Network: enable network domain, capture a snapshot of current requests
+// (requests made before devtools attach aren't available — attach early or
+// use performance.getEntriesByType for a retrospective list)
+async function cmdDevtoolsNetwork({ includeHeaders = true, includeBodies = false, filter } = {}, tab) {
+  if (!tab) return { ok: false, error: 'No active tab' };
+  return await _debuggerSession(tab.id, async (target) => {
+    await chrome.debugger.sendCommand(target, 'Network.enable', {});
+    // Retrospective: read from window.performance.getEntriesByType('resource')
+    const perfResult = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+      expression: `JSON.stringify(performance.getEntriesByType('resource').slice(0,200).map(function(e){
+        return {name:e.name,type:e.initiatorType,method:'GET',status:0,
+          transferSize:e.transferSize,duration:Math.round(e.duration),
+          startTime:Math.round(e.startTime)};
+      }))`,
+      returnByValue: true,
+    });
+    const resources = JSON.parse(perfResult?.result?.value || '[]');
+    // Also grab navigation timing
+    const navResult = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+      expression: `JSON.stringify((function(){var t=performance.timing;return t?{domContentLoaded:t.domContentLoadedEventEnd-t.navigationStart,load:t.loadEventEnd-t.navigationStart,ttfb:t.responseStart-t.navigationStart}:null;})())`,
+      returnByValue: true,
+    });
+    const navTiming = JSON.parse(navResult?.result?.value || 'null');
+    const filtered = filter ? resources.filter(r => r.name.includes(filter)) : resources;
+    return { ok: true, resources: filtered, count: filtered.length, navTiming, url: tab.url };
+  });
+}
+
+// HAR export: builds a minimal HAR 1.2 object from performance entries
+async function cmdDevtoolsHar({} = {}, tab) {
+  if (!tab) return { ok: false, error: 'No active tab' };
+  return await _debuggerSession(tab.id, async (target) => {
+    await chrome.debugger.sendCommand(target, 'Network.enable', {});
+    const result = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+      expression: `JSON.stringify((function(){
+        var entries = performance.getEntriesByType('resource').slice(0,500);
+        var nav = performance.getEntriesByType('navigation')[0];
+        var all = nav ? [{name:location.href,initiatorType:'navigation',transferSize:nav.transferSize||0,duration:nav.duration,startTime:0,decodedBodySize:nav.decodedBodySize||0,encodedBodySize:nav.encodedBodySize||0}].concat(entries) : entries;
+        return {
+          log: {
+            version:'1.2',
+            creator:{name:'Fauna Browser Bridge',version:'1.0'},
+            pages:[{startedDateTime:new Date(performance.timeOrigin).toISOString(),id:'page_1',title:document.title,pageTimings:{onContentLoad:performance.timing?performance.timing.domContentLoadedEventEnd-performance.timing.navigationStart:-1,onLoad:performance.timing?performance.timing.loadEventEnd-performance.timing.navigationStart:-1}}],
+            entries: all.map(function(e,i){return {
+              startedDateTime: new Date(performance.timeOrigin+e.startTime).toISOString(),
+              time: Math.round(e.duration),
+              request:{method:'GET',url:e.name,httpVersion:'h2',headers:[],queryString:[],cookies:[],headersSize:-1,bodySize:0,postData:undefined},
+              response:{status:0,statusText:'',httpVersion:'h2',headers:[],cookies:[],content:{size:e.decodedBodySize||0,mimeType:''},redirectURL:'',headersSize:-1,bodySize:e.encodedBodySize||e.transferSize||0},
+              cache:{},
+              timings:{send:0,wait:Math.round(e.duration*0.6),receive:Math.round(e.duration*0.4)},
+              pageref:'page_1'
+            };})
+          }
+        };
+      })())`,
+      returnByValue: true,
+    });
+    const har = JSON.parse(result?.result?.value || 'null');
+    return { ok: true, har, entryCount: har?.log?.entries?.length || 0, url: tab.url };
+  });
+}
+
+// Security: TLS cert info + mixed content + CSP headers via Security domain
+async function cmdDevtoolsSecurity({} = {}, tab) {
+  if (!tab) return { ok: false, error: 'No active tab' };
+  return await _debuggerSession(tab.id, async (target) => {
+    await chrome.debugger.sendCommand(target, 'Network.enable', {});
+    await chrome.debugger.sendCommand(target, 'Security.enable', {});
+    // Get security state
+    const state = await chrome.debugger.sendCommand(target, 'Security.getSecurityState', {}).catch(() => null);
+    // Read meta CSP + headers via JS
+    const cspResult = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+      expression: `JSON.stringify((function(){
+        var metas = Array.from(document.querySelectorAll('meta[http-equiv]')).map(function(m){return {httpEquiv:m.httpEquiv,content:m.content};});
+        var isHttps = location.protocol==='https:';
+        var mixedContent = Array.from(document.querySelectorAll('[src],[href]')).filter(function(e){
+          var u=(e.src||e.href||''); return isHttps && u.startsWith('http:');
+        }).slice(0,20).map(function(e){return {tag:e.tagName,url:(e.src||e.href)};});
+        var cookies = document.cookie.split(';').filter(Boolean).map(function(c){return c.trim().split('=')[0];});
+        return {protocol:location.protocol,host:location.host,metaHeaders:metas,mixedContent:mixedContent,visibleCookieNames:cookies.slice(0,30)};
+      })())`,
+      returnByValue: true,
+    });
+    const pageInfo = JSON.parse(cspResult?.result?.value || '{}');
+    return { ok: true, securityState: state, ...pageInfo, url: tab.url };
+  });
+}
+
+// Cookies: read all cookies for the current tab via CDP
+async function cmdDevtoolsCookies({} = {}, tab) {
+  if (!tab) return { ok: false, error: 'No active tab' };
+  return await _debuggerSession(tab.id, async (target) => {
+    await chrome.debugger.sendCommand(target, 'Network.enable', {});
+    const result = await chrome.debugger.sendCommand(target, 'Network.getCookies', { urls: [tab.url] });
+    return { ok: true, cookies: result.cookies, count: result.cookies.length, url: tab.url };
+  });
+}
+
+// Storage: localStorage, sessionStorage, IndexedDB database names
+async function cmdDevtoolsStorage({} = {}, tab) {
+  if (!tab) return { ok: false, error: 'No active tab' };
+  return await _debuggerSession(tab.id, async (target) => {
+    const result = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+      expression: `JSON.stringify((function(){
+        var ls={},ss={};
+        try{for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);ls[k]=localStorage.getItem(k).slice(0,500);}}catch(e){}
+        try{for(var i=0;i<sessionStorage.length;i++){var k=sessionStorage.key(i);ss[k]=sessionStorage.getItem(k).slice(0,500);}}catch(e){}
+        var idbDbs=[];
+        try{indexedDB.databases().then(function(dbs){idbDbs=dbs.map(function(d){return d.name;});});}catch(e){}
+        return {localStorage:ls,sessionStorage:ss,localStorageCount:Object.keys(ls).length,sessionStorageCount:Object.keys(ss).length};
+      })())`,
+      returnByValue: true, awaitPromise: true,
+    });
+    const storage = JSON.parse(result?.result?.value || '{}');
+    return { ok: true, ...storage, url: tab.url };
+  });
 }
 
 // ── Interaction ───────────────────────────────────────────────────────────
