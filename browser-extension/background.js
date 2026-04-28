@@ -309,12 +309,6 @@ async function cmdExtractForms({} = {}, tab) {
   return { ok: true, ...data };
 }
 
-async function cmdExtractForms({} = {}, tab) {
-  if (!tab) return { ok: false, error: 'No active tab' };
-  const data = await msgTab(tab, { action: 'extract-forms' }).catch(() => ({ fields: [] }));
-  return { ok: true, ...data };
-}
-
 async function cmdExtractAssets({} = {}, tab) {
   if (!tab) return { ok: false, error: 'No active tab' };
   let data;
