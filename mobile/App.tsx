@@ -1,7 +1,7 @@
 // Fauna Mobile — App entry point with navigation
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useColorScheme, StatusBar, Text as RNText, TouchableOpacity } from 'react-native';
+import { useColorScheme, StatusBar, Text as RNText, TouchableOpacity, ActivityIndicator, View } from 'react-native';
 import { NavigationContainer, DefaultTheme, DarkTheme, createNavigationContainerRef } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator, NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -156,8 +156,12 @@ export default function App() {
   const handleDisconnect = useCallback(() => setConnected(false), []);
 
   if (connected === null) {
-    // Loading splash
-    return null;
+    // Loading splash — show spinner so the screen is never blank
+    return (
+      <View style={{ flex: 1, backgroundColor: t.bg, alignItems: 'center', justifyContent: 'center' }}>
+        <ActivityIndicator size="large" color={t.teal} />
+      </View>
+    );
   }
 
   return (

@@ -252,9 +252,17 @@ export function streamTask(id: string, onEvent: (evt: any) => void): () => void 
 
 export async function verifyConnection(): Promise<boolean> {
   try {
-    // If we get a 200 response, the mobile token was accepted
-    await getSystemContext();
-    return true;
+    // Abort after 5 seconds so the app doesn't hang on an unreachable server
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const res = await fetch(`${_baseUrl}/api/system`, { headers: headers(), signal: controller.signal });
+      clearTimeout(timer);
+      return res.ok;
+    } catch {
+      clearTimeout(timer);
+      return false;
+    }
   } catch {
     return false;
   }
