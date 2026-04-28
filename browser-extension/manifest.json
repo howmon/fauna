@@ -16,8 +16,18 @@
     "contextMenus",
     "alarms",
     "sidePanel",
-    "debugger"
+    "debugger",
+    "notifications"
   ],
+  "commands": {
+    "toggle-sidebar": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+F",
+        "mac": "MacCtrl+Shift+F"
+      },
+      "description": "Open/close the Fauna sidebar"
+    }
+  },
   "host_permissions": [
     "<all_urls>"
   ],

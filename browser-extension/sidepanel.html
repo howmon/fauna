@@ -133,6 +133,8 @@
     .btn.primary { background: #191740; border-color: #4338ca44; color: #a5b4fc; }
     .btn.primary:hover { background: #1e1c50; border-color: #6366f1aa; }
     .btn:disabled { opacity: 0.38; pointer-events: none; }
+    .btn.picking { background: #2d1a0e; border-color: #f97316aa; color: #fb923c; animation: pickPulse 1.2s infinite; }
+    @keyframes pickPulse { 0%,100% { border-color: #f97316aa; } 50% { border-color: #f97316ff; box-shadow: 0 0 8px #f9731644; } }
     .btn-icon { font-size: 14px; width: 17px; text-align: center; flex-shrink: 0; }
     .btn-label { flex: 1; }
     .btn-badge {
@@ -226,6 +228,41 @@
       margin-top: 8px;
       line-height: 1.45;
     }
+
+    /* ── Picked element card ── */
+    .picked-card {
+      background: #141414;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .picked-tag {
+      font-size: 11px;
+      font-weight: 700;
+      font-family: ui-monospace, monospace;
+      color: #a5b4fc;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .picked-selector {
+      font-size: 11px;
+      font-family: ui-monospace, monospace;
+      color: #6366f1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .picked-text {
+      font-size: 11px;
+      color: #888;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 4px;
+    }
   </style>
 </head>
 <body>
@@ -271,6 +308,24 @@
         <button class="btn" id="btn-extract-forms">
           <span class="btn-icon">&#8801;</span>
           <span class="btn-label">Extract forms</span>
+        </button>
+      </div>
+      <button class="btn" id="btn-pick-element">
+        <span class="btn-icon">&#8853;</span>
+        <span class="btn-label">Pick element</span>
+      </button>
+    </div>
+
+    <!-- Picked Element (shown after picker selects something) -->
+    <div id="picked-section" class="section" style="display:none">
+      <div class="section-label">Picked Element</div>
+      <div class="picked-card">
+        <div class="picked-tag" id="picked-tag">—</div>
+        <div class="picked-selector" id="picked-selector">—</div>
+        <div class="picked-text" id="picked-text">—</div>
+        <button class="btn primary" id="btn-send-picked">
+          <span class="btn-icon">&#8594;</span>
+          <span class="btn-label">Send to Fauna</span>
         </button>
       </div>
     </div>

@@ -112,6 +112,18 @@ async function handleServerMessage(msg) {
 
   if (type === 'pong') return;
 
+  // Server → extension: show a system notification
+  if (type === 'notify') {
+    showNotification(msg.id, msg.title, msg.message, msg.icon);
+    return;
+  }
+
+  // Server → extension: mark a tab as active/idle
+  if (type === 'tab:working') {
+    if (msg.tabId != null) setTabActive(msg.tabId); else if (_activeTabId) clearTabActive(_activeTabId);
+    return;
+  }
+
   // Command dispatch
   if (type === 'cmd') {
     let result;
@@ -168,6 +180,8 @@ async function dispatchCommand(msg) {
       case 'hover':        return await cmdHover(params, tab);
       case 'select':       return await cmdSelect(params, tab);
       case 'keyboard':     return await cmdKeyboard(params, tab);
+      case 'type':         return await cmdType(params, tab);
+      case 'drag':         return await cmdDrag(params, tab);
       default:
         return { ok: false, error: 'Unknown action: ' + action };
     }
@@ -329,11 +343,51 @@ async function cmdKeyboard({ key, selector } = {}, tab) {
   return { ok: true, ...result };
 }
 
+async function cmdType({ selector, text, delay, pressEnter } = {}, tab) {
+  if (!tab) return { ok: false, error: 'No active tab' };
+  const result = await msgTab(tab, { action: 'type', selector, text, delay, pressEnter });
+  return { ok: true, ...result };
+}
+
+async function cmdDrag({ source, target, sourceX, sourceY, targetX, targetY, steps } = {}, tab) {
+  if (!tab) return { ok: false, error: 'No active tab' };
+  const result = await msgTab(tab, { action: 'drag', source, target, sourceX, sourceY, targetX, targetY, steps });
+  return { ok: true, ...result };
+}
+
 async function cmdEval({ js } = {}, tab) {
   if (!tab) return { ok: false, error: 'No active tab' };
   if (!js) return { ok: false, error: 'js required' };
-  const result = await msgTab(tab, { action: 'eval', js });
-  return { ok: true, ...result };
+  // Use DevTools Protocol Runtime.evaluate — bypasses both the page's CSP and
+  // the extension's own MV3 CSP that blocks new Function() / eval in content scripts.
+  const target = { tabId: tab.id };
+  let attached = false;
+  try {
+    try {
+      await chrome.debugger.attach(target, '1.3');
+      attached = true;
+    } catch (e) {
+      if (!String(e.message).includes('already')) throw e;
+      attached = true;
+    }
+    const evalResult = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+      expression: js,
+      returnByValue: true,
+      awaitPromise: true,
+      userGesture: true,
+    });
+    if (evalResult.exceptionDetails) {
+      const desc = evalResult.exceptionDetails.exception?.description ||
+                   evalResult.exceptionDetails.text || 'JS exception';
+      return { ok: true, result: 'ERROR: ' + desc };
+    }
+    const val = evalResult.result?.value;
+    return { ok: true, result: val === undefined ? '(undefined)' : String(val) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  } finally {
+    if (attached) chrome.debugger.detach(target).catch(() => {});
+  }
 }
 
 async function cmdWait({ ms = 1000 } = {}) {
@@ -510,13 +564,47 @@ async function cmdSnapshotFull({} = {}, tab) {
 
 // ── Badge & status ────────────────────────────────────────────────────────
 
+// Track which tab Fauna is currently working on
+let _activeTabId = null;
+
 function updateBadge(online) {
   chrome.action.setBadgeText({ text: online ? 'ON' : '' });
   chrome.action.setBadgeBackgroundColor({ color: online ? '#10b981' : '#6b7280' });
+  chrome.action.setBadgeTextColor({ color: '#ffffff' });
+}
+
+// Show a working indicator on the tab Fauna is operating on
+function setTabActive(tabId) {
+  if (_activeTabId && _activeTabId !== tabId) clearTabActive(_activeTabId);
+  _activeTabId = tabId;
+  if (tabId == null) return;
+  chrome.action.setBadgeText({ text: '▶', tabId });
+  chrome.action.setBadgeBackgroundColor({ color: '#0ea5e9', tabId });
+  chrome.action.setBadgeTextColor({ color: '#ffffff', tabId });
+}
+
+function clearTabActive(tabId) {
+  if (tabId == null) return;
+  // Restore to global badge state
+  chrome.action.setBadgeText({ text: connected ? 'ON' : '', tabId });
+  chrome.action.setBadgeBackgroundColor({ color: connected ? '#10b981' : '#6b7280', tabId });
+  if (_activeTabId === tabId) _activeTabId = null;
 }
 
 function broadcastStatus() {
   chrome.runtime.sendMessage({ type: 'fauna:status', connected }).catch(() => {});
+}
+
+// ── Notifications ─────────────────────────────────────────────────────────
+
+function showNotification(id, title, message, iconUrl) {
+  chrome.notifications.create('fauna-' + (id || Date.now()), {
+    type: 'basic',
+    iconUrl: iconUrl || chrome.runtime.getURL('icons/icon48.png'),
+    title: title || 'Fauna',
+    message: message || '',
+    silent: false
+  });
 }
 
 // ── Push events (tab → Fauna) ─────────────────────────────────────────────
@@ -546,6 +634,14 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 // Open the side panel when the toolbar icon is clicked
 chrome.action.onClicked.addListener((tab) => {
   chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
+});
+
+// Keyboard shortcut — Ctrl+Shift+F / MacCtrl+Shift+F — toggle sidebar
+chrome.commands.onCommand.addListener(async (command) => {
+  if (command === 'toggle-sidebar') {
+    const [win] = await chrome.windows.getAll({ windowTypes: ['normal'] }).then(ws => ws.filter(w => w.focused)).catch(() => [null]);
+    if (win) chrome.sidePanel.open({ windowId: win.id }).catch(() => {});
+  }
 });
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -611,6 +707,33 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
       const snap = await cmdSnapshot({}, tab).catch(e => ({ ok: false, error: e.message }));
       pushEvent('user:snapshot', { tabId: tab.id, url: tab.url, title: tab.title, ...snap });
     });
+    reply({ ok: true });
+    return true;
+  }
+  // Element picker — activate crosshair mode in the active tab
+  if (msg.type === 'pick-element') {
+    chrome.tabs.query({ active: true, currentWindow: true }, async ([tab]) => {
+      if (!tab) { reply({ ok: false, error: 'No active tab' }); return; }
+      try {
+        await chrome.tabs.sendMessage(tab.id, { action: 'picker:start' });
+      } catch (_) {
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+        await chrome.tabs.sendMessage(tab.id, { action: 'picker:start' });
+      }
+      reply({ ok: true });
+    });
+    return true;
+  }
+  // Picker result relayed from content script → forward to sidebar + Fauna server
+  if (msg.type === 'picker:selected') {
+    chrome.runtime.sendMessage({ type: 'fauna:picker-selected', data: msg.data }).catch(() => {});
+    // Push to Fauna server as a contextual event so the AI can reference it
+    send({ type: 'event', event: 'user:element-picked', data: msg.data });
+    reply({ ok: true });
+    return true;
+  }
+  if (msg.type === 'picker:cancelled') {
+    chrome.runtime.sendMessage({ type: 'fauna:picker-cancelled' }).catch(() => {});
     reply({ ok: true });
     return true;
   }

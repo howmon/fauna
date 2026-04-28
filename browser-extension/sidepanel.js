@@ -12,9 +12,15 @@ const offlineSec   = document.getElementById('offline-section');
 const btnSendPage  = document.getElementById('btn-send-page');
 const btnSnapshot  = document.getElementById('btn-snapshot');
 const btnExtForms  = document.getElementById('btn-extract-forms');
+const btnPickEl    = document.getElementById('btn-pick-element');
 const btnReconnect = document.getElementById('btn-reconnect');
 const logList      = document.getElementById('log-list');
 const logEmpty     = document.getElementById('log-empty');
+const pickedSec    = document.getElementById('picked-section');
+const pickedTag    = document.getElementById('picked-tag');
+const pickedSel    = document.getElementById('picked-selector');
+const pickedText   = document.getElementById('picked-text');
+const btnSendPicked= document.getElementById('btn-send-picked');
 
 const LOG_MAX = 30; // keep last N entries
 
@@ -118,6 +124,17 @@ function escHtml(str) {
         refreshTabInfo();
       }
     }
+    if (msg.type === 'fauna:picker-selected') {
+      showPickedElement(msg.data);
+      showFeedback('Element picked!', 'ok');
+      btnPickEl.classList.remove('picking');
+      btnPickEl.disabled = false;
+    }
+    if (msg.type === 'fauna:picker-cancelled') {
+      btnPickEl.classList.remove('picking');
+      btnPickEl.disabled = false;
+      showFeedback('Picker cancelled');
+    }
   });
 
   // Keep tab info fresh when the active tab changes
@@ -184,4 +201,56 @@ btnReconnect.addEventListener('click', async () => {
       s?.connected ? 'ok' : 'err'
     );
   }, 800);
+});
+
+// ── Element Picker ────────────────────────────────────────────────────────
+
+let _lastPickedData = null;
+
+function showPickedElement(data) {
+  _lastPickedData = data;
+  pickedTag.textContent  = '<' + (data.tag || '?') + (data.id ? '#' + data.id : '') + '>';
+  pickedSel.textContent  = data.selector || '—';
+  pickedText.textContent = data.text ? data.text.slice(0, 120) : '(no text)';
+  pickedSec.style.display = '';
+  addLogEntry('user:element-picked', { text: data.selector });
+}
+
+btnPickEl.addEventListener('click', async () => {
+  if (btnPickEl.classList.contains('picking')) {
+    // Cancel active pick
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab) chrome.tabs.sendMessage(tab.id, { action: 'picker:stop' }).catch(() => {});
+    btnPickEl.classList.remove('picking');
+    btnPickEl.disabled = false;
+    showFeedback('Picker cancelled');
+    return;
+  }
+  btnPickEl.classList.add('picking');
+  btnPickEl.disabled = false; // keep clickable for cancel
+  showFeedback('Click any element on the page… (Esc to cancel)');
+  const result = await chrome.runtime.sendMessage({ type: 'pick-element' }).catch(() => null);
+  if (result && !result.ok) {
+    btnPickEl.classList.remove('picking');
+    showFeedback('Could not activate picker: ' + (result.error || 'unknown'), 'err');
+  }
+});
+
+btnSendPicked.addEventListener('click', async () => {
+  if (!_lastPickedData) return;
+  btnSendPicked.disabled = true;
+  showFeedback('Sending element to Fauna…');
+  const payload = JSON.stringify({
+    type: 'element-scope',
+    selector: _lastPickedData.selector,
+    tag:      _lastPickedData.tag,
+    text:     _lastPickedData.text,
+    html:     _lastPickedData.html,
+    rect:     _lastPickedData.rect,
+    url:      _lastPickedData.url,
+    pageTitle: _lastPickedData.pageTitle,
+  }, null, 2);
+  await chrome.runtime.sendMessage({ type: 'send-page-to-fauna', overrideData: payload }).catch(() => {});
+  showFeedback('Element sent to Fauna!', 'ok');
+  btnSendPicked.disabled = false;
 });

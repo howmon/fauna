@@ -31,6 +31,36 @@ try {
 const chatLog  = (...args) => { if (process.env.FAUNA_CHAT_DEBUG) console.log(...args); };
 const chatWarn = (...args) => { if (process.env.FAUNA_CHAT_DEBUG) console.warn(...args); };
 
+// ── PyAutoGUI desktop automation helpers ─────────────────────────────────
+// Thin wrappers that shell out to `python3 -c` with pyautogui imported.
+// pyautogui must be installed in the active Python 3 env: pip install pyautogui
+
+function _runPyGui(lines) {
+  return new Promise((resolve, reject) => {
+    const script = `import pyautogui\npyautogui.FAILSAFE = False\npyautogui.PAUSE = 0.05\n${lines}`;
+    const proc = _spawn('python3', ['-c', script]);
+    let out = '', err = '';
+    proc.stdout.on('data', d => { out += d; });
+    proc.stderr.on('data', d => { err += d; });
+    proc.on('close', code => {
+      if (code !== 0) reject(new Error((err.trim() || 'python3 exit ' + code).slice(0, 500)));
+      else resolve(out.trim());
+    });
+    proc.on('error', e => reject(new Error('python3 not found — install Python 3 and run: pip install pyautogui')));
+  });
+}
+
+async function _guiScreenshot() {
+  const b64 = await _runPyGui(
+    'import base64, io\n' +
+    'img = pyautogui.screenshot()\n' +
+    'buf = io.BytesIO()\n' +
+    'img.save(buf, format="PNG")\n' +
+    'print(base64.b64encode(buf.getvalue()).decode())'
+  );
+  return b64;
+}
+
 // Power-save blocker — keeps screen/CPU awake while any chat request is active.
 let _psBlockerId = null;
 let _psActiveCount = 0;
@@ -1122,6 +1152,19 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
 
     // ── Browser Extension tools (only available when extension is connected, never in CLI) ──
     if (!isCLI && _extSockets.size > 0) {
+      // GUI automation tools (PyAutoGUI — desktop-wide, always available in app mode)
+      const guiToolDefs = [
+        { type: 'function', function: { name: 'gui_screenshot', description: 'Take a full-desktop screenshot and return the image so you can see the current screen state. Use this to understand what is on screen before clicking.', parameters: { type: 'object', properties: {}, required: [] } } },
+        { type: 'function', function: { name: 'gui_click', description: 'Click at screen coordinates (x, y). Use gui_screenshot first to identify the correct coordinates.', parameters: { type: 'object', properties: { x: { type: 'number', description: 'Screen X coordinate' }, y: { type: 'number', description: 'Screen Y coordinate' }, button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Mouse button. Default: left' }, clicks: { type: 'number', description: 'Number of clicks (2 for double-click). Default: 1' } }, required: ['x', 'y'] } } },
+        { type: 'function', function: { name: 'gui_move', description: 'Move the mouse cursor to screen coordinates without clicking.', parameters: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, duration: { type: 'number', description: 'Move duration in seconds. Default: 0.2' } }, required: ['x', 'y'] } } },
+        { type: 'function', function: { name: 'gui_type', description: 'Type text at the current cursor position. Click the target field with gui_click first.', parameters: { type: 'object', properties: { text: { type: 'string', description: 'Text to type' }, interval: { type: 'number', description: 'Seconds between keystrokes. Default: 0.02' } }, required: ['text'] } } },
+        { type: 'function', function: { name: 'gui_hotkey', description: 'Press a keyboard shortcut (e.g. ctrl+c, cmd+v, enter, escape, tab). Pass individual key names.', parameters: { type: 'object', properties: { keys: { type: 'array', items: { type: 'string' }, description: 'Keys to press together, e.g. ["ctrl", "c"] or ["enter"]' } }, required: ['keys'] } } },
+        { type: 'function', function: { name: 'gui_scroll', description: 'Scroll at screen coordinates. Positive clicks = up, negative = down.', parameters: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, clicks: { type: 'number', description: 'Scroll amount. Positive=up, negative=down.' } }, required: ['x', 'y', 'clicks'] } } },
+        { type: 'function', function: { name: 'gui_drag', description: 'Drag from one screen position to another.', parameters: { type: 'object', properties: { fromX: { type: 'number' }, fromY: { type: 'number' }, toX: { type: 'number' }, toY: { type: 'number' }, duration: { type: 'number', description: 'Drag duration in seconds. Default: 0.3' }, button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Default: left' } }, required: ['fromX', 'fromY', 'toX', 'toY'] } } },
+        { type: 'function', function: { name: 'gui_locate', description: 'Find where a given image appears on screen. Returns the center (x, y) coordinates if found.', parameters: { type: 'object', properties: { image_base64: { type: 'string', description: 'Base64-encoded PNG image of the UI element to locate on screen.' }, confidence: { type: 'number', description: 'Match confidence 0-1. Default: 0.8' } }, required: ['image_base64'] } } },
+      ];
+      mcpTools = [...(mcpTools || []), ...guiToolDefs];
+
       const extToolDefs = [
         { type: 'function', function: { name: 'browser_ext_list_tabs', description: 'List open tabs in the user\'s Chrome/Edge browser. ONLY use this when the user explicitly asks about a browser tab, web page, or website — never for general tasks.', parameters: { type: 'object', properties: {}, required: [] } } },
         { type: 'function', function: { name: 'browser_ext_extract_page', description: 'Extract text content from a browser tab. ONLY use when the task explicitly requires reading content from a specific web page the user has open. Do not use for general information retrieval or tasks unrelated to the browser.', parameters: { type: 'object', properties: { tabId: { type: 'number', description: 'Optional tab ID to extract from (from browser_ext_list_tabs). Omit for active tab.' } }, required: [] } } },
@@ -1254,28 +1297,91 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
                 onWaitingForInput: (killId, hint) => send({ type: 'tool_waiting_for_input', killId, hint }),
               } : undefined;
               result = await agentToolHandlers.get(toolName)(args, onOutput, shellOpts);
+            } else if (toolName === 'gui_screenshot') {
+              chatLog('[chat] GUI tool: screenshot');
+              const b64 = await _guiScreenshot();
+              result = 'Desktop screenshot captured. The image is included in the conversation.';
+              allMessages.push({ role: 'user', content: [
+                { type: 'text', text: '[Desktop screenshot via PyAutoGUI]' },
+                { type: 'image_url', image_url: { url: 'data:image/png;base64,' + b64, detail: 'high' } }
+              ] });
+            } else if (toolName === 'gui_click') {
+              chatLog('[chat] GUI tool: click %d,%d', args.x, args.y);
+              const btn = args.button || 'left';
+              const clicks = args.clicks || 1;
+              await _runPyGui(`pyautogui.click(${args.x}, ${args.y}, clicks=${clicks}, button='${btn}')`);
+              result = `Clicked (${args.x}, ${args.y}) with ${btn} button × ${clicks}.`;
+            } else if (toolName === 'gui_move') {
+              chatLog('[chat] GUI tool: move %d,%d', args.x, args.y);
+              const dur = args.duration ?? 0.2;
+              await _runPyGui(`pyautogui.moveTo(${args.x}, ${args.y}, duration=${dur})`);
+              result = `Mouse moved to (${args.x}, ${args.y}).`;
+            } else if (toolName === 'gui_type') {
+              chatLog('[chat] GUI tool: type');
+              const interval = args.interval ?? 0.02;
+              // Use pyautogui.write for printable ASCII, fallback to typewrite
+              const escaped = String(args.text).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+              await _runPyGui(`pyautogui.typewrite('${escaped}', interval=${interval})`);
+              result = `Typed ${args.text.length} characters.`;
+            } else if (toolName === 'gui_hotkey') {
+              chatLog('[chat] GUI tool: hotkey %s', (args.keys || []).join('+'));
+              const keyArgs = (args.keys || []).map(k => `'${String(k).replace(/'/g, "\'")}' `).join(', ');
+              await _runPyGui(`pyautogui.hotkey(${keyArgs})`);
+              result = `Pressed hotkey: ${(args.keys || []).join('+')} .`;
+            } else if (toolName === 'gui_scroll') {
+              chatLog('[chat] GUI tool: scroll %d,%d clicks=%d', args.x, args.y, args.clicks);
+              await _runPyGui(`pyautogui.scroll(${args.clicks}, x=${args.x}, y=${args.y})`);
+              result = `Scrolled ${args.clicks} clicks at (${args.x}, ${args.y}).`;
+            } else if (toolName === 'gui_drag') {
+              chatLog('[chat] GUI tool: drag');
+              const dur = args.duration ?? 0.3;
+              const btn = args.button || 'left';
+              await _runPyGui(`pyautogui.moveTo(${args.fromX}, ${args.fromY}, duration=0.1)\npyautogui.dragTo(${args.toX}, ${args.toY}, duration=${dur}, button='${btn}')`);
+              result = `Dragged from (${args.fromX}, ${args.fromY}) to (${args.toX}, ${args.toY}).`;
+            } else if (toolName === 'gui_locate') {
+              chatLog('[chat] GUI tool: locate');
+              const conf = args.confidence ?? 0.8;
+              const out = await _runPyGui(
+                'import base64, tempfile, os\n' +
+                `data = base64.b64decode("${args.image_base64}")\n` +
+                'tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)\n' +
+                'tmp.write(data)\ntmp.close()\n' +
+                `pt = pyautogui.locateCenterOnScreen(tmp.name, confidence=${conf})\n` +
+                'os.unlink(tmp.name)\n' +
+                'print(pt.x, pt.y) if pt else print("not_found")'
+              );
+              if (out === 'not_found') {
+                result = 'Element not found on screen.';
+              } else {
+                const [lx, ly] = out.split(' ').map(Number);
+                result = `Element found at (${lx}, ${ly}).`;
+              }
             } else if (toolName === 'browser_ext_list_tabs') {
               chatLog('[chat] Browser ext tool: list-tabs');
               const r = await extCommand('tab:list', {}, null, 10000);
               result = JSON.stringify(r);
             } else if (toolName === 'browser_ext_extract_page') {
               chatLog('[chat] Browser ext tool: extract-page');
-              const r = await extCommand('extract', {}, args.tabId || null, 15000);
-              result = JSON.stringify(r);
+              const targetTabId = args.tabId || null;
+              extSend({ type: 'tab:working', tabId: targetTabId });
+              try { const r = await extCommand('extract', {}, targetTabId, 15000); result = JSON.stringify(r); }
+              finally { extSend({ type: 'tab:working', tabId: null }); }
             } else if (toolName === 'browser_ext_screenshot') {
               chatLog('[chat] Browser ext tool: screenshot');
-              const r = await extCommand('snapshot', {}, args.tabId || null, 15000);
-              if (r.ok && r.screenshot) {
-                // Return as a vision-compatible description + inject the image into context
-                result = 'Screenshot captured from ' + (r.url || 'active tab') + '. The image is included in the conversation.';
-                // Add a user message with the image so the model can see it
-                allMessages.push({ role: 'user', content: [
-                  { type: 'text', text: '[Browser extension screenshot of ' + (r.url || 'active tab') + ']' },
-                  { type: 'image_url', image_url: { url: 'data:' + (r.mime || 'image/png') + ';base64,' + r.screenshot, detail: 'high' } }
-                ] });
-              } else {
-                result = 'Screenshot failed: ' + (r.error || 'unknown error');
-              }
+              const targetTabId = args.tabId || null;
+              extSend({ type: 'tab:working', tabId: targetTabId });
+              try {
+                const r = await extCommand('snapshot', {}, targetTabId, 15000);
+                if (r.ok && r.screenshot) {
+                  result = 'Screenshot captured from ' + (r.url || 'active tab') + '. The image is included in the conversation.';
+                  allMessages.push({ role: 'user', content: [
+                    { type: 'text', text: '[Browser extension screenshot of ' + (r.url || 'active tab') + ']' },
+                    { type: 'image_url', image_url: { url: 'data:' + (r.mime || 'image/png') + ';base64,' + r.screenshot, detail: 'high' } }
+                  ] });
+                } else {
+                  result = 'Screenshot failed: ' + (r.error || 'unknown error');
+                }
+              } finally { extSend({ type: 'tab:working', tabId: null }); }
             } else if (toolName === 'browser_ext_tab_info') {
               chatLog('[chat] Browser ext tool: tab-info');
               const r = await extCommand('tab:info', {}, null, 10000);
@@ -5454,6 +5560,16 @@ startScheduler((task) => {
   runTask(task.id, { trigger: 'scheduler' }).catch(err => {
     console.error('[tasks] Scheduled run failed:', err.message);
   });
+});
+
+// Push browser-extension notifications when tasks complete or fail
+subscribeTask('*', (evt) => {
+  if (!_extSockets.size) return;
+  if (evt.event === 'completed') {
+    extSend({ type: 'notify', id: evt.taskId, title: 'Task completed', message: evt.summary || 'Task finished successfully.' });
+  } else if (evt.event === 'failed') {
+    extSend({ type: 'notify', id: evt.taskId, title: 'Task failed', message: evt.error || 'Task did not complete.' });
+  }
 });
 
 // ── macOS Permissions check ───────────────────────────────────────────────

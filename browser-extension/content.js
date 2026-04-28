@@ -36,6 +36,8 @@
           case 'eval':          result = await doEval(msg); break;
           case 'get-dims':      result = getDims(); break;
           case 'stitch-strips': result = await doStitchStrips(msg); break;
+          case 'picker:start':  result = startPicker(); break;
+          case 'picker:stop':   result = stopPicker();  break;
           default:              result = { error: 'Unknown action: ' + msg.action };
         }
         reply(result);
@@ -554,6 +556,105 @@
       }
     }
     return null;
+  }
+
+  // ── Element Picker ──────────────────────────────────────────────────────
+  // Visual crosshair picker: hover highlights elements, click captures them.
+
+  let _pickerActive = false;
+  let _pickerOverlay = null;
+  let _pickerLabel   = null;
+  let _pickerMoveFn  = null;
+  let _pickerClickFn = null;
+  let _pickerKeyFn   = null;
+
+  function startPicker() {
+    if (_pickerActive) return { ok: true };
+    _pickerActive = true;
+
+    // Highlight box
+    _pickerOverlay = document.createElement('div');
+    _pickerOverlay.setAttribute('id', '__fauna_picker_hl__');
+    Object.assign(_pickerOverlay.style, {
+      position: 'fixed', pointerEvents: 'none', zIndex: '2147483646',
+      border: '2px solid #6366f1', background: 'rgba(99,102,241,0.10)',
+      borderRadius: '3px', boxSizing: 'border-box', display: 'none',
+      transition: 'top 0.04s,left 0.04s,width 0.04s,height 0.04s',
+    });
+    document.documentElement.appendChild(_pickerOverlay);
+
+    // Tag label
+    _pickerLabel = document.createElement('div');
+    _pickerLabel.setAttribute('id', '__fauna_picker_lbl__');
+    Object.assign(_pickerLabel.style, {
+      position: 'fixed', pointerEvents: 'none', zIndex: '2147483647',
+      background: '#6366f1', color: '#fff', fontSize: '11px',
+      fontFamily: 'ui-monospace,monospace', padding: '2px 7px',
+      borderRadius: '3px', display: 'none',
+      maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    });
+    document.documentElement.appendChild(_pickerLabel);
+
+    _pickerMoveFn = (e) => {
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      if (!el || el === _pickerOverlay || el === _pickerLabel) return;
+      const r = el.getBoundingClientRect();
+      Object.assign(_pickerOverlay.style, {
+        display: 'block', left: r.left + 'px', top: r.top + 'px',
+        width: r.width + 'px', height: r.height + 'px',
+      });
+      const sel = uniqueSelector(el);
+      _pickerLabel.textContent = el.tagName.toLowerCase() + (sel.length < 50 ? '  ' + sel : '');
+      const lx = Math.min(e.clientX, window.innerWidth - 330);
+      const ly = r.top > 24 ? r.top - 22 : r.bottom + 4;
+      Object.assign(_pickerLabel.style, { display: 'block', left: lx + 'px', top: ly + 'px' });
+    };
+
+    _pickerClickFn = (e) => {
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      if (!el || el === _pickerOverlay || el === _pickerLabel) return;
+      e.preventDefault(); e.stopPropagation();
+      stopPicker();
+      const r = el.getBoundingClientRect();
+      const attrs = {};
+      for (const a of el.attributes) attrs[a.name] = a.value;
+      const data = {
+        selector:   uniqueSelector(el),
+        tag:        el.tagName.toLowerCase(),
+        id:         el.id || null,
+        classes:    Array.from(el.classList).join(' '),
+        text:       (el.innerText || el.textContent || '').trim().slice(0, 800),
+        html:       el.outerHTML.slice(0, 6000),
+        rect:       { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) },
+        attributes: attrs,
+        url:        location.href,
+        pageTitle:  document.title,
+      };
+      chrome.runtime.sendMessage({ type: 'picker:selected', data });
+    };
+
+    _pickerKeyFn = (e) => {
+      if (e.key === 'Escape') { stopPicker(); chrome.runtime.sendMessage({ type: 'picker:cancelled' }); }
+    };
+
+    document.addEventListener('mousemove', _pickerMoveFn,  true);
+    document.addEventListener('click',     _pickerClickFn, true);
+    document.addEventListener('keydown',   _pickerKeyFn,   true);
+    document.documentElement.style.cursor = 'crosshair';
+    return { ok: true };
+  }
+
+  function stopPicker() {
+    if (!_pickerActive) return { ok: true };
+    _pickerActive = false;
+    _pickerOverlay?.remove(); _pickerOverlay = null;
+    _pickerLabel?.remove();   _pickerLabel   = null;
+    if (_pickerMoveFn)  document.removeEventListener('mousemove', _pickerMoveFn,  true);
+    if (_pickerClickFn) document.removeEventListener('click',     _pickerClickFn, true);
+    if (_pickerKeyFn)   document.removeEventListener('keydown',   _pickerKeyFn,   true);
+    _pickerMoveFn = _pickerClickFn = _pickerKeyFn = null;
+    document.documentElement.style.cursor = '';
+    return { ok: true };
   }
 
 })();
