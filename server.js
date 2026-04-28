@@ -647,6 +647,7 @@ If the user asks you to look at or interact with their Chrome/Edge browser, you 
 
 ### Rules
 - **browser-ext-action is ONLY for interacting with web pages in Chrome/Edge.** Do NOT use it for app-internal tasks like updating agent instructions, editing system prompts, modifying settings, or managing agents. For those, use \`patch-agent\` blocks, the \`update-prompt\` API, or \`shell-exec\` blocks — never navigate anywhere.
+- **browser_ext_* tools are ONLY for tasks that explicitly require browser/web page access.** Do NOT call them for general coding, file, math, or conversation tasks. Only invoke when the user's request is clearly about a web page, browser tab, or website content.
 - **Prioritise context the user already pushed** (sent page, snapshot, selection) before requesting more via extract.
 - When the user says "look at my Chrome tab / Edge / browser" — use \`extract\` or \`snapshot\` to pull context in first, then reason about it.
 - Always \`extract\` or \`extract-forms\` before attempting \`fill\` or \`click\` — you need current selectors.
@@ -1111,13 +1112,13 @@ app.post('/api/chat', async (req, res) => {
       console.log(`[chat] Agent "${safeAgentName}" active — ${agentToolDefs.length} tools registered`);
     }
 
-    // ── Browser Extension tools (always available when extension is connected) ──
+    // ── Browser Extension tools (only available when extension is connected) ──
     if (_extSockets.size > 0) {
       const extToolDefs = [
-        { type: 'function', function: { name: 'browser_ext_list_tabs', description: 'List all open tabs in the user\'s Chrome/Edge browser (via the connected Fauna Browser Bridge extension).', parameters: { type: 'object', properties: {}, required: [] } } },
-        { type: 'function', function: { name: 'browser_ext_extract_page', description: 'Extract the text content, links, and headings from the active tab in the user\'s Chrome/Edge browser.', parameters: { type: 'object', properties: { tabId: { type: 'number', description: 'Optional tab ID to extract from (from browser_ext_list_tabs). Omit for active tab.' } }, required: [] } } },
-        { type: 'function', function: { name: 'browser_ext_screenshot', description: 'Take a screenshot of the active tab in the user\'s Chrome/Edge browser.', parameters: { type: 'object', properties: { tabId: { type: 'number', description: 'Optional tab ID. Omit for active tab.' } }, required: [] } } },
-        { type: 'function', function: { name: 'browser_ext_tab_info', description: 'Get the URL and title of the active tab in the user\'s Chrome/Edge browser.', parameters: { type: 'object', properties: {}, required: [] } } },
+        { type: 'function', function: { name: 'browser_ext_list_tabs', description: 'List open tabs in the user\'s Chrome/Edge browser. ONLY use this when the user explicitly asks about a browser tab, web page, or website — never for general tasks.', parameters: { type: 'object', properties: {}, required: [] } } },
+        { type: 'function', function: { name: 'browser_ext_extract_page', description: 'Extract text content from a browser tab. ONLY use when the task explicitly requires reading content from a specific web page the user has open. Do not use for general information retrieval or tasks unrelated to the browser.', parameters: { type: 'object', properties: { tabId: { type: 'number', description: 'Optional tab ID to extract from (from browser_ext_list_tabs). Omit for active tab.' } }, required: [] } } },
+        { type: 'function', function: { name: 'browser_ext_screenshot', description: 'Screenshot the active browser tab. ONLY use when the user explicitly asks you to look at, inspect, or interact with their current browser page.', parameters: { type: 'object', properties: { tabId: { type: 'number', description: 'Optional tab ID. Omit for active tab.' } }, required: [] } } },
+        { type: 'function', function: { name: 'browser_ext_tab_info', description: 'Get the URL and title of the active browser tab. ONLY use when the task specifically involves the user\'s current web page.', parameters: { type: 'object', properties: {}, required: [] } } },
       ];
       mcpTools = [...(mcpTools || []), ...extToolDefs];
     }
