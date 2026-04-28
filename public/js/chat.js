@@ -400,7 +400,7 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
   if (pickerEl) {
     pickerEl.innerHTML =
       '<span class="deleg-mode-chosen"><i class="ti ti-' + (chosenMode === 'sequential' ? 'arrow-down' : 'bolt') + '"></i> ' + (chosenMode === 'sequential' ? 'Sequential' : 'Parallel') + '</span>' +
-      '<button class="deleg-stop-btn" id="' + stopId + '" onclick="window._mcStop_' + mcId + ' && window._mcStop_' + mcId + '()"><i class="ti ti-player-stop-filled"></i> Stop all</button>';
+      '<button class="deleg-stop-btn" id="' + stopId + '" onclick="var _f=window[\'_mcStop_\'+\'' + mcId + '\'];_f&&_f()"><i class="ti ti-player-stop-filled"></i> Stop all</button>';
   }
 
   window['_mcStop_' + mcId] = function() {
