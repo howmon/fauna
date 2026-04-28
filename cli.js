@@ -180,6 +180,7 @@ async function chat(message, { model, agent, userContent } = {}) {
 
   const body = {
     messages,
+    clientContext: 'cli',
     ...(model && { model }),
     ...(agent && { agentName: agent }),
   };
@@ -201,6 +202,15 @@ async function chat(message, { model, agent, userContent } = {}) {
   const decoder = new TextDecoder();
   let buffer = '';
 
+  // Spinner shown while model is generating (replaced by rendered output when done)
+  const SPINNER = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+  let _spinFrame = 0;
+  let _toolLabel = '';
+  const _spinner = setInterval(() => {
+    const label = _toolLabel ? ` ${DM}${_toolLabel}${R}` : '';
+    process.stdout.write(`\r${DM}${SPINNER[_spinFrame++ % SPINNER.length]}${R}${label} `);
+  }, 80);
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -217,21 +227,22 @@ async function chat(message, { model, agent, userContent } = {}) {
         const evt = JSON.parse(data);
         switch (evt.type) {
           case 'content':
-            process.stdout.write(evt.content);
             fullContent += evt.content;
             break;
           case 'tool_call':
+            _toolLabel = evt.name || '';
             if (VERBOSE) process.stdout.write(`\n${DM}⚙ calling ${CY}${evt.name}${R}${DM}…${R}\n`);
             break;
           case 'tool_output':
+            _toolLabel = '';
             if (VERBOSE) {
               const out = (evt.output || '').slice(0, 200);
-              process.stdout.write(`${GY}${out}${R}`);
+              process.stdout.write(`\n${GY}${out}${R}`);
             }
             break;
           case 'tool_waiting_for_input':
-            process.stdout.write(`\n${YL}⏳ Waiting for input: ${evt.hint || 'stdin'}${R}\n`);
-            // In interactive mode the user can type; in pipe mode this is informational
+            clearInterval(_spinner);
+            process.stdout.write(`\r${YL}⏳ ${evt.hint || 'waiting for input'}${R}\n`);
             break;
           case 'error':
             process.stderr.write(`\n${RD}✗ ${evt.error}${R}\n`);
@@ -244,8 +255,17 @@ async function chat(message, { model, agent, userContent } = {}) {
     }
   }
 
+  clearInterval(_spinner);
+  process.stdout.write('\r\x1b[K'); // clear spinner line
+
+  // Strip browser-action / browser-ext-action code blocks from final output
+  const stripped = fullContent.replace(/```browser(-ext)?-action[\s\S]*?```/g, '').trim();
+
+  // Render and print the full response with markdown → ANSI formatting
+  if (stripped) process.stdout.write(renderMarkdown(stripped));
+
   if (fullContent) {
-    process.stdout.write('\n');
+    if (stripped) process.stdout.write('\n');
     // Store the user content (may be multipart with images) in history
     _history.push({ role: 'user', content: userContent || message });
     _history.push({ role: 'assistant', content: fullContent });
@@ -943,6 +963,8 @@ async function main() {
   await printBanner();
 
   try {
+    // Expose chat debug logs to stdout only in verbose mode
+    if (VERBOSE) process.env.FAUNA_CHAT_DEBUG = '1';
     await startServer(PORT);
   } catch (e) {
     if (e.code === 'EADDRINUSE') {

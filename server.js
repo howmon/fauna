@@ -26,6 +26,11 @@ try {
   ({ systemPreferences, desktopCapturer, powerSaveBlocker } = _require('electron'));
 } catch (_) {}
 
+// ── Chat debug logging (only when FAUNA_CHAT_DEBUG=1) ─────────────────────
+// Suppressed by default so [chat] lines don't pollute CLI stdout.
+const chatLog  = (...args) => { if (process.env.FAUNA_CHAT_DEBUG) console.log(...args); };
+const chatWarn = (...args) => { if (process.env.FAUNA_CHAT_DEBUG) console.warn(...args); };
+
 // Power-save blocker — keeps screen/CPU awake while any chat request is active.
 let _psBlockerId = null;
 let _psActiveCount = 0;
@@ -996,7 +1001,7 @@ app.post('/api/chat', async (req, res) => {
   res.on('finish', _psRelease);
   res.on('close',  _psRelease);
   const { messages = [], model = 'claude-sonnet-4.6', systemPrompt = '', useFigmaMCP = false, contextSummary = '',
-          thinkingBudget = 'high', maxContextTurns = 20, agentName = null } = req.body;
+          thinkingBudget = 'high', maxContextTurns = 20, agentName = null, clientContext = 'app' } = req.body;
 
   // Track client disconnect so the tool loop can bail early
   let clientAborted = false;
@@ -1016,9 +1021,12 @@ app.post('/api/chat', async (req, res) => {
     const allMessages = [];
 
     // Build system prompt — append context summary and browser context
+    const isCLI = clientContext === 'cli';
+    const cliHint = isCLI ? `\n\n## Output Format
+You are running in a terminal CLI. Respond in plain, readable text. Do NOT use markdown headers (###), horizontal rules (---), or emojis. Use plain bullet points (- or *) only when a list genuinely helps. Be concise and direct. Never emit browser-action or browser-ext-action code blocks — those do not work in the terminal.` : '';
     const fullSystem = [
-      systemPrompt.trim(),
-      BROWSER_BUILD_CONTEXT,
+      systemPrompt.trim() + cliHint,
+      isCLI ? '' : BROWSER_BUILD_CONTEXT,
       contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : ''
     ].filter(Boolean).join('\n');
     if (fullSystem) allMessages.push({ role: 'system', content: fullSystem });
@@ -1061,7 +1069,7 @@ app.post('/api/chat', async (req, res) => {
     }
     const trimmed = first ? [first, ...recent] : recent;
     allMessages.push(...trimmed);
-    console.log(`[chat] context: ${trimmed.length}/${messages.length} msgs, ~${charCount} chars (sys: ${systemPrompt.length}ch)`);
+    chatLog(`[chat] context: ${trimmed.length}/${messages.length} msgs, ~${charCount} chars (sys: ${systemPrompt.length}ch)`);
 
     // Fetch Figma MCP tools and inject layout knowledge if requested
     let mcpTools;
@@ -1109,11 +1117,11 @@ app.post('/api/chat', async (req, res) => {
         try { await startAgentMCPServers(effectiveManifest, safeAgentName); } catch (_) {}
       }
 
-      console.log(`[chat] Agent "${safeAgentName}" active — ${agentToolDefs.length} tools registered`);
+      chatLog(`[chat] Agent "${safeAgentName}" active — ${agentToolDefs.length} tools registered`);
     }
 
-    // ── Browser Extension tools (only available when extension is connected) ──
-    if (_extSockets.size > 0) {
+    // ── Browser Extension tools (only available when extension is connected, never in CLI) ──
+    if (!isCLI && _extSockets.size > 0) {
       const extToolDefs = [
         { type: 'function', function: { name: 'browser_ext_list_tabs', description: 'List open tabs in the user\'s Chrome/Edge browser. ONLY use this when the user explicitly asks about a browser tab, web page, or website — never for general tasks.', parameters: { type: 'object', properties: {}, required: [] } } },
         { type: 'function', function: { name: 'browser_ext_extract_page', description: 'Extract text content from a browser tab. ONLY use when the task explicitly requires reading content from a specific web page the user has open. Do not use for general information retrieval or tasks unrelated to the browser.', parameters: { type: 'object', properties: { tabId: { type: 'number', description: 'Optional tab ID to extract from (from browser_ext_list_tabs). Omit for active tab.' } }, required: [] } } },
@@ -1169,7 +1177,7 @@ app.post('/api/chat', async (req, res) => {
           stream = await client.chat.completions.create(params);
         // Auto-recover: if thinking param is rejected, retry without it
         } else if (apiErr.message?.includes('thinking') && params.thinking) {
-          console.log('[chat] thinking param rejected for %s, disabling and retrying', model);
+          chatLog('[chat] thinking param rejected for %s, disabling and retrying', model);
           _thinkingDisabledModels.add(model);
           delete params.thinking;
           stream = await client.chat.completions.create(params);
@@ -1236,7 +1244,7 @@ app.post('/api/chat', async (req, res) => {
 
             // Route to agent tool handler if available, then browser ext tools, otherwise Figma MCP
             if (agentToolHandlers?.has(toolName)) {
-              console.log(`[chat] Agent tool: ${toolName}`);
+              chatLog(`[chat] Agent tool: ${toolName}`);
               const onOutput = toolName === 'agent_shell_exec'
                 ? (chunk) => send({ type: 'tool_output', name: toolName, output: chunk })
                 : undefined;
@@ -1247,15 +1255,15 @@ app.post('/api/chat', async (req, res) => {
               } : undefined;
               result = await agentToolHandlers.get(toolName)(args, onOutput, shellOpts);
             } else if (toolName === 'browser_ext_list_tabs') {
-              console.log('[chat] Browser ext tool: list-tabs');
+              chatLog('[chat] Browser ext tool: list-tabs');
               const r = await extCommand('tab:list', {}, null, 10000);
               result = JSON.stringify(r);
             } else if (toolName === 'browser_ext_extract_page') {
-              console.log('[chat] Browser ext tool: extract-page');
+              chatLog('[chat] Browser ext tool: extract-page');
               const r = await extCommand('extract', {}, args.tabId || null, 15000);
               result = JSON.stringify(r);
             } else if (toolName === 'browser_ext_screenshot') {
-              console.log('[chat] Browser ext tool: screenshot');
+              chatLog('[chat] Browser ext tool: screenshot');
               const r = await extCommand('snapshot', {}, args.tabId || null, 15000);
               if (r.ok && r.screenshot) {
                 // Return as a vision-compatible description + inject the image into context
@@ -1269,7 +1277,7 @@ app.post('/api/chat', async (req, res) => {
                 result = 'Screenshot failed: ' + (r.error || 'unknown error');
               }
             } else if (toolName === 'browser_ext_tab_info') {
-              console.log('[chat] Browser ext tool: tab-info');
+              chatLog('[chat] Browser ext tool: tab-info');
               const r = await extCommand('tab:info', {}, null, 10000);
               result = JSON.stringify(r);
             } else {
@@ -1296,21 +1304,21 @@ app.post('/api/chat', async (req, res) => {
             figmaLog('✗ ' + toolName + ': ' + e.message, 'err');
           }
         }
-        console.log('[chat] tool pass done — toolCallCount=%d continueLoop=%s', toolCallCount, continueLoop);
+        chatLog('[chat] tool pass done — toolCallCount=%d continueLoop=%s', toolCallCount, continueLoop);
         if (continueLoop) { /* loop continues to get next AI response */ }
         else { send({ type: 'done', finish_reason: 'tool_limit' }); }
       } else if (finishReason === 'length' && continueCount < MAX_CONTINUES) {
         // Model hit token limit mid-output — auto-continue so the response finishes seamlessly
         continueCount++;
-        console.log('[chat] finish_reason=length — auto-continuing (' + assistantText.length + ' chars so far, attempt ' + continueCount + '/' + MAX_CONTINUES + ')');
+        chatLog('[chat] finish_reason=length — auto-continuing (' + assistantText.length + ' chars so far, attempt ' + continueCount + '/' + MAX_CONTINUES + ')');
         allMessages.push({ role: 'assistant', content: assistantText });
         allMessages.push({ role: 'user', content: 'Your previous response was cut off mid-output. Continue EXACTLY where you left off — do NOT repeat anything already written. Do NOT narrate or explain, just output the remaining content.' });
         // keep continueLoop = true
       } else {
         if (toolCallCount > 0 && !assistantText && finishReason !== 'stop' && finishReason !== 'end_turn') {
-          console.warn('[chat] Empty response after tool call — finish_reason=%s pendingCalls=%d', finishReason, pendingCalls.length);
+          chatWarn('[chat] Empty response after tool call — finish_reason=%s pendingCalls=%d', finishReason, pendingCalls.length);
         }
-        console.log('[chat] loop end — finish_reason=%s assistantText=%dch toolCalls=%d', finishReason, assistantText.length, toolCallCount);
+        chatLog('[chat] loop end — finish_reason=%s assistantText=%dch toolCalls=%d', finishReason, assistantText.length, toolCallCount);
         send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null });
         continueLoop = false;
       }
@@ -1318,7 +1326,7 @@ app.post('/api/chat', async (req, res) => {
   } catch (err) {
     // Auto-recover: if thinking param caused a stream error, disable and retry
     if (err.message?.includes('thinking') && !res.writableEnded) {
-      console.log('[chat] thinking param caused stream error for %s, disabling and retrying', model);
+      chatLog('[chat] thinking param caused stream error for %s, disabling and retrying', model);
       _thinkingDisabledModels.add(model);
       try {
         const retryParams = { model, messages: allMessages, stream: true, stream_options: { include_usage: true } };
