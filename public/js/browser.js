@@ -1524,7 +1524,12 @@ async function _loadExtTabs() {
     }
 
     var multiBrowser = results.length > 1;
-    var html = '';
+    var html = '<div class="ext-menu-search-wrap">' +
+      '<i class="ti ti-search" style="font-size:11px;color:var(--text-muted);flex-shrink:0"></i>' +
+      '<input id="ext-tab-search" type="text" placeholder="Filter tabs…" autocomplete="off" ' +
+        'style="flex:1;background:none;border:none;outline:none;font-size:12px;color:var(--text);padding:0" ' +
+        'oninput="_filterExtTabs(this.value)">' +
+    '</div>';
 
     results.forEach(function(res) {
       if (!res.tabs.length) return;
@@ -1555,10 +1560,35 @@ async function _loadExtTabs() {
     });
 
     menu.innerHTML = html;
+    // Autofocus search and keep focus inside menu (prevent outside-click from firing)
+    setTimeout(function() {
+      var inp = document.getElementById('ext-tab-search');
+      if (inp) inp.focus();
+    }, 0);
   } catch (e) {
     menu.innerHTML = '<div class="ext-menu-header">Browser Tabs</div>' +
       '<div class="ext-menu-empty" style="color:var(--error)">Error: ' + escHtml(e.message) + '</div>';
   }
+}
+
+function _filterExtTabs(query) {
+  var q = query.trim().toLowerCase();
+  var items = document.querySelectorAll('#ext-tab-menu .ext-tab-item');
+  var headers = document.querySelectorAll('#ext-tab-menu .ext-menu-header');
+  items.forEach(function(item) {
+    var text = item.textContent.toLowerCase();
+    item.style.display = (!q || text.includes(q)) ? '' : 'none';
+  });
+  // Hide section headers when all their tabs are hidden
+  headers.forEach(function(header) {
+    var next = header.nextElementSibling;
+    var hasVisible = false;
+    while (next && next.classList.contains('ext-tab-item')) {
+      if (next.style.display !== 'none') hasVisible = true;
+      next = next.nextElementSibling;
+    }
+    header.style.display = hasVisible ? '' : 'none';
+  });
 }
 
 async function extGrabPage(tabId, browser) {

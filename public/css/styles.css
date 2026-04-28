@@ -695,6 +695,13 @@ button .ti, label .ti { pointer-events: none; }
   padding: 6px 12px; font-size: 10px; font-weight: 700; text-transform: uppercase;
   letter-spacing: .06em; color: var(--text-muted);
 }
+#ext-tab-menu .ext-menu-search-wrap {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px; margin: 4px 8px 2px;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 6px;
+}
+#ext-tab-menu .ext-menu-search-wrap input::placeholder { color: var(--text-muted); }
 #ext-tab-menu .ext-menu-empty {
   padding: 14px 12px; color: var(--text-dim); text-align: center; font-size: 11.5px;
 }
