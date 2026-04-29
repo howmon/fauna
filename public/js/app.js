@@ -41,6 +41,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Load projects and render the switcher
   if (typeof loadProjects === 'function') await loadProjects();
   if (typeof renderProjectSwitcher === 'function') renderProjectSwitcher();
+  // Start global port polling (shows active processes count in topbar)
+  if (typeof _startPortsPolling === 'function') _startPortsPolling();
   checkAuth();
   renderConvList();
   document.getElementById('sys-prompt-input').value = state.systemPrompt;

@@ -137,6 +137,7 @@
       <span id="agent-badge" style="display:none !important" onclick="deactivateAgent(getConv(state.currentId))"></span>
       <select id="model-select" onchange="onModelChange(this.value)"></select>
       <button class="topbar-btn" onclick="clearConversation()" title="Clear messages"><i class="ti ti-trash"></i> Clear</button>
+      <button class="topbar-btn" id="topbar-ports-btn" onclick="openPortsDashboard()" title="Active ports" style="display:none"><i class="ti ti-server"></i> <span id="topbar-ports-count">0</span></button>
       <button class="topbar-btn" onclick="toggleDebugLog()" id="debug-btn" title="Debug log"><i class="ti ti-bug"></i></button>
       <button class="topbar-btn voice-mic-btn" id="voice-mic-btn" data-voice-state="off" title="Voice control — click to toggle, say wake word to activate"><i class="ti ti-microphone-off"></i></button>
       <button class="topbar-btn topbar-account-btn" id="topbar-account-btn" onclick="openStoreAccount()" title="Agent Store Account"><i class="ti ti-user-circle"></i> <span id="topbar-account-label">Account</span></button>

@@ -5774,6 +5774,231 @@ app.put('/api/projects/:id/sources/:srcId/file', (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+// ── Project Process Runner ────────────────────────────────────────────────
+// In-memory map of active run processes: runId → RunRecord
+const _runs = new Map();
+// SSE subscribers: runId → Set<res>
+const _runLogSubs = new Map();
+
+function _runUid() { return 'run-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7); }
+
+function _getSourceRoot(projectId, srcId) {
+  const p = getProject(projectId);
+  if (!p) throw new Error('Project not found');
+  const src = p.sources.find(s => s.id === srcId);
+  if (!src) throw new Error('Source not found');
+  const CONFIG_DIR_R = path.join(os.homedir(), '.config', 'fauna');
+  const root = src.type === 'local'
+    ? src.path
+    : path.join(CONFIG_DIR_R, 'projects', projectId, 'sources', srcId);
+  if (!root || !fs.existsSync(root)) throw new Error('Source directory not available');
+  return { root, src };
+}
+
+function _detectRunCommands(rootDir) {
+  const candidates = [];
+  const pkgPath = path.join(rootDir, 'package.json');
+  if (fs.existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      const scripts = pkg.scripts || {};
+      const priority = ['dev', 'start', 'serve', 'preview', 'develop'];
+      for (const k of priority) {
+        if (scripts[k]) candidates.push({ label: `npm run ${k}`, cmd: `npm run ${k}`, detected: true });
+      }
+      for (const [k, v] of Object.entries(scripts)) {
+        if (!priority.includes(k)) candidates.push({ label: `npm run ${k}`, cmd: `npm run ${k}`, detected: false });
+      }
+    } catch (_) {}
+  }
+  // Python
+  if (fs.existsSync(path.join(rootDir, 'manage.py')))
+    candidates.push({ label: 'python manage.py runserver', cmd: 'python manage.py runserver', detected: true });
+  if (fs.existsSync(path.join(rootDir, 'app.py')))
+    candidates.push({ label: 'python app.py', cmd: 'python app.py', detected: true });
+  if (fs.existsSync(path.join(rootDir, 'main.py')))
+    candidates.push({ label: 'python main.py', cmd: 'python main.py', detected: true });
+  // Ruby
+  if (fs.existsSync(path.join(rootDir, 'Gemfile')))
+    candidates.push({ label: 'bundle exec rails server', cmd: 'bundle exec rails server', detected: true });
+  // Go
+  if (fs.existsSync(path.join(rootDir, 'go.mod')))
+    candidates.push({ label: 'go run .', cmd: 'go run .', detected: true });
+  // Cargo (Rust)
+  if (fs.existsSync(path.join(rootDir, 'Cargo.toml')))
+    candidates.push({ label: 'cargo run', cmd: 'cargo run', detected: true });
+  return candidates;
+}
+
+function _pushRunLog(runId, line) {
+  const rec = _runs.get(runId);
+  if (!rec) return;
+  rec.logs.push(line);
+  if (rec.logs.length > 500) rec.logs.shift();
+  const subs = _runLogSubs.get(runId);
+  if (subs && subs.size) {
+    const payload = 'data: ' + JSON.stringify({ line }) + '\n\n';
+    for (const r of subs) { try { r.write(payload); } catch (_) {} }
+  }
+}
+
+function _broadcastRunStatus(runId) {
+  const rec = _runs.get(runId);
+  if (!rec) return;
+  const subs = _runLogSubs.get(runId);
+  if (subs && subs.size) {
+    const payload = 'data: ' + JSON.stringify({ status: rec.status, port: rec.port }) + '\n\n';
+    for (const r of subs) { try { r.write(payload); } catch (_) {} }
+  }
+}
+
+// Detect commands for a source
+app.get('/api/projects/:id/sources/:srcId/run-commands', (req, res) => {
+  try {
+    const { root } = _getSourceRoot(req.params.id, req.params.srcId);
+    res.json(_detectRunCommands(root));
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Start a process for a source
+app.post('/api/projects/:id/sources/:srcId/run', (req, res) => {
+  try {
+    const { cmd, name, port } = req.body;
+    if (!cmd || typeof cmd !== 'string') return res.status(400).json({ error: 'cmd required' });
+    const { root, src } = _getSourceRoot(req.params.id, req.params.srcId);
+    const projectId = req.params.id;
+    const srcId     = req.params.srcId;
+
+    // Port conflict check
+    if (port) {
+      for (const [, rec] of _runs) {
+        if (rec.port === Number(port) && rec.status === 'running') {
+          return res.status(409).json({
+            error: `Port ${port} is already used by "${rec.name}" in project ${rec.projectId}`,
+            conflictRunId: rec.runId
+          });
+        }
+      }
+    }
+
+    const runId = _runUid();
+    const record = {
+      runId, projectId, srcId,
+      srcName: src.name,
+      name: name || cmd.split(' ')[0],
+      cmd,
+      port: port ? Number(port) : null,
+      status: 'starting',
+      pid: null,
+      logs: [],
+      startedAt: new Date().toISOString(),
+      stoppedAt: null,
+      process: null,
+    };
+    _runs.set(runId, record);
+
+    // Spawn with shell so npm/npx etc. work properly
+    const child = _spawn('sh', ['-c', cmd], {
+      cwd: root,
+      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
+      detached: false,
+    });
+    record.process = child;
+    record.pid     = child.pid;
+    record.status  = 'running';
+
+    const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
+
+    child.stdout.on('data', (d) => {
+      stripAnsi(d.toString()).split('\n').forEach(l => { if (l) _pushRunLog(runId, l); });
+    });
+    child.stderr.on('data', (d) => {
+      stripAnsi(d.toString()).split('\n').forEach(l => { if (l) _pushRunLog(runId, '[stderr] ' + l); });
+    });
+    child.on('close', (code) => {
+      const rec = _runs.get(runId);
+      if (rec) {
+        rec.status = code === 0 ? 'stopped' : 'exited';
+        rec.stoppedAt = new Date().toISOString();
+        rec.process = null;
+        _pushRunLog(runId, `[process exited with code ${code}]`);
+        _broadcastRunStatus(runId);
+      }
+    });
+    child.on('error', (err) => {
+      const rec = _runs.get(runId);
+      if (rec) { rec.status = 'error'; _pushRunLog(runId, '[error] ' + err.message); _broadcastRunStatus(runId); }
+    });
+
+    res.json({ runId, pid: child.pid, status: 'running' });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// List all active runs for a project
+app.get('/api/projects/:id/runs', (req, res) => {
+  const projectId = req.params.id;
+  const list = [];
+  for (const [, rec] of _runs) {
+    if (rec.projectId === projectId) {
+      list.push({ runId: rec.runId, srcId: rec.srcId, srcName: rec.srcName,
+        name: rec.name, cmd: rec.cmd, port: rec.port, status: rec.status,
+        pid: rec.pid, startedAt: rec.startedAt, stoppedAt: rec.stoppedAt });
+    }
+  }
+  res.json(list);
+});
+
+// List all runs across all projects (for global ports dashboard)
+app.get('/api/runs', (req, res) => {
+  const list = [];
+  for (const [, rec] of _runs) {
+    list.push({ runId: rec.runId, projectId: rec.projectId, srcId: rec.srcId,
+      srcName: rec.srcName, name: rec.name, cmd: rec.cmd, port: rec.port,
+      status: rec.status, pid: rec.pid, startedAt: rec.startedAt, stoppedAt: rec.stoppedAt });
+  }
+  res.json(list);
+});
+
+// Kill a run
+app.delete('/api/projects/:id/runs/:runId', (req, res) => {
+  const rec = _runs.get(req.params.runId);
+  if (!rec || rec.projectId !== req.params.id) return res.status(404).json({ error: 'Run not found' });
+  if (rec.process) {
+    try {
+      // Kill the entire process group on POSIX; fallback to direct kill
+      process.kill(-rec.process.pid, 'SIGTERM');
+    } catch (_) {
+      try { rec.process.kill('SIGTERM'); } catch (__) {}
+    }
+  }
+  rec.status = 'stopped';
+  rec.stoppedAt = new Date().toISOString();
+  rec.process = null;
+  _broadcastRunStatus(rec.runId);
+  _pushRunLog(rec.runId, '[stopped by user]');
+  res.json({ ok: true });
+});
+
+// SSE log stream for a run
+app.get('/api/projects/:id/runs/:runId/logs', (req, res) => {
+  const rec = _runs.get(req.params.runId);
+  if (!rec || rec.projectId !== req.params.id) return res.status(404).json({ error: 'Run not found' });
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+  // Replay buffer
+  for (const line of rec.logs) {
+    res.write('data: ' + JSON.stringify({ line }) + '\n\n');
+  }
+  // Send current status
+  res.write('data: ' + JSON.stringify({ status: rec.status, port: rec.port }) + '\n\n');
+  // Subscribe
+  if (!_runLogSubs.has(rec.runId)) _runLogSubs.set(rec.runId, new Set());
+  _runLogSubs.get(rec.runId).add(res);
+  req.on('close', () => {
+    const subs = _runLogSubs.get(rec.runId);
+    if (subs) { subs.delete(res); if (!subs.size) _runLogSubs.delete(rec.runId); }
+  });
+});
+
 // Stream raw bytes — used by the frontend to render images, video, audio, PDF
 app.get('/api/projects/:id/sources/:srcId/raw', (req, res) => {
   try {

@@ -160,6 +160,7 @@ function _renderProjectHub(proj) {
     { id: 'files',    icon: 'ti-folder',       label: 'Files' },
     { id: 'contexts', icon: 'ti-file-text',     label: 'Contexts' },
     { id: 'sources',  icon: 'ti-source-code',   label: 'Sources' },
+    { id: 'run',      icon: 'ti-player-play',   label: 'Run' },
     { id: 'convs',    icon: 'ti-messages',      label: 'Conversations' },
     { id: 'tasks',    icon: 'ti-checklist',     label: 'Tasks' },
     { id: 'settings', icon: 'ti-settings',      label: 'Settings' },
@@ -180,6 +181,10 @@ function switchProjectHubTab(tab) {
   // Dispose Monaco if leaving the files tab
   if (state.projectHubTab === 'files' && tab !== 'files') {
     if (_projMonacoEditor) { _projMonacoEditor.dispose(); _projMonacoEditor = null; }
+  }
+  // Disconnect run log SSE if leaving run tab
+  if (state.projectHubTab === 'run' && tab !== 'run') {
+    _runLogClose();
   }
   state.projectHubTab = tab;
   var proj = _activeProject();
@@ -206,6 +211,7 @@ function _renderProjectHubBody(proj) {
   }
   else if (tab === 'contexts') body.innerHTML = _renderContextsTab(proj);
   else if (tab === 'sources')  body.innerHTML = _renderSourcesTab(proj);
+  else if (tab === 'run')      { body.innerHTML = _renderRunTabShell(); _runTabLoad(proj); }
   else if (tab === 'convs')    body.innerHTML = _renderConvsTab(proj);
   else if (tab === 'tasks')    body.innerHTML = _renderTasksTab(proj);
   else if (tab === 'settings') body.innerHTML = _renderSettingsTab(proj);
@@ -928,6 +934,264 @@ async function _addProjectSource(opts) {
   } catch(e) { _showToast('Error: ' + e.message, true); }
 }
 
+}
+
+// ── Run Tab ───────────────────────────────────────────────────────────────
+// State: detected commands per srcId, active runs, open log SSE
+
+var _runDetected   = {};   // srcId → [{ label, cmd, detected }]
+var _runActiveList = [];   // list from /api/projects/:id/runs
+var _runLogESrc    = null; // EventSource for log pane
+var _runOpenLogId  = null; // which runId is showing logs
+
+function _renderRunTabShell() {
+  return '<div id="proj-run-root" class="proj-run-root">' +
+    '<div class="proj-hub-empty"><i class="ti ti-loader-2 ti-spin" style="font-size:22px;opacity:.5"></i><div>Loading…</div></div>' +
+  '</div>';
+}
+
+async function _runTabLoad(proj) {
+  _runDetected = {};
+  _runActiveList = [];
+  _runOpenLogId = null;
+  if (_runLogESrc) { try { _runLogESrc.close(); } catch(_) {} _runLogESrc = null; }
+
+  // Fetch active runs
+  try {
+    var r = await fetch('/api/projects/' + proj.id + '/runs');
+    _runActiveList = await r.json();
+  } catch(_) {}
+
+  // Detect commands for each source in parallel
+  if (proj.sources && proj.sources.length) {
+    await Promise.all(proj.sources.map(async function(s) {
+      try {
+        var r = await fetch('/api/projects/' + proj.id + '/sources/' + s.id + '/run-commands');
+        _runDetected[s.id] = await r.json();
+      } catch(_) { _runDetected[s.id] = []; }
+    }));
+  }
+
+  _runRender(proj);
+}
+
+function _runRender(proj) {
+  var root = document.getElementById('proj-run-root');
+  if (!root) return;
+  var srcs = (proj && proj.sources) ? proj.sources : [];
+
+  // Active runs section
+  var activeHtml = '';
+  var activeRuns = _runActiveList.filter(function(r) { return r.status === 'running' || r.status === 'starting'; });
+  var stoppedRuns = _runActiveList.filter(function(r) { return r.status !== 'running' && r.status !== 'starting'; });
+  var allRunsHtml = [...activeRuns, ...stoppedRuns].map(function(r) { return _runRecordCard(r, proj.id); }).join('');
+
+  var html = '<div class="proj-run-layout">';
+
+  // Left: sources to start
+  html += '<div class="proj-run-sources">';
+  html += '<div class="proj-section-header"><span>Launch</span></div>';
+  if (!srcs.length) {
+    html += '<div class="proj-hub-empty" style="padding:24px"><div>No sources — add one in the Sources tab</div></div>';
+  } else {
+    html += srcs.map(function(s) {
+      var cmds = _runDetected[s.id] || [];
+      var topCmd = cmds.length ? cmds[0].cmd : '';
+      return '<div class="proj-run-src-card" id="proj-run-src-' + _projEsc(s.id) + '">' +
+        '<div class="proj-run-src-header">' +
+          '<i class="ti ti-folder proj-folder-icon"></i>' +
+          '<span class="proj-run-src-name">' + _projEsc(s.name) + '</span>' +
+        '</div>' +
+        '<div class="proj-run-src-body">' +
+          '<div class="proj-run-field-row">' +
+            '<label class="proj-run-label">Command</label>' +
+            (cmds.length
+              ? '<div class="proj-run-detected-pills">' + cmds.slice(0, 4).map(function(c, i) {
+                  return '<button class="proj-run-pill' + (i === 0 ? ' active' : '') + '" onclick="_runSetCmd(\'' + _projEsc(s.id) + '\',this,\'' + _projEsc(c.cmd) + '\')">' + _projEsc(c.label) + '</button>';
+                }).join('') + '</div>'
+              : '') +
+            '<input id="proj-run-cmd-' + _projEsc(s.id) + '" class="proj-run-input" placeholder="e.g. npm run dev" value="' + _projEsc(topCmd) + '">' +
+          '</div>' +
+          '<div class="proj-run-field-row proj-run-port-row">' +
+            '<label class="proj-run-label">Port</label>' +
+            '<input id="proj-run-port-' + _projEsc(s.id) + '" class="proj-run-input proj-run-port-input" type="number" placeholder="auto" min="1" max="65535">' +
+            '<button class="proj-run-start-btn" onclick="startProjectRun(\'' + _projEsc(s.id) + '\')">' +
+              '<i class="ti ti-player-play-filled"></i> Run' +
+            '</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+  html += '</div>';
+
+  // Right: active runs
+  html += '<div class="proj-run-active">';
+  html += '<div class="proj-section-header"><span>Active runs</span>' +
+    '<button class="proj-icon-btn" title="Refresh" onclick="_runRefresh()"><i class="ti ti-refresh"></i></button>' +
+  '</div>';
+  html += allRunsHtml || '<div class="proj-hub-empty" style="padding:24px"><div>No runs yet</div></div>';
+  html += '</div>';
+
+  html += '</div>';
+
+  // Log pane (shown when a run is expanded)
+  if (_runOpenLogId) {
+    html += '<div class="proj-run-log-pane" id="proj-run-log-pane">' +
+      '<div class="proj-run-log-header">' +
+        '<span class="proj-run-log-title" id="proj-run-log-title">Logs</span>' +
+        '<button class="proj-icon-btn" onclick="_runLogClose()" title="Close logs"><i class="ti ti-x"></i></button>' +
+      '</div>' +
+      '<pre id="proj-run-log-body" class="proj-run-log-body"></pre>' +
+    '</div>';
+  }
+
+  root.innerHTML = html;
+
+  // Re-open log pane if needed
+  if (_runOpenLogId) { _runLogOpen(_runOpenLogId, proj.id, false); }
+}
+
+function _runRecordCard(r, projectId) {
+  var statusCls = { running: 'proj-run-status-running', starting: 'proj-run-status-starting',
+    stopped: 'proj-run-status-stopped', exited: 'proj-run-status-exited', error: 'proj-run-status-error' }[r.status] || '';
+  var portBtn = r.port
+    ? '<button class="proj-icon-btn" title="Open in browser" onclick="openRunInBrowser(\'http://localhost:' + r.port + '\')">' +
+        '<i class="ti ti-world"></i> :' + r.port + '</button>'
+    : '';
+  var isActive = r.status === 'running' || r.status === 'starting';
+  return '<div class="proj-run-card" id="proj-run-card-' + _projEsc(r.runId) + '">' +
+    '<div class="proj-run-card-header">' +
+      '<span class="proj-run-status-dot ' + statusCls + '"></span>' +
+      '<span class="proj-run-card-name">' + _projEsc(r.name) + '</span>' +
+      '<span class="proj-run-card-src">' + _projEsc(r.srcName) + '</span>' +
+      portBtn +
+      '<button class="proj-icon-btn" title="View logs" onclick="_runLogOpen(\'' + _projEsc(r.runId) + '\',\'' + _projEsc(projectId) + '\',true)">' +
+        '<i class="ti ti-terminal-2"></i></button>' +
+      (isActive
+        ? '<button class="proj-icon-btn" style="color:var(--error-light)" title="Stop" onclick="stopProjectRun(\'' + _projEsc(r.runId) + '\',\'' + _projEsc(projectId) + '\')">' +
+            '<i class="ti ti-player-stop-filled"></i></button>'
+        : '') +
+    '</div>' +
+    '<div class="proj-run-card-cmd">' + _projEsc(r.cmd) + '</div>' +
+  '</div>';
+}
+
+function _runSetCmd(srcId, btn, cmd) {
+  // Highlight the chosen pill
+  var card = document.getElementById('proj-run-src-' + srcId);
+  if (card) {
+    card.querySelectorAll('.proj-run-pill').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+  }
+  var inp = document.getElementById('proj-run-cmd-' + srcId);
+  if (inp) inp.value = cmd;
+}
+
+async function startProjectRun(srcId) {
+  var proj = _activeProject();
+  if (!proj) return;
+  var cmdEl  = document.getElementById('proj-run-cmd-' + srcId);
+  var portEl = document.getElementById('proj-run-port-' + srcId);
+  var cmd  = cmdEl ? cmdEl.value.trim() : '';
+  var port = portEl && portEl.value.trim() ? Number(portEl.value.trim()) : null;
+  if (!cmd) { _showToast('Enter a command first', true); return; }
+
+  try {
+    var body = { cmd, name: cmd.split(' ')[0] };
+    if (port) body.port = port;
+    var r = await fetch('/api/projects/' + proj.id + '/sources/' + srcId + '/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    var data = await r.json();
+    if (!r.ok) throw new Error(data.error);
+    _showToast('Started: ' + cmd.split(' ')[0]);
+    // Refresh run list
+    await _runRefresh();
+    // Auto-open logs for the new run
+    _runLogOpen(data.runId, proj.id, true);
+  } catch(e) { _showToast('Failed: ' + e.message, true); }
+}
+
+async function stopProjectRun(runId, projectId) {
+  var pid = projectId || (state.activeProjectId);
+  try {
+    var r = await fetch('/api/projects/' + pid + '/runs/' + runId, { method: 'DELETE' });
+    if (!r.ok) throw new Error((await r.json()).error);
+    _showToast('Stopped');
+    if (_runOpenLogId === runId) _runLogClose();
+    await _runRefresh();
+  } catch(e) { _showToast('Stop failed: ' + e.message, true); }
+}
+
+async function _runRefresh() {
+  var proj = _activeProject();
+  if (!proj || state.projectHubTab !== 'run') return;
+  try {
+    var r = await fetch('/api/projects/' + proj.id + '/runs');
+    _runActiveList = await r.json();
+  } catch(_) {}
+  _runRender(proj);
+}
+
+function _runLogOpen(runId, projectId, scroll) {
+  _runOpenLogId = runId;
+  if (_runLogESrc) { try { _runLogESrc.close(); } catch(_) {} _runLogESrc = null; }
+
+  // Make sure pane exists (re-render injects it)
+  var pane = document.getElementById('proj-run-log-pane');
+  if (!pane) {
+    _runRender(_activeProject());
+    pane = document.getElementById('proj-run-log-pane');
+    if (!pane) return;
+  }
+
+  // Update title
+  var run = _runActiveList.find(function(r) { return r.runId === runId; });
+  var titleEl = document.getElementById('proj-run-log-title');
+  if (titleEl && run) titleEl.textContent = run.name + ' logs';
+
+  var body = document.getElementById('proj-run-log-body');
+  if (!body) return;
+  body.textContent = '';
+
+  var es = new EventSource('/api/projects/' + projectId + '/runs/' + runId + '/logs');
+  _runLogESrc = es;
+  es.onmessage = function(e) {
+    var d = JSON.parse(e.data);
+    if (d.line !== undefined) {
+      body.textContent += d.line + '\n';
+      if (scroll !== false) body.scrollTop = body.scrollHeight;
+    }
+    if (d.status) {
+      _runRefresh();
+    }
+  };
+  es.onerror = function() { es.close(); };
+}
+
+function _runLogClose() {
+  if (_runLogESrc) { try { _runLogESrc.close(); } catch(_) {} _runLogESrc = null; }
+  _runOpenLogId = null;
+  var pane = document.getElementById('proj-run-log-pane');
+  if (pane) pane.remove();
+}
+
+function openRunInBrowser(url) {
+  // Switch to chat view so the browser pane is visible, then open
+  if (typeof switchToChat === 'function') switchToChat();
+  if (typeof openBrowserPane === 'function') {
+    // Bypass the agent permission check for localhost/project runs
+    var pane = document.getElementById('browser-pane');
+    if (pane) pane.classList.add('open');
+    if (typeof _restoreBrowserPaneWidth === 'function') _restoreBrowserPaneWidth();
+    if (typeof browserNavigateTo === 'function') browserNavigateTo(url);
+  } else {
+    window.open(url, '_blank');
+  }
+}
+
 // ── Conversations Tab ────────────────────────────────────────────────────
 
 function _renderConvsTab(proj) {
@@ -1368,4 +1632,66 @@ function _fileIcon(ext) {
     txt:'ti-file-text',
   };
   return (ext && map[ext]) || 'ti-file';
+}
+
+// ── Global Ports Dashboard ────────────────────────────────────────────────
+
+var _portsPollingInterval = null;
+
+function _startPortsPolling() {
+  if (_portsPollingInterval) return;
+  _portsPollingInterval = setInterval(_pollPorts, 5000);
+  _pollPorts();
+}
+
+async function _pollPorts() {
+  try {
+    var r = await fetch('/api/runs');
+    var runs = await r.json();
+    var active = runs.filter(function(r) { return r.status === 'running' || r.status === 'starting'; });
+    var btn = document.getElementById('topbar-ports-btn');
+    var cnt = document.getElementById('topbar-ports-count');
+    if (btn) btn.style.display = active.length ? '' : 'none';
+    if (cnt) cnt.textContent = active.length;
+  } catch(_) {}
+}
+
+function openPortsDashboard() {
+  fetch('/api/runs').then(function(r) { return r.json(); }).then(function(runs) {
+    var rows = runs.map(function(r) {
+      var isActive = r.status === 'running' || r.status === 'starting';
+      var portStr = r.port ? ':' + r.port : '(no port)';
+      var statusDot = '<span class="proj-run-status-dot proj-run-status-' + r.status + '"></span>';
+      var openBtn = r.port && isActive
+        ? '<button class="proj-action-btn" style="padding:3px 10px;font-size:11px" onclick="openRunInBrowser(\'http://localhost:' + r.port + '\');document.querySelector(\'.proj-modal-overlay\').remove()">Open</button>'
+        : '';
+      var stopBtn = isActive
+        ? '<button class="proj-action-btn" style="padding:3px 10px;font-size:11px;color:var(--error-light)" onclick="stopProjectRun(\'' + r.runId + '\',\'' + r.projectId + '\').then(function(){openPortsDashboard()});document.querySelector(\'.proj-modal-overlay\').remove()">Stop</button>'
+        : '';
+      return '<tr class="proj-ports-row">' +
+        '<td>' + statusDot + ' ' + _projEsc(r.name) + '</td>' +
+        '<td>' + _projEsc(r.srcName) + '</td>' +
+        '<td style="font-variant-numeric:tabular-nums">' + portStr + '</td>' +
+        '<td><code class="proj-run-cmd-badge">' + _projEsc(r.cmd.length > 40 ? r.cmd.slice(0,40) + '…' : r.cmd) + '</code></td>' +
+        '<td style="white-space:nowrap">' + openBtn + ' ' + stopBtn + '</td>' +
+      '</tr>';
+    }).join('');
+
+    var html = runs.length
+      ? '<table class="proj-ports-table"><thead><tr><th>Process</th><th>Source</th><th>Port</th><th>Command</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+      : '<div class="proj-hub-empty" style="padding:32px"><i class="ti ti-server" style="font-size:28px;opacity:.3"></i><div>No active processes</div></div>';
+
+    var overlay = document.createElement('div');
+    overlay.className = 'proj-modal-overlay';
+    overlay.innerHTML =
+      '<div class="proj-modal" style="max-width:720px;width:90vw">' +
+        '<div class="proj-modal-header">' +
+          '<span class="proj-modal-title"><i class="ti ti-server"></i> Active Ports</span>' +
+          '<button class="proj-icon-btn" onclick="this.closest(\'.proj-modal-overlay\').remove()"><i class="ti ti-x"></i></button>' +
+        '</div>' +
+        '<div class="proj-modal-body" style="padding:0;overflow:auto;max-height:60vh">' + html + '</div>' +
+      '</div>';
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+  }).catch(function() {});
 }
