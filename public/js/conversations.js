@@ -58,8 +58,13 @@ function getConv(id) {
 function newConversation() {
   var id = 'c' + Date.now();
   var conv = { id, title: 'New conversation', messages: [], model: state.model, systemPrompt: state.systemPrompt, createdAt: Date.now() };
+  if (state.activeProjectId) conv.projectId = state.activeProjectId;
   state.conversations.unshift(conv);
   saveConversations();
+  // Notify backend about the link
+  if (state.activeProjectId) {
+    fetch('/api/projects/' + state.activeProjectId + '/conversations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ convId: id }) }).catch(function(){});
+  }
   loadConversation(id);
   // Clear agents — only pinned agents auto-populate in new chats
   if (typeof resetAgentChipsToPinned === 'function') resetAgentChipsToPinned();
@@ -228,12 +233,20 @@ function renderConvList() {
   list.innerHTML = '';
   var MAX_VISIBLE = 5;
   var convs = state.conversations;
+  // When a project is active, filter to project convs (with a fallback to all if none match)
+  if (state.activeProjectId) {
+    var projConvs = convs.filter(function(c) { return c.projectId === state.activeProjectId; });
+    if (projConvs.length) convs = projConvs;
+  }
   var visible = convs.slice(0, MAX_VISIBLE);
   visible.forEach(conv => {
     var d = document.createElement('div');
     d.className = 'conv-item' + (conv.id === state.currentId ? ' active' : '');
     d.onclick = () => loadConversation(conv.id);
+    // Small project dot for project-linked conversations
+    var projDot = conv.projectId ? '<span class="conv-proj-dot" title="Project conversation"></span>' : '';
     d.innerHTML = (conv._streaming ? '<i class="ti ti-loader-2 conv-streaming-icon"></i>' : '') +
+      projDot +
       '<span class="conv-label">' + escHtml(conv.title) + '</span>' +
       '<button class="conv-del" onclick="deleteConversation(\'' + conv.id + '\', event)"><i class="ti ti-x"></i></button>';
     list.appendChild(d);

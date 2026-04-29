@@ -18,6 +18,14 @@ var state = {
   // streaming/abortController/_autoFeedDepth are per-conversation (conv._streaming etc.)
   artifacts:      [],  // active conv's artifacts { id, type, title, content, base64, mime, path, url }
   activeArtifact: null,
+  // ── Projects
+  projects:         [],         // all projects (loaded from /api/projects)
+  activeProjectId:  localStorage.getItem('fauna-active-project') || null,
+  projectHubOpen:   false,
+  projectHubTab:    'files',    // 'files' | 'contexts' | 'sources' | 'tasks' | 'settings'
+  projectFilePath:  null,       // currently viewed file path in file tree
+  projectFileContent: null,     // content of viewed file
+  projectContextEnabled: {},    // { ctxId: bool } — which contexts are active for chat
 };
 
 // ── Write-file side-channel store ─────────────────────────────────────────

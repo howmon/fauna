@@ -38,6 +38,9 @@ loadMemoryFromServer();
 document.addEventListener('DOMContentLoaded', async () => {
   await loadSysCtx();
   await loadModels();
+  // Load projects and render the switcher
+  if (typeof loadProjects === 'function') await loadProjects();
+  if (typeof renderProjectSwitcher === 'function') renderProjectSwitcher();
   checkAuth();
   renderConvList();
   document.getElementById('sys-prompt-input').value = state.systemPrompt;

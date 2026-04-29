@@ -34,10 +34,17 @@ async function fetchTasks() {
 function renderTasks() {
   var list = document.getElementById('tasks-list');
   if (!list) return;
-  if (!_tasksCache.length) {
+  // Filter by active project when one is selected
+  var tasks = _tasksCache;
+  var isFiltered = false;
+  if (state.activeProjectId) {
+    var projTasks = tasks.filter(function(t) { return t.projectId === state.activeProjectId; });
+    if (projTasks.length) { tasks = projTasks; isFiltered = true; }
+  }
+  if (!tasks.length) {
     list.innerHTML = '<div class="tasks-empty">' +
       '<i class="ti ti-checklist" style="font-size:28px;opacity:.3"></i>' +
-      '<div>No tasks yet</div>' +
+      '<div>' + (isFiltered ? 'No tasks for this project' : 'No tasks yet') + '</div>' +
       '<div style="font-size:11px;color:var(--text-dim)">Create a task or ask the AI to schedule one</div>' +
       '</div>';
     return;
@@ -45,7 +52,7 @@ function renderTasks() {
 
   // Sort: running first, then scheduled, then pending, then completed/failed
   var order = { running: 0, scheduled: 1, pending: 2, paused: 3, failed: 4, completed: 5 };
-  var sorted = _tasksCache.slice().sort(function(a, b) {
+  var sorted = tasks.slice().sort(function(a, b) {
     return (order[a.status] || 9) - (order[b.status] || 9);
   });
 

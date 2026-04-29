@@ -51,6 +51,8 @@ function createTask(opts) {
     result:      null,
     history:     [{ timestamp: Date.now(), event: 'created', detail: null }],
     convId:      null,                                  // linked conversation (set at run time)
+    projectId:   opts.projectId || null,                // linked project
+    projectContextIds: opts.projectContextIds || [],    // project context IDs to inject
     createdAt:   new Date().toISOString(),
     updatedAt:   new Date().toISOString(),
   };

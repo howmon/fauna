@@ -21,6 +21,8 @@
       <span id="sidebar-logo"><img src="img/logo.svg" alt="" width="20" height="20"></span>
       <span id="sidebar-title">Fauna</span>
     </div>
+    <!-- ── Project Switcher ──────────────────────────────────────── -->
+    <div id="project-switcher"></div>
     <!-- ── Scrollable middle area ──────────────────────────────── -->
     <div id="sidebar-scroll">
 
@@ -253,6 +255,9 @@
         <div class="empty-card" onclick="usePrompt(this)"><strong>Debug an error</strong>Share a stack trace, get a fix</div>
       </div>
     </div>
+
+    <!-- Project context bar (visible when project active) -->
+    <div id="project-context-bar" style="display:none"></div>
 
     <!-- Messages area -->
     <div id="messages" style="display:none">
@@ -682,6 +687,7 @@ Examples:
 <script src="js/chat.js"></script>
 <script src="js/voice.js"></script>
 <script src="js/tasks.js"></script>
+<script src="js/projects.js"></script>
 <script src="js/app.js"></script>
 
 <!-- ── Tasks panel ──────────────────────────────────────────────── -->
@@ -984,6 +990,16 @@ Examples:
 <div id="all-agents-page" style="display:none"></div>
 <!-- ── Agent Actions Page (Create / Import overlay) ───────────── -->
 <div id="agent-actions-page" style="display:none"></div>
+<!-- ── Project Hub panel ─────────────────────────────────────────── -->
+<div id="project-hub" class="project-hub-panel" style="display:none">
+  <div class="project-hub-header">
+    <span id="project-hub-name" class="project-hub-title"></span>
+    <span style="flex:1"></span>
+    <button class="project-hub-close-btn" onclick="closeProjectHub()" title="Close"><i class="ti ti-x"></i></button>
+  </div>
+  <div class="project-hub-tabs" id="project-hub-tabs"></div>
+  <div class="project-hub-body" id="project-hub-body"></div>
+</div>
 
 <!-- ── Help Panel ────────────────────────────────────────────────── -->
 <div id="help-panel">

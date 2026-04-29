@@ -17,6 +17,13 @@ import { getAgentTools, startAgentMCPServers, stopAgentMCPServers, executeBuiltI
 import { scanAgent, formatScanReport } from './agent-scanner.js';
 import { createTask, getTask, getAllTasks, updateTask, deleteTask, startScheduler, stopScheduler, completeTask, failTask } from './task-manager.js';
 import { runTask, pauseTask, stopTask, steerTask, isTaskRunning, getRunningTaskInfo, getRunningTasks, subscribe as subscribeTask } from './task-runner.js';
+import {
+  createProject, getProject, getAllProjects, updateProject, deleteProject, touchProject,
+  linkConversation, linkTask as linkTaskToProject,
+  addSource, removeSource, syncSource, listFiles, readSourceFile, resolveSourceFilePath,
+  addContext, updateContext, removeContext, contextFromArtifact, buildContextPayload, getProjectSystemContext,
+  addConnector, removeConnector, testConnector, listRepos,
+} from './project-manager.js';
 
 // Electron APIs — available when server runs inside the Electron main process.
 // Gracefully degrade if run standalone (e.g. during testing).
@@ -1042,7 +1049,8 @@ app.post('/api/chat', async (req, res) => {
   res.on('finish', _psRelease);
   res.on('close',  _psRelease);
   const { messages = [], model = 'claude-sonnet-4.6', systemPrompt = '', useFigmaMCP = false, contextSummary = '',
-          thinkingBudget = 'high', maxContextTurns = 20, agentName = null, clientContext = 'app' } = req.body;
+          thinkingBudget = 'high', maxContextTurns = 20, agentName = null, clientContext = 'app',
+          projectId = null, projectContextIds = null } = req.body;
 
   // Track client disconnect so the tool loop can bail early
   let clientAborted = false;
@@ -1065,8 +1073,21 @@ app.post('/api/chat', async (req, res) => {
     const isCLI = clientContext === 'cli';
     const cliHint = isCLI ? `\n\n## Output Format
 You are running in a terminal CLI. Respond in plain, readable text. Do NOT use markdown headers (###), horizontal rules (---), or emojis. Use plain bullet points (- or *) only when a list genuinely helps. Be concise and direct. Never emit browser-action or browser-ext-action code blocks — those do not work in the terminal.` : '';
+    // Inject project context if projectId is present
+    let projectCtx = '';
+    if (projectId) {
+      try {
+        const pinnedCtx = getProjectSystemContext(projectId);
+        if (pinnedCtx) projectCtx = '\n\n' + pinnedCtx;
+        // Also inject any explicitly toggled contexts
+        if (projectContextIds && projectContextIds.length) {
+          const toggled = buildContextPayload(projectId, projectContextIds);
+          if (toggled) projectCtx += '\n\n' + toggled;
+        }
+      } catch (_) {}
+    }
     const fullSystem = [
-      systemPrompt.trim() + cliHint,
+      systemPrompt.trim() + cliHint + projectCtx,
       isCLI ? '' : BROWSER_BUILD_CONTEXT,
       contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : ''
     ].filter(Boolean).join('\n');
@@ -5617,6 +5638,169 @@ subscribeTask('*', (evt) => {
   } else if (evt.event === 'failed') {
     extSend({ type: 'notify', id: evt.taskId, title: 'Task failed', message: evt.error || 'Task did not complete.' });
   }
+});
+
+// ── Projects ───────────────────────────────────────────────────────────────
+
+// List all projects
+app.get('/api/projects', (req, res) => {
+  res.json(getAllProjects());
+});
+
+// Create project
+app.post('/api/projects', (req, res) => {
+  try { res.json(createProject(req.body)); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Get single project
+app.get('/api/projects/:id', (req, res) => {
+  const p = getProject(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Project not found' });
+  res.json(p);
+});
+
+// Update project
+app.put('/api/projects/:id', (req, res) => {
+  const p = updateProject(req.params.id, req.body);
+  if (!p) return res.status(404).json({ error: 'Project not found' });
+  res.json(p);
+});
+
+// Delete project
+app.delete('/api/projects/:id', (req, res) => {
+  const ok = deleteProject(req.params.id);
+  res.json({ ok });
+});
+
+// Touch lastActiveAt
+app.post('/api/projects/:id/touch', (req, res) => {
+  touchProject(req.params.id);
+  res.json({ ok: true });
+});
+
+// Link conversation
+app.post('/api/projects/:id/conversations', (req, res) => {
+  const { convId } = req.body;
+  if (!convId) return res.status(400).json({ error: 'convId required' });
+  linkConversation(req.params.id, convId);
+  res.json({ ok: true });
+});
+
+// ── Sources
+app.post('/api/projects/:id/sources', (req, res) => {
+  try { res.json(addSource(req.params.id, req.body)); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/projects/:id/sources/:srcId', (req, res) => {
+  const ok = removeSource(req.params.id, req.params.srcId);
+  res.json({ ok });
+});
+
+app.post('/api/projects/:id/sources/:srcId/sync', async (req, res) => {
+  try {
+    const src = await syncSource(req.params.id, req.params.srcId);
+    res.json(src);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.get('/api/projects/:id/sources/:srcId/files', (req, res) => {
+  try {
+    const files = listFiles(req.params.id, req.params.srcId, req.query.path || '');
+    res.json(files);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.get('/api/projects/:id/sources/:srcId/file', (req, res) => {
+  try {
+    const result = readSourceFile(req.params.id, req.params.srcId, req.query.path || '');
+    res.json(result);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Stream raw bytes — used by the frontend to render images, video, audio, PDF
+app.get('/api/projects/:id/sources/:srcId/raw', (req, res) => {
+  try {
+    const { fullPath, mime, size } = resolveSourceFilePath(
+      req.params.id, req.params.srcId, req.query.path || '');
+    const range = req.headers.range;
+    if (range) {
+      const [s, e] = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(s, 10);
+      const end   = e ? parseInt(e, 10) : Math.min(start + 10 * 1024 * 1024 - 1, size - 1);
+      res.writeHead(206, {
+        'Content-Range':  `bytes ${start}-${end}/${size}`,
+        'Accept-Ranges':  'bytes',
+        'Content-Length': end - start + 1,
+        'Content-Type':   mime,
+      });
+      fs.createReadStream(fullPath, { start, end }).pipe(res);
+    } else {
+      res.setHeader('Content-Type', mime);
+      res.setHeader('Content-Length', size);
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Cache-Control', 'private, max-age=60');
+      fs.createReadStream(fullPath).pipe(res);
+    }
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// ── Contexts
+app.get('/api/projects/:id/contexts', (req, res) => {
+  const p = getProject(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Project not found' });
+  res.json(p.contexts || []);
+});
+
+app.post('/api/projects/:id/contexts', (req, res) => {
+  try { res.json(addContext(req.params.id, req.body)); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.put('/api/projects/:id/contexts/:ctxId', (req, res) => {
+  const ctx = updateContext(req.params.id, req.params.ctxId, req.body);
+  if (!ctx) return res.status(404).json({ error: 'Context not found' });
+  res.json(ctx);
+});
+
+app.delete('/api/projects/:id/contexts/:ctxId', (req, res) => {
+  const ok = removeContext(req.params.id, req.params.ctxId);
+  res.json({ ok });
+});
+
+app.post('/api/projects/:id/contexts/from-artifact', (req, res) => {
+  try { res.json(contextFromArtifact(req.params.id, req.body)); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// ── Connectors
+app.post('/api/projects/:id/connectors', (req, res) => {
+  try { res.json(addConnector(req.params.id, req.body)); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/projects/:id/connectors/:connId', (req, res) => {
+  const ok = removeConnector(req.params.id, req.params.connId);
+  res.json({ ok });
+});
+
+app.post('/api/projects/:id/connectors/:connId/test', async (req, res) => {
+  const { accessToken } = req.body;
+  if (!accessToken) return res.status(400).json({ error: 'accessToken required' });
+  try {
+    const result = await testConnector(req.params.id, req.params.connId, accessToken);
+    res.json(result);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.get('/api/projects/:id/connectors/:connId/repos', async (req, res) => {
+  const accessToken = req.query.token || req.headers['x-connector-token'];
+  if (!accessToken) return res.status(400).json({ error: 'token required' });
+  try {
+    const repos = await listRepos(req.params.id, req.params.connId, accessToken);
+    res.json(repos);
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 // ── macOS Permissions check ───────────────────────────────────────────────

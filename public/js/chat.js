@@ -629,6 +629,12 @@ async function streamResponse(conv) {
       chatBody.agentName = getActiveAgentName();
       chatBody.agentPermissions = getActiveAgentPermissions();
     }
+    // Include active project + enabled context IDs
+    if (state.activeProjectId) {
+      chatBody.projectId = state.activeProjectId;
+      var enabledCtxIds = Object.keys(state.projectContextEnabled || {}).filter(function(k) { return state.projectContextEnabled[k]; });
+      if (enabledCtxIds.length) chatBody.projectContextIds = enabledCtxIds;
+    }
 
     var response = await fetch('/api/chat', {
       method: 'POST',
