@@ -7,15 +7,17 @@ marked.use({
       // marked.js has TWO calling conventions depending on version:
       //   Old (v4-): code(codeText:string, infostring:string, escaped:bool)
       //   New (v5+): code(token:object) where token.text / token.lang
-      var rawText, lang;
+      var rawText, lang, fullLang;
       if (typeof token === 'string') {
         // Old API — first arg IS the code content
         rawText = token.trim();
-        lang = (infostring || '').split(/[\s.]/)[0] || 'plaintext';
+        fullLang = (infostring || '');
+        lang = fullLang.split(/[\s.]/)[0] || 'plaintext';
       } else {
         // New token-object API
         rawText = (token.text != null ? token.text : token.raw || '').trim();
-        lang = (token.lang || '').split(/[\s.]/)[0] || 'plaintext';
+        fullLang = (token.lang || '');
+        lang = fullLang.split(/[\s.]/)[0] || 'plaintext';
       }
       dbg('  fence lang=' + lang + ' text=' + JSON.stringify(rawText.slice(0,80)), 'info');
 
@@ -24,16 +26,18 @@ marked.use({
         return '<pre data-special-lang="shell-exec"><code class="language-shell-exec">' + escHtml(rawText) + '</code></pre>';
       }
       // write-file blocks: lang is "write-file:/path/to/file" (raw, unsanitized — fallback only)
-      if (lang.startsWith('write-file:') || lang.startsWith('write-file/')) {
+      // Use fullLang so file extensions (dots) are not stripped from the path
+      if (fullLang.startsWith('write-file:') || fullLang.startsWith('write-file/')) {
         // Inline write-file block (not yet sanitized) — extract content directly
-        var wfPath = lang.replace(/^write-file[:/]/, '').trim();
+        var wfPath = fullLang.replace(/^write-file[:/]/, '').trim();
         var wfId = 'wf-' + Date.now() + '-' + Math.random().toString(36).slice(2);
         _wfContentStore[wfId] = { path: wfPath, content: rawText };
         return '<pre data-special-lang="write-file"><code class="language-write-file" data-wf-id="' + escHtml(wfId) + '" data-wf-path="' + escHtml(wfPath) + '"></code></pre>';
       }
       // write-file-ready: already sanitized placeholder — content is in _wfContentStore
-      if (lang.startsWith('write-file-ready:')) {
-        var parts = lang.slice('write-file-ready:'.length).split(':');
+      // Use fullLang so any dots in the path survive
+      if (fullLang.startsWith('write-file-ready:')) {
+        var parts = fullLang.slice('write-file-ready:'.length).split(':');
         var wfId  = parts[0];
         var wfPath = parts.slice(1).join(':');
         return '<pre data-special-lang="write-file"><code class="language-write-file" data-wf-id="' + escHtml(wfId) + '" data-wf-path="' + escHtml(wfPath) + '"></code></pre>';

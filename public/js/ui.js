@@ -527,9 +527,30 @@ function showEmpty() {
   document.getElementById('messages').style.display = 'none';
 }
 
+var _userScrolledUp = false;
+(function () {
+  function _onMsgScroll() {
+    var el = document.getElementById('messages');
+    if (!el) return;
+    // Consider "at bottom" if within 80px
+    _userScrolledUp = el.scrollHeight - el.scrollTop - el.clientHeight > 80;
+  }
+  document.addEventListener('DOMContentLoaded', function () {
+    var el = document.getElementById('messages');
+    if (el) el.addEventListener('scroll', _onMsgScroll, { passive: true });
+  });
+})();
+
 function scrollBottom() {
+  if (_userScrolledUp) return;
   var el = document.getElementById('messages');
   el.scrollTop = el.scrollHeight;
+}
+
+function forceScrollBottom() {
+  _userScrolledUp = false;
+  var el = document.getElementById('messages');
+  if (el) el.scrollTop = el.scrollHeight;
 }
 
 // ── Copy & Regen ──────────────────────────────────────────────────────────

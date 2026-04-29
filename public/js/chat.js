@@ -126,7 +126,7 @@ async function sendDirectMessage(content, opts) {
       appendMessageDOM('user', displayText, [], true);
       showMessages();
     }
-    scrollBottom();
+    forceScrollBottom();
   } else if (opts.isAutoFeed || opts.isBrowserFeed) {
     var feedIcon2  = opts.isBrowserFeed ? 'ti-world-www' : opts.isWriteFileFeed ? 'ti-file-alert' : 'ti-terminal-2';
     var feedLabel2 = opts.isBrowserFeed ? 'Browser page fed to AI' : opts.isWriteFileFeed ? 'File error fed to AI' : 'Shell output fed to AI';
@@ -278,7 +278,7 @@ async function sendMessage(opts) {
 
   input.value = '';
   resizeTextarea(input);
-  scrollBottom();
+  forceScrollBottom();
 
   await streamResponse(conv);
 }
@@ -322,7 +322,7 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
   appendMessageDOM('user', content, null, true);
   showMessages();
   clearAttachments();
-  scrollBottom();
+  forceScrollBottom();
 
   // Use per-conv DOM container so switching away doesn't hide/destroy the progress UI
   var inner = getConvInner(conv.id);
@@ -558,7 +558,7 @@ async function streamResponse(conv) {
   var bodyEl = msgEl.querySelector('.msg-body');
   bodyEl.innerHTML = '<div class="thinking"><div class="think-dot"></div><div class="think-dot"></div><div class="think-dot"></div></div>';
   getConvInner(convId).appendChild(msgEl);
-  if (isActive()) { showMessages(); scrollBottom(); }
+  if (isActive()) { showMessages(); forceScrollBottom(); }
 
   var buffer       = '';
   var renderTimer  = null;

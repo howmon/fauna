@@ -11,6 +11,20 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
     var storeId  = code.dataset.wfId   || '';
     var filePath = code.dataset.wfPath || '';
     var stored   = storeId ? _wfContentStore[storeId] : null;
+
+    // Guard: storeId present but store entry missing means the content was lost
+    // (e.g. page reload cleared _wfContentStore). Show error instead of writing empty file.
+    if (storeId && !stored && !code.textContent.trim()) {
+      dbg('write-file: store entry missing for id=' + storeId + ' — skipping to avoid empty write', 'err');
+      var widget2 = document.createElement('div');
+      widget2.className = 'wf-block err';
+      widget2.innerHTML = '<div class="wf-header"><i class="ti ti-file-x"></i>' +
+        '<span class="wf-path">write-file</span>' +
+        '<span class="wf-status">Error: content store missing — refresh and retry</span></div>';
+      code.closest('pre').replaceWith(widget2);
+      return;
+    }
+
     var content  = stored ? stored.content : code.textContent;
     var mode     = (stored && stored.mode) || 'write-file';
     if (!stored) filePath = filePath || code.dataset.wfPath || '';
