@@ -5767,9 +5767,7 @@ app.put('/api/projects/:id/sources/:srcId/file', (req, res) => {
     const { fullPath } = resolveSourceFilePath(req.params.id, req.params.srcId, req.query.path || '');
     const { content } = req.body;
     if (typeof content !== 'string') return res.status(400).json({ error: 'content must be a string' });
-    const tmp = fullPath + '.fauna-tmp-' + Date.now();
-    fs.writeFileSync(tmp, content, 'utf8');
-    fs.renameSync(tmp, fullPath);
+    fs.writeFileSync(fullPath, content, 'utf8');
     res.json({ ok: true });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
