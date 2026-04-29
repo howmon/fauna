@@ -198,7 +198,12 @@ function _renderProjectHubBody(proj) {
   var body = document.getElementById('project-hub-body');
   if (!body) return;
   var tab = state.projectHubTab;
-  if (tab === 'files')         body.innerHTML = _renderFilesTab(proj);
+  if (tab === 'files') {
+    var proj2 = proj;
+    body.innerHTML = _renderFilesTab(proj2);
+    var activeSrcId = state._projectFileSrcId || (proj2.sources && proj2.sources[0] && proj2.sources[0].id);
+    if (activeSrcId) loadProjectFileTree(activeSrcId, '');
+  }
   else if (tab === 'contexts') body.innerHTML = _renderContextsTab(proj);
   else if (tab === 'sources')  body.innerHTML = _renderSourcesTab(proj);
   else if (tab === 'convs')    body.innerHTML = _renderConvsTab(proj);
@@ -216,14 +221,13 @@ function _renderFilesTab(proj) {
   var srcOptions = proj.sources.map(function(s) {
     return '<option value="' + _projEsc(s.id) + '">' + _projEsc(s.name) + '</option>';
   }).join('');
-  var activeSrcId = state._projectFileSrcId || proj.sources[0].id;
   return '<div class="proj-files-toolbar">' +
     '<select class="proj-src-select" onchange="loadProjectFileTree(this.value, \'\')">' + srcOptions + '</select>' +
+    '<button class="proj-icon-btn" onclick="openProjectFileExplorer()" title="Expand to full screen"><i class="ti ti-arrows-maximize"></i></button>' +
     '<button class="proj-icon-btn" onclick="loadProjectFileTree(document.querySelector(\'.proj-src-select\').value, \'\')" title="Refresh"><i class="ti ti-refresh"></i></button>' +
   '</div>' +
   '<div id="proj-file-tree-root" class="proj-file-tree"></div>' +
-  '<div id="proj-file-viewer" class="proj-file-viewer" style="display:none"></div>' +
-  '<script>loadProjectFileTree("' + _projEsc(activeSrcId) + '", "");<\/script>';
+  '<div id="proj-file-viewer" class="proj-file-viewer" style="display:none"></div>';
 }
 
 async function loadProjectFileTree(srcId, subPath) {
@@ -481,6 +485,147 @@ function closeProjectFileViewer() {
 
 function copyFileContent() {
   if (window._lastProjectFileContent) navigator.clipboard.writeText(window._lastProjectFileContent).catch(function(){});
+}
+
+// ── Full-screen File Explorer ─────────────────────────────────────────────
+
+var _explorerMonaco = null;
+
+function openProjectFileExplorer() {
+  var proj = _activeProject();
+  if (!proj || !proj.sources || !proj.sources.length) return;
+
+  var existing = document.getElementById('proj-explorer-overlay');
+  if (existing) { existing.remove(); _explorerMonacoDispose(); return; }
+
+  var srcOptions = proj.sources.map(function(s) {
+    return '<option value="' + _projEsc(s.id) + '">' + _projEsc(s.name) + '</option>';
+  }).join('');
+  var activeSrcId = state._projectFileSrcId || proj.sources[0].id;
+
+  var overlay = document.createElement('div');
+  overlay.id = 'proj-explorer-overlay';
+  overlay.className = 'proj-explorer-overlay';
+  overlay.innerHTML =
+    '<div class="proj-explorer-panel">' +
+      '<div class="proj-explorer-header">' +
+        '<i class="ti ti-folder-open" style="color:var(--accent)"></i>' +
+        '<span class="proj-explorer-title">' + _projEsc(proj.name) + ' — Files</span>' +
+        '<select class="proj-src-select proj-explorer-src-select" id="proj-exp-src" onchange="explorerLoadTree(this.value,\'\')">' + srcOptions + '</select>' +
+        '<button class="proj-icon-btn" onclick="explorerLoadTree(document.getElementById(\'proj-exp-src\').value,\'\')" title="Refresh"><i class="ti ti-refresh"></i></button>' +
+        '<button class="proj-icon-btn" onclick="closeProjectFileExplorer()" title="Close"><i class="ti ti-x"></i></button>' +
+      '</div>' +
+      '<div class="proj-explorer-body">' +
+        '<div class="proj-explorer-tree" id="proj-exp-tree"></div>' +
+        '<div class="proj-explorer-viewer" id="proj-exp-viewer">' +
+          '<div class="proj-explorer-viewer-empty"><i class="ti ti-file-code" style="font-size:40px;opacity:.2"></i><div>Select a file to view</div></div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+  explorerLoadTree(activeSrcId, '');
+}
+
+function closeProjectFileExplorer() {
+  _explorerMonacoDispose();
+  var el = document.getElementById('proj-explorer-overlay');
+  if (el) el.remove();
+}
+
+function _explorerMonacoDispose() {
+  if (_explorerMonaco) { _explorerMonaco.dispose(); _explorerMonaco = null; }
+}
+
+async function explorerLoadTree(srcId, subPath) {
+  if (!state.activeProjectId) return;
+  state._projectFileSrcId = srcId;
+  var treeEl = document.getElementById('proj-exp-tree');
+  if (!treeEl) return;
+  treeEl.innerHTML = '<div class="proj-loading"><i class="ti ti-loader-2 spin"></i> Loading…</div>';
+  try {
+    var r = await fetch('/api/projects/' + state.activeProjectId + '/sources/' + srcId + '/files?path=' + encodeURIComponent(subPath));
+    var files = await r.json();
+    if (!r.ok) { treeEl.innerHTML = '<div class="proj-hub-error">' + _projEsc(files.error) + '</div>'; return; }
+    var html = '';
+    if (subPath) {
+      var parent = subPath.split('/').slice(0,-1).join('/');
+      html += '<div class="proj-file-back" onclick="explorerLoadTree(\'' + _projEsc(srcId) + '\',\'' + _projEsc(parent) + '\')">' +
+        '<i class="ti ti-arrow-left"></i> Back</div>';
+    }
+    html += files.map(function(f) {
+      var icon = f.type === 'dir' ? 'ti-folder' : _fileIcon(f.ext);
+      var click = f.type === 'dir'
+        ? 'explorerLoadTree(\'' + _projEsc(srcId) + '\',\'' + _projEsc(f.path) + '\')'
+        : 'explorerOpenFile(\'' + _projEsc(srcId) + '\',\'' + _projEsc(f.path) + '\')';
+      var size = f.type === 'file' && f.size ? ' <span class="proj-file-size">' + _fmtSize(f.size) + '</span>' : '';
+      return '<div class="proj-file-row" onclick="' + click + '">' +
+        '<i class="ti ' + icon + ' proj-file-icon"></i>' +
+        '<span class="proj-file-name">' + _projEsc(f.name) + '</span>' + size +
+      '</div>';
+    }).join('');
+    treeEl.innerHTML = html || '<div class="proj-hub-empty">Empty directory</div>';
+  } catch(e) { treeEl.innerHTML = '<div class="proj-hub-error">' + _projEsc(e.message) + '</div>'; }
+}
+
+async function explorerOpenFile(srcId, filePath) {
+  if (!state.activeProjectId) return;
+  var viewerEl = document.getElementById('proj-exp-viewer');
+  if (!viewerEl) return;
+  viewerEl.innerHTML = '<div class="proj-loading"><i class="ti ti-loader-2 spin"></i> Loading…</div>';
+  _explorerMonacoDispose();
+  try {
+    var r = await fetch('/api/projects/' + state.activeProjectId + '/sources/' + srcId + '/file?path=' + encodeURIComponent(filePath));
+    var data = await r.json();
+    if (!r.ok) { viewerEl.innerHTML = '<div class="proj-hub-error">' + _projEsc(data.error) + '</div>'; return; }
+    window._lastProjectFileContent = data.type === 'text' ? data.content : null;
+    window._lastProjectFileSrcId = srcId;
+    window._lastProjectFilePath  = filePath;
+    var fname  = filePath.split('/').pop();
+    var rawUrl = '/api/projects/' + state.activeProjectId + '/sources/' + encodeURIComponent(srcId) + '/raw?path=' + encodeURIComponent(filePath);
+    var headerBtns = data.type === 'text'
+      ? '<button class="proj-icon-btn" onclick="saveFileAsContext(\'' + _projEsc(srcId) + '\',\'' + _projEsc(filePath) + '\')" title="Save as context"><i class="ti ti-folder-plus"></i> Save to Project</button>' +
+        '<button class="proj-icon-btn" onclick="copyFileContent()" title="Copy"><i class="ti ti-copy"></i></button>'
+      : '<a class="proj-icon-btn" href="' + rawUrl + '" download="' + _projEsc(fname) + '"><i class="ti ti-download"></i></a>';
+    viewerEl.innerHTML =
+      '<div class="proj-file-viewer-header">' +
+        '<span class="proj-file-viewer-path">' + _projEsc(filePath) + '</span>' +
+        '<span class="proj-file-viewer-size">' + _fmtSize(data.size) + '</span>' +
+        headerBtns +
+      '</div>' +
+      '<div id="proj-exp-monaco" class="proj-explorer-monaco"></div>';
+    if (data.type === 'text') {
+      var ext = (data.ext || '').toLowerCase();
+      var lang = _MONO_LANG[ext] || 'plaintext';
+      _mountExplorerMonaco(data.content, lang);
+    } else {
+      var bodyEl = document.getElementById('proj-exp-monaco');
+      if (bodyEl) bodyEl.innerHTML = '<div class="proj-file-binary-wrap"><i class="ti ti-file-unknown proj-file-binary-icon"></i><div class="proj-file-binary-name">' + _projEsc(fname) + '</div><a class="proj-action-btn" href="' + rawUrl + '" download="' + _projEsc(fname) + '"><i class="ti ti-download"></i> Download</a></div>';
+    }
+  } catch(e) { viewerEl.innerHTML = '<div class="proj-hub-error">' + _projEsc(e.message) + '</div>'; }
+}
+
+function _mountExplorerMonaco(content, lang) {
+  var container = document.getElementById('proj-exp-monaco');
+  if (!container) return;
+  if (typeof require === 'undefined') {
+    container.innerHTML = '<pre class="proj-file-code"><code>' + _projEsc(content) + '</code></pre>';
+    return;
+  }
+  require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs' } });
+  require(['vs/editor/editor.main'], function() {
+    container.innerHTML = '';
+    _explorerMonaco = monaco.editor.create(container, {
+      value: content, language: lang,
+      theme: 'vs-dark', readOnly: true,
+      fontSize: 13,
+      fontFamily: "'Cascadia Code','JetBrains Mono','Fira Code',Menlo,Consolas,monospace",
+      lineNumbers: 'on', minimap: { enabled: true },
+      scrollBeyondLastLine: false, automaticLayout: true,
+      wordWrap: 'off', folding: true,
+      scrollbar: { verticalScrollbarSize: 6, horizontalScrollbarSize: 6 },
+      padding: { top: 8, bottom: 8 },
+    });
+  });
 }
 
 async function saveFileAsContext(srcId, filePath) {

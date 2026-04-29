@@ -58,6 +58,23 @@ function _runPyGui(lines) {
 }
 
 async function _guiScreenshot() {
+  // Use native screencapture on macOS (no Python dependency)
+  if (process.platform === 'darwin') {
+    const tmp = require('os').tmpdir() + '/fauna-screenshot-' + Date.now() + '.png';
+    return new Promise((resolve, reject) => {
+      const proc = _spawn('screencapture', ['-x', '-t', 'png', tmp]);
+      proc.on('close', code => {
+        if (code !== 0) return reject(new Error('screencapture failed with code ' + code));
+        try {
+          const buf = require('fs').readFileSync(tmp);
+          require('fs').unlinkSync(tmp);
+          resolve(buf.toString('base64'));
+        } catch (e) { reject(e); }
+      });
+      proc.on('error', e => reject(e));
+    });
+  }
+  // Fallback: pyautogui on other platforms
   const b64 = await _runPyGui(
     'import base64, io\n' +
     'img = pyautogui.screenshot()\n' +
@@ -1341,7 +1358,7 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
               const b64 = await _guiScreenshot();
               result = 'Desktop screenshot captured. The image is included in the conversation.';
               allMessages.push({ role: 'user', content: [
-                { type: 'text', text: '[Desktop screenshot via PyAutoGUI]' },
+                { type: 'text', text: '[Desktop screenshot]' },
                 { type: 'image_url', image_url: { url: 'data:image/png;base64,' + b64, detail: 'high' } }
               ] });
             } else if (toolName === 'gui_click') {

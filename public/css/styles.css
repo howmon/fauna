@@ -4314,6 +4314,43 @@ body.win-platform .acv-header {
 .proj-file-binary-size { font-size: 11px; color: var(--text-muted); }
 .proj-file-binary-note { font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
 
+/* ── Full-screen File Explorer ─────────────────────────────────────────── */
+.proj-explorer-overlay {
+  position: fixed; inset: 0; z-index: 900;
+  background: rgba(0,0,0,.6); backdrop-filter: blur(4px);
+  display: flex; align-items: stretch; justify-content: stretch;
+}
+.proj-explorer-panel {
+  flex: 1; display: flex; flex-direction: column;
+  background: var(--surface); overflow: hidden;
+}
+.proj-explorer-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.proj-explorer-title { font-size: 13px; font-weight: 700; flex: 1; }
+.proj-explorer-src-select { max-width: 200px; }
+.proj-explorer-body {
+  flex: 1; display: flex; overflow: hidden;
+}
+.proj-explorer-tree {
+  width: 260px; min-width: 180px; max-width: 360px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto; padding: 8px; flex-shrink: 0;
+  display: flex; flex-direction: column; gap: 1px;
+}
+.proj-explorer-viewer {
+  flex: 1; display: flex; flex-direction: column; overflow: hidden;
+}
+.proj-explorer-viewer-empty {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; color: var(--text-muted); font-size: 13px;
+}
+.proj-explorer-monaco {
+  flex: 1; min-height: 0;
+}
+
 /* ── Context cards ─────────────────────────────────────────────────────── */
 .proj-ctx-card {
   border: 1px solid var(--border); border-radius: 8px;
