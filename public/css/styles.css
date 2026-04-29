@@ -4734,6 +4734,26 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 .proj-modal-body { padding: 16px 20px; }
 .proj-modal-body p { margin: 0; font-size: 13px; line-height: 1.5; }
 .proj-modal-err { padding: 0 20px 10px; font-size: 12px; color: var(--error, #f36e6e); }
+
+/* Add Context dialog tabs */
+.proj-ctx-add-tabs {
+  display: flex; border-bottom: 1px solid var(--border);
+}
+.proj-ctx-add-tab {
+  flex: 1; background: none; border: none; border-bottom: 2px solid transparent;
+  padding: 9px 8px; font-size: 12px; color: var(--text-dim); cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  font-family: inherit; transition: color .12s, background .12s;
+}
+.proj-ctx-add-tab:hover { color: var(--text); background: var(--surface2); }
+.proj-ctx-add-tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.proj-ctx-file-drop {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; padding: 28px 16px; border: 2px dashed var(--border); border-radius: 8px;
+  margin: 4px 0; cursor: pointer; transition: border-color .12s, background .12s;
+  text-align: center; font-size: 12px; color: var(--text-muted);
+}
+.proj-ctx-file-drop.dragover { border-color: var(--accent); background: var(--accent-dim); }
 .proj-modal-textarea {
   width: 100%; min-height: 100px; resize: vertical;
   font-family: var(--mono); font-size: 12px;
