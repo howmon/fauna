@@ -4541,9 +4541,7 @@ body.win-platform .acv-header {
 }
 .proj-sidebar-item:hover { background: var(--surface2); color: var(--text); }
 .proj-sidebar-item.active { background: var(--accent-dim); color: var(--text); border-left: 2px solid var(--accent); }
-.proj-sidebar-item-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
-.proj-sidebar-item-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.proj-sidebar-item-meta { font-size: 10px; color: var(--text-muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.proj-sidebar-item-name { flex: 1; font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .proj-sidebar-item-actions {
   display: flex; align-items: center; gap: 2px; opacity: 0; transition: opacity .15s;
   flex-shrink: 0;

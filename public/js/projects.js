@@ -53,20 +53,10 @@ function renderProjectSidebarList() {
   var visible = projects.slice(0, MAX);
 
   el.innerHTML = visible.map(function(p) {
-    var convCount = (state.conversations || []).filter(function(c) { return c.projectId === p.id; }).length;
-    var taskCount = (p.taskIds || []).length;
-    var srcCount  = (p.sources  || []).length;
-    var isActive  = p.id === state.activeProjectId;
-    var meta = [];
-    if (srcCount)  meta.push(srcCount  + ' src'  + (srcCount  !== 1 ? 's' : ''));
-    if (convCount) meta.push(convCount + ' conv' + (convCount !== 1 ? 's' : ''));
-    if (taskCount) meta.push(taskCount + ' task' + (taskCount !== 1 ? 's' : ''));
+    var isActive = p.id === state.activeProjectId;
     return '<div class="proj-sidebar-item' + (isActive ? ' active' : '') + '" onclick="setActiveProject(\'' + _projEsc(p.id) + '\')">' +
       '<span class="proj-dot proj-color-' + _projEsc(p.color) + '"></span>' +
-      '<div class="proj-sidebar-item-body">' +
-        '<span class="proj-sidebar-item-name">' + _projEsc(p.name) + '</span>' +
-        (meta.length ? '<span class="proj-sidebar-item-meta">' + meta.join(' · ') + '</span>' : '') +
-      '</div>' +
+      '<span class="proj-sidebar-item-name">' + _projEsc(p.name) + '</span>' +
       '<span class="proj-sidebar-item-actions">' +
         (isActive
           ? '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();openProjectHub()" title="Open hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>' +
