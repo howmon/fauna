@@ -51,22 +51,26 @@ function renderProjectSidebarList() {
     return (b.lastActiveAt || 0) > (a.lastActiveAt || 0) ? 1 : -1;
   });
   var visible = projects.slice(0, MAX);
+
   el.innerHTML = visible.map(function(p) {
     var convCount = (state.conversations || []).filter(function(c) { return c.projectId === p.id; }).length;
     var taskCount = (p.taskIds || []).length;
     var srcCount  = (p.sources  || []).length;
     var isActive  = p.id === state.activeProjectId;
     var meta = [];
-    if (srcCount)  meta.push('<span>' + srcCount  + ' src'  + (srcCount  !== 1 ? 's' : '') + '</span>');
-    if (convCount) meta.push('<span>' + convCount + ' conv' + (convCount !== 1 ? 's' : '') + '</span>');
-    if (taskCount) meta.push('<span>' + taskCount + ' task' + (taskCount !== 1 ? 's' : '') + '</span>');
+    if (srcCount)  meta.push(srcCount  + ' src'  + (srcCount  !== 1 ? 's' : ''));
+    if (convCount) meta.push(convCount + ' conv' + (convCount !== 1 ? 's' : ''));
+    if (taskCount) meta.push(taskCount + ' task' + (taskCount !== 1 ? 's' : ''));
     return '<div class="proj-sidebar-item' + (isActive ? ' active' : '') + '" onclick="setActiveProject(\'' + _projEsc(p.id) + '\')">' +
       '<span class="proj-dot proj-color-' + _projEsc(p.color) + '"></span>' +
       '<div class="proj-sidebar-item-body">' +
         '<span class="proj-sidebar-item-name">' + _projEsc(p.name) + '</span>' +
         (meta.length ? '<span class="proj-sidebar-item-meta">' + meta.join(' · ') + '</span>' : '') +
       '</div>' +
-      (isActive ? '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();openProjectHub()" title="Open hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>' : '') +
+      (isActive
+        ? '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();openProjectHub()" title="Open hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>' +
+          '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();clearActiveProject()" title="Deactivate"><i class="ti ti-x"></i></button>'
+        : '') +
     '</div>';
   }).join('') || '<div class="proj-sidebar-empty">No projects yet</div>';
 
@@ -164,31 +168,10 @@ async function _confirmDeleteProjectFromList(id) {
   } catch(e) { _showToast('Delete failed: ' + e.message, true); }
 }
 
-// ── Project Switcher (sidebar pill) ──────────────────────────────────────
+// ── Project Switcher (sidebar pill) — now a no-op, list handles display ──
 
 function renderProjectSwitcher() {
-  var el = document.getElementById('project-switcher');
-  if (!el) return;
-  var proj = _activeProject();
-  if (!proj) {
-    el.innerHTML =
-      '<div class="proj-switcher-row">' +
-        '<button class="proj-switcher-btn proj-switcher-none" onclick="openProjectPicker()" title="Switch project">' +
-          '<i class="ti ti-folder-open"></i> No project' +
-        '</button>' +
-        '<button class="proj-new-btn" onclick="openCreateProjectDialog()" title="New project"><i class="ti ti-plus"></i></button>' +
-      '</div>';
-    return;
-  }
-  el.innerHTML =
-    '<div class="proj-switcher-row">' +
-      '<button class="proj-switcher-btn proj-switcher-active" onclick="openProjectHub()" title="Open project hub" data-proj-color="' + _projEsc(proj.color) + '">' +
-        '<span class="proj-dot proj-color-' + _projEsc(proj.color) + '"></span>' +
-        '<span class="proj-switcher-label">' + _projEsc(proj.name) + '</span>' +
-        '<i class="ti ti-layout-sidebar-right-expand" style="margin-left:4px;font-size:11px;opacity:.6"></i>' +
-      '</button>' +
-      '<button class="proj-switcher-close-btn" onclick="clearActiveProject()" title="Deactivate project"><i class="ti ti-x"></i></button>' +
-    '</div>';
+  renderProjectSidebarList();
 }
 
 // ── Project Context Bar (above messages, shows active contexts) ───────────
@@ -1057,8 +1040,6 @@ async function _addProjectSource(opts) {
     await _refreshProject(proj.id);
     _renderProjectHubBody(_activeProject());
   } catch(e) { _showToast('Error: ' + e.message, true); }
-}
-
 }
 
 // ── Run Tab ───────────────────────────────────────────────────────────────
