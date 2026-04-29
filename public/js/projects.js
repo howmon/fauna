@@ -1308,9 +1308,15 @@ function _runRender(proj) {
 
   // Log pane (shown when a run is expanded)
   if (_runOpenLogId) {
+    var logRun = _runActiveList.find(function(r) { return r.runId === _runOpenLogId; });
+    var logIsActive = logRun && (logRun.status === 'running' || logRun.status === 'starting');
     html += '<div class="proj-run-log-pane" id="proj-run-log-pane">' +
       '<div class="proj-run-log-header">' +
         '<span class="proj-run-log-title" id="proj-run-log-title">Logs</span>' +
+        (logIsActive
+          ? '<button class="proj-icon-btn" style="color:#f87171" title="Stop process" onclick="stopProjectRun(\'' + _projEsc(_runOpenLogId) + '\',\'' + _projEsc(proj.id) + '\')">' +
+              '<i class="ti ti-player-stop-filled"></i> Stop</button>'
+          : '') +
         '<button class="proj-icon-btn" onclick="_runLogClose()" title="Close logs"><i class="ti ti-x"></i></button>' +
       '</div>' +
       '<pre id="proj-run-log-body" class="proj-run-log-body"></pre>' +

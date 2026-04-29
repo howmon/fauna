@@ -5907,11 +5907,70 @@ app.post('/api/projects/:id/sources/:srcId/run', (req, res) => {
 
     const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
 
+    // Auto-correction: watch early output for common errors and restart with a fix
+    const _autoCorrect = (() => {
+      let tried = false;
+      const errorPatterns = [
+        { re: /command not found.*npm|npm.*not found|npm: command not found/i,
+          fix: (c) => c.replace(/\bnpm\b/, 'npx'), hint: 'npm not found → retrying with npx' },
+        { re: /command not found.*python[^3]|python.*not found/i,
+          fix: (c) => c.replace(/\bpython\b/, 'python3'), hint: 'python not found → retrying with python3' },
+        { re: /command not found.*node|node.*not found/i,
+          fix: (c) => 'npx --yes ' + c, hint: 'node not found → retrying with npx' },
+        { re: /ENOENT.*npm|Missing script/i,
+          fix: (c) => c.replace(/^npm run /, 'npx '), hint: 'npm script missing → retrying with npx' },
+        { re: /command not found.*cargo|cargo.*not found/i,
+          fix: (c) => '~/.cargo/bin/cargo ' + c.replace(/^cargo\s*/, ''), hint: 'cargo not in PATH → trying ~/.cargo/bin/cargo' },
+        { re: /command not found.*go\b|go:.*not found/i,
+          fix: (c) => '/usr/local/go/bin/go ' + c.replace(/^go\s*/, ''), hint: 'go not in PATH → trying /usr/local/go/bin/go' },
+      ];
+      return (line) => {
+        if (tried) return;
+        for (const { re, fix, hint } of errorPatterns) {
+          if (re.test(line)) {
+            tried = true;
+            const newCmd = fix(cmd);
+            if (newCmd === cmd) continue;
+            _pushRunLog(runId, `[auto-fix] ${hint}`);
+            _pushRunLog(runId, `[auto-fix] retrying: ${newCmd}`);
+            // Kill current child and restart
+            try { child.kill('SIGTERM'); } catch (_) {}
+            setTimeout(() => {
+              const rec2 = _runs.get(runId);
+              if (!rec2 || rec2.status === 'stopped') return;
+              rec2.cmd = newCmd;
+              rec2.status = 'starting';
+              const child2 = _spawn('sh', ['-c', newCmd], {
+                cwd: root,
+                env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
+                detached: false,
+              });
+              rec2.process = child2;
+              rec2.pid = child2.pid;
+              rec2.status = 'running';
+              _broadcastRunStatus(runId);
+              child2.stdout.on('data', (d) => { stripAnsi(d.toString()).split('\n').forEach(l => { if (l) _pushRunLog(runId, l); }); });
+              child2.stderr.on('data', (d) => { stripAnsi(d.toString()).split('\n').forEach(l => { if (l) _pushRunLog(runId, '[stderr] ' + l); }); });
+              child2.on('close', (code) => {
+                const rec = _runs.get(runId);
+                if (rec) { rec.status = code === 0 ? 'stopped' : 'exited'; rec.stoppedAt = new Date().toISOString(); rec.process = null; _pushRunLog(runId, `[process exited with code ${code}]`); _broadcastRunStatus(runId); }
+              });
+              child2.on('error', (err) => {
+                const rec = _runs.get(runId);
+                if (rec) { rec.status = 'error'; _pushRunLog(runId, '[error] ' + err.message); _broadcastRunStatus(runId); }
+              });
+            }, 200);
+            break;
+          }
+        }
+      };
+    })();
+
     child.stdout.on('data', (d) => {
-      stripAnsi(d.toString()).split('\n').forEach(l => { if (l) _pushRunLog(runId, l); });
+      stripAnsi(d.toString()).split('\n').forEach(l => { if (l) { _pushRunLog(runId, l); _autoCorrect(l); } });
     });
     child.stderr.on('data', (d) => {
-      stripAnsi(d.toString()).split('\n').forEach(l => { if (l) _pushRunLog(runId, '[stderr] ' + l); });
+      stripAnsi(d.toString()).split('\n').forEach(l => { if (l) { _pushRunLog(runId, '[stderr] ' + l); _autoCorrect(l); } });
     });
     child.on('close', (code) => {
       const rec = _runs.get(runId);
