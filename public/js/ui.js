@@ -903,12 +903,13 @@ function toggleSidebar() {
 
 // ── Sidebar resize ───────────────────────────────────────────────────────
 (function() {
-  var SIDEBAR_MIN = 180, SIDEBAR_MAX = 480, SIDEBAR_DEFAULT = 230;
+  var SIDEBAR_MIN = 160, SIDEBAR_MAX = 600, SIDEBAR_DEFAULT = 230;
   var STORAGE_KEY = 'fauna-sidebar-width';
 
   function applySidebarWidth(w) {
     var sb = document.getElementById('sidebar');
     if (!sb) return;
+    document.documentElement.style.setProperty('--sidebar-w', w + 'px');
     sb.style.width = w + 'px';
     sb.style.minWidth = w + 'px';
   }

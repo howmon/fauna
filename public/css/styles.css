@@ -114,15 +114,15 @@ button .ti, label .ti { pointer-events: none; }
 
 /* ── Sidebar ───────────────────────────────────────────────────────── */
 #sidebar {
-  width: 230px; min-width: 230px; background: var(--sidebar);
+  width: var(--sidebar-w, 230px); min-width: var(--sidebar-w, 230px); background: var(--sidebar);
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column;
-  transition: width .2s; overflow: hidden;
+  transition: width .2s, min-width .2s; overflow: hidden;
   position: relative;
 }
 #sidebar.resizing { transition: none; user-select: none; }
 #sidebar-resize-handle {
-  position: absolute; right: 0; top: 0; bottom: 0; width: 5px;
+  position: absolute; right: -4px; top: 0; bottom: 0; width: 8px;
   cursor: col-resize; z-index: 10;
   display: flex; align-items: center; justify-content: center;
 }
