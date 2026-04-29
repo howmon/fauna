@@ -4366,6 +4366,18 @@ body.win-platform .acv-header {
 .proj-task-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .proj-task-status { font-size: 11px; color: var(--text-muted); }
 
+/* ── Conversations tab ─────────────────────────────────────────────────── */
+.proj-conv-row {
+  display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 7px;
+  cursor: pointer; transition: background .12s;
+}
+.proj-conv-row:hover { background: var(--surface2); }
+.proj-conv-row.active { background: var(--surface2); }
+.proj-conv-icon { font-size: 15px; color: var(--text-muted); flex-shrink: 0; }
+.proj-conv-info { flex: 1; overflow: hidden; display: flex; flex-direction: column; gap: 1px; }
+.proj-conv-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-conv-meta { font-size: 11px; color: var(--text-muted); }
+
 /* ── Settings ──────────────────────────────────────────────────────────── */
 .proj-settings { display: flex; flex-direction: column; gap: 12px; padding: 4px 0; }
 .proj-settings-row { display: flex; flex-direction: column; gap: 5px; }

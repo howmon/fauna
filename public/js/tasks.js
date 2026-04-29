@@ -308,6 +308,8 @@ async function submitTask() {
     },
   };
 
+  if (state.activeProjectId) payload.projectId = state.activeProjectId;
+
   var form = document.getElementById('task-create-form');
   var editId = form.dataset.editId;
 

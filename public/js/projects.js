@@ -157,11 +157,12 @@ function _renderProjectHub(proj) {
   if (nameEl) nameEl.textContent = proj.name;
 
   var TABS = [
-    { id: 'files',    icon: 'ti-folder', label: 'Files' },
-    { id: 'contexts', icon: 'ti-file-text', label: 'Contexts' },
-    { id: 'sources',  icon: 'ti-source-code', label: 'Sources' },
-    { id: 'tasks',    icon: 'ti-checklist', label: 'Tasks' },
-    { id: 'settings', icon: 'ti-settings', label: 'Settings' },
+    { id: 'files',    icon: 'ti-folder',       label: 'Files' },
+    { id: 'contexts', icon: 'ti-file-text',     label: 'Contexts' },
+    { id: 'sources',  icon: 'ti-source-code',   label: 'Sources' },
+    { id: 'convs',    icon: 'ti-messages',      label: 'Conversations' },
+    { id: 'tasks',    icon: 'ti-checklist',     label: 'Tasks' },
+    { id: 'settings', icon: 'ti-settings',      label: 'Settings' },
   ];
   var tabsEl = document.getElementById('project-hub-tabs');
   if (tabsEl) {
@@ -197,9 +198,10 @@ function _renderProjectHubBody(proj) {
   var body = document.getElementById('project-hub-body');
   if (!body) return;
   var tab = state.projectHubTab;
-  if (tab === 'files')    body.innerHTML = _renderFilesTab(proj);
+  if (tab === 'files')         body.innerHTML = _renderFilesTab(proj);
   else if (tab === 'contexts') body.innerHTML = _renderContextsTab(proj);
   else if (tab === 'sources')  body.innerHTML = _renderSourcesTab(proj);
+  else if (tab === 'convs')    body.innerHTML = _renderConvsTab(proj);
   else if (tab === 'tasks')    body.innerHTML = _renderTasksTab(proj);
   else if (tab === 'settings') body.innerHTML = _renderSettingsTab(proj);
 }
@@ -679,7 +681,7 @@ function openAddSourceDialog() {
         _projModal({
           title: 'Add Local Source',
           fields: [
-            { id: 'src-path', label: 'Folder path', placeholder: '/Users/me/myproject', type: 'text' },
+            { id: 'src-path', label: 'Folder path', placeholder: '/Users/me/myproject', type: 'text', browse: true },
           ],
           submit: 'Add',
           onSubmit: function(v2) {
@@ -722,6 +724,36 @@ async function _addProjectSource(opts) {
   } catch(e) { _showToast('Error: ' + e.message, true); }
 }
 
+// ── Conversations Tab ────────────────────────────────────────────────────
+
+function _renderConvsTab(proj) {
+  var convs = (typeof state !== 'undefined' ? state.conversations || [] : [])
+    .filter(function(c) { return c.projectId === proj.id; });
+  var header = '<div class="proj-section-header">' +
+    '<span>' + convs.length + ' conversation' + (convs.length !== 1 ? 's' : '') + '</span>' +
+    '<button class="proj-action-btn" onclick="closeProjectHub();newConversation()"><i class="ti ti-plus"></i> New conversation</button>' +
+  '</div>';
+  if (!convs.length) {
+    return header +
+      '<div class="proj-hub-empty"><i class="ti ti-messages" style="font-size:28px;opacity:.3"></i>' +
+      '<div>No conversations yet</div>' +
+      '<div style="font-size:11px;color:var(--text-dim)">New conversations while this project is active will appear here with all project context included</div></div>';
+  }
+  return header + convs.map(function(c) {
+    var isActive = c.id === state.currentId;
+    var date = c.createdAt ? new Date(c.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+    var msgCount = (c.messages || []).filter(function(m){ return m.role === 'user'; }).length;
+    return '<div class="proj-conv-row' + (isActive ? ' active' : '') + '" onclick="closeProjectHub();loadConversation(\'' + c.id + '\')">' +
+      '<i class="ti ti-message proj-conv-icon"></i>' +
+      '<div class="proj-conv-info">' +
+        '<span class="proj-conv-title">' + _projEsc(c.title) + '</span>' +
+        '<span class="proj-conv-meta">' + (msgCount ? msgCount + ' message' + (msgCount !== 1 ? 's' : '') + ' · ' : '') + date + '</span>' +
+      '</div>' +
+      '<button class="proj-icon-btn" onclick="event.stopPropagation();deleteConversation(\'' + c.id + '\',event)" title="Delete"><i class="ti ti-trash"></i></button>' +
+    '</div>';
+  }).join('');
+}
+
 // ── Tasks Tab ─────────────────────────────────────────────────────────────
 
 function _renderTasksTab(proj) {
@@ -732,7 +764,7 @@ function _renderTasksTab(proj) {
   if (!tasks.length) {
     return '<div class="proj-hub-empty"><i class="ti ti-checklist" style="font-size:28px;opacity:.3"></i>' +
       '<div>No tasks for this project</div>' +
-      '<button class="proj-action-btn" onclick="closeProjectHub();openTasksPanel()"><i class="ti ti-plus"></i> Create a task</button></div>';
+      '<button class="proj-action-btn" onclick="closeProjectHub();toggleTasksPanel()"><i class="ti ti-plus"></i> Create a task</button></div>';
   }
   return tasks.map(function(t) {
     var icon = { running:'ti-player-play', completed:'ti-check', failed:'ti-x', pending:'ti-clock', scheduled:'ti-calendar', paused:'ti-player-pause' }[t.status] || 'ti-clock';
@@ -932,6 +964,16 @@ async function browseNewProjectFolder() {
   } catch(e) { _showToast('Could not open folder picker', true); }
 }
 
+async function _projModalBrowse(fieldId) {
+  try {
+    var r = await fetch('/api/pick-folder', { method: 'POST' });
+    var data = await r.json();
+    if (data.cancelled || !data.path) return;
+    var input = document.getElementById('pmf-' + fieldId);
+    if (input) input.value = data.path;
+  } catch(e) { _showToast('Could not open folder picker', true); }
+}
+
 function pickNewProjColor(color) {
   window._newProjColor = color;
   var picker = document.getElementById('proj-new-color-picker');
@@ -1011,6 +1053,11 @@ function _projModal(opts) {
           return '<option value="' + _projEsc(o.value) + '">' + _projEsc(o.label) + '</option>';
         }).join('') +
       '</select>';
+    } else if (f.browse) {
+      input = '<div style="display:flex;gap:6px;flex:1">' +
+        '<input class="proj-input" id="pmf-' + f.id + '" type="text" placeholder="' + _projEsc(f.placeholder || '') + '" autocomplete="off" style="flex:1">' +
+        '<button class="proj-action-btn" type="button" onclick="_projModalBrowse(\'' + f.id + '\')" title="Browse"><i class="ti ti-folder-open"></i></button>' +
+      '</div>';
     } else {
       input = '<input class="proj-input" id="pmf-' + f.id + '" type="text" placeholder="' + _projEsc(f.placeholder || '') + '" autocomplete="off">';
     }
@@ -1057,7 +1104,7 @@ function _projModal(opts) {
 
   // Submit on Enter (but not in textarea)
   overlay.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA') {
+    if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'BUTTON') {
       overlay.querySelector('#_pmsubmit').click();
     }
     if (e.key === 'Escape') overlay.remove();
