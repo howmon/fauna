@@ -4431,3 +4431,13 @@ body.win-platform .acv-header {
 }
 .proj-toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
 .proj-toast.proj-toast-error { border-color: rgba(243,110,110,.4); color: var(--error); }
+
+/* ── Modal helpers (_projModal / _projConfirm) ─────────────────────────── */
+.proj-modal-sm { max-width: 380px !important; }
+.proj-modal-body { padding: 16px 20px; }
+.proj-modal-body p { margin: 0; font-size: 13px; line-height: 1.5; }
+.proj-modal-err { padding: 0 20px 10px; font-size: 12px; color: var(--error, #f36e6e); }
+.proj-modal-textarea {
+  width: 100%; min-height: 100px; resize: vertical;
+  font-family: var(--mono); font-size: 12px;
+}

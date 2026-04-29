@@ -560,10 +560,18 @@ async function deleteProjectContext(ctxId) {
 }
 
 function openAddContextDialog() {
-  var name = prompt('Context name:');
-  if (!name) return;
-  var content = prompt('Paste content (or leave empty):');
-  _addProjectContext({ type: 'snippet', name: name, content: content || '' });
+  _projModal({
+    title: 'Add Context',
+    fields: [
+      { id: 'ctx-name',    label: 'Name',    placeholder: 'e.g. API spec', type: 'text' },
+      { id: 'ctx-content', label: 'Content', placeholder: 'Paste text here…', type: 'textarea' },
+    ],
+    submit: 'Add',
+    onSubmit: function(vals) {
+      if (!vals['ctx-name']) return 'Name is required';
+      _addProjectContext({ type: 'snippet', name: vals['ctx-name'], content: vals['ctx-content'] || '' });
+    },
+  });
 }
 
 async function _addProjectContext(opts) {
@@ -643,7 +651,7 @@ async function syncProjectSource(srcId) {
 }
 
 async function deleteProjectSource(srcId) {
-  if (!confirm('Remove this source?')) return;
+  if (!await _projConfirm('Remove this source?')) return;
   var proj = _activeProject();
   if (!proj) return;
   try {
@@ -654,20 +662,50 @@ async function deleteProjectSource(srcId) {
 }
 
 function openAddSourceDialog() {
-  var type = prompt('Source type: local | github | gitlab', 'local');
-  if (!type) return;
-  if (type === 'local') {
-    var p = prompt('Local folder path:');
-    if (!p) return;
-    _addProjectSource({ type: 'local', path: p });
-  } else {
-    var owner = prompt('Owner / org name:');
-    if (!owner) return;
-    var repo = prompt('Repository name:');
-    if (!repo) return;
-    var branch = prompt('Branch:', 'main') || 'main';
-    _addProjectSource({ type, owner, repo, branch, name: owner + '/' + repo });
-  }
+  // Step 1: pick type
+  _projModal({
+    title: 'Add Source — Step 1',
+    fields: [
+      { id: 'src-type', label: 'Type', type: 'select', options: [
+        { value: 'local',  label: 'Local folder' },
+        { value: 'github', label: 'GitHub repository' },
+        { value: 'gitlab', label: 'GitLab repository' },
+      ]},
+    ],
+    submit: 'Next',
+    onSubmit: function(vals) {
+      var type = vals['src-type'];
+      if (type === 'local') {
+        _projModal({
+          title: 'Add Local Source',
+          fields: [
+            { id: 'src-path', label: 'Folder path', placeholder: '/Users/me/myproject', type: 'text' },
+          ],
+          submit: 'Add',
+          onSubmit: function(v2) {
+            if (!v2['src-path']) return 'Path is required';
+            _addProjectSource({ type: 'local', path: v2['src-path'] });
+          },
+        });
+      } else {
+        _projModal({
+          title: 'Add ' + type.charAt(0).toUpperCase() + type.slice(1) + ' Source',
+          fields: [
+            { id: 'src-owner',  label: 'Owner / org',   placeholder: 'octocat',  type: 'text' },
+            { id: 'src-repo',   label: 'Repository',    placeholder: 'my-repo',  type: 'text' },
+            { id: 'src-branch', label: 'Branch',        placeholder: 'main',     type: 'text' },
+          ],
+          submit: 'Add',
+          onSubmit: function(v2) {
+            if (!v2['src-owner'] || !v2['src-repo']) return 'Owner and repository are required';
+            var branch = v2['src-branch'] || 'main';
+            _addProjectSource({ type: type, owner: v2['src-owner'], repo: v2['src-repo'],
+              branch: branch, name: v2['src-owner'] + '/' + v2['src-repo'] });
+          },
+        });
+      }
+    },
+  });
 }
 
 async function _addProjectSource(opts) {
@@ -767,7 +805,7 @@ async function saveProjectSettings() {
 async function confirmDeleteProject() {
   var proj = _activeProject();
   if (!proj) return;
-  if (!confirm('Delete project "' + proj.name + '"? This cannot be undone.')) return;
+  if (!await _projConfirm('Delete project \u201c' + proj.name + '\u201d? This cannot be undone.')) return;
   try {
     await fetch('/api/projects/' + proj.id, { method: 'DELETE' });
     var idx = state.projects.findIndex(function(p) { return p.id === proj.id; });
@@ -875,6 +913,97 @@ function _showToast(msg, isError) {
   document.body.appendChild(el);
   setTimeout(function(){ el.classList.add('visible'); }, 10);
   setTimeout(function(){ el.classList.remove('visible'); setTimeout(function(){ el.remove(); }, 300); }, 3000);
+}
+
+// ── Modal helpers (replaces browser prompt/confirm — not supported in Electron) ──
+
+// _projConfirm(message) → Promise<boolean>
+function _projConfirm(message) {
+  return new Promise(function(resolve) {
+    var overlay = document.createElement('div');
+    overlay.className = 'proj-picker-overlay';
+    overlay.innerHTML =
+      '<div class="proj-picker-panel proj-modal-sm">' +
+        '<div class="proj-picker-header"><span>Confirm</span></div>' +
+        '<div class="proj-modal-body"><p>' + _projEsc(message) + '</p></div>' +
+        '<div class="proj-picker-footer">' +
+          '<button class="proj-action-btn proj-danger-btn" id="_pmc-ok">Delete</button>' +
+          '<button class="proj-action-btn" id="_pmc-cancel">Cancel</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    overlay.querySelector('#_pmc-ok').onclick    = function() { overlay.remove(); resolve(true);  };
+    overlay.querySelector('#_pmc-cancel').onclick = function() { overlay.remove(); resolve(false); };
+  });
+}
+
+// _projModal({ title, fields, submit, onSubmit }) — fields: [{id, label, type, placeholder, options}]
+// onSubmit(values) may return an error string, or void/falsy on success.
+function _projModal(opts) {
+  var overlay = document.createElement('div');
+  overlay.className = 'proj-picker-overlay';
+
+  var fieldsHtml = (opts.fields || []).map(function(f) {
+    var input;
+    if (f.type === 'textarea') {
+      input = '<textarea class="proj-input proj-modal-textarea" id="pmf-' + f.id + '" placeholder="' + _projEsc(f.placeholder || '') + '"></textarea>';
+    } else if (f.type === 'select') {
+      input = '<select class="proj-input" id="pmf-' + f.id + '">' +
+        (f.options || []).map(function(o) {
+          return '<option value="' + _projEsc(o.value) + '">' + _projEsc(o.label) + '</option>';
+        }).join('') +
+      '</select>';
+    } else {
+      input = '<input class="proj-input" id="pmf-' + f.id + '" type="text" placeholder="' + _projEsc(f.placeholder || '') + '" autocomplete="off">';
+    }
+    return '<div class="proj-settings-row"><label>' + _projEsc(f.label) + '</label>' + input + '</div>';
+  }).join('');
+
+  overlay.innerHTML =
+    '<div class="proj-picker-panel">' +
+      '<div class="proj-picker-header">' +
+        '<span>' + _projEsc(opts.title || '') + '</span>' +
+        '<button id="_pmclose"><i class="ti ti-x"></i></button>' +
+      '</div>' +
+      '<div class="proj-form">' + fieldsHtml + '</div>' +
+      '<div id="_pm-err" class="proj-modal-err" style="display:none"></div>' +
+      '<div class="proj-picker-footer">' +
+        '<button class="proj-action-btn" id="_pmsubmit">' + _projEsc(opts.submit || 'Submit') + '</button>' +
+        '<button class="proj-action-btn" id="_pmcancel">Cancel</button>' +
+      '</div>' +
+    '</div>';
+
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('#_pmclose').onclick  = function() { overlay.remove(); };
+  overlay.querySelector('#_pmcancel').onclick = function() { overlay.remove(); };
+  // Focus first text/textarea input
+  var first = overlay.querySelector('input, textarea');
+  if (first) setTimeout(function() { first.focus(); }, 50);
+
+  overlay.querySelector('#_pmsubmit').onclick = function() {
+    var vals = {};
+    (opts.fields || []).forEach(function(f) {
+      var el = overlay.querySelector('#pmf-' + f.id);
+      vals[f.id] = el ? el.value : '';
+    });
+    var err = opts.onSubmit && opts.onSubmit(vals);
+    if (err) {
+      var errEl = overlay.querySelector('#_pm-err');
+      errEl.textContent = err;
+      errEl.style.display = '';
+    } else {
+      overlay.remove();
+    }
+  };
+
+  // Submit on Enter (but not in textarea)
+  overlay.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA') {
+      overlay.querySelector('#_pmsubmit').click();
+    }
+    if (e.key === 'Escape') overlay.remove();
+  });
 }
 
 // ── Utility helpers ───────────────────────────────────────────────────────
