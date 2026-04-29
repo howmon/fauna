@@ -4633,6 +4633,12 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
   font-weight: 600; font-size: 13px; margin-bottom: 10px; color: var(--text);
 }
 .proj-run-src-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-stack-badges { display: flex; gap: 4px; flex-wrap: wrap; flex-shrink: 0; }
+.proj-stack-badge {
+  padding: 2px 7px; border-radius: 10px; font-size: 10px; font-weight: 600;
+  background: var(--accent-dim, rgba(99,102,241,.15)); color: var(--accent, #6366f1);
+  white-space: nowrap; letter-spacing: .02em;
+}
 .proj-run-src-body { display: flex; flex-direction: column; gap: 8px; }
 .proj-run-field-row { display: flex; flex-direction: column; gap: 5px; }
 .proj-run-port-row { flex-direction: row; align-items: center; gap: 8px; }

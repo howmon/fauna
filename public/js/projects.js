@@ -1178,6 +1178,7 @@ async function _addProjectSource(opts) {
 // State: detected commands per srcId, active runs, open log SSE
 
 var _runDetected   = {};   // srcId → [{ label, cmd, detected }]
+var _runStack      = {};   // srcId → string[]
 var _runActiveList = [];   // list from /api/projects/:id/runs
 var _runLogESrc    = null; // EventSource for log pane
 var _runOpenLogId  = null; // which runId is showing logs
@@ -1190,6 +1191,7 @@ function _renderRunTabShell() {
 
 async function _runTabLoad(proj) {
   _runDetected = {};
+  _runStack = {};
   _runActiveList = [];
   _runOpenLogId = null;
   if (_runLogESrc) { try { _runLogESrc.close(); } catch(_) {} _runLogESrc = null; }
@@ -1205,8 +1207,10 @@ async function _runTabLoad(proj) {
     await Promise.all(proj.sources.map(async function(s) {
       try {
         var r = await fetch('/api/projects/' + proj.id + '/sources/' + s.id + '/run-commands');
-        _runDetected[s.id] = await r.json();
-      } catch(_) { _runDetected[s.id] = []; }
+        var data = await r.json();
+        _runDetected[s.id] = Array.isArray(data) ? data : (data.commands || []);
+        _runStack[s.id] = Array.isArray(data) ? [] : (data.stack || []);
+      } catch(_) { _runDetected[s.id] = []; _runStack[s.id] = []; }
     }));
   }
 
@@ -1266,10 +1270,14 @@ function _runRender(proj) {
     html += srcs.map(function(s) {
       var cmds = _runDetected[s.id] || [];
       var topCmd = cmds.length ? cmds[0].cmd : '';
+      var stackBadges = (_runStack[s.id] || []).map(function(t) {
+        return '<span class="proj-stack-badge">' + _projEsc(t) + '</span>';
+      }).join('');
       return '<div class="proj-run-src-card" id="proj-run-src-' + _projEsc(s.id) + '">' +
         '<div class="proj-run-src-header">' +
           '<i class="ti ti-folder proj-folder-icon"></i>' +
           '<span class="proj-run-src-name">' + _projEsc(s.name) + '</span>' +
+          (stackBadges ? '<span class="proj-stack-badges">' + stackBadges + '</span>' : '') +
         '</div>' +
         '<div class="proj-run-src-body">' +
           '<div class="proj-run-field-row">' +

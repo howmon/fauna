@@ -1101,6 +1101,41 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
           const toggled = buildContextPayload(projectId, projectContextIds);
           if (toggled) projectCtx += '\n\n' + toggled;
         }
+        // Inject live run status + stack context
+        const activeRuns = [];
+        for (const [, rec] of _runs) {
+          if (rec.projectId === projectId) activeRuns.push(rec);
+        }
+        if (activeRuns.length) {
+          projectCtx += '\n\n## Active Processes';
+          for (const r of activeRuns) {
+            const isLive = r.status === 'running' || r.status === 'starting';
+            projectCtx += `\n- **${r.name}** (${r.status})  cmd: \`${r.cmd}\`` +
+              (r.port ? `  port: ${r.port}  url: http://localhost:${r.port}` : '') +
+              (r.srcName ? `  source: ${r.srcName}` : '') +
+              `  runId: ${r.runId}`;
+            if (isLive && r.logs && r.logs.length) {
+              const tail = r.logs.slice(-10).join('\n');
+              projectCtx += `\n  Recent logs:\n\`\`\`\n${tail}\n\`\`\``;
+            }
+          }
+          projectCtx += `\n\nTo stop a run: call DELETE /api/projects/{id}/runs/{runId}. To start a new run: POST /api/projects/{id}/sources/{srcId}/run with { cmd, name }. To read logs: GET /api/projects/{id}/runs/{runId}/logs (SSE).`;
+        }
+        // Stack info per source
+        const p = getProject(projectId);
+        if (p && p.sources && p.sources.length) {
+          const stackLines = [];
+          for (const src of p.sources) {
+            try {
+              const { root } = _getSourceRoot(projectId, src.id);
+              const stack = _detectStack(root);
+              if (stack.length) stackLines.push(`- **${src.name}**: ${stack.join(', ')}`);
+            } catch (_) {}
+          }
+          if (stackLines.length) {
+            projectCtx += '\n\n## Detected Stack\n' + stackLines.join('\n');
+          }
+        }
       } catch (_) {}
     }
     const fullSystem = [
@@ -5793,6 +5828,50 @@ function _getSourceRoot(projectId, srcId) {
   return { root, src };
 }
 
+function _detectStack(rootDir) {
+  const stack = [];
+  const pkgPath = path.join(rootDir, 'package.json');
+  if (fs.existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+      if (deps['next'])       stack.push('Next.js');
+      else if (deps['nuxt']) stack.push('Nuxt.js');
+      else if (deps['@sveltejs/kit']) stack.push('SvelteKit');
+      else if (deps['react'])  stack.push('React');
+      else if (deps['vue'])    stack.push('Vue');
+      else if (deps['svelte']) stack.push('Svelte');
+      else if (deps['angular'] || deps['@angular/core']) stack.push('Angular');
+      if (deps['express'])    stack.push('Express');
+      if (deps['fastify'])    stack.push('Fastify');
+      if (deps['hono'])       stack.push('Hono');
+      if (deps['vite'])       stack.push('Vite');
+      if (deps['typescript'] || deps['ts-node']) stack.push('TypeScript');
+      if (deps['tailwindcss']) stack.push('Tailwind CSS');
+      if (deps['prisma'] || deps['@prisma/client']) stack.push('Prisma');
+      if (deps['drizzle-orm']) stack.push('Drizzle ORM');
+      if (!stack.includes('TypeScript')) stack.push('Node.js');
+    } catch (_) {}
+  }
+  if (fs.existsSync(path.join(rootDir, 'manage.py')))    stack.push('Django');
+  else if (fs.existsSync(path.join(rootDir, 'app.py')) || fs.existsSync(path.join(rootDir, 'main.py'))) stack.push('Python');
+  if (fs.existsSync(path.join(rootDir, 'requirements.txt')) && !stack.includes('Django') && !stack.includes('Python')) {
+    try { const req = fs.readFileSync(path.join(rootDir, 'requirements.txt'), 'utf8');
+      if (/fastapi/i.test(req)) stack.push('FastAPI');
+      else if (/flask/i.test(req)) stack.push('Flask');
+      else stack.push('Python');
+    } catch (_) { stack.push('Python'); }
+  }
+  if (fs.existsSync(path.join(rootDir, 'Gemfile')))       stack.push('Ruby on Rails');
+  if (fs.existsSync(path.join(rootDir, 'go.mod')))        stack.push('Go');
+  if (fs.existsSync(path.join(rootDir, 'Cargo.toml')))    stack.push('Rust');
+  if (fs.existsSync(path.join(rootDir, 'pom.xml')))       stack.push('Java (Maven)');
+  if (fs.existsSync(path.join(rootDir, 'build.gradle'))) stack.push('Java (Gradle)');
+  if (fs.existsSync(path.join(rootDir, 'pubspec.yaml'))) stack.push('Flutter/Dart');
+  if (fs.existsSync(path.join(rootDir, 'composer.json'))) stack.push('PHP');
+  return [...new Set(stack)];
+}
+
 function _detectRunCommands(rootDir) {
   const candidates = [];
   const pkgPath = path.join(rootDir, 'package.json');
@@ -5854,7 +5933,23 @@ function _broadcastRunStatus(runId) {
 app.get('/api/projects/:id/sources/:srcId/run-commands', (req, res) => {
   try {
     const { root } = _getSourceRoot(req.params.id, req.params.srcId);
-    res.json(_detectRunCommands(root));
+    res.json({ commands: _detectRunCommands(root), stack: _detectStack(root) });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Stack summary for entire project (all sources)
+app.get('/api/projects/:id/stack', (req, res) => {
+  try {
+    const p = getProject(req.params.id);
+    if (!p) return res.status(404).json({ error: 'Project not found' });
+    const result = {};
+    for (const src of (p.sources || [])) {
+      try {
+        const { root } = _getSourceRoot(req.params.id, src.id);
+        result[src.id] = { name: src.name, stack: _detectStack(root), commands: _detectRunCommands(root) };
+      } catch (_) {}
+    }
+    res.json(result);
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
