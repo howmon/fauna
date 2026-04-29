@@ -1348,6 +1348,11 @@ function _runRecordCard(r, projectId) {
         '<i class="ti ti-world"></i> :' + r.port + '</button>'
     : '';
   var isActive = r.status === 'running' || r.status === 'starting';
+  var actionBtn = isActive
+    ? '<button class="proj-run-stop-btn" title="Stop" onclick="stopProjectRun(\'' + _projEsc(r.runId) + '\',\'' + _projEsc(projectId) + '\')">' +
+        '<i class="ti ti-player-stop-filled"></i> Stop</button>'
+    : '<button class="proj-icon-btn proj-run-dismiss-btn" title="Dismiss" onclick="dismissProjectRun(\'' + _projEsc(r.runId) + '\',\'' + _projEsc(projectId) + '\')">' +
+        '<i class="ti ti-x"></i></button>';
   return '<div class="proj-run-card" id="proj-run-card-' + _projEsc(r.runId) + '">' +
     '<div class="proj-run-card-header">' +
       '<span class="proj-run-status-dot ' + statusCls + '"></span>' +
@@ -1356,10 +1361,7 @@ function _runRecordCard(r, projectId) {
       portBtn +
       '<button class="proj-icon-btn" title="View logs" onclick="_runLogOpen(\'' + _projEsc(r.runId) + '\',\'' + _projEsc(projectId) + '\',true)">' +
         '<i class="ti ti-terminal-2"></i></button>' +
-      (isActive
-        ? '<button class="proj-icon-btn" style="color:var(--error-light)" title="Stop" onclick="stopProjectRun(\'' + _projEsc(r.runId) + '\',\'' + _projEsc(projectId) + '\')">' +
-            '<i class="ti ti-player-stop-filled"></i></button>'
-        : '') +
+      actionBtn +
     '</div>' +
     '<div class="proj-run-card-cmd">' + _projEsc(r.cmd) + '</div>' +
   '</div>';
@@ -1411,6 +1413,17 @@ async function stopProjectRun(runId, projectId) {
     if (_runOpenLogId === runId) _runLogClose();
     await _runRefresh();
   } catch(e) { _showToast('Stop failed: ' + e.message, true); }
+}
+
+async function dismissProjectRun(runId, projectId) {
+  var pid = projectId || (state.activeProjectId);
+  try {
+    await fetch('/api/projects/' + pid + '/runs/' + runId, { method: 'DELETE' });
+    if (_runOpenLogId === runId) _runLogClose();
+    _runActiveList = _runActiveList.filter(function(r) { return r.runId !== runId; });
+    var proj = _activeProject();
+    if (proj) _runRender(proj);
+  } catch(_) {}
 }
 
 async function _runRefresh() {

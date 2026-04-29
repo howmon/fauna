@@ -4678,6 +4678,15 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 .proj-run-card-name { font-weight: 600; font-size: 13px; color: var(--text); }
 .proj-run-card-src  { font-size: 11px; color: var(--text-muted); margin-right: auto; }
 .proj-run-card-cmd  { font-size: 11px; color: var(--text-dim); font-family: var(--mono-font, monospace); margin-top: 4px; }
+.proj-run-stop-btn {
+  display: flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 5px;
+  border: 1px solid var(--error-light, #f36e6e); color: var(--error-light, #f36e6e);
+  background: transparent; font-size: 11px; font-weight: 600; cursor: pointer; flex-shrink: 0;
+  transition: background .15s, color .15s;
+}
+.proj-run-stop-btn:hover { background: var(--error-light, #f36e6e); color: #fff; }
+.proj-run-dismiss-btn { opacity: 0; transition: opacity .15s; }
+.proj-run-card:hover .proj-run-dismiss-btn { opacity: 1; }
 
 /* Status dot */
 .proj-run-status-dot {
