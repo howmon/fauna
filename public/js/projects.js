@@ -26,6 +26,7 @@ async function loadProjects() {
     console.warn('[projects] load failed', e);
   }
   renderProjectSwitcher();
+  renderProjectSidebarList();
   renderProjectContextBar();
 }
 
@@ -38,6 +39,129 @@ async function _refreshProject(id) {
     if (idx !== -1) state.projects[idx] = updated;
     else state.projects.push(updated);
   } catch(e) {}
+}
+
+// ── Project Sidebar List ──────────────────────────────────────────────────
+
+function renderProjectSidebarList() {
+  var el = document.getElementById('proj-sidebar-list');
+  if (!el) return;
+  var MAX = 5;
+  var projects = (state.projects || []).slice().sort(function(a, b) {
+    return (b.lastActiveAt || 0) > (a.lastActiveAt || 0) ? 1 : -1;
+  });
+  var visible = projects.slice(0, MAX);
+  el.innerHTML = visible.map(function(p) {
+    var convCount = (state.conversations || []).filter(function(c) { return c.projectId === p.id; }).length;
+    var taskCount = (p.taskIds || []).length;
+    var srcCount  = (p.sources  || []).length;
+    var isActive  = p.id === state.activeProjectId;
+    var meta = [];
+    if (srcCount)  meta.push('<span>' + srcCount  + ' src'  + (srcCount  !== 1 ? 's' : '') + '</span>');
+    if (convCount) meta.push('<span>' + convCount + ' conv' + (convCount !== 1 ? 's' : '') + '</span>');
+    if (taskCount) meta.push('<span>' + taskCount + ' task' + (taskCount !== 1 ? 's' : '') + '</span>');
+    return '<div class="proj-sidebar-item' + (isActive ? ' active' : '') + '" onclick="setActiveProject(\'' + _projEsc(p.id) + '\')">' +
+      '<span class="proj-dot proj-color-' + _projEsc(p.color) + '"></span>' +
+      '<div class="proj-sidebar-item-body">' +
+        '<span class="proj-sidebar-item-name">' + _projEsc(p.name) + '</span>' +
+        (meta.length ? '<span class="proj-sidebar-item-meta">' + meta.join(' · ') + '</span>' : '') +
+      '</div>' +
+      (isActive ? '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();openProjectHub()" title="Open hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>' : '') +
+    '</div>';
+  }).join('') || '<div class="proj-sidebar-empty">No projects yet</div>';
+
+  var showAll = document.getElementById('proj-show-all');
+  if (showAll) showAll.style.display = projects.length > MAX ? '' : 'none';
+}
+
+// ── All Projects Page ─────────────────────────────────────────────────────
+
+function openAllProjects() {
+  var page = document.getElementById('all-projects-page');
+  if (!page) return;
+  page._filter = '';
+  page.style.display = 'flex';
+  _renderAllProjectsPage();
+}
+
+function closeAllProjects() {
+  var page = document.getElementById('all-projects-page');
+  if (page) page.style.display = 'none';
+}
+
+function _renderAllProjectsPage() {
+  var page = document.getElementById('all-projects-page');
+  if (!page) return;
+  var filter = (page._filter || '').toLowerCase();
+  var projects = (state.projects || []).slice().sort(function(a, b) {
+    return (b.lastActiveAt || 0) > (a.lastActiveAt || 0) ? 1 : -1;
+  });
+  if (filter) projects = projects.filter(function(p) { return p.name.toLowerCase().includes(filter) || (p.description || '').toLowerCase().includes(filter); });
+
+  var listEl = document.getElementById('all-projects-list-body');
+  if (!listEl) {
+    // First render — build shell
+    page.innerHTML =
+      '<div class="all-agents-page-inner">' +
+        '<div class="all-agents-header">' +
+          '<div class="all-agents-title"><i class="ti ti-folders"></i> All Projects</div>' +
+          '<div class="all-agents-search-wrap">' +
+            '<i class="ti ti-search"></i>' +
+            '<input class="all-agents-search" id="all-projects-search" placeholder="Search projects…" oninput="document.getElementById(\'all-projects-page\')._filter=this.value;_renderAllProjectsPage()">' +
+          '</div>' +
+          '<button class="all-agents-close" onclick="closeAllProjects()"><i class="ti ti-x"></i></button>' +
+        '</div>' +
+        '<div id="all-projects-list-body" class="all-projects-list"></div>' +
+        '<div class="all-agents-footer">' +
+          '<button class="proj-action-btn" onclick="openCreateProjectDialog()"><i class="ti ti-plus"></i> New project</button>' +
+        '</div>' +
+      '</div>';
+    listEl = document.getElementById('all-projects-list-body');
+  }
+
+  if (!projects.length) {
+    listEl.innerHTML = '<div class="proj-hub-empty" style="padding:40px"><i class="ti ti-folders" style="font-size:28px;opacity:.3"></i><div>No projects yet</div></div>';
+    return;
+  }
+
+  listEl.innerHTML = projects.map(function(p) {
+    var convCount = (state.conversations || []).filter(function(c) { return c.projectId === p.id; }).length;
+    var taskCount = (p.taskIds || []).length;
+    var srcCount  = (p.sources  || []).length;
+    var isActive  = p.id === state.activeProjectId;
+    return '<div class="all-proj-card' + (isActive ? ' active' : '') + '">' +
+      '<div class="all-proj-card-top">' +
+        '<span class="proj-dot proj-color-' + _projEsc(p.color) + '" style="width:10px;height:10px;flex-shrink:0"></span>' +
+        '<span class="all-proj-card-name">' + _projEsc(p.name) + '</span>' +
+        (isActive ? '<span class="all-proj-active-badge">Active</span>' : '') +
+      '</div>' +
+      (p.description ? '<div class="all-proj-card-desc">' + _projEsc(p.description) + '</div>' : '') +
+      '<div class="all-proj-card-meta">' +
+        '<span><i class="ti ti-source-code"></i> ' + srcCount + ' source' + (srcCount !== 1 ? 's' : '') + '</span>' +
+        '<span><i class="ti ti-messages"></i> ' + convCount + ' conv' + (convCount !== 1 ? 's' : '') + '</span>' +
+        '<span><i class="ti ti-checklist"></i> ' + taskCount + ' task' + (taskCount !== 1 ? 's' : '') + '</span>' +
+      '</div>' +
+      '<div class="all-proj-card-actions">' +
+        (isActive
+          ? '<button class="proj-action-btn" onclick="openProjectHub();closeAllProjects()"><i class="ti ti-layout-sidebar-right-expand"></i> Open Hub</button>' +
+            '<button class="proj-icon-btn" onclick="clearActiveProject();closeAllProjects()" title="Deactivate"><i class="ti ti-x"></i></button>'
+          : '<button class="proj-action-btn" onclick="setActiveProject(\'' + _projEsc(p.id) + '\');closeAllProjects()"><i class="ti ti-player-play"></i> Activate</button>') +
+        '<button class="proj-icon-btn" style="color:var(--text-muted)" onclick="_confirmDeleteProjectFromList(\'' + _projEsc(p.id) + '\')" title="Delete project"><i class="ti ti-trash"></i></button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+async function _confirmDeleteProjectFromList(id) {
+  if (!await _projConfirm('Delete this project? This cannot be undone.')) return;
+  try {
+    await fetch('/api/projects/' + id, { method: 'DELETE' });
+    state.projects = state.projects.filter(function(p) { return p.id !== id; });
+    _deleteProjectConversations(id);
+    if (state.activeProjectId === id) clearActiveProject();
+    renderProjectSidebarList();
+    _renderAllProjectsPage();
+  } catch(e) { _showToast('Delete failed: ' + e.message, true); }
 }
 
 // ── Project Switcher (sidebar pill) ──────────────────────────────────────
@@ -122,6 +246,7 @@ async function setActiveProject(id) {
     state.projectContextEnabled = {};
   }
   renderProjectSwitcher();
+  renderProjectSidebarList();
   renderProjectContextBar();
   if (typeof renderConvList === 'function') renderConvList();
   if (typeof renderTasks === 'function') renderTasks();
@@ -1360,14 +1485,36 @@ async function saveProjectSettings() {
   } catch(e) { _showToast('Error: ' + e.message, true); }
 }
 
+function _deleteProjectConversations(projectId) {
+  var ids = state.conversations
+    .filter(function(c) { return c.projectId === projectId; })
+    .map(function(c) { return c.id; });
+  if (!ids.length) return;
+  ids.forEach(function(id) {
+    if (typeof _destroyConvBrowserTabs === 'function') _destroyConvBrowserTabs(id);
+    if (typeof purgeConvDom === 'function') purgeConvDom(id);
+    fetch('/api/conversations/' + id, { method: 'DELETE' }).catch(function() {});
+  });
+  state.conversations = state.conversations.filter(function(c) { return c.projectId !== projectId; });
+  if (typeof saveConversations === 'function') saveConversations();
+  if (ids.includes(state.currentId)) {
+    state.currentId = null;
+    if (state.conversations.length && typeof loadConversation === 'function') loadConversation(state.conversations[0].id);
+    else if (typeof showEmpty === 'function') showEmpty();
+  }
+  if (typeof renderConvList === 'function') renderConvList();
+}
+
 async function confirmDeleteProject() {
   var proj = _activeProject();
   if (!proj) return;
   if (!await _projConfirm('Delete project \u201c' + proj.name + '\u201d? This cannot be undone.')) return;
   try {
-    await fetch('/api/projects/' + proj.id, { method: 'DELETE' });
-    var idx = state.projects.findIndex(function(p) { return p.id === proj.id; });
+    var id = proj.id;
+    await fetch('/api/projects/' + id, { method: 'DELETE' });
+    var idx = state.projects.findIndex(function(p) { return p.id === id; });
     if (idx !== -1) state.projects.splice(idx, 1);
+    _deleteProjectConversations(id);
     clearActiveProject();
   } catch(e) { _showToast('Error: ' + e.message, true); }
 }

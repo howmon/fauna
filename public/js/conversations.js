@@ -233,20 +233,20 @@ function renderConvList() {
   list.innerHTML = '';
   var MAX_VISIBLE = 5;
   var convs = state.conversations;
-  // When a project is active, filter to project convs (with a fallback to all if none match)
   if (state.activeProjectId) {
+    // Project active: show only that project's conversations
     var projConvs = convs.filter(function(c) { return c.projectId === state.activeProjectId; });
     if (projConvs.length) convs = projConvs;
+  } else {
+    // No project active: hide all project-linked conversations — they live in the project
+    convs = convs.filter(function(c) { return !c.projectId; });
   }
   var visible = convs.slice(0, MAX_VISIBLE);
   visible.forEach(conv => {
     var d = document.createElement('div');
     d.className = 'conv-item' + (conv.id === state.currentId ? ' active' : '');
     d.onclick = () => loadConversation(conv.id);
-    // Small project dot for project-linked conversations
-    var projDot = conv.projectId ? '<span class="conv-proj-dot" title="Project conversation"></span>' : '';
     d.innerHTML = (conv._streaming ? '<i class="ti ti-loader-2 conv-streaming-icon"></i>' : '') +
-      projDot +
       '<span class="conv-label">' + escHtml(conv.title) + '</span>' +
       '<button class="conv-del" onclick="deleteConversation(\'' + conv.id + '\', event)"><i class="ti ti-x"></i></button>';
     list.appendChild(d);
@@ -316,14 +316,13 @@ function renderAllConvsPage() {
 }
 
 function toggleSidebarSection(section) {
-  var bodyId = section === 'conv' ? 'conv-section-body' : 'agents-section-body';
-  var body = document.getElementById(bodyId);
+  var bodyMap = { conv: 'conv-section-body', agents: 'agents-section-body', projects: 'projects-section-body' };
+  var headerMap = { conv: 'conv-section-header', agents: 'agents-section-header', projects: 'projects-section-header' };
+  var body = document.getElementById(bodyMap[section]);
   if (!body) return;
   var isHidden = body.style.display === 'none';
   body.style.display = isHidden ? '' : 'none';
-  // Toggle chevron on the clicked icon
-  var headerId = section === 'conv' ? 'conv-section-header' : 'agents-section-header';
-  var header = document.getElementById(headerId);
+  var header = document.getElementById(headerMap[section]);
   if (header) {
     var chevron = header.querySelector('.section-chevron');
     if (chevron) {

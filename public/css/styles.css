@@ -4526,6 +4526,54 @@ body.win-platform .acv-header {
   display: inline-block; flex-shrink: 0; margin-right: 1px; opacity: .8;
 }
 
+/* ── Projects Sidebar Section ───────────────────────────────────────────── */
+.proj-sidebar-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; cursor: pointer; border-radius: 6px; margin: 1px 6px;
+  transition: background .1s;
+}
+.proj-sidebar-item:hover { background: var(--surface2); }
+.proj-sidebar-item.active { background: var(--surface2); }
+.proj-sidebar-item-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+.proj-sidebar-item-name { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-sidebar-item-meta { font-size: 10px; color: var(--text-muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.proj-sidebar-hub-btn {
+  flex-shrink: 0; padding: 2px 4px; border-radius: 4px; font-size: 12px;
+  color: var(--text-dim); background: none; border: none; cursor: pointer; opacity: .7;
+}
+.proj-sidebar-hub-btn:hover { opacity: 1; background: var(--surface3); }
+.proj-sidebar-empty { font-size: 12px; color: var(--text-muted); padding: 8px 14px; }
+
+/* ── All Projects Page ──────────────────────────────────────────────────── */
+#all-projects-page {
+  position: fixed; inset: 0; z-index: 800;
+  background: var(--bg); flex-direction: column; overflow: hidden;
+}
+.all-projects-list {
+  flex: 1; overflow-y: auto; padding: 12px 16px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; align-content: start;
+}
+.all-proj-card {
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 8px;
+  background: var(--surface1); transition: border-color .1s;
+}
+.all-proj-card:hover { border-color: var(--accent); }
+.all-proj-card.active { border-color: var(--accent); background: var(--surface2); }
+.all-proj-card-top { display: flex; align-items: center; gap: 8px; }
+.all-proj-card-name { font-size: 14px; font-weight: 600; color: var(--text); flex: 1; }
+.all-proj-active-badge {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--accent); border: 1px solid var(--accent); border-radius: 4px; padding: 1px 6px;
+}
+.all-proj-card-desc { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+.all-proj-card-meta {
+  display: flex; gap: 12px; font-size: 11px; color: var(--text-dim);
+}
+.all-proj-card-meta span { display: flex; align-items: center; gap: 4px; }
+.all-proj-card-actions { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.all-agents-footer { padding: 12px 16px; border-top: 1px solid var(--border); flex-shrink: 0; }
+
 /* ── Run Tab ────────────────────────────────────────────────────────────── */
 .proj-run-root { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 .proj-run-layout { display: flex; gap: 0; flex: 1; overflow: hidden; min-height: 0; }

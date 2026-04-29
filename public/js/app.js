@@ -41,6 +41,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Load projects and render the switcher
   if (typeof loadProjects === 'function') await loadProjects();
   if (typeof renderProjectSwitcher === 'function') renderProjectSwitcher();
+  if (typeof renderProjectSidebarList === 'function') renderProjectSidebarList();
   // Start global port polling (shows active processes count in topbar)
   if (typeof _startPortsPolling === 'function') _startPortsPolling();
   checkAuth();

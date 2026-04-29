@@ -26,6 +26,21 @@
     <!-- ── Scrollable middle area ──────────────────────────────── -->
     <div id="sidebar-scroll">
 
+    <!-- ── Projects section ────────────────────────────────────── -->
+    <div id="projects-section">
+      <div id="projects-section-header">
+        <i class="ti ti-folders"></i>
+        <span>Projects</span>
+        <span style="flex:1"></span>
+        <button class="section-plus-btn" onclick="openCreateProjectDialog()" title="New project"><i class="ti ti-plus"></i></button>
+        <i class="ti ti-chevron-down section-chevron" onclick="toggleSidebarSection('projects')"></i>
+      </div>
+      <div id="projects-section-body">
+        <div id="proj-sidebar-list"></div>
+        <div id="proj-show-all" class="sidebar-show-all" onclick="openAllProjects()" style="display:none">All projects</div>
+      </div>
+    </div>
+
     <!-- ── Conversations section ───────────────────────────────── -->
     <div id="conv-section">
       <div id="conv-section-header">
@@ -49,9 +64,9 @@
         <span id="agent-update-badge" class="agent-update-count" style="display:none"></span>
         <span style="flex:1"></span>
         <button id="agents-plus-btn" class="section-plus-btn" onclick="event.stopPropagation();openAgentActionsPage()" title="Create or import agent"><i class="ti ti-plus"></i></button>
-        <i class="ti ti-chevron-down section-chevron" onclick="toggleSidebarSection('agents')"></i>
+        <i class="ti ti-chevron-right section-chevron" onclick="toggleSidebarSection('agents')"></i>
       </div>
-      <div id="agents-section-body">
+      <div id="agents-section-body" style="display:none">
         <div id="agent-list"></div>
         <div id="agents-show-all" class="sidebar-show-all" onclick="openAllAgents()" style="display:none">All agents</div>
         <div id="agent-store-btn" onclick="openAgentStore()" title="Browse the Agent Store">
@@ -989,6 +1004,8 @@ Examples:
 <div id="all-convs-page" style="display:none"></div>
 <!-- ── All Agents Page (full overlay) ──────────────────────────── -->
 <div id="all-agents-page" style="display:none"></div>
+<!-- ── All Projects Page (full overlay) ─────────────────────────── -->
+<div id="all-projects-page" style="display:none"></div>
 <!-- ── Agent Actions Page (Create / Import overlay) ───────────── -->
 <div id="agent-actions-page" style="display:none"></div>
 <!-- ── Project Hub panel ─────────────────────────────────────────── -->
