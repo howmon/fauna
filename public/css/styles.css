@@ -4371,6 +4371,33 @@ body.win-platform .acv-header {
 .proj-settings-row { display: flex; flex-direction: column; gap: 5px; }
 .proj-settings-row label { font-size: 11px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
 .proj-settings-actions { display: flex; gap: 8px; padding-top: 4px; }
+/* Project folder section */
+.proj-settings-folder {
+  border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px; background: var(--surface2);
+}
+.proj-settings-folder-header {
+  display: flex; align-items: center; justify-content: space-between;
+}
+.proj-settings-folder-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--text-muted); display: flex; align-items: center; gap: 5px;
+}
+.proj-settings-folder-path {
+  font-size: 12px; font-family: var(--mono); color: var(--text); word-break: break-all;
+  padding: 4px 6px; background: var(--code-bg); border-radius: 4px;
+}
+.proj-settings-folder-empty {
+  font-size: 12px; color: var(--text-dim); font-style: italic;
+}
+.proj-settings-folder-actions {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.proj-folder-clear-btn { font-size: 11px; opacity: .7; }
+.proj-folder-src-btn { font-size: 11px; }
+.proj-folder-src-note { font-size: 11px; color: var(--accent); display: flex; align-items: center; gap: 4px; }
+/* Hide the raw text input — visible but subtle, useful for manual edits */
+.proj-settings-folder-input { font-size: 11px; font-family: var(--mono); }
 .proj-color-picker { display: flex; gap: 6px; flex-wrap: wrap; }
 .proj-color-dot {
   width: 18px; height: 18px; border-radius: 50%; border: 2px solid transparent;

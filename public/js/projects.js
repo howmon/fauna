@@ -747,6 +747,30 @@ function _renderTasksTab(proj) {
 // ── Settings Tab ──────────────────────────────────────────────────────────
 
 function _renderSettingsTab(proj) {
+  var rootSet = proj.rootPath && proj.rootPath.trim();
+  // Check if rootPath is already added as a local source
+  var rootAlreadySource = rootSet && (proj.sources || []).some(function(s) {
+    return s.type === 'local' && s.path === proj.rootPath.trim();
+  });
+
+  var folderSection =
+    '<div class="proj-settings-folder">' +
+      '<div class="proj-settings-folder-header">' +
+        '<span class="proj-settings-folder-label"><i class="ti ti-folder"></i> Project folder</span>' +
+        '<button class="proj-icon-btn" onclick="browseProjectFolder()" title="Browse"><i class="ti ti-dots"></i></button>' +
+      '</div>' +
+      (rootSet
+        ? '<div class="proj-settings-folder-path">' + _projEsc(proj.rootPath) + '</div>' +
+          '<div class="proj-settings-folder-actions">' +
+            '<button class="proj-icon-btn proj-folder-clear-btn" onclick="clearProjectFolder()" title="Clear folder"><i class="ti ti-x"></i> Clear</button>' +
+            (!rootAlreadySource
+              ? '<button class="proj-action-btn proj-folder-src-btn" onclick="addRootAsSource()" title="Add to sources"><i class="ti ti-plug"></i> Add as source</button>'
+              : '<span class="proj-folder-src-note"><i class="ti ti-check"></i> Added as source</span>') +
+          '</div>'
+        : '<div class="proj-settings-folder-empty">No folder set &mdash; type a path or click <i class="ti ti-dots"></i></div>') +
+      '<input class="proj-input proj-settings-folder-input" id="proj-set-root" value="' + _projEsc(proj.rootPath || '') + '" placeholder="/path/to/project" oninput="this.dataset.dirty=1">' +
+    '</div>';
+
   return '<div class="proj-settings">' +
     '<div class="proj-settings-row">' +
       '<label>Name</label>' +
@@ -756,10 +780,7 @@ function _renderSettingsTab(proj) {
       '<label>Description</label>' +
       '<input class="proj-input" id="proj-set-desc" value="' + _projEsc(proj.description || '') + '">' +
     '</div>' +
-    '<div class="proj-settings-row">' +
-      '<label>Root path</label>' +
-      '<input class="proj-input" id="proj-set-root" value="' + _projEsc(proj.rootPath || '') + '">' +
-    '</div>' +
+    folderSection +
     '<div class="proj-settings-row">' +
       '<label>Color</label>' +
       '<div class="proj-color-picker">' +
@@ -781,6 +802,33 @@ function pickProjColor(color) {
   // Optimistic update in memory
   proj.color = color;
   _renderProjectHubBody(proj);
+}
+
+async function browseProjectFolder() {
+  try {
+    var r = await fetch('/api/pick-folder', { method: 'POST' });
+    var data = await r.json();
+    if (data.cancelled || !data.path) return;
+    var input = document.getElementById('proj-set-root');
+    if (input) {
+      input.value = data.path;
+      input.dataset.dirty = '1';
+    }
+    // Auto-save immediately so the folder card re-renders
+    await saveProjectSettings();
+  } catch(e) { _showToast('Could not open folder picker', true); }
+}
+
+async function clearProjectFolder() {
+  var input = document.getElementById('proj-set-root');
+  if (input) input.value = '';
+  await saveProjectSettings();
+}
+
+async function addRootAsSource() {
+  var proj = _activeProject();
+  if (!proj || !proj.rootPath) return;
+  await _addProjectSource({ type: 'local', path: proj.rootPath });
 }
 
 async function saveProjectSettings() {

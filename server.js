@@ -5642,6 +5642,28 @@ subscribeTask('*', (evt) => {
 
 // ── Projects ───────────────────────────────────────────────────────────────
 
+// Native folder picker — used by the project settings "Browse" button
+app.post('/api/pick-folder', async (req, res) => {
+  try {
+    let chosen;
+    if (process.platform === 'darwin') {
+      chosen = execSync(
+        `osascript -e 'set f to choose folder with prompt "Choose project folder"' -e 'POSIX path of f'`,
+        { encoding: 'utf8', timeout: 60000 }
+      ).trim().replace(/\/$/, '');
+    } else {
+      chosen = execSync(
+        `powershell -Command "[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = 'Choose project folder'; if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath } else { throw 'cancelled' }"`,
+        { encoding: 'utf8', timeout: 60000 }
+      ).trim();
+    }
+    if (!chosen) return res.json({ cancelled: true });
+    res.json({ path: chosen });
+  } catch (_) {
+    res.json({ cancelled: true });
+  }
+});
+
 // List all projects
 app.get('/api/projects', (req, res) => {
   res.json(getAllProjects());
