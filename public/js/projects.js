@@ -904,7 +904,7 @@ function openCreateProjectDialog() {
       '<div class="proj-form">' +
         '<div class="proj-settings-row"><label>Name</label><input class="proj-input" id="proj-new-name" placeholder="My project" autofocus></div>' +
         '<div class="proj-settings-row"><label>Description</label><input class="proj-input" id="proj-new-desc" placeholder="Optional description"></div>' +
-        '<div class="proj-settings-row"><label>Root path</label><input class="proj-input" id="proj-new-root" placeholder="~/code/myproject (optional)"></div>' +
+        '<div class="proj-settings-row"><label>Root path</label><div style="display:flex;gap:6px;flex:1"><input class="proj-input" id="proj-new-root" placeholder="~/code/myproject (optional)" style="flex:1"><button class="proj-action-btn" type="button" onclick="browseNewProjectFolder()" title="Browse"><i class="ti ti-folder-open"></i></button></div></div>' +
         '<div class="proj-settings-row"><label>Color</label>' +
           '<div class="proj-color-picker" id="proj-new-color-picker">' +
             ['teal','teal2','purple','green','orange','red','violet','pink'].map(function(c,i) {
@@ -920,6 +920,16 @@ function openCreateProjectDialog() {
   document.body.appendChild(overlay);
   setTimeout(function(){ var n = document.getElementById('proj-new-name'); if(n) n.focus(); }, 50);
   window._newProjColor = 'teal';
+}
+
+async function browseNewProjectFolder() {
+  try {
+    var r = await fetch('/api/pick-folder', { method: 'POST' });
+    var data = await r.json();
+    if (data.cancelled || !data.path) return;
+    var input = document.getElementById('proj-new-root');
+    if (input) input.value = data.path;
+  } catch(e) { _showToast('Could not open folder picker', true); }
 }
 
 function pickNewProjColor(color) {
