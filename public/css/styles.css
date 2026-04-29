@@ -4314,6 +4314,24 @@ body.win-platform .acv-header {
 .proj-file-binary-size { font-size: 11px; color: var(--text-muted); }
 .proj-file-binary-note { font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
 
+/* ── Project settings toggle ──────────────────────────────────────────── */
+.proj-toggle-label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.proj-toggle-input { position: absolute; opacity: 0; width: 0; height: 0; }
+.proj-toggle-track {
+  position: relative; display: inline-block;
+  width: 32px; height: 18px; border-radius: 9px;
+  background: var(--surface3); transition: background .15s; flex-shrink: 0;
+}
+.proj-toggle-input:checked + .proj-toggle-track { background: var(--accent); }
+.proj-toggle-thumb {
+  position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: #fff; transition: transform .15s;
+}
+.proj-toggle-input:checked + .proj-toggle-track .proj-toggle-thumb { transform: translateX(14px); }
+.proj-toggle-text { font-size: 12px; color: var(--text); }
+.proj-settings-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; line-height: 1.4; }
+
 /* ── Full-screen File Explorer ─────────────────────────────────────────── */
 .proj-explorer-overlay {
   position: fixed; inset: 0; z-index: 900;
@@ -4326,9 +4344,10 @@ body.win-platform .acv-header {
 }
 .proj-explorer-header {
   display: flex; align-items: center; gap: 8px;
-  padding: 10px 14px; border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
+  padding: 10px 14px; padding-left: 82px; border-bottom: 1px solid var(--border);
+  flex-shrink: 0; -webkit-app-region: drag; user-select: none;
 }
+.proj-explorer-header > * { -webkit-app-region: no-drag; }
 .proj-explorer-title { font-size: 13px; font-weight: 700; flex: 1; }
 .proj-explorer-src-select { max-width: 200px; }
 .proj-explorer-body {
@@ -4350,6 +4369,20 @@ body.win-platform .acv-header {
 .proj-explorer-monaco {
   flex: 1; min-height: 0;
 }
+
+/* ── VS Code-style expand-in-place tree ────────────────────────────────── */
+.proj-tree-chevron {
+  font-size: 10px; color: var(--text-dim); flex-shrink: 0;
+  width: 14px; text-align: center; transition: transform .1s;
+}
+.proj-folder-icon { color: #e8ae4a !important; }
+.proj-tree-dir-row { font-weight: 500; }
+.proj-tree-dot {
+  display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--accent); margin-left: auto; flex-shrink: 0;
+}
+.proj-file-opened > .proj-file-name { color: var(--accent); opacity: .85; }
+.proj-file-opened > .proj-file-icon { color: var(--accent); opacity: .7; }
 
 /* ── Context cards ─────────────────────────────────────────────────────── */
 .proj-ctx-card {
@@ -4494,7 +4527,7 @@ body.win-platform .acv-header {
 }
 
 /* ── Save to Project button ────────────────────────────────────────────── */
-.proj-save-btn { color: var(--accent) !important; }
+.proj-save-btn { color: var(--accent) !important; font-weight: 600; }
 .proj-save-btn:hover { background: var(--accent-dim) !important; }
 
 /* ── Toast notification ────────────────────────────────────────────────── */

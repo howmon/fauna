@@ -5758,6 +5758,22 @@ app.get('/api/projects/:id/sources/:srcId/file', (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+// Write a file back to a local source (only if project.allowFileEditing === true)
+app.put('/api/projects/:id/sources/:srcId/file', (req, res) => {
+  try {
+    const p = getProject(req.params.id);
+    if (!p) return res.status(404).json({ error: 'Project not found' });
+    if (!p.allowFileEditing) return res.status(403).json({ error: 'File editing is disabled for this project. Enable it in Project Settings.' });
+    const { fullPath } = resolveSourceFilePath(req.params.id, req.params.srcId, req.query.path || '');
+    const { content } = req.body;
+    if (typeof content !== 'string') return res.status(400).json({ error: 'content must be a string' });
+    const tmp = fullPath + '.fauna-tmp-' + Date.now();
+    fs.writeFileSync(tmp, content, 'utf8');
+    fs.renameSync(tmp, fullPath);
+    res.json({ ok: true });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
 // Stream raw bytes — used by the frontend to render images, video, audio, PDF
 app.get('/api/projects/:id/sources/:srcId/raw', (req, res) => {
   try {

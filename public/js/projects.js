@@ -230,41 +230,103 @@ function _renderFilesTab(proj) {
   '<div id="proj-file-viewer" class="proj-file-viewer" style="display:none"></div>';
 }
 
-async function loadProjectFileTree(srcId, subPath) {
-  if (!state.activeProjectId) return;
-  state._projectFileSrcId = srcId;
-  state._projectFilePath  = subPath;
-  var treeEl = document.getElementById('proj-file-tree-root');
-  if (!treeEl) return;
-  treeEl.innerHTML = '<div class="proj-loading"><i class="ti ti-loader-2 spin"></i> Loading…</div>';
-  try {
-    var r = await fetch('/api/projects/' + state.activeProjectId + '/sources/' + srcId + '/files?path=' + encodeURIComponent(subPath));
-    var files = await r.json();
-    if (!r.ok) { treeEl.innerHTML = '<div class="proj-hub-error">' + _projEsc(files.error) + '</div>'; return; }
-    treeEl.innerHTML = _renderFileList(files, srcId, subPath);
-    if (subPath) {
-      var backHtml = '<div class="proj-file-back" onclick="loadProjectFileTree(\'' + _projEsc(srcId) + '\', \'' + _projEsc(subPath.split('/').slice(0,-1).join('/')) + '\')">' +
-        '<i class="ti ti-arrow-left"></i> Back' +
-      '</div>';
-      treeEl.innerHTML = backHtml + treeEl.innerHTML;
-    }
-  } catch(e) { treeEl.innerHTML = '<div class="proj-hub-error">' + _projEsc(e.message) + '</div>'; }
+// ── Unified expand-in-place tree ─────────────────────────────────────────
+var _hubTreeState = { _id:'hub', srcId:null, dirCache:{}, expanded:{}, openedFiles:{}, dirHasOpened:{} };
+var _explorerTreeState = { _id:'explorer', srcId:null, dirCache:{}, expanded:{}, openedFiles:{}, dirHasOpened:{} };
+
+function _treeMarkOpened(st, filePath) {
+  st.openedFiles[filePath] = true;
+  var parts = filePath.split('/');
+  for (var i = 1; i < parts.length; i++) {
+    st.dirHasOpened[parts.slice(0, i).join('/')] = true;
+  }
 }
 
-function _renderFileList(files, srcId, subPath) {
-  if (!files.length) return '<div class="proj-hub-empty">Empty directory</div>';
-  return files.map(function(f) {
-    var icon = f.type === 'dir' ? 'ti-folder' : _fileIcon(f.ext);
-    var clickFn = f.type === 'dir'
-      ? 'loadProjectFileTree(\'' + _projEsc(srcId) + '\',\'' + _projEsc(f.path) + '\')'
-      : 'openProjectFile(\'' + _projEsc(srcId) + '\',\'' + _projEsc(f.path) + '\')';
-    var sizeLabel = f.type === 'file' && f.size ? ' <span class="proj-file-size">' + _fmtSize(f.size) + '</span>' : '';
-    return '<div class="proj-file-row" onclick="' + clickFn + '">' +
-      '<i class="ti ' + icon + ' proj-file-icon"></i>' +
-      '<span class="proj-file-name">' + _projEsc(f.name) + '</span>' +
-      sizeLabel +
-    '</div>';
+function _treeRender(st) {
+  var elId = st._id === 'hub' ? 'proj-file-tree-root' : 'proj-exp-tree';
+  var el = document.getElementById(elId);
+  if (!el) return;
+  var html = _treeRenderLevel(st, '', 0);
+  el.innerHTML = html || '<div class="proj-hub-empty">Empty directory</div>';
+}
+
+function _treeRenderLevel(st, path, depth) {
+  var entries = st.dirCache[path];
+  if (!entries || !entries.length) return '';
+  return entries.map(function(f) {
+    var pad = 8 + depth * 16;
+    if (f.type === 'dir') {
+      var open = !!st.expanded[f.path];
+      var hasDot = !!st.dirHasOpened[f.path];
+      var chevron = open ? 'ti-chevron-down' : 'ti-chevron-right';
+      var folderIco = open ? 'ti-folder-open' : 'ti-folder';
+      var children = open ? _treeRenderLevel(st, f.path, depth + 1) : '';
+      return '<div>' +
+        '<div class="proj-file-row proj-tree-dir-row" style="padding-left:' + pad + 'px" onclick="_treeToggleDir(\'' + st._id + '\',\'' + _projEsc(f.path) + '\')">' +
+          '<i class="ti ' + chevron + ' proj-tree-chevron"></i>' +
+          '<i class="ti ' + folderIco + ' proj-file-icon proj-folder-icon"></i>' +
+          '<span class="proj-file-name">' + _projEsc(f.name) + '</span>' +
+          (hasDot ? '<span class="proj-tree-dot"></span>' : '') +
+        '</div>' +
+        (open ? '<div>' + children + '</div>' : '') +
+      '</div>';
+    } else {
+      var opened = !!st.openedFiles[f.path];
+      var size = f.size ? '<span class="proj-file-size">' + _fmtSize(f.size) + '</span>' : '';
+      return '<div class="proj-file-row' + (opened ? ' proj-file-opened' : '') + '" style="padding-left:' + pad + 'px" onclick="_treeOpenFile(\'' + st._id + '\',\'' + _projEsc(f.path) + '\')">' +
+        '<i class="ti ' + _fileIcon(f.ext) + ' proj-file-icon"></i>' +
+        '<span class="proj-file-name">' + _projEsc(f.name) + '</span>' +
+        size +
+      '</div>';
+    }
   }).join('');
+}
+
+async function _treeToggleDir(stId, path) {
+  var st = stId === 'hub' ? _hubTreeState : _explorerTreeState;
+  if (st.expanded[path]) {
+    delete st.expanded[path];
+    _treeRender(st);
+    return;
+  }
+  st.expanded[path] = true;
+  if (!st.dirCache[path]) {
+    try {
+      var r = await fetch('/api/projects/' + state.activeProjectId + '/sources/' + st.srcId + '/files?path=' + encodeURIComponent(path));
+      var files = await r.json();
+      st.dirCache[path] = r.ok ? files : [];
+    } catch(e) { st.dirCache[path] = []; }
+  }
+  _treeRender(st);
+}
+
+function _treeOpenFile(stId, filePath) {
+  var st = stId === 'hub' ? _hubTreeState : _explorerTreeState;
+  _treeMarkOpened(st, filePath);
+  _treeRender(st);
+  if (stId === 'hub') openProjectFile(st.srcId, filePath);
+  else explorerOpenFile(st.srcId, filePath);
+}
+
+async function _treeInit(st, srcId) {
+  if (!state.activeProjectId) return;
+  st.srcId = srcId;
+  st.dirCache = {};
+  st.expanded = {};
+  var el = document.getElementById(st._id === 'hub' ? 'proj-file-tree-root' : 'proj-exp-tree');
+  if (el) el.innerHTML = '<div class="proj-loading"><i class="ti ti-loader-2 spin"></i> Loading…</div>';
+  try {
+    var r = await fetch('/api/projects/' + state.activeProjectId + '/sources/' + srcId + '/files?path=');
+    var files = await r.json();
+    if (!r.ok) { if (el) el.innerHTML = '<div class="proj-hub-error">' + _projEsc(files.error) + '</div>'; return; }
+    st.dirCache[''] = files;
+    _treeRender(st);
+  } catch(e) { if (el) el.innerHTML = '<div class="proj-hub-error">' + _projEsc(e.message) + '</div>'; }
+}
+
+async function loadProjectFileTree(srcId /*, subPath ignored — tree always starts at root */) {
+  state._projectFileSrcId = srcId;
+  await _treeInit(_hubTreeState, srcId);
 }
 
 // ── Monaco file viewer ────────────────────────────────────────────────────
@@ -330,7 +392,9 @@ async function openProjectFile(srcId, filePath) {
     if (headerEl) {
       var headerBtns = '';
       if (data.type === 'text') {
+        var canEdit = _activeProject() && _activeProject().allowFileEditing;
         headerBtns =
+          (canEdit ? '<button class="proj-icon-btn proj-save-btn" onclick="saveProjectFile()" title="Save file"><i class="ti ti-device-floppy"></i> Save</button>' : '') +
           '<button class="proj-icon-btn" onclick="saveFileAsContext(\'' + _projEsc(srcId) + '\',\'' + _projEsc(filePath) + '\')" title="Save as context"><i class="ti ti-folder-plus"></i> Save to Project</button>' +
           '<button class="proj-icon-btn" onclick="copyFileContent()" title="Copy"><i class="ti ti-copy"></i></button>';
       } else {
@@ -452,7 +516,7 @@ function _mountProjectMonaco(content, lang) {
       value: content,
       language: lang,
       theme: 'vs-dark',
-      readOnly: true,
+      readOnly: !(_activeProject() && _activeProject().allowFileEditing),
       fontSize: 12,
       fontFamily: "'Cascadia Code','JetBrains Mono','Fira Code',Menlo,Consolas,monospace",
       lineNumbers: 'on',
@@ -485,6 +549,25 @@ function closeProjectFileViewer() {
 
 function copyFileContent() {
   if (window._lastProjectFileContent) navigator.clipboard.writeText(window._lastProjectFileContent).catch(function(){});
+}
+
+async function saveProjectFile() {
+  var srcId    = window._lastProjectFileSrcId;
+  var filePath = window._lastProjectFilePath;
+  if (!srcId || !filePath || !state.activeProjectId) return;
+  // Get content from whichever Monaco is active
+  var content = _explorerMonaco ? _explorerMonaco.getValue()
+              : _projMonacoEditor ? _projMonacoEditor.getValue()
+              : null;
+  if (content === null) { _showToast('Nothing to save', true); return; }
+  try {
+    var r = await fetch('/api/projects/' + state.activeProjectId + '/sources/' + encodeURIComponent(srcId) + '/file?path=' + encodeURIComponent(filePath), {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content })
+    });
+    if (!r.ok) throw new Error((await r.json()).error);
+    _showToast('Saved \u2713 ' + filePath.split('/').pop());
+  } catch(e) { _showToast('Save failed: ' + e.message, true); }
 }
 
 // ── Full-screen File Explorer ─────────────────────────────────────────────
@@ -536,35 +619,9 @@ function _explorerMonacoDispose() {
   if (_explorerMonaco) { _explorerMonaco.dispose(); _explorerMonaco = null; }
 }
 
-async function explorerLoadTree(srcId, subPath) {
-  if (!state.activeProjectId) return;
+async function explorerLoadTree(srcId /*, subPath ignored — tree always starts at root */) {
   state._projectFileSrcId = srcId;
-  var treeEl = document.getElementById('proj-exp-tree');
-  if (!treeEl) return;
-  treeEl.innerHTML = '<div class="proj-loading"><i class="ti ti-loader-2 spin"></i> Loading…</div>';
-  try {
-    var r = await fetch('/api/projects/' + state.activeProjectId + '/sources/' + srcId + '/files?path=' + encodeURIComponent(subPath));
-    var files = await r.json();
-    if (!r.ok) { treeEl.innerHTML = '<div class="proj-hub-error">' + _projEsc(files.error) + '</div>'; return; }
-    var html = '';
-    if (subPath) {
-      var parent = subPath.split('/').slice(0,-1).join('/');
-      html += '<div class="proj-file-back" onclick="explorerLoadTree(\'' + _projEsc(srcId) + '\',\'' + _projEsc(parent) + '\')">' +
-        '<i class="ti ti-arrow-left"></i> Back</div>';
-    }
-    html += files.map(function(f) {
-      var icon = f.type === 'dir' ? 'ti-folder' : _fileIcon(f.ext);
-      var click = f.type === 'dir'
-        ? 'explorerLoadTree(\'' + _projEsc(srcId) + '\',\'' + _projEsc(f.path) + '\')'
-        : 'explorerOpenFile(\'' + _projEsc(srcId) + '\',\'' + _projEsc(f.path) + '\')';
-      var size = f.type === 'file' && f.size ? ' <span class="proj-file-size">' + _fmtSize(f.size) + '</span>' : '';
-      return '<div class="proj-file-row" onclick="' + click + '">' +
-        '<i class="ti ' + icon + ' proj-file-icon"></i>' +
-        '<span class="proj-file-name">' + _projEsc(f.name) + '</span>' + size +
-      '</div>';
-    }).join('');
-    treeEl.innerHTML = html || '<div class="proj-hub-empty">Empty directory</div>';
-  } catch(e) { treeEl.innerHTML = '<div class="proj-hub-error">' + _projEsc(e.message) + '</div>'; }
+  await _treeInit(_explorerTreeState, srcId);
 }
 
 async function explorerOpenFile(srcId, filePath) {
@@ -582,8 +639,10 @@ async function explorerOpenFile(srcId, filePath) {
     window._lastProjectFilePath  = filePath;
     var fname  = filePath.split('/').pop();
     var rawUrl = '/api/projects/' + state.activeProjectId + '/sources/' + encodeURIComponent(srcId) + '/raw?path=' + encodeURIComponent(filePath);
+    var canEdit2 = _activeProject() && _activeProject().allowFileEditing;
     var headerBtns = data.type === 'text'
-      ? '<button class="proj-icon-btn" onclick="saveFileAsContext(\'' + _projEsc(srcId) + '\',\'' + _projEsc(filePath) + '\')" title="Save as context"><i class="ti ti-folder-plus"></i> Save to Project</button>' +
+      ? (canEdit2 ? '<button class="proj-icon-btn proj-save-btn" onclick="saveProjectFile()" title="Save file"><i class="ti ti-device-floppy"></i> Save</button>' : '') +
+        '<button class="proj-icon-btn" onclick="saveFileAsContext(\'' + _projEsc(srcId) + '\',\'' + _projEsc(filePath) + '\')" title="Save as context"><i class="ti ti-folder-plus"></i> Save to Project</button>' +
         '<button class="proj-icon-btn" onclick="copyFileContent()" title="Copy"><i class="ti ti-copy"></i></button>'
       : '<a class="proj-icon-btn" href="' + rawUrl + '" download="' + _projEsc(fname) + '"><i class="ti ti-download"></i></a>';
     viewerEl.innerHTML =
@@ -616,7 +675,7 @@ function _mountExplorerMonaco(content, lang) {
     container.innerHTML = '';
     _explorerMonaco = monaco.editor.create(container, {
       value: content, language: lang,
-      theme: 'vs-dark', readOnly: true,
+      theme: 'vs-dark', readOnly: !(_activeProject() && _activeProject().allowFileEditing),
       fontSize: 13,
       fontFamily: "'Cascadia Code','JetBrains Mono','Fira Code',Menlo,Consolas,monospace",
       lineNumbers: 'on', minimap: { enabled: true },
@@ -966,6 +1025,15 @@ function _renderSettingsTab(proj) {
         }).join('') +
       '</div>' +
     '</div>' +
+    '<div class="proj-settings-row">' +
+      '<label>File editing</label>' +
+      '<label class="proj-toggle-label">' +
+        '<input type="checkbox" id="proj-set-allow-edit" class="proj-toggle-input"' + (proj.allowFileEditing ? ' checked' : '') + '>' +
+        '<span class="proj-toggle-track"><span class="proj-toggle-thumb"></span></span>' +
+        '<span class="proj-toggle-text">Allow editing source files</span>' +
+      '</label>' +
+      '<div class="proj-settings-hint">When on, you and agents can modify files in this project\'s sources directly from the file viewer.</div>' +
+    '</div>' +
     '<div class="proj-settings-actions">' +
       '<button class="proj-action-btn" onclick="saveProjectSettings()"><i class="ti ti-check"></i> Save</button>' +
       '<button class="proj-action-btn proj-danger-btn" onclick="confirmDeleteProject()"><i class="ti ti-trash"></i> Delete project</button>' +
@@ -1014,10 +1082,11 @@ async function saveProjectSettings() {
   var name = (document.getElementById('proj-set-name') || {}).value || proj.name;
   var desc = (document.getElementById('proj-set-desc') || {}).value || '';
   var root = (document.getElementById('proj-set-root') || {}).value || null;
+  var allowEdit = !!(document.getElementById('proj-set-allow-edit') || {}).checked;
   try {
     var r = await fetch('/api/projects/' + proj.id, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, description: desc, rootPath: root || null, color: proj.color })
+      body: JSON.stringify({ name, description: desc, rootPath: root || null, color: proj.color, allowFileEditing: allowEdit })
     });
     if (!r.ok) throw new Error((await r.json()).error);
     await _refreshProject(proj.id);
