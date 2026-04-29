@@ -235,8 +235,7 @@ function renderConvList() {
   var convs = state.conversations;
   if (state.activeProjectId) {
     // Project active: show only that project's conversations
-    var projConvs = convs.filter(function(c) { return c.projectId === state.activeProjectId; });
-    if (projConvs.length) convs = projConvs;
+    convs = convs.filter(function(c) { return c.projectId === state.activeProjectId; });
   } else {
     // No project active: hide all project-linked conversations — they live in the project
     convs = convs.filter(function(c) { return !c.projectId; });

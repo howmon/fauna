@@ -235,6 +235,43 @@ function clearActiveProject() {
 
 // ── Project Hub Panel ─────────────────────────────────────────────────────
 
+var _hubResizeInited = false;
+function _initHubResize() {
+  if (_hubResizeInited) return;
+  _hubResizeInited = true;
+  var HUB_MIN = 300, HUB_MAX = 900, HUB_KEY = 'fauna-hub-width';
+  var hub = document.getElementById('project-hub');
+  var handle = document.getElementById('project-hub-resize-handle');
+  if (!hub || !handle) return;
+  var saved = parseInt(localStorage.getItem(HUB_KEY), 10);
+  if (saved && saved >= HUB_MIN && saved <= HUB_MAX) {
+    document.documentElement.style.setProperty('--hub-w', saved + 'px');
+  }
+  handle.addEventListener('mousedown', function(e) {
+    e.preventDefault();
+    var startX = e.clientX;
+    var startW = hub.getBoundingClientRect().width;
+    hub.classList.add('resizing');
+    function onMove(e) {
+      var w = Math.min(HUB_MAX, Math.max(HUB_MIN, startW - (e.clientX - startX)));
+      document.documentElement.style.setProperty('--hub-w', w + 'px');
+    }
+    function onUp() {
+      hub.classList.remove('resizing');
+      var finalW = hub.getBoundingClientRect().width;
+      localStorage.setItem(HUB_KEY, Math.round(finalW));
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+  handle.addEventListener('dblclick', function() {
+    document.documentElement.style.setProperty('--hub-w', '460px');
+    localStorage.removeItem(HUB_KEY);
+  });
+}
+
 function openProjectHub(tab) {
   var proj = _activeProject();
   if (!proj) { openProjectPicker(); return; }
@@ -243,6 +280,7 @@ function openProjectHub(tab) {
   var hub = document.getElementById('project-hub');
   if (!hub) return;
   hub.style.display = 'flex';
+  _initHubResize();
   _renderProjectHub(proj);
 }
 
@@ -873,17 +911,118 @@ async function deleteProjectContext(ctxId) {
 }
 
 function openAddContextDialog() {
-  _projModal({
-    title: 'Add Context',
-    fields: [
-      { id: 'ctx-name',    label: 'Name',    placeholder: 'e.g. API spec', type: 'text' },
-      { id: 'ctx-content', label: 'Content', placeholder: 'Paste text here…', type: 'textarea' },
-    ],
-    submit: 'Add',
-    onSubmit: function(vals) {
-      if (!vals['ctx-name']) return 'Name is required';
-      _addProjectContext({ type: 'snippet', name: vals['ctx-name'], content: vals['ctx-content'] || '' });
-    },
+  var overlay = document.createElement('div');
+  overlay.className = 'proj-picker-overlay';
+  overlay.innerHTML =
+    '<div class="proj-picker-panel">' +
+      '<div class="proj-picker-header">' +
+        '<span>Add Context</span>' +
+        '<button id="_acclose"><i class="ti ti-x"></i></button>' +
+      '</div>' +
+      '<div class="proj-ctx-add-tabs">' +
+        '<button class="proj-ctx-add-tab active" id="_actab-paste" onclick="_acSwitchTab(\'paste\')"><i class="ti ti-clipboard-text"></i> Paste text</button>' +
+        '<button class="proj-ctx-add-tab" id="_actab-file" onclick="_acSwitchTab(\'file\')"><i class="ti ti-paperclip"></i> Attach file</button>' +
+      '</div>' +
+      '<div class="proj-form" id="_ac-pane-paste">' +
+        '<div class="proj-settings-row"><label>Name</label><input class="proj-input" id="_ac-name" placeholder="e.g. API spec" autocomplete="off"></div>' +
+        '<div class="proj-settings-row"><label>Content</label><textarea class="proj-input proj-modal-textarea" id="_ac-content" placeholder="Paste text here…"></textarea></div>' +
+      '</div>' +
+      '<div class="proj-form" id="_ac-pane-file" style="display:none">' +
+        '<div class="proj-settings-row"><label>Name</label><input class="proj-input" id="_ac-fname" placeholder="Auto-filled from filename" autocomplete="off"></div>' +
+        '<div class="proj-ctx-file-drop" id="_ac-drop">' +
+          '<i class="ti ti-upload" style="font-size:28px;opacity:.4"></i>' +
+          '<span>Drop a file here, or</span>' +
+          '<button class="proj-action-btn" type="button" onclick="document.getElementById(\'_ac-fileinput\').click()">Browse…</button>' +
+          '<input type="file" id="_ac-fileinput" style="display:none" accept=".txt,.md,.js,.ts,.jsx,.tsx,.py,.json,.yaml,.yml,.html,.css,.csv,.xml,.sh,.env,.toml,.ini,.rs,.go,.rb,.java,.c,.cpp,.h,.swift,.kt">' +
+          '<span id="_ac-filename" style="font-size:11px;color:var(--accent);display:none"></span>' +
+        '</div>' +
+      '</div>' +
+      '<div id="_ac-err" class="proj-modal-err" style="display:none"></div>' +
+      '<div class="proj-picker-footer">' +
+        '<button class="proj-action-btn" id="_acsubmit">Add</button>' +
+        '<button class="proj-action-btn" id="_accancel">Cancel</button>' +
+      '</div>' +
+    '</div>';
+
+  document.body.appendChild(overlay);
+
+  var _acMode = 'paste';
+  var _acFileData = null; // { name, content }
+
+  window._acSwitchTab = function(tab) {
+    _acMode = tab;
+    overlay.querySelector('#_actab-paste').classList.toggle('active', tab === 'paste');
+    overlay.querySelector('#_actab-file').classList.toggle('active', tab === 'file');
+    overlay.querySelector('#_ac-pane-paste').style.display = tab === 'paste' ? '' : 'none';
+    overlay.querySelector('#_ac-pane-file').style.display  = tab === 'file'  ? '' : 'none';
+  };
+
+  // File input change
+  var fileInput = overlay.querySelector('#_ac-fileinput');
+  fileInput.onchange = function() {
+    var f = fileInput.files[0];
+    if (!f) return;
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      _acFileData = { name: f.name, content: e.target.result };
+      overlay.querySelector('#_ac-filename').textContent = f.name;
+      overlay.querySelector('#_ac-filename').style.display = '';
+      if (!overlay.querySelector('#_ac-fname').value) {
+        overlay.querySelector('#_ac-fname').value = f.name.replace(/\.[^.]+$/, '');
+      }
+    };
+    reader.readAsText(f);
+  };
+
+  // Drag & drop
+  var drop = overlay.querySelector('#_ac-drop');
+  drop.addEventListener('dragover', function(e) { e.preventDefault(); drop.classList.add('dragover'); });
+  drop.addEventListener('dragleave', function() { drop.classList.remove('dragover'); });
+  drop.addEventListener('drop', function(e) {
+    e.preventDefault(); drop.classList.remove('dragover');
+    var f = e.dataTransfer.files[0];
+    if (!f) return;
+    fileInput.files = e.dataTransfer.files;
+    fileInput.onchange();
+  });
+
+  overlay.querySelector('#_acclose').onclick  = function() { overlay.remove(); };
+  overlay.querySelector('#_accancel').onclick = function() { overlay.remove(); };
+  setTimeout(function() { overlay.querySelector('#_ac-name').focus(); }, 50);
+
+  overlay.querySelector('#_acsubmit').onclick = async function() {
+    var errEl = overlay.querySelector('#_ac-err');
+    errEl.style.display = 'none';
+    var proj = _activeProject();
+    if (!proj) return;
+
+    if (_acMode === 'paste') {
+      var name = overlay.querySelector('#_ac-name').value.trim();
+      var content = overlay.querySelector('#_ac-content').value;
+      if (!name) { errEl.textContent = 'Name is required'; errEl.style.display = ''; return; }
+      overlay.remove();
+      await _addProjectContext({ type: 'snippet', name, content });
+
+    } else {
+      if (!_acFileData) { errEl.textContent = 'Please select a file'; errEl.style.display = ''; return; }
+      var customName = overlay.querySelector('#_ac-fname').value.trim() || _acFileData.name;
+      overlay.remove();
+      try {
+        var form = new FormData();
+        form.append('name', customName);
+        var blob = new Blob([_acFileData.content], { type: 'text/plain' });
+        form.append('file', blob, _acFileData.name);
+        var r = await fetch('/api/projects/' + proj.id + '/contexts/from-file', { method: 'POST', body: form });
+        if (!r.ok) throw new Error((await r.json()).error);
+        await _refreshProject(proj.id);
+        renderProjectContextBar();
+        _renderProjectHubBody(_activeProject());
+      } catch(e) { _showToast('Error: ' + e.message, true); }
+    }
+  };
+
+  overlay.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') overlay.remove();
   });
 }
 
@@ -1074,6 +1213,37 @@ async function _runTabLoad(proj) {
   _runRender(proj);
 }
 
+function _initRunResize() {
+  var handle = document.getElementById('proj-run-resize-handle');
+  var sources = document.querySelector('.proj-run-sources');
+  if (!handle || !sources) return;
+  var RUN_MIN = 180, RUN_MAX = 700, RUN_KEY = 'fauna-run-sources-width';
+  var saved = parseInt(localStorage.getItem(RUN_KEY), 10);
+  if (saved && saved >= RUN_MIN && saved <= RUN_MAX) sources.style.width = saved + 'px';
+  handle.addEventListener('mousedown', function(e) {
+    e.preventDefault();
+    var startX = e.clientX;
+    var startW = sources.getBoundingClientRect().width;
+    document.body.classList.add('proj-run-resizing');
+    function onMove(e) {
+      var w = Math.min(RUN_MAX, Math.max(RUN_MIN, startW + (e.clientX - startX)));
+      sources.style.width = w + 'px';
+    }
+    function onUp() {
+      document.body.classList.remove('proj-run-resizing');
+      localStorage.setItem(RUN_KEY, Math.round(sources.getBoundingClientRect().width));
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+  handle.addEventListener('dblclick', function() {
+    sources.style.width = '340px';
+    localStorage.removeItem(RUN_KEY);
+  });
+}
+
 function _runRender(proj) {
   var root = document.getElementById('proj-run-root');
   if (!root) return;
@@ -1122,7 +1292,9 @@ function _runRender(proj) {
       '</div>';
     }).join('');
   }
-  html += '</div>';
+  html += '</div>'; // close proj-run-sources
+
+  html += '<div class="proj-run-resize-handle" id="proj-run-resize-handle"></div>';
 
   // Right: active runs
   html += '<div class="proj-run-active">';
@@ -1146,6 +1318,9 @@ function _runRender(proj) {
   }
 
   root.innerHTML = html;
+
+  // Wire up split resize
+  _initRunResize();
 
   // Re-open log pane if needed
   if (_runOpenLogId) { _runLogOpen(_runOpenLogId, proj.id, false); }

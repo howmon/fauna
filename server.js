@@ -6052,6 +6052,25 @@ app.post('/api/projects/:id/contexts/from-artifact', (req, res) => {
   catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+app.post('/api/projects/:id/contexts/from-file', (req, res) => {
+  const chunks = [];
+  req.on('data', c => chunks.push(c));
+  req.on('end', () => {
+    try {
+      const raw = Buffer.concat(chunks);
+      const contentType = req.headers['content-type'] || '';
+      const boundary = contentType.split('boundary=')[1];
+      if (!boundary) return res.status(400).json({ error: 'Missing multipart boundary' });
+      const { fields, fileBuffer, fileName } = parseMultipart(raw, boundary);
+      if (!fileBuffer) return res.status(400).json({ error: 'No file found in upload' });
+      const content = fileBuffer.toString('utf-8');
+      const name = fields.name || fileName || 'Uploaded file';
+      const ctx = addContext(req.params.id, { type: 'file', name, content, path: fileName });
+      res.json(ctx);
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+});
+
 // ── Connectors
 app.post('/api/projects/:id/connectors', (req, res) => {
   try { res.json(addConnector(req.params.id, req.body)); }
