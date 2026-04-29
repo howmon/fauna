@@ -388,7 +388,6 @@ export function readSourceFile(projectId, srcId, filePath) {
   const type = _fileType(ext);
 
   if (type === 'text') {
-    if (stat.size > MAX_CONTEXT_BYTES) throw new Error('File too large to preview (max 256 KB)');
     const content = fs.readFileSync(full, 'utf8');
     return { type: 'text', content, size: stat.size, mime, ext, path: rel };
   }
