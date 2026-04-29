@@ -886,7 +886,19 @@ function updateSysScopeHint() {
 var sidebarVisible = true;
 function toggleSidebar() {
   sidebarVisible = !sidebarVisible;
-  document.getElementById('sidebar').classList.toggle('collapsed', !sidebarVisible);
+  var sb = document.getElementById('sidebar');
+  if (!sidebarVisible) {
+    // Store current inline width so we can restore it
+    sb.dataset.savedWidth = sb.style.width || '';
+    sb.dataset.savedMinWidth = sb.style.minWidth || '';
+    sb.style.width = '';
+    sb.style.minWidth = '';
+    sb.classList.add('collapsed');
+  } else {
+    sb.classList.remove('collapsed');
+    if (sb.dataset.savedWidth) sb.style.width = sb.dataset.savedWidth;
+    if (sb.dataset.savedMinWidth) sb.style.minWidth = sb.dataset.savedMinWidth;
+  }
 }
 
 // ── Sidebar resize ───────────────────────────────────────────────────────
