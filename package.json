@@ -64,6 +64,7 @@
   "build": {
     "appId": "com.fauna.app",
     "productName": "Fauna",
+    "afterPack": "./afterPack.cjs",
     "copyright": "Copyright © 2026 Solomon Abey",
     "icon": "assets/icon.icns",
     "asarUnpack": [
@@ -77,7 +78,7 @@
       "identity": null,
       "target": [
         {
-          "target": "dmg",
+          "target": "zip",
           "arch": [
             "arm64"
           ]
@@ -132,6 +133,8 @@
       "widget-preload.js",
       "task-manager.js",
       "task-runner.js",
+      "project-manager.js",
+      "afterPack.cjs",
       "agent-*.js",
       "public/**",
       "assets/**",
