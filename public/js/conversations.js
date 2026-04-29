@@ -248,7 +248,7 @@ function renderConvList() {
     d.onclick = () => loadConversation(conv.id);
     d.innerHTML = (conv._streaming ? '<i class="ti ti-loader-2 conv-streaming-icon"></i>' : '') +
       '<span class="conv-label">' + escHtml(conv.title) + '</span>' +
-      '<button class="conv-del" onclick="deleteConversation(\'' + conv.id + '\', event)"><i class="ti ti-x"></i></button>';
+      '<button class="conv-del" onclick="deleteConversation(\'' + conv.id + '\', event)"><i class="ti ti-trash"></i></button>';
     list.appendChild(d);
   });
   var showAll = document.getElementById('conv-show-all');

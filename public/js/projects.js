@@ -67,10 +67,13 @@ function renderProjectSidebarList() {
         '<span class="proj-sidebar-item-name">' + _projEsc(p.name) + '</span>' +
         (meta.length ? '<span class="proj-sidebar-item-meta">' + meta.join(' · ') + '</span>' : '') +
       '</div>' +
-      (isActive
-        ? '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();openProjectHub()" title="Open hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>' +
-          '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();clearActiveProject()" title="Deactivate"><i class="ti ti-x"></i></button>'
-        : '') +
+      '<span class="proj-sidebar-item-actions">' +
+        (isActive
+          ? '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();openProjectHub()" title="Open hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>' +
+            '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();clearActiveProject()" title="Deactivate"><i class="ti ti-x"></i></button>'
+          : '') +
+        '<button class="proj-sidebar-del-btn" onclick="event.stopPropagation();_confirmDeleteProjectFromList(\'' + _projEsc(p.id) + '\')" title="Delete project"><i class="ti ti-trash"></i></button>' +
+      '</span>' +
     '</div>';
   }).join('') || '<div class="proj-sidebar-empty">No projects yet</div>';
 

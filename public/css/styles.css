@@ -166,26 +166,32 @@ button .ti, label .ti { pointer-events: none; }
 .conv-item:hover { background: var(--surface2); color: var(--text); }
 .conv-item.active { background: var(--accent-dim); color: var(--text); border-left: 2px solid var(--accent); }
 .conv-item .conv-del {
-  flex-shrink: 0; opacity: 0; padding: 2px 5px; margin-left: auto;
-  color: var(--error); font-size: 11px; transition: opacity .12s; background: var(--bg); border: 0;
+  flex-shrink: 0; opacity: 0; margin-left: auto;
+  background: none; border: none; color: var(--text-muted); cursor: pointer;
+  font-size: 13px; padding: 3px 4px; border-radius: 4px; display: flex; align-items: center;
+  transition: opacity .12s;
 }
 .conv-item:hover .conv-del { opacity: 1; }
+.conv-item .conv-del:hover { color: #f87171; background: rgba(239,68,68,.1); }
 .conv-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .conv-streaming-icon { font-size: 11px; opacity: .65; flex-shrink: 0; animation: spin 1.2s linear infinite; }
 
 /* ── Sidebar section headers ───────────────────────────────────── */
 #conv-section { }
 #conv-section-header,
-#agents-section-header {
+#agents-section-header,
+#projects-section-header {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 14px; cursor: pointer; font-size: 12px;
   font-weight: 600; color: var(--accent2); transition: color .15s;
   user-select: none;
 }
 #conv-section-header:hover,
-#agents-section-header:hover { color: var(--text); }
+#agents-section-header:hover,
+#projects-section-header:hover { color: var(--text); }
 #conv-section-header .ti:first-child,
-#agents-section-header .ti:first-child { font-size: 15px; color: var(--accent); }
+#agents-section-header .ti:first-child,
+#projects-section-header .ti:first-child { font-size: 15px; color: var(--accent); }
 #conv-section-body { padding: 0; }
 .section-plus-btn {
   background: none; border: none; color: var(--text-muted); cursor: pointer;
@@ -4527,21 +4533,32 @@ body.win-platform .acv-header {
 }
 
 /* ── Projects Sidebar Section ───────────────────────────────────────────── */
+#proj-sidebar-list { padding: 4px 8px; display: flex; flex-direction: column; gap: 2px; }
 .proj-sidebar-item {
   display: flex; align-items: center; gap: 8px;
-  padding: 6px 12px; cursor: pointer; border-radius: 6px; margin: 1px 6px;
-  transition: background .1s;
+  padding: 6px 10px; cursor: pointer; border-radius: 8px;
+  font-size: 12px; color: var(--text-dim); transition: all .12s;
 }
-.proj-sidebar-item:hover { background: var(--surface2); }
-.proj-sidebar-item.active { background: var(--surface2); }
+.proj-sidebar-item:hover { background: var(--surface2); color: var(--text); }
+.proj-sidebar-item.active { background: var(--accent-dim); color: var(--text); border-left: 2px solid var(--accent); }
 .proj-sidebar-item-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
-.proj-sidebar-item-name { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-sidebar-item-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .proj-sidebar-item-meta { font-size: 10px; color: var(--text-muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.proj-sidebar-hub-btn {
-  flex-shrink: 0; padding: 2px 4px; border-radius: 4px; font-size: 12px;
-  color: var(--text-dim); background: none; border: none; cursor: pointer; opacity: .7;
+.proj-sidebar-item-actions {
+  display: flex; align-items: center; gap: 2px; opacity: 0; transition: opacity .15s;
+  flex-shrink: 0;
 }
-.proj-sidebar-hub-btn:hover { opacity: 1; background: var(--surface3); }
+.proj-sidebar-item:hover .proj-sidebar-item-actions { opacity: 1; }
+.proj-sidebar-hub-btn {
+  background: none; border: none; color: var(--text-muted); cursor: pointer;
+  font-size: 13px; padding: 3px 4px; border-radius: 4px; display: flex; align-items: center;
+}
+.proj-sidebar-hub-btn:hover { color: var(--accent); background: var(--surface2); }
+.proj-sidebar-del-btn {
+  background: none; border: none; color: var(--text-muted); cursor: pointer;
+  font-size: 13px; padding: 3px 4px; border-radius: 4px; display: flex; align-items: center;
+}
+.proj-sidebar-del-btn:hover { color: #f87171 !important; background: rgba(239,68,68,.1) !important; }
 .proj-sidebar-empty { font-size: 12px; color: var(--text-muted); padding: 8px 14px; }
 
 /* ── All Projects Page ──────────────────────────────────────────────────── */
