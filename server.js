@@ -619,7 +619,9 @@ app.get('/api/models', async (req, res) => {
 // Injected into the system prompt when Figma MCP is enabled.
 
 // ── Browser panel + app building context ────────────────────────────────
-// Always injected so the AI knows how to use the built-in browser.
+// BROWSER_ACTIONS_CONTEXT: always injected (browser reference, extension rules).
+// APP_BUILD_RULES: only injected when no project is active — contains "just run it"
+//   directives that conflict with project shell-command policy.
 const BROWSER_BUILD_CONTEXT = `
 ## Built-in Browser Panel
 
@@ -640,7 +642,11 @@ You have a built-in browser panel that runs inside the app. You can control it u
 - **console-logs** — \`{"action":"console-logs"}\` — read console errors/warnings/logs from the active tab
 - **console-logs (filtered)** — \`{"action":"console-logs","level":"error"}\` — only errors
 - **clear-console** — \`{"action":"clear-console"}\` — clear captured console logs
+`;
 
+// Only injected when no project is active. These "just DO it" build directives
+// conflict with the project shell-command policy.
+const APP_BUILD_RULES = `
 ### Dev Server + Browser Debugging Workflow
 When building a web app for the user, follow this workflow:
 1. **Install ALL dependencies in one complete command** — never truncate \`npm install\`. Write the full package.json first, then run \`npm install\`.
@@ -658,7 +664,10 @@ When building a web app for the user, follow this workflow:
 - **If your output was cut off**, you will be automatically asked to continue. Just pick up exactly where you left off.
 - The browser keeps login sessions across pages (cookies persist). No need to re-authenticate.
 - Each conversation has its own browser tabs — they don't interfere with other conversations.
+`;
 
+// Always injected — browser extension reference and rules (no "just run it" directives).
+const BROWSER_EXT_CONTEXT = `
 ## Browser Extension (Chrome / Edge)
 
 The user may have the **Fauna Browser Bridge** extension installed in Chrome or Edge. Its primary purpose is to bring context from those external browsers **into Fauna** — so you can see and reason about pages the user has open outside the Fauna app. The extension also supports optional two-way actions when the user explicitly asks you to interact with their external browser.
@@ -1143,7 +1152,7 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
           // Tell the model what CWD shell-exec blocks run from
           const firstLocal = p.sources.find(s => s.type === 'local' && s.path);
           if (firstLocal) {
-            projectCtx += `\n\n## Shell Environment\nShell commands (\`shell-exec\` blocks) run with cwd set to \`${firstLocal.path}\` (the first local source root). Use absolute paths or paths relative to that root. Do NOT use bare \`ls\` or \`cat\` without a path — always prefix with the full source path or \`./\`.`;
+            projectCtx += `\n\n## Shell Environment\nShell commands (\`shell-exec\` blocks) run with cwd \`${firstLocal.path}\`. Use absolute paths — do NOT use bare \`ls\` or \`cat\` without the full path prefix.`;
           }
         }
       } catch (_) {}
@@ -1151,6 +1160,10 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
     const fullSystem = [
       systemPrompt.trim() + cliHint + projectCtx,
       isCLI ? '' : BROWSER_BUILD_CONTEXT,
+      // APP_BUILD_RULES ("just DO it / never narrate") only for non-project, non-CLI sessions.
+      // In project sessions these directives conflict with the shell-command policy.
+      (!isCLI && !projectId) ? APP_BUILD_RULES : '',
+      isCLI ? '' : BROWSER_EXT_CONTEXT,
       contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : ''
     ].filter(Boolean).join('\n');
     if (fullSystem) allMessages.push({ role: 'system', content: fullSystem });
