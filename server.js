@@ -4801,15 +4801,34 @@ Only include findings for criteria that actually fail. If the prompt already sat
   try {
     const resp = await client.chat.completions.create({
       model,
-      max_tokens: 2048,
+      max_tokens: 4096,
       messages: [{ role: 'user', content: rubricPrompt }]
     });
     const raw = resp.choices[0]?.message?.content?.trim() || '{}';
-    // Strip any accidental markdown fences
-    const json = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '');
-    const parsed = JSON.parse(json);
+    // Robustly extract the JSON object — handle markdown fences, leading prose, trailing text
+    let json = raw;
+    // Strip ```json ... ``` or ``` ... ``` fences
+    const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fenceMatch) {
+      json = fenceMatch[1].trim();
+    } else {
+      // Find the first { and last } to extract the object
+      const start = raw.indexOf('{');
+      const end   = raw.lastIndexOf('}');
+      if (start !== -1 && end !== -1 && end > start) {
+        json = raw.slice(start, end + 1);
+      }
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(json);
+    } catch (parseErr) {
+      console.error('[rubric-audit] JSON parse failed. raw response:\n', raw);
+      return res.status(500).json({ error: 'Rubric audit: model returned non-JSON response' });
+    }
     res.json(parsed);
   } catch (e) {
+    console.error('[rubric-audit] error:', e.message);
     res.status(500).json({ error: 'Rubric audit failed: ' + e.message });
   }
 });
