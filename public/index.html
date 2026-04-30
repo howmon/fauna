@@ -147,6 +147,7 @@
     <div id="topbar">
       <button id="toggle-sidebar" onclick="toggleSidebar()" title="Toggle sidebar"><i class="ti ti-menu-2"></i></button>
       <span id="topbar-title">New conversation</span>
+      <span id="topbar-project-pill" style="display:none" onclick="openProjectHub()" title="You are in a project — click to open hub"><i class="ti ti-folder"></i> <span id="topbar-project-name"></span></span>
       <span id="agent-badge" style="display:none !important" onclick="deactivateAgent(getConv(state.currentId))"></span>
       <select id="model-select" onchange="onModelChange(this.value)"></select>
       <button class="topbar-btn" onclick="clearConversation()" title="Clear messages"><i class="ti ti-trash"></i> Clear</button>

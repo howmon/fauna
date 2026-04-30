@@ -313,6 +313,16 @@ button .ti, label .ti { pointer-events: none; }
 }
 #toggle-sidebar:hover { color: var(--text); background: var(--surface2); }
 #topbar-title { font-size: 13px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+#topbar-project-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: var(--accent-dim); border: 1px solid var(--accent);
+  color: var(--accent2); border-radius: var(--radius-sm);
+  padding: 3px 9px; font-size: 11px; font-weight: 600;
+  cursor: pointer; white-space: nowrap; flex-shrink: 0;
+  transition: background .12s, border-color .12s;
+}
+#topbar-project-pill:hover { background: var(--accent); color: #fff; }
+#topbar-project-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar-btn {
   background: var(--surface2); border: 1px solid var(--border);
   color: var(--text-dim); border-radius: var(--radius-sm);

@@ -28,6 +28,7 @@ async function loadProjects() {
   renderProjectSwitcher();
   renderProjectSidebarList();
   renderProjectContextBar();
+  updateProjectIndicator();
 }
 
 async function _refreshProject(id) {
@@ -202,6 +203,20 @@ function toggleProjectContext(ctxId) {
 
 // ── Set / Clear Active Project ────────────────────────────────────────────
 
+function updateProjectIndicator() {
+  var pill = document.getElementById('topbar-project-pill');
+  var nameEl = document.getElementById('topbar-project-name');
+  if (!pill || !nameEl) return;
+  var proj = _activeProject();
+  if (proj) {
+    nameEl.textContent = proj.name;
+    pill.style.display = '';
+  } else {
+    pill.style.display = 'none';
+    nameEl.textContent = '';
+  }
+}
+
 async function setActiveProject(id) {
   state.activeProjectId = id;
   if (id) {
@@ -224,8 +239,28 @@ async function setActiveProject(id) {
   renderProjectSwitcher();
   renderProjectSidebarList();
   renderProjectContextBar();
+  updateProjectIndicator();
   if (typeof renderConvList === 'function') renderConvList();
   if (typeof renderTasks === 'function') renderTasks();
+
+  // Navigate to a conversation appropriate for the new project context
+  if (id) {
+    // Enter project: load most recent project conversation, or start a new one
+    var projConvs = state.conversations.filter(function(c) { return c.projectId === id; });
+    if (projConvs.length) {
+      loadConversation(projConvs[0].id);
+    } else {
+      newConversation();
+    }
+  } else {
+    // Exited project: load most recent non-project conversation if one exists
+    var nonProjConv = state.conversations.find(function(c) { return !c.projectId; });
+    if (nonProjConv) {
+      loadConversation(nonProjConv.id);
+    } else {
+      newConversation();
+    }
+  }
 }
 
 function clearActiveProject() {
