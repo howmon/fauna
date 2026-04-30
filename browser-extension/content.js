@@ -73,6 +73,27 @@
       .map(i => ({ src: i.src, alt: i.alt || '' }))
       .filter(i => i.src && !i.src.startsWith('data:'));
 
+    // Clickable cards/items — for SPAs that use <button> or role="group" instead of <a href>.
+    // Captures Figma folder cards, Notion pages, Google Drive tiles, etc.
+    const cards = [];
+    // Pattern 1: role="group" containers with aria-label (Figma folder cards)
+    document.querySelectorAll('[role="group"][aria-label]').forEach(el => {
+      const label = el.getAttribute('aria-label').trim();
+      if (!label) return;
+      const btn = el.querySelector('[data-card-main-action], button[tabindex="0"]');
+      const selector = btn
+        ? '[role="group"][aria-label="' + label.replace(/"/g, '\\"') + '"] button[data-card-main-action="true"]'
+        : '[role="group"][aria-label="' + label.replace(/"/g, '\\"') + '"]';
+      cards.push({ label, selector });
+    });
+    // Pattern 2: role="listitem" or role="option" with visible text
+    if (!cards.length) {
+      document.querySelectorAll('[role="listitem"], [role="option"], [role="row"]').forEach(el => {
+        const t = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+        if (t) cards.push({ label: t, selector: null });
+      });
+    }
+
     return {
       title, url,
       text: text.slice(0, maxChars),
@@ -80,7 +101,8 @@
       truncated: text.length > maxChars,
       links,
       headings,
-      images
+      images,
+      cards: cards.slice(0, 100)
     };
   }
 

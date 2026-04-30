@@ -741,6 +741,7 @@ If the user asks you to look at or interact with their Chrome/Edge browser, you 
 - If a click targets a link that triggers a full page load, the URL change will be visible after the settle wait. Trust it.
 - For SPA pages (React, Angular, Vue, Next.js) clicks update the view without a URL change — use \`snapshot\` or \`eval\` (e.g. \`return document.querySelector('h1').textContent\`) to verify what changed.
 - **Autocomplete / combobox / typeahead fields:** Use \`type\` (not \`fill\`) to enter text character-by-character — this triggers the suggestion dropdown. Then \`wait\` 500-1000 ms for suggestions to appear, \`extract\` or \`snapshot\` to see the list, and \`click\` the desired option by its text or selector.
+- **Card-grid SPAs (Figma, Notion, Google Drive, etc.):** These pages use \`<button>\` or \`role="group"\` cards — they have NO \`<a href>\` links in the DOM. The \`extract_page\` result includes a \`cards[]\` array listing each card's label and its click selector. To open a card, use \`browser_ext_click\` with the selector from \`cards[].selector\`, or use \`browser_ext_eval\` with \`document.querySelector('[role="group"][aria-label="My File"] button[data-card-main-action="true"]').click()\`. Never call \`extract_page\` or \`extract_assets\` repeatedly looking for file URLs on these pages — the URLs don't exist as anchors. Use the \`cards[]\` list from the first \`extract_page\` call, then click or eval directly.
 
 ## Task Scheduling
 
@@ -1307,10 +1308,11 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
         // Browser extension tools — only when user explicitly references browser/web content
         const extToolDefs = [
           { type: 'function', function: { name: 'browser_ext_list_tabs', description: 'List open tabs in the user\'s Chrome/Edge browser.', parameters: { type: 'object', properties: {}, required: [] } } },
-          { type: 'function', function: { name: 'browser_ext_extract_page', description: 'Extract text content from a browser tab.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
+          { type: 'function', function: { name: 'browser_ext_extract_page', description: 'Extract visible text, links, headings, and images from a browser tab. Returns innerText + up to 200 anchor hrefs. Does NOT return data-* attributes, JS variables, dynamic keys, or content only accessible via JavaScript — use browser_ext_eval for those.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
           { type: 'function', function: { name: 'browser_ext_screenshot', description: 'Screenshot the active browser tab.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
           { type: 'function', function: { name: 'browser_ext_tab_info', description: 'Get the URL and title of the active browser tab.', parameters: { type: 'object', properties: {}, required: [] } } },
-          { type: 'function', function: { name: 'browser_ext_extract_assets', description: 'Extract images, SVGs, CSS, design tokens, and JS files referenced by the current page.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
+          { type: 'function', function: { name: 'browser_ext_extract_assets', description: 'Extract images, SVGs, CSS stylesheets, CSS custom properties (design tokens), and JS files referenced by the current page. Use for asset auditing/cloning. Does NOT return data-* attributes or dynamic app state — use browser_ext_eval for those.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
+          { type: 'function', function: { name: 'browser_ext_eval', description: 'Run JavaScript in the active browser tab and return the result as a string. Use when extract_page or extract_assets does not give you the specific data you need — e.g. reading data-* attributes, querying specific DOM nodes, reading JS variables, scraping file keys or IDs from a SPA. Example: "return JSON.stringify(Array.from(document.querySelectorAll(\'.file-item\')).map(el => ({key: el.dataset.key, name: el.textContent.trim()})))". Always use browser_ext_eval instead of calling extract_page again if extract_page already failed to return the data.', parameters: { type: 'object', properties: { js: { type: 'string', description: 'JavaScript to run. Must return a value (use return statement). Runs in page context.' }, tabId: { type: 'number' } }, required: ['js'] } } },
           { type: 'function', function: { name: 'browser_ext_devtools_console', description: 'Read the browser console log (JS errors, warnings, log output).', parameters: { type: 'object', properties: { tabId: { type: 'number' }, limit: { type: 'number' } }, required: [] } } },
           { type: 'function', function: { name: 'browser_ext_devtools_network', description: 'List network requests made by the page.', parameters: { type: 'object', properties: { tabId: { type: 'number' }, filter: { type: 'string' }, includeHeaders: { type: 'boolean' } }, required: [] } } },
           { type: 'function', function: { name: 'browser_ext_devtools_har', description: 'Export a HAR 1.2 file for the current page.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
@@ -1424,6 +1426,20 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
             continue;
           }
 
+          // Loop guard: if last 2 tool calls were both browser_ext_extract_* and this is another one,
+          // inject a nudge to use eval instead of looping on blunt extraction.
+          const _isExtract = /^browser_ext_extract_/.test(toolName);
+          if (_isExtract) {
+            const _recentTools = allMessages.slice(-6)
+              .filter(m => m.role === 'assistant' && m.tool_calls)
+              .flatMap(m => m.tool_calls.map(t => t.function?.name || ''));
+            const _recentExtractCount = _recentTools.filter(n => /^browser_ext_extract_/.test(n)).length;
+            if (_recentExtractCount >= 2) {
+              allMessages.push({ role: 'tool', tool_call_id: tc.id, content: 'LOOP DETECTED: You have already called extract twice without getting the data you need. Do NOT call extract_page or extract_assets again. Instead, use browser_ext_eval with a targeted querySelector — e.g. return JSON.stringify(Array.from(document.querySelectorAll("[data-key]")).map(el => ({key: el.dataset.key, text: el.textContent.trim()}))). If the page uses a JS framework, read its state directly via eval.' });
+              continue;
+            }
+          }
+
           send({ type: 'tool_call', name: toolName, arguments: tc.function.arguments || '' });
           // Keepalive heartbeat — prevents mobile XHR from appearing dead during long tool calls
           const _keepalive = setInterval(() => {
@@ -1534,6 +1550,14 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
               chatLog('[chat] Browser ext tool: tab-info');
               const r = await extCommand('tab:info', {}, null, 10000);
               result = JSON.stringify(r);
+            } else if (toolName === 'browser_ext_eval') {
+              chatLog('[chat] Browser ext tool: eval');
+              const targetTabId = args.tabId || null;
+              extSend({ type: 'tab:working', tabId: targetTabId });
+              try {
+                const r = await extCommand('eval', { js: args.js || 'return document.title' }, targetTabId, 15000);
+                result = typeof r === 'string' ? r : JSON.stringify(r);
+              } finally { extSend({ type: 'tab:working', tabId: null }); }
             } else if (toolName === 'browser_ext_extract_assets') {
               chatLog('[chat] Browser ext tool: extract-assets');
               const targetTabId = args.tabId || null;
