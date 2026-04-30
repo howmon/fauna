@@ -955,10 +955,10 @@ function renderStep6Scan() {
       (audit.improvedPrompt ? (
         '<div class="scan-rubric-improved">' +
           '<div class="scan-rubric-improved-label"><i class="ti ti-wand"></i> Suggested improvement</div>' +
-          '<pre class="scan-rubric-preview">' + escHtml(audit.improvedPrompt.slice(0, 800)) + (audit.improvedPrompt.length > 800 ? '\u2026' : '') + '</pre>' +
+          '<pre class="scan-rubric-preview">' + escHtml(audit.improvedPrompt) + '</pre>' +
           '<div class="scan-rubric-actions">' +
             '<button class="builder-btn primary" onclick="builderAcceptImprovedPrompt()"><i class="ti ti-check"></i> Accept &amp; replace my prompt</button>' +
-            '<button class="builder-btn secondary" onclick="builderState.data.rubricAudit.improvedPrompt=null;renderBuilderPanel()">Dismiss</button>' +
+            '<button class="builder-btn secondary" onclick="builderState.data.rubricAudit=null;renderBuilderPanel()">Dismiss</button>' +
           '</div>' +
         '</div>'
       ) : '') +
@@ -1025,13 +1025,15 @@ async function builderRunRubricAudit() {
   renderBuilderPanel();
 }
 
-function builderAcceptImprovedPrompt() {
+async function builderAcceptImprovedPrompt() {
   var audit = builderState.data.rubricAudit;
   if (!audit || !audit.improvedPrompt) return;
   builderState.data.systemPrompt = audit.improvedPrompt;
-  builderState.data.rubricAudit = null; // clear after accept
-  showToast('Improved prompt applied — review it in Step 2');
+  builderState.data.rubricAudit = null;
+  showToast('Improved prompt applied — re-analysing…');
   renderBuilderPanel();
+  // Re-run rubric audit on the new prompt immediately so the user sees the updated score
+  await builderRunRubricAudit();
 }
 
 // ── Step 7: Review & Package ─────────────────────────────────────────────
