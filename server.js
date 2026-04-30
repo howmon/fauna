@@ -1244,9 +1244,13 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
       // Only inject GUI and browser tools when the user's message contains clear signals
       // that they want desktop automation or browser interaction. This prevents the model
       // from eagerly reaching for these tools on project/code questions.
-      const _recentText = allMessages.slice(-4).map(m =>
-        Array.isArray(m.content) ? m.content.filter(p => p.type === 'text').map(p => p.text).join(' ') : (m.content || '')
-      ).join(' ').toLowerCase();
+      // Only inspect the current user message for browser/GUI intent.
+      // Using last-N messages caused prior browser conversations to keep tools
+      // injected for unrelated follow-up questions (e.g. "tell me about my source").
+      const _lastUser = allMessages.filter(m => m.role === 'user').slice(-1)[0];
+      const _recentText = (Array.isArray(_lastUser?.content)
+        ? _lastUser.content.filter(p => p.type === 'text').map(p => p.text).join(' ')
+        : (_lastUser?.content || '')).toLowerCase();
 
       const _wantsBrowser = /\b(browser|tab|chrome|edge|safari|webpage|web page|website|url|open site|navigate to|click.*link|my browser|current tab|page content|extract.*page|screenshot.*tab|inspect.*page|devtools|console log|network request)\b/.test(_recentText);
       const _wantsGui = /\b(click|type into|automate|control|desktop|screen|gui|window|drag|scroll|hotkey|shortcut|take a screenshot|screenshot of my|what('s| is) on (my )?screen|open app|move (mouse|cursor))\b/.test(_recentText);
@@ -6283,7 +6287,18 @@ app.get('/api/projects/:id/contexts', (req, res) => {
 });
 
 app.post('/api/projects/:id/contexts', (req, res) => {
-  try { res.json(addContext(req.params.id, req.body)); }
+  try {
+    const body = { ...req.body };
+    // If caller passes srcId + path, resolve the full absolute path on disk
+    if (body.srcId && body.path) {
+      try {
+        const { fullPath } = resolveSourceFilePath(req.params.id, body.srcId, body.path);
+        body.path = fullPath;
+      } catch (_) {}
+      delete body.srcId;
+    }
+    res.json(addContext(req.params.id, body));
+  }
   catch (err) { res.status(400).json({ error: err.message }); }
 });
 

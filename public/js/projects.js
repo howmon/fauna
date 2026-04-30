@@ -805,7 +805,8 @@ async function explorerOpenFile(srcId, filePath) {
       ? (canEdit2 ? '<button class="proj-icon-btn proj-save-btn" onclick="saveProjectFile()" title="Save file"><i class="ti ti-device-floppy"></i> Save</button>' : '') +
         '<button class="proj-icon-btn" onclick="saveFileAsContext(\'' + _projEsc(srcId) + '\',\'' + _projEsc(filePath) + '\')" title="Save as context"><i class="ti ti-folder-plus"></i> Save to Project</button>' +
         '<button class="proj-icon-btn" onclick="copyFileContent()" title="Copy"><i class="ti ti-copy"></i></button>'
-      : '<a class="proj-icon-btn" href="' + rawUrl + '" download="' + _projEsc(fname) + '"><i class="ti ti-download"></i></a>';
+      : '<button class="proj-icon-btn" onclick="saveFileAsContext(\'' + _projEsc(srcId) + '\',\'' + _projEsc(filePath) + '\')" title="Save as context"><i class="ti ti-folder-plus"></i> Save to Project</button>' +
+        '<a class="proj-icon-btn" href="' + rawUrl + '" download="' + _projEsc(fname) + '" title="Download"><i class="ti ti-download"></i></a>';
     viewerEl.innerHTML =
       '<div class="proj-file-viewer-header">' +
         '<span class="proj-file-viewer-path">' + _projEsc(filePath) + '</span>' +
@@ -813,13 +814,61 @@ async function explorerOpenFile(srcId, filePath) {
         headerBtns +
       '</div>' +
       '<div id="proj-exp-monaco" class="proj-explorer-monaco"></div>';
+    var bodyEl2 = document.getElementById('proj-exp-monaco');
     if (data.type === 'text') {
       var ext = (data.ext || '').toLowerCase();
       var lang = _MONO_LANG[ext] || 'plaintext';
       _mountExplorerMonaco(data.content, lang);
+    } else if (data.type === 'image') {
+      if (bodyEl2) bodyEl2.innerHTML =
+        '<div class="proj-file-media-wrap">' +
+          '<img class="proj-file-img" src="' + rawUrl + '" alt="' + _projEsc(fname) + '">' +
+        '</div>';
+    } else if (data.type === 'video') {
+      if (bodyEl2) bodyEl2.innerHTML =
+        '<div class="proj-file-media-wrap">' +
+          '<video class="proj-file-video" controls>' +
+            '<source src="' + rawUrl + '" type="' + _projEsc(data.mime) + '">' +
+            'Your browser cannot play this video.' +
+          '</video>' +
+        '</div>';
+    } else if (data.type === 'audio') {
+      if (bodyEl2) bodyEl2.innerHTML =
+        '<div class="proj-file-audio-wrap">' +
+          '<i class="ti ti-music proj-file-audio-icon"></i>' +
+          '<div class="proj-file-audio-name">' + _projEsc(fname) + '</div>' +
+          '<audio class="proj-file-audio" controls>' +
+            '<source src="' + rawUrl + '" type="' + _projEsc(data.mime) + '">' +
+            'Your browser cannot play this audio.' +
+          '</audio>' +
+        '</div>';
+    } else if (data.type === 'pdf') {
+      if (bodyEl2) bodyEl2.innerHTML =
+        '<iframe class="proj-file-pdf" src="' + rawUrl + '" title="' + _projEsc(fname) + '"></iframe>';
+    } else if (data.type === 'office') {
+      var officeIconMap2 = {
+        doc:'ti-file-word', docx:'ti-file-word',
+        xls:'ti-file-spreadsheet', xlsx:'ti-file-spreadsheet',
+        ppt:'ti-presentation', pptx:'ti-presentation',
+        odt:'ti-file-text', ods:'ti-file-text', odp:'ti-presentation',
+      };
+      var officeIco2 = officeIconMap2[data.ext] || 'ti-file-description';
+      if (bodyEl2) bodyEl2.innerHTML =
+        '<div class="proj-file-binary-wrap">' +
+          '<i class="ti ' + officeIco2 + ' proj-file-binary-icon"></i>' +
+          '<div class="proj-file-binary-name">' + _projEsc(fname) + '</div>' +
+          '<div class="proj-file-binary-size">' + _fmtSize(data.size) + '</div>' +
+          '<div class="proj-file-binary-note">Office documents cannot be previewed in-browser</div>' +
+          '<a class="proj-action-btn" href="' + rawUrl + '" download="' + _projEsc(fname) + '"><i class="ti ti-download"></i> Download</a>' +
+        '</div>';
     } else {
-      var bodyEl = document.getElementById('proj-exp-monaco');
-      if (bodyEl) bodyEl.innerHTML = '<div class="proj-file-binary-wrap"><i class="ti ti-file-unknown proj-file-binary-icon"></i><div class="proj-file-binary-name">' + _projEsc(fname) + '</div><a class="proj-action-btn" href="' + rawUrl + '" download="' + _projEsc(fname) + '"><i class="ti ti-download"></i> Download</a></div>';
+      if (bodyEl2) bodyEl2.innerHTML =
+        '<div class="proj-file-binary-wrap">' +
+          '<i class="ti ti-file-unknown proj-file-binary-icon"></i>' +
+          '<div class="proj-file-binary-name">' + _projEsc(fname) + '</div>' +
+          '<div class="proj-file-binary-size">' + _fmtSize(data.size) + '</div>' +
+          '<a class="proj-action-btn" href="' + rawUrl + '" download="' + _projEsc(fname) + '"><i class="ti ti-download"></i> Download</a>' +
+        '</div>';
     }
   } catch(e) { viewerEl.innerHTML = '<div class="proj-hub-error">' + _projEsc(e.message) + '</div>'; }
 }
@@ -857,7 +906,7 @@ async function saveFileAsContext(srcId, filePath) {
     var r2 = await fetch('/api/projects/' + state.activeProjectId + '/contexts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'file', name: filePath.split('/').pop(), content: data.content, path: filePath })
+    body: JSON.stringify({ type: 'file', name: filePath.split('/').pop(), content: data.content, srcId: srcId, path: filePath })
     });
     if (!r2.ok) throw new Error('Failed to save context');
     await _refreshProject(state.activeProjectId);

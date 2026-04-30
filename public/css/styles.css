@@ -4307,7 +4307,7 @@ body.win-platform .acv-header {
   flex: 1; min-height: 0; overflow: auto; position: relative;
 }
 .proj-monaco-container {
-  height: 360px; flex-shrink: 0;
+  height: 100%; flex-shrink: 0;
 }
 /* Fallback pre/code (when Monaco unavailable) */
 .proj-file-code {
@@ -4336,8 +4336,13 @@ body.win-platform .acv-header {
 .proj-file-audio { width: 100%; max-width: 420px; }
 /* PDF viewer */
 .proj-file-pdf {
-  display: block; width: 100%; height: 520px; border: none;
+  display: block; width: 100%; height: 520px; border: none; min-height: 400px;
 }
+/* Inside the full-screen explorer, let PDF + media fill available space */
+.proj-explorer-monaco .proj-file-pdf { height: 100%; }
+.proj-explorer-monaco .proj-file-media-wrap { flex: 1; min-height: 0; }
+.proj-explorer-monaco .proj-file-img { max-height: 100%; }
+.proj-explorer-monaco .proj-file-video { max-height: 100%; }
 /* Office / binary download card */
 .proj-file-binary-wrap {
   display: flex; flex-direction: column; align-items: center; justify-content: center;

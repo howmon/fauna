@@ -510,8 +510,8 @@ export function buildContextPayload(projectId, ctxIds) {
   out += '\n';
   for (const ctx of selected) {
     out += `### Context: ${ctx.name} (${ctx.type})\n`;
-    if (ctx.url) out += `Source: ${ctx.url}\n`;
-    if (ctx.path) out += `Path: ${ctx.path}\n`;
+    if (ctx.url) out += `Source URL: ${ctx.url}\n`;
+    if (ctx.path) out += `Full path: ${ctx.path}\n`;
     out += ctx.content ? ctx.content + '\n\n' : '(empty)\n\n';
   }
   return out.trim();
@@ -525,8 +525,14 @@ export function getProjectSystemContext(projectId) {
   let out = `## Active Project: ${p.name}\n`;
   if (p.description) out += `${p.description}\n`;
   if (p.rootPath) out += `Root path: ${p.rootPath}\n`;
-  const srcNames = (p.sources || []).map(s => s.name).filter(Boolean);
-  if (srcNames.length) out += `Sources: ${srcNames.join(', ')}\n`;
+  if (p.sources && p.sources.length) {
+    out += '\n### Sources\n';
+    for (const src of p.sources) {
+      const loc = src.type === 'local' && src.path ? ` — \`${src.path}\`` :
+                  src.url ? ` — ${src.url}` : '';
+      out += `- **${src.name}** (${src.type})${loc}\n`;
+    }
+  }
   if (pinned.length) {
     out += '\n### Pinned Project Contexts\n';
     for (const ctx of pinned) {
