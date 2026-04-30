@@ -4221,6 +4221,7 @@ body.win-platform .acv-header {
 .project-hub-body {
   flex: 1; overflow-y: auto; padding: 12px;
   display: flex; flex-direction: column; gap: 8px;
+  min-height: 0;
 }
 
 /* ── Hub shared components ─────────────────────────────────────────────── */
@@ -4261,7 +4262,17 @@ body.win-platform .acv-header {
 
 /* ── File tree ─────────────────────────────────────────────────────────── */
 .proj-files-toolbar {
-  display: flex; align-items: center; gap: 6px; margin-bottom: 8px;
+  display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-shrink: 0;
+}
+.proj-files-layout {
+  display: flex; flex-direction: row; gap: 8px; flex: 1; min-height: 400px; height: 100%;
+}
+.proj-files-tree-col {
+  width: 220px; min-width: 140px; max-width: 320px; flex-shrink: 0;
+  overflow-y: auto;
+}
+.proj-files-viewer-col {
+  flex: 1; min-width: 0; margin-top: 0 !important;
 }
 .proj-src-select {
   flex: 1; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
@@ -4282,8 +4293,8 @@ body.win-platform .acv-header {
 }
 .proj-file-back:hover { background: var(--surface2); color: var(--text); }
 .proj-file-viewer {
-  margin-top: 10px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
-  display: flex; flex-direction: column;
+  border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+  display: flex; flex-direction: column; min-height: 0;
 }
 .proj-file-viewer-header {
   display: flex; align-items: center; gap: 6px; padding: 6px 10px;
@@ -4293,7 +4304,7 @@ body.win-platform .acv-header {
 .proj-file-viewer-path { font-size: 11px; color: var(--text-dim); flex: 1; font-family: var(--mono); }
 .proj-file-viewer-size { font-size: 10px; color: var(--text-muted); }
 .proj-file-viewer-body {
-  flex: 1; min-height: 200px; overflow: auto; position: relative;
+  flex: 1; min-height: 0; overflow: auto; position: relative;
 }
 .proj-monaco-container {
   height: 360px; flex-shrink: 0;

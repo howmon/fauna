@@ -385,8 +385,10 @@ function _renderFilesTab(proj) {
     '<button class="proj-icon-btn" onclick="openProjectFileExplorer()" title="Expand to full screen"><i class="ti ti-arrows-maximize"></i></button>' +
     '<button class="proj-icon-btn" onclick="loadProjectFileTree(document.querySelector(\'.proj-src-select\').value, \'\')" title="Refresh"><i class="ti ti-refresh"></i></button>' +
   '</div>' +
-  '<div id="proj-file-tree-root" class="proj-file-tree"></div>' +
-  '<div id="proj-file-viewer" class="proj-file-viewer" style="display:none"></div>';
+  '<div class="proj-files-layout">' +
+    '<div id="proj-file-tree-root" class="proj-file-tree proj-files-tree-col"></div>' +
+    '<div id="proj-file-viewer" class="proj-file-viewer proj-files-viewer-col" style="display:none"></div>' +
+  '</div>';
 }
 
 // ── Unified expand-in-place tree ─────────────────────────────────────────

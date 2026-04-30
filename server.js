@@ -60,14 +60,14 @@ function _runPyGui(lines) {
 async function _guiScreenshot() {
   // Use native screencapture on macOS (no Python dependency)
   if (process.platform === 'darwin') {
-    const tmp = require('os').tmpdir() + '/fauna-screenshot-' + Date.now() + '.png';
+    const tmp = os.tmpdir() + '/fauna-screenshot-' + Date.now() + '.png';
     return new Promise((resolve, reject) => {
       const proc = _spawn('screencapture', ['-x', '-t', 'png', tmp]);
       proc.on('close', code => {
         if (code !== 0) return reject(new Error('screencapture failed with code ' + code));
         try {
-          const buf = require('fs').readFileSync(tmp);
-          require('fs').unlinkSync(tmp);
+          const buf = fs.readFileSync(tmp);
+          fs.unlinkSync(tmp);
           resolve(buf.toString('base64'));
         } catch (e) { reject(e); }
       });
@@ -1022,6 +1022,11 @@ await applyTextOverrides(nav, {
 - Always batch ALL edits (text, visibility, swaps) into a SINGLE figma_execute call when possible.
 - Always \`return 'Done'\` or a summary at the end of figma_execute so you know it succeeded.
 - After figma_execute returns, summarize what was built — do not call more tools unless needed.
+
+## GUI Automation Tools
+- gui_screenshot, gui_click, gui_move, gui_type, gui_hotkey, gui_scroll, gui_drag, gui_locate are ONLY for tasks where the user explicitly asks you to control the desktop (e.g. "click that button for me", "automate this UI", "take a screenshot of my screen").
+- NEVER call gui_screenshot or any gui_* tool proactively, as a first step, or for code/project/file questions.
+- NEVER call browser_ext_screenshot, browser_ext_extract_page, or browser_ext_list_tabs unless the user explicitly asks about their browser or a web page.
 `;
 
 // ── Context summarization endpoint ───────────────────────────────────────────
@@ -1236,33 +1241,48 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
 
     // ── Browser Extension tools (only available when extension is connected, never in CLI) ──
     if (!isCLI && _extSockets.size > 0) {
-      // GUI automation tools (PyAutoGUI — desktop-wide, always available in app mode)
-      const guiToolDefs = [
-        { type: 'function', function: { name: 'gui_screenshot', description: 'Take a full-desktop screenshot and return the image so you can see the current screen state. Use this to understand what is on screen before clicking.', parameters: { type: 'object', properties: {}, required: [] } } },
-        { type: 'function', function: { name: 'gui_click', description: 'Click at screen coordinates (x, y). Use gui_screenshot first to identify the correct coordinates.', parameters: { type: 'object', properties: { x: { type: 'number', description: 'Screen X coordinate' }, y: { type: 'number', description: 'Screen Y coordinate' }, button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Mouse button. Default: left' }, clicks: { type: 'number', description: 'Number of clicks (2 for double-click). Default: 1' } }, required: ['x', 'y'] } } },
-        { type: 'function', function: { name: 'gui_move', description: 'Move the mouse cursor to screen coordinates without clicking.', parameters: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, duration: { type: 'number', description: 'Move duration in seconds. Default: 0.2' } }, required: ['x', 'y'] } } },
-        { type: 'function', function: { name: 'gui_type', description: 'Type text at the current cursor position. Click the target field with gui_click first.', parameters: { type: 'object', properties: { text: { type: 'string', description: 'Text to type' }, interval: { type: 'number', description: 'Seconds between keystrokes. Default: 0.02' } }, required: ['text'] } } },
-        { type: 'function', function: { name: 'gui_hotkey', description: 'Press a keyboard shortcut (e.g. ctrl+c, cmd+v, enter, escape, tab). Pass individual key names.', parameters: { type: 'object', properties: { keys: { type: 'array', items: { type: 'string' }, description: 'Keys to press together, e.g. ["ctrl", "c"] or ["enter"]' } }, required: ['keys'] } } },
-        { type: 'function', function: { name: 'gui_scroll', description: 'Scroll at screen coordinates. Positive clicks = up, negative = down.', parameters: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, clicks: { type: 'number', description: 'Scroll amount. Positive=up, negative=down.' } }, required: ['x', 'y', 'clicks'] } } },
-        { type: 'function', function: { name: 'gui_drag', description: 'Drag from one screen position to another.', parameters: { type: 'object', properties: { fromX: { type: 'number' }, fromY: { type: 'number' }, toX: { type: 'number' }, toY: { type: 'number' }, duration: { type: 'number', description: 'Drag duration in seconds. Default: 0.3' }, button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Default: left' } }, required: ['fromX', 'fromY', 'toX', 'toY'] } } },
-        { type: 'function', function: { name: 'gui_locate', description: 'Find where a given image appears on screen. Returns the center (x, y) coordinates if found.', parameters: { type: 'object', properties: { image_base64: { type: 'string', description: 'Base64-encoded PNG image of the UI element to locate on screen.' }, confidence: { type: 'number', description: 'Match confidence 0-1. Default: 0.8' } }, required: ['image_base64'] } } },
-      ];
-      mcpTools = [...(mcpTools || []), ...guiToolDefs];
+      // Only inject GUI and browser tools when the user's message contains clear signals
+      // that they want desktop automation or browser interaction. This prevents the model
+      // from eagerly reaching for these tools on project/code questions.
+      const _recentText = allMessages.slice(-4).map(m =>
+        Array.isArray(m.content) ? m.content.filter(p => p.type === 'text').map(p => p.text).join(' ') : (m.content || '')
+      ).join(' ').toLowerCase();
 
-      const extToolDefs = [
-        { type: 'function', function: { name: 'browser_ext_list_tabs', description: 'List open tabs in the user\'s Chrome/Edge browser. ONLY use this when the user explicitly asks about a browser tab, web page, or website — never for general tasks.', parameters: { type: 'object', properties: {}, required: [] } } },
-        { type: 'function', function: { name: 'browser_ext_extract_page', description: 'Extract text content from a browser tab. ONLY use when the task explicitly requires reading content from a specific web page the user has open. Do not use for general information retrieval or tasks unrelated to the browser.', parameters: { type: 'object', properties: { tabId: { type: 'number', description: 'Optional tab ID to extract from (from browser_ext_list_tabs). Omit for active tab.' } }, required: [] } } },
-        { type: 'function', function: { name: 'browser_ext_screenshot', description: 'Screenshot the active browser tab. ONLY use when the user explicitly asks you to look at, inspect, or interact with their current browser page.', parameters: { type: 'object', properties: { tabId: { type: 'number', description: 'Optional tab ID. Omit for active tab.' } }, required: [] } } },
-        { type: 'function', function: { name: 'browser_ext_tab_info', description: 'Get the URL and title of the active browser tab. ONLY use when the task specifically involves the user\'s current web page.', parameters: { type: 'object', properties: {}, required: [] } } },
-        { type: 'function', function: { name: 'browser_ext_extract_assets', description: 'Extract all images, SVGs, CSS stylesheets, CSS custom properties (design tokens), and JavaScript files referenced by the current page. Use when the user wants to audit, clone, or analyse web assets.', parameters: { type: 'object', properties: { tabId: { type: 'number', description: 'Optional tab ID. Omit for active tab.' } }, required: [] } } },
-        { type: 'function', function: { name: 'browser_ext_devtools_console', description: 'Read the browser console log (JS errors, warnings, log output). Essential for debugging web pages and verifying JS behaviour.', parameters: { type: 'object', properties: { tabId: { type: 'number' }, limit: { type: 'number', description: 'Max entries to return. Default 100.' } }, required: [] } } },
-        { type: 'function', function: { name: 'browser_ext_devtools_network', description: 'List network requests made by the page (URLs, type, duration, transfer size). Use to debug failed requests, slow resources, or audit what a page fetches.', parameters: { type: 'object', properties: { tabId: { type: 'number' }, filter: { type: 'string', description: 'Optional URL substring filter.' }, includeHeaders: { type: 'boolean' } }, required: [] } } },
-        { type: 'function', function: { name: 'browser_ext_devtools_har', description: 'Export a HAR 1.2 file for the current page — all network requests with timing. Use for detailed performance or security analysis.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
-        { type: 'function', function: { name: 'browser_ext_devtools_security', description: 'Inspect the page\'s security posture: HTTPS/TLS state, CSP meta headers, mixed content, and visible cookie names.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
-        { type: 'function', function: { name: 'browser_ext_devtools_cookies', description: 'Read all cookies set for the current page (name, value, domain, path, secure, httpOnly, sameSite, expiry). Use to audit session management and cookie security flags.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
-        { type: 'function', function: { name: 'browser_ext_devtools_storage', description: 'Read localStorage and sessionStorage key/value pairs from the current page. Use to inspect client-side state and tokens.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
-      ];
-      mcpTools = [...(mcpTools || []), ...extToolDefs];
+      const _wantsBrowser = /\b(browser|tab|chrome|edge|safari|webpage|web page|website|url|open site|navigate to|click.*link|my browser|current tab|page content|extract.*page|screenshot.*tab|inspect.*page|devtools|console log|network request)\b/.test(_recentText);
+      const _wantsGui = /\b(click|type into|automate|control|desktop|screen|gui|window|drag|scroll|hotkey|shortcut|take a screenshot|screenshot of my|what('s| is) on (my )?screen|open app|move (mouse|cursor))\b/.test(_recentText);
+
+      if (_wantsGui) {
+        // GUI automation tools — only when user explicitly wants desktop control
+        const guiToolDefs = [
+          { type: 'function', function: { name: 'gui_screenshot', description: 'Take a full-desktop screenshot. Use before clicking to identify coordinates.', parameters: { type: 'object', properties: {}, required: [] } } },
+          { type: 'function', function: { name: 'gui_click', description: 'Click at screen coordinates (x, y).', parameters: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, button: { type: 'string', enum: ['left', 'right', 'middle'] }, clicks: { type: 'number' } }, required: ['x', 'y'] } } },
+          { type: 'function', function: { name: 'gui_move', description: 'Move the mouse cursor to screen coordinates without clicking.', parameters: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, duration: { type: 'number' } }, required: ['x', 'y'] } } },
+          { type: 'function', function: { name: 'gui_type', description: 'Type text at the current cursor position.', parameters: { type: 'object', properties: { text: { type: 'string' }, interval: { type: 'number' } }, required: ['text'] } } },
+          { type: 'function', function: { name: 'gui_hotkey', description: 'Press a keyboard shortcut (e.g. ctrl+c, cmd+v).', parameters: { type: 'object', properties: { keys: { type: 'array', items: { type: 'string' } } }, required: ['keys'] } } },
+          { type: 'function', function: { name: 'gui_scroll', description: 'Scroll at screen coordinates.', parameters: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, clicks: { type: 'number' } }, required: ['x', 'y', 'clicks'] } } },
+          { type: 'function', function: { name: 'gui_drag', description: 'Drag from one screen position to another.', parameters: { type: 'object', properties: { fromX: { type: 'number' }, fromY: { type: 'number' }, toX: { type: 'number' }, toY: { type: 'number' }, duration: { type: 'number' }, button: { type: 'string', enum: ['left', 'right', 'middle'] } }, required: ['fromX', 'fromY', 'toX', 'toY'] } } },
+          { type: 'function', function: { name: 'gui_locate', description: 'Find where a given image appears on screen. Returns center (x, y) if found.', parameters: { type: 'object', properties: { image_base64: { type: 'string' }, confidence: { type: 'number' } }, required: ['image_base64'] } } },
+        ];
+        mcpTools = [...(mcpTools || []), ...guiToolDefs];
+      }
+
+      if (_wantsBrowser) {
+        // Browser extension tools — only when user explicitly references browser/web content
+        const extToolDefs = [
+          { type: 'function', function: { name: 'browser_ext_list_tabs', description: 'List open tabs in the user\'s Chrome/Edge browser.', parameters: { type: 'object', properties: {}, required: [] } } },
+          { type: 'function', function: { name: 'browser_ext_extract_page', description: 'Extract text content from a browser tab.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
+          { type: 'function', function: { name: 'browser_ext_screenshot', description: 'Screenshot the active browser tab.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
+          { type: 'function', function: { name: 'browser_ext_tab_info', description: 'Get the URL and title of the active browser tab.', parameters: { type: 'object', properties: {}, required: [] } } },
+          { type: 'function', function: { name: 'browser_ext_extract_assets', description: 'Extract images, SVGs, CSS, design tokens, and JS files referenced by the current page.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
+          { type: 'function', function: { name: 'browser_ext_devtools_console', description: 'Read the browser console log (JS errors, warnings, log output).', parameters: { type: 'object', properties: { tabId: { type: 'number' }, limit: { type: 'number' } }, required: [] } } },
+          { type: 'function', function: { name: 'browser_ext_devtools_network', description: 'List network requests made by the page.', parameters: { type: 'object', properties: { tabId: { type: 'number' }, filter: { type: 'string' }, includeHeaders: { type: 'boolean' } }, required: [] } } },
+          { type: 'function', function: { name: 'browser_ext_devtools_har', description: 'Export a HAR 1.2 file for the current page.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
+          { type: 'function', function: { name: 'browser_ext_devtools_security', description: 'Inspect the page\'s security posture: HTTPS/TLS, CSP, mixed content, cookies.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
+          { type: 'function', function: { name: 'browser_ext_devtools_cookies', description: 'Read all cookies set for the current page.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
+          { type: 'function', function: { name: 'browser_ext_devtools_storage', description: 'Read localStorage and sessionStorage key/value pairs from the current page.', parameters: { type: 'object', properties: { tabId: { type: 'number' } }, required: [] } } },
+        ];
+        mcpTools = [...(mcpTools || []), ...extToolDefs];
+      }
     }
 
     // Agentic loop — re-runs if model calls tools (max 12 iterations)
