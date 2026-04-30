@@ -300,6 +300,7 @@ function _renderProjectHub(proj) {
     { id: 'contexts', icon: 'ti-file-text',     label: 'Contexts' },
     { id: 'sources',  icon: 'ti-source-code',   label: 'Sources' },
     { id: 'run',      icon: 'ti-player-play',   label: 'Run' },
+    { id: 'terminal', icon: 'ti-terminal-2',    label: 'Terminal' },
     { id: 'convs',    icon: 'ti-messages',      label: 'Conversations' },
     { id: 'tasks',    icon: 'ti-checklist',     label: 'Tasks' },
     { id: 'settings', icon: 'ti-settings',      label: 'Settings' },
@@ -324,6 +325,10 @@ function switchProjectHubTab(tab) {
   // Disconnect run log SSE if leaving run tab
   if (state.projectHubTab === 'run' && tab !== 'run') {
     _runLogClose();
+  }
+  // Kill terminal shell if leaving terminal tab
+  if (state.projectHubTab === 'terminal' && tab !== 'terminal') {
+    _termDestroy(_activeProject());
   }
   state.projectHubTab = tab;
   var proj = _activeProject();
@@ -351,6 +356,7 @@ function _renderProjectHubBody(proj) {
   else if (tab === 'contexts') body.innerHTML = _renderContextsTab(proj);
   else if (tab === 'sources')  body.innerHTML = _renderSourcesTab(proj);
   else if (tab === 'run')      { body.innerHTML = _renderRunTabShell(); _runTabLoad(proj); }
+  else if (tab === 'terminal') { body.innerHTML = _renderTerminalTab(proj); _termTabLoad(proj); }
   else if (tab === 'convs')    body.innerHTML = _renderConvsTab(proj);
   else if (tab === 'tasks')    body.innerHTML = _renderTasksTab(proj);
   else if (tab === 'settings') body.innerHTML = _renderSettingsTab(proj);
@@ -1183,6 +1189,12 @@ var _runActiveList = [];   // list from /api/projects/:id/runs
 var _runLogESrc    = null; // EventSource for log pane
 var _runOpenLogId  = null; // which runId is showing logs
 
+// Terminal state
+var _termId      = null;
+var _termESrc    = null;
+var _termHistory = [];
+var _termHistIdx = -1;
+
 function _renderRunTabShell() {
   return '<div id="proj-run-root" class="proj-run-root">' +
     '<div class="proj-hub-empty"><i class="ti ti-loader-2 ti-spin" style="font-size:22px;opacity:.5"></i><div>Loading…</div></div>' +
@@ -1547,6 +1559,147 @@ function openRunInBrowser(url) {
     if (typeof browserNavigateTo === 'function') browserNavigateTo(url);
   } else {
     window.open(url, '_blank');
+  }
+}
+
+// ── Terminal Tab ─────────────────────────────────────────────────────────
+
+function _renderTerminalTab(proj) {
+  var rootLabel = proj.rootPath ? proj.rootPath.replace(/.*\//, '') : '~';
+  return '<div class="proj-terminal" id="proj-terminal">' +
+    '<div class="proj-terminal-toolbar">' +
+      '<span class="proj-terminal-title"><i class="ti ti-terminal-2"></i> ' + _projEsc(rootLabel) + '</span>' +
+      '<button class="proj-icon-btn" title="New shell" onclick="_termNew()"><i class="ti ti-refresh"></i> New shell</button>' +
+      '<button class="proj-icon-btn" title="Clear output" onclick="_termClear()"><i class="ti ti-eraser"></i> Clear</button>' +
+    '</div>' +
+    '<div id="proj-terminal-output" class="proj-terminal-output"></div>' +
+    '<div class="proj-terminal-input-row">' +
+      '<span class="proj-terminal-prompt">$</span>' +
+      '<input id="proj-terminal-input" class="proj-terminal-input" placeholder="Type a command and press Enter…" autocomplete="off" autocorrect="off" spellcheck="false">' +
+    '</div>' +
+  '</div>';
+}
+
+async function _termTabLoad(proj) {
+  _termId = null;
+  _termHistory = [];
+  _termHistIdx = -1;
+  if (_termESrc) { try { _termESrc.close(); } catch(_) {} _termESrc = null; }
+  _termWrite('<span style="color:#6b7280">Starting shell…</span>\n');
+  try {
+    var r = await fetch('/api/projects/' + proj.id + '/terminal', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    var d = await r.json();
+    _termId = d.termId;
+  } catch(e) {
+    _termWrite('<span style="color:#f87171">[Failed to start shell: ' + e.message + ']</span>\n');
+    return;
+  }
+  var out = document.getElementById('proj-terminal-output');
+  if (out) out.innerHTML = '';
+  _termWrite('<span style="color:#6b7280">Connected — ' + _projEsc(proj.rootPath || '~') + '</span>\n');
+  _termConnectSSE(proj.id);
+  var inp = document.getElementById('proj-terminal-input');
+  if (inp) {
+    inp.addEventListener('keydown', _termKeydown);
+    inp.focus();
+  }
+}
+
+function _termConnectSSE(projectId) {
+  if (_termESrc) { try { _termESrc.close(); } catch(_) {} }
+  _termESrc = new EventSource('/api/projects/' + projectId + '/terminal/' + _termId + '/output');
+  _termESrc.onmessage = function(e) {
+    var d = JSON.parse(e.data);
+    if (d.out !== undefined) _termAppend(d.out);
+  };
+  _termESrc.onerror = function() { _termESrc.close(); _termESrc = null; };
+}
+
+function _termAppend(raw) {
+  var out = document.getElementById('proj-terminal-output');
+  if (!out) return;
+  // Strip ANSI escape codes
+  var text = raw.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+                .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
+                .replace(/\x1b[()][0-9A-Za-z]/g, '')
+                .replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  // Append as text node inside a span (safe, no XSS)
+  var span = document.createElement('span');
+  span.textContent = text;
+  out.appendChild(span);
+  out.scrollTop = out.scrollHeight;
+}
+
+function _termWrite(html) {
+  var out = document.getElementById('proj-terminal-output');
+  if (!out) return;
+  var span = document.createElement('span');
+  span.innerHTML = html;
+  out.appendChild(span);
+  out.scrollTop = out.scrollHeight;
+}
+
+function _termClear() {
+  var out = document.getElementById('proj-terminal-output');
+  if (out) out.innerHTML = '';
+}
+
+function _termKeydown(e) {
+  if (e.key === 'Enter') {
+    var inp = e.target;
+    var cmd = inp.value;
+    inp.value = '';
+    _termHistIdx = -1;
+    if (cmd.trim()) { _termHistory.unshift(cmd); if (_termHistory.length > 200) _termHistory.pop(); }
+    _termWrite('<span class="proj-terminal-echo">$ ' + _projEsc(cmd) + '</span>\n');
+    if (cmd.trim() === 'clear' || cmd.trim() === 'cls') { _termClear(); return; }
+    _termSend(cmd + '\n');
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (_termHistory.length) {
+      _termHistIdx = Math.min(_termHistIdx + 1, _termHistory.length - 1);
+      e.target.value = _termHistory[_termHistIdx];
+    }
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (_termHistIdx > 0) { _termHistIdx--; e.target.value = _termHistory[_termHistIdx]; }
+    else { _termHistIdx = -1; e.target.value = ''; }
+  } else if (e.key === 'c' && e.ctrlKey) {
+    e.preventDefault();
+    _termSend('\x03');
+    _termWrite('^C\n');
+  } else if (e.key === 'l' && e.ctrlKey) {
+    e.preventDefault();
+    _termClear();
+  }
+}
+
+async function _termSend(data) {
+  var proj = _activeProject();
+  if (!proj || !_termId) return;
+  try {
+    await fetch('/api/projects/' + proj.id + '/terminal/' + _termId + '/input', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data }),
+    });
+  } catch(_) {}
+}
+
+async function _termNew() {
+  var proj = _activeProject();
+  if (!proj) return;
+  await _termDestroy(proj);
+  _termClear();
+  await _termTabLoad(proj);
+}
+
+async function _termDestroy(proj) {
+  if (_termESrc) { try { _termESrc.close(); } catch(_) {} _termESrc = null; }
+  if (proj && _termId) {
+    try { await fetch('/api/projects/' + proj.id + '/terminal/' + _termId, { method: 'DELETE' }); } catch(_) {}
+    _termId = null;
   }
 }
 

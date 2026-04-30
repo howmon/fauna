@@ -6158,6 +6158,75 @@ app.get('/api/projects/:id/runs/:runId/logs', (req, res) => {
   });
 });
 
+// ── Project Terminal (persistent shell) ───────────────────────────────────
+const _terminals = new Map();  // termId → { shell, subs, projectId, buf, exited }
+function _termUid() { return 'term-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7); }
+
+// Spawn a persistent login shell for the project
+app.post('/api/projects/:id/terminal', (req, res) => {
+  const p = getProject(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Project not found' });
+  const cwd = (p.rootPath && fs.existsSync(p.rootPath)) ? p.rootPath : os.homedir();
+  const termId = _termUid();
+  // Login shell so nvm/volta/brew are on PATH, with prompts suppressed
+  const shell = _spawn('/bin/zsh', ['-l'], {
+    cwd,
+    env: { ...process.env, PS1: '', PS2: '', PS3: '', PS4: '', TERM: 'dumb',
+           FORCE_COLOR: '0', NO_COLOR: '1', COLORTERM: '' },
+    stdio: ['pipe', 'pipe', 'pipe'],
+    detached: false,
+  });
+  const rec = { shell, subs: new Set(), projectId: req.params.id, buf: '', exited: false };
+  _terminals.set(termId, rec);
+  const push = (data) => {
+    rec.buf += data;
+    if (rec.buf.length > 500000) rec.buf = rec.buf.slice(-400000);
+    const payload = 'data: ' + JSON.stringify({ out: data }) + '\n\n';
+    for (const r of rec.subs) { try { r.write(payload); } catch (_) {} }
+  };
+  shell.stdout.on('data', d => push(d.toString()));
+  shell.stderr.on('data', d => push(d.toString()));
+  shell.on('close', (code) => {
+    rec.exited = true;
+    push(`\r\n[shell exited with code ${code}]\r\n`);
+    for (const r of rec.subs) { try { r.end(); } catch (_) {} }
+  });
+  res.json({ termId, cwd });
+});
+
+// Send stdin to terminal
+app.post('/api/projects/:id/terminal/:termId/input', (req, res) => {
+  const rec = _terminals.get(req.params.termId);
+  if (!rec || rec.projectId !== req.params.id) return res.status(404).json({ error: 'Terminal not found' });
+  const { data } = req.body || {};
+  if (!rec.exited && rec.shell && rec.shell.stdin) {
+    try { rec.shell.stdin.write(data || ''); } catch (_) {}
+  }
+  res.json({ ok: true });
+});
+
+// SSE output stream
+app.get('/api/projects/:id/terminal/:termId/output', (req, res) => {
+  const rec = _terminals.get(req.params.termId);
+  if (!rec || rec.projectId !== req.params.id) return res.status(404).json({ error: 'Terminal not found' });
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
+  if (rec.buf) res.write('data: ' + JSON.stringify({ out: rec.buf }) + '\n\n');
+  if (rec.exited) { res.end(); return; }
+  rec.subs.add(res);
+  req.on('close', () => rec.subs.delete(res));
+});
+
+// Kill terminal
+app.delete('/api/projects/:id/terminal/:termId', (req, res) => {
+  const rec = _terminals.get(req.params.termId);
+  if (!rec || rec.projectId !== req.params.id) return res.status(404).json({ error: 'Terminal not found' });
+  try { rec.shell.kill('SIGTERM'); } catch (_) {}
+  for (const r of rec.subs) { try { r.end(); } catch (_) {} }
+  _terminals.delete(req.params.termId);
+  res.json({ ok: true });
+});
+
 // Stream raw bytes — used by the frontend to render images, video, audio, PDF
 app.get('/api/projects/:id/sources/:srcId/raw', (req, res) => {
   try {
