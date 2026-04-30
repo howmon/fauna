@@ -68,10 +68,15 @@ function _playVoiceChime(type) {
 // ── Text-to-speech ────────────────────────────────────────────────────────
 
 var _speakTimer = null;
+var _ttsActive  = false;   // true while speechSynthesis is playing
+var _ttsResumeText = null; // text saved for false-interruption recovery
+var _ttsResumeTimer = null;
 
 function _speak(text) {
   if (!window.speechSynthesis || !text) return;
   window.speechSynthesis.cancel();
+  _ttsActive     = true;
+  _ttsResumeText = text;
   var utt = new SpeechSynthesisUtterance(text);
   utt.rate   = 1.05;
   utt.pitch  = 1.0;
@@ -85,8 +90,8 @@ function _speak(text) {
   // Show response card
   _showResponseCard(text);
 
-  utt.onend = function() { _hideResponseCard(); };
-  utt.onerror = function() { _hideResponseCard(); };
+  utt.onend = function() { _ttsActive = false; _ttsResumeText = null; _hideResponseCard(); };
+  utt.onerror = function() { _ttsActive = false; _ttsResumeText = null; _hideResponseCard(); };
 
   window.speechSynthesis.speak(utt);
 }
@@ -534,14 +539,20 @@ async function _transcribeBlobs(chunks, mode) {
 
 // ── VAD (Voice Activity Detection) ───────────────────────────────────────
 
-var VAD_RMS_THRESHOLD       = 0.004;  // energy floor: speech vs ambient
-var VAD_SPEECH_FRAMES_START = 1;      // loud frames to start recording (1 = capture word from onset)
-var VAD_MIN_RECORD_FRAMES   = 15;     // minimum frames before silence can end recording (~1.5s)
-var VAD_SILENCE_FRAMES_WAKE = 10;     // silence frames to end wake chunk (~1s, after min duration)
-var VAD_SILENCE_FRAMES_CMD  = 12;     // silence frames to end command chunk (~1.2s)
+// Asymmetric thresholds (Pipecat/LiveKit pattern): higher bar to START, lower to STOP.
+// Eliminates false triggers from brief noise and prevents premature silence cuts.
+var VAD_RMS_START           = 0.012;  // RMS level needed to BEGIN speech (STARTING state)
+var VAD_RMS_STOP            = 0.006;  // RMS level to confirm silence (STOPPING state) — lower for hysteresis
+var VAD_SPEECH_FRAMES_START = 3;      // consecutive frames above START threshold → commit to recording (~300ms)
+var VAD_SILENCE_FRAMES_STOP = 8;      // consecutive frames below STOP threshold → commit to silence (~800ms)
+var VAD_MIN_RECORD_FRAMES   = 8;      // minimum recording frames before silence can end it (~800ms)
+var VAD_SILENCE_FRAMES_WAKE = 6;      // silence frames to end wake chunk (~600ms)
+var VAD_SILENCE_FRAMES_CMD  = 7;      // silence frames to end command chunk (~700ms — was 1.2s)
 var VAD_MAX_WAKE_FRAMES     = 35;     // max frames before force-stopping wake recording (~3.5s)
 var _vadPeakRms             = 0;      // peak RMS during current recording (for threshold tuning)
 var _vadRecordFrames        = 0;      // frames elapsed since recording started
+var _vadSmoothedRms         = 0;      // EMA-smoothed RMS (alpha=0.2, Pipecat default)
+var VAD_EMA_ALPHA           = 0.2;    // smoothing factor: lower = more smoothing
 
 function _rms(data) {
   var sum = 0;
@@ -558,72 +569,112 @@ function _startVADLoop() {
     if (_audioCtx.state === 'suspended' || _audioCtx.state === 'interrupted') {
       console.log('[vad] AudioContext', _audioCtx.state, '— resuming');
       _audioCtx.resume().catch(function(){});
-      // don't return — keep polling; reads will be zero until resumed
     }
     if (_vadState === 'transcribing') return;
 
     _analyserNode.getFloatTimeDomainData(buf);
-    var level         = _rms(buf);
-    var now = Date.now();
-    if (now - _vadRmsLogTimer > 2000) { _vadRmsLogTimer = now; console.log('[vad] rms:', level.toFixed(4), '| threshold:', VAD_RMS_THRESHOLD, '| state:', _vadState); }
-    var silenceFrames = (_vadState === 'recording_cmd') ? VAD_SILENCE_FRAMES_CMD : VAD_SILENCE_FRAMES_WAKE;
+    var rawRms = _rms(buf);
+    // Exponential moving average smoothing (Pipecat alpha=0.2): damps single-frame spikes
+    _vadSmoothedRms = _vadSmoothedRms * (1 - VAD_EMA_ALPHA) + rawRms * VAD_EMA_ALPHA;
+    var level = _vadSmoothedRms;
 
-    if (level > VAD_RMS_THRESHOLD) {
-      _vadSilenceFrames = 0;
-      _vadSpeechFrames++;
-      if (_vadState === 'recording_wake' || _vadState === 'recording_cmd') {
-        if (level > _vadPeakRms) _vadPeakRms = level;
-        _vadRecordFrames++;
-      }
-      if (_vadSpeechFrames >= VAD_SPEECH_FRAMES_START && _vadState === 'idle') {
-        var nextState    = _voiceActive ? 'recording_cmd' : 'recording_wake';
-        _vadState        = nextState;
-        _vadSpeechFrames = 0;
-        _vadPeakRms      = 0;
-        _vadRecordFrames = 0;
-        _recordChunks    = [];
-        try {
-          var mime = _bestMime();
-          console.log('[vad] speech detected — starting MediaRecorder, mode:', nextState, 'mime:', mime || '(default)');
-          _mediaRecorder = new MediaRecorder(_micStream, mime ? { mimeType: mime } : {});
-          _mediaRecorder.ondataavailable = function(ev) {
-            if (ev.data && ev.data.size > 0) _recordChunks.push(ev.data);
-          };
-          _mediaRecorder.start(100);
-          if (nextState === 'recording_cmd') _showVoiceOverlay('Listening…');
-        } catch (err) {
-          console.warn('[voice] MediaRecorder start error:', err);
-          _vadState = 'idle';
-        }
-      }
-    } else {
-      _vadSpeechFrames = 0;
-      if (_vadState === 'recording_wake' || _vadState === 'recording_cmd') {
-        _vadRecordFrames++;
-        _vadSilenceFrames++;
-        var forceStop = (_vadState === 'recording_wake' && _vadRecordFrames >= VAD_MAX_WAKE_FRAMES);
-        var minMet    = (_vadRecordFrames >= VAD_MIN_RECORD_FRAMES);
-        if ((minMet && _vadSilenceFrames >= silenceFrames) || forceStop) {
-          if (forceStop) console.log('[vad] force-stopping wake recording after', _vadRecordFrames, 'frames');
-          var capturedMode   = (_vadState === 'recording_cmd') ? 'cmd' : 'wake';
-          console.log('[vad] end of speech — peak rms during recording:', _vadPeakRms.toFixed(4));
-          _vadSpeechFrames   = 0;
-          _vadSilenceFrames  = 0;
-          _vadPeakRms        = 0;
-          _vadRecordFrames   = 0;
-          _vadState          = 'transcribing';  // block VAD from starting a new recording before onstop fires
-          if (_mediaRecorder && _mediaRecorder.state !== 'inactive') {
-            var mr = _mediaRecorder;
-            mr.onstop = function() {
-              // Slice AFTER onstop so we include the final ondataavailable chunk
-              _transcribeBlobs(_recordChunks.slice(), capturedMode);
-            };
-            try { mr.stop(); } catch (_) {}
+    var now = Date.now();
+    if (now - _vadRmsLogTimer > 2000) {
+      _vadRmsLogTimer = now;
+      console.log('[vad] rms:', level.toFixed(4), '| start:', VAD_RMS_START, '| stop:', VAD_RMS_STOP, '| state:', _vadState);
+    }
+
+    // ── 5-state machine: idle → starting → recording_* → stopping → transcribing ──
+
+    if (_vadState === 'idle') {
+      if (level > VAD_RMS_START) {
+        _vadSpeechFrames++;
+        // Barge-in guard: while TTS is playing, require 5× more frames before committing
+        // (≈500ms sustained speech) — prevents background noise from killing a response.
+        var framesNeeded = _ttsActive ? (VAD_SPEECH_FRAMES_START * 5) : VAD_SPEECH_FRAMES_START;
+        if (_vadSpeechFrames >= framesNeeded) {
+          // If TTS was playing, cancel it and set a 2s recovery timer.
+          // If no real transcript arrives within 2s, resume speaking from the saved text.
+          if (_ttsActive) {
+            var savedText = _ttsResumeText;
+            window.speechSynthesis.cancel();
+            _ttsActive = false;
+            if (_ttsResumeTimer) clearTimeout(_ttsResumeTimer);
+            _ttsResumeTimer = setTimeout(function() {
+              // No real command arrived — false interruption, resume TTS
+              if (!_voiceActive && _vadState === 'idle' && savedText) {
+                console.log('[vad] false interruption detected — resuming TTS');
+                _speak(savedText);
+              }
+              _ttsResumeTimer = null;
+            }, 2000);
           }
+          var nextState = _voiceActive ? 'recording_cmd' : 'recording_wake';
+          _vadState        = nextState;
+          _vadSpeechFrames = 0;
+          _vadSilenceFrames = 0;
+          _vadPeakRms      = 0;
+          _vadRecordFrames = 0;
+          _recordChunks    = [];
+          try {
+            var mime = _bestMime();
+            console.log('[vad] speech confirmed (' + VAD_SPEECH_FRAMES_START + ' frames) — starting MediaRecorder, mode:', nextState, 'mime:', mime || '(default)');
+            _mediaRecorder = new MediaRecorder(_micStream, mime ? { mimeType: mime } : {});
+            _mediaRecorder.ondataavailable = function(ev) {
+              if (ev.data && ev.data.size > 0) _recordChunks.push(ev.data);
+            };
+            _mediaRecorder.start(100);
+            if (nextState === 'recording_cmd') _showVoiceOverlay('Listening…');
+          } catch (err) {
+            console.warn('[voice] MediaRecorder start error:', err);
+            _vadState = 'idle';
+          }
+        }
+      } else {
+        _vadSpeechFrames = 0;
+      }
+
+    } else if (_vadState === 'recording_wake' || _vadState === 'recording_cmd') {
+      _vadRecordFrames++;
+      if (level > VAD_RMS_STOP) {
+        // Still speaking — reset silence counter
+        _vadSilenceFrames = 0;
+        if (level > _vadPeakRms) _vadPeakRms = level;
+        // Check force-stop for wake chunk
+        if (_vadState === 'recording_wake' && _vadRecordFrames >= VAD_MAX_WAKE_FRAMES) {
+          console.log('[vad] force-stopping wake recording after', _vadRecordFrames, 'frames');
+          _commitStop();
+        }
+      } else {
+        _vadSilenceFrames++;
+        var silenceNeeded = (_vadState === 'recording_cmd') ? VAD_SILENCE_FRAMES_CMD : VAD_SILENCE_FRAMES_WAKE;
+        var minMet = (_vadRecordFrames >= VAD_MIN_RECORD_FRAMES);
+        if (minMet && _vadSilenceFrames >= VAD_SILENCE_FRAMES_STOP) {
+          // Enter STOPPING — use the silence threshold that applies to the mode as a further gate,
+          // then commit. (Pipecat has a separate STOPPING state; we merge it into the silence count.)
+          console.log('[vad] silence confirmed (', _vadSilenceFrames, 'frames) — peak rms:', _vadPeakRms.toFixed(4));
+          _commitStop();
         }
       }
     }
   }, 100);
+}
+
+function _commitStop() {
+  var capturedMode = (_vadState === 'recording_cmd') ? 'cmd' : 'wake';
+  _vadSpeechFrames  = 0;
+  _vadSilenceFrames = 0;
+  _vadPeakRms       = 0;
+  _vadRecordFrames  = 0;
+  _vadSmoothedRms   = 0;
+  _vadState         = 'transcribing';
+  if (_mediaRecorder && _mediaRecorder.state !== 'inactive') {
+    var mr = _mediaRecorder;
+    mr.onstop = function() {
+      _transcribeBlobs(_recordChunks.slice(), capturedMode);
+    };
+    try { mr.stop(); } catch (_) {}
+  }
 }
 
 // ── Whisper result handler ────────────────────────────────────────────────
@@ -698,6 +749,8 @@ function _exitCommandMode(transcript) {
   _playVoiceChime('dismiss');
   _hideVoiceOverlay();
   _setVoicePillState(_voiceEnabled ? 'listening' : 'off');
+  // Cancel any false-interruption TTS recovery — a real command arrived
+  if (_ttsResumeTimer) { clearTimeout(_ttsResumeTimer); _ttsResumeTimer = null; }
   if ((transcript || '').trim()) _routeVoiceCommand(transcript.trim());
 }
 
@@ -708,6 +761,7 @@ function _startWakeListener() {
   _vadState         = 'idle';
   _vadSpeechFrames  = 0;
   _vadSilenceFrames = 0;
+  _vadSmoothedRms   = 0;
 
   if (_micStream) {
     // Mic already open — restart VAD loop
