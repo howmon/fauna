@@ -393,8 +393,12 @@ function _renderProjectHubBody(proj) {
   if (tab === 'files') {
     var proj2 = proj;
     body.innerHTML = _renderFilesTab(proj2);
-    var activeSrcId = state._projectFileSrcId || (proj2.sources && proj2.sources[0] && proj2.sources[0].id);
-    if (activeSrcId) loadProjectFileTree(activeSrcId, '');
+    var rootPath2 = proj2.rootPath && proj2.rootPath.trim();
+    var rootAlreadySrc2 = rootPath2 && (proj2.sources || []).some(function(s) { return s.type === 'local' && s.path === rootPath2; });
+    var defaultSrcId = state._projectFileSrcId ||
+      (rootPath2 && !rootAlreadySrc2 ? '__rootpath__' : null) ||
+      (proj2.sources && proj2.sources[0] && proj2.sources[0].id);
+    if (defaultSrcId) loadProjectFileTree(defaultSrcId, '');
   }
   else if (tab === 'contexts') body.innerHTML = _renderContextsTab(proj);
   else if (tab === 'sources')  body.innerHTML = _renderSourcesTab(proj);
@@ -408,11 +412,21 @@ function _renderProjectHubBody(proj) {
 // ── Files Tab ─────────────────────────────────────────────────────────────
 
 function _renderFilesTab(proj) {
-  if (!proj.sources || !proj.sources.length) {
+  var rootPath = proj.rootPath && proj.rootPath.trim();
+  var rootAlreadySrc = rootPath && (proj.sources || []).some(function(s) {
+    return s.type === 'local' && s.path === rootPath;
+  });
+  var hasAnySrc = (proj.sources && proj.sources.length) || (rootPath && !rootAlreadySrc);
+  if (!hasAnySrc) {
     return '<div class="proj-hub-empty"><i class="ti ti-folder-open" style="font-size:28px;opacity:.3"></i><div>No sources yet</div>' +
       '<button class="proj-action-btn" onclick="switchProjectHubTab(\'sources\')"><i class="ti ti-plus"></i> Add a source</button></div>';
   }
-  var srcOptions = proj.sources.map(function(s) {
+  var srcOptions = '';
+  if (rootPath && !rootAlreadySrc) {
+    var rootBasename = rootPath.split('/').filter(Boolean).pop() || rootPath;
+    srcOptions += '<option value="__rootpath__">' + _projEsc(rootBasename) + ' (working folder)</option>';
+  }
+  srcOptions += (proj.sources || []).map(function(s) {
     return '<option value="' + _projEsc(s.id) + '">' + _projEsc(s.name) + '</option>';
   }).join('');
   return '<div class="proj-files-toolbar">' +
@@ -817,6 +831,11 @@ function _explorerMonacoDispose() {
 
 async function explorerLoadTree(srcId /*, subPath ignored — tree always starts at root */) {
   state._projectFileSrcId = srcId;
+  // Preserve expanded/opened state when the same source is already loaded
+  if (_explorerTreeState.srcId === srcId && _explorerTreeState.dirCache['']) {
+    _treeRender(_explorerTreeState);
+    return;
+  }
   await _treeInit(_explorerTreeState, srcId);
 }
 

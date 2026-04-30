@@ -324,10 +324,16 @@ export async function syncSource(projectId, srcId) {
 export function listFiles(projectId, srcId, subPath) {
   const p = getProject(projectId);
   if (!p) throw new Error('Project not found');
-  const src = p.sources.find(s => s.id === srcId);
-  if (!src) throw new Error('Source not found');
 
-  const root = src.type === 'local' ? src.path : _sourceCloneDir(projectId, srcId);
+  let root;
+  if (srcId === '__rootpath__') {
+    if (!p.rootPath) throw new Error('No root folder set for this project');
+    root = p.rootPath;
+  } else {
+    const src = p.sources.find(s => s.id === srcId);
+    if (!src) throw new Error('Source not found');
+    root = src.type === 'local' ? src.path : _sourceCloneDir(projectId, srcId);
+  }
   if (!root || !fs.existsSync(root)) throw new Error('Source directory not available');
 
   const rel   = (subPath || '').replace(/^\/+/, '');
@@ -368,10 +374,16 @@ export function listFiles(projectId, srcId, subPath) {
 export function readSourceFile(projectId, srcId, filePath) {
   const p = getProject(projectId);
   if (!p) throw new Error('Project not found');
-  const src = p.sources.find(s => s.id === srcId);
-  if (!src) throw new Error('Source not found');
 
-  const root = src.type === 'local' ? src.path : _sourceCloneDir(projectId, srcId);
+  let root;
+  if (srcId === '__rootpath__') {
+    if (!p.rootPath) throw new Error('No root folder set for this project');
+    root = p.rootPath;
+  } else {
+    const src = p.sources.find(s => s.id === srcId);
+    if (!src) throw new Error('Source not found');
+    root = src.type === 'local' ? src.path : _sourceCloneDir(projectId, srcId);
+  }
   if (!root || !fs.existsSync(root)) throw new Error('Source not available');
 
   const rel  = (filePath || '').replace(/^\/+/, '');
@@ -400,10 +412,16 @@ export function readSourceFile(projectId, srcId, filePath) {
 export function resolveSourceFilePath(projectId, srcId, filePath) {
   const p = getProject(projectId);
   if (!p) throw new Error('Project not found');
-  const src = p.sources.find(s => s.id === srcId);
-  if (!src) throw new Error('Source not found');
 
-  const root = src.type === 'local' ? src.path : _sourceCloneDir(projectId, srcId);
+  let root;
+  if (srcId === '__rootpath__') {
+    if (!p.rootPath) throw new Error('No root folder set for this project');
+    root = p.rootPath;
+  } else {
+    const src = p.sources.find(s => s.id === srcId);
+    if (!src) throw new Error('Source not found');
+    root = src.type === 'local' ? src.path : _sourceCloneDir(projectId, srcId);
+  }
   if (!root || !fs.existsSync(root)) throw new Error('Source not available');
 
   const rel  = (filePath || '').replace(/^\/+/, '');
