@@ -4633,6 +4633,8 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
   font-weight: 600; font-size: 13px; margin-bottom: 10px; color: var(--text);
 }
 .proj-run-src-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-run-src-term-btn { opacity: 0; transition: opacity .15s; margin-left: auto; }
+.proj-run-src-card:hover .proj-run-src-term-btn { opacity: 1; }
 .proj-stack-badges { display: flex; gap: 4px; flex-wrap: wrap; flex-shrink: 0; }
 .proj-stack-badge {
   padding: 2px 7px; border-radius: 10px; font-size: 10px; font-weight: 600;
@@ -4733,6 +4735,29 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 }
 .proj-run-bottom-tab.active { color: #e6edf3; border-bottom-color: #58a6ff; }
 .proj-run-bottom-tab:hover { color: #c9d1d9; }
+.proj-term-new-btn { padding: 0 8px !important; opacity: .6; }
+.proj-term-new-btn:hover { opacity: 1; }
+.proj-term-tab-close {
+  margin-left: 4px; padding: 0 2px; opacity: 0; transition: opacity .12s;
+  font-size: 13px; line-height: 1;
+}
+.proj-run-bottom-tab:hover .proj-term-tab-close,
+.proj-term-session-tab:hover .proj-term-tab-close { opacity: 1; }
+
+/* ── Terminal Tab session tabs ─────────────────────────────────────────── */
+.proj-term-session-tabs {
+  display: flex; align-items: center; gap: 2px; padding: 0 8px;
+  border-bottom: 1px solid rgba(255,255,255,.08); flex-shrink: 0; background: #161b22;
+  min-height: 34px; overflow-x: auto;
+}
+.proj-term-session-tab {
+  padding: 0 12px; height: 34px; border: none; background: none; cursor: pointer;
+  font-size: 11.5px; font-weight: 500; color: #8b949e;
+  border-bottom: 2px solid transparent; transition: color .15s, border-color .15s;
+  display: flex; align-items: center; gap: 5px; flex-shrink: 0; white-space: nowrap;
+}
+.proj-term-session-tab.active { color: #e6edf3; border-bottom-color: #58a6ff; }
+.proj-term-session-tab:hover { color: #c9d1d9; }
 .proj-run-terminal-output {
   flex: 1; overflow-y: auto; padding: 10px 14px; margin: 0; min-height: 0;
   font-size: 12px; font-family: var(--mono-font, 'JetBrains Mono', 'Menlo', monospace);

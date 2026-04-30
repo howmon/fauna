@@ -5980,6 +5980,7 @@ app.post('/api/projects/:id/sources/:srcId/run', (req, res) => {
       srcName: src.name,
       name: name || cmd.split(' ')[0],
       cmd,
+      originalCmd: cmd,
       port: port ? Number(port) : null,
       status: 'starting',
       pid: null,
@@ -5990,8 +5991,8 @@ app.post('/api/projects/:id/sources/:srcId/run', (req, res) => {
     };
     _runs.set(runId, record);
 
-    // Spawn with shell so npm/npx etc. work properly
-    const child = _spawn('sh', ['-c', cmd], {
+    // Use login shell so nvm/volta/homebrew are on PATH
+    const child = _spawn('/bin/zsh', ['-l', '-c', cmd], {
       cwd: root,
       env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
       detached: false,
@@ -6040,9 +6041,9 @@ app.post('/api/projects/:id/sources/:srcId/run', (req, res) => {
             setTimeout(() => {
               const rec2 = _runs.get(runId);
               if (!rec2 || rec2.status === 'stopped') return;
-              rec2.cmd = newCmd;
+              // Keep originalCmd, only update actual running cmd
               rec2.status = 'starting';
-              const child2 = _spawn('sh', ['-c', newCmd], {
+              const child2 = _spawn('/bin/zsh', ['-l', '-c', newCmd], {
                 cwd: root,
                 env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
                 detached: false,
@@ -6100,7 +6101,7 @@ app.get('/api/projects/:id/runs', (req, res) => {
   for (const [, rec] of _runs) {
     if (rec.projectId === projectId) {
       list.push({ runId: rec.runId, srcId: rec.srcId, srcName: rec.srcName,
-        name: rec.name, cmd: rec.cmd, port: rec.port, status: rec.status,
+        name: rec.name, cmd: rec.originalCmd || rec.cmd, port: rec.port, status: rec.status,
         pid: rec.pid, startedAt: rec.startedAt, stoppedAt: rec.stoppedAt });
     }
   }

@@ -287,6 +287,8 @@ function openProjectHub(tab) {
 function closeProjectHub() {
   state.projectHubOpen = false;
   if (_projMonacoEditor) { _projMonacoEditor.dispose(); _projMonacoEditor = null; }
+  // Kill all terminal sessions
+  _termDestroyAll();
   var hub = document.getElementById('project-hub');
   if (hub) hub.style.display = 'none';
 }
@@ -322,13 +324,19 @@ function switchProjectHubTab(tab) {
   if (state.projectHubTab === 'files' && tab !== 'files') {
     if (_projMonacoEditor) { _projMonacoEditor.dispose(); _projMonacoEditor = null; }
   }
-  // Disconnect run log SSE if leaving run tab
+  // Disconnect run log SSE if leaving run tab (keep terminal alive)
   if (state.projectHubTab === 'run' && tab !== 'run') {
-    _runLogClose();
+    if (_runLogESrc) { try { _runLogESrc.close(); } catch(_) {} _runLogESrc = null; }
+    // Disconnect terminal SSE but keep shell alive
+    _termDisconnectSSE();
   }
-  // Kill terminal shell if leaving terminal tab
+  // Reconnect terminal SSE when entering terminal or run tab
+  if ((tab === 'run' || tab === 'terminal') && state.projectHubTab !== tab) {
+    // Will reconnect after render
+  }
+  // Kill standalone terminal tab shell if leaving (it shares the session pool)
   if (state.projectHubTab === 'terminal' && tab !== 'terminal') {
-    _termDestroy(_activeProject());
+    _termDisconnectSSE();
   }
   state.projectHubTab = tab;
   var proj = _activeProject();
@@ -356,7 +364,7 @@ function _renderProjectHubBody(proj) {
   else if (tab === 'contexts') body.innerHTML = _renderContextsTab(proj);
   else if (tab === 'sources')  body.innerHTML = _renderSourcesTab(proj);
   else if (tab === 'run')      { body.innerHTML = _renderRunTabShell(); _runTabLoad(proj); }
-  else if (tab === 'terminal') { body.innerHTML = _renderTerminalTab(proj); _termTabLoad(proj); }
+  else if (tab === 'terminal') { body.innerHTML = ''; _renderTerminalTab(proj, body); _termTabLoad(proj); }
   else if (tab === 'convs')    body.innerHTML = _renderConvsTab(proj);
   else if (tab === 'tasks')    body.innerHTML = _renderTasksTab(proj);
   else if (tab === 'settings') body.innerHTML = _renderSettingsTab(proj);
@@ -1190,11 +1198,13 @@ var _runLogESrc    = null; // EventSource for log pane
 var _runOpenLogId  = null; // which runId is showing logs
 
 // Terminal state
-var _termId      = null;
-var _termESrc    = null;
-var _termHistory = [];
-var _termHistIdx = -1;
+var _termSessions  = [];  // [{ id, name, termId, projectId, ess }]
+var _termActiveId  = null; // id of active session
+var _termHistory   = [];
+var _termHistIdx   = -1;
 var _runBottomMode = 'terminal'; // 'terminal' | 'logs'
+
+function _termUidLocal() { return 'ts-' + Date.now() + '-' + Math.random().toString(36).slice(2,6); }
 
 function _renderRunTabShell() {
   return '<div id="proj-run-root" class="proj-run-root">' +
@@ -1209,10 +1219,11 @@ async function _runTabLoad(proj) {
   _runOpenLogId = null;
   _runBottomMode = 'terminal';
   if (_runLogESrc) { try { _runLogESrc.close(); } catch(_) {} _runLogESrc = null; }
-  // Kill any prior terminal for this tab
-  await _termDestroy(proj);
-  _termHistory = [];
-  _termHistIdx = -1;
+  // Keep sessions alive — just filter to this project's sessions
+  _termSessions = _termSessions.filter(function(s) { return s.projectId === proj.id; });
+  if (!_termActiveId || !_termSessions.find(function(s) { return s.id === _termActiveId; })) {
+    _termActiveId = _termSessions.length ? _termSessions[0].id : null;
+  }
 
   // Fetch active runs
   try {
@@ -1277,26 +1288,13 @@ function _runRenderBottom(proj) {
   var pane = document.createElement('div');
   pane.className = 'proj-run-bottom-pane';
   pane.id = 'proj-run-bottom-pane';
-  pane.innerHTML =
-    '<div class="proj-run-bottom-tabs">' +
-      '<button class="proj-run-bottom-tab' + (!isLogs ? ' active' : '') + '" onclick="_runSwitchBottomMode(\'terminal\')">' +
-        '<i class="ti ti-terminal-2"></i> Terminal</button>' +
-      (isLogs
-        ? '<button class="proj-run-bottom-tab active">' +
-            '<i class="ti ti-file-text"></i> ' + _projEsc((logRun ? logRun.name : '') + ' logs') + '</button>' +
-            '<button class="proj-icon-btn" style="margin-left:auto" onclick="_runSwitchBottomMode(\'terminal\')"><i class="ti ti-x"></i></button>' +
-            (logIsActive
-              ? '<button class="proj-icon-btn proj-run-log-stop-btn" style="color:#f87171" onclick="stopProjectRun(\'' + _projEsc(_runOpenLogId) + '\',\'' + _projEsc(proj.id) + '\')"><i class="ti ti-player-stop-filled"></i> Stop</button>'
-              : '')
-        : '') +
-    '</div>' +
-    (isLogs
-      ? '<pre id="proj-run-log-body" class="proj-run-log-body"></pre>'
-      : '<div id="proj-terminal-output" class="proj-terminal-output proj-run-terminal-output"></div>' +
-        '<div class="proj-terminal-input-row">' +
-          '<span class="proj-terminal-prompt">$</span>' +
-          '<input id="proj-terminal-input" class="proj-terminal-input" placeholder="Type a command…" autocomplete="off" autocorrect="off" spellcheck="false">' +
-        '</div>');
+
+  var tabsHtml = _termSessionTabsHtml(isLogs, logRun, logIsActive, proj);
+  var bodyHtml = isLogs
+    ? '<pre id="proj-run-log-body" class="proj-run-log-body"></pre>'
+    : _termSessionBodyHtml();
+
+  pane.innerHTML = tabsHtml + bodyHtml;
   var old = document.getElementById('proj-run-bottom-pane');
   if (old) old.replaceWith(pane);
   else root.appendChild(pane);
@@ -1306,25 +1304,190 @@ function _runRenderBottom(proj) {
   }
 }
 
+function _termSessionTabsHtml(isLogs, logRun, logIsActive, proj) {
+  var projId = proj ? proj.id : '';
+  var html = '<div class="proj-run-bottom-tabs">';
+  // Terminal session tabs
+  _termSessions.filter(function(s) { return s.projectId === projId; }).forEach(function(s) {
+    var isActive = !isLogs && s.id === _termActiveId;
+    html += '<button class="proj-run-bottom-tab' + (isActive ? ' active' : '') + '" onclick="_termSwitchSession(\'' + _projEsc(s.id) + '\')" title="' + _projEsc(s.name) + '">' +
+      '<i class="ti ti-terminal-2"></i> ' + _projEsc(s.name) +
+      '<span class="proj-term-tab-close" onclick="event.stopPropagation();_termCloseSession(\'' + _projEsc(s.id) + '\')">×</span>' +
+    '</button>';
+  });
+  // New terminal button
+  html += '<button class="proj-run-bottom-tab proj-term-new-btn" onclick="_termNewSession()" title="New terminal"><i class="ti ti-plus"></i></button>';
+  // Logs tab (when in logs mode)
+  if (isLogs) {
+    html += '<button class="proj-run-bottom-tab active">' +
+      '<i class="ti ti-file-text"></i> ' + _projEsc((logRun ? logRun.name : '') + ' logs') + '</button>' +
+      '<button class="proj-icon-btn" style="margin-left:auto" onclick="_runSwitchBottomMode(\'terminal\')"><i class="ti ti-x"></i></button>' +
+      (logIsActive
+        ? '<button class="proj-icon-btn proj-run-log-stop-btn" style="color:#f87171" onclick="stopProjectRun(\'' + _projEsc(_runOpenLogId) + '\',\'' + _projEsc(proj ? proj.id : '') + '\')"><i class="ti ti-player-stop-filled"></i> Stop</button>'
+        : '');
+  }
+  html += '</div>';
+  return html;
+}
+
+function _termSessionBodyHtml() {
+  return '<div id="proj-terminal-output" class="proj-terminal-output proj-run-terminal-output"></div>' +
+    '<div class="proj-terminal-input-row">' +
+      '<span class="proj-terminal-prompt">$</span>' +
+      '<input id="proj-terminal-input" class="proj-terminal-input" placeholder="Type a command…" autocomplete="off" autocorrect="off" spellcheck="false">' +
+    '</div>';
+}
+
 async function _runStartTerminal(proj) {
-  _termId = null;
-  if (_termESrc) { try { _termESrc.close(); } catch(_) {} _termESrc = null; }
-  _termWrite('<span style="color:#6b7280">Starting shell…</span>\n');
+  // If we already have a session for this project, just reconnect SSE
+  var existing = _termSessions.filter(function(s) { return s.projectId === proj.id; });
+  if (existing.length) {
+    _termActiveId = existing[0].id;
+    var sess = existing[0];
+    if (!sess.ess) _termConnectSSE(sess);
+    _runRenderBottom(proj);
+    var inp = document.getElementById('proj-terminal-input');
+    if (inp) { inp.addEventListener('keydown', _termKeydown); inp.focus(); }
+    _termRepaintOutput(sess);
+    return;
+  }
+  // No session yet — create one
+  await _termNewSession(proj, null, null);
+}
+
+// Create a new terminal session. name=null → auto, initCmd=null → none
+async function _termNewSession(proj, name, initCmd) {
+  proj = proj || _activeProject();
+  if (!proj) return;
+  var label = name || ('Terminal ' + (_termSessions.filter(function(s){ return s.projectId === proj.id; }).length + 1));
+  var sess = { id: _termUidLocal(), name: label, termId: null, projectId: proj.id, ess: null, localBuf: '' };
+  _termSessions.push(sess);
+  _termActiveId = sess.id;
+  // Render pane so the output div exists before we write to it
+  _runRenderBottom(proj);
+  var inp = document.getElementById('proj-terminal-input');
+  if (inp) inp.addEventListener('keydown', _termKeydown);
+  _termWriteToSession(sess, '<span style="color:#6b7280">Starting shell\u2026</span>\n');
   try {
     var r = await fetch('/api/projects/' + proj.id + '/terminal', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     var d = await r.json();
-    _termId = d.termId;
+    sess.termId = d.termId;
   } catch(e) {
-    _termWrite('<span style="color:#f87171">[Failed to start shell: ' + e.message + ']</span>\n');
+    _termWriteToSession(sess, '<span style="color:#f87171">[Failed: ' + e.message + ']</span>\n');
     return;
   }
-  var out = document.getElementById('proj-terminal-output');
-  if (out) out.innerHTML = '';
-  _termWrite('<span style="color:#6b7280">Ready — ' + _projEsc(proj.rootPath || '~') + '</span>\n');
-  _termConnectSSE(proj.id);
+  sess.localBuf = '';
+  _termWriteToSession(sess, '<span style="color:#6b7280">Ready \u2014 ' + _projEsc(proj.rootPath || '~') + '</span>\n');
+  _termConnectSSE(sess);
+  if (initCmd) {
+    _termWriteToSession(sess, '<span class="proj-terminal-echo">$ ' + _projEsc(initCmd) + '</span>\n');
+    await _termSendToSession(sess, proj.id, initCmd + '\n');
+  }
+  if (_termActiveId === sess.id) {
+    var inp2 = document.getElementById('proj-terminal-input');
+    if (inp2) inp2.focus();
+  }
+}
+
+function _termSwitchSession(id) {
+  var prev = _termSessions.find(function(s) { return s.id === _termActiveId; });
+  if (prev && prev.ess) { try { prev.ess.close(); } catch(_) {} prev.ess = null; }
+  _termActiveId = id;
+  _runBottomMode = 'terminal';
+  var proj = _activeProject();
+  if (proj) _runRenderBottom(proj);
+  var sess = _termSessions.find(function(s) { return s.id === id; });
+  if (sess) {
+    _termRepaintOutput(sess);
+    if (sess.termId) _termConnectSSE(sess);
+  }
   var inp = document.getElementById('proj-terminal-input');
-  if (inp) inp.focus();
+  if (inp) { inp.addEventListener('keydown', _termKeydown); inp.focus(); }
+}
+
+function _termRepaintOutput(sess) {
+  var out = document.getElementById('proj-terminal-output');
+  if (!out || !sess) return;
+  out.innerHTML = '';
+  if (sess.localBuf) {
+    var span = document.createElement('span');
+    span.textContent = sess.localBuf;
+    out.appendChild(span);
+    out.scrollTop = out.scrollHeight;
+  }
+}
+
+async function _termCloseSession(id) {
+  var sess = _termSessions.find(function(s) { return s.id === id; });
+  if (!sess) return;
+  if (sess.ess) { try { sess.ess.close(); } catch(_) {} }
+  var proj = _activeProject();
+  if (proj && sess.termId) {
+    try { await fetch('/api/projects/' + proj.id + '/terminal/' + sess.termId, { method: 'DELETE' }); } catch(_) {}
+  }
+  _termSessions = _termSessions.filter(function(s) { return s.id !== id; });
+  if (_termActiveId === id) {
+    _termActiveId = _termSessions.length ? _termSessions[_termSessions.length-1].id : null;
+  }
+  if (proj) {
+    _runRenderBottom(proj);
+    if (_termActiveId) {
+      var next = _termSessions.find(function(s) { return s.id === _termActiveId; });
+      if (next) { _termRepaintOutput(next); if (next.termId) _termConnectSSE(next); }
+    }
+  }
+}
+
+function _termDestroyAll() {
+  _termSessions.forEach(function(sess) {
+    if (sess.ess) { try { sess.ess.close(); } catch(_) {} }
+    var proj = _activeProject();
+    if (proj && sess.termId) {
+      fetch('/api/projects/' + proj.id + '/terminal/' + sess.termId, { method: 'DELETE' }).catch(function(){});
+    }
+  });
+  _termSessions = [];
+  _termActiveId = null;
+}
+
+function _termDisconnectSSE() {
+  _termSessions.forEach(function(sess) {
+    if (sess.ess) { try { sess.ess.close(); } catch(_) {} sess.ess = null; }
+  });
+}
+
+function _termConnectSSE(sess) {
+  if (!sess || !sess.termId) return;
+  var projectId = sess.projectId;
+  if (sess.ess) { try { sess.ess.close(); } catch(_) {} sess.ess = null; }
+  var es = new EventSource('/api/projects/' + projectId + '/terminal/' + sess.termId + '/output');
+  sess.ess = es;
+  es.onmessage = function(e) {
+    var d = JSON.parse(e.data);
+    if (d.out !== undefined) {
+      // Strip ANSI
+      var text = d.out.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+                      .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
+                      .replace(/\x1b[()][0-9A-Za-z]/g, '')
+                      .replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      // Filter zsh login noise on first connect
+      text = text.replace(/^Last login:.*\n?/m, '');
+      sess.localBuf += text;
+      if (sess.localBuf.length > 200000) sess.localBuf = sess.localBuf.slice(-150000);
+      // Only paint to DOM if this session is active
+      if (sess.id === _termActiveId) {
+        var out = document.getElementById('proj-terminal-output');
+        if (out) {
+          var span = document.createElement('span');
+          span.textContent = text;
+          out.appendChild(span);
+          out.scrollTop = out.scrollHeight;
+        }
+      }
+    }
+  };
+  es.onerror = function() { sess.ess = null; };
 }
 
 function _runSwitchBottomMode(mode) {
@@ -1335,8 +1498,9 @@ function _runSwitchBottomMode(mode) {
   }
   var proj = _activeProject();
   if (proj) _runRenderBottom(proj);
-  if (mode === 'terminal' && _termId && proj) {
-    _termConnectSSE(proj.id);
+  if (mode === 'terminal') {
+    var sess = _termSessions.find(function(s) { return s.id === _termActiveId; });
+    if (sess) { _termRepaintOutput(sess); if (sess.termId && !sess.ess) _termConnectSSE(sess); }
     var inp = document.getElementById('proj-terminal-input');
     if (inp) inp.focus();
   }
@@ -1372,6 +1536,8 @@ function _runRender(proj) {
           '<i class="ti ti-folder proj-folder-icon"></i>' +
           '<span class="proj-run-src-name">' + _projEsc(s.name) + '</span>' +
           (stackBadges ? '<span class="proj-stack-badges">' + stackBadges + '</span>' : '') +
+          '<button class="proj-icon-btn proj-run-src-term-btn" title="Open terminal here" onclick="_termOpenForSource(\'' + _projEsc(proj.id) + '\',\'' + _projEsc(s.id) + '\',\'' + _projEsc(s.name) + '\',\'' + _projEsc(s.rootPath || s.path || '') + '\')">' +
+            '<i class="ti ti-terminal-2"></i></button>' +
         '</div>' +
         '<div class="proj-run-src-body">' +
           '<div class="proj-run-field-row">' +
@@ -1517,7 +1683,7 @@ function _runLogOpen(runId, projectId, scroll) {
   _runOpenLogId = runId;
   _runBottomMode = 'logs';
   if (_runLogESrc) { try { _runLogESrc.close(); } catch(_) {} _runLogESrc = null; }
-  if (_termESrc) { try { _termESrc.close(); } catch(_) {} _termESrc = null; }
+  _termDisconnectSSE();
 
   // Render bottom pane in logs mode
   var proj = _activeProject();
@@ -1618,97 +1784,75 @@ function openRunInBrowser(url) {
 
 // ── Terminal Tab ─────────────────────────────────────────────────────────
 
-function _renderTerminalTab(proj) {
-  var rootLabel = proj.rootPath ? proj.rootPath.replace(/.*\//, '') : '~';
-  return '<div class="proj-terminal" id="proj-terminal">' +
-    '<div class="proj-terminal-toolbar">' +
-      '<span class="proj-terminal-title"><i class="ti ti-terminal-2"></i> ' + _projEsc(rootLabel) + '</span>' +
-      '<button class="proj-icon-btn" title="New shell" onclick="_termNew()"><i class="ti ti-refresh"></i> New shell</button>' +
-      '<button class="proj-icon-btn" title="Clear output" onclick="_termClear()"><i class="ti ti-eraser"></i> Clear</button>' +
-    '</div>' +
-    '<div id="proj-terminal-output" class="proj-terminal-output"></div>' +
-    '<div class="proj-terminal-input-row">' +
-      '<span class="proj-terminal-prompt">$</span>' +
-      '<input id="proj-terminal-input" class="proj-terminal-input" placeholder="Type a command and press Enter…" autocomplete="off" autocorrect="off" spellcheck="false">' +
-    '</div>' +
+function _renderTerminalTab(proj, container) {
+  var sessions = _termSessions.filter(function(s) { return s.projectId === proj.id; });
+  var sessionTabsHtml = '<div class="proj-term-session-tabs">';
+  sessions.forEach(function(s) {
+    var isActive = s.id === _termActiveId;
+    sessionTabsHtml +=
+      '<button class="proj-term-session-tab' + (isActive ? ' active' : '') + '" onclick="_termSwitchSession(\'' + _projEsc(s.id) + '\')" title="' + _projEsc(s.name) + '">' +
+        '<i class="ti ti-terminal-2"></i> ' + _projEsc(s.name) +
+        '<span class="proj-term-tab-close" onclick="event.stopPropagation();_termCloseSession(\'' + _projEsc(s.id) + '\')">×</span>' +
+      '</button>';
+  });
+  sessionTabsHtml +=
+    '<button class="proj-term-session-tab proj-term-new-btn" onclick="_termNewSession()" title="New terminal"><i class="ti ti-plus"></i></button>' +
+    '<button class="proj-icon-btn" style="margin-left:auto" title="Clear output" onclick="_termClear()"><i class="ti ti-eraser"></i></button>' +
   '</div>';
+  var root = container || document.getElementById('project-hub-body');
+  if (root) {
+    root.innerHTML = '<div class="proj-terminal" id="proj-terminal">' +
+      sessionTabsHtml +
+      '<div id="proj-terminal-output" class="proj-terminal-output"></div>' +
+      '<div class="proj-terminal-input-row">' +
+        '<span class="proj-terminal-prompt">$</span>' +
+        '<input id="proj-terminal-input" class="proj-terminal-input" placeholder="Type a command and press Enter…" autocomplete="off" autocorrect="off" spellcheck="false">' +
+      '</div>' +
+    '</div>';
+  }
 }
 
 async function _termTabLoad(proj) {
-  _termId = null;
-  _termHistory = [];
-  _termHistIdx = -1;
-  if (_termESrc) { try { _termESrc.close(); } catch(_) {} _termESrc = null; }
-  _termWrite('<span style="color:#6b7280">Starting shell…</span>\n');
-  try {
-    var r = await fetch('/api/projects/' + proj.id + '/terminal', { method: 'POST',
-      headers: { 'Content-Type': 'application/json' }, body: '{}' });
-    var d = await r.json();
-    _termId = d.termId;
-  } catch(e) {
-    _termWrite('<span style="color:#f87171">[Failed to start shell: ' + e.message + ']</span>\n');
+  // Reuse existing sessions for this project
+  var existing = _termSessions.filter(function(s) { return s.projectId === proj.id; });
+  if (existing.length) {
+    _termActiveId = existing[0].id;
+    _renderTerminalTab(proj);
+    var sess = existing[0];
+    _termRepaintOutput(sess);
+    if (!sess.ess && sess.termId) _termConnectSSE(sess);
+    var inp = document.getElementById('proj-terminal-input');
+    if (inp) { inp.addEventListener('keydown', _termKeydown); inp.focus(); }
     return;
   }
-  var out = document.getElementById('proj-terminal-output');
-  if (out) out.innerHTML = '';
-  _termWrite('<span style="color:#6b7280">Connected — ' + _projEsc(proj.rootPath || '~') + '</span>\n');
-  _termConnectSSE(proj.id);
-  var inp = document.getElementById('proj-terminal-input');
-  if (inp) {
-    inp.addEventListener('keydown', _termKeydown);
-    inp.focus();
-  }
-}
-
-function _termConnectSSE(projectId) {
-  if (_termESrc) { try { _termESrc.close(); } catch(_) {} }
-  _termESrc = new EventSource('/api/projects/' + projectId + '/terminal/' + _termId + '/output');
-  _termESrc.onmessage = function(e) {
-    var d = JSON.parse(e.data);
-    if (d.out !== undefined) _termAppend(d.out);
-  };
-  _termESrc.onerror = function() { _termESrc.close(); _termESrc = null; };
+  // No sessions yet — create one
+  _renderTerminalTab(proj);
+  await _termNewSession(proj, null, null);
 }
 
 function _termAppend(raw) {
-  var out = document.getElementById('proj-terminal-output');
-  if (!out) return;
-  // Strip ANSI escape codes
+  var sess = _termSessions.find(function(s) { return s.id === _termActiveId; });
+  if (!sess) return;
   var text = raw.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
                 .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
                 .replace(/\x1b[()][0-9A-Za-z]/g, '')
                 .replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  // Append as text node inside a span (safe, no XSS)
-  var span = document.createElement('span');
-  span.textContent = text;
-  out.appendChild(span);
-  out.scrollTop = out.scrollHeight;
+  _termWriteToSession(sess, text);
 }
 
-function _termWrite(html) {
-  var out = document.getElementById('proj-terminal-output');
-  if (!out) return;
-  var span = document.createElement('span');
-  span.innerHTML = html;
-  out.appendChild(span);
-  out.scrollTop = out.scrollHeight;
-}
-
-function _termClear() {
-  var out = document.getElementById('proj-terminal-output');
-  if (out) out.innerHTML = '';
-}
 
 function _termKeydown(e) {
+  var sess = _termSessions.find(function(s) { return s.id === _termActiveId; });
+  if (!sess) return;
   if (e.key === 'Enter') {
     var inp = e.target;
     var cmd = inp.value;
     inp.value = '';
     _termHistIdx = -1;
     if (cmd.trim()) { _termHistory.unshift(cmd); if (_termHistory.length > 200) _termHistory.pop(); }
-    _termWrite('<span class="proj-terminal-echo">$ ' + _projEsc(cmd) + '</span>\n');
-    if (cmd.trim() === 'clear' || cmd.trim() === 'cls') { _termClear(); return; }
-    _termSend(cmd + '\n');
+    _termWriteToSession(sess, '<span class="proj-terminal-echo">$ ' + _projEsc(cmd) + '</span>\n');
+    if (cmd.trim() === 'clear' || cmd.trim() === 'cls') { _termClearSession(sess); return; }
+    _termSendToSession(sess, sess.projectId, cmd + '\n');
   } else if (e.key === 'ArrowUp') {
     e.preventDefault();
     if (_termHistory.length) {
@@ -1721,19 +1865,18 @@ function _termKeydown(e) {
     else { _termHistIdx = -1; e.target.value = ''; }
   } else if (e.key === 'c' && e.ctrlKey) {
     e.preventDefault();
-    _termSend('\x03');
-    _termWrite('^C\n');
+    _termSendToSession(sess, sess.projectId, '\x03');
+    _termWriteToSession(sess, '^C\n');
   } else if (e.key === 'l' && e.ctrlKey) {
     e.preventDefault();
-    _termClear();
+    _termClearSession(sess);
   }
 }
 
-async function _termSend(data) {
-  var proj = _activeProject();
-  if (!proj || !_termId) return;
+async function _termSendToSession(sess, projectId, data) {
+  if (!sess || !sess.termId) return;
   try {
-    await fetch('/api/projects/' + proj.id + '/terminal/' + _termId + '/input', {
+    await fetch('/api/projects/' + projectId + '/terminal/' + sess.termId + '/input', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ data }),
@@ -1741,21 +1884,68 @@ async function _termSend(data) {
   } catch(_) {}
 }
 
+function _termWriteToSession(sess, html) {
+  if (!sess) return;
+  // Append to local buffer (plain text)
+  var tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  sess.localBuf += tmp.textContent;
+  if (sess.localBuf.length > 200000) sess.localBuf = sess.localBuf.slice(-150000);
+  // Only paint to DOM if visible
+  if (sess.id === _termActiveId) {
+    var out = document.getElementById('proj-terminal-output');
+    if (out) {
+      var span = document.createElement('span');
+      span.innerHTML = html;
+      out.appendChild(span);
+      out.scrollTop = out.scrollHeight;
+    }
+  }
+}
+
+function _termClearSession(sess) {
+  if (!sess) return;
+  sess.localBuf = '';
+  var out = document.getElementById('proj-terminal-output');
+  if (out) out.innerHTML = '';
+}
+
+// Open a new terminal tab and cd into the given source root
+async function _termOpenForSource(projId, srcId, srcName, srcPath) {
+  var proj = _activeProject();
+  if (!proj || proj.id !== projId) return;
+  // Switch run bottom pane to terminal mode
+  _runBottomMode = 'terminal';
+  // Create a session named after the source, cd into its root
+  await _termNewSession(proj, srcName, srcPath ? ('cd ' + JSON.stringify(srcPath)) : null);
+}
+
+async function _termSend(data) {
+  var sess = _termSessions.find(function(s) { return s.id === _termActiveId; });
+  var proj = _activeProject();
+  if (!sess || !proj) return;
+  await _termSendToSession(sess, proj.id, data);
+}
+
+function _termWrite(html) {
+  var sess = _termSessions.find(function(s) { return s.id === _termActiveId; });
+  if (sess) _termWriteToSession(sess, html);
+}
+
+function _termClear() {
+  var sess = _termSessions.find(function(s) { return s.id === _termActiveId; });
+  if (sess) _termClearSession(sess);
+}
+
 async function _termNew() {
   var proj = _activeProject();
   if (!proj) return;
-  await _termDestroy(proj);
-  _termClear();
-  await _termTabLoad(proj);
+  await _termNewSession(proj, null, null);
 }
 
-async function _termDestroy(proj) {
-  if (_termESrc) { try { _termESrc.close(); } catch(_) {} _termESrc = null; }
-  if (proj && _termId) {
-    try { await fetch('/api/projects/' + proj.id + '/terminal/' + _termId, { method: 'DELETE' }); } catch(_) {}
-    _termId = null;
-  }
-}
+// Legacy compat — no-op (we no longer destroy on tab switch)
+async function _termDestroy(proj) {}
+
 
 // ── Conversations Tab ────────────────────────────────────────────────────
 
