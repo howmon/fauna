@@ -132,7 +132,18 @@ async function runShellExec(execId, opts) {
   try {
     // Route through sandbox endpoint when an agent is active
     var endpoint = '/api/shell-exec';
+    // Resolve working directory: prefer conversation CWD, then active project source root
+    var convId2 = widget.dataset.convId || state.currentId;
+    var shellCwd = _convCwd[convId2] || '';
+    if (!shellCwd && state.activeProjectId) {
+      var activeProj = typeof _activeProject === 'function' ? _activeProject() : null;
+      if (activeProj && activeProj.sources) {
+        var firstLocal = activeProj.sources.find(function(s) { return s.type === 'local' && s.path; });
+        if (firstLocal) shellCwd = firstLocal.path;
+      }
+    }
     var bodyObj = { command: code, killId: killId, stream: true };
+    if (shellCwd) bodyObj.cwd = shellCwd;
     if (typeof isAgentActive === 'function' && isAgentActive()) {
       var sb = getSandboxedEndpoint('/api/shell-exec');
       endpoint = sb.url;

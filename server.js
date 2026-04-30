@@ -1134,11 +1134,16 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
             try {
               const { root } = _getSourceRoot(projectId, src.id);
               const stack = _detectStack(root);
-              if (stack.length) stackLines.push(`- **${src.name}**: ${stack.join(', ')}`);
+              if (stack.length) stackLines.push(`- **${src.name}** \`${root}\`: ${stack.join(', ')}`);
             } catch (_) {}
           }
           if (stackLines.length) {
             projectCtx += '\n\n## Detected Stack\n' + stackLines.join('\n');
+          }
+          // Tell the model what CWD shell-exec blocks run from
+          const firstLocal = p.sources.find(s => s.type === 'local' && s.path);
+          if (firstLocal) {
+            projectCtx += `\n\n## Shell Environment\nShell commands (\`shell-exec\` blocks) run with cwd set to \`${firstLocal.path}\` (the first local source root). Use absolute paths or paths relative to that root. Do NOT use bare \`ls\` or \`cat\` without a path — always prefix with the full source path or \`./\`.`;
           }
         }
       } catch (_) {}
