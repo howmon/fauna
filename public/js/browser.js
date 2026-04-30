@@ -1444,19 +1444,29 @@ var _extConnectedBrowsers = []; // [{id, browser, version, connectedAt}]
 
   function _connectExtEvents() {
     var retries = 0;
-    (function connect() {
+    var current = null;
+    var retryTimer = null;
+    function connect() {
+      if (current) { try { current.close(); } catch (_) {} current = null; }
+      if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
       var es = new EventSource('/api/ext/events');
+      current = es;
       es.onmessage = function(e) { retries = 0; _handleExtEvent(e); };
       es.onerror = function() {
         es.close();
+        if (current === es) current = null;
         var delay = Math.min(1000 * Math.pow(2, retries), 30000);
         retries++;
-        setTimeout(connect, delay);
+        retryTimer = setTimeout(connect, delay);
       };
-    }());
-    // Reconnect immediately on visibility restore (handles sleep/wake)
+    }
+    connect();
+    // On wake/restore: close stale connection and reconnect immediately
     document.addEventListener('visibilitychange', function() {
-      if (document.visibilityState === 'visible') { retries = 0; }
+      if (document.visibilityState === 'visible') {
+        retries = 0;
+        connect();
+      }
     });
   }
 
