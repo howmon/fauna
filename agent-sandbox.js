@@ -29,11 +29,18 @@ const BLOCKED_PATHS = [
 ];
 
 // Shell commands/patterns that are ALWAYS blocked when an agent has shell
+//
+// IMPORTANT: these patterns run against the *raw command string*, so they must
+// only match the word as a command token (leading the pipeline segment), not as
+// content inside a quoted string or heredoc body.
+// For env/printenv/set we anchor to "command position": start of string or after
+// a pipe/semicolon/newline/&&/||, with optional leading whitespace.
 const BLOCKED_SHELL_PATTERNS = [
-  // Environment / system info exposure
-  /\benv\b/,
-  /\bprintenv\b/,
-  /\bset\b(?:\s|$)/,
+  // Environment / system info exposure — only blocked when used AS a command,
+  // not when the word appears inside a quoted argument or file content.
+  /(?:^|[|;&\n])\s*env\b(?!\s*=)/,      // env as command (not VAR=val env …)
+  /(?:^|[|;&\n])\s*printenv\b/,
+  /(?:^|[|;&\n])\s*set\s*(?:[;|&\n]|$)/, // bare `set` only (not set -e, set VAR=…)
   /\bifconfig\b/,
   /\bip\s+addr/,
   /\bhostname\s+-[iI]/,
