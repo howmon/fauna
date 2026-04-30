@@ -26,7 +26,8 @@ var builderState = {
     },
     tools: [],        // { name, description, parameters: {}, code: '' }
     testCases: [],     // { input, expectedOutput, result?, passed? }
-    scanReport: null
+    scanReport: null,
+    rubricAudit: null  // { findings, improvedPrompt, summary }
   }
 };
 
@@ -99,7 +100,7 @@ function resetBuilderState() {
       fileRead: [], fileWrite: [],
       network: { allowedDomains: [], blockAll: true }
     },
-    tools: [], testCases: [], scanReport: null
+    tools: [], testCases: [], scanReport: null, rubricAudit: null
   };
 }
 
@@ -925,6 +926,52 @@ function renderStep6Scan() {
     }
   }
 
+  // Rubric audit panel
+  var rubricHtml = '';
+  var audit = builderState.data.rubricAudit;
+  if (builderState._rubricLoading) {
+    rubricHtml = '<div class="scan-rubric-section">' +
+      '<div class="scan-rubric-title"><i class="ti ti-sparkles"></i> Analysing instruction quality\u2026</div>' +
+      '<div class="builder-hint-block">Checking your system prompt against quality rubric\u2026</div>' +
+    '</div>';
+  } else if (audit) {
+    var sevIcons = { high: '<i class="ti ti-alert-circle" style="color:#f97316"></i>', medium: '<i class="ti ti-alert-triangle" style="color:#eab308"></i>', low: '<i class="ti ti-info-circle" style="color:#3b82f6"></i>' };
+    var auditFindings = '';
+    if (audit.findings && audit.findings.length) {
+      for (var ai = 0; ai < audit.findings.length; ai++) {
+        var af = audit.findings[ai];
+        auditFindings += '<div class="scan-finding">' +
+          '<div class="scan-finding-name">' + (sevIcons[af.severity] || '') + ' <code>' + escHtml(af.id) + '</code> ' + escHtml(af.label) + '</div>' +
+          '<div class="scan-finding-desc">' + escHtml(af.detail) + '</div>' +
+        '</div>';
+      }
+    }
+    rubricHtml = '<div class="scan-rubric-section">' +
+      '<div class="scan-rubric-title"><i class="ti ti-sparkles"></i> Instruction Quality' +
+        '<button class="builder-btn small" onclick="builderRunRubricAudit()" style="margin-left:auto"><i class="ti ti-refresh"></i> Re-analyse</button>' +
+      '</div>' +
+      (audit.summary ? '<div class="builder-hint-block">' + escHtml(audit.summary) + '</div>' : '') +
+      (auditFindings || '<div class="scan-clean"><i class="ti ti-circle-check" style="color:#22c55e"></i> Prompt passes all quality checks.</div>') +
+      (audit.improvedPrompt ? (
+        '<div class="scan-rubric-improved">' +
+          '<div class="scan-rubric-improved-label"><i class="ti ti-wand"></i> Suggested improvement</div>' +
+          '<pre class="scan-rubric-preview">' + escHtml(audit.improvedPrompt.slice(0, 800)) + (audit.improvedPrompt.length > 800 ? '\u2026' : '') + '</pre>' +
+          '<div class="scan-rubric-actions">' +
+            '<button class="builder-btn primary" onclick="builderAcceptImprovedPrompt()"><i class="ti ti-check"></i> Accept &amp; replace my prompt</button>' +
+            '<button class="builder-btn secondary" onclick="builderState.data.rubricAudit.improvedPrompt=null;renderBuilderPanel()">Dismiss</button>' +
+          '</div>' +
+        '</div>'
+      ) : '') +
+    '</div>';
+  } else if (report) {
+    // Scan done but no rubric yet (no systemPrompt, or not triggered)
+    if (builderState.data.systemPrompt && builderState.data.systemPrompt.trim()) {
+      rubricHtml = '<div class="scan-rubric-section">' +
+        '<button class="builder-btn secondary" onclick="builderRunRubricAudit()"><i class="ti ti-sparkles"></i> Analyse instruction quality</button>' +
+      '</div>';
+    }
+  }
+
   return '<div class="builder-section">' +
     '<div class="scan-header">' +
       '<span class="scan-badge-large">' + badge + '</span>' +
@@ -933,11 +980,13 @@ function renderStep6Scan() {
       '<button class="builder-btn small" onclick="builderRunScan()" style="margin-left:auto"><i class="ti ti-refresh"></i> Rescan</button>' +
     '</div>' +
     (findingsHtml || '<div class="scan-clean"><i class="ti ti-circle-check" style="color:#22c55e"></i> No security issues found!</div>') +
+    rubricHtml +
   '</div>';
 }
 
 async function builderRunScan() {
   showToast('Scanning agent…');
+  builderState.data.rubricAudit = null;
   try {
     var r = await fetch('/api/agent-builder/scan', {
       method: 'POST',
@@ -949,7 +998,40 @@ async function builderRunScan() {
     renderBuilderPanel();
   } catch (_) {
     showToast('Scan failed');
+    return;
   }
+  // Auto-run rubric audit after security scan if there's a system prompt
+  if (builderState.data.systemPrompt && builderState.data.systemPrompt.trim()) {
+    await builderRunRubricAudit();
+  }
+}
+
+async function builderRunRubricAudit() {
+  builderState._rubricLoading = true;
+  renderBuilderPanel();
+  try {
+    var r = await fetch('/api/agent-builder/rubric-audit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(builderState.data)
+    });
+    var audit = await r.json();
+    builderState.data.rubricAudit = audit.error ? null : audit;
+    if (audit.error) showToast('Rubric audit failed');
+  } catch (_) {
+    builderState.data.rubricAudit = null;
+  }
+  builderState._rubricLoading = false;
+  renderBuilderPanel();
+}
+
+function builderAcceptImprovedPrompt() {
+  var audit = builderState.data.rubricAudit;
+  if (!audit || !audit.improvedPrompt) return;
+  builderState.data.systemPrompt = audit.improvedPrompt;
+  builderState.data.rubricAudit = null; // clear after accept
+  showToast('Improved prompt applied — review it in Step 2');
+  renderBuilderPanel();
 }
 
 // ── Step 7: Review & Package ─────────────────────────────────────────────

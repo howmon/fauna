@@ -4744,6 +4744,66 @@ app.post('/api/agent-builder/test-tool', async (req, res) => {
   }
 });
 
+// Rubric-based quality audit for agent system prompts (builder only)
+app.post('/api/agent-builder/rubric-audit', async (req, res) => {
+  const data = req.body;
+  if (!data || !data.systemPrompt) return res.status(400).json({ error: 'systemPrompt required' });
+
+  const { client, model } = getUtilityClient();
+
+  const agentMeta = [
+    `Name: ${data.name || '(unnamed)'}`,
+    `Display name: ${data.displayName || ''}`,
+    `Description: ${data.description || ''}`,
+    `Category: ${data.category || ''}`,
+    `Permissions: ${JSON.stringify(data.permissions || {})}`,
+  ].join('\n');
+
+  const rubricPrompt = `You are an agent quality auditor. Evaluate this agent's system prompt against the rubric below and return a JSON response only — no prose, no markdown fences.
+
+## Agent metadata
+${agentMeta}
+
+## System prompt
+${data.systemPrompt.slice(0, 6000)}
+
+## Rubric dimensions to check
+- IQ-3.4: Does the prompt explain things the model already knows from pretraining? (flag if yes — remove obvious knowledge)
+- IQ-3.5: Is the content density Compact or Detailed — every sentence earns its tokens? (flag if bloated)
+- IQ-3.6: Is the prompt exhaustive/comprehensive in a way that hurts clarity? (flag if yes)
+- AC-5.2: Does the prompt clearly state what the agent does?
+- AC-5.3: Does the prompt specify when to use / trigger scenarios?
+- AC-5.7: Does the prompt include "when NOT to use" boundaries?
+- WE-4.1: Does the prompt include at least one concrete example or expected output?
+- DE-7.4: Does the prompt restate widely available knowledge the model already handles well?
+
+## Response format (JSON, no wrapper)
+{
+  "findings": [
+    { "id": "IQ-3.4", "label": "Short label", "detail": "One sentence explaining the issue", "severity": "high|medium|low" }
+  ],
+  "improvedPrompt": "The complete improved system prompt text — same intent, better instruction quality. Keep it concise. Do not add examples unless they are genuinely helpful. Do not add padding.",
+  "summary": "2–3 sentence plain English summary of what was improved"
+}
+
+Only include findings for criteria that actually fail. If the prompt already satisfies a criterion, omit it. Return valid JSON.`;
+
+  try {
+    const resp = await client.chat.completions.create({
+      model,
+      max_tokens: 2048,
+      messages: [{ role: 'user', content: rubricPrompt }]
+    });
+    const raw = resp.choices[0]?.message?.content?.trim() || '{}';
+    // Strip any accidental markdown fences
+    const json = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '');
+    const parsed = JSON.parse(json);
+    res.json(parsed);
+  } catch (e) {
+    res.status(500).json({ error: 'Rubric audit failed: ' + e.message });
+  }
+});
+
 // Scan agent data from builder (not yet saved to disk)
 app.post('/api/agent-builder/scan', (req, res) => {
   const data = req.body;
