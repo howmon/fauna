@@ -4782,8 +4782,15 @@ app.post('/api/agent-builder/rubric-audit', async (req, res) => {
   if (!data || !data.systemPrompt) return res.status(400).json({ error: 'systemPrompt required' });
 
   const requestedModel = data.model;
-  const client = requestedModel ? getClientForModel(requestedModel) : getUtilityClient().client;
-  const model  = requestedModel || getUtilityClient().model;
+
+  let client, model;
+  try {
+    client = requestedModel ? getClientForModel(requestedModel) : getUtilityClient().client;
+    model  = requestedModel || getUtilityClient().model;
+  } catch (initErr) {
+    console.error('[rubric-audit] client init error:', initErr.message);
+    return res.status(500).json({ error: 'Rubric audit failed: ' + initErr.message });
+  }
 
   const agentMeta = [
     `Name: ${data.name || '(unnamed)'}`,
