@@ -412,7 +412,10 @@ function getUtilityClient() {
   if (keys.openai)    return { client: new OpenAI({ apiKey: keys.openai, baseURL: PROVIDERS.openai.baseURL }), model: 'gpt-4.1-mini' };
   if (keys.anthropic) return { client: new OpenAI({ apiKey: keys.anthropic, baseURL: PROVIDERS.anthropic.baseURL }), model: 'claude-haiku-3.5-20241022' };
   if (keys.google)    return { client: new OpenAI({ apiKey: keys.google, baseURL: PROVIDERS.google.baseURL }), model: 'gemini-2.0-flash' };
-  return { client: getCopilotClient(), model: 'gpt-4.1-mini' };
+  // Copilot fallback: prefer a fast model from the known-working FALLBACK_MODELS list
+  const COPILOT_FAST_PREFERENCE = ['gpt-4.1-mini', 'claude-haiku-4.5', 'gpt-5-mini', 'gpt-4.1', 'claude-sonnet-4.6'];
+  const fast = COPILOT_FAST_PREFERENCE.find(id => FALLBACK_MODELS.some(m => m.id === id)) || 'gpt-4.1';
+  return { client: getCopilotClient(), model: fast };
 }
 
 const FALLBACK_MODELS = [
@@ -1686,7 +1689,7 @@ app.get('/api/git/repos', (req, res) => {
 // ── Git Smart Commit (Feature A) ──────────────────────────────────────────
 // Detects repo convention, generates message from diff, commits.
 app.post('/api/git/commit', async (req, res) => {
-  const { cwd, amend = false, stageAll = false } = req.body;
+  const { cwd, amend = false, stageAll = false, model: reqModel } = req.body;
   const workDir = cwd || os.homedir();
   const run = (cmd) => new Promise((resolve, reject) => {
     _exec(cmd, { cwd: workDir, env: { ...process.env, PATH: AUGMENTED_PATH }, timeout: 30000, maxBuffer: 5 * 1024 * 1024, shell: SHELL_BIN },
@@ -1716,7 +1719,8 @@ app.post('/api/git/commit', async (req, res) => {
     const diffText = diff.stdout.slice(0, 8000); // cap for LLM context
 
     // 5. Generate commit message via LLM
-    const { client, model: utilModel } = getUtilityClient();
+    const _util = reqModel ? { client: getClientForModel(reqModel), model: reqModel } : getUtilityClient();
+    const { client, model: utilModel } = _util;
     const conventionHint = detectCommitConvention(recentLog.stdout);
     const genMessages = [
       { role: 'system', content: `You are an expert at writing concise, meaningful git commit messages. Analyse the diff and write a commit message following the repository's convention.\n\nConvention detected: ${conventionHint}\n\nRules:\n- Subject line ≤ 72 chars, follow the convention\n- Optional body explains WHY, not a file-by-file inventory\n- Reference issue/ticket numbers from branch names when visible\n- Output ONLY the commit message (subject + optional body separated by blank line). No markdown, no fencing, no explanation.` },
@@ -1765,10 +1769,11 @@ function detectCommitConvention(logOutput) {
 
 // ── Git Branch Name Generation (Feature G) ────────────────────────────────
 app.post('/api/git/branch-name', async (req, res) => {
-  const { description, cwd } = req.body;
+  const { description, cwd, model: reqModel } = req.body;
   if (!description) return res.status(400).json({ error: 'description required' });
   try {
-    const { client, model: utilModel } = getUtilityClient();
+    const _util = reqModel ? { client: getClientForModel(reqModel), model: reqModel } : getUtilityClient();
+    const { client, model: utilModel } = _util;
     const completion = await client.chat.completions.create({
       model: utilModel,
       messages: [
@@ -4398,10 +4403,11 @@ app.get('/api/agents/:name/tests', (req, res) => {
 
 // Generate a conversation summary for agent context handoff
 app.post('/api/chat-summary', async (req, res) => {
-  const { messages } = req.body;
+  const { messages, model: reqModel } = req.body;
   if (!messages) return res.status(400).json({ error: 'messages required' });
   try {
-    const { client: utilClient, model: utilModel } = getUtilityClient();
+    const _util = reqModel ? { client: getClientForModel(reqModel), model: reqModel } : getUtilityClient();
+    const { client: utilClient, model: utilModel } = _util;
     const response = await utilClient.chat.completions.create({
       model: utilModel,
       max_tokens: 500,
@@ -4420,7 +4426,7 @@ app.post('/api/chat-summary', async (req, res) => {
 // ── Multi-agent composition planner ────────────────────────────────────────
 // Given a task and a list of agents, determine which agent handles which sub-task.
 app.post('/api/composition/plan', async (req, res) => {
-  const { task, agents, conversationContext } = req.body;
+  const { task, agents, conversationContext, model: reqModel } = req.body;
   if (!task || !agents || !agents.length) return res.status(400).json({ error: 'task and agents required' });
 
   const agentDescriptions = agents.map(a =>
@@ -4429,7 +4435,8 @@ app.post('/api/composition/plan', async (req, res) => {
   ).join('\n');
 
   try {
-    const { client: utilClient, model: utilModel } = getUtilityClient();
+    const _util = reqModel ? { client: getClientForModel(reqModel), model: reqModel } : getUtilityClient();
+    const { client: utilClient, model: utilModel } = _util;
     const response = await utilClient.chat.completions.create({
       model: utilModel,
       max_tokens: 1500,
@@ -4692,10 +4699,11 @@ Set permissions conservatively — only enable what the agent truly needs.` },
 
 // Test a system prompt by sending a test message through the model
 app.post('/api/agent-builder/test-prompt', async (req, res) => {
-  const { systemPrompt, testMessage } = req.body;
+  const { systemPrompt, testMessage, model: reqModel } = req.body;
   if (!systemPrompt || !testMessage) return res.status(400).json({ error: 'systemPrompt and testMessage required' });
   try {
-    const { client: utilClient, model: utilModel } = getUtilityClient();
+    const _util = reqModel ? { client: getClientForModel(reqModel), model: reqModel } : getUtilityClient();
+    const { client: utilClient, model: utilModel } = _util;
     const response = await utilClient.chat.completions.create({
       model: utilModel,
       max_tokens: 500,
@@ -4749,7 +4757,9 @@ app.post('/api/agent-builder/rubric-audit', async (req, res) => {
   const data = req.body;
   if (!data || !data.systemPrompt) return res.status(400).json({ error: 'systemPrompt required' });
 
-  const { client, model } = getUtilityClient();
+  const requestedModel = data.model;
+  const client = requestedModel ? getClientForModel(requestedModel) : getUtilityClient().client;
+  const model  = requestedModel || getUtilityClient().model;
 
   const agentMeta = [
     `Name: ${data.name || '(unnamed)'}`,

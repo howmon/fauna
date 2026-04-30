@@ -19,7 +19,7 @@ async function smartCommit(opts) {
   try {
     var res = await fetch('/api/git/commit', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cwd: cwd, stageAll: opts.stageAll !== false, amend: opts.amend || false })
+      body: JSON.stringify({ cwd: cwd, stageAll: opts.stageAll !== false, amend: opts.amend || false, model: state.model })
     });
     var data = await res.json();
     if (!data.ok) {
@@ -47,7 +47,7 @@ async function generateBranchName(description, opts) {
   }  try {
     var res = await fetch('/api/git/branch-name', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ description: description, cwd: cwd, create: opts.create || false })
+      body: JSON.stringify({ description: description, cwd: cwd, create: opts.create || false, model: state.model })
     });
     var data = await res.json();
     if (data.ok) {

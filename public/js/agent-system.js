@@ -242,7 +242,7 @@ async function generateConversationSummary(conv) {
     var r = await fetch('/api/chat-summary', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: msgs })
+      body: JSON.stringify({ messages: msgs, model: state.model })
     });
     var d = await r.json();
     return d.summary || '';
@@ -1299,7 +1299,7 @@ async function runAgentTests(agentName) {
         var tr = await fetch('/api/agent-builder/test-prompt', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ systemPrompt: systemPrompt, testMessage: tc.input })
+          body: JSON.stringify({ systemPrompt: systemPrompt, testMessage: tc.input, model: state.model })
         });
         var td = await tr.json();
         var response = td.response || '';

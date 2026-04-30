@@ -440,7 +440,7 @@ async function builderTestPrompt() {
     var r = await fetch('/api/agent-builder/test-prompt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ systemPrompt: prompt, testMessage: 'What can you help me with?' })
+      body: JSON.stringify({ systemPrompt: prompt, testMessage: 'What can you help me with?', model: state.model })
     });
     var d = await r.json();
     preview.innerHTML = '<div class="builder-test-result">' +
@@ -870,7 +870,7 @@ async function builderRunAllTests() {
       var r = await fetch('/api/agent-builder/test-prompt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ systemPrompt: builderState.data.systemPrompt, testMessage: tc.input })
+        body: JSON.stringify({ systemPrompt: builderState.data.systemPrompt, testMessage: tc.input, model: state.model })
       });
       var d = await r.json();
       tc.result = d.response || '';
@@ -1013,7 +1013,7 @@ async function builderRunRubricAudit() {
     var r = await fetch('/api/agent-builder/rubric-audit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(builderState.data)
+      body: JSON.stringify(Object.assign({}, builderState.data, { model: state.model }))
     });
     var audit = await r.json();
     builderState.data.rubricAudit = audit.error ? null : audit;
