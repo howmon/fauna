@@ -605,6 +605,8 @@ async function openProjectFile(srcId, filePath) {
         var canEdit = _activeProject() && _activeProject().allowFileEditing;
         headerBtns =
           (canEdit ? '<button class="proj-icon-btn proj-save-btn" onclick="saveProjectFile()" title="Save file"><i class="ti ti-device-floppy"></i> Save</button>' : '') +
+          (canEdit ? '<button class="proj-icon-btn" onclick="projUndoFile()" title="Undo"><i class="ti ti-arrow-back-up"></i></button>' : '') +
+          (canEdit ? '<button class="proj-icon-btn" onclick="projRedoFile()" title="Redo"><i class="ti ti-arrow-forward-up"></i></button>' : '') +
           '<button class="proj-icon-btn" onclick="saveFileAsContext(\'' + _projEsc(srcId) + '\',\'' + _projEsc(filePath) + '\')" title="Save as context"><i class="ti ti-folder-plus"></i> Save to Project</button>' +
           '<button class="proj-icon-btn" onclick="copyFileContent()" title="Copy"><i class="ti ti-copy"></i></button>';
       } else {
@@ -761,6 +763,16 @@ function copyFileContent() {
   if (window._lastProjectFileContent) navigator.clipboard.writeText(window._lastProjectFileContent).catch(function(){});
 }
 
+function projUndoFile() {
+  var ed = _explorerMonaco || _projMonacoEditor;
+  if (ed) ed.trigger('keyboard', 'undo', null);
+}
+
+function projRedoFile() {
+  var ed = _explorerMonaco || _projMonacoEditor;
+  if (ed) ed.trigger('keyboard', 'redo', null);
+}
+
 async function saveProjectFile() {
   var srcId    = window._lastProjectFileSrcId;
   var filePath = window._lastProjectFilePath;
@@ -857,6 +869,8 @@ async function explorerOpenFile(srcId, filePath) {
     var canEdit2 = _activeProject() && _activeProject().allowFileEditing;
     var headerBtns = data.type === 'text'
       ? (canEdit2 ? '<button class="proj-icon-btn proj-save-btn" onclick="saveProjectFile()" title="Save file"><i class="ti ti-device-floppy"></i> Save</button>' : '') +
+        (canEdit2 ? '<button class="proj-icon-btn" onclick="projUndoFile()" title="Undo"><i class="ti ti-arrow-back-up"></i></button>' : '') +
+        (canEdit2 ? '<button class="proj-icon-btn" onclick="projRedoFile()" title="Redo"><i class="ti ti-arrow-forward-up"></i></button>' : '') +
         '<button class="proj-icon-btn" onclick="saveFileAsContext(\'' + _projEsc(srcId) + '\',\'' + _projEsc(filePath) + '\')" title="Save as context"><i class="ti ti-folder-plus"></i> Save to Project</button>' +
         '<button class="proj-icon-btn" onclick="copyFileContent()" title="Copy"><i class="ti ti-copy"></i></button>'
       : '<button class="proj-icon-btn" onclick="saveFileAsContext(\'' + _projEsc(srcId) + '\',\'' + _projEsc(filePath) + '\')" title="Save as context"><i class="ti ti-folder-plus"></i> Save to Project</button>' +
