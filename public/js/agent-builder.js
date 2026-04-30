@@ -22,7 +22,8 @@ var builderState = {
       figma: false,
       fileRead: [],
       fileWrite: [],
-      network: { allowedDomains: [], blockAll: true }
+      network: { allowedDomains: [], blockAll: true },
+      mcp: []           // [{ name, command, args, cwd, env }]
     },
     tools: [],        // { name, description, parameters: {}, code: '' }
     testCases: [],     // { input, expectedOutput, result?, passed? }
@@ -100,7 +101,8 @@ function resetBuilderState() {
       fileRead: [], fileWrite: [],
       network: { allowedDomains: [], blockAll: true }
     },
-    tools: [], testCases: [], scanReport: null, rubricAudit: null
+    tools: [], testCases: [], scanReport: null, rubricAudit: null,
+    permissions: { shell: false, browser: false, figma: false, fileRead: [], fileWrite: [], network: { allowedDomains: [], blockAll: true }, mcp: [] }
   };
 }
 
@@ -340,6 +342,7 @@ async function builderAIGenerate() {
         figma: !!config.permissions.figma,
         fileRead: Array.isArray(config.permissions.fileRead) ? config.permissions.fileRead : [],
         fileWrite: Array.isArray(config.permissions.fileWrite) ? config.permissions.fileWrite : [],
+        mcp: Array.isArray(config.permissions.mcp) ? config.permissions.mcp : [],
         network: config.permissions.network ? {
           allowedDomains: Array.isArray(config.permissions.network.allowedDomains) ? config.permissions.network.allowedDomains : [],
           blockAll: config.permissions.network.blockAll !== false
@@ -520,6 +523,25 @@ function renderStep3Permissions() {
         '<div class="builder-path-add"><input class="builder-input small" id="builder-domain-input" placeholder="api.example.com" onkeydown="if(event.key===\'Enter\')builderAddDomain()"><button class="builder-btn small" onclick="builderAddDomain()"><i class="ti ti-plus"></i></button></div>'
       ) +
     '</div>' +
+
+    '<div class="builder-perm-section">' +
+      '<label class="builder-label"><i class="ti ti-plug"></i> MCP Servers</label>' +
+      '<span class="builder-hint-inline" style="margin-bottom:8px;display:block">External MCP servers this agent will spawn on first use. Use <code>npx -y &lt;package&gt;</code> for npm-hosted servers.</span>' +
+      renderMcpServersList() +
+      '<div class="builder-mcp-add">' +
+        '<input class="builder-input small" id="builder-mcp-name" placeholder="Name (e.g. filesystem)" style="width:110px">' +
+        '<input class="builder-input small" id="builder-mcp-cmd" placeholder="Command (e.g. npx)" style="flex:1">' +
+        '<input class="builder-input small" id="builder-mcp-args" placeholder="Args (e.g. -y @modelcontextprotocol/server-filesystem ~)" style="flex:2">' +
+        '<button class="builder-btn small" onclick="builderAddMcpServer()" title="Add MCP server"><i class="ti ti-plus"></i></button>' +
+      '</div>' +
+      '<div class="builder-hint-inline" style="margin-top:4px">Quick-import: ' +
+        '<button class="builder-btn secondary small" onclick="builderMcpQuickImport(\'filesystem\', \'npx\', \'-y @modelcontextprotocol/server-filesystem ~\')">Filesystem</button> ' +
+        '<button class="builder-btn secondary small" onclick="builderMcpQuickImport(\'memory\', \'npx\', \'-y @modelcontextprotocol/server-memory\')">Memory</button> ' +
+        '<button class="builder-btn secondary small" onclick="builderMcpQuickImport(\'github\', \'npx\', \'-y @modelcontextprotocol/server-github\')">GitHub</button> ' +
+        '<button class="builder-btn secondary small" onclick="builderMcpQuickImport(\'postgres\', \'npx\', \'-y @modelcontextprotocol/server-postgres\')">Postgres</button> ' +
+        '<button class="builder-btn secondary small" onclick="builderMcpQuickImport(\'brave-search\', \'npx\', \'-y @modelcontextprotocol/server-brave-search\')">Brave Search</button>' +
+      '</div>' +
+    '</div>' +
   '</div>';
 }
 
@@ -545,6 +567,49 @@ function builderAddDomain() {
 
 function builderRemoveDomain(idx) {
   builderState.data.permissions.network.allowedDomains.splice(idx, 1);
+  renderBuilderPanel();
+}
+
+function renderMcpServersList() {
+  var mcps = builderState.data.permissions.mcp || [];
+  if (!mcps.length) return '<div class="builder-hint-inline" style="margin-bottom:6px">No MCP servers added</div>';
+  return '<div class="builder-path-list" style="margin-bottom:6px">' +
+    mcps.map(function(m, i) {
+      var cmd = m.command + (m.args ? ' ' + m.args : '');
+      return '<div class="builder-mcp-item">' +
+        '<span class="builder-mcp-tag"><i class="ti ti-plug"></i> MCP</span>' +
+        '<span class="builder-mcp-name" title="' + escHtml(cmd) + '">' + escHtml(m.name) + '</span>' +
+        '<span class="builder-mcp-cmd">' + escHtml(cmd.length > 48 ? cmd.slice(0, 48) + '…' : cmd) + '</span>' +
+        '<button class="builder-path-rm" onclick="builderRemoveMcpServer(' + i + ')"><i class="ti ti-x"></i></button>' +
+      '</div>';
+    }).join('') +
+  '</div>';
+}
+
+function builderAddMcpServer() {
+  var name = (document.getElementById('builder-mcp-name') || {}).value || '';
+  var cmd  = (document.getElementById('builder-mcp-cmd')  || {}).value || '';
+  var args = (document.getElementById('builder-mcp-args') || {}).value || '';
+  name = name.trim(); cmd = cmd.trim(); args = args.trim();
+  if (!name || !cmd) { showToast('Name and command are required'); return; }
+  if (!builderState.data.permissions.mcp) builderState.data.permissions.mcp = [];
+  builderState.data.permissions.mcp.push({ name: name, command: cmd, args: args ? args.split(/\s+/) : [] });
+  renderBuilderPanel();
+}
+
+function builderRemoveMcpServer(idx) {
+  builderState.data.permissions.mcp.splice(idx, 1);
+  renderBuilderPanel();
+}
+
+function builderMcpQuickImport(name, command, argsStr) {
+  if (!builderState.data.permissions.mcp) builderState.data.permissions.mcp = [];
+  // Don't add duplicate
+  if (builderState.data.permissions.mcp.some(function(m) { return m.name === name; })) {
+    showToast(name + ' already added');
+    return;
+  }
+  builderState.data.permissions.mcp.push({ name: name, command: command, args: argsStr.split(/\s+/) });
   renderBuilderPanel();
 }
 

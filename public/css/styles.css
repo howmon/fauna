@@ -2919,6 +2919,28 @@ textarea.builder-find-active {
 }
 .builder-path-add .builder-input { flex: 1; }
 
+/* MCP servers section in builder */
+.builder-mcp-add {
+  display: flex; gap: 6px; align-items: center; margin-top: 4px; flex-wrap: wrap;
+}
+.builder-mcp-item {
+  display: flex; align-items: center; gap: 7px; padding: 5px 10px;
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 7px;
+}
+.builder-mcp-tag {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 9.5px; font-weight: 700; color: #818cf8;
+  background: rgba(99,102,241,.13); padding: 1px 5px; border-radius: 4px;
+  flex-shrink: 0;
+}
+.builder-mcp-name {
+  font-size: 12px; font-weight: 600; color: var(--text); min-width: 60px;
+}
+.builder-mcp-cmd {
+  font-size: 10.5px; color: var(--text-dim); font-family: monospace; flex: 1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 /* Tool cards */
 .builder-tool-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
 .builder-tool-card {
@@ -3142,6 +3164,16 @@ textarea.builder-find-active {
 /* Sandbox badge */
 .agent-sandbox-badge { font-size: 10px; margin-left: 2px; }
 
+/* MCP badge on agent list items */
+.agent-mcp-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 9.5px; font-weight: 700; letter-spacing: .02em;
+  color: #818cf8; background: rgba(99,102,241,.13);
+  padding: 1px 5px; border-radius: 4px; margin-left: 3px;
+  vertical-align: middle;
+}
+.agent-mcp-badge .ti { font-size: 9px; }
+
 /* Test runner progress bar */
 .test-runner { display: flex; flex-direction: column; gap: 10px; max-height: 400px; overflow-y: auto; }
 .test-progress {
@@ -3315,6 +3347,15 @@ textarea.builder-find-active {
   background: rgba(234, 179, 8, 0.12); padding: 1px 6px;
   border-radius: 4px; margin-left: 6px; vertical-align: middle;
 }
+
+/* Type badge: Agent vs MCP */
+.store-type-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 9.5px; font-weight: 700; letter-spacing: .02em;
+  padding: 1px 6px; border-radius: 4px; margin-left: 5px; vertical-align: middle;
+}
+.store-type-badge.agent { color: var(--accent); background: rgba(99,179,237,.1); }
+.store-type-badge.mcp   { color: #818cf8; background: rgba(99,102,241,.13); }
 
 /* Superadmin actions */
 .store-admin-actions {

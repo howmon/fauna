@@ -820,6 +820,8 @@ function agentListItemHtml(a) {
   var pinned = getPinnedAgents();
   var scanBadge = getScanBadgeHtml(a.name);
   var sandboxBadge = isAgentSandboxed(a.name) ? '<span class="agent-sandbox-badge" title="Sandbox mode — restricted permissions"><i class="ti ti-shield-lock"></i></span>' : '';
+  var mcpCount = (a.permissions && Array.isArray(a.permissions.mcp)) ? a.permissions.mcp.length : 0;
+  var mcpBadge = mcpCount > 0 ? '<span class="agent-mcp-badge" title="Uses ' + mcpCount + ' MCP server' + (mcpCount > 1 ? 's' : '') + '"><i class="ti ti-plug"></i> MCP</span>' : '';
   var pinIndicator = pinned.indexOf(a.name) >= 0 ? '<i class="ti ti-pin-filled agent-pin-indicator" title="Pinned"></i>' : '';
   var isFromStore = a._meta && a._meta.installedFromStore;
   var eName = escHtml(a.name);
@@ -840,7 +842,7 @@ function agentListItemHtml(a) {
     agentIconHtml(a) +
     pinIndicator +
     '<span class="agent-list-name">' + escHtml(a.displayName) + '</span>' +
-    sandboxBadge + scanBadge + polishExtras +
+    sandboxBadge + mcpBadge + scanBadge + polishExtras +
     '<span class="agent-action-btns">' +
       (menuItems ? '<span class="agent-menu-wrap">' +
         '<button class="agent-action-btn" onclick="event.stopPropagation(); toggleAgentMenu(this)" title="More actions"><i class="ti ti-dots"></i></button>' +

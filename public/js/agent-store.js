@@ -183,6 +183,9 @@ function renderStoreBrowse() {
         var scoreBadge = a.scanScore >= 90 ? '<i class="ti ti-circle-check" style="color:#22c55e"></i>' : a.scanScore >= 80 ? '<i class="ti ti-alert-triangle" style="color:#eab308"></i>' : '<i class="ti ti-circle-x" style="color:#ef4444"></i>';
         var installed = isAgentInstalled(a.slug);
         var deprecatedBadge = a.deprecated ? '<span class="store-deprecated-badge"><i class="ti ti-alert-triangle"></i> Deprecated</span>' : '';
+        var typeBadge = a.hasMcp
+          ? '<span class="store-type-badge mcp" title="Uses ' + (a.mcpCount || '') + ' MCP server' + (a.mcpCount > 1 ? 's' : '') + '"><i class="ti ti-plug"></i> MCP</span>'
+          : '<span class="store-type-badge agent"><i class="ti ti-robot"></i> Agent</span>';
         var installBtn = installed ?
           '<button class="store-card-btn installed" onclick="event.stopPropagation();uninstallStoreAgent(\'' + escHtml(a.slug) + '\')"><i class="ti ti-circle-check"></i> Installed</button>' :
           '<button class="store-card-btn" onclick="event.stopPropagation();installStoreAgent(\'' + escHtml(a.slug) + '\')">Install</button>';
@@ -190,7 +193,7 @@ function renderStoreBrowse() {
         return '<div class="store-card" onclick="viewStoreAgent(\'' + escHtml(a.slug) + '\')">' +
           '<div class="store-card-icon"><i class="ti ' + escHtml(a.icon || 'ti-robot') + '"></i></div>' +
           '<div class="store-card-info">' +
-            '<div class="store-card-name">' + escHtml(a.displayName) + deprecatedBadge + '</div>' +
+            '<div class="store-card-name">' + escHtml(a.displayName) + deprecatedBadge + typeBadge + '</div>' +
             '<div class="store-card-author">by ' + escHtml(a.author ? a.author.name : 'Unknown') + (a.author && a.author.verified ? ' <i class="ti ti-rosette-discount-check" style="color:var(--accent)"></i>' : '') + '</div>' +
             '<div class="store-card-meta">' +
               '<span>' + scoreBadge + ' ' + (a.scanScore || '—') + '</span>' +
