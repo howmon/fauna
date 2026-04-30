@@ -1443,12 +1443,21 @@ var _extConnectedBrowsers = []; // [{id, browser, version, connectedAt}]
   }
 
   function _connectExtEvents() {
-    var es = new EventSource('/api/ext/events');
-    es.onmessage = _handleExtEvent;
-    es.onerror = function() {
-      es.close();
-      setTimeout(_connectExtEvents, 5000);
-    };
+    var retries = 0;
+    (function connect() {
+      var es = new EventSource('/api/ext/events');
+      es.onmessage = function(e) { retries = 0; _handleExtEvent(e); };
+      es.onerror = function() {
+        es.close();
+        var delay = Math.min(1000 * Math.pow(2, retries), 30000);
+        retries++;
+        setTimeout(connect, delay);
+      };
+    }());
+    // Reconnect immediately on visibility restore (handles sleep/wake)
+    document.addEventListener('visibilitychange', function() {
+      if (document.visibilityState === 'visible') { retries = 0; }
+    });
   }
 
   document.addEventListener('DOMContentLoaded', function() {

@@ -1206,6 +1206,21 @@ var _runBottomMode = 'terminal'; // 'terminal' | 'logs'
 
 function _termUidLocal() { return 'ts-' + Date.now() + '-' + Math.random().toString(36).slice(2,6); }
 
+// Reconnect all dropped SSEs when the page becomes visible again or network comes back
+// (handles macOS sleep/wake and ERR_NETWORK_IO_SUSPENDED)
+function _sseReconnectAll() {
+  _termSessions.forEach(function(sess) {
+    if (!sess.termId) return;
+    if (!sess.ess || sess.ess.readyState === EventSource.CLOSED) {
+      _termConnectSSE(sess);
+    }
+  });
+}
+document.addEventListener('visibilitychange', function() {
+  if (document.visibilityState === 'visible') _sseReconnectAll();
+});
+window.addEventListener('online', _sseReconnectAll);
+
 function _renderRunTabShell() {
   return '<div id="proj-run-root" class="proj-run-root">' +
     '<div class="proj-hub-empty"><i class="ti ti-loader-2 ti-spin" style="font-size:22px;opacity:.5"></i><div>Loading…</div></div>' +
@@ -1461,33 +1476,42 @@ function _termConnectSSE(sess) {
   if (!sess || !sess.termId) return;
   var projectId = sess.projectId;
   if (sess.ess) { try { sess.ess.close(); } catch(_) {} sess.ess = null; }
-  var es = new EventSource('/api/projects/' + projectId + '/terminal/' + sess.termId + '/output');
-  sess.ess = es;
-  es.onmessage = function(e) {
-    var d = JSON.parse(e.data);
-    if (d.out !== undefined) {
-      // Strip ANSI
-      var text = d.out.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
-                      .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
-                      .replace(/\x1b[()][0-9A-Za-z]/g, '')
-                      .replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-      // Filter zsh login noise on first connect
-      text = text.replace(/^Last login:.*\n?/m, '');
-      sess.localBuf += text;
-      if (sess.localBuf.length > 200000) sess.localBuf = sess.localBuf.slice(-150000);
-      // Only paint to DOM if this session is active
-      if (sess.id === _termActiveId) {
-        var out = document.getElementById('proj-terminal-output');
-        if (out) {
-          var span = document.createElement('span');
-          span.textContent = text;
-          out.appendChild(span);
-          out.scrollTop = out.scrollHeight;
+  sess._essRetry = 0;
+  (function connect() {
+    if (!sess.termId) return; // session was closed
+    var es = new EventSource('/api/projects/' + projectId + '/terminal/' + sess.termId + '/output');
+    sess.ess = es;
+    es.onmessage = function(e) {
+      sess._essRetry = 0;
+      var d = JSON.parse(e.data);
+      if (d.out !== undefined) {
+        var text = d.out.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+                        .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
+                        .replace(/\x1b[()][0-9A-Za-z]/g, '')
+                        .replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        text = text.replace(/^Last login:.*\n?/m, '');
+        sess.localBuf += text;
+        if (sess.localBuf.length > 200000) sess.localBuf = sess.localBuf.slice(-150000);
+        if (sess.id === _termActiveId) {
+          var out = document.getElementById('proj-terminal-output');
+          if (out) {
+            var span = document.createElement('span');
+            span.textContent = text;
+            out.appendChild(span);
+            out.scrollTop = out.scrollHeight;
+          }
         }
       }
-    }
-  };
-  es.onerror = function() { sess.ess = null; };
+    };
+    es.onerror = function() {
+      try { es.close(); } catch(_) {}
+      sess.ess = null;
+      if (!sess.termId) return;
+      var delay = Math.min(1000 * Math.pow(2, sess._essRetry || 0), 15000);
+      sess._essRetry = (sess._essRetry || 0) + 1;
+      setTimeout(connect, delay);
+    };
+  }());
 }
 
 function _runSwitchBottomMode(mode) {
@@ -1693,29 +1717,39 @@ function _runLogOpen(runId, projectId, scroll) {
   if (!body) return;
   body.textContent = '';
 
-  var es = new EventSource('/api/projects/' + projectId + '/runs/' + runId + '/logs');
-  _runLogESrc = es;
-  es.onmessage = function(e) {
-    var d = JSON.parse(e.data);
-    if (d.line !== undefined) {
-      body.textContent += d.line + '\n';
-      if (scroll !== false) body.scrollTop = body.scrollHeight;
-    }
-    if (d.status) {
-      // Update the run record in memory
-      var rec = _runActiveList.find(function(r) { return r.runId === runId; });
-      if (rec) {
-        rec.status = d.status;
-        if (d.port) rec.port = d.port;
-        _runPatchCard(rec, runId);
-        // Also update the log pane header stop button
-        _runPatchLogHeader(rec);
-      } else {
-        _runRefresh();
+  var _logRetry = 0;
+  (function connectLog() {
+    var es = new EventSource('/api/projects/' + projectId + '/runs/' + runId + '/logs');
+    _runLogESrc = es;
+    es.onmessage = function(e) {
+      _logRetry = 0;
+      var d = JSON.parse(e.data);
+      if (d.line !== undefined) {
+        body.textContent += d.line + '\n';
+        if (scroll !== false) body.scrollTop = body.scrollHeight;
       }
-    }
-  };
-  es.onerror = function() { es.close(); };
+      if (d.status) {
+        var rec = _runActiveList.find(function(r) { return r.runId === runId; });
+        if (rec) {
+          rec.status = d.status;
+          if (d.port) rec.port = d.port;
+          _runPatchCard(rec, runId);
+          _runPatchLogHeader(rec);
+        } else {
+          _runRefresh();
+        }
+      }
+    };
+    es.onerror = function() {
+      try { es.close(); } catch(_) {}
+      _runLogESrc = null;
+      // Only reconnect if we're still showing this log and the body element still exists
+      if (_runOpenLogId !== runId || !document.getElementById('proj-run-log-body')) return;
+      var delay = Math.min(1000 * Math.pow(2, _logRetry), 15000);
+      _logRetry++;
+      setTimeout(connectLog, delay);
+    };
+  }());
 }
 
 function _runPatchCard(rec, runId) {
