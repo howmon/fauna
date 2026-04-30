@@ -1157,13 +1157,25 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
         }
       } catch (_) {}
     }
+    // Gate BROWSER_EXT_CONTEXT — 2,500 tokens of extension/devtools reference.
+    // Only inject when the conversation references browser/web content.
+    const _lastUserText = (() => {
+      const last = [...messages].reverse().find(m => m.role === 'user');
+      if (!last) return '';
+      return Array.isArray(last.content)
+        ? last.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
+        : (last.content || '');
+    })();
+    const _wantsBrowserCtx = /\b(browser|tab|chrome|edge|webpage|web page|website|url|navigate|my browser|current tab|page content|devtools|console log|network request|extension|send page|snapshot|extract|screenshot.*tab)\b/i.test(_lastUserText);
+
     const fullSystem = [
       systemPrompt.trim() + cliHint + projectCtx,
       isCLI ? '' : BROWSER_BUILD_CONTEXT,
       // APP_BUILD_RULES ("just DO it / never narrate") only for non-project, non-CLI sessions.
       // In project sessions these directives conflict with the shell-command policy.
       (!isCLI && !projectId) ? APP_BUILD_RULES : '',
-      isCLI ? '' : BROWSER_EXT_CONTEXT,
+      // BROWSER_EXT_CONTEXT: 2,500-token extension reference — only load when relevant.
+      (!isCLI && _wantsBrowserCtx) ? BROWSER_EXT_CONTEXT : '',
       contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : ''
     ].filter(Boolean).join('\n');
     if (fullSystem) allMessages.push({ role: 'system', content: fullSystem });
