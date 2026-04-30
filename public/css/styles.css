@@ -4685,7 +4685,7 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
   transition: background .15s, color .15s;
 }
 .proj-run-stop-btn:hover { background: var(--error-light, #f36e6e); color: #fff; }
-.proj-run-dismiss-btn { opacity: 0; transition: opacity .15s; }
+.proj-run-dismiss-btn { opacity: .45; transition: opacity .15s; }
 .proj-run-card:hover .proj-run-dismiss-btn { opacity: 1; }
 
 /* Status dot */

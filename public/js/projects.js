@@ -1322,7 +1322,7 @@ function _runRender(proj) {
       '<div class="proj-run-log-header">' +
         '<span class="proj-run-log-title" id="proj-run-log-title">Logs</span>' +
         (logIsActive
-          ? '<button class="proj-icon-btn" style="color:#f87171" title="Stop process" onclick="stopProjectRun(\'' + _projEsc(_runOpenLogId) + '\',\'' + _projEsc(proj.id) + '\')">' +
+          ? '<button class="proj-icon-btn proj-run-log-stop-btn" style="color:#f87171" title="Stop process" onclick="stopProjectRun(\'' + _projEsc(_runOpenLogId) + '\',\'' + _projEsc(proj.id) + '\')">' +
               '<i class="ti ti-player-stop-filled"></i> Stop</button>'
           : '') +
         '<button class="proj-icon-btn" onclick="_runLogClose()" title="Close logs"><i class="ti ti-x"></i></button>' +
@@ -1466,10 +1466,67 @@ function _runLogOpen(runId, projectId, scroll) {
       if (scroll !== false) body.scrollTop = body.scrollHeight;
     }
     if (d.status) {
-      _runRefresh();
+      // Update the run record in memory
+      var rec = _runActiveList.find(function(r) { return r.runId === runId; });
+      if (rec) {
+        rec.status = d.status;
+        if (d.port) rec.port = d.port;
+        _runPatchCard(rec, runId);
+        // Also update the log pane header stop button
+        _runPatchLogHeader(rec);
+      } else {
+        _runRefresh();
+      }
     }
   };
   es.onerror = function() { es.close(); };
+}
+
+function _runPatchCard(rec, runId) {
+  var card = document.getElementById('proj-run-card-' + runId);
+  if (!card) return;
+  var isActive = rec.status === 'running' || rec.status === 'starting';
+  var statusCls = { running: 'proj-run-status-running', starting: 'proj-run-status-starting',
+    stopped: 'proj-run-status-stopped', exited: 'proj-run-status-exited', error: 'proj-run-status-error' }[rec.status] || '';
+  var dot = card.querySelector('.proj-run-status-dot');
+  if (dot) { dot.className = 'proj-run-status-dot ' + statusCls; }
+  // Replace action button
+  var proj = _activeProject();
+  var pid = proj ? proj.id : '';
+  var oldBtn = card.querySelector('.proj-run-stop-btn, .proj-run-dismiss-btn');
+  var newBtn = document.createElement('button');
+  if (isActive) {
+    newBtn.className = 'proj-run-stop-btn';
+    newBtn.title = 'Stop';
+    newBtn.innerHTML = '<i class="ti ti-player-stop-filled"></i> Stop';
+    newBtn.onclick = function() { stopProjectRun(runId, pid); };
+  } else {
+    newBtn.className = 'proj-icon-btn proj-run-dismiss-btn';
+    newBtn.title = 'Dismiss';
+    newBtn.innerHTML = '<i class="ti ti-x"></i>';
+    newBtn.onclick = function() { dismissProjectRun(runId, pid); };
+  }
+  if (oldBtn) oldBtn.replaceWith(newBtn);
+}
+
+function _runPatchLogHeader(rec) {
+  var stopBtn = document.querySelector('.proj-run-log-header .proj-run-log-stop-btn');
+  var isActive = rec && (rec.status === 'running' || rec.status === 'starting');
+  if (!isActive && stopBtn) stopBtn.remove();
+  if (isActive && !stopBtn) {
+    var header = document.querySelector('.proj-run-log-header');
+    var proj = _activeProject();
+    if (header && proj) {
+      var btn = document.createElement('button');
+      btn.className = 'proj-icon-btn proj-run-log-stop-btn';
+      btn.style.color = '#f87171';
+      btn.title = 'Stop process';
+      btn.innerHTML = '<i class="ti ti-player-stop-filled"></i> Stop';
+      btn.onclick = function() { stopProjectRun(rec.runId, proj.id); };
+      var closeBtn = header.querySelector('.proj-icon-btn:last-child');
+      if (closeBtn) header.insertBefore(btn, closeBtn);
+    }
+  }
 }
 
 function _runLogClose() {

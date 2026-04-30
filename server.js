@@ -6005,15 +6005,22 @@ app.post('/api/projects/:id/sources/:srcId/run', (req, res) => {
     // Auto-correction: watch early output for common errors and restart with a fix
     const _autoCorrect = (() => {
       let tried = false;
+      // Prefix that sources common shell profiles so nvm/volta/homebrew are in PATH
+      const shellInit = 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; ' +
+        '[ -f /opt/homebrew/bin/brew ] && eval "$(/opt/homebrew/bin/brew shellenv)"; ' +
+        '[ -f /usr/local/bin/brew ] && eval "$(/usr/local/bin/brew shellenv)"; ' +
+        '[ -f "$HOME/.volta/bin/volta" ] && export VOLTA_HOME="$HOME/.volta" && export PATH="$VOLTA_HOME/bin:$PATH"; ';
       const errorPatterns = [
-        { re: /command not found.*npm|npm.*not found|npm: command not found/i,
-          fix: (c) => c.replace(/\bnpm\b/, 'npx'), hint: 'npm not found → retrying with npx' },
+        { re: /command not found.*npm|npm.*command not found|npm: command not found|sh: npm:/i,
+          fix: (c) => shellInit + c, hint: 'npm not in PATH → sourcing shell profile (nvm/volta/brew)' },
+        { re: /command not found.*npx|npx.*command not found|npx: command not found|sh: npx:/i,
+          fix: (c) => shellInit + c.replace(/^npx\b/, 'npx'), hint: 'npx not in PATH → sourcing shell profile' },
         { re: /command not found.*python[^3]|python.*not found/i,
           fix: (c) => c.replace(/\bpython\b/, 'python3'), hint: 'python not found → retrying with python3' },
-        { re: /command not found.*node|node.*not found/i,
-          fix: (c) => 'npx --yes ' + c, hint: 'node not found → retrying with npx' },
+        { re: /command not found.*node\b|node.*not found/i,
+          fix: (c) => shellInit + c, hint: 'node not in PATH → sourcing shell profile' },
         { re: /ENOENT.*npm|Missing script/i,
-          fix: (c) => c.replace(/^npm run /, 'npx '), hint: 'npm script missing → retrying with npx' },
+          fix: (c) => shellInit + c.replace(/^npm run /, 'npx '), hint: 'npm script missing → retrying with npx' },
         { re: /command not found.*cargo|cargo.*not found/i,
           fix: (c) => '~/.cargo/bin/cargo ' + c.replace(/^cargo\s*/, ''), hint: 'cargo not in PATH → trying ~/.cargo/bin/cargo' },
         { re: /command not found.*go\b|go:.*not found/i,
