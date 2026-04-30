@@ -1194,6 +1194,7 @@ var _termId      = null;
 var _termESrc    = null;
 var _termHistory = [];
 var _termHistIdx = -1;
+var _runBottomMode = 'terminal'; // 'terminal' | 'logs'
 
 function _renderRunTabShell() {
   return '<div id="proj-run-root" class="proj-run-root">' +
@@ -1206,7 +1207,12 @@ async function _runTabLoad(proj) {
   _runStack = {};
   _runActiveList = [];
   _runOpenLogId = null;
+  _runBottomMode = 'terminal';
   if (_runLogESrc) { try { _runLogESrc.close(); } catch(_) {} _runLogESrc = null; }
+  // Kill any prior terminal for this tab
+  await _termDestroy(proj);
+  _termHistory = [];
+  _termHistIdx = -1;
 
   // Fetch active runs
   try {
@@ -1227,6 +1233,8 @@ async function _runTabLoad(proj) {
   }
 
   _runRender(proj);
+  // Start embedded terminal shell
+  _runStartTerminal(proj);
 }
 
 function _initRunResize() {
@@ -1258,6 +1266,80 @@ function _initRunResize() {
     sources.style.width = '340px';
     localStorage.removeItem(RUN_KEY);
   });
+}
+
+function _runRenderBottom(proj) {
+  var root = document.getElementById('proj-run-root');
+  if (!root) return;
+  var isLogs = _runBottomMode === 'logs';
+  var logRun = isLogs ? _runActiveList.find(function(r) { return r.runId === _runOpenLogId; }) : null;
+  var logIsActive = logRun && (logRun.status === 'running' || logRun.status === 'starting');
+  var pane = document.createElement('div');
+  pane.className = 'proj-run-bottom-pane';
+  pane.id = 'proj-run-bottom-pane';
+  pane.innerHTML =
+    '<div class="proj-run-bottom-tabs">' +
+      '<button class="proj-run-bottom-tab' + (!isLogs ? ' active' : '') + '" onclick="_runSwitchBottomMode(\'terminal\')">' +
+        '<i class="ti ti-terminal-2"></i> Terminal</button>' +
+      (isLogs
+        ? '<button class="proj-run-bottom-tab active">' +
+            '<i class="ti ti-file-text"></i> ' + _projEsc((logRun ? logRun.name : '') + ' logs') + '</button>' +
+            '<button class="proj-icon-btn" style="margin-left:auto" onclick="_runSwitchBottomMode(\'terminal\')"><i class="ti ti-x"></i></button>' +
+            (logIsActive
+              ? '<button class="proj-icon-btn proj-run-log-stop-btn" style="color:#f87171" onclick="stopProjectRun(\'' + _projEsc(_runOpenLogId) + '\',\'' + _projEsc(proj.id) + '\')"><i class="ti ti-player-stop-filled"></i> Stop</button>'
+              : '')
+        : '') +
+    '</div>' +
+    (isLogs
+      ? '<pre id="proj-run-log-body" class="proj-run-log-body"></pre>'
+      : '<div id="proj-terminal-output" class="proj-terminal-output proj-run-terminal-output"></div>' +
+        '<div class="proj-terminal-input-row">' +
+          '<span class="proj-terminal-prompt">$</span>' +
+          '<input id="proj-terminal-input" class="proj-terminal-input" placeholder="Type a command…" autocomplete="off" autocorrect="off" spellcheck="false">' +
+        '</div>');
+  var old = document.getElementById('proj-run-bottom-pane');
+  if (old) old.replaceWith(pane);
+  else root.appendChild(pane);
+  if (!isLogs) {
+    var inp = pane.querySelector('#proj-terminal-input');
+    if (inp) inp.addEventListener('keydown', _termKeydown);
+  }
+}
+
+async function _runStartTerminal(proj) {
+  _termId = null;
+  if (_termESrc) { try { _termESrc.close(); } catch(_) {} _termESrc = null; }
+  _termWrite('<span style="color:#6b7280">Starting shell…</span>\n');
+  try {
+    var r = await fetch('/api/projects/' + proj.id + '/terminal', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    var d = await r.json();
+    _termId = d.termId;
+  } catch(e) {
+    _termWrite('<span style="color:#f87171">[Failed to start shell: ' + e.message + ']</span>\n');
+    return;
+  }
+  var out = document.getElementById('proj-terminal-output');
+  if (out) out.innerHTML = '';
+  _termWrite('<span style="color:#6b7280">Ready — ' + _projEsc(proj.rootPath || '~') + '</span>\n');
+  _termConnectSSE(proj.id);
+  var inp = document.getElementById('proj-terminal-input');
+  if (inp) inp.focus();
+}
+
+function _runSwitchBottomMode(mode) {
+  _runBottomMode = mode;
+  if (mode === 'terminal') {
+    if (_runLogESrc) { try { _runLogESrc.close(); } catch(_) {} _runLogESrc = null; }
+    _runOpenLogId = null;
+  }
+  var proj = _activeProject();
+  if (proj) _runRenderBottom(proj);
+  if (mode === 'terminal' && _termId && proj) {
+    _termConnectSSE(proj.id);
+    var inp = document.getElementById('proj-terminal-input');
+    if (inp) inp.focus();
+  }
 }
 
 function _runRender(proj) {
@@ -1326,30 +1408,13 @@ function _runRender(proj) {
 
   html += '</div>';
 
-  // Log pane (shown when a run is expanded)
-  if (_runOpenLogId) {
-    var logRun = _runActiveList.find(function(r) { return r.runId === _runOpenLogId; });
-    var logIsActive = logRun && (logRun.status === 'running' || logRun.status === 'starting');
-    html += '<div class="proj-run-log-pane" id="proj-run-log-pane">' +
-      '<div class="proj-run-log-header">' +
-        '<span class="proj-run-log-title" id="proj-run-log-title">Logs</span>' +
-        (logIsActive
-          ? '<button class="proj-icon-btn proj-run-log-stop-btn" style="color:#f87171" title="Stop process" onclick="stopProjectRun(\'' + _projEsc(_runOpenLogId) + '\',\'' + _projEsc(proj.id) + '\')">' +
-              '<i class="ti ti-player-stop-filled"></i> Stop</button>'
-          : '') +
-        '<button class="proj-icon-btn" onclick="_runLogClose()" title="Close logs"><i class="ti ti-x"></i></button>' +
-      '</div>' +
-      '<pre id="proj-run-log-body" class="proj-run-log-body"></pre>' +
-    '</div>';
-  }
-
   root.innerHTML = html;
 
   // Wire up split resize
   _initRunResize();
 
-  // Re-open log pane if needed
-  if (_runOpenLogId) { _runLogOpen(_runOpenLogId, proj.id, false); }
+  // Render bottom pane
+  _runRenderBottom(proj);
 }
 
 function _runRecordCard(r, projectId) {
@@ -1450,20 +1515,13 @@ async function _runRefresh() {
 
 function _runLogOpen(runId, projectId, scroll) {
   _runOpenLogId = runId;
+  _runBottomMode = 'logs';
   if (_runLogESrc) { try { _runLogESrc.close(); } catch(_) {} _runLogESrc = null; }
+  if (_termESrc) { try { _termESrc.close(); } catch(_) {} _termESrc = null; }
 
-  // Make sure pane exists (re-render injects it)
-  var pane = document.getElementById('proj-run-log-pane');
-  if (!pane) {
-    _runRender(_activeProject());
-    pane = document.getElementById('proj-run-log-pane');
-    if (!pane) return;
-  }
-
-  // Update title
-  var run = _runActiveList.find(function(r) { return r.runId === runId; });
-  var titleEl = document.getElementById('proj-run-log-title');
-  if (titleEl && run) titleEl.textContent = run.name + ' logs';
+  // Render bottom pane in logs mode
+  var proj = _activeProject();
+  if (proj) _runRenderBottom(proj);
 
   var body = document.getElementById('proj-run-log-body');
   if (!body) return;
@@ -1522,30 +1580,26 @@ function _runPatchCard(rec, runId) {
 }
 
 function _runPatchLogHeader(rec) {
-  var stopBtn = document.querySelector('.proj-run-log-header .proj-run-log-stop-btn');
+  var stopBtn = document.querySelector('.proj-run-bottom-tabs .proj-run-log-stop-btn');
   var isActive = rec && (rec.status === 'running' || rec.status === 'starting');
   if (!isActive && stopBtn) stopBtn.remove();
   if (isActive && !stopBtn) {
-    var header = document.querySelector('.proj-run-log-header');
+    var tabs = document.querySelector('.proj-run-bottom-tabs');
     var proj = _activeProject();
-    if (header && proj) {
+    if (tabs && proj) {
       var btn = document.createElement('button');
       btn.className = 'proj-icon-btn proj-run-log-stop-btn';
       btn.style.color = '#f87171';
       btn.title = 'Stop process';
       btn.innerHTML = '<i class="ti ti-player-stop-filled"></i> Stop';
       btn.onclick = function() { stopProjectRun(rec.runId, proj.id); };
-      var closeBtn = header.querySelector('.proj-icon-btn:last-child');
-      if (closeBtn) header.insertBefore(btn, closeBtn);
+      tabs.appendChild(btn);
     }
   }
 }
 
 function _runLogClose() {
-  if (_runLogESrc) { try { _runLogESrc.close(); } catch(_) {} _runLogESrc = null; }
-  _runOpenLogId = null;
-  var pane = document.getElementById('proj-run-log-pane');
-  if (pane) pane.remove();
+  _runSwitchBottomMode('terminal');
 }
 
 function openRunInBrowser(url) {
