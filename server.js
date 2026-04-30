@@ -4799,11 +4799,31 @@ ${data.systemPrompt.slice(0, 6000)}
 Only include findings for criteria that actually fail. If the prompt already satisfies a criterion, omit it. Return valid JSON.`;
 
   try {
-    const resp = await client.chat.completions.create({
-      model,
-      max_tokens: 4096,
-      messages: [{ role: 'user', content: rubricPrompt }]
-    });
+    // o-series and gpt-5+ use max_completion_tokens; everything else uses max_tokens
+    const isCompletionTokenModel = /^(o\d|gpt-5)/i.test(model);
+    const tokenParam = isCompletionTokenModel
+      ? { max_completion_tokens: 4096 }
+      : { max_tokens: 4096 };
+
+    let resp;
+    try {
+      resp = await client.chat.completions.create({
+        model,
+        ...tokenParam,
+        messages: [{ role: 'user', content: rubricPrompt }]
+      });
+    } catch (apiErr) {
+      // If max_tokens was rejected, retry with max_completion_tokens
+      if (apiErr.message?.includes('max_tokens') && tokenParam.max_tokens) {
+        resp = await client.chat.completions.create({
+          model,
+          max_completion_tokens: 4096,
+          messages: [{ role: 'user', content: rubricPrompt }]
+        });
+      } else {
+        throw apiErr;
+      }
+    }
     const raw = resp.choices[0]?.message?.content?.trim() || '{}';
     // Robustly extract the JSON object — handle markdown fences, leading prose, trailing text
     let json = raw;

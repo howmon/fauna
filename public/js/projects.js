@@ -2274,7 +2274,7 @@ function openCreateProjectDialog() {
     '<div class="proj-picker-panel">' +
       '<div class="proj-picker-header"><span>New Project</span><button onclick="document.getElementById(\'proj-create-overlay\').remove()"><i class="ti ti-x"></i></button></div>' +
       '<div class="proj-form">' +
-        '<div class="proj-settings-row"><label>Name</label><input class="proj-input" id="proj-new-name" placeholder="My project" autofocus></div>' +
+        '<div class="proj-settings-row"><label>Name</label><input class="proj-input" id="proj-new-name" placeholder="My project"></div>' +
         '<div class="proj-settings-row"><label>Description</label><input class="proj-input" id="proj-new-desc" placeholder="Optional description"></div>' +
         '<div class="proj-settings-row"><label>Root path</label><div style="display:flex;gap:6px;flex:1"><input class="proj-input" id="proj-new-root" placeholder="~/code/myproject (optional)" style="flex:1"><button class="proj-action-btn" type="button" onclick="browseNewProjectFolder()" title="Browse"><i class="ti ti-folder-open"></i></button></div></div>' +
         '<div class="proj-settings-row"><label>Color</label>' +
