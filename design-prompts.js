@@ -193,19 +193,25 @@ function parseFrontmatter(raw) {
 /**
  * Assemble the full system prompt for a design-mode project.
  * @param {object} opts
- * @param {string}  opts.skillId          — skill directory name (e.g. 'web-prototype')
- * @param {string}  opts.systemId         — design system directory name (e.g. 'default')
- * @param {string}  [opts.directionId]    — visual direction id (e.g. 'modern-minimal')
- * @param {string}  [opts.fidelity]       — 'lo' | 'hi' (overrides skill default)
- * @param {string}  [opts.platform]       — 'desktop' | 'mobile'
- * @param {boolean} [opts.speakerNotes]   — deck mode: include speaker notes
- * @param {boolean} [opts.animations]     — allow CSS animations
- * @param {string}  [opts.projectName]    — project name for context
+ * @param {string|string[]} [opts.skillIds]    — one or more skill directory names
+ * @param {string}          [opts.skillId]     — single skill (legacy; merged into skillIds)
+ * @param {string}          opts.systemId      — design system directory name (e.g. 'default')
+ * @param {string}          [opts.directionId] — visual direction id (e.g. 'modern-minimal')
+ * @param {string}          [opts.fidelity]    — 'lo' | 'hi'
+ * @param {string}          [opts.platform]    — 'desktop' | 'mobile'
+ * @param {boolean}         [opts.speakerNotes]
+ * @param {boolean}         [opts.animations]
+ * @param {string}          [opts.projectName]
  * @returns {string} Full assembled system prompt
  */
 function composeDesignPrompt(opts = {}) {
-  const { skillId, systemId, directionId, fidelity, platform,
+  const { systemId, directionId, fidelity, platform,
           speakerNotes, animations, projectName } = opts;
+
+  // Normalise skillIds — accept array or legacy single string
+  const skillIds = Array.isArray(opts.skillIds)
+    ? opts.skillIds.filter(Boolean)
+    : opts.skillId ? [opts.skillId] : [];
 
   const layers = [];
 
@@ -224,27 +230,26 @@ function composeDesignPrompt(opts = {}) {
     }
   }
 
-  // ── Layer 4: Skill
+  // ── Layer 4: Skills (one layer per selected skill)
   let skillMode = 'prototype';
-  if (skillId) {
-    const skillPath = path.join(SKILLS_DIR, skillId, 'SKILL.md');
+  for (const sid of skillIds) {
+    const skillPath = path.join(SKILLS_DIR, sid, 'SKILL.md');
     const rawSkill  = readFileSafe(skillPath);
     if (rawSkill) {
       const fm = parseFrontmatter(rawSkill);
-      skillMode = fm.mode || 'prototype';
-      // Strip frontmatter block from the prompt
+      if (fm.mode === 'deck') skillMode = 'deck'; // deck wins if any skill is deck
       const body = rawSkill.replace(/^---[\s\S]*?---\s*\n/, '');
-      layers.push(`## Active Skill: ${skillId}\n\n${body}`);
+      layers.push(`## Active Skill: ${sid}\n\n${body}`);
     }
   }
 
   // ── Layer 5: Project metadata
   const meta = [];
-  if (projectName) meta.push(`Project: ${projectName}`);
-  if (skillId)     meta.push(`Skill: ${skillId}`);
-  if (systemId)    meta.push(`Design system: ${systemId}`);
-  if (platform)    meta.push(`Platform: ${platform}`);
-  if (fidelity)    meta.push(`Fidelity: ${fidelity === 'lo' ? 'low (wireframe — no visual polish)' : 'high (pixel-ready)'}`);
+  if (projectName)        meta.push(`Project: ${projectName}`);
+  if (skillIds.length)    meta.push(`Skills: ${skillIds.join(', ')}`);
+  if (systemId)           meta.push(`Design system: ${systemId}`);
+  if (platform)           meta.push(`Platform: ${platform}`);
+  if (fidelity)           meta.push(`Fidelity: ${fidelity === 'lo' ? 'low (wireframe — no visual polish)' : 'high (pixel-ready)'}`);
   if (animations === false) meta.push('Animations: disabled — use static states only');
   if (speakerNotes)         meta.push('Speaker notes: include in deck slides');
   if (meta.length > 0) {

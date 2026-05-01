@@ -727,6 +727,15 @@ async function executeBrowserAction(action) {
 
   } else if (action.action === 'ask-user') {
     return { ok: true, manual: true, message: action.message || action.label };
+
+  } else if (action.action === 'screenshot') {
+    // Capture the current webview as a PNG and return base64 — same as clicking the camera button
+    if (!wv) throw new Error('Browser pane not open — send a navigate action first');
+    var nativeImg = await wv.capturePage();
+    var pngDataUrl = nativeImg.toDataURL();
+    if (!pngDataUrl || !pngDataUrl.includes(',')) throw new Error('capturePage returned empty image');
+    var b64 = pngDataUrl.split(',')[1];
+    return { ok: true, screenshot: b64, mime: 'image/png', url: wv.getURL ? wv.getURL() : '' };
   }
 
   throw new Error('Unknown action: ' + action.action);
@@ -898,6 +907,12 @@ async function _runBrowserActionSequence(widgets, convId) {
           : 'Page loaded in browser panel (no text content):\n**Title:** ' + result.title + '\n**URL:** ' + result.url)
           + '\n\nContinue your task immediately — emit the next browser-action blocks now.';
         await browserFeedAI(feedContent, convId);
+      }
+      // If it was a screenshot, feed the image back to the AI
+      if (w.action.action === 'screenshot' && result.screenshot) {
+        var imgDataUrl = 'data:' + (result.mime || 'image/png') + ';base64,' + result.screenshot;
+        sendDirectMessage('[Browser screenshot from: ' + (result.url || 'browser panel') + ']',
+          { image: imgDataUrl, fromAutoFeed: true });
       }
       // If it was an eval, feed result back too
       if (w.action.action === 'eval') {

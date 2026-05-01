@@ -400,8 +400,8 @@ function _renderProjectHubBody(proj) {
     body.innerHTML =
       '<div class="proj-section">' +
         '<div class="proj-section-header"><i class="ti ti-layout-2"></i> Design Settings</div>' +
-        '<div class="proj-settings-row"><label>Skill</label>' +
-          '<select class="proj-input" data-field="skillId" onchange="_saveDesignField(\'' + proj.id + '\', this)"></select>' +
+        '<div class="proj-settings-row"><label>Skills</label>' +
+          '<div class="proj-skill-checks" id="proj-hub-skill-checks">Loading…</div>' +
         '</div>' +
         '<div class="proj-settings-row"><label>Design System</label>' +
           '<select class="proj-input" data-field="systemId" onchange="_saveDesignField(\'' + proj.id + '\', this)"></select>' +
@@ -419,23 +419,29 @@ function _renderProjectHubBody(proj) {
           '</select>' +
         '</div>' +
       '</div>';
-    // Populate skill and system selects via API
+    // Populate skill checkboxes and system select via API
     if (typeof loadDesignCatalog === 'function') {
       loadDesignCatalog(function(catalog) {
-        var selSkill = body.querySelector('[data-field="skillId"]');
-        var selSys   = body.querySelector('[data-field="systemId"]');
-        if (selSkill) {
-          selSkill.innerHTML = '<option value="">— no skill —</option>' +
-            (catalog.skills || []).map(function(s) {
-              return '<option value="' + _projEsc(s.id) + '"' + (s.id === d.skillId ? ' selected' : '') + '>' + _projEsc(s.name) + '</option>';
-            }).join('');
+        var skillChecks = body.querySelector('#proj-hub-skill-checks');
+        var selSys      = body.querySelector('[data-field="systemId"]');
+        var activeIds   = d.skillIds || (d.skillId ? [d.skillId] : []);
+        if (skillChecks) {
+          skillChecks.innerHTML = (catalog.skills || []).map(function(s) {
+            var checked = activeIds.indexOf(s.id) !== -1 ? ' checked' : '';
+            return '<label class="proj-skill-check">' +
+              '<input type="checkbox" value="' + _projEsc(s.id) + '"' + checked +
+                ' onchange="_saveDesignSkills(\'' + proj.id + '\', this.closest(\'.proj-skill-checks\'))">' +
+              ' ' + _projEsc(s.name) +
+            '</label>';
+          }).join('');
+          if (!(catalog.skills || []).length) skillChecks.textContent = 'No skills installed';
         }
         if (selSys) {
           selSys.innerHTML = '<option value="default">Default (neutral)</option>' +
             (catalog.systems || []).filter(function(s){ return s.id !== 'default'; }).map(function(s) {
               return '<option value="' + _projEsc(s.id) + '"' + (s.id === d.systemId ? ' selected' : '') + '>' + _projEsc(s.name) + '</option>';
             }).join('');
-          if (selSys.value === 'default' && !d.systemId) selSys.value = 'default';
+          if (!d.systemId) selSys.value = 'default';
         }
       });
     }
@@ -2404,8 +2410,8 @@ function openCreateProjectDialog() {
             '<button class="proj-type-btn" data-type="design" onclick="_pickProjType(this)"><i class="ti ti-layout-2"></i> Design</button>' +
           '</div>' +
         '</div>' +
-        '<div class="proj-settings-row" id="proj-new-design-row" style="display:none"><label>Skill</label>' +
-          '<select class="proj-input" id="proj-new-skill-id"><option value="">Loading…</option></select>' +
+        '<div class="proj-settings-row" id="proj-new-design-row" style="display:none"><label>Skills</label>' +
+          '<div class="proj-skill-checks" id="proj-new-skill-checks">Loading…</div>' +
         '</div>' +
         '<div class="proj-settings-row"><label>Root path</label><div style="display:flex;gap:6px;flex:1"><input class="proj-input" id="proj-new-root" placeholder="~/code/myproject (optional)" style="flex:1"><button class="proj-action-btn" type="button" onclick="browseNewProjectFolder()" title="Browse"><i class="ti ti-folder-open"></i></button></div></div>' +
         '<div class="proj-settings-row"><label>Color</label>' +
@@ -2427,12 +2433,14 @@ function openCreateProjectDialog() {
   // Pre-populate skill list
   if (typeof loadDesignCatalog === 'function') {
     loadDesignCatalog(function(catalog) {
-      var sel = document.getElementById('proj-new-skill-id');
-      if (sel) {
-        sel.innerHTML = '<option value="">— choose skill —</option>' +
-          (catalog.skills || []).map(function(s) {
-            return '<option value="' + _projEsc(s.id) + '">' + _projEsc(s.name) + '</option>';
-          }).join('');
+      var checks = document.getElementById('proj-new-skill-checks');
+      if (checks) {
+        checks.innerHTML = (catalog.skills || []).map(function(s) {
+          return '<label class="proj-skill-check">' +
+            '<input type="checkbox" value="' + _projEsc(s.id) + '"> ' + _projEsc(s.name) +
+          '</label>';
+        }).join('');
+        if (!(catalog.skills || []).length) checks.textContent = 'No skills available';
       }
     });
   }
@@ -2454,6 +2462,26 @@ function _pickProjType(btn) {
   if (row) row.style.display = window._newProjType === 'design' ? '' : 'none';
   var btns = document.querySelectorAll('#proj-new-type .proj-type-btn');
   btns.forEach(function(b) { b.classList.toggle('active', b === btn); });
+}
+
+async function _saveDesignSkills(projectId, checksContainer) {
+  var skillIds = [];
+  if (checksContainer) {
+    checksContainer.querySelectorAll('input[type="checkbox"]:checked').forEach(function(cb) {
+      if (cb.value) skillIds.push(cb.value);
+    });
+  }
+  try {
+    await fetch('/api/projects/' + projectId + '/design', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ skillIds: skillIds })
+    });
+    var proj = (state.projects || []).find(function(p){ return p.id === projectId; });
+    if (proj) { if (!proj.design) proj.design = {}; proj.design.skillIds = skillIds; }
+    _showToast('Saved');
+  } catch(e) {
+    _showToast('Save failed: ' + e.message, true);
+  }
 }
 
 async function _saveDesignField(projectId, selectEl) {
@@ -2501,7 +2529,13 @@ async function submitCreateProject() {
   var root    = (document.getElementById('proj-new-root') || {}).value || null;
   var color   = window._newProjColor || 'teal';
   var type    = window._newProjType  || '';
-  var skillId = (document.getElementById('proj-new-skill-id') || {}).value || null;
+  var skillIds = [];
+  var newChecks = document.getElementById('proj-new-skill-checks');
+  if (newChecks) {
+    newChecks.querySelectorAll('input[type="checkbox"]:checked').forEach(function(cb) {
+      if (cb.value) skillIds.push(cb.value);
+    });
+  }
   try {
     var r = await fetch('/api/projects', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2514,9 +2548,9 @@ async function submitCreateProject() {
       try {
         await fetch('/api/projects/' + proj.id + '/design', {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ projectType: 'design', skillId: skillId || null, systemId: 'default', fidelity: 'hi', platform: 'desktop' })
+          body: JSON.stringify({ projectType: 'design', skillIds: skillIds, systemId: 'default', fidelity: 'hi', platform: 'desktop' })
         });
-        proj.design = { projectType: 'design', skillId: skillId || null, systemId: 'default', fidelity: 'hi', platform: 'desktop' };
+        proj.design = { projectType: 'design', skillIds: skillIds, systemId: 'default', fidelity: 'hi', platform: 'desktop' };
       } catch(_) {}
     }
     state.projects.push(proj);

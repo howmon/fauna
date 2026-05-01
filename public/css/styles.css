@@ -5048,3 +5048,32 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 
 /* Artifact frame wrap */
 .artifact-frame-wrap { display: flex; align-items: center; justify-content: center; }
+
+/* ── Skill multi-select checkboxes ───────────────────────────────────────── */
+.proj-skill-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1;
+}
+.proj-skill-check {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color .1s, background .1s;
+  user-select: none;
+}
+.proj-skill-check:hover { border-color: var(--accent-dim); background: var(--accent-dim); }
+.proj-skill-check:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-weight: 600;
+}
+.proj-skill-check input[type="checkbox"] { accent-color: var(--accent); }

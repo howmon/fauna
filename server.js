@@ -659,6 +659,16 @@ When building a web app for the user, follow this workflow:
 4. **Fix and iterate** — if there are errors, fix the code, navigate again or use console-logs to recheck
 5. **Only report success after verifying** — don't tell the user it works until you've seen the page load without errors
 
+### Previewing written HTML files
+After writing a self-contained HTML file to disk (via write-file blocks), preview it using:
+\`\`\`browser-action
+{"action":"navigate","url":"http://localhost:3737/api/preview-file?path=/absolute/path/to/file.html"}
+\`\`\`
+- **Always use `/api/preview-file?path=<absolute-path>`** — never use `file://` URLs (blocked in the browser panel) and never try to copy the file into the `public/` folder.
+- After navigating, take a `screenshot` action to confirm the page renders correctly.
+- The valid screenshot action is `{"action":"screenshot"}` — **not** `{"action":"snapshot"}` (snapshot is Chrome/Edge extension only).
+- **Do NOT use emojis** in any response text, summaries, or bullet lists.
+
 ### Critical Rules:
 - **NEVER truncate shell commands or code blocks**. Write them fully in one go. Never stop mid-line or say "let me continue".
 - **NEVER narrate what you're about to do**. Don't say "Let me...", "I'll now...", "I need to...". Just DO it — write the code, run the command.
@@ -1117,7 +1127,7 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
         const _proj = getProject(projectId);
         if (_proj && _proj.design && _proj.design.projectType === 'design') {
           const _dp = composeDesignPrompt({
-            skillId:      _proj.design.skillId,
+            skillIds:     _proj.design.skillIds || (_proj.design.skillId ? [_proj.design.skillId] : []),
             systemId:     _proj.design.systemId || 'default',
             directionId:  _proj.design.directionId,
             fidelity:     _proj.design.fidelity,
@@ -3732,6 +3742,36 @@ function checkpointFile(abs) {
     return null; // checkpoint failure must never break the actual write
   }
 }
+
+// ── Preview local file in the built-in browser panel ─────────────────────
+// GET /api/preview-file?path=<encoded-abs-path>
+// Reads any file from the local filesystem and serves it with the correct
+// Content-Type so the AI can navigate to it after writing.
+app.get('/api/preview-file', (req, res) => {
+  const rawPath = req.query.path;
+  if (!rawPath) return res.status(400).send('path query param required');
+  try {
+    const abs = path.resolve(rawPath);  // no cwd — must be absolute
+    if (!fs.existsSync(abs)) return res.status(404).send('File not found: ' + abs);
+    const ext = path.extname(abs).toLowerCase();
+    const mimeMap = {
+      '.html': 'text/html', '.htm': 'text/html',
+      '.css':  'text/css',  '.js':  'text/javascript',
+      '.json': 'application/json', '.svg': 'image/svg+xml',
+      '.png':  'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+      '.gif':  'image/gif', '.webp': 'image/webp',
+      '.txt':  'text/plain', '.md': 'text/plain',
+    };
+    const mime = mimeMap[ext] || 'application/octet-stream';
+    res.setHeader('Content-Type', mime + (mime.startsWith('text/') ? '; charset=utf-8' : ''));
+    // Prevent search engines / external caching
+    res.setHeader('X-Robots-Tag', 'noindex');
+    const content = fs.readFileSync(abs);
+    res.send(content);
+  } catch (e) {
+    res.status(500).send(e.message);
+  }
+});
 
 app.post('/api/write-file', (req, res) => {
   const { path: filePath, content, fromFile, encoding, cwd } = req.body;
