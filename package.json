@@ -134,6 +134,7 @@
       "task-manager.js",
       "task-runner.js",
       "project-manager.js",
+      "design-prompts.js",
       "afterPack.cjs",
       "agent-*.js",
       "public/**",
