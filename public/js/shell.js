@@ -319,6 +319,7 @@ async function feedShellResultToAI(execId, opts) {
   if (d.stderr && d.stderr.trim()) lines.push('[stderr] ' + d.stderr.trimEnd());
   if (!d.stdout && !d.stderr && d._screenshot) lines.push('(no stdout — screenshot captured)');
   if (!d.stdout && !d.stderr && !d._screenshot && d.exitCode !== 0) lines.push('(no output — command not found or path does not exist)');
+  if (!d.stdout && !d.stderr && !d._screenshot && d.exitCode === 0) lines.push('(no output — command succeeded silently)');
   lines.push('exit ' + d.exitCode);
   lines.push('```');
   lines.push('Continue working on the task. If more steps are needed, run the next command. If done, summarize.');

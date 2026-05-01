@@ -3731,10 +3731,13 @@ app.post('/api/write-file', (req, res) => {
       if (content === undefined) return res.status(400).json({ error: 'content or fromFile required' });
       // Checkpoint the existing file before overwriting (AutoRecovery)
       checkpointFile(abs);
-      // Atomic write: write to a temp file then rename so the original is never half-written
+      // Atomic write: write to a temp file, fdatasync, then rename so the original is never half-written
       const tmp = abs + '.~tmp' + process.pid;
       try {
         fs.writeFileSync(tmp, content, encoding || 'utf8');
+        // Flush OS write buffer to disk before rename (VS Code pattern)
+        const fd = fs.openSync(tmp, 'r+');
+        try { fs.fdatasyncSync(fd); } catch (_) {} finally { fs.closeSync(fd); }
         fs.renameSync(tmp, abs);
       } catch (e) {
         try { fs.unlinkSync(tmp); } catch (_) {}
@@ -3760,8 +3763,11 @@ app.put('/api/write-file-stream', (req, res) => {
     const tmp = abs + '.~tmp' + process.pid;
     const out = fs.createWriteStream(tmp);
     req.pipe(out);
-    out.on('finish', () => {
+    out.on('finish', async () => {
       try {
+        // Flush OS write buffer to disk before rename (VS Code pattern)
+        const fd = await fs.promises.open(tmp, 'r+');
+        try { await fd.datasync(); } catch (_) {} finally { await fd.close(); }
         fs.renameSync(tmp, abs);
         res.json({ ok: true, path: abs, bytes: fs.statSync(abs).size });
       } catch (e) {
@@ -3817,6 +3823,9 @@ app.post('/api/replace-string', (req, res) => {
     const tmp = abs + '.~tmp' + process.pid;
     try {
       fs.writeFileSync(tmp, updated, 'utf8');
+      // Flush OS write buffer to disk before rename (VS Code pattern)
+      const fd = fs.openSync(tmp, 'r+');
+      try { fs.fdatasyncSync(fd); } catch (_) {} finally { fs.closeSync(fd); }
       fs.renameSync(tmp, abs);
     } catch (e) {
       try { fs.unlinkSync(tmp); } catch (_) {}
@@ -5459,7 +5468,7 @@ function getAgentManifest(name) {
 
 // Sandboxed shell execution
 app.post('/api/agent/shell-exec', (req, res) => {
-  const { command, cwd, agentName } = req.body;
+  const { command, cwd, agentName, killId, stream: wantStream } = req.body;
   if (!command) return res.status(400).json({ error: 'command required' });
   if (!agentName) return res.status(400).json({ error: 'agentName required' });
 
@@ -5478,6 +5487,59 @@ app.post('/api/agent/shell-exec', (req, res) => {
   const env = getSandboxedEnv(permissions);
   const limits = manifest ? getResourceLimits(manifest) : { timeout: 300000 };
 
+  if (wantStream) {
+    // ── Streaming mode: SSE with real-time output (matches /api/shell-exec) ──
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+    const shellFlag = IS_WIN ? '-Command' : '-c';
+    const child = _spawn(IS_WIN ? 'powershell.exe' : '/bin/zsh', [shellFlag, command], { cwd: workDir, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    if (killId) _shellProcs.set(killId, child);
+
+    let lastChunk = '';
+    let idleTimer = null;
+    const IDLE_MS = 3000;
+    function resetIdleTimer() {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        if (!child.killed && child.exitCode === null) {
+          res.write(`data: ${JSON.stringify({ type: 'waiting_for_input', hint: lastChunk.trim().split('\n').pop() })}\n\n`);
+        }
+      }, IDLE_MS);
+    }
+    resetIdleTimer();
+
+    child.stdout.on('data', (chunk) => {
+      lastChunk = chunk.toString();
+      res.write(`data: ${JSON.stringify({ type: 'stdout', text: lastChunk })}\n\n`);
+      resetIdleTimer();
+    });
+    child.stderr.on('data', (chunk) => {
+      lastChunk = chunk.toString();
+      res.write(`data: ${JSON.stringify({ type: 'stderr', text: lastChunk })}\n\n`);
+      resetIdleTimer();
+    });
+
+    const timeout = setTimeout(() => { try { child.kill('SIGTERM'); } catch (_) {} }, limits.timeout);
+
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      if (idleTimer) clearTimeout(idleTimer);
+      if (killId) _shellProcs.delete(killId);
+      res.write(`data: ${JSON.stringify({ type: 'exit', exitCode: code ?? 0, sandboxed: true })}\n\n`);
+      res.end();
+    });
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      if (idleTimer) clearTimeout(idleTimer);
+      if (killId) _shellProcs.delete(killId);
+      res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
+      res.end();
+    });
+
+    req.on('close', () => { if (idleTimer) clearTimeout(idleTimer); try { child.kill('SIGTERM'); } catch (_) {} });
+    return;
+  }
+
+  // ── Buffered mode ──
   const child = _exec(command, {
     cwd: workDir, env, timeout: limits.timeout,
     maxBuffer: 10 * 1024 * 1024, shell: IS_WIN ? 'powershell.exe' : '/bin/zsh'
