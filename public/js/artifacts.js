@@ -2,9 +2,20 @@
 
 var _codePreviewRegistry = {}; // id → rawText for Preview buttons on code blocks
 
+var ARTIFACT_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+// Prune artifacts older than 30 days from a conversation's persisted list
+function pruneStaleArtifacts(conv) {
+  if (!conv || !conv.artifacts) return;
+  var cutoff = Date.now() - ARTIFACT_TTL_MS;
+  conv.artifacts = conv.artifacts.filter(function(a) {
+    return !a.createdAt || a.createdAt > cutoff;
+  });
+}
+
 function addArtifact(spec) {
   var id = 'art-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
-  var artifact = Object.assign({ id: id }, spec);
+  var artifact = Object.assign({ id: id, createdAt: Date.now() }, spec);
   state.artifacts.push(artifact);
   if (state.artifacts.length > 20) state.artifacts.shift();
   renderArtifactTabs();

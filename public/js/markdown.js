@@ -66,6 +66,10 @@ marked.use({
       if (lang === 'uninstall-agent' || lang === 'uninstall_agent') {
         return '<pre data-special-lang="uninstall-agent" style="display:none"><code class="language-uninstall-agent">' + escHtml(rawText) + '</code></pre>';
       }
+      // gen-ui: generative UI spec — rendered inline as live components after streaming
+      if (lang === 'gen-ui' || lang === 'gen_ui') {
+        return '<pre data-special-lang="gen-ui" style="display:none"><code class="language-gen-ui">' + escHtml(rawText) + '</code></pre>';
+      }
 
       var highlighted;
       try {

@@ -21,6 +21,24 @@ function toggleDebugLog() {
   var isVisible = p.style.display !== 'none' && p.style.display !== '';
   p.style.display = isVisible ? 'none' : 'flex';
 }
+
+// ── Topbar overflow menu ──────────────────────────────────────────────────
+function toggleTopbarMenu(e) {
+  if (e) e.stopPropagation();
+  var menu = document.getElementById('topbar-menu');
+  if (!menu) return;
+  var isOpen = menu.style.display !== 'none';
+  if (isOpen) { menu.style.display = 'none'; return; }
+  menu.style.display = 'flex';
+  // Close on next outside click
+  setTimeout(function() {
+    document.addEventListener('click', closeTopbarMenu, { once: true });
+  }, 0);
+}
+function closeTopbarMenu() {
+  var menu = document.getElementById('topbar-menu');
+  if (menu) menu.style.display = 'none';
+}
 function copyDebugLog() {
   navigator.clipboard.writeText(_debugLogs.join('\n')).then(function() {
     var btn = document.querySelector('#debug-panel button');
@@ -505,6 +523,7 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
     extractAndRenderWriteFile(el, true);
     extractAndRenderSaveInstruction(content, el, true);
     extractArtifactsFromBuffer(content, el, false);
+    if (typeof extractAndRenderGenUI === 'function') extractAndRenderGenUI(content, el, true);
     wrapInChainOfThought(el);
   }
 
@@ -955,7 +974,7 @@ function toggleSidebar() {
 var promptMap = {
   'What\'s using my disk?':  'What\'s using the most disk space on my Mac? Check my home folder and show the top offenders.',
   'Open a website':          'Open https://github.com in the browser panel.',
-  'Register on a site':      'I want to register on a website. The URL is: ',
+  'Show Q1 metrics':         'Show me a dashboard card with these Q1 metrics: Revenue $128,400 (up 12%), NPS 94 (down 2), CSAT 73% (up 5%). Use the gen-ui components to render it inline.',
   'Build a dashboard':       'Build an interactive dashboard as an HTML artifact. It should include a chart and some stats. The data is:\n\n',
   'Explain code':            'Please explain the following code:\n\n```\n// Paste your code here\n```',
   'Write a script':          'Write and run a script that ',

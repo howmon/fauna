@@ -139,6 +139,7 @@ function loadConversation(id) {
   var convInner = showConvDom(id);
 
   // Restore artifacts BEFORE rendering messages so history load can inject cards
+  if (typeof pruneStaleArtifacts === 'function') pruneStaleArtifacts(conv);
   state.artifacts = (conv.artifacts || []).map(function(a) { return Object.assign({}, a); });
   state.activeArtifact = null;
   state.artifacts.forEach(function(a) {
@@ -198,6 +199,7 @@ function loadConversation(id) {
 
   renderConvList();
   scrollBottom();
+  if (typeof _updateMoveToProjectBtn === 'function') _updateMoveToProjectBtn();
 }
 
 function clearConversation() {

@@ -617,7 +617,7 @@ async function streamResponse(conv) {
       'Security warnings and irreversible actions: always be explicit and clear.\n' +
       'Pattern: [thing] [action] [reason]. Not: "Sure! I\'d be happy to help you with that. The issue is likely..."';
 
-    var systemPrompt   = [agentSysCtx ? agentSysCtx + '\n\n' + getAgentMetaContext() : (capsCtx + agentCtx), playbookCtx, memoryCtx, workspaceCtx, figmaCtx, conciseDirective, userSysPrompt].filter(Boolean).join('\n\n');
+    var systemPrompt   = [agentSysCtx ? agentSysCtx + '\n\n' + getAgentMetaContext() : (capsCtx + agentCtx), playbookCtx, memoryCtx, workspaceCtx, figmaCtx, conciseDirective, typeof GEN_UI_CATALOG_PROMPT !== 'undefined' ? GEN_UI_CATALOG_PROMPT : '', userSysPrompt].filter(Boolean).join('\n\n');
 
     dbg('► fetch /api/chat model=' + state.model + ' msgs=' + messages.length + ' sysPrompt=' + systemPrompt.length + 'ch', 'cmd');
 
@@ -807,6 +807,7 @@ async function streamResponse(conv) {
         if (typeof extractAndRenderPatchAgent === 'function') extractAndRenderPatchAgent(buffer, msgEl);
         if (typeof extractAndRenderUninstallAgent === 'function') extractAndRenderUninstallAgent(buffer, msgEl);
         if (typeof extractAndRenderTaskCreate === 'function') extractAndRenderTaskCreate(buffer, msgEl);
+        if (typeof extractAndRenderGenUI === 'function') extractAndRenderGenUI(buffer, msgEl, false);
         wrapInChainOfThought(msgEl);
         if (state._lastMsgWasDesktopTask) {
           injectOrganizerCard(msgEl, buffer);
@@ -833,6 +834,7 @@ async function streamResponse(conv) {
       if (typeof extractAndRenderPatchAgent === 'function') extractAndRenderPatchAgent(buffer, msgEl);
       if (typeof extractAndRenderUninstallAgent === 'function') extractAndRenderUninstallAgent(buffer, msgEl);
       if (typeof extractAndRenderTaskCreate === 'function') extractAndRenderTaskCreate(buffer, msgEl);
+      if (typeof extractAndRenderGenUI === 'function') extractAndRenderGenUI(buffer, msgEl, true);
       wrapInChainOfThought(msgEl);
     }
   }

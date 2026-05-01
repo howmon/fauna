@@ -150,11 +150,20 @@
       <span id="topbar-project-pill" style="display:none" onclick="openProjectHub()" title="You are in a project — click to open hub"><i class="ti ti-folder"></i> <span id="topbar-project-name"></span></span>
       <span id="agent-badge" style="display:none !important" onclick="deactivateAgent(getConv(state.currentId))"></span>
       <select id="model-select" onchange="onModelChange(this.value)"></select>
-      <button class="topbar-btn" onclick="clearConversation()" title="Clear messages"><i class="ti ti-trash"></i> Clear</button>
-      <button class="topbar-btn" id="topbar-ports-btn" onclick="openPortsDashboard()" title="Active ports" style="display:none"><i class="ti ti-server"></i> <span id="topbar-ports-count">0</span></button>
-      <button class="topbar-btn" onclick="toggleDebugLog()" id="debug-btn" title="Debug log"><i class="ti ti-bug"></i></button>
+      <!-- Primary CTAs always visible -->
       <button class="topbar-btn voice-mic-btn" id="voice-mic-btn" data-voice-state="off" title="Voice control — click to toggle, say wake word to activate"><i class="ti ti-microphone-off"></i></button>
       <button class="topbar-btn topbar-account-btn" id="topbar-account-btn" onclick="openStoreAccount()" title="Agent Store Account"><i class="ti ti-user-circle"></i> <span id="topbar-account-label">Account</span></button>
+      <!-- Overflow menu -->
+      <div id="topbar-overflow" class="topbar-overflow">
+        <button class="topbar-btn" id="topbar-overflow-btn" onclick="toggleTopbarMenu(event)" title="More options"><i class="ti ti-dots"></i></button>
+        <div id="topbar-menu" class="topbar-menu" style="display:none">
+          <button class="topbar-menu-item" id="topbar-move-to-project-btn" onclick="openMoveConversationToProject();closeTopbarMenu()" title="Move this conversation to a project"><i class="ti ti-folder-symlink"></i> Move to Project</button>
+          <button class="topbar-menu-item" id="topbar-ports-btn" onclick="openPortsDashboard();closeTopbarMenu()" title="Active ports" style="display:none"><i class="ti ti-server"></i> Ports <span id="topbar-ports-count" class="topbar-menu-badge">0</span></button>
+          <div class="topbar-menu-divider"></div>
+          <button class="topbar-menu-item" onclick="clearConversation();closeTopbarMenu()" title="Clear messages"><i class="ti ti-trash"></i> Clear conversation</button>
+          <button class="topbar-menu-item" onclick="toggleDebugLog();closeTopbarMenu()" id="debug-btn"><i class="ti ti-bug"></i> Debug log</button>
+        </div>
+      </div>
       <!-- Windows-only title bar controls (shown via JS on win32) -->
       <div id="win-controls">
         <button class="win-ctrl" title="Minimize" onclick="winCtrl('minimize')"><i class="ti ti-minus"></i></button>
@@ -262,7 +271,7 @@
       <div class="empty-grid">
         <div class="empty-card" onclick="usePrompt(this)"><strong>What's using my disk?</strong>Find large files and free up space</div>
         <div class="empty-card" onclick="usePrompt(this)"><strong>Open a website</strong>Browse any URL in the browser panel</div>
-        <div class="empty-card" onclick="usePrompt(this)"><strong>Register on a site</strong>AI fills the form, you handle passwords</div>
+        <div class="empty-card" onclick="usePrompt(this)"><strong>Show Q1 metrics</strong>Revenue, NPS and CSAT as a live dashboard card</div>
         <div class="empty-card" onclick="usePrompt(this)"><strong>Build a dashboard</strong>Generate an interactive HTML artifact</div>
         <div class="empty-card" onclick="usePrompt(this)"><strong>Explain code</strong>Paste code and get a clear explanation</div>
         <div class="empty-card" onclick="usePrompt(this)"><strong>Write a script</strong>Describe it and run it right here</div>
@@ -699,6 +708,7 @@ Examples:
 <script src="js/agent-builder.js"></script>
 <script src="js/agent-store.js"></script>
 <script src="js/agent-polish.js"></script>
+<script src="js/gen-ui.js"></script>
 <script src="js/chat.js"></script>
 <script src="js/voice.js"></script>
 <script src="js/tasks.js"></script>

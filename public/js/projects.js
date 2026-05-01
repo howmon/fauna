@@ -215,6 +215,7 @@ function updateProjectIndicator() {
     pill.style.display = 'none';
     nameEl.textContent = '';
   }
+  _updateMoveToProjectBtn();
 }
 
 async function setActiveProject(id) {
@@ -1255,6 +1256,183 @@ async function saveArtifactToProject(artifactId) {
     renderProjectContextBar();
     _showToast('Saved to ' + proj.name);
   } catch(e) { _showToast('Error: ' + e.message, true); }
+}
+
+// ── Save a gen-ui spec to a project as a JSON context ────────────────────
+
+async function saveGenUIToProject(specJson, title) {
+  if (state.activeProjectId) {
+    // Already in a project — save directly
+    var proj = _activeProject();
+    try {
+      var r = await fetch('/api/projects/' + proj.id + '/contexts/from-artifact', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: title || 'UI Component', content: specJson, type: 'json' })
+      });
+      if (!r.ok) throw new Error((await r.json()).error);
+      await _refreshProject(proj.id);
+      renderProjectContextBar();
+      _showToast('Saved to ' + proj.name);
+    } catch(e) { _showToast('Error: ' + e.message, true); }
+  } else {
+    // Not in a project — show project picker
+    _openGenUIProjectPicker(specJson, title);
+  }
+}
+
+function _openGenUIProjectPicker(specJson, title) {
+  var existing = document.getElementById('gui-proj-picker-overlay');
+  if (existing) existing.remove();
+
+  var overlay = document.createElement('div');
+  overlay.id = 'gui-proj-picker-overlay';
+  overlay.className = 'proj-picker-overlay';
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+
+  var projList = (state.projects || []).map(function(p) {
+    return '<div class="proj-picker-item" onclick="_saveGenUIToSpecificProject(\'' +
+      _projEsc(p.id) + '\',document.getElementById(\'gui-proj-picker-overlay\'))">' +
+      '<span class="proj-dot proj-color-' + _projEsc(p.color) + '"></span>' +
+      '<span class="proj-picker-name">' + _projEsc(p.name) + '</span>' +
+    '</div>';
+  }).join('') || '<div style="padding:12px;color:var(--fau-text-dim)">No projects yet</div>';
+
+  overlay.innerHTML =
+    '<div class="proj-picker-panel">' +
+      '<div class="proj-picker-header">' +
+        '<span><i class="ti ti-folder-plus"></i> Add to Project</span>' +
+        '<button onclick="document.getElementById(\'gui-proj-picker-overlay\').remove()"><i class="ti ti-x"></i></button>' +
+      '</div>' +
+      '<div style="padding:8px 12px;font-size:11px;color:var(--fau-text-muted)">Save <strong>' + _projEsc(title || 'UI Component') + '</strong> as a project context</div>' +
+      '<div class="proj-picker-list">' + projList + '</div>' +
+      '<div class="proj-picker-footer">' +
+        '<button class="proj-action-btn" onclick="_createProjectAndSaveGenUI()"><i class="ti ti-plus"></i> New project</button>' +
+      '</div>' +
+    '</div>';
+
+  // Stash spec on the overlay so sub-functions can reach it
+  overlay._guiSpecJson = specJson;
+  overlay._guiTitle    = title;
+  document.body.appendChild(overlay);
+}
+
+async function _saveGenUIToSpecificProject(projectId, overlay) {
+  var specJson = overlay && overlay._guiSpecJson;
+  var title    = overlay && overlay._guiTitle;
+  if (overlay) overlay.remove();
+  try {
+    var r = await fetch('/api/projects/' + projectId + '/contexts/from-artifact', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: title || 'UI Component', content: specJson, type: 'json' })
+    });
+    if (!r.ok) throw new Error((await r.json()).error);
+    var proj = state.projects.find(function(p) { return p.id === projectId; });
+    await _refreshProject(projectId);
+    _showToast('Saved to ' + (proj ? proj.name : 'project'));
+  } catch(e) { _showToast('Error: ' + e.message, true); }
+}
+
+async function _createProjectAndSaveGenUI() {
+  var overlay = document.getElementById('gui-proj-picker-overlay');
+  var specJson = overlay && overlay._guiSpecJson;
+  var title    = overlay && overlay._guiTitle;
+  if (overlay) overlay.remove();
+
+  // Reuse the create-project dialog, then hook into submit
+  openCreateProjectDialog();
+  // After project creation the spec will need to be saved manually —
+  // store pending data on window so submitCreateProject can pick it up
+  window._pendingGenUISpec = { specJson: specJson, title: title };
+}
+
+// ── Move current conversation into a project ─────────────────────────────
+
+function openMoveConversationToProject() {
+  var conv = typeof getConv === 'function' && state.currentId ? getConv(state.currentId) : null;
+  if (!conv) { _showToast('No active conversation', true); return; }
+
+  var existing = document.getElementById('move-conv-proj-overlay');
+  if (existing) existing.remove();
+
+  var overlay = document.createElement('div');
+  overlay.id = 'move-conv-proj-overlay';
+  overlay.className = 'proj-picker-overlay';
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+
+  var projList = (state.projects || []).map(function(p) {
+    var isLinked = conv.projectId === p.id;
+    return '<div class="proj-picker-item' + (isLinked ? ' active' : '') + '" onclick="_linkConvToProject(\'' +
+      _projEsc(p.id) + '\',document.getElementById(\'move-conv-proj-overlay\'))">' +
+      '<span class="proj-dot proj-color-' + _projEsc(p.color) + '"></span>' +
+      '<span class="proj-picker-name">' + _projEsc(p.name) + '</span>' +
+      (isLinked ? '<span style="margin-left:auto;font-size:10px;color:var(--accent)"><i class="ti ti-check"></i></span>' : '') +
+    '</div>';
+  }).join('') || '<div style="padding:12px;color:var(--fau-text-dim)">No projects yet</div>';
+
+  var removeRow = conv.projectId
+    ? '<div class="proj-picker-item" onclick="_linkConvToProject(null,document.getElementById(\'move-conv-proj-overlay\'))" style="color:var(--fau-text-muted)">' +
+        '<i class="ti ti-folder-x" style="font-size:13px"></i> <span>Remove from project</span>' +
+      '</div>'
+    : '';
+
+  overlay.innerHTML =
+    '<div class="proj-picker-panel">' +
+      '<div class="proj-picker-header">' +
+        '<span><i class="ti ti-folder-symlink"></i> Move to Project</span>' +
+        '<button onclick="document.getElementById(\'move-conv-proj-overlay\').remove()"><i class="ti ti-x"></i></button>' +
+      '</div>' +
+      '<div style="padding:8px 12px;font-size:11px;color:var(--fau-text-muted)">Assign this conversation to a project</div>' +
+      '<div class="proj-picker-list">' + projList + removeRow + '</div>' +
+      '<div class="proj-picker-footer">' +
+        '<button class="proj-action-btn" onclick="_createProjectAndMoveConv()"><i class="ti ti-plus"></i> New project</button>' +
+      '</div>' +
+    '</div>';
+
+  document.body.appendChild(overlay);
+}
+
+async function _linkConvToProject(projectId, overlay) {
+  if (overlay) overlay.remove();
+  var conv = typeof getConv === 'function' && state.currentId ? getConv(state.currentId) : null;
+  if (!conv) return;
+
+  var oldProjectId = conv.projectId;
+  conv.projectId = projectId || undefined;
+  if (!projectId) delete conv.projectId;
+
+  if (typeof saveConversations === 'function') saveConversations();
+  if (typeof renderConvList === 'function') renderConvList();
+
+  // Notify backend
+  if (projectId) {
+    fetch('/api/projects/' + projectId + '/conversations', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ convId: conv.id })
+    }).catch(function(){});
+  }
+
+  var proj = projectId && state.projects.find(function(p) { return p.id === projectId; });
+  _showToast(proj ? 'Moved to ' + proj.name : 'Removed from project');
+
+  // Refresh topbar button state
+  _updateMoveToProjectBtn();
+}
+
+async function _createProjectAndMoveConv() {
+  var overlay = document.getElementById('move-conv-proj-overlay');
+  if (overlay) overlay.remove();
+  window._pendingMoveConvId = state.currentId;
+  openCreateProjectDialog();
+}
+
+// Update the topbar "Move to Project" button visibility
+function _updateMoveToProjectBtn() {
+  var btn = document.getElementById('topbar-move-to-project-btn');
+  if (!btn) return;
+  // Show when there is no active project OR when the current conv is not in the active project
+  var conv = typeof getConv === 'function' && state.currentId ? getConv(state.currentId) : null;
+  var inProject = conv && conv.projectId && conv.projectId === state.activeProjectId;
+  btn.style.display = inProject ? 'none' : '';
 }
 
 // ── Sources Tab ───────────────────────────────────────────────────────────
@@ -2567,6 +2745,37 @@ async function submitCreateProject() {
     await setActiveProject(proj.id);
     openProjectHub(type === 'design' ? 'design' : 'files');
     _showToast('Project created');
+
+    // Handle pending gen-ui spec save (from _createProjectAndSaveGenUI)
+    if (window._pendingGenUISpec) {
+      var pending = window._pendingGenUISpec;
+      window._pendingGenUISpec = null;
+      try {
+        var sr = await fetch('/api/projects/' + proj.id + '/contexts/from-artifact', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: pending.title || 'UI Component', content: pending.specJson, type: 'json' })
+        });
+        if (sr.ok) { await _refreshProject(proj.id); renderProjectContextBar(); _showToast('UI saved to ' + proj.name); }
+      } catch(_) {}
+    }
+
+    // Handle pending conversation move (from _createProjectAndMoveConv)
+    if (window._pendingMoveConvId) {
+      var convId = window._pendingMoveConvId;
+      window._pendingMoveConvId = null;
+      var conv = typeof getConv === 'function' ? getConv(convId) : null;
+      if (conv) {
+        conv.projectId = proj.id;
+        if (typeof saveConversations === 'function') saveConversations();
+        if (typeof renderConvList === 'function') renderConvList();
+        fetch('/api/projects/' + proj.id + '/conversations', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ convId: convId })
+        }).catch(function(){});
+        _showToast('Conversation moved to ' + proj.name);
+        _updateMoveToProjectBtn();
+      }
+    }
   } catch(e) { _showToast('Error: ' + e.message, true); }
 }
 
