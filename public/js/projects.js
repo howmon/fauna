@@ -398,27 +398,35 @@ function _renderProjectHubBody(proj) {
     // Design settings panel
     var d = proj.design || {};
     body.innerHTML =
-      '<div class="proj-section">' +
-        '<div class="proj-section-header"><i class="ti ti-layout-2"></i> Design Settings</div>' +
-        '<div class="proj-settings-row"><label>Skills</label>' +
-          '<div class="proj-skill-checks" id="proj-hub-skill-checks">Loading…</div>' +
+      '<div class="proj-design-ready">' +
+        '<div class="proj-design-ready-icon"><i class="ti ti-sparkles"></i></div>' +
+        '<div class="proj-design-ready-title">Your design project is ready</div>' +
+        '<div class="proj-design-ready-desc">Close this panel and start chatting — describe what you want to build and the AI will generate it. The settings below are optional and can be changed any time.</div>' +
+        '<button class="proj-design-start-btn" onclick="closeProjectHub()"><i class="ti ti-arrow-right"></i> Start designing</button>' +
+      '</div>' +
+      '<details class="proj-design-settings-details">' +
+        '<summary class="proj-design-settings-summary"><i class="ti ti-adjustments-horizontal"></i> Settings (optional)</summary>' +
+        '<div class="proj-section proj-design-settings-body">' +
+          '<div class="proj-settings-row"><label>Skills<span class="proj-settings-hint">Choose what kinds of design output to focus on</span></label>' +
+            '<div class="proj-skill-checks" id="proj-hub-skill-checks">Loading…</div>' +
+          '</div>' +
+          '<div class="proj-settings-row"><label>Design System<span class="proj-settings-hint">Visual style foundation</span></label>' +
+            '<select class="proj-input" data-field="systemId" onchange="_saveDesignField(\'' + proj.id + '\', this)"></select>' +
+          '</div>' +
+          '<div class="proj-settings-row"><label>Platform<span class="proj-settings-hint">Target viewport</span></label>' +
+            '<select class="proj-input" data-field="platform" onchange="_saveDesignField(\'' + proj.id + '\', this)">' +
+              '<option value="desktop"' + (d.platform !== 'mobile' ? ' selected' : '') + '>Desktop</option>' +
+              '<option value="mobile"'  + (d.platform === 'mobile'  ? ' selected' : '') + '>Mobile</option>' +
+            '</select>' +
+          '</div>' +
+          '<div class="proj-settings-row"><label>Fidelity<span class="proj-settings-hint">How polished the output should be</span></label>' +
+            '<select class="proj-input" data-field="fidelity" onchange="_saveDesignField(\'' + proj.id + '\', this)">' +
+              '<option value="hi"' + (d.fidelity !== 'lo' ? ' selected' : '') + '>High (pixel-ready HTML/CSS)</option>' +
+              '<option value="lo"' + (d.fidelity === 'lo'  ? ' selected' : '') + '>Low (wireframe sketch)</option>' +
+            '</select>' +
+          '</div>' +
         '</div>' +
-        '<div class="proj-settings-row"><label>Design System</label>' +
-          '<select class="proj-input" data-field="systemId" onchange="_saveDesignField(\'' + proj.id + '\', this)"></select>' +
-        '</div>' +
-        '<div class="proj-settings-row"><label>Platform</label>' +
-          '<select class="proj-input" data-field="platform" onchange="_saveDesignField(\'' + proj.id + '\', this)">' +
-            '<option value="desktop"' + (d.platform !== 'mobile' ? ' selected' : '') + '>Desktop</option>' +
-            '<option value="mobile"'  + (d.platform === 'mobile'  ? ' selected' : '') + '>Mobile</option>' +
-          '</select>' +
-        '</div>' +
-        '<div class="proj-settings-row"><label>Fidelity</label>' +
-          '<select class="proj-input" data-field="fidelity" onchange="_saveDesignField(\'' + proj.id + '\', this)">' +
-            '<option value="hi"' + (d.fidelity !== 'lo' ? ' selected' : '') + '>High (pixel-ready)</option>' +
-            '<option value="lo"' + (d.fidelity === 'lo'  ? ' selected' : '') + '>Low (wireframe)</option>' +
-          '</select>' +
-        '</div>' +
-      '</div>';
+      '</details>';
     // Populate skill checkboxes and system select via API
     if (typeof loadDesignCatalog === 'function') {
       loadDesignCatalog(function(catalog) {
