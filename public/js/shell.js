@@ -11,8 +11,11 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
 
     var execId  = 'se-' + Date.now() + '-' + Math.random().toString(36).slice(2);
     var targetConv = getConv(convId || state.currentId);
-    var autoRun = !noAutoRun && state.autoRunShell && (targetConv ? (targetConv._autoFeedDepth || 0) : 0) < 10;
-    dbg('  ↳ block: ' + rawCode.slice(0,60) + ' autoRun=' + autoRun + ' depth=' + (targetConv ? targetConv._autoFeedDepth || 0 : 0), 'cmd');
+    var depth = targetConv ? (targetConv._autoFeedDepth || 0) : 0;
+    var DEPTH_LIMIT = 20;
+    var autoRun = !noAutoRun && state.autoRunShell && depth < DEPTH_LIMIT;
+    var depthLimited = !noAutoRun && state.autoRunShell && depth >= DEPTH_LIMIT;
+    dbg('  ↳ block: ' + rawCode.slice(0,60) + ' autoRun=' + autoRun + ' depth=' + depth, 'cmd');
 
     var widget = document.createElement('div');
     widget.className = 'shell-exec-block';
@@ -24,6 +27,7 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
         '<i class="ti ti-terminal-2"></i>' +
         '<span>Shell Command</span>' +
         (autoRun ? '<span class="shell-exec-autorun-badge">auto-run</span>' : '') +
+        (depthLimited ? '<span class="shell-exec-autorun-badge" style="background:var(--warn,#f59e0b);color:#000">paused — click Run</span>' : '') +
         '<div class="shell-exec-btns">' +
           '<button class="shell-exec-run" id="' + execId + '-run" ' +
             'onclick="runShellExec(\'' + execId + '\')"><i class="ti ti-player-play"></i> Run</button>' +
@@ -32,12 +36,26 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
         '</div>' +
       '</div>' +
       '<div class="shell-exec-code">' + escHtml(rawCode) + '</div>' +
-      '<div class="shell-exec-result" id="' + execId + '-result" style="display:none"></div>';
+      '<div class="shell-exec-result" id="' + execId + '-result"' + (depthLimited ? '' : ' style="display:none"') + '>' +
+        (depthLimited ? '<span class="se-meta">Auto-run paused after ' + DEPTH_LIMIT + ' steps — click Run to continue.</span>' : '') +
+      '</div>';
     pre.parentNode.replaceChild(widget, pre);
 
     // Auto-run after a short delay if enabled
     if (autoRun) {
       setTimeout(function() { runShellExec(execId, { autoFeed: true }); }, 350);
+    }
+    // If depth limit hit, notify AI once so it stops looping
+    if (depthLimited && targetConv && !targetConv._depthLimitNotified) {
+      targetConv._depthLimitNotified = true;
+      setTimeout(function() {
+        sendDirectMessage(
+          'Auto-run has been paused after ' + DEPTH_LIMIT + ' consecutive steps as a safety measure. ' +
+          'The command `' + rawCode.slice(0, 120) + '` was NOT run automatically. ' +
+          'Please summarise what has been completed so far and ask the user if they want to continue.',
+          { fromAutoFeed: true, isAutoFeed: true, targetConvId: convId || state.currentId }
+        );
+      }, 400);
     }
   });
 }

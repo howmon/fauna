@@ -89,6 +89,7 @@ async function sendDirectMessage(content, opts) {
   if (conv._cancelled) return;
   if (conv._streaming) return;
   if (!opts.fromAutoFeed && !opts.isBrowserFeed) conv._autoFeedDepth = 0;
+  if (!opts.fromAutoFeed && !opts.isBrowserFeed) conv._depthLimitNotified = false;
   var isCurrentConv = (targetId === state.currentId);
 
   var displayText = typeof content === 'string' ? content
@@ -148,6 +149,7 @@ async function sendMessage(opts) {
   var conv = getConv(state.currentId);
   if (!conv) return;
   if (!opts.fromAutoFeed) conv._autoFeedDepth = 0; // user-initiated → reset chain
+  if (!opts.fromAutoFeed) conv._depthLimitNotified = false;
   if (conv._streaming) {
     // Safety: if streaming flag is stale (>90s), force reset
     if (Date.now() - (conv._streamingStart || 0) > 90000) {
