@@ -2,6 +2,7 @@
 
 var _browserTabsByConv = {};  // convId → { tabs: [{id, title, url, wv}], activeTabId }
 var _tabIdCounter = 0;
+var _domReadyWebviews = new WeakSet(); // tracks webviews that have fired dom-ready
 var _browserUA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
 function _getConvBrowser(convId) {
@@ -56,7 +57,11 @@ function _renderTabBar() {
 }
 
 function _initWebviewEvents(wv, tabId, convId) {
+  wv.addEventListener('dom-ready', function() {
+    _domReadyWebviews.add(wv);
+  });
   wv.addEventListener('did-start-loading', function() {
+    _domReadyWebviews.delete(wv);
     if (_getConvActiveTabId() !== tabId || state.currentId !== convId) return;
     document.getElementById('browser-loading-bar').classList.add('loading');
     document.getElementById('browser-status').textContent = 'Loading…';
@@ -406,13 +411,19 @@ async function browserScreenshot() {
 // Timeout prevents hangs when the webview JS never resolves (e.g. infinite loop, stuck page).
 // Retry handles GUEST_VIEW_MANAGER_CALL errors when the renderer is mid-navigation.
 function _waitForDomReady(wv) {
+  if (_domReadyWebviews.has(wv)) return Promise.resolve();
   return new Promise(function(resolve) {
-    wv.addEventListener('dom-ready', function onReady() {
+    function onReady() {
+      wv.removeEventListener('dom-ready', onReady);
+      clearTimeout(fallback);
+      resolve();
+    }
+    wv.addEventListener('dom-ready', onReady);
+    // Safety fallback — if dom-ready already fired and WeakSet missed it
+    var fallback = setTimeout(function() {
       wv.removeEventListener('dom-ready', onReady);
       resolve();
-    });
-    // Resolve immediately if already loaded (dom-ready won't fire again) — safety fallback 5s
-    setTimeout(resolve, 5000);
+    }, 5000);
   });
 }
 
