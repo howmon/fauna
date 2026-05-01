@@ -335,6 +335,8 @@ function printDesignArtifact(id) {
   win.focus();
   setTimeout(function() { win.print(); }, 500);
 }
+
+function setArtifactView(codeMode) {
   state.artifactCodeView = codeMode;
   renderArtifactContent();
 }

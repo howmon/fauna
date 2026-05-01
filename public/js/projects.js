@@ -343,7 +343,7 @@ function _renderProjectHub(proj) {
     { id: 'settings', icon: 'ti-settings',      label: 'Settings' },
   ];
   // Add Design tab for design projects
-  if (proj.design && proj.design.skillId) {
+  if (proj.design && proj.design.projectType === 'design') {
     TABS.splice(1, 0, { id: 'design', icon: 'ti-layout-2', label: 'Design' });
   }
   var tabsEl = document.getElementById('project-hub-tabs');
@@ -2369,6 +2369,7 @@ function openProjectPicker() {
       return '<div class="proj-picker-item' + (p.id === state.activeProjectId ? ' active' : '') + '" onclick="setActiveProject(\'' + p.id + '\');document.getElementById(\'proj-picker-overlay\').remove()">' +
         '<span class="proj-dot proj-color-' + _projEsc(p.color) + '"></span>' +
         '<span class="proj-picker-name">' + _projEsc(p.name) + '</span>' +
+        (p.design && p.design.projectType === 'design' ? '<span class="proj-design-badge"><i class="ti ti-layout-2"></i> Design</span>' : '') +
       '</div>';
     }).join('') : '<div style="padding:12px;color:var(--text-dim)">No projects yet</div>') +
     '</div>' +
@@ -2467,9 +2468,9 @@ async function _saveDesignField(projectId, selectEl) {
     // Update cached state
     var proj = (state.projects || []).find(function(p){ return p.id === projectId; });
     if (proj) { if (!proj.design) proj.design = {}; proj.design[field] = value; }
-    if (typeof showToast === 'function') showToast('Saved');
+    _showToast('Saved');
   } catch(e) {
-    if (typeof showToast === 'function') showToast('Save failed: ' + e.message);
+    _showToast('Save failed: ' + e.message, true);
   }
 }
 
@@ -2511,9 +2512,9 @@ async function submitCreateProject() {
       try {
         await fetch('/api/projects/' + proj.id + '/design', {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ skillId: skillId || null, systemId: 'default', fidelity: 'hi', platform: 'desktop' })
+          body: JSON.stringify({ projectType: 'design', skillId: skillId || null, systemId: 'default', fidelity: 'hi', platform: 'desktop' })
         });
-        proj.design = { skillId: skillId || null, systemId: 'default', fidelity: 'hi', platform: 'desktop' };
+        proj.design = { projectType: 'design', skillId: skillId || null, systemId: 'default', fidelity: 'hi', platform: 'desktop' };
       } catch(_) {}
     }
     state.projects.push(proj);

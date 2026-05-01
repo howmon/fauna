@@ -1115,7 +1115,7 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
       try {
         // Design project: prepend the full layered design prompt
         const _proj = getProject(projectId);
-        if (_proj && _proj.design && _proj.design.skillId) {
+        if (_proj && _proj.design && _proj.design.projectType === 'design') {
           const _dp = composeDesignPrompt({
             skillId:      _proj.design.skillId,
             systemId:     _proj.design.systemId || 'default',
