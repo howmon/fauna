@@ -224,7 +224,7 @@ function renderArtifactContent() {
     content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
       '<div class="artifact-image-wrap">' +
         (src ? '<img src="' + src + '" alt="' + escHtml(a.title) + '" id="artimg-' + a.id + '">'
-             : '<div id="artimg-' + a.id + '" style="color:var(--text-muted);font-size:12px">Loading…</div>') +
+             : '<div id="artimg-' + a.id + '" style="color:var(--fau-text-muted);font-size:12px">Loading…</div>') +
       '</div>' +
     '</div>';
 

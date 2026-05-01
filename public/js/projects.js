@@ -144,7 +144,7 @@ function _renderAllProjectsPage() {
           ? '<button class="proj-action-btn" onclick="openProjectHub();closeAllProjects()"><i class="ti ti-layout-sidebar-right-expand"></i> Open Hub</button>' +
             '<button class="proj-icon-btn" onclick="clearActiveProject();closeAllProjects()" title="Deactivate"><i class="ti ti-x"></i></button>'
           : '<button class="proj-action-btn" onclick="setActiveProject(\'' + _projEsc(p.id) + '\');closeAllProjects()"><i class="ti ti-player-play"></i> Activate</button>') +
-        '<button class="proj-icon-btn" style="color:var(--text-muted)" onclick="_confirmDeleteProjectFromList(\'' + _projEsc(p.id) + '\')" title="Delete project"><i class="ti ti-trash"></i></button>' +
+        '<button class="proj-icon-btn" style="color:var(--fau-text-muted)" onclick="_confirmDeleteProjectFromList(\'' + _projEsc(p.id) + '\')" title="Delete project"><i class="ti ti-trash"></i></button>' +
       '</div>' +
     '</div>';
   }).join('');
@@ -1063,7 +1063,7 @@ function _renderContextsTab(proj) {
   (sorted.length ? sorted.map(_renderContextCard).join('') :
     '<div class="proj-hub-empty"><i class="ti ti-files" style="font-size:28px;opacity:.3"></i>' +
     '<div>No contexts yet</div>' +
-    '<div style="font-size:11px;color:var(--text-dim)">Save files, URLs, or AI artifacts as named contexts</div></div>');
+    '<div style="font-size:11px;color:var(--fau-text-dim)">Save files, URLs, or AI artifacts as named contexts</div></div>');
 }
 
 function _renderContextCard(c) {
@@ -1268,7 +1268,7 @@ function _renderSourcesTab(proj) {
   (srcs.length ? srcs.map(function(s) { return _renderSourceCard(proj, s); }).join('') :
     '<div class="proj-hub-empty"><i class="ti ti-folder" style="font-size:28px;opacity:.3"></i>' +
     '<div>No sources yet</div>' +
-    '<div style="font-size:11px;color:var(--text-dim)">Add a local folder or connect a GitHub/GitLab repo</div></div>');
+    '<div style="font-size:11px;color:var(--fau-text-dim)">Add a local folder or connect a GitHub/GitLab repo</div></div>');
 }
 
 function _renderSourceCard(proj, s) {
@@ -1280,7 +1280,7 @@ function _renderSourceCard(proj, s) {
       '<span class="proj-src-name">' + _projEsc(s.name) + '</span>' +
       '<span class="proj-src-status ' + statusCls + '">' + _projEsc(s.status) + '</span>' +
       '<button class="proj-icon-btn" onclick="syncProjectSource(\'' + s.id + '\')" title="Sync"><i class="ti ti-refresh"></i></button>' +
-      '<button class="proj-icon-btn" style="color:var(--text-muted)" onclick="deleteProjectSource(\'' + s.id + '\')" title="Remove"><i class="ti ti-trash"></i></button>' +
+      '<button class="proj-icon-btn" style="color:var(--fau-text-muted)" onclick="deleteProjectSource(\'' + s.id + '\')" title="Remove"><i class="ti ti-trash"></i></button>' +
     '</div>' +
     (s.path ? '<div class="proj-src-path">' + _projEsc(s.path) + '</div>' : '') +
     (s.url && !s.path ? '<div class="proj-src-path">' + _projEsc(s.url) + '</div>' : '') +
@@ -2180,7 +2180,7 @@ function _renderConvsTab(proj) {
     return header +
       '<div class="proj-hub-empty"><i class="ti ti-messages" style="font-size:28px;opacity:.3"></i>' +
       '<div>No conversations yet</div>' +
-      '<div style="font-size:11px;color:var(--text-dim)">New conversations while this project is active will appear here with all project context included</div></div>';
+      '<div style="font-size:11px;color:var(--fau-text-dim)">New conversations while this project is active will appear here with all project context included</div></div>';
   }
   return header + convs.map(function(c) {
     var isActive = c.id === state.currentId;
@@ -2387,7 +2387,7 @@ function openProjectPicker() {
         '<span class="proj-picker-name">' + _projEsc(p.name) + '</span>' +
         (p.design && p.design.projectType === 'design' ? '<span class="proj-design-badge"><i class="ti ti-layout-2"></i> Design</span>' : '') +
       '</div>';
-    }).join('') : '<div style="padding:12px;color:var(--text-dim)">No projects yet</div>') +
+    }).join('') : '<div style="padding:12px;color:var(--fau-text-dim)">No projects yet</div>') +
     '</div>' +
     '<div class="proj-picker-footer">' +
       '<button class="proj-action-btn" onclick="openCreateProjectDialog();document.getElementById(\'proj-picker-overlay\').remove()"><i class="ti ti-plus"></i> New project</button>' +

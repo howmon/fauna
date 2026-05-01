@@ -1354,7 +1354,7 @@ function updateTestRunnerUI(container, tests, results, currentIdx, phase) {
     } else if (i === currentIdx && phase === 'running') {
       html += '<div class="builder-test-card"><div class="builder-test-card-header"><span class="builder-test-status"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i></span><span class="builder-test-title">Test #' + (i + 1) + ' — running…</span></div></div>';
     } else {
-      html += '<div class="builder-test-card"><div class="builder-test-card-header"><span class="builder-test-status"><i class="ti ti-clock" style="color:var(--text-muted)"></i></span><span class="builder-test-title">Test #' + (i + 1) + '</span></div></div>';
+      html += '<div class="builder-test-card"><div class="builder-test-card-header"><span class="builder-test-status"><i class="ti ti-clock" style="color:var(--fau-text-muted)"></i></span><span class="builder-test-title">Test #' + (i + 1) + '</span></div></div>';
     }
   }
 

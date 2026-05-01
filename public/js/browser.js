@@ -1543,7 +1543,7 @@ async function _loadExtTabs() {
   if (!_extConnectedBrowsers.length) {
     menu.innerHTML = '<div class="ext-menu-header">Browser Extension</div>' +
       '<div class="ext-menu-empty"><i class="ti ti-plug-off" style="font-size:16px;display:block;margin-bottom:4px"></i>' +
-      'Extension not connected<br><span style="font-size:10px;color:var(--text-muted)">Install from Plugins &amp; Extensions panel</span></div>';
+      'Extension not connected<br><span style="font-size:10px;color:var(--fau-text-muted)">Install from Plugins &amp; Extensions panel</span></div>';
     return;
   }
 
@@ -1570,9 +1570,9 @@ async function _loadExtTabs() {
 
     var multiBrowser = results.length > 1;
     var html = '<div class="ext-menu-search-wrap">' +
-      '<i class="ti ti-search" style="font-size:11px;color:var(--text-muted);flex-shrink:0"></i>' +
+      '<i class="ti ti-search" style="font-size:11px;color:var(--fau-text-muted);flex-shrink:0"></i>' +
       '<input id="ext-tab-search" type="text" placeholder="Filter tabs…" autocomplete="off" ' +
-        'style="flex:1;background:none;border:none;outline:none;font-size:12px;color:var(--text);padding:0" ' +
+        'style="flex:1;background:none;border:none;outline:none;font-size:12px;color:var(--fau-text);padding:0" ' +
         'oninput="_filterExtTabs(this.value)">' +
     '</div>';
 

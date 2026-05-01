@@ -416,7 +416,7 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
         _r.classList.remove('working', 'pending');
         _r.classList.add('cancelled');
         var _st = _r.querySelector('.delegation-agent-status');
-        if (_st) _st.innerHTML = '<i class="ti ti-minus" style="font-size:10px;color:var(--text-muted)"></i>';
+        if (_st) _st.innerHTML = '<i class="ti ti-minus" style="font-size:10px;color:var(--fau-text-muted)"></i>';
       }
     });
     if (headerEl) { headerEl.innerHTML = '<i class="ti ti-player-stop-filled"></i> Stopped by user'; headerEl.classList.add('cancelled'); }
@@ -755,7 +755,7 @@ async function streamResponse(conv) {
       if (delegations.length > 0 && typeof isOrchestratorActive === 'function' && isOrchestratorActive()) {
         // Strip delegation blocks from displayed content
         var cleanBuffer = stripDelegationBlocks(renderBuffer || buffer);
-        bodyEl.innerHTML = cleanBuffer.trim() ? renderMarkdown(cleanBuffer) : '<span style="color:var(--text-muted)">Delegating tasks…</span>';
+        bodyEl.innerHTML = cleanBuffer.trim() ? renderMarkdown(cleanBuffer) : '<span style="color:var(--fau-text-muted)">Delegating tasks…</span>';
         scrollBottom();
 
         // Extract last user message text for synthesis context
@@ -790,7 +790,7 @@ async function streamResponse(conv) {
         }
         setBusy(false);
       } else {
-        bodyEl.innerHTML = renderBuffer ? renderMarkdown(renderBuffer) : '<span style="color:var(--text-muted)">No response.</span>';
+        bodyEl.innerHTML = renderBuffer ? renderMarkdown(renderBuffer) : '<span style="color:var(--fau-text-muted)">No response.</span>';
 
         var shellBlocks = (msgEl.querySelectorAll('code.language-shell-exec')||[]).length;
         dbg('  code blocks found: shell-exec=' + shellBlocks, 'info');
@@ -882,10 +882,10 @@ async function maybeCompressConversation(conv) {
     if (state.currentId === conv.id) {
       var indicator = document.createElement('div');
       indicator.className = 'msg system-msg';
-      indicator.innerHTML = '<div class="msg-body" style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted)">' +
+      indicator.innerHTML = '<div class="msg-body" style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--fau-text-muted)">' +
         '<i class="ti ti-compress" style="font-size:13px"></i>' +
         '<span>Older messages summarized to save context — task state preserved</span>' +
-        '<button onclick="showContextSummary(\'' + conv.id + '\')" style="margin-left:auto;font-size:10px;opacity:.7;background:none;border:1px solid var(--border);border-radius:3px;padding:1px 6px;cursor:pointer;color:inherit">View</button>' +
+        '<button onclick="showContextSummary(\'' + conv.id + '\')" style="margin-left:auto;font-size:10px;opacity:.7;background:none;border:1px solid var(--fau-border);border-radius:3px;padding:1px 6px;cursor:pointer;color:inherit">View</button>' +
       '</div>';
       getConvInner(conv.id).appendChild(indicator);
     }

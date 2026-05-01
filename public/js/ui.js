@@ -194,7 +194,7 @@ async function loadMobilePairQR() {
     var tunnelLine = data.tunnelUrl ? '<br><strong>Tunnel:</strong> <span style="color:var(--teal)">' + data.tunnelUrl + '</span>' : '';
     info.innerHTML = '<strong>Server:</strong> ' + (data.hostname || 'unknown') + '<br>' +
       '<strong>Address:</strong> ' + ipList + tunnelLine + '<br>' +
-      '<strong>Token:</strong> <code style="font-size:10px;background:var(--surface3);padding:1px 4px;border-radius:3px">' + data.token.slice(0,8) + '…</code>';
+      '<strong>Token:</strong> <code style="font-size:10px;background:var(--fau-surface3);padding:1px 4px;border-radius:3px">' + data.token.slice(0,8) + '…</code>';
     // Update tunnel button state
     _updateTunnelBtn(!!data.tunnelUrl, data.tunnelUrl);
   } catch (e) {
@@ -781,7 +781,7 @@ async function fetchUrl() {
   if (!url) return;
   var status = document.getElementById('url-modal-status');
   status.innerHTML = '<i class="ti ti-loader"></i> Fetching…';
-  status.style.color = 'var(--text-dim)';
+  status.style.color = 'var(--fau-text-dim)';
   try {
     var r = await fetch('/api/fetch-url', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -909,7 +909,7 @@ function toggleSidebar() {
   function applySidebarWidth(w) {
     var sb = document.getElementById('sidebar');
     if (!sb) return;
-    document.documentElement.style.setProperty('--sidebar-w', w + 'px');
+    document.documentElement.style.setProperty('--fau-sidebar-w', w + 'px');
     sb.style.width = w + 'px';
     sb.style.minWidth = w + 'px';
   }
@@ -1321,7 +1321,7 @@ async function injectOrganizerCard(msgEl, buffer) {
     '</div>' +
     '<div class="organizer-preview">' +
       summaryHtml +
-      '<br><span style="color:var(--text-muted);font-size:11px">' + preview.moves.length + ' files · ' + (preview.skipped || []).length + ' folders/unmatched skipped</span>' +
+      '<br><span style="color:var(--fau-text-muted);font-size:11px">' + preview.moves.length + ' files · ' + (preview.skipped || []).length + ' folders/unmatched skipped</span>' +
     '</div>' +
     '<div class="organizer-actions">' +
       '<button class="organizer-btn primary" onclick="runOrganizerCard(\'' + cardId + '\')"><i class="ti ti-player-play"></i> Organise Now</button>' +
@@ -1554,7 +1554,7 @@ async function refreshPermissions() {
     document.getElementById('ob-checking-hint').textContent =
       allReqOk ? 'All required permissions granted' : 'Some permissions need your attention'; // plain text hint
     document.getElementById('ob-checking-hint').style.color =
-      allReqOk ? 'var(--success)' : 'var(--text-muted)';
+      allReqOk ? 'var(--success)' : 'var(--fau-text-muted)';
   } catch (e) {
     document.getElementById('ob-checking-hint').textContent = 'Could not check permissions';
   }

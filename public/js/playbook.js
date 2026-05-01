@@ -23,7 +23,7 @@ function renderPlaybook() {
   var all = loadPlaybook();
   var list = document.getElementById('playbook-list');
   if (!all.length) {
-    list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:12px">No saved instructions yet.<br>The AI can save strategies automatically, or add your own below.</div>';
+    list.innerHTML = '<div style="color:var(--fau-text-muted);font-size:12px;padding:12px">No saved instructions yet.<br>The AI can save strategies automatically, or add your own below.</div>';
     return;
   }
   list.innerHTML = all.map(function(e) {
@@ -35,7 +35,7 @@ function renderPlaybook() {
         (e.autoSaved ? '<span class="pb-auto-badge">auto-saved</span>' : '') +
         '<div class="pb-row-actions">' +
           '<button title="' + (isOn ? 'Disable' : 'Enable') + '" onclick="togglePlaybookEntry(\'' + e.id + '\')">' +
-            '<i class="ti ti-' + (isOn ? 'toggle-right' : 'toggle-left') + '" style="color:' + (isOn ? 'var(--success)' : 'var(--text-muted)') + '"></i></button>' +
+            '<i class="ti ti-' + (isOn ? 'toggle-right' : 'toggle-left') + '" style="color:' + (isOn ? 'var(--success)' : 'var(--fau-text-muted)') + '"></i></button>' +
           '<button title="Edit" onclick="editPlaybookEntry(\'' + e.id + '\')"><i class="ti ti-pencil"></i></button>' +
           '<button title="Delete" onclick="deletePlaybookEntry(\'' + e.id + '\')"><i class="ti ti-trash"></i></button>' +
         '</div>' +
@@ -151,7 +151,7 @@ function extractAndRenderSaveInstruction(html, messageEl, isHistoryLoad) {
           : (addPlaybookFromAI(title, body, tags), true);
         widget.innerHTML += '<div style="padding:4px 12px 8px"><span class="si-saved"><i class="ti ti-check"></i> ' + (saved ? 'Saved to Playbook' : 'Already saved (duplicate)') + '</span></div>';
       } else {
-        widget.innerHTML += '<div style="padding:4px 12px 8px"><span style="font-size:11px;color:var(--text-dim)"><i class="ti ti-check"></i> Previously saved</span></div>';
+        widget.innerHTML += '<div style="padding:4px 12px 8px"><span style="font-size:11px;color:var(--fau-text-dim)"><i class="ti ti-check"></i> Previously saved</span></div>';
       }
 
       pre.replaceWith(widget);
@@ -189,14 +189,14 @@ async function loadMemoryFromServer() {
     renderMemoryList();
   } catch (e) {
     document.getElementById('memory-list').innerHTML =
-      '<div style="color:var(--text-muted);font-size:12px;padding:12px">Failed to load memory: ' + escHtml(e.message) + '</div>';
+      '<div style="color:var(--fau-text-muted);font-size:12px;padding:12px">Failed to load memory: ' + escHtml(e.message) + '</div>';
   }
 }
 
 function renderMemoryList() {
   var list = document.getElementById('memory-list');
   if (!_memoryCategories || !_memoryCategories.length) {
-    list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:12px">No skill categories. Click "New Category" to create one, or "Reset Built-in" to restore defaults.</div>';
+    list.innerHTML = '<div style="color:var(--fau-text-muted);font-size:12px;padding:12px">No skill categories. Click "New Category" to create one, or "Reset Built-in" to restore defaults.</div>';
     return;
   }
   list.innerHTML = _memoryCategories.map(function(cat) {
@@ -212,7 +212,7 @@ function renderMemoryList() {
           '<span class="mem-group-title">' + escHtml(g.title) + '</span>' +
           '<div class="mem-group-actions" onclick="event.stopPropagation()">' +
             '<button title="' + (isOn ? 'Disable' : 'Enable') + '" onclick="toggleMemGroup(\'' + escHtml(cat.id) + '\',\'' + escHtml(g.id) + '\')">' +
-              '<i class="ti ti-' + (isOn ? 'toggle-right' : 'toggle-left') + '" style="color:' + (isOn ? 'var(--success)' : 'var(--text-muted)') + '"></i></button>' +
+              '<i class="ti ti-' + (isOn ? 'toggle-right' : 'toggle-left') + '" style="color:' + (isOn ? 'var(--success)' : 'var(--fau-text-muted)') + '"></i></button>' +
             '<button title="Edit" onclick="editMemGroup(\'' + escHtml(cat.id) + '\',\'' + escHtml(g.id) + '\')"><i class="ti ti-pencil"></i></button>' +
             '<button title="Delete skill" onclick="deleteMemGroup(\'' + escHtml(cat.id) + '\',\'' + escHtml(g.id) + '\')"><i class="ti ti-trash" style="font-size:13px"></i></button>' +
           '</div>' +
@@ -238,13 +238,13 @@ function renderMemoryList() {
         '<span class="mem-cat-count">' + activeCount + '/' + groupCount + '</span>' +
         '<div class="mem-cat-actions" onclick="event.stopPropagation()">' +
           '<button title="' + (catOn ? 'Disable category' : 'Enable category') + '" onclick="toggleCatEnabled(\'' + escHtml(cat.id) + '\')">' +
-            '<i class="ti ti-' + (catOn ? 'toggle-right' : 'toggle-left') + '" style="color:' + (catOn ? 'var(--success)' : 'var(--text-muted)') + '"></i></button>' +
+            '<i class="ti ti-' + (catOn ? 'toggle-right' : 'toggle-left') + '" style="color:' + (catOn ? 'var(--success)' : 'var(--fau-text-muted)') + '"></i></button>' +
           '<button title="Edit keywords" onclick="editCatKeywords(\'' + escHtml(cat.id) + '\')"><i class="ti ti-hash" style="font-size:14px"></i></button>' +
           '<button title="Add skill" onclick="addSkillToCategory(\'' + escHtml(cat.id) + '\')"><i class="ti ti-plus" style="font-size:14px"></i></button>' +
           '<button title="Delete category" onclick="deleteCategory(\'' + escHtml(cat.id) + '\')"><i class="ti ti-trash" style="font-size:13px;color:#f87171"></i></button>' +
         '</div>' +
       '</div>' +
-      ((cat.keywords && cat.keywords.length) ? '<div class="mem-cat-keywords" onclick="event.stopPropagation();editCatKeywords(\'' + escHtml(cat.id) + '\')">' + cat.keywords.map(function(k) { return '<span class="mem-kw-pill">' + escHtml(k) + '</span>'; }).join('') + '</div>' : '<div class="mem-cat-keywords mem-cat-keywords-empty" onclick="event.stopPropagation();editCatKeywords(\'' + escHtml(cat.id) + '\')"><span style="font-size:11px;color:var(--text-dim);cursor:pointer">Always active — click <i class="ti ti-hash" style="font-size:11px"></i> to add keyword filters</span></div>') +
+      ((cat.keywords && cat.keywords.length) ? '<div class="mem-cat-keywords" onclick="event.stopPropagation();editCatKeywords(\'' + escHtml(cat.id) + '\')">' + cat.keywords.map(function(k) { return '<span class="mem-kw-pill">' + escHtml(k) + '</span>'; }).join('') + '</div>' : '<div class="mem-cat-keywords mem-cat-keywords-empty" onclick="event.stopPropagation();editCatKeywords(\'' + escHtml(cat.id) + '\')"><span style="font-size:11px;color:var(--fau-text-dim);cursor:pointer">Always active — click <i class="ti ti-hash" style="font-size:11px"></i> to add keyword filters</span></div>') +
       '<div class="mem-cat-body">' + groupsHtml + '</div>' +
     '</div>';
   }).join('');
@@ -301,7 +301,7 @@ async function toggleMemGroup(catId, grpId) {
       var icon = toggleBtn.querySelector('i');
       if (icon) {
         icon.className = 'ti ti-' + (g.enabled ? 'toggle-right' : 'toggle-left');
-        icon.style.color = g.enabled ? 'var(--success)' : 'var(--text-muted)';
+        icon.style.color = g.enabled ? 'var(--success)' : 'var(--fau-text-muted)';
       }
     }
   }

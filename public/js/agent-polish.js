@@ -555,7 +555,7 @@ async function executeDelegations(delegations, conv, originalMessage) {
       if (_row2 && _row2.classList.contains('working')) {
         _row2.classList.remove('working'); _row2.classList.add('cancelled');
         var _st = _row2.querySelector('.delegation-agent-status');
-        if (_st) _st.innerHTML = '<i class="ti ti-minus" style="font-size:10px;color:var(--text-muted)"></i>';
+        if (_st) _st.innerHTML = '<i class="ti ti-minus" style="font-size:10px;color:var(--fau-text-muted)"></i>';
       }
       if (_row2 && _row2.classList.contains('pending')) {
         _row2.classList.remove('pending'); _row2.classList.add('cancelled');

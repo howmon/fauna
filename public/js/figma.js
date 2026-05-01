@@ -48,13 +48,13 @@ function updateFigmaMCPBadge() {
   // Section header status label
   if (secStat) {
     secStat.textContent = enabled ? '● ON' : '○ OFF';
-    secStat.style.color = enabled ? '#62d794' : 'var(--text-muted)';
+    secStat.style.color = enabled ? '#62d794' : 'var(--fau-text-muted)';
   }
 
   if (figmaMCPChecking) {
     badge.textContent = '◌ Figma';
     badge.title = 'Checking Figma MCP…';
-    badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--surface2);color:var(--text-muted);border:1px solid var(--border);cursor:default;transition:all .2s';
+    badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--fau-surface2);color:var(--fau-text-muted);border:1px solid var(--fau-border);cursor:default;transition:all .2s';
     badge.onclick = null;
     return;
   }
@@ -72,11 +72,11 @@ function updateFigmaMCPBadge() {
   } else if (!enabled && connected) {
     badge.textContent = '◎ Figma MCP';
     badge.title = 'Figma MCP available (' + (figmaMCPStatus.toolCount || 0) + ' tools) — click to enable';
-    badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--surface2);color:var(--text-secondary,#8b8b9e);border:1px solid var(--border);cursor:pointer;transition:all .2s';
+    badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--fau-surface2);color:var(--fau-text-secondary,#8b8b9e);border:1px solid var(--fau-border);cursor:pointer;transition:all .2s';
   } else {
     badge.textContent = '◌ Figma MCP';
     badge.title = 'Figma MCP off — click to enable';
-    badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--surface2);color:var(--text-muted);border:1px solid var(--border);cursor:pointer;opacity:.6;transition:all .2s';
+    badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--fau-surface2);color:var(--fau-text-muted);border:1px solid var(--fau-border);cursor:pointer;opacity:.6;transition:all .2s';
   }
 }
 
@@ -220,7 +220,7 @@ function toggleMcpLogs() {
   var box = document.getElementById('figma-logs-box');
   var btn = document.getElementById('figma-logs-btn');
   box.style.display = figmaLogsOpen ? 'block' : 'none';
-  btn.style.background = figmaLogsOpen ? 'var(--surface3)' : '';
+  btn.style.background = figmaLogsOpen ? 'var(--fau-surface3)' : '';
   if (figmaLogsOpen) {
     refreshMcpLogs();
     figmaLogsInterval = setInterval(refreshMcpLogs, 1500);
@@ -276,7 +276,7 @@ async function loadFigmaRules() {
 function renderFigmaRules() {
   var list = document.getElementById('figma-rules-list');
   if (!figmaRules.length) {
-    list.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-muted);font-size:12px">No rules yet.<br>Add some below to guide the AI.</div>';
+    list.innerHTML = '<div style="padding:16px;text-align:center;color:var(--fau-text-muted);font-size:12px">No rules yet.<br>Add some below to guide the AI.</div>';
     return;
   }
   list.innerHTML = figmaRules.map(function(r) {

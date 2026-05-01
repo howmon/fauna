@@ -628,7 +628,7 @@ function renderSubAgentsSection() {
       '<p class="builder-hint-inline" style="margin-bottom:6px">Content appended automatically to every sub-agent\'s system prompt.</p>' +
       '<textarea class="builder-input" rows="6" placeholder="Shared infrastructure, component keys, font helpers, design tokens, etc." style="resize:vertical;font-family:monospace;font-size:12px" onchange="builderState.data.shared=this.value" oninput="builderState.data.shared=this.value">' + escHtml(builderState.data.shared || '') + '</textarea>' +
     '</div>' +
-    '<div style="height:1px;background:var(--border);margin:10px 0"></div>';
+    '<div style="height:1px;background:var(--fau-border);margin:10px 0"></div>';
 
   if (subs.length) {
     html += '<div class="builder-subagents-list">';

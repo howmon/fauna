@@ -1087,7 +1087,7 @@ async function showApproveAccessDialog(agentId) {
   if (existingRules.length) {
     existingContainer.innerHTML = existingRules.map(function(r) {
       return '<div style="display:flex;gap:6px;align-items:center;padding:2px 0;font-size:12px">' +
-        '<span style="background:var(--surface2);border-radius:4px;padding:1px 6px">' + escHtml(r.type) + '</span>' +
+        '<span style="background:var(--fau-surface2);border-radius:4px;padding:1px 6px">' + escHtml(r.type) + '</span>' +
         '<span style="font-family:monospace;flex:1">' + escHtml(r.value) + '</span>' +
       '</div>';
     }).join('');

@@ -316,7 +316,7 @@ function wrapGroupInCOT(elements, icon, label) {
   details.className = 'cot-block';
   details.innerHTML =
     '<summary>' +
-      '<i class="ti ' + icon + '" style="font-size:12px;flex-shrink:0;color:var(--text-muted)"></i>' +
+      '<i class="ti ' + icon + '" style="font-size:12px;flex-shrink:0;color:var(--fau-text-muted)"></i>' +
       '<span class="cot-label">' + escHtml(label) + '</span>' +
       '<i class="ti ti-chevron-right cot-chevron"></i>' +
     '</summary>';

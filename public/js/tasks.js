@@ -45,7 +45,7 @@ function renderTasks() {
     list.innerHTML = '<div class="tasks-empty">' +
       '<i class="ti ti-checklist" style="font-size:28px;opacity:.3"></i>' +
       '<div>' + (isFiltered ? 'No tasks for this project' : 'No tasks yet') + '</div>' +
-      '<div style="font-size:11px;color:var(--text-dim)">Create a task or ask the AI to schedule one</div>' +
+      '<div style="font-size:11px;color:var(--fau-text-dim)">Create a task or ask the AI to schedule one</div>' +
       '</div>';
     return;
   }
@@ -101,10 +101,10 @@ function _taskStatusIcon(status) {
   switch (status) {
     case 'running':   return '<i class="ti ti-loader-2 spin" style="color:var(--accent)"></i>';
     case 'scheduled': return '<i class="ti ti-clock" style="color:var(--warn)"></i>';
-    case 'pending':   return '<i class="ti ti-circle-dashed" style="color:var(--text-dim)"></i>';
+    case 'pending':   return '<i class="ti ti-circle-dashed" style="color:var(--fau-text-dim)"></i>';
     case 'completed': return '<i class="ti ti-circle-check" style="color:var(--success)"></i>';
     case 'failed':    return '<i class="ti ti-circle-x" style="color:var(--error)"></i>';
-    case 'paused':    return '<i class="ti ti-player-pause" style="color:var(--text-muted)"></i>';
+    case 'paused':    return '<i class="ti ti-player-pause" style="color:var(--fau-text-muted)"></i>';
     default:          return '<i class="ti ti-circle-dashed"></i>';
   }
 }
@@ -548,9 +548,9 @@ function _renderTaskLog(t) {
 
 function _logEventIcon(event) {
   switch (event) {
-    case 'created':     return '<i class="ti ti-circle-plus" style="color:var(--text-dim)"></i>';
+    case 'created':     return '<i class="ti ti-circle-plus" style="color:var(--fau-text-dim)"></i>';
     case 'started':     return '<i class="ti ti-player-play" style="color:var(--accent)"></i>';
-    case 'step':        return '<i class="ti ti-arrow-right" style="color:var(--text-muted)"></i>';
+    case 'step':        return '<i class="ti ti-arrow-right" style="color:var(--fau-text-muted)"></i>';
     case 'completed':   return '<i class="ti ti-circle-check" style="color:var(--success)"></i>';
     case 'failed':      return '<i class="ti ti-circle-x" style="color:var(--error)"></i>';
     case 'paused':      return '<i class="ti ti-player-pause" style="color:var(--warn)"></i>';

@@ -309,10 +309,10 @@
           <div class="toolbar-sep"></div>
           <button class="toolbar-btn" onclick="openUrlModal()" title="Add URL context"><i class="ti ti-link"></i> Add URL</button>
           <div class="toolbar-sep"></div>
-          <span id="figma-mcp-badge" style="display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--surface2);color:var(--text-muted);border:1px solid var(--border);cursor:default;transition:all .2s" title="Checking Figma MCP…">◌ Figma</span>
+          <span id="figma-mcp-badge" style="display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--fau-surface2);color:var(--fau-text-muted);border:1px solid var(--fau-border);cursor:default;transition:all .2s" title="Checking Figma MCP…">◌ Figma</span>
           <div style="position:relative;display:inline-flex">
             <span id="ext-toolbar-badge" onclick="toggleExtTabMenu()" title="Browser extension — click to insert page context"
-              style="display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--surface2);color:var(--text-muted);border:1px solid var(--border);cursor:pointer;transition:all .2s;user-select:none">
+              style="display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--fau-surface2);color:var(--fau-text-muted);border:1px solid var(--fau-border);cursor:pointer;transition:all .2s;user-select:none">
               <span id="ext-toolbar-dot" style="width:5px;height:5px;border-radius:50%;background:#444;flex-shrink:0"></span>
               <i class="ti ti-browser" style="font-size:11px"></i> <span id="ext-toolbar-label">Ext</span>
             </span>
@@ -347,7 +347,7 @@
     <div id="browser-resize-handle" title="Drag to resize"></div>
     <div id="browser-pane-header">
       <i class="ti ti-world-www" style="color:var(--accent2);font-size:14px"></i>
-      <span style="font-size:11.5px;font-weight:600;color:var(--text-dim);flex:1">Browser</span>
+      <span style="font-size:11.5px;font-weight:600;color:var(--fau-text-dim);flex:1">Browser</span>
       <button class="bpnav" onclick="closeBrowserPane()" title="Close browser pane"><i class="ti ti-x"></i></button>
     </div>
     <div id="browser-tab-bar">
@@ -419,7 +419,7 @@ Examples:
 
 <!-- ── Settings panel ─────────────────────────────────────────────── -->
 <div id="settings-panel">
-  <div id="sys-panel-header" style="display:flex;align-items:center;gap:8px;padding:14px 16px;border-bottom:1px solid var(--border)">
+  <div id="sys-panel-header" style="display:flex;align-items:center;gap:8px;padding:14px 16px;border-bottom:1px solid var(--fau-border)">
     <span><i class="ti ti-settings"></i></span>
     <span style="font-size:13px;font-weight:600;flex:1">Settings</span>
     <button id="sys-panel-close" onclick="toggleSettings()"><i class="ti ti-x"></i></button>
@@ -440,7 +440,7 @@ Examples:
         <option value="high" selected>High — deep analysis (~10K tokens)</option>
         <option value="max">Max — exhaustive (~32K tokens)</option>
       </select>
-      <span style="font-size:11px;color:var(--text-muted)" id="thinking-budget-hint">Extended thinking for complex problems requiring deep analysis.</span>
+      <span style="font-size:11px;color:var(--fau-text-muted)" id="thinking-budget-hint">Extended thinking for complex problems requiring deep analysis.</span>
     </label>
 
     <label class="settings-label" style="margin-top:10px">
@@ -449,9 +449,9 @@ Examples:
         <input type="range" id="max-turns-range" min="4" max="100" step="2" value="20"
           oninput="setMaxTurns(+this.value)"
           style="flex:1;accent-color:var(--accent);cursor:pointer">
-        <span id="max-turns-label" style="font-size:12px;color:var(--text);min-width:32px;text-align:right">20</span>
+        <span id="max-turns-label" style="font-size:12px;color:var(--fau-text);min-width:32px;text-align:right">20</span>
       </div>
-      <span style="font-size:11px;color:var(--text-muted)">How many past messages to include in each request. Higher = more context, more cost.</span>
+      <span style="font-size:11px;color:var(--fau-text-muted)">How many past messages to include in each request. Higher = more context, more cost.</span>
     </label>
   </div>
 
@@ -462,7 +462,7 @@ Examples:
       <input type="checkbox" id="autorun-toggle"
         onchange="setAutoRunShell(this.checked)"
         style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
-      <span style="font-size:12.5px;color:var(--text)">Auto-run shell commands</span>
+      <span style="font-size:12.5px;color:var(--fau-text)">Auto-run shell commands</span>
     </label>
     <div class="settings-hint" style="margin-top:4px">
       When enabled, <code>shell-exec</code> blocks in AI responses execute automatically.
@@ -481,13 +481,13 @@ Examples:
     <!-- Tab: GitHub CLI -->
     <div id="auth-tab-cli" class="auth-tab-pane">
       <div>
-        <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px;">Current status:</div>
+        <div style="font-size:12px;color:var(--fau-text-dim);margin-bottom:8px;">Current status:</div>
         <span id="auth-badge" class="auth-source-badge"><i class="ti ti-circle-dot"></i> Checking…</span>
       </div>
 
       <div class="settings-label">
         <span>GitHub Personal Access Token</span>
-        Enter a PAT to override the auto-detected token. Required if you're not logged in via the <code style="font-size:11px;background:var(--surface3);padding:1px 4px;border-radius:3px">gh</code> CLI.
+        Enter a PAT to override the auto-detected token. Required if you're not logged in via the <code style="font-size:11px;background:var(--fau-surface3);padding:1px 4px;border-radius:3px">gh</code> CLI.
       </div>
       <div class="settings-input-row">
         <input id="pat-input" class="settings-input" type="password" placeholder="ghp_… or github_pat_…" autocomplete="off" spellcheck="false">
@@ -557,7 +557,7 @@ Examples:
       <input type="checkbox" id="voice-toggle"
         onchange="setVoiceEnabled(this.checked)"
         style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
-      <span style="font-size:12.5px;color:var(--text)">Enable voice control</span>
+      <span style="font-size:12.5px;color:var(--fau-text)">Enable voice control</span>
     </label>
     <div class="settings-hint" style="margin-top:4px">
       Say the wake word to activate — Fauna will listen for your command and route it automatically.
@@ -581,9 +581,9 @@ Examples:
     <div class="settings-hint" style="margin-bottom:10px">Scan this QR code with the Fauna mobile app to connect.</div>
     <div id="mobile-qr-wrap" style="display:flex;flex-direction:column;align-items:center;gap:10px">
       <canvas id="mobile-qr-canvas" style="border-radius:8px;image-rendering:pixelated"></canvas>
-      <div id="mobile-qr-status" style="font-size:11px;color:var(--text-muted)">Loading…</div>
+      <div id="mobile-qr-status" style="font-size:11px;color:var(--fau-text-muted)">Loading…</div>
     </div>
-    <div id="mobile-pair-info" style="margin-top:10px;font-size:11.5px;color:var(--text-dim);line-height:1.6"></div>
+    <div id="mobile-pair-info" style="margin-top:10px;font-size:11.5px;color:var(--fau-text-dim);line-height:1.6"></div>
     <div style="margin-top:8px;display:flex;gap:6px">
       <button class="settings-row-btn" onclick="loadMobilePairQR()" style="flex:1"><i class="ti ti-refresh"></i> Refresh</button>
       <button class="settings-row-btn danger" onclick="resetMobilePairToken()">Reset Token</button>
@@ -591,22 +591,22 @@ Examples:
     <div style="margin-top:10px;display:flex;gap:6px;align-items:center">
       <button id="tunnel-toggle-btn" class="settings-row-btn" onclick="toggleTunnel()" style="flex:1"><i class="ti ti-world"></i> <span id="tunnel-btn-label">Enable Remote Access</span></button>
     </div>
-    <div id="tunnel-status" style="margin-top:6px;font-size:11px;color:var(--text-muted);display:none"></div>
+    <div id="tunnel-status" style="margin-top:6px;font-size:11px;color:var(--fau-text-muted);display:none"></div>
   </div>
 
   <!-- About -->
   <div class="settings-section" style="flex:1">
     <div class="settings-section-title">About</div>
     <div class="settings-hint" style="line-height:1.7">
-      <strong style="color:var(--text)">Fauna</strong> v1.0.0<br>
+      <strong style="color:var(--fau-text)">Fauna</strong> v1.0.0<br>
       Multi-provider AI assistant — use GitHub Copilot, OpenAI, Anthropic, or Google models.<br><br>
-      <strong style="color:var(--text)">Model routing:</strong><br>
+      <strong style="color:var(--fau-text)">Model routing:</strong><br>
       • Models from API Keys → sent directly to that provider<br>
       • All other models → routed through GitHub Copilot<br><br>
-      <strong style="color:var(--text)">GitHub token priority:</strong><br>
-      1. Saved PAT &nbsp; 2. <code style="background:var(--surface3);padding:1px 4px;border-radius:3px">GH_TOKEN</code> env &nbsp; 3. <code style="background:var(--surface3);padding:1px 4px;border-radius:3px">gh auth token</code> &nbsp; 4. Keychain<br><br>
+      <strong style="color:var(--fau-text)">GitHub token priority:</strong><br>
+      1. Saved PAT &nbsp; 2. <code style="background:var(--fau-surface3);padding:1px 4px;border-radius:3px">GH_TOKEN</code> env &nbsp; 3. <code style="background:var(--fau-surface3);padding:1px 4px;border-radius:3px">gh auth token</code> &nbsp; 4. Keychain<br><br>
       API key models are fetched dynamically from each provider.<br><br>
-      <span style="color:var(--text-dim);font-size:11px">by Solomon Abey · <a href="https://github.com/howmon" style="color:var(--accent)" target="_blank">@howmon</a></span>
+      <span style="color:var(--fau-text-dim);font-size:11px">by Solomon Abey · <a href="https://github.com/howmon" style="color:var(--accent)" target="_blank">@howmon</a></span>
     </div>
   </div>
   </div><!-- /.settings-scroll -->
@@ -629,7 +629,7 @@ Examples:
 <div id="dlg-modal" onclick="if(event.target===this)_dlgResolve(null)">
   <div id="dlg-modal-box">
     <div id="dlg-modal-title"></div>
-    <div id="dlg-modal-msg" style="display:none;font-size:13px;color:var(--text-dim)"></div>
+    <div id="dlg-modal-msg" style="display:none;font-size:13px;color:var(--fau-text-dim)"></div>
     <input id="dlg-modal-input" style="display:none" autocomplete="off">
     <div id="dlg-modal-btns">
       <button class="panel-btn secondary" style="flex:0;padding:7px 14px" onclick="_dlgResolve(null)">Cancel</button>
@@ -788,8 +788,8 @@ Examples:
   <div id="playbook-header">
     <span><i class="ti ti-notebook" style="font-size:16px;color:#f0a030"></i></span>
     <span class="title">Playbook</span>
-    <span style="font-size:11px;color:var(--text-dim);flex:1"></span>
-    <button style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;padding:0 2px" onclick="togglePlaybook()"><i class="ti ti-x"></i></button>
+    <span style="font-size:11px;color:var(--fau-text-dim);flex:1"></span>
+    <button style="background:none;border:none;color:var(--fau-text-muted);cursor:pointer;font-size:18px;padding:0 2px" onclick="togglePlaybook()"><i class="ti ti-x"></i></button>
   </div>
   <!-- Tabs: Learned | Memory -->
   <div id="playbook-tabs">
@@ -798,7 +798,7 @@ Examples:
   </div>
   <!-- Learned tab -->
   <div id="pb-tab-learned" class="pb-tab-body active">
-    <div style="font-size:11.5px;color:var(--text-dim);padding:10px 16px 8px;border-bottom:1px solid var(--border);line-height:1.5">
+    <div style="font-size:11.5px;color:var(--fau-text-dim);padding:10px 16px 8px;border-bottom:1px solid var(--fau-border);line-height:1.5">
       Instructions the AI has learned from successful approaches.<br>
       Auto-saved entries come from the AI; you can also add your own. All enabled entries are injected into the system prompt.
     </div>
@@ -813,10 +813,10 @@ Examples:
   </div>
   <!-- Memory tab -->
   <div id="pb-tab-memory" class="pb-tab-body">
-    <div style="font-size:11.5px;color:var(--text-dim);padding:10px 16px 8px;border-bottom:1px solid var(--border);line-height:1.5">
+    <div style="font-size:11.5px;color:var(--fau-text-dim);padding:10px 16px 8px;border-bottom:1px solid var(--fau-border);line-height:1.5">
       Skill categories for different tools. Each category contains skill groups that are injected into the AI system prompt when enabled.
     </div>
-    <div id="memory-actions" style="padding:6px 10px;display:flex;gap:6px;border-bottom:1px solid var(--border)">
+    <div id="memory-actions" style="padding:6px 10px;display:flex;gap:6px;border-bottom:1px solid var(--fau-border)">
       <button class="mem-action-btn" onclick="addMemoryCategory()" title="Create a new skill category"><i class="ti ti-plus"></i> New Category</button>
       <button class="mem-action-btn" onclick="resetMemoryToDefaults()" title="Reset built-in categories to defaults"><i class="ti ti-refresh"></i> Reset Built-in</button>
       <button class="mem-action-btn" onclick="exportMemory()" title="Export all as JSON"><i class="ti ti-download"></i> Export</button>
@@ -834,9 +834,9 @@ Examples:
   <div id="agent-rules-header">
     <span><i class="ti ti-robot" style="font-size:16px;color:var(--accent2)"></i></span>
     <span class="title">Agent Rules</span>
-    <button style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;padding:0 2px" onclick="toggleAgentRules()"><i class="ti ti-x"></i></button>
+    <button style="background:none;border:none;color:var(--fau-text-muted);cursor:pointer;font-size:18px;padding:0 2px" onclick="toggleAgentRules()"><i class="ti ti-x"></i></button>
   </div>
-  <div style="font-size:11.5px;color:var(--text-dim);padding:10px 16px 8px;border-bottom:1px solid var(--border);line-height:1.5">
+  <div style="font-size:11.5px;color:var(--fau-text-dim);padding:10px 16px 8px;border-bottom:1px solid var(--fau-border);line-height:1.5">
     Rules injected into <strong>every</strong> AI message as hard constraints.<br>
     Use them to control how the AI behaves, formats responses, or uses tools.
   </div>
@@ -989,7 +989,7 @@ Examples:
 
     <div id="permission-list">
       <!-- Populated by renderPermissions() -->
-      <div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px">Checking permissions…</div>
+      <div style="padding:24px;text-align:center;color:var(--fau-text-muted);font-size:13px">Checking permissions…</div>
     </div>
 
     <div id="onboarding-footer">

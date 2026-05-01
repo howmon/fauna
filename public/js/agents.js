@@ -40,7 +40,7 @@ function toggleAgentRules() {
 function renderAgentRules() {
   var all  = getAllAgentRules();
   var list = document.getElementById('agent-rules-list');
-  if (!all.length) { list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:12px">No rules yet. Add one below.</div>'; return; }
+  if (!all.length) { list.innerHTML = '<div style="color:var(--fau-text-muted);font-size:12px;padding:12px">No rules yet. Add one below.</div>'; return; }
   list.innerHTML = all.map(function(r) {
     var isOn = r.enabled !== false;
     return '<div class="agent-rule-row' + (!isOn ? ' disabled' : '') + (r.builtin ? ' builtin' : '') + '">' +
@@ -49,10 +49,10 @@ function renderAgentRules() {
       '<div style="display:flex;gap:4px;flex-shrink:0;margin-left:4px">' +
         '<button title="' + (isOn ? 'Disable' : 'Enable') + '" ' +
           'onclick="toggleAgentRule(\'' + r.id + '\')" ' +
-          'style="background:none;border:none;cursor:pointer;color:' + (isOn ? 'var(--success)' : 'var(--text-muted)') + ';font-size:15px;padding:2px">' +
+          'style="background:none;border:none;cursor:pointer;color:' + (isOn ? 'var(--success)' : 'var(--fau-text-muted)') + ';font-size:15px;padding:2px">' +
           '<i class="ti ti-' + (isOn ? 'toggle-right' : 'toggle-left') + '"></i></button>' +
         (!r.builtin ? '<button title="Delete" onclick="deleteAgentRule(\'' + r.id + '\')" ' +
-          'style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:14px;padding:2px">' +
+          'style="background:none;border:none;cursor:pointer;color:var(--fau-text-muted);font-size:14px;padding:2px">' +
           '<i class="ti ti-trash"></i></button>' : '') +
       '</div>' +
     '</div>';
