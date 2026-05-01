@@ -232,7 +232,12 @@ function renderStreamingCOT(buffer) {
       result += '<div class="cot-pill"><i class="ti ' + liveIcon + '"' + spin + '></i>' + escHtml(label) + '</div>';
     }
   });
-  return result || marked.parse(buffer);
+  var raw = result || marked.parse(buffer);
+  // Sanitise streaming output to prevent AI-generated style/script tags from
+  // bleeding into Fauna's own UI during streaming (marked passes HTML through).
+  return typeof DOMPurify !== 'undefined'
+    ? DOMPurify.sanitize(raw, { ADD_ATTR: ['data-special-lang', 'data-lang', 'data-wf-id', 'data-wf-path', 'onclick', 'data-code-id'], ADD_TAGS: ['iframe'] })
+    : raw;
 }
 
 // Returns true if el2 immediately follows el1 with only whitespace between
