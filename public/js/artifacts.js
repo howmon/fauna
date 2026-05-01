@@ -312,7 +312,7 @@ function makeArtifactToolbar(a) {
   }
   // Save to active project
   if (state.activeProjectId && a.content != null) {
-    btns += '<button class="artifact-tbtn proj-save-btn" onclick="saveArtifactToProject(' + JSON.stringify({id:a.id,title:a.title,content:a.content,type:a.type}).replace(/'/g,"&#39;") + ')" title="Save to project"><i class="ti ti-folder-plus"></i> Save to Project</button>';
+    btns += '<button class="artifact-tbtn proj-save-btn" onclick="saveArtifactToProject(\'' + escHtml(a.id) + '\')" title="Save to project"><i class="ti ti-folder-plus"></i> Save to Project</button>';
   }
   return '<div class="artifact-toolbar">' +
     '<span class="artifact-toolbar-label">' + escHtml(a.title || 'Artifact') + '</span>' +

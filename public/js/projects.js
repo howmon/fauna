@@ -1226,13 +1226,15 @@ async function _addProjectContext(opts) {
 }
 
 // Save an artifact to the active project (called from artifacts.js toolbar)
-async function saveArtifactToProject(artifactData) {
+async function saveArtifactToProject(artifactId) {
   var proj = _activeProject();
   if (!proj) { _showToast('No active project', true); return; }
+  var a = (state.artifacts || []).find(function(x) { return x.id === artifactId; });
+  if (!a) { _showToast('Artifact not found', true); return; }
   try {
     var r = await fetch('/api/projects/' + proj.id + '/contexts/from-artifact', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(artifactData)
+      body: JSON.stringify({ id: a.id, title: a.title, content: a.content, type: a.type })
     });
     if (!r.ok) throw new Error((await r.json()).error);
     await _refreshProject(proj.id);
