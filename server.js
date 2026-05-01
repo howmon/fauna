@@ -24,6 +24,7 @@ import {
   addContext, updateContext, removeContext, contextFromArtifact, buildContextPayload, getProjectSystemContext,
   addConnector, removeConnector, testConnector, listRepos,
 } from './project-manager.js';
+import { composeDesignPrompt, VISUAL_DIRECTIONS } from './design-prompts.js';
 
 // Electron APIs — available when server runs inside the Electron main process.
 // Gracefully degrade if run standalone (e.g. during testing).
@@ -1112,8 +1113,23 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
     let projectCtx = '';
     if (projectId) {
       try {
+        // Design project: prepend the full layered design prompt
+        const _proj = getProject(projectId);
+        if (_proj && _proj.design && _proj.design.skillId) {
+          const _dp = composeDesignPrompt({
+            skillId:      _proj.design.skillId,
+            systemId:     _proj.design.systemId || 'default',
+            directionId:  _proj.design.directionId,
+            fidelity:     _proj.design.fidelity,
+            platform:     _proj.design.platform,
+            speakerNotes: _proj.design.speakerNotes,
+            animations:   _proj.design.animations,
+            projectName:  _proj.name,
+          });
+          projectCtx = '\n\n' + _dp;
+        }
         const pinnedCtx = getProjectSystemContext(projectId);
-        if (pinnedCtx) projectCtx = '\n\n' + pinnedCtx;
+        if (pinnedCtx) projectCtx += '\n\n' + pinnedCtx;
         // Also inject any explicitly toggled contexts
         if (projectContextIds && projectContextIds.length) {
           const toggled = buildContextPayload(projectId, projectContextIds);
@@ -6649,6 +6665,162 @@ app.get('/api/permissions', (req, res) => {
   }
 
   res.json(result);
+});
+
+// ── Design Skills & Systems ──────────────────────────────────────────────
+
+const DESIGN_SKILLS_DIR  = path.join(__dirname, 'public', 'design-skills');
+const DESIGN_SYSTEMS_DIR = path.join(__dirname, 'public', 'design-systems');
+const DESIGN_FRAMES_DIR  = path.join(__dirname, 'public', 'frames');
+
+// Parse SKILL.md frontmatter for catalog metadata
+function _parseSkillMeta(id, rawContent) {
+  const match = rawContent.match(/^---\s*\n([\s\S]*?)\n---/);
+  const meta  = { id, name: id, mode: 'prototype', platform: 'desktop', scenario: 'design', featured: false };
+  if (!match) return meta;
+  const lines = match[1].split('\n');
+  let inOd = false;
+  for (const line of lines) {
+    if (/^od:\s*$/.test(line)) { inOd = true; continue; }
+    if (inOd) {
+      if (/^\S/.test(line)) { inOd = false; continue; }
+      const m = line.match(/^\s+(\w+):\s+(.+)$/);
+      if (m) {
+        const k = m[1].trim(), v = m[2].trim().replace(/^['"]|['"]$/g, '');
+        if (k === 'mode')            meta.mode            = v;
+        if (k === 'platform')        meta.platform        = v;
+        if (k === 'scenario')        meta.scenario        = v;
+        if (k === 'featured')        meta.featured        = v === 'true';
+        if (k === 'fidelity')        meta.fidelity        = v;
+        if (k === 'example_prompt')  meta.examplePrompt   = v;
+      }
+    }
+    // Pick up skill display name from first # heading in body
+    const nameMatch = rawContent.match(/^# (.+)$/m);
+    if (nameMatch) meta.name = nameMatch[1].trim();
+  }
+  return meta;
+}
+
+// GET /api/design/skills — catalog of all skills
+app.get('/api/design/skills', (_req, res) => {
+  try {
+    const skills = [];
+    if (fs.existsSync(DESIGN_SKILLS_DIR)) {
+      for (const entry of fs.readdirSync(DESIGN_SKILLS_DIR, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const skillMd = path.join(DESIGN_SKILLS_DIR, entry.name, 'SKILL.md');
+        if (!fs.existsSync(skillMd)) continue;
+        const raw  = fs.readFileSync(skillMd, 'utf8');
+        const meta = _parseSkillMeta(entry.name, raw);
+        skills.push(meta);
+      }
+    }
+    res.json({ skills });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/design/skills/:id — full skill payload (SKILL.md body + side files)
+app.get('/api/design/skills/:id', (req, res) => {
+  try {
+    const id      = req.params.id.replace(/[^a-zA-Z0-9_-]/g, '');
+    const dir     = path.join(DESIGN_SKILLS_DIR, id);
+    const skillMd = path.join(dir, 'SKILL.md');
+    if (!fs.existsSync(skillMd)) return res.status(404).json({ error: 'Skill not found' });
+    const raw  = fs.readFileSync(skillMd, 'utf8');
+    const meta = _parseSkillMeta(id, raw);
+    const body = raw.replace(/^---[\s\S]*?---\s*\n/, '');
+    // Collect reference files
+    const refs = {};
+    const refsDir = path.join(dir, 'references');
+    if (fs.existsSync(refsDir)) {
+      for (const f of fs.readdirSync(refsDir)) {
+        if (f.endsWith('.md') || f.endsWith('.txt')) {
+          refs[f] = fs.readFileSync(path.join(refsDir, f), 'utf8');
+        }
+      }
+    }
+    // Template HTML
+    const tplPath = path.join(dir, 'assets', 'template.html');
+    const template = fs.existsSync(tplPath) ? fs.readFileSync(tplPath, 'utf8') : null;
+    res.json({ id, meta, body, template, refs });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/design/systems — catalog of all design systems
+app.get('/api/design/systems', (_req, res) => {
+  try {
+    const systems = [];
+    if (fs.existsSync(DESIGN_SYSTEMS_DIR)) {
+      for (const entry of fs.readdirSync(DESIGN_SYSTEMS_DIR, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const designMd = path.join(DESIGN_SYSTEMS_DIR, entry.name, 'DESIGN.md');
+        if (!fs.existsSync(designMd)) continue;
+        const raw     = fs.readFileSync(designMd, 'utf8');
+        const nameMatch = raw.match(/^#\s+(.+)$/m);
+        const name    = nameMatch ? nameMatch[1].trim() : entry.name;
+        // Extract first 4 hex colors for swatches
+        const hexMatches = raw.match(/#[0-9a-fA-F]{6}/g) || [];
+        const swatches   = [...new Set(hexMatches)].slice(0, 4);
+        systems.push({ id: entry.name, name, swatches });
+      }
+    }
+    res.json({ systems });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/design/systems/:id — full DESIGN.md content
+app.get('/api/design/systems/:id', (req, res) => {
+  try {
+    const id       = req.params.id.replace(/[^a-zA-Z0-9_-]/g, '');
+    const designMd = path.join(DESIGN_SYSTEMS_DIR, id, 'DESIGN.md');
+    if (!fs.existsSync(designMd)) return res.status(404).json({ error: 'Design system not found' });
+    const content = fs.readFileSync(designMd, 'utf8');
+    res.json({ id, content });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/design/directions — visual direction options
+app.get('/api/design/directions', (_req, res) => {
+  res.json({ directions: VISUAL_DIRECTIONS });
+});
+
+// GET /api/design/frames/:name — device frame HTML
+app.get('/api/design/frames/:name', (req, res) => {
+  try {
+    const name     = req.params.name.replace(/[^a-zA-Z0-9_-]/g, '');
+    const framePath = path.join(DESIGN_FRAMES_DIR, name + '.html');
+    if (!fs.existsSync(framePath)) return res.status(404).json({ error: 'Frame not found' });
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.sendFile(framePath);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PATCH /api/projects/:id/design — update design metadata on a project
+app.patch('/api/projects/:id/design', (req, res) => {
+  try {
+    const proj = getProject(req.params.id);
+    if (!proj) return res.status(404).json({ error: 'Project not found' });
+    const allowedKeys = ['skillId', 'systemId', 'directionId', 'fidelity', 'platform', 'speakerNotes', 'animations'];
+    const update = {};
+    for (const k of allowedKeys) {
+      if (req.body[k] !== undefined) update[k] = req.body[k];
+    }
+    updateProject(req.params.id, { design: { ...(proj.design || {}), ...update } });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Trigger Screen Recording permission prompt via desktopCapturer

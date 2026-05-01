@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #1a1a1a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: system-ui;
+  }
+  .device {
+    position: relative;
+    width: 411px;
+    height: 890px;
+    background: #0d0d0d;
+    border-radius: 40px;
+    box-shadow:
+      0 0 0 2px #2a2a2a,
+      0 0 0 4px #1a1a1a,
+      0 30px 80px rgba(0,0,0,0.7),
+      inset 0 0 0 1px #2a2a2a;
+    overflow: hidden;
+  }
+  /* Camera cutout — centered punch hole */
+  .camera {
+    position: absolute;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 12px;
+    height: 12px;
+    background: #000;
+    border-radius: 50%;
+    z-index: 10;
+  }
+  .screen {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    border-radius: 40px;
+    overflow: hidden;
+    background: #fff;
+  }
+  .screen iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    border-radius: 40px;
+  }
+  /* Side buttons */
+  .btn-power {
+    position: absolute;
+    right: -3px;
+    top: 180px;
+    width: 3px;
+    height: 72px;
+    background: #2a2a2a;
+    border-radius: 0 2px 2px 0;
+  }
+  .btn-vol-up {
+    position: absolute;
+    left: -3px;
+    top: 180px;
+    width: 3px;
+    height: 52px;
+    background: #2a2a2a;
+    border-radius: 2px 0 0 2px;
+  }
+  .btn-vol-down {
+    position: absolute;
+    left: -3px;
+    top: 248px;
+    width: 3px;
+    height: 52px;
+    background: #2a2a2a;
+    border-radius: 2px 0 0 2px;
+  }
+  /* Gesture bar (Android nav) */
+  .nav-bar {
+    position: absolute;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 120px;
+    height: 4px;
+    background: rgba(0,0,0,0.25);
+    border-radius: 2px;
+    z-index: 10;
+  }
+</style>
+</head>
+<body>
+<div class="device">
+  <div class="btn-power"></div>
+  <div class="btn-vol-up"></div>
+  <div class="btn-vol-down"></div>
+  <div class="camera"></div>
+  <div class="screen">
+    <iframe id="content-frame" src="about:blank" sandbox="allow-scripts allow-forms allow-popups allow-modals"></iframe>
+  </div>
+  <div class="nav-bar"></div>
+</div>
+<script>
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'setContent') {
+      var frame = document.getElementById('content-frame');
+      frame.srcdoc = e.data.html;
+    }
+  });
+</script>
+</body>
+</html>

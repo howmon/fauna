@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #1a1a1a;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    gap: 0;
+  }
+  .macbook {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  /* Lid */
+  .lid {
+    width: 1080px;
+    height: 680px;
+    background: #1d1d1f;
+    border-radius: 14px 14px 0 0;
+    padding: 16px;
+    box-shadow: 0 -4px 20px rgba(0,0,0,0.4);
+    position: relative;
+    overflow: hidden;
+  }
+  /* Notch */
+  .notch {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 200px;
+    height: 20px;
+    background: #000;
+    border-radius: 0 0 16px 16px;
+    z-index: 10;
+  }
+  /* Screen bezel */
+  .screen-bezel {
+    width: 100%;
+    height: 100%;
+    background: #000;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .screen-bezel iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+  }
+  /* Apple logo on back (decorative, shown as reflection) */
+  .hinge {
+    width: 1100px;
+    height: 6px;
+    background: linear-gradient(to bottom, #2a2a2c, #1a1a1c);
+    border-radius: 0 0 2px 2px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+  }
+  /* Base */
+  .base {
+    width: 1100px;
+    height: 24px;
+    background: linear-gradient(to bottom, #2c2c2e, #242426);
+    border-radius: 0 0 6px 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+  /* Trackpad region */
+  .trackpad-area {
+    width: 240px;
+    height: 12px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 3px;
+    margin-top: 2px;
+  }
+  /* Feet */
+  .feet {
+    display: flex;
+    width: 1100px;
+    justify-content: space-between;
+    padding: 0 60px;
+  }
+  .foot {
+    width: 60px;
+    height: 6px;
+    background: #111;
+    border-radius: 0 0 3px 3px;
+  }
+</style>
+</head>
+<body>
+<div class="macbook">
+  <div class="lid">
+    <div class="notch"></div>
+    <div class="screen-bezel">
+      <iframe id="content-frame" src="about:blank" sandbox="allow-scripts allow-forms allow-popups allow-modals"></iframe>
+    </div>
+  </div>
+  <div class="hinge"></div>
+  <div class="base">
+    <div class="trackpad-area"></div>
+  </div>
+  <div class="feet">
+    <div class="foot"></div>
+    <div class="foot"></div>
+  </div>
+</div>
+<script>
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'setContent') {
+      var frame = document.getElementById('content-frame');
+      frame.srcdoc = e.data.html;
+    }
+  });
+</script>
+</body>
+</html>

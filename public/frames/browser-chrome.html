@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #111;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: system-ui;
+    gap: 0;
+  }
+  /* Browser chrome */
+  .browser-chrome {
+    width: 1280px;
+    display: flex;
+    flex-direction: column;
+    border-radius: 10px 10px 0 0;
+    overflow: hidden;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+  }
+  .titlebar {
+    background: #2c2c2e;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .traffic-lights {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .tl { width: 12px; height: 12px; border-radius: 50%; }
+  .tl-close  { background: #ff5f57; }
+  .tl-min    { background: #febc2e; }
+  .tl-max    { background: #28c840; }
+  .toolbar {
+    background: #3a3a3c;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .nav-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: rgba(255,255,255,0.08);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255,255,255,0.5);
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+  .address-bar {
+    flex: 1;
+    height: 28px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    color: rgba(255,255,255,0.7);
+    font-size: 12px;
+    gap: 6px;
+  }
+  .lock-icon { color: rgba(255,255,255,0.4); font-size: 10px; }
+  /* Tab bar */
+  .tab-bar {
+    background: #2c2c2e;
+    height: 32px;
+    display: flex;
+    align-items: flex-end;
+    padding: 0 12px;
+    gap: 0;
+    flex-shrink: 0;
+  }
+  .tab {
+    height: 28px;
+    min-width: 140px;
+    max-width: 220px;
+    background: #1c1c1e;
+    border-radius: 6px 6px 0 0;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    font-size: 11px;
+    color: rgba(255,255,255,0.8);
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .tab-favicon {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    background: rgba(255,255,255,0.2);
+    flex-shrink: 0;
+  }
+  /* Content area */
+  .content-area {
+    height: 720px;
+    background: #fff;
+    position: relative;
+    overflow: hidden;
+  }
+  .content-area iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+  }
+</style>
+</head>
+<body>
+<div class="browser-chrome">
+  <div class="titlebar">
+    <div class="traffic-lights">
+      <div class="tl tl-close"></div>
+      <div class="tl tl-min"></div>
+      <div class="tl tl-max"></div>
+    </div>
+  </div>
+  <div class="tab-bar">
+    <div class="tab">
+      <div class="tab-favicon"></div>
+      <span id="tab-title">Design Preview</span>
+    </div>
+  </div>
+  <div class="toolbar">
+    <div class="nav-btn">←</div>
+    <div class="nav-btn">→</div>
+    <div class="nav-btn">↺</div>
+    <div class="address-bar">
+      <span class="lock-icon">🔒</span>
+      <span id="address-url">localhost:3737/preview</span>
+    </div>
+  </div>
+  <div class="content-area">
+    <iframe id="content-frame" src="about:blank" sandbox="allow-scripts allow-forms allow-popups allow-modals"></iframe>
+  </div>
+</div>
+<script>
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'setContent') {
+      var frame = document.getElementById('content-frame');
+      frame.srcdoc = e.data.html;
+      if (e.data.title) document.getElementById('tab-title').textContent = e.data.title;
+      if (e.data.url) document.getElementById('address-url').textContent = e.data.url;
+    }
+  });
+</script>
+</body>
+</html>

@@ -174,9 +174,12 @@ function renderArtifactTabs() {
 function artifactTypeIcon(type) {
   var m = { html:'ti-brand-html5', image:'ti-photo', markdown:'ti-markdown', json:'ti-braces',
             csv:'ti-table', text:'ti-file-text', files:'ti-folder-open', web:'ti-world',
-            code:'ti-code', svg:'ti-vector', summary:'ti-align-left' };
+            code:'ti-code', svg:'ti-vector', summary:'ti-align-left', design:'ti-layout-2' };
   return m[type] || 'ti-file';
 }
+
+// Per-artifact frame setting: null = no frame, 'browser-chrome' | 'iphone-15-pro' | 'android-pixel' | 'macbook'
+var _artifactFrames = {};
 
 function renderArtifactContent() {
   var body = document.getElementById('artifact-body');
@@ -191,16 +194,27 @@ function renderArtifactContent() {
   var content = '';
   var showCode = !!state.artifactCodeView;
 
-  if ((a.type === 'html' || a.type === 'svg') && !showCode) {
+  if ((a.type === 'html' || a.type === 'svg' || a.type === 'design') && !showCode) {
     var doc = a.type === 'svg'
       ? '<!DOCTYPE html><html><body style="margin:0;background:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh">' + a.content + '</body></html>'
       : a.content;
-    var srcdoc = doc.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/`/g,'&#96;').replace(/\n/g,'&#10;');
-    content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
-      '<iframe srcdoc="' + srcdoc + '" sandbox="allow-scripts allow-modals allow-popups allow-forms" title="' + escHtml(a.title) + '"></iframe>' +
-    '</div>';
+    var activeFrame = _artifactFrames[a.id] || null;
+    if (activeFrame && a.type === 'design') {
+      // Render inside device frame — load frame HTML, communicate content via postMessage
+      content = '<div class="artifact-scroll artifact-frame-wrap" style="height:calc(100% - 35px);background:#1a1a1a;overflow:auto">' +
+        '<iframe id="frame-host-' + a.id + '" src="/api/design/frames/' + encodeURIComponent(activeFrame) + '" style="border:none;width:100%;height:100%;min-height:600px" ' +
+          'sandbox="allow-scripts allow-same-origin" ' +
+          'onload="(function(el){var f=el.contentWindow;var d=' + JSON.stringify(JSON.stringify({type:'setContent',html:doc})) + ';f.postMessage(JSON.parse(d),\'*\')})(this)">' +
+        '</iframe>' +
+      '</div>';
+    } else {
+      var srcdoc = doc.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/`/g,'&#96;').replace(/\n/g,'&#10;');
+      content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
+        '<iframe srcdoc="' + srcdoc + '" sandbox="allow-scripts allow-modals allow-popups allow-forms" title="' + escHtml(a.title) + '"></iframe>' +
+      '</div>';
+    }
 
-  } else if ((a.type === 'html' || a.type === 'svg' || showCode) && a.content != null) {
+  } else if ((a.type === 'html' || a.type === 'svg' || a.type === 'design' || showCode) && a.content != null) {
     content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
       '<pre class="artifact-mono">' + escHtml(a.content || '') + '</pre>' +
     '</div>';
@@ -250,23 +264,44 @@ function makeArtifactToolbar(a) {
   var btns = '';
   var showCode = !!state.artifactCodeView;
 
-  // Visual / Code toggle for HTML and SVG
-  if (a.type === 'html' || a.type === 'svg') {
+  // Visual / Code toggle for HTML, SVG, and design artifacts
+  if (a.type === 'html' || a.type === 'svg' || a.type === 'design') {
     btns += '<button class="artifact-tbtn' + (!showCode ? ' active' : '') + '" onclick="setArtifactView(false)" title="Rendered preview"><i class="ti ti-eye"></i> Visual</button>';
     btns += '<button class="artifact-tbtn' + (showCode ? ' active' : '') + '" onclick="setArtifactView(true)" title="View source"><i class="ti ti-code"></i> Code</button>';
   }
+
+  // Device frame picker for design artifacts
+  if (a.type === 'design') {
+    var curFrame = _artifactFrames[a.id] || '';
+    var frames = [
+      { id: '',               icon: 'ti-layout',          label: 'No frame' },
+      { id: 'browser-chrome', icon: 'ti-browser',         label: 'Browser' },
+      { id: 'macbook',        icon: 'ti-device-laptop',   label: 'MacBook' },
+      { id: 'iphone-15-pro',  icon: 'ti-device-mobile',   label: 'iPhone' },
+      { id: 'android-pixel',  icon: 'ti-brand-android',   label: 'Android' }
+    ];
+    frames.forEach(function(f) {
+      btns += '<button class="artifact-tbtn' + (curFrame === f.id ? ' active' : '') + '" ' +
+        'onclick="setArtifactFrame(\'' + a.id + '\',\'' + f.id + '\')" title="' + f.label + '">' +
+        '<i class="ti ' + f.icon + '"></i>' +
+      '</button>';
+    });
+    // PDF print button
+    btns += '<button class="artifact-tbtn" onclick="printDesignArtifact(\'' + a.id + '\')" title="Print / Save as PDF"><i class="ti ti-printer"></i> PDF</button>';
+  }
+
   // Copy source code
   if (a.content != null) {
     btns += '<button class="artifact-tbtn" onclick="copyArtifact(\'' + a.id + '\')" title="Copy source code"><i class="ti ti-copy"></i> Copy Code</button>';
   }
   // Download
   if (a.content != null) {
-    var ext = a.type === 'html' ? '.html' : a.type === 'svg' ? '.svg' : a.type === 'json' ? '.json' : a.type === 'csv' ? '.csv' : a.type === 'markdown' ? '.md' : '.txt';
+    var ext = (a.type === 'design') ? '.html' : a.type === 'html' ? '.html' : a.type === 'svg' ? '.svg' : a.type === 'json' ? '.json' : a.type === 'csv' ? '.csv' : a.type === 'markdown' ? '.md' : '.txt';
     var filename = (a.title || 'artifact').replace(/[^a-zA-Z0-9._-]/g, '_') + ext;
     btns += '<button class="artifact-tbtn" onclick="downloadArtifact(\'' + a.id + '\',\'' + escHtml(filename) + '\')" title="Download file"><i class="ti ti-download"></i> Download</button>';
   }
   // Open externally in default browser
-  if (a.type === 'html' || a.type === 'svg') {
+  if (a.type === 'html' || a.type === 'svg' || a.type === 'design') {
     btns += '<button class="artifact-tbtn" onclick="openArtifactExternal(\'' + a.id + '\')" title="Open in browser"><i class="ti ti-external-link"></i> Open</button>';
   }
   if ((a.type === 'image') && a.path) {
@@ -285,7 +320,21 @@ function makeArtifactToolbar(a) {
   '</div>';
 }
 
-function setArtifactView(codeMode) {
+function setArtifactFrame(id, frameId) {
+  _artifactFrames[id] = frameId;
+  if (state.activeArtifact === id) renderArtifactContent();
+}
+
+function printDesignArtifact(id) {
+  var a = state.artifacts.find(function(x) { return x.id === id; });
+  if (!a || !a.content) return;
+  var win = window.open('', '_blank');
+  if (!win) return;
+  win.document.write(a.content);
+  win.document.close();
+  win.focus();
+  setTimeout(function() { win.print(); }, 500);
+}
   state.artifactCodeView = codeMode;
   renderArtifactContent();
 }

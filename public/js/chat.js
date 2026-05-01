@@ -564,6 +564,7 @@ async function streamResponse(conv) {
   var renderTimer  = null;
   var lastScrolled = 0;
   var tokenCount   = 0;
+  if (typeof resetDesignArtifactState === 'function') resetDesignArtifactState();
 
   function scheduleRender() {
     if (!isActive() || !bodyEl) return;
@@ -675,7 +676,7 @@ async function streamResponse(conv) {
             if (lastClose === -1) buffer += '\n```\n';
           }
 
-          if (evt.type === 'content')   { buffer += evt.content; tokenCount++; if (tokenCount === 1) dbg('first token received', 'ok'); scheduleRender(); }
+          if (evt.type === 'content')   { buffer += evt.content; tokenCount++; if (tokenCount === 1) dbg('first token received', 'ok'); if (typeof processDesignStreamChunk === 'function') processDesignStreamChunk(evt.content, buffer); scheduleRender(); }
           if (evt.type === 'error')     { dbg('SSE error: ' + evt.error, 'err'); buffer += '\n\nError: ' + evt.error; scheduleRender(); }
           if (evt.type === 'tool_call') {
             dbg('tool_call: ' + evt.name, 'cmd');
@@ -799,6 +800,7 @@ async function streamResponse(conv) {
         extractAndRenderWriteFile(msgEl, false, convId);
         extractAndRenderSaveInstruction(buffer, msgEl, false);
         extractArtifactsFromBuffer(buffer, msgEl);
+        if (typeof postProcessDesignMessage === 'function') postProcessDesignMessage(bodyEl);
         if (typeof extractAndRenderCreateAgent === 'function') extractAndRenderCreateAgent(buffer, msgEl);
         if (typeof extractAndRenderPatchAgent === 'function') extractAndRenderPatchAgent(buffer, msgEl);
         if (typeof extractAndRenderUninstallAgent === 'function') extractAndRenderUninstallAgent(buffer, msgEl);
@@ -824,6 +826,7 @@ async function streamResponse(conv) {
       extractAndRenderWriteFile(msgEl, false, convId);
       extractAndRenderSaveInstruction(buffer, msgEl, false);
       extractArtifactsFromBuffer(buffer, msgEl, true);
+      if (typeof postProcessDesignMessage === 'function') postProcessDesignMessage(bodyEl);
       if (typeof extractAndRenderCreateAgent === 'function') extractAndRenderCreateAgent(buffer, msgEl);
       if (typeof extractAndRenderPatchAgent === 'function') extractAndRenderPatchAgent(buffer, msgEl);
       if (typeof extractAndRenderUninstallAgent === 'function') extractAndRenderUninstallAgent(buffer, msgEl);

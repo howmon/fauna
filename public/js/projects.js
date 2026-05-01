@@ -342,6 +342,10 @@ function _renderProjectHub(proj) {
     { id: 'tasks',    icon: 'ti-checklist',     label: 'Tasks' },
     { id: 'settings', icon: 'ti-settings',      label: 'Settings' },
   ];
+  // Add Design tab for design projects
+  if (proj.design && proj.design.skillId) {
+    TABS.splice(1, 0, { id: 'design', icon: 'ti-layout-2', label: 'Design' });
+  }
   var tabsEl = document.getElementById('project-hub-tabs');
   if (tabsEl) {
     tabsEl.innerHTML = TABS.map(function(t) {
@@ -390,6 +394,53 @@ function _renderProjectHubBody(proj) {
   var body = document.getElementById('project-hub-body');
   if (!body) return;
   var tab = state.projectHubTab;
+  if (tab === 'design') {
+    // Design settings panel
+    var d = proj.design || {};
+    body.innerHTML =
+      '<div class="proj-section">' +
+        '<div class="proj-section-header"><i class="ti ti-layout-2"></i> Design Settings</div>' +
+        '<div class="proj-settings-row"><label>Skill</label>' +
+          '<select class="proj-input" data-field="skillId" onchange="_saveDesignField(\'' + proj.id + '\', this)"></select>' +
+        '</div>' +
+        '<div class="proj-settings-row"><label>Design System</label>' +
+          '<select class="proj-input" data-field="systemId" onchange="_saveDesignField(\'' + proj.id + '\', this)"></select>' +
+        '</div>' +
+        '<div class="proj-settings-row"><label>Platform</label>' +
+          '<select class="proj-input" data-field="platform" onchange="_saveDesignField(\'' + proj.id + '\', this)">' +
+            '<option value="desktop"' + (d.platform !== 'mobile' ? ' selected' : '') + '>Desktop</option>' +
+            '<option value="mobile"'  + (d.platform === 'mobile'  ? ' selected' : '') + '>Mobile</option>' +
+          '</select>' +
+        '</div>' +
+        '<div class="proj-settings-row"><label>Fidelity</label>' +
+          '<select class="proj-input" data-field="fidelity" onchange="_saveDesignField(\'' + proj.id + '\', this)">' +
+            '<option value="hi"' + (d.fidelity !== 'lo' ? ' selected' : '') + '>High (pixel-ready)</option>' +
+            '<option value="lo"' + (d.fidelity === 'lo'  ? ' selected' : '') + '>Low (wireframe)</option>' +
+          '</select>' +
+        '</div>' +
+      '</div>';
+    // Populate skill and system selects via API
+    if (typeof loadDesignCatalog === 'function') {
+      loadDesignCatalog(function(catalog) {
+        var selSkill = body.querySelector('[data-field="skillId"]');
+        var selSys   = body.querySelector('[data-field="systemId"]');
+        if (selSkill) {
+          selSkill.innerHTML = '<option value="">— no skill —</option>' +
+            (catalog.skills || []).map(function(s) {
+              return '<option value="' + _projEsc(s.id) + '"' + (s.id === d.skillId ? ' selected' : '') + '>' + _projEsc(s.name) + '</option>';
+            }).join('');
+        }
+        if (selSys) {
+          selSys.innerHTML = '<option value="default">Default (neutral)</option>' +
+            (catalog.systems || []).filter(function(s){ return s.id !== 'default'; }).map(function(s) {
+              return '<option value="' + _projEsc(s.id) + '"' + (s.id === d.systemId ? ' selected' : '') + '>' + _projEsc(s.name) + '</option>';
+            }).join('');
+          if (selSys.value === 'default' && !d.systemId) selSys.value = 'default';
+        }
+      });
+    }
+    return;
+  }
   if (tab === 'files') {
     var proj2 = proj;
     body.innerHTML = _renderFilesTab(proj2);
@@ -2344,6 +2395,15 @@ function openCreateProjectDialog() {
       '<div class="proj-form">' +
         '<div class="proj-settings-row"><label>Name</label><input class="proj-input" id="proj-new-name" placeholder="My project"></div>' +
         '<div class="proj-settings-row"><label>Description</label><input class="proj-input" id="proj-new-desc" placeholder="Optional description"></div>' +
+        '<div class="proj-settings-row"><label>Type</label>' +
+          '<div class="proj-type-toggle" id="proj-new-type">' +
+            '<button class="proj-type-btn active" data-type="" onclick="_pickProjType(this)"><i class="ti ti-code"></i> Code / General</button>' +
+            '<button class="proj-type-btn" data-type="design" onclick="_pickProjType(this)"><i class="ti ti-layout-2"></i> Design</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="proj-settings-row" id="proj-new-design-row" style="display:none"><label>Skill</label>' +
+          '<select class="proj-input" id="proj-new-skill-id"><option value="">Loading…</option></select>' +
+        '</div>' +
         '<div class="proj-settings-row"><label>Root path</label><div style="display:flex;gap:6px;flex:1"><input class="proj-input" id="proj-new-root" placeholder="~/code/myproject (optional)" style="flex:1"><button class="proj-action-btn" type="button" onclick="browseNewProjectFolder()" title="Browse"><i class="ti ti-folder-open"></i></button></div></div>' +
         '<div class="proj-settings-row"><label>Color</label>' +
           '<div class="proj-color-picker" id="proj-new-color-picker">' +
@@ -2360,6 +2420,19 @@ function openCreateProjectDialog() {
   document.body.appendChild(overlay);
   setTimeout(function(){ var n = document.getElementById('proj-new-name'); if(n) n.focus(); }, 50);
   window._newProjColor = 'teal';
+  window._newProjType  = '';
+  // Pre-populate skill list
+  if (typeof loadDesignCatalog === 'function') {
+    loadDesignCatalog(function(catalog) {
+      var sel = document.getElementById('proj-new-skill-id');
+      if (sel) {
+        sel.innerHTML = '<option value="">— choose skill —</option>' +
+          (catalog.skills || []).map(function(s) {
+            return '<option value="' + _projEsc(s.id) + '">' + _projEsc(s.name) + '</option>';
+          }).join('');
+      }
+    });
+  }
 }
 
 async function browseNewProjectFolder() {
@@ -2370,6 +2443,34 @@ async function browseNewProjectFolder() {
     var input = document.getElementById('proj-new-root');
     if (input) input.value = data.path;
   } catch(e) { _showToast('Could not open folder picker', true); }
+}
+
+function _pickProjType(btn) {
+  window._newProjType = btn.dataset.type || '';
+  var row = document.getElementById('proj-new-design-row');
+  if (row) row.style.display = window._newProjType === 'design' ? '' : 'none';
+  var btns = document.querySelectorAll('#proj-new-type .proj-type-btn');
+  btns.forEach(function(b) { b.classList.toggle('active', b === btn); });
+}
+
+async function _saveDesignField(projectId, selectEl) {
+  var field = selectEl.dataset.field;
+  var value = selectEl.value;
+  if (!field) return;
+  var patch = {};
+  patch[field] = value;
+  try {
+    await fetch('/api/projects/' + projectId + '/design', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch)
+    });
+    // Update cached state
+    var proj = (state.projects || []).find(function(p){ return p.id === projectId; });
+    if (proj) { if (!proj.design) proj.design = {}; proj.design[field] = value; }
+    if (typeof showToast === 'function') showToast('Saved');
+  } catch(e) {
+    if (typeof showToast === 'function') showToast('Save failed: ' + e.message);
+  }
 }
 
 async function _projModalBrowse(fieldId) {
@@ -2393,9 +2494,11 @@ function pickNewProjColor(color) {
 async function submitCreateProject() {
   var name = (document.getElementById('proj-new-name') || {}).value;
   if (!name || !name.trim()) { _showToast('Name is required', true); return; }
-  var desc = (document.getElementById('proj-new-desc') || {}).value || '';
-  var root = (document.getElementById('proj-new-root') || {}).value || null;
-  var color = window._newProjColor || 'teal';
+  var desc    = (document.getElementById('proj-new-desc') || {}).value || '';
+  var root    = (document.getElementById('proj-new-root') || {}).value || null;
+  var color   = window._newProjColor || 'teal';
+  var type    = window._newProjType  || '';
+  var skillId = (document.getElementById('proj-new-skill-id') || {}).value || null;
   try {
     var r = await fetch('/api/projects', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2403,11 +2506,21 @@ async function submitCreateProject() {
     });
     if (!r.ok) throw new Error((await r.json()).error);
     var proj = await r.json();
+    // Save design metadata if this is a design project
+    if (type === 'design') {
+      try {
+        await fetch('/api/projects/' + proj.id + '/design', {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ skillId: skillId || null, systemId: 'default', fidelity: 'hi', platform: 'desktop' })
+        });
+        proj.design = { skillId: skillId || null, systemId: 'default', fidelity: 'hi', platform: 'desktop' };
+      } catch(_) {}
+    }
     state.projects.push(proj);
     var overlay = document.getElementById('proj-create-overlay');
     if (overlay) overlay.remove();
     await setActiveProject(proj.id);
-    openProjectHub('files');
+    openProjectHub(type === 'design' ? 'design' : 'files');
     _showToast('Project created');
   } catch(e) { _showToast('Error: ' + e.message, true); }
 }
