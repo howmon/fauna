@@ -1046,6 +1046,8 @@ Examples:
     <a href="#help-shell">Shell Execution</a>
     <a href="#help-files">File Operations</a>
     <a href="#help-artifacts">Artifacts</a>
+    <a href="#help-genui">Generative UI</a>
+    <a href="#help-projects">Projects</a>
     <a href="#help-browser">Browser</a>
     <a href="#help-figma">Figma</a>
     <a href="#help-playbook">Playbook</a>
@@ -1065,6 +1067,8 @@ Examples:
       <p>The context meter (bottom of input) shows how much of the model's context window the conversation is using. When it fills, older messages are automatically trimmed.</p>
       <h3 class="help-h3">Model selection</h3>
       <p>Choose the active model from the dropdown in the top bar. The list is populated from your account subscription.</p>
+      <h3 class="help-h3">Top bar</h3>
+      <p>The top bar surfaces the model selector, voice mic, and account button. Secondary actions live in the <strong>⋯</strong> overflow menu on the right: <em>Move to Project</em>, <em>Ports</em>, <em>Clear conversation</em>, and <em>Debug log</em>.</p>
     </section>
 
     <!-- ── Agents ── -->
@@ -1147,6 +1151,51 @@ Examples:
         <li><strong>Code</strong> — syntax-highlighted source</li>
       </ul>
       <p>Each artifact appears as a card in the chat; click <strong>Open</strong> to show it in the pane. Tabs at the top let you switch between multiple artifacts.</p>
+      <h3 class="help-h3">30-day retention</h3>
+      <p>Closing the artifact pane does <em>not</em> delete anything. Artifacts are stored with the conversation and kept for <strong>30 days</strong> from creation. Switch back to a conversation at any time — all its artifacts are still there. After 30 days they are pruned automatically on the next visit.</p>
+      <h3 class="help-h3">Save to Project</h3>
+      <p>Click <strong>Save to Project</strong> in any artifact's toolbar to add it to the active project's context library. If no project is active, a picker lets you choose an existing project or create a new one.</p>
+    </section>
+
+    <!-- ── Generative UI ── -->
+    <section class="help-section" id="help-genui">
+      <h2 class="help-h2">Generative UI</h2>
+      <p>The AI can render interactive widgets <strong>inline inside chat messages</strong> — no pane required. These appear directly in the conversation flow.</p>
+      <h3 class="help-h3">When the AI uses gen-ui vs artifacts vs plain text</h3>
+      <dl class="help-dl">
+        <dt>gen-ui (inline widget)</dt>
+        <dd>Ephemeral snapshots — metric dashboards, comparison cards, status overviews, checklists, interactive tabs. Content you want to <em>view</em>, not save.</dd>
+        <dt>Artifact pane</dt>
+        <dd>Saveable output — full HTML pages, documents, code files, anything longer than ~40 lines or intended for reuse.</dd>
+        <dt>Plain Markdown</dt>
+        <dd>Conversational answers, bullet lists, explanations — no special wrapper.</dd>
+      </dl>
+      <h3 class="help-h3">Available components</h3>
+      <p>Card · Stack · Grid · Heading · Text · Badge · Stat · Alert · Button · Divider · KeyValue · Table · List · Progress · Code · Image · Select · Input · Tabs</p>
+      <p>Buttons can toggle sections, set values, copy text to clipboard, or open a URL — all without leaving the chat.</p>
+      <h3 class="help-h3">Add to Project</h3>
+      <p>Hover over any gen-ui widget to reveal the <strong>Add to Project</strong> footer button. It saves the widget spec to the active project context library (or shows a picker if no project is active).</p>
+    </section>
+
+    <!-- ── Projects ── -->
+    <section class="help-section" id="help-projects">
+      <h2 class="help-h2">Projects</h2>
+      <p>Projects group related conversations, artifacts, and reference documents under a single workspace. When a project is active its context is automatically injected into every AI message.</p>
+      <h3 class="help-h3">Creating a project</h3>
+      <p>Open the <strong>⋯</strong> overflow menu in the top bar → <strong>Move to Project</strong> → <strong>New project</strong>. Give it a name, color, and optional root path.</p>
+      <h3 class="help-h3">Project Hub</h3>
+      <p>Click the colored project pill in the top bar to open the hub:</p>
+      <ul class="help-list">
+        <li><strong>Files</strong> — browse the project's root folder</li>
+        <li><strong>Contexts</strong> — pinned docs and snippets always injected into the AI</li>
+        <li><strong>Sources</strong> — linked local folders or GitHub/GitLab repos (sync to refresh)</li>
+        <li><strong>Conversations</strong> — all conversations assigned to this project</li>
+        <li><strong>Design</strong> — design system settings (design projects only)</li>
+      </ul>
+      <h3 class="help-h3">Moving a conversation into a project</h3>
+      <p>Open the <strong>⋯</strong> menu → <strong>Move to Project</strong>. Pick a project or create one. The conversation will appear in the hub and the project pill will show in the top bar.</p>
+      <h3 class="help-h3">Saving output to a project</h3>
+      <p>Any <strong>artifact</strong> (via its toolbar button) or <strong>gen-ui widget</strong> (via its hover footer) can be saved to the current project as a context item.</p>
     </section>
 
     <!-- ── Browser ── -->

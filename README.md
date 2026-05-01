@@ -151,8 +151,29 @@ Enable **orchestrator mode** to create agents that delegate tasks to sub-agents.
 - **Types**: HTML (interactive), Markdown, JSON, CSV, Images, SVG, Files list, Summary, Code
 - Entity cards appear inline in the chat — click to open in the pane
 - Resizable pane (drag handle)
-- Artifacts persist per-conversation and restore when you switch back
+- **30-day retention** — artifacts persist per-conversation for 30 days; closing the pane just hides it, nothing is lost
+- Artifacts restore when you switch back to a conversation
 - Charts/dashboards via Chart.js CDN in HTML artifacts
+- Save any artifact to a project with one click
+
+### ✨ Generative UI (inline widgets)
+- AI can render interactive UI components **inline in the chat** using `gen-ui` code blocks — no pane required
+- 18 components: `Card`, `Stack`, `Grid`, `Heading`, `Text`, `Badge`, `Stat`, `Alert`, `Button`, `Divider`, `KeyValue`, `Table`, `List`, `Progress`, `Code`, `Image`, `Select`, `Input`, `Tabs`
+- **Reactive state** — components can read and write shared state; buttons can toggle visibility, copy text, set values, or open URLs
+- **Smart routing** — the AI decides automatically:
+  - **gen-ui** for ephemeral snapshots: dashboards, metric cards, status overviews, comparison tables
+  - **Artifact pane** for saveable output: full HTML pages, documents, code files (>40 lines)
+  - **Plain Markdown** for conversational prose
+- Each widget has an **Add to Project** footer button (fades in on hover)
+
+### 🗂️ Projects
+- Group conversations, artifacts, and file contexts under named **Projects**
+- **Project Hub** — dedicated panel with tabs for files, contexts, sources, conversations, and design settings
+- Contexts (docs, code snippets, gen-ui specs) are injected into the AI's system prompt while the project is active
+- **Move to Project** — assign any conversation to a project from the `⋯` topbar menu
+- **Add to Project** — save any gen-ui widget or artifact directly into a project's context library
+- Sources: link local folders or GitHub/GitLab repos; sync to keep them fresh
+- Color-coded project switcher in the topbar pill
 
 ### 📓 Playbook — Learned Instructions
 - AI saves successful strategies and approaches as playbook entries
@@ -223,7 +244,8 @@ fauna/
 │       ├── shell.js         # Shell execution widgets, auto-run, auto-feed
 │       ├── browser.js       # Interactive browser pane, tabs, resize
 │       ├── figma.js         # Figma MCP/plugin connection, status
-│       ├── artifacts.js     # Artifact pane, entity cards, preview rendering
+│       ├── artifacts.js     # Artifact pane, entity cards, preview rendering, 30-day retention
+│       ├── gen-ui.js        # Generative UI renderer — 18 components, reactive state, smart routing
 │       ├── markdown.js      # Markdown → HTML with code block handling
 │       ├── writefile.js     # File write/replace/patch execution
 │       ├── playbook.js      # Learned instructions CRUD
@@ -232,6 +254,7 @@ fauna/
 │       ├── agent-builder.js # 7-step agent creation wizard
 │       ├── agent-store.js   # Store browse, install, publish, update
 │       ├── agent-polish.js  # Auto-update checks, composition parsing
+│       ├── projects.js      # Projects UI — hub panel, switcher, contexts, sources, gen-ui save
 │       └── agent-system.js  # Built-in agents, orchestrator prompt injection
 ├── assets/
 │   ├── figma-plugin/        # Bundled Figma plugin (assets/figma-plugin/)
@@ -492,7 +515,10 @@ Each conversation keeps its message elements alive in a hidden `<div>` — never
 - [x] Shell execution with auto-run and auto-feed
 - [x] Interactive browser panel with multi-tab support
 - [x] Figma MCP integration + design spec generation
-- [x] Artifact pane (HTML, Markdown, JSON, CSV, charts)
+- [x] Artifact pane (HTML, Markdown, JSON, CSV, charts) with 30-day retention
+- [x] Generative UI — inline reactive widgets in chat
+- [x] Projects — group conversations, artifacts, and contexts
+- [x] Smart artifact vs gen-ui routing (model decides based on content)
 - [x] Playbook — learned instructions across sessions
 
 ### Next
