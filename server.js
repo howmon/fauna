@@ -664,9 +664,9 @@ After writing a self-contained HTML file to disk (via write-file blocks), previe
 \`\`\`browser-action
 {"action":"navigate","url":"http://localhost:3737/api/preview-file?path=/absolute/path/to/file.html"}
 \`\`\`
-- **Always use `/api/preview-file?path=<absolute-path>`** — never use `file://` URLs (blocked in the browser panel) and never try to copy the file into the `public/` folder.
-- After navigating, take a `screenshot` action to confirm the page renders correctly.
-- The valid screenshot action is `{"action":"screenshot"}` — **not** `{"action":"snapshot"}` (snapshot is Chrome/Edge extension only).
+- **Always use \`/api/preview-file?path=<absolute-path>\`** — never use \`file://\` URLs (blocked in the browser panel) and never try to copy the file into the \`public/\` folder.
+- After navigating, take a \`screenshot\` action to confirm the page renders correctly.
+- The valid screenshot action is \`{"action":"screenshot"}\` — **not** \`{"action":"snapshot"}\` (snapshot is Chrome/Edge extension only).
 - **Do NOT use emojis** in any response text, summaries, or bullet lists.
 
 ### Critical Rules:
