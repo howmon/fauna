@@ -6851,7 +6851,7 @@ app.patch('/api/projects/:id/design', (req, res) => {
   try {
     const proj = getProject(req.params.id);
     if (!proj) return res.status(404).json({ error: 'Project not found' });
-    const allowedKeys = ['skillId', 'systemId', 'directionId', 'fidelity', 'platform', 'speakerNotes', 'animations'];
+    const allowedKeys = ['projectType', 'skillIds', 'skillId', 'systemId', 'directionId', 'fidelity', 'platform', 'speakerNotes', 'animations'];
     const update = {};
     for (const k of allowedKeys) {
       if (req.body[k] !== undefined) update[k] = req.body[k];

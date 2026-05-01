@@ -5055,6 +5055,9 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
   flex-wrap: wrap;
   gap: 6px;
   flex: 1;
+  max-height: 160px;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 /* Design project ready card */
