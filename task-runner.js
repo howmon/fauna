@@ -125,6 +125,11 @@ async function _autonomyLoop(task, state) {
     'Do not explain what you are about to do — just do it.',
   ].join('\n');
 
+  // Track consecutive tool failures (empty/not-found results) to bail early
+  let consecutiveNotFoundCount = 0;
+  const MAX_CONSECUTIVE_NOT_FOUND = 3;
+  const NOT_FOUND_RE = /no such file|not found|no results|0 results|directory is empty|zero files|no files found|no matches|does not exist|cannot find/i;
+
   for (let step = 0; step < maxSteps; step++) {
     state.step = step + 1;
     _emit(task.id, 'step', { step: state.step });
@@ -202,6 +207,20 @@ async function _autonomyLoop(task, state) {
       const feedback = actionResults.map((r, i) =>
         `[Action ${i + 1}] ${r.type}: ${r.output.slice(0, 2000)}`
       ).join('\n\n');
+
+      // Detect consecutive not-found / empty results to bail early
+      const allNotFound = actionResults.every(r => NOT_FOUND_RE.test(r.output));
+      if (allNotFound) {
+        consecutiveNotFoundCount++;
+        if (consecutiveNotFoundCount >= MAX_CONSECUTIVE_NOT_FOUND) {
+          failTask(task.id, 'Stopped after ' + consecutiveNotFoundCount + ' consecutive not-found results. The requested files or resources do not exist at the searched locations. Please clarify the correct path or provide the missing files.');
+          _emit(task.id, 'failed', { error: 'consecutive not-found: resources do not exist' });
+          return;
+        }
+      } else {
+        consecutiveNotFoundCount = 0;
+      }
+
       messages.push({ role: 'user', content: feedback + '\n\nContinue the task based on these results. Say TASK_COMPLETE: <summary> when done, or TASK_FAILED: <reason> if you cannot proceed.' });
     } else {
       // No action blocks — this is a pure text response, check for completion markers

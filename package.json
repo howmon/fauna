@@ -49,6 +49,7 @@
     "archiver": "^7.0.1",
     "express": "^4.19.2",
     "localtunnel": "^2.0.2",
+    "marked": "^18.0.3",
     "multer": "^2.1.1",
     "nodejs-whisper": "^0.3.0",
     "openai": "^4.67.0",
@@ -80,7 +81,8 @@
         {
           "target": "zip",
           "arch": [
-            "x64"
+            "x64",
+            "arm64"
           ]
         }
       ],

@@ -12,6 +12,7 @@ import os         from 'os';
 import fs         from 'fs';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
+import { marked } from 'marked';
 import { checkFilePath, checkNetworkAccess, checkShellCommand, getSandboxedEnv, getResourceLimits, audit, getAuditLog } from './agent-sandbox.js';
 import { getAgentTools, startAgentMCPServers, stopAgentMCPServers, executeBuiltInTool, executeCustomTool } from './agent-tools.js';
 import { scanAgent, formatScanReport } from './agent-scanner.js';
@@ -67,6 +68,8 @@ async function _guiScreenshot() {
       proc.on('close', code => {
         if (code !== 0) return reject(new Error('screencapture failed with code ' + code));
         try {
+          // Downscale to max 1280px wide using sips (built-in on macOS) to keep payload small
+          try { execSync(`sips -Z 1280 "${tmp}" --out "${tmp}" 2>/dev/null`); } catch (_) {}
           const buf = fs.readFileSync(tmp);
           fs.unlinkSync(tmp);
           resolve(buf.toString('base64'));
@@ -671,13 +674,30 @@ After writing a self-contained HTML file to disk (via write-file blocks), previe
 
 ### Critical Rules:
 - **NEVER truncate shell commands or code blocks**. Write them fully in one go. Never stop mid-line or say "let me continue".
-- **NEVER narrate what you're about to do**. Don't say "Let me...", "I'll now...", "I need to...". Just DO it — write the code, run the command.
+- **Never announce then act in the same response.** A brief present-tense note is fine ("Running npm install…"). What's forbidden: claiming past-tense completion ("Done!", "I've created...", "The file is saved") in the same response that runs the command — only say that after you've seen confirming output. Just write the code or command; don't pad with "Let me...", "I need to...", "I'll now...".
 - **ALWAYS write complete files**. When creating a file, write ALL of it in one code block. Never split a file across multiple blocks.
 - **ALWAYS write complete package.json** before running npm install — don't rely on incremental installs.
 - **Use console-logs to debug** — after loading a page, check for errors before telling the user it's done.
 - **If your output was cut off**, you will be automatically asked to continue. Just pick up exactly where you left off.
 - The browser keeps login sessions across pages (cookies persist). No need to re-authenticate.
 - Each conversation has its own browser tabs — they don't interfere with other conversations.
+
+`;
+
+// ── Grounding rules — injected into ALL sessions ──────────────────────────
+const GROUNDING_RULES = `
+## Grounding Rules (absolute — override all other instructions)
+1. **Never describe files or directories before reading them.** First action must always be a shell command.
+2. **Never fabricate or invent output.** Only report data that appeared in actual tool/shell results this conversation. Shell output is ground truth — never override or supplement it with generated content.
+3. **Empty output = full stop.** If a command returns nothing, say exactly "The command produced no output." then ask the user how to proceed. Do NOT run any follow-up commands — no \`ls\`, no retries, no alternatives. One empty result = stop everything, wait for user.
+4. **One command at a time.** Run one shell command, wait for its output, then decide the next step based on what actually came back. Never pre-plan and narrate a multi-step sequence upfront — if step 1 fails, steps 2–N must not execute.
+5. **"STOP" / "HARD STOP" in a shell result means stop immediately.** No more commands.
+6. **Exit code 0 ≠ success.** After a write/create command, verify the file exists with \`ls\` in a separate command BEFORE reporting it as created.
+7. **Max 2 searches of the same path.** After 2 misses, tell the user and ask for the correct location.
+8. **Empty output has no other interpretation.** It is not suppressed, redirected, or blocked — the command simply produced nothing.
+9. **Screenshots: use \`gui_screenshot\` tool, not \`screencapture\` via shell** (exits 0 but writes nothing without Screen Recording permission).
+10. **Default write location: ask the user.** Never write to \`~/Desktop\`, \`~/Downloads\`, or \`~/Documents\` unless the user explicitly named that path. \`/tmp\` writes are fine. Reads from anywhere are fine.
+11. **No past-tense completion claims until output confirms it.** Use present tense while running ("Running pandoc…"). Only say "Done" / "File created" / "PDF saved" after a shell result confirms it. Never claim success in the same response that runs the command.
 `;
 
 // Always injected — browser extension reference and rules (no "just run it" directives).
@@ -1179,10 +1199,10 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
           if (stackLines.length) {
             projectCtx += '\n\n## Detected Stack\n' + stackLines.join('\n');
           }
-          // Tell the model what CWD shell-exec blocks run from
+          // Tell the model what CWD shell-exec blocks run from and enforce project-scoped writes
           const firstLocal = p.sources.find(s => s.type === 'local' && s.path);
           if (firstLocal) {
-            projectCtx += `\n\n## Shell Environment\nShell commands (\`shell-exec\` blocks) run with cwd \`${firstLocal.path}\`. Use absolute paths — do NOT use bare \`ls\` or \`cat\` without the full path prefix.`;
+            projectCtx += `\n\n## Shell Environment\nShell commands (\`shell-exec\` blocks) run with cwd \`${firstLocal.path}\`. Use absolute paths — do NOT use bare \`ls\` or \`cat\` without the full path prefix.\n\n## File Write Policy — STRICT\nThis conversation has an active project folder: \`${firstLocal.path}\`\n- **ALL files you create or write MUST go inside \`${firstLocal.path}\`** (or a subdirectory of it).\n- **NEVER write files to \`~/Desktop\`, \`~/Downloads\`, \`~/Documents\`, \`/tmp\`, or any path outside \`${firstLocal.path}\`** unless the user explicitly names a different destination in their message.\n- When writing a file with a relative path, it is relative to \`${firstLocal.path}\`.\n- If you are unsure where to put a file, put it in \`${firstLocal.path}\`.`;
           }
         }
       } catch (_) {}
@@ -1204,6 +1224,8 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
       // APP_BUILD_RULES ("just DO it / never narrate") only for non-project, non-CLI sessions.
       // In project sessions these directives conflict with the shell-command policy.
       (!isCLI && !projectId) ? APP_BUILD_RULES : '',
+      // GROUNDING_RULES: always injected in every session — prevents hallucinated file content and search loops.
+      GROUNDING_RULES,
       // BROWSER_EXT_CONTEXT: 2,500-token extension reference — only load when relevant.
       (!isCLI && _wantsBrowserCtx) ? BROWSER_EXT_CONTEXT : '',
       contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : ''
@@ -1400,6 +1422,30 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
           _thinkingDisabledModels.add(model);
           delete params.thinking;
           stream = await client.chat.completions.create(params);
+        // Auto-recover: 400 caused by oversized/rejected image payload — strip images and retry
+        } else if (
+          apiErr.status === 400 || apiErr.statusCode === 400 ||
+          String(apiErr.message).match(/\b400\b/) ||
+          String(apiErr.message).toLowerCase().includes('bad request') ||
+          String(apiErr.error?.message).match(/\b400\b/)
+        ) {
+          chatLog('[chat] 400 error — stripping image payloads and retrying', model);
+          const _stripImages = msgs => msgs.map(m => {
+            if (!Array.isArray(m.content)) return m;
+            const hasImg = m.content.some(c => c.type === 'image_url');
+            const textOnly = m.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+            return { ...m, content: (textOnly || '') + (hasImg ? '\n[screenshot could not be sent — model rejected image payload]' : '') };
+          });
+          params.messages = _stripImages(params.messages);
+          // Also strip from allMessages so future loop iterations don't re-send the image
+          for (let _i = 0; _i < allMessages.length; _i++) {
+            if (Array.isArray(allMessages[_i].content) && allMessages[_i].content.some(c => c.type === 'image_url')) {
+              const _hasImg = true;
+              const _txt = allMessages[_i].content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+              allMessages[_i] = { ...allMessages[_i], content: (_txt || '') + '\n[screenshot could not be sent — model rejected image payload]' };
+            }
+          }
+          stream = await client.chat.completions.create(params);
         } else {
           throw apiErr;
         }
@@ -1452,6 +1498,18 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
             continue;
           }
 
+          // Loop guard: cap gui_screenshot at 2 calls per turn — prevents infinite screenshot loops
+          if (toolName === 'gui_screenshot') {
+            const _screenshotCalls = allMessages
+              .filter(m => m.role === 'assistant' && m.tool_calls)
+              .flatMap(m => m.tool_calls)
+              .filter(t => t.function?.name === 'gui_screenshot').length;
+            if (_screenshotCalls >= 2) {
+              allMessages.push({ role: 'tool', tool_call_id: tc.id, content: 'LOOP DETECTED: gui_screenshot has already been called twice this turn. Do NOT call it again. If the screenshot produced a 400 error or was not useful, stop trying to use the camera. Instead, use shell-exec blocks to verify results (e.g. ls, cat, open). Tell the user what you were trying to confirm and ask them to check manually if needed.' });
+              continue;
+            }
+          }
+
           // Loop guard: if last 2 tool calls were both browser_ext_extract_* and this is another one,
           // inject a nudge to use eval instead of looping on blunt extraction.
           const _isExtract = /^browser_ext_extract_/.test(toolName);
@@ -1490,11 +1548,22 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
             } else if (toolName === 'gui_screenshot') {
               chatLog('[chat] GUI tool: screenshot');
               const b64 = await _guiScreenshot();
-              result = 'Desktop screenshot captured. The image is included in the conversation.';
-              allMessages.push({ role: 'user', content: [
-                { type: 'text', text: '[Desktop screenshot]' },
-                { type: 'image_url', image_url: { url: 'data:image/png;base64,' + b64, detail: 'high' } }
-              ] });
+              const _screenshotProvider = getActiveProviderForModel(model);
+              const _visionSupported = _screenshotProvider !== 'copilot';
+              if (_visionSupported) {
+                result = 'Desktop screenshot captured. The image is included in the conversation.';
+                allMessages.push({ role: 'user', content: [
+                  { type: 'text', text: '[Desktop screenshot]' },
+                  { type: 'image_url', image_url: { url: 'data:image/png;base64,' + b64, detail: 'high' } }
+                ] });
+              } else {
+                // GitHub Copilot API does not support inline base64 images — send text-only description.
+                // Save screenshot to a temp file and report its path so the user can open it manually.
+                const _scPath = os.tmpdir() + '/fauna-screenshot-last.png';
+                try { fs.writeFileSync(_scPath, Buffer.from(b64, 'base64')); } catch (_) {}
+                result = `Screenshot captured but cannot be sent as an image — the current model (${model} via GitHub Copilot) does not support inline image input. The screenshot has been saved to: ${_scPath}\n\nTo verify results use shell-exec (e.g. ls, cat) rather than taking a screenshot. If you need to check a file was created, run: ls -la <path>`;
+                allMessages.push({ role: 'user', content: result });
+              }
             } else if (toolName === 'gui_click') {
               chatLog('[chat] GUI tool: click %d,%d', args.x, args.y);
               const btn = args.button || 'left';
@@ -1657,8 +1726,38 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
       }
     }
   } catch (err) {
+    // Helper: does the error look like a 400?
+    const _is400 = e => e.status === 400 || e.statusCode === 400 ||
+      String(e.message).match(/\b400\b/) || String(e.message).toLowerCase().includes('bad request') ||
+      String(e.error?.message).match(/\b400\b/);
+
+    // Auto-recover: 400 caused by image payload in stream — strip images and retry
+    if (_is400(err) && !res.writableEnded) {
+      chatLog('[chat] outer 400 error — stripping image payloads and retrying');
+      const cleanMsgs = allMessages.map(m => {
+        if (!Array.isArray(m.content)) return m;
+        const hasImg = m.content.some(c => c.type === 'image_url');
+        const txt = m.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+        return { ...m, content: (txt || '') + (hasImg ? '\n[screenshot could not be sent — model rejected image payload]' : '') };
+      });
+      try {
+        const retryParams = { model, messages: cleanMsgs, stream: true, stream_options: { include_usage: true } };
+        if (/^(o[1-9]|gpt-5)/.test(model)) { retryParams.max_completion_tokens = 16384; }
+        else { retryParams.max_tokens = 16384; }
+        if (mcpTools?.length) retryParams.tools = mcpTools;
+        const retryStream = await getClientForModel(model).chat.completions.create(retryParams);
+        for await (const chunk of retryStream) {
+          if (res.writableEnded) break;
+          if (chunk.usage) send({ type: 'done', finish_reason: chunk.choices?.[0]?.finish_reason || 'stop', usage: chunk.usage });
+          const delta = chunk.choices?.[0]?.delta;
+          if (delta?.content) send({ type: 'content', content: delta.content });
+        }
+        send({ type: 'done', finish_reason: 'stop', usage: null });
+      } catch (retryErr) {
+        send({ type: 'error', error: retryErr.message });
+      }
     // Auto-recover: if thinking param caused a stream error, disable and retry
-    if (err.message?.includes('thinking') && !res.writableEnded) {
+    } else if (err.message?.includes('thinking') && !res.writableEnded) {
       chatLog('[chat] thinking param caused stream error for %s, disabling and retrying', model);
       _thinkingDisabledModels.add(model);
       try {
@@ -2249,6 +2348,40 @@ function normalizeAttachmentText(text) {
 
 function buildAttachmentRef(name) {
   return 'attachment://' + encodeURIComponent(name || ('file-' + Date.now()));
+}
+
+function _supportedDocumentReadExt(ext) {
+  return new Set(['.doc', '.docx', '.rtf', '.odt', '.pages']).has(ext);
+}
+
+function _supportedDocumentWriteExt(ext) {
+  return new Set(['.docx', '.rtf', '.odt']).has(ext);
+}
+
+async function extractDocumentTextFromPath(filePath) {
+  const ext = path.extname(filePath || '').toLowerCase();
+  if (!(process.platform === 'darwin' && _supportedDocumentReadExt(ext))) {
+    throw new Error('Document extraction is only supported for macOS office documents in this build');
+  }
+  const out = await _execFileAsync('/usr/bin/textutil', ['-convert', 'txt', '-stdout', filePath], { maxBuffer: 15 * 1024 * 1024 });
+  return normalizeAttachmentText(out.stdout);
+}
+
+async function writeDocumentTextToPath(filePath, content) {
+  const ext = path.extname(filePath || '').toLowerCase();
+  if (!(process.platform === 'darwin' && _supportedDocumentWriteExt(ext))) {
+    throw new Error('Document writing is only supported for .docx, .rtf, and .odt files in this build');
+  }
+  const tmpTxt = path.join(os.tmpdir(), 'fauna-doc-edit-' + Date.now() + '-' + Math.random().toString(36).slice(2) + '.txt');
+  fs.writeFileSync(tmpTxt, String(content || ''), 'utf8');
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    checkpointFile(filePath);
+    await _execFileAsync('/usr/bin/textutil', ['-convert', ext.slice(1), tmpTxt, '-output', filePath], { maxBuffer: 15 * 1024 * 1024 });
+    return { bytes: fs.statSync(filePath).size };
+  } finally {
+    try { fs.unlinkSync(tmpTxt); } catch (_) {}
+  }
 }
 
 app.post('/api/extract-attachment', async (req, res) => {
@@ -3644,7 +3777,16 @@ app.post('/api/shell-exec', (req, res) => {
       res.end();
     });
 
-    req.on('close', () => { if (idleTimer) clearTimeout(idleTimer); try { child.kill('SIGTERM'); } catch (_) {} });
+    req.on('aborted', () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      try { child.kill('SIGTERM'); } catch (_) {}
+    });
+    res.on('close', () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      if (!res.writableEnded) {
+        try { child.kill('SIGTERM'); } catch (_) {}
+      }
+    });
     return;
   }
 
@@ -3696,6 +3838,32 @@ app.post('/api/shell-stdin', (req, res) => {
   }
 });
 
+app.post('/api/extract-document', async (req, res) => {
+  const { path: filePath, cwd } = req.body || {};
+  if (!filePath) return res.status(400).json({ error: 'path required' });
+  try {
+    const abs = resolvePath(filePath, cwd);
+    if (!fs.existsSync(abs)) return res.status(404).json({ error: 'File not found: ' + abs, path: abs });
+    const text = await extractDocumentTextFromPath(abs);
+    res.json({ ok: true, path: abs, content: text, editable: _supportedDocumentWriteExt(path.extname(abs).toLowerCase()) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/api/write-document-text', async (req, res) => {
+  const { path: filePath, content, cwd } = req.body || {};
+  if (!filePath) return res.status(400).json({ error: 'path required' });
+  if (content === undefined) return res.status(400).json({ error: 'content required' });
+  try {
+    const abs = resolvePath(filePath, cwd);
+    const result = await writeDocumentTextToPath(abs, content);
+    res.json({ ok: true, path: abs, bytes: result.bytes });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ── Write file (no shell / no truncation) ─────────────────────────────────
 // VS Code lesson: bypass shell entirely — put content in the HTTP body (20 MB limit).
 // Use this instead of shell heredocs which truncate at ~16 KB.
@@ -3715,6 +3883,132 @@ function resolvePath(filePath, cwd) {
     throw new Error('Path outside allowed directories');
   }
   return resolved;
+}
+
+function renderMarkdownForPdf(markdown, title) {
+  const body = marked.parse(markdown || '');
+  const safeTitle = String(title || 'Document').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>${safeTitle}</title>
+  <style>
+    @page { size: A4; margin: 18mm 16mm 18mm 16mm; }
+    :root { color-scheme: light; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #ffffff;
+      color: #111827;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 12pt;
+      line-height: 1.55;
+    }
+    body { padding: 0; }
+    main { max-width: 100%; }
+    h1, h2, h3, h4, h5, h6 {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.2;
+      margin: 1.2em 0 0.55em;
+      color: #0f172a;
+      break-after: avoid-page;
+    }
+    h1 { font-size: 22pt; }
+    h2 { font-size: 17pt; }
+    h3 { font-size: 14pt; }
+    p, ul, ol, blockquote, pre, table { margin: 0 0 0.9em; }
+    ul, ol { padding-left: 1.35em; }
+    li + li { margin-top: 0.2em; }
+    blockquote {
+      margin-left: 0;
+      padding-left: 1em;
+      border-left: 3px solid #d1d5db;
+      color: #374151;
+    }
+    code, pre {
+      font-family: "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+      font-size: 10.5pt;
+    }
+    code {
+      background: #f3f4f6;
+      padding: 0.08em 0.28em;
+      border-radius: 4px;
+    }
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #f8fafc;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 0.9em;
+    }
+    pre code { background: transparent; padding: 0; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 10.5pt;
+    }
+    th, td {
+      border: 1px solid #d1d5db;
+      padding: 0.45em 0.55em;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    hr { border: none; border-top: 1px solid #d1d5db; margin: 1.3em 0; }
+    img { max-width: 100%; }
+    a { color: #1d4ed8; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <main>${body}</main>
+</body>
+</html>`;
+}
+
+async function convertMarkdownToPdf(markdown, outputPath, title) {
+  let win = null;
+  let tmpHtml = null;
+  try {
+    const { BrowserWindow } = _require('electron');
+    if (!BrowserWindow) throw new Error('Electron BrowserWindow is unavailable');
+    const html = renderMarkdownForPdf(markdown, title);
+    tmpHtml = path.join(os.tmpdir(), 'fauna-mdpdf-' + Date.now() + '-' + Math.random().toString(36).slice(2) + '.html');
+    fs.writeFileSync(tmpHtml, html, 'utf8');
+
+    win = new BrowserWindow({
+      show: false,
+      width: 794,
+      height: 1123,
+      backgroundColor: '#ffffff',
+      webPreferences: {
+        sandbox: false,
+        offscreen: true,
+      },
+    });
+    await win.loadFile(tmpHtml);
+    try {
+      await win.webContents.executeJavaScript('document.fonts && document.fonts.ready ? document.fonts.ready.then(() => true) : true');
+    } catch (_) {}
+
+    const pdf = await win.webContents.printToPDF({
+      printBackground: true,
+      preferCSSPageSize: true,
+      pageSize: 'A4',
+      margins: { top: 0, bottom: 0, left: 0, right: 0 },
+    });
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.writeFileSync(outputPath, pdf);
+    return { path: outputPath, bytes: pdf.length };
+  } finally {
+    if (win) {
+      try { win.destroy(); } catch (_) {}
+    }
+    if (tmpHtml) {
+      try { fs.unlinkSync(tmpHtml); } catch (_) {}
+    }
+  }
 }
 
 // ── AutoRecovery — Word-style checkpoint before every destructive write ───
@@ -3760,6 +4054,7 @@ app.get('/api/preview-file', (req, res) => {
       '.json': 'application/json', '.svg': 'image/svg+xml',
       '.png':  'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
       '.gif':  'image/gif', '.webp': 'image/webp',
+      '.pdf':  'application/pdf',
       '.txt':  'text/plain', '.md': 'text/plain',
     };
     const mime = mimeMap[ext] || 'application/octet-stream';
@@ -3770,6 +4065,28 @@ app.get('/api/preview-file', (req, res) => {
     res.send(content);
   } catch (e) {
     res.status(500).send(e.message);
+  }
+});
+
+app.post('/api/markdown-to-pdf', async (req, res) => {
+  const { markdownPath, markdown, outputPath, title, cwd } = req.body || {};
+  if (!markdownPath && typeof markdown !== 'string') {
+    return res.status(400).json({ error: 'markdownPath or markdown required' });
+  }
+  try {
+    const sourceMarkdown = markdownPath
+      ? fs.readFileSync(resolvePath(markdownPath, cwd), 'utf8')
+      : String(markdown || '');
+    const resolvedOutput = outputPath
+      ? resolvePath(outputPath, cwd)
+      : (markdownPath
+          ? resolvePath(String(markdownPath).replace(/\.[^.\/]+$/, '') + '.pdf', cwd)
+          : null);
+    if (!resolvedOutput) return res.status(400).json({ error: 'outputPath required when markdownPath is not provided' });
+    const result = await convertMarkdownToPdf(sourceMarkdown, resolvedOutput, title || path.basename(resolvedOutput, path.extname(resolvedOutput)) || 'Document');
+    res.json({ ok: true, path: result.path, bytes: result.bytes });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -4120,6 +4437,11 @@ app.get('/api/read-image', (req, res) => {
   const filePath = req.query.path;
   const maxWidth = parseInt(req.query.maxWidth || '1280', 10);
   if (!filePath) return res.status(400).json({ error: 'path required' });
+
+  // Check file exists before attempting conversion
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: `File not found: ${filePath}. If this was a screencapture command, it may have failed silently due to missing Screen Recording permission — use the gui_screenshot tool instead.` });
+  }
 
   const tmpPath = `/tmp/fauna_vision_${Date.now()}.jpg`;
   _exec(
