@@ -1280,6 +1280,22 @@ async function saveGenUIToProject(specJson, title) {
   }
 }
 
+function _buildGenUIProjList(filter) {
+  var q = (filter || '').toLowerCase();
+  var projs = (state.projects || []).filter(function(p) {
+    return !q || p.name.toLowerCase().indexOf(q) !== -1;
+  });
+  var rows = projs.map(function(p) {
+    return '<div class="proj-picker-item" onclick="_saveGenUIToSpecificProject(\'' +
+      _projEsc(p.id) + '\',document.getElementById(\'gui-proj-picker-overlay\'))">' +
+      '<span class="proj-dot proj-color-' + _projEsc(p.color) + '"></span>' +
+      '<span class="proj-picker-name">' + _projEsc(p.name) + '</span>' +
+    '</div>';
+  }).join('');
+  if (!rows) rows = '<div style="padding:10px 12px;font-size:12px;color:var(--fau-text-dim)">' + (q ? 'No matches' : 'No projects yet') + '</div>';
+  return rows;
+}
+
 function _openGenUIProjectPicker(specJson, title) {
   var existing = document.getElementById('gui-proj-picker-overlay');
   if (existing) existing.remove();
@@ -1289,23 +1305,22 @@ function _openGenUIProjectPicker(specJson, title) {
   overlay.className = 'proj-picker-overlay';
   overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
 
-  var projList = (state.projects || []).map(function(p) {
-    return '<div class="proj-picker-item" onclick="_saveGenUIToSpecificProject(\'' +
-      _projEsc(p.id) + '\',document.getElementById(\'gui-proj-picker-overlay\'))">' +
-      '<span class="proj-dot proj-color-' + _projEsc(p.color) + '"></span>' +
-      '<span class="proj-picker-name">' + _projEsc(p.name) + '</span>' +
-    '</div>';
-  }).join('') || '<div style="padding:12px;color:var(--fau-text-dim)">No projects yet</div>';
-
   overlay.innerHTML =
     '<div class="proj-picker-panel">' +
       '<div class="proj-picker-header">' +
         '<span><i class="ti ti-folder-plus"></i> Add to Project</span>' +
         '<button onclick="document.getElementById(\'gui-proj-picker-overlay\').remove()"><i class="ti ti-x"></i></button>' +
       '</div>' +
-      '<div style="padding:8px 12px;font-size:11px;color:var(--fau-text-muted)">Save <strong>' + _projEsc(title || 'UI Component') + '</strong> as a project context</div>' +
-      '<div class="proj-picker-list">' + projList + '</div>' +
+      '<div class="proj-picker-search-wrap">' +
+        '<i class="ti ti-search proj-picker-search-icon"></i>' +
+        '<input id="gui-proj-search" class="proj-picker-search" placeholder="Filter projects…" autocomplete="off"' +
+          ' oninput="document.getElementById(\'gui-proj-list\').innerHTML=_buildGenUIProjList(this.value)">' +
+      '</div>' +
+      '<div class="proj-picker-list" id="gui-proj-list" style="max-height:260px">' +
+        _buildGenUIProjList('') +
+      '</div>' +
       '<div class="proj-picker-footer">' +
+        '<div style="font-size:11px;color:var(--fau-text-muted);flex:1">Save <strong>' + _projEsc(title || 'UI Component') + '</strong> as a context</div>' +
         '<button class="proj-action-btn" onclick="_createProjectAndSaveGenUI()"><i class="ti ti-plus"></i> New project</button>' +
       '</div>' +
     '</div>';
@@ -1314,6 +1329,11 @@ function _openGenUIProjectPicker(specJson, title) {
   overlay._guiSpecJson = specJson;
   overlay._guiTitle    = title;
   document.body.appendChild(overlay);
+  // Auto-focus search
+  setTimeout(function() {
+    var inp = document.getElementById('gui-proj-search');
+    if (inp) inp.focus();
+  }, 50);
 }
 
 async function _saveGenUIToSpecificProject(projectId, overlay) {
@@ -1347,6 +1367,24 @@ async function _createProjectAndSaveGenUI() {
 
 // ── Move current conversation into a project ─────────────────────────────
 
+function _buildMoveConvProjList(filter, convProjectId) {
+  var q = (filter || '').toLowerCase();
+  var projs = (state.projects || []).filter(function(p) {
+    return !q || p.name.toLowerCase().indexOf(q) !== -1;
+  });
+  var rows = projs.map(function(p) {
+    var isLinked = convProjectId === p.id;
+    return '<div class="proj-picker-item' + (isLinked ? ' active' : '') + '" onclick="_linkConvToProject(\'' +
+      _projEsc(p.id) + '\',document.getElementById(\'move-conv-proj-overlay\'))">' +
+      '<span class="proj-dot proj-color-' + _projEsc(p.color) + '"></span>' +
+      '<span class="proj-picker-name">' + _projEsc(p.name) + '</span>' +
+      (isLinked ? '<span style="margin-left:auto;font-size:10px;color:var(--accent)"><i class="ti ti-check"></i></span>' : '') +
+    '</div>';
+  }).join('');
+  if (!rows) rows = '<div style="padding:10px 12px;font-size:12px;color:var(--fau-text-dim)">' + (q ? 'No matches' : 'No projects yet') + '</div>';
+  return rows;
+}
+
 function openMoveConversationToProject() {
   var conv = typeof getConv === 'function' && state.currentId ? getConv(state.currentId) : null;
   if (!conv) { _showToast('No active conversation', true); return; }
@@ -1359,18 +1397,8 @@ function openMoveConversationToProject() {
   overlay.className = 'proj-picker-overlay';
   overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
 
-  var projList = (state.projects || []).map(function(p) {
-    var isLinked = conv.projectId === p.id;
-    return '<div class="proj-picker-item' + (isLinked ? ' active' : '') + '" onclick="_linkConvToProject(\'' +
-      _projEsc(p.id) + '\',document.getElementById(\'move-conv-proj-overlay\'))">' +
-      '<span class="proj-dot proj-color-' + _projEsc(p.color) + '"></span>' +
-      '<span class="proj-picker-name">' + _projEsc(p.name) + '</span>' +
-      (isLinked ? '<span style="margin-left:auto;font-size:10px;color:var(--accent)"><i class="ti ti-check"></i></span>' : '') +
-    '</div>';
-  }).join('') || '<div style="padding:12px;color:var(--fau-text-dim)">No projects yet</div>';
-
   var removeRow = conv.projectId
-    ? '<div class="proj-picker-item" onclick="_linkConvToProject(null,document.getElementById(\'move-conv-proj-overlay\'))" style="color:var(--fau-text-muted)">' +
+    ? '<div class="proj-picker-item proj-picker-remove" onclick="_linkConvToProject(null,document.getElementById(\'move-conv-proj-overlay\'))" style="color:var(--fau-text-muted)">' +
         '<i class="ti ti-folder-x" style="font-size:13px"></i> <span>Remove from project</span>' +
       '</div>'
     : '';
@@ -1381,14 +1409,27 @@ function openMoveConversationToProject() {
         '<span><i class="ti ti-folder-symlink"></i> Move to Project</span>' +
         '<button onclick="document.getElementById(\'move-conv-proj-overlay\').remove()"><i class="ti ti-x"></i></button>' +
       '</div>' +
-      '<div style="padding:8px 12px;font-size:11px;color:var(--fau-text-muted)">Assign this conversation to a project</div>' +
-      '<div class="proj-picker-list">' + projList + removeRow + '</div>' +
+      '<div class="proj-picker-search-wrap">' +
+        '<i class="ti ti-search proj-picker-search-icon"></i>' +
+        '<input id="move-conv-proj-search" class="proj-picker-search" placeholder="Filter projects…" autocomplete="off"' +
+          ' oninput="document.getElementById(\'move-conv-proj-list\').innerHTML=_buildMoveConvProjList(this.value,\'' + _projEsc(conv.projectId || '') + '\')+document.getElementById(\'move-conv-proj-remove\').innerHTML">' +
+      '</div>' +
+      '<div class="proj-picker-list" id="move-conv-proj-list" style="max-height:260px">' +
+        _buildMoveConvProjList('', conv.projectId) +
+      '</div>' +
+      '<div id="move-conv-proj-remove" style="display:none">' + removeRow + '</div>' +
       '<div class="proj-picker-footer">' +
+        (removeRow ? '<div class="proj-picker-remove-wrap">' + removeRow + '</div>' : '') +
         '<button class="proj-action-btn" onclick="_createProjectAndMoveConv()"><i class="ti ti-plus"></i> New project</button>' +
       '</div>' +
     '</div>';
 
   document.body.appendChild(overlay);
+  // Auto-focus search
+  setTimeout(function() {
+    var inp = document.getElementById('move-conv-proj-search');
+    if (inp) inp.focus();
+  }, 50);
 }
 
 async function _linkConvToProject(projectId, overlay) {
