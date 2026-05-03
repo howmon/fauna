@@ -564,6 +564,30 @@ button .ti, label .ti { pointer-events: none; }
 .msg.user .msg-body { background: var(--fau-user-bg); border: 1px solid var(--fau-border); }
 .msg.ai   .msg-body { background: var(--fau-ai-bg);   border: 1px solid var(--fau-border); }
 .msg.system-msg .msg-body { background: transparent; color: var(--fau-text-muted); font-size: 12px; font-style: italic; text-align: center; border: none; padding: 4px 0; }
+.msg-shell-verification {
+  display: flex; align-items: center; gap: 7px;
+  margin: 0 0 10px; padding: 7px 10px;
+  border: 1px solid var(--fau-border); border-radius: 8px;
+  font-size: 11.5px; line-height: 1.35;
+}
+.msg-shell-verification i { flex-shrink: 0; }
+.msg-shell-verification.pending {
+  background: rgba(245, 158, 11, .08);
+  border-color: rgba(245, 158, 11, .28);
+  color: var(--warn, #f59e0b);
+}
+.msg-shell-verification.pending .ti-loader { animation: spin .8s linear infinite; }
+.msg-shell-verification.warn {
+  background: rgba(248, 113, 113, .08);
+  border-color: rgba(248, 113, 113, .28);
+  color: #f87171;
+}
+.msg-shell-verification.done {
+  background: rgba(30, 200, 130, .08);
+  border-color: rgba(30, 200, 130, .28);
+  color: var(--success, #1ec882);
+}
+.shell-narrative-hidden { display: none !important; }
 
 /* Attachment chips in user message */
 .msg-attachments { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
@@ -670,6 +694,25 @@ button .ti, label .ti { pointer-events: none; }
 
 /* ── Attachment bar ────────────────────────────────────────────────── */
 #input-wrap.drag-over { border-color: var(--accent); background: var(--accent-dim); }
+
+/* ── Full-app drop overlay ─────────────────────────────────────── */
+#app-drop-overlay {
+  display: none; position: fixed; inset: 0; z-index: 9999;
+  background: rgba(0,0,0,.45); backdrop-filter: blur(2px);
+  align-items: center; justify-content: center;
+  pointer-events: none;
+}
+#app-drop-overlay.active { display: flex; }
+#app-drop-overlay-inner {
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+  border: 2.5px dashed var(--accent, #1ec882); border-radius: 18px;
+  padding: 48px 72px; color: var(--accent, #1ec882);
+  background: rgba(30,200,130,.07);
+  font-size: 15px; font-weight: 600; letter-spacing: .01em;
+  pointer-events: none;
+}
+#app-drop-overlay-inner .ti { font-size: 48px; }
+
 #drag-overlay {
   display: none; position: absolute; inset: 0; z-index: 20;
   border: 2px dashed var(--accent); border-radius: var(--radius);
@@ -2142,14 +2185,18 @@ body { animation: none; }
 .artifact-toolbar {
   display: flex; align-items: center; gap: 5px; padding: 5px 10px;
   border-bottom: 1px solid var(--fau-border); background: var(--fau-surface); flex-shrink: 0;
+  overflow: hidden;
 }
 .artifact-toolbar-label { font-size: 11px; color: var(--fau-text-muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-tbtn {
   background: var(--fau-surface2); border: 1px solid var(--fau-border); color: var(--fau-text-dim);
   border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer;
   display: inline-flex; align-items: center; gap: 3px; font-family: var(--font);
-  transition: all .12s; white-space: nowrap; flex-shrink: 0;
+  transition: all .12s; white-space: nowrap; flex-shrink: 1; min-width: 0; overflow: hidden;
 }
+.artifact-tbtn i { flex-shrink: 0; }
+.artifact-tbtn-view { flex-shrink: 0; }
+.artifact-tbtn-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .artifact-tbtn:hover { border-color: var(--accent); color: var(--accent2); }
 .artifact-tbtn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent2); }
 .artifact-scroll { flex: 1; overflow: auto; }
