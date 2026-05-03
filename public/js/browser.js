@@ -451,10 +451,45 @@ async function wvExec(wv, js, retries) {
   }
 }
 
+function _mapBrowserActionToExtAction(action) {
+  if (!action || typeof action.action !== 'string') return null;
+  var mapped = Object.assign({}, action);
+  var actionMap = {
+    'new-tab': 'tab:new',
+    'switch-tab': 'tab:switch',
+    'close-tab': 'tab:close',
+    'list-tabs': 'tab:list',
+    'screenshot': 'snapshot'
+  };
+  mapped.action = actionMap[mapped.action] || mapped.action;
+  if (typeof mapped.index === 'number' && mapped.tabId == null && (mapped.action === 'tab:switch' || mapped.action === 'tab:close')) {
+    mapped.tabId = mapped.index;
+  }
+  return mapped;
+}
+
+async function _executeBrowserActionViaExtension(action) {
+  if (!_extConnectedBrowsers.length) return null;
+  var mapped = _mapBrowserActionToExtAction(action);
+  if (!mapped) return null;
+  var supported = new Set([
+    'navigate', 'extract', 'extract-forms', 'fill', 'click', 'type', 'drag', 'scroll', 'hover', 'select',
+    'keyboard', 'wait', 'eval', 'snapshot', 'snapshot-full', 'tab:list', 'tab:new', 'tab:switch', 'tab:close', 'tab:info'
+  ]);
+  if (!supported.has(mapped.action)) return null;
+  var result = await executeExtAction(mapped);
+  if (result && typeof result === 'object' && !result._browserActionSource) result._browserActionSource = 'extension';
+  return result;
+}
+
 async function executeBrowserAction(action) {
   var wv = getActiveWebview();
 
   if (action.action === 'navigate') {
+    if (!wv && _extConnectedBrowsers.length) {
+      var extNav = await _executeBrowserActionViaExtension(action);
+      if (extNav) return extNav;
+    }
     openBrowserPane(); // opens pane + ensures a tab exists
     wv = getActiveWebview();
     if (!wv) throw new Error('No browser tab available');
@@ -471,7 +506,9 @@ async function executeBrowserAction(action) {
     return { ok: true, url: wv.getURL() };
 
   } else if (!wv) {
-    throw new Error('Browser pane not open — send a navigate action first');
+    var extResult = await _executeBrowserActionViaExtension(action);
+    if (extResult) return extResult;
+    throw new Error('Browser pane not open and no browser extension tab is available — send a navigate action first');
 
   } else if (action.action === 'type') {
     var js =
@@ -589,6 +626,11 @@ async function executeBrowserAction(action) {
       ? '\n\n### Page links (use these EXACT URLs in navigate — do not modify them):\n' + linkLines.join('\n')
       : '\n\n### Page links: none found';
     return { ok: true, title: d.title, url: d.url, text: d.text.slice(0, 10000) + linksBlock };
+
+  } else if (action.action === 'extract-forms') {
+    var extForms = await _executeBrowserActionViaExtension(action);
+    if (extForms) return extForms;
+    throw new Error('extract-forms is only available through the browser extension');
 
   } else if (action.action === 'eval') {
     // Run arbitrary JS in the webview and return the result as a string.
@@ -913,11 +955,20 @@ async function _runBrowserActionSequence(widgets, convId) {
 
       // If it was an extract, always feed result back to AI so it can continue
       if (w.action.action === 'extract') {
+        var fromExt = result && result._browserActionSource === 'extension';
+        var feedPrefix = fromExt ? 'Extracted page from real browser tab:' : 'Extracted page from browser panel:';
+        var emptyPrefix = fromExt ? 'Page loaded in real browser tab (no text content):' : 'Page loaded in browser panel (no text content):';
         var feedContent = (result.text
-          ? 'Extracted page from browser panel:\n\n**Title:** ' + result.title + '\n**URL:** ' + result.url + '\n\n' + result.text
-          : 'Page loaded in browser panel (no text content):\n**Title:** ' + result.title + '\n**URL:** ' + result.url)
+          ? feedPrefix + '\n\n**Title:** ' + result.title + '\n**URL:** ' + result.url + '\n\n' + result.text
+          : emptyPrefix + '\n**Title:** ' + result.title + '\n**URL:** ' + result.url)
           + '\n\nContinue your task immediately — emit the next browser-action blocks now.';
         await browserFeedAI(feedContent, convId);
+      }
+      if (w.action.action === 'extract-forms') {
+        var formsFeed = 'Form fields extracted from ' + ((result && result._browserActionSource === 'extension') ? 'real browser tab' : 'browser panel') + ' (' + (((result && result.fields) || []).length) + ' fields):\n\n```json\n' +
+          JSON.stringify(result.forms || result, null, 2).slice(0, 10000) + '\n```' +
+          '\n\nUse the selector values above for the next browser-action blocks.';
+        await browserFeedAI(formsFeed, convId);
       }
       // If it was a screenshot, feed the image back to the AI
       if (w.action.action === 'screenshot' && result.screenshot) {
