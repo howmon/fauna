@@ -48,10 +48,10 @@ function injectArtifactCard(id, containerEl) {
   var a = state.artifacts.find(function(x) { return x.id === id; });
   if (!a) return;
   var icons = { html:'ti-brand-html5', image:'ti-photo', markdown:'ti-markdown', json:'ti-braces',
-                csv:'ti-table', text:'ti-file-text', files:'ti-folder-open', web:'ti-world',
+                csv:'ti-table', text:'ti-file-text', files:'ti-folder-open', web:'ti-world', pdf:'ti-file-type-pdf', docx:'ti-file-word',
                 code:'ti-code', svg:'ti-vector', summary:'ti-align-left' };
   var labels = { html:'HTML', image:'Image', markdown:'Markdown', json:'JSON',
-                 csv:'CSV', text:'Text', files:'Files', web:'Web', code:'Code',
+                 csv:'CSV', text:'Text', files:'Files', web:'Web', pdf:'PDF', docx:'DOCX', code:'Code',
                  svg:'SVG', summary:'Summary' };
   var icon  = icons[a.type]  || 'ti-file';
   var label = labels[a.type] || a.type;
@@ -184,7 +184,7 @@ function renderArtifactTabs() {
 
 function artifactTypeIcon(type) {
   var m = { html:'ti-brand-html5', image:'ti-photo', markdown:'ti-markdown', json:'ti-braces',
-            csv:'ti-table', text:'ti-file-text', files:'ti-folder-open', web:'ti-world',
+            csv:'ti-table', text:'ti-file-text', files:'ti-folder-open', web:'ti-world', pdf:'ti-file-type-pdf', docx:'ti-file-word',
             code:'ti-code', svg:'ti-vector', summary:'ti-align-left', design:'ti-layout-2' };
   return m[type] || 'ti-file';
 }
@@ -239,6 +239,23 @@ function renderArtifactContent() {
       '</div>' +
     '</div>';
 
+  } else if (a.type === 'pdf' && a.path) {
+    var pdfUrl = '/api/preview-file?path=' + encodeURIComponent(a.path);
+    content = '<div class="artifact-scroll" style="height:calc(100% - 35px);background:#2a2a2a">' +
+      '<iframe src="' + pdfUrl + '" title="' + escHtml(a.title || 'PDF') + '" style="width:100%;height:100%;border:none;background:#fff"></iframe>' +
+    '</div>';
+
+  } else if (a.type === 'docx') {
+    var readOnly = a.editable === false;
+    content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
+      '<div style="padding:12px;display:flex;flex-direction:column;gap:10px;height:100%;box-sizing:border-box">' +
+        '<div style="font-size:12px;color:var(--fau-text-muted)">' +
+          (readOnly ? 'Previewing extracted document text. Editing is not supported for this document format in this build.' : 'Previewing extracted document text. Edit below and save back to the source document.') +
+        '</div>' +
+        '<textarea id="artifact-docx-editor-' + a.id + '" spellcheck="true" style="flex:1;min-height:280px;resize:none;background:var(--fau-surface2);color:var(--fau-text);border:1px solid var(--fau-border);border-radius:8px;padding:12px;font:13px/1.5 var(--mono);outline:none">' + escHtml(a.content || '') + '</textarea>' +
+      '</div>' +
+    '</div>';
+
   } else if (a.type === 'markdown' || a.type === 'summary' || a.type === 'web') {
     content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
       '<div class="artifact-prose msg-body">' + renderMarkdown(a.content || '') + '</div>' +
@@ -277,8 +294,8 @@ function makeArtifactToolbar(a) {
 
   // Visual / Code toggle for HTML, SVG, and design artifacts
   if (a.type === 'html' || a.type === 'svg' || a.type === 'design') {
-    btns += '<button class="artifact-tbtn' + (!showCode ? ' active' : '') + '" onclick="setArtifactView(false)" title="Rendered preview"><i class="ti ti-eye"></i> Visual</button>';
-    btns += '<button class="artifact-tbtn' + (showCode ? ' active' : '') + '" onclick="setArtifactView(true)" title="View source"><i class="ti ti-code"></i> Code</button>';
+    btns += '<button class="artifact-tbtn artifact-tbtn-view' + (!showCode ? ' active' : '') + '" onclick="setArtifactView(false)" title="Rendered preview"><i class="ti ti-eye"></i> Visual</button>';
+    btns += '<button class="artifact-tbtn artifact-tbtn-view' + (showCode ? ' active' : '') + '" onclick="setArtifactView(true)" title="View source"><i class="ti ti-code"></i> Code</button>';
   }
 
   // Device frame picker for design artifacts
@@ -298,32 +315,43 @@ function makeArtifactToolbar(a) {
       '</button>';
     });
     // PDF print button
-    btns += '<button class="artifact-tbtn" onclick="printDesignArtifact(\'' + a.id + '\')" title="Print / Save as PDF"><i class="ti ti-printer"></i> PDF</button>';
+    btns += '<button class="artifact-tbtn" onclick="printDesignArtifact(\'' + a.id + '\')" title="Print / Save as PDF"><i class="ti ti-printer"></i><span class="artifact-tbtn-label"> PDF</span></button>';
   }
 
   // Copy source code
   if (a.content != null) {
-    btns += '<button class="artifact-tbtn" onclick="copyArtifact(\'' + a.id + '\')" title="Copy source code"><i class="ti ti-copy"></i> Copy Code</button>';
+    btns += '<button class="artifact-tbtn" onclick="copyArtifact(\'' + a.id + '\')" title="Copy source code"><i class="ti ti-copy"></i><span class="artifact-tbtn-label"> Copy Code</span></button>';
   }
   // Download
   if (a.content != null) {
     var ext = (a.type === 'design') ? '.html' : a.type === 'html' ? '.html' : a.type === 'svg' ? '.svg' : a.type === 'json' ? '.json' : a.type === 'csv' ? '.csv' : a.type === 'markdown' ? '.md' : '.txt';
     var filename = (a.title || 'artifact').replace(/[^a-zA-Z0-9._-]/g, '_') + ext;
-    btns += '<button class="artifact-tbtn" onclick="downloadArtifact(\'' + a.id + '\',\'' + escHtml(filename) + '\')" title="Download file"><i class="ti ti-download"></i> Download</button>';
+    btns += '<button class="artifact-tbtn" onclick="downloadArtifact(\'' + a.id + '\',\'' + escHtml(filename) + '\')" title="Download file"><i class="ti ti-download"></i><span class="artifact-tbtn-label"> Download</span></button>';
   }
   // Open externally in default browser
   if (a.type === 'html' || a.type === 'svg' || a.type === 'design') {
-    btns += '<button class="artifact-tbtn" onclick="openArtifactExternal(\'' + a.id + '\')" title="Open in browser"><i class="ti ti-external-link"></i> Open</button>';
+    btns += '<button class="artifact-tbtn" onclick="openArtifactExternal(\'' + a.id + '\')" title="Open in browser"><i class="ti ti-external-link"></i><span class="artifact-tbtn-label"> Open</span></button>';
   }
   if ((a.type === 'image') && a.path) {
-    btns += '<button class="artifact-tbtn" onclick="openFileInFinder(\'' + a.path + '\')" title="Reveal in Finder"><i class="ti ti-folder"></i> Reveal</button>';
+    btns += '<button class="artifact-tbtn" onclick="openFileInFinder(\'' + a.path + '\')" title="Reveal in Finder"><i class="ti ti-folder"></i><span class="artifact-tbtn-label"> Reveal</span></button>';
+  }
+  if (a.type === 'pdf' && a.path) {
+    btns += '<button class="artifact-tbtn" onclick="openFilePath(\'' + a.path + '\')" title="Open file"><i class="ti ti-external-link"></i><span class="artifact-tbtn-label"> Open</span></button>';
+    btns += '<button class="artifact-tbtn" onclick="openFileInFinder(\'' + a.path + '\')" title="Reveal in Finder"><i class="ti ti-folder"></i><span class="artifact-tbtn-label"> Reveal</span></button>';
+  }
+  if (a.type === 'docx' && a.path) {
+    if (a.editable !== false) {
+      btns += '<button class="artifact-tbtn" onclick="saveDocxArtifact(\'' + a.id + '\')" title="Save changes back to document"><i class="ti ti-device-floppy"></i><span class="artifact-tbtn-label"> Save</span></button>';
+    }
+    btns += '<button class="artifact-tbtn" onclick="openFilePath(\'' + a.path + '\')" title="Open file"><i class="ti ti-external-link"></i><span class="artifact-tbtn-label"> Open</span></button>';
+    btns += '<button class="artifact-tbtn" onclick="openFileInFinder(\'' + a.path + '\')" title="Reveal in Finder"><i class="ti ti-folder"></i><span class="artifact-tbtn-label"> Reveal</span></button>';
   }
   if (a.url && /^https?:\/\//i.test(a.url)) {
-    btns += '<button class="artifact-tbtn" onclick="window.open(\'' + escHtml(a.url) + '\',\'_blank\')" title="Open URL"><i class="ti ti-external-link"></i> Open</button>';
+    btns += '<button class="artifact-tbtn" onclick="window.open(\'' + escHtml(a.url) + '\',\'_blank\')" title="Open URL"><i class="ti ti-external-link"></i><span class="artifact-tbtn-label"> Open</span></button>';
   }
   // Save to active project
   if (state.activeProjectId && a.content != null) {
-    btns += '<button class="artifact-tbtn proj-save-btn" onclick="saveArtifactToProject(\'' + escHtml(a.id) + '\')" title="Save to project"><i class="ti ti-folder-plus"></i> Save to Project</button>';
+    btns += '<button class="artifact-tbtn proj-save-btn" onclick="saveArtifactToProject(\'' + escHtml(a.id) + '\')" title="Save to project"><i class="ti ti-folder-plus"></i><span class="artifact-tbtn-label"> Save to Project</span></button>';
   }
   return '<div class="artifact-toolbar">' +
     '<span class="artifact-toolbar-label">' + escHtml(a.title || 'Artifact') + '</span>' +
@@ -399,6 +427,33 @@ function openFileInFinder(path) {
     body: JSON.stringify({ command: 'open -R ' + JSON.stringify(path) }) }).catch(function(){});
 }
 
+function openFilePath(path) {
+  fetch('/api/shell-exec', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command: 'open ' + JSON.stringify(path) }) }).catch(function(){});
+}
+
+async function saveDocxArtifact(id) {
+  var a = state.artifacts.find(function(x) { return x.id === id; });
+  if (!a || !a.path) return;
+  var editor = document.getElementById('artifact-docx-editor-' + id);
+  if (!editor) return;
+  var nextContent = editor.value;
+  try {
+    var r = await fetch('/api/write-document-text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: a.path, content: nextContent })
+    });
+    var d = await r.json();
+    if (!r.ok || !d.ok) throw new Error((d && d.error) || 'Failed to save document');
+    a.content = nextContent;
+    saveConversations();
+    showToast('Document saved');
+  } catch (e) {
+    showToast('Save failed: ' + e.message);
+  }
+}
+
 async function fetchArtifactImage(id, path) {
   try {
     var r = await fetch('/api/read-image?path=' + encodeURIComponent(path));
@@ -434,11 +489,32 @@ function renderFileList(text) {
     var isDir = line.endsWith('/');
     var name  = line.split('/').pop() || line;
     var icon  = isDir ? 'ti-folder' : fileIcon(name);
-    return '<div class="artifact-file-row" onclick="previewFilePath(' + JSON.stringify(line) + ')" title="' + escHtml(line) + '">' +
+    var canPreview = isLikelyArtifactPath(line);
+    return '<div class="artifact-file-row' + (canPreview ? '' : ' artifact-file-row-disabled') + '"' +
+      (canPreview ? ' onclick="previewFilePath(' + JSON.stringify(line) + ')"' : '') +
+      ' title="' + escHtml(canPreview ? line : 'Not a previewable file path: ' + line) + '">' +
       '<i class="ti ' + icon + '"></i>' +
       '<span class="artifact-file-path">' + escHtml(line) + '</span>' +
     '</div>';
   }).join('');
+}
+
+function isLikelyArtifactPath(line) {
+  var value = String(line || '').trim();
+  if (!value) return false;
+  if (/^[0-9]+:?$/.test(value)) return false;
+  if (/^[0-9]+:\s*$/.test(value)) return false;
+  if (/^[A-Za-z]+:$/.test(value)) return false;
+  if (/^[A-Za-z][A-Za-z\s-]{1,40}:$/.test(value)) return false;
+  if (/^(developer|assistant|user|system)$/i.test(value)) return false;
+  if (/^[*-]\s+/.test(value)) value = value.replace(/^[*-]\s+/, '');
+  if (/^\d+[.)]\s+/.test(value)) value = value.replace(/^\d+[.)]\s+/, '');
+  if (/^(https?:|data:|blob:)/i.test(value)) return false;
+  if (/^[~./]/.test(value)) return true;
+  if (/^[A-Za-z]:[\\/]/.test(value)) return true;
+  if (/[\\/]/.test(value)) return true;
+  if (/\.[A-Za-z0-9]{1,8}$/.test(value)) return true;
+  return false;
 }
 
 function fileIcon(name) {
@@ -452,9 +528,27 @@ function fileIcon(name) {
 }
 
 async function previewFilePath(filePath) {
+  if (!isLikelyArtifactPath(filePath)) return;
   var ext = (filePath.split('.').pop() || '').toLowerCase();
   if (['png','jpg','jpeg','gif','webp'].includes(ext)) {
-    addArtifact({ type: 'image', title: filePath.split('/').pop(), path: filePath });
+    openArtifact(addArtifact({ type: 'image', title: filePath.split('/').pop(), path: filePath }));
+    return;
+  }
+  if (ext === 'pdf') {
+    openArtifact(addArtifact({ type: 'pdf', title: filePath.split('/').pop(), path: filePath }));
+    return;
+  }
+  if (['doc','docx','rtf','odt','pages'].includes(ext)) {
+    try {
+      var docRes = await fetch('/api/extract-document', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath })
+      });
+      var docData = await docRes.json();
+      if (!docRes.ok || !docData.ok) throw new Error((docData && docData.error) || 'Failed to preview document');
+      openArtifact(addArtifact({ type: 'docx', title: filePath.split('/').pop(), path: docData.path || filePath, content: docData.content || '', editable: docData.editable !== false }));
+    } catch (_) {}
     return;
   }
   try {
@@ -467,7 +561,7 @@ async function previewFilePath(filePath) {
                : ext === 'csv'  ? 'csv'
                : ['html','htm'].includes(ext) ? 'html'
                : 'text';
-      addArtifact({ type: type, title: filePath.split('/').pop(), content: d.stdout });
+      openArtifact(addArtifact({ type: type, title: filePath.split('/').pop(), path: filePath, content: d.stdout }));
     }
   } catch (_) {}
 }

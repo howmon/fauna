@@ -1,9 +1,268 @@
 // ── Shell-exec block execution ────────────────────────────────────────────
 
+function _parseShellExecResult(widget) {
+  if (!widget || !widget.dataset.result) return null;
+  try { return JSON.parse(widget.dataset.result); } catch (_) { return null; }
+}
+
+function _ensureShellVerificationBanner(msgEl) {
+  if (!msgEl) return null;
+  var body = msgEl.querySelector('.msg-body');
+  if (!body) return null;
+  var banner = body.querySelector('.msg-shell-verification');
+  if (banner) return banner;
+  banner = document.createElement('div');
+  banner.className = 'msg-shell-verification pending';
+  body.insertBefore(banner, body.firstChild || null);
+  return banner;
+}
+
+function _updateShellNarrativeVisibility(msgEl, shouldHide) {
+  if (!msgEl) return;
+  var body = msgEl.querySelector('.msg-body');
+  if (!body) return;
+  Array.from(body.children).forEach(function(child) {
+    if (child.classList.contains('msg-shell-verification')) return;
+    if (child.classList.contains('shell-exec-block')) return;
+    if (child.classList.contains('system-inline-card')) return;
+    if (shouldHide) child.classList.add('shell-narrative-hidden');
+    else child.classList.remove('shell-narrative-hidden');
+  });
+}
+
+function updateMessageShellVerification(msgEl) {
+  if (!msgEl) return;
+  var widgets = Array.from(msgEl.querySelectorAll('.shell-exec-block'));
+  var banner = msgEl.querySelector('.msg-shell-verification');
+  if (!widgets.length) {
+    if (banner) banner.remove();
+    _updateShellNarrativeVisibility(msgEl, false);
+    return;
+  }
+  banner = _ensureShellVerificationBanner(msgEl);
+  if (!banner) return;
+
+  var completed = 0;
+  var running = 0;
+  var empty = 0;
+  widgets.forEach(function(widget) {
+    var resultEl = widget.querySelector('.shell-exec-result');
+    if (resultEl && resultEl.classList.contains('running')) running += 1;
+    var result = _parseShellExecResult(widget);
+    if (!result) return;
+    completed += 1;
+    if (!(result.stdout && result.stdout.trim()) && !(result.stderr && result.stderr.trim()) && !result.error && !result._screenshot) {
+      empty += 1;
+    }
+  });
+
+  if (completed === 0) {
+    banner.className = 'msg-shell-verification pending';
+    banner.innerHTML = '<i class="ti ti-hourglass"></i><span>Shell commands pending verification. Ignore assistant claims below until command results appear.</span>';
+    _updateShellNarrativeVisibility(msgEl, true);
+    return;
+  }
+
+  if (running > 0 || completed < widgets.length) {
+    banner.className = 'msg-shell-verification pending';
+    banner.innerHTML = '<i class="ti ti-loader"></i><span>Shell verification in progress — ' + completed + ' of ' + widgets.length + ' command' + (widgets.length === 1 ? '' : 's') + ' produced results.</span>';
+    _updateShellNarrativeVisibility(msgEl, true);
+    return;
+  }
+
+  if (empty > 0) {
+    banner.className = 'msg-shell-verification warn';
+    banner.innerHTML = '<i class="ti ti-alert-triangle"></i><span>Shell results are incomplete. ' + empty + ' command' + (empty === 1 ? '' : 's') + ' produced no output, so the assistant text above remains unverified.</span>';
+    _updateShellNarrativeVisibility(msgEl, true);
+    return;
+  }
+
+  banner.className = 'msg-shell-verification done';
+  banner.innerHTML = '<i class="ti ti-check"></i><span>Shell results received. Review command output below before trusting any success claims in the assistant message.</span>';
+  _updateShellNarrativeVisibility(msgEl, false);
+}
+
+function _resolveShellFilePath(filePath, cwd) {
+  if (!filePath) return '';
+  var raw = String(filePath).trim().replace(/^['"]|['"]$/g, '');
+  if (!raw) return '';
+  if (raw.startsWith('~/')) return raw;
+  if (raw[0] === '/') return raw;
+  if (/^[A-Za-z]:[\\/]/.test(raw)) return raw;
+  if (!cwd) return raw;
+  var base = cwd.replace(/\/+$|\/+$/g, '');
+  return base + '/' + raw.replace(/^\.\//, '');
+}
+
+function _extractCreatedFileCandidates(command, cwd) {
+  var paths = [];
+  function pushMatch(path) {
+    var raw = String(path || '').trim().replace(/^['"]|['"]$/g, '');
+    if (!raw) return;
+    // Ignore option-like tokens accidentally captured from commands such as `find ... -o -name`.
+    if (/^-[A-Za-z]/.test(raw)) return;
+    var resolved = _resolveShellFilePath(path, cwd);
+    if (!resolved) return;
+    if (/[|;&]$/.test(resolved)) resolved = resolved.slice(0, -1);
+    if (!paths.includes(resolved)) paths.push(resolved);
+  }
+
+  String(command || '').replace(/(?:^|\s)(?:>|1>|>>)\s*(?:"([^"]+)"|'([^']+)'|([^\s|;&<]+))/g, function(_, a, b, c) {
+    pushMatch(a || b || c);
+    return _;
+  });
+  String(command || '').replace(/(?:^|\s)tee(?:\s+-a)?\s+(?:"([^"]+)"|'([^']+)'|([^\s|;&]+))/g, function(_, a, b, c) {
+    pushMatch(a || b || c);
+    return _;
+  });
+  String(command || '').replace(/(?:^|\s)(?:-o\s+|--output(?:=|\s+))(?:"([^"]+)"|'([^']+)'|([^\s|;&]+))/g, function(_, a, b, c) {
+    pushMatch(a || b || c);
+    return _;
+  });
+
+  var cpMv = String(command || '').match(/^(?:cp|mv)\s+(?:-[^\s]+\s+)*(?:"[^"]+"|'[^']+'|[^\s]+)\s+(?:"([^"]+)"|'([^']+)'|([^\s|;&]+))\s*$/m);
+  if (cpMv) pushMatch(cpMv[1] || cpMv[2] || cpMv[3]);
+
+  return paths;
+}
+
+async function _createArtifactForFilePath(filePath) {
+  if (!filePath) return null;
+  var existing = state.artifacts.find(function(a) { return a.path === filePath; });
+  if (existing) return existing.id;
+
+  var existsRes;
+  try {
+    existsRes = await fetch('/api/preview-file?path=' + encodeURIComponent(filePath), { method: 'HEAD' });
+  } catch (_) {
+    return null;
+  }
+  if (!existsRes || !existsRes.ok) return null;
+
+  var ext = (filePath.split('.').pop() || '').toLowerCase();
+  var title = filePath.split('/').pop() || filePath;
+  if (['png','jpg','jpeg','gif','webp'].includes(ext)) {
+    return addArtifact({ type: 'image', title: title, path: filePath });
+  }
+  if (ext === 'pdf') {
+    return addArtifact({ type: 'pdf', title: title, path: filePath });
+  }
+
+  var readRes;
+  try {
+    readRes = await fetch('/api/read-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: filePath })
+    });
+  } catch (_) {
+    return null;
+  }
+  if (!readRes.ok) return null;
+  var readData;
+  try { readData = await readRes.json(); } catch (_) { return null; }
+  if (!readData || typeof readData.content !== 'string') return null;
+
+  var type = ['html','htm'].includes(ext) ? 'html'
+           : ext === 'svg' ? 'svg'
+           : ['md','markdown'].includes(ext) ? 'markdown'
+           : ext === 'json' ? 'json'
+           : ext === 'csv' ? 'csv'
+           : 'text';
+  return addArtifact({ type: type, title: title, path: filePath, content: readData.content });
+}
+
+async function maybeAttachCreatedFileArtifact(command, result, containerEl) {
+  if (!result || result.exitCode !== 0) return [];
+  var candidates = _extractCreatedFileCandidates(command, result.cwd || '');
+  var verified = [];
+  if (!candidates.length) return verified;
+  for (var i = 0; i < candidates.length; i++) {
+    try {
+      var artId = await _createArtifactForFilePath(candidates[i]);
+      if (artId) {
+        verified.push(candidates[i]);
+        if (containerEl) injectArtifactCard(artId, containerEl);
+      }
+    } catch (_) {}
+  }
+  return verified;
+}
+
+function _firstCommandToken(command) {
+  var lines = String(command || '').split('\n').map(function(line) { return line.trim(); }).filter(function(line) {
+    return line && !line.startsWith('#');
+  });
+  if (!lines.length) return '';
+  var line = lines[0].replace(/^sudo\s+/, '');
+  var match = line.match(/^([^\s|;&()]+)/);
+  return match ? match[1] : '';
+}
+
+function _escapeDoubleQuoted(text) {
+  return String(text || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function _buildTroubleshootCommand(command, result) {
+  var pieces = [];
+  pieces.push('echo "[troubleshoot] command produced no stdout/stderr; collecting diagnostics"');
+  pieces.push('pwd');
+
+  var token = _firstCommandToken(command);
+  if (token) {
+    pieces.push('echo "[command] ' + _escapeDoubleQuoted(token) + '"');
+    pieces.push('command -v ' + JSON.stringify(token) + ' || true');
+  }
+
+  var candidates = _extractCreatedFileCandidates(command, result.cwd || '');
+  if (candidates.length) {
+    candidates.forEach(function(filePath) {
+      pieces.push('if [ -e ' + JSON.stringify(filePath) + ' ]; then echo "[exists] ' + _escapeDoubleQuoted(filePath) + '"; ls -ld ' + JSON.stringify(filePath) + '; else echo "[missing] ' + _escapeDoubleQuoted(filePath) + '"; fi');
+    });
+  } else {
+    pieces.push('echo "[note] no explicit output path inferred from command"');
+  }
+
+  return pieces.join(' ; ');
+}
+
+async function _runTroubleshootForEmptyResult(widget, command, result) {
+  if (!widget || result._troubleshoot) return result;
+  var diagCommand = _buildTroubleshootCommand(command, result);
+  var bodyObj = { command: diagCommand };
+  if (result.cwd) bodyObj.cwd = result.cwd;
+  try {
+    var resp = await fetch('/api/shell-exec', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(bodyObj)
+    });
+    var diag = resp.ok ? await resp.json() : { ok: false, exitCode: 1, stdout: '', stderr: await resp.text() };
+    result._troubleshoot = {
+      command: diagCommand,
+      stdout: diag.stdout || '',
+      stderr: diag.stderr || '',
+      exitCode: (diag.exitCode != null) ? diag.exitCode : (diag.ok ? 0 : 1)
+    };
+    widget.dataset.result = JSON.stringify(result);
+  } catch (e) {
+    result._troubleshoot = {
+      command: diagCommand,
+      stdout: '',
+      stderr: e.message || 'Troubleshoot failed',
+      exitCode: 1
+    };
+    widget.dataset.result = JSON.stringify(result);
+  }
+  return result;
+}
+
 function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
   var container = messageEl.querySelector('.prose') || messageEl;
   var codeBlocks = container.querySelectorAll('code.language-shell-exec, code.language-shell_exec');
   dbg('extractAndRenderShellExec: found ' + codeBlocks.length + ' block(s)', 'info');
+  if (codeBlocks.length) updateMessageShellVerification(messageEl);
+  var _autoRunIdx = 0; // only the first block in a response auto-runs; rest wait for user
   codeBlocks.forEach(function(code) {
     var pre = code.parentElement;
     var rawCode = code.textContent.trim();
@@ -12,9 +271,12 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
     var execId  = 'se-' + Date.now() + '-' + Math.random().toString(36).slice(2);
     var targetConv = getConv(convId || state.currentId);
     var depth = targetConv ? (targetConv._autoFeedDepth || 0) : 0;
-    var DEPTH_LIMIT = 20;
-    var autoRun = !noAutoRun && state.autoRunShell && depth < DEPTH_LIMIT;
+    var DEPTH_LIMIT = 10;
+    // Only the first block in this response may auto-run; subsequent blocks must be manually triggered.
+    var autoRun = !noAutoRun && state.autoRunShell && depth < DEPTH_LIMIT && _autoRunIdx === 0;
     var depthLimited = !noAutoRun && state.autoRunShell && depth >= DEPTH_LIMIT;
+    var pendingSerial = !noAutoRun && state.autoRunShell && depth < DEPTH_LIMIT && _autoRunIdx > 0;
+    if (autoRun || pendingSerial) _autoRunIdx++;
     dbg('  ↳ block: ' + rawCode.slice(0,60) + ' autoRun=' + autoRun + ' depth=' + depth, 'cmd');
 
     var widget = document.createElement('div');
@@ -27,6 +289,7 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
         '<i class="ti ti-terminal-2"></i>' +
         '<span>Shell Command</span>' +
         (autoRun ? '<span class="shell-exec-autorun-badge">auto-run</span>' : '') +
+        (pendingSerial ? '<span class="shell-exec-autorun-badge" style="background:var(--fau-surface2);color:var(--fau-text-dim)">pending — click Run</span>' : '') +
         (depthLimited ? '<span class="shell-exec-autorun-badge" style="background:var(--warn,#f59e0b);color:#000">paused — click Run</span>' : '') +
         '<div class="shell-exec-btns">' +
           '<button class="shell-exec-run" id="' + execId + '-run" ' +
@@ -36,10 +299,12 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
         '</div>' +
       '</div>' +
       '<div class="shell-exec-code">' + escHtml(rawCode) + '</div>' +
-      '<div class="shell-exec-result" id="' + execId + '-result"' + (depthLimited ? '' : ' style="display:none"') + '>' +
+      '<div class="shell-exec-result" id="' + execId + '-result"' + (depthLimited || pendingSerial ? '' : ' style="display:none"') + '>' +
         (depthLimited ? '<span class="se-meta">Auto-run paused after ' + DEPTH_LIMIT + ' steps — click Run to continue.</span>' : '') +
+        (pendingSerial ? '<span class="se-meta">Waiting for previous command — click Run to execute now.</span>' : '') +
       '</div>';
     pre.parentNode.replaceChild(widget, pre);
+    updateMessageShellVerification(messageEl);
 
     // Auto-run after a short delay if enabled
     if (autoRun) {
@@ -63,13 +328,38 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
 var _shellAbortControllers = {};
 var _shellKillIds = {};
 
-function showShellRunningPill(execId, code) {
+function syncShellRunningPills() {
+  var container = document.getElementById('shell-running-pills');
+  if (!container) return;
+  var activeConvId = (typeof state !== 'undefined' && state.currentId) ? state.currentId : '';
+  var visibleCount = 0;
+  Array.from(container.children).forEach(function(pill) {
+    var pillConvId = pill.dataset.convId || '';
+    var show = !pillConvId || pillConvId === activeConvId;
+    pill.style.display = show ? '' : 'none';
+    if (show) visibleCount += 1;
+  });
+  container.style.display = visibleCount ? 'flex' : 'none';
+}
+
+function clearShellRunningPillsForConversation(convId) {
+  if (!convId) return;
+  var container = document.getElementById('shell-running-pills');
+  if (!container) return;
+  Array.from(container.children).forEach(function(pill) {
+    if ((pill.dataset.convId || '') === convId) pill.remove();
+  });
+  syncShellRunningPills();
+}
+
+function showShellRunningPill(execId, code, convId) {
   var container = document.getElementById('shell-running-pills');
   if (!container) return;
   var short = code.length > 46 ? code.slice(0, 46) + '…' : code;
   var pill = document.createElement('span');
   pill.className = 'shell-running-pill';
   pill.id = 'pill-' + execId;
+  pill.dataset.convId = convId || (typeof state !== 'undefined' ? (state.currentId || '') : '');
   pill.innerHTML =
     '<i class="ti ti-loader spin"></i>' +
     '<span class="pill-label">' + escHtml(short) + '</span>' +
@@ -77,13 +367,12 @@ function showShellRunningPill(execId, code) {
       '<i class="ti ti-player-stop-filled"></i>' +
     '</button>';
   container.appendChild(pill);
-  container.style.display = 'flex';
+  syncShellRunningPills();
 }
 function hideShellRunningPill(execId) {
   var pill = document.getElementById('pill-' + execId);
   if (pill) pill.remove();
-  var container = document.getElementById('shell-running-pills');
-  if (container && !container.children.length) container.style.display = 'none';
+  syncShellRunningPills();
 }
 
 function killShellExec(execId) {
@@ -105,6 +394,7 @@ async function runShellExec(execId, opts) {
   var widget   = document.querySelector('[data-exec-id="' + execId + '"]');
   if (!widget) { dbg('runShellExec: widget not found ' + execId, 'err'); return; }
   var code     = widget.dataset.code;
+  var convId2  = widget.dataset.convId || state.currentId;
   var runBtn   = document.getElementById(execId + '-run');
   var feedBtn  = document.getElementById(execId + '-feed');
   var resultEl = document.getElementById(execId + '-result');
@@ -119,6 +409,8 @@ async function runShellExec(execId, opts) {
       resultEl.style.display = 'block';
       resultEl.className = 'shell-exec-result';
       resultEl.innerHTML = '<span class="se-err"><i class="ti ti-shield-check"></i> ' + escHtml(perm.reason) + '</span>';
+      widget.dataset.result = JSON.stringify({ ok: false, exitCode: 126, stdout: '', stderr: '', error: perm.reason, command: code });
+      updateMessageShellVerification(widget.closest('.msg'));
       runBtn.disabled = false;
       runBtn.innerHTML = '<i class="ti ti-player-play"></i> Run';
       return;
@@ -145,13 +437,12 @@ async function runShellExec(execId, opts) {
   _shellKillIds[execId] = killId;
 
   // Show a status pill in the input bar (with stop button)
-  showShellRunningPill(execId, code);
+  showShellRunningPill(execId, code, convId2);
 
   try {
     // Route through sandbox endpoint when an agent is active
     var endpoint = '/api/shell-exec';
     // Resolve working directory: prefer conversation CWD, then active project source root
-    var convId2 = widget.dataset.convId || state.currentId;
     var shellCwd = _convCwd[convId2] || '';
     if (!shellCwd && state.activeProjectId) {
       var activeProj = typeof _activeProject === 'function' ? _activeProject() : null;
@@ -261,6 +552,7 @@ async function runShellExec(execId, opts) {
 
     // Store result for feed-to-AI
     widget.dataset.result = JSON.stringify(d);
+    updateMessageShellVerification(widget.closest('.msg'));
 
     // Show feed button
     if (feedBtn) { feedBtn.style.display = ''; }
@@ -296,6 +588,10 @@ async function runShellExec(execId, opts) {
       detectShellArtifacts(code, d.stdout, widget.closest('.msg-body') || resultEl);
     }
 
+    var verifiedPaths = await maybeAttachCreatedFileArtifact(code, d, widget.closest('.msg-body') || resultEl);
+    if (verifiedPaths.length) d._verifiedPaths = verifiedPaths;
+    widget.dataset.result = JSON.stringify(d);
+
     // Auto-feed output back to AI always when autoFeed is set —
     // the AI needs to know about empty results and failures, not just successes
     if (opts.autoFeed) {
@@ -311,11 +607,14 @@ async function runShellExec(execId, opts) {
       dbg('runShellExec cancelled by user', 'warn');
       resultEl.className = 'shell-exec-result';
       resultEl.innerHTML = '<span class="se-meta">⏹ Cancelled</span>';
+      widget.dataset.result = JSON.stringify({ ok: false, exitCode: 130, stdout: '', stderr: '', error: 'Cancelled', command: code });
     } else {
       dbg('runShellExec error: ' + e.message, 'err');
       resultEl.className = 'shell-exec-result';
       resultEl.innerHTML = '<span class="se-err">Error: ' + escHtml(e.message) + '</span>';
+      widget.dataset.result = JSON.stringify({ ok: false, exitCode: 1, stdout: '', stderr: '', error: e.message, command: code });
     }
+    updateMessageShellVerification(widget.closest('.msg'));
     runBtn.disabled = false;
     runBtn.innerHTML = '<i class="ti ti-player-play"></i> Run';
   }
@@ -332,15 +631,39 @@ async function feedShellResultToAI(execId, opts) {
   var targetConvId = widget.dataset.convId || state.currentId;
 
   var d = JSON.parse(raw);
+  var _hasPrimaryOutput = (d.stdout && d.stdout.trim()) || (d.stderr && d.stderr.trim()) || d._screenshot;
+  if (!_hasPrimaryOutput && !d._screenshot && (!d._verifiedPaths || !d._verifiedPaths.length) && opts.silent) {
+    d = await _runTroubleshootForEmptyResult(widget, code, d);
+  }
+  var _hasOutput = _hasPrimaryOutput || (d._verifiedPaths && d._verifiedPaths.length) || (d._troubleshoot && ((d._troubleshoot.stdout && d._troubleshoot.stdout.trim()) || (d._troubleshoot.stderr && d._troubleshoot.stderr.trim())));
   var lines = ['**Shell output:**', '```', '$ ' + code, ''];
   if (d.stdout && d.stdout.trim()) lines.push(d.stdout.trimEnd());
   if (d.stderr && d.stderr.trim()) lines.push('[stderr] ' + d.stderr.trimEnd());
-  if (!d.stdout && !d.stderr && d._screenshot) lines.push('(no stdout — screenshot captured)');
-  if (!d.stdout && !d.stderr && !d._screenshot && d.exitCode !== 0) lines.push('(no output — command not found or path does not exist)');
-  if (!d.stdout && !d.stderr && !d._screenshot && d.exitCode === 0) lines.push('(no output — command succeeded silently)');
+  if (d._verifiedPaths && d._verifiedPaths.length) lines.push('[verified files]\n' + d._verifiedPaths.join('\n'));
+  if (!_hasOutput && d._screenshot) lines.push('(no stdout — screenshot captured)');
+  if (!_hasOutput && !d._screenshot && d.exitCode !== 0) lines.push('(no output — command not found or path does not exist)');
+  if (!_hasOutput && !d._screenshot && d.exitCode === 0) lines.push('(no output — cannot confirm whether command had any effect)');
   lines.push('exit ' + d.exitCode);
   lines.push('```');
-  lines.push('Continue working on the task. If more steps are needed, run the next command. If done, summarize.');
+  if (d._troubleshoot) {
+    lines.push('**Automatic troubleshoot:**');
+    lines.push('```');
+    lines.push('$ ' + d._troubleshoot.command);
+    lines.push('');
+    if (d._troubleshoot.stdout && d._troubleshoot.stdout.trim()) lines.push(d._troubleshoot.stdout.trimEnd());
+    if (d._troubleshoot.stderr && d._troubleshoot.stderr.trim()) lines.push('[stderr] ' + d._troubleshoot.stderr.trimEnd());
+    if (!(d._troubleshoot.stdout && d._troubleshoot.stdout.trim()) && !(d._troubleshoot.stderr && d._troubleshoot.stderr.trim())) lines.push('(troubleshoot also produced no output)');
+    lines.push('exit ' + d._troubleshoot.exitCode);
+    lines.push('```');
+  }
+
+  // Track consecutive empty-output results (kept for non-auto-feed reference)
+  var _emptyKey = '_emptyShellCount_' + (targetConvId || 'default');
+  if (!_hasOutput) {
+    window[_emptyKey] = (window[_emptyKey] || 0) + 1;
+  } else {
+    window[_emptyKey] = 0;
+  }
 
   // Increment chain depth on the target conversation
   if (opts.silent) {

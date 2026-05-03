@@ -137,6 +137,7 @@ function loadConversation(id) {
 
   // Show this conv's DOM (keeping all others alive in background)
   var convInner = showConvDom(id);
+  if (typeof syncShellRunningPills === 'function') syncShellRunningPills();
 
   // Restore artifacts BEFORE rendering messages so history load can inject cards
   if (typeof pruneStaleArtifacts === 'function') pruneStaleArtifacts(conv);
@@ -217,6 +218,7 @@ function clearConversation() {
 function deleteConversation(id, e) {
   e.stopPropagation();
   _destroyConvBrowserTabs(id);
+  if (typeof clearShellRunningPillsForConversation === 'function') clearShellRunningPillsForConversation(id);
   state.conversations = state.conversations.filter(c => c.id !== id);
   saveConversations();
   fetch('/api/conversations/' + id, { method: 'DELETE' }).catch(function() {});

@@ -42,7 +42,9 @@ marked.use({
         var wfPath = parts.slice(1).join(':');
         return '<pre data-special-lang="write-file"><code class="language-write-file" data-wf-id="' + escHtml(wfId) + '" data-wf-path="' + escHtml(wfPath) + '"></code></pre>';
       }
-      // Runnable script langs — treat as shell-exec so they auto-run when autoRunShell is on
+      // Runnable script langs — treat as shell-exec so they auto-run when autoRunShell is on.
+      // The shell-exec pipeline already serializes execution, feeds results back to the AI,
+      // and hard-stops on empty output, so regular bash/sh/python blocks can use it safely.
       var RUNNABLE_LANGS = { bash:1, sh:1, zsh:1, shell:1, python:1, python3:1, node:1, nodejs:1, ruby:1, perl:1, console:1 };
       if (RUNNABLE_LANGS[lang]) {
         return '<pre data-special-lang="shell-exec"><code class="language-shell-exec">' + escHtml(rawText) + '</code></pre>';
@@ -311,6 +313,7 @@ function wrapInChainOfThought(msgEl) {
     var label  = (LANG_LABELS[lang] || lang.toUpperCase() || 'Code') + ' · ' + lines + ' lines';
     wrapGroupInCOT([pre], LANG_ICONS[lang] || 'ti-code', label);
   });
+
 }
 
 // Wrap one or more elements together in a single <details> COT block

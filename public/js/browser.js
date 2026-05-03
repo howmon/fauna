@@ -1046,6 +1046,9 @@ async function browserFeedAI(content, convId) {
  * @returns {object} result from extension
  */
 async function executeExtAction(action) {
+  if (!action || typeof action.action !== 'string' || !action.action.trim()) {
+    throw new Error('Invalid browser action payload');
+  }
   var endpoint;
   if (action.action === 'snapshot' || action.action === 'snapshot-full') {
     endpoint = '/api/ext/snapshot';

@@ -183,6 +183,7 @@ function getCapabilitiesContext() {
     '     • Or use replace-string to fix the specific broken section.',
     '     • NEVER do a full rewrite to recover from a truncation.',
     '- To read a file: curl -s -X POST http://localhost:3737/api/read-file -H "Content-Type: application/json" -d \'{"path":"/abs/path"}\'',
+    '- Built-in Markdown → PDF conversion: curl -s -X POST http://localhost:3737/api/markdown-to-pdf -H "Content-Type: application/json" -d \'{"markdownPath":"/abs/file.md","outputPath":"/abs/file.pdf"}\'  — prefer this over pandoc, xelatex, wkhtmltopdf, brew, or python-based converters.',
     '- For commands that produce large output (> ~200 lines), redirect stdout to a temp file and read it back in full:',
     '    TMPF=$(mktemp /tmp/out.XXXXXX.txt) && your-command > "$TMPF" 2>&1',
     '    curl -s -X POST http://localhost:3737/api/read-file -H "Content-Type: application/json" -d "{\\"path\\":\\"$TMPF\\"}" | python3 -c "import sys,json;print(json.load(sys.stdin)[\'content\'])"',

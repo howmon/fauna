@@ -523,8 +523,9 @@ async function _transcribeBlobs(chunks, mode) {
       headers: { 'Content-Type': blobType },
       body: blob,
     });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
     var data = await resp.json();
+    if (!resp.ok) throw new Error((data && (data.message || data.error)) || ('HTTP ' + resp.status));
+    if (data && data.ok === false) throw new Error(data.message || data.error || 'Voice transcription unavailable');
     var text = (data.text || '').replace(WHISPER_NOISE_TOKENS, '').trim();
     console.log('[voice] transcribed:', JSON.stringify(text));
     _onWhisperResult(text);
@@ -1113,8 +1114,9 @@ async function _dictTranscribe() {
       headers: { 'Content-Type': blobType },
       body: blob,
     });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
     var data = await resp.json();
+    if (!resp.ok) throw new Error((data && (data.message || data.error)) || ('HTTP ' + resp.status));
+    if (data && data.ok === false) throw new Error(data.message || data.error || 'Dictation unavailable');
     var text = (data.text || '').replace(WHISPER_NOISE_TOKENS, '').trim();
     if (text) _dictHandleTranscript(text);
   } catch (err) {

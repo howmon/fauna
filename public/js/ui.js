@@ -1143,7 +1143,7 @@ input.addEventListener('paste', function(e) {
 
 // ── Drag-and-drop files onto the input wrap ──────────────────────────────
 (function() {
-  var wrap = document.getElementById('input-wrap');
+  var overlay = document.getElementById('app-drop-overlay');
   var dragCounter = 0;
 
   function hasFileItem(dt) {
@@ -1157,26 +1157,28 @@ input.addEventListener('paste', function(e) {
     return false;
   }
 
-  wrap.addEventListener('dragenter', function(e) {
+  document.addEventListener('dragenter', function(e) {
     if (!hasFileItem(e.dataTransfer)) return;
     e.preventDefault();
     dragCounter++;
-    wrap.classList.add('drag-over');
+    if (overlay) overlay.classList.add('active');
   });
-  wrap.addEventListener('dragleave', function(e) {
-    dragCounter--;
-    if (dragCounter <= 0) { dragCounter = 0; wrap.classList.remove('drag-over'); }
+  document.addEventListener('dragleave', function(e) {
+    // Only count leaves that exit the window entirely
+    if (e.relatedTarget) return;
+    dragCounter = 0;
+    if (overlay) overlay.classList.remove('active');
   });
-  wrap.addEventListener('dragover', function(e) {
+  document.addEventListener('dragover', function(e) {
     if (!hasFileItem(e.dataTransfer)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
   });
-  wrap.addEventListener('drop', function(e) {
+  document.addEventListener('drop', function(e) {
     e.preventDefault();
     dragCounter = 0;
-    wrap.classList.remove('drag-over');
-    handleFiles(e.dataTransfer.files);
+    if (overlay) overlay.classList.remove('active');
+    if (hasFileItem(e.dataTransfer)) handleFiles(e.dataTransfer.files);
   });
 })();
 
