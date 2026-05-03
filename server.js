@@ -2224,7 +2224,10 @@ app.post('/api/transcribe', async (req, res) => {
     const { whisperBin, modelFile } = _whisperPaths();
 
     if (!fs.existsSync(modelFile)) {
-      return res.status(503).json({ error: 'model_not_ready', message: 'Whisper model not downloaded yet' });
+      return res.json({ ok: false, error: 'model_not_ready', message: 'Whisper model not downloaded yet' });
+    }
+    if (!fs.existsSync(whisperBin)) {
+      return res.json({ ok: false, error: 'whisper_unavailable', message: 'Whisper runtime is not available in this app build' });
     }
 
     const chunks = [];
@@ -2245,7 +2248,10 @@ app.post('/api/transcribe', async (req, res) => {
     // Convert to 16kHz mono PCM WAV — whisper-cli requires this
     if (!isWav) {
       const ffmpegBin = ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg']
-        .find(p => { try { return fs.existsSync(p); } catch (_) { return false; } }) || 'ffmpeg';
+        .find(p => { try { return fs.existsSync(p); } catch (_) { return false; } });
+      if (!ffmpegBin) {
+        return res.json({ ok: false, error: 'ffmpeg_missing', message: 'ffmpeg is required for microphone transcription on this system' });
+      }
       execFileSync(ffmpegBin, [
         '-y', '-i', tmpInput, '-ar', '16000', '-ac', '1', '-f', 'wav', tmpWav,
       ], { stdio: 'pipe' });
@@ -2267,7 +2273,7 @@ app.post('/api/transcribe', async (req, res) => {
       .replace(/\[BLANK_AUDIO\]/gi, '')
       .trim();
 
-    res.json({ text });
+    res.json({ ok: true, text });
   } catch (err) {
     console.error('[transcribe]', err.message);
     res.status(500).json({ error: err.message });
@@ -5176,7 +5182,7 @@ app.post('/api/agent-builder/rubric-audit', async (req, res) => {
     model  = requestedModel || getUtilityClient().model;
   } catch (initErr) {
     console.error('[rubric-audit] client init error:', initErr.message);
-    return res.status(500).json({ error: 'Rubric audit failed: ' + initErr.message });
+    return res.json({ ok: false, error: 'Rubric audit unavailable: ' + initErr.message });
   }
 
   const agentMeta = [
@@ -5262,12 +5268,12 @@ Only include findings for criteria that actually fail. If the prompt already sat
       parsed = JSON.parse(json);
     } catch (parseErr) {
       console.error('[rubric-audit] JSON parse failed. raw response:\n', raw);
-      return res.status(500).json({ error: 'Rubric audit: model returned non-JSON response' });
+      return res.json({ ok: false, error: 'Rubric audit: model returned non-JSON response' });
     }
-    res.json(parsed);
+    res.json(Object.assign({ ok: true }, parsed));
   } catch (e) {
     console.error('[rubric-audit] error:', e.message);
-    res.status(500).json({ error: 'Rubric audit failed: ' + e.message });
+    res.json({ ok: false, error: 'Rubric audit failed: ' + e.message });
   }
 });
 
