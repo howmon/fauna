@@ -426,8 +426,10 @@ function sendToFigma(command, timeoutMs = 15000, targetFileKey = null) {
 
 
 // ── MCP Server ────────────────────────────────────────────────────────────
-
-const mcp = new McpServer({ name: 'figma-fauna', version: '2.0.0' });
+// registerTools registers all tools on a given McpServer instance.
+// Called once for the stdio server and once per HTTP session — each needs
+// its own McpServer because the SDK only allows one transport per instance.
+function registerTools(mcp) {
 
 // ── Design system tools ───────────────────────────────────────────────────
 
@@ -794,14 +796,18 @@ mcp.tool('list_pages', 'List all pages in the Figma document', {},
   }
 );
 
+} // ── end registerTools ──────────────────────────────────────────────────
+
 // ── Start ─────────────────────────────────────────────────────────────────
 
 process.stderr.write(`[MCP] WebSocket relay on ws://localhost:${WS_PORT}\n`);
 process.stderr.write(`[MCP] Active system: ${getActiveSystem().name}\n`);
 
 // stdio transport (Claude Desktop, Copilot, etc.)
+const mcpStdio = new McpServer({ name: 'figma-fauna', version: '2.0.0' });
+registerTools(mcpStdio);
 const transport = new StdioServerTransport();
-await mcp.connect(transport);
+await mcpStdio.connect(transport);
 
 // ── HTTP/MCP server — any app that speaks MCP over HTTP can connect ────────
 
@@ -868,7 +874,9 @@ const httpServer = createServer(async (req, res) => {
         const id = t.sessionId;
         if (id) { httpSessions.delete(id); process.stderr.write(`[HTTP] MCP session closed: ${id}\n`); }
       };
-      await mcp.connect(t);
+      const httpMcp = new McpServer({ name: 'figma-fauna', version: '2.0.0' });
+      registerTools(httpMcp);
+      await httpMcp.connect(t);
       await t.handleRequest(req, res, parsed);
 
     } else {
