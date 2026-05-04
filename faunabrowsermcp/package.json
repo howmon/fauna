@@ -17,7 +17,8 @@
     "files": [
       "main.js",
       "preload.js",
-      "popup.html"
+      "popup.html",
+      "popup.js"
     ],
     "extraResources": [
       { "from": "../assets/icon.png",             "to": "icon.png"    },

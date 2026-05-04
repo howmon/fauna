@@ -181,7 +181,7 @@
     <img id="logo" class="logo" src="" alt="">
     <span class="app-name">FaunaFigmaMCP</span>
   </div>
-  <button class="close-btn" onclick="window.mcp.close()">✕</button>
+  <button class="close-btn" id="closeBtn">✕</button>
 </div>
 
 <!-- Status bar -->
@@ -190,7 +190,7 @@
     <div class="dot stopped" id="dot"></div>
     <span class="status-text" id="statusText">Starting…</span>
   </div>
-  <button class="toggle-btn start" id="toggleBtn" onclick="toggleRelay()">Start</button>
+  <button class="toggle-btn start" id="toggleBtn">Start</button>
 </div>
 
 <!-- URLs -->
@@ -198,12 +198,12 @@
   <div class="row">
     <span class="lbl">WS</span>
     <span class="val" id="wsUrl">ws://localhost:3335</span>
-    <button class="copy" onclick="cp('ws://localhost:3335', this)">Copy</button>
+    <button class="copy" id="copyWs">Copy</button>
   </div>
   <div class="row">
     <span class="lbl">HTTP</span>
     <span class="val" id="httpUrl">http://localhost:3336/mcp</span>
-    <button class="copy" onclick="cp('http://localhost:3336/mcp', this)">Copy</button>
+    <button class="copy" id="copyHttp">Copy</button>
   </div>
 </div>
 
@@ -211,8 +211,8 @@
 <div class="plugin-section">
   <div class="plugin-row">
     <span class="plugin-label">Figma plugin</span>
-    <button class="dl-btn save"   id="pluginSaveBtn"   onclick="savePlugin()">⬇ Save to…</button>
-    <button class="dl-btn reveal" id="pluginRevealBtn" onclick="revealPlugin()">Show in Finder</button>
+    <button class="dl-btn save"   id="pluginSaveBtn">⬇ Save to…</button>
+    <button class="dl-btn reveal" id="pluginRevealBtn">Show in Finder</button>
   </div>
 </div>
 
@@ -224,7 +224,7 @@
   </div>
   <div class="snippet-wrap">
     <div class="snippet" id="stdioSnippet">loading…</div>
-    <button class="snippet-copy" id="snippetCopyBtn" onclick="cpSnippet(this)">Copy</button>
+    <button class="snippet-copy" id="snippetCopyBtn">Copy</button>
   </div>
 </div>
 
@@ -239,126 +239,12 @@
 <!-- Footer -->
 <div class="footer">
   <div class="login-row">
-    <div class="toggle-switch" id="loginSwitch" onclick="toggleLogin()"></div>
+    <div class="toggle-switch" id="loginSwitch"></div>
     <span class="login-label">Start at login</span>
   </div>
   <span class="version" id="version">v1.0.0</span>
 </div>
 
-<script>
-let running    = false;
-let loginItem  = false;
-let stdioText  = '';
-
-const dot        = document.getElementById('dot');
-const statusText = document.getElementById('statusText');
-const toggleBtn  = document.getElementById('toggleBtn');
-const logList    = document.getElementById('logList');
-const loginSwitch = document.getElementById('loginSwitch');
-
-// ── Init ─────────────────────────────────────────────────────────────────
-window.mcp.getStatus().then(s => {
-  applyStatus(s.running);
-  document.getElementById('wsUrl').textContent   = s.wsUrl;
-  document.getElementById('httpUrl').textContent = s.httpUrl;
-  document.getElementById('stdioSnippet').textContent = s.stdioConfig;
-  stdioText = s.stdioConfig;
-  document.querySelector('.copy').setAttribute('data-val', s.wsUrl);
-  setLogin(s.loginItem);
-  if (s.iconUrl) document.getElementById('logo').src = s.iconUrl;
-  if (s.version) document.getElementById('version').textContent = 'v' + s.version;
-  s.logs.forEach(e => addLogEntry(e));
-});
-
-window.mcp.onStatus(s => applyStatus(s.running));
-window.mcp.onLog(e => addLogEntry(e));
-
-// ── Status ────────────────────────────────────────────────────────────────
-function applyStatus(r) {
-  running = r;
-  dot.className = 'dot ' + (r ? 'running' : 'stopped');
-  statusText.textContent = r ? 'Running' : 'Stopped';
-  toggleBtn.className = 'toggle-btn ' + (r ? 'stop' : 'start');
-  toggleBtn.textContent = r ? 'Stop' : 'Start';
-}
-
-function toggleRelay() {
-  if (running) {
-    dot.className = 'dot starting';
-    statusText.textContent = 'Stopping…';
-    window.mcp.stopRelay();
-  } else {
-    dot.className = 'dot starting';
-    statusText.textContent = 'Starting…';
-    window.mcp.startRelay();
-  }
-}
-
-// ── Log ───────────────────────────────────────────────────────────────────
-function addLogEntry(e) {
-  const empty = logList.querySelector('.log-empty');
-  if (empty) empty.remove();
-
-  const el = document.createElement('div');
-  el.className = 'log-entry ' + (e.level === 'ok' ? 'ok' : e.level === 'err' ? 'err' : '');
-  const t = new Date(e.ts).toLocaleTimeString('en', { hour12: false, hour:'2-digit', minute:'2-digit', second:'2-digit' });
-  el.textContent = t + '  ' + e.text;
-  el.title = e.text;
-  logList.appendChild(el);
-  if (logList.children.length > 60) logList.removeChild(logList.firstChild);
-  logList.scrollTop = logList.scrollHeight;
-}
-
-// ── Copy helpers ──────────────────────────────────────────────────────────
-function cp(text, btn) {
-  window.mcp.copy(text);
-  flash(btn);
-}
-
-function cpSnippet(btn) {
-  window.mcp.copy(stdioText);
-  flash(btn);
-}
-
-function flash(btn) {
-  btn.classList.add('flash');
-  btn.textContent = 'Copied!';
-  setTimeout(() => {
-    btn.classList.remove('flash');
-    btn.textContent = 'Copy';
-  }, 1400);
-}
-
-// ── Plugin download ───────────────────────────────────────────────────────
-async function savePlugin() {
-  const btn = document.getElementById('pluginSaveBtn');
-  btn.textContent = '…';
-  const r = await window.mcp.savePlugin();
-  if (r && r.ok) {
-    btn.classList.add('flash');
-    btn.textContent = '✓ Saved!';
-    setTimeout(() => { btn.classList.remove('flash'); btn.textContent = '⬇ Save to…'; }, 2500);
-  } else if (r && !r.canceled) {
-    btn.textContent = '✗ Error';
-    setTimeout(() => { btn.textContent = '⬇ Save to…'; }, 2000);
-  } else {
-    btn.textContent = '⬇ Save to…';
-  }
-}
-
-function revealPlugin() {
-  window.mcp.revealPlugin();
-}
-
-// ── Login item ────────────────────────────────────────────────────────────
-function setLogin(on) {
-  loginItem = on;
-  loginSwitch.className = 'toggle-switch' + (on ? ' on' : '');
-}
-
-function toggleLogin() {
-  window.mcp.setLogin(!loginItem).then(on => setLogin(on));
-}
-</script>
+<script src="popup.js"></script>
 </body>
 </html>
