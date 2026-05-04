@@ -978,6 +978,13 @@ Examples:
         <span id="setup-mcp-icon">…</span>
         <span id="setup-mcp-text">Checking…</span>
       </div>
+      <div id="setup-mcp-http-row" style="display:none;margin-top:8px;display:none">
+        <div class="setup-path-row" style="margin-top:8px">
+          <span style="font-size:11px;color:var(--fau-text-muted);margin-right:6px">HTTP/MCP</span>
+          <code id="setup-mcp-url">http://localhost:3336/mcp</code>
+          <button class="setup-copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('setup-mcp-url').textContent).then(()=>showToast('Copied'))" title="Copy endpoint"><i class="ti ti-copy"></i></button>
+        </div>
+      </div>
     </div>
 
     <!-- Tips -->

@@ -468,6 +468,14 @@ async function loadFigmaSetupState() {
     var mcpText = document.getElementById('setup-mcp-text');
     if (d2.mcpRunning) {
       mcpIcon.innerHTML = '<i class="ti ti-circle-check" style="color:var(--success)"></i>'; mcpText.textContent = 'MCP server is running (PID ' + (d2.mcpPid || '?') + ')';
+      var httpRow = document.getElementById('setup-mcp-http-row');
+      if (httpRow) {
+        if (d2.mcpHttpUrl) {
+          var urlEl = document.getElementById('setup-mcp-url');
+          if (urlEl) urlEl.textContent = d2.mcpHttpUrl;
+        }
+        httpRow.style.display = '';
+      }
     } else {
       mcpIcon.innerHTML = '<i class="ti ti-circle-x" style="color:var(--warn)"></i>'; mcpText.textContent = 'MCP server not running — expand Figma panel and click Start';
     }

@@ -2777,6 +2777,7 @@ function getDefaultMcpPath() {
 }
 
 let mcpProcess    = null;
+let mcpHttpPort   = null;
 let mcpLogs       = [];       // last 200 stderr lines
 let mcpAutoStart  = true;     // start with the app by default
 
@@ -2848,6 +2849,9 @@ function startMcpServer() {
     for (const line of lines) {
       mcpLogs.push({ t: Date.now(), msg: line });
       if (mcpLogs.length > 200) mcpLogs.shift();
+      // Capture HTTP/MCP port from relay startup log
+      const portMatch = line.match(/HTTP\/MCP server on http:\/\/localhost:(\d+)/);
+      if (portMatch) mcpHttpPort = parseInt(portMatch[1], 10);
     }
   });
 
@@ -2855,6 +2859,7 @@ function startMcpServer() {
     const reason = signal ? `signal ${signal}` : `code ${code}`;
     mcpLogs.push({ t: Date.now(), msg: `[App] MCP server exited (${reason})` });
     mcpProcess = null;
+    mcpHttpPort = null;
     // Auto-reconnect WS after brief delay (process may restart)
     figmaState.connected = false;
     figmaState.fileInfo  = null;
@@ -3648,6 +3653,8 @@ app.get('/api/figma/status', (req, res) => {
     activeSystem:  figmaState.activeSystem,
     mcpRunning:    isMcpRunning(),
     mcpPid:        mcpProcess?.pid ?? null,
+    mcpHttpPort:   mcpHttpPort,
+    mcpHttpUrl:    mcpHttpPort ? `http://localhost:${mcpHttpPort}/mcp` : null,
   });
 });
 
