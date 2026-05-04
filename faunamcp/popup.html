@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI Variable','Segoe UI',-apple-system,system-ui,sans-serif; }
+
+  body {
+    background: #1b1b1b;
+    color: #f0f0f0;
+    width: 320px;
+    height: 382px;
+    display: flex;
+    flex-direction: column;
+    border-radius: 10px;
+    overflow: hidden;
+    -webkit-app-region: no-drag;
+    user-select: none;
+  }
+
+  /* ── Header ── */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px 10px;
+    background: #141414;
+    border-bottom: 1px solid #2a2a2a;
+    -webkit-app-region: drag;
+  }
+  .header-left { display: flex; align-items: center; gap: 8px; }
+  .logo { width: 20px; height: 20px; border-radius: 4px; }
+  .app-name { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+  .close-btn {
+    width: 22px; height: 22px;
+    background: #2e2e2e; border: none; border-radius: 50%;
+    color: #888; font-size: 13px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    -webkit-app-region: no-drag;
+    transition: background 0.15s, color 0.15s;
+  }
+  .close-btn:hover { background: #3e3e3e; color: #fff; }
+
+  /* ── Status bar ── */
+  .status-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: #1e1e1e;
+    border-bottom: 1px solid #272727;
+  }
+  .status-left { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; transition: background 0.3s, box-shadow 0.3s; }
+  .dot.running    { background: #6ccb5f; box-shadow: 0 0 6px #6ccb5faa; }
+  .dot.stopped    { background: #f36e6e; }
+  .dot.starting   { background: #f2c661; animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .status-text { font-size: 12px; font-weight: 500; }
+  .toggle-btn {
+    font-size: 11px; font-weight: 600;
+    padding: 4px 12px; border: none; border-radius: 5px;
+    cursor: pointer; transition: opacity 0.15s;
+  }
+  .toggle-btn:hover { opacity: 0.85; }
+  .toggle-btn.start { background: #2d5c27; color: #6ccb5f; }
+  .toggle-btn.stop  { background: #4a2020; color: #f36e6e; }
+
+  /* ── URL rows ── */
+  .section { padding: 8px 14px; border-bottom: 1px solid #242424; }
+  .row {
+    display: flex; align-items: center; gap: 6px;
+    margin-bottom: 5px;
+  }
+  .row:last-child { margin-bottom: 0; }
+  .lbl  { font-size: 10px; color: #666; min-width: 36px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .val  {
+    font-size: 10.5px;
+    font-family: 'Cascadia Code','JetBrains Mono','Fira Code',monospace;
+    color: #b4eaff; background: #1a1a1a; border-radius: 4px;
+    padding: 3px 7px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .copy {
+    font-size: 10px; background: #2a2a2a; color: #888;
+    border: none; border-radius: 4px; padding: 3px 8px;
+    cursor: pointer; flex-shrink: 0; transition: background 0.12s, color 0.12s;
+    white-space: nowrap;
+  }
+  .copy:hover       { background: #3a3a3a; color: #fff; }
+  .copy.flash       { background: #2d5c27; color: #6ccb5f; }
+
+  /* ── Config snippet ── */
+  .snippet-wrap { position: relative; }
+  .snippet {
+    font-size: 10px;
+    font-family: 'Cascadia Code','JetBrains Mono','Fira Code',monospace;
+    background: #141414; border-radius: 5px;
+    padding: 8px 9px; color: #c0c0c0;
+    white-space: pre; overflow-x: auto;
+    line-height: 1.55; border: 1px solid #2a2a2a;
+  }
+  .snippet-copy {
+    position: absolute; top: 5px; right: 6px;
+    font-size: 10px; background: #2a2a2a; color: #888;
+    border: none; border-radius: 3px; padding: 2px 7px;
+    cursor: pointer; transition: background 0.12s, color 0.12s;
+  }
+  .snippet-copy:hover   { background: #3a3a3a; color: #fff; }
+  .snippet-copy.flash   { background: #2d5c27; color: #6ccb5f; }
+
+  /* ── Log ── */
+  .log-section { flex: 1; display: flex; flex-direction: column; padding: 0; min-height: 0; overflow: hidden; }
+  .log-title   { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 0.05em; padding: 6px 14px 4px; }
+  .log-list    { flex: 1; overflow-y: auto; padding: 0 14px 8px; display: flex; flex-direction: column; gap: 2px; }
+  .log-list::-webkit-scrollbar { width: 4px; }
+  .log-list::-webkit-scrollbar-track { background: transparent; }
+  .log-list::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+  .log-entry {
+    font-size: 10.5px;
+    font-family: 'Cascadia Code','JetBrains Mono','Fira Code',monospace;
+    line-height: 1.6;
+    min-height: 24px;
+    padding: 4px 8px; border-radius: 3px;
+    background: #1f1f1f; color: #9a9a9a;
+    border-left: 2px solid #333;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    display: flex; align-items: center;
+  }
+  .log-entry.ok  { border-color: #6ccb5f; color: #b4b4b4; }
+  .log-entry.err { border-color: #f36e6e; color: #f36e6e; }
+  .log-empty     { font-size: 10px; color: #444; padding: 4px 0; }
+
+  /* ── Footer ── */
+  .footer {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 14px;
+    background: #141414; border-top: 1px solid #2a2a2a;
+  }
+  .login-row { display: flex; align-items: center; gap: 7px; }
+  .toggle-switch {
+    position: relative; width: 28px; height: 16px;
+    background: #333; border-radius: 8px; cursor: pointer;
+    transition: background 0.2s;
+  }
+  .toggle-switch.on { background: #2d5c27; }
+  .toggle-switch::after {
+    content: '';
+    position: absolute; top: 2px; left: 2px;
+    width: 12px; height: 12px;
+    background: #888; border-radius: 50%;
+    transition: transform 0.2s, background 0.2s;
+  }
+  .toggle-switch.on::after { transform: translateX(12px); background: #6ccb5f; }
+  .login-label { font-size: 11px; color: #777; }
+  .version { font-size: 10px; color: #444; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="header-left">
+    <img id="logo" class="logo" src="" alt="">
+    <span class="app-name">FaunaMCP</span>
+  </div>
+  <button class="close-btn" onclick="window.mcp.close()">✕</button>
+</div>
+
+<!-- Status bar -->
+<div class="status-bar">
+  <div class="status-left">
+    <div class="dot stopped" id="dot"></div>
+    <span class="status-text" id="statusText">Starting…</span>
+  </div>
+  <button class="toggle-btn start" id="toggleBtn" onclick="toggleRelay()">Start</button>
+</div>
+
+<!-- URLs -->
+<div class="section">
+  <div class="row">
+    <span class="lbl">WS</span>
+    <span class="val" id="wsUrl">ws://localhost:3335</span>
+    <button class="copy" onclick="cp('ws://localhost:3335', this)">Copy</button>
+  </div>
+  <div class="row">
+    <span class="lbl">HTTP</span>
+    <span class="val" id="httpUrl">http://localhost:3336/mcp</span>
+    <button class="copy" onclick="cp('http://localhost:3336/mcp', this)">Copy</button>
+  </div>
+</div>
+
+<!-- Stdio config -->
+<div class="section">
+  <div class="row" style="margin-bottom:5px">
+    <span class="lbl" style="color:#555">stdio config</span>
+    <span style="font-size:10px;color:#555;flex:1">for Claude Desktop / VS Code / Cursor</span>
+  </div>
+  <div class="snippet-wrap">
+    <div class="snippet" id="stdioSnippet">loading…</div>
+    <button class="snippet-copy" id="snippetCopyBtn" onclick="cpSnippet(this)">Copy</button>
+  </div>
+</div>
+
+<!-- Log -->
+<div class="log-section">
+  <div class="log-title">Relay log</div>
+  <div class="log-list" id="logList">
+    <span class="log-empty">No output yet…</span>
+  </div>
+</div>
+
+<!-- Footer -->
+<div class="footer">
+  <div class="login-row">
+    <div class="toggle-switch" id="loginSwitch" onclick="toggleLogin()"></div>
+    <span class="login-label">Start at login</span>
+  </div>
+  <span class="version">v1.0.0</span>
+</div>
+
+<script>
+let running    = false;
+let loginItem  = false;
+let stdioText  = '';
+
+const dot        = document.getElementById('dot');
+const statusText = document.getElementById('statusText');
+const toggleBtn  = document.getElementById('toggleBtn');
+const logList    = document.getElementById('logList');
+const loginSwitch = document.getElementById('loginSwitch');
+
+// ── Init ─────────────────────────────────────────────────────────────────
+window.mcp.getStatus().then(s => {
+  applyStatus(s.running);
+  document.getElementById('wsUrl').textContent   = s.wsUrl;
+  document.getElementById('httpUrl').textContent = s.httpUrl;
+  document.getElementById('stdioSnippet').textContent = s.stdioConfig;
+  stdioText = s.stdioConfig;
+  document.querySelector('.copy').setAttribute('data-val', s.wsUrl);
+  setLogin(s.loginItem);
+  if (s.iconUrl) document.getElementById('logo').src = s.iconUrl;
+  s.logs.forEach(e => addLogEntry(e));
+});
+
+window.mcp.onStatus(s => applyStatus(s.running));
+window.mcp.onLog(e => addLogEntry(e));
+
+// ── Status ────────────────────────────────────────────────────────────────
+function applyStatus(r) {
+  running = r;
+  dot.className = 'dot ' + (r ? 'running' : 'stopped');
+  statusText.textContent = r ? 'Running' : 'Stopped';
+  toggleBtn.className = 'toggle-btn ' + (r ? 'stop' : 'start');
+  toggleBtn.textContent = r ? 'Stop' : 'Start';
+}
+
+function toggleRelay() {
+  if (running) {
+    dot.className = 'dot starting';
+    statusText.textContent = 'Stopping…';
+    window.mcp.stopRelay();
+  } else {
+    dot.className = 'dot starting';
+    statusText.textContent = 'Starting…';
+    window.mcp.startRelay();
+  }
+}
+
+// ── Log ───────────────────────────────────────────────────────────────────
+function addLogEntry(e) {
+  const empty = logList.querySelector('.log-empty');
+  if (empty) empty.remove();
+
+  const el = document.createElement('div');
+  el.className = 'log-entry ' + (e.level === 'ok' ? 'ok' : e.level === 'err' ? 'err' : '');
+  const t = new Date(e.ts).toLocaleTimeString('en', { hour12: false, hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  el.textContent = t + '  ' + e.text;
+  el.title = e.text;
+  logList.appendChild(el);
+  if (logList.children.length > 60) logList.removeChild(logList.firstChild);
+  logList.scrollTop = logList.scrollHeight;
+}
+
+// ── Copy helpers ──────────────────────────────────────────────────────────
+function cp(text, btn) {
+  window.mcp.copy(text);
+  flash(btn);
+}
+
+function cpSnippet(btn) {
+  window.mcp.copy(stdioText);
+  flash(btn);
+}
+
+function flash(btn) {
+  btn.classList.add('flash');
+  btn.textContent = 'Copied!';
+  setTimeout(() => {
+    btn.classList.remove('flash');
+    btn.textContent = 'Copy';
+  }, 1400);
+}
+
+// ── Login item ────────────────────────────────────────────────────────────
+function setLogin(on) {
+  loginItem = on;
+  loginSwitch.className = 'toggle-switch' + (on ? ' on' : '');
+}
+
+function toggleLogin() {
+  window.mcp.setLogin(!loginItem).then(on => setLogin(on));
+}
+</script>
+</body>
+</html>
