@@ -42,7 +42,12 @@
     "dist": "electron-builder --mac",
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win",
-    "dist:all": "electron-builder --mac --win"
+    "dist:all": "electron-builder --mac --win",
+    "version:show":  "node scripts/version.cjs",
+    "version:patch": "node scripts/version.cjs patch",
+    "version:minor": "node scripts/version.cjs minor",
+    "version:major": "node scripts/version.cjs major",
+    "version:set":   "node scripts/version.cjs set"
   },
   "dependencies": {
     "@xenova/transformers": "^2.17.2",

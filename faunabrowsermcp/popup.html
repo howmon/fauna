@@ -250,7 +250,7 @@
     <div class="toggle-switch" id="loginSwitch" onclick="toggleLogin()"></div>
     <span class="login-label">Start at login</span>
   </div>
-  <span class="version">v1.0.0</span>
+  <span class="version" id="version">v1.0.0</span>
 </div>
 
 <script>
@@ -279,6 +279,7 @@ window.mcp.getStatus().then(s => {
   }
   setLogin(s.loginItem);
   if (s.iconUrl) document.getElementById('logo').src = s.iconUrl;
+  if (s.version) document.getElementById('version').textContent = 'v' + s.version;
   if (s.logs) s.logs.forEach(e => addLogEntry(e));
 });
 

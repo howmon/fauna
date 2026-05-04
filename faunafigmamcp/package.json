@@ -20,25 +20,64 @@
       "popup.html"
     ],
     "extraResources": [
-      { "from": "../assets/icon.png",           "to": "icon.png"                     },
-      { "from": "../assets/icon.icns",          "to": "icon.icns"                    },
-      { "from": "../assets/figma-plugin",       "to": "figma-plugin",      "filter": ["**/*"] },
-      { "from": "../relay/server",              "to": "mcp-server/server", "filter": ["**/*"] },
-      { "from": "../relay/node_modules",        "to": "mcp-server/node_modules","filter": ["**/*"] },
-      { "from": "../relay/package.json",        "to": "mcp-server/package.json" }
+      {
+        "from": "../assets/icon.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "../assets/icon.icns",
+        "to": "icon.icns"
+      },
+      {
+        "from": "../assets/figma-plugin",
+        "to": "figma-plugin",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../relay/server",
+        "to": "mcp-server/server",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../relay/node_modules",
+        "to": "mcp-server/node_modules",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../relay/package.json",
+        "to": "mcp-server/package.json"
+      }
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "../assets/icon.icns",
       "identity": null,
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ]
     },
     "win": {
       "icon": "../assets/icon.png",
       "target": [
-        { "target": "nsis", "arch": ["x64", "arm64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ]
     },
     "nsis": {
@@ -49,8 +88,16 @@
     "dmg": {
       "title": "FaunaFigmaMCP",
       "contents": [
-        { "x": 130, "y": 220 },
-        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
       ]
     },
     "electronVersion": "41.0.3"

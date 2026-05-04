@@ -254,7 +254,8 @@ ipcMain.handle('get-status', () => ({
   extensionPath: getExtensionPath(),
   logs:          relayLogs.slice(-40),
   loginItem:     app.getLoginItemSettings().openAtLogin,
-  iconUrl:       `file://${getIconPath().replace(/\\/g, '/')}`
+  iconUrl:       `file://${getIconPath().replace(/\\/g, '/')}`,
+  version:       app.getVersion()
 }));
 
 ipcMain.handle('start-relay',  ()       => startRelay());
