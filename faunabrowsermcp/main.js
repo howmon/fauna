@@ -1,8 +1,9 @@
 'use strict';
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, clipboard, screen } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, clipboard, screen, dialog, shell } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
+const fs   = require('fs');
 
 const WS_PORT   = 3340;
 const HTTP_PORT = 3341;
@@ -226,6 +227,23 @@ function updateTrayMenu() {
   );
 }
 
+// ── Folder copy helper ────────────────────────────────────────────────────
+async function saveFolderTo(srcDir, defaultName) {
+  const { canceled, filePaths } = await dialog.showOpenDialog(popup || null, {
+    title:       'Choose destination folder',
+    buttonLabel: 'Save Here',
+    properties:  ['openDirectory', 'createDirectory']
+  });
+  if (canceled || !filePaths.length) return { ok: false, canceled: true };
+  const dest = path.join(filePaths[0], defaultName);
+  try {
+    fs.cpSync(srcDir, dest, { recursive: true, force: true });
+    return { ok: true, dest };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
 // ── IPC handlers ──────────────────────────────────────────────────────────
 
 ipcMain.handle('get-status', () => ({
@@ -247,7 +265,9 @@ ipcMain.handle('set-login',    (_, on)  => {
   updateTrayMenu();
   return app.getLoginItemSettings().openAtLogin;
 });
-ipcMain.handle('close-popup',  ()       => { if (popup && !popup.isDestroyed()) popup.hide(); });
+ipcMain.handle('close-popup',      ()   => { if (popup && !popup.isDestroyed()) popup.hide(); });
+ipcMain.handle('save-extension',   ()   => saveFolderTo(getExtensionPath(), 'FaunaBrowserMCP-extension'));
+ipcMain.handle('reveal-extension', ()   => { shell.showItemInFolder(getExtensionPath()); });
 
 // ── App lifecycle ─────────────────────────────────────────────────────────
 

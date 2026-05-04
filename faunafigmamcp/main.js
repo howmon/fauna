@@ -1,8 +1,9 @@
 'use strict';
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, clipboard, screen } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, clipboard, screen, dialog, shell } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
+const fs   = require('fs');
 
 const WS_PORT   = 3335;
 const HTTP_PORT = 3336;
@@ -72,9 +73,32 @@ function getTrayIcon() {
   }
 }
 
+function getPluginPath() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'figma-plugin')
+    : path.join(__dirname, '..', 'assets', 'figma-plugin');
+}
+
 function stdioConfig() {
   const p = getRelayPath().replace(/\\/g, '\\\\');
   return `"figma-fauna": {\n  "command": "node",\n  "args": ["${p}"]\n}`;
+}
+
+// ── Folder copy helper ────────────────────────────────────────────────────
+async function saveFolderTo(srcDir, defaultName) {
+  const { canceled, filePaths } = await dialog.showOpenDialog(popup || null, {
+    title:       'Choose destination folder',
+    buttonLabel: 'Save Here',
+    properties:  ['openDirectory', 'createDirectory']
+  });
+  if (canceled || !filePaths.length) return { ok: false, canceled: true };
+  const dest = path.join(filePaths[0], defaultName);
+  try {
+    fs.cpSync(srcDir, dest, { recursive: true, force: true });
+    return { ok: true, dest };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 }
 
 // ── Relay process ─────────────────────────────────────────────────────────
@@ -228,13 +252,14 @@ function updateTrayMenu() {
 
 // ── IPC handlers ──────────────────────────────────────────────────────────
 ipcMain.handle('get-status', () => ({
-  running:    relayRunning,
-  wsUrl:      `ws://localhost:${WS_PORT}`,
-  httpUrl:    `http://localhost:${HTTP_PORT}/mcp`,
+  running:     relayRunning,
+  wsUrl:       `ws://localhost:${WS_PORT}`,
+  httpUrl:     `http://localhost:${HTTP_PORT}/mcp`,
   stdioConfig: stdioConfig(),
-  logs:       relayLogs.slice(-40),
-  loginItem:  app.getLoginItemSettings().openAtLogin,
-  iconUrl:    `file://${getIconPath().replace(/\\/g, '/')}`
+  pluginPath:  getPluginPath(),
+  logs:        relayLogs.slice(-40),
+  loginItem:   app.getLoginItemSettings().openAtLogin,
+  iconUrl:     `file://${getIconPath().replace(/\\/g, '/')}`
 }));
 
 ipcMain.handle('start-relay',  ()       => startRelay());
@@ -246,6 +271,8 @@ ipcMain.handle('set-login',    (_, on)  => {
   return app.getLoginItemSettings().openAtLogin;
 });
 ipcMain.handle('close-popup',  ()       => { if (popup && !popup.isDestroyed()) popup.hide(); });
+ipcMain.handle('save-plugin',  ()       => saveFolderTo(getPluginPath(), 'FaunaFigmaPlugin'));
+ipcMain.handle('reveal-plugin',()       => { shell.showItemInFolder(getPluginPath()); });
 
 // ── App lifecycle ─────────────────────────────────────────────────────────
 app.whenReady().then(() => {

@@ -2,311 +2,377 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>FaunaBrowserMCP</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body {
-    width: 360px;
-    background: #0f172a;
-    color: #e2e8f0;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    font-size: 13px;
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI Variable','Segoe UI',-apple-system,system-ui,sans-serif; }
+
+  body {
+    background: #1b1b1b;
+    color: #f0f0f0;
+    width: 320px;
+    height: 400px;
+    display: flex;
+    flex-direction: column;
+    border-radius: 10px;
     overflow: hidden;
+    -webkit-app-region: no-drag;
     user-select: none;
   }
 
   /* ── Header ── */
   .header {
-    display: flex; align-items: center; gap: 10px;
-    padding: 14px 14px 12px;
-    border-bottom: 1px solid #1e293b;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px 10px;
+    background: #141414;
+    border-bottom: 1px solid #2a2a2a;
     -webkit-app-region: drag;
   }
-  #logo { width: 28px; height: 28px; border-radius: 8px; object-fit: cover; }
-  .logo-fallback {
-    width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;
-    background: linear-gradient(135deg, #6366f1, #8b5cf6);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 16px;
-  }
-  .title-col .title    { font-weight: 600; font-size: 14px; }
-  .title-col .subtitle { font-size: 11px; color: #64748b; margin-top: 1px; }
+  .header-left { display: flex; align-items: center; gap: 8px; }
+  .logo { width: 20px; height: 20px; border-radius: 4px; }
+  .app-name { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
   .close-btn {
-    margin-left: auto;
-    background: none; border: none; cursor: pointer;
-    color: #475569; font-size: 16px; line-height: 1;
-    padding: 2px 6px; border-radius: 4px;
+    width: 22px; height: 22px;
+    background: #2e2e2e; border: none; border-radius: 50%;
+    color: #888; font-size: 13px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
     -webkit-app-region: no-drag;
+    transition: background 0.15s, color 0.15s;
   }
-  .close-btn:hover { background: #1e293b; color: #94a3b8; }
+  .close-btn:hover { background: #3e3e3e; color: #fff; }
 
-  /* ── Rows ── */
+  /* ── Status bar ── */
+  .status-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: #1e1e1e;
+    border-bottom: 1px solid #272727;
+  }
+  .status-left { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; transition: background 0.3s, box-shadow 0.3s; }
+  .dot.running  { background: #6ccb5f; box-shadow: 0 0 6px #6ccb5faa; }
+  .dot.stopped  { background: #f36e6e; }
+  .dot.starting { background: #f2c661; animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .status-text { font-size: 12px; font-weight: 500; }
+  .toggle-btn {
+    font-size: 11px; font-weight: 600;
+    padding: 4px 12px; border: none; border-radius: 5px;
+    cursor: pointer; transition: opacity 0.15s;
+  }
+  .toggle-btn:hover { opacity: 0.85; }
+  .toggle-btn.start { background: #2d5c27; color: #6ccb5f; }
+  .toggle-btn.stop  { background: #4a2020; color: #f36e6e; }
+
+  /* ── URL rows ── */
+  .section { padding: 8px 14px; border-bottom: 1px solid #242424; }
   .row {
-    display: flex; align-items: center; gap: 8px;
-    padding: 8px 12px;
-    background: #1e293b;
-    border-radius: 8px;
-    margin: 8px 10px 0;
+    display: flex; align-items: center; gap: 6px;
+    margin-bottom: 5px;
   }
-  .row.indicator { padding: 8px 14px; }
-  .dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: #ef4444; flex-shrink: 0;
+  .row:last-child { margin-bottom: 0; }
+  .lbl  { font-size: 10px; color: #666; min-width: 36px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .val  {
+    font-size: 10.5px;
+    font-family: 'Cascadia Code','JetBrains Mono','Fira Code',monospace;
+    color: #b4eaff; background: #1a1a1a; border-radius: 4px;
+    padding: 3px 7px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .dot.on  { background: #10b981; box-shadow: 0 0 6px #10b981; }
-  .dot.off { background: #ef4444; }
-  .row-label { font-size: 12px; color: #94a3b8; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .copy-btn {
-    background: none; border: none; cursor: pointer;
-    color: #475569; font-size: 11px; padding: 2px 6px; border-radius: 4px;
-    white-space: nowrap; flex-shrink: 0;
+  .copy {
+    font-size: 10px; background: #2a2a2a; color: #888;
+    border: none; border-radius: 4px; padding: 3px 8px;
+    cursor: pointer; flex-shrink: 0; transition: background 0.12s, color 0.12s;
+    white-space: nowrap;
   }
-  .copy-btn:hover { background: #0f172a; color: #94a3b8; }
+  .copy:hover     { background: #3a3a3a; color: #fff; }
+  .copy.flash     { background: #2d5c27; color: #6ccb5f; }
 
-  /* ── Section ── */
-  .section {
-    padding: 10px 14px 4px;
+  /* ── Extension download ── */
+  .plugin-section {
+    padding: 8px 14px;
+    border-bottom: 1px solid #242424;
   }
-  .section-title {
-    font-size: 10px; font-weight: 600; color: #475569;
-    text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px;
+  .plugin-row { display: flex; align-items: center; gap: 6px; }
+  .plugin-label { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.05em; flex: 1; }
+  .ext-path {
+    font-family: 'Cascadia Code','JetBrains Mono','Fira Code',monospace;
+    font-size: 9.5px; color: #4f7aad; cursor: pointer;
+    display: block; margin-top: 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+  .ext-path:hover { color: #7eb3f5; text-decoration: underline; }
+  .dl-btn {
+    font-size: 10px; font-weight: 600;
+    padding: 4px 10px; border: none; border-radius: 4px;
+    cursor: pointer; transition: opacity 0.15s, background 0.15s;
+    white-space: nowrap;
+  }
+  .dl-btn.save   { background: #1e3a5f; color: #60a5fa; }
+  .dl-btn.reveal { background: #2a2a2a; color: #888; }
+  .dl-btn:hover  { opacity: 0.85; }
+  .dl-btn.flash  { background: #2d5c27; color: #6ccb5f; }
 
-  /* ── Code block ── */
-  .code-block {
-    background: #1e293b;
-    border: 1px solid #1e293b;
-    border-radius: 8px;
-    padding: 9px 12px;
-    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  /* ── Config snippet ── */
+  .snippet-wrap { position: relative; }
+  .snippet {
     font-size: 10px;
-    color: #a5b4fc;
-    white-space: pre;
-    overflow-x: auto;
-    line-height: 1.6;
-    margin: 0 10px;
-    cursor: pointer;
-    transition: border-color 0.15s;
+    font-family: 'Cascadia Code','JetBrains Mono','Fira Code',monospace;
+    background: #141414; border-radius: 5px;
+    padding: 8px 9px; color: #c0c0c0;
+    white-space: pre; overflow-x: auto;
+    line-height: 1.55; border: 1px solid #2a2a2a;
   }
-  .code-block:hover { border-color: #6366f1; }
-  .hint { font-size: 10px; color: #334155; text-align: center; padding: 3px 0 0; }
+  .snippet-copy {
+    position: absolute; top: 5px; right: 6px;
+    font-size: 10px; background: #2a2a2a; color: #888;
+    border: none; border-radius: 3px; padding: 2px 7px;
+    cursor: pointer; transition: background 0.12s, color 0.12s;
+  }
+  .snippet-copy:hover { background: #3a3a3a; color: #fff; }
+  .snippet-copy.flash { background: #2d5c27; color: #6ccb5f; }
 
-  /* ── Extension banner ── */
-  .ext-banner {
-    background: #1e293b;
-    border-radius: 8px;
-    padding: 10px 12px;
-    margin: 4px 10px 0;
-    display: flex; align-items: flex-start; gap: 8px;
-  }
-  .ext-banner .icon { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
-  .ext-banner .text { font-size: 11px; color: #94a3b8; line-height: 1.5; }
-  .ext-banner .text strong { color: #e2e8f0; }
-  .ext-path { font-family: monospace; font-size: 10px; color: #6366f1; word-break: break-all; cursor: pointer; }
-  .ext-path:hover { text-decoration: underline; }
-
-  /* ── Log list ── */
-  .log-list {
-    margin: 4px 10px 0;
-    background: #1e293b;
-    border-radius: 8px;
-    padding: 6px 10px;
-    max-height: 90px;
-    overflow-y: auto;
-    scrollbar-width: thin;
-    scrollbar-color: #334155 transparent;
-  }
-  .log-item {
-    font-family: 'SF Mono', 'Fira Code', monospace;
-    font-size: 10px;
-    min-height: 18px;
+  /* ── Log ── */
+  .log-section { flex: 1; display: flex; flex-direction: column; padding: 0; min-height: 0; overflow: hidden; }
+  .log-title   { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 0.05em; padding: 6px 14px 4px; }
+  .log-list    { flex: 1; overflow-y: auto; padding: 0 14px 8px; display: flex; flex-direction: column; gap: 2px; }
+  .log-list::-webkit-scrollbar { width: 4px; }
+  .log-list::-webkit-scrollbar-track { background: transparent; }
+  .log-list::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+  .log-entry {
+    font-size: 10.5px;
+    font-family: 'Cascadia Code','JetBrains Mono','Fira Code',monospace;
     line-height: 1.6;
-    padding: 1px 0;
-    color: #64748b;
-    word-break: break-word;
-    overflow-wrap: break-word;
-    white-space: pre-wrap;
+    min-height: 24px;
+    padding: 4px 8px; border-radius: 3px;
+    background: #1f1f1f; color: #9a9a9a;
+    border-left: 2px solid #333;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    display: flex; align-items: center;
   }
-  .log-item.ok  { color: #10b981; }
-  .log-item.err { color: #f87171; }
+  .log-entry.ok  { border-color: #6ccb5f; color: #b4b4b4; }
+  .log-entry.err { border-color: #f36e6e; color: #f36e6e; }
+  .log-empty     { font-size: 10px; color: #444; padding: 4px 0; }
 
   /* ── Footer ── */
   .footer {
-    display: flex; align-items: center;
-    padding: 8px 12px 10px;
-    border-top: 1px solid #1e293b;
-    margin-top: 8px;
-    gap: 8px;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 14px;
+    background: #141414; border-top: 1px solid #2a2a2a;
   }
-  .login-toggle {
-    font-size: 11px; color: #64748b; cursor: pointer;
-    display: flex; align-items: center; gap: 5px;
+  .login-row { display: flex; align-items: center; gap: 7px; }
+  .toggle-switch {
+    position: relative; width: 28px; height: 16px;
+    background: #333; border-radius: 8px; cursor: pointer;
+    transition: background 0.2s;
   }
-  .login-toggle input { accent-color: #6366f1; }
-  .spacer { flex: 1; }
-  .footer-btn {
-    font-size: 11px; color: #475569;
-    background: none; border: none; cursor: pointer; padding: 3px 8px;
-    border-radius: 4px;
+  .toggle-switch.on { background: #2d5c27; }
+  .toggle-switch::after {
+    content: '';
+    position: absolute; top: 2px; left: 2px;
+    width: 12px; height: 12px;
+    background: #888; border-radius: 50%;
+    transition: transform 0.2s, background 0.2s;
   }
-  .footer-btn:hover { background: #1e293b; color: #94a3b8; }
-  .toggle-btn {
-    font-size: 11px; padding: 3px 10px; border-radius: 5px; cursor: pointer;
-    border: 1px solid #334155; background: #1e293b; color: #94a3b8;
-  }
-  .toggle-btn.stop { border-color: #ef4444; color: #ef4444; }
-  .toggle-btn:hover { background: #334155; }
+  .toggle-switch.on::after { transform: translateX(12px); background: #6ccb5f; }
+  .login-label { font-size: 11px; color: #777; }
+  .version { font-size: 10px; color: #444; }
 </style>
 </head>
 <body>
 
 <!-- Header -->
 <div class="header">
-  <img id="logo" src="" alt="" style="display:none" onerror="this.style.display='none'">
-  <div class="logo-fallback" id="logoFallback">🌐</div>
-  <div class="title-col">
-    <div class="title">FaunaBrowserMCP</div>
-    <div class="subtitle">Browser ↔ MCP relay</div>
+  <div class="header-left">
+    <img id="logo" class="logo" src="" alt="">
+    <span class="app-name">FaunaBrowserMCP</span>
   </div>
-  <button class="close-btn" id="closeBtn" title="Close">×</button>
+  <button class="close-btn" onclick="window.mcp.close()">✕</button>
 </div>
 
-<!-- Relay status -->
-<div class="row indicator">
-  <div class="dot" id="dot"></div>
-  <span class="row-label" id="statusLabel">Starting…</span>
-  <button class="toggle-btn" id="toggleBtn">Stop</button>
-</div>
-
-<!-- WS URL -->
-<div class="row">
-  <span class="row-label" id="wsUrl">ws://localhost:3340</span>
-  <button class="copy-btn" data-copy="ws">Copy</button>
-</div>
-
-<!-- HTTP/MCP URL -->
-<div class="row">
-  <span class="row-label" id="httpUrl">http://localhost:3341/mcp</span>
-  <button class="copy-btn" data-copy="http">Copy</button>
-</div>
-
-<!-- Extension install instructions -->
-<div class="ext-banner" id="extBanner">
-  <div class="icon">🧩</div>
-  <div class="text">
-    <strong>Install Chrome/Edge extension</strong><br>
-    Open <em>chrome://extensions</em>, enable Developer mode, click "Load unpacked" and select:<br>
-    <span class="ext-path" id="extPath" title="Click to copy path">…</span>
+<!-- Status bar -->
+<div class="status-bar">
+  <div class="status-left">
+    <div class="dot stopped" id="dot"></div>
+    <span class="status-text" id="statusText">Starting…</span>
   </div>
+  <button class="toggle-btn start" id="toggleBtn" onclick="toggleRelay()">Start</button>
+</div>
+
+<!-- URLs -->
+<div class="section">
+  <div class="row">
+    <span class="lbl">WS</span>
+    <span class="val" id="wsUrl">ws://localhost:3340</span>
+    <button class="copy" id="copyWs" onclick="cp(document.getElementById('wsUrl').textContent, this)">Copy</button>
+  </div>
+  <div class="row">
+    <span class="lbl">HTTP</span>
+    <span class="val" id="httpUrl">http://localhost:3341/mcp</span>
+    <button class="copy" id="copyHttp" onclick="cp(document.getElementById('httpUrl').textContent, this)">Copy</button>
+  </div>
+</div>
+
+<!-- Extension download -->
+<div class="plugin-section">
+  <div class="plugin-row">
+    <span class="plugin-label">Chrome / Edge extension</span>
+    <button class="dl-btn save"   id="extSaveBtn"   onclick="saveExtension()">⬇ Save to…</button>
+    <button class="dl-btn reveal" id="extRevealBtn" onclick="revealExtension()">Show in Finder</button>
+  </div>
+  <span class="ext-path" id="extPath" title="Click to copy path">…</span>
 </div>
 
 <!-- Stdio config -->
 <div class="section">
-  <div class="section-title">MCP Config (Claude Desktop / VS Code)</div>
+  <div class="row" style="margin-bottom:5px">
+    <span class="lbl" style="color:#555">stdio</span>
+    <span style="font-size:10px;color:#555;flex:1">for Claude Desktop / VS Code / Cursor</span>
+  </div>
+  <div class="snippet-wrap">
+    <div class="snippet" id="stdioSnippet">loading…</div>
+    <button class="snippet-copy" id="snippetCopyBtn" onclick="cpSnippet(this)">Copy</button>
+  </div>
 </div>
-<div class="code-block" id="stdioBlock" title="Click to copy"></div>
-<div class="hint" id="copyHint">Click to copy</div>
 
-<!-- Logs -->
-<div class="section"><div class="section-title">Relay Log</div></div>
-<div class="log-list" id="logList"></div>
+<!-- Log -->
+<div class="log-section">
+  <div class="log-title">Relay log</div>
+  <div class="log-list" id="logList">
+    <span class="log-empty">No output yet…</span>
+  </div>
+</div>
 
 <!-- Footer -->
 <div class="footer">
-  <label class="login-toggle">
-    <input type="checkbox" id="loginChk"> Start at login
-  </label>
-  <div class="spacer"></div>
-  <button class="footer-btn" id="clearBtn">Clear logs</button>
+  <div class="login-row">
+    <div class="toggle-switch" id="loginSwitch" onclick="toggleLogin()"></div>
+    <span class="login-label">Start at login</span>
+  </div>
+  <span class="version">v1.0.0</span>
 </div>
 
 <script>
-let s = {};
+let running   = false;
+let loginItem = false;
+let stdioText = '';
 
-function applyStatus(st) {
-  s = { ...s, ...st };
-  const dot    = document.getElementById('dot');
-  const label  = document.getElementById('statusLabel');
-  const toggle = document.getElementById('toggleBtn');
-  if (s.running) {
-    dot.className = 'dot on';
-    label.textContent = `Relay running — WS :3340  HTTP :3341`;
-    toggle.textContent = 'Stop';
-    toggle.className = 'toggle-btn stop';
-  } else {
-    dot.className = 'dot off';
-    label.textContent = 'Relay stopped';
-    toggle.textContent = 'Start';
-    toggle.className = 'toggle-btn';
-  }
-  if (s.stdioConfig) document.getElementById('stdioBlock').textContent = `{\n  "mcpServers": {\n${s.stdioConfig.split('\n').map(l => '    ' + l).join('\n')}\n  }\n}`;
-  if (s.iconUrl) {
-    const img = document.getElementById('logo');
-    img.src = s.iconUrl;
-    img.onload = () => { img.style.display = ''; document.getElementById('logoFallback').style.display = 'none'; };
+const dot        = document.getElementById('dot');
+const statusText = document.getElementById('statusText');
+const toggleBtn  = document.getElementById('toggleBtn');
+const logList    = document.getElementById('logList');
+const loginSwitch = document.getElementById('loginSwitch');
+
+// ── Init ──────────────────────────────────────────────────────────────────
+window.mcp.getStatus().then(s => {
+  applyStatus(s.running);
+  document.getElementById('wsUrl').textContent   = s.wsUrl   || 'ws://localhost:3340';
+  document.getElementById('httpUrl').textContent = s.httpUrl || 'http://localhost:3341/mcp';
+  if (s.stdioConfig) {
+    document.getElementById('stdioSnippet').textContent = s.stdioConfig;
+    stdioText = s.stdioConfig;
   }
   if (s.extensionPath) {
-    document.getElementById('extPath').textContent = s.extensionPath;
+    document.getElementById('extPath').textContent    = s.extensionPath;
+    document.getElementById('extPath').dataset.path   = s.extensionPath;
+  }
+  setLogin(s.loginItem);
+  if (s.iconUrl) document.getElementById('logo').src = s.iconUrl;
+  if (s.logs) s.logs.forEach(e => addLogEntry(e));
+});
+
+window.mcp.onStatus(s => {
+  applyStatus(s.running);
+  if (s.extensionPath) {
+    document.getElementById('extPath').textContent  = s.extensionPath;
     document.getElementById('extPath').dataset.path = s.extensionPath;
   }
-  if (s.loginItem != null) document.getElementById('loginChk').checked = s.loginItem;
-  if (s.logs) s.logs.forEach(appendLog);
+});
+window.mcp.onLog(e => addLogEntry(e));
+
+// ── Status ────────────────────────────────────────────────────────────────
+function applyStatus(r) {
+  running = r;
+  dot.className = 'dot ' + (r ? 'running' : 'stopped');
+  statusText.textContent = r ? 'Running' : 'Stopped';
+  toggleBtn.className = 'toggle-btn ' + (r ? 'stop' : 'start');
+  toggleBtn.textContent = r ? 'Stop' : 'Start';
 }
 
-function appendLog(entry) {
-  const list = document.getElementById('logList');
-  const el   = document.createElement('div');
-  el.className = 'log-item ' + (entry.level || '');
-  el.textContent = entry.text;
-  list.appendChild(el);
-  list.scrollTop = list.scrollHeight;
+function toggleRelay() {
+  dot.className = 'dot starting';
+  statusText.textContent = running ? 'Stopping…' : 'Starting…';
+  if (running) window.mcp.stopRelay(); else window.mcp.startRelay();
 }
 
-// Initial load
-window.mcp.getStatus().then(applyStatus);
+// ── Log ───────────────────────────────────────────────────────────────────
+function addLogEntry(e) {
+  const empty = logList.querySelector('.log-empty');
+  if (empty) empty.remove();
 
-// Live updates
-window.mcp.onStatus(st => applyStatus(st));
-window.mcp.onLog(entry => appendLog(entry));
+  const el = document.createElement('div');
+  el.className = 'log-entry ' + (e.level === 'ok' ? 'ok' : e.level === 'err' ? 'err' : '');
+  const t = new Date(e.ts || Date.now()).toLocaleTimeString('en', { hour12: false, hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  el.textContent = t + '  ' + e.text;
+  el.title = e.text;
+  logList.appendChild(el);
+  if (logList.children.length > 60) logList.removeChild(logList.firstChild);
+  logList.scrollTop = logList.scrollHeight;
+}
 
-// Toggle relay
-document.getElementById('toggleBtn').addEventListener('click', () => {
-  if (s.running) window.mcp.stopRelay(); else window.mcp.startRelay();
-});
+// ── Copy helpers ──────────────────────────────────────────────────────────
+function cp(text, btn) {
+  window.mcp.copy(text);
+  flash(btn, 'Copy');
+}
 
-// Copy buttons (WS / HTTP)
-document.querySelectorAll('[data-copy]').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const v = btn.dataset.copy === 'ws' ? s.wsUrl : s.httpUrl;
-    if (v) window.mcp.copy(v).then(() => { btn.textContent = '✓'; setTimeout(() => btn.textContent = 'Copy', 1500); });
-  });
-});
+function cpSnippet(btn) {
+  window.mcp.copy(stdioText);
+  flash(btn, 'Copy');
+}
 
-// Stdio block copy
-document.getElementById('stdioBlock').addEventListener('click', function() {
-  window.mcp.copy(this.textContent).then(() => {
-    document.getElementById('copyHint').textContent = '✓ Copied!';
-    setTimeout(() => document.getElementById('copyHint').textContent = 'Click to copy', 2000);
-  });
-});
+function flash(btn, resetLabel) {
+  btn.classList.add('flash');
+  btn.textContent = 'Copied!';
+  setTimeout(() => { btn.classList.remove('flash'); btn.textContent = resetLabel; }, 1400);
+}
 
-// Extension path copy
+// ── Extension path copy ───────────────────────────────────────────────────
 document.getElementById('extPath').addEventListener('click', function() {
   window.mcp.copy(this.dataset.path || this.textContent);
 });
 
-// Clear logs
-document.getElementById('clearBtn').addEventListener('click', () => {
-  document.getElementById('logList').innerHTML = '';
-});
+// ── Extension save / reveal ───────────────────────────────────────────────
+async function saveExtension() {
+  const btn = document.getElementById('extSaveBtn');
+  btn.textContent = '…';
+  const r = await window.mcp.saveExtension();
+  if (r && r.ok) {
+    btn.classList.add('flash');
+    btn.textContent = '✓ Saved!';
+    setTimeout(() => { btn.classList.remove('flash'); btn.textContent = '⬇ Save to…'; }, 2500);
+  } else if (r && !r.canceled) {
+    btn.textContent = '✗ Error';
+    setTimeout(() => { btn.textContent = '⬇ Save to…'; }, 2000);
+  } else {
+    btn.textContent = '⬇ Save to…';
+  }
+}
 
-// Login at startup toggle
-document.getElementById('loginChk').addEventListener('change', function() {
-  window.mcp.setLogin(this.checked);
-});
+function revealExtension() {
+  window.mcp.revealExtension();
+}
 
-// Close button
-document.getElementById('closeBtn').addEventListener('click', () => window.mcp.close());
+// ── Login item ────────────────────────────────────────────────────────────
+function setLogin(on) {
+  loginItem = !!on;
+  loginSwitch.className = 'toggle-switch' + (loginItem ? ' on' : '');
+}
+
+function toggleLogin() {
+  window.mcp.setLogin(!loginItem).then(on => setLogin(on));
+}
 </script>
 </body>
 </html>
