@@ -861,8 +861,10 @@ const httpServer = createServer(async (req, res) => {
       // Existing session — route to its transport
       await httpSessions.get(sid).handleRequest(req, res, parsed);
 
-    } else if (!sid && isInitializeRequest(parsed)) {
-      // New session — create transport, connect a fresh McpServer instance
+    } else if (isInitializeRequest(parsed)) {
+      // New or re-initializing session (stale session IDs are ignored — client
+      // may send a leftover mcp-session-id after the relay restarts, and that's fine)
+      if (sid) process.stderr.write(`[HTTP] Stale session ${sid} — creating new session\n`);
       const t = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: id => {
