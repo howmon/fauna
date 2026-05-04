@@ -12,16 +12,20 @@
  *   :3335  → WebSocket relay to Figma plugin UI
  */
 
-import { McpServer }           from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { WebSocketServer }      from 'ws';
-import { OpenAI }               from 'openai';
-import { execSync }             from 'child_process';
-import { z }                    from 'zod';
-import fs                       from 'fs';
-import path                     from 'path';
-import https                    from 'https';
-import { fileURLToPath }        from 'url';
+import { McpServer }                     from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport }          from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { isInitializeRequest }           from '@modelcontextprotocol/sdk/types.js';
+import { WebSocketServer }               from 'ws';
+import { OpenAI }                        from 'openai';
+import { execSync }                      from 'child_process';
+import { z }                             from 'zod';
+import { createServer }                  from 'http';
+import { randomUUID }                    from 'crypto';
+import fs                                from 'fs';
+import path                              from 'path';
+import https                             from 'https';
+import { fileURLToPath }                 from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -795,5 +799,88 @@ mcp.tool('list_pages', 'List all pages in the Figma document', {},
 process.stderr.write(`[MCP] WebSocket relay on ws://localhost:${WS_PORT}\n`);
 process.stderr.write(`[MCP] Active system: ${getActiveSystem().name}\n`);
 
+// stdio transport (Claude Desktop, Copilot, etc.)
 const transport = new StdioServerTransport();
 await mcp.connect(transport);
+
+// ── HTTP/MCP server — any app that speaks MCP over HTTP can connect ────────
+
+const HTTP_PORT    = 3336;
+const httpSessions = new Map(); // sessionId → StreamableHTTPServerTransport
+
+const httpServer = createServer(async (req, res) => {
+  // CORS — allow local browser-based MCP clients
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, mcp-session-id');
+  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+  const url = new URL(req.url, `http://localhost:${HTTP_PORT}`);
+  if (url.pathname !== '/mcp') { res.writeHead(404); res.end('Not found'); return; }
+
+  // GET /mcp — resume an existing SSE session
+  if (req.method === 'GET') {
+    const sid = req.headers['mcp-session-id'];
+    if (sid && httpSessions.has(sid)) {
+      await httpSessions.get(sid).handleRequest(req, res);
+    } else {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unknown session — POST /mcp to initialize' }));
+    }
+    return;
+  }
+
+  // DELETE /mcp — close session
+  if (req.method === 'DELETE') {
+    const sid = req.headers['mcp-session-id'];
+    if (sid && httpSessions.has(sid)) {
+      await httpSessions.get(sid).handleRequest(req, res);
+      httpSessions.delete(sid);
+    } else {
+      res.writeHead(404); res.end();
+    }
+    return;
+  }
+
+  // POST /mcp — MCP protocol messages
+  if (req.method === 'POST') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    let parsed;
+    try { parsed = JSON.parse(body); } catch (_) { res.writeHead(400); res.end('Invalid JSON'); return; }
+
+    const sid = req.headers['mcp-session-id'];
+
+    if (sid && httpSessions.has(sid)) {
+      // Existing session — route to its transport
+      await httpSessions.get(sid).handleRequest(req, res, parsed);
+
+    } else if (!sid && isInitializeRequest(parsed)) {
+      // New session — create transport, connect a fresh McpServer instance
+      const t = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: id => {
+          httpSessions.set(id, t);
+          process.stderr.write(`[HTTP] MCP session opened: ${id}\n`);
+        }
+      });
+      t.onclose = () => {
+        const id = t.sessionId;
+        if (id) { httpSessions.delete(id); process.stderr.write(`[HTTP] MCP session closed: ${id}\n`); }
+      };
+      await mcp.connect(t);
+      await t.handleRequest(req, res, parsed);
+
+    } else {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Send an MCP initialize request (no mcp-session-id) to start a session' }));
+    }
+    return;
+  }
+
+  res.writeHead(405); res.end('Method not allowed');
+});
+
+httpServer.listen(HTTP_PORT, () => {
+  process.stderr.write(`[MCP] HTTP/MCP server on http://localhost:${HTTP_PORT}/mcp\n`);
+});

@@ -17,6 +17,16 @@
   .log-entry.err { border-left: 2px solid #f36e6e; color: #f36e6e; }
   .log-entry.cmd { border-left: 2px solid #789996; }
   .hint { font-size: 11px; color: #7a7a7a; text-align: center; }
+  .mcp-info { border-top: 1px solid #2e2e2e; padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .mcp-info summary { font-size: 11px; font-weight: 600; color: #9b9b9b; cursor: pointer; user-select: none; letter-spacing: 0.04em; text-transform: uppercase; }
+  .mcp-info summary:hover { color: #c8c8c8; }
+  .mcp-row { display: flex; align-items: center; gap: 6px; }
+  .mcp-label { font-size: 10px; color: #6a6a6a; min-width: 48px; }
+  .mcp-val { font-size: 11px; font-family: 'Cascadia Code','JetBrains Mono','Fira Code',monospace; color: #b4eaff; background: #1f1f1f; border-radius: 4px; padding: 2px 6px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mcp-badge { font-size: 10px; background: #2d3a2d; color: #6ccb5f; border-radius: 3px; padding: 1px 5px; }
+  .mcp-snippet { font-size: 10px; font-family: 'Cascadia Code','JetBrains Mono','Fira Code',monospace; background: #1a1a1a; border-radius: 5px; padding: 7px 8px; color: #c8c8c8; white-space: pre; overflow-x: auto; line-height: 1.5; }
+  .copy-btn { font-size: 10px; background: #2a2a2a; color: #9b9b9b; border: none; border-radius: 3px; padding: 2px 6px; cursor: pointer; flex-shrink: 0; }
+  .copy-btn:hover { background: #333; color: #fff; }
 </style>
 </head>
 <body>
@@ -29,6 +39,30 @@
 
 <div class="log" id="log"></div>
 <div class="hint">ws://localhost:3335 · MCP tools ready when connected</div>
+
+<details class="mcp-info" id="mcpInfo">
+  <summary>Connect via HTTP/MCP</summary>
+
+  <div class="mcp-row">
+    <span class="mcp-label">Endpoint</span>
+    <span class="mcp-val">http://localhost:3336/mcp</span>
+    <button class="copy-btn" onclick="copyText('http://localhost:3336/mcp')">Copy</button>
+  </div>
+  <div class="mcp-row">
+    <span class="mcp-label">Transport</span>
+    <span class="mcp-val" style="color:#c8c8c8">Streamable HTTP (MCP 2025-03-26)</span>
+  </div>
+  <div class="mcp-row">
+    <span class="mcp-label">Auth</span>
+    <span class="mcp-badge">None — local only</span>
+  </div>
+
+  <div class="mcp-row" style="margin-top:4px">
+    <span class="mcp-label" style="min-width:unset;font-size:10px;color:#6a6a6a">Config key &nbsp;—&nbsp; point any MCP client here</span>
+    <button class="copy-btn" onclick="copyText(genericSnippet)">Copy</button>
+  </div>
+  <div class="mcp-snippet" id="genericSnippet"></div>
+</details>
 
 <script>
 const dot        = document.getElementById('dot');
@@ -132,6 +166,20 @@ window.onmessage = function(event) {
 };
 
 connect();
+
+// ── HTTP/MCP info section ─────────────────────────────────────────────────
+var genericSnippet = '"figma-fauna": {\n  "url": "http://localhost:3336/mcp"\n}';
+document.getElementById('genericSnippet').textContent = genericSnippet;
+
+function copyText(text) {
+  var t = typeof text === 'string' ? text : (text && text.textContent ? text.textContent : String(text));
+  navigator.clipboard.writeText(t).catch(function() {
+    // fallback: execCommand
+    var el = document.createElement('textarea');
+    el.value = t; el.style.position = 'fixed'; el.style.opacity = '0';
+    document.body.appendChild(el); el.select(); document.execCommand('copy'); document.body.removeChild(el);
+  });
+}
 </script>
 </body>
 </html>
