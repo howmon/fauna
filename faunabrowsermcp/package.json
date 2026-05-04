@@ -1,0 +1,61 @@
+{
+  "name": "faunabrowsermcp",
+  "version": "1.0.0",
+  "description": "FaunaBrowserMCP — Browser MCP relay tray utility. Bridges Chrome/Edge browser tabs to any MCP-capable AI tool.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.fauna.browser.mcp",
+    "productName": "FaunaBrowserMCP",
+    "copyright": "Copyright © 2026 Solomon Abey",
+    "publish": null,
+    "files": [
+      "main.js",
+      "preload.js",
+      "popup.html"
+    ],
+    "extraResources": [
+      { "from": "../assets/icon.png",             "to": "icon.png"    },
+      { "from": "../assets/icon.icns",            "to": "icon.icns"   },
+      { "from": "server",                         "to": "mcp-server/server",      "filter": ["**/*", "!node_modules/**"] },
+      { "from": "server/node_modules",            "to": "mcp-server/server/node_modules", "filter": ["**/*"] },
+      { "from": "extension",                      "to": "mcp-server/extension",   "filter": ["**/*"] }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "../assets/icon.icns",
+      "identity": null,
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] }
+      ]
+    },
+    "win": {
+      "icon": "../assets/icon.png",
+      "target": [
+        { "target": "nsis", "arch": ["x64", "arm64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "createDesktopShortcut": false,
+      "createStartMenuShortcut": true
+    },
+    "dmg": {
+      "title": "FaunaBrowserMCP",
+      "contents": [
+        { "x": 130, "y": 220 },
+        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+      ]
+    },
+    "electronVersion": "41.0.3"
+  },
+  "devDependencies": {
+    "electron": "^41.0.3",
+    "electron-builder": "^26.8.1"
+  }
+}
