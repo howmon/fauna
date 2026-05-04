@@ -1,7 +1,7 @@
 {
-  "name": "faunamcp",
+  "name": "faunafigmamcp",
   "version": "1.0.0",
-  "description": "FaunaMCP — Figma MCP relay tray utility. Bridges the Fauna Figma plugin to any MCP-capable AI tool.",
+  "description": "FaunaFigmaMCP — Figma MCP relay tray utility. Bridges the Fauna Figma plugin to any MCP-capable AI tool.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -10,8 +10,8 @@
     "dist:win": "electron-builder --win"
   },
   "build": {
-    "appId": "com.fauna.mcp",
-    "productName": "FaunaMCP",
+    "appId": "com.fauna.figma.mcp",
+    "productName": "FaunaFigmaMCP",
     "copyright": "Copyright © 2026 Solomon Abey",
     "publish": null,
     "files": [
@@ -46,7 +46,7 @@
       "createStartMenuShortcut": true
     },
     "dmg": {
-      "title": "FaunaMCP",
+      "title": "FaunaFigmaMCP",
       "contents": [
         { "x": 130, "y": 220 },
         { "x": 410, "y": 220, "type": "link", "path": "/Applications" }

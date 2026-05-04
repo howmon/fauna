@@ -198,7 +198,7 @@ function updateTrayMenu() {
     : '○ Stopped';
 
   const menu = Menu.buildFromTemplate([
-    { label: 'FaunaMCP',   enabled: false },
+    { label: 'FaunaFigmaMCP',   enabled: false },
     { label: statusLabel,  enabled: false },
     { type: 'separator' },
     relayRunning
@@ -215,14 +215,14 @@ function updateTrayMenu() {
       click: item => app.setLoginItemSettings({ openAtLogin: item.checked })
     },
     { type: 'separator' },
-    { label: 'Quit FaunaMCP', click: () => { stopRelay(); app.quit(); } }
+    { label: 'Quit FaunaFigmaMCP', click: () => { stopRelay(); app.quit(); } }
   ]);
 
   tray.setContextMenu(menu);
   tray.setToolTip(
     relayRunning
-      ? `FaunaMCP ● Running\nHTTP: http://localhost:${HTTP_PORT}/mcp`
-      : 'FaunaMCP ○ Stopped'
+      ? `FaunaFigmaMCP ● Running\nHTTP: http://localhost:${HTTP_PORT}/mcp`
+      : 'FaunaFigmaMCP ○ Stopped'
   );
 }
 
