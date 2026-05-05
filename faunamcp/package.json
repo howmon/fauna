@@ -1,7 +1,7 @@
 {
-  "name": "faunabrowsermcp",
+  "name": "faunamcp",
   "version": "1.0.0",
-  "description": "FaunaBrowserMCP — Browser MCP relay tray utility. Bridges Chrome/Edge browser tabs to any MCP-capable AI tool.",
+  "description": "FaunaMCP — Unified MCP relay tray utility. Bridges the Fauna browser extension and Figma plugin to any MCP-capable AI tool.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -10,8 +10,8 @@
     "dist:win": "electron-builder --win"
   },
   "build": {
-    "appId": "com.fauna.browser.mcp",
-    "productName": "FaunaBrowserMCP",
+    "appId": "com.fauna.mcp",
+    "productName": "FaunaMCP",
     "copyright": "Copyright © 2026 Solomon Abey",
     "publish": null,
     "files": [
@@ -21,11 +21,12 @@
       "popup.js"
     ],
     "extraResources": [
-      { "from": "../assets/icon.png",             "to": "icon.png"    },
-      { "from": "../assets/icon.icns",            "to": "icon.icns"   },
-      { "from": "server",                         "to": "mcp-server/server",      "filter": ["**/*", "!node_modules/**"] },
-      { "from": "server/node_modules",            "to": "mcp-server/server/node_modules", "filter": ["**/*"] },
-      { "from": "extension",                      "to": "mcp-server/extension",   "filter": ["**/*"] }
+      { "from": "../assets/icon.png",  "to": "icon.png"  },
+      { "from": "../assets/icon.icns", "to": "icon.icns" },
+      { "from": "browser-server",      "to": "browser-server", "filter": ["**/*"] },
+      { "from": "extension",           "to": "extension",      "filter": ["**/*"] },
+      { "from": "figma-server",        "to": "figma-server",   "filter": ["**/*"] },
+      { "from": "figma-plugin",        "to": "figma-plugin",   "filter": ["**/*"] }
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
@@ -47,7 +48,7 @@
       "createStartMenuShortcut": true
     },
     "dmg": {
-      "title": "FaunaBrowserMCP",
+      "title": "FaunaMCP",
       "contents": [
         { "x": 130, "y": 220 },
         { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
