@@ -3240,9 +3240,16 @@ class PlaywrightMCPClient {
   async _doStart() {
     const cliPath = path.join(__dirname, 'node_modules', '@playwright', 'mcp', 'cli.js');
     if (!fs.existsSync(cliPath)) throw new Error('@playwright/mcp not installed — run: npm install @playwright/mcp');
-    this.proc = _spawn('node', [cliPath, '--headless'], {
+
+    // In a packaged Electron app, `node` is not on PATH — use the Electron binary
+    // with ELECTRON_RUN_AS_NODE=1 to run Node scripts (same approach as Clawpilot).
+    // In standalone Node server, process.execPath is already the node binary.
+    const spawnEnv = { ...process.env };
+    if (process.versions.electron) spawnEnv.ELECTRON_RUN_AS_NODE = '1';
+
+    this.proc = _spawn(process.execPath, [cliPath, '--headless'], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env },
+      env: spawnEnv,
     });
     this._buffer = '';
     this._initialized = false;
