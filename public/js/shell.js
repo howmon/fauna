@@ -101,6 +101,10 @@ function _extractCreatedFileCandidates(command, cwd) {
     if (!raw) return;
     // Ignore option-like tokens accidentally captured from commands such as `find ... -o -name`.
     if (/^-[A-Za-z]/.test(raw)) return;
+    // Ignore unexpanded shell variables (e.g. $TMPF, ${VAR}) — we can't resolve them client-side.
+    if (/\$/.test(raw)) return;
+    // Ignore glob/regex patterns (e.g. browser_[a-zA-Z_]*, *.log) — not real file paths.
+    if (/[*?[\]{]/.test(raw)) return;
     var resolved = _resolveShellFilePath(path, cwd);
     if (!resolved) return;
     if (/[|;&]$/.test(resolved)) resolved = resolved.slice(0, -1);

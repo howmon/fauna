@@ -1020,7 +1020,7 @@ function extractAndRenderBrowserActions(html, messageEl, isHistoryLoad, convId) 
   var hasNav = actions.some(function(a) { return a.action === 'navigate' || a.action === 'new-tab'; });
   if (hasNav) {
     fetch('/api/playwright-mcp/status').then(function(r) { return r.json(); }).then(function(d) {
-      if (!d.installed) { try { openBrowserPane(); } catch(e) { dbg('openBrowserPane: ' + e.message, 'err'); } }
+      if (!d.installed && !d.running) { try { openBrowserPane(); } catch(e) { dbg('openBrowserPane: ' + e.message, 'err'); } }
     }).catch(function() {
       // Server not reachable — open pane as safe fallback
       try { openBrowserPane(); } catch(e) { dbg('openBrowserPane: ' + e.message, 'err'); }

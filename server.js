@@ -1090,26 +1090,98 @@ await applyTextOverrides(nav, {
 const PLAYWRIGHT_BROWSER_CONTEXT = `
 ## Playwright Browser Control (MCP Tools)
 
-You have a real browser you can control via MCP tool calls. Use these tools for autonomous web research, testing, form automation, and web scraping.
+You have a real headless browser you can control via MCP tool calls. The relay has extension-first dispatch: if the user's Chrome/Edge extension is connected it uses that, otherwise it falls back to Playwright headless automatically.
 
-### Key tools:
+### Status
+- **browser_status** — check extension/Playwright backend status and current URL
+
+### Navigation & page reading
 - **browser_navigate** — navigate to a URL
-- **browser_snapshot** — get the accessibility tree of the current page (structured, text-based — prefer over screenshots for reading page content)
-- **browser_take_screenshot** — take a screenshot of the current page
-- **browser_click** — click an element by aria label, text, or ref from snapshot
-- **browser_type** — type text into an input field
-- **browser_fill** — fill a form field
-- **browser_select_option** — select a dropdown option
-- **browser_wait_for** — wait for an element or condition
-- **browser_close** — close the browser
+- **browser_navigate_back** / **browser_navigate_forward** / **browser_reload** — history navigation
+- **browser_snapshot** — accessibility tree of the current page (structured text — prefer over screenshots for reading content)
+- **browser_take_screenshot** — screenshot (JPEG, base64); alias: **browser_screenshot**
+- **browser_pdf_save** — save current page as PDF to a file path
+- **browser_get_content** — extract clean text, links, and headings from the page
+- **browser_get_forms** — get all form fields (labels, selectors, types, current values)
+- **browser_get_assets** — extract CSS, scripts, images, design tokens (extension only)
+- **browser_get_security** — TLS/CSP/HTTPS security info (extension only)
 
-### Rules:
-- Always call **browser_snapshot** after navigating to read the page content before interacting with it.
-- Use **browser_snapshot** (accessibility tree) over **browser_take_screenshot** for text extraction — it's faster and more reliable.
-- After clicking or submitting a form, call **browser_snapshot** to verify the result.
-- The browser starts fresh each session. Cookies and sessions are NOT shared with the built-in browser panel.
-- Use Playwright MCP tools when you need reliable, multi-step web automation (logins, form flows, data extraction).
-- Use browser-action fenced blocks when you want the user to see the browser panel open in the UI.
+### Interaction
+- **browser_click** — click by CSS selector, visible text, or x/y coordinates
+- **browser_hover** — hover over an element
+- **browser_type** — type text character-by-character (triggers autocomplete/live validation)
+- **browser_press_sequentially** — like browser_type but fires a keystroke event per character
+- **browser_fill_form** — fill multiple form fields at once: \`[{selector, value}, ...]\`
+- **browser_select_option** / **browser_select** — select a \`<select>\` dropdown value
+- **browser_check** / **browser_uncheck** — toggle checkboxes/radio buttons
+- **browser_drag** — drag from one element to another (by selector)
+- **browser_file_upload** — set an \`<input type="file">\` value
+- **browser_press_key** — press a named key (e.g. "Enter", "Tab", "Escape"); alias: **browser_keyboard**
+- **browser_keydown** / **browser_keyup** — hold/release modifier keys
+- **browser_scroll** — scroll by direction/pixels or to an element
+- **browser_mouse_move_xy** / **browser_mouse_down** / **browser_mouse_up** / **browser_mouse_click_xy** — raw mouse control
+- **browser_mouse_wheel** — scroll wheel delta (delta_x, delta_y)
+- **browser_mouse_drag_xy** — drag using raw mouse events between coordinates
+- **browser_generate_locator** — ask Playwright to suggest a stable selector for an element
+
+### Waiting & verification
+- **browser_wait_for** — wait for text to appear/disappear or a fixed timeout
+- **browser_verify_text_visible** — assert text is visible on page (throws if not found)
+- **browser_verify_element_visible** — assert a CSS selector is visible
+- **browser_verify_list_visible** — assert all items in an array are visible
+- **browser_verify_value** — assert an input's current value
+- **browser_handle_dialog** — accept or dismiss JS alert/confirm/prompt dialogs
+
+### Evaluation & console
+- **browser_evaluate** / **browser_eval** — run arbitrary JavaScript in the page and return result
+- **browser_console_messages** / **browser_get_console** — read captured JS console output (log/warn/error)
+- **browser_console_clear** — clear the console log buffer
+
+### Network
+- **browser_network_requests** / **browser_get_network** — list all network requests (URL, method, status, timing)
+- **browser_network_clear** — clear the network request log
+- **browser_route** — intercept/mock a URL pattern (modify or abort requests)
+- **browser_route_list** — list active mock routes
+- **browser_unroute** — remove a mock route (or all if no pattern given)
+
+### Cookies
+- **browser_cookie_list** / **browser_get_cookies** — list all cookies
+- **browser_cookie_get** — get a specific cookie by name
+- **browser_cookie_set** — set a cookie (name, value, domain, path, expires, httpOnly, secure, sameSite)
+- **browser_cookie_delete** — delete a specific cookie by name
+- **browser_cookie_clear** — clear all cookies
+
+### Storage
+- **browser_localstorage_list** — list all localStorage key-value pairs
+- **browser_localstorage_get** / **browser_localstorage_set** / **browser_localstorage_delete** / **browser_localstorage_clear** — localStorage CRUD
+- **browser_sessionstorage_list** — list all sessionStorage key-value pairs
+- **browser_sessionstorage_get** / **browser_sessionstorage_set** / **browser_sessionstorage_delete** / **browser_sessionstorage_clear** — sessionStorage CRUD
+- **browser_get_storage** — get both localStorage and sessionStorage in one call
+- **browser_storage_state** — export full auth state (cookies + storage) to a file
+- **browser_set_storage_state** — restore auth state from a saved file
+
+### Tabs
+- **browser_list_tabs** — list all open tabs
+- **browser_new_tab** — open a new tab (optionally with a URL)
+- **browser_switch_tab** — switch to tab by index or ID
+- **browser_close_tab** — close a specific tab
+
+### Recording & tracing
+- **browser_start_tracing** / **browser_stop_tracing** — Playwright trace (saves to a file)
+- **browser_start_video** / **browser_stop_video** — screen recording
+- **browser_resize** — resize the browser viewport
+
+### Closing
+- **browser_close** — close the current page
+
+### Rules
+- Always call **browser_snapshot** (or **browser_get_content**) after navigating before interacting — you need to know what's on the page.
+- Use **browser_type** or **browser_press_sequentially** (not **browser_fill_form**) for autocomplete/typeahead fields.
+- After clicking or submitting, call **browser_snapshot** to verify the result.
+- The browser session persists across tool calls in a conversation — cookies and auth are retained.
+- Prefer **browser_evaluate** over repeated snapshot calls when you need to read a specific DOM value.
+- Use **browser_route** to mock API responses when testing or scraping behind auth walls.
+- Use **browser_set_storage_state** to restore a saved login session instead of re-authenticating.
 `;
 
 // ── Context summarization endpoint ───────────────────────────────────────────
@@ -3246,8 +3318,7 @@ function figmaLog(message, level = 'info') {
 
 class PlaywrightMCPClient {
   constructor() {
-    this.proc = null;
-    this._port = null;
+    this._url = 'http://localhost:3341/mcp';
     this._sessionId = null;
     this.toolsCache = null;
     this._nextId = 1;
@@ -3256,120 +3327,31 @@ class PlaywrightMCPClient {
   }
 
   async _ensureStarted() {
-    if (this.proc && !this.proc.killed && this._initialized) return;
+    if (this._initialized) return;
     if (this._initPromise) return this._initPromise;
     this._initPromise = this._doStart().finally(() => { this._initPromise = null; });
     return this._initPromise;
   }
 
-  // Find the system node binary so @playwright/mcp can launch Chromium normally.
-  // When running inside Electron, process.execPath is the Electron binary; using
-  // ELECTRON_RUN_AS_NODE=1 works for pure-JS scripts but Playwright's browser
-  // launch is incompatible with Electron's sandboxed environment.
-  async _findNodeBin() {
-    if (!process.versions.electron) return process.execPath; // already node
-    // Try login-shell `which node` so nvm / volta / homebrew paths are visible
-    try {
-      const bin = await new Promise((resolve, reject) => {
-        const p = _spawn('/bin/zsh', ['-l', '-c', 'which node'], { stdio: ['ignore', 'pipe', 'ignore'] });
-        let out = '';
-        p.stdout.on('data', d => { out += d.toString(); });
-        p.on('close', code => (code === 0 && out.trim()) ? resolve(out.trim()) : reject());
-      });
-      if (fs.existsSync(bin)) return bin;
-    } catch (_) {}
-    // Common macOS static paths
-    for (const b of ['/opt/homebrew/bin/node', '/usr/local/bin/node', '/usr/bin/node']) {
-      if (fs.existsSync(b)) return b;
-    }
-    // Last resort: Electron binary with ELECTRON_RUN_AS_NODE (may not work for Playwright)
-    return null;
-  }
-
   async _doStart() {
-    // In a packaged Electron app node_modules live inside app.asar, but
-    // child_process.spawn cannot execute scripts from inside an asar archive.
-    // electron-builder unpacks asarUnpack entries to app.asar.unpacked/.
-    const appDir = __dirname.includes('app.asar')
-      ? __dirname.replace('app.asar', 'app.asar.unpacked')
-      : __dirname;
-    const cliPath = path.join(appDir, 'node_modules', '@playwright', 'mcp', 'cli.js');
-    if (!fs.existsSync(cliPath)) throw new Error('@playwright/mcp not installed — run: npm install @playwright/mcp');
+    // Connect to the FaunaMCP browser-server relay at port 3341.
+    // It exposes a full Playwright headless backend via MCP Streamable HTTP,
+    // with extension-first dispatch and Playwright fallback for all ~70 tools.
 
-    // Find a free port via the OS (bind to :0, read assigned port, close)
-    this._port = await new Promise((resolve, reject) => {
-      const srv = net.createServer();
-      srv.listen(0, () => { const p = srv.address().port; srv.close(() => resolve(p)); });
-      srv.on('error', reject);
-    });
-
-    const spawnEnv = { ...process.env };
-    const nodeBin = await this._findNodeBin();
-    let execBin, execArgs;
-    if (nodeBin) {
-      execBin = nodeBin;
-      execArgs = [cliPath, '--port', String(this._port), '--headless', '--no-sandbox'];
-    } else {
-      // Fallback: Electron binary acting as Node
-      execBin = process.execPath;
-      execArgs = [cliPath, '--port', String(this._port), '--headless', '--no-sandbox'];
-      spawnEnv.ELECTRON_RUN_AS_NODE = '1';
-    }
-    console.log('[Playwright MCP] spawning with', execBin);
-
-    // The MCP server validates the Host header — must use localhost, not 127.0.0.1
-    this.proc = _spawn(execBin, execArgs, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: spawnEnv,
-    });
-
-    // Wait for the "Listening on ..." message on stdout/stderr as the readiness signal
-    let startupOutput = '';
-    const readyPromise = new Promise((resolve) => {
-      const onData = (d) => {
-        const s = d.toString();
-        startupOutput += s;
-        console.log('[Playwright MCP]', s.trim());
-        if (s.includes('Listening on')) { resolve(); }
-      };
-      this.proc.stderr.on('data', onData);
-      this.proc.stdout.on('data', onData);
-    });
-
-    this.proc.on('exit', (code) => {
-      console.log('[Playwright MCP] exited with code', code);
-      this.proc = null;
-      this._initialized = false;
-      this._port = null;
-      this._sessionId = null;
-      this.toolsCache = null;
-    });
-
-    // Race: readiness message OR 20-second timeout OR process exit
-    const ready = await Promise.race([
-      readyPromise.then(() => true),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Playwright MCP did not start in time')), 20000)),
-      new Promise((_, reject) => this.proc.once('close', (code) => {
-        const tail = startupOutput.slice(-400).trim();
-        reject(new Error(`Playwright MCP process exited (code ${code}) during startup${tail ? ':\n' + tail : ''}`));
-      })),
-    ]);
-    if (!ready) throw new Error('Playwright MCP did not become ready');
-
-    // MCP initialize handshake over HTTP
+    // MCP initialize handshake
     const initResult = await this._post({ jsonrpc: '2.0', method: 'initialize', id: this._nextId++,
       params: { protocolVersion: '2024-11-05', capabilities: {},
         clientInfo: { name: 'Fauna', version: '1.0.0' } } });
 
     // Send initialized notification (fire-and-forget, no response expected)
-    fetch(`http://localhost:${this._port}/mcp`, {
+    fetch(this._url, {
       method: 'POST',
       headers: this._headers(),
       body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
     }).catch(() => {});
 
     this._initialized = true;
-    console.log('[Playwright MCP] ready on port', this._port);
+    console.log('[Playwright MCP] connected to FaunaMCP relay at', this._url);
     return initResult;
   }
 
@@ -3380,9 +3362,7 @@ class PlaywrightMCPClient {
   }
 
   async _post(msg) {
-    if (!this._port) throw new Error('Playwright MCP not started');
-    // Use localhost (not 127.0.0.1) — the MCP server validates the Host header
-    const res = await fetch(`http://localhost:${this._port}/mcp`, {
+    const res = await fetch(this._url, {
       method: 'POST',
       headers: this._headers(),
       body: JSON.stringify(msg),
@@ -3469,16 +3449,88 @@ class PlaywrightMCPClient {
   }
 
   stop() {
-    if (this.proc && !this.proc.killed) this.proc.kill('SIGTERM');
-    this.proc = null;
+    // Nothing to kill — the relay is a long-running independent process.
     this._initialized = false;
-    this._port = null;
     this._sessionId = null;
     this.toolsCache = null;
   }
 }
 
 const playwrightMCP = new PlaywrightMCPClient();
+
+// ── Browser-server (FaunaMCP relay) process management ────────────────────
+// Spawns faunamcp/browser-server/index.js which exposes ~70 Playwright tools
+// over HTTP MCP at port 3341. The PlaywrightMCPClient above connects to it.
+
+let _browserServerProc = null;
+let _browserServerLogs = [];  // last 100 lines
+let _browserServerRetryTimer = null;
+const BROWSER_SERVER_PATH = path.join(__dirname, 'faunamcp', 'browser-server', 'index.js');
+
+function startBrowserServer() {
+  if (_browserServerProc && _browserServerProc.exitCode === null) return; // already running
+  if (!fs.existsSync(BROWSER_SERVER_PATH)) {
+    console.log('[BrowserServer] not found at', BROWSER_SERVER_PATH, '— Playwright MCP unavailable');
+    return;
+  }
+  const nodeBin = findNodeBinary();
+  if (!nodeBin) {
+    console.log('[BrowserServer] Node.js binary not found — Playwright MCP unavailable');
+    return;
+  }
+
+  _browserServerProc = _spawn(nodeBin, [BROWSER_SERVER_PATH], {
+    stdio: ['pipe', 'ignore', 'pipe'],
+    env: { ...process.env },
+  });
+  // Keep stdin open (prevents EOF on the relay's StdioServerTransport)
+  _browserServerProc.stdin.resume();
+
+  _browserServerProc.stderr.on('data', chunk => {
+    const lines = chunk.toString().split('\n').filter(Boolean);
+    for (const l of lines) {
+      _browserServerLogs.push({ t: Date.now(), msg: l });
+      if (_browserServerLogs.length > 100) _browserServerLogs.shift();
+      console.log('[BrowserServer]', l);
+    }
+  });
+
+  _browserServerProc.on('spawn', () => {
+    console.log('[BrowserServer] started (pid', _browserServerProc.pid + ')');
+    // Reset PlaywrightMCPClient so it re-initializes against the fresh server
+    playwrightMCP._initialized = false;
+    playwrightMCP._sessionId = null;
+    playwrightMCP.toolsCache = null;
+  });
+
+  _browserServerProc.on('exit', (code, signal) => {
+    console.log('[BrowserServer] exited (' + (signal || 'code ' + code) + ') — restarting in 3 s');
+    _browserServerProc = null;
+    playwrightMCP._initialized = false;
+    playwrightMCP._sessionId = null;
+    playwrightMCP.toolsCache = null;
+    // Auto-restart unless we're shutting down
+    _browserServerRetryTimer = setTimeout(startBrowserServer, 3000);
+  });
+
+  _browserServerProc.on('error', err => {
+    console.log('[BrowserServer] spawn error:', err.message);
+    _browserServerProc = null;
+  });
+}
+
+function stopBrowserServer() {
+  if (_browserServerRetryTimer) { clearTimeout(_browserServerRetryTimer); _browserServerRetryTimer = null; }
+  if (_browserServerProc && _browserServerProc.exitCode === null) {
+    _browserServerProc.removeAllListeners('exit'); // prevent auto-restart
+    _browserServerProc.kill('SIGTERM');
+    setTimeout(() => {
+      if (_browserServerProc && _browserServerProc.exitCode === null)
+        _browserServerProc.kill('SIGKILL');
+    }, 3000);
+    _browserServerProc = null;
+  }
+}
 
 // Pre-warm Playwright MCP on startup so the first browser action is instant.
 // Fire-and-forget — failure is expected when @playwright/mcp is not installed.
@@ -3491,12 +3543,11 @@ const playwrightMCP = new PlaywrightMCPClient();
 }
 
 app.get('/api/playwright-mcp/status', async (req, res) => {
-  const _appDir = __dirname.includes('app.asar') ? __dirname.replace('app.asar', 'app.asar.unpacked') : __dirname;
-  const cliPath = path.join(_appDir, 'node_modules', '@playwright', 'mcp', 'cli.js');
-  const installed = fs.existsSync(cliPath);
-  const running = !!(playwrightMCP.proc && !playwrightMCP.proc.killed && playwrightMCP._initialized);
+  const installed = fs.existsSync(BROWSER_SERVER_PATH);
+  const running = !!(_browserServerProc && _browserServerProc.exitCode === null);
+  const initialized = playwrightMCP._initialized;
   const toolCount = playwrightMCP.toolsCache ? playwrightMCP.toolsCache.length : 0;
-  res.json({ ok: true, installed, running, toolCount });
+  res.json({ ok: true, installed, running, initialized, toolCount });
 });
 
 app.post('/api/playwright-mcp/stop', (req, res) => {
@@ -7859,6 +7910,8 @@ export function startServer(port) {
       console.log();
       // Boot the browser-extension WebSocket endpoint on the same HTTP server
       startExtWebSocketServer(server);
+      // Start the FaunaMCP browser-server relay (Playwright MCP backend)
+      startBrowserServer();
       resolve(server);
     });
     server.on('error', reject);
@@ -7888,6 +7941,8 @@ export function startServer(port) {
       }
       // Kill MCP child
       if (isMcpRunning()) mcpProcess.kill('SIGKILL');
+      // Kill browser-server relay
+      stopBrowserServer();
       // Close tunnel
       stopTunnel();
     }
