@@ -85,7 +85,7 @@ class PlaywrightBackend {
       // Using channel: is the correct way — executablePath alone doesn't trigger proper Edge/Chrome profile setup
       const EDGE_PATH   = process.platform === 'darwin' ? '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge' : 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
       const CHROME_PATH = process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-      const launchOpts = { headless: false, args: ['--no-sandbox', '--disable-dev-shm-usage'] };
+      const launchOpts = { headless: false, args: ['--no-sandbox', '--disable-dev-shm-usage'], ignoreDefaultArgs: ['--disable-blink-features=AutomationControlled'] };
       let launched = false;
       if (fs.existsSync(EDGE_PATH)) {
         try {
@@ -290,40 +290,34 @@ async function dispatch(extAction, extParams, extTabId, extTimeout, pwFn) {
 
 // ── WebSocket server ──────────────────────────────────────────────────────
 
-function killPortOwner(port) {
-  try {
-    const pids = execSync(`lsof -ti tcp:${port}`, { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
-    for (const pid of pids) {
-      try { process.kill(Number(pid), 'SIGTERM'); } catch (_) {}
-    }
-    // Give the process up to 1s to release the port
-    const deadline = Date.now() + 1000;
-    while (Date.now() < deadline) {
-      try { execSync(`lsof -ti tcp:${port}`, { encoding: 'utf8', stdio: 'pipe' }); } catch { break; }
-    }
-  } catch (_) {}
+function killPortOwner(...ports) {
+  const allPids = new Set();
+  for (const port of ports) {
+    try {
+      execSync(`lsof -ti tcp:${port}`, { encoding: 'utf8' }).trim().split('\n').filter(Boolean)
+        .forEach(p => allPids.add(Number(p)));
+    } catch (_) {}
+  }
+  if (allPids.size === 0) return;
+  process.stderr.write(`[Browser] Killing previous instance (PIDs: ${[...allPids].join(', ')})…\n`);
+  for (const pid of allPids) {
+    try { process.kill(pid, 'SIGKILL'); } catch (_) {}
+  }
+  // Flat wait: after SIGKILL the process is gone instantly but the OS needs
+  // a moment to reclaim the TCP sockets. lsof no longer shows the PID so
+  // polling it exits the loop too early — a fixed sleep is more reliable.
+  try { execSync('sleep 0.8'); } catch (_) {}
 }
 
-function startWss() {
-  const server = new WebSocketServer({ port: WS_PORT });
-  server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-      process.stderr.write(`[Browser] Port ${WS_PORT} busy — killing previous instance and retrying…\n`);
-      killPortOwner(WS_PORT);
-      setTimeout(startWss, 200);
-    } else {
-      throw err;
-    }
-  });
-  server.on('listening', () => {
-    process.stderr.write(`[Browser] WS listening on port ${WS_PORT}\n`);
-    wss = server;
-    wireWss(server);
-  });
-}
+// Kill any previous instance holding our ports before binding
+process.stderr.write('[Browser] Checking for previous instance…\n');
+killPortOwner(WS_PORT, HTTP_PORT);
 
-let wss;
-startWss();
+const wss = new WebSocketServer({ port: WS_PORT });
+wss.on('error', (err) => { throw err; });
+wss.on('listening', () => process.stderr.write(`[Browser] WS listening on port ${WS_PORT}\n`));
+
+wireWss(wss);
 
 function wireWss(wss) {
 wss.on('connection', (ws) => {
@@ -879,4 +873,5 @@ const httpServer = createServer(async (req, res) => {
   res.writeHead(405); res.end('Method not allowed');
 });
 
+httpServer.on('error', (err) => { throw err; });
 httpServer.listen(HTTP_PORT, () => { process.stderr.write(`[MCP] HTTP/MCP listening on http://localhost:${HTTP_PORT}/mcp\n`); });
