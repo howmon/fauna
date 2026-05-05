@@ -80,11 +80,30 @@ class PlaywrightBackend {
     if (!chromium) throw new Error('playwright-core: chromium not found');
     if (this._browser && !this._browser.isConnected()) { this._browser = null; this._ctx = null; this._page = null; }
     if (!this._browser) {
-      const EDGE   = process.platform === 'darwin' ? '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge' : 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
-      const CHROME = process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-      const execPath = fs.existsSync(EDGE) ? EDGE : fs.existsSync(CHROME) ? CHROME : undefined;
-      this._browser = await chromium.launch({ executablePath: execPath, headless: true, args: ['--no-sandbox','--disable-dev-shm-usage'] });
-      process.stderr.write(`[PW] Browser launched${execPath ? ` (${path.basename(execPath)})` : ' (bundled)'}\n`);
+      // Try browser channels first (Edge → Chrome → bundled Chromium)
+      // Using channel: is the correct way — executablePath alone doesn't trigger proper Edge/Chrome profile setup
+      const EDGE_PATH   = process.platform === 'darwin' ? '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge' : 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
+      const CHROME_PATH = process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+      const launchOpts = { headless: false, args: ['--no-sandbox', '--disable-dev-shm-usage'] };
+      let launched = false;
+      if (fs.existsSync(EDGE_PATH)) {
+        try {
+          this._browser = await chromium.launch({ ...launchOpts, channel: 'msedge' });
+          process.stderr.write('[PW] Browser launched (msedge channel)\n');
+          launched = true;
+        } catch (e) { process.stderr.write(`[PW] msedge channel failed: ${e.message}\n`); }
+      }
+      if (!launched && fs.existsSync(CHROME_PATH)) {
+        try {
+          this._browser = await chromium.launch({ ...launchOpts, channel: 'chrome' });
+          process.stderr.write('[PW] Browser launched (chrome channel)\n');
+          launched = true;
+        } catch (e) { process.stderr.write(`[PW] chrome channel failed: ${e.message}\n`); }
+      }
+      if (!launched) {
+        this._browser = await chromium.launch(launchOpts);
+        process.stderr.write('[PW] Browser launched (bundled chromium)\n');
+      }
     }
     if (!this._ctx) {
       this._ctx = await this._browser.newContext({ userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36', viewport: { width: 1280, height: 900 } });

@@ -3368,7 +3368,7 @@ function figmaLog(message, level = 'info') {
 
 class PlaywrightMCPClient {
   constructor() {
-    this._url = 'http://localhost:3341/mcp';
+    this._url = 'http://localhost:3342/mcp';
     this._sessionId = null;
     this.toolsCache = null;
     this._nextId = 1;
@@ -3384,9 +3384,9 @@ class PlaywrightMCPClient {
   }
 
   async _doStart() {
-    // Connect to the FaunaMCP browser-server relay at port 3341.
-    // It exposes a full Playwright headless backend via MCP Streamable HTTP,
-    // with extension-first dispatch and Playwright fallback for all ~70 tools.
+    // Connect to the official @playwright/mcp server at port 3342.
+    // It exposes all standard Playwright MCP tools (browser_navigate, browser_click, etc.)
+    // and uses the installed Edge or Chrome browser (headed, visible window).
 
     // MCP initialize handshake
     const initResult = await this._post({ jsonrpc: '2.0', method: 'initialize', id: this._nextId++,
@@ -3401,7 +3401,7 @@ class PlaywrightMCPClient {
     }).catch(() => {});
 
     this._initialized = true;
-    console.log('[Playwright MCP] connected to FaunaMCP relay at', this._url);
+    console.log('[Playwright MCP] connected to @playwright/mcp at', this._url);
     return initResult;
   }
 
@@ -3508,14 +3508,128 @@ class PlaywrightMCPClient {
 
 const playwrightMCP = new PlaywrightMCPClient();
 
+// ── @playwright/mcp process management ──────────────────────────────────────
+// Spawns the official @playwright/mcp CLI on port 3342 (headed Edge/Chrome).
+// PlaywrightMCPClient connects to http://localhost:3342/mcp.
+// Port 3342 is dedicated to this; the custom relay stays on 3341 for extension fallback.
+
+const PLAYWRIGHT_MCP_PORT = 3342;
+const PLAYWRIGHT_MCP_CLI_PATH = (() => {
+  // Packaged: asarUnpack puts it in app.asar.unpacked/node_modules/@playwright/mcp/cli.js
+  const unpackedPath = path.join(__dirname, '..', 'app.asar.unpacked', 'node_modules', '@playwright', 'mcp', 'cli.js');
+  if (fs.existsSync(unpackedPath)) return unpackedPath;
+  // Dev: straight from node_modules
+  const devPath = path.join(__dirname, 'node_modules', '@playwright', 'mcp', 'cli.js');
+  return devPath;
+})();
+
+function _detectBrowserChannel() {
+  const checks = process.platform === 'darwin'
+    ? [
+        { path: '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge', channel: 'msedge' },
+        { path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', channel: 'chrome' },
+      ]
+    : [
+        { path: 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', channel: 'msedge' },
+        { path: 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe', channel: 'msedge' },
+        { path: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', channel: 'chrome' },
+      ];
+  for (const c of checks) if (fs.existsSync(c.path)) return c.channel;
+  return null; // fall back to bundled chromium
+}
+
+let _pwMCPProc = null;
+let _pwMCPLogs = [];
+let _pwMCPRetryTimer = null;
+
+function startPlaywrightMCPServer() {
+  if (_pwMCPProc && _pwMCPProc.exitCode === null) return; // already running
+  if (!fs.existsSync(PLAYWRIGHT_MCP_CLI_PATH)) {
+    console.log('[PlaywrightMCP] cli not found at', PLAYWRIGHT_MCP_CLI_PATH, '— skipping');
+    return;
+  }
+  const nodeBin = findNodeBinary();
+  if (!nodeBin) { console.log('[PlaywrightMCP] Node binary not found'); return; }
+
+  const channel = _detectBrowserChannel();
+  const args = [
+    PLAYWRIGHT_MCP_CLI_PATH,
+    '--port', String(PLAYWRIGHT_MCP_PORT),
+    '--host', '127.0.0.1',
+    // headed (no --headless flag) so user sees the browser window
+    ...(channel ? ['--browser', channel] : []),
+  ];
+  console.log('[PlaywrightMCP] starting on port', PLAYWRIGHT_MCP_PORT, channel ? `(${channel})` : '(bundled chromium)');
+
+  _pwMCPProc = _spawn(nodeBin, args, {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env },
+  });
+  _pwMCPProc.stdin.resume();
+
+  const _captureLog = (prefix) => (chunk) => {
+    const lines = chunk.toString().split('\n').filter(Boolean);
+    for (const l of lines) {
+      _pwMCPLogs.push({ t: Date.now(), msg: l });
+      if (_pwMCPLogs.length > 200) _pwMCPLogs.shift();
+      console.log('[PlaywrightMCP]', l);
+    }
+  };
+  _pwMCPProc.stdout.on('data', _captureLog('stdout'));
+  _pwMCPProc.stderr.on('data', _captureLog('stderr'));
+
+  _pwMCPProc.on('spawn', () => {
+    console.log('[PlaywrightMCP] started (pid', _pwMCPProc.pid + ')');
+    playwrightMCP._initialized = false;
+    playwrightMCP._sessionId = null;
+    playwrightMCP.toolsCache = null;
+  });
+
+  _pwMCPProc.on('exit', (code, signal) => {
+    console.log('[PlaywrightMCP] exited (' + (signal || 'code ' + code) + ') — restarting in 3 s');
+    _pwMCPProc = null;
+    playwrightMCP._initialized = false;
+    playwrightMCP._sessionId = null;
+    playwrightMCP.toolsCache = null;
+    _pwMCPRetryTimer = setTimeout(startPlaywrightMCPServer, 3000);
+  });
+
+  _pwMCPProc.on('error', err => {
+    console.log('[PlaywrightMCP] spawn error:', err.message);
+    _pwMCPProc = null;
+  });
+}
+
+function stopPlaywrightMCPServer() {
+  if (_pwMCPRetryTimer) { clearTimeout(_pwMCPRetryTimer); _pwMCPRetryTimer = null; }
+  if (_pwMCPProc && _pwMCPProc.exitCode === null) {
+    _pwMCPProc.removeAllListeners('exit');
+    _pwMCPProc.kill('SIGTERM');
+    setTimeout(() => { if (_pwMCPProc && _pwMCPProc.exitCode === null) _pwMCPProc.kill('SIGKILL'); }, 3000);
+    _pwMCPProc = null;
+  }
+}
+
 // ── Browser-server (FaunaMCP relay) process management ────────────────────
-// Spawns faunamcp/browser-server/index.js which exposes ~70 Playwright tools
-// over HTTP MCP at port 3341. The PlaywrightMCPClient above connects to it.
+// Spawns faunamcp/browser-server/index.js (extension WebSocket on 3340,
+// custom relay HTTP MCP on 3341). Kept for Chrome extension fallback.
+// PlaywrightMCPClient now connects to @playwright/mcp on 3342 instead.
 
 let _browserServerProc = null;
 let _browserServerLogs = [];  // last 100 lines
 let _browserServerRetryTimer = null;
-const BROWSER_SERVER_PATH = path.join(__dirname, 'faunamcp', 'browser-server', 'index.js');
+// In a packaged app extraResources land at process.resourcesPath.
+// In dev __dirname works fine.
+const BROWSER_SERVER_PATH = (() => {
+  const devPath = path.join(__dirname, 'faunamcp', 'browser-server', 'index.js');
+  if (fs.existsSync(devPath)) return devPath;
+  // Packaged: extraResources puts it under Resources/faunamcp/browser-server/
+  const resPkg = process.resourcesPath
+    ? path.join(process.resourcesPath, 'faunamcp', 'browser-server', 'index.js')
+    : null;
+  if (resPkg && fs.existsSync(resPkg)) return resPkg;
+  return devPath; // fallback (will log "not found")
+})();
 
 function startBrowserServer() {
   if (_browserServerProc && _browserServerProc.exitCode === null) return; // already running
@@ -3583,21 +3697,21 @@ function stopBrowserServer() {
 }
 
 // Pre-warm Playwright MCP on startup so the first browser action is instant.
-// Fire-and-forget — failure is expected when @playwright/mcp is not installed.
+// Fire-and-forget — failure is expected when the relay hasn't fully started yet.
 {
-  const _appDir = __dirname.includes('app.asar') ? __dirname.replace('app.asar', 'app.asar.unpacked') : __dirname;
-  const cliPath = path.join(_appDir, 'node_modules', '@playwright', 'mcp', 'cli.js');
-  if (fs.existsSync(cliPath)) {
+  const _warmDelay = 2000; // give the browser-server 2 s to come up first
+  setTimeout(() => {
     playwrightMCP._ensureStarted().catch(e => console.log('[Playwright MCP] pre-warm failed:', e.message));
-  }
+  }, _warmDelay);
 }
 
 app.get('/api/playwright-mcp/status', async (req, res) => {
-  const installed = fs.existsSync(BROWSER_SERVER_PATH);
-  const running = !!(_browserServerProc && _browserServerProc.exitCode === null);
+  const installed = fs.existsSync(PLAYWRIGHT_MCP_CLI_PATH);
+  const running = !!(_pwMCPProc && _pwMCPProc.exitCode === null);
   const initialized = playwrightMCP._initialized;
   const toolCount = playwrightMCP.toolsCache ? playwrightMCP.toolsCache.length : 0;
-  res.json({ ok: true, installed, running, initialized, toolCount });
+  const channel = _detectBrowserChannel();
+  res.json({ ok: true, installed, running, initialized, toolCount, port: PLAYWRIGHT_MCP_PORT, channel: channel || 'chromium' });
 });
 
 app.post('/api/playwright-mcp/stop', (req, res) => {
@@ -3609,6 +3723,8 @@ app.post('/api/playwright-mcp/call', async (req, res) => {
   const { tool, args = {} } = req.body;
   if (!tool) return res.status(400).json({ ok: false, error: 'tool required' });
   try {
+    // Ensure the relay session is initialized (auto-connects on first call)
+    await playwrightMCP._ensureStarted();
     const content = await playwrightMCP.callToolRaw(tool, args);
     res.json({ ok: true, content });
   } catch (e) {
@@ -7960,7 +8076,9 @@ export function startServer(port) {
       console.log();
       // Boot the browser-extension WebSocket endpoint on the same HTTP server
       startExtWebSocketServer(server);
-      // Start the FaunaMCP browser-server relay (Playwright MCP backend)
+      // Start the official @playwright/mcp server (headed Edge/Chrome, port 3342)
+      startPlaywrightMCPServer();
+      // Start the FaunaMCP browser-server relay (extension WebSocket + fallback relay)
       startBrowserServer();
       resolve(server);
     });
@@ -7991,7 +8109,8 @@ export function startServer(port) {
       }
       // Kill MCP child
       if (isMcpRunning()) mcpProcess.kill('SIGKILL');
-      // Kill browser-server relay
+      // Kill @playwright/mcp server and browser-server relay
+      stopPlaywrightMCPServer();
       stopBrowserServer();
       // Close tunnel
       stopTunnel();

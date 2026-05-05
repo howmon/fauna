@@ -470,6 +470,7 @@ function _mapBrowserActionToExtAction(action) {
 
 async function _executeBrowserActionViaPlaywright(action) {
   var tool, args;
+  console.log('[Playwright MCP] attempting action:', action.action);
 
   switch (action.action) {
     case 'navigate':
@@ -480,22 +481,20 @@ async function _executeBrowserActionViaPlaywright(action) {
     case 'click':
       tool = 'browser_click';
       args = {};
-      if (action.selector) args.target = action.selector;
-      if (action.label || action.text) args.element = action.label || action.text;
-      if (!args.target && !args.element) return null;
+      if (action.selector) args.selector = action.selector;
+      if (action.label || action.text) args.text = action.label || action.text;
+      if (!args.selector && !args.text) return null;
       break;
 
     case 'type':
       tool = 'browser_type';
       args = { text: action.value || action.text || '' };
-      if (action.selector) args.target = action.selector;
-      if (action.label) args.element = action.label;
-      if (!args.target && !args.element) return null;
+      if (action.selector) args.selector = action.selector;
       break;
 
     case 'extract':
     case 'snapshot':
-      tool = 'browser_snapshot';
+      tool = 'browser_get_content';
       args = {};
       break;
 
@@ -505,40 +504,37 @@ async function _executeBrowserActionViaPlaywright(action) {
       break;
 
     case 'scroll':
-      tool = 'browser_mouse_wheel';
-      var amt = action.amount || 300;
-      var dir = action.direction || 'down';
-      args = {
-        deltaX: (dir === 'left' ? -amt : dir === 'right' ? amt : 0),
-        deltaY: (dir === 'up' ? -amt : dir === 'down' ? amt : 0)
-      };
+      tool = 'browser_scroll';
+      args = { direction: action.direction || 'down' };
+      if (action.amount) args.px = action.amount;
+      if (action.selector) args.selector = action.selector;
       break;
 
     case 'eval':
       tool = 'browser_evaluate';
-      args = { 'function': action.js || '() => {}' };
+      args = { js: action.js || 'document.title' };
       break;
 
     case 'new-tab':
-      tool = 'browser_tabs';
-      args = { action: 'new' };
+      tool = 'browser_new_tab';
+      args = {};
       if (action.url) args.url = action.url;
       break;
 
     case 'list-tabs':
-      tool = 'browser_tabs';
-      args = { action: 'list' };
+      tool = 'browser_list_tabs';
+      args = {};
       break;
 
     case 'switch-tab':
-      tool = 'browser_tabs';
-      args = { action: 'select', index: typeof action.index === 'number' ? action.index : 0 };
+      tool = 'browser_switch_tab';
+      args = { index: typeof action.index === 'number' ? action.index : 0 };
       break;
 
     case 'close-tab':
-      tool = 'browser_tabs';
-      args = { action: 'close' };
-      if (typeof action.index === 'number') args.index = action.index;
+      tool = 'browser_close_tab';
+      args = {};
+      if (typeof action.index === 'number') args.tab_id = action.index;
       break;
 
     case 'console-logs':
@@ -570,11 +566,15 @@ async function _executeBrowserActionViaPlaywright(action) {
     });
     if (!r.ok) {
       var errBody = await r.json().catch(function() { return {}; });
-      console.warn('[Playwright MCP] tool call failed:', errBody.error || r.status);
+      console.warn('[Playwright MCP] tool call failed (' + tool + '):', errBody.error || r.status);
       return null;
     }
     var d = await r.json();
-    if (!d.ok) return null;
+    if (!d.ok) {
+      console.warn('[Playwright MCP] relay returned not-ok for', tool, d.error || '');
+      return null;
+    }
+    console.log('[Playwright MCP] ✅', tool, 'ok');
 
     var content = d.content || [];
 
@@ -595,6 +595,7 @@ async function _executeBrowserActionViaPlaywright(action) {
     }
     return result;
   } catch (e) {
+    console.warn('[Playwright MCP] fetch error for', tool, ':', e.message);
     return null; // Playwright unavailable — fall through to extension/webview
   }
 }
