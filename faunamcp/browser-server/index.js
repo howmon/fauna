@@ -21,6 +21,7 @@ import { z }                             from 'zod';
 import fs                                from 'fs';
 import os                                from 'os';
 import path                              from 'path';
+import { execSync }                      from 'child_process';
 
 const WS_PORT   = 3340;
 const HTTP_PORT = 3341;
@@ -289,15 +290,42 @@ async function dispatch(extAction, extParams, extTabId, extTimeout, pwFn) {
 
 // ── WebSocket server ──────────────────────────────────────────────────────
 
-const wss = new WebSocketServer({ port: WS_PORT });
-wss.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    process.stderr.write(`[Browser] Port ${WS_PORT} already in use — another FaunaMCP instance may be running. Exiting.\n`);
-    process.exit(0);
-  } else {
-    throw err;
-  }
-});
+function killPortOwner(port) {
+  try {
+    const pids = execSync(`lsof -ti tcp:${port}`, { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+    for (const pid of pids) {
+      try { process.kill(Number(pid), 'SIGTERM'); } catch (_) {}
+    }
+    // Give the process up to 1s to release the port
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline) {
+      try { execSync(`lsof -ti tcp:${port}`, { encoding: 'utf8', stdio: 'pipe' }); } catch { break; }
+    }
+  } catch (_) {}
+}
+
+function startWss() {
+  const server = new WebSocketServer({ port: WS_PORT });
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      process.stderr.write(`[Browser] Port ${WS_PORT} busy — killing previous instance and retrying…\n`);
+      killPortOwner(WS_PORT);
+      setTimeout(startWss, 200);
+    } else {
+      throw err;
+    }
+  });
+  server.on('listening', () => {
+    process.stderr.write(`[Browser] WS listening on port ${WS_PORT}\n`);
+    wss = server;
+    wireWss(server);
+  });
+}
+
+let wss;
+startWss();
+
+function wireWss(wss) {
 wss.on('connection', (ws) => {
   let conn = null;
   ws.on('message', (raw) => {
@@ -315,6 +343,7 @@ wss.on('connection', (ws) => {
   });
   ws.on('close', () => { if (conn === extConn) { extConn = null; process.stderr.write('[Browser] Extension disconnected\n'); } });
 });
+} // end wireWss
 
 // ── MCP tool registry ─────────────────────────────────────────────────────
 
