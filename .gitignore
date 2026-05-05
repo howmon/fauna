@@ -28,6 +28,10 @@ npm-debug.log*
 .env.*
 *.pem
 
+# Optional enterprise 
+enterprise-auth.js
+enterprise-auth.example.js
+
 # Editor
 .vscode/
 .idea/

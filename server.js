@@ -27,7 +27,18 @@ import {
 } from './project-manager.js';
 import { composeDesignPrompt, VISUAL_DIRECTIONS } from './design-prompts.js';
 
-// Electron APIs — available when server runs inside the Electron main process.
+// ── Optional enterprise auth ───────────────────────────────────
+// Load enterprise-auth.js if present.
+let enterpriseAuth = null;
+try {
+  enterpriseAuth = await import('./enterprise-auth.js');
+  console.log('[Enterprise] Auth module loaded (✓ m365_sign_in / m365_sign_out / m365_auth_status)');
+} catch (e) {
+  if (!e.message?.includes('Cannot find module') && !e.code?.includes('ERR_MODULE_NOT_FOUND')) {
+    console.warn('[Enterprise] enterprise-auth.js found but failed to load:', e.message);
+  }
+  // File absent — normal mode, no enterprise auth
+}
 // Gracefully degrade if run standalone (e.g. during testing).
 const _require = createRequire(import.meta.url);
 let systemPreferences, desktopCapturer, powerSaveBlocker;
@@ -1329,6 +1340,16 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
       }
     }
 
+    // Inject enterprise auth tools + context if the module is loaded
+    const enterpriseToolNames = new Set();
+    if (enterpriseAuth) {
+      for (const t of enterpriseAuth.TOOLS) enterpriseToolNames.add(t.function.name);
+      mcpTools = [...(mcpTools || []), ...enterpriseAuth.TOOLS];
+      if (allMessages[0]) {
+        allMessages[0] = { ...allMessages[0], content: allMessages[0].content + '\n\n' + enterpriseAuth.SYSTEM_CONTEXT };
+      }
+    }
+
     // Load agent tools if an agent is active
     let agentToolHandlers = null; // Map<name, executeFn>
     if (agentName) {
@@ -1730,6 +1751,9 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
               chatLog('[chat] Playwright tool: ' + toolName);
               result = await playwrightMCP.callTool(toolName, args);
               chatLog('[chat] Playwright tool done: ' + toolName);
+            } else if (enterpriseAuth && enterpriseToolNames.has(toolName)) {
+              chatLog('[chat] Enterprise tool: ' + toolName);
+              result = await enterpriseAuth.handleTool(toolName, args);
             } else {
               figmaLog('🔧 ' + toolName + (toolName === 'figma_execute' ? ': ' + (args.code || '').slice(0, 80).replace(/\n/g,' ') + '…' : ''), 'cmd');
               result = await figmaMCP.callTool(toolName, args);
@@ -3498,6 +3522,34 @@ class FigmaMCPClient {
 }
 
 const figmaMCP = new FigmaMCPClient();
+
+// ── Enterprise auth endpoints ─────────────────────────────────────────────
+// Only active when enterprise-auth.js is present (gitignored).
+
+app.get('/api/enterprise-auth/status', (req, res) => {
+  if (!enterpriseAuth) return res.json({ available: false });
+  res.json({ available: true, ...enterpriseAuth.getAuthStatus() });
+});
+
+app.post('/api/enterprise-auth/sign-in', async (req, res) => {
+  if (!enterpriseAuth) return res.status(404).json({ error: 'Enterprise auth not available' });
+  try {
+    const result = await enterpriseAuth.signIn();
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/api/enterprise-auth/sign-out', async (req, res) => {
+  if (!enterpriseAuth) return res.status(404).json({ error: 'Enterprise auth not available' });
+  try {
+    const result = await enterpriseAuth.signOut();
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 app.get('/api/figma-mcp/status', async (req, res) => {
   try {
