@@ -3261,6 +3261,7 @@ class PlaywrightMCPClient {
     this.proc = null;
     this._buffer = '';
     this._initialized = false;
+    this.toolsCache = null;
     for (const [, { reject }] of this._pendingRequests) reject(new Error('Playwright MCP restarting'));
     this._pendingRequests.clear();
   }
@@ -3365,10 +3366,7 @@ class PlaywrightMCPClient {
   }
 
   stop() {
-    if (this.proc && !this.proc.killed) this.proc.kill('SIGTERM');
-    this.proc = null;
-    this.toolsCache = null;
-    this._initialized = false;
+    this._cleanup();
   }
 }
 
