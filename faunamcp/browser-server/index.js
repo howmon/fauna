@@ -290,6 +290,14 @@ async function dispatch(extAction, extParams, extTabId, extTimeout, pwFn) {
 // ── WebSocket server ──────────────────────────────────────────────────────
 
 const wss = new WebSocketServer({ port: WS_PORT });
+wss.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    process.stderr.write(`[Browser] Port ${WS_PORT} already in use — another FaunaMCP instance may be running. Exiting.\n`);
+    process.exit(0);
+  } else {
+    throw err;
+  }
+});
 wss.on('connection', (ws) => {
   let conn = null;
   ws.on('message', (raw) => {

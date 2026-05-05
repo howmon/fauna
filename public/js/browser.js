@@ -481,20 +481,24 @@ async function _executeBrowserActionViaPlaywright(action) {
     case 'click':
       tool = 'browser_click';
       args = {};
-      if (action.selector) args.selector = action.selector;
-      if (action.label || action.text) args.text = action.label || action.text;
-      if (!args.selector && !args.text) return null;
+      // @playwright/mcp v0.0.73 uses 'element' (human description) + 'target' (snapshot ref).
+      // We map our action's selector/text/label fields to these.
+      if (action.selector) args.target = action.selector;
+      if (action.label || action.text) args.element = action.label || action.text;
+      if (!args.target && !args.element) return null;
       break;
 
     case 'type':
       tool = 'browser_type';
       args = { text: action.value || action.text || '' };
-      if (action.selector) args.selector = action.selector;
+      if (action.selector) args.target = action.selector;
+      if (action.label) args.element = action.label;
       break;
 
     case 'extract':
     case 'snapshot':
-      tool = 'browser_get_content';
+      // browser_get_content does not exist — the correct tool is browser_snapshot
+      tool = 'browser_snapshot';
       args = {};
       break;
 
@@ -504,37 +508,48 @@ async function _executeBrowserActionViaPlaywright(action) {
       break;
 
     case 'scroll':
-      tool = 'browser_scroll';
-      args = { direction: action.direction || 'down' };
-      if (action.amount) args.px = action.amount;
-      if (action.selector) args.selector = action.selector;
+      // browser_scroll does not exist — use browser_mouse_wheel with deltaX/deltaY
+      tool = 'browser_mouse_wheel';
+      var scrollDown = (action.direction || 'down') !== 'up';
+      var scrollAmount = action.amount || 300;
+      args = {
+        deltaX: 0,
+        deltaY: scrollDown ? scrollAmount : -scrollAmount
+      };
       break;
 
     case 'eval':
+      // browser_evaluate takes 'function' not 'js' — wrap as an arrow function if needed
       tool = 'browser_evaluate';
-      args = { js: action.js || 'document.title' };
+      var jsCode = action.js || 'document.title';
+      // If it's an expression (not already a function), wrap it
+      args = { function: jsCode.trim().startsWith('(') || jsCode.trim().startsWith('function') ? jsCode : '() => ' + jsCode };
       break;
 
     case 'new-tab':
-      tool = 'browser_new_tab';
-      args = {};
+      // browser_new_tab does not exist — use browser_tabs action:"new"
+      tool = 'browser_tabs';
+      args = { action: 'new' };
       if (action.url) args.url = action.url;
       break;
 
     case 'list-tabs':
-      tool = 'browser_list_tabs';
-      args = {};
+      // browser_list_tabs does not exist — use browser_tabs action:"list"
+      tool = 'browser_tabs';
+      args = { action: 'list' };
       break;
 
     case 'switch-tab':
-      tool = 'browser_switch_tab';
-      args = { index: typeof action.index === 'number' ? action.index : 0 };
+      // browser_switch_tab does not exist — use browser_tabs action:"select"
+      tool = 'browser_tabs';
+      args = { action: 'select', index: typeof action.index === 'number' ? action.index : 0 };
       break;
 
     case 'close-tab':
-      tool = 'browser_close_tab';
-      args = {};
-      if (typeof action.index === 'number') args.tab_id = action.index;
+      // browser_close_tab does not exist — use browser_tabs action:"close"
+      tool = 'browser_tabs';
+      args = { action: 'close' };
+      if (typeof action.index === 'number') args.index = action.index;
       break;
 
     case 'console-logs':
@@ -589,12 +604,12 @@ async function _executeBrowserActionViaPlaywright(action) {
     var text = content.filter(function(c) { return c.type === 'text'; }).map(function(c) { return c.text; }).join('\n');
     var result = { ok: true, result: text, _browserActionSource: 'playwright' };
     if (action.action === 'extract' || action.action === 'snapshot' || action.action === 'navigate') {
-      // @playwright/mcp returns structured headers like:
-      //   "Page URL: https://..."
-      //   "Page Title: ..."
+      // @playwright/mcp renders tab headers as:
+      //   "- Page URL: https://..."
+      //   "- Page Title: ..."
       // Parse them out so bot-detection and feed summaries have accurate data.
-      var urlMatch   = text.match(/^Page URL:\s*(.+)$/m);
-      var titleMatch = text.match(/^Page Title:\s*(.+)$/m);
+      var urlMatch   = text.match(/^-\s*Page URL:\s*(.+)$/m);
+      var titleMatch = text.match(/^-\s*Page Title:\s*(.+)$/m);
       result.text  = text;
       result.url   = urlMatch   ? urlMatch[1].trim()   : (action.url || '');
       result.title = titleMatch ? titleMatch[1].trim() : '';
@@ -1253,8 +1268,7 @@ async function _runBrowserActionSequence(widgets, convId) {
             ? 'browser-action `eval` failed (' + e.message + '). The page may be blocking script execution.\n\nCurrent page state:\n\n'
             : 'browser-action `' + w.action.action + '` failed (' + e.message + ').\n\nAuto-extracted current page:\n\n';
           var errFeed = errIntro +
-            '**Title:** ' + errD.title + '\n**URL:** ' + errD.url + '\n\n' + errD.text.slice(0, 10000) +
-;
+            '**Title:** ' + errD.title + '\n**URL:** ' + errD.url + '\n\n' + errD.text.slice(0, 10000);
           await browserFeedAI(errFeed, convId);
         } catch(_) {}
       }
