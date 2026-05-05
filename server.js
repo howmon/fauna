@@ -3247,12 +3247,30 @@ class PlaywrightMCPClient {
     const spawnEnv = { ...process.env };
     if (process.versions.electron) spawnEnv.ELECTRON_RUN_AS_NODE = '1';
 
-    this.proc = _spawn(process.execPath, [cliPath, '--headless'], {
+    await this._spawnAndInit(['--headless'], spawnEnv, cliPath)
+      .catch(async (err) => {
+        console.log('[Playwright MCP] headless failed (' + err.message + ') — retrying without --headless');
+        this._cleanup();
+        await this._spawnAndInit([], spawnEnv, cliPath);
+      });
+    this._initialized = true;
+  }
+
+  _cleanup() {
+    if (this.proc && !this.proc.killed) this.proc.kill('SIGTERM');
+    this.proc = null;
+    this._buffer = '';
+    this._initialized = false;
+    for (const [, { reject }] of this._pendingRequests) reject(new Error('Playwright MCP restarting'));
+    this._pendingRequests.clear();
+  }
+
+  async _spawnAndInit(extraArgs, spawnEnv, cliPath) {
+    this.proc = _spawn(process.execPath, [cliPath, ...extraArgs], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: spawnEnv,
     });
     this._buffer = '';
-    this._initialized = false;
 
     this.proc.stdout.on('data', (data) => {
       this._buffer += data.toString();
@@ -3270,14 +3288,13 @@ class PlaywrightMCPClient {
       this._pendingRequests.clear();
     });
 
-    // Initialize MCP handshake
+    // MCP handshake
     await this._request({ jsonrpc: '2.0', method: 'initialize', id: this._nextId++,
       params: { protocolVersion: '2024-11-05', capabilities: {},
         clientInfo: { name: 'Fauna', version: '1.0.0' } } });
     // Send initialized notification (fire-and-forget, no id)
     const note = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' });
     this.proc.stdin.write(`Content-Length: ${Buffer.byteLength(note)}\r\n\r\n${note}`);
-    this._initialized = true;
   }
 
   _processBuffer() {
