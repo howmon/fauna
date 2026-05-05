@@ -58,7 +58,6 @@ function applyStatus(s) {
   // Browser panel
   renderRelayPanel('browser', {
     running:   s.browserRunning,
-    enabled:   s.browserEnabled,
     wsUrl:     s.browserWsUrl,
     httpUrl:   s.browserHttpUrl,
     stdio:     s.browserStdio,
@@ -68,16 +67,17 @@ function applyStatus(s) {
   // Figma panel
   renderRelayPanel('figma', {
     running:   s.figmaRunning,
-    enabled:   s.figmaEnabled,
     wsUrl:     s.figmaWsUrl,
     httpUrl:   s.figmaHttpUrl,
     stdio:     s.figmaStdio,
     assetPath: null,
   });
 
-  // Tab badges
-  renderBadge('badgeBrowser', s.browserRunning, s.browserEnabled);
-  renderBadge('badgeFigma',   s.figmaRunning,   s.figmaEnabled);
+  // Tab badges + relay buttons
+  renderBadge('badgeBrowser', s.browserRunning, true);
+  renderBadge('badgeFigma',   s.figmaRunning,   true);
+  updateRelayBtn('browser', s.browserRunning);
+  updateRelayBtn('figma',   s.figmaRunning);
 }
 
 function renderBadge(id, running, enabled) {
@@ -86,31 +86,12 @@ function renderBadge(id, running, enabled) {
   el.className = 'tab-badge ' + (enabled === false ? 'disabled' : running ? 'running' : 'stopped');
 }
 
-function renderRelayPanel(which, { running, enabled, wsUrl, httpUrl, stdio, assetPath }) {
+function renderRelayPanel(which, { running, wsUrl, httpUrl, stdio, assetPath }) {
   const pfx = which === 'browser' ? 'b' : 'f';
 
-  // Dot
+  // Dot in combined bar
   const dot = document.getElementById('dot' + cap(which));
-  if (dot) {
-    dot.className = 'dot ' + (enabled === false ? 'disabled' : running ? 'running' : 'stopped');
-  }
-
-  // Status text
-  const statusEl = document.getElementById('status' + cap(which));
-  if (statusEl) {
-    statusEl.textContent = enabled === false ? 'Disabled' : running ? 'Running' : 'Stopped';
-  }
-
-  // Toggle button
-  const btn = document.getElementById('toggle' + cap(which));
-  if (btn) {
-    btn.textContent  = running ? 'Stop' : 'Start';
-    btn.className    = 'toggle-btn ' + (running ? 'stop' : 'start');
-    btn.disabled     = enabled === false;
-  }
-
-  // Enable switch
-  setToggle('enable' + cap(which), enabled !== false);
+  if (dot) dot.className = 'dot ' + (running ? 'running' : 'stopped');
 
   // URL fields
   setText(pfx + 'WsUrl',   wsUrl   || '');
@@ -239,11 +220,11 @@ mcp.onStatus(d => {
     // Partial update from relay
     if (d.which === 'browser') st.browserRunning = d.running;
     if (d.which === 'figma')   st.figmaRunning   = d.running;
-    renderBadge('badgeBrowser', st.browserRunning, st.browserEnabled);
-    renderBadge('badgeFigma',   st.figmaRunning,   st.figmaEnabled);
+    renderBadge('badgeBrowser', st.browserRunning, true);
+    renderBadge('badgeFigma',   st.figmaRunning,   true);
+    updateRelayBtn(d.which, d.running);
     renderRelayPanel(d.which, {
       running:   d.which === 'browser' ? st.browserRunning : st.figmaRunning,
-      enabled:   d.which === 'browser' ? st.browserEnabled : st.figmaEnabled,
       wsUrl:     d.which === 'browser' ? st.browserWsUrl   : st.figmaWsUrl,
       httpUrl:   d.which === 'browser' ? st.browserHttpUrl : st.figmaHttpUrl,
       stdio:     null,

@@ -23,10 +23,12 @@
     "extraResources": [
       { "from": "../assets/icon.png",  "to": "icon.png"  },
       { "from": "../assets/icon.icns", "to": "icon.icns" },
-      { "from": "browser-server",      "to": "browser-server", "filter": ["**/*"] },
-      { "from": "extension",           "to": "extension",      "filter": ["**/*"] },
-      { "from": "figma-server",        "to": "figma-server",   "filter": ["**/*"] },
-      { "from": "figma-plugin",        "to": "figma-plugin",   "filter": ["**/*"] }
+      { "from": "browser-server",             "to": "browser-server",             "filter": ["**/*", "!node_modules/**"] },
+      { "from": "browser-server/node_modules","to": "browser-server/node_modules","filter": ["**/*"] },
+      { "from": "extension",                  "to": "extension",                  "filter": ["**/*"] },
+      { "from": "figma-server",               "to": "figma-server",               "filter": ["**/*", "!node_modules/**"] },
+      { "from": "figma-server/node_modules",  "to": "figma-server/node_modules",  "filter": ["**/*"] },
+      { "from": "figma-plugin",               "to": "figma-plugin",               "filter": ["**/*"] }
     ],
     "mac": {
       "category": "public.app-category.developer-tools",

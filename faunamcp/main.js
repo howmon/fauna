@@ -119,7 +119,8 @@ function setRunning(which, running) {
 
 function startRelay(which, _retryCount = 0) {
   const r = relay[which];
-  if (r.proc || !r.enabled) return;
+  r.enabled = true;   // user explicitly wants this running
+  if (r.proc) return;
 
   // If we stopped recently, wait for ports to release before respawning
   const elapsed = r.stoppedAt ? Date.now() - r.stoppedAt : Infinity;
@@ -160,7 +161,7 @@ function startRelay(which, _retryCount = 0) {
     r.stoppedAt = Date.now();
     setRunning(which, false);
     addLog(which, `Relay stopped (code ${code ?? signal})`, code === 0 ? 'info' : 'err');
-    // If it died within 3 s of spawning and user still wants it enabled, retry once
+    // Only auto-retry if enabled (i.e. not manually stopped) and it died too fast
     if (r.enabled && uptime < 3000 && _retryCount < 1) {
       addLog(which, 'Died too quickly — retrying in 1.5 s…', 'info');
       setTimeout(() => startRelay(which, _retryCount + 1), 1500);
@@ -177,6 +178,7 @@ function startRelay(which, _retryCount = 0) {
 
 function stopRelay(which) {
   const r = relay[which];
+  r.enabled = false;  // user explicitly stopped — don't auto-restart
   if (!r.proc) return;
   addLog(which, `Stopping ${which} relay…`, 'info');
   r.proc.kill('SIGTERM');
@@ -186,7 +188,7 @@ function stopRelay(which) {
 function createPopup() {
   popup = new BrowserWindow({
     width: 360,
-    height: 520,
+    height: 560,
     show: false,
     frame: false,
     resizable: false,
