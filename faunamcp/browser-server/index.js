@@ -249,12 +249,23 @@ class PlaywrightBackend {
 const pw = new PlaywrightBackend();
 
 // ── Unified dispatch ──────────────────────────────────────────────────────
+// Priority: 1) Playwright headless (primary)  2) Browser extension (last resort)
 
 async function dispatch(extAction, extParams, extTabId, extTimeout, pwFn) {
-  if (extConn && extConn.ws.readyState === 1) {
-    try { return await sendToExt(extAction, extParams, extTabId, extTimeout || 20000); } catch (e) { if (e.message !== 'NO_EXT') throw e; }
+  try {
+    return await pwFn();
+  } catch (pwErr) {
+    // Fall back to extension only if it's connected
+    if (extConn && extConn.ws.readyState === 1) {
+      try {
+        process.stderr.write(`[Browser] Playwright failed (${pwErr.message}) — retrying via extension\n`);
+        return await sendToExt(extAction, extParams, extTabId, extTimeout || 20000);
+      } catch (e) {
+        if (e.message !== 'NO_EXT') throw e;
+      }
+    }
+    throw pwErr;
   }
-  return pwFn();
 }
 
 // ── WebSocket server ──────────────────────────────────────────────────────
@@ -282,11 +293,11 @@ wss.on('connection', (ws) => {
 
 function registerTools(mcp) {
 
-mcp.tool('browser_status', 'Check extension/Playwright backend status and active URL', {}, async () => {
+mcp.tool('browser_status', 'Check Playwright/extension backend status and active URL', {}, async () => {
   const lines = [];
-  if (extConn) { const tab = extConn.info.activeTab; lines.push('✅ Extension connected'); if (tab) lines.push(`Active tab: "${tab.title}" — ${tab.url}`); }
-  else lines.push('ℹ️ Extension not connected — using Playwright headless fallback');
-  try { const p = pw._page; if (p && !p.isClosed()) lines.push(`Playwright page: ${p.url()}`); } catch (_) {}
+  try { const p = pw._page; if (p && !p.isClosed()) lines.push(`✅ Playwright active — ${p.url()}`); else lines.push('ℹ️ Playwright ready (no page open yet)'); } catch (_) { lines.push('⚠️ Playwright unavailable'); }
+  if (extConn) { const tab = extConn.info.activeTab; lines.push('✅ Extension connected (fallback available)'); if (tab) lines.push(`Extension tab: "${tab.title}" — ${tab.url}`); }
+  else lines.push('ℹ️ Extension not connected');
   return { content: [{ type: 'text', text: lines.join('\n') }] };
 });
 
@@ -652,12 +663,16 @@ mcp.tool('browser_set_storage_state', 'Restore cookies + localStorage from a sav
 // ── Storage convenience ──
 
 mcp.tool('browser_get_storage', 'Get localStorage and sessionStorage contents', { tab_id: z.number().optional() }, async ({ tab_id }) => {
-  if (extConn && extConn.ws.readyState === 1) {
-    const r = await sendToExt('devtools:storage', {}, tab_id ?? null).catch(() => null);
-    if (r) return { content: [{ type: 'text', text: resultText(r) }] };
+  try {
+    const [ls, ss] = await Promise.all([pw.localStorageList(), pw.sessionStorageList()]);
+    return { content: [{ type: 'text', text: JSON.stringify({ localStorage: ls.items, sessionStorage: ss.items }, null, 2) }] };
+  } catch (pwErr) {
+    if (extConn && extConn.ws.readyState === 1) {
+      const r = await sendToExt('devtools:storage', {}, tab_id ?? null).catch(() => null);
+      if (r) return { content: [{ type: 'text', text: resultText(r) }] };
+    }
+    throw pwErr;
   }
-  const [ls, ss] = await Promise.all([pw.localStorageList(), pw.sessionStorageList()]);
-  return { content: [{ type: 'text', text: JSON.stringify({ localStorage: ls.items, sessionStorage: ss.items }, null, 2) }] };
 });
 
 // ── Tabs ──
@@ -749,7 +764,7 @@ mcp.tool('browser_get_security', 'Get TLS/CSP/HTTPS info (extension only — ret
 
 // ── Startup ───────────────────────────────────────────────────────────────
 
-process.stderr.write(`[MCP] FaunaBrowserMCP v2 (Playwright fallback enabled)\n`);
+process.stderr.write(`[MCP] FaunaBrowserMCP v2 (Playwright-first, extension fallback)\n`);
 process.stderr.write(`[MCP] Extension WS:  ws://localhost:${WS_PORT}\n`);
 process.stderr.write(`[MCP] HTTP/MCP:      http://localhost:${HTTP_PORT}/mcp\n`);
 

@@ -1090,7 +1090,7 @@ await applyTextOverrides(nav, {
 const PLAYWRIGHT_BROWSER_CONTEXT = `
 ## Playwright Browser Control (MCP Tools)
 
-You have a real headless browser you can control via MCP tool calls. The relay has extension-first dispatch: if the user's Chrome/Edge extension is connected it uses that, otherwise it falls back to Playwright headless automatically.
+You have a real headless browser you can control via MCP tool calls. The relay uses Playwright headless as the primary backend. The Chrome/Edge extension is only used as a last resort if Playwright fails.
 
 ### Status
 - **browser_status** — check extension/Playwright backend status and current URL
@@ -1754,72 +1754,122 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
                 result = `Element found at (${lx}, ${ly}).`;
               }
             } else if (toolName === 'browser_ext_list_tabs') {
-              chatLog('[chat] Browser ext tool: list-tabs');
-              const r = await extCommand('tab:list', {}, null, 10000);
-              result = JSON.stringify(r);
-            } else if (toolName === 'browser_ext_extract_page') {
-              chatLog('[chat] Browser ext tool: extract-page');
-              const targetTabId = args.tabId || null;
-              extSend({ type: 'tab:working', tabId: targetTabId });
-              try { const r = await extCommand('extract', {}, targetTabId, 15000); result = JSON.stringify(r); }
-              finally { extSend({ type: 'tab:working', tabId: null }); }
-            } else if (toolName === 'browser_ext_screenshot') {
-              chatLog('[chat] Browser ext tool: screenshot');
-              const targetTabId = args.tabId || null;
-              extSend({ type: 'tab:working', tabId: targetTabId });
+              chatLog('[chat] Browser ext tool: list-tabs (pw-first)');
               try {
-                const r = await extCommand('snapshot', {}, targetTabId, 15000);
-                if (r.ok && r.screenshot) {
-                  result = 'Screenshot captured from ' + (r.url || 'active tab') + '. The image is included in the conversation.';
+                result = await playwrightMCP.callTool('browser_list_tabs', {});
+              } catch (_) {
+                const r = await extCommand('tab:list', {}, null, 10000);
+                result = JSON.stringify(r);
+              }
+            } else if (toolName === 'browser_ext_extract_page') {
+              chatLog('[chat] Browser ext tool: extract-page (pw-first)');
+              try {
+                result = await playwrightMCP.callTool('browser_get_content', { max_chars: args.maxChars || 12000 });
+              } catch (_) {
+                const targetTabId = args.tabId || null;
+                extSend({ type: 'tab:working', tabId: targetTabId });
+                try { const r = await extCommand('extract', {}, targetTabId, 15000); result = JSON.stringify(r); }
+                finally { extSend({ type: 'tab:working', tabId: null }); }
+              }
+            } else if (toolName === 'browser_ext_screenshot') {
+              chatLog('[chat] Browser ext tool: screenshot (pw-first)');
+              try {
+                const pwContent = await playwrightMCP.callToolRaw('browser_take_screenshot', {});
+                const img = pwContent.find(c => c.type === 'image');
+                if (img) {
+                  const url = `data:${img.mimeType};base64,${img.data}`;
+                  result = 'Screenshot captured. The image is included in the conversation.';
                   allMessages.push({ role: 'user', content: [
-                    { type: 'text', text: '[Browser extension screenshot of ' + (r.url || 'active tab') + ']' },
-                    { type: 'image_url', image_url: { url: 'data:' + (r.mime || 'image/png') + ';base64,' + r.screenshot, detail: 'high' } }
+                    { type: 'text', text: '[Playwright screenshot]' },
+                    { type: 'image_url', image_url: { url, detail: 'high' } }
                   ] });
                 } else {
-                  result = 'Screenshot failed: ' + (r.error || 'unknown error');
+                  result = pwContent.map(c => c.text || '').join('\n') || 'Screenshot failed';
                 }
-              } finally { extSend({ type: 'tab:working', tabId: null }); }
+              } catch (_) {
+                const targetTabId = args.tabId || null;
+                extSend({ type: 'tab:working', tabId: targetTabId });
+                try {
+                  const r = await extCommand('snapshot', {}, targetTabId, 15000);
+                  if (r.ok && r.screenshot) {
+                    result = 'Screenshot captured from ' + (r.url || 'active tab') + '. The image is included in the conversation.';
+                    allMessages.push({ role: 'user', content: [
+                      { type: 'text', text: '[Browser extension screenshot of ' + (r.url || 'active tab') + ']' },
+                      { type: 'image_url', image_url: { url: 'data:' + (r.mime || 'image/png') + ';base64,' + r.screenshot, detail: 'high' } }
+                    ] });
+                  } else {
+                    result = 'Screenshot failed: ' + (r.error || 'unknown error');
+                  }
+                } finally { extSend({ type: 'tab:working', tabId: null }); }
+              }
             } else if (toolName === 'browser_ext_tab_info') {
-              chatLog('[chat] Browser ext tool: tab-info');
-              const r = await extCommand('tab:info', {}, null, 10000);
-              result = JSON.stringify(r);
-            } else if (toolName === 'browser_ext_eval') {
-              chatLog('[chat] Browser ext tool: eval');
-              const targetTabId = args.tabId || null;
-              extSend({ type: 'tab:working', tabId: targetTabId });
+              chatLog('[chat] Browser ext tool: tab-info (pw-first)');
               try {
-                const r = await extCommand('eval', { js: args.js || 'return document.title' }, targetTabId, 15000);
-                result = typeof r === 'string' ? r : JSON.stringify(r);
-              } finally { extSend({ type: 'tab:working', tabId: null }); }
+                result = await playwrightMCP.callTool('browser_evaluate', { js: 'return JSON.stringify({ url: location.href, title: document.title })' });
+              } catch (_) {
+                const r = await extCommand('tab:info', {}, null, 10000);
+                result = JSON.stringify(r);
+              }
+            } else if (toolName === 'browser_ext_eval') {
+              chatLog('[chat] Browser ext tool: eval (pw-first)');
+              try {
+                result = await playwrightMCP.callTool('browser_evaluate', { js: args.js || 'return document.title' });
+              } catch (_) {
+                const targetTabId = args.tabId || null;
+                extSend({ type: 'tab:working', tabId: targetTabId });
+                try {
+                  const r = await extCommand('eval', { js: args.js || 'return document.title' }, targetTabId, 15000);
+                  result = typeof r === 'string' ? r : JSON.stringify(r);
+                } finally { extSend({ type: 'tab:working', tabId: null }); }
+              }
             } else if (toolName === 'browser_ext_extract_assets') {
+              // No Playwright equivalent — extension only
               chatLog('[chat] Browser ext tool: extract-assets');
               const targetTabId = args.tabId || null;
               const r = await extCommand('extract-assets', {}, targetTabId, 20000);
               result = JSON.stringify(r);
             } else if (toolName === 'browser_ext_devtools_console') {
-              chatLog('[chat] Browser ext tool: devtools-console');
-              const r = await extCommand('devtools:console', { limit: args.limit || 100 }, args.tabId || null, 15000);
-              result = JSON.stringify(r);
+              chatLog('[chat] Browser ext tool: devtools-console (pw-first)');
+              try {
+                result = await playwrightMCP.callTool('browser_console_messages', { limit: args.limit || 100 });
+              } catch (_) {
+                const r = await extCommand('devtools:console', { limit: args.limit || 100 }, args.tabId || null, 15000);
+                result = JSON.stringify(r);
+              }
             } else if (toolName === 'browser_ext_devtools_network') {
-              chatLog('[chat] Browser ext tool: devtools-network');
-              const r = await extCommand('devtools:network', { filter: args.filter, includeHeaders: args.includeHeaders }, args.tabId || null, 15000);
-              result = JSON.stringify(r);
+              chatLog('[chat] Browser ext tool: devtools-network (pw-first)');
+              try {
+                result = await playwrightMCP.callTool('browser_network_requests', { filter: args.filter });
+              } catch (_) {
+                const r = await extCommand('devtools:network', { filter: args.filter, includeHeaders: args.includeHeaders }, args.tabId || null, 15000);
+                result = JSON.stringify(r);
+              }
             } else if (toolName === 'browser_ext_devtools_har') {
+              // No Playwright equivalent — extension only
               chatLog('[chat] Browser ext tool: devtools-har');
               const r = await extCommand('devtools:har', {}, args.tabId || null, 20000);
               result = JSON.stringify(r);
             } else if (toolName === 'browser_ext_devtools_security') {
+              // No Playwright equivalent — extension only
               chatLog('[chat] Browser ext tool: devtools-security');
               const r = await extCommand('devtools:security', {}, args.tabId || null, 15000);
               result = JSON.stringify(r);
             } else if (toolName === 'browser_ext_devtools_cookies') {
-              chatLog('[chat] Browser ext tool: devtools-cookies');
-              const r = await extCommand('devtools:cookies', {}, args.tabId || null, 10000);
-              result = JSON.stringify(r);
+              chatLog('[chat] Browser ext tool: devtools-cookies (pw-first)');
+              try {
+                result = await playwrightMCP.callTool('browser_cookie_list', {});
+              } catch (_) {
+                const r = await extCommand('devtools:cookies', {}, args.tabId || null, 10000);
+                result = JSON.stringify(r);
+              }
             } else if (toolName === 'browser_ext_devtools_storage') {
-              chatLog('[chat] Browser ext tool: devtools-storage');
-              const r = await extCommand('devtools:storage', {}, args.tabId || null, 10000);
-              result = JSON.stringify(r);
+              chatLog('[chat] Browser ext tool: devtools-storage (pw-first)');
+              try {
+                result = await playwrightMCP.callTool('browser_get_storage', {});
+              } catch (_) {
+                const r = await extCommand('devtools:storage', {}, args.tabId || null, 10000);
+                result = JSON.stringify(r);
+              }
             } else if (usePlaywrightMCP && pwToolNames.has(toolName)) {
               chatLog('[chat] Playwright tool: ' + toolName);
               result = await playwrightMCP.callTool(toolName, args);
