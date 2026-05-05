@@ -197,6 +197,14 @@ function flashBtn(id) {
 }
 
 // ── Utility ───────────────────────────────────────────────────────────────
+function updateRelayBtn(which, running) {
+  const btn = document.getElementById(which === 'browser' ? 'btnBrowser' : 'btnFigma');
+  if (!btn) return;
+  btn.textContent = running ? 'Stop' : 'Start';
+  btn.classList.toggle('start', !running);
+  btn.classList.toggle('stop',   running);
+}
+
 function cap(str) { return str ? str[0].toUpperCase() + str.slice(1) : ''; }
 
 function setText(id, text) {
