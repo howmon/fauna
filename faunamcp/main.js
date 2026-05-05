@@ -117,17 +117,30 @@ function setRunning(which, running) {
   });
 }
 
-function startRelay(which) {
+function startRelay(which, _retryCount = 0) {
   const r = relay[which];
   if (r.proc || !r.enabled) return;
+
+  // If we stopped recently, wait for ports to release before respawning
+  const elapsed = r.stoppedAt ? Date.now() - r.stoppedAt : Infinity;
+  if (elapsed < 1200) {
+    const wait = 1200 - elapsed;
+    addLog(which, `Waiting ${wait}ms for ports to release…`, 'info');
+    setTimeout(() => startRelay(which, _retryCount), wait);
+    return;
+  }
 
   const relayPath = which === 'browser' ? getBrowserRelayPath() : getFigmaRelayPath();
   addLog(which, `Starting ${which} relay…`, 'info');
 
   r.proc = spawn(NODE_BIN, [relayPath], {
     env: { ...process.env },
-    stdio: ['ignore', 'ignore', 'pipe']
+    stdio: ['pipe', 'ignore', 'pipe']
   });
+  // Keep stdin open (prevent EOF on the relay's StdioServerTransport)
+  r.proc.stdin.resume();
+
+  r.spawnedAt = Date.now();
 
   r.proc.stderr.on('data', chunk => {
     const text = chunk.toString().trim();
@@ -142,13 +155,21 @@ function startRelay(which) {
   });
 
   r.proc.on('exit', (code, signal) => {
+    const uptime = Date.now() - (r.spawnedAt || 0);
     r.proc = null;
+    r.stoppedAt = Date.now();
     setRunning(which, false);
     addLog(which, `Relay stopped (code ${code ?? signal})`, code === 0 ? 'info' : 'err');
+    // If it died within 3 s of spawning and user still wants it enabled, retry once
+    if (r.enabled && uptime < 3000 && _retryCount < 1) {
+      addLog(which, 'Died too quickly — retrying in 1.5 s…', 'info');
+      setTimeout(() => startRelay(which, _retryCount + 1), 1500);
+    }
   });
 
   r.proc.on('error', err => {
     r.proc = null;
+    r.stoppedAt = Date.now();
     setRunning(which, false);
     addLog(which, `Failed to start: ${err.message} — is Node.js installed?`, 'err');
   });

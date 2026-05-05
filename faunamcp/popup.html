@@ -66,6 +66,7 @@
   .enable-row {
     display: flex; align-items: center; justify-content: space-between;
     padding: 8px 14px; background: #1a1a1a; border-bottom: 1px solid #252525;
+    flex-shrink: 0;
   }
   .enable-label { font-size: 11px; color: #888; }
   .toggle-switch {
@@ -85,6 +86,7 @@
   .status-bar {
     display: flex; align-items: center; justify-content: space-between;
     padding: 9px 14px; background: #1e1e1e; border-bottom: 1px solid #272727;
+    flex-shrink: 0;
   }
   .status-left { display: flex; align-items: center; gap: 8px; }
   .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; transition: background 0.3s, box-shadow 0.3s; }
@@ -104,7 +106,7 @@
   .toggle-btn.stop  { background: #4a2020; color: #f36e6e; }
 
   /* ── URL/info rows ── */
-  .section { padding: 7px 14px; border-bottom: 1px solid #242424; }
+  .section { padding: 7px 14px; border-bottom: 1px solid #242424; flex-shrink: 0; }
   .row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
   .row:last-child { margin-bottom: 0; }
   .lbl { font-size: 10px; color: #666; min-width: 36px; text-transform: uppercase; letter-spacing: 0.05em; }
@@ -124,7 +126,7 @@
   .copy.flash   { background: #2d5c27; color: #6ccb5f; }
 
   /* ── Asset row (extension / plugin) ── */
-  .asset-section { padding: 7px 14px; border-bottom: 1px solid #242424; }
+  .asset-section { padding: 7px 14px; border-bottom: 1px solid #242424; flex-shrink: 0; }
   .asset-row     { display: flex; align-items: center; gap: 6px; }
   .asset-label   { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.05em; flex: 1; }
   .asset-path {
@@ -145,7 +147,7 @@
   .dl-btn.flash  { background: #2d5c27; color: #6ccb5f; }
 
   /* ── Stdio snippet ── */
-  .snippet-wrap { position: relative; margin: 0 14px 7px; }
+  .snippet-wrap { position: relative; margin: 0 14px 7px; flex-shrink: 0; }
   .snippet {
     font-size: 10px;
     font-family: 'Cascadia Code','JetBrains Mono','Fira Code',monospace;
