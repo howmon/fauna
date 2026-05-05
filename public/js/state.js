@@ -13,6 +13,7 @@ var state = {
   pendingAttachments: [],   // { type: 'file'|'url', name, content }
   autoRunShell:  localStorage.getItem('fauna-autorun-shell') !== 'false', // default ON
   figmaMCPEnabled: localStorage.getItem('fauna-figma-mcp') === 'true',   // default OFF
+  playwrightMCPEnabled: localStorage.getItem('fauna-playwright-mcp') === 'true', // default OFF
   thinkingBudget: localStorage.getItem('fauna-thinking-budget') || 'high',
   maxContextTurns: parseInt(localStorage.getItem('fauna-max-turns') || '20', 10),
   // streaming/abortController/_autoFeedDepth are per-conversation (conv._streaming etc.)

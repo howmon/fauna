@@ -1073,6 +1073,33 @@ await applyTextOverrides(nav, {
 - NEVER call browser_ext_screenshot, browser_ext_extract_page, or browser_ext_list_tabs unless the user explicitly asks about their browser or a web page.
 `;
 
+// ── Playwright MCP browser control context ────────────────────────────────────
+// Injected into the system prompt when Playwright MCP is enabled.
+const PLAYWRIGHT_BROWSER_CONTEXT = `
+## Playwright Browser Control (MCP Tools)
+
+You have a real browser you can control via MCP tool calls. Use these tools for autonomous web research, testing, form automation, and web scraping.
+
+### Key tools:
+- **browser_navigate** — navigate to a URL
+- **browser_snapshot** — get the accessibility tree of the current page (structured, text-based — prefer over screenshots for reading page content)
+- **browser_take_screenshot** — take a screenshot of the current page
+- **browser_click** — click an element by aria label, text, or ref from snapshot
+- **browser_type** — type text into an input field
+- **browser_fill** — fill a form field
+- **browser_select_option** — select a dropdown option
+- **browser_wait_for** — wait for an element or condition
+- **browser_close** — close the browser
+
+### Rules:
+- Always call **browser_snapshot** after navigating to read the page content before interacting with it.
+- Use **browser_snapshot** (accessibility tree) over **browser_take_screenshot** for text extraction — it's faster and more reliable.
+- After clicking or submitting a form, call **browser_snapshot** to verify the result.
+- The browser starts fresh each session. Cookies and sessions are NOT shared with the built-in browser panel.
+- Use Playwright MCP tools when you need reliable, multi-step web automation (logins, form flows, data extraction).
+- Use browser-action fenced blocks when you want the user to see the browser panel open in the UI.
+`;
+
 // ── Context summarization endpoint ───────────────────────────────────────────
 app.post('/api/summarize', async (req, res) => {
   const { messages = [], model = 'claude-sonnet-4.6' } = req.body;
@@ -1114,7 +1141,7 @@ app.post('/api/chat', async (req, res) => {
   _psAcquire();
   res.on('finish', _psRelease);
   res.on('close',  _psRelease);
-  const { messages = [], model = 'claude-sonnet-4.6', systemPrompt = '', useFigmaMCP = false, contextSummary = '',
+  const { messages = [], model = 'claude-sonnet-4.6', systemPrompt = '', useFigmaMCP = false, usePlaywrightMCP = false, contextSummary = '',
           thinkingBudget = 'high', maxContextTurns = 20, agentName = null, clientContext = 'app',
           projectId = null, projectContextIds = null } = req.body;
 
@@ -1283,6 +1310,23 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
       allMessages[0] = allMessages[0]
         ? { ...allMessages[0], content: allMessages[0].content + '\n\n' + FIGMA_LAYOUT_CONTEXT }
         : { role: 'system', content: FIGMA_LAYOUT_CONTEXT };
+    }
+
+    // Fetch Playwright MCP tools if enabled
+    const pwToolNames = new Set();
+    if (usePlaywrightMCP) {
+      try {
+        const pwTools = await playwrightMCP.getTools();
+        for (const t of pwTools) pwToolNames.add(t.function.name);
+        mcpTools = [...(mcpTools || []), ...pwTools];
+        // Inject playwright browser context into system prompt
+        if (allMessages[0]) {
+          allMessages[0] = { ...allMessages[0], content: allMessages[0].content + '\n\n' + PLAYWRIGHT_BROWSER_CONTEXT };
+        }
+        chatLog('[chat] Playwright MCP enabled — %d tools', pwTools.length);
+      } catch (e) {
+        chatLog('[chat] Playwright MCP unavailable: ' + e.message);
+      }
     }
 
     // Load agent tools if an agent is active
@@ -1682,6 +1726,10 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
               chatLog('[chat] Browser ext tool: devtools-storage');
               const r = await extCommand('devtools:storage', {}, args.tabId || null, 10000);
               result = JSON.stringify(r);
+            } else if (usePlaywrightMCP && pwToolNames.has(toolName)) {
+              chatLog('[chat] Playwright tool: ' + toolName);
+              result = await playwrightMCP.callTool(toolName, args);
+              chatLog('[chat] Playwright tool done: ' + toolName);
             } else {
               figmaLog('🔧 ' + toolName + (toolName === 'figma_execute' ? ': ' + (args.code || '').slice(0, 80).replace(/\n/g,' ') + '…' : ''), 'cmd');
               result = await figmaMCP.callTool(toolName, args);
@@ -3167,6 +3215,154 @@ function figmaLog(message, level = 'info') {
   }
 }
 
+// ── Playwright MCP Client ───────────────────────────────────────────────────
+// Wraps @playwright/mcp in a headless stdio subprocess.
+// Provides AI with real browser automation: navigate, click, type, screenshot, etc.
+
+class PlaywrightMCPClient {
+  constructor() {
+    this.proc = null;
+    this.toolsCache = null;
+    this._pendingRequests = new Map();
+    this._nextId = 1;
+    this._buffer = '';
+    this._initialized = false;
+    this._initPromise = null;
+  }
+
+  async _ensureStarted() {
+    if (this.proc && !this.proc.killed && this._initialized) return;
+    if (this._initPromise) return this._initPromise;
+    this._initPromise = this._doStart().finally(() => { this._initPromise = null; });
+    return this._initPromise;
+  }
+
+  async _doStart() {
+    const cliPath = path.join(__dirname, 'node_modules', '@playwright', 'mcp', 'cli.js');
+    if (!fs.existsSync(cliPath)) throw new Error('@playwright/mcp not installed — run: npm install @playwright/mcp');
+    this.proc = _spawn('node', [cliPath, '--headless'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env },
+    });
+    this._buffer = '';
+    this._initialized = false;
+
+    this.proc.stdout.on('data', (data) => {
+      this._buffer += data.toString();
+      this._processBuffer();
+    });
+    this.proc.stderr.on('data', (data) => {
+      console.log('[Playwright MCP]', data.toString().trim());
+    });
+    this.proc.on('exit', (code) => {
+      console.log('[Playwright MCP] exited with code', code);
+      this.proc = null;
+      this.toolsCache = null;
+      this._initialized = false;
+      for (const [, { reject }] of this._pendingRequests) reject(new Error('Playwright MCP process exited'));
+      this._pendingRequests.clear();
+    });
+
+    // Initialize MCP handshake
+    await this._request({ jsonrpc: '2.0', method: 'initialize', id: this._nextId++,
+      params: { protocolVersion: '2024-11-05', capabilities: {},
+        clientInfo: { name: 'Fauna', version: '1.0.0' } } });
+    // Send initialized notification (fire-and-forget, no id)
+    const note = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    this.proc.stdin.write(`Content-Length: ${Buffer.byteLength(note)}\r\n\r\n${note}`);
+    this._initialized = true;
+  }
+
+  _processBuffer() {
+    while (true) {
+      const headerEnd = this._buffer.indexOf('\r\n\r\n');
+      if (headerEnd === -1) break;
+      const header = this._buffer.slice(0, headerEnd);
+      const match = header.match(/Content-Length:\s*(\d+)/i);
+      if (!match) { this._buffer = this._buffer.slice(headerEnd + 4); continue; }
+      const contentLen = parseInt(match[1]);
+      const start = headerEnd + 4;
+      if (this._buffer.length < start + contentLen) break;
+      const json = this._buffer.slice(start, start + contentLen);
+      this._buffer = this._buffer.slice(start + contentLen);
+      try {
+        const msg = JSON.parse(json);
+        if (msg.id != null && this._pendingRequests.has(msg.id)) {
+          const { resolve, reject } = this._pendingRequests.get(msg.id);
+          this._pendingRequests.delete(msg.id);
+          if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
+          else resolve(msg.result);
+        }
+      } catch (_) {}
+    }
+  }
+
+  _request(msg) {
+    return new Promise((resolve, reject) => {
+      if (!this.proc || this.proc.killed) return reject(new Error('Playwright MCP not running'));
+      const { id } = msg;
+      if (id != null) {
+        this._pendingRequests.set(id, { resolve, reject });
+        setTimeout(() => {
+          if (this._pendingRequests.has(id)) {
+            this._pendingRequests.delete(id);
+            reject(new Error('Playwright MCP request timed out: ' + msg.method));
+          }
+        }, 60000);
+      }
+      const json = JSON.stringify(msg);
+      this.proc.stdin.write(`Content-Length: ${Buffer.byteLength(json)}\r\n\r\n${json}`);
+      if (id == null) resolve(null);
+    });
+  }
+
+  async getTools() {
+    if (this.toolsCache) return this.toolsCache;
+    await this._ensureStarted();
+    const result = await this._request({ jsonrpc: '2.0', method: 'tools/list', id: this._nextId++, params: {} });
+    this.toolsCache = (result?.tools || []).map(t => ({
+      type: 'function',
+      function: { name: t.name, description: t.description,
+        parameters: t.inputSchema || { type: 'object', properties: {} } }
+    }));
+    return this.toolsCache;
+  }
+
+  async callTool(name, args) {
+    await this._ensureStarted();
+    const result = await this._request({ jsonrpc: '2.0', method: 'tools/call', id: this._nextId++,
+      params: { name, arguments: args } });
+    const content = result?.content || [];
+    return content.map(c => {
+      if (c.type === 'text') return c.text;
+      if (c.type === 'image') return `[screenshot: data:${c.mimeType};base64,${c.data || ''}]`;
+      return JSON.stringify(c);
+    }).join('\n');
+  }
+
+  stop() {
+    if (this.proc && !this.proc.killed) this.proc.kill('SIGTERM');
+    this.proc = null;
+    this.toolsCache = null;
+    this._initialized = false;
+  }
+}
+
+const playwrightMCP = new PlaywrightMCPClient();
+
+app.get('/api/playwright-mcp/status', async (req, res) => {
+  const cliPath = path.join(__dirname, 'node_modules', '@playwright', 'mcp', 'cli.js');
+  const installed = fs.existsSync(cliPath);
+  const running = !!(playwrightMCP.proc && !playwrightMCP.proc.killed && playwrightMCP._initialized);
+  const toolCount = playwrightMCP.toolsCache ? playwrightMCP.toolsCache.length : 0;
+  res.json({ ok: true, installed, running, toolCount });
+});
+
+app.post('/api/playwright-mcp/stop', (req, res) => {
+  playwrightMCP.stop();
+  res.json({ ok: true });
+});
+
 // ── Figma Dev Mode MCP Client ─────────────────────────────────────────────
 // Connects to Figma's built-in MCP server at http://127.0.0.1:3845/mcp
 // Provides AI with design context, variables, screenshots, and more.
@@ -4057,8 +4253,13 @@ function checkpointFile(abs) {
 app.get('/api/preview-file', (req, res) => {
   const rawPath = req.query.path;
   if (!rawPath) return res.status(400).send('path query param required');
+  // Reject shell variables ($TMPF), regex patterns ([^"]*...), and relative paths.
+  // path.resolve() would silently turn these into wrong absolute paths → misleading 404s.
+  if (!path.isAbsolute(rawPath)) {
+    return res.status(400).send('preview-file requires an absolute path (got: ' + rawPath.slice(0, 120) + ')');
+  }
   try {
-    const abs = path.resolve(rawPath);  // no cwd — must be absolute
+    const abs = path.resolve(rawPath);
     if (!fs.existsSync(abs)) return res.status(404).send('File not found: ' + abs);
     const ext = path.extname(abs).toLowerCase();
     const mimeMap = {

@@ -246,6 +246,9 @@ async function sendMessage(opts) {
   var sysContext = await gatherSystemContext(text);
   var apiContent = sysContext ? content + sysContext : content;
 
+  // Inject current date/time — gives the AI authoritative "today" context on every turn
+  apiContent += '\n\n[Current date and time: ' + new Intl.DateTimeFormat('en', { dateStyle: 'full', timeStyle: 'short', hour12: false }).format(new Date()) + ']';
+
   var userMsg = {
     role: 'user',
     content: apiContent,
@@ -463,6 +466,7 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
         agentSystemPrompt: agent.systemPrompt || '',
         agentPermissions: agent.permissions || {},
         useFigmaMCP: state.figmaMCPEnabled || false,
+        usePlaywrightMCP: state.playwrightMCPEnabled || false,
         thinkingBudget: state.thinkingBudget || 'high',
         systemPrompt: '## Active Agent: ' + agent.displayName + '\n\n' + (agent.systemPrompt || '') + '\n\nYou are running as one of several agents in a multi-agent session. Complete your assigned task thoroughly.'
       })
@@ -627,7 +631,7 @@ async function streamResponse(conv) {
     var _ctxUsage = null;
 
     // Build chat request body — include agent info when active
-    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: state.figmaMCPEnabled, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns };
+    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: state.figmaMCPEnabled, usePlaywrightMCP: state.playwrightMCPEnabled || false, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns };
     if (typeof isAgentActive === 'function' && isAgentActive()) {
       chatBody.agentName = getActiveAgentName();
       chatBody.agentPermissions = getActiveAgentPermissions();
