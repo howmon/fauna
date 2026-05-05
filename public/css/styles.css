@@ -1953,6 +1953,28 @@ body { animation: none; }
 .ba-status.err     { color: var(--error); }
 .ba-status.manual  { color: #f59e0b; }
 
+/* ── Bot-block options card ─────────────────────────────────────────── */
+.bot-block-options {
+  display: flex; flex-direction: column; gap: 6px; margin-top: 10px;
+}
+.bot-block-btn {
+  display: block; width: 100%; text-align: left;
+  padding: 9px 14px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--bg2);
+  color: var(--text); font-size: 13px; cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.bot-block-btn:hover:not(:disabled) {
+  background: var(--bg3); border-color: var(--accent);
+}
+.bot-block-btn:disabled { opacity: .45; cursor: default; }
+.bot-block-btn-danger {
+  border-color: rgba(239,68,68,.35); color: #ef4444;
+}
+.bot-block-btn-danger:hover:not(:disabled) {
+  background: rgba(239,68,68,.08); border-color: #ef4444;
+}
+
 /* ── Desktop organizer action card ─────────────────────────────────── */
 .organizer-card {
   border: 1px solid rgba(30,200,130,.3); border-radius: var(--radius-sm);

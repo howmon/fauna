@@ -468,6 +468,137 @@ function _mapBrowserActionToExtAction(action) {
   return mapped;
 }
 
+async function _executeBrowserActionViaPlaywright(action) {
+  var tool, args;
+
+  switch (action.action) {
+    case 'navigate':
+      tool = 'browser_navigate';
+      args = { url: action.url };
+      break;
+
+    case 'click':
+      tool = 'browser_click';
+      args = {};
+      if (action.selector) args.target = action.selector;
+      if (action.label || action.text) args.element = action.label || action.text;
+      if (!args.target && !args.element) return null;
+      break;
+
+    case 'type':
+      tool = 'browser_type';
+      args = { text: action.value || action.text || '' };
+      if (action.selector) args.target = action.selector;
+      if (action.label) args.element = action.label;
+      if (!args.target && !args.element) return null;
+      break;
+
+    case 'extract':
+    case 'snapshot':
+      tool = 'browser_snapshot';
+      args = {};
+      break;
+
+    case 'screenshot':
+      tool = 'browser_take_screenshot';
+      args = {};
+      break;
+
+    case 'scroll':
+      tool = 'browser_mouse_wheel';
+      var amt = action.amount || 300;
+      var dir = action.direction || 'down';
+      args = {
+        deltaX: (dir === 'left' ? -amt : dir === 'right' ? amt : 0),
+        deltaY: (dir === 'up' ? -amt : dir === 'down' ? amt : 0)
+      };
+      break;
+
+    case 'eval':
+      tool = 'browser_evaluate';
+      args = { 'function': action.js || '() => {}' };
+      break;
+
+    case 'new-tab':
+      tool = 'browser_tabs';
+      args = { action: 'new' };
+      if (action.url) args.url = action.url;
+      break;
+
+    case 'list-tabs':
+      tool = 'browser_tabs';
+      args = { action: 'list' };
+      break;
+
+    case 'switch-tab':
+      tool = 'browser_tabs';
+      args = { action: 'select', index: typeof action.index === 'number' ? action.index : 0 };
+      break;
+
+    case 'close-tab':
+      tool = 'browser_tabs';
+      args = { action: 'close' };
+      if (typeof action.index === 'number') args.index = action.index;
+      break;
+
+    case 'console-logs':
+      tool = 'browser_console_messages';
+      args = {};
+      break;
+
+    case 'clear-console':
+      tool = 'browser_console_clear';
+      args = {};
+      break;
+
+    case 'wait':
+      await new Promise(function(r) { setTimeout(r, action.ms || 1500); });
+      return { ok: true, _browserActionSource: 'playwright' };
+
+    case 'ask-user':
+      return { ok: true, manual: true, message: action.message || action.label, _browserActionSource: 'playwright' };
+
+    default:
+      return null;
+  }
+
+  try {
+    var r = await fetch('/api/playwright-mcp/call', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool: tool, args: args })
+    });
+    if (!r.ok) {
+      var errBody = await r.json().catch(function() { return {}; });
+      console.warn('[Playwright MCP] tool call failed:', errBody.error || r.status);
+      return null;
+    }
+    var d = await r.json();
+    if (!d.ok) return null;
+
+    var content = d.content || [];
+
+    // Screenshot: extract image data
+    if (action.action === 'screenshot') {
+      var img = content.find(function(c) { return c.type === 'image'; });
+      if (img) return { ok: true, screenshot: img.data, mime: img.mimeType || 'image/png', _browserActionSource: 'playwright' };
+      return null; // no image — fall through
+    }
+
+    // Text content
+    var text = content.filter(function(c) { return c.type === 'text'; }).map(function(c) { return c.text; }).join('\n');
+    var result = { ok: true, result: text, _browserActionSource: 'playwright' };
+    if (action.action === 'extract' || action.action === 'snapshot') {
+      result.text = text;
+      result.url = '';
+      result.title = '';
+    }
+    return result;
+  } catch (e) {
+    return null; // Playwright unavailable — fall through to extension/webview
+  }
+}
+
 async function _executeBrowserActionViaExtension(action) {
   if (!_extConnectedBrowsers.length) return null;
   var mapped = _mapBrowserActionToExtAction(action);
@@ -483,6 +614,11 @@ async function _executeBrowserActionViaExtension(action) {
 }
 
 async function executeBrowserAction(action) {
+  // ── 1. Playwright (external visible browser — default) ──────────────────
+  var pwResult = await _executeBrowserActionViaPlaywright(action);
+  if (pwResult) return pwResult;
+
+  // ── 2 & 3. Browser extension + internal webview (existing logic) ────────
   var wv = getActiveWebview();
 
   if (action.action === 'navigate') {
@@ -879,10 +1015,17 @@ function extractAndRenderBrowserActions(html, messageEl, isHistoryLoad, convId) 
 
   if (!actions.length || isHistoryLoad) return;
 
-  // Open browser pane now so user sees it immediately.
-  // Don't pre-navigate — let the action sequence handle it to avoid a double load.
+  // Only pre-open the internal browser pane when Playwright MCP is NOT available.
+  // If Playwright is handling actions, opening the pane is noise — it will never be used.
   var hasNav = actions.some(function(a) { return a.action === 'navigate' || a.action === 'new-tab'; });
-  if (hasNav) { try { openBrowserPane(); } catch(e) { dbg('openBrowserPane: ' + e.message, 'err'); } }
+  if (hasNav) {
+    fetch('/api/playwright-mcp/status').then(function(r) { return r.json(); }).then(function(d) {
+      if (!d.installed) { try { openBrowserPane(); } catch(e) { dbg('openBrowserPane: ' + e.message, 'err'); } }
+    }).catch(function() {
+      // Server not reachable — open pane as safe fallback
+      try { openBrowserPane(); } catch(e) { dbg('openBrowserPane: ' + e.message, 'err'); }
+    });
+  }
 
   // Run all actions sequentially
   _runBrowserActionSequence(widgets, convId);
@@ -928,6 +1071,30 @@ async function _runBrowserActionSequence(widgets, convId) {
         if (!hasFollowingExtract) {
           try {
             var navExtract = await executeBrowserAction({ action: 'extract' });
+
+            // Bot-block detection — pause and let the user decide before feeding AI
+            var navBotChoice = await _handleBotBlockIfNeeded(navExtract, w.action.url, convId);
+            if (navBotChoice) {
+              if (navBotChoice === 'stop') { break; }
+              if (navBotChoice === 'retry') { i--; continue; }
+              if (navBotChoice === 'skip') {
+                await browserFeedAI('The site at ' + (navExtract.url || w.action.url || 'the URL') + ' blocked automated access (bot protection). The user chose to skip it. Continue the task without that page.', convId);
+                continue;
+              }
+              if (navBotChoice === 'login') {
+                appendAINotice('**Action needed:** Please log in or solve the CAPTCHA in the browser panel, then say "done" or "continue".', convId);
+                break;
+              }
+              if (navBotChoice === 'extension') {
+                await browserFeedAI('The site blocked the headless browser. The user wants to use the real browser extension instead. Re-emit the navigate action targeting the extension.', convId);
+                break;
+              }
+              if (navBotChoice === 'headers') {
+                await browserFeedAI('The site at ' + (navExtract.url || w.action.url || 'the URL') + ' blocked the request. The user wants you to retry with a custom user-agent or headers. Re-emit the browser action with an appropriate approach.', convId);
+                break;
+              }
+            }
+
             var navFeed = (navExtract.text
               ? 'Navigated and extracted page from browser panel:\n\n**Title:** ' + navExtract.title + '\n**URL:** ' + navExtract.url + '\n\n' + navExtract.text
               : 'Navigated to page in browser panel (no text content):\n**Title:** ' + navExtract.title + '\n**URL:** ' + navExtract.url);
@@ -955,6 +1122,28 @@ async function _runBrowserActionSequence(widgets, convId) {
 
       // If it was an extract, always feed result back to AI so it can continue
       if (w.action.action === 'extract') {
+        // Bot-block detection — pause before feeding AI
+        var extBotChoice = await _handleBotBlockIfNeeded(result, null, convId);
+        if (extBotChoice) {
+          if (extBotChoice === 'stop') { break; }
+          if (extBotChoice === 'retry') { i--; continue; }
+          if (extBotChoice === 'skip') {
+            await browserFeedAI('The site blocked automated access (bot protection). The user chose to skip it. Continue the task without that page\'s content.', convId);
+            continue;
+          }
+          if (extBotChoice === 'login') {
+            appendAINotice('**Action needed:** Please log in or solve the CAPTCHA in the browser panel, then say "done" or "continue".', convId);
+            break;
+          }
+          if (extBotChoice === 'extension') {
+            await browserFeedAI('The site blocked the headless browser. The user wants to use the real browser extension instead. Re-emit the navigate/extract targeting the extension.', convId);
+            break;
+          }
+          if (extBotChoice === 'headers') {
+            await browserFeedAI('The site blocked the request. The user wants you to retry with a custom user-agent or different headers. Re-emit the browser action with an appropriate approach.', convId);
+            break;
+          }
+        }
         var fromExt = result && result._browserActionSource === 'extension';
         var feedPrefix = fromExt ? 'Extracted page from real browser tab:' : 'Extracted page from browser panel:';
         var emptyPrefix = fromExt ? 'Page loaded in real browser tab (no text content):' : 'Page loaded in browser panel (no text content):';
@@ -1068,6 +1257,118 @@ async function _runBrowserActionSequence(widgets, convId) {
       break; // Stop sequence on error
     }
   }
+}
+
+// ── Bot / CAPTCHA / block detection ───────────────────────────────────────
+
+/**
+ * Return true when the extracted page text / title looks like an anti-bot wall.
+ * We check the most common patterns: Cloudflare, Akamai, PerimeterX, Imperva,
+ * reCAPTCHA, hCaptcha, DataDome, and generic "access denied" pages.
+ */
+function _detectBotBlock(text, title) {
+  var t = (title || '').toLowerCase();
+  var b = (text  || '').toLowerCase().slice(0, 4000); // only check the top of the page
+  // Title-based signals
+  var titleHits = [
+    'just a moment', 'attention required', 'access denied', 'forbidden',
+    'security check', 'please verify', 'are you human', 'bot check',
+    'one more step', 'checking your browser', 'ddos protection',
+  ];
+  for (var ti = 0; ti < titleHits.length; ti++) {
+    if (t.includes(titleHits[ti])) return true;
+  }
+  // Body-based signals
+  var bodyHits = [
+    'enable javascript and cookies', 'checking if the site connection is secure',
+    'why do i have to complete a captcha', 'cloudflare ray id',
+    'please complete the security check', 'your browser does not support javascript',
+    'automated access to this service', 'your ip address has been blocked',
+    'access to this page has been denied', 'please stand by',
+    'verify you are human', 'complete a brief security check',
+    'this site is protected by recaptcha', 'please verify you are a human',
+    'datadome', 'perimeterx', 'px-captcha', 'imperva',
+    'akamai bot manager', 'radware bot manager',
+    'we have been receiving a large volume of requests',
+    'unusual traffic from your computer network',
+    'to continue, please prove you are not a robot',
+  ];
+  for (var bi = 0; bi < bodyHits.length; bi++) {
+    if (b.includes(bodyHits[bi])) return true;
+  }
+  return false;
+}
+
+/**
+ * Show an interactive "site is blocking bots" card in the chat.
+ * Returns a Promise that resolves with the user's choice:
+ *   'retry'      – retry the navigate action
+ *   'extension'  – open in real browser (extension)
+ *   'headers'    – tell AI to add custom headers / user-agent
+ *   'login'      – user will log in manually then say done
+ *   'skip'       – skip this site and continue
+ *   'stop'       – stop the sequence entirely
+ */
+function _showBotBlockOptions(url, title, convId) {
+  return new Promise(function(resolve) {
+    var inner = getConvInner(convId || state.currentId);
+    if (!inner) { resolve('stop'); return; }
+
+    var cardId = 'bot-block-' + Date.now();
+    var el = document.createElement('div');
+    el.className = 'msg ai';
+    el.id = cardId;
+    el.innerHTML = [
+      '<div class="msg-body">',
+        '<div class="prose">',
+          '<p><strong>Bot protection detected</strong></p>',
+          '<p>The site <strong>' + escHtml(title || url || 'this page') + '</strong> appears to be blocking automated access',
+          url ? ' (<code>' + escHtml(url) + '</code>).' : '.', '</p>',
+          '<p>What would you like to do?</p>',
+          '<div class="bot-block-options">',
+            '<button class="bot-block-btn" data-choice="retry">Retry — try loading again</button>',
+            '<button class="bot-block-btn" data-choice="extension">Open in real browser — use your connected Chrome/Edge extension</button>',
+            '<button class="bot-block-btn" data-choice="headers">Try with custom headers — ask AI to retry with a different user-agent / headers</button>',
+            '<button class="bot-block-btn" data-choice="login">Log in manually — open the page, solve the CAPTCHA or log in, then click Done</button>',
+            '<button class="bot-block-btn" data-choice="skip">Skip this site — continue the task without this page</button>',
+            '<button class="bot-block-btn bot-block-btn-danger" data-choice="stop">Stop — cancel the current task</button>',
+          '</div>',
+        '</div>',
+      '</div>',
+    ].join('');
+
+    inner.appendChild(el);
+    scrollBottom();
+
+    // Wire up buttons
+    el.querySelectorAll('.bot-block-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var choice = btn.getAttribute('data-choice');
+        // Replace the card with a confirmation line
+        el.querySelector('.bot-block-options').innerHTML =
+          '<p style="color:var(--text-muted);font-size:12px">Selected: <strong>' + escHtml(btn.textContent.trim()) + '</strong></p>';
+        // Disable all remaining buttons
+        el.querySelectorAll('.bot-block-btn').forEach(function(b) { b.disabled = true; });
+        resolve(choice);
+      });
+    });
+  });
+}
+
+/**
+ * Check extracted content for bot-blocks and, if found, pause the sequence
+ * to let the user decide what to do.  Returns the user's choice string, or
+ * null if no block was detected (normal path continues).
+ */
+async function _handleBotBlockIfNeeded(extractResult, url, convId) {
+  if (!extractResult) return null;
+  var text = extractResult.text || '';
+  var title = extractResult.title || '';
+  var pageUrl = extractResult.url || url || '';
+  if (!_detectBotBlock(text, title)) return null;
+
+  var choice = await _showBotBlockOptions(pageUrl, title, convId);
+  return choice;
 }
 
 // Send browser page/eval result to AI. Retries if the conv is still streaming.

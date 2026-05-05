@@ -12,6 +12,7 @@ import os         from 'os';
 import fs         from 'fs';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
+import net       from 'net';
 import { marked } from 'marked';
 import { checkFilePath, checkNetworkAccess, checkShellCommand, getSandboxedEnv, getResourceLimits, audit, getAuditLog } from './agent-sandbox.js';
 import { getAgentTools, startAgentMCPServers, stopAgentMCPServers, executeBuiltInTool, executeCustomTool } from './agent-tools.js';
@@ -3246,10 +3247,10 @@ function figmaLog(message, level = 'info') {
 class PlaywrightMCPClient {
   constructor() {
     this.proc = null;
+    this._port = null;
+    this._sessionId = null;
     this.toolsCache = null;
-    this._pendingRequests = new Map();
     this._nextId = 1;
-    this._buffer = '';
     this._initialized = false;
     this._initPromise = null;
   }
@@ -3261,114 +3262,174 @@ class PlaywrightMCPClient {
     return this._initPromise;
   }
 
+  // Find the system node binary so @playwright/mcp can launch Chromium normally.
+  // When running inside Electron, process.execPath is the Electron binary; using
+  // ELECTRON_RUN_AS_NODE=1 works for pure-JS scripts but Playwright's browser
+  // launch is incompatible with Electron's sandboxed environment.
+  async _findNodeBin() {
+    if (!process.versions.electron) return process.execPath; // already node
+    // Try login-shell `which node` so nvm / volta / homebrew paths are visible
+    try {
+      const bin = await new Promise((resolve, reject) => {
+        const p = _spawn('/bin/zsh', ['-l', '-c', 'which node'], { stdio: ['ignore', 'pipe', 'ignore'] });
+        let out = '';
+        p.stdout.on('data', d => { out += d.toString(); });
+        p.on('close', code => (code === 0 && out.trim()) ? resolve(out.trim()) : reject());
+      });
+      if (fs.existsSync(bin)) return bin;
+    } catch (_) {}
+    // Common macOS static paths
+    for (const b of ['/opt/homebrew/bin/node', '/usr/local/bin/node', '/usr/bin/node']) {
+      if (fs.existsSync(b)) return b;
+    }
+    // Last resort: Electron binary with ELECTRON_RUN_AS_NODE (may not work for Playwright)
+    return null;
+  }
+
   async _doStart() {
-    const cliPath = path.join(__dirname, 'node_modules', '@playwright', 'mcp', 'cli.js');
+    // In a packaged Electron app node_modules live inside app.asar, but
+    // child_process.spawn cannot execute scripts from inside an asar archive.
+    // electron-builder unpacks asarUnpack entries to app.asar.unpacked/.
+    const appDir = __dirname.includes('app.asar')
+      ? __dirname.replace('app.asar', 'app.asar.unpacked')
+      : __dirname;
+    const cliPath = path.join(appDir, 'node_modules', '@playwright', 'mcp', 'cli.js');
     if (!fs.existsSync(cliPath)) throw new Error('@playwright/mcp not installed — run: npm install @playwright/mcp');
 
-    // In a packaged Electron app, `node` is not on PATH — use the Electron binary
-    // with ELECTRON_RUN_AS_NODE=1 to run Node scripts (same approach as Clawpilot).
-    // In standalone Node server, process.execPath is already the node binary.
+    // Find a free port via the OS (bind to :0, read assigned port, close)
+    this._port = await new Promise((resolve, reject) => {
+      const srv = net.createServer();
+      srv.listen(0, () => { const p = srv.address().port; srv.close(() => resolve(p)); });
+      srv.on('error', reject);
+    });
+
     const spawnEnv = { ...process.env };
-    if (process.versions.electron) spawnEnv.ELECTRON_RUN_AS_NODE = '1';
+    const nodeBin = await this._findNodeBin();
+    let execBin, execArgs;
+    if (nodeBin) {
+      execBin = nodeBin;
+      execArgs = [cliPath, '--port', String(this._port), '--headless', '--no-sandbox'];
+    } else {
+      // Fallback: Electron binary acting as Node
+      execBin = process.execPath;
+      execArgs = [cliPath, '--port', String(this._port), '--headless', '--no-sandbox'];
+      spawnEnv.ELECTRON_RUN_AS_NODE = '1';
+    }
+    console.log('[Playwright MCP] spawning with', execBin);
 
-    await this._spawnAndInit(['--headless'], spawnEnv, cliPath)
-      .catch(async (err) => {
-        console.log('[Playwright MCP] headless failed (' + err.message + ') — retrying without --headless');
-        this._cleanup();
-        await this._spawnAndInit([], spawnEnv, cliPath);
-      });
-    this._initialized = true;
-  }
-
-  _cleanup() {
-    if (this.proc && !this.proc.killed) this.proc.kill('SIGTERM');
-    this.proc = null;
-    this._buffer = '';
-    this._initialized = false;
-    this.toolsCache = null;
-    for (const [, { reject }] of this._pendingRequests) reject(new Error('Playwright MCP restarting'));
-    this._pendingRequests.clear();
-  }
-
-  async _spawnAndInit(extraArgs, spawnEnv, cliPath) {
-    this.proc = _spawn(process.execPath, [cliPath, ...extraArgs], {
-      stdio: ['pipe', 'pipe', 'pipe'],
+    // The MCP server validates the Host header — must use localhost, not 127.0.0.1
+    this.proc = _spawn(execBin, execArgs, {
+      stdio: ['ignore', 'pipe', 'pipe'],
       env: spawnEnv,
     });
-    this._buffer = '';
 
-    this.proc.stdout.on('data', (data) => {
-      this._buffer += data.toString();
-      this._processBuffer();
+    // Wait for the "Listening on ..." message on stdout/stderr as the readiness signal
+    let startupOutput = '';
+    const readyPromise = new Promise((resolve) => {
+      const onData = (d) => {
+        const s = d.toString();
+        startupOutput += s;
+        console.log('[Playwright MCP]', s.trim());
+        if (s.includes('Listening on')) { resolve(); }
+      };
+      this.proc.stderr.on('data', onData);
+      this.proc.stdout.on('data', onData);
     });
-    this.proc.stderr.on('data', (data) => {
-      console.log('[Playwright MCP]', data.toString().trim());
-    });
+
     this.proc.on('exit', (code) => {
       console.log('[Playwright MCP] exited with code', code);
       this.proc = null;
-      this.toolsCache = null;
       this._initialized = false;
-      for (const [, { reject }] of this._pendingRequests) reject(new Error('Playwright MCP process exited'));
-      this._pendingRequests.clear();
+      this._port = null;
+      this._sessionId = null;
+      this.toolsCache = null;
     });
 
-    // MCP handshake
-    await this._request({ jsonrpc: '2.0', method: 'initialize', id: this._nextId++,
+    // Race: readiness message OR 20-second timeout OR process exit
+    const ready = await Promise.race([
+      readyPromise.then(() => true),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Playwright MCP did not start in time')), 20000)),
+      new Promise((_, reject) => this.proc.once('close', (code) => {
+        const tail = startupOutput.slice(-400).trim();
+        reject(new Error(`Playwright MCP process exited (code ${code}) during startup${tail ? ':\n' + tail : ''}`));
+      })),
+    ]);
+    if (!ready) throw new Error('Playwright MCP did not become ready');
+
+    // MCP initialize handshake over HTTP
+    const initResult = await this._post({ jsonrpc: '2.0', method: 'initialize', id: this._nextId++,
       params: { protocolVersion: '2024-11-05', capabilities: {},
         clientInfo: { name: 'Fauna', version: '1.0.0' } } });
-    // Send initialized notification (fire-and-forget, no id)
-    const note = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' });
-    this.proc.stdin.write(`Content-Length: ${Buffer.byteLength(note)}\r\n\r\n${note}`);
+
+    // Send initialized notification (fire-and-forget, no response expected)
+    fetch(`http://localhost:${this._port}/mcp`, {
+      method: 'POST',
+      headers: this._headers(),
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+    }).catch(() => {});
+
+    this._initialized = true;
+    console.log('[Playwright MCP] ready on port', this._port);
+    return initResult;
   }
 
-  _processBuffer() {
-    while (true) {
-      const headerEnd = this._buffer.indexOf('\r\n\r\n');
-      if (headerEnd === -1) break;
-      const header = this._buffer.slice(0, headerEnd);
-      const match = header.match(/Content-Length:\s*(\d+)/i);
-      if (!match) { this._buffer = this._buffer.slice(headerEnd + 4); continue; }
-      const contentLen = parseInt(match[1]);
-      const start = headerEnd + 4;
-      if (this._buffer.length < start + contentLen) break;
-      const json = this._buffer.slice(start, start + contentLen);
-      this._buffer = this._buffer.slice(start + contentLen);
-      try {
-        const msg = JSON.parse(json);
-        if (msg.id != null && this._pendingRequests.has(msg.id)) {
-          const { resolve, reject } = this._pendingRequests.get(msg.id);
-          this._pendingRequests.delete(msg.id);
-          if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
-          else resolve(msg.result);
-        }
-      } catch (_) {}
-    }
+  _headers(extra) {
+    const h = { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' };
+    if (this._sessionId) h['Mcp-Session-Id'] = this._sessionId;
+    return Object.assign(h, extra);
   }
 
-  _request(msg) {
-    return new Promise((resolve, reject) => {
-      if (!this.proc || this.proc.killed) return reject(new Error('Playwright MCP not running'));
-      const { id } = msg;
-      if (id != null) {
-        this._pendingRequests.set(id, { resolve, reject });
-        setTimeout(() => {
-          if (this._pendingRequests.has(id)) {
-            this._pendingRequests.delete(id);
-            reject(new Error('Playwright MCP request timed out: ' + msg.method));
-          }
-        }, 60000);
-      }
-      const json = JSON.stringify(msg);
-      this.proc.stdin.write(`Content-Length: ${Buffer.byteLength(json)}\r\n\r\n${json}`);
-      if (id == null) resolve(null);
+  async _post(msg) {
+    if (!this._port) throw new Error('Playwright MCP not started');
+    // Use localhost (not 127.0.0.1) — the MCP server validates the Host header
+    const res = await fetch(`http://localhost:${this._port}/mcp`, {
+      method: 'POST',
+      headers: this._headers(),
+      body: JSON.stringify(msg),
     });
+
+    // Capture session ID from response (new per-session transport)
+    const sid = res.headers.get('mcp-session-id');
+    if (sid) this._sessionId = sid;
+
+    if (res.status === 202) return null; // notification accepted
+
+    // Session expired / invalidated — reset and let the caller restart
+    if (res.status === 404 && this._sessionId) {
+      console.log('[Playwright MCP] session expired, resetting');
+      this._sessionId = null;
+      this._initialized = false;
+      throw new Error('MCP session expired');
+    }
+
+    const ct = res.headers.get('content-type') || '';
+    if (ct.includes('text/event-stream')) {
+      // Streamable HTTP — parse the SSE data lines
+      const text = await res.text();
+      for (const line of text.split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim();
+        if (!payload) continue;
+        const d = JSON.parse(payload);
+        if (d.error) throw new Error(d.error.message || JSON.stringify(d.error));
+        return d.result ?? null;
+      }
+      return null;
+    }
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}: ${body}`);
+    }
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+    return data.result ?? null;
   }
 
   async getTools() {
     if (this.toolsCache) return this.toolsCache;
     await this._ensureStarted();
-    const result = await this._request({ jsonrpc: '2.0', method: 'tools/list', id: this._nextId++, params: {} });
+    const result = await this._post({ jsonrpc: '2.0', method: 'tools/list', id: this._nextId++, params: {} });
     this.toolsCache = (result?.tools || []).map(t => ({
       type: 'function',
       function: { name: t.name, description: t.description,
@@ -3379,7 +3440,7 @@ class PlaywrightMCPClient {
 
   async callTool(name, args) {
     await this._ensureStarted();
-    const result = await this._request({ jsonrpc: '2.0', method: 'tools/call', id: this._nextId++,
+    const result = await this._post({ jsonrpc: '2.0', method: 'tools/call', id: this._nextId++,
       params: { name, arguments: args } });
     const content = result?.content || [];
     return content.map(c => {
@@ -3389,15 +3450,49 @@ class PlaywrightMCPClient {
     }).join('\n');
   }
 
+  async callToolRaw(name, args) {
+    await this._ensureStarted();
+    try {
+      const result = await this._post({ jsonrpc: '2.0', method: 'tools/call', id: this._nextId++,
+        params: { name, arguments: args } });
+      return result?.content || [];
+    } catch (e) {
+      // If the session expired, restart and retry once
+      if (e.message === 'MCP session expired') {
+        await this._ensureStarted();
+        const result = await this._post({ jsonrpc: '2.0', method: 'tools/call', id: this._nextId++,
+          params: { name, arguments: args } });
+        return result?.content || [];
+      }
+      throw e;
+    }
+  }
+
   stop() {
-    this._cleanup();
+    if (this.proc && !this.proc.killed) this.proc.kill('SIGTERM');
+    this.proc = null;
+    this._initialized = false;
+    this._port = null;
+    this._sessionId = null;
+    this.toolsCache = null;
   }
 }
 
 const playwrightMCP = new PlaywrightMCPClient();
 
+// Pre-warm Playwright MCP on startup so the first browser action is instant.
+// Fire-and-forget — failure is expected when @playwright/mcp is not installed.
+{
+  const _appDir = __dirname.includes('app.asar') ? __dirname.replace('app.asar', 'app.asar.unpacked') : __dirname;
+  const cliPath = path.join(_appDir, 'node_modules', '@playwright', 'mcp', 'cli.js');
+  if (fs.existsSync(cliPath)) {
+    playwrightMCP._ensureStarted().catch(e => console.log('[Playwright MCP] pre-warm failed:', e.message));
+  }
+}
+
 app.get('/api/playwright-mcp/status', async (req, res) => {
-  const cliPath = path.join(__dirname, 'node_modules', '@playwright', 'mcp', 'cli.js');
+  const _appDir = __dirname.includes('app.asar') ? __dirname.replace('app.asar', 'app.asar.unpacked') : __dirname;
+  const cliPath = path.join(_appDir, 'node_modules', '@playwright', 'mcp', 'cli.js');
   const installed = fs.existsSync(cliPath);
   const running = !!(playwrightMCP.proc && !playwrightMCP.proc.killed && playwrightMCP._initialized);
   const toolCount = playwrightMCP.toolsCache ? playwrightMCP.toolsCache.length : 0;
@@ -3407,6 +3502,18 @@ app.get('/api/playwright-mcp/status', async (req, res) => {
 app.post('/api/playwright-mcp/stop', (req, res) => {
   playwrightMCP.stop();
   res.json({ ok: true });
+});
+
+app.post('/api/playwright-mcp/call', async (req, res) => {
+  const { tool, args = {} } = req.body;
+  if (!tool) return res.status(400).json({ ok: false, error: 'tool required' });
+  try {
+    const content = await playwrightMCP.callToolRaw(tool, args);
+    res.json({ ok: true, content });
+  } catch (e) {
+    console.error('[Playwright MCP] tool call failed:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // ── Figma Dev Mode MCP Client ─────────────────────────────────────────────
@@ -7725,11 +7832,19 @@ app.get('/api/ext/events', (req, res) => {
     'X-Accel-Buffering': 'no',
   });
   res.write(':ok\n\n');
+
+  // Heartbeat every 15 s — prevents Electron from suspending the SSE connection
+  // when the renderer is backgrounded (ERR_NETWORK_IO_SUSPENDED).
+  const hb = setInterval(() => { try { res.write(': heartbeat\n\n'); } catch (_) {} }, 15000);
+
   function handler(msg) {
     try { res.write(`data: ${JSON.stringify(msg)}\n\n`); } catch (_) {}
   }
   process.on('ext:event', handler);
-  req.on('close', () => process.off('ext:event', handler));
+  req.on('close', () => {
+    clearInterval(hb);
+    process.off('ext:event', handler);
+  });
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────
