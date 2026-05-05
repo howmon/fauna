@@ -1344,8 +1344,8 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
     if (fullSystem) allMessages.push({ role: 'system', content: fullSystem });
 
     // ── Context trimming ──────────────────────────────────────────────────
-    // Target: ~60k chars of conversation history (well inside 128k context window)
-    const MAX_HISTORY_CHARS = 200000;
+    // Target: ~400k chars of conversation history
+    const MAX_HISTORY_CHARS = 400000;
     const MAX_MSG_CHARS     = 40000; // cap any single message (shell outputs can be huge)
     const TURN_LIMIT        = maxContextTurns >= 100 ? Infinity : maxContextTurns;
 
@@ -1367,7 +1367,9 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
       return { ...m, content };
     });
 
-    // 2. Always keep first msg + as many recent msgs as fit within token budget
+    // 2. Always keep first msg + as many recent msgs as fit within token budget.
+    // Walk backward from newest — skip (don't stop at) messages that would exceed
+    // the budget so that older smaller messages can still be included.
     const first = stripped[0];
     const rest  = stripped.slice(1);
     const recent = [];
@@ -1375,7 +1377,7 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
     for (let i = rest.length - 1; i >= 0; i--) {
       if (recent.length >= TURN_LIMIT) break;
       const len = typeof rest[i].content === 'string' ? rest[i].content.length : 500;
-      if (charCount + len > MAX_HISTORY_CHARS) break;
+      if (charCount + len > MAX_HISTORY_CHARS) continue; // skip oversized, keep going
       recent.unshift(rest[i]);
       charCount += len;
     }

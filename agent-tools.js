@@ -287,7 +287,7 @@ function getBuiltInToolDefinitions(permissions) {
       type: 'function',
       function: {
         name: 'agent_write_file',
-        description: 'Write content to a file. Access is restricted to: ' + permissions.fileWrite.join(', '),
+        description: 'Write content to a file (full overwrite). Use agent_str_replace for targeted edits. Access is restricted to: ' + permissions.fileWrite.join(', '),
         parameters: {
           type: 'object',
           properties: {
@@ -295,6 +295,22 @@ function getBuiltInToolDefinitions(permissions) {
             content: { type: 'string', description: 'Content to write' },
           },
           required: ['path', 'content'],
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'agent_str_replace',
+        description: 'Replace an exact string in a file with new content. Reads the file, substitutes old_str → new_str exactly once, writes back. Fails if old_str is not found or appears more than once. Prefer this over agent_write_file for targeted edits. Access is restricted to: ' + permissions.fileWrite.join(', '),
+        parameters: {
+          type: 'object',
+          properties: {
+            path:    { type: 'string', description: 'File path to edit' },
+            old_str: { type: 'string', description: 'Exact string to find and replace (must appear exactly once)' },
+            new_str: { type: 'string', description: 'Replacement string' },
+          },
+          required: ['path', 'old_str', 'new_str'],
         },
       },
     });
@@ -433,6 +449,31 @@ async function executeBuiltInTool(toolName, args, permissions, agentName, onOutp
         fs.mkdirSync(path.dirname(abs), { recursive: true });
         fs.writeFileSync(abs, args.content || '', 'utf8');
         return 'File written: ' + abs + ' (' + Buffer.byteLength(args.content || '') + ' bytes)';
+      } catch (e) {
+        return 'Error writing file: ' + e.message;
+      }
+    }
+
+    case 'agent_str_replace': {
+      const abs = path.resolve((args.path || '').replace(/^~/, HOME));
+      const checkR = checkFilePath(abs, 'read', permissions, agentName);
+      if (!checkR.allowed) return 'BLOCKED: ' + checkR.reason;
+      const checkW = checkFilePath(abs, 'write', permissions, agentName);
+      if (!checkW.allowed) return 'BLOCKED: ' + checkW.reason;
+      if (!args.old_str) return 'Error: old_str is required';
+      let original;
+      try {
+        original = fs.readFileSync(abs, 'utf8');
+      } catch (e) {
+        return 'Error reading file: ' + e.message;
+      }
+      const count = original.split(args.old_str).length - 1;
+      if (count === 0) return 'Error: old_str not found in ' + abs;
+      if (count > 1) return 'Error: old_str appears ' + count + ' times — must be unique. Add more context to make it unambiguous.';
+      const updated = original.replace(args.old_str, args.new_str);
+      try {
+        fs.writeFileSync(abs, updated, 'utf8');
+        return 'Replaced in ' + abs + ' — ' + Buffer.byteLength(updated) + ' bytes written';
       } catch (e) {
         return 'Error writing file: ' + e.message;
       }
