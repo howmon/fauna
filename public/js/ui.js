@@ -293,6 +293,7 @@ async function loadSettingsState() {
   checkAuth();
   loadProviderStatus();
   loadMobilePairQR();
+  loadEnterpriseAuthStatus();
 }async function checkAuth() {
   var pill  = document.getElementById('auth-pill');
   var badge = document.getElementById('auth-badge');
@@ -326,6 +327,67 @@ async function loadSettingsState() {
       pill.innerHTML = '<i class="ti ti-wifi-off"></i> Offline';
     }
     if (badge) { badge.className = 'auth-source-badge err'; badge.innerHTML = '<i class="ti ti-x"></i> Server offline'; }
+  }
+}
+
+async function loadEnterpriseAuthStatus() {
+  try {
+    const r = await fetch('/api/enterprise-auth/status');
+    const d = await r.json();
+    const section = document.getElementById('ms-account-section');
+    if (!section) return;
+    if (!d.available) { section.style.display = 'none'; return; }
+    section.style.display = '';
+    const badge = document.getElementById('ms-account-badge');
+    const nameEl = document.getElementById('ms-account-name');
+    const signInBtn = document.getElementById('ms-signin-btn');
+    const signOutBtn = document.getElementById('ms-signout-btn');
+    if (d.isAuthenticated) {
+      badge.className = 'auth-source-badge ok';
+      badge.innerHTML = '<i class="ti ti-check"></i> Signed in';
+      nameEl.textContent = d.account.name + ' · ' + d.account.username;
+      nameEl.style.display = '';
+      signInBtn.style.display = 'none';
+      signOutBtn.style.display = '';
+    } else {
+      badge.className = 'auth-source-badge';
+      badge.innerHTML = '<i class="ti ti-circle-dot"></i> Not signed in';
+      nameEl.style.display = 'none';
+      signInBtn.style.display = '';
+      signOutBtn.style.display = 'none';
+    }
+  } catch (e) {
+    // server not running or endpoint missing — hide section
+    const section = document.getElementById('ms-account-section');
+    if (section) section.style.display = 'none';
+  }
+}
+
+async function enterpriseSignIn() {
+  const btn = document.getElementById('ms-signin-btn');
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="ti ti-loader"></i> Signing in…';
+  try {
+    const r = await fetch('/api/enterprise-auth/sign-in', { method: 'POST' });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'Sign-in failed');
+    await loadEnterpriseAuthStatus();
+  } catch (e) {
+    btn.disabled = false;
+    btn.innerHTML = orig;
+    alert('Microsoft sign-in failed: ' + e.message);
+  }
+}
+
+async function enterpriseSignOut() {
+  const btn = document.getElementById('ms-signout-btn');
+  btn.disabled = true;
+  try {
+    await fetch('/api/enterprise-auth/sign-out', { method: 'POST' });
+    await loadEnterpriseAuthStatus();
+  } finally {
+    btn.disabled = false;
   }
 }
 
