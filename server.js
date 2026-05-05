@@ -4256,11 +4256,18 @@ app.get('/api/preview-file', (req, res) => {
   // Reject shell variables ($TMPF), regex patterns ([^"]*...), and relative paths.
   // path.resolve() would silently turn these into wrong absolute paths → misleading 404s.
   if (!path.isAbsolute(rawPath)) {
-    return res.status(400).send('preview-file requires an absolute path (got: ' + rawPath.slice(0, 120) + ')');
+    const msg = 'preview-file requires an absolute path — got: ' + rawPath.slice(0, 200);
+    return res.status(400).type('html').send(
+      `<!doctype html><html><body style="font:14px monospace;padding:24px;color:#c0392b">`
+      + `<b>400 — Bad path</b><br><br>${msg.replace(/</g,'&lt;')}</body></html>`
+    );
   }
   try {
     const abs = path.resolve(rawPath);
-    if (!fs.existsSync(abs)) return res.status(404).send('File not found: ' + abs);
+    if (!fs.existsSync(abs)) return res.status(404).type('html').send(
+      `<!doctype html><html><body style="font:14px monospace;padding:24px;color:#c0392b">`
+      + `<b>404 — File not found</b><br><br>${abs.replace(/</g,'&lt;')}</body></html>`
+    );
     const ext = path.extname(abs).toLowerCase();
     const mimeMap = {
       '.html': 'text/html', '.htm': 'text/html',
