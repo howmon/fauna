@@ -8362,7 +8362,8 @@ app.post('/api/permissions/request-accessibility', (req, res) => {
 // ── Browser Extension REST API ────────────────────────────────────────────
 
 // GET /api/ext/status — which extensions are connected?
-// Checks both the direct /ext WebSocket (port 3737) AND the FaunaMCP relay (port 3341).
+// Checks: 1) direct /ext WebSocket (port 3737), 2) relay /ext-status (port 3341, new endpoint),
+// 3) relay browser_status MCP tool (fallback for older deployed FaunaMCP that lacks /ext-status).
 app.get('/api/ext/status', async (_req, res) => {
   const browsers = [];
   // 1. Direct connections to the main server's /ext WebSocket
@@ -8371,21 +8372,41 @@ app.get('/api/ext/status', async (_req, res) => {
       browsers.push({ id, browser: info.browser, version: info.version, connectedAt: info.connectedAt, source: 'direct' });
     }
   }
-  // 2. Extension connected to the FaunaMCP browser-relay (port 3341)
+  // 2. Extension connected to the FaunaMCP browser-relay (port 3341 /ext-status — new endpoint)
+  let relayExtFound = false;
   try {
     const relayRes = await fetch('http://localhost:3341/ext-status', { signal: AbortSignal.timeout(800) });
     if (relayRes.ok) {
       const relayData = await relayRes.json();
       if (relayData.connected) {
         const browserName = relayData.browser || 'Browser';
-        // Avoid duplicates — only add if not already present from direct socket
         const alreadyDirect = browsers.some(b => b.browser === browserName);
         if (!alreadyDirect) {
           browsers.push({ id: 'relay-0', browser: browserName, version: null, connectedAt: Date.now(), source: 'relay' });
+          relayExtFound = true;
         }
       }
     }
-  } catch (_) { /* relay not running or unreachable — that's fine */ }
+  } catch (_) { /* relay not running or lacks /ext-status — fall through to MCP tool */ }
+  // 3. Fallback: call browser_status MCP tool on the relay — works with any FaunaMCP version.
+  //    Returns text like "✅ Extension connected (fallback available)" or "ℹ️ Extension not connected".
+  if (!relayExtFound && _faunaMCPClient) {
+    try {
+      const statusText = await Promise.race([
+        _faunaMCPClient.callTool('browser_status', {}),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1500)),
+      ]);
+      if (typeof statusText === 'string' && statusText.includes('Extension connected')) {
+        // Extract browser name from the text if present, otherwise default to 'Browser'
+        const m = statusText.match(/Edge|Chrome|Firefox|Safari/i);
+        const browserName = m ? m[0] : 'Browser';
+        const alreadyDirect = browsers.some(b => b.browser === browserName);
+        if (!alreadyDirect) {
+          browsers.push({ id: 'relay-mcp', browser: browserName, version: null, connectedAt: Date.now(), source: 'relay' });
+        }
+      }
+    } catch (_) { /* tool call failed — no relay extension info available */ }
+  }
   res.json({ connected: browsers.length > 0, browsers });
 });
 
