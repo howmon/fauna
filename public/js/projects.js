@@ -61,7 +61,7 @@ function renderProjectSidebarList() {
       '<span class="proj-sidebar-item-actions">' +
         (isActive
           ? '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();openProjectHub()" title="Open hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>' +
-            '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();clearActiveProject()" title="Deactivate"><i class="ti ti-x"></i></button>'
+            '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();clearActiveProject()" title="Leave project"><i class="ti ti-door-exit"></i></button>'
           : '') +
         '<button class="proj-sidebar-del-btn" onclick="event.stopPropagation();_confirmDeleteProjectFromList(\'' + _projEsc(p.id) + '\')" title="Delete project"><i class="ti ti-trash"></i></button>' +
       '</span>' +
@@ -142,7 +142,7 @@ function _renderAllProjectsPage() {
       '<div class="all-proj-card-actions">' +
         (isActive
           ? '<button class="proj-action-btn" onclick="openProjectHub();closeAllProjects()"><i class="ti ti-layout-sidebar-right-expand"></i> Open Hub</button>' +
-            '<button class="proj-icon-btn" onclick="clearActiveProject();closeAllProjects()" title="Deactivate"><i class="ti ti-x"></i></button>'
+            '<button class="proj-icon-btn" onclick="clearActiveProject();closeAllProjects()" title="Leave project"><i class="ti ti-door-exit"></i></button>'
           : '<button class="proj-action-btn" onclick="setActiveProject(\'' + _projEsc(p.id) + '\');closeAllProjects()"><i class="ti ti-player-play"></i> Activate</button>') +
         '<button class="proj-icon-btn" style="color:var(--fau-text-muted)" onclick="_confirmDeleteProjectFromList(\'' + _projEsc(p.id) + '\')" title="Delete project"><i class="ti ti-trash"></i></button>' +
       '</div>' +

@@ -68,6 +68,7 @@ async function refreshStoreAccount() {
 function openAgentStore() {
   storeState.open = true;
   storeState.view = 'browse';
+  storeState.browseTab = 'myagents';
   var panel = document.getElementById('agent-store-panel');
   if (panel) {
     panel.style.display = 'flex';
@@ -819,8 +820,9 @@ function renderStoreMyAgents() {
           '<div class="myagent-metric"><span class="myagent-metric-num">' + llast + '</span><span class="myagent-metric-lbl">last</span></div>' +
         '</div>' +
         '<div class="myagent-actions">' +
+          '<button class="builder-btn primary small" onclick="quickActivateAgent(\'' + escHtml(la.name) + '\');closeAgentStore()" title="Use agent"><i class="ti ti-player-play"></i> Use</button>' +
           '<button class="builder-btn secondary small" onclick="closeAgentStore();openAgentBuilder(\'' + escHtml(la.name) + '\')" title="Edit agent"><i class="ti ti-pencil"></i></button>' +
-          (!isPublished && storeState.account ? '<button class="builder-btn primary small" onclick="publishAgent(\'' + escHtml(la.name) + '\')" title="Publish to store"><i class="ti ti-upload"></i></button>' : '') +
+          (!isPublished && storeState.account ? '<button class="builder-btn secondary small" onclick="publishAgent(\'' + escHtml(la.name) + '\')" title="Publish to store"><i class="ti ti-upload"></i></button>' : '') +
         '</div>' +
       '</div>';
     }
@@ -854,6 +856,7 @@ function renderStoreMyAgents() {
           '<div class="myagent-metric"><span class="myagent-metric-num">' + slast + '</span><span class="myagent-metric-lbl">last</span></div>' +
         '</div>' +
         '<div class="myagent-actions">' +
+          '<button class="builder-btn primary small" onclick="quickActivateAgent(\'' + escHtml(sa.name) + '\');closeAgentStore()" title="Use agent"><i class="ti ti-player-play"></i> Use</button>' +
           (isMine ? '<button class="builder-btn secondary small" onclick="closeAgentStore();openAgentBuilder(\'' + escHtml(sa.name) + '\')" title="Edit agent"><i class="ti ti-pencil"></i></button>' : '') +
         '</div>' +
       '</div>';
