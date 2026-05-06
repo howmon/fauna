@@ -235,6 +235,8 @@ async function fetchTasks() {
 
 function renderTasks() {
   _renderList();
+  // Don't clobber a new unsaved compose form on background polls
+  if (_draft && !_draft.id) return;
   _renderDetail();
 }
 
@@ -574,7 +576,7 @@ function _renderComposeForm(panel) {
           '<button class="auto-compose-tpl-btn" onclick="event.stopPropagation();_acTogglePop(\'tpl\')">' +
             '<i class="ti ti-template"></i> Use template' +
           '</button>' +
-          '<div id="auto-pop-tpl" class="auto-cbar-pop auto-tpl-pop" style="display:none">' +
+          '<div id="auto-pop-tpl" class="auto-cbar-pop auto-tpl-pop pop-right" style="display:none">' +
             _acTemplatesHtml() +
           '</div>' +
         '</div>' +

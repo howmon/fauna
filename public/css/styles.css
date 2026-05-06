@@ -6170,7 +6170,7 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 
 /* ── Automations Panel — Two-Panel Layout ─────────────────────────────── */
 .tasks-panel-body { display: none; } /* no longer used — nav col + content col handle layout */
-#auto-detail-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; height: 100%; }
+#auto-detail-panel { flex: 1; display: flex; flex-direction: column; overflow: visible; min-width: 0; height: 100%; }
 
 /* Group labels */
 .auto-group-label { font-size: 10px; font-weight: 600; color: var(--fau-text-muted); text-transform: uppercase; letter-spacing: .5px; padding: 10px 12px 3px; }
@@ -6263,7 +6263,7 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 
 /* ── Compose Form (new automation) ──────────────────────────────────────── */
 .auto-compose { display: flex; flex-direction: column; height: 100%; overflow: visible; }
-.auto-compose-header { display: flex; align-items: center; gap: 8px; padding: 12px 14px 10px; border-bottom: 1px solid var(--fau-border); flex-shrink: 0; }
+.auto-compose-header { display: flex; align-items: center; gap: 8px; padding: 12px 14px 10px; border-bottom: 1px solid var(--fau-border); flex-shrink: 0; position: relative; z-index: 1; }
 .auto-compose-title { flex: 1; background: none; border: none; font-size: 15px; font-weight: 600; color: var(--fau-text); outline: none; font-family: var(--font); min-width: 0; }
 .auto-compose-title::placeholder { color: var(--fau-text-muted); font-weight: 400; }
 .auto-compose-header-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
@@ -6273,12 +6273,12 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 .auto-compose-prompt::placeholder { color: var(--fau-text-muted); }
 .auto-compose-kind-rows { border-top: 1px solid var(--fau-border); padding: 10px 14px 12px; flex-shrink: 0; overflow-y: auto; max-height: 280px; }
 .auto-compose-kind-header { margin-bottom: 10px; }
-.auto-compose-bar { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-top: 1px solid var(--fau-border); flex-shrink: 0; }
+.auto-compose-bar { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-top: 1px solid var(--fau-border); flex-shrink: 0; position: relative; z-index: 20; }
 .auto-compose-bar-left { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; overflow: hidden; }
 .auto-compose-bar-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 
 /* Compose bar chips */
-.auto-cbar-wrap { position: relative; }
+.auto-cbar-wrap { position: relative; z-index: 10; }
 .auto-cbar-chip { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; border-radius: 6px; padding: 4px 7px; font-size: 12px; font-family: var(--font); color: var(--fau-text-dim); cursor: pointer; white-space: nowrap; transition: background .1s, color .1s; }
 .auto-cbar-chip:hover { background: var(--fau-surface2); color: var(--fau-text); }
 .auto-cbar-chip.active { color: var(--accent); background: var(--accent-dim, rgba(99,102,241,.1)); }
@@ -6288,7 +6288,9 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 
 /* Compose bar popovers */
 .auto-cbar-pop { position: absolute; left: 0; z-index: 200; background: var(--fau-surface); border: 1px solid var(--fau-border); border-radius: 10px; box-shadow: 0 4px 24px rgba(0,0,0,.35); min-width: 200px; max-height: 300px; overflow-y: auto; top: calc(100% + 4px); }
-.auto-cbar-pop-up { bottom: calc(100% + 4px); top: auto; }
+.auto-cbar-pop.pop-right { left: auto; right: 0; }
+/* All compose-bar pops open UPWARD (bar is at bottom of panel) */
+.auto-compose-bar .auto-cbar-pop { top: auto !important; bottom: calc(100% + 6px) !important; }
 .auto-cbar-pop-pad { padding: 8px 10px; }
 .auto-cbar-section-lbl { font-size: 10px; font-weight: 600; color: var(--fau-text-muted); text-transform: uppercase; letter-spacing: .5px; padding: 8px 10px 2px; }
 .auto-cbar-list { padding: 4px; }
