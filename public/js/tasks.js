@@ -66,12 +66,14 @@ function _draftChange(key, val) {
     _draft[key] = val;
   }
   _draftDirty = true;
-  if (_draft.id && _draftAutoSaveEnabled) {
-    clearTimeout(_draftSaveTimer);
-    _draftSaveTimer = setTimeout(_autoSave, 600);
-    _setDraftStatus('saving');
+  if (_draft.id) {
+    if (_draftAutoSaveEnabled) {
+      clearTimeout(_draftSaveTimer);
+      _draftSaveTimer = setTimeout(_autoSave, 600);
+      _setDraftStatus('saving');
+    }
+    _renderDetailKindRows(); // edit mode only — keep kind rows in sync
   }
-  _renderDetailKindRows();
 }
 
 function _setDraftStatus(status) {
@@ -448,6 +450,7 @@ function _initSchedulePicker() {
     _draft.schedule.rrule = newRrule;
     _draft.schedule.type  = newRrule ? 'recurring' : 'manual';
     _draftDirty = true;
+    _acUpdateSchedChip();
     if (_draft.id && _draftAutoSaveEnabled) {
       clearTimeout(_draftSaveTimer);
       _draftSaveTimer = setTimeout(_autoSave, 600);
@@ -469,6 +472,7 @@ function _renderDetail() {
   }
 
   var isNew = !_draft.id;
+  if (isNew) { _renderComposeForm(panel); return; }
   var running = _draft.id && _tasksCache.find(function(t) { return t.id === _draft.id && t._running; });
 
   // Conv list for heartbeat picker
@@ -552,6 +556,430 @@ function _renderDetail() {
   _renderDetailKindRows();
 }
 
+// ── Compose Form (new automation) ─────────────────────────────────────────
+
+var _acOpenPop = null; // currently open compose bar popover key
+
+function _renderComposeForm(panel) {
+  panel.innerHTML =
+    '<div class="auto-compose" id="auto-compose-root">' +
+
+    // Header: title + template picker + close
+    '<div class="auto-compose-header">' +
+      '<input id="auto-detail-title" class="auto-compose-title" type="text" ' +
+        'placeholder="Automation title" value="' + escHtml(_draft.title) + '" ' +
+        'oninput="_draftChange(\'title\',this.value)">' +
+      '<div class="auto-compose-header-right">' +
+        '<div class="auto-cbar-wrap">' +
+          '<button class="auto-compose-tpl-btn" onclick="event.stopPropagation();_acTogglePop(\'tpl\')">' +
+            '<i class="ti ti-template"></i> Use template' +
+          '</button>' +
+          '<div id="auto-pop-tpl" class="auto-cbar-pop auto-tpl-pop" style="display:none">' +
+            _acTemplatesHtml() +
+          '</div>' +
+        '</div>' +
+        '<button class="auto-detail-close" onclick="closeAutomationDetail()" title="Close"><i class="ti ti-x"></i></button>' +
+      '</div>' +
+    '</div>' +
+
+    // Prompt textarea
+    '<textarea id="auto-detail-desc" class="auto-compose-prompt" ' +
+      'placeholder="Add prompt e.g. look for crashes in $sentry" ' +
+      'oninput="_draftChange(\'description\',this.value)">' + escHtml(_draft.description) + '</textarea>' +
+
+    // Expandable kind/schedule section (toggled by schedule chip)
+    '<div id="auto-kind-rows" class="auto-compose-kind-rows" style="display:none"></div>' +
+
+    // Bottom compose bar
+    '<div class="auto-compose-bar" onclick="event.stopPropagation()">' +
+      '<div class="auto-compose-bar-left">' +
+
+        // Agent chip
+        '<div class="auto-cbar-wrap">' +
+          '<button class="auto-cbar-chip" onclick="event.stopPropagation();_acTogglePop(\'agent\')">' +
+            '<i class="ti ti-sparkles"></i>' +
+            '<span id="auto-bar-agent-label">' + _acAgentLabel() + '</span>' +
+            '<i class="ti ti-chevron-down auto-cbar-chev"></i>' +
+          '</button>' +
+          '<div id="auto-pop-agent" class="auto-cbar-pop auto-cbar-pop-up" style="display:none"></div>' +
+        '</div>' +
+
+        '<div class="auto-cbar-sep"></div>' +
+
+        // Schedule chip — toggles inline kind rows
+        '<button class="auto-cbar-chip" id="auto-bar-sched-btn" onclick="event.stopPropagation();_acToggleSched()">' +
+          '<i class="ti ' + _acSchedIcon() + '" id="auto-bar-sched-icon"></i>' +
+          '<span id="auto-bar-sched-label">' + _acSchedLabel() + '</span>' +
+          '<i class="ti ti-chevron-down auto-cbar-chev"></i>' +
+        '</button>' +
+
+        '<div class="auto-cbar-sep"></div>' +
+
+        // Model chip
+        '<div class="auto-cbar-wrap">' +
+          '<button class="auto-cbar-chip" onclick="event.stopPropagation();_acTogglePop(\'model\')">' +
+            '<i class="ti ti-cpu"></i>' +
+            '<span id="auto-bar-model-label">' + _acModelLabel() + '</span>' +
+          '</button>' +
+          '<div id="auto-pop-model" class="auto-cbar-pop auto-cbar-pop-up" style="display:none"></div>' +
+        '</div>' +
+
+        // Permissions chip
+        '<div class="auto-cbar-wrap">' +
+          '<button class="auto-cbar-chip" id="auto-bar-perms-btn" onclick="event.stopPropagation();_acTogglePop(\'perms\')">' +
+            _acPermsIcons() +
+          '</button>' +
+          '<div id="auto-pop-perms" class="auto-cbar-pop auto-cbar-pop-up auto-cbar-pop-pad" style="display:none">' +
+            _acPermsContent() +
+          '</div>' +
+        '</div>' +
+
+      '</div>' +
+      '<div class="auto-compose-bar-right">' +
+        '<button class="auto-footer-btn" onclick="closeAutomationDetail()">Cancel</button>' +
+        '<button class="auto-footer-btn primary" onclick="submitAutomation()">' +
+          '<i class="ti ti-plus"></i> Create' +
+        '</button>' +
+      '</div>' +
+    '</div>' +
+    '</div>';
+
+  _selectedAgents = (_draft.agents || []).slice();
+
+  // Set up click-outside handler to close bar pops
+  setTimeout(function() {
+    var root = document.getElementById('auto-compose-root');
+    if (root) {
+      root.addEventListener('click', function(e) {
+        if (_acOpenPop === null) return;
+        if (!e.target.closest('.auto-cbar-wrap') && !e.target.closest('.auto-compose-tpl-btn')) {
+          _acCloseAllPops();
+        }
+      });
+    }
+    var titleIn = document.getElementById('auto-detail-title');
+    var descIn  = document.getElementById('auto-detail-desc');
+    if (titleIn && !titleIn.value) titleIn.focus();
+    else if (descIn) descIn.focus();
+  }, 0);
+}
+
+function _acAgentLabel() {
+  if (!_selectedAgents || !_selectedAgents.length) return 'Agent';
+  var agents = typeof getAllAgents === 'function' ? getAllAgents() : [];
+  if (_selectedAgents.length === 1) {
+    var name = _selectedAgents[0];
+    var a = agents.find(function(x) { return x.name === name; });
+    return a ? (a.displayName || a.name) : name;
+  }
+  return _selectedAgents.length + ' agents';
+}
+
+function _acSchedIcon() {
+  if (!_draft) return 'ti-clock';
+  if (_draft.kind === 'heartbeat') return 'ti-heart-rate-monitor';
+  if (_draft.kind === 'pipeline')  return 'ti-git-branch';
+  return 'ti-clock';
+}
+
+function _acSchedLabel() {
+  if (!_draft) return 'Schedule';
+  if (_draft.kind === 'heartbeat') return 'Heartbeat';
+  if (_draft.kind === 'pipeline')  return 'Pipeline';
+  var rrule = _draft.schedule && _draft.schedule.rrule;
+  if (!rrule) return 'No schedule';
+  if (typeof scheduleBuilder !== 'undefined' && typeof scheduleBuilder.humanize === 'function') {
+    try { return scheduleBuilder.humanize(rrule) || 'Schedule'; } catch (_) {}
+  }
+  if (rrule.indexOf('FREQ=DAILY') >= 0) {
+    var hour = rrule.match(/BYHOUR=(\d+)/);
+    if (hour) { var h = parseInt(hour[1]); return 'Daily at ' + (h % 12 || 12) + ' ' + (h < 12 ? 'AM' : 'PM'); }
+    return 'Daily';
+  }
+  if (rrule.indexOf('FREQ=WEEKLY') >= 0) return 'Weekly';
+  if (rrule.indexOf('FREQ=HOURLY') >= 0) return 'Hourly';
+  return 'Custom schedule';
+}
+
+function _acModelLabel() {
+  if (!_draft) return 'Default';
+  if (!_draft.model) {
+    var cur = (typeof allModels !== 'undefined' && typeof state !== 'undefined') ?
+      allModels.find(function(m) { return m.id === state.model; }) : null;
+    return cur ? cur.name : 'Default';
+  }
+  var m = typeof allModels !== 'undefined' ? allModels.find(function(x) { return x.id === _draft.model; }) : null;
+  return m ? m.name : _draft.model;
+}
+
+function _acPermsIcons() {
+  if (!_draft) return '<i class="ti ti-lock"></i>';
+  var icons = [];
+  if (_draft.permissions.shell !== false)  icons.push('<i class="ti ti-terminal-2" title="Shell"></i>');
+  if (_draft.permissions.browser)          icons.push('<i class="ti ti-world-www" title="Browser"></i>');
+  if (_draft.permissions.figma)            icons.push('<i class="ti ti-brand-figma" title="Figma"></i>');
+  if (!icons.length) return '<i class="ti ti-lock" title="No extra permissions"></i>';
+  return icons.join(' ');
+}
+
+function _acPermsContent() {
+  if (!_draft) return '';
+  return '<div class="auto-cbar-perms">' +
+    _acPermToggle('shell',   'ti-terminal-2', 'Shell',   _draft.permissions.shell !== false) +
+    _acPermToggle('browser', 'ti-world-www',  'Browser', !!_draft.permissions.browser) +
+    _acPermToggle('figma',   'ti-brand-figma','Figma',   !!_draft.permissions.figma) +
+  '</div>';
+}
+
+function _acPermToggle(key, icon, label, checked) {
+  return '<label class="auto-perm-toggle">' +
+    '<input type="checkbox"' + (checked ? ' checked' : '') + ' onchange="_acPermChange(\'' + key + '\',this.checked)">' +
+    '<i class="ti ' + icon + '"></i>' +
+    '<span>' + label + '</span>' +
+  '</label>';
+}
+
+function _acPermChange(key, checked) {
+  _draftChange('permissions.' + key, checked);
+  var btn = document.getElementById('auto-bar-perms-btn');
+  if (btn) btn.innerHTML = _acPermsIcons();
+}
+
+function _acTemplatesHtml() {
+  var templates = [
+    { title: 'Daily standup summary',  desc: 'Summarize recent activity and blockers',      rrule: 'FREQ=DAILY;BYHOUR=9;BYMINUTE=0',                    kind: 'cron'      },
+    { title: 'Weekly code review',     desc: 'Review open PRs and suggest improvements',    rrule: 'FREQ=WEEKLY;BYDAY=MO;BYHOUR=10;BYMINUTE=0',         kind: 'cron'      },
+    { title: 'Nightly test run',       desc: 'Run test suite and report failures',          rrule: 'FREQ=DAILY;BYHOUR=23;BYMINUTE=0',                   kind: 'cron'      },
+    { title: 'Watch thread',           desc: 'Monitor a conversation and continue when idle', rrule: '',                                                kind: 'heartbeat' },
+  ];
+  if (!window._autoSuggestionSeeds) window._autoSuggestionSeeds = {};
+  var html = '<div class="auto-tpl-list">';
+  templates.forEach(function(t, i) {
+    var seedId = 'ac-tpl-' + i;
+    window._autoSuggestionSeeds[seedId] = t;
+    html +=
+      '<div class="auto-tpl-item" onclick="_acApplyTemplate(\'' + seedId + '\')">' +
+        '<div class="auto-tpl-name">' + escHtml(t.title) + '</div>' +
+        '<div class="auto-tpl-desc">' + escHtml(t.desc) + '</div>' +
+      '</div>';
+  });
+  html += '</div>';
+  return html;
+}
+
+function _acApplyTemplate(seedId) {
+  var seed = window._autoSuggestionSeeds && window._autoSuggestionSeeds[seedId];
+  if (!seed || !_draft) return;
+  _acCloseAllPops();
+  if (seed.title) _draft.title = seed.title;
+  if (seed.desc)  _draft.description = seed.desc;
+  if (seed.rrule) { _draft.schedule.rrule = seed.rrule; _draft.schedule.type = 'recurring'; }
+  if (seed.kind)  _draft.kind = seed.kind;
+  _draftDirty = true;
+  var panel = document.getElementById('auto-detail-panel');
+  if (panel) _renderComposeForm(panel);
+}
+
+function _acTogglePop(which) {
+  var el = document.getElementById('auto-pop-' + which);
+  if (!el) return;
+  var isOpen = el.style.display !== 'none';
+  _acCloseAllPops();
+  if (!isOpen) {
+    el.style.display = 'block';
+    _acOpenPop = which;
+    if (which === 'agent') _acFillAgentPop(el);
+    if (which === 'model') _acFillModelPop(el);
+  }
+}
+
+function _acToggleSched() {
+  var kindRows = document.getElementById('auto-kind-rows');
+  if (!kindRows) return;
+  var isHidden = kindRows.style.display === 'none';
+  _acCloseAllPops();
+  if (isHidden) {
+    kindRows.style.display = '';
+    _renderDetailKindRows();
+    if (_draft && _draft.kind === 'cron') setTimeout(_initSchedulePicker, 50);
+  } else {
+    kindRows.style.display = 'none';
+  }
+}
+
+function _acCloseAllPops() {
+  ['agent', 'model', 'perms', 'tpl'].forEach(function(k) {
+    var el = document.getElementById('auto-pop-' + k);
+    if (el) el.style.display = 'none';
+  });
+  _acOpenPop = null;
+}
+
+function _acUpdateSchedChip() {
+  var icon = document.getElementById('auto-bar-sched-icon');
+  var lbl  = document.getElementById('auto-bar-sched-label');
+  if (icon) icon.className = 'ti ' + _acSchedIcon();
+  if (lbl)  lbl.textContent = _acSchedLabel();
+}
+
+function _acFillAgentPop(el) {
+  var agents = typeof getAllAgents === 'function' ? getAllAgents() : [];
+  el.innerHTML =
+    '<div class="auto-cbar-search-row">' +
+      '<input class="auto-cbar-search" placeholder="Search agents\u2026" ' +
+        'oninput="_acFilterAgents(this.value)" onclick="event.stopPropagation()">' +
+    '</div>' +
+    '<div class="auto-cbar-list" id="auto-agent-pop-list">' +
+      _acAgentListHtml(agents, '') +
+    '</div>';
+}
+
+function _acAgentListHtml(agents, q) {
+  var lq = (q || '').toLowerCase();
+  var filtered = agents.filter(function(a) {
+    if (_selectedAgents.indexOf(a.name) >= 0) return true; // always show selected
+    if (!lq) return true;
+    return (a.name.toLowerCase().indexOf(lq) >= 0) ||
+           ((a.displayName || '').toLowerCase().indexOf(lq) >= 0);
+  });
+  if (!filtered.length) return '<div class="auto-cbar-empty">No agents found</div>';
+  return filtered.slice(0, 15).map(function(a) {
+    var sel = _selectedAgents.indexOf(a.name) >= 0;
+    var icon = a.icon || 'ti-robot';
+    var display = a.displayName || a.name;
+    return '<div class="auto-cbar-item' + (sel ? ' selected' : '') + '" onclick="_acPickAgent(\'' + escHtml(a.name) + '\')">' +
+      '<i class="ti ' + escHtml(icon) + '"></i>' +
+      '<span>' + escHtml(display) + '</span>' +
+      (sel ? '<i class="ti ti-check" style="margin-left:auto"></i>' : '') +
+    '</div>';
+  }).join('');
+}
+
+function _acFilterAgents(q) {
+  var list = document.getElementById('auto-agent-pop-list');
+  if (!list) return;
+  var agents = typeof getAllAgents === 'function' ? getAllAgents() : [];
+  list.innerHTML = _acAgentListHtml(agents, q);
+}
+
+function _acPickAgent(name) {
+  var idx = _selectedAgents.indexOf(name);
+  if (idx >= 0) _selectedAgents.splice(idx, 1);
+  else _selectedAgents.push(name);
+  var lbl = document.getElementById('auto-bar-agent-label');
+  if (lbl) lbl.textContent = _acAgentLabel();
+  var list = document.getElementById('auto-agent-pop-list');
+  if (list) {
+    var agents = typeof getAllAgents === 'function' ? getAllAgents() : [];
+    list.innerHTML = _acAgentListHtml(agents, '');
+  }
+}
+
+function _acFillModelPop(el) {
+  var models = typeof allModels !== 'undefined' ? allModels : [];
+  if (!models.length) {
+    el.innerHTML = '<div class="auto-cbar-empty">Loading models\u2026</div>';
+    fetch('/api/models').then(function(r) { return r.json(); }).then(function(d) {
+      _acFillModelPopData(el, d.models || []);
+    }).catch(function() { el.innerHTML = '<div class="auto-cbar-empty">Failed to load</div>'; });
+    return;
+  }
+  _acFillModelPopData(el, models);
+}
+
+function _acFillModelPopData(el, models) {
+  var curModel = _draft && _draft.model;
+  var defSel = !curModel;
+  var html = '<div class="auto-cbar-section-lbl">Model</div><div class="auto-cbar-list">';
+  html += '<div class="auto-cbar-item' + (defSel ? ' selected' : '') + '" onclick="_acSetModel(null)">' +
+    '<i class="ti ti-sparkles"></i><span>Default</span>' +
+    (defSel ? '<i class="ti ti-check" style="margin-left:auto"></i>' : '') +
+  '</div>';
+  models.forEach(function(m) {
+    var sel = curModel === m.id;
+    html += '<div class="auto-cbar-item' + (sel ? ' selected' : '') + '" onclick="_acSetModel(\'' + escHtml(m.id) + '\')">' +
+      '<i class="ti ti-cpu"></i><span>' + escHtml(m.name || m.id) + '</span>' +
+      (sel ? '<i class="ti ti-check" style="margin-left:auto"></i>' : '') +
+    '</div>';
+  });
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function _acSetModel(id) {
+  if (!_draft) return;
+  _draft.model = id || null;
+  _draftDirty = true;
+  var lbl = document.getElementById('auto-bar-model-label');
+  if (lbl) lbl.textContent = _acModelLabel();
+  _acCloseAllPops();
+}
+
+// ── NL → Pipeline generation ────────────────────────────────────────────
+
+async function _acGeneratePipeline() {
+  if (!_draft) return;
+  var desc = (_draft.description || '').trim();
+  if (!desc) { showToast('Add a description first'); return; }
+
+  var btn  = document.getElementById('auto-gen-pipeline-btn');
+  var info = document.getElementById('auto-pipeline-info-lbl');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2 rotating"></i> Generating…'; }
+
+  // Build list of available agents for context
+  var agentList = (typeof getAllAgents === 'function') ? getAllAgents() : [];
+  var agentNames = agentList.slice(0, 20).map(function(a) { return (a.displayName || a.name) + ' (' + a.name + ')'; }).join(', ');
+
+  var systemPrompt = [
+    'You are a pipeline builder assistant. Convert the user\'s natural-language description into a JSON pipeline.',
+    'Available node types: trigger, prompt, condition, shell, browser, figma, agent, loop, webhook, delay, code.',
+    'Available agents: ' + (agentNames || 'none defined yet') + '.',
+    'Return ONLY valid JSON with this exact schema:',
+    '{"nodes":[{"id":"n1","type":"trigger","label":"Start","x":100,"y":200,"config":{}},',
+    ' {"id":"n2","type":"agent","label":"AgentDisplayName","x":320,"y":200,"config":{"agent":"agentInternalName"}}],',
+    '"edges":[{"id":"e1","from":"n1","fromPort":"out","to":"n2","toPort":"in"}]}',
+    'Layout nodes left-to-right, x increments of 240, y around 200. For condition nodes use ports "true"/"false". No markdown, no explanation — raw JSON only.',
+  ].join('\n');
+
+  try {
+    var r = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: desc },
+        ],
+        stream: false,
+      }),
+    });
+    var d = await r.json();
+    var raw = '';
+    if (d.choices && d.choices[0]) {
+      raw = d.choices[0].message ? d.choices[0].message.content : (d.choices[0].text || '');
+    } else if (d.content) {
+      raw = d.content;
+    }
+    // Extract JSON (may be wrapped in ```json ... ```)
+    var match = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (match) raw = match[1];
+    var pipeline = JSON.parse(raw.trim());
+    if (!pipeline.nodes || !Array.isArray(pipeline.nodes)) throw new Error('No nodes array');
+
+    _draft.pipeline = pipeline;
+    _draftDirty = true;
+
+    var count = pipeline.nodes.length;
+    if (info) info.textContent = count + ' node' + (count !== 1 ? 's' : '') + ' generated';
+    if (btn)  { btn.disabled = false; btn.innerHTML = '<i class="ti ti-wand"></i> Regenerate'; }
+    showToast('Pipeline generated — open the builder to review');
+  } catch (err) {
+    console.error('Pipeline generation failed', err);
+    if (btn)  { btn.disabled = false; btn.innerHTML = '<i class="ti ti-wand"></i> Generate'; }
+    showToast('Failed to generate pipeline. Try rephrasing the description.');
+  }
+}
+
 function _kindTab(kind, icon, label) {
   var active = (_draft && _draft.kind === kind) ? ' active' : '';
   return '<button class="auto-kind-tab' + active + '" onclick="_setDraftKind(\'' + kind + '\')">' +
@@ -570,8 +998,15 @@ function _setDraftKind(kind) {
   if (!_draft) return;
   _draft.kind = kind;
   _draftDirty = true;
-  _renderDetail();
-  if (kind === 'cron') setTimeout(_initSchedulePicker, 0);
+  if (!_draft.id) {
+    // Compose mode — update kind rows and chip label without full re-render
+    _renderDetailKindRows();
+    _acUpdateSchedChip();
+    if (kind === 'cron') setTimeout(_initSchedulePicker, 50);
+  } else {
+    _renderDetail();
+    if (kind === 'cron') setTimeout(_initSchedulePicker, 0);
+  }
 }
 
 function _renderDetailKindRows() {
@@ -579,6 +1014,17 @@ function _renderDetailKindRows() {
   if (!el || !_draft) return;
 
   var html = '';
+
+  // In compose mode (new automation) prepend kind selector tabs
+  if (!_draft.id) {
+    html += '<div class="auto-compose-kind-header">' +
+      '<div class="auto-kind-tabs">' +
+        _kindTab('cron',      'ti-clock',              'Cron') +
+        _kindTab('heartbeat', 'ti-heart-rate-monitor', 'Heartbeat') +
+        _kindTab('pipeline',  'ti-git-branch',         'Pipeline') +
+      '</div>' +
+    '</div>';
+  }
 
   if (_draft.kind === 'cron') {
     // Schedule picker
@@ -614,10 +1060,23 @@ function _renderDetailKindRows() {
 
   if (_draft.kind === 'pipeline') {
     var nodeCount = _draft.pipeline ? (_draft.pipeline.nodes || []).length : 0;
+    var hasDesc   = !!(_draft.description && _draft.description.trim());
     html += '<div class="auto-field-row">' +
       '<label class="auto-field-lbl">Pipeline</label>' +
       '<div class="auto-pipeline-row">' +
-        '<span class="auto-pipeline-info">' + (nodeCount ? nodeCount + ' node' + (nodeCount !== 1 ? 's' : '') : 'No nodes yet') + '</span>' +
+        '<span class="auto-pipeline-info" id="auto-pipeline-info-lbl">' +
+          (nodeCount ? nodeCount + ' node' + (nodeCount !== 1 ? 's' : '') : 'No nodes yet') +
+        '</span>';
+    // Compose mode: offer to generate from description
+    if (!_draft.id) {
+      html +=
+        '<button class="auto-footer-btn" id="auto-gen-pipeline-btn" ' +
+            'onclick="_acGeneratePipeline()" ' +
+            (hasDesc ? '' : 'disabled title="Add a description first"') + '>' +
+          '<i class="ti ti-wand"></i> Generate' +
+        '</button>';
+    }
+    html +=
         '<button class="auto-footer-btn" onclick="openPipelineBuilder(' + (_draft.id ? '\'' + _draft.id + '\'' : 'null') + ')">' +
           '<i class="ti ti-git-branch"></i> Open Builder' +
         '</button>' +
