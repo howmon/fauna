@@ -3,6 +3,14 @@
  *
  * Connects to the FaunaBrowserMCP relay at ws://localhost:3340
  * and routes MCP tool commands to the active tab's content script.
+ *
+ * Full sidebar experience:
+ *   - Side panel opens on toolbar click / Ctrl+Shift+M
+ *   - Context menus for Snapshot and Extract page
+ *   - Activity feed broadcast to sidebar
+ *   - Element picker relay
+ *   - Alarms keepalive
+ *   - Tab event listeners push events to sidebar
  */
 
 const RELAY_WS_URL       = 'ws://localhost:3340';
@@ -17,6 +25,7 @@ let reconnectTimer = null;
 let reconnectDelay = RECONNECT_BASE_MS;
 let pingTimer      = null;
 let connected      = false;
+let _activeTabId   = null;
 
 // ── WebSocket lifecycle ───────────────────────────────────────────────────
 
@@ -540,7 +549,7 @@ async function cmdSnapshotFull({} = {}, tab) {
   return { ok: true, base64: fb, mime: 'image/png', type: 'viewport-fallback' };
 }
 
-// ── Badge & status ────────────────────────────────────────────────────────
+// ── Badge ─────────────────────────────────────────────────────────────────
 
 function updateBadge(online) {
   chrome.action.setBadgeText({ text: online ? 'ON' : '' });
@@ -548,18 +557,165 @@ function updateBadge(online) {
   chrome.action.setBadgeTextColor({ color: '#ffffff' });
 }
 
+function setTabActive(tabId) {
+  if (_activeTabId && _activeTabId !== tabId) clearTabActive(_activeTabId);
+  _activeTabId = tabId;
+  if (tabId == null) return;
+  chrome.action.setBadgeText({ text: '▶', tabId });
+  chrome.action.setBadgeBackgroundColor({ color: '#0ea5e9', tabId });
+  chrome.action.setBadgeTextColor({ color: '#ffffff', tabId });
+}
+
+function clearTabActive(tabId) {
+  if (tabId == null) return;
+  chrome.action.setBadgeText({ text: connected ? 'ON' : '', tabId });
+  chrome.action.setBadgeBackgroundColor({ color: connected ? '#10b981' : '#6b7280', tabId });
+  if (_activeTabId === tabId) _activeTabId = null;
+}
+
 function broadcastStatus() {
   chrome.runtime.sendMessage({ type: 'fauna:status', connected }).catch(() => {});
 }
 
-// ── Extension message bus (popup → background) ────────────────────────────
+// ── Push events to sidebar ────────────────────────────────────────────────
+
+function pushEvent(eventType, data) {
+  chrome.runtime.sendMessage({ type: 'fauna:event', event: eventType, data }).catch(() => {});
+}
+
+// ── Notifications ─────────────────────────────────────────────────────────
+
+function showNotification(id, title, message, iconUrl) {
+  chrome.notifications.create('faunamcp-' + (id || Date.now()), {
+    type: 'basic',
+    iconUrl: iconUrl || chrome.runtime.getURL('icons/icon48.png'),
+    title: title || 'FaunaBrowserMCP',
+    message: message || '',
+    silent: false
+  });
+}
+
+// ── Tab event listeners ───────────────────────────────────────────────────
+
+chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab) return;
+  pushEvent('tab:activated', { tabId, url: tab.url, title: tab.title });
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'complete') {
+    pushEvent('page:loaded', { tabId, url: tab.url, title: tab.title });
+  }
+});
+
+// ── Sidebar: open on toolbar click ────────────────────────────────────────
+
+chrome.action.onClicked.addListener((tab) => {
+  chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
+});
+
+// ── Keyboard shortcut ─────────────────────────────────────────────────────
+
+chrome.commands.onCommand.addListener(async (command) => {
+  if (command === 'toggle-sidebar') {
+    const wins = await chrome.windows.getAll({ windowTypes: ['normal'] }).catch(() => []);
+    const win = wins.find(w => w.focused) || null;
+    if (win) chrome.sidePanel.open({ windowId: win.id }).catch(() => {});
+  }
+});
+
+// ── Context menus ─────────────────────────────────────────────────────────
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.create({
+    id: 'mcp-extract-page',
+    title: 'Extract page (MCP)',
+    contexts: ['page', 'frame']
+  });
+  chrome.contextMenus.create({
+    id: 'mcp-snapshot',
+    title: 'Snapshot page (MCP)',
+    contexts: ['page', 'frame']
+  });
+  connect();
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId === 'mcp-extract-page' && tab) {
+    const data = await cmdExtract({}, tab).catch(e => ({ ok: false, error: e.message }));
+    pushEvent('user:extract-page', { tabId: tab.id, url: tab.url, title: tab.title, ...data });
+  } else if (info.menuItemId === 'mcp-snapshot' && tab) {
+    const snap = await cmdSnapshot({}, tab).catch(e => ({ ok: false, error: e.message }));
+    pushEvent('user:snapshot', { tabId: tab.id, url: tab.url, title: tab.title, ...snap });
+  }
+});
+
+// ── Service worker keepalive (alarms) ─────────────────────────────────────
+
+chrome.alarms.create('mcp-keepalive', { periodInMinutes: 0.4 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'mcp-keepalive' && !connected) connect();
+});
+
+// ── Extension message bus (sidebar / popup → background) ─────────────────
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
-  if (msg.type === 'get-status') { reply({ connected }); return true; }
-  if (msg.type === 'connect')    { connect(); reply({ ok: true }); return true; }
+  if (msg.type === 'get-status') {
+    reply({ connected });
+    return true;
+  }
+  if (msg.type === 'connect') {
+    connect();
+    reply({ ok: true });
+    return true;
+  }
+  if (msg.type === 'snapshot-to-mcp') {
+    chrome.tabs.query({ active: true, currentWindow: true }, async ([tab]) => {
+      if (!tab) return;
+      const snap = await cmdSnapshot({}, tab).catch(e => ({ ok: false, error: e.message }));
+      pushEvent('user:snapshot', { tabId: tab.id, url: tab.url, title: tab.title, ...snap });
+    });
+    reply({ ok: true });
+    return true;
+  }
+  if (msg.type === 'extract-page') {
+    chrome.tabs.query({ active: true, currentWindow: true }, async ([tab]) => {
+      if (!tab) return;
+      const data = await cmdExtract({}, tab).catch(e => ({ ok: false, error: e.message }));
+      pushEvent('user:extract-page', { tabId: tab.id, url: tab.url, title: tab.title, ...data });
+    });
+    reply({ ok: true });
+    return true;
+  }
+  // Element picker — activate crosshair mode in the active tab
+  if (msg.type === 'pick-element') {
+    chrome.tabs.query({ active: true, currentWindow: true }, async ([tab]) => {
+      if (!tab) { reply({ ok: false, error: 'No active tab' }); return; }
+      try {
+        await chrome.tabs.sendMessage(tab.id, { action: 'picker:start' });
+      } catch (_) {
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+        await chrome.tabs.sendMessage(tab.id, { action: 'picker:start' });
+      }
+      reply({ ok: true });
+    });
+    return true;
+  }
+  // Picker result relayed from content script → forward to sidebar
+  if (msg.type === 'picker:selected') {
+    chrome.runtime.sendMessage({ type: 'fauna:picker-selected', data: msg.data }).catch(() => {});
+    reply({ ok: true });
+    return true;
+  }
+  if (msg.type === 'picker:cancelled') {
+    chrome.runtime.sendMessage({ type: 'fauna:picker-cancelled' }).catch(() => {});
+    reply({ ok: true });
+    return true;
+  }
+  return false;
 });
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────
 
-chrome.runtime.onInstalled.addListener(() => { connect(); });
 connect();
