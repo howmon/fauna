@@ -1874,6 +1874,8 @@ var _extConnectedBrowsers = []; // [{id, browser, version, connectedAt}]
     setInterval(_pollExtStatus, 5000);
     _connectExtEvents();
   });
+  // Expose for external callers (e.g. + menu open refresh)
+  window.refreshExtStatus = _pollExtStatus;
 }());
 
 // ── Extension tab menu (input toolbar) ────────────────────────────────────

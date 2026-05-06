@@ -1069,8 +1069,9 @@ button .ti, label .ti { pointer-events: none; }
   letter-spacing: .05em; padding: 1px 6px; border-radius: 20px;
   background: var(--fau-surface2); color: var(--fau-text-muted);
 }
-.tb-pm-badge-on   { background: rgba(46,164,79,.15); color: #2ea44f; }
-.tb-pm-badge-warn { background: rgba(251,191,36,.12); color: #f0b429; }
+.tb-pm-badge-on    { background: rgba(46,164,79,.15); color: #2ea44f; }
+.tb-pm-badge-warn  { background: rgba(251,191,36,.12); color: #f0b429; }
+.tb-pm-badge-ready { background: rgba(99,179,237,.12); color: #63b3ed; }
 /* Ext badge inside the plus menu */
 #tb-ext-item-wrap { position: relative; }
 #ext-toolbar-badge {

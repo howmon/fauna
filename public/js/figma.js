@@ -83,23 +83,12 @@ async function toggleFigmaMCP() {
   updateFigmaMCPBadge();
 
   if (state.figmaMCPEnabled) {
-    // Enable: show Figma section + start relay server if not already running
-    setFigmaSectionVisible(true);
-    if (!figmaStatus.mcpRunning) {
-      var r = await fetch('/api/figma/mcp-start', { method: 'POST' }).catch(() => null);
-      var d = r ? await r.json().catch(() => ({})) : {};
-      if (d && !d.ok && d.error) showToast('Relay: ' + d.error);
-      setTimeout(pollFigmaStatus, 600);
+    // Only start Fauna's own local relay if FaunaMCP relay is not already connected
+    if (!figmaStatus.relayConnected && !figmaStatus.mcpRunning) {
+      fetch('/api/figma/mcp-start', { method: 'POST' }).catch(() => null);
     }
-    checkFigmaMCPStatus();
     showToast('✦ Figma MCP enabled');
   } else {
-    // Disable: hide Figma section + stop relay server
-    setFigmaSectionVisible(false);
-    if (figmaStatus.mcpRunning) {
-      await fetch('/api/figma/mcp-stop', { method: 'POST' }).catch(() => null);
-      setTimeout(pollFigmaStatus, 600);
-    }
     showToast('○ Figma MCP disabled');
   }
 }

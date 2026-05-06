@@ -329,8 +329,13 @@ function _suggestedTasksHtml() {
     { title: 'Watch thread and continue', desc: 'Resume work when conversation is idle', rrule: '', kind: 'heartbeat' },
   ];
 
-  var rows = suggestions.map(function(s) {
-    var safe = JSON.stringify(s).replace(/'/g, "\\'");
+  // Assign stable IDs so we can retrieve seed data from a Map instead of
+  // inlining JSON in onclick attributes (which causes SyntaxErrors with
+  // any JSON that contains quotes, apostrophes, or special chars).
+  var _seeds = window._autoSuggestionSeeds = window._autoSuggestionSeeds || {};
+  var rows = suggestions.map(function(s, idx) {
+    var seedId = 'auto-seed-' + idx;
+    _seeds[seedId] = s;
     return '<div class="auto-suggest-row">' +
       '<div class="auto-suggest-info">' +
         '<div class="auto-suggest-name">' + escHtml(s.title) + '</div>' +
@@ -338,7 +343,7 @@ function _suggestedTasksHtml() {
       '</div>' +
       '<div class="auto-suggest-sub">' +
         '<span class="auto-suggest-sched">' + (s.rrule ? _humanizeRruleFE(s.rrule) : s.kind) + '</span>' +
-        '<button class="auto-suggest-btn" onclick="event.stopPropagation();openNewAutomation(' + JSON.stringify(safe) + ')">Create</button>' +
+        '<button class="auto-suggest-btn" data-seed-id="' + seedId + '" onclick="event.stopPropagation();openNewAutomation(window._autoSuggestionSeeds[this.dataset.seedId])">Create</button>' +
       '</div>' +
     '</div>';
   }).join('');

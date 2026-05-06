@@ -938,6 +938,9 @@ Examples:
     m.style.display = _tbPlusOpen ? '' : 'none';
     if (_tbPlusOpen) {
       _refreshTbFigmaItem();
+      // Refresh ext + figma status so badges show live state
+      if (typeof refreshExtStatus === 'function') refreshExtStatus();
+      if (typeof pollFigmaStatus === 'function') pollFigmaStatus().then(_refreshTbFigmaItem);
       setTimeout(function() {
         document.addEventListener('click', _closeTbPlusOutside, { once: true, capture: true });
       }, 0);
@@ -963,10 +966,13 @@ Examples:
   function _refreshTbFigmaItem() {
     var badge = document.getElementById('tb-figma-item-state');
     if (!badge) return;
-    var enabled   = typeof state !== 'undefined' && state.figmaMCPEnabled;
-    var connected = typeof figmaMCPStatus !== 'undefined' && figmaMCPStatus.connected;
-    if (enabled && connected) {
+    var enabled    = typeof state !== 'undefined' && state.figmaMCPEnabled;
+    // Use actual relay connection state, not the always-true figmaMCPStatus.connected
+    var relayReady = typeof figmaStatus !== 'undefined' && (figmaStatus.relayConnected || figmaStatus.mcpRunning);
+    if (enabled && relayReady) {
       badge.textContent = 'on'; badge.className = 'tb-pm-badge tb-pm-badge-on';
+    } else if (!enabled && relayReady) {
+      badge.textContent = 'ready'; badge.className = 'tb-pm-badge tb-pm-badge-ready';
     } else if (enabled) {
       badge.textContent = 'on'; badge.className = 'tb-pm-badge tb-pm-badge-warn';
     } else {
