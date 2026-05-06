@@ -172,6 +172,7 @@ function toggleTasksPanel() {
   tasksPanelOpen = !tasksPanelOpen;
   document.getElementById('tasks-panel').classList.toggle('open', tasksPanelOpen);
   if (tasksPanelOpen) {
+    _initAutoResizeHandle();
     fetchTasks();
     _startTaskPolling();
     _connectTaskSSE();
@@ -183,6 +184,39 @@ function toggleTasksPanel() {
     _draft = null;
     _renderDetail();
   }
+}
+
+var _autoResizeHandleInited = false;
+function _initAutoResizeHandle() {
+  if (_autoResizeHandleInited) return;
+  _autoResizeHandleInited = true;
+  var handle = document.getElementById('auto-resize-handle');
+  var navCol = document.getElementById('auto-nav-col');
+  var panel  = document.getElementById('tasks-panel');
+  if (!handle || !navCol || !panel) return;
+
+  var savedW = parseInt(localStorage.getItem('fauna-auto-nav-w'), 10);
+  if (savedW && savedW >= 160 && savedW <= 520) navCol.style.width = savedW + 'px';
+
+  var startX, startW;
+  handle.addEventListener('mousedown', function(e) {
+    e.preventDefault();
+    startX = e.clientX;
+    startW = navCol.offsetWidth;
+    panel.classList.add('resizing');
+    function onMove(e) {
+      var w = Math.min(Math.max(startW + e.clientX - startX, 160), 520);
+      navCol.style.width = w + 'px';
+    }
+    function onUp() {
+      panel.classList.remove('resizing');
+      localStorage.setItem('fauna-auto-nav-w', navCol.offsetWidth);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
 }
 
 // ── Fetch & Render ───────────────────────────────────────────────────────

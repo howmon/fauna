@@ -1468,7 +1468,7 @@ body { animation: none; }
 /* Left nav column — mirrors #settings-nav-col */
 #auto-nav-col {
   width: 220px;
-  min-width: 220px;
+  min-width: 160px;
   border-right: 1px solid var(--fau-border);
   display: flex;
   flex-direction: column;
@@ -1524,6 +1524,25 @@ body { animation: none; }
   transition: background .12s, color .12s;
 }
 #auto-refresh-btn:hover { background: var(--fau-surface2); color: var(--fau-text); }
+
+/* Resize handle between nav and content columns */
+#auto-resize-handle {
+  width: 5px; flex-shrink: 0; cursor: col-resize; z-index: 10;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent;
+  transition: background .15s;
+}
+#auto-resize-handle::after {
+  content: ''; width: 3px; height: 32px;
+  background: var(--fau-border); border-radius: 2px;
+  opacity: 0; transition: opacity .15s, background .15s;
+}
+#auto-resize-handle:hover::after,
+#tasks-panel.resizing #auto-resize-handle::after {
+  opacity: 1; background: var(--accent);
+}
+#tasks-panel.resizing { cursor: col-resize; user-select: none; }
+#tasks-panel.resizing #auto-content-col { pointer-events: none; }
 
 /* Right content column */
 #auto-content-col {
@@ -6187,9 +6206,9 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 .auto-row-btn.del:hover { color: var(--error, #ef4444); }
 
 /* Empty / suggestions */
-.auto-empty { padding: 20px 12px 8px; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; }
+.auto-empty { padding: 20px 12px 8px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; text-align: left; }
 .auto-empty-title { font-size: 12.5px; font-weight: 500; color: var(--fau-text-dim); }
-.auto-empty-sub   { font-size: 11px; color: var(--fau-text-muted); max-width: 200px; line-height: 1.4; }
+.auto-empty-sub   { font-size: 11px; color: var(--fau-text-muted); line-height: 1.4; }
 .auto-suggestions { width: 100%; margin-top: 8px; border-top: 1px solid var(--fau-border); }
 .auto-suggest-row { display: flex; flex-direction: column; gap: 4px; padding: 9px 12px; border-top: 1px solid var(--fau-border); cursor: pointer; transition: background .1s; }
 .auto-suggest-row:hover { background: var(--fau-surface2); }
