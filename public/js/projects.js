@@ -216,6 +216,21 @@ function updateProjectIndicator() {
     nameEl.textContent = '';
   }
   _updateMoveToProjectBtn();
+
+  // Sidebar active project strip
+  var strip = document.getElementById('sidebar-active-project');
+  var stripName = document.getElementById('sidebar-active-project-name');
+  var stripDot = document.getElementById('sidebar-active-project-dot');
+  if (!strip) return;
+  if (proj) {
+    if (stripName) stripName.textContent = proj.name;
+    if (stripDot) {
+      stripDot.className = 'proj-dot proj-color-' + (proj.color || 'blue');
+    }
+    strip.style.display = '';
+  } else {
+    strip.style.display = 'none';
+  }
 }
 
 async function setActiveProject(id) {

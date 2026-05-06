@@ -28,55 +28,83 @@
       <span id="sidebar-logo"><img src="img/logo.svg" alt="" width="20" height="20"></span>
       <span id="sidebar-title">Fauna</span>
     </div>
+
+    <!-- New chat + Search -->
+    <div id="sidebar-actions">
+      <button id="new-chat-main-btn" onclick="newConversation()">
+        <i class="ti ti-edit"></i>
+        New chat
+      </button>
+      <button id="sidebar-search-btn" onclick="openAllConversations()">
+        <i class="ti ti-search"></i>
+        Search
+      </button>
+    </div>
+
+    <!-- Primary nav -->
+    <nav id="sidebar-nav">
+      <button class="sidebar-nav-item" onclick="openAgentStore()">
+        <i class="ti ti-puzzle"></i><span>Plugins</span>
+      </button>
+      <button class="sidebar-nav-item" onclick="toggleTasksPanel()">
+        <i class="ti ti-bolt"></i><span>Automations</span>
+      </button>
+      <button class="sidebar-nav-item" onclick="openAllProjects()">
+        <i class="ti ti-folder"></i><span>Project</span>
+      </button>
+    </nav>
+
+    <!-- Active project strip -->
+    <div id="sidebar-active-project" style="display:none">
+      <span id="sidebar-active-project-dot" class="proj-dot"></span>
+      <span id="sidebar-active-project-name"></span>
+      <button id="sidebar-active-project-hub" onclick="openProjectHub()" title="Open project hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>
+      <button id="sidebar-active-project-clear" onclick="clearActiveProject()" title="Deactivate"><i class="ti ti-x"></i></button>
+    </div>
+
     <!-- ── Scrollable middle area ──────────────────────────────── -->
     <div id="sidebar-scroll">
 
-    <!-- ── Projects section ────────────────────────────────────── -->
-    <div id="projects-section">
+    <!-- Hidden JS-compat stubs (projects + agents) -->
+    <div id="projects-section" style="display:none">
       <div id="projects-section-header">
         <i class="ti ti-folders"></i>
         <span>Projects</span>
         <span style="flex:1"></span>
         <button class="section-plus-btn" onclick="openCreateProjectDialog()" title="New project"><i class="ti ti-plus"></i></button>
-        <i class="ti ti-chevron-down section-chevron" onclick="toggleSidebarSection('projects')"></i>
       </div>
       <div id="projects-section-body">
         <div id="proj-sidebar-list"></div>
         <div id="proj-show-all" class="sidebar-show-all" onclick="openAllProjects()" style="display:none">All projects</div>
       </div>
     </div>
-
-    <!-- ── Conversations section ───────────────────────────────── -->
-    <div id="conv-section">
-      <div id="conv-section-header">
-        <i class="ti ti-messages"></i>
-        <span>Conversations</span>
+    <div id="agents-section" style="display:none">
+      <div id="agents-section-header">
+        <i class="ti ti-robot"></i>
+        <span>Agents</span>
+        <span id="agent-update-badge" class="agent-update-count" style="display:none"></span>
         <span style="flex:1"></span>
-        <button class="section-plus-btn" onclick="newConversation()" title="New conversation"><i class="ti ti-plus"></i></button>
-        <i class="ti ti-chevron-down section-chevron" onclick="toggleSidebarSection('conv')"></i>
+        <button id="agents-plus-btn" class="section-plus-btn" onclick="event.stopPropagation();openAgentActionsPage()"><i class="ti ti-plus"></i></button>
       </div>
-      <div id="conv-section-body">
-        <div id="conv-list"></div>
-        <div id="conv-show-all" class="sidebar-show-all" onclick="openAllConversations()" style="display:none">All conversations</div>
+      <div id="agents-section-body">
+        <div id="agent-list"></div>
+        <div id="agents-show-all" class="sidebar-show-all" onclick="openAllAgents()" style="display:none">All agents</div>
+        <div id="agent-store-btn" onclick="openAgentStore()">
+          <i class="ti ti-package"></i> <span>Agent Store</span>
+        </div>
       </div>
     </div>
 
-    <!-- ── Agents section ───────────────────────────────────────── -->
-    <div id="agents-section">
-      <div id="agents-section-header">
-        <i class="ti ti-robot" onclick="toggleAgentsAccordion()" style="cursor:pointer"></i>
-        <span onclick="toggleAgentsAccordion()" style="cursor:pointer">Agents</span>
-        <span id="agent-update-badge" class="agent-update-count" style="display:none"></span>
+    <!-- ── Chats ────────────────────────────────────────────────── -->
+    <div id="conv-section">
+      <div id="conv-section-header">
+        <span>Chats</span>
         <span style="flex:1"></span>
-        <button id="agents-plus-btn" class="section-plus-btn" onclick="event.stopPropagation();openAgentActionsPage()" title="Create or import agent"><i class="ti ti-plus"></i></button>
-        <i class="ti ti-chevron-right section-chevron" onclick="toggleSidebarSection('agents')"></i>
+        <button class="section-plus-btn" onclick="newConversation()" title="New chat"><i class="ti ti-edit" style="font-size:12px"></i></button>
       </div>
-      <div id="agents-section-body" style="display:none">
-        <div id="agent-list"></div>
-        <div id="agents-show-all" class="sidebar-show-all" onclick="openAllAgents()" style="display:none">All agents</div>
-        <div id="agent-store-btn" onclick="openAgentStore()" title="Browse the Agent Store">
-          <i class="ti ti-package"></i> <span>Agent Store</span>
-        </div>
+      <div id="conv-section-body">
+        <div id="conv-list"></div>
+        <div id="conv-show-all" class="sidebar-show-all" onclick="openAllConversations()" style="display:none">All chats</div>
       </div>
     </div>
 
@@ -84,8 +112,8 @@
 
     <!-- ── Fixed bottom area ────────────────────────────────────── -->
     <div id="sidebar-bottom">
-      <!-- ── Figma status section ───────────────────────────────── -->
-      <div id="figma-section">
+      <!-- Figma section: kept for JS compat, hidden in sidebar -->
+      <div id="figma-section" style="display:none">
         <div id="figma-section-header" onclick="toggleFigmaMCP()" title="Click to enable/disable Figma MCP">
           <span id="figma-dot" class="figma-dot off"></span>
           <span id="figma-section-label">Figma MCP</span>
@@ -115,7 +143,8 @@
       </div>
 
       <div id="sidebar-footer">
-        <div id="sidebar-footer-icons">
+        <!-- Original icon buttons kept hidden for JS compat -->
+        <div id="sidebar-footer-icons" style="display:none">
           <button class="footer-icon-btn" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle light/dark mode">
             <i class="ti ti-moon"></i>
           </button>
@@ -132,7 +161,7 @@
             <span id="auth-pill" class="dim">…</span>
           </button>
         </div>
-        <!-- More overflow menu -->
+        <!-- More overflow menu kept for JS compat -->
         <div id="more-menu" class="more-menu" style="display:none">
           <button class="more-menu-item" onclick="openOnboarding();hideMoreMenu()"><i class="ti ti-shield-lock"></i> Permissions &amp; Setup</button>
           <button class="more-menu-item" onclick="toggleAgentRules();hideMoreMenu()"><i class="ti ti-robot"></i> Agent Rules</button>
@@ -142,6 +171,11 @@
           <button class="more-menu-item" onclick="toggleFigmaSetup();hideMoreMenu()"><i class="ti ti-plug"></i> Plugins &amp; Extensions</button>
           <button class="more-menu-item" onclick="toggleHelp();hideMoreMenu()"><i class="ti ti-help-circle"></i> Help &amp; Reference</button>
         </div>
+        <!-- Clean Settings button -->
+        <button id="settings-nav-btn" onclick="toggleSettings()">
+          <i class="ti ti-settings"></i>
+          <span>Settings</span>
+        </button>
       </div>
     </div><!-- /sidebar-bottom -->
     <div id="sidebar-resize-handle" title="Drag to resize"></div>
@@ -435,211 +469,314 @@ Examples:
 
 <!-- ── Settings panel ─────────────────────────────────────────────── -->
 <div id="settings-panel">
-  <div id="sys-panel-header" style="display:flex;align-items:center;gap:8px;padding:14px 16px;border-bottom:1px solid var(--fau-border)">
-    <span><i class="ti ti-settings"></i></span>
-    <span style="font-size:13px;font-weight:600;flex:1">Settings</span>
-    <button id="sys-panel-close" onclick="toggleSettings()"><i class="ti ti-x"></i></button>
+  <div id="settings-nav-col">
+    <button id="settings-back-btn" onclick="toggleSettings()">
+      <i class="ti ti-arrow-left"></i>
+      Back to app
+    </button>
+    <div class="settings-nav-group">
+      <button class="settings-nav-item active" data-page="general" onclick="switchSettingsPage('general',this)">
+        <i class="ti ti-adjustments"></i> General
+      </button>
+      <button class="settings-nav-item" data-page="appearance" onclick="switchSettingsPage('appearance',this)">
+        <i class="ti ti-palette"></i> Appearance
+      </button>
+      <button class="settings-nav-item" data-page="auth" onclick="switchSettingsPage('auth',this)">
+        <i class="ti ti-key"></i> Authentication
+      </button>
+      <button class="settings-nav-item" data-page="voice" onclick="switchSettingsPage('voice',this)">
+        <i class="ti ti-microphone"></i> Voice
+      </button>
+      <button class="settings-nav-item" data-page="mcp" onclick="switchSettingsPage('mcp',this)">
+        <i class="ti ti-plug"></i> MCP Servers
+      </button>
+      <button class="settings-nav-item" data-page="browser" onclick="switchSettingsPage('browser',this)">
+        <i class="ti ti-world-www"></i> Browser use
+      </button>
+      <button class="settings-nav-item" data-page="mobile" onclick="switchSettingsPage('mobile',this)">
+        <i class="ti ti-device-mobile"></i> Mobile
+      </button>
+      <button class="settings-nav-item" data-page="about" onclick="switchSettingsPage('about',this)">
+        <i class="ti ti-info-circle"></i> About
+      </button>
+    </div>
   </div>
 
+  <div id="settings-content-col">
   <div class="settings-scroll">
 
-  <!-- Model Settings -->
-  <div class="settings-section">
-    <div class="settings-section-title">Model Settings</div>
+  <!-- ── General ─────────────────────────────────────────────── -->
+  <div class="settings-page active" data-page="general">
+    <div class="settings-page-title">General</div>
 
-    <label class="settings-label">
-      <span>Thinking Budget</span>
-      <select id="thinking-budget-select" class="settings-input" onchange="setThinkingBudget(this.value)" style="cursor:pointer">
-        <option value="off">Off — no extended thinking</option>
-        <option value="low">Low — quick reasoning (~1K tokens)</option>
-        <option value="medium">Medium — balanced (~5K tokens)</option>
-        <option value="high" selected>High — deep analysis (~10K tokens)</option>
-        <option value="max">Max — exhaustive (~32K tokens)</option>
-      </select>
-      <span style="font-size:11px;color:var(--fau-text-muted)" id="thinking-budget-hint">Extended thinking for complex problems requiring deep analysis.</span>
-    </label>
+    <div class="settings-section">
+      <div class="settings-section-title">Model Settings</div>
+      <label class="settings-label">
+        <span>Thinking Budget</span>
+        <select id="thinking-budget-select" class="settings-input" onchange="setThinkingBudget(this.value)" style="cursor:pointer">
+          <option value="off">Off — no extended thinking</option>
+          <option value="low">Low — quick reasoning (~1K tokens)</option>
+          <option value="medium">Medium — balanced (~5K tokens)</option>
+          <option value="high" selected>High — deep analysis (~10K tokens)</option>
+          <option value="max">Max — exhaustive (~32K tokens)</option>
+        </select>
+        <span style="font-size:11px;color:var(--fau-text-muted)" id="thinking-budget-hint">Extended thinking for complex problems requiring deep analysis.</span>
+      </label>
+      <label class="settings-label" style="margin-top:10px">
+        <span>Maximum context turns</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <input type="range" id="max-turns-range" min="4" max="100" step="2" value="20"
+            oninput="setMaxTurns(+this.value)"
+            style="flex:1;accent-color:var(--accent);cursor:pointer">
+          <span id="max-turns-label" style="font-size:12px;color:var(--fau-text);min-width:32px;text-align:right">20</span>
+        </div>
+        <span style="font-size:11px;color:var(--fau-text-muted)">How many past messages to include in each request. Higher = more context, more cost.</span>
+      </label>
+    </div>
 
-    <label class="settings-label" style="margin-top:10px">
-      <span>Maximum context turns</span>
-      <div style="display:flex;align-items:center;gap:8px">
-        <input type="range" id="max-turns-range" min="4" max="100" step="2" value="20"
-          oninput="setMaxTurns(+this.value)"
-          style="flex:1;accent-color:var(--accent);cursor:pointer">
-        <span id="max-turns-label" style="font-size:12px;color:var(--fau-text);min-width:32px;text-align:right">20</span>
+    <div class="settings-section">
+      <div class="settings-section-title">Agent Behaviour</div>
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none">
+        <input type="checkbox" id="autorun-toggle"
+          onchange="setAutoRunShell(this.checked)"
+          style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+        <span style="font-size:12.5px;color:var(--fau-text)">Auto-run shell commands</span>
+      </label>
+      <div class="settings-hint" style="margin-top:4px">
+        When enabled, <code>shell-exec</code> blocks in AI responses execute automatically.
+        Results appear inline; click <strong>Feed to AI</strong> to let the AI continue based on output.
       </div>
-      <span style="font-size:11px;color:var(--fau-text-muted)">How many past messages to include in each request. Higher = more context, more cost.</span>
-    </label>
-  </div>
-
-  <!-- Agent Behaviour -->
-  <div class="settings-section">
-    <div class="settings-section-title">Agent Behaviour</div>
-    <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none">
-      <input type="checkbox" id="autorun-toggle"
-        onchange="setAutoRunShell(this.checked)"
-        style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
-      <span style="font-size:12.5px;color:var(--fau-text)">Auto-run shell commands</span>
-    </label>
-    <div class="settings-hint" style="margin-top:4px">
-      When enabled, <code>shell-exec</code> blocks in AI responses execute automatically.
-      Results appear inline; click <strong>Feed to AI</strong> to let the AI continue based on output.
     </div>
   </div>
 
-  <!-- Authentication (tabbed) -->
-  <div class="settings-section">
-    <div class="settings-section-title">Authentication</div>
-    <div class="auth-tabs">
-      <button class="auth-tab active" onclick="switchAuthTab('cli')">GitHub CLI</button>
-      <button class="auth-tab" onclick="switchAuthTab('keys')">API Keys</button>
+  <!-- ── Appearance ─────────────────────────────────────────────── -->
+  <div class="settings-page" data-page="appearance">
+    <div class="settings-page-title">Appearance</div>
+    <div class="settings-section">
+      <div class="settings-section-title">Theme</div>
+      <div style="display:flex;gap:10px">
+        <button class="settings-row-btn" style="flex:1" onclick="applyTheme('dark')"><i class="ti ti-moon"></i> Dark</button>
+        <button class="settings-row-btn" style="flex:1" onclick="applyTheme('light')"><i class="ti ti-sun"></i> Light</button>
+        <button class="settings-row-btn" style="flex:1" onclick="toggleTheme()"><i class="ti ti-rotate"></i> Toggle</button>
+      </div>
+      <div class="settings-hint">Switch between dark and light mode.</div>
+    </div>
+  </div>
+
+  <!-- ── Authentication ─────────────────────────────────────────── -->
+  <div class="settings-page" data-page="auth">
+    <div class="settings-page-title">Authentication</div>
+
+    <div class="settings-section">
+      <div class="auth-tabs">
+        <button class="auth-tab active" onclick="switchAuthTab('cli')">GitHub CLI</button>
+        <button class="auth-tab" onclick="switchAuthTab('keys')">API Keys</button>
+      </div>
+
+      <div id="auth-tab-cli" class="auth-tab-pane">
+        <div>
+          <div style="font-size:12px;color:var(--fau-text-dim);margin-bottom:8px;">Current status:</div>
+          <span id="auth-badge" class="auth-source-badge"><i class="ti ti-circle-dot"></i> Checking…</span>
+        </div>
+        <div class="settings-label">
+          <span>GitHub Personal Access Token</span>
+          Enter a PAT to override the auto-detected token. Required if you're not logged in via the <code style="font-size:11px;background:var(--fau-surface3);padding:1px 4px;border-radius:3px">gh</code> CLI.
+        </div>
+        <div class="settings-input-row">
+          <input id="pat-input" class="settings-input" type="password" placeholder="ghp_… or github_pat_…" autocomplete="off" spellcheck="false">
+          <button class="settings-row-btn" onclick="togglePatVisibility()" id="pat-toggle" title="Show/hide token"><i class="ti ti-eye"></i></button>
+        </div>
+        <div id="pat-status" class="settings-status"></div>
+        <div style="display:flex;gap:6px">
+          <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="savePat()">Save Token</button>
+          <button class="settings-row-btn danger" onclick="clearPat()" id="clear-pat-btn" style="display:none">Remove</button>
+        </div>
+        <div class="settings-hint">
+          Generate a PAT at <a href="#" onclick="openGithubTokenPage(); return false">github.com/settings/tokens</a> with the <strong>copilot</strong> scope.
+        </div>
+      </div>
+
+      <div id="auth-tab-keys" class="auth-tab-pane" style="display:none">
+        <div class="settings-hint" style="margin-bottom:12px">
+          Bring your own API keys to use models directly — no GitHub Copilot subscription needed.
+        </div>
+        <div class="settings-label"><span>OpenAI</span></div>
+        <div class="settings-input-row">
+          <input id="provider-openai-input" class="settings-input" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false"
+            onkeydown="if(event.key==='Enter')saveProviderKey('openai')">
+          <button class="settings-row-btn" onclick="toggleProviderKeyVisibility('openai')" title="Show/hide"><i class="ti ti-eye"></i></button>
+        </div>
+        <div id="provider-openai-status" class="settings-status"></div>
+        <div style="display:flex;gap:6px">
+          <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('openai')">Save</button>
+          <button class="settings-row-btn danger" onclick="clearProviderKey('openai')" id="provider-openai-clear" style="display:none">Remove</button>
+        </div>
+
+        <div class="settings-label" style="margin-top:12px"><span>Anthropic</span></div>
+        <div class="settings-input-row">
+          <input id="provider-anthropic-input" class="settings-input" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"
+            onkeydown="if(event.key==='Enter')saveProviderKey('anthropic')">
+          <button class="settings-row-btn" onclick="toggleProviderKeyVisibility('anthropic')" title="Show/hide"><i class="ti ti-eye"></i></button>
+        </div>
+        <div id="provider-anthropic-status" class="settings-status"></div>
+        <div style="display:flex;gap:6px">
+          <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('anthropic')">Save</button>
+          <button class="settings-row-btn danger" onclick="clearProviderKey('anthropic')" id="provider-anthropic-clear" style="display:none">Remove</button>
+        </div>
+
+        <div class="settings-label" style="margin-top:12px"><span>Google AI</span></div>
+        <div class="settings-input-row">
+          <input id="provider-google-input" class="settings-input" type="password" placeholder="AIza…" autocomplete="off" spellcheck="false"
+            onkeydown="if(event.key==='Enter')saveProviderKey('google')">
+          <button class="settings-row-btn" onclick="toggleProviderKeyVisibility('google')" title="Show/hide"><i class="ti ti-eye"></i></button>
+        </div>
+        <div id="provider-google-status" class="settings-status"></div>
+        <div style="display:flex;gap:6px">
+          <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('google')">Save</button>
+          <button class="settings-row-btn danger" onclick="clearProviderKey('google')" id="provider-google-clear" style="display:none">Remove</button>
+        </div>
+      </div>
     </div>
 
-    <!-- Tab: GitHub CLI -->
-    <div id="auth-tab-cli" class="auth-tab-pane">
-      <div>
-        <div style="font-size:12px;color:var(--fau-text-dim);margin-bottom:8px;">Current status:</div>
-        <span id="auth-badge" class="auth-source-badge"><i class="ti ti-circle-dot"></i> Checking…</span>
+    <div class="settings-section" id="ms-account-section" style="display:none">
+      <div class="settings-section-title">Account</div>
+      <div style="margin-bottom:10px">
+        <span id="ms-account-badge" class="auth-source-badge"><i class="ti ti-circle-dot"></i> Checking…</span>
       </div>
-
-      <div class="settings-label">
-        <span>GitHub Personal Access Token</span>
-        Enter a PAT to override the auto-detected token. Required if you're not logged in via the <code style="font-size:11px;background:var(--fau-surface3);padding:1px 4px;border-radius:3px">gh</code> CLI.
-      </div>
-      <div class="settings-input-row">
-        <input id="pat-input" class="settings-input" type="password" placeholder="ghp_… or github_pat_…" autocomplete="off" spellcheck="false">
-        <button class="settings-row-btn" onclick="togglePatVisibility()" id="pat-toggle" title="Show/hide token"><i class="ti ti-eye"></i></button>
-      </div>
-      <div id="pat-status" class="settings-status"></div>
+      <div id="ms-account-name" style="font-size:12px;color:var(--fau-text-dim);margin-bottom:10px;display:none"></div>
       <div style="display:flex;gap:6px">
-        <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="savePat()">Save Token</button>
-        <button class="settings-row-btn danger" onclick="clearPat()" id="clear-pat-btn" style="display:none">Remove</button>
+        <button id="ms-signin-btn" class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="enterpriseSignIn()"><i class="ti ti-brand-windows"></i> Sign in</button>
+        <button id="ms-signout-btn" class="settings-row-btn danger" onclick="enterpriseSignOut()" style="display:none">Sign out</button>
       </div>
+      <div class="settings-hint" style="margin-top:8px">Sign in to your work account</div>
+    </div>
+  </div>
+
+  <!-- ── Voice ──────────────────────────────────────────────────── -->
+  <div class="settings-page" data-page="voice">
+    <div class="settings-page-title">Voice</div>
+    <div class="settings-section">
+      <div class="settings-section-title">Voice Control</div>
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none">
+        <input type="checkbox" id="voice-toggle"
+          onchange="setVoiceEnabled(this.checked)"
+          style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+        <span style="font-size:12.5px;color:var(--fau-text)">Enable voice control</span>
+      </label>
+      <div class="settings-hint" style="margin-top:4px">
+        Say the wake word to activate — Fauna will listen for your command and route it automatically.
+        Requires microphone permission. Runs entirely on-device via Chromium's speech recognition.
+      </div>
+      <div id="voice-wake-row" style="margin-top:10px;display:none">
+        <label class="settings-label"><span>Wake word</span></label>
+        <div class="settings-input-row">
+          <input id="voice-wake-input" class="settings-input" type="text" placeholder="fauna"
+            spellcheck="false" autocomplete="off"
+            onkeydown="if(event.key==='Enter')saveVoiceWakeWord()">
+          <button class="settings-row-btn" onclick="saveVoiceWakeWord()">Save</button>
+        </div>
+        <div class="settings-hint">Default: <strong>fauna</strong>. Speak this word to activate voice input.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── MCP Servers ────────────────────────────────────────────── -->
+  <div class="settings-page" data-page="mcp">
+    <div class="settings-page-title">MCP Servers</div>
+    <div class="settings-section">
+      <div class="settings-section-title">Figma MCP</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <span style="font-size:12px;color:var(--fau-text-dim)">Status:</span>
+        <button class="settings-row-btn" onclick="toggleFigmaMCP()"><i class="ti ti-toggle-left"></i> Toggle Figma MCP</button>
+        <button class="settings-row-btn" onclick="toggleMcpServer()"><i class="ti ti-server"></i> Toggle MCP Server</button>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="settings-row-btn" onclick="figmaWsConnect()"><i class="ti ti-refresh"></i> Reconnect</button>
+        <button class="settings-row-btn" onclick="toggleFigmaSetup()"><i class="ti ti-puzzle"></i> Plugins &amp; Extensions</button>
+        <button class="settings-row-btn" onclick="toggleMcpLogs()"><i class="ti ti-terminal-2"></i> View Logs</button>
+      </div>
+      <div class="settings-hint" style="margin-top:8px">
+        Connect Fauna to Figma to read and write your design files directly via the MCP protocol.
+        Make sure the FaunaMCP plugin is open in Figma.
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Browser use ────────────────────────────────────────────── -->
+  <div class="settings-page" data-page="browser">
+    <div class="settings-page-title">Browser use</div>
+    <div class="settings-section">
+      <div class="settings-section-title">Built-in Browser</div>
+      <div style="display:flex;gap:6px">
+        <button class="settings-row-btn" style="flex:1" onclick="openBrowserPane()"><i class="ti ti-world-www"></i> Open Browser Panel</button>
+      </div>
+      <div class="settings-hint" style="margin-top:8px">
+        Fauna includes a built-in browser panel for web browsing, form filling, and page extraction.
+      </div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-title">Browser Extension</div>
       <div class="settings-hint">
-        Generate a PAT at <a href="#" onclick="openGithubTokenPage(); return false">github.com/settings/tokens</a> with the <strong>copilot</strong> scope (or use a token that already has Copilot access).
-      </div>
-    </div>
-
-    <!-- Tab: API Keys -->
-    <div id="auth-tab-keys" class="auth-tab-pane" style="display:none">
-      <div class="settings-hint" style="margin-bottom:12px">
-        Bring your own API keys to use models directly — no GitHub Copilot subscription needed.
-      </div>
-
-      <!-- OpenAI -->
-      <div class="settings-label"><span>OpenAI</span></div>
-      <div class="settings-input-row">
-        <input id="provider-openai-input" class="settings-input" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false"
-          onkeydown="if(event.key==='Enter')saveProviderKey('openai')">
-        <button class="settings-row-btn" onclick="toggleProviderKeyVisibility('openai')" title="Show/hide"><i class="ti ti-eye"></i></button>
-      </div>
-      <div id="provider-openai-status" class="settings-status"></div>
-      <div style="display:flex;gap:6px">
-        <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('openai')">Save</button>
-        <button class="settings-row-btn danger" onclick="clearProviderKey('openai')" id="provider-openai-clear" style="display:none">Remove</button>
-      </div>
-
-      <!-- Anthropic -->
-      <div class="settings-label" style="margin-top:12px"><span>Anthropic</span></div>
-      <div class="settings-input-row">
-        <input id="provider-anthropic-input" class="settings-input" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"
-          onkeydown="if(event.key==='Enter')saveProviderKey('anthropic')">
-        <button class="settings-row-btn" onclick="toggleProviderKeyVisibility('anthropic')" title="Show/hide"><i class="ti ti-eye"></i></button>
-      </div>
-      <div id="provider-anthropic-status" class="settings-status"></div>
-      <div style="display:flex;gap:6px">
-        <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('anthropic')">Save</button>
-        <button class="settings-row-btn danger" onclick="clearProviderKey('anthropic')" id="provider-anthropic-clear" style="display:none">Remove</button>
-      </div>
-
-      <!-- Google AI -->
-      <div class="settings-label" style="margin-top:12px"><span>Google AI</span></div>
-      <div class="settings-input-row">
-        <input id="provider-google-input" class="settings-input" type="password" placeholder="AIza…" autocomplete="off" spellcheck="false"
-          onkeydown="if(event.key==='Enter')saveProviderKey('google')">
-        <button class="settings-row-btn" onclick="toggleProviderKeyVisibility('google')" title="Show/hide"><i class="ti ti-eye"></i></button>
-      </div>
-      <div id="provider-google-status" class="settings-status"></div>
-      <div style="display:flex;gap:6px">
-        <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('google')">Save</button>
-        <button class="settings-row-btn danger" onclick="clearProviderKey('google')" id="provider-google-clear" style="display:none">Remove</button>
+        Install the Fauna Browser Bridge extension to connect your Chrome/Edge browser to Fauna.
+        Once installed the extension bridges tabs, screenshots, forms, and page content to the AI.
       </div>
     </div>
   </div>
 
-  <!--  (shown only when enterprise-auth.js is present) -->
-  <div class="settings-section" id="ms-account-section" style="display:none">
-    <div class="settings-section-title">Account</div>
-    <div style="margin-bottom:10px">
-      <span id="ms-account-badge" class="auth-source-badge"><i class="ti ti-circle-dot"></i> Checking…</span>
-    </div>
-    <div id="ms-account-name" style="font-size:12px;color:var(--fau-text-dim);margin-bottom:10px;display:none"></div>
-    <div style="display:flex;gap:6px">
-      <button id="ms-signin-btn" class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="enterpriseSignIn()"><i class="ti ti-brand-windows"></i> Sign in</button>
-      <button id="ms-signout-btn" class="settings-row-btn danger" onclick="enterpriseSignOut()" style="display:none">Sign out</button>
-    </div>
-    <div class="settings-hint" style="margin-top:8px">Sign in to your work account</div>
-  </div>
-
-  <!-- Voice Control -->
-  <div class="settings-section">
-    <div class="settings-section-title">Voice Control</div>
-    <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none">
-      <input type="checkbox" id="voice-toggle"
-        onchange="setVoiceEnabled(this.checked)"
-        style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
-      <span style="font-size:12.5px;color:var(--fau-text)">Enable voice control</span>
-    </label>
-    <div class="settings-hint" style="margin-top:4px">
-      Say the wake word to activate — Fauna will listen for your command and route it automatically.
-      Requires microphone permission. Runs entirely on-device via Chromium's speech recognition.
-    </div>
-    <div id="voice-wake-row" style="margin-top:10px;display:none">
-      <label class="settings-label"><span>Wake word</span></label>
-      <div class="settings-input-row">
-        <input id="voice-wake-input" class="settings-input" type="text" placeholder="fauna"
-          spellcheck="false" autocomplete="off"
-          onkeydown="if(event.key==='Enter')saveVoiceWakeWord()">
-        <button class="settings-row-btn" onclick="saveVoiceWakeWord()">Save</button>
+  <!-- ── Mobile ─────────────────────────────────────────────────── -->
+  <div class="settings-page" data-page="mobile">
+    <div class="settings-page-title">Mobile</div>
+    <div class="settings-section">
+      <div class="settings-section-title">Mobile App</div>
+      <div class="settings-hint" style="margin-bottom:10px">Scan this QR code with the Fauna mobile app to connect.</div>
+      <div id="mobile-qr-wrap" style="display:flex;flex-direction:column;align-items:center;gap:10px">
+        <canvas id="mobile-qr-canvas" style="border-radius:8px;image-rendering:pixelated"></canvas>
+        <div id="mobile-qr-status" style="font-size:11px;color:var(--fau-text-muted)">Loading…</div>
       </div>
-      <div class="settings-hint">Default: <strong>fauna</strong>. Speak this word to activate voice input.</div>
+      <div id="mobile-pair-info" style="margin-top:10px;font-size:11.5px;color:var(--fau-text-dim);line-height:1.6"></div>
+      <div style="margin-top:8px;display:flex;gap:6px">
+        <button class="settings-row-btn" onclick="loadMobilePairQR()" style="flex:1"><i class="ti ti-refresh"></i> Refresh</button>
+        <button class="settings-row-btn danger" onclick="resetMobilePairToken()">Reset Token</button>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:6px;align-items:center">
+        <button id="tunnel-toggle-btn" class="settings-row-btn" onclick="toggleTunnel()" style="flex:1"><i class="ti ti-world"></i> <span id="tunnel-btn-label">Enable Remote Access</span></button>
+      </div>
+      <div id="tunnel-status" style="margin-top:6px;font-size:11px;color:var(--fau-text-muted);display:none"></div>
     </div>
   </div>
 
-  <!-- Mobile App -->
-  <div class="settings-section">
-    <div class="settings-section-title">Mobile App</div>
-    <div class="settings-hint" style="margin-bottom:10px">Scan this QR code with the Fauna mobile app to connect.</div>
-    <div id="mobile-qr-wrap" style="display:flex;flex-direction:column;align-items:center;gap:10px">
-      <canvas id="mobile-qr-canvas" style="border-radius:8px;image-rendering:pixelated"></canvas>
-      <div id="mobile-qr-status" style="font-size:11px;color:var(--fau-text-muted)">Loading…</div>
+  <!-- ── About ──────────────────────────────────────────────────── -->
+  <div class="settings-page" data-page="about">
+    <div class="settings-page-title">About</div>
+    <div class="settings-section">
+      <div class="settings-hint" style="line-height:1.7">
+        <strong style="color:var(--fau-text)">Fauna</strong> v1.0.0<br>
+        Multi-provider AI assistant — use GitHub Copilot, OpenAI, Anthropic, or Google models.<br><br>
+        <strong style="color:var(--fau-text)">Model routing:</strong><br>
+        • Models from API Keys → sent directly to that provider<br>
+        • All other models → routed through GitHub Copilot<br><br>
+        <strong style="color:var(--fau-text)">GitHub token priority:</strong><br>
+        1. Saved PAT &nbsp; 2. <code style="background:var(--fau-surface3);padding:1px 4px;border-radius:3px">GH_TOKEN</code> env &nbsp; 3. <code style="background:var(--fau-surface3);padding:1px 4px;border-radius:3px">gh auth token</code> &nbsp; 4. Keychain<br><br>
+        API key models are fetched dynamically from each provider.<br><br>
+        <span style="color:var(--fau-text-dim);font-size:11px">by Solomon Abey · <a href="https://github.com/howmon" style="color:var(--accent)" target="_blank">@howmon</a></span>
+      </div>
     </div>
-    <div id="mobile-pair-info" style="margin-top:10px;font-size:11.5px;color:var(--fau-text-dim);line-height:1.6"></div>
-    <div style="margin-top:8px;display:flex;gap:6px">
-      <button class="settings-row-btn" onclick="loadMobilePairQR()" style="flex:1"><i class="ti ti-refresh"></i> Refresh</button>
-      <button class="settings-row-btn danger" onclick="resetMobilePairToken()">Reset Token</button>
-    </div>
-    <div style="margin-top:10px;display:flex;gap:6px;align-items:center">
-      <button id="tunnel-toggle-btn" class="settings-row-btn" onclick="toggleTunnel()" style="flex:1"><i class="ti ti-world"></i> <span id="tunnel-btn-label">Enable Remote Access</span></button>
-    </div>
-    <div id="tunnel-status" style="margin-top:6px;font-size:11px;color:var(--fau-text-muted);display:none"></div>
   </div>
 
-  <!-- About -->
-  <div class="settings-section" style="flex:1">
-    <div class="settings-section-title">About</div>
-    <div class="settings-hint" style="line-height:1.7">
-      <strong style="color:var(--fau-text)">Fauna</strong> v1.0.0<br>
-      Multi-provider AI assistant — use GitHub Copilot, OpenAI, Anthropic, or Google models.<br><br>
-      <strong style="color:var(--fau-text)">Model routing:</strong><br>
-      • Models from API Keys → sent directly to that provider<br>
-      • All other models → routed through GitHub Copilot<br><br>
-      <strong style="color:var(--fau-text)">GitHub token priority:</strong><br>
-      1. Saved PAT &nbsp; 2. <code style="background:var(--fau-surface3);padding:1px 4px;border-radius:3px">GH_TOKEN</code> env &nbsp; 3. <code style="background:var(--fau-surface3);padding:1px 4px;border-radius:3px">gh auth token</code> &nbsp; 4. Keychain<br><br>
-      API key models are fetched dynamically from each provider.<br><br>
-      <span style="color:var(--fau-text-dim);font-size:11px">by Solomon Abey · <a href="https://github.com/howmon" style="color:var(--accent)" target="_blank">@howmon</a></span>
-    </div>
-  </div>
   </div><!-- /.settings-scroll -->
+  </div><!-- /#settings-content-col -->
+
+  <script>
+  function switchSettingsPage(page, btn) {
+    document.querySelectorAll('#settings-panel .settings-page').forEach(function(p) {
+      p.classList.toggle('active', p.dataset.page === page);
+    });
+    document.querySelectorAll('#settings-panel .settings-nav-item').forEach(function(b) {
+      b.classList.remove('active');
+    });
+    if (btn) btn.classList.add('active');
+  }
+  </script>
 </div>
 
 <!-- ── URL modal ───────────────────────────────────────────────── -->
