@@ -8362,13 +8362,30 @@ app.post('/api/permissions/request-accessibility', (req, res) => {
 // ── Browser Extension REST API ────────────────────────────────────────────
 
 // GET /api/ext/status — which extensions are connected?
-app.get('/api/ext/status', (_req, res) => {
+// Checks both the direct /ext WebSocket (port 3737) AND the FaunaMCP relay (port 3341).
+app.get('/api/ext/status', async (_req, res) => {
   const browsers = [];
+  // 1. Direct connections to the main server's /ext WebSocket
   for (const [id, info] of _extSockets) {
     if (info.ws.readyState === 1) {
-      browsers.push({ id, browser: info.browser, version: info.version, connectedAt: info.connectedAt });
+      browsers.push({ id, browser: info.browser, version: info.version, connectedAt: info.connectedAt, source: 'direct' });
     }
   }
+  // 2. Extension connected to the FaunaMCP browser-relay (port 3341)
+  try {
+    const relayRes = await fetch('http://localhost:3341/ext-status', { signal: AbortSignal.timeout(800) });
+    if (relayRes.ok) {
+      const relayData = await relayRes.json();
+      if (relayData.connected) {
+        const browserName = relayData.browser || 'Browser';
+        // Avoid duplicates — only add if not already present from direct socket
+        const alreadyDirect = browsers.some(b => b.browser === browserName);
+        if (!alreadyDirect) {
+          browsers.push({ id: 'relay-0', browser: browserName, version: null, connectedAt: Date.now(), source: 'relay' });
+        }
+      }
+    }
+  } catch (_) { /* relay not running or unreachable — that's fine */ }
   res.json({ connected: browsers.length > 0, browsers });
 });
 

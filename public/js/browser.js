@@ -1721,7 +1721,7 @@ var _extConnectedBrowsers = []; // [{id, browser, version, connectedAt}]
     _extConnectedBrowsers = browsers || [];
     var connected = _extConnectedBrowsers.length > 0;
     var browserNames = _extConnectedBrowsers.map(function(b) { return b.browser; });
-    var label = connected ? browserNames.join(' · ') : 'Ext offline';
+    var label = connected ? browserNames.join(' · ') : 'Web Browser MCP offline';
 
     // Browser action bar badge (inside browser pane)
     var dot   = document.getElementById('browser-ext-dot');
@@ -1739,11 +1739,11 @@ var _extConnectedBrowsers = []; // [{id, browser, version, connectedAt}]
       } else {
         dot.style.background = '#444';
         dot.style.boxShadow  = 'none';
-        lbl.textContent = 'Ext offline';
+        lbl.textContent = 'Web Browser MCP offline';
         badge.style.color       = '#555';
         badge.style.borderColor = '#2a2a2a';
         badge.style.background  = '#111';
-        badge.title = 'Browser extension not connected';
+        badge.title = 'Web Browser MCP not connected';
       }
     }
 
@@ -1757,8 +1757,8 @@ var _extConnectedBrowsers = []; // [{id, browser, version, connectedAt}]
         if (tbLabel) tbLabel.textContent = browserNames.length > 1 ? browserNames.length + ' browsers' : browserNames[0];
       } else {
         tbBadge.classList.remove('ext-connected');
-        tbBadge.title = 'Browser extension offline';
-        if (tbLabel) tbLabel.textContent = 'Ext';
+        tbBadge.title = 'Web Browser MCP not connected';
+        if (tbLabel) tbLabel.textContent = 'Web Browser MCP';
       }
     }
 
@@ -1914,7 +1914,7 @@ async function _loadExtTabs() {
   if (!menu) return;
 
   if (!_extConnectedBrowsers.length) {
-    menu.innerHTML = '<div class="ext-menu-header">Browser Extension</div>' +
+    menu.innerHTML = '<div class="ext-menu-header">Web Browser MCP</div>' +
       '<div class="ext-menu-empty"><i class="ti ti-plug-off" style="font-size:16px;display:block;margin-bottom:4px"></i>' +
       'Extension not connected<br><span style="font-size:10px;color:var(--fau-text-muted)">Install from Plugins &amp; Extensions panel</span></div>';
     return;
