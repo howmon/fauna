@@ -1,19 +1,22 @@
 /**
  * Fauna Browser Bridge — background service worker
  *
- * Maintains a persistent WebSocket connection to Fauna's local server
- * (ws://localhost:3737/ext) and routes commands to the appropriate
- * tab's content script. Results and push events flow back over the
- * same WS channel.
+ * Maintains two persistent WebSocket connections:
+ *   1. ws://localhost:3737/ext  — Fauna main server
+ *   2. ws://localhost:3340      — FaunaMCP relay (shares same dispatch logic)
+ *
+ * Commands arriving on either connection are routed through dispatchCommand()
+ * and results are sent back on the same connection.
  */
 
 const FAUNA_WS_URL  = 'ws://localhost:3737/ext';
 const FAUNA_ORIGIN  = 'http://localhost:3737';
+const MCP_WS_URL    = 'ws://localhost:3340';
 const RECONNECT_BASE_MS  = 1500;
 const RECONNECT_MAX_MS   = 30000;
 const PING_INTERVAL_MS   = 20000;
 
-// ── State ─────────────────────────────────────────────────────────────────
+// ── State — main Fauna server ─────────────────────────────────────────────
 
 let ws              = null;
 let reconnectTimer  = null;
@@ -21,6 +24,14 @@ let reconnectDelay  = RECONNECT_BASE_MS;
 let pingTimer       = null;
 let connected       = false;
 let pendingCmds     = new Map(); // cmdId → { resolve, reject, timeoutId }
+
+// ── State — FaunaMCP relay ────────────────────────────────────────────────
+
+let mcpWs             = null;
+let mcpReconnectTimer = null;
+let mcpReconnectDelay = RECONNECT_BASE_MS;
+let mcpPingTimer      = null;
+let mcpConnected      = false;
 
 // ── WebSocket lifecycle ───────────────────────────────────────────────────
 
@@ -86,6 +97,74 @@ function send(obj) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return false;
   ws.send(JSON.stringify(obj));
   return true;
+}
+
+// ── FaunaMCP relay connection ─────────────────────────────────────────────
+
+function connectMcp() {
+  if (mcpWs && (mcpWs.readyState === WebSocket.OPEN || mcpWs.readyState === WebSocket.CONNECTING)) return;
+
+  clearTimeout(mcpReconnectTimer);
+  mcpWs = new WebSocket(MCP_WS_URL);
+
+  mcpWs.addEventListener('open', () => {
+    mcpConnected      = true;
+    mcpReconnectDelay = RECONNECT_BASE_MS;
+    console.log('[fauna-ext] connected to FaunaMCP relay');
+    updateBadge(true);
+    // Send hello so the relay knows an extension is available
+    const hello = { type: 'ext:hello', version: chrome.runtime.getManifest().version, userAgent: navigator.userAgent };
+    mcpWs.send(JSON.stringify(hello));
+    startMcpPing();
+    broadcastStatus();
+  });
+
+  mcpWs.addEventListener('message', async (evt) => {
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { return; }
+    if (msg.type === 'pong') return;
+    if (msg.type === 'cmd') {
+      let result;
+      try   { result = await dispatchCommand(msg); }
+      catch (e) { result = { ok: false, error: e.message || String(e) }; }
+      mcpWs.send(JSON.stringify({ ...result, type: 'result', id: msg.id }));
+    }
+  });
+
+  mcpWs.addEventListener('close', () => {
+    mcpConnected = false;
+    mcpWs = null;
+    stopMcpPing();
+    updateBadge(connected); // badge stays green if main server still up
+    broadcastStatus();
+    scheduleMcpReconnect();
+  });
+
+  mcpWs.addEventListener('error', () => {
+    // 'close' fires after error — handled there
+  });
+}
+
+function scheduleMcpReconnect() {
+  clearTimeout(mcpReconnectTimer);
+  mcpReconnectTimer = setTimeout(() => {
+    connectMcp();
+    mcpReconnectDelay = Math.min(mcpReconnectDelay * 1.5, RECONNECT_MAX_MS);
+  }, mcpReconnectDelay);
+}
+
+function startMcpPing() {
+  stopMcpPing();
+  mcpPingTimer = setInterval(() => {
+    if (mcpWs && mcpWs.readyState === WebSocket.OPEN) {
+      mcpWs.send(JSON.stringify({ type: 'ping' }));
+    }
+  }, PING_INTERVAL_MS);
+}
+
+function stopMcpPing() {
+  clearInterval(mcpPingTimer);
+  mcpPingTimer = null;
 }
 
 // ── Hello handshake ───────────────────────────────────────────────────────
@@ -778,7 +857,7 @@ function clearTabActive(tabId) {
 }
 
 function broadcastStatus() {
-  chrome.runtime.sendMessage({ type: 'fauna:status', connected }).catch(() => {});
+  chrome.runtime.sendMessage({ type: 'fauna:status', connected, mcpConnected }).catch(() => {});
 }
 
 // ── Notifications ─────────────────────────────────────────────────────────
@@ -847,6 +926,7 @@ chrome.runtime.onInstalled.addListener(() => {
     contexts: ['page', 'frame']
   });
   connect();
+  connectMcp();
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
@@ -870,7 +950,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg.type === 'get-status') {
-    reply({ connected });
+    reply({ connected, mcpConnected });
     return true;
   }
   if (msg.type === 'connect') {
@@ -930,9 +1010,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
 
 chrome.alarms.create('fauna-keepalive', { periodInMinutes: 0.4 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'fauna-keepalive' && !connected) connect();
+  if (alarm.name === 'fauna-keepalive') {
+    if (!connected) connect();
+    if (!mcpConnected) connectMcp();
+  }
 });
 
 // ── Boot ──────────────────────────────────────────────────────────────────
 
 connect();
+connectMcp();

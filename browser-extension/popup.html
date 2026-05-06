@@ -137,6 +137,12 @@
       text-align: center;
     }
     .reconnect-btn:hover { background: #2e2e2e; }
+    .mcp-pill {
+      font-size: 10px;
+      padding: 2px 7px;
+      margin-top: 3px;
+    }
+    .status-col { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
   </style>
 </head>
 <body>
@@ -146,9 +152,15 @@
       <div class="header-title">Fauna Bridge</div>
       <div class="header-subtitle">Browser extension</div>
     </div>
-    <div class="status-pill offline" id="status-pill">
-      <span class="dot"></span>
-      <span id="status-text">Offline</span>
+    <div class="status-col">
+      <div class="status-pill offline" id="status-pill">
+        <span class="dot"></span>
+        <span id="status-text">Offline</span>
+      </div>
+      <div class="status-pill mcp-pill offline" id="mcp-status-pill" title="FaunaMCP relay: offline">
+        <span class="dot"></span>
+        <span>MCP</span>
+      </div>
     </div>
   </div>
 

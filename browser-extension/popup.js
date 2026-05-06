@@ -13,10 +13,16 @@ const btnSnapshot  = document.getElementById('btn-snapshot');
 const btnExtForms  = document.getElementById('btn-extract-forms');
 const btnReconnect = document.getElementById('btn-reconnect');
 
-function setStatus(online) {
+function setStatus(online, mcpOnline) {
   pill.className = 'status-pill ' + (online ? 'online' : 'offline');
   statusText.textContent = online ? 'Connected' : 'Offline';
   offlineSec.style.display = online ? 'none' : 'block';
+  // Show MCP relay status as a secondary indicator if the element exists
+  const mcpPill = document.getElementById('mcp-status-pill');
+  if (mcpPill) {
+    mcpPill.className = 'status-pill mcp-pill ' + (mcpOnline ? 'online' : 'offline');
+    mcpPill.title = mcpOnline ? 'FaunaMCP relay: connected' : 'FaunaMCP relay: offline';
+  }
 }
 
 function showFeedback(msg, type = '') {
@@ -30,7 +36,7 @@ function showFeedback(msg, type = '') {
 (async () => {
   // Get current status from background
   const status = await chrome.runtime.sendMessage({ type: 'get-status' }).catch(() => ({ connected: false }));
-  setStatus(status?.connected || false);
+  setStatus(status?.connected || false, status?.mcpConnected || false);
 
   // Populate tab info
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => [null]);
@@ -41,7 +47,7 @@ function showFeedback(msg, type = '') {
 
   // Listen for status updates from background while popup is open
   chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === 'fauna:status') setStatus(msg.connected);
+    if (msg.type === 'fauna:status') setStatus(msg.connected, msg.mcpConnected);
   });
 })();
 
