@@ -78,6 +78,9 @@ function updateFigmaMCPBadge() {
     badge.title = 'Figma MCP off — click to enable';
     badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--fau-surface2);color:var(--fau-text-muted);border:1px solid var(--fau-border);cursor:pointer;opacity:.6;transition:all .2s';
   }
+
+  // Sync plus menu Figma item badge
+  if (typeof _refreshTbFigmaItem === 'function') _refreshTbFigmaItem();
 }
 
 function setFigmaSectionVisible(show) {

@@ -284,10 +284,13 @@ function updateContextMeterGranular(data) {
   var totalUsed = promptTokens + completionTokens;
   var pct = Math.min((totalUsed / limit) * 100, 100);
 
-  fill.style.width = pct + '%';
-  fill.className = '';
-  if (pct > 80) fill.className = 'ctx-meter-danger';
-  else if (pct > 50) fill.className = 'ctx-meter-warn';
+  // Circular ring: r=9, circumference≈56.55
+  var offset = (56.55 * (1 - pct / 100)).toFixed(2);
+  fill.setAttribute('stroke-dashoffset', offset);
+  var cls = 'ctx-ring-arc';
+  if (pct > 80) cls += ' ctx-meter-danger';
+  else if (pct > 50) cls += ' ctx-meter-warn';
+  fill.setAttribute('class', cls);
 
   // Build granular breakdown
   var sysTokens = Math.round(data.sysChars / 4);

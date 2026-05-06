@@ -34,7 +34,11 @@ async function runTask(taskId, opts = {}) {
   _emit(taskId, 'started', { title: task.title });
 
   try {
-    await _autonomyLoop(task, state);
+    if (task.kind === 'pipeline') {
+      await _runPipeline(task, state);
+    } else {
+      await _autonomyLoop(task, state);
+    }
   } catch (err) {
     console.error('[task-runner] Task failed:', task.title, err.message);
     failTask(taskId, err.message);
@@ -516,6 +520,220 @@ function getRunningTasks() {
     result.push({ id, step: state.step, startedAt: state.startedAt, elapsed: Date.now() - state.startedAt });
   }
   return result;
+}
+
+// ── Pipeline executor ────────────────────────────────────────────────────
+// Runs a pipeline kind task by executing its node graph.
+
+async function _runPipeline(task, state) {
+  const pipeline = task.pipeline;
+  if (!pipeline || !pipeline.nodes || !pipeline.nodes.length) {
+    throw new Error('Pipeline has no nodes');
+  }
+
+  const nodes = pipeline.nodes;
+  const edges = pipeline.edges || [];
+
+  // Topological sort (Kahn's algorithm)
+  const inDeg = {};
+  const adj   = {};    // nodeId → [{ to, fromPort, toPort }]
+  nodes.forEach(n => { inDeg[n.id] = 0; adj[n.id] = []; });
+  edges.forEach(e => {
+    if (inDeg[e.to] !== undefined) inDeg[e.to]++;
+    if (adj[e.from]) adj[e.from].push({ to: e.to, fromPort: e.fromPort, toPort: e.toPort });
+  });
+
+  const queue    = nodes.filter(n => inDeg[n.id] === 0).map(n => n.id);
+  const order    = [];
+  const skipped  = new Set();   // nodes on non-taken condition branches
+
+  while (queue.length) {
+    const nid = queue.shift();
+    order.push(nid);
+    (adj[nid] || []).forEach(e => {
+      if (--inDeg[e.to] === 0) queue.push(e.to);
+    });
+  }
+
+  // Accumulate outputs per node
+  const nodeOutputs = {};
+
+  for (const nid of order) {
+    if (skipped.has(nid)) {
+      nodeOutputs[nid] = null;
+      continue;
+    }
+
+    const node = nodes.find(n => n.id === nid);
+    if (!node) continue;
+
+    // Resolve input: output of the first upstream node
+    const inEdge = edges.find(e => e.to === nid);
+    const input  = inEdge ? (nodeOutputs[inEdge.from] ?? null) : null;
+
+    state.step++;
+    _emit(task.id, 'step', { step: state.step, nodeId: nid, nodeType: node.type });
+    updateTask(task.id, { _historyEvent: 'step', _historyDetail: 'Pipeline step: ' + node.label + ' (' + node.type + ')' });
+
+    let output;
+    const cfg = node.config || {};
+
+    try {
+      switch (node.type) {
+
+        case 'trigger':
+          output = input ?? '';
+          break;
+
+        case 'prompt':
+        case 'agent': {
+          // Run a prompt against the AI
+          const promptText = _interpolate(cfg.prompt || node.label, nodeOutputs);
+          const aiResp = await _callChat({
+            messages: [{ role: 'user', content: promptText }],
+            model:    task.model || 'claude-sonnet-4.6',
+            agentName: cfg.agentName || _pickAgent(task, state.step),
+          }, state.abortController.signal);
+          output = aiResp || '';
+          break;
+        }
+
+        case 'shell': {
+          // Run shell command
+          const cmd = _interpolate(cfg.command || '', nodeOutputs);
+          const shellResult = await _callChat({
+            messages: [{ role: 'user', content: '```shell-exec\n' + cmd + '\n```\nReturn only the command output, no explanation.' }],
+            model: task.model || 'claude-sonnet-4.6',
+            systemPrompt: 'Execute shell commands. Return only the output.',
+          }, state.abortController.signal);
+          output = shellResult || '';
+          break;
+        }
+
+        case 'browser': {
+          const url  = _interpolate(cfg.url || '', nodeOutputs);
+          const inst = _interpolate(cfg.instruction || 'Summarize this page', nodeOutputs);
+          const browserResp = await _callChat({
+            messages: [{ role: 'user', content: 'Navigate to ' + url + ' and ' + inst }],
+            model: task.model || 'claude-sonnet-4.6',
+            systemPrompt: 'You can use browser-ext-action blocks. Navigate and return results.',
+          }, state.abortController.signal);
+          output = browserResp || '';
+          break;
+        }
+
+        case 'figma': {
+          const inst = _interpolate(cfg.instruction || 'Describe the current Figma selection', nodeOutputs);
+          const figmaResp = await _callChat({
+            messages: [{ role: 'user', content: inst }],
+            model: task.model || 'claude-sonnet-4.6',
+            systemPrompt: 'You have access to Figma MCP tools.',
+          }, state.abortController.signal);
+          output = figmaResp || '';
+          break;
+        }
+
+        case 'condition': {
+          // Evaluate JS expression
+          const expr = _interpolate(cfg.expression || 'false', nodeOutputs);
+          let result = false;
+          try {
+            // eslint-disable-next-line no-new-func
+            result = !!(new Function('input', 'return (' + expr + ')'))(input);
+          } catch (_) { result = false; }
+          output = result;
+          // Skip nodes on the non-taken port
+          const takenPort  = result ? 'true' : 'false';
+          const skippedPort = result ? 'false' : 'true';
+          edges.filter(e => e.from === nid && e.fromPort === skippedPort).forEach(e => {
+            // BFS to mark all downstream of skipped port
+            const toSkip = [e.to];
+            while (toSkip.length) {
+              const sid = toSkip.shift();
+              skipped.add(sid);
+              edges.filter(e2 => e2.from === sid).forEach(e2 => toSkip.push(e2.to));
+            }
+          });
+          break;
+        }
+
+        case 'loop': {
+          const maxIter = parseInt(cfg.maxIterations || '10', 10);
+          const condExpr = _interpolate(cfg.condition || 'false', nodeOutputs);
+          let loopInput = input;
+          let iteration = 0;
+          // Execute body nodes repeatedly (simplified: just run condition check)
+          while (iteration < maxIter) {
+            let stop = false;
+            try {
+              // eslint-disable-next-line no-new-func
+              stop = !!(new Function('input', 'iteration', 'return (' + condExpr + ')')(loopInput, iteration));
+            } catch (_) { stop = true; }
+            if (stop) break;
+            iteration++;
+          }
+          output = loopInput;
+          break;
+        }
+
+        case 'webhook': {
+          const url = _interpolate(cfg.url || '', nodeOutputs);
+          if (!url) { output = 'No URL configured'; break; }
+          const method = cfg.method || 'POST';
+          const body   = cfg.body ? _interpolate(cfg.body, nodeOutputs) : undefined;
+          const fetchOpts = { method, headers: { 'Content-Type': 'application/json' } };
+          if (body && method !== 'GET') fetchOpts.body = body;
+          const resp   = await fetch(url, fetchOpts);
+          output = await resp.text();
+          break;
+        }
+
+        case 'delay': {
+          const ms = parseInt(cfg.ms || '1000', 10);
+          await new Promise(resolve => setTimeout(resolve, Math.min(ms, 30000)));
+          output = input;
+          break;
+        }
+
+        case 'code': {
+          const code = _interpolate(cfg.code || 'return input;', nodeOutputs);
+          try {
+            // eslint-disable-next-line no-new-func
+            output = (new Function('input', code))(input);
+          } catch (e) {
+            output = 'Code error: ' + e.message;
+          }
+          break;
+        }
+
+        default:
+          output = input;
+      }
+    } catch (e) {
+      output = 'Node error: ' + e.message;
+    }
+
+    nodeOutputs[nid] = output;
+    state.stats.actionsTotal++;
+    const ok = !String(output).startsWith('Node error') && !String(output).startsWith('Code error');
+    if (ok) state.stats.actionsOk++; else state.stats.actionsFailed++;
+    state.reasoning.push({ step: state.step, intent: node.label, actions: [{ type: node.type, action: node.label, ok }], outcome: String(output).slice(0, 200) });
+  }
+
+  // Final output = last node's output
+  const lastId = order[order.length - 1];
+  const summary = String(nodeOutputs[lastId] || 'Pipeline completed').slice(0, 500);
+  completeTask(task.id, { summary });
+  _emit(task.id, 'completed', { summary });
+}
+
+// Variable interpolation: {{nodeId.output}} or {{nodeId}}
+function _interpolate(str, nodeOutputs) {
+  if (!str) return str;
+  return String(str).replace(/\{\{(\w+)(?:\.output)?\}\}/g, (_, id) => {
+    const v = nodeOutputs[id];
+    return v !== undefined && v !== null ? String(v) : '';
+  });
 }
 
 export {

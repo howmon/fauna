@@ -367,24 +367,55 @@
           <button onclick="toggleFigmaMCP()" style="margin-left:auto;background:none;border:none;color:#62d794;cursor:pointer;font-size:11px;opacity:.8" title="Disable Figma MCP"><i class="ti ti-x" style="font-size:10px"></i> disable</button>
         </div>
         <div id="input-toolbar">
-          <button class="toolbar-btn" onclick="openFileAttach()" title="Attach file or image (or paste / drag &amp; drop)"><i class="ti ti-paperclip"></i> Attach file</button>
-          <div class="toolbar-sep"></div>
-          <button class="toolbar-btn" onclick="openUrlModal()" title="Add URL context"><i class="ti ti-link"></i> Add URL</button>
-          <div class="toolbar-sep"></div>
-          <span id="figma-mcp-badge" style="display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--fau-surface2);color:var(--fau-text-muted);border:1px solid var(--fau-border);cursor:default;transition:all .2s" title="Checking Figma MCP…">◌ Figma</span>
-          <div style="position:relative;display:inline-flex">
-            <span id="ext-toolbar-badge" onclick="toggleExtTabMenu()" title="Browser extension — click to insert page context"
-              style="display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--fau-surface2);color:var(--fau-text-muted);border:1px solid var(--fau-border);cursor:pointer;transition:all .2s;user-select:none">
-              <span id="ext-toolbar-dot" style="width:5px;height:5px;border-radius:50%;background:#444;flex-shrink:0"></span>
-              <i class="ti ti-browser" style="font-size:11px"></i> <span id="ext-toolbar-label">Ext</span>
-            </span>
-            <div id="ext-tab-menu" style="display:none"></div>
+          <!-- ① Plus menu — Attach / Add URL / Figma MCP / Browser Ext -->
+          <div id="tb-plus-wrap">
+            <button id="tb-plus-btn" onclick="toggleTbPlusMenu(event)" title="Attach, Add URL, MCP &amp; Ext">
+              <i class="ti ti-plus"></i>
+            </button>
+            <div id="tb-plus-menu" style="display:none">
+              <button class="tb-pm-item" onclick="openFileAttach();closeTbPlusMenu()">
+                <i class="ti ti-paperclip"></i><span>Attach file</span>
+              </button>
+              <button class="tb-pm-item" onclick="openUrlModal();closeTbPlusMenu()">
+                <i class="ti ti-link"></i><span>Add URL</span>
+              </button>
+              <div class="tb-pm-sep"></div>
+              <button class="tb-pm-item" id="tb-figma-item" onclick="toggleFigmaMCP();closeTbPlusMenu()">
+                <i class="ti ti-vector-triangle"></i><span>Figma MCP</span>
+                <span id="tb-figma-item-state" class="tb-pm-badge">off</span>
+              </button>
+              <div id="tb-ext-item-wrap" style="position:relative">
+                <span id="ext-toolbar-badge" onclick="toggleExtTabMenu()" title="Browser extension — click to see tabs">
+                  <i class="ti ti-browser"></i>
+                  <span id="ext-toolbar-dot"></span>
+                  <span id="ext-toolbar-label">Browser Ext</span>
+                </span>
+                <div id="ext-tab-menu" style="display:none"></div>
+              </div>
+            </div>
           </div>
+          <!-- figma-mcp-badge kept offscreen for JS compat -->
+          <span id="figma-mcp-badge" style="position:fixed;left:-9999px;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none"></span>
+
           <span id="hint-text">⏎ send · ⇧⏎ newline</span>
-        </div>
-        <div id="ctx-meter" style="display:none">
-          <div id="ctx-meter-bar"><div id="ctx-meter-fill"></div></div>
-          <span id="ctx-meter-label"></span>
+
+          <!-- ② Circular context ring -->
+          <div id="ctx-meter" style="display:none">
+            <svg viewBox="0 0 24 24" width="20" height="20" style="flex-shrink:0">
+              <circle class="ctx-ring-bg" cx="12" cy="12" r="9"/>
+              <circle id="ctx-meter-fill" class="ctx-ring-arc" cx="12" cy="12" r="9" transform="rotate(-90 12 12)"/>
+            </svg>
+            <span id="ctx-meter-label"></span>
+          </div>
+
+          <!-- ③ Model picker -->
+          <div id="tb-model-wrap">
+            <button id="tb-model-btn" onclick="toggleTbModelMenu(event)" title="Switch model">
+              <span id="tb-model-label">Model</span>
+              <i class="ti ti-chevron-down"></i>
+            </button>
+            <div id="tb-model-menu" style="display:none"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -709,10 +740,6 @@ Examples:
             <div class="mcp-builtin-desc">Read and write Figma design files via the FaunaMCP plugin.</div>
           </div>
           <div class="mcp-builtin-status" id="mcp-builtin-figma-status"></div>
-          <label class="mcp-toggle-switch" title="Enable Figma MCP">
-            <input type="checkbox" id="mcp-builtin-figma-toggle" onchange="mcpBuiltinToggle('figma',this.checked)">
-            <span class="mcp-toggle-track"></span>
-          </label>
         </div>
 
         <!-- Playwright MCP -->
@@ -723,10 +750,6 @@ Examples:
             <div class="mcp-builtin-desc">Automate and control the browser via Playwright.</div>
           </div>
           <div class="mcp-builtin-status" id="mcp-builtin-playwright-status"></div>
-          <label class="mcp-toggle-switch" title="Enable Browser MCP">
-            <input type="checkbox" id="mcp-builtin-playwright-toggle" onchange="mcpBuiltinToggle('playwright',this.checked)">
-            <span class="mcp-toggle-track"></span>
-          </label>
         </div>
 
       </div>
@@ -768,6 +791,19 @@ Examples:
   <div class="settings-page" data-page="browser">
     <div class="settings-page-title">Browser use</div>
     <div class="settings-section">
+      <div class="settings-section-title">FaunaMCP App</div>
+      <!-- Live FaunaMCP connection status -->
+      <div id="faunamcp-settings-status" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:var(--fau-surface2);border:1px solid var(--fau-border)">
+        <span id="faunamcp-settings-dot" style="width:8px;height:8px;border-radius:50%;background:#444;flex-shrink:0"></span>
+        <span id="faunamcp-settings-label" style="font-size:12px;color:var(--fau-text-muted)">Checking…</span>
+        <button onclick="_faunaMCPSettingsRefresh()" style="margin-left:auto;background:none;border:none;color:var(--fau-text-muted);cursor:pointer;font-size:11px;padding:2px 6px;border-radius:4px" title="Refresh"><i class="ti ti-refresh"></i></button>
+      </div>
+      <div class="settings-hint">
+        When the <strong style="color:var(--fau-text)">FaunaMCP</strong> standalone app is running, Fauna automatically connects to its browser and Figma tools — no bundled process needed.
+        The Chrome extension, browser automation, and Figma plugin all flow through FaunaMCP.
+      </div>
+    </div>
+    <div class="settings-section">
       <div class="settings-section-title">Built-in Browser</div>
       <div style="display:flex;gap:6px">
         <button class="settings-row-btn" style="flex:1" onclick="openBrowserPane()"><i class="ti ti-world-www"></i> Open Browser Panel</button>
@@ -778,9 +814,21 @@ Examples:
     </div>
     <div class="settings-section">
       <div class="settings-section-title">Browser Extension</div>
+      <!-- Live connection status -->
+      <div id="browser-ext-settings-status" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:var(--fau-surface2);border:1px solid var(--fau-border)">
+        <span id="browser-ext-settings-dot" style="width:8px;height:8px;border-radius:50%;background:#444;flex-shrink:0"></span>
+        <span id="browser-ext-settings-label" style="font-size:12px;color:var(--fau-text-muted)">Checking…</span>
+        <button onclick="_browserExtSettingsRefresh()" style="margin-left:auto;background:none;border:none;color:var(--fau-text-muted);cursor:pointer;font-size:11px;padding:2px 6px;border-radius:4px" title="Refresh status"><i class="ti ti-refresh"></i></button>
+      </div>
       <div class="settings-hint">
-        Install the Fauna Browser Bridge extension to connect your Chrome/Edge browser to Fauna.
+        Install the <strong style="color:var(--fau-text)">Fauna Browser Bridge</strong> extension in Chrome or Edge to connect your external browser to Fauna.
         Once installed the extension bridges tabs, screenshots, forms, and page content to the AI.
+      </div>
+      <div style="margin-top:8px;display:flex;gap:6px">
+        <button class="settings-row-btn" style="flex:1" onclick="_openExtInstallDir()"><i class="ti ti-folder-open"></i> Show Extension Folder</button>
+      </div>
+      <div class="settings-hint" style="margin-top:6px;font-size:10.5px">
+        In Chrome/Edge → go to <code style="background:var(--fau-surface3);padding:1px 4px;border-radius:3px">Extensions</code> → enable Developer mode → Load unpacked → select the extension folder above.
       </div>
     </div>
   </div>
@@ -851,52 +899,191 @@ Examples:
       if (typeof mcpMgr !== 'undefined') mcpMgr.load();
       mcpBuiltinInit();
     }
-  }
-
-  function mcpBuiltinInit() {
-    // Figma toggle
-    var figmaChk = document.getElementById('mcp-builtin-figma-toggle');
-    if (figmaChk) figmaChk.checked = !!(typeof state !== 'undefined' && state.figmaMCPEnabled);
-    mcpBuiltinPollStatus();
-  }
-
-  function mcpBuiltinToggle(which, enabled) {
-    if (which === 'figma') {
-      if (typeof toggleFigmaMCP === 'function') {
-        // toggleFigmaMCP flips state itself, so only call if needed
-        if (!!(typeof state !== 'undefined' && state.figmaMCPEnabled) !== enabled) toggleFigmaMCP();
-      }
-      var detail = document.getElementById('mcp-figma-detail');
-      if (detail) detail.style.display = enabled ? '' : 'none';
-    } else if (which === 'playwright') {
-      if (typeof state !== 'undefined') {
-        state.playwrightMCPEnabled = enabled;
-        localStorage.setItem('fauna-playwright-mcp', enabled ? 'true' : 'false');
-      }
-      if (!enabled) fetch('/api/playwright-mcp/stop', { method: 'POST' }).catch(function(){});
+    if (page === 'browser') {
+      _faunaMCPSettingsRefresh();
+      _browserExtSettingsRefresh();
     }
   }
 
+  function mcpBuiltinInit() {
+    mcpBuiltinPollStatus();
+  }
+
   function mcpBuiltinPollStatus() {
-    // Figma status
-    fetch('/api/figma/mcp-status').then(function(r){ return r.json(); }).then(function(d) {
-      var el = document.getElementById('mcp-builtin-figma-status');
-      if (el) {
-        el.innerHTML = d.running
-          ? '<span class="mcp-status-pill running">Running</span>'
-          : '<span class="mcp-status-pill stopped">Stopped</span>';
+    // Figma — show whether it's active in the current chat
+    var figmaActive = typeof state !== 'undefined' && state.figmaMCPEnabled;
+    var figmaEl = document.getElementById('mcp-builtin-figma-status');
+    if (figmaEl) {
+      figmaEl.innerHTML = figmaActive
+        ? '<span class="mcp-status-pill active">Active</span>'
+        : '<span class="mcp-status-pill inactive">Inactive</span>';
+    }
+    // Browser MCP — show whether it's active in the current chat
+    var pwActive = typeof state !== 'undefined' && state.playwrightMCPEnabled;
+    var pwEl = document.getElementById('mcp-builtin-playwright-status');
+    if (pwEl) {
+      pwEl.innerHTML = pwActive
+        ? '<span class="mcp-status-pill active">Active</span>'
+        : '<span class="mcp-status-pill inactive">Inactive</span>';
+    }
+  }
+
+  // ── Toolbar plus menu ──────────────────────────────────────────────────
+  var _tbPlusOpen = false;
+  function toggleTbPlusMenu(e) {
+    if (e) e.stopPropagation();
+    _tbPlusOpen = !_tbPlusOpen;
+    var m = document.getElementById('tb-plus-menu');
+    if (!m) return;
+    m.style.display = _tbPlusOpen ? '' : 'none';
+    if (_tbPlusOpen) {
+      _refreshTbFigmaItem();
+      setTimeout(function() {
+        document.addEventListener('click', _closeTbPlusOutside, { once: true, capture: true });
+      }, 0);
+    }
+  }
+  function closeTbPlusMenu() {
+    _tbPlusOpen = false;
+    var m = document.getElementById('tb-plus-menu');
+    if (m) m.style.display = 'none';
+  }
+  function _closeTbPlusOutside(e) {
+    var wrap = document.getElementById('tb-plus-wrap');
+    if (wrap && wrap.contains(e.target)) {
+      if (_tbPlusOpen) {
+        setTimeout(function() {
+          document.addEventListener('click', _closeTbPlusOutside, { once: true, capture: true });
+        }, 0);
       }
-    }).catch(function(){});
-    // Playwright status
-    fetch('/api/playwright-mcp/status').then(function(r){ return r.json(); }).then(function(d) {
-      var el = document.getElementById('mcp-builtin-playwright-status');
-      if (el) {
-        el.innerHTML = d.running
-          ? '<span class="mcp-status-pill running">Running</span>'
-          : '<span class="mcp-status-pill stopped">Stopped</span>';
+      return;
+    }
+    closeTbPlusMenu();
+  }
+  function _refreshTbFigmaItem() {
+    var badge = document.getElementById('tb-figma-item-state');
+    if (!badge) return;
+    var enabled   = typeof state !== 'undefined' && state.figmaMCPEnabled;
+    var connected = typeof figmaMCPStatus !== 'undefined' && figmaMCPStatus.connected;
+    if (enabled && connected) {
+      badge.textContent = 'on'; badge.className = 'tb-pm-badge tb-pm-badge-on';
+    } else if (enabled) {
+      badge.textContent = 'on'; badge.className = 'tb-pm-badge tb-pm-badge-warn';
+    } else {
+      badge.textContent = 'off'; badge.className = 'tb-pm-badge';
+    }
+  }
+
+  // ── Toolbar model picker ───────────────────────────────────────────────
+  var _tbModelOpen = false;
+  function toggleTbModelMenu(e) {
+    if (e) e.stopPropagation();
+    _tbModelOpen = !_tbModelOpen;
+    var m = document.getElementById('tb-model-menu');
+    if (!m) return;
+    if (_tbModelOpen) {
+      _populateTbModelMenu();
+      m.style.display = '';
+      setTimeout(function() {
+        document.addEventListener('click', _closeTbModelOutside, { once: true, capture: true });
+      }, 0);
+    } else {
+      m.style.display = 'none';
+    }
+  }
+  function _closeTbModelOutside(e) {
+    var wrap = document.getElementById('tb-model-wrap');
+    if (wrap && wrap.contains(e.target)) {
+      if (_tbModelOpen) {
+        setTimeout(function() {
+          document.addEventListener('click', _closeTbModelOutside, { once: true, capture: true });
+        }, 0);
       }
-      var chk = document.getElementById('mcp-builtin-playwright-toggle');
-      if (chk && typeof state !== 'undefined') chk.checked = state.playwrightMCPEnabled;
+      return;
+    }
+    _tbModelOpen = false;
+    var m = document.getElementById('tb-model-menu');
+    if (m) m.style.display = 'none';
+  }
+  function _populateTbModelMenu() {
+    var menu = document.getElementById('tb-model-menu');
+    if (!menu || typeof allModels === 'undefined' || !allModels.length) return;
+    var groups = {};
+    allModels.forEach(function(m) {
+      var g = m.provider === 'copilot' ? 'GitHub' : (m.vendor || m.provider || 'Other');
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(m);
+    });
+    var cur = typeof state !== 'undefined' ? state.model : '';
+    var html = '';
+    Object.entries(groups).forEach(function(entry) {
+      var label = entry[0]; var models = entry[1];
+      html += '<div class="tb-model-group">' + label + '</div>';
+      models.forEach(function(m) {
+        var active = cur === m.id ? ' tb-model-item-active' : '';
+        var check  = cur === m.id ? '<i class="ti ti-check" style="font-size:10px;margin-left:auto;opacity:.7"></i>' : '';
+        html += '<button class="tb-model-item' + active + '" onclick="onModelChange(\'' +
+          m.id.replace(/\\/g,'\\\\').replace(/'/g,"\\'") + '\');_tbModelOpen=false;document.getElementById(\'tb-model-menu\').style.display=\'none\'">' +
+          '<span>' + m.name + '</span>' + check + '</button>';
+      });
+    });
+    menu.innerHTML = html;
+  }
+
+  function _faunaMCPSettingsRefresh() {
+    var dot   = document.getElementById('faunamcp-settings-dot');
+    var label = document.getElementById('faunamcp-settings-label');
+    if (!dot || !label) return;
+    fetch('/api/faunamcp/status').then(function(r){ return r.json(); }).then(function(d) {
+      var connected = d.connected;
+      dot.style.background = connected ? '#10b981' : '#555';
+      dot.style.boxShadow  = connected ? '0 0 5px #10b98166' : 'none';
+      label.style.color    = connected ? '#10b981' : 'var(--fau-text-muted)';
+      if (connected) {
+        var toolTxt = d.toolCount ? ' · ' + d.toolCount + ' tools' : '';
+        label.textContent = 'Connected' + toolTxt + ' — browser & Figma tools routed via FaunaMCP';
+      } else {
+        label.textContent = 'Not running — start the FaunaMCP app to share browser & Figma tools';
+      }
+    }).catch(function(){
+      var d2 = document.getElementById('faunamcp-settings-dot');
+      var l2 = document.getElementById('faunamcp-settings-label');
+      if (d2) { d2.style.background = '#555'; d2.style.boxShadow = 'none'; }
+      if (l2) { l2.textContent = 'Not running'; l2.style.color = 'var(--fau-text-muted)'; }
+    });
+  }
+
+  function _browserExtSettingsRefresh() {
+    var dot   = document.getElementById('browser-ext-settings-dot');
+    var label = document.getElementById('browser-ext-settings-label');
+    if (!dot || !label) return;
+    fetch('/api/ext/status').then(function(r){ return r.json(); }).then(function(d) {
+      var browsers = d.browsers || [];
+      var connected = browsers.length > 0;
+      dot.style.background   = connected ? '#10b981' : '#555';
+      dot.style.boxShadow    = connected ? '0 0 5px #10b98166' : 'none';
+      label.style.color      = connected ? '#10b981' : 'var(--fau-text-muted)';
+      if (connected) {
+        var names = browsers.map(function(b){ return b.browser + (b.version ? ' v' + b.version : ''); }).join(', ');
+        label.textContent = 'Connected — ' + names;
+      } else {
+        label.textContent = 'Not connected — open Chrome/Edge and load the extension';
+      }
+    }).catch(function(){
+      var dot2 = document.getElementById('browser-ext-settings-dot');
+      var lbl2 = document.getElementById('browser-ext-settings-label');
+      if (dot2) { dot2.style.background = '#555'; dot2.style.boxShadow = 'none'; }
+      if (lbl2) { lbl2.textContent = 'Not connected'; lbl2.style.color = 'var(--fau-text-muted)'; }
+    });
+  }
+
+  function _openExtInstallDir() {
+    fetch('/api/ext/install-dir').then(function(r){ return r.json(); }).then(function(d) {
+      if (d.path) {
+        fetch('/api/shell-open', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: d.path }) }).catch(function(){});
+      }
     }).catch(function(){});
   }
   </script>
@@ -993,86 +1180,42 @@ Examples:
 <script src="js/gen-ui.js"></script>
 <script src="js/chat.js"></script>
 <script src="js/voice.js"></script>
+<script src="js/automation-schedule.js"></script>
+<script src="js/automation-canvas.js"></script>
+<script src="js/automation-builder.js"></script>
 <script src="js/tasks.js"></script>
 <script src="js/projects.js"></script>
 <script src="js/design.js"></script>
 <script src="js/app.js"></script>
 
-<!-- ── Tasks panel ──────────────────────────────────────────────── -->
+<!-- ── Tasks / Automations panel ───────────────────────────────── -->
 <div id="tasks-panel">
-  <div id="tasks-header">
-    <span><i class="ti ti-checklist" style="font-size:16px;color:var(--accent)"></i></span>
-    <span class="title">Tasks</span>
-    <span style="flex:1"></span>
-    <button class="tasks-header-btn" onclick="toggleTaskCreateForm()" title="New task"><i class="ti ti-plus"></i></button>
-    <button class="tasks-header-btn" onclick="fetchTasks()" title="Refresh"><i class="ti ti-refresh"></i></button>
-    <button class="tasks-header-btn" onclick="toggleTasksPanel()" title="Close"><i class="ti ti-x"></i></button>
-  </div>
-  <div id="task-create-form" style="display:none">
-    <div class="task-form-row">
-      <input type="text" id="task-title-input" placeholder="Task title (e.g. Send quarterly email)" onkeydown="if(event.key==='Enter')submitTask()">
-    </div>
-    <div class="task-form-row">
-      <textarea id="task-desc-input" rows="2" placeholder="Description (what should be done)"></textarea>
-    </div>
-    <div class="task-form-row">
-      <textarea id="task-context-input" rows="2" placeholder="Context (extra info for the AI)"></textarea>
-    </div>
-    <div class="task-form-row">
-      <label>Agents</label>
-      <div class="task-agent-picker-wrap">
-        <div id="task-agent-selected" class="task-agent-selected"></div>
-        <input type="text" id="task-agent-search" placeholder="Search agents…" autocomplete="off" oninput="_filterAgentPicker(this.value)" onfocus="_showAgentPicker()">
-        <div id="task-agent-dropdown" class="task-agent-dropdown" style="display:none"></div>
-      </div>
-    </div>
-    <div class="task-form-row task-perms-row">
-      <label>Permissions</label>
-      <div class="task-perm-toggles">
-        <label class="task-perm-toggle" title="Allow shell/terminal commands">
-          <input type="checkbox" id="task-perm-shell" checked>
-          <i class="ti ti-terminal-2"></i> Shell
-        </label>
-        <label class="task-perm-toggle" title="Allow browser extension interaction">
-          <input type="checkbox" id="task-perm-browser" onchange="_onBrowserPermChange()">
-          <i class="ti ti-world-www"></i> Browser
-        </label>
-        <label class="task-perm-toggle" title="Allow Figma MCP tools">
-          <input type="checkbox" id="task-perm-figma">
-          <i class="ti ti-brand-figma"></i> Figma
-        </label>
-      </div>
-    </div>
-    <div class="task-form-row" id="task-browser-tabs-row" style="display:none">
-      <label>Target tabs <button type="button" class="task-tab-refresh-btn" onclick="_refreshExtTabs()" title="Refresh tabs"><i class="ti ti-refresh"></i></button></label>
-      <input type="text" id="task-tab-search" placeholder="Filter tabs…" autocomplete="off" oninput="_filterTabPicker(this.value)" style="font-size:11px;margin-bottom:4px">
-      <div id="task-tab-picker" class="task-tab-picker">
-        <div class="task-tab-picker-empty">Enable Browser above to pick tabs</div>
-      </div>
-      <input type="text" id="task-browser-tabs" placeholder="Or type URLs manually (comma-separated)" style="font-size:11px">
-    </div>
-    <div class="task-form-row">
-      <label>Schedule</label>
-      <select id="task-schedule-type" onchange="_onScheduleTypeChange()">
-        <option value="manual">Manual (run on demand)</option>
-        <option value="once">One-time</option>
-        <option value="recurring">Recurring (cron)</option>
-      </select>
-    </div>
-    <div class="task-form-row" id="task-schedule-at-row" style="display:none">
-      <label>Run at</label>
-      <input type="datetime-local" id="task-schedule-at">
-    </div>
-    <div class="task-form-row" id="task-schedule-cron-row" style="display:none">
-      <label>Cron expression</label>
-      <input type="text" id="task-schedule-cron" placeholder="0 9 * * 1  (Mon 9am)">
-    </div>
-    <div class="task-form-row" style="justify-content:flex-end;gap:8px">
-      <button class="task-form-cancel" onclick="toggleTaskCreateForm()">Cancel</button>
-      <button class="task-form-submit" id="task-create-btn" onclick="submitTask()"><i class="ti ti-plus"></i> Create Task</button>
+  <!-- Left nav column -->
+  <div id="auto-nav-col">
+    <button id="auto-back-btn" onclick="toggleTasksPanel()">
+      <i class="ti ti-arrow-left"></i>
+      Back to app
+    </button>
+    <button id="auto-new-nav-btn" onclick="openNewAutomation(null)">
+      <i class="ti ti-plus"></i> New Automation
+    </button>
+    <div id="auto-nav-section-label">Automations</div>
+    <div id="tasks-list"></div>
+    <div id="auto-nav-footer">
+      <button id="auto-refresh-btn" onclick="fetchTasks()" title="Refresh list">
+        <i class="ti ti-refresh"></i> Refresh
+      </button>
     </div>
   </div>
-  <div id="tasks-list"></div>
+  <!-- Right detail column -->
+  <div id="auto-content-col">
+    <div id="auto-detail-panel">
+      <div class="auto-detail-empty">
+        <i class="ti ti-clock-plus" style="font-size:26px;opacity:.2"></i>
+        <div>Select an automation or create a new one</div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- ── Playbook panel ──────────────────────────────────────────── -->

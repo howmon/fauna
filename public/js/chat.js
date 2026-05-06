@@ -878,20 +878,34 @@ async function maybeCompressConversation(conv) {
     var data = await r.json();
     if (!data.summary) return;
 
-    // Store summary and drop the summarized messages from history
+    // Archive old messages (strip image base64 to keep storage lean) instead of dropping
+    var archiveBatch = toSummarize.map(function(m) {
+      // Remove raw image bytes; keep text so the history is readable
+      if (Array.isArray(m.content)) {
+        var textOnly = m.content.filter(function(c) { return c.type === 'text'; }).map(function(c) { return c.text; }).join('\n');
+        return Object.assign({}, m, { content: textOnly || '[image]', images: undefined });
+      }
+      if (m.images && m.images.length) {
+        return Object.assign({}, m, { images: undefined });
+      }
+      return m;
+    });
+    conv.archivedMessages = (conv.archivedMessages || []).concat(archiveBatch);
+
+    // Store summary and trim active history (only recent messages sent to AI)
     conv.contextSummary = data.summary;
     conv.messages = conv.messages.slice(-SUMMARIZE_KEEP_RECENT);
     saveConversations();
-    dbg('context compressed — summary: ' + data.summary.length + ' chars, kept last ' + SUMMARIZE_KEEP_RECENT + ' messages', 'ok');
+    dbg('context compressed — summary: ' + data.summary.length + ' chars, kept last ' + SUMMARIZE_KEEP_RECENT + ' messages, archived ' + archiveBatch.length + ' to history', 'ok');
 
     // Show an indicator in the active conversation
     if (state.currentId === conv.id) {
       var indicator = document.createElement('div');
-      indicator.className = 'msg system-msg';
-      indicator.innerHTML = '<div class="msg-body" style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--fau-text-muted)">' +
-        '<i class="ti ti-compress" style="font-size:13px"></i>' +
-        '<span>Older messages summarized to save context — task state preserved</span>' +
-        '<button onclick="showContextSummary(\'' + conv.id + '\')" style="margin-left:auto;font-size:10px;opacity:.7;background:none;border:1px solid var(--fau-border);border-radius:3px;padding:1px 6px;cursor:pointer;color:inherit">View</button>' +
+      indicator.className = 'msg system-msg conv-archive-divider';
+      indicator.innerHTML = '<div class="msg-body conv-archive-divider-inner">' +
+        '<i class="ti ti-history"></i>' +
+        '<span>Older messages archived — full history preserved above, AI context starts here</span>' +
+        '<button onclick="showContextSummary(\'' + conv.id + '\')" class="conv-archive-view-btn">View summary</button>' +
       '</div>';
       getConvInner(conv.id).appendChild(indicator);
     }

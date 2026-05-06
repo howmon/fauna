@@ -138,6 +138,11 @@ function populateModelSelect() {
     });
     sel.appendChild(grp);
   });
+
+  // Sync toolbar label
+  var cur = allModels.find(m => m.id === state.model);
+  var lbl = document.getElementById('tb-model-label');
+  if (lbl) lbl.textContent = cur ? cur.name : (state.model || 'Model');
 }
 
 function onModelChange(id) {
@@ -145,6 +150,11 @@ function onModelChange(id) {
   localStorage.setItem('fauna-model', id);
   var m = allModels.find(m => m.id === id);
   if (m) showToast('Model: ' + m.name);
+  // Sync hidden select + toolbar label
+  var sel = document.getElementById('model-select');
+  if (sel) sel.value = id;
+  var lbl = document.getElementById('tb-model-label');
+  if (lbl) lbl.textContent = m ? m.name : id;
 }
 
 // ── Auth & Settings ───────────────────────────────────────────────────────
@@ -1164,10 +1174,13 @@ function updateContextMeter(data) {
   var totalUsed = promptTokens + completionTokens;
   var pct = Math.min((totalUsed / limit) * 100, 100);
 
-  fill.style.width = pct + '%';
-  fill.className = '';
-  if (pct > 80) fill.className = 'ctx-meter-danger';
-  else if (pct > 50) fill.className = 'ctx-meter-warn';
+  // Circular ring: r=9, circumference≈56.55
+  var offset = (56.55 * (1 - pct / 100)).toFixed(2);
+  fill.setAttribute('stroke-dashoffset', offset);
+  var cls = 'ctx-ring-arc';
+  if (pct > 80) cls += ' ctx-meter-danger';
+  else if (pct > 50) cls += ' ctx-meter-warn';
+  fill.setAttribute('class', cls);
 
   label.textContent = formatTokens(promptTokens) + ' in + ' + formatTokens(completionTokens) + ' out = ' + formatTokens(totalUsed) + ' / ' + formatTokens(limit) + (data.usage ? '' : ' (est.)');
   meter.style.display = 'flex';
