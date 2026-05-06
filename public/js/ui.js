@@ -1182,7 +1182,11 @@ function updateContextMeter(data) {
   else if (pct > 50) cls += ' ctx-meter-warn';
   fill.setAttribute('class', cls);
 
-  label.textContent = formatTokens(promptTokens) + ' in + ' + formatTokens(completionTokens) + ' out = ' + formatTokens(totalUsed) + ' / ' + formatTokens(limit) + (data.usage ? '' : ' (est.)');
+  var popover = document.getElementById('ctx-meter-popover');
+  var labelText = 'in:' + formatTokens(promptTokens) + ' + out:' + formatTokens(completionTokens) + ' = ' + formatTokens(totalUsed) + '/' + formatTokens(limit) + (data.usage ? '' : ' (est.)');
+  if (popover) popover.textContent = labelText;
+  meter.setAttribute('title', '');
+  meter.setAttribute('data-ctx-tip', labelText);
   meter.style.display = 'flex';
 }
 

@@ -300,21 +300,20 @@ function updateContextMeterGranular(data) {
   if (data.usage) {
     breakdown = 'in:' + formatTokens(promptTokens) + ' + out:' + formatTokens(completionTokens);
   }
-  label.textContent = breakdown + ' = ' + formatTokens(totalUsed) + '/' + formatTokens(limit) + (data.usage ? '' : ' (est.)');
-
-  // Tooltip with full breakdown
   var tipParts = [
     'System prompt: ~' + formatTokens(sysTokens) + ' tokens',
     'Messages: ~' + formatTokens(msgTokens) + ' tokens',
   ];
   if (data.usage) {
-    tipParts.push('Actual prompt: ' + formatTokens(promptTokens));
-    tipParts.push('Completion: ' + formatTokens(completionTokens));
+    tipParts.push('Actual in: ' + formatTokens(promptTokens));
+    tipParts.push('Actual out: ' + formatTokens(completionTokens));
   }
   tipParts.push('Model limit: ' + formatTokens(limit));
   tipParts.push('Used: ' + pct.toFixed(1) + '%');
-  meter.title = tipParts.join('\n');
-
+  var labelText = breakdown + ' = ' + formatTokens(totalUsed) + '/' + formatTokens(limit) + (data.usage ? '' : ' (est.)');
+  var popover = document.getElementById('ctx-meter-popover');
+  if (popover) popover.innerHTML = tipParts.map(function(l) { return '<div>' + l + '</div>'; }).join('');
+  meter.setAttribute('data-ctx-tip', labelText);
   meter.style.display = 'flex';
 }
 

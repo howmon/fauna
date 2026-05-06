@@ -1019,9 +1019,28 @@ button .ti, label .ti { pointer-events: none; }
 }
 .ctx-ring-arc.ctx-meter-warn    { stroke: var(--warn); }
 .ctx-ring-arc.ctx-meter-danger  { stroke: var(--error); }
-#ctx-meter-label {
-  font-size: 10px; color: var(--fau-text-dim); white-space: nowrap;
+/* figma-mcp-badge permanently offscreen — JS compat shim only */
+.figma-mcp-badge-hidden {
+  position: fixed; left: -9999px; width: 1px; height: 1px;
+  overflow: hidden; opacity: 0; pointer-events: none; display: block;
 }
+/* ctx-meter ring + popover */
+#ctx-meter {
+  position: relative; display: flex; align-items: center;
+  cursor: default; gap: 4px;
+}
+#ctx-meter-popover {
+  display: none;
+  position: absolute; bottom: calc(100% + 8px); right: 0;
+  background: var(--fau-surface); border: 1px solid var(--fau-border);
+  border-radius: 8px; padding: 8px 12px;
+  font-size: 11px; color: var(--fau-text); white-space: nowrap;
+  box-shadow: 0 6px 20px rgba(0,0,0,.5); z-index: 900;
+  line-height: 1.8; pointer-events: none;
+  min-width: 160px;
+}
+#ctx-meter:hover #ctx-meter-popover,
+#ctx-meter:focus-within #ctx-meter-popover { display: block; }
 
 /* ── Toolbar plus menu ─────────────────────────────────────────────── */
 #tb-plus-wrap { position: relative; flex-shrink: 0; }
