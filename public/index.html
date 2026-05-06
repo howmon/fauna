@@ -681,23 +681,73 @@ Examples:
   </div>
 
   <!-- ── MCP Servers ────────────────────────────────────────────── -->
-  <div class="settings-page" data-page="mcp">
+  <div class="settings-page" data-page="mcp" id="settings-page-mcp">
     <div class="settings-page-title">MCP Servers</div>
+
+    <!-- ── Built-in Servers ────────────────────────────────────── -->
     <div class="settings-section">
-      <div class="settings-section-title">Figma MCP</div>
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
-        <span style="font-size:12px;color:var(--fau-text-dim)">Status:</span>
-        <button class="settings-row-btn" onclick="toggleFigmaMCP()"><i class="ti ti-toggle-left"></i> Toggle Figma MCP</button>
-        <button class="settings-row-btn" onclick="toggleMcpServer()"><i class="ti ti-server"></i> Toggle MCP Server</button>
+      <div class="settings-section-title">Built-in Servers</div>
+      <div class="mcp-builtin-list">
+
+        <!-- Figma MCP -->
+        <div class="mcp-builtin-row" id="mcp-builtin-figma">
+          <div class="mcp-builtin-icon"><i class="ti ti-brand-figma"></i></div>
+          <div class="mcp-builtin-info">
+            <div class="mcp-builtin-name">Figma MCP</div>
+            <div class="mcp-builtin-desc">Read and write Figma design files via the FaunaMCP plugin.</div>
+          </div>
+          <div class="mcp-builtin-status" id="mcp-builtin-figma-status"></div>
+          <label class="mcp-toggle-switch" title="Enable Figma MCP">
+            <input type="checkbox" id="mcp-builtin-figma-toggle" onchange="mcpBuiltinToggle('figma',this.checked)">
+            <span class="mcp-toggle-track"></span>
+          </label>
+        </div>
+
+        <!-- Playwright MCP -->
+        <div class="mcp-builtin-row" id="mcp-builtin-playwright">
+          <div class="mcp-builtin-icon"><i class="ti ti-brand-chrome"></i></div>
+          <div class="mcp-builtin-info">
+            <div class="mcp-builtin-name">Browser MCP</div>
+            <div class="mcp-builtin-desc">Automate and control the browser via Playwright.</div>
+          </div>
+          <div class="mcp-builtin-status" id="mcp-builtin-playwright-status"></div>
+          <label class="mcp-toggle-switch" title="Enable Browser MCP">
+            <input type="checkbox" id="mcp-builtin-playwright-toggle" onchange="mcpBuiltinToggle('playwright',this.checked)">
+            <span class="mcp-toggle-track"></span>
+          </label>
+        </div>
+
       </div>
+    </div>
+
+    <!-- ── Custom MCP servers ──────────────────────────────────── -->
+    <div class="settings-section" id="mcp-custom-section">
+      <div class="settings-section-title">Custom Servers</div>
+      <div class="settings-hint" style="margin-bottom:12px">
+        Connect external tools and data sources via the Model Context Protocol.
+        <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener" style="color:var(--accent)">Learn more.</a>
+      </div>
+      <!-- List panel -->
+      <div id="mcp-list-panel">
+        <div class="mcp-servers-list" id="mcp-custom-list">
+          <div class="mcp-empty-row">
+            <span>No MCP servers connected</span>
+            <button class="mcp-add-btn" onclick="mcpMgr.showForm(null)"><i class="ti ti-plus"></i> Add server</button>
+          </div>
+        </div>
+      </div>
+      <!-- Add / Edit form panel -->
+      <div id="mcp-form-panel" style="display:none"></div>
+    </div>
+
+    <!-- Figma MCP extra controls (collapsed, accessed via Built-in row) -->
+    <div class="settings-section" id="mcp-figma-detail" style="display:none">
+      <div class="settings-section-title">Figma MCP</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="settings-row-btn" onclick="figmaWsConnect()"><i class="ti ti-refresh"></i> Reconnect</button>
         <button class="settings-row-btn" onclick="toggleFigmaSetup()"><i class="ti ti-puzzle"></i> Plugins &amp; Extensions</button>
+        <button class="settings-row-btn" onclick="toggleMcpServer()"><i class="ti ti-server"></i> Toggle MCP Server</button>
         <button class="settings-row-btn" onclick="toggleMcpLogs()"><i class="ti ti-terminal-2"></i> View Logs</button>
-      </div>
-      <div class="settings-hint" style="margin-top:8px">
-        Connect Fauna to Figma to read and write your design files directly via the MCP protocol.
-        Make sure the FaunaMCP plugin is open in Figma.
       </div>
     </div>
   </div>
@@ -775,6 +825,57 @@ Examples:
       b.classList.remove('active');
     });
     if (btn) btn.classList.add('active');
+    if (page === 'mcp') {
+      if (typeof mcpMgr !== 'undefined') mcpMgr.load();
+      mcpBuiltinInit();
+    }
+  }
+
+  function mcpBuiltinInit() {
+    // Figma toggle
+    var figmaChk = document.getElementById('mcp-builtin-figma-toggle');
+    if (figmaChk) figmaChk.checked = !!(typeof state !== 'undefined' && state.figmaMCPEnabled);
+    mcpBuiltinPollStatus();
+  }
+
+  function mcpBuiltinToggle(which, enabled) {
+    if (which === 'figma') {
+      if (typeof toggleFigmaMCP === 'function') {
+        // toggleFigmaMCP flips state itself, so only call if needed
+        if (!!(typeof state !== 'undefined' && state.figmaMCPEnabled) !== enabled) toggleFigmaMCP();
+      }
+      var detail = document.getElementById('mcp-figma-detail');
+      if (detail) detail.style.display = enabled ? '' : 'none';
+    } else if (which === 'playwright') {
+      if (typeof state !== 'undefined') {
+        state.playwrightMCPEnabled = enabled;
+        localStorage.setItem('fauna-playwright-mcp', enabled ? 'true' : 'false');
+      }
+      if (!enabled) fetch('/api/playwright-mcp/stop', { method: 'POST' }).catch(function(){});
+    }
+  }
+
+  function mcpBuiltinPollStatus() {
+    // Figma status
+    fetch('/api/figma/mcp-status').then(function(r){ return r.json(); }).then(function(d) {
+      var el = document.getElementById('mcp-builtin-figma-status');
+      if (el) {
+        el.innerHTML = d.running
+          ? '<span class="mcp-status-pill running">Running</span>'
+          : '<span class="mcp-status-pill stopped">Stopped</span>';
+      }
+    }).catch(function(){});
+    // Playwright status
+    fetch('/api/playwright-mcp/status').then(function(r){ return r.json(); }).then(function(d) {
+      var el = document.getElementById('mcp-builtin-playwright-status');
+      if (el) {
+        el.innerHTML = d.running
+          ? '<span class="mcp-status-pill running">Running</span>'
+          : '<span class="mcp-status-pill stopped">Stopped</span>';
+      }
+      var chk = document.getElementById('mcp-builtin-playwright-toggle');
+      if (chk && typeof state !== 'undefined') chk.checked = state.playwrightMCPEnabled;
+    }).catch(function(){});
   }
   </script>
 </div>
@@ -864,6 +965,7 @@ Examples:
 <script src="js/agents.js"></script>
 <script src="js/agent-system.js"></script>
 <script src="js/agent-builder.js"></script>
+<script src="js/mcp-manager.js"></script>
 <script src="js/agent-store.js"></script>
 <script src="js/agent-polish.js"></script>
 <script src="js/gen-ui.js"></script>

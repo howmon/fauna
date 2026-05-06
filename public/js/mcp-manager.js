@@ -1,0 +1,360 @@
+// ── Custom MCP Server Manager ────────────────────────────────────────────────
+// Manages the custom MCP servers settings page:
+//   - List all configured servers (with live running status)
+//   - Add / edit / remove servers
+//   - Start / stop individual servers
+//   - View recent logs
+
+var mcpMgr = (function () {
+  var _servers = [];      // cached list
+  var _editingId = null;  // id of server being edited (null = add mode)
+  var _showForm = false;
+  var _transport = 'stdio'; // current form transport tab
+
+  // ── API helpers ────────────────────────────────────────────────────────────
+
+  async function _api(method, path, body) {
+    const opts = { method, headers: { 'Content-Type': 'application/json' } };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    const r = await fetch(path, opts);
+    return r.json();
+  }
+
+  // ── Load & render server list ──────────────────────────────────────────────
+
+  async function loadServers() {
+    try {
+      _servers = await _api('GET', '/api/custom-mcp-servers');
+    } catch (_) {
+      _servers = [];
+    }
+    renderList();
+  }
+
+  function renderList() {
+    var el = document.getElementById('mcp-custom-list');
+    if (!el) return;
+
+    if (!_servers.length) {
+      el.innerHTML =
+        '<div class="mcp-empty-row">' +
+          '<span>No MCP servers connected</span>' +
+          '<button class="mcp-add-btn" onclick="mcpMgr.showForm(null)">' +
+            '<i class="ti ti-plus"></i> Add server' +
+          '</button>' +
+        '</div>';
+      return;
+    }
+
+    el.innerHTML = _servers.map(function (s) {
+      var statusDot = s.running
+        ? '<span class="mcp-dot running" title="Running"></span>'
+        : '<span class="mcp-dot stopped" title="Stopped"></span>';
+      var badge = s.transport === 'http'
+        ? '<span class="mcp-transport-badge http">HTTP</span>'
+        : '<span class="mcp-transport-badge stdio">STDIO</span>';
+      var startStop = s.transport === 'stdio'
+        ? (s.running
+            ? '<button class="mcp-row-btn" title="Stop" onclick="mcpMgr.stop(\'' + s.id + '\')">' +
+                '<i class="ti ti-player-stop"></i></button>'
+            : '<button class="mcp-row-btn" title="Start" onclick="mcpMgr.start(\'' + s.id + '\')">' +
+                '<i class="ti ti-player-play"></i></button>')
+        : '';
+      return (
+        '<div class="mcp-server-row" data-id="' + s.id + '">' +
+          '<span class="mcp-row-status">' + statusDot + '</span>' +
+          '<span class="mcp-row-name">' + _esc(s.name) + '</span>' +
+          badge +
+          '<span class="mcp-row-cmd">' + _esc(s.transport === 'http' ? s.url : s.command) + '</span>' +
+          '<div class="mcp-row-actions">' +
+            startStop +
+            '<button class="mcp-row-btn" title="Edit" onclick="mcpMgr.showForm(\'' + s.id + '\')">' +
+              '<i class="ti ti-pencil"></i></button>' +
+            '<button class="mcp-row-btn danger" title="Remove" onclick="mcpMgr.remove(\'' + s.id + '\')">' +
+              '<i class="ti ti-trash"></i></button>' +
+          '</div>' +
+        '</div>'
+      );
+    }).join('') +
+    '<div class="mcp-list-footer">' +
+      '<button class="mcp-add-btn" onclick="mcpMgr.showForm(null)">' +
+        '<i class="ti ti-plus"></i> Add server' +
+      '</button>' +
+    '</div>';
+  }
+
+  // ── Add / Edit form ────────────────────────────────────────────────────────
+
+  function showForm(id) {
+    _editingId = id;
+    _showForm = true;
+    var server = id ? _servers.find(function (s) { return s.id === id; }) : null;
+    _transport = (server && server.transport === 'http') ? 'http' : 'stdio';
+
+    var formEl = document.getElementById('mcp-form-panel');
+    if (!formEl) return;
+
+    // Populate args list
+    var argsArr = (server && server.args) ? server.args : [''];
+    var envArr  = (server && server.env)
+      ? Object.entries(server.env).map(function (kv) { return { k: kv[0], v: kv[1] }; })
+      : [{ k: '', v: '' }];
+    var passthroughArr = (server && server.envPassthrough) ? server.envPassthrough : [''];
+
+    formEl.innerHTML = _buildForm(server, argsArr, envArr, passthroughArr);
+    formEl.style.display = '';
+
+    // Hide list, show form
+    document.getElementById('mcp-list-panel').style.display = 'none';
+    _updateTransportTabs();
+  }
+
+  function hideForm() {
+    _showForm = false;
+    _editingId = null;
+    document.getElementById('mcp-form-panel').style.display = 'none';
+    document.getElementById('mcp-list-panel').style.display = '';
+    loadServers();
+  }
+
+  function _buildForm(server, argsArr, envArr, passthroughArr) {
+    var title = server ? 'Edit MCP server' : 'Connect to a custom MCP';
+    var nameVal = server ? _attr(server.name) : '';
+    var cmdVal  = server ? _attr(server.command || '') : '';
+    var urlVal  = server ? _attr(server.url || '') : '';
+    var cwdVal  = server ? _attr(server.cwd || '') : '';
+
+    return (
+      '<div class="mcp-form-header">' +
+        '<button class="mcp-back-btn" onclick="mcpMgr.hideForm()">' +
+          '<i class="ti ti-arrow-left"></i> Back' +
+        '</button>' +
+        '<div class="mcp-form-title">' + title + '</div>' +
+      '</div>' +
+      '<div class="mcp-form-body">' +
+        '<label class="mcp-field-label">Name</label>' +
+        '<input id="mcp-f-name" class="mcp-field-input" type="text" placeholder="MCP server name" value="' + nameVal + '">' +
+
+        '<div class="mcp-transport-tabs">' +
+          '<button class="mcp-tab-btn' + (_transport === 'stdio' ? ' active' : '') + '" onclick="mcpMgr.setTransport(\'stdio\')" id="mcp-tab-stdio">STDIO</button>' +
+          '<button class="mcp-tab-btn' + (_transport === 'http' ? ' active' : '') + '" onclick="mcpMgr.setTransport(\'http\')" id="mcp-tab-http">Streamable HTTP</button>' +
+        '</div>' +
+
+        '<div id="mcp-stdio-fields">' +
+          '<label class="mcp-field-label">Command to launch</label>' +
+          '<input id="mcp-f-cmd" class="mcp-field-input" type="text" placeholder="openai-dev-mcp serve-sqlite" value="' + cmdVal + '">' +
+
+          '<label class="mcp-field-label">Arguments</label>' +
+          '<div id="mcp-args-list">' + _buildArgRows(argsArr) + '</div>' +
+          '<button class="mcp-add-row-btn" onclick="mcpMgr.addArg()"><i class="ti ti-plus"></i> Add argument</button>' +
+
+          '<label class="mcp-field-label" style="margin-top:16px">Environment variables</label>' +
+          '<div id="mcp-env-list">' + _buildEnvRows(envArr) + '</div>' +
+          '<button class="mcp-add-row-btn" onclick="mcpMgr.addEnv()"><i class="ti ti-plus"></i> Add environment variable</button>' +
+
+          '<label class="mcp-field-label" style="margin-top:16px">Environment variable passthrough</label>' +
+          '<div id="mcp-passthrough-list">' + _buildPassthroughRows(passthroughArr) + '</div>' +
+          '<button class="mcp-add-row-btn" onclick="mcpMgr.addPassthrough()"><i class="ti ti-plus"></i> Add variable</button>' +
+
+          '<label class="mcp-field-label" style="margin-top:16px">Working directory</label>' +
+          '<input id="mcp-f-cwd" class="mcp-field-input" type="text" placeholder="~/code" value="' + cwdVal + '">' +
+        '</div>' +
+
+        '<div id="mcp-http-fields" style="display:none">' +
+          '<label class="mcp-field-label">Server URL</label>' +
+          '<input id="mcp-f-url" class="mcp-field-input" type="text" placeholder="https://my-mcp-server.example.com/mcp" value="' + urlVal + '">' +
+        '</div>' +
+
+        '<div class="mcp-form-actions">' +
+          '<button class="mcp-save-btn" onclick="mcpMgr.save()">Save</button>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function _buildArgRows(args) {
+    return args.map(function (a, i) {
+      return (
+        '<div class="mcp-dynamic-row">' +
+          '<input class="mcp-field-input mcp-arg-input" type="text" value="' + _attr(a) + '" placeholder="Argument ' + (i + 1) + '">' +
+          '<button class="mcp-rm-row-btn" onclick="mcpMgr.removeRow(this)"><i class="ti ti-x"></i></button>' +
+        '</div>'
+      );
+    }).join('');
+  }
+
+  function _buildEnvRows(envArr) {
+    return envArr.map(function (e) {
+      return (
+        '<div class="mcp-dynamic-row">' +
+          '<input class="mcp-field-input mcp-env-key" type="text" placeholder="Key" value="' + _attr(e.k) + '" style="width:38%">' +
+          '<input class="mcp-field-input mcp-env-val" type="text" placeholder="Value" value="' + _attr(e.v) + '" style="flex:1">' +
+          '<button class="mcp-rm-row-btn" onclick="mcpMgr.removeRow(this)"><i class="ti ti-x"></i></button>' +
+        '</div>'
+      );
+    }).join('');
+  }
+
+  function _buildPassthroughRows(arr) {
+    return arr.map(function (v) {
+      return (
+        '<div class="mcp-dynamic-row">' +
+          '<input class="mcp-field-input mcp-pass-input" type="text" value="' + _attr(v) + '" placeholder="VARIABLE_NAME">' +
+          '<button class="mcp-rm-row-btn" onclick="mcpMgr.removeRow(this)"><i class="ti ti-x"></i></button>' +
+        '</div>'
+      );
+    }).join('');
+  }
+
+  function setTransport(t) {
+    _transport = t;
+    _updateTransportTabs();
+  }
+
+  function _updateTransportTabs() {
+    var stdioBtn = document.getElementById('mcp-tab-stdio');
+    var httpBtn  = document.getElementById('mcp-tab-http');
+    var stdioF   = document.getElementById('mcp-stdio-fields');
+    var httpF    = document.getElementById('mcp-http-fields');
+    if (!stdioBtn) return;
+    stdioBtn.classList.toggle('active', _transport === 'stdio');
+    httpBtn.classList.toggle('active', _transport === 'http');
+    if (stdioF) stdioF.style.display = _transport === 'stdio' ? '' : 'none';
+    if (httpF)  httpF.style.display  = _transport === 'http' ? '' : 'none';
+  }
+
+  // Dynamic row helpers
+  function addArg() {
+    var list = document.getElementById('mcp-args-list');
+    if (!list) return;
+    var idx = list.querySelectorAll('.mcp-arg-input').length;
+    var row = document.createElement('div');
+    row.className = 'mcp-dynamic-row';
+    row.innerHTML = '<input class="mcp-field-input mcp-arg-input" type="text" placeholder="Argument ' + (idx + 1) + '">' +
+      '<button class="mcp-rm-row-btn" onclick="mcpMgr.removeRow(this)"><i class="ti ti-x"></i></button>';
+    list.appendChild(row);
+  }
+
+  function addEnv() {
+    var list = document.getElementById('mcp-env-list');
+    if (!list) return;
+    var row = document.createElement('div');
+    row.className = 'mcp-dynamic-row';
+    row.innerHTML = '<input class="mcp-field-input mcp-env-key" type="text" placeholder="Key" style="width:38%">' +
+      '<input class="mcp-field-input mcp-env-val" type="text" placeholder="Value" style="flex:1">' +
+      '<button class="mcp-rm-row-btn" onclick="mcpMgr.removeRow(this)"><i class="ti ti-x"></i></button>';
+    list.appendChild(row);
+  }
+
+  function addPassthrough() {
+    var list = document.getElementById('mcp-passthrough-list');
+    if (!list) return;
+    var row = document.createElement('div');
+    row.className = 'mcp-dynamic-row';
+    row.innerHTML = '<input class="mcp-field-input mcp-pass-input" type="text" placeholder="VARIABLE_NAME">' +
+      '<button class="mcp-rm-row-btn" onclick="mcpMgr.removeRow(this)"><i class="ti ti-x"></i></button>';
+    list.appendChild(row);
+  }
+
+  function removeRow(btn) {
+    var row = btn.closest('.mcp-dynamic-row');
+    if (row) row.remove();
+  }
+
+  // ── Save ──────────────────────────────────────────────────────────────────
+
+  async function save() {
+    var name = (document.getElementById('mcp-f-name')?.value || '').trim();
+    if (!name) { alert('Please enter a server name.'); return; }
+
+    var payload = { name, transport: _transport };
+
+    if (_transport === 'stdio') {
+      var cmd = (document.getElementById('mcp-f-cmd')?.value || '').trim();
+      if (!cmd) { alert('Please enter a command to launch.'); return; }
+      payload.command = cmd;
+
+      // Args
+      var argInputs = document.querySelectorAll('#mcp-args-list .mcp-arg-input');
+      payload.args = Array.from(argInputs).map(function (el) { return el.value.trim(); }).filter(Boolean);
+
+      // Env vars
+      var envKeys = document.querySelectorAll('#mcp-env-list .mcp-env-key');
+      var envVals = document.querySelectorAll('#mcp-env-list .mcp-env-val');
+      payload.env = {};
+      for (var i = 0; i < envKeys.length; i++) {
+        var k = envKeys[i].value.trim();
+        if (k) payload.env[k] = envVals[i].value;
+      }
+
+      // Passthrough
+      var ptInputs = document.querySelectorAll('#mcp-passthrough-list .mcp-pass-input');
+      payload.envPassthrough = Array.from(ptInputs).map(function (el) { return el.value.trim(); }).filter(Boolean);
+
+      payload.cwd = (document.getElementById('mcp-f-cwd')?.value || '').trim();
+    } else {
+      var url = (document.getElementById('mcp-f-url')?.value || '').trim();
+      if (!url) { alert('Please enter a server URL.'); return; }
+      payload.url = url;
+    }
+
+    try {
+      var result;
+      if (_editingId) {
+        result = await _api('PUT', '/api/custom-mcp-servers/' + _editingId, payload);
+      } else {
+        result = await _api('POST', '/api/custom-mcp-servers', payload);
+      }
+      if (!result.ok) { alert('Error: ' + (result.error || 'Unknown error')); return; }
+      hideForm();
+    } catch (e) {
+      alert('Failed to save: ' + e.message);
+    }
+  }
+
+  // ── Start / stop / remove ─────────────────────────────────────────────────
+
+  async function start(id) {
+    await _api('POST', '/api/custom-mcp-servers/' + id + '/start');
+    await loadServers();
+  }
+
+  async function stop(id) {
+    await _api('POST', '/api/custom-mcp-servers/' + id + '/stop');
+    await loadServers();
+  }
+
+  async function remove(id) {
+    var server = _servers.find(function (s) { return s.id === id; });
+    var name = server ? server.name : 'this server';
+    if (!confirm('Remove "' + name + '"?')) return;
+    await _api('DELETE', '/api/custom-mcp-servers/' + id);
+    await loadServers();
+  }
+
+  // ── Utils ──────────────────────────────────────────────────────────────────
+
+  function _esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  function _attr(s) {
+    return String(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
+  // ── Public API ────────────────────────────────────────────────────────────
+
+  return {
+    load: loadServers,
+    showForm: showForm,
+    hideForm: hideForm,
+    setTransport: setTransport,
+    addArg: addArg,
+    addEnv: addEnv,
+    addPassthrough: addPassthrough,
+    removeRow: removeRow,
+    save: save,
+    start: start,
+    stop: stop,
+    remove: remove,
+  };
+})();

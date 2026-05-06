@@ -3854,6 +3854,135 @@ app.post('/api/figma-mcp/call', async (req, res) => {
   }
 });
 
+// ── Custom MCP Servers ───────────────────────────────────────────────────────
+// Users can add global custom MCP servers (STDIO or HTTP) that are available
+// across all conversations (not tied to a specific agent).
+
+const CUSTOM_MCP_FILE = path.join(CONFIG_DIR, 'custom-mcp-servers.json');
+const _customMcpProcesses = new Map(); // id → { proc, logs: [] }
+
+function readCustomMcpServers() {
+  try { return JSON.parse(fs.readFileSync(CUSTOM_MCP_FILE, 'utf8')); }
+  catch (_) { return []; }
+}
+function writeCustomMcpServers(servers) {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.writeFileSync(CUSTOM_MCP_FILE, JSON.stringify(servers, null, 2));
+}
+
+function customMcpStatus(server) {
+  const running = _customMcpProcesses.has(server.id);
+  const entry = _customMcpProcesses.get(server.id);
+  return {
+    ...server,
+    running,
+    pid: entry?.proc?.pid ?? null,
+    recentLogs: entry?.logs?.slice(-20) ?? [],
+  };
+}
+
+function startCustomMcpServer(server) {
+  if (!server.id || !server.command) return { ok: false, error: 'id and command are required' };
+  if (_customMcpProcesses.has(server.id)) return { ok: true, status: 'already-running' };
+
+  try {
+    const args = (server.args || []).filter(Boolean);
+    const env = { ...process.env, ...(server.env || {}) };
+    const cwd = server.cwd ? server.cwd.replace(/^~/, os.homedir()) : os.homedir();
+
+    const proc = spawn(server.command, args, { env, cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    const logs = [];
+
+    proc.stdout.on('data', d => logs.push({ t: Date.now(), s: 'stdout', m: d.toString().trim() }));
+    proc.stderr.on('data', d => logs.push({ t: Date.now(), s: 'stderr', m: d.toString().trim() }));
+    proc.on('exit', code => {
+      logs.push({ t: Date.now(), s: 'system', m: `Process exited with code ${code}` });
+      _customMcpProcesses.delete(server.id);
+    });
+
+    _customMcpProcesses.set(server.id, { proc, logs });
+    return { ok: true, status: 'started', pid: proc.pid };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+function stopCustomMcpServer(id) {
+  const entry = _customMcpProcesses.get(id);
+  if (!entry) return { ok: true, status: 'not-running' };
+  try { entry.proc.kill('SIGTERM'); } catch (_) {}
+  _customMcpProcesses.delete(id);
+  return { ok: true, status: 'stopped' };
+}
+
+// GET all custom MCP servers (with live status)
+app.get('/api/custom-mcp-servers', (req, res) => {
+  const servers = readCustomMcpServers();
+  res.json(servers.map(customMcpStatus));
+});
+
+// POST add a new custom MCP server
+app.post('/api/custom-mcp-servers', (req, res) => {
+  const { name, transport = 'stdio', command, args = [], env = {}, envPassthrough = [], cwd = '', url = '' } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'name is required' });
+  if (transport === 'stdio' && !command) return res.status(400).json({ error: 'command is required for STDIO transport' });
+  if (transport === 'http' && !url) return res.status(400).json({ error: 'url is required for HTTP transport' });
+
+  const servers = readCustomMcpServers();
+  const id = 'mcp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+  const server = { id, name: name.trim(), transport, command: command || '', args, env, envPassthrough, cwd, url, enabled: true, createdAt: Date.now() };
+  servers.push(server);
+  writeCustomMcpServers(servers);
+  res.json({ ok: true, server: customMcpStatus(server) });
+});
+
+// PUT update a custom MCP server
+app.put('/api/custom-mcp-servers/:id', (req, res) => {
+  const servers = readCustomMcpServers();
+  const idx = servers.findIndex(s => s.id === req.params.id);
+  if (idx < 0) return res.status(404).json({ error: 'Server not found' });
+  // Stop if running before updating
+  stopCustomMcpServer(req.params.id);
+  const updated = { ...servers[idx], ...req.body, id: req.params.id };
+  servers[idx] = updated;
+  writeCustomMcpServers(servers);
+  res.json({ ok: true, server: customMcpStatus(updated) });
+});
+
+// DELETE remove a custom MCP server
+app.delete('/api/custom-mcp-servers/:id', (req, res) => {
+  const servers = readCustomMcpServers();
+  const idx = servers.findIndex(s => s.id === req.params.id);
+  if (idx < 0) return res.status(404).json({ error: 'Server not found' });
+  stopCustomMcpServer(req.params.id);
+  servers.splice(idx, 1);
+  writeCustomMcpServers(servers);
+  res.json({ ok: true });
+});
+
+// POST start a custom MCP server
+app.post('/api/custom-mcp-servers/:id/start', (req, res) => {
+  const servers = readCustomMcpServers();
+  const server = servers.find(s => s.id === req.params.id);
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+  res.json(startCustomMcpServer(server));
+});
+
+// POST stop a custom MCP server
+app.post('/api/custom-mcp-servers/:id/stop', (req, res) => {
+  res.json(stopCustomMcpServer(req.params.id));
+});
+
+// GET logs for a custom MCP server
+app.get('/api/custom-mcp-servers/:id/logs', (req, res) => {
+  const entry = _customMcpProcesses.get(req.params.id);
+  const since = parseInt(req.query.since || '0', 10);
+  const logs = (entry?.logs || []).filter(l => l.t > since);
+  res.json({ ok: true, logs });
+});
+
+// ── End Custom MCP Servers ──────────────────────────────────────────────────
+
 // Start trying to connect immediately when the server starts
 // Also auto-start the MCP server if it's not already running
 setTimeout(() => {
