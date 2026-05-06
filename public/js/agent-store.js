@@ -770,111 +770,73 @@ function renderStoreMyAgents() {
   var agentStats = data.agents || {};
   var analyticsOn = typeof analyticsEnabled !== 'undefined' ? analyticsEnabled : false;
 
-  var html = '<div class="store-myagents">';
-
-  // Toggle row
-  html += '<div class="myagents-toggle-row">' +
-    '<label class="builder-toggle"><input type="checkbox"' + (analyticsOn ? ' checked' : '') + ' onchange="toggleAnalytics(this.checked)"><span class="builder-toggle-slider"></span></label>' +
-    '<span>Usage analytics</span>' +
-  '</div>';
-
-  // Compact stats row
-  html += '<div class="myagents-stats-row">' +
-    '<div class="myagents-stat"><span class="myagents-stat-num">' + data.totalInvocations + '</span><span class="myagents-stat-lbl">Calls</span></div>' +
-    '<div class="myagents-stat"><span class="myagents-stat-num">' + Object.keys(agentStats).length + '</span><span class="myagents-stat-lbl">Used</span></div>' +
-    '<div class="myagents-stat"><span class="myagents-stat-num">' + (data.sessions || []).length + '</span><span class="myagents-stat-lbl">Sessions</span></div>' +
-  '</div>';
-
-  // Split agents into local (user-created) vs store-installed
   var localAgents = agents.filter(function(a) { return !(a._meta && a._meta.installedFromStore); });
   var storeAgents = agents.filter(function(a) { return a._meta && a._meta.installedFromStore; });
 
-  // ── Local agents section ──
-  html += '<div class="myagents-section-title"><i class="ti ti-device-laptop"></i> Local (' + localAgents.length + ')</div>';
+  var html = '<div class="store-myagents">';
 
-  if (!localAgents.length) {
-    html += '<div class="store-empty" style="padding:16px 0"><i class="ti ti-code-plus"></i><p>No local agents yet — build one in the Agent Builder</p></div>';
-  } else {
-    html += '<div class="myagents-list">';
-    for (var li = 0; li < localAgents.length; li++) {
-      var la = localAgents[li];
-      var lst = agentStats[la.name] || { invocations: 0, totalDuration: 0 };
-      var lavg = lst.invocations > 0 ? (lst.totalDuration / lst.invocations / 1000).toFixed(1) : '—';
-      var llast = lst.lastUsed ? new Date(lst.lastUsed).toLocaleDateString() : '—';
-      var liconHtml = typeof agentIconHtml === 'function' ? agentIconHtml(la) : '<i class="ti ' + (la.icon || 'ti-robot') + '"></i>';
-      var isPublished = storeState.myPublishedSlugs.indexOf(la.name) !== -1;
-
-      html += '<div class="myagent-row">' +
-        '<div class="myagent-icon">' + liconHtml + '</div>' +
-        '<div class="myagent-info">' +
-          '<div class="myagent-name">' + escHtml(la.displayName) +
-            (isPublished
-              ? '<span class="myagent-badge published"><i class="ti ti-world"></i> Published</span>'
-              : '<span class="myagent-badge local"><i class="ti ti-device-laptop"></i> Local</span>') +
-          '</div>' +
-          '<div class="myagent-desc">' + escHtml((la.description || '').substring(0, 60)) + '</div>' +
-        '</div>' +
-        '<div class="myagent-metrics">' +
-          '<div class="myagent-metric"><span class="myagent-metric-num">' + lst.invocations + '</span><span class="myagent-metric-lbl">calls</span></div>' +
-          '<div class="myagent-metric"><span class="myagent-metric-num">' + lavg + 's</span><span class="myagent-metric-lbl">avg</span></div>' +
-          '<div class="myagent-metric"><span class="myagent-metric-num">' + llast + '</span><span class="myagent-metric-lbl">last</span></div>' +
-        '</div>' +
-        '<div class="myagent-actions">' +
-          '<button class="builder-btn primary small" onclick="quickActivateAgent(\'' + escHtml(la.name) + '\');closeAgentStore()" title="Use agent"><i class="ti ti-player-play"></i> Use</button>' +
-          '<button class="builder-btn secondary small" onclick="closeAgentStore();openAgentBuilder(\'' + escHtml(la.name) + '\')" title="Edit agent"><i class="ti ti-pencil"></i></button>' +
-          (!isPublished && storeState.account ? '<button class="builder-btn secondary small" onclick="publishAgent(\'' + escHtml(la.name) + '\')" title="Publish to store"><i class="ti ti-upload"></i></button>' : '') +
-        '</div>' +
-      '</div>';
-    }
-    html += '</div>';
-  }
-
-  // ── Store-installed agents section ──
-  if (storeAgents.length) {
-    html += '<div class="myagents-section-title"><i class="ti ti-download"></i> From Store (' + storeAgents.length + ')</div>';
-    html += '<div class="myagents-list">';
-    for (var si = 0; si < storeAgents.length; si++) {
-      var sa = storeAgents[si];
-      var sst = agentStats[sa.name] || { invocations: 0, totalDuration: 0 };
-      var savg = sst.invocations > 0 ? (sst.totalDuration / sst.invocations / 1000).toFixed(1) : '—';
-      var slast = sst.lastUsed ? new Date(sst.lastUsed).toLocaleDateString() : '—';
-      var siconHtml = typeof agentIconHtml === 'function' ? agentIconHtml(sa) : '<i class="ti ' + (sa.icon || 'ti-robot') + '"></i>';
-      var isMine = (storeState.account && sa._meta && sa._meta.installedBy === storeState.account.email)
-        || storeState.myPublishedSlugs.indexOf(sa.name) !== -1;
-
-      html += '<div class="myagent-row">' +
-        '<div class="myagent-icon">' + siconHtml + '</div>' +
-        '<div class="myagent-info">' +
-          '<div class="myagent-name">' + escHtml(sa.displayName) +
-            '<span class="myagent-badge store"><i class="ti ti-building-store"></i> Store</span>' +
-          '</div>' +
-          '<div class="myagent-desc">' + escHtml((sa.description || '').substring(0, 60)) + '</div>' +
-        '</div>' +
-        '<div class="myagent-metrics">' +
-          '<div class="myagent-metric"><span class="myagent-metric-num">' + sst.invocations + '</span><span class="myagent-metric-lbl">calls</span></div>' +
-          '<div class="myagent-metric"><span class="myagent-metric-num">' + savg + 's</span><span class="myagent-metric-lbl">avg</span></div>' +
-          '<div class="myagent-metric"><span class="myagent-metric-num">' + slast + '</span><span class="myagent-metric-lbl">last</span></div>' +
-        '</div>' +
-        '<div class="myagent-actions">' +
-          '<button class="builder-btn primary small" onclick="quickActivateAgent(\'' + escHtml(sa.name) + '\');closeAgentStore()" title="Use agent"><i class="ti ti-player-play"></i> Use</button>' +
-          (isMine ? '<button class="builder-btn secondary small" onclick="closeAgentStore();openAgentBuilder(\'' + escHtml(sa.name) + '\')" title="Edit agent"><i class="ti ti-pencil"></i></button>' : '') +
-        '</div>' +
-      '</div>';
-    }
-    html += '</div>';
-  }
-
-  // Published agents section (loaded async)
-  html += '<div id="myagents-published-section"></div>';
-
-  // Footer
-  html += '<div class="myagents-footer">' +
-    '<button class="builder-btn secondary" onclick="clearAnalytics();switchBrowseTab(\'myagents\')"><i class="ti ti-trash"></i> Clear Analytics</button>' +
+  // ── Header row: count + analytics toggle ──
+  html += '<div class="myagents-header-row">' +
+    '<span class="myagents-total">' + agents.length + ' agent' + (agents.length !== 1 ? 's' : '') + '</span>' +
+    '<label class="myagents-analytics-toggle" title="Usage analytics">' +
+      '<input type="checkbox"' + (analyticsOn ? ' checked' : '') + ' onchange="toggleAnalytics(this.checked)">' +
+      '<span class="myagents-analytics-track"></span>' +
+      '<span class="myagents-analytics-label">Analytics</span>' +
+    '</label>' +
   '</div>';
+
+  function agentRow(a, isStore) {
+    var st = agentStats[a.name] || { invocations: 0, totalDuration: 0 };
+    var iconHtml = typeof agentIconHtml === 'function' ? agentIconHtml(a) : '<i class="ti ' + (a.icon || 'ti-robot') + '"></i>';
+    var isPublished = storeState.myPublishedSlugs.indexOf(a.name) !== -1;
+    var canEdit = !isStore || (storeState.account && a._meta && a._meta.installedBy === storeState.account.email) || isPublished;
+    var badge = isPublished
+      ? '<span class="myagent-badge published">Published</span>'
+      : isStore
+        ? ''
+        : '';
+
+    var callsLabel = analyticsOn && st.invocations > 0
+      ? '<span class="myagent-calls">' + st.invocations + ' call' + (st.invocations !== 1 ? 's' : '') + '</span>'
+      : '';
+
+    return '<div class="myagent-row">' +
+      '<div class="myagent-icon">' + iconHtml + '</div>' +
+      '<div class="myagent-info">' +
+        '<div class="myagent-name">' + escHtml(a.displayName) + badge + '</div>' +
+        '<div class="myagent-desc">' + escHtml((a.description || '').substring(0, 72)) + '</div>' +
+      '</div>' +
+      callsLabel +
+      '<div class="myagent-actions">' +
+        '<button class="ma-btn primary" onclick="quickActivateAgent(\'' + escHtml(a.name) + '\');closeAgentStore()" title="Use"><i class="ti ti-player-play"></i> Use</button>' +
+        (canEdit ? '<button class="ma-btn" onclick="closeAgentStore();openAgentBuilder(\'' + escHtml(a.name) + '\')" title="Edit"><i class="ti ti-pencil"></i></button>' : '') +
+        (!isStore && !isPublished && storeState.account ? '<button class="ma-btn" onclick="publishAgent(\'' + escHtml(a.name) + '\')" title="Publish"><i class="ti ti-upload"></i></button>' : '') +
+      '</div>' +
+    '</div>';
+  }
+
+  // ── Local agents ──
+  if (localAgents.length) {
+    html += '<div class="myagents-group-label">Local</div>';
+    html += '<div class="myagents-list">';
+    for (var li = 0; li < localAgents.length; li++) html += agentRow(localAgents[li], false);
+    html += '</div>';
+  } else {
+    html += '<div class="store-empty" style="padding:24px 0"><i class="ti ti-code-plus"></i><p>No local agents yet — build one in the Agent Builder</p></div>';
+  }
+
+  // ── Store-installed ──
+  if (storeAgents.length) {
+    html += '<div class="myagents-group-label">From Store</div>';
+    html += '<div class="myagents-list">';
+    for (var si = 0; si < storeAgents.length; si++) html += agentRow(storeAgents[si], true);
+    html += '</div>';
+  }
+
+  html += '<div id="myagents-published-section"></div>';
 
   html += '</div>';
 
-  // Fetch published agents in background
   if (storeState.account && localStorage.getItem('store-token')) {
     loadMyPublishedAgents();
   }
@@ -1525,15 +1487,14 @@ function openStoreAccount() {
 }
 
 function updateTopbarAccount() {
-  var label = document.getElementById('topbar-account-label');
   var btn = document.getElementById('topbar-account-btn');
-  if (!label) return;
+  if (!btn) return;
   if (storeState.account) {
-    label.textContent = storeState.account.name || 'Account';
-    if (btn) btn.classList.add('logged-in');
+    btn.classList.add('logged-in');
+    btn.title = (storeState.account.name || 'Account') + ' — click to open settings';
   } else {
-    label.textContent = 'Account';
-    if (btn) btn.classList.remove('logged-in');
+    btn.classList.remove('logged-in');
+    btn.title = 'Account & settings';
   }
 }
 

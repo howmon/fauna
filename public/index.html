@@ -187,13 +187,25 @@
     <!-- Top bar -->
     <div id="topbar">
       <button id="toggle-sidebar" onclick="toggleSidebar()" title="Toggle sidebar"><i class="ti ti-menu-2"></i></button>
-      <span id="topbar-title">New conversation</span>
-      <span id="topbar-project-pill" style="display:none" onclick="openProjectHub()" title="You are in a project — click to open hub"><i class="ti ti-folder"></i> <span id="topbar-project-name"></span></span>
+      <!-- Breadcrumb: shows project > conversation or just conversation title -->
+      <div id="topbar-breadcrumb">
+        <span id="topbar-project-crumb" style="display:none" onclick="openProjectHub()" title="Open project hub">
+          <i class="ti ti-folder-filled"></i>
+          <span id="topbar-project-name" class="topbar-crumb-project"></span>
+        </span>
+        <i class="ti ti-chevron-right topbar-crumb-sep" id="topbar-crumb-sep" style="display:none"></i>
+        <span id="topbar-title" class="topbar-crumb-conv">New conversation</span>
+      </div>
+      <!-- hidden compat stubs for existing JS -->
+      <span id="topbar-project-pill" style="display:none !important"></span>
       <span id="agent-badge" style="display:none !important" onclick="deactivateAgent(getConv(state.currentId))"></span>
       <select id="model-select" onchange="onModelChange(this.value)"></select>
-      <!-- Primary CTAs always visible -->
+      <!-- Right side: voice + profile + overflow -->
       <button class="topbar-btn voice-mic-btn" id="voice-mic-btn" data-voice-state="off" title="Voice control — click to toggle, say wake word to activate"><i class="ti ti-microphone-off"></i></button>
-      <button class="topbar-btn topbar-account-btn" id="topbar-account-btn" onclick="openStoreAccount()" title="Agent Store Account"><i class="ti ti-user-circle"></i> <span id="topbar-account-label">Account</span></button>
+      <button class="topbar-icon-btn" id="topbar-account-btn" onclick="openUserSettings()" title="Account &amp; settings">
+        <i class="ti ti-user-circle" id="topbar-account-icon"></i>
+        <span id="topbar-account-label" style="display:none"></span>
+      </button>
       <!-- Overflow menu -->
       <div id="topbar-overflow" class="topbar-overflow">
         <button class="topbar-btn" id="topbar-overflow-btn" onclick="toggleTopbarMenu(event)" title="More options"><i class="ti ti-dots"></i></button>
@@ -817,6 +829,16 @@ Examples:
   </div><!-- /#settings-content-col -->
 
   <script>
+  function openUserSettings() {
+    // Open settings panel to the auth page
+    var panel = document.getElementById('settings-panel');
+    if (panel) {
+      panel.classList.add('open');
+      var authBtn = document.querySelector('#settings-panel .settings-nav-item[data-page="auth"]');
+      switchSettingsPage('auth', authBtn);
+    }
+  }
+
   function switchSettingsPage(page, btn) {
     document.querySelectorAll('#settings-panel .settings-page').forEach(function(p) {
       p.classList.toggle('active', p.dataset.page === page);

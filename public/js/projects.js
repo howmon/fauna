@@ -204,17 +204,27 @@ function toggleProjectContext(ctxId) {
 // ── Set / Clear Active Project ────────────────────────────────────────────
 
 function updateProjectIndicator() {
+  // Legacy pill stubs (kept for compat but always hidden)
   var pill = document.getElementById('topbar-project-pill');
   var nameEl = document.getElementById('topbar-project-name');
-  if (!pill || !nameEl) return;
   var proj = _activeProject();
-  if (proj) {
-    nameEl.textContent = proj.name;
-    pill.style.display = '';
-  } else {
-    pill.style.display = 'none';
-    nameEl.textContent = '';
+
+  // ── Breadcrumb ────────────────────────────────────────────────
+  var crumb    = document.getElementById('topbar-project-crumb');
+  var crumbSep = document.getElementById('topbar-crumb-sep');
+  var crumbName = document.getElementById('topbar-project-name'); // shared id
+
+  if (crumb) {
+    if (proj) {
+      if (crumbName) crumbName.textContent = proj.name;
+      crumb.style.display = '';
+      if (crumbSep) crumbSep.style.display = '';
+    } else {
+      crumb.style.display = 'none';
+      if (crumbSep) crumbSep.style.display = 'none';
+    }
   }
+
   _updateMoveToProjectBtn();
 
   // Sidebar active project strip
