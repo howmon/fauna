@@ -1045,6 +1045,7 @@ async function saveFileAsContext(srcId, filePath) {
     if (!r2.ok) throw new Error('Failed to save context');
     await _refreshProject(state.activeProjectId);
     renderProjectContextBar();
+    if (state.projectHubOpen) _renderProjectHubBody(_activeProject());
     _showToast('Saved as project context');
   } catch(e) { _showToast('Error: ' + e.message, true); }
 }
@@ -1254,6 +1255,7 @@ async function saveArtifactToProject(artifactId) {
     if (!r.ok) throw new Error((await r.json()).error);
     await _refreshProject(proj.id);
     renderProjectContextBar();
+    if (state.projectHubOpen) _renderProjectHubBody(_activeProject());
     _showToast('Saved to ' + proj.name);
   } catch(e) { _showToast('Error: ' + e.message, true); }
 }
@@ -1272,6 +1274,7 @@ async function saveGenUIToProject(specJson, title) {
       if (!r.ok) throw new Error((await r.json()).error);
       await _refreshProject(proj.id);
       renderProjectContextBar();
+      if (state.projectHubOpen) _renderProjectHubBody(_activeProject());
       _showToast('Saved to ' + proj.name);
     } catch(e) { _showToast('Error: ' + e.message, true); }
   } else {
@@ -1348,6 +1351,8 @@ async function _saveGenUIToSpecificProject(projectId, overlay) {
     if (!r.ok) throw new Error((await r.json()).error);
     var proj = state.projects.find(function(p) { return p.id === projectId; });
     await _refreshProject(projectId);
+    renderProjectContextBar();
+    if (state.projectHubOpen) _renderProjectHubBody(_activeProject());
     _showToast('Saved to ' + (proj ? proj.name : 'project'));
   } catch(e) { _showToast('Error: ' + e.message, true); }
 }
@@ -2796,7 +2801,7 @@ async function submitCreateProject() {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ title: pending.title || 'UI Component', content: pending.specJson, type: 'json' })
         });
-        if (sr.ok) { await _refreshProject(proj.id); renderProjectContextBar(); _showToast('UI saved to ' + proj.name); }
+        if (sr.ok) { await _refreshProject(proj.id); renderProjectContextBar(); if (state.projectHubOpen) _renderProjectHubBody(_activeProject()); _showToast('UI saved to ' + proj.name); }
       } catch(_) {}
     }
 
