@@ -639,9 +639,24 @@ function _renderComposeForm(panel) {
       '</div>' +
       '<div class="auto-compose-bar-right">' +
         '<button class="auto-footer-btn" onclick="closeAutomationDetail()">Cancel</button>' +
-        '<button class="auto-footer-btn primary" onclick="submitAutomation()">' +
-          '<i class="ti ti-plus"></i> Create' +
-        '</button>' +
+        '<div class="auto-split-btn-wrap">' +
+          '<button class="auto-footer-btn primary auto-split-main" onclick="submitAutomation()">' +
+            '<i class="ti ti-plus"></i> Create' +
+          '</button>' +
+          '<button class="auto-footer-btn primary auto-split-arrow" onclick="event.stopPropagation();_acTogglePop(\'create\')" title="More options">' +
+            '<i class="ti ti-chevron-down" style="font-size:11px"></i>' +
+          '</button>' +
+          '<div id="auto-pop-create" class="auto-cbar-pop pop-right" style="display:none;min-width:190px">' +
+            '<div class="auto-cbar-list">' +
+              '<div class="auto-cbar-item" onclick="_acTogglePop(\'create\');submitAutomation()">' +
+                '<i class="ti ti-plus"></i><span>Create manually</span>' +
+              '</div>' +
+              '<div class="auto-cbar-item" onclick="_acTogglePop(\'create\');_acGeneratePipeline()">' +
+                '<i class="ti ti-wand"></i><span>Generate pipeline from description</span>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
       '</div>' +
     '</div>' +
     '</div>';
@@ -810,7 +825,7 @@ function _acToggleSched() {
 }
 
 function _acCloseAllPops() {
-  ['agent', 'model', 'perms', 'tpl'].forEach(function(k) {
+  ['agent', 'model', 'perms', 'tpl', 'create'].forEach(function(k) {
     var el = document.getElementById('auto-pop-' + k);
     if (el) el.style.display = 'none';
   });
@@ -924,9 +939,11 @@ async function _acGeneratePipeline() {
   var desc = (_draft.description || '').trim();
   if (!desc) { showToast('Add a description first'); return; }
 
-  var btn  = document.getElementById('auto-gen-pipeline-btn');
-  var info = document.getElementById('auto-pipeline-info-lbl');
-  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2 rotating"></i> Generating…'; }
+  // Show loading state on the main Create button
+  var mainBtn = document.querySelector('.auto-split-main');
+  var arrowBtn = document.querySelector('.auto-split-arrow');
+  if (mainBtn) { mainBtn.disabled = true; mainBtn.innerHTML = '<i class="ti ti-loader-2 rotating"></i> Generating…'; }
+  if (arrowBtn) arrowBtn.disabled = true;
 
   // Build list of available agents for context
   var agentList = (typeof getAllAgents === 'function') ? getAllAgents() : [];
@@ -952,32 +969,55 @@ async function _acGeneratePipeline() {
           { role: 'system', content: systemPrompt },
           { role: 'user', content: desc },
         ],
-        stream: false,
       }),
     });
-    var d = await r.json();
-    var raw = '';
-    if (d.choices && d.choices[0]) {
-      raw = d.choices[0].message ? d.choices[0].message.content : (d.choices[0].text || '');
-    } else if (d.content) {
-      raw = d.content;
-    }
-    // Extract JSON (may be wrapped in ```json ... ```)
+
+    // /api/chat always streams SSE: "data: {type,content}" lines
+    var raw = await (async function readSSE(response) {
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder();
+      var partial = '';
+      var text = '';
+      while (true) {
+        var chunk = await reader.read();
+        if (chunk.done) break;
+        partial += decoder.decode(chunk.value, { stream: true });
+        var lines = partial.split('\n');
+        partial = lines.pop();
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i];
+          if (!line.startsWith('data: ')) continue;
+          var payload = line.slice(6);
+          if (payload === '[DONE]') continue;
+          try { var evt = JSON.parse(payload); if (evt.type === 'content') text += evt.content; } catch (_) {}
+        }
+      }
+      return text;
+    })(r);
+
+    // Strip optional ```json fences
     var match = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (match) raw = match[1];
+    // Find first { ... } block in case model added preamble text
+    var jsonStart = raw.indexOf('{');
+    var jsonEnd   = raw.lastIndexOf('}');
+    if (jsonStart >= 0 && jsonEnd > jsonStart) raw = raw.slice(jsonStart, jsonEnd + 1);
     var pipeline = JSON.parse(raw.trim());
     if (!pipeline.nodes || !Array.isArray(pipeline.nodes)) throw new Error('No nodes array');
 
     _draft.pipeline = pipeline;
     _draftDirty = true;
 
-    var count = pipeline.nodes.length;
-    if (info) info.textContent = count + ' node' + (count !== 1 ? 's' : '') + ' generated';
-    if (btn)  { btn.disabled = false; btn.innerHTML = '<i class="ti ti-wand"></i> Regenerate'; }
-    showToast('Pipeline generated — open the builder to review');
+    if (mainBtn) { mainBtn.disabled = false; mainBtn.innerHTML = '<i class="ti ti-plus"></i> Create'; }
+    if (arrowBtn) arrowBtn.disabled = false;
+    // Set kind to pipeline and open the builder to review
+    _draft.kind = 'pipeline';
+    showToast('Pipeline generated — opening builder…');
+    setTimeout(function() { openPipelineBuilder(null); }, 300);
   } catch (err) {
     console.error('Pipeline generation failed', err);
-    if (btn)  { btn.disabled = false; btn.innerHTML = '<i class="ti ti-wand"></i> Generate'; }
+    if (mainBtn) { mainBtn.disabled = false; mainBtn.innerHTML = '<i class="ti ti-plus"></i> Create'; }
+    if (arrowBtn) arrowBtn.disabled = false;
     showToast('Failed to generate pipeline. Try rephrasing the description.');
   }
 }
@@ -1062,23 +1102,12 @@ function _renderDetailKindRows() {
 
   if (_draft.kind === 'pipeline') {
     var nodeCount = _draft.pipeline ? (_draft.pipeline.nodes || []).length : 0;
-    var hasDesc   = !!(_draft.description && _draft.description.trim());
     html += '<div class="auto-field-row">' +
       '<label class="auto-field-lbl">Pipeline</label>' +
       '<div class="auto-pipeline-row">' +
         '<span class="auto-pipeline-info" id="auto-pipeline-info-lbl">' +
           (nodeCount ? nodeCount + ' node' + (nodeCount !== 1 ? 's' : '') : 'No nodes yet') +
-        '</span>';
-    // Compose mode: offer to generate from description
-    if (!_draft.id) {
-      html +=
-        '<button class="auto-footer-btn" id="auto-gen-pipeline-btn" ' +
-            'onclick="_acGeneratePipeline()" ' +
-            (hasDesc ? '' : 'disabled title="Add a description first"') + '>' +
-          '<i class="ti ti-wand"></i> Generate' +
-        '</button>';
-    }
-    html +=
+        '</span>' +
         '<button class="auto-footer-btn" onclick="openPipelineBuilder(' + (_draft.id ? '\'' + _draft.id + '\'' : 'null') + ')">' +
           '<i class="ti ti-git-branch"></i> Open Builder' +
         '</button>' +
