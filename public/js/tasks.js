@@ -237,6 +237,9 @@ function renderTasks() {
   _renderList();
   // Don't clobber a new unsaved compose form on background polls
   if (_draft && !_draft.id) return;
+  // Don't clobber the agent picker while it's open — user is mid-interaction
+  var _agentDd = document.getElementById('task-agent-dropdown');
+  if (_agentDd && _agentDd.style.display !== 'none') return;
   _renderDetail();
 }
 
@@ -864,7 +867,7 @@ function _acAgentListHtml(agents, q) {
     var sel = _selectedAgents.indexOf(a.name) >= 0;
     var icon = a.icon || 'ti-robot';
     var display = a.displayName || a.name;
-    return '<div class="auto-cbar-item' + (sel ? ' selected' : '') + '" onclick="_acPickAgent(\'' + escHtml(a.name) + '\')">' +
+    return '<div class="auto-cbar-item' + (sel ? ' selected' : '') + '" onclick="event.stopPropagation();_acPickAgent(\'' + escHtml(a.name) + '\')">' +
       '<i class="ti ' + escHtml(icon) + '"></i>' +
       '<span>' + escHtml(display) + '</span>' +
       (sel ? '<i class="ti ti-check" style="margin-left:auto"></i>' : '') +
@@ -883,6 +886,8 @@ function _acPickAgent(name) {
   var idx = _selectedAgents.indexOf(name);
   if (idx >= 0) _selectedAgents.splice(idx, 1);
   else _selectedAgents.push(name);
+  // Keep draft in sync so re-renders don't reset selections
+  if (_draft) _draft.agents = _selectedAgents.slice();
   var lbl = document.getElementById('auto-bar-agent-label');
   if (lbl) lbl.textContent = _acAgentLabel();
   var list = document.getElementById('auto-agent-pop-list');
@@ -1051,6 +1056,58 @@ function _setDraftKind(kind) {
   }
 }
 
+// ── Pipeline Last-Run View (read-only node status) ────────────────────────
+
+var _NODE_TYPE_ICONS = {
+  trigger: 'ti-bolt', prompt: 'ti-message', agent: 'ti-robot',
+  shell: 'ti-terminal-2', browser: 'ti-world-www', figma: 'ti-brand-figma',
+  condition: 'ti-git-branch', loop: 'ti-refresh', webhook: 'ti-webhook',
+  delay: 'ti-clock-pause', code: 'ti-code',
+};
+
+function _renderPipelineLastRun(nodes, task) {
+  var when = '';
+  if (task && task.lastRunAt) {
+    try {
+      var d = new Date(task.lastRunAt);
+      when = d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    } catch (_) {}
+  }
+  var overallOk = nodes.every(function(n) { return n.status === 'ok' || n.status === 'skipped'; });
+  var failedNode = nodes.find(function(n) { return n.status === 'failed'; });
+
+  var items = nodes.map(function(n) {
+    var icon, iconColor, cls;
+    if (n.status === 'ok') {
+      icon = 'ti-circle-check'; iconColor = 'var(--success)'; cls = 'plr-node-ok';
+    } else if (n.status === 'failed') {
+      icon = 'ti-circle-x'; iconColor = 'var(--error)'; cls = 'plr-node-fail';
+    } else {
+      icon = 'ti-circle-dashed'; iconColor = 'var(--fau-text-dim)'; cls = 'plr-node-skip';
+    }
+    var typeIcon = _NODE_TYPE_ICONS[n.type] || 'ti-point';
+    return '<div class="plr-node ' + cls + '">' +
+      '<i class="ti ' + icon + ' plr-node-status-icon" style="color:' + iconColor + '"></i>' +
+      '<i class="ti ' + typeIcon + ' plr-node-type-icon"></i>' +
+      '<div class="plr-node-info">' +
+        '<span class="plr-node-label">' + escHtml(n.label || n.type) + '</span>' +
+        (n.status === 'failed' && n.error ? '<span class="plr-node-error">' + escHtml(n.error.slice(0, 120)) + '</span>' : '') +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  return '<div class="auto-field-row auto-field-row-col">' +
+    '<label class="auto-field-lbl">Last Run' + (when ? ' <span class="plr-when">' + escHtml(when) + '</span>' : '') + '</label>' +
+    '<div class="plr-wrap ' + (overallOk ? 'plr-ok' : 'plr-fail') + '">' +
+      '<div class="plr-header">' +
+        '<i class="ti ' + (overallOk ? 'ti-circle-check' : 'ti-circle-x') + '" style="color:' + (overallOk ? 'var(--success)' : 'var(--error)') + '"></i>' +
+        '<span>' + (overallOk ? 'All nodes completed' : 'Failed at: ' + escHtml((failedNode && failedNode.label) || 'unknown node')) + '</span>' +
+      '</div>' +
+      '<div class="plr-nodes">' + items + '</div>' +
+    '</div>' +
+  '</div>';
+}
+
 function _renderDetailKindRows() {
   var el = document.getElementById('auto-kind-rows');
   if (!el || !_draft) return;
@@ -1113,6 +1170,15 @@ function _renderDetailKindRows() {
         '</button>' +
       '</div>' +
     '</div>';
+
+    // Last-run node results
+    if (_draft.id) {
+      var _cachedTask = _tasksCache.find(function(t) { return t.id === _draft.id; });
+      var _lastNodes = _cachedTask && _cachedTask.result && _cachedTask.result.nodes;
+      if (_lastNodes && _lastNodes.length) {
+        html += _renderPipelineLastRun(_lastNodes, _cachedTask);
+      }
+    }
   }
 
   el.innerHTML = html;
@@ -1144,14 +1210,27 @@ async function submitAutomation() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+      if (!r.ok) {
+        var errBody = await r.text();
+        throw new Error('Server error ' + r.status + ': ' + errBody);
+      }
       var created = await r.json();
+      if (!created || !created.id) throw new Error('Server returned no task id');
       _draft.id = created.id;
       _draftAutoSaveEnabled = true;
     }
     _draftDirty = false;
     _setDraftStatus('saved');
-    showToast(_draft.id ? 'Automation saved' : 'Automation created');
-    fetchTasks();
+    showToast('Automation created');
+    await fetchTasks();
+    // Select the newly created automation in the list
+    var created2 = _tasksCache.find(function(t) { return t.id === _draft.id; });
+    if (created2) {
+      _draft = _taskToDraft(created2);
+      _draftAutoSaveEnabled = true;
+      _renderList();
+      _renderDetail();
+    }
   } catch (e) {
     showToast('Failed to save: ' + e.message);
     _setDraftStatus('error');

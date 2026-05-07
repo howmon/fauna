@@ -24,6 +24,7 @@ async function runTask(taskId, opts = {}) {
     abortController: ac, step: 0, startedAt: Date.now(), log: [], steerQueue: [],
     reasoning: [],   // chain-of-reasoning entries: { step, intent, actions[], outcome }
     stats: { actionsTotal: 0, actionsOk: 0, actionsFailed: 0 },
+    nodeResults: [], // pipeline per-node results: { id, label, type, status, output, error }
   };
   _runningTasks.set(taskId, state);
 
@@ -56,6 +57,7 @@ async function runTask(taskId, opts = {}) {
           reasoning: reasoning,
           duration: Date.now() - state.startedAt,
           totalSteps: state.step,
+          nodes: state.nodeResults.length ? state.nodeResults : undefined,
         },
       });
     }
@@ -561,6 +563,8 @@ async function _runPipeline(task, state) {
   for (const nid of order) {
     if (skipped.has(nid)) {
       nodeOutputs[nid] = null;
+      const skippedNode = nodes.find(n => n.id === nid);
+      if (skippedNode) state.nodeResults.push({ id: nid, label: skippedNode.label, type: skippedNode.type, status: 'skipped' });
       continue;
     }
 
@@ -717,6 +721,14 @@ async function _runPipeline(task, state) {
     state.stats.actionsTotal++;
     const ok = !String(output).startsWith('Node error') && !String(output).startsWith('Code error');
     if (ok) state.stats.actionsOk++; else state.stats.actionsFailed++;
+    state.nodeResults.push({
+      id: nid,
+      label: node.label,
+      type: node.type,
+      status: ok ? 'ok' : 'failed',
+      output: ok ? String(output).slice(0, 300) : null,
+      error: ok ? null : String(output).replace(/^Node error: |^Code error: /, ''),
+    });
     state.reasoning.push({ step: state.step, intent: node.label, actions: [{ type: node.type, action: node.label, ok }], outcome: String(output).slice(0, 200) });
   }
 

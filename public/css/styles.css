@@ -6249,6 +6249,25 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 .auto-hb-status.waiting  { background: var(--fau-surface2); color: var(--fau-text-muted); }
 .auto-pipeline-row { display: flex; align-items: center; gap: 10px; flex: 1; }
 .auto-pipeline-info { font-size: 12px; color: var(--fau-text-dim); }
+
+/* Pipeline Last-Run View */
+.auto-field-row-col { flex-direction: column !important; align-items: flex-start !important; gap: 6px !important; }
+.auto-field-row-col > label { margin-right: 0; }
+.plr-when { font-weight: 400; color: var(--fau-text-muted); font-size: 10px; margin-left: 6px; }
+.plr-wrap { border-radius: 8px; border: 1px solid var(--fau-border); overflow: hidden; width: 100%; box-sizing: border-box; }
+.plr-wrap.plr-ok { border-color: rgba(108,203,95,.3); background: rgba(108,203,95,.04); }
+.plr-wrap.plr-fail { border-color: rgba(243,110,110,.3); background: rgba(243,110,110,.04); }
+.plr-header { display: flex; align-items: center; gap: 6px; padding: 7px 10px; font-size: 12px; font-weight: 600; color: var(--fau-text); border-bottom: 1px solid var(--fau-border); }
+.plr-node { display: flex; align-items: flex-start; gap: 7px; padding: 6px 10px; font-size: 12px; border-bottom: 1px solid var(--fau-border); }
+.plr-node:last-child { border-bottom: none; }
+.plr-node-status-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+.plr-node-type-icon { font-size: 12px; color: var(--fau-text-muted); flex-shrink: 0; margin-top: 2px; }
+.plr-node-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.plr-node-label { color: var(--fau-text); font-weight: 500; }
+.plr-node-error { font-size: 11px; color: var(--error); line-height: 1.4; word-break: break-word; }
+.plr-node-ok .plr-node-label { color: var(--fau-text); }
+.plr-node-fail { background: rgba(243,110,110,.06); }
+.plr-node-skip .plr-node-label { color: var(--fau-text-muted); }
 .auto-detail-footer { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-top: 1px solid var(--fau-border); flex-shrink: 0; }
 .auto-detail-save-status { font-size: 11px; color: var(--fau-text-muted); }
 .auto-detail-save-status.saving { color: var(--fau-text-dim); }
