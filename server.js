@@ -1683,7 +1683,7 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
               const shellOpts = toolName === 'agent_shell_exec' ? {
                 registerProcess: (killId, child) => _shellProcs.set(killId, child),
                 unregisterProcess: (killId) => _shellProcs.delete(killId),
-                onWaitingForInput: (killId, hint) => send({ type: 'tool_waiting_for_input', killId, hint }),
+                onWaitingForInput: (killId, hint, context) => send({ type: 'tool_waiting_for_input', killId, hint, context }),
               } : undefined;
               result = await agentToolHandlers.get(toolName)(args, onOutput, shellOpts);
             } else if (toolName === 'gui_screenshot') {
@@ -4617,7 +4617,7 @@ app.post('/api/shell-exec', (req, res) => {
     // Track last output time for idle detection
     let lastOutputTime = Date.now();
     let idleTimer = null;
-    let lastChunk = '';
+    let recentOutput = '';
     const IDLE_MS = 3000; // 3s of silence = might be waiting for input
 
     function resetIdleTimer() {
@@ -4626,7 +4626,9 @@ app.post('/api/shell-exec', (req, res) => {
       idleTimer = setTimeout(() => {
         // Process is alive but hasn't produced output — likely waiting for input
         if (!child.killed && child.exitCode === null) {
-          res.write(`data: ${JSON.stringify({ type: 'waiting_for_input', hint: lastChunk.trim().split('\n').pop() })}\n\n`);
+          const lines = recentOutput.split('\n').map(l => l.trim()).filter(Boolean);
+          const hint = lines.slice(-3).join('\n');
+          res.write(`data: ${JSON.stringify({ type: 'waiting_for_input', hint })}\n\n`);
         }
       }, IDLE_MS);
     }
@@ -4634,8 +4636,9 @@ app.post('/api/shell-exec', (req, res) => {
     resetIdleTimer();
 
     child.stdout.on('data', (chunk) => {
-      lastChunk = chunk.toString();
-      res.write(`data: ${JSON.stringify({ type: 'stdout', text: lastChunk })}\n\n`);
+      const text = chunk.toString();
+      recentOutput = (recentOutput + text).slice(-500);
+      res.write(`data: ${JSON.stringify({ type: 'stdout', text })}\n\n`);
       resetIdleTimer();
     });
     child.stderr.on('data', (chunk) => {
@@ -6768,27 +6771,31 @@ app.post('/api/agent/shell-exec', (req, res) => {
     const child = _spawn(IS_WIN ? 'powershell.exe' : '/bin/zsh', [shellFlag, command], { cwd: workDir, env, stdio: ['pipe', 'pipe', 'pipe'] });
     if (killId) _shellProcs.set(killId, child);
 
-    let lastChunk = '';
+    let recentOutput = '';
     let idleTimer = null;
     const IDLE_MS = 3000;
     function resetIdleTimer() {
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
         if (!child.killed && child.exitCode === null) {
-          res.write(`data: ${JSON.stringify({ type: 'waiting_for_input', hint: lastChunk.trim().split('\n').pop() })}\n\n`);
+          const lines = recentOutput.split('\n').map(l => l.trim()).filter(Boolean);
+          const hint = lines.slice(-3).join('\n');
+          res.write(`data: ${JSON.stringify({ type: 'waiting_for_input', hint })}\n\n`);
         }
       }, IDLE_MS);
     }
     resetIdleTimer();
 
     child.stdout.on('data', (chunk) => {
-      lastChunk = chunk.toString();
-      res.write(`data: ${JSON.stringify({ type: 'stdout', text: lastChunk })}\n\n`);
+      const text = chunk.toString();
+      recentOutput = (recentOutput + text).slice(-500);
+      res.write(`data: ${JSON.stringify({ type: 'stdout', text })}\n\n`);
       resetIdleTimer();
     });
     child.stderr.on('data', (chunk) => {
-      lastChunk = chunk.toString();
-      res.write(`data: ${JSON.stringify({ type: 'stderr', text: lastChunk })}\n\n`);
+      const text = chunk.toString();
+      recentOutput = (recentOutput + text).slice(-500);
+      res.write(`data: ${JSON.stringify({ type: 'stderr', text })}\n\n`);
       resetIdleTimer();
     });
 

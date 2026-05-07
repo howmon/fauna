@@ -792,7 +792,7 @@ function _parseQuickOptions(hint) {
   return options;
 }
 
-function _showShellInput(execId, killId, hint, resultEl) {
+function _showShellInput(execId, killId, hint, resultEl, context) {
   if (document.getElementById('shell-input-' + execId)) return; // already showing
 
   var wrapper = document.createElement('div');
@@ -800,6 +800,27 @@ function _showShellInput(execId, killId, hint, resultEl) {
   wrapper.className = 'shell-stdin-prompt';
   var hintText = hint || 'Waiting for input…';
   var quickOptions = _parseQuickOptions(hintText);
+
+  // Derive a human-readable input placeholder from the hint
+  // Strip trailing prompt chars (?, :, >, spaces) to get the question
+  var cleanHint = hintText.replace(/[\s?:>]+$/, '').trim();
+  var inputPlaceholder = quickOptions.length
+    ? 'Or type a custom response…'
+    : (cleanHint && cleanHint !== 'Waiting for input…' ? cleanHint + '…' : 'Type your response…');
+
+  // Build context block showing what the process printed before going idle
+  var contextHtml = '';
+  if (context && context.trim()) {
+    // Strip ANSI escape codes for display
+    var cleanCtx = context.replace(/\x1b\[[0-9;]*[mGKHF]/g, '').trim();
+    if (cleanCtx) {
+      contextHtml =
+        '<div style="margin-bottom:10px;border-radius:6px;background:var(--bg-secondary,#1e1e1e);border:1px solid var(--border,#3a3a3a);overflow:hidden">' +
+          '<div style="padding:4px 10px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-secondary,#aaa);border-bottom:1px solid var(--border,#3a3a3a)">Process output</div>' +
+          '<div style="padding:8px 10px;font-size:12px;font-family:var(--font-mono,monospace);white-space:pre-wrap;line-height:1.5;color:var(--text-primary,#eee);max-height:180px;overflow-y:auto">' + escHtml(cleanCtx) + '</div>' +
+        '</div>';
+    }
+  }
 
   var quickBtnsHtml = '';
   if (quickOptions.length > 0) {
@@ -821,16 +842,21 @@ function _showShellInput(execId, killId, hint, resultEl) {
 
   wrapper.innerHTML =
     '<div style="margin-top:8px;padding:10px 12px;background:var(--bg-tertiary,#2a2a2a);border-radius:8px;border:1px solid var(--border,#3a3a3a)">' +
-      '<div style="color:var(--text-primary,#eee);font-size:13px;font-family:var(--font-mono,monospace);margin-bottom:8px;white-space:pre-wrap;line-height:1.4">' +
-        '<i class="ti ti-terminal-2" style="color:var(--accent,#7c5cff);margin-right:4px"></i>' + escHtml(hintText) +
+      contextHtml +
+      '<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:10px">' +
+        '<i class="ti ti-terminal-2" style="color:var(--accent,#7c5cff);font-size:14px;margin-top:2px;flex-shrink:0"></i>' +
+        '<div>' +
+          '<div style="color:var(--text-secondary,#aaa);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Waiting for input</div>' +
+          '<div style="color:var(--text-primary,#eee);font-size:13px;font-family:var(--font-mono,monospace);white-space:pre-wrap;line-height:1.5">' + escHtml(hintText) + '</div>' +
+        '</div>' +
       '</div>' +
       quickBtnsHtml +
       '<div style="display:flex;align-items:center;gap:8px">' +
         '<input type="text" id="shell-input-field-' + execId + '" ' +
-          'style="flex:1;background:var(--bg-secondary,#1e1e1e);border:1px solid var(--border,#444);border-radius:4px;padding:6px 10px;color:var(--text-primary,#eee);font-family:var(--font-mono,monospace);font-size:13px;outline:none" ' +
-          'placeholder="' + (quickOptions.length ? 'Or type a custom response…' : 'Type response and press Enter…') + '" autocomplete="off">' +
+          'style="flex:1;background:var(--bg-secondary,#1e1e1e);border:1px solid var(--accent,#7c5cff);border-radius:6px;padding:7px 11px;color:var(--text-primary,#eee);font-family:var(--font-mono,monospace);font-size:13px;outline:none" ' +
+          'placeholder="' + escHtml(inputPlaceholder) + '" autocomplete="off">' +
         '<button onclick="_sendShellInput(\'' + execId + '\',\'' + killId + '\')" ' +
-          'style="background:var(--accent,#7c5cff);color:#fff;border:none;border-radius:4px;padding:6px 12px;cursor:pointer;font-size:12px">' +
+          'style="background:var(--accent,#7c5cff);color:#fff;border:none;border-radius:6px;padding:7px 13px;cursor:pointer;font-size:12px;display:flex;align-items:center;gap:4px">' +
           '<i class="ti ti-send"></i>' +
         '</button>' +
       '</div>' +

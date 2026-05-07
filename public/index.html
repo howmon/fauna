@@ -878,12 +878,10 @@ Examples:
 
   <script>
   function openUserSettings() {
-    // Open settings panel to the auth page
-    var panel = document.getElementById('settings-panel');
-    if (panel) {
-      panel.classList.add('open');
-      var authBtn = document.querySelector('#settings-panel .settings-nav-item[data-page="auth"]');
-      switchSettingsPage('auth', authBtn);
+    // Open the Agent Store panel on the account/login view
+    if (typeof openAgentStore === 'function') {
+      openAgentStore();
+      if (typeof storeNavigate === 'function') storeNavigate('account');
     }
   }
 

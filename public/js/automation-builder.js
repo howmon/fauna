@@ -130,11 +130,14 @@ function _pbAddNode(type) {
   var menu = document.getElementById('pb-node-menu');
   if (menu) menu.style.display = 'none';
   if (!_pbCanvas) return;
-  // Place at visible center of canvas
+  // Place at visible center of canvas, accounting for current pan/zoom
   var host = document.getElementById('pb-canvas-host');
-  var cx = host ? host.clientWidth  / 2 - 80 : 200;
-  var cy = host ? host.clientHeight / 2 - 36 : 150;
-  // Offset subsequent nodes
+  var hostW = host ? host.clientWidth  : 400;
+  var hostH = host ? host.clientHeight : 300;
+  var vp = _pbCanvas.getViewport ? _pbCanvas.getViewport() : { zoom: 1, pan: { x: 0, y: 0 } };
+  var cx = (hostW / 2 - vp.pan.x) / vp.zoom - 80;
+  var cy = (hostH / 2 - vp.pan.y) / vp.zoom - 36;
+  // Offset subsequent nodes so they don't stack exactly
   var count = _pbCanvas.getPipeline().nodes.length;
   _pbCanvas.addNode(type, cx + count * 30, cy + count * 30);
   _updateNodeCount();
@@ -221,8 +224,9 @@ function _configFieldsForType(node) {
     html += _pbFieldInput(nid, 'url', 'URL', config.url || '', 'https://...');
     html += _pbFieldSelect(nid, 'method', 'Method', ['GET','POST','PUT','DELETE'], config.method || 'POST');
     html += _pbFieldTextarea(nid, 'body', 'Body (JSON)', config.body || '', '{"key": "{{input}}"}');
-  }
-  if (node.type === 'delay') {
+  }  if (node.type === 'notify') {
+    html += _pbFieldInput(nid, 'title', 'Conversation title', config.title || '', 'e.g. Daily standup summary');
+  }  if (node.type === 'delay') {
     html += _pbFieldInput(nid, 'ms', 'Delay (ms)', config.ms || '1000', 'Milliseconds to wait');
   }
   if (node.type === 'browser') {
@@ -299,6 +303,10 @@ async function savePipelineToTask(taskId) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pipeline: pipeline }),
       });
+      // Keep _draft in sync so the main Save form doesn't overwrite with stale pipeline
+      if (typeof _draft !== 'undefined' && _draft && _draft.id === taskId) {
+        _draft.pipeline = pipeline;
+      }
       if (typeof showToast === 'function') showToast('Pipeline saved');
       if (typeof fetchTasks === 'function') fetchTasks();
     } else {

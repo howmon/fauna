@@ -570,6 +570,7 @@ async function streamResponse(conv) {
   var renderTimer  = null;
   var lastScrolled = 0;
   var tokenCount   = 0;
+  var _lastToolOutputAccum = ''; // rolling last ~1000 chars of tool_output for input context
   if (typeof resetDesignArtifactState === 'function') resetDesignArtifactState();
 
   function scheduleRender() {
@@ -686,6 +687,7 @@ async function streamResponse(conv) {
           if (evt.type === 'error')     { dbg('SSE error: ' + evt.error, 'err'); buffer += '\n\nError: ' + evt.error; scheduleRender(); }
           if (evt.type === 'tool_call') {
             dbg('tool_call: ' + evt.name, 'cmd');
+            _lastToolOutputAccum = ''; // reset per tool invocation
             // Pick a readable label based on the tool name
             var toolLabel = evt.name || 'tool';
             var isFigma = /figma/i.test(toolLabel);
@@ -695,6 +697,8 @@ async function streamResponse(conv) {
           }
           if (evt.type === 'tool_output') {
             // Live shell output — append to a collapsible output block
+            // Also accumulate for use in the waiting-for-input context
+            _lastToolOutputAccum = ((_lastToolOutputAccum || '') + evt.output).slice(-1000);
             if (!buffer.includes('```shell-output\n')) {
               buffer += '```shell-output\n';
             }
@@ -713,7 +717,9 @@ async function streamResponse(conv) {
               // Create a unique exec ID and show the input widget below the current AI message
               var stdinId = 'agent-stdin-' + Date.now();
               var resultEl = bodyEl.querySelector('.shell-output-block') || bodyEl;
-              _showShellInput(stdinId, evt.killId, evt.hint || 'Waiting for input…', resultEl);
+              // Use server-side context if available, otherwise fall back to locally accumulated tool output
+              var inputContext = (evt.context && evt.context.trim()) ? evt.context : (_lastToolOutputAccum || '');
+              _showShellInput(stdinId, evt.killId, evt.hint || 'Waiting for input…', resultEl, inputContext);
             }
           }
           if (evt.type === 'done') {

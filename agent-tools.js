@@ -365,7 +365,7 @@ async function executeBuiltInTool(toolName, args, permissions, agentName, onOutp
 
         let stdout = '';
         let stderr = '';
-        let lastChunk = '';
+        let recentOutput = ''; // rolling last ~500 chars of output for hint context
         let idleTimer = null;
         const MAX_BUF = 10 * 1024 * 1024;
         const IDLE_MS = 4000;
@@ -374,9 +374,11 @@ async function executeBuiltInTool(toolName, args, permissions, agentName, onOutp
           if (idleTimer) clearTimeout(idleTimer);
           idleTimer = setTimeout(() => {
             if (!child.killed && child.exitCode === null) {
-              const hint = lastChunk.trim().split('\n').pop();
+              // Use the last 3 non-empty lines of recent output as the hint
+              const lines = recentOutput.split('\n').map(l => l.trim()).filter(Boolean);
+              const hint = lines.slice(-3).join('\n');
               if (opts && opts.onWaitingForInput) {
-                opts.onWaitingForInput(killId, hint);
+                opts.onWaitingForInput(killId, hint, recentOutput);
               } else if (onOutput) {
                 onOutput('\n⏳ Process appears to be waiting for input: ' + hint + '\n');
               }
@@ -386,7 +388,7 @@ async function executeBuiltInTool(toolName, args, permissions, agentName, onOutp
 
         child.stdout.on('data', (chunk) => {
           const text = chunk.toString();
-          lastChunk = text;
+          recentOutput = (recentOutput + text).slice(-500);
           if (stdout.length < MAX_BUF) stdout += text;
           if (onOutput) onOutput(text);
           resetIdleTimer();
@@ -394,7 +396,7 @@ async function executeBuiltInTool(toolName, args, permissions, agentName, onOutp
 
         child.stderr.on('data', (chunk) => {
           const text = chunk.toString();
-          lastChunk = text;
+          recentOutput = (recentOutput + text).slice(-500);
           if (stderr.length < MAX_BUF) stderr += text;
           if (onOutput) onOutput(text);
           resetIdleTimer();

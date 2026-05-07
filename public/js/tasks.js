@@ -7,6 +7,53 @@ var _tasksCache = [];
 var _tasksPoller = null;
 var _taskSSE = null;
 
+// ── Last-run inspection state ─────────────────────────────────────────────
+var _plrRunNodes    = [];    // node results from most-recently rendered last-run view
+var _plrRunTaskName = '';
+var _plrExpanded    = {};    // idx → true for rows the user has expanded
+
+/** Toggle the output panel for node at index idx in the last-run list. */
+function _plrToggle(idx) {
+  var out  = document.getElementById('plr-out-' + idx);
+  var chev = document.getElementById('plr-chev-' + idx);
+  if (!out) return;
+  var open = out.style.display !== 'none';
+  _plrExpanded[idx] = !open;
+  out.style.display = open ? 'none' : 'block';
+  if (chev) {
+    chev.classList.toggle('ti-chevron-right', open);
+    chev.classList.toggle('ti-chevron-down',  !open);
+  }
+}
+
+/** Open a new chat pre-loaded with pipeline failure context so AI can help fix it. */
+function _plrAskFix() {
+  if (!_plrRunNodes || !_plrRunNodes.length) return;
+  var taskName = _plrRunTaskName || 'Pipeline';
+
+  var lines = ['I need help fixing a failed automation called **' + taskName + '**.\n'];
+  lines.push('**Step-by-step results:**');
+  _plrRunNodes.forEach(function(n, i) {
+    var badge = n.status === 'ok' ? '✓' : n.status === 'failed' ? '✗' : '–';
+    lines.push((i + 1) + '. ' + badge + ' **' + (n.label || n.type) + '** (' + n.type + ')');
+    if (n.output && n.output.trim()) {
+      lines.push('   Output: ' + n.output.trim().slice(0, 500));
+    }
+    if (n.error) lines.push('   Error: ' + n.error);
+  });
+  lines.push('\nPlease help me diagnose and resolve the failing steps. You can ask me questions about the pipeline configuration or present options I can choose from.');
+
+  var msg = lines.join('\n');
+  closeAutomationDetail();
+  if (typeof newConversation === 'function') newConversation();
+  var inp = document.getElementById('msg-input');
+  if (inp) {
+    inp.value = msg;
+    if (typeof resizeTextarea === 'function') resizeTextarea(inp);
+    if (typeof sendMessage === 'function') sendMessage();
+  }
+}
+
 // ── Draft state ──────────────────────────────────────────────────────────
 var _draft = null;           // currently open automation (null = none)
 var _draftSaveTimer = null;
@@ -516,6 +563,8 @@ function _renderDetail() {
       '</div>' +
       // Kind-specific rows (rendered separately via _renderDetailKindRows)
       '<div id="auto-kind-rows"></div>' +
+      // Last-run output
+      '<div id="auto-run-output"></div>' +
       // Permissions
       '<div class="auto-field-row">' +
         '<label class="auto-field-lbl">Permissions</label>' +
@@ -529,9 +578,11 @@ function _renderDetail() {
       '<div class="auto-field-row">' +
         '<label class="auto-field-lbl">Agents</label>' +
         '<div class="task-agent-picker-wrap">' +
-          '<div id="task-agent-selected"></div>' +
-          '<input id="task-agent-search" class="task-agent-search" type="text" placeholder="Add agent…" ' +
-            'onfocus="_showAgentPicker()" oninput="_filterAgentPicker(this.value)">' +
+          '<div class="task-agent-token-field" id="task-agent-token-field" onclick="document.getElementById(\"task-agent-search\").focus()">' +
+            '<div id="task-agent-selected" class="task-agent-chips"></div>' +
+            '<input id="task-agent-search" class="task-agent-search" type="text" placeholder="Add agent…" ' +
+              'onfocus="_showAgentPicker()" oninput="_filterAgentPicker(this.value)">' +
+          '</div>' +
           '<div id="task-agent-dropdown" class="task-agent-dropdown" style="display:none"></div>' +
         '</div>' +
       '</div>' +
@@ -559,6 +610,13 @@ function _renderDetail() {
 
   // Render kind-specific rows
   _renderDetailKindRows();
+
+  // Render last-run output
+  var _outEl = document.getElementById('auto-run-output');
+  if (_outEl) {
+    var _outTask = _tasksCache.find(function(t) { return t.id === _draft.id; });
+    _outEl.innerHTML = _outTask ? _renderRunOutput(_outTask) : '';
+  }
 }
 
 // ── Compose Form (new automation) ─────────────────────────────────────────
@@ -1061,11 +1119,21 @@ function _setDraftKind(kind) {
 var _NODE_TYPE_ICONS = {
   trigger: 'ti-bolt', prompt: 'ti-message', agent: 'ti-robot',
   shell: 'ti-terminal-2', browser: 'ti-world-www', figma: 'ti-brand-figma',
-  condition: 'ti-git-branch', loop: 'ti-refresh', webhook: 'ti-webhook',
+  condition: 'ti-git-branch', loop: 'ti-refresh', webhook: 'ti-webhook', notify: 'ti-message-forward',
   delay: 'ti-clock-pause', code: 'ti-code',
 };
 
 function _renderPipelineLastRun(nodes, task) {
+  // Store for global access by _plrToggle / _plrAskFix
+  // Reset expanded state only when the pipeline result has changed
+  var newKey = (task && task.lastRunAt) ? String(task.lastRunAt) : '';
+  if (newKey !== _plrRunNodes._runKey) {
+    _plrExpanded = {};
+  }
+  _plrRunNodes         = nodes;
+  _plrRunNodes._runKey = newKey;
+  _plrRunTaskName = (task && task.name) || 'Pipeline';
+
   var when = '';
   if (task && task.lastRunAt) {
     try {
@@ -1076,7 +1144,7 @@ function _renderPipelineLastRun(nodes, task) {
   var overallOk = nodes.every(function(n) { return n.status === 'ok' || n.status === 'skipped'; });
   var failedNode = nodes.find(function(n) { return n.status === 'failed'; });
 
-  var items = nodes.map(function(n) {
+  var items = nodes.map(function(n, idx) {
     var icon, iconColor, cls;
     if (n.status === 'ok') {
       icon = 'ti-circle-check'; iconColor = 'var(--success)'; cls = 'plr-node-ok';
@@ -1085,14 +1153,35 @@ function _renderPipelineLastRun(nodes, task) {
     } else {
       icon = 'ti-circle-dashed'; iconColor = 'var(--fau-text-dim)'; cls = 'plr-node-skip';
     }
-    var typeIcon = _NODE_TYPE_ICONS[n.type] || 'ti-point';
+    var typeIcon  = _NODE_TYPE_ICONS[n.type] || 'ti-point';
+    var hasOutput = !!(n.output && n.output.trim());
+
+    var chevron = hasOutput
+      ? '<i class="ti ' + (isOpen ? 'ti-chevron-down' : 'ti-chevron-right') + ' plr-chev" id="plr-chev-' + idx + '"></i>'
+      : '<i class="ti ti-point-filled plr-chev plr-chev-dot" id="plr-chev-' + idx + '"></i>';
+
+    var isOpen = !!_plrExpanded[idx];
+    var outputPanel = hasOutput
+      ? '<div id="plr-out-' + idx + '" class="plr-node-output" style="display:' + (isOpen ? 'block' : 'none') + '">' +
+          '<pre class="plr-out-pre">' + escHtml(n.output.trim()) + '</pre>' +
+        '</div>'
+      : '';
+
+    var rowClick = hasOutput ? ' onclick="_plrToggle(' + idx + ')"' : '';
+
     return '<div class="plr-node ' + cls + '">' +
-      '<i class="ti ' + icon + ' plr-node-status-icon" style="color:' + iconColor + '"></i>' +
-      '<i class="ti ' + typeIcon + ' plr-node-type-icon"></i>' +
-      '<div class="plr-node-info">' +
-        '<span class="plr-node-label">' + escHtml(n.label || n.type) + '</span>' +
-        (n.status === 'failed' && n.error ? '<span class="plr-node-error">' + escHtml(n.error.slice(0, 120)) + '</span>' : '') +
+      '<div class="plr-node-row"' + rowClick + (hasOutput ? ' style="cursor:pointer"' : '') + '>' +
+        chevron +
+        '<i class="ti ' + icon + ' plr-node-status-icon" style="color:' + iconColor + '"></i>' +
+        '<i class="ti ' + typeIcon + ' plr-node-type-icon"></i>' +
+        '<div class="plr-node-info">' +
+          '<span class="plr-node-label">' + escHtml(n.label || n.type) + '</span>' +
+          (n.status === 'failed' && n.error
+            ? '<span class="plr-node-error">' + escHtml(n.error.slice(0, 120)) + '</span>'
+            : '') +
+        '</div>' +
       '</div>' +
+      outputPanel +
     '</div>';
   }).join('');
 
@@ -1101,7 +1190,12 @@ function _renderPipelineLastRun(nodes, task) {
     '<div class="plr-wrap ' + (overallOk ? 'plr-ok' : 'plr-fail') + '">' +
       '<div class="plr-header">' +
         '<i class="ti ' + (overallOk ? 'ti-circle-check' : 'ti-circle-x') + '" style="color:' + (overallOk ? 'var(--success)' : 'var(--error)') + '"></i>' +
-        '<span>' + (overallOk ? 'All nodes completed' : 'Failed at: ' + escHtml((failedNode && failedNode.label) || 'unknown node')) + '</span>' +
+        '<span class="plr-header-text">' + (overallOk ? 'All steps completed' : 'Failed at: ' + escHtml((failedNode && failedNode.label) || 'unknown node')) + '</span>' +
+        (!overallOk
+          ? '<button class="plr-ask-ai-btn" onclick="_plrAskFix()">' +
+              '<i class="ti ti-message-bolt"></i> Ask AI to fix' +
+            '</button>'
+          : '') +
       '</div>' +
       '<div class="plr-nodes">' + items + '</div>' +
     '</div>' +
@@ -1402,6 +1496,88 @@ function _scheduleLabel(t) {
 
 
 
+// ── Run Output (shown in detail panel) ──────────────────────────────────
+
+var _outputExpanded = new Set();
+
+function taskToggleOutput(id) {
+  if (_outputExpanded.has(id)) _outputExpanded.delete(id);
+  else _outputExpanded.add(id);
+  var el = document.getElementById('auto-run-output');
+  if (el) {
+    var t = _tasksCache.find(function(x) { return x.id === id; });
+    if (t) el.innerHTML = _renderRunOutput(t);
+  }
+}
+
+function _renderRunOutput(t) {
+  var r = t.result || {};
+  var hasSummary = !!(r.summary || r.error);
+  if (!hasSummary) return '';
+
+  var isOk = !!r.ok;
+  var text = isOk ? (r.summary || '') : (r.error || 'Failed');
+  var stats = r.stats || {};
+  var duration = r.duration ? _formatDuration(r.duration) : '';
+  var steps = r.totalSteps || 0;
+  var ok = stats.actionsOk || 0;
+  var total = stats.actionsTotal || 0;
+  var when = r.completedAt ? new Date(r.completedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+
+  var expanded = _outputExpanded.has(t.id);
+  // Truncation threshold for collapsed view
+  var PREVIEW_LEN = 320;
+  var needsExpand = text.length > PREVIEW_LEN;
+  var displayText = (!expanded && needsExpand) ? text.slice(0, PREVIEW_LEN) : text;
+
+  var statsHtml = '';
+  if (steps || total || duration) {
+    statsHtml = '<div class="aro-stats">' +
+      (steps   ? '<span><i class="ti ti-arrow-iteration"></i>' + steps + ' steps</span>' : '') +
+      (total   ? '<span><i class="ti ti-bolt"></i>' + ok + '/' + total + ' actions</span>' : '') +
+      (duration ? '<span><i class="ti ti-clock"></i>' + duration + '</span>' : '') +
+    '</div>';
+  }
+
+  var reasoningHtml = '';
+  if (r.reasoning && r.reasoning.length && t.kind !== 'pipeline') {
+    var rExpanded = _expandedReasoning.has(t.id);
+    reasoningHtml = '<div class="aro-reasoning-toggle" onclick="taskToggleReasoning(\'' + t.id + '\')">' +
+      '<i class="ti ti-' + (rExpanded ? 'chevron-down' : 'chevron-right') + '"></i>' +
+      '<i class="ti ti-brain"></i> Steps (' + r.reasoning.length + ')' +
+    '</div>';
+    if (rExpanded) {
+      reasoningHtml += '<div class="aro-reasoning-list">' +
+        r.reasoning.map(function(entry) {
+          return '<div class="aro-reason-row">' +
+            '<span class="aro-reason-step">' + entry.step + '</span>' +
+            '<span class="aro-reason-intent">' + escHtml((entry.intent || '').slice(0, 180)) + '</span>' +
+          '</div>';
+        }).join('') +
+      '</div>';
+    }
+  }
+
+  return '<div class="auto-field-row auto-field-row-col">' +
+    '<label class="auto-field-lbl">Output' +
+      (when ? ' <span class="plr-when">' + escHtml(when) + '</span>' : '') +
+    '</label>' +
+    '<div class="aro-wrap ' + (isOk ? 'aro-ok' : 'aro-fail') + '">' +
+      '<div class="aro-body">' +
+        '<div class="aro-status-bar">' +
+          '<i class="ti ' + (isOk ? 'ti-circle-check' : 'ti-circle-x') + '" style="color:' + (isOk ? 'var(--success)' : 'var(--error)') + '"></i>' +
+          '<span class="aro-status-txt">' + (isOk ? 'Completed' : 'Failed') + '</span>' +
+          statsHtml +
+        '</div>' +
+        '<div class="aro-text">' + escHtml(displayText) + (needsExpand && !expanded ? '…' : '') + '</div>' +
+        (needsExpand ? '<button class="aro-expand-btn" onclick="taskToggleOutput(\'' + t.id + '\')">'
+          + (expanded ? 'Show less' : 'Show more') + '</button>' : '') +
+      '</div>' +
+      reasoningHtml +
+    '</div>' +
+  '</div>';
+}
+
 // ── Task log / history rendering ─────────────────────────────────────────
 
 var _expandedLogs = new Set(); // task IDs with log expanded
@@ -1563,16 +1739,19 @@ function _setAgentPickerSelections(names) {
 function _renderAgentSelections() {
   var el = document.getElementById('task-agent-selected');
   if (!el) return;
-  if (!_selectedAgents.length) { el.innerHTML = ''; return; }
   el.innerHTML = _selectedAgents.map(function(name) {
     var agent = (typeof getAllAgents === 'function') ? getAllAgents().find(function(a) { return a.name === name; }) : null;
     var icon = agent ? agent.icon || 'ti-robot' : 'ti-robot';
     var display = agent ? (agent.displayName || agent.name) : name;
     return '<span class="task-agent-chip">' +
-      '<i class="ti ' + icon + '"></i> ' + escHtml(display) +
-      '<button type="button" onclick="_removeAgent(\'' + escHtml(name) + '\')" title="Remove">&times;</button>' +
+      '<i class="ti ' + escHtml(icon) + '"></i>' +
+      '<span>' + escHtml(display) + '</span>' +
+      '<button type="button" class="task-agent-chip-rm" onclick="event.stopPropagation();_removeAgent(\'' + escHtml(name) + '\')" title="Remove"><i class="ti ti-x"></i></button>' +
     '</span>';
   }).join('');
+  // Update placeholder visibility
+  var search = document.getElementById('task-agent-search');
+  if (search) search.placeholder = _selectedAgents.length ? '' : 'Add agent…';
 }
 
 function _removeAgent(name) {
@@ -1611,12 +1790,11 @@ function _filterAgentPicker(query) {
     var display = a.displayName || a.name;
     var cat = a.category ? '<span class="task-agent-dd-cat">' + escHtml(a.category) + '</span>' : '';
     return '<div class="task-agent-dd-item" onclick="_pickAgent(\'' + escHtml(a.name) + '\')">' +
-      '<i class="ti ' + icon + '"></i>' +
+      '<span class="task-agent-dd-icon"><i class="ti ' + escHtml(icon) + '"></i></span>' +
       '<div class="task-agent-dd-info">' +
-        '<span class="task-agent-dd-name">' + escHtml(display) + '</span>' +
-        '<span class="task-agent-dd-desc">' + escHtml((a.description || '').slice(0, 60)) + '</span>' +
+        '<div class="task-agent-dd-row1"><span class="task-agent-dd-name">' + escHtml(display) + '</span>' + cat + '</div>' +
+        (a.description ? '<span class="task-agent-dd-desc">' + escHtml((a.description || '').slice(0, 72)) + '</span>' : '') +
       '</div>' +
-      cat +
     '</div>';
   }).join('');
   dd.style.display = 'block';

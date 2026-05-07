@@ -680,9 +680,32 @@ async function _runPipeline(task, state) {
           break;
         }
 
+        case 'notify': {
+          // Create a new conversation in the app with the summary as its content
+          const convId = 'conv-task-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+          const convTitle = _interpolate(cfg.title || '', nodeOutputs) || task.name + ' — result';
+          const msgText = String(input);
+          const newConv = {
+            id: convId,
+            title: convTitle,
+            createdAt: new Date().toISOString(),
+            messages: [
+              { role: 'assistant', content: msgText, timestamp: new Date().toISOString() },
+            ],
+          };
+          const cr = await fetch(`http://localhost:${PORT}/api/conversations/${convId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(newConv),
+          });
+          if (!cr.ok) { output = 'Node error: Failed to create conversation'; break; }
+          output = convId;
+          break;
+        }
+
         case 'webhook': {
           const url = _interpolate(cfg.url || '', nodeOutputs);
-          if (!url) { output = 'No URL configured'; break; }
+          if (!url) { output = 'Node error: No URL configured'; break; }
           const method = cfg.method || 'POST';
           const body   = cfg.body ? _interpolate(cfg.body, nodeOutputs) : undefined;
           const fetchOpts = { method, headers: { 'Content-Type': 'application/json' } };
@@ -719,15 +742,20 @@ async function _runPipeline(task, state) {
 
     nodeOutputs[nid] = output;
     state.stats.actionsTotal++;
-    const ok = !String(output).startsWith('Node error') && !String(output).startsWith('Code error');
+    const _outStr = String(output);
+    const _isError = _outStr.startsWith('Node error') ||
+                     _outStr.startsWith('Code error') ||
+                     _outStr.startsWith('BLOCKED:') ||
+                     _outStr.startsWith('Condition error');
+    const ok = !_isError;
     if (ok) state.stats.actionsOk++; else state.stats.actionsFailed++;
     state.nodeResults.push({
       id: nid,
       label: node.label,
       type: node.type,
       status: ok ? 'ok' : 'failed',
-      output: ok ? String(output).slice(0, 300) : null,
-      error: ok ? null : String(output).replace(/^Node error: |^Code error: /, ''),
+      output: ok ? _outStr.slice(0, 300) : null,
+      error: ok ? null : _outStr.replace(/^Node error: |^Code error: |^BLOCKED: |^Condition error: /, ''),
     });
     state.reasoning.push({ step: state.step, intent: node.label, actions: [{ type: node.type, action: node.label, ok }], outcome: String(output).slice(0, 200) });
   }

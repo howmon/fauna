@@ -34,13 +34,14 @@ var pipelineCanvas = (function () {
     agent:     { label: 'Agent',     icon: 'ti-robot',             color: '#ec4899', ports: { in: ['in'],  out: ['out'] } },
     loop:      { label: 'Loop',      icon: 'ti-repeat',            color: '#f97316', ports: { in: ['in'],  out: ['body', 'done'] } },
     webhook:   { label: 'Webhook',   icon: 'ti-webhook',           color: '#14b8a6', ports: { in: ['in'],  out: ['out'] } },
+    notify:    { label: 'Open in Chat', icon: 'ti-message-forward', color: '#f59e0b', ports: { in: ['in'],  out: ['out'] } },
     delay:     { label: 'Delay',     icon: 'ti-clock-pause',       color: '#6b7280', ports: { in: ['in'],  out: ['out'] } },
     code:      { label: 'Code',      icon: 'ti-code',              color: '#8b5cf6', ports: { in: ['in'],  out: ['out'] } },
   };
 
   var NODE_W = 160;
   var NODE_H = 72;
-  var PORT_R = 5;
+  var PORT_R = 7;   // larger ports — easier to grab
 
   // ── Init ────────────────────────────────────────────────────────────────
 
@@ -63,6 +64,11 @@ var pipelineCanvas = (function () {
     // Hydrate from pipeline
     if (pipeline && pipeline.nodes) {
       state.nodes = pipeline.nodes.map(function(n) { return Object.assign({}, n); });
+      // Bump _nextId so new nodes never collide with loaded IDs
+      state.nodes.forEach(function(n) {
+        var m = n.id && n.id.match(/\d+$/);
+        if (m) { var v = parseInt(m[0], 10) + 1; if (v > _nextId) _nextId = v; }
+      });
     }
     if (pipeline && pipeline.edges) {
       state.edges = pipeline.edges.map(function(e) { return Object.assign({}, e); });
@@ -137,6 +143,10 @@ var pipelineCanvas = (function () {
         var s = _canvases[canvasId];
         return s ? s.nodes.find(function(n) { return n.id === id; }) : null;
       },
+      getViewport: function() {
+        var s = _canvases[canvasId];
+        return s ? { zoom: s.zoom, pan: { x: s.pan.x, y: s.pan.y } } : { zoom: 1, pan: { x: 0, y: 0 } };
+      },
       updateNodeConfig: function(nodeId, config) {
         var s = _canvases[canvasId];
         if (!s) return;
@@ -170,7 +180,7 @@ var pipelineCanvas = (function () {
     _fire(canvasId);
   }
 
-  // ── Edge CRUD ───────────────────────────────────────────────────────────
+  // ── Edge CRUD ─────────────────────────────────────────────────────────────────
 
   function _addEdge(canvasId, fromId, fromPort, toId, toPort) {
     var s = _canvases[canvasId];
@@ -191,6 +201,63 @@ var pipelineCanvas = (function () {
     s.edges = s.edges.filter(function(e) { return e.id !== edgeId; });
     _redrawEdges(canvasId);
     _fire(canvasId);
+  }
+
+  function _removeEdgesForPort(canvasId, nodeId, port, side) {
+    var s = _canvases[canvasId];
+    if (!s) return;
+    if (side === 'out') {
+      s.edges = s.edges.filter(function(e) { return !(e.from === nodeId && e.fromPort === port); });
+    } else {
+      s.edges = s.edges.filter(function(e) { return !(e.to === nodeId && e.toPort === port); });
+    }
+    _redrawEdges(canvasId);
+    _fire(canvasId);
+  }
+
+  // ── Drop-zone highlight helpers ──────────────────────────────────────────
+
+  var SNAP_RADIUS = 48; // px in canvas-space — glow when wire is within this
+
+  function _highlightDropZones(canvasId, mx, my) {
+    var s = _canvases[canvasId];
+    if (!s) return;
+    s.nodes.forEach(function(node) {
+      if (node.id === s.connecting.fromNodeId) return;
+      var def = NODE_TYPES[node.type] || NODE_TYPES.prompt;
+      var inPorts = (def.ports && def.ports.in) || [];
+      inPorts.forEach(function(p, i) {
+        var portX = node.x;
+        var portY = node.y + (NODE_H / (inPorts.length + 1)) * (i + 1);
+        var dist = Math.sqrt(Math.pow(mx - portX, 2) + Math.pow(my - portY, 2));
+        var el = document.querySelector('[data-cv="' + canvasId + '"][data-nid="' + node.id + '"][data-port="' + p + '"][data-side="in"]');
+        if (!el) return;
+        if (dist < SNAP_RADIUS) {
+          el.style.transform = 'scale(1.7)';
+          el.style.boxShadow = '0 0 0 4px ' + def.color + '44, 0 0 12px ' + def.color;
+          el.style.background = def.color;
+          el.style.zIndex = '10';
+          s.connecting._snapTarget = { nodeId: node.id, port: p };
+        } else {
+          el.style.transform = '';
+          el.style.boxShadow = '';
+          el.style.background = 'var(--fau-surface3,#333)';
+          el.style.zIndex = '2';
+          if (s.connecting._snapTarget && s.connecting._snapTarget.nodeId === node.id) {
+            s.connecting._snapTarget = null;
+          }
+        }
+      });
+    });
+  }
+
+  function _clearDropZones(canvasId) {
+    document.querySelectorAll('[data-cv="' + canvasId + '"][data-side="in"]').forEach(function(el) {
+      el.style.transform = '';
+      el.style.boxShadow = '';
+      el.style.background = 'var(--fau-surface3,#333)';
+      el.style.zIndex = '2';
+    });
   }
 
   // ── Selection ───────────────────────────────────────────────────────────
@@ -259,7 +326,14 @@ var pipelineCanvas = (function () {
       dot.dataset.side = 'in';
       dot.style.cssText = 'position:absolute;left:-' + PORT_R + 'px;top:' + (top - PORT_R) + 'px;' +
         'width:' + (PORT_R * 2) + 'px;height:' + (PORT_R * 2) + 'px;border-radius:50%;' +
-        'background:var(--fau-surface3,#333);border:2px solid ' + def.color + ';cursor:crosshair;z-index:2;';
+        'background:var(--fau-surface3,#333);border:2px solid ' + def.color + ';cursor:crosshair;z-index:2;' +
+        'transition:transform .12s,box-shadow .12s;';
+      dot.title = 'Right-click to disconnect';
+      // Right-click in-port → remove all edges connected to it
+      dot.addEventListener('contextmenu', function(e) {
+        e.preventDefault(); e.stopPropagation();
+        _removeEdgesForPort(canvasId, node.id, p, 'in');
+      });
       el.appendChild(dot);
     });
 
@@ -274,10 +348,17 @@ var pipelineCanvas = (function () {
       dot.dataset.side = 'out';
       dot.style.cssText = 'position:absolute;right:-' + PORT_R + 'px;top:' + (top - PORT_R) + 'px;' +
         'width:' + (PORT_R * 2) + 'px;height:' + (PORT_R * 2) + 'px;border-radius:50%;' +
-        'background:var(--fau-surface3,#333);border:2px solid ' + portColor + ';cursor:crosshair;z-index:2;';
+        'background:var(--fau-surface3,#333);border:2px solid ' + portColor + ';cursor:crosshair;z-index:2;' +
+        'transition:transform .12s,box-shadow .12s;';
+      dot.title = 'Drag to connect · Right-click to disconnect';
+      // Right-click out-port → remove all edges from it
+      dot.addEventListener('contextmenu', function(e) {
+        e.preventDefault(); e.stopPropagation();
+        _removeEdgesForPort(canvasId, node.id, p, 'out');
+      });
       if (p !== 'in') {
         var lbl = document.createElement('span');
-        lbl.style.cssText = 'position:absolute;left:12px;top:-1px;font-size:9px;color:' + portColor + ';white-space:nowrap;';
+        lbl.style.cssText = 'position:absolute;left:16px;top:-1px;font-size:9px;color:' + portColor + ';white-space:nowrap;pointer-events:none;';
         lbl.textContent = p;
         dot.appendChild(lbl);
       }
@@ -369,11 +450,36 @@ var pipelineCanvas = (function () {
       path.setAttribute('fill', 'none');
       path.setAttribute('marker-end', 'url(#arrowhead-' + canvasId + ')');
       path.setAttribute('opacity', '0.8');
-      path.style.pointerEvents = 'auto';
-      path.style.cursor = 'pointer';
-      path.addEventListener('click', function() { _removeEdge(canvasId, e.id); });
+      path.style.pointerEvents = 'none';
+
+      // Invisible wider hit path for easy clicking
+      var hitPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      hitPath.setAttribute('d', 'M' + x1 + ',' + y1 + ' C' + (x1 + cx) + ',' + y1 + ' ' + (x2 - cx) + ',' + y2 + ' ' + x2 + ',' + y2);
+      hitPath.setAttribute('stroke', 'transparent');
+      hitPath.setAttribute('stroke-width', '16');
+      hitPath.setAttribute('fill', 'none');
+      hitPath.style.pointerEvents = 'auto';
+      hitPath.style.cursor = 'pointer';
+      hitPath.setAttribute('title', 'Click to remove');
+      hitPath.addEventListener('mouseenter', function() { path.setAttribute('stroke-width', '4'); path.setAttribute('opacity', '1'); });
+      hitPath.addEventListener('mouseleave', function() { path.setAttribute('stroke-width', '2'); path.setAttribute('opacity', '0.8'); });
+      hitPath.addEventListener('click', function() { _removeEdge(canvasId, e.id); });
+
       svgEl.appendChild(path);
+      svgEl.appendChild(hitPath);
     });
+
+    // Mark ports that have edges so CSS can show disconnect affordance
+    var host = document.getElementById('pcv-nodes-' + canvasId);
+    if (host) {
+      host.querySelectorAll('.pcv-port').forEach(function(el) { el.classList.remove('pcv-port-connected'); });
+      s.edges.forEach(function(e) {
+        var fromEl = host.querySelector('[data-nid="' + e.from + '"][data-port="' + e.fromPort + '"][data-side="out"]');
+        var toEl   = host.querySelector('[data-nid="' + e.to   + '"][data-port="' + e.toPort   + '"][data-side="in"]');
+        if (fromEl) fromEl.classList.add('pcv-port-connected');
+        if (toEl)   toEl.classList.add('pcv-port-connected');
+      });
+    }
 
     // Draw in-progress connection wire
     if (s.connecting) {
@@ -393,8 +499,8 @@ var pipelineCanvas = (function () {
   // ── Input events ────────────────────────────────────────────────────────
 
   function _onNodeDown(canvasId, nodeId, e) {
-    // Check if clicking a port
-    if (e.target.classList.contains('pcv-port')) { return; }
+    // Check if clicking a port or the node-delete button
+    if (e.target.classList.contains('pcv-port') || e.target.classList.contains('pcv-node-del')) { return; }
     e.stopPropagation();
     var s = _canvases[canvasId];
     if (!s) return;
@@ -402,7 +508,8 @@ var pipelineCanvas = (function () {
     var node = s.nodes.find(function(n) { return n.id === nodeId; });
     if (!node) return;
     s.dragging = { nodeId: nodeId, startX: e.clientX, startY: e.clientY, origX: node.x, origY: node.y };
-    e.target.setPointerCapture(e.pointerId);
+    // Capture on currentTarget (the node div) not e.target (which may be a child icon/label)
+    e.currentTarget.setPointerCapture(e.pointerId);
   }
 
   function _onHostDown(canvasId, e) {
@@ -469,6 +576,7 @@ var pipelineCanvas = (function () {
       var hostRect = e.currentTarget.getBoundingClientRect();
       s.connecting.mx = (e.clientX - hostRect.left - s.pan.x) / s.zoom;
       s.connecting.my = (e.clientY - hostRect.top  - s.pan.y) / s.zoom;
+      _highlightDropZones(canvasId, s.connecting.mx, s.connecting.my);
       _redrawEdges(canvasId);
     }
   }
@@ -488,8 +596,12 @@ var pipelineCanvas = (function () {
     if (s.connecting) {
       var conn = s.connecting;
       s.connecting = null;
-      // Check if pointer is over an in-port
-      if (e.target.classList.contains('pcv-port') && e.target.dataset.side === 'in') {
+      _clearDropZones(canvasId);
+      // 1. Snap target (wire dragged near a port)
+      if (conn._snapTarget) {
+        _addEdge(canvasId, conn.fromNodeId, conn.fromPort, conn._snapTarget.nodeId, conn._snapTarget.port);
+      // 2. Dropped directly on in-port element
+      } else if (e.target.classList.contains('pcv-port') && e.target.dataset.side === 'in') {
         var toNodeId = e.target.dataset.nid;
         var toPort   = e.target.dataset.port;
         if (toNodeId !== conn.fromNodeId) {
