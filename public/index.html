@@ -200,6 +200,7 @@
       <span id="topbar-project-pill" style="display:none !important"></span>
       <span id="agent-badge" style="display:none !important" onclick="deactivateAgent(getConv(state.currentId))"></span>
       <select id="model-select" onchange="onModelChange(this.value)"></select>
+      <button class="topbar-update-btn" id="topbar-update-btn" type="button" style="display:none" onclick="_installFaunaUpdate()" title="Install app update"><i class="ti ti-download"></i> <span>Update</span></button>
       <!-- Right side: voice + profile + overflow -->
       <button class="topbar-btn voice-mic-btn" id="voice-mic-btn" data-voice-state="off" title="Voice control — click to toggle, say wake word to activate"><i class="ti ti-microphone-off"></i></button>
       <button class="topbar-icon-btn" id="topbar-account-btn" onclick="openUserSettings()" title="Account &amp; settings">
@@ -1168,6 +1169,30 @@ Examples:
     _renderFaunaUpdateStatus(_faunaUpdateLastData || {});
   }
 
+  function _syncFaunaHeaderUpdate(data) {
+    var headerBtn = document.getElementById('topbar-update-btn');
+    if (!headerBtn) return;
+    var label = headerBtn.querySelector('span');
+    var icon = headerBtn.querySelector('i');
+    var job = data && data.job;
+    var running = !!(job && job.running);
+    var available = !!(job && job.updateAvailable);
+    if (!running && !available) {
+      headerBtn.style.display = 'none';
+      headerBtn.disabled = false;
+      headerBtn.classList.remove('updating');
+      if (label) label.textContent = 'Update';
+      if (icon) icon.className = 'ti ti-download';
+      return;
+    }
+    headerBtn.style.display = 'inline-flex';
+    headerBtn.disabled = running;
+    headerBtn.classList.toggle('updating', running);
+    if (label) label.textContent = running ? 'Updating' : 'Update';
+    if (icon) icon.className = running ? 'ti ti-loader-2' : 'ti ti-download';
+    headerBtn.title = running ? 'App update is installing' : 'Install app update';
+  }
+
   function _renderFaunaUpdateStatus(data) {
     _faunaUpdateLastData = data || {};
     var el = document.getElementById('fauna-update-status');
@@ -1175,6 +1200,7 @@ Examples:
     if (!el) return;
     var job = data && data.job;
     var running = job && (job.running || job.checking);
+    _syncFaunaHeaderUpdate(data);
     if (btn) btn.disabled = !!running;
     var meta = _faunaUpdatePhaseMeta(job);
     var isError = !!(job && job.error);
@@ -1219,6 +1245,12 @@ Examples:
     });
   }
 
+  function _checkFaunaHeaderUpdate() {
+    fetch('/api/fauna/check-update', { method: 'POST' }).then(function(r){ return r.json(); }).then(_renderFaunaUpdateStatus).catch(function(){
+      _syncFaunaHeaderUpdate({});
+    });
+  }
+
   function _pollFaunaUpdate() {
     fetch('/api/fauna/update-status').then(function(r){ return r.json(); }).then(function(d) {
       _renderFaunaUpdateStatus(d);
@@ -1230,6 +1262,7 @@ Examples:
 
   function _installFaunaUpdate() {
     var btn = document.getElementById('fauna-update-install-btn');
+    _syncFaunaHeaderUpdate({ job: { running: true, phase: 'starting' } });
     if (btn) btn.disabled = true;
     fetch('/api/fauna/install-update', {
       method: 'POST',
@@ -1277,6 +1310,8 @@ Examples:
       }
     }).catch(function(){});
   }
+
+  setTimeout(_checkFaunaHeaderUpdate, 2500);
   </script>
 </div>
 

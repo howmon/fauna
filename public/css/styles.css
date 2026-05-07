@@ -361,6 +361,18 @@ button .ti, label .ti { pointer-events: none; }
 }
 .topbar-btn:hover { border-color: var(--fau-border); color: var(--fau-text); background: var(--fau-surface2); }
 .topbar-btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent2); }
+.topbar-update-btn {
+  flex-shrink: 0; align-items: center; gap: 5px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
+  background: var(--accent-dim); color: var(--accent2);
+  border-radius: var(--radius-sm); padding: 5px 9px;
+  font: 600 12px/1 var(--font); cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s, opacity .12s;
+}
+.topbar-update-btn:hover { border-color: var(--accent); color: var(--fau-text); background: var(--fau-surface2); }
+.topbar-update-btn.updating { cursor: default; opacity: .85; }
+.topbar-update-btn.updating .ti-loader-2 { animation: spin 1.1s linear infinite; }
+.topbar-update-btn:disabled { pointer-events: none; }
 
 /* Profile/account icon button */
 .topbar-icon-btn {
