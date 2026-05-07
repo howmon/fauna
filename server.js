@@ -664,6 +664,49 @@ You have a built-in browser panel that runs inside the app. You can control it u
 - **console-logs (filtered)** — \`{"action":"console-logs","level":"error"}\` — only errors
 - **clear-console** — \`{"action":"clear-console"}\` — clear captured console logs
 `;
+const WEB_SEARCH_CONTEXT = `
+## Search Web
+
+You have first-class web tools, separate from browser automation:
+- **web_search** — search the public web for current information.
+- **web_fetch** — fetch and extract readable content from a known URL.
+
+Use web_search for real-time facts, recent documentation, product pages, and broad discovery. Use browser tools only when you need to interact with a page, inspect dynamic UI state, or debug a live website.
+`;
+
+const WEB_TOOL_DEFS = [
+  {
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description: 'Search the public web for current information. Returns ranked results with title, URL, snippet, and source.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query' },
+          limit: { type: 'number', description: 'Maximum results to return, 1-10. Default 5.' },
+          freshness: { type: 'string', enum: ['any', 'day', 'week', 'month', 'year'], description: 'Optional freshness window. Best-effort; may be ignored by fallback providers.' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'web_fetch',
+      description: 'Fetch a known HTTP/HTTPS URL and return readable page content, title, and final URL. Use after web_search when a result needs more detail.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'HTTP or HTTPS URL to fetch' },
+          maxChars: { type: 'number', description: 'Maximum extracted characters to return. Default 12000, max 40000.' },
+        },
+        required: ['url'],
+      },
+    },
+  },
+];
 
 // Only injected when no project is active. These "just DO it" build directives
 // conflict with the project shell-command policy.
@@ -1333,6 +1376,7 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
 
     const fullSystem = [
       systemPrompt.trim() + cliHint + projectCtx,
+      WEB_SEARCH_CONTEXT,
       isCLI ? '' : BROWSER_BUILD_CONTEXT,
       // APP_BUILD_RULES ("just DO it / never narrate") only for non-project, non-CLI sessions.
       // In project sessions these directives conflict with the shell-command policy.
@@ -1388,11 +1432,11 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
     chatLog(`[chat] context: ${trimmed.length}/${messages.length} msgs, ~${charCount} chars (sys: ${systemPrompt.length}ch)`);
 
     // Fetch Figma MCP tools and inject layout knowledge if requested
-    let mcpTools;
+    let mcpTools = [...WEB_TOOL_DEFS];
     if (useFigmaMCP) {
-      try { mcpTools = await figmaMCP.getTools(); } catch (_) {
+      try { mcpTools = [...WEB_TOOL_DEFS, ...await figmaMCP.getTools()]; } catch (_) {
         // Fallback: always expose figma_execute even when port-3845 is unavailable
-        mcpTools = [FigmaMCPClient.FIGMA_EXECUTE_TOOL];
+        mcpTools = [...WEB_TOOL_DEFS, FigmaMCPClient.FIGMA_EXECUTE_TOOL];
       }
       // Inject layout guide into system prompt
       allMessages[0] = allMessages[0]
@@ -1686,6 +1730,12 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
                 onWaitingForInput: (killId, hint, context) => send({ type: 'tool_waiting_for_input', killId, hint, context }),
               } : undefined;
               result = await agentToolHandlers.get(toolName)(args, onOutput, shellOpts);
+            } else if (toolName === 'web_search') {
+              chatLog('[chat] Web tool: search');
+              result = _formatWebSearchResult(await webSearch(args.query, args));
+            } else if (toolName === 'web_fetch') {
+              chatLog('[chat] Web tool: fetch %s', args.url || '');
+              result = _formatWebFetchResult(await webFetch(args.url, args));
             } else if (toolName === 'gui_screenshot') {
               chatLog('[chat] GUI tool: screenshot');
               const b64 = await _guiScreenshot();
@@ -2324,6 +2374,155 @@ function validateExternalUrl(raw) {
   if (/^(10|172\.(1[6-9]|2\d|3[01])|192\.168|169\.254)\./.test(host)) throw new Error('Access to private networks is blocked');
   return parsed.href;
 }
+
+function _clampNumber(value, fallback, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.trunc(n)));
+}
+
+function _decodeHtmlEntities(text = '') {
+  const named = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+  return String(text)
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&([a-z]+);/gi, (m, n) => named[n.toLowerCase()] ?? m);
+}
+
+function _stripHtml(text = '') {
+  return _decodeHtmlEntities(String(text)
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim());
+}
+
+function _normalizeSearchUrl(rawUrl) {
+  if (!rawUrl) return '';
+  let url = _decodeHtmlEntities(rawUrl);
+  try {
+    const parsed = new URL(url, 'https://duckduckgo.com');
+    const uddg = parsed.searchParams.get('uddg');
+    if (uddg) url = decodeURIComponent(uddg);
+    else url = parsed.href;
+  } catch (_) {}
+  try { return validateExternalUrl(url); } catch (_) { return ''; }
+}
+
+async function _fetchText(url, opts = {}) {
+  const safeUrl = validateExternalUrl(url);
+  const response = await fetch(safeUrl, {
+    method: 'GET',
+    redirect: 'follow',
+    headers: {
+      'User-Agent': opts.userAgent || 'Mozilla/5.0 (compatible; Fauna-Web/1.0)',
+      'Accept': opts.accept || 'text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7',
+      'Accept-Language': 'en-US,en;q=0.9',
+      ...(opts.headers || {}),
+    },
+    signal: AbortSignal.timeout(opts.timeoutMs || 15000),
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`);
+  return { text, url: response.url || safeUrl, status: response.status, headers: response.headers };
+}
+
+async function _searchWithBrave(query, limit, freshness) {
+  const key = process.env.BRAVE_SEARCH_API_KEY || process.env.BRAVE_API_KEY;
+  if (!key) return null;
+  const params = new URLSearchParams({ q: query, count: String(limit), text_decorations: 'false' });
+  const freshnessMap = { day: 'pd', week: 'pw', month: 'pm', year: 'py' };
+  if (freshnessMap[freshness]) params.set('freshness', freshnessMap[freshness]);
+  const { text } = await _fetchText(`https://api.search.brave.com/res/v1/web/search?${params}`, {
+    accept: 'application/json',
+    headers: { 'X-Subscription-Token': key },
+  });
+  const data = JSON.parse(text);
+  const results = (data.web?.results || []).slice(0, limit).map((item, index) => ({
+    rank: index + 1,
+    title: _stripHtml(item.title || ''),
+    url: _normalizeSearchUrl(item.url || ''),
+    snippet: _stripHtml(item.description || ''),
+    source: 'brave',
+  })).filter(r => r.url);
+  return { query, provider: 'brave', count: results.length, results };
+}
+
+async function _searchWithDuckDuckGo(query, limit) {
+  const searchUrl = `https://duckduckgo.com/html/?${new URLSearchParams({ q: query })}`;
+  const { text } = await _fetchText(searchUrl, { timeoutMs: 20000 });
+  const results = [];
+  const resultRe = /<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?(?:<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>|<div[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/div>)?/gi;
+  let match;
+  while ((match = resultRe.exec(text)) && results.length < limit) {
+    const url = _normalizeSearchUrl(match[1]);
+    const title = _stripHtml(match[2]);
+    const snippet = _stripHtml(match[3] || match[4] || '');
+    if (url && title && !results.some(r => r.url === url)) {
+      results.push({ rank: results.length + 1, title, url, snippet, source: 'duckduckgo' });
+    }
+  }
+  return { query, provider: 'duckduckgo', count: results.length, results };
+}
+
+async function webSearch(query, opts = {}) {
+  const q = String(query || '').trim();
+  if (!q) throw new Error('query is required');
+  const limit = _clampNumber(opts.limit, 5, 1, 10);
+  const freshness = opts.freshness || 'any';
+  const brave = await _searchWithBrave(q, limit, freshness).catch(e => ({ error: e.message }));
+  if (brave && !brave.error && brave.results?.length) return brave;
+  const fallback = await _searchWithDuckDuckGo(q, limit);
+  if (brave?.error) fallback.warning = `Brave Search failed: ${brave.error}`;
+  return fallback;
+}
+
+async function webFetch(url, opts = {}) {
+  const maxChars = _clampNumber(opts.maxChars, 12000, 1000, 40000);
+  const safeUrl = validateExternalUrl(url);
+  const { text, url: finalUrl, status, headers } = await _fetchText(safeUrl, { timeoutMs: 20000 });
+  const contentType = headers.get('content-type') || '';
+  const title = (text.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1];
+  let content;
+  if (/json/i.test(contentType)) {
+    try { content = JSON.stringify(JSON.parse(text), null, 2); } catch (_) { content = text; }
+  } else {
+    content = htmlToMarkdown(text, finalUrl);
+  }
+  return {
+    url: finalUrl,
+    status,
+    contentType,
+    title: title ? _stripHtml(title) : '',
+    content: content.slice(0, maxChars),
+    chars: content.length,
+    truncated: content.length > maxChars,
+  };
+}
+
+function _formatWebSearchResult(data) {
+  return JSON.stringify(data, null, 2);
+}
+
+function _formatWebFetchResult(data) {
+  return JSON.stringify(data, null, 2);
+}
+
+app.get('/api/web/search', async (req, res) => {
+  try { res.json(await webSearch(req.query.q || req.query.query, req.query)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/web/search', async (req, res) => {
+  try { res.json(await webSearch(req.body?.query, req.body || {})); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/web/fetch', async (req, res) => {
+  try { res.json(await webFetch(req.body?.url, req.body || {})); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // ── Whisper transcription (nodejs-whisper / whisper.cpp) ─────────────────
 
