@@ -1861,6 +1861,22 @@ Examples:
 
 <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/loader.js"></script>
 <!-- Private integrations loader — no-op if file absent -->
-<script>(function(){var s=document.createElement('script');s.src='/js/private-auth.js';s.onerror=function(){};document.body.appendChild(s);})();</script>
+<script>
+(function(){
+  fetch('/js/private-auth.js', { cache: 'no-store', headers: { Accept: 'application/javascript' } })
+    .then(function(r){
+      var ct = r.headers.get('content-type') || '';
+      if (!r.ok || ct.indexOf('javascript') === -1) return '';
+      return r.text();
+    })
+    .then(function(code){
+      if (!code || !code.trim()) return;
+      var s = document.createElement('script');
+      s.textContent = code;
+      document.body.appendChild(s);
+    })
+    .catch(function(){});
+})();
+</script>
 </body>
 </html>

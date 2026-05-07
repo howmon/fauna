@@ -84,11 +84,13 @@ function setConversationTitle(id, title, opts) {
   if (document.getElementById('all-convs-page')?.style.display !== 'none') renderAllConvsPage();
 }
 
-function renameConversation(id, e) {
+async function renameConversation(id, e) {
   if (e) e.stopPropagation();
   var conv = getConv(id || state.currentId);
   if (!conv) return;
-  var next = prompt('Rename conversation', conv.title || 'Conversation');
+  var next = typeof showPrompt === 'function'
+    ? await showPrompt('Rename conversation', conv.title || 'Conversation')
+    : null;
   if (next === null) return;
   setConversationTitle(conv.id, next, { manual: true });
 }
