@@ -867,10 +867,10 @@ Examples:
     </div>
     <div class="settings-section">
       <div class="settings-section-title">App Updates</div>
-      <div id="fauna-update-status" class="settings-hint" style="margin-bottom:8px">Checking update status…</div>
+      <div id="fauna-update-status" class="settings-hint fauna-update-status">Checking update status…</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <button type="button" class="settings-row-btn" style="flex:1;min-width:140px" onclick="_checkFaunaUpdate()"><i class="ti ti-refresh"></i> Check Main</button>
-        <button type="button" id="fauna-update-install-btn" class="settings-row-btn" style="flex:1;min-width:140px" onclick="_installFaunaUpdate()"><i class="ti ti-download"></i> Build &amp; Install</button>
+        <button type="button" class="settings-row-btn" style="flex:1;min-width:140px" onclick="_checkFaunaUpdate()"><i class="ti ti-refresh"></i> Check Update</button>
+        <button type="button" id="fauna-update-install-btn" class="settings-row-btn" style="flex:1;min-width:140px" onclick="_installFaunaUpdate()"><i class="ti ti-download"></i> Install</button>
         <button type="button" class="settings-row-btn" style="flex:1;min-width:140px" onclick="window.open('https://github.com/howmon/fauna','_blank')"><i class="ti ti-brand-github"></i> Repository</button>
       </div>
       <div class="settings-hint" style="margin-top:6px;font-size:10.5px">Build &amp; Install downloads Fauna main, compiles the platform package, then launches the installer/relauncher when supported.</div>
@@ -1121,39 +1121,101 @@ Examples:
     });
   }
 
+  var _faunaUpdateDetailsOpen = false;
+  var _faunaUpdateLastData = null;
+
+  function _faunaUpdateEsc(value) {
+    if (typeof escHtml === 'function') return escHtml(value);
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
+    });
+  }
+
+  function _faunaUpdatePhaseMeta(job) {
+    var phase = (job && job.phase) || (job && job.checking ? 'checking' : 'idle');
+    var map = {
+      idle:         { label: 'Ready', pct: 0,   icon: 'ti-circle' },
+      checking:     { label: 'Checking', pct: 12,  icon: 'ti-refresh' },
+      available:    { label: 'Update available', pct: 0, icon: 'ti-download' },
+      current:      { label: 'Up to date', pct: 100, icon: 'ti-circle-check' },
+      starting:     { label: 'Starting', pct: 6,   icon: 'ti-loader-2' },
+      download:     { label: 'Downloading', pct: 22, icon: 'ti-cloud-download' },
+      extract:      { label: 'Extracting', pct: 38, icon: 'ti-file-zip' },
+      dependencies: { label: 'Installing dependencies', pct: 56, icon: 'ti-packages' },
+      build:        { label: 'Building', pct: 78, icon: 'ti-hammer' },
+      install:      { label: 'Installing', pct: 93, icon: 'ti-device-desktop-down' },
+      complete:     { label: 'Complete', pct: 100, icon: 'ti-circle-check' },
+      error:        { label: 'Update failed', pct: Math.max(8, job && job.running ? 50 : 100), icon: 'ti-alert-circle' }
+    };
+    return map[phase] || { label: phase ? phase.charAt(0).toUpperCase() + phase.slice(1) : 'Working', pct: 50, icon: 'ti-loader-2' };
+  }
+
+  function _faunaUpdateDetailsHtml(data, job) {
+    var logs = (job && job.logs || []).slice(-80).map(function(l) { return l.message || l.m || ''; }).filter(Boolean);
+    var parts = [];
+    if (job && job.error) parts.push('Error: ' + job.error);
+    if (job && job.message) parts.push('Latest: ' + job.message);
+    if (job && job.currentSha) parts.push('Current: ' + String(job.currentSha).slice(0, 12));
+    if (job && job.latestSha) parts.push('Latest SHA: ' + String(job.latestSha).slice(0, 12));
+    if (data && data.sourceDir) parts.push('Source: ' + data.sourceDir);
+    var detailText = parts.concat(logs).join('\n');
+    if (!detailText) detailText = 'No update details yet.';
+    return '<pre class="fauna-update-log">' + _faunaUpdateEsc(detailText) + '</pre>';
+  }
+
+  function _toggleFaunaUpdateDetails() {
+    _faunaUpdateDetailsOpen = !_faunaUpdateDetailsOpen;
+    _renderFaunaUpdateStatus(_faunaUpdateLastData || {});
+  }
+
   function _renderFaunaUpdateStatus(data) {
+    _faunaUpdateLastData = data || {};
     var el = document.getElementById('fauna-update-status');
     var btn = document.getElementById('fauna-update-install-btn');
     if (!el) return;
     var job = data && data.job;
     var running = job && (job.running || job.checking);
     if (btn) btn.disabled = !!running;
+    var meta = _faunaUpdatePhaseMeta(job);
+    var isError = !!(job && job.error);
+    var showBar = !!running || meta.pct > 0 || meta.label === 'Complete' || meta.label === 'Up to date';
+    var pct = Math.max(0, Math.min(100, meta.pct || 0));
+    var statusText;
     if (running) {
-      el.textContent = (job.running ? 'Updating: ' : 'Checking: ') + (job.message || job.phase || 'working...');
+      statusText = meta.label;
     } else if (job && job.error) {
-      el.textContent = 'Update error: ' + job.error;
+      statusText = 'Update failed';
     } else if (job && job.updateAvailable) {
-      el.textContent = 'Update available from main: ' + String(job.latestSha || '').slice(0, 7);
+      statusText = 'Update available' + (job.latestSha ? ' @ ' + String(job.latestSha).slice(0, 7) : '');
     } else if (job && job.phase === 'current') {
-      el.textContent = 'Fauna is up to date' + (job.latestSha ? ' @ ' + job.latestSha.slice(0, 7) : '');
+      statusText = 'Fauna is up to date' + (job.latestSha ? ' @ ' + job.latestSha.slice(0, 7) : '');
     } else if (data && data.sourceReady) {
-      el.textContent = 'Update source is staged at ' + data.sourceDir;
+      statusText = 'Update source staged';
     } else {
-      el.textContent = 'Ready to check GitHub main for app updates.';
+      statusText = 'Ready to check for updates';
     }
+    var hasDetails = !!(isError || running || (job && job.logs && job.logs.length) || (data && data.sourceDir));
+    var barClass = running ? ' running' : isError ? ' error' : meta.label === 'Complete' || meta.label === 'Up to date' ? ' complete' : '';
+    el.innerHTML =
+      '<div class="fauna-update-card' + (isError ? ' error' : '') + '">' +
+        '<div class="fauna-update-head">' +
+          '<span class="fauna-update-state"><i class="ti ' + meta.icon + '"></i> ' + _faunaUpdateEsc(statusText) + '</span>' +
+          (hasDetails ? '<button type="button" class="fauna-update-details-btn" onclick="_toggleFaunaUpdateDetails()"><i class="ti ti-terminal-2"></i> ' + (_faunaUpdateDetailsOpen ? 'Hide details' : 'View details') + '</button>' : '') +
+        '</div>' +
+        (showBar ? '<div class="fauna-update-progress"><div class="fauna-update-progress-bar' + barClass + '" style="width:' + pct + '%"></div></div>' : '') +
+        (_faunaUpdateDetailsOpen && hasDetails ? _faunaUpdateDetailsHtml(data, job) : '') +
+      '</div>';
   }
 
   function _refreshFaunaUpdateStatus() {
     fetch('/api/fauna/update-status').then(function(r){ return r.json(); }).then(_renderFaunaUpdateStatus).catch(function(e){
-      var el = document.getElementById('fauna-update-status');
-      if (el) el.textContent = 'Update status unavailable: ' + e.message;
+      _renderFaunaUpdateStatus({ job: { phase: 'error', error: 'Update status unavailable: ' + e.message, logs: [{ message: e.message }] } });
     });
   }
 
   function _checkFaunaUpdate() {
     fetch('/api/fauna/check-update', { method: 'POST' }).then(function(r){ return r.json(); }).then(_renderFaunaUpdateStatus).catch(function(e){
-      var el = document.getElementById('fauna-update-status');
-      if (el) el.textContent = 'Update check failed: ' + e.message;
+      _renderFaunaUpdateStatus({ job: { phase: 'error', error: 'Update check failed: ' + e.message, logs: [{ message: e.message }] } });
     });
   }
 
@@ -1162,8 +1224,7 @@ Examples:
       _renderFaunaUpdateStatus(d);
       if (d.job && d.job.running) setTimeout(_pollFaunaUpdate, 1500);
     }).catch(function(e) {
-      var el = document.getElementById('fauna-update-status');
-      if (el) el.textContent = 'Update status unavailable: ' + e.message;
+      _renderFaunaUpdateStatus({ job: { phase: 'error', error: 'Update status unavailable: ' + e.message, logs: [{ message: e.message }] } });
     });
   }
 
@@ -1179,8 +1240,7 @@ Examples:
       _pollFaunaUpdate();
     }).catch(function(e) {
       if (btn) btn.disabled = false;
-      var el = document.getElementById('fauna-update-status');
-      if (el) el.textContent = 'Update failed: ' + e.message;
+      _renderFaunaUpdateStatus({ job: { phase: 'error', error: 'Update failed: ' + e.message, logs: [{ message: e.message }] } });
     });
   }
 

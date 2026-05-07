@@ -1201,6 +1201,36 @@ button .ti, label .ti { pointer-events: none; }
   font-size: 11px; color: var(--fau-text-muted); line-height: 1.5;
 }
 .settings-hint a { color: var(--accent2); }
+.fauna-update-status { margin-bottom: 8px; }
+.fauna-update-card {
+  border: 1px solid var(--fau-border);
+  background: var(--fau-surface2);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  color: var(--fau-text-dim);
+}
+.fauna-update-card.error { border-color: rgba(243,110,110,.45); background: rgba(243,110,110,.08); }
+.fauna-update-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.fauna-update-state { display: inline-flex; align-items: center; gap: 7px; min-width: 0; color: var(--fau-text); font-size: 12px; font-weight: 600; }
+.fauna-update-state .ti-loader-2 { animation: spin 1.1s linear infinite; }
+.fauna-update-details-btn {
+  flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid transparent; background: transparent; color: var(--fau-text-muted);
+  border-radius: var(--radius-sm); padding: 3px 7px; font: inherit; font-size: 11px; cursor: pointer;
+}
+.fauna-update-details-btn:hover { color: var(--fau-text); background: var(--fau-surface3); border-color: var(--fau-border); }
+.fauna-update-progress { height: 5px; margin-top: 9px; overflow: hidden; border-radius: 99px; background: var(--fau-border); }
+.fauna-update-progress-bar { height: 100%; border-radius: 99px; background: var(--accent); transition: width .35s ease; }
+.fauna-update-progress-bar.running { box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 45%, transparent); }
+.fauna-update-progress-bar.complete { background: var(--success); }
+.fauna-update-progress-bar.error { background: var(--error); }
+.fauna-update-log {
+  margin-top: 10px; max-height: 180px; overflow: auto;
+  white-space: pre-wrap; word-break: break-word;
+  border: 1px solid var(--fau-border); border-radius: var(--radius-sm);
+  background: var(--fau-code-bg); color: var(--fau-text-dim);
+  padding: 8px; font-family: var(--mono); font-size: 10.5px; line-height: 1.45;
+}
 .settings-status { font-size: 11.5px; min-height: 16px; }
 .settings-status.ok  { color: var(--success); }
 .settings-status.err { color: var(--error); }
