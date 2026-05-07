@@ -1407,7 +1407,18 @@ async function taskRun(id) {
 
 async function taskPause(id) {
   try {
-    await fetch('/api/tasks/' + id + '/pause', { method: 'POST' });
+    var task = _tasksCache.find(function(t) { return t.id === id; });
+    if (task && task.status === 'running') {
+      // Abort an actively running execution
+      await fetch('/api/tasks/' + id + '/pause', { method: 'POST' });
+    } else {
+      // Deactivate a scheduled/pending task by setting its status to paused
+      await fetch('/api/tasks/' + id, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'paused' }),
+      });
+    }
     fetchTasks();
   } catch (e) { showToast('Failed to pause: ' + e.message); }
 }
