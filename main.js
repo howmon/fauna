@@ -9,6 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT      = 3737;
 const IS_WIN    = process.platform === 'win32';
 const IS_MAC    = process.platform === 'darwin';
+const FAUNAMCP_REPO_URL = 'https://github.com/howmon/faunaMCP';
 
 nativeTheme.themeSource = 'dark';
 
@@ -202,6 +203,7 @@ function buildMenu() {
       role: 'help',
       submenu: [
         { label: 'Documentation', click: () => shell.openExternal('https://github.com/howmon/fauna') },
+        { label: 'Get FaunaMCP Standalone', click: () => shell.openExternal(FAUNAMCP_REPO_URL) },
         { label: 'Report Issue', click: () => shell.openExternal('https://github.com/howmon/fauna/issues') },
       ]
     }

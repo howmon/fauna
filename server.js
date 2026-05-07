@@ -10,6 +10,7 @@ import crypto     from 'crypto';
 import path       from 'path';
 import os         from 'os';
 import fs         from 'fs';
+import https      from 'https';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import net       from 'net';
@@ -8390,14 +8391,217 @@ app.get('/api/ext/status', async (_req, res) => {
 });
 
 // GET /api/faunamcp/status — is the FaunaMCP app running and connected?
+const FAUNAMCP_REPO_URL = 'https://github.com/howmon/faunaMCP';
+const FAUNAMCP_DOWNLOAD_URL = 'https://github.com/howmon/faunaMCP/archive/refs/heads/main.zip';
+const FAUNAMCP_RELEASES_URL = 'https://github.com/howmon/faunaMCP/releases';
+const FAUNAMCP_INSTALL_ROOT = path.join(CONFIG_DIR, 'faunamcp-standalone');
+const FAUNAMCP_SOURCE_DIR = path.join(FAUNAMCP_INSTALL_ROOT, 'source');
+const FAUNAMCP_ZIP_PATH = path.join(FAUNAMCP_INSTALL_ROOT, 'faunaMCP-main.zip');
+const FAUNAMCP_MAC_APP_PATH = '/Applications/FaunaMCP.app';
+const FAUNAMCP_WIN_APP_PATH = process.platform === 'win32'
+  ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Programs', 'FaunaMCP', 'FaunaMCP.exe')
+  : null;
+
+function _faunaMCPAppPath() {
+  if (process.platform === 'darwin') return FAUNAMCP_MAC_APP_PATH;
+  if (process.platform === 'win32') return FAUNAMCP_WIN_APP_PATH;
+  return null;
+}
+
+function _faunaMCPAppInstalled() {
+  const appPath = _faunaMCPAppPath();
+  return !!(appPath && fs.existsSync(appPath));
+}
+
+function _faunaMCPNpmCommand() {
+  return process.platform === 'win32' ? 'npm.cmd' : 'npm';
+}
+
+function _findFile(root, predicate) {
+  if (!fs.existsSync(root)) return null;
+  for (const name of fs.readdirSync(root)) {
+    const fullPath = path.join(root, name);
+    const stat = fs.statSync(fullPath);
+    if (stat.isDirectory()) {
+      const found = _findFile(fullPath, predicate);
+      if (found) return found;
+    } else if (predicate(fullPath, name)) {
+      return fullPath;
+    }
+  }
+  return null;
+}
+
+let _faunaMCPInstallJob = {
+  running: false,
+  phase: 'idle',
+  message: 'Idle',
+  error: null,
+  startedAt: null,
+  finishedAt: null,
+  sourceDir: FAUNAMCP_SOURCE_DIR,
+  appPath: _faunaMCPAppPath(),
+  logs: [],
+};
+
+function _faunaMCPInstallLog(message, phase = null) {
+  if (phase) _faunaMCPInstallJob.phase = phase;
+  _faunaMCPInstallJob.message = message;
+  _faunaMCPInstallJob.logs.push({ t: Date.now(), message });
+  if (_faunaMCPInstallJob.logs.length > 200) _faunaMCPInstallJob.logs.shift();
+  console.log('[FaunaMCP install]', message);
+}
+
+function _runProcess(command, args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const proc = _spawn(command, args, { ...opts, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    proc.stdout.on('data', chunk => {
+      const text = chunk.toString();
+      stdout += text;
+      for (const line of text.split('\n').filter(Boolean)) _faunaMCPInstallLog(line.slice(0, 500));
+    });
+    proc.stderr.on('data', chunk => {
+      const text = chunk.toString();
+      stderr += text;
+      for (const line of text.split('\n').filter(Boolean)) _faunaMCPInstallLog(line.slice(0, 500));
+    });
+    proc.on('error', reject);
+    proc.on('close', code => {
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(`${command} ${args.join(' ')} exited with ${code}: ${(stderr || stdout).slice(-1000)}`));
+    });
+  });
+}
+
+function _downloadFile(url, dest, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { headers: { 'User-Agent': 'Fauna' } }, res => {
+      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+        res.resume();
+        if (redirects > 5) return reject(new Error('Too many redirects'));
+        return resolve(_downloadFile(new URL(res.headers.location, url).toString(), dest, redirects + 1));
+      }
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume();
+        return reject(new Error(`Download failed with HTTP ${res.statusCode}`));
+      }
+      const file = fs.createWriteStream(dest);
+      res.pipe(file);
+      file.on('finish', () => file.close(resolve));
+      file.on('error', reject);
+    });
+    req.on('error', reject);
+  });
+}
+
+async function _installFaunaMCP({ installApp = true } = {}) {
+  if (_faunaMCPInstallJob.running) return;
+  _faunaMCPInstallJob = {
+    running: true,
+    phase: 'starting',
+    message: 'Starting FaunaMCP install',
+    error: null,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    sourceDir: FAUNAMCP_SOURCE_DIR,
+    appPath: _faunaMCPAppPath(),
+    logs: [],
+  };
+  try {
+    fs.mkdirSync(FAUNAMCP_INSTALL_ROOT, { recursive: true });
+    _faunaMCPInstallLog('Downloading FaunaMCP source zip...', 'download');
+    await _downloadFile(FAUNAMCP_DOWNLOAD_URL, FAUNAMCP_ZIP_PATH);
+
+    _faunaMCPInstallLog('Extracting FaunaMCP source...', 'extract');
+    fs.rmSync(FAUNAMCP_SOURCE_DIR, { recursive: true, force: true });
+    if (process.platform === 'win32') {
+      await _runProcess('powershell.exe', [
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-Command',
+        `Expand-Archive -LiteralPath ${JSON.stringify(FAUNAMCP_ZIP_PATH)} -DestinationPath ${JSON.stringify(FAUNAMCP_INSTALL_ROOT)} -Force`,
+      ]);
+    } else {
+      await _runProcess('unzip', ['-q', '-o', FAUNAMCP_ZIP_PATH, '-d', FAUNAMCP_INSTALL_ROOT]);
+    }
+    const extracted = path.join(FAUNAMCP_INSTALL_ROOT, 'faunaMCP-main');
+    if (!fs.existsSync(extracted)) throw new Error('Downloaded zip did not contain faunaMCP-main');
+    fs.renameSync(extracted, FAUNAMCP_SOURCE_DIR);
+
+    _faunaMCPInstallLog('Installing FaunaMCP npm dependencies...', 'dependencies');
+    await _runProcess(_faunaMCPNpmCommand(), ['install'], { cwd: FAUNAMCP_SOURCE_DIR, env: { ...process.env } });
+
+    const buildScript = process.platform === 'darwin' ? 'dist:mac' : process.platform === 'win32' ? 'dist:win' : 'dist';
+    _faunaMCPInstallLog(`Building FaunaMCP with npm run ${buildScript}...`, 'build');
+    await _runProcess(_faunaMCPNpmCommand(), ['run', buildScript], { cwd: FAUNAMCP_SOURCE_DIR, env: { ...process.env } });
+
+    if (installApp && process.platform === 'darwin') {
+      const builtApp = path.join(FAUNAMCP_SOURCE_DIR, 'dist', 'mac', 'FaunaMCP.app');
+      if (!fs.existsSync(builtApp)) throw new Error('Build completed, but dist/mac/FaunaMCP.app was not found');
+      _faunaMCPInstallLog('Installing FaunaMCP.app into /Applications...', 'install');
+      fs.rmSync(FAUNAMCP_MAC_APP_PATH, { recursive: true, force: true });
+      await _runProcess('cp', ['-R', builtApp, FAUNAMCP_MAC_APP_PATH]);
+      _faunaMCPInstallJob.appPath = FAUNAMCP_MAC_APP_PATH;
+    } else if (installApp && process.platform === 'win32') {
+      const distDir = path.join(FAUNAMCP_SOURCE_DIR, 'dist');
+      const installer = _findFile(distDir, (_fullPath, name) => /\.exe$/i.test(name) && /setup|faunamcp/i.test(name));
+      if (!installer) throw new Error('Build completed, but no Windows installer .exe was found in dist');
+      _faunaMCPInstallLog('Running FaunaMCP Windows installer...', 'install');
+      try {
+        await _runProcess(installer, ['/S'], { cwd: distDir, env: { ...process.env } });
+        _faunaMCPInstallJob.appPath = FAUNAMCP_WIN_APP_PATH;
+      } catch (silentErr) {
+        _faunaMCPInstallLog('Silent install failed; opening installer UI...', 'install');
+        const child = _spawn(installer, [], { cwd: distDir, detached: true, stdio: 'ignore' });
+        child.unref();
+        _faunaMCPInstallJob.appPath = installer;
+      }
+    }
+
+    _faunaMCPInstallLog('FaunaMCP install complete', 'complete');
+    _faunaMCPInstallJob.running = false;
+    _faunaMCPInstallJob.finishedAt = new Date().toISOString();
+  } catch (e) {
+    _faunaMCPInstallJob.running = false;
+    _faunaMCPInstallJob.phase = 'error';
+    _faunaMCPInstallJob.error = e.message;
+    _faunaMCPInstallJob.message = 'Install failed: ' + e.message;
+    _faunaMCPInstallJob.finishedAt = new Date().toISOString();
+    console.error('[FaunaMCP install]', e);
+  }
+}
+
 app.get('/api/faunamcp/status', (_req, res) => {
   res.json({
     connected: !!_faunaMCPClient,
     initialized: _faunaMCPClient?._initialized ?? false,
     url: _faunaMCPClient?._url ?? null,
+    repoUrl: FAUNAMCP_REPO_URL,
+    downloadUrl: FAUNAMCP_DOWNLOAD_URL,
+    releasesUrl: FAUNAMCP_RELEASES_URL,
+    install: {
+      sourceDir: FAUNAMCP_SOURCE_DIR,
+      sourceReady: fs.existsSync(path.join(FAUNAMCP_SOURCE_DIR, 'package.json')),
+      appPath: _faunaMCPAppPath(),
+      appInstalled: _faunaMCPAppInstalled(),
+      canBuild: true,
+      job: _faunaMCPInstallJob,
+    },
     toolCount: _faunaMCPClient?.toolsCache?.length ?? 0,
     builtInRunning: !!(_browserServerProc && _browserServerProc.exitCode === null),
   });
+});
+
+app.get('/api/faunamcp/install-status', (_req, res) => {
+  res.json({ ok: true, job: _faunaMCPInstallJob });
+});
+
+app.post('/api/faunamcp/install', (req, res) => {
+  if (_faunaMCPInstallJob.running) return res.status(409).json({ ok: false, error: 'FaunaMCP install already running', job: _faunaMCPInstallJob });
+  const installApp = req.body?.installApp !== false;
+  _installFaunaMCP({ installApp }).catch(() => {});
+  res.json({ ok: true, job: _faunaMCPInstallJob });
 });
 
 // GET /api/ext/install-dir — path to the browser-extension folder (for unpacked load)

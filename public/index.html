@@ -790,6 +790,12 @@ Examples:
         When the <strong style="color:var(--fau-text)">FaunaMCP</strong> standalone app is running, Fauna automatically connects to its browser and Figma tools — no bundled process needed.
         The Chrome extension, browser automation, and Figma plugin all flow through FaunaMCP.
       </div>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+        <button type="button" class="settings-row-btn" style="flex:1;min-width:150px" onclick="_openFaunaMCPRepo()"><i class="ti ti-brand-github"></i> FaunaMCP Repo</button>
+        <button type="button" class="settings-row-btn" style="flex:1;min-width:150px" onclick="_downloadFaunaMCP()"><i class="ti ti-download"></i> Download FaunaMCP</button>
+        <button type="button" id="faunamcp-install-btn" class="settings-row-btn" style="flex:1;min-width:150px" onclick="_installFaunaMCP()"><i class="ti ti-package-import"></i> Build &amp; Install</button>
+      </div>
+      <div id="faunamcp-install-status" class="settings-hint" style="margin-top:6px;font-size:10.5px"></div>
     </div>
     <div class="settings-section">
       <div class="settings-section-title">Built-in Browser</div>
@@ -1035,13 +1041,70 @@ Examples:
         var toolTxt = d.toolCount ? ' · ' + d.toolCount + ' tools' : '';
         label.textContent = 'Connected' + toolTxt + ' — browser & Figma tools routed via FaunaMCP';
       } else {
-        label.textContent = 'Not running — start the FaunaMCP app to share browser & Figma tools';
+        var installHint = d.install && d.install.appInstalled ? ' installed' : ' not installed';
+        label.textContent = 'Not running — FaunaMCP' + installHint + '; build/install it to share browser & Figma tools';
       }
+      _renderFaunaMCPInstallStatus(d.install && d.install.job, d.install);
     }).catch(function(){
       var d2 = document.getElementById('faunamcp-settings-dot');
       var l2 = document.getElementById('faunamcp-settings-label');
       if (d2) { d2.style.background = '#555'; d2.style.boxShadow = 'none'; }
       if (l2) { l2.textContent = 'Not running'; l2.style.color = 'var(--fau-text-muted)'; }
+    });
+  }
+
+  function _openFaunaMCPRepo() {
+    window.open('https://github.com/howmon/faunaMCP', '_blank');
+  }
+
+  function _downloadFaunaMCP() {
+    window.open('https://github.com/howmon/faunaMCP/archive/refs/heads/main.zip', '_blank');
+  }
+
+  function _renderFaunaMCPInstallStatus(job, install) {
+    var el = document.getElementById('faunamcp-install-status');
+    var btn = document.getElementById('faunamcp-install-btn');
+    if (!el) return;
+    var running = job && job.running;
+    if (btn) btn.disabled = !!running;
+    if (running) {
+      el.textContent = 'Installing: ' + (job.message || job.phase || 'working...');
+    } else if (job && job.error) {
+      el.textContent = 'Install failed: ' + job.error;
+    } else if (install && install.appInstalled) {
+      el.textContent = 'Installed at ' + install.appPath + '. Start FaunaMCP, then refresh status.';
+    } else if (install && install.sourceReady) {
+      el.textContent = 'Source is ready at ' + install.sourceDir + '. Build & Install can refresh it.';
+    } else {
+      el.textContent = 'Build & Install downloads FaunaMCP, compiles it, and installs the app when supported.';
+    }
+  }
+
+  function _pollFaunaMCPInstall() {
+    fetch('/api/faunamcp/install-status').then(function(r){ return r.json(); }).then(function(d) {
+      _renderFaunaMCPInstallStatus(d.job, null);
+      if (d.job && d.job.running) setTimeout(_pollFaunaMCPInstall, 1500);
+      else _faunaMCPSettingsRefresh();
+    }).catch(function(e) {
+      var el = document.getElementById('faunamcp-install-status');
+      if (el) el.textContent = 'Install status unavailable: ' + e.message;
+    });
+  }
+
+  function _installFaunaMCP() {
+    var btn = document.getElementById('faunamcp-install-btn');
+    if (btn) btn.disabled = true;
+    fetch('/api/faunamcp/install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ installApp: true })
+    }).then(function(r){ return r.json().then(function(d){ if (!r.ok) throw new Error(d.error || 'Install failed'); return d; }); }).then(function(d) {
+      _renderFaunaMCPInstallStatus(d.job, null);
+      _pollFaunaMCPInstall();
+    }).catch(function(e) {
+      if (btn) btn.disabled = false;
+      var el = document.getElementById('faunamcp-install-status');
+      if (el) el.textContent = 'Install failed: ' + e.message;
     });
   }
 
