@@ -3843,6 +3843,21 @@ textarea.builder-find-active {
   -webkit-app-region: no-drag;
 }
 #agent-store-panel.open { right: 0; }
+#settings-panel #agent-store-panel {
+  position: static;
+  right: auto;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  flex: 1;
+  border: 1px solid var(--fau-border);
+  border-radius: 10px;
+  z-index: auto;
+  transition: none;
+  overflow: hidden;
+}
+#settings-panel #agent-store-panel.open { right: auto; }
+#settings-panel #agent-store-panel .store-body { padding: 18px; }
 
 .store-header {
   display: flex; align-items: center; gap: 8px; padding: 12px 16px;
@@ -6034,10 +6049,27 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
   padding: 32px 40px;
   max-width: 720px;
 }
+#settings-content-col.plugins-active .settings-scroll {
+  max-width: none;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 24px 32px;
+}
 
 /* Settings pages (only .active is shown) */
 .settings-page { display: none; }
 .settings-page.active { display: block; }
+
+.settings-page-plugins.active {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 48px);
+}
+.settings-plugin-shell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
 
 .settings-page-title {
   font-size: 22px;

@@ -70,10 +70,11 @@ function openAgentStore() {
   storeState.open = true;
   storeState.view = 'browse';
   storeState.browseTab = 'myagents';
+  if (typeof openSettingsPage === 'function') openSettingsPage('plugins');
   var panel = document.getElementById('agent-store-panel');
   if (panel) {
     panel.style.display = 'flex';
-    requestAnimationFrame(function() { panel.classList.add('open'); });
+    panel.classList.add('open');
   }
   loadStoreCategories();
   searchStoreAgents();
@@ -87,7 +88,9 @@ function closeAgentStore() {
   var panel = document.getElementById('agent-store-panel');
   if (panel) {
     panel.classList.remove('open');
-    setTimeout(function() { panel.style.display = 'none'; }, 250);
+    if (!panel.closest('#settings-panel')) {
+      setTimeout(function() { panel.style.display = 'none'; }, 250);
+    }
   }
 }
 
@@ -97,6 +100,7 @@ function renderStorePanel() {
   var panel = document.getElementById('agent-store-panel');
   if (!panel) return;
 
+  var embeddedInSettings = !!panel.closest('#settings-panel');
   var isReviewer = storeState.account && ['superadmin','admin','reviewer'].indexOf(storeState.account.role) !== -1;
 
   var headerHtml =
@@ -109,7 +113,7 @@ function renderStorePanel() {
         '<button class="store-nav-btn' + (storeState.view === 'account' ? ' active' : '') + '" onclick="storeNavigate(\'account\')"><i class="ti ti-user"></i> Account</button>' +
         (storeState.account ? '<button class="store-notif-btn" onclick="toggleNotificationPanel()" title="Notifications"><i class="ti ti-bell"></i>' + (storeState.unreadCount > 0 ? '<span class="store-notif-badge">' + storeState.unreadCount + '</span>' : '') + '</button>' : '') +
       '</div>' +
-      '<button class="store-close-btn" onclick="closeAgentStore()" title="Close"><i class="ti ti-x"></i></button>' +
+      (embeddedInSettings ? '' : '<button class="store-close-btn" onclick="closeAgentStore()" title="Close"><i class="ti ti-x"></i></button>') +
     '</div>';
 
   var bodyHtml = '';

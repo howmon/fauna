@@ -43,9 +43,6 @@
 
     <!-- Primary nav -->
     <nav id="sidebar-nav">
-      <button class="sidebar-nav-item" onclick="openAgentStore()">
-        <i class="ti ti-puzzle"></i><span>Plugins</span>
-      </button>
       <button class="sidebar-nav-item" onclick="toggleTasksPanel()">
         <i class="ti ti-bolt"></i><span>Automations</span>
       </button>
@@ -89,9 +86,6 @@
       <div id="agents-section-body">
         <div id="agent-list"></div>
         <div id="agents-show-all" class="sidebar-show-all" onclick="openAllAgents()" style="display:none">All agents</div>
-        <div id="agent-store-btn" onclick="openAgentStore()">
-          <i class="ti ti-package"></i> <span>Agent Store</span>
-        </div>
       </div>
     </div>
 
@@ -531,6 +525,9 @@ Examples:
       <button class="settings-nav-item" data-page="voice" onclick="switchSettingsPage('voice',this)">
         <i class="ti ti-microphone"></i> Voice
       </button>
+      <button class="settings-nav-item" data-page="plugins" onclick="openAgentStore()">
+        <i class="ti ti-puzzle"></i> Plugins
+      </button>
       <button class="settings-nav-item" data-page="mcp" onclick="switchSettingsPage('mcp',this)">
         <i class="ti ti-plug"></i> MCP Servers
       </button>
@@ -712,6 +709,14 @@ Examples:
     </div>
   </div>
 
+  <!-- ── Plugins ──────────────────────────────────────────────── -->
+  <div class="settings-page settings-page-plugins" data-page="plugins">
+    <div class="settings-page-title">Plugins</div>
+    <div class="settings-plugin-shell">
+      <div id="agent-store-panel" class="settings-agent-store" style="display:none"></div>
+    </div>
+  </div>
+
   <!-- ── MCP Servers ────────────────────────────────────────────── -->
   <div class="settings-page" data-page="mcp" id="settings-page-mcp">
     <div class="settings-page-title">MCP Servers</div>
@@ -890,10 +895,23 @@ Examples:
     }
   }
 
+  function openSettingsPage(page) {
+    var panel = document.getElementById('settings-panel');
+    if (panel && !panel.classList.contains('open')) {
+      settingsOpen = true;
+      panel.classList.add('open');
+      if (typeof loadSettingsState === 'function') loadSettingsState();
+    }
+    var btn = document.querySelector('#settings-panel .settings-nav-item[data-page="' + page + '"]');
+    switchSettingsPage(page, btn);
+  }
+
   function switchSettingsPage(page, btn) {
     document.querySelectorAll('#settings-panel .settings-page').forEach(function(p) {
       p.classList.toggle('active', p.dataset.page === page);
     });
+    var contentCol = document.getElementById('settings-content-col');
+    if (contentCol) contentCol.classList.toggle('plugins-active', page === 'plugins');
     document.querySelectorAll('#settings-panel .settings-nav-item').forEach(function(b) {
       b.classList.remove('active');
     });
@@ -1364,11 +1382,6 @@ Examples:
   </div>
   <div id="acv-editor" class="acv-editor"></div>
 </div>
-
-<!-- ── Agent Store Panel ───────────────────────────────────────── -->
-<div id="agent-store-panel" style="display:none"></div>
-
-
 
 <!-- ── Agent Import Modal ─────────────────────────────────────── -->
 <div id="import-modal" style="display:none" onclick="if(event.target===this){closeImportModal()}">
