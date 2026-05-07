@@ -128,6 +128,12 @@ function loadConversation(id) {
 
   state.model  = conv.model || state.model;
   document.getElementById('model-select').value = state.model;
+  // Sync toolbar model label
+  var _tbLbl = document.getElementById('tb-model-label');
+  if (_tbLbl && typeof allModels !== 'undefined') {
+    var _m = allModels.find(function(m) { return m.id === state.model; });
+    if (_m) _tbLbl.textContent = _m.name;
+  }
   document.getElementById('sys-prompt-input').value = conv.systemPrompt || '';
   updateSysScopeHint();
   document.getElementById('topbar-title').textContent = conv.title;
@@ -150,6 +156,46 @@ function loadConversation(id) {
 
   // Only populate DOM if it's empty (first load); don't re-render if already built
   if (!convInner.hasChildNodes()) {
+    // Render archived messages first (history preserved from previous compressions)
+    if (conv.archivedMessages && conv.archivedMessages.length) {
+      conv.archivedMessages.forEach(function(m) {
+        if (m._compositionHandoff) return;
+        if (m._isBrowserFeed) {
+          var feedNote = document.createElement('div');
+          feedNote.className = 'msg system-msg';
+          feedNote.innerHTML = '<div class="msg-body" style="display:flex;align-items:center;gap:5px;font-size:11px">' +
+            '<i class="ti ti-world-www" style="font-size:12px;opacity:.5"></i>' +
+            '<span>Browser page fed to AI</span>' +
+          '</div>';
+          convInner.appendChild(feedNote);
+          return;
+        }
+        if (m._isAutoFeed) {
+          var autoNote = document.createElement('div');
+          autoNote.className = 'msg system-msg';
+          autoNote.innerHTML = '<div class="msg-body" style="display:flex;align-items:center;gap:5px;font-size:11px">' +
+            '<i class="ti ti-terminal-2" style="font-size:12px;opacity:.5"></i>' +
+            '<span>Shell output fed to AI</span>' +
+          '</div>';
+          convInner.appendChild(autoNote);
+          return;
+        }
+        appendMessageDOM(m.role, m.content, m.attachments, false, m.agentInfo || null, m._isHTML || false);
+      });
+
+      // Divider showing where archive ends and active context begins
+      var divider = document.createElement('div');
+      divider.className = 'msg system-msg conv-archive-divider';
+      divider.innerHTML = '<div class="msg-body conv-archive-divider-inner">' +
+        '<i class="ti ti-history"></i>' +
+        '<span>Older messages archived — full history preserved above, AI context starts here</span>' +
+        (conv.contextSummary
+          ? '<button onclick="showContextSummary(\'' + conv.id + '\')" class="conv-archive-view-btn">View summary</button>'
+          : '') +
+      '</div>';
+      convInner.appendChild(divider);
+    }
+
     conv.messages.forEach(m => {
       if (m._compositionHandoff) return; // skip internal handoff messages
       if (m._isBrowserFeed) {

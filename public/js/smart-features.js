@@ -284,10 +284,13 @@ function updateContextMeterGranular(data) {
   var totalUsed = promptTokens + completionTokens;
   var pct = Math.min((totalUsed / limit) * 100, 100);
 
-  fill.style.width = pct + '%';
-  fill.className = '';
-  if (pct > 80) fill.className = 'ctx-meter-danger';
-  else if (pct > 50) fill.className = 'ctx-meter-warn';
+  // Circular ring: r=9, circumference≈56.55
+  var offset = (56.55 * (1 - pct / 100)).toFixed(2);
+  fill.setAttribute('stroke-dashoffset', offset);
+  var cls = 'ctx-ring-arc';
+  if (pct > 80) cls += ' ctx-meter-danger';
+  else if (pct > 50) cls += ' ctx-meter-warn';
+  fill.setAttribute('class', cls);
 
   // Build granular breakdown
   var sysTokens = Math.round(data.sysChars / 4);
@@ -297,21 +300,20 @@ function updateContextMeterGranular(data) {
   if (data.usage) {
     breakdown = 'in:' + formatTokens(promptTokens) + ' + out:' + formatTokens(completionTokens);
   }
-  label.textContent = breakdown + ' = ' + formatTokens(totalUsed) + '/' + formatTokens(limit) + (data.usage ? '' : ' (est.)');
-
-  // Tooltip with full breakdown
   var tipParts = [
     'System prompt: ~' + formatTokens(sysTokens) + ' tokens',
     'Messages: ~' + formatTokens(msgTokens) + ' tokens',
   ];
   if (data.usage) {
-    tipParts.push('Actual prompt: ' + formatTokens(promptTokens));
-    tipParts.push('Completion: ' + formatTokens(completionTokens));
+    tipParts.push('Actual in: ' + formatTokens(promptTokens));
+    tipParts.push('Actual out: ' + formatTokens(completionTokens));
   }
   tipParts.push('Model limit: ' + formatTokens(limit));
   tipParts.push('Used: ' + pct.toFixed(1) + '%');
-  meter.title = tipParts.join('\n');
-
+  var labelText = breakdown + ' = ' + formatTokens(totalUsed) + '/' + formatTokens(limit) + (data.usage ? '' : ' (est.)');
+  var popover = document.getElementById('ctx-meter-popover');
+  if (popover) popover.innerHTML = tipParts.map(function(l) { return '<div>' + l + '</div>'; }).join('');
+  meter.setAttribute('data-ctx-tip', labelText);
   meter.style.display = 'flex';
 }
 

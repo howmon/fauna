@@ -51,33 +51,15 @@ function updateFigmaMCPBadge() {
     secStat.style.color = enabled ? '#62d794' : 'var(--fau-text-muted)';
   }
 
-  if (figmaMCPChecking) {
-    badge.textContent = '◌ Figma';
-    badge.title = 'Checking Figma MCP…';
-    badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--fau-surface2);color:var(--fau-text-muted);border:1px solid var(--fau-border);cursor:default;transition:all .2s';
-    badge.onclick = null;
-    return;
-  }
+  // badge is kept permanently offscreen — only update its data attrs for JS compat.
+  // Visual Figma state is shown via the figma-mode-banner (above input-wrap) and
+  // the + menu item badge. Never touch badge.style here.
+  badge.setAttribute('data-figma-state', figmaMCPChecking ? 'checking' : (enabled && connected) ? 'active' : (enabled && !connected) ? 'warn' : (!enabled && connected) ? 'available' : 'off');
 
-  badge.onclick = toggleFigmaMCP;
+  if (!figmaMCPChecking) badge.onclick = toggleFigmaMCP;
 
-  if (enabled && connected) {
-    badge.textContent = '✦ Figma MCP';
-    badge.title = 'Figma MCP active (' + (figmaMCPStatus.toolCount || 0) + ' tools) — click to disable';
-    badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:rgba(98,215,148,.15);color:#62d794;border:1px solid rgba(98,215,148,.35);cursor:pointer;font-weight:600;transition:all .2s';
-  } else if (enabled && !connected) {
-    badge.textContent = '⚠ Figma MCP';
-    badge.title = 'Figma MCP enabled but Figma Desktop / Dev Mode MCP not running — click to disable';
-    badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:rgba(255,200,80,.12);color:#f0b429;border:1px solid rgba(255,200,80,.3);cursor:pointer;transition:all .2s';
-  } else if (!enabled && connected) {
-    badge.textContent = '◎ Figma MCP';
-    badge.title = 'Figma MCP available (' + (figmaMCPStatus.toolCount || 0) + ' tools) — click to enable';
-    badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--fau-surface2);color:var(--fau-text-secondary,#8b8b9e);border:1px solid var(--fau-border);cursor:pointer;transition:all .2s';
-  } else {
-    badge.textContent = '◌ Figma MCP';
-    badge.title = 'Figma MCP off — click to enable';
-    badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--fau-surface2);color:var(--fau-text-muted);border:1px solid var(--fau-border);cursor:pointer;opacity:.6;transition:all .2s';
-  }
+  // Sync plus menu Figma item badge
+  if (typeof _refreshTbFigmaItem === 'function') _refreshTbFigmaItem();
 }
 
 function setFigmaSectionVisible(show) {
@@ -101,23 +83,12 @@ async function toggleFigmaMCP() {
   updateFigmaMCPBadge();
 
   if (state.figmaMCPEnabled) {
-    // Enable: show Figma section + start relay server if not already running
-    setFigmaSectionVisible(true);
-    if (!figmaStatus.mcpRunning) {
-      var r = await fetch('/api/figma/mcp-start', { method: 'POST' }).catch(() => null);
-      var d = r ? await r.json().catch(() => ({})) : {};
-      if (d && !d.ok && d.error) showToast('Relay: ' + d.error);
-      setTimeout(pollFigmaStatus, 600);
+    // Only start Fauna's own local relay if FaunaMCP relay is not already connected
+    if (!figmaStatus.relayConnected && !figmaStatus.mcpRunning) {
+      fetch('/api/figma/mcp-start', { method: 'POST' }).catch(() => null);
     }
-    checkFigmaMCPStatus();
     showToast('✦ Figma MCP enabled');
   } else {
-    // Disable: hide Figma section + stop relay server
-    setFigmaSectionVisible(false);
-    if (figmaStatus.mcpRunning) {
-      await fetch('/api/figma/mcp-stop', { method: 'POST' }).catch(() => null);
-      setTimeout(pollFigmaStatus, 600);
-    }
     showToast('○ Figma MCP disabled');
   }
 }

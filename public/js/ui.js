@@ -138,6 +138,11 @@ function populateModelSelect() {
     });
     sel.appendChild(grp);
   });
+
+  // Sync toolbar label
+  var cur = allModels.find(m => m.id === state.model);
+  var lbl = document.getElementById('tb-model-label');
+  if (lbl) lbl.textContent = cur ? cur.name : (state.model || 'Model');
 }
 
 function onModelChange(id) {
@@ -145,6 +150,11 @@ function onModelChange(id) {
   localStorage.setItem('fauna-model', id);
   var m = allModels.find(m => m.id === id);
   if (m) showToast('Model: ' + m.name);
+  // Sync hidden select + toolbar label
+  var sel = document.getElementById('model-select');
+  if (sel) sel.value = id;
+  var lbl = document.getElementById('tb-model-label');
+  if (lbl) lbl.textContent = m ? m.name : id;
 }
 
 // ── Auth & Settings ───────────────────────────────────────────────────────
@@ -294,6 +304,7 @@ async function loadSettingsState() {
   loadProviderStatus();
   loadMobilePairQR();
   loadEnterpriseAuthStatus();
+  loadWorkiqStatus();
 }async function checkAuth() {
   var pill  = document.getElementById('auth-pill');
   var badge = document.getElementById('auth-badge');
@@ -330,66 +341,13 @@ async function loadSettingsState() {
   }
 }
 
-async function loadEnterpriseAuthStatus() {
-  try {
-    const r = await fetch('/api/enterprise-auth/status');
-    const d = await r.json();
-    const section = document.getElementById('ms-account-section');
-    if (!section) return;
-    if (!d.available) { section.style.display = 'none'; return; }
-    section.style.display = '';
-    const badge = document.getElementById('ms-account-badge');
-    const nameEl = document.getElementById('ms-account-name');
-    const signInBtn = document.getElementById('ms-signin-btn');
-    const signOutBtn = document.getElementById('ms-signout-btn');
-    if (d.isAuthenticated) {
-      badge.className = 'auth-source-badge ok';
-      badge.innerHTML = '<i class="ti ti-check"></i> Signed in';
-      nameEl.textContent = d.account.name + ' · ' + d.account.username;
-      nameEl.style.display = '';
-      signInBtn.style.display = 'none';
-      signOutBtn.style.display = '';
-    } else {
-      badge.className = 'auth-source-badge';
-      badge.innerHTML = '<i class="ti ti-circle-dot"></i> Not signed in';
-      nameEl.style.display = 'none';
-      signInBtn.style.display = '';
-      signOutBtn.style.display = 'none';
-    }
-  } catch (e) {
-    // server not running or endpoint missing — hide section
-    const section = document.getElementById('ms-account-section');
-    if (section) section.style.display = 'none';
-  }
-}
-
-async function enterpriseSignIn() {
-  const btn = document.getElementById('ms-signin-btn');
-  const orig = btn.innerHTML;
-  btn.disabled = true;
-  btn.innerHTML = '<i class="ti ti-loader"></i> Signing in…';
-  try {
-    const r = await fetch('/api/enterprise-auth/sign-in', { method: 'POST' });
-    const d = await r.json();
-    if (!d.ok) throw new Error(d.error || 'Sign-in failed');
-    await loadEnterpriseAuthStatus();
-  } catch (e) {
-    btn.disabled = false;
-    btn.innerHTML = orig;
-    alert('Microsoft sign-in failed: ' + e.message);
-  }
-}
-
-async function enterpriseSignOut() {
-  const btn = document.getElementById('ms-signout-btn');
-  btn.disabled = true;
-  try {
-    await fetch('/api/enterprise-auth/sign-out', { method: 'POST' });
-    await loadEnterpriseAuthStatus();
-  } finally {
-    btn.disabled = false;
-  }
-}
+// No-op stubs — real implementations injected by /js/private-auth.js if present
+async function loadEnterpriseAuthStatus() {}
+async function enterpriseSignIn() {}
+async function enterpriseSignOut() {}
+async function loadWorkiqStatus() {}
+async function workiqConnect() {}
+async function workiqSignOut() {}
 
 async function savePat() {
   var input  = document.getElementById('pat-input');
@@ -1164,12 +1122,19 @@ function updateContextMeter(data) {
   var totalUsed = promptTokens + completionTokens;
   var pct = Math.min((totalUsed / limit) * 100, 100);
 
-  fill.style.width = pct + '%';
-  fill.className = '';
-  if (pct > 80) fill.className = 'ctx-meter-danger';
-  else if (pct > 50) fill.className = 'ctx-meter-warn';
+  // Circular ring: r=9, circumference≈56.55
+  var offset = (56.55 * (1 - pct / 100)).toFixed(2);
+  fill.setAttribute('stroke-dashoffset', offset);
+  var cls = 'ctx-ring-arc';
+  if (pct > 80) cls += ' ctx-meter-danger';
+  else if (pct > 50) cls += ' ctx-meter-warn';
+  fill.setAttribute('class', cls);
 
-  label.textContent = formatTokens(promptTokens) + ' in + ' + formatTokens(completionTokens) + ' out = ' + formatTokens(totalUsed) + ' / ' + formatTokens(limit) + (data.usage ? '' : ' (est.)');
+  var popover = document.getElementById('ctx-meter-popover');
+  var labelText = 'in:' + formatTokens(promptTokens) + ' + out:' + formatTokens(completionTokens) + ' = ' + formatTokens(totalUsed) + '/' + formatTokens(limit) + (data.usage ? '' : ' (est.)');
+  if (popover) popover.textContent = labelText;
+  meter.setAttribute('title', '');
+  meter.setAttribute('data-ctx-tip', labelText);
   meter.style.display = 'flex';
 }
 

@@ -570,6 +570,7 @@ async function streamResponse(conv) {
   var renderTimer  = null;
   var lastScrolled = 0;
   var tokenCount   = 0;
+  var _lastToolOutputAccum = ''; // rolling last ~1000 chars of tool_output for input context
   if (typeof resetDesignArtifactState === 'function') resetDesignArtifactState();
 
   function scheduleRender() {
@@ -686,6 +687,7 @@ async function streamResponse(conv) {
           if (evt.type === 'error')     { dbg('SSE error: ' + evt.error, 'err'); buffer += '\n\nError: ' + evt.error; scheduleRender(); }
           if (evt.type === 'tool_call') {
             dbg('tool_call: ' + evt.name, 'cmd');
+            _lastToolOutputAccum = ''; // reset per tool invocation
             // Pick a readable label based on the tool name
             var toolLabel = evt.name || 'tool';
             var isFigma = /figma/i.test(toolLabel);
@@ -695,6 +697,8 @@ async function streamResponse(conv) {
           }
           if (evt.type === 'tool_output') {
             // Live shell output — append to a collapsible output block
+            // Also accumulate for use in the waiting-for-input context
+            _lastToolOutputAccum = ((_lastToolOutputAccum || '') + evt.output).slice(-1000);
             if (!buffer.includes('```shell-output\n')) {
               buffer += '```shell-output\n';
             }
@@ -713,7 +717,9 @@ async function streamResponse(conv) {
               // Create a unique exec ID and show the input widget below the current AI message
               var stdinId = 'agent-stdin-' + Date.now();
               var resultEl = bodyEl.querySelector('.shell-output-block') || bodyEl;
-              _showShellInput(stdinId, evt.killId, evt.hint || 'Waiting for input…', resultEl);
+              // Use server-side context if available, otherwise fall back to locally accumulated tool output
+              var inputContext = (evt.context && evt.context.trim()) ? evt.context : (_lastToolOutputAccum || '');
+              _showShellInput(stdinId, evt.killId, evt.hint || 'Waiting for input…', resultEl, inputContext);
             }
           }
           if (evt.type === 'done') {
@@ -878,20 +884,34 @@ async function maybeCompressConversation(conv) {
     var data = await r.json();
     if (!data.summary) return;
 
-    // Store summary and drop the summarized messages from history
+    // Archive old messages (strip image base64 to keep storage lean) instead of dropping
+    var archiveBatch = toSummarize.map(function(m) {
+      // Remove raw image bytes; keep text so the history is readable
+      if (Array.isArray(m.content)) {
+        var textOnly = m.content.filter(function(c) { return c.type === 'text'; }).map(function(c) { return c.text; }).join('\n');
+        return Object.assign({}, m, { content: textOnly || '[image]', images: undefined });
+      }
+      if (m.images && m.images.length) {
+        return Object.assign({}, m, { images: undefined });
+      }
+      return m;
+    });
+    conv.archivedMessages = (conv.archivedMessages || []).concat(archiveBatch);
+
+    // Store summary and trim active history (only recent messages sent to AI)
     conv.contextSummary = data.summary;
     conv.messages = conv.messages.slice(-SUMMARIZE_KEEP_RECENT);
     saveConversations();
-    dbg('context compressed — summary: ' + data.summary.length + ' chars, kept last ' + SUMMARIZE_KEEP_RECENT + ' messages', 'ok');
+    dbg('context compressed — summary: ' + data.summary.length + ' chars, kept last ' + SUMMARIZE_KEEP_RECENT + ' messages, archived ' + archiveBatch.length + ' to history', 'ok');
 
     // Show an indicator in the active conversation
     if (state.currentId === conv.id) {
       var indicator = document.createElement('div');
-      indicator.className = 'msg system-msg';
-      indicator.innerHTML = '<div class="msg-body" style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--fau-text-muted)">' +
-        '<i class="ti ti-compress" style="font-size:13px"></i>' +
-        '<span>Older messages summarized to save context — task state preserved</span>' +
-        '<button onclick="showContextSummary(\'' + conv.id + '\')" style="margin-left:auto;font-size:10px;opacity:.7;background:none;border:1px solid var(--fau-border);border-radius:3px;padding:1px 6px;cursor:pointer;color:inherit">View</button>' +
+      indicator.className = 'msg system-msg conv-archive-divider';
+      indicator.innerHTML = '<div class="msg-body conv-archive-divider-inner">' +
+        '<i class="ti ti-history"></i>' +
+        '<span>Older messages archived — full history preserved above, AI context starts here</span>' +
+        '<button onclick="showContextSummary(\'' + conv.id + '\')" class="conv-archive-view-btn">View summary</button>' +
       '</div>';
       getConvInner(conv.id).appendChild(indicator);
     }

@@ -17,7 +17,7 @@ import { marked } from 'marked';
 import { checkFilePath, checkNetworkAccess, checkShellCommand, getSandboxedEnv, getResourceLimits, audit, getAuditLog } from './agent-sandbox.js';
 import { getAgentTools, startAgentMCPServers, stopAgentMCPServers, executeBuiltInTool, executeCustomTool } from './agent-tools.js';
 import { scanAgent, formatScanReport } from './agent-scanner.js';
-import { createTask, getTask, getAllTasks, updateTask, deleteTask, startScheduler, stopScheduler, completeTask, failTask } from './task-manager.js';
+import { createTask, getTask, getAllTasks, updateTask, deleteTask, startScheduler, stopScheduler, completeTask, failTask, parseRrule, rruleMatchesNow, nextRruleOccurrence, humanizeRrule } from './task-manager.js';
 import { runTask, pauseTask, stopTask, steerTask, isTaskRunning, getRunningTaskInfo, getRunningTasks, subscribe as subscribeTask } from './task-runner.js';
 import {
   createProject, getProject, getAllProjects, updateProject, deleteProject, touchProject,
@@ -28,17 +28,17 @@ import {
 } from './project-manager.js';
 import { composeDesignPrompt, VISUAL_DIRECTIONS } from './design-prompts.js';
 
-// ── Optional enterprise auth ───────────────────────────────────
-// Load enterprise-auth.js if present.
-let enterpriseAuth = null;
+// ── Optional private integrations (enterprise auth, WorkIQ M365) ─────────
+// Loaded from private-integrations.js if present — never committed to repo.
+let privateIntegrations = null;
+const privateToolNames = new Set();
 try {
-  enterpriseAuth = await import('./enterprise-auth.js');
-  console.log('[Enterprise] Auth module loaded (✓ m365_sign_in / m365_sign_out / m365_auth_status)');
+  privateIntegrations = await import('./private-integrations.js');
+  await privateIntegrations.setup(app);
 } catch (e) {
   if (!e.message?.includes('Cannot find module') && !e.code?.includes('ERR_MODULE_NOT_FOUND')) {
-    console.warn('[Enterprise] enterprise-auth.js found but failed to load:', e.message);
+    console.warn('[Private] private-integrations.js failed to load:', e.message);
   }
-  // File absent — normal mode, no enterprise auth
 }
 // Gracefully degrade if run standalone (e.g. during testing).
 const _require = createRequire(import.meta.url);
@@ -1344,8 +1344,8 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
     if (fullSystem) allMessages.push({ role: 'system', content: fullSystem });
 
     // ── Context trimming ──────────────────────────────────────────────────
-    // Target: ~60k chars of conversation history (well inside 128k context window)
-    const MAX_HISTORY_CHARS = 200000;
+    // Target: ~400k chars of conversation history
+    const MAX_HISTORY_CHARS = 400000;
     const MAX_MSG_CHARS     = 40000; // cap any single message (shell outputs can be huge)
     const TURN_LIMIT        = maxContextTurns >= 100 ? Infinity : maxContextTurns;
 
@@ -1367,7 +1367,9 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
       return { ...m, content };
     });
 
-    // 2. Always keep first msg + as many recent msgs as fit within token budget
+    // 2. Always keep first msg + as many recent msgs as fit within token budget.
+    // Walk backward from newest — skip (don't stop at) messages that would exceed
+    // the budget so that older smaller messages can still be included.
     const first = stripped[0];
     const rest  = stripped.slice(1);
     const recent = [];
@@ -1375,7 +1377,7 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
     for (let i = rest.length - 1; i >= 0; i--) {
       if (recent.length >= TURN_LIMIT) break;
       const len = typeof rest[i].content === 'string' ? rest[i].content.length : 500;
-      if (charCount + len > MAX_HISTORY_CHARS) break;
+      if (charCount + len > MAX_HISTORY_CHARS) continue; // skip oversized, keep going
       recent.unshift(rest[i]);
       charCount += len;
     }
@@ -1396,31 +1398,30 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
         : { role: 'system', content: FIGMA_LAYOUT_CONTEXT };
     }
 
-    // Fetch Playwright MCP tools if enabled
+    // Fetch browser MCP tools if enabled.
+    // Prefer FaunaMCP HTTP client (external app) when running; fall back to built-in STDIO.
     const pwToolNames = new Set();
     if (usePlaywrightMCP) {
+      const browserClient = _faunaMCPClient || playwrightMCP;
       try {
-        const pwTools = await playwrightMCP.getTools();
+        const pwTools = await browserClient.getTools();
         for (const t of pwTools) pwToolNames.add(t.function.name);
         mcpTools = [...(mcpTools || []), ...pwTools];
-        // Inject playwright browser context into system prompt
         if (allMessages[0]) {
           allMessages[0] = { ...allMessages[0], content: allMessages[0].content + '\n\n' + PLAYWRIGHT_BROWSER_CONTEXT };
         }
-        chatLog('[chat] Playwright MCP enabled — %d tools', pwTools.length);
+        chatLog('[chat] Browser MCP via %s — %d tools', _faunaMCPClient ? 'FaunaMCP' : 'built-in', pwTools.length);
       } catch (e) {
-        chatLog('[chat] Playwright MCP unavailable: ' + e.message);
+        chatLog('[chat] Browser MCP unavailable: ' + e.message);
       }
     }
 
-    // Inject enterprise auth tools + context if the module is loaded
-    const enterpriseToolNames = new Set();
-    if (enterpriseAuth) {
-      for (const t of enterpriseAuth.TOOLS) enterpriseToolNames.add(t.function.name);
-      mcpTools = [...(mcpTools || []), ...enterpriseAuth.TOOLS];
-      if (allMessages[0]) {
-        allMessages[0] = { ...allMessages[0], content: allMessages[0].content + '\n\n' + enterpriseAuth.SYSTEM_CONTEXT };
-      }
+    // Inject private integration tools (enterprise auth, WorkIQ M365)
+    privateToolNames.clear();
+    if (privateIntegrations) {
+      const r = await privateIntegrations.injectTools(allMessages, mcpTools);
+      mcpTools = r.tools;
+      for (const n of r.names) privateToolNames.add(n);
     }
 
     // Load agent tools if an agent is active
@@ -1680,7 +1681,7 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
               const shellOpts = toolName === 'agent_shell_exec' ? {
                 registerProcess: (killId, child) => _shellProcs.set(killId, child),
                 unregisterProcess: (killId) => _shellProcs.delete(killId),
-                onWaitingForInput: (killId, hint) => send({ type: 'tool_waiting_for_input', killId, hint }),
+                onWaitingForInput: (killId, hint, context) => send({ type: 'tool_waiting_for_input', killId, hint, context }),
               } : undefined;
               result = await agentToolHandlers.get(toolName)(args, onOutput, shellOpts);
             } else if (toolName === 'gui_screenshot') {
@@ -1871,12 +1872,12 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
                 result = JSON.stringify(r);
               }
             } else if (usePlaywrightMCP && pwToolNames.has(toolName)) {
-              chatLog('[chat] Playwright tool: ' + toolName);
-              result = await playwrightMCP.callTool(toolName, args);
-              chatLog('[chat] Playwright tool done: ' + toolName);
-            } else if (enterpriseAuth && enterpriseToolNames.has(toolName)) {
-              chatLog('[chat] Enterprise tool: ' + toolName);
-              result = await enterpriseAuth.handleTool(toolName, args);
+              const browserClient = _faunaMCPClient || playwrightMCP;
+              chatLog('[chat] Browser tool via %s: %s', _faunaMCPClient ? 'FaunaMCP' : 'built-in', toolName);
+              result = await browserClient.callTool(toolName, args);
+              chatLog('[chat] Browser tool done: ' + toolName);
+            } else if (privateIntegrations && privateToolNames.has(toolName)) {
+              result = await privateIntegrations.routeTool(toolName, args, chatLog);
             } else {
               figmaLog('🔧 ' + toolName + (toolName === 'figma_execute' ? ': ' + (args.code || '').slice(0, 80).replace(/\n/g,' ') + '…' : ''), 'cmd');
               result = await figmaMCP.callTool(toolName, args);
@@ -3547,6 +3548,175 @@ class PlaywrightMCPClient {
 
 const playwrightMCP = new PlaywrightMCPClient();
 
+// ── FaunaMCPHTTPClient — auto-connect to FaunaMCP standalone app ─────────────
+// When the FaunaMCP app is running it binds:
+//   • port 3340  WebSocket  (Chrome/Edge extension relay)
+//   • port 3341  HTTP MCP   (Streamable HTTP, same browser-server but external)
+//
+// If detected, Fauna uses this HTTP client as its browser-tool backend instead
+// of spawning a duplicate browser-server process.  The Chrome extension connects
+// to FaunaMCP's WS relay automatically.  If FaunaMCP is not running we fall back
+// to the bundled @playwright/mcp STDIO client as today.
+
+class FaunaMCPHTTPClient {
+  constructor(url = 'http://localhost:3341') {
+    this._url = url;
+    this._sessionId = null;
+    this._nextId = 1;
+    this.toolsCache = null;
+    this._initialized = false;
+    this._initPromise = null;
+  }
+
+  async _parseResponse(resp, expectedId) {
+    const ct = resp.headers.get('content-type') || '';
+    const text = await resp.text();
+    if (ct.includes('text/event-stream')) {
+      for (const line of text.split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const msg = JSON.parse(line.slice(6));
+          if (msg.error) throw new Error(msg.error.message || JSON.stringify(msg.error));
+          if (expectedId == null || msg.id == null || msg.id === expectedId) return msg.result ?? null;
+        } catch (e) { if (e instanceof SyntaxError) continue; throw e; }
+      }
+      return null; // notifications have no response
+    } else {
+      const msg = JSON.parse(text);
+      if (msg.error) throw new Error(msg.error.message || JSON.stringify(msg.error));
+      return msg.result ?? null;
+    }
+  }
+
+  async _ensureInit() {
+    if (this._initialized && this._sessionId) return;
+    if (this._initPromise) return this._initPromise;
+    this._initPromise = this._doInit().finally(() => { this._initPromise = null; });
+    return this._initPromise;
+  }
+
+  async _doInit() {
+    const id = this._nextId++;
+    const resp = await fetch(this._url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id, method: 'initialize',
+        params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'Fauna', version: '1.0.0' } } }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!resp.ok) throw new Error('FaunaMCP init HTTP ' + resp.status);
+    const sid = resp.headers.get('mcp-session-id');
+    if (sid) this._sessionId = sid;
+    await this._parseResponse(resp, id);
+    // Send initialized notification (server may ignore response)
+    fetch(this._url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream',
+        ...(this._sessionId ? { 'mcp-session-id': this._sessionId } : {}) },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => {});
+    this._initialized = true;
+    console.log('[FaunaMCP] HTTP session ready, id:', this._sessionId || 'none');
+  }
+
+  async _rpc(method, params, timeoutMs = 30000) {
+    await this._ensureInit();
+    const id = this._nextId++;
+    const resp = await fetch(this._url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream',
+        ...(this._sessionId ? { 'mcp-session-id': this._sessionId } : {}) },
+      body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (resp.status === 404 && this._sessionId) {
+      // Session expired — re-init once then retry
+      this._initialized = false; this._sessionId = null; this.toolsCache = null;
+      await this._ensureInit();
+      return this._rpc(method, params, timeoutMs);
+    }
+    if (!resp.ok) throw new Error('FaunaMCP HTTP ' + resp.status);
+    return this._parseResponse(resp, id);
+  }
+
+  async getTools() {
+    if (this.toolsCache) return this.toolsCache;
+    const result = await this._rpc('tools/list', {});
+    this.toolsCache = (result?.tools || []).map(t => ({
+      type: 'function',
+      function: { name: t.name, description: t.description,
+        parameters: t.inputSchema || { type: 'object', properties: {} } },
+    }));
+    return this.toolsCache;
+  }
+
+  async callTool(name, args) {
+    const result = await this._rpc('tools/call', { name, arguments: args }, 60000);
+    return (result?.content || []).map(c => {
+      if (c.type === 'text') return c.text;
+      if (c.type === 'image') return `[screenshot: data:${c.mimeType};base64,${c.data || ''}]`;
+      return JSON.stringify(c);
+    }).join('\n');
+  }
+
+  async callToolRaw(name, args) {
+    const result = await this._rpc('tools/call', { name, arguments: args }, 60000);
+    return result?.content || [];
+  }
+
+  stop() {
+    if (this._sessionId) {
+      fetch(this._url, { method: 'DELETE',
+        headers: { 'mcp-session-id': this._sessionId },
+        signal: AbortSignal.timeout(2000) }).catch(() => {});
+    }
+    this._initialized = false; this._sessionId = null; this.toolsCache = null;
+  }
+
+  get _proc() { return null; } // compatibility shim — FaunaMCP manages its own process
+}
+
+// ── FaunaMCP auto-detection helpers ─────────────────────────────────────────
+
+let _faunaMCPClient = null;          // FaunaMCPHTTPClient when FaunaMCP is running
+let _faunaMCPAutodetectTimer = null;
+
+/** Quick TCP probe — resolves true if something is listening on port */
+function _probeTcpPort(port, timeoutMs = 400) {
+  return new Promise(resolve => {
+    const sock = net.createConnection({ port, host: '127.0.0.1' });
+    sock.setTimeout(timeoutMs);
+    sock.on('connect', () => { sock.destroy(); resolve(true); });
+    sock.on('error',   () => resolve(false));
+    sock.on('timeout', () => { sock.destroy(); resolve(false); });
+  });
+}
+
+/** Probe port 3341 and toggle _faunaMCPClient accordingly */
+async function _detectAndConnectFaunaMCP() {
+  const alive = await _probeTcpPort(3341);
+  if (alive && !_faunaMCPClient) {
+    console.log('[FaunaMCP] Detected on port 3341 — switching to external browser backend');
+    _faunaMCPClient = new FaunaMCPHTTPClient('http://localhost:3341');
+    _faunaMCPClient._ensureInit().catch(e => console.log('[FaunaMCP] Init warning:', e.message));
+    // Reset playwrightMCP's tool cache so the AI sees faunamcp's richer set next call
+    playwrightMCP.toolsCache = null;
+  } else if (!alive && _faunaMCPClient) {
+    console.log('[FaunaMCP] No longer detected — reverting to built-in browser backend');
+    _faunaMCPClient.stop();
+    _faunaMCPClient = null;
+    playwrightMCP.toolsCache = null;
+    // Re-start our own browser-server if it died
+    if (!_browserServerProc || _browserServerProc.exitCode !== null) startBrowserServer();
+  }
+}
+
+/** Start background probe (every 15 s) */
+function _startFaunaMCPAutodetect() {
+  _faunaMCPAutodetectTimer = setInterval(_detectAndConnectFaunaMCP, 15_000);
+}
+
 // ── @playwright/mcp CLI path + browser detection ────────────────────────────
 // PlaywrightMCPClient manages the process directly via STDIO — no HTTP port.
 
@@ -3596,7 +3766,17 @@ const BROWSER_SERVER_PATH = (() => {
   return devPath; // fallback (will log "not found")
 })();
 
-function startBrowserServer() {
+async function startBrowserServer() {
+  // If FaunaMCP app is already running on port 3341, skip — no point starting a
+  // duplicate that would clash with its killPortOwner() on startup.
+  if (await _probeTcpPort(3341)) {
+    console.log('[BrowserServer] FaunaMCP detected on port 3341 — skipping built-in browser-server');
+    if (!_faunaMCPClient) {
+      _faunaMCPClient = new FaunaMCPHTTPClient('http://localhost:3341');
+      _faunaMCPClient._ensureInit().catch(e => console.log('[FaunaMCP] Init warning:', e.message));
+    }
+    return;
+  }
   if (_browserServerProc && _browserServerProc.exitCode === null) return; // already running
   if (!fs.existsSync(BROWSER_SERVER_PATH)) {
     console.log('[BrowserServer] not found at', BROWSER_SERVER_PATH, '— Playwright MCP unavailable');
@@ -3673,6 +3853,15 @@ app.get('/api/playwright-mcp/status', async (req, res) => {
 app.post('/api/playwright-mcp/stop', (req, res) => {
   playwrightMCP.stop();
   res.json({ ok: true });
+});
+
+app.post('/api/playwright-mcp/start', async (req, res) => {
+  try {
+    await playwrightMCP._ensureStarted();
+    res.json({ ok: true, initialized: playwrightMCP._initialized });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 app.post('/api/playwright-mcp/call', async (req, res) => {
@@ -3803,33 +3992,7 @@ class FigmaMCPClient {
 
 const figmaMCP = new FigmaMCPClient();
 
-// ── Enterprise auth endpoints ─────────────────────────────────────────────
-// Only active when enterprise-auth.js is present (gitignored).
-
-app.get('/api/enterprise-auth/status', (req, res) => {
-  if (!enterpriseAuth) return res.json({ available: false });
-  res.json({ available: true, ...enterpriseAuth.getAuthStatus() });
-});
-
-app.post('/api/enterprise-auth/sign-in', async (req, res) => {
-  if (!enterpriseAuth) return res.status(404).json({ error: 'Enterprise auth not available' });
-  try {
-    const result = await enterpriseAuth.signIn();
-    res.json(result);
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-app.post('/api/enterprise-auth/sign-out', async (req, res) => {
-  if (!enterpriseAuth) return res.status(404).json({ error: 'Enterprise auth not available' });
-  try {
-    const result = await enterpriseAuth.signOut();
-    res.json(result);
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
+// ── Private integration endpoints registered in private-integrations.js ──────
 
 app.get('/api/figma-mcp/status', async (req, res) => {
   try {
@@ -3851,6 +4014,135 @@ app.post('/api/figma-mcp/call', async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+// ── Custom MCP Servers ───────────────────────────────────────────────────────
+// Users can add global custom MCP servers (STDIO or HTTP) that are available
+// across all conversations (not tied to a specific agent).
+
+const CUSTOM_MCP_FILE = path.join(CONFIG_DIR, 'custom-mcp-servers.json');
+const _customMcpProcesses = new Map(); // id → { proc, logs: [] }
+
+function readCustomMcpServers() {
+  try { return JSON.parse(fs.readFileSync(CUSTOM_MCP_FILE, 'utf8')); }
+  catch (_) { return []; }
+}
+function writeCustomMcpServers(servers) {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.writeFileSync(CUSTOM_MCP_FILE, JSON.stringify(servers, null, 2));
+}
+
+function customMcpStatus(server) {
+  const running = _customMcpProcesses.has(server.id);
+  const entry = _customMcpProcesses.get(server.id);
+  return {
+    ...server,
+    running,
+    pid: entry?.proc?.pid ?? null,
+    recentLogs: entry?.logs?.slice(-20) ?? [],
+  };
+}
+
+function startCustomMcpServer(server) {
+  if (!server.id || !server.command) return { ok: false, error: 'id and command are required' };
+  if (_customMcpProcesses.has(server.id)) return { ok: true, status: 'already-running' };
+
+  try {
+    const args = (server.args || []).filter(Boolean);
+    const env = { ...process.env, ...(server.env || {}) };
+    const cwd = server.cwd ? server.cwd.replace(/^~/, os.homedir()) : os.homedir();
+
+    const proc = spawn(server.command, args, { env, cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    const logs = [];
+
+    proc.stdout.on('data', d => logs.push({ t: Date.now(), s: 'stdout', m: d.toString().trim() }));
+    proc.stderr.on('data', d => logs.push({ t: Date.now(), s: 'stderr', m: d.toString().trim() }));
+    proc.on('exit', code => {
+      logs.push({ t: Date.now(), s: 'system', m: `Process exited with code ${code}` });
+      _customMcpProcesses.delete(server.id);
+    });
+
+    _customMcpProcesses.set(server.id, { proc, logs });
+    return { ok: true, status: 'started', pid: proc.pid };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+function stopCustomMcpServer(id) {
+  const entry = _customMcpProcesses.get(id);
+  if (!entry) return { ok: true, status: 'not-running' };
+  try { entry.proc.kill('SIGTERM'); } catch (_) {}
+  _customMcpProcesses.delete(id);
+  return { ok: true, status: 'stopped' };
+}
+
+// GET all custom MCP servers (with live status)
+app.get('/api/custom-mcp-servers', (req, res) => {
+  const servers = readCustomMcpServers();
+  res.json(servers.map(customMcpStatus));
+});
+
+// POST add a new custom MCP server
+app.post('/api/custom-mcp-servers', (req, res) => {
+  const { name, transport = 'stdio', command, args = [], env = {}, envPassthrough = [], cwd = '', url = '' } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'name is required' });
+  if (transport === 'stdio' && !command) return res.status(400).json({ error: 'command is required for STDIO transport' });
+  if (transport === 'http' && !url) return res.status(400).json({ error: 'url is required for HTTP transport' });
+
+  const servers = readCustomMcpServers();
+  const id = 'mcp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+  const server = { id, name: name.trim(), transport, command: command || '', args, env, envPassthrough, cwd, url, enabled: true, createdAt: Date.now() };
+  servers.push(server);
+  writeCustomMcpServers(servers);
+  res.json({ ok: true, server: customMcpStatus(server) });
+});
+
+// PUT update a custom MCP server
+app.put('/api/custom-mcp-servers/:id', (req, res) => {
+  const servers = readCustomMcpServers();
+  const idx = servers.findIndex(s => s.id === req.params.id);
+  if (idx < 0) return res.status(404).json({ error: 'Server not found' });
+  // Stop if running before updating
+  stopCustomMcpServer(req.params.id);
+  const updated = { ...servers[idx], ...req.body, id: req.params.id };
+  servers[idx] = updated;
+  writeCustomMcpServers(servers);
+  res.json({ ok: true, server: customMcpStatus(updated) });
+});
+
+// DELETE remove a custom MCP server
+app.delete('/api/custom-mcp-servers/:id', (req, res) => {
+  const servers = readCustomMcpServers();
+  const idx = servers.findIndex(s => s.id === req.params.id);
+  if (idx < 0) return res.status(404).json({ error: 'Server not found' });
+  stopCustomMcpServer(req.params.id);
+  servers.splice(idx, 1);
+  writeCustomMcpServers(servers);
+  res.json({ ok: true });
+});
+
+// POST start a custom MCP server
+app.post('/api/custom-mcp-servers/:id/start', (req, res) => {
+  const servers = readCustomMcpServers();
+  const server = servers.find(s => s.id === req.params.id);
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+  res.json(startCustomMcpServer(server));
+});
+
+// POST stop a custom MCP server
+app.post('/api/custom-mcp-servers/:id/stop', (req, res) => {
+  res.json(stopCustomMcpServer(req.params.id));
+});
+
+// GET logs for a custom MCP server
+app.get('/api/custom-mcp-servers/:id/logs', (req, res) => {
+  const entry = _customMcpProcesses.get(req.params.id);
+  const since = parseInt(req.query.since || '0', 10);
+  const logs = (entry?.logs || []).filter(l => l.t > since);
+  res.json({ ok: true, logs });
+});
+
+// ── End Custom MCP Servers ──────────────────────────────────────────────────
 
 // Start trying to connect immediately when the server starts
 // Also auto-start the MCP server if it's not already running
@@ -4296,7 +4588,7 @@ app.post('/api/shell-exec', (req, res) => {
     // Track last output time for idle detection
     let lastOutputTime = Date.now();
     let idleTimer = null;
-    let lastChunk = '';
+    let recentOutput = '';
     const IDLE_MS = 3000; // 3s of silence = might be waiting for input
 
     function resetIdleTimer() {
@@ -4305,7 +4597,9 @@ app.post('/api/shell-exec', (req, res) => {
       idleTimer = setTimeout(() => {
         // Process is alive but hasn't produced output — likely waiting for input
         if (!child.killed && child.exitCode === null) {
-          res.write(`data: ${JSON.stringify({ type: 'waiting_for_input', hint: lastChunk.trim().split('\n').pop() })}\n\n`);
+          const lines = recentOutput.split('\n').map(l => l.trim()).filter(Boolean);
+          const hint = lines.slice(-3).join('\n');
+          res.write(`data: ${JSON.stringify({ type: 'waiting_for_input', hint })}\n\n`);
         }
       }, IDLE_MS);
     }
@@ -4313,8 +4607,9 @@ app.post('/api/shell-exec', (req, res) => {
     resetIdleTimer();
 
     child.stdout.on('data', (chunk) => {
-      lastChunk = chunk.toString();
-      res.write(`data: ${JSON.stringify({ type: 'stdout', text: lastChunk })}\n\n`);
+      const text = chunk.toString();
+      recentOutput = (recentOutput + text).slice(-500);
+      res.write(`data: ${JSON.stringify({ type: 'stdout', text })}\n\n`);
       resetIdleTimer();
     });
     child.stderr.on('data', (chunk) => {
@@ -6350,7 +6645,6 @@ app.post('/api/store/auth/register', express.json(), (req, res) => {
 app.get('/api/store/auth/me', (req, res) => {
   storeProxy(req, res, 'GET', '/auth/me');
 });
-
 // Developer dashboard — user's published agents
 app.get('/api/store/dashboard/agents', (req, res) => {
   storeProxy(req, res, 'GET', '/dashboard/agents');
@@ -6447,27 +6741,31 @@ app.post('/api/agent/shell-exec', (req, res) => {
     const child = _spawn(IS_WIN ? 'powershell.exe' : '/bin/zsh', [shellFlag, command], { cwd: workDir, env, stdio: ['pipe', 'pipe', 'pipe'] });
     if (killId) _shellProcs.set(killId, child);
 
-    let lastChunk = '';
+    let recentOutput = '';
     let idleTimer = null;
     const IDLE_MS = 3000;
     function resetIdleTimer() {
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
         if (!child.killed && child.exitCode === null) {
-          res.write(`data: ${JSON.stringify({ type: 'waiting_for_input', hint: lastChunk.trim().split('\n').pop() })}\n\n`);
+          const lines = recentOutput.split('\n').map(l => l.trim()).filter(Boolean);
+          const hint = lines.slice(-3).join('\n');
+          res.write(`data: ${JSON.stringify({ type: 'waiting_for_input', hint })}\n\n`);
         }
       }, IDLE_MS);
     }
     resetIdleTimer();
 
     child.stdout.on('data', (chunk) => {
-      lastChunk = chunk.toString();
-      res.write(`data: ${JSON.stringify({ type: 'stdout', text: lastChunk })}\n\n`);
+      const text = chunk.toString();
+      recentOutput = (recentOutput + text).slice(-500);
+      res.write(`data: ${JSON.stringify({ type: 'stdout', text })}\n\n`);
       resetIdleTimer();
     });
     child.stderr.on('data', (chunk) => {
-      lastChunk = chunk.toString();
-      res.write(`data: ${JSON.stringify({ type: 'stderr', text: lastChunk })}\n\n`);
+      const text = chunk.toString();
+      recentOutput = (recentOutput + text).slice(-500);
+      res.write(`data: ${JSON.stringify({ type: 'stderr', text })}\n\n`);
       resetIdleTimer();
     });
 
@@ -6836,8 +7134,9 @@ app.post('/api/tasks/:id/run', async (req, res) => {
   const task = getTask(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found' });
   if (isTaskRunning(task.id)) return res.status(409).json({ error: 'Task already running' });
-  // Fire and forget — the task runs in the background
-  runTask(task.id, { trigger: 'manual' }).catch(err => {
+  const trigger = req.body?.trigger || 'manual';
+  const convId  = req.body?.convId  || null;
+  runTask(task.id, { trigger, convId }).catch(err => {
     console.error('[tasks] Run failed:', err.message);
   });
   res.json({ ok: true, status: 'running' });
@@ -6883,6 +7182,109 @@ app.get('/api/tasks/:id/stream', (req, res) => {
   const running = getRunningTaskInfo(req.params.id);
   send({ event: 'connected', running });
 });
+
+// Resume a paused/failed task (re-arm scheduler)
+app.post('/api/tasks/:id/resume', (req, res) => {
+  const task = getTask(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  const rruleStr = task.schedule?.rrule || null;
+  const nextAt = rruleStr ? nextRruleOccurrence(rruleStr) : (task.schedule?.at || null);
+  const updated = updateTask(req.params.id, {
+    status: 'scheduled',
+    nextRunAt: nextAt,
+    _historyEvent: 'resumed',
+    _historyDetail: nextAt,
+  });
+  res.json(updated);
+});
+
+// Heartbeat eligibility — checks if a heartbeat automation's target thread is eligible to run
+app.get('/api/tasks/:id/heartbeat-status', (req, res) => {
+  const task = getTask(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  if (task.kind !== 'heartbeat') return res.status(400).json({ error: 'Not a heartbeat task' });
+  // Eligibility is evaluated on the frontend (has access to live conversation state).
+  // This endpoint returns static task metadata for the client to combine with its state.
+  res.json({
+    taskId: task.id,
+    targetConvId: task.targetConvId,
+    status: task.status,
+    lastRunAt: task.lastRunAt,
+  });
+});
+
+// RRULE utilities — next N occurrences (for schedule preview in UI)
+app.post('/api/rrule/next', (req, res) => {
+  const { rrule, count = 5 } = req.body || {};
+  if (!rrule || typeof rrule !== 'string') return res.status(400).json({ error: 'rrule required' });
+  const n = Math.min(Math.max(parseInt(count, 10) || 5, 1), 20);
+  const results = [];
+  let rruleStr = rrule;
+  // Scan forward collecting n occurrences by advancing a virtual "lastRunAt"
+  let lastSeen = null;
+  for (let i = 0; i < n; i++) {
+    const next = nextRruleOccurrence(rruleStr);
+    if (!next) break;
+    results.push(next);
+    // To get the NEXT one after this, temporarily patch UNTIL won't work — just
+    // set a fake lastSeen and re-call.  nextRruleOccurrence scans from now+1m,
+    // so we use a count trick: rebuild rrule with UNTIL set past each result.
+    // Simpler: add DTSTART-like offset into rruleStr — not supported.
+    // Instead: each call scans from "now", so diff calls give same result.
+    // Work-around: advance "now" proxy by checking results already found.
+    // We just collect the first n unique results from a longer scan.
+    break; // TODO: multi-occurrence scan in next iteration — return first for now
+  }
+  // Multi-occurrence: scan manually
+  const multiResults = _nextNRrule(rrule, n);
+  res.json({ occurrences: multiResults, human: humanizeRrule(rrule) });
+});
+
+function _nextNRrule(rruleStr, n) {
+  const r = parseRrule(rruleStr);
+  if (!r || !r.freq) return [];
+  const results = [];
+  const now = new Date();
+  const targetH = (r.byHour   && r.byHour.length)   ? r.byHour[0]   : 0;
+  const targetM = (r.byMinute && r.byMinute.length) ? r.byMinute[0] : 0;
+  const WEEKDAY_NAMES_S = ['SU','MO','TU','WE','TH','FR','SA'];
+  const maxMins = 366 * 24 * 60;
+  for (let delta = 1; delta <= maxMins && results.length < n; delta++) {
+    const c = new Date(now.getTime() + delta * 60000);
+    if (r.until && c > r.until) break;
+    const ch = c.getHours(), cm = c.getMinutes();
+    if (r.byHour && !r.byHour.includes(ch)) continue;
+    if (r.byMinute && !r.byMinute.includes(cm)) continue;
+    if (r.byHour && !r.byMinute && cm !== 0) continue;
+    let match = false;
+    switch (r.freq) {
+      case 'MINUTELY': match = true; break;
+      case 'HOURLY':   match = cm === targetM; break;
+      case 'DAILY':    match = ch === targetH && cm === targetM; break;
+      case 'WEEKLY':   match = ch === targetH && cm === targetM &&
+        (!r.byDay || r.byDay.some(d => d.endsWith(WEEKDAY_NAMES_S[c.getDay()]))); break;
+      case 'MONTHLY':  match = ch === targetH && cm === targetM &&
+        (!r.byMonthDay || r.byMonthDay.includes(c.getDate())); break;
+      case 'YEARLY':   match = ch === targetH && cm === targetM; break;
+    }
+    if (match) {
+      const iso = c.toISOString();
+      if (!results.includes(iso)) results.push(iso);
+    }
+  }
+  return results;
+}
+
+// /api/automations/* — aliases over /api/tasks/* for semantic naming
+app.get('/api/automations',            (req, res) => res.redirect(307, '/api/tasks'));
+app.post('/api/automations',           (req, res) => res.redirect(307, '/api/tasks'));
+app.get('/api/automations/:id',        (req, res) => res.redirect(307, '/api/tasks/' + req.params.id));
+app.put('/api/automations/:id',        (req, res) => res.redirect(307, '/api/tasks/' + req.params.id));
+app.delete('/api/automations/:id',     (req, res) => res.redirect(307, '/api/tasks/' + req.params.id));
+app.post('/api/automations/:id/run',   (req, res) => res.redirect(307, '/api/tasks/' + req.params.id + '/run'));
+app.post('/api/automations/:id/pause', (req, res) => res.redirect(307, '/api/tasks/' + req.params.id + '/pause'));
+app.post('/api/automations/:id/resume',(req, res) => res.redirect(307, '/api/tasks/' + req.params.id + '/resume'));
+app.get('/api/automations/:id/heartbeat-status', (req, res) => res.redirect(307, '/api/tasks/' + req.params.id + '/heartbeat-status'));
 
 // Start the task scheduler
 startScheduler((task) => {
@@ -7937,14 +8339,90 @@ app.post('/api/permissions/request-accessibility', (req, res) => {
 // ── Browser Extension REST API ────────────────────────────────────────────
 
 // GET /api/ext/status — which extensions are connected?
-app.get('/api/ext/status', (_req, res) => {
+// Checks: 1) direct /ext WebSocket (port 3737), 2) relay /ext-status (port 3341, new endpoint),
+// 3) relay browser_status MCP tool (fallback for older deployed FaunaMCP that lacks /ext-status).
+app.get('/api/ext/status', async (_req, res) => {
   const browsers = [];
+  // 1. Direct connections to the main server's /ext WebSocket
   for (const [id, info] of _extSockets) {
     if (info.ws.readyState === 1) {
-      browsers.push({ id, browser: info.browser, version: info.version, connectedAt: info.connectedAt });
+      browsers.push({ id, browser: info.browser, version: info.version, connectedAt: info.connectedAt, source: 'direct' });
     }
   }
+  // 2. Extension connected to the FaunaMCP browser-relay (port 3341 /ext-status — new endpoint)
+  let relayExtFound = false;
+  try {
+    const relayRes = await fetch('http://localhost:3341/ext-status', { signal: AbortSignal.timeout(800) });
+    if (relayRes.ok) {
+      const relayData = await relayRes.json();
+      if (relayData.connected) {
+        const browserName = relayData.browser || 'Browser';
+        const alreadyDirect = browsers.some(b => b.browser === browserName);
+        if (!alreadyDirect) {
+          browsers.push({ id: 'relay-0', browser: browserName, version: null, connectedAt: Date.now(), source: 'relay' });
+          relayExtFound = true;
+        }
+      }
+    }
+  } catch (_) { /* relay not running or lacks /ext-status — fall through to MCP tool */ }
+  // 3. Fallback: call browser_status MCP tool on the relay — works with any FaunaMCP version.
+  //    Returns text like "✅ Extension connected (fallback available)" or "ℹ️ Extension not connected".
+  if (!relayExtFound && _faunaMCPClient) {
+    try {
+      const statusText = await Promise.race([
+        _faunaMCPClient.callTool('browser_status', {}),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1500)),
+      ]);
+      if (typeof statusText === 'string' && statusText.includes('Extension connected')) {
+        // Extract browser name from the text if present, otherwise default to 'Browser'
+        const m = statusText.match(/Edge|Chrome|Firefox|Safari/i);
+        const browserName = m ? m[0] : 'Browser';
+        const alreadyDirect = browsers.some(b => b.browser === browserName);
+        if (!alreadyDirect) {
+          browsers.push({ id: 'relay-mcp', browser: browserName, version: null, connectedAt: Date.now(), source: 'relay' });
+        }
+      }
+    } catch (_) { /* tool call failed — no relay extension info available */ }
+  }
   res.json({ connected: browsers.length > 0, browsers });
+});
+
+// GET /api/faunamcp/status — is the FaunaMCP app running and connected?
+app.get('/api/faunamcp/status', (_req, res) => {
+  res.json({
+    connected: !!_faunaMCPClient,
+    initialized: _faunaMCPClient?._initialized ?? false,
+    url: _faunaMCPClient?._url ?? null,
+    toolCount: _faunaMCPClient?.toolsCache?.length ?? 0,
+    builtInRunning: !!(_browserServerProc && _browserServerProc.exitCode === null),
+  });
+});
+
+// GET /api/ext/install-dir — path to the browser-extension folder (for unpacked load)
+app.get('/api/ext/install-dir', (_req, res) => {
+  // Prefer the extraResources copy (packaged app), fall back to dev source
+  const resPkg = process.resourcesPath
+    ? path.join(process.resourcesPath, 'browser-extension')
+    : null;
+  const devPath = path.join(__dirname, 'browser-extension');
+  const extPath = (resPkg && fs.existsSync(resPkg)) ? resPkg : devPath;
+  res.json({ path: extPath, exists: fs.existsSync(extPath) });
+});
+
+// POST /api/shell-open — reveal a path in Finder / Explorer
+app.post('/api/shell-open', (req, res) => {
+  const { path: p } = req.body || {};
+  if (!p) return res.status(400).json({ ok: false, error: 'path required' });
+  try {
+    if (IS_WIN) {
+      _spawn('explorer', [p], { detached: true, stdio: 'ignore' }).unref();
+    } else {
+      _spawn('open', ['-R', p], { detached: true, stdio: 'ignore' }).unref();
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // POST /api/ext/command — send an arbitrary command to the extension and return its result
@@ -8025,13 +8503,19 @@ app.get('/api/ext/events', (req, res) => {
 export function startServer(port) {
   return new Promise((resolve, reject) => {
     // Bind to 0.0.0.0 to allow LAN access from mobile app
-    const server = app.listen(port, '0.0.0.0', () => {
+    const server = app.listen(port, '0.0.0.0', async () => {
       const ips = getLanAddresses();
       console.log(`\n  ✦ Fauna  →  http://127.0.0.1:${port}`);
       if (ips.length) console.log(`  ${ips.map(ip => `http://${ip}:${port}`).join('  ')}`);
       console.log();
       // Boot the browser-extension WebSocket endpoint on the same HTTP server
       startExtWebSocketServer(server);
+      // Start the FaunaMCP browser-server (port 3340 WS + 3341 HTTP).
+      // If FaunaMCP app is already running, startBrowserServer() detects it and
+      // connects via HTTP MCP instead of spawning a duplicate process.
+      await startBrowserServer();
+      // Start background probe — if FaunaMCP starts/stops after boot, we adapt.
+      _startFaunaMCPAutodetect();
       // @playwright/mcp is started lazily on first tool call — no pre-warm,
       // so the browser only opens when the user actually requests a browser action.
       resolve(server);

@@ -61,7 +61,7 @@ function renderProjectSidebarList() {
       '<span class="proj-sidebar-item-actions">' +
         (isActive
           ? '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();openProjectHub()" title="Open hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>' +
-            '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();clearActiveProject()" title="Deactivate"><i class="ti ti-x"></i></button>'
+            '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();clearActiveProject()" title="Leave project"><i class="ti ti-door-exit"></i></button>'
           : '') +
         '<button class="proj-sidebar-del-btn" onclick="event.stopPropagation();_confirmDeleteProjectFromList(\'' + _projEsc(p.id) + '\')" title="Delete project"><i class="ti ti-trash"></i></button>' +
       '</span>' +
@@ -142,7 +142,7 @@ function _renderAllProjectsPage() {
       '<div class="all-proj-card-actions">' +
         (isActive
           ? '<button class="proj-action-btn" onclick="openProjectHub();closeAllProjects()"><i class="ti ti-layout-sidebar-right-expand"></i> Open Hub</button>' +
-            '<button class="proj-icon-btn" onclick="clearActiveProject();closeAllProjects()" title="Deactivate"><i class="ti ti-x"></i></button>'
+            '<button class="proj-icon-btn" onclick="clearActiveProject();closeAllProjects()" title="Leave project"><i class="ti ti-door-exit"></i></button>'
           : '<button class="proj-action-btn" onclick="setActiveProject(\'' + _projEsc(p.id) + '\');closeAllProjects()"><i class="ti ti-player-play"></i> Activate</button>') +
         '<button class="proj-icon-btn" style="color:var(--fau-text-muted)" onclick="_confirmDeleteProjectFromList(\'' + _projEsc(p.id) + '\')" title="Delete project"><i class="ti ti-trash"></i></button>' +
       '</div>' +
@@ -204,18 +204,43 @@ function toggleProjectContext(ctxId) {
 // ── Set / Clear Active Project ────────────────────────────────────────────
 
 function updateProjectIndicator() {
+  // Legacy pill stubs (kept for compat but always hidden)
   var pill = document.getElementById('topbar-project-pill');
   var nameEl = document.getElementById('topbar-project-name');
-  if (!pill || !nameEl) return;
   var proj = _activeProject();
-  if (proj) {
-    nameEl.textContent = proj.name;
-    pill.style.display = '';
-  } else {
-    pill.style.display = 'none';
-    nameEl.textContent = '';
+
+  // ── Breadcrumb ────────────────────────────────────────────────
+  var crumb    = document.getElementById('topbar-project-crumb');
+  var crumbSep = document.getElementById('topbar-crumb-sep');
+  var crumbName = document.getElementById('topbar-project-name'); // shared id
+
+  if (crumb) {
+    if (proj) {
+      if (crumbName) crumbName.textContent = proj.name;
+      crumb.style.display = '';
+      if (crumbSep) crumbSep.style.display = '';
+    } else {
+      crumb.style.display = 'none';
+      if (crumbSep) crumbSep.style.display = 'none';
+    }
   }
+
   _updateMoveToProjectBtn();
+
+  // Sidebar active project strip
+  var strip = document.getElementById('sidebar-active-project');
+  var stripName = document.getElementById('sidebar-active-project-name');
+  var stripDot = document.getElementById('sidebar-active-project-dot');
+  if (!strip) return;
+  if (proj) {
+    if (stripName) stripName.textContent = proj.name;
+    if (stripDot) {
+      stripDot.className = 'proj-dot proj-color-' + (proj.color || 'blue');
+    }
+    strip.style.display = '';
+  } else {
+    strip.style.display = 'none';
+  }
 }
 
 async function setActiveProject(id) {
@@ -1045,6 +1070,7 @@ async function saveFileAsContext(srcId, filePath) {
     if (!r2.ok) throw new Error('Failed to save context');
     await _refreshProject(state.activeProjectId);
     renderProjectContextBar();
+    if (state.projectHubOpen) _renderProjectHubBody(_activeProject());
     _showToast('Saved as project context');
   } catch(e) { _showToast('Error: ' + e.message, true); }
 }
@@ -1254,6 +1280,7 @@ async function saveArtifactToProject(artifactId) {
     if (!r.ok) throw new Error((await r.json()).error);
     await _refreshProject(proj.id);
     renderProjectContextBar();
+    if (state.projectHubOpen) _renderProjectHubBody(_activeProject());
     _showToast('Saved to ' + proj.name);
   } catch(e) { _showToast('Error: ' + e.message, true); }
 }
@@ -1272,6 +1299,7 @@ async function saveGenUIToProject(specJson, title) {
       if (!r.ok) throw new Error((await r.json()).error);
       await _refreshProject(proj.id);
       renderProjectContextBar();
+      if (state.projectHubOpen) _renderProjectHubBody(_activeProject());
       _showToast('Saved to ' + proj.name);
     } catch(e) { _showToast('Error: ' + e.message, true); }
   } else {
@@ -1348,6 +1376,8 @@ async function _saveGenUIToSpecificProject(projectId, overlay) {
     if (!r.ok) throw new Error((await r.json()).error);
     var proj = state.projects.find(function(p) { return p.id === projectId; });
     await _refreshProject(projectId);
+    renderProjectContextBar();
+    if (state.projectHubOpen) _renderProjectHubBody(_activeProject());
     _showToast('Saved to ' + (proj ? proj.name : 'project'));
   } catch(e) { _showToast('Error: ' + e.message, true); }
 }
@@ -2796,7 +2826,7 @@ async function submitCreateProject() {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ title: pending.title || 'UI Component', content: pending.specJson, type: 'json' })
         });
-        if (sr.ok) { await _refreshProject(proj.id); renderProjectContextBar(); _showToast('UI saved to ' + proj.name); }
+        if (sr.ok) { await _refreshProject(proj.id); renderProjectContextBar(); if (state.projectHubOpen) _renderProjectHubBody(_activeProject()); _showToast('UI saved to ' + proj.name); }
       } catch(_) {}
     }
 

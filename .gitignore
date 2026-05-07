@@ -28,9 +28,13 @@ npm-debug.log*
 .env.*
 *.pem
 
-# Optional enterprise 
+# Optional enterprise integrations (gitignored — see *.example.js for setup instructions)
 enterprise-auth.js
 enterprise-auth.example.js
+workiq-integration.js
+workiq-integration.md
+private-integrations.js
+public/js/private-auth.js
 
 # Editor
 .vscode/
@@ -49,3 +53,4 @@ app.asar.bak
 !SECURITY.md
 !.github/**/*.md
 PROJECTS_PLAN.html
+workiq-integration.example.js

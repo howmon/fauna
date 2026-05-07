@@ -833,6 +833,27 @@ const httpServer = createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, mcp-session-id');
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
   const url = new URL(req.url, `http://localhost:${HTTP_PORT}`);
+
+  // GET /ext-status — is a browser extension connected to this relay?
+  if (req.method === 'GET' && url.pathname === '/ext-status') {
+    const connected = !!(extConn && extConn.ws.readyState === 1);
+    const info = connected ? extConn.info : null;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      connected,
+      browser: connected ? (info?.userAgent?.match(/Edg\//) ? 'Edge' : info?.userAgent?.match(/Chrome\//) ? 'Chrome' : 'Browser') : null,
+      activeTab: info?.activeTab ?? null,
+    }));
+    return;
+  }
+
+  // GET /health — simple liveness check
+  if (req.method === 'GET' && url.pathname === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
   if (url.pathname !== '/mcp') { res.writeHead(404); res.end('Not found'); return; }
 
   if (req.method === 'GET') {

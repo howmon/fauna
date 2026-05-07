@@ -287,7 +287,7 @@ function getBuiltInToolDefinitions(permissions) {
       type: 'function',
       function: {
         name: 'agent_write_file',
-        description: 'Write content to a file. Access is restricted to: ' + permissions.fileWrite.join(', '),
+        description: 'Write content to a file (full overwrite). Use agent_str_replace for targeted edits. Access is restricted to: ' + permissions.fileWrite.join(', '),
         parameters: {
           type: 'object',
           properties: {
@@ -295,6 +295,22 @@ function getBuiltInToolDefinitions(permissions) {
             content: { type: 'string', description: 'Content to write' },
           },
           required: ['path', 'content'],
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'agent_str_replace',
+        description: 'Replace an exact string in a file with new content. Reads the file, substitutes old_str → new_str exactly once, writes back. Fails if old_str is not found or appears more than once. Prefer this over agent_write_file for targeted edits. Access is restricted to: ' + permissions.fileWrite.join(', '),
+        parameters: {
+          type: 'object',
+          properties: {
+            path:    { type: 'string', description: 'File path to edit' },
+            old_str: { type: 'string', description: 'Exact string to find and replace (must appear exactly once)' },
+            new_str: { type: 'string', description: 'Replacement string' },
+          },
+          required: ['path', 'old_str', 'new_str'],
         },
       },
     });
@@ -349,7 +365,7 @@ async function executeBuiltInTool(toolName, args, permissions, agentName, onOutp
 
         let stdout = '';
         let stderr = '';
-        let lastChunk = '';
+        let recentOutput = ''; // rolling last ~500 chars of output for hint context
         let idleTimer = null;
         const MAX_BUF = 10 * 1024 * 1024;
         const IDLE_MS = 4000;
@@ -358,9 +374,11 @@ async function executeBuiltInTool(toolName, args, permissions, agentName, onOutp
           if (idleTimer) clearTimeout(idleTimer);
           idleTimer = setTimeout(() => {
             if (!child.killed && child.exitCode === null) {
-              const hint = lastChunk.trim().split('\n').pop();
+              // Use the last 3 non-empty lines of recent output as the hint
+              const lines = recentOutput.split('\n').map(l => l.trim()).filter(Boolean);
+              const hint = lines.slice(-3).join('\n');
               if (opts && opts.onWaitingForInput) {
-                opts.onWaitingForInput(killId, hint);
+                opts.onWaitingForInput(killId, hint, recentOutput);
               } else if (onOutput) {
                 onOutput('\n⏳ Process appears to be waiting for input: ' + hint + '\n');
               }
@@ -370,7 +388,7 @@ async function executeBuiltInTool(toolName, args, permissions, agentName, onOutp
 
         child.stdout.on('data', (chunk) => {
           const text = chunk.toString();
-          lastChunk = text;
+          recentOutput = (recentOutput + text).slice(-500);
           if (stdout.length < MAX_BUF) stdout += text;
           if (onOutput) onOutput(text);
           resetIdleTimer();
@@ -378,7 +396,7 @@ async function executeBuiltInTool(toolName, args, permissions, agentName, onOutp
 
         child.stderr.on('data', (chunk) => {
           const text = chunk.toString();
-          lastChunk = text;
+          recentOutput = (recentOutput + text).slice(-500);
           if (stderr.length < MAX_BUF) stderr += text;
           if (onOutput) onOutput(text);
           resetIdleTimer();
@@ -433,6 +451,31 @@ async function executeBuiltInTool(toolName, args, permissions, agentName, onOutp
         fs.mkdirSync(path.dirname(abs), { recursive: true });
         fs.writeFileSync(abs, args.content || '', 'utf8');
         return 'File written: ' + abs + ' (' + Buffer.byteLength(args.content || '') + ' bytes)';
+      } catch (e) {
+        return 'Error writing file: ' + e.message;
+      }
+    }
+
+    case 'agent_str_replace': {
+      const abs = path.resolve((args.path || '').replace(/^~/, HOME));
+      const checkR = checkFilePath(abs, 'read', permissions, agentName);
+      if (!checkR.allowed) return 'BLOCKED: ' + checkR.reason;
+      const checkW = checkFilePath(abs, 'write', permissions, agentName);
+      if (!checkW.allowed) return 'BLOCKED: ' + checkW.reason;
+      if (!args.old_str) return 'Error: old_str is required';
+      let original;
+      try {
+        original = fs.readFileSync(abs, 'utf8');
+      } catch (e) {
+        return 'Error reading file: ' + e.message;
+      }
+      const count = original.split(args.old_str).length - 1;
+      if (count === 0) return 'Error: old_str not found in ' + abs;
+      if (count > 1) return 'Error: old_str appears ' + count + ' times — must be unique. Add more context to make it unambiguous.';
+      const updated = original.replace(args.old_str, args.new_str);
+      try {
+        fs.writeFileSync(abs, updated, 'utf8');
+        return 'Replaced in ' + abs + ' — ' + Buffer.byteLength(updated) + ' bytes written';
       } catch (e) {
         return 'Error writing file: ' + e.message;
       }

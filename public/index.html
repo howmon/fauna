@@ -28,55 +28,83 @@
       <span id="sidebar-logo"><img src="img/logo.svg" alt="" width="20" height="20"></span>
       <span id="sidebar-title">Fauna</span>
     </div>
+
+    <!-- New chat + Search -->
+    <div id="sidebar-actions">
+      <button id="new-chat-main-btn" onclick="newConversation()">
+        <i class="ti ti-edit"></i>
+        New chat
+      </button>
+      <button id="sidebar-search-btn" onclick="openAllConversations()">
+        <i class="ti ti-search"></i>
+        Search
+      </button>
+    </div>
+
+    <!-- Primary nav -->
+    <nav id="sidebar-nav">
+      <button class="sidebar-nav-item" onclick="openAgentStore()">
+        <i class="ti ti-puzzle"></i><span>Plugins</span>
+      </button>
+      <button class="sidebar-nav-item" onclick="toggleTasksPanel()">
+        <i class="ti ti-bolt"></i><span>Automations</span>
+      </button>
+      <button class="sidebar-nav-item" onclick="openAllProjects()">
+        <i class="ti ti-folder"></i><span>Project</span>
+      </button>
+    </nav>
+
+    <!-- Active project strip -->
+    <div id="sidebar-active-project" style="display:none">
+      <span id="sidebar-active-project-dot" class="proj-dot"></span>
+      <span id="sidebar-active-project-name"></span>
+      <button id="sidebar-active-project-hub" onclick="openProjectHub()" title="Open project hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>
+      <button id="sidebar-active-project-clear" onclick="clearActiveProject()" title="Leave project"><i class="ti ti-door-exit"></i></button>
+    </div>
+
     <!-- ── Scrollable middle area ──────────────────────────────── -->
     <div id="sidebar-scroll">
 
-    <!-- ── Projects section ────────────────────────────────────── -->
-    <div id="projects-section">
+    <!-- Hidden JS-compat stubs (projects + agents) -->
+    <div id="projects-section" style="display:none">
       <div id="projects-section-header">
         <i class="ti ti-folders"></i>
         <span>Projects</span>
         <span style="flex:1"></span>
         <button class="section-plus-btn" onclick="openCreateProjectDialog()" title="New project"><i class="ti ti-plus"></i></button>
-        <i class="ti ti-chevron-down section-chevron" onclick="toggleSidebarSection('projects')"></i>
       </div>
       <div id="projects-section-body">
         <div id="proj-sidebar-list"></div>
         <div id="proj-show-all" class="sidebar-show-all" onclick="openAllProjects()" style="display:none">All projects</div>
       </div>
     </div>
-
-    <!-- ── Conversations section ───────────────────────────────── -->
-    <div id="conv-section">
-      <div id="conv-section-header">
-        <i class="ti ti-messages"></i>
-        <span>Conversations</span>
+    <div id="agents-section" style="display:none">
+      <div id="agents-section-header">
+        <i class="ti ti-robot"></i>
+        <span>Agents</span>
+        <span id="agent-update-badge" class="agent-update-count" style="display:none"></span>
         <span style="flex:1"></span>
-        <button class="section-plus-btn" onclick="newConversation()" title="New conversation"><i class="ti ti-plus"></i></button>
-        <i class="ti ti-chevron-down section-chevron" onclick="toggleSidebarSection('conv')"></i>
+        <button id="agents-plus-btn" class="section-plus-btn" onclick="event.stopPropagation();openAgentActionsPage()"><i class="ti ti-plus"></i></button>
       </div>
-      <div id="conv-section-body">
-        <div id="conv-list"></div>
-        <div id="conv-show-all" class="sidebar-show-all" onclick="openAllConversations()" style="display:none">All conversations</div>
+      <div id="agents-section-body">
+        <div id="agent-list"></div>
+        <div id="agents-show-all" class="sidebar-show-all" onclick="openAllAgents()" style="display:none">All agents</div>
+        <div id="agent-store-btn" onclick="openAgentStore()">
+          <i class="ti ti-package"></i> <span>Agent Store</span>
+        </div>
       </div>
     </div>
 
-    <!-- ── Agents section ───────────────────────────────────────── -->
-    <div id="agents-section">
-      <div id="agents-section-header">
-        <i class="ti ti-robot" onclick="toggleAgentsAccordion()" style="cursor:pointer"></i>
-        <span onclick="toggleAgentsAccordion()" style="cursor:pointer">Agents</span>
-        <span id="agent-update-badge" class="agent-update-count" style="display:none"></span>
+    <!-- ── Chats ────────────────────────────────────────────────── -->
+    <div id="conv-section">
+      <div id="conv-section-header">
+        <span>Chats</span>
         <span style="flex:1"></span>
-        <button id="agents-plus-btn" class="section-plus-btn" onclick="event.stopPropagation();openAgentActionsPage()" title="Create or import agent"><i class="ti ti-plus"></i></button>
-        <i class="ti ti-chevron-right section-chevron" onclick="toggleSidebarSection('agents')"></i>
+        <button class="section-plus-btn" onclick="newConversation()" title="New chat"><i class="ti ti-edit" style="font-size:12px"></i></button>
       </div>
-      <div id="agents-section-body" style="display:none">
-        <div id="agent-list"></div>
-        <div id="agents-show-all" class="sidebar-show-all" onclick="openAllAgents()" style="display:none">All agents</div>
-        <div id="agent-store-btn" onclick="openAgentStore()" title="Browse the Agent Store">
-          <i class="ti ti-package"></i> <span>Agent Store</span>
-        </div>
+      <div id="conv-section-body">
+        <div id="conv-list"></div>
+        <div id="conv-show-all" class="sidebar-show-all" onclick="openAllConversations()" style="display:none">All chats</div>
       </div>
     </div>
 
@@ -84,8 +112,8 @@
 
     <!-- ── Fixed bottom area ────────────────────────────────────── -->
     <div id="sidebar-bottom">
-      <!-- ── Figma status section ───────────────────────────────── -->
-      <div id="figma-section">
+      <!-- Figma section: kept for JS compat, hidden in sidebar -->
+      <div id="figma-section" style="display:none">
         <div id="figma-section-header" onclick="toggleFigmaMCP()" title="Click to enable/disable Figma MCP">
           <span id="figma-dot" class="figma-dot off"></span>
           <span id="figma-section-label">Figma MCP</span>
@@ -115,7 +143,8 @@
       </div>
 
       <div id="sidebar-footer">
-        <div id="sidebar-footer-icons">
+        <!-- Original icon buttons kept hidden for JS compat -->
+        <div id="sidebar-footer-icons" style="display:none">
           <button class="footer-icon-btn" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle light/dark mode">
             <i class="ti ti-moon"></i>
           </button>
@@ -132,7 +161,7 @@
             <span id="auth-pill" class="dim">…</span>
           </button>
         </div>
-        <!-- More overflow menu -->
+        <!-- More overflow menu kept for JS compat -->
         <div id="more-menu" class="more-menu" style="display:none">
           <button class="more-menu-item" onclick="openOnboarding();hideMoreMenu()"><i class="ti ti-shield-lock"></i> Permissions &amp; Setup</button>
           <button class="more-menu-item" onclick="toggleAgentRules();hideMoreMenu()"><i class="ti ti-robot"></i> Agent Rules</button>
@@ -142,6 +171,11 @@
           <button class="more-menu-item" onclick="toggleFigmaSetup();hideMoreMenu()"><i class="ti ti-plug"></i> Plugins &amp; Extensions</button>
           <button class="more-menu-item" onclick="toggleHelp();hideMoreMenu()"><i class="ti ti-help-circle"></i> Help &amp; Reference</button>
         </div>
+        <!-- Clean Settings button -->
+        <button id="settings-nav-btn" onclick="toggleSettings()">
+          <i class="ti ti-settings"></i>
+          <span>Settings</span>
+        </button>
       </div>
     </div><!-- /sidebar-bottom -->
     <div id="sidebar-resize-handle" title="Drag to resize"></div>
@@ -153,13 +187,25 @@
     <!-- Top bar -->
     <div id="topbar">
       <button id="toggle-sidebar" onclick="toggleSidebar()" title="Toggle sidebar"><i class="ti ti-menu-2"></i></button>
-      <span id="topbar-title">New conversation</span>
-      <span id="topbar-project-pill" style="display:none" onclick="openProjectHub()" title="You are in a project — click to open hub"><i class="ti ti-folder"></i> <span id="topbar-project-name"></span></span>
+      <!-- Breadcrumb: shows project > conversation or just conversation title -->
+      <div id="topbar-breadcrumb">
+        <span id="topbar-project-crumb" style="display:none" onclick="openProjectHub()" title="Open project hub">
+          <i class="ti ti-folder-filled"></i>
+          <span id="topbar-project-name" class="topbar-crumb-project"></span>
+        </span>
+        <i class="ti ti-chevron-right topbar-crumb-sep" id="topbar-crumb-sep" style="display:none"></i>
+        <span id="topbar-title" class="topbar-crumb-conv">New conversation</span>
+      </div>
+      <!-- hidden compat stubs for existing JS -->
+      <span id="topbar-project-pill" style="display:none !important"></span>
       <span id="agent-badge" style="display:none !important" onclick="deactivateAgent(getConv(state.currentId))"></span>
       <select id="model-select" onchange="onModelChange(this.value)"></select>
-      <!-- Primary CTAs always visible -->
+      <!-- Right side: voice + profile + overflow -->
       <button class="topbar-btn voice-mic-btn" id="voice-mic-btn" data-voice-state="off" title="Voice control — click to toggle, say wake word to activate"><i class="ti ti-microphone-off"></i></button>
-      <button class="topbar-btn topbar-account-btn" id="topbar-account-btn" onclick="openStoreAccount()" title="Agent Store Account"><i class="ti ti-user-circle"></i> <span id="topbar-account-label">Account</span></button>
+      <button class="topbar-icon-btn" id="topbar-account-btn" onclick="openUserSettings()" title="Account &amp; settings">
+        <i class="ti ti-user-circle" id="topbar-account-icon"></i>
+        <span id="topbar-account-label" style="display:none"></span>
+      </button>
       <!-- Overflow menu -->
       <div id="topbar-overflow" class="topbar-overflow">
         <button class="topbar-btn" id="topbar-overflow-btn" onclick="toggleTopbarMenu(event)" title="More options"><i class="ti ti-dots"></i></button>
@@ -295,50 +341,81 @@
       <div id="messages-inner"></div>
     </div>
 
-    <!-- Pending attachments bar -->
-    <div id="attach-bar"></div>
-
     <!-- Input area -->
     <div id="input-area">
+      <!-- Agent chip bar floats above the input wrap -->
+      <div id="agent-chip-bar" style="display:none"></div>
+      <!-- Pending attachments inline above wrap -->
+      <div id="attach-bar"></div>
+      <!-- Figma active banner (above wrap) -->
+      <div id="figma-mode-banner" style="display:none;align-items:center;gap:6px;padding:5px 10px;margin:0 auto 6px;max-width:820px;background:rgba(98,215,148,.1);border:1px solid rgba(98,215,148,.25);border-radius:8px;font-size:11px;color:#62d794">
+        <i class="ti ti-vector-triangle"></i>
+        <span>Figma MCP active — AI will read &amp; write your Figma file</span>
+        <button onclick="toggleFigmaMCP()" style="margin-left:auto;background:none;border:none;color:#62d794;cursor:pointer;font-size:11px;opacity:.8" title="Disable Figma MCP"><i class="ti ti-x" style="font-size:10px"></i> disable</button>
+      </div>
       <div id="input-wrap">
         <!-- Agent autocomplete dropdown -->
         <div id="agent-autocomplete" style="display:none"></div>
         <!-- Slash command autocomplete dropdown -->
         <div id="slash-autocomplete" style="display:none"></div>
         <div id="drag-overlay"><i class="ti ti-file-upload"></i> Drop files to attach</div>
-        <!-- Active agent chip -->
-        <div id="agent-chip-bar" style="display:none"></div>
+        <!-- Main input row: + · textarea · mic · stop · send -->
         <div id="textarea-row">
-          <textarea id="msg-input" placeholder="Ask Fauna anything… (paste or drop files to attach)" rows="1"></textarea>
-          <button id="dictate-btn" onclick="startDictation()" title="Dictate message (click to speak, click again to stop)"><i class="ti ti-microphone"></i></button>
+          <!-- Plus menu -->
+          <div id="tb-plus-wrap">
+            <button id="tb-plus-btn" onclick="toggleTbPlusMenu(event)" title="Attach, Add URL, MCP &amp; Ext">
+              <i class="ti ti-plus"></i>
+            </button>
+            <div id="tb-plus-menu" style="display:none">
+              <button class="tb-pm-item" onclick="openFileAttach();closeTbPlusMenu()">
+                <i class="ti ti-paperclip"></i><span>Attach file</span>
+              </button>
+              <button class="tb-pm-item" onclick="openUrlModal();closeTbPlusMenu()">
+                <i class="ti ti-link"></i><span>Add URL</span>
+              </button>
+              <div class="tb-pm-sep"></div>
+              <button class="tb-pm-item" id="tb-figma-item" onclick="toggleFigmaMCP();closeTbPlusMenu()">
+                <i class="ti ti-vector-triangle"></i><span>Figma MCP</span>
+                <span id="tb-figma-item-state" class="tb-pm-badge">off</span>
+              </button>
+              <div id="tb-ext-item-wrap" style="position:relative">
+                <span id="ext-toolbar-badge" onclick="toggleExtTabMenu()" title="Web Browser MCP — click to see tabs">
+                  <i class="ti ti-browser"></i>
+                  <span id="ext-toolbar-dot"></span>
+                  <span id="ext-toolbar-label">Web Browser MCP</span>
+                </span>
+                <div id="ext-tab-menu" style="display:none"></div>
+              </div>
+            </div>
+          </div>
+          <textarea id="msg-input" placeholder="Ask Fauna anything…" rows="1"></textarea>
+          <button id="dictate-btn" onclick="startDictation()" title="Dictate message"><i class="ti ti-microphone"></i></button>
           <button id="stop-btn" onclick="stopGeneration()" title="Stop generation">■</button>
           <button id="send-btn" onclick="sendMessage()" title="Send (⌘↵ or ⏎)"><i class="ti ti-send"></i></button>
         </div>
-        <div id="shell-running-pills" style="display:none;gap:4px;padding:3px 6px 0;flex-wrap:wrap"></div>
-        <div id="figma-mode-banner" style="display:none;align-items:center;gap:6px;padding:4px 10px;margin:0 0 2px;background:rgba(98,215,148,.1);border:1px solid rgba(98,215,148,.25);border-radius:6px;font-size:11px;color:#62d794">
-          <i class="ti ti-vector-triangle"></i>
-          <span>Figma MCP active — AI will read &amp; write your Figma file</span>
-          <button onclick="toggleFigmaMCP()" style="margin-left:auto;background:none;border:none;color:#62d794;cursor:pointer;font-size:11px;opacity:.8" title="Disable Figma MCP"><i class="ti ti-x" style="font-size:10px"></i> disable</button>
-        </div>
+        <!-- Shell pills -->
+        <div id="shell-running-pills" style="display:none;gap:4px;padding:0 10px 4px;flex-wrap:wrap"></div>
+        <!-- Bottom bar: hint · ring · model picker -->
         <div id="input-toolbar">
-          <button class="toolbar-btn" onclick="openFileAttach()" title="Attach file or image (or paste / drag &amp; drop)"><i class="ti ti-paperclip"></i> Attach file</button>
-          <div class="toolbar-sep"></div>
-          <button class="toolbar-btn" onclick="openUrlModal()" title="Add URL context"><i class="ti ti-link"></i> Add URL</button>
-          <div class="toolbar-sep"></div>
-          <span id="figma-mcp-badge" style="display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--fau-surface2);color:var(--fau-text-muted);border:1px solid var(--fau-border);cursor:default;transition:all .2s" title="Checking Figma MCP…">◌ Figma</span>
-          <div style="position:relative;display:inline-flex">
-            <span id="ext-toolbar-badge" onclick="toggleExtTabMenu()" title="Browser extension — click to insert page context"
-              style="display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--fau-surface2);color:var(--fau-text-muted);border:1px solid var(--fau-border);cursor:pointer;transition:all .2s;user-select:none">
-              <span id="ext-toolbar-dot" style="width:5px;height:5px;border-radius:50%;background:#444;flex-shrink:0"></span>
-              <i class="ti ti-browser" style="font-size:11px"></i> <span id="ext-toolbar-label">Ext</span>
-            </span>
-            <div id="ext-tab-menu" style="display:none"></div>
-          </div>
+          <!-- figma-mcp-badge kept offscreen for JS compat — NEVER change display via JS -->
+          <span id="figma-mcp-badge" class="figma-mcp-badge-hidden" aria-hidden="true"></span>
           <span id="hint-text">⏎ send · ⇧⏎ newline</span>
-        </div>
-        <div id="ctx-meter" style="display:none">
-          <div id="ctx-meter-bar"><div id="ctx-meter-fill"></div></div>
-          <span id="ctx-meter-label"></span>
+          <!-- Circular context ring -->
+          <div id="ctx-meter" style="display:none" tabindex="0">
+            <svg viewBox="0 0 24 24" width="18" height="18" style="flex-shrink:0">
+              <circle class="ctx-ring-bg" cx="12" cy="12" r="9"/>
+              <circle id="ctx-meter-fill" class="ctx-ring-arc" cx="12" cy="12" r="9" transform="rotate(-90 12 12)"/>
+            </svg>
+            <div id="ctx-meter-popover"></div>
+          </div>
+          <!-- Model picker -->
+          <div id="tb-model-wrap">
+            <button id="tb-model-btn" onclick="toggleTbModelMenu(event)" title="Switch model">
+              <span id="tb-model-label">Model</span>
+              <i class="ti ti-chevron-down"></i>
+            </button>
+            <div id="tb-model-menu" style="display:none"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -435,211 +512,573 @@ Examples:
 
 <!-- ── Settings panel ─────────────────────────────────────────────── -->
 <div id="settings-panel">
-  <div id="sys-panel-header" style="display:flex;align-items:center;gap:8px;padding:14px 16px;border-bottom:1px solid var(--fau-border)">
-    <span><i class="ti ti-settings"></i></span>
-    <span style="font-size:13px;font-weight:600;flex:1">Settings</span>
-    <button id="sys-panel-close" onclick="toggleSettings()"><i class="ti ti-x"></i></button>
+  <div id="settings-nav-col">
+    <button id="settings-back-btn" onclick="toggleSettings()">
+      <i class="ti ti-arrow-left"></i>
+      Back to app
+    </button>
+    <div class="settings-nav-group">
+      <button class="settings-nav-item active" data-page="general" onclick="switchSettingsPage('general',this)">
+        <i class="ti ti-adjustments"></i> General
+      </button>
+      <button class="settings-nav-item" data-page="appearance" onclick="switchSettingsPage('appearance',this)">
+        <i class="ti ti-palette"></i> Appearance
+      </button>
+      <button class="settings-nav-item" data-page="auth" onclick="switchSettingsPage('auth',this)">
+        <i class="ti ti-key"></i> Authentication
+      </button>
+      <button class="settings-nav-item" data-page="voice" onclick="switchSettingsPage('voice',this)">
+        <i class="ti ti-microphone"></i> Voice
+      </button>
+      <button class="settings-nav-item" data-page="mcp" onclick="switchSettingsPage('mcp',this)">
+        <i class="ti ti-plug"></i> MCP Servers
+      </button>
+      <button class="settings-nav-item" data-page="browser" onclick="switchSettingsPage('browser',this)">
+        <i class="ti ti-world-www"></i> Browser use
+      </button>
+      <button class="settings-nav-item" data-page="mobile" onclick="switchSettingsPage('mobile',this)">
+        <i class="ti ti-device-mobile"></i> Mobile
+      </button>
+      <button class="settings-nav-item" data-page="about" onclick="switchSettingsPage('about',this)">
+        <i class="ti ti-info-circle"></i> About
+      </button>
+    </div>
   </div>
 
+  <div id="settings-content-col">
   <div class="settings-scroll">
 
-  <!-- Model Settings -->
-  <div class="settings-section">
-    <div class="settings-section-title">Model Settings</div>
+  <!-- ── General ─────────────────────────────────────────────── -->
+  <div class="settings-page active" data-page="general">
+    <div class="settings-page-title">General</div>
 
-    <label class="settings-label">
-      <span>Thinking Budget</span>
-      <select id="thinking-budget-select" class="settings-input" onchange="setThinkingBudget(this.value)" style="cursor:pointer">
-        <option value="off">Off — no extended thinking</option>
-        <option value="low">Low — quick reasoning (~1K tokens)</option>
-        <option value="medium">Medium — balanced (~5K tokens)</option>
-        <option value="high" selected>High — deep analysis (~10K tokens)</option>
-        <option value="max">Max — exhaustive (~32K tokens)</option>
-      </select>
-      <span style="font-size:11px;color:var(--fau-text-muted)" id="thinking-budget-hint">Extended thinking for complex problems requiring deep analysis.</span>
-    </label>
+    <div class="settings-section">
+      <div class="settings-section-title">Model Settings</div>
+      <label class="settings-label">
+        <span>Thinking Budget</span>
+        <select id="thinking-budget-select" class="settings-input" onchange="setThinkingBudget(this.value)" style="cursor:pointer">
+          <option value="off">Off — no extended thinking</option>
+          <option value="low">Low — quick reasoning (~1K tokens)</option>
+          <option value="medium">Medium — balanced (~5K tokens)</option>
+          <option value="high" selected>High — deep analysis (~10K tokens)</option>
+          <option value="max">Max — exhaustive (~32K tokens)</option>
+        </select>
+        <span style="font-size:11px;color:var(--fau-text-muted)" id="thinking-budget-hint">Extended thinking for complex problems requiring deep analysis.</span>
+      </label>
+      <label class="settings-label" style="margin-top:10px">
+        <span>Maximum context turns</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <input type="range" id="max-turns-range" min="4" max="100" step="2" value="20"
+            oninput="setMaxTurns(+this.value)"
+            style="flex:1;accent-color:var(--accent);cursor:pointer">
+          <span id="max-turns-label" style="font-size:12px;color:var(--fau-text);min-width:32px;text-align:right">20</span>
+        </div>
+        <span style="font-size:11px;color:var(--fau-text-muted)">How many past messages to include in each request. Higher = more context, more cost.</span>
+      </label>
+    </div>
 
-    <label class="settings-label" style="margin-top:10px">
-      <span>Maximum context turns</span>
-      <div style="display:flex;align-items:center;gap:8px">
-        <input type="range" id="max-turns-range" min="4" max="100" step="2" value="20"
-          oninput="setMaxTurns(+this.value)"
-          style="flex:1;accent-color:var(--accent);cursor:pointer">
-        <span id="max-turns-label" style="font-size:12px;color:var(--fau-text);min-width:32px;text-align:right">20</span>
+    <div class="settings-section">
+      <div class="settings-section-title">Agent Behaviour</div>
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none">
+        <input type="checkbox" id="autorun-toggle"
+          onchange="setAutoRunShell(this.checked)"
+          style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+        <span style="font-size:12.5px;color:var(--fau-text)">Auto-run shell commands</span>
+      </label>
+      <div class="settings-hint" style="margin-top:4px">
+        When enabled, <code>shell-exec</code> blocks in AI responses execute automatically.
+        Results appear inline; click <strong>Feed to AI</strong> to let the AI continue based on output.
       </div>
-      <span style="font-size:11px;color:var(--fau-text-muted)">How many past messages to include in each request. Higher = more context, more cost.</span>
-    </label>
-  </div>
-
-  <!-- Agent Behaviour -->
-  <div class="settings-section">
-    <div class="settings-section-title">Agent Behaviour</div>
-    <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none">
-      <input type="checkbox" id="autorun-toggle"
-        onchange="setAutoRunShell(this.checked)"
-        style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
-      <span style="font-size:12.5px;color:var(--fau-text)">Auto-run shell commands</span>
-    </label>
-    <div class="settings-hint" style="margin-top:4px">
-      When enabled, <code>shell-exec</code> blocks in AI responses execute automatically.
-      Results appear inline; click <strong>Feed to AI</strong> to let the AI continue based on output.
     </div>
   </div>
 
-  <!-- Authentication (tabbed) -->
-  <div class="settings-section">
-    <div class="settings-section-title">Authentication</div>
-    <div class="auth-tabs">
-      <button class="auth-tab active" onclick="switchAuthTab('cli')">GitHub CLI</button>
-      <button class="auth-tab" onclick="switchAuthTab('keys')">API Keys</button>
+  <!-- ── Appearance ─────────────────────────────────────────────── -->
+  <div class="settings-page" data-page="appearance">
+    <div class="settings-page-title">Appearance</div>
+    <div class="settings-section">
+      <div class="settings-section-title">Theme</div>
+      <div style="display:flex;gap:10px">
+        <button class="settings-row-btn" style="flex:1" onclick="applyTheme('dark')"><i class="ti ti-moon"></i> Dark</button>
+        <button class="settings-row-btn" style="flex:1" onclick="applyTheme('light')"><i class="ti ti-sun"></i> Light</button>
+        <button class="settings-row-btn" style="flex:1" onclick="toggleTheme()"><i class="ti ti-rotate"></i> Toggle</button>
+      </div>
+      <div class="settings-hint">Switch between dark and light mode.</div>
+    </div>
+  </div>
+
+  <!-- ── Authentication ─────────────────────────────────────────── -->
+  <div class="settings-page" data-page="auth">
+    <div class="settings-page-title">Authentication</div>
+
+    <div class="settings-section">
+      <div class="auth-tabs">
+        <button class="auth-tab active" onclick="switchAuthTab('cli')">GitHub CLI</button>
+        <button class="auth-tab" onclick="switchAuthTab('keys')">API Keys</button>
+      </div>
+
+      <div id="auth-tab-cli" class="auth-tab-pane">
+        <div>
+          <div style="font-size:12px;color:var(--fau-text-dim);margin-bottom:8px;">Current status:</div>
+          <span id="auth-badge" class="auth-source-badge"><i class="ti ti-circle-dot"></i> Checking…</span>
+        </div>
+        <div class="settings-label">
+          <span>GitHub Personal Access Token</span>
+          Enter a PAT to override the auto-detected token. Required if you're not logged in via the <code style="font-size:11px;background:var(--fau-surface3);padding:1px 4px;border-radius:3px">gh</code> CLI.
+        </div>
+        <div class="settings-input-row">
+          <input id="pat-input" class="settings-input" type="password" placeholder="ghp_… or github_pat_…" autocomplete="off" spellcheck="false">
+          <button class="settings-row-btn" onclick="togglePatVisibility()" id="pat-toggle" title="Show/hide token"><i class="ti ti-eye"></i></button>
+        </div>
+        <div id="pat-status" class="settings-status"></div>
+        <div style="display:flex;gap:6px">
+          <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="savePat()">Save Token</button>
+          <button class="settings-row-btn danger" onclick="clearPat()" id="clear-pat-btn" style="display:none">Remove</button>
+        </div>
+        <div class="settings-hint">
+          Generate a PAT at <a href="#" onclick="openGithubTokenPage(); return false">github.com/settings/tokens</a> with the <strong>copilot</strong> scope.
+        </div>
+      </div>
+
+      <div id="auth-tab-keys" class="auth-tab-pane" style="display:none">
+        <div class="settings-hint" style="margin-bottom:12px">
+          Bring your own API keys to use models directly — no GitHub Copilot subscription needed.
+        </div>
+        <div class="settings-label"><span>OpenAI</span></div>
+        <div class="settings-input-row">
+          <input id="provider-openai-input" class="settings-input" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false"
+            onkeydown="if(event.key==='Enter')saveProviderKey('openai')">
+          <button class="settings-row-btn" onclick="toggleProviderKeyVisibility('openai')" title="Show/hide"><i class="ti ti-eye"></i></button>
+        </div>
+        <div id="provider-openai-status" class="settings-status"></div>
+        <div style="display:flex;gap:6px">
+          <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('openai')">Save</button>
+          <button class="settings-row-btn danger" onclick="clearProviderKey('openai')" id="provider-openai-clear" style="display:none">Remove</button>
+        </div>
+
+        <div class="settings-label" style="margin-top:12px"><span>Anthropic</span></div>
+        <div class="settings-input-row">
+          <input id="provider-anthropic-input" class="settings-input" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"
+            onkeydown="if(event.key==='Enter')saveProviderKey('anthropic')">
+          <button class="settings-row-btn" onclick="toggleProviderKeyVisibility('anthropic')" title="Show/hide"><i class="ti ti-eye"></i></button>
+        </div>
+        <div id="provider-anthropic-status" class="settings-status"></div>
+        <div style="display:flex;gap:6px">
+          <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('anthropic')">Save</button>
+          <button class="settings-row-btn danger" onclick="clearProviderKey('anthropic')" id="provider-anthropic-clear" style="display:none">Remove</button>
+        </div>
+
+        <div class="settings-label" style="margin-top:12px"><span>Google AI</span></div>
+        <div class="settings-input-row">
+          <input id="provider-google-input" class="settings-input" type="password" placeholder="AIza…" autocomplete="off" spellcheck="false"
+            onkeydown="if(event.key==='Enter')saveProviderKey('google')">
+          <button class="settings-row-btn" onclick="toggleProviderKeyVisibility('google')" title="Show/hide"><i class="ti ti-eye"></i></button>
+        </div>
+        <div id="provider-google-status" class="settings-status"></div>
+        <div style="display:flex;gap:6px">
+          <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('google')">Save</button>
+          <button class="settings-row-btn danger" onclick="clearProviderKey('google')" id="provider-google-clear" style="display:none">Remove</button>
+        </div>
+      </div>
     </div>
 
-    <!-- Tab: GitHub CLI -->
-    <div id="auth-tab-cli" class="auth-tab-pane">
-      <div>
-        <div style="font-size:12px;color:var(--fau-text-dim);margin-bottom:8px;">Current status:</div>
-        <span id="auth-badge" class="auth-source-badge"><i class="ti ti-circle-dot"></i> Checking…</span>
-      </div>
+  </div>
 
-      <div class="settings-label">
-        <span>GitHub Personal Access Token</span>
-        Enter a PAT to override the auto-detected token. Required if you're not logged in via the <code style="font-size:11px;background:var(--fau-surface3);padding:1px 4px;border-radius:3px">gh</code> CLI.
+  <!-- ── Voice ──────────────────────────────────────────────────── -->
+  <div class="settings-page" data-page="voice">
+    <div class="settings-page-title">Voice</div>
+    <div class="settings-section">
+      <div class="settings-section-title">Voice Control</div>
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none">
+        <input type="checkbox" id="voice-toggle"
+          onchange="setVoiceEnabled(this.checked)"
+          style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+        <span style="font-size:12.5px;color:var(--fau-text)">Enable voice control</span>
+      </label>
+      <div class="settings-hint" style="margin-top:4px">
+        Say the wake word to activate — Fauna will listen for your command and route it automatically.
+        Requires microphone permission. Runs entirely on-device via Chromium's speech recognition.
       </div>
-      <div class="settings-input-row">
-        <input id="pat-input" class="settings-input" type="password" placeholder="ghp_… or github_pat_…" autocomplete="off" spellcheck="false">
-        <button class="settings-row-btn" onclick="togglePatVisibility()" id="pat-toggle" title="Show/hide token"><i class="ti ti-eye"></i></button>
+      <div id="voice-wake-row" style="margin-top:10px;display:none">
+        <label class="settings-label"><span>Wake word</span></label>
+        <div class="settings-input-row">
+          <input id="voice-wake-input" class="settings-input" type="text" placeholder="fauna"
+            spellcheck="false" autocomplete="off"
+            onkeydown="if(event.key==='Enter')saveVoiceWakeWord()">
+          <button class="settings-row-btn" onclick="saveVoiceWakeWord()">Save</button>
+        </div>
+        <div class="settings-hint">Default: <strong>fauna</strong>. Speak this word to activate voice input.</div>
       </div>
-      <div id="pat-status" class="settings-status"></div>
-      <div style="display:flex;gap:6px">
-        <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="savePat()">Save Token</button>
-        <button class="settings-row-btn danger" onclick="clearPat()" id="clear-pat-btn" style="display:none">Remove</button>
+    </div>
+  </div>
+
+  <!-- ── MCP Servers ────────────────────────────────────────────── -->
+  <div class="settings-page" data-page="mcp" id="settings-page-mcp">
+    <div class="settings-page-title">MCP Servers</div>
+
+    <!-- ── Built-in Servers ────────────────────────────────────── -->
+    <div class="settings-section">
+      <div class="settings-section-title">Built-in Servers</div>
+      <div class="mcp-builtin-list">
+
+        <!-- Figma MCP -->
+        <div class="mcp-builtin-row" id="mcp-builtin-figma">
+          <div class="mcp-builtin-icon"><i class="ti ti-brand-figma"></i></div>
+          <div class="mcp-builtin-info">
+            <div class="mcp-builtin-name">Figma MCP</div>
+            <div class="mcp-builtin-desc">Read and write Figma design files via the FaunaMCP plugin.</div>
+          </div>
+          <div class="mcp-builtin-status" id="mcp-builtin-figma-status"></div>
+        </div>
+
+        <!-- Playwright MCP -->
+        <div class="mcp-builtin-row" id="mcp-builtin-playwright">
+          <div class="mcp-builtin-icon"><i class="ti ti-brand-chrome"></i></div>
+          <div class="mcp-builtin-info">
+            <div class="mcp-builtin-name">Browser MCP</div>
+            <div class="mcp-builtin-desc">Automate and control the browser via Playwright.</div>
+          </div>
+          <div class="mcp-builtin-status" id="mcp-builtin-playwright-status"></div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── Custom MCP servers ──────────────────────────────────── -->
+    <div class="settings-section" id="mcp-custom-section">
+      <div class="settings-section-title">Custom Servers</div>
+      <div class="settings-hint" style="margin-bottom:12px">
+        Connect external tools and data sources via the Model Context Protocol.
+        <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener" style="color:var(--accent)">Learn more.</a>
+      </div>
+      <!-- List panel -->
+      <div id="mcp-list-panel">
+        <div class="mcp-servers-list" id="mcp-custom-list">
+          <div class="mcp-empty-row">
+            <span>No MCP servers connected</span>
+            <button class="mcp-add-btn" onclick="mcpMgr.showForm(null)"><i class="ti ti-plus"></i> Add server</button>
+          </div>
+        </div>
+      </div>
+      <!-- Add / Edit form panel -->
+      <div id="mcp-form-panel" style="display:none"></div>
+    </div>
+
+    <!-- Figma MCP extra controls (collapsed, accessed via Built-in row) -->
+    <div class="settings-section" id="mcp-figma-detail" style="display:none">
+      <div class="settings-section-title">Figma MCP</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="settings-row-btn" onclick="figmaWsConnect()"><i class="ti ti-refresh"></i> Reconnect</button>
+        <button class="settings-row-btn" onclick="toggleFigmaSetup()"><i class="ti ti-puzzle"></i> Plugins &amp; Extensions</button>
+        <button class="settings-row-btn" onclick="toggleMcpServer()"><i class="ti ti-server"></i> Toggle MCP Server</button>
+        <button class="settings-row-btn" onclick="toggleMcpLogs()"><i class="ti ti-terminal-2"></i> View Logs</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Browser use ────────────────────────────────────────────── -->
+  <div class="settings-page" data-page="browser">
+    <div class="settings-page-title">Browser use</div>
+    <div class="settings-section">
+      <div class="settings-section-title">FaunaMCP App</div>
+      <!-- Live FaunaMCP connection status -->
+      <div id="faunamcp-settings-status" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:var(--fau-surface2);border:1px solid var(--fau-border)">
+        <span id="faunamcp-settings-dot" style="width:8px;height:8px;border-radius:50%;background:#444;flex-shrink:0"></span>
+        <span id="faunamcp-settings-label" style="font-size:12px;color:var(--fau-text-muted)">Checking…</span>
+        <button onclick="_faunaMCPSettingsRefresh()" style="margin-left:auto;background:none;border:none;color:var(--fau-text-muted);cursor:pointer;font-size:11px;padding:2px 6px;border-radius:4px" title="Refresh"><i class="ti ti-refresh"></i></button>
       </div>
       <div class="settings-hint">
-        Generate a PAT at <a href="#" onclick="openGithubTokenPage(); return false">github.com/settings/tokens</a> with the <strong>copilot</strong> scope (or use a token that already has Copilot access).
+        When the <strong style="color:var(--fau-text)">FaunaMCP</strong> standalone app is running, Fauna automatically connects to its browser and Figma tools — no bundled process needed.
+        The Chrome extension, browser automation, and Figma plugin all flow through FaunaMCP.
       </div>
     </div>
-
-    <!-- Tab: API Keys -->
-    <div id="auth-tab-keys" class="auth-tab-pane" style="display:none">
-      <div class="settings-hint" style="margin-bottom:12px">
-        Bring your own API keys to use models directly — no GitHub Copilot subscription needed.
-      </div>
-
-      <!-- OpenAI -->
-      <div class="settings-label"><span>OpenAI</span></div>
-      <div class="settings-input-row">
-        <input id="provider-openai-input" class="settings-input" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false"
-          onkeydown="if(event.key==='Enter')saveProviderKey('openai')">
-        <button class="settings-row-btn" onclick="toggleProviderKeyVisibility('openai')" title="Show/hide"><i class="ti ti-eye"></i></button>
-      </div>
-      <div id="provider-openai-status" class="settings-status"></div>
+    <div class="settings-section">
+      <div class="settings-section-title">Built-in Browser</div>
       <div style="display:flex;gap:6px">
-        <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('openai')">Save</button>
-        <button class="settings-row-btn danger" onclick="clearProviderKey('openai')" id="provider-openai-clear" style="display:none">Remove</button>
+        <button class="settings-row-btn" style="flex:1" onclick="openBrowserPane()"><i class="ti ti-world-www"></i> Open Browser Panel</button>
       </div>
-
-      <!-- Anthropic -->
-      <div class="settings-label" style="margin-top:12px"><span>Anthropic</span></div>
-      <div class="settings-input-row">
-        <input id="provider-anthropic-input" class="settings-input" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"
-          onkeydown="if(event.key==='Enter')saveProviderKey('anthropic')">
-        <button class="settings-row-btn" onclick="toggleProviderKeyVisibility('anthropic')" title="Show/hide"><i class="ti ti-eye"></i></button>
+      <div class="settings-hint" style="margin-top:8px">
+        Fauna includes a built-in browser panel for web browsing, form filling, and page extraction.
       </div>
-      <div id="provider-anthropic-status" class="settings-status"></div>
-      <div style="display:flex;gap:6px">
-        <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('anthropic')">Save</button>
-        <button class="settings-row-btn danger" onclick="clearProviderKey('anthropic')" id="provider-anthropic-clear" style="display:none">Remove</button>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-title">Browser Extension</div>
+      <!-- Live connection status -->
+      <div id="browser-ext-settings-status" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:var(--fau-surface2);border:1px solid var(--fau-border)">
+        <span id="browser-ext-settings-dot" style="width:8px;height:8px;border-radius:50%;background:#444;flex-shrink:0"></span>
+        <span id="browser-ext-settings-label" style="font-size:12px;color:var(--fau-text-muted)">Checking…</span>
+        <button onclick="_browserExtSettingsRefresh()" style="margin-left:auto;background:none;border:none;color:var(--fau-text-muted);cursor:pointer;font-size:11px;padding:2px 6px;border-radius:4px" title="Refresh status"><i class="ti ti-refresh"></i></button>
       </div>
-
-      <!-- Google AI -->
-      <div class="settings-label" style="margin-top:12px"><span>Google AI</span></div>
-      <div class="settings-input-row">
-        <input id="provider-google-input" class="settings-input" type="password" placeholder="AIza…" autocomplete="off" spellcheck="false"
-          onkeydown="if(event.key==='Enter')saveProviderKey('google')">
-        <button class="settings-row-btn" onclick="toggleProviderKeyVisibility('google')" title="Show/hide"><i class="ti ti-eye"></i></button>
+      <div class="settings-hint">
+        Install the <strong style="color:var(--fau-text)">Fauna Browser Bridge</strong> extension in Chrome or Edge to connect your external browser to Fauna.
+        Once installed the extension bridges tabs, screenshots, forms, and page content to the AI.
       </div>
-      <div id="provider-google-status" class="settings-status"></div>
-      <div style="display:flex;gap:6px">
-        <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('google')">Save</button>
-        <button class="settings-row-btn danger" onclick="clearProviderKey('google')" id="provider-google-clear" style="display:none">Remove</button>
+      <div style="margin-top:8px;display:flex;gap:6px">
+        <button class="settings-row-btn" style="flex:1" onclick="_openExtInstallDir()"><i class="ti ti-folder-open"></i> Show Extension Folder</button>
+      </div>
+      <div class="settings-hint" style="margin-top:6px;font-size:10.5px">
+        In Chrome/Edge → go to <code style="background:var(--fau-surface3);padding:1px 4px;border-radius:3px">Extensions</code> → enable Developer mode → Load unpacked → select the extension folder above.
       </div>
     </div>
   </div>
 
-  <!--  (shown only when enterprise-auth.js is present) -->
-  <div class="settings-section" id="ms-account-section" style="display:none">
-    <div class="settings-section-title">Account</div>
-    <div style="margin-bottom:10px">
-      <span id="ms-account-badge" class="auth-source-badge"><i class="ti ti-circle-dot"></i> Checking…</span>
-    </div>
-    <div id="ms-account-name" style="font-size:12px;color:var(--fau-text-dim);margin-bottom:10px;display:none"></div>
-    <div style="display:flex;gap:6px">
-      <button id="ms-signin-btn" class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="enterpriseSignIn()"><i class="ti ti-brand-windows"></i> Sign in</button>
-      <button id="ms-signout-btn" class="settings-row-btn danger" onclick="enterpriseSignOut()" style="display:none">Sign out</button>
-    </div>
-    <div class="settings-hint" style="margin-top:8px">Sign in to your work account</div>
-  </div>
-
-  <!-- Voice Control -->
-  <div class="settings-section">
-    <div class="settings-section-title">Voice Control</div>
-    <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none">
-      <input type="checkbox" id="voice-toggle"
-        onchange="setVoiceEnabled(this.checked)"
-        style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
-      <span style="font-size:12.5px;color:var(--fau-text)">Enable voice control</span>
-    </label>
-    <div class="settings-hint" style="margin-top:4px">
-      Say the wake word to activate — Fauna will listen for your command and route it automatically.
-      Requires microphone permission. Runs entirely on-device via Chromium's speech recognition.
-    </div>
-    <div id="voice-wake-row" style="margin-top:10px;display:none">
-      <label class="settings-label"><span>Wake word</span></label>
-      <div class="settings-input-row">
-        <input id="voice-wake-input" class="settings-input" type="text" placeholder="fauna"
-          spellcheck="false" autocomplete="off"
-          onkeydown="if(event.key==='Enter')saveVoiceWakeWord()">
-        <button class="settings-row-btn" onclick="saveVoiceWakeWord()">Save</button>
+  <!-- ── Mobile ─────────────────────────────────────────────────── -->
+  <div class="settings-page" data-page="mobile">
+    <div class="settings-page-title">Mobile</div>
+    <div class="settings-section">
+      <div class="settings-section-title">Mobile App</div>
+      <div class="settings-hint" style="margin-bottom:10px">Scan this QR code with the Fauna mobile app to connect.</div>
+      <div id="mobile-qr-wrap" style="display:flex;flex-direction:column;align-items:center;gap:10px">
+        <canvas id="mobile-qr-canvas" style="border-radius:8px;image-rendering:pixelated"></canvas>
+        <div id="mobile-qr-status" style="font-size:11px;color:var(--fau-text-muted)">Loading…</div>
       </div>
-      <div class="settings-hint">Default: <strong>fauna</strong>. Speak this word to activate voice input.</div>
+      <div id="mobile-pair-info" style="margin-top:10px;font-size:11.5px;color:var(--fau-text-dim);line-height:1.6"></div>
+      <div style="margin-top:8px;display:flex;gap:6px">
+        <button class="settings-row-btn" onclick="loadMobilePairQR()" style="flex:1"><i class="ti ti-refresh"></i> Refresh</button>
+        <button class="settings-row-btn danger" onclick="resetMobilePairToken()">Reset Token</button>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:6px;align-items:center">
+        <button id="tunnel-toggle-btn" class="settings-row-btn" onclick="toggleTunnel()" style="flex:1"><i class="ti ti-world"></i> <span id="tunnel-btn-label">Enable Remote Access</span></button>
+      </div>
+      <div id="tunnel-status" style="margin-top:6px;font-size:11px;color:var(--fau-text-muted);display:none"></div>
     </div>
   </div>
 
-  <!-- Mobile App -->
-  <div class="settings-section">
-    <div class="settings-section-title">Mobile App</div>
-    <div class="settings-hint" style="margin-bottom:10px">Scan this QR code with the Fauna mobile app to connect.</div>
-    <div id="mobile-qr-wrap" style="display:flex;flex-direction:column;align-items:center;gap:10px">
-      <canvas id="mobile-qr-canvas" style="border-radius:8px;image-rendering:pixelated"></canvas>
-      <div id="mobile-qr-status" style="font-size:11px;color:var(--fau-text-muted)">Loading…</div>
+  <!-- ── About ──────────────────────────────────────────────────── -->
+  <div class="settings-page" data-page="about">
+    <div class="settings-page-title">About</div>
+    <div class="settings-section">
+      <div class="settings-hint" style="line-height:1.7">
+        <strong style="color:var(--fau-text)">Fauna</strong> v1.0.0<br>
+        Multi-provider AI assistant — use GitHub Copilot, OpenAI, Anthropic, or Google models.<br><br>
+        <strong style="color:var(--fau-text)">Model routing:</strong><br>
+        • Models from API Keys → sent directly to that provider<br>
+        • All other models → routed through GitHub Copilot<br><br>
+        <strong style="color:var(--fau-text)">GitHub token priority:</strong><br>
+        1. Saved PAT &nbsp; 2. <code style="background:var(--fau-surface3);padding:1px 4px;border-radius:3px">GH_TOKEN</code> env &nbsp; 3. <code style="background:var(--fau-surface3);padding:1px 4px;border-radius:3px">gh auth token</code> &nbsp; 4. Keychain<br><br>
+        API key models are fetched dynamically from each provider.<br><br>
+        <span style="color:var(--fau-text-dim);font-size:11px">by Solomon Abey · <a href="https://github.com/howmon" style="color:var(--accent)" target="_blank">@howmon</a></span>
+      </div>
     </div>
-    <div id="mobile-pair-info" style="margin-top:10px;font-size:11.5px;color:var(--fau-text-dim);line-height:1.6"></div>
-    <div style="margin-top:8px;display:flex;gap:6px">
-      <button class="settings-row-btn" onclick="loadMobilePairQR()" style="flex:1"><i class="ti ti-refresh"></i> Refresh</button>
-      <button class="settings-row-btn danger" onclick="resetMobilePairToken()">Reset Token</button>
-    </div>
-    <div style="margin-top:10px;display:flex;gap:6px;align-items:center">
-      <button id="tunnel-toggle-btn" class="settings-row-btn" onclick="toggleTunnel()" style="flex:1"><i class="ti ti-world"></i> <span id="tunnel-btn-label">Enable Remote Access</span></button>
-    </div>
-    <div id="tunnel-status" style="margin-top:6px;font-size:11px;color:var(--fau-text-muted);display:none"></div>
   </div>
 
-  <!-- About -->
-  <div class="settings-section" style="flex:1">
-    <div class="settings-section-title">About</div>
-    <div class="settings-hint" style="line-height:1.7">
-      <strong style="color:var(--fau-text)">Fauna</strong> v1.0.0<br>
-      Multi-provider AI assistant — use GitHub Copilot, OpenAI, Anthropic, or Google models.<br><br>
-      <strong style="color:var(--fau-text)">Model routing:</strong><br>
-      • Models from API Keys → sent directly to that provider<br>
-      • All other models → routed through GitHub Copilot<br><br>
-      <strong style="color:var(--fau-text)">GitHub token priority:</strong><br>
-      1. Saved PAT &nbsp; 2. <code style="background:var(--fau-surface3);padding:1px 4px;border-radius:3px">GH_TOKEN</code> env &nbsp; 3. <code style="background:var(--fau-surface3);padding:1px 4px;border-radius:3px">gh auth token</code> &nbsp; 4. Keychain<br><br>
-      API key models are fetched dynamically from each provider.<br><br>
-      <span style="color:var(--fau-text-dim);font-size:11px">by Solomon Abey · <a href="https://github.com/howmon" style="color:var(--accent)" target="_blank">@howmon</a></span>
-    </div>
-  </div>
   </div><!-- /.settings-scroll -->
+  </div><!-- /#settings-content-col -->
+
+  <script>
+  function openUserSettings() {
+    // Open the Agent Store panel on the account/login view
+    if (typeof openAgentStore === 'function') {
+      openAgentStore();
+      if (typeof storeNavigate === 'function') storeNavigate('account');
+    }
+  }
+
+  function switchSettingsPage(page, btn) {
+    document.querySelectorAll('#settings-panel .settings-page').forEach(function(p) {
+      p.classList.toggle('active', p.dataset.page === page);
+    });
+    document.querySelectorAll('#settings-panel .settings-nav-item').forEach(function(b) {
+      b.classList.remove('active');
+    });
+    if (btn) btn.classList.add('active');
+    if (page === 'mcp') {
+      if (typeof mcpMgr !== 'undefined') mcpMgr.load();
+      mcpBuiltinInit();
+    }
+    if (page === 'browser') {
+      _faunaMCPSettingsRefresh();
+      _browserExtSettingsRefresh();
+    }
+  }
+
+  function mcpBuiltinInit() {
+    mcpBuiltinPollStatus();
+  }
+
+  function mcpBuiltinPollStatus() {
+    // Figma — show whether it's active in the current chat
+    var figmaActive = typeof state !== 'undefined' && state.figmaMCPEnabled;
+    var figmaEl = document.getElementById('mcp-builtin-figma-status');
+    if (figmaEl) {
+      figmaEl.innerHTML = figmaActive
+        ? '<span class="mcp-status-pill active">Active</span>'
+        : '<span class="mcp-status-pill inactive">Inactive</span>';
+    }
+    // Browser MCP — show whether it's active in the current chat
+    var pwActive = typeof state !== 'undefined' && state.playwrightMCPEnabled;
+    var pwEl = document.getElementById('mcp-builtin-playwright-status');
+    if (pwEl) {
+      pwEl.innerHTML = pwActive
+        ? '<span class="mcp-status-pill active">Active</span>'
+        : '<span class="mcp-status-pill inactive">Inactive</span>';
+    }
+  }
+
+  // ── Toolbar plus menu ──────────────────────────────────────────────────
+  var _tbPlusOpen = false;
+  function toggleTbPlusMenu(e) {
+    if (e) e.stopPropagation();
+    _tbPlusOpen = !_tbPlusOpen;
+    var m = document.getElementById('tb-plus-menu');
+    if (!m) return;
+    m.style.display = _tbPlusOpen ? '' : 'none';
+    if (_tbPlusOpen) {
+      _refreshTbFigmaItem();
+      // Refresh ext + figma status so badges show live state
+      if (typeof refreshExtStatus === 'function') refreshExtStatus();
+      if (typeof pollFigmaStatus === 'function') pollFigmaStatus().then(_refreshTbFigmaItem);
+      setTimeout(function() {
+        document.addEventListener('click', _closeTbPlusOutside, { once: true, capture: true });
+      }, 0);
+    }
+  }
+  function closeTbPlusMenu() {
+    _tbPlusOpen = false;
+    var m = document.getElementById('tb-plus-menu');
+    if (m) m.style.display = 'none';
+  }
+  function _closeTbPlusOutside(e) {
+    var wrap = document.getElementById('tb-plus-wrap');
+    if (wrap && wrap.contains(e.target)) {
+      if (_tbPlusOpen) {
+        setTimeout(function() {
+          document.addEventListener('click', _closeTbPlusOutside, { once: true, capture: true });
+        }, 0);
+      }
+      return;
+    }
+    closeTbPlusMenu();
+  }
+  function _refreshTbFigmaItem() {
+    var badge = document.getElementById('tb-figma-item-state');
+    if (!badge) return;
+    var enabled    = typeof state !== 'undefined' && state.figmaMCPEnabled;
+    // Use actual relay connection state, not the always-true figmaMCPStatus.connected
+    var relayReady = typeof figmaStatus !== 'undefined' && (figmaStatus.relayConnected || figmaStatus.mcpRunning);
+    if (enabled && relayReady) {
+      badge.textContent = 'on'; badge.className = 'tb-pm-badge tb-pm-badge-on';
+    } else if (!enabled && relayReady) {
+      badge.textContent = 'ready'; badge.className = 'tb-pm-badge tb-pm-badge-ready';
+    } else if (enabled) {
+      badge.textContent = 'on'; badge.className = 'tb-pm-badge tb-pm-badge-warn';
+    } else {
+      badge.textContent = 'off'; badge.className = 'tb-pm-badge';
+    }
+  }
+
+  // ── Toolbar model picker ───────────────────────────────────────────────
+  var _tbModelOpen = false;
+  function toggleTbModelMenu(e) {
+    if (e) e.stopPropagation();
+    _tbModelOpen = !_tbModelOpen;
+    var m = document.getElementById('tb-model-menu');
+    if (!m) return;
+    if (_tbModelOpen) {
+      _populateTbModelMenu();
+      m.style.display = '';
+      setTimeout(function() {
+        document.addEventListener('click', _closeTbModelOutside, { once: true, capture: true });
+      }, 0);
+    } else {
+      m.style.display = 'none';
+    }
+  }
+  function _closeTbModelOutside(e) {
+    var wrap = document.getElementById('tb-model-wrap');
+    if (wrap && wrap.contains(e.target)) {
+      if (_tbModelOpen) {
+        setTimeout(function() {
+          document.addEventListener('click', _closeTbModelOutside, { once: true, capture: true });
+        }, 0);
+      }
+      return;
+    }
+    _tbModelOpen = false;
+    var m = document.getElementById('tb-model-menu');
+    if (m) m.style.display = 'none';
+  }
+  function _populateTbModelMenu() {
+    var menu = document.getElementById('tb-model-menu');
+    if (!menu || typeof allModels === 'undefined' || !allModels.length) return;
+    var groups = {};
+    allModels.forEach(function(m) {
+      var g = m.provider === 'copilot' ? 'GitHub' : (m.vendor || m.provider || 'Other');
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(m);
+    });
+    var cur = typeof state !== 'undefined' ? state.model : '';
+    var html = '';
+    Object.entries(groups).forEach(function(entry) {
+      var label = entry[0]; var models = entry[1];
+      html += '<div class="tb-model-group">' + label + '</div>';
+      models.forEach(function(m) {
+        var active = cur === m.id ? ' tb-model-item-active' : '';
+        var check  = cur === m.id ? '<i class="ti ti-check" style="font-size:10px;margin-left:auto;opacity:.7"></i>' : '';
+        html += '<button class="tb-model-item' + active + '" onclick="onModelChange(\'' +
+          m.id.replace(/\\/g,'\\\\').replace(/'/g,"\\'") + '\');_tbModelOpen=false;document.getElementById(\'tb-model-menu\').style.display=\'none\'">' +
+          '<span>' + m.name + '</span>' + check + '</button>';
+      });
+    });
+    menu.innerHTML = html;
+  }
+
+  function _faunaMCPSettingsRefresh() {
+    var dot   = document.getElementById('faunamcp-settings-dot');
+    var label = document.getElementById('faunamcp-settings-label');
+    if (!dot || !label) return;
+    fetch('/api/faunamcp/status').then(function(r){ return r.json(); }).then(function(d) {
+      var connected = d.connected;
+      dot.style.background = connected ? '#10b981' : '#555';
+      dot.style.boxShadow  = connected ? '0 0 5px #10b98166' : 'none';
+      label.style.color    = connected ? '#10b981' : 'var(--fau-text-muted)';
+      if (connected) {
+        var toolTxt = d.toolCount ? ' · ' + d.toolCount + ' tools' : '';
+        label.textContent = 'Connected' + toolTxt + ' — browser & Figma tools routed via FaunaMCP';
+      } else {
+        label.textContent = 'Not running — start the FaunaMCP app to share browser & Figma tools';
+      }
+    }).catch(function(){
+      var d2 = document.getElementById('faunamcp-settings-dot');
+      var l2 = document.getElementById('faunamcp-settings-label');
+      if (d2) { d2.style.background = '#555'; d2.style.boxShadow = 'none'; }
+      if (l2) { l2.textContent = 'Not running'; l2.style.color = 'var(--fau-text-muted)'; }
+    });
+  }
+
+  function _browserExtSettingsRefresh() {
+    var dot   = document.getElementById('browser-ext-settings-dot');
+    var label = document.getElementById('browser-ext-settings-label');
+    if (!dot || !label) return;
+    fetch('/api/ext/status').then(function(r){ return r.json(); }).then(function(d) {
+      var browsers = d.browsers || [];
+      var connected = browsers.length > 0;
+      dot.style.background   = connected ? '#10b981' : '#555';
+      dot.style.boxShadow    = connected ? '0 0 5px #10b98166' : 'none';
+      label.style.color      = connected ? '#10b981' : 'var(--fau-text-muted)';
+      if (connected) {
+        var names = browsers.map(function(b){ return b.browser + (b.version ? ' v' + b.version : ''); }).join(', ');
+        label.textContent = 'Connected — ' + names;
+      } else {
+        label.textContent = 'Not connected — open Chrome/Edge and load the extension';
+      }
+    }).catch(function(){
+      var dot2 = document.getElementById('browser-ext-settings-dot');
+      var lbl2 = document.getElementById('browser-ext-settings-label');
+      if (dot2) { dot2.style.background = '#555'; dot2.style.boxShadow = 'none'; }
+      if (lbl2) { lbl2.textContent = 'Not connected'; lbl2.style.color = 'var(--fau-text-muted)'; }
+    });
+  }
+
+  function _openExtInstallDir() {
+    fetch('/api/ext/install-dir').then(function(r){ return r.json(); }).then(function(d) {
+      if (d.path) {
+        fetch('/api/shell-open', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: d.path }) }).catch(function(){});
+      }
+    }).catch(function(){});
+  }
+  </script>
 </div>
 
 <!-- ── URL modal ───────────────────────────────────────────────── -->
@@ -727,91 +1166,50 @@ Examples:
 <script src="js/agents.js"></script>
 <script src="js/agent-system.js"></script>
 <script src="js/agent-builder.js"></script>
+<script src="js/mcp-manager.js"></script>
 <script src="js/agent-store.js"></script>
 <script src="js/agent-polish.js"></script>
 <script src="js/gen-ui.js"></script>
 <script src="js/chat.js"></script>
 <script src="js/voice.js"></script>
+<script src="js/automation-schedule.js"></script>
+<script src="js/automation-canvas.js"></script>
+<script src="js/automation-builder.js"></script>
 <script src="js/tasks.js"></script>
 <script src="js/projects.js"></script>
 <script src="js/design.js"></script>
 <script src="js/app.js"></script>
 
-<!-- ── Tasks panel ──────────────────────────────────────────────── -->
+<!-- ── Tasks / Automations panel ───────────────────────────────── -->
 <div id="tasks-panel">
-  <div id="tasks-header">
-    <span><i class="ti ti-checklist" style="font-size:16px;color:var(--accent)"></i></span>
-    <span class="title">Tasks</span>
-    <span style="flex:1"></span>
-    <button class="tasks-header-btn" onclick="toggleTaskCreateForm()" title="New task"><i class="ti ti-plus"></i></button>
-    <button class="tasks-header-btn" onclick="fetchTasks()" title="Refresh"><i class="ti ti-refresh"></i></button>
-    <button class="tasks-header-btn" onclick="toggleTasksPanel()" title="Close"><i class="ti ti-x"></i></button>
-  </div>
-  <div id="task-create-form" style="display:none">
-    <div class="task-form-row">
-      <input type="text" id="task-title-input" placeholder="Task title (e.g. Send quarterly email)" onkeydown="if(event.key==='Enter')submitTask()">
-    </div>
-    <div class="task-form-row">
-      <textarea id="task-desc-input" rows="2" placeholder="Description (what should be done)"></textarea>
-    </div>
-    <div class="task-form-row">
-      <textarea id="task-context-input" rows="2" placeholder="Context (extra info for the AI)"></textarea>
-    </div>
-    <div class="task-form-row">
-      <label>Agents</label>
-      <div class="task-agent-picker-wrap">
-        <div id="task-agent-selected" class="task-agent-selected"></div>
-        <input type="text" id="task-agent-search" placeholder="Search agents…" autocomplete="off" oninput="_filterAgentPicker(this.value)" onfocus="_showAgentPicker()">
-        <div id="task-agent-dropdown" class="task-agent-dropdown" style="display:none"></div>
-      </div>
-    </div>
-    <div class="task-form-row task-perms-row">
-      <label>Permissions</label>
-      <div class="task-perm-toggles">
-        <label class="task-perm-toggle" title="Allow shell/terminal commands">
-          <input type="checkbox" id="task-perm-shell" checked>
-          <i class="ti ti-terminal-2"></i> Shell
-        </label>
-        <label class="task-perm-toggle" title="Allow browser extension interaction">
-          <input type="checkbox" id="task-perm-browser" onchange="_onBrowserPermChange()">
-          <i class="ti ti-world-www"></i> Browser
-        </label>
-        <label class="task-perm-toggle" title="Allow Figma MCP tools">
-          <input type="checkbox" id="task-perm-figma">
-          <i class="ti ti-brand-figma"></i> Figma
-        </label>
-      </div>
-    </div>
-    <div class="task-form-row" id="task-browser-tabs-row" style="display:none">
-      <label>Target tabs <button type="button" class="task-tab-refresh-btn" onclick="_refreshExtTabs()" title="Refresh tabs"><i class="ti ti-refresh"></i></button></label>
-      <input type="text" id="task-tab-search" placeholder="Filter tabs…" autocomplete="off" oninput="_filterTabPicker(this.value)" style="font-size:11px;margin-bottom:4px">
-      <div id="task-tab-picker" class="task-tab-picker">
-        <div class="task-tab-picker-empty">Enable Browser above to pick tabs</div>
-      </div>
-      <input type="text" id="task-browser-tabs" placeholder="Or type URLs manually (comma-separated)" style="font-size:11px">
-    </div>
-    <div class="task-form-row">
-      <label>Schedule</label>
-      <select id="task-schedule-type" onchange="_onScheduleTypeChange()">
-        <option value="manual">Manual (run on demand)</option>
-        <option value="once">One-time</option>
-        <option value="recurring">Recurring (cron)</option>
-      </select>
-    </div>
-    <div class="task-form-row" id="task-schedule-at-row" style="display:none">
-      <label>Run at</label>
-      <input type="datetime-local" id="task-schedule-at">
-    </div>
-    <div class="task-form-row" id="task-schedule-cron-row" style="display:none">
-      <label>Cron expression</label>
-      <input type="text" id="task-schedule-cron" placeholder="0 9 * * 1  (Mon 9am)">
-    </div>
-    <div class="task-form-row" style="justify-content:flex-end;gap:8px">
-      <button class="task-form-cancel" onclick="toggleTaskCreateForm()">Cancel</button>
-      <button class="task-form-submit" id="task-create-btn" onclick="submitTask()"><i class="ti ti-plus"></i> Create Task</button>
+  <!-- Left nav column -->
+  <div id="auto-nav-col">
+    <button id="auto-back-btn" onclick="toggleTasksPanel()">
+      <i class="ti ti-arrow-left"></i>
+      Back to app
+    </button>
+    <button id="auto-new-nav-btn" onclick="openNewAutomation(null)">
+      <i class="ti ti-plus"></i> New Automation
+    </button>
+    <div id="auto-nav-section-label">Automations</div>
+    <div id="tasks-list"></div>
+    <div id="auto-nav-footer">
+      <button id="auto-refresh-btn" onclick="fetchTasks()" title="Refresh list">
+        <i class="ti ti-refresh"></i> Refresh
+      </button>
     </div>
   </div>
-  <div id="tasks-list"></div>
+  <!-- Resize handle -->
+  <div id="auto-resize-handle"></div>
+  <!-- Right detail column -->
+  <div id="auto-content-col">
+    <div id="auto-detail-panel">
+      <div class="auto-detail-empty">
+        <i class="ti ti-clock-plus" style="font-size:26px;opacity:.2"></i>
+        <div>Select an automation or create a new one</div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- ── Playbook panel ──────────────────────────────────────────── -->
@@ -1323,5 +1721,7 @@ Examples:
 </div><!-- /help-panel -->
 
 <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/loader.js"></script>
+<!-- Private integrations loader — no-op if file absent -->
+<script>(function(){var s=document.createElement('script');s.src='/js/private-auth.js';s.onerror=function(){};document.body.appendChild(s);})();</script>
 </body>
 </html>
