@@ -120,6 +120,8 @@ fauna -q "summarize this repo" # one-shot
 echo "explain this" | fauna    # pipe mode
 ```
 
+Inside the REPL: `/store` searches Agent Store, `/store show <slug>` previews an agent, `/store install <slug>` installs it, `/projects` manages project context, and `/mcps` checks MCP/browser bridge status.
+
 ---
 
 ## Roadmap

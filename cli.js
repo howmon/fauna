@@ -16,7 +16,6 @@
  *   echo "explain this" | node cli.js      # pipe mode
  */
 
-import { startServer } from './server.js';
 import { createInterface } from 'readline';
 import path from 'path';
 import os from 'os';
@@ -25,6 +24,7 @@ import { fileURLToPath } from 'url';
 import QRCode from 'qrcode';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+let startServer;
 
 // ── Arg parsing ───────────────────────────────────────────────────────────
 
@@ -37,6 +37,20 @@ const SERVER_ONLY = flag('--server') || flag('-s');
 const ONE_SHOT    = option('-q', null) || option('--query', null);
 const SHOW_HELP   = flag('--help') || flag('-h');
 let   VERBOSE     = flag('--verbose') || flag('-v');
+
+// ── Colors (no deps) ─────────────────────────────────────────────────────
+
+const R  = '\x1b[0m';      // reset
+const DM = '\x1b[2m';      // dim
+const B  = '\x1b[1m';      // bold
+const UL = '\x1b[4m';      // underline
+const CY = '\x1b[36m';     // cyan
+const GR = '\x1b[32m';     // green
+const YL = '\x1b[33m';     // yellow
+const RD = '\x1b[31m';     // red
+const MG = '\x1b[35m';     // magenta
+const GY = '\x1b[90m';     // gray
+const BG_DIM = '\x1b[48;5;236m'; // subtle bg for code blocks
 
 if (SHOW_HELP) {
   console.log(`
@@ -58,20 +72,6 @@ if (SHOW_HELP) {
 `);
   process.exit(0);
 }
-
-// ── Colors (no deps) ─────────────────────────────────────────────────────
-
-const R  = '\x1b[0m';      // reset
-const DM = '\x1b[2m';      // dim
-const B  = '\x1b[1m';      // bold
-const UL = '\x1b[4m';      // underline
-const CY = '\x1b[36m';     // cyan
-const GR = '\x1b[32m';     // green
-const YL = '\x1b[33m';     // yellow
-const RD = '\x1b[31m';     // red
-const MG = '\x1b[35m';     // magenta
-const GY = '\x1b[90m';     // gray
-const BG_DIM = '\x1b[48;5;236m'; // subtle bg for code blocks
 
 // ── True-color helpers (logo) ────────────────────────────────────────────
 
@@ -183,6 +183,7 @@ async function chat(message, { model, agent, userContent } = {}) {
     clientContext: 'cli',
     ...(model && { model }),
     ...(agent && { agentName: agent }),
+    ...(_currentProjectId && { projectId: _currentProjectId }),
   };
 
   const res = await fetch(url, {
@@ -288,6 +289,8 @@ async function chat(message, { model, agent, userContent } = {}) {
 let _history = [];
 let _currentModel = null;
 let _currentAgent = null;
+let _currentProjectId = null;
+let _currentProjectName = null;
 let _attachments = [];  // pending file attachments
 let _convId = 'conv-' + Date.now(); // current conversation ID for auto-save
 
@@ -301,8 +304,12 @@ function _saveConv() {
     title,
     messages: msgs.map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) })),
     model: _currentModel || undefined,
+    projectId: _currentProjectId || undefined,
     createdAt: parseInt(_convId.replace('conv-', '')) || Date.now(),
   }).catch(() => {});
+  if (_currentProjectId) {
+    apiPost('/api/projects/' + _currentProjectId + '/conversations', { convId: _convId }).catch(() => {});
+  }
 }
 
 // ── Formatting helpers ───────────────────────────────────────────────────
@@ -384,10 +391,30 @@ ${B}Tasks${R}
   ${CY}/task steer${R} <id> msg  inject guidance into running task
   ${CY}/task delete${R} <id>     delete a task
   ${CY}/task log${R} <id>        show task reasoning chain
+  ${CY}/automations${R}          alias for /tasks
+  ${CY}/automation${R} ...       alias for /task ...
+
+${B}Projects${R}
+  ${CY}/projects${R}             list projects
+  ${CY}/project${R} <id>         show project detail
+  ${CY}/project use${R} <id>     set active project for chat context
+  ${CY}/project clear${R}        clear active project
+  ${CY}/project create${R} <name> create a project
+  ${CY}/project source${R} <id> <path> add local source folder
+  ${CY}/project sync${R} <id> <sourceId> sync a source
+
+${B}Agent Store${R}
+  ${CY}/store${R} [query]        search Agent Store
+  ${CY}/store categories${R}     list store categories
+  ${CY}/store show${R} <slug>    show store agent details
+  ${CY}/store install${R} <slug> install or update a store agent
 
 ${B}Tools${R}
   ${CY}/browse${R} <url>         fetch & summarize a URL
   ${CY}/shell${R} <cmd>          run a shell command
+  ${CY}/mcps${R}                 status of MCPs and browser bridge
+  ${CY}/mcp start${R} <id>       start custom MCP server
+  ${CY}/mcp stop${R} <id>        stop custom MCP server
 
 ${B}Mobile${R}
   ${CY}/pair${R}                 show QR code for mobile app pairing
@@ -528,6 +555,63 @@ ${B}System${R}
     return _taskDetail(sub);
   },
 
+  '/automations': async (arg) => { await COMMANDS['/tasks'](arg); },
+  '/automation': async (arg) => { await COMMANDS['/task'](arg); },
+
+  // ── Project commands ─────────────────────────────────────────────────
+
+  '/projects': async () => {
+    try {
+      const projects = await apiGet('/api/projects');
+      if (!projects.length) { console.log(`${DM}No projects${R}`); return; }
+      console.log(`\n  ${B}${'ID'.padEnd(10)} ${'Name'.padEnd(28)} ${'Sources'.padEnd(8)} Updated${R}`);
+      console.log(`  ${DM}${'─'.repeat(70)}${R}`);
+      for (const p of projects) {
+        const active = p.id === _currentProjectId ? `${GR}*${R}` : ' ';
+        const updated = p.updatedAt || p.lastActiveAt || p.createdAt;
+        const date = updated ? new Date(updated).toLocaleDateString() : '';
+        console.log(`${active} ${DM}${shortId(p.id).padEnd(9)}${R} ${(p.name || '').slice(0,27).padEnd(28)} ${String((p.sources || []).length).padEnd(8)} ${GY}${date}${R}`);
+      }
+      console.log();
+    } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
+  },
+
+  '/project': async (arg) => {
+    if (!arg) { console.log(`${DM}Usage: /project <id|use|clear|create|source|sync> ...${R}`); return; }
+    const parts = arg.split(/\s+/);
+    const sub = parts[0].toLowerCase();
+    if (sub === 'use') return _projectUse(parts[1]);
+    if (sub === 'clear') return _projectClear();
+    if (sub === 'create') return _projectCreate(parts.slice(1).join(' '));
+    if (sub === 'source') return _projectAddSource(parts[1], parts.slice(2).join(' '));
+    if (sub === 'sync') return _projectSync(parts[1], parts[2]);
+    return _projectDetail(sub);
+  },
+
+  // ── MCP commands ─────────────────────────────────────────────────────
+
+  '/mcps': async () => { await _mcpStatus(); },
+  '/mcp': async (arg) => {
+    const parts = (arg || '').split(/\s+/).filter(Boolean);
+    const sub = parts[0];
+    if (sub === 'start') return _mcpStart(parts[1]);
+    if (sub === 'stop') return _mcpStop(parts[1]);
+    if (sub === 'logs') return _mcpLogs(parts[1]);
+    console.log(`${DM}Usage: /mcps | /mcp start <id> | /mcp stop <id> | /mcp logs <id>${R}`);
+  },
+
+  // ── Agent Store commands ──────────────────────────────────────────────
+
+  '/store': async (arg) => {
+    const parts = (arg || '').split(/\s+/).filter(Boolean);
+    const sub = parts[0];
+    if (sub === 'categories') return _storeCategories();
+    if (sub === 'show') return _storeShow(parts[1]);
+    if (sub === 'install') return _storeInstall(parts[1]);
+    if (sub === 'search') return _storeSearch(parts.slice(1).join(' '));
+    return _storeSearch(arg || '');
+  },
+
   // ── Browse & Shell ───────────────────────────────────────────────────
 
   '/browse': async (arg) => {
@@ -598,6 +682,7 @@ ${B}System${R}
       console.log(`  ${B}Node:${R}       ${process.version}`);
       console.log(`  ${B}Model:${R}      ${_currentModel || 'default'}`);
       console.log(`  ${B}Agent:${R}      ${_currentAgent || 'none'}`);
+      console.log(`  ${B}Project:${R}    ${_currentProjectName || _currentProjectId || 'none'}`);
       console.log(`  ${B}Verbose:${R}    ${VERBOSE ? GR + 'on' : DM + 'off'}${R}`);
       console.log();
     } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
@@ -807,6 +892,258 @@ async function _resolveTask(idPrefix) {
   }
 }
 
+// ── Project sub-command implementations ─────────────────────────────────
+
+async function _projectCreate(name) {
+  if (!name) { console.log(`${DM}Usage: /project create <name>${R}`); return; }
+  try {
+    const project = await apiPost('/api/projects', { name });
+    _currentProjectId = project.id;
+    _currentProjectName = project.name;
+    console.log(`${GR}Created and selected project ${shortId(project.id)}${R}: ${project.name}`);
+  } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
+}
+
+async function _projectUse(id) {
+  if (!id) { console.log(`${DM}Usage: /project use <id>${R}`); return; }
+  const project = await _resolveProject(id);
+  if (!project) return;
+  _currentProjectId = project.id;
+  _currentProjectName = project.name;
+  await apiPost('/api/projects/' + project.id + '/touch').catch(() => {});
+  console.log(`${GR}Project → ${project.name}${R} ${DM}(${shortId(project.id)})${R}`);
+}
+
+function _projectClear() {
+  _currentProjectId = null;
+  _currentProjectName = null;
+  console.log(`${DM}Project cleared${R}`);
+}
+
+async function _projectDetail(id) {
+  const project = await _resolveProject(id);
+  if (!project) return;
+  console.log(`\n  ${B}${project.name}${R}`);
+  console.log(`  ${DM}ID:${R}          ${project.id}`);
+  if (project.description) console.log(`  ${DM}Description:${R} ${project.description}`);
+  if (project.rootPath) console.log(`  ${DM}Root:${R}        ${project.rootPath}`);
+  console.log(`  ${DM}Sources:${R}     ${(project.sources || []).length}`);
+  for (const s of project.sources || []) {
+    const label = s.path || s.url || s.repo || '';
+    console.log(`    ${CY}${shortId(s.id)}${R} ${s.type} ${s.name || ''} ${GY}${label}${R}`);
+  }
+  console.log(`  ${DM}Contexts:${R}    ${(project.contexts || []).length}`);
+  console.log(`  ${DM}Conversations:${R} ${(project.conversationIds || []).length}`);
+  console.log();
+}
+
+async function _projectAddSource(id, sourcePath) {
+  if (!id || !sourcePath) { console.log(`${DM}Usage: /project source <projectId> <localPath>${R}`); return; }
+  const project = await _resolveProject(id);
+  if (!project) return;
+  const abs = path.resolve(sourcePath.replace(/^~/, os.homedir()));
+  try {
+    const source = await apiPost('/api/projects/' + project.id + '/sources', { type: 'local', path: abs });
+    console.log(`${GR}Added source ${shortId(source.id)}${R}: ${source.path || source.name}`);
+  } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
+}
+
+async function _projectSync(id, sourceId) {
+  if (!id || !sourceId) { console.log(`${DM}Usage: /project sync <projectId> <sourceId>${R}`); return; }
+  const project = await _resolveProject(id);
+  if (!project) return;
+  const source = (project.sources || []).find(s => s.id === sourceId || s.id.startsWith(sourceId));
+  if (!source) { console.log(`${RD}No source matching "${sourceId}"${R}`); return; }
+  try {
+    const updated = await apiPost('/api/projects/' + project.id + '/sources/' + source.id + '/sync');
+    console.log(`${GR}Synced source ${shortId(updated.id)}${R}: ${updated.name || updated.path || updated.url}`);
+  } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
+}
+
+async function _resolveProject(idPrefix) {
+  try {
+    const projects = await apiGet('/api/projects');
+    const match = projects.find(p => p.id === idPrefix || p.id.startsWith(idPrefix) || (p.name || '').toLowerCase() === idPrefix.toLowerCase());
+    if (!match) {
+      try { return await apiGet('/api/projects/' + idPrefix); } catch (_) {}
+      console.log(`${RD}No project matching "${idPrefix}"${R}`);
+      return null;
+    }
+    return await apiGet('/api/projects/' + match.id);
+  } catch (e) {
+    console.log(`${RD}Failed: ${e.message}${R}`);
+    return null;
+  }
+}
+
+// ── MCP sub-command implementations ─────────────────────────────────────
+
+function _okLabel(ok) { return ok ? `${GR}connected${R}` : `${DM}offline${R}`; }
+function _runLabel(ok) { return ok ? `${GR}running${R}` : `${DM}stopped${R}`; }
+
+async function _mcpStatus() {
+  try {
+    const [fauna, ext, legacyFigma, devFigma, playwright, custom] = await Promise.all([
+      apiGet('/api/faunamcp/status').catch(e => ({ error: e.message })),
+      apiGet('/api/ext/status').catch(e => ({ error: e.message })),
+      apiGet('/api/figma/mcp-status').catch(e => ({ error: e.message })),
+      apiGet('/api/figma-mcp/status').catch(e => ({ error: e.message })),
+      apiGet('/api/playwright-mcp/status').catch(e => ({ error: e.message })),
+      apiGet('/api/custom-mcp-servers').catch(e => ({ error: e.message })),
+    ]);
+
+    console.log(`\n  ${B}MCP Status${R}`);
+    console.log(`  ${DM}${'─'.repeat(58)}${R}`);
+    console.log(`  FaunaMCP relay       ${_okLabel(!!fauna.connected)} ${GY}${fauna.url || ''}${R} ${fauna.toolCount != null ? `${DM}${fauna.toolCount} tools${R}` : ''}`);
+    console.log(`  Browser bridge       ${_okLabel(!!ext.connected)} ${(ext.browsers || []).map(b => `${b.browser}${b.source ? '/' + b.source : ''}`).join(', ')}`);
+    console.log(`  Figma relay plugin   ${_runLabel(!!legacyFigma.running)} ${legacyFigma.pid ? `${DM}pid ${legacyFigma.pid}${R}` : ''}`);
+    console.log(`  Figma Dev Mode MCP   ${_okLabel(!!devFigma.connected)} ${devFigma.toolCount != null ? `${DM}${devFigma.toolCount} tools${R}` : devFigma.error ? RD + devFigma.error + R : ''}`);
+    console.log(`  Playwright MCP       ${_runLabel(!!playwright.running)} ${playwright.installed === false ? RD + 'not installed' + R : ''} ${playwright.toolCount != null ? `${DM}${playwright.toolCount} tools${R}` : ''}`);
+    if (Array.isArray(custom) && custom.length) {
+      console.log(`\n  ${B}Custom MCP servers${R}`);
+      for (const s of custom) {
+        console.log(`  ${CY}${shortId(s.id)}${R} ${(s.name || '').padEnd(22)} ${_runLabel(!!s.running)} ${GY}${s.transport || ''} ${s.command || s.url || ''}${R}`);
+      }
+    } else {
+      console.log(`\n  ${DM}No custom MCP servers configured${R}`);
+    }
+    console.log();
+  } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
+}
+
+async function _mcpStart(id) {
+  if (!id) { console.log(`${DM}Usage: /mcp start <id>${R}`); return; }
+  const server = await _resolveCustomMcp(id);
+  if (!server) return;
+  try {
+    const res = await apiPost('/api/custom-mcp-servers/' + server.id + '/start');
+    console.log(`${GR}Started ${server.name}${R} ${res.pid ? `${DM}pid ${res.pid}${R}` : ''}`);
+  } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
+}
+
+async function _mcpStop(id) {
+  if (!id) { console.log(`${DM}Usage: /mcp stop <id>${R}`); return; }
+  const server = await _resolveCustomMcp(id);
+  if (!server) return;
+  try {
+    await apiPost('/api/custom-mcp-servers/' + server.id + '/stop');
+    console.log(`${YL}Stopped ${server.name}${R}`);
+  } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
+}
+
+async function _mcpLogs(id) {
+  if (!id) { console.log(`${DM}Usage: /mcp logs <id>${R}`); return; }
+  const server = await _resolveCustomMcp(id);
+  if (!server) return;
+  try {
+    const data = await apiGet('/api/custom-mcp-servers/' + server.id + '/logs');
+    const logs = data.logs || [];
+    if (!logs.length) { console.log(`${DM}No logs for ${server.name}${R}`); return; }
+    for (const l of logs.slice(-40)) console.log(`${GY}${new Date(l.t).toLocaleTimeString()} ${l.s}:${R} ${l.m}`);
+  } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
+}
+
+async function _resolveCustomMcp(idPrefix) {
+  try {
+    const servers = await apiGet('/api/custom-mcp-servers');
+    const match = servers.find(s => s.id === idPrefix || s.id.startsWith(idPrefix) || (s.name || '').toLowerCase() === idPrefix.toLowerCase());
+    if (!match) console.log(`${RD}No custom MCP matching "${idPrefix}"${R}`);
+    return match || null;
+  } catch (e) {
+    console.log(`${RD}Failed: ${e.message}${R}`);
+    return null;
+  }
+}
+
+// ── Agent Store sub-command implementations ─────────────────────────────
+
+function _storeAgentName(agent) {
+  return agent.displayName || agent.name || agent.slug || 'Untitled';
+}
+
+async function _storeSearch(query) {
+  try {
+    const qs = new URLSearchParams({ page: '1' });
+    if (query && query.trim()) qs.set('q', query.trim());
+    const data = await apiGet('/api/store/agents?' + qs.toString());
+    const agents = data.agents || data.data || data || [];
+    if (!Array.isArray(agents) || !agents.length) { console.log(`${DM}No store agents found${R}`); return; }
+    console.log(`\n  ${B}${'Slug'.padEnd(24)} ${'Name'.padEnd(28)} ${'Score'.padEnd(7)} Downloads${R}`);
+    console.log(`  ${DM}${'─'.repeat(78)}${R}`);
+    for (const a of agents.slice(0, 25)) {
+      const slug = a.slug || a.name || '';
+      const score = a.scanScore ?? a.scan_score ?? '—';
+      const downloads = a.downloads ?? a.installCount ?? a.install_count ?? 0;
+      console.log(`  ${CY}${slug.slice(0,23).padEnd(24)}${R} ${_storeAgentName(a).slice(0,27).padEnd(28)} ${String(score).padEnd(7)} ${GY}${downloads}${R}`);
+    }
+    console.log(`\n  ${DM}Use /store show <slug> or /store install <slug>${R}\n`);
+  } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
+}
+
+async function _storeCategories() {
+  try {
+    const data = await apiGet('/api/store/categories');
+    const categories = data.categories || data.data || data || [];
+    if (!Array.isArray(categories) || !categories.length) { console.log(`${DM}No categories found${R}`); return; }
+    for (const c of categories) console.log(`  ${CY}${c.slug || c.id || c.name}${R} ${c.name || ''}`);
+  } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
+}
+
+async function _storeShow(slug) {
+  if (!slug) { console.log(`${DM}Usage: /store show <slug>${R}`); return; }
+  try {
+    const a = await apiGet('/api/store/agents/' + encodeURIComponent(slug));
+    console.log(`\n  ${B}${_storeAgentName(a)}${R}`);
+    console.log(`  ${DM}Slug:${R}      ${a.slug || slug}`);
+    if (a.version) console.log(`  ${DM}Version:${R}   ${a.version}`);
+    if (a.author?.name) console.log(`  ${DM}Author:${R}    ${a.author.name}${a.author.verified ? ' ✓' : ''}`);
+    if (a.category?.name || a.category) console.log(`  ${DM}Category:${R}  ${a.category.name || a.category}`);
+    console.log(`  ${DM}Score:${R}     ${a.scanScore ?? a.scan_score ?? '—'}`);
+    console.log(`  ${DM}Downloads:${R} ${a.downloads ?? a.installCount ?? a.install_count ?? 0}`);
+    if (a.description) console.log(`\n${renderMarkdown(String(a.description).slice(0, 1200))}`);
+    console.log(`\n  ${DM}Install with:${R} ${CY}/store install ${a.slug || slug}${R}\n`);
+  } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
+}
+
+async function _storeInstall(slug) {
+  if (!slug) { console.log(`${DM}Usage: /store install <slug>${R}`); return; }
+  try {
+    console.log(`${DM}Downloading ${slug}…${R}`);
+    const zipRes = await fetch(`${API}/api/store/agents/${encodeURIComponent(slug)}/zip`);
+    if (!zipRes.ok) throw new Error(`${zipRes.status}: ${await zipRes.text()}`);
+    const zip = Buffer.from(await zipRes.arrayBuffer());
+
+    const importOnce = async (force) => {
+      const res = await fetch(`${API}/api/agents/import${force ? '?force=1' : ''}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/zip' },
+        body: zip,
+      });
+      const data = await res.json().catch(() => ({}));
+      return { res, data };
+    };
+
+    let { res, data } = await importOnce(false);
+    if (!res.ok && (res.status === 409 || String(data.error || '').includes('already exists'))) {
+      console.log(`${YL}${data.error || 'Agent already exists'}${R}`);
+      console.log(`${DM}Reinstalling with overwrite…${R}`);
+      ({ res, data } = await importOnce(true));
+    }
+    if (!res.ok || data.error) throw new Error(data.error || `Import failed (${res.status})`);
+
+    await apiPost('/api/agents/' + encodeURIComponent(data.name) + '/meta', {
+      storeSlug: slug,
+      installedFromStore: true,
+      installedAt: new Date().toISOString(),
+      storeVersion: '1.0',
+      installedBy: 'cli',
+    }).catch(() => {});
+
+    console.log(`${GR}Installed ${data.displayName || data.name}${R} ${DM}(${data.name})${R}`);
+    console.log(`${DM}Use it with:${R} ${CY}/agent ${data.name}${R}`);
+  } catch (e) { console.log(`${RD}Install failed: ${e.message}${R}`); }
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 function _version() {
@@ -965,6 +1302,7 @@ async function main() {
   try {
     // Expose chat debug logs to stdout only in verbose mode
     if (VERBOSE) process.env.FAUNA_CHAT_DEBUG = '1';
+    ({ startServer } = await import('./server.js'));
     await startServer(PORT);
   } catch (e) {
     if (e.code === 'EADDRINUSE') {
