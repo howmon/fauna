@@ -86,6 +86,13 @@ function js(code) {
   mainWindow?.webContents?.executeJavaScript(code).catch(() => {});
 }
 
+function toggleDetachedDevTools() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const wc = mainWindow.webContents;
+  if (wc.isDevToolsOpened()) wc.closeDevTools();
+  else wc.openDevTools({ mode: 'detach' });
+}
+
 function buildMenu() {
   return Menu.buildFromTemplate([
     {
@@ -143,7 +150,7 @@ function buildMenu() {
         { label: 'Task Widget',          accelerator: 'Ctrl+Shift+Space', click: () => toggleWidget() },
         { type: 'separator' },
         { label: 'Reload',              role: 'reload' },
-        { label: 'Toggle DevTools',     accelerator: 'Alt+Cmd+I', role: 'toggleDevTools' },
+        { label: 'Toggle DevTools',     accelerator: 'Alt+Cmd+I', click: () => toggleDetachedDevTools() },
         { type: 'separator' },
         { label: 'Actual Size',         role: 'resetZoom' },
         { label: 'Zoom In',             role: 'zoomIn' },
