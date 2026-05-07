@@ -203,6 +203,7 @@ function buildMenu() {
       role: 'help',
       submenu: [
         { label: 'Documentation', click: () => shell.openExternal('https://github.com/howmon/fauna') },
+        { label: 'Check for Fauna Updates', click: () => js("switchSettingsPage('about', document.querySelector('.settings-nav-item[data-page=about]')); if(!settingsOpen) toggleSettings(); _checkFaunaUpdate();") },
         { label: 'Get FaunaMCP Standalone', click: () => shell.openExternal(FAUNAMCP_REPO_URL) },
         { label: 'Report Issue', click: () => shell.openExternal('https://github.com/howmon/fauna/issues') },
       ]

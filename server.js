@@ -8604,6 +8604,238 @@ app.post('/api/faunamcp/install', (req, res) => {
   res.json({ ok: true, job: _faunaMCPInstallJob });
 });
 
+// ── Fauna app self-update from main branch ───────────────────────────────
+const FAUNA_REPO_URL = 'https://github.com/howmon/fauna';
+const FAUNA_BRANCH_API_URL = 'https://api.github.com/repos/howmon/fauna/commits/main';
+const FAUNA_DOWNLOAD_URL = 'https://github.com/howmon/fauna/archive/refs/heads/main.zip';
+const FAUNA_UPDATE_ROOT = path.join(CONFIG_DIR, 'fauna-self-update');
+const FAUNA_UPDATE_SOURCE_DIR = path.join(FAUNA_UPDATE_ROOT, 'source');
+const FAUNA_UPDATE_ZIP_PATH = path.join(FAUNA_UPDATE_ROOT, 'fauna-main.zip');
+const FAUNA_UPDATE_STATE_PATH = path.join(FAUNA_UPDATE_ROOT, 'state.json');
+const FAUNA_MAC_APP_PATH = '/Applications/Fauna.app';
+const FAUNA_WIN_APP_PATH = process.platform === 'win32'
+  ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Programs', 'Fauna', 'Fauna.exe')
+  : null;
+
+let _faunaUpdateJob = {
+  running: false,
+  checking: false,
+  phase: 'idle',
+  message: 'Idle',
+  error: null,
+  currentSha: null,
+  latestSha: null,
+  updateAvailable: false,
+  startedAt: null,
+  finishedAt: null,
+  sourceDir: FAUNA_UPDATE_SOURCE_DIR,
+  appPath: process.platform === 'darwin' ? FAUNA_MAC_APP_PATH : process.platform === 'win32' ? FAUNA_WIN_APP_PATH : null,
+  logs: [],
+};
+
+function _faunaAppPath() {
+  if (process.platform === 'darwin') return FAUNA_MAC_APP_PATH;
+  if (process.platform === 'win32') return FAUNA_WIN_APP_PATH;
+  return null;
+}
+
+function _faunaAppInstalled() {
+  const appPath = _faunaAppPath();
+  return !!(appPath && fs.existsSync(appPath));
+}
+
+function _faunaInstalledSha() {
+  try { return JSON.parse(fs.readFileSync(FAUNA_UPDATE_STATE_PATH, 'utf8')).installedSha || null; }
+  catch (_) { return null; }
+}
+
+function _saveFaunaInstalledSha(sha) {
+  fs.mkdirSync(path.dirname(FAUNA_UPDATE_STATE_PATH), { recursive: true });
+  fs.writeFileSync(FAUNA_UPDATE_STATE_PATH, JSON.stringify({ installedSha: sha, updatedAt: new Date().toISOString() }, null, 2));
+}
+
+function _faunaUpdateLog(message, phase = null) {
+  if (phase) _faunaUpdateJob.phase = phase;
+  _faunaUpdateJob.message = message;
+  _faunaUpdateJob.logs.push({ t: Date.now(), message });
+  if (_faunaUpdateJob.logs.length > 200) _faunaUpdateJob.logs.shift();
+  console.log('[Fauna update]', message);
+}
+
+function _runFaunaUpdateProcess(command, args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const proc = _spawn(command, args, { ...opts, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    proc.stdout.on('data', chunk => {
+      const text = chunk.toString();
+      stdout += text;
+      for (const line of text.split('\n').filter(Boolean)) _faunaUpdateLog(line.slice(0, 500));
+    });
+    proc.stderr.on('data', chunk => {
+      const text = chunk.toString();
+      stderr += text;
+      for (const line of text.split('\n').filter(Boolean)) _faunaUpdateLog(line.slice(0, 500));
+    });
+    proc.on('error', reject);
+    proc.on('close', code => code === 0 ? resolve({ stdout, stderr }) : reject(new Error(`${command} ${args.join(' ')} exited with ${code}: ${(stderr || stdout).slice(-1000)}`)));
+  });
+}
+
+function _requestJson(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'Fauna', 'Accept': 'application/vnd.github+json' } }, resp => {
+      let body = '';
+      resp.on('data', chunk => { body += chunk; });
+      resp.on('end', () => {
+        if (resp.statusCode < 200 || resp.statusCode >= 300) return reject(new Error(`HTTP ${resp.statusCode}: ${body.slice(0, 200)}`));
+        try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+      });
+    }).on('error', reject);
+  });
+}
+
+async function _checkFaunaUpdate() {
+  if (_faunaUpdateJob.running || _faunaUpdateJob.checking) return _faunaUpdateJob;
+  _faunaUpdateJob.checking = true;
+  _faunaUpdateJob.error = null;
+  _faunaUpdateJob.currentSha = _faunaInstalledSha();
+  _faunaUpdateLog('Checking Fauna main branch...', 'checking');
+  try {
+    const data = await _requestJson(FAUNA_BRANCH_API_URL);
+    _faunaUpdateJob.latestSha = data.sha || null;
+    _faunaUpdateJob.updateAvailable = !!_faunaUpdateJob.latestSha && _faunaUpdateJob.latestSha !== _faunaUpdateJob.currentSha;
+    _faunaUpdateJob.phase = _faunaUpdateJob.updateAvailable ? 'available' : 'current';
+    _faunaUpdateJob.message = _faunaUpdateJob.updateAvailable
+      ? `Update available: ${_faunaUpdateJob.latestSha.slice(0, 7)}`
+      : 'Fauna is up to date';
+  } catch (e) {
+    _faunaUpdateJob.phase = 'error';
+    _faunaUpdateJob.error = e.message;
+    _faunaUpdateJob.message = 'Update check failed: ' + e.message;
+  } finally {
+    _faunaUpdateJob.checking = false;
+  }
+  return _faunaUpdateJob;
+}
+
+async function _installFaunaUpdate({ installApp = true } = {}) {
+  if (_faunaUpdateJob.running) return;
+  _faunaUpdateJob = {
+    ..._faunaUpdateJob,
+    running: true,
+    checking: false,
+    phase: 'starting',
+    message: 'Starting Fauna update',
+    error: null,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    logs: [],
+  };
+  try {
+    if (!_faunaUpdateJob.latestSha) {
+      const data = await _requestJson(FAUNA_BRANCH_API_URL);
+      _faunaUpdateJob.latestSha = data.sha || null;
+      _faunaUpdateJob.currentSha = _faunaInstalledSha();
+      _faunaUpdateJob.updateAvailable = !!_faunaUpdateJob.latestSha && _faunaUpdateJob.latestSha !== _faunaUpdateJob.currentSha;
+    }
+    const targetSha = _faunaUpdateJob.latestSha;
+    if (!targetSha) throw new Error('No main branch SHA available');
+
+    fs.mkdirSync(FAUNA_UPDATE_ROOT, { recursive: true });
+    _faunaUpdateLog('Downloading Fauna source zip...', 'download');
+    await _downloadFile(FAUNA_DOWNLOAD_URL, FAUNA_UPDATE_ZIP_PATH);
+
+    _faunaUpdateLog('Extracting Fauna source...', 'extract');
+    fs.rmSync(FAUNA_UPDATE_SOURCE_DIR, { recursive: true, force: true });
+    fs.rmSync(path.join(FAUNA_UPDATE_ROOT, 'fauna-main'), { recursive: true, force: true });
+    if (process.platform === 'win32') {
+      await _runFaunaUpdateProcess('powershell.exe', [
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-Command',
+        `Expand-Archive -LiteralPath ${JSON.stringify(FAUNA_UPDATE_ZIP_PATH)} -DestinationPath ${JSON.stringify(FAUNA_UPDATE_ROOT)} -Force`,
+      ]);
+    } else {
+      await _runFaunaUpdateProcess('unzip', ['-q', '-o', FAUNA_UPDATE_ZIP_PATH, '-d', FAUNA_UPDATE_ROOT]);
+    }
+    const extracted = path.join(FAUNA_UPDATE_ROOT, 'fauna-main');
+    if (!fs.existsSync(extracted)) throw new Error('Downloaded zip did not contain fauna-main');
+    fs.renameSync(extracted, FAUNA_UPDATE_SOURCE_DIR);
+
+    _faunaUpdateLog('Installing Fauna npm dependencies...', 'dependencies');
+    await _runFaunaUpdateProcess(_faunaMCPNpmCommand(), ['install'], { cwd: FAUNA_UPDATE_SOURCE_DIR, env: { ...process.env } });
+
+    const buildScript = process.platform === 'darwin' ? 'dist:mac' : process.platform === 'win32' ? 'dist:win' : 'dist';
+    _faunaUpdateLog(`Building Fauna with npm run ${buildScript}...`, 'build');
+    await _runFaunaUpdateProcess(_faunaMCPNpmCommand(), ['run', buildScript], { cwd: FAUNA_UPDATE_SOURCE_DIR, env: { ...process.env } });
+
+    if (installApp && process.platform === 'darwin') {
+      const builtApp = [
+        path.join(FAUNA_UPDATE_SOURCE_DIR, 'dist', 'mac', 'Fauna.app'),
+        path.join(FAUNA_UPDATE_SOURCE_DIR, 'dist', 'mac-arm64', 'Fauna.app'),
+      ].find(p => fs.existsSync(p));
+      if (!builtApp) throw new Error('Build completed, but no Fauna.app was found in dist/mac or dist/mac-arm64');
+      _faunaUpdateLog('Installing Fauna.app into /Applications and relaunching...', 'install');
+      const scriptPath = path.join(FAUNA_UPDATE_ROOT, 'install-fauna-mac.sh');
+      fs.writeFileSync(scriptPath, `#!/bin/zsh\nsleep 1\nosascript -e 'tell application "Fauna" to quit' || true\nsleep 2\nrm -rf ${JSON.stringify(FAUNA_MAC_APP_PATH)}\ncp -R ${JSON.stringify(builtApp)} ${JSON.stringify(FAUNA_MAC_APP_PATH)}\nopen ${JSON.stringify(FAUNA_MAC_APP_PATH)}\n`, { mode: 0o755 });
+      _saveFaunaInstalledSha(targetSha);
+      _spawn('/bin/zsh', [scriptPath], { detached: true, stdio: 'ignore' }).unref();
+    } else if (installApp && process.platform === 'win32') {
+      const installer = _findFile(path.join(FAUNA_UPDATE_SOURCE_DIR, 'dist'), (_fullPath, name) => /\.exe$/i.test(name) && /setup|fauna/i.test(name));
+      if (!installer) throw new Error('Build completed, but no Windows installer .exe was found in dist');
+      _faunaUpdateLog('Launching Fauna Windows installer...', 'install');
+      const scriptPath = path.join(FAUNA_UPDATE_ROOT, 'install-fauna-win.ps1');
+      fs.writeFileSync(scriptPath, `Start-Sleep -Seconds 1\nGet-Process Fauna -ErrorAction SilentlyContinue | Stop-Process -Force\nStart-Process -FilePath ${JSON.stringify(installer)} -ArgumentList '/S' -Wait\n$exe = ${JSON.stringify(FAUNA_WIN_APP_PATH)}\nif (Test-Path $exe) { Start-Process -FilePath $exe }\n`);
+      _saveFaunaInstalledSha(targetSha);
+      _spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath], { detached: true, stdio: 'ignore' }).unref();
+    } else {
+      _saveFaunaInstalledSha(targetSha);
+      _faunaUpdateLog(`Update built at ${FAUNA_UPDATE_SOURCE_DIR}`, 'complete');
+    }
+
+    _faunaUpdateJob.running = false;
+    _faunaUpdateJob.phase = 'complete';
+    _faunaUpdateJob.message = installApp ? 'Update installer launched' : 'Update built';
+    _faunaUpdateJob.finishedAt = new Date().toISOString();
+  } catch (e) {
+    _faunaUpdateJob.running = false;
+    _faunaUpdateJob.phase = 'error';
+    _faunaUpdateJob.error = e.message;
+    _faunaUpdateJob.message = 'Update failed: ' + e.message;
+    _faunaUpdateJob.finishedAt = new Date().toISOString();
+    console.error('[Fauna update]', e);
+  }
+}
+
+function _faunaUpdatePayload() {
+  return {
+    ok: true,
+    repoUrl: FAUNA_REPO_URL,
+    downloadUrl: FAUNA_DOWNLOAD_URL,
+    branchApiUrl: FAUNA_BRANCH_API_URL,
+    appPath: _faunaAppPath(),
+    appInstalled: _faunaAppInstalled(),
+    sourceDir: FAUNA_UPDATE_SOURCE_DIR,
+    sourceReady: fs.existsSync(path.join(FAUNA_UPDATE_SOURCE_DIR, 'package.json')),
+    canBuild: true,
+    job: _faunaUpdateJob,
+  };
+}
+
+app.get('/api/fauna/update-status', (_req, res) => res.json(_faunaUpdatePayload()));
+
+app.post('/api/fauna/check-update', async (_req, res) => {
+  await _checkFaunaUpdate();
+  res.json(_faunaUpdatePayload());
+});
+
+app.post('/api/fauna/install-update', (req, res) => {
+  if (_faunaUpdateJob.running) return res.status(409).json({ ok: false, error: 'Fauna update already running', job: _faunaUpdateJob });
+  const installApp = req.body?.installApp !== false;
+  _installFaunaUpdate({ installApp }).catch(() => {});
+  res.json(_faunaUpdatePayload());
+});
+
 // GET /api/ext/install-dir — path to the browser-extension folder (for unpacked load)
 app.get('/api/ext/install-dir', (_req, res) => {
   // Prefer the extraResources copy (packaged app), fall back to dev source

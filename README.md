@@ -110,6 +110,10 @@ npm run dist     # build
 **Auth:** Settings → Authentication → paste a GitHub PAT or API key.  
 **Figma:** Figma Desktop → Preferences → Enable Dev Mode MCP Server → toggle 🔷 MCP in toolbar.
 
+### Fauna standalone updates
+
+The desktop app can check `https://github.com/howmon/fauna` main for updates from Help → Check for Fauna Updates or Settings → About → App Updates. Build & Install downloads the main branch zip, extracts it into Fauna app data, runs `npm install`, builds the platform package, and launches the installer/relauncher on macOS or Windows.
+
 ### FaunaMCP standalone
 
 Fauna can use the standalone [FaunaMCP app](https://github.com/howmon/faunaMCP) for shared browser and Figma MCP tooling. Start FaunaMCP first, then Fauna will auto-detect `http://localhost:3341/mcp` and route browser/Figma tools through it. You can get the source directly from [howmon/faunaMCP](https://github.com/howmon/faunaMCP), download the current main branch as a zip with [faunaMCP main.zip](https://github.com/howmon/faunaMCP/archive/refs/heads/main.zip), or use Settings → Browser use → FaunaMCP App → Build & Install to let Fauna download, compile, and install the standalone app when needed. The in-app installer supports macOS and Windows builds; Windows uses PowerShell extraction, `npm.cmd`, and the generated NSIS installer.

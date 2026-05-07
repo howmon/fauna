@@ -865,6 +865,16 @@ Examples:
         <span style="color:var(--fau-text-dim);font-size:11px">by Solomon Abey · <a href="https://github.com/howmon" style="color:var(--accent)" target="_blank">@howmon</a></span>
       </div>
     </div>
+    <div class="settings-section">
+      <div class="settings-section-title">App Updates</div>
+      <div id="fauna-update-status" class="settings-hint" style="margin-bottom:8px">Checking update status…</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button type="button" class="settings-row-btn" style="flex:1;min-width:140px" onclick="_checkFaunaUpdate()"><i class="ti ti-refresh"></i> Check Main</button>
+        <button type="button" id="fauna-update-install-btn" class="settings-row-btn" style="flex:1;min-width:140px" onclick="_installFaunaUpdate()"><i class="ti ti-download"></i> Build &amp; Install</button>
+        <button type="button" class="settings-row-btn" style="flex:1;min-width:140px" onclick="window.open('https://github.com/howmon/fauna','_blank')"><i class="ti ti-brand-github"></i> Repository</button>
+      </div>
+      <div class="settings-hint" style="margin-top:6px;font-size:10.5px">Build &amp; Install downloads Fauna main, compiles the platform package, then launches the installer/relauncher when supported.</div>
+    </div>
   </div>
 
   </div><!-- /.settings-scroll -->
@@ -894,6 +904,9 @@ Examples:
     if (page === 'browser') {
       _faunaMCPSettingsRefresh();
       _browserExtSettingsRefresh();
+    }
+    if (page === 'about') {
+      _refreshFaunaUpdateStatus();
     }
   }
 
@@ -1105,6 +1118,69 @@ Examples:
       if (btn) btn.disabled = false;
       var el = document.getElementById('faunamcp-install-status');
       if (el) el.textContent = 'Install failed: ' + e.message;
+    });
+  }
+
+  function _renderFaunaUpdateStatus(data) {
+    var el = document.getElementById('fauna-update-status');
+    var btn = document.getElementById('fauna-update-install-btn');
+    if (!el) return;
+    var job = data && data.job;
+    var running = job && (job.running || job.checking);
+    if (btn) btn.disabled = !!running;
+    if (running) {
+      el.textContent = (job.running ? 'Updating: ' : 'Checking: ') + (job.message || job.phase || 'working...');
+    } else if (job && job.error) {
+      el.textContent = 'Update error: ' + job.error;
+    } else if (job && job.updateAvailable) {
+      el.textContent = 'Update available from main: ' + String(job.latestSha || '').slice(0, 7);
+    } else if (job && job.phase === 'current') {
+      el.textContent = 'Fauna is up to date' + (job.latestSha ? ' @ ' + job.latestSha.slice(0, 7) : '');
+    } else if (data && data.sourceReady) {
+      el.textContent = 'Update source is staged at ' + data.sourceDir;
+    } else {
+      el.textContent = 'Ready to check GitHub main for app updates.';
+    }
+  }
+
+  function _refreshFaunaUpdateStatus() {
+    fetch('/api/fauna/update-status').then(function(r){ return r.json(); }).then(_renderFaunaUpdateStatus).catch(function(e){
+      var el = document.getElementById('fauna-update-status');
+      if (el) el.textContent = 'Update status unavailable: ' + e.message;
+    });
+  }
+
+  function _checkFaunaUpdate() {
+    fetch('/api/fauna/check-update', { method: 'POST' }).then(function(r){ return r.json(); }).then(_renderFaunaUpdateStatus).catch(function(e){
+      var el = document.getElementById('fauna-update-status');
+      if (el) el.textContent = 'Update check failed: ' + e.message;
+    });
+  }
+
+  function _pollFaunaUpdate() {
+    fetch('/api/fauna/update-status').then(function(r){ return r.json(); }).then(function(d) {
+      _renderFaunaUpdateStatus(d);
+      if (d.job && d.job.running) setTimeout(_pollFaunaUpdate, 1500);
+    }).catch(function(e) {
+      var el = document.getElementById('fauna-update-status');
+      if (el) el.textContent = 'Update status unavailable: ' + e.message;
+    });
+  }
+
+  function _installFaunaUpdate() {
+    var btn = document.getElementById('fauna-update-install-btn');
+    if (btn) btn.disabled = true;
+    fetch('/api/fauna/install-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ installApp: true })
+    }).then(function(r){ return r.json().then(function(d){ if (!r.ok) throw new Error(d.error || 'Update failed'); return d; }); }).then(function(d) {
+      _renderFaunaUpdateStatus(d);
+      _pollFaunaUpdate();
+    }).catch(function(e) {
+      if (btn) btn.disabled = false;
+      var el = document.getElementById('fauna-update-status');
+      if (el) el.textContent = 'Update failed: ' + e.message;
     });
   }
 
