@@ -23,16 +23,18 @@ function openPipelineBuilder(taskId) {
     overlay.id = 'pipeline-builder-overlay';
     overlay.style.cssText = [
       'position:fixed;inset:0;z-index:9000;display:flex;flex-direction:column;',
-      'background:var(--fau-bg,#0e0e14);',
+      'background:var(--fau-bg,#0e0e14);padding-top:36px;',
     ].join('');
     document.body.appendChild(overlay);
   }
 
-  // Get pipeline from task (or blank)
+  // Get pipeline from task, draft, or blank
   var pipeline = { nodes: [], edges: [] };
   if (taskId && typeof _tasksCache !== 'undefined') {
     var task = _tasksCache.find(function(t) { return t.id === taskId; });
     if (task && task.pipeline) pipeline = task.pipeline;
+  } else if (!taskId && typeof _draft !== 'undefined' && _draft && _draft.pipeline) {
+    pipeline = _draft.pipeline;
   }
 
   _buildOverlayHTML(overlay, pipeline);
