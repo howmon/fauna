@@ -4758,6 +4758,47 @@ const AUGMENTED_PATH = IS_WIN
 
 const SHELL_BIN = IS_WIN ? 'powershell.exe' : '/bin/zsh';
 
+function homebrewNodeBinPaths() {
+  const bins = [];
+  for (const root of ['/opt/homebrew/opt', '/usr/local/opt']) {
+    try {
+      for (const name of fs.readdirSync(root)) {
+        if (!/^node(@\d+)?$/.test(name)) continue;
+        const bin = path.join(root, name, 'bin');
+        if (fs.existsSync(path.join(bin, 'npm'))) bins.push(bin);
+      }
+    } catch (_) {}
+  }
+  return bins;
+}
+
+function buildAugmentedEnv(baseEnv = process.env) {
+  const env = { ...process.env, ...(baseEnv || {}) };
+  const existingPath = env.PATH || env.Path || process.env.PATH || process.env.Path || '';
+  const extraPaths = IS_WIN
+    ? [
+        existingPath,
+        path.join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs'),
+        path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'npm'),
+      ]
+    : [...homebrewNodeBinPaths(), AUGMENTED_PATH, existingPath];
+  const seen = new Set();
+  const mergedPath = extraPaths
+    .join(PATH_SEP)
+    .split(PATH_SEP)
+    .filter(Boolean)
+    .filter(p => {
+      const key = IS_WIN ? p.toLowerCase() : p;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .join(PATH_SEP);
+  env.PATH = mergedPath;
+  if (IS_WIN) env.Path = mergedPath;
+  return env;
+}
+
 app.post('/api/shell-exec', (req, res) => {
   const { command, cwd, killId, stream: wantStream } = req.body;
   if (!command) return res.status(400).json({ error: 'command required' });
@@ -8653,7 +8694,7 @@ function _faunaMCPInstallLog(message, phase = null) {
 
 function _runProcess(command, args, opts = {}) {
   return new Promise((resolve, reject) => {
-    const proc = _spawn(command, args, { ...opts, stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = _spawn(command, args, { ...opts, env: buildAugmentedEnv(opts.env), stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     proc.stdout.on('data', chunk => {
       const text = chunk.toString();
@@ -8665,7 +8706,13 @@ function _runProcess(command, args, opts = {}) {
       stderr += text;
       for (const line of text.split('\n').filter(Boolean)) _faunaMCPInstallLog(line.slice(0, 500));
     });
-    proc.on('error', reject);
+    proc.on('error', e => {
+      if (e.code === 'ENOENT' && /^npm(\.cmd)?$/i.test(command)) {
+        reject(new Error('npm was not found. Install Node.js/npm, or make sure npm is available in /opt/homebrew/bin, /opt/homebrew/opt/node@*/bin, /usr/local/bin, or /usr/local/opt/node@*/bin before using Build and Install.'));
+      } else {
+        reject(e);
+      }
+    });
     proc.on('close', code => {
       if (code === 0) resolve({ stdout, stderr });
       else reject(new Error(`${command} ${args.join(' ')} exited with ${code}: ${(stderr || stdout).slice(-1000)}`));
@@ -8863,7 +8910,7 @@ function _faunaUpdateLog(message, phase = null) {
 
 function _runFaunaUpdateProcess(command, args, opts = {}) {
   return new Promise((resolve, reject) => {
-    const proc = _spawn(command, args, { ...opts, stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = _spawn(command, args, { ...opts, env: buildAugmentedEnv(opts.env), stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     proc.stdout.on('data', chunk => {
       const text = chunk.toString();
@@ -8875,7 +8922,13 @@ function _runFaunaUpdateProcess(command, args, opts = {}) {
       stderr += text;
       for (const line of text.split('\n').filter(Boolean)) _faunaUpdateLog(line.slice(0, 500));
     });
-    proc.on('error', reject);
+    proc.on('error', e => {
+      if (e.code === 'ENOENT' && /^npm(\.cmd)?$/i.test(command)) {
+        reject(new Error('npm was not found. Install Node.js/npm, or make sure npm is available in /opt/homebrew/bin, /opt/homebrew/opt/node@*/bin, /usr/local/bin, or /usr/local/opt/node@*/bin before using Build and Install.'));
+      } else {
+        reject(e);
+      }
+    });
     proc.on('close', code => code === 0 ? resolve({ stdout, stderr }) : reject(new Error(`${command} ${args.join(' ')} exited with ${code}: ${(stderr || stdout).slice(-1000)}`)));
   });
 }
