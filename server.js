@@ -3746,25 +3746,17 @@ function _detectBrowserChannel() {
 }
 
 
-// ── Browser-server (FaunaMCP relay) process management ────────────────────
-// Spawns faunamcp/browser-server/index.js (extension WebSocket on 3340,
-// custom relay HTTP MCP on 3341). Kept for Chrome extension fallback.
-// PlaywrightMCPClient now connects to @playwright/mcp on 3342 instead.
+// ── Browser relay process management ─────────────────────────────────────
+// FaunaMCP now lives in its own repository/app and is discovered on port 3341.
+// Developers can still point FAUNA_BROWSER_SERVER_PATH at a local relay script
+// when they want this app to spawn one directly.
 
 let _browserServerProc = null;
 let _browserServerLogs = [];  // last 100 lines
 let _browserServerRetryTimer = null;
-// In a packaged app extraResources land at process.resourcesPath.
-// In dev __dirname works fine.
 const BROWSER_SERVER_PATH = (() => {
-  const devPath = path.join(__dirname, 'faunamcp', 'browser-server', 'index.js');
-  if (fs.existsSync(devPath)) return devPath;
-  // Packaged: extraResources puts it under Resources/faunamcp/browser-server/
-  const resPkg = process.resourcesPath
-    ? path.join(process.resourcesPath, 'faunamcp', 'browser-server', 'index.js')
-    : null;
-  if (resPkg && fs.existsSync(resPkg)) return resPkg;
-  return devPath; // fallback (will log "not found")
+  const override = process.env.FAUNA_BROWSER_SERVER_PATH;
+  return override && fs.existsSync(override) ? override : null;
 })();
 
 async function startBrowserServer() {
@@ -3779,8 +3771,8 @@ async function startBrowserServer() {
     return;
   }
   if (_browserServerProc && _browserServerProc.exitCode === null) return; // already running
-  if (!fs.existsSync(BROWSER_SERVER_PATH)) {
-    console.log('[BrowserServer] not found at', BROWSER_SERVER_PATH, '— Playwright MCP unavailable');
+  if (!BROWSER_SERVER_PATH) {
+    console.log('[BrowserServer] FaunaMCP not detected on port 3341 — external browser relay unavailable');
     return;
   }
   const nodeBin = findNodeBinary();
@@ -8520,9 +8512,8 @@ export function startServer(port) {
       console.log();
       // Boot the browser-extension WebSocket endpoint on the same HTTP server
       startExtWebSocketServer(server);
-      // Start the FaunaMCP browser-server (port 3340 WS + 3341 HTTP).
-      // If FaunaMCP app is already running, startBrowserServer() detects it and
-      // connects via HTTP MCP instead of spawning a duplicate process.
+      // Detect an external FaunaMCP app (port 3341) or an explicit developer
+      // relay override via FAUNA_BROWSER_SERVER_PATH.
       await startBrowserServer();
       // Start background probe — if FaunaMCP starts/stops after boot, we adapt.
       _startFaunaMCPAutodetect();

@@ -80,8 +80,7 @@
       "node_modules/@playwright/mcp/**",
       "node_modules/playwright-core/**",
       "node_modules/playwright/**",
-      "node_modules/@microsoft/workiq/**",
-      "faunamcp/browser-server/**"
+      "node_modules/@microsoft/workiq/**"
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
@@ -198,21 +197,6 @@
       {
         "from": "browser-extension",
         "to": "browser-extension",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "faunamcp/browser-server",
-        "to": "faunamcp/browser-server",
-        "filter": [
-          "**/*",
-          "!node_modules/**"
-        ]
-      },
-      {
-        "from": "faunamcp/browser-server/node_modules",
-        "to": "faunamcp/browser-server/node_modules",
         "filter": [
           "**/*"
         ]
