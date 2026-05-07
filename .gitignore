@@ -28,7 +28,7 @@ npm-debug.log*
 .env.*
 *.pem
 
-# Optional enterprise / M365 integrations (gitignored — see *.example.js for setup instructions)
+# Optional enterprise integrations (gitignored — see *.example.js for setup instructions)
 enterprise-auth.js
 enterprise-auth.example.js
 workiq-integration.js
