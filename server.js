@@ -28,17 +28,17 @@ import {
 } from './project-manager.js';
 import { composeDesignPrompt, VISUAL_DIRECTIONS } from './design-prompts.js';
 
-// ── Optional enterprise auth ───────────────────────────────────
-// Load enterprise-auth.js if present.
-let enterpriseAuth = null;
+// ── Optional private integrations (enterprise auth, WorkIQ M365) ─────────
+// Loaded from private-integrations.js if present — never committed to repo.
+let privateIntegrations = null;
+const privateToolNames = new Set();
 try {
-  enterpriseAuth = await import('./enterprise-auth.js');
-  console.log('[Enterprise] Auth module loaded (✓ m365_sign_in / m365_sign_out / m365_auth_status)');
+  privateIntegrations = await import('./private-integrations.js');
+  await privateIntegrations.setup(app);
 } catch (e) {
   if (!e.message?.includes('Cannot find module') && !e.code?.includes('ERR_MODULE_NOT_FOUND')) {
-    console.warn('[Enterprise] enterprise-auth.js found but failed to load:', e.message);
+    console.warn('[Private] private-integrations.js failed to load:', e.message);
   }
-  // File absent — normal mode, no enterprise auth
 }
 // Gracefully degrade if run standalone (e.g. during testing).
 const _require = createRequire(import.meta.url);
@@ -1416,14 +1416,12 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
       }
     }
 
-    // Inject enterprise auth tools + context if the module is loaded
-    const enterpriseToolNames = new Set();
-    if (enterpriseAuth) {
-      for (const t of enterpriseAuth.TOOLS) enterpriseToolNames.add(t.function.name);
-      mcpTools = [...(mcpTools || []), ...enterpriseAuth.TOOLS];
-      if (allMessages[0]) {
-        allMessages[0] = { ...allMessages[0], content: allMessages[0].content + '\n\n' + enterpriseAuth.SYSTEM_CONTEXT };
-      }
+    // Inject private integration tools (enterprise auth, WorkIQ M365)
+    privateToolNames.clear();
+    if (privateIntegrations) {
+      const r = await privateIntegrations.injectTools(allMessages, mcpTools);
+      mcpTools = r.tools;
+      for (const n of r.names) privateToolNames.add(n);
     }
 
     // Load agent tools if an agent is active
@@ -1878,9 +1876,8 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
               chatLog('[chat] Browser tool via %s: %s', _faunaMCPClient ? 'FaunaMCP' : 'built-in', toolName);
               result = await browserClient.callTool(toolName, args);
               chatLog('[chat] Browser tool done: ' + toolName);
-            } else if (enterpriseAuth && enterpriseToolNames.has(toolName)) {
-              chatLog('[chat] Enterprise tool: ' + toolName);
-              result = await enterpriseAuth.handleTool(toolName, args);
+            } else if (privateIntegrations && privateToolNames.has(toolName)) {
+              result = await privateIntegrations.routeTool(toolName, args, chatLog);
             } else {
               figmaLog('🔧 ' + toolName + (toolName === 'figma_execute' ? ': ' + (args.code || '').slice(0, 80).replace(/\n/g,' ') + '…' : ''), 'cmd');
               result = await figmaMCP.callTool(toolName, args);
@@ -3995,33 +3992,7 @@ class FigmaMCPClient {
 
 const figmaMCP = new FigmaMCPClient();
 
-// ── Enterprise auth endpoints ─────────────────────────────────────────────
-// Only active when enterprise-auth.js is present (gitignored).
-
-app.get('/api/enterprise-auth/status', (req, res) => {
-  if (!enterpriseAuth) return res.json({ available: false });
-  res.json({ available: true, ...enterpriseAuth.getAuthStatus() });
-});
-
-app.post('/api/enterprise-auth/sign-in', async (req, res) => {
-  if (!enterpriseAuth) return res.status(404).json({ error: 'Enterprise auth not available' });
-  try {
-    const result = await enterpriseAuth.signIn();
-    res.json(result);
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-app.post('/api/enterprise-auth/sign-out', async (req, res) => {
-  if (!enterpriseAuth) return res.status(404).json({ error: 'Enterprise auth not available' });
-  try {
-    const result = await enterpriseAuth.signOut();
-    res.json(result);
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
+// ── Private integration endpoints registered in private-integrations.js ──────
 
 app.get('/api/figma-mcp/status', async (req, res) => {
   try {
@@ -6674,7 +6645,6 @@ app.post('/api/store/auth/register', express.json(), (req, res) => {
 app.get('/api/store/auth/me', (req, res) => {
   storeProxy(req, res, 'GET', '/auth/me');
 });
-
 // Developer dashboard — user's published agents
 app.get('/api/store/dashboard/agents', (req, res) => {
   storeProxy(req, res, 'GET', '/dashboard/agents');

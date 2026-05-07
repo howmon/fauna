@@ -681,18 +681,6 @@ Examples:
       </div>
     </div>
 
-    <div class="settings-section" id="ms-account-section" style="display:none">
-      <div class="settings-section-title">Account</div>
-      <div style="margin-bottom:10px">
-        <span id="ms-account-badge" class="auth-source-badge"><i class="ti ti-circle-dot"></i> Checking…</span>
-      </div>
-      <div id="ms-account-name" style="font-size:12px;color:var(--fau-text-dim);margin-bottom:10px;display:none"></div>
-      <div style="display:flex;gap:6px">
-        <button id="ms-signin-btn" class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="enterpriseSignIn()"><i class="ti ti-brand-windows"></i> Sign in</button>
-        <button id="ms-signout-btn" class="settings-row-btn danger" onclick="enterpriseSignOut()" style="display:none">Sign out</button>
-      </div>
-      <div class="settings-hint" style="margin-top:8px">Sign in to your work account</div>
-    </div>
   </div>
 
   <!-- ── Voice ──────────────────────────────────────────────────── -->
@@ -1733,5 +1721,7 @@ Examples:
 </div><!-- /help-panel -->
 
 <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/loader.js"></script>
+<!-- Private integrations loader — no-op if file absent -->
+<script>(function(){var s=document.createElement('script');s.src='/js/private-auth.js';s.onerror=function(){};document.body.appendChild(s);})();</script>
 </body>
 </html>

@@ -21,7 +21,8 @@ var storeState = {
   notifOpen: false,        // notification panel open
   reviewQueue: [],         // admin review queue
   reviewStatus: 'pending',  // current review filter
-  myPublishedSlugs: []      // slugs of user's published agents (for ownership check)
+  myPublishedSlugs: [],      // slugs of user's published agents (for ownership check)
+  enterpriseAuth: null       // populated by private-auth.js if present
 };
 
 var STORE_BASE = '/api/store'; // Proxy through our Express server
@@ -78,6 +79,7 @@ function openAgentStore() {
   searchStoreAgents();
   loadUnreadCount();
   refreshStoreAccount();
+  if (typeof checkStoreSSOSection === 'function') checkStoreSSOSection();
 }
 
 function closeAgentStore() {
@@ -137,6 +139,10 @@ function storeNavigate(view) {
   if (view === 'browse') searchStoreAgents();
   if (view === 'review') loadReviewQueue();
 }
+
+// No-op stubs — real implementations injected by /js/private-auth.js if present
+async function checkStoreSSOSection() {}
+async function storeLoginWithMicrosoft() {}
 
 // ── Browse view ──────────────────────────────────────────────────────────
 
@@ -411,6 +417,7 @@ function renderStoreAccount() {
       '<input class="builder-input" id="store-login-password" type="password" placeholder="Password">' +
       '<button class="builder-btn primary" onclick="storeLogin()"><i class="ti ti-login"></i> Sign In</button>' +
       '<div id="store-login-error" class="store-auth-error"></div>' +
+      (window._storeSSO ? window._storeSSO.renderLoginExtra() : '') +
     '</div>' +
     '<div id="store-register-form" class="store-auth-form" style="display:none">' +
       '<input class="builder-input" id="store-register-name" placeholder="Developer Name">' +
