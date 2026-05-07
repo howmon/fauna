@@ -1,5 +1,9 @@
 # Fauna — AI Desktop Assistant
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/howmon/fauna/main/assets/icon.png" alt="Fauna" width="128" height="128">
+</p>
+
 A cross-platform Electron app. Streaming AI with real shell execution, browser control, Figma integration, file editing, and a full agent system.
 
 **macOS** (Apple Silicon & Intel) · **Windows** (x64 & ARM64)
