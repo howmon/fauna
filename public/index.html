@@ -565,8 +565,8 @@ Examples:
         </select>
         <span style="font-size:11px;color:var(--fau-text-muted)" id="thinking-budget-hint">Extended thinking for complex problems requiring deep analysis.</span>
       </label>
-      <label class="settings-label" style="margin-top:10px">
-        <span>Maximum context turns</span>
+      <div class="settings-label" style="margin-top:10px">
+        <label for="max-turns-range">Maximum context turns</label>
         <div style="display:flex;align-items:center;gap:8px">
           <input type="range" id="max-turns-range" min="4" max="100" step="2" value="20"
             oninput="setMaxTurns(+this.value)"
@@ -574,7 +574,7 @@ Examples:
           <span id="max-turns-label" style="font-size:12px;color:var(--fau-text);min-width:32px;text-align:right">20</span>
         </div>
         <span style="font-size:11px;color:var(--fau-text-muted)">How many past messages to include in each request. Higher = more context, more cost.</span>
-      </label>
+      </div>
     </div>
 
     <div class="settings-section">

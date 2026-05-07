@@ -32,14 +32,6 @@ import { composeDesignPrompt, VISUAL_DIRECTIONS } from './design-prompts.js';
 // Loaded from private-integrations.js if present — never committed to repo.
 let privateIntegrations = null;
 const privateToolNames = new Set();
-try {
-  privateIntegrations = await import('./private-integrations.js');
-  await privateIntegrations.setup(app);
-} catch (e) {
-  if (!e.message?.includes('Cannot find module') && !e.code?.includes('ERR_MODULE_NOT_FOUND')) {
-    console.warn('[Private] private-integrations.js failed to load:', e.message);
-  }
-}
 // Gracefully degrade if run standalone (e.g. during testing).
 const _require = createRequire(import.meta.url);
 let systemPreferences, desktopCapturer, powerSaveBlocker;
@@ -132,6 +124,15 @@ app.use(express.urlencoded({ limit: '25mb', extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
 // Serve @xenova/transformers dist for the Whisper Web Worker
 app.use('/transformers', express.static(path.join(__dirname, 'node_modules', '@xenova', 'transformers', 'dist')));
+
+try {
+  privateIntegrations = await import('./private-integrations.js');
+  await privateIntegrations.setup(app);
+} catch (e) {
+  if (!e.message?.includes('Cannot find module') && !e.code?.includes('ERR_MODULE_NOT_FOUND')) {
+    console.warn('[Private] private-integrations.js failed to load:', e.message);
+  }
+}
 
 // ── Mobile LAN access: auth + CORS for non-localhost requests ─────────────
 app.use((req, res, next) => {
@@ -6451,6 +6452,15 @@ async function storeProxy(req, res, method, backendPath, body) {
     if (ct.includes('json')) {
       const data = await upstream.json();
       return res.status(status).json(data);
+    }
+    if (!ct.includes('zip') && !ct.includes('octet-stream')) {
+      const text = await upstream.text();
+      return res.status(status >= 400 ? status : 502).json({
+        error: 'Store backend returned non-JSON response',
+        status,
+        contentType: ct || 'unknown',
+        preview: text.slice(0, 160),
+      });
     }
     // Binary (zip download)
     const buf = Buffer.from(await upstream.arrayBuffer());
