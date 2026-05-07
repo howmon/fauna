@@ -5938,6 +5938,40 @@ app.post('/api/chat-summary', async (req, res) => {
   }
 });
 
+// Generate a short display title for a conversation.
+app.post('/api/conversation-title', async (req, res) => {
+  const { messages = [], model: reqModel } = req.body || {};
+  if (!Array.isArray(messages) || !messages.length) return res.status(400).json({ error: 'messages array required' });
+  try {
+    const _util = reqModel ? { client: getClientForModel(reqModel), model: reqModel } : getUtilityClient();
+    const { client: utilClient, model: utilModel } = _util;
+    const cleanMessages = messages.slice(-8).map(m => ({
+      role: m.role === 'assistant' ? 'assistant' : 'user',
+      content: typeof m.content === 'string'
+        ? m.content.slice(0, 1200)
+        : JSON.stringify(m.content || '').slice(0, 1200)
+    }));
+    const titleParams = {
+      model: utilModel,
+      messages: [
+        { role: 'system', content: 'Write a concise conversation title from the messages. Rules: 3-7 words, sentence case, no quotes, no punctuation at the end unless required, no markdown, no generic labels like New conversation.' },
+        ...cleanMessages,
+        { role: 'user', content: 'Return only the title.' }
+      ]
+    };
+    if (/^(o[1-9]|gpt-5)/.test(utilModel)) titleParams.max_completion_tokens = 40;
+    else titleParams.max_tokens = 40;
+    const response = await utilClient.chat.completions.create(titleParams);
+    let title = (response.choices?.[0]?.message?.content || '').trim();
+    title = title.replace(/^['"“”]+|['"“”]+$/g, '').replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+    title = title.replace(/[.!?]+$/g, '').slice(0, 80).trim();
+    if (!title) title = 'Conversation';
+    res.json({ title });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── Multi-agent composition planner ────────────────────────────────────────
 // Given a task and a list of agents, determine which agent handles which sub-task.
 app.post('/api/composition/plan', async (req, res) => {

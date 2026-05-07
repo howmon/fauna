@@ -269,13 +269,6 @@ async function sendMessage(opts) {
   };
   conv.messages.push(userMsg);
 
-  // Auto-title from first message
-  if (conv.messages.length === 1) {
-    conv.title = text.slice(0, 45) || 'Conversation';
-    document.getElementById('topbar-title').textContent = conv.title;
-    renderConvList();
-  }
-
   saveConversations();
   appendMessageDOM('user', content, userMsg.attachments, true);
   showMessages();
@@ -318,11 +311,6 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
   var userMsg = { role: 'user', content: content, images: pendingImages.length ? pendingImages : undefined };
   conv.messages.push(userMsg);
 
-  if (conv.messages.length === 1) {
-    conv.title = userMessage.slice(0, 45) || 'Conversation';
-    document.getElementById('topbar-title').textContent = conv.title;
-    renderConvList();
-  }
   saveConversations();
   appendMessageDOM('user', content, null, true);
   showMessages();
@@ -539,6 +527,7 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
   var aiSummaryMsg = { role: 'assistant', content: summary };
   conv.messages.push(aiSummaryMsg);
   saveConversations();
+  if (typeof maybeUpdateConversationTitle === 'function') maybeUpdateConversationTitle(conv);
 
   scrollBottom();
   if (typeof renderAgentChips === 'function') renderAgentChips();
@@ -749,6 +738,7 @@ async function streamResponse(conv) {
     conv._abortController = null;
     saveConversations();
     renderConvList(); // remove streaming spinner from sidebar
+    if (typeof maybeUpdateConversationTitle === 'function') maybeUpdateConversationTitle(conv);
 
     // Background summarization — trigger when conversation is getting long
     // so older messages can be dropped without losing task context

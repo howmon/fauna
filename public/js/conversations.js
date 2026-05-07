@@ -55,6 +55,77 @@ function getConv(id) {
   return state.conversations.find(c => c.id === id);
 }
 
+function normalizeConversationTitle(title) {
+  return String(title || '').replace(/\s+/g, ' ').trim().slice(0, 80) || 'Conversation';
+}
+
+function setConversationTitle(id, title, opts) {
+  opts = opts || {};
+  var conv = getConv(id);
+  if (!conv) return;
+  conv.title = normalizeConversationTitle(title);
+  if (opts.manual) {
+    conv.titleManual = true;
+    conv.titleSource = 'user';
+  } else {
+    conv.titleSource = 'ai';
+    conv.titleUpdatedAt = Date.now();
+  }
+  if (state.currentId === id) {
+    var titleEl = document.getElementById('topbar-title');
+    if (titleEl) {
+      titleEl.textContent = conv.title;
+      titleEl.title = conv.title;
+    }
+  }
+  saveConversations();
+  _flushConvToServer(id);
+  renderConvList();
+  if (document.getElementById('all-convs-page')?.style.display !== 'none') renderAllConvsPage();
+}
+
+function renameConversation(id, e) {
+  if (e) e.stopPropagation();
+  var conv = getConv(id || state.currentId);
+  if (!conv) return;
+  var next = prompt('Rename conversation', conv.title || 'Conversation');
+  if (next === null) return;
+  setConversationTitle(conv.id, next, { manual: true });
+}
+
+async function maybeUpdateConversationTitle(conv) {
+  if (!conv || conv.titleManual || conv._titleUpdating) return;
+  if (!conv.messages || conv.messages.length < 2) return;
+  var userMessages = conv.messages.filter(function(m) { return m.role === 'user' && !m._isAutoFeed && !m._isBrowserFeed; });
+  if (!userMessages.length) return;
+  var now = Date.now();
+  if (conv.titleUpdatedAt && now - conv.titleUpdatedAt < 45000 && conv.messages.length > 3) return;
+
+  conv._titleUpdating = true;
+  try {
+    var payloadMessages = conv.messages
+      .filter(function(m) { return (m.role === 'user' || m.role === 'assistant') && !m._compositionHandoff; })
+      .slice(-8)
+      .map(function(m) {
+        var content = m._displayText || m.content || '';
+        if (typeof content !== 'string') content = JSON.stringify(content || '');
+        return { role: m.role, content: content.slice(0, 1200) };
+      });
+    var r = await fetch('/api/conversation-title', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: payloadMessages, model: conv.model || state.model })
+    });
+    if (!r.ok) return;
+    var data = await r.json();
+    var title = normalizeConversationTitle(data.title);
+    if (title && title !== conv.title && !conv.titleManual) setConversationTitle(conv.id, title, { manual: false });
+  } catch (_) {
+  } finally {
+    conv._titleUpdating = false;
+  }
+}
+
 function newConversation() {
   var id = 'c' + Date.now();
   var conv = { id, title: 'New conversation', messages: [], model: state.model, systemPrompt: state.systemPrompt, createdAt: Date.now() };
@@ -136,7 +207,9 @@ function loadConversation(id) {
   }
   document.getElementById('sys-prompt-input').value = conv.systemPrompt || '';
   updateSysScopeHint();
-  document.getElementById('topbar-title').textContent = conv.title;
+  var topbarTitle = document.getElementById('topbar-title');
+  topbarTitle.textContent = conv.title;
+  topbarTitle.title = conv.title;
 
   // Switch browser pane to this conversation's tabs
   _showConvBrowserTabs(id);
@@ -254,7 +327,12 @@ function clearConversation() {
   if (!conv) return;
   conv.messages = [];
   conv.title = 'New conversation';
-  document.getElementById('topbar-title').textContent = conv.title;
+  conv.titleManual = false;
+  conv.titleSource = null;
+  conv.titleUpdatedAt = null;
+  var titleEl = document.getElementById('topbar-title');
+  titleEl.textContent = conv.title;
+  titleEl.title = conv.title;
   purgeConvDom(state.currentId);
   showConvDom(state.currentId);
   saveConversations();
@@ -296,7 +374,8 @@ function renderConvList() {
     d.className = 'conv-item' + (conv.id === state.currentId ? ' active' : '');
     d.onclick = () => loadConversation(conv.id);
     d.innerHTML = (conv._streaming ? '<i class="ti ti-loader-2 conv-streaming-icon"></i>' : '') +
-      '<span class="conv-label">' + escHtml(conv.title) + '</span>' +
+      '<span class="conv-label" title="' + escHtml(conv.title) + '">' + escHtml(conv.title) + '</span>' +
+      '<button class="conv-rename" onclick="renameConversation(\'' + conv.id + '\', event)" title="Rename"><i class="ti ti-pencil"></i></button>' +
       '<button class="conv-del" onclick="deleteConversation(\'' + conv.id + '\', event)"><i class="ti ti-trash"></i></button>';
     list.appendChild(d);
   });
@@ -325,7 +404,7 @@ function renderAllConvsPage() {
   var convs = state.conversations;
   if (filter) {
     var f = filter.toLowerCase();
-    convs = convs.filter(function(c) { return c.title.toLowerCase().includes(f); });
+    convs = convs.filter(function(c) { return String(c.title || 'Conversation').toLowerCase().includes(f); });
   }
 
   // If the page is already built, only update the list body
@@ -350,11 +429,13 @@ function renderAllConvsPage() {
   var items = '';
   for (var i = 0; i < convs.length; i++) {
     var c = convs[i];
+    var title = c.title || 'Conversation';
     var isActive = c.id === state.currentId;
     items += '<div class="all-convs-item' + (isActive ? ' active' : '') + '" onclick="closeAllConversations();loadConversation(\'' + c.id + '\')">'+
-      '<i class="ti ti-message"></i>' +
-      '<span class="all-convs-title">' + escHtml(c.title) + '</span>' +
+      '<i class="ti ti-message all-convs-icon"></i>' +
+      '<span class="all-convs-title" title="' + escHtml(title) + '">' + escHtml(title) + '</span>' +
       '<span class="all-convs-date">' + (c.createdAt ? new Date(c.createdAt).toLocaleDateString() : '') + '</span>' +
+      '<button class="all-convs-rename" onclick="event.stopPropagation();renameConversation(\'' + c.id + '\', event)" title="Rename"><i class="ti ti-pencil"></i></button>' +
       '<button class="all-convs-del" onclick="event.stopPropagation();deleteConversation(\'' + c.id + '\', event);renderAllConvsPage()"><i class="ti ti-trash"></i></button>' +
     '</div>';
   }
