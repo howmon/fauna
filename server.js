@@ -4616,12 +4616,23 @@ app.get('/api/custom-mcp-servers/:id/auth-stream', (req, res) => {
     return;
   }
 
+  // MSAL device code format:  "...open the page <url> and enter the code <CODE> to authenticate."
+  const DEVICE_CODE_RE = /open the page (https?:\/\/\S+?)\s+and enter the code\s+([A-Z0-9]+)/i;
+
   const onData = (stream) => (chunk) => {
     const text = chunk.toString();
-    // Split on newlines so each line is a separate event
     for (const line of text.split(/\r?\n/)) {
       const trimmed = line.trim();
-      if (trimmed) send(stream, trimmed);
+      if (!trimmed) continue;
+      // Detect MSAL device code line (stdout only)
+      if (stream === 'stdout') {
+        const m = DEVICE_CODE_RE.exec(trimmed);
+        if (m) {
+          send('deviceCode', { url: m[1], code: m[2] });
+          continue; // don't also emit raw stdout for this line
+        }
+      }
+      send(stream, trimmed);
     }
   };
 

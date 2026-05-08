@@ -455,8 +455,6 @@ var mcpMgr = (function () {
   function _startAuthStream(id) {
     var logEl = document.getElementById('mcp-auth-log');
     var hintEl = document.querySelector('.mcp-auth-modal-hint');
-    var urlPattern = /https?:\/\/[^\s]+/g;
-    var codePattern = /[A-Z0-9]{8,12}/g;
 
     var sse = new EventSource('/api/custom-mcp-servers/' + id + '/auth-stream');
     if (_authModal) _authModal.sse = sse;
@@ -465,7 +463,6 @@ var mcpMgr = (function () {
       if (!logEl) return;
       var line = document.createElement('div');
       line.className = 'mcp-auth-line' + (cls ? ' ' + cls : '');
-      // Linkify URLs
       line.innerHTML = _esc(text).replace(/https?:\/\/[^\s]+/g, function (url) {
         return '<a href="' + url + '" target="_blank" class="mcp-auth-url">' + url + '</a>';
       });
@@ -473,26 +470,56 @@ var mcpMgr = (function () {
       logEl.scrollTop = logEl.scrollHeight;
     }
 
+    function renderDeviceCard(url, code) {
+      if (!logEl) return;
+      // Auto-open the browser (goes through Electron's setWindowOpenHandler → shell.openExternal)
+      window.open(url, '_blank');
+
+      logEl.innerHTML =
+        '<div class="mcp-device-card">' +
+          '<div class="mcp-device-icon"><i class="ti ti-brand-windows"></i></div>' +
+          '<div class="mcp-device-title">Sign in to Microsoft 365</div>' +
+          '<div class="mcp-device-sub">Your browser opened. Go to:</div>' +
+          '<a href="' + _esc(url) + '" target="_blank" class="mcp-device-url">' + _esc(url) + '</a>' +
+          '<div class="mcp-device-sub" style="margin-top:12px">Enter this code when prompted:</div>' +
+          '<div class="mcp-device-code-row">' +
+            '<span class="mcp-device-code" id="mcp-device-code-val">' + _esc(code) + '</span>' +
+            '<button class="mcp-device-copy-btn" onclick="' +
+              'navigator.clipboard.writeText(\'' + _esc(code) + '\').then(function(){' +
+                'var b=document.getElementById(\'mcp-device-copy-lbl\');if(b){b.textContent=\'Copied!\';setTimeout(function(){b.textContent=\'Copy\'},1500);}' +
+              '})' +
+            '"><span id="mcp-device-copy-lbl">Copy</span></button>' +
+          '</div>' +
+          '<div class="mcp-device-waiting"><i class="ti ti-loader-2 spin"></i> Waiting for sign-in&hellip;</div>' +
+        '</div>';
+
+      if (hintEl) hintEl.textContent = 'Complete sign-in in your browser. This window closes automatically when done.';
+    }
+
     sse.onmessage = function (evt) {
       var msg;
       try { msg = JSON.parse(evt.data); } catch (_) { return; }
 
-      if (msg.type === 'start') {
+      if (msg.type === 'deviceCode') {
+        renderDeviceCard(msg.data.url, msg.data.code);
+      } else if (msg.type === 'start') {
         appendLine(msg.data, 'system');
       } else if (msg.type === 'stdout' || msg.type === 'stderr') {
         appendLine(msg.data, msg.type === 'stderr' ? 'err' : '');
-        // Once we see a URL, update hint
-        if (urlPattern.test(msg.data) && hintEl) {
-          hintEl.textContent = 'Open the URL above in your browser and complete sign-in. This window will close automatically when done.';
-        }
       } else if (msg.type === 'error') {
         appendLine('Error: ' + msg.data, 'err');
       } else if (msg.type === 'exit') {
         var code = msg.data;
-        appendLine(code === 0 ? '✓ Authentication complete.' : 'Process exited with code ' + code + '.', code === 0 ? 'ok' : 'err');
-        sse.close();
         if (code === 0) {
+          // Replace spinner with success
+          var waitEl = logEl && logEl.querySelector('.mcp-device-waiting');
+          if (waitEl) waitEl.innerHTML = '<span style="color:var(--c-ok,#4ade80)"><i class="ti ti-circle-check"></i> Signed in successfully.</span>';
+          else appendLine('✓ Authentication complete.', 'ok');
+          sse.close();
           setTimeout(function () { closeAuthModal(); }, 1800);
+        } else {
+          appendLine('Process exited with code ' + code + '.', 'err');
+          sse.close();
         }
       }
     };
