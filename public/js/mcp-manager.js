@@ -528,6 +528,19 @@ var mcpMgr = (function () {
           if (waitEl) waitEl.innerHTML = '<span style="color:var(--c-ok,#4ade80)"><i class="ti ti-circle-check"></i> Signed in successfully.</span>';
           else appendLine('✓ Authentication complete.', 'ok');
           sse.close();
+          // Restart the MCP server so it picks up the freshly-saved token.
+          // The process that was running before auth has a stale (empty) token
+          // cache in memory — stopping and starting gives it a clean read from
+          // the keychain/file where the --login process just saved the token.
+          var authId = id;
+          _api('POST', '/api/custom-mcp-servers/' + authId + '/stop')
+            .catch(function () {})
+            .then(function () {
+              return _api('POST', '/api/custom-mcp-servers/' + authId + '/start');
+            })
+            .catch(function () {})
+            .then(function () { loadServers(); })
+            .catch(function () {});
           setTimeout(function () { closeAuthModal(); }, 1800);
         } else {
           appendLine('Process exited with code ' + code + '.', 'err');
