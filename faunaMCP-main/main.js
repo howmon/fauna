@@ -391,6 +391,7 @@ function startRelay(which, _retryCount = 0) {
 
   const relayPath = which === 'browser' ? getBrowserRelayPath() : getFigmaRelayPath();
   addLog(which, `Starting ${which} relay…`, 'info');
+  r.portInUse = false;
 
   r.proc = spawn(NODE_BIN, [relayPath], {
     env: cliEnv(),
@@ -404,7 +405,10 @@ function startRelay(which, _retryCount = 0) {
   r.proc.stderr.on('data', chunk => {
     const text = chunk.toString().trim();
     for (const line of text.split('\n')) {
-      if (line.trim()) addLog(which, line, /error/i.test(line) ? 'err' : 'ok');
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      if (/EADDRINUSE|already in use|port \d+ is already in use/i.test(trimmed)) r.portInUse = true;
+      addLog(which, trimmed, /error|EADDRINUSE|already in use/i.test(trimmed) ? 'err' : 'ok');
     }
   });
 
@@ -419,6 +423,11 @@ function startRelay(which, _retryCount = 0) {
     r.stoppedAt = Date.now();
     setRunning(which, false);
     addLog(which, `Relay stopped (code ${code ?? signal})`, code === 0 ? 'info' : 'err');
+    if (r.portInUse) {
+      r.enabled = false;
+      addLog(which, 'Port is already occupied — not retrying this relay automatically.', 'err');
+      return;
+    }
     // Only auto-retry if enabled (i.e. not manually stopped) and it died too fast
     if (r.enabled && uptime < 3000 && _retryCount < 1) {
       addLog(which, 'Died too quickly — retrying in 1.5 s…', 'info');
@@ -451,7 +460,7 @@ function createPopup() {
     frame: false,
     resizable: false,
     alwaysOnTop: true,
-    skipTaskbar: true,
+    skipTaskbar: false,
     roundedCorners: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -599,8 +608,6 @@ ipcMain.handle('install-update',    ()  => installUpdate());
 ipcMain.handle('open-repo',         ()  => shell.openExternal(REPO_URL));
 
 // ── App lifecycle ─────────────────────────────────────────────────────────
-if (process.platform === 'darwin') app.dock.hide();
-
 app.whenReady().then(() => {
   tray = new Tray(getTrayIcon());
   updateTrayMenu();
@@ -608,6 +615,7 @@ app.whenReady().then(() => {
   createPopup();
   startRelay('browser');
   startRelay('figma');
+  showPopup();
   setTimeout(() => checkForUpdates(false), 2500);
 });
 

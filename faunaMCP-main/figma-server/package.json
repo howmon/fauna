@@ -1,0 +1,17 @@
+{
+  "name": "fauna-figma-mcp-server",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "MCP server that bridges the FaunaMCP Figma plugin to MCP clients",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.9.0",
+    "openai": "^4.67.0",
+    "ws": "^8.16.0",
+    "zod": "^3.22.4"
+  }
+}

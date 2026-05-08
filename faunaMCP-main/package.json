@@ -1,0 +1,68 @@
+{
+  "name": "faunamcp",
+  "version": "1.0.0",
+  "author": "Solomon Abey",
+  "description": "FaunaMCP — Unified MCP relay tray utility. Bridges the Fauna browser extension and Figma plugin to any MCP-capable AI tool.",
+  "main": "main.js",
+  "scripts": {
+    "postinstall": "npm run install:relays",
+    "install:relays": "npm --prefix browser-server install && npm --prefix figma-server install",
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.fauna.mcp",
+    "productName": "FaunaMCP",
+    "copyright": "Copyright © 2026 Solomon Abey",
+    "publish": null,
+    "files": [
+      "main.js",
+      "preload.js",
+      "popup.html",
+      "popup.js"
+    ],
+    "extraResources": [
+      { "from": "assets/icon.png",  "to": "icon.png"  },
+      { "from": "assets/icon.icns", "to": "icon.icns" },
+      { "from": "browser-server",             "to": "browser-server",             "filter": ["**/*", "!node_modules/**"] },
+      { "from": "browser-server/node_modules","to": "browser-server/node_modules","filter": ["**/*"] },
+      { "from": "extension",                  "to": "extension",                  "filter": ["**/*"] },
+      { "from": "figma-server",               "to": "figma-server",               "filter": ["**/*", "!node_modules/**"] },
+      { "from": "figma-server/node_modules",  "to": "figma-server/node_modules",  "filter": ["**/*"] },
+      { "from": "figma-plugin",               "to": "figma-plugin",               "filter": ["**/*"] }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/icon.icns",
+      "identity": "-",
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] }
+      ]
+    },
+    "win": {
+      "icon": "assets/icon.png",
+      "target": [
+        { "target": "nsis", "arch": ["x64", "arm64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "createDesktopShortcut": false,
+      "createStartMenuShortcut": true
+    },
+    "dmg": {
+      "title": "FaunaMCP",
+      "contents": [
+        { "x": 130, "y": 220 },
+        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+      ]
+    },
+    "electronVersion": "41.0.3"
+  },
+  "devDependencies": {
+    "electron": "^41.0.3",
+    "electron-builder": "^26.8.1"
+  }
+}
