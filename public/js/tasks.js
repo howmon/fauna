@@ -1283,21 +1283,26 @@ function _renderDetailKindRows() {
 // ── Create / Update ──────────────────────────────────────────────────────
 
 async function submitAutomation() {
-  if (!_draft) return;
+  if (!_draft) return false;
   var title = _draft.title.trim();
-  if (!title) { showToast('Name is required'); return; }
+  if (!title) { showToast('Name is required'); return false; }
 
   var payload = _draftToPayload();
   // Sync agents from picker
   payload.agents = _getSelectedAgents();
+  var wasNew = !_draft.id;
 
   try {
     if (_draft.id) {
-      await fetch('/api/tasks/' + _draft.id, {
+      var updateR = await fetch('/api/tasks/' + _draft.id, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+      if (!updateR.ok) {
+        var updateErr = await updateR.text();
+        throw new Error('Server error ' + updateR.status + ': ' + updateErr);
+      }
     } else {
       var r = await fetch('/api/tasks', {
         method: 'POST',
@@ -1315,7 +1320,7 @@ async function submitAutomation() {
     }
     _draftDirty = false;
     _setDraftStatus('saved');
-    showToast('Automation created');
+    showToast(wasNew ? 'Automation created' : 'Automation saved');
     await fetchTasks();
     // Select the newly created automation in the list
     var created2 = _tasksCache.find(function(t) { return t.id === _draft.id; });
@@ -1325,9 +1330,11 @@ async function submitAutomation() {
       _renderList();
       _renderDetail();
     }
+    return true;
   } catch (e) {
     showToast('Failed to save: ' + e.message);
     _setDraftStatus('error');
+    return false;
   }
 }
 

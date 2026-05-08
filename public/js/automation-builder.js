@@ -4,7 +4,7 @@
 // Public API:
 //   openPipelineBuilder(taskId)   — open overlay for given task (or null = new)
 //   closePipelineBuilder()        — close overlay
-//   savePipelineToTask(taskId)    — PUT pipeline into task
+//   savePipelineToTask(taskId)    — save pipeline into task or create the current draft
 
 var _pbCanvas   = null;   // canvas controller
 var _pbTaskId   = null;   // task being edited
@@ -310,11 +310,18 @@ async function savePipelineToTask(taskId) {
       if (typeof showToast === 'function') showToast('Pipeline saved');
       if (typeof fetchTasks === 'function') fetchTasks();
     } else {
-      // If no taskId, store in draft (called from new automation form)
+      // If no taskId, this is the builder for a new/generated automation draft.
       if (typeof _draft !== 'undefined' && _draft) {
         _draft.pipeline = pipeline;
-        if (typeof _renderDetailKindRows === 'function') _renderDetailKindRows();
-        if (typeof showToast === 'function') showToast('Pipeline saved to draft');
+        _draft.kind = 'pipeline';
+        if (!_draft.title || !_draft.title.trim()) _draft.title = 'Generated automation';
+        if (typeof submitAutomation === 'function') {
+          var saved = await submitAutomation();
+          if (!saved) return;
+        } else {
+          if (typeof _renderDetailKindRows === 'function') _renderDetailKindRows();
+          if (typeof showToast === 'function') showToast('Pipeline saved to draft');
+        }
       }
     }
     _pbDirty = false;
