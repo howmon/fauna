@@ -291,7 +291,7 @@ function bundledBin(name) {
   const moduleRoot = path.dirname(new URL(import.meta.url).pathname);
   const cwdRoot    = process.cwd();
   const candidates = [
-    // Unpacked asar path (production build)
+    // Unpacked asar path (production build) — .bin symlinks if present
     path.join(moduleRoot, '..', 'app.asar.unpacked', 'node_modules', '.bin', name),
     // Dev / non-packed: relative to server.js
     path.join(moduleRoot, 'node_modules', '.bin', name),
@@ -301,7 +301,29 @@ function bundledBin(name) {
   for (const c of candidates) {
     try { fs.accessSync(c, fs.constants.X_OK); return c; } catch (_) {}
   }
-  // Fallback: hope it's on PATH
+  // electron-builder does NOT copy .bin symlinks into asar.unpacked.
+  // Scan the (small) asar.unpacked/node_modules for any package whose
+  // package.json "bin" field exports `name`, then return its real path.
+  const unpackedMods = path.join(moduleRoot, '..', 'app.asar.unpacked', 'node_modules');
+  try {
+    for (const entry of fs.readdirSync(unpackedMods)) {
+      const pkgDirs = entry.startsWith('@')
+        ? (() => { try { return fs.readdirSync(path.join(unpackedMods, entry)).map(s => path.join(unpackedMods, entry, s)); } catch (_) { return []; } })()
+        : [path.join(unpackedMods, entry)];
+      for (const pkgDir of pkgDirs) {
+        try {
+          const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
+          const raw = pkg.bin || {};
+          const binMap = typeof raw === 'string' ? { [pkg.name.split('/').pop()]: raw } : raw;
+          if (binMap[name]) {
+            const target = path.resolve(pkgDir, binMap[name]);
+            fs.accessSync(target, fs.constants.F_OK);
+            return target;
+          }
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
   return name;
 }
 
