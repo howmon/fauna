@@ -472,26 +472,38 @@ var mcpMgr = (function () {
 
     function renderDeviceCard(url, code) {
       if (!logEl) return;
-      // Auto-open the browser (goes through Electron's setWindowOpenHandler → shell.openExternal)
-      window.open(url, '_blank');
+
+      // Open browser via server-side API (avoids Electron window.open edge cases)
+      fetch('/api/open-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url })
+      }).catch(function () {});
 
       logEl.innerHTML =
         '<div class="mcp-device-card">' +
           '<div class="mcp-device-icon"><i class="ti ti-brand-windows"></i></div>' +
           '<div class="mcp-device-title">Sign in to Microsoft 365</div>' +
           '<div class="mcp-device-sub">Your browser opened. Go to:</div>' +
-          '<a href="' + _esc(url) + '" target="_blank" class="mcp-device-url">' + _esc(url) + '</a>' +
+          '<a href="' + _attr(url) + '" target="_blank" class="mcp-device-url">' + _esc(url) + '</a>' +
           '<div class="mcp-device-sub" style="margin-top:12px">Enter this code when prompted:</div>' +
           '<div class="mcp-device-code-row">' +
-            '<span class="mcp-device-code" id="mcp-device-code-val">' + _esc(code) + '</span>' +
-            '<button class="mcp-device-copy-btn" onclick="' +
-              'navigator.clipboard.writeText(\'' + _esc(code) + '\').then(function(){' +
-                'var b=document.getElementById(\'mcp-device-copy-lbl\');if(b){b.textContent=\'Copied!\';setTimeout(function(){b.textContent=\'Copy\'},1500);}' +
-              '})' +
-            '"><span id="mcp-device-copy-lbl">Copy</span></button>' +
+            '<span class="mcp-device-code">' + _esc(code) + '</span>' +
+            '<button class="mcp-device-copy-btn" id="mcp-copy-btn">Copy</button>' +
           '</div>' +
           '<div class="mcp-device-waiting"><i class="ti ti-loader-2 spin"></i> Waiting for sign-in&hellip;</div>' +
         '</div>';
+
+      // Attach copy handler cleanly (no inline JS)
+      var copyBtn = document.getElementById('mcp-copy-btn');
+      if (copyBtn) {
+        copyBtn.addEventListener('click', function () {
+          navigator.clipboard.writeText(code).then(function () {
+            copyBtn.textContent = 'Copied!';
+            setTimeout(function () { copyBtn.textContent = 'Copy'; }, 1500);
+          }).catch(function () {});
+        });
+      }
 
       if (hintEl) hintEl.textContent = 'Complete sign-in in your browser. This window closes automatically when done.';
     }

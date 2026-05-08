@@ -4495,6 +4495,22 @@ app.get('/api/bundled-bin/:name', (req, res) => {
   res.json({ path: bundledBin(safe) });
 });
 
+// POST open a URL in the system browser (server runs in Electron main process)
+app.post('/api/open-url', express.json(), (req, res) => {
+  const url = req.body && req.body.url;
+  if (!url || !/^https?:\/\//.test(url)) return res.status(400).json({ error: 'invalid url' });
+  const opener = process.platform === 'win32' ? 'start' :
+                 process.platform === 'darwin' ? 'open' : 'xdg-open';
+  const args   = process.platform === 'win32' ? ['""', url] : [url];
+  const shell  = process.platform === 'win32';
+  try {
+    spawn(opener, args, { detached: true, stdio: 'ignore', shell }).unref();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET all custom MCP servers (with live status)
 app.get('/api/custom-mcp-servers', (req, res) => {
   const servers = readCustomMcpServers();
