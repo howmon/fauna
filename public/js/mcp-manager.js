@@ -101,7 +101,7 @@ var mcpMgr = (function () {
           '<div class="mcp-featured-grid">' +
           notAdded.map(function (p) {
             return (
-              '<div class="mcp-featured-card" onclick="mcpMgr.applyPreset(' + JSON.stringify(JSON.stringify(p)) + ')">' +
+              '<div class="mcp-featured-card" onclick="mcpMgr.applyPreset(\'' + p.id + '\')">' +
                 '<i class="ti ' + p.icon + ' mcp-featured-icon"></i>' +
                 '<div class="mcp-featured-name">' + _esc(p.name) + '</div>' +
                 '<div class="mcp-featured-desc">' + _esc(p.description) + '</div>' +
@@ -362,9 +362,9 @@ var mcpMgr = (function () {
 
   // ── Featured preset ───────────────────────────────────────────────────────
 
-  function applyPreset(presetJson) {
-    var preset;
-    try { preset = JSON.parse(presetJson); } catch (_) { return; }
+  function applyPreset(presetId) {
+    var preset = FEATURED_PRESETS.find(function (p) { return p.id === presetId; });
+    if (!preset) return;
     _editingId = null;
     _showForm = true;
     _transport = preset.transport || 'http';
