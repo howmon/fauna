@@ -21,8 +21,8 @@ var mcpMgr = (function () {
       icon: 'ti-brand-office',
       description: 'Outlook, Calendar, OneDrive, Teams, SharePoint & more',
       transport: 'stdio',
-      command: 'npx',
-      args: ['-y', '@softeria/ms-365-mcp-server', '--discovery'],
+      bundledBin: 'ms-365-mcp-server',
+      args: ['--discovery'],
     },
     {
       id: 'preset-m365-work',
@@ -30,8 +30,8 @@ var mcpMgr = (function () {
       icon: 'ti-brand-teams',
       description: 'Adds Teams, SharePoint, shared mailboxes & org tools',
       transport: 'stdio',
-      command: 'npx',
-      args: ['-y', '@softeria/ms-365-mcp-server', '--org-mode', '--discovery'],
+      bundledBin: 'ms-365-mcp-server',
+      args: ['--org-mode', '--discovery'],
     },
     {
       id: 'preset-github',
@@ -381,14 +381,27 @@ var mcpMgr = (function () {
     document.getElementById('mcp-list-panel').style.display = 'none';
     _updateTransportTabs();
 
-    // Pre-fill fields
+    // Pre-fill name immediately
     var nameEl = document.getElementById('mcp-f-name');
     if (nameEl) nameEl.value = preset.name || '';
 
     if (_transport === 'stdio') {
-      var cmdEl = document.getElementById('mcp-f-cmd');
-      if (cmdEl) cmdEl.value = preset.command || '';
-      // Args already injected via _buildForm above
+      if (preset.bundledBin) {
+        // Resolve the bundled binary path from the server, fall back to name
+        fetch('/api/bundled-bin/' + encodeURIComponent(preset.bundledBin))
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            var cmdEl = document.getElementById('mcp-f-cmd');
+            if (cmdEl) cmdEl.value = data.path || preset.bundledBin;
+          })
+          .catch(function () {
+            var cmdEl = document.getElementById('mcp-f-cmd');
+            if (cmdEl) cmdEl.value = preset.bundledBin;
+          });
+      } else {
+        var cmdEl = document.getElementById('mcp-f-cmd');
+        if (cmdEl) cmdEl.value = preset.command || '';
+      }
     } else {
       var urlEl = document.getElementById('mcp-f-url');
       if (urlEl) urlEl.value = preset.url || '';

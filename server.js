@@ -282,6 +282,26 @@ const CONFIG_DIR   = path.join(os.homedir(), '.config', 'fauna');
 const CONFIG_FILE  = path.join(CONFIG_DIR, 'config.json');
 const RECOVERY_DIR = path.join(os.homedir(), '.fauna-recovery');
 
+// ── Bundled binary resolver ───────────────────────────────────────────────
+// Returns the absolute path to a bundled node_modules/.bin binary.
+// In packaged Electron builds the app root is one level above __dirname
+// (which points inside the asar). asarUnpack extracts the package to
+// app.asar.unpacked/node_modules, so we probe that first.
+function bundledBin(name) {
+  const appRoot = path.dirname(new URL(import.meta.url).pathname);
+  const candidates = [
+    // Unpacked asar path (production build)
+    path.join(appRoot, '..', 'app.asar.unpacked', 'node_modules', '.bin', name),
+    // Normal dev / non-packed path
+    path.join(appRoot, 'node_modules', '.bin', name),
+  ];
+  for (const c of candidates) {
+    try { fs.accessSync(c, fs.constants.X_OK); return c; } catch (_) {}
+  }
+  // Fallback: hope it's on PATH
+  return name;
+}
+
 function readSavedConfig() {
   try { return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); }
   catch (_) { return {}; }
@@ -4448,6 +4468,12 @@ function stopCustomMcpServer(id) {
   _customMcpProcesses.delete(id);
   return { ok: true, status: 'stopped' };
 }
+
+// GET resolve a bundled binary path (used by UI presets)
+app.get('/api/bundled-bin/:name', (req, res) => {
+  const safe = req.params.name.replace(/[^a-zA-Z0-9@/._-]/g, '');
+  res.json({ path: bundledBin(safe) });
+});
 
 // GET all custom MCP servers (with live status)
 app.get('/api/custom-mcp-servers', (req, res) => {
