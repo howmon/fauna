@@ -997,6 +997,62 @@ function _acSetModel(id) {
 
 // ── NL → Pipeline generation ────────────────────────────────────────────
 
+function _acParsePipelineJson(raw) {
+  raw = String(raw || '').trim();
+  var candidates = [];
+
+  var fenceRe = /```(?:json)?\s*([\s\S]*?)```/gi;
+  var match;
+  while ((match = fenceRe.exec(raw))) candidates.push(match[1].trim());
+  candidates.push(raw);
+
+  function addBalancedObjects(text) {
+    var start = -1;
+    var depth = 0;
+    var inString = false;
+    var escape = false;
+    for (var i = 0; i < text.length; i++) {
+      var ch = text[i];
+      if (inString) {
+        if (escape) escape = false;
+        else if (ch === '\\') escape = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') { inString = true; continue; }
+      if (ch === '{') {
+        if (depth === 0) start = i;
+        depth++;
+      } else if (ch === '}') {
+        depth--;
+        if (depth === 0 && start >= 0) {
+          candidates.push(text.slice(start, i + 1));
+          start = -1;
+        }
+      }
+    }
+  }
+
+  addBalancedObjects(raw);
+  candidates.slice().forEach(addBalancedObjects);
+
+  var seen = new Set();
+  for (var j = 0; j < candidates.length; j++) {
+    var candidate = candidates[j];
+    if (!candidate || seen.has(candidate)) continue;
+    seen.add(candidate);
+    try {
+      var parsed = JSON.parse(candidate);
+      if (parsed && Array.isArray(parsed.nodes)) {
+        if (!Array.isArray(parsed.edges)) parsed.edges = [];
+        return parsed;
+      }
+    } catch (_) {}
+  }
+
+  throw new Error('Model did not return a valid pipeline JSON object. Preview: ' + raw.slice(0, 160));
+}
+
 async function _acGeneratePipeline() {
   if (!_draft) return;
   var desc = (_draft.description || '').trim();
@@ -1028,10 +1084,11 @@ async function _acGeneratePipeline() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: desc },
-        ],
+        systemPrompt: systemPrompt,
+        messages: [{ role: 'user', content: desc }],
+        clientContext: 'cli',
+        thinkingBudget: 'off',
+        maxContextTurns: 4,
       }),
     });
 
@@ -1058,15 +1115,7 @@ async function _acGeneratePipeline() {
       return text;
     })(r);
 
-    // Strip optional ```json fences
-    var match = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (match) raw = match[1];
-    // Find first { ... } block in case model added preamble text
-    var jsonStart = raw.indexOf('{');
-    var jsonEnd   = raw.lastIndexOf('}');
-    if (jsonStart >= 0 && jsonEnd > jsonStart) raw = raw.slice(jsonStart, jsonEnd + 1);
-    var pipeline = JSON.parse(raw.trim());
-    if (!pipeline.nodes || !Array.isArray(pipeline.nodes)) throw new Error('No nodes array');
+    var pipeline = _acParsePipelineJson(raw);
 
     _draft.pipeline = pipeline;
     _draftDirty = true;
