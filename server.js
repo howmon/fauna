@@ -3307,7 +3307,8 @@ app.post('/api/browse', async (req, res) => {
 
 import { spawn } from 'child_process';
 
-const FIGMA_WS_URL     = 'ws://localhost:3335';
+const FIGMA_WS_PORT    = 3335;
+const FIGMA_WS_URL     = `ws://localhost:${FIGMA_WS_PORT}`;
 const FIGMA_RULES_FILE = path.join(CONFIG_DIR, 'figma-rules.json');
 // ── MCP server process management ────────────────────────────────────────
 
@@ -3406,6 +3407,7 @@ function startMcpServer() {
     // Auto-reconnect WS after brief delay (process may restart)
     figmaState.connected = false;
     figmaState.fileInfo  = null;
+    if (figmaState.relaySource === 'bundled') figmaState.relaySource = null;
   });
 
   mcpProcess.on('error', err => {
@@ -3441,7 +3443,11 @@ app.get('/api/figma/mcp-status', (req, res) => {
   });
 });
 
-app.post('/api/figma/mcp-start', (req, res) => {
+app.post('/api/figma/mcp-start', async (req, res) => {
+  if (!isMcpRunning() && await _probeTcpPort(FIGMA_WS_PORT, 500)) {
+    figmaConnect();
+    return res.json({ ok: true, external: true, message: 'Using external FaunaMCP Figma relay on port ' + FIGMA_WS_PORT });
+  }
   const result = startMcpServer();
   res.json(result);
 });
@@ -3459,7 +3465,7 @@ app.get('/api/figma/mcp-logs', (req, res) => {
 // ── WS bridge fields ──────────────────────────────────────────────────────
 
 let figmaWs      = null;
-let figmaState   = { connected: false, fileInfo: null, activeSystem: null, pendingReconnect: null };
+let figmaState   = { connected: false, fileInfo: null, activeSystem: null, pendingReconnect: null, relaySource: null };
 
 // ── Browser Extension WebSocket server ───────────────────────────────────
 // The extension connects to ws://localhost:3737/ext. The server acts as the
@@ -3653,8 +3659,9 @@ function figmaConnect() {
     figmaWs.on('open', () => {
       figmaState.connected = true;
       figmaState.pendingReconnect = null;
+      figmaState.relaySource = isMcpRunning() ? 'bundled' : 'external';
       figmaWs.send(JSON.stringify({ type: 'client-hello', clientName: 'Fauna App' }));
-      console.log('[Figma] Controller connected to relay');
+      console.log('[Figma] Controller connected to ' + figmaState.relaySource + ' relay');
       if (typeof process._refreshCliPrompt === 'function') process._refreshCliPrompt();
     });
 
@@ -3677,6 +3684,7 @@ function figmaConnect() {
     figmaWs.on('close', () => {
       figmaState.connected = false;
       figmaState.fileInfo  = null;
+      figmaState.relaySource = null;
       // Immediately reject all in-flight requests so they don't hang for 30 s
       for (const [id, { reject, timer }] of figmaPending) {
         clearTimeout(timer);
@@ -4785,9 +4793,16 @@ app.get('/api/custom-mcp-servers/:id/auth-stream', (req, res) => {
 // Pre-warm node resolver so it never blocks during a live request
 setTimeout(() => { findSystemNode(); }, 500);
 
-setTimeout(() => {
-  if (mcpAutoStart) startMcpServer();
-  else figmaConnect();
+setTimeout(async () => {
+  const externalFigmaRelay = await _probeTcpPort(FIGMA_WS_PORT, 500);
+  if (externalFigmaRelay) {
+    console.log('[Figma] External relay detected on port ' + FIGMA_WS_PORT + ' — using it instead of bundled relay');
+    figmaConnect();
+  } else if (mcpAutoStart) {
+    startMcpServer();
+  } else {
+    figmaConnect();
+  }
 }, 500);  // slight delay so the main server is fully up first
 
 function figmaSend(command, timeoutMs = 30000) {
@@ -5125,10 +5140,13 @@ app.post('/api/mobile/app-install', (req, res) => {
 
 // ── Figma API endpoints ───────────────────────────────────────────────────
 
-app.get('/api/figma/status', (req, res) => {
+app.get('/api/figma/status', async (req, res) => {
   const figmaConnected = figmaState.connected && !!figmaState.fileInfo;
+  const externalRelayAvailable = !isMcpRunning() && await _probeTcpPort(FIGMA_WS_PORT, 300);
   res.json({
     relayConnected: figmaState.connected,
+    relaySource:    figmaState.relaySource,
+    externalRelayAvailable,
     figmaConnected,
     fileInfo:      figmaState.fileInfo,
     activeSystem:  figmaState.activeSystem,
@@ -9298,11 +9316,14 @@ async function _installFaunaMCP({ installApp = true } = {}) {
   }
 }
 
-app.get('/api/faunamcp/status', (_req, res) => {
+app.get('/api/faunamcp/status', async (_req, res) => {
+  const figmaRelayAvailable = !isMcpRunning() && await _probeTcpPort(FIGMA_WS_PORT, 300);
   res.json({
     connected: !!_faunaMCPClient,
     initialized: _faunaMCPClient?._initialized ?? false,
     url: _faunaMCPClient?._url ?? null,
+    figmaRelayAvailable,
+    figmaRelayUrl: figmaRelayAvailable ? FIGMA_WS_URL : null,
     repoUrl: FAUNAMCP_REPO_URL,
     downloadUrl: FAUNAMCP_DOWNLOAD_URL,
     releasesUrl: FAUNAMCP_RELEASES_URL,

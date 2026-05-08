@@ -1065,13 +1065,15 @@ Examples:
     var label = document.getElementById('faunamcp-settings-label');
     if (!dot || !label) return;
     fetch('/api/faunamcp/status').then(function(r){ return r.json(); }).then(function(d) {
-      var connected = d.connected;
+      var connected = d.connected || d.figmaRelayAvailable;
       dot.style.background = connected ? '#10b981' : '#555';
       dot.style.boxShadow  = connected ? '0 0 5px #10b98166' : 'none';
       label.style.color    = connected ? '#10b981' : 'var(--fau-text-muted)';
-      if (connected) {
+      if (d.connected) {
         var toolTxt = d.toolCount ? ' · ' + d.toolCount + ' tools' : '';
         label.textContent = 'Connected' + toolTxt + ' — browser & Figma tools routed via FaunaMCP';
+      } else if (d.figmaRelayAvailable) {
+        label.textContent = 'Figma relay detected — Figma tools can use FaunaMCP on port 3335';
       } else {
         var installHint = d.install && d.install.appInstalled ? ' installed' : ' not installed';
         label.textContent = 'Not running — FaunaMCP' + installHint + '; build/install it to share browser & Figma tools';

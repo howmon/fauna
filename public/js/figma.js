@@ -1,7 +1,7 @@
 var figmaRulesOpen   = false;
 var figmaSectionOpen = false;
 var figmaLogsOpen    = false;
-var figmaStatus      = { relayConnected: false, figmaConnected: false, fileInfo: null, activeSystem: null, mcpRunning: false };
+var figmaStatus      = { relayConnected: false, relaySource: null, externalRelayAvailable: false, figmaConnected: false, fileInfo: null, activeSystem: null, mcpRunning: false };
 var figmaRules       = [];
 var figmaLogsLastTs  = 0;
 var figmaMCPStatus        = { connected: false, tools: [] };
@@ -83,11 +83,17 @@ async function toggleFigmaMCP() {
   updateFigmaMCPBadge();
 
   if (state.figmaMCPEnabled) {
+    var enabledMsg = '✦ Figma MCP enabled';
     // Only start Fauna's own local relay if FaunaMCP relay is not already connected
     if (!figmaStatus.relayConnected && !figmaStatus.mcpRunning) {
-      fetch('/api/figma/mcp-start', { method: 'POST' }).catch(() => null);
+      try {
+        var startR = await fetch('/api/figma/mcp-start', { method: 'POST' });
+        var startD = await startR.json();
+        if (startD && startD.external) enabledMsg = '✦ Figma MCP enabled via FaunaMCP';
+        if (startD && !startD.ok && startD.error) enabledMsg = startD.error;
+      } catch (_) {}
     }
-    showToast('✦ Figma MCP enabled');
+    showToast(enabledMsg);
   } else {
     showToast('○ Figma MCP disabled');
   }
@@ -110,10 +116,19 @@ function updateFigmaStatusUI() {
   var badge      = document.getElementById('figma-system-badge');
   var serverDot  = document.getElementById('figma-server-dot');
   var serverBtn  = document.getElementById('figma-server-btn');
+  var serverLabel = document.getElementById('figma-server-label');
   if (!dot) return;
 
+  var usingExternal = figmaStatus.relaySource === 'external';
+  var externalAvailable = usingExternal || (!!figmaStatus.externalRelayAvailable && !figmaStatus.mcpRunning);
+  if (serverLabel) serverLabel.textContent = externalAvailable ? 'FaunaMCP App' : 'MCP Server';
+
   // MCP server row
-  if (figmaStatus.mcpRunning) {
+  if (externalAvailable) {
+    serverDot.className = 'figma-dot on'; serverDot.style.cssText += '';
+    serverBtn.textContent = usingExternal ? 'Reconnect' : 'Use';
+    serverBtn.className = 'figma-btn figma-server-toggle running';
+  } else if (figmaStatus.mcpRunning) {
     serverDot.className = 'figma-dot on'; serverDot.style.cssText += '';
     serverBtn.textContent = 'Stop';
     serverBtn.className = 'figma-btn figma-server-toggle running';
@@ -134,8 +149,13 @@ function updateFigmaStatusUI() {
     } else { badge.style.display = 'none'; }
   } else if (figmaStatus.relayConnected) {
     dot.className = 'figma-dot relay';
-    fname.textContent = 'Relay ready';
+    fname.textContent = usingExternal ? 'FaunaMCP relay ready' : 'Relay ready';
     fmeta.textContent = 'Open FaunaMCP plugin in Figma';
+    badge.style.display = 'none';
+  } else if (figmaStatus.externalRelayAvailable) {
+    dot.className = 'figma-dot relay';
+    fname.textContent = 'FaunaMCP relay available';
+    fmeta.textContent = 'Click Use to connect to the standalone app';
     badge.style.display = 'none';
   } else if (figmaStatus.mcpRunning) {
     dot.className = 'figma-dot relay';
@@ -171,11 +191,14 @@ async function toggleMcpServer() {
   var btn = document.getElementById('figma-server-btn');
   btn.disabled = true;
   try {
-    if (figmaStatus.mcpRunning) {
+    if (figmaStatus.relaySource === 'external' || (figmaStatus.externalRelayAvailable && !figmaStatus.mcpRunning)) {
+      await fetch('/api/figma/connect', { method: 'POST' }).catch(() => {});
+    } else if (figmaStatus.mcpRunning) {
       await fetch('/api/figma/mcp-stop', { method: 'POST' });
     } else {
       var r = await fetch('/api/figma/mcp-start', { method: 'POST' });
       var d = await r.json();
+      if (d.external) showToast('Using FaunaMCP Figma relay');
       if (!d.ok && d.error) showToast(d.error);
     }
     setTimeout(pollFigmaStatus, 600);
