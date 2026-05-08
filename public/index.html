@@ -1269,6 +1269,13 @@ Examples:
     });
   }
 
+  var _faunaHeaderUpdatePoller = null;
+  function _startFaunaHeaderUpdatePolling() {
+    if (_faunaHeaderUpdatePoller) return;
+    setTimeout(_checkFaunaHeaderUpdate, 2500);
+    _faunaHeaderUpdatePoller = setInterval(_checkFaunaHeaderUpdate, 60 * 60 * 1000);
+  }
+
   function _pollFaunaUpdate() {
     fetch('/api/fauna/update-status').then(function(r){ return r.json(); }).then(function(d) {
       _renderFaunaUpdateStatus(d);
@@ -1329,7 +1336,7 @@ Examples:
     }).catch(function(){});
   }
 
-  setTimeout(_checkFaunaHeaderUpdate, 2500);
+  _startFaunaHeaderUpdatePolling();
   </script>
 </div>
 
