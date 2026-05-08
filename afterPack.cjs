@@ -118,6 +118,42 @@ exports.default = async function(context) {
     }
   }
   console.log('[afterPack] done — copied ' + copied + ', skipped ' + skipped + ' already-present');
+
+  // 3. Restore ms-365-mcp-server's nested node_modules that electron-builder stripped.
+  //    electron-builder deduplicates by package *name* only — if any version exists in the
+  //    outer node_modules it removes the nested version, even when the semver is different.
+  //    We compare source nested vs build nested and copy anything that's missing.
+  if (fs.existsSync(ms365NestedMods)) {
+    const ms365DstNested = path.join(unpackedMods, '@softeria', 'ms-365-mcp-server', 'node_modules');
+    let nestedCopied = 0;
+    const entries = fs.readdirSync(ms365NestedMods, { withFileTypes: true });
+    for (const entry of entries) {
+      const pkgNames = entry.name.startsWith('@')
+        ? (() => {
+            const scopeDir = path.join(ms365NestedMods, entry.name);
+            return fs.readdirSync(scopeDir)
+              .filter(n => fs.existsSync(path.join(scopeDir, n, 'package.json')))
+              .map(n => entry.name + '/' + n);
+          })()
+        : [entry.name];
+      for (const pkgName of pkgNames) {
+        const srcPkg = path.join(ms365NestedMods, pkgName);
+        const dstPkg = path.join(ms365DstNested, pkgName);
+        if (!fs.existsSync(path.join(srcPkg, 'package.json'))) continue;
+        if (fs.existsSync(dstPkg)) continue; // electron-builder kept it, leave it
+        try {
+          fs.mkdirSync(path.dirname(dstPkg), { recursive: true });
+          copyDirSync(srcPkg, dstPkg, fs, path);
+          nestedCopied++;
+        } catch (e) {
+          console.error('[afterPack] failed to restore nested ' + pkgName + ':', e.message);
+        }
+      }
+    }
+    if (nestedCopied > 0) {
+      console.log('[afterPack] restored ' + nestedCopied + ' stripped nested packages for ms-365-mcp-server');
+    }
+  }
 };
 
 function copyDirSync(src, dest, fs, path) {
