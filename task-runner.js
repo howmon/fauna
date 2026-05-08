@@ -591,12 +591,14 @@ async function _runPipeline(task, state) {
 
         case 'prompt':
         case 'agent': {
-          // Run a prompt against the AI
+          // Run a prompt against the AI — disable tools so the model processes
+          // the piped data instead of searching the web
           const promptText = _interpolate(cfg.prompt || node.label, nodeOutputs);
           const aiResp = await _callChat({
             messages: [{ role: 'user', content: promptText }],
             model:    task.model || 'claude-sonnet-4.6',
             agentName: cfg.agentName || _pickAgent(task, state.step),
+            noTools: node.type === 'prompt',
           }, state.abortController.signal);
           output = aiResp || '';
           break;
@@ -681,24 +683,24 @@ async function _runPipeline(task, state) {
         }
 
         case 'notify': {
-          // Create a new conversation in the app with the summary as its content
+          // Post the pipeline output to a new conversation in the app.
+          // Conversations live in renderer localStorage, so we emit a SSE 'notify'
+          // event that the front-end handles to inject a new conversation directly.
           const convId = 'conv-task-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
-          const convTitle = _interpolate(cfg.title || '', nodeOutputs) || task.name + ' — result';
+          const convTitle = _interpolate(cfg.title || '', nodeOutputs) || task.title + ' — result';
           const msgText = String(input);
-          const newConv = {
-            id: convId,
-            title: convTitle,
-            createdAt: new Date().toISOString(),
-            messages: [
-              { role: 'assistant', content: msgText, timestamp: new Date().toISOString() },
-            ],
-          };
-          const cr = await fetch(`http://localhost:${PORT}/api/conversations/${convId}`, {
+          // Emit to renderer — it will create the conversation in localStorage
+          _emit(task.id, 'notify', { convId, title: convTitle, content: msgText });
+          // Also persist server-side as a fallback
+          await fetch(`http://localhost:${PORT}/api/conversations/${convId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(newConv),
-          });
-          if (!cr.ok) { output = 'Node error: Failed to create conversation'; break; }
+            body: JSON.stringify({
+              id: convId, title: convTitle,
+              createdAt: new Date().toISOString(),
+              messages: [{ role: 'assistant', content: msgText, timestamp: new Date().toISOString() }],
+            }),
+          }).catch(() => {});
           output = convId;
           break;
         }

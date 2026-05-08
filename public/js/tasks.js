@@ -1070,7 +1070,8 @@ async function _acGeneratePipeline() {
 
   var systemPrompt = [
     'You are a pipeline builder assistant. Convert the user\'s natural-language description into a JSON pipeline.',
-    'Available node types: trigger, prompt, condition, shell, browser, figma, agent, loop, webhook, delay, code.',
+    'Available node types: trigger, prompt, condition, shell, browser, figma, agent, loop, webhook, delay, code, notify.',
+    'Use notify as the last node when the user wants to post the result to chat or see it in a new conversation. notify config: { title: "optional title" }.',
     'Available agents: ' + (agentNames || 'none defined yet') + '.',
     'Return ONLY valid JSON with this exact schema:',
     '{"nodes":[{"id":"n1","type":"trigger","label":"Start","x":100,"y":200,"config":{}},',
@@ -1421,6 +1422,22 @@ function _connectTaskSSE() {
         if (evt.event === 'completed' || evt.event === 'failed' || evt.event === 'started') {
           if (evt.event === 'failed' && evt.taskId) _expandedLogs.add(evt.taskId);
           fetchTasks();
+        }
+        if (evt.event === 'notify' && evt.convId && evt.content) {
+          // Pipeline notify node: inject a new conversation into the local state so it appears in chat
+          var notifyConv = {
+            id: evt.convId,
+            title: evt.title || 'Automation result',
+            messages: [{ role: 'assistant', content: evt.content, timestamp: new Date().toISOString() }],
+            model: (typeof state !== 'undefined' && state.model) || 'claude-sonnet-4.6',
+            createdAt: Date.now(),
+          };
+          if (typeof state !== 'undefined' && Array.isArray(state.conversations)) {
+            state.conversations.unshift(notifyConv);
+            if (typeof saveConversations === 'function') saveConversations();
+            if (typeof renderConvList === 'function') renderConvList();
+            if (typeof loadConversation === 'function') loadConversation(evt.convId);
+          }
         }
         if (evt.event === 'step') {
           var row = document.querySelector('[data-task-id="' + evt.taskId + '"] .auto-row-progress-bar');
