@@ -18,10 +18,19 @@ var mcpMgr = (function () {
       id: 'preset-m365',
       name: 'Microsoft 365',
       icon: 'ti-brand-office',
-      description: 'Connect to Word, Excel, Outlook, Teams & more',
-      transport: 'http',
-      url: 'https://m365-mcp.microsoft.com/mcp',
-      oauthAuthUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+      description: 'Outlook, Calendar, OneDrive, Teams, SharePoint & more',
+      transport: 'stdio',
+      command: 'npx',
+      args: ['-y', '@softeria/ms-365-mcp-server', '--discovery'],
+    },
+    {
+      id: 'preset-m365-work',
+      name: 'Microsoft 365 (Work)',
+      icon: 'ti-brand-teams',
+      description: 'Adds Teams, SharePoint, shared mailboxes & org tools',
+      transport: 'stdio',
+      command: 'npx',
+      args: ['-y', '@softeria/ms-365-mcp-server', '--org-mode', '--discovery'],
     },
     {
       id: 'preset-github',
@@ -362,7 +371,9 @@ var mcpMgr = (function () {
 
     var formEl = document.getElementById('mcp-form-panel');
     if (!formEl) return;
-    formEl.innerHTML = _buildForm(null, [''], [{ k: '', v: '' }], ['']);
+
+    var argsArr = (preset.args && preset.args.length) ? preset.args : [''];
+    formEl.innerHTML = _buildForm(null, argsArr, [{ k: '', v: '' }], ['']);
     formEl.style.display = '';
     document.getElementById('mcp-list-panel').style.display = 'none';
     _updateTransportTabs();
@@ -370,10 +381,17 @@ var mcpMgr = (function () {
     // Pre-fill fields
     var nameEl = document.getElementById('mcp-f-name');
     if (nameEl) nameEl.value = preset.name || '';
-    var urlEl = document.getElementById('mcp-f-url');
-    if (urlEl) urlEl.value = preset.url || '';
-    var oauthEl = document.getElementById('mcp-f-oauthurl');
-    if (oauthEl) oauthEl.value = preset.oauthAuthUrl || '';
+
+    if (_transport === 'stdio') {
+      var cmdEl = document.getElementById('mcp-f-cmd');
+      if (cmdEl) cmdEl.value = preset.command || '';
+      // Args already injected via _buildForm above
+    } else {
+      var urlEl = document.getElementById('mcp-f-url');
+      if (urlEl) urlEl.value = preset.url || '';
+      var oauthEl = document.getElementById('mcp-f-oauthurl');
+      if (oauthEl) oauthEl.value = preset.oauthAuthUrl || '';
+    }
   }
 
   // ── OAuth ─────────────────────────────────────────────────────────────────
