@@ -5,6 +5,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs   = require('fs');
 const https = require('https');
+const net = require('net');
 
 // ── Ports ─────────────────────────────────────────────────────────────────
 const BROWSER_WS_PORT   = 3340;
@@ -375,7 +376,28 @@ function setRunning(which, running) {
   });
 }
 
-function startRelay(which, _retryCount = 0) {
+const RELAY_PORTS = {
+  browser: [BROWSER_WS_PORT, BROWSER_HTTP_PORT],
+  figma:   [FIGMA_WS_PORT, FIGMA_HTTP_PORT],
+};
+
+function isPortOpen(port, timeoutMs = 300) {
+  return new Promise(resolve => {
+    const sock = net.createConnection({ host: '127.0.0.1', port });
+    sock.setTimeout(timeoutMs);
+    sock.on('connect', () => { sock.destroy(); resolve(true); });
+    sock.on('error', () => resolve(false));
+    sock.on('timeout', () => { sock.destroy(); resolve(false); });
+  });
+}
+
+async function getOccupiedRelayPorts(which) {
+  const ports = RELAY_PORTS[which] || [];
+  const checks = await Promise.all(ports.map(async port => ({ port, open: await isPortOpen(port) })));
+  return checks.filter(p => p.open).map(p => p.port);
+}
+
+async function startRelay(which, _retryCount = 0) {
   const r = relay[which];
   r.enabled = true;   // user explicitly wants this running
   if (r.proc) return;
@@ -386,6 +408,15 @@ function startRelay(which, _retryCount = 0) {
     const wait = 1200 - elapsed;
     addLog(which, `Waiting ${wait}ms for ports to release…`, 'info');
     setTimeout(() => startRelay(which, _retryCount), wait);
+    return;
+  }
+
+  const occupiedPorts = await getOccupiedRelayPorts(which);
+  if (occupiedPorts.length) {
+    r.enabled = false;
+    r.portInUse = true;
+    setRunning(which, false);
+    addLog(which, `Port${occupiedPorts.length > 1 ? 's' : ''} ${occupiedPorts.join(', ')} already occupied — not starting ${which} relay.`, 'err');
     return;
   }
 
