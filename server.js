@@ -317,6 +317,74 @@ function resolveCmd(cmd) {
   return cmd;
 }
 
+// ── Shell PATH enrichment ─────────────────────────────────────────────────
+// Electron strips the user's shell PATH from child process environments.
+// We capture the real PATH once at startup by asking the login shell, then
+// inject it into every spawn call so tools like Node.js are findable.
+let _shellPath = null;
+function getShellPath() {
+  if (_shellPath) return _shellPath;
+  try {
+    const shell = process.env.SHELL || '/bin/zsh';
+    const out = execSync(`${shell} -l -c 'echo $PATH' 2>/dev/null`, { timeout: 3000 }).toString().trim();
+    if (out) { _shellPath = out; return _shellPath; }
+  } catch (_) {}
+  // Fallback: augment existing PATH with common Node install locations
+  const extras = [
+    '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin',
+    `${os.homedir()}/.nvm/versions/node/current/bin`,
+    `${os.homedir()}/.volta/bin`, `${os.homedir()}/.fnm/current/bin`,
+  ];
+  _shellPath = [...extras, ...(process.env.PATH || '').split(':')].join(':');
+  return _shellPath;
+}
+
+function spawnEnv(extra) {
+  return { ...process.env, PATH: getShellPath(), ...(extra || {}) };
+}
+
+// ── Node-script spawn resolver ────────────────────────────────────────────
+// Electron has its own node ABI and strips PATH, so #!/usr/bin/env node
+// in .bin wrappers fails. Detect shebang scripts and call them directly
+// with the system node binary instead of going through /usr/bin/env.
+let _systemNode = null;
+function findSystemNode() {
+  if (_systemNode) return _systemNode;
+  const candidates = [
+    // Homebrew arm64 & x64
+    '/opt/homebrew/opt/node@22/bin/node',
+    '/opt/homebrew/opt/node@20/bin/node',
+    '/opt/homebrew/opt/node@18/bin/node',
+    '/opt/homebrew/bin/node',
+    '/usr/local/bin/node',
+    '/usr/bin/node',
+    // nvm / volta / fnm
+    `${os.homedir()}/.nvm/versions/node/current/bin/node`,
+    `${os.homedir()}/.volta/bin/node`,
+    `${os.homedir()}/.fnm/default/bin/node`,
+  ];
+  for (const c of candidates) {
+    try { fs.accessSync(c, fs.constants.X_OK); _systemNode = c; return c; } catch (_) {}
+  }
+  // Last resort: sync which (only runs once at startup)
+  try { _systemNode = execSync('which node', { timeout: 2000 }).toString().trim(); return _systemNode; } catch (_) {}
+  _systemNode = 'node';
+  return _systemNode;
+}
+
+// If cmd is a #!/usr/bin/env node script, return {cmd: nodePath, args: [script, ...args]}
+// so we bypass /usr/bin/env (which can't find node in Electron's stripped PATH).
+function resolveNodeScript(cmd, args) {
+  try {
+    const first = fs.readFileSync(cmd, { encoding: 'utf8', flag: 'r' }).slice(0, 80);
+    if (/^#!.*\benv\s+node\b|^#!.*\/node\b/.test(first)) {
+      return { cmd: findSystemNode(), args: [cmd, ...args] };
+    }
+  } catch (_) {}
+  return { cmd, args };
+}
+
+
 function readSavedConfig() {
   try { return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); }
   catch (_) { return {}; }
@@ -4455,10 +4523,11 @@ function startCustomMcpServer(server) {
   if (_customMcpProcesses.has(server.id)) return { ok: true, status: 'already-running' };
 
   try {
-    const args = (server.args || []).filter(Boolean);
+    const rawArgs = (server.args || []).filter(Boolean);
+    const rawCmd = resolveCmd(server.command);
+    const { cmd, args } = resolveNodeScript(rawCmd, rawArgs);
     const env = { ...process.env, ...(server.env || {}) };
     const cwd = server.cwd ? server.cwd.replace(/^~/, os.homedir()) : os.homedir();
-    const cmd = resolveCmd(server.command);
 
     const proc = spawn(cmd, args, { env, cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     const logs = [];
@@ -4637,12 +4706,13 @@ app.get('/api/custom-mcp-servers/:id/auth-stream', (req, res) => {
     res.write(`data: ${JSON.stringify({ type, data })}\n\n`);
   };
 
-  const args = [...(server.args || []).filter(Boolean), '--login'];
+  const rawArgs = [...(server.args || []).filter(Boolean), '--login'];
+  const rawCmd = resolveCmd(server.command);
+  const { cmd, args } = resolveNodeScript(rawCmd, rawArgs);
   const env = { ...process.env, ...(server.env || {}) };
   const cwd = server.cwd ? server.cwd.replace(/^~/, os.homedir()) : os.homedir();
-  const cmd = resolveCmd(server.command);
 
-  send('start', `Spawning: ${cmd} ${args.join(' ')}`);
+  send('start', `Spawning: ${rawCmd} ${rawArgs.join(' ')}`);
 
   let proc;
   try {
@@ -4690,6 +4760,9 @@ app.get('/api/custom-mcp-servers/:id/auth-stream', (req, res) => {
 
 // Start trying to connect immediately when the server starts
 // Also auto-start the MCP server if it's not already running
+// Pre-warm node resolver so it never blocks during a live request
+setTimeout(() => { findSystemNode(); }, 500);
+
 setTimeout(() => {
   if (mcpAutoStart) startMcpServer();
   else figmaConnect();
