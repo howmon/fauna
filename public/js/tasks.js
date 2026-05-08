@@ -1076,7 +1076,10 @@ async function _acGeneratePipeline() {
     '{"nodes":[{"id":"n1","type":"trigger","label":"Start","x":100,"y":200,"config":{}},',
     ' {"id":"n2","type":"agent","label":"AgentDisplayName","x":320,"y":200,"config":{"agent":"agentInternalName"}}],',
     '"edges":[{"id":"e1","from":"n1","fromPort":"out","to":"n2","toPort":"in"}]}',
-    'Layout nodes left-to-right, x increments of 240, y around 200. For condition nodes use ports "true"/"false". No markdown, no explanation — raw JSON only.',
+    'Layout nodes left-to-right, x increments of 240, y around 200. For condition nodes use ports "true"/"false".',
+    'INTERPOLATION: To reference a prior node\'s output in a prompt or code config, use {{nodeId}} where nodeId is the "id" field of that node (e.g. {{n2}}, {{n3}}). NEVER use {{code.output}}, {{prompt.output}}, or any other form — only {{nodeId}}.',
+    'CODE NODES: The "code" field must contain complete, executable JavaScript. It receives the prior node output as `input` (a string). It MUST end with a `return` statement that returns a string. Never leave the code as just a comment.',
+    'No markdown, no explanation — raw JSON only.',
   ].join('\n');
 
   try {

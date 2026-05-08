@@ -740,6 +740,10 @@ async function _runPipeline(task, state) {
       output = 'Node error: ' + e.message;
     }
 
+    // Treat undefined/null output as a node failure (e.g. code node that never returns)
+    if (output === undefined || output === null) {
+      output = 'Node error: Step produced no output (returned ' + output + ')';
+    }
     nodeOutputs[nid] = output;
     state.stats.actionsTotal++;
     const _outStr = String(output);
@@ -763,6 +767,16 @@ async function _runPipeline(task, state) {
   // Final output = last node's output
   const lastId = order[order.length - 1];
   const summary = String(nodeOutputs[lastId] || 'Pipeline completed').slice(0, 500);
+
+  // If any node failed, mark the whole pipeline as failed
+  if (state.stats.actionsFailed > 0) {
+    const failedNodes = state.nodeResults.filter(n => n.status === 'failed').map(n => n.label).join(', ');
+    const errMsg = `Pipeline failed: ${state.stats.actionsFailed} step(s) errored — ${failedNodes}`;
+    failTask(task.id, errMsg);
+    _emit(task.id, 'failed', { error: errMsg, nodes: state.nodeResults });
+    return;
+  }
+
   completeTask(task.id, { summary });
   _emit(task.id, 'completed', { summary });
 }
