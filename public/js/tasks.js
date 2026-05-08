@@ -1089,6 +1089,7 @@ async function _acGeneratePipeline() {
         clientContext: 'cli',
         thinkingBudget: 'off',
         maxContextTurns: 4,
+        noTools: true,
       }),
     });
 

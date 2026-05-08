@@ -1272,7 +1272,7 @@ app.post('/api/chat', async (req, res) => {
   res.on('close',  _psRelease);
   const { messages = [], model = 'claude-sonnet-4.6', systemPrompt = '', useFigmaMCP = false, usePlaywrightMCP = false, contextSummary = '',
           thinkingBudget = 'high', maxContextTurns = 20, agentName = null, clientContext = 'app',
-          projectId = null, projectContextIds = null } = req.body;
+          projectId = null, projectContextIds = null, noTools = false } = req.body;
 
   // Track client disconnect so the tool loop can bail early
   let clientAborted = false;
@@ -1556,6 +1556,9 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
         mcpTools = [...(mcpTools || []), ...extToolDefs];
       }
     }
+
+    // Strip all tools when caller requests a tool-free completion (e.g. pipeline JSON generation)
+    if (noTools) mcpTools = [];
 
     // Agentic loop — re-runs if model calls tools (max 12 iterations)
     let continueLoop = true;
