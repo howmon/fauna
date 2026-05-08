@@ -4465,6 +4465,10 @@ function startCustomMcpServer(server) {
 
     proc.stdout.on('data', d => logs.push({ t: Date.now(), s: 'stdout', m: d.toString().trim() }));
     proc.stderr.on('data', d => logs.push({ t: Date.now(), s: 'stderr', m: d.toString().trim() }));
+    proc.on('error', e => {
+      logs.push({ t: Date.now(), s: 'error', m: e.message });
+      _customMcpProcesses.delete(server.id);
+    });
     proc.on('exit', code => {
       logs.push({ t: Date.now(), s: 'system', m: `Process exited with code ${code}` });
       _customMcpProcesses.delete(server.id);
