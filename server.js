@@ -288,18 +288,33 @@ const RECOVERY_DIR = path.join(os.homedir(), '.fauna-recovery');
 // (which points inside the asar). asarUnpack extracts the package to
 // app.asar.unpacked/node_modules, so we probe that first.
 function bundledBin(name) {
-  const appRoot = path.dirname(new URL(import.meta.url).pathname);
+  const moduleRoot = path.dirname(new URL(import.meta.url).pathname);
+  const cwdRoot    = process.cwd();
   const candidates = [
     // Unpacked asar path (production build)
-    path.join(appRoot, '..', 'app.asar.unpacked', 'node_modules', '.bin', name),
-    // Normal dev / non-packed path
-    path.join(appRoot, 'node_modules', '.bin', name),
+    path.join(moduleRoot, '..', 'app.asar.unpacked', 'node_modules', '.bin', name),
+    // Dev / non-packed: relative to server.js
+    path.join(moduleRoot, 'node_modules', '.bin', name),
+    // cwd-relative fallback (works if server started from project root)
+    path.join(cwdRoot, 'node_modules', '.bin', name),
   ];
   for (const c of candidates) {
     try { fs.accessSync(c, fs.constants.X_OK); return c; } catch (_) {}
   }
   // Fallback: hope it's on PATH
   return name;
+}
+
+// Resolve a command that may be just a bare binary name to its full path
+// inside the bundled node_modules, if available.
+function resolveCmd(cmd) {
+  if (!cmd || path.isAbsolute(cmd)) return cmd;
+  // Only try resolution for names that look like bare binary names (no slashes)
+  if (!cmd.includes('/') && !cmd.includes('\\')) {
+    const resolved = bundledBin(cmd);
+    if (resolved !== cmd) return resolved;
+  }
+  return cmd;
 }
 
 function readSavedConfig() {
@@ -4443,8 +4458,9 @@ function startCustomMcpServer(server) {
     const args = (server.args || []).filter(Boolean);
     const env = { ...process.env, ...(server.env || {}) };
     const cwd = server.cwd ? server.cwd.replace(/^~/, os.homedir()) : os.homedir();
+    const cmd = resolveCmd(server.command);
 
-    const proc = spawn(server.command, args, { env, cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = spawn(cmd, args, { env, cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     const logs = [];
 
     proc.stdout.on('data', d => logs.push({ t: Date.now(), s: 'stdout', m: d.toString().trim() }));
@@ -4604,12 +4620,13 @@ app.get('/api/custom-mcp-servers/:id/auth-stream', (req, res) => {
   const args = [...(server.args || []).filter(Boolean), '--login'];
   const env = { ...process.env, ...(server.env || {}) };
   const cwd = server.cwd ? server.cwd.replace(/^~/, os.homedir()) : os.homedir();
+  const cmd = resolveCmd(server.command);
 
-  send('start', `Spawning: ${server.command} ${args.join(' ')}`);
+  send('start', `Spawning: ${cmd} ${args.join(' ')}`);
 
   let proc;
   try {
-    proc = spawn(server.command, args, { env, cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    proc = spawn(cmd, args, { env, cwd, stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (e) {
     send('error', e.message);
     res.end();
