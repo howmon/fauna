@@ -1376,7 +1376,7 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
 
     const fullSystem = [
       systemPrompt.trim() + cliHint + projectCtx,
-      WEB_SEARCH_CONTEXT,
+      noTools ? '' : WEB_SEARCH_CONTEXT,
       isCLI ? '' : BROWSER_BUILD_CONTEXT,
       // APP_BUILD_RULES ("just DO it / never narrate") only for non-project, non-CLI sessions.
       // In project sessions these directives conflict with the shell-command policy.
