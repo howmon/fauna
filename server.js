@@ -1470,6 +1470,18 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
       for (const n of r.names) privateToolNames.add(n);
     }
 
+    // Inject custom HTTP MCP server tools (user-configured servers)
+    const _customHttpToolMap = new Map(); // tool name → server
+    if (!noTools) {
+      try {
+        const r = await injectCustomHttpMcpTools(mcpTools);
+        mcpTools = r.tools;
+        r.toolToServer.forEach((srv, name) => _customHttpToolMap.set(name, srv));
+      } catch (e) {
+        chatLog('[custom-mcp] injection error: ' + e.message);
+      }
+    }
+
     // Load agent tools if an agent is active
     let agentToolHandlers = null; // Map<name, executeFn>
     if (agentName) {
@@ -1933,6 +1945,12 @@ You are running in a terminal CLI. Respond in plain, readable text. Do NOT use m
               chatLog('[chat] Browser tool done: ' + toolName);
             } else if (privateIntegrations && privateToolNames.has(toolName)) {
               result = await privateIntegrations.routeTool(toolName, args, chatLog);
+            } else if (_customHttpToolMap.has(toolName)) {
+              const customServer = _customHttpToolMap.get(toolName);
+              chatLog(`[custom-mcp] calling ${toolName} on ${customServer.name}`);
+              const client = _getOrCreateHttpMcpClient(customServer);
+              result = await client.callTool(toolName, args);
+              chatLog(`[custom-mcp] ${toolName} done`);
             } else {
               figmaLog('🔧 ' + toolName + (toolName === 'figma_execute' ? ': ' + (args.code || '').slice(0, 80).replace(/\n/g,' ') + '…' : ''), 'cmd');
               result = await figmaMCP.callTool(toolName, args);
@@ -4217,6 +4235,165 @@ app.post('/api/figma-mcp/call', async (req, res) => {
 
 const CUSTOM_MCP_FILE = path.join(CONFIG_DIR, 'custom-mcp-servers.json');
 const _customMcpProcesses = new Map(); // id → { proc, logs: [] }
+const _customHttpMcpClients = new Map(); // id → HttpMcpClient
+
+// ── HttpMcpClient — generic Streamable HTTP MCP client ───────────────────────
+// Same wire protocol as FaunaMCPHTTPClient; supports optional Bearer token auth.
+class HttpMcpClient {
+  constructor(url, headers = {}) {
+    this._url = url;
+    this._headers = headers; // e.g. { Authorization: 'Bearer ...' }
+    this._sessionId = null;
+    this._nextId = 1;
+    this.toolsCache = null;
+    this._initialized = false;
+    this._initPromise = null;
+  }
+
+  _buildHeaders(extra = {}) {
+    return { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream',
+      ...(this._sessionId ? { 'mcp-session-id': this._sessionId } : {}),
+      ...this._headers, ...extra };
+  }
+
+  async _parseResponse(resp, expectedId) {
+    const ct = resp.headers.get('content-type') || '';
+    const text = await resp.text();
+    if (ct.includes('text/event-stream')) {
+      for (const line of text.split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const msg = JSON.parse(line.slice(6));
+          if (msg.error) throw new Error(msg.error.message || JSON.stringify(msg.error));
+          if (expectedId == null || msg.id == null || msg.id === expectedId) return msg.result ?? null;
+        } catch (e) { if (e instanceof SyntaxError) continue; throw e; }
+      }
+      return null;
+    }
+    const msg = JSON.parse(text);
+    if (msg.error) throw new Error(msg.error.message || JSON.stringify(msg.error));
+    return msg.result ?? null;
+  }
+
+  async _ensureInit() {
+    if (this._initialized) return;
+    if (this._initPromise) return this._initPromise;
+    this._initPromise = this._doInit().finally(() => { this._initPromise = null; });
+    return this._initPromise;
+  }
+
+  async _doInit() {
+    const id = this._nextId++;
+    const resp = await fetch(this._url, {
+      method: 'POST', headers: this._buildHeaders(),
+      body: JSON.stringify({ jsonrpc: '2.0', id, method: 'initialize',
+        params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'Fauna', version: '1.0.0' } } }),
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!resp.ok) throw new Error(`HTTP MCP init failed: ${resp.status} ${resp.statusText}`);
+    const sid = resp.headers.get('mcp-session-id');
+    if (sid) this._sessionId = sid;
+    await this._parseResponse(resp, id);
+    fetch(this._url, {
+      method: 'POST', headers: this._buildHeaders(),
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => {});
+    this._initialized = true;
+  }
+
+  async _rpc(method, params, timeoutMs = 30000) {
+    await this._ensureInit();
+    const id = this._nextId++;
+    const resp = await fetch(this._url, {
+      method: 'POST', headers: this._buildHeaders(),
+      body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (resp.status === 401) throw new Error('HTTP MCP: authentication required (401)');
+    if (resp.status === 404 && this._sessionId) {
+      // Session expired — re-init once
+      this._initialized = false; this._sessionId = null; this.toolsCache = null;
+      await this._ensureInit();
+      return this._rpc(method, params, timeoutMs);
+    }
+    if (!resp.ok) throw new Error(`HTTP MCP RPC failed: ${resp.status}`);
+    return this._parseResponse(resp, id);
+  }
+
+  async getTools() {
+    if (this.toolsCache) return this.toolsCache;
+    const result = await this._rpc('tools/list', {});
+    this.toolsCache = (result?.tools || []).map(t => ({
+      type: 'function',
+      function: { name: t.name, description: t.description,
+        parameters: t.inputSchema || { type: 'object', properties: {} } },
+    }));
+    return this.toolsCache;
+  }
+
+  async callTool(name, args) {
+    const result = await this._rpc('tools/call', { name, arguments: args }, 60000);
+    return (result?.content || []).map(c => {
+      if (c.type === 'text') return c.text;
+      if (c.type === 'image') return `[image: data:${c.mimeType};base64,${c.data || ''}]`;
+      return JSON.stringify(c);
+    }).join('\n');
+  }
+
+  invalidateCache() { this.toolsCache = null; this._initialized = false; this._sessionId = null; }
+}
+
+// ── OAuth token cache for HTTP MCP servers ───────────────────────────────────
+// Simple in-memory store keyed by server ID. Tokens are stored as
+// { accessToken, expiresAt (ms epoch) }. Refresh is done by re-directing the
+// user to the OAuth flow via /api/custom-mcp-servers/:id/oauth/start.
+const _mcpOAuthTokens = new Map(); // id → { accessToken, expiresAt }
+
+function _getMcpBearerToken(serverId) {
+  const t = _mcpOAuthTokens.get(serverId);
+  if (!t) return null;
+  if (t.expiresAt && Date.now() > t.expiresAt - 60000) { _mcpOAuthTokens.delete(serverId); return null; }
+  return t.accessToken;
+}
+
+// Returns an HttpMcpClient for a custom HTTP server, creating/caching it as needed.
+function _getOrCreateHttpMcpClient(server) {
+  const existing = _customHttpMcpClients.get(server.id);
+  // Determine current auth headers (OAuth token takes priority over static authHeader)
+  const oauthToken = _getMcpBearerToken(server.id);
+  const authHeaders = oauthToken
+    ? { Authorization: `Bearer ${oauthToken}` }
+    : server.authHeader ? { Authorization: server.authHeader } : {};
+  if (existing) {
+    existing._headers = authHeaders;
+    return existing;
+  }
+  const client = new HttpMcpClient(server.url, authHeaders);
+  _customHttpMcpClients.set(server.id, client);
+  return client;
+}
+
+// Inject all enabled custom HTTP MCP server tools into a tools array.
+// Returns { tools, toolToServer } where toolToServer maps tool name → server.
+async function injectCustomHttpMcpTools(mcpTools) {
+  const servers = readCustomMcpServers().filter(s => s.transport === 'http' && s.enabled !== false && s.url);
+  if (!servers.length) return { tools: mcpTools, toolToServer: new Map() };
+
+  const toolToServer = new Map();
+  for (const server of servers) {
+    try {
+      const client = _getOrCreateHttpMcpClient(server);
+      const tools = await client.getTools();
+      for (const t of tools) toolToServer.set(t.function.name, server);
+      mcpTools = [...mcpTools, ...tools];
+      chatLog(`[custom-mcp] ${server.name}: injected ${tools.length} tools`);
+    } catch (e) {
+      chatLog(`[custom-mcp] ${server.name}: failed to fetch tools — ${e.message}`);
+    }
+  }
+  return { tools: mcpTools, toolToServer };
+}
 
 function readCustomMcpServers() {
   try { return JSON.parse(fs.readFileSync(CUSTOM_MCP_FILE, 'utf8')); }
@@ -4303,6 +4480,9 @@ app.put('/api/custom-mcp-servers/:id', (req, res) => {
   const updated = { ...servers[idx], ...req.body, id: req.params.id };
   servers[idx] = updated;
   writeCustomMcpServers(servers);
+  // Invalidate cached HTTP client so new URL/auth takes effect
+  const hc = _customHttpMcpClients.get(req.params.id);
+  if (hc) { hc.invalidateCache(); _customHttpMcpClients.delete(req.params.id); }
   res.json({ ok: true, server: customMcpStatus(updated) });
 });
 
@@ -4314,6 +4494,10 @@ app.delete('/api/custom-mcp-servers/:id', (req, res) => {
   stopCustomMcpServer(req.params.id);
   servers.splice(idx, 1);
   writeCustomMcpServers(servers);
+  // Clean up HTTP client + OAuth token
+  const hc = _customHttpMcpClients.get(req.params.id);
+  if (hc) { hc.invalidateCache(); _customHttpMcpClients.delete(req.params.id); }
+  _mcpOAuthTokens.delete(req.params.id);
   res.json({ ok: true });
 });
 
@@ -4336,6 +4520,39 @@ app.get('/api/custom-mcp-servers/:id/logs', (req, res) => {
   const since = parseInt(req.query.since || '0', 10);
   const logs = (entry?.logs || []).filter(l => l.t > since);
   res.json({ ok: true, logs });
+});
+
+// POST set OAuth token for an HTTP MCP server (called after OAuth callback)
+app.post('/api/custom-mcp-servers/:id/oauth/token', (req, res) => {
+  const { accessToken, expiresIn } = req.body;
+  if (!accessToken) return res.status(400).json({ error: 'accessToken required' });
+  const expiresAt = expiresIn ? Date.now() + expiresIn * 1000 : null;
+  _mcpOAuthTokens.set(req.params.id, { accessToken, expiresAt });
+  // Invalidate cached client so it picks up new token
+  const client = _customHttpMcpClients.get(req.params.id);
+  if (client) client.invalidateCache();
+  res.json({ ok: true });
+});
+
+// GET OAuth status for an HTTP MCP server
+app.get('/api/custom-mcp-servers/:id/oauth/status', (req, res) => {
+  const token = _getMcpBearerToken(req.params.id);
+  res.json({ authorized: !!token });
+});
+
+// DELETE OAuth token (sign out)
+app.delete('/api/custom-mcp-servers/:id/oauth/token', (req, res) => {
+  _mcpOAuthTokens.delete(req.params.id);
+  const client = _customHttpMcpClients.get(req.params.id);
+  if (client) { client.invalidateCache(); _customHttpMcpClients.delete(req.params.id); }
+  res.json({ ok: true });
+});
+
+// POST refresh/invalidate tool cache for an HTTP MCP server
+app.post('/api/custom-mcp-servers/:id/refresh', (req, res) => {
+  const client = _customHttpMcpClients.get(req.params.id);
+  if (client) client.invalidateCache();
+  res.json({ ok: true });
 });
 
 // ── End Custom MCP Servers ──────────────────────────────────────────────────

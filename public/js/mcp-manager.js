@@ -10,6 +10,44 @@ var mcpMgr = (function () {
   var _editingId = null;  // id of server being edited (null = add mode)
   var _showForm = false;
   var _transport = 'stdio'; // current form transport tab
+  var _oauthStatus = {};  // id → { authorized }
+
+  // Featured HTTP MCP server presets
+  var FEATURED_PRESETS = [
+    {
+      id: 'preset-m365',
+      name: 'Microsoft 365',
+      icon: 'ti-brand-office',
+      description: 'Connect to Word, Excel, Outlook, Teams & more',
+      transport: 'http',
+      url: 'https://m365-mcp.microsoft.com/mcp',
+      oauthAuthUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+    },
+    {
+      id: 'preset-github',
+      name: 'GitHub',
+      icon: 'ti-brand-github',
+      description: 'Issues, PRs, code search, repo management',
+      transport: 'http',
+      url: 'https://api.githubcopilot.com/mcp/',
+    },
+    {
+      id: 'preset-notion',
+      name: 'Notion',
+      icon: 'ti-notebook',
+      description: 'Databases, pages, comments & blocks',
+      transport: 'http',
+      url: 'https://api.notion.com/v1/mcp',
+    },
+    {
+      id: 'preset-linear',
+      name: 'Linear',
+      icon: 'ti-brand-linear',
+      description: 'Projects, issues, and team workflows',
+      transport: 'http',
+      url: 'https://mcp.linear.app/sse',
+    },
+  ];
 
   // ── API helpers ────────────────────────────────────────────────────────────
 
@@ -28,6 +66,13 @@ var mcpMgr = (function () {
     } catch (_) {
       _servers = [];
     }
+    // Load OAuth status for HTTP servers
+    await Promise.allSettled(_servers.filter(s => s.transport === 'http').map(async s => {
+      try {
+        const r = await _api('GET', '/api/custom-mcp-servers/' + s.id + '/oauth/status');
+        _oauthStatus[s.id] = r;
+      } catch (_) {}
+    }));
     renderList();
   }
 
@@ -35,8 +80,32 @@ var mcpMgr = (function () {
     var el = document.getElementById('mcp-custom-list');
     if (!el) return;
 
+    // Featured presets (only show those not already added)
+    var addedUrls = new Set(_servers.filter(s => s.url).map(s => s.url));
+    var notAdded = FEATURED_PRESETS.filter(p => !addedUrls.has(p.url));
+
+    var featuredHtml = '';
+    if (notAdded.length) {
+      featuredHtml =
+        '<div class="mcp-featured-section">' +
+          '<div class="mcp-featured-title">Featured integrations</div>' +
+          '<div class="mcp-featured-grid">' +
+          notAdded.map(function (p) {
+            return (
+              '<div class="mcp-featured-card" onclick="mcpMgr.applyPreset(' + JSON.stringify(JSON.stringify(p)) + ')">' +
+                '<i class="ti ' + p.icon + ' mcp-featured-icon"></i>' +
+                '<div class="mcp-featured-name">' + _esc(p.name) + '</div>' +
+                '<div class="mcp-featured-desc">' + _esc(p.description) + '</div>' +
+              '</div>'
+            );
+          }).join('') +
+          '</div>' +
+        '</div>';
+    }
+
     if (!_servers.length) {
       el.innerHTML =
+        featuredHtml +
         '<div class="mcp-empty-row">' +
           '<span>No MCP servers connected</span>' +
           '<button class="mcp-add-btn" onclick="mcpMgr.showForm(null)">' +
@@ -59,12 +128,24 @@ var mcpMgr = (function () {
                 '<i class="ti ti-player-stop"></i></button>'
             : '<button class="mcp-row-btn" title="Start" onclick="mcpMgr.start(\'' + s.id + '\')">' +
                 '<i class="ti ti-player-play"></i></button>')
-        : '';
+        : '<button class="mcp-row-btn" title="Refresh tools" onclick="mcpMgr.refreshHttpTools(\'' + s.id + '\')">' +
+            '<i class="ti ti-refresh"></i></button>';
+      var oauthBadge = '';
+      if (s.transport === 'http') {
+        var oauthSt = _oauthStatus[s.id];
+        oauthBadge = oauthSt && oauthSt.authorized
+          ? '<span class="mcp-oauth-badge authorized" title="Authorized">✓ Auth</span>'
+          : (s.oauthAuthUrl
+              ? '<span class="mcp-oauth-badge unauthorized" title="Not authorized — click to sign in" ' +
+                  'onclick="mcpMgr.oauthSignIn(\'' + s.id + '\', \'' + _attr(s.oauthAuthUrl) + '\')" ' +
+                  'style="cursor:pointer">Sign in</span>'
+              : '');
+      }
       return (
         '<div class="mcp-server-row" data-id="' + s.id + '">' +
           '<span class="mcp-row-status">' + statusDot + '</span>' +
           '<span class="mcp-row-name">' + _esc(s.name) + '</span>' +
-          badge +
+          badge + oauthBadge +
           '<span class="mcp-row-cmd">' + _esc(s.transport === 'http' ? s.url : s.command) + '</span>' +
           '<div class="mcp-row-actions">' +
             startStop +
@@ -80,7 +161,8 @@ var mcpMgr = (function () {
       '<button class="mcp-add-btn" onclick="mcpMgr.showForm(null)">' +
         '<i class="ti ti-plus"></i> Add server' +
       '</button>' +
-    '</div>';
+    '</div>' +
+    featuredHtml;
   }
 
   // ── Add / Edit form ────────────────────────────────────────────────────────
@@ -119,10 +201,12 @@ var mcpMgr = (function () {
 
   function _buildForm(server, argsArr, envArr, passthroughArr) {
     var title = server ? 'Edit MCP server' : 'Connect to a custom MCP';
-    var nameVal = server ? _attr(server.name) : '';
-    var cmdVal  = server ? _attr(server.command || '') : '';
-    var urlVal  = server ? _attr(server.url || '') : '';
-    var cwdVal  = server ? _attr(server.cwd || '') : '';
+    var nameVal       = server ? _attr(server.name) : '';
+    var cmdVal        = server ? _attr(server.command || '') : '';
+    var urlVal        = server ? _attr(server.url || '') : '';
+    var cwdVal        = server ? _attr(server.cwd || '') : '';
+    var authHeaderVal = server ? _attr(server.authHeader || '') : '';
+    var oauthUrlVal   = server ? _attr(server.oauthAuthUrl || '') : '';
 
     return (
       '<div class="mcp-form-header">' +
@@ -163,6 +247,12 @@ var mcpMgr = (function () {
         '<div id="mcp-http-fields" style="display:none">' +
           '<label class="mcp-field-label">Server URL</label>' +
           '<input id="mcp-f-url" class="mcp-field-input" type="text" placeholder="https://my-mcp-server.example.com/mcp" value="' + urlVal + '">' +
+
+          '<label class="mcp-field-label" style="margin-top:12px">Authorization header <span class="mcp-field-hint">(optional — e.g. Bearer sk-…)</span></label>' +
+          '<input id="mcp-f-authheader" class="mcp-field-input" type="text" placeholder="Bearer sk-xxxxxxxx" value="' + authHeaderVal + '" autocomplete="off">' +
+
+          '<label class="mcp-field-label" style="margin-top:12px">OAuth authorization URL <span class="mcp-field-hint">(optional — enables "Sign in" button)</span></label>' +
+          '<input id="mcp-f-oauthurl" class="mcp-field-input" type="text" placeholder="https://auth.example.com/authorize?..." value="' + oauthUrlVal + '">' +
         '</div>' +
 
         '<div class="mcp-form-actions">' +
@@ -261,6 +351,57 @@ var mcpMgr = (function () {
     if (row) row.remove();
   }
 
+  // ── Featured preset ───────────────────────────────────────────────────────
+
+  function applyPreset(presetJson) {
+    var preset;
+    try { preset = JSON.parse(presetJson); } catch (_) { return; }
+    _editingId = null;
+    _showForm = true;
+    _transport = preset.transport || 'http';
+
+    var formEl = document.getElementById('mcp-form-panel');
+    if (!formEl) return;
+    formEl.innerHTML = _buildForm(null, [''], [{ k: '', v: '' }], ['']);
+    formEl.style.display = '';
+    document.getElementById('mcp-list-panel').style.display = 'none';
+    _updateTransportTabs();
+
+    // Pre-fill fields
+    var nameEl = document.getElementById('mcp-f-name');
+    if (nameEl) nameEl.value = preset.name || '';
+    var urlEl = document.getElementById('mcp-f-url');
+    if (urlEl) urlEl.value = preset.url || '';
+    var oauthEl = document.getElementById('mcp-f-oauthurl');
+    if (oauthEl) oauthEl.value = preset.oauthAuthUrl || '';
+  }
+
+  // ── OAuth ─────────────────────────────────────────────────────────────────
+
+  function oauthSignIn(serverId, authUrl) {
+    // Open auth URL in system browser; user must manually paste token back.
+    // A full OAuth callback server would need a redirect_uri registered with
+    // the provider — for now open the URL and show a paste dialog.
+    if (typeof electronAPI !== 'undefined' && electronAPI.openExternal) {
+      electronAPI.openExternal(authUrl);
+    } else {
+      window.open(authUrl, '_blank');
+    }
+    setTimeout(function () {
+      var token = prompt('Paste the access token returned by the sign-in flow:');
+      if (!token) return;
+      _api('POST', '/api/custom-mcp-servers/' + serverId + '/oauth/token', { accessToken: token })
+        .then(function () { loadServers(); })
+        .catch(function (e) { alert('Failed to set token: ' + e.message); });
+    }, 500);
+  }
+
+  async function refreshHttpTools(id) {
+    try {
+      await _api('POST', '/api/custom-mcp-servers/' + id + '/refresh');
+    } catch (_) {}
+  }
+
   // ── Save ──────────────────────────────────────────────────────────────────
 
   async function save() {
@@ -296,6 +437,12 @@ var mcpMgr = (function () {
       var url = (document.getElementById('mcp-f-url')?.value || '').trim();
       if (!url) { alert('Please enter a server URL.'); return; }
       payload.url = url;
+
+      var authHeader = (document.getElementById('mcp-f-authheader')?.value || '').trim();
+      if (authHeader) payload.authHeader = authHeader;
+
+      var oauthAuthUrl = (document.getElementById('mcp-f-oauthurl')?.value || '').trim();
+      if (oauthAuthUrl) payload.oauthAuthUrl = oauthAuthUrl;
     }
 
     try {
@@ -356,5 +503,8 @@ var mcpMgr = (function () {
     start: start,
     stop: stop,
     remove: remove,
+    applyPreset: applyPreset,
+    oauthSignIn: oauthSignIn,
+    refreshHttpTools: refreshHttpTools,
   };
 })();
