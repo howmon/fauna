@@ -11,6 +11,7 @@ var mcpMgr = (function () {
   var _showForm = false;
   var _transport = 'stdio'; // current form transport tab
   var _oauthStatus = {};  // id → { authorized }
+  var _authModal = null;  // active auth modal state
 
   // Featured HTTP MCP server presets
   var FEATURED_PRESETS = [
@@ -136,7 +137,9 @@ var mcpMgr = (function () {
             ? '<button class="mcp-row-btn" title="Stop" onclick="mcpMgr.stop(\'' + s.id + '\')">' +
                 '<i class="ti ti-player-stop"></i></button>'
             : '<button class="mcp-row-btn" title="Start" onclick="mcpMgr.start(\'' + s.id + '\')">' +
-                '<i class="ti ti-player-play"></i></button>')
+                '<i class="ti ti-player-play"></i></button>') +
+          '<button class="mcp-row-btn" title="Authenticate (login)" onclick="mcpMgr.openAuthModal(\'' + s.id + '\')">' +
+            '<i class="ti ti-login-2"></i></button>'
         : '<button class="mcp-row-btn" title="Refresh tools" onclick="mcpMgr.refreshHttpTools(\'' + s.id + '\')">' +
             '<i class="ti ti-refresh"></i></button>';
       var oauthBadge = '';
@@ -394,6 +397,99 @@ var mcpMgr = (function () {
     }
   }
 
+  // ── STDIO Auth Modal ──────────────────────────────────────────────────────
+  // Spawns the server with --login and streams the output so the user can
+  // see the device code URL, open it in their browser, and complete auth.
+
+  function openAuthModal(id) {
+    var server = _servers.find(function (s) { return s.id === id; });
+    if (!server) return;
+
+    // Close any existing modal
+    var existing = document.getElementById('mcp-auth-modal');
+    if (existing) existing.remove();
+
+    var modal = document.createElement('div');
+    modal.id = 'mcp-auth-modal';
+    modal.className = 'mcp-auth-modal-overlay';
+    modal.innerHTML =
+      '<div class="mcp-auth-modal">' +
+        '<div class="mcp-auth-modal-header">' +
+          '<div class="mcp-auth-modal-title"><i class="ti ti-login-2"></i> Authenticate — ' + _esc(server.name) + '</div>' +
+          '<button class="mcp-auth-modal-close" onclick="mcpMgr.closeAuthModal()"><i class="ti ti-x"></i></button>' +
+        '</div>' +
+        '<div class="mcp-auth-modal-hint">Waiting for the server to print a login URL&hellip;</div>' +
+        '<div id="mcp-auth-log" class="mcp-auth-log"></div>' +
+        '<div class="mcp-auth-modal-footer">' +
+          '<button class="mcp-auth-cancel-btn" onclick="mcpMgr.closeAuthModal()">Close</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+
+    _authModal = { id, sse: null };
+    _startAuthStream(id);
+  }
+
+  function closeAuthModal() {
+    if (_authModal && _authModal.sse) {
+      _authModal.sse.close();
+    }
+    _authModal = null;
+    var modal = document.getElementById('mcp-auth-modal');
+    if (modal) modal.remove();
+  }
+
+  function _startAuthStream(id) {
+    var logEl = document.getElementById('mcp-auth-log');
+    var hintEl = document.querySelector('.mcp-auth-modal-hint');
+    var urlPattern = /https?:\/\/[^\s]+/g;
+    var codePattern = /[A-Z0-9]{8,12}/g;
+
+    var sse = new EventSource('/api/custom-mcp-servers/' + id + '/auth-stream');
+    if (_authModal) _authModal.sse = sse;
+
+    function appendLine(text, cls) {
+      if (!logEl) return;
+      var line = document.createElement('div');
+      line.className = 'mcp-auth-line' + (cls ? ' ' + cls : '');
+      // Linkify URLs
+      line.innerHTML = _esc(text).replace(/https?:\/\/[^\s]+/g, function (url) {
+        return '<a href="' + url + '" target="_blank" class="mcp-auth-url">' + url + '</a>';
+      });
+      logEl.appendChild(line);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    sse.onmessage = function (evt) {
+      var msg;
+      try { msg = JSON.parse(evt.data); } catch (_) { return; }
+
+      if (msg.type === 'start') {
+        appendLine(msg.data, 'system');
+      } else if (msg.type === 'stdout' || msg.type === 'stderr') {
+        appendLine(msg.data, msg.type === 'stderr' ? 'err' : '');
+        // Once we see a URL, update hint
+        if (urlPattern.test(msg.data) && hintEl) {
+          hintEl.textContent = 'Open the URL above in your browser and complete sign-in. This window will close automatically when done.';
+        }
+      } else if (msg.type === 'error') {
+        appendLine('Error: ' + msg.data, 'err');
+      } else if (msg.type === 'exit') {
+        var code = msg.data;
+        appendLine(code === 0 ? '✓ Authentication complete.' : 'Process exited with code ' + code + '.', code === 0 ? 'ok' : 'err');
+        sse.close();
+        if (code === 0) {
+          setTimeout(function () { closeAuthModal(); }, 1800);
+        }
+      }
+    };
+
+    sse.onerror = function () {
+      appendLine('Connection to server lost.', 'err');
+      sse.close();
+    };
+  }
+
   // ── OAuth ─────────────────────────────────────────────────────────────────
 
   function oauthSignIn(serverId, authUrl) {
@@ -524,5 +620,7 @@ var mcpMgr = (function () {
     applyPreset: applyPreset,
     oauthSignIn: oauthSignIn,
     refreshHttpTools: refreshHttpTools,
+    openAuthModal: openAuthModal,
+    closeAuthModal: closeAuthModal,
   };
 })();

@@ -4555,6 +4555,63 @@ app.post('/api/custom-mcp-servers/:id/refresh', (req, res) => {
   res.json({ ok: true });
 });
 
+// GET SSE stream: spawn the STDIO server with --login (or a custom auth flag) and
+// stream stdout+stderr back line-by-line so the UI can show the device code prompt.
+// The process exits on its own once auth completes.
+app.get('/api/custom-mcp-servers/:id/auth-stream', (req, res) => {
+  const servers = readCustomMcpServers();
+  const server = servers.find(s => s.id === req.params.id);
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+  if (server.transport !== 'stdio') return res.status(400).json({ error: 'Auth stream only supported for STDIO servers' });
+
+  // SSE headers
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const send = (type, data) => {
+    if (res.writableEnded) return;
+    res.write(`data: ${JSON.stringify({ type, data })}\n\n`);
+  };
+
+  const args = [...(server.args || []).filter(Boolean), '--login'];
+  const env = { ...process.env, ...(server.env || {}) };
+  const cwd = server.cwd ? server.cwd.replace(/^~/, os.homedir()) : os.homedir();
+
+  send('start', `Spawning: ${server.command} ${args.join(' ')}`);
+
+  let proc;
+  try {
+    proc = spawn(server.command, args, { env, cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (e) {
+    send('error', e.message);
+    res.end();
+    return;
+  }
+
+  const onData = (stream) => (chunk) => {
+    const text = chunk.toString();
+    // Split on newlines so each line is a separate event
+    for (const line of text.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (trimmed) send(stream, trimmed);
+    }
+  };
+
+  proc.stdout.on('data', onData('stdout'));
+  proc.stderr.on('data', onData('stderr'));
+
+  proc.on('error', (e) => { send('error', e.message); res.end(); });
+  proc.on('exit', (code) => {
+    send('exit', code);
+    res.end();
+  });
+
+  // If client disconnects, kill the process
+  req.on('close', () => { try { proc.kill('SIGTERM'); } catch (_) {} });
+});
+
 // ── End Custom MCP Servers ──────────────────────────────────────────────────
 
 // Start trying to connect immediately when the server starts
