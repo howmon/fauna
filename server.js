@@ -3906,7 +3906,7 @@ const playwrightMCP = new PlaywrightMCPClient();
 // to the bundled @playwright/mcp STDIO client as today.
 
 class FaunaMCPHTTPClient {
-  constructor(url = 'http://localhost:3341') {
+  constructor(url = 'http://localhost:3341/mcp') {
     this._url = url;
     this._sessionId = null;
     this._nextId = 1;
@@ -4045,7 +4045,7 @@ async function _detectAndConnectFaunaMCP() {
   const alive = await _probeTcpPort(3341);
   if (alive && !_faunaMCPClient) {
     console.log('[FaunaMCP] Detected on port 3341 — switching to external browser backend');
-    _faunaMCPClient = new FaunaMCPHTTPClient('http://localhost:3341');
+    _faunaMCPClient = new FaunaMCPHTTPClient('http://localhost:3341/mcp');
     _faunaMCPClient._ensureInit().catch(e => console.log('[FaunaMCP] Init warning:', e.message));
     // Reset playwrightMCP's tool cache so the AI sees faunamcp's richer set next call
     playwrightMCP.toolsCache = null;
@@ -4111,7 +4111,7 @@ async function startBrowserServer() {
   if (await _probeTcpPort(3341)) {
     console.log('[BrowserServer] FaunaMCP detected on port 3341 — skipping built-in browser-server');
     if (!_faunaMCPClient) {
-      _faunaMCPClient = new FaunaMCPHTTPClient('http://localhost:3341');
+      _faunaMCPClient = new FaunaMCPHTTPClient('http://localhost:3341/mcp');
       _faunaMCPClient._ensureInit().catch(e => console.log('[FaunaMCP] Init warning:', e.message));
     }
     return;
