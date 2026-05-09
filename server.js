@@ -26,6 +26,7 @@ import {
   getProjectSystemContext,
 } from './project-manager.js';
 import { loadInstructionFiles, _safeReadInstructionFile, _isPathInside, _realPathOrResolve, INSTRUCTION_FILE_LIMIT, INSTRUCTION_TOTAL_LIMIT } from './lib/instruction-files.js';
+import QRCode     from 'qrcode';
 
 // Electron APIs — available when server runs inside the Electron main process.
 // Gracefully degrade if run standalone (e.g. during testing).
@@ -631,9 +632,13 @@ function getMobilePairData() {
   return { token, ips, port: PORT_NUM, hostname: os.hostname(), primaryQr, qrImage: null, tunnelUrl: null };
 }
 
-app.get('/api/mobile/pair', (_req, res) => {
-  try { res.json(getMobilePairData()); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+app.get('/api/mobile/pair', async (_req, res) => {
+  try {
+    const data = getMobilePairData();
+    // Generate QR code as data URL so it works offline in Electron
+    data.qrImage = await QRCode.toDataURL(data.primaryQr, { width: 200, margin: 2 });
+    res.json(data);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/mobile/pair/reset', (_req, res) => {
