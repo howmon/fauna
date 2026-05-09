@@ -201,6 +201,13 @@
         <i class="ti ti-user-circle" id="topbar-account-icon"></i>
         <span id="topbar-account-label" style="display:none"></span>
       </button>
+      <div id="topbar-notif-wrap" class="topbar-notif-wrap">
+        <button class="topbar-icon-btn topbar-notif-btn" id="topbar-notif-btn" onclick="toggleNotificationPanel()" title="Notifications">
+          <i class="ti ti-bell"></i>
+          <span id="topbar-notif-badge" class="store-notif-badge" style="display:none"></span>
+        </button>
+        <div id="topbar-notif-panel"></div>
+      </div>
       <!-- Overflow menu -->
       <div id="topbar-overflow" class="topbar-overflow">
         <button class="topbar-btn" id="topbar-overflow-btn" onclick="toggleTopbarMenu(event)" title="More options"><i class="ti ti-dots"></i></button>
@@ -1203,22 +1210,16 @@ Examples:
   }
 
   function _syncFaunaHeaderUpdate(data) {
+    if (data) _faunaUpdateLastData = data;
     var headerBtn = document.getElementById('topbar-update-btn');
+    if (typeof syncTopbarNotificationButton === 'function') syncTopbarNotificationButton();
+    if (typeof renderTopbarNotifications === 'function' && typeof storeState !== 'undefined' && storeState.notifOpen) renderTopbarNotifications();
     if (!headerBtn) return;
     var label = headerBtn.querySelector('span');
     var icon = headerBtn.querySelector('i');
     var job = data && data.job;
     var running = !!(job && job.running);
-    var available = !!(job && job.updateAvailable);
-    if (!running && !available) {
-      headerBtn.style.display = 'none';
-      headerBtn.disabled = false;
-      headerBtn.classList.remove('updating');
-      if (label) label.textContent = 'Update';
-      if (icon) icon.className = 'ti ti-download';
-      return;
-    }
-    headerBtn.style.display = 'inline-flex';
+    headerBtn.style.display = 'none';
     headerBtn.disabled = running;
     headerBtn.classList.toggle('updating', running);
     if (label) label.textContent = running ? 'Updating' : 'Update';

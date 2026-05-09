@@ -111,7 +111,6 @@ function renderStorePanel() {
         '<button class="store-nav-btn' + (storeState.view === 'browse' ? ' active' : '') + '" onclick="storeNavigate(\'browse\')"><i class="ti ti-grid-dots"></i> Browse</button>' +
         (isReviewer ? '<button class="store-nav-btn' + (storeState.view === 'review' ? ' active' : '') + '" onclick="storeNavigate(\'review\')"><i class="ti ti-shield-check"></i> Review</button>' : '') +
         '<button class="store-nav-btn' + (storeState.view === 'publish' ? ' active' : '') + '" onclick="storeNavigate(\'publish\')"><i class="ti ti-upload"></i> Publish</button>' +
-        (storeState.account ? '<button class="store-notif-btn" onclick="toggleNotificationPanel()" title="Notifications"><i class="ti ti-bell"></i>' + (storeState.unreadCount > 0 ? '<span class="store-notif-badge">' + storeState.unreadCount + '</span>' : '') + '</button>' : '') +
       '</div>' +
       (embeddedInSettings ? '' : '<button class="store-close-btn" onclick="closeAgentStore()" title="Close"><i class="ti ti-x"></i></button>') +
     '</div>';
@@ -124,9 +123,7 @@ function renderStorePanel() {
     case 'publish': bodyHtml = renderStorePublish(); break;
   }
 
-  var notifHtml = storeState.notifOpen ? renderNotificationPanel() : '';
-
-  panel.innerHTML = headerHtml + notifHtml + '<div class="store-body">' + bodyHtml + '</div>';
+  panel.innerHTML = headerHtml + '<div class="store-body">' + bodyHtml + '</div>';
 }
 
 function storeNavigate(view) {
@@ -1308,54 +1305,117 @@ function showReviewReasonInput(agentId, action, placeholder, onSubmit) {
 // ── Notifications ─────────────────────────────────────────────────────────
 
 async function loadUnreadCount() {
-  if (!storeState.account) return;
+  if (!storeState.account) {
+    storeState.unreadCount = 0;
+    syncTopbarNotificationButton();
+    return;
+  }
   try {
     var r = await storeApi('/notifications/unread-count');
     var d = await r.json();
     storeState.unreadCount = d.count || 0;
-    // Update badge without full re-render
-    var badge = document.querySelector('.store-notif-badge');
-    var btn = document.querySelector('.store-notif-btn');
-    if (btn) {
-      if (storeState.unreadCount > 0) {
-        if (badge) badge.textContent = storeState.unreadCount;
-        else btn.insertAdjacentHTML('beforeend', '<span class="store-notif-badge">' + storeState.unreadCount + '</span>');
-      } else if (badge) {
-        badge.remove();
-      }
-    }
+    syncTopbarNotificationButton();
   } catch (_) {}
 }
 
 function toggleNotificationPanel() {
   storeState.notifOpen = !storeState.notifOpen;
   if (storeState.notifOpen) loadNotifications();
-  else renderStorePanel();
+  else renderTopbarNotifications();
+  syncTopbarNotificationButton();
+}
+
+function closeNotificationPanel() {
+  storeState.notifOpen = false;
+  renderTopbarNotifications();
+  syncTopbarNotificationButton();
 }
 
 async function loadNotifications() {
-  try {
-    var r = await storeApi('/notifications');
-    var d = await r.json();
-    storeState.notifications = d.data || d || [];
-  } catch (_) {
+  if (!storeState.account) {
     storeState.notifications = [];
+  } else {
+    try {
+      var r = await storeApi('/notifications');
+      var d = await r.json();
+      storeState.notifications = d.data || d || [];
+    } catch (_) {
+      storeState.notifications = [];
+    }
   }
-  renderStorePanel();
+  renderTopbarNotifications();
+}
+
+function hasFaunaUpdateNotification() {
+  var data = typeof _faunaUpdateLastData !== 'undefined' ? _faunaUpdateLastData : null;
+  var job = data && data.job;
+  return !!(job && (job.running || job.updateAvailable || job.error));
+}
+
+function syncTopbarNotificationButton() {
+  var btn = document.getElementById('topbar-notif-btn');
+  var badge = document.getElementById('topbar-notif-badge');
+  if (!btn || !badge) return;
+  var hasUpdate = hasFaunaUpdateNotification();
+  btn.classList.toggle('active', !!storeState.notifOpen);
+  if (storeState.unreadCount > 0) {
+    badge.style.display = 'flex';
+    badge.textContent = storeState.unreadCount > 99 ? '99+' : String(storeState.unreadCount);
+    badge.classList.remove('update-only');
+  } else if (hasUpdate) {
+    badge.style.display = 'flex';
+    badge.textContent = '';
+    badge.classList.add('update-only');
+  } else {
+    badge.style.display = 'none';
+    badge.textContent = '';
+    badge.classList.remove('update-only');
+  }
+}
+
+function renderTopbarNotifications() {
+  var panel = document.getElementById('topbar-notif-panel');
+  if (!panel) return;
+  panel.innerHTML = storeState.notifOpen ? renderNotificationPanel() : '';
+}
+
+function renderFaunaUpdateNotificationItem() {
+  var data = typeof _faunaUpdateLastData !== 'undefined' ? _faunaUpdateLastData : null;
+  var job = data && data.job;
+  if (!job || (!job.running && !job.updateAvailable && !job.error)) return '';
+  var running = !!job.running;
+  var icon = job.error ? 'ti-alert-circle notif-error' : running ? 'ti-loader-2 notif-warn' : 'ti-download notif-success';
+  var title = job.error ? 'Update failed' : running ? 'Installing update' : 'Fauna update available';
+  var body = job.error || job.message || (job.latestSha ? 'Latest build ' + String(job.latestSha).slice(0, 7) : 'A new version is ready to install.');
+  var action = !running && !job.error ? '<button type="button" class="store-notif-action" onclick="event.stopPropagation();_installFaunaUpdate()"><i class="ti ti-download"></i> Install</button>' : '';
+  if (job.error) action = '<button type="button" class="store-notif-action" onclick="event.stopPropagation();_checkFaunaUpdate()"><i class="ti ti-refresh"></i> Retry</button>';
+  return '<div class="store-notif-item unread update-notif-item">' +
+    '<i class="ti ' + icon + '"></i>' +
+    '<div class="store-notif-content">' +
+      '<div class="store-notif-title">' + escHtml(title) + '</div>' +
+      '<div class="store-notif-body">' + escHtml(body || '') + '</div>' +
+    '</div>' +
+    action +
+  '</div>';
 }
 
 function renderNotificationPanel() {
   var items = storeState.notifications;
+  var updateHtml = renderFaunaUpdateNotificationItem();
   var html = '<div class="store-notif-panel">' +
     '<div class="store-notif-header">' +
       '<span>Notifications</span>' +
-      (items.length > 0 ? '<button class="store-notif-markall" onclick="markAllNotificationsRead()">Mark all read</button>' : '') +
+      '<div class="store-notif-header-actions">' +
+        (items.length > 0 ? '<button class="store-notif-markall" onclick="markAllNotificationsRead()">Mark all read</button>' : '') +
+        '<button class="store-notif-close" onclick="closeNotificationPanel()" title="Close"><i class="ti ti-x"></i></button>' +
+      '</div>' +
     '</div>';
 
-  if (items.length === 0) {
+  if (items.length === 0 && !updateHtml) {
     html += '<div class="store-notif-empty"><i class="ti ti-bell-off"></i> No notifications</div>';
   } else {
     html += '<div class="store-notif-list">';
+    html += updateHtml;
     items.forEach(function(n) {
       var icon = n.type === 'agent_approved' ? 'ti-circle-check' :
                  n.type === 'agent_rejected' ? 'ti-circle-x' :
@@ -1404,7 +1464,8 @@ async function markNotificationRead(id) {
   storeState.unreadCount = Math.max(0, storeState.unreadCount - 1);
   // Mark locally
   storeState.notifications.forEach(function(n) { if (n.id === id) n.read_at = new Date().toISOString(); });
-  renderStorePanel();
+  syncTopbarNotificationButton();
+  renderTopbarNotifications();
 }
 
 async function markAllNotificationsRead() {
@@ -1413,7 +1474,8 @@ async function markAllNotificationsRead() {
   } catch (_) {}
   storeState.unreadCount = 0;
   storeState.notifications.forEach(function(n) { n.read_at = n.read_at || new Date().toISOString(); });
-  renderStorePanel();
+  syncTopbarNotificationButton();
+  renderTopbarNotifications();
 }
 
 // ── Superadmin actions ────────────────────────────────────────────────────
@@ -1526,4 +1588,5 @@ function initAgentStore() {
   loadUnreadCount();
   // Update topbar account label
   updateTopbarAccount();
+  syncTopbarNotificationButton();
 }
