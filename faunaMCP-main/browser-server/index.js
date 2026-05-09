@@ -29,17 +29,46 @@ const HTTP_PORT = 3341;
 // ── Extension connection state ────────────────────────────────────────────
 
 let extConn = null;
+const extConns = new Map();
+let extConnSeq = 0;
 const pending = new Map();
 
-function sendToExt(action, params = {}, tabId = null, timeoutMs = 20000) {
+function parseBrowser(ua) {
+  if (!ua) return 'Browser';
+  if (/Edg\//i.test(ua)) return 'Edge';
+  if (/OPR\//i.test(ua)) return 'Opera';
+  if (/Brave\//i.test(ua)) return 'Brave';
+  if (/Vivaldi\//i.test(ua)) return 'Vivaldi';
+  if (/Chrome\//i.test(ua)) return 'Chrome';
+  if (/Firefox\//i.test(ua)) return 'Firefox';
+  if (/Safari\//i.test(ua)) return 'Safari';
+  return 'Browser';
+}
+
+function openExtConns() {
+  return [...extConns.values()].filter(conn => conn.ws.readyState === 1);
+}
+
+function pickExtConn(browser = null) {
+  const conns = openExtConns();
+  if (!conns.length) return null;
+  if (browser) {
+    const wanted = String(browser).toLowerCase();
+    return conns.find(conn => conn.browser.toLowerCase() === wanted) || null;
+  }
+  return conns.sort((a, b) => b.connectedAt - a.connectedAt)[0] || null;
+}
+
+function sendToExt(action, params = {}, tabId = null, timeoutMs = 20000, browser = null) {
   return new Promise((resolve, reject) => {
-    if (!extConn || extConn.ws.readyState !== 1) return reject(new Error('NO_EXT'));
+    const conn = pickExtConn(browser);
+    if (!conn) return reject(new Error('NO_EXT'));
     const id    = randomUUID();
     const timer = setTimeout(() => { pending.delete(id); reject(new Error(`Command "${action}" timed out after ${timeoutMs}ms`)); }, timeoutMs);
     pending.set(id, { resolve, reject, timer });
     const msg = { type: 'cmd', id, action, params };
     if (tabId != null) msg.tabId = tabId;
-    extConn.ws.send(JSON.stringify(msg));
+    conn.ws.send(JSON.stringify(msg));
   });
 }
 
@@ -326,8 +355,18 @@ wss.on('connection', (ws) => {
     let msg; try { msg = JSON.parse(raw); } catch { return; }
     if (msg.type === 'ping') { ws.send(JSON.stringify({ type: 'pong' })); return; }
     if (msg.type === 'ext:hello') {
-      conn = { ws, info: msg }; extConn = conn;
-      process.stderr.write(`[Browser] Extension connected — ${msg.userAgent || 'unknown'}\n`);
+      if (conn) extConns.delete(conn.id);
+      conn = {
+        id: `relay-${++extConnSeq}`,
+        ws,
+        info: msg,
+        browser: parseBrowser(msg.userAgent),
+        version: msg.version || null,
+        connectedAt: Date.now(),
+      };
+      extConns.set(conn.id, conn);
+      extConn = pickExtConn();
+      process.stderr.write(`[Browser] Extension connected — ${conn.browser} (${msg.userAgent || 'unknown'})\n`);
       if (msg.activeTab) process.stderr.write(`[Browser] Active tab: ${msg.activeTab.title || msg.activeTab.url}\n`);
       return;
     }
@@ -335,7 +374,13 @@ wss.on('connection', (ws) => {
       const p = pending.get(msg.id); pending.delete(msg.id); clearTimeout(p.timer); p.resolve(msg);
     }
   });
-  ws.on('close', () => { if (conn === extConn) { extConn = null; process.stderr.write('[Browser] Extension disconnected\n'); } });
+  ws.on('close', () => {
+    if (conn) {
+      extConns.delete(conn.id);
+      if (conn === extConn) extConn = pickExtConn();
+      process.stderr.write(`[Browser] Extension disconnected — ${conn.browser}\n`);
+    }
+  });
 });
 } // end wireWss
 
@@ -836,14 +881,44 @@ const httpServer = createServer(async (req, res) => {
 
   // GET /ext-status — is a browser extension connected to this relay?
   if (req.method === 'GET' && url.pathname === '/ext-status') {
-    const connected = !!(extConn && extConn.ws.readyState === 1);
-    const info = connected ? extConn.info : null;
+    const browsers = openExtConns().map(conn => ({
+      id: conn.id,
+      browser: conn.browser,
+      version: conn.version,
+      connectedAt: conn.connectedAt,
+      activeTab: conn.info?.activeTab ?? null,
+    }));
+    const connected = browsers.length > 0;
+    const current = pickExtConn();
+    const info = current?.info ?? null;
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       connected,
-      browser: connected ? (info?.userAgent?.match(/Edg\//) ? 'Edge' : info?.userAgent?.match(/Chrome\//) ? 'Chrome' : 'Browser') : null,
+      browser: current?.browser ?? null,
       activeTab: info?.activeTab ?? null,
+      browsers,
     }));
+    return;
+  }
+
+  // POST /ext-command — forward a command to a connected browser extension.
+  if (req.method === 'POST' && url.pathname === '/ext-command') {
+    let body = ''; for await (const chunk of req) body += chunk;
+    let parsed; try { parsed = JSON.parse(body || '{}'); } catch { res.writeHead(400); res.end('Invalid JSON'); return; }
+    const { action, params = {}, tabId = null, timeout = 30000, browser = null } = parsed;
+    if (!action) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'action required' }));
+      return;
+    }
+    try {
+      const result = await sendToExt(action, params, tabId, Math.min(timeout, 60000), browser);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(result));
+    } catch (e) {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: e.message || String(e) }));
+    }
     return;
   }
 

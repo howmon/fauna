@@ -3578,6 +3578,25 @@ function extCommand(action, params = {}, tabId = null, timeoutMs = 30000, browse
   });
 }
 
+async function relayExtCommand(action, params = {}, tabId = null, timeoutMs = 30000, browser = null) {
+  const response = await fetch('http://localhost:3341/ext-command', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(Math.min(timeoutMs + 1500, 65000)),
+    body: JSON.stringify({ action, params, tabId, timeout: timeoutMs, browser }),
+  });
+  let data = null;
+  try { data = await response.json(); } catch (_) {}
+  if (!response.ok) throw new Error(data?.error || 'FaunaMCP browser relay command failed');
+  return data;
+}
+
+async function browserExtCommand(action, params = {}, tabId = null, timeoutMs = 30000, browser = null) {
+  const direct = _pickExtSocket(browser);
+  if (direct) return extCommand(action, params, tabId, timeoutMs, browser);
+  return relayExtCommand(action, params, tabId, timeoutMs, browser);
+}
+
 function startExtWebSocketServer(httpServer) {
   try {
     const WS = _require('ws');
@@ -9149,11 +9168,23 @@ app.get('/api/ext/status', async (_req, res) => {
     if (relayRes.ok) {
       const relayData = await relayRes.json();
       if (relayData.connected) {
-        const browserName = relayData.browser || 'Browser';
-        const alreadyDirect = browsers.some(b => b.browser === browserName);
-        if (!alreadyDirect) {
-          browsers.push({ id: 'relay-0', browser: browserName, version: null, connectedAt: Date.now(), source: 'relay' });
-          relayExtFound = true;
+        const relayBrowsers = Array.isArray(relayData.browsers) && relayData.browsers.length
+          ? relayData.browsers
+          : [{ id: 'relay-0', browser: relayData.browser || 'Browser', version: null, connectedAt: Date.now() }];
+        for (const relayBrowser of relayBrowsers) {
+          const browserName = relayBrowser.browser || 'Browser';
+          const alreadyDirect = browsers.some(b => b.browser === browserName);
+          if (!alreadyDirect) {
+            browsers.push({
+              id: relayBrowser.id || ('relay-' + browsers.length),
+              browser: browserName,
+              version: relayBrowser.version || null,
+              connectedAt: relayBrowser.connectedAt || Date.now(),
+              activeTab: relayBrowser.activeTab || null,
+              source: 'relay',
+            });
+            relayExtFound = true;
+          }
         }
       }
     }
@@ -9677,13 +9708,19 @@ app.post('/api/fauna/install-update', (req, res) => {
 
 // GET /api/ext/install-dir — path to the browser-extension folder (for unpacked load)
 app.get('/api/ext/install-dir', (_req, res) => {
-  // Prefer the extraResources copy (packaged app), fall back to dev source
+  // Prefer the user-installed copy because Chrome/Edge load unpacked extensions
+  // from a stable folder. The install endpoint refreshes this from the current
+  // bundled extension, so it survives app replacement and avoids stale bundles.
+  if (fs.existsSync(path.join(BROWSER_EXT_INSTALL_DIR, 'manifest.json'))) {
+    return res.json({ path: BROWSER_EXT_INSTALL_DIR, exists: true, installed: true });
+  }
+  // Fall back to the bundled copy before first install.
   const resPkg = process.resourcesPath
     ? path.join(process.resourcesPath, 'browser-extension')
     : null;
   const devPath = path.join(__dirname, 'browser-extension');
   const extPath = (resPkg && fs.existsSync(resPkg)) ? resPkg : devPath;
-  res.json({ path: extPath, exists: fs.existsSync(extPath) });
+  res.json({ path: extPath, exists: fs.existsSync(extPath), installed: false });
 });
 
 // POST /api/shell-open — reveal a path in Finder / Explorer
@@ -9708,7 +9745,7 @@ app.post('/api/ext/command', async (req, res) => {
   const { action, params = {}, tabId = null, timeout = 30000, browser = null } = req.body || {};
   if (!action) return res.status(400).json({ ok: false, error: 'action required' });
   try {
-    const result = await extCommand(action, params, tabId, Math.min(timeout, 60000), browser);
+    const result = await browserExtCommand(action, params, tabId, Math.min(timeout, 60000), browser);
     res.json(result);
   } catch (e) {
     res.status(503).json({ ok: false, error: e.message });
@@ -9720,12 +9757,19 @@ app.post('/api/ext/command', async (req, res) => {
 app.post('/api/ext/snapshot', async (req, res) => {
   const { tabId = null, full = false, browser = null } = req.body || {};
 
-  // Try extension first
+  // Try extension first, either directly on Fauna or through the FaunaMCP relay.
   const info = _pickExtSocket(browser);
-  if (info) {
+  let relayInfo = null;
+  if (!info) {
+    try {
+      const relayRes = await fetch('http://localhost:3341/ext-status', { signal: AbortSignal.timeout(800) });
+      if (relayRes.ok) relayInfo = await relayRes.json();
+    } catch (_) {}
+  }
+  if (info || relayInfo?.connected) {
     try {
       const action = full ? 'snapshot-full' : 'snapshot';
-      const result = await extCommand(action, {}, tabId, 15000, browser);
+      const result = await browserExtCommand(action, {}, tabId, 15000, browser);
       // Extension may return ok:false if all capture methods failed
       if (result.ok) return res.json(result);
       // Extension is connected but capture failed — do NOT launch a new browser.
