@@ -555,6 +555,140 @@ app.post('/api/projects/:id/contexts/from-file', (req, res) => {
   }
 });
 
+// ── Store: auth/me ────────────────────────────────────────────────────────
+app.get('/api/store/auth/me', (req, res) => {
+  storeProxy(req, res, 'GET', '/auth/me');
+});
+
+// ── Provider API key management ───────────────────────────────────────────
+// Keys stored in FAUNA_CONFIG_DIR/provider-keys.json (plain-text, local-only)
+const PROVIDER_KEYS_FILE = path.join(FAUNA_CONFIG_DIR, 'provider-keys.json');
+const KNOWN_PROVIDERS = [
+  { id: 'openai',    name: 'OpenAI',    placeholder: 'sk-…'     },
+  { id: 'anthropic', name: 'Anthropic', placeholder: 'sk-ant-…' },
+  { id: 'google',    name: 'Google',    placeholder: 'AIza…'    },
+];
+
+function readProviderKeys() {
+  try { return JSON.parse(fs.readFileSync(PROVIDER_KEYS_FILE, 'utf8')); } catch (_) { return {}; }
+}
+function writeProviderKeys(keys) {
+  fs.mkdirSync(FAUNA_CONFIG_DIR, { recursive: true });
+  fs.writeFileSync(PROVIDER_KEYS_FILE, JSON.stringify(keys, null, 2));
+}
+function keyPreview(k) { return k ? k.slice(0, 4) + '…' + k.slice(-4) : ''; }
+
+app.get('/api/providers', (_req, res) => {
+  const stored = readProviderKeys();
+  res.json({
+    providers: KNOWN_PROVIDERS.map(p => ({
+      id: p.id, name: p.name,
+      configured: !!stored[p.id],
+      preview: stored[p.id] ? keyPreview(stored[p.id]) : null,
+    })),
+  });
+});
+
+app.post('/api/providers/:provider/key', (req, res) => {
+  const { provider } = req.params;
+  const key = (req.body?.key || '').trim();
+  if (!key) return res.status(400).json({ error: 'key required' });
+  if (!KNOWN_PROVIDERS.find(p => p.id === provider)) return res.status(404).json({ error: 'Unknown provider' });
+  const keys = readProviderKeys();
+  keys[provider] = key;
+  writeProviderKeys(keys);
+  res.json({ ok: true, preview: keyPreview(key) });
+});
+
+app.delete('/api/providers/:provider/key', (req, res) => {
+  const keys = readProviderKeys();
+  delete keys[req.params.provider];
+  writeProviderKeys(keys);
+  res.json({ ok: true });
+});
+
+// ── Mobile pairing ────────────────────────────────────────────────────────
+const MOBILE_TOKEN_FILE = path.join(FAUNA_CONFIG_DIR, 'mobile-token.json');
+
+function getMobilePairData() {
+  let token;
+  try { token = JSON.parse(fs.readFileSync(MOBILE_TOKEN_FILE, 'utf8')).token; } catch (_) {}
+  if (!token) {
+    token = crypto.randomBytes(32).toString('hex');
+    fs.mkdirSync(FAUNA_CONFIG_DIR, { recursive: true });
+    fs.writeFileSync(MOBILE_TOKEN_FILE, JSON.stringify({ token }));
+  }
+  const PORT_NUM = 3737;
+  const ifaces = os.networkInterfaces();
+  const ips = [];
+  for (const iface of Object.values(ifaces)) {
+    for (const addr of (iface || [])) {
+      if (addr.family === 'IPv4' && !addr.internal) ips.push(addr.address);
+    }
+  }
+  const primary = ips[0] || '127.0.0.1';
+  const primaryQr = `fauna://pair?host=${primary}&port=${PORT_NUM}&token=${token}`;
+  return { token, ips, port: PORT_NUM, hostname: os.hostname(), primaryQr, qrImage: null, tunnelUrl: null };
+}
+
+app.get('/api/mobile/pair', (_req, res) => {
+  try { res.json(getMobilePairData()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/mobile/pair/reset', (_req, res) => {
+  try {
+    const token = crypto.randomBytes(32).toString('hex');
+    fs.mkdirSync(FAUNA_CONFIG_DIR, { recursive: true });
+    fs.writeFileSync(MOBILE_TOKEN_FILE, JSON.stringify({ token }));
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Tunnel (stub — no external tunnel dependency) ─────────────────────────
+app.post('/api/tunnel/start', (_req, res) => {
+  res.status(501).json({ ok: false, error: 'Remote tunnel not configured' });
+});
+app.post('/api/tunnel/stop', (_req, res) => {
+  res.json({ ok: true });
+});
+
+// ── Enterprise auth (stub — enterprise-auth.js not wired) ────────────────
+app.get('/api/enterprise-auth/status', (_req, res) => {
+  res.json({ configured: false, signedIn: false, pendingDeviceCode: null });
+});
+app.post('/api/enterprise-auth/sign-in', (_req, res) => {
+  res.status(501).json({ ok: false, error: 'Enterprise auth not configured' });
+});
+app.post('/api/enterprise-auth/sign-out', (_req, res) => {
+  res.json({ ok: true });
+});
+
+// ── WorkIQ (stub — workiq-integration.js not wired) ──────────────────────
+app.get('/api/workiq/status', (_req, res) => {
+  res.json({ connected: false, available: false });
+});
+app.post('/api/workiq/connect', (_req, res) => {
+  res.status(501).json({ ok: false, error: 'WorkIQ not configured' });
+});
+app.post('/api/workiq/sign-out', (_req, res) => {
+  res.json({ ok: true });
+});
+
+// ── Fauna self-update ─────────────────────────────────────────────────────
+let _faunaUpdateJob = null;
+
+app.get('/api/fauna/update-status', (_req, res) => {
+  res.json({ job: _faunaUpdateJob || { phase: 'current', updateAvailable: false } });
+});
+
+app.post('/api/fauna/check-update', async (_req, res) => {
+  // Stub: report current version as up to date. A real implementation would
+  // compare against a releases API.
+  _faunaUpdateJob = { phase: 'current', updateAvailable: false, checking: false };
+  res.json({ job: _faunaUpdateJob });
+});
+
 // ── Token resolution ──────────────────────────────────────────────────────
 // Electron runs with a stripped PATH so `gh` may not be found.
 // Resolution order:
