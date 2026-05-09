@@ -157,6 +157,7 @@
       "design-prompts.js",
       "afterPack.cjs",
       "agent-*.js",
+      "lib/**",
       "public/**",
       "assets/**",
       "package.json",
