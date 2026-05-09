@@ -4072,6 +4072,7 @@ class FaunaMCPHTTPClient {
 
 let _faunaMCPClient = null;          // FaunaMCPHTTPClient when FaunaMCP is running
 let _faunaMCPAutodetectTimer = null;
+let _faunaMCPDetectPromise = null;
 
 /** Quick TCP probe — resolves true if something is listening on port */
 function _probeTcpPort(port, timeoutMs = 400) {
@@ -4086,13 +4087,21 @@ function _probeTcpPort(port, timeoutMs = 400) {
 
 /** Probe port 3341 and toggle _faunaMCPClient accordingly */
 async function _detectAndConnectFaunaMCP() {
+  if (_faunaMCPDetectPromise) return _faunaMCPDetectPromise;
+  _faunaMCPDetectPromise = _detectAndConnectFaunaMCPOnce().finally(() => { _faunaMCPDetectPromise = null; });
+  return _faunaMCPDetectPromise;
+}
+
+async function _detectAndConnectFaunaMCPOnce() {
   const alive = await _probeTcpPort(3341);
   if (alive && !_faunaMCPClient) {
     console.log('[FaunaMCP] Detected on port 3341 — switching to external browser backend');
     _faunaMCPClient = new FaunaMCPHTTPClient('http://localhost:3341/mcp');
-    _faunaMCPClient._ensureInit().catch(e => console.log('[FaunaMCP] Init warning:', e.message));
+    await _faunaMCPClient._ensureInit().catch(e => console.log('[FaunaMCP] Init warning:', e.message));
     // Reset playwrightMCP's tool cache so the AI sees faunamcp's richer set next call
     playwrightMCP.toolsCache = null;
+  } else if (alive && _faunaMCPClient && !_faunaMCPClient._initialized) {
+    await _faunaMCPClient._ensureInit().catch(e => console.log('[FaunaMCP] Re-init warning:', e.message));
   } else if (!alive && _faunaMCPClient) {
     console.log('[FaunaMCP] No longer detected — reverting to built-in browser backend');
     _faunaMCPClient.stop();
@@ -4105,6 +4114,8 @@ async function _detectAndConnectFaunaMCP() {
 
 /** Start background probe (every 15 s) */
 function _startFaunaMCPAutodetect() {
+  if (_faunaMCPAutodetectTimer) return;
+  _detectAndConnectFaunaMCP().catch(() => {});
   _faunaMCPAutodetectTimer = setInterval(_detectAndConnectFaunaMCP, 15_000);
 }
 
@@ -9358,9 +9369,20 @@ async function _installFaunaMCP({ installApp = true } = {}) {
 }
 
 app.get('/api/faunamcp/status', async (_req, res) => {
+  await _detectAndConnectFaunaMCP().catch(() => {});
+  let toolCount = _faunaMCPClient?.toolsCache?.length ?? 0;
+  if (_faunaMCPClient && _faunaMCPClient._initialized && !toolCount) {
+    try {
+      const tools = await _faunaMCPClient.getTools();
+      toolCount = tools.length;
+    } catch (e) {
+      console.log('[FaunaMCP] Tool list warning:', e.message);
+    }
+  }
   const figmaRelayAvailable = !isMcpRunning() && await _probeTcpPort(FIGMA_WS_PORT, 300);
+  const browserMcpConnected = !!(_faunaMCPClient && _faunaMCPClient._initialized);
   res.json({
-    connected: !!_faunaMCPClient,
+    connected: browserMcpConnected,
     initialized: _faunaMCPClient?._initialized ?? false,
     url: _faunaMCPClient?._url ?? null,
     figmaRelayAvailable,
@@ -9376,7 +9398,7 @@ app.get('/api/faunamcp/status', async (_req, res) => {
       canBuild: true,
       job: _faunaMCPInstallJob,
     },
-    toolCount: _faunaMCPClient?.toolsCache?.length ?? 0,
+    toolCount,
     builtInRunning: !!(_browserServerProc && _browserServerProc.exitCode === null),
   });
 });
