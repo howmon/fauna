@@ -1544,6 +1544,16 @@ var PERMISSIONS_DEF_MAC = [
     actionLabel: 'Open Settings',
   },
   {
+    id: 'osascriptAccessibility',
+    icon: '<i class="ti ti-script"></i>',
+    name: 'AppleScript UI Access',
+    desc: 'Required when shell commands use osascript to control System Events. macOS may require /usr/bin/osascript separately from Fauna.',
+    required: false,
+    action: 'settings',
+    settingsUrl: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
+    actionLabel: 'Open Settings',
+  },
+  {
     id: 'automation',
     icon: '<i class="ti ti-robot"></i>',
     name: 'Automation',

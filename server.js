@@ -94,6 +94,42 @@ async function _guiScreenshot() {
   return b64;
 }
 
+const OSASCRIPT_A11Y_HINT = [
+  'macOS blocked /usr/bin/osascript from UI scripting.',
+  'Grant Accessibility to both Fauna and /usr/bin/osascript:',
+  '1. Open System Settings > Privacy & Security > Accessibility.',
+  '2. Add Fauna if it is missing.',
+  '3. Click +, press Cmd+Shift+G, enter /usr/bin/osascript, and add it.',
+  '4. Quit and reopen Fauna after changing the permission.',
+  'If Fauna was just updated/replaced, remove the old Fauna entry and add the current /Applications/Fauna.app again.'
+].join('\n');
+
+function isOsascriptAssistiveAccessError(text = '') {
+  return /osascript is not allowed assistive access|not allowed assistive access|\(-1728\)/i.test(String(text));
+}
+
+function withOsascriptAssistiveAccessHint(text = '') {
+  const body = String(text || '');
+  if (!isOsascriptAssistiveAccessError(body) || body.includes('/usr/bin/osascript')) return body;
+  return body.trimEnd() + '\n\n' + OSASCRIPT_A11Y_HINT + '\n';
+}
+
+function checkOsascriptAccessibility() {
+  if (process.platform !== 'darwin') return 'not-applicable';
+  try {
+    execSync('/usr/bin/osascript -e \'tell application "System Events" to count processes\'', {
+      encoding: 'utf8',
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return 'granted';
+  } catch (e) {
+    const output = String(e.stderr || e.stdout || e.message || '');
+    if (isOsascriptAssistiveAccessError(output)) return 'denied';
+    return 'unknown';
+  }
+}
+
 // Power-save blocker — keeps screen/CPU awake while any chat request is active.
 let _psBlockerId = null;
 let _psActiveCount = 0;
@@ -5311,7 +5347,7 @@ app.post('/api/shell-exec', (req, res) => {
       resetIdleTimer();
     });
     child.stderr.on('data', (chunk) => {
-      lastChunk = chunk.toString();
+      lastChunk = withOsascriptAssistiveAccessHint(chunk.toString());
       res.write(`data: ${JSON.stringify({ type: 'stderr', text: lastChunk })}\n\n`);
       resetIdleTimer();
     });
@@ -5357,7 +5393,7 @@ app.post('/api/shell-exec', (req, res) => {
         ok:       !err || err.killed === false && (err.code === 0 || stdout),
         exitCode: err?.code ?? 0,
         stdout:   stdout || '',
-        stderr:   stderr || '',
+        stderr:   withOsascriptAssistiveAccessHint(stderr || ''),
         command,
         cwd: workDir,
       });
@@ -7504,7 +7540,7 @@ app.post('/api/agent/shell-exec', (req, res) => {
       resetIdleTimer();
     });
     child.stderr.on('data', (chunk) => {
-      const text = chunk.toString();
+      const text = withOsascriptAssistiveAccessHint(chunk.toString());
       recentOutput = (recentOutput + text).slice(-500);
       res.write(`data: ${JSON.stringify({ type: 'stderr', text })}\n\n`);
       resetIdleTimer();
@@ -7540,7 +7576,7 @@ app.post('/api/agent/shell-exec', (req, res) => {
       ok:       !err || (stdout && err?.code === 0),
       exitCode: err?.code ?? 0,
       stdout:   stdout || '',
-      stderr:   stderr || '',
+      stderr:   withOsascriptAssistiveAccessHint(stderr || ''),
       command, cwd: workDir,
       sandboxed: true,
     });
@@ -7727,6 +7763,7 @@ app.get('/api/system-context', (req, res) => {
     } else {
       r.screenRecording = systemPreferences?.getMediaAccessStatus?.('screen') ?? 'unknown';
       r.accessibility   = (systemPreferences?.isTrustedAccessibilityClient?.(false) === true) ? 'granted' : 'denied';
+      r.osascriptAccessibility = checkOsascriptAccessibility();
       r.fullDiskAccess  = checkFullDiskAccess();
       r.automation      = 'auto-prompted';
     }
@@ -8736,6 +8773,10 @@ app.get('/api/permissions', (req, res) => {
     // Accessibility — Electron systemPreferences API
     result.accessibility = (systemPreferences?.isTrustedAccessibilityClient?.(false) === true)
       ? 'granted' : 'denied';
+
+    // Accessibility for AppleScript UI scripting through /usr/bin/osascript.
+    // macOS may require this separately from the parent Electron app.
+    result.osascriptAccessibility = checkOsascriptAccessibility();
 
     // Full Disk Access — file system probe
     result.fullDiskAccess = checkFullDiskAccess();
