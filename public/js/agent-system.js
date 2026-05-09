@@ -6,6 +6,8 @@ var AGENTS_KEY  = 'fauna-installed-agents';
 var activeAgent = null;   // { name, manifest, systemPrompt } or null = default mode
 var installedAgents = []; // cached list from server
 var agentAutocompleteOpen = false;
+var agentAutocompleteMentionFilter = '';
+var agentAutocompleteSearchFilter = '';
 
 // ── Built-in agents (moved to store) ─────────────────────────────────────
 
@@ -392,29 +394,78 @@ function showAgentAutocomplete(filter) {
   var dropdown = document.getElementById('agent-autocomplete');
   if (!dropdown) return;
 
-  var agents = getAllAgents();
-  if (filter) {
-    var f = filter.toLowerCase();
-    agents = agents.filter(function(a) {
-      return a.name.toLowerCase().includes(f) || a.displayName.toLowerCase().includes(f);
-    });
+  var previousMentionFilter = agentAutocompleteMentionFilter;
+  agentAutocompleteMentionFilter = filter || '';
+  if (!agentAutocompleteOpen || previousMentionFilter !== agentAutocompleteMentionFilter) {
+    agentAutocompleteSearchFilter = '';
   }
 
-  if (agents.length === 0 && !filter) {
+  var agents = getAllAgents();
+  if (agents.length === 0 && !agentAutocompleteMentionFilter) {
     dropdown.style.display = 'none';
     agentAutocompleteOpen = false;
     return;
   }
 
-  var html = agents.map(function(a) {
-    return '<div class="agent-ac-item" data-agent="' + escHtml(a.name) + '" onclick="selectAgentFromAutocomplete(\'' + escHtml(a.name) + '\')">' +
+  dropdown.innerHTML =
+    '<div class="agent-ac-search-wrap">' +
+      '<i class="ti ti-search"></i>' +
+      '<input id="agent-ac-filter" class="agent-ac-search" type="text" autocomplete="off" spellcheck="false" ' +
+        'placeholder="Filter agents…" value="' + escHtml(agentAutocompleteSearchFilter) + '" ' +
+        'oninput="updateAgentAutocompleteFilter(this.value)" onclick="event.stopPropagation()">' +
+      '<button class="agent-ac-clear" title="Clear filter" onclick="clearAgentAutocompleteFilter(event)"><i class="ti ti-x"></i></button>' +
+    '</div>' +
+    '<div id="agent-ac-results"></div>';
+
+  renderAgentAutocompleteResults();
+  dropdown.style.display = 'block';
+  agentAutocompleteOpen = true;
+}
+
+function updateAgentAutocompleteFilter(value) {
+  agentAutocompleteSearchFilter = value || '';
+  renderAgentAutocompleteResults();
+}
+
+function clearAgentAutocompleteFilter(event) {
+  if (event) event.stopPropagation();
+  agentAutocompleteSearchFilter = '';
+  var input = document.getElementById('agent-ac-filter');
+  if (input) input.value = '';
+  renderAgentAutocompleteResults();
+  if (input) input.focus();
+}
+
+function renderAgentAutocompleteResults() {
+  var results = document.getElementById('agent-ac-results');
+  if (!results) return;
+  var agents = getAllAgents();
+
+  if (agentAutocompleteMentionFilter) {
+    var f = agentAutocompleteMentionFilter.toLowerCase();
+    agents = agents.filter(function(a) {
+      return a.name.toLowerCase().includes(f) || a.displayName.toLowerCase().includes(f);
+    });
+  }
+
+  if (agentAutocompleteSearchFilter) {
+    var q = agentAutocompleteSearchFilter.toLowerCase();
+    agents = agents.filter(function(a) {
+      return a.name.toLowerCase().includes(q) ||
+        (a.displayName || '').toLowerCase().includes(q) ||
+        (a.description || '').toLowerCase().includes(q);
+    });
+  }
+
+  var html = agents.length ? agents.map(function(a) {
+    return '<div class="agent-ac-item" data-agent="' + escHtml(a.name) + '" onclick="selectAgentFromAutocomplete(this.dataset.agent)">' +
       agentIconHtml(a, 'agent-ac-icon') +
       '<div class="agent-ac-info">' +
         '<span class="agent-ac-name">@' + escHtml(a.displayName || a.name) + '</span>' +
         (a.description ? '<span class="agent-ac-desc">' + escHtml(a.description) + '</span>' : '') +
       '</div>' +
     '</div>';
-  }).join('');
+  }).join('') : '<div class="agent-ac-empty">No matching agents</div>';
 
   // Add footer actions
   html += '<div class="agent-ac-divider"></div>';
@@ -425,15 +476,15 @@ function showAgentAutocomplete(filter) {
     '<i class="ti ti-plus agent-ac-icon"></i>' +
     '<div class="agent-ac-info"><span class="agent-ac-name">Create New Agent</span></div></div>';
 
-  dropdown.innerHTML = html;
-  dropdown.style.display = 'block';
-  agentAutocompleteOpen = true;
+  results.innerHTML = html;
 }
 
 function hideAgentAutocomplete() {
   var dropdown = document.getElementById('agent-autocomplete');
   if (dropdown) dropdown.style.display = 'none';
   agentAutocompleteOpen = false;
+  agentAutocompleteMentionFilter = '';
+  agentAutocompleteSearchFilter = '';
 }
 
 function selectAgentFromAutocomplete(name) {
@@ -784,6 +835,15 @@ function handleAgentAutocompleteKey(e) {
   var active = dropdown.querySelector('.agent-ac-item.active');
   var idx = -1;
   items.forEach(function(item, i) { if (item === active) idx = i; });
+
+  if (!items.length) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      hideAgentAutocomplete();
+      return true;
+    }
+    return false;
+  }
 
   if (e.key === 'ArrowDown') {
     e.preventDefault();
