@@ -149,6 +149,7 @@
       "enterprise-auth.js",
       "workiq-integration.js",
       "private-integrations.js",
+      "workflow-features.js",
       "widget-preload.js",
       "task-manager.js",
       "task-runner.js",
