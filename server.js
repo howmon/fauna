@@ -12,6 +12,7 @@ import os         from 'os';
 import fs         from 'fs';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
+import { WebSocketServer } from 'ws';
 import { checkFilePath, checkNetworkAccess, checkShellCommand, getSandboxedEnv, getResourceLimits, audit, getAuditLog } from './agent-sandbox.js';
 import { getAgentTools, startAgentMCPServers, stopAgentMCPServers, executeBuiltInTool, executeCustomTool } from './agent-tools.js';
 import { scanAgent, formatScanReport } from './agent-scanner.js';
@@ -50,6 +51,172 @@ const PATH_SEP = IS_WIN ? ';' : ':';
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ limit: '25mb', extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Browser extension bridge. The extension connects to ws://localhost:3737/ext;
+// the UI polls these HTTP/SSE endpoints for connection state and pushed events.
+let extWss = null;
+let extNextClientId = 1;
+const extClients = new Map();
+const extPendingCommands = new Map();
+const extEventClients = new Set();
+
+function extBrowserName(userAgent = '') {
+  if (/Edg\//.test(userAgent)) return 'Edge';
+  if (/OPR\//.test(userAgent)) return 'Opera';
+  if (/Firefox\//.test(userAgent)) return 'Firefox';
+  if (/Chrome\//.test(userAgent)) return 'Chrome';
+  if (/Safari\//.test(userAgent)) return 'Safari';
+  return 'Browser';
+}
+
+function extStatusList() {
+  return Array.from(extClients.values()).map(client => ({
+    id: client.id,
+    browser: client.browser,
+    version: client.version,
+    connectedAt: client.connectedAt,
+    activeTab: client.activeTab || null,
+  }));
+}
+
+function sendExtSse(event, data = {}) {
+  const payload = JSON.stringify(data);
+  for (const res of Array.from(extEventClients)) {
+    try {
+      res.write(`event: ${event}\n`);
+      res.write(`data: ${payload}\n\n`);
+    } catch (_) {
+      extEventClients.delete(res);
+    }
+  }
+}
+
+function broadcastExtStatus() {
+  sendExtSse('message', { event: 'ext:status-changed', browsers: extStatusList() });
+}
+
+function handleExtMessage(client, raw) {
+  let msg;
+  try { msg = JSON.parse(raw.toString()); } catch (_) { return; }
+
+  if (msg.type === 'ping') {
+    try { client.ws.send(JSON.stringify({ type: 'pong' })); } catch (_) {}
+    return;
+  }
+
+  if (msg.type === 'ext:hello') {
+    client.version = msg.version || client.version;
+    client.userAgent = msg.userAgent || client.userAgent;
+    client.browser = extBrowserName(client.userAgent);
+    client.activeTab = msg.activeTab || client.activeTab || null;
+    broadcastExtStatus();
+    return;
+  }
+
+  if (msg.type === 'result' && msg.id && extPendingCommands.has(msg.id)) {
+    const pending = extPendingCommands.get(msg.id);
+    extPendingCommands.delete(msg.id);
+    clearTimeout(pending.timeoutId);
+    pending.resolve(msg);
+    return;
+  }
+
+  if (msg.type === 'event') {
+    const eventMsg = { event: msg.event, data: msg.data || {}, browser: client.browser, id: client.id };
+    if (msg.event === 'tab:activated' || msg.event === 'page:loaded') {
+      client.activeTab = msg.data || client.activeTab;
+      broadcastExtStatus();
+    }
+    sendExtSse('message', eventMsg);
+  }
+}
+
+function attachExtBridge(server) {
+  if (extWss) return;
+  extWss = new WebSocketServer({ noServer: true });
+
+  server.on('upgrade', (req, socket, head) => {
+    let pathname = '';
+    try { pathname = new URL(req.url, 'http://localhost').pathname; } catch (_) {}
+    if (pathname !== '/ext') return;
+    extWss.handleUpgrade(req, socket, head, ws => extWss.emit('connection', ws, req));
+  });
+
+  extWss.on('connection', (ws, req) => {
+    const id = 'ext-' + extNextClientId++;
+    const userAgent = req.headers['user-agent'] || '';
+    const client = {
+      id,
+      ws,
+      userAgent,
+      browser: extBrowserName(userAgent),
+      version: '',
+      connectedAt: new Date().toISOString(),
+      activeTab: null,
+    };
+    extClients.set(id, client);
+    broadcastExtStatus();
+
+    ws.on('message', raw => handleExtMessage(client, raw));
+    ws.on('close', () => {
+      extClients.delete(id);
+      for (const [cmdId, pending] of Array.from(extPendingCommands.entries())) {
+        if (pending.clientId === id) {
+          extPendingCommands.delete(cmdId);
+          clearTimeout(pending.timeoutId);
+          pending.reject(new Error('Browser extension disconnected'));
+        }
+      }
+      broadcastExtStatus();
+    });
+  });
+}
+
+app.get('/api/ext/status', (_req, res) => {
+  res.json({ ok: true, browsers: extStatusList() });
+});
+
+app.get('/api/ext/events', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+  extEventClients.add(res);
+  res.write(`data: ${JSON.stringify({ event: 'ext:status-changed', browsers: extStatusList() })}\n\n`);
+  req.on('close', () => extEventClients.delete(res));
+});
+
+app.post('/api/ext/command', async (req, res) => {
+  const clients = Array.from(extClients.values()).filter(client => client.ws.readyState === 1);
+  if (!clients.length) return res.status(503).json({ ok: false, error: 'Browser extension not connected' });
+
+  const { action, params = {}, tabId } = req.body || {};
+  if (!action) return res.status(400).json({ ok: false, error: 'action required' });
+
+  const client = tabId
+    ? clients.find(c => c.activeTab && c.activeTab.id === tabId) || clients[0]
+    : clients[0];
+  const id = 'cmd-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+  const timeoutMs = Math.max(1000, Math.min(Number(req.body.timeout) || 30000, 120000));
+
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        extPendingCommands.delete(id);
+        reject(new Error('Browser extension command timed out'));
+      }, timeoutMs);
+      extPendingCommands.set(id, { resolve, reject, timeoutId, clientId: client.id });
+      client.ws.send(JSON.stringify({ type: 'cmd', id, action, params, tabId }));
+    });
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get('/api/runs', (_req, res) => {
+  res.json([]);
+});
 
 // ── Token resolution ──────────────────────────────────────────────────────
 // Electron runs with a stripped PATH so `gh` may not be found.
@@ -4604,6 +4771,7 @@ export function startServer(port) {
       console.log(`\n  ✦ Copilot Chat  →  http://127.0.0.1:${port}\n`);
       resolve(server);
     });
+    attachExtBridge(server);
     server.on('error', reject);
 
     // Clean up MCP child process and Figma timers on exit
