@@ -36,6 +36,14 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
     var isReplace = mode === 'replace-string';
     var isPatch   = mode === 'apply-patch';
 
+    function addActiveAgentContext(body) {
+      if (typeof isAgentActive === 'function' && isAgentActive()) {
+        body.agentName = typeof getActiveAgentName === 'function' ? getActiveAgentName() : undefined;
+        body.permissions = typeof getActiveAgentPermissions === 'function' ? getActiveAgentPermissions() : undefined;
+      }
+      return body;
+    }
+
     // Resolve relative paths against conversation CWD (write-file / append-file only)
     var wid = convId || state.currentId || '';
     if (!isReplace && !isPatch && filePath && !filePath.startsWith('/') && !filePath.startsWith('~')) {
@@ -117,7 +125,7 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
       promise = fetch('/api/replace-string', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: filePath, old_string: oldStr, new_string: newStr, cwd: _convCwd[state.currentId] || undefined })
+        body: JSON.stringify(addActiveAgentContext({ path: filePath, old_string: oldStr, new_string: newStr, cwd: _convCwd[wid] || undefined }))
       }).then(function(r) { return r.json(); }).then(function(d) {
         if (!d.ok) throw new Error(d.error || 'replace failed');
         var statusEl = document.getElementById(widgetId + '-status');
@@ -132,7 +140,7 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
       promise = fetch('/api/apply-patch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: filePath, patch: content })
+        body: JSON.stringify(addActiveAgentContext({ path: filePath, patch: content, cwd: _convCwd[wid] || undefined }))
       }).then(function(r) { return r.json(); }).then(function(d) {
         if (!d.ok) throw new Error(d.error || 'patch failed');
         var statusEl = document.getElementById(widgetId + '-status');
@@ -146,14 +154,7 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
 
     } else {
       var apiUrl = isAppend ? '/api/append-file' : '/api/write-file';
-      var writeBody = { path: filePath, content: content || '' };
-      // Route through sandbox endpoint when an agent is active
-      if (typeof isAgentActive === 'function' && isAgentActive()) {
-        var sb = getSandboxedEndpoint('/api/write-file');
-        apiUrl = sb.url;
-        writeBody.filePath = filePath;
-        Object.assign(writeBody, sb.extra);
-      }
+      var writeBody = addActiveAgentContext({ path: filePath, content: content || '', cwd: _convCwd[wid] || undefined });
       promise = fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

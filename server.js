@@ -2411,6 +2411,44 @@ function resolvePath(filePath, cwd) {
   return resolved;
 }
 
+function getMutationContext(body = {}) {
+  const agentName = body.agentName;
+  if (!agentName) return null;
+  const manifest = getAgentManifest(agentName);
+  return {
+    agentName,
+    permissions: manifest?.permissions || body.permissions || {},
+  };
+}
+
+function assertWriteAllowed(absPath, context) {
+  if (!context) return;
+  const writeCheck = checkFilePath(absPath, 'write', context.permissions, context.agentName);
+  if (!writeCheck.allowed) {
+    const err = new Error(writeCheck.reason);
+    err.statusCode = 403;
+    err.blocked = true;
+    throw err;
+  }
+}
+
+function atomicWriteFile(absPath, content, encoding = 'utf8') {
+  fs.mkdirSync(path.dirname(absPath), { recursive: true });
+  const tmp = absPath + '.~tmp' + process.pid;
+  try {
+    fs.writeFileSync(tmp, content, encoding);
+    fs.renameSync(tmp, absPath);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    throw e;
+  }
+}
+
+function sendMutationError(res, e) {
+  const status = e.statusCode || (e.blocked ? 403 : 500);
+  res.status(status).json({ ok: false, error: e.message, blocked: !!e.blocked });
+}
+
 // ── AutoRecovery — Word-style checkpoint before every destructive write ───
 // Saves the current version to ~/.copilotchat-recovery/<mirrored-path>/<ts>.bak
 // Keeps the 20 most-recent checkpoints per file; never throws (best-effort).
@@ -2441,29 +2479,23 @@ app.post('/api/write-file', (req, res) => {
   const { path: filePath, content, fromFile, encoding, cwd } = req.body;
   if (!filePath) return res.status(400).json({ error: 'path required' });
   try {
+    const context = getMutationContext(req.body);
     const abs = resolvePath(filePath, cwd);
+    assertWriteAllowed(abs, context);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     if (fromFile) {
       fs.copyFileSync(fromFile, abs);
       const bytes = fs.statSync(abs).size;
-      res.json({ ok: true, path: abs, bytes });
+      res.json({ ok: true, path: abs, bytes, sandboxed: !!context });
     } else {
       if (content === undefined) return res.status(400).json({ error: 'content or fromFile required' });
       // Checkpoint the existing file before overwriting (AutoRecovery)
       checkpointFile(abs);
-      // Atomic write: write to a temp file then rename so the original is never half-written
-      const tmp = abs + '.~tmp' + process.pid;
-      try {
-        fs.writeFileSync(tmp, content, encoding || 'utf8');
-        fs.renameSync(tmp, abs);
-      } catch (e) {
-        try { fs.unlinkSync(tmp); } catch (_) {}
-        throw e;
-      }
-      res.json({ ok: true, path: abs, bytes: Buffer.byteLength(content, encoding || 'utf8') });
+      atomicWriteFile(abs, content, encoding || 'utf8');
+      res.json({ ok: true, path: abs, bytes: Buffer.byteLength(content, encoding || 'utf8'), sandboxed: !!context });
     }
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    sendMutationError(res, e);
   }
 });
 
@@ -2475,7 +2507,9 @@ app.put('/api/write-file-stream', (req, res) => {
   const cwd      = req.query.cwd;
   if (!filePath) return res.status(400).json({ error: 'path query param required' });
   try {
+    const context = getMutationContext(req.query);
     const abs = resolvePath(filePath, cwd);
+    assertWriteAllowed(abs, context);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     const tmp = abs + '.~tmp' + process.pid;
     const out = fs.createWriteStream(tmp);
@@ -2492,7 +2526,7 @@ app.put('/api/write-file-stream', (req, res) => {
     out.on('error', e => { try { fs.unlinkSync(tmp); } catch (_) {} res.status(500).json({ error: e.message }); });
     req.on('error', e => { try { fs.unlinkSync(tmp); } catch (_) {} res.status(500).json({ error: e.message }); });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    sendMutationError(res, e);
   }
 });
 
@@ -2503,13 +2537,15 @@ app.post('/api/append-file', (req, res) => {
   if (!filePath) return res.status(400).json({ error: 'path required' });
   if (content === undefined) return res.status(400).json({ error: 'content required' });
   try {
+    const context = getMutationContext(req.body);
     const abs = resolvePath(filePath, cwd);
+    assertWriteAllowed(abs, context);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.appendFileSync(abs, content, encoding || 'utf8');
     const bytes = fs.statSync(abs).size;
-    res.json({ ok: true, path: abs, bytes });
+    res.json({ ok: true, path: abs, bytes, sandboxed: !!context });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    sendMutationError(res, e);
   }
 });
 
@@ -2520,7 +2556,9 @@ app.post('/api/replace-string', (req, res) => {
   if (!filePath)        return res.status(400).json({ error: 'path required' });
   if (old_string == null) return res.status(400).json({ error: 'old_string required' });
   try {
+    const context = getMutationContext(req.body);
     const abs      = resolvePath(filePath, cwd);
+    assertWriteAllowed(abs, context);
     if (!fs.existsSync(abs)) {
       return res.status(404).json({ error: 'File not found: ' + abs, path: abs });
     }
@@ -2533,18 +2571,10 @@ app.post('/api/replace-string', (req, res) => {
     // Replace only the FIRST occurrence (like VS Code)
     const idx     = original.indexOf(old_string);
     const updated = original.slice(0, idx) + (new_string ?? '') + original.slice(idx + old_string.length);
-    // Atomic write
-    const tmp = abs + '.~tmp' + process.pid;
-    try {
-      fs.writeFileSync(tmp, updated, 'utf8');
-      fs.renameSync(tmp, abs);
-    } catch (e) {
-      try { fs.unlinkSync(tmp); } catch (_) {}
-      throw e;
-    }
-    res.json({ ok: true, path: abs, bytes: Buffer.byteLength(updated) });
+    atomicWriteFile(abs, updated, 'utf8');
+    res.json({ ok: true, path: abs, bytes: Buffer.byteLength(updated), sandboxed: !!context });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    sendMutationError(res, e);
   }
 });
 
@@ -2566,10 +2596,23 @@ app.post('/api/apply-patch', (req, res) => {
   const { patch, cwd } = req.body;
   if (!patch) return res.status(400).json({ error: 'patch required' });
   try {
-    const results = _applyPatch(patch, cwd);
-    res.json({ ok: true, results });
+    const context = getMutationContext(req.body);
+    const results = _applyPatch(patch, cwd, context);
+    res.json({ ok: true, results, sandboxed: !!context });
   } catch (e) {
-    res.status(422).json({ error: e.message });
+    res.status(e.statusCode || 422).json({ ok: false, error: e.message, blocked: !!e.blocked });
+  }
+});
+
+app.post('/api/apply-patch/check', (req, res) => {
+  const { patch, cwd } = req.body;
+  if (!patch) return res.status(400).json({ error: 'patch required' });
+  try {
+    const context = getMutationContext(req.body);
+    const plan = _buildPatchPlan(patch, cwd, context);
+    res.json({ ok: true, results: _summarizePatchPlan(plan), sandboxed: !!context });
+  } catch (e) {
+    res.status(e.statusCode || 422).json({ ok: false, error: e.message, blocked: !!e.blocked });
   }
 });
 
@@ -2609,9 +2652,13 @@ function _applyHunk(fileContent, hunkLines) {
   throw new Error('Hunk context not found in file:\n' + JSON.stringify(searchStr.slice(0, 200)));
 }
 
-function _applyPatch(patchText, cwd) {
+function _summarizePatchPlan(plan) {
+  return plan.map(op => ({ path: op.path, from: op.from, op: op.op, bytes: op.bytes }));
+}
+
+function _buildPatchPlan(patchText, cwd, context) {
   const lines   = patchText.split('\n');
-  const results = [];
+  const plan = [];
   let i = 0;
 
   while (i < lines.length && !lines[i].trim().startsWith('*** Begin Patch')) i++;
@@ -2624,6 +2671,8 @@ function _applyPatch(patchText, cwd) {
 
     if (line.startsWith('*** Add File: ')) {
       const filePath = resolvePath(line.slice('*** Add File: '.length).trim(), cwd);
+      assertWriteAllowed(filePath, context);
+      if (fs.existsSync(filePath)) throw new Error('Add File target already exists: ' + filePath);
       i++;
       const contentLines = [];
       while (i < lines.length && !_isFileOp(lines[i])) {
@@ -2633,27 +2682,26 @@ function _applyPatch(patchText, cwd) {
         i++;
       }
       const body = contentLines.join('\n');
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      fs.writeFileSync(filePath, body, 'utf8');
-      results.push({ path: filePath, op: 'add', bytes: Buffer.byteLength(body) });
+      plan.push({ path: filePath, op: 'add', content: body, bytes: Buffer.byteLength(body) });
 
     } else if (line.startsWith('*** Delete File: ')) {
       const filePath = resolvePath(line.slice('*** Delete File: '.length).trim(), cwd);
-      checkpointFile(filePath); // preserve before deletion
-      fs.unlinkSync(filePath);
-      results.push({ path: filePath, op: 'delete' });
+      assertWriteAllowed(filePath, context);
+      if (!fs.existsSync(filePath)) throw new Error('File not found: ' + filePath);
+      plan.push({ path: filePath, op: 'delete' });
       i++;
 
     } else if (line.startsWith('*** Update File: ')) {
       const origPath = resolvePath(line.slice('*** Update File: '.length).trim(), cwd);
+      assertWriteAllowed(origPath, context);
       i++;
       let newPath = null;
       if (i < lines.length && lines[i].trim().startsWith('*** Move to: ')) {
         newPath = resolvePath(lines[i].trim().slice('*** Move to: '.length).trim(), cwd);
+        assertWriteAllowed(newPath, context);
         i++;
       }
 
-      checkpointFile(origPath); // AutoRecovery before patch
       let fileContent = fs.readFileSync(origPath, 'utf8');
 
       while (i < lines.length && !_isFileOp(lines[i])) {
@@ -2671,16 +2719,33 @@ function _applyPatch(patchText, cwd) {
       }
 
       const dest = newPath || origPath;
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.writeFileSync(dest, fileContent, 'utf8');
-      if (newPath) { try { fs.unlinkSync(origPath); } catch (_) {} }
-      results.push({ path: dest, op: newPath ? 'move' : 'update', bytes: Buffer.byteLength(fileContent) });
+      plan.push({ path: dest, from: newPath ? origPath : undefined, op: newPath ? 'move' : 'update', content: fileContent, bytes: Buffer.byteLength(fileContent) });
 
     } else {
       i++;
     }
   }
-  return results;
+  return plan;
+}
+
+function _commitPatchPlan(plan) {
+  const checkpoints = new Set();
+  for (const op of plan) {
+    if (op.from && !checkpoints.has(op.from)) { checkpointFile(op.from); checkpoints.add(op.from); }
+    if (op.op !== 'add' && !checkpoints.has(op.path)) { checkpointFile(op.path); checkpoints.add(op.path); }
+
+    if (op.op === 'delete') {
+      fs.unlinkSync(op.path);
+    } else {
+      atomicWriteFile(op.path, op.content, 'utf8');
+      if (op.from) { try { fs.unlinkSync(op.from); } catch (_) {} }
+    }
+  }
+  return _summarizePatchPlan(plan);
+}
+
+function _applyPatch(patchText, cwd, context) {
+  return _commitPatchPlan(_buildPatchPlan(patchText, cwd, context));
 }
 
 // ── AutoRecovery endpoints ───────────────────────────────────────────────
@@ -4092,7 +4157,7 @@ app.post('/api/agent/shell-exec', (req, res) => {
 
 // Sandboxed file write
 app.post('/api/agent/write-file', (req, res) => {
-  const { filePath: fp, content, agentName } = req.body;
+  const { filePath: fp, content, agentName, cwd } = req.body;
   if (!fp || content == null) return res.status(400).json({ error: 'filePath and content required' });
   if (!agentName) return res.status(400).json({ error: 'agentName required' });
 
@@ -4100,7 +4165,7 @@ app.post('/api/agent/write-file', (req, res) => {
   const permissions = manifest?.permissions || req.body.permissions || {};
 
   let absPath;
-  try { absPath = resolvePath(fp); } catch (e) {
+  try { absPath = resolvePath(fp, cwd); } catch (e) {
     return res.status(403).json({ ok: false, error: e.message, blocked: true });
   }
 
@@ -4110,8 +4175,8 @@ app.post('/api/agent/write-file', (req, res) => {
   }
 
   try {
-    fs.mkdirSync(path.dirname(absPath), { recursive: true });
-    fs.writeFileSync(absPath, content, 'utf8');
+    checkpointFile(absPath);
+    atomicWriteFile(absPath, content, 'utf8');
     audit(agentName, 'file-write', absPath, true);
     res.json({ ok: true, path: absPath, sandboxed: true });
   } catch (e) {
