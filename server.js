@@ -147,12 +147,19 @@ function attachExtBridge(server) {
   if (extWss) return;
   extWss = new WebSocketServer({ noServer: true });
 
+  // Accept connections at /ext on the main server (Fauna Browser Bridge extension)
   server.on('upgrade', (req, socket, head) => {
     let pathname = '';
     try { pathname = new URL(req.url, 'http://localhost').pathname; } catch (_) {}
-    if (pathname !== '/ext') return;
+    if (pathname !== '/ext') { socket.destroy(); return; }
     extWss.handleUpgrade(req, socket, head, ws => extWss.emit('connection', ws, req));
   });
+
+  // Also accept connections on port 3340 (FaunaBrowserMCP / faunaMCP-main extension)
+  // Silently skip if port is already in use by a standalone relay.
+  const relay3340 = new WebSocketServer({ port: 3340 });
+  relay3340.on('connection', (ws, req) => extWss.emit('connection', ws, req));
+  relay3340.on('error', () => { /* port already in use — relay running separately, ignore */ });
 
   extWss.on('connection', (ws, req) => {
     const id = 'ext-' + extNextClientId++;
