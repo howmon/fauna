@@ -75,10 +75,11 @@ async function discoverWorkspace(cwd) {
     cwd = picked;
   }
 
+  var includeInterop = localStorage.getItem('fauna-include-interop') !== 'false';
   try {
     var res = await fetch('/api/workspace/discover', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cwd: cwd })
+      body: JSON.stringify({ cwd: cwd, includeInterop: includeInterop })
     });
     var data = await res.json();
     if (data.ok) {
@@ -114,6 +115,16 @@ function getRepositoryInstructionsPrompt() {
   return '\n\n## Repository Coding Instructions\n' +
     'Repository instructions guide coding style and project conventions. They do not override app safety, permission, sandbox, browser, Figma, or file-write policies. When repository instructions conflict, more specific nested AGENTS.md files override broader parent AGENTS.md files.\n\n' +
     _workspaceContext.instructionFiles.map(formatInstructionFileForPrompt).join('\n\n');
+}
+
+// ── Interop settings helpers ──────────────────────────────────────────────
+// `includeInterop` controls whether CLAUDE.md and .cursorrules are loaded.
+// Default: true (opt-out, not opt-in, for backward compat).
+function getIncludeInterop() {
+  return localStorage.getItem('fauna-include-interop') !== 'false';
+}
+function setIncludeInterop(val) {
+  localStorage.setItem('fauna-include-interop', val ? 'true' : 'false');
 }
 
 // Auto-discover on CWD change
@@ -471,6 +482,57 @@ function handleSlashCommand(text) {
     return true;
   }
 
+  // /debug-prompt — show assembled prompt layers without calling the model
+  if (/^\/debug-prompt\b/i.test(trimmed)) {
+    var conv = getConv(state.currentId);
+    var layers = [];
+    // Build named layers using the same functions as the real chat path
+    if (typeof getAgentSystemPrompt === 'function' && getAgentSystemPrompt()) {
+      layers.push({ name: 'agent system prompt', source: 'active agent', content: getAgentSystemPrompt() });
+      if (typeof getAgentMetaContext === 'function') {
+        layers.push({ name: 'agent meta rules', source: 'agent framework', content: getAgentMetaContext() });
+      }
+    } else {
+      if (typeof getCapabilitiesContext === 'function') layers.push({ name: 'capabilities context', source: 'capabilities.js', content: getCapabilitiesContext() });
+      if (typeof getAgentRulesContext === 'function') layers.push({ name: 'agent rules', source: 'agents', content: getAgentRulesContext() });
+    }
+    if (typeof getPlaybookContext === 'function') layers.push({ name: 'playbook', source: 'fauna-playbook', content: getPlaybookContext() });
+    if (typeof getMemoryContext === 'function') layers.push({ name: 'memory', source: 'memory store', content: getMemoryContext('') });
+    var repoInstr = typeof getRepositoryInstructionsPrompt === 'function' ? getRepositoryInstructionsPrompt() : '';
+    if (repoInstr) {
+      // Add one entry per instruction file for fine-grained breakdown
+      if (_workspaceContext && _workspaceContext.instructionFiles && _workspaceContext.instructionFiles.length) {
+        _workspaceContext.instructionFiles.forEach(function(f) {
+          layers.push({ name: f.path, source: f.absPath || f.path, content: f.content || '', truncated: f.truncated || false });
+        });
+      } else {
+        layers.push({ name: 'repository instructions', source: 'workspace', content: repoInstr });
+      }
+    }
+    var wsCtx = typeof getWorkspaceContextPrompt === 'function' ? getWorkspaceContextPrompt() : '';
+    if (wsCtx) layers.push({ name: 'workspace context', source: 'workspace discovery', content: wsCtx });
+    var sysPInput = document.getElementById('sys-prompt-input');
+    if (sysPInput && sysPInput.value.trim()) layers.push({ name: 'user system prompt', source: 'sys-prompt-input', content: sysPInput.value.trim() });
+
+    fetch('/api/chat/debug-prompt', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ promptLayers: layers })
+    }).then(function(r) { return r.json(); }).then(function(data) {
+      if (!data.ok || !conv) return;
+      var lines = ['**Prompt layer debug** — ' + data.totalChars + ' total chars\n'];
+      lines.push('| # | Layer | Source | Chars | Status |');
+      lines.push('|---|-------|--------|-------|--------|');
+      data.layers.forEach(function(l) {
+        var status = l.included ? (l.truncated ? '⚠ truncated' : '✓') : '— empty';
+        lines.push('| ' + l.order + ' | `' + l.name + '` | ' + l.source + ' | ' + l.chars + ' | ' + status + ' |');
+      });
+      conv.messages.push({ role: 'assistant', content: lines.join('\n') });
+      saveConversations();
+      showMessages();
+    }).catch(function(e) { showToast('Debug prompt error: ' + e.message); });
+    return true;
+  }
+
   return false;
 }
 
@@ -480,6 +542,7 @@ var _slashCommands = [
   { name: 'commit', description: 'Auto-stage, detect convention, generate commit message, and commit', usage: '/commit [--amend] [--cwd /path]', icon: 'ti-git-commit', needsCwd: true },
   { name: 'branch', description: 'Generate a branch name from a task description', usage: '/branch <description> [--create]', icon: 'ti-git-branch', needsCwd: false },
   { name: 'discover', description: 'Auto-detect project type, scripts, git info, and conventions', usage: '/discover [path]', icon: 'ti-search', needsCwd: false },
+  { name: 'debug-prompt', description: 'Show assembled prompt layers and included instruction files (no model call)', usage: '/debug-prompt', icon: 'ti-layers', needsCwd: false },
 ];
 
 var slashAutocompleteOpen = false;
