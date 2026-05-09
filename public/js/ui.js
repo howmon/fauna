@@ -543,6 +543,7 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
     extractAndRenderWriteFile(el, true);
     extractAndRenderSaveInstruction(content, el, true);
     extractArtifactsFromBuffer(content, el, false);
+    if (typeof extractAndRenderClarifications === 'function') extractAndRenderClarifications(content, el, true, state.currentId);
     if (typeof extractAndRenderGenUI === 'function') extractAndRenderGenUI(content, el, true);
     wrapInChainOfThought(el);
   }

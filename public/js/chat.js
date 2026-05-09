@@ -784,6 +784,7 @@ async function streamResponse(conv) {
             synthBody.innerHTML = renderMarkdown(delResult.synthesis);
             synthEl.classList.add('synthesis-message');
             getConvInner(convId).appendChild(synthEl);
+            if (typeof extractAndRenderClarifications === 'function') extractAndRenderClarifications(delResult.synthesis, synthEl, false, convId);
             scrollBottom();
           }
         } catch (delErr) {
@@ -803,6 +804,7 @@ async function streamResponse(conv) {
         extractAndRenderWriteFile(msgEl, false, convId);
         extractAndRenderSaveInstruction(buffer, msgEl, false);
         extractArtifactsFromBuffer(buffer, msgEl);
+        if (typeof extractAndRenderClarifications === 'function') extractAndRenderClarifications(buffer, msgEl, false, convId);
         if (typeof postProcessDesignMessage === 'function') postProcessDesignMessage(bodyEl);
         if (typeof extractAndRenderCreateAgent === 'function') extractAndRenderCreateAgent(buffer, msgEl);
         if (typeof extractAndRenderPatchAgent === 'function') extractAndRenderPatchAgent(buffer, msgEl);
@@ -830,6 +832,7 @@ async function streamResponse(conv) {
       extractAndRenderWriteFile(msgEl, false, convId);
       extractAndRenderSaveInstruction(buffer, msgEl, false);
       extractArtifactsFromBuffer(buffer, msgEl, true);
+      if (typeof extractAndRenderClarifications === 'function') extractAndRenderClarifications(buffer, msgEl, false, convId);
       if (typeof postProcessDesignMessage === 'function') postProcessDesignMessage(bodyEl);
       if (typeof extractAndRenderCreateAgent === 'function') extractAndRenderCreateAgent(buffer, msgEl);
       if (typeof extractAndRenderPatchAgent === 'function') extractAndRenderPatchAgent(buffer, msgEl);

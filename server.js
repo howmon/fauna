@@ -15,6 +15,7 @@ import { fileURLToPath } from 'url';
 import { checkFilePath, checkNetworkAccess, checkShellCommand, getSandboxedEnv, getResourceLimits, audit, getAuditLog } from './agent-sandbox.js';
 import { getAgentTools, startAgentMCPServers, stopAgentMCPServers, executeBuiltInTool, executeCustomTool } from './agent-tools.js';
 import { scanAgent, formatScanReport } from './agent-scanner.js';
+import { registerWorkflowFeatureRoutes } from './workflow-features.js';
 
 // Electron APIs — available when server runs inside the Electron main process.
 // Gracefully degrade if run standalone (e.g. during testing).
@@ -2344,6 +2345,17 @@ const AUGMENTED_PATH = IS_WIN
     ].join(':');
 
 const SHELL_BIN = IS_WIN ? 'powershell.exe' : '/bin/zsh';
+
+registerWorkflowFeatureRoutes({
+  app,
+  configDir: CONFIG_DIR,
+  getGhToken,
+  getCopilotClient,
+  readSavedConfig,
+  loadInstructionFiles,
+  augmentedPath: AUGMENTED_PATH,
+  shellBin: SHELL_BIN,
+});
 
 app.post('/api/shell-exec', (req, res) => {
   const { command, cwd, killId } = req.body;

@@ -62,6 +62,69 @@ async function generateBranchName(description, opts) {
   }
 }
 
+// ── Review Mode ─────────────────────────────────────────────────────────
+
+function formatReviewMarkdown(data) {
+  var review = data.review || {};
+  var findings = review.findings || [];
+  var lines = [];
+  lines.push('**Review: ' + (data.target || 'changes') + '**');
+  if (review.summary) lines.push('\n' + review.summary);
+  if (!findings.length) {
+    lines.push('\n**Findings:** none');
+  } else {
+    lines.push('\n**Findings:**');
+    findings.forEach(function(f, idx) {
+      var loc = f.file ? f.file + (f.line ? ':' + f.line : '') : 'unknown location';
+      lines.push('\n' + (idx + 1) + '. **' + (f.severity || 'medium').toUpperCase() + '** — ' + (f.title || 'Finding'));
+      lines.push('   - Location: `' + loc + '`');
+      if (f.details) lines.push('   - Details: ' + f.details);
+      if (f.suggestedPatch) lines.push('   - Suggested patch included.');
+    });
+  }
+  if (review.testGaps && review.testGaps.length) {
+    lines.push('\n**Test gaps:**');
+    review.testGaps.forEach(function(g) { lines.push('- ' + g); });
+  }
+  if (review.residualRisk) lines.push('\n**Residual risk:** ' + review.residualRisk);
+  if (data.pull && data.pull.htmlUrl) lines.push('\nPR: ' + data.pull.htmlUrl);
+  return lines.join('\n');
+}
+
+async function runReviewCommand(opts) {
+  opts = opts || {};
+  var cwd = opts.cwd || (_convCwd[state.currentId] || '');
+  if (!cwd && opts.kind !== 'pr') {
+    var picked = await _showRepoPicker('/review');
+    if (!picked) return null;
+    cwd = picked;
+  }
+  var endpoint = '/api/review/' + (opts.kind || 'uncommitted');
+  var body = { cwd: cwd, model: state.model };
+  if (opts.base) body.base = opts.base;
+  if (opts.commit) body.commit = opts.commit;
+  if (opts.number) body.number = opts.number;
+  showToast('Running review…');
+  try {
+    var res = await fetch(endpoint, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    var data = await res.json();
+    var conv = getConv(state.currentId);
+    if (conv) {
+      conv.messages.push({ role: 'assistant', content: data.ok ? formatReviewMarkdown(data) : '**Review failed:** ' + (data.error || 'Unknown error') });
+      saveConversations();
+      showMessages();
+    }
+    showToast(data.ok ? 'Review complete' : (data.error || 'Review failed'));
+    return data;
+  } catch (e) {
+    showToast('Review error: ' + e.message);
+    return null;
+  }
+}
+
 // ── C: Workspace Discovery ───────────────────────────────────────────────
 // Auto-detect project context and inject into system prompt.
 
@@ -410,7 +473,7 @@ function isFileIndexable(filePath) {
 }
 
 // ── Slash command detection ──────────────────────────────────────────────
-// Detects /commit, /branch, /discover in user input.
+// Detects /commit, /branch, /discover, and review commands in user input.
 
 function handleSlashCommand(text) {
   var trimmed = text.trim();
@@ -443,6 +506,33 @@ function handleSlashCommand(text) {
     } else {
       showToast('Usage: /branch <description> [--create]');
     }
+    return true;
+  }
+
+  // /review [--uncommitted|--staged|--base main|--commit sha] [--cwd /path]
+  if (/^\/review\b/i.test(trimmed)) {
+    var cwdReview = trimmed.match(/--cwd\s+(\S+)/);
+    var baseMatch = trimmed.match(/--base\s+(\S+)/);
+    var commitMatch = trimmed.match(/--commit\s+([a-f0-9]{7,40})/i);
+    var kind = 'uncommitted';
+    var opts = { cwd: cwdReview ? cwdReview[1] : undefined };
+    if (/--staged\b/i.test(trimmed)) kind = 'staged';
+    if (baseMatch) { kind = 'base'; opts.base = baseMatch[1]; }
+    if (commitMatch) { kind = 'commit'; opts.commit = commitMatch[1]; }
+    opts.kind = kind;
+    runReviewCommand(opts);
+    return true;
+  }
+
+  // /review-pr <number> [--cwd /path]
+  if (/^\/review-pr\b/i.test(trimmed)) {
+    var prNumber = trimmed.match(/^\/review-pr\s+(\d+)/i);
+    var cwdPr = trimmed.match(/--cwd\s+(\S+)/);
+    if (!prNumber) {
+      showToast('Usage: /review-pr <number> [--cwd /path]');
+      return true;
+    }
+    runReviewCommand({ kind: 'pr', number: parseInt(prNumber[1], 10), cwd: cwdPr ? cwdPr[1] : undefined });
     return true;
   }
 
@@ -479,6 +569,8 @@ function handleSlashCommand(text) {
 var _slashCommands = [
   { name: 'commit', description: 'Auto-stage, detect convention, generate commit message, and commit', usage: '/commit [--amend] [--cwd /path]', icon: 'ti-git-commit', needsCwd: true },
   { name: 'branch', description: 'Generate a branch name from a task description', usage: '/branch <description> [--create]', icon: 'ti-git-branch', needsCwd: false },
+  { name: 'review', description: 'Review uncommitted, staged, base-branch, or commit changes', usage: '/review [--staged|--base main|--commit sha] [--cwd /path]', icon: 'ti-shield-check', needsCwd: true },
+  { name: 'review-pr', description: 'Review a GitHub pull request by number', usage: '/review-pr <number> [--cwd /path]', icon: 'ti-git-pull-request', needsCwd: true },
   { name: 'discover', description: 'Auto-detect project type, scripts, git info, and conventions', usage: '/discover [path]', icon: 'ti-search', needsCwd: false },
 ];
 

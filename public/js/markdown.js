@@ -72,6 +72,10 @@ marked.use({
       if (lang === 'gen-ui' || lang === 'gen_ui') {
         return '<pre data-special-lang="gen-ui" style="display:none"><code class="language-gen-ui">' + escHtml(rawText) + '</code></pre>';
       }
+      // clarify: structured user-input request rendered as an interactive card.
+      if (lang === 'clarify' || lang === 'clarification') {
+        return '<pre data-special-lang="clarify" style="display:none"><code class="language-clarify">' + escHtml(rawText) + '</code></pre>';
+      }
 
       var highlighted;
       try {

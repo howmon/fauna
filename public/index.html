@@ -46,6 +46,9 @@
       <button class="sidebar-nav-item" onclick="toggleTasksPanel()">
         <i class="ti ti-bolt"></i><span>Automations</span>
       </button>
+      <button class="sidebar-nav-item" onclick="openWorkflowWorkbench()">
+        <i class="ti ti-layout-dashboard"></i><span>Workflow</span>
+      </button>
       <button class="sidebar-nav-item" onclick="openAllProjects()">
         <i class="ti ti-folder"></i><span>Project</span>
       </button>
@@ -541,6 +544,9 @@ Examples:
       <button class="settings-nav-item" data-page="mcp" onclick="switchSettingsPage('mcp',this)">
         <i class="ti ti-plug"></i> MCP Servers
       </button>
+      <button class="settings-nav-item" data-page="workflow" onclick="switchSettingsPage('workflow',this)">
+        <i class="ti ti-layout-dashboard"></i> Workflow
+      </button>
       <button class="settings-nav-item" data-page="browser" onclick="switchSettingsPage('browser',this)">
         <i class="ti ti-world-www"></i> Browser use
       </button>
@@ -799,6 +805,16 @@ Examples:
     </div>
   </div>
 
+  <!-- Workflow -->
+  <div class="settings-page" data-page="workflow" id="settings-page-workflow">
+    <div class="settings-page-title">Workflow</div>
+    <div id="workflow-workbench-root" class="workflow-shell">
+      <div class="settings-section">
+        <div class="settings-hint">Loading workflow tools...</div>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Browser use ────────────────────────────────────────────── -->
   <div class="settings-page" data-page="browser">
     <div class="settings-page-title">Browser use</div>
@@ -933,6 +949,9 @@ Examples:
     if (page === 'mcp') {
       if (typeof mcpMgr !== 'undefined') mcpMgr.load();
       mcpBuiltinInit();
+    }
+    if (page === 'workflow' && typeof workflowWorkbench !== 'undefined') {
+      workflowWorkbench.load();
     }
     if (page === 'account') {
       if (typeof renderStoreAccountSettings === 'function') renderStoreAccountSettings();
@@ -1433,10 +1452,12 @@ Examples:
 <script src="js/writefile.js"></script>
 <script src="js/playbook.js"></script>
 <script src="js/smart-features.js"></script>
+<script src="js/clarifications.js"></script>
 <script src="js/agents.js"></script>
 <script src="js/agent-system.js"></script>
 <script src="js/agent-builder.js"></script>
 <script src="js/mcp-manager.js"></script>
+<script src="js/workflow-workbench.js"></script>
 <script src="js/agent-store.js"></script>
 <script src="js/agent-polish.js"></script>
 <script src="js/gen-ui.js"></script>
