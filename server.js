@@ -16,6 +16,8 @@ import { WebSocketServer } from 'ws';
 import { checkFilePath, checkNetworkAccess, checkShellCommand, getSandboxedEnv, getResourceLimits, audit, getAuditLog } from './agent-sandbox.js';
 import { getAgentTools, startAgentMCPServers, stopAgentMCPServers, executeBuiltInTool, executeCustomTool } from './agent-tools.js';
 import { scanAgent, formatScanReport } from './agent-scanner.js';
+import { createTask, getTask, getAllTasks, updateTask, deleteTask, startScheduler, stopScheduler } from './task-manager.js';
+import { runTask, pauseTask, stopTask, steerTask, isTaskRunning, subscribe } from './task-runner.js';
 
 // Electron APIs — available when server runs inside the Electron main process.
 // Gracefully degrade if run standalone (e.g. during testing).
@@ -47,6 +49,8 @@ const app    = express();
 const PORT   = 3737;
 const IS_WIN = process.platform === 'win32';
 const PATH_SEP = IS_WIN ? ';' : ':';
+const FAUNA_CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
+const CONVERSATIONS_FILE = path.join(FAUNA_CONFIG_DIR, 'conversations.json');
 
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ limit: '25mb', extended: false }));
@@ -216,6 +220,155 @@ app.post('/api/ext/command', async (req, res) => {
 
 app.get('/api/runs', (_req, res) => {
   res.json([]);
+});
+
+// ── Server-side conversation sync ────────────────────────────────────────
+// The renderer keeps localStorage as the primary UI cache, but also mirrors
+// conversations here so CLI/mobile/build resets can hydrate them back.
+
+function readServerConversations() {
+  try {
+    const data = JSON.parse(fs.readFileSync(CONVERSATIONS_FILE, 'utf8'));
+    return Array.isArray(data) ? data : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function writeServerConversations(conversations) {
+  fs.mkdirSync(FAUNA_CONFIG_DIR, { recursive: true });
+  const tmp = CONVERSATIONS_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(Array.isArray(conversations) ? conversations : [], null, 2));
+  fs.renameSync(tmp, CONVERSATIONS_FILE);
+}
+
+app.get('/api/conversations', (req, res) => {
+  const full = req.query.full === '1' || req.query.full === 'true';
+  const conversations = readServerConversations()
+    .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+  if (full) return res.json(conversations);
+  res.json(conversations.map(conv => ({
+    id: conv.id,
+    title: conv.title,
+    model: conv.model,
+    projectId: conv.projectId,
+    createdAt: conv.createdAt,
+    updatedAt: conv.updatedAt,
+    messageCount: Array.isArray(conv.messages) ? conv.messages.length : 0,
+  })));
+});
+
+app.get('/api/conversations/:id', (req, res) => {
+  const conv = readServerConversations().find(c => c.id === req.params.id);
+  if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+  res.json(conv);
+});
+
+app.put('/api/conversations/:id', (req, res) => {
+  const conversations = readServerConversations();
+  const idx = conversations.findIndex(c => c.id === req.params.id);
+  const conv = { ...(req.body || {}), id: req.params.id, updatedAt: req.body?.updatedAt || Date.now() };
+  if (!conv.createdAt) conv.createdAt = Date.now();
+  if (idx >= 0) conversations[idx] = { ...conversations[idx], ...conv };
+  else conversations.push(conv);
+  writeServerConversations(conversations);
+  res.json({ ok: true, conversation: conv });
+});
+
+app.delete('/api/conversations/:id', (req, res) => {
+  const conversations = readServerConversations();
+  const next = conversations.filter(c => c.id !== req.params.id);
+  writeServerConversations(next);
+  res.json({ ok: true, deleted: conversations.length - next.length });
+});
+
+// ── Automations / tasks API ──────────────────────────────────────────────
+
+function taskWithRuntime(task) {
+  if (!task) return task;
+  return { ...task, _running: isTaskRunning(task.id) };
+}
+
+function sendTaskEvent(res, evt) {
+  res.write(`data: ${JSON.stringify(evt)}\n\n`);
+}
+
+app.get('/api/tasks', (_req, res) => {
+  res.json(getAllTasks().map(taskWithRuntime));
+});
+
+app.post('/api/tasks', (req, res) => {
+  try {
+    const task = createTask(req.body || {});
+    res.status(201).json(taskWithRuntime(task));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.get('/api/tasks/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+  sendTaskEvent(res, { event: 'ready' });
+  const unsubscribe = subscribe('*', evt => sendTaskEvent(res, evt));
+  req.on('close', unsubscribe);
+});
+
+app.get('/api/tasks/:id', (req, res) => {
+  const task = getTask(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  res.json(taskWithRuntime(task));
+});
+
+app.put('/api/tasks/:id', (req, res) => {
+  const task = updateTask(req.params.id, req.body || {});
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  res.json(taskWithRuntime(task));
+});
+
+app.delete('/api/tasks/:id', (req, res) => {
+  if (isTaskRunning(req.params.id)) stopTask(req.params.id);
+  const ok = deleteTask(req.params.id);
+  if (!ok) return res.status(404).json({ error: 'Task not found' });
+  res.json({ ok: true });
+});
+
+app.post('/api/tasks/:id/run', (req, res) => {
+  const task = getTask(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  runTask(req.params.id, req.body || {}).catch(e => console.error('[tasks] run failed:', e.message));
+  res.json({ ok: true, runId: req.params.id });
+});
+
+app.post('/api/tasks/:id/pause', (req, res) => {
+  const task = getTask(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  if (isTaskRunning(req.params.id)) pauseTask(req.params.id);
+  else updateTask(req.params.id, { status: 'paused', _historyEvent: 'paused', _historyDetail: 'manual' });
+  res.json({ ok: true });
+});
+
+app.post('/api/tasks/:id/resume', (req, res) => {
+  const task = getTask(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  const status = task.schedule?.type === 'manual' ? 'pending' : 'scheduled';
+  res.json(taskWithRuntime(updateTask(req.params.id, { status, _historyEvent: 'resumed', _historyDetail: 'manual' })));
+});
+
+app.post('/api/tasks/:id/stop', (req, res) => {
+  const task = getTask(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  if (isTaskRunning(req.params.id)) stopTask(req.params.id);
+  else updateTask(req.params.id, { status: 'paused', _historyEvent: 'stopped', _historyDetail: 'manual' });
+  res.json({ ok: true });
+});
+
+app.post('/api/tasks/:id/steer', (req, res) => {
+  const ok = steerTask(req.params.id, req.body?.message || '');
+  if (!ok) return res.status(409).json({ error: 'Task is not running' });
+  res.json({ ok: true });
 });
 
 // ── Token resolution ──────────────────────────────────────────────────────
@@ -4772,6 +4925,9 @@ export function startServer(port) {
       resolve(server);
     });
     attachExtBridge(server);
+    startScheduler(task => {
+      runTask(task.id, { trigger: 'scheduler' }).catch(e => console.error('[tasks] scheduled run failed:', e.message));
+    });
     server.on('error', reject);
 
     // Clean up MCP child process and Figma timers on exit
@@ -4787,6 +4943,7 @@ export function startServer(port) {
         figmaWs = null;
       }
       // Kill MCP child
+      stopScheduler();
       if (isMcpRunning()) mcpProcess.kill('SIGKILL');
     }
     process.on('exit',    () => fullCleanup());
