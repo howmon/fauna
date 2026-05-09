@@ -602,6 +602,7 @@ async function streamResponse(conv) {
     var lastUserMsg = conv.messages.slice().reverse().find(function(m) { return m.role === 'user'; });
     var userText = lastUserMsg ? (typeof lastUserMsg.content === 'string' ? lastUserMsg.content : (lastUserMsg.content.find(function(c){ return c.type === 'text'; }) || {}).text || '') : '';
     var memoryCtx      = getMemoryContext(userText);
+    var repoInstructionsCtx = typeof getRepositoryInstructionsPrompt === 'function' ? getRepositoryInstructionsPrompt() : '';
     var workspaceCtx   = typeof getWorkspaceContextPrompt === 'function' ? getWorkspaceContextPrompt() : '';
 
     // Concise chat directive: terse in conversation, verbose only when writing output
@@ -611,7 +612,7 @@ async function streamResponse(conv) {
       'Security warnings and irreversible actions: always be explicit and clear.\n' +
       'Pattern: [thing] [action] [reason]. Not: "Sure! I\'d be happy to help you with that. The issue is likely..."';
 
-    var systemPrompt   = [agentSysCtx ? agentSysCtx + '\n\n' + getAgentMetaContext() : (capsCtx + agentCtx), playbookCtx, memoryCtx, workspaceCtx, figmaCtx, conciseDirective, typeof GEN_UI_CATALOG_PROMPT !== 'undefined' ? GEN_UI_CATALOG_PROMPT : '', userSysPrompt].filter(Boolean).join('\n\n');
+    var systemPrompt   = [agentSysCtx ? agentSysCtx + '\n\n' + getAgentMetaContext() : (capsCtx + agentCtx), playbookCtx, memoryCtx, repoInstructionsCtx, workspaceCtx, figmaCtx, conciseDirective, typeof GEN_UI_CATALOG_PROMPT !== 'undefined' ? GEN_UI_CATALOG_PROMPT : '', userSysPrompt].filter(Boolean).join('\n\n');
 
     dbg('► fetch /api/chat model=' + state.model + ' msgs=' + messages.length + ' sysPrompt=' + systemPrompt.length + 'ch', 'cmd');
 

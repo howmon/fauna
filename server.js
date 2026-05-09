@@ -1155,6 +1155,96 @@ app.post('/api/git/branch-name', async (req, res) => {
 
 // ── Workspace Discovery (Feature C) ──────────────────────────────────────
 // Scans a directory and returns project context (build commands, architecture, etc.)
+const INSTRUCTION_FILE_LIMIT = 24 * 1024;
+const INSTRUCTION_TOTAL_LIMIT = 64 * 1024;
+
+function _safeReadInstructionFile(absPath, remainingBytes) {
+  try {
+    const stat = fs.statSync(absPath);
+    if (!stat.isFile()) return null;
+    if (stat.size === 0) return null;
+    const maxBytes = Math.max(0, Math.min(INSTRUCTION_FILE_LIMIT, remainingBytes));
+    if (maxBytes <= 0) return null;
+    const buffer = Buffer.alloc(Math.min(stat.size, maxBytes));
+    const fd = fs.openSync(absPath, 'r');
+    try { fs.readSync(fd, buffer, 0, buffer.length, 0); }
+    finally { fs.closeSync(fd); }
+    return {
+      content: buffer.toString('utf8'),
+      bytes: stat.size,
+      includedBytes: buffer.length,
+      truncated: stat.size > buffer.length,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+function _isPathInside(parent, child) {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function _realPathOrResolve(p) {
+  try { return fs.realpathSync.native ? fs.realpathSync.native(p) : fs.realpathSync(p); }
+  catch (_) { return path.resolve(p); }
+}
+
+async function loadInstructionFiles(workDir, run) {
+  const records = [];
+  const seen = new Set();
+  let totalIncluded = 0;
+
+  const absWorkDir = _realPathOrResolve(workDir);
+  const gitRootRaw = await run('git rev-parse --show-toplevel 2>/dev/null');
+  const repoRoot = gitRootRaw ? _realPathOrResolve(gitRootRaw) : absWorkDir;
+  const cwdForInstructions = _isPathInside(repoRoot, absWorkDir) ? absWorkDir : repoRoot;
+
+  const addFile = (absPath, relPath, kind, scope, priority) => {
+    absPath = path.resolve(absPath);
+    const key = absPath.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    const read = _safeReadInstructionFile(absPath, INSTRUCTION_TOTAL_LIMIT - totalIncluded);
+    if (!read) return;
+    totalIncluded += read.includedBytes;
+    records.push({
+      path: relPath,
+      absPath,
+      kind,
+      scope,
+      priority,
+      content: read.content,
+      bytes: read.bytes,
+      includedBytes: read.includedBytes,
+      truncated: read.truncated,
+    });
+  };
+
+  const faunaConfigDir = path.join(os.homedir(), '.config', 'fauna');
+  addFile(path.join(faunaConfigDir, 'AGENTS.md'), path.join('~', '.config', 'fauna', 'AGENTS.md'), 'agents', 'global', 190);
+  if (path.resolve(CONFIG_DIR) !== path.resolve(faunaConfigDir)) {
+    addFile(path.join(CONFIG_DIR, 'AGENTS.md'), path.join('~', '.config', path.basename(CONFIG_DIR), 'AGENTS.md'), 'agents', 'global', 200);
+  }
+
+  addFile(path.join(repoRoot, 'AGENTS.md'), path.relative(repoRoot, path.join(repoRoot, 'AGENTS.md')) || 'AGENTS.md', 'agents', 'repo', 300);
+
+  if (_isPathInside(repoRoot, cwdForInstructions)) {
+    let cursor = repoRoot;
+    const relParts = path.relative(repoRoot, cwdForInstructions).split(path.sep).filter(Boolean);
+    for (const part of relParts) {
+      cursor = path.join(cursor, part);
+      addFile(path.join(cursor, 'AGENTS.md'), path.relative(repoRoot, path.join(cursor, 'AGENTS.md')), 'agents', 'nested', 320);
+    }
+  }
+
+  addFile(path.join(repoRoot, '.github', 'copilot-instructions.md'), '.github/copilot-instructions.md', 'copilot', 'repo', 340);
+  addFile(path.join(repoRoot, 'CLAUDE.md'), 'CLAUDE.md', 'interop', 'repo', 360);
+  addFile(path.join(repoRoot, '.cursorrules'), '.cursorrules', 'interop', 'repo', 370);
+
+  return records.sort((a, b) => a.priority - b.priority || a.path.localeCompare(b.path));
+}
+
 app.post('/api/workspace/discover', async (req, res) => {
   const { cwd } = req.body;
   const workDir = cwd || os.homedir();
@@ -1206,6 +1296,7 @@ app.post('/api/workspace/discover', async (req, res) => {
       if (exists === '1') conventionFiles.push(f);
     }
     context.conventionFiles = conventionFiles;
+    context.instructionFiles = await loadInstructionFiles(workDir, run);
 
     // README excerpt
     const readme = await run('head -50 README.md 2>/dev/null');
@@ -1253,8 +1344,30 @@ function generateWorkspaceSummary(ctx) {
   if (ctx.hasMakefile) parts.push('Has Makefile');
   if (ctx.hasDocker) parts.push('Has Docker config');
   if (ctx.conventionFiles.length) parts.push(`Convention files: ${ctx.conventionFiles.join(', ')}`);
+  if (ctx.instructionFiles?.length) {
+    parts.push(`Instruction files loaded: ${ctx.instructionFiles.map(f => f.path + (f.truncated ? ' (truncated)' : '')).join(', ')}`);
+  }
   return parts.join('\n');
 }
+
+app.post('/api/chat/debug-prompt', (req, res) => {
+  const { systemPrompt = '', contextSummary = '', clientContext = 'app', noTools = false } = req.body || {};
+  const isCLI = clientContext === 'cli';
+  const cliHint = isCLI ? `\n\n## Output Format
+You are running in a terminal CLI. Respond in plain, readable text. Do NOT use markdown headers (###), horizontal rules (---), or emojis. Use plain bullet points (- or *) only when a list genuinely helps. Be concise and direct. Never emit browser-action or browser-ext-action code blocks — those do not work in the terminal.` : '';
+  const sections = [
+    { name: 'client system prompt', content: systemPrompt.trim() + cliHint },
+    { name: 'browser build context', content: noTools || isCLI ? '' : BROWSER_BUILD_CONTEXT },
+    { name: 'task context summary', content: contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '' },
+  ].filter(s => s.content);
+  const fullSystem = sections.map(s => s.content).join('\n');
+  res.json({
+    ok: true,
+    sections: sections.map(s => ({ name: s.name, chars: s.content.length })),
+    chars: fullSystem.length,
+    systemPrompt: fullSystem,
+  });
+});
 
 // ── File Filter / Indexing (Feature E) ────────────────────────────────────
 // Returns whether a file should be indexed/read (excludes binaries, junk, etc.)
