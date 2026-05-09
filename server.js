@@ -9164,7 +9164,7 @@ app.get('/api/ext/status', async (_req, res) => {
   // 2. Extension connected to the FaunaMCP browser-relay (port 3341 /ext-status — new endpoint)
   let relayExtFound = false;
   try {
-    const relayRes = await fetch('http://localhost:3341/ext-status', { signal: AbortSignal.timeout(800) });
+    const relayRes = await fetch('http://localhost:3341/ext-status', { signal: AbortSignal.timeout(2500) });
     if (relayRes.ok) {
       const relayData = await relayRes.json();
       if (relayData.connected) {
@@ -9762,7 +9762,7 @@ app.post('/api/ext/snapshot', async (req, res) => {
   let relayInfo = null;
   if (!info) {
     try {
-      const relayRes = await fetch('http://localhost:3341/ext-status', { signal: AbortSignal.timeout(800) });
+      const relayRes = await fetch('http://localhost:3341/ext-status', { signal: AbortSignal.timeout(2500) });
       if (relayRes.ok) relayInfo = await relayRes.json();
     } catch (_) {}
   }
