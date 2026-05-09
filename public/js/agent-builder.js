@@ -1265,8 +1265,7 @@ async function builderPublish() {
   if (typeof storeState === 'undefined' || !storeState.account || !localStorage.getItem('store-token')) {
     showToast('Sign in to your developer account first');
     closeAgentBuilder();
-    if (typeof openAgentStore === 'function') openAgentStore();
-    if (typeof storeNavigate === 'function') storeNavigate('account');
+    if (typeof openStoreAccount === 'function') openStoreAccount();
     return;
   }
 

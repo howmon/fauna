@@ -4,7 +4,7 @@
 
 var storeState = {
   open: false,
-  view: 'browse',        // 'browse' | 'detail' | 'publish' | 'account'
+  view: 'browse',        // 'browse' | 'detail' | 'publish'
   agents: [],
   categories: [],
   query: '',
@@ -60,6 +60,7 @@ async function refreshStoreAccount() {
       // Re-render if verified status changed
       if (!wasVerified && storeState.account.verified) {
         renderStorePanel();
+        renderStoreAccountSettings();
         updateTopbarAccount();
       }
     }
@@ -110,7 +111,6 @@ function renderStorePanel() {
         '<button class="store-nav-btn' + (storeState.view === 'browse' ? ' active' : '') + '" onclick="storeNavigate(\'browse\')"><i class="ti ti-grid-dots"></i> Browse</button>' +
         (isReviewer ? '<button class="store-nav-btn' + (storeState.view === 'review' ? ' active' : '') + '" onclick="storeNavigate(\'review\')"><i class="ti ti-shield-check"></i> Review</button>' : '') +
         '<button class="store-nav-btn' + (storeState.view === 'publish' ? ' active' : '') + '" onclick="storeNavigate(\'publish\')"><i class="ti ti-upload"></i> Publish</button>' +
-        '<button class="store-nav-btn' + (storeState.view === 'account' ? ' active' : '') + '" onclick="storeNavigate(\'account\')"><i class="ti ti-user"></i> Account</button>' +
         (storeState.account ? '<button class="store-notif-btn" onclick="toggleNotificationPanel()" title="Notifications"><i class="ti ti-bell"></i>' + (storeState.unreadCount > 0 ? '<span class="store-notif-badge">' + storeState.unreadCount + '</span>' : '') + '</button>' : '') +
       '</div>' +
       (embeddedInSettings ? '' : '<button class="store-close-btn" onclick="closeAgentStore()" title="Close"><i class="ti ti-x"></i></button>') +
@@ -122,7 +122,6 @@ function renderStorePanel() {
     case 'detail': bodyHtml = renderStoreDetail(); break;
     case 'review': bodyHtml = renderStoreReview(); break;
     case 'publish': bodyHtml = renderStorePublish(); break;
-    case 'account': bodyHtml = renderStoreAccount(); break;
   }
 
   var notifHtml = storeState.notifOpen ? renderNotificationPanel() : '';
@@ -131,6 +130,10 @@ function renderStorePanel() {
 }
 
 function storeNavigate(view) {
+  if (view === 'account') {
+    openStoreAccount();
+    return;
+  }
   if (view === 'myagents') {
     storeState.view = 'browse';
     storeState.browseTab = 'myagents';
@@ -356,7 +359,7 @@ function renderStorePublish() {
   if (!storeState.account) {
     return '<div class="store-publish">' +
       '<div class="builder-empty-state"><i class="ti ti-lock"></i><p>Sign in to your developer account to publish agents.</p></div>' +
-      '<button class="builder-btn primary" onclick="storeNavigate(\'account\')"><i class="ti ti-user"></i> Sign In / Register</button>' +
+      '<button class="builder-btn primary" onclick="openStoreAccount()"><i class="ti ti-user"></i> Sign In / Register</button>' +
     '</div>';
   }
 
@@ -431,6 +434,12 @@ function renderStoreAccount() {
       '<div id="store-register-error" class="store-auth-error"></div>' +
     '</div>' +
   '</div>';
+}
+
+function renderStoreAccountSettings() {
+  var panel = document.getElementById('agent-account-panel');
+  if (!panel) return;
+  panel.innerHTML = renderStoreAccount();
 }
 
 function storeShowTab(tab) {
@@ -600,7 +609,7 @@ async function uninstallStoreAgent(slug) {
 async function publishAgent(agentName) {
   if (!storeState.account) {
     showToast('Sign in to publish');
-    storeNavigate('account');
+    openStoreAccount();
     return;
   }
 
@@ -735,6 +744,7 @@ async function storeLogin() {
     localStorage.setItem('store-account', JSON.stringify(storeState.account));
     updateTopbarAccount();
     renderStorePanel();
+    renderStoreAccountSettings();
   } catch (e) {
     if (errorEl) errorEl.textContent = e.message;
   }
@@ -759,6 +769,7 @@ async function storeRegister() {
     localStorage.setItem('store-account', JSON.stringify(storeState.account));
     updateTopbarAccount();
     renderStorePanel();
+    renderStoreAccountSettings();
     showToast('Account created! Check your email for verification.');
   } catch (e) {
     if (errorEl) errorEl.textContent = e.message;
@@ -771,6 +782,7 @@ function storeLogout() {
   storeState.account = null;
   updateTopbarAccount();
   renderStorePanel();
+  renderStoreAccountSettings();
 }
 
 // ── My Agents view (analytics + installed + published agents) ────────────
@@ -1485,16 +1497,9 @@ function showAdminReasonInput(placeholder, onSubmit) {
 // ── Init ─────────────────────────────────────────────────────────────────
 
 function openStoreAccount() {
-  storeState.view = 'account';
-  openAgentStore();
-  // If already open, just navigate
-  var panel = document.getElementById('agent-store-panel');
-  if (panel && panel.classList.contains('open')) {
-    storeState.view = 'account';
-    renderStorePanel();
-  }
+  if (typeof openSettingsPage === 'function') openSettingsPage('account');
   // Always refresh to pick up latest verified status
-  refreshStoreAccount().then(function() { renderStorePanel(); });
+  refreshStoreAccount().then(function() { renderStoreAccountSettings(); });
 }
 
 function updateTopbarAccount() {

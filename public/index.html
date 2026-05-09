@@ -522,6 +522,9 @@ Examples:
       <button class="settings-nav-item" data-page="auth" onclick="switchSettingsPage('auth',this)">
         <i class="ti ti-key"></i> Authentication
       </button>
+      <button class="settings-nav-item" data-page="account" onclick="switchSettingsPage('account',this)">
+        <i class="ti ti-user-circle"></i> Account
+      </button>
       <button class="settings-nav-item" data-page="voice" onclick="switchSettingsPage('voice',this)">
         <i class="ti ti-microphone"></i> Voice
       </button>
@@ -679,6 +682,14 @@ Examples:
       </div>
     </div>
 
+  </div>
+
+  <!-- ── Account ────────────────────────────────────────────────── -->
+  <div class="settings-page" data-page="account">
+    <div class="settings-page-title">Account</div>
+    <div class="settings-section store-account-settings">
+      <div id="agent-account-panel"></div>
+    </div>
   </div>
 
   <!-- ── Voice ──────────────────────────────────────────────────── -->
@@ -888,11 +899,7 @@ Examples:
 
   <script>
   function openUserSettings() {
-    // Open the Agent Store panel on the account/login view
-    if (typeof openAgentStore === 'function') {
-      openAgentStore();
-      if (typeof storeNavigate === 'function') storeNavigate('account');
-    }
+    openSettingsPage('account');
   }
 
   function openSettingsPage(page) {
@@ -919,6 +926,12 @@ Examples:
     if (page === 'mcp') {
       if (typeof mcpMgr !== 'undefined') mcpMgr.load();
       mcpBuiltinInit();
+    }
+    if (page === 'account') {
+      if (typeof renderStoreAccountSettings === 'function') renderStoreAccountSettings();
+      if (typeof refreshStoreAccount === 'function') refreshStoreAccount().then(function() {
+        if (typeof renderStoreAccountSettings === 'function') renderStoreAccountSettings();
+      });
     }
     if (page === 'browser') {
       _faunaMCPSettingsRefresh();
