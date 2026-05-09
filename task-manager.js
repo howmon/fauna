@@ -8,6 +8,7 @@ import os   from 'os';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
 const TASKS_FILE = path.join(CONFIG_DIR, 'tasks.json');
+const TASKS_BACKUP_FILE = path.join(CONFIG_DIR, 'backups', 'tasks.json');
 
 // ── RRULE Engine ─────────────────────────────────────────────────────────
 // Supports: FREQ, INTERVAL, BYHOUR, BYMINUTE, BYDAY, BYMONTHDAY, COUNT, UNTIL
@@ -212,14 +213,30 @@ function _ordinal(n) {
 
 // ── Persistence ──────────────────────────────────────────────────────────
 
+function _readTaskArray(file) {
+  const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  return Array.isArray(data) ? data : [];
+}
+
 function readTasks() {
-  try { return JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8')); }
-  catch (_) { return []; }
+  try { return _readTaskArray(TASKS_FILE); }
+  catch (_) {
+    try {
+      const backup = _readTaskArray(TASKS_BACKUP_FILE);
+      if (backup.length) writeTasks(backup);
+      return backup;
+    } catch (_) { return []; }
+  }
 }
 
 function writeTasks(tasks) {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
+  fs.mkdirSync(path.dirname(TASKS_BACKUP_FILE), { recursive: true });
+  const body = JSON.stringify(Array.isArray(tasks) ? tasks : [], null, 2);
+  const tmp = TASKS_FILE + '.tmp';
+  fs.writeFileSync(tmp, body);
+  fs.renameSync(tmp, TASKS_FILE);
+  fs.writeFileSync(TASKS_BACKUP_FILE, body);
 }
 
 // ── CRUD ─────────────────────────────────────────────────────────────────
@@ -349,7 +366,8 @@ function updateTask(id, updates) {
 
   const allowed = ['title', 'description', 'kind', 'status', 'schedule', 'agents', 'actions',
                    'context', 'permissions', 'model', 'maxRetries', 'timeout', 'maxSteps',
-                   'result', 'convId', 'targetConvId', 'pipeline', 'lastRunAt', 'nextRunAt'];
+                   'result', 'convId', 'targetConvId', 'pipeline', 'lastRunAt', 'nextRunAt',
+                   'projectId', 'projectContextIds'];
   for (const key of allowed) {
     if (key in updates) tasks[idx][key] = updates[key];
   }

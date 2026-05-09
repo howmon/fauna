@@ -9359,6 +9359,7 @@ const FAUNA_UPDATE_ROOT = path.join(CONFIG_DIR, 'fauna-self-update');
 const FAUNA_UPDATE_SOURCE_DIR = path.join(FAUNA_UPDATE_ROOT, 'source');
 const FAUNA_UPDATE_ZIP_PATH = path.join(FAUNA_UPDATE_ROOT, 'fauna-main.zip');
 const FAUNA_UPDATE_STATE_PATH = path.join(FAUNA_UPDATE_ROOT, 'state.json');
+const FAUNA_UPDATE_BACKUP_DIR = path.join(FAUNA_UPDATE_ROOT, 'persistent-backup');
 const FAUNA_MAC_APP_PATH = '/Applications/Fauna.app';
 const FAUNA_WIN_APP_PATH = process.platform === 'win32'
   ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Programs', 'Fauna', 'Fauna.exe')
@@ -9407,6 +9408,26 @@ function _faunaUpdateLog(message, phase = null) {
   _faunaUpdateJob.logs.push({ t: Date.now(), message });
   if (_faunaUpdateJob.logs.length > 200) _faunaUpdateJob.logs.shift();
   console.log('[Fauna update]', message);
+}
+
+function _snapshotFaunaPersistentData() {
+  const snapshotDir = path.join(FAUNA_UPDATE_BACKUP_DIR, 'latest');
+  const files = ['tasks.json', 'conversations.json', 'projects.json', 'config.json'];
+  fs.mkdirSync(snapshotDir, { recursive: true });
+  let copied = 0;
+  for (const file of files) {
+    const src = path.join(CONFIG_DIR, file);
+    if (!fs.existsSync(src)) continue;
+    fs.copyFileSync(src, path.join(snapshotDir, file));
+    copied++;
+  }
+  const agentsDir = path.join(CONFIG_DIR, 'agents');
+  if (fs.existsSync(agentsDir)) {
+    fs.cpSync(agentsDir, path.join(snapshotDir, 'agents'), { recursive: true, force: true });
+    copied++;
+  }
+  fs.writeFileSync(path.join(snapshotDir, 'manifest.json'), JSON.stringify({ copied, createdAt: new Date().toISOString() }, null, 2));
+  _faunaUpdateLog('Snapshot saved for persistent data (' + copied + ' item' + (copied === 1 ? '' : 's') + ')', 'backup');
 }
 
 function _runFaunaUpdateProcess(command, args, opts = {}) {
@@ -9493,6 +9514,8 @@ async function _installFaunaUpdate({ installApp = true } = {}) {
     }
     const targetSha = _faunaUpdateJob.latestSha;
     if (!targetSha) throw new Error('No main branch SHA available');
+
+    _snapshotFaunaPersistentData();
 
     fs.mkdirSync(FAUNA_UPDATE_ROOT, { recursive: true });
     _faunaUpdateLog('Downloading Fauna source zip...', 'download');
