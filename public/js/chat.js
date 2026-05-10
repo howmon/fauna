@@ -560,6 +560,7 @@ async function streamResponse(conv) {
   var lastScrolled = 0;
   var tokenCount   = 0;
   var _lastToolOutputAccum = ''; // rolling last ~1000 chars of tool_output for input context
+  var _reasoning = null; // { text, startedAt } — live thinking state
   if (typeof resetDesignArtifactState === 'function') resetDesignArtifactState();
 
   function scheduleRender() {
@@ -574,6 +575,34 @@ async function streamResponse(conv) {
         if (now - lastScrolled > 200) { scrollBottom(); lastScrolled = now; }
       }
     }, 60);
+  }
+
+  function _updateReasoningPanel(text, durationSeconds, completed) {
+    if (!isActive() || !msgEl) return;
+    var panel = msgEl.querySelector('.reasoning-panel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.className = 'reasoning-panel';
+      msgEl.insertBefore(panel, msgEl.querySelector('.msg-body'));
+    }
+    var elapsed = durationSeconds != null ? durationSeconds
+                : (_reasoning && _reasoning.startedAt) ? Math.round((Date.now() - _reasoning.startedAt) / 1000) : null;
+    var label = completed
+      ? ('Thought for ' + (elapsed != null ? elapsed + 's' : '…'))
+      : (elapsed != null ? 'Thinking… ' + elapsed + 's' : 'Thinking…');
+    var open = !completed; // auto-open while streaming, collapsed when done
+    panel.dataset.completed = completed ? '1' : '';
+    panel.dataset.open = panel.dataset.open === '0' ? '0' : (open ? '1' : '0');
+    var isOpen = panel.dataset.open !== '0';
+    panel.innerHTML =
+      '<button class="reasoning-toggle" onclick="this.parentElement.dataset.open=this.parentElement.dataset.open===\'0\'?\'1\':\'0\';this.parentElement.querySelector(\'.reasoning-body\').style.display=this.parentElement.dataset.open===\'0\'?\'none\':\'\'">' +
+        '<i class="ti ' + (completed ? 'ti-brain' : 'ti-loader-2') + '" ' + (completed ? '' : 'style="animation:spin .8s linear infinite"') + '></i>' +
+        '<span class="reasoning-label">' + label + '</span>' +
+        '<i class="ti ti-chevron-right reasoning-chevron' + (isOpen ? ' reasoning-chevron-open' : '') + '"></i>' +
+      '</button>' +
+      '<div class="reasoning-body" style="' + (isOpen ? '' : 'display:none') + '">' +
+        (typeof renderMarkdown === 'function' ? renderMarkdown(text || '') : (text || '')) +
+      '</div>';
   }
 
   try {
@@ -675,7 +704,12 @@ async function streamResponse(conv) {
 
           if (evt.type === 'content')   { buffer += evt.content; tokenCount++; if (tokenCount === 1) dbg('first token received', 'ok'); if (typeof processDesignStreamChunk === 'function') processDesignStreamChunk(evt.content, buffer); scheduleRender(); }
           if (evt.type === 'error')     { dbg('SSE error: ' + evt.error, 'err'); buffer += '\n\nError: ' + evt.error; scheduleRender(); }
-          if (evt.type === 'tool_call') {
+          if (evt.type === 'reasoning') {
+            if (!_reasoning) { _reasoning = { text: '', startedAt: Date.now() }; }
+            _reasoning.text = evt.accumulated || (_reasoning.text + evt.text);
+            _updateReasoningPanel(_reasoning.text, null, false);
+            scrollBottom();
+          }
             dbg('tool_call: ' + evt.name, 'cmd');
             _lastToolOutputAccum = ''; // reset per tool invocation
             // Pick a readable label based on the tool name
@@ -715,6 +749,14 @@ async function streamResponse(conv) {
           if (evt.type === 'done') {
             dbg('done: finish_reason=' + evt.finish_reason + ' usage=' + JSON.stringify(evt.usage), evt.finish_reason ? 'ok' : 'warn');
             if (evt.usage) _ctxUsage = evt.usage;
+            // Finalize reasoning panel (collapse, freeze duration)
+            if (evt.reasoning || _reasoning) {
+              var doneReasoning = evt.reasoning || (_reasoning ? { text: _reasoning.text, durationSeconds: Math.round((Date.now() - _reasoning.startedAt) / 1000) } : null);
+              if (doneReasoning) {
+                _reasoning = doneReasoning;
+                _updateReasoningPanel(doneReasoning.text, doneReasoning.durationSeconds, true);
+              }
+            }
           }
         } catch (e) {}
       }
@@ -734,6 +776,7 @@ async function streamResponse(conv) {
     // Always save the AI message regardless of which conv is active
     var aiMsg = { role: 'assistant', content: buffer };
     if (_currentAgentInfo) aiMsg.agentInfo = _currentAgentInfo;
+    if (_reasoning && _reasoning.text) aiMsg.reasoning = { text: _reasoning.text, durationSeconds: _reasoning.durationSeconds != null ? _reasoning.durationSeconds : (_reasoning.startedAt ? Math.round((Date.now() - _reasoning.startedAt) / 1000) : null) };
     conv.messages.push(aiMsg);
     conv._streaming = false;
     conv._abortController = null;

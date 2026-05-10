@@ -1543,6 +1543,9 @@ app.post('/api/chat', async (req, res) => {
       let assistantText = '';
       let streamUsage = null;
 
+      let reasoningText  = '';
+      let reasoningStart = null;
+
       for await (const chunk of stream) {
         if (res.writableEnded) { continueLoop = false; break; }
         if (chunk.usage) streamUsage = chunk.usage;
@@ -1550,8 +1553,35 @@ app.post('/api/chat', async (req, res) => {
         finishReason = chunk.choices?.[0]?.finish_reason || finishReason;
         if (!delta) continue;
 
-        if (delta.content) { assistantText += delta.content; send({ type: 'content', content: delta.content }); }
+        // ── Claude extended thinking blocks ────────────────────────────────
+        // Anthropic returns thinking as content array items with type='thinking'
+        if (Array.isArray(delta.content)) {
+          for (const block of delta.content) {
+            if (block.type === 'thinking' && block.thinking) {
+              if (reasoningStart === null) reasoningStart = Date.now();
+              reasoningText += block.thinking;
+              send({ type: 'reasoning', text: block.thinking, accumulated: reasoningText });
+            } else if (block.type === 'text' && block.text) {
+              assistantText += block.text;
+              send({ type: 'content', content: block.text });
+            }
+          }
+        }
 
+        // ── Standard text delta ────────────────────────────────────────────
+        if (typeof delta.content === 'string' && delta.content) {
+          assistantText += delta.content;
+          send({ type: 'content', content: delta.content });
+        }
+
+        // ── o-series reasoning summary delta ──────────────────────────────
+        if (delta.reasoning_content) {
+          if (reasoningStart === null) reasoningStart = Date.now();
+          reasoningText += delta.reasoning_content;
+          send({ type: 'reasoning', text: delta.reasoning_content, accumulated: reasoningText });
+        }
+
+        // ── Tool call accumulation ─────────────────────────────────────────
         if (delta?.tool_calls) {
           for (const tc of delta.tool_calls) {
             const i = tc.index ?? 0;
@@ -1620,7 +1650,9 @@ app.post('/api/chat', async (req, res) => {
         allMessages.push({ role: 'user', content: 'Your previous response was cut off mid-output. Continue EXACTLY where you left off — do NOT repeat anything already written. Do NOT narrate or explain, just output the remaining content.' });
         // keep continueLoop = true
       } else {
-        send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null });
+        send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
+          reasoning: reasoningText ? { text: reasoningText, durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
+        });
         continueLoop = false;
       }
     }

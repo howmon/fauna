@@ -509,7 +509,7 @@ function createMessageEl(role, agentInfo) {
   return div;
 }
 
-function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML) {
+function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML, reasoning) {
   var el     = createMessageEl(role, agentInfo);
   var body   = el.querySelector('.msg-body');
   if (!animate) el.style.animation = 'none';
@@ -545,6 +545,25 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
     extractArtifactsFromBuffer(content, el, false);
     if (typeof extractAndRenderGenUI === 'function') extractAndRenderGenUI(content, el, true);
     wrapInChainOfThought(el);
+  }
+
+  // Inject committed reasoning panel for historical AI messages
+  if (role === 'assistant' && reasoning && reasoning.text) {
+    var rPanel = document.createElement('div');
+    rPanel.className = 'reasoning-panel';
+    rPanel.dataset.completed = '1';
+    rPanel.dataset.open = '0';
+    var rLabel = reasoning.durationSeconds != null ? 'Thought for ' + reasoning.durationSeconds + 's' : 'Thought process';
+    rPanel.innerHTML =
+      '<button class="reasoning-toggle" onclick="var p=this.parentElement;p.dataset.open=p.dataset.open===\'0\'?\'1\':\'0\';p.querySelector(\'.reasoning-body\').style.display=p.dataset.open===\'0\'?\'none\':\'\'">' +
+        '<i class="ti ti-brain"></i>' +
+        '<span class="reasoning-label">' + escHtml(rLabel) + '</span>' +
+        '<i class="ti ti-chevron-right reasoning-chevron"></i>' +
+      '</button>' +
+      '<div class="reasoning-body" style="display:none">' +
+        renderMarkdown(reasoning.text) +
+      '</div>';
+    el.insertBefore(rPanel, body);
   }
 
   getConvInner(state.currentId).appendChild(el);
