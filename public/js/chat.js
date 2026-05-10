@@ -710,6 +710,7 @@ async function streamResponse(conv) {
             _updateReasoningPanel(_reasoning.text, null, false);
             scrollBottom();
           }
+          if (evt.type === 'tool_call') {
             dbg('tool_call: ' + evt.name, 'cmd');
             _lastToolOutputAccum = ''; // reset per tool invocation
             // Pick a readable label based on the tool name
