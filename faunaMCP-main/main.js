@@ -68,21 +68,28 @@ function cliEnv(extra = {}) {
 }
 
 function getNodeBin() {
-  // In packaged Electron app, use the bundled Node.js
-  if (app.isPackaged) {
-    return process.execPath;
-  }
+  const { execSync } = require('child_process');
 
-  // Development mode - find system Node.js
+  // Windows: try to find system Node.js first
   if (process.platform === 'win32') {
-    // On Windows, try to find node.exe
+    // First try to find node.exe using 'where' command (searches PATH)
+    try {
+      const whereOutput = execSync('where node', { encoding: 'utf8', timeout: 2000 }).trim();
+      const nodePath = whereOutput.split('\n')[0].trim();
+      if (fs.existsSync(nodePath)) {
+        return nodePath;
+      }
+    } catch (_) {}
+
+    // Fallback to common installation paths
     const candidates = [
       process.env.NODE_BINARY,
       path.join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs', 'node.exe'),
+      path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'nodejs', 'node.exe'),
       path.join(process.env.LOCALAPPDATA || path.join(require('os').homedir(), 'AppData', 'Local'), 'Programs', 'nodejs', 'node.exe'),
+      path.join(process.env.APPDATA || path.join(require('os').homedir(), 'AppData', 'Roaming'), 'npm', 'node.exe'),
     ].filter(Boolean);
 
-    const { execSync } = require('child_process');
     for (const p of candidates) {
       try { 
         if (fs.existsSync(p)) {
@@ -91,11 +98,11 @@ function getNodeBin() {
         }
       } catch (_) {}
     }
-    // Try 'node' in PATH as last resort
-    try {
-      execSync('node --version', { stdio: 'ignore', timeout: 2000 });
-      return 'node';
-    } catch (_) {}
+    
+    // Last resort: use Electron as Node (will need ELECTRON_RUN_AS_NODE env var)
+    if (app.isPackaged) {
+      return process.execPath;
+    }
     return 'node';
   }
 
@@ -107,7 +114,6 @@ function getNodeBin() {
     '/usr/bin/node',
   ].filter(Boolean);
 
-  const { execSync } = require('child_process');
   for (const p of candidates) {
     try { execSync(`"${p}" --version`, { stdio: 'ignore', timeout: 2000 }); return p; } catch (_) {}
   }
@@ -117,9 +123,14 @@ function getNodeBin() {
       env: cliEnv(),
       timeout: 3000
     }).toString().trim();
-  } catch (_) { return 'node'; }
+  } catch (_) { 
+    // Last resort: use Electron as Node
+    if (app.isPackaged) return process.execPath;
+    return 'node'; 
+  }
 }
 const NODE_BIN = getNodeBin();
+console.log(`[FaunaMCP] Using Node.js binary: ${NODE_BIN}${NODE_BIN === process.execPath ? ' (Electron)' : ''}`);
 
 function getNpmBin() {
   if (process.platform === 'win32') return process.env.NPM_BINARY || 'npm.cmd';
@@ -456,8 +467,16 @@ async function startRelay(which, _retryCount = 0) {
   addLog(which, `Starting ${which} relay…`, 'info');
   r.portInUse = false;
 
+  // Prepare environment for relay process
+  const spawnEnv = cliEnv();
+  
+  // If NODE_BIN is Electron executable, set ELECTRON_RUN_AS_NODE to make it behave like Node.js
+  if (NODE_BIN === process.execPath) {
+    spawnEnv.ELECTRON_RUN_AS_NODE = '1';
+  }
+
   r.proc = spawn(NODE_BIN, [relayPath], {
-    env: cliEnv(),
+    env: spawnEnv,
     stdio: ['pipe', 'ignore', 'pipe']
   });
   // Keep stdin open (prevent EOF on the relay's StdioServerTransport)
