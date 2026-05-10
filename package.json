@@ -39,10 +39,15 @@
     "serve": "node cli.js --server",
     "dev": "electron . --inspect",
     "build": "electron-builder --mac --dir",
+    "prebuild": "node -e \"const {execSync,writeFileSync}=require('child_process'),fs=require('fs');try{writeFileSync('build-info.json',JSON.stringify({sha:execSync('git rev-parse HEAD').toString().trim(),built:new Date().toISOString()}))}catch(e){if(!fs.existsSync('build-info.json'))writeFileSync('build-info.json',JSON.stringify({sha:null,built:new Date().toISOString()}))}}\"",
     "dist": "electron-builder --mac",
+    "predist": "npm run prebuild",
     "dist:mac": "electron-builder --mac --arm64",
+    "predist:mac": "npm run prebuild",
     "dist:win": "electron-builder --win",
+    "predist:win": "npm run prebuild",
     "dist:all": "electron-builder --mac --win",
+    "predist:all": "npm run prebuild",
     "postdist:mac": "npm rebuild keytar --arch=arm64",
     "test": "node --test tests/instruction-discovery.test.js",
     "version:show": "node scripts/version.cjs",
@@ -145,6 +150,7 @@
       }
     },
     "files": [
+      "build-info.json",
       "main.js",
       "server.js",
       "enterprise-auth.js",

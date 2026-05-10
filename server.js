@@ -32,9 +32,12 @@ import { marked }  from 'marked';
 // Electron APIs — available when server runs inside the Electron main process.
 // Gracefully degrade if run standalone (e.g. during testing).
 const _require = createRequire(import.meta.url);
-let systemPreferences, desktopCapturer, powerSaveBlocker, _ElectronBrowserWindow;
+let systemPreferences, desktopCapturer, powerSaveBlocker, _ElectronBrowserWindow, _electronApp, _electronShell;
 try {
-  ({ systemPreferences, desktopCapturer, powerSaveBlocker, BrowserWindow: _ElectronBrowserWindow } = _require('electron'));
+  ({ systemPreferences, desktopCapturer, powerSaveBlocker,
+     BrowserWindow: _ElectronBrowserWindow,
+     app: _electronApp,
+     shell: _electronShell } = _require('electron'));
 } catch (_) {}
 
 // Power-save blocker — keeps screen/CPU awake while any chat request is active.
@@ -684,15 +687,131 @@ app.post('/api/workiq/sign-out', (_req, res) => {
 // ── Fauna self-update ─────────────────────────────────────────────────────
 let _faunaUpdateJob = null;
 
+const FAUNA_REPO_OWNER = 'howmon';
+const FAUNA_REPO_NAME  = 'fauna';
+const FAUNA_APP_DIR    = __dirname;
+
+function _faunaLog(msg) {
+  if (!_faunaUpdateJob) return;
+  _faunaUpdateJob.logs = _faunaUpdateJob.logs || [];
+  _faunaUpdateJob.logs.push({ message: msg, ts: Date.now() });
+  _faunaUpdateJob.message = msg;
+}
+
+function _faunaIsPackaged() {
+  return !!(_electronApp && _electronApp.isPackaged);
+}
+
+function _faunaGitSha() {
+  // 1. Try live git (works in dev / git-clone installs)
+  try {
+    return execSync('git rev-parse HEAD', { cwd: FAUNA_APP_DIR, encoding: 'utf8' }).trim();
+  } catch (_) {}
+  // 2. Fall back to build-time SHA embedded in build-info.json (packaged app)
+  try {
+    const info = JSON.parse(fs.readFileSync(path.join(FAUNA_APP_DIR, 'build-info.json'), 'utf8'));
+    if (info && info.sha) return info.sha;
+  } catch (_) {}
+  return null;
+}
+
+async function _faunaFetchRemoteSha() {
+  // Use GitHub API — no auth needed for public repos
+  const https = await import('https');
+  return new Promise((resolve, reject) => {
+    const url = `https://api.github.com/repos/${FAUNA_REPO_OWNER}/${FAUNA_REPO_NAME}/commits/HEAD`;
+    const opts = { headers: { 'User-Agent': 'Fauna-App/1.0', 'Accept': 'application/vnd.github.sha' } };
+    https.get(url, opts, r => {
+      let body = '';
+      r.on('data', c => body += c);
+      r.on('end', () => {
+        if (r.statusCode === 200) resolve(body.trim());
+        else reject(new Error(`GitHub API ${r.statusCode}: ${body.slice(0, 120)}`));
+      });
+    }).on('error', reject);
+  });
+}
+
 app.get('/api/fauna/update-status', (_req, res) => {
-  res.json({ job: _faunaUpdateJob || { phase: 'current', updateAvailable: false } });
+  res.json({ job: _faunaUpdateJob || { phase: 'idle', updateAvailable: false } });
 });
 
 app.post('/api/fauna/check-update', async (_req, res) => {
-  // Stub: report current version as up to date. A real implementation would
-  // compare against a releases API.
-  _faunaUpdateJob = { phase: 'current', updateAvailable: false, checking: false };
+  _faunaUpdateJob = { phase: 'checking', checking: true, running: false, logs: [] };
+  _faunaLog('Reading local git SHA…');
+  try {
+    const currentSha = _faunaGitSha();
+    if (!currentSha) throw new Error('Not a git repository — cannot check for updates');
+    _faunaLog(`Local SHA: ${currentSha.slice(0, 12)}`);
+    _faunaLog('Fetching latest SHA from GitHub…');
+    const latestSha = await _faunaFetchRemoteSha();
+    _faunaLog(`Remote SHA: ${latestSha.slice(0, 12)}`);
+    const updateAvailable = latestSha !== currentSha;
+    _faunaUpdateJob = {
+      phase: updateAvailable ? 'available' : 'current',
+      checking: false, running: false,
+      updateAvailable,
+      currentSha, latestSha,
+      logs: _faunaUpdateJob.logs,
+      message: updateAvailable ? `Update available (${latestSha.slice(0,7)})` : 'Already up to date',
+    };
+  } catch (err) {
+    _faunaUpdateJob = {
+      phase: 'error', checking: false, running: false, updateAvailable: false,
+      error: err.message, logs: (_faunaUpdateJob && _faunaUpdateJob.logs) || [],
+    };
+    _faunaLog(`Error: ${err.message}`);
+  }
   res.json({ job: _faunaUpdateJob });
+});
+
+app.post('/api/fauna/install-update', express.json(), async (req, res) => {
+  if (_faunaUpdateJob && _faunaUpdateJob.running) {
+    return res.status(409).json({ error: 'Update already in progress' });
+  }
+
+  // In a packaged app we cannot do in-place git updates — open the releases page instead
+  if (_faunaIsPackaged()) {
+    const releasesUrl = `https://github.com/${FAUNA_REPO_OWNER}/${FAUNA_REPO_NAME}/releases`;
+    if (_electronShell) _electronShell.openExternal(releasesUrl);
+    _faunaUpdateJob = {
+      phase: 'complete', running: false, updateAvailable: false,
+      message: 'Opened GitHub releases page in browser — download and install the new version.',
+      logs: [{ message: `Opened ${releasesUrl}` }],
+    };
+    return res.json({ job: _faunaUpdateJob });
+  }
+
+  _faunaUpdateJob = { phase: 'starting', running: true, logs: [], updateAvailable: false };
+  res.json({ job: _faunaUpdateJob });   // respond immediately; client polls /update-status
+
+  const { promisify } = await import('util');
+  const execP = promisify(_exec);
+
+  async function phase(name, cmd) {
+    _faunaUpdateJob.phase = name;
+    _faunaLog(`[${name}] ${cmd}`);
+    const { stdout, stderr } = await execP(cmd, { cwd: FAUNA_APP_DIR, env: { ...process.env } });
+    if (stdout) stdout.trim().split('\n').forEach(l => _faunaLog(l));
+    if (stderr) stderr.trim().split('\n').forEach(l => _faunaLog(l));
+  }
+
+  (async () => {
+    try {
+      await phase('download',      'git fetch origin');
+      await phase('extract',       'git reset --hard origin/HEAD');
+      await phase('dependencies',  'npm install --prefer-offline');
+      _faunaUpdateJob.phase    = 'complete';
+      _faunaUpdateJob.running  = false;
+      _faunaUpdateJob.message  = 'Update complete — restart Fauna to apply changes';
+      _faunaLog('Done. Restart the app to use the new version.');
+    } catch (err) {
+      _faunaUpdateJob.phase   = 'error';
+      _faunaUpdateJob.running = false;
+      _faunaUpdateJob.error   = err.message;
+      _faunaLog(`Install failed: ${err.message}`);
+    }
+  })();
 });
 
 // ── Markdown → PDF ───────────────────────────────────────────────────────
