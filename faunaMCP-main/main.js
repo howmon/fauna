@@ -68,6 +68,38 @@ function cliEnv(extra = {}) {
 }
 
 function getNodeBin() {
+  // In packaged Electron app, use the bundled Node.js
+  if (app.isPackaged) {
+    return process.execPath;
+  }
+
+  // Development mode - find system Node.js
+  if (process.platform === 'win32') {
+    // On Windows, try to find node.exe
+    const candidates = [
+      process.env.NODE_BINARY,
+      path.join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs', 'node.exe'),
+      path.join(process.env.LOCALAPPDATA || path.join(require('os').homedir(), 'AppData', 'Local'), 'Programs', 'nodejs', 'node.exe'),
+    ].filter(Boolean);
+
+    const { execSync } = require('child_process');
+    for (const p of candidates) {
+      try { 
+        if (fs.existsSync(p)) {
+          execSync(`"${p}" --version`, { stdio: 'ignore', timeout: 2000 }); 
+          return p; 
+        }
+      } catch (_) {}
+    }
+    // Try 'node' in PATH as last resort
+    try {
+      execSync('node --version', { stdio: 'ignore', timeout: 2000 });
+      return 'node';
+    } catch (_) {}
+    return 'node';
+  }
+
+  // macOS/Linux
   const candidates = [
     process.env.NODE_BINARY,
     '/usr/local/bin/node',
