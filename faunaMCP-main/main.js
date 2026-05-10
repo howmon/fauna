@@ -72,6 +72,16 @@ function getNodeBin() {
 
   // Windows: try to find system Node.js first
   if (process.platform === 'win32') {
+    // First try to find node.exe using 'where' command (searches PATH)
+    try {
+      const whereOutput = execSync('where node', { encoding: 'utf8', timeout: 2000 }).trim();
+      const nodePath = whereOutput.split('\n')[0].trim();
+      if (fs.existsSync(nodePath)) {
+        return nodePath;
+      }
+    } catch (_) {}
+
+    // Fallback to common installation paths
     const candidates = [
       process.env.NODE_BINARY,
       path.join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs', 'node.exe'),
@@ -80,7 +90,6 @@ function getNodeBin() {
       path.join(process.env.APPDATA || path.join(require('os').homedir(), 'AppData', 'Roaming'), 'npm', 'node.exe'),
     ].filter(Boolean);
 
-    // Try known paths first
     for (const p of candidates) {
       try { 
         if (fs.existsSync(p)) {
@@ -89,12 +98,6 @@ function getNodeBin() {
         }
       } catch (_) {}
     }
-    
-    // Try 'node' command in PATH
-    try {
-      execSync('node --version', { stdio: 'ignore', timeout: 2000 });
-      return 'node';
-    } catch (_) {}
     
     // Last resort: use Electron as Node (will need ELECTRON_RUN_AS_NODE env var)
     if (app.isPackaged) {
