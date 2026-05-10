@@ -39,7 +39,7 @@
     "serve": "node cli.js --server",
     "dev": "electron . --inspect",
     "build": "electron-builder --mac --dir",
-    "prebuild": "node -e \"const {execSync,writeFileSync}=require('child_process'),fs=require('fs');try{writeFileSync('build-info.json',JSON.stringify({sha:execSync('git rev-parse HEAD').toString().trim(),built:new Date().toISOString()}))}catch(e){if(!fs.existsSync('build-info.json'))writeFileSync('build-info.json',JSON.stringify({sha:null,built:new Date().toISOString()}))}}\"",
+    "prebuild": "node scripts/build-info.cjs",
     "dist": "electron-builder --mac",
     "predist": "npm run prebuild",
     "dist:mac": "electron-builder --mac --arm64",
