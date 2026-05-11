@@ -258,7 +258,7 @@ function renderArtifactContent() {
 
   } else if (a.type === 'markdown' || a.type === 'summary' || a.type === 'web') {
     content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
-      '<div class="artifact-prose msg-body">' + renderMarkdown(a.content || '') + '</div>' +
+      '<div class="artifact-prose msg-body" id="artifact-md-' + a.id + '">' + renderMarkdown(a.content || '') + '</div>' +
     '</div>';
 
   } else if (a.type === 'json') {
@@ -286,6 +286,14 @@ function renderArtifactContent() {
   }
 
   body.innerHTML = toolbar + content;
+  
+  // Initialize mermaid diagrams if this is a markdown artifact
+  if ((a.type === 'markdown' || a.type === 'summary' || a.type === 'web') && typeof initMermaidInContainer === 'function') {
+    var mdContainer = document.getElementById('artifact-md-' + a.id);
+    if (mdContainer) {
+      setTimeout(function() { initMermaidInContainer(mdContainer); }, 100);
+    }
+  }
 }
 
 function makeArtifactToolbar(a) {

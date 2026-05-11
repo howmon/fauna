@@ -836,6 +836,7 @@ async function streamResponse(conv) {
         setBusy(false);
       } else {
         bodyEl.innerHTML = renderBuffer ? renderMarkdown(renderBuffer) : '<span style="color:var(--fau-text-muted)">No response.</span>';
+        if (typeof initMermaidInContainer === 'function') initMermaidInContainer(bodyEl);
 
         var shellBlocks = (msgEl.querySelectorAll('code.language-shell-exec')||[]).length;
         dbg('  code blocks found: shell-exec=' + shellBlocks, 'info');
@@ -867,6 +868,7 @@ async function streamResponse(conv) {
       bodyEl.classList.remove('streaming-cursor');
       var renderBuffer = sanitizeWriteFileBlocks(buffer);
       bodyEl.innerHTML = renderBuffer ? renderMarkdown(renderBuffer) : '';
+      if (typeof initMermaidInContainer === 'function') initMermaidInContainer(bodyEl);
       extractAndRenderFigmaExec(buffer, msgEl);
       extractAndRenderShellExec(buffer, msgEl, false, convId);  // auto-run continues in background
       extractAndRenderBrowserActions(buffer, msgEl, false, convId);
