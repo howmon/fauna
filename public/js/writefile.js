@@ -235,12 +235,35 @@ function validateWrittenFile(filePath, content, widget) {
     if (codeBlockMarkers % 2 !== 0) {
       markWriteFileFailed(widget, filePath,
         'Markdown has unclosed code block (``` count: ' + codeBlockMarkers + ') — likely truncated', convId);
+      return;
     }
-    // Check if file ends abruptly mid-sentence (no proper ending punctuation or newline)
+    
+    // Check for common truncation indicators
     var trimmed = content.trimEnd();
-    if (trimmed.length > 100 && !trimmed.match(/[.!?)\]}>\n]$/)) {
+    var lastLine = trimmed.split('\n').pop() || '';
+    
+    // Red flags: ends with incomplete sentence/word
+    if (trimmed.length > 100) {
+      // Ends mid-word (lowercase letter without punctuation)
+      if (lastLine.match(/[a-z]$/) && !lastLine.match(/[.!?:;)\]}>]$/)) {
+        markWriteFileFailed(widget, filePath,
+          'Markdown ends mid-sentence or mid-word — likely truncated. Last line: "' + lastLine.slice(-50) + '"', convId);
+        return;
+      }
+      
+      // Ends with unfinished markdown syntax
+      if (lastLine.match(/^#+\s*$|^\s*[-*]\s*$|^\s*\d+\.\s*$/)) {
+        markWriteFileFailed(widget, filePath,
+          'Markdown ends with unfinished heading/list marker — likely truncated', convId);
+        return;
+      }
+    }
+    
+    // Check for suspiciously short "strategy" or "document" files (< 500 bytes)
+    if (content.length < 500 && (filePath.match(/strategy|document|report|plan/i))) {
       markWriteFileFailed(widget, filePath,
-        'Markdown appears to end abruptly without proper punctuation — possible truncation', convId);
+        'File appears suspiciously short (' + content.length + ' bytes) for a ' + filePath.match(/strategy|document|report|plan/i)[0] + ' — likely incomplete', convId);
+      return;
     }
 
   } else if (ext === 'json') {
