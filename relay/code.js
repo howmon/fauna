@@ -45,9 +45,9 @@ sendFileInfo();
 figma.on('currentpagechange', sendFileInfo);
 
 // ── Selection change — send full SELECTION_CHANGE (buffered by server) ────
-figma.on('selectionchange', function() {
+figma.on('selectionchange', async function() {
   var sel = figma.currentPage.selection;
-  var info = sel.map(function(n) {
+  var info = await Promise.all(sel.map(async function(n) {
     var obj = {
       id: n.id, name: n.name, type: n.type,
       isLayoutGrid: isLayoutGrid(n),
@@ -56,7 +56,7 @@ figma.on('selectionchange', function() {
     };
     if (n.type === 'INSTANCE') {
       obj.slots = getSlotState(n);
-      var mc = n.mainComponent;
+      var mc = await n.getMainComponentAsync();
       if (mc) {
         obj.componentName = mc.name;
         obj.componentId   = mc.id;
@@ -66,7 +66,7 @@ figma.on('selectionchange', function() {
       }
     }
     return obj;
-  });
+  }));
   // SELECTION_CHANGE is forwarded to the MCP server buffer
   figma.ui.postMessage({ type: 'SELECTION_CHANGE', nodes: info, page: figma.currentPage.name, timestamp: Date.now() });
   // legacy alias kept for Fauna chat UI
@@ -170,12 +170,7 @@ function getInstanceSwapKeys(instance) {
 function isLayoutGrid(node) {
   if (node.type !== 'INSTANCE') return false;
   var name = node.name.toLowerCase();
-  if (name.indexOf('layoutgrid') !== -1) return true;
-  var mc = node.mainComponent;
-  if (!mc) return false;
-  var mcName = (mc.name || '').toLowerCase();
-  return mcName.indexOf('layoutgrid') !== -1 ||
-    (mc.parent && (mc.parent.name || '').toLowerCase().indexOf('layoutgrid') !== -1);
+  return name.indexOf('layoutgrid') !== -1;
 }
 
 function getSlotState(instance) {
@@ -573,7 +568,7 @@ figma.ui.onmessage = async function(msg) {
                 var tin = contentInsts[tni];
                 var tinId = tin.id;
                 if (usedIds[tinId]) continue;
-                var mc = tin.mainComponent;
+                var mc = await tin.getMainComponentAsync();
                 if (mc && mc.name === rcomps[toi].name) {
                   await applyTextOverrides(tin, rcomps[toi].textOverrides);
                   usedIds[tinId] = true;
