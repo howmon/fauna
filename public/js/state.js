@@ -16,6 +16,7 @@ var state = {
   playwrightMCPEnabled: localStorage.getItem('fauna-playwright-mcp') === 'true', // default OFF
   thinkingBudget: localStorage.getItem('fauna-thinking-budget') || 'high',
   maxContextTurns: parseInt(localStorage.getItem('fauna-max-turns') || '20', 10),
+  defaultSavePath: localStorage.getItem('fauna-default-save-path') || null, // user-specified default directory for file saves
   // streaming/abortController/_autoFeedDepth are per-conversation (conv._streaming etc.)
   artifacts:      [],  // active conv's artifacts { id, type, title, content, base64, mime, path, url }
   activeArtifact: null,
@@ -174,6 +175,19 @@ function moveConvFilesToProject(convId) {
   }).then(function(r) { return r.json(); }).then(function(d) {
     alert(d.exitCode === 0 ? 'Copied ' + files.length + ' file(s) to ' + dest : 'Error: ' + (d.stderr || d.stdout));
   });
+}
+
+// Set default save path for all new files (user preference)
+function setDefaultSavePath(path) {
+  if (path && path.trim()) {
+    state.defaultSavePath = path.trim();
+    localStorage.setItem('fauna-default-save-path', path.trim());
+    console.log('[fauna] Default save path set to:', path.trim());
+  } else {
+    state.defaultSavePath = null;
+    localStorage.removeItem('fauna-default-save-path');
+    console.log('[fauna] Default save path cleared');
+  }
 }
 
 
