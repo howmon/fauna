@@ -54,3 +54,4 @@ app.asar.bak
 !.github/**/*.md
 PROJECTS_PLAN.html
 workiq-integration.example.js
+build-info.json
