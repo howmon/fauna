@@ -927,11 +927,9 @@ function renderAgentList() {
     return;
   }
 
-  var MAX_VISIBLE = 5;
-  var visible = agents.slice(0, MAX_VISIBLE);
-  list.innerHTML = visible.map(agentListItemHtml).join('');
+  list.innerHTML = agents.map(agentListItemHtml).join('');
   var showAll = document.getElementById('agents-show-all');
-  if (showAll) showAll.style.display = agents.length > MAX_VISIBLE ? '' : 'none';
+  if (showAll) showAll.style.display = 'none';
 }
 
 function openAllAgents() {
