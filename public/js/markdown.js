@@ -136,34 +136,55 @@ marked.use({
 function renderMarkdown(text) {
   // Strip artifact fenced blocks before rendering — they're shown as entity cards, not code fences
   var cleaned = (text || '').replace(/```artifact:[^\n`]+\n[\s\S]*?```\n?/g, '');
+  
+  // Pre-process mermaid blocks before markdown parsing
+  // Replace ```mermaid blocks with placeholder divs
+  var mermaidId = 0;
+  var mermaidBlocks = {};
+  cleaned = cleaned.replace(/```mermaid\n([\s\S]*?)```/g, function(match, code) {
+    var id = 'mermaid-placeholder-' + (mermaidId++);
+    mermaidBlocks[id] = code.trim();
+    return '<div class="mermaid-placeholder" data-mermaid-id="' + id + '"></div>';
+  });
+  
   try {
     var html = marked.parse(cleaned);
     // Sanitise HTML to prevent XSS from AI-generated or injected content
     html = typeof DOMPurify !== 'undefined'
-      ? DOMPurify.sanitize(html, { ADD_ATTR: ['data-special-lang', 'data-lang', 'data-wf-id', 'data-wf-path', 'onclick', 'data-code-id'], ADD_TAGS: ['iframe'] })
+      ? DOMPurify.sanitize(html, { ADD_ATTR: ['data-special-lang', 'data-lang', 'data-wf-id', 'data-wf-path', 'onclick', 'data-code-id', 'data-mermaid-id'], ADD_TAGS: ['iframe'] })
       : html;
     
-    // Initialize Mermaid diagrams after DOM insertion
-    setTimeout(function() {
-      if (typeof mermaid !== 'undefined') {
-        mermaid.initialize({ startOnLoad: false, theme: 'dark' });
-        var mermaidBlocks = document.querySelectorAll('code.language-mermaid');
-        mermaidBlocks.forEach(function(block, idx) {
-          var code = block.textContent;
-          var id = 'mermaid-' + Date.now() + '-' + idx;
-          var div = document.createElement('div');
-          div.className = 'mermaid';
-          div.id = id;
-          div.textContent = code;
-          block.parentElement.replaceChild(div, block);
-        });
-        mermaid.run({ nodes: document.querySelectorAll('.mermaid') });
-      }
-    }, 50);
+    // Replace placeholders with actual mermaid divs
+    html = html.replace(/<div class="mermaid-placeholder" data-mermaid-id="([^"]+)"><\/div>/g, function(match, id) {
+      var code = mermaidBlocks[id] || '';
+      return '<pre class="mermaid">' + escHtml(code) + '</pre>';
+    });
     
     return html;
   }
   catch (e) { return escHtml(cleaned); }
+}
+
+// Initialize mermaid diagrams in a container after it's been inserted into DOM
+function initMermaidInContainer(container) {
+  if (typeof mermaid === 'undefined' || !container) return;
+  
+  try {
+    mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
+    var mermaidBlocks = container.querySelectorAll('pre.mermaid');
+    if (mermaidBlocks.length === 0) return;
+    
+    mermaidBlocks.forEach(function(block) {
+      var code = block.textContent;
+      var id = 'mermaid-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9);
+      block.id = id;
+      block.textContent = code; // Ensure clean text content
+    });
+    
+    mermaid.run({ nodes: Array.from(mermaidBlocks) });
+  } catch (e) {
+    console.error('[mermaid] Init error:', e);
+  }
 }
 
 // ── Chain of Thought rendering ────────────────────────────────────────────
