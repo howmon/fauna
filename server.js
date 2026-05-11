@@ -302,6 +302,35 @@ app.delete('/api/conversations/:id', (req, res) => {
   res.json({ ok: true, deleted: conversations.length - next.length });
 });
 
+// Generate AI conversation title from messages
+app.post('/api/conversation-title', async (req, res) => {
+  try {
+    const { messages = [], model = 'claude-sonnet-4.6' } = req.body;
+    if (!messages.length) return res.status(400).json({ error: 'No messages provided' });
+
+    const client = getCopilotClient();
+    const systemPrompt = 'You are a helpful assistant that generates short, descriptive titles for conversations. Generate a concise title (3-6 words) that captures the main topic. Return ONLY the title, no quotes, no explanation.';
+    
+    const titleMessages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: 'Generate a short title for this conversation:\n\n' + messages.map(m => `${m.role}: ${m.content}`).join('\n\n') }
+    ];
+
+    const completion = await client.chat.completions.create({
+      model,
+      messages: titleMessages,
+      max_tokens: 50,
+      temperature: 0.7
+    });
+
+    const title = (completion.choices[0]?.message?.content || 'New conversation').trim();
+    res.json({ title });
+  } catch (err) {
+    console.error('[conversation-title] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Automations / tasks API ──────────────────────────────────────────────
 
 function taskWithRuntime(task) {
