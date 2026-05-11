@@ -863,6 +863,35 @@ async function streamResponse(conv) {
         }
         scrollBottom();
         setBusy(false);
+
+        // Voice conversational reply: speak the AI response back
+        if (window._voiceAwaitingReply && buffer && typeof _speak === 'function') {
+          window._voiceAwaitingReply = false;
+          // Strip markdown formatting, code blocks, and excessive detail for speech
+          var spokenText = buffer
+            .replace(/```[\s\S]*?```/g, '')        // remove code blocks
+            .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // links → text
+            .replace(/[#*_~`>|]/g, '')             // strip markdown chars
+            .replace(/\n{2,}/g, '. ')              // paragraphs → pause
+            .replace(/\n/g, ' ')                   // newlines → space
+            .replace(/\s{2,}/g, ' ')               // collapse whitespace
+            .trim();
+          // Limit to ~500 chars for speech (avoid long monologues)
+          if (spokenText.length > 500) spokenText = spokenText.slice(0, 497) + '…';
+          if (spokenText) {
+            _speak(spokenText);
+            // Re-enter command mode after TTS finishes (persistent conversation)
+            if (typeof _conversationMode !== 'undefined' && _conversationMode && typeof _reenterCommandMode === 'function') {
+              // Wait for TTS to finish, then re-enter
+              var _checkTTS = setInterval(function() {
+                if (!window.speechSynthesis.speaking) {
+                  clearInterval(_checkTTS);
+                  setTimeout(_reenterCommandMode, 600);
+                }
+              }, 300);
+            }
+          }
+        }
       }
     } else {
       // Background conversation — render into its (hidden) DOM and auto-run shell commands

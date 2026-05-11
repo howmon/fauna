@@ -15,6 +15,8 @@ var _analyserNode     = null;   // AnalyserNode for energy detection
 var _mediaRecorder    = null;   // MediaRecorder for audio chunks
 var _recordChunks     = [];     // Blob chunks from current recording
 var _voiceActive      = false;  // in command capture mode
+var _conversationMode = false;  // persistent voice conversation (stays active until user says stop)
+var _cmdTimeout       = null;   // timeout handle for auto-exit
 var _vadState         = 'idle'; // 'idle'|'recording_wake'|'recording_cmd'|'transcribing'
 var _vadSpeechFrames  = 0;      // consecutive frames above energy threshold
 var _vadSilenceFrames = 0;      // consecutive frames below threshold
@@ -37,6 +39,73 @@ function getWakeWord() {
 
 function _setWakeWord(w) {
   localStorage.setItem(VOICE_WAKEWORD_KEY, w.trim().toLowerCase());
+}
+
+// ── Fuzzy wake-word matching ──────────────────────────────────────────────
+// Whisper often mis-transcribes "fauna" as "vohma", "follow", "phone a", etc.
+// We use edit distance + known phonetic aliases to tolerate this.
+
+var _WAKE_ALIASES = {
+  fauna: ['fawna','fona','vona','vohma','forma','foma','fauna','forner','fawner',
+          'follow','fowna','funna','fana','faana','phona','phone a','for now',
+          'fawn a','von a','fauna?','a fauna']
+};
+
+function _levenshtein(a, b) {
+  if (a === b) return 0;
+  var m = a.length, n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  var prev = [], curr = [], i, j;
+  for (j = 0; j <= n; j++) prev[j] = j;
+  for (i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (j = 1; j <= n; j++) {
+      curr[j] = a[i-1] === b[j-1]
+        ? prev[j-1]
+        : 1 + Math.min(prev[j-1], prev[j], curr[j-1]);
+    }
+    var tmp = prev; prev = curr; curr = tmp;
+  }
+  return prev[n];
+}
+
+/**
+ * Fuzzy check if `text` contains the wake word (or something close to it).
+ * Returns {matched: true, afterWake: "..."} or {matched: false}.
+ */
+function _fuzzyWakeMatch(text) {
+  var ww    = getWakeWord();
+  var lower = text.toLowerCase().trim();
+
+  // 1. Exact substring (original behavior)
+  var idx = lower.indexOf(ww);
+  if (idx !== -1) {
+    return { matched: true, afterWake: text.slice(idx + ww.length).replace(/^[\s,.!?]+/, '').trim() };
+  }
+
+  // 2. Check known aliases
+  var aliases = _WAKE_ALIASES[ww] || [];
+  for (var a = 0; a < aliases.length; a++) {
+    var ai = lower.indexOf(aliases[a]);
+    if (ai !== -1) {
+      return { matched: true, afterWake: text.slice(ai + aliases[a].length).replace(/^[\s,.!?]+/, '').trim() };
+    }
+  }
+
+  // 3. Edit-distance on each word (max distance = 2 for words ≥4 chars)
+  var words = lower.replace(/[^a-z\s]/g, '').split(/\s+/);
+  var maxDist = ww.length <= 3 ? 1 : 2;
+  for (var w = 0; w < words.length; w++) {
+    if (words[w].length < 3) continue;
+    if (_levenshtein(words[w], ww) <= maxDist) {
+      // Reconstruct afterWake from remaining words
+      var afterWords = words.slice(w + 1).join(' ').trim();
+      return { matched: true, afterWake: afterWords };
+    }
+  }
+
+  return { matched: false, afterWake: '' };
 }
 
 // ── Audio feedback ────────────────────────────────────────────────────────
@@ -371,7 +440,8 @@ function _routeVoiceCommand(transcript) {
     }
   }
 
-  // Default: inject into the chat input and submit
+  // Default: inject into the chat input and submit, then speak the response
+  window._voiceAwaitingReply = true;
   var input = document.getElementById('msg-input');
   if (input) {
     input.value = t;
@@ -515,6 +585,15 @@ async function _transcribeBlobs(chunks, mode) {
 
   var blobType = (chunks[0] && chunks[0].type) || 'audio/webm';
   var blob = new Blob(chunks, { type: blobType });
+  // Skip tiny blobs — too short to contain meaningful audio, and often cause ffmpeg parse errors
+  if (blob.size < 1500) {
+    console.log('[voice] skipping tiny blob (', blob.size, 'bytes) — likely noise');
+    _vadState = 'idle';
+    if (_conversationMode && mode === 'cmd') {
+      _reenterCommandMode();
+    }
+    return;
+  }
   console.log('[voice] POSTing', blob.size, 'bytes to /api/transcribe, mode:', mode);
   _vadState = 'transcribing';
   try {
@@ -524,8 +603,10 @@ async function _transcribeBlobs(chunks, mode) {
       body: blob,
     });
     var data = await resp.json();
-    if (!resp.ok) throw new Error((data && (data.message || data.error)) || ('HTTP ' + resp.status));
-    if (data && data.ok === false) throw new Error(data.message || data.error || 'Voice transcription unavailable');
+    if (!resp.ok || (data && data.ok === false)) {
+      if (data && data.code === 'FFMPEG_BROKEN') { _repairFfmpeg(); return; }
+      throw new Error((data && (data.message || data.error)) || ('HTTP ' + resp.status));
+    }
     var text = (data.text || '').replace(WHISPER_NOISE_TOKENS, '').trim();
     console.log('[voice] transcribed:', JSON.stringify(text));
     _onWhisperResult(text);
@@ -533,8 +614,13 @@ async function _transcribeBlobs(chunks, mode) {
     console.warn('[voice] transcribe error:', err);
     _vadState    = 'idle';
     _voiceActive = false;
-    _hideVoiceOverlay();
-    _setVoicePillState(_voiceEnabled ? 'listening' : 'off');
+    // In conversation mode, recover and keep listening instead of dropping out
+    if (_conversationMode) {
+      setTimeout(_reenterCommandMode, 800);
+    } else {
+      _hideVoiceOverlay();
+      _setVoicePillState(_voiceEnabled ? 'listening' : 'off');
+    }
   }
 }
 
@@ -681,7 +767,7 @@ function _commitStop() {
 // ── Whisper result handler ────────────────────────────────────────────────
 
 // Whisper hallucination tokens to ignore
-var WHISPER_NOISE_TOKENS = /^\s*\*?(?:unintelligible|inaudible|silence|music|noise|applause|laughter|\[.*?\])\*?\s*$/i;
+var WHISPER_NOISE_TOKENS = /^\s*\*?(?:unintelligible|inaudible|silence|music|noise|applause|laughter|thanks for watching.*|\[.*?\]|\(.*?\))\*?\s*$/i;
 
 function _onWhisperResult(text) {
   var lower = (text || '').toLowerCase().trim();
@@ -694,17 +780,22 @@ function _onWhisperResult(text) {
   }
 
   if (!_voiceActive) {
-    // Wake word scan
+    // Wake word scan (fuzzy — tolerates Whisper mis-transcriptions)
     _vadState = 'idle';
-    if (lower.includes(getWakeWord())) {
-      var ww        = getWakeWord();
-      var idx       = lower.indexOf(ww);
-      var afterWake = text.slice(idx + ww.length).replace(/^[\s,.!?]+/, '').trim();
+    var wakeResult = _fuzzyWakeMatch(text);
+    if (wakeResult.matched) {
+      console.log('[whisper] wake word matched (fuzzy) in:', lower);
+      var afterWake = wakeResult.afterWake;
       if (afterWake.length > 2) {
-        // Inline command: "fauna new conversation"
+        // Inline command: "fauna do something" — enter conversation mode + route
+        _conversationMode = true;
         _playVoiceChime('activate');
-        setTimeout(function() { _playVoiceChime('dismiss'); }, 300);
+        _setVoicePillState('active');
         _routeVoiceCommand(afterWake);
+        // Re-enter after TTS or immediately
+        if (!window._voiceAwaitingReply) {
+          setTimeout(_reenterCommandMode, 1200);
+        }
       } else {
         _enterCommandMode();
       }
@@ -718,41 +809,96 @@ function _onWhisperResult(text) {
 
 // ── Command mode ──────────────────────────────────────────────────────────
 
+// Phrases that end persistent conversation mode
+var _EXIT_CONVERSATION_PHRASES = /\b(stop\s*listen|end\s*voice|goodbye|that'?s?\s*all|never\s*mind|go\s*away|exit\s*voice|stop\s*talking|i'?m\s*done|shut\s*up)\b/i;
+
 function _enterCommandMode() {
   if (_voiceActive) return;
   _voiceActive      = true;
+  _conversationMode = true;   // enter persistent conversation mode
   _vadState         = 'idle';   // let VAD pick up command speech
   _vadSpeechFrames  = 0;
   _vadSilenceFrames = 0;
   _playVoiceChime('activate');
   _setVoicePillState('active');
-  _showVoiceOverlay('');
-  // Guard: auto-exit after 8s
-  setTimeout(function() {
+  _showVoiceOverlay('Listening…');
+  // Guard: auto-exit after 30s of silence in conversation mode
+  _resetCmdTimeout();
+}
+
+function _resetCmdTimeout() {
+  if (_cmdTimeout) clearTimeout(_cmdTimeout);
+  _cmdTimeout = setTimeout(function() {
     if (!_voiceActive) return;
     if (_mediaRecorder && _mediaRecorder.state !== 'inactive') {
       var chunks = _recordChunks.slice();
       var mr = _mediaRecorder;
       mr.onstop = function() {
         if (chunks.length) _transcribeBlobs(chunks, 'cmd');
-        else _exitCommandMode('');
+        else _endConversationMode();
       };
-      try { mr.stop(); } catch (_) { _exitCommandMode(''); }
+      try { mr.stop(); } catch (_) { _endConversationMode(); }
     } else {
-      _exitCommandMode('');
+      _endConversationMode();
     }
-  }, 8000);
+  }, _conversationMode ? 30000 : 8000);
 }
 
-function _exitCommandMode(transcript) {
-  _voiceActive = false;
-  _vadState    = 'idle';
+function _endConversationMode() {
+  _conversationMode = false;
+  _voiceActive      = false;
+  _vadState         = 'idle';
+  if (_cmdTimeout) { clearTimeout(_cmdTimeout); _cmdTimeout = null; }
   _playVoiceChime('dismiss');
   _hideVoiceOverlay();
   _setVoicePillState(_voiceEnabled ? 'listening' : 'off');
+  _speak('Voice mode ended.');
+}
+
+// Re-enter command mode for next utterance (conversation mode persists)
+function _reenterCommandMode() {
+  if (!_conversationMode) return;
+  _voiceActive      = true;
+  _vadState         = 'idle';
+  _vadSpeechFrames  = 0;
+  _vadSilenceFrames = 0;
+  _setVoicePillState('active');
+  _showVoiceOverlay('Listening…');
+  _resetCmdTimeout();
+}
+
+function _exitCommandMode(transcript) {
+  if (_cmdTimeout) { clearTimeout(_cmdTimeout); _cmdTimeout = null; }
+  _voiceActive = false;
+  _vadState    = 'idle';
   // Cancel any false-interruption TTS recovery — a real command arrived
   if (_ttsResumeTimer) { clearTimeout(_ttsResumeTimer); _ttsResumeTimer = null; }
-  if ((transcript || '').trim()) _routeVoiceCommand(transcript.trim());
+
+  var t = (transcript || '').trim();
+
+  // Check if user wants to end conversation mode
+  if (_conversationMode && t && _EXIT_CONVERSATION_PHRASES.test(t)) {
+    _endConversationMode();
+    return;
+  }
+
+  if (_conversationMode) {
+    // Stay in conversation mode — route command, then re-enter after a pause
+    _hideVoiceOverlay();
+    _setVoicePillState('active');
+    if (t) _routeVoiceCommand(t);
+    // Re-enter will be triggered after TTS finishes (or immediately if no TTS)
+    if (!window._voiceAwaitingReply) {
+      setTimeout(_reenterCommandMode, 1200);
+    }
+    // If _voiceAwaitingReply is true, chat.js will call _reenterCommandMode after speaking
+  } else {
+    // Original non-persistent behavior
+    _playVoiceChime('dismiss');
+    _hideVoiceOverlay();
+    _setVoicePillState(_voiceEnabled ? 'listening' : 'off');
+    if (t) _routeVoiceCommand(t);
+  }
 }
 
 // ── Wake word listener (VAD + Whisper) ───────────────────────────────────
@@ -831,6 +977,8 @@ function _stopVoiceListeners() {
   _vadSpeechFrames  = 0;
   _vadSilenceFrames = 0;
   _voiceActive      = false;
+  _conversationMode = false;
+  if (_cmdTimeout) { clearTimeout(_cmdTimeout); _cmdTimeout = null; }
   _recordChunks     = [];
   _hideVoiceOverlay();
   _setVoicePillState('off');
@@ -1115,8 +1263,10 @@ async function _dictTranscribe() {
       body: blob,
     });
     var data = await resp.json();
-    if (!resp.ok) throw new Error((data && (data.message || data.error)) || ('HTTP ' + resp.status));
-    if (data && data.ok === false) throw new Error(data.message || data.error || 'Dictation unavailable');
+    if (!resp.ok || (data && data.ok === false)) {
+      if (data && data.code === 'FFMPEG_BROKEN') { _dictSetState('idle'); _repairFfmpeg(); return; }
+      throw new Error((data && (data.message || data.error)) || ('HTTP ' + resp.status));
+    }
     var text = (data.text || '').replace(WHISPER_NOISE_TOKENS, '').trim();
     if (text) _dictHandleTranscript(text);
   } catch (err) {
@@ -1125,4 +1275,33 @@ async function _dictTranscribe() {
   } finally {
     _dictSetState('idle');
   }
+}
+
+// ── ffmpeg self-repair ────────────────────────────────────────────────────
+var _ffmpegRepairInProgress = false;
+function _repairFfmpeg() {
+  if (_ffmpegRepairInProgress) return;
+  _ffmpegRepairInProgress = true;
+  console.warn('[voice] ffmpeg broken — starting brew reinstall');
+  if (typeof showToast === 'function') showToast('Repairing audio tools… this may take a minute', 0);
+  var es = new EventSource('/api/repair-ffmpeg');
+  es.onmessage = function(e) {
+    try {
+      var msg = JSON.parse(e.data);
+      if (msg.done) {
+        es.close();
+        _ffmpegRepairInProgress = false;
+        if (typeof showToast === 'function') showToast('Audio tools repaired — try voice again ✓');
+      } else if (msg.error) {
+        es.close();
+        _ffmpegRepairInProgress = false;
+        if (typeof showToast === 'function') showToast('Auto-repair failed: ' + msg.error + '. Run: brew reinstall ffmpeg');
+      }
+    } catch (_) {}
+  };
+  es.onerror = function() {
+    es.close();
+    _ffmpegRepairInProgress = false;
+    if (typeof showToast === 'function') showToast('Auto-repair failed. Run: brew reinstall ffmpeg');
+  };
 }

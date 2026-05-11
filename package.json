@@ -63,6 +63,7 @@
     "@xenova/transformers": "^2.17.2",
     "archiver": "^7.0.1",
     "express": "^4.19.2",
+    "ffmpeg-static": "^5.3.0",
     "localtunnel": "^2.0.2",
     "marked": "^18.0.3",
     "multer": "^2.1.1",
@@ -84,6 +85,7 @@
     "copyright": "Copyright © 2026 Solomon Abey",
     "icon": "assets/icon.icns",
     "asarUnpack": [
+      "node_modules/ffmpeg-static/**",
       "node_modules/nodejs-whisper/**",
       "node_modules/@playwright/mcp/**",
       "node_modules/playwright-core/**",
