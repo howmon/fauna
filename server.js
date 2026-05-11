@@ -6009,6 +6009,788 @@ app.post('/api/permissions/request-accessibility', (req, res) => {
   }
 });
 
+// ── Shell stdin ───────────────────────────────────────────────────────────
+// POST { killId, input } → writes input to a running streaming shell process
+app.post('/api/shell-stdin', (req, res) => {
+  const { killId, input } = req.body || {};
+  if (!killId) return res.status(400).json({ error: 'killId required' });
+  const child = _shellProcs.get(killId);
+  if (!child) return res.status(404).json({ error: 'process not found' });
+  try {
+    if (child.stdin && !child.stdin.destroyed) {
+      child.stdin.write((input || '') + '\n');
+      res.json({ ok: true });
+    } else {
+      res.status(409).json({ error: 'stdin not available for this process' });
+    }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Preview-file existence check ──────────────────────────────────────────
+// HEAD /api/preview-file?path=... → 200 if file exists, 404 if not
+app.head('/api/preview-file', (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).end();
+  try {
+    const abs = path.isAbsolute(filePath) ? filePath : path.join(os.homedir(), filePath);
+    if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.status(200).end();
+    } else {
+      res.status(404).end();
+    }
+  } catch (_) {
+    res.status(404).end();
+  }
+});
+
+// ── Pick-folder dialog ────────────────────────────────────────────────────
+// POST {} → { ok, folderPath } — shows native folder picker (Electron only)
+app.post('/api/pick-folder', async (req, res) => {
+  try {
+    const { dialog, BrowserWindow } = _require('electron');
+    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+    const result = await dialog.showOpenDialog(win || undefined, {
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (result.cancelled || !result.filePaths || !result.filePaths.length) {
+      return res.json({ ok: false, cancelled: true });
+    }
+    res.json({ ok: true, folderPath: result.filePaths[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Open URL in default browser ───────────────────────────────────────────
+// POST { url } → opens URL using Electron shell or macOS 'open'
+app.post('/api/open-url', async (req, res) => {
+  const { url } = req.body || {};
+  if (!url) return res.status(400).json({ error: 'url required' });
+  // Basic URL validation — only allow http/https
+  if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Only http/https URLs allowed' });
+  try {
+    const { shell } = _require('electron');
+    await shell.openExternal(url);
+    res.json({ ok: true });
+  } catch (_) {
+    // Fallback for non-Electron (dev mode)
+    try {
+      const opener = IS_WIN ? 'start' : (process.platform === 'darwin' ? 'open' : 'xdg-open');
+      _exec(`${opener} ${JSON.stringify(url)}`);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  }
+});
+
+// ── Bundled binary path lookup ────────────────────────────────────────────
+// GET /api/bundled-bin/:bin → { path } — resolves bundled MCP binary path
+app.get('/api/bundled-bin/:bin', (req, res) => {
+  const binName = req.params.bin;
+  // Search in node_modules/.bin and common paths
+  const candidates = [
+    path.join(__dirname, 'node_modules', '.bin', binName),
+    path.join(__dirname, 'node_modules', '.bin', binName + (IS_WIN ? '.cmd' : '')),
+    path.join(process.resourcesPath || '', 'node_modules', '.bin', binName),
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return res.json({ ok: true, path: c });
+  }
+  // Try resolving via which/where
+  try {
+    const found = execSync(`${IS_WIN ? 'where' : 'which'} ${binName} 2>/dev/null`, { encoding: 'utf8' }).trim().split('\n')[0];
+    if (found) return res.json({ ok: true, path: found });
+  } catch (_) {}
+  res.json({ ok: false, path: binName });
+});
+
+// ── RRule next occurrences ────────────────────────────────────────────────
+// POST { rrule, count } → { occurrences: [ISO strings] }
+app.post('/api/rrule/next', (req, res) => {
+  const { rrule: rruleStr, count = 3 } = req.body || {};
+  if (!rruleStr) return res.status(400).json({ error: 'rrule required' });
+  try {
+    // Minimal RRule parser for FREQ=DAILY/WEEKLY/MONTHLY + BYDAY/BYHOUR/BYMINUTE
+    const occurrences = _computeRruleNext(rruleStr, Math.min(count, 20));
+    res.json({ occurrences });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+function _computeRruleNext(rruleStr, n) {
+  const now = new Date();
+  const pairs = {};
+  // Strip RRULE: prefix
+  const raw = rruleStr.replace(/^RRULE:/i, '');
+  raw.split(';').forEach(part => {
+    const eq = part.indexOf('=');
+    if (eq !== -1) pairs[part.slice(0, eq).toUpperCase()] = part.slice(eq + 1);
+  });
+  const freq  = (pairs.FREQ || 'DAILY').toUpperCase();
+  const interval = parseInt(pairs.INTERVAL || '1', 10) || 1;
+  const byHour   = pairs.BYHOUR   ? parseInt(pairs.BYHOUR, 10)   : null;
+  const byMin    = pairs.BYMINUTE ? parseInt(pairs.BYMINUTE, 10)  : null;
+  const byDay    = pairs.BYDAY    ? pairs.BYDAY.split(',')        : null;
+  const DAY_MAP  = { SU:0, MO:1, TU:2, WE:3, TH:4, FR:5, SA:6 };
+
+  const results = [];
+  let cur = new Date(now);
+  // Advance to next minute minimum
+  cur.setSeconds(0, 0);
+  cur.setMinutes(cur.getMinutes() + 1);
+  if (byHour !== null) cur.setHours(byHour, byMin ?? 0, 0, 0);
+  if (byMin !== null && byHour === null) cur.setMinutes(byMin, 0, 0);
+
+  let tries = 0;
+  while (results.length < n && tries < 10000) {
+    tries++;
+    const day = cur.getDay(); // 0=Sun
+    let match = true;
+    if (byDay) {
+      const dayNames = byDay.map(d => d.replace(/^[-+]?\d*/, '').toUpperCase());
+      const dayNums  = dayNames.map(d => DAY_MAP[d] ?? -1);
+      if (!dayNums.includes(day)) match = false;
+    }
+    if (match && cur > now) {
+      results.push(cur.toISOString());
+      cur = new Date(cur);
+    }
+    // Advance
+    if (freq === 'MINUTELY') {
+      cur.setMinutes(cur.getMinutes() + interval);
+    } else if (freq === 'HOURLY') {
+      cur.setHours(cur.getHours() + interval);
+      if (byMin !== null) cur.setMinutes(byMin, 0, 0);
+    } else if (freq === 'DAILY') {
+      cur.setDate(cur.getDate() + interval);
+      if (byHour !== null) cur.setHours(byHour, byMin ?? 0, 0, 0);
+    } else if (freq === 'WEEKLY') {
+      cur.setDate(cur.getDate() + 1);
+      if (byHour !== null) cur.setHours(byHour, byMin ?? 0, 0, 0);
+    } else if (freq === 'MONTHLY') {
+      const dom = parseInt(pairs.BYMONTHDAY || String(now.getDate()), 10);
+      cur.setMonth(cur.getMonth() + interval, dom);
+      if (byHour !== null) cur.setHours(byHour, byMin ?? 0, 0, 0);
+    } else {
+      // Unknown — advance by day
+      cur.setDate(cur.getDate() + 1);
+    }
+  }
+  return results;
+}
+
+// ── Design catalog: directions, skills, systems ───────────────────────────
+// GET /api/design/directions → { directions: [{id, name, description, palette}] }
+app.get('/api/design/directions', (req, res) => {
+  res.json({
+    directions: [
+      { id: 'minimal',   name: 'Minimal',   description: 'Clean, white space-heavy, monochromatic', palette: ['#ffffff','#f5f5f5','#111111','#555555'] },
+      { id: 'bold',      name: 'Bold',      description: 'High contrast, vivid accent colors, strong typography', palette: ['#0d0d0d','#ff3b30','#007aff','#f5f5f5'] },
+      { id: 'warm',      name: 'Warm',      description: 'Earthy tones, editorial, warm neutrals', palette: ['#fdf6ec','#d4a574','#8b5e3c','#2c1810'] },
+      { id: 'dark',      name: 'Dark',      description: 'Dark mode first, neon accents, techy', palette: ['#0a0a0f','#1a1a2e','#7c5cff','#00d4aa'] },
+      { id: 'pastel',    name: 'Pastel',    description: 'Soft colors, rounded, playful', palette: ['#fce4ec','#e8f5e9','#e3f2fd','#fff9c4'] },
+      { id: 'corporate', name: 'Corporate', description: 'Professional, trustworthy, structured', palette: ['#003087','#0066cc','#ffffff','#e8ecf0'] },
+    ],
+  });
+});
+
+// GET /api/design/skills → { skills: [{id, name, description}] }
+app.get('/api/design/skills', (req, res) => {
+  const skillsDir = path.join(__dirname, 'public', 'design-skills');
+  const skills = [];
+  try {
+    for (const dir of fs.readdirSync(skillsDir)) {
+      const md = path.join(skillsDir, dir, 'SKILL.md');
+      if (!fs.existsSync(md)) continue;
+      const src = fs.readFileSync(md, 'utf8');
+      const title = (src.match(/^#\s+(.+)/m) || [])[1] || dir;
+      const desc  = (src.match(/^(?!#)[^\n]{10,}/m) || [])[0] || '';
+      skills.push({ id: dir, name: title.trim(), description: desc.trim().slice(0, 160) });
+    }
+  } catch (_) {}
+  res.json({ skills });
+});
+
+// GET /api/design/systems → { systems: [{id, name, description}] }
+app.get('/api/design/systems', (req, res) => {
+  const systemsDir = path.join(__dirname, 'public', 'design-systems');
+  const systems = [];
+  try {
+    for (const dir of fs.readdirSync(systemsDir)) {
+      const md = path.join(systemsDir, dir, 'DESIGN.md');
+      if (!fs.existsSync(md)) continue;
+      const src = fs.readFileSync(md, 'utf8');
+      const title = (src.match(/^#\s+(.+)/m) || [])[1] || dir;
+      const desc  = (src.match(/^(?!#)[^\n]{10,}/m) || [])[0] || '';
+      systems.push({ id: dir, name: title.trim(), description: desc.trim().slice(0, 160) });
+    }
+  } catch (_) {}
+  res.json({ systems });
+});
+
+// ── Whisper voice transcription ───────────────────────────────────────────
+// Model lives at ~/.config/fauna/whisper/ggml-base.en.bin (downloaded on first use)
+const WHISPER_MODEL_DIR  = path.join(FAUNA_CONFIG_DIR, 'whisper');
+const WHISPER_MODEL_FILE = path.join(WHISPER_MODEL_DIR, 'ggml-base.en.bin');
+const WHISPER_MODEL_URL  = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin';
+
+app.get('/api/whisper-model-status', (_req, res) => {
+  const ready = fs.existsSync(WHISPER_MODEL_FILE);
+  const size  = ready ? (() => { try { return fs.statSync(WHISPER_MODEL_FILE).size; } catch (_) { return 0; } })() : 0;
+  res.json({ ready, modelPath: WHISPER_MODEL_FILE, size });
+});
+
+// SSE endpoint — download model and stream progress
+app.get('/api/whisper-model-download', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  function send(obj) { res.write(`data: ${JSON.stringify(obj)}\n\n`); }
+
+  if (fs.existsSync(WHISPER_MODEL_FILE)) {
+    send({ pct: 100, ready: true });
+    return res.end();
+  }
+
+  fs.mkdirSync(WHISPER_MODEL_DIR, { recursive: true });
+  const tmpFile = WHISPER_MODEL_FILE + '.tmp';
+
+  // Use curl for download — reliable progress on macOS
+  const dl = spawn('curl', ['-L', '--progress-bar', '-o', tmpFile, WHISPER_MODEL_URL], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  let lastPct = 0;
+  dl.stderr.on('data', chunk => {
+    const str = chunk.toString();
+    const m = str.match(/(\d+(?:\.\d+)?)%/);
+    if (m) {
+      const pct = Math.round(parseFloat(m[1]));
+      if (pct !== lastPct) { lastPct = pct; send({ pct }); }
+    }
+  });
+
+  dl.on('close', code => {
+    if (code === 0 && fs.existsSync(tmpFile)) {
+      fs.renameSync(tmpFile, WHISPER_MODEL_FILE);
+      send({ pct: 100, ready: true });
+    } else {
+      try { fs.unlinkSync(tmpFile); } catch (_) {}
+      send({ error: 'Download failed (exit ' + code + ')' });
+    }
+    res.end();
+  });
+
+  req.on('close', () => { try { dl.kill(); } catch (_) {} });
+});
+
+// POST /api/transcribe — audio blob body → { ok, text }
+// Uses nodejs-whisper (ships whisper.cpp binary in node_modules)
+app.post('/api/transcribe', express.raw({ type: ['audio/*', 'application/octet-stream'], limit: '25mb' }), async (req, res) => {
+  if (!fs.existsSync(WHISPER_MODEL_FILE)) {
+    return res.status(503).json({ ok: false, error: 'Whisper model not downloaded yet' });
+  }
+  const tmpIn  = path.join(os.tmpdir(), `fauna_voice_${Date.now()}.webm`);
+  const tmpWav = path.join(os.tmpdir(), `fauna_voice_${Date.now()}.wav`);
+  try {
+    fs.writeFileSync(tmpIn, req.body);
+    // Convert to WAV 16kHz mono using ffmpeg
+    await new Promise((resolve, reject) => {
+      const ff = spawn('ffmpeg', ['-y', '-i', tmpIn, '-ar', '16000', '-ac', '1', '-f', 'wav', tmpWav], { stdio: 'pipe' });
+      ff.on('close', code => code === 0 ? resolve() : reject(new Error('ffmpeg failed: ' + code)));
+      ff.on('error', reject);
+    });
+    // Run whisper.cpp via nodejs-whisper
+    const { nodewhisper } = await import('nodejs-whisper');
+    const result = await nodewhisper(tmpWav, {
+      modelName: 'base.en',
+      autoDownloadModelName: 'base.en',
+      whisperOptions: { outputInText: true },
+      modelPath: WHISPER_MODEL_FILE,
+    });
+    const text = (Array.isArray(result) ? result.map(s => s.speech || s.text || '').join(' ') : String(result || '')).trim();
+    res.json({ ok: true, text });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    try { fs.unlinkSync(tmpIn); } catch (_) {}
+    try { fs.unlinkSync(tmpWav); } catch (_) {}
+  }
+});
+
+// ── Document extraction / write ────────────────────────────────────────────
+// POST { path } → extract text from a docx/doc/rtf/odt file
+app.post('/api/extract-document', async (req, res) => {
+  const { path: docPath } = req.body || {};
+  if (!docPath) return res.status(400).json({ error: 'path required' });
+  const abs = path.isAbsolute(docPath) ? docPath : path.join(os.homedir(), docPath);
+  if (!fs.existsSync(abs)) return res.status(404).json({ error: 'File not found' });
+  const ext = path.extname(abs).toLowerCase().slice(1);
+  try {
+    let content = '';
+    // Try pandoc first (most accurate for docx/odt)
+    const pandocOut = path.join(os.tmpdir(), `fauna_doc_${Date.now()}.txt`);
+    try {
+      execSync(`pandoc -f ${ext === 'doc' ? 'doc' : 'docx'} -t plain -o ${JSON.stringify(pandocOut)} ${JSON.stringify(abs)} 2>/dev/null`, { timeout: 15000 });
+      content = fs.readFileSync(pandocOut, 'utf8');
+      try { fs.unlinkSync(pandocOut); } catch (_) {}
+    } catch (_) {
+      // Fallback: textutil (macOS only, supports doc/docx/rtf)
+      try {
+        const txtOut = abs.replace(/\.[^.]+$/, '') + '.txt';
+        execSync(`textutil -convert txt -output ${JSON.stringify(txtOut)} ${JSON.stringify(abs)} 2>/dev/null`, { timeout: 15000 });
+        if (fs.existsSync(txtOut)) { content = fs.readFileSync(txtOut, 'utf8'); try { fs.unlinkSync(txtOut); } catch (_) {} }
+      } catch (_2) {
+        // Last resort: strings
+        try { content = execSync(`strings ${JSON.stringify(abs)} 2>/dev/null`, { encoding: 'utf8', timeout: 10000 }); } catch (_3) {}
+      }
+    }
+    res.json({ ok: true, content, path: abs, editable: ['docx','odt'].includes(ext) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST { path, content } → write text content back to a document
+app.post('/api/write-document-text', async (req, res) => {
+  const { path: docPath, content } = req.body || {};
+  if (!docPath || content === undefined) return res.status(400).json({ error: 'path and content required' });
+  const abs = path.isAbsolute(docPath) ? docPath : path.join(os.homedir(), docPath);
+  try {
+    // Try pandoc to convert plain text back to docx format
+    const tmpTxt = path.join(os.tmpdir(), `fauna_doc_in_${Date.now()}.txt`);
+    fs.writeFileSync(tmpTxt, content, 'utf8');
+    const ext = path.extname(abs).toLowerCase().slice(1);
+    try {
+      execSync(`pandoc -f plain -t ${ext === 'odt' ? 'odt' : 'docx'} -o ${JSON.stringify(abs)} ${JSON.stringify(tmpTxt)} 2>/dev/null`, { timeout: 15000 });
+    } catch (_) {
+      // Fallback: just write as .txt alongside (the path stays the same)
+      fs.writeFileSync(abs, content, 'utf8');
+    }
+    try { fs.unlinkSync(tmpTxt); } catch (_) {}
+    res.json({ ok: true, path: abs });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST { name, mime, base64 } → extract text from a base64-encoded attachment
+app.post('/api/extract-attachment', async (req, res) => {
+  const { name = 'file', mime = 'application/octet-stream', base64 } = req.body || {};
+  if (!base64) return res.status(400).json({ error: 'base64 required' });
+  const ext  = (name.split('.').pop() || '').toLowerCase();
+  const buf  = Buffer.from(base64, 'base64');
+  const tmp  = path.join(os.tmpdir(), `fauna_attach_${Date.now()}.${ext || 'bin'}`);
+  try {
+    fs.writeFileSync(tmp, buf);
+    let text = '';
+    if (['pdf'].includes(ext)) {
+      text = execSync(`pdftotext ${JSON.stringify(tmp)} - 2>/dev/null`, { encoding: 'utf8', timeout: 15000 }).trim();
+    } else if (['doc','docx','odt','rtf','pages'].includes(ext)) {
+      try {
+        text = execSync(`pandoc -t plain ${JSON.stringify(tmp)} 2>/dev/null`, { encoding: 'utf8', timeout: 15000 }).trim();
+      } catch (_) {
+        try { text = execSync(`textutil -convert txt -stdout ${JSON.stringify(tmp)} 2>/dev/null`, { encoding: 'utf8', timeout: 10000 }).trim(); } catch (_2) {}
+      }
+    } else if (['xls','xlsx','csv'].includes(ext)) {
+      text = execSync(`strings ${JSON.stringify(tmp)} 2>/dev/null | head -200`, { encoding: 'utf8', timeout: 10000 }).trim();
+    } else {
+      // Generic: try as text
+      text = buf.slice(0, 200000).toString('utf8');
+    }
+    res.json({ ok: true, text, name, mime });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  } finally {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+  }
+});
+
+// ── Browser extension install / download ──────────────────────────────────
+const BROWSER_EXT_INSTALL_DIR = path.join(FAUNA_CONFIG_DIR, 'browser-extension');
+const BROWSER_EXT_SRC_DIR     = path.join(__dirname, 'browser-extension');
+
+function getBrowserExtSrcDir() {
+  const packed = path.join(process.resourcesPath || '', 'browser-extension');
+  if (fs.existsSync(packed)) return packed;
+  return BROWSER_EXT_SRC_DIR;
+}
+
+app.get('/api/browser-ext/info', (req, res) => {
+  const installed = fs.existsSync(path.join(BROWSER_EXT_INSTALL_DIR, 'manifest.json'));
+  res.json({
+    installed,
+    installDir:  installed ? BROWSER_EXT_INSTALL_DIR : null,
+    bundledDir:  getBrowserExtSrcDir(),
+  });
+});
+
+app.post('/api/browser-ext/install', (req, res) => {
+  try {
+    const src = getBrowserExtSrcDir();
+    if (!fs.existsSync(src)) return res.status(404).json({ error: 'Bundled extension not found' });
+    fs.mkdirSync(BROWSER_EXT_INSTALL_DIR, { recursive: true });
+    // Copy all files (shallow — no subdirectory icons handled separately)
+    for (const file of fs.readdirSync(src)) {
+      const s = path.join(src, file);
+      const d = path.join(BROWSER_EXT_INSTALL_DIR, file);
+      if (fs.statSync(s).isDirectory()) {
+        fs.mkdirSync(d, { recursive: true });
+        for (const sub of fs.readdirSync(s)) {
+          fs.copyFileSync(path.join(s, sub), path.join(d, sub));
+        }
+      } else {
+        fs.copyFileSync(s, d);
+      }
+    }
+    res.json({ ok: true, installDir: BROWSER_EXT_INSTALL_DIR });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/browser-ext/download', async (req, res) => {
+  try {
+    const { dialog, BrowserWindow } = _require('electron');
+    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+    const result = await dialog.showOpenDialog(win || undefined, {
+      title: 'Choose folder to save browser extension',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (result.cancelled || !result.filePaths || !result.filePaths.length) {
+      return res.json({ ok: false, cancelled: true });
+    }
+    const dest = path.join(result.filePaths[0], 'fauna-browser-extension');
+    const src  = getBrowserExtSrcDir();
+    if (!fs.existsSync(src)) return res.status(404).json({ error: 'Bundled extension not found' });
+    fs.mkdirSync(dest, { recursive: true });
+    for (const file of fs.readdirSync(src)) {
+      const s = path.join(src, file);
+      const d = path.join(dest, file);
+      if (fs.statSync(s).isDirectory()) {
+        fs.mkdirSync(d, { recursive: true });
+        for (const sub of fs.readdirSync(s)) fs.copyFileSync(path.join(s, sub), path.join(d, sub));
+      } else {
+        fs.copyFileSync(s, d);
+      }
+    }
+    res.json({ ok: true, downloadDir: dest });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Playwright MCP status / call ──────────────────────────────────────────
+let _playwrightMcpClient = null;
+let _playwrightMcpInstalled = null;
+
+async function _getPlaywrightMcpClient() {
+  if (_playwrightMcpClient) return _playwrightMcpClient;
+  const mcpMod = await import('@playwright/mcp');
+  const server = mcpMod.createServer ? mcpMod.createServer() : (mcpMod.default?.createServer?.() || null);
+  if (!server) throw new Error('@playwright/mcp server could not be created');
+  _playwrightMcpClient = server;
+  return server;
+}
+
+app.get('/api/playwright-mcp/status', async (req, res) => {
+  if (_playwrightMcpInstalled === null) {
+    try { await import('@playwright/mcp'); _playwrightMcpInstalled = true; } catch (_) { _playwrightMcpInstalled = false; }
+  }
+  res.json({ installed: _playwrightMcpInstalled, running: !!_playwrightMcpClient });
+});
+
+app.post('/api/playwright-mcp/call', express.json({ limit: '4mb' }), async (req, res) => {
+  const { tool, args = {} } = req.body || {};
+  if (!tool) return res.status(400).json({ error: 'tool required' });
+  try {
+    const client = await _getPlaywrightMcpClient();
+    // Playwright MCP uses MCP protocol — wrap in a tool-call compatible way
+    const result = typeof client.callTool === 'function'
+      ? await client.callTool(tool, args)
+      : await client.call(tool, args);
+    res.json({ ok: true, content: Array.isArray(result) ? result : [{ type: 'text', text: JSON.stringify(result) }] });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ── Project runs & terminals ──────────────────────────────────────────────
+// In-memory stores (survive server restarts only via existing processes)
+const _projectRuns     = new Map(); // runId → { runId, projectId, srcId, srcName, name, cmd, port, status, child, sseClients }
+const _projectTerminals = new Map(); // termId → { termId, projectId, child, sseClients, buf }
+
+function _runId() { return 'run-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6); }
+function _termId() { return 'term-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6); }
+
+// GET /api/projects/:id/runs → list of active run records
+app.get('/api/projects/:id/runs', (req, res) => {
+  const list = [];
+  for (const r of _projectRuns.values()) {
+    if (r.projectId === req.params.id) {
+      list.push({ runId: r.runId, name: r.name, cmd: r.cmd, port: r.port, srcName: r.srcName, status: r.status });
+    }
+  }
+  res.json(list);
+});
+
+// POST /api/projects/:id/sources/:srcId/run { cmd, name, port? } → { runId }
+app.post('/api/projects/:id/sources/:srcId/run', (req, res) => {
+  const { cmd, name, port } = req.body || {};
+  if (!cmd) return res.status(400).json({ error: 'cmd required' });
+  const proj = getProject(req.params.id);
+  if (!proj) return res.status(404).json({ error: 'Project not found' });
+  const src = (proj.sources || []).find(s => s.id === req.params.srcId);
+  const srcPath = src?.path || proj.rootPath || os.homedir();
+
+  const runId = _runId();
+  const env = { ...process.env, PATH: AUGMENTED_PATH, HOME: os.homedir() };
+  const child = spawn(SHELL_BIN, ['-c', cmd], {
+    cwd: srcPath || os.homedir(),
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  const record = {
+    runId, projectId: req.params.id, srcId: req.params.srcId,
+    srcName: src?.name || req.params.srcId,
+    name: name || cmd.split(' ')[0], cmd, port: port || null,
+    status: 'starting', child, sseClients: new Set(), logBuf: [],
+  };
+  _projectRuns.set(runId, record);
+
+  function _emit(line, statusUpdate) {
+    record.logBuf.push(line);
+    if (record.logBuf.length > 5000) record.logBuf.shift();
+    const payload = JSON.stringify({ line, status: statusUpdate || undefined });
+    for (const sse of record.sseClients) { try { sse.write(`data: ${payload}\n\n`); } catch (_) {} }
+  }
+
+  child.stdout.on('data', chunk => {
+    // Detect port
+    const text = chunk.toString();
+    if (!record.port) {
+      const m = text.match(/(?:localhost|127\.0\.0\.1|port)[:\s]+(\d{4,5})/i);
+      if (m) { record.port = parseInt(m[1], 10); _emit('', undefined); }
+    }
+    for (const line of text.split('\n')) { if (line) _emit(line); }
+    if (record.status === 'starting') { record.status = 'running'; _emit('', 'running'); }
+  });
+  child.stderr.on('data', chunk => {
+    const text = chunk.toString();
+    for (const line of text.split('\n')) { if (line) _emit(line); }
+    if (record.status === 'starting') { record.status = 'running'; _emit('', 'running'); }
+  });
+  child.on('exit', (code) => {
+    record.status = code === 0 ? 'stopped' : 'exited';
+    record.child = null;
+    _emit('', record.status);
+  });
+  child.on('error', (err) => {
+    record.status = 'error';
+    record.child = null;
+    _emit('[Error: ' + err.message + ']', 'error');
+  });
+
+  res.json({ ok: true, runId });
+});
+
+// DELETE /api/projects/:id/runs/:runId → stop run
+app.delete('/api/projects/:id/runs/:runId', (req, res) => {
+  const record = _projectRuns.get(req.params.runId);
+  if (!record) return res.status(404).json({ error: 'Run not found' });
+  if (record.child) {
+    try { record.child.kill('SIGTERM'); } catch (_) {}
+    setTimeout(() => { try { if (record.child) record.child.kill('SIGKILL'); } catch (_) {} }, 3000);
+  }
+  record.status = 'stopped';
+  record.child  = null;
+  _projectRuns.delete(req.params.runId);
+  res.json({ ok: true });
+});
+
+// GET /api/projects/:id/runs/:runId/logs → SSE stream
+app.get('/api/projects/:id/runs/:runId/logs', (req, res) => {
+  const record = _projectRuns.get(req.params.runId);
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+  if (!record) {
+    res.write(`data: ${JSON.stringify({ line: '[Run not found]', status: 'error' })}\n\n`);
+    return res.end();
+  }
+  // Replay buffered log
+  for (const line of record.logBuf) {
+    res.write(`data: ${JSON.stringify({ line })}\n\n`);
+  }
+  // Send current status
+  res.write(`data: ${JSON.stringify({ status: record.status })}\n\n`);
+  record.sseClients.add(res);
+  req.on('close', () => { record.sseClients.delete(res); });
+});
+
+// GET /api/projects/:id/sources/:srcId/run-commands → detect runnable commands
+app.get('/api/projects/:id/sources/:srcId/run-commands', (req, res) => {
+  const proj = getProject(req.params.id);
+  if (!proj) return res.status(404).json({ error: 'Project not found' });
+  const src = (proj.sources || []).find(s => s.id === req.params.srcId);
+  const srcPath = src?.path || proj.rootPath || '';
+
+  const commands = [];
+  const stack    = [];
+
+  if (!srcPath || !fs.existsSync(srcPath)) return res.json({ commands, stack });
+
+  // Detect from package.json
+  const pkgPath = path.join(srcPath, 'package.json');
+  if (fs.existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      const scripts = pkg.scripts || {};
+      for (const s of ['dev', 'start', 'serve', 'preview']) {
+        if (scripts[s]) commands.push({ label: `npm run ${s}`, cmd: `npm run ${s}`, detected: true });
+      }
+      // Detect tech stack
+      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+      if (deps.next)    stack.push('Next.js');
+      if (deps.react)   stack.push('React');
+      if (deps.vue)     stack.push('Vue');
+      if (deps.svelte)  stack.push('Svelte');
+      if (deps.vite)    stack.push('Vite');
+      if (deps.express || deps.fastify || deps.koa) stack.push('Node.js');
+    } catch (_) {}
+  }
+
+  // Python
+  for (const f of ['manage.py', 'app.py', 'main.py', 'run.py']) {
+    if (fs.existsSync(path.join(srcPath, f))) {
+      if (f === 'manage.py') { commands.push({ label: 'python manage.py runserver', cmd: 'python manage.py runserver', detected: true }); stack.push('Django'); }
+      else { commands.push({ label: `python ${f}`, cmd: `python ${f}`, detected: true }); stack.push('Python'); }
+      break;
+    }
+  }
+
+  // Makefile
+  if (fs.existsSync(path.join(srcPath, 'Makefile')) || fs.existsSync(path.join(srcPath, 'makefile'))) {
+    commands.push({ label: 'make', cmd: 'make', detected: true });
+  }
+
+  // Docker Compose
+  if (fs.existsSync(path.join(srcPath, 'docker-compose.yml')) || fs.existsSync(path.join(srcPath, 'docker-compose.yaml'))) {
+    commands.push({ label: 'docker compose up', cmd: 'docker compose up', detected: true });
+    stack.push('Docker');
+  }
+
+  // Go
+  if (fs.existsSync(path.join(srcPath, 'go.mod'))) {
+    commands.push({ label: 'go run .', cmd: 'go run .', detected: true });
+    stack.push('Go');
+  }
+
+  // Cargo (Rust)
+  if (fs.existsSync(path.join(srcPath, 'Cargo.toml'))) {
+    commands.push({ label: 'cargo run', cmd: 'cargo run', detected: true });
+    stack.push('Rust');
+  }
+
+  res.json({ commands: commands.slice(0, 8), stack });
+});
+
+// POST /api/projects/:id/terminal → create persistent terminal session → { termId }
+app.post('/api/projects/:id/terminal', (req, res) => {
+  const proj = getProject(req.params.id);
+  if (!proj) return res.status(404).json({ error: 'Project not found' });
+  const cwd = proj.rootPath && fs.existsSync(proj.rootPath) ? proj.rootPath : os.homedir();
+
+  const termId = _termId();
+  const env = { ...process.env, PATH: AUGMENTED_PATH, HOME: os.homedir(), TERM: 'xterm-256color' };
+
+  // Use an interactive login shell so PATH and rc files are sourced
+  const child = spawn(SHELL_BIN, IS_WIN ? [] : ['-i', '-l'], {
+    cwd,
+    env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  const session = { termId, projectId: req.params.id, child, sseClients: new Set(), buf: '' };
+  _projectTerminals.set(termId, session);
+
+  function _emit(out) {
+    session.buf += out;
+    if (session.buf.length > 200000) session.buf = session.buf.slice(-150000);
+    const payload = JSON.stringify({ out });
+    for (const sse of session.sseClients) { try { sse.write(`data: ${payload}\n\n`); } catch (_) {} }
+  }
+
+  child.stdout.on('data', chunk => _emit(chunk.toString()));
+  child.stderr.on('data', chunk => _emit(chunk.toString()));
+  child.on('exit', () => {
+    _projectTerminals.delete(termId);
+    const payload = JSON.stringify({ out: '\r\n[Shell exited]\r\n' });
+    for (const sse of session.sseClients) { try { sse.write(`data: ${payload}\n\n`); sse.end(); } catch (_) {} }
+  });
+  child.on('error', err => {
+    const payload = JSON.stringify({ out: `\r\n[Error: ${err.message}]\r\n` });
+    for (const sse of session.sseClients) { try { sse.write(`data: ${payload}\n\n`); sse.end(); } catch (_) {} }
+    _projectTerminals.delete(termId);
+  });
+
+  res.json({ ok: true, termId });
+});
+
+// DELETE /api/projects/:id/terminal/:termId → close terminal
+app.delete('/api/projects/:id/terminal/:termId', (req, res) => {
+  const session = _projectTerminals.get(req.params.termId);
+  if (!session) return res.json({ ok: true, already: true });
+  if (session.child) {
+    try { session.child.kill('SIGHUP'); } catch (_) {}
+    setTimeout(() => { try { if (session.child) session.child.kill('SIGKILL'); } catch (_) {} }, 2000);
+  }
+  for (const sse of session.sseClients) { try { sse.end(); } catch (_) {} }
+  _projectTerminals.delete(req.params.termId);
+  res.json({ ok: true });
+});
+
+// POST /api/projects/:id/terminal/:termId/input { data } → write to stdin
+app.post('/api/projects/:id/terminal/:termId/input', express.json({ limit: '64kb' }), (req, res) => {
+  const session = _projectTerminals.get(req.params.termId);
+  if (!session) return res.status(404).json({ error: 'Terminal not found' });
+  const data = req.body?.data ?? '';
+  try {
+    if (session.child && session.child.stdin && !session.child.stdin.destroyed) {
+      session.child.stdin.write(data);
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/projects/:id/terminal/:termId/output → SSE stream
+app.get('/api/projects/:id/terminal/:termId/output', (req, res) => {
+  const session = _projectTerminals.get(req.params.termId);
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+  if (!session) {
+    res.write(`data: ${JSON.stringify({ out: '[Terminal not found or closed]\r\n' })}\n\n`);
+    return res.end();
+  }
+  // Send buffered output
+  if (session.buf) res.write(`data: ${JSON.stringify({ out: session.buf })}\n\n`);
+  session.sseClients.add(res);
+  req.on('close', () => { session.sseClients.delete(res); });
+});
+
 // ── Start ─────────────────────────────────────────────────────────────────
 
 export function startServer(port) {
