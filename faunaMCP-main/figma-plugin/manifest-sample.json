@@ -1,9 +1,8 @@
 {
   "name": "Fauna MCP",
- "id": "1635531151922450654",
+  "id": "fauna-mcp-figma",
   "api": "1.0.0",
   "main": "code.js",
-  "documentAccess": "dynamic-page",
   "ui": "ui.html",
   "editorType": ["figma"],
   "networkAccess": {

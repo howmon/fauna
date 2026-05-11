@@ -305,15 +305,11 @@ app.delete('/api/conversations/:id', (req, res) => {
 // Generate AI conversation title from messages
 app.post('/api/conversation-title', async (req, res) => {
   try {
-    const { messages = [] } = req.body;
+    const { messages = [], model: reqModel } = req.body;
     if (!messages.length) return res.status(400).json({ error: 'No messages provided' });
 
-    // Always use a fast Copilot-hosted model for title generation regardless of
-    // which model the conversation is using. Using the conversation model would
-    // fail for provider-direct models (Anthropic, Google, etc.) that aren't on
-    // the Copilot API endpoint, causing the title to never update.
     const client = getCopilotClient();
-    const TITLE_MODEL = 'gpt-4.1-mini';
+    const TITLE_MODEL = reqModel || 'gpt-4.1-mini';
     const systemPrompt = 'You are a helpful assistant that generates short, descriptive titles for conversations. Generate a concise title (3-6 words) that captures the main topic. Return ONLY the title, no quotes, no explanation.';
 
     const titleMessages = [
@@ -332,7 +328,19 @@ app.post('/api/conversation-title', async (req, res) => {
     res.json({ title });
   } catch (err) {
     console.error('[conversation-title] Error:', err.message);
-    res.status(500).json({ error: err.message });
+    // Fall back to a locally-derived title rather than returning 500, so the
+    // conversation title always updates even when the API is unavailable.
+    try {
+      const { messages = [] } = req.body;
+      const firstUser = messages.find(m => m.role === 'user');
+      const raw = (firstUser && firstUser.content) ? firstUser.content.trim() : '';
+      const fallback = raw
+        ? raw.replace(/\s+/g, ' ').slice(0, 60).replace(/[^a-zA-Z0-9 ,.'!?-]/g, '').trim() || 'New conversation'
+        : 'New conversation';
+      res.json({ title: fallback });
+    } catch (_) {
+      res.json({ title: 'New conversation' });
+    }
   }
 });
 
@@ -4944,6 +4952,55 @@ app.post('/api/agent-builder/scan', (req, res) => {
     res.status(500).json({ error: 'Scan failed: ' + e.message });
   } finally {
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+  }
+});
+
+// Audit a system prompt against a quality rubric and suggest improvements
+app.post('/api/agent-builder/rubric-audit', async (req, res) => {
+  const { systemPrompt, displayName, description, model: reqModel } = req.body;
+  if (!systemPrompt || !systemPrompt.trim()) return res.status(400).json({ error: 'systemPrompt required' });
+  const model = reqModel || 'gpt-4.1';
+  try {
+    const client = getCopilotClient();
+    const response = await client.chat.completions.create({
+      model,
+      max_tokens: 2000,
+      messages: [
+        {
+          role: 'system',
+          content: `You are an expert AI prompt quality auditor. Evaluate the given agent system prompt against these quality criteria and return ONLY valid JSON with no markdown fencing.
+
+Return a JSON object with:
+- "summary": string — one or two sentence overall assessment
+- "findings": array of issues found (empty array if the prompt passes all checks). Each finding has:
+  - "id": short snake_case identifier (e.g. "missing_role", "vague_output_format")
+  - "label": short human-readable label (5-8 words)
+  - "detail": one or two sentences explaining the issue and how to fix it
+  - "severity": "high" | "medium" | "low"
+- "improvedPrompt": string — a rewritten version of the system prompt that addresses all findings. Omit this field (or set to null) only if there are no findings.
+
+Quality criteria to check:
+1. Role clarity (high) — Is the agent's role and purpose clearly defined up front?
+2. Instruction specificity (high) — Are instructions specific enough to guide behavior, or are they vague?
+3. Output format (medium) — Does the prompt specify expected output format when relevant?
+4. Safety & scope limits (medium) — Does the prompt define what the agent should NOT do?
+5. Edge case handling (low) — Are common edge cases or failure modes addressed?
+6. Conciseness (low) — Is the prompt free of repetitive or contradictory content?
+7. Tone & persona consistency (low) — Is the agent persona consistent throughout?`
+        },
+        {
+          role: 'user',
+          content: `Agent name: ${displayName || 'Unnamed'}\nDescription: ${description || 'N/A'}\n\nSystem prompt:\n${systemPrompt.trim()}`
+        }
+      ]
+    });
+    const text = response.choices?.[0]?.message?.content || '';
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return res.status(500).json({ error: 'Failed to parse audit response' });
+    const audit = JSON.parse(jsonMatch[0]);
+    res.json(audit);
+  } catch (e) {
+    res.status(500).json({ error: 'Rubric audit failed: ' + e.message });
   }
 });
 
