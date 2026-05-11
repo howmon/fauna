@@ -1303,16 +1303,26 @@ Examples:
 
   function _installFaunaUpdate() {
     var btn = document.getElementById('fauna-update-install-btn');
+    console.log('[fauna-update] Install button clicked');
     _syncFaunaHeaderUpdate({ job: { running: true, phase: 'starting' } });
     if (btn) btn.disabled = true;
     fetch('/api/fauna/install-update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ installApp: true })
-    }).then(function(r){ return r.json().then(function(d){ if (!r.ok) throw new Error(d.error || 'Update failed'); return d; }); }).then(function(d) {
+    }).then(function(r){ 
+      console.log('[fauna-update] Response status:', r.status);
+      return r.json().then(function(d){ 
+        console.log('[fauna-update] Response data:', d);
+        if (!r.ok) throw new Error(d.error || 'Update failed'); 
+        return d; 
+      }); 
+    }).then(function(d) {
+      console.log('[fauna-update] Install response:', d);
       _renderFaunaUpdateStatus(d);
       _pollFaunaUpdate();
     }).catch(function(e) {
+      console.error('[fauna-update] Install error:', e);
       if (btn) btn.disabled = false;
       _renderFaunaUpdateStatus({ job: { phase: 'error', error: 'Update failed: ' + e.message, logs: [{ message: e.message }] } });
     });
