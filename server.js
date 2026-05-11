@@ -770,13 +770,26 @@ app.post('/api/fauna/install-update', express.json(), async (req, res) => {
     return res.status(409).json({ error: 'Update already in progress' });
   }
 
+  console.log('[fauna-update] Install triggered. App dir:', FAUNA_APP_DIR);
+  console.log('[fauna-update] Is packaged:', _faunaIsPackaged());
+  
   // Check if we can do git-based updates (requires .git folder)
   const hasGitRepo = fs.existsSync(path.join(FAUNA_APP_DIR, '.git'));
+  console.log('[fauna-update] .git exists in app dir:', hasGitRepo);
   
   // In a packaged app without git repo, open the releases page instead
   if (_faunaIsPackaged() && !hasGitRepo) {
     const releasesUrl = `https://github.com/${FAUNA_REPO_OWNER}/${FAUNA_REPO_NAME}/releases`;
-    if (_electronShell) _electronShell.openExternal(releasesUrl);
+    console.log('[fauna-update] Opening releases page:', releasesUrl);
+    console.log('[fauna-update] _electronShell available:', !!_electronShell);
+    
+    if (_electronShell) {
+      _electronShell.openExternal(releasesUrl);
+      console.log('[fauna-update] openExternal called');
+    } else {
+      console.log('[fauna-update] WARNING: _electronShell not available, cannot open browser');
+    }
+    
     _faunaUpdateJob = {
       phase: 'complete', running: false, updateAvailable: false,
       message: 'Opened GitHub releases page in browser — download and install the new version.',
@@ -787,6 +800,7 @@ app.post('/api/fauna/install-update', express.json(), async (req, res) => {
   
   // If no git repo exists at all, we can't update
   if (!hasGitRepo) {
+    console.log('[fauna-update] No git repo found, cannot update');
     return res.status(400).json({ 
       error: 'No git repository found. Please install from GitHub releases or clone the repository.'
     });

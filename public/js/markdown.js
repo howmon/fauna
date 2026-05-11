@@ -139,9 +139,29 @@ function renderMarkdown(text) {
   try {
     var html = marked.parse(cleaned);
     // Sanitise HTML to prevent XSS from AI-generated or injected content
-    return typeof DOMPurify !== 'undefined'
+    html = typeof DOMPurify !== 'undefined'
       ? DOMPurify.sanitize(html, { ADD_ATTR: ['data-special-lang', 'data-lang', 'data-wf-id', 'data-wf-path', 'onclick', 'data-code-id'], ADD_TAGS: ['iframe'] })
       : html;
+    
+    // Initialize Mermaid diagrams after DOM insertion
+    setTimeout(function() {
+      if (typeof mermaid !== 'undefined') {
+        mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+        var mermaidBlocks = document.querySelectorAll('code.language-mermaid');
+        mermaidBlocks.forEach(function(block, idx) {
+          var code = block.textContent;
+          var id = 'mermaid-' + Date.now() + '-' + idx;
+          var div = document.createElement('div');
+          div.className = 'mermaid';
+          div.id = id;
+          div.textContent = code;
+          block.parentElement.replaceChild(div, block);
+        });
+        mermaid.run({ nodes: document.querySelectorAll('.mermaid') });
+      }
+    }, 50);
+    
+    return html;
   }
   catch (e) { return escHtml(cleaned); }
 }
