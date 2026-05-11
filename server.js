@@ -874,7 +874,24 @@ app.post('/api/markdown-to-pdf', express.json({ limit: '10mb' }), async (req, re
   if (!outputPath) return res.status(400).json({ error: 'outputPath is required' });
   if (!_ElectronBrowserWindow) return res.status(503).json({ error: 'PDF generation only available inside Electron' });
 
-  const htmlBody = marked(markdown);
+  // Pre-process mermaid blocks so marked doesn't swallow them or truncate the document.
+  // marked treats unclosed/unknown fences as raw code, causing everything after to not render.
+  let mdClean = markdown;
+  const mermaidSections = [];
+  // 1. Complete mermaid blocks (with closing ```)
+  mdClean = mdClean.replace(/```mermaid\n([\s\S]*?)```/g, (_m, code) => {
+    const i = mermaidSections.length;
+    mermaidSections.push(code.trim());
+    return `\`\`\`\nmermaid diagram (section ${i + 1})\n\`\`\``;
+  });
+  // 2. Unclosed mermaid block at end (shouldn't happen for complete files, but be safe)
+  mdClean = mdClean.replace(/```mermaid\n([\s\S]*)$/, (_m, code) => {
+    const i = mermaidSections.length;
+    mermaidSections.push(code.trim());
+    return `\`\`\`\nmermaid diagram (section ${i + 1})\n\`\`\``;
+  });
+
+  const htmlBody = marked(mdClean);
   const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;line-height:1.6;color:#1a1a1a;max-width:800px;margin:40px auto;padding:0 40px}

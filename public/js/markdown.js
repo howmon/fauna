@@ -146,6 +146,15 @@ function renderMarkdown(text) {
     mermaidBlocks[id] = code.trim();
     return '<div class="mermaid-placeholder" data-mermaid-id="' + id + '"></div>';
   });
+
+  // Handle unclosed mermaid block at end of text (streaming — closing ``` not yet received).
+  // Without this, marked@13 treats everything after the unclosed fence as code and
+  // stops rendering the rest of the message as markdown (looks like truncation).
+  cleaned = cleaned.replace(/```mermaid\n([\s\S]*)$/, function(match, code) {
+    var id = 'mermaid-placeholder-' + (mermaidId++);
+    mermaidBlocks[id] = code.trim(); // preserve partial diagram; will re-render when fence closes
+    return '<div class="mermaid-placeholder" data-mermaid-id="' + id + '"></div>';
+  });
   
   try {
     var html = marked.parse(cleaned);
