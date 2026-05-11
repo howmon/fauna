@@ -305,19 +305,24 @@ app.delete('/api/conversations/:id', (req, res) => {
 // Generate AI conversation title from messages
 app.post('/api/conversation-title', async (req, res) => {
   try {
-    const { messages = [], model = 'claude-sonnet-4.6' } = req.body;
+    const { messages = [] } = req.body;
     if (!messages.length) return res.status(400).json({ error: 'No messages provided' });
 
+    // Always use a fast Copilot-hosted model for title generation regardless of
+    // which model the conversation is using. Using the conversation model would
+    // fail for provider-direct models (Anthropic, Google, etc.) that aren't on
+    // the Copilot API endpoint, causing the title to never update.
     const client = getCopilotClient();
+    const TITLE_MODEL = 'gpt-4.1-mini';
     const systemPrompt = 'You are a helpful assistant that generates short, descriptive titles for conversations. Generate a concise title (3-6 words) that captures the main topic. Return ONLY the title, no quotes, no explanation.';
-    
+
     const titleMessages = [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: 'Generate a short title for this conversation:\n\n' + messages.map(m => `${m.role}: ${m.content}`).join('\n\n') }
     ];
 
     const completion = await client.chat.completions.create({
-      model,
+      model: TITLE_MODEL,
       messages: titleMessages,
       max_tokens: 50,
       temperature: 0.7
