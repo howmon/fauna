@@ -2905,11 +2905,445 @@ app.post('/api/figma-mcp/call', async (req, res) => {
   }
 });
 
+// ── Custom MCP Servers ─────────────────────────────────────────────────────
+// Support for user-configured custom MCP servers (HTTP or stdio transport)
+
+const CUSTOM_MCP_FILE = path.join(FAUNA_CONFIG_DIR, 'custom-mcp-servers.json');
+const customMcpClients = new Map(); // serverId → HttpMcpClient instance
+const customMcpProcesses = new Map(); // serverId → { process, logs }
+
+class HttpMcpClient {
+  constructor(url) {
+    this.url = url;
+    this.sessionId = null;
+    this.toolsCache = null;
+  }
+
+  async _parseSSE(response) {
+    const text = await response.text();
+    const lines = text.split('\n');
+    const events = [];
+    let currentEvent = { event: null, data: '' };
+    
+    for (const line of lines) {
+      if (line.startsWith('event:')) {
+        if (currentEvent.data) events.push(currentEvent);
+        currentEvent = { event: line.slice(6).trim(), data: '' };
+      } else if (line.startsWith('data:')) {
+        currentEvent.data += line.slice(5).trim();
+      } else if (line === '' && currentEvent.data) {
+        events.push(currentEvent);
+        currentEvent = { event: null, data: '' };
+      }
+    }
+    if (currentEvent.data) events.push(currentEvent);
+    
+    // Find the message event with JSON data
+    const msgEvent = events.find(e => e.event === 'message' || e.event === 'endpoint');
+    if (!msgEvent) throw new Error('No message event in SSE response');
+    
+    return JSON.parse(msgEvent.data);
+  }
+
+  async init() {
+    const body = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'fauna-custom-mcp', version: '1.0' }
+      }
+    });
+    const resp = await fetch(this.url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/event-stream'
+      },
+      body
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => resp.statusText);
+      throw new Error(`Failed to initialize: ${resp.status} ${text}`);
+    }
+    const sid = resp.headers.get('mcp-session-id');
+    if (!sid) throw new Error('No session ID returned from MCP server');
+    this.sessionId = sid;
+    
+    // Parse SSE response
+    const init = await this._parseSSE(resp);
+    if (init.error) throw new Error(init.error.message || 'Initialize failed');
+    
+    // Request tools list
+    const toolsResp = await this._post({
+      jsonrpc: '2.0',
+      method: 'tools/list',
+      params: {},
+      id: Date.now()
+    });
+    if (toolsResp.error) throw new Error(toolsResp.error.message);
+    this.toolsCache = (toolsResp.result?.tools || []).map(t => ({
+      type: 'function',
+      function: {
+        name: t.name,
+        description: t.description || '',
+        parameters: t.inputSchema || { type: 'object', properties: {} }
+      }
+    }));
+  }
+
+  async _post(body) {
+    const resp = await fetch(this.url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'mcp-session-id': this.sessionId,
+        'Accept': 'application/json, text/event-stream'
+      },
+      body: JSON.stringify(body)
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => resp.statusText);
+      throw new Error(`MCP request failed: ${resp.status} ${text}`);
+    }
+    return this._parseSSE(resp);
+  }
+
+  async getTools() {
+    if (!this.toolsCache) await this.init();
+    return this.toolsCache;
+  }
+
+  async callTool(name, args = {}) {
+    if (!this.sessionId) await this.init();
+    const r = await this._post({
+      jsonrpc: '2.0',
+      method: 'tools/call',
+      params: { name, arguments: args },
+      id: Date.now()
+    });
+    if (r.error) throw new Error(r.error.message);
+    const content = r.result?.content || [];
+    return content.map(c => c.text || JSON.stringify(c)).join('\n');
+  }
+
+  reset() {
+    this.sessionId = null;
+    this.toolsCache = null;
+  }
+}
+
+function readCustomMcpServers() {
+  if (!fs.existsSync(CUSTOM_MCP_FILE)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(CUSTOM_MCP_FILE, 'utf8'));
+  } catch (_) {
+    return [];
+  }
+}
+
+function writeCustomMcpServers(servers) {
+  fs.mkdirSync(path.dirname(CUSTOM_MCP_FILE), { recursive: true });
+  fs.writeFileSync(CUSTOM_MCP_FILE, JSON.stringify(servers, null, 2));
+}
+
+function addCustomMcpLog(serverId, severity, message) {
+  const proc = customMcpProcesses.get(serverId);
+  if (proc) {
+    proc.logs.push({ t: Date.now(), s: severity, m: message });
+    if (proc.logs.length > 200) proc.logs = proc.logs.slice(-200);
+  }
+}
+
+// Auto-detection logic - checks for browser MCP at localhost:3341
+let autoDetectPollTimer = null;
+
+async function probeBrowserMcp() {
+  try {
+    const resp = await fetch('http://localhost:3341/health', {
+      method: 'GET',
+      signal: AbortSignal.timeout(2000)
+    });
+    return resp.ok;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function autoDetectBrowserMcp() {
+  const servers = readCustomMcpServers();
+  const existing = servers.find(s => s.url === 'http://localhost:3341/mcp' || s.id === 'fauna-browser-mcp-auto');
+  
+  if (existing) return; // Already registered
+  
+  const available = await probeBrowserMcp();
+  if (!available) return; // Not running
+  
+  // Auto-add it
+  const newServer = {
+    id: 'fauna-browser-mcp-auto',
+    name: 'Browser MCP (FaunaMCP)',
+    transport: 'http',
+    url: 'http://localhost:3341/mcp',
+    autoDetected: true,
+    running: false
+  };
+  servers.push(newServer);
+  writeCustomMcpServers(servers);
+  console.log('[custom-mcp] Auto-detected browser MCP at localhost:3341');
+  
+  // Auto-start it
+  try {
+    const client = new HttpMcpClient(newServer.url);
+    await client.getTools();
+    customMcpClients.set(newServer.id, client);
+    newServer.running = true;
+    writeCustomMcpServers(servers);
+    console.log('[custom-mcp] Browser MCP auto-started');
+  } catch (e) {
+    console.error('[custom-mcp] Failed to auto-start browser MCP:', e.message);
+  }
+}
+
+function startCustomMcpAutoDetection() {
+  // Initial check
+  autoDetectBrowserMcp().catch(() => {});
+  
+  // Poll every 10 seconds
+  autoDetectPollTimer = setInterval(() => {
+    autoDetectBrowserMcp().catch(() => {});
+  }, 10000);
+}
+
+function stopCustomMcpAutoDetection() {
+  if (autoDetectPollTimer) {
+    clearInterval(autoDetectPollTimer);
+    autoDetectPollTimer = null;
+  }
+}
+
+// API routes for custom MCP servers
+
+app.get('/api/custom-mcp-servers', (req, res) => {
+  const servers = readCustomMcpServers();
+  res.json(servers);
+});
+
+app.post('/api/custom-mcp-servers', (req, res) => {
+  const { name, transport, command, args, env, envPassthrough, url } = req.body;
+  if (!name) return res.status(400).json({ error: 'name required' });
+  if (!transport) return res.status(400).json({ error: 'transport required' });
+  if (transport === 'stdio' && !command) return res.status(400).json({ error: 'command required for stdio transport' });
+  if (transport === 'http' && !url) return res.status(400).json({ error: 'url required for http transport' });
+  
+  const servers = readCustomMcpServers();
+  const newServer = {
+    id: `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name,
+    transport,
+    command: command || null,
+    args: args || [],
+    env: env || {},
+    envPassthrough: envPassthrough || [],
+    url: url || null,
+    running: false
+  };
+  servers.push(newServer);
+  writeCustomMcpServers(servers);
+  res.status(201).json(newServer);
+});
+
+app.put('/api/custom-mcp-servers/:id', (req, res) => {
+  const servers = readCustomMcpServers();
+  const idx = servers.findIndex(s => s.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'Server not found' });
+  
+  const updated = { ...servers[idx], ...req.body, id: servers[idx].id };
+  servers[idx] = updated;
+  writeCustomMcpServers(servers);
+  res.json(updated);
+});
+
+app.delete('/api/custom-mcp-servers/:id', (req, res) => {
+  const servers = readCustomMcpServers();
+  const server = servers.find(s => s.id === req.params.id);
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+  
+  // Stop if running
+  if (customMcpClients.has(server.id)) {
+    customMcpClients.get(server.id).reset();
+    customMcpClients.delete(server.id);
+  }
+  if (customMcpProcesses.has(server.id)) {
+    try { customMcpProcesses.get(server.id).process.kill('SIGTERM'); } catch (_) {}
+    customMcpProcesses.delete(server.id);
+  }
+  
+  const next = servers.filter(s => s.id !== req.params.id);
+  writeCustomMcpServers(next);
+  res.json({ ok: true });
+});
+
+app.post('/api/custom-mcp-servers/:id/start', async (req, res) => {
+  const servers = readCustomMcpServers();
+  const server = servers.find(s => s.id === req.params.id);
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+  
+  if (server.transport === 'http') {
+    try {
+      const client = new HttpMcpClient(server.url);
+      await client.getTools();
+      customMcpClients.set(server.id, client);
+      server.running = true;
+      writeCustomMcpServers(servers);
+      res.json({ ok: true, transport: 'http' });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  } else if (server.transport === 'stdio') {
+    try {
+      const env = { ...process.env, ...server.env };
+      for (const key of server.envPassthrough || []) {
+        if (process.env[key]) env[key] = process.env[key];
+      }
+      
+      const proc = _exec(
+        `${server.command} ${(server.args || []).join(' ')}`,
+        { env, maxBuffer: 10 * 1024 * 1024 }
+      );
+      
+      const logs = [];
+      proc.stdout?.on('data', d => {
+        const msg = d.toString();
+        logs.push({ t: Date.now(), s: 'stdout', m: msg });
+        if (logs.length > 200) logs.shift();
+      });
+      proc.stderr?.on('data', d => {
+        const msg = d.toString();
+        logs.push({ t: Date.now(), s: 'stderr', m: msg });
+        if (logs.length > 200) logs.shift();
+      });
+      proc.on('exit', code => {
+        logs.push({ t: Date.now(), s: 'info', m: `Process exited with code ${code}` });
+        customMcpProcesses.delete(server.id);
+        const srvs = readCustomMcpServers();
+        const srv = srvs.find(s => s.id === server.id);
+        if (srv) {
+          srv.running = false;
+          writeCustomMcpServers(srvs);
+        }
+      });
+      
+      customMcpProcesses.set(server.id, { process: proc, logs });
+      server.running = true;
+      writeCustomMcpServers(servers);
+      res.json({ ok: true, pid: proc.pid, transport: 'stdio' });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  } else {
+    res.status(400).json({ error: 'Unknown transport' });
+  }
+});
+
+app.post('/api/custom-mcp-servers/:id/stop', (req, res) => {
+  const servers = readCustomMcpServers();
+  const server = servers.find(s => s.id === req.params.id);
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+  
+  if (customMcpClients.has(server.id)) {
+    customMcpClients.get(server.id).reset();
+    customMcpClients.delete(server.id);
+  }
+  
+  if (customMcpProcesses.has(server.id)) {
+    try { customMcpProcesses.get(server.id).process.kill('SIGTERM'); } catch (_) {}
+    customMcpProcesses.delete(server.id);
+  }
+  
+  server.running = false;
+  writeCustomMcpServers(servers);
+  res.json({ ok: true });
+});
+
+app.get('/api/custom-mcp-servers/:id/logs', (req, res) => {
+  const proc = customMcpProcesses.get(req.params.id);
+  res.json({ logs: proc?.logs || [] });
+});
+
+app.get('/api/custom-mcp-servers/:id/oauth/status', (req, res) => {
+  // Placeholder for OAuth status - not implemented yet
+  res.json({ authorized: false });
+});
+
+app.post('/api/custom-mcp-servers/:id/refresh', async (req, res) => {
+  // Refresh HTTP tools for an HTTP server
+  const server = readCustomMcpServers().find(s => s.id === req.params.id);
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+  if (server.transport !== 'http') return res.status(400).json({ error: 'Only HTTP servers can be refreshed' });
+  
+  const client = customMcpClients.get(server.id);
+  if (!client) return res.status(400).json({ error: 'Server not running' });
+  
+  try {
+    client.reset();
+    const tools = await client.getTools();
+    res.json({ ok: true, toolCount: tools.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Expose custom MCP tools to chat (integrate with agent tools)
+async function getCustomMcpTools() {
+  const servers = readCustomMcpServers();
+  const tools = [];
+  
+  for (const server of servers.filter(s => s.running && s.transport === 'http')) {
+    const client = customMcpClients.get(server.id);
+    if (client) {
+      try {
+        const serverTools = await client.getTools();
+        tools.push(...serverTools);
+      } catch (e) {
+        console.error(`[custom-mcp] Failed to get tools from ${server.name}:`, e.message);
+      }
+    }
+  }
+  
+  return tools;
+}
+
+async function callCustomMcpTool(toolName, args) {
+  // Find which server has this tool
+  const servers = readCustomMcpServers().filter(s => s.running && s.transport === 'http');
+  
+  for (const server of servers) {
+    const client = customMcpClients.get(server.id);
+    if (!client) continue;
+    
+    try {
+      const tools = await client.getTools();
+      if (tools.some(t => t.function.name === toolName)) {
+        return await client.callTool(toolName, args);
+      }
+    } catch (e) {
+      console.error(`[custom-mcp] Error calling ${toolName} on ${server.name}:`, e.message);
+    }
+  }
+  
+  throw new Error(`Tool ${toolName} not found in any running custom MCP server`);
+}
+
 // Start trying to connect immediately when the server starts
 // Also auto-start the MCP server if it's not already running
 setTimeout(() => {
   if (mcpAutoStart) startMcpServer();
   else figmaConnect();
+  // Start custom MCP auto-detection
+  startCustomMcpAutoDetection();
 }, 500);  // slight delay so the main server is fully up first
 
 function figmaSend(command, timeoutMs = 30000) {
@@ -5390,6 +5824,14 @@ export function startServer(port) {
         try { figmaWs.terminate(); } catch (_) {}
         figmaWs = null;
       }
+      // Stop custom MCP auto-detection polling
+      stopCustomMcpAutoDetection();
+      // Kill all custom MCP processes
+      for (const [id, proc] of customMcpProcesses) {
+        try { proc.process.kill('SIGTERM'); } catch (_) {}
+      }
+      customMcpProcesses.clear();
+      customMcpClients.clear();
       // Kill MCP child
       stopScheduler();
       if (isMcpRunning()) mcpProcess.kill('SIGKILL');
