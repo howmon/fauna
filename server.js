@@ -4180,17 +4180,26 @@ app.get('/api/read-image', (req, res) => {
 
 // ── Agent System ──────────────────────────────────────────────────────────
 
-const AGENTS_DIR = path.join(CONFIG_DIR, 'agents');
+// Primary agents dir: ~/.config/fauna/agents (matches documented path in capabilities.js)
+const AGENTS_DIR = path.join(FAUNA_CONFIG_DIR, 'agents');
 fs.mkdirSync(AGENTS_DIR, { recursive: true });
+// Legacy agents dir: ~/.config/copilot-chat/agents (kept for backward compatibility)
+const LEGACY_AGENTS_DIR = path.join(CONFIG_DIR, 'agents');
 
 // Project-local agents folder (version-controlled alongside the app source)
 const LOCAL_AGENTS_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), 'agents');
 
 function* iterAgentDirs() {
-  for (const dir of [AGENTS_DIR, LOCAL_AGENTS_DIR]) {
+  const seen = new Set();
+  // Primary: ~/.config/fauna/agents
+  // Legacy: ~/.config/copilot-chat/agents (read-only fallback)
+  // Local: bundled app agents
+  for (const [dir, src] of [[AGENTS_DIR, 'user'], [LEGACY_AGENTS_DIR, 'user'], [LOCAL_AGENTS_DIR, 'local']]) {
     if (!fs.existsSync(dir)) continue;
     for (const name of fs.readdirSync(dir)) {
-      yield { name, agentDir: path.join(dir, name), source: dir === LOCAL_AGENTS_DIR ? 'local' : 'user' };
+      if (seen.has(name)) continue; // primary dir takes precedence
+      seen.add(name);
+      yield { name, agentDir: path.join(dir, name), source: src };
     }
   }
 }
