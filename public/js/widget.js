@@ -1,141 +1,247 @@
-// ── Task Widget — Floating task list with live updates ────────────────────
-// Loaded in widget.html inside a small BrowserWindow.
-// Communicates with the Fauna server via REST + SSE on localhost:3737.
+// ── Fauna Automations Widget ───────────────────────────────────────────────
+// Floating BrowserWindow that shows the automations list with full kind support.
 
-const API = 'http://localhost:3737/api/tasks';
+const API  = 'http://localhost:3737/api/tasks';
+const BASE = 'http://localhost:3737';
 
-// ── State ────────────────────────────────────────────────────────────────
+// ── State ─────────────────────────────────────────────────────────────────
 
-let tasks = [];
-let eventSource = null;
+let _tasks    = [];
+let _tab      = 'active';   // 'active' | 'recent'
+let _qaKind   = 'cron';
+let _evsrc    = null;
+let _pollTimer = null;
 
-// ── DOM refs ─────────────────────────────────────────────────────────────
+// ── DOM refs ──────────────────────────────────────────────────────────────
 
 const $list     = document.getElementById('task-list');
 const $empty    = document.getElementById('empty-state');
 const $quickAdd = document.getElementById('quick-add');
 const $qaTitle  = document.getElementById('qa-title');
 const $qaDesc   = document.getElementById('qa-desc');
-const $qaCtx    = document.getElementById('qa-context');
-const $qaAgents = document.getElementById('qa-agents');
 const $qaSched  = document.getElementById('qa-sched');
 const $qaAt     = document.getElementById('qa-at');
 const $qaCron   = document.getElementById('qa-cron');
+const $qaSchedRow = document.getElementById('qa-sched-row');
 
-// ── Helpers ──────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────
 
-const STATUS_ICON = {
-  pending:   '○',
-  scheduled: '◉',
-  running:   '⟳',
-  completed: '✓',
-  failed:    '✗',
-  paused:    '⏸',
-};
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = String(s || '');
+  return d.innerHTML;
+}
 
 function timeAgo(iso) {
   if (!iso) return '';
   const diff = Date.now() - new Date(iso).getTime();
-  if (diff < 60000) return 'just now';
-  if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
-  if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
-  return Math.floor(diff / 86400000) + 'd ago';
+  if (diff < 60e3)   return 'just now';
+  if (diff < 3600e3) return Math.floor(diff / 60e3)   + 'm ago';
+  if (diff < 86400e3) return Math.floor(diff / 3600e3) + 'h ago';
+  return Math.floor(diff / 86400e3) + 'd ago';
 }
 
-function scheduleLabel(sched) {
-  if (!sched) return '';
-  if (sched.type === 'once' && sched.at) {
-    return new Date(sched.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+function formatCountdown(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60)   return s + 's';
+  const m = Math.floor(s / 60);
+  if (m < 60)   return m + 'm';
+  const h = Math.floor(m / 60);
+  return h + 'h ' + (m % 60 ? m % 60 + 'm' : '');
+}
+
+function schedLabel(t) {
+  const s = t.schedule;
+  if (!s) return 'manual';
+  if (s.rrule) return humanizeRrule(s.rrule);
+  if (s.type === 'once' && s.at) {
+    const d = new Date(s.at);
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   }
-  if (sched.type === 'recurring' && sched.cron) return sched.cron;
-  return sched.type;
+  if (s.type === 'recurring' && s.cron) return s.cron;
+  if (t.kind === 'heartbeat') return 'heartbeat';
+  if (t.kind === 'pipeline')  return 'pipeline';
+  return 'manual';
 }
 
-// ── Rendering ────────────────────────────────────────────────────────────
+function humanizeRrule(r) {
+  if (!r) return '';
+  if (r.includes('FREQ=DAILY')) {
+    const h = (r.match(/BYHOUR=(\d+)/) || [])[1];
+    if (h != null) {
+      const hr = parseInt(h);
+      return 'Daily at ' + (hr % 12 || 12) + ' ' + (hr < 12 ? 'AM' : 'PM');
+    }
+    return 'Daily';
+  }
+  if (r.includes('FREQ=WEEKLY')) return 'Weekly';
+  if (r.includes('FREQ=HOURLY')) return 'Hourly';
+  if (r.includes('FREQ=MONTHLY')) return 'Monthly';
+  return r;
+}
+
+function dotClass(status) {
+  return { pending: 'pending', scheduled: 'scheduled', running: 'running',
+           completed: 'completed', failed: 'failed', paused: 'paused' }[status] || 'pending';
+}
+
+// ── Rendering ─────────────────────────────────────────────────────────────
 
 const STATUS_ORDER = { running: 0, scheduled: 1, pending: 2, paused: 3, failed: 4, completed: 5 };
 
 function render() {
-  tasks.sort((a, b) => (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9));
   $list.innerHTML = '';
 
-  if (tasks.length === 0) {
+  const isActive = (t) => !['paused','completed','failed'].includes(t.status);
+
+  let pool = _tab === 'active'
+    ? _tasks.filter(isActive).concat(_tasks.filter(t => t.status === 'paused'))
+    : _tasks.filter(t => ['completed','failed'].includes(t.status));
+
+  pool.sort((a, b) => (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9));
+
+  if (!pool.length) {
     $empty.classList.remove('hidden');
     return;
   }
   $empty.classList.add('hidden');
 
-  for (const t of tasks) {
-    const item = document.createElement('div');
-    item.className = 'task-item';
-    item.dataset.id = t.id;
+  // Group rows for "active" tab
+  if (_tab === 'active') {
+    const running   = pool.filter(t => t.status === 'running');
+    const scheduled = pool.filter(t => t.status === 'scheduled');
+    const pending   = pool.filter(t => t.status === 'pending');
+    const paused    = pool.filter(t => t.status === 'paused');
 
-    const running = t._running;
-    const step = running ? `Step ${running.step || 0}/${running.maxSteps || 20}` : '';
-    const pct = running ? Math.round(((running.step || 0) / (running.maxSteps || 20)) * 100) : 0;
-
-    item.innerHTML = `
-      <div class="task-status ${t.status}">${STATUS_ICON[t.status] || '○'}</div>
-      <div class="task-info">
-        <div class="task-title">${esc(t.title)}</div>
-        <div class="task-meta">${scheduleLabel(t.schedule)}${step ? ' · ' + step : ''} · ${timeAgo(t.updatedAt)}</div>
-        ${t.status === 'running' ? `<div class="task-progress"><div class="task-progress-bar" style="width:${pct}%"></div></div>` : ''}
-        ${t.status === 'running' ? `<div class="task-steer-row"><input class="steer-input" placeholder="Steer…" data-id="${t.id}"><button class="steer-btn" data-id="${t.id}">→</button></div>` : ''}
-        ${(t.status === 'completed' && t.result) ? `<div class="task-result ok">${esc((t.result.summary || '').slice(0, 80))}</div>` : ''}
-        ${(t.status === 'failed' && t.result) ? `<div class="task-result fail">${esc((t.result.error || '').slice(0, 80))}</div>` : ''}
-      </div>
-      <div class="task-actions">
-        ${t.status === 'running'
-          ? `<button class="task-action" data-act="pause" title="Pause">⏸</button>`
-          : `<button class="task-action" data-act="run" title="Run">▶</button>`}
-        <button class="task-action" data-act="delete" title="Delete">🗑</button>
-      </div>
-    `;
-    $list.appendChild(item);
+    if (running.length) {
+      $list.innerHTML += `<div class="w-group-label">Running</div>`;
+      running.forEach(t => $list.innerHTML += rowHtml(t));
+    }
+    if (scheduled.length) {
+      $list.innerHTML += `<div class="w-group-label">Scheduled</div>`;
+      scheduled.forEach(t => $list.innerHTML += rowHtml(t));
+    }
+    if (pending.length) {
+      $list.innerHTML += `<div class="w-group-label">Pending</div>`;
+      pending.forEach(t => $list.innerHTML += rowHtml(t));
+    }
+    if (paused.length) {
+      $list.innerHTML += `<div class="w-group-label">Paused</div>`;
+      paused.forEach(t => $list.innerHTML += rowHtml(t));
+    }
+  } else {
+    pool.slice(0, 20).forEach(t => $list.innerHTML += rowHtml(t));
   }
 }
 
-function esc(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
+function rowHtml(t) {
+  const kind     = t.kind || 'cron';
+  const sched    = schedLabel(t);
+  const when     = timeAgo(t.updatedAt || t.createdAt);
+  const running  = t._running;
+  const pct      = running ? Math.min(100, Math.round(((running.step || 0) / (running.maxSteps || 20)) * 100)) : 0;
+
+  // Next run countdown
+  let nextRun = '';
+  if (t.nextRunAt && t.status === 'scheduled') {
+    const diff = new Date(t.nextRunAt).getTime() - Date.now();
+    nextRun = diff > 0
+      ? `<span class="task-sub-sep">·</span><span>in ${esc(formatCountdown(diff))}</span>`
+      : `<span class="task-sub-sep">·</span><span>now</span>`;
+  }
+
+  // Pipeline info
+  let pipeInfo = '';
+  if (kind === 'pipeline' && t.pipeline && Array.isArray(t.pipeline.nodes)) {
+    pipeInfo = `<span class="task-sub-sep">·</span><span>${t.pipeline.nodes.length} nodes</span>`;
+  }
+
+  // Result snippet
+  let resultHtml = '';
+  if (t.status === 'completed' && t.result) {
+    const snip = (t.result.summary || t.result.output || '').slice(0, 90);
+    if (snip) resultHtml = `<div class="task-result ok">${esc(snip)}</div>`;
+  } else if (t.status === 'failed' && t.result) {
+    const snip = (t.result.error || t.result.output || '').slice(0, 90);
+    if (snip) resultHtml = `<div class="task-result fail">${esc(snip)}</div>`;
+  }
+
+  // Action buttons
+  const actRun    = `<button class="task-action" data-act="run"    data-id="${t.id}" title="Run now"><i class="ti ti-player-play"></i></button>`;
+  const actStop   = `<button class="task-action" data-act="stop"   data-id="${t.id}" title="Stop"><i class="ti ti-player-stop"></i></button>`;
+  const actPause  = `<button class="task-action" data-act="pause"  data-id="${t.id}" title="Pause"><i class="ti ti-player-pause"></i></button>`;
+  const actResume = `<button class="task-action" data-act="resume" data-id="${t.id}" title="Resume"><i class="ti ti-player-play"></i></button>`;
+  const actDel    = `<button class="task-action danger" data-act="delete" data-id="${t.id}" title="Delete"><i class="ti ti-trash"></i></button>`;
+
+  const s = t.status;
+  let actBtns = '';
+  if (s === 'running')   actBtns = actStop + actPause + actDel;
+  else if (s === 'paused')    actBtns = actResume + actDel;
+  else if (s === 'scheduled') actBtns = actRun + actPause + actDel;
+  else                        actBtns = actRun + actDel;
+
+  return `
+<div class="task-item" data-id="${t.id}">
+  <div class="task-dot ${dotClass(s)}"></div>
+  <div class="task-body">
+    <div class="task-top">
+      <span class="task-title">${esc(t.title)}</span>
+      <span class="task-kind-badge ${esc(kind)}">${esc(kind)}</span>
+    </div>
+    <div class="task-sub">
+      <span>${esc(sched)}</span>
+      ${nextRun}
+      ${pipeInfo}
+      ${when ? `<span class="task-sub-sep">·</span><span>${esc(when)}</span>` : ''}
+    </div>
+    ${running ? `<div class="task-progress"><div class="task-progress-bar" style="width:${pct}%"></div></div>` : ''}
+    ${s === 'running' ? `<div class="task-steer-row"><input class="steer-input" placeholder="Steer…" data-id="${t.id}"><button class="steer-btn" data-id="${t.id}"><i class="ti ti-send"></i></button></div>` : ''}
+    ${resultHtml}
+  </div>
+  <div class="task-actions">${actBtns}</div>
+</div>`;
 }
 
-// ── Task actions ─────────────────────────────────────────────────────────
+// ── Task actions ──────────────────────────────────────────────────────────
 
 $list.addEventListener('click', async (e) => {
+  // Action buttons
   const btn = e.target.closest('.task-action');
-  if (!btn) return;
-  const item = btn.closest('.task-item');
-  const id = item?.dataset.id;
-  if (!id) return;
+  if (btn) {
+    const act = btn.dataset.act;
+    const id  = btn.dataset.id;
+    if (!id) return;
+    if (act === 'run')    await fetch(`${API}/${id}/run`,    { method: 'POST' }).catch(() => {});
+    if (act === 'stop')   await fetch(`${API}/${id}/stop`,   { method: 'POST' }).catch(() => {});
+    if (act === 'pause')  await fetch(`${API}/${id}/pause`,  { method: 'POST' }).catch(() => {});
+    if (act === 'resume') await fetch(`${API}/${id}/resume`, { method: 'POST' }).catch(() => {});
+    if (act === 'delete') {
+      const row = $list.querySelector(`.task-item[data-id="${id}"]`);
+      if (row) row.style.opacity = '0.4';
+      await fetch(`${API}/${id}`, { method: 'DELETE' }).catch(() => {});
+    }
+    await fetchTasks();
+    return;
+  }
 
-  const act = btn.dataset.act;
-  if (act === 'run')    await fetch(`${API}/${id}/run`, { method: 'POST' });
-  if (act === 'pause')  await fetch(`${API}/${id}/pause`, { method: 'POST' });
-  if (act === 'delete') await fetch(`${API}/${id}`, { method: 'DELETE' });
-
-  await fetchTasks();
-});
-
-// Steer — send via input or button
-$list.addEventListener('click', async (e) => {
-  const btn = e.target.closest('.steer-btn');
-  if (!btn) return;
-  const id = btn.dataset.id;
-  const input = $list.querySelector(`.steer-input[data-id="${id}"]`);
-  if (input) await sendSteer(id, input);
+  // Steer send button
+  const steerBtn = e.target.closest('.steer-btn');
+  if (steerBtn) {
+    const id    = steerBtn.dataset.id;
+    const input = $list.querySelector(`.steer-input[data-id="${id}"]`);
+    if (input) await sendSteer(id, input);
+    return;
+  }
 });
 
 $list.addEventListener('keydown', async (e) => {
   if (e.key !== 'Enter') return;
   const input = e.target.closest('.steer-input');
-  if (!input) return;
-  await sendSteer(input.dataset.id, input);
+  if (input) await sendSteer(input.dataset.id, input);
 });
 
 async function sendSteer(id, input) {
-  const msg = input.value.trim();
+  const msg = (input.value || '').trim();
   if (!msg) return;
   input.value = '';
   input.disabled = true;
@@ -150,12 +256,52 @@ async function sendSteer(id, input) {
   input.focus();
 }
 
-// ── Quick-add ────────────────────────────────────────────────────────────
+// ── Tab bar ───────────────────────────────────────────────────────────────
 
-document.getElementById('btn-add').addEventListener('click', () => {
-  $quickAdd.classList.toggle('hidden');
-  if (!$quickAdd.classList.contains('hidden')) $qaTitle.focus();
+document.getElementById('tab-bar').addEventListener('click', (e) => {
+  const btn = e.target.closest('.tab-btn');
+  if (!btn) return;
+  _tab = btn.dataset.tab;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === _tab));
+  render();
 });
+
+// ── Quick-add ─────────────────────────────────────────────────────────────
+
+function openQuickAdd() {
+  $quickAdd.classList.remove('hidden');
+  setTimeout(() => $qaTitle && $qaTitle.focus(), 50);
+}
+
+function closeQuickAdd() {
+  $quickAdd.classList.add('hidden');
+  $qaTitle.value  = '';
+  $qaDesc.value   = '';
+  $qaSched.value  = 'manual';
+  $qaAt.classList.add('hidden');
+  $qaCron.classList.add('hidden');
+  // Reset kind
+  setKind('cron');
+}
+
+document.getElementById('btn-new').addEventListener('click', openQuickAdd);
+document.getElementById('btn-empty-new').addEventListener('click', openQuickAdd);
+document.getElementById('qa-cancel').addEventListener('click', closeQuickAdd);
+
+// Kind tabs
+document.querySelectorAll('.qa-kind-tab').forEach(btn => {
+  btn.addEventListener('click', () => setKind(btn.dataset.kind));
+});
+
+function setKind(kind) {
+  _qaKind = kind;
+  document.querySelectorAll('.qa-kind-tab').forEach(b => b.classList.toggle('active', b.dataset.kind === kind));
+  // Show schedule row only for cron kind
+  $qaSchedRow.style.display = (kind === 'cron') ? '' : 'none';
+}
+
+// Init kind
+setKind('cron');
 
 $qaSched.addEventListener('change', () => {
   $qaAt.classList.toggle('hidden', $qaSched.value !== 'once');
@@ -163,135 +309,104 @@ $qaSched.addEventListener('change', () => {
 });
 
 document.getElementById('qa-submit').addEventListener('click', async () => {
-  const title = $qaTitle.value.trim();
-  if (!title) return;
-
-  const agents = $qaAgents.value.split(',').map(s => s.trim()).filter(Boolean);
-  const browserChecked = document.getElementById('qa-perm-browser').checked;
-  let browserPerm = false;
-  if (browserChecked) {
-    const picked = [];
-    document.querySelectorAll('#qa-tab-picker .qa-tab-cb:checked').forEach(cb => picked.push(cb.dataset.url));
-    browserPerm = picked.length ? { tabs: picked } : true;
-  }
+  const title = ($qaTitle.value || '').trim();
+  if (!title) { $qaTitle.focus(); return; }
 
   const body = {
     title,
-    description: $qaDesc.value.trim(),
-    context: $qaCtx.value.trim(),
-    agents,
+    description: ($qaDesc.value || '').trim(),
+    kind: _qaKind,
     permissions: {
-      shell: document.getElementById('qa-perm-shell').checked,
-      browser: browserPerm,
-      figma: document.getElementById('qa-perm-figma').checked,
+      shell:   document.getElementById('qa-perm-shell').checked,
+      browser: document.getElementById('qa-perm-browser').checked,
+      figma:   document.getElementById('qa-perm-figma').checked,
     },
-    schedule: { type: $qaSched.value },
+    schedule: { type: 'manual' },
   };
-  if ($qaSched.value === 'once')      body.schedule.at = $qaAt.value ? new Date($qaAt.value).toISOString() : null;
-  if ($qaSched.value === 'recurring') body.schedule.cron = $qaCron.value.trim() || null;
 
-  await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (_qaKind === 'cron') {
+    body.schedule.type = $qaSched.value;
+    if ($qaSched.value === 'once' && $qaAt.value) {
+      body.schedule.at = new Date($qaAt.value).toISOString();
+    }
+    if ($qaSched.value === 'recurring' && $qaCron.value.trim()) {
+      body.schedule.cron = $qaCron.value.trim();
+    }
+  }
 
-  // Reset form
-  $qaTitle.value = '';
-  $qaDesc.value = '';
-  $qaCtx.value = '';
-  $qaAgents.value = '';
-  document.getElementById('qa-perm-shell').checked = true;
-  document.getElementById('qa-perm-browser').checked = false;
-  document.getElementById('qa-perm-figma').checked = false;
-  document.getElementById('qa-tabs-row').classList.add('hidden');
-  $qaSched.value = 'manual';
-  $qaAt.classList.add('hidden');
-  $qaCron.classList.add('hidden');
-  $quickAdd.classList.add('hidden');
-
-  await fetchTasks();
+  const btn = document.getElementById('qa-submit');
+  btn.disabled = true;
+  btn.textContent = 'Creating…';
+  try {
+    await fetch(API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    closeQuickAdd();
+    await fetchTasks();
+  } catch (err) {
+    console.error('[widget] create error:', err);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Create';
+  }
 });
 
-// Also submit on Enter in the title field
 $qaTitle.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') document.getElementById('qa-submit').click();
+  if (e.key === 'Escape') closeQuickAdd();
 });
 
-// ── Pin / Close ──────────────────────────────────────────────────────────
+// ── Pin / Close / Open in app ─────────────────────────────────────────────
 
 document.getElementById('btn-pin').addEventListener('click', () => {
-  // Communicate with the main process via the preload bridge
   if (window.widgetAPI?.togglePin) window.widgetAPI.togglePin();
 });
 
 document.getElementById('btn-close').addEventListener('click', () => {
   if (window.widgetAPI?.hide) window.widgetAPI.hide();
 });
-// ── Browser permission toggle & tab picker ───────────────────────────
 
-function onQaBrowserChange() {
-  const checked = document.getElementById('qa-perm-browser').checked;
-  const row = document.getElementById('qa-tabs-row');
-  if (checked) {
-    row.classList.remove('hidden');
-    fetchExtTabs();
-  } else {
-    row.classList.add('hidden');
-  }
+document.getElementById('btn-open-app').addEventListener('click', () => {
+  if (window.widgetAPI?.openInApp) window.widgetAPI.openInApp();
+});
+
+if (window.widgetAPI?.onPinChanged) {
+  window.widgetAPI.onPinChanged((pinned) => {
+    document.getElementById('btn-pin').classList.toggle('pinned', pinned);
+  });
 }
 
-async function fetchExtTabs() {
-  const picker = document.getElementById('qa-tab-picker');
-  picker.innerHTML = '<div class="qa-tab-empty">Loading…</div>';
-  try {
-    const r = await fetch('http://localhost:3737/api/ext/command', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'tab:list' }),
-    });
-    const data = await r.json();
-    if (!data.ok || !data.tabs?.length) {
-      picker.innerHTML = '<div class="qa-tab-empty">No extension connected</div>';
-      return;
-    }
-    picker.innerHTML = data.tabs.map(tab => {
-      const active = tab.active ? ' <span class="qa-tab-active">•</span>' : '';
-      return `<label class="qa-tab-label"><input type="checkbox" class="qa-tab-cb" data-url="${esc(tab.url)}">${esc((tab.title || '').slice(0, 40))}${active}</label>`;
-    }).join('');
-  } catch (_) {
-    picker.innerHTML = '<div class="qa-tab-empty">Extension not connected</div>';
-  }
-}
-
-// Expose for inline handler
-window.onQaBrowserChange = onQaBrowserChange;
-// ── Fetching ─────────────────────────────────────────────────────────────
+// ── Fetch ─────────────────────────────────────────────────────────────────
 
 async function fetchTasks() {
   try {
     const res = await fetch(API);
     if (res.ok) {
-      tasks = await res.json();
+      _tasks = await res.json();
       render();
     }
   } catch (_) { /* server not ready yet */ }
 }
 
-// ── SSE live updates ─────────────────────────────────────────────────────
+// ── SSE live updates ──────────────────────────────────────────────────────
 
 function connectSSE() {
-  if (eventSource) { eventSource.close(); eventSource = null; }
+  if (_evsrc) { _evsrc.close(); _evsrc = null; }
   try {
-    eventSource = new EventSource(`${API}/stream`);
-    eventSource.onmessage = (e) => {
+    _evsrc = new EventSource(`${API}/stream`);
+    _evsrc.onmessage = (e) => {
       try {
         const evt = JSON.parse(e.data);
-        if (['completed', 'failed', 'started', 'paused', 'step', 'created', 'deleted'].includes(evt.event)) {
+        if (['completed','failed','started','paused','step','created','deleted','resumed'].includes(evt.event)) {
           fetchTasks();
         }
       } catch (_) {}
     };
-    eventSource.onerror = () => {
-      eventSource.close();
-      eventSource = null;
-      // Retry after a few seconds
+    _evsrc.onerror = () => {
+      _evsrc.close();
+      _evsrc = null;
       setTimeout(connectSSE, 5000);
     };
   } catch (_) {
@@ -299,17 +414,9 @@ function connectSSE() {
   }
 }
 
-// ── Init ─────────────────────────────────────────────────────────────────
+// ── Init ──────────────────────────────────────────────────────────────────
 
 fetchTasks();
 connectSSE();
-
-// Also poll every 30s as a fallback
-setInterval(fetchTasks, 30000);
-
-// Listen for pin state updates from main process
-if (window.widgetAPI?.onPinChanged) {
-  window.widgetAPI.onPinChanged((pinned) => {
-    document.getElementById('btn-pin').classList.toggle('pinned', pinned);
-  });
-}
+// Fallback poll every 30s for missed SSE events
+_pollTimer = setInterval(fetchTasks, 30000);

@@ -235,8 +235,8 @@ function createWidget() {
   const prefs = readWidgetPrefs();
   const x = prefs.x ?? undefined;
   const y = prefs.y ?? undefined;
-  const w = prefs.width  ?? 320;
-  const h = prefs.height ?? 420;
+  const w = prefs.width  ?? 380;
+  const h = prefs.height ?? 560;
   const pinned = prefs.pinned ?? true;
 
   widgetWindow = new BrowserWindow({
@@ -315,6 +315,17 @@ ipcMain.on('widget:toggle-pin', () => {
 
 ipcMain.on('widget:hide', () => {
   widgetWindow?.hide();
+});
+
+ipcMain.on('widget:open-in-app', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show();
+    mainWindow.focus();
+    // Open the Automations panel inside the main app
+    mainWindow.webContents.executeJavaScript(
+      'typeof toggleTasksPanel === "function" && !tasksPanelOpen && toggleTasksPanel()'
+    ).catch(() => {});
+  }
 });
 
 // ── Tray ──────────────────────────────────────────────────────────────────
