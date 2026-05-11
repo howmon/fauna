@@ -238,6 +238,32 @@ app.post('/api/ext/command', async (req, res) => {
   }
 });
 
+app.post('/api/ext/snapshot', async (req, res) => {
+  const clients = Array.from(extClients.values()).filter(client => client.ws.readyState === 1);
+  if (!clients.length) return res.status(503).json({ ok: false, error: 'Browser extension not connected' });
+
+  const { full = false, tabId } = req.body || {};
+  const action = full ? 'snapshot-full' : 'snapshot';
+  const client = tabId
+    ? clients.find(c => c.activeTab && c.activeTab.id === tabId) || clients[0]
+    : clients[0];
+  const id = 'cmd-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        extPendingCommands.delete(id);
+        reject(new Error('Screenshot timed out'));
+      }, 30000);
+      extPendingCommands.set(id, { resolve, reject, timeoutId, clientId: client.id });
+      client.ws.send(JSON.stringify({ type: 'cmd', id, action, params: { full }, tabId }));
+    });
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.get('/api/runs', (_req, res) => {
   res.json([]);
 });
