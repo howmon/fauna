@@ -48,6 +48,21 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
     var wid = convId || state.currentId || '';
     if (!isReplace && !isPatch && filePath && !filePath.startsWith('/') && !filePath.startsWith('~')) {
       var cwd = _convCwd[wid];
+      
+      // Priority: 1) conversation CWD, 2) active project rootPath, 3) user default save path, 4) workspace folder
+      if (!cwd && typeof _activeProject === 'function') {
+        var activeProj = _activeProject();
+        if (activeProj && activeProj.rootPath) {
+          cwd = activeProj.rootPath;
+          dbg('write-file: using active project rootPath: ' + cwd, 'info');
+        }
+      }
+      
+      if (!cwd && state.defaultSavePath) {
+        cwd = state.defaultSavePath;
+        dbg('write-file: using default save path: ' + cwd, 'info');
+      }
+      
       filePath = cwd ? cwd.replace(/\/$/, '') + '/' + filePath
                      : '~/.fauna/workspaces/' + wid + '/' + filePath;
     }
@@ -212,6 +227,31 @@ function validateWrittenFile(filePath, content, widget) {
     if (open !== close) {
       markWriteFileFailed(widget, filePath,
         'CSS has unbalanced braces (' + open + ' open, ' + close + ' close) — likely truncated', convId);
+    }
+
+  } else if (ext === 'md' || ext === 'markdown') {
+    // Check for unclosed code blocks
+    var codeBlockMarkers = (content.match(/```/g) || []).length;
+    if (codeBlockMarkers % 2 !== 0) {
+      markWriteFileFailed(widget, filePath,
+        'Markdown has unclosed code block (``` count: ' + codeBlockMarkers + ') — likely truncated', convId);
+    }
+    // Check if file ends abruptly mid-sentence (no proper ending punctuation or newline)
+    var trimmed = content.trimEnd();
+    if (trimmed.length > 100 && !trimmed.match(/[.!?)\]}>\n]$/)) {
+      markWriteFileFailed(widget, filePath,
+        'Markdown appears to end abruptly without proper punctuation — possible truncation', convId);
+    }
+
+  } else if (ext === 'json') {
+    // Quick JSON validation for truncation
+    try {
+      JSON.parse(content);
+    } catch (e) {
+      var errorMsg = e.message || 'JSON parse error';
+      if (errorMsg.includes('Unexpected end') || errorMsg.includes('Unexpected token')) {
+        markWriteFileFailed(widget, filePath, 'JSON is invalid or truncated: ' + errorMsg, convId);
+      }
     }
   }
 }
