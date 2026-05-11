@@ -1,5 +1,16 @@
 // ── Conversations ─────────────────────────────────────────────────────────
 
+// Bump a conversation to the top of the list (only call when real activity occurs)
+function bumpConvToTop(id) {
+  var conv = getConv(id);
+  if (!conv) return;
+  var idx = state.conversations.indexOf(conv);
+  if (idx > 0) {
+    state.conversations.splice(idx, 1);
+    state.conversations.unshift(conv);
+  }
+}
+
 function saveConversations() {
   // Strip transient runtime fields before persisting
   var toSave = state.conversations.map(function(conv) {
@@ -190,14 +201,6 @@ function loadConversation(id) {
   _promptHistDraft = '';
   var conv = getConv(id);
   if (!conv) return;
-
-  // Move to top of list so it appears as the most recent
-  var idx = state.conversations.indexOf(conv);
-  if (idx > 0) {
-    state.conversations.splice(idx, 1);
-    state.conversations.unshift(conv);
-    saveConversations();
-  }
 
   state.model  = conv.model || state.model;
   document.getElementById('model-select').value = state.model;

@@ -139,6 +139,7 @@ async function sendDirectMessage(content, opts) {
     '</div>';
     getConvInner(targetId).appendChild(bgStatusEl);
   }
+  bumpConvToTop(conv.id);
   saveConversations();
   await streamResponse(conv);
 }
@@ -269,6 +270,7 @@ async function sendMessage(opts) {
   };
   conv.messages.push(userMsg);
 
+  bumpConvToTop(conv.id);
   saveConversations();
   appendMessageDOM('user', content, userMsg.attachments, true);
   showMessages();

@@ -1220,7 +1220,8 @@ Examples:
     var icon = headerBtn.querySelector('i');
     var job = data && data.job;
     var running = !!(job && job.running);
-    headerBtn.style.display = 'none';
+    var showBtn = running || !!(job && job.updateAvailable);
+    headerBtn.style.display = showBtn ? '' : 'none';
     headerBtn.disabled = running;
     headerBtn.classList.toggle('updating', running);
     if (label) label.textContent = running ? 'Updating' : 'Update';
@@ -1250,6 +1251,8 @@ Examples:
       statusText = 'Update available' + (job.latestSha ? ' @ ' + String(job.latestSha).slice(0, 7) : '');
     } else if (job && job.phase === 'current') {
       statusText = 'Fauna is up to date' + (job.latestSha ? ' @ ' + job.latestSha.slice(0, 7) : '');
+    } else if (job && job.phase === 'complete') {
+      statusText = job.message || 'Update complete — restart Fauna to apply changes';
     } else if (data && data.sourceReady) {
       statusText = 'Update source staged';
     } else {
@@ -1289,7 +1292,15 @@ Examples:
   var _faunaHeaderUpdatePoller = null;
   function _startFaunaHeaderUpdatePolling() {
     if (_faunaHeaderUpdatePoller) return;
-    setTimeout(_checkFaunaHeaderUpdate, 2500);
+    // On startup, first fetch the current status — only run a fresh check if idle
+    setTimeout(function() {
+      fetch('/api/fauna/update-status').then(function(r) { return r.json(); }).then(function(d) {
+        _renderFaunaUpdateStatus(d);
+        var phase = d && d.job && d.job.phase;
+        // Only auto-check if the server hasn't already found/completed something
+        if (!phase || phase === 'idle') _checkFaunaHeaderUpdate();
+      }).catch(function() { _checkFaunaHeaderUpdate(); });
+    }, 2500);
     _faunaHeaderUpdatePoller = setInterval(_checkFaunaHeaderUpdate, 60 * 60 * 1000);
   }
 
