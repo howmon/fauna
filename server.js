@@ -5,7 +5,7 @@
 
 import express    from 'express';
 import OpenAI     from 'openai';
-import { execSync, exec as _exec, execFile as _execFile } from 'child_process';
+import { execSync, exec as _exec, execFile as _execFile, spawn } from 'child_process';
 import crypto     from 'crypto';
 import path       from 'path';
 import os         from 'os';
@@ -2553,8 +2553,6 @@ app.post('/api/browse', async (req, res) => {
 // When the Figma plugin (CopilotMCP/CopilotChat plugin in Figma desktop) is open,
 // this bridge can execute arbitrary Figma Plugin API code and query design state.
 
-import { spawn } from 'child_process';
-
 const FIGMA_WS_URL     = 'ws://localhost:3335';
 const FIGMA_RULES_FILE = path.join(CONFIG_DIR, 'figma-rules.json');
 const DEFAULT_MCP_PATH = path.join(os.homedir(), 'FigmaExtensions', 'CopilotMCP', 'server', 'index.js');
@@ -3548,7 +3546,7 @@ const AUGMENTED_PATH = IS_WIN
 const SHELL_BIN = IS_WIN ? 'powershell.exe' : '/bin/zsh';
 
 app.post('/api/shell-exec', (req, res) => {
-  const { command, cwd, killId } = req.body;
+  const { command, cwd, killId, stream } = req.body;
   if (!command) return res.status(400).json({ error: 'command required' });
 
   const workDir = cwd || os.homedir();
@@ -3560,6 +3558,51 @@ app.post('/api/shell-exec', (req, res) => {
     ...(IS_WIN ? {} : { SHELL: '/bin/zsh', TERM: 'xterm-256color' }),
   };
 
+  // Streaming mode - send SSE events as output arrives
+  if (stream) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const child = spawn(SHELL_BIN, IS_WIN ? ['-Command', command] : ['-c', command], {
+      cwd: workDir,
+      env,
+      timeout: 300000,
+      maxBuffer: 10 * 1024 * 1024,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    
+    if (child.stdout) {
+      child.stdout.on('data', (chunk) => {
+        const text = chunk.toString();
+        res.write(`data: ${JSON.stringify({ type: 'stdout', text })}\n\n`);
+      });
+    }
+    
+    if (child.stderr) {
+      child.stderr.on('data', (chunk) => {
+        const text = chunk.toString();
+        res.write(`data: ${JSON.stringify({ type: 'stderr', text })}\n\n`);
+      });
+    }
+    
+    child.on('exit', (code) => {
+      if (killId) _shellProcs.delete(killId);
+      res.write(`data: ${JSON.stringify({ type: 'exit', exitCode: code || 0 })}\n\n`);
+      res.end();
+    });
+    
+    child.on('error', (err) => {
+      res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
+      res.end();
+    });
+    
+    if (killId) _shellProcs.set(killId, child);
+    return;
+  }
+
+  // Non-streaming mode - wait for completion and return JSON
   const child = _exec(command, { cwd: workDir, env, timeout: 300000, maxBuffer: 10 * 1024 * 1024, shell: SHELL_BIN },
     (err, stdout, stderr) => {
       if (killId) _shellProcs.delete(killId);
