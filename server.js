@@ -770,8 +770,11 @@ app.post('/api/fauna/install-update', express.json(), async (req, res) => {
     return res.status(409).json({ error: 'Update already in progress' });
   }
 
-  // In a packaged app we cannot do in-place git updates — open the releases page instead
-  if (_faunaIsPackaged()) {
+  // Check if we can do git-based updates (requires .git folder)
+  const hasGitRepo = fs.existsSync(path.join(FAUNA_APP_DIR, '.git'));
+  
+  // In a packaged app without git repo, open the releases page instead
+  if (_faunaIsPackaged() && !hasGitRepo) {
     const releasesUrl = `https://github.com/${FAUNA_REPO_OWNER}/${FAUNA_REPO_NAME}/releases`;
     if (_electronShell) _electronShell.openExternal(releasesUrl);
     _faunaUpdateJob = {
@@ -780,6 +783,13 @@ app.post('/api/fauna/install-update', express.json(), async (req, res) => {
       logs: [{ message: `Opened ${releasesUrl}` }],
     };
     return res.json({ job: _faunaUpdateJob });
+  }
+  
+  // If no git repo exists at all, we can't update
+  if (!hasGitRepo) {
+    return res.status(400).json({ 
+      error: 'No git repository found. Please install from GitHub releases or clone the repository.'
+    });
   }
 
   _faunaUpdateJob = { phase: 'starting', running: true, logs: [], updateAvailable: false };
