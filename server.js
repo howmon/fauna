@@ -309,7 +309,7 @@ app.post('/api/conversation-title', async (req, res) => {
     if (!messages.length) return res.status(400).json({ error: 'No messages provided' });
 
     const client = getCopilotClient();
-    const TITLE_MODEL = reqModel || 'gpt-4.1-mini';
+    const TITLE_MODEL = reqModel || 'gpt-4.1';
     const systemPrompt = 'You are a helpful assistant that generates short, descriptive titles for conversations. Generate a concise title (3-6 words) that captures the main topic. Return ONLY the title, no quotes, no explanation.';
 
     const titleMessages = [
@@ -4959,6 +4959,7 @@ app.post('/api/agent-builder/scan', (req, res) => {
 app.post('/api/agent-builder/rubric-audit', async (req, res) => {
   const { systemPrompt, displayName, description, model: reqModel } = req.body;
   if (!systemPrompt || !systemPrompt.trim()) return res.status(400).json({ error: 'systemPrompt required' });
+  // Use the model the client is using; fall back to gpt-4.1 which is reliably available on the Copilot endpoint
   const model = reqModel || 'gpt-4.1';
   try {
     const client = getCopilotClient();
