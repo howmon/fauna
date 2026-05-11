@@ -251,8 +251,11 @@ function validateWrittenFile(filePath, content, widget) {
         return;
       }
       
-      // Ends with unfinished markdown syntax
-      if (lastLine.match(/^#+\s*$|^\s*[-*]\s*$|^\s*\d+\.\s*$/)) {
+      // Ends with unfinished markdown syntax (but NOT diagram elements)
+      // Allow: lines of dashes/equals (------, ======) used in diagrams or heading underlines
+      // Reject: single dash/asterisk with whitespace (- , * )
+      var isDiagramLine = lastLine.match(/^[-=|+\/\\]{3,}$/);
+      if (!isDiagramLine && lastLine.match(/^#+\s*$|^\s*[-*]\s*$|^\s*\d+\.\s*$/)) {
         markWriteFileFailed(widget, filePath,
           'Markdown ends with unfinished heading/list marker — likely truncated', convId);
         return;
