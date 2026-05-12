@@ -137,6 +137,8 @@ function renderMarkdown(text) {
   // Strip artifact fenced blocks before rendering — they're shown as entity cards, not code fences
   // Backreference: match same number of opening/closing backticks (3+) so nested ``` inside artifacts are preserved
   var cleaned = (text || '').replace(/(`{3,})artifact:[^\n]+\n[\s\S]*?\1\n?/g, '');
+  // Strip suggestion blocks — rendered as clickable CTA buttons, not code
+  cleaned = cleaned.replace(/```suggestions\n[\s\S]*?```\n?/g, '');
   
   // Pre-process mermaid blocks before markdown parsing
   // Replace ```mermaid blocks with placeholder divs

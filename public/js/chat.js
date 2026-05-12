@@ -78,6 +78,49 @@ async function gatherSystemContext(text) {
   return ctx.length ? '\n\n[System context gathered automatically]\n' + ctx.join('\n') : '';
 }
 
+// ── Suggested next steps ──────────────────────────────────────────────────
+// Parse ```suggestions blocks and render clickable CTA buttons after the message.
+function extractAndRenderSuggestions(buffer, msgEl) {
+  var match = buffer.match(/```suggestions\n([\s\S]*?)```/);
+  if (!match) return;
+  var items;
+  try { items = JSON.parse(match[1].trim()); } catch (_) { return; }
+  if (!Array.isArray(items) || !items.length) return;
+
+  // Remove any previously rendered suggestion bar (e.g. from re-render)
+  var old = msgEl.querySelector('.suggestion-bar');
+  if (old) old.remove();
+
+  var bar = document.createElement('div');
+  bar.className = 'suggestion-bar';
+
+  items.slice(0, 4).forEach(function(label) {
+    var btn = document.createElement('button');
+    btn.className = 'suggestion-btn';
+    btn.textContent = label;
+    btn.onclick = function() {
+      bar.remove();
+      var input = document.getElementById('msg-input');
+      input.value = label;
+      sendMessage();
+    };
+    bar.appendChild(btn);
+  });
+
+  // "Other…" button — focuses input so user can type
+  var otherBtn = document.createElement('button');
+  otherBtn.className = 'suggestion-btn suggestion-btn-other';
+  otherBtn.innerHTML = '<i class="ti ti-dots"></i> Other…';
+  otherBtn.onclick = function() {
+    bar.remove();
+    var input = document.getElementById('msg-input');
+    input.focus();
+  };
+  bar.appendChild(otherBtn);
+
+  msgEl.appendChild(bar);
+}
+
 // Send a message directly into the conversation (supports vision/array content).
 // Used by auto-feed when a screenshot was taken.
 async function sendDirectMessage(content, opts) {
@@ -857,6 +900,7 @@ async function streamResponse(conv) {
         if (typeof extractAndRenderTaskCreate === 'function') extractAndRenderTaskCreate(buffer, msgEl);
         if (typeof extractAndRenderGenUI === 'function') extractAndRenderGenUI(buffer, msgEl, false);
         wrapInChainOfThought(msgEl);
+        extractAndRenderSuggestions(buffer, msgEl);
         if (state._lastMsgWasDesktopTask) {
           injectOrganizerCard(msgEl, buffer);
           state._lastMsgWasDesktopTask = false;
