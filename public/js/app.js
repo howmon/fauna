@@ -91,7 +91,6 @@ function toggleHelp() {
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────
 document.addEventListener('keydown', function(e) {
-  if (e.key === 'Escape' && playbookOpen)     { togglePlaybook(); }
   if (e.key === 'Escape' && agentRulesOpen)  { toggleAgentRules(); }
   if (e.key === 'Escape' && figmaRulesOpen)  { toggleFigmaRules(); }
   if (e.key === 'Escape' && figmaSetupOpen)  { toggleFigmaSetup(); }

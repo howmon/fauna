@@ -1524,14 +1524,7 @@ body { animation: none; }
 }
 #agent-rule-add-btn:hover { opacity: .85; }
 
-/* ── Playbook panel ─────────────────────────────────────────────── */
-#playbook-panel {
-  position: fixed; top: 0; right: 0; bottom: 0; width: 440px;
-  background: var(--fau-surface); border-left: 1px solid var(--fau-border);
-  display: flex; flex-direction: column; z-index: 500;
-  transform: translateX(100%); transition: transform .22s cubic-bezier(.4,0,.2,1), box-shadow .22s;
-}
-#playbook-panel.open { transform: translateX(0); box-shadow: -12px 0 40px rgba(0,0,0,.5); }
+/* ── Playbook (settings page) ──────────────────────────────────── */
 
 /* ── Tasks Panel ────────────────────────────────────────────── */
 #tasks-panel {
@@ -1947,11 +1940,6 @@ body { animation: none; }
   font-size: 12.5px; color: var(--fau-text);
 }
 
-#playbook-header {
-  padding: 14px 16px; border-bottom: 1px solid var(--fau-border);
-  display: flex; align-items: center; gap: 8px;
-}
-#playbook-header .title { font-size: 13px; font-weight: 700; flex: 1; }
 .pb-row {
   display: flex; flex-direction: column; gap: 4px;
   padding: 10px 12px; margin-bottom: 6px;
@@ -1969,7 +1957,6 @@ body { animation: none; }
 .pb-row-actions { display: flex; gap: 4px; flex-shrink: 0; }
 .pb-row-actions button { background: none; border: none; cursor: pointer; color: var(--fau-text-muted); font-size: 14px; padding: 2px; }
 .pb-row-actions button:hover { color: var(--fau-text); }
-#playbook-add { padding: 10px 14px; border-top: 1px solid var(--fau-border); display: flex; flex-direction: column; gap: 6px; }
 #pb-title-input {
   width: 100%; background: var(--fau-surface3); border: 1px solid var(--fau-border);
   border-radius: var(--radius-sm); color: var(--fau-text); font-size: 12.5px;
@@ -1991,8 +1978,9 @@ body { animation: none; }
 #pb-add-btn:hover { opacity: .85; }
 
 /* ── Playbook tabs ──────────────────────────────────────────────── */
-#playbook-tabs {
-  display: flex; border-bottom: 1px solid var(--fau-border); padding: 0;
+#settings-playbook-tabs {
+  display: flex; border-bottom: 1px solid var(--fau-border); padding: 0; border-radius: 8px; overflow: hidden;
+  border: 1px solid var(--fau-border);
 }
 .pb-tab {
   flex: 1; padding: 9px 0; font-size: 12px; font-weight: 600;

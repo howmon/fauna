@@ -162,7 +162,7 @@
           <button class="more-menu-item" onclick="toggleAgentRules();hideMoreMenu()"><i class="ti ti-robot"></i> Agent Rules</button>
           <button class="more-menu-item" onclick="openAgentBuilder();hideMoreMenu()"><i class="ti ti-wand"></i> Agent Builder</button>
           <button class="more-menu-item" onclick="openBrowserPane();hideMoreMenu()"><i class="ti ti-world-www"></i> Browser Panel</button>
-          <button class="more-menu-item" onclick="togglePlaybook();hideMoreMenu()"><i class="ti ti-notebook"></i> Playbook</button>
+          <button class="more-menu-item" onclick="openSettingsPage('playbook');hideMoreMenu()"><i class="ti ti-notebook"></i> Playbook</button>
           <button class="more-menu-item" onclick="toggleFigmaSetup();hideMoreMenu()"><i class="ti ti-plug"></i> Plugins &amp; Extensions</button>
           <button class="more-menu-item" onclick="toggleHelp();hideMoreMenu()"><i class="ti ti-help-circle"></i> Help &amp; Reference</button>
         </div>
@@ -539,7 +539,7 @@ Examples:
       <button class="settings-nav-item" data-page="plugins" onclick="openAgentStore()">
         <i class="ti ti-puzzle"></i> Plugins
       </button>
-      <button class="settings-nav-item" data-page="playbook" onclick="toggleSettings();togglePlaybook()">
+      <button class="settings-nav-item" data-page="playbook" onclick="switchSettingsPage('playbook',this)">
         <i class="ti ti-notebook"></i> Playbook
       </button>
       <button class="settings-nav-item" data-page="mcp" onclick="switchSettingsPage('mcp',this)">
@@ -878,6 +878,51 @@ Examples:
   </div>
 
   <!-- ── About ──────────────────────────────────────────────────── -->
+  <!-- ── Playbook ─────────────────────────────────────────────── -->
+  <div class="settings-page" data-page="playbook">
+    <div class="settings-page-title">Playbook</div>
+
+    <div class="settings-section">
+      <div id="settings-playbook-tabs" style="display:flex;gap:0;margin-bottom:12px">
+        <button class="pb-tab active" data-tab="learned" onclick="switchPlaybookTab('learned')" style="flex:1">Learned Instructions</button>
+        <button class="pb-tab" data-tab="memory" onclick="switchPlaybookTab('memory')" style="flex:1">Spec Memory</button>
+      </div>
+
+      <!-- Learned tab -->
+      <div id="pb-tab-learned" class="pb-tab-body active">
+        <div class="settings-hint" style="margin-bottom:12px">
+          Instructions the AI has learned from successful approaches.<br>
+          Auto-saved entries come from the AI; you can also add your own. All enabled entries are injected into the system prompt.
+        </div>
+        <div id="playbook-list" style="max-height:calc(100vh - 340px);overflow-y:auto;padding:4px 0 12px">
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+          <input type="text" id="pb-title-input" class="settings-input" placeholder="Title (e.g. Figma Audit Strategy)" style="width:100%">
+          <textarea id="pb-body-input" class="settings-input" rows="3" placeholder="Instruction body..."
+            onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))addPlaybookEntry()"
+            style="width:100%;resize:vertical;font-family:var(--font);font-size:12.5px"></textarea>
+          <button id="pb-add-btn" class="settings-row-btn" onclick="addPlaybookEntry()" style="align-self:flex-start"><i class="ti ti-plus"></i> Add Entry</button>
+        </div>
+      </div>
+
+      <!-- Memory tab -->
+      <div id="pb-tab-memory" class="pb-tab-body">
+        <div class="settings-hint" style="margin-bottom:12px">
+          Skill categories for different tools. Each category contains skill groups that are injected into the AI system prompt when enabled.
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+          <button class="settings-row-btn" onclick="addMemoryCategory()" title="Create a new skill category"><i class="ti ti-plus"></i> New Category</button>
+          <button class="settings-row-btn" onclick="resetMemoryToDefaults()" title="Reset built-in categories to defaults"><i class="ti ti-refresh"></i> Reset Built-in</button>
+          <button class="settings-row-btn" onclick="exportMemory()" title="Export all as JSON"><i class="ti ti-download"></i> Export</button>
+          <button class="settings-row-btn" onclick="document.getElementById('mem-import-file').click()" title="Import from JSON"><i class="ti ti-upload"></i> Import</button>
+          <input type="file" id="mem-import-file" accept=".json" style="display:none" onchange="importMemory(event)">
+        </div>
+        <div id="memory-list" style="max-height:calc(100vh - 340px);overflow-y:auto;padding:4px 0">
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="settings-page" data-page="about">
     <div class="settings-page-title">About</div>
     <div class="settings-section">
@@ -947,6 +992,10 @@ Examples:
     if (page === 'browser') {
       _faunaMCPSettingsRefresh();
       _browserExtSettingsRefresh();
+    }
+    if (page === 'playbook') {
+      renderPlaybook();
+      if (typeof renderMemory === 'function') renderMemory();
     }
     if (page === 'about') {
       _refreshFaunaUpdateStatus();
@@ -1503,51 +1552,6 @@ Examples:
         <i class="ti ti-clock-plus" style="font-size:26px;opacity:.2"></i>
         <div>Select an automation or create a new one</div>
       </div>
-    </div>
-  </div>
-</div>
-
-<!-- ── Playbook panel ──────────────────────────────────────────── -->
-<div id="playbook-panel">
-  <div id="playbook-header">
-    <span><i class="ti ti-notebook" style="font-size:16px;color:#f0a030"></i></span>
-    <span class="title">Playbook</span>
-    <span style="font-size:11px;color:var(--fau-text-dim);flex:1"></span>
-    <button style="background:none;border:none;color:var(--fau-text-muted);cursor:pointer;font-size:18px;padding:0 2px" onclick="togglePlaybook()"><i class="ti ti-x"></i></button>
-  </div>
-  <!-- Tabs: Learned | Memory -->
-  <div id="playbook-tabs">
-    <button class="pb-tab active" data-tab="learned" onclick="switchPlaybookTab('learned')">Learned Instructions</button>
-    <button class="pb-tab" data-tab="memory" onclick="switchPlaybookTab('memory')">Spec Memory</button>
-  </div>
-  <!-- Learned tab -->
-  <div id="pb-tab-learned" class="pb-tab-body active">
-    <div style="font-size:11.5px;color:var(--fau-text-dim);padding:10px 16px 8px;border-bottom:1px solid var(--fau-border);line-height:1.5">
-      Instructions the AI has learned from successful approaches.<br>
-      Auto-saved entries come from the AI; you can also add your own. All enabled entries are injected into the system prompt.
-    </div>
-    <div id="playbook-list" style="flex:1;overflow-y:auto;padding:8px 10px">
-    </div>
-    <div id="playbook-add">
-      <input type="text" id="pb-title-input" placeholder="Title (e.g. Figma Audit Strategy)">
-      <textarea id="pb-body-input" rows="3" placeholder="Instruction body..."
-        onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))addPlaybookEntry()"></textarea>
-      <button id="pb-add-btn" onclick="addPlaybookEntry()"><i class="ti ti-plus"></i> Add Entry</button>
-    </div>
-  </div>
-  <!-- Memory tab -->
-  <div id="pb-tab-memory" class="pb-tab-body">
-    <div style="font-size:11.5px;color:var(--fau-text-dim);padding:10px 16px 8px;border-bottom:1px solid var(--fau-border);line-height:1.5">
-      Skill categories for different tools. Each category contains skill groups that are injected into the AI system prompt when enabled.
-    </div>
-    <div id="memory-actions" style="padding:6px 10px;display:flex;gap:6px;border-bottom:1px solid var(--fau-border)">
-      <button class="mem-action-btn" onclick="addMemoryCategory()" title="Create a new skill category"><i class="ti ti-plus"></i> New Category</button>
-      <button class="mem-action-btn" onclick="resetMemoryToDefaults()" title="Reset built-in categories to defaults"><i class="ti ti-refresh"></i> Reset Built-in</button>
-      <button class="mem-action-btn" onclick="exportMemory()" title="Export all as JSON"><i class="ti ti-download"></i> Export</button>
-      <button class="mem-action-btn" onclick="document.getElementById('mem-import-file').click()" title="Import from JSON"><i class="ti ti-upload"></i> Import</button>
-      <input type="file" id="mem-import-file" accept=".json" style="display:none" onchange="importMemory(event)">
-    </div>
-    <div id="memory-list" style="flex:1;overflow-y:auto;padding:8px 10px">
     </div>
   </div>
 </div>

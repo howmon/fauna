@@ -14,9 +14,7 @@ function savePlaybook(entries) {
 }
 
 function togglePlaybook() {
-  playbookOpen = !playbookOpen;
-  document.getElementById('playbook-panel').classList.toggle('open', playbookOpen);
-  if (playbookOpen) renderPlaybook();
+  openSettingsPage('playbook');
 }
 
 function renderPlaybook() {
@@ -74,7 +72,8 @@ function addPlaybookFromAI(title, body, tags) {
     entries.push({ id: 'pb-' + Date.now(), title: title, body: body, tags: tags || [], enabled: true, autoSaved: true, createdAt: Date.now() });
   }
   savePlaybook(entries);
-  if (playbookOpen) renderPlaybook();
+  var playbookPage = document.querySelector('.settings-page[data-page="playbook"]');
+  if (playbookPage && playbookPage.classList.contains('active')) renderPlaybook();
 }
 
 function togglePlaybookEntry(id) {
