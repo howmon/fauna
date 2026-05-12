@@ -105,6 +105,8 @@ function _extractCreatedFileCandidates(command, cwd) {
     if (/\$/.test(raw)) return;
     // Ignore glob/regex patterns (e.g. browser_[a-zA-Z_]*, *.log) — not real file paths.
     if (/[*?[\]{]/.test(raw)) return;
+    // Ignore shell operators and bare punctuation that aren't file paths.
+    if (/^[>|<;&]+$/.test(raw)) return;
     var resolved = _resolveShellFilePath(path, cwd);
     if (!resolved) return;
     if (/[|;&]$/.test(resolved)) resolved = resolved.slice(0, -1);
