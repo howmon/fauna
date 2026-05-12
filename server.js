@@ -5187,6 +5187,66 @@ Quality criteria to check:
   res.status(500).json({ error: 'Rubric audit failed: ' + (lastError?.message || 'all models failed') });
 });
 
+// Suggest decomposing a large agent into orchestrator + sub-agents
+app.post('/api/agent-builder/decompose', async (req, res) => {
+  const { systemPrompt, displayName, description, name: agentName, permissions, icon, category, model: reqModel } = req.body;
+  if (!systemPrompt || !systemPrompt.trim()) return res.status(400).json({ error: 'systemPrompt required' });
+
+  const tokenEst = Math.ceil(systemPrompt.trim().length / 4);
+  if (tokenEst < 4000) return res.json({ recommend: false, reason: 'Prompt is under 4000 tokens — no split needed.' });
+
+  const decomposeMsg = `You are an expert agent architect. The user has a single agent with a very large system prompt (~${tokenEst} tokens). Your job is to decompose it into an orchestrator agent with specialized sub-agents.
+
+Return ONLY valid JSON with no markdown fencing. The JSON object must have:
+- "recommend": true
+- "reason": string — 1-2 sentences explaining why splitting helps (faster responses, lower per-call token cost, better separation of concerns)
+- "orchestrator": object with:
+  - "displayName": string
+  - "name": string (slug)
+  - "description": string
+  - "systemPrompt": string — short dispatch-only prompt (100-200 words). Must reference sub-agents by name using [DELEGATE:agents/NAME] syntax.
+- "shared": string — common context/facts/conventions shared across all sub-agents (extract anything repeated or universally needed). This is automatically appended to every sub-agent.
+- "subAgents": array of 2-5 sub-agents, each with:
+  - "name": string (slug)
+  - "displayName": string (2-4 words)
+  - "description": string (1 sentence)
+  - "icon": one of "ti-robot","ti-code","ti-search","ti-pencil","ti-vector-triangle","ti-database","ti-chart-bar","ti-terminal-2","ti-world-www","ti-shield-check","ti-brain","ti-bolt","ti-bug","ti-palette","ti-wand"
+  - "systemPrompt": string (focused, 100-400 words — the sub-agent's specific responsibility only, no shared context)
+- "tokenEstimate": { "original": number, "perCallMax": number } — original = total tokens of the monolithic prompt, perCallMax = max tokens any single sub-agent + shared + orchestrator would consume in one call
+
+Rules:
+- Split along natural responsibility boundaries (e.g. research vs writing, planning vs execution, different domains)
+- The shared section should contain facts/context that 2+ sub-agents need — don't duplicate across sub-agents
+- Each sub-agent prompt should be self-contained for its responsibility (it gets shared context automatically)
+- Preserve 100% of the original prompt's behavioral intent — nothing should be lost in the split
+- The orchestrator prompt should be a pure dispatcher — it decides which sub-agent(s) to invoke based on the user's request`;
+
+  const userMsg = `Agent: ${displayName || agentName || 'Unnamed'}\nDescription: ${description || 'N/A'}\n\nFull system prompt (${tokenEst} tokens):\n${systemPrompt.trim()}`;
+  const messages = [{ role: 'system', content: decomposeMsg }, { role: 'user', content: userMsg }];
+
+  const modelsToTry = [reqModel, 'gpt-4.1', 'claude-sonnet-4.6'].filter(Boolean);
+  const client = getCopilotClient();
+  let lastError = null;
+
+  for (const model of modelsToTry) {
+    try {
+      console.log('[decompose] trying model:', model);
+      const response = await client.chat.completions.create({ model, max_tokens: 16384, stream: false, messages });
+      const text = response.choices?.[0]?.message?.content || '';
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) { lastError = new Error('Failed to parse from ' + model); continue; }
+      const result = JSON.parse(jsonMatch[0]);
+      // Carry forward original agent metadata
+      result._originalMeta = { permissions: permissions || {}, icon: icon || 'ti-robot', category: category || 'other' };
+      return res.json(result);
+    } catch (e) {
+      console.warn('[decompose] model', model, 'failed:', e.message);
+      lastError = e;
+    }
+  }
+  res.status(500).json({ error: 'Decomposition failed: ' + (lastError?.message || 'all models failed') });
+});
+
 // Save agent from builder
 const BUILTIN_AGENT_NAMES = ['research', 'coder', 'writer', 'designer'];
 

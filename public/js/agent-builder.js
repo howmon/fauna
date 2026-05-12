@@ -28,7 +28,8 @@ var builderState = {
     tools: [],        // { name, description, parameters: {}, code: '' }
     testCases: [],     // { input, expectedOutput, result?, passed? }
     scanReport: null,
-    rubricAudit: null  // { findings, improvedPrompt, summary }
+    rubricAudit: null,  // { findings, improvedPrompt, summary }
+    decomposeResult: null  // { recommend, reason, orchestrator, shared, subAgents, tokenEstimate }
   }
 };
 
@@ -101,7 +102,7 @@ function resetBuilderState() {
       fileRead: [], fileWrite: [],
       network: { allowedDomains: [], blockAll: true }
     },
-    tools: [], testCases: [], scanReport: null, rubricAudit: null,
+    tools: [], testCases: [], scanReport: null, rubricAudit: null, decomposeResult: null,
     permissions: { shell: false, browser: false, figma: false, fileRead: [], fileWrite: [], network: { allowedDomains: [], blockAll: true }, mcp: [] }
   };
 }
@@ -1041,6 +1042,47 @@ function renderStep6Scan() {
     }
   }
 
+  // Decomposition recommendation panel
+  var decompHtml = '';
+  var dec = builderState.data.decomposeResult;
+  if (builderState._decomposeLoading) {
+    decompHtml = '<div class="scan-rubric-section">' +
+      '<div class="scan-rubric-title"><i class="ti ti-git-branch"></i> Analysing prompt for decomposition\u2026</div>' +
+      '<div class="builder-hint-block">Checking if this agent should be split into an orchestrator with focused sub-agents\u2026</div>' +
+    '</div>';
+  } else if (dec && dec.recommend && dec.orchestrator && dec.subAgents) {
+    var subList = '';
+    for (var si = 0; si < dec.subAgents.length; si++) {
+      var sa = dec.subAgents[si];
+      subList += '<div class="decompose-sub">' +
+        '<i class="ti ' + escHtml(sa.icon || 'ti-robot') + '"></i> ' +
+        '<strong>' + escHtml(sa.displayName) + '</strong>' +
+        '<span class="decompose-sub-desc"> \u2014 ' + escHtml(sa.description || '') + '</span>' +
+        ' <span class="decompose-sub-tokens">~' + Math.ceil((sa.systemPrompt || '').length / 4) + ' tokens</span>' +
+      '</div>';
+    }
+    var sharedTokens = dec.shared ? Math.ceil(dec.shared.length / 4) : 0;
+    decompHtml = '<div class="scan-rubric-section scan-decompose-section">' +
+      '<div class="scan-rubric-title"><i class="ti ti-git-branch"></i> Recommended: Split into Sub-Agents' +
+        '<button class="builder-btn small" onclick="builderDismissDecompose()" style="margin-left:auto"><i class="ti ti-x"></i> Dismiss</button>' +
+      '</div>' +
+      '<div class="builder-hint-block">' + escHtml(dec.reason || '') + '</div>' +
+      (dec.tokenEstimate ? '<div class="scan-token-estimate">' +
+        '<i class="ti ti-coin"></i> Per-call max: <strong>' + dec.tokenEstimate.perCallMax + '</strong> tokens (was <strong>' + dec.tokenEstimate.original + '</strong>)' +
+        ' <span class="scan-token-saved">(\u2212' + Math.round((1 - dec.tokenEstimate.perCallMax / dec.tokenEstimate.original) * 100) + '% per call)</span>' +
+      '</div>' : '') +
+      '<div class="decompose-arch">' +
+        '<div class="decompose-orch"><i class="ti ti-topology-star-3"></i> <strong>' + escHtml(dec.orchestrator.displayName || 'Orchestrator') + '</strong> (dispatcher)</div>' +
+        (sharedTokens > 0 ? '<div class="decompose-shared"><i class="ti ti-share-2"></i> Shared context: ~' + sharedTokens + ' tokens</div>' : '') +
+        '<div class="decompose-subs">' + subList + '</div>' +
+      '</div>' +
+      '<div class="scan-rubric-actions">' +
+        '<button class="builder-btn primary" onclick="builderAcceptDecompose()"><i class="ti ti-git-branch"></i> Accept &amp; split into sub-agents</button>' +
+        '<button class="builder-btn secondary" onclick="builderDismissDecompose()">Keep as single agent</button>' +
+      '</div>' +
+    '</div>';
+  }
+
   return '<div class="builder-section">' +
     '<div class="scan-header">' +
       '<span class="scan-badge-large">' + badge + '</span>' +
@@ -1050,6 +1092,7 @@ function renderStep6Scan() {
     '</div>' +
     (findingsHtml || '<div class="scan-clean"><i class="ti ti-circle-check" style="color:#22c55e"></i> No security issues found!</div>') +
     rubricHtml +
+    decompHtml +
   '</div>';
 }
 
@@ -1093,6 +1136,8 @@ async function builderRunRubricAudit() {
   }
   builderState._rubricLoading = false;
   renderBuilderPanel();
+  // If prompt is very large (>4000 tokens), check if it should be split into sub-agents
+  await builderCheckDecompose();
 }
 
 async function builderAcceptImprovedPrompt() {
@@ -1104,6 +1149,65 @@ async function builderAcceptImprovedPrompt() {
   renderBuilderPanel();
   // Re-run rubric audit on the new prompt immediately so the user sees the updated score
   await builderRunRubricAudit();
+}
+
+// ── Decomposition: split large prompts into orchestrator + sub-agents ────
+
+async function builderCheckDecompose() {
+  var prompt = builderState.data.systemPrompt || '';
+  var tokens = Math.ceil(prompt.trim().length / 4);
+  if (tokens < 4000 || builderState.data.orchestrator) {
+    builderState.data.decomposeResult = null;
+    return;
+  }
+  builderState._decomposeLoading = true;
+  renderBuilderPanel();
+  try {
+    var r = await fetch('/api/agent-builder/decompose', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.assign({}, builderState.data, { model: state.model }))
+    });
+    var result = await r.json();
+    builderState.data.decomposeResult = result.error ? null : result;
+    if (result.error) showToast('Decomposition analysis failed: ' + result.error);
+  } catch (e) {
+    builderState.data.decomposeResult = null;
+  }
+  builderState._decomposeLoading = false;
+  renderBuilderPanel();
+}
+
+function builderAcceptDecompose() {
+  var dec = builderState.data.decomposeResult;
+  if (!dec || !dec.orchestrator || !dec.subAgents) return;
+
+  // Transform current agent into orchestrator with sub-agents
+  builderState.data.orchestrator = true;
+  builderState.data.displayName = dec.orchestrator.displayName || builderState.data.displayName;
+  builderState.data.name = dec.orchestrator.name || builderState.data.name;
+  builderState.data.description = dec.orchestrator.description || builderState.data.description;
+  builderState.data.systemPrompt = dec.orchestrator.systemPrompt;
+  builderState.data.shared = dec.shared || '';
+  builderState.data.subAgents = dec.subAgents.map(function(sa) {
+    return {
+      name: sa.name,
+      displayName: sa.displayName,
+      description: sa.description || '',
+      icon: sa.icon || 'ti-robot',
+      systemPrompt: sa.systemPrompt || ''
+    };
+  });
+  builderState.data.decomposeResult = null;
+  builderState.data.rubricAudit = null;
+  builderState.data.scanReport = null;
+  showToast('Agent split into orchestrator + ' + dec.subAgents.length + ' sub-agents — review & rescan');
+  renderBuilderPanel();
+}
+
+function builderDismissDecompose() {
+  builderState.data.decomposeResult = null;
+  renderBuilderPanel();
 }
 
 // ── Step 7: Review & Package ─────────────────────────────────────────────

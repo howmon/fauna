@@ -633,7 +633,7 @@ figma.ui.onmessage = async function(msg) {
       } catch(e) { errors.push({ name: drawerComp.name, error: e.message }); }
     }
 
-    figma.currentPage = targetPage;
+    await figma.setCurrentPageAsync(targetPage);
     figma.viewport.scrollAndZoomIntoView([appFrame]);
     figma.ui.postMessage({ type: 'place-result', placed: placed, errors: errors });
   }
@@ -646,7 +646,7 @@ figma.ui.onmessage = async function(msg) {
     var placed      = [], errors = [];
 
     // Find the root layout frame (by ID from selection, or first FRAME on page)
-    var rootFrame = targetId ? figma.getNodeById(targetId) : null;
+    var rootFrame = targetId ? await figma.getNodeByIdAsync(targetId) : null;
     if (!rootFrame || (rootFrame.type !== 'FRAME' && rootFrame.type !== 'INSTANCE')) {
       // Walk up to nearest frame ancestor
       if (rootFrame) {
@@ -745,7 +745,7 @@ figma.ui.onmessage = async function(msg) {
     }
 
     if (placed.length > 0) {
-      figma.currentPage = targetPage;
+      await figma.setCurrentPageAsync(targetPage);
       var nodes = targetPage.children.slice(-placed.length);
       figma.viewport.scrollAndZoomIntoView(nodes);
     }
@@ -767,7 +767,7 @@ figma.ui.onmessage = async function(msg) {
     var componentName = msg.componentName;
 
     try {
-      var targetNode = figma.getNodeById(nodeId);
+      var targetNode = await figma.getNodeByIdAsync(nodeId);
       if (!targetNode || targetNode.type !== 'INSTANCE') {
         throw new Error('Node not found or not an instance: ' + nodeId);
       }
@@ -807,7 +807,7 @@ figma.ui.onmessage = async function(msg) {
   // ── Make a hidden node visible (reveal optional LayoutGrid row) ──────────
   if (msg.type === 'make-visible') {
     try {
-      var node = figma.getNodeById(msg.nodeId);
+      var node = await figma.getNodeByIdAsync(msg.nodeId);
       if (node) {
         node.visible = true;
         figma.viewport.scrollAndZoomIntoView([node]);
@@ -845,7 +845,7 @@ figma.ui.onmessage = async function(msg) {
   if (msg.type === 'create-page') {
     var newPage = figma.createPage();
     newPage.name = msg.name || 'Fauna Canvas';
-    figma.currentPage = newPage;
+    await figma.setCurrentPageAsync(newPage);
     figma.ui.postMessage({
       type: 'pages-list',
       pages: figma.root.children.map(function(p) { return p.name; }),
@@ -855,11 +855,11 @@ figma.ui.onmessage = async function(msg) {
 
   // ── Apply token (variable) to a node property ────────────────────────────
   if (msg.type === 'apply-token') {
-    figma.importVariableByKeyAsync(msg.tokenKey).then(function(variable) {
+    figma.importVariableByKeyAsync(msg.tokenKey).then(async function(variable) {
       // Determine target node
       var targetNode = null;
       if (msg.nodeId) {
-        targetNode = figma.getNodeById(msg.nodeId);
+        targetNode = await figma.getNodeByIdAsync(msg.nodeId);
       } else if (msg.layerName) {
         targetNode = figma.currentPage.findOne(function(n) {
           return n.name === msg.layerName;
@@ -930,7 +930,7 @@ figma.ui.onmessage = async function(msg) {
     try {
       // Inject safe helpers for common pitfalls
       var helpers = [
-        'function safeGetNode(id) { try { return figma.getNodeById(id); } catch(e) { console.warn("safeGetNode: node " + id + " not found"); return null; } }',
+        'async function safeGetNode(id) { try { return await figma.getNodeByIdAsync(id); } catch(e) { console.warn("safeGetNode: node " + id + " not found"); return null; } }',
         'function safeFindAll(parent, predicate) {',
         '  var results = [];',
         '  try {',
@@ -945,6 +945,10 @@ figma.ui.onmessage = async function(msg) {
       ].join('\n');
       // Auto-fix: rewrite synchronous .mainComponent to async getMainComponentAsync()
       execCode = execCode.replace(/\b(\w+)\.mainComponent\b(?!\s*Async)/g, '(await $1.getMainComponentAsync())');
+      // Auto-fix: rewrite synchronous getNodeById to async getNodeByIdAsync
+      execCode = execCode.replace(/figma\.getNodeById\(/g, 'await figma.getNodeByIdAsync(');
+      // Auto-fix: rewrite figma.currentPage = X to await figma.setCurrentPageAsync(X)
+      execCode = execCode.replace(/figma\.currentPage\s*=\s*([^;]+)/g, 'await figma.setCurrentPageAsync($1)');
       // Wrap in async IIFE so `return` statements and await work at top level
       var execResult = eval('(async function __exec__() {\n' + helpers + '\n' + execCode + '\n})()'); // jshint ignore:line
       // Always a Promise from the async IIFE

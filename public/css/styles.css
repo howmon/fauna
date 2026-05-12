@@ -3388,6 +3388,16 @@ webview {
 .scan-token-estimate .ti-coin { color: var(--accent); }
 .scan-token-saved { color: #4ade80; font-weight: 600; }
 
+/* Decomposition recommendation */
+.scan-decompose-section { border: 1px solid var(--accent); border-radius: 10px; }
+.decompose-arch { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.decompose-orch { font-size: 13px; color: var(--accent); display: flex; align-items: center; gap: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--fau-border); }
+.decompose-shared { font-size: 11.5px; color: var(--fau-text-dim); display: flex; align-items: center; gap: 6px; }
+.decompose-subs { display: flex; flex-direction: column; gap: 4px; padding-left: 12px; }
+.decompose-sub { font-size: 12.5px; display: flex; align-items: center; gap: 6px; padding: 4px 0; }
+.decompose-sub-desc { color: var(--fau-text-dim); }
+.decompose-sub-tokens { font-size: 10.5px; color: var(--fau-text-dim); opacity: 0.7; margin-left: auto; }
+
 /* ── Agent Builder ─────────────────────────────────────────────── */
 
 #agent-builder-panel {
