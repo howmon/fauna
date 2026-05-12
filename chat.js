@@ -677,26 +677,63 @@ async function streamResponse(conv) {
           }
         }
 
-        // Execute delegations and synthesize
+        // Execute delegations with iterative pipeline support
+        // After each synthesis round, check if the orchestrator emitted more [DELEGATE:] blocks
         try {
-          var delResult = await executeDelegations(delegations, conv, lastUserText);
-          if (delResult.synthesis) {
-            // Add synthesis as a new AI message
-            var synthMsg = { role: 'assistant', content: delResult.synthesis };
-            if (_currentAgentInfo) synthMsg.agentInfo = _currentAgentInfo;
-            synthMsg.isDelegationSynthesis = true;
-            conv.messages.push(synthMsg);
-            saveConversations();
+          var MAX_ROUNDS = 10;
+          var round = 0;
+          var currentDelegations = delegations;
+          var allResults = [];
+          while (currentDelegations.length > 0 && round < MAX_ROUNDS) {
+            round++;
+            conv._delegRound = round;
+            dbg('Delegation round ' + round + ': ' + currentDelegations.length + ' agent(s)', 'cmd');
+            var delResult = await executeDelegations(currentDelegations, conv, lastUserText);
+            if (delResult.results) allResults = allResults.concat(delResult.results);
 
-            var synthEl = createMessageEl('ai', _currentAgentInfo);
-            var synthBody = synthEl.querySelector('.msg-body');
-            synthBody.innerHTML = renderMarkdown(delResult.synthesis);
-            synthEl.classList.add('synthesis-message');
-            getConvInner(convId).appendChild(synthEl);
-            scrollBottom();
+            if (delResult.synthesis) {
+              // Check if synthesis contains more delegation blocks (pipeline continuation)
+              var nextDelegations = typeof parseDelegations === 'function' ? parseDelegations(delResult.synthesis) : [];
+              if (nextDelegations.length > 0) {
+                // More phases — show the synthesis as an intermediate message and continue
+                var interClean = typeof stripDelegationBlocks === 'function' ? stripDelegationBlocks(delResult.synthesis) : delResult.synthesis;
+                if (interClean.trim()) {
+                  var interMsg = { role: 'assistant', content: interClean };
+                  if (_currentAgentInfo) interMsg.agentInfo = _currentAgentInfo;
+                  interMsg.isDelegationSynthesis = true;
+                  conv.messages.push(interMsg);
+                  saveConversations();
+                  var interEl = createMessageEl('ai', _currentAgentInfo);
+                  var interBody = interEl.querySelector('.msg-body');
+                  interBody.innerHTML = renderMarkdown(interClean);
+                  interEl.classList.add('synthesis-message');
+                  getConvInner(convId).appendChild(interEl);
+                  forceScrollBottom();
+                }
+                currentDelegations = nextDelegations;
+                continue;
+              }
+              // No more delegations — this is the final synthesis
+              var synthMsg = { role: 'assistant', content: delResult.synthesis };
+              if (_currentAgentInfo) synthMsg.agentInfo = _currentAgentInfo;
+              synthMsg.isDelegationSynthesis = true;
+              conv.messages.push(synthMsg);
+              saveConversations();
+
+              var synthEl = createMessageEl('ai', _currentAgentInfo);
+              var synthBody = synthEl.querySelector('.msg-body');
+              synthBody.innerHTML = renderMarkdown(delResult.synthesis);
+              synthEl.classList.add('synthesis-message');
+              getConvInner(convId).appendChild(synthEl);
+              forceScrollBottom();
+            }
+            break;
           }
+          if (round >= MAX_ROUNDS) dbg('Delegation hit max rounds (' + MAX_ROUNDS + ')', 'warn');
+          delete conv._delegRound;
         } catch (delErr) {
           dbg('Delegation error: ' + delErr.message, 'err');
+          delete conv._delegRound;
         }
         setBusy(false);
       } else {

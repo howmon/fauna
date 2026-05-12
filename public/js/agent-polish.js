@@ -471,6 +471,7 @@ function _parseTaskStatus(text) {
  */
 async function executeDelegations(delegations, conv, originalMessage) {
   var results = [];
+  var roundLabel = conv._delegRound ? ' (round ' + conv._delegRound + ')' : '';
 
   // Show delegation progress in UI with per-agent status — anchored to the conversation's DOM
   var inner = typeof getConvInner === 'function' ? getConvInner(conv.id) : document.getElementById('messages-inner');
@@ -513,7 +514,7 @@ async function executeDelegations(delegations, conv, originalMessage) {
     '</div>';
 
   progressEl.innerHTML =
-    '<div class="delegation-progress-header"><i class="ti ti-hierarchy-3"></i> Orchestrating ' + delegations.length + ' agent(s)…</div>' +
+    '<div class="delegation-progress-header"><i class="ti ti-hierarchy-3"></i> Orchestrating ' + delegations.length + ' agent(s)' + roundLabel + '…</div>' +
     modePickerHtml +
     '<div class="delegation-agent-list">' + agentRows + '</div>';
   if (inner) { inner.appendChild(progressEl); scrollBottom(); }
@@ -627,7 +628,7 @@ async function executeDelegations(delegations, conv, originalMessage) {
     // Run one at a time; each agent receives prior agents' results as context
     for (var _s = 0; _s < delegations.length; _s++) {
       if (cancelled) break;
-      var priorCtx = results.map(function(r) { return '**' + (r.displayName || r.agentName) + '**: ' + r.response.substring(0, 800); }).join('\n\n');
+      var priorCtx = results.map(function(r) { return '**' + (r.displayName || r.agentName) + '**: ' + r.response.substring(0, 4000); }).join('\n\n');
       var res = await runOne(delegations[_s], _s, priorCtx || null);
       results.push(res);
     }
@@ -651,7 +652,7 @@ async function executeDelegations(delegations, conv, originalMessage) {
   // Update header to synthesis phase
   var headerEl = progressEl.querySelector('.delegation-progress-header');
   if (headerEl) {
-    headerEl.innerHTML = '<i class="ti ti-circle-check"></i> All ' + delegations.length + ' delegation(s) complete — synthesizing…';
+    headerEl.innerHTML = '<i class="ti ti-circle-check"></i> All ' + delegations.length + ' delegation(s) complete — <span class="delegation-spinner" style="display:inline-block;vertical-align:middle;margin:0 6px"></span>synthesizing…';
     headerEl.classList.add('complete');
   }
 
@@ -800,7 +801,7 @@ async function synthesizeDelegationResults(results, originalMessage, conv) {
         model: state.model,
         useFigmaMCP: state.figmaMCPEnabled || false,
         thinkingBudget: state.thinkingBudget || 'high',
-        systemPrompt: '## Active Agent: ' + activeAgent.displayName + ' (Orchestrator — Synthesis Phase)\n\n' + (activeAgent.systemPrompt || '') + '\n\nYou are synthesizing results from delegated agents. Provide a unified, coherent response. Do NOT use [DELEGATE] blocks in this response.'
+        systemPrompt: '## Active Agent: ' + activeAgent.displayName + ' (Orchestrator — Synthesis Phase)\n\n' + (activeAgent.systemPrompt || '') + '\n\nYou are synthesizing results from delegated agents. If your workflow has more phases to execute, output the next [DELEGATE:agents/name]task[/DELEGATE] block(s). If all phases are complete, provide a unified summary response with no [DELEGATE] blocks.'
       })
     });
     return await readDelegationStream(response);
