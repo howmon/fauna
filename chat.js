@@ -663,6 +663,10 @@ async function streamResponse(conv) {
       // Orchestrator delegation — check for [DELEGATE:...] blocks
       var delegations = typeof parseDelegations === 'function' ? parseDelegations(buffer) : [];
       if (delegations.length > 0 && typeof isOrchestratorActive === 'function' && isOrchestratorActive()) {
+        // Re-assert busy state during delegation (stream just ended and cleared _streaming)
+        conv._streaming = true;
+        if (isActive()) setBusy(true);
+
         // Strip delegation blocks from displayed content
         var cleanBuffer = stripDelegationBlocks(renderBuffer || buffer);
         bodyEl.innerHTML = cleanBuffer.trim() ? renderMarkdown(cleanBuffer) : '<span style="color:var(--text-muted)">Delegating tasks…</span>';
@@ -737,7 +741,10 @@ async function streamResponse(conv) {
           dbg('Delegation error: ' + delErr.message, 'err');
           delete conv._delegRound;
         }
+        conv._streaming = false;
+        window._delegStop = null;
         setBusy(false);
+        renderConvList();
       } else {
         bodyEl.innerHTML = renderBuffer ? renderMarkdown(renderBuffer) : '<span style="color:var(--text-muted)">No response.</span>';
 
@@ -849,6 +856,12 @@ function showContextSummary(convId) {
 
 function stopGeneration() {
   var conv = getConv(state.currentId);
-  if (conv && conv._abortController) conv._abortController.abort();
+  if (!conv) return;
+  conv._cancelled = true;
+  if (conv._abortController) conv._abortController.abort();
+  // Also stop any active delegation
+  if (typeof window._delegStop === 'function') window._delegStop();
+  conv._streaming = false;
+  conv._abortController = null;
   showToast('Generation stopped');
 }

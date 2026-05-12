@@ -363,7 +363,7 @@ wss.on('connection', ws => {
 
     // ── Controller execute-code: forward to active Figma plugin ───────────
     if (msg.type === 'execute-code' && conn && conn.isController) {
-      sendToFigma({ type: 'execute-code', code: msg.code }, 30000)
+      sendToFigma({ type: 'execute-code', code: msg.code }, 30000, msg.fileKey || null)
         .then(result => ws.send(JSON.stringify({ type: 'execute-result', id: msg.id, result: result.result, error: result.error })))
         .catch(err  => ws.send(JSON.stringify({ type: 'execute-result', id: msg.id, error: err.message })));
       return;

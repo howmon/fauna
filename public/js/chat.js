@@ -428,24 +428,20 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
     chosenMode = 'parallel';
   }
 
-  // ── Setup abort + show stop button ───────────────────────────────────────
+  // ── Setup abort ───────────────────────────────────────────────────────────
   var abortCtrl = new AbortController();
   var cancelled = false;
-  var stopId = 'mc-stop-' + mcId;
   var headerEl = document.getElementById('mc-header-' + mcId);
 
   var pickerEl = document.getElementById('mc-mode-picker-' + mcId);
   if (pickerEl) {
     pickerEl.innerHTML =
-      '<span class="deleg-mode-chosen"><i class="ti ti-' + (chosenMode === 'sequential' ? 'arrow-down' : 'bolt') + '"></i> ' + (chosenMode === 'sequential' ? 'Sequential' : 'Parallel') + '</span>' +
-      '<button class="deleg-stop-btn" id="' + stopId + '" onclick="var _f=window[\'_mcStop_\'+\'' + mcId + '\'];_f&&_f()"><i class="ti ti-player-stop-filled"></i> Stop all</button>';
+      '<span class="deleg-mode-chosen"><i class="ti ti-' + (chosenMode === 'sequential' ? 'arrow-down' : 'bolt') + '"></i> ' + (chosenMode === 'sequential' ? 'Sequential' : 'Parallel') + '</span>';
   }
 
   window['_mcStop_' + mcId] = function() {
     cancelled = true;
     abortCtrl.abort();
-    var btn = document.getElementById(stopId);
-    if (btn) btn.disabled = true;
     agentNames.forEach(function(_, _i) {
       var _r = document.getElementById('mc-row-' + _i + '-' + mcId);
       if (_r && (_r.classList.contains('working') || _r.classList.contains('pending'))) {
@@ -461,6 +457,8 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
     if (state.currentId === conv.id) setBusy(false);
     renderConvList();
   };
+  // Expose to main stop button
+  window._delegStop = window['_mcStop_' + mcId];
 
   // ── Mark rows as pending (sequential) or working (parallel) ──────────────
   agentNames.forEach(function(_, i) {
@@ -842,6 +840,10 @@ async function streamResponse(conv) {
       // Orchestrator delegation — check for [DELEGATE:...] blocks
       var delegations = typeof parseDelegations === 'function' ? parseDelegations(buffer) : [];
       if (delegations.length > 0 && typeof isOrchestratorActive === 'function' && isOrchestratorActive()) {
+        // Re-assert busy state during delegation (stream just ended and cleared _streaming)
+        conv._streaming = true;
+        if (isActive()) setBusy(true);
+
         // Strip delegation blocks from displayed content
         var cleanBuffer = stripDelegationBlocks(renderBuffer || buffer);
         bodyEl.innerHTML = cleanBuffer.trim() ? renderMarkdown(cleanBuffer) : '<span style="color:var(--fau-text-muted)">Delegating tasks…</span>';
@@ -916,7 +918,10 @@ async function streamResponse(conv) {
           dbg('Delegation error: ' + delErr.message, 'err');
           delete conv._delegRound;
         }
+        conv._streaming = false;
+        window._delegStop = null;
         setBusy(false);
+        renderConvList();
       } else {
         bodyEl.innerHTML = renderBuffer ? renderMarkdown(renderBuffer) : '<span style="color:var(--fau-text-muted)">No response.</span>';
         if (typeof initMermaidInContainer === 'function') initMermaidInContainer(bodyEl);
@@ -1085,6 +1090,8 @@ function stopGeneration() {
   if (!conv) return;
   conv._cancelled = true;
   if (conv._abortController) conv._abortController.abort();
+  // Also stop any active delegation
+  if (typeof window._delegStop === 'function') window._delegStop();
   conv._streaming = false;
   conv._abortController = null;
   setBusy(false);

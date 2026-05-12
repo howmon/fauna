@@ -555,19 +555,16 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
   var abortCtrl = new AbortController();
   var cancelled = false;
 
-  // Update picker to show chosen mode + stop button, mark rows as working
+  // Update picker to show chosen mode (stop is handled by the main input stop button)
   var pickerEl = document.getElementById('deleg-mode-picker-' + uid);
   if (pickerEl) {
-    var stopId = 'deleg-stop-' + uid;
     pickerEl.innerHTML =
-      '<span class="deleg-mode-chosen"><i class="ti ti-' + (chosenMode === 'sequential' ? 'arrow-down' : 'bolt') + '"></i> ' + (chosenMode === 'sequential' ? 'Sequential' : 'Parallel') + '</span>' +
-      '<button class="deleg-stop-btn" id="' + stopId + '" onclick="window._delegStop && window._delegStop()"><i class="ti ti-player-stop-filled"></i> Stop</button>';
+      '<span class="deleg-mode-chosen"><i class="ti ti-' + (chosenMode === 'sequential' ? 'arrow-down' : 'bolt') + '"></i> ' + (chosenMode === 'sequential' ? 'Sequential' : 'Parallel') + '</span>';
   }
+  // Expose _delegStop so the main stop button (stopGeneration) can cancel delegation
   window._delegStop = function() {
     cancelled = true;
     abortCtrl.abort();
-    var stopBtn = document.getElementById(stopId);
-    if (stopBtn) stopBtn.disabled = true;
     // Mark all still-working rows as cancelled
     for (var _c = 0; _c < delegations.length; _c++) {
       var _row2 = document.getElementById('deleg-row-' + _c + '-' + uid);

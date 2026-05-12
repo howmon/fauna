@@ -1379,12 +1379,19 @@ app.post('/api/chat', async (req, res) => {
     // Build system prompt — append project context, facts memory, context summary and browser context
     // For delegation (sub-agent) calls, skip heavy shared context to reduce token cost
     const factsCtx = isDelegation ? '' : factsForSystemPrompt(20);
+    // Inject connected Figma file info so AI can target the right document
+    let figmaFilesCtx = '';
+    if (useFigmaMCP && figmaFiles.size > 0) {
+      const entries = [...figmaFiles.values()].map(f => `- "${f.fileName}" (fileKey: ${f.fileKey}, page: ${f.currentPage})`).join('\n');
+      figmaFilesCtx = `\n## Connected Figma Documents\nThe following Figma documents are currently open with the plugin running:\n${entries}\nWhen using figma_execute, pass the fileKey parameter to target a specific document. If omitted, the most recently active document is used.`;
+    }
     const fullSystem = [
       systemPrompt.trim(),
       isDelegation ? '' : projectCtx,
       factsCtx,
       isDelegation ? '' : BROWSER_BUILD_CONTEXT,
-      contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : ''
+      contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '',
+      figmaFilesCtx
     ].filter(Boolean).join('\n');
     if (fullSystem) allMessages.push({ role: 'system', content: fullSystem });
 
@@ -2548,6 +2555,7 @@ app.get('/api/figma/mcp-logs', (req, res) => {
 
 let figmaWs      = null;
 let figmaState   = { connected: false, fileInfo: null, activeSystem: null, pendingReconnect: null };
+const figmaFiles   = new Map(); // fileKey → { fileName, fileKey, currentPage, currentPageId, timestamp }
 const figmaPending = new Map(); // id → { resolve, reject, timer }
 
 function readFigmaRules() {
@@ -2577,6 +2585,14 @@ function figmaConnect() {
 
       if (msg.type === 'FILE_INFO') {
         figmaState.fileInfo = { fileName: msg.fileName, fileKey: msg.fileKey, currentPage: msg.currentPage, currentPageId: msg.currentPageId };
+        // Track all connected Figma files
+        if (msg.fileKey) {
+          figmaFiles.set(msg.fileKey, { fileName: msg.fileName, fileKey: msg.fileKey, currentPage: msg.currentPage, currentPageId: msg.currentPageId, timestamp: Date.now() });
+        }
+      }
+      // Plugin disconnected — remove from tracked files
+      if (msg.type === 'plugin-disconnected' && msg.fileKey) {
+        figmaFiles.delete(msg.fileKey);
       }
       if (msg.type === 'active-system') {
         figmaState.activeSystem = { id: msg.id, name: msg.name };
@@ -2591,6 +2607,7 @@ function figmaConnect() {
     figmaWs.on('close', () => {
       figmaState.connected = false;
       figmaState.fileInfo  = null;
+      figmaFiles.clear();
       // Immediately reject all in-flight requests so they don't hang for 30 s
       for (const [id, { reject, timer }] of figmaPending) {
         clearTimeout(timer);
@@ -2666,11 +2683,12 @@ class FigmaMCPClient {
       type: 'function',
       function: {
         name: 'figma_execute',
-        description: 'Execute Figma Plugin API JavaScript code to CREATE, MODIFY, or DELETE nodes in the open Figma file. Use this instead of the REST API — no PAT required. The code runs inside the Figma plugin context and has full access to the figma object (figma.currentPage, figma.createFrame, figma.createText, etc). IMPORTANT: when accessing .componentProperties or .componentPropertyDefinitions on any node, always wrap in try/catch (e.g. `let props; try { props = node.componentProperties || {}; } catch(_) { props = {}; }`) to avoid "Component set for node has existing errors" on broken components.',
+        description: 'Execute Figma Plugin API JavaScript code to CREATE, MODIFY, or DELETE nodes in the open Figma file. Use this instead of the REST API — no PAT required. The code runs inside the Figma plugin context and has full access to the figma object (figma.currentPage, figma.createFrame, figma.createText, etc). IMPORTANT: when accessing .componentProperties or .componentPropertyDefinitions on any node, always wrap in try/catch (e.g. `let props; try { props = node.componentProperties || {}; } catch(_) { props = {}; }`) to avoid "Component set for node has existing errors" on broken components. When multiple Figma files are open, use the fileKey parameter to target a specific file.',
         parameters: {
           type: 'object',
           properties: {
-            code: { type: 'string', description: 'Valid Figma Plugin API JavaScript to execute. Must be synchronous or use async/await. Return a value with `return` to get output.' }
+            code: { type: 'string', description: 'Valid Figma Plugin API JavaScript to execute. Must be synchronous or use async/await. Return a value with `return` to get output.' },
+            fileKey: { type: 'string', description: 'Optional Figma file key to target. When omitted, targets the most recently active file. Use this when multiple Figma files are open to avoid cross-document mixups.' }
           },
           required: ['code']
         }
@@ -2702,7 +2720,8 @@ class FigmaMCPClient {
     // figma_execute is a local tool — route through the port-3335 plugin relay
     if (name === 'figma_execute') {
       let code = args.code;
-      let result = await figmaSend({ type: 'execute-code', code });
+      const targetFileKey = args.fileKey || null;
+      let result = await figmaSend({ type: 'execute-code', code }, 30000, targetFileKey);
 
       // Auto-recover from unloaded font errors: parse the fonts out of the error,
       // prepend loadFontAsync calls, and retry once.
@@ -2717,7 +2736,7 @@ class FigmaMCPClient {
         }
         if (fontCalls.length) {
           const wrappedCode = '// auto-load missing fonts\n' + fontCalls.join('\n') + '\n\n' + code;
-          result = await figmaSend({ type: 'execute-code', code: wrappedCode });
+          result = await figmaSend({ type: 'execute-code', code: wrappedCode }, 30000, targetFileKey);
         }
       }
 
@@ -3199,7 +3218,7 @@ setTimeout(() => {
   startCustomMcpAutoDetection();
 }, 500);  // slight delay so the main server is fully up first
 
-function figmaSend(command, timeoutMs = 30000) {
+function figmaSend(command, timeoutMs = 30000, targetFileKey = null) {
   return new Promise((resolve, reject) => {
     if (!figmaWs || figmaWs.readyState !== 1) {
       return reject(new Error(
@@ -3211,7 +3230,9 @@ function figmaSend(command, timeoutMs = 30000) {
     const id    = `ctrl-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const timer = setTimeout(() => { figmaPending.delete(id); reject(new Error('Figma execution timed out — the operation may have been too large or the plugin became unresponsive')); }, timeoutMs);
     figmaPending.set(id, { resolve, reject, timer });
-    figmaWs.send(JSON.stringify({ ...command, id }));
+    const payload = { ...command, id };
+    if (targetFileKey) payload.fileKey = targetFileKey;
+    figmaWs.send(JSON.stringify(payload));
   });
 }
 
@@ -3329,6 +3350,7 @@ app.get('/api/figma/status', (req, res) => {
     relayConnected: figmaState.connected,
     figmaConnected,
     fileInfo:      figmaState.fileInfo,
+    connectedFiles: [...figmaFiles.values()],
     activeSystem:  figmaState.activeSystem,
     mcpRunning:    isMcpRunning(),
     mcpPid:        mcpProcess?.pid ?? null,
@@ -3342,10 +3364,10 @@ app.post('/api/figma/connect', (req, res) => {
 });
 
 app.post('/api/figma/execute', async (req, res) => {
-  const { code, timeout } = req.body;
+  const { code, timeout, fileKey } = req.body;
   if (!code) return res.status(400).json({ error: 'code required' });
   try {
-    const result = await figmaSend({ type: 'execute-code', code }, timeout || 15000);
+    const result = await figmaSend({ type: 'execute-code', code }, timeout || 15000, fileKey || null);
     res.json({ ok: true, result: result.result, error: result.error });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
