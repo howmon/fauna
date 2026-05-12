@@ -5135,13 +5135,14 @@ app.post('/api/agent-builder/rubric-audit', async (req, res) => {
   const auditSystemMsg = `You are an expert AI prompt quality auditor. Evaluate the given agent system prompt against these quality criteria and return ONLY valid JSON with no markdown fencing.
 
 Return a JSON object with:
-- "summary": string — one or two sentence overall assessment
+- "summary": string — one or two sentence overall assessment. Include approximate token savings if the improved prompt is shorter (e.g. "~320 tokens saved").
 - "findings": array of issues found (empty array if the prompt passes all checks). Each finding has:
-  - "id": short snake_case identifier (e.g. "missing_role", "vague_output_format")
+  - "id": short snake_case identifier (e.g. "missing_role", "vague_output_format", "verbose_phrasing")
   - "label": short human-readable label (5-8 words)
   - "detail": one or two sentences explaining the issue and how to fix it
   - "severity": "high" | "medium" | "low"
-- "improvedPrompt": string — a COMPLETE rewritten version of the system prompt that addresses all findings. You MUST include the ENTIRE prompt text — never truncate, abbreviate, or use placeholders like "[...rest of prompt...]". Omit this field (or set to null) only if there are no findings.
+- "tokenEstimate": { "original": number, "improved": number } — rough token counts (chars/4) for original vs improved prompt
+- "improvedPrompt": string — a COMPLETE rewritten version of the system prompt that addresses all findings. You MUST include the ENTIRE prompt text — never truncate, abbreviate, or use placeholders like "[...rest of prompt...]". Actively compress verbose phrasing: use imperative voice, terse bullets, remove filler words, collapse redundant sentences — while keeping every behavioral instruction intact. Omit this field (or set to null) only if there are no findings.
 
 Quality criteria to check:
 1. Role clarity (high) — Is the agent's role and purpose clearly defined up front?
@@ -5150,9 +5151,10 @@ Quality criteria to check:
 4. Safety & scope limits (medium) — Does the prompt define what the agent should NOT do?
 5. Edge case handling (low) — Are common edge cases or failure modes addressed?
 6. Conciseness (low) — Is the prompt free of repetitive or contradictory content?
-7. Tone & persona consistency (low) — Is the agent persona consistent throughout?`;
+7. Tone & persona consistency (low) — Is the agent persona consistent throughout?
+8. Token efficiency (medium) — Is the prompt unnecessarily verbose? Flag wordy phrasing, redundant restatements, over-explained obvious points, or filler sentences that inflate token count without adding behavioral clarity. The improved prompt should preserve 100% of the original intent while using significantly fewer tokens. Prefer terse bullet points, imperative voice, and compressed phrasing over full prose paragraphs.`;
 
-  const userMsg = `Agent name: ${displayName || 'Unnamed'}\nDescription: ${description || 'N/A'}\n\nSystem prompt:\n${systemPrompt.trim()}`;
+  const userMsg = `Agent name: ${displayName || 'Unnamed'}\nDescription: ${description || 'N/A'}\nOriginal token estimate: ~${Math.ceil(systemPrompt.trim().length / 4)}\n\nSystem prompt:\n${systemPrompt.trim()}`;
   const messages = [{ role: 'system', content: auditSystemMsg }, { role: 'user', content: userMsg }];
 
   // Try with user's current model first, then fallback models

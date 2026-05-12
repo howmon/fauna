@@ -1016,6 +1016,10 @@ function renderStep6Scan() {
         '<button class="builder-btn small" onclick="builderRunRubricAudit()" style="margin-left:auto"><i class="ti ti-refresh"></i> Re-analyse</button>' +
       '</div>' +
       (audit.summary ? '<div class="builder-hint-block">' + escHtml(audit.summary) + '</div>' : '') +
+      (audit.tokenEstimate ? '<div class="scan-token-estimate">' +
+        '<i class="ti ti-coin"></i> Tokens: <strong>' + audit.tokenEstimate.original + '</strong> → <strong>' + audit.tokenEstimate.improved + '</strong>' +
+        (audit.tokenEstimate.original > audit.tokenEstimate.improved ? ' <span class="scan-token-saved">(−' + (audit.tokenEstimate.original - audit.tokenEstimate.improved) + ' saved, ' + Math.round((1 - audit.tokenEstimate.improved / audit.tokenEstimate.original) * 100) + '% leaner)</span>' : '') +
+      '</div>' : '') +
       (auditFindings || '<div class="scan-clean"><i class="ti ti-circle-check" style="color:#22c55e"></i> Prompt passes all quality checks.</div>') +
       (audit.improvedPrompt ? (
         '<div class="scan-rubric-improved">' +
