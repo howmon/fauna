@@ -1082,9 +1082,10 @@ async function builderRunRubricAudit() {
     });
     var audit = await r.json();
     builderState.data.rubricAudit = audit.error ? null : audit;
-    if (audit.error) showToast('Rubric audit failed');
-  } catch (_) {
+    if (audit.error) showToast('Rubric audit failed: ' + audit.error);
+  } catch (e) {
     builderState.data.rubricAudit = null;
+    showToast('Rubric audit error: ' + (e.message || 'network error'));
   }
   builderState._rubricLoading = false;
   renderBuilderPanel();

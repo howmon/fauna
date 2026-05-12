@@ -928,8 +928,25 @@ figma.ui.onmessage = async function(msg) {
     }
 
     try {
+      // Inject safe helpers for common pitfalls
+      var helpers = [
+        'function safeGetNode(id) { try { return figma.getNodeById(id); } catch(e) { console.warn("safeGetNode: node " + id + " not found"); return null; } }',
+        'function safeFindAll(parent, predicate) {',
+        '  var results = [];',
+        '  try {',
+        '    parent.findAll(function(n) { try { if (predicate(n)) results.push(n); } catch(e) {} return false; });',
+        '  } catch(e) { console.warn("safeFindAll error: " + e.message); }',
+        '  return results;',
+        '}',
+        'async function safeGetMainComponent(node) {',
+        '  if (!node || node.type !== "INSTANCE") return null;',
+        '  try { return await node.getMainComponentAsync(); } catch(e) { console.warn("safeGetMainComponent error: " + e.message); return null; }',
+        '}',
+      ].join('\n');
+      // Auto-fix: rewrite synchronous .mainComponent to async getMainComponentAsync()
+      execCode = execCode.replace(/\b(\w+)\.mainComponent\b(?!\s*Async)/g, '(await $1.getMainComponentAsync())');
       // Wrap in async IIFE so `return` statements and await work at top level
-      var execResult = eval('(async function __exec__() {\n' + execCode + '\n})()'); // jshint ignore:line
+      var execResult = eval('(async function __exec__() {\n' + helpers + '\n' + execCode + '\n})()'); // jshint ignore:line
       // Always a Promise from the async IIFE
       execResult.then(function(val) {
         figma.ui.postMessage({ type: 'execute-result', id: execId, success: true, result: safeSerialize(val) });

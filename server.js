@@ -200,6 +200,60 @@ app.get('/api/ext/status', (_req, res) => {
   res.json({ ok: true, browsers: extStatusList() });
 });
 
+// FaunaMCP relay status — checks if FaunaBrowserMCP is reachable
+app.get('/api/faunamcp/status', async (_req, res) => {
+  let connected = false;
+  let toolCount = null;
+  let url = 'http://localhost:3341';
+  let figmaRelayAvailable = false;
+  let appInstalled = false;
+
+  // Check if FaunaMCP HTTP server is reachable
+  try {
+    const healthResp = await fetch('http://localhost:3341/health', {
+      method: 'GET',
+      signal: AbortSignal.timeout(2000)
+    });
+    if (healthResp.ok) {
+      connected = true;
+      try {
+        const data = await healthResp.json();
+        if (data.toolCount != null) toolCount = data.toolCount;
+      } catch (_) {}
+    }
+  } catch (_) {}
+
+  // Check if Figma relay (port 3335) is reachable — use the existing figmaState
+  figmaRelayAvailable = figmaState.connected;
+
+  // Check if the faunaMCP-main app is installed (look for the directory)
+  try {
+    const mcpDir = new URL('./faunaMCP-main', import.meta.url).pathname;
+    appInstalled = fs.existsSync(mcpDir);
+  } catch (_) {}
+
+  // Count tools from the auto-detected custom MCP server if registered
+  if (connected && toolCount == null) {
+    const servers = readCustomMcpServers();
+    const autoEntry = servers.find(s => s.id === 'fauna-browser-mcp-auto');
+    const client = autoEntry ? customMcpClients.get(autoEntry.id) : null;
+    if (client) {
+      try {
+        const tools = await client.getTools();
+        toolCount = tools.length;
+      } catch (_) {}
+    }
+  }
+
+  res.json({
+    connected,
+    url: connected ? url : undefined,
+    toolCount,
+    figmaRelayAvailable,
+    install: { appInstalled }
+  });
+});
+
 app.get('/api/ext/events', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -4985,17 +5039,8 @@ app.post('/api/agent-builder/scan', (req, res) => {
 app.post('/api/agent-builder/rubric-audit', async (req, res) => {
   const { systemPrompt, displayName, description, model: reqModel } = req.body;
   if (!systemPrompt || !systemPrompt.trim()) return res.status(400).json({ error: 'systemPrompt required' });
-  // Use the model the client is using; fall back to gpt-4.1 which is reliably available on the Copilot endpoint
-  const model = reqModel || 'gpt-4.1';
-  try {
-    const client = getCopilotClient();
-    const response = await client.chat.completions.create({
-      model,
-      max_tokens: 2000,
-      messages: [
-        {
-          role: 'system',
-          content: `You are an expert AI prompt quality auditor. Evaluate the given agent system prompt against these quality criteria and return ONLY valid JSON with no markdown fencing.
+
+  const auditSystemMsg = `You are an expert AI prompt quality auditor. Evaluate the given agent system prompt against these quality criteria and return ONLY valid JSON with no markdown fencing.
 
 Return a JSON object with:
 - "summary": string — one or two sentence overall assessment
@@ -5013,22 +5058,39 @@ Quality criteria to check:
 4. Safety & scope limits (medium) — Does the prompt define what the agent should NOT do?
 5. Edge case handling (low) — Are common edge cases or failure modes addressed?
 6. Conciseness (low) — Is the prompt free of repetitive or contradictory content?
-7. Tone & persona consistency (low) — Is the agent persona consistent throughout?`
-        },
-        {
-          role: 'user',
-          content: `Agent name: ${displayName || 'Unnamed'}\nDescription: ${description || 'N/A'}\n\nSystem prompt:\n${systemPrompt.trim()}`
-        }
-      ]
-    });
-    const text = response.choices?.[0]?.message?.content || '';
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return res.status(500).json({ error: 'Failed to parse audit response' });
-    const audit = JSON.parse(jsonMatch[0]);
-    res.json(audit);
-  } catch (e) {
-    res.status(500).json({ error: 'Rubric audit failed: ' + e.message });
+7. Tone & persona consistency (low) — Is the agent persona consistent throughout?`;
+
+  const userMsg = `Agent name: ${displayName || 'Unnamed'}\nDescription: ${description || 'N/A'}\n\nSystem prompt:\n${systemPrompt.trim()}`;
+  const messages = [{ role: 'system', content: auditSystemMsg }, { role: 'user', content: userMsg }];
+
+  // Try with user's current model first, then fallback models
+  const modelsToTry = [reqModel, 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o'].filter(Boolean);
+  const client = getCopilotClient();
+  let lastError = null;
+
+  for (const model of modelsToTry) {
+    try {
+      console.log('[rubric-audit] trying model:', model);
+      const response = await client.chat.completions.create({
+        model,
+        max_tokens: 2000,
+        stream: false,
+        messages
+      });
+      const text = response.choices?.[0]?.message?.content || '';
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        lastError = new Error('Failed to parse audit response from ' + model);
+        continue;
+      }
+      const audit = JSON.parse(jsonMatch[0]);
+      return res.json(audit);
+    } catch (e) {
+      console.warn('[rubric-audit] model', model, 'failed:', e.message);
+      lastError = e;
+    }
   }
+  res.status(500).json({ error: 'Rubric audit failed: ' + (lastError?.message || 'all models failed') });
 });
 
 // Save agent from builder

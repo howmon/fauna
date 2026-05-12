@@ -940,7 +940,15 @@ figma.ui.onmessage = async function(msg) {
         '  } catch(e) { console.warn("safeFindAll error: " + e.message); }',
         '  return results;',
         '}',
+        // safeGetMainComponent: async wrapper — works with dynamic-page documentAccess
+        'async function safeGetMainComponent(node) {',
+        '  if (!node || node.type !== "INSTANCE") return null;',
+        '  try { return await node.getMainComponentAsync(); } catch(e) { console.warn("safeGetMainComponent error: " + e.message); return null; }',
+        '}',
       ].join('\n');
+      // Auto-fix: rewrite synchronous .mainComponent to async getMainComponentAsync()
+      // This prevents "Cannot call with documentAccess: dynamic-page" errors
+      execCode = execCode.replace(/\b(\w+)\.mainComponent\b(?!\s*Async)/g, '(await $1.getMainComponentAsync())');
       // Wrap in async IIFE so `return` statements and await work at top level
       var execResult = eval('(async function __exec__() {\n' + helpers + '\n' + execCode + '\n})()'); // jshint ignore:line
       // Always a Promise from the async IIFE
