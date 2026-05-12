@@ -4596,14 +4596,14 @@ The JSON must have these fields:
 - "category": one of "productivity","development","design","research","writing","data","other"
 - "icon": one of "ti-robot","ti-code","ti-search","ti-pencil","ti-vector-triangle","ti-database","ti-chart-bar","ti-terminal-2","ti-world-www","ti-shield-check","ti-brain","ti-bolt","ti-bug","ti-git-merge","ti-palette","ti-mail","ti-file-analytics","ti-api","ti-cpu","ti-cloud","ti-package","ti-wand"
 - "orchestrator": boolean — set true if the agent's purpose involves coordinating multiple specialized sub-agents (e.g. "generate a report using 3 agents", "multi-step pipeline", "spec writer with sections"). Set false for single-purpose agents.
-- "systemPrompt": string (detailed system prompt). For orchestrators: 100-200 words, dispatch-only — must say "output ONLY [DELEGATE:agents/sub-agent-name] blocks", describe inputs to resolve, and list the sub-agents in a dispatch table. For regular agents: 200-800 words defining role, capabilities, workflow, output format.
+- "systemPrompt": string (detailed system prompt). For orchestrators: 100-200 words, dispatch-only — must output ONLY [DELEGATE:agents/sub-agent-name]task[/DELEGATE] blocks, describe inputs to resolve, and list the sub-agents in a dispatch table. For pipelines where step N depends on step N-1, emit ONE block at a time — the system loops automatically, returning results before the next delegation. For parallel work, emit all blocks at once. For regular agents: 200-800 words defining role, capabilities, workflow, output format.
 - "shared": string — only for orchestrators (empty string otherwise). Shared infrastructure prompt appended to every sub-agent automatically. Put common facts, APIs, component keys, helpers, or conventions here so sub-agents don't repeat them.
 - "subAgents": array — only for orchestrators (empty array otherwise). Each sub-agent has:
   - "name": string (lowercase slug, e.g. "section-overview")
   - "displayName": string (human-friendly, e.g. "Overview Section")
   - "description": string (one sentence)
   - "icon": string (ti-* icon from the list above)
-  - "systemPrompt": string (focused prompt for this sub-agent's specific responsibility, 100-300 words. It receives shared context automatically — don't repeat shared infrastructure here.)
+  - "systemPrompt": string (focused prompt for this sub-agent's specific responsibility, 100-300 words. It receives shared context automatically — don't repeat shared infrastructure here. In sequential mode, sub-agents automatically receive prior agents' results as context.)
 - "permissions": object with:
   - "shell": boolean
   - "browser": boolean
@@ -4623,14 +4623,13 @@ The JSON must have these fields:
 ORCHESTRATOR EXAMPLE — if the user asks for a "report writer with a research agent and a writing agent":
 {
   "orchestrator": true,
-  "systemPrompt": "You coordinate report generation. Resolve the topic, then output ONLY [DELEGATE:] blocks.\\n\\n## Dispatch\\n[DELEGATE:agents/researcher] → gather facts\\n[DELEGATE:agents/writer] → write the report",
+  "systemPrompt": "You coordinate report generation. Resolve the topic, then output ONLY [DELEGATE:] blocks.\\n\\n## Dispatch\\n[DELEGATE:agents/researcher]Research the topic and return key facts, sources, and a summary[/DELEGATE]\\n[DELEGATE:agents/writer]Write a polished report from the research findings[/DELEGATE]",
   "shared": "Output reports in Markdown. Use headers ##, bullet points, and concise language.",
   "subAgents": [
     { "name": "researcher", "displayName": "Researcher", "icon": "ti-search", "description": "Finds and summarizes facts on a topic.", "systemPrompt": "You research a given topic and return structured findings: key facts, sources, and a short summary." },
     { "name": "writer", "displayName": "Writer", "icon": "ti-pencil", "description": "Writes the final report from research.", "systemPrompt": "You receive research findings and write a polished report. Prior agent results are in your context." }
   ],
-  "tools": [],
-  "subAgents": [...]
+  "tools": []
 }
 
 Set permissions conservatively — only enable what the agent truly needs.` },
@@ -4839,8 +4838,8 @@ Return ONLY valid JSON with no markdown fencing. The JSON object must have:
   - "displayName": string
   - "name": string (slug)
   - "description": string
-  - "systemPrompt": string — short dispatch-only prompt (100-200 words). Must reference sub-agents by name using [DELEGATE:agents/NAME] syntax.
-- "shared": string — common context/facts/conventions shared across all sub-agents (extract anything repeated or universally needed). This is automatically appended to every sub-agent.
+  - "systemPrompt": string — short dispatch-only prompt (100-200 words). Must use [DELEGATE:agents/NAME]task description[/DELEGATE] syntax for each sub-agent. For parallel work, emit all blocks at once. For pipelines where step N needs step N-1 output, emit ONE block at a time — the system loops automatically, returning results before requesting the next delegation.
+- "shared": string — common context/facts/conventions shared across all sub-agents (extract anything repeated or universally needed). This is automatically appended to every sub-agent's prompt.
 - "subAgents": array of 2-5 sub-agents, each with:
   - "name": string (slug)
   - "displayName": string (2-4 words)
@@ -4854,7 +4853,9 @@ Rules:
 - The shared section should contain facts/context that 2+ sub-agents need — don't duplicate across sub-agents
 - Each sub-agent prompt should be self-contained for its responsibility (it gets shared context automatically)
 - Preserve 100% of the original prompt's behavioral intent — nothing should be lost in the split
-- The orchestrator prompt should be a pure dispatcher — it decides which sub-agent(s) to invoke based on the user's request`;
+- The orchestrator prompt should be a pure dispatcher — it decides which sub-agent(s) to invoke based on the user's request
+- In sequential mode each sub-agent automatically receives prior agents' results as context — sub-agent prompts can reference "prior agent results" without you wiring it manually
+- The orchestrator systemPrompt MUST include a dispatch table showing which sub-agent handles which responsibility, using the format: [DELEGATE:agents/name]task[/DELEGATE]`;
 
   const userMsg = `Agent: ${displayName || agentName || 'Unnamed'}\nDescription: ${description || 'N/A'}\n\nFull system prompt (${tokenEst} tokens):\n${systemPrompt.trim()}`;
   const messages = [{ role: 'system', content: decomposeMsg }, { role: 'user', content: userMsg }];
