@@ -49,7 +49,10 @@
     "dist:all": "electron-builder --mac --win",
     "predist:all": "npm run prebuild",
     "postdist:mac": "npm rebuild keytar --arch=arm64",
-    "test": "node --test tests/instruction-discovery.test.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:legacy": "node --test tests/instruction-discovery.test.js",
     "version:show": "node scripts/version.cjs",
     "version:patch": "node scripts/version.cjs patch",
     "version:minor": "node scripts/version.cjs minor",
@@ -75,8 +78,10 @@
     "ws": "^8.19.0"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.6",
     "electron": "^41.0.3",
-    "electron-builder": "^26.8.1"
+    "electron-builder": "^26.8.1",
+    "vitest": "^4.1.6"
   },
   "build": {
     "appId": "com.fauna.app",
@@ -165,6 +170,12 @@
       "design-prompts.js",
       "afterPack.cjs",
       "agent-*.js",
+      "memory-store.js",
+      "self-tools.js",
+      "heartbeat.js",
+      "workflow-manager.js",
+      "permission-guard.js",
+      "teams-bridge.js",
       "lib/**",
       "public/**",
       "assets/**",

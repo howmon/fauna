@@ -31,6 +31,23 @@ import {
   listFacts, getFact, runDecay, formatForSystemPrompt as factsForSystemPrompt,
   exportFacts, importFacts, getStats as factsGetStats,
 } from './memory-store.js';
+import { SELF_TOOL_DEFS, executeSelfTool, isSelfTool } from './self-tools.js';
+import {
+  getSettings as hbGetSettings, updateSettings as hbUpdateSettings,
+  getLog as hbGetLog, clearLog as hbClearLog,
+  runHeartbeat, startHeartbeat, stopHeartbeat,
+} from './heartbeat.js';
+import {
+  createWorkflow, getWorkflow, getAllWorkflows, updateWorkflow, deleteWorkflow,
+  getHistory as wfGetHistory, runWorkflow, startWorkflowTimer, stopWorkflowTimer, parseSchedule,
+} from './workflow-manager.js';
+import {
+  isCommandSafe, addAutoAllow, getAutoAllowList, removeAutoAllow, clearAutoAllow,
+  checkCommandPermission, explainCommand,
+} from './permission-guard.js';
+import {
+  getTeamsSettings, updateTeamsSettings, startTeamsBridge, stopTeamsBridge, testConnection as teamsTestConnection,
+} from './teams-bridge.js';
 import QRCode     from 'qrcode';
 import { marked }  from 'marked';
 
@@ -69,6 +86,9 @@ const IS_WIN = process.platform === 'win32';
 const PATH_SEP = IS_WIN ? ';' : ':';
 const FAUNA_CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
 const CONVERSATIONS_FILE = path.join(FAUNA_CONFIG_DIR, 'conversations.json');
+
+// Module-level AI caller — set during startServer(), used by permission guard etc.
+let internalAICaller = async () => '';
 
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ limit: '25mb', extended: false }));
@@ -1827,52 +1847,32 @@ app.post('/api/chat', async (req, res) => {
       console.log(`[chat] Agent "${safeAgentName}" active — ${agentToolDefs.length} tools registered`);
     }
 
-    // ── Built-in fact memory tools (always available) ─────────────────────
-    const FACT_TOOLS = [
-      {
-        type: 'function',
-        function: {
-          name: 'remember_fact',
-          description: 'Remember a fact about the user. Use this when the user tells you a preference, makes a decision, or shares important context you should recall later. Categories: preference, fact, decision, context.',
-          parameters: {
-            type: 'object',
-            properties: {
-              text: { type: 'string', description: 'The fact to remember (max 500 chars)' },
-              category: { type: 'string', enum: ['preference', 'fact', 'decision', 'context'], description: 'Category for this fact' },
-            },
-            required: ['text'],
-          },
-        },
+    // ── Self-tools — LLM-callable tools (memory, models, settings, etc.) ──
+    const selfToolContext = {
+      getModels: () => FALLBACK_MODELS,
+      getSettings: () => ({
+        model,
+        thinkingBudget,
+        maxContextTurns,
+        figmaMCPEnabled: useFigmaMCP,
+        factsCount: factsGetStats().total,
+      }),
+      sendToRenderer: (channel, data) => {
+        try {
+          const wins = _ElectronBrowserWindow?.getAllWindows?.() || [];
+          for (const w of wins) w.webContents?.send?.(channel, data);
+        } catch (_) {}
       },
-      {
-        type: 'function',
-        function: {
-          name: 'recall_facts',
-          description: 'Search your memory for facts about the user. Returns matching facts scored by relevance and recency. Call with empty keywords to get the most recent facts.',
-          parameters: {
-            type: 'object',
-            properties: {
-              keywords: { type: 'string', description: 'Space-separated keywords to search for' },
-            },
-          },
-        },
+      sendNotification: (title, body) => {
+        try {
+          const { Notification: ElectronNotification } = _require('electron');
+          new ElectronNotification({ title, body }).show();
+        } catch (_) {
+          console.log(`[notification] ${title}: ${body}`);
+        }
       },
-      {
-        type: 'function',
-        function: {
-          name: 'forget_fact',
-          description: 'Forget a specific fact by its ID. Use when the user asks you to forget something or when a fact is no longer accurate.',
-          parameters: {
-            type: 'object',
-            properties: {
-              id: { type: 'string', description: 'The fact ID to forget' },
-            },
-            required: ['id'],
-          },
-        },
-      },
-    ];
-    mcpTools = [...(mcpTools || []), ...FACT_TOOLS];
+    };
+    mcpTools = [...(mcpTools || []), ...SELF_TOOL_DEFS];
 
     // Agentic loop — re-runs if model calls tools (max 12 iterations)
     let continueLoop = true;
@@ -2003,13 +2003,9 @@ app.post('/api/chat', async (req, res) => {
             const args = JSON.parse(tc.function.arguments || '{}');
             let result;
 
-            // Route to fact memory tools first (always available)
-            if (toolName === 'remember_fact') {
-              result = JSON.stringify(factsRemember(args.text, args.category));
-            } else if (toolName === 'recall_facts') {
-              result = JSON.stringify(factsRecall(args.keywords));
-            } else if (toolName === 'forget_fact') {
-              result = JSON.stringify(factsForget(args.id));
+            // Route to self-tools first (memory, models, settings, etc.)
+            if (isSelfTool(toolName)) {
+              result = executeSelfTool(toolName, args, selfToolContext);
             }
             // Route to agent tool handler if available, otherwise Figma MCP
             else if (agentToolHandlers?.has(toolName)) {
@@ -3776,9 +3772,31 @@ const AUGMENTED_PATH = IS_WIN
 
 const SHELL_BIN = IS_WIN ? 'powershell.exe' : '/bin/zsh';
 
-app.post('/api/shell-exec', (req, res) => {
+app.post('/api/shell-exec', async (req, res) => {
   const { command, cwd, killId, stream } = req.body;
   if (!command) return res.status(400).json({ error: 'command required' });
+
+  // Permission guard — check if command is safe or requires approval
+  if (!isCommandSafe(command)) {
+    const { BrowserWindow, dialog } = await import('electron');
+    const showDialog = async (cmd, explanation) => {
+      const mainWin = BrowserWindow.getAllWindows()[0];
+      const result = dialog.showMessageBoxSync(mainWin, {
+        type: 'warning',
+        title: 'Command Permission',
+        message: `Allow this command?\n\n${cmd}`,
+        detail: explanation || '',
+        buttons: ['Deny', 'Allow Once', 'Always Allow'],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      return result === 2 ? 'auto-allow' : result === 1 ? 'allow' : 'deny';
+    };
+    const decision = await checkCommandPermission(command, { showDialog, aiCaller: internalAICaller });
+    if (decision === 'deny') {
+      return res.status(403).json({ ok: false, error: 'Command denied by user', blocked: true });
+    }
+  }
 
   const workDir = cwd || os.homedir();
   const env = {
@@ -6178,6 +6196,127 @@ app.post('/api/facts/import', (req, res) => {
   res.json(result);
 });
 
+// ── Heartbeat Monitoring ──────────────────────────────────────────────────
+
+app.get('/api/heartbeat/settings', (req, res) => {
+  res.json(hbGetSettings());
+});
+
+app.put('/api/heartbeat/settings', (req, res) => {
+  const settings = hbUpdateSettings(req.body);
+  res.json(settings);
+});
+
+app.get('/api/heartbeat/log', (req, res) => {
+  res.json(hbGetLog());
+});
+
+app.post('/api/heartbeat/clear-log', (req, res) => {
+  hbClearLog();
+  res.json({ ok: true });
+});
+
+app.post('/api/heartbeat/run-now', async (req, res) => {
+  try {
+    const result = await runHeartbeat(true);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Scheduled Workflows ───────────────────────────────────────────────────
+
+app.get('/api/workflows', (req, res) => {
+  res.json(getAllWorkflows());
+});
+
+app.post('/api/workflows', (req, res) => {
+  const wf = createWorkflow(req.body);
+  res.json(wf);
+});
+
+app.get('/api/workflows/:id', (req, res) => {
+  const wf = getWorkflow(req.params.id);
+  if (!wf) return res.status(404).json({ error: 'Workflow not found' });
+  res.json(wf);
+});
+
+app.put('/api/workflows/:id', (req, res) => {
+  const wf = updateWorkflow(req.params.id, req.body);
+  if (!wf) return res.status(404).json({ error: 'Workflow not found' });
+  res.json(wf);
+});
+
+app.delete('/api/workflows/:id', (req, res) => {
+  const ok = deleteWorkflow(req.params.id);
+  if (!ok) return res.status(404).json({ error: 'Workflow not found' });
+  res.json({ ok: true });
+});
+
+app.post('/api/workflows/:id/run-now', async (req, res) => {
+  try {
+    const result = await runWorkflow(req.params.id);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/workflows/:id/history', (req, res) => {
+  res.json(wfGetHistory(req.params.id));
+});
+
+app.post('/api/workflows/parse-schedule', (req, res) => {
+  const { text } = req.body || {};
+  res.json(parseSchedule(text));
+});
+
+// ── Permission Guard ──────────────────────────────────────────────────────
+
+app.get('/api/permissions/auto-allow', (req, res) => {
+  res.json(getAutoAllowList());
+});
+
+app.post('/api/permissions/auto-allow', (req, res) => {
+  const { command } = req.body || {};
+  if (!command) return res.status(400).json({ error: 'command required' });
+  addAutoAllow(command);
+  res.json({ ok: true });
+});
+
+app.delete('/api/permissions/auto-allow', (req, res) => {
+  const { command } = req.body || {};
+  if (command) removeAutoAllow(command);
+  else clearAutoAllow();
+  res.json({ ok: true });
+});
+
+app.post('/api/permissions/check', (req, res) => {
+  const { command } = req.body || {};
+  res.json({ safe: isCommandSafe(command) });
+});
+
+// ── Teams Self-Chat Bridge ────────────────────────────────────────────────
+
+app.get('/api/teams/settings', (req, res) => {
+  res.json(getTeamsSettings());
+});
+
+app.put('/api/teams/settings', (req, res) => {
+  const settings = updateTeamsSettings(req.body);
+  res.json(settings);
+});
+
+app.post('/api/teams/test', async (req, res) => {
+  try {
+    const result = await teamsTestConnection();
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Trigger Accessibility permission prompt
 app.post('/api/permissions/request-accessibility', (req, res) => {
   try {
@@ -6185,6 +6324,72 @@ app.post('/api/permissions/request-accessibility', (req, res) => {
     res.json({ status: trusted ? 'granted' : 'denied' });
   } catch (e) {
     res.json({ status: 'denied', error: e.message });
+  }
+});
+
+// ── Region capture ────────────────────────────────────────────────────────
+app.post('/api/capture-region', async (req, res) => {
+  try {
+    if (!_ElectronBrowserWindow || !desktopCapturer) {
+      return res.status(503).json({ error: 'Capture requires Electron' });
+    }
+    const { screen, ipcMain } = _require('electron');
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width, height } = primaryDisplay.size;
+    const scaleFactor = primaryDisplay.scaleFactor;
+
+    // Hide main window briefly
+    const wins = _ElectronBrowserWindow.getAllWindows();
+    const mainWin = wins.find(w => !w.isDestroyed() && w.getTitle() !== 'Region Capture');
+    const wasVisible = mainWin?.isVisible();
+    if (wasVisible) mainWin.hide();
+    await new Promise(r => setTimeout(r, 200));
+
+    // Full-screen capture
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: width * scaleFactor, height: height * scaleFactor },
+    });
+    if (!sources.length) {
+      if (wasVisible) mainWin.show();
+      return res.json({ cancelled: true, error: 'No screen source found' });
+    }
+    const fullScreenshot = sources[0].thumbnail;
+
+    // Overlay for region selection
+    const overlay = new _ElectronBrowserWindow({
+      x: 0, y: 0, width, height,
+      frame: false, transparent: true, alwaysOnTop: true,
+      fullscreen: true, skipTaskbar: true, resizable: false, hasShadow: false,
+      title: 'Region Capture',
+      webPreferences: { nodeIntegration: true, contextIsolation: false },
+    });
+    const overlayPath = path.join(__dirname, 'public', 'capture-overlay.html');
+    await overlay.loadFile(overlayPath);
+    overlay.webContents.send('set-screenshot', fullScreenshot.toDataURL());
+
+    const captureResult = await new Promise((resolve) => {
+      ipcMain.once('capture-region-result', (_event, rect) => {
+        overlay.close();
+        if (wasVisible) mainWin.show();
+        if (!rect) return resolve({ cancelled: true });
+        const cropRect = {
+          x: Math.round(rect.x * scaleFactor),
+          y: Math.round(rect.y * scaleFactor),
+          width: Math.round(rect.width * scaleFactor),
+          height: Math.round(rect.height * scaleFactor),
+        };
+        const cropped = fullScreenshot.crop(cropRect);
+        const base64 = cropped.toDataURL().replace(/^data:image\/png;base64,/, '');
+        resolve({ base64, width: rect.width, height: rect.height });
+      });
+      overlay.webContents.on('before-input-event', (_event, input) => {
+        if (input.key === 'Escape') ipcMain.emit('capture-region-result', null, null);
+      });
+    });
+    res.json(captureResult);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -7131,6 +7336,30 @@ export function startServer(port) {
     });
     // Run fact memory decay on startup (prune facts not accessed in 60 days)
     try { runDecay(); } catch (_) {}
+
+    // Internal AI caller for heartbeat and workflows
+    internalAICaller = async (prompt, model = 'gpt-4.1') => {
+      const client = getCopilotClient();
+      const resp = await client.chat.completions.create({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 2000,
+      });
+      return resp.choices[0]?.message?.content?.trim() || '';
+    };
+    const internalNotifier = (title, body) => {
+      try {
+        const { Notification: ElectronNotification } = _require('electron');
+        new ElectronNotification({ title, body }).show();
+      } catch (_) {
+        console.log(`[notification] ${title}: ${body}`);
+      }
+    };
+
+    // Start heartbeat and workflow timers
+    startHeartbeat(internalAICaller, internalNotifier);
+    startWorkflowTimer(internalAICaller, internalNotifier);
+    startTeamsBridge(internalAICaller, internalNotifier);
     server.on('error', reject);
 
     // Clean up MCP child process and Figma timers on exit

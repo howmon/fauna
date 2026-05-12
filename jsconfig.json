@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "checkJs": true,
+    "allowJs": true,
+    "noEmit": true,
+    "strict": false,
+    "esModuleInterop": true,
+    "moduleResolution": "node",
+    "module": "ESNext",
+    "target": "ES2022",
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "baseUrl": "."
+  },
+  "include": [
+    "memory-store.js",
+    "workflow-manager.js",
+    "heartbeat.js",
+    "self-tools.js",
+    "permission-guard.js",
+    "teams-bridge.js"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "mobile",
+    "faunaMCP-main",
+    "relay",
+    "public"
+  ]
+}

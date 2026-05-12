@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, shell, nativeImage, nativeTheme } from 'electron';
+import { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, shell, nativeImage, nativeTheme, Notification, dialog, screen } from 'electron';
 import path     from 'path';
 import fs       from 'fs';
 import os       from 'os';
@@ -326,6 +326,97 @@ ipcMain.on('widget:open-in-app', () => {
       'typeof toggleTasksPanel === "function" && !tasksPanelOpen && toggleTasksPanel()'
     ).catch(() => {});
   }
+});
+
+// ── Show native notification (from server / self-tools) ──────────────
+ipcMain.on('show-notification', (event, { title, body }) => {
+  new Notification({ title: title || 'Fauna', body: body || '' }).show();
+});
+
+// ── Permission dialog (show native dialog for dangerous commands) ─────
+ipcMain.handle('show-permission-dialog', async (event, { command, explanation }) => {
+  const result = dialog.showMessageBoxSync(mainWindow, {
+    type: 'warning',
+    title: 'Permission Request',
+    message: `The AI wants to run a command:`,
+    detail: `${command}\n\n${explanation || ''}`,
+    buttons: ['Deny', 'Allow Once', 'Always Allow'],
+    defaultId: 0,
+    cancelId: 0,
+  });
+  // 0 = Deny, 1 = Allow Once, 2 = Always Allow
+  return ['deny', 'allow', 'auto-allow'][result] || 'deny';
+});
+
+// ── Region capture (overlay window for screen area selection) ─────────
+ipcMain.handle('capture-region', async () => {
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width, height } = primaryDisplay.size;
+  const scaleFactor = primaryDisplay.scaleFactor;
+
+  // Hide main window briefly
+  const wasVisible = mainWindow?.isVisible();
+  if (wasVisible) mainWindow.hide();
+
+  // Wait a moment for window to hide
+  await new Promise(r => setTimeout(r, 200));
+
+  // Take a full screenshot using desktopCapturer
+  const { desktopCapturer: dc } = await import('electron');
+  const sources = await dc.getSources({ types: ['screen'], thumbnailSize: { width: width * scaleFactor, height: height * scaleFactor } });
+  const primarySource = sources[0];
+  if (!primarySource) {
+    if (wasVisible) mainWindow.show();
+    return { ok: false, error: 'No screen source found' };
+  }
+
+  const fullScreenshot = primarySource.thumbnail;
+
+  // Create overlay window for region selection
+  const overlay = new BrowserWindow({
+    x: 0, y: 0, width, height,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    fullscreen: true,
+    skipTaskbar: true,
+    resizable: false,
+    hasShadow: false,
+    webPreferences: { nodeIntegration: true, contextIsolation: false },
+  });
+
+  const overlayPath = path.join(__dirname, 'public', 'capture-overlay.html');
+  await overlay.loadFile(overlayPath);
+  overlay.webContents.send('set-screenshot', fullScreenshot.toDataURL());
+
+  return new Promise((resolve) => {
+    ipcMain.once('capture-region-result', (event, rect) => {
+      overlay.close();
+      if (wasVisible) mainWindow.show();
+
+      if (!rect) {
+        resolve({ ok: false, cancelled: true });
+        return;
+      }
+
+      // Crop the screenshot
+      const cropRect = {
+        x: Math.round(rect.x * scaleFactor),
+        y: Math.round(rect.y * scaleFactor),
+        width: Math.round(rect.width * scaleFactor),
+        height: Math.round(rect.height * scaleFactor),
+      };
+      const cropped = fullScreenshot.crop(cropRect);
+      resolve({ ok: true, image: cropped.toDataURL(), width: rect.width, height: rect.height });
+    });
+
+    // Cancel on Escape
+    overlay.webContents.on('before-input-event', (event, input) => {
+      if (input.key === 'Escape') {
+        ipcMain.emit('capture-region-result', null, null);
+      }
+    });
+  });
 });
 
 // ── Tray ──────────────────────────────────────────────────────────────────

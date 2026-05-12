@@ -16,6 +16,12 @@ const MAX_CHARS   = 500;
 const DECAY_DAYS  = 60;
 const CATEGORIES  = ['preference', 'fact', 'decision', 'context'];
 
+/**
+ * @typedef {{id: string, text: string, category: string, createdAt: number, lastAccessedAt: number, accessCount: number}} Fact
+ * @typedef {{ok: boolean, error?: string, id?: string, deduplicated?: boolean}} RememberResult
+ * @typedef {{total: number, maxFacts: number, maxChars: number, decayDays: number, byCategory: Record<string,number>, categories: string[]}} FactStats
+ */
+
 let _facts = null; // lazy-loaded cache
 
 // ── Persistence ────────────────────────────────────────────────────────────
@@ -46,6 +52,7 @@ function _normalize(text) {
 
 // ── Core API ──────────────────────────────────────────────────────────────
 
+/** @param {string} text @param {string} [category='fact'] @returns {RememberResult} */
 export function remember(text, category = 'fact') {
   const facts = _load();
   const trimmed = (text || '').trim();
