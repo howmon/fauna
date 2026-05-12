@@ -12,6 +12,8 @@ var state = {
   systemPrompt:  localStorage.getItem('fauna-sys')   || '',
   pendingAttachments: [],   // { type: 'file'|'url', name, content }
   autoRunShell:  localStorage.getItem('fauna-autorun-shell') !== 'false', // default ON
+  bypassCommandPermissions: localStorage.getItem('fauna-bypass-cmd-perms') === 'true', // default OFF
+  _sessionAllowAllCommands: false, // per-session flag, not persisted
   figmaMCPEnabled: localStorage.getItem('fauna-figma-mcp') === 'true',   // default OFF
   playwrightMCPEnabled: localStorage.getItem('fauna-playwright-mcp') === 'true', // default OFF
   thinkingBudget: localStorage.getItem('fauna-thinking-budget') || 'high',

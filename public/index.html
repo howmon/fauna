@@ -611,6 +611,15 @@ Examples:
         When enabled, <code>shell-exec</code> blocks in AI responses execute automatically.
         Results appear inline; click <strong>Feed to AI</strong> to let the AI continue based on output.
       </div>
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none;margin-top:12px">
+        <input type="checkbox" id="bypass-perms-toggle"
+          onchange="setBypassCommandPermissions(this.checked)"
+          style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+        <span style="font-size:12.5px;color:var(--fau-text)">Bypass command permissions</span>
+      </label>
+      <div class="settings-hint" style="margin-top:4px">
+        Skip the permission prompt for all shell commands. <strong>Use with caution</strong> — all commands will execute without confirmation.
+      </div>
     </div>
   </div>
 

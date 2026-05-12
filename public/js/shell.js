@@ -261,6 +261,87 @@ async function _runTroubleshootForEmptyResult(widget, command, result) {
   return result;
 }
 
+// ── Inline permission prompt (replaces native dialog) ──────────────────
+
+function _showInlinePermissionPrompt(execId, widget, resultEl, runBtn, feedBtn, command, explanation, opts) {
+  // Hide the result area inside the accordion — we'll show the prompt outside
+  resultEl.style.display = 'none';
+  resultEl.className = 'shell-exec-result';
+  resultEl.innerHTML = '';
+
+  // Remove any previous prompt for this execId
+  var prev = document.getElementById('perm-' + execId);
+  if (prev) prev.remove();
+
+  // Build the prompt card as a standalone element outside the accordion
+  var card = document.createElement('div');
+  card.className = 'perm-prompt-card';
+  card.id = 'perm-' + execId;
+  card.innerHTML =
+    '<div class="perm-prompt-header"><i class="ti ti-shield-lock"></i> Permission Required</div>' +
+    '<div class="perm-prompt-cmd">' + escHtml(command) + '</div>' +
+    (explanation ? '<div class="perm-prompt-explain">' + escHtml(explanation) + '</div>' : '') +
+    '<div class="perm-prompt-actions">' +
+      '<button class="perm-btn perm-allow" onclick="_handlePermission(\'' + execId + '\',\'allow\')"><i class="ti ti-check"></i> Allow Once</button>' +
+      '<button class="perm-btn perm-always" onclick="_handlePermission(\'' + execId + '\',\'auto-allow\')"><i class="ti ti-checks"></i> Always Allow</button>' +
+      '<button class="perm-btn perm-session" onclick="_handlePermission(\'' + execId + '\',\'session-allow\')"><i class="ti ti-lock-open"></i> Allow All This Conversation</button>' +
+      '<button class="perm-btn perm-deny" onclick="_handlePermission(\'' + execId + '\',\'deny\')"><i class="ti ti-x"></i> Deny</button>' +
+    '</div>';
+
+  // Insert after the closest accordion (cot-block) or after the widget itself
+  var anchor = widget.closest('.cot-block') || widget;
+  anchor.parentNode.insertBefore(card, anchor.nextSibling);
+
+  widget._permOpts = opts;
+  runBtn.disabled = false;
+  runBtn.innerHTML = '<i class="ti ti-player-play"></i> Run';
+  scrollBottom();
+}
+
+async function _handlePermission(execId, decision) {
+  var widget = document.querySelector('[data-exec-id="' + execId + '"]');
+  if (!widget) return;
+  var code = widget.dataset.code;
+  var resultEl = document.getElementById(execId + '-result');
+  var runBtn = document.getElementById(execId + '-run');
+
+  // Remove the standalone permission card
+  var card = document.getElementById('perm-' + execId);
+  if (card) card.remove();
+
+  if (decision === 'deny') {
+    resultEl.style.display = 'block';
+    resultEl.className = 'shell-exec-result';
+    resultEl.innerHTML = '<span class="se-err"><i class="ti ti-shield-x"></i> Command denied</span>';
+    widget.dataset.result = JSON.stringify({ ok: false, exitCode: 126, stdout: '', stderr: '', error: 'Command denied by user', command: code });
+    updateMessageShellVerification(widget.closest('.msg'));
+    return;
+  }
+
+  // Record decision server-side
+  if (decision === 'auto-allow') {
+    fetch('/api/shell-permission', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: code, decision: 'auto-allow' })
+    }).catch(function() {});
+  }
+
+  // Session-allow: set flag so all subsequent commands in this session skip permissions
+  if (decision === 'session-allow') {
+    state._sessionAllowAllCommands = true;
+  }
+
+  // Clear the prompt and re-run with bypass
+  resultEl.style.display = 'none';
+  resultEl.className = 'shell-exec-result';
+  resultEl.innerHTML = '';
+
+  // Re-run the command with bypassPermissions=true
+  var origOpts = widget._permOpts || {};
+  origOpts._bypassPermissions = true;
+  runShellExec(execId, origOpts);
+}
+
 function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
   var container = messageEl.querySelector('.prose') || messageEl;
   var codeBlocks = container.querySelectorAll('code.language-shell-exec, code.language-shell_exec');
@@ -456,6 +537,10 @@ async function runShellExec(execId, opts) {
       }
     }
     var bodyObj = { command: code, killId: killId, stream: true };
+    // Bypass permissions if settings toggle is on, session-allow-all is active, or re-running after approval
+    if (state.bypassCommandPermissions || state._sessionAllowAllCommands || opts._bypassPermissions) {
+      bodyObj.bypassPermissions = true;
+    }
     if (shellCwd) bodyObj.cwd = shellCwd;
     if (typeof isAgentActive === 'function' && isAgentActive()) {
       var sb = getSandboxedEndpoint('/api/shell-exec');
@@ -467,6 +552,34 @@ async function runShellExec(execId, opts) {
       body: JSON.stringify(bodyObj),
       signal: abortCtrl.signal
     });
+
+    // ── Handle permission-required response (inline prompt) ──
+    var contentType = r.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      var jsonResp = await r.json();
+      if (jsonResp.permissionRequired) {
+        clearInterval(timerInterval);
+        hideShellRunningPill(execId);
+        delete _shellAbortControllers[execId];
+        delete _shellKillIds[execId];
+        _showInlinePermissionPrompt(execId, widget, resultEl, runBtn, feedBtn, jsonResp.command, jsonResp.explanation, opts);
+        return;
+      }
+      // Other JSON error responses (like 403 blocked)
+      if (!jsonResp.ok || jsonResp.error) {
+        clearInterval(timerInterval);
+        hideShellRunningPill(execId);
+        delete _shellAbortControllers[execId];
+        delete _shellKillIds[execId];
+        resultEl.className = 'shell-exec-result';
+        resultEl.innerHTML = '<span class="se-err">' + escHtml(jsonResp.error || 'Unknown error') + '</span>';
+        widget.dataset.result = JSON.stringify({ ok: false, exitCode: 1, stdout: '', stderr: '', error: jsonResp.error, command: code });
+        updateMessageShellVerification(widget.closest('.msg'));
+        runBtn.disabled = false;
+        runBtn.innerHTML = '<i class="ti ti-player-play"></i> Run';
+        return;
+      }
+    }
 
     // ── Streaming mode: parse SSE events ──
     var stdoutBuf = '';
@@ -744,11 +857,28 @@ async function _executeCommand(btn, resultEl, command) {
   resultEl.innerHTML = '<span style="color:#1ec882;font-style:italic">Running…</span>';
 
   try {
+    var bodyObj = { command: command };
+    if (state.bypassCommandPermissions || state._sessionAllowAllCommands) {
+      bodyObj.bypassPermissions = true;
+    }
     var r = await fetch('/api/shell-exec', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command })
+      body: JSON.stringify(bodyObj)
     });
     var d = r.ok ? await r.json() : { ok: false, exitCode: 1, stdout: '', stderr: await r.text(), command };
+
+    // Handle permission-required response
+    if (d.permissionRequired) {
+      resultEl.innerHTML =
+        '<div class="perm-prompt-card" style="margin:0">' +
+          '<div class="perm-prompt-header"><i class="ti ti-shield-lock"></i> Permission Required</div>' +
+          '<div class="perm-prompt-cmd">' + escHtml(d.command) + '</div>' +
+          (d.explanation ? '<div class="perm-prompt-explain">' + escHtml(d.explanation) + '</div>' : '') +
+          '<div style="font-size:11px;color:var(--fau-text-muted)">Use the shell-exec widget or enable <em>Bypass command permissions</em> in Settings.</div>' +
+        '</div>';
+      if (btn) { btn.classList.remove('running'); btn.innerHTML = '<i class="ti ti-player-play"></i>'; }
+      return;
+    }
 
     var exitCode = (d.exitCode != null) ? d.exitCode : (d.ok ? 0 : 1);
     var parts = [];

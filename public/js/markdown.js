@@ -135,7 +135,8 @@ marked.use({
 
 function renderMarkdown(text) {
   // Strip artifact fenced blocks before rendering — they're shown as entity cards, not code fences
-  var cleaned = (text || '').replace(/```artifact:[^\n`]+\n[\s\S]*?```\n?/g, '');
+  // Backreference: match same number of opening/closing backticks (3+) so nested ``` inside artifacts are preserved
+  var cleaned = (text || '').replace(/(`{3,})artifact:[^\n]+\n[\s\S]*?\1\n?/g, '');
   
   // Pre-process mermaid blocks before markdown parsing
   // Replace ```mermaid blocks with placeholder divs

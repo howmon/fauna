@@ -1884,7 +1884,7 @@ app.post('/api/chat', async (req, res) => {
     let toolCallCount = 0;
     let continueCount = 0; // track auto-continue on length finish
     const MAX_TOOL_CALLS = 50;
-    const MAX_CONTINUES = 4; // max auto-continue attempts for truncated output
+    const MAX_CONTINUES = 6; // max auto-continue attempts for truncated output
     const MAX_RESULT_CHARS = 40000; // prevent context overflow from large tool responses
     const toolCallsSeen = new Map(); // deduplicate identical calls
 
@@ -1894,8 +1894,10 @@ app.post('/api/chat', async (req, res) => {
       // o-series and gpt-5+ models require max_completion_tokens instead of max_tokens
       const useCompletionTokens = /^(o[1-9]|gpt-5)/.test(model);
       const params = { model, messages: allMessages, stream: true };
-      if (useCompletionTokens) { params.max_completion_tokens = 16384; }
-      else { params.max_tokens = 16384; }
+      // Claude models support much larger outputs — use 32K to avoid truncating artifacts
+      const defaultMaxTokens = model.includes('claude') ? 32768 : 16384;
+      if (useCompletionTokens) { params.max_completion_tokens = defaultMaxTokens; }
+      else { params.max_tokens = defaultMaxTokens; }
 
       // Thinking budget — Claude models use `thinking`, o-series use `reasoning_effort`
       if (thinkingBudget !== 'off') {
@@ -3777,30 +3779,29 @@ const AUGMENTED_PATH = IS_WIN
 
 const SHELL_BIN = IS_WIN ? 'powershell.exe' : '/bin/zsh';
 
+// ── Permission decision endpoint (from inline chat prompt) ────────────────
+app.post('/api/shell-permission', async (req, res) => {
+  const { command, decision } = req.body;
+  if (!command || !decision) return res.status(400).json({ error: 'command and decision required' });
+  if (decision === 'auto-allow') {
+    const firstWord = command.trim().split(/\s/)[0];
+    addAutoAllow(firstWord);
+  }
+  res.json({ ok: true });
+});
+
 app.post('/api/shell-exec', async (req, res) => {
-  const { command, cwd, killId, stream } = req.body;
+  const { command, cwd, killId, stream, bypassPermissions } = req.body;
   if (!command) return res.status(400).json({ error: 'command required' });
 
   // Permission guard — check if command is safe or requires approval
-  if (!isCommandSafe(command)) {
-    const { BrowserWindow, dialog } = await import('electron');
-    const showDialog = async (cmd, explanation) => {
-      const mainWin = BrowserWindow.getAllWindows()[0];
-      const result = dialog.showMessageBoxSync(mainWin, {
-        type: 'warning',
-        title: 'Command Permission',
-        message: `Allow this command?\n\n${cmd}`,
-        detail: explanation || '',
-        buttons: ['Deny', 'Allow Once', 'Always Allow'],
-        defaultId: 0,
-        cancelId: 0,
-      });
-      return result === 2 ? 'auto-allow' : result === 1 ? 'allow' : 'deny';
-    };
-    const decision = await checkCommandPermission(command, { showDialog, aiCaller: internalAICaller });
-    if (decision === 'deny') {
-      return res.status(403).json({ ok: false, error: 'Command denied by user', blocked: true });
+  if (!bypassPermissions && !isCommandSafe(command)) {
+    // Get explanation and return it to the frontend for inline prompting
+    let explanation = '';
+    if (internalAICaller) {
+      try { explanation = await explainCommand(command, internalAICaller); } catch (_) {}
     }
+    return res.json({ permissionRequired: true, command, explanation });
   }
 
   const workDir = cwd || os.homedir();
@@ -7029,11 +7030,20 @@ let _playwrightMcpInstalled = null;
 
 async function _getPlaywrightMcpClient() {
   if (_playwrightMcpClient) return _playwrightMcpClient;
-  const mcpMod = await import('@playwright/mcp');
-  const server = mcpMod.createServer ? mcpMod.createServer() : (mcpMod.default?.createServer?.() || null);
-  if (!server) throw new Error('@playwright/mcp server could not be created');
-  _playwrightMcpClient = server;
-  return server;
+  // Spawn @playwright/mcp as a subprocess and connect via MCP SDK stdio transport
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
+  const cliPath = path.join(path.dirname(_require.resolve('@playwright/mcp')), 'cli.js');
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [cliPath, '--headless'],
+  });
+  const client = new Client({ name: 'fauna-playwright', version: '1.0.0' });
+  await client.connect(transport);
+  _playwrightMcpClient = client;
+  // Clean up on close
+  client.onclose = () => { _playwrightMcpClient = null; };
+  return client;
 }
 
 app.get('/api/playwright-mcp/status', async (req, res) => {
@@ -7048,12 +7058,12 @@ app.post('/api/playwright-mcp/call', express.json({ limit: '4mb' }), async (req,
   if (!tool) return res.status(400).json({ error: 'tool required' });
   try {
     const client = await _getPlaywrightMcpClient();
-    // Playwright MCP uses MCP protocol — wrap in a tool-call compatible way
-    const result = typeof client.callTool === 'function'
-      ? await client.callTool(tool, args)
-      : await client.call(tool, args);
-    res.json({ ok: true, content: Array.isArray(result) ? result : [{ type: 'text', text: JSON.stringify(result) }] });
+    const result = await client.callTool({ name: tool, arguments: args });
+    const content = Array.isArray(result?.content) ? result.content : [{ type: 'text', text: JSON.stringify(result) }];
+    res.json({ ok: true, content });
   } catch (e) {
+    // If the subprocess died, reset so next call tries to reconnect
+    _playwrightMcpClient = null;
     res.status(500).json({ ok: false, error: e.message });
   }
 });
@@ -7346,12 +7356,28 @@ export function startServer(port) {
     internalAICaller = async (prompt, model) => {
       const useModel = model || _activeModel || 'gpt-4.1';
       const client = getCopilotClient();
-      const resp = await client.chat.completions.create({
-        model: useModel,
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 2000,
-      });
-      return resp.choices[0]?.message?.content?.trim() || '';
+      const callModel = async (m) => {
+        const resp = await client.chat.completions.create({
+          model: m,
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 2000,
+        });
+        return resp.choices[0]?.message?.content?.trim() || '';
+      };
+      try {
+        return await callModel(useModel);
+      } catch (e) {
+        // If model not supported, retry with fallback
+        if (e.status === 400 && useModel !== _activeModel && _activeModel) {
+          console.log(`[ai-caller] model "${useModel}" not supported, falling back to "${_activeModel}"`);
+          return await callModel(_activeModel);
+        }
+        if (e.status === 400 && useModel !== 'gpt-4.1') {
+          console.log(`[ai-caller] model "${useModel}" not supported, falling back to "gpt-4.1"`);
+          return await callModel('gpt-4.1');
+        }
+        throw e;
+      }
     };
     const internalNotifier = (title, body) => {
       try {

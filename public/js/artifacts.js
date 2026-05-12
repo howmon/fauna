@@ -591,11 +591,13 @@ function previewCodeBlock(codeId, lang) {
 function extractArtifactsFromBuffer(buffer, msgEl, injectCards) {
   if (injectCards === undefined) injectCards = true;
   var container = msgEl ? (msgEl.querySelector('.msg-body') || msgEl) : null;
-  var re = /```artifact:([^\n`]+)\n([\s\S]*?)```/g;
+  // Backreference: opening backtick count (3+) must match closing count.
+  // This lets ````artifact:... ```` survive nested ``` code blocks inside the content.
+  var re = /(`{3,})artifact:([^\n]+)\n([\s\S]*?)\1/g;
   var match;
   while ((match = re.exec(buffer)) !== null) {
-    var spec    = match[1].trim();
-    var content = match[2];
+    var spec    = match[2].trim();
+    var content = match[3];
     var parts   = spec.split(':');
     var type    = parts[0];
     var title   = parts.slice(1).join(':') || type;

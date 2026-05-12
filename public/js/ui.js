@@ -278,6 +278,10 @@ async function loadSettingsState() {
   var cb = document.getElementById('autorun-toggle');
   if (cb) cb.checked = state.autoRunShell;
 
+  // Sync bypass permissions checkbox
+  var bpCb = document.getElementById('bypass-perms-toggle');
+  if (bpCb) bpCb.checked = state.bypassCommandPermissions;
+
   // Sync thinking budget
   var tb = document.getElementById('thinking-budget-select');
   if (tb) tb.value = state.thinkingBudget;
@@ -1483,6 +1487,12 @@ async function feedCodeResult(a) {
 function setAutoRunShell(val) {
   state.autoRunShell = val;
   localStorage.setItem('fauna-autorun-shell', val ? 'true' : 'false');
+}
+
+// Toggle bypass command permissions from Settings
+function setBypassCommandPermissions(val) {
+  state.bypassCommandPermissions = val;
+  localStorage.setItem('fauna-bypass-cmd-perms', val ? 'true' : 'false');
 }
 
 var _thinkingHints = {
