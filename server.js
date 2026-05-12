@@ -26,6 +26,11 @@ import {
   getProjectSystemContext, buildContextPayload,
 } from './project-manager.js';
 import { loadInstructionFiles, _safeReadInstructionFile, _isPathInside, _realPathOrResolve, INSTRUCTION_FILE_LIMIT, INSTRUCTION_TOTAL_LIMIT } from './lib/instruction-files.js';
+import {
+  remember as factsRemember, recall as factsRecall, forget as factsForget,
+  listFacts, getFact, runDecay, formatForSystemPrompt as factsForSystemPrompt,
+  exportFacts, importFacts, getStats as factsGetStats,
+} from './memory-store.js';
 import QRCode     from 'qrcode';
 import { marked }  from 'marked';
 
@@ -1722,10 +1727,12 @@ app.post('/api/chat', async (req, res) => {
         : getProjectSystemContext(projectId);
     }
 
-    // Build system prompt — append project context, context summary and browser context
+    // Build system prompt — append project context, facts memory, context summary and browser context
+    const factsCtx = factsForSystemPrompt(20);
     const fullSystem = [
       systemPrompt.trim(),
       projectCtx,
+      factsCtx,
       BROWSER_BUILD_CONTEXT,
       contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : ''
     ].filter(Boolean).join('\n');
@@ -1819,6 +1826,53 @@ app.post('/api/chat', async (req, res) => {
 
       console.log(`[chat] Agent "${safeAgentName}" active — ${agentToolDefs.length} tools registered`);
     }
+
+    // ── Built-in fact memory tools (always available) ─────────────────────
+    const FACT_TOOLS = [
+      {
+        type: 'function',
+        function: {
+          name: 'remember_fact',
+          description: 'Remember a fact about the user. Use this when the user tells you a preference, makes a decision, or shares important context you should recall later. Categories: preference, fact, decision, context.',
+          parameters: {
+            type: 'object',
+            properties: {
+              text: { type: 'string', description: 'The fact to remember (max 500 chars)' },
+              category: { type: 'string', enum: ['preference', 'fact', 'decision', 'context'], description: 'Category for this fact' },
+            },
+            required: ['text'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'recall_facts',
+          description: 'Search your memory for facts about the user. Returns matching facts scored by relevance and recency. Call with empty keywords to get the most recent facts.',
+          parameters: {
+            type: 'object',
+            properties: {
+              keywords: { type: 'string', description: 'Space-separated keywords to search for' },
+            },
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'forget_fact',
+          description: 'Forget a specific fact by its ID. Use when the user asks you to forget something or when a fact is no longer accurate.',
+          parameters: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'The fact ID to forget' },
+            },
+            required: ['id'],
+          },
+        },
+      },
+    ];
+    mcpTools = [...(mcpTools || []), ...FACT_TOOLS];
 
     // Agentic loop — re-runs if model calls tools (max 12 iterations)
     let continueLoop = true;
@@ -1949,8 +2003,16 @@ app.post('/api/chat', async (req, res) => {
             const args = JSON.parse(tc.function.arguments || '{}');
             let result;
 
+            // Route to fact memory tools first (always available)
+            if (toolName === 'remember_fact') {
+              result = JSON.stringify(factsRemember(args.text, args.category));
+            } else if (toolName === 'recall_facts') {
+              result = JSON.stringify(factsRecall(args.keywords));
+            } else if (toolName === 'forget_fact') {
+              result = JSON.stringify(factsForget(args.id));
+            }
             // Route to agent tool handler if available, otherwise Figma MCP
-            if (agentToolHandlers?.has(toolName)) {
+            else if (agentToolHandlers?.has(toolName)) {
               console.log(`[chat] Agent tool: ${toolName}`);
               result = await agentToolHandlers.get(toolName)(args);
             } else {
@@ -6067,6 +6129,55 @@ app.post('/api/memory/reset', (req, res) => {
   res.json({ ok: true, categories: result, defaults });
 });
 
+// ── Structured Facts Memory ───────────────────────────────────────────────
+// Individual facts the AI learns about the user, with decay and recall scoring.
+
+app.get('/api/facts', (req, res) => {
+  const category = req.query.category || null;
+  res.json(listFacts(category));
+});
+
+app.get('/api/facts/stats', (req, res) => {
+  res.json(factsGetStats());
+});
+
+app.post('/api/facts', (req, res) => {
+  const { text, category } = req.body || {};
+  const result = factsRemember(text, category);
+  if (!result.ok) return res.status(400).json(result);
+  res.json(result);
+});
+
+app.post('/api/facts/recall', (req, res) => {
+  const { keywords } = req.body || {};
+  const results = factsRecall(keywords);
+  res.json(results);
+});
+
+app.delete('/api/facts/:id', (req, res) => {
+  const result = factsForget(req.params.id);
+  if (!result.ok) return res.status(404).json(result);
+  res.json(result);
+});
+
+app.post('/api/facts/decay', (req, res) => {
+  const maxAgeDays = req.body?.maxAgeDays || undefined;
+  const result = runDecay(maxAgeDays);
+  res.json(result);
+});
+
+app.get('/api/facts/export', (req, res) => {
+  res.json(exportFacts());
+});
+
+app.post('/api/facts/import', (req, res) => {
+  const facts = req.body;
+  if (!Array.isArray(facts)) return res.status(400).json({ error: 'Expected array of facts' });
+  const result = importFacts(facts);
+  if (!result.ok) return res.status(400).json(result);
+  res.json(result);
+});
+
 // Trigger Accessibility permission prompt
 app.post('/api/permissions/request-accessibility', (req, res) => {
   try {
@@ -7018,6 +7129,8 @@ export function startServer(port) {
     startScheduler(task => {
       runTask(task.id, { trigger: 'scheduler' }).catch(e => console.error('[tasks] scheduled run failed:', e.message));
     });
+    // Run fact memory decay on startup (prune facts not accessed in 60 days)
+    try { runDecay(); } catch (_) {}
     server.on('error', reject);
 
     // Clean up MCP child process and Figma timers on exit

@@ -179,6 +179,7 @@ function switchPlaybookTab(tab) {
     el.classList.toggle('active', el.id === 'pb-tab-' + tab);
   });
   if (tab === 'memory' && !_memoryCategories) loadMemoryFromServer();
+  if (tab === 'facts' && !_factsLoaded) loadFactsFromServer();
 }
 
 async function loadMemoryFromServer() {
@@ -543,5 +544,158 @@ function getMemoryContext(userMessage) {
   });
   if (!parts.length) return '';
   return '\n\n' + parts.join('\n\n');
+}
+
+// ── Facts tab — Structured memory with decay ─────────────────────────────
+// Stored server-side at ~/.config/fauna/facts.json.
+// Shape: [ { id, category, text, createdAt, lastAccessedAt, accessCount } ]
+
+var _factsLoaded = false;
+var _factsData = [];
+
+async function loadFactsFromServer() {
+  try {
+    var catFilter = document.getElementById('facts-filter-cat');
+    var cat = catFilter ? catFilter.value : '';
+    var url = '/api/facts' + (cat ? '?category=' + encodeURIComponent(cat) : '');
+    var res = await fetch(url);
+    _factsData = await res.json();
+    _factsLoaded = true;
+
+    // Also load stats
+    var statsRes = await fetch('/api/facts/stats');
+    var stats = await statsRes.json();
+    var statsEl = document.getElementById('facts-stats');
+    if (statsEl) {
+      statsEl.textContent = stats.total + '/' + stats.maxFacts + ' facts · Decay: ' + stats.decayDays + ' days · ' +
+        Object.entries(stats.byCategory).map(function(e) { return e[0] + ': ' + e[1]; }).join(' · ');
+    }
+
+    renderFactsList();
+  } catch (e) {
+    document.getElementById('facts-list').innerHTML =
+      '<div style="color:var(--fau-text-muted);font-size:12px;padding:12px">Failed to load facts: ' + escHtml(e.message) + '</div>';
+  }
+}
+
+function renderFactsList() {
+  var list = document.getElementById('facts-list');
+  if (!_factsData || !_factsData.length) {
+    list.innerHTML = '<div style="color:var(--fau-text-muted);font-size:12px;padding:12px">No facts stored yet. Add one below or let the AI remember things about you.</div>';
+    return;
+  }
+
+  var catIcons = { preference: 'ti-heart', fact: 'ti-info-circle', decision: 'ti-gavel', context: 'ti-bulb' };
+  var catColors = { preference: '#e8a0bf', fact: '#7eb8da', decision: '#c4a35a', context: '#82c882' };
+
+  list.innerHTML = _factsData.map(function(f) {
+    var age = Math.round((Date.now() - (f.lastAccessedAt || f.createdAt)) / (1000 * 60 * 60 * 24));
+    var ageStr = age === 0 ? 'today' : age + 'd ago';
+    var icon = catIcons[f.category] || 'ti-note';
+    var color = catColors[f.category] || 'var(--fau-text-dim)';
+    return '<div class="pb-row" data-fact-id="' + f.id + '" style="position:relative">' +
+      '<div class="pb-row-head">' +
+        '<span style="display:flex;align-items:center;gap:6px;flex:1;min-width:0">' +
+          '<i class="ti ' + icon + '" style="color:' + color + ';flex-shrink:0"></i>' +
+          '<span class="pb-row-title" style="font-size:12.5px">' + escHtml(f.text) + '</span>' +
+        '</span>' +
+        '<div class="pb-row-actions" style="flex-shrink:0">' +
+          '<span style="font-size:10px;color:var(--fau-text-dim);margin-right:6px" title="Last accessed">' + ageStr + '</span>' +
+          '<span style="font-size:10px;color:var(--fau-text-dim);margin-right:6px" title="Access count">×' + (f.accessCount || 0) + '</span>' +
+          '<button title="Delete" onclick="deleteFactEntry(\'' + f.id + '\')"><i class="ti ti-trash"></i></button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+async function addFactEntry() {
+  var textInput = document.getElementById('facts-text-input');
+  var catInput = document.getElementById('facts-cat-input');
+  var text = textInput.value.trim();
+  var category = catInput.value;
+  if (!text) { showToast('Enter something to remember'); return; }
+  try {
+    var res = await fetch('/api/facts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text, category: category })
+    });
+    var result = await res.json();
+    if (!result.ok) { showToast(result.error || 'Failed to save'); return; }
+    textInput.value = '';
+    showToast(result.deduplicated ? 'Fact already exists — refreshed' : 'Fact remembered');
+    loadFactsFromServer();
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+async function deleteFactEntry(id) {
+  try {
+    var res = await fetch('/api/facts/' + id, { method: 'DELETE' });
+    var result = await res.json();
+    if (!result.ok) { showToast(result.error || 'Failed to delete'); return; }
+    showToast('Fact forgotten');
+    loadFactsFromServer();
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+async function runFactsDecay() {
+  try {
+    var res = await fetch('/api/facts/decay', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    var result = await res.json();
+    showToast('Decay: removed ' + result.removed + ' old facts, ' + result.remaining + ' remaining');
+    loadFactsFromServer();
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+async function exportFactsJSON() {
+  try {
+    var res = await fetch('/api/facts/export');
+    var data = await res.json();
+    var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'fauna-facts-' + new Date().toISOString().slice(0, 10) + '.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    showToast('Facts exported');
+  } catch (e) {
+    showToast('Export failed: ' + e.message);
+  }
+}
+
+function importFactsJSON(event) {
+  var file = event.target.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = async function() {
+    try {
+      var data = JSON.parse(reader.result);
+      if (!Array.isArray(data)) { showToast('Invalid file: expected array of facts'); return; }
+      var res = await fetch('/api/facts/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      var result = await res.json();
+      if (!result.ok) { showToast(result.error || 'Import failed'); return; }
+      showToast('Imported ' + result.added + ' facts (' + result.total + ' total)');
+      loadFactsFromServer();
+    } catch (e) {
+      showToast('Import failed: ' + e.message);
+    }
+  };
+  reader.readAsText(file);
+  event.target.value = '';
 }
 

@@ -885,6 +885,7 @@ Examples:
     <div class="settings-section">
       <div id="settings-playbook-tabs" style="display:flex;gap:0;margin-bottom:12px">
         <button class="pb-tab active" data-tab="learned" onclick="switchPlaybookTab('learned')" style="flex:1">Learned Instructions</button>
+        <button class="pb-tab" data-tab="facts" onclick="switchPlaybookTab('facts')" style="flex:1">Facts</button>
         <button class="pb-tab" data-tab="memory" onclick="switchPlaybookTab('memory')" style="flex:1">Spec Memory</button>
       </div>
 
@@ -902,6 +903,43 @@ Examples:
             onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))addPlaybookEntry()"
             style="width:100%;resize:vertical;font-family:var(--font);font-size:12.5px"></textarea>
           <button id="pb-add-btn" class="settings-row-btn" onclick="addPlaybookEntry()" style="align-self:flex-start"><i class="ti ti-plus"></i> Add Entry</button>
+        </div>
+      </div>
+
+      <!-- Facts tab -->
+      <div id="pb-tab-facts" class="pb-tab-body">
+        <div class="settings-hint" style="margin-bottom:12px">
+          Individual facts the AI remembers about you — preferences, decisions, context.
+          Facts decay after 60 days without use. The AI can also remember/forget facts via tools.
+        </div>
+        <div id="facts-stats" style="margin-bottom:8px;font-size:11px;color:var(--fau-text-dim)"></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+          <select id="facts-filter-cat" class="settings-input" style="width:auto;min-width:110px;font-size:12px" onchange="loadFactsFromServer()">
+            <option value="">All categories</option>
+            <option value="preference">Preference</option>
+            <option value="fact">Fact</option>
+            <option value="decision">Decision</option>
+            <option value="context">Context</option>
+          </select>
+          <button class="settings-row-btn" onclick="runFactsDecay()" title="Remove facts not accessed in 60 days"><i class="ti ti-hourglass"></i> Run Decay</button>
+          <button class="settings-row-btn" onclick="exportFactsJSON()" title="Export all as JSON"><i class="ti ti-download"></i> Export</button>
+          <button class="settings-row-btn" onclick="document.getElementById('facts-import-file').click()" title="Import from JSON"><i class="ti ti-upload"></i> Import</button>
+          <input type="file" id="facts-import-file" accept=".json" style="display:none" onchange="importFactsJSON(event)">
+        </div>
+        <div id="facts-list" style="max-height:calc(100vh - 420px);overflow-y:auto;padding:4px 0 12px">
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+          <div style="display:flex;gap:6px">
+            <input type="text" id="facts-text-input" class="settings-input" placeholder="Something to remember…" style="flex:1"
+              onkeydown="if(event.key==='Enter')addFactEntry()">
+            <select id="facts-cat-input" class="settings-input" style="width:auto;min-width:100px;font-size:12px">
+              <option value="fact">Fact</option>
+              <option value="preference">Preference</option>
+              <option value="decision">Decision</option>
+              <option value="context">Context</option>
+            </select>
+          </div>
+          <button class="settings-row-btn" onclick="addFactEntry()" style="align-self:flex-start"><i class="ti ti-plus"></i> Remember</button>
         </div>
       </div>
 
