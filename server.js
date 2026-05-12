@@ -1383,7 +1383,7 @@ app.post('/api/chat', async (req, res) => {
     let figmaFilesCtx = '';
     if (useFigmaMCP && figmaFiles.size > 0) {
       const entries = [...figmaFiles.values()].map(f => `- "${f.fileName}" (fileKey: ${f.fileKey}, page: ${f.currentPage})`).join('\n');
-      figmaFilesCtx = `\n## Connected Figma Documents\nThe following Figma documents are currently open with the plugin running:\n${entries}\nWhen using figma_execute, pass the fileKey parameter to target a specific document. If omitted, the most recently active document is used.`;
+      figmaFilesCtx = `\n## Connected Figma Documents\nThe following Figma documents are currently open with the plugin running:\n${entries}\nWhen using figma_execute, pass the fileKey parameter to target a specific document. If omitted, the most recently active document is used.\nIMPORTANT: Dev Mode MCP tools (get_screenshot, get_design_context, get_metadata, etc.) always operate on whichever file is currently focused in Figma — they do NOT accept a fileKey parameter. If you need to read from or screenshot a specific file, use figma_execute with the fileKey parameter instead.`;
     }
     const fullSystem = [
       systemPrompt.trim(),
@@ -2649,12 +2649,12 @@ const FIGMA_MCP_URL = 'http://127.0.0.1:3845/mcp';
 class FigmaMCPClient {
   constructor() { this.sessionId = null; this.toolsCache = null; }
 
-  async _post(body) {
+  async _post(body, timeoutMs = 30000) {
     const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' };
     if (this.sessionId) headers['mcp-session-id'] = this.sessionId;
     const res = await fetch(FIGMA_MCP_URL, {
       method: 'POST', headers, body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30000)
+      signal: AbortSignal.timeout(timeoutMs)
     });
     if (!this.sessionId) this.sessionId = res.headers.get('mcp-session-id');
     const text = await res.text();
@@ -2744,8 +2744,10 @@ class FigmaMCPClient {
       return typeof result.result !== 'undefined' ? JSON.stringify(result.result) : 'Done';
     }
     if (!this.sessionId) await this.init();
+    // Use shorter timeout for screenshot-type calls that tend to hang when targeting wrong file
+    const timeoutMs = /screenshot/i.test(name) ? 15000 : 30000;
     const r = await this._post({ jsonrpc: '2.0', method: 'tools/call',
-      params: { name, arguments: args }, id: Date.now() });
+      params: { name, arguments: args }, id: Date.now() }, timeoutMs);
     if (r.error) throw new Error(r.error.message);
     const content = r.result?.content || [];
     return content.map(c => c.text || JSON.stringify(c)).join('\n');
