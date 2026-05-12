@@ -408,10 +408,12 @@ function isOrchestratorActive() {
 function parseDelegations(buffer) {
   if (!buffer) return [];
   var delegations = [];
-  var re = /\[DELEGATE:([\w-]+)\]\s*([\s\S]*?)\s*\[\/DELEGATE\]/gi;
+  var re = /\[DELEGATE:([\w\/-]+)\]\s*([\s\S]*?)\s*\[\/DELEGATE\]/gi;
   var match;
   while ((match = re.exec(buffer)) !== null) {
-    var name = match[1].trim();
+    var rawName = match[1].trim();
+    // Strip agents/ prefix — orchestrators may emit [DELEGATE:agents/name]
+    var name = rawName.replace(/^agents\//, '');
     var task = match[2].trim();
     if (name && task && (findAgent(name) || findSubAgent(name))) {
       delegations.push({ agentName: name, task: task });
@@ -445,8 +447,8 @@ function resolveAgent(name) {
  * Replaces each block with a placeholder card reference.
  */
 function stripDelegationBlocks(buffer) {
-  return buffer.replace(/```?\n?\[DELEGATE:([\w-]+)\]\s*[\s\S]*?\[\/DELEGATE\]\n?```?/gi, '')
-               .replace(/\[DELEGATE:([\w-]+)\]\s*[\s\S]*?\[\/DELEGATE\]/gi, '');
+  return buffer.replace(/```?\n?\[DELEGATE:([\w\/-]+)\]\s*[\s\S]*?\[\/DELEGATE\]\n?```?/gi, '')
+               .replace(/\[DELEGATE:([\w\/-]+)\]\s*[\s\S]*?\[\/DELEGATE\]/gi, '');
 }
 
 /**
@@ -597,9 +599,10 @@ async function executeDelegations(delegations, conv, originalMessage) {
         messages: [{ role: 'user', content: userContent }],
         model: state.model,
         agentName: agent.name,
+        isDelegation: true,
         agentSystemPrompt: agent.systemPrompt || '',
         agentPermissions: agent.permissions || {},
-        useFigmaMCP: state.figmaMCPEnabled || false,
+        useFigmaMCP: !!(agent.permissions && agent.permissions.figma) || !!(activeAgent && activeAgent.permissions && activeAgent.permissions.figma) || state.figmaMCPEnabled || false,
         thinkingBudget: state.thinkingBudget || 'high',
         systemPrompt: '## Active Agent: ' + agent.displayName + '\n\n' + (agent.systemPrompt || '') + '\n\nYou are being delegated a task by an orchestrator agent. Complete the task thoroughly and return your result.\n\n## Verification Before Completion (REQUIRED)\nBefore emitting your completion signal, you MUST verify your work:\n- File edits: read back the changed section to confirm it landed correctly.\n- Shell commands: check exit codes and scan output for errors.\n- Figma: confirm the execution result shows success.\n- If you cannot verify, state what you could NOT confirm.\n- NEVER emit [TASK_COMPLETE] if any step produced errors you did not resolve.\n\n## Completion Signal (REQUIRED)\nYou MUST end your response with a verification summary and exactly one of these markers on its own line:\n- `[TASK_COMPLETE]` — task finished successfully AND verified\n- `[TASK_PARTIAL: <what remains>]` — made progress but could not fully finish\n- `[TASK_BLOCKED: <reason>]` — could not proceed due to a blocker\n- `[TASK_FAILED: <reason>]` — attempted but failed\n\nFormat your ending as:\n### Verification\n- ✓ <what you checked and confirmed>\n- ✗ <what failed or could not be checked> (if any)\n[TASK_COMPLETE]'
       })
@@ -704,27 +707,29 @@ function showDelegationResults(results, container) {
   if (!container) return;
 
   for (var i = 0; i < results.length; i++) {
+    try {
     var r = results[i];
+    var resp = (r.response || '') + '';
     var card = document.createElement('div');
     var statusLabel = r.status === 'complete' ? '✓' : r.status === 'partial' ? '◐' : r.status === 'blocked' ? '⊘' : r.status === 'failed' ? '✗' : '';
     var statusClass = r.status && r.status !== 'unknown' ? ' status-' + r.status : '';
     card.className = 'delegation-result-card' + (r.error ? ' error' : '') + statusClass;
-    var preview = r.response.length > 600 ? r.response.substring(0, 600) + '…' : r.response;
+    var preview = resp.length > 600 ? resp.substring(0, 600) + '…' : resp;
     card.innerHTML =
       '<div class="delegation-result-header">' +
         '<span class="delegation-agent"><i class="ti ' + escHtml(r.icon || 'ti-robot') + '"></i> ' + escHtml(r.displayName || r.agentName) + '</span>' +
         (statusLabel ? '<span class="delegation-status-badge' + statusClass + '">' + statusLabel + ' ' + (r.status || '') + '</span>' : '') +
-        '<span class="delegation-duration">' + (r.duration / 1000).toFixed(1) + 's</span>' +
+        '<span class="delegation-duration">' + ((r.duration || 0) / 1000).toFixed(1) + 's</span>' +
       '</div>' +
-      '<div class="delegation-task"><i class="ti ti-arrow-right"></i> ' + escHtml(r.task.substring(0, 120)) + '</div>' +
+      '<div class="delegation-task"><i class="ti ti-arrow-right"></i> ' + escHtml((r.task || '').substring(0, 120)) + '</div>' +
       '<div class="delegation-result-body">' + renderMarkdown(preview) + '</div>';
 
     // Expand/collapse for long responses
-    if (r.response.length > 600) {
+    if (resp.length > 600) {
       var toggle = document.createElement('button');
       toggle.className = 'delegation-expand-btn';
       toggle.textContent = 'Show full response';
-      toggle.dataset.full = r.response;
+      toggle.dataset.full = resp;
       toggle.dataset.preview = preview;
       toggle.onclick = function() {
         var body = this.previousElementSibling;
@@ -742,6 +747,14 @@ function showDelegationResults(results, container) {
     }
 
     container.appendChild(card);
+    } catch (cardErr) {
+      console.error('[delegation] Error rendering result card ' + i + ':', cardErr);
+      var errCard = document.createElement('div');
+      errCard.className = 'delegation-result-card error';
+      errCard.innerHTML = '<div class="delegation-result-header"><span class="delegation-agent"><i class="ti ti-alert-triangle"></i> ' + escHtml((results[i] && results[i].displayName) || 'Agent ' + i) + '</span></div>' +
+        '<div class="delegation-result-body"><em>Error rendering result</em></div>';
+      container.appendChild(errCard);
+    }
   }
   scrollBottom();
 }

@@ -1306,382 +1306,6 @@ When building a web app for the user, follow this workflow:
 - Each conversation has its own browser tabs — they don't interfere with other conversations.
 `;
 
-const FIGMA_LAYOUT_CONTEXT = `
-## Figma MCP — MANDATORY EXECUTION RULES
-
-You have two Figma tools available via MCP:
-- **get_design_context** — reads current Figma state (node IDs, component keys, text, structure)
-- **figma_execute** — executes Figma Plugin API JavaScript directly inside the open Figma document
-
-### ⚠️ ABSOLUTE RULE: Always call figma_execute when asked to build or modify Figma
-
-When the user asks you to create, build, modify, update, execute, or design anything in Figma:
-1. Call \`get_design_context\` ONCE to get node IDs / existing state (skip if you already have it)
-2. **IMMEDIATELY call \`figma_execute\`** with the complete code — do NOT output any text first
-3. Never say "I'll execute now" / "Running the code" / "Let me do that" — **just call the tool**
-4. Do NOT describe what you're about to do — **just do it**
-5. Task is NOT complete until \`figma_execute\` has returned "Done" or a result summary
-
-**WRONG** (do not do this):
-> "I'll now call figma_execute to build the layout..." ← NO. Just call it.
-
-**RIGHT** (do this):
-> [call figma_execute immediately with the full code]
-
----
-## Figma Layout & Component Swap Guide
-
-Build and modify Figma designs using figma_execute (Plugin API JavaScript). All code runs inside Figma with full access to the \`figma\` object. \`return\` and \`await\` work at top level.
-
----
-### ⚠️ CRITICAL: Auto-layout sizing rules (read before writing any sizing code)
-\`layoutSizingVertical\`, \`layoutSizingHorizontal\`, \`layoutAlign\`, and \`layoutGrow\` only work on children of an auto-layout frame (\`layoutMode !== 'NONE'\`). Setting them on a node whose parent is NOT auto-layout throws an error.
-
-**Safe pattern — always guard before setting child sizing:**
-\`\`\`javascript
-function safeChildSizing(node, horizontal, vertical) {
-  const parent = node.parent;
-  if (!parent || parent.layoutMode === 'NONE' || parent.type === 'PAGE') return;
-  try {
-    if (horizontal) node.layoutSizingHorizontal = horizontal; // 'FILL' | 'HUG' | 'FIXED'
-    if (vertical)   node.layoutSizingVertical   = vertical;
-  } catch(_) {}
-}
-// Usage after appendChild:
-parent.appendChild(inst);
-safeChildSizing(inst, 'FILL', 'HUG');
-
-// The old API (still works but prefer safeChildSizing):
-// child.layoutAlign = 'STRETCH';  // FILL cross-axis — only works inside auto-layout parent
-// child.layoutGrow = 1;           // FILL main-axis  — only works inside auto-layout parent
-\`\`\`
-
-**When to use each value:**
-- \`FILL\` — stretch to fill parent (parent must be auto-layout)
-- \`HUG\` — shrink-wrap content (auto-layout children only)
-- \`FIXED\` — explicit size; safe to set anywhere with \`node.resize(w,h)\`
-
-**Rule: always call \`parent.appendChild(child)\` BEFORE setting child sizing on it.**
-
----
-### Dashboard Frame Structure
-\`\`\`
-App frame (VERTICAL, 1920×1080)
-  ├─ Header [STRETCH]
-  └─ Main (HORIZONTAL, grow=1, gap=24)
-      ├─ SideNav [STRETCH]  — key: 2249c2b1fb655e82e5b9fe5a9dfe2b797f2064cc
-      └─ PageLayout (VERTICAL, grow=1, gap=24, pad=12)
-          └─ Section rows (Section wrapper → LayoutGrid → content slots)
-\`\`\`
-
----
-### 1. Create auto-layout frames
-\`\`\`javascript
-const f = figma.createFrame();
-f.name = 'MyFrame';
-f.layoutMode = 'VERTICAL';   // or 'HORIZONTAL'
-f.itemSpacing = 24;
-f.paddingLeft = f.paddingRight = f.paddingTop = f.paddingBottom = 16;
-f.primaryAxisSizingMode = 'FIXED';
-f.counterAxisSizingMode = 'AUTO';   // or 'FIXED'
-f.resize(1920, 1080);
-
-// ✅ ALWAYS append to parent BEFORE setting child sizing
-parent.appendChild(f);
-safeChildSizing(f, 'FILL', 'HUG');  // use the safe helper defined above
-\`\`\`
-
----
-### 2. Place a component by key
-\`\`\`javascript
-const comp = await figma.importComponentByKeyAsync('KEY');
-const inst = comp.createInstance();
-parent.appendChild(inst);  // append FIRST
-safeChildSizing(inst, 'FILL', 'HUG');
-\`\`\`
-
----
-### 3. Swap an instance's component (INSTANCE_SWAP slots)
-This is the key pattern for swapping predefined content into Section/LayoutGrid slots:
-\`\`\`javascript
-// Find the INSTANCE_SWAP property keys on an instance
-function getSwapSlots(instance) {
-  const props = instance.componentProperties || {};
-  return Object.entries(props)
-    .filter(([, v]) => v.type === 'INSTANCE_SWAP')
-    .map(([key]) => key);
-}
-
-// Swap a component into a slot by key
-async function swapSlot(instance, slotKey, componentKey) {
-  // slotKey may be short label — do case-insensitive prefix match if needed
-  const liveProps = instance.componentProperties || {};
-  let actualKey = slotKey;
-  if (!liveProps[slotKey]) {
-    const found = Object.keys(liveProps).find(k =>
-      k.toLowerCase().startsWith(slotKey.toLowerCase())
-    );
-    if (found) actualKey = found;
-  }
-  const comp = await figma.importComponentByKeyAsync(componentKey);
-  instance.setProperties({ [actualKey]: comp.id }); // Use node ID, NOT key
-}
-
-// Example: place a DataGrid into slot "Item 1" of a LayoutGrid
-const lgInst = figma.currentPage.findAll(n => n.type === 'INSTANCE' && n.name.includes('LayoutGrid'))[0];
-await swapSlot(lgInst, 'Item 1', 'YOUR_COMPONENT_KEY');
-\`\`\`
-
----
-### 4. Swap the selected node's component
-\`\`\`javascript
-const sel = figma.currentPage.selection[0];
-if (sel && sel.type === 'INSTANCE') {
-  const newComp = await figma.importComponentByKeyAsync('NEW_KEY');
-  sel.swapComponent(newComp);  // replaces the master component in-place
-}
-\`\`\`
-
----
-### 5. Section + LayoutGrid keys (Security AI UI Kit)
-**Section wrapper** (content container with optional header):
-- \`ec55e1cf42855ce08a89e90ba302bb531dcda8d1\`
-
-**LayoutGrid_Section variants** (swap into Section's content slot):
-| Layout       | Key |
-|---|---|
-| 1-col        | \`cd3267e90f83d7487d7f2976fb9ea3599aa48ff4\` |
-| 2-col equal  | \`399160f011bf1cade3c078cf7b8df3abc1889176\` |
-| 2-col 1:3    | \`c268d614669496370f588f1a432432da70871032\` |
-| 2-col 3:1    | \`fadfc8ba7bea951815c228aa28b3fe1303fe612d\` |
-| 3-col equal  | \`b27e456a69e7f81710fb82dd5635cd5abd1ee27d\` |
-| 3-col 2:1:1  | \`14ac2eb8a0173da1509c9a880c659b47c3a1bc2d\` |
-| 3-col 1:1:2  | \`b19eb1c9135bbdbc582c567ef47b6d9a37bc25a7\` |
-| 4-col equal  | \`b7c46dd6c84ecd6e80f1cb020c49ddab7e8e8d1e\` |
-
-**Navigation**:
-- SideNav: \`2249c2b1fb655e82e5b9fe5a9dfe2b797f2064cc\`
-- TopNav: \`e6b6b1b7c1f80aa538f4542ba66f59da03e9b606\`
-
-**Cards / content blocks**:
-- Recommendation (general): \`8d0a2578a95681d39205a030c28cc31df89b7e3d\`
-- Recommendation (spotlight): \`22ede7aa59eebe9595c1592f6e0e734d74b5c532\`
-- Recommendation (contextual): \`7c56e6dd7668d23315bfab10169c209cec544bdb\`
-- Metric group: \`c4a57f63e0e8aa4a495482b88bd7c4ed750ac09c\`
-- Card (filled): \`5594f2616c702b4afe82f7addfc11a6f4daab5da\`
-
----
-### 6. Build a full content row (Section + LayoutGrid + content)
-\`\`\`javascript
-// 1. Import Section and a 2-column LayoutGrid
-const sectionComp = await figma.importComponentByKeyAsync('ec55e1cf42855ce08a89e90ba302bb531dcda8d1');
-const lgComp      = await figma.importComponentByKeyAsync('399160f011bf1cade3c078cf7b8df3abc1889176'); // 2-col
-
-// 2. Create Section instance, add to page layout
-const section = sectionComp.createInstance();
-pageLayout.appendChild(section);
-section.layoutAlign = 'STRETCH';
-section.layoutSizingVertical = 'HUG';
-
-// 3. Swap the LayoutGrid into the Section's content INSTANCE_SWAP slot
-const sectionSwapKeys = getSwapSlots(section);
-if (sectionSwapKeys.length > 0) {
-  section.setProperties({ [sectionSwapKeys[0]]: lgComp.id });
-}
-
-// 4. Find the LayoutGrid instance inside Section and fill its slots
-const lgInst = section.findAll(n => n.type === 'INSTANCE' && /LayoutGrid/i.test(n.name))[0];
-if (lgInst) {
-  const slots = getSwapSlots(lgInst);  // ['Item 1 content#...', 'Item 2 content#...']
-  const metricComp = await figma.importComponentByKeyAsync('c4a57f63e0e8aa4a495482b88bd7c4ed750ac09c');
-  const cardComp   = await figma.importComponentByKeyAsync('5594f2616c702b4afe82f7addfc11a6f4daab5da');
-  if (slots[0]) lgInst.setProperties({ [slots[0]]: metricComp.id });
-  if (slots[1]) lgInst.setProperties({ [slots[1]]: cardComp.id });
-}
-\`\`\`
-
----
-### 7. Text overrides
-⚠️ ALWAYS load fonts before setting .characters on ANY text node — even existing ones.
-  Batch all loadFontAsync calls with Promise.all BEFORE any text edits:
-\`\`\`javascript
-// CORRECT: load all needed fonts first
-const textNodes = frame.findAll(n => n.type === 'TEXT');
-await Promise.all(textNodes.map(t =>
-  figma.loadFontAsync(Array.isArray(t.fontName) ? t.fontName[0] : t.fontName).catch(()=>{})
-));
-// NOW safe to edit characters
-textNodes.forEach(t => { if (t.name === 'Title') t.characters = 'New Title'; });
-
-// Via component TEXT property (preferred — no loadFont needed)
-inst.setProperties({ 'Title#abc': 'My Title', 'Description#xyz': 'Some text' });
-
-// Via direct text node edit (must load font first)
-const textNode = inst.findAll(n => n.type === 'TEXT' && n.name === 'Title')[0];
-if (textNode) {
-  await figma.loadFontAsync(Array.isArray(textNode.fontName) ? textNode.fontName[0] : textNode.fontName);
-  textNode.characters = 'My Title';
-}
-\`\`\`
-
----
-### 8. Scan for existing instances to swap
-\`\`\`javascript
-// Find all instances of a specific component on the current page
-const instances = figma.currentPage.findAll(n =>
-  n.type === 'INSTANCE' && n.mainComponent?.key === 'COMPONENT_KEY'
-);
-
-// Find instances by name pattern
-const sections = figma.currentPage.findAll(n =>
-  n.type === 'INSTANCE' && /Section/i.test(n.name)
-);
-\`\`\`
-
----
-### 9. Hide / show layers
-\`\`\`javascript
-node.visible = false;   // hide
-node.visible = true;    // show
-node.opacity = 0.5;     // 50% opacity
-
-// Hide all nodes whose name matches a pattern
-figma.currentPage.findAll(n => /unused|extra/i.test(n.name))
-  .forEach(n => { n.visible = false; });
-
-// Hide specific nav items by their label text
-figma.currentPage.findAll(n => n.type === 'TEXT')
-  .filter(n => ['Reports', 'Settings', 'Help'].includes(n.characters))
-  .forEach(n => {
-    // Hide the parent nav item frame, not just the text node
-    let p = n.parent;
-    while (p && p.type !== 'INSTANCE' && p.parent?.type !== 'INSTANCE') p = p.parent;
-    if (p) p.visible = false;
-  });
-\`\`\`
-
----
-### 10. Edit ALL text in an existing node tree (applyTextOverrides pattern)
-Use this to update text in nav items, section headers, card labels — anything already in the file:
-\`\`\`javascript
-async function applyTextOverrides(instance, overrides) {
-  if (!overrides || !Object.keys(overrides).length) return;
-  const keys = Object.keys(overrides);
-  const applied = {};
-
-  // Step 1: component TEXT properties (fastest path)
-  try {
-    const defs = instance.componentPropertyDefinitions || {};
-    const propsToSet = {};
-    for (const ok of keys) {
-      const okl = ok.toLowerCase();
-      for (const dk of Object.keys(defs)) {
-        if (defs[dk].type !== 'TEXT') continue;
-        const dkl = dk.split('#')[0].toLowerCase().trim();
-        if (dkl === okl || dkl.includes(okl) || okl.includes(dkl)) {
-          propsToSet[dk] = String(overrides[ok]);
-          applied[ok] = true;
-          break;
-        }
-      }
-    }
-    if (Object.keys(propsToSet).length) instance.setProperties(propsToSet);
-  } catch(_) {}
-
-  // Step 2: find TEXT nodes by layer name for anything not matched above
-  const remaining = keys.filter(k => !applied[k]);
-  if (!remaining.length) return;
-  const textNodes = instance.findAll(n => n.type === 'TEXT');
-  for (const rk of remaining) {
-    const rkl = rk.toLowerCase();
-    const tn = textNodes.find(n => n.name.toLowerCase().includes(rkl));
-    if (tn) {
-      try { await figma.loadFontAsync(tn.fontName); tn.characters = String(overrides[rk]); } catch(_) {}
-    }
-  }
-}
-
-// Usage — edit existing nav instance on the page:
-const nav = figma.currentPage.findAll(n => n.type === 'INSTANCE' && /nav/i.test(n.name))[0];
-await applyTextOverrides(nav, {
-  'Dashboard': 'Threat Center',
-  'Overview': 'Incidents',
-  'Analytics': 'Threat Intel',
-});
-\`\`\`
-
----
-### 11. Edit text found by current content (rename existing labels)
-\`\`\`javascript
-// Find text nodes by what they currently say and change them
-const allText = figma.currentPage.findAll(n => n.type === 'TEXT');
-const renames = {
-  'Dashboard': 'Threat Center',
-  'Overview':  'Active Incidents',
-  'Reports':   'Threat Reports',
-  'Users':     'Affected Assets',
-};
-for (const t of allText) {
-  const newVal = renames[t.characters];
-  if (newVal) {
-    try { await figma.loadFontAsync(t.fontName); t.characters = newVal; } catch(_) {}
-  }
-}
-\`\`\`
-
----
-### 12. Practical workflow — "Make this a Threat Dashboard"
-1. Call \`get_design_context\` ONCE to get node IDs and existing text
-2. Use \`figma_execute\` to do ALL edits in one call:
-   - Rename text nodes (nav labels, section titles, card headings)
-   - Hide unused nav items / layers
-   - Swap placeholder cards for threat-specific components
-   - Update section titles & descriptions via \`setProperties\`
-\`\`\`javascript
-// All in ONE figma_execute call — batch everything
-const page = figma.currentPage;
-
-// 1. Rename all nav text
-const renames = { 'Home': 'Threat Center', 'Analytics': 'Threat Intel', 'Users': 'Assets' };
-for (const t of page.findAll(n => n.type === 'TEXT')) {
-  if (renames[t.characters]) {
-    try { await figma.loadFontAsync(t.fontName); t.characters = renames[t.characters]; } catch(_) {}
-  }
-}
-
-// 2. Hide nav items not relevant to threat dashboard
-const hideLabels = new Set(['Settings', 'Help', 'Billing', 'Integrations']);
-for (const t of page.findAll(n => n.type === 'TEXT' && hideLabels.has(n.characters))) {
-  let p = t.parent;
-  while (p && p.type !== 'FRAME' && p.type !== 'INSTANCE') p = p.parent;
-  if (p) p.visible = false;
-}
-
-// 3. Update section component properties by name
-for (const n of page.findAll(n => n.type === 'INSTANCE')) {
-  const defs = n.componentPropertyDefinitions || {};
-  const titleKey = Object.keys(defs).find(k => /title/i.test(k) && defs[k].type === 'TEXT');
-  if (titleKey && /section/i.test(n.name)) {
-    try { n.setProperties({ [titleKey]: 'Active Threats' }); } catch(_) {}
-    break;
-  }
-}
-
-return 'Done';
-\`\`\`
-
----
-### Rules
-- **ALWAYS call figma_execute when asked to build/modify/create** — never just describe what you'd do.
-- Use get_design_context ONCE to read existing keys/IDs, then call figma_execute immediately.
-- Do NOT call get_design_context or get_screenshot more than twice per task.
-- Prefer swapComponent() for replacing a whole instance, setProperties() for slot swaps.
-- importComponentByKeyAsync() returns the Component node; use .id for setProperties, .createInstance() to place.
-- Always batch ALL edits (text, visibility, swaps) into a SINGLE figma_execute call when possible.
-- Always \`return 'Done'\` or a summary at the end of figma_execute so you know it succeeded.
-- After figma_execute returns, summarize what was built — do not call more tools unless needed.
-`;
-
 // ── Context summarization endpoint ───────────────────────────────────────────
 app.post('/api/summarize', async (req, res) => {
   const { messages = [], model = 'claude-sonnet-4.6' } = req.body;
@@ -1725,7 +1349,7 @@ app.post('/api/chat', async (req, res) => {
   res.on('close',  _psRelease);
   const { messages = [], model = 'claude-sonnet-4.6', systemPrompt = '', useFigmaMCP = false, contextSummary = '',
           thinkingBudget = 'high', maxContextTurns = 20, agentName = null,
-          projectId = null, projectContextIds = null } = req.body;
+          projectId = null, projectContextIds = null, isDelegation = false } = req.body;
 
   // Track the active conversation model so heartbeat/workflows/teams use the same one
   _activeModel = model;
@@ -1753,12 +1377,13 @@ app.post('/api/chat', async (req, res) => {
     }
 
     // Build system prompt — append project context, facts memory, context summary and browser context
-    const factsCtx = factsForSystemPrompt(20);
+    // For delegation (sub-agent) calls, skip heavy shared context to reduce token cost
+    const factsCtx = isDelegation ? '' : factsForSystemPrompt(20);
     const fullSystem = [
       systemPrompt.trim(),
-      projectCtx,
+      isDelegation ? '' : projectCtx,
       factsCtx,
-      BROWSER_BUILD_CONTEXT,
+      isDelegation ? '' : BROWSER_BUILD_CONTEXT,
       contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : ''
     ].filter(Boolean).join('\n');
     if (fullSystem) allMessages.push({ role: 'system', content: fullSystem });
@@ -1810,10 +1435,6 @@ app.post('/api/chat', async (req, res) => {
         // Fallback: always expose figma_execute even when port-3845 is unavailable
         mcpTools = [FigmaMCPClient.FIGMA_EXECUTE_TOOL];
       }
-      // Inject layout guide into system prompt
-      allMessages[0] = allMessages[0]
-        ? { ...allMessages[0], content: allMessages[0].content + '\n\n' + FIGMA_LAYOUT_CONTEXT }
-        : { role: 'system', content: FIGMA_LAYOUT_CONTEXT };
     }
 
     // Load agent tools if an agent is active
@@ -4420,15 +4041,22 @@ app.get('/api/agents', (req, res) => {
           const pEnd = raw.indexOf('\n---\n');
           manifest._learnings = pEnd !== -1 ? raw.slice(0, pEnd).trim() : '';
         }
-        // Load sub-agents if manifest declares them
-        if (manifest.agents && Array.isArray(manifest.agents)) {
+        // Load sub-agents — from manifest.agents array or auto-discover agents/ subdirectory
+        let subRefs = manifest.agents && Array.isArray(manifest.agents) ? manifest.agents : null;
+        if (!subRefs) {
+          const agentsSubDir = path.join(agentDir, 'agents');
+          if (fs.existsSync(agentsSubDir) && fs.statSync(agentsSubDir).isDirectory()) {
+            subRefs = fs.readdirSync(agentsSubDir).filter(d => fs.existsSync(path.join(agentsSubDir, d, 'agent.json'))).map(d => 'agents/' + d);
+          }
+        }
+        if (subRefs && subRefs.length) {
           manifest._subAgents = [];
           // Load optional shared.md to append to every sub-agent prompt
           const sharedPromptPath = path.join(agentDir, 'shared.md');
           const sharedPrompt = fs.existsSync(sharedPromptPath)
             ? '\n\n---\n## Shared Infrastructure\n\n' + fs.readFileSync(sharedPromptPath, 'utf8')
             : '';
-          for (const subRef of manifest.agents) {
+          for (const subRef of subRefs) {
             const subDir = path.join(agentDir, subRef);
             const subManifestPath = path.join(subDir, 'agent.json');
             if (fs.existsSync(subManifestPath)) {
@@ -4475,13 +4103,20 @@ app.get('/api/agents/:name', (req, res) => {
       const pEnd = raw.indexOf('\n---\n');
       manifest._learnings = pEnd !== -1 ? raw.slice(0, pEnd).trim() : '';
     }
-    // Load sub-agents
-    if (manifest.agents && Array.isArray(manifest.agents)) {
+    // Load sub-agents — from manifest.agents array or auto-discover agents/ subdirectory
+    let subRefs = manifest.agents && Array.isArray(manifest.agents) ? manifest.agents : null;
+    if (!subRefs) {
+      const agentsSubDir = path.join(agentDir, 'agents');
+      if (fs.existsSync(agentsSubDir) && fs.statSync(agentsSubDir).isDirectory()) {
+        subRefs = fs.readdirSync(agentsSubDir).filter(d => fs.existsSync(path.join(agentsSubDir, d, 'agent.json'))).map(d => 'agents/' + d);
+      }
+    }
+    if (subRefs && subRefs.length) {
       manifest._subAgents = [];
       // Expose shared.md content for the builder editor
       const sharedPath = path.join(agentDir, 'shared.md');
       if (fs.existsSync(sharedPath)) manifest._shared = fs.readFileSync(sharedPath, 'utf8');
-      for (const subRef of manifest.agents) {
+      for (const subRef of subRefs) {
         const subDir = path.join(agentDir, subRef);
         const subManifestPath = path.join(subDir, 'agent.json');
         if (fs.existsSync(subManifestPath)) {

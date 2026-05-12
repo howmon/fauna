@@ -496,10 +496,9 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
         messages: [{ role: 'user', content: userContent }],
         model: state.model,
         agentName: agent.name,
-        agentSystemPrompt: agent.systemPrompt || '',
-        agentPermissions: agent.permissions || {},
-        useFigmaMCP: state.figmaMCPEnabled || false,
-        usePlaywrightMCP: state.playwrightMCPEnabled || false,
+        isDelegation: true,
+        useFigmaMCP: !!(agent.permissions && agent.permissions.figma),
+        usePlaywrightMCP: !!(agent.permissions && agent.permissions.browser),
         thinkingBudget: state.thinkingBudget || 'high',
         systemPrompt: '## Active Agent: ' + agent.displayName + '\n\n' + (agent.systemPrompt || '') + '\n\nYou are running as one of several agents in a multi-agent session. Complete your assigned task thoroughly.'
       })
@@ -574,7 +573,7 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
   saveConversations();
   if (typeof maybeUpdateConversationTitle === 'function') maybeUpdateConversationTitle(conv);
 
-  scrollBottom();
+  forceScrollBottom();
   if (typeof renderAgentChips === 'function') renderAgentChips();
 }
 
