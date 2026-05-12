@@ -89,6 +89,8 @@ const CONVERSATIONS_FILE = path.join(FAUNA_CONFIG_DIR, 'conversations.json');
 
 // Module-level AI caller — set during startServer(), used by permission guard etc.
 let internalAICaller = async () => '';
+// Track the model currently in use for conversations so features inherit it
+let _activeModel = 'gpt-4.1';
 
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ limit: '25mb', extended: false }));
@@ -1724,6 +1726,9 @@ app.post('/api/chat', async (req, res) => {
   const { messages = [], model = 'claude-sonnet-4.6', systemPrompt = '', useFigmaMCP = false, contextSummary = '',
           thinkingBudget = 'high', maxContextTurns = 20, agentName = null,
           projectId = null, projectContextIds = null } = req.body;
+
+  // Track the active conversation model so heartbeat/workflows/teams use the same one
+  _activeModel = model;
 
   res.writeHead(200, {
     'Content-Type':    'text/event-stream',
@@ -7337,11 +7342,12 @@ export function startServer(port) {
     // Run fact memory decay on startup (prune facts not accessed in 60 days)
     try { runDecay(); } catch (_) {}
 
-    // Internal AI caller for heartbeat and workflows
-    internalAICaller = async (prompt, model = 'gpt-4.1') => {
+    // Internal AI caller for heartbeat and workflows — defaults to active conversation model
+    internalAICaller = async (prompt, model) => {
+      const useModel = model || _activeModel || 'gpt-4.1';
       const client = getCopilotClient();
       const resp = await client.chat.completions.create({
-        model,
+        model: useModel,
         messages: [{ role: 'user', content: prompt }],
         max_tokens: 2000,
       });

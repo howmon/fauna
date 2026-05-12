@@ -90,7 +90,7 @@ export function createWorkflow(opts = {}) {
     enabled: opts.enabled !== false,
     schedule,
     scheduleText: opts.schedule || 'daily at 9am',
-    model: opts.model || 'gpt-4.1',
+    model: opts.model || '',  // empty = use active conversation model
     steps: (opts.steps || []).map((s, i) => ({
       id: 'step-' + (i + 1),
       prompt: String(s.prompt || s).slice(0, 4000),

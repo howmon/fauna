@@ -19,7 +19,7 @@ const DEFAULTS = {
   enabled: false,
   pollIntervalSeconds: 10,
   accessToken: '',
-  model: 'gpt-4.1-mini',
+  model: '',  // empty = use active conversation model
   status: 'disconnected', // disconnected | connected | error
   lastError: null,
 };

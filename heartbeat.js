@@ -23,7 +23,7 @@ const DEFAULTS = {
   intervalMinutes: 30,
   prompt: 'Check my system status. If anything needs immediate attention, prefix your response with HEARTBEAT_URGENT|source|summary. Otherwise respond with HEARTBEAT_OK followed by a brief summary.',
   schedule: { days: [1, 2, 3, 4, 5], startHour: 9, endHour: 17 }, // weekdays 9am-5pm
-  model: 'gpt-4.1',
+  model: '',  // empty = use active conversation model
 };
 
 // ── Persistence ────────────────────────────────────────────────────────
