@@ -467,11 +467,13 @@ function _parseTaskStatus(text) {
 
 /**
  * Execute all delegations in parallel, then synthesize.
- * Returns { results: [...], synthesis: string }
+ * Returns { results: [...], synthesis: string, chosenMode: string }
+ * @param {string} [preferredMode] - If set, skip mode picker and use this mode (for pipeline round 2+)
  */
-async function executeDelegations(delegations, conv, originalMessage) {
+async function executeDelegations(delegations, conv, originalMessage, preferredMode) {
   var results = [];
   var roundLabel = conv._delegRound ? ' (round ' + conv._delegRound + ')' : '';
+  var uid = 'del-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
 
   // Show delegation progress in UI with per-agent status — anchored to the conversation's DOM
   var inner = typeof getConvInner === 'function' ? getConvInner(conv.id) : document.getElementById('messages-inner');
@@ -484,34 +486,43 @@ async function executeDelegations(delegations, conv, originalMessage) {
     var _icon = _a ? (_a.icon || 'ti-robot') : 'ti-robot';
     var _name = _a ? _a.displayName : delegations[_d].agentName;
     var _taskPreview = delegations[_d].task.length > 80 ? delegations[_d].task.substring(0, 80) + '…' : delegations[_d].task;
-    agentRows += '<div class="delegation-agent-row" id="deleg-row-' + _d + '">' +
+    agentRows += '<div class="delegation-agent-row" id="deleg-row-' + _d + '-' + uid + '">' +
       '<div class="delegation-agent-status"></div>' +
       '<i class="ti ' + escHtml(_icon) + ' delegation-agent-icon"></i>' +
       '<span class="delegation-agent-name">' + escHtml(_name) + '</span>' +
       '<span class="delegation-agent-task">' + escHtml(_taskPreview) + '</span>' +
-      '<span class="delegation-agent-time" id="deleg-time-' + _d + '"></span>' +
+      '<span class="delegation-agent-time" id="deleg-time-' + _d + '-' + uid + '"></span>' +
     '</div>';
   }
 
   // Mode picker — shown before execution starts, waits for user choice
-  var agentOptions = '';
-  for (var _o = 0; _o < delegations.length; _o++) {
-    var _oa = resolveAgent(delegations[_o].agentName);
-    var _oName = _oa ? _oa.displayName : delegations[_o].agentName;
-    agentOptions += '<button class="deleg-mode-btn deleg-single-agent-btn" onclick="window._delegPickMode && window._delegPickMode(\'single:' + _o + '\')">' +
-      '<i class="ti ' + escHtml(_oa ? (_oa.icon || 'ti-robot') : 'ti-robot') + '"></i> ' + escHtml(_oName) + '</button>';
+  // When preferredMode is set (pipeline round 2+), skip interactive picker and show chosen mode directly
+  var modePickerHtml;
+  if (preferredMode) {
+    modePickerHtml =
+      '<div class="delegation-mode-picker" id="deleg-mode-picker-' + uid + '">' +
+        '<span class="deleg-mode-chosen"><i class="ti ti-' + (preferredMode === 'sequential' ? 'arrow-down' : 'bolt') + '"></i> ' + (preferredMode === 'sequential' ? 'Sequential' : 'Parallel') + '</span>' +
+      '</div>';
+  } else {
+    var agentOptions = '';
+    for (var _o = 0; _o < delegations.length; _o++) {
+      var _oa = resolveAgent(delegations[_o].agentName);
+      var _oName = _oa ? _oa.displayName : delegations[_o].agentName;
+      agentOptions += '<button class="deleg-mode-btn deleg-single-agent-btn" onclick="window._delegPickMode && window._delegPickMode(\'single:' + _o + '\')">' +
+        '<i class="ti ' + escHtml(_oa ? (_oa.icon || 'ti-robot') : 'ti-robot') + '"></i> ' + escHtml(_oName) + '</button>';
+    }
+    modePickerHtml =
+      '<div class="delegation-mode-picker" id="deleg-mode-picker-' + uid + '">' +
+        '<span class="deleg-mode-label"><i class="ti ti-settings-2"></i> Run mode:</span>' +
+        '<button class="deleg-mode-btn" onclick="window._delegPickMode && window._delegPickMode(\'parallel\')"><i class="ti ti-bolt"></i> Parallel</button>' +
+        '<button class="deleg-mode-btn" onclick="window._delegPickMode && window._delegPickMode(\'sequential\')"><i class="ti ti-arrow-down"></i> Sequential</button>' +
+        '<button class="deleg-mode-btn" onclick="var el=document.getElementById(\'deleg-single-picker-' + uid + '\');el.style.display=el.style.display===\'none\'?\'\':\'none\'"><i class="ti ti-user"></i> Single</button>' +
+      '</div>' +
+      '<div class="delegation-single-picker" id="deleg-single-picker-' + uid + '" style="display:none">' +
+        '<span class="deleg-mode-label">Pick one agent:</span>' +
+        agentOptions +
+      '</div>';
   }
-  var modePickerHtml =
-    '<div class="delegation-mode-picker" id="deleg-mode-picker">' +
-      '<span class="deleg-mode-label"><i class="ti ti-settings-2"></i> Run mode:</span>' +
-      '<button class="deleg-mode-btn" id="deleg-mode-parallel" onclick="window._delegPickMode && window._delegPickMode(\'parallel\')"><i class="ti ti-bolt"></i> Parallel</button>' +
-      '<button class="deleg-mode-btn" id="deleg-mode-sequential" onclick="window._delegPickMode && window._delegPickMode(\'sequential\')"><i class="ti ti-arrow-down"></i> Sequential</button>' +
-      '<button class="deleg-mode-btn" id="deleg-mode-single-toggle" onclick="var el=document.getElementById(\'deleg-single-picker\');el.style.display=el.style.display===\'none\'?\'\':\'none\'"><i class="ti ti-user"></i> Single</button>' +
-    '</div>' +
-    '<div class="delegation-single-picker" id="deleg-single-picker" style="display:none">' +
-      '<span class="deleg-mode-label">Pick one agent:</span>' +
-      agentOptions +
-    '</div>';
 
   progressEl.innerHTML =
     '<div class="delegation-progress-header"><i class="ti ti-hierarchy-3"></i> Orchestrating ' + delegations.length + ' agent(s)' + roundLabel + '…</div>' +
@@ -519,13 +530,18 @@ async function executeDelegations(delegations, conv, originalMessage) {
     '<div class="delegation-agent-list">' + agentRows + '</div>';
   if (inner) { inner.appendChild(progressEl); scrollBottom(); }
 
-  // Wait for user mode choice — no auto-timeout, user must pick
-  var chosenMode = await new Promise(function(resolve) {
-    window._delegPickMode = function(mode) {
-      resolve(mode);
-    };
-  });
-  window._delegPickMode = null;
+  // Wait for user mode choice — skip picker if preferredMode set (pipeline round 2+)
+  var chosenMode;
+  if (preferredMode) {
+    chosenMode = preferredMode;
+  } else {
+    chosenMode = await new Promise(function(resolve) {
+      window._delegPickMode = function(mode) {
+        resolve(mode);
+      };
+    });
+    window._delegPickMode = null;
+  }
 
   // Handle single-agent mode: filter delegations to just the chosen one
   var singleAgentIndex = -1;
@@ -540,9 +556,9 @@ async function executeDelegations(delegations, conv, originalMessage) {
   var cancelled = false;
 
   // Update picker to show chosen mode + stop button, mark rows as working
-  var pickerEl = document.getElementById('deleg-mode-picker');
+  var pickerEl = document.getElementById('deleg-mode-picker-' + uid);
   if (pickerEl) {
-    var stopId = 'deleg-stop-' + Date.now();
+    var stopId = 'deleg-stop-' + uid;
     pickerEl.innerHTML =
       '<span class="deleg-mode-chosen"><i class="ti ti-' + (chosenMode === 'sequential' ? 'arrow-down' : 'bolt') + '"></i> ' + (chosenMode === 'sequential' ? 'Sequential' : 'Parallel') + '</span>' +
       '<button class="deleg-stop-btn" id="' + stopId + '" onclick="window._delegStop && window._delegStop()"><i class="ti ti-player-stop-filled"></i> Stop</button>';
@@ -554,7 +570,7 @@ async function executeDelegations(delegations, conv, originalMessage) {
     if (stopBtn) stopBtn.disabled = true;
     // Mark all still-working rows as cancelled
     for (var _c = 0; _c < delegations.length; _c++) {
-      var _row2 = document.getElementById('deleg-row-' + _c);
+      var _row2 = document.getElementById('deleg-row-' + _c + '-' + uid);
       if (_row2 && _row2.classList.contains('working')) {
         _row2.classList.remove('working'); _row2.classList.add('cancelled');
         var _st = _row2.querySelector('.delegation-agent-status');
@@ -569,7 +585,7 @@ async function executeDelegations(delegations, conv, originalMessage) {
   };
 
   for (var _r = 0; _r < delegations.length; _r++) {
-    var _row = document.getElementById('deleg-row-' + _r);
+    var _row = document.getElementById('deleg-row-' + _r + '-' + uid);
     if (_row) {
       _row.classList.add(chosenMode === 'sequential' ? 'pending' : 'working');
       if (chosenMode === 'sequential') _row.querySelector('.delegation-agent-status').innerHTML = '<span class="deleg-pending-dot"></span>';
@@ -583,8 +599,8 @@ async function executeDelegations(delegations, conv, originalMessage) {
     if (cancelled) return Promise.resolve({ agentName: del.agentName, response: 'Cancelled', duration: 0, cancelled: true });
     var agent = resolveAgent(del.agentName);
     if (!agent) return Promise.resolve({ agentName: del.agentName, response: 'Agent not found', duration: 0, error: true });
-    var row = document.getElementById('deleg-row-' + idx);
-    var timeEl = document.getElementById('deleg-time-' + idx);
+    var row = document.getElementById('deleg-row-' + idx + '-' + uid);
+    var timeEl = document.getElementById('deleg-time-' + idx + '-' + uid);
     if (row) { row.classList.remove('pending'); row.classList.add('working'); row.querySelector('.delegation-agent-status').innerHTML = '<span class="delegation-spinner"></span>'; }
     var start = Date.now();
     var timerTick = setInterval(function() {
@@ -646,7 +662,7 @@ async function executeDelegations(delegations, conv, originalMessage) {
       headerElC.innerHTML = '<i class="ti ti-player-stop-filled"></i> Stopped by user';
       headerElC.classList.add('cancelled');
     }
-    return { results: results, synthesis: null };
+    return { results: results, synthesis: null, chosenMode: chosenMode };
   }
 
   // Update header to synthesis phase
@@ -667,7 +683,7 @@ async function executeDelegations(delegations, conv, originalMessage) {
     headerEl.innerHTML = '<i class="ti ti-circle-check"></i> Orchestration complete';
   }
 
-  return { results: results, synthesis: synthesis };
+  return { results: results, synthesis: synthesis, chosenMode: chosenMode };
 }
 
 /**

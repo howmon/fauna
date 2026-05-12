@@ -962,7 +962,8 @@ figma.ui.onmessage = async function(msg) {
         figma.ui.postMessage({ type: 'execute-result', id: execId, success: false, error: err.message });
       });
     } catch(execErr) {
-      figma.ui.postMessage({ type: 'execute-result', id: execId, success: false, error: execErr.message });
+      console.error('[figma_execute] Syntax/eval error: ' + execErr.message + '\\nCode (first 300 chars): ' + (execCode || '').slice(0, 300));
+      figma.ui.postMessage({ type: 'execute-result', id: execId, success: false, error: execErr.message + ' — code snippet: ' + (execCode || '').slice(0, 200).replace(/\n/g, '\\n') });
     }
   }
 

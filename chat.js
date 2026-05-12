@@ -684,11 +684,13 @@ async function streamResponse(conv) {
           var round = 0;
           var currentDelegations = delegations;
           var allResults = [];
+          var persistedMode = null; // remember mode choice across rounds
           while (currentDelegations.length > 0 && round < MAX_ROUNDS) {
             round++;
             conv._delegRound = round;
             dbg('Delegation round ' + round + ': ' + currentDelegations.length + ' agent(s)', 'cmd');
-            var delResult = await executeDelegations(currentDelegations, conv, lastUserText);
+            var delResult = await executeDelegations(currentDelegations, conv, lastUserText, persistedMode);
+            if (!persistedMode && delResult.chosenMode) persistedMode = delResult.chosenMode;
             if (delResult.results) allResults = allResults.concat(delResult.results);
 
             if (delResult.synthesis) {
