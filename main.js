@@ -480,7 +480,7 @@ app.on('window-all-closed', () => {
 // reconnect loop) cannot keep the process alive and cause a phantom restart.
 app.on('before-quit', () => {
   app.isQuitting = true;
-  globalShortcut.unregisterAll();
+  if (app.isReady()) globalShortcut.unregisterAll();
   // Give Electron ~300 ms to close windows, then hard-exit the Node process.
   setTimeout(() => process.exit(0), 300);
 });

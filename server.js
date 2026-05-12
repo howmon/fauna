@@ -5141,7 +5141,7 @@ Return a JSON object with:
   - "label": short human-readable label (5-8 words)
   - "detail": one or two sentences explaining the issue and how to fix it
   - "severity": "high" | "medium" | "low"
-- "improvedPrompt": string — a rewritten version of the system prompt that addresses all findings. Omit this field (or set to null) only if there are no findings.
+- "improvedPrompt": string — a COMPLETE rewritten version of the system prompt that addresses all findings. You MUST include the ENTIRE prompt text — never truncate, abbreviate, or use placeholders like "[...rest of prompt...]". Omit this field (or set to null) only if there are no findings.
 
 Quality criteria to check:
 1. Role clarity (high) — Is the agent's role and purpose clearly defined up front?
@@ -5165,7 +5165,7 @@ Quality criteria to check:
       console.log('[rubric-audit] trying model:', model);
       const response = await client.chat.completions.create({
         model,
-        max_tokens: 2000,
+        max_tokens: 16384,
         stream: false,
         messages
       });
@@ -7036,7 +7036,7 @@ async function _getPlaywrightMcpClient() {
   const cliPath = path.join(path.dirname(_require.resolve('@playwright/mcp')), 'cli.js');
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [cliPath, '--headless'],
+    args: [cliPath],
   });
   const client = new Client({ name: 'fauna-playwright', version: '1.0.0' });
   await client.connect(transport);
@@ -7058,7 +7058,15 @@ app.post('/api/playwright-mcp/call', express.json({ limit: '4mb' }), async (req,
   if (!tool) return res.status(400).json({ error: 'tool required' });
   try {
     const client = await _getPlaywrightMcpClient();
-    const result = await client.callTool({ name: tool, arguments: args });
+    // Use AbortSignal for a 90s timeout — browser actions can be slow
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 90000);
+    let result;
+    try {
+      result = await client.callTool({ name: tool, arguments: args }, undefined, { signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
     const content = Array.isArray(result?.content) ? result.content : [{ type: 'text', text: JSON.stringify(result) }];
     res.json({ ok: true, content });
   } catch (e) {
