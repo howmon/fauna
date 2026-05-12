@@ -642,20 +642,34 @@ var _MONO_LANG = {
   ts:'typescript', tsx:'typescript', jsx:'javascript',
   json:'json', jsonc:'json',
   html:'html', htm:'html',
-  css:'css', scss:'scss', less:'less',
-  md:'markdown', markdown:'markdown',
+  css:'css', scss:'scss', sass:'scss', less:'less',
+  md:'markdown', markdown:'markdown', mdx:'markdown',
   py:'python', rb:'ruby', php:'php',
   go:'go', rs:'rust', java:'java',
-  c:'c', cpp:'cpp', h:'c', hpp:'cpp',
+  c:'c', cpp:'cpp', h:'c', hpp:'cpp', hh:'cpp', cc:'cpp',
+  cs:'csharp', vb:'vb',
   sh:'shell', bash:'shell', zsh:'shell', fish:'shell',
-  sql:'sql', graphql:'graphql',
+  bat:'bat', cmd:'bat', ps1:'powershell', psm1:'powershell',
+  sql:'sql', graphql:'graphql', gql:'graphql', graphqls:'graphql',
   yaml:'yaml', yml:'yaml', toml:'ini',
-  xml:'xml', svg:'xml',
-  swift:'swift', kt:'kotlin', dart:'dart',
+  xml:'xml', svg:'xml', plist:'xml',
+  swift:'swift', kt:'kotlin', kts:'kotlin', dart:'dart',
   ex:'elixir', exs:'elixir', lua:'lua',
   tf:'hcl', tfvars:'hcl', bicep:'bicep',
-  conf:'ini', ini:'ini', cfg:'ini', env:'plaintext',
-  txt:'plaintext', log:'plaintext',
+  conf:'ini', ini:'ini', cfg:'ini', env:'plaintext', properties:'ini',
+  txt:'plaintext', log:'plaintext', csv:'plaintext',
+  r:'r', m:'objective-c', mm:'objective-c',
+  pl:'perl', hs:'haskell', ml:'fsharp',
+  scala:'scala', groovy:'groovy', clj:'clojure', cljs:'clojure',
+  dockerfile:'dockerfile', makefile:'plaintext',
+  svelte:'html', vue:'html', astro:'html',
+  prisma:'graphql', proto:'protobuf',
+  diff:'plaintext', patch:'plaintext',
+  // Extensionless basenames (sent as ext from server fallback)
+  license:'plaintext', licence:'plaintext', readme:'markdown',
+  changelog:'markdown', authors:'plaintext', codeowners:'plaintext',
+  gemfile:'ruby', rakefile:'ruby', vagrantfile:'ruby',
+  procfile:'yaml', brewfile:'ruby',
 };
 
 async function openProjectFile(srcId, filePath) {
@@ -2541,10 +2555,10 @@ async function browseProjectFolder() {
   try {
     var r = await fetch('/api/pick-folder', { method: 'POST' });
     var data = await r.json();
-    if (data.cancelled || !data.path) return;
+    if (data.cancelled || !data.folderPath) return;
     var input = document.getElementById('proj-set-root');
     if (input) {
-      input.value = data.path;
+      input.value = data.folderPath;
       input.dataset.dirty = '1';
     }
     // Auto-save immediately so the folder card re-renders
@@ -2707,9 +2721,9 @@ async function browseNewProjectFolder() {
   try {
     var r = await fetch('/api/pick-folder', { method: 'POST' });
     var data = await r.json();
-    if (data.cancelled || !data.path) return;
+    if (data.cancelled || !data.folderPath) return;
     var input = document.getElementById('proj-new-root');
-    if (input) input.value = data.path;
+    if (input) input.value = data.folderPath;
   } catch(e) { _showToast('Could not open folder picker', true); }
 }
 
@@ -2814,6 +2828,8 @@ async function submitCreateProject() {
     var overlay = document.getElementById('proj-create-overlay');
     if (overlay) overlay.remove();
     await setActiveProject(proj.id);
+    renderProjectSidebarList();
+    _renderAllProjectsPage();
     openProjectHub(type === 'design' ? 'design' : 'files');
     _showToast('Project created');
 

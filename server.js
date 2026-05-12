@@ -23,7 +23,7 @@ import {
   touchProject, linkConversation, linkTask,
   addSource, removeSource, syncSource, listFiles, readSourceFile, resolveSourceFilePath,
   addContext, updateContext, removeContext, contextFromArtifact,
-  getProjectSystemContext,
+  getProjectSystemContext, buildContextPayload,
 } from './project-manager.js';
 import { loadInstructionFiles, _safeReadInstructionFile, _isPathInside, _realPathOrResolve, INSTRUCTION_FILE_LIMIT, INSTRUCTION_TOTAL_LIMIT } from './lib/instruction-files.js';
 import QRCode     from 'qrcode';
@@ -606,12 +606,8 @@ app.get('/api/projects/:id/sources/:srcId/files', (req, res) => {
 
 app.get('/api/projects/:id/sources/:srcId/file', (req, res) => {
   try {
-    const { content, mime, isBinary } = readSourceFile(req.params.id, req.params.srcId, req.query.path || '');
-    if (isBinary) {
-      res.setHeader('Content-Type', mime || 'application/octet-stream');
-      return res.send(content);
-    }
-    res.json({ content, mime });
+    const result = readSourceFile(req.params.id, req.params.srcId, req.query.path || '');
+    res.json(result);
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
@@ -1701,7 +1697,8 @@ app.post('/api/chat', async (req, res) => {
   res.on('finish', _psRelease);
   res.on('close',  _psRelease);
   const { messages = [], model = 'claude-sonnet-4.6', systemPrompt = '', useFigmaMCP = false, contextSummary = '',
-          thinkingBudget = 'high', maxContextTurns = 20, agentName = null } = req.body;
+          thinkingBudget = 'high', maxContextTurns = 20, agentName = null,
+          projectId = null, projectContextIds = null } = req.body;
 
   res.writeHead(200, {
     'Content-Type':    'text/event-stream',
@@ -1717,9 +1714,18 @@ app.post('/api/chat', async (req, res) => {
     const client = getCopilotClient();
     const allMessages = [];
 
-    // Build system prompt — append context summary and browser context
+    // Build project context from active project (name, root, sources, pinned/enabled contexts)
+    let projectCtx = '';
+    if (projectId) {
+      projectCtx = projectContextIds && projectContextIds.length
+        ? buildContextPayload(projectId, projectContextIds)
+        : getProjectSystemContext(projectId);
+    }
+
+    // Build system prompt — append project context, context summary and browser context
     const fullSystem = [
       systemPrompt.trim(),
+      projectCtx,
       BROWSER_BUILD_CONTEXT,
       contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : ''
     ].filter(Boolean).join('\n');

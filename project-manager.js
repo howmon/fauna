@@ -19,13 +19,34 @@ const MAX_CONTEXT_BYTES = 256 * 1024;
 // ── File type classification ──────────────────────────────────────────────
 const TEXT_EXTS = new Set([
   'js','ts','jsx','tsx','mjs','cjs','json','jsonc','yaml','yml','toml',
-  'md','txt','html','htm','css','scss','less','py','go','rs','java','c','cpp','h',
-  'sh','bash','zsh','fish','env','gitignore','sql','graphql','xml','csv','log',
+  'md','txt','html','htm','css','scss','sass','less','py','go','rs','java','c','cpp','h',
+  'sh','bash','zsh','fish','env','gitignore','sql','graphql','gql','graphqls','xml','csv','log',
   'rb','php','swift','kt','dart','ex','exs','lua','vim','conf','ini','cfg',
   'hpp','hh','cc','cs','vb','r','m','mm','pl','hs','ml','proto','thrift',
   'tf','tfvars','bicep','svelte','vue','astro','mdx','tex','rst',
-  'makefile','dockerfile','editorconfig','prettierrc','eslintrc','babelrc',
-  'tsconfig','jsconfig','lock','gradle','properties','pom','f','f90',
+  'lock','gradle','properties','pom','f','f90',
+  'prisma','snap','njk','ejs','pug','hbs','mustache','twig',
+  'patch','diff','cmake','mk','bat','cmd','ps1','psm1',
+  'erl','clj','cljs','scala','groovy','kt','kts','nim','zig','v','d',
+  'plist','strings','entitlements','pbxproj',
+  'crt','pem','pub','asc',
+  'applescript','awk','sed','tcl',
+  'org','adoc','asciidoc','textile','wiki',
+  'npmrc','nvmrc','yarnrc','bowerrc','stylelintrc','huskyrc',
+  'editorconfig','prettierrc','eslintrc','babelrc','tsconfig','jsconfig',
+  'browserslistrc','postcssrc','swcrc',
+]);
+
+// Extensionless files recognised as text by basename (case-insensitive)
+const TEXT_BASENAMES = new Set([
+  'makefile','dockerfile','containerfile','gemfile','rakefile','procfile',
+  'vagrantfile','brewfile','justfile','taskfile','cakefile','guardfile',
+  'license','licence','copying','authors','contributors','changelog',
+  'readme','todo','news','history','notice','install','maintainers',
+  'codeowners','watchmanconfig','flowconfig','gitattributes','gitmodules',
+  'gitignore','dockerignore','npmignore','eslintignore','prettierignore',
+  'hgignore','stylelintignore','slugignore','vercelignore','nowignore',
+  'htaccess','htpasswd',
 ]);
 const IMAGE_EXTS  = new Set(['png','jpg','jpeg','gif','webp','svg','ico','bmp','tiff','tif','avif']);
 const VIDEO_EXTS  = new Set(['mp4','webm','mov','avi','mkv','m4v','3gp','ogv']);
@@ -58,14 +79,15 @@ const MIME_MAP = {
   odp:'application/vnd.oasis.opendocument.presentation',
 };
 
-function _fileType(ext) {
+function _fileType(ext, basename) {
   if (TEXT_EXTS.has(ext))   return 'text';
+  if (!ext && basename && TEXT_BASENAMES.has(basename.toLowerCase())) return 'text';
   if (IMAGE_EXTS.has(ext))  return 'image';
   if (VIDEO_EXTS.has(ext))  return 'video';
   if (AUDIO_EXTS.has(ext))  return 'audio';
   if (PDF_EXTS.has(ext))    return 'pdf';
   if (OFFICE_EXTS.has(ext)) return 'office';
-  return 'binary';
+  return 'unknown'; // caller will attempt text detection
 }
 
 // ── Persistence ──────────────────────────────────────────────────────────
@@ -396,12 +418,33 @@ export function readSourceFile(projectId, srcId, filePath) {
   if (!stat.isFile()) throw new Error('Not a file');
 
   const ext  = path.extname(full).slice(1).toLowerCase();
+  const basename = path.basename(full);
   const mime = MIME_MAP[ext] || 'application/octet-stream';
-  const type = _fileType(ext);
+  let type = _fileType(ext, basename);
+
+  // For unknown types, try to detect text by reading a small sample
+  if (type === 'unknown') {
+    if (stat.size === 0) {
+      type = 'text'; // empty files are safe to show as text
+    } else if (stat.size <= 2 * 1024 * 1024) { // up to 2 MB
+      try {
+        const fd = fs.openSync(full, 'r');
+        const sample = Buffer.alloc(Math.min(8192, stat.size));
+        fs.readSync(fd, sample, 0, sample.length, 0);
+        fs.closeSync(fd);
+        // If no null bytes in the sample, treat as text
+        type = sample.includes(0) ? 'binary' : 'text';
+      } catch (_) {
+        type = 'binary';
+      }
+    } else {
+      type = 'binary';
+    }
+  }
 
   if (type === 'text') {
     const content = fs.readFileSync(full, 'utf8');
-    return { type: 'text', content, size: stat.size, mime, ext, path: rel };
+    return { type: 'text', content, size: stat.size, mime: 'text/plain', ext: ext || basename.toLowerCase(), path: rel };
   }
 
   // Non-text: return metadata only — bytes served by the /raw endpoint
