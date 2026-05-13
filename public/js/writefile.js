@@ -183,6 +183,9 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
         if (storeId) delete _wfContentStore[storeId];
         trackConvFile(wid, d.path, d.bytes);
         if (!isAppend) validateWrittenFile(d.path, content || '', widget);
+        // Inline SVG preview
+        var _wfExt = (d.path || filePath).split('.').pop().toLowerCase();
+        if (_wfExt === 'svg' && content && !isAppend) _injectWfSvgPreview(widget, content);
       });
     }
 
@@ -290,6 +293,22 @@ function validateWrittenFile(filePath, content, widget) {
       }
     }
   }
+}
+
+function _injectWfSvgPreview(widget, svgContent) {
+  // Strip script/event-handler content for safety
+  var safe = svgContent.replace(/<script[\s\S]*?<\/script>/gi, '')
+                       .replace(/\son\w+\s*=\s*["'][^"']*["']/gi, '');
+  var preview = document.createElement('div');
+  preview.className = 'wf-svg-preview';
+  preview.innerHTML = safe;
+  var svgEl = preview.querySelector('svg');
+  if (svgEl) {
+    // Remove fixed dimensions so it scales with the container
+    svgEl.removeAttribute('width');
+    svgEl.removeAttribute('height');
+  }
+  widget.appendChild(preview);
 }
 
 function markWriteFileFailed(widget, filePath, errorMsg, convId) {

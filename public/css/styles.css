@@ -2313,6 +2313,14 @@ body { animation: none; }
   white-space: pre; overflow-x: auto; max-height: 120px; overflow-y: auto;
   border-top: 1px solid rgba(251,191,36,.12);
 }
+.wf-svg-preview {
+  background: var(--fau-surface); border-top: 1px solid rgba(30,200,130,.2);
+  padding: 10px; display: flex; justify-content: center; align-items: flex-start;
+}
+.wf-svg-preview svg {
+  width: 100%; height: auto; max-height: 480px; display: block;
+  border-radius: var(--radius-sm);
+}
 
 /* ── Conversation file bar ──────────────────────────────────────────── */
 .conv-file-bar { border:1px solid var(--accent-glow); border-radius:8px; margin:0 0 14px; overflow:hidden; background:var(--fau-surface); font-size:12px; }
