@@ -23,14 +23,48 @@ figma.showUI(__html__, { width: 320, height: 200, title: "Fauna MCP" });
 })();
 
 // ── Announce file identity to the relay (sent on startup + reconnect) ─────
+// Stable key for local files — generated once per plugin load so that page-change
+// re-identifies don't create a new client entry on the server and lose its caches.
+var _stableLocalKey = 'local-' + Math.random().toString(36).slice(2, 10);
+
+// Build the current selection and push it as a SELECTION_CHANGE snapshot.
+// Called from sendFileInfo so the server cache is warm immediately on
+// connect / reconnect / page-change, even if no selectionchange event fires.
+async function sendSelectionSnapshot() {
+  var sel = figma.currentPage.selection;
+  var info = await Promise.all(sel.map(async function(n) {
+    var obj = {
+      id: n.id, name: n.name, type: n.type,
+      isLayoutGrid: isLayoutGrid(n),
+      width: Math.round(n.width || 0), height: Math.round(n.height || 0),
+      x: Math.round(n.x || 0),         y: Math.round(n.y || 0)
+    };
+    if (n.type === 'INSTANCE') {
+      obj.slots = getSlotState(n);
+      var mc = await n.getMainComponentAsync();
+      if (mc) {
+        obj.componentName = mc.name;
+        obj.componentId   = mc.id;
+        if (mc.parent && mc.parent.type === 'COMPONENT_SET') {
+          obj.componentSetName = mc.parent.name;
+        }
+      }
+    }
+    return obj;
+  }));
+  figma.ui.postMessage({ type: 'SELECTION_CHANGE', nodes: info, page: figma.currentPage.name, timestamp: Date.now() });
+}
+
 function sendFileInfo() {
   figma.ui.postMessage({
     type: 'FILE_INFO',
     fileName:      figma.root.name,
-    fileKey:       figma.fileKey || ('local-' + Date.now()),
+    fileKey:       figma.fileKey || _stableLocalKey,
     currentPage:   figma.currentPage.name,
     currentPageId: figma.currentPage.id
   });
+  // Warm the server's selection cache immediately on connect / page-change.
+  sendSelectionSnapshot();
 }
 sendFileInfo();
 figma.on('currentpagechange', sendFileInfo);
@@ -822,17 +856,31 @@ figma.ui.onmessage = async function(msg) {
 
   // ── Get selected node info ───────────────────────────────────────────────
   if (msg.type === 'get-selection') {
-    var sel = figma.currentPage.selection;
-    var info = sel.map(function(n) {
-      return {
-        id: n.id,
-        name: n.name,
-        type: n.type,
+    var selNodes = figma.currentPage.selection;
+    var selId = msg.id;
+    Promise.all(selNodes.map(async function(n) {
+      var obj = {
+        id: n.id, name: n.name, type: n.type,
         isLayoutGrid: isLayoutGrid(n),
-        slots: n.type === 'INSTANCE' ? getSlotState(n) : []
+        width: Math.round(n.width || 0), height: Math.round(n.height || 0),
+        x: Math.round(n.x || 0),         y: Math.round(n.y || 0)
       };
+      if (n.type === 'INSTANCE') {
+        obj.slots = getSlotState(n);
+        var mc = await n.getMainComponentAsync();
+        if (mc) {
+          obj.componentName = mc.name;
+          obj.componentId   = mc.id;
+          if (mc.parent && mc.parent.type === 'COMPONENT_SET') {
+            obj.componentSetName = mc.parent.name;
+          }
+        }
+      }
+      return obj;
+    })).then(function(info) {
+      // Echo msg.id so the server's pending-request resolver can match the response.
+      figma.ui.postMessage({ type: 'selection-info', id: selId, nodes: info, page: figma.currentPage.name, timestamp: Date.now() });
     });
-    figma.ui.postMessage({ type: 'selection-info', nodes: info });
   }
 
   // ── List pages ───────────────────────────────────────────────────────────

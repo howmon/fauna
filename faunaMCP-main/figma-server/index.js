@@ -258,7 +258,32 @@ wss.on('connection', ws => {
     // ── FILE_INFO: plugin identifies itself ───────────────────────────────
     if (msg.type === 'FILE_INFO') {
       clearTimeout(identifyTimer);
-      fileKey = msg.fileKey || ('file-' + Date.now());
+      const newFileKey = msg.fileKey || ('file-' + Date.now());
+
+      if (conn) {
+        // Already-identified connection sending FILE_INFO again (page change).
+        // Update conn in-place so selection cache and other state are preserved.
+        if (fileKey !== newFileKey) {
+          clients.delete(fileKey);
+          fileKey = newFileKey;
+          clients.set(fileKey, conn);
+        }
+        conn.fileInfo = { fileName: msg.fileName, fileKey, currentPage: msg.currentPage, currentPageId: msg.currentPageId };
+        // Don't steal activeFileKey from another file that is already active.
+        if (!activeFileKey || activeFileKey === fileKey || !clients.has(activeFileKey)) {
+          activeFileKey = fileKey;
+        }
+        process.stderr.write(`[MCP] "${msg.fileName}" page → "${msg.currentPage}"\n`);
+        for (const c of clients.values()) {
+          if (c.isController && c.ws.readyState === 1) {
+            c.ws.send(JSON.stringify({ type: 'FILE_INFO', ...conn.fileInfo }));
+          }
+        }
+        return;
+      }
+
+      // First identification on this WebSocket connection.
+      fileKey = newFileKey;
       const existing = clients.get(fileKey);
       if (existing && existing.gracePeriodTimer) {
         clearTimeout(existing.gracePeriodTimer);
@@ -793,15 +818,24 @@ mcp.tool('place_component',
   }
 );
 
-mcp.tool('get_selection', 'Get info about what is currently selected in Figma (from live buffer — instant)', {},
+mcp.tool('get_selection', 'Get info about what is currently selected in Figma', {},
   async () => {
     const key    = activeFileKey;
-    const client = key ? clients.get(key) : [...clients.values()][0];
+    const client = key ? clients.get(key) : [...clients.values()].find(c => !c.isController);
     if (!client) return { content: [{ type: 'text', text: 'No plugin connected.' }] };
-    // Return buffered selection (updated in real-time via SELECTION_CHANGE events)
-    const sel = client.selection;
-    if (!sel || !sel.nodes?.length) return { content: [{ type: 'text', text: 'Nothing selected.' }] };
-    return { content: [{ type: 'text', text: JSON.stringify(sel, null, 2) }] };
+    try {
+      // Live query — plugin reads figma.currentPage.selection at call time,
+      // so this is always accurate regardless of whether SELECTION_CHANGE fired.
+      const result = await sendToFigma({ type: 'get-selection' }, 8000);
+      const nodes = result.nodes || [];
+      if (!nodes.length) return { content: [{ type: 'text', text: 'Nothing selected.' }] };
+      return { content: [{ type: 'text', text: JSON.stringify({ nodes, page: result.page, timestamp: result.timestamp }, null, 2) }] };
+    } catch (_) {
+      // Fall back to buffered cache on timeout / error.
+      const sel = client.selection;
+      if (!sel || !sel.nodes?.length) return { content: [{ type: 'text', text: 'Nothing selected.' }] };
+      return { content: [{ type: 'text', text: JSON.stringify(sel, null, 2) }] };
+    }
   }
 );
 

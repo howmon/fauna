@@ -10,12 +10,15 @@
     "start": "electron .",
     "dist": "electron-builder",
     "dist:mac": "electron-builder --mac",
+    "dist:mac:arm64": "electron-builder --mac --arm64",
+    "dist:mac:x64": "electron-builder --mac --x64",
     "dist:win": "electron-builder --win"
   },
   "build": {
     "appId": "com.fauna.mcp",
     "productName": "FaunaMCP",
     "copyright": "Copyright © 2026 Solomon Abey",
+    "afterSign": "afterSign.js",
     "publish": null,
     "files": [
       "main.js",

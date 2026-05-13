@@ -7,6 +7,6 @@
   "editorType": ["figma"],
   "networkAccess": {
     "allowedDomains": ["http://localhost:3335", "ws://localhost:3335"],
-    "reasoning": "This plugin connects to a local Fauna server running on port 3335 to relay AI-driven design actions via WebSocket."
+    "reasoning": "This plugin connects to a local Fauna server running on port 3335 to relay AI-driven design actions via WebSocket"
   }
 }
