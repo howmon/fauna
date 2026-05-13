@@ -3157,7 +3157,7 @@ webview {
 }
 .gui-playlist-body.grid .gui-playlist-player { border-bottom: 1px solid var(--fau-border); }
 .gui-playlist-body.grid .gui-playlist-item {
-  flex-direction: column; padding: 0; border-bottom: none; border-radius: var(--radius-sm);
+  flex-direction: column; align-items: stretch; padding: 0; border-bottom: none; border-radius: var(--radius-sm);
   overflow: hidden; background: var(--fau-surface2); border: 1px solid var(--fau-border);
 }
 .gui-playlist-body.grid .gui-playlist-item.active { border-color: var(--accent); }
