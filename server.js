@@ -1735,10 +1735,19 @@ app.post('/api/chat', async (req, res) => {
         allMessages.push({ role: 'user', content: 'Your previous response was cut off mid-output. Continue EXACTLY where you left off — do NOT repeat anything already written. Do NOT narrate or explain, just output the remaining content.' });
         // keep continueLoop = true
       } else {
-        send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
-          reasoning: reasoningText ? { text: reasoningText, durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
-        });
-        continueLoop = false;
+        // If tools were called but no text was produced, prompt a summary so the user sees something
+        if (toolCallCount > 0 && !assistantText.trim() && continueCount < MAX_CONTINUES) {
+          continueCount++;
+          console.log('[chat] tool calls completed but no text output — prompting summary');
+          allMessages.push({ role: 'assistant', content: '' });
+          allMessages.push({ role: 'user', content: '[System: Your tool calls completed but you produced no visible response. Briefly summarize what you did for the user.]' });
+          // keep continueLoop = true
+        } else {
+          send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
+            reasoning: reasoningText ? { text: reasoningText, durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
+          });
+          continueLoop = false;
+        }
       }
     }
   } catch (err) {
