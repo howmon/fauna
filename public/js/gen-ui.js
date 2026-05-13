@@ -132,6 +132,15 @@ function _guiMediaIcon(type) {
 
 function _guiBuildMediaEl(src, type, opts) {
   opts = opts || {};
+  // Proxy any local path through the server — the renderer can't load file:// or bare /abs/paths
+  if (src) {
+    if (src.startsWith('file://')) {
+      src = '/api/serve-media?path=' + encodeURIComponent(src.replace(/^file:\/\//, ''));
+    } else if (/^\/[^/]|^~\//.test(src)) {
+      // bare absolute path (/Users/... or ~/...)
+      src = '/api/serve-media?path=' + encodeURIComponent(src);
+    }
+  }
   if (type === 'youtube') {
     var ytId = _guiExtractYouTubeId(src || '');
     if (!ytId) return document.createTextNode('(invalid YouTube URL)');
@@ -717,7 +726,8 @@ var _genUiComponents = {
     renderList();
 
     var body = document.createElement('div');
-    body.className = 'gui-playlist-body' + (props.layout === 'side' ? ' side' : '');
+    var layout = props.layout || 'stack';
+    body.className = 'gui-playlist-body' + (layout === 'side' ? ' side' : layout === 'grid' ? ' grid' : '');
     body.appendChild(playerArea);
     body.appendChild(listArea);
     wrap.appendChild(body);
@@ -911,7 +921,7 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 | \`Tabs\` | \`tabs\` (array of \`{id,label}\`), \`statePath\` | Tabbed layout |
 | \`Carousel\` | \`loop\`, \`statePath\` | Cycle through any children — slides |
 | \`MediaPlayer\` | \`src\`, \`title\`, \`type\` ("youtube"/"video"/"audio"/"image"), \`poster\`, \`autoplay\` | Embed YouTube / play local video, audio, or image |
-| \`Playlist\` | \`title\`, \`items\` (array of \`{src,title,type,description,duration,thumbnail}\`), \`layout\` ("stack"/"side"), \`autoplay\`, \`statePath\` | Browsable playlist with inline player |
+| \`Playlist\` | \`title\`, \`items\` (array of \`{src,title,type,description,duration,thumbnail}\`), \`layout\` ("stack"/"side"/"grid"), \`autoplay\`, \`statePath\` | Browsable playlist with inline player. Use \`layout:"grid"\` for search results / YouTube playlists (3 tiles per row). |
 
 ### Actions (Button.action)
 \`setState\` · \`toggle_visible\` · \`copy_text\` · \`open_url\`
@@ -986,7 +996,12 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 - \`.png .jpg .jpeg .gif .webp .svg\` → \`image\`
 - Everything else (including \`.mov .mp4 .webm\`) → \`video\`
 - \`file://\` paths work for local files (video, audio, image)
-- Force type explicitly with \`"type": "video"|"audio"|"image"|"youtube"\``.trim();
+- Force type explicitly with \`"type": "video"|"audio"|"image"|"youtube"\`
+
+### Playlist layout guidance
+- \`layout: "grid"\` — **use this for search results**, YouTube playlist browsing, image galleries. Shows 3 tiles per row with thumbnails, title clicks open the player above.
+- \`layout: "side"\` — narrow sidebar list + large player. Best for ≤10 items you'll play sequentially.
+- \`layout: "stack"\` (default) — player on top, vertical list below. Good for audio tracks or small counts.`.trim();
 
 // Attach to window so chat.js can include it in the system prompt
 window.GEN_UI_CATALOG_PROMPT = GEN_UI_CATALOG_PROMPT;

@@ -6229,6 +6229,63 @@ app.head('/api/preview-file', (req, res) => {
   }
 });
 
+// ── Serve local media file (proxy for renderer — file:// is blocked by CSP) ──
+// GET /api/serve-media?path=<abs-path> — streams file with Range support
+app.get('/api/serve-media', (req, res) => {
+  const rawPath = req.query.path;
+  if (!rawPath) return res.status(400).end();
+  try {
+    let abs = path.isAbsolute(rawPath) ? rawPath
+              : rawPath.startsWith('~') ? path.join(os.homedir(), rawPath.slice(1))
+              : path.join(os.homedir(), rawPath);
+    if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+      // Fallback: macOS screen recordings use U+202F (narrow no-break space) before AM/PM.
+      // If the exact path fails, scan the directory with whitespace-normalized comparison.
+      const dir      = path.dirname(abs);
+      const basename = path.basename(abs);
+      const normalize = s => s.normalize('NFC').replace(/[\u00A0\u2009\u202F\u2007\u200A\uFEFF\u2060]/g, ' ');
+      let resolved = null;
+      try {
+        const entries = fs.readdirSync(dir);
+        const match   = entries.find(e => normalize(e) === normalize(basename));
+        if (match) resolved = path.join(dir, match);
+      } catch (_) {}
+      if (!resolved) return res.status(404).end();
+      abs = resolved;
+    }
+
+    const ext  = path.extname(abs).toLowerCase().slice(1);
+    const mime = {
+      mp4:'video/mp4', mov:'video/quicktime', webm:'video/webm', mkv:'video/x-matroska', avi:'video/x-msvideo',
+      mp3:'audio/mpeg', wav:'audio/wav', ogg:'audio/ogg', aac:'audio/aac', m4a:'audio/mp4', flac:'audio/flac',
+      png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', gif:'image/gif', webp:'image/webp', svg:'image/svg+xml',
+    }[ext] || 'application/octet-stream';
+
+    const stat  = fs.statSync(abs);
+    const total = stat.size;
+    const range = req.headers.range;
+
+    if (range) {
+      const [startStr, endStr] = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(startStr, 10);
+      const end   = endStr ? parseInt(endStr, 10) : Math.min(start + 1024 * 1024 - 1, total - 1);
+      const chunkSize = end - start + 1;
+      res.writeHead(206, {
+        'Content-Range':  `bytes ${start}-${end}/${total}`,
+        'Accept-Ranges':  'bytes',
+        'Content-Length': chunkSize,
+        'Content-Type':   mime,
+      });
+      fs.createReadStream(abs, { start, end }).pipe(res);
+    } else {
+      res.writeHead(200, { 'Content-Length': total, 'Content-Type': mime, 'Accept-Ranges': 'bytes' });
+      fs.createReadStream(abs).pipe(res);
+    }
+  } catch (e) {
+    res.status(500).end();
+  }
+});
+
 // ── Pick-folder dialog ────────────────────────────────────────────────────
 // POST {} → { ok, folderPath } — shows native folder picker (Electron only)
 app.post('/api/pick-folder', async (req, res) => {
