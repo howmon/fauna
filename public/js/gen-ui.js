@@ -697,6 +697,10 @@ var _genUiComponents = {
     var listArea = document.createElement('div');
     listArea.className = 'gui-playlist-list';
 
+    // Controls live OUTSIDE the player area so they don't shift with media height
+    var controlsEl = document.createElement('div');
+    controlsEl.className = 'gui-playlist-controls gui-playlist-controls-footer';
+
     function getItemType(item) {
       return item.type || _guiDetectMediaType(item.src || '');
     }
@@ -724,9 +728,8 @@ var _genUiComponents = {
       });
       playerArea.appendChild(mediaEl);
 
-      // Prev / counter / next controls
-      var controls = document.createElement('div');
-      controls.className = 'gui-playlist-controls';
+      // Rebuild controls content (the element itself stays fixed in the DOM)
+      controlsEl.innerHTML = '';
       var prevBtn = document.createElement('button');
       prevBtn.className = 'gui-playlist-btn';
       prevBtn.innerHTML = '<i class="ti ti-chevron-left"></i>';
@@ -748,10 +751,9 @@ var _genUiComponents = {
           store.set(sp, (i + 1) % items.length);
         });
       })(idx);
-      controls.appendChild(prevBtn);
-      controls.appendChild(counter);
-      controls.appendChild(nextBtn);
-      playerArea.appendChild(controls);
+      controlsEl.appendChild(prevBtn);
+      controlsEl.appendChild(counter);
+      controlsEl.appendChild(nextBtn);
     }
 
     function renderList() {
@@ -827,6 +829,7 @@ var _genUiComponents = {
     body.appendChild(playerArea);
     body.appendChild(listArea);
     wrap.appendChild(body);
+    wrap.appendChild(controlsEl);
     return wrap;
   }
 };
