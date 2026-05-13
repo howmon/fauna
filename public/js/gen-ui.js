@@ -108,6 +108,66 @@ function _genUiDispatch(action, params, store, rootEl) {
   }
 }
 
+// ── Media helpers ─────────────────────────────────────────────────────────
+
+function _guiDetectMediaType(src) {
+  if (!src) return 'video';
+  if (/youtube\.com|youtu\.be/.test(src)) return 'youtube';
+  if (/\.(mp3|wav|ogg|aac|m4a|flac)(\?|$)/i.test(src)) return 'audio';
+  if (/\.(png|jpe?g|gif|webp|svg|avif)(\?|$)/i.test(src)) return 'image';
+  return 'video';
+}
+
+function _guiExtractYouTubeId(url) {
+  var m = url.match(/(?:v=|youtu\.be\/|embed\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
+function _guiMediaIcon(type) {
+  if (type === 'youtube' || type === 'video') return 'ti-video';
+  if (type === 'audio') return 'ti-music';
+  if (type === 'image') return 'ti-photo';
+  return 'ti-file';
+}
+
+function _guiBuildMediaEl(src, type, opts) {
+  opts = opts || {};
+  if (type === 'youtube') {
+    var ytId = _guiExtractYouTubeId(src || '');
+    if (!ytId) return document.createTextNode('(invalid YouTube URL)');
+    var iframe = document.createElement('iframe');
+    iframe.className = 'gui-player-iframe';
+    iframe.src = 'https://www.youtube-nocookie.com/embed/' + ytId + (opts.autoplay ? '?autoplay=1' : '');
+    iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture';
+    iframe.allowFullscreen = true;
+    iframe.setAttribute('frameborder', '0');
+    return iframe;
+  } else if (type === 'audio') {
+    var audio = document.createElement('audio');
+    audio.controls = true;
+    audio.className = 'gui-player-audio';
+    if (src) audio.src = src;
+    if (opts.autoplay) audio.autoplay = true;
+    return audio;
+  } else if (type === 'image') {
+    var img = document.createElement('img');
+    img.className = 'gui-player-image';
+    img.src = src || '';
+    img.alt = opts.alt || '';
+    img.style.maxWidth = '100%';
+    return img;
+  } else {
+    var video = document.createElement('video');
+    video.controls = true;
+    video.className = 'gui-player-video';
+    if (src) video.src = src;
+    if (opts.poster) video.poster = opts.poster;
+    if (opts.autoplay) video.autoplay = true;
+    if (opts.onEnded) video.addEventListener('ended', opts.onEnded);
+    return video;
+  }
+}
+
 // ── Component renderers ───────────────────────────────────────────────────
 
 var _genUiComponents = {
@@ -464,6 +524,204 @@ var _genUiComponents = {
     wrap.appendChild(bar);
     wrap.appendChild(content);
     return wrap;
+  },
+
+  // ── Carousel ── cycle through any child elements ──────────────────────
+  Carousel: function(el, props, children, store) {
+    if (!children.length) return document.createTextNode('');
+    var wrap = document.createElement('div');
+    wrap.className = 'gui-carousel';
+    var sp = props.statePath || ('__carousel_' + Math.random().toString(36).slice(2));
+    if (store.get(sp) == null) store.set(sp, 0);
+
+    var track = document.createElement('div');
+    track.className = 'gui-carousel-track';
+    children.forEach(function(c) {
+      var slide = document.createElement('div');
+      slide.className = 'gui-carousel-slide';
+      slide.appendChild(c);
+      track.appendChild(slide);
+    });
+
+    var navRow = document.createElement('div');
+    navRow.className = 'gui-carousel-nav';
+
+    var prevBtn = document.createElement('button');
+    prevBtn.className = 'gui-carousel-arrow';
+    prevBtn.innerHTML = '<i class="ti ti-chevron-left"></i>';
+
+    var dots = document.createElement('div');
+    dots.className = 'gui-carousel-dots';
+
+    var nextBtn = document.createElement('button');
+    nextBtn.className = 'gui-carousel-arrow';
+    nextBtn.innerHTML = '<i class="ti ti-chevron-right"></i>';
+
+    function syncCarousel() {
+      var idx = store.get(sp) || 0;
+      var n = children.length;
+      Array.from(track.children).forEach(function(s, i) { s.classList.toggle('active', i === idx); });
+      dots.innerHTML = '';
+      for (var i = 0; i < n; i++) {
+        var dot = document.createElement('button');
+        dot.className = 'gui-carousel-dot' + (i === idx ? ' active' : '');
+        (function(i) { dot.addEventListener('click', function() { store.set(sp, i); }); })(i);
+        dots.appendChild(dot);
+      }
+      prevBtn.disabled = !props.loop && idx === 0;
+      nextBtn.disabled = !props.loop && idx === n - 1;
+    }
+
+    prevBtn.addEventListener('click', function() {
+      var idx = store.get(sp) || 0, n = children.length;
+      store.set(sp, props.loop ? (idx - 1 + n) % n : Math.max(0, idx - 1));
+    });
+    nextBtn.addEventListener('click', function() {
+      var idx = store.get(sp) || 0, n = children.length;
+      store.set(sp, props.loop ? (idx + 1) % n : Math.min(n - 1, idx + 1));
+    });
+
+    store.subscribe(syncCarousel);
+    syncCarousel();
+
+    navRow.appendChild(prevBtn);
+    navRow.appendChild(dots);
+    navRow.appendChild(nextBtn);
+    wrap.appendChild(track);
+    wrap.appendChild(navRow);
+    return wrap;
+  },
+
+  // ── MediaPlayer ── YouTube / video / audio / image ────────────────────
+  MediaPlayer: function(el, props, children, store) {
+    var wrap = document.createElement('div');
+    wrap.className = 'gui-player';
+    var src  = props.src  || '';
+    var type = props.type || _guiDetectMediaType(src);
+
+    if (props.title) {
+      var titleEl = document.createElement('div');
+      titleEl.className = 'gui-player-title';
+      titleEl.textContent = props.title;
+      wrap.appendChild(titleEl);
+    }
+
+    var mediaWrap = document.createElement('div');
+    mediaWrap.className = 'gui-player-media';
+    mediaWrap.appendChild(_guiBuildMediaEl(src, type, {
+      poster: props.poster,
+      autoplay: props.autoplay,
+      alt: props.alt || props.title
+    }));
+    wrap.appendChild(mediaWrap);
+    return wrap;
+  },
+
+  // ── Playlist ── browsable list of video / audio / image items ─────────
+  Playlist: function(el, props, children, store) {
+    var items = props.items || [];
+    if (!items.length) return document.createTextNode('(empty playlist)');
+
+    var wrap = document.createElement('div');
+    wrap.className = 'gui-playlist';
+    var sp = props.statePath || ('__playlist_' + Math.random().toString(36).slice(2));
+    if (store.get(sp) == null) store.set(sp, 0);
+
+    if (props.title) {
+      var titleEl = document.createElement('div');
+      titleEl.className = 'gui-playlist-header';
+      titleEl.innerHTML = '<i class="ti ti-playlist"></i> ' + escHtml(props.title);
+      wrap.appendChild(titleEl);
+    }
+
+    var playerArea = document.createElement('div');
+    playerArea.className = 'gui-playlist-player';
+
+    var listArea = document.createElement('div');
+    listArea.className = 'gui-playlist-list';
+
+    function getItemType(item) {
+      return item.type || _guiDetectMediaType(item.src || '');
+    }
+
+    function renderPlayer(idx) {
+      playerArea.innerHTML = '';
+      var item = items[idx];
+      if (!item) return;
+      var type = getItemType(item);
+
+      var nowPlaying = document.createElement('div');
+      nowPlaying.className = 'gui-playlist-now-playing';
+      nowPlaying.innerHTML = '<i class="ti ' + _guiMediaIcon(type) + '"></i> ' + escHtml(item.title || item.src || '');
+      playerArea.appendChild(nowPlaying);
+
+      var mediaEl = _guiBuildMediaEl(item.src || '', type, {
+        poster: item.poster,
+        autoplay: idx > 0 || !!props.autoplay,
+        alt: item.title,
+        onEnded: function() {
+          var next = (idx + 1) % items.length;
+          store.set(sp, next);
+        }
+      });
+      playerArea.appendChild(mediaEl);
+    }
+
+    function renderList() {
+      var active = store.get(sp) || 0;
+      listArea.innerHTML = '';
+      items.forEach(function(item, i) {
+        var row = document.createElement('div');
+        row.className = 'gui-playlist-item' + (i === active ? ' active' : '');
+        var type = getItemType(item);
+
+        // Thumbnail
+        var thumbEl;
+        if (type === 'youtube') {
+          var ytId = _guiExtractYouTubeId(item.src || '');
+          thumbEl = document.createElement('img');
+          thumbEl.className = 'gui-playlist-thumb';
+          if (ytId) thumbEl.src = 'https://img.youtube.com/vi/' + ytId + '/mqdefault.jpg';
+          thumbEl.alt = '';
+        } else if ((type === 'image' || item.thumbnail) && (item.thumbnail || item.src)) {
+          thumbEl = document.createElement('img');
+          thumbEl.className = 'gui-playlist-thumb';
+          thumbEl.src = item.thumbnail || item.src;
+          thumbEl.alt = '';
+        } else {
+          thumbEl = document.createElement('div');
+          thumbEl.className = 'gui-playlist-thumb-icon';
+          thumbEl.innerHTML = '<i class="ti ' + _guiMediaIcon(type) + '"></i>';
+        }
+        row.appendChild(thumbEl);
+
+        var info = document.createElement('div');
+        info.className = 'gui-playlist-item-info';
+        info.innerHTML =
+          '<div class="gui-playlist-item-title">' + escHtml(item.title || item.src || 'Untitled') + '</div>' +
+          (item.description ? '<div class="gui-playlist-item-desc">' + escHtml(item.description) + '</div>' : '') +
+          (item.duration    ? '<div class="gui-playlist-item-dur">'  + escHtml(item.duration)    + '</div>' : '');
+        row.appendChild(info);
+
+        (function(i) { row.addEventListener('click', function() { store.set(sp, i); }); })(i);
+        listArea.appendChild(row);
+      });
+    }
+
+    store.subscribe(function() {
+      renderPlayer(store.get(sp) || 0);
+      renderList();
+    });
+
+    renderPlayer(0);
+    renderList();
+
+    var body = document.createElement('div');
+    body.className = 'gui-playlist-body' + (props.layout === 'side' ? ' side' : '');
+    body.appendChild(playerArea);
+    body.appendChild(listArea);
+    wrap.appendChild(body);
+    return wrap;
   }
 };
 
@@ -651,6 +909,9 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 | \`Select\` | \`label\`, \`options\`, \`value\` | Dropdown |
 | \`Input\` | \`label\`, \`placeholder\`, \`type\`, \`value\` | Text input |
 | \`Tabs\` | \`tabs\` (array of \`{id,label}\`), \`statePath\` | Tabbed layout |
+| \`Carousel\` | \`loop\`, \`statePath\` | Cycle through any children — slides |
+| \`MediaPlayer\` | \`src\`, \`title\`, \`type\` ("youtube"/"video"/"audio"/"image"), \`poster\`, \`autoplay\` | Embed YouTube / play local video, audio, or image |
+| \`Playlist\` | \`title\`, \`items\` (array of \`{src,title,type,description,duration,thumbnail}\`), \`layout\` ("stack"/"side"), \`autoplay\`, \`statePath\` | Browsable playlist with inline player |
 
 ### Actions (Button.action)
 \`setState\` · \`toggle_visible\` · \`copy_text\` · \`open_url\`
@@ -673,7 +934,59 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
     "s3": { "type": "Stat", "props": { "value": "73", "label": "CSAT", "format": "percent", "trend": 5 }, "children": [] }
   }
 }
-\`\`\``.trim();
+\`\`\`
+
+### Example — YouTube video + media player
+\`\`\`gen-ui
+{
+  "root": "player",
+  "elements": {
+    "player": { "type": "MediaPlayer", "props": { "src": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "title": "Never Gonna Give You Up" }, "children": [] }
+  }
+}
+\`\`\`
+
+### Example — image/video carousel
+\`\`\`gen-ui
+{
+  "root": "carousel",
+  "elements": {
+    "carousel": { "type": "Carousel", "props": { "loop": true }, "children": ["s1","s2","s3"] },
+    "s1": { "type": "MediaPlayer", "props": { "src": "https://www.youtube.com/watch?v=VIDEO_ID_1", "title": "Clip 1" }, "children": [] },
+    "s2": { "type": "MediaPlayer", "props": { "src": "https://www.youtube.com/watch?v=VIDEO_ID_2", "title": "Clip 2" }, "children": [] },
+    "s3": { "type": "Image",       "props": { "src": "https://example.com/photo.jpg", "alt": "Photo" }, "children": [] }
+  }
+}
+\`\`\`
+
+### Example — video playlist from folder
+\`\`\`gen-ui
+{
+  "root": "pl",
+  "elements": {
+    "pl": {
+      "type": "Playlist",
+      "props": {
+        "title": "Screen Recordings",
+        "layout": "side",
+        "items": [
+          { "src": "file:///Users/you/Desktop/Screen Recordings/Screen Recording 2025-10-28 at 9.43.19 AM.mov", "title": "Recording Oct 28", "duration": "~4 min", "type": "video" },
+          { "src": "file:///Users/you/Desktop/Screen Recordings/ArtifactPanel.mov", "title": "Artifact Panel Demo", "duration": "2 min", "type": "video" }
+        ]
+      },
+      "children": []
+    }
+  }
+}
+\`\`\`
+
+### Media type auto-detection (Playlist / MediaPlayer)
+- YouTube URL → \`youtube\` (embedded iframe, thumbnail auto-fetched)
+- \`.mp3 .wav .ogg .aac .m4a .flac\` → \`audio\`
+- \`.png .jpg .jpeg .gif .webp .svg\` → \`image\`
+- Everything else (including \`.mov .mp4 .webm\`) → \`video\`
+- \`file://\` paths work for local files (video, audio, image)
+- Force type explicitly with \`"type": "video"|"audio"|"image"|"youtube"\``.trim();
 
 // Attach to window so chat.js can include it in the system prompt
 window.GEN_UI_CATALOG_PROMPT = GEN_UI_CATALOG_PROMPT;

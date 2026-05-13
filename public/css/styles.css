@@ -3083,6 +3083,61 @@ webview {
 }
 .gui-unknown { font-size: 11px; color: var(--fau-text-muted); font-style: italic; }
 
+/* ── Carousel ─────────────────────────────────────────────────────────── */
+.gui-carousel { width: 100%; display: flex; flex-direction: column; gap: 8px; }
+.gui-carousel-track { position: relative; overflow: hidden; border-radius: var(--radius); }
+.gui-carousel-slide { display: none; }
+.gui-carousel-slide.active { display: block; }
+.gui-carousel-nav { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.gui-carousel-arrow {
+  background: var(--fau-surface2); border: 1px solid var(--fau-border); color: var(--fau-text);
+  border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center;
+  justify-content: center; cursor: pointer; font-size: 14px; padding: 0; flex-shrink: 0;
+  transition: background .15s;
+}
+.gui-carousel-arrow:hover:not(:disabled) { background: var(--fau-surface3,var(--fau-surface2)); }
+.gui-carousel-arrow:disabled { opacity: .3; cursor: default; }
+.gui-carousel-dots { display: flex; gap: 5px; align-items: center; }
+.gui-carousel-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--fau-border);
+  border: none; padding: 0; cursor: pointer; transition: background .15s, transform .15s;
+}
+.gui-carousel-dot.active { background: var(--accent); transform: scale(1.25); }
+
+/* ── MediaPlayer ──────────────────────────────────────────────────────── */
+.gui-player { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.gui-player-title { font-size: 13px; font-weight: 600; color: var(--fau-text); }
+.gui-player-media { width: 100%; border-radius: var(--radius); overflow: hidden; background: #000; }
+.gui-player-iframe { width: 100%; aspect-ratio: 16/9; border: none; display: block; }
+.gui-player-video  { width: 100%; max-height: 420px; display: block; border-radius: var(--radius); }
+.gui-player-audio  { width: 100%; display: block; margin: 4px 0; }
+.gui-player-image  { width: 100%; border-radius: var(--radius); display: block; }
+
+/* ── Playlist ─────────────────────────────────────────────────────────── */
+.gui-playlist { width: 100%; display: flex; flex-direction: column; gap: 0; border: 1px solid var(--fau-border); border-radius: var(--radius); overflow: hidden; }
+.gui-playlist-header { padding: 10px 14px; font-size: 13px; font-weight: 600; color: var(--fau-text); background: var(--fau-surface2); border-bottom: 1px solid var(--fau-border); display: flex; align-items: center; gap: 7px; }
+.gui-playlist-body { display: flex; flex-direction: column; }
+.gui-playlist-body.side { flex-direction: row; align-items: flex-start; }
+.gui-playlist-player { padding: 12px; background: var(--fau-surface); display: flex; flex-direction: column; gap: 6px; }
+.gui-playlist-body.side .gui-playlist-player { flex: 1; min-width: 0; }
+.gui-playlist-now-playing { font-size: 12px; font-weight: 600; color: var(--fau-text); display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gui-playlist-player .gui-player-iframe { width: 100%; aspect-ratio: 16/9; border: none; display: block; border-radius: var(--radius-sm); }
+.gui-playlist-player .gui-player-video  { width: 100%; max-height: 320px; border-radius: var(--radius-sm); }
+.gui-playlist-player .gui-player-audio  { width: 100%; }
+.gui-playlist-player .gui-player-image  { width: 100%; border-radius: var(--radius-sm); max-height: 320px; object-fit: contain; background: #000; }
+.gui-playlist-list { max-height: 320px; overflow-y: auto; background: var(--fau-surface2); border-top: 1px solid var(--fau-border); }
+.gui-playlist-body.side .gui-playlist-list { flex: 0 0 220px; max-height: 420px; border-top: none; border-left: 1px solid var(--fau-border); }
+.gui-playlist-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; transition: background .1s; border-bottom: 1px solid var(--fau-border2,var(--fau-border)); }
+.gui-playlist-item:hover    { background: var(--fau-surface3,var(--fau-hover)); }
+.gui-playlist-item.active   { background: rgba(var(--accent-rgb,99,102,241),.12); }
+.gui-playlist-thumb { width: 60px; height: 36px; object-fit: cover; border-radius: 3px; flex-shrink: 0; background: var(--fau-border); }
+.gui-playlist-thumb-icon { width: 60px; height: 36px; display: flex; align-items: center; justify-content: center; background: var(--fau-surface); border-radius: 3px; flex-shrink: 0; color: var(--fau-text-muted); font-size: 18px; }
+.gui-playlist-item-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.gui-playlist-item-title { font-size: 12.5px; font-weight: 500; color: var(--fau-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gui-playlist-item.active .gui-playlist-item-title { color: var(--accent); }
+.gui-playlist-item-desc { font-size: 11px; color: var(--fau-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gui-playlist-item-dur  { font-size: 10.5px; color: var(--fau-text-dim,var(--fau-text-muted)); }
+
 /* Make auth row a grid so the PAT form spans full width */
 .perm-row.auth-row {
   display: grid;

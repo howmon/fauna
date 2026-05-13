@@ -2088,8 +2088,18 @@ Examples:
         <dd>Conversational answers, bullet lists, explanations — no special wrapper.</dd>
       </dl>
       <h3 class="help-h3">Available components</h3>
-      <p>Card · Stack · Grid · Heading · Text · Badge · Stat · Alert · Button · Divider · KeyValue · Table · List · Progress · Code · Image · Select · Input · Tabs</p>
+      <p>Card · Stack · Grid · Heading · Text · Badge · Stat · Alert · Button · Divider · KeyValue · Table · List · Progress · Code · Image · Select · Input · Tabs · <strong>Carousel</strong> · <strong>MediaPlayer</strong> · <strong>Playlist</strong></p>
       <p>Buttons can toggle sections, set values, copy text to clipboard, or open a URL — all without leaving the chat.</p>
+      <h3 class="help-h3">Media components</h3>
+      <dl class="help-dl">
+        <dt>MediaPlayer</dt>
+        <dd>Embeds a YouTube video (auto-detected from URL), or plays a local <code>.mov</code>/<code>.mp4</code> video, audio file, or image inline. Pass <code>src</code> and optionally <code>type</code> to force the player mode.</dd>
+        <dt>Carousel</dt>
+        <dd>Cycles through any child elements with prev/next arrows and dot indicators. Wrap multiple MediaPlayer, Image, or Card children inside a Carousel to step through them. Supports <code>loop: true</code>.</dd>
+        <dt>Playlist</dt>
+        <dd>A browsable list of media items with an inline player. Each item has <code>src</code>, <code>title</code>, optional <code>type</code>, <code>description</code>, <code>duration</code>, and <code>thumbnail</code>. YouTube items get their thumbnail fetched automatically. Set <code>layout: "side"</code> for a two-column view. Videos auto-advance to the next item on completion.</dd>
+      </dl>
+      <p>Ask the AI things like: <em>"Show my screen recordings as a playlist"</em>, <em>"Embed that YouTube video inline"</em>, or <em>"Make a carousel of these product images"</em>.</p>
       <h3 class="help-h3">Add to Project</h3>
       <p>Hover over any gen-ui widget to reveal the <strong>Add to Project</strong> footer button. It saves the widget spec to the active project context library (or shows a picker if no project is active).</p>
     </section>
