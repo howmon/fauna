@@ -346,6 +346,7 @@ function extractAndRenderFigmaExec(html, messageEl) {
   // with interactive execution widgets
   var container = messageEl.querySelector('.prose') || messageEl;
   var codeBlocks = container.querySelectorAll('code.language-figma-exec');
+  if (!codeBlocks.length) return;
   codeBlocks.forEach(function(code) {
     var pre = code.parentElement;
     var rawCode = code.textContent;
@@ -362,6 +363,16 @@ function extractAndRenderFigmaExec(html, messageEl) {
     widget.dataset.code = rawCode;
     pre.parentNode.replaceChild(widget, pre);
   });
+
+  // In chain messages (auto-fed responses), hide narration prose — only show the figma widgets
+  if (messageEl.classList.contains('chain-msg') && container) {
+    Array.from(container.children).forEach(function(child) {
+      if (!child.classList || !child.classList.contains('figma-exec-block')) {
+        child.style.display = 'none';
+      }
+    });
+    messageEl.classList.add('chain-figma-only');
+  }
 }
 
 async function runFigmaExec(execId) {

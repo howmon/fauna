@@ -45,6 +45,7 @@ import {
   isCommandSafe, addAutoAllow, getAutoAllowList, removeAutoAllow, clearAutoAllow,
   checkCommandPermission, explainCommand,
 } from './permission-guard.js';
+import { ToolGuardContext, formatToolLabel, getToolCategory } from './tool-guard.js';
 import {
   getTeamsSettings, updateTeamsSettings, startTeamsBridge, stopTeamsBridge, testConnection as teamsTestConnection,
 } from './teams-bridge.js';
@@ -295,12 +296,16 @@ app.post('/api/ext/command', async (req, res) => {
   const clients = Array.from(extClients.values()).filter(client => client.ws.readyState === 1);
   if (!clients.length) return res.status(503).json({ ok: false, error: 'Browser extension not connected' });
 
-  const { action, params = {}, tabId } = req.body || {};
+  const { action, params = {}, tabId, browser, clientId } = req.body || {};
   if (!action) return res.status(400).json({ ok: false, error: 'action required' });
 
-  const client = tabId
-    ? clients.find(c => c.activeTab && c.activeTab.id === tabId) || clients[0]
-    : clients[0];
+  const client = clientId
+    ? clients.find(c => c.id === clientId) || clients[0]
+    : tabId
+      ? clients.find(c => c.activeTab && c.activeTab.id === tabId) || clients[0]
+      : browser
+        ? clients.find(c => c.browser === browser) || clients[0]
+        : clients[0];
   const id = 'cmd-' + Date.now() + '-' + Math.random().toString(36).slice(2);
   const timeoutMs = Math.max(1000, Math.min(Number(req.body.timeout) || 30000, 120000));
 
@@ -323,11 +328,15 @@ app.post('/api/ext/snapshot', async (req, res) => {
   const clients = Array.from(extClients.values()).filter(client => client.ws.readyState === 1);
   if (!clients.length) return res.status(503).json({ ok: false, error: 'Browser extension not connected' });
 
-  const { full = false, tabId } = req.body || {};
+  const { full = false, tabId, browser, clientId } = req.body || {};
   const action = full ? 'snapshot-full' : 'snapshot';
-  const client = tabId
-    ? clients.find(c => c.activeTab && c.activeTab.id === tabId) || clients[0]
-    : clients[0];
+  const client = clientId
+    ? clients.find(c => c.id === clientId) || clients[0]
+    : tabId
+      ? clients.find(c => c.activeTab && c.activeTab.id === tabId) || clients[0]
+      : browser
+        ? clients.find(c => c.browser === browser) || clients[0]
+        : clients[0];
   const id = 'cmd-' + Date.now() + '-' + Math.random().toString(36).slice(2);
 
   try {
@@ -1296,8 +1305,10 @@ When building a web app for the user, follow this workflow:
 5. **Only report success after verifying** — don't tell the user it works until you've seen the page load without errors
 
 ### Critical Rules:
+- **ZERO NARRATION before actions.** NEVER write text before a browser-action, browser-ext-action, or shell command block. No "Let me...", "I'll...", "I need to...", "Let me search...", "Let me use...", "I'll try...". Just emit the action block with nothing before it. This is the #1 rule — violating it wastes the user's time.
 - **NEVER truncate shell commands or code blocks**. Write them fully in one go. Never stop mid-line or say "let me continue".
-- **NEVER narrate what you're about to do**. Don't say "Let me...", "I'll now...", "I need to...". Just DO it — write the code, run the command.
+- **Batch browser actions** when possible. If you need to do multiple actions (e.g. eval + extract), emit them all in one fenced block as JSONL (one JSON object per line) instead of separate blocks.
+- **Be silent DURING browser action sequences**. When you receive auto-fed browser results and need to do more actions, respond ONLY with the next action block — no commentary. But when you're DONE (no more actions needed), give the user a brief summary of what you accomplished and any relevant findings.
 - **ALWAYS write complete files**. When creating a file, write ALL of it in one code block. Never split a file across multiple blocks.
 - **ALWAYS write complete package.json** before running npm install — don't rely on incremental installs.
 - **Use console-logs to debug** — after loading a page, check for errors before telling the user it's done.
@@ -1516,6 +1527,16 @@ app.post('/api/chat', async (req, res) => {
     const MAX_RESULT_CHARS = 40000; // prevent context overflow from large tool responses
     const toolCallsSeen = new Map(); // deduplicate identical calls
 
+    // ── Tool guard — pre-call checks, category limits, browser discipline ──
+    const toolGuard = new ToolGuardContext({
+      send,
+      onPermissionRequest: async (toolName, args, info) => {
+        // For now, send SSE event and auto-allow (Phase 2 will add interactive prompt)
+        send({ type: 'tool_permission_request', name: toolName, args, label: info.label, category: info.category });
+        return 'allow';
+      },
+    });
+
     while (continueLoop) {
       if (res.writableEnded) break;
 
@@ -1621,7 +1642,7 @@ app.post('/api/chat', async (req, res) => {
           const callKey  = toolName + '|' + tc.function.arguments;
           toolCallCount++;
 
-          // Hard stop: too many tool calls — let model finish with what it has
+          // Hard stop: too many tool calls (legacy global limit as safety net)
           if (toolCallCount > MAX_TOOL_CALLS) {
             allMessages.push({ role: 'tool', tool_call_id: tc.id, content: 'Tool call limit reached (' + MAX_TOOL_CALLS + '). Summarize what you have done so far and tell the user to continue the task in a follow-up message if needed.' });
             continue;
@@ -1633,9 +1654,50 @@ app.post('/api/chat', async (req, res) => {
             continue;
           }
 
-          send({ type: 'tool_call', name: toolName });
+          // ── Pre-tool-call guard ─────────────────────────────────────────
+          const args = JSON.parse(tc.function.arguments || '{}');
+          const guardResult = await toolGuard.check(toolName, args);
+
+          if (guardResult.action === 'deny') {
+            allMessages.push({ role: 'tool', tool_call_id: tc.id, content: guardResult.reason });
+            continue;
+          }
+
+          // inject_snapshot: force a browser snapshot before the blind action
+          if (guardResult.action === 'inject_snapshot') {
+            send({ type: 'tool_call', name: 'browser_snapshot', label: 'Taking browser snapshot (auto)' });
+            try {
+              let snapClient = await _getPlaywrightMcpClient();
+              let snapResult;
+              try {
+                snapResult = await snapClient.callTool({ name: 'browser_snapshot', arguments: {} });
+              } catch (connErr) {
+                // Auto-reconnect once if the subprocess died
+                if (/closed|disconnect|EPIPE|EOF/i.test(connErr.message)) {
+                  _playwrightMcpClient = null;
+                  snapClient = await _getPlaywrightMcpClient();
+                  snapResult = await snapClient.callTool({ name: 'browser_snapshot', arguments: {} });
+                } else { throw connErr; }
+              }
+              const snapContent = Array.isArray(snapResult?.content)
+                ? snapResult.content.map(c => c.text || '').join('\n')
+                : JSON.stringify(snapResult);
+              // Insert snapshot as a separate tool message so the model sees it
+              allMessages.push({ role: 'tool', tool_call_id: tc.id, content: '[Auto-snapshot before ' + toolName + ']\n' + snapContent.slice(0, MAX_RESULT_CHARS) });
+              toolGuard.resetBrowserRate();
+              // The original tool call is consumed — model will re-decide after seeing the snapshot
+              continue;
+            } catch (snapErr) {
+              // Snapshot failed — allow the original action to proceed
+              console.log('[tool-guard] auto-snapshot failed:', snapErr.message);
+            }
+          }
+
+          // Send human-readable tool status to the client
+          const toolLabel = formatToolLabel(toolName, args);
+          send({ type: 'tool_call', name: toolName, label: toolLabel });
+
           try {
-            const args = JSON.parse(tc.function.arguments || '{}');
             let result;
 
             // Route to self-tools first (memory, models, settings, etc.)
@@ -6778,23 +6840,30 @@ app.get('/api/playwright-mcp/status', async (req, res) => {
 app.post('/api/playwright-mcp/call', express.json({ limit: '4mb' }), async (req, res) => {
   const { tool, args = {} } = req.body || {};
   if (!tool) return res.status(400).json({ error: 'tool required' });
-  try {
-    const client = await _getPlaywrightMcpClient();
-    // Use AbortSignal for a 90s timeout — browser actions can be slow
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 90000);
-    let result;
+
+  // Try up to 2 attempts — auto-reconnect if first attempt fails with connection error
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      result = await client.callTool({ name: tool, arguments: args }, undefined, { signal: controller.signal });
-    } finally {
-      clearTimeout(timeout);
+      const client = await _getPlaywrightMcpClient();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 90000);
+      let result;
+      try {
+        result = await client.callTool({ name: tool, arguments: args }, undefined, { signal: controller.signal });
+      } finally {
+        clearTimeout(timeout);
+      }
+      const content = Array.isArray(result?.content) ? result.content : [{ type: 'text', text: JSON.stringify(result) }];
+      return res.json({ ok: true, content });
+    } catch (e) {
+      // Reset stale client so next attempt spawns a fresh subprocess
+      _playwrightMcpClient = null;
+      if (attempt === 0 && /closed|disconnect|EPIPE|EOF/i.test(e.message)) {
+        console.log('[playwright-mcp] connection lost, retrying…');
+        continue;
+      }
+      return res.status(500).json({ ok: false, error: e.message });
     }
-    const content = Array.isArray(result?.content) ? result.content : [{ type: 'text', text: JSON.stringify(result) }];
-    res.json({ ok: true, content });
-  } catch (e) {
-    // If the subprocess died, reset so next call tries to reconnect
-    _playwrightMcpClient = null;
-    res.status(500).json({ ok: false, error: e.message });
   }
 });
 

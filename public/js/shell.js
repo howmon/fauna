@@ -358,7 +358,7 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
     var execId  = 'se-' + Date.now() + '-' + Math.random().toString(36).slice(2);
     var targetConv = getConv(convId || state.currentId);
     var depth = targetConv ? (targetConv._autoFeedDepth || 0) : 0;
-    var DEPTH_LIMIT = 10;
+    var DEPTH_LIMIT = 5;
     // Only the first block in this response may auto-run; subsequent blocks must be manually triggered.
     var autoRun = !noAutoRun && state.autoRunShell && depth < DEPTH_LIMIT && _autoRunIdx === 0;
     var depthLimited = !noAutoRun && state.autoRunShell && depth >= DEPTH_LIMIT;
@@ -410,6 +410,16 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
       }, 400);
     }
   });
+
+  // In chain messages (auto-fed responses), hide narration prose — only show the shell widgets
+  if (messageEl.classList.contains('chain-msg') && container && codeBlocks.length) {
+    Array.from(container.children).forEach(function(child) {
+      if (!child.classList || !child.classList.contains('shell-exec-block')) {
+        child.style.display = 'none';
+      }
+    });
+    messageEl.classList.add('chain-shell-only');
+  }
 }
 
 var _shellAbortControllers = {};

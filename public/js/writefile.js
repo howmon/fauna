@@ -193,6 +193,16 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
       dbg((isReplace ? 'replace-string' : isPatch ? 'apply-patch' : 'write-file') + ' error: ' + e.message, 'err');
     });
   });
+
+  // In chain messages (auto-fed responses), hide narration prose — only show the write-file widgets
+  if (messageEl.classList.contains('chain-msg') && container) {
+    Array.from(container.children).forEach(function(child) {
+      if (!child.classList || (!child.classList.contains('wf-block'))) {
+        child.style.display = 'none';
+      }
+    });
+    messageEl.classList.add('chain-wf-only');
+  }
 }
 
 // ── Post-write file validation — catches truncated/broken files early ─────────

@@ -133,7 +133,9 @@ async function sendDirectMessage(content, opts) {
   if (conv._streaming) return;
   if (!opts.fromAutoFeed && !opts.isBrowserFeed) conv._autoFeedDepth = 0;
   if (!opts.fromAutoFeed && !opts.isBrowserFeed) conv._depthLimitNotified = false;
+
   var isCurrentConv = (targetId === state.currentId);
+  var isChainFeed = !!(opts.isAutoFeed || opts.isBrowserFeed);
 
   var displayText = typeof content === 'string' ? content
     : (content.find(function(c){ return c.type === 'text'; }) || {}).text || '';
@@ -154,33 +156,18 @@ async function sendDirectMessage(content, opts) {
   }
   conv.messages.push(userMsg);
 
+  // Mark chain mode so streamResponse can merge the next AI bubble
+  if (isChainFeed) conv._chainMode = true;
+
   if (isCurrentConv) {
-    if (opts.isAutoFeed || opts.isBrowserFeed) {
-      var feedIcon  = opts.isBrowserFeed ? 'ti-world-www' : opts.isWriteFileFeed ? 'ti-file-alert' : 'ti-terminal-2';
-      var feedLabel = opts.isBrowserFeed ? 'Browser page fed to AI' : opts.isWriteFileFeed ? 'File error fed to AI' : 'Shell output fed to AI';
-      var statusEl = document.createElement('div');
-      statusEl.className = 'msg system-msg';
-      statusEl.innerHTML = '<div class="msg-body" style="display:flex;align-items:center;gap:5px;font-size:11px">' +
-        '<i class="ti ' + feedIcon + '" style="font-size:12px;opacity:.5"></i>' +
-        '<span>' + feedLabel + '</span>' +
-      '</div>';
-      getConvInner(targetId).appendChild(statusEl);
-      showMessages();
+    if (isChainFeed) {
+      // Silent — no "Browser page fed to AI" / "Shell output fed to AI" system messages
+      dbg('chain feed: ' + (opts.isBrowserFeed ? 'browser' : 'shell/auto'), 'info');
     } else if (displayText) {
       appendMessageDOM('user', displayText, [], true);
       showMessages();
     }
     forceScrollBottom();
-  } else if (opts.isAutoFeed || opts.isBrowserFeed) {
-    var feedIcon2  = opts.isBrowserFeed ? 'ti-world-www' : opts.isWriteFileFeed ? 'ti-file-alert' : 'ti-terminal-2';
-    var feedLabel2 = opts.isBrowserFeed ? 'Browser page fed to AI' : opts.isWriteFileFeed ? 'File error fed to AI' : 'Shell output fed to AI';
-    var bgStatusEl = document.createElement('div');
-    bgStatusEl.className = 'msg system-msg';
-    bgStatusEl.innerHTML = '<div class="msg-body" style="display:flex;align-items:center;gap:5px;font-size:11px">' +
-      '<i class="ti ' + feedIcon2 + '" style="font-size:12px;opacity:.5"></i>' +
-      '<span>' + feedLabel2 + '</span>' +
-    '</div>';
-    getConvInner(targetId).appendChild(bgStatusEl);
   }
   bumpConvToTop(conv.id);
   saveConversations();
@@ -194,6 +181,7 @@ async function sendMessage(opts) {
   if (!conv) return;
   if (!opts.fromAutoFeed) conv._autoFeedDepth = 0; // user-initiated → reset chain
   if (!opts.fromAutoFeed) conv._depthLimitNotified = false;
+  if (!opts.fromAutoFeed) conv._chainMode = false; // user msg → not a chain continuation
   if (conv._streaming) {
     // Safety: if streaming flag is stale (>90s), force reset
     if (Date.now() - (conv._streamingStart || 0) > 90000) {
@@ -594,6 +582,11 @@ async function streamResponse(conv) {
   var msgEl  = createMessageEl('ai', _currentAgentInfo);
   var bodyEl = msgEl.querySelector('.msg-body');
   bodyEl.innerHTML = '<div class="thinking"><div class="think-dot"></div><div class="think-dot"></div><div class="think-dot"></div></div>';
+  // Chain-merge: if this is a continuation from auto-feed, visually merge with previous AI message
+  if (conv._chainMode) {
+    msgEl.classList.add('chain-msg');
+    conv._chainMode = false;
+  }
   getConvInner(convId).appendChild(msgEl);
   if (isActive()) { showMessages(); forceScrollBottom(); }
 
@@ -604,6 +597,37 @@ async function streamResponse(conv) {
   var _lastToolOutputAccum = ''; // rolling last ~1000 chars of tool_output for input context
   var _reasoning = null; // { text, startedAt } — live thinking state
   if (typeof resetDesignArtifactState === 'function') resetDesignArtifactState();
+
+  // ── Ephemeral tool status stack (Clawpilot-style) ──────────────────
+  var _toolStatuses = []; // { label, ts }
+  var _toolStatusEl = null;
+  function _addToolStatus(label) {
+    _toolStatuses.push({ label: label, ts: Date.now() });
+    if (_toolStatuses.length > 3) _toolStatuses.shift();
+    _renderToolStatuses();
+  }
+  function _clearToolStatuses() {
+    _toolStatuses = [];
+    if (_toolStatusEl) { _toolStatusEl.remove(); _toolStatusEl = null; }
+  }
+  function _renderToolStatuses() {
+    if (!_toolStatuses.length) { _clearToolStatuses(); return; }
+    if (!_toolStatusEl) {
+      _toolStatusEl = document.createElement('div');
+      _toolStatusEl.className = 'tool-status-stack';
+      bodyEl.appendChild(_toolStatusEl);
+    }
+    var html = '';
+    var last = _toolStatuses.length - 1;
+    for (var t = 0; t < _toolStatuses.length; t++) {
+      var op = t === last ? 1 : t === last - 1 ? 0.6 : 0.4;
+      html += '<div class="tool-status-line" style="opacity:' + op + '">' +
+        '<span class="tool-status-icon">⚡</span>' +
+        '<span class="' + (t === last ? 'tool-status-shimmer' : '') + '">' + escHtml(_toolStatuses[t].label) + '</span>' +
+      '</div>';
+    }
+    _toolStatusEl.innerHTML = html;
+  }
 
   function scheduleRender() {
     if (!isActive() || !bodyEl) return;
@@ -744,8 +768,8 @@ async function streamResponse(conv) {
             if (lastClose === -1) buffer += '\n```\n';
           }
 
-          if (evt.type === 'content')   { buffer += evt.content; tokenCount++; if (tokenCount === 1) dbg('first token received', 'ok'); if (typeof processDesignStreamChunk === 'function') processDesignStreamChunk(evt.content, buffer); scheduleRender(); }
-          if (evt.type === 'error')     { dbg('SSE error: ' + evt.error, 'err'); buffer += '\n\nError: ' + evt.error; scheduleRender(); }
+          if (evt.type === 'content')   { _clearToolStatuses(); buffer += evt.content; tokenCount++; if (tokenCount === 1) dbg('first token received', 'ok'); if (typeof processDesignStreamChunk === 'function') processDesignStreamChunk(evt.content, buffer); scheduleRender(); }
+          if (evt.type === 'error')     { _clearToolStatuses(); dbg('SSE error: ' + evt.error, 'err'); buffer += '\n\nError: ' + evt.error; scheduleRender(); }
           if (evt.type === 'reasoning') {
             if (!_reasoning) { _reasoning = { text: '', startedAt: Date.now() }; }
             _reasoning.text = evt.accumulated || (_reasoning.text + evt.text);
@@ -755,12 +779,10 @@ async function streamResponse(conv) {
           if (evt.type === 'tool_call') {
             dbg('tool_call: ' + evt.name, 'cmd');
             _lastToolOutputAccum = ''; // reset per tool invocation
-            // Pick a readable label based on the tool name
-            var toolLabel = evt.name || 'tool';
-            var isFigma = /figma/i.test(toolLabel);
-            var toolPrefix = isFigma ? 'Calling Figma tool' : 'Calling tool';
-            buffer += '\n\n*' + toolPrefix + ': `' + toolLabel + '`…*\n\n';
-            scheduleRender();
+            // Ephemeral tool status — shown as shimmer stack, not baked into buffer
+            var toolLabel = evt.label || evt.name || 'tool';
+            _addToolStatus(toolLabel);
+            if (isActive()) scrollBottom();
           }
           if (evt.type === 'tool_output') {
             // Live shell output — append to a collapsible output block
@@ -790,6 +812,7 @@ async function streamResponse(conv) {
             }
           }
           if (evt.type === 'done') {
+            _clearToolStatuses();
             dbg('done: finish_reason=' + evt.finish_reason + ' usage=' + JSON.stringify(evt.usage), evt.finish_reason ? 'ok' : 'warn');
             if (evt.usage) _ctxUsage = evt.usage;
             // Finalize reasoning panel (collapse, freeze duration)
@@ -808,6 +831,7 @@ async function streamResponse(conv) {
     dbg('stream error: ' + err.message, 'err');
     if (err.name !== 'AbortError') buffer += (buffer ? '\n\n' : '') + err.message;
   } finally {
+    _clearToolStatuses();
     if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
     dbg('■ stream done — buffer=' + buffer.length + 'ch tokens=' + tokenCount, buffer.length ? 'ok' : 'warn');
     dbg('  raw: ' + JSON.stringify(buffer), 'info');

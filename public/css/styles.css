@@ -613,6 +613,22 @@ button .ti, label .ti { pointer-events: none; }
 .msg.ai   .msg-body {background: var(--fau-ai-bg);/* border: 1px solid var(--fau-border); */}
 .msg.system-msg .msg-body { background: transparent; color: var(--fau-text-muted); font-size: 12px; font-style: italic; text-align: center; border: none; padding: 4px 0; }
 
+/* ── Chain continuation messages (auto-feed) — merge with previous AI msg ── */
+.msg.chain-msg { margin-top: -12px !important; animation: none; }
+.msg.chain-msg .msg-header { display: none; }
+.msg.chain-msg .msg-body { border-top: 1px solid var(--fau-border); border-radius: 0 0 var(--radius) var(--radius); padding-top: 10px; }
+
+/* ── Ephemeral tool status stack ──────────────────────────────────── */
+.tool-status-stack { display: flex; flex-direction: column; gap: 3px; padding: 6px 0 2px; }
+.tool-status-line { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fau-text-muted); transition: opacity .25s; }
+.tool-status-line .tool-status-icon { font-size: 11px; opacity: .7; }
+.tool-status-shimmer {
+  background: linear-gradient(90deg, var(--fau-text-muted), var(--accent2, #a78bfa), var(--fau-text-muted));
+  background-size: 200% auto; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  animation: toolShimmer 2s linear infinite;
+}
+@keyframes toolShimmer { to { background-position: 200% center; } }
+
 /* ── Archive divider ──────────────────────────────────────────────── */
 .conv-archive-divider .msg-body { font-style: normal !important; text-align: left !important; }
 .conv-archive-divider-inner {
@@ -2338,6 +2354,32 @@ body { animation: none; }
 .ba-status.ok      { color: var(--success); }
 .ba-status.err     { color: var(--error); }
 .ba-status.manual  { color: #f59e0b; }
+
+/* Chain-merged action messages: compact, prose hidden, widgets stacked tightly */
+.msg.chain-ba-only,
+.msg.chain-shell-only,
+.msg.chain-figma-only,
+.msg.chain-wf-only { margin-top: -6px !important; }
+.msg.chain-ba-only .msg-body,
+.msg.chain-shell-only .msg-body,
+.msg.chain-figma-only .msg-body,
+.msg.chain-wf-only .msg-body { padding: 2px 10px; border-top: none; background: transparent; }
+
+.msg.chain-ba-only .ba-block { margin: 2px 0; border: none; background: transparent; }
+.msg.chain-ba-only .ba-header { padding: 3px 6px; background: transparent; font-size: 11px; opacity: .75; }
+.msg.chain-ba-only .ba-header:hover { opacity: 1; }
+.msg.chain-ba-only .ba-status.ok { opacity: .5; }
+
+.msg.chain-shell-only .shell-exec-block { margin: 2px 0; border: none; }
+.msg.chain-shell-only .shell-exec-header { padding: 3px 6px; background: transparent; font-size: 11px; opacity: .75; }
+.msg.chain-shell-only .shell-exec-header:hover { opacity: 1; }
+.msg.chain-shell-only .shell-exec-code { padding: 4px 8px; max-height: 80px; font-size: 11px; }
+
+.msg.chain-figma-only .figma-exec-block { margin: 2px 0; }
+.msg.chain-figma-only .figma-exec-header { font-size: 11px; opacity: .75; }
+.msg.chain-figma-only .figma-exec-header:hover { opacity: 1; }
+
+.msg.chain-wf-only .wf-block { margin: 2px 0; }
 
 /* ── Bot-block options card ─────────────────────────────────────────── */
 .bot-block-options {

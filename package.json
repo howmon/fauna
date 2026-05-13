@@ -39,20 +39,11 @@
     "serve": "node cli.js --server",
     "dev": "electron . --inspect",
     "build": "electron-builder --mac --dir",
-    "prebuild": "node scripts/build-info.cjs",
     "dist": "electron-builder --mac",
-    "predist": "npm run prebuild",
     "dist:mac": "electron-builder --mac --arm64",
-    "predist:mac": "npm run prebuild",
     "dist:win": "electron-builder --win",
-    "predist:win": "npm run prebuild",
     "dist:all": "electron-builder --mac --win",
-    "predist:all": "npm run prebuild",
     "postdist:mac": "npm rebuild keytar --arch=arm64",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
-    "test:legacy": "node --test tests/instruction-discovery.test.js",
     "version:show": "node scripts/version.cjs",
     "version:patch": "node scripts/version.cjs patch",
     "version:minor": "node scripts/version.cjs minor",
@@ -66,7 +57,6 @@
     "@xenova/transformers": "^2.17.2",
     "archiver": "^7.0.1",
     "express": "^4.19.2",
-    "ffmpeg-static": "^5.3.0",
     "localtunnel": "^2.0.2",
     "marked": "^18.0.3",
     "multer": "^2.1.1",
@@ -78,10 +68,8 @@
     "ws": "^8.19.0"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.1.6",
     "electron": "^41.0.3",
-    "electron-builder": "^26.8.1",
-    "vitest": "^4.1.6"
+    "electron-builder": "^26.8.1"
   },
   "build": {
     "appId": "com.fauna.app",
@@ -90,7 +78,6 @@
     "copyright": "Copyright © 2026 Solomon Abey",
     "icon": "assets/icon.icns",
     "asarUnpack": [
-      "node_modules/ffmpeg-static/**",
       "node_modules/nodejs-whisper/**",
       "node_modules/@playwright/mcp/**",
       "node_modules/playwright-core/**",
@@ -118,7 +105,7 @@
       "hardenedRuntime": true
     },
     "win": {
-      "icon": "assets/icon.ico",
+      "icon": "assets/icon.png",
       "target": [
         {
           "target": "nsis",
@@ -157,25 +144,8 @@
       }
     },
     "files": [
-      "build-info.json",
-      "main.js",
-      "server.js",
-      "enterprise-auth.js",
-      "workiq-integration.js",
-      "private-integrations.js",
-      "widget-preload.js",
-      "task-manager.js",
-      "task-runner.js",
-      "project-manager.js",
-      "design-prompts.js",
-      "afterPack.cjs",
-      "agent-*.js",
-      "memory-store.js",
-      "self-tools.js",
-      "heartbeat.js",
-      "workflow-manager.js",
-      "permission-guard.js",
-      "teams-bridge.js",
+      "*.js",
+      "*.cjs",
       "lib/**",
       "public/**",
       "assets/**",

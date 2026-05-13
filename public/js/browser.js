@@ -1049,6 +1049,16 @@ function extractAndRenderBrowserActions(html, messageEl, isHistoryLoad, convId) 
     });
   }
 
+  // In chain messages (auto-fed responses), hide narration prose — only show the action widgets
+  if (messageEl.classList.contains('chain-msg') && container) {
+    Array.from(container.children).forEach(function(child) {
+      if (!child.classList || !child.classList.contains('ba-block')) {
+        child.style.display = 'none';
+      }
+    });
+    messageEl.classList.add('chain-ba-only');
+  }
+
   // Run all actions sequentially
   _runBrowserActionSequence(widgets, convId);
 }
@@ -1523,6 +1533,17 @@ function extractAndRenderBrowserExtActions(html, messageEl, isHistoryLoad, convI
   });
 
   if (!actions.length || isHistoryLoad) return;
+
+  // In chain messages (auto-fed responses), hide narration prose — only show the action widgets
+  if (messageEl.classList.contains('chain-msg') && container) {
+    Array.from(container.children).forEach(function(child) {
+      if (!child.classList || !child.classList.contains('ba-block')) {
+        child.style.display = 'none';
+      }
+    });
+    messageEl.classList.add('chain-ba-only');
+  }
+
   _runExtActionSequence(widgets, convId);
 }
 
@@ -1926,14 +1947,22 @@ async function _loadExtTabs() {
     '<div class="ext-menu-empty" style="padding:10px"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i></div>';
 
   try {
-    // Fetch tabs from all connected browsers in parallel
+    // Fetch tabs from all connected browsers in parallel (route by unique clientId)
+    // Count browser name occurrences to label duplicates (e.g. "Edge (1)", "Edge (2)")
+    var _browserCounts = {};
+    _extConnectedBrowsers.forEach(function(b) { _browserCounts[b.browser] = (_browserCounts[b.browser] || 0) + 1; });
+    var _browserSeen = {};
     var results = await Promise.all(_extConnectedBrowsers.map(function(b) {
+      _browserSeen[b.browser] = (_browserSeen[b.browser] || 0) + 1;
+      var displayName = _browserCounts[b.browser] > 1
+        ? b.browser + ' (' + _browserSeen[b.browser] + ')'
+        : b.browser;
       return fetch('/api/ext/command', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'tab:list', browser: b.browser })
+        body: JSON.stringify({ action: 'tab:list', clientId: b.id })
       }).then(function(r) { return r.json(); }).then(function(d) {
-        return { browser: b.browser, tabs: (d.ok && d.tabs) ? d.tabs : [] };
-      }).catch(function() { return { browser: b.browser, tabs: [] }; });
+        return { browser: displayName, clientId: b.id, tabs: (d.ok && d.tabs) ? d.tabs : [] };
+      }).catch(function() { return { browser: displayName, clientId: b.id, tabs: [] }; });
     }));
 
     var totalTabs = results.reduce(function(sum, r) { return sum + r.tabs.length; }, 0);
@@ -1957,13 +1986,14 @@ async function _loadExtTabs() {
         '<i class="ti ti-brand-' + res.browser.toLowerCase() + '" style="font-size:11px"></i> ' +
         escHtml(res.browser) + (multiBrowser ? ' (' + res.tabs.length + ')' : ' — ' + res.tabs.length + ' tabs') +
       '</div>';
+      var cId = res.clientId || '';
       res.tabs.forEach(function(tab) {
         var title = tab.title || 'Untitled';
         var shortTitle = title.length > 38 ? title.slice(0, 35) + '…' : title;
         var domain = '';
         try { domain = new URL(tab.url).hostname; } catch (_) { domain = tab.url || ''; }
         var shortDomain = domain.length > 35 ? domain.slice(0, 32) + '…' : domain;
-        var bAttr = ' data-browser="' + escHtml(res.browser) + '"';
+        var bAttr = ' data-browser="' + escHtml(res.browser) + '" data-client-id="' + escHtml(cId) + '"';
 
         html += '<div class="ext-tab-item"' + bAttr + '>' +
           (tab.active ? '<span class="ext-tab-active-dot" title="Active tab"></span>' : '<span style="width:5px;flex-shrink:0"></span>') +
@@ -1972,8 +2002,8 @@ async function _loadExtTabs() {
             '<div class="ext-tab-url">' + escHtml(shortDomain) + '</div>' +
           '</div>' +
           '<div class="ext-tab-actions">' +
-            '<button onclick="extGrabPage(' + tab.id + ',\'' + escHtml(res.browser) + '\')" title="Insert page content"><i class="ti ti-file-text"></i></button>' +
-            '<button onclick="extGrabSnapshot(' + tab.id + ',\'' + escHtml(res.browser) + '\')" title="Insert screenshot"><i class="ti ti-camera"></i></button>' +
+            '<button onclick="extGrabPage(' + tab.id + ',\'' + escHtml(res.browser) + '\',\'' + escHtml(cId) + '\')" title="Insert page content"><i class="ti ti-file-text"></i></button>' +
+            '<button onclick="extGrabSnapshot(' + tab.id + ',\'' + escHtml(res.browser) + '\',\'' + escHtml(cId) + '\')" title="Insert screenshot"><i class="ti ti-camera"></i></button>' +
           '</div>' +
         '</div>';
       });
@@ -2011,7 +2041,7 @@ function _filterExtTabs(query) {
   });
 }
 
-async function extGrabPage(tabId, browser) {
+async function extGrabPage(tabId, browser, clientId) {
   _extTabMenuOpen = false;
   var menu = document.getElementById('ext-tab-menu');
   if (menu) menu.style.display = 'none';
@@ -2019,7 +2049,8 @@ async function extGrabPage(tabId, browser) {
   try {
     var body = { action: 'extract' };
     if (tabId) body.tabId = tabId;
-    if (browser) body.browser = browser;
+    if (clientId) body.clientId = clientId;
+    else if (browser) body.browser = browser;
     var r = await fetch('/api/ext/command', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -2043,7 +2074,7 @@ async function extGrabPage(tabId, browser) {
   }
 }
 
-async function extGrabSnapshot(tabId, browser) {
+async function extGrabSnapshot(tabId, browser, clientId) {
   _extTabMenuOpen = false;
   var menu = document.getElementById('ext-tab-menu');
   if (menu) menu.style.display = 'none';
@@ -2051,7 +2082,8 @@ async function extGrabSnapshot(tabId, browser) {
   try {
     var body = { full: false };
     if (tabId) body.tabId = tabId;
-    if (browser) body.browser = browser;
+    if (clientId) body.clientId = clientId;
+    else if (browser) body.browser = browser;
     var r = await fetch('/api/ext/snapshot', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
