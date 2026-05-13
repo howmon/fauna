@@ -686,7 +686,8 @@ var _genUiComponents = {
         return 'Tell me about the "' + props.title + '" playlist (' + items.length + ' items: ' + titles.slice(0, 5).map(function(t) { return '"' + t + '"'; }).join(', ') + (titles.length > 5 ? '…' : '') + ')';
       }, 'Ask about this playlist');
       plAskBtn.classList.add('gui-ask-btn-header');
-      headerEl.insertBefore(plAskBtn, toggleBtn);
+      headerEl.appendChild(plAskBtn);
+      headerEl.appendChild(toggleBtn);
       wrap.appendChild(headerEl);
     }
 
