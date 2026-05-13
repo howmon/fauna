@@ -180,6 +180,8 @@ function switchPlaybookTab(tab) {
   });
   if (tab === 'memory' && !_memoryCategories) loadMemoryFromServer();
   if (tab === 'facts' && !_factsLoaded) loadFactsFromServer();
+  if (tab === 'agent-rules' && typeof renderAgentRules === 'function') renderAgentRules();
+  if (tab === 'sys-prompt' && typeof updateSysScopeHint === 'function') updateSysScopeHint();
 }
 
 async function loadMemoryFromServer() {

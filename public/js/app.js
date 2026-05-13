@@ -82,17 +82,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 });
 
-// ── Help panel ────────────────────────────────────────────────────────────
-var helpOpen = false;
+// ── Help panel (redirects to Settings → Help) ─────────────────────────────
 function toggleHelp() {
-  helpOpen = !helpOpen;
-  document.getElementById('help-panel').classList.toggle('open', helpOpen);
+  if (typeof openSettingsPage === 'function') openSettingsPage('help');
 }
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────
 document.addEventListener('keydown', function(e) {
-  if (e.key === 'Escape' && agentRulesOpen)  { toggleAgentRules(); }
   if (e.key === 'Escape' && figmaRulesOpen)  { toggleFigmaRules(); }
   if (e.key === 'Escape' && figmaSetupOpen)  { toggleFigmaSetup(); }
-  if (e.key === 'Escape' && helpOpen)        { toggleHelp(); }
 });

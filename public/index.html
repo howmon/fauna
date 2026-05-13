@@ -216,6 +216,7 @@
           <button class="topbar-menu-item" id="topbar-move-to-project-btn" onclick="openMoveConversationToProject();closeTopbarMenu()" title="Move this conversation to a project"><i class="ti ti-folder-symlink"></i> Move to Project</button>
           <button class="topbar-menu-item" id="topbar-ports-btn" onclick="openPortsDashboard();closeTopbarMenu()" title="Active ports" style="display:none"><i class="ti ti-server"></i> Ports <span id="topbar-ports-count" class="topbar-menu-badge">0</span></button>
           <div class="topbar-menu-divider"></div>
+          <button class="topbar-menu-item" onclick="toggleSysPanel();closeTopbarMenu()" title="Edit system prompt for this conversation"><i class="ti ti-terminal-2"></i> System Prompt</button>
           <button class="topbar-menu-item" onclick="clearConversation();closeTopbarMenu()" title="Clear messages"><i class="ti ti-trash"></i> Clear conversation</button>
           <button class="topbar-menu-item" onclick="toggleDebugLog();closeTopbarMenu()" id="debug-btn"><i class="ti ti-bug"></i> Debug log</button>
         </div>
@@ -490,29 +491,8 @@
 
 </div>
 
-<!-- ── System prompt panel ─────────────────────────────────────── -->
-<div id="sys-panel">
-  <div id="sys-panel-header">
-    <span><i class="ti ti-adjustments-horizontal"></i></span>
-    <span id="sys-panel-title">System Prompt</span>
-    <button id="sys-panel-close" onclick="toggleSysPanel()"><i class="ti ti-x"></i></button>
-  </div>
-  <div id="sys-scope-hint"></div>
-  <textarea id="sys-prompt-input" oninput="updateSysScopeHint()" placeholder="Enter a system prompt to guide the AI's behavior…
-
-Examples:
-• You are a senior TypeScript engineer. Always use strict types.
-• You are a concise assistant. Keep responses short.
-• You are an expert in React and Figma plugin development."></textarea>
-  <div id="sys-panel-footer">
-    <div class="sys-footer-row">
-      <button class="panel-btn secondary" style="flex:0;padding:7px 12px" onclick="clearSysPrompt()">Clear</button>
-      <button class="panel-btn secondary" style="flex:1" onclick="saveSysPromptForConv()" title="Apply only to this conversation"><i class="ti ti-message-circle"></i> This chat</button>
-      <button class="panel-btn primary" style="flex:1" onclick="saveSysPromptGlobal()" title="Apply to every new and existing chat"><i class="ti ti-world"></i> All chats</button>
-    </div>
-    <button class="panel-btn rule-btn" onclick="addPromptAsRule()"><i class="ti ti-list-check"></i> Add as global rule</button>
-  </div>
-</div>
+<!-- ── System prompt panel (content moved to Settings → Playbook → System Prompt tab) ── -->
+<div id="sys-panel"></div>
 
 <!-- ── Settings panel ─────────────────────────────────────────────── -->
 <div id="settings-panel">
@@ -560,6 +540,12 @@ Examples:
       </button>
       <button class="settings-nav-item" data-page="teams" onclick="switchSettingsPage('teams',this)">
         <i class="ti ti-brand-teams"></i> Teams Bridge
+      </button>
+      <button class="settings-nav-item" data-page="permissions" onclick="switchSettingsPage('permissions',this)">
+        <i class="ti ti-shield-lock"></i> Permissions
+      </button>
+      <button class="settings-nav-item" data-page="help" onclick="switchSettingsPage('help',this)">
+        <i class="ti ti-help-circle"></i> Help &amp; Reference
       </button>
       <button class="settings-nav-item" data-page="about" onclick="switchSettingsPage('about',this)">
         <i class="ti ti-info-circle"></i> About
@@ -902,10 +888,12 @@ Examples:
     <div class="settings-page-title">Playbook</div>
 
     <div class="settings-section">
-      <div id="settings-playbook-tabs" style="display:flex;gap:0;margin-bottom:12px">
+      <div id="settings-playbook-tabs" style="display:flex;gap:0;margin-bottom:12px;flex-wrap:wrap">
         <button class="pb-tab active" data-tab="learned" onclick="switchPlaybookTab('learned')" style="flex:1">Learned Instructions</button>
         <button class="pb-tab" data-tab="facts" onclick="switchPlaybookTab('facts')" style="flex:1">Facts</button>
         <button class="pb-tab" data-tab="memory" onclick="switchPlaybookTab('memory')" style="flex:1">Spec Memory</button>
+        <button class="pb-tab" data-tab="sys-prompt" onclick="switchPlaybookTab('sys-prompt')" style="flex:1">System Prompt</button>
+        <button class="pb-tab" data-tab="agent-rules" onclick="switchPlaybookTab('agent-rules')" style="flex:1">Agent Rules</button>
       </div>
 
       <!-- Learned tab -->
@@ -975,6 +963,44 @@ Examples:
           <input type="file" id="mem-import-file" accept=".json" style="display:none" onchange="importMemory(event)">
         </div>
         <div id="memory-list" style="max-height:calc(100vh - 340px);overflow-y:auto;padding:4px 0">
+        </div>
+      </div>
+
+      <!-- System Prompt tab -->
+      <div id="pb-tab-sys-prompt" class="pb-tab-body">
+        <div class="settings-hint" style="margin-bottom:8px">Override the AI's system prompt. Changes take effect on the next message.</div>
+        <div id="sys-scope-hint" style="font-size:11px;color:var(--fau-text-muted);min-height:16px;margin-bottom:6px"></div>
+        <textarea id="sys-prompt-input" oninput="updateSysScopeHint()" class="settings-input"
+          placeholder="Enter a system prompt to guide the AI's behavior…
+
+Examples:
+• You are a senior TypeScript engineer. Always use strict types.
+• You are a concise assistant. Keep responses short.
+• You are an expert in React and Figma plugin development."
+          style="width:100%;resize:vertical;min-height:160px;font-family:var(--font);font-size:12.5px"></textarea>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+          <button class="settings-row-btn" style="flex:0;padding:7px 12px" onclick="clearSysPrompt()">Clear</button>
+          <button class="settings-row-btn" style="flex:1" onclick="saveSysPromptForConv()" title="Apply only to this conversation"><i class="ti ti-message-circle"></i> This chat</button>
+          <button class="settings-row-btn" style="flex:1" onclick="saveSysPromptGlobal()" title="Apply to all conversations"><i class="ti ti-world"></i> All chats</button>
+          <button class="settings-row-btn" style="flex:1" onclick="addPromptAsRule()"><i class="ti ti-list-check"></i> Add as rule</button>
+        </div>
+      </div>
+
+      <!-- Agent Rules tab -->
+      <div id="pb-tab-agent-rules" class="pb-tab-body">
+        <div class="settings-hint" style="margin-bottom:12px">
+          Rules injected into <strong>every</strong> AI message as hard constraints.<br>
+          Use them to control how the AI behaves, formats responses, or uses tools.
+        </div>
+        <div id="agent-rules-list" style="max-height:calc(100vh - 460px);overflow-y:auto;padding:4px 0 12px">
+          <!-- Populated by renderAgentRules() -->
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+          <textarea id="agent-rule-input" class="settings-input" rows="3"
+            placeholder="e.g. Always write complete shell commands — never leave code blocks empty&#10;e.g. Reply in British English&#10;e.g. Always explain what each command does before running it"
+            onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))addAgentRule()"
+            style="resize:vertical;font-family:var(--font);font-size:12.5px"></textarea>
+          <button class="settings-row-btn" onclick="addAgentRule()" style="align-self:flex-start"><i class="ti ti-plus"></i> Add Rule</button>
         </div>
       </div>
     </div>
@@ -1089,6 +1115,14 @@ Examples:
     </div>
   </div>
 
+  <!-- ── Help & Reference ──────────────────────────────────────── -->
+  <div class="settings-page" data-page="help">
+    <div class="settings-page-title">Help &amp; Reference</div>
+    <div class="settings-section" style="padding:0">
+      <div id="help-settings-mount"></div>
+    </div>
+  </div>
+
   <div class="settings-page" data-page="about">
     <div class="settings-page-title">About</div>
     <div class="settings-section">
@@ -1113,6 +1147,21 @@ Examples:
         <button type="button" class="settings-row-btn" style="flex:1;min-width:140px" onclick="window.open('https://github.com/howmon/fauna','_blank')"><i class="ti ti-brand-github"></i> Repository</button>
       </div>
       <div class="settings-hint" style="margin-top:6px;font-size:10.5px">Build &amp; Install downloads Fauna main, compiles the platform package, then launches the installer/relauncher when supported.</div>
+    </div>
+  </div>
+
+  <!-- ── Permissions ───────────────────────────────────────────── -->
+  <div class="settings-page" data-page="permissions">
+    <div class="settings-page-title">Permissions &amp; Setup</div>
+    <div class="settings-section">
+      <div class="settings-hint" style="margin-bottom:12px">Grant the permissions below to unlock all capabilities.</div>
+      <div id="permission-list">
+        <div style="padding:24px;text-align:center;color:var(--fau-text-muted);font-size:13px">Checking permissions…</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:12px;padding-top:12px;border-top:1px solid var(--fau-border)">
+        <span id="ob-checking-hint" style="flex:1;font-size:11.5px;color:var(--fau-text-muted)"></span>
+        <button class="settings-row-btn" onclick="refreshPermissions()"><i class="ti ti-refresh"></i> Check again</button>
+      </div>
     </div>
   </div>
 
@@ -1162,9 +1211,24 @@ Examples:
     if (page === 'playbook') {
       renderPlaybook();
       if (typeof renderMemory === 'function') renderMemory();
+      if (typeof renderAgentRules === 'function') renderAgentRules();
     }
     if (page === 'about') {
       _refreshFaunaUpdateStatus();
+    }
+    if (page === 'permissions') {
+      if (typeof refreshPermissions === 'function') refreshPermissions();
+    }
+    if (page === 'help') {
+      // Move help content into the settings page on first open
+      var mount = document.getElementById('help-settings-mount');
+      var panel = document.getElementById('help-panel');
+      if (mount && panel && !mount.children.length) {
+        var toc  = panel.querySelector('#help-toc');
+        var body = panel.querySelector('#help-body');
+        if (toc)  mount.appendChild(toc);
+        if (body) mount.appendChild(body);
+      }
     }
   }
 
@@ -1724,27 +1788,8 @@ Examples:
 </div>
 
 <!-- ── Figma Rules panel ──────────────────────────────────────────── -->
-<!-- ── Agent Rules panel ──────────────────────────────────────────── -->
-<div id="agent-rules-panel">
-  <div id="agent-rules-header">
-    <span><i class="ti ti-robot" style="font-size:16px;color:var(--accent2)"></i></span>
-    <span class="title">Agent Rules</span>
-    <button style="background:none;border:none;color:var(--fau-text-muted);cursor:pointer;font-size:18px;padding:0 2px" onclick="toggleAgentRules()"><i class="ti ti-x"></i></button>
-  </div>
-  <div style="font-size:11.5px;color:var(--fau-text-dim);padding:10px 16px 8px;border-bottom:1px solid var(--fau-border);line-height:1.5">
-    Rules injected into <strong>every</strong> AI message as hard constraints.<br>
-    Use them to control how the AI behaves, formats responses, or uses tools.
-  </div>
-  <div id="agent-rules-list" style="flex:1;overflow-y:auto;padding:8px 10px">
-    <!-- Populated by renderAgentRules() -->
-  </div>
-  <div id="agent-rules-add">
-    <textarea id="agent-rule-input" rows="3"
-      placeholder="e.g. Always write complete shell commands — never leave code blocks empty&#10;e.g. Reply in British English&#10;e.g. Always explain what each command does before running it"
-      onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))addAgentRule()"></textarea>
-    <button id="agent-rule-add-btn" onclick="addAgentRule()"><i class="ti ti-plus"></i> Add Rule</button>
-  </div>
-</div>
+<!-- ── Agent Rules panel (content moved to Settings → Playbook → Agent Rules tab) ── -->
+<div id="agent-rules-panel"></div>
 
 <div id="figma-rules-panel">
   <div id="figma-rules-header">
@@ -1879,29 +1924,8 @@ Examples:
   </div>
 </div>
 
-<!-- ── Onboarding overlay ──────────────────────────────────────────── -->
-<div id="onboarding-overlay" style="display:none">
-  <div id="onboarding-card">
-
-    <div id="onboarding-header">
-      <div class="ob-icon"><img src="/img/logo.svg" alt="Fauna" width="56" height="56"></div>
-      <h1>Set up Fauna</h1>
-      <p>Grant the permissions below to unlock all capabilities.<br>You can revisit this screen anytime from <strong>Fauna → Permissions &amp; Setup</strong>.</p>
-    </div>
-
-    <div id="permission-list">
-      <!-- Populated by renderPermissions() -->
-      <div style="padding:24px;text-align:center;color:var(--fau-text-muted);font-size:13px">Checking permissions…</div>
-    </div>
-
-    <div id="onboarding-footer">
-      <span id="ob-checking-hint"></span>
-      <button id="ob-check-again" onclick="refreshPermissions()"><i class="ti ti-refresh"></i> Check again</button>
-      <button id="ob-continue" onclick="closeOnboarding()">Continue to Chat <i class="ti ti-arrow-right"></i></button>
-    </div>
-
-  </div>
-</div>
+<!-- ── Onboarding overlay (kept for first-run; now redirects to Settings > Permissions) ── -->
+<div id="onboarding-overlay" style="display:none"></div>
 <!-- ── All Conversations Page (full overlay) ──────────────────── -->
 <div id="all-convs-page" style="display:none"></div>
 <!-- ── All Agents Page (full overlay) ──────────────────────────── -->

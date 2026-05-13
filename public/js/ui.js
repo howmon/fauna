@@ -873,12 +873,10 @@ document.getElementById('pat-input').addEventListener('keydown', e => {
 // ── System prompt panel ───────────────────────────────────────────────────
 
 function toggleSysPanel() {
-  var panel = document.getElementById('sys-panel');
-  var btn = document.getElementById('sys-btn');
-  if (!panel) return;
-  panel.classList.toggle('open');
-  if (btn) btn.classList.toggle('active');
-  if (panel.classList.contains('open')) updateSysScopeHint();
+  if (typeof openSettingsPage === 'function') {
+    openSettingsPage('playbook');
+    if (typeof switchPlaybookTab === 'function') switchPlaybookTab('sys-prompt');
+  }
 }
 
 // Legacy — kept for any older callers
@@ -891,7 +889,6 @@ function saveSysPromptForConv() {
   if (!conv) { showToast('No active conversation'); return; }
   conv.systemPrompt = val;
   saveConversations();
-  toggleSysPanel();
   showToast('Saved for this chat');
 }
 
@@ -902,7 +899,6 @@ function saveSysPromptGlobal() {
   localStorage.setItem('fauna-sys', val);
   var conv = getConv(state.currentId);
   if (conv) { conv.systemPrompt = val; saveConversations(); }
-  toggleSysPanel();
   showToast('System prompt saved globally');
 }
 
@@ -913,7 +909,6 @@ function addPromptAsRule() {
   var rules = loadAgentRules();
   rules.push({ id: 'ar-' + Date.now(), text: text, enabled: true });
   saveAgentRules(rules);
-  toggleSysPanel();
   showToast('Added to global rules');
 }
 
@@ -1262,8 +1257,7 @@ input.addEventListener('keydown', e => {
   }
 
   if (e.key === 'Escape') {
-    if (obOpen) closeOnboarding();
-    else if (document.getElementById('sys-panel').classList.contains('open'))      toggleSysPanel();
+    if (document.getElementById('sys-panel').classList.contains('open'))      toggleSysPanel();
     else if (document.getElementById('settings-panel').classList.contains('open')) toggleSettings();
   }
 });
@@ -1533,8 +1527,6 @@ function winCtrl(action) {
 
 // ── Onboarding / Permissions ──────────────────────────────────────────────
 
-var obOpen = false;
-
 var PERMISSIONS_DEF_MAC = [
   {
     id: 'auth',
@@ -1606,22 +1598,14 @@ var PERMISSIONS_DEF_WIN = [
 var PERMISSIONS_DEF = navigator.userAgent.includes('Windows') ? PERMISSIONS_DEF_WIN : PERMISSIONS_DEF_MAC;
 
 function openOnboarding() {
-  obOpen = true;
-  var el = document.getElementById('onboarding-overlay');
-  el.style.display = 'flex';
-  refreshPermissions();
-  window.addEventListener('focus', onWindowFocus);
+  // Permissions now live in Settings → Permissions page
+  if (typeof openSettingsPage === 'function') {
+    openSettingsPage('permissions');
+  }
 }
 
 function closeOnboarding() {
-  obOpen = false;
-  document.getElementById('onboarding-overlay').style.display = 'none';
-  window.removeEventListener('focus', onWindowFocus);
   localStorage.setItem('fauna-chat-onboarding-done', '1');
-}
-
-function onWindowFocus() {
-  if (obOpen) refreshPermissions();
 }
 
 async function refreshPermissions() {

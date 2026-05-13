@@ -2,7 +2,6 @@
 // Stored in localStorage. Injected into EVERY system prompt as hard constraints.
 
 var AGENT_RULES_KEY = 'fauna-agent-rules';
-var agentRulesOpen  = false;
 
 var BUILTIN_AGENT_RULES = [
   { id: 'builtin-shell', builtin: true, enabled: true,
@@ -32,9 +31,10 @@ function getAgentRulesContext() {
 }
 
 function toggleAgentRules() {
-  agentRulesOpen = !agentRulesOpen;
-  document.getElementById('agent-rules-panel').classList.toggle('open', agentRulesOpen);
-  if (agentRulesOpen) renderAgentRules();
+  if (typeof openSettingsPage === 'function') {
+    openSettingsPage('playbook');
+    if (typeof switchPlaybookTab === 'function') switchPlaybookTab('agent-rules');
+  }
 }
 
 function renderAgentRules() {
