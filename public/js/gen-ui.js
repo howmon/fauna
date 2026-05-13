@@ -631,16 +631,30 @@ var _genUiComponents = {
     var items = props.items || [];
     if (!items.length) return document.createTextNode('(empty playlist)');
 
-    var wrap = document.createElement('div');
+    var wrap    = document.createElement('div');
     wrap.className = 'gui-playlist';
-    var sp = props.statePath || ('__playlist_' + Math.random().toString(36).slice(2));
-    if (store.get(sp) == null) store.set(sp, 0);
+    var sp      = props.statePath || ('__playlist_' + Math.random().toString(36).slice(2));
+    var spList  = sp + '__list';   // tracks list open/closed
+    if (store.get(sp)     == null) store.set(sp,     0);
+    if (store.get(spList) == null) store.set(spList, true);
 
+    // ── Header (title + hide/show toggle) ─────────────────────────────
+    var toggleBtn = null;
     if (props.title) {
-      var titleEl = document.createElement('div');
-      titleEl.className = 'gui-playlist-header';
-      titleEl.innerHTML = '<i class="ti ti-playlist"></i> ' + escHtml(props.title);
-      wrap.appendChild(titleEl);
+      var headerEl = document.createElement('div');
+      headerEl.className = 'gui-playlist-header';
+      var titleSpan = document.createElement('span');
+      titleSpan.innerHTML = '<i class="ti ti-playlist"></i> ' + escHtml(props.title);
+      headerEl.appendChild(titleSpan);
+      toggleBtn = document.createElement('button');
+      toggleBtn.className = 'gui-playlist-toggle';
+      toggleBtn.title = 'Hide list';
+      toggleBtn.innerHTML = '<i class="ti ti-chevron-up"></i>';
+      toggleBtn.addEventListener('click', function() {
+        store.set(spList, !store.get(spList));
+      });
+      headerEl.appendChild(toggleBtn);
+      wrap.appendChild(headerEl);
     }
 
     var playerArea = document.createElement('div');
@@ -659,21 +673,51 @@ var _genUiComponents = {
       if (!item) return;
       var type = getItemType(item);
 
+      // Now-playing label
       var nowPlaying = document.createElement('div');
       nowPlaying.className = 'gui-playlist-now-playing';
       nowPlaying.innerHTML = '<i class="ti ' + _guiMediaIcon(type) + '"></i> ' + escHtml(item.title || item.src || '');
       playerArea.appendChild(nowPlaying);
 
+      // Media element
       var mediaEl = _guiBuildMediaEl(item.src || '', type, {
         poster: item.poster,
         autoplay: idx > 0 || !!props.autoplay,
         alt: item.title,
         onEnded: function() {
-          var next = (idx + 1) % items.length;
-          store.set(sp, next);
+          store.set(sp, (idx + 1) % items.length);
         }
       });
       playerArea.appendChild(mediaEl);
+
+      // Prev / counter / next controls
+      var controls = document.createElement('div');
+      controls.className = 'gui-playlist-controls';
+      var prevBtn = document.createElement('button');
+      prevBtn.className = 'gui-playlist-btn';
+      prevBtn.innerHTML = '<i class="ti ti-chevron-left"></i>';
+      prevBtn.title = 'Previous';
+      (function(i) {
+        prevBtn.addEventListener('click', function() {
+          store.set(sp, (i - 1 + items.length) % items.length);
+        });
+      })(idx);
+      var counter = document.createElement('span');
+      counter.className = 'gui-playlist-counter';
+      counter.textContent = (idx + 1) + ' / ' + items.length;
+      var nextBtn = document.createElement('button');
+      nextBtn.className = 'gui-playlist-btn';
+      nextBtn.innerHTML = '<i class="ti ti-chevron-right"></i>';
+      nextBtn.title = 'Next';
+      (function(i) {
+        nextBtn.addEventListener('click', function() {
+          store.set(sp, (i + 1) % items.length);
+        });
+      })(idx);
+      controls.appendChild(prevBtn);
+      controls.appendChild(counter);
+      controls.appendChild(nextBtn);
+      playerArea.appendChild(controls);
     }
 
     function renderList() {
@@ -717,13 +761,24 @@ var _genUiComponents = {
       });
     }
 
+    function syncListVisibility() {
+      var open = store.get(spList) !== false;
+      listArea.style.display = open ? '' : 'none';
+      if (toggleBtn) {
+        toggleBtn.querySelector('i').className = 'ti ' + (open ? 'ti-chevron-up' : 'ti-chevron-down');
+        toggleBtn.title = open ? 'Hide list' : 'Show list';
+      }
+    }
+
     store.subscribe(function() {
       renderPlayer(store.get(sp) || 0);
       renderList();
+      syncListVisibility();
     });
 
     renderPlayer(0);
     renderList();
+    syncListVisibility();
 
     var body = document.createElement('div');
     var layout = props.layout || 'stack';

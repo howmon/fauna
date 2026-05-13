@@ -3123,7 +3123,13 @@ webview {
 
 /* ── Playlist ─────────────────────────────────────────────────────────── */
 .gui-playlist { width: 100%; display: flex; flex-direction: column; gap: 0; border: 1px solid var(--fau-border); border-radius: var(--radius); overflow: hidden; }
-.gui-playlist-header { padding: 10px 14px; font-size: 13px; font-weight: 600; color: var(--fau-text); background: var(--fau-surface2); border-bottom: 1px solid var(--fau-border); display: flex; align-items: center; gap: 7px; }
+.gui-playlist-header { padding: 8px 10px 8px 14px; font-size: 13px; font-weight: 600; color: var(--fau-text); background: var(--fau-surface2); border-bottom: 1px solid var(--fau-border); display: flex; align-items: center; gap: 7px; justify-content: space-between; }
+.gui-playlist-toggle { margin-left: auto; background: none; border: none; cursor: pointer; color: var(--fau-text-muted); padding: 3px 5px; border-radius: 4px; display: flex; align-items: center; line-height: 1; font-size: 15px; transition: background .12s, color .12s; }
+.gui-playlist-toggle:hover { background: var(--fau-hover); color: var(--fau-text); }
+.gui-playlist-controls { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 4px 0 2px; }
+.gui-playlist-btn { background: none; border: 1px solid var(--fau-border); border-radius: 5px; cursor: pointer; color: var(--fau-text); padding: 3px 9px; font-size: 14px; display: flex; align-items: center; transition: background .12s; }
+.gui-playlist-btn:hover { background: var(--fau-hover); }
+.gui-playlist-counter { font-size: 11.5px; color: var(--fau-text-muted); min-width: 40px; text-align: center; }
 .gui-playlist-body { display: flex; flex-direction: column; }
 .gui-playlist-body.side { flex-direction: row; align-items: flex-start; }
 .gui-playlist-player { padding: 12px; background: var(--fau-surface); display: flex; flex-direction: column; gap: 6px; }
