@@ -1968,6 +1968,7 @@ Examples:
     <a href="#help-figma">Figma</a>
     <a href="#help-playbook">Playbook</a>
     <a href="#help-memory">Spec Memory</a>
+    <a href="#help-sysprompt">System Prompt</a>
     <a href="#help-rules">Agent Rules</a>
     <a href="#help-settings">Settings</a>
     <a href="#help-shortcuts">Shortcuts</a>
@@ -2139,9 +2140,19 @@ Examples:
     <!-- ── Playbook ── -->
     <section class="help-section" id="help-playbook">
       <h2 class="help-h2">Playbook</h2>
-      <p>The Playbook (<kbd>notebook icon</kbd> in the sidebar footer) stores <strong>Learned Instructions</strong> — short rules the AI has discovered from successful approaches.</p>
-      <p>Entries are auto-saved when the AI identifies a reusable pattern, or you can add them manually. All enabled entries are injected into the system prompt on every request.</p>
-      <p>Toggle individual entries on/off with the checkbox. Delete entries with the trash icon. Dragging is not required — use the toggle to temporarily suppress an instruction without deleting it.</p>
+      <p>Open the Playbook from <strong>Settings → Playbook</strong>. It has five tabs:</p>
+      <dl class="help-dl">
+        <dt>Learned Instructions</dt>
+        <dd>Short rules the AI has discovered from successful approaches, or that you add manually. All enabled entries are injected into the system prompt on every request. Toggle individual entries on/off, or delete them with the trash icon.</dd>
+        <dt>Facts</dt>
+        <dd>Persistent factual statements the AI should always be aware of — your name, timezone, preferred tools, team conventions, etc.</dd>
+        <dt>Spec Memory</dt>
+        <dd>Structured knowledge organised into categories and groups. Great for component specs, API docs, and design system rules. See the <a href="#help-memory">Spec Memory</a> section for details.</dd>
+        <dt>System Prompt</dt>
+        <dd>Override the AI’s base system prompt for this conversation or globally. See the <a href="#help-sysprompt">System Prompt</a> section for details.</dd>
+        <dt>Agent Rules</dt>
+        <dd>Hard constraints injected into every AI message. See the <a href="#help-rules">Agent Rules</a> section for details.</dd>
+      </dl>
     </section>
 
     <!-- ── Spec Memory ── -->
@@ -2157,34 +2168,56 @@ Examples:
       </ul>
     </section>
 
+    <!-- ── System Prompt ── -->
+    <section class="help-section" id="help-sysprompt">
+      <h2 class="help-h2">System Prompt</h2>
+      <p>Open <strong>Settings → Playbook → System Prompt</strong> to customise the base instructions the AI follows.</p>
+      <dl class="help-dl">
+        <dt>This chat</dt>
+        <dd>Saves the prompt only for the current conversation. Useful for one-off personas or task-specific instructions.</dd>
+        <dt>All chats</dt>
+        <dd>Saves the prompt globally. Applied to every new and existing conversation until you change it again.</dd>
+        <dt>Add as rule</dt>
+        <dd>Converts the current prompt text into an Agent Rule instead — useful when you want it enforced as a hard constraint rather than a soft instruction.</dd>
+        <dt>Clear</dt>
+        <dd>Removes the custom system prompt, reverting the AI to its built-in defaults.</dd>
+      </dl>
+      <p>The scope hint below the textarea shows which prompt is currently active (global vs conversation-specific).</p>
+    </section>
+
     <!-- ── Agent Rules ── -->
     <section class="help-section" id="help-rules">
       <h2 class="help-h2">Agent Rules</h2>
-      <p>Agent Rules (<i class="ti ti-robot" style="font-size:12px"></i> in the sidebar footer) are hard constraints injected into <em>every</em> AI message, regardless of which agent or model is active.</p>
+      <p>Open <strong>Settings → Playbook → Agent Rules</strong>. Rules are hard constraints injected into <em>every</em> AI message, regardless of which agent or model is active.</p>
       <p>Use them for global formatting preferences, safety guardrails, or behavioral overrides that should always apply, such as:</p>
       <ul class="help-list">
         <li>Always write complete commands — never leave code blocks empty</li>
         <li>Reply in a specific language</li>
         <li>Never include caveats or disclaimers</li>
       </ul>
-      <p>Rules are persisted locally and survive app restarts.</p>
+      <p>Two built-in rules (shell completeness and no simulated output) are always active and cannot be deleted, only toggled. Custom rules are persisted locally and survive app restarts.</p>
+      <p>Type a rule and press <kbd>Cmd/Ctrl+Enter</kbd> or click <strong>Add Rule</strong> to save it. Delete a rule with the trash icon; disable it temporarily with the toggle.</p>
     </section>
 
     <!-- ── Settings ── -->
     <section class="help-section" id="help-settings">
       <h2 class="help-h2">Settings</h2>
-      <p>Open Settings from the bottom of the sidebar (<i class="ti ti-settings" style="font-size:12px"></i> Settings button).</p>
+      <p>Open Settings from the <strong>Settings</strong> button at the bottom of the sidebar. Use the left nav to jump between pages.</p>
       <dl class="help-dl">
-        <dt>Personal Access Token</dt>
+        <dt>General &rarr; Personal Access Token</dt>
         <dd>Override the auto-detected Copilot token. Required if you are not signed into the <code>gh</code> CLI. Generate one at github.com/settings/tokens with the <code>copilot</code> scope.</dd>
-        <dt>Thinking Budget</dt>
-        <dd>Controls extended thinking for supported models (Claude, o-series). Higher budgets allow deeper analysis at the cost of more tokens: Off / Low (~1K) / Medium (~5K) / High (~10K) / Max (~32K).</dd>
-        <dt>Maximum Context Turns</dt>
+        <dt>General &rarr; Thinking Budget</dt>
+        <dd>Controls extended thinking for supported models (Claude, o-series). Higher budgets allow deeper analysis at the cost of more tokens: Off / Low (~1 K) / Medium (~5 K) / High (~10 K) / Max (~32 K).</dd>
+        <dt>General &rarr; Maximum Context Turns</dt>
         <dd>How many past conversation messages to include in each request. Higher values increase accuracy for long tasks but also cost more tokens.</dd>
-        <dt>Auto-run Shell Commands</dt>
+        <dt>General &rarr; Auto-run Shell Commands</dt>
         <dd>When enabled, bash blocks execute automatically without a click. Use with caution.</dd>
-        <dt>System Prompt</dt>
-        <dd>Override the default system prompt for all conversations. Changes take effect on the next message.</dd>
+        <dt>Playbook &rarr; System Prompt</dt>
+        <dd>Override the default AI system prompt per-conversation or globally. See the <a href="#help-sysprompt">System Prompt</a> section for details.</dd>
+        <dt>Playbook &rarr; Agent Rules</dt>
+        <dd>Hard constraints applied to every message. See the <a href="#help-rules">Agent Rules</a> section for details.</dd>
+        <dt>Permissions</dt>
+        <dd>Grant or revoke access to shell execution, file write, browser, and Figma. Required on first run.</dd>
       </dl>
     </section>
 
@@ -2201,8 +2234,9 @@ Examples:
           <tr><td>Open Agent Store</td><td><kbd>Ctrl/Cmd+Shift+P</kbd></td></tr>
           <tr><td>Open Agent Builder</td><td><kbd>Ctrl/Cmd+Shift+B</kbd></td></tr>
           <tr><td>Open Analytics</td><td><kbd>Ctrl/Cmd+Shift+A</kbd></td></tr>
+          <tr><td>Save rule (in Agent Rules input)</td><td><kbd>Cmd/Ctrl+Enter</kbd></td></tr>
           <tr><td>Deactivate agent (empty input)</td><td><kbd>Esc</kbd></td></tr>
-          <tr><td>Close any panel</td><td><kbd>Esc</kbd></td></tr>
+          <tr><td>Close Figma panels</td><td><kbd>Esc</kbd></td></tr>
         </tbody>
       </table>
     </section>
