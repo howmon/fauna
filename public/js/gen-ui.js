@@ -130,6 +130,27 @@ function _guiMediaIcon(type) {
   return 'ti-file';
 }
 
+// ── "Ask about this" helpers ─────────────────────────────────────────────
+function _guiAskAbout(prompt) {
+  var inp = document.getElementById('msg-input');
+  if (!inp) return;
+  inp.value = prompt;
+  inp.dispatchEvent(new Event('input')); // trigger auto-resize
+  inp.focus();
+  inp.setSelectionRange(prompt.length, prompt.length);
+}
+function _guiMakeAskBtn(getPrompt, title) {
+  var btn = document.createElement('button');
+  btn.className = 'gui-ask-btn';
+  btn.title = title || 'Ask about this';
+  btn.innerHTML = '<i class="ti ti-message-circle"></i>';
+  btn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    _guiAskAbout(typeof getPrompt === 'function' ? getPrompt() : getPrompt);
+  });
+  return btn;
+}
+
 function _guiBuildMediaEl(src, type, opts) {
   opts = opts || {};
   // Proxy any local path through the server — the renderer can't load file:// or bare /abs/paths
@@ -611,7 +632,13 @@ var _genUiComponents = {
     if (props.title) {
       var titleEl = document.createElement('div');
       titleEl.className = 'gui-player-title';
-      titleEl.textContent = props.title;
+      var titleText = document.createElement('span');
+      titleText.textContent = props.title;
+      titleEl.appendChild(titleText);
+      titleEl.appendChild(_guiMakeAskBtn(
+        'Tell me about "' + props.title + '"',
+        'Ask about this ' + (type === 'audio' ? 'audio' : type === 'image' ? 'image' : 'video')
+      ));
       wrap.appendChild(titleEl);
     }
 
@@ -653,7 +680,13 @@ var _genUiComponents = {
       toggleBtn.addEventListener('click', function() {
         store.set(spList, !store.get(spList));
       });
-      headerEl.appendChild(toggleBtn);
+      // Ask about entire playlist
+      var plAskBtn = _guiMakeAskBtn(function() {
+        var titles = items.map(function(it) { return it.title || it.src || 'Untitled'; });
+        return 'Tell me about the "' + props.title + '" playlist (' + items.length + ' items: ' + titles.slice(0, 5).map(function(t) { return '"' + t + '"'; }).join(', ') + (titles.length > 5 ? '…' : '') + ')';
+      }, 'Ask about this playlist');
+      plAskBtn.classList.add('gui-ask-btn-header');
+      headerEl.insertBefore(plAskBtn, toggleBtn);
       wrap.appendChild(headerEl);
     }
 
@@ -756,7 +789,14 @@ var _genUiComponents = {
           (item.duration    ? '<div class="gui-playlist-item-dur">'  + escHtml(item.duration)    + '</div>' : '');
         row.appendChild(info);
 
-        (function(i) { row.addEventListener('click', function() { store.set(sp, i); }); })(i);
+        // Ask button for individual item
+        var askBtn = _guiMakeAskBtn(
+          'Tell me about "' + (item.title || item.src || 'this item') + '"',
+          'Ask about this item'
+        );
+        row.appendChild(askBtn);
+
+        (function(i) { row.addEventListener('click', function(e) { if (!e.target.closest('.gui-ask-btn')) store.set(sp, i); }); })(i);
         listArea.appendChild(row);
       });
     }
