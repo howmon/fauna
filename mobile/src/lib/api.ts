@@ -155,6 +155,12 @@ export function streamChat(
   return controller;
 }
 
+// ── Shell exec ───────────────────────────────────────────────────────────
+
+export async function shellExec(command: string): Promise<{ ok: boolean; stdout: string; stderr: string; exitCode: number }> {
+  return apiPost('/api/shell-exec', { command });
+}
+
 // ── Tasks ─────────────────────────────────────────────────────────────────
 
 export async function getTasks() {

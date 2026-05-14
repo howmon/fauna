@@ -77,6 +77,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef, activeProjectRef
   const systemPromptCtxRef = useRef<string>('');  // built from prefs, not reactive
   const autoTitledRef = useRef(false);
   const projectIdRef = useRef<string | null>(null);  // project this chat belongs to
+  const shellFeedDepthRef = useRef(0);  // tracks auto-feed loop depth (max 5)
 
   const nextId = () => `msg-${++msgIdRef.current}`;
 
@@ -322,6 +323,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef, activeProjectRef
     // Reset scroll state — user just sent a message, jump to bottom
     userScrolledUp.current = false;
     setShowScrollBtn(false);
+    shellFeedDepthRef.current = 0;
     scrollToEnd();
 
     // Build history — strip images from older messages to avoid payload bloat
@@ -414,7 +416,102 @@ export default function ChatScreen({ loadedConvRef, newChatRef, activeProjectRef
                   saveCurrentConv(msgs, title);
                 }
               }
+              // Auto-run shell-exec blocks and feed output back to AI
+              await runShellAutoFeed(msgs);
             }, 300);
+            break;
+        }
+      },
+    );
+    abortRef.current = controller;
+  }
+
+  // ── Shell auto-feed loop ────────────────────────────────────────────────
+  // Detects shell-exec code blocks in the last assistant message, runs them
+  // via /api/shell-exec, and feeds the output back for the AI to continue.
+
+  const SHELL_FEED_DEPTH_LIMIT = 5;
+
+  async function runShellAutoFeed(msgs: Message[]) {
+    const lastAsst = [...msgs].reverse().find(m => m.role === 'assistant');
+    if (!lastAsst?.content) return;
+
+    const shellBlockRe = /```(?:shell[-_]exec|shell_exec)\n([\s\S]*?)```/gi;
+    const commands: string[] = [];
+    let match: RegExpExecArray | null;
+    while ((match = shellBlockRe.exec(lastAsst.content)) !== null) {
+      const cmd = match[1].trim();
+      if (cmd) commands.push(cmd);
+    }
+    if (!commands.length) {
+      shellFeedDepthRef.current = 0; // reset depth when no blocks
+      return;
+    }
+    if (shellFeedDepthRef.current >= SHELL_FEED_DEPTH_LIMIT) {
+      shellFeedDepthRef.current = 0;
+      return;
+    }
+    shellFeedDepthRef.current++;
+
+    // Execute all commands sequentially, collect outputs
+    const resultLines: string[] = ['**Shell output:**'];
+    for (const cmd of commands) {
+      try {
+        const r = await api.shellExec(cmd);
+        resultLines.push('```');
+        resultLines.push('$ ' + cmd);
+        if (r.stdout?.trim()) resultLines.push(r.stdout.trimEnd());
+        if (r.stderr?.trim()) resultLines.push('[stderr] ' + r.stderr.trimEnd());
+        if (!r.stdout?.trim() && !r.stderr?.trim()) resultLines.push('(no output)');
+        resultLines.push('exit ' + (r.exitCode ?? 0));
+        resultLines.push('```');
+      } catch (e: any) {
+        resultLines.push('```');
+        resultLines.push('$ ' + cmd);
+        resultLines.push('(error: ' + (e?.message || 'unknown') + ')');
+        resultLines.push('```');
+      }
+    }
+    const feedMsg = resultLines.join('\n');
+
+    // Add to conversation and continue streaming
+    const feedMsgItem: Message = { id: nextId(), role: 'user', content: feedMsg };
+    const asstPlaceholder: Message = { id: nextId(), role: 'assistant', content: '' };
+    setMessages(prev => [...prev, feedMsgItem, asstPlaceholder]);
+    setStreaming(true);
+    scrollToEnd(false);
+
+    const history = [...msgs, feedMsgItem]
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .map(m => ({ role: m.role, content: m.content }));
+
+    const controller = api.streamChat(
+      history,
+      { model: model || undefined, agentName: agent || undefined, systemPrompt: systemPromptCtxRef.current || undefined },
+      (evt) => {
+        switch (evt.type) {
+          case 'content':
+            setMessages(prev => {
+              const updated = [...prev];
+              const lastIdx = updated.length - 1;
+              const last = updated[lastIdx];
+              if (last?.role === 'assistant') {
+                updated[lastIdx] = { ...last, content: last.content + (evt.content || '') };
+              }
+              return updated;
+            });
+            scrollToEnd(false);
+            break;
+          case 'done':
+            setStreaming(false);
+            setTimeout(async () => {
+              const newMsgs = messagesRef.current;
+              saveCurrentConv(newMsgs);
+              await runShellAutoFeed(newMsgs);
+            }, 300);
+            break;
+          case 'error':
+            setStreaming(false);
             break;
         }
       },
@@ -424,6 +521,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef, activeProjectRef
 
   function handleStop() {
     abortRef.current?.abort();
+    shellFeedDepthRef.current = 0;
     setStreaming(false);
   }
 
