@@ -928,6 +928,13 @@ button .ti, label .ti { pointer-events: none; }
   padding: 6px 12px; font-size: 10px; font-weight: 700; text-transform: uppercase;
   letter-spacing: .06em; color: var(--fau-text-muted);
 }
+#ext-tab-menu .ext-menu-window-header {
+  display: flex; align-items: center; gap: 5px;
+  padding: 3px 18px; font-size: 10px; font-weight: 600;
+  color: var(--fau-text-dim); opacity: 0.8;
+  border-top: 1px solid var(--fau-border);
+  margin-top: 2px;
+}
 #ext-tab-menu .ext-menu-search-wrap {
   display: flex; align-items: center; gap: 6px;
   padding: 5px 10px; margin: 4px 8px 2px;

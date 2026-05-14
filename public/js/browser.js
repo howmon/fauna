@@ -1987,25 +1987,44 @@ async function _loadExtTabs() {
         escHtml(res.browser) + (multiBrowser ? ' (' + res.tabs.length + ')' : ' — ' + res.tabs.length + ' tabs') +
       '</div>';
       var cId = res.clientId || '';
-      res.tabs.forEach(function(tab) {
-        var title = tab.title || 'Untitled';
-        var shortTitle = title.length > 38 ? title.slice(0, 35) + '…' : title;
-        var domain = '';
-        try { domain = new URL(tab.url).hostname; } catch (_) { domain = tab.url || ''; }
-        var shortDomain = domain.length > 35 ? domain.slice(0, 32) + '…' : domain;
-        var bAttr = ' data-browser="' + escHtml(res.browser) + '" data-client-id="' + escHtml(cId) + '"';
 
-        html += '<div class="ext-tab-item"' + bAttr + '>' +
-          (tab.active ? '<span class="ext-tab-active-dot" title="Active tab"></span>' : '<span style="width:5px;flex-shrink:0"></span>') +
-          '<div class="ext-tab-info">' +
-            '<div class="ext-tab-title">' + escHtml(shortTitle) + '</div>' +
-            '<div class="ext-tab-url">' + escHtml(shortDomain) + '</div>' +
-          '</div>' +
-          '<div class="ext-tab-actions">' +
-            '<button onclick="extGrabPage(' + tab.id + ',\'' + escHtml(res.browser) + '\',\'' + escHtml(cId) + '\')" title="Insert page content"><i class="ti ti-file-text"></i></button>' +
-            '<button onclick="extGrabSnapshot(' + tab.id + ',\'' + escHtml(res.browser) + '\',\'' + escHtml(cId) + '\')" title="Insert screenshot"><i class="ti ti-camera"></i></button>' +
-          '</div>' +
-        '</div>';
+      // Group tabs by windowId so each browser window appears as a separate block
+      var windowMap = {};
+      var windowOrder = [];
+      res.tabs.forEach(function(tab) {
+        var wid = tab.windowId != null ? tab.windowId : '__single__';
+        if (!windowMap[wid]) { windowMap[wid] = []; windowOrder.push(wid); }
+        windowMap[wid].push(tab);
+      });
+
+      var multiWindow = windowOrder.length > 1;
+      windowOrder.forEach(function(wid, widx) {
+        if (multiWindow) {
+          html += '<div class="ext-menu-window-header" data-browser="' + escHtml(res.browser) + '">' +
+            '<i class="ti ti-app-window" style="font-size:10px;opacity:0.55"></i> Window ' + (widx + 1) +
+            ' <span style="opacity:0.45;font-weight:400">(' + windowMap[wid].length + ')</span>' +
+          '</div>';
+        }
+        windowMap[wid].forEach(function(tab) {
+          var title = tab.title || 'Untitled';
+          var shortTitle = title.length > 38 ? title.slice(0, 35) + '…' : title;
+          var domain = '';
+          try { domain = new URL(tab.url).hostname; } catch (_) { domain = tab.url || ''; }
+          var shortDomain = domain.length > 35 ? domain.slice(0, 32) + '…' : domain;
+          var bAttr = ' data-browser="' + escHtml(res.browser) + '" data-client-id="' + escHtml(cId) + '"';
+
+          html += '<div class="ext-tab-item"' + bAttr + '>' +
+            (tab.active ? '<span class="ext-tab-active-dot" title="Active tab"></span>' : '<span style="width:5px;flex-shrink:0"></span>') +
+            '<div class="ext-tab-info">' +
+              '<div class="ext-tab-title">' + escHtml(shortTitle) + '</div>' +
+              '<div class="ext-tab-url">' + escHtml(shortDomain) + '</div>' +
+            '</div>' +
+            '<div class="ext-tab-actions">' +
+              '<button onclick="extGrabPage(' + tab.id + ',\'' + escHtml(res.browser) + '\',\'' + escHtml(cId) + '\')" title="Insert page content"><i class="ti ti-file-text"></i></button>' +
+              '<button onclick="extGrabSnapshot(' + tab.id + ',\'' + escHtml(res.browser) + '\',\'' + escHtml(cId) + '\')" title="Insert screenshot"><i class="ti ti-camera"></i></button>' +
+            '</div>' +
+          '</div>';
+        });
       });
     });
 
@@ -2025,16 +2044,28 @@ function _filterExtTabs(query) {
   var q = query.trim().toLowerCase();
   var items = document.querySelectorAll('#ext-tab-menu .ext-tab-item');
   var headers = document.querySelectorAll('#ext-tab-menu .ext-menu-header');
+  var windowHeaders = document.querySelectorAll('#ext-tab-menu .ext-menu-window-header');
   items.forEach(function(item) {
     var text = item.textContent.toLowerCase();
     item.style.display = (!q || text.includes(q)) ? '' : 'none';
+  });
+  // Hide window sub-headers when all their tabs are hidden
+  windowHeaders.forEach(function(wh) {
+    var next = wh.nextElementSibling;
+    var hasVisible = false;
+    while (next && (next.classList.contains('ext-tab-item') || next.classList.contains('ext-menu-window-header'))) {
+      if (next.classList.contains('ext-tab-item') && next.style.display !== 'none') hasVisible = true;
+      if (next.classList.contains('ext-menu-window-header')) break;
+      next = next.nextElementSibling;
+    }
+    wh.style.display = hasVisible ? '' : 'none';
   });
   // Hide section headers when all their tabs are hidden
   headers.forEach(function(header) {
     var next = header.nextElementSibling;
     var hasVisible = false;
-    while (next && next.classList.contains('ext-tab-item')) {
-      if (next.style.display !== 'none') hasVisible = true;
+    while (next && (next.classList.contains('ext-tab-item') || next.classList.contains('ext-menu-window-header'))) {
+      if (next.classList.contains('ext-tab-item') && next.style.display !== 'none') hasVisible = true;
       next = next.nextElementSibling;
     }
     header.style.display = hasVisible ? '' : 'none';
