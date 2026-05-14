@@ -1454,6 +1454,64 @@ When building a web app for the user, follow this workflow:
 - Each conversation has its own browser tabs — they don't interfere with other conversations.
 `;
 
+// ── Browser Extension (Fauna Web Extension) context ─────────────────────────
+// Injected dynamically when at least one browser extension is connected.
+// Documents the browser-ext-action code block syntax so the AI knows how to
+// control the user's real Chrome/Edge/Firefox browser via the extension.
+function buildBrowserExtContext() {
+  const connected = extStatusList();
+  if (!connected.length) return '';
+  const browserNames = [...new Set(connected.map(b => b.browser).filter(Boolean))];
+  const browserLabel = browserNames.length ? browserNames.join(' and ') : 'browser';
+  return `
+## Fauna Web Extension — Controlling the User's Real ${browserLabel}
+
+The user has the Fauna browser extension connected in their **real ${browserLabel}** (${connected.length} connection${connected.length > 1 ? 's' : ''}). You can control that browser directly using \`\`\`browser-ext-action code blocks.
+
+**Use \`browser-ext-action\` (extension) instead of \`browser-action\` (built-in panel) when the user:**
+- Wants to interact with their existing open tabs and real browser session
+- Is already logged into sites you need to access
+- Wants to scrape, automate, or control pages in their real browser
+- Asks you to "use the extension", "use my browser", or mentions tabs/windows they have open
+
+### Available browser-ext-action commands:
+
+#### Page interaction
+- **navigate** — \`{"action":"navigate","url":"..."}\` — navigate to a URL (auto-extracts after)
+- **extract** — \`{"action":"extract"}\` — extract page text + links from active tab
+- **extract-forms** — \`{"action":"extract-forms"}\` — extract all form fields with selectors
+- **fill** — \`{"action":"fill","fields":[{"selector":"...","value":"..."}]}\` — fill form fields
+- **click** — \`{"action":"click","selector":"..."}\` — click an element (auto-extracts after)
+- **type** — \`{"action":"type","selector":"...","value":"..."}\` — type into an input (auto-extracts after)
+- **hover** — \`{"action":"hover","selector":"..."}\` — hover over an element
+- **scroll** — \`{"action":"scroll","selector":"...","direction":"down","amount":300}\` — scroll the page
+- **drag** — \`{"action":"drag","from":"selector","to":"selector"}\` — drag and drop
+- **select** — \`{"action":"select","selector":"...","value":"..."}\` — select an option
+- **keyboard** — \`{"action":"keyboard","key":"Enter"}\` — press a keyboard key
+- **wait** — \`{"action":"wait","ms":1500}\` — wait N milliseconds
+- **eval** — \`{"action":"eval","js":"document.title"}\` — run JS in the real page, result fed to AI
+
+#### Screenshots
+- **snapshot** — \`{"action":"snapshot"}\` — screenshot the visible area (image injected into AI)
+- **snapshot-full** — \`{"action":"snapshot-full"}\` — full-page screenshot
+
+#### Tab management
+- **tab:list** — \`{"action":"tab:list"}\` — list all open tabs (id, title, url, active)
+- **tab:new** — \`{"action":"tab:new","url":"..."}\` — open a new tab
+- **tab:switch** — \`{"action":"tab:switch","tabId":123}\` — switch to a tab by id (use tab:list first)
+- **tab:close** — \`{"action":"tab:close","tabId":123}\` — close a tab
+- **tab:info** — \`{"action":"tab:info"}\` — get info (url, title) of the active tab
+
+### Rules for browser-ext-action:
+- **ZERO NARRATION before action blocks** — emit the block immediately with no preamble.
+- **Results are auto-fed back** — after navigate, click, type, scroll etc. the page state is automatically extracted and sent back to you. Wait for it before acting further.
+- **Batch sequential actions** as JSONL (one JSON per line in a single block).
+- **To target a specific tab**: use \`tab:list\` first to get the tab id, then pass \`"tabId": <id>\` in subsequent actions.
+- **selector tips**: use CSS selectors; for forms prefer \`extract-forms\` first to get exact selectors.
+- **snapshot** is useful when text extraction misses visual layout — request one to see the page.
+`.trim();
+}
+
 // ── Context summarization endpoint ───────────────────────────────────────────
 app.post('/api/summarize', async (req, res) => {
   const { messages = [], model = 'claude-sonnet-4.6' } = req.body;
@@ -1538,6 +1596,7 @@ app.post('/api/chat', async (req, res) => {
       isDelegation ? '' : projectCtx,
       factsCtx,
       isDelegation ? '' : BROWSER_BUILD_CONTEXT,
+      isDelegation ? '' : buildBrowserExtContext(),
       isDelegation ? '' : GEN_UI_CATALOG_PROMPT,
       contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '',
       figmaFilesCtx
