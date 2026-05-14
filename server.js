@@ -7370,7 +7370,7 @@ app.get('/api/projects/:id/terminal/:termId/output', (req, res) => {
 
 export function startServer(port) {
   return new Promise((resolve, reject) => {
-    const server = app.listen(port, '127.0.0.1', () => {
+    const server = app.listen(port, '0.0.0.0', () => {
       console.log(`\n  ✦ Copilot Chat  →  http://127.0.0.1:${port}\n`);
       resolve(server);
     });
