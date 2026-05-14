@@ -161,6 +161,14 @@ export async function shellExec(command: string): Promise<{ ok: boolean; stdout:
   return apiPost('/api/shell-exec', { command });
 }
 
+export async function extCommand(action: string, params: Record<string, any> = {}, tabId?: number): Promise<any> {
+  return apiPost('/api/ext/command', { action, params, tabId: tabId ?? null });
+}
+
+export async function extStatus(): Promise<{ ok: boolean; browsers: any[] }> {
+  return apiGet('/api/ext/status');
+}
+
 // ── Tasks ─────────────────────────────────────────────────────────────────
 
 export async function getTasks() {

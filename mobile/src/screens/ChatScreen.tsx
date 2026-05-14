@@ -78,6 +78,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef, activeProjectRef
   const autoTitledRef = useRef(false);
   const projectIdRef = useRef<string | null>(null);  // project this chat belongs to
   const shellFeedDepthRef = useRef(0);  // tracks auto-feed loop depth (max 5)
+  const extFeedDepthRef = useRef(0);    // tracks browser-ext-action auto-feed depth (max 10)
 
   const nextId = () => `msg-${++msgIdRef.current}`;
 
@@ -324,9 +325,8 @@ export default function ChatScreen({ loadedConvRef, newChatRef, activeProjectRef
     userScrolledUp.current = false;
     setShowScrollBtn(false);
     shellFeedDepthRef.current = 0;
+    extFeedDepthRef.current = 0;
     scrollToEnd();
-
-    // Build history — strip images from older messages to avoid payload bloat
     const history: Array<{ role: string; content: string | any[] }> = messages
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .map((m) => {
@@ -416,8 +416,9 @@ export default function ChatScreen({ loadedConvRef, newChatRef, activeProjectRef
                   saveCurrentConv(msgs, title);
                 }
               }
-              // Auto-run shell-exec blocks and feed output back to AI
+              // Auto-run shell-exec and browser-ext-action blocks
               await runShellAutoFeed(msgs);
+              await runBrowserExtAutoFeed(messagesRef.current);
             }, 300);
             break;
         }
@@ -522,7 +523,167 @@ export default function ChatScreen({ loadedConvRef, newChatRef, activeProjectRef
   function handleStop() {
     abortRef.current?.abort();
     shellFeedDepthRef.current = 0;
+    extFeedDepthRef.current = 0;
     setStreaming(false);
+  }
+
+  // ── Browser-ext auto-feed loop ──────────────────────────────────────────
+  // Detects browser-ext-action blocks in the last assistant message, executes
+  // each action via /api/ext/command, and feeds results back for the AI to continue.
+
+  const EXT_FEED_DEPTH_LIMIT = 10;
+
+  async function runBrowserExtAutoFeed(msgs: Message[]) {
+    const lastAsst = [...msgs].reverse().find(m => m.role === 'assistant');
+    if (!lastAsst?.content) return;
+
+    // Parse out browser-ext-action blocks (single JSON or JSONL)
+    const extBlockRe = /```(?:browser[-_]ext[-_]action)\n([\s\S]*?)```/gi;
+    const actions: any[] = [];
+    let match: RegExpExecArray | null;
+    while ((match = extBlockRe.exec(lastAsst.content)) !== null) {
+      const raw = match[1].trim();
+      if (!raw) continue;
+      const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+      // Try JSONL first, fall back to single JSON
+      const allJsonl = lines.length > 1 && lines.every(l => { try { JSON.parse(l); return true; } catch { return false; } });
+      if (allJsonl) {
+        for (const l of lines) { try { actions.push(JSON.parse(l)); } catch {} }
+      } else {
+        try { actions.push(JSON.parse(raw)); } catch {}
+      }
+    }
+    if (!actions.length) {
+      extFeedDepthRef.current = 0;
+      return;
+    }
+    if (extFeedDepthRef.current >= EXT_FEED_DEPTH_LIMIT) {
+      extFeedDepthRef.current = 0;
+      return;
+    }
+    extFeedDepthRef.current++;
+
+    // Actions that need an auto-extract after execution (mirrors desktop behavior)
+    const AUTO_EXTRACT_AFTER = new Set(['navigate', 'click', 'type', 'scroll', 'hover', 'select', 'keyboard', 'drag', 'wait', 'tab:switch', 'tab:new']);
+
+    const resultParts: string[] = [];
+
+    for (const act of actions) {
+      const actionName: string = act.action;
+      try {
+        const result = await api.extCommand(actionName, act, act.tabId ?? undefined);
+
+        if (actionName === 'extract') {
+          resultParts.push(
+            'Extracted real browser tab:\n\n**Title:** ' + (result.title || '') +
+            '\n**URL:** ' + (result.url || '') + '\n\n' + (result.text || '').slice(0, 12000)
+          );
+        } else if (actionName === 'extract-forms') {
+          resultParts.push(
+            'Form fields extracted from real browser tab (' + (result.fields?.length || 0) + ' fields):\n\n```json\n' +
+            JSON.stringify(result.forms || result, null, 2).slice(0, 10000) + '\n```\n' +
+            '\nUse the selector values above to fill fields with browser-ext-action fill blocks.'
+          );
+        } else if (actionName === 'fill') {
+          const failed = (result.filled || []).filter((f: any) => !f.ok);
+          resultParts.push(
+            'Fill result — ' + (result.filled || []).length + ' field(s) processed' +
+            (failed.length ? ', ' + failed.length + ' failed: ' + JSON.stringify(failed) : ', all ok')
+          );
+        } else if (actionName === 'eval') {
+          resultParts.push('Eval result from real browser tab:\n```\n' + String(result.result || '(empty)').slice(0, 8000) + '\n```');
+        } else if (actionName === 'tab:list') {
+          const tabLines = (result.tabs || []).map((t: any) =>
+            '  [id:' + t.id + '] ' + (t.active ? '→ ' : '  ') + t.title + ' — ' + t.url
+          );
+          resultParts.push('Browser tabs in real browser (' + (result.tabs || []).length + '):\n' + tabLines.join('\n'));
+        } else if (actionName === 'tab:close') {
+          resultParts.push('Tab closed (ext). ' + (result.error ? 'Error: ' + result.error : 'OK.'));
+        } else if (actionName === 'tab:info') {
+          resultParts.push('Active tab info:\n**Title:** ' + (result.title || '') + '\n**URL:** ' + (result.url || ''));
+        } else if (actionName === 'snapshot' || actionName === 'snapshot-full') {
+          // Can't show thumbnail on mobile but report it happened
+          resultParts.push('Snapshot taken' + (actionName === 'snapshot-full' ? ' (full page)' : '') + '. URL: ' + (result.url || 'unknown'));
+        } else if (AUTO_EXTRACT_AFTER.has(actionName)) {
+          // Auto-extract page state after navigation/interaction actions
+          let extractResult: any = null;
+          try {
+            if (actionName === 'wait') {
+              // wait already waited server-side, just extract
+            }
+            extractResult = await api.extCommand('extract', {}, act.tabId ?? undefined);
+          } catch {}
+          if (extractResult) {
+            const label = actionName === 'navigate' ? 'Navigated (ext) and extracted page' :
+                          actionName === 'tab:switch' ? 'Switched to tab (ext)' :
+                          actionName === 'tab:new' ? 'Opened new tab (ext)' :
+                          'After ' + actionName + ' (ext) — page state';
+            resultParts.push(
+              label + ':\n\n**Title:** ' + (extractResult.title || '') +
+              '\n**URL:** ' + (extractResult.url || '') + '\n\n' + (extractResult.text || '').slice(0, 12000)
+            );
+          } else {
+            resultParts.push(actionName + ' completed (ext).');
+          }
+        } else {
+          resultParts.push(actionName + ' completed (ext).');
+        }
+      } catch (e: any) {
+        const msg = e?.message || 'unknown error';
+        if (msg.includes('not connected')) {
+          resultParts.push('browser-ext-action `' + actionName + '` failed: Browser extension not connected. Ask the user to open the Fauna extension in their browser.');
+          break; // no point continuing if ext is gone
+        }
+        resultParts.push('browser-ext-action `' + actionName + '` failed: ' + msg);
+      }
+    }
+
+    if (!resultParts.length) return;
+
+    const feedMsg = resultParts.join('\n\n---\n\n');
+    const feedMsgItem: Message = { id: nextId(), role: 'user', content: feedMsg };
+    const asstPlaceholder: Message = { id: nextId(), role: 'assistant', content: '' };
+    setMessages(prev => [...prev, feedMsgItem, asstPlaceholder]);
+    setStreaming(true);
+    scrollToEnd(false);
+
+    const history = [...msgs, feedMsgItem]
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .map(m => ({ role: m.role, content: m.content }));
+
+    const controller = api.streamChat(
+      history,
+      { model: model || undefined, agentName: agent || undefined, systemPrompt: systemPromptCtxRef.current || undefined },
+      (evt) => {
+        switch (evt.type) {
+          case 'content':
+            setMessages(prev => {
+              const updated = [...prev];
+              const lastIdx = updated.length - 1;
+              const last = updated[lastIdx];
+              if (last?.role === 'assistant') {
+                updated[lastIdx] = { ...last, content: last.content + (evt.content || '') };
+              }
+              return updated;
+            });
+            scrollToEnd(false);
+            break;
+          case 'done':
+            setStreaming(false);
+            setTimeout(async () => {
+              const newMsgs = messagesRef.current;
+              saveCurrentConv(newMsgs);
+              await runShellAutoFeed(newMsgs);
+              await runBrowserExtAutoFeed(messagesRef.current);
+            }, 300);
+            break;
+          case 'error':
+            setStreaming(false);
+            break;
+        }
+      },
+    );
+    abortRef.current = controller;
   }
 
   // ── Render message (using MessageBubble) ────────────────────────────────
