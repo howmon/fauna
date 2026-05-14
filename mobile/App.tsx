@@ -39,6 +39,8 @@ import ConversationsScreen from './src/screens/ConversationsScreen';
 import TasksScreen from './src/screens/TasksScreen';
 import TaskDetailScreen from './src/screens/TaskDetailScreen';
 import TaskCreateScreen from './src/screens/TaskCreateScreen';
+import ProjectsScreen from './src/screens/ProjectsScreen';
+import ProjectDetailScreen from './src/screens/ProjectDetailScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 
 type TasksStackParams = {
@@ -47,13 +49,19 @@ type TasksStackParams = {
   TaskCreate: undefined;
 };
 
+type ProjectsStackParams = {
+  ProjectsList: undefined;
+  ProjectDetail: { project: import('./src/lib/api').Project };
+};
+
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator<TasksStackParams>();
+const ProjectStack = createNativeStackNavigator<ProjectsStackParams>();
 
 // Stable screen wrapper components (defined outside MainTabs so their
 // references never change, preventing unmount/remount on each render)
 function ChatTab() {
-  return <ChatScreen loadedConvRef={_loadedConvRef} newChatRef={_newChatRef} />;
+  return <ChatScreen loadedConvRef={_loadedConvRef} newChatRef={_newChatRef} activeProjectRef={_activeProjectRef} />;
 }
 function HistoryTab({ onLoadConversation }: { onLoadConversation: (c: any) => void }) {
   return <ConversationsScreen onLoadConversation={onLoadConversation} />;
@@ -84,12 +92,65 @@ function TasksStack() {
   );
 }
 
+// ── Projects stack (list → detail) ───────────────────────────────────────
+
+function ProjectsStackNav() {
+  const scheme = useColorScheme();
+  const t = scheme === 'light' ? light : dark;
+
+  function handleNewChatInProject(project: import('./src/lib/api').Project) {
+    _activeProjectRef.current = project;
+    if (navigationRef.isReady()) {
+      (navigationRef as any).navigate('Chat');
+    }
+  }
+
+  return (
+    <ProjectStack.Navigator
+      screenOptions={{
+        headerStyle: { backgroundColor: t.surface },
+        headerTintColor: t.text,
+        headerTitleStyle: { fontWeight: '600' },
+        contentStyle: { backgroundColor: t.bg },
+      }}
+    >
+      <ProjectStack.Screen name="ProjectsList" options={{ headerShown: false }}>
+        {(props: any) => (
+          <ProjectsScreen
+            onOpenProject={(project) => props.navigation.navigate('ProjectDetail', { project })}
+            onNewChatInProject={handleNewChatInProject}
+          />
+        )}
+      </ProjectStack.Screen>
+      <ProjectStack.Screen
+        name="ProjectDetail"
+        options={({ route }: any) => ({ title: route.params?.project?.name || 'Project' })}
+      >
+        {(props: any) => (
+          <ProjectDetailScreen
+            project={props.route.params.project}
+            onLoadConversation={(conv) => {
+              _loadedConvRef.current = conv;
+              if (navigationRef.isReady()) {
+                (navigationRef as any).navigate('Chat');
+              }
+            }}
+            onNewChatInProject={handleNewChatInProject}
+          />
+        )}
+      </ProjectStack.Screen>
+    </ProjectStack.Navigator>
+  );
+}
+
 // ── Main tabs ─────────────────────────────────────────────────────────────
 
 // Shared ref to pass loaded conversation from ConversationsScreen to ChatScreen
 const _loadedConvRef = { current: null as any };
 // Ref to trigger new conversation from header button
 const _newChatRef = { current: null as (() => void) | null };
+// Ref to pass active project when starting a chat from ProjectDetailScreen
+const _activeProjectRef = { current: null as import('./src/lib/api').Project | null };
 const navigationRef = createNavigationContainerRef();
 
 // Simple text-based tab icons (no font loading required)
@@ -143,6 +204,11 @@ function MainTabs({ onDisconnect }: { onDisconnect: () => void }) {
         name="Tasks"
         component={TasksStack}
         options={{ headerShown: false, tabBarIcon: ({ color }) => <TabIcon label="▢" color={color} /> }}
+      />
+      <Tab.Screen
+        name="Projects"
+        component={ProjectsStackNav}
+        options={{ headerShown: false, tabBarIcon: ({ color }) => <TabIcon label="◈" color={color} /> }}
       />
       <Tab.Screen
         name="Settings"

@@ -53,7 +53,7 @@ interface Message {
   images?: MessageImage[];
 }
 
-export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRef?: { current: any }; newChatRef?: { current: (() => void) | null } }) {
+export default function ChatScreen({ loadedConvRef, newChatRef, activeProjectRef }: { loadedConvRef?: { current: any }; newChatRef?: { current: (() => void) | null }; activeProjectRef?: { current: api.Project | null } }) {
   const scheme = useColorScheme();
   const t = scheme === 'light' ? light : dark;
   const [messages, setMessages] = useState<Message[]>([]);
@@ -76,6 +76,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
   const messagesRef = useRef<Message[]>([]);
   const systemPromptCtxRef = useRef<string>('');  // built from prefs, not reactive
   const autoTitledRef = useRef(false);
+  const projectIdRef = useRef<string | null>(null);  // project this chat belongs to
 
   const nextId = () => `msg-${++msgIdRef.current}`;
 
@@ -100,6 +101,10 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
         model: model || undefined,
         createdAt: parseInt(id.replace('conv-', '')) || Date.now(),
       });
+      // Link to project if this chat was started from one
+      if (projectIdRef.current) {
+        api.linkConversationToProject(projectIdRef.current, id).catch(() => {});
+      }
     } catch {}
   }, [messages, convTitle, model]);
 
@@ -117,6 +122,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
         msgIdRef.current = 0;
         convIdRef.current = 'conv-' + Date.now();
         autoTitledRef.current = false;
+        projectIdRef.current = null;
       };
     }
     return () => { if (newChatRef) newChatRef.current = null; };
@@ -135,7 +141,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
     }).catch(() => {});
   }, []);
 
-  // Pick up loaded conversation when Chat tab is focused
+  // Pick up loaded conversation or active project when Chat tab is focused
   useFocusEffect(
     useCallback(() => {
       if (loadedConvRef?.current) {
@@ -148,13 +154,58 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
         setConvTitle(conv.title || '');
         if (conv.model) setModel(conv.model);
         if (conv.id) convIdRef.current = conv.id;
+        // Clear project context when loading an existing conv
+        projectIdRef.current = null;
+      } else if (activeProjectRef?.current) {
+        // Starting a new chat from a project — clear existing chat and set project context
+        const proj = activeProjectRef.current;
+        activeProjectRef.current = null;
+        setMessages([]);
+        setInput('');
+        setConvTitle('');
+        setAgent('');
+        setPendingImages([]);
+        msgIdRef.current = 0;
+        convIdRef.current = 'conv-' + Date.now();
+        autoTitledRef.current = false;
+        projectIdRef.current = proj.id;
+        setConvTitle(proj.name);  // pre-fill title with project name (will be overwritten by auto-title)
       }
     }, [])
   );
 
-  const scrollToEnd = useCallback(() => {
-    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+  // ── Scroll-to-bottom management ──────────────────────────────────────────
+  // userScrolledUp: user deliberately scrolled away from bottom — pause auto-scroll
+  const userScrolledUp = useRef(false);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const scrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const scrollToEnd = useCallback((animated = false) => {
+    if (userScrolledUp.current) return;
+    if (scrollDebounceRef.current) clearTimeout(scrollDebounceRef.current);
+    scrollDebounceRef.current = setTimeout(() => {
+      flatListRef.current?.scrollToEnd({ animated });
+    }, 40);
   }, []);
+
+  function handleScroll(e: any) {
+    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+    const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
+    const atBottom = distanceFromBottom < 80;
+    if (atBottom) {
+      userScrolledUp.current = false;
+      setShowScrollBtn(false);
+    } else {
+      userScrolledUp.current = true;
+      setShowScrollBtn(true);
+    }
+  }
+
+  function jumpToBottom() {
+    userScrolledUp.current = false;
+    setShowScrollBtn(false);
+    flatListRef.current?.scrollToEnd({ animated: true });
+  }
 
   // ── Image picker ────────────────────────────────────────────────────────
 
@@ -268,6 +319,9 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
 
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
     setStreaming(true);
+    // Reset scroll state — user just sent a message, jump to bottom
+    userScrolledUp.current = false;
+    setShowScrollBtn(false);
     scrollToEnd();
 
     // Build history — strip images from older messages to avoid payload bloat
@@ -313,7 +367,8 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
               }
               return updated;
             });
-            scrollToEnd();
+            // Instant (non-animated) scroll during streaming — prevents animation queue buildup
+            scrollToEnd(false);
             break;
 
           case 'tool_call':
@@ -321,7 +376,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
               ...prev,
               { id: nextId(), role: 'tool', content: `[tool] ${evt.name}(${(evt.arguments || '').slice(0, 80)})`, toolName: evt.name },
             ]);
-            scrollToEnd();
+            scrollToEnd(false);
             break;
 
           case 'tool_output':
@@ -330,7 +385,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
               { id: nextId(), role: 'tool', content: `> ${(evt.output || '').slice(0, 200)}` },
               { id: nextId(), role: 'assistant', content: '' },
             ]);
-            scrollToEnd();
+            scrollToEnd(false);
             break;
 
           case 'error':
@@ -400,8 +455,18 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
         keyExtractor={(m) => m.id}
         renderItem={renderMessage}
         contentContainerStyle={s.list}
-        onContentSizeChange={scrollToEnd}
+        onScroll={handleScroll}
+        scrollEventThrottle={100}
       />
+      {showScrollBtn && (
+        <TouchableOpacity
+          style={[s.scrollBtn, { backgroundColor: t.teal }]}
+          onPress={jumpToBottom}
+          activeOpacity={0.85}
+        >
+          <Text style={s.scrollBtnLabel}>↓</Text>
+        </TouchableOpacity>
+      )}
 
       {/* Pending file chips */}
       {pendingFiles.length > 0 && (
@@ -598,4 +663,7 @@ const s = StyleSheet.create({
   agentDesc: { fontSize: 12, marginTop: 2 },
   modalClose: { borderTopWidth: 1, marginTop: spacing.md, paddingTop: spacing.md, alignItems: 'center' },
   artifactOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end', paddingTop: 80 },
+  // Scroll-to-bottom FAB
+  scrollBtn: { position: 'absolute', right: 16, bottom: 80, width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', elevation: 4, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } },
+  scrollBtnLabel: { color: '#fff', fontSize: 20, lineHeight: 24, fontWeight: '700' },
 });

@@ -304,6 +304,49 @@ export async function getPreferences(): Promise<Preferences> {
   catch (_) { return { playbook: [], agentRules: [], systemPrompt: '' }; }
 }
 
+// ── Projects ──────────────────────────────────────────────────────────────
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  icon: string | null;
+  color: string;
+  conversationIds: string[];
+  taskIds: string[];
+  createdAt: string;
+  updatedAt: string;
+  lastActiveAt: string;
+}
+
+export async function getProjects(): Promise<Project[]> {
+  return apiGet<Project[]>('/api/projects');
+}
+
+export async function getProjectById(id: string): Promise<Project> {
+  return apiGet<Project>(`/api/projects/${id}`);
+}
+
+export async function createProject(opts: { name: string; description?: string; color?: string }): Promise<Project> {
+  return apiPost<Project>('/api/projects', opts);
+}
+
+export async function updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'description' | 'color'>>): Promise<Project> {
+  return apiPut<Project>(`/api/projects/${id}`, patch);
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  return apiDelete(`/api/projects/${id}`);
+}
+
+export async function linkConversationToProject(projectId: string, convId: string): Promise<void> {
+  return apiPost(`/api/projects/${projectId}/conversations`, { convId });
+}
+
+export async function touchProject(id: string): Promise<void> {
+  return apiPost(`/api/projects/${id}/touch`);
+}
+
 // ── Conversation title generation ────────────────────────────────────────
 
 export async function getConversationTitle(
