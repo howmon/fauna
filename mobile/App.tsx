@@ -1,7 +1,29 @@
 // Fauna Mobile — App entry point with navigation
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useColorScheme, StatusBar, Text as RNText, TouchableOpacity, ActivityIndicator, View } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef, Component } from 'react';
+import { useColorScheme, StatusBar, Text as RNText, TouchableOpacity, ActivityIndicator, View, ScrollView } from 'react-native';
+
+// ── Error boundary — catches render crashes and shows them instead of white ──
+interface EBState { error: Error | null }
+class ErrorBoundary extends Component<{ children: React.ReactNode }, EBState> {
+  state: EBState = { error: null };
+  static getDerivedStateFromError(e: Error) { return { error: e }; }
+  componentDidCatch(e: Error, info: any) { console.error('[ErrorBoundary]', e, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <View style={{ flex: 1, backgroundColor: '#1b1b1b', padding: 24, justifyContent: 'center' }}>
+          <RNText style={{ color: '#f36e6e', fontSize: 16, fontWeight: '700', marginBottom: 8 }}>App Error</RNText>
+          <ScrollView><RNText style={{ color: '#f5f5f5', fontSize: 13, fontFamily: 'monospace' }} selectable>{String(this.state.error?.stack || this.state.error)}</RNText></ScrollView>
+          <TouchableOpacity onPress={() => this.setState({ error: null })} style={{ marginTop: 16, padding: 10, backgroundColor: '#14B8A6', borderRadius: 8 }}>
+            <RNText style={{ color: '#fff', textAlign: 'center', fontWeight: '600' }}>Retry</RNText>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
 import { NavigationContainer, DefaultTheme, DarkTheme, createNavigationContainerRef } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator, NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -27,6 +49,18 @@ type TasksStackParams = {
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator<TasksStackParams>();
+
+// Stable screen wrapper components (defined outside MainTabs so their
+// references never change, preventing unmount/remount on each render)
+function ChatTab() {
+  return <ChatScreen loadedConvRef={_loadedConvRef} newChatRef={_newChatRef} />;
+}
+function HistoryTab({ onLoadConversation }: { onLoadConversation: (c: any) => void }) {
+  return <ConversationsScreen onLoadConversation={onLoadConversation} />;
+}
+function SettingsTab({ onDisconnect }: { onDisconnect: () => void }) {
+  return <SettingsScreen onDisconnect={onDisconnect} />;
+}
 
 // ── Task stack (list → detail / create) ──────────────────────────────────
 
@@ -87,6 +121,7 @@ function MainTabs({ onDisconnect }: { onDisconnect: () => void }) {
     >
       <Tab.Screen
         name="Chat"
+        component={ChatTab}
         options={{
           tabBarIcon: ({ color }) => <TabIcon label="✦" color={color} />,
           title: 'Chat',
@@ -96,14 +131,13 @@ function MainTabs({ onDisconnect }: { onDisconnect: () => void }) {
             </TouchableOpacity>
           ),
         }}
-      >
-        {() => <ChatScreen loadedConvRef={_loadedConvRef} newChatRef={_newChatRef} />}
-      </Tab.Screen>
+      />
       <Tab.Screen
         name="History"
         options={{ tabBarIcon: ({ color }) => <TabIcon label="☰" color={color} /> }}
+        initialParams={{ onLoadConversation: handleLoadConversation }}
       >
-        {() => <ConversationsScreen onLoadConversation={handleLoadConversation} />}
+        {(props: any) => <HistoryTab onLoadConversation={handleLoadConversation} />}
       </Tab.Screen>
       <Tab.Screen
         name="Tasks"
@@ -113,8 +147,9 @@ function MainTabs({ onDisconnect }: { onDisconnect: () => void }) {
       <Tab.Screen
         name="Settings"
         options={{ tabBarIcon: ({ color }) => <TabIcon label="⋮" color={color} /> }}
+        initialParams={{ onDisconnect }}
       >
-        {() => <SettingsScreen onDisconnect={onDisconnect} />}
+        {() => <SettingsTab onDisconnect={onDisconnect} />}
       </Tab.Screen>
     </Tab.Navigator>
   );
@@ -165,15 +200,17 @@ export default function App() {
   }
 
   return (
-    <SafeAreaProvider>
-      <StatusBar barStyle={scheme === 'light' ? 'dark-content' : 'light-content'} backgroundColor={t.bg} />
-      <NavigationContainer ref={navigationRef} theme={navTheme}>
-        {connected ? (
-          <MainTabs onDisconnect={handleDisconnect} />
-        ) : (
-          <ScanScreen onConnected={handleConnected} />
-        )}
-      </NavigationContainer>
-    </SafeAreaProvider>
+    <ErrorBoundary>
+      <SafeAreaProvider>
+        <StatusBar barStyle={scheme === 'light' ? 'dark-content' : 'light-content'} backgroundColor={t.bg} />
+        <NavigationContainer ref={navigationRef} theme={navTheme}>
+          {connected ? (
+            <MainTabs onDisconnect={handleDisconnect} />
+          ) : (
+            <ScanScreen onConnected={handleConnected} />
+          )}
+        </NavigationContainer>
+      </SafeAreaProvider>
+    </ErrorBoundary>
   );
 }
