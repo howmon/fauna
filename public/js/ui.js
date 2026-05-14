@@ -148,6 +148,13 @@ function populateModelSelect() {
 function onModelChange(id) {
   state.model = id;
   localStorage.setItem('fauna-model', id);
+  if (state.currentId && typeof getConv === 'function') {
+    var conv = getConv(state.currentId);
+    if (conv) {
+      conv.model = id;
+      saveConversations();
+    }
+  }
   var m = allModels.find(m => m.id === id);
   if (m) showToast('Model: ' + m.name);
   // Sync hidden select + toolbar label
