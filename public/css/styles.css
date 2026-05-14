@@ -187,7 +187,6 @@ button .ti, label .ti { pointer-events: none; }
 .conv-streaming-icon { font-size: 11px; opacity: .65; flex-shrink: 0; animation: spin 1.2s linear infinite; }
 
 /* ── Sidebar section headers ───────────────────────────────────── */
-#conv-section { }
 #conv-section-header,
 #agents-section-header,
 #projects-section-header {
@@ -624,7 +623,7 @@ button .ti, label .ti { pointer-events: none; }
 .tool-status-line .tool-status-icon { font-size: 11px; opacity: .7; }
 .tool-status-shimmer {
   background: linear-gradient(90deg, var(--fau-text-muted), var(--accent2, #a78bfa), var(--fau-text-muted));
-  background-size: 200% auto; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-size: 200% auto; background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
   animation: toolShimmer 2s linear infinite;
 }
 @keyframes toolShimmer { to { background-position: 200% center; } }
@@ -2334,12 +2333,11 @@ body { animation: none; }
 .cfb-header { display:flex; align-items:center; gap:6px; padding:7px 10px; background:var(--accent-dim); }
 .cfb-icon { font-size:13px; flex-shrink:0; }
 .cfb-title { flex:1; color:var(--fau-text-muted); font-size:11px; }
-.cfb-cwd-badge { font-family:var(--mono); font-size:10px; color:var(--accent); max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; background:var(--accent-dim); padding:1px 6px; border-radius:3px; cursor:pointer; title:attr(title); }
+.cfb-cwd-badge { font-family:var(--mono); font-size:10px; color:var(--accent); max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; background:var(--accent-dim); padding:1px 6px; border-radius:3px; cursor:pointer; }
 .cfb-actions { display:flex; gap:4px; margin-left:auto; }
 .cfb-btn { background:var(--accent-dim); border:1px solid var(--accent-glow); color:var(--accent); border-radius:4px; padding:2px 8px; font-size:11px; cursor:pointer; white-space:nowrap; }
 .cfb-btn:hover { background:var(--accent-glow); }
 .cfb-toggle { background:none; border:none; color:var(--fau-text-muted); cursor:pointer; padding:0 2px; font-size:11px; }
-.cfb-list { }
 .cfb-file { display:flex; align-items:center; gap:6px; padding:5px 10px; border-top:1px solid var(--fau-border2); }
 .cfb-file:hover { background:var(--fau-surface2); }
 .cfb-file-path { font-family:var(--mono); font-size:11px; color:var(--fau-text-dim); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
@@ -2384,6 +2382,7 @@ body { animation: none; }
 .msg.chain-ba-only .ba-header { padding: 3px 6px; background: transparent; font-size: 11px; opacity: .75; }
 .msg.chain-ba-only .ba-header:hover { opacity: 1; }
 .msg.chain-ba-only .ba-status.ok { opacity: .5; }
+.msg.chain-ba-only.chain-action-complete { display: none !important; }
 
 .msg.chain-shell-only .shell-exec-block { margin: 2px 0; border: none; }
 .msg.chain-shell-only .shell-exec-header { padding: 3px 6px; background: transparent; font-size: 11px; opacity: .75; }
@@ -3481,7 +3480,6 @@ webview {
 .agent-divider .ti { font-size: 14px; color: var(--accent); }
 
 /* Sidebar agents section */
-#conv-section {/* border-top: 1px solid var(--fau-border); */}
 #agents-section {margin-top: 0;/* border-top: 1px solid var(--fau-border); */}
 #agents-section-body { padding: 0 8px 4px; }
 #agent-create-btn {

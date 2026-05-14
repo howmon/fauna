@@ -1072,9 +1072,26 @@ function _markRemainingCancelled(widgets, fromIndex) {
   }
 }
 
+function _collapseCompletedChainActionMessage(widgets) {
+  if (!widgets || !widgets.length) return;
+  var firstBlock = document.getElementById(widgets[0].id);
+  var msgEl = firstBlock && firstBlock.closest ? firstBlock.closest('.msg.chain-ba-only') : null;
+  if (!msgEl) return;
+
+  var allDone = widgets.every(function(w) {
+    var statusEl = document.getElementById(w.id + '-status');
+    return statusEl && statusEl.classList.contains('ok');
+  });
+  if (!allDone) return;
+
+  msgEl.classList.add('chain-action-complete');
+  msgEl.setAttribute('aria-hidden', 'true');
+}
+
 async function _runBrowserActionSequence(widgets, convId) {
   var conv = getConv(convId || state.currentId);
-  for (var i = 0; i < widgets.length; i++) {
+  var i = 0;
+  for (; i < widgets.length; i++) {
     if (conv && conv._cancelled) { _markRemainingCancelled(widgets, i); return; }
     var w = widgets[i];
     var statusEl = document.getElementById(w.id + '-status');
@@ -1285,6 +1302,7 @@ async function _runBrowserActionSequence(widgets, convId) {
       break; // Stop sequence on error
     }
   }
+  if (i >= widgets.length) _collapseCompletedChainActionMessage(widgets);
 }
 
 // ── Bot / CAPTCHA / block detection ───────────────────────────────────────
@@ -1579,7 +1597,8 @@ function extractAndRenderBrowserExtActions(html, messageEl, isHistoryLoad, convI
 
 async function _runExtActionSequence(widgets, convId) {
   var conv = getConv(convId || state.currentId);
-  for (var i = 0; i < widgets.length; i++) {
+  var i = 0;
+  for (; i < widgets.length; i++) {
     if (conv && conv._cancelled) { _markRemainingCancelled(widgets, i); return; }
     var w        = widgets[i];
     var statusEl = document.getElementById(w.id + '-status');
@@ -1755,6 +1774,7 @@ async function _runExtActionSequence(widgets, convId) {
       break;
     }
   }
+  if (i >= widgets.length) _collapseCompletedChainActionMessage(widgets);
 }
 
 // ── Extension connection badge ─────────────────────────────────────────────
