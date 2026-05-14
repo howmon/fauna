@@ -75,7 +75,8 @@ export async function getSystemContext() {
 }
 
 export async function getModels() {
-  return apiGet<any[]>('/api/models');
+  const data = await apiGet<{ models: any[] }>('/api/models');
+  return Array.isArray(data) ? data : (data?.models || []);
 }
 
 export async function getAgents() {
@@ -98,7 +99,7 @@ export interface ChatEvent {
 
 export function streamChat(
   messages: Array<{ role: string; content: string | any[] }>,
-  options: { model?: string; agentName?: string } = {},
+  options: { model?: string; agentName?: string; systemPrompt?: string } = {},
   onEvent: (evt: ChatEvent) => void,
 ): AbortController {
   const controller = new AbortController();
@@ -284,4 +285,75 @@ export async function deleteConversation(id: string) {
 
 export async function saveConversation(id: string, conv: any) {
   return apiPut(`/api/conversations/${id}`, conv);
+}
+
+export async function updateConversation(id: string, updates: any) {
+  return apiPut(`/api/conversations/${id}`, updates);
+}
+
+// ── Preferences (playbook + agent rules + system prompt) ─────────────────
+
+export interface Preferences {
+  playbook: Array<{ id: string; title: string; body: string; enabled?: boolean; tags?: string[] }>;
+  agentRules: Array<{ id: string; text: string; enabled?: boolean }>;
+  systemPrompt: string;
+}
+
+export async function getPreferences(): Promise<Preferences> {
+  try { return await apiGet<Preferences>('/api/preferences'); }
+  catch (_) { return { playbook: [], agentRules: [], systemPrompt: '' }; }
+}
+
+// ── Projects ──────────────────────────────────────────────────────────────
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  icon: string | null;
+  color: string;
+  conversationIds: string[];
+  taskIds: string[];
+  createdAt: string;
+  updatedAt: string;
+  lastActiveAt: string;
+}
+
+export async function getProjects(): Promise<Project[]> {
+  return apiGet<Project[]>('/api/projects');
+}
+
+export async function getProjectById(id: string): Promise<Project> {
+  return apiGet<Project>(`/api/projects/${id}`);
+}
+
+export async function createProject(opts: { name: string; description?: string; color?: string }): Promise<Project> {
+  return apiPost<Project>('/api/projects', opts);
+}
+
+export async function updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'description' | 'color'>>): Promise<Project> {
+  return apiPut<Project>(`/api/projects/${id}`, patch);
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  return apiDelete(`/api/projects/${id}`);
+}
+
+export async function linkConversationToProject(projectId: string, convId: string): Promise<void> {
+  return apiPost(`/api/projects/${projectId}/conversations`, { convId });
+}
+
+export async function touchProject(id: string): Promise<void> {
+  return apiPost(`/api/projects/${id}/touch`);
+}
+
+// ── Conversation title generation ────────────────────────────────────────
+
+export async function getConversationTitle(
+  messages: Array<{ role: string; content: string }>
+): Promise<string> {
+  try {
+    const data = await apiPost<{ title: string }>('/api/conversation-title', { messages });
+    return data?.title || '';
+  } catch (_) { return ''; }
 }

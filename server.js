@@ -114,14 +114,29 @@ function extBrowserName(userAgent = '') {
   return 'Browser';
 }
 
+// Cache of browsers connected to the FaunaMCP relay (populated by polling /ext-status)
+let faunaMcpRelayBrowsers = [];  // [{id, browser, version, connectedAt, activeTab}]
+
 function extStatusList() {
-  return Array.from(extClients.values()).map(client => ({
+  const direct = Array.from(extClients.values()).map(client => ({
     id: client.id,
     browser: client.browser,
     version: client.version,
     connectedAt: client.connectedAt,
     activeTab: client.activeTab || null,
   }));
+  // Include browsers connected to FaunaMCP relay (suppressing duplicates by id)
+  if (faunaMcpBrowserConnected) {
+    const directIds = new Set(direct.map(c => c.id));
+    for (const b of faunaMcpRelayBrowsers) {
+      if (!directIds.has(b.id)) direct.push(b);
+    }
+    // Fallback: if relay has no extensions, show a generic FaunaMCP entry
+    if (!faunaMcpRelayBrowsers.length && !direct.some(c => c.id === 'faunamcp')) {
+      direct.push({ id: 'faunamcp', browser: 'FaunaMCP', version: null, connectedAt: faunaMcpConnectedAt, activeTab: null });
+    }
+  }
+  return direct;
 }
 
 function sendExtSse(event, data = {}) {
@@ -293,11 +308,31 @@ app.get('/api/ext/events', (req, res) => {
 });
 
 app.post('/api/ext/command', async (req, res) => {
-  const clients = Array.from(extClients.values()).filter(client => client.ws.readyState === 1);
-  if (!clients.length) return res.status(503).json({ ok: false, error: 'Browser extension not connected' });
-
   const { action, params = {}, tabId, browser, clientId } = req.body || {};
   if (!action) return res.status(400).json({ ok: false, error: 'action required' });
+
+  // Route FaunaMCP relay IDs (relay-*) or generic 'faunamcp' to the FaunaMCP relay server
+  if (clientId && (clientId === 'faunamcp' || clientId.startsWith('relay-'))) {
+    try {
+      const body = clientId.startsWith('relay-')
+        ? JSON.stringify({ id: clientId, action, params, tabId: tabId ?? null, timeout: 30000 })
+        : JSON.stringify({ action, params, tabId: tabId ?? null, timeout: 30000 });
+      const endpoint = clientId.startsWith('relay-') ? '/ext-command-by-id' : '/ext-command';
+      const r = await fetch(`http://localhost:3341${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        signal: AbortSignal.timeout(35000),
+      });
+      const data = await r.json();
+      return res.json(data);
+    } catch (e) {
+      return res.status(503).json({ ok: false, error: e.message });
+    }
+  }
+
+  const clients = Array.from(extClients.values()).filter(client => client.ws.readyState === 1);
+  if (!clients.length) return res.status(503).json({ ok: false, error: 'Browser extension not connected' });
 
   const client = clientId
     ? clients.find(c => c.id === clientId) || clients[0]
@@ -660,6 +695,19 @@ app.put('/api/projects/:id/sources/:srcId/file', (req, res) => {
   }
 });
 
+// Stream raw bytes for binary files (images, PDFs, video, audio, etc.)
+app.get('/api/projects/:id/sources/:srcId/raw', (req, res) => {
+  try {
+    const { fullPath, mime, size } = resolveSourceFilePath(req.params.id, req.params.srcId, req.query.path || '');
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Length', size);
+    res.setHeader('Cache-Control', 'no-store');
+    fs.createReadStream(fullPath).pipe(res);
+  } catch (e) {
+    res.status(404).json({ error: e.message });
+  }
+});
+
 // ── Contexts ──────────────────────────────────────────────────────────────
 
 app.get('/api/projects/:id/contexts', (req, res) => {
@@ -806,6 +854,18 @@ app.post('/api/mobile/pair/reset', (_req, res) => {
     fs.writeFileSync(MOBILE_TOKEN_FILE, JSON.stringify({ token }));
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── System info — used by mobile verifyConnection() ──────────────────────
+// Validates X-Fauna-Token against the stored mobile token.
+app.get('/api/system', (req, res) => {
+  let storedToken;
+  try { storedToken = JSON.parse(fs.readFileSync(MOBILE_TOKEN_FILE, 'utf8')).token; } catch (_) {}
+  const provided = (req.headers['x-fauna-token'] || '').trim();
+  if (!storedToken || !provided || provided !== storedToken) {
+    return res.status(401).json({ error: 'Invalid or missing token' });
+  }
+  res.json({ ok: true, hostname: os.hostname() });
 });
 
 // ── Tunnel (stub — no external tunnel dependency) ─────────────────────────
@@ -3004,6 +3064,9 @@ function addCustomMcpLog(serverId, severity, message) {
 
 // Auto-detection logic - checks for browser MCP at localhost:3341
 let autoDetectPollTimer = null;
+let faunaMcpBrowserConnected = false;  // true when FaunaMCP standalone is reachable
+let faunaMcpConnectedAt = null;        // ISO timestamp when first detected
+let bundledBrowserServerProc = null;   // spawned fallback process
 
 async function probeBrowserMcp() {
   try {
@@ -3021,11 +3084,62 @@ async function autoDetectBrowserMcp() {
   const servers = readCustomMcpServers();
   const existing = servers.find(s => s.url === 'http://localhost:3341/mcp' || s.id === 'fauna-browser-mcp-auto');
   
-  if (existing) return; // Already registered
-  
   const available = await probeBrowserMcp();
-  if (!available) return; // Not running
-  
+
+  // Update the SSE-visible connected flag
+  const wasConnected = faunaMcpBrowserConnected;
+  faunaMcpBrowserConnected = available;
+  if (available && !faunaMcpConnectedAt) faunaMcpConnectedAt = new Date().toISOString();
+  if (!available) faunaMcpConnectedAt = null;
+
+  // Broadcast a status-changed SSE when the connection state changes
+  if (available !== wasConnected) {
+    broadcastExtStatus();
+  }
+
+  if (!available) {
+    faunaMcpRelayBrowsers = [];
+    // Try to start the bundled browser server if not already running
+    if (!bundledBrowserServerProc) {
+      const bundledServer = path.join(__dirname, 'faunaMCP-main', 'browser-server', 'index.js');
+      if (fs.existsSync(bundledServer)) {
+        try {
+          const nodeBin = findNodeBinary ? findNodeBinary() : process.execPath;
+          if (nodeBin) {
+            bundledBrowserServerProc = spawn(nodeBin, [bundledServer], {
+              cwd: path.dirname(bundledServer),
+              stdio: 'ignore',
+              detached: false,
+              env: { ...process.env }
+            });
+            bundledBrowserServerProc.on('exit', () => { bundledBrowserServerProc = null; });
+            console.log('[custom-mcp] Started bundled browser server as fallback');
+          }
+        } catch (e) {
+          console.error('[custom-mcp] Failed to start bundled browser server:', e.message);
+        }
+      }
+    }
+    return;
+  }
+
+  // Refresh the FaunaMCP relay browser list
+  try {
+    const statusResp = await fetch('http://localhost:3341/ext-status', { signal: AbortSignal.timeout(2000) });
+    if (statusResp.ok) {
+      const statusData = await statusResp.json();
+      faunaMcpRelayBrowsers = (statusData.browsers || []).map(b => ({
+        id: b.id,
+        browser: b.browser,
+        version: b.version || null,
+        connectedAt: b.connectedAt || faunaMcpConnectedAt,
+        activeTab: b.activeTab || null,
+      }));
+    }
+  } catch (_) {}
+
+  if (existing) return; // Already registered
+
   // Auto-add it
   const newServer = {
     id: 'fauna-browser-mcp-auto',
@@ -3066,6 +3180,10 @@ function stopCustomMcpAutoDetection() {
   if (autoDetectPollTimer) {
     clearInterval(autoDetectPollTimer);
     autoDetectPollTimer = null;
+  }
+  if (bundledBrowserServerProc) {
+    try { bundledBrowserServerProc.kill(); } catch (_) {}
+    bundledBrowserServerProc = null;
   }
 }
 
@@ -3289,6 +3407,15 @@ setTimeout(() => {
   else figmaConnect();
   // Start custom MCP auto-detection
   startCustomMcpAutoDetection();
+  // Pre-warm Playwright MCP if available so it shows READY immediately
+  (async () => {
+    try {
+      await import('@playwright/mcp');
+      _playwrightMcpInstalled = true;
+      await _getPlaywrightMcpClient();
+      console.log('[playwright-mcp] pre-warmed on startup');
+    } catch (_) {}
+  })();
 }, 500);  // slight delay so the main server is fully up first
 
 function figmaSend(command, timeoutMs = 30000, targetFileKey = null) {
@@ -5799,6 +5926,16 @@ app.post('/api/permissions/request-screen', async (req, res) => {
 // Shape: [ { id, name, icon, enabled, builtIn, groups: [{id, title, body, enabled}] } ]
 
 const MEMORY_FILE = path.join(CONFIG_DIR, 'memory.json');
+const PREFS_FILE  = path.join(CONFIG_DIR, 'preferences.json');
+
+function loadPrefs() {
+  try { return JSON.parse(fs.readFileSync(PREFS_FILE, 'utf8')); }
+  catch (_) { return { playbook: [], agentRules: [], systemPrompt: '' }; }
+}
+function savePrefs(patch) {
+  const current = loadPrefs();
+  fs.writeFileSync(PREFS_FILE, JSON.stringify({ ...current, ...patch }, null, 2));
+}
 
 function defaultFigmaGroups() {
   return [];
@@ -5851,6 +5988,19 @@ function saveMemoryCategories(categories) {
 // GET — return all categories
 app.get('/api/memory', (req, res) => {
   res.json(loadMemoryCategories());
+});
+
+// ── Preferences (playbook + agent rules + system prompt) ──────────────────
+app.get('/api/preferences', (req, res) => {
+  res.json(loadPrefs());
+});
+
+app.put('/api/preferences', (req, res) => {
+  const patch = req.body;
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch))
+    return res.status(400).json({ error: 'Expected object' });
+  savePrefs(patch);
+  res.json({ ok: true });
 });
 
 // PUT — save all categories (full replace)
@@ -6903,6 +7053,20 @@ app.get('/api/playwright-mcp/status', async (req, res) => {
   res.json({ installed: _playwrightMcpInstalled, running: !!_playwrightMcpClient });
 });
 
+// Pre-warm the Playwright MCP client (no-op if already running)
+app.post('/api/playwright-mcp/start', async (req, res) => {
+  if (_playwrightMcpInstalled === null) {
+    try { await import('@playwright/mcp'); _playwrightMcpInstalled = true; } catch (_) { _playwrightMcpInstalled = false; }
+  }
+  if (!_playwrightMcpInstalled) return res.json({ ok: false, error: 'not-installed' });
+  try {
+    await _getPlaywrightMcpClient();
+    res.json({ ok: true, running: true });
+  } catch (e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
+
 app.post('/api/playwright-mcp/call', express.json({ limit: '4mb' }), async (req, res) => {
   const { tool, args = {} } = req.body || {};
   if (!tool) return res.status(400).json({ error: 'tool required' });
@@ -7206,7 +7370,7 @@ app.get('/api/projects/:id/terminal/:termId/output', (req, res) => {
 
 export function startServer(port) {
   return new Promise((resolve, reject) => {
-    const server = app.listen(port, '127.0.0.1', () => {
+    const server = app.listen(port, '0.0.0.0', () => {
       console.log(`\n  ✦ Copilot Chat  →  http://127.0.0.1:${port}\n`);
       resolve(server);
     });

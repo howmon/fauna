@@ -5,6 +5,7 @@ import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
   useColorScheme, Platform, Share,
 } from 'react-native';
+import { WebView } from 'react-native-webview';
 import Markdown from 'react-native-markdown-display';
 import * as Clipboard from 'expo-clipboard';
 import { dark, light, spacing, radius } from '../lib/theme';
@@ -52,6 +53,33 @@ export default function ArtifactPanel({ artifact, onClose }: Props) {
 
   const renderContent = () => {
     switch (artifact.type) {
+      case 'html':
+        return (
+          <WebView
+            source={{ html: artifact.content, baseUrl: '' }}
+            style={[s.webview, { backgroundColor: t.bg }]}
+            originWhitelist={['*']}
+            scrollEnabled
+          />
+        );
+
+      case 'svg': {
+        const bg = t.bg ?? (scheme === 'light' ? '#ffffff' : '#111111');
+        const svgHtml = `<!DOCTYPE html><html><head>` +
+          `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+          `<style>html,body{margin:0;padding:16px;background:${bg};box-sizing:border-box}` +
+          `svg{max-width:100%;height:auto;display:block;margin:0 auto}</style>` +
+          `</head><body>${artifact.content}</body></html>`;
+        return (
+          <WebView
+            source={{ html: svgHtml, baseUrl: '' }}
+            style={[s.webview, { backgroundColor: bg }]}
+            originWhitelist={['*']}
+            scrollEnabled
+          />
+        );
+      }
+
       case 'markdown':
         return <Markdown style={mdStyles}>{artifact.content}</Markdown>;
 
@@ -71,8 +99,6 @@ export default function ArtifactPanel({ artifact, onClose }: Props) {
           );
         }
 
-      case 'html':
-      case 'svg':
       case 'csv':
       default:
         return (
@@ -82,6 +108,8 @@ export default function ArtifactPanel({ artifact, onClose }: Props) {
         );
     }
   };
+
+  const isWebType = artifact.type === 'html' || artifact.type === 'svg';
 
   return (
     <View style={[s.container, { backgroundColor: t.surface }]}>
@@ -102,10 +130,14 @@ export default function ArtifactPanel({ artifact, onClose }: Props) {
         </TouchableOpacity>
       </View>
 
-      {/* Content */}
-      <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
-        {renderContent()}
-      </ScrollView>
+      {/* Content — WebView fills remaining space; others use ScrollView */}
+      {isWebType ? (
+        renderContent()
+      ) : (
+        <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
+          {renderContent()}
+        </ScrollView>
+      )}
     </View>
   );
 }
@@ -121,4 +153,5 @@ const s = StyleSheet.create({
   scrollContent: { padding: spacing.lg, paddingBottom: spacing.xxl },
   codeWrap: { padding: spacing.md, borderRadius: radius.md },
   codeText: { fontSize: 13, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', lineHeight: 18 },
+  webview: { flex: 1 },
 });

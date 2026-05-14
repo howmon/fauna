@@ -8,10 +8,36 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
+import * as DocumentPicker from 'expo-document-picker';
 import { dark, light, spacing, radius } from '../lib/theme';
 import * as api from '../lib/api';
 import MessageBubble, { type ParsedArtifact } from '../components/MessageBubble';
 import ArtifactPanel from '../components/ArtifactPanel';
+
+// ── System prompt helpers ─────────────────────────────────────────────────
+
+const BUILTIN_RULES = [
+  'Always write complete, executable shell commands inside code blocks — never output an empty code block for a command. Every code block must contain real commands.',
+  'Never simulate or invent command output. Write the actual command and let the app run it.',
+];
+
+function buildSystemPrompt(prefs: api.Preferences): string {
+  const parts: string[] = [];
+  if (prefs.systemPrompt?.trim()) parts.push(prefs.systemPrompt.trim());
+  const activeRules = [
+    ...BUILTIN_RULES.map((t, i) => `${i + 1}. ${t}`),
+    ...prefs.agentRules
+      .filter(r => r.enabled !== false)
+      .map((r, i) => `${BUILTIN_RULES.length + i + 1}. ${r.text}`),
+  ];
+  if (activeRules.length)
+    parts.push('## Agent Rules (follow these strictly in every response)\n' + activeRules.join('\n'));
+  const activePlaybook = prefs.playbook.filter(e => e.enabled !== false);
+  if (activePlaybook.length)
+    parts.push('## Playbook \u2014 Learned Instructions (apply these to relevant tasks)\n' +
+      activePlaybook.map((e, i) => `### ${i + 1}. ${e.title}\n${e.body}`).join('\n\n'));
+  return parts.join('\n\n');
+}
 
 interface MessageImage {
   uri: string;
@@ -27,7 +53,7 @@ interface Message {
   images?: MessageImage[];
 }
 
-export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRef?: { current: any }; newChatRef?: { current: (() => void) | null } }) {
+export default function ChatScreen({ loadedConvRef, newChatRef, activeProjectRef }: { loadedConvRef?: { current: any }; newChatRef?: { current: (() => void) | null }; activeProjectRef?: { current: api.Project | null } }) {
   const scheme = useColorScheme();
   const t = scheme === 'light' ? light : dark;
   const [messages, setMessages] = useState<Message[]>([]);
@@ -38,13 +64,19 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
   const [convTitle, setConvTitle] = useState('');
   const [agents, setAgents] = useState<any[]>([]);
   const [showAgentPicker, setShowAgentPicker] = useState(false);
+  const [models, setModels] = useState<any[]>([]);
+  const [showModelPicker, setShowModelPicker] = useState(false);
   const [pendingImages, setPendingImages] = useState<MessageImage[]>([]);
+  const [pendingFiles, setPendingFiles] = useState<Array<{ name: string; content: string }>>([]);
   const [activeArtifact, setActiveArtifact] = useState<ParsedArtifact | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const msgIdRef = useRef(0);
   const convIdRef = useRef<string>('conv-' + Date.now());
   const messagesRef = useRef<Message[]>([]);
+  const systemPromptCtxRef = useRef<string>('');  // built from prefs, not reactive
+  const autoTitledRef = useRef(false);
+  const projectIdRef = useRef<string | null>(null);  // project this chat belongs to
 
   const nextId = () => `msg-${++msgIdRef.current}`;
 
@@ -69,6 +101,10 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
         model: model || undefined,
         createdAt: parseInt(id.replace('conv-', '')) || Date.now(),
       });
+      // Link to project if this chat was started from one
+      if (projectIdRef.current) {
+        api.linkConversationToProject(projectIdRef.current, id).catch(() => {});
+      }
     } catch {}
   }, [messages, convTitle, model]);
 
@@ -85,6 +121,8 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
         setPendingImages([]);
         msgIdRef.current = 0;
         convIdRef.current = 'conv-' + Date.now();
+        autoTitledRef.current = false;
+        projectIdRef.current = null;
       };
     }
     return () => { if (newChatRef) newChatRef.current = null; };
@@ -95,7 +133,15 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
     api.getAgents().then(setAgents).catch(() => {});
   }, []);
 
-  // Pick up loaded conversation when Chat tab is focused
+  // Load models + preferences (playbook, agent rules, sys prompt) once on mount
+  useEffect(() => {
+    api.getModels().then((list: any[]) => setModels(list)).catch(() => {});
+    api.getPreferences().then(prefs => {
+      systemPromptCtxRef.current = buildSystemPrompt(prefs);
+    }).catch(() => {});
+  }, []);
+
+  // Pick up loaded conversation or active project when Chat tab is focused
   useFocusEffect(
     useCallback(() => {
       if (loadedConvRef?.current) {
@@ -108,13 +154,58 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
         setConvTitle(conv.title || '');
         if (conv.model) setModel(conv.model);
         if (conv.id) convIdRef.current = conv.id;
+        // Clear project context when loading an existing conv
+        projectIdRef.current = null;
+      } else if (activeProjectRef?.current) {
+        // Starting a new chat from a project — clear existing chat and set project context
+        const proj = activeProjectRef.current;
+        activeProjectRef.current = null;
+        setMessages([]);
+        setInput('');
+        setConvTitle('');
+        setAgent('');
+        setPendingImages([]);
+        msgIdRef.current = 0;
+        convIdRef.current = 'conv-' + Date.now();
+        autoTitledRef.current = false;
+        projectIdRef.current = proj.id;
+        setConvTitle(proj.name);  // pre-fill title with project name (will be overwritten by auto-title)
       }
     }, [])
   );
 
-  const scrollToEnd = useCallback(() => {
-    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+  // ── Scroll-to-bottom management ──────────────────────────────────────────
+  // userScrolledUp: user deliberately scrolled away from bottom — pause auto-scroll
+  const userScrolledUp = useRef(false);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const scrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const scrollToEnd = useCallback((animated = false) => {
+    if (userScrolledUp.current) return;
+    if (scrollDebounceRef.current) clearTimeout(scrollDebounceRef.current);
+    scrollDebounceRef.current = setTimeout(() => {
+      flatListRef.current?.scrollToEnd({ animated });
+    }, 40);
   }, []);
+
+  function handleScroll(e: any) {
+    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+    const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
+    const atBottom = distanceFromBottom < 80;
+    if (atBottom) {
+      userScrolledUp.current = false;
+      setShowScrollBtn(false);
+    } else {
+      userScrolledUp.current = true;
+      setShowScrollBtn(true);
+    }
+  }
+
+  function jumpToBottom() {
+    userScrolledUp.current = false;
+    setShowScrollBtn(false);
+    flatListRef.current?.scrollToEnd({ animated: true });
+  }
 
   // ── Image picker ────────────────────────────────────────────────────────
 
@@ -181,20 +272,56 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
     setPendingImages(prev => prev.filter((_, i) => i !== index));
   }
 
+  async function pickFile() {
+    const result = await DocumentPicker.getDocumentAsync({
+      type: '*/*',
+      copyToCacheDirectory: true,
+      multiple: true,
+    });
+    if (result.canceled) return;
+    const MAX_BYTES = 150_000; // ~150 KB text limit
+    for (const asset of result.assets) {
+      try {
+        const content = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.UTF8 });
+        const trimmed = content.length > MAX_BYTES ? content.slice(0, MAX_BYTES) + '\n… [truncated]' : content;
+        setPendingFiles(prev => [...prev, { name: asset.name, content: trimmed }]);
+      } catch {
+        // Binary file — attach name only so the model knows a file was provided
+        setPendingFiles(prev => [...prev, { name: asset.name, content: '[binary file — content not available as text]' }]);
+      }
+    }
+  }
+
+  function removeFile(index: number) {
+    setPendingFiles(prev => prev.filter((_, i) => i !== index));
+  }
+
   // ── Send message ───────────────────────────────────────────────────────
 
   function handleSend() {
     const text = input.trim();
-    if ((!text && pendingImages.length === 0) || streaming) return;
+    if ((!text && pendingImages.length === 0 && pendingFiles.length === 0) || streaming) return;
     setInput('');
     const images = [...pendingImages];
+    const files  = [...pendingFiles];
     setPendingImages([]);
+    setPendingFiles([]);
 
-    const userMsg: Message = { id: nextId(), role: 'user', content: text, images: images.length > 0 ? images : undefined };
+    // Append file contents as quoted blocks appended to the user text
+    const fileBlocks = files.map(f => {
+      const ext = f.name.split('.').pop() || '';
+      return `\`\`\`${ext}\n// File: ${f.name}\n${f.content}\n\`\`\``;
+    }).join('\n\n');
+    const fullText = fileBlocks ? (text ? `${text}\n\n${fileBlocks}` : fileBlocks) : text;
+
+    const userMsg: Message = { id: nextId(), role: 'user', content: fullText, images: images.length > 0 ? images : undefined };
     const assistantMsg: Message = { id: nextId(), role: 'assistant', content: '' };
 
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
     setStreaming(true);
+    // Reset scroll state — user just sent a message, jump to bottom
+    userScrolledUp.current = false;
+    setShowScrollBtn(false);
     scrollToEnd();
 
     // Build history — strip images from older messages to avoid payload bloat
@@ -212,19 +339,19 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
     // Build current message content — only the NEW message gets full base64
     if (images.length > 0) {
       const parts: any[] = [];
-      if (text) parts.push({ type: 'text', text });
+      if (fullText) parts.push({ type: 'text', text: fullText });
       images.forEach(img => parts.push({
         type: 'image_url',
         image_url: { url: `data:${img.mime};base64,${img.base64}`, detail: 'low' }
       }));
       history.push({ role: 'user', content: parts });
     } else {
-      history.push({ role: 'user', content: text });
+      history.push({ role: 'user', content: fullText });
     }
 
     const controller = api.streamChat(
       history,
-      { model: model || undefined, agentName: agent || undefined },
+      { model: model || undefined, agentName: agent || undefined, systemPrompt: systemPromptCtxRef.current || undefined },
       (evt) => {
         switch (evt.type) {
           case 'content':
@@ -240,7 +367,8 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
               }
               return updated;
             });
-            scrollToEnd();
+            // Instant (non-animated) scroll during streaming — prevents animation queue buildup
+            scrollToEnd(false);
             break;
 
           case 'tool_call':
@@ -248,7 +376,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
               ...prev,
               { id: nextId(), role: 'tool', content: `[tool] ${evt.name}(${(evt.arguments || '').slice(0, 80)})`, toolName: evt.name },
             ]);
-            scrollToEnd();
+            scrollToEnd(false);
             break;
 
           case 'tool_output':
@@ -257,7 +385,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
               { id: nextId(), role: 'tool', content: `> ${(evt.output || '').slice(0, 200)}` },
               { id: nextId(), role: 'assistant', content: '' },
             ]);
-            scrollToEnd();
+            scrollToEnd(false);
             break;
 
           case 'error':
@@ -270,7 +398,23 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
 
           case 'done':
             setStreaming(false);
-            setTimeout(() => saveCurrentConv(messagesRef.current), 300);
+            setTimeout(async () => {
+              const msgs = messagesRef.current;
+              saveCurrentConv(msgs);
+              // Auto-title after the first exchange if not already titled
+              if (!autoTitledRef.current && msgs.length >= 2) {
+                autoTitledRef.current = true;
+                const titleMsgs = msgs
+                  .filter(m => m.role === 'user' || m.role === 'assistant')
+                  .slice(0, 4)
+                  .map(m => ({ role: m.role, content: m.content.slice(0, 300) }));
+                const title = await api.getConversationTitle(titleMsgs);
+                if (title) {
+                  setConvTitle(title);
+                  saveCurrentConv(msgs, title);
+                }
+              }
+            }, 300);
             break;
         }
       },
@@ -311,8 +455,34 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
         keyExtractor={(m) => m.id}
         renderItem={renderMessage}
         contentContainerStyle={s.list}
-        onContentSizeChange={scrollToEnd}
+        onScroll={handleScroll}
+        scrollEventThrottle={100}
       />
+      {showScrollBtn && (
+        <TouchableOpacity
+          style={[s.scrollBtn, { backgroundColor: t.teal }]}
+          onPress={jumpToBottom}
+          activeOpacity={0.85}
+        >
+          <Text style={s.scrollBtnLabel}>↓</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* Pending file chips */}
+      {pendingFiles.length > 0 && (
+        <View style={[s.fileChipBar, { backgroundColor: t.surface }]}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingHorizontal: spacing.sm }}>
+            {pendingFiles.map((f, i) => (
+              <View key={i} style={[s.fileChip, { backgroundColor: t.surface2 }]}>
+                <Text style={[s.fileChipName, { color: t.text }]} numberOfLines={1}>{f.name}</Text>
+                <TouchableOpacity onPress={() => removeFile(i)} style={s.fileChipRemove}>
+                  <Text style={{ color: t.textMuted, fontSize: 12, fontWeight: '700' }}>×</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      )}
 
       {/* Pending image preview strip */}
       {pendingImages.length > 0 && (
@@ -330,7 +500,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
         </View>
       )}
 
-      {/* Agent chip bar + image buttons */}
+      {/* Agent chip bar + model chip + image buttons */}
       <View style={[s.chipBar, { backgroundColor: t.surface, borderTopColor: t.border }]}>
         <TouchableOpacity style={[s.agentChip, { backgroundColor: agent ? t.teal : t.surface2 }]} onPress={() => setShowAgentPicker(true)}>
           <Text style={[s.agentChipText, { color: agent ? '#fff' : t.textMuted }]}>
@@ -342,7 +512,15 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
             <Text style={{ color: t.textMuted, fontSize: 14, marginLeft: 6, fontWeight: '600' }}>x</Text>
           </TouchableOpacity>
         ) : null}
+        <TouchableOpacity style={[s.agentChip, { backgroundColor: model ? t.surface3 : t.surface2, marginLeft: 4 }]} onPress={() => setShowModelPicker(true)}>
+          <Text style={[s.agentChipText, { color: t.textMuted }]} numberOfLines={1}>
+            {model ? model.split('/').pop()?.replace(/-\d{4}-\d{2}-\d{2}$/, '') : 'Model'}
+          </Text>
+        </TouchableOpacity>
         <View style={{ flex: 1 }} />
+        <TouchableOpacity style={[s.iconBtn, { backgroundColor: t.surface2 }]} onPress={pickFile}>
+          <Text style={{ fontSize: 15, color: t.textMuted }}>📎</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={[s.iconBtn, { backgroundColor: t.surface2 }]} onPress={pickImage}>
           <Text style={{ fontSize: 13, color: t.textMuted, fontWeight: '600' }}>IMG</Text>
         </TouchableOpacity>
@@ -370,9 +548,9 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
-            style={[s.sendBtn, { backgroundColor: (input.trim() || pendingImages.length) ? t.teal : t.surface3 }]}
+            style={[s.sendBtn, { backgroundColor: (input.trim() || pendingImages.length || pendingFiles.length) ? t.teal : t.surface3 }]}
             onPress={handleSend}
-            disabled={!input.trim() && pendingImages.length === 0}
+            disabled={!input.trim() && pendingImages.length === 0 && pendingFiles.length === 0}
           >
             <Text style={s.sendBtnText}>↑</Text>
           </TouchableOpacity>
@@ -409,6 +587,39 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
         </View>
       </Modal>
 
+      {/* Model picker modal */}
+      <Modal visible={showModelPicker} transparent animationType="slide">
+        <View style={s.modalOverlay}>
+          <View style={[s.modalContent, { backgroundColor: t.surface }]}>
+            <Text style={[s.modalTitle, { color: t.text }]}>Select Model</Text>
+            <ScrollView style={{ maxHeight: 400 }}>
+              <TouchableOpacity
+                style={[s.agentItem, model === '' && { backgroundColor: t.surface2 }]}
+                onPress={() => { setModel(''); setShowModelPicker(false); }}
+              >
+                <Text style={[s.agentName, { color: t.text }]}>Default</Text>
+              </TouchableOpacity>
+              {models.map((m: any) => {
+                const id = typeof m === 'string' ? m : (m.id || m.name || String(m));
+                const label = typeof m === 'string' ? m : (m.displayName || m.name || m.id || String(m));
+                return (
+                  <TouchableOpacity
+                    key={id}
+                    style={[s.agentItem, model === id && { backgroundColor: t.surface2 }]}
+                    onPress={() => { setModel(id); setShowModelPicker(false); }}
+                  >
+                    <Text style={[s.agentName, { color: t.text }]}>{label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+            <TouchableOpacity style={[s.modalClose, { borderColor: t.border }]} onPress={() => setShowModelPicker(false)}>
+              <Text style={{ color: t.textMuted, fontWeight: '600' }}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* Artifact panel modal */}
       <Modal visible={!!activeArtifact} transparent animationType="slide">
         <View style={s.artifactOverlay}>
@@ -432,6 +643,11 @@ const s = StyleSheet.create({
   textInput: { flex: 1, borderRadius: radius.md, padding: spacing.md, fontSize: 15, maxHeight: 120, marginRight: spacing.sm },
   sendBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   sendBtnText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  // File chip strip
+  fileChipBar: { paddingVertical: 6 },
+  fileChip: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 16, maxWidth: 200 },
+  fileChipName: { fontSize: 12, fontWeight: '500', flex: 1 },
+  fileChipRemove: { marginLeft: 6, padding: 2 },
   // Image preview strip
   imagePreviewBar: { paddingVertical: 6 },
   imagePreviewWrap: { position: 'relative' },
@@ -447,4 +663,7 @@ const s = StyleSheet.create({
   agentDesc: { fontSize: 12, marginTop: 2 },
   modalClose: { borderTopWidth: 1, marginTop: spacing.md, paddingTop: spacing.md, alignItems: 'center' },
   artifactOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end', paddingTop: 80 },
+  // Scroll-to-bottom FAB
+  scrollBtn: { position: 'absolute', right: 16, bottom: 80, width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', elevation: 4, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } },
+  scrollBtnLabel: { color: '#fff', fontSize: 20, lineHeight: 24, fontWeight: '700' },
 });

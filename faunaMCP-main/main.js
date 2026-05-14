@@ -440,6 +440,44 @@ async function getOccupiedRelayPorts(which) {
   return checks.filter(p => p.open).map(p => p.port);
 }
 
+// Kill whatever process(es) are holding the given ports.
+// Returns true if all ports were freed within ~1.5 s.
+async function forceReclaimPorts(ports) {
+  const { execSync } = require('child_process');
+  const pids = new Set();
+  for (const port of ports) {
+    try {
+      if (process.platform === 'win32') {
+        const out = execSync(`netstat -ano | findstr :${port}`, { encoding: 'utf8', env: cliEnv() });
+        for (const line of out.split('\n')) {
+          const m = line.trim().match(/(\d+)$/);
+          if (m) pids.add(Number(m[1]));
+        }
+      } else {
+        const out = execSync(`lsof -ti tcp:${port}`, { encoding: 'utf8', env: cliEnv() });
+        for (const p of out.trim().split('\n').filter(Boolean)) pids.add(Number(p));
+      }
+    } catch (_) {}
+  }
+  if (!pids.size) return true; // nothing holding them
+  for (const pid of pids) {
+    try {
+      if (process.platform === 'win32') {
+        execSync(`taskkill /F /PID ${pid}`, { stdio: 'ignore', env: cliEnv() });
+      } else {
+        process.kill(pid, 'SIGKILL');
+      }
+    } catch (_) {}
+  }
+  // Wait for OS to reclaim sockets (up to 1.5 s)
+  for (let i = 0; i < 15; i++) {
+    await new Promise(r => setTimeout(r, 100));
+    const still = await Promise.all(ports.map(p => isPortOpen(p)));
+    if (still.every(open => !open)) return true;
+  }
+  return false;
+}
+
 async function startRelay(which, _retryCount = 0) {
   const r = relay[which];
   r.enabled = true;   // user explicitly wants this running
@@ -456,11 +494,16 @@ async function startRelay(which, _retryCount = 0) {
 
   const occupiedPorts = await getOccupiedRelayPorts(which);
   if (occupiedPorts.length) {
-    r.enabled = false;
-    r.portInUse = true;
-    setRunning(which, false);
-    addLog(which, `Port${occupiedPorts.length > 1 ? 's' : ''} ${occupiedPorts.join(', ')} already occupied — not starting ${which} relay.`, 'err');
-    return;
+    addLog(which, `Port${occupiedPorts.length > 1 ? 's' : ''} ${occupiedPorts.join(', ')} occupied — reclaiming…`, 'info');
+    const freed = await forceReclaimPorts(occupiedPorts);
+    if (!freed) {
+      r.enabled = false;
+      r.portInUse = true;
+      setRunning(which, false);
+      addLog(which, `Could not free port${occupiedPorts.length > 1 ? 's' : ''} ${occupiedPorts.join(', ')} — try again or check Activity Monitor.`, 'err');
+      return;
+    }
+    addLog(which, `Ports reclaimed — starting ${which} relay…`, 'ok');
   }
 
   const relayPath = which === 'browser' ? getBrowserRelayPath() : getFigmaRelayPath();
@@ -507,7 +550,8 @@ async function startRelay(which, _retryCount = 0) {
     addLog(which, `Relay stopped (code ${code ?? signal})`, code === 0 ? 'info' : 'err');
     if (r.portInUse) {
       r.enabled = false;
-      addLog(which, 'Port is already occupied — not retrying this relay automatically.', 'err');
+      r.portInUse = false; // reset so manual restart can reclaim the port
+      addLog(which, 'Port was in use — click Start to reclaim it.', 'err');
       return;
     }
     // Only auto-retry if enabled (i.e. not manually stopped) and it died too fast

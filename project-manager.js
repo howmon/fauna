@@ -377,15 +377,20 @@ export function listFiles(projectId, srcId, subPath) {
     .map(e => {
       const fullPath = path.join(resolvedTarget, e.name);
       const relPath  = path.relative(resolvedRoot, fullPath);
-      const stat     = e.isFile() ? fs.statSync(fullPath) : null;
+      // Use statSync (follows symlinks) so symlinked directories are detected correctly
+      let stat;
+      try { stat = fs.statSync(fullPath); } catch (_) { return null; } // skip broken symlinks
+      const isDir  = stat.isDirectory();
+      const isFile = stat.isFile();
       return {
         name: e.name,
         path: relPath,
-        type: e.isDirectory() ? 'dir' : 'file',
-        size: stat ? stat.size : 0,
-        ext:  e.isFile() ? path.extname(e.name).slice(1).toLowerCase() : null,
+        type: isDir ? 'dir' : 'file',
+        size: isFile ? stat.size : 0,
+        ext:  isFile ? path.extname(e.name).slice(1).toLowerCase() : null,
       };
     })
+    .filter(Boolean)
     .sort((a, b) => {
       if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
       return a.name.localeCompare(b.name);

@@ -1197,6 +1197,9 @@ Examples:
     if (page === 'mcp') {
       if (typeof mcpMgr !== 'undefined') mcpMgr.load();
       mcpBuiltinInit();
+    } else {
+      // Stop polling when navigating away from the MCP page
+      if (window._mcpBuiltinInterval) { clearInterval(window._mcpBuiltinInterval); window._mcpBuiltinInterval = null; }
     }
     if (page === 'account') {
       if (typeof renderStoreAccountSettings === 'function') renderStoreAccountSettings();
@@ -1234,24 +1237,46 @@ Examples:
 
   function mcpBuiltinInit() {
     mcpBuiltinPollStatus();
+    // Keep pills live while the MCP settings page is open
+    if (window._mcpBuiltinInterval) clearInterval(window._mcpBuiltinInterval);
+    window._mcpBuiltinInterval = setInterval(mcpBuiltinPollStatus, 4000);
   }
 
-  function mcpBuiltinPollStatus() {
-    // Figma — show whether it's active in the current chat
-    var figmaActive = typeof state !== 'undefined' && state.figmaMCPEnabled;
+  async function mcpBuiltinPollStatus() {
     var figmaEl = document.getElementById('mcp-builtin-figma-status');
-    if (figmaEl) {
-      figmaEl.innerHTML = figmaActive
-        ? '<span class="mcp-status-pill active">Active</span>'
-        : '<span class="mcp-status-pill inactive">Inactive</span>';
+    var pwEl    = document.getElementById('mcp-builtin-playwright-status');
+
+    // Fetch real server availability
+    var figmaStatus = {}, pwStatus = {};
+    try {
+      var results = await Promise.all([
+        fetch('/api/figma/status').then(function(r) { return r.json(); }).catch(function() { return {}; }),
+        fetch('/api/playwright-mcp/status').then(function(r) { return r.json(); }).catch(function() { return {}; })
+      ]);
+      figmaStatus = results[0];
+      pwStatus    = results[1];
+    } catch (_) {}
+
+    // Per-chat toggles
+    var figmaEnabled = typeof state !== 'undefined' && state.figmaMCPEnabled;
+    var pwEnabled    = typeof state !== 'undefined' && state.playwrightMCPEnabled;
+
+    // Server availability
+    var figmaAvail = !!(figmaStatus.relayConnected || figmaStatus.mcpRunning);
+    var pwAvail    = !!(pwStatus.installed);
+
+    function pill(enabled, avail) {
+      if (enabled && avail)  return '<span class="mcp-status-pill active">Active</span>';
+      if (avail)             return '<span class="mcp-status-pill ready">Ready</span>';
+      return '<span class="mcp-status-pill inactive">Inactive</span>';
     }
-    // Browser MCP — show whether it's active in the current chat
-    var pwActive = typeof state !== 'undefined' && state.playwrightMCPEnabled;
-    var pwEl = document.getElementById('mcp-builtin-playwright-status');
-    if (pwEl) {
-      pwEl.innerHTML = pwActive
-        ? '<span class="mcp-status-pill active">Active</span>'
-        : '<span class="mcp-status-pill inactive">Inactive</span>';
+
+    if (figmaEl) figmaEl.innerHTML = pill(figmaEnabled, figmaAvail);
+    if (pwEl)    pwEl.innerHTML    = pill(pwEnabled,    pwAvail);
+
+    // If Playwright is installed but not yet running, pre-warm it silently
+    if (pwAvail && !pwStatus.running) {
+      fetch('/api/playwright-mcp/start', { method: 'POST' }).catch(function() {});
     }
   }
 

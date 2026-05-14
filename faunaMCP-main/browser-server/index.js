@@ -901,6 +901,56 @@ const httpServer = createServer(async (req, res) => {
     return;
   }
 
+  // GET /ext-tabs — list tabs from ALL connected browser extensions in parallel
+  if (req.method === 'GET' && url.pathname === '/ext-tabs') {
+    const conns = openExtConns();
+    const results = await Promise.all(conns.map(conn => new Promise(resolve => {
+      const id = randomUUID();
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        resolve({ id: conn.id, browser: conn.browser, tabs: [] });
+      }, 8000);
+      pending.set(id, {
+        resolve: (r) => { clearTimeout(timer); resolve({ id: conn.id, browser: conn.browser, tabs: r.tabs || [] }); },
+        reject:  ()  => { clearTimeout(timer); resolve({ id: conn.id, browser: conn.browser, tabs: [] }); },
+        timer,
+      });
+      conn.ws.send(JSON.stringify({ type: 'cmd', id, action: 'tab:list', params: {} }));
+    })));
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, browsers: results }));
+    return;
+  }
+
+  // POST /ext-command-by-id — forward a command to a specific browser extension by relay ID
+  if (req.method === 'POST' && url.pathname === '/ext-command-by-id') {
+    let body = ''; for await (const chunk of req) body += chunk;
+    let parsed; try { parsed = JSON.parse(body || '{}'); } catch { res.writeHead(400); res.end('Invalid JSON'); return; }
+    const { id: connId, action, params = {}, tabId = null, timeout = 30000 } = parsed;
+    if (!action) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: 'action required' })); return; }
+    const conn = connId ? extConns.get(connId) : null;
+    if (!conn || conn.ws.readyState !== 1) {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'Extension not connected' }));
+      return;
+    }
+    const cmdId = randomUUID();
+    const p = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { pending.delete(cmdId); reject(new Error('Command timed out')); }, Math.min(timeout, 60000));
+      pending.set(cmdId, { resolve, reject, timer });
+    });
+    conn.ws.send(JSON.stringify({ type: 'cmd', id: cmdId, action, params, ...(tabId != null ? { tabId } : {}) }));
+    try {
+      const result = await p;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(result));
+    } catch (e) {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: e.message }));
+    }
+    return;
+  }
+
   // POST /ext-command — forward a command to a connected browser extension.
   if (req.method === 'POST' && url.pathname === '/ext-command') {
     let body = ''; for await (const chunk of req) body += chunk;
