@@ -7,7 +7,7 @@
 //   ```
 //
 // Supported component types: Card, Stack, Heading, Text, Badge, Stat,
-// Table, List, Progress, Alert, Button, Divider, KeyValue, Grid, Code, Image
+// Table, List, Progress, Alert, Button, Divider, KeyValue, Grid, Code, Image, SVG
 //
 // Actions: copy_text, open_url, toggle_visible, setState
 
@@ -462,6 +462,45 @@ var _genUiComponents = {
     if (props.height) img.style.height = typeof props.height === 'number' ? props.height + 'px' : props.height;
     img.style.maxWidth = '100%';
     return img;
+  },
+
+  SVG: function(el, props, children, store) {
+    var wrap = document.createElement('div');
+    wrap.className = 'gui-svg-wrap';
+    if (props.width) wrap.style.width = typeof props.width === 'number' ? props.width + 'px' : props.width;
+    if (props.height) wrap.style.height = typeof props.height === 'number' ? props.height + 'px' : props.height;
+    wrap.style.maxWidth = '100%';
+    var markup = props.markup || props.svg || '';
+    if (!markup) {
+      wrap.textContent = '(no SVG markup)';
+      return wrap;
+    }
+    // Sanitize: strip <script> tags and on* event attributes
+    var safe = markup
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/\bon\w+\s*=\s*(["'])[^\1]*?\1/gi, '')
+      .replace(/\bon\w+\s*=\s*[^\s>\/]+/gi, '')
+      .replace(/href\s*=\s*(["'])javascript:[^\1]*?\1/gi, 'href="#"')
+      .replace(/xlink:href\s*=\s*(["'])javascript:[^\1]*?\1/gi, 'xlink:href="#"');
+    // Force viewBox/width/height overrides if provided
+    if (props.viewBox || props.width || props.height) {
+      safe = safe.replace(/<svg(\s[^>]*)?>/, function(m, attrs) {
+        var a = attrs || '';
+        if (props.viewBox) a = a.replace(/viewBox\s*=\s*(["'])[^\1]*?\1/i, '') + ' viewBox="' + props.viewBox + '"';
+        if (props.width)   a = a.replace(/\bwidth\s*=\s*(["'])[^\1]*?\1/i, '') + ' width="' + (typeof props.width === 'number' ? props.width + 'px' : props.width) + '"';
+        if (props.height)  a = a.replace(/\bheight\s*=\s*(["'])[^\1]*?\1/i, '') + ' height="' + (typeof props.height === 'number' ? props.height + 'px' : props.height) + '"';
+        return '<svg' + a + '>';
+      });
+    }
+    wrap.innerHTML = safe;
+    // Ensure the inline SVG scales to container
+    var svgEl = wrap.querySelector('svg');
+    if (svgEl) {
+      svgEl.style.maxWidth = '100%';
+      svgEl.style.height = 'auto';
+      svgEl.style.display = 'block';
+    }
+    return wrap;
   },
 
   Select: function(el, props, children, store) {
@@ -1014,6 +1053,8 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 | \`List\` | \`items\` (strings or \`{label,description}\`), \`ordered\` | Bullet/numbered list |
 | \`Progress\` | \`value\` (0–100), \`label\`, \`variant\` | Progress bar |
 | \`Code\` | \`code\`, \`language\` | Syntax-highlighted snippet |
+| \`Image\` | \`src\`, \`alt\`, \`width\`, \`height\` | Image from a URL or data URI |
+| \`SVG\` | \`markup\` (raw SVG string), \`width\`, \`height\`, \`viewBox\` | Inline SVG — pass the full \`<svg>…</svg>\` as \`markup\`. Use this to render icons, logos, diagrams, or any vector graphic the AI generates. Scripts and event handlers are sanitized automatically. |
 | \`Image\` | \`src\`, \`alt\`, \`width\`, \`height\` | Image |
 | \`Select\` | \`label\`, \`options\`, \`value\` | Dropdown |
 | \`Input\` | \`label\`, \`placeholder\`, \`type\`, \`value\` | Text input |

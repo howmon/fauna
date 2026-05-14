@@ -1387,6 +1387,8 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 | \`List\` | \`items\` (strings or \`{label,description}\`), \`ordered\` | Bullet/numbered list |
 | \`Progress\` | \`value\` (0–100), \`label\`, \`variant\` | Progress bar |
 | \`Code\` | \`code\`, \`language\` | Syntax-highlighted snippet |
+| \`Image\` | \`src\`, \`alt\`, \`width\`, \`height\` | Image from a URL or data URI |
+| \`SVG\` | \`markup\` (raw SVG string), \`width\`, \`height\`, \`viewBox\` | Inline SVG — pass the full \`<svg>…</svg>\` as \`markup\`. Use this to render icons, logos, diagrams, or any vector graphic the AI generates. Scripts and event handlers are sanitized automatically. |
 
 ### Actions (Button.action)
 \`setState\` · \`toggle_visible\` · \`copy_text\`
