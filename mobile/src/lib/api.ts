@@ -75,7 +75,8 @@ export async function getSystemContext() {
 }
 
 export async function getModels() {
-  return apiGet<any[]>('/api/models');
+  const data = await apiGet<{ models: any[] }>('/api/models');
+  return Array.isArray(data) ? data : (data?.models || []);
 }
 
 export async function getAgents() {
