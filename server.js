@@ -695,6 +695,19 @@ app.put('/api/projects/:id/sources/:srcId/file', (req, res) => {
   }
 });
 
+// Stream raw bytes for binary files (images, PDFs, video, audio, etc.)
+app.get('/api/projects/:id/sources/:srcId/raw', (req, res) => {
+  try {
+    const { fullPath, mime, size } = resolveSourceFilePath(req.params.id, req.params.srcId, req.query.path || '');
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Length', size);
+    res.setHeader('Cache-Control', 'no-store');
+    fs.createReadStream(fullPath).pipe(res);
+  } catch (e) {
+    res.status(404).json({ error: e.message });
+  }
+});
+
 // ── Contexts ──────────────────────────────────────────────────────────────
 
 app.get('/api/projects/:id/contexts', (req, res) => {
