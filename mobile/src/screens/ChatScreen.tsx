@@ -483,7 +483,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
-            style={[s.sendBtn, { backgroundColor: (input.trim() || pendingImages.length || pendingFiles.length) ? t.teal : t.surface3 }]}>
+            style={[s.sendBtn, { backgroundColor: (input.trim() || pendingImages.length || pendingFiles.length) ? t.teal : t.surface3 }]}
             onPress={handleSend}
             disabled={!input.trim() && pendingImages.length === 0 && pendingFiles.length === 0}
           >
