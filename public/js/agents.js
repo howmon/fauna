@@ -17,6 +17,8 @@ function loadAgentRules() {
 
 function saveAgentRules(rules) {
   localStorage.setItem(AGENT_RULES_KEY, JSON.stringify(rules.filter(function(r) { return !r.builtin; })));
+  // Sync to server so mobile apps see the latest rules
+  fetch('/api/preferences', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentRules: rules.filter(function(r) { return !r.builtin; }) }) }).catch(function() {});
 }
 
 function getAllAgentRules() {

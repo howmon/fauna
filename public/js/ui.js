@@ -899,6 +899,8 @@ function saveSysPromptGlobal() {
   localStorage.setItem('fauna-sys', val);
   var conv = getConv(state.currentId);
   if (conv) { conv.systemPrompt = val; saveConversations(); }
+  // Sync to server for mobile
+  fetch('/api/preferences', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ systemPrompt: val }) }).catch(function() {});
   showToast('System prompt saved globally');
 }
 

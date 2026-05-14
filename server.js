@@ -115,13 +115,18 @@ function extBrowserName(userAgent = '') {
 }
 
 function extStatusList() {
-  return Array.from(extClients.values()).map(client => ({
+  const direct = Array.from(extClients.values()).map(client => ({
     id: client.id,
     browser: client.browser,
     version: client.version,
     connectedAt: client.connectedAt,
     activeTab: client.activeTab || null,
   }));
+  // Include FaunaMCP standalone as a synthetic browser entry when it is reachable
+  if (faunaMcpBrowserConnected && !direct.some(c => c.id === 'faunamcp')) {
+    direct.push({ id: 'faunamcp', browser: 'FaunaMCP', version: null, connectedAt: faunaMcpConnectedAt, activeTab: null });
+  }
+  return direct;
 }
 
 function sendExtSse(event, data = {}) {
@@ -3004,6 +3009,9 @@ function addCustomMcpLog(serverId, severity, message) {
 
 // Auto-detection logic - checks for browser MCP at localhost:3341
 let autoDetectPollTimer = null;
+let faunaMcpBrowserConnected = false;  // true when FaunaMCP standalone is reachable
+let faunaMcpConnectedAt = null;        // ISO timestamp when first detected
+let bundledBrowserServerProc = null;   // spawned fallback process
 
 async function probeBrowserMcp() {
   try {
@@ -3021,11 +3029,46 @@ async function autoDetectBrowserMcp() {
   const servers = readCustomMcpServers();
   const existing = servers.find(s => s.url === 'http://localhost:3341/mcp' || s.id === 'fauna-browser-mcp-auto');
   
-  if (existing) return; // Already registered
-  
   const available = await probeBrowserMcp();
-  if (!available) return; // Not running
-  
+
+  // Update the SSE-visible connected flag
+  const wasConnected = faunaMcpBrowserConnected;
+  faunaMcpBrowserConnected = available;
+  if (available && !faunaMcpConnectedAt) faunaMcpConnectedAt = new Date().toISOString();
+  if (!available) faunaMcpConnectedAt = null;
+
+  // Broadcast a status-changed SSE when the connection state changes
+  if (available !== wasConnected) {
+    broadcastExtStatus();
+  }
+
+  if (!available) {
+    // Try to start the bundled browser server if not already running
+    if (!bundledBrowserServerProc) {
+      const bundledServer = path.join(__dirname, 'faunaMCP-main', 'browser-server', 'index.js');
+      if (fs.existsSync(bundledServer)) {
+        try {
+          const nodeBin = findNodeBinary ? findNodeBinary() : process.execPath;
+          if (nodeBin) {
+            bundledBrowserServerProc = spawn(nodeBin, [bundledServer], {
+              cwd: path.dirname(bundledServer),
+              stdio: 'ignore',
+              detached: false,
+              env: { ...process.env }
+            });
+            bundledBrowserServerProc.on('exit', () => { bundledBrowserServerProc = null; });
+            console.log('[custom-mcp] Started bundled browser server as fallback');
+          }
+        } catch (e) {
+          console.error('[custom-mcp] Failed to start bundled browser server:', e.message);
+        }
+      }
+    }
+    return;
+  }
+
+  if (existing) return; // Already registered
+
   // Auto-add it
   const newServer = {
     id: 'fauna-browser-mcp-auto',
@@ -3066,6 +3109,10 @@ function stopCustomMcpAutoDetection() {
   if (autoDetectPollTimer) {
     clearInterval(autoDetectPollTimer);
     autoDetectPollTimer = null;
+  }
+  if (bundledBrowserServerProc) {
+    try { bundledBrowserServerProc.kill(); } catch (_) {}
+    bundledBrowserServerProc = null;
   }
 }
 
@@ -5799,6 +5846,16 @@ app.post('/api/permissions/request-screen', async (req, res) => {
 // Shape: [ { id, name, icon, enabled, builtIn, groups: [{id, title, body, enabled}] } ]
 
 const MEMORY_FILE = path.join(CONFIG_DIR, 'memory.json');
+const PREFS_FILE  = path.join(CONFIG_DIR, 'preferences.json');
+
+function loadPrefs() {
+  try { return JSON.parse(fs.readFileSync(PREFS_FILE, 'utf8')); }
+  catch (_) { return { playbook: [], agentRules: [], systemPrompt: '' }; }
+}
+function savePrefs(patch) {
+  const current = loadPrefs();
+  fs.writeFileSync(PREFS_FILE, JSON.stringify({ ...current, ...patch }, null, 2));
+}
 
 function defaultFigmaGroups() {
   return [];
@@ -5851,6 +5908,19 @@ function saveMemoryCategories(categories) {
 // GET — return all categories
 app.get('/api/memory', (req, res) => {
   res.json(loadMemoryCategories());
+});
+
+// ── Preferences (playbook + agent rules + system prompt) ──────────────────
+app.get('/api/preferences', (req, res) => {
+  res.json(loadPrefs());
+});
+
+app.put('/api/preferences', (req, res) => {
+  const patch = req.body;
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch))
+    return res.status(400).json({ error: 'Expected object' });
+  savePrefs(patch);
+  res.json({ ok: true });
 });
 
 // PUT — save all categories (full replace)

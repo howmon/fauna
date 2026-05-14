@@ -11,6 +11,8 @@ function loadPlaybook() {
 }
 function savePlaybook(entries) {
   localStorage.setItem(PLAYBOOK_KEY, JSON.stringify(entries));
+  // Sync to server so mobile apps see the latest playbook
+  fetch('/api/preferences', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playbook: entries }) }).catch(function() {});
 }
 
 function togglePlaybook() {

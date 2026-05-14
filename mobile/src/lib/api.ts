@@ -98,7 +98,7 @@ export interface ChatEvent {
 
 export function streamChat(
   messages: Array<{ role: string; content: string | any[] }>,
-  options: { model?: string; agentName?: string } = {},
+  options: { model?: string; agentName?: string; systemPrompt?: string } = {},
   onEvent: (evt: ChatEvent) => void,
 ): AbortController {
   const controller = new AbortController();
@@ -284,4 +284,32 @@ export async function deleteConversation(id: string) {
 
 export async function saveConversation(id: string, conv: any) {
   return apiPut(`/api/conversations/${id}`, conv);
+}
+
+export async function updateConversation(id: string, updates: any) {
+  return apiPut(`/api/conversations/${id}`, updates);
+}
+
+// ── Preferences (playbook + agent rules + system prompt) ─────────────────
+
+export interface Preferences {
+  playbook: Array<{ id: string; title: string; body: string; enabled?: boolean; tags?: string[] }>;
+  agentRules: Array<{ id: string; text: string; enabled?: boolean }>;
+  systemPrompt: string;
+}
+
+export async function getPreferences(): Promise<Preferences> {
+  try { return await apiGet<Preferences>('/api/preferences'); }
+  catch (_) { return { playbook: [], agentRules: [], systemPrompt: '' }; }
+}
+
+// ── Conversation title generation ────────────────────────────────────────
+
+export async function getConversationTitle(
+  messages: Array<{ role: string; content: string }>
+): Promise<string> {
+  try {
+    const data = await apiPost<{ title: string }>('/api/conversation-title', { messages });
+    return data?.title || '';
+  } catch (_) { return ''; }
 }

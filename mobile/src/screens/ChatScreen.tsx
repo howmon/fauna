@@ -13,6 +13,31 @@ import * as api from '../lib/api';
 import MessageBubble, { type ParsedArtifact } from '../components/MessageBubble';
 import ArtifactPanel from '../components/ArtifactPanel';
 
+// ── System prompt helpers ─────────────────────────────────────────────────
+
+const BUILTIN_RULES = [
+  'Always write complete, executable shell commands inside code blocks — never output an empty code block for a command. Every code block must contain real commands.',
+  'Never simulate or invent command output. Write the actual command and let the app run it.',
+];
+
+function buildSystemPrompt(prefs: api.Preferences): string {
+  const parts: string[] = [];
+  if (prefs.systemPrompt?.trim()) parts.push(prefs.systemPrompt.trim());
+  const activeRules = [
+    ...BUILTIN_RULES.map((t, i) => `${i + 1}. ${t}`),
+    ...prefs.agentRules
+      .filter(r => r.enabled !== false)
+      .map((r, i) => `${BUILTIN_RULES.length + i + 1}. ${r.text}`),
+  ];
+  if (activeRules.length)
+    parts.push('## Agent Rules (follow these strictly in every response)\n' + activeRules.join('\n'));
+  const activePlaybook = prefs.playbook.filter(e => e.enabled !== false);
+  if (activePlaybook.length)
+    parts.push('## Playbook \u2014 Learned Instructions (apply these to relevant tasks)\n' +
+      activePlaybook.map((e, i) => `### ${i + 1}. ${e.title}\n${e.body}`).join('\n\n'));
+  return parts.join('\n\n');
+}
+
 interface MessageImage {
   uri: string;
   base64: string;
@@ -38,6 +63,8 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
   const [convTitle, setConvTitle] = useState('');
   const [agents, setAgents] = useState<any[]>([]);
   const [showAgentPicker, setShowAgentPicker] = useState(false);
+  const [models, setModels] = useState<any[]>([]);
+  const [showModelPicker, setShowModelPicker] = useState(false);
   const [pendingImages, setPendingImages] = useState<MessageImage[]>([]);
   const [activeArtifact, setActiveArtifact] = useState<ParsedArtifact | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -45,6 +72,8 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
   const msgIdRef = useRef(0);
   const convIdRef = useRef<string>('conv-' + Date.now());
   const messagesRef = useRef<Message[]>([]);
+  const systemPromptCtxRef = useRef<string>('');  // built from prefs, not reactive
+  const autoTitledRef = useRef(false);
 
   const nextId = () => `msg-${++msgIdRef.current}`;
 
@@ -85,6 +114,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
         setPendingImages([]);
         msgIdRef.current = 0;
         convIdRef.current = 'conv-' + Date.now();
+        autoTitledRef.current = false;
       };
     }
     return () => { if (newChatRef) newChatRef.current = null; };
@@ -93,6 +123,14 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
   // Load agents list
   useEffect(() => {
     api.getAgents().then(setAgents).catch(() => {});
+  }, []);
+
+  // Load models + preferences (playbook, agent rules, sys prompt) once on mount
+  useEffect(() => {
+    api.getModels().then((list: any[]) => setModels(list)).catch(() => {});
+    api.getPreferences().then(prefs => {
+      systemPromptCtxRef.current = buildSystemPrompt(prefs);
+    }).catch(() => {});
   }, []);
 
   // Pick up loaded conversation when Chat tab is focused
@@ -224,7 +262,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
 
     const controller = api.streamChat(
       history,
-      { model: model || undefined, agentName: agent || undefined },
+      { model: model || undefined, agentName: agent || undefined, systemPrompt: systemPromptCtxRef.current || undefined },
       (evt) => {
         switch (evt.type) {
           case 'content':
@@ -270,7 +308,23 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
 
           case 'done':
             setStreaming(false);
-            setTimeout(() => saveCurrentConv(messagesRef.current), 300);
+            setTimeout(async () => {
+              const msgs = messagesRef.current;
+              saveCurrentConv(msgs);
+              // Auto-title after the first exchange if not already titled
+              if (!autoTitledRef.current && msgs.length >= 2) {
+                autoTitledRef.current = true;
+                const titleMsgs = msgs
+                  .filter(m => m.role === 'user' || m.role === 'assistant')
+                  .slice(0, 4)
+                  .map(m => ({ role: m.role, content: m.content.slice(0, 300) }));
+                const title = await api.getConversationTitle(titleMsgs);
+                if (title) {
+                  setConvTitle(title);
+                  saveCurrentConv(msgs, title);
+                }
+              }
+            }, 300);
             break;
         }
       },
@@ -330,7 +384,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
         </View>
       )}
 
-      {/* Agent chip bar + image buttons */}
+      {/* Agent chip bar + model chip + image buttons */}
       <View style={[s.chipBar, { backgroundColor: t.surface, borderTopColor: t.border }]}>
         <TouchableOpacity style={[s.agentChip, { backgroundColor: agent ? t.teal : t.surface2 }]} onPress={() => setShowAgentPicker(true)}>
           <Text style={[s.agentChipText, { color: agent ? '#fff' : t.textMuted }]}>
@@ -342,6 +396,11 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
             <Text style={{ color: t.textMuted, fontSize: 14, marginLeft: 6, fontWeight: '600' }}>x</Text>
           </TouchableOpacity>
         ) : null}
+        <TouchableOpacity style={[s.agentChip, { backgroundColor: model ? t.surface3 : t.surface2, marginLeft: 4 }]} onPress={() => setShowModelPicker(true)}>
+          <Text style={[s.agentChipText, { color: t.textMuted }]} numberOfLines={1}>
+            {model ? model.split('/').pop()?.replace(/-\d{4}-\d{2}-\d{2}$/, '') : 'Model'}
+          </Text>
+        </TouchableOpacity>
         <View style={{ flex: 1 }} />
         <TouchableOpacity style={[s.iconBtn, { backgroundColor: t.surface2 }]} onPress={pickImage}>
           <Text style={{ fontSize: 13, color: t.textMuted, fontWeight: '600' }}>IMG</Text>
@@ -403,6 +462,39 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
               ))}
             </ScrollView>
             <TouchableOpacity style={[s.modalClose, { borderColor: t.border }]} onPress={() => setShowAgentPicker(false)}>
+              <Text style={{ color: t.textMuted, fontWeight: '600' }}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Model picker modal */}
+      <Modal visible={showModelPicker} transparent animationType="slide">
+        <View style={s.modalOverlay}>
+          <View style={[s.modalContent, { backgroundColor: t.surface }]}>
+            <Text style={[s.modalTitle, { color: t.text }]}>Select Model</Text>
+            <ScrollView style={{ maxHeight: 400 }}>
+              <TouchableOpacity
+                style={[s.agentItem, model === '' && { backgroundColor: t.surface2 }]}
+                onPress={() => { setModel(''); setShowModelPicker(false); }}
+              >
+                <Text style={[s.agentName, { color: t.text }]}>Default</Text>
+              </TouchableOpacity>
+              {models.map((m: any) => {
+                const id = typeof m === 'string' ? m : (m.id || m.name || String(m));
+                const label = typeof m === 'string' ? m : (m.displayName || m.name || m.id || String(m));
+                return (
+                  <TouchableOpacity
+                    key={id}
+                    style={[s.agentItem, model === id && { backgroundColor: t.surface2 }]}
+                    onPress={() => { setModel(id); setShowModelPicker(false); }}
+                  >
+                    <Text style={[s.agentName, { color: t.text }]}>{label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+            <TouchableOpacity style={[s.modalClose, { borderColor: t.border }]} onPress={() => setShowModelPicker(false)}>
               <Text style={{ color: t.textMuted, fontWeight: '600' }}>Cancel</Text>
             </TouchableOpacity>
           </View>
