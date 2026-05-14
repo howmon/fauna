@@ -119,8 +119,49 @@ function _guiDetectMediaType(src) {
 }
 
 function _guiExtractYouTubeId(url) {
-  var m = url.match(/(?:v=|youtu\.be\/|embed\/)([A-Za-z0-9_-]{11})/);
+  if (!url) return null;
+  var raw = String(url).trim();
+  var bare = raw.match(/^[A-Za-z0-9_-]{11}$/);
+  if (bare) return bare[0];
+
+  function fromUrl(value) {
+    var parsed;
+    try { parsed = new URL(value); }
+    catch (_) {
+      try { parsed = new URL('https://' + value.replace(/^\/\//, '')); }
+      catch (_) { return null; }
+    }
+
+    var host = parsed.hostname.replace(/^www\./, '').replace(/^m\./, '');
+    var parts = parsed.pathname.split('/').filter(Boolean);
+    var candidate = null;
+
+    if (host === 'youtu.be') candidate = parts[0];
+    if (!candidate && /(^|\.)youtube(?:-nocookie)?\.com$/.test(host)) {
+      candidate = parsed.searchParams.get('v') || parsed.searchParams.get('vi');
+      if (!candidate && ['embed', 'shorts', 'live', 'v', 'e'].indexOf(parts[0]) !== -1) candidate = parts[1];
+      if (!candidate && parts[0] === 'watch') candidate = parsed.searchParams.get('v');
+      if (!candidate && parsed.searchParams.get('u')) candidate = fromUrl(parsed.searchParams.get('u'));
+    }
+
+    return /^[A-Za-z0-9_-]{11}$/.test(candidate || '') ? candidate : null;
+  }
+
+  var id = fromUrl(raw);
+  if (id) return id;
+  var m = raw.match(/(?:v=|vi=|youtu\.be\/|embed\/|shorts\/|live\/|\/v\/|\/e\/)([A-Za-z0-9_-]{11})/);
   return m ? m[1] : null;
+}
+
+function _guiYouTubeThumbnailUrl(id) {
+  return id ? 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg' : '';
+}
+
+function _guiBuildMediaFallback(type) {
+  var fallback = document.createElement('div');
+  fallback.className = 'gui-playlist-thumb-icon';
+  fallback.innerHTML = '<i class="ti ' + _guiMediaIcon(type) + '"></i>';
+  return fallback;
 }
 
 function _guiMediaIcon(type) {
@@ -807,19 +848,29 @@ var _genUiComponents = {
         var thumbEl;
         if (type === 'youtube') {
           var ytId = _guiExtractYouTubeId(item.src || '');
-          thumbEl = document.createElement('img');
-          thumbEl.className = 'gui-playlist-thumb';
-          if (ytId) thumbEl.src = 'https://img.youtube.com/vi/' + ytId + '/mqdefault.jpg';
-          thumbEl.alt = '';
+          if (ytId) {
+            thumbEl = document.createElement('img');
+            thumbEl.className = 'gui-playlist-thumb';
+            thumbEl.src = item.thumbnail || _guiYouTubeThumbnailUrl(ytId);
+            thumbEl.alt = '';
+            thumbEl.onerror = function() {
+              var fallback = _guiBuildMediaFallback(type);
+              if (this.parentNode) this.parentNode.replaceChild(fallback, this);
+            };
+          } else {
+            thumbEl = _guiBuildMediaFallback(type);
+          }
         } else if ((type === 'image' || item.thumbnail) && (item.thumbnail || item.src)) {
           thumbEl = document.createElement('img');
           thumbEl.className = 'gui-playlist-thumb';
           thumbEl.src = item.thumbnail || item.src;
           thumbEl.alt = '';
+          thumbEl.onerror = function() {
+            var fallback = _guiBuildMediaFallback(type);
+            if (this.parentNode) this.parentNode.replaceChild(fallback, this);
+          };
         } else {
-          thumbEl = document.createElement('div');
-          thumbEl.className = 'gui-playlist-thumb-icon';
-          thumbEl.innerHTML = '<i class="ti ' + _guiMediaIcon(type) + '"></i>';
+          thumbEl = _guiBuildMediaFallback(type);
         }
         row.appendChild(thumbEl);
 
