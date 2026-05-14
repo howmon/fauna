@@ -3382,6 +3382,15 @@ setTimeout(() => {
   else figmaConnect();
   // Start custom MCP auto-detection
   startCustomMcpAutoDetection();
+  // Pre-warm Playwright MCP if available so it shows READY immediately
+  (async () => {
+    try {
+      await import('@playwright/mcp');
+      _playwrightMcpInstalled = true;
+      await _getPlaywrightMcpClient();
+      console.log('[playwright-mcp] pre-warmed on startup');
+    } catch (_) {}
+  })();
 }, 500);  // slight delay so the main server is fully up first
 
 function figmaSend(command, timeoutMs = 30000, targetFileKey = null) {
@@ -7017,6 +7026,20 @@ app.get('/api/playwright-mcp/status', async (req, res) => {
     try { await import('@playwright/mcp'); _playwrightMcpInstalled = true; } catch (_) { _playwrightMcpInstalled = false; }
   }
   res.json({ installed: _playwrightMcpInstalled, running: !!_playwrightMcpClient });
+});
+
+// Pre-warm the Playwright MCP client (no-op if already running)
+app.post('/api/playwright-mcp/start', async (req, res) => {
+  if (_playwrightMcpInstalled === null) {
+    try { await import('@playwright/mcp'); _playwrightMcpInstalled = true; } catch (_) { _playwrightMcpInstalled = false; }
+  }
+  if (!_playwrightMcpInstalled) return res.json({ ok: false, error: 'not-installed' });
+  try {
+    await _getPlaywrightMcpClient();
+    res.json({ ok: true, running: true });
+  } catch (e) {
+    res.json({ ok: false, error: e.message });
+  }
 });
 
 app.post('/api/playwright-mcp/call', express.json({ limit: '4mb' }), async (req, res) => {

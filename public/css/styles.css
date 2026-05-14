@@ -6689,6 +6689,7 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
   letter-spacing: .04em; padding: 2px 7px; border-radius: 20px;
 }
 .mcp-status-pill.active   { background: rgba(46,164,79,.15); color: #2ea44f; }
+.mcp-status-pill.ready    { background: rgba(9,105,218,.12); color: #0969da; }
 .mcp-status-pill.inactive { background: var(--fau-surface2); color: var(--fau-text-muted); }
 
 /* ── Automations Panel — Two-Panel Layout ─────────────────────────────── */
