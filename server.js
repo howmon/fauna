@@ -856,6 +856,18 @@ app.post('/api/mobile/pair/reset', (_req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── System info — used by mobile verifyConnection() ──────────────────────
+// Validates X-Fauna-Token against the stored mobile token.
+app.get('/api/system', (req, res) => {
+  let storedToken;
+  try { storedToken = JSON.parse(fs.readFileSync(MOBILE_TOKEN_FILE, 'utf8')).token; } catch (_) {}
+  const provided = (req.headers['x-fauna-token'] || '').trim();
+  if (!storedToken || !provided || provided !== storedToken) {
+    return res.status(401).json({ error: 'Invalid or missing token' });
+  }
+  res.json({ ok: true, hostname: os.hostname() });
+});
+
 // ── Tunnel (stub — no external tunnel dependency) ─────────────────────────
 app.post('/api/tunnel/start', (_req, res) => {
   res.status(501).json({ ok: false, error: 'Remote tunnel not configured' });
