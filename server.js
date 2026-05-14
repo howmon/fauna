@@ -307,32 +307,57 @@ app.get('/api/ext/events', (req, res) => {
   req.on('close', () => extEventClients.delete(res));
 });
 
+function openDirectExtClients() {
+  return Array.from(extClients.values()).filter(client => client.ws.readyState === 1);
+}
+
+function isRelayExtClientId(clientId) {
+  return clientId && (clientId === 'faunamcp' || clientId.startsWith('relay-'));
+}
+
+async function forwardExtCommandToRelay({ action, params = {}, tabId = null, clientId = null, timeout = 30000 }) {
+  const body = isRelayExtClientId(clientId) && clientId.startsWith('relay-')
+    ? JSON.stringify({ id: clientId, action, params, tabId: tabId ?? null, timeout })
+    : JSON.stringify({ action, params, tabId: tabId ?? null, timeout });
+  const endpoint = isRelayExtClientId(clientId) && clientId.startsWith('relay-')
+    ? '/ext-command-by-id'
+    : '/ext-command';
+  const r = await fetch(`http://localhost:3341${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+    signal: AbortSignal.timeout(Math.max(1000, Math.min(Number(timeout) || 30000, 120000)) + 5000),
+  });
+  const data = await r.json();
+  return { status: r.status, data };
+}
+
 app.post('/api/ext/command', async (req, res) => {
   const { action, params = {}, tabId, browser, clientId } = req.body || {};
   if (!action) return res.status(400).json({ ok: false, error: 'action required' });
 
   // Route FaunaMCP relay IDs (relay-*) or generic 'faunamcp' to the FaunaMCP relay server
-  if (clientId && (clientId === 'faunamcp' || clientId.startsWith('relay-'))) {
+  if (isRelayExtClientId(clientId)) {
     try {
-      const body = clientId.startsWith('relay-')
-        ? JSON.stringify({ id: clientId, action, params, tabId: tabId ?? null, timeout: 30000 })
-        : JSON.stringify({ action, params, tabId: tabId ?? null, timeout: 30000 });
-      const endpoint = clientId.startsWith('relay-') ? '/ext-command-by-id' : '/ext-command';
-      const r = await fetch(`http://localhost:3341${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body,
-        signal: AbortSignal.timeout(35000),
-      });
-      const data = await r.json();
-      return res.json(data);
+      const { status, data } = await forwardExtCommandToRelay({ action, params, tabId, clientId, timeout: req.body?.timeout || 30000 });
+      return res.status(status).json(data);
     } catch (e) {
       return res.status(503).json({ ok: false, error: e.message });
     }
   }
 
-  const clients = Array.from(extClients.values()).filter(client => client.ws.readyState === 1);
-  if (!clients.length) return res.status(503).json({ ok: false, error: 'Browser extension not connected' });
+  const clients = openDirectExtClients();
+  if (!clients.length) {
+    if (faunaMcpBrowserConnected) {
+      try {
+        const { status, data } = await forwardExtCommandToRelay({ action, params, tabId, timeout: req.body?.timeout || 30000 });
+        return res.status(status).json(data);
+      } catch (e) {
+        return res.status(503).json({ ok: false, error: e.message });
+      }
+    }
+    return res.status(503).json({ ok: false, error: 'Browser extension not connected' });
+  }
 
   const client = clientId
     ? clients.find(c => c.id === clientId) || clients[0]
@@ -360,11 +385,29 @@ app.post('/api/ext/command', async (req, res) => {
 });
 
 app.post('/api/ext/snapshot', async (req, res) => {
-  const clients = Array.from(extClients.values()).filter(client => client.ws.readyState === 1);
-  if (!clients.length) return res.status(503).json({ ok: false, error: 'Browser extension not connected' });
-
   const { full = false, tabId, browser, clientId } = req.body || {};
   const action = full ? 'snapshot-full' : 'snapshot';
+  if (isRelayExtClientId(clientId)) {
+    try {
+      const { status, data } = await forwardExtCommandToRelay({ action, params: { full }, tabId, clientId, timeout: req.body?.timeout || 30000 });
+      return res.status(status).json(data);
+    } catch (e) {
+      return res.status(503).json({ ok: false, error: e.message });
+    }
+  }
+
+  const clients = openDirectExtClients();
+  if (!clients.length) {
+    if (faunaMcpBrowserConnected) {
+      try {
+        const { status, data } = await forwardExtCommandToRelay({ action, params: { full }, tabId, timeout: req.body?.timeout || 30000 });
+        return res.status(status).json(data);
+      } catch (e) {
+        return res.status(503).json({ ok: false, error: e.message });
+      }
+    }
+    return res.status(503).json({ ok: false, error: 'Browser extension not connected' });
+  }
   const client = clientId
     ? clients.find(c => c.id === clientId) || clients[0]
     : tabId
