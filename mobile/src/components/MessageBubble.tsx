@@ -8,6 +8,7 @@ import {
 import Markdown from 'react-native-markdown-display';
 import * as Clipboard from 'expo-clipboard';
 import { dark, light, spacing, radius, type Theme } from '../lib/theme';
+import GenUIBlock from './GenUIBlock';
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -37,6 +38,33 @@ function stripActionBlocks(text: string): string {
 }
 
 // Chain-of-thought parsing removed — Markdown handles code blocks natively
+
+// ── Gen-UI extraction ────────────────────────────────────────────────────
+
+const GEN_UI_RE = /```gen[_-]ui\n([\s\S]*?)```/g;
+
+interface GenUISpec {
+  root: string;
+  state?: Record<string, any>;
+  elements: Record<string, any>;
+}
+
+function extractGenUI(text: string): GenUISpec[] {
+  const specs: GenUISpec[] = [];
+  const re = new RegExp(GEN_UI_RE.source, 'g');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    try {
+      const parsed = JSON.parse(m[1].trim());
+      if (parsed && parsed.root && parsed.elements) specs.push(parsed);
+    } catch {}
+  }
+  return specs;
+}
+
+function stripGenUI(text: string): string {
+  return text.replace(GEN_UI_RE, '').replace(/\n{3,}/g, '\n\n').trim();
+}
 
 // ── Artifact extraction (mirrors web UI) ─────────────────────────────────
 
@@ -81,6 +109,8 @@ export default function MessageBubble({ role, content, images, agentName, stream
 
   // ALL hooks must be called unconditionally (React rules of hooks)
   const artifacts = useMemo(() => (isUser || isTool) ? [] : extractArtifacts(content || ''), [content, isUser, isTool]);
+  const genUISpecs = useMemo(() => (isUser || isTool) ? [] : extractGenUI(content || ''), [content, isUser, isTool]);
+  const cleanedForMd = useMemo(() => (isUser || isTool) ? cleaned : stripGenUI(cleaned), [cleaned, isUser, isTool]);
 
   const mdStyles = useMemo(() => ({
     body: { color: t.text, fontSize: 15, lineHeight: 22 },
@@ -167,7 +197,12 @@ export default function MessageBubble({ role, content, images, agentName, stream
         {agentName || 'Fauna'}{streaming ? ' ...' : ''}
       </Text>
 
-      <Markdown style={mdStyles}>{cleaned}</Markdown>
+      <Markdown style={mdStyles}>{cleanedForMd}</Markdown>
+
+      {/* Gen-UI inline blocks */}
+      {genUISpecs.map((spec, i) => (
+        <GenUIBlock key={i} spec={spec} />
+      ))}
 
       {/* Artifact cards */}
       {artifacts.length > 0 && (

@@ -8,6 +8,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
+import * as DocumentPicker from 'expo-document-picker';
 import { dark, light, spacing, radius } from '../lib/theme';
 import * as api from '../lib/api';
 import MessageBubble, { type ParsedArtifact } from '../components/MessageBubble';
@@ -66,6 +67,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
   const [models, setModels] = useState<any[]>([]);
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [pendingImages, setPendingImages] = useState<MessageImage[]>([]);
+  const [pendingFiles, setPendingFiles] = useState<Array<{ name: string; content: string }>>([]);
   const [activeArtifact, setActiveArtifact] = useState<ParsedArtifact | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const flatListRef = useRef<FlatList>(null);
@@ -219,16 +221,49 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
     setPendingImages(prev => prev.filter((_, i) => i !== index));
   }
 
+  async function pickFile() {
+    const result = await DocumentPicker.getDocumentAsync({
+      type: '*/*',
+      copyToCacheDirectory: true,
+      multiple: true,
+    });
+    if (result.canceled) return;
+    const MAX_BYTES = 150_000; // ~150 KB text limit
+    for (const asset of result.assets) {
+      try {
+        const content = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.UTF8 });
+        const trimmed = content.length > MAX_BYTES ? content.slice(0, MAX_BYTES) + '\n… [truncated]' : content;
+        setPendingFiles(prev => [...prev, { name: asset.name, content: trimmed }]);
+      } catch {
+        // Binary file — attach name only so the model knows a file was provided
+        setPendingFiles(prev => [...prev, { name: asset.name, content: '[binary file — content not available as text]' }]);
+      }
+    }
+  }
+
+  function removeFile(index: number) {
+    setPendingFiles(prev => prev.filter((_, i) => i !== index));
+  }
+
   // ── Send message ───────────────────────────────────────────────────────
 
   function handleSend() {
     const text = input.trim();
-    if ((!text && pendingImages.length === 0) || streaming) return;
+    if ((!text && pendingImages.length === 0 && pendingFiles.length === 0) || streaming) return;
     setInput('');
     const images = [...pendingImages];
+    const files  = [...pendingFiles];
     setPendingImages([]);
+    setPendingFiles([]);
 
-    const userMsg: Message = { id: nextId(), role: 'user', content: text, images: images.length > 0 ? images : undefined };
+    // Append file contents as quoted blocks appended to the user text
+    const fileBlocks = files.map(f => {
+      const ext = f.name.split('.').pop() || '';
+      return `\`\`\`${ext}\n// File: ${f.name}\n${f.content}\n\`\`\``;
+    }).join('\n\n');
+    const fullText = fileBlocks ? (text ? `${text}\n\n${fileBlocks}` : fileBlocks) : text;
+
+    const userMsg: Message = { id: nextId(), role: 'user', content: fullText, images: images.length > 0 ? images : undefined };
     const assistantMsg: Message = { id: nextId(), role: 'assistant', content: '' };
 
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
@@ -250,14 +285,14 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
     // Build current message content — only the NEW message gets full base64
     if (images.length > 0) {
       const parts: any[] = [];
-      if (text) parts.push({ type: 'text', text });
+      if (fullText) parts.push({ type: 'text', text: fullText });
       images.forEach(img => parts.push({
         type: 'image_url',
         image_url: { url: `data:${img.mime};base64,${img.base64}`, detail: 'low' }
       }));
       history.push({ role: 'user', content: parts });
     } else {
-      history.push({ role: 'user', content: text });
+      history.push({ role: 'user', content: fullText });
     }
 
     const controller = api.streamChat(
@@ -368,6 +403,22 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
         onContentSizeChange={scrollToEnd}
       />
 
+      {/* Pending file chips */}
+      {pendingFiles.length > 0 && (
+        <View style={[s.fileChipBar, { backgroundColor: t.surface }]}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingHorizontal: spacing.sm }}>
+            {pendingFiles.map((f, i) => (
+              <View key={i} style={[s.fileChip, { backgroundColor: t.surface2 }]}>
+                <Text style={[s.fileChipName, { color: t.text }]} numberOfLines={1}>{f.name}</Text>
+                <TouchableOpacity onPress={() => removeFile(i)} style={s.fileChipRemove}>
+                  <Text style={{ color: t.textMuted, fontSize: 12, fontWeight: '700' }}>×</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+
       {/* Pending image preview strip */}
       {pendingImages.length > 0 && (
         <View style={[s.imagePreviewBar, { backgroundColor: t.surface }]}>
@@ -402,6 +453,9 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
           </Text>
         </TouchableOpacity>
         <View style={{ flex: 1 }} />
+        <TouchableOpacity style={[s.iconBtn, { backgroundColor: t.surface2 }]} onPress={pickFile}>
+          <Text style={{ fontSize: 15, color: t.textMuted }}>📎</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={[s.iconBtn, { backgroundColor: t.surface2 }]} onPress={pickImage}>
           <Text style={{ fontSize: 13, color: t.textMuted, fontWeight: '600' }}>IMG</Text>
         </TouchableOpacity>
@@ -429,9 +483,9 @@ export default function ChatScreen({ loadedConvRef, newChatRef }: { loadedConvRe
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
-            style={[s.sendBtn, { backgroundColor: (input.trim() || pendingImages.length) ? t.teal : t.surface3 }]}
+            style={[s.sendBtn, { backgroundColor: (input.trim() || pendingImages.length || pendingFiles.length) ? t.teal : t.surface3 }]}>
             onPress={handleSend}
-            disabled={!input.trim() && pendingImages.length === 0}
+            disabled={!input.trim() && pendingImages.length === 0 && pendingFiles.length === 0}
           >
             <Text style={s.sendBtnText}>↑</Text>
           </TouchableOpacity>
@@ -524,6 +578,11 @@ const s = StyleSheet.create({
   textInput: { flex: 1, borderRadius: radius.md, padding: spacing.md, fontSize: 15, maxHeight: 120, marginRight: spacing.sm },
   sendBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   sendBtnText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  // File chip strip
+  fileChipBar: { paddingVertical: 6 },
+  fileChip: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 16, maxWidth: 200 },
+  fileChipName: { fontSize: 12, fontWeight: '500', flex: 1 },
+  fileChipRemove: { marginLeft: 6, padding: 2 },
   // Image preview strip
   imagePreviewBar: { paddingVertical: 6 },
   imagePreviewWrap: { position: 'relative' },
