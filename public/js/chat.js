@@ -268,6 +268,9 @@ async function sendMessage(opts) {
         if (att.mime) meta.push('mime=' + att.mime);
         if (att.size) meta.push('bytes=' + att.size);
         if (att.warning) meta.push('warning=' + att.warning);
+        if (att.browser) meta.push('browser=' + att.browser);
+        if (att.tabId) meta.push('tabId=' + att.tabId);
+        if (att.clientId) meta.push('clientId=' + att.clientId);
         var header = '// ' + label + '\n// Ref: ' + ref + (meta.length ? '\n// Meta: ' + meta.join(', ') : '');
         content += '\n\n```\n' + header + '\n' + (att.content || '') + '\n```';
       }
@@ -292,6 +295,10 @@ async function sendMessage(opts) {
         name: a.name,
         content: a.type === 'image' ? undefined : a.content,
         sourceUri: a.sourceUri,
+        extSource: a.extSource,
+        browser: a.browser,
+        tabId: a.tabId,
+        clientId: a.clientId,
         size: a.size,
         warning: a.warning,
         base64: a.type === 'image' ? a.base64 : undefined,

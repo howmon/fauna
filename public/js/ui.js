@@ -1337,6 +1337,10 @@ function _restoreHistoryAttachments(attachments) {
         mime: a.mime || undefined,
         content: a.content || undefined,
         sourceUri: a.sourceUri || undefined,
+        extSource: a.extSource || undefined,
+        browser: a.browser || undefined,
+        tabId: a.tabId || undefined,
+        clientId: a.clientId || undefined,
         size: a.size || undefined,
         warning: a.warning || undefined
       });

@@ -1429,13 +1429,20 @@ async function executeExtAction(action) {
   if (!action || typeof action.action !== 'string' || !action.action.trim()) {
     throw new Error('Invalid browser action payload');
   }
+  var target = _getLastBrowserExtTarget();
+  var tabId = action.tabId || target.tabId || null;
+  var clientId = action.clientId || target.clientId || null;
+  var browser = action.browser || target.browser || null;
   var endpoint;
   if (action.action === 'snapshot' || action.action === 'snapshot-full') {
     endpoint = '/api/ext/snapshot';
+    var snapBody = { full: action.action === 'snapshot-full', tabId: tabId };
+    if (clientId) snapBody.clientId = clientId;
+    else if (browser) snapBody.browser = browser;
     var snapR = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ full: action.action === 'snapshot-full', tabId: action.tabId || null })
+      body: JSON.stringify(snapBody)
     });
     var snapD = await snapR.json();
     if (!snapR.ok || !snapD.ok) throw new Error(snapD.error || 'Snapshot failed');
@@ -1443,14 +1450,37 @@ async function executeExtAction(action) {
   }
 
   // All other actions go through /api/ext/command
+  var body = { action: action.action, params: action, tabId: tabId };
+  if (clientId) body.clientId = clientId;
+  else if (browser) body.browser = browser;
   var r = await fetch('/api/ext/command', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: action.action, params: action, tabId: action.tabId || null })
+    body: JSON.stringify(body)
   });
   var d = await r.json();
   if (!r.ok) throw new Error(d.error || 'Extension command failed');
   return d;
+}
+
+function _getLastBrowserExtTarget() {
+  var conv = typeof getConv === 'function' ? getConv(state.currentId) : null;
+  if (!conv || !Array.isArray(conv.messages)) return {};
+  for (var i = conv.messages.length - 1; i >= 0; i--) {
+    var atts = conv.messages[i] && conv.messages[i].attachments;
+    if (!Array.isArray(atts)) continue;
+    for (var j = atts.length - 1; j >= 0; j--) {
+      var att = atts[j];
+      if (att && att.extSource && (att.tabId || att.clientId || att.browser)) {
+        return {
+          tabId: att.tabId || null,
+          clientId: att.clientId || null,
+          browser: att.browser || null
+        };
+      }
+    }
+  }
+  return {};
 }
 
 function extractAndRenderBrowserExtActions(html, messageEl, isHistoryLoad, convId) {
@@ -1830,7 +1860,7 @@ var _extConnectedBrowsers = []; // [{id, browser, version, connectedAt}]
                     (d.text  || '');
       if (typeof addAttachment === 'function') {
         addAttachment({ type: 'url', extSource: 'page', name: bName + ': ' + short,
-                        content: content, sourceUri: d.url });
+                        content: content, sourceUri: d.url, tabId: d.tabId, clientId: msg.id, browser: bName });
       }
       _showExtToast('Page from ' + bName + ' added — type your question');
     }
@@ -1856,7 +1886,7 @@ var _extConnectedBrowsers = []; // [{id, browser, version, connectedAt}]
       if (typeof addAttachment === 'function') {
         addAttachment({ type: 'url', extSource: 'selection',
                         name: 'Selection from ' + bName + domain,
-                        content: selContent, sourceUri: d.url });
+                        content: selContent, sourceUri: d.url, tabId: d.tabId, clientId: msg.id, browser: bName });
       }
       _showExtToast('Selection from ' + bName + ' added');
     }
@@ -2097,7 +2127,7 @@ async function extGrabPage(tabId, browser, clientId) {
                   (d.content || d.text || '');
 
     if (typeof addAttachment === 'function') {
-      addAttachment({ type: 'url', extSource: 'page', name: prefix + short, content: content, sourceUri: d.url });
+      addAttachment({ type: 'url', extSource: 'page', name: prefix + short, content: content, sourceUri: d.url, tabId: tabId, clientId: clientId, browser: browser });
     }
     if (typeof showToast === 'function') showToast('Page content added to context');
   } catch (e) {
