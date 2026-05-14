@@ -1333,6 +1333,83 @@ app.get('/api/models', async (req, res) => {
 // ── Figma layout knowledge ───────────────────────────────────────────────
 // Injected into the system prompt when Figma MCP is enabled.
 
+// ── Gen-UI catalog prompt ────────────────────────────────────────────────
+// Injected server-side so all clients (desktop + mobile) can generate gen-ui.
+const GEN_UI_CATALOG_PROMPT = `
+## Output format decision — artifact pane vs inline gen-ui vs plain text
+
+Use this decision table every time you produce structured or visual output. Pick **exactly one** format.
+
+### Use \`\`\`artifact:<type>:<title>\`\`\` (artifact pane) when:
+- The output is a **file or document** the user will save, copy, or reuse (code, HTML, Markdown, JSON, CSV)
+- The output is **long** (more than ~40 lines of content)
+- The user's request contains words like *create*, *write*, *generate*, *build*, *draft* referencing a file or doc
+- The output is runnable/executable (shell script, HTML page, full component)
+- Artifact types: \`html\`, \`markdown\`, \`json\`, \`csv\`, \`code\`, \`text\`, \`files\`, \`summary\`
+
+### Use a \`\`\`gen-ui\`\`\` block (inline in chat) when:
+- The output is a **snapshot** of current data: metrics, status, comparison, leaderboard
+- The output is a **compact interactive widget**: tabs, toggle, progress tracker, key-value list
+- The user asked for a *dashboard*, *scorecard*, *summary card*, *checklist*, or *status overview*
+- The content is **ephemeral** — not something the user needs to save or edit
+- The output would be ≤ 30 logical elements and primarily visual/structured rather than prose
+
+### Use **plain Markdown prose** when:
+- The answer is conversational, explanatory, or a list of bullet points
+- No special formatting would add clarity
+- Never wrap plain explanations in gen-ui or artifact blocks
+
+### Priority rule
+Artifact > gen-ui > prose. If in doubt between artifact and gen-ui, ask: *would the user want to copy or save this later?* If yes → artifact. If it's just a visual aid for this moment → gen-ui.
+
+---
+
+## Generative UI (gen-ui inline blocks)
+Render interactive UI components inline using a \`gen-ui\` code block containing a valid JSON flat spec.
+
+**Spec shape:** \`{ "root": "id", "elements": { "id": { "type", "props", "children": [] } }, "state": {} }\`
+
+### Available components
+| Type | Key props | Notes |
+|------|-----------|-------|
+| \`Card\` | \`title\`, \`description\` | Container with optional header |
+| \`Stack\` | \`direction\` ("vertical"/"horizontal"), \`gap\`, \`align\`, \`justify\`, \`wrap\` | Flex layout |
+| \`Grid\` | \`columns\` (number), \`gap\` | CSS grid layout |
+| \`Heading\` | \`text\`, \`level\` (1–6) | Heading element |
+| \`Text\` | \`text\`, \`muted\`, \`strong\`, \`small\`, \`code\` | Paragraph |
+| \`Badge\` | \`label\`, \`variant\` ("default"/"success"/"warning"/"error"/"info") | Colored badge |
+| \`Stat\` | \`value\`, \`label\`, \`format\` ("currency"/"percent"/"number"), \`trend\` | Metric display |
+| \`Alert\` | \`title\`, \`message\`, \`variant\` ("info"/"success"/"warning"/"error") | Callout banner |
+| \`Button\` | \`label\`, \`variant\` ("default"/"primary"/"danger"), \`action\`, \`actionParams\`, \`icon\`, \`disabled\` | Clickable button |
+| \`Divider\` | \`label\` (optional) | Horizontal rule |
+| \`KeyValue\` | \`key\`, \`value\` | Label: value row |
+| \`Table\` | \`columns\` (strings or \`{header,width,align}\`), \`rows\` (2-D array) | Data table |
+| \`List\` | \`items\` (strings or \`{label,description}\`), \`ordered\` | Bullet/numbered list |
+| \`Progress\` | \`value\` (0–100), \`label\`, \`variant\` | Progress bar |
+| \`Code\` | \`code\`, \`language\` | Syntax-highlighted snippet |
+
+### Actions (Button.action)
+\`setState\` · \`toggle_visible\` · \`copy_text\`
+
+### Dynamic props
+- \`{ "$state": "/path" }\` — read state value
+- \`{ "$template": "Hello \${/name}!" }\` — string interpolation
+
+### Example — dashboard card
+\`\`\`gen-ui
+{
+  "root": "card",
+  "elements": {
+    "card": { "type": "Card", "props": { "title": "Q1 Metrics" }, "children": ["grid"] },
+    "grid": { "type": "Grid", "props": { "columns": 3, "gap": 12 }, "children": ["s1","s2","s3"] },
+    "s1": { "type": "Stat", "props": { "value": "128400", "label": "Revenue", "format": "currency", "trend": 12 }, "children": [] },
+    "s2": { "type": "Stat", "props": { "value": "94", "label": "NPS", "format": "number", "trend": -2 }, "children": [] },
+    "s3": { "type": "Stat", "props": { "value": "73", "label": "CSAT", "format": "percent", "trend": 5 }, "children": [] }
+  }
+}
+\`\`\`
+`.trim();
+
 // ── Browser panel + app building context ────────────────────────────────
 // Always injected so the AI knows how to use the built-in browser.
 const BROWSER_BUILD_CONTEXT = `
@@ -1461,6 +1538,7 @@ app.post('/api/chat', async (req, res) => {
       isDelegation ? '' : projectCtx,
       factsCtx,
       isDelegation ? '' : BROWSER_BUILD_CONTEXT,
+      isDelegation ? '' : GEN_UI_CATALOG_PROMPT,
       contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '',
       figmaFilesCtx
     ].filter(Boolean).join('\n');
