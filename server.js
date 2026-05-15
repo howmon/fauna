@@ -5,6 +5,7 @@
 
 import express    from 'express';
 import OpenAI     from 'openai';
+import localtunnel from 'localtunnel';
 import { execSync, exec as _exec, execFile as _execFile, spawn } from 'child_process';
 import crypto     from 'crypto';
 import path       from 'path';
@@ -864,6 +865,14 @@ app.delete('/api/providers/:provider/key', (req, res) => {
 
 // ── Mobile pairing ────────────────────────────────────────────────────────
 const MOBILE_TOKEN_FILE = path.join(FAUNA_CONFIG_DIR, 'mobile-token.json');
+let _mobileTunnel = null;
+let _mobileTunnelUrl = null;
+
+function mobilePairUrl({ host, port, token, name, tunnelUrl }) {
+  const params = new URLSearchParams({ host, port: String(port), token, name });
+  if (tunnelUrl) params.set('tunnel', tunnelUrl);
+  return `fauna://pair?${params.toString()}`;
+}
 
 function getMobilePairData() {
   let token;
@@ -873,7 +882,7 @@ function getMobilePairData() {
     fs.mkdirSync(FAUNA_CONFIG_DIR, { recursive: true });
     fs.writeFileSync(MOBILE_TOKEN_FILE, JSON.stringify({ token }));
   }
-  const PORT_NUM = 3737;
+  const PORT_NUM = PORT;
   const ifaces = os.networkInterfaces();
   const ips = [];
   for (const iface of Object.values(ifaces)) {
@@ -882,8 +891,9 @@ function getMobilePairData() {
     }
   }
   const primary = ips[0] || '127.0.0.1';
-  const primaryQr = `fauna://pair?host=${primary}&port=${PORT_NUM}&token=${token}`;
-  return { token, ips, port: PORT_NUM, hostname: os.hostname(), primaryQr, qrImage: null, tunnelUrl: null };
+  const hostname = os.hostname();
+  const primaryQr = mobilePairUrl({ host: primary, port: PORT_NUM, token, name: hostname, tunnelUrl: _mobileTunnelUrl });
+  return { token, ips, port: PORT_NUM, hostname, primaryQr, qrImage: null, tunnelUrl: _mobileTunnelUrl };
 }
 
 app.get('/api/mobile/pair', async (_req, res) => {
@@ -916,12 +926,44 @@ app.get('/api/system', (req, res) => {
   res.json({ ok: true, hostname: os.hostname() });
 });
 
-// ── Tunnel (stub — no external tunnel dependency) ─────────────────────────
-app.post('/api/tunnel/start', (_req, res) => {
-  res.status(501).json({ ok: false, error: 'Remote tunnel not configured' });
+// ── Tunnel (remote mobile access) ─────────────────────────────────────────
+app.get('/api/tunnel/status', (_req, res) => {
+  res.json({ ok: true, active: !!_mobileTunnelUrl, url: _mobileTunnelUrl });
+});
+
+app.post('/api/tunnel/start', async (_req, res) => {
+  try {
+    if (_mobileTunnelUrl) return res.json({ ok: true, url: _mobileTunnelUrl, active: true });
+
+    const tunnelOptions = { port: PORT };
+    const subdomain = process.env.FAUNA_MOBILE_TUNNEL_SUBDOMAIN || process.env.FAUNA_TUNNEL_SUBDOMAIN || '';
+    if (subdomain) tunnelOptions.subdomain = subdomain;
+
+    _mobileTunnel = await localtunnel(tunnelOptions);
+    _mobileTunnelUrl = _mobileTunnel.url;
+
+    _mobileTunnel.on('close', () => {
+      _mobileTunnel = null;
+      _mobileTunnelUrl = null;
+    });
+    _mobileTunnel.on('error', (err) => {
+      console.warn('[mobile tunnel] error:', err.message);
+    });
+
+    res.json({ ok: true, url: _mobileTunnelUrl, active: true });
+  } catch (e) {
+    _mobileTunnel = null;
+    _mobileTunnelUrl = null;
+    res.status(500).json({ ok: false, error: e.message || 'Failed to start remote tunnel' });
+  }
 });
 app.post('/api/tunnel/stop', (_req, res) => {
-  res.json({ ok: true });
+  try {
+    if (_mobileTunnel) _mobileTunnel.close();
+  } catch (_) {}
+  _mobileTunnel = null;
+  _mobileTunnelUrl = null;
+  res.json({ ok: true, active: false, url: null });
 });
 
 // ── Enterprise auth (stub — enterprise-auth.js not wired) ────────────────
