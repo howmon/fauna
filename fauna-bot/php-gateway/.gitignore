@@ -1,0 +1,4 @@
+config.php
+.env
+storage/*.json
+!storage/.gitignore

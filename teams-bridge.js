@@ -1,6 +1,10 @@
 // ── Teams Self-Chat Bridge — Poll self-chat, forward to Fauna, respond ───
 // Uses Microsoft Graph API to poll the user's "self-chat" (48:notes),
 // forwards new messages to Fauna's AI, and sends responses back.
+//
+// Also supports proactive push: the bot relay (fauna-bot/) can call
+// proactiveNotify(conversationRef, text) to send a message from the
+// desktop into a Teams conversation at any time.
 
 import fs from 'fs';
 import path from 'path';
@@ -14,6 +18,10 @@ let _timer = null;
 let _lastMessageId = null;
 let _aiCaller = null;     // function(prompt, model) → string
 let _notifier = null;     // function(title, body)
+
+// Stored conversation references for proactive messages
+// { userId → conversationReference }
+const _conversationRefs = new Map();
 
 const DEFAULTS = {
   enabled: false,
@@ -191,4 +199,52 @@ export function testConnection() {
     status: _settings.status,
     error: _settings.lastError,
   }));
+}
+
+// ── Proactive push support ─────────────────────────────────────────────────
+// The fauna-bot relay server can store conversation references and ask the
+// desktop to push a notification into a specific Teams conversation.
+
+/**
+ * Store a conversation reference so the bot relay can later push messages
+ * into that conversation without the user sending a message first.
+ * @param {string} userId  Teams user ID
+ * @param {object} ref     Bot Framework conversation reference
+ */
+export function storeConversationRef(userId, ref) {
+  _conversationRefs.set(userId, ref);
+}
+
+/**
+ * Retrieve a stored conversation reference by user ID.
+ * @param {string} userId
+ * @returns {object|undefined}
+ */
+export function getConversationRef(userId) {
+  return _conversationRefs.get(userId);
+}
+
+/**
+ * Send a proactive message into a Teams conversation using the Graph API.
+ * This is a lightweight push that does NOT require the Bot Framework adapter —
+ * it uses the same access token as the self-chat bridge.
+ *
+ * @param {string} chatId   Teams chat thread ID
+ * @param {string} text     Message text to send
+ */
+export async function proactiveNotify(chatId, text) {
+  try {
+    await _sendMessage(chatId, `[Fauna] ${text}`);
+  } catch (err) {
+    console.error('[teams-bridge] proactiveNotify failed:', err.message);
+    throw err;
+  }
+}
+
+/**
+ * Return all stored conversation refs (for relay server to iterate).
+ * @returns {Map<string, object>}
+ */
+export function getAllConversationRefs() {
+  return _conversationRefs;
 }

@@ -1,0 +1,82 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "1.0.0",
+  "id": "{{MICROSOFT_APP_ID}}",
+  "name": {
+    "short": "Fauna",
+    "full": "Fauna AI Assistant"
+  },
+  "description": {
+    "short": "Your Fauna AI assistant, everywhere",
+    "full": "Chat with Fauna from Teams — on your phone, tablet, or desktop. Fauna connects to your running desktop instance and gives you full access to AI chat, shell execution, browser control, agents, tasks, and more. Requires the Fauna desktop app running on your computer."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#10B981",
+  "developer": {
+    "name": "Solomon Abey",
+    "websiteUrl": "https://github.com/howmon/fauna",
+    "privacyUrl": "https://go.microsoft.com/fwlink/?LinkId=521839",
+    "termsOfUseUrl": "https://go.microsoft.com/fwlink/?LinkID=206977"
+  },
+  "bots": [
+    {
+      "botId": "{{MICROSOFT_APP_ID}}",
+      "scopes": ["personal", "groupChat"],
+      "supportsFiles": true,
+      "isNotificationOnly": false,
+      "commandLists": [
+        {
+          "scopes": ["personal", "groupChat"],
+          "commands": [
+            {
+              "title": "help",
+              "description": "Show everything Fauna can do"
+            },
+            {
+              "title": "status",
+              "description": "Check if Fauna desktop is connected"
+            },
+            {
+              "title": "shell",
+              "description": "Run a shell command on your desktop"
+            },
+            {
+              "title": "browse",
+              "description": "Open a URL in Fauna's browser"
+            },
+            {
+              "title": "screenshot",
+              "description": "Take a screenshot of your desktop"
+            },
+            {
+              "title": "agents",
+              "description": "List your installed Fauna agents"
+            },
+            {
+              "title": "task",
+              "description": "Create a background task"
+            },
+            {
+              "title": "models",
+              "description": "List available AI models"
+            },
+            {
+              "title": "playbook",
+              "description": "Show your Fauna playbook instructions"
+            },
+            {
+              "title": "pair",
+              "description": "Get a QR code to pair with Fauna desktop"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": ["{{BOT_DOMAIN}}"]
+}

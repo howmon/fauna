@@ -230,11 +230,12 @@ async function loadTeamsSettings() {
     document.getElementById('teams-enabled').checked = s.enabled;
     document.getElementById('teams-interval').value = s.pollIntervalSeconds || 10;
     document.getElementById('teams-status').textContent = s.status || 'disconnected';
-    // Don't pre-fill token for security
     _teamsLoaded = true;
   } catch (e) {
     console.error('Failed to load teams settings:', e);
   }
+  // Also load bot server config
+  loadBotConfig();
 }
 
 async function saveTeamsSettings() {
@@ -268,6 +269,126 @@ async function testTeamsConnection() {
   } catch (e) {
     showToast('Error: ' + e.message);
   }
+}
+
+// ── Teams Bot Server ───────────────────────────────────────────────────
+
+async function loadBotConfig() {
+  try {
+    var cfg = await (await fetch('/api/teams-bot/config')).json();
+    document.getElementById('tbot-mode').value         = cfg.mode        || 'gateway';
+    document.getElementById('tbot-app-id').value       = cfg.appId       || '';
+    document.getElementById('tbot-app-password').value = '';  // never pre-fill password
+    document.getElementById('tbot-tenant-id').value    = cfg.tenantId    || '';
+    document.getElementById('tbot-subdomain').value    = cfg.subdomain   || 'fauna-bot';
+    document.getElementById('tbot-gateway-url').value  = cfg.gatewayUrl  || 'https://bot.pointlabel.com';
+    document.getElementById('tbot-gateway-route-key').value = cfg.gatewayRouteKey || '';
+    document.getElementById('tbot-gateway-admin-token').value = '';
+    document.getElementById('tbot-auto-start').checked = cfg.autoStart   || false;
+    _syncBotAdvancedFields();
+  } catch (e) { console.error('Failed to load bot config:', e); }
+  _refreshBotStatus();
+}
+
+async function saveBotConfig() {
+  var pw = document.getElementById('tbot-app-password').value;
+  var gatewayToken = document.getElementById('tbot-gateway-admin-token').value;
+  var body = {
+    mode:      document.getElementById('tbot-mode').value,
+    appId:     document.getElementById('tbot-app-id').value.trim(),
+    tenantId:  document.getElementById('tbot-tenant-id').value.trim(),
+    subdomain: document.getElementById('tbot-subdomain').value.trim() || 'fauna-bot',
+    gatewayUrl: document.getElementById('tbot-gateway-url').value.trim() || 'https://bot.pointlabel.com',
+    gatewayRouteKey: document.getElementById('tbot-gateway-route-key').value.trim(),
+    autoStart: document.getElementById('tbot-auto-start').checked,
+  };
+  if (pw) body.appPassword = pw;
+  if (gatewayToken) body.gatewayAdminToken = gatewayToken;
+  await fetch('/api/teams-bot/config', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  showToast('Bot config saved');
+}
+
+async function startTeamsBot() {
+  var pw = document.getElementById('tbot-app-password').value;
+  var gatewayToken = document.getElementById('tbot-gateway-admin-token').value;
+  var body = {
+    mode:      document.getElementById('tbot-mode').value,
+    appId:     document.getElementById('tbot-app-id').value.trim(),
+    tenantId:  document.getElementById('tbot-tenant-id').value.trim(),
+    subdomain: document.getElementById('tbot-subdomain').value.trim() || 'fauna-bot',
+    gatewayUrl: document.getElementById('tbot-gateway-url').value.trim() || 'https://bot.pointlabel.com',
+    gatewayRouteKey: document.getElementById('tbot-gateway-route-key').value.trim(),
+    autoStart: document.getElementById('tbot-auto-start').checked,
+  };
+  if (pw) body.appPassword = pw;
+  if (gatewayToken) body.gatewayAdminToken = gatewayToken;
+  document.getElementById('tbot-status').textContent = 'starting…';
+  try {
+    await fetch('/api/teams-bot/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    // Poll until running (tunnel URL appears)
+    var attempts = 0;
+    var poll = setInterval(async () => {
+      await _refreshBotStatus();
+      var st = document.getElementById('tbot-status').textContent;
+      if (st === 'running' || st === 'error' || ++attempts > 30) clearInterval(poll);
+    }, 2000);
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+async function stopTeamsBot() {
+  await fetch('/api/teams-bot/stop', { method: 'POST' });
+  _refreshBotStatus();
+}
+
+async function _refreshBotStatus() {
+  try {
+    var s = await (await fetch('/api/teams-bot/status')).json();
+    document.getElementById('tbot-status').textContent = s.status || 'stopped';
+
+    var running = s.status === 'running';
+    document.getElementById('tbot-start-btn').style.display  = running ? 'none'  : '';
+    document.getElementById('tbot-stop-btn').style.display   = running ? ''      : 'none';
+    document.getElementById('tbot-download-btn').style.display = s.downloadUrl ? '' : 'none';
+    if (s.downloadUrl) document.getElementById('tbot-download-btn').href = s.downloadUrl;
+
+    var epRow = document.getElementById('tbot-endpoint-row');
+    if (s.messagingEndpoint) {
+      epRow.style.display = 'flex';
+      document.getElementById('tbot-endpoint').textContent = s.messagingEndpoint;
+      document.getElementById('tbot-endpoint-label').textContent = s.mode === 'gateway'
+        ? 'Gateway messaging endpoint configured on the shared Azure Bot:'
+        : 'Paste this into Azure Portal → Azure Bot → Configuration → Messaging endpoint:';
+    } else {
+      epRow.style.display = 'none';
+    }
+  } catch (e) { /* bot server not running */ }
+}
+
+function copyBotEndpoint() {
+  var ep = document.getElementById('tbot-endpoint').textContent;
+  if (ep) { navigator.clipboard.writeText(ep); showToast('Copied!'); }
+}
+
+function _syncBotAdvancedFields() {
+  var pairs = [
+    ['tbot-mode', 'tbot-mode-advanced'],
+    ['tbot-app-id', 'tbot-app-id-advanced'],
+    ['tbot-tenant-id', 'tbot-tenant-id-advanced'],
+    ['tbot-gateway-url', 'tbot-gateway-url-advanced'],
+  ];
+  pairs.forEach(function (pair) {
+    var source = document.getElementById(pair[0]);
+    var target = document.getElementById(pair[1]);
+    if (source && target) target.value = source.value || '';
+  });
+  var advancedPw = document.getElementById('tbot-app-password-advanced');
+  if (advancedPw) advancedPw.value = '';
 }
 
 // ── Settings page loading hooks ────────────────────────────────────────
