@@ -30,6 +30,7 @@ const PORT            = process.env.PORT             || 3978;
 const APP_ID          = process.env.MicrosoftAppId       || '';
 const APP_PASSWORD    = process.env.MicrosoftAppPassword  || '';
 const APP_TENANT_ID   = process.env.MicrosoftAppTenantId  || '';  // required for Single Tenant
+const TEAMS_APP_ID    = process.env.FAUNA_TEAMS_APP_ID    || '';
 const BOT_DOMAIN      = process.env.BOT_DOMAIN            || `localhost:${PORT}`;
 const GATEWAY_MODE    = process.env.FAUNA_GATEWAY_MODE === '1';
 const GATEWAY_SECRET  = process.env.FAUNA_GATEWAY_SECRET || '';
@@ -107,6 +108,7 @@ app.get('/download-app', (_req, res) => {
     if (!APP_ID) return res.status(400).json({ error: 'MicrosoftAppId not configured' });
 
     const manifest = readFileSync(join(BOT_ROOT, 'manifest.json'), 'utf8')
+      .replace(/\{\{TEAMS_APP_ID\}\}/g, TEAMS_APP_ID || stableTeamsAppId(APP_ID))
       .replace(/\{\{MICROSOFT_APP_ID\}\}/g, APP_ID)
       .replace(/\{\{BOT_DOMAIN\}\}/g, domain);
 
@@ -222,4 +224,19 @@ function _verifyGatewaySignature(req) {
   const expectedBuf = Buffer.from(expected, 'hex');
   return providedBuf.length === expectedBuf.length
     && crypto.timingSafeEqual(providedBuf, expectedBuf);
+}
+
+function stableTeamsAppId(appId) {
+  const hexChars = crypto
+    .createHash('sha256')
+    .update(`fauna-teams-app:${appId}`)
+    .digest('hex')
+    .slice(0, 32)
+    .split('');
+
+  hexChars[12] = '4';
+  hexChars[16] = ((parseInt(hexChars[16], 16) & 0x3) | 0x8).toString(16);
+
+  const hex = hexChars.join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }

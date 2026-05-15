@@ -222,7 +222,7 @@ function forward_to_target(array $route, string $rawBody): array
         'http' => [
             'method' => 'POST',
             'header' => "Content-Type: application/json\r\nX-Fauna-Gateway: bot.pointlabel.com\r\nX-Fauna-Gateway-Signature: sha256={$signature}\r\n",
-            'content' => $rawBody,
+            'supportsFiles' => false,
             'timeout' => 65,
             'ignore_errors' => true,
         ],
@@ -251,7 +251,6 @@ function send_connector_activity(array $config, array $sourceActivity, array $re
     $serviceUrl = rtrim((string)($sourceActivity['serviceUrl'] ?? ''), '/');
     $conversationId = (string)($sourceActivity['conversation']['id'] ?? '');
     if ($serviceUrl === '' || $conversationId === '') throw new RuntimeException('Activity is missing serviceUrl or conversation.id');
-
     $replyActivity['type'] = $replyActivity['type'] ?? 'message';
     $replyActivity['replyToId'] = $sourceActivity['id'] ?? null;
 
@@ -335,8 +334,8 @@ function send_teams_zip(array $config): void
     $zip = new ZipArchive();
     if ($zip->open($zipPath, ZipArchive::OVERWRITE) !== true) throw new RuntimeException('Could not create app zip');
     $zip->addFromString('manifest.json', json_encode(build_manifest($config), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-    $zip->addFromString('color.png', generate_png(192, 192, [16, 185, 129, 255]));
-    $zip->addFromString('outline.png', generate_png(32, 32, [255, 255, 255, 255]));
+    $zip->addFromString('color.png', read_icon_asset('color.png', generate_png(192, 192, [16, 185, 129, 255])));
+    $zip->addFromString('outline.png', read_icon_asset('outline.png', generate_png(32, 32, [255, 255, 255, 255])));
     $zip->close();
 
     header('Content-Type: application/zip');
@@ -345,6 +344,16 @@ function send_teams_zip(array $config): void
     readfile($zipPath);
     unlink($zipPath);
     exit;
+}
+
+function read_icon_asset(string $filename, string $fallback): string
+{
+    $path = __DIR__ . '/' . $filename;
+    if (is_file($path)) {
+        $contents = file_get_contents($path);
+        if ($contents !== false && $contents !== '') return $contents;
+    }
+    return $fallback;
 }
 
 function build_manifest(array $config): array
@@ -373,7 +382,7 @@ function build_manifest(array $config): array
         'bots' => [[
             'botId' => $appId,
             'scopes' => ['personal', 'groupChat'],
-            'supportsFiles' => true,
+            'supportsFiles' => false,
             'isNotificationOnly' => false,
             'commandLists' => [[
                 'scopes' => ['personal', 'groupChat'],
@@ -386,7 +395,11 @@ function build_manifest(array $config): array
                 ],
             ]],
         ]],
-        'permissions' => ['identity', 'messageTeamMembers'],
+        'permissions' => ['identity'],
+        'webApplicationInfo' => [
+            'id' => $appId,
+            'resource' => 'api://botid-' . $appId,
+        ],
         'validDomains' => [$host],
     ];
 }

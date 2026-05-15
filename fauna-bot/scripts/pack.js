@@ -1,31 +1,33 @@
 #!/usr/bin/env node
 /**
  * Fauna Teams Bot — packaging script
- * Usage: node scripts/pack.js <APP_ID> <BOT_DOMAIN>
- * Example: node scripts/pack.js abc123 abc123.ngrok-free.app
+ * Usage: node scripts/pack.js <APP_ID> <BOT_DOMAIN> [TEAMS_APP_ID]
+ * Example: node scripts/pack.js abc123 abc123.ngrok-free.app 11111111-1111-4111-8111-111111111111
  *
  * Produces: fauna-teams-bot.zip  (sideload this in Teams)
  */
 
 import fs   from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 
-const [,, APP_ID, BOT_DOMAIN] = process.argv;
+const [,, APP_ID, BOT_DOMAIN, TEAMS_APP_ID] = process.argv;
 
 if (!APP_ID || !BOT_DOMAIN) {
-  console.error('\nUsage: node scripts/pack.js <APP_ID> <BOT_DOMAIN>\n');
-  console.error('Example: node scripts/pack.js abc123 abc123.ngrok-free.app\n');
+  console.error('\nUsage: node scripts/pack.js <APP_ID> <BOT_DOMAIN> [TEAMS_APP_ID]\n');
+  console.error('Example: node scripts/pack.js abc123 abc123.ngrok-free.app 11111111-1111-4111-8111-111111111111\n');
   process.exit(1);
 }
 
 // Read and fill manifest placeholders
 const manifestSrc = fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8');
 const filled = manifestSrc
+  .replace(/\{\{TEAMS_APP_ID\}\}/g, TEAMS_APP_ID || stableTeamsAppId(APP_ID))
   .replace(/\{\{MICROSOFT_APP_ID\}\}/g, APP_ID)
   .replace(/\{\{BOT_DOMAIN\}\}/g, BOT_DOMAIN);
 
@@ -50,3 +52,18 @@ console.log(`\nNext steps:`);
 console.log(`  1. Teams → Apps → Manage your apps → Upload an app → fauna-teams-bot.zip`);
 console.log(`  2. Make sure your bot server is running: npm start`);
 console.log(`  3. Make sure ngrok is tunneling port 3978\n`);
+
+function stableTeamsAppId(appId) {
+  const hexChars = crypto
+    .createHash('sha256')
+    .update(`fauna-teams-app:${appId}`)
+    .digest('hex')
+    .slice(0, 32)
+    .split('');
+
+  hexChars[12] = '4';
+  hexChars[16] = ((parseInt(hexChars[16], 16) & 0x3) | 0x8).toString(16);
+
+  const hex = hexChars.join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
