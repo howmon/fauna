@@ -164,6 +164,112 @@ function _guiBuildMediaFallback(type) {
   return fallback;
 }
 
+var _guiVideoThumbCache = Object.create(null);
+
+function _guiCaptureVideoThumbnail(src) {
+  return new Promise(function(resolve, reject) {
+    if (!src) { reject(new Error('Missing video source')); return; }
+    var video = document.createElement('video');
+    var settled = false;
+    var timer = setTimeout(function() { finish(null); }, 8000);
+
+    function cleanup() {
+      clearTimeout(timer);
+      video.onloadedmetadata = null;
+      video.onloadeddata = null;
+      video.onseeked = null;
+      video.onerror = null;
+      video.removeAttribute('src');
+      try { video.load(); } catch (_) {}
+    }
+
+    function finish(value) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (value) resolve(value);
+      else reject(new Error('Unable to capture video thumbnail'));
+    }
+
+    function drawFrame() {
+      try {
+        var w = video.videoWidth || 640;
+        var h = video.videoHeight || 360;
+        if (!w || !h) { finish(null); return; }
+        var canvas = document.createElement('canvas');
+        var maxW = 480;
+        var scale = Math.min(1, maxW / w);
+        canvas.width = Math.max(1, Math.round(w * scale));
+        canvas.height = Math.max(1, Math.round(h * scale));
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        finish(canvas.toDataURL('image/jpeg', 0.78));
+      } catch (_) {
+        finish(null);
+      }
+    }
+
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+    video.onerror = function() { finish(null); };
+    video.onseeked = drawFrame;
+    video.onloadeddata = function() {
+      if (video.readyState >= 2 && (!isFinite(video.duration) || video.currentTime > 0)) drawFrame();
+    };
+    video.onloadedmetadata = function() {
+      var duration = isFinite(video.duration) ? video.duration : 0;
+      var target = duration > 1 ? Math.min(3, Math.max(0.25, duration * 0.08)) : 0;
+      if (target > 0 && Math.abs(video.currentTime - target) > 0.05) {
+        try { video.currentTime = target; }
+        catch (_) { drawFrame(); }
+      } else {
+        drawFrame();
+      }
+    };
+    video.src = src;
+    try { video.load(); } catch (_) {}
+  });
+}
+
+function _guiBuildVideoThumbnail(src, type) {
+  if (!src) return _guiBuildMediaFallback(type);
+  var cached = _guiVideoThumbCache[src];
+  if (typeof cached === 'string') {
+    var img = document.createElement('img');
+    img.className = 'gui-playlist-thumb';
+    img.src = cached;
+    img.alt = '';
+    return img;
+  }
+
+  var thumb = document.createElement('div');
+  thumb.className = 'gui-playlist-thumb gui-playlist-video-thumb';
+  thumb.innerHTML = '<i class="ti ' + _guiMediaIcon(type) + '"></i>';
+
+  function apply(dataUrl) {
+    if (!dataUrl) return;
+    thumb.classList.add('ready');
+    thumb.style.backgroundImage = 'url("' + dataUrl + '")';
+    thumb.innerHTML = '';
+  }
+
+  if (cached && typeof cached.then === 'function') {
+    cached.then(apply).catch(function(){});
+  } else if (cached !== null) {
+    _guiVideoThumbCache[src] = _guiCaptureVideoThumbnail(src).then(function(dataUrl) {
+      _guiVideoThumbCache[src] = dataUrl;
+      return dataUrl;
+    }).catch(function(err) {
+      _guiVideoThumbCache[src] = null;
+      throw err;
+    });
+    _guiVideoThumbCache[src].then(apply).catch(function(){});
+  }
+
+  return thumb;
+}
+
 function _guiMediaIcon(type) {
   if (type === 'youtube' || type === 'video') return 'ti-video';
   if (type === 'audio') return 'ti-music';
@@ -869,6 +975,8 @@ var _genUiComponents = {
             var fallback = _guiBuildMediaFallback(type);
             if (this.parentNode) this.parentNode.replaceChild(fallback, this);
           };
+        } else if (type === 'video') {
+          thumbEl = _guiBuildVideoThumbnail(item.src || '', type);
         } else {
           thumbEl = _guiBuildMediaFallback(type);
         }
@@ -914,7 +1022,11 @@ var _genUiComponents = {
     syncListVisibility();
 
     var body = document.createElement('div');
-    var layout = props.layout || 'stack';
+    var hasVideoItems = items.some(function(item) {
+      var itemType = getItemType(item);
+      return itemType === 'video' || itemType === 'youtube';
+    });
+    var layout = props.layout || (hasVideoItems ? 'side' : 'stack');
     body.className = 'gui-playlist-body' + (layout === 'side' ? ' side' : layout === 'grid' ? ' grid' : '');
     body.appendChild(playerArea);
     body.appendChild(listArea);

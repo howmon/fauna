@@ -3156,7 +3156,11 @@ webview {
 .gui-playlist-player .gui-player-audio  { width: 100%; }
 .gui-playlist-player .gui-player-image  { width: 100%; border-radius: var(--radius-sm); max-height: 320px; object-fit: contain; background: #000; }
 .gui-playlist-list { max-height: 320px; overflow-y: auto; background: var(--fau-surface2); border-top: 1px solid var(--fau-border); }
-.gui-playlist-body.side .gui-playlist-list { flex: 0 0 220px; max-height: 420px; border-top: none; border-left: 1px solid var(--fau-border); }
+.gui-playlist-body.side .gui-playlist-list { flex: 0 0 min(340px, 38%); max-height: 420px; border-top: none; border-left: 1px solid var(--fau-border); }
+@media (max-width: 760px) {
+  .gui-playlist-body.side { flex-direction: column; }
+  .gui-playlist-body.side .gui-playlist-list { flex: none; width: 100%; max-height: 320px; border-top: 1px solid var(--fau-border); border-left: none; }
+}
 /* Grid layout — 3 tiles per row */
 .gui-playlist-body.grid .gui-playlist-list {
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
@@ -3181,6 +3185,7 @@ webview {
 .gui-playlist-item:hover    { background: var(--fau-surface3,var(--fau-hover)); }
 .gui-playlist-item.active   { background: rgba(var(--accent-rgb,99,102,241),.12); }
 .gui-playlist-thumb { width: 60px; height: 36px; object-fit: cover; border-radius: 3px; flex-shrink: 0; background: var(--fau-border); }
+.gui-playlist-video-thumb { display: flex; align-items: center; justify-content: center; background-color: var(--fau-surface); background-position: center; background-size: cover; color: var(--fau-text-muted); font-size: 18px; }
 .gui-playlist-thumb-icon { width: 60px; height: 36px; display: flex; align-items: center; justify-content: center; background: var(--fau-surface); border-radius: 3px; flex-shrink: 0; color: var(--fau-text-muted); font-size: 18px; }
 .gui-playlist-item-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .gui-playlist-item-title { font-size: 12.5px; font-weight: 500; color: var(--fau-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
