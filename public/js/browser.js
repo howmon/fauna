@@ -462,9 +462,6 @@ function _mapBrowserActionToExtAction(action) {
     'screenshot': 'snapshot'
   };
   mapped.action = actionMap[mapped.action] || mapped.action;
-  if (typeof mapped.index === 'number' && mapped.tabId == null && (mapped.action === 'tab:switch' || mapped.action === 'tab:close')) {
-    mapped.tabId = mapped.index;
-  }
   return mapped;
 }
 
@@ -1447,6 +1444,7 @@ async function executeExtAction(action) {
   if (!action || typeof action.action !== 'string' || !action.action.trim()) {
     throw new Error('Invalid browser action payload');
   }
+  action = _mapBrowserActionToExtAction(action) || action;
   var target = _getLastBrowserExtTarget();
   var tabId = action.tabId || target.tabId || null;
   var clientId = action.clientId || target.clientId || null;
@@ -1557,10 +1555,16 @@ function extractAndRenderBrowserExtActions(html, messageEl, isHistoryLoad, convI
     });
     if (allJsonl) {
       lines.forEach(function(l) {
-        try { parsedLines.push({ raw: l, action: JSON.parse(l) }); } catch(_) {}
+        try {
+          var parsedAction = _mapBrowserActionToExtAction(JSON.parse(l));
+          if (parsedAction) parsedLines.push({ raw: l, action: parsedAction });
+        } catch(_) {}
       });
     } else {
-      try { parsedLines.push({ raw: raw, action: JSON.parse(raw) }); } catch(e) {
+      try {
+        var parsedAction = _mapBrowserActionToExtAction(JSON.parse(raw));
+        if (parsedAction) parsedLines.push({ raw: raw, action: parsedAction });
+      } catch(e) {
         dbg('browser-ext-action parse error: ' + e.message, 'err');
         pre.remove(); return;
       }
