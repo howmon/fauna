@@ -1909,16 +1909,15 @@ app.post('/api/chat', async (req, res) => {
           if (guardResult.action === 'inject_snapshot') {
             send({ type: 'tool_call', name: 'browser_snapshot', label: 'Taking browser snapshot (auto)' });
             try {
-              let snapClient = await _getPlaywrightMcpClient();
               let snapResult;
               try {
-                snapResult = await snapClient.callTool({ name: 'browser_snapshot', arguments: {} });
+                snapResult = await _callPlaywrightMcpTool('browser_snapshot', {});
               } catch (connErr) {
                 // Auto-reconnect once if the subprocess died
                 if (/closed|disconnect|EPIPE|EOF/i.test(connErr.message)) {
                   _playwrightMcpClient = null;
-                  snapClient = await _getPlaywrightMcpClient();
-                  snapResult = await snapClient.callTool({ name: 'browser_snapshot', arguments: {} });
+                  _playwrightMcpClientPromise = null;
+                  snapResult = await _callPlaywrightMcpTool('browser_snapshot', {});
                 } else { throw connErr; }
               }
               const snapContent = Array.isArray(snapResult?.content)
@@ -7208,30 +7207,84 @@ app.post('/api/browser-ext/download', async (req, res) => {
 
 // ── Playwright MCP status / call ──────────────────────────────────────────
 let _playwrightMcpClient = null;
+let _playwrightMcpClientPromise = null;
 let _playwrightMcpInstalled = null;
+let _playwrightMcpCallQueue = Promise.resolve();
+let _playwrightMcpLastLaunch = null;
+let _playwrightMcpLastStderr = '';
 
 async function _getPlaywrightMcpClient() {
   if (_playwrightMcpClient) return _playwrightMcpClient;
+  if (_playwrightMcpClientPromise) return _playwrightMcpClientPromise;
+
+  _playwrightMcpClientPromise = (async () => {
   // Spawn @playwright/mcp as a subprocess and connect via MCP SDK stdio transport
   const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
   const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
-  const cliPath = path.join(path.dirname(_require.resolve('@playwright/mcp')), 'cli.js');
+  let cliPath = path.join(path.dirname(_require.resolve('@playwright/mcp')), 'cli.js');
+  if (cliPath.includes('app.asar')) {
+    const unpackedCliPath = cliPath.replace('app.asar', 'app.asar.unpacked');
+    if (fs.existsSync(unpackedCliPath)) cliPath = unpackedCliPath;
+  }
   const nodeBin = findNodeBinary() || process.execPath;
   const spawnEnv = { ...process.env };
+  spawnEnv.PATH = IS_WIN
+    ? (spawnEnv.PATH || '')
+    : `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${spawnEnv.PATH || ''}`;
   if (process.versions?.electron && nodeBin === process.execPath) {
     spawnEnv.ELECTRON_RUN_AS_NODE = '1';
   }
+  _playwrightMcpLastStderr = '';
+  _playwrightMcpLastLaunch = { nodeBin, cliPath, cwd: path.dirname(cliPath) };
   const transport = new StdioClientTransport({
     command: nodeBin,
     args: [cliPath],
     env: spawnEnv,
+    cwd: path.dirname(cliPath),
+    stderr: 'pipe',
+  });
+  transport.stderr?.on('data', chunk => {
+    _playwrightMcpLastStderr = (_playwrightMcpLastStderr + chunk.toString()).slice(-4000);
   });
   const client = new Client({ name: 'fauna-playwright', version: '1.0.0' });
   await client.connect(transport);
   _playwrightMcpClient = client;
   // Clean up on close
-  client.onclose = () => { _playwrightMcpClient = null; };
+  client.onclose = () => { _playwrightMcpClient = null; _playwrightMcpClientPromise = null; };
   return client;
+  })();
+
+  try {
+    return await _playwrightMcpClientPromise;
+  } catch (e) {
+    _playwrightMcpClient = null;
+    _playwrightMcpClientPromise = null;
+    throw e;
+  }
+}
+
+function _formatPlaywrightMcpError(e) {
+  const parts = [e.message || String(e)];
+  if (_playwrightMcpLastStderr) parts.push('stderr: ' + _playwrightMcpLastStderr.trim());
+  if (_playwrightMcpLastLaunch) parts.push('launch: ' + JSON.stringify(_playwrightMcpLastLaunch));
+  return parts.join('\n');
+}
+
+async function _callPlaywrightMcpTool(tool, args = {}) {
+  const run = async () => {
+    const client = await _getPlaywrightMcpClient();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 90000);
+    try {
+      return await client.callTool({ name: tool, arguments: args }, undefined, { signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
+  const queued = _playwrightMcpCallQueue.catch(() => {}).then(run);
+  _playwrightMcpCallQueue = queued.then(() => {}, () => {});
+  return queued;
 }
 
 app.get('/api/playwright-mcp/status', async (req, res) => {
@@ -7262,25 +7315,18 @@ app.post('/api/playwright-mcp/call', express.json({ limit: '4mb' }), async (req,
   // Try up to 2 attempts — auto-reconnect if first attempt fails with connection error
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const client = await _getPlaywrightMcpClient();
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 90000);
-      let result;
-      try {
-        result = await client.callTool({ name: tool, arguments: args }, undefined, { signal: controller.signal });
-      } finally {
-        clearTimeout(timeout);
-      }
+      const result = await _callPlaywrightMcpTool(tool, args);
       const content = Array.isArray(result?.content) ? result.content : [{ type: 'text', text: JSON.stringify(result) }];
       return res.json({ ok: true, content });
     } catch (e) {
       // Reset stale client so next attempt spawns a fresh subprocess
       _playwrightMcpClient = null;
+      _playwrightMcpClientPromise = null;
       if (attempt === 0 && /closed|disconnect|EPIPE|EOF/i.test(e.message)) {
         console.log('[playwright-mcp] connection lost, retrying…');
         continue;
       }
-      return res.status(500).json({ ok: false, error: e.message });
+      return res.status(500).json({ ok: false, error: _formatPlaywrightMcpError(e) });
     }
   }
 });
