@@ -111,10 +111,16 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
       '<div class="wf-preview">' + escHtml(preview) + ((content||'').length > 300 ? '\n…' : '') + '</div>';
     pre.parentNode.replaceChild(widget, pre);
 
+    function updateWriteFileStatus(className, text) {
+      if (!widget.isConnected) return false;
+      widget.className = className;
+      var statusEl = widget.querySelector('.wf-status') || document.getElementById(widgetId + '-status');
+      if (statusEl) statusEl.textContent = text;
+      return true;
+    }
+
     if (isHistoryLoad) {
-      widget.className = 'wf-block done';
-      var statusEl = widget.querySelector('.wf-status');
-      if (statusEl) statusEl.textContent = lines + ' lines';
+      updateWriteFileStatus('wf-block done', lines + ' lines');
       return;
     }
 
@@ -143,9 +149,7 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
         body: JSON.stringify(addActiveAgentContext({ path: filePath, old_string: oldStr, new_string: newStr, cwd: _convCwd[wid] || undefined }))
       }).then(function(r) { return r.json(); }).then(function(d) {
         if (!d.ok) throw new Error(d.error || 'replace failed');
-        var statusEl = document.getElementById(widgetId + '-status');
-        widget.className = 'wf-block done';
-        statusEl.textContent = 'replaced';
+        updateWriteFileStatus('wf-block done', 'replaced');
         dbg('replace-string: patched → ' + d.path, 'ok');
         if (storeId) delete _wfContentStore[storeId];
         trackConvFile(wid, d.path, d.bytes);
@@ -158,10 +162,8 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
         body: JSON.stringify(addActiveAgentContext({ path: filePath, patch: content, cwd: _convCwd[wid] || undefined }))
       }).then(function(r) { return r.json(); }).then(function(d) {
         if (!d.ok) throw new Error(d.error || 'patch failed');
-        var statusEl = document.getElementById(widgetId + '-status');
-        widget.className = 'wf-block done';
         var n = d.results ? d.results.length : 0;
-        statusEl.textContent = n + ' file' + (n !== 1 ? 's' : '') + ' patched';
+        updateWriteFileStatus('wf-block done', n + ' file' + (n !== 1 ? 's' : '') + ' patched');
         dbg('apply-patch: ' + n + ' file(s) patched', 'ok');
         if (storeId) delete _wfContentStore[storeId];
         if (d.results) d.results.forEach(function(r) { if (r.op !== 'delete') trackConvFile(wid, r.path, r.bytes); });
@@ -176,9 +178,7 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
         body: JSON.stringify(writeBody)
       }).then(function(r) { return r.json(); }).then(function(d) {
         if (!d.ok) throw new Error(d.error || 'write failed');
-        var statusEl = document.getElementById(widgetId + '-status');
-        widget.className = 'wf-block done';
-        statusEl.textContent = (d.bytes / 1024).toFixed(1) + ' KB ' + (isAppend ? 'total' : 'written');
+        updateWriteFileStatus('wf-block done', (d.bytes / 1024).toFixed(1) + ' KB ' + (isAppend ? 'total' : 'written'));
         dbg('write-file: ' + (isAppend ? 'appended' : 'wrote') + ' → ' + d.path, 'ok');
         if (storeId) delete _wfContentStore[storeId];
         trackConvFile(wid, d.path, d.bytes);
@@ -190,9 +190,7 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
     }
 
     promise.catch(function(e) {
-      widget.className = 'wf-block err';
-      var statusEl = document.getElementById(widgetId + '-status');
-      if (statusEl) statusEl.textContent = 'Error: ' + e.message;
+      updateWriteFileStatus('wf-block err', 'Error: ' + e.message);
       dbg((isReplace ? 'replace-string' : isPatch ? 'apply-patch' : 'write-file') + ' error: ' + e.message, 'err');
     });
   });

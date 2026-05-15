@@ -267,9 +267,11 @@ async function _runTroubleshootForEmptyResult(widget, command, result) {
 
 function _showInlinePermissionPrompt(execId, widget, resultEl, runBtn, feedBtn, command, explanation, opts) {
   // Hide the result area inside the accordion — we'll show the prompt outside
-  resultEl.style.display = 'none';
-  resultEl.className = 'shell-exec-result';
-  resultEl.innerHTML = '';
+  if (resultEl) {
+    resultEl.style.display = 'none';
+    resultEl.className = 'shell-exec-result';
+    resultEl.innerHTML = '';
+  }
 
   // Remove any previous prompt for this execId
   var prev = document.getElementById('perm-' + execId);
@@ -292,11 +294,13 @@ function _showInlinePermissionPrompt(execId, widget, resultEl, runBtn, feedBtn, 
 
   // Insert after the closest accordion (cot-block) or after the widget itself
   var anchor = widget.closest('.cot-block') || widget;
-  anchor.parentNode.insertBefore(card, anchor.nextSibling);
+  if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(card, anchor.nextSibling);
 
   widget._permOpts = opts;
-  runBtn.disabled = false;
-  runBtn.innerHTML = '<i class="ti ti-player-play"></i> Run';
+  if (runBtn) {
+    runBtn.disabled = false;
+    runBtn.innerHTML = '<i class="ti ti-player-play"></i> Run';
+  }
   scrollBottom();
 }
 
@@ -306,6 +310,15 @@ async function _handlePermission(execId, decision) {
   var code = widget.dataset.code;
   var resultEl = document.getElementById(execId + '-result');
   var runBtn = document.getElementById(execId + '-run');
+  if (!resultEl) {
+    resultEl = widget.querySelector('.shell-exec-result');
+    if (!resultEl) {
+      resultEl = document.createElement('div');
+      resultEl.className = 'shell-exec-result';
+      resultEl.id = execId + '-result';
+      widget.appendChild(resultEl);
+    }
+  }
 
   // Remove the standalone permission card
   var card = document.getElementById('perm-' + execId);
@@ -395,7 +408,13 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
 
     // Auto-run after a short delay if enabled
     if (autoRun) {
-      setTimeout(function() { runShellExec(execId, { autoFeed: true }); }, 350);
+      setTimeout(function() {
+        if (!widget.isConnected || !document.querySelector('[data-exec-id="' + execId + '"]')) {
+          dbg('runShellExec: auto-run skipped because widget was re-rendered ' + execId, 'warn');
+          return;
+        }
+        runShellExec(execId, { autoFeed: true });
+      }, 350);
     }
     // If depth limit hit, notify AI once so it stops looping
     if (depthLimited && targetConv && !targetConv._depthLimitNotified) {
@@ -495,6 +514,15 @@ async function runShellExec(execId, opts) {
   var runBtn   = document.getElementById(execId + '-run');
   var feedBtn  = document.getElementById(execId + '-feed');
   var resultEl = document.getElementById(execId + '-result');
+  if (!resultEl) {
+    resultEl = widget.querySelector('.shell-exec-result');
+    if (!resultEl) {
+      resultEl = document.createElement('div');
+      resultEl.className = 'shell-exec-result';
+      resultEl.id = execId + '-result';
+      widget.appendChild(resultEl);
+    }
+  }
 
   dbg('▶ runShellExec: ' + code.slice(0,80), 'cmd');
 
@@ -508,14 +536,18 @@ async function runShellExec(execId, opts) {
       resultEl.innerHTML = '<span class="se-err"><i class="ti ti-shield-check"></i> ' + escHtml(perm.reason) + '</span>';
       widget.dataset.result = JSON.stringify({ ok: false, exitCode: 126, stdout: '', stderr: '', error: perm.reason, command: code });
       updateMessageShellVerification(widget.closest('.msg'));
-      runBtn.disabled = false;
-      runBtn.innerHTML = '<i class="ti ti-player-play"></i> Run';
+      if (runBtn) {
+        runBtn.disabled = false;
+        runBtn.innerHTML = '<i class="ti ti-player-play"></i> Run';
+      }
       return;
     }
   }
 
-  runBtn.disabled = true;
-  runBtn.innerHTML = '<i class="ti ti-loader"></i>';
+  if (runBtn) {
+    runBtn.disabled = true;
+    runBtn.innerHTML = '<i class="ti ti-loader"></i>';
+  }
   resultEl.style.display = 'block';
   resultEl.className = 'shell-exec-result running';
 
@@ -587,8 +619,10 @@ async function runShellExec(execId, opts) {
         resultEl.innerHTML = '<span class="se-err">' + escHtml(jsonResp.error || 'Unknown error') + '</span>';
         widget.dataset.result = JSON.stringify({ ok: false, exitCode: 1, stdout: '', stderr: '', error: jsonResp.error, command: code });
         updateMessageShellVerification(widget.closest('.msg'));
-        runBtn.disabled = false;
-        runBtn.innerHTML = '<i class="ti ti-player-play"></i> Run';
+        if (runBtn) {
+          runBtn.disabled = false;
+          runBtn.innerHTML = '<i class="ti ti-player-play"></i> Run';
+        }
         return;
       }
     }
@@ -606,6 +640,7 @@ async function runShellExec(execId, opts) {
     while (true) {
       var chunk = await reader.read();
       if (chunk.done) break;
+      if (!widget.isConnected) break;
       sseBuf += decoder.decode(chunk.value, { stream: true });
 
       var sseLines = sseBuf.split('\n');
@@ -687,8 +722,10 @@ async function runShellExec(execId, opts) {
     if (feedBtn) { feedBtn.style.display = ''; }
 
     // Re-enable run button
-    runBtn.disabled = false;
-    runBtn.innerHTML = '<i class="ti ti-refresh"></i> Re-run';
+    if (runBtn) {
+      runBtn.disabled = false;
+      runBtn.innerHTML = '<i class="ti ti-refresh"></i> Re-run';
+    }
 
     // Detect screencapture output — try to read the image for vision
     var screenshotPath = null;
@@ -744,8 +781,10 @@ async function runShellExec(execId, opts) {
       widget.dataset.result = JSON.stringify({ ok: false, exitCode: 1, stdout: '', stderr: '', error: e.message, command: code });
     }
     updateMessageShellVerification(widget.closest('.msg'));
-    runBtn.disabled = false;
-    runBtn.innerHTML = '<i class="ti ti-player-play"></i> Run';
+    if (runBtn) {
+      runBtn.disabled = false;
+      runBtn.innerHTML = '<i class="ti ti-player-play"></i> Run';
+    }
   }
   scrollBottom();
 }
