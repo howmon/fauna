@@ -121,6 +121,25 @@ function sanitizeSvg(markup: string): string {
     .replace(/xlink:href\s*=\s*(["'])javascript:.*?\1/gi, 'xlink:href="#"');
 }
 
+function normalizeStats(stats: any): Array<{ label?: string; value?: any; trend?: string; trendDir?: string }> {
+  if (!stats) return [];
+  if (!Array.isArray(stats) && typeof stats === 'object') {
+    return Object.keys(stats).map(key => ({ label: key, value: stats[key] }));
+  }
+  return (Array.isArray(stats) ? stats : []).map(stat => {
+    if (typeof stat === 'string' || typeof stat === 'number') return { value: stat };
+    return stat || {};
+  }).filter(stat => stat.value != null || stat.label != null);
+}
+
+function normalizeFacts(facts: any): Array<{ id?: string; title?: string; text?: string; body?: string; dismissible?: boolean }> {
+  if (!facts) return [];
+  return (Array.isArray(facts) ? facts : [facts]).map((fact, i) => {
+    if (typeof fact === 'string') return { id: `fact-${i}`, text: fact };
+    return { id: `fact-${i}`, ...(fact || {}) };
+  }).filter(fact => fact.title || fact.text || fact.body);
+}
+
 // ── Component renderers ───────────────────────────────────────────────────
 
 function renderEl(id: string, ctx: RenderCtx): React.ReactNode {
@@ -475,15 +494,53 @@ function renderEl(id: string, ctx: RenderCtx): React.ReactNode {
 
     case 'Playlist': {
       const items = props.items || [];
+      const statePath = props.statePath || '__playlist';
       return (
         <View style={[gs.mediaCard, { backgroundColor: t.surface2, borderColor: t.border }]}> 
           {props.title ? <Text style={[gs.cardTitle, { color: t.text }]}>{props.title}</Text> : null}
-          {items.map((item: any, i: number) => (
-            <View key={i} style={[gs.playlistItem, i < items.length - 1 && { borderBottomColor: t.border, borderBottomWidth: StyleSheet.hairlineWidth }]}> 
-              <Text style={[gs.text, { color: t.text, fontWeight: '600' }]}>{item.title || item.src || `Item ${i + 1}`}</Text>
-              {item.description ? <Text style={[gs.caption, { color: t.textMuted }]}>{item.description}</Text> : null}
-            </View>
-          ))}
+          {items.map((item: any, i: number) => {
+            const stats = props.showStats === false ? [] : normalizeStats(item.stats || item.metrics || props.stats || props.metrics);
+            const facts = props.showFacts === false ? [] : normalizeFacts(item.facts || item.additionalFacts || props.facts || props.additionalFacts);
+            return (
+              <View key={i} style={[gs.playlistItem, i < items.length - 1 && { borderBottomColor: t.border, borderBottomWidth: StyleSheet.hairlineWidth }]}> 
+                <Text style={[gs.text, { color: t.text, fontWeight: '600' }]}>{item.title || item.src || `Item ${i + 1}`}</Text>
+                {item.description ? <Text style={[gs.caption, { color: t.textMuted }]}>{item.description}</Text> : null}
+                {stats.length ? (
+                  <View style={gs.playlistStats}>
+                    {stats.map((stat, si) => (
+                      <View key={si} style={[gs.playlistStat, { backgroundColor: t.surface, borderColor: t.border }]}> 
+                        {stat.value != null ? <Text style={[gs.playlistStatValue, { color: t.text }]}>{String(stat.value)}</Text> : null}
+                        {stat.label != null ? <Text style={[gs.playlistStatLabel, { color: t.textMuted }]}>{String(stat.label)}</Text> : null}
+                        {stat.trend != null ? <Text style={[gs.caption, { color: stat.trendDir === 'down' ? t.error : stat.trendDir === 'up' ? t.success : t.textMuted }]}>{stat.trend}</Text> : null}
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+                {facts.length ? (
+                  <View style={gs.playlistFacts}>
+                    {facts.map((fact, fi) => {
+                      const factKey = String(fact.id || fact.title || fi).replace(/[^A-Za-z0-9_-]/g, '_');
+                      const dismissPath = `${statePath}/item_${i}/dismissedFacts/${factKey}`;
+                      if (fact.dismissible !== false && getPath(ctx.state, dismissPath)) return null;
+                      return (
+                        <View key={factKey} style={[gs.playlistFact, { backgroundColor: t.surface, borderColor: t.border }]}> 
+                          <View style={{ flex: 1 }}>
+                            {fact.title ? <Text style={[gs.playlistFactTitle, { color: t.text }]}>{fact.title}</Text> : null}
+                            <Text style={[gs.caption, { color: t.textMuted }]}>{fact.text || fact.body || ''}</Text>
+                          </View>
+                          {fact.dismissible !== false ? (
+                            <TouchableOpacity style={gs.factDismiss} onPress={() => ctx.dispatch('setState', { statePath: dismissPath, value: true })}>
+                              <Text style={{ color: t.textMuted }}>x</Text>
+                            </TouchableOpacity>
+                          ) : null}
+                        </View>
+                      );
+                    })}
+                  </View>
+                ) : null}
+              </View>
+            );
+          })}
         </View>
       );
     }
@@ -612,4 +669,12 @@ const gs = StyleSheet.create({
   navBtn: { width: 32, height: 28, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   mediaCard: { borderWidth: 1, borderRadius: 12, padding: 10, marginBottom: 8 },
   playlistItem: { paddingVertical: 8 },
+  playlistStats: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+  playlistStat: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 7, minWidth: 86 },
+  playlistStatValue: { fontSize: 16, fontWeight: '700' },
+  playlistStatLabel: { fontSize: 10, textTransform: 'uppercase', marginTop: 2 },
+  playlistFacts: { gap: 6, marginTop: 8 },
+  playlistFact: { borderWidth: 1, borderRadius: 8, padding: 9, flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  playlistFactTitle: { fontSize: 12, fontWeight: '700', marginBottom: 2 },
+  factDismiss: { width: 24, height: 24, alignItems: 'center', justifyContent: 'center' },
 });

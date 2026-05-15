@@ -3182,6 +3182,20 @@ webview {
 .gui-playlist-player .gui-player-video  { width: 100%; max-height: 320px; border-radius: var(--radius-sm); }
 .gui-playlist-player .gui-player-audio  { width: 100%; }
 .gui-playlist-player .gui-player-image  { width: 100%; border-radius: var(--radius-sm); max-height: 320px; object-fit: contain; background: #000; }
+.gui-playlist-stats { display: grid; grid-template-columns: repeat(auto-fit,minmax(108px,1fr)); gap: 8px; margin-top: 4px; }
+.gui-playlist-stat { background: var(--fau-surface2); border: 1px solid var(--fau-border); border-radius: var(--radius-sm); padding: 8px 10px; min-width: 0; }
+.gui-playlist-stat-value { color: var(--fau-text); font-size: 16px; line-height: 1.2; font-weight: 700; overflow-wrap: anywhere; }
+.gui-playlist-stat-label { color: var(--fau-text-muted); font-size: 10.5px; line-height: 1.3; margin-top: 2px; text-transform: uppercase; letter-spacing: .02em; }
+.gui-playlist-stat-trend { color: var(--fau-text-dim,var(--fau-text-muted)); font-size: 11px; margin-top: 2px; }
+.gui-playlist-stat-trend.up { color: var(--success); }
+.gui-playlist-stat-trend.down { color: var(--error); }
+.gui-playlist-facts { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.gui-playlist-fact { display: flex; align-items: flex-start; gap: 8px; background: rgba(var(--accent-rgb,99,102,241),.08); border: 1px solid rgba(var(--accent-rgb,99,102,241),.2); border-radius: var(--radius-sm); padding: 9px 10px; }
+.gui-playlist-fact-content { flex: 1; min-width: 0; }
+.gui-playlist-fact-title { color: var(--fau-text); font-size: 12px; font-weight: 700; margin-bottom: 2px; }
+.gui-playlist-fact-text { color: var(--fau-text-dim,var(--fau-text-muted)); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.gui-playlist-fact-dismiss { flex: 0 0 auto; border: 0; background: transparent; color: var(--fau-text-muted); cursor: pointer; border-radius: 4px; padding: 2px 4px; line-height: 1; }
+.gui-playlist-fact-dismiss:hover { background: var(--fau-hover); color: var(--fau-text); }
 .gui-playlist-list { max-height: 320px; overflow-y: auto; background: var(--fau-surface2); border-top: 1px solid var(--fau-border); }
 .gui-playlist-body.side .gui-playlist-list { flex: 0 0 min(340px, 38%); max-height: 420px; border-top: none; border-left: 1px solid var(--fau-border); }
 @media (max-width: 760px) {

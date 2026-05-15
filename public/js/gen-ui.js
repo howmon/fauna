@@ -157,6 +157,77 @@ function _guiYouTubeThumbnailUrl(id) {
   return id ? 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg' : '';
 }
 
+function _guiNormalizeStats(stats) {
+  if (!stats) return [];
+  if (!Array.isArray(stats) && typeof stats === 'object') {
+    return Object.keys(stats).map(function(key) { return { label: key, value: stats[key] }; });
+  }
+  return (Array.isArray(stats) ? stats : []).map(function(stat) {
+    if (typeof stat === 'string' || typeof stat === 'number') return { value: stat };
+    return stat || {};
+  }).filter(function(stat) { return stat.value != null || stat.label != null; });
+}
+
+function _guiRenderPlaylistStats(stats) {
+  var normalized = _guiNormalizeStats(stats);
+  if (!normalized.length) return null;
+  var wrap = document.createElement('div');
+  wrap.className = 'gui-playlist-stats';
+  normalized.forEach(function(stat) {
+    var node = document.createElement('div');
+    node.className = 'gui-playlist-stat';
+    node.innerHTML =
+      '<div class="gui-playlist-stat-value">' + escHtml(stat.value != null ? stat.value : '') + '</div>' +
+      (stat.label != null ? '<div class="gui-playlist-stat-label">' + escHtml(stat.label) + '</div>' : '') +
+      (stat.trend != null ? '<div class="gui-playlist-stat-trend ' + (stat.trendDir === 'down' ? 'down' : stat.trendDir === 'up' ? 'up' : '') + '">' + escHtml(stat.trend) + '</div>' : '');
+    wrap.appendChild(node);
+  });
+  return wrap;
+}
+
+function _guiNormalizeFacts(facts) {
+  if (!facts) return [];
+  return (Array.isArray(facts) ? facts : [facts]).map(function(fact, i) {
+    if (typeof fact === 'string') return { id: 'fact-' + i, text: fact };
+    return Object.assign({ id: 'fact-' + i }, fact || {});
+  }).filter(function(fact) { return fact.title || fact.text || fact.body; });
+}
+
+function _guiRenderPlaylistFacts(facts, store, stateBase) {
+  var normalized = _guiNormalizeFacts(facts);
+  if (!normalized.length) return null;
+  var wrap = document.createElement('div');
+  wrap.className = 'gui-playlist-facts';
+  normalized.forEach(function(fact, i) {
+    var factId = String(fact.id || fact.title || i).replace(/[^A-Za-z0-9_-]/g, '_');
+    var dismissPath = stateBase + '/dismissedFacts/' + factId;
+    if (fact.dismissible !== false && store.get(dismissPath)) return;
+
+    var card = document.createElement('div');
+    card.className = 'gui-playlist-fact';
+    var content = document.createElement('div');
+    content.className = 'gui-playlist-fact-content';
+    content.innerHTML =
+      (fact.title ? '<div class="gui-playlist-fact-title">' + escHtml(fact.title) + '</div>' : '') +
+      '<div class="gui-playlist-fact-text">' + escHtml(fact.text || fact.body || '') + '</div>';
+    card.appendChild(content);
+
+    if (fact.dismissible !== false) {
+      var btn = document.createElement('button');
+      btn.className = 'gui-playlist-fact-dismiss';
+      btn.title = 'Dismiss fact';
+      btn.innerHTML = '<i class="ti ti-x"></i>';
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        store.set(dismissPath, true);
+      });
+      card.appendChild(btn);
+    }
+    wrap.appendChild(card);
+  });
+  return wrap.childNodes.length ? wrap : null;
+}
+
 function _guiBuildMediaFallback(type) {
   var fallback = document.createElement('div');
   fallback.className = 'gui-playlist-thumb-icon';
@@ -913,6 +984,20 @@ var _genUiComponents = {
         }
       });
       playerArea.appendChild(mediaEl);
+
+      if (props.showStats !== false) {
+        var statsEl = _guiRenderPlaylistStats(item.stats || item.metrics || props.stats || props.metrics);
+        if (statsEl) playerArea.appendChild(statsEl);
+      }
+
+      if (props.showFacts !== false) {
+        var factsEl = _guiRenderPlaylistFacts(
+          item.facts || item.additionalFacts || props.facts || props.additionalFacts,
+          store,
+          sp + '/item_' + idx
+        );
+        if (factsEl) playerArea.appendChild(factsEl);
+      }
 
       // Rebuild controls content (the element itself stays fixed in the DOM)
       controlsEl.innerHTML = '';
