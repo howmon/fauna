@@ -16,8 +16,9 @@ import { fileURLToPath } from 'url';
 const __dirname   = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_DIR  = path.join(os.homedir(), '.config', 'fauna');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'teams-bot-config.json');
-const BOT_ENTRY   = path.join(__dirname, 'fauna-bot', 'server', 'index.js');
 const BOT_PORT    = 3978;
+const IS_WIN      = process.platform === 'win32';
+const PATH_SEP    = IS_WIN ? ';' : ':';
 
 const DEFAULTS = {
   mode:        'gateway', // standalone | gateway
@@ -137,7 +138,25 @@ export function startBot() {
   // Remove BOT_DOMAIN so the child always auto-starts the tunnel
   delete env.BOT_DOMAIN;
 
-  _proc = spawn('node', [BOT_ENTRY], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const botEntry = _getBotEntryPath();
+  const nodeBin = _getNodeBinary();
+
+  if (process.versions?.electron && nodeBin === process.execPath) {
+    env.ELECTRON_RUN_AS_NODE = '1';
+  }
+  env.PATH = IS_WIN
+    ? (env.PATH || '')
+    : `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${env.PATH || ''}`;
+
+  _proc = spawn(nodeBin, [botEntry], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+
+  _proc.on('error', (err) => {
+    _proc = null;
+    _domain = null;
+    _status = 'error';
+    _lastErr = `Could not start Teams bot process: ${err.message}`;
+    console.error('[fauna-bot] Spawn failed:', err);
+  });
 
   _proc.stdout.on('data', (chunk) => {
     const text = chunk.toString();
@@ -225,4 +244,37 @@ async function _registerGatewayRoute(routeSecret) {
     const body = await res.text();
     throw new Error(`${res.status} ${body}`);
   }
+}
+
+function _getBotEntryPath() {
+  const entry = path.join(__dirname, 'fauna-bot', 'server', 'index.js');
+  if (entry.includes('app.asar')) {
+    const unpacked = entry.replace('app.asar', 'app.asar.unpacked');
+    if (fs.existsSync(unpacked)) return unpacked;
+  }
+  return entry;
+}
+
+function _getNodeBinary() {
+  const candidates = IS_WIN ? [
+    'C:\\Program Files\\nodejs\\node.exe',
+    path.join(os.homedir(), 'AppData', 'Roaming', 'nvm', 'current', 'node.exe'),
+    path.join(os.homedir(), 'scoop', 'shims', 'node.exe'),
+  ] : [
+    '/opt/homebrew/bin/node',
+    '/usr/local/bin/node',
+    '/opt/homebrew/opt/node/bin/node',
+    '/usr/bin/node',
+  ];
+
+  const binName = IS_WIN ? 'node.exe' : 'node';
+  for (const dir of (process.env.PATH || '').split(PATH_SEP)) {
+    if (dir) candidates.push(path.join(dir, binName));
+  }
+
+  for (const candidate of candidates) {
+    try { fs.accessSync(candidate, fs.constants.X_OK); return candidate; } catch (_) {}
+  }
+
+  return process.execPath;
 }

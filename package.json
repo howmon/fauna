@@ -83,7 +83,9 @@
       "node_modules/playwright-core/**",
       "node_modules/playwright/**",
       "node_modules/@microsoft/workiq/**",
-      "node_modules/@softeria/ms-365-mcp-server/**"
+      "node_modules/@softeria/ms-365-mcp-server/**",
+      "fauna-bot/server/**",
+      "fauna-bot/node_modules/**"
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
@@ -149,6 +151,12 @@
       "lib/**",
       "public/**",
       "assets/**",
+      "fauna-bot/server/**",
+      "fauna-bot/manifest.json",
+      "fauna-bot/color.png",
+      "fauna-bot/outline.png",
+      "fauna-bot/package.json",
+      "fauna-bot/node_modules/**",
       "package.json",
       "node_modules/**",
       "!node_modules/@xenova/transformers/**",

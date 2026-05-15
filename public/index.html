@@ -27,28 +27,54 @@
   <div id="sidebar">
     <div id="sidebar-header">
       <span id="sidebar-logo"><img src="img/logo.svg" alt="" width="20" height="20"></span>
-        Connect Teams through bot.pointlabel.com. Fauna registers your current tunnel when you start the bot.
-      </button>
+      <span id="sidebar-title">Fauna</span>
+    </div>
 
-      <input type="hidden" id="tbot-mode" value="gateway">
-      <input type="hidden" id="tbot-app-id" value="">
-      <input type="hidden" id="tbot-app-password" value="">
-      <input type="hidden" id="tbot-tenant-id" value="">
+    <!-- New chat + Search -->
+    <div id="sidebar-actions">
+      <button id="new-chat-main-btn" onclick="newConversation()">
+        <i class="ti ti-edit"></i>
+        New chat
+      </button>
+      <button id="sidebar-search-btn" onclick="openAllConversations()">
+        <i class="ti ti-search"></i>
+        Search
+      </button>
+    </div>
+
+    <!-- Primary nav -->
+    <nav id="sidebar-nav">
+      <button class="sidebar-nav-item" onclick="toggleTasksPanel()">
+        <i class="ti ti-bolt"></i><span>Automations</span>
+      </button>
+      <button class="sidebar-nav-item" onclick="openAllProjects()">
+        <i class="ti ti-folder"></i><span>Project</span>
+      </button>
     </nav>
 
     <!-- Active project strip -->
     <div id="sidebar-active-project" style="display:none">
       <span id="sidebar-active-project-dot" class="proj-dot"></span>
       <span id="sidebar-active-project-name"></span>
-      <input type="hidden" id="tbot-gateway-url" value="https://bot.pointlabel.com">
       <button id="sidebar-active-project-hub" onclick="openProjectHub()" title="Open project hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>
-        <label>Route Key</label>
+      <button id="sidebar-active-project-clear" onclick="clearActiveProject()" title="Leave project"><i class="ti ti-door-exit"></i></button>
+    </div>
+
+    <!-- ── Scrollable middle area ──────────────────────────────── -->
+    <div id="sidebar-scroll">
 
     <!-- Hidden JS-compat stubs (projects + agents) -->
     <div id="projects-section" style="display:none">
-        <label>Registration Token</label>
-        <input type="password" id="tbot-gateway-admin-token" class="settings-input" placeholder="Paste gateway registration token" style="width:100%">
+      <div id="projects-section-header">
+        <i class="ti ti-folders"></i>
         <span>Projects</span>
+        <span style="flex:1"></span>
+        <button class="section-plus-btn" onclick="openCreateProjectDialog()" title="New project"><i class="ti ti-plus"></i></button>
+      </div>
+      <div id="projects-section-body">
+        <div id="proj-sidebar-list"></div>
+        <div id="proj-show-all" class="sidebar-show-all" onclick="openAllProjects()" style="display:none">All projects</div>
+      </div>
     </div>
     <div id="agents-section" style="display:none">
       <div id="agents-section-header">
@@ -1065,52 +1091,26 @@ Examples:
     <div class="settings-section">
       <div class="settings-section-title">Bot Server</div>
       <div class="settings-hint" style="margin-bottom:12px">
-        Use the hosted Point Label gateway to avoid storing Microsoft bot credentials locally, or run a standalone Azure Bot for development.
+        Connect Teams through bot.pointlabel.com. Fauna registers your current tunnel when you start the bot.
       </div>
 
-      <div class="settings-row">
-        <label>Mode</label>
-        <select id="tbot-mode" class="settings-input" style="width:190px" onchange="saveBotConfig()">
-          <option value="gateway">Hosted gateway</option>
-          <option value="standalone">Standalone Azure Bot</option>
-        </select>
-      </div>
-
-      <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:6px">
-        <label>Azure Bot App ID</label>
-        <input type="text" id="tbot-app-id" class="settings-input" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="width:100%">
-      </div>
-      <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:6px">
-        <label>App Password (Client Secret)</label>
-        <input type="password" id="tbot-app-password" class="settings-input" placeholder="Your bot's client secret" style="width:100%">
-      </div>
-      <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:6px">
-        <label>Tenant ID <span style="color:var(--fau-text-dim);font-weight:400">(optional — Single Tenant only)</span></label>
-        <input type="text" id="tbot-tenant-id" class="settings-input" placeholder="Leave blank for Multi-Tenant" style="width:100%">
-      </div>
+      <input type="hidden" id="tbot-mode" value="gateway">
+      <input type="hidden" id="tbot-app-id" value="">
+      <input type="hidden" id="tbot-app-password" value="">
+      <input type="hidden" id="tbot-tenant-id" value="">
       <div class="settings-row">
         <label>Tunnel Subdomain</label>
         <input type="text" id="tbot-subdomain" class="settings-input" style="width:160px" placeholder="fauna-bot">
         <span style="font-size:11px;color:var(--fau-text-dim);margin-left:6px">.loca.lt</span>
       </div>
+      <input type="hidden" id="tbot-gateway-url" value="https://bot.pointlabel.com">
       <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:6px">
-        <label>Gateway URL</label>
-        <input type="text" id="tbot-gateway-url" class="settings-input" placeholder="https://bot.pointlabel.com" style="width:100%">
-      </div>
-      <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:6px">
-        <label>Gateway Route Key</label>
+        <label>Route Key</label>
         <input type="text" id="tbot-gateway-route-key" class="settings-input" placeholder="teams-user:&lt;tenant-id&gt;:&lt;aad-object-id&gt;" style="width:100%">
       </div>
       <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:6px">
-        <label>Gateway Registration Token</label>
-        <input type="password" id="tbot-gateway-admin-token" class="settings-input" placeholder="Registration token from bot.pointlabel.com" style="width:100%">
-      </div>
-      <div class="settings-row">
-        <label>Auto-start with Fauna</label>
-        <label class="settings-toggle">
-          <input type="checkbox" id="tbot-auto-start" onchange="saveBotConfig()">
-          <span class="settings-toggle-slider"></span>
-        </label>
+        <label>Registration Token</label>
+        <input type="password" id="tbot-gateway-admin-token" class="settings-input" placeholder="Paste gateway registration token" style="width:100%">
       </div>
 
       <div class="settings-row" style="margin-top:4px">
