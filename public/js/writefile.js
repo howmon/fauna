@@ -252,11 +252,33 @@ function validateWrittenFile(filePath, content, widget) {
     // Check for common truncation indicators
     var trimmed = content.trimEnd();
     var lastLine = trimmed.split('\n').pop() || '';
+
+    function looksLikeCompleteMarkdownEnding(line) {
+      var s = String(line || '').trim();
+      if (!s) return true;
+      if (/[.!?:;)\]}>]$/.test(s)) return true;
+      if (/https?:\/\/|www\.|github\.com|linkedin\.com|mailto:|@/.test(s)) return true;
+      if (/^\|.*\|$/.test(s)) return true;
+      if (/^#{1,6}\s+\S/.test(s)) return true;
+      if (/^[-*+]\s+\S/.test(s)) return true;
+      if (/^\d+\.\s+\S/.test(s)) return true;
+      if (/[·|•,]\s*[^·|•,]+$/.test(s)) return true;
+      if (/\b(mentorship|leveling|leadership|strategy|planning|architecture|research|design|engineering|deepmind|resume|portfolio)$/i.test(s)) return true;
+      return false;
+    }
+
+    function looksLikeDanglingMarkdownEnding(line) {
+      var s = String(line || '').trim();
+      if (!s) return false;
+      if (/[`*_\[({<]$/.test(s)) return true;
+      if (/\b(and|or|the|a|an|to|of|for|with|in|on|at|by|from|as|into|through|while|because|including|using)$/i.test(s)) return true;
+      if (/[,;:]$/.test(s)) return true;
+      return /[a-z]$/.test(s) && !looksLikeCompleteMarkdownEnding(s) && s.split(/\s+/).length >= 8;
+    }
     
-    // Red flags: ends with incomplete sentence/word
+    // Red flags: dangling syntax or an obviously incomplete trailing phrase.
     if (trimmed.length > 100) {
-      // Ends mid-word (lowercase letter without punctuation)
-      if (lastLine.match(/[a-z]$/) && !lastLine.match(/[.!?:;)\]}>]$/)) {
+      if (looksLikeDanglingMarkdownEnding(lastLine)) {
         markWriteFileFailed(widget, filePath,
           'Markdown ends mid-sentence or mid-word — likely truncated. Last line: "' + lastLine.slice(-50) + '"', convId);
         return;
