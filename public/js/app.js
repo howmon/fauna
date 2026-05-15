@@ -15,17 +15,45 @@ async function _hydrateServerConvs() {
         merged = true;
       } else {
         var local = state.conversations.find(function(c) { return c.id === sc.id; });
-        if (local && (sc.messages || []).length > (local.messages || []).length) {
+        var serverNewer = (sc.updatedAt || sc.createdAt || 0) > (local.updatedAt || local.createdAt || 0);
+        var serverHasMore = (sc.messages || []).length > (local.messages || []).length;
+        if (local && (serverNewer || serverHasMore)) {
           Object.assign(local, sc);
           merged = true;
         }
       }
     });
     if (merged) {
-      state.conversations.sort(function(a, b) { return (b.createdAt || 0) - (a.createdAt || 0); });
+      state.conversations.sort(function(a, b) { return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0); });
       saveConversations();
       renderConvList();
+      if (state.currentId && getConv(state.currentId)) {
+        purgeConvDom(state.currentId);
+        loadConversation(state.currentId);
+      }
     }
+  } catch (_) {}
+}
+
+function _startConversationRealtimeSync() {
+  if (!window.EventSource || window._conversationEvents) return;
+  try {
+    var source = new EventSource('/api/conversations/stream');
+    window._conversationEvents = source;
+    var timer = null;
+    source.onmessage = function(evt) {
+      try {
+        var msg = JSON.parse(evt.data || '{}');
+        if (msg.type === 'ready') return;
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(function() { _hydrateServerConvs(); }, 120);
+      } catch (_) {}
+    };
+    source.onerror = function() {
+      source.close();
+      window._conversationEvents = null;
+      setTimeout(_startConversationRealtimeSync, 2500);
+    };
   } catch (_) {}
 }
 
@@ -67,6 +95,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // This ensures conversations from CLI/mobile are visible, and standalone app
   // doesn't lose conversations when Electron's localStorage resets (new build, etc.)
   await _hydrateServerConvs();
+  _startConversationRealtimeSync();
 
   // Re-hydrate when window regains focus (picks up mobile/CLI conversations)
   window.addEventListener('focus', function() { _hydrateServerConvs(); });

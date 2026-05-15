@@ -3,10 +3,11 @@
 
 import React, { useState, useCallback } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, ScrollView,
+  View, Text, TouchableOpacity, StyleSheet, ScrollView, Image, TextInput,
   Platform, useColorScheme,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import { WebView } from 'react-native-webview';
 import { dark, light, type Theme } from '../lib/theme';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -100,6 +101,24 @@ function formatValue(val: any, fmt?: string): string {
   if (fmt === 'number' && !isNaN(parseFloat(s)))
     return parseFloat(s).toLocaleString();
   return s;
+}
+
+function optionParts(opt: any): { label: string; value: any } {
+  if (typeof opt === 'string' || typeof opt === 'number') return { label: String(opt), value: opt };
+  return { label: String(opt?.label ?? opt?.value ?? ''), value: opt?.value ?? opt?.label ?? '' };
+}
+
+function boundStatePath(value: any): string | null {
+  return value && typeof value === 'object' && value.$bindState ? String(value.$bindState) : null;
+}
+
+function sanitizeSvg(markup: string): string {
+  return String(markup || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/\son\w+\s*=\s*(["']).*?\1/gi, '')
+    .replace(/\son\w+\s*=\s*[^\s>\/]+/gi, '')
+    .replace(/href\s*=\s*(["'])javascript:.*?\1/gi, 'href="#"')
+    .replace(/xlink:href\s*=\s*(["'])javascript:.*?\1/gi, 'xlink:href="#"');
 }
 
 // ── Component renderers ───────────────────────────────────────────────────
@@ -343,8 +362,134 @@ function renderEl(id: string, ctx: RenderCtx): React.ReactNode {
       );
     }
 
+    case 'Image': {
+      const src = props.src || props.url;
+      if (!src || !/^https?:\/\/|^data:image\//.test(String(src))) return null;
+      const height = typeof props.height === 'number' ? props.height : 180;
+      return (
+        <View style={gs.mediaWrap}>
+          <Image source={{ uri: String(src) }} style={[gs.image, { height }]} resizeMode="contain" accessibilityLabel={props.alt || ''} />
+          {props.caption ? <Text style={[gs.caption, { color: t.textMuted }]}>{props.caption}</Text> : null}
+        </View>
+      );
+    }
+
+    case 'SVG': {
+      const markup = sanitizeSvg(props.markup || props.svg || '');
+      if (!markup) return <Text style={[gs.text, { color: t.textMuted }]}>(no SVG markup)</Text>;
+      const height = typeof props.height === 'number' ? props.height : 220;
+      const html = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;background:transparent}svg{max-width:100%;height:auto;display:block}</style></head><body>${markup}</body></html>`;
+      return <View style={[gs.svgWrap, { height }]}><WebView originWhitelist={['*']} source={{ html }} scrollEnabled={false} style={{ backgroundColor: 'transparent' }} /></View>;
+    }
+
+    case 'Select': {
+      const options = (props.options || []).map(optionParts);
+      const bind = boundStatePath(props.value);
+      const selected = bind ? getPath(ctx.state, bind) : props.value;
+      return (
+        <View style={gs.inputWrap}>
+          {props.label ? <Text style={[gs.inputLabel, { color: t.textMuted }]}>{props.label}</Text> : null}
+          <View style={gs.segmentRow}>
+            {options.map((opt: { label: string; value: any }, i: number) => {
+              const active = String(selected ?? options[0]?.value ?? '') === String(opt.value);
+              return (
+                <TouchableOpacity key={i} style={[gs.segment, { borderColor: t.border, backgroundColor: active ? t.teal : t.surface2 }]} onPress={() => bind && ctx.dispatch('setState', { statePath: bind, value: opt.value })}>
+                  <Text style={[gs.segmentText, { color: active ? '#fff' : t.text }]}>{opt.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      );
+    }
+
+    case 'Input': {
+      const bind = boundStatePath(props.value);
+      const value = String((bind ? getPath(ctx.state, bind) : props.value) ?? '');
+      return (
+        <View style={gs.inputWrap}>
+          {props.label ? <Text style={[gs.inputLabel, { color: t.textMuted }]}>{props.label}</Text> : null}
+          <TextInput
+            style={[gs.input, { color: t.text, backgroundColor: t.surface2, borderColor: t.border }]}
+            placeholder={props.placeholder || ''}
+            placeholderTextColor={t.textMuted}
+            value={value}
+            secureTextEntry={props.type === 'password'}
+            keyboardType={props.type === 'number' ? 'numeric' : 'default'}
+            onChangeText={(next) => bind && ctx.dispatch('setState', { statePath: bind, value: next })}
+          />
+        </View>
+      );
+    }
+
+    case 'Tabs': {
+      const tabs = props.tabs || [];
+      const statePath = props.statePath || '__tabs';
+      const active = getPath(ctx.state, statePath) ?? (tabs[0] && (typeof tabs[0] === 'string' ? tabs[0] : tabs[0].id));
+      const activeIndex = Math.max(0, tabs.findIndex((tab: any) => String(typeof tab === 'string' ? tab : tab.id) === String(active)));
+      return (
+        <View style={gs.tabs}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={gs.tabBar}>
+            {tabs.map((tab: any, i: number) => {
+              const id = typeof tab === 'string' ? tab : tab.id;
+              const label = typeof tab === 'string' ? tab : (tab.label || tab.id);
+              const isActive = String(id) === String(active);
+              return <TouchableOpacity key={String(id || i)} style={[gs.tabBtn, { backgroundColor: isActive ? t.teal : t.surface2 }]} onPress={() => ctx.dispatch('setState', { statePath, value: id })}><Text style={[gs.tabText, { color: isActive ? '#fff' : t.text }]}>{label}</Text></TouchableOpacity>;
+            })}
+          </ScrollView>
+          <View>{children[activeIndex] || null}</View>
+        </View>
+      );
+    }
+
+    case 'Carousel': {
+      if (!children.length) return null;
+      const statePath = props.statePath || '__carousel';
+      const idx = Math.max(0, Math.min(children.length - 1, Number(getPath(ctx.state, statePath) ?? 0)));
+      const go = (delta: number) => {
+        const next = props.loop ? (idx + delta + children.length) % children.length : Math.max(0, Math.min(children.length - 1, idx + delta));
+        ctx.dispatch('setState', { statePath, value: next });
+      };
+      return (
+        <View style={gs.carousel}>
+          <View>{children[idx]}</View>
+          <View style={gs.carouselNav}>
+            <TouchableOpacity style={[gs.navBtn, { borderColor: t.border }]} onPress={() => go(-1)}><Text style={{ color: t.text }}>{'<'}</Text></TouchableOpacity>
+            <Text style={[gs.caption, { color: t.textMuted }]}>{idx + 1} / {children.length}</Text>
+            <TouchableOpacity style={[gs.navBtn, { borderColor: t.border }]} onPress={() => go(1)}><Text style={{ color: t.text }}>{'>'}</Text></TouchableOpacity>
+          </View>
+        </View>
+      );
+    }
+
+    case 'MediaPlayer': {
+      const src = props.src || '';
+      const type = props.type || (/\.(png|jpe?g|gif|webp)$/i.test(src) ? 'image' : 'media');
+      return (
+        <View style={[gs.mediaCard, { backgroundColor: t.surface2, borderColor: t.border }]}> 
+          {props.title ? <Text style={[gs.cardTitle, { color: t.text }]}>{props.title}</Text> : null}
+          {type === 'image' && src ? <Image source={{ uri: src }} style={[gs.image, { height: 180 }]} resizeMode="contain" /> : <Text style={[gs.text, { color: t.text }]}>{src || 'Media item'}</Text>}
+        </View>
+      );
+    }
+
+    case 'Playlist': {
+      const items = props.items || [];
+      return (
+        <View style={[gs.mediaCard, { backgroundColor: t.surface2, borderColor: t.border }]}> 
+          {props.title ? <Text style={[gs.cardTitle, { color: t.text }]}>{props.title}</Text> : null}
+          {items.map((item: any, i: number) => (
+            <View key={i} style={[gs.playlistItem, i < items.length - 1 && { borderBottomColor: t.border, borderBottomWidth: StyleSheet.hairlineWidth }]}> 
+              <Text style={[gs.text, { color: t.text, fontWeight: '600' }]}>{item.title || item.src || `Item ${i + 1}`}</Text>
+              {item.description ? <Text style={[gs.caption, { color: t.textMuted }]}>{item.description}</Text> : null}
+            </View>
+          ))}
+        </View>
+      );
+    }
+
     default:
-      return null;
+      return <Text style={[gs.text, { color: t.textMuted }]}>Unsupported gen-ui component: {el.type}</Text>;
   }
 }
 
@@ -447,4 +592,24 @@ const gs = StyleSheet.create({
   codeBlock: { padding: 10, borderRadius: 8, marginBottom: 4 },
   codeLang: { fontSize: 10, fontWeight: '600', marginBottom: 4 },
   codeText: { fontSize: 12, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', lineHeight: 18 },
+  // Media / form / navigation controls
+  mediaWrap: { marginBottom: 8 },
+  image: { width: '100%', borderRadius: 10, backgroundColor: 'transparent' },
+  svgWrap: { width: '100%', borderRadius: 10, overflow: 'hidden', marginBottom: 8 },
+  caption: { fontSize: 12, marginTop: 4 },
+  inputWrap: { marginBottom: 8, gap: 6 },
+  inputLabel: { fontSize: 12, fontWeight: '600' },
+  input: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, fontSize: 14 },
+  segmentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  segment: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
+  segmentText: { fontSize: 13, fontWeight: '600' },
+  tabs: { gap: 8, marginBottom: 8 },
+  tabBar: { gap: 6, paddingBottom: 2 },
+  tabBtn: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
+  tabText: { fontSize: 13, fontWeight: '600' },
+  carousel: { gap: 8, marginBottom: 8 },
+  carouselNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12 },
+  navBtn: { width: 32, height: 28, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  mediaCard: { borderWidth: 1, borderRadius: 12, padding: 10, marginBottom: 8 },
+  playlistItem: { paddingVertical: 8 },
 });

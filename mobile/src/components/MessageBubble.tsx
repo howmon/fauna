@@ -41,7 +41,7 @@ function stripActionBlocks(text: string): string {
 
 // ── Gen-UI extraction ────────────────────────────────────────────────────
 
-const GEN_UI_RE = /```gen[_-]ui\n([\s\S]*?)```/g;
+const GEN_UI_RE = /```gen[_-]ui[^\n]*\n([\s\S]*?)```/gi;
 
 interface GenUISpec {
   root: string;
@@ -51,11 +51,14 @@ interface GenUISpec {
 
 function extractGenUI(text: string): GenUISpec[] {
   const specs: GenUISpec[] = [];
-  const re = new RegExp(GEN_UI_RE.source, 'g');
+  const re = new RegExp(GEN_UI_RE.source, 'gi');
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     try {
-      const parsed = JSON.parse(m[1].trim());
+      let parsed = JSON.parse(m[1].trim());
+      if (parsed && parsed.type && (!parsed.root || !parsed.elements)) {
+        parsed = { root: '__root__', elements: { __root__: parsed } };
+      }
       if (parsed && parsed.root && parsed.elements) specs.push(parsed);
     } catch {}
   }

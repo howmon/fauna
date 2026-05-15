@@ -71,6 +71,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef, activeProjectRef
   const [activeArtifact, setActiveArtifact] = useState<ParsedArtifact | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const flatListRef = useRef<FlatList>(null);
+  const saveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const msgIdRef = useRef(0);
   const convIdRef = useRef<string>('conv-' + Date.now());
   const messagesRef = useRef<Message[]>([]);
@@ -110,6 +111,13 @@ export default function ChatScreen({ loadedConvRef, newChatRef, activeProjectRef
     } catch {}
   }, [messages, convTitle, model]);
 
+  const scheduleConversationSave = useCallback((msgs: Message[], delay = 900) => {
+    if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+    saveDebounceRef.current = setTimeout(() => {
+      saveCurrentConv(msgs);
+    }, delay);
+  }, [saveCurrentConv]);
+
   // Register new chat handler for header button
   useEffect(() => {
     if (newChatRef) {
@@ -133,6 +141,12 @@ export default function ChatScreen({ loadedConvRef, newChatRef, activeProjectRef
   // Load agents list
   useEffect(() => {
     api.getAgents().then(setAgents).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+    };
   }, []);
 
   // Load models + preferences (playbook, agent rules, sys prompt) once on mount
@@ -318,8 +332,10 @@ export default function ChatScreen({ loadedConvRef, newChatRef, activeProjectRef
 
     const userMsg: Message = { id: nextId(), role: 'user', content: fullText, images: images.length > 0 ? images : undefined };
     const assistantMsg: Message = { id: nextId(), role: 'assistant', content: '' };
+    const conversationStartMessages = [...messages, userMsg, assistantMsg];
 
-    setMessages((prev) => [...prev, userMsg, assistantMsg]);
+    setMessages(conversationStartMessages);
+    saveCurrentConv(conversationStartMessages);
     setStreaming(true);
     // Reset scroll state — user just sent a message, jump to bottom
     userScrolledUp.current = false;
@@ -367,6 +383,7 @@ export default function ChatScreen({ loadedConvRef, newChatRef, activeProjectRef
               } else {
                 updated.push({ id: nextId(), role: 'assistant', content: evt.content || '' });
               }
+              scheduleConversationSave(updated);
               return updated;
             });
             // Instant (non-animated) scroll during streaming — prevents animation queue buildup
@@ -401,6 +418,10 @@ export default function ChatScreen({ loadedConvRef, newChatRef, activeProjectRef
           case 'done':
             setStreaming(false);
             setTimeout(async () => {
+              if (saveDebounceRef.current) {
+                clearTimeout(saveDebounceRef.current);
+                saveDebounceRef.current = null;
+              }
               const msgs = messagesRef.current;
               saveCurrentConv(msgs);
               // Auto-title after the first exchange if not already titled

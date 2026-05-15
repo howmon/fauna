@@ -462,6 +462,15 @@ function writeServerConversations(conversations) {
   fs.renameSync(tmp, CONVERSATIONS_FILE);
 }
 
+const conversationSseClients = new Set();
+
+function sendConversationEvent(type, payload = {}) {
+  const data = JSON.stringify({ type, ...payload, ts: Date.now() });
+  for (const client of conversationSseClients) {
+    try { client.write(`data: ${data}\n\n`); } catch (_) {}
+  }
+}
+
 app.get('/api/conversations', (req, res) => {
   const full = req.query.full === '1' || req.query.full === 'true';
   const conversations = readServerConversations()
@@ -478,6 +487,22 @@ app.get('/api/conversations', (req, res) => {
   })));
 });
 
+app.get('/api/conversations/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+  res.write(`data: ${JSON.stringify({ type: 'ready', ts: Date.now() })}\n\n`);
+  conversationSseClients.add(res);
+  const keepalive = setInterval(() => {
+    try { res.write(`: keepalive ${Date.now()}\n\n`); } catch (_) {}
+  }, 25000);
+  req.on('close', () => {
+    clearInterval(keepalive);
+    conversationSseClients.delete(res);
+  });
+});
+
 app.get('/api/conversations/:id', (req, res) => {
   const conv = readServerConversations().find(c => c.id === req.params.id);
   if (!conv) return res.status(404).json({ error: 'Conversation not found' });
@@ -492,6 +517,7 @@ app.put('/api/conversations/:id', (req, res) => {
   if (idx >= 0) conversations[idx] = { ...conversations[idx], ...conv };
   else conversations.push(conv);
   writeServerConversations(conversations);
+  sendConversationEvent('upsert', { conversation: conv });
   res.json({ ok: true, conversation: conv });
 });
 
@@ -499,6 +525,7 @@ app.delete('/api/conversations/:id', (req, res) => {
   const conversations = readServerConversations();
   const next = conversations.filter(c => c.id !== req.params.id);
   writeServerConversations(next);
+  sendConversationEvent('delete', { id: req.params.id });
   res.json({ ok: true, deleted: conversations.length - next.length });
 });
 
