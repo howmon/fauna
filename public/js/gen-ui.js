@@ -118,11 +118,31 @@ function _guiDetectMediaType(src) {
   return 'video';
 }
 
+function _guiIsPlaceholderMediaValue(value) {
+  var raw = String(value || '').trim().toLowerCase();
+  if (!raw) return true;
+  return /(^|[\/=_-])(placeholder|sample|example|dummy|todo|tbd)([\/?&#._-]|$)/.test(raw) ||
+         /^0{6,}$/.test(raw) ||
+         raw === 'aaaaaaaaaaa' ||
+         raw === '-----------' ||
+         raw === '___________';
+}
+
+function _guiIsValidYouTubeId(id) {
+  return /^[A-Za-z0-9_-]{11}$/.test(id || '') && !_guiIsPlaceholderMediaValue(id);
+}
+
+function _guiSafeThumbnailUrl(url) {
+  if (!url || _guiIsPlaceholderMediaValue(url)) return '';
+  return String(url);
+}
+
 function _guiExtractYouTubeId(url) {
   if (!url) return null;
   var raw = String(url).trim();
+  if (_guiIsPlaceholderMediaValue(raw)) return null;
   var bare = raw.match(/^[A-Za-z0-9_-]{11}$/);
-  if (bare) return bare[0];
+  if (bare && _guiIsValidYouTubeId(bare[0])) return bare[0];
 
   function fromUrl(value) {
     var parsed;
@@ -144,17 +164,17 @@ function _guiExtractYouTubeId(url) {
       if (!candidate && parsed.searchParams.get('u')) candidate = fromUrl(parsed.searchParams.get('u'));
     }
 
-    return /^[A-Za-z0-9_-]{11}$/.test(candidate || '') ? candidate : null;
+    return _guiIsValidYouTubeId(candidate || '') ? candidate : null;
   }
 
   var id = fromUrl(raw);
   if (id) return id;
   var m = raw.match(/(?:v=|vi=|youtu\.be\/|embed\/|shorts\/|live\/|\/v\/|\/e\/)([A-Za-z0-9_-]{11})/);
-  return m ? m[1] : null;
+  return m && _guiIsValidYouTubeId(m[1]) ? m[1] : null;
 }
 
 function _guiYouTubeThumbnailUrl(id) {
-  return id ? 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg' : '';
+  return _guiIsValidYouTubeId(id) ? 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg' : '';
 }
 
 function _guiNormalizeStats(stats) {
@@ -1039,10 +1059,11 @@ var _genUiComponents = {
         var thumbEl;
         if (type === 'youtube') {
           var ytId = _guiExtractYouTubeId(item.src || '');
-          if (ytId) {
+          var ytThumb = _guiSafeThumbnailUrl(item.thumbnail) || _guiYouTubeThumbnailUrl(ytId);
+          if (ytId && ytThumb) {
             thumbEl = document.createElement('img');
             thumbEl.className = 'gui-playlist-thumb';
-            thumbEl.src = item.thumbnail || _guiYouTubeThumbnailUrl(ytId);
+            thumbEl.src = ytThumb;
             thumbEl.alt = '';
             thumbEl.onerror = function() {
               var fallback = _guiBuildMediaFallback(type);
@@ -1051,10 +1072,10 @@ var _genUiComponents = {
           } else {
             thumbEl = _guiBuildMediaFallback(type);
           }
-        } else if ((type === 'image' || item.thumbnail) && (item.thumbnail || item.src)) {
+        } else if ((type === 'image' || item.thumbnail) && (_guiSafeThumbnailUrl(item.thumbnail) || !_guiIsPlaceholderMediaValue(item.src))) {
           thumbEl = document.createElement('img');
           thumbEl.className = 'gui-playlist-thumb';
-          thumbEl.src = item.thumbnail || item.src;
+          thumbEl.src = _guiSafeThumbnailUrl(item.thumbnail) || item.src;
           thumbEl.alt = '';
           thumbEl.onerror = function() {
             var fallback = _guiBuildMediaFallback(type);
