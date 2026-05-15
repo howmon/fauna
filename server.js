@@ -1269,6 +1269,65 @@ app.post('/api/markdown-to-pdf', express.json({ limit: '10mb' }), async (req, re
   }
 });
 
+const YOUTUBE_THUMB_FALLBACK_SVG = Buffer.from(`
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="360" viewBox="0 0 480 360">
+  <rect width="480" height="360" rx="28" fill="#f4f4f5"/>
+  <rect x="176" y="130" width="128" height="100" rx="22" fill="#d4d4d8"/>
+  <path d="M226 156l54 24-54 24z" fill="#71717a"/>
+</svg>
+`.trim());
+const youtubeThumbnailCache = new Map();
+
+function _isPlaceholderYouTubeId(id) {
+  const raw = String(id || '').trim().toLowerCase();
+  return !raw || /(^|[\/_=-])(placeholder|sample|example|dummy|todo|tbd)([\/?&#._-]|$)/.test(raw) ||
+         /^0{6,}$/.test(raw) || raw === 'aaaaaaaaaaa' || raw === '-----------' || raw === '___________';
+}
+
+function _isValidYouTubeId(id) {
+  return /^[A-Za-z0-9_-]{11}$/.test(String(id || '')) && !_isPlaceholderYouTubeId(id);
+}
+
+function _sendYoutubeFallbackThumbnail(res) {
+  res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.status(200).send(YOUTUBE_THUMB_FALLBACK_SVG);
+}
+
+app.get('/api/youtube-thumbnail', async (req, res) => {
+  const id = String(req.query.id || '').trim();
+  if (!_isValidYouTubeId(id)) return _sendYoutubeFallbackThumbnail(res);
+
+  const cached = youtubeThumbnailCache.get(id);
+  if (cached) {
+    res.setHeader('Content-Type', cached.contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.status(200).send(cached.body);
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+  try {
+    const upstream = await fetch(`https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg`, {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: { 'User-Agent': 'Fauna/1.0 thumbnail-proxy' },
+    });
+    const contentType = upstream.headers.get('content-type') || 'image/jpeg';
+    if (!upstream.ok || !/^image\//i.test(contentType)) return _sendYoutubeFallbackThumbnail(res);
+    const body = Buffer.from(await upstream.arrayBuffer());
+    if (body.length < 2048) return _sendYoutubeFallbackThumbnail(res);
+    youtubeThumbnailCache.set(id, { contentType, body });
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.status(200).send(body);
+  } catch (_) {
+    return _sendYoutubeFallbackThumbnail(res);
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
 // ── Token resolution ──────────────────────────────────────────────────────
 // Electron runs with a stripped PATH so `gh` may not be found.
 // Resolution order:

@@ -134,7 +134,16 @@ function _guiIsValidYouTubeId(id) {
 
 function _guiSafeThumbnailUrl(url) {
   if (!url || _guiIsPlaceholderMediaValue(url)) return '';
-  return String(url);
+  var raw = String(url).trim();
+  try {
+    var parsed = new URL(raw, window.location.origin);
+    var host = parsed.hostname.replace(/^www\./, '').replace(/^m\./, '');
+    var parts = parsed.pathname.split('/').filter(Boolean);
+    if ((host === 'i.ytimg.com' || host === 'img.youtube.com') && parts[0] === 'vi') {
+      return _guiYouTubeThumbnailUrl(parts[1]);
+    }
+  } catch (_) {}
+  return raw;
 }
 
 function _guiExtractYouTubeId(url) {
@@ -174,7 +183,7 @@ function _guiExtractYouTubeId(url) {
 }
 
 function _guiYouTubeThumbnailUrl(id) {
-  return _guiIsValidYouTubeId(id) ? 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg' : '';
+  return _guiIsValidYouTubeId(id) ? '/api/youtube-thumbnail?id=' + encodeURIComponent(id) : '';
 }
 
 function _guiNormalizeStats(stats) {
