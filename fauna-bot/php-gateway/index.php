@@ -45,6 +45,7 @@ function load_config(): array
     return array_merge([
         'microsoft_app_id' => getenv('FAUNA_BOT_APP_ID') ?: '',
         'microsoft_app_password' => getenv('FAUNA_BOT_APP_PASSWORD') ?: '',
+        'teams_app_id' => getenv('FAUNA_TEAMS_APP_ID') ?: '',
         'admin_token' => getenv('FAUNA_GATEWAY_ADMIN_TOKEN') ?: '',
         'gateway_host' => getenv('FAUNA_GATEWAY_HOST') ?: ($_SERVER['HTTP_HOST'] ?? 'bot.pointlabel.com'),
         'allowed_target_suffixes' => explode(',', getenv('FAUNA_ALLOWED_TARGET_SUFFIXES') ?: '.loca.lt'),
@@ -349,12 +350,13 @@ function send_teams_zip(array $config): void
 function build_manifest(array $config): array
 {
     $appId = (string)$config['microsoft_app_id'];
+    $teamsAppId = (string)($config['teams_app_id'] ?: stable_uuid_from_app_id($appId));
     $host = (string)$config['gateway_host'];
     return [
         '$schema' => 'https://developer.microsoft.com/json-schemas/teams/v1.17/MicrosoftTeams.schema.json',
         'manifestVersion' => '1.17',
         'version' => '1.0.0',
-        'id' => $appId,
+        'id' => $teamsAppId,
         'name' => ['short' => 'Fauna', 'full' => 'Fauna AI Assistant'],
         'description' => [
             'short' => 'Your Fauna AI assistant, everywhere',
@@ -387,6 +389,14 @@ function build_manifest(array $config): array
         'permissions' => ['identity', 'messageTeamMembers'],
         'validDomains' => [$host],
     ];
+}
+
+function stable_uuid_from_app_id(string $appId): string
+{
+    $hex = substr(hash('sha256', 'fauna-teams-app:' . $appId), 0, 32);
+    $hex[12] = '4';
+    $hex[16] = dechex((hexdec($hex[16]) & 0x3) | 0x8);
+    return substr($hex, 0, 8) . '-' . substr($hex, 8, 4) . '-' . substr($hex, 12, 4) . '-' . substr($hex, 16, 4) . '-' . substr($hex, 20, 12);
 }
 
 function normalize_target_url(string $target, array $config): string

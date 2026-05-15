@@ -39,11 +39,14 @@ Example `.env`:
 ```dotenv
 FAUNA_BOT_APP_ID=00000000-0000-0000-0000-000000000000
 FAUNA_BOT_APP_PASSWORD=server-only-client-secret
+FAUNA_TEAMS_APP_ID=11111111-1111-4111-8111-111111111111
 FAUNA_GATEWAY_ADMIN_TOKEN=long-random-token-used-by-fauna-to-register-routes
 FAUNA_GATEWAY_HOST=bot.pointlabel.com
 FAUNA_ALLOWED_TARGET_SUFFIXES=.loca.lt
 FAUNA_ROUTE_TTL_SECONDS=21600
 ```
+
+`FAUNA_TEAMS_APP_ID` is the Teams app package ID. Generate it once with `uuidgen` and keep it stable across downloads. It should be different from `FAUNA_BOT_APP_ID`, which is the Azure Bot / Microsoft App ID.
 
 ## Register A Runtime Tunnel
 

@@ -6,6 +6,9 @@ return [
     'microsoft_app_id' => '00000000-0000-0000-0000-000000000000',
     'microsoft_app_password' => 'put-client-secret-here',
 
+    // Stable Teams app package ID. This is not the Azure Bot App ID.
+    'teams_app_id' => '11111111-1111-4111-8111-111111111111',
+
     // Used by Fauna desktop to register its current localtunnel target.
     'admin_token' => 'replace-with-a-long-random-token',
 
