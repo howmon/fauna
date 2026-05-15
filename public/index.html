@@ -1174,32 +1174,32 @@ Examples:
     </div>
 
     <!-- Self-Chat Bridge Section -->
-    <details class="settings-section" style="margin-top:16px">
+    <details class="settings-section self-chat-bridge" style="margin-top:16px">
       <summary class="settings-section-title" style="cursor:pointer">Self-Chat Bridge <span style="font-size:11px;font-weight:400;color:var(--fau-text-dim)">(legacy)</span></summary>
-      <div style="margin-top:12px">
-        <div class="settings-hint" style="margin-bottom:12px">
+      <div class="self-chat-bridge-body">
+        <div class="settings-hint">
           Poll your Teams "Notes to Self" chat through Microsoft Graph instead of using the bot server.
         </div>
-        <div class="settings-row">
+        <div class="self-chat-bridge-row inline">
           <label>Enable</label>
           <label class="settings-toggle">
             <input type="checkbox" id="teams-enabled" onchange="saveTeamsSettings()">
             <span class="settings-toggle-slider"></span>
           </label>
         </div>
-        <div class="settings-row">
+        <div class="self-chat-bridge-row inline">
           <label>Status</label>
           <span id="teams-status" style="font-size:12px;color:var(--fau-text-dim)">disconnected</span>
         </div>
-        <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:6px">
+        <div class="self-chat-bridge-row field">
           <label>Access Token (Microsoft Graph)</label>
           <input type="password" id="teams-token" class="settings-input" placeholder="Paste Graph API access token" style="width:100%" onchange="saveTeamsSettings()">
         </div>
-        <div class="settings-row">
+        <div class="self-chat-bridge-row inline compact">
           <label>Poll Interval (seconds)</label>
           <input type="number" id="teams-interval" class="settings-input" style="width:80px" min="5" max="300" value="10" onchange="saveTeamsSettings()">
         </div>
-        <div style="display:flex;gap:6px;margin-top:8px">
+        <div class="self-chat-bridge-actions">
           <button class="settings-row-btn" onclick="testTeamsConnection()"><i class="ti ti-plug"></i> Test Connection</button>
         </div>
       </div>

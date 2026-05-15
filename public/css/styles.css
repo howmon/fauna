@@ -1294,6 +1294,33 @@ button .ti, label .ti { pointer-events: none; }
   font-size: 11px; color: var(--fau-text-muted); line-height: 1.5;
 }
 .settings-hint a { color: var(--accent2); }
+.self-chat-bridge-body {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.self-chat-bridge-row {
+  display: flex;
+  min-height: 28px;
+}
+.self-chat-bridge-row.inline {
+  align-items: center;
+  gap: 10px;
+}
+.self-chat-bridge-row.field {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+}
+.self-chat-bridge-row.compact .settings-input {
+  flex: 0 0 88px;
+}
+.self-chat-bridge-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
 .fauna-update-status { margin-bottom: 8px; }
 .fauna-update-card {
   border: 1px solid var(--fau-border);
