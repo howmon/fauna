@@ -32,6 +32,7 @@ let mcpReconnectTimer = null;
 let mcpReconnectDelay = RECONNECT_BASE_MS;
 let mcpPingTimer      = null;
 let mcpConnected      = false;
+let contextMenusReady = Promise.resolve();
 
 // ── WebSocket lifecycle ───────────────────────────────────────────────────
 
@@ -165,6 +166,39 @@ function startMcpPing() {
 function stopMcpPing() {
   clearInterval(mcpPingTimer);
   mcpPingTimer = null;
+}
+
+function disconnectMcp() {
+  clearTimeout(mcpReconnectTimer);
+  mcpReconnectTimer = null;
+  stopMcpPing();
+  if (mcpWs) {
+    try { mcpWs.close(); } catch (_) {}
+  }
+  mcpWs = null;
+  mcpConnected = false;
+}
+
+function createContextMenus() {
+  contextMenusReady = contextMenusReady.catch(() => {}).then(async () => {
+    await chrome.contextMenus.removeAll().catch(() => {});
+    chrome.contextMenus.create({
+      id: 'fauna-send-selection',
+      title: 'Send to Fauna',
+      contexts: ['selection']
+    });
+    chrome.contextMenus.create({
+      id: 'fauna-send-page',
+      title: 'Send page to Fauna',
+      contexts: ['page', 'frame']
+    });
+    chrome.contextMenus.create({
+      id: 'fauna-snapshot',
+      title: 'Take Fauna snapshot',
+      contexts: ['page', 'frame']
+    });
+  });
+  return contextMenusReady;
 }
 
 // ── Hello handshake ───────────────────────────────────────────────────────
@@ -910,23 +944,8 @@ chrome.commands.onCommand.addListener(async (command) => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: 'fauna-send-selection',
-    title: 'Send to Fauna',
-    contexts: ['selection']
-  });
-  chrome.contextMenus.create({
-    id: 'fauna-send-page',
-    title: 'Send page to Fauna',
-    contexts: ['page', 'frame']
-  });
-  chrome.contextMenus.create({
-    id: 'fauna-snapshot',
-    title: 'Take Fauna snapshot',
-    contexts: ['page', 'frame']
-  });
+  createContextMenus();
   connect();
-  connectMcp();
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
@@ -955,6 +974,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   }
   if (msg.type === 'connect') {
     connect();
+    reply({ ok: true });
+    return true;
+  }
+  if (msg.type === 'connect-mcp') {
+    connectMcp();
+    reply({ ok: true });
+    return true;
+  }
+  if (msg.type === 'disconnect-mcp') {
+    disconnectMcp();
+    broadcastStatus();
     reply({ ok: true });
     return true;
   }
@@ -1012,11 +1042,10 @@ chrome.alarms.create('fauna-keepalive', { periodInMinutes: 0.4 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'fauna-keepalive') {
     if (!connected) connect();
-    if (!mcpConnected) connectMcp();
   }
 });
 
 // ── Boot ──────────────────────────────────────────────────────────────────
 
+createContextMenus();
 connect();
-connectMcp();

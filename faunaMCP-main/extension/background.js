@@ -14,6 +14,7 @@
  */
 
 const RELAY_WS_URL       = 'ws://localhost:3340';
+const RELAY_HEALTH_URL   = 'http://localhost:3341/health';
 const RECONNECT_BASE_MS  = 1500;
 const RECONNECT_MAX_MS   = 30000;
 const PING_INTERVAL_MS   = 20000;
@@ -26,12 +27,34 @@ let reconnectDelay = RECONNECT_BASE_MS;
 let pingTimer      = null;
 let connected      = false;
 let _activeTabId   = null;
+let contextMenusReady = Promise.resolve();
 
 // ── WebSocket lifecycle ───────────────────────────────────────────────────
 
-function connect() {
+async function relayAvailable() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1000);
+  try {
+    const response = await fetch(RELAY_HEALTH_URL, { signal: controller.signal, cache: 'no-store' });
+    return response.ok;
+  } catch (_) {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function connect() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   clearTimeout(reconnectTimer);
+
+  if (!await relayAvailable()) {
+    connected = false;
+    broadcastStatus();
+    scheduleReconnect();
+    return;
+  }
+
   ws = new WebSocket(RELAY_WS_URL);
 
   ws.addEventListener('open', () => {
@@ -78,6 +101,23 @@ function startPing() {
   }, PING_INTERVAL_MS);
 }
 function stopPing() { clearInterval(pingTimer); pingTimer = null; }
+
+function createContextMenus() {
+  contextMenusReady = contextMenusReady.catch(() => {}).then(async () => {
+    await chrome.contextMenus.removeAll().catch(() => {});
+    chrome.contextMenus.create({
+      id: 'mcp-extract-page',
+      title: 'Extract page (MCP)',
+      contexts: ['page', 'frame']
+    });
+    chrome.contextMenus.create({
+      id: 'mcp-snapshot',
+      title: 'Snapshot page (MCP)',
+      contexts: ['page', 'frame']
+    });
+  });
+  return contextMenusReady;
+}
 
 function send(obj) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -628,16 +668,7 @@ chrome.commands.onCommand.addListener(async (command) => {
 // ── Context menus ─────────────────────────────────────────────────────────
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: 'mcp-extract-page',
-    title: 'Extract page (MCP)',
-    contexts: ['page', 'frame']
-  });
-  chrome.contextMenus.create({
-    id: 'mcp-snapshot',
-    title: 'Snapshot page (MCP)',
-    contexts: ['page', 'frame']
-  });
+  createContextMenus();
   connect();
 });
 
@@ -718,4 +749,5 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────
 
+createContextMenus();
 connect();
