@@ -7216,9 +7216,15 @@ async function _getPlaywrightMcpClient() {
   const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
   const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
   const cliPath = path.join(path.dirname(_require.resolve('@playwright/mcp')), 'cli.js');
+  const nodeBin = findNodeBinary() || process.execPath;
+  const spawnEnv = { ...process.env };
+  if (process.versions?.electron && nodeBin === process.execPath) {
+    spawnEnv.ELECTRON_RUN_AS_NODE = '1';
+  }
   const transport = new StdioClientTransport({
-    command: process.execPath,
+    command: nodeBin,
     args: [cliPath],
+    env: spawnEnv,
   });
   const client = new Client({ name: 'fauna-playwright', version: '1.0.0' });
   await client.connect(transport);
