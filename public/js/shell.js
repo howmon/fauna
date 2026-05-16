@@ -517,10 +517,7 @@ function hasActiveShellWorkForCurrentConversation() {
   if (hasRunning) return true;
   var pendingKeys = Object.keys(_shellAutoRunPending || {});
   if (pendingKeys.length && activeWidgets.some(function(widget) { return pendingKeys.indexOf(widget.dataset.shellKey || '') >= 0; })) return true;
-  return activeWidgets.some(function(widget) {
-    var msg = widget.closest('.msg');
-    return !!(msg && msg.querySelector('.msg-shell-verification.pending'));
-  });
+  return false;
 }
 
 function stopActiveShellWorkForCurrentConversation() {
