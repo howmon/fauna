@@ -580,10 +580,25 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
   getConvInner(state.currentId).appendChild(el);
 }
 
+function sendButtonAction() {
+  var conv = getConv(state.currentId);
+  if (conv && conv._streaming) stopGeneration();
+  else sendMessage();
+}
+
 function setBusy(busy) {
-  document.getElementById('send-btn').disabled = busy;
+  var sendBtn = document.getElementById('send-btn');
+  if (sendBtn) {
+    sendBtn.disabled = false;
+    sendBtn.classList.toggle('is-stopping', !!busy);
+    sendBtn.title = busy ? 'Stop generation' : 'Send (⌘↵ or ⏎)';
+    sendBtn.setAttribute('aria-label', busy ? 'Stop generation' : 'Send message');
+    sendBtn.innerHTML = busy
+      ? '<span class="send-stop-icon" aria-hidden="true"></span>'
+      : '<i class="ti ti-send"></i>';
+  }
   var stopEl = document.getElementById('stop-btn');
-  stopEl.className = busy ? 'show' : '';
+  if (stopEl) stopEl.className = '';
 }
 
 function showMessages() {

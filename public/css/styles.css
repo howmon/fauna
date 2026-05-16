@@ -1053,11 +1053,25 @@ button .ti, label .ti { pointer-events: none; }
 #send-btn {
   width: 30px; height: 30px; border-radius: 8px; background: var(--accent);
   border: none; color: #fff; cursor: pointer; font-size: 15px; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center; transition: background .15s;
+  display: flex; align-items: center; justify-content: center; transition: background .15s, box-shadow .15s, transform .15s;
   align-self: flex-end; margin-bottom: 1px;
 }
 #send-btn:hover:not(:disabled) { background: var(--accent2); }
 #send-btn:disabled { opacity: .4; cursor: not-allowed; }
+#send-btn.is-stopping {
+  background: var(--error);
+  box-shadow: 0 0 0 0 rgba(243, 110, 110, .38);
+  animation: sendStopPulse 1.05s ease-in-out infinite;
+}
+#send-btn.is-stopping:hover { background: #f87171; transform: scale(1.03); }
+.send-stop-icon {
+  width: 10px; height: 10px; border-radius: 2px; background: #fff;
+  display: block; box-shadow: 0 0 0 1px rgba(255,255,255,.12);
+}
+@keyframes sendStopPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(243, 110, 110, .36); }
+  50% { box-shadow: 0 0 0 5px rgba(243, 110, 110, 0); }
+}
 .shell-running-pill {
   display: inline-flex; align-items: center; gap: 5px;
   background: rgba(251,191,36,.1); border: 1px solid rgba(251,191,36,.3);
@@ -1076,10 +1090,10 @@ button .ti, label .ti { pointer-events: none; }
 #stop-btn {
   width: 30px; height: 30px; border-radius: 8px; background: transparent;
   border: none; color: var(--error); cursor: pointer;
-  font-size: 14px; flex-shrink: 0; display: none; align-items: center; justify-content: center;
+  font-size: 14px; flex-shrink: 0; display: none !important; align-items: center; justify-content: center;
   transition: all .15s; align-self: flex-end; margin-bottom: 1px;
 }
-#stop-btn.show { display: flex; }
+#stop-btn.show { display: none !important; }
 #stop-btn:hover { background: rgba(248,113,113,.15); border-radius: 8px; }
 /* Bottom bar: hint · ring · model picker */
 #input-toolbar {
