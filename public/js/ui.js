@@ -599,6 +599,7 @@ function setBusy(busy) {
       _busyClearTimer = null;
       var activeConv = getConv(state.currentId);
       if (activeConv && activeConv._streaming) return;
+      if (typeof hasActiveShellWorkForCurrentConversation === 'function' && hasActiveShellWorkForCurrentConversation()) return;
       _applyBusyState(false);
     }, 650);
     return;
@@ -607,6 +608,7 @@ function setBusy(busy) {
 }
 
 function _applyBusyState(busy) {
+  if (!busy && typeof hasActiveShellWorkForCurrentConversation === 'function' && hasActiveShellWorkForCurrentConversation()) busy = true;
   var sendBtn = document.getElementById('send-btn');
   if (sendBtn) {
     sendBtn.disabled = false;

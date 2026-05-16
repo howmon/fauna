@@ -116,6 +116,7 @@ function updateMessageShellVerification(msgEl) {
     banner.className = 'msg-shell-verification pending';
     banner.innerHTML = '<i class="ti ti-hourglass"></i><span>Shell commands pending verification. Ignore assistant claims below until command results appear.</span>';
     _updateShellNarrativeVisibility(msgEl, true);
+    if (typeof setBusy === 'function') setBusy(true);
     return;
   }
 
@@ -123,6 +124,7 @@ function updateMessageShellVerification(msgEl) {
     banner.className = 'msg-shell-verification pending';
     banner.innerHTML = '<i class="ti ti-loader"></i><span>Shell verification in progress — ' + completed + ' of ' + widgets.length + ' command' + (widgets.length === 1 ? '' : 's') + ' produced results.</span>';
     _updateShellNarrativeVisibility(msgEl, true);
+    if (typeof setBusy === 'function') setBusy(true);
     return;
   }
 
@@ -136,6 +138,7 @@ function updateMessageShellVerification(msgEl) {
   banner.className = 'msg-shell-verification done';
   banner.innerHTML = '<i class="ti ti-check"></i><span>Shell results received. Review command output below before trusting any success claims in the assistant message.</span>';
   _updateShellNarrativeVisibility(msgEl, false);
+  if (typeof setBusy === 'function') setBusy(false);
 }
 
 function _resolveShellFilePath(filePath, cwd) {
@@ -497,6 +500,59 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
 var _shellAbortControllers = {};
 var _shellKillIds = {};
 
+function _shellWidgetBelongsToActiveConversation(widget) {
+  if (!widget) return false;
+  var activeConvId = (typeof state !== 'undefined' && state.currentId) ? state.currentId : '';
+  if (!activeConvId) return true;
+  return !widget.dataset.convId || widget.dataset.convId === activeConvId;
+}
+
+function hasActiveShellWorkForCurrentConversation() {
+  var activeWidgets = Array.from(document.querySelectorAll('.shell-exec-block')).filter(_shellWidgetBelongsToActiveConversation);
+  if (!activeWidgets.length) return false;
+  var hasRunning = activeWidgets.some(function(widget) {
+    var resultEl = widget.querySelector('.shell-exec-result');
+    return resultEl && resultEl.classList.contains('running');
+  });
+  if (hasRunning) return true;
+  var pendingKeys = Object.keys(_shellAutoRunPending || {});
+  if (pendingKeys.length && activeWidgets.some(function(widget) { return pendingKeys.indexOf(widget.dataset.shellKey || '') >= 0; })) return true;
+  return activeWidgets.some(function(widget) {
+    var msg = widget.closest('.msg');
+    return !!(msg && msg.querySelector('.msg-shell-verification.pending'));
+  });
+}
+
+function stopActiveShellWorkForCurrentConversation() {
+  var activeWidgets = Array.from(document.querySelectorAll('.shell-exec-block')).filter(_shellWidgetBelongsToActiveConversation);
+  var stopped = 0;
+  activeWidgets.forEach(function(widget) {
+    var execId = widget.dataset.execId;
+    var shellKey = widget.dataset.shellKey || '';
+    if (shellKey && _shellAutoRunPending[shellKey]) {
+      delete _shellAutoRunPending[shellKey];
+      stopped += 1;
+    }
+    if (execId && _shellAbortControllers[execId]) {
+      killShellExec(execId);
+      stopped += 1;
+      return;
+    }
+    if (!widget.dataset.result) {
+      var resultEl = widget.querySelector('.shell-exec-result');
+      if (resultEl) {
+        resultEl.style.display = 'block';
+        resultEl.className = 'shell-exec-result';
+        resultEl.innerHTML = '<span class="se-meta">Stopped</span>';
+      }
+      widget.dataset.result = JSON.stringify({ ok: false, exitCode: 130, stdout: '', stderr: '', error: 'Stopped', command: widget.dataset.code || '' });
+    }
+  });
+  activeWidgets.forEach(function(widget) { updateMessageShellVerification(widget.closest('.msg')); });
+  if (typeof setBusy === 'function') setBusy(false);
+  return stopped;
+}
+
 function syncShellRunningPills() {
   var container = document.getElementById('shell-running-pills');
   if (!container) return;
@@ -509,6 +565,7 @@ function syncShellRunningPills() {
     if (show) visibleCount += 1;
   });
   container.style.display = visibleCount ? 'flex' : 'none';
+  if (typeof setBusy === 'function') setBusy(visibleCount > 0 || hasActiveShellWorkForCurrentConversation());
 }
 
 function clearShellRunningPillsForConversation(convId) {

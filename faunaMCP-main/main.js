@@ -12,6 +12,7 @@ const BROWSER_WS_PORT   = 3340;
 const BROWSER_HTTP_PORT = 3341;
 const FIGMA_WS_PORT     = 3335;
 const FIGMA_HTTP_PORT   = 3336;
+const FAUNA_STANDALONE_PORT = 3737;
 const REPO_URL          = 'https://github.com/howmon/faunaMCP';
 const BRANCH_API_URL    = 'https://api.github.com/repos/howmon/faunaMCP/commits/main';
 const SOURCE_ZIP_URL    = 'https://github.com/howmon/faunaMCP/archive/refs/heads/main.zip';
@@ -32,6 +33,11 @@ app.on('second-instance', () => {
 const relay = {
   browser: { proc: null, running: false, logs: [], enabled: true },
   figma:   { proc: null, running: false, logs: [], enabled: true },
+};
+
+const standalone = {
+  connected: false,
+  checkedAt: null,
 };
 
 const MAX_LOGS = 100;
@@ -65,6 +71,10 @@ function cliEnv(extra = {}) {
   const env = { ...process.env, ...extra };
   env.PATH = `${DEFAULT_CLI_PATH}:${env.PATH || ''}`;
   return env;
+}
+
+function cap(str) {
+  return str ? str[0].toUpperCase() + str.slice(1) : '';
 }
 
 function getNodeBin() {
@@ -419,6 +429,41 @@ function setRunning(which, running) {
   });
 }
 
+function getStatusSnapshot() {
+  return {
+    browserRunning:   relay.browser.running,
+    browserEnabled:   relay.browser.enabled,
+    browserWsUrl:     `ws://localhost:${BROWSER_WS_PORT}`,
+    browserHttpUrl:   `http://localhost:${BROWSER_HTTP_PORT}/mcp`,
+    browserStdio:     browserStdioConfig(),
+    browserExtPath:   getBrowserExtensionPath(),
+    browserLogs:      relay.browser.logs.slice(-40),
+
+    figmaRunning:     relay.figma.running,
+    figmaEnabled:     relay.figma.enabled,
+    figmaWsUrl:       `ws://localhost:${FIGMA_WS_PORT}`,
+    figmaHttpUrl:     `http://localhost:${FIGMA_HTTP_PORT}/mcp`,
+    figmaStdio:       figmaStdioConfig(),
+    figmaPluginPath:  getFigmaPluginPath(),
+    figmaLogs:        relay.figma.logs.slice(-40),
+
+    standaloneConnected: standalone.connected,
+    standalonePort: FAUNA_STANDALONE_PORT,
+    standaloneCheckedAt: standalone.checkedAt,
+
+    loginItem:  app.getLoginItemSettings().openAtLogin,
+    iconUrl:    `file://${getIconPath().replace(/\\/g, '/')}`,
+    version:    app.getVersion(),
+    repoUrl:    REPO_URL,
+    update:     updateState,
+  };
+}
+
+function broadcastStatusSnapshot() {
+  updateTrayMenu();
+  if (popup && !popup.isDestroyed()) popup.webContents.send('status', getStatusSnapshot());
+}
+
 const RELAY_PORTS = {
   browser: [BROWSER_WS_PORT, BROWSER_HTTP_PORT],
   figma:   [FIGMA_WS_PORT, FIGMA_HTTP_PORT],
@@ -438,6 +483,26 @@ async function getOccupiedRelayPorts(which) {
   const ports = RELAY_PORTS[which] || [];
   const checks = await Promise.all(ports.map(async port => ({ port, open: await isPortOpen(port) })));
   return checks.filter(p => p.open).map(p => p.port);
+}
+
+async function refreshStandaloneStatus() {
+  const connected = await isPortOpen(FAUNA_STANDALONE_PORT, 350);
+  const changed = connected !== standalone.connected;
+  standalone.connected = connected;
+  standalone.checkedAt = new Date().toISOString();
+  if (connected) {
+    relay.browser.enabled = false;
+    relay.figma.enabled = false;
+  }
+  if (changed) {
+    const text = connected
+      ? `Fauna standalone detected on localhost:${FAUNA_STANDALONE_PORT}; relays will stay off here.`
+      : `Fauna standalone is no longer detected on localhost:${FAUNA_STANDALONE_PORT}; relays can be started here.`;
+    addLog('browser', text, connected ? 'ok' : 'info');
+    addLog('figma', text, connected ? 'ok' : 'info');
+    broadcastStatusSnapshot();
+  }
+  return connected;
 }
 
 // Kill whatever process(es) are holding the given ports.
@@ -480,6 +545,22 @@ async function forceReclaimPorts(ports) {
 
 async function startRelay(which, _retryCount = 0) {
   const r = relay[which];
+  if (await refreshStandaloneStatus()) {
+    r.enabled = false;
+    r.portInUse = false;
+    setRunning(which, false);
+    const msg = `Fauna standalone is already running on localhost:${FAUNA_STANDALONE_PORT}. ${cap(which)} MCP is connected through standalone, so FaunaMCP will not reclaim or start this relay. Quit/stop Fauna standalone first if you want FaunaMCP to own the relay ports.`;
+    addLog(which, msg, 'info');
+    dialog.showMessageBox(popup || null, {
+      type: 'info',
+      title: 'Connected to Fauna standalone',
+      message: 'Fauna standalone is already running',
+      detail: msg,
+      buttons: ['OK'],
+    }).catch(() => {});
+    broadcastStatusSnapshot();
+    return { ok: false, standalone: true };
+  }
   r.enabled = true;   // user explicitly wants this running
   if (r.proc) return;
 
@@ -627,8 +708,8 @@ function showPopup() {
 function updateTrayMenu() {
   if (!tray) return;
 
-  const bStatus = relay.browser.running ? `● Browser  :${BROWSER_HTTP_PORT}/mcp` : '○ Browser stopped';
-  const fStatus = relay.figma.running   ? `● Figma    :${FIGMA_HTTP_PORT}/mcp`   : '○ Figma stopped';
+  const bStatus = standalone.connected ? `↔ Browser via Fauna :${BROWSER_HTTP_PORT}/mcp` : (relay.browser.running ? `● Browser  :${BROWSER_HTTP_PORT}/mcp` : '○ Browser stopped');
+  const fStatus = standalone.connected ? `↔ Figma via Fauna :${FIGMA_HTTP_PORT}/mcp` : (relay.figma.running ? `● Figma    :${FIGMA_HTTP_PORT}/mcp`   : '○ Figma stopped');
 
   const menu = Menu.buildFromTemplate([
     { label: 'FaunaMCP', enabled: false },
@@ -664,7 +745,7 @@ function updateTrayMenu() {
     relay.browser.running ? 'Browser' : null,
     relay.figma.running   ? 'Figma'   : null,
   ].filter(Boolean);
-  tray.setToolTip(running.length ? `FaunaMCP — ${running.join(', ')} running` : 'FaunaMCP — all stopped');
+  tray.setToolTip(standalone.connected ? 'FaunaMCP — connected to Fauna standalone' : (running.length ? `FaunaMCP — ${running.join(', ')} running` : 'FaunaMCP — all stopped'));
 }
 
 // ── Folder copy helper ────────────────────────────────────────────────────
@@ -683,39 +764,26 @@ async function saveFolderTo(srcDir, defaultName) {
 
 // ── IPC handlers ──────────────────────────────────────────────────────────
 
-ipcMain.handle('get-status', () => ({
-  browserRunning:   relay.browser.running,
-  browserEnabled:   relay.browser.enabled,
-  browserWsUrl:     `ws://localhost:${BROWSER_WS_PORT}`,
-  browserHttpUrl:   `http://localhost:${BROWSER_HTTP_PORT}/mcp`,
-  browserStdio:     browserStdioConfig(),
-  browserExtPath:   getBrowserExtensionPath(),
-  browserLogs:      relay.browser.logs.slice(-40),
-
-  figmaRunning:     relay.figma.running,
-  figmaEnabled:     relay.figma.enabled,
-  figmaWsUrl:       `ws://localhost:${FIGMA_WS_PORT}`,
-  figmaHttpUrl:     `http://localhost:${FIGMA_HTTP_PORT}/mcp`,
-  figmaStdio:       figmaStdioConfig(),
-  figmaPluginPath:  getFigmaPluginPath(),
-  figmaLogs:        relay.figma.logs.slice(-40),
-
-  loginItem:  app.getLoginItemSettings().openAtLogin,
-  iconUrl:    `file://${getIconPath().replace(/\\/g, '/')}`,
-  version:    app.getVersion(),
-  repoUrl:    REPO_URL,
-  update:     updateState,
-}));
+ipcMain.handle('get-status', async () => {
+  await refreshStandaloneStatus();
+  return getStatusSnapshot();
+});
 
 ipcMain.handle('start-relay',  (_, which) => startRelay(which));
 ipcMain.handle('stop-relay',   (_, which) => stopRelay(which));
 
-ipcMain.handle('set-enabled', (_, which, enabled) => {
+ipcMain.handle('set-enabled', async (_, which, enabled) => {
+  if (enabled && await refreshStandaloneStatus()) {
+    relay[which].enabled = false;
+    addLog(which, `Not enabling ${which} relay because Fauna standalone owns localhost:${FAUNA_STANDALONE_PORT}.`, 'info');
+    broadcastStatusSnapshot();
+    return { browserEnabled: relay.browser.enabled, figmaEnabled: relay.figma.enabled, standaloneConnected: true };
+  }
   relay[which].enabled = enabled;
   if (!enabled) stopRelay(which);
   else if (!relay[which].running) startRelay(which);
   updateTrayMenu();
-  return { browserEnabled: relay.browser.enabled, figmaEnabled: relay.figma.enabled };
+  return { browserEnabled: relay.browser.enabled, figmaEnabled: relay.figma.enabled, standaloneConnected: standalone.connected };
 });
 
 ipcMain.handle('copy',       (_, txt) => clipboard.writeText(txt));
@@ -734,13 +802,19 @@ ipcMain.handle('install-update',    ()  => installUpdate());
 ipcMain.handle('open-repo',         ()  => shell.openExternal(REPO_URL));
 
 // ── App lifecycle ─────────────────────────────────────────────────────────
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   tray = new Tray(getTrayIcon());
   updateTrayMenu();
   tray.on('click', showPopup);
   createPopup();
-  startRelay('browser');
-  startRelay('figma');
+  const standaloneActive = await refreshStandaloneStatus();
+  if (!standaloneActive) {
+    startRelay('browser');
+    startRelay('figma');
+  } else {
+    addLog('browser', 'Started with relays off because Fauna standalone is already active.', 'ok');
+    addLog('figma', 'Started with relays off because Fauna standalone is already active.', 'ok');
+  }
   showPopup();
   setTimeout(() => checkForUpdates(false), 2500);
 });

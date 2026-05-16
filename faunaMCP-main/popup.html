@@ -52,6 +52,17 @@
   .relay-btn:hover { opacity: 0.85; }
   .relay-btn.start { background: #2d5c27; color: #6ccb5f; }
   .relay-btn.stop  { background: #4a2020; color: #f36e6e; }
+  .standalone-banner {
+    display: none;
+    padding: 8px 14px;
+    background: #1d2a1f;
+    border-bottom: 1px solid #29472f;
+    color: #9ee493;
+    font-size: 11px;
+    line-height: 1.35;
+    flex-shrink: 0;
+  }
+  .standalone-banner.show { display: block; }
 
   /* ── Tab bar ── */
   .tab-bar {
@@ -251,6 +262,8 @@
     <button class="relay-btn start" id="btnFigma" onclick="toggleRelay('figma')">Start</button>
   </div>
 </div>
+
+<div class="standalone-banner" id="standaloneBanner"></div>
 
 <!-- Tab bar -->
 <div class="tab-bar">

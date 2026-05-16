@@ -1166,6 +1166,10 @@ function showContextSummary(convId) {
 function stopGeneration() {
   var conv = getConv(state.currentId);
   if (!conv) return;
+  var stoppedShell = 0;
+  if (typeof stopActiveShellWorkForCurrentConversation === 'function') {
+    stoppedShell = stopActiveShellWorkForCurrentConversation() || 0;
+  }
   conv._cancelled = true;
   if (conv._abortController) conv._abortController.abort();
   // Also stop any active delegation
@@ -1174,5 +1178,5 @@ function stopGeneration() {
   conv._abortController = null;
   setBusy(false);
   renderConvList();
-  showToast('Generation stopped');
+  showToast(stoppedShell ? 'Shell verification stopped' : 'Generation stopped');
 }

@@ -18,8 +18,8 @@ function switchTab(which) {
 // ── Relay start / stop ────────────────────────────────────────────────────
 function toggleRelay(which) {
   const running = which === 'browser' ? st.browserRunning : st.figmaRunning;
-  if (running) mcp.stopRelay(which);
-  else         mcp.startRelay(which);
+  const op = running ? mcp.stopRelay(which) : mcp.startRelay(which);
+  Promise.resolve(op).then(() => mcp.getStatus()).then(applyStatus).catch(() => {});
 }
 
 function toggleEnabled(which) {
@@ -55,6 +55,14 @@ function applyStatus(s) {
   // Login
   setToggle('loginSwitch', s.loginItem);
 
+  const standaloneBanner = document.getElementById('standaloneBanner');
+  if (standaloneBanner) {
+    standaloneBanner.classList.toggle('show', !!s.standaloneConnected);
+    standaloneBanner.textContent = s.standaloneConnected
+      ? 'Connected to Fauna standalone on localhost:' + (s.standalonePort || 3737) + '. FaunaMCP relays stay off here so they do not interrupt the main app.'
+      : '';
+  }
+
   // Browser panel
   renderRelayPanel('browser', {
     running:   s.browserRunning,
@@ -74,8 +82,8 @@ function applyStatus(s) {
   });
 
   // Tab badges + relay buttons
-  renderBadge('badgeBrowser', s.browserRunning, true);
-  renderBadge('badgeFigma',   s.figmaRunning,   true);
+  renderBadge('badgeBrowser', s.browserRunning, !s.standaloneConnected);
+  renderBadge('badgeFigma',   s.figmaRunning,   !s.standaloneConnected);
   updateRelayBtn('browser', s.browserRunning);
   updateRelayBtn('figma',   s.figmaRunning);
   renderUpdate(s.update);
@@ -126,7 +134,7 @@ function renderRelayPanel(which, { running, wsUrl, httpUrl, stdio, assetPath }) 
 
   // Dot in combined bar
   const dot = document.getElementById('dot' + cap(which));
-  if (dot) dot.className = 'dot ' + (running ? 'running' : 'stopped');
+  if (dot) dot.className = 'dot ' + (st.standaloneConnected && !running ? 'disabled' : (running ? 'running' : 'stopped'));
 
   // URL fields
   setText(pfx + 'WsUrl',   wsUrl   || '');
@@ -245,7 +253,7 @@ function flashBtn(id) {
 function updateRelayBtn(which, running) {
   const btn = document.getElementById(which === 'browser' ? 'btnBrowser' : 'btnFigma');
   if (!btn) return;
-  btn.textContent = running ? 'Stop' : 'Start';
+  btn.textContent = st.standaloneConnected && !running ? 'Standalone' : (running ? 'Stop' : 'Start');
   btn.classList.toggle('start', !running);
   btn.classList.toggle('stop',   running);
 }
