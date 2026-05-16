@@ -588,7 +588,22 @@ async function streamResponse(conv) {
   }
   var msgEl  = createMessageEl('ai', _currentAgentInfo);
   var bodyEl = msgEl.querySelector('.msg-body');
-  bodyEl.innerHTML = '<div class="thinking"><div class="think-dot"></div><div class="think-dot"></div><div class="think-dot"></div></div>';
+  function _streamingStatusHtml(label) {
+    return '<div class="thinking streaming-status">' +
+      '<div class="think-dot"></div><div class="think-dot"></div><div class="think-dot"></div>' +
+      '<span class="thinking-label">' + escHtml(label || 'Fauna is working…') + '</span>' +
+    '</div>';
+  }
+  function _bodyHasVisibleStreamContent() {
+    if (!bodyEl) return false;
+    if ((bodyEl.textContent || '').trim()) return true;
+    return !!bodyEl.querySelector('img,svg,iframe,video,audio,canvas,.cot-pill,.tool-status-stack,.shell-output-block');
+  }
+  function _ensureStreamingStatus(label) {
+    if (!conv._streaming || !isActive() || !bodyEl) return;
+    if (!_bodyHasVisibleStreamContent()) bodyEl.innerHTML = _streamingStatusHtml(label);
+  }
+  bodyEl.innerHTML = _streamingStatusHtml('Fauna is thinking…');
   // Chain-merge: if this is a continuation from auto-feed, visually merge with previous AI message
   if (conv._chainMode) {
     msgEl.classList.add('chain-msg');
@@ -616,9 +631,11 @@ async function streamResponse(conv) {
   function _clearToolStatuses() {
     _toolStatuses = [];
     if (_toolStatusEl) { _toolStatusEl.remove(); _toolStatusEl = null; }
+    _ensureStreamingStatus('Fauna is working…');
   }
   function _renderToolStatuses() {
     if (!_toolStatuses.length) { _clearToolStatuses(); return; }
+    if (bodyEl && bodyEl.querySelector('.streaming-status') && !buffer) bodyEl.innerHTML = '';
     if (!_toolStatusEl) {
       _toolStatusEl = document.createElement('div');
       _toolStatusEl.className = 'tool-status-stack';
@@ -643,9 +660,13 @@ async function streamResponse(conv) {
       renderTimer = null;
       if (buffer) {
         bodyEl.classList.add('streaming-cursor');
-        bodyEl.innerHTML = renderStreamingCOT(buffer);
+        var rendered = renderStreamingCOT(buffer);
+        if (rendered && rendered.trim()) bodyEl.innerHTML = rendered;
+        else _ensureStreamingStatus('Fauna is working…');
         var now = Date.now();
         if (now - lastScrolled > 200) { scrollBottom(); lastScrolled = now; }
+      } else {
+        _ensureStreamingStatus('Fauna is working…');
       }
     }, 60);
   }
