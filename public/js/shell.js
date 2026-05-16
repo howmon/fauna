@@ -5,6 +5,26 @@ function _parseShellExecResult(widget) {
   try { return JSON.parse(widget.dataset.result); } catch (_) { return null; }
 }
 
+var _shellAutoRunStarted = Object.create(null);
+
+function _shellStableHash(value) {
+  var hash = 2166136261;
+  var text = String(value || '');
+  for (var i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function _shellEnsureMessageId(messageEl, convId) {
+  if (!messageEl) return convId || 'msg';
+  if (!messageEl.dataset.shellMsgId) {
+    messageEl.dataset.shellMsgId = 'msg-' + _shellStableHash((convId || state.currentId || '') + ':' + Date.now() + ':' + Math.random());
+  }
+  return messageEl.dataset.shellMsgId;
+}
+
 function _ensureShellVerificationBanner(msgEl) {
   if (!msgEl) return null;
   var body = msgEl.querySelector('.msg-body');
@@ -359,16 +379,18 @@ async function _handlePermission(execId, decision) {
 
 function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
   var container = messageEl.querySelector('.prose') || messageEl;
-  var codeBlocks = container.querySelectorAll('code.language-shell-exec, code.language-shell_exec');
+  var codeBlocks = Array.from(container.querySelectorAll('code.language-shell-exec, code.language-shell_exec'));
   dbg('extractAndRenderShellExec: found ' + codeBlocks.length + ' block(s)', 'info');
   if (codeBlocks.length) updateMessageShellVerification(messageEl);
+  var shellMsgId = _shellEnsureMessageId(messageEl, convId);
   var _autoRunIdx = 0; // only the first block in a response auto-runs; rest wait for user
-  codeBlocks.forEach(function(code) {
+  codeBlocks.forEach(function(code, blockIdx) {
     var pre = code.parentElement;
     var rawCode = code.textContent.trim();
     if (!rawCode) { dbg('  ↳ skipped empty block', 'warn'); pre.remove(); return; }
 
-    var execId  = 'se-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    var shellKey = [convId || state.currentId || '', shellMsgId, blockIdx, _shellStableHash(rawCode)].join(':');
+    var execId  = 'se-' + _shellStableHash(shellKey);
     var targetConv = getConv(convId || state.currentId);
     var depth = targetConv ? (targetConv._autoFeedDepth || 0) : 0;
     var DEPTH_LIMIT = 5;
@@ -383,6 +405,7 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
     widget.className = 'shell-exec-block';
     widget.dataset.code = rawCode;
     widget.dataset.execId = execId;
+    widget.dataset.shellKey = shellKey;
     widget.dataset.convId = convId || state.currentId || ''; // route auto-feed to correct conv
     widget.innerHTML =
       '<div class="shell-exec-header">' +
@@ -409,11 +432,21 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
     // Auto-run after a short delay if enabled
     if (autoRun) {
       setTimeout(function() {
-        if (!widget.isConnected || !document.querySelector('[data-exec-id="' + execId + '"]')) {
-          dbg('runShellExec: auto-run skipped because widget was re-rendered ' + execId, 'warn');
+        var liveWidget = document.querySelector('[data-exec-id="' + execId + '"]');
+        if (!liveWidget) {
+          var candidates = Array.from(document.querySelectorAll('.shell-exec-block'));
+          liveWidget = candidates.find(function(candidate) { return candidate.dataset.shellKey === shellKey; }) || null;
+        }
+        if (!liveWidget) {
+          dbg('runShellExec: auto-run skipped because widget was removed ' + execId, 'warn');
           return;
         }
-        runShellExec(execId, { autoFeed: true });
+        var liveExecId = liveWidget.dataset.execId || execId;
+        if (_shellAutoRunStarted[liveExecId]) {
+          return;
+        }
+        _shellAutoRunStarted[liveExecId] = true;
+        runShellExec(liveExecId, { autoFeed: true });
       }, 350);
     }
     // If depth limit hit, notify AI once so it stops looping
