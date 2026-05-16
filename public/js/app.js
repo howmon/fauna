@@ -28,8 +28,14 @@ async function _hydrateServerConvs() {
       saveConversations();
       renderConvList();
       if (state.currentId && getConv(state.currentId)) {
-        purgeConvDom(state.currentId);
-        loadConversation(state.currentId);
+        var activeConv = getConv(state.currentId);
+        if (activeConv && activeConv._streaming) {
+          if (typeof showMessages === 'function') showMessages();
+          if (typeof setBusy === 'function') setBusy(true);
+        } else {
+          purgeConvDom(state.currentId);
+          loadConversation(state.currentId);
+        }
       }
     }
   } catch (_) {}

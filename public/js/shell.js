@@ -6,6 +6,7 @@ function _parseShellExecResult(widget) {
 }
 
 var _shellAutoRunStarted = Object.create(null);
+var _shellAutoRunPending = Object.create(null);
 
 function _shellStableHash(value) {
   var hash = 2166136261;
@@ -23,6 +24,41 @@ function _shellEnsureMessageId(messageEl, convId) {
     messageEl.dataset.shellMsgId = 'msg-' + _shellStableHash((convId || state.currentId || '') + ':' + Date.now() + ':' + Math.random());
   }
   return messageEl.dataset.shellMsgId;
+}
+
+function _findShellWidget(execId, shellKey) {
+  var widget = execId ? document.querySelector('[data-exec-id="' + execId + '"]') : null;
+  if (widget) return widget;
+  if (!shellKey) return null;
+  var candidates = Array.from(document.querySelectorAll('.shell-exec-block'));
+  return candidates.find(function(candidate) { return candidate.dataset.shellKey === shellKey; }) || null;
+}
+
+function _scheduleShellAutoRun(execId, shellKey, delay, attemptsLeft) {
+  _shellAutoRunPending[shellKey] = { execId: execId, attemptsLeft: attemptsLeft };
+  setTimeout(function() {
+    var pending = _shellAutoRunPending[shellKey];
+    if (!pending) return;
+    var liveWidget = _findShellWidget(pending.execId || execId, shellKey);
+    if (!liveWidget) {
+      if (pending.attemptsLeft > 0) {
+        pending.attemptsLeft -= 1;
+        _scheduleShellAutoRun(execId, shellKey, 180, pending.attemptsLeft);
+        return;
+      }
+      delete _shellAutoRunPending[shellKey];
+      dbg('runShellExec: auto-run skipped because widget was removed ' + execId, 'warn');
+      return;
+    }
+    var liveExecId = liveWidget.dataset.execId || execId;
+    if (_shellAutoRunStarted[liveExecId]) {
+      delete _shellAutoRunPending[shellKey];
+      return;
+    }
+    _shellAutoRunStarted[liveExecId] = true;
+    delete _shellAutoRunPending[shellKey];
+    runShellExec(liveExecId, { autoFeed: true, shellKey: shellKey });
+  }, delay);
 }
 
 function _ensureShellVerificationBanner(msgEl) {
@@ -431,23 +467,7 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
 
     // Auto-run after a short delay if enabled
     if (autoRun) {
-      setTimeout(function() {
-        var liveWidget = document.querySelector('[data-exec-id="' + execId + '"]');
-        if (!liveWidget) {
-          var candidates = Array.from(document.querySelectorAll('.shell-exec-block'));
-          liveWidget = candidates.find(function(candidate) { return candidate.dataset.shellKey === shellKey; }) || null;
-        }
-        if (!liveWidget) {
-          dbg('runShellExec: auto-run skipped because widget was removed ' + execId, 'warn');
-          return;
-        }
-        var liveExecId = liveWidget.dataset.execId || execId;
-        if (_shellAutoRunStarted[liveExecId]) {
-          return;
-        }
-        _shellAutoRunStarted[liveExecId] = true;
-        runShellExec(liveExecId, { autoFeed: true });
-      }, 350);
+      _scheduleShellAutoRun(execId, shellKey, 350, 8);
     }
     // If depth limit hit, notify AI once so it stops looping
     if (depthLimited && targetConv && !targetConv._depthLimitNotified) {
@@ -540,8 +560,9 @@ function killShellExec(execId) {
 
 async function runShellExec(execId, opts) {
   opts = opts || {};
-  var widget   = document.querySelector('[data-exec-id="' + execId + '"]');
+  var widget   = _findShellWidget(execId, opts.shellKey || '');
   if (!widget) { dbg('runShellExec: widget not found ' + execId, 'err'); return; }
+  execId = widget.dataset.execId || execId;
   var code     = widget.dataset.code;
   var convId2  = widget.dataset.convId || state.currentId;
   var runBtn   = document.getElementById(execId + '-run');

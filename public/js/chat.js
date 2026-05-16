@@ -587,7 +587,19 @@ async function streamResponse(conv) {
     _currentAgentInfo = { name: activeAgent.name, displayName: activeAgent.displayName, icon: activeAgent.manifest.icon || 'ti-robot' };
   }
   var msgEl  = createMessageEl('ai', _currentAgentInfo);
+  msgEl.dataset.streamingLive = '1';
   var bodyEl = msgEl.querySelector('.msg-body');
+  function _ensureLiveMessageAttached() {
+    if (!conv._streaming) return;
+    if (msgEl.isConnected) return;
+    var inner = getConvInner(convId);
+    if (!inner) return;
+    Array.from(inner.querySelectorAll('.msg.ai[data-streaming-live="1"]')).forEach(function(existing) {
+      if (existing !== msgEl) existing.remove();
+    });
+    inner.appendChild(msgEl);
+    if (isActive()) { showMessages(); forceScrollBottom(); }
+  }
   function _streamingStatusHtml(label) {
     return '<div class="thinking streaming-status">' +
       '<div class="think-dot"></div><div class="think-dot"></div><div class="think-dot"></div>' +
@@ -600,6 +612,7 @@ async function streamResponse(conv) {
     return !!bodyEl.querySelector('img,svg,iframe,video,audio,canvas,.cot-pill,.tool-status-stack,.shell-output-block');
   }
   function _ensureStreamingStatus(label) {
+    _ensureLiveMessageAttached();
     if (!conv._streaming || !isActive() || !bodyEl) return;
     if (!_bodyHasVisibleStreamContent()) bodyEl.innerHTML = _streamingStatusHtml(label);
   }
@@ -654,6 +667,7 @@ async function streamResponse(conv) {
   }
 
   function scheduleRender() {
+    _ensureLiveMessageAttached();
     if (!isActive() || !bodyEl) return;
     if (renderTimer) return;
     renderTimer = setTimeout(() => {
@@ -672,8 +686,14 @@ async function streamResponse(conv) {
   }
 
   function _updateReasoningPanel(text, durationSeconds, completed) {
+    _ensureLiveMessageAttached();
     if (!isActive() || !msgEl) return;
     var panel = msgEl.querySelector('.reasoning-panel');
+    if (!completed && !(text || '').trim()) return;
+    if (completed && !(text || '').trim()) {
+      if (panel) panel.remove();
+      return;
+    }
     if (!panel) {
       panel = document.createElement('div');
       panel.className = 'reasoning-panel';
@@ -688,6 +708,9 @@ async function streamResponse(conv) {
     panel.dataset.completed = completed ? '1' : '';
     panel.dataset.open = panel.dataset.open === '0' ? '0' : (open ? '1' : '0');
     var isOpen = panel.dataset.open !== '0';
+    var bodyHtml = (text || '').trim()
+      ? (typeof renderMarkdown === 'function' ? renderMarkdown(text || '') : escHtml(text || ''))
+      : '';
     panel.innerHTML =
       '<button class="reasoning-toggle" onclick="this.parentElement.dataset.open=this.parentElement.dataset.open===\'0\'?\'1\':\'0\';this.parentElement.querySelector(\'.reasoning-body\').style.display=this.parentElement.dataset.open===\'0\'?\'none\':\'\'">' +
         '<i class="ti ' + (completed ? 'ti-brain' : 'ti-loader-2') + '" ' + (completed ? '' : 'style="animation:spin .8s linear infinite"') + '></i>' +
@@ -695,7 +718,7 @@ async function streamResponse(conv) {
         '<i class="ti ti-chevron-right reasoning-chevron' + (isOpen ? ' reasoning-chevron-open' : '') + '"></i>' +
       '</button>' +
       '<div class="reasoning-body" style="' + (isOpen ? '' : 'display:none') + '">' +
-        (typeof renderMarkdown === 'function' ? renderMarkdown(text || '') : (text || '')) +
+        bodyHtml +
       '</div>';
   }
 
@@ -884,7 +907,10 @@ async function streamResponse(conv) {
     maybeCompressConversation(conv);
 
     if (isActive()) {
+      _ensureLiveMessageAttached();
+      delete msgEl.dataset.streamingLive;
       bodyEl.classList.remove('streaming-cursor');
+      if (!_reasoning || !_reasoning.text) _updateReasoningPanel('', null, true);
       // Sanitize write-file blocks BEFORE rendering — extracts file content into
       // _wfContentStore so the markdown renderer never sees large file bytes.
       var renderBuffer = sanitizeWriteFileBlocks(buffer);

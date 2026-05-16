@@ -187,6 +187,29 @@ function purgeConvDom(id) {
   }
 }
 
+function ensureStreamingPlaceholder(conv) {
+  if (!conv || !conv._streaming) return;
+  var convInner = getConvInner(conv.id);
+  if (!convInner) return;
+  var liveMessages = Array.from(convInner.querySelectorAll('.msg.ai[data-streaming-live="1"]'));
+  if (liveMessages.length) {
+    liveMessages.slice(1).forEach(function(el) { el.remove(); });
+    return;
+  }
+  var hasLiveAssistant = convInner.querySelector('.msg.ai .reasoning-panel, .msg.ai .streaming-status');
+  if (hasLiveAssistant) return;
+  var msgEl = createMessageEl('ai', null);
+  msgEl.dataset.streamingLive = '1';
+  var body = msgEl.querySelector('.msg-body');
+  if (body) {
+    body.innerHTML = '<div class="thinking streaming-status">' +
+      '<div class="think-dot"></div><div class="think-dot"></div><div class="think-dot"></div>' +
+      '<span class="thinking-label">Fauna is working…</span>' +
+    '</div>';
+  }
+  convInner.appendChild(msgEl);
+}
+
 function loadConversation(id) {
   // Save outgoing conversation's agent state before switching
   if (state.currentId && state.currentId !== id) {
@@ -302,6 +325,9 @@ function loadConversation(id) {
 
   if (conv.messages.length) showMessages();
   else showEmpty();
+
+  ensureStreamingPlaceholder(conv);
+  if (conv._streaming) showMessages();
 
   // Reflect this conversation's streaming state in UI
   setBusy(!!conv._streaming);
