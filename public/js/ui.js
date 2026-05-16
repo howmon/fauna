@@ -582,11 +582,31 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
 
 function sendButtonAction() {
   var conv = getConv(state.currentId);
-  if (conv && conv._streaming) stopGeneration();
+  var sendBtn = document.getElementById('send-btn');
+  if ((conv && conv._streaming) || (sendBtn && sendBtn.classList.contains('is-stopping'))) stopGeneration();
   else sendMessage();
 }
 
+var _busyClearTimer = null;
+
 function setBusy(busy) {
+  if (_busyClearTimer) {
+    clearTimeout(_busyClearTimer);
+    _busyClearTimer = null;
+  }
+  if (!busy) {
+    _busyClearTimer = setTimeout(function() {
+      _busyClearTimer = null;
+      var activeConv = getConv(state.currentId);
+      if (activeConv && activeConv._streaming) return;
+      _applyBusyState(false);
+    }, 650);
+    return;
+  }
+  _applyBusyState(true);
+}
+
+function _applyBusyState(busy) {
   var sendBtn = document.getElementById('send-btn');
   if (sendBtn) {
     sendBtn.disabled = false;
