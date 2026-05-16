@@ -525,7 +525,8 @@ function _renderDetail() {
 
   var isNew = !_draft.id;
   if (isNew) { _renderComposeForm(panel); return; }
-  var running = _draft.id && _tasksCache.find(function(t) { return t.id === _draft.id && t._running; });
+  var currentTask = _draft.id ? _tasksCache.find(function(t) { return t.id === _draft.id; }) : null;
+  var running = !!(currentTask && (currentTask._running || currentTask.status === 'running'));
 
   // Conv list for heartbeat picker
   var convOptions = '';
@@ -597,6 +598,8 @@ function _renderDetail() {
     '<div class="auto-detail-footer">' +
       '<span id="auto-detail-save-status" class="auto-detail-save-status"></span>' +
       '<div class="auto-detail-footer-btns">' +
+        (!isNew && running ? '<button class="auto-footer-btn danger" onclick="taskStop(\'' + _draft.id + '\')"><i class="ti ti-player-stop"></i> Stop</button>' : '') +
+        (!isNew && !running ? '<button class="auto-footer-btn" onclick="taskRun(\'' + _draft.id + '\')"><i class="ti ti-player-play"></i> Run now</button>' : '') +
         (isNew
           ? '<button class="auto-footer-btn primary" onclick="submitAutomation()"><i class="ti ti-plus"></i> Create</button>'
           : '<button class="auto-footer-btn primary" onclick="submitAutomation()"><i class="ti ti-check"></i> Save</button>') +
@@ -1460,17 +1463,38 @@ function _disconnectTaskSSE() {
 
 // ── Quick task from chat ──────────────────────────────────────────────────
 
-function createTaskFromAI(taskData) {
-  fetch('/api/tasks', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(taskData),
-  }).then(function() {
-    showToast('Task created: ' + (taskData.title || 'Untitled'));
-    if (tasksPanelOpen) fetchTasks();
-  }).catch(function(e) {
-    showToast('Failed to create task: ' + e.message);
-  });
+async function createTaskFromAI(taskData) {
+  var payload = Object.assign({}, taskData || {});
+  if (!payload.title && payload.name) payload.title = payload.name;
+  if (!payload.title && payload.description) payload.title = payload.description.slice(0, 80);
+  if (!payload.schedule) payload.schedule = { type: 'manual' };
+
+  try {
+    var r = await fetch('/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) {
+      var errBody = await r.json().catch(function() { return {}; });
+      throw new Error(errBody.error || ('HTTP ' + r.status));
+    }
+    var created = await r.json();
+    showToast('Automation created: ' + (created.title || payload.title || 'Untitled'));
+    await fetchTasks();
+
+    var saved = _tasksCache.find(function(t) { return t.id === created.id; }) || created;
+    if (saved && tasksPanelOpen) {
+      _draft = _taskToDraft(saved);
+      _draftAutoSaveEnabled = true;
+      _renderList();
+      _renderDetail();
+    }
+    return created;
+  } catch (e) {
+    showToast('Failed to create automation: ' + e.message);
+    throw e;
+  }
 }
 
 // ── Task Actions (retained for buttons in list rows) ─────────────────────
@@ -1478,7 +1502,7 @@ function createTaskFromAI(taskData) {
 async function taskRun(id) {
   try {
     await fetch('/api/tasks/' + id + '/run', { method: 'POST' });
-    fetchTasks();
+    await fetchTasks();
   } catch (e) { showToast('Failed to run: ' + e.message); }
 }
 
@@ -1503,7 +1527,7 @@ async function taskPause(id) {
 async function taskStop(id) {
   try {
     await fetch('/api/tasks/' + id + '/stop', { method: 'POST' });
-    fetchTasks();
+    await fetchTasks();
   } catch (e) { showToast('Failed to stop: ' + e.message); }
 }
 
@@ -1992,16 +2016,22 @@ function extractAndRenderTaskCreate(buffer, msgEl) {
     try {
       var data = JSON.parse(m[1].trim());
       if (data.title) {
-        createTaskFromAI(data);
         // Replace the code block with a confirmation card
         var card = document.createElement('div');
         card.className = 'task-created-card';
         card.innerHTML = '<i class="ti ti-checklist" style="color:var(--accent)"></i> ' +
-          '<strong>Task scheduled:</strong> ' + escHtml(data.title) +
+          '<strong>Saving automation:</strong> ' + escHtml(data.title || data.name || 'Untitled') +
           (data.schedule && data.schedule.type !== 'manual'
             ? ' <span style="color:var(--warn);font-size:11px">(' + (data.schedule.type === 'once' ? data.schedule.at : '⟳ ' + data.schedule.cron) + ')</span>'
             : '');
         msgEl.querySelector('.msg-body')?.appendChild(card);
+        createTaskFromAI(data).then(function(created) {
+          card.innerHTML = '<i class="ti ti-checklist" style="color:var(--accent)"></i> ' +
+            '<strong>Automation saved:</strong> ' + escHtml((created && created.title) || data.title || data.name || 'Untitled');
+        }).catch(function(e) {
+          card.innerHTML = '<i class="ti ti-alert-triangle" style="color:var(--error)"></i> ' +
+            '<strong>Automation save failed:</strong> ' + escHtml(e.message || 'Unknown error');
+        });
       }
     } catch (e) {
       console.warn('[tasks] Failed to parse task-create block:', e.message);

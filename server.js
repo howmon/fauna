@@ -7898,8 +7898,8 @@ function attachTeamsRelay(server) {
           }
 
           case 'task/create': {
-            const task = createTask({ name: msg.description, description: msg.description });
-            respond({ task: { id: task.id, description: task.description, status: task.status } });
+            const task = createTask({ title: msg.title || msg.description, description: msg.description });
+            respond({ task: { id: task.id, title: task.title, description: task.description, status: task.status } });
             break;
           }
 

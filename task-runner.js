@@ -8,6 +8,28 @@ import { getTask, updateTask, completeTask, failTask } from './task-manager.js';
 const PORT = 3737;
 const _runningTasks = new Map(); // taskId → { abortController, step, startedAt }
 
+function _abortError() {
+  const err = new Error('Stopped by user');
+  err.name = 'AbortError';
+  return err;
+}
+
+function _throwIfAborted(signal) {
+  if (signal?.aborted) throw _abortError();
+}
+
+function _abortableDelay(ms, signal) {
+  _throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(_abortError());
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 // ── Main entry point — called when scheduler fires or user hits "Run Now" ──
 
 async function runTask(taskId, opts = {}) {
@@ -41,6 +63,14 @@ async function runTask(taskId, opts = {}) {
       await _autonomyLoop(task, state);
     }
   } catch (err) {
+    if (err.name === 'AbortError' || state.abortController.signal.aborted) {
+      const current = getTask(taskId);
+      if (current && current.status === 'running') {
+        failTask(taskId, 'Stopped by user');
+        _emit(taskId, 'failed', { error: 'Stopped by user' });
+      }
+      return;
+    }
     console.error('[task-runner] Task failed:', task.title, err.message);
     failTask(taskId, err.message);
     _emit(taskId, 'failed', { error: err.message });
@@ -172,6 +202,7 @@ async function _autonomyLoop(task, state) {
       maxContextTurns: 100,
     }, state.abortController.signal);
 
+    _throwIfAborted(state.abortController.signal);
     if (!aiResponse) {
       failTask(task.id, 'No response from AI');
       _emit(task.id, 'failed', { error: 'no response' });
@@ -195,7 +226,7 @@ async function _autonomyLoop(task, state) {
     // FIRST: execute any action blocks in the response (before checking completion markers)
     // The AI often emits action blocks alongside TASK_FAILED guesses — we must run
     // the actions first and feed results back so the AI can make an informed decision.
-    const actionResults = await _executeResponseActions(aiResponse, task);
+    const actionResults = await _executeResponseActions(aiResponse, task, state.abortController.signal);
 
     if (actionResults && actionResults.length) {
       // Track stats and reasoning
@@ -305,9 +336,10 @@ async function _callChat(params, signal) {
 
 // ── Extract and execute action blocks from AI response ───────────────────
 
-async function _executeResponseActions(response, task) {
+async function _executeResponseActions(response, task, signal) {
   const results = [];
   const perms = task.permissions || {};
+  _throwIfAborted(signal);
 
   // Extract ```shell-exec blocks (handle both newline and space/inline after block name)
   const shellBlocks = [];
@@ -316,6 +348,7 @@ async function _executeResponseActions(response, task) {
   while ((m = shellRe.exec(response))) shellBlocks.push(m[1].trim());
 
   for (const cmd of shellBlocks) {
+    _throwIfAborted(signal);
     // Gate: skip if shell permission is disabled
     if (perms.shell === false) {
       results.push({ type: 'shell-exec', output: 'Shell access is disabled for this task. Skipped.' });
@@ -327,6 +360,7 @@ async function _executeResponseActions(response, task) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ command: cmd, cwd }),
+        signal,
       });
       // SSE stream — collect output
       const text = await r.text();
@@ -341,6 +375,7 @@ async function _executeResponseActions(response, task) {
       }
       results.push({ type: 'shell-exec', output: output.slice(0, 8000) });
     } catch (err) {
+      if (err.name === 'AbortError' || signal?.aborted) throw _abortError();
       results.push({ type: 'shell-exec', output: 'Error: ' + err.message });
     }
   }
@@ -369,6 +404,7 @@ async function _executeResponseActions(response, task) {
     }
 
     for (const act of actions) {
+      _throwIfAborted(signal);
       if (!act.action) { results.push({ type: 'browser-ext-action', output: 'Invalid action (no action field): ' + JSON.stringify(act).slice(0, 200) }); continue; }
       try {
         // Determine target tabId — if task has specific tabs, try to resolve
@@ -383,6 +419,7 @@ async function _executeResponseActions(response, task) {
             tabId,
             timeout: act.timeout || 15000,
           }),
+          signal,
         });
         const result = await r.json();
         if (result.ok) {
@@ -393,6 +430,7 @@ async function _executeResponseActions(response, task) {
           results.push({ type: 'browser-ext-action', output: act.action + ' → error: ' + (result.error || 'unknown') });
         }
       } catch (err) {
+        if (err.name === 'AbortError' || signal?.aborted) throw _abortError();
         results.push({ type: 'browser-ext-action', output: act.action + ' → failed: ' + err.message });
       }
     }
@@ -561,6 +599,7 @@ async function _runPipeline(task, state) {
   const nodeOutputs = {};
 
   for (const nid of order) {
+    _throwIfAborted(state.abortController.signal);
     if (skipped.has(nid)) {
       nodeOutputs[nid] = null;
       const skippedNode = nodes.find(n => n.id === nid);
@@ -583,6 +622,7 @@ async function _runPipeline(task, state) {
     const cfg = node.config || {};
 
     try {
+      _throwIfAborted(state.abortController.signal);
       switch (node.type) {
 
         case 'trigger':
@@ -600,6 +640,7 @@ async function _runPipeline(task, state) {
             agentName: cfg.agentName || _pickAgent(task, state.step),
             noTools: node.type === 'prompt',
           }, state.abortController.signal);
+          _throwIfAborted(state.abortController.signal);
           output = aiResp || '';
           break;
         }
@@ -612,6 +653,7 @@ async function _runPipeline(task, state) {
             model: task.model || 'claude-sonnet-4.6',
             systemPrompt: 'Execute shell commands. Return only the output.',
           }, state.abortController.signal);
+          _throwIfAborted(state.abortController.signal);
           output = shellResult || '';
           break;
         }
@@ -624,6 +666,7 @@ async function _runPipeline(task, state) {
             model: task.model || 'claude-sonnet-4.6',
             systemPrompt: 'You can use browser-ext-action blocks. Navigate and return results.',
           }, state.abortController.signal);
+          _throwIfAborted(state.abortController.signal);
           output = browserResp || '';
           break;
         }
@@ -635,6 +678,7 @@ async function _runPipeline(task, state) {
             model: task.model || 'claude-sonnet-4.6',
             systemPrompt: 'You have access to Figma MCP tools.',
           }, state.abortController.signal);
+          _throwIfAborted(state.abortController.signal);
           output = figmaResp || '';
           break;
         }
@@ -700,6 +744,7 @@ async function _runPipeline(task, state) {
               createdAt: new Date().toISOString(),
               messages: [{ role: 'assistant', content: msgText, timestamp: new Date().toISOString() }],
             }),
+            signal: state.abortController.signal,
           }).catch(() => {});
           output = convId;
           break;
@@ -710,16 +755,17 @@ async function _runPipeline(task, state) {
           if (!url) { output = 'Node error: No URL configured'; break; }
           const method = cfg.method || 'POST';
           const body   = cfg.body ? _interpolate(cfg.body, nodeOutputs) : undefined;
-          const fetchOpts = { method, headers: { 'Content-Type': 'application/json' } };
+          const fetchOpts = { method, headers: { 'Content-Type': 'application/json' }, signal: state.abortController.signal };
           if (body && method !== 'GET') fetchOpts.body = body;
           const resp   = await fetch(url, fetchOpts);
+          _throwIfAborted(state.abortController.signal);
           output = await resp.text();
           break;
         }
 
         case 'delay': {
           const ms = parseInt(cfg.ms || '1000', 10);
-          await new Promise(resolve => setTimeout(resolve, Math.min(ms, 30000)));
+          await _abortableDelay(Math.min(ms, 30000), state.abortController.signal);
           output = input;
           break;
         }
@@ -739,6 +785,7 @@ async function _runPipeline(task, state) {
           output = input;
       }
     } catch (e) {
+      if (e.name === 'AbortError' || state.abortController.signal.aborted) throw _abortError();
       output = 'Node error: ' + e.message;
     }
 
