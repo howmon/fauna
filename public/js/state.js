@@ -41,6 +41,7 @@ var _convFileLog    = {};  // { convId: [{path, bytes, time}] }
 var _convCwd        = {};  // { convId: string } — project working dir for relative paths
 var _promptHistIdx  = -1;  // current arrow-up/down cursor (-1 = draft)
 var _promptHistDraft = ''; // stashed draft text while cycling
+var _unterminatedWriteFileWarnings = {}; // de-dupe malformed saved-message warnings
 
 // ── Conversation file bar ─────────────────────────────────────────────────
 function _cfbEsc(s) { return String(s).replace(/'/g, "\\'").replace(/"/g, '&quot;'); }
@@ -251,6 +252,18 @@ function sanitizeWriteFileBlocks(rawBuffer) {
     '</div>\n';
   }
 
+  function incompleteBlockPlaceholder(mode, target) {
+    var label = activityLabel(mode, target);
+    return '```text\n' + label + ' was not rendered or run because the closing fence was missing.\n```\n';
+  }
+
+  function warnUnterminatedBlockOnce(mode, target, contentStart) {
+    var key = mode + '|' + String(target || '') + '|' + contentStart + '|' + text.length;
+    if (_unterminatedWriteFileWarnings[key]) return;
+    _unterminatedWriteFileWarnings[key] = true;
+    console.warn('[fauna] Unterminated ' + mode + ' block neutralized to avoid partial file write');
+  }
+
   while (pos < text.length) {
     var lineEnd = nextLineEnd(pos);
     var line = text.slice(pos, lineEnd);
@@ -303,8 +316,10 @@ function sanitizeWriteFileBlocks(rawBuffer) {
     }
 
     if (closeStart === -1) {
-      out += text.slice(pos);
-      console.warn('[fauna] Unterminated ' + mode + ' block left untouched to avoid partial file write');
+      var unterminatedIsFilePlan = mode === 'file-plan' || mode === 'workspace-edit' || mode === 'bulk-edit';
+      var unterminatedFilePath = mode === 'apply-patch' ? '(patch)' : unterminatedIsFilePlan ? '(file plan)' : langSuffix.replace(/^[:/]/, '').trim();
+      out += incompleteBlockPlaceholder(mode, unterminatedFilePath);
+      warnUnterminatedBlockOnce(mode, unterminatedFilePath, contentStart);
       return out;
     }
 

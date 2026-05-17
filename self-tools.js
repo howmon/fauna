@@ -13,6 +13,60 @@ import {
 import {
   createProject, getAllProjects, getProject,
 } from './project-manager.js';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import crypto from 'crypto';
+
+const HOME = os.homedir();
+
+function _resolveFaunaWritePath(filePath, cwd) {
+  if (!filePath) throw new Error('path required');
+  let resolved;
+  if (String(filePath).startsWith('/')) resolved = String(filePath);
+  else if (String(filePath).startsWith('~/')) resolved = String(filePath).replace(/^~/, HOME);
+  else if (cwd) resolved = path.join(String(cwd).replace(/^~/, HOME), String(filePath));
+  else resolved = path.join(HOME, String(filePath));
+  resolved = path.resolve(resolved);
+  if (!resolved.startsWith(HOME) && !resolved.startsWith('/tmp')) throw new Error('Path outside allowed directories: ' + resolved);
+  return resolved;
+}
+
+function _atomicFastWrite(abs, buffer) {
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  const tmp = abs + '.~fauna-fast-' + process.pid + '-' + crypto.randomBytes(4).toString('hex');
+  try {
+    fs.writeFileSync(tmp, buffer);
+    fs.renameSync(tmp, abs);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    throw e;
+  }
+}
+
+function _writeFastFile(args = {}) {
+  const abs = _resolveFaunaWritePath(args.path, args.cwd);
+  const encoding = args.encoding || 'utf8';
+  const existed = fs.existsSync(abs);
+  if (args.overwrite === false && existed && !args.append) throw new Error('Refusing to overwrite existing file: ' + abs);
+  let content = String(args.content ?? '');
+  if (args.append && existed) content = fs.readFileSync(abs, encoding) + content;
+  const buffer = Buffer.from(content, encoding);
+  const bytes = buffer.length;
+  const lines = content.length ? content.split('\n').length : 0;
+  if (args.reject_empty !== false && bytes === 0) throw new Error('Refusing to write empty file: ' + abs);
+  if (args.minBytes != null && bytes < Number(args.minBytes)) throw new Error('Content too short for ' + abs + ': ' + bytes + ' bytes < ' + args.minBytes);
+  if (args.minLines != null && lines < Number(args.minLines)) throw new Error('Content too short for ' + abs + ': ' + lines + ' lines < ' + args.minLines);
+  const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+  if (args.sha256 && args.sha256 !== sha256) throw new Error('sha256 mismatch for ' + abs + ': expected ' + args.sha256 + ', got ' + sha256);
+  let backup = null;
+  if (args.backup && existed) {
+    backup = abs + '.~fauna-backup-' + Date.now();
+    fs.copyFileSync(abs, backup);
+  }
+  _atomicFastWrite(abs, buffer);
+  return { path: abs, bytes, lines, sha256, existed, op: args.append ? 'append' : 'write', backup };
+}
 
 // ── Tool definitions ────────────────────────────────────────────────────
 
@@ -169,6 +223,62 @@ export const SELF_TOOL_DEFS = [
       },
     },
   },
+
+  // ── Fast file tools ──
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_write_file',
+      description: 'Fast VS Code-style file write. Prefer this over markdown write-file blocks whenever tools are available. Writes server-side with temp+rename and returns path/bytes/sha256 without rendering file bytes in chat.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute path, ~/ path, or path relative to cwd' },
+          cwd: { type: 'string', description: 'Optional working directory for relative paths' },
+          content: { type: 'string', description: 'Full file content' },
+          append: { type: 'boolean', description: 'Append content to existing file instead of replacing' },
+          overwrite: { type: 'boolean', description: 'Set false to refuse overwriting existing files' },
+          minBytes: { type: 'number', description: 'Optional minimum byte count guard' },
+          minLines: { type: 'number', description: 'Optional minimum line count guard' },
+          sha256: { type: 'string', description: 'Optional expected final content sha256' },
+          backup: { type: 'boolean', description: 'Optional: create a backup copy before overwriting. Defaults false for speed.' },
+        },
+        required: ['path', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_write_files',
+      description: 'Fast VS Code-style bulk file write. Prefer this for projects and multi-file changes instead of file-plan markdown. Preflights all files, writes server-side with temp+rename, and returns compact results.',
+      parameters: {
+        type: 'object',
+        properties: {
+          cwd: { type: 'string', description: 'Optional working directory for relative file paths' },
+          expected_file_count: { type: 'number', description: 'Optional guard for exact number of files' },
+          files: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                path: { type: 'string' },
+                content: { type: 'string' },
+                append: { type: 'boolean' },
+                overwrite: { type: 'boolean' },
+                minBytes: { type: 'number' },
+                minLines: { type: 'number' },
+                sha256: { type: 'string' },
+              },
+              required: ['path', 'content'],
+            },
+          },
+          backup: { type: 'boolean', description: 'Optional: create backup copies before overwriting. Defaults false for speed.' },
+        },
+        required: ['files'],
+      },
+    },
+  },
 ];
 
 // ── Tool executor ───────────────────────────────────────────────────────
@@ -232,6 +342,38 @@ export function executeSelfTool(toolName, args, context = {}) {
     case 'fauna_send_notification': {
       context.sendNotification?.(args.title, args.body);
       return JSON.stringify({ ok: true, title: args.title });
+    }
+
+    // ── Fast file writes ──
+    case 'fauna_write_file': {
+      try {
+        const started = Date.now();
+        const result = _writeFastFile(args || {});
+        return JSON.stringify({ ok: true, ms: Date.now() - started, result });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+    case 'fauna_write_files': {
+      try {
+        const started = Date.now();
+        const files = Array.isArray(args.files) ? args.files : [];
+        if (!files.length) throw new Error('files array required');
+        if (args.expected_file_count != null && Number(args.expected_file_count) !== files.length) {
+          throw new Error('Expected ' + args.expected_file_count + ' files, received ' + files.length);
+        }
+        const seen = new Set();
+        for (const file of files) {
+          const abs = _resolveFaunaWritePath(file.path, args.cwd);
+          if (seen.has(abs)) throw new Error('Duplicate write target: ' + abs);
+          seen.add(abs);
+          if (file.content === undefined) throw new Error('Missing content for ' + file.path);
+        }
+        const results = files.map(file => _writeFastFile({ ...file, cwd: args.cwd, backup: args.backup || file.backup }));
+        return JSON.stringify({ ok: true, ms: Date.now() - started, results });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
     }
 
     default:
