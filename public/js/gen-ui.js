@@ -1227,10 +1227,7 @@ function extractAndRenderGenUI(buffer, msgEl, isHistoryLoad) {
   if (!blocks.length) return;
   if (_genUiShouldSuppressForShellMessage(msgEl)) {
     blocks.forEach(function(pre) {
-      var notice = document.createElement('div');
-      notice.className = 'gui-parse-error';
-      notice.innerHTML = '<i class="ti ti-shield-check"></i> Generated UI hidden until command output is reviewed.';
-      pre.replaceWith(notice);
+      pre.remove();
     });
     return;
   }
