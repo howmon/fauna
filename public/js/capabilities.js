@@ -96,6 +96,8 @@ function getCapabilitiesContext() {
     '- NEVER simulate or invent command output — always run the real command.',
     '- Prefer INLINE execution — run python3 -c, node -e, bash -c instead of writing temp files unless >50 lines.',
     '- Keep responses concise — show reasoning briefly, then act. Avoid long preambles before running commands.',
+    '- When you emit a command, STOP after the command block. Do not also provide a final answer, generated UI, playlist, artifact, or recommendations in that same response.',
+    '- After command output is fed back, base the final answer only on that real output. If the output is irrelevant, say so and run a corrected command instead of fabricating results.',
     '- After a command runs and output is fed back, CONTINUE working — run the next command. Keep going until fully done.',
     '- Only stop when the task is complete. Then summarize what was accomplished.',
     '',

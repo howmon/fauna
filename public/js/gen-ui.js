@@ -1225,6 +1225,15 @@ function _genUiSpecTitle(spec) {
 function extractAndRenderGenUI(buffer, msgEl, isHistoryLoad) {
   var blocks = msgEl.querySelectorAll('pre[data-special-lang="gen-ui"]');
   if (!blocks.length) return;
+  if (_genUiShouldSuppressForShellMessage(msgEl)) {
+    blocks.forEach(function(pre) {
+      var notice = document.createElement('div');
+      notice.className = 'gui-parse-error';
+      notice.innerHTML = '<i class="ti ti-shield-check"></i> Generated UI hidden until command output is reviewed.';
+      pre.replaceWith(notice);
+    });
+    return;
+  }
   blocks.forEach(function(pre) {
     var code = pre.querySelector('code');
     var raw = code ? code.textContent : pre.textContent;
@@ -1274,6 +1283,11 @@ function extractAndRenderGenUI(buffer, msgEl, isHistoryLoad) {
 
     pre.replaceWith(wrapper);
   });
+}
+
+function _genUiShouldSuppressForShellMessage(msgEl) {
+  if (!msgEl) return false;
+  return !!msgEl.querySelector('.shell-exec-block, code.language-shell-exec, code.language-shell_exec');
 }
 
 // ── Catalog prompt (for system prompt injection) ──────────────────────────
