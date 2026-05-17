@@ -198,7 +198,7 @@ function sanitizeWriteFileBlocks(rawBuffer) {
   var text = String(rawBuffer);
   var out = '';
   var pos = 0;
-  var blockStart = /^([`~]{3,})(write-file|append-file|replace-string|apply-patch)([^\r\n]*)\r?\n/;
+  var blockStart = /^([`~]{3,})(write-file|append-file|replace-string|apply-patch|file-plan|workspace-edit|bulk-edit)([^\r\n]*)\r?\n/;
 
   function nextLineEnd(from) {
     var nl = text.indexOf('\n', from);
@@ -246,10 +246,13 @@ function sanitizeWriteFileBlocks(rawBuffer) {
     }
 
     var content = text.slice(contentStart, closeStart);
-    var filePath = mode === 'apply-patch' ? '(patch)' : langSuffix.replace(/^[:/]/, '').trim();
+    var isFilePlan = mode === 'file-plan' || mode === 'workspace-edit' || mode === 'bulk-edit';
+    var filePath = mode === 'apply-patch' ? '(patch)' : isFilePlan ? '(file plan)' : langSuffix.replace(/^[:/]/, '').trim();
     var id = 'wf-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-    _wfContentStore[id] = { path: filePath, content: content, mode: mode };
-    out += '```write-file-ready:' + id + ':' + filePath + '\n```';
+    _wfContentStore[id] = { path: filePath, content: content, mode: isFilePlan ? 'file-plan' : mode };
+    out += isFilePlan
+      ? '```file-plan-ready:' + id + ':' + filePath + '\n```'
+      : '```write-file-ready:' + id + ':' + filePath + '\n```';
     pos = closeEnd;
   }
   return out;

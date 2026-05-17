@@ -4230,36 +4230,137 @@ app.put('/api/write-file-stream', (req, res) => {
 });
 
 // ── Bulk write plan — VS Code-style structured file operations ───────────
-// POST { cwd?, files:[{ path, content, append?, encoding?, sha256? }] }
-// sha256, when supplied, is checked against the final on-disk file content.
-app.post('/api/write-files', (req, res) => {
-  const { cwd, files } = req.body || {};
-  if (!Array.isArray(files) || files.length === 0) {
-    return res.status(400).json({ ok: false, error: 'files array required' });
+// POST { cwd?, expected_file_count?, files:[{ path, content, append?, encoding?, sha256?, minBytes?, minLines?, overwrite? }] }
+// The whole plan is preflighted and staged before any target is replaced.
+function _sha256(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+function _summarizeWritePlan(plan) {
+  return plan.map(op => ({
+    path: op.path,
+    op: op.op,
+    bytes: op.bytes,
+    lines: op.lines,
+    sha256: op.sha256,
+    existed: op.existed,
+  }));
+}
+
+function _buildWriteFilesPlan(body = {}, context) {
+  const { cwd, files } = body;
+  if (!Array.isArray(files) || files.length === 0) throw new Error('files array required');
+  const expectedCount = body.expected_file_count ?? body.expectedFileCount;
+  if (expectedCount != null && Number(expectedCount) !== files.length) {
+    throw new Error('Expected ' + expectedCount + ' files, received ' + files.length);
   }
-  try {
-    const context = getMutationContext(req.body);
-    const results = [];
-    for (const item of files) {
-      if (!item || !item.path) throw new Error('Each file entry requires path');
-      if (item.content === undefined) throw new Error('Missing content for ' + item.path);
-      const encoding = item.encoding || 'utf8';
-      const abs = resolvePath(item.path, cwd);
-      assertWriteAllowed(abs, context);
-      checkpointFile(abs);
-      let finalContent = String(item.content ?? '');
-      if (item.append && fs.existsSync(abs)) {
-        finalContent = fs.readFileSync(abs, encoding) + finalContent;
-      }
-      const finalBuffer = Buffer.from(finalContent, encoding);
-      const sha256 = crypto.createHash('sha256').update(finalBuffer).digest('hex');
-      if (item.sha256 && item.sha256 !== sha256) {
-        throw new Error('sha256 mismatch for ' + abs + ': expected ' + item.sha256 + ', got ' + sha256);
-      }
-      atomicWriteFile(abs, finalContent, encoding);
-      const bytes = fs.statSync(abs).size;
-      results.push({ path: abs, bytes, sha256, op: item.append ? 'append' : 'write' });
+  const seen = new Set();
+  const plan = [];
+  for (const item of files) {
+    if (!item || !item.path) throw new Error('Each file entry requires path');
+    if (item.content === undefined) throw new Error('Missing content for ' + item.path);
+    const abs = resolvePath(String(item.path), cwd);
+    assertWriteAllowed(abs, context);
+    if (seen.has(abs)) throw new Error('Duplicate write target in plan: ' + abs);
+    seen.add(abs);
+
+    const existed = fs.existsSync(abs);
+    if (item.ignoreIfExists && existed) {
+      plan.push({ path: abs, op: 'skip', bytes: 0, lines: 0, sha256: null, existed });
+      continue;
     }
+    if (item.overwrite === false && existed && !item.append) {
+      throw new Error('Refusing to overwrite existing file: ' + abs);
+    }
+
+    const encoding = item.encoding || 'utf8';
+    let finalContent = String(item.content ?? '');
+    if (item.append && existed) finalContent = fs.readFileSync(abs, encoding) + finalContent;
+
+    const finalBuffer = Buffer.from(finalContent, encoding);
+    const sha256 = _sha256(finalBuffer);
+    const bytes = finalBuffer.length;
+    const lines = finalContent.length ? finalContent.split('\n').length : 0;
+    if (item.sha256 && item.sha256 !== sha256) {
+      throw new Error('sha256 mismatch for ' + abs + ': expected ' + item.sha256 + ', got ' + sha256);
+    }
+    if (item.minBytes != null && bytes < Number(item.minBytes)) {
+      throw new Error('Content for ' + abs + ' is too short: ' + bytes + ' bytes < ' + item.minBytes);
+    }
+    if (item.minLines != null && lines < Number(item.minLines)) {
+      throw new Error('Content for ' + abs + ' is too short: ' + lines + ' lines < ' + item.minLines);
+    }
+    if (body.reject_empty !== false && bytes === 0) throw new Error('Refusing to write empty file: ' + abs);
+
+    plan.push({ path: abs, op: item.append ? 'append' : 'write', content: finalContent, buffer: finalBuffer, encoding, bytes, lines, sha256, existed });
+  }
+  return plan;
+}
+
+function _commitWriteFilesPlan(plan) {
+  const tx = crypto.randomBytes(6).toString('hex');
+  const staged = [];
+  const backups = [];
+  const committed = [];
+  try {
+    for (const op of plan) {
+      if (op.op === 'skip') continue;
+      fs.mkdirSync(path.dirname(op.path), { recursive: true });
+      if (op.existed) {
+        checkpointFile(op.path);
+        const backup = op.path + '.~fauna-bak-' + process.pid + '-' + tx;
+        fs.copyFileSync(op.path, backup);
+        backups.push({ path: op.path, backup, existed: true });
+      } else {
+        backups.push({ path: op.path, backup: null, existed: false });
+      }
+      const tmp = op.path + '.~fauna-plan-' + process.pid + '-' + tx;
+      fs.writeFileSync(tmp, op.buffer);
+      const stagedHash = _sha256(fs.readFileSync(tmp));
+      if (stagedHash !== op.sha256) throw new Error('Staged checksum mismatch for ' + op.path);
+      staged.push({ path: op.path, tmp });
+    }
+
+    for (const item of staged) {
+      fs.renameSync(item.tmp, item.path);
+      committed.push(item.path);
+    }
+
+    for (const b of backups) {
+      if (b.backup) { try { fs.unlinkSync(b.backup); } catch (_) {} }
+    }
+    return _summarizeWritePlan(plan);
+  } catch (e) {
+    for (const item of staged) {
+      try { if (fs.existsSync(item.tmp)) fs.unlinkSync(item.tmp); } catch (_) {}
+    }
+    for (const b of backups.reverse()) {
+      try {
+        if (b.existed && b.backup && fs.existsSync(b.backup)) fs.copyFileSync(b.backup, b.path);
+        else if (!b.existed && fs.existsSync(b.path)) fs.unlinkSync(b.path);
+      } catch (_) {}
+      try { if (b.backup) fs.unlinkSync(b.backup); } catch (_) {}
+    }
+    e.message = 'Write plan failed and rollback was attempted: ' + e.message;
+    throw e;
+  }
+}
+
+app.post('/api/write-files/check', (req, res) => {
+  try {
+    const context = getMutationContext(req.body || {});
+    const plan = _buildWriteFilesPlan(req.body || {}, context);
+    res.json({ ok: true, results: _summarizeWritePlan(plan), sandboxed: !!context });
+  } catch (e) {
+    sendMutationError(res, e);
+  }
+});
+
+app.post('/api/write-files', (req, res) => {
+  try {
+    const context = getMutationContext(req.body || {});
+    const plan = _buildWriteFilesPlan(req.body || {}, context);
+    const results = _commitWriteFilesPlan(plan);
     res.json({ ok: true, results, sandboxed: !!context });
   } catch (e) {
     sendMutationError(res, e);

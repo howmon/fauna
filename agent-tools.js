@@ -303,7 +303,7 @@ function getBuiltInToolDefinitions(permissions) {
       type: 'function',
       function: {
         name: 'agent_write_files',
-        description: 'Write multiple project files in one structured operation. This avoids markdown fence truncation for complex projects. Each entry may include sha256 for final content verification. Access is restricted to: ' + permissions.fileWrite.join(', '),
+        description: 'Write multiple project files in one structured, transaction-like operation. This avoids markdown fence truncation for complex projects. Entries may include sha256/minLines/minBytes for final content verification. Access is restricted to: ' + permissions.fileWrite.join(', '),
         parameters: {
           type: 'object',
           properties: {
@@ -315,11 +315,15 @@ function getBuiltInToolDefinitions(permissions) {
                   path: { type: 'string', description: 'File path to write' },
                   content: { type: 'string', description: 'Full file content' },
                   append: { type: 'boolean', description: 'Append instead of overwrite' },
+                  overwrite: { type: 'boolean', description: 'Set false to fail if the file already exists' },
+                  minBytes: { type: 'number', description: 'Reject final content smaller than this many bytes' },
+                  minLines: { type: 'number', description: 'Reject final content with fewer lines' },
                   sha256: { type: 'string', description: 'Optional SHA-256 of the final on-disk content' },
                 },
                 required: ['path', 'content'],
               },
             },
+            expected_file_count: { type: 'number', description: 'Optional guard: expected number of files in the plan' },
           },
           required: ['files'],
         },
@@ -486,22 +490,65 @@ async function executeBuiltInTool(toolName, args, permissions, agentName, onOutp
     case 'agent_write_files': {
       const files = Array.isArray(args.files) ? args.files : [];
       if (!files.length) return 'Error: files array is required';
-      const results = [];
+      if (args.expected_file_count != null && Number(args.expected_file_count) !== files.length) {
+        return 'Error: expected ' + args.expected_file_count + ' files, received ' + files.length;
+      }
+      const plan = [];
+      const seen = new Set();
       try {
         for (const item of files) {
           if (!item || !item.path) return 'Error: each file entry requires path';
           if (item.content === undefined) return 'Error: missing content for ' + item.path;
           const abs = path.resolve(String(item.path).replace(/^~/, HOME));
+          if (seen.has(abs)) return 'Error: duplicate write target in plan: ' + abs;
+          seen.add(abs);
           const check = checkFilePath(abs, 'write', permissions, agentName);
           if (!check.allowed) return 'BLOCKED: ' + check.reason;
-          fs.mkdirSync(path.dirname(abs), { recursive: true });
+          const existed = fs.existsSync(abs);
+          if (item.overwrite === false && existed && !item.append) return 'Error: refusing to overwrite existing file: ' + abs;
           let finalContent = String(item.content ?? '');
-          if (item.append && fs.existsSync(abs)) finalContent = fs.readFileSync(abs, 'utf8') + finalContent;
-          const sha256 = crypto.createHash('sha256').update(Buffer.from(finalContent, 'utf8')).digest('hex');
+          if (item.append && existed) finalContent = fs.readFileSync(abs, 'utf8') + finalContent;
+          const buffer = Buffer.from(finalContent, 'utf8');
+          const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
           if (item.sha256 && item.sha256 !== sha256) return 'Error: sha256 mismatch for ' + abs + ': expected ' + item.sha256 + ', got ' + sha256;
-          fs.writeFileSync(abs, finalContent, 'utf8');
-          results.push({ path: abs, bytes: Buffer.byteLength(finalContent), sha256, op: item.append ? 'append' : 'write' });
+          const bytes = buffer.length;
+          const lines = finalContent.length ? finalContent.split('\n').length : 0;
+          if (item.minBytes != null && bytes < Number(item.minBytes)) return 'Error: content for ' + abs + ' is too short: ' + bytes + ' bytes < ' + item.minBytes;
+          if (item.minLines != null && lines < Number(item.minLines)) return 'Error: content for ' + abs + ' is too short: ' + lines + ' lines < ' + item.minLines;
+          if (bytes === 0) return 'Error: refusing to write empty file: ' + abs;
+          plan.push({ path: abs, buffer, sha256, bytes, lines, existed, op: item.append ? 'append' : 'write' });
         }
+        const tx = crypto.randomBytes(6).toString('hex');
+        const staged = [];
+        const backups = [];
+        try {
+          for (const op of plan) {
+            fs.mkdirSync(path.dirname(op.path), { recursive: true });
+            if (op.existed) {
+              const backup = op.path + '.~fauna-agent-bak-' + process.pid + '-' + tx;
+              fs.copyFileSync(op.path, backup);
+              backups.push({ path: op.path, backup, existed: true });
+            } else {
+              backups.push({ path: op.path, backup: null, existed: false });
+            }
+            const tmp = op.path + '.~fauna-agent-plan-' + process.pid + '-' + tx;
+            fs.writeFileSync(tmp, op.buffer);
+            staged.push({ path: op.path, tmp });
+          }
+          for (const item of staged) fs.renameSync(item.tmp, item.path);
+          for (const b of backups) if (b.backup) { try { fs.unlinkSync(b.backup); } catch (_) {} }
+        } catch (e) {
+          for (const item of staged) { try { if (fs.existsSync(item.tmp)) fs.unlinkSync(item.tmp); } catch (_) {} }
+          for (const b of backups.reverse()) {
+            try {
+              if (b.existed && b.backup && fs.existsSync(b.backup)) fs.copyFileSync(b.backup, b.path);
+              else if (!b.existed && fs.existsSync(b.path)) fs.unlinkSync(b.path);
+            } catch (_) {}
+            try { if (b.backup) fs.unlinkSync(b.backup); } catch (_) {}
+          }
+          throw e;
+        }
+        const results = plan.map(op => ({ path: op.path, bytes: op.bytes, lines: op.lines, sha256: op.sha256, op: op.op }));
         return 'Files written: ' + JSON.stringify(results);
       } catch (e) {
         return 'Error writing files: ' + e.message;

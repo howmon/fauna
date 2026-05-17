@@ -42,6 +42,16 @@ marked.use({
         var wfPath = parts.slice(1).join(':');
         return '<pre data-special-lang="write-file"><code class="language-write-file" data-wf-id="' + escHtml(wfId) + '" data-wf-path="' + escHtml(wfPath) + '"></code></pre>';
       }
+      if (fullLang.startsWith('file-plan-ready:')) {
+        var planParts = fullLang.slice('file-plan-ready:'.length).split(':');
+        var readyPlanId = planParts[0];
+        return '<pre data-special-lang="file-plan"><code class="language-file-plan" data-wf-id="' + escHtml(readyPlanId) + '" data-wf-path="(file plan)"></code></pre>';
+      }
+      if (lang === 'file-plan' || lang === 'workspace-edit' || lang === 'bulk-edit') {
+        var planId = 'wf-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+        _wfContentStore[planId] = { path: '(file plan)', content: rawText, mode: 'file-plan' };
+        return '<pre data-special-lang="file-plan"><code class="language-file-plan" data-wf-id="' + escHtml(planId) + '" data-wf-path="(file plan)"></code></pre>';
+      }
       // Runnable script langs — treat as shell-exec so they auto-run when autoRunShell is on.
       // The shell-exec pipeline already serializes execution, feeds results back to the AI,
       // and hard-stops on empty output, so regular bash/sh/python blocks can use it safely.

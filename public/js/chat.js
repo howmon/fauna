@@ -87,9 +87,9 @@ function extractAndRenderSuggestions(buffer, msgEl) {
   try { items = JSON.parse(match[1].trim()); } catch (_) { return; }
   if (!Array.isArray(items) || !items.length) return;
 
-  // Remove any previously rendered suggestion bar (e.g. from re-render)
-  var old = msgEl.querySelector('.suggestion-bar');
-  if (old) old.remove();
+  // Suggestions are conversation-level CTAs: keep only the latest bar visible.
+  var scope = msgEl.closest('.conv-inner') || msgEl.parentElement || document;
+  Array.from(scope.querySelectorAll('.suggestion-bar')).forEach(function(old) { old.remove(); });
 
   var bar = document.createElement('div');
   bar.className = 'suggestion-bar';

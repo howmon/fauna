@@ -2,7 +2,7 @@
 
 function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
   var container = messageEl.querySelector('.prose') || messageEl;
-  var codeBlocks = container.querySelectorAll('code.language-write-file');
+  var codeBlocks = container.querySelectorAll('code.language-write-file, code.language-file-plan');
   if (!codeBlocks.length) return;
   dbg('extractAndRenderWriteFile: found ' + codeBlocks.length + ' block(s)', 'info');
   codeBlocks.forEach(function(code) {
@@ -35,6 +35,7 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
     var isAppend  = mode === 'append-file';
     var isReplace = mode === 'replace-string';
     var isPatch   = mode === 'apply-patch';
+    var isPlan    = mode === 'file-plan' || code.classList.contains('language-file-plan');
 
     function addActiveAgentContext(body) {
       if (typeof isAgentActive === 'function' && isAgentActive()) {
@@ -44,37 +45,37 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
       return body;
     }
 
-    // Resolve relative paths against conversation CWD (write-file / append-file only)
-    var wid = convId || state.currentId || '';
-    if (!isReplace && !isPatch && filePath && !filePath.startsWith('/') && !filePath.startsWith('~')) {
+    function getWriteCwd() {
       var cwd = _convCwd[wid];
-      
-      // Priority: 1) conversation CWD, 2) active project rootPath, 3) user default save path, 4) workspace folder
       if (!cwd && typeof _activeProject === 'function') {
         var activeProj = _activeProject();
-        if (activeProj && activeProj.rootPath) {
-          cwd = activeProj.rootPath;
-          dbg('write-file: using active project rootPath: ' + cwd, 'info');
-        }
+        if (activeProj && activeProj.rootPath) cwd = activeProj.rootPath;
       }
-      
-      if (!cwd && state.defaultSavePath) {
-        cwd = state.defaultSavePath;
-        dbg('write-file: using default save path: ' + cwd, 'info');
-      }
-      
+      if (!cwd && state.defaultSavePath) cwd = state.defaultSavePath;
+      return cwd;
+    }
+
+    // Resolve relative paths against conversation CWD (write-file / append-file only)
+    var wid = convId || state.currentId || '';
+    if (!isReplace && !isPatch && !isPlan && filePath && !filePath.startsWith('/') && !filePath.startsWith('~')) {
+      var cwd = getWriteCwd();
       filePath = cwd ? cwd.replace(/\/$/, '') + '/' + filePath
                      : '~/.fauna/workspaces/' + wid + '/' + filePath;
     }
 
     var widgetId  = storeId || ('wf-' + Date.now() + '-' + Math.random().toString(36).slice(2));
-    var shortPath = filePath.length > 60 ? '…' + filePath.slice(-57) : filePath;
+    var shortPath = isPlan ? 'workspace file plan' : (filePath.length > 60 ? '…' + filePath.slice(-57) : filePath);
     var lines     = content ? content.split('\n').length : 0;
     var preview   = (content || '').slice(0, 300);
 
     // ── icon / label / colours per mode ───────────────────────────────────
     var iconClass, modeLabel, modeColor, pendingMsg;
-    if (isReplace) {
+    if (isPlan) {
+      iconClass  = 'ti-files';
+      modeLabel  = 'plan';
+      modeColor  = '#60a5fa';
+      pendingMsg = '⏳ Applying plan…';
+    } else if (isReplace) {
       iconClass  = 'ti-replace';
       modeLabel  = 'replace';
       modeColor  = '#fbbf24';   // amber
@@ -120,14 +121,42 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
     }
 
     if (isHistoryLoad) {
-      updateWriteFileStatus('wf-block done', lines + ' lines');
+      updateWriteFileStatus('wf-block done', isPlan ? 'file plan' : lines + ' lines');
       return;
     }
 
     // ── execute ────────────────────────────────────────────────────────────
     var promise;
 
-    if (isReplace) {
+    if (isPlan) {
+      var plan;
+      try {
+        plan = JSON.parse(content || '{}');
+      } catch (parseErr) {
+        updateWriteFileStatus('wf-block err', 'Invalid file plan JSON: ' + parseErr.message);
+        return;
+      }
+      if (!plan || !Array.isArray(plan.files) || !plan.files.length) {
+        updateWriteFileStatus('wf-block err', 'Invalid file plan: files array required');
+        return;
+      }
+      var planCwd = plan.cwd || getWriteCwd() || undefined;
+      var planBody = addActiveAgentContext(Object.assign({}, plan, { cwd: planCwd }));
+      promise = fetch('/api/write-files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(planBody)
+      }).then(function(r) { return r.json(); }).then(function(d) {
+        if (!d.ok) throw new Error(d.error || 'file plan failed');
+        var results = d.results || [];
+        var written = results.filter(function(r) { return r.op !== 'skip'; });
+        updateWriteFileStatus('wf-block done', written.length + ' file' + (written.length === 1 ? '' : 's') + ' written atomically');
+        dbg('file-plan: ' + written.length + ' file(s) written', 'ok');
+        if (storeId) delete _wfContentStore[storeId];
+        results.forEach(function(r) { if (r.op !== 'skip') trackConvFile(wid, r.path, r.bytes); });
+      });
+
+    } else if (isReplace) {
       // Parse SEARCH/REPLACE format
       var sepIdx = content.indexOf('=======');
       var searchBlock = content.indexOf('<<<<<<< SEARCH\n');

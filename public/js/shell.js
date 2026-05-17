@@ -367,9 +367,15 @@ function _showInlinePermissionPrompt(execId, widget, resultEl, runBtn, feedBtn, 
       '<button class="perm-btn perm-deny" onclick="_handlePermission(\'' + execId + '\',\'deny\')"><i class="ti ti-x"></i> Deny</button>' +
     '</div>';
 
-  // Insert after the closest accordion (cot-block) or after the widget itself
-  var anchor = widget.closest('.cot-block') || widget;
+  // Insert outside the outermost accordion/cluster so approval buttons are never hidden.
+  var anchor = widget;
+  var detail = widget.closest('details.cot-block, details.process-cluster');
+  while (detail && detail.parentElement) {
+    anchor = detail;
+    detail = detail.parentElement.closest('details.cot-block, details.process-cluster');
+  }
   if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(card, anchor.nextSibling);
+  try { card.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (_) {}
 
   widget._permOpts = opts;
   if (runBtn) {
@@ -884,6 +890,8 @@ async function runShellExec(execId, opts) {
     var verifiedPaths = await maybeAttachCreatedFileArtifact(code, d, widget.closest('.msg-body') || resultEl);
     if (verifiedPaths.length) d._verifiedPaths = verifiedPaths;
     widget.dataset.result = JSON.stringify(d);
+    updateMessageShellVerification(widget.closest('.msg'));
+    if (typeof syncShellRunningPills === 'function') syncShellRunningPills();
 
     // Auto-feed output back to AI always when autoFeed is set —
     // the AI needs to know about empty results and failures, not just successes
