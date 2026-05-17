@@ -2447,6 +2447,18 @@ body { animation: none; }
   white-space: pre; overflow-x: auto; max-height: 120px; overflow-y: auto;
   border-top: 1px solid rgba(251,191,36,.12);
 }
+.wf-artifact-link {
+  padding: 8px 10px;
+  border-top: 1px solid rgba(30,200,130,.14);
+  background: rgba(30,200,130,.035);
+}
+.wf-artifact-link .artifact-card {
+  margin: 0;
+  max-width: 100%;
+}
+.wf-open-created {
+  width: fit-content;
+}
 .wf-svg-preview {
   background: var(--fau-surface); border-top: 1px solid rgba(30,200,130,.2);
   padding: 10px; display: flex; justify-content: center; align-items: flex-start;

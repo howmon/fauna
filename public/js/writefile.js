@@ -1,5 +1,66 @@
 // ── Write-file block: direct file write without shell ────────────────────
 
+function _wfFileName(filePath) {
+  return String(filePath || '').split(/[\\/]/).pop() || String(filePath || 'File');
+}
+
+function _wfArtifactType(filePath) {
+  var ext = (_wfFileName(filePath).split('.').pop() || '').toLowerCase();
+  if (ext === 'md' || ext === 'markdown') return 'markdown';
+  if (ext === 'json') return 'json';
+  if (ext === 'csv') return 'csv';
+  if (ext === 'html' || ext === 'htm') return 'html';
+  if (ext === 'svg') return 'svg';
+  if (ext === 'pdf') return 'pdf';
+  if (['doc', 'docx', 'rtf', 'odt', 'pages'].includes(ext)) return 'docx';
+  if (['js','mjs','cjs','ts','tsx','jsx','py','rb','go','rs','java','cs','php','sh','zsh','bash','css','xml','yaml','yml'].includes(ext)) return 'code';
+  return 'text';
+}
+
+function _wfArtifactContainer(widget) {
+  var container = widget.querySelector('.wf-artifact-link');
+  if (!container) {
+    container = document.createElement('div');
+    container.className = 'wf-artifact-link';
+    widget.appendChild(container);
+  }
+  return container;
+}
+
+function _wfAddCreatedFileArtifact(widget, filePath, content, opts) {
+  opts = opts || {};
+  if (!widget || !filePath || typeof addArtifact !== 'function' || typeof injectArtifactCard !== 'function') return null;
+  var type = opts.type || _wfArtifactType(filePath);
+  var title = opts.title || _wfFileName(filePath);
+  var artifact = { type: type, title: title, path: filePath };
+  if (content != null && type !== 'pdf') artifact.content = content;
+  var id = addArtifact(artifact);
+  var container = _wfArtifactContainer(widget);
+  injectArtifactCard(id, container);
+  return id;
+}
+
+function _wfAddCreatedFilesArtifact(widget, files) {
+  if (!widget || !files || !files.length || typeof addArtifact !== 'function' || typeof injectArtifactCard !== 'function') return null;
+  var paths = files.map(function(f) { return f.path; }).filter(Boolean);
+  if (!paths.length) return null;
+  var title = paths.length === 1 ? _wfFileName(paths[0]) : paths.length + ' created files';
+  var id = addArtifact({ type: 'files', title: title, content: paths.join('\n') });
+  injectArtifactCard(id, _wfArtifactContainer(widget));
+  return id;
+}
+
+function _wfAddArtifactFromDisk(widget, filePath) {
+  if (!filePath || typeof previewFilePath !== 'function') return;
+  // Prefer the artifact pane's existing file previewer when final content must be read from disk.
+  var row = document.createElement('div');
+  row.className = 'wf-artifact-link';
+  row.innerHTML = '<button class="artifact-card-open wf-open-created" type="button"><i class="ti ti-eye"></i> View created file</button>';
+  var btn = row.querySelector('button');
+  btn.onclick = function() { previewFilePath(filePath); };
+  widget.appendChild(row);
+}
+
 function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
   var container = messageEl.querySelector('.prose') || messageEl;
   var codeBlocks = container.querySelectorAll('code.language-write-file, code.language-file-plan');
@@ -170,6 +231,14 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
         dbg('file-plan: ' + written.length + ' file(s) written', 'ok');
         if (storeId) delete _wfContentStore[storeId];
         results.forEach(function(r) { if (r.op !== 'skip') trackConvFile(wid, r.path, r.bytes); });
+        if (written.length === 1) {
+          var writtenIdx = results.findIndex(function(r) { return r.op !== 'skip'; });
+          var sourceItem = writtenIdx >= 0 && plan.files ? plan.files[writtenIdx] : null;
+          if (sourceItem && sourceItem.content != null && !sourceItem.append) _wfAddCreatedFileArtifact(widget, written[0].path, String(sourceItem.content));
+          else _wfAddArtifactFromDisk(widget, written[0].path);
+        } else if (written.length > 1) {
+          _wfAddCreatedFilesArtifact(widget, written);
+        }
         clearWriteRepairMode(wid);
       });
 
@@ -199,6 +268,7 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
         dbg('replace-string: patched → ' + d.path, 'ok');
         if (storeId) delete _wfContentStore[storeId];
         trackConvFile(wid, d.path, d.bytes);
+        _wfAddArtifactFromDisk(widget, d.path);
         clearWriteRepairMode(wid);
       });
 
@@ -214,6 +284,9 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
         dbg('apply-patch: ' + n + ' file(s) patched', 'ok');
         if (storeId) delete _wfContentStore[storeId];
         if (d.results) d.results.forEach(function(r) { if (r.op !== 'delete') trackConvFile(wid, r.path, r.bytes); });
+        var patched = (d.results || []).filter(function(r) { return r.op !== 'delete'; });
+        if (patched.length === 1) _wfAddArtifactFromDisk(widget, patched[0].path);
+        else if (patched.length > 1) _wfAddCreatedFilesArtifact(widget, patched);
         clearWriteRepairMode(wid);
       });
 
@@ -230,8 +303,12 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
         dbg('write-file: ' + (isAppend ? 'appended' : 'wrote') + ' → ' + d.path, 'ok');
         if (storeId) delete _wfContentStore[storeId];
         trackConvFile(wid, d.path, d.bytes);
-        if (isAppend) validateWrittenFileFromDisk(d.path, widget, wid);
-        else validateWrittenFile(d.path, content || '', widget);
+        if (isAppend) {
+          _wfAddArtifactFromDisk(widget, d.path);
+          validateWrittenFileFromDisk(d.path, widget, wid);
+        } else if (validateWrittenFile(d.path, content || '', widget) !== false) {
+          _wfAddCreatedFileArtifact(widget, d.path, content || '');
+        }
         // Inline SVG preview
         var _wfExt = (d.path || filePath).split('.').pop().toLowerCase();
         if (_wfExt === 'svg' && content && !isAppend) _injectWfSvgPreview(widget, content);
