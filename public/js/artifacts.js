@@ -168,6 +168,44 @@ function switchArtifactTab(id) {
   renderArtifactContent();
 }
 
+function _artifactShouldHydrateFromDisk(a) {
+  return !!(a && a.path && ['markdown','summary','web','text','code','json','csv','html','svg','design'].includes(a.type));
+}
+
+function _hydrateArtifactFromDisk(a) {
+  if (!_artifactShouldHydrateFromDisk(a) || a._hydratingFromDisk) return;
+  a._hydratingFromDisk = true;
+  fetch('/api/read-file', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: a.path })
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    a._hydratingFromDisk = false;
+    if (!d.ok) throw new Error(d.error || 'read failed');
+    var diskContent = d.content || '';
+    if (diskContent && diskContent !== a.content) {
+      a.content = diskContent;
+      a.bytes = d.bytes;
+      a._hydratedFromDisk = true;
+      dbg('artifact hydrate: loaded full file path=' + d.path + ' bytes=' + d.bytes + ' chars=' + diskContent.length, 'ok');
+      if (state.activeArtifact === a.id) renderArtifactContent();
+      var conv = getConv(state.currentId);
+      if (conv && conv.artifacts) {
+        var stored = conv.artifacts.find(function(x) { return x.id === a.id; });
+        if (stored) {
+          stored.content = diskContent;
+          stored.bytes = d.bytes;
+          stored._hydratedFromDisk = true;
+          saveConversations();
+        }
+      }
+    }
+  }).catch(function(e) {
+    a._hydratingFromDisk = false;
+    dbg('artifact hydrate failed: ' + (a.path || a.title || a.id) + ' — ' + e.message, 'warn');
+  });
+}
+
 function renderArtifactTabs() {
   var tabs = document.getElementById('artifact-tabs');
   if (!tabs) return;
@@ -200,6 +238,7 @@ function renderArtifactContent() {
     body.innerHTML = '<div class="artifact-empty"><i class="ti ti-layers-intersect"></i><span>Nothing to preview</span></div>';
     return;
   }
+  if (_artifactShouldHydrateFromDisk(a) && !a._hydratedFromDisk) _hydrateArtifactFromDisk(a);
 
   var toolbar = makeArtifactToolbar(a);
   var content = '';
