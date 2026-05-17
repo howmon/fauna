@@ -360,6 +360,31 @@ function wrapInActivityDetails(msgEl) {
     wrapGroupInCOT(group, 'ti-vector-triangle', label);
   });
 
+  // Group consecutive file-write widgets
+  var writeBlocks = Array.from(body.querySelectorAll('.wf-block')).filter(function(el) { return !el.closest('.cot-block'); });
+  buildAdjacentGroups(writeBlocks).forEach(function(group) {
+    var firstPath = group[0].querySelector('.wf-path');
+    var firstStatus = group[0].querySelector('.wf-status');
+    var pathText = firstPath ? firstPath.textContent.trim() : '';
+    var statusText = firstStatus ? firstStatus.textContent.trim() : '';
+    var label = group.length === 1
+      ? ('File operation' + (pathText ? ' — ' + pathText : '') + (statusText ? ' · ' + statusText : ''))
+      : group.length + ' file operations' + (statusText ? ' · ' + statusText : '');
+    wrapGroupInCOT(group, 'ti-file-code', label);
+  });
+
+  // Group consecutive browser/fetch widgets
+  var browserBlocks = Array.from(body.querySelectorAll('.ba-block')).filter(function(el) { return !el.closest('.cot-block'); });
+  buildAdjacentGroups(browserBlocks).forEach(function(group) {
+    var firstLabel = group[0].querySelector('.ba-label');
+    var firstDesc = group[0].querySelector('.ba-desc');
+    var descText = firstDesc ? firstDesc.textContent.trim() : '';
+    var label = group.length === 1
+      ? ((firstLabel ? firstLabel.textContent.trim() : 'Browser action') + (descText ? ' — ' + descText : ''))
+      : group.length + ' browser actions' + (descText ? ' — ' + descText : '');
+    wrapGroupInCOT(group, 'ti-world-search', label);
+  });
+
   // Wrap large standalone code blocks (≥ 8 lines) individually
   var LANG_LABELS = { html:'HTML', css:'CSS', javascript:'JavaScript', js:'JavaScript',
     python:'Python', json:'JSON', markdown:'Markdown', bash:'Shell script',
@@ -406,19 +431,21 @@ function compactProcessClusters(msgEl) {
   if (!msgEl) return;
   var body = msgEl.querySelector('.msg-body');
   if (!body) return;
-  var selectors = '.cot-pill,.wf-block,.shell-exec-block,.figma-exec-block,.ba-block';
+  var selectors = '.cot-pill,.cot-block,.wf-block,.shell-exec-block,.figma-exec-block,.ba-block';
   var containers = [body].concat(Array.from(body.querySelectorAll('.prose,.cot-block-content')));
   containers.forEach(function(container) {
     if (!container || container.closest('.process-cluster')) return;
     var children = Array.from(container.children || []);
     var run = [];
     function flush() {
-      if (run.length < 6) { run = []; return; }
-      var shellCount = run.filter(function(el) { return el.classList.contains('shell-exec-block') || /shell command/i.test(el.textContent || ''); }).length;
-      var writeCount = run.filter(function(el) { return el.classList.contains('wf-block') || /write-file|append-file|replace-string|apply-patch/i.test(el.textContent || ''); }).length;
+      if (run.length < 3) { run = []; return; }
+      var shellCount = run.filter(function(el) { return el.classList.contains('shell-exec-block') || /shell command|shell commands/i.test(el.textContent || ''); }).length;
+      var writeCount = run.filter(function(el) { return el.classList.contains('wf-block') || /file operation|file operations|write-file|append-file|replace-string|apply-patch/i.test(el.textContent || ''); }).length;
+      var browserCount = run.filter(function(el) { return el.classList.contains('ba-block') || /browser action|browser actions|navigate|extract|screenshot/i.test(el.textContent || ''); }).length;
       var labelParts = [];
       if (writeCount) labelParts.push(writeCount + ' file ' + (writeCount === 1 ? 'write' : 'writes'));
       if (shellCount) labelParts.push(shellCount + ' shell ' + (shellCount === 1 ? 'command' : 'commands'));
+      if (browserCount) labelParts.push(browserCount + ' browser ' + (browserCount === 1 ? 'action' : 'actions'));
       var title = labelParts.length ? labelParts.join(' · ') : run.length + ' operations';
 
       var details = document.createElement('details');

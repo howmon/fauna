@@ -870,10 +870,12 @@ button .ti, label .ti { pointer-events: none; }
 }
 .process-cluster:not([open]) .process-cluster-content { display: none; }
 .process-cluster-content > .cot-pill,
+.process-cluster-content > .cot-block,
 .process-cluster-content > .wf-block,
 .process-cluster-content > .shell-exec-block,
 .process-cluster-content > .figma-exec-block,
 .process-cluster-content > .ba-block { margin: 0 !important; }
+.process-cluster-content > .cot-block { border-radius: 0 !important; border-left: none !important; border-right: none !important; }
 .long-response-details {
   margin: 10px 0; border: 1px solid var(--fau-border); border-radius: 8px;
   background: var(--fau-surface2); overflow: hidden;
