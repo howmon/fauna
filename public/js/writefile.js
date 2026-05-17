@@ -32,6 +32,23 @@ function _wfArtifactContainer(widget) {
   return container;
 }
 
+function _wfMoveCreatedArtifactsToEnd(messageEl) {
+  var body = messageEl && messageEl.querySelector ? messageEl.querySelector('.msg-body') : null;
+  if (!body) return;
+  Array.from(body.querySelectorAll(':scope > .wf-created-artifacts')).forEach(function(container) {
+    body.appendChild(container);
+  });
+}
+
+function _wfFetchWithTimeout(url, options, timeoutMs) {
+  options = options || {};
+  timeoutMs = timeoutMs || 30000;
+  var controller = new AbortController();
+  var timer = setTimeout(function() { controller.abort(); }, timeoutMs);
+  options.signal = controller.signal;
+  return fetch(url, options).finally(function() { clearTimeout(timer); });
+}
+
 function _wfAddCreatedFileArtifact(widget, filePath, content, opts) {
   opts = opts || {};
   if (!widget || !filePath || typeof addArtifact !== 'function' || typeof injectArtifactCard !== 'function') return null;
@@ -74,8 +91,9 @@ function _wfAddArtifactFromDisk(widget, filePath) {
 function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
   var container = messageEl.querySelector('.prose') || messageEl;
   var codeBlocks = container.querySelectorAll('code.language-write-file, code.language-file-plan');
-  if (!codeBlocks.length) return;
+  if (!codeBlocks.length) return Promise.resolve([]);
   dbg('extractAndRenderWriteFile: found ' + codeBlocks.length + ' block(s)', 'info');
+  var writePromises = [];
   codeBlocks.forEach(function(code) {
     var pre = code.parentElement;
 
@@ -232,11 +250,11 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
       var planCwd = plan.cwd || getWriteCwd() || undefined;
       var planBody = addActiveAgentContext(Object.assign({}, plan, { cwd: planCwd }));
       dbg('file-plan request: files=' + plan.files.length + ' cwd=' + (planCwd || '') + ' expected=' + (plan.expected_file_count || plan.expectedFileCount || ''), 'info');
-      promise = fetch('/api/write-files', {
+      promise = _wfFetchWithTimeout('/api/write-files', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(planBody)
-      }).then(function(r) { return r.json(); }).then(function(d) {
+      }, 30000).then(function(r) { return r.json(); }).then(function(d) {
         if (!d.ok) throw new Error(d.error || 'file plan failed');
         var results = d.results || [];
         var written = results.filter(function(r) { return r.op !== 'skip'; });
@@ -271,11 +289,11 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
       } else {
         oldStr = content; newStr = '';
       }
-      promise = fetch('/api/replace-string', {
+      promise = _wfFetchWithTimeout('/api/replace-string', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(addActiveAgentContext({ path: filePath, old_string: oldStr, new_string: newStr, cwd: _convCwd[wid] || undefined }))
-      }).then(function(r) { return r.json(); }).then(function(d) {
+      }, 30000).then(function(r) { return r.json(); }).then(function(d) {
         if (!d.ok) throw new Error(d.error || 'replace failed');
         updateWriteFileStatus('wf-block done', 'replaced');
         dbg('replace-string: patched → ' + d.path, 'ok');
@@ -286,11 +304,11 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
       });
 
     } else if (isPatch) {
-      promise = fetch('/api/apply-patch', {
+      promise = _wfFetchWithTimeout('/api/apply-patch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(addActiveAgentContext({ path: filePath, patch: content, cwd: _convCwd[wid] || undefined }))
-      }).then(function(r) { return r.json(); }).then(function(d) {
+      }, 30000).then(function(r) { return r.json(); }).then(function(d) {
         if (!d.ok) throw new Error(d.error || 'patch failed');
         var n = d.results ? d.results.length : 0;
         updateWriteFileStatus('wf-block done', n + ' file' + (n !== 1 ? 's' : '') + ' patched');
@@ -313,18 +331,18 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
         if (_convCwd[wid]) params.set('cwd', _convCwd[wid]);
         if (writeBody.agentName) params.set('agentName', writeBody.agentName);
         dbg('write-file request: transport=raw-stream chars=' + (content || '').length + ' path=' + filePath + ' cwd=' + (_convCwd[wid] || ''), 'info');
-        promise = fetch('/api/write-file-stream?' + params.toString(), {
+        promise = _wfFetchWithTimeout('/api/write-file-stream?' + params.toString(), {
           method: 'PUT',
           headers: { 'Content-Type': 'text/plain; charset=utf-8' },
           body: content || ''
-        });
+        }, 60000);
       } else {
         dbg('write-file request: transport=json endpoint=' + apiUrl + ' chars=' + (content || '').length + ' path=' + filePath, 'info');
-        promise = fetch(apiUrl, {
+        promise = _wfFetchWithTimeout(apiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(writeBody)
-        });
+        }, 30000);
       }
       promise = promise.then(function(r) { return r.json(); }).then(function(d) {
         if (!d.ok) throw new Error(d.error || 'write failed');
@@ -344,11 +362,16 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
       });
     }
 
-    promise.catch(function(e) {
-      updateWriteFileStatus('wf-block err', 'Error: ' + e.message);
-      dbg((isReplace ? 'replace-string' : isPatch ? 'apply-patch' : 'write-file') + ' error: ' + e.message, 'err');
+    var observedPromise = promise.catch(function(e) {
+      var msg = e.name === 'AbortError' ? 'Timed out after waiting for write response' : e.message;
+      updateWriteFileStatus('wf-block err', 'Error: ' + msg);
+      dbg((isReplace ? 'replace-string' : isPatch ? 'apply-patch' : 'write-file') + ' error: ' + msg, 'err');
+      throw e;
     });
+    writePromises.push(observedPromise);
   });
+
+  _wfMoveCreatedArtifactsToEnd(messageEl);
 
   // In chain messages (auto-fed responses), hide narration prose — only show the write-file widgets
   if (messageEl.classList.contains('chain-msg') && container) {
@@ -359,6 +382,11 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
     });
     messageEl.classList.add('chain-wf-only');
   }
+
+  return Promise.allSettled(writePromises).then(function(results) {
+    _wfMoveCreatedArtifactsToEnd(messageEl);
+    return results;
+  });
 }
 
 function clearWriteRepairMode(convId) {

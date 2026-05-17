@@ -661,6 +661,7 @@ async function streamResponse(conv) {
   var tokenCount   = 0;
   var _lastRenderTraceAt = 0;
   var _streamStartedAt = Date.now();
+  var _lastLiveRenderHtml = '';
   var _lastToolOutputAccum = ''; // rolling last ~1000 chars of tool_output for input context
   var _reasoning = null; // { startedAt, durationSeconds } — compact thinking status only
   if (typeof resetDesignArtifactState === 'function') resetDesignArtifactState();
@@ -710,12 +711,20 @@ async function streamResponse(conv) {
         var liveBuffer = typeof redactWriteFileBlocksForStreaming === 'function' ? redactWriteFileBlocksForStreaming(buffer) : buffer;
         var rendered = (typeof renderStreamingActivity === 'function' ? renderStreamingActivity : renderStreamingCOT)(liveBuffer);
         var renderEnd = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-        if (rendered && rendered.trim()) bodyEl.innerHTML = rendered;
-        else _ensureStreamingStatus('Fauna is working…');
+        var visibleChanged = rendered !== _lastLiveRenderHtml;
+        if (rendered && rendered.trim()) {
+          if (visibleChanged) {
+            bodyEl.innerHTML = rendered;
+            _lastLiveRenderHtml = rendered;
+          }
+        } else {
+          _ensureStreamingStatus('Fauna is working…');
+        }
         var now = Date.now();
-        if (now - _lastRenderTraceAt > 1000 || liveBuffer.length !== buffer.length) {
+        var renderMs = renderEnd - renderStart;
+        if (visibleChanged || renderMs > 25 || now - _lastRenderTraceAt > 5000) {
           _lastRenderTraceAt = now;
-          dbg('stream render: raw=' + buffer.length + 'ch visible=' + liveBuffer.length + 'ch html=' + (rendered || '').length + 'ch renderMs=' + (renderEnd - renderStart).toFixed(1), 'info');
+          dbg('stream render: raw=' + buffer.length + 'ch visible=' + liveBuffer.length + 'ch html=' + (rendered || '').length + 'ch renderMs=' + renderMs.toFixed(1) + (visibleChanged ? ' changed' : ' unchanged'), 'info');
         }
         if (now - lastScrolled > 200) { scrollBottom(); lastScrolled = now; }
       } else {
@@ -1038,12 +1047,13 @@ async function streamResponse(conv) {
         var shellBlocks = (msgEl.querySelectorAll('code.language-shell-exec')||[]).length;
         dbg('  code blocks found: shell-exec=' + shellBlocks, 'info');
 
+        var writeResults = await extractAndRenderWriteFile(msgEl, false, convId);
+        var writeFailed = Array.isArray(writeResults) && writeResults.some(function(r) { return r.status === 'rejected'; });
         extractAndRenderFigmaExec(buffer, msgEl);
-        var suppressShellAutoRun = !!(conv._suppressShellAutoRunOnce || conv._writeRepairMode);
+        var suppressShellAutoRun = !!(conv._suppressShellAutoRunOnce || conv._writeRepairMode || writeFailed);
         extractAndRenderShellExec(buffer, msgEl, suppressShellAutoRun, convId);
         extractAndRenderBrowserActions(buffer, msgEl, false, convId);
         if (typeof extractAndRenderBrowserExtActions === 'function') extractAndRenderBrowserExtActions(buffer, msgEl, false, convId);
-        extractAndRenderWriteFile(msgEl, false, convId);
         extractAndRenderSaveInstruction(buffer, msgEl, false);
         extractArtifactsFromBuffer(buffer, msgEl);
         if (typeof postProcessDesignMessage === 'function') postProcessDesignMessage(bodyEl);
@@ -1061,6 +1071,7 @@ async function streamResponse(conv) {
           injectOrganizerCard(msgEl, buffer);
           state._lastMsgWasDesktopTask = false;
         }
+        if (typeof _wfMoveCreatedArtifactsToEnd === 'function') _wfMoveCreatedArtifactsToEnd(msgEl);
         scrollBottom();
         setBusy(false);
 
@@ -1100,12 +1111,13 @@ async function streamResponse(conv) {
       var renderBuffer = sanitizeWriteFileBlocks(buffer);
       bodyEl.innerHTML = renderBuffer ? renderMarkdown(renderBuffer) : '';
       if (typeof initMermaidInContainer === 'function') initMermaidInContainer(bodyEl);
+      var bgWriteResults = await extractAndRenderWriteFile(msgEl, false, convId);
+      var bgWriteFailed = Array.isArray(bgWriteResults) && bgWriteResults.some(function(r) { return r.status === 'rejected'; });
       extractAndRenderFigmaExec(buffer, msgEl);
-      var suppressShellAutoRunFinal = !!(conv._suppressShellAutoRunOnce || conv._writeRepairMode);
+      var suppressShellAutoRunFinal = !!(conv._suppressShellAutoRunOnce || conv._writeRepairMode || bgWriteFailed);
       extractAndRenderShellExec(buffer, msgEl, suppressShellAutoRunFinal, convId);  // auto-run continues in background unless explicitly suppressed
       extractAndRenderBrowserActions(buffer, msgEl, false, convId);
       if (typeof extractAndRenderBrowserExtActions === 'function') extractAndRenderBrowserExtActions(buffer, msgEl, false, convId);
-      extractAndRenderWriteFile(msgEl, false, convId);
       extractAndRenderSaveInstruction(buffer, msgEl, false);
       extractArtifactsFromBuffer(buffer, msgEl, true);
       if (typeof postProcessDesignMessage === 'function') postProcessDesignMessage(bodyEl);
@@ -1117,6 +1129,7 @@ async function streamResponse(conv) {
       (typeof wrapInActivityDetails === 'function' ? wrapInActivityDetails : wrapInChainOfThought)(msgEl);
       if (typeof compactProcessClusters === 'function') compactProcessClusters(msgEl);
       if (typeof compactLongAssistantMessage === 'function') compactLongAssistantMessage(msgEl, buffer);
+      if (typeof _wfMoveCreatedArtifactsToEnd === 'function') _wfMoveCreatedArtifactsToEnd(msgEl);
       delete conv._suppressShellAutoRunOnce;
     }
   }
