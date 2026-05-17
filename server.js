@@ -48,6 +48,9 @@ import {
   checkCommandPermission, explainCommand,
 } from './permission-guard.js';
 import { ToolGuardContext, formatToolLabel, getToolCategory } from './tool-guard.js';
+import { registerConversationRoutes } from './server/routes/conversations.js';
+import { registerTaskRoutes } from './server/routes/tasks.js';
+import { registerUtilityRoutes } from './server/routes/utilities.js';
 import {
   getTeamsSettings, updateTeamsSettings, startTeamsBridge, stopTeamsBridge, testConnection as teamsTestConnection,
 } from './teams-bridge.js';
@@ -91,7 +94,6 @@ const PORT   = 3737;
 const IS_WIN = process.platform === 'win32';
 const PATH_SEP = IS_WIN ? ';' : ':';
 const FAUNA_CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
-const CONVERSATIONS_FILE = path.join(FAUNA_CONFIG_DIR, 'conversations.json');
 
 // Module-level AI caller — set during startServer(), used by permission guard etc.
 let internalAICaller = async () => '';
@@ -443,222 +445,25 @@ app.get('/api/runs', (_req, res) => {
   res.json([]);
 });
 
-// ── Server-side conversation sync ────────────────────────────────────────
-// The renderer keeps localStorage as the primary UI cache, but also mirrors
-// conversations here so CLI/mobile/build resets can hydrate them back.
-
-function readServerConversations() {
-  try {
-    const data = JSON.parse(fs.readFileSync(CONVERSATIONS_FILE, 'utf8'));
-    return Array.isArray(data) ? data : [];
-  } catch (_) {
-    return [];
-  }
-}
-
-function writeServerConversations(conversations) {
-  fs.mkdirSync(FAUNA_CONFIG_DIR, { recursive: true });
-  const tmp = CONVERSATIONS_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(Array.isArray(conversations) ? conversations : [], null, 2));
-  fs.renameSync(tmp, CONVERSATIONS_FILE);
-}
-
-const conversationSseClients = new Set();
-
-function sendConversationEvent(type, payload = {}) {
-  const data = JSON.stringify({ type, ...payload, ts: Date.now() });
-  for (const client of conversationSseClients) {
-    try { client.write(`data: ${data}\n\n`); } catch (_) {}
-  }
-}
-
-app.get('/api/conversations', (req, res) => {
-  const full = req.query.full === '1' || req.query.full === 'true';
-  const conversations = readServerConversations()
-    .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
-  if (full) return res.json(conversations);
-  res.json(conversations.map(conv => ({
-    id: conv.id,
-    title: conv.title,
-    model: conv.model,
-    projectId: conv.projectId,
-    createdAt: conv.createdAt,
-    updatedAt: conv.updatedAt,
-    messageCount: Array.isArray(conv.messages) ? conv.messages.length : 0,
-  })));
+registerConversationRoutes(app, {
+  fs,
+  path,
+  configDir: FAUNA_CONFIG_DIR,
+  getCopilotClient,
 });
 
-app.get('/api/conversations/stream', (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders?.();
-  res.write(`data: ${JSON.stringify({ type: 'ready', ts: Date.now() })}\n\n`);
-  conversationSseClients.add(res);
-  const keepalive = setInterval(() => {
-    try { res.write(`: keepalive ${Date.now()}\n\n`); } catch (_) {}
-  }, 25000);
-  req.on('close', () => {
-    clearInterval(keepalive);
-    conversationSseClients.delete(res);
-  });
-});
-
-app.get('/api/conversations/:id', (req, res) => {
-  const conv = readServerConversations().find(c => c.id === req.params.id);
-  if (!conv) return res.status(404).json({ error: 'Conversation not found' });
-  res.json(conv);
-});
-
-app.put('/api/conversations/:id', (req, res) => {
-  const conversations = readServerConversations();
-  const idx = conversations.findIndex(c => c.id === req.params.id);
-  const conv = { ...(req.body || {}), id: req.params.id, updatedAt: req.body?.updatedAt || Date.now() };
-  if (!conv.createdAt) conv.createdAt = Date.now();
-  if (idx >= 0) conversations[idx] = { ...conversations[idx], ...conv };
-  else conversations.push(conv);
-  writeServerConversations(conversations);
-  sendConversationEvent('upsert', { conversation: conv });
-  res.json({ ok: true, conversation: conv });
-});
-
-app.delete('/api/conversations/:id', (req, res) => {
-  const conversations = readServerConversations();
-  const next = conversations.filter(c => c.id !== req.params.id);
-  writeServerConversations(next);
-  sendConversationEvent('delete', { id: req.params.id });
-  res.json({ ok: true, deleted: conversations.length - next.length });
-});
-
-// Generate AI conversation title from messages
-app.post('/api/conversation-title', async (req, res) => {
-  try {
-    const { messages = [], model: reqModel } = req.body;
-    if (!messages.length) return res.status(400).json({ error: 'No messages provided' });
-
-    const client = getCopilotClient();
-    const TITLE_MODEL = reqModel || 'gpt-4.1';
-    const systemPrompt = 'You are a helpful assistant that generates short, descriptive titles for conversations. Generate a concise title (3-6 words) that captures the main topic. Return ONLY the title, no quotes, no explanation.';
-
-    const titleMessages = [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: 'Generate a short title for this conversation:\n\n' + messages.map(m => `${m.role}: ${m.content}`).join('\n\n') }
-    ];
-
-    const completion = await client.chat.completions.create({
-      model: TITLE_MODEL,
-      messages: titleMessages,
-      max_tokens: 50,
-      temperature: 0.7
-    });
-
-    const title = (completion.choices[0]?.message?.content || 'New conversation').trim();
-    res.json({ title });
-  } catch (err) {
-    console.error('[conversation-title] Error:', err.message);
-    // Fall back to a locally-derived title rather than returning 500, so the
-    // conversation title always updates even when the API is unavailable.
-    try {
-      const { messages = [] } = req.body;
-      const firstUser = messages.find(m => m.role === 'user');
-      const raw = (firstUser && firstUser.content) ? firstUser.content.trim() : '';
-      const fallback = raw
-        ? raw.replace(/\s+/g, ' ').slice(0, 60).replace(/[^a-zA-Z0-9 ,.'!?-]/g, '').trim() || 'New conversation'
-        : 'New conversation';
-      res.json({ title: fallback });
-    } catch (_) {
-      res.json({ title: 'New conversation' });
-    }
-  }
-});
-
-// ── Automations / tasks API ──────────────────────────────────────────────
-
-function taskWithRuntime(task) {
-  if (!task) return task;
-  return { ...task, _running: isTaskRunning(task.id) };
-}
-
-function sendTaskEvent(res, evt) {
-  res.write(`data: ${JSON.stringify(evt)}\n\n`);
-}
-
-app.get('/api/tasks', (_req, res) => {
-  res.json(getAllTasks().map(taskWithRuntime));
-});
-
-app.post('/api/tasks', (req, res) => {
-  try {
-    const task = createTask(req.body || {});
-    res.status(201).json(taskWithRuntime(task));
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-app.get('/api/tasks/stream', (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders?.();
-  sendTaskEvent(res, { event: 'ready' });
-  const unsubscribe = subscribe('*', evt => sendTaskEvent(res, evt));
-  req.on('close', unsubscribe);
-});
-
-app.get('/api/tasks/:id', (req, res) => {
-  const task = getTask(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
-  res.json(taskWithRuntime(task));
-});
-
-app.put('/api/tasks/:id', (req, res) => {
-  const task = updateTask(req.params.id, req.body || {});
-  if (!task) return res.status(404).json({ error: 'Task not found' });
-  res.json(taskWithRuntime(task));
-});
-
-app.delete('/api/tasks/:id', (req, res) => {
-  if (isTaskRunning(req.params.id)) stopTask(req.params.id);
-  const ok = deleteTask(req.params.id);
-  if (!ok) return res.status(404).json({ error: 'Task not found' });
-  res.json({ ok: true });
-});
-
-app.post('/api/tasks/:id/run', (req, res) => {
-  const task = getTask(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
-  runTask(req.params.id, req.body || {}).catch(e => console.error('[tasks] run failed:', e.message));
-  res.json({ ok: true, runId: req.params.id });
-});
-
-app.post('/api/tasks/:id/pause', (req, res) => {
-  const task = getTask(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
-  if (isTaskRunning(req.params.id)) pauseTask(req.params.id);
-  else updateTask(req.params.id, { status: 'paused', _historyEvent: 'paused', _historyDetail: 'manual' });
-  res.json({ ok: true });
-});
-
-app.post('/api/tasks/:id/resume', (req, res) => {
-  const task = getTask(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
-  const status = task.schedule?.type === 'manual' ? 'pending' : 'scheduled';
-  res.json(taskWithRuntime(updateTask(req.params.id, { status, _historyEvent: 'resumed', _historyDetail: 'manual' })));
-});
-
-app.post('/api/tasks/:id/stop', (req, res) => {
-  const task = getTask(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
-  if (isTaskRunning(req.params.id)) stopTask(req.params.id);
-  else updateTask(req.params.id, { status: 'paused', _historyEvent: 'stopped', _historyDetail: 'manual' });
-  res.json({ ok: true });
-});
-
-app.post('/api/tasks/:id/steer', (req, res) => {
-  const ok = steerTask(req.params.id, req.body?.message || '');
-  if (!ok) return res.status(409).json({ error: 'Task is not running' });
-  res.json({ ok: true });
+registerTaskRoutes(app, {
+  createTask,
+  getTask,
+  getAllTasks,
+  updateTask,
+  deleteTask,
+  runTask,
+  pauseTask,
+  stopTask,
+  steerTask,
+  isTaskRunning,
+  subscribe,
 });
 
 // ── Projects ──────────────────────────────────────────────────────────────
@@ -3806,38 +3611,6 @@ function figmaSend(command, timeoutMs = 30000, targetFileKey = null) {
   });
 }
 
-app.post('/api/open-folder', async (req, res) => {
-  const { folderPath } = req.body;
-  if (!folderPath) return res.status(400).json({ error: 'folderPath required' });
-  try {
-    const { shell } = _require('electron');
-    await shell.openPath(folderPath);
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ── Window controls (Windows custom title bar) ───────────────────────────
-app.post('/api/window/:action', (req, res) => {
-  try {
-    const { BrowserWindow } = _require('electron');
-    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
-    if (!win) return res.status(404).json({ error: 'No window' });
-    switch (req.params.action) {
-      case 'minimize': win.minimize(); break;
-      case 'maximize': win.isMaximized() ? win.unmaximize() : win.maximize(); break;
-      case 'close':    win.close(); break;
-      default: return res.status(400).json({ error: 'Unknown action' });
-    }
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-
-
 const PLUGIN_INSTALL_DIR = path.join(CONFIG_DIR, 'figma-plugin');
 
 function getBundledPluginDir() {
@@ -4123,6 +3896,18 @@ function resolvePath(filePath, cwd) {
   }
   return resolved;
 }
+
+registerUtilityRoutes(app, {
+  fs,
+  path,
+  os,
+  execSync,
+  exec: _exec,
+  requireElectron: _require,
+  isWin: IS_WIN,
+  rootDir: __dirname,
+  resolvePath,
+});
 
 function getMutationContext(body = {}) {
   const agentName = body.agentName;
@@ -6918,296 +6703,6 @@ app.post('/api/shell-stdin', (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
-});
-
-// ── Preview-file existence check ──────────────────────────────────────────
-// GET /api/preview-file/status?path=... → 200 { exists } without noisy 404 probes
-app.get('/api/preview-file/status', (req, res) => {
-  const filePath = req.query.path;
-  if (!filePath) return res.json({ ok: false, exists: false, error: 'path required' });
-  try {
-    const abs = resolvePath(String(filePath));
-    const exists = fs.existsSync(abs) && fs.statSync(abs).isFile();
-    res.json({ ok: true, exists, path: abs });
-  } catch (e) {
-    res.json({ ok: false, exists: false, error: e.message });
-  }
-});
-
-// HEAD /api/preview-file?path=... → 200 if file exists, 404 if not
-app.head('/api/preview-file', (req, res) => {
-  const filePath = req.query.path;
-  if (!filePath) return res.status(400).end();
-  try {
-    const abs = resolvePath(String(filePath));
-    if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
-      res.setHeader('Content-Type', 'application/octet-stream');
-      res.status(200).end();
-    } else {
-      res.status(404).end();
-    }
-  } catch (_) {
-    res.status(404).end();
-  }
-});
-
-// GET /api/preview-file?path=... → stream a local file for iframe previews
-app.get('/api/preview-file', (req, res) => {
-  const filePath = req.query.path;
-  if (!filePath) return res.status(400).json({ error: 'path required' });
-  try {
-    const abs = resolvePath(String(filePath));
-    if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
-      return res.status(404).json({ error: 'File not found', path: abs });
-    }
-    res.sendFile(abs);
-  } catch (e) {
-    res.status(404).json({ error: e.message });
-  }
-});
-
-// ── Serve local media file (proxy for renderer — file:// is blocked by CSP) ──
-// GET /api/serve-media?path=<abs-path> — streams file with Range support
-app.get('/api/serve-media', (req, res) => {
-  const rawPath = req.query.path;
-  if (!rawPath) return res.status(400).end();
-  try {
-    let abs = path.isAbsolute(rawPath) ? rawPath
-              : rawPath.startsWith('~') ? path.join(os.homedir(), rawPath.slice(1))
-              : path.join(os.homedir(), rawPath);
-    if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
-      // Fallback: macOS screen recordings use U+202F (narrow no-break space) before AM/PM.
-      // If the exact path fails, scan the directory with whitespace-normalized comparison.
-      const dir      = path.dirname(abs);
-      const basename = path.basename(abs);
-      const normalize = s => s.normalize('NFC').replace(/[\u00A0\u2009\u202F\u2007\u200A\uFEFF\u2060]/g, ' ');
-      let resolved = null;
-      try {
-        const entries = fs.readdirSync(dir);
-        const match   = entries.find(e => normalize(e) === normalize(basename));
-        if (match) resolved = path.join(dir, match);
-      } catch (_) {}
-      if (!resolved) return res.status(404).end();
-      abs = resolved;
-    }
-
-    const ext  = path.extname(abs).toLowerCase().slice(1);
-    const mime = {
-      mp4:'video/mp4', mov:'video/quicktime', webm:'video/webm', mkv:'video/x-matroska', avi:'video/x-msvideo',
-      mp3:'audio/mpeg', wav:'audio/wav', ogg:'audio/ogg', aac:'audio/aac', m4a:'audio/mp4', flac:'audio/flac',
-      png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', gif:'image/gif', webp:'image/webp', svg:'image/svg+xml',
-    }[ext] || 'application/octet-stream';
-
-    const stat  = fs.statSync(abs);
-    const total = stat.size;
-    const range = req.headers.range;
-
-    if (range) {
-      const [startStr, endStr] = range.replace(/bytes=/, '').split('-');
-      const start = parseInt(startStr, 10);
-      const end   = endStr ? parseInt(endStr, 10) : Math.min(start + 1024 * 1024 - 1, total - 1);
-      const chunkSize = end - start + 1;
-      res.writeHead(206, {
-        'Content-Range':  `bytes ${start}-${end}/${total}`,
-        'Accept-Ranges':  'bytes',
-        'Content-Length': chunkSize,
-        'Content-Type':   mime,
-      });
-      fs.createReadStream(abs, { start, end }).pipe(res);
-    } else {
-      res.writeHead(200, { 'Content-Length': total, 'Content-Type': mime, 'Accept-Ranges': 'bytes' });
-      fs.createReadStream(abs).pipe(res);
-    }
-  } catch (e) {
-    res.status(500).end();
-  }
-});
-
-// ── Pick-folder dialog ────────────────────────────────────────────────────
-// POST {} → { ok, folderPath } — shows native folder picker (Electron only)
-app.post('/api/pick-folder', async (req, res) => {
-  try {
-    const { dialog, BrowserWindow } = _require('electron');
-    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
-    const result = await dialog.showOpenDialog(win || undefined, {
-      properties: ['openDirectory', 'createDirectory'],
-    });
-    if (result.cancelled || !result.filePaths || !result.filePaths.length) {
-      return res.json({ ok: false, cancelled: true });
-    }
-    res.json({ ok: true, folderPath: result.filePaths[0] });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ── Open URL in default browser ───────────────────────────────────────────
-// POST { url } → opens URL using Electron shell or macOS 'open'
-app.post('/api/open-url', async (req, res) => {
-  const { url } = req.body || {};
-  if (!url) return res.status(400).json({ error: 'url required' });
-  // Basic URL validation — only allow http/https
-  if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Only http/https URLs allowed' });
-  try {
-    const { shell } = _require('electron');
-    await shell.openExternal(url);
-    res.json({ ok: true });
-  } catch (_) {
-    // Fallback for non-Electron (dev mode)
-    try {
-      const opener = IS_WIN ? 'start' : (process.platform === 'darwin' ? 'open' : 'xdg-open');
-      _exec(`${opener} ${JSON.stringify(url)}`);
-      res.json({ ok: true });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  }
-});
-
-// ── Bundled binary path lookup ────────────────────────────────────────────
-// GET /api/bundled-bin/:bin → { path } — resolves bundled MCP binary path
-app.get('/api/bundled-bin/:bin', (req, res) => {
-  const binName = req.params.bin;
-  // Search in node_modules/.bin and common paths
-  const candidates = [
-    path.join(__dirname, 'node_modules', '.bin', binName),
-    path.join(__dirname, 'node_modules', '.bin', binName + (IS_WIN ? '.cmd' : '')),
-    path.join(process.resourcesPath || '', 'node_modules', '.bin', binName),
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return res.json({ ok: true, path: c });
-  }
-  // Try resolving via which/where
-  try {
-    const found = execSync(`${IS_WIN ? 'where' : 'which'} ${binName} 2>/dev/null`, { encoding: 'utf8' }).trim().split('\n')[0];
-    if (found) return res.json({ ok: true, path: found });
-  } catch (_) {}
-  res.json({ ok: false, path: binName });
-});
-
-// ── RRule next occurrences ────────────────────────────────────────────────
-// POST { rrule, count } → { occurrences: [ISO strings] }
-app.post('/api/rrule/next', (req, res) => {
-  const { rrule: rruleStr, count = 3 } = req.body || {};
-  if (!rruleStr) return res.status(400).json({ error: 'rrule required' });
-  try {
-    // Minimal RRule parser for FREQ=DAILY/WEEKLY/MONTHLY + BYDAY/BYHOUR/BYMINUTE
-    const occurrences = _computeRruleNext(rruleStr, Math.min(count, 20));
-    res.json({ occurrences });
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-function _computeRruleNext(rruleStr, n) {
-  const now = new Date();
-  const pairs = {};
-  // Strip RRULE: prefix
-  const raw = rruleStr.replace(/^RRULE:/i, '');
-  raw.split(';').forEach(part => {
-    const eq = part.indexOf('=');
-    if (eq !== -1) pairs[part.slice(0, eq).toUpperCase()] = part.slice(eq + 1);
-  });
-  const freq  = (pairs.FREQ || 'DAILY').toUpperCase();
-  const interval = parseInt(pairs.INTERVAL || '1', 10) || 1;
-  const byHour   = pairs.BYHOUR   ? parseInt(pairs.BYHOUR, 10)   : null;
-  const byMin    = pairs.BYMINUTE ? parseInt(pairs.BYMINUTE, 10)  : null;
-  const byDay    = pairs.BYDAY    ? pairs.BYDAY.split(',')        : null;
-  const DAY_MAP  = { SU:0, MO:1, TU:2, WE:3, TH:4, FR:5, SA:6 };
-
-  const results = [];
-  let cur = new Date(now);
-  // Advance to next minute minimum
-  cur.setSeconds(0, 0);
-  cur.setMinutes(cur.getMinutes() + 1);
-  if (byHour !== null) cur.setHours(byHour, byMin ?? 0, 0, 0);
-  if (byMin !== null && byHour === null) cur.setMinutes(byMin, 0, 0);
-
-  let tries = 0;
-  while (results.length < n && tries < 10000) {
-    tries++;
-    const day = cur.getDay(); // 0=Sun
-    let match = true;
-    if (byDay) {
-      const dayNames = byDay.map(d => d.replace(/^[-+]?\d*/, '').toUpperCase());
-      const dayNums  = dayNames.map(d => DAY_MAP[d] ?? -1);
-      if (!dayNums.includes(day)) match = false;
-    }
-    if (match && cur > now) {
-      results.push(cur.toISOString());
-      cur = new Date(cur);
-    }
-    // Advance
-    if (freq === 'MINUTELY') {
-      cur.setMinutes(cur.getMinutes() + interval);
-    } else if (freq === 'HOURLY') {
-      cur.setHours(cur.getHours() + interval);
-      if (byMin !== null) cur.setMinutes(byMin, 0, 0);
-    } else if (freq === 'DAILY') {
-      cur.setDate(cur.getDate() + interval);
-      if (byHour !== null) cur.setHours(byHour, byMin ?? 0, 0, 0);
-    } else if (freq === 'WEEKLY') {
-      cur.setDate(cur.getDate() + 1);
-      if (byHour !== null) cur.setHours(byHour, byMin ?? 0, 0, 0);
-    } else if (freq === 'MONTHLY') {
-      const dom = parseInt(pairs.BYMONTHDAY || String(now.getDate()), 10);
-      cur.setMonth(cur.getMonth() + interval, dom);
-      if (byHour !== null) cur.setHours(byHour, byMin ?? 0, 0, 0);
-    } else {
-      // Unknown — advance by day
-      cur.setDate(cur.getDate() + 1);
-    }
-  }
-  return results;
-}
-
-// ── Design catalog: directions, skills, systems ───────────────────────────
-// GET /api/design/directions → { directions: [{id, name, description, palette}] }
-app.get('/api/design/directions', (req, res) => {
-  res.json({
-    directions: [
-      { id: 'minimal',   name: 'Minimal',   description: 'Clean, white space-heavy, monochromatic', palette: ['#ffffff','#f5f5f5','#111111','#555555'] },
-      { id: 'bold',      name: 'Bold',      description: 'High contrast, vivid accent colors, strong typography', palette: ['#0d0d0d','#ff3b30','#007aff','#f5f5f5'] },
-      { id: 'warm',      name: 'Warm',      description: 'Earthy tones, editorial, warm neutrals', palette: ['#fdf6ec','#d4a574','#8b5e3c','#2c1810'] },
-      { id: 'dark',      name: 'Dark',      description: 'Dark mode first, neon accents, techy', palette: ['#0a0a0f','#1a1a2e','#7c5cff','#00d4aa'] },
-      { id: 'pastel',    name: 'Pastel',    description: 'Soft colors, rounded, playful', palette: ['#fce4ec','#e8f5e9','#e3f2fd','#fff9c4'] },
-      { id: 'corporate', name: 'Corporate', description: 'Professional, trustworthy, structured', palette: ['#003087','#0066cc','#ffffff','#e8ecf0'] },
-    ],
-  });
-});
-
-// GET /api/design/skills → { skills: [{id, name, description}] }
-app.get('/api/design/skills', (req, res) => {
-  const skillsDir = path.join(__dirname, 'public', 'design-skills');
-  const skills = [];
-  try {
-    for (const dir of fs.readdirSync(skillsDir)) {
-      const md = path.join(skillsDir, dir, 'SKILL.md');
-      if (!fs.existsSync(md)) continue;
-      const src = fs.readFileSync(md, 'utf8');
-      const title = (src.match(/^#\s+(.+)/m) || [])[1] || dir;
-      const desc  = (src.match(/^(?!#)[^\n]{10,}/m) || [])[0] || '';
-      skills.push({ id: dir, name: title.trim(), description: desc.trim().slice(0, 160) });
-    }
-  } catch (_) {}
-  res.json({ skills });
-});
-
-// GET /api/design/systems → { systems: [{id, name, description}] }
-app.get('/api/design/systems', (req, res) => {
-  const systemsDir = path.join(__dirname, 'public', 'design-systems');
-  const systems = [];
-  try {
-    for (const dir of fs.readdirSync(systemsDir)) {
-      const md = path.join(systemsDir, dir, 'DESIGN.md');
-      if (!fs.existsSync(md)) continue;
-      const src = fs.readFileSync(md, 'utf8');
-      const title = (src.match(/^#\s+(.+)/m) || [])[1] || dir;
-      const desc  = (src.match(/^(?!#)[^\n]{10,}/m) || [])[0] || '';
-      systems.push({ id: dir, name: title.trim(), description: desc.trim().slice(0, 160) });
-    }
-  } catch (_) {}
-  res.json({ systems });
 });
 
 // ── Whisper voice transcription ───────────────────────────────────────────
