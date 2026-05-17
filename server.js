@@ -49,6 +49,7 @@ import {
 } from './permission-guard.js';
 import { ToolGuardContext, formatToolLabel, getToolCategory } from './tool-guard.js';
 import { registerConversationRoutes } from './server/routes/conversations.js';
+import { registerProjectRoutes } from './server/routes/projects.js';
 import { registerTaskRoutes } from './server/routes/tasks.js';
 import { registerUtilityRoutes } from './server/routes/utilities.js';
 import {
@@ -466,182 +467,26 @@ registerTaskRoutes(app, {
   subscribe,
 });
 
-// ── Projects ──────────────────────────────────────────────────────────────
-
-app.get('/api/projects', (_req, res) => {
-  res.json(getAllProjects());
-});
-
-app.post('/api/projects', (req, res) => {
-  try { res.status(201).json(createProject(req.body || {})); }
-  catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-app.get('/api/projects/:id', (req, res) => {
-  const p = getProject(req.params.id);
-  if (!p) return res.status(404).json({ error: 'Project not found' });
-  res.json(p);
-});
-
-app.put('/api/projects/:id', (req, res) => {
-  const p = updateProject(req.params.id, req.body || {});
-  if (!p) return res.status(404).json({ error: 'Project not found' });
-  res.json(p);
-});
-
-app.patch('/api/projects/:id', (req, res) => {
-  const p = updateProject(req.params.id, req.body || {});
-  if (!p) return res.status(404).json({ error: 'Project not found' });
-  res.json(p);
-});
-
-// PATCH /api/projects/:id/design — update design-specific metadata
-app.patch('/api/projects/:id/design', (req, res) => {
-  const patch = req.body || {};
-  const p = updateProject(req.params.id, { design: patch });
-  if (!p) return res.status(404).json({ error: 'Project not found' });
-  res.json(p);
-});
-
-app.delete('/api/projects/:id', (req, res) => {
-  const ok = deleteProject(req.params.id);
-  if (!ok) return res.status(404).json({ error: 'Project not found' });
-  res.json({ ok: true });
-});
-
-app.post('/api/projects/:id/touch', (req, res) => {
-  touchProject(req.params.id);
-  res.json({ ok: true });
-});
-
-app.post('/api/projects/:id/conversations', (req, res) => {
-  const ok = linkConversation(req.params.id, req.body?.convId);
-  if (!ok) return res.status(404).json({ error: 'Project not found' });
-  res.json({ ok: true });
-});
-
-app.post('/api/projects/:id/tasks', (req, res) => {
-  const ok = linkTask(req.params.id, req.body?.taskId);
-  if (!ok) return res.status(404).json({ error: 'Project not found' });
-  res.json({ ok: true });
-});
-
-// ── Sources ───────────────────────────────────────────────────────────────
-
-app.post('/api/projects/:id/sources', (req, res) => {
-  try { res.status(201).json(addSource(req.params.id, req.body || {})); }
-  catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-app.delete('/api/projects/:id/sources/:srcId', (req, res) => {
-  const ok = removeSource(req.params.id, req.params.srcId);
-  if (!ok) return res.status(404).json({ error: 'Source not found' });
-  res.json({ ok: true });
-});
-
-app.post('/api/projects/:id/sources/:srcId/sync', async (req, res) => {
-  try {
-    const src = await syncSource(req.params.id, req.params.srcId);
-    res.json(src);
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-app.get('/api/projects/:id/sources/:srcId/files', (req, res) => {
-  try {
-    const entries = listFiles(req.params.id, req.params.srcId, req.query.path || '');
-    res.json(entries);
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-app.get('/api/projects/:id/sources/:srcId/file', (req, res) => {
-  try {
-    const result = readSourceFile(req.params.id, req.params.srcId, req.query.path || '');
-    res.json(result);
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-// Write file back into a local source
-app.put('/api/projects/:id/sources/:srcId/file', (req, res) => {
-  try {
-    const { fullPath } = resolveSourceFilePath(req.params.id, req.params.srcId, req.query.path || '');
-    fs.writeFileSync(fullPath, req.body?.content ?? '', 'utf8');
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-// Stream raw bytes for binary files (images, PDFs, video, audio, etc.)
-app.get('/api/projects/:id/sources/:srcId/raw', (req, res) => {
-  try {
-    const { fullPath, mime, size } = resolveSourceFilePath(req.params.id, req.params.srcId, req.query.path || '');
-    res.setHeader('Content-Type', mime);
-    res.setHeader('Content-Length', size);
-    res.setHeader('Cache-Control', 'no-store');
-    fs.createReadStream(fullPath).pipe(res);
-  } catch (e) {
-    res.status(404).json({ error: e.message });
-  }
-});
-
-// ── Contexts ──────────────────────────────────────────────────────────────
-
-app.get('/api/projects/:id/contexts', (req, res) => {
-  const p = getProject(req.params.id);
-  if (!p) return res.status(404).json({ error: 'Project not found' });
-  res.json(p.contexts || []);
-});
-
-app.post('/api/projects/:id/contexts', (req, res) => {
-  try { res.status(201).json(addContext(req.params.id, req.body || {})); }
-  catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-app.put('/api/projects/:id/contexts/:ctxId', (req, res) => {
-  const ctx = updateContext(req.params.id, req.params.ctxId, req.body || {});
-  if (!ctx) return res.status(404).json({ error: 'Context not found' });
-  res.json(ctx);
-});
-
-app.patch('/api/projects/:id/contexts/:ctxId', (req, res) => {
-  const ctx = updateContext(req.params.id, req.params.ctxId, req.body || {});
-  if (!ctx) return res.status(404).json({ error: 'Context not found' });
-  res.json(ctx);
-});
-
-app.delete('/api/projects/:id/contexts/:ctxId', (req, res) => {
-  const ok = removeContext(req.params.id, req.params.ctxId);
-  if (!ok) return res.status(404).json({ error: 'Context not found' });
-  res.json({ ok: true });
-});
-
-app.post('/api/projects/:id/contexts/from-artifact', (req, res) => {
-  try { res.status(201).json(contextFromArtifact(req.params.id, req.body || {})); }
-  catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-// Upload a file as a context entry (multipart)
-app.post('/api/projects/:id/contexts/from-file', (req, res) => {
-  // Multer-free: raw body already parsed by express json/urlencoded, or a
-  // base64 payload sent via JSON {name, content, mime}
-  try {
-    const { name, content, mime } = req.body || {};
-    if (!content) return res.status(400).json({ error: 'content required' });
-    const ctx = addContext(req.params.id, {
-      type: 'file', name: name || 'Uploaded file',
-      content: typeof content === 'string' ? content : Buffer.from(content).toString('utf8'),
-      path: mime || null,
-    });
-    res.status(201).json(ctx);
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
+registerProjectRoutes(app, {
+  fs,
+  createProject,
+  getProject,
+  getAllProjects,
+  updateProject,
+  deleteProject,
+  touchProject,
+  linkConversation,
+  linkTask,
+  addSource,
+  removeSource,
+  syncSource,
+  listFiles,
+  readSourceFile,
+  resolveSourceFilePath,
+  addContext,
+  updateContext,
+  removeContext,
+  contextFromArtifact,
 });
 
 // ── Store: auth/me ────────────────────────────────────────────────────────
