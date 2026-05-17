@@ -4219,8 +4219,9 @@ app.put('/api/write-file-stream', (req, res) => {
     req.pipe(out);
     out.on('finish', () => {
       try {
+        checkpointFile(abs);
         fs.renameSync(tmp, abs);
-        res.json({ ok: true, path: abs, bytes: fs.statSync(abs).size });
+        res.json({ ok: true, path: abs, bytes: fs.statSync(abs).size, sandboxed: !!context });
       } catch (e) {
         try { fs.unlinkSync(tmp); } catch (_) {}
         res.status(500).json({ error: e.message });

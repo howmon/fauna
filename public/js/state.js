@@ -400,46 +400,9 @@ function redactWriteFileBlocksForStreaming(rawBuffer) {
     var isPlan = mode === 'file-plan' || mode === 'workspace-edit' || mode === 'bulk-edit';
     var target = mode === 'apply-patch' ? 'apply-patch' : isPlan ? 'workspace file plan' : langSuffix.replace(/^[:/]/, '').trim();
     out += streamingActivityHtml(mode, target);
-
-    var contentStart = lineEnd;
-    var scan = contentStart;
-    var closeStart = -1;
-    var closeEnd = -1;
-    var lastCloseStart = -1;
-    var lastCloseEnd = -1;
-    var scanLimit = text.length;
-    var isMarkdownWrite = looksLikeMarkdownWrite(mode, langSuffix) && fence[0] === '`' && fence.length <= 3;
-    if (isMarkdownWrite) {
-      var suggestionsAt = nextSuggestionsStart(contentStart);
-      if (suggestionsAt !== -1) scanLimit = suggestionsAt;
-    }
-
-    while (scan < scanLimit) {
-      var candidateEnd = nextLineEnd(scan);
-      var candidate = text.slice(scan, candidateEnd);
-      if (isClosingFence(candidate, fence[0], fence.length)) {
-        if (closeStart === -1) {
-          closeStart = scan;
-          closeEnd = candidateEnd;
-        }
-        lastCloseStart = scan;
-        lastCloseEnd = candidateEnd;
-        if (!isMarkdownWrite) break;
-      }
-      scan = candidateEnd;
-    }
-
-    if (lastCloseStart !== -1 && isMarkdownWrite) {
-      closeStart = lastCloseStart;
-      closeEnd = lastCloseEnd;
-      var trailingWriteText = text.slice(closeEnd, scanLimit).trim();
-      if (trailingWriteText.length > 120 && /(^|\n)#{1,6}\s+|(^|\n)[-*]\s+|(^|\n)```|\b(API|Database|Service|Setup|Testing|Next Steps|Implementation)\b/i.test(trailingWriteText)) {
-        closeStart = scanLimit;
-        closeEnd = scanLimit;
-      }
-    }
-
-    pos = closeStart === -1 ? scanLimit : closeEnd;
+    var suggestionsAt = nextSuggestionsStart(lineEnd);
+    if (suggestionsAt !== -1) out += text.slice(suggestionsAt);
+    return out;
   }
   return out;
 }

@@ -293,11 +293,26 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
     } else {
       var apiUrl = isAppend ? '/api/append-file' : '/api/write-file';
       var writeBody = addActiveAgentContext({ path: filePath, content: content || '', cwd: _convCwd[wid] || undefined });
-      promise = fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(writeBody)
-      }).then(function(r) { return r.json(); }).then(function(d) {
+      var useRawStreamWrite = !isAppend && (content || '').length > 256 * 1024;
+      if (useRawStreamWrite) {
+        var params = new URLSearchParams();
+        params.set('path', filePath);
+        if (_convCwd[wid]) params.set('cwd', _convCwd[wid]);
+        if (writeBody.agentName) params.set('agentName', writeBody.agentName);
+        dbg('write-file: using raw stream endpoint for large payload (' + (content || '').length + ' chars)', 'info');
+        promise = fetch('/api/write-file-stream?' + params.toString(), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+          body: content || ''
+        });
+      } else {
+        promise = fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(writeBody)
+        });
+      }
+      promise = promise.then(function(r) { return r.json(); }).then(function(d) {
         if (!d.ok) throw new Error(d.error || 'write failed');
         updateWriteFileStatus('wf-block done', (d.bytes / 1024).toFixed(1) + ' KB ' + (isAppend ? 'total' : 'written'));
         dbg('write-file: ' + (isAppend ? 'appended' : 'wrote') + ' → ' + d.path, 'ok');
