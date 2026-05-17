@@ -4292,7 +4292,7 @@ function _buildWriteFilesPlan(body = {}, context) {
     }
     if (body.reject_empty !== false && bytes === 0) throw new Error('Refusing to write empty file: ' + abs);
 
-    plan.push({ path: abs, op: item.append ? 'append' : 'write', content: finalContent, buffer: finalBuffer, encoding, bytes, lines, sha256, existed });
+    plan.push({ path: abs, op: item.append ? 'append' : 'write', buffer: finalBuffer, bytes, lines, sha256, existed });
   }
   return plan;
 }
@@ -4301,7 +4301,6 @@ function _commitWriteFilesPlan(plan) {
   const tx = crypto.randomBytes(6).toString('hex');
   const staged = [];
   const backups = [];
-  const committed = [];
   try {
     for (const op of plan) {
       if (op.op === 'skip') continue;
@@ -4323,7 +4322,6 @@ function _commitWriteFilesPlan(plan) {
 
     for (const item of staged) {
       fs.renameSync(item.tmp, item.path);
-      committed.push(item.path);
     }
 
     for (const b of backups) {
