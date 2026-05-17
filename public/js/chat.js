@@ -704,7 +704,8 @@ async function streamResponse(conv) {
       renderTimer = null;
       if (buffer) {
         bodyEl.classList.add('streaming-cursor');
-        var rendered = (typeof renderStreamingActivity === 'function' ? renderStreamingActivity : renderStreamingCOT)(buffer);
+        var liveBuffer = typeof redactWriteFileBlocksForStreaming === 'function' ? redactWriteFileBlocksForStreaming(buffer) : buffer;
+        var rendered = (typeof renderStreamingActivity === 'function' ? renderStreamingActivity : renderStreamingCOT)(liveBuffer);
         if (rendered && rendered.trim()) bodyEl.innerHTML = rendered;
         else _ensureStreamingStatus('Fauna is working…');
         var now = Date.now();

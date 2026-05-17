@@ -293,6 +293,97 @@ function sanitizeWriteFileBlocks(rawBuffer) {
   return out;
 }
 
+function redactWriteFileBlocksForStreaming(rawBuffer) {
+  if (!rawBuffer) return rawBuffer;
+  var text = String(rawBuffer);
+  var out = '';
+  var pos = 0;
+  var blockStart = /^([`~]{3,})(write-file|append-file|replace-string|apply-patch|file-plan|workspace-edit|bulk-edit)([^\r\n]*)\r?\n/;
+
+  function nextLineEnd(from) {
+    var nl = text.indexOf('\n', from);
+    return nl === -1 ? text.length : nl + 1;
+  }
+
+  function isClosingFence(line, fenceChar, fenceLen) {
+    var trimmed = line.replace(/\r?\n$/, '');
+    var pattern = new RegExp('^' + fenceChar.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '{' + fenceLen + ',}[ \t]*$');
+    return pattern.test(trimmed);
+  }
+
+  function looksLikeMarkdownWrite(mode, suffix) {
+    if (mode !== 'write-file' && mode !== 'append-file') return false;
+    var target = String(suffix || '').toLowerCase();
+    return /\.(md|markdown|mdx)\b/.test(target) || /(implementation[_-]?guide|readme|runbook|handbook|playbook|architecture|spec|report|plan|strategy|guide)/i.test(target);
+  }
+
+  function nextSuggestionsStart(from) {
+    var re = /(?:^|\n)([`~]{3,})suggestions\b[^\n]*\n/g;
+    re.lastIndex = from;
+    var m = re.exec(text);
+    return m ? (m.index + (m[0][0] === '\n' ? 1 : 0)) : -1;
+  }
+
+  while (pos < text.length) {
+    var lineEnd = nextLineEnd(pos);
+    var line = text.slice(pos, lineEnd);
+    var match = line.match(blockStart);
+    if (!match) {
+      out += line;
+      pos = lineEnd;
+      continue;
+    }
+
+    var fence = match[1];
+    var mode = match[2];
+    var langSuffix = match[3] || '';
+    var isPlan = mode === 'file-plan' || mode === 'workspace-edit' || mode === 'bulk-edit';
+    var target = mode === 'apply-patch' ? 'apply-patch' : isPlan ? 'workspace file plan' : langSuffix.replace(/^[:/]/, '').trim();
+    out += '```' + (isPlan ? 'file-plan-streaming' : 'write-file-streaming') + '\n' + mode + (target ? ': ' + target : '') + '\n```\n';
+
+    var contentStart = lineEnd;
+    var scan = contentStart;
+    var closeStart = -1;
+    var closeEnd = -1;
+    var lastCloseStart = -1;
+    var lastCloseEnd = -1;
+    var scanLimit = text.length;
+    var isMarkdownWrite = looksLikeMarkdownWrite(mode, langSuffix) && fence[0] === '`' && fence.length <= 3;
+    if (isMarkdownWrite) {
+      var suggestionsAt = nextSuggestionsStart(contentStart);
+      if (suggestionsAt !== -1) scanLimit = suggestionsAt;
+    }
+
+    while (scan < scanLimit) {
+      var candidateEnd = nextLineEnd(scan);
+      var candidate = text.slice(scan, candidateEnd);
+      if (isClosingFence(candidate, fence[0], fence.length)) {
+        if (closeStart === -1) {
+          closeStart = scan;
+          closeEnd = candidateEnd;
+        }
+        lastCloseStart = scan;
+        lastCloseEnd = candidateEnd;
+        if (!isMarkdownWrite) break;
+      }
+      scan = candidateEnd;
+    }
+
+    if (lastCloseStart !== -1 && isMarkdownWrite) {
+      closeStart = lastCloseStart;
+      closeEnd = lastCloseEnd;
+      var trailingWriteText = text.slice(closeEnd, scanLimit).trim();
+      if (trailingWriteText.length > 120 && /(^|\n)#{1,6}\s+|(^|\n)[-*]\s+|(^|\n)```|\b(API|Database|Service|Setup|Testing|Next Steps|Implementation)\b/i.test(trailingWriteText)) {
+        closeStart = scanLimit;
+        closeEnd = scanLimit;
+      }
+    }
+
+    pos = closeStart === -1 ? scanLimit : closeEnd;
+  }
+  return out;
+}
+
 // ── Utilities (loaded early since most files need these) ──────────────────
 
 function escHtml(s) {
