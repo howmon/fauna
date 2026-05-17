@@ -659,6 +659,8 @@ async function streamResponse(conv) {
   var renderTimer  = null;
   var lastScrolled = 0;
   var tokenCount   = 0;
+  var _lastRenderTraceAt = 0;
+  var _streamStartedAt = Date.now();
   var _lastToolOutputAccum = ''; // rolling last ~1000 chars of tool_output for input context
   var _reasoning = null; // { startedAt, durationSeconds } — compact thinking status only
   if (typeof resetDesignArtifactState === 'function') resetDesignArtifactState();
@@ -704,11 +706,17 @@ async function streamResponse(conv) {
       renderTimer = null;
       if (buffer) {
         bodyEl.classList.add('streaming-cursor');
+        var renderStart = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
         var liveBuffer = typeof redactWriteFileBlocksForStreaming === 'function' ? redactWriteFileBlocksForStreaming(buffer) : buffer;
         var rendered = (typeof renderStreamingActivity === 'function' ? renderStreamingActivity : renderStreamingCOT)(liveBuffer);
+        var renderEnd = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
         if (rendered && rendered.trim()) bodyEl.innerHTML = rendered;
         else _ensureStreamingStatus('Fauna is working…');
         var now = Date.now();
+        if (now - _lastRenderTraceAt > 1000 || liveBuffer.length !== buffer.length) {
+          _lastRenderTraceAt = now;
+          dbg('stream render: raw=' + buffer.length + 'ch visible=' + liveBuffer.length + 'ch html=' + (rendered || '').length + 'ch renderMs=' + (renderEnd - renderStart).toFixed(1), 'info');
+        }
         if (now - lastScrolled > 200) { scrollBottom(); lastScrolled = now; }
       } else {
         _ensureStreamingStatus('Fauna is working…');
@@ -842,7 +850,7 @@ async function streamResponse(conv) {
             if (lastClose === -1) buffer += '\n```\n';
           }
 
-          if (evt.type === 'content')   { _clearToolStatuses(); buffer += evt.content; tokenCount++; if (tokenCount === 1) dbg('first token received', 'ok'); if (typeof processDesignStreamChunk === 'function') processDesignStreamChunk(evt.content, buffer); scheduleRender(); }
+          if (evt.type === 'content')   { _clearToolStatuses(); buffer += evt.content; tokenCount++; if (tokenCount === 1) dbg('first token received', 'ok'); if (tokenCount % 25 === 0) dbg('stream chunk: tokens=' + tokenCount + ' buffer=' + buffer.length + 'ch elapsed=' + (Date.now() - _streamStartedAt) + 'ms lastChunk=' + (evt.content || '').length + 'ch', 'info'); if (typeof processDesignStreamChunk === 'function') processDesignStreamChunk(evt.content, buffer); scheduleRender(); }
           if (evt.type === 'error')     { _clearToolStatuses(); dbg('SSE error: ' + evt.error, 'err'); buffer += '\n\nError: ' + evt.error; scheduleRender(); }
           if (evt.type === 'reasoning') {
             if (!_reasoning) _reasoning = { startedAt: Date.now() };
@@ -907,6 +915,7 @@ async function streamResponse(conv) {
     _clearToolStatuses();
     if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
     dbg('■ stream done — buffer=' + buffer.length + 'ch tokens=' + tokenCount, buffer.length ? 'ok' : 'warn');
+    dbg('stream timing: elapsed=' + (Date.now() - _streamStartedAt) + 'ms avgCharsPerToken=' + (tokenCount ? Math.round(buffer.length / tokenCount) : 0), 'info');
     dbg('  raw: ' + JSON.stringify(buffer), 'info');
 
     // Update context meter (granular breakdown)

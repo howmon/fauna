@@ -11,6 +11,7 @@ import crypto     from 'crypto';
 import path       from 'path';
 import os         from 'os';
 import fs         from 'fs';
+import { performance } from 'perf_hooks';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
@@ -4181,6 +4182,7 @@ function checkpointFile(abs) {
 app.post('/api/write-file', (req, res) => {
   const { path: filePath, content, fromFile, encoding, cwd } = req.body;
   if (!filePath) return res.status(400).json({ error: 'path required' });
+  const startedAt = performance.now();
   try {
     const context = getMutationContext(req.body);
     const abs = resolvePath(filePath, cwd);
@@ -4189,15 +4191,22 @@ app.post('/api/write-file', (req, res) => {
     if (fromFile) {
       fs.copyFileSync(fromFile, abs);
       const bytes = fs.statSync(abs).size;
+      console.log(`[write-file] copy ${fromFile} -> ${abs} bytes=${bytes} ms=${(performance.now() - startedAt).toFixed(1)} sandboxed=${!!context}`);
       res.json({ ok: true, path: abs, bytes, sandboxed: !!context });
     } else {
       if (content === undefined) return res.status(400).json({ error: 'content or fromFile required' });
       // Checkpoint the existing file before overwriting (AutoRecovery)
+      const checkpointStartedAt = performance.now();
       checkpointFile(abs);
+      const checkpointMs = performance.now() - checkpointStartedAt;
+      const writeStartedAt = performance.now();
       atomicWriteFile(abs, content, encoding || 'utf8');
-      res.json({ ok: true, path: abs, bytes: Buffer.byteLength(content, encoding || 'utf8'), sandboxed: !!context });
+      const bytes = Buffer.byteLength(content, encoding || 'utf8');
+      console.log(`[write-file] json path=${abs} chars=${String(content).length} bytes=${bytes} checkpointMs=${checkpointMs.toFixed(1)} writeMs=${(performance.now() - writeStartedAt).toFixed(1)} totalMs=${(performance.now() - startedAt).toFixed(1)} sandboxed=${!!context}`);
+      res.json({ ok: true, path: abs, bytes, sandboxed: !!context });
     }
   } catch (e) {
+    console.log(`[write-file] error path=${filePath} ms=${(performance.now() - startedAt).toFixed(1)} error=${e.message}`);
     sendMutationError(res, e);
   }
 });
@@ -4209,6 +4218,7 @@ app.put('/api/write-file-stream', (req, res) => {
   const filePath = req.query.path;
   const cwd      = req.query.cwd;
   if (!filePath) return res.status(400).json({ error: 'path query param required' });
+  const startedAt = performance.now();
   try {
     const context = getMutationContext(req.query);
     const abs = resolvePath(filePath, cwd);
@@ -4216,20 +4226,29 @@ app.put('/api/write-file-stream', (req, res) => {
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     const tmp = abs + '.~tmp' + process.pid;
     const out = fs.createWriteStream(tmp);
+    let receivedBytes = 0;
+    req.on('data', chunk => { receivedBytes += chunk.length; });
     req.pipe(out);
     out.on('finish', () => {
       try {
+        const checkpointStartedAt = performance.now();
         checkpointFile(abs);
+        const checkpointMs = performance.now() - checkpointStartedAt;
+        const renameStartedAt = performance.now();
         fs.renameSync(tmp, abs);
-        res.json({ ok: true, path: abs, bytes: fs.statSync(abs).size, sandboxed: !!context });
+        const bytes = fs.statSync(abs).size;
+        console.log(`[write-file-stream] path=${abs} received=${receivedBytes} bytes=${bytes} checkpointMs=${checkpointMs.toFixed(1)} renameMs=${(performance.now() - renameStartedAt).toFixed(1)} totalMs=${(performance.now() - startedAt).toFixed(1)} sandboxed=${!!context}`);
+        res.json({ ok: true, path: abs, bytes, sandboxed: !!context });
       } catch (e) {
         try { fs.unlinkSync(tmp); } catch (_) {}
+        console.log(`[write-file-stream] finish error path=${abs} received=${receivedBytes} ms=${(performance.now() - startedAt).toFixed(1)} error=${e.message}`);
         res.status(500).json({ error: e.message });
       }
     });
-    out.on('error', e => { try { fs.unlinkSync(tmp); } catch (_) {} res.status(500).json({ error: e.message }); });
-    req.on('error', e => { try { fs.unlinkSync(tmp); } catch (_) {} res.status(500).json({ error: e.message }); });
+    out.on('error', e => { try { fs.unlinkSync(tmp); } catch (_) {} console.log(`[write-file-stream] output error path=${abs} received=${receivedBytes} ms=${(performance.now() - startedAt).toFixed(1)} error=${e.message}`); res.status(500).json({ error: e.message }); });
+    req.on('error', e => { try { fs.unlinkSync(tmp); } catch (_) {} console.log(`[write-file-stream] request error path=${abs} received=${receivedBytes} ms=${(performance.now() - startedAt).toFixed(1)} error=${e.message}`); res.status(500).json({ error: e.message }); });
   } catch (e) {
+    console.log(`[write-file-stream] setup error path=${filePath} ms=${(performance.now() - startedAt).toFixed(1)} error=${e.message}`);
     sendMutationError(res, e);
   }
 });
@@ -4360,12 +4379,19 @@ app.post('/api/write-files/check', (req, res) => {
 });
 
 app.post('/api/write-files', (req, res) => {
+  const startedAt = performance.now();
   try {
     const context = getMutationContext(req.body || {});
+    const planStartedAt = performance.now();
     const plan = _buildWriteFilesPlan(req.body || {}, context);
+    const planMs = performance.now() - planStartedAt;
+    const commitStartedAt = performance.now();
     const results = _commitWriteFilesPlan(plan);
+    const commitMs = performance.now() - commitStartedAt;
+    console.log(`[write-files] files=${plan.length} bytes=${plan.reduce((sum, op) => sum + (op.bytes || 0), 0)} planMs=${planMs.toFixed(1)} commitMs=${commitMs.toFixed(1)} totalMs=${(performance.now() - startedAt).toFixed(1)} sandboxed=${!!context}`);
     res.json({ ok: true, results, sandboxed: !!context });
   } catch (e) {
+    console.log(`[write-files] error ms=${(performance.now() - startedAt).toFixed(1)} error=${e.message}`);
     sendMutationError(res, e);
   }
 });

@@ -30,6 +30,7 @@ function _wfArtifactContainer(widget) {
 function _wfAddCreatedFileArtifact(widget, filePath, content, opts) {
   opts = opts || {};
   if (!widget || !filePath || typeof addArtifact !== 'function' || typeof injectArtifactCard !== 'function') return null;
+  var startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   var type = opts.type || _wfArtifactType(filePath);
   var title = opts.title || _wfFileName(filePath);
   var artifact = { type: type, title: title, path: filePath };
@@ -37,6 +38,8 @@ function _wfAddCreatedFileArtifact(widget, filePath, content, opts) {
   var id = addArtifact(artifact);
   var container = _wfArtifactContainer(widget);
   injectArtifactCard(id, container);
+  var endedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  dbg('write-file artifact: id=' + id + ' type=' + type + ' path=' + filePath + ' content=' + (content ? content.length : 0) + 'ch ms=' + (endedAt - startedAt).toFixed(1), 'info');
   return id;
 }
 
@@ -47,6 +50,7 @@ function _wfAddCreatedFilesArtifact(widget, files) {
   var title = paths.length === 1 ? _wfFileName(paths[0]) : paths.length + ' created files';
   var id = addArtifact({ type: 'files', title: title, content: paths.join('\n') });
   injectArtifactCard(id, _wfArtifactContainer(widget));
+  dbg('write-file artifact: id=' + id + ' type=files count=' + paths.length + ' paths=' + paths.join(', '), 'info');
   return id;
 }
 
@@ -204,6 +208,8 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
 
     // ── execute ────────────────────────────────────────────────────────────
     var promise;
+    var writeStartedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    dbg('write-file execute: mode=' + mode + ' path=' + filePath + ' chars=' + (content || '').length + ' lines=' + lines + ' history=' + !!isHistoryLoad, 'cmd');
 
     if (isPlan) {
       var plan;
@@ -219,6 +225,7 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
       }
       var planCwd = plan.cwd || getWriteCwd() || undefined;
       var planBody = addActiveAgentContext(Object.assign({}, plan, { cwd: planCwd }));
+      dbg('file-plan request: files=' + plan.files.length + ' cwd=' + (planCwd || '') + ' expected=' + (plan.expected_file_count || plan.expectedFileCount || ''), 'info');
       promise = fetch('/api/write-files', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -228,7 +235,7 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
         var results = d.results || [];
         var written = results.filter(function(r) { return r.op !== 'skip'; });
         updateWriteFileStatus('wf-block done', written.length + ' file' + (written.length === 1 ? '' : 's') + ' written atomically');
-        dbg('file-plan: ' + written.length + ' file(s) written', 'ok');
+        dbg('file-plan: ' + written.length + ' file(s) written in ' + (((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - writeStartedAt).toFixed(1) + 'ms results=' + results.map(function(r) { return r.op + ':' + r.path + ':' + r.bytes + 'b'; }).join(', '), 'ok');
         if (storeId) delete _wfContentStore[storeId];
         results.forEach(function(r) { if (r.op !== 'skip') trackConvFile(wid, r.path, r.bytes); });
         if (written.length === 1) {
@@ -299,13 +306,14 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
         params.set('path', filePath);
         if (_convCwd[wid]) params.set('cwd', _convCwd[wid]);
         if (writeBody.agentName) params.set('agentName', writeBody.agentName);
-        dbg('write-file: using raw stream endpoint for large payload (' + (content || '').length + ' chars)', 'info');
+        dbg('write-file request: transport=raw-stream chars=' + (content || '').length + ' path=' + filePath + ' cwd=' + (_convCwd[wid] || ''), 'info');
         promise = fetch('/api/write-file-stream?' + params.toString(), {
           method: 'PUT',
           headers: { 'Content-Type': 'text/plain; charset=utf-8' },
           body: content || ''
         });
       } else {
+        dbg('write-file request: transport=json endpoint=' + apiUrl + ' chars=' + (content || '').length + ' path=' + filePath, 'info');
         promise = fetch(apiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -315,7 +323,7 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
       promise = promise.then(function(r) { return r.json(); }).then(function(d) {
         if (!d.ok) throw new Error(d.error || 'write failed');
         updateWriteFileStatus('wf-block done', (d.bytes / 1024).toFixed(1) + ' KB ' + (isAppend ? 'total' : 'written'));
-        dbg('write-file: ' + (isAppend ? 'appended' : 'wrote') + ' → ' + d.path, 'ok');
+        dbg('write-file: ' + (isAppend ? 'appended' : 'wrote') + ' → ' + d.path + ' bytes=' + d.bytes + ' transport=' + (useRawStreamWrite ? 'raw-stream' : 'json') + ' totalMs=' + (((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - writeStartedAt).toFixed(1), 'ok');
         if (storeId) delete _wfContentStore[storeId];
         trackConvFile(wid, d.path, d.bytes);
         if (isAppend) {
@@ -355,12 +363,15 @@ function clearWriteRepairMode(convId) {
 }
 
 function validateWrittenFileFromDisk(filePath, widget, convId) {
+  var validationStartedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  dbg('write-file validation: read-back start path=' + filePath, 'info');
   fetch('/api/read-file', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path: filePath })
   }).then(function(r) { return r.json(); }).then(function(d) {
     if (!d.ok) throw new Error(d.error || 'read failed');
+    dbg('write-file validation: read-back complete path=' + (d.path || filePath) + ' bytes=' + d.bytes + ' ms=' + (((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - validationStartedAt).toFixed(1), 'info');
     validateWrittenFile(d.path || filePath, d.content || '', widget);
   }).catch(function(e) {
     markWriteFileFailed(widget, filePath, 'Could not validate final appended file: ' + e.message, convId);
@@ -372,8 +383,10 @@ function validateWrittenFileFromDisk(filePath, widget, convId) {
 // On failure, feed a constrained repair request back to the AI.
 
 function validateWrittenFile(filePath, content, widget) {
+  var validationStartedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   var ext = (filePath.split('.').pop() || '').toLowerCase();
   var convId = widget.dataset.convId || state.currentId;
+  dbg('write-file validation: start path=' + filePath + ' ext=' + ext + ' chars=' + (content || '').length, 'info');
 
   if (['js', 'mjs', 'cjs'].includes(ext)) {
     // node --check is fast and definitive for syntax errors
@@ -386,6 +399,7 @@ function validateWrittenFile(filePath, content, widget) {
         var err = (d.stderr || d.stdout || 'Syntax error').trim().slice(0, 600);
         markWriteFileFailed(widget, filePath, err, convId);
       } else {
+        dbg('write-file validation: node --check passed path=' + filePath + ' ms=' + (((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - validationStartedAt).toFixed(1), 'ok');
         clearWriteRepairMode(convId);
       }
     }).catch(function() {});
@@ -396,6 +410,7 @@ function validateWrittenFile(filePath, content, widget) {
       return false;
     }
     clearWriteRepairMode(convId);
+    dbg('write-file validation: html passed path=' + filePath + ' ms=' + (((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - validationStartedAt).toFixed(1), 'ok');
     return true;
 
   } else if (ext === 'css') {
@@ -407,6 +422,7 @@ function validateWrittenFile(filePath, content, widget) {
       return false;
     }
     clearWriteRepairMode(convId);
+    dbg('write-file validation: css passed path=' + filePath + ' ms=' + (((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - validationStartedAt).toFixed(1), 'ok');
     return true;
 
   } else if (ext === 'md' || ext === 'markdown') {
@@ -479,6 +495,7 @@ function validateWrittenFile(filePath, content, widget) {
       return false;
     }
     clearWriteRepairMode(convId);
+    dbg('write-file validation: markdown passed path=' + filePath + ' lines=' + trimmed.split('\n').length + ' ms=' + (((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - validationStartedAt).toFixed(1), 'ok');
     return true;
 
   } else if (ext === 'json') {
@@ -493,9 +510,11 @@ function validateWrittenFile(filePath, content, widget) {
       }
     }
     clearWriteRepairMode(convId);
+    dbg('write-file validation: json passed path=' + filePath + ' ms=' + (((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - validationStartedAt).toFixed(1), 'ok');
     return true;
   }
   clearWriteRepairMode(convId);
+  dbg('write-file validation: no-op passed path=' + filePath + ' ext=' + ext + ' ms=' + (((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - validationStartedAt).toFixed(1), 'ok');
   return true;
 }
 
