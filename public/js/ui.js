@@ -555,26 +555,22 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
     extractAndRenderSaveInstruction(content, el, true);
     extractArtifactsFromBuffer(content, el, false);
     if (typeof extractAndRenderGenUI === 'function') extractAndRenderGenUI(content, el, true);
-    wrapInChainOfThought(el);
+    (typeof wrapInActivityDetails === 'function' ? wrapInActivityDetails : wrapInChainOfThought)(el);
     if (typeof compactProcessClusters === 'function') compactProcessClusters(el);
   }
 
-  // Inject committed reasoning panel for historical AI messages
-  if (role === 'assistant' && reasoning && reasoning.text) {
+  // Inject committed compact thinking status for historical AI messages.
+  if (role === 'assistant' && reasoning) {
     var rPanel = document.createElement('div');
     rPanel.className = 'reasoning-panel';
     rPanel.dataset.completed = '1';
     rPanel.dataset.open = '0';
-    var rLabel = reasoning.durationSeconds != null ? 'Thought for ' + reasoning.durationSeconds + 's' : 'Thought process';
+    var rLabel = reasoning.durationSeconds != null ? 'Thought for ' + reasoning.durationSeconds + 's' : 'Thought briefly';
     rPanel.innerHTML =
-      '<button class="reasoning-toggle" onclick="var p=this.parentElement;p.dataset.open=p.dataset.open===\'0\'?\'1\':\'0\';p.querySelector(\'.reasoning-body\').style.display=p.dataset.open===\'0\'?\'none\':\'\'">' +
+      '<button class="reasoning-toggle" type="button">' +
         '<i class="ti ti-brain"></i>' +
         '<span class="reasoning-label">' + escHtml(rLabel) + '</span>' +
-        '<i class="ti ti-chevron-right reasoning-chevron"></i>' +
-      '</button>' +
-      '<div class="reasoning-body" style="display:none">' +
-        renderMarkdown(reasoning.text) +
-      '</div>';
+      '</button>';
     el.insertBefore(rPanel, body);
   }
 

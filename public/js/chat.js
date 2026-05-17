@@ -630,7 +630,7 @@ async function streamResponse(conv) {
   var lastScrolled = 0;
   var tokenCount   = 0;
   var _lastToolOutputAccum = ''; // rolling last ~1000 chars of tool_output for input context
-  var _reasoning = null; // { text, startedAt } — live thinking state
+  var _reasoning = null; // { startedAt, durationSeconds } — compact thinking status only
   if (typeof resetDesignArtifactState === 'function') resetDesignArtifactState();
 
   // ── Ephemeral tool status stack (Clawpilot-style) ──────────────────
@@ -674,7 +674,7 @@ async function streamResponse(conv) {
       renderTimer = null;
       if (buffer) {
         bodyEl.classList.add('streaming-cursor');
-        var rendered = renderStreamingCOT(buffer);
+        var rendered = (typeof renderStreamingActivity === 'function' ? renderStreamingActivity : renderStreamingCOT)(buffer);
         if (rendered && rendered.trim()) bodyEl.innerHTML = rendered;
         else _ensureStreamingStatus('Fauna is working…');
         var now = Date.now();
@@ -685,12 +685,11 @@ async function streamResponse(conv) {
     }, 60);
   }
 
-  function _updateReasoningPanel(text, durationSeconds, completed) {
+  function _updateReasoningPanel(durationSeconds, completed) {
     _ensureLiveMessageAttached();
     if (!isActive() || !msgEl) return;
     var panel = msgEl.querySelector('.reasoning-panel');
-    if (!completed && !(text || '').trim()) return;
-    if (completed && !(text || '').trim()) {
+    if (completed && !_reasoning) {
       if (panel) panel.remove();
       return;
     }
@@ -704,22 +703,15 @@ async function streamResponse(conv) {
     var label = completed
       ? ('Thought for ' + (elapsed != null ? elapsed + 's' : '…'))
       : (elapsed != null ? 'Thinking… ' + elapsed + 's' : 'Thinking…');
-    var open = !completed; // auto-open while streaming, collapsed when done
+    var open = false;
     panel.dataset.completed = completed ? '1' : '';
     panel.dataset.open = panel.dataset.open === '0' ? '0' : (open ? '1' : '0');
     var isOpen = panel.dataset.open !== '0';
-    var bodyHtml = (text || '').trim()
-      ? (typeof renderMarkdown === 'function' ? renderMarkdown(text || '') : escHtml(text || ''))
-      : '';
     panel.innerHTML =
-      '<button class="reasoning-toggle" onclick="this.parentElement.dataset.open=this.parentElement.dataset.open===\'0\'?\'1\':\'0\';this.parentElement.querySelector(\'.reasoning-body\').style.display=this.parentElement.dataset.open===\'0\'?\'none\':\'\'">' +
+      '<button class="reasoning-toggle" type="button">' +
         '<i class="ti ' + (completed ? 'ti-brain' : 'ti-loader-2') + '" ' + (completed ? '' : 'style="animation:spin .8s linear infinite"') + '></i>' +
         '<span class="reasoning-label">' + label + '</span>' +
-        '<i class="ti ti-chevron-right reasoning-chevron' + (isOpen ? ' reasoning-chevron-open' : '') + '"></i>' +
-      '</button>' +
-      '<div class="reasoning-body" style="' + (isOpen ? '' : 'display:none') + '">' +
-        bodyHtml +
-      '</div>';
+      '</button>';
   }
 
   try {
@@ -822,9 +814,8 @@ async function streamResponse(conv) {
           if (evt.type === 'content')   { _clearToolStatuses(); buffer += evt.content; tokenCount++; if (tokenCount === 1) dbg('first token received', 'ok'); if (typeof processDesignStreamChunk === 'function') processDesignStreamChunk(evt.content, buffer); scheduleRender(); }
           if (evt.type === 'error')     { _clearToolStatuses(); dbg('SSE error: ' + evt.error, 'err'); buffer += '\n\nError: ' + evt.error; scheduleRender(); }
           if (evt.type === 'reasoning') {
-            if (!_reasoning) { _reasoning = { text: '', startedAt: Date.now() }; }
-            _reasoning.text = evt.accumulated || (_reasoning.text + evt.text);
-            _updateReasoningPanel(_reasoning.text, null, false);
+            if (!_reasoning) _reasoning = { startedAt: Date.now() };
+            _updateReasoningPanel(null, false);
             scrollBottom();
           }
           if (evt.type === 'tool_call') {
@@ -868,10 +859,10 @@ async function streamResponse(conv) {
             if (evt.usage) _ctxUsage = evt.usage;
             // Finalize reasoning panel (collapse, freeze duration)
             if (evt.reasoning || _reasoning) {
-              var doneReasoning = evt.reasoning || (_reasoning ? { text: _reasoning.text, durationSeconds: Math.round((Date.now() - _reasoning.startedAt) / 1000) } : null);
+              var doneReasoning = evt.reasoning || (_reasoning ? { durationSeconds: Math.round((Date.now() - _reasoning.startedAt) / 1000) } : null);
               if (doneReasoning) {
                 _reasoning = doneReasoning;
-                _updateReasoningPanel(doneReasoning.text, doneReasoning.durationSeconds, true);
+                _updateReasoningPanel(doneReasoning.durationSeconds, true);
               }
             }
           }
@@ -894,7 +885,7 @@ async function streamResponse(conv) {
     // Always save the AI message regardless of which conv is active
     var aiMsg = { role: 'assistant', content: buffer };
     if (_currentAgentInfo) aiMsg.agentInfo = _currentAgentInfo;
-    if (_reasoning && _reasoning.text) aiMsg.reasoning = { text: _reasoning.text, durationSeconds: _reasoning.durationSeconds != null ? _reasoning.durationSeconds : (_reasoning.startedAt ? Math.round((Date.now() - _reasoning.startedAt) / 1000) : null) };
+    if (_reasoning) aiMsg.reasoning = { durationSeconds: _reasoning.durationSeconds != null ? _reasoning.durationSeconds : (_reasoning.startedAt ? Math.round((Date.now() - _reasoning.startedAt) / 1000) : null) };
     conv.messages.push(aiMsg);
     conv._streaming = false;
     conv._abortController = null;
@@ -910,7 +901,7 @@ async function streamResponse(conv) {
       _ensureLiveMessageAttached();
       delete msgEl.dataset.streamingLive;
       bodyEl.classList.remove('streaming-cursor');
-      if (!_reasoning || !_reasoning.text) _updateReasoningPanel('', null, true);
+      if (!_reasoning) _updateReasoningPanel(null, true);
       // Sanitize write-file blocks BEFORE rendering — extracts file content into
       // _wfContentStore so the markdown renderer never sees large file bytes.
       var renderBuffer = sanitizeWriteFileBlocks(buffer);
@@ -1020,7 +1011,7 @@ async function streamResponse(conv) {
         if (typeof extractAndRenderUninstallAgent === 'function') extractAndRenderUninstallAgent(buffer, msgEl);
         if (typeof extractAndRenderTaskCreate === 'function') extractAndRenderTaskCreate(buffer, msgEl);
         if (typeof extractAndRenderGenUI === 'function') extractAndRenderGenUI(buffer, msgEl, false);
-        wrapInChainOfThought(msgEl);
+        (typeof wrapInActivityDetails === 'function' ? wrapInActivityDetails : wrapInChainOfThought)(msgEl);
         if (typeof compactProcessClusters === 'function') compactProcessClusters(msgEl);
         extractAndRenderSuggestions(buffer, msgEl);
         if (state._lastMsgWasDesktopTask) {
@@ -1079,7 +1070,7 @@ async function streamResponse(conv) {
       if (typeof extractAndRenderUninstallAgent === 'function') extractAndRenderUninstallAgent(buffer, msgEl);
       if (typeof extractAndRenderTaskCreate === 'function') extractAndRenderTaskCreate(buffer, msgEl);
       if (typeof extractAndRenderGenUI === 'function') extractAndRenderGenUI(buffer, msgEl, true);
-      wrapInChainOfThought(msgEl);
+      (typeof wrapInActivityDetails === 'function' ? wrapInActivityDetails : wrapInChainOfThought)(msgEl);
     }
   }
 }

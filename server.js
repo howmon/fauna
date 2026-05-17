@@ -2000,7 +2000,7 @@ app.post('/api/chat', async (req, res) => {
       let assistantText = '';
       let streamUsage = null;
 
-      let reasoningText  = '';
+      let sawReasoning = false;
       let reasoningStart = null;
 
       for await (const chunk of stream) {
@@ -2016,8 +2016,10 @@ app.post('/api/chat', async (req, res) => {
           for (const block of delta.content) {
             if (block.type === 'thinking' && block.thinking) {
               if (reasoningStart === null) reasoningStart = Date.now();
-              reasoningText += block.thinking;
-              send({ type: 'reasoning', text: block.thinking, accumulated: reasoningText });
+              if (!sawReasoning) {
+                sawReasoning = true;
+                send({ type: 'reasoning' });
+              }
             } else if (block.type === 'text' && block.text) {
               assistantText += block.text;
               send({ type: 'content', content: block.text });
@@ -2034,8 +2036,10 @@ app.post('/api/chat', async (req, res) => {
         // ── o-series reasoning summary delta ──────────────────────────────
         if (delta.reasoning_content) {
           if (reasoningStart === null) reasoningStart = Date.now();
-          reasoningText += delta.reasoning_content;
-          send({ type: 'reasoning', text: delta.reasoning_content, accumulated: reasoningText });
+          if (!sawReasoning) {
+            sawReasoning = true;
+            send({ type: 'reasoning' });
+          }
         }
 
         // ── Tool call accumulation ─────────────────────────────────────────
@@ -2160,7 +2164,7 @@ app.post('/api/chat', async (req, res) => {
           // keep continueLoop = true
         } else {
           send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
-            reasoning: reasoningText ? { text: reasoningText, durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
+            reasoning: sawReasoning ? { durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
           });
           continueLoop = false;
         }

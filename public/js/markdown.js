@@ -209,7 +209,7 @@ function initMermaidInContainer(container) {
   }
 }
 
-// ── Chain of Thought rendering ────────────────────────────────────────────
+// ── Activity/detail rendering ─────────────────────────────────────────────
 
 // Segment buffer into {type:'prose',text} | {type:'code',lang,lines,isLive}
 function parseBufferSegments(buffer) {
@@ -278,8 +278,8 @@ function groupLabel(items, isLive) {
   return n + ' code blocks' + (isLive ? '…' : '');
 }
 
-// Used during streaming: prose renders normally, consecutive code blocks become one pill
-function renderStreamingCOT(buffer) {
+// Used during streaming: prose renders normally, consecutive code blocks become one activity pill.
+function renderStreamingActivity(buffer) {
   var segments = parseBufferSegments(buffer);
   var grouped  = groupCodeSegments(segments);
   var result   = '';
@@ -336,8 +336,8 @@ function buildAdjacentGroups(elements) {
   return groups;
 }
 
-// Called after streaming — groups consecutive same-type blocks into one collapsible COT
-function wrapInChainOfThought(msgEl) {
+// Called after streaming — groups consecutive same-type blocks into one collapsible activity/details block.
+function wrapInActivityDetails(msgEl) {
   var body = msgEl.querySelector('.msg-body');
   if (!body) return;
 
@@ -397,7 +397,9 @@ function wrapGroupInCOT(elements, icon, label) {
   elements.forEach(function(el) { content.appendChild(el); });
 }
 
-// Keep old name as alias for single-element calls
+// Compatibility aliases for older call sites/extensions.
+function renderStreamingCOT(buffer) { return renderStreamingActivity(buffer); }
+function wrapInChainOfThought(msgEl) { return wrapInActivityDetails(msgEl); }
 function wrapInCOT(el, icon, label) { wrapGroupInCOT([el], icon, label); }
 
 function compactProcessClusters(msgEl) {
