@@ -1017,6 +1017,7 @@ async function streamResponse(conv) {
         (typeof wrapInActivityDetails === 'function' ? wrapInActivityDetails : wrapInChainOfThought)(msgEl);
         delete conv._suppressShellAutoRunOnce;
         if (typeof compactProcessClusters === 'function') compactProcessClusters(msgEl);
+        if (typeof compactLongAssistantMessage === 'function') compactLongAssistantMessage(msgEl, buffer);
         extractAndRenderSuggestions(buffer, msgEl);
         if (state._lastMsgWasDesktopTask) {
           injectOrganizerCard(msgEl, buffer);
@@ -1076,6 +1077,8 @@ async function streamResponse(conv) {
       if (typeof extractAndRenderTaskCreate === 'function') extractAndRenderTaskCreate(buffer, msgEl);
       if (typeof extractAndRenderGenUI === 'function') extractAndRenderGenUI(buffer, msgEl, true);
       (typeof wrapInActivityDetails === 'function' ? wrapInActivityDetails : wrapInChainOfThought)(msgEl);
+      if (typeof compactProcessClusters === 'function') compactProcessClusters(msgEl);
+      if (typeof compactLongAssistantMessage === 'function') compactLongAssistantMessage(msgEl, buffer);
       delete conv._suppressShellAutoRunOnce;
     }
   }

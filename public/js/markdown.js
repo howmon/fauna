@@ -448,3 +448,56 @@ function compactProcessClusters(msgEl) {
   });
 }
 
+function compactLongAssistantMessage(msgEl, sourceText) {
+  if (!msgEl || !msgEl.classList || !msgEl.classList.contains('ai')) return;
+  if (msgEl.querySelector('.long-response-details')) return;
+  var body = msgEl.querySelector('.msg-body');
+  if (!body) return;
+
+  var raw = String(sourceText || body.innerText || '');
+  var plain = raw
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/[#*_~`>|]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  var lineCount = raw.split('\n').length;
+  var visibleText = (body.innerText || '').trim();
+  if (raw.length < 7000 && lineCount < 120 && visibleText.length < 6000) return;
+
+  var preserveSelector = [
+    '.msg-shell-verification', '.shell-exec-block', '.wf-block', '.figma-exec-block',
+    '.ba-block', '.artifact-card', '.suggestions-row', '.gen-ui-root', '.create-agent-card',
+    '.patch-agent-card', '.task-create-card', '.process-cluster'
+  ].join(',');
+  var children = Array.from(body.children || []);
+  var movable = children.filter(function(child) {
+    if (!child || !child.textContent || !child.textContent.trim()) return false;
+    return !(child.matches && child.matches(preserveSelector));
+  });
+  if (!movable.length) return;
+
+  var details = document.createElement('details');
+  details.className = 'long-response-details';
+  var summary = document.createElement('summary');
+  summary.innerHTML =
+    '<span class="long-response-icon"><i class="ti ti-file-text"></i></span>' +
+    '<span class="long-response-title">Long response collapsed</span>' +
+    '<span class="long-response-meta">' + lineCount + ' lines · ' + Math.round(raw.length / 1000) + 'k chars</span>' +
+    '<span class="long-response-action">Show full</span>';
+  details.appendChild(summary);
+
+  if (plain) {
+    var preview = document.createElement('div');
+    preview.className = 'long-response-preview';
+    preview.textContent = plain.slice(0, 520) + (plain.length > 520 ? '…' : '');
+    details.appendChild(preview);
+  }
+
+  var content = document.createElement('div');
+  content.className = 'long-response-content';
+  details.appendChild(content);
+  body.appendChild(details);
+  movable.forEach(function(node) { content.appendChild(node); });
+}
+

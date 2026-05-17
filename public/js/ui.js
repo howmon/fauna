@@ -557,6 +557,7 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
     if (typeof extractAndRenderGenUI === 'function') extractAndRenderGenUI(content, el, true);
     (typeof wrapInActivityDetails === 'function' ? wrapInActivityDetails : wrapInChainOfThought)(el);
     if (typeof compactProcessClusters === 'function') compactProcessClusters(el);
+    if (typeof compactLongAssistantMessage === 'function') compactLongAssistantMessage(el, content);
   }
 
   // Inject committed compact thinking status for historical AI messages.
