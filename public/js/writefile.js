@@ -237,7 +237,7 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
 
 // ── Post-write file validation — catches truncated/broken files early ─────────
 // Validates JS/TS files with `node --check`, HTML by closing tag, CSS by braces.
-// On failure, auto-feeds the error back to the AI so it can self-correct.
+// On failure, feed a constrained repair request back to the AI.
 
 function validateWrittenFile(filePath, content, widget) {
   var ext = (filePath.split('.').pop() || '').toLowerCase();
@@ -363,21 +363,26 @@ function _injectWfSvgPreview(widget, svgContent) {
 function markWriteFileFailed(widget, filePath, errorMsg, convId) {
   widget.className = 'wf-block err';
   var statusEl = widget.querySelector('.wf-status');
-  if (statusEl) statusEl.textContent = 'invalid — feeding error to AI';
+  if (statusEl) statusEl.textContent = 'invalid — queued structured repair';
   dbg('write-file validation failed [' + filePath + ']: ' + errorMsg, 'err');
 
   var targetConv = getConv(convId);
   if (!targetConv || (targetConv._autoFeedDepth || 0) >= 3) return;
   targetConv._autoFeedDepth = (targetConv._autoFeedDepth || 0) + 1;
 
-  var msg = 'The file I just wrote has an error:\n\n**File:** `' + filePath + '`\n**Error:**\n```\n' + errorMsg +
-    '\n```\n\n' +
-    '**DO NOT rewrite the whole file.** Fix it with a targeted edit:\n' +
-    '- If the file was truncated (missing closing tags/braces): use `append-file` to add only the missing tail.\n' +
-    '- If there is a syntax error in a specific function: use `replace-string` to fix just that section.\n' +
-    'Read the file first with the read-file API if needed, then apply the minimal fix.';
+  var isLikelyTruncation = /truncated|unclosed|unexpected end|missing closing|mid-sentence|mid-word|unfinished|too short|incomplete/i.test(errorMsg || '');
+  var msg = 'The file write validation failed. Repair it using structured file operations only.\n\n' +
+    '**File:** `' + filePath + '`\n**Error:**\n```\n' + errorMsg + '\n```\n\n' +
+    '**Rules for the repair response:**\n' +
+    '- Do NOT emit `shell-exec`, bash, zsh, Python, `cat`, heredocs, or other shell commands.\n' +
+    '- Do NOT narrate a backup/recreate plan. Output the actual structured fix.\n' +
+    '- Prefer one `file-plan` block for a complete corrected final file, with `expected_file_count`, `minLines`, and `minBytes`.\n' +
+    '- For a tiny known missing tail, `append-file` is allowed, but only append the missing tail.\n' +
+    '- For localized syntax mistakes, use `replace-string`.\n' +
+    (isLikelyTruncation ? '- Because this looks truncated, use `file-plan` unless you know the exact missing tail.\n' : '') +
+    'If you need the current content, ask to read the file first; do not run shell commands.';
   setTimeout(function() {
-    sendDirectMessage(msg, { fromAutoFeed: true, isAutoFeed: true, isWriteFileFeed: true, targetConvId: convId });
+    sendDirectMessage(msg, { fromAutoFeed: true, isAutoFeed: true, isWriteFileFeed: true, suppressShellAutoRun: true, targetConvId: convId });
   }, 800);
 }
 

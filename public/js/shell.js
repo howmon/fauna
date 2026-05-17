@@ -459,6 +459,7 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
     var autoRun = !noAutoRun && state.autoRunShell && depth < DEPTH_LIMIT && _autoRunIdx === 0;
     var depthLimited = !noAutoRun && state.autoRunShell && depth >= DEPTH_LIMIT;
     var pendingSerial = !noAutoRun && state.autoRunShell && depth < DEPTH_LIMIT && _autoRunIdx > 0;
+    var suppressedAutoRun = !!noAutoRun && state.autoRunShell;
     if (autoRun || pendingSerial) _autoRunIdx++;
     dbg('  ↳ block: ' + rawCode.slice(0,60) + ' autoRun=' + autoRun + ' depth=' + depth, 'cmd');
 
@@ -474,6 +475,7 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
         '<i class="ti ti-terminal-2"></i>' +
         '<span>Shell Command</span>' +
         (autoRun ? '<span class="shell-exec-autorun-badge">auto-run</span>' : '') +
+        (suppressedAutoRun ? '<span class="shell-exec-autorun-badge" style="background:var(--fau-surface2);color:var(--fau-text-dim)">manual — structured repair</span>' : '') +
         (pendingSerial ? '<span class="shell-exec-autorun-badge" style="background:var(--fau-surface2);color:var(--fau-text-dim)">pending — click Run</span>' : '') +
         (depthLimited ? '<span class="shell-exec-autorun-badge" style="background:var(--warn,#f59e0b);color:#000">paused — click Run</span>' : '') +
         '<div class="shell-exec-btns">' +
@@ -484,9 +486,10 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
         '</div>' +
       '</div>' +
       '<div class="shell-exec-code">' + escHtml(rawCode) + '</div>' +
-      '<div class="shell-exec-result" id="' + execId + '-result"' + (depthLimited || pendingSerial ? '' : ' style="display:none"') + '>' +
+      '<div class="shell-exec-result" id="' + execId + '-result"' + (depthLimited || pendingSerial || suppressedAutoRun ? '' : ' style="display:none"') + '>' +
         (depthLimited ? '<span class="se-meta">Auto-run paused after ' + DEPTH_LIMIT + ' steps — click Run to continue.</span>' : '') +
         (pendingSerial ? '<span class="se-meta">Waiting for previous command — click Run to execute now.</span>' : '') +
+        (suppressedAutoRun ? '<span class="se-meta">Auto-run disabled for write-file repair. Use file-plan, append-file, or replace-string instead.</span>' : '') +
       '</div>';
     pre.parentNode.replaceChild(widget, pre);
     updateMessageShellVerification(messageEl);

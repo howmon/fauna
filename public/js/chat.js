@@ -143,6 +143,7 @@ async function sendDirectMessage(content, opts) {
   var userMsg = { role: 'user', content: content };
   if (opts.isBrowserFeed) userMsg._isBrowserFeed = true;
   if (opts.isAutoFeed || opts.fromAutoFeed) userMsg._isAutoFeed = true;
+  if (opts.isWriteFileFeed) userMsg._isWriteFileFeed = true;
   // Attach inline image if provided (e.g. browser extension snapshot)
   if (opts.image) {
     var imgDataUrl = opts.image;
@@ -158,11 +159,12 @@ async function sendDirectMessage(content, opts) {
 
   // Mark chain mode so streamResponse can merge the next AI bubble
   if (isChainFeed) conv._chainMode = true;
+  if (opts.suppressShellAutoRun) conv._suppressShellAutoRunOnce = true;
 
   if (isCurrentConv) {
     if (isChainFeed) {
       // Silent — no "Browser page fed to AI" / "Shell output fed to AI" system messages
-      dbg('chain feed: ' + (opts.isBrowserFeed ? 'browser' : 'shell/auto'), 'info');
+      dbg('chain feed: ' + (opts.isBrowserFeed ? 'browser' : opts.isWriteFileFeed ? 'write-file' : 'shell/auto'), 'info');
     } else if (displayText) {
       appendMessageDOM('user', displayText, [], true);
       showMessages();
@@ -999,7 +1001,8 @@ async function streamResponse(conv) {
         dbg('  code blocks found: shell-exec=' + shellBlocks, 'info');
 
         extractAndRenderFigmaExec(buffer, msgEl);
-        extractAndRenderShellExec(buffer, msgEl, false, convId);
+        var suppressShellAutoRun = !!conv._suppressShellAutoRunOnce;
+        extractAndRenderShellExec(buffer, msgEl, suppressShellAutoRun, convId);
         extractAndRenderBrowserActions(buffer, msgEl, false, convId);
         if (typeof extractAndRenderBrowserExtActions === 'function') extractAndRenderBrowserExtActions(buffer, msgEl, false, convId);
         extractAndRenderWriteFile(msgEl, false, convId);
@@ -1012,6 +1015,7 @@ async function streamResponse(conv) {
         if (typeof extractAndRenderTaskCreate === 'function') extractAndRenderTaskCreate(buffer, msgEl);
         if (typeof extractAndRenderGenUI === 'function') extractAndRenderGenUI(buffer, msgEl, false);
         (typeof wrapInActivityDetails === 'function' ? wrapInActivityDetails : wrapInChainOfThought)(msgEl);
+        delete conv._suppressShellAutoRunOnce;
         if (typeof compactProcessClusters === 'function') compactProcessClusters(msgEl);
         extractAndRenderSuggestions(buffer, msgEl);
         if (state._lastMsgWasDesktopTask) {
@@ -1051,14 +1055,15 @@ async function streamResponse(conv) {
         }
       }
     } else {
-      // Background conversation — render into its (hidden) DOM and auto-run shell commands
+      // Background conversation — render into its (hidden) DOM and auto-run shell commands unless this turn explicitly suppresses them.
       dbg('■ background stream done for conv ' + convId, 'info');
       bodyEl.classList.remove('streaming-cursor');
       var renderBuffer = sanitizeWriteFileBlocks(buffer);
       bodyEl.innerHTML = renderBuffer ? renderMarkdown(renderBuffer) : '';
       if (typeof initMermaidInContainer === 'function') initMermaidInContainer(bodyEl);
       extractAndRenderFigmaExec(buffer, msgEl);
-      extractAndRenderShellExec(buffer, msgEl, false, convId);  // auto-run continues in background
+      var suppressShellAutoRunFinal = !!conv._suppressShellAutoRunOnce;
+      extractAndRenderShellExec(buffer, msgEl, suppressShellAutoRunFinal, convId);  // auto-run continues in background unless explicitly suppressed
       extractAndRenderBrowserActions(buffer, msgEl, false, convId);
       if (typeof extractAndRenderBrowserExtActions === 'function') extractAndRenderBrowserExtActions(buffer, msgEl, false, convId);
       extractAndRenderWriteFile(msgEl, false, convId);
@@ -1071,6 +1076,7 @@ async function streamResponse(conv) {
       if (typeof extractAndRenderTaskCreate === 'function') extractAndRenderTaskCreate(buffer, msgEl);
       if (typeof extractAndRenderGenUI === 'function') extractAndRenderGenUI(buffer, msgEl, true);
       (typeof wrapInActivityDetails === 'function' ? wrapInActivityDetails : wrapInChainOfThought)(msgEl);
+      delete conv._suppressShellAutoRunOnce;
     }
   }
 }
