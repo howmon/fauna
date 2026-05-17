@@ -281,6 +281,7 @@ function getCapabilitiesContext() {
     '  {"action":"extract"}                                        — extract page text + all link hrefs → fed to AI',
     '  {"action":"eval","js":"document.title"}                     — run JS in page, result fed to AI',
     '  {"action":"ask-user","message":"Please type your password in the browser"} — manual step',
+    '- For simple navigate/extract tasks, temporary browser-panel tabs may close after results are fed back. If you need the tab to remain open for follow-up browsing, include `"keepOpen":true` or `"autoClose":false` on the navigate action.',
     '',
     '- **MULTI-TAB RULE**: When visiting multiple websites (e.g. comparing, researching), open each in its own tab using `new-tab`.',
     '  Do NOT reuse the same tab for unrelated URLs — this loses the previous page.',

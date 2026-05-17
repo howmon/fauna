@@ -165,6 +165,37 @@ function browserCloseTab(tabId, convId) {
   }
 }
 
+function _isLocalBrowserTaskUrl(url) {
+  return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?/i.test(url || '');
+}
+
+function _isDisposableBrowserActionSequence(widgets) {
+  if (!Array.isArray(widgets) || !widgets.length) return false;
+  var sawNavigate = false;
+  var allowed = { navigate: true, extract: true, wait: true, eval: true };
+  return widgets.every(function(w) {
+    var action = w && w.action;
+    if (!action || !allowed[action.action]) return false;
+    if (action.keepOpen || action.autoClose === false) return false;
+    if (action.action === 'navigate') {
+      sawNavigate = true;
+      if (_isLocalBrowserTaskUrl(action.url)) return false;
+    }
+    if (action.action === 'wait' && action.ms > 5000) return false;
+    return true;
+  }) && sawNavigate;
+}
+
+function _closeDisposableBrowserTabIfUnused(convId, initialTabIds) {
+  var initial = initialTabIds || [];
+  if (initial.length > 0) return;
+  var tabs = _getConvTabs(convId);
+  if (tabs.length !== 1) return;
+  var tab = tabs[0];
+  if (!tab) return;
+  browserCloseTab(tab.id, convId);
+}
+
 function browserSwitchTab(tabId, convId) {
   var cid = convId || state.currentId;
   var b = _getConvBrowser(cid);
@@ -1043,6 +1074,8 @@ function extractAndRenderBrowserActions(html, messageEl, isHistoryLoad, convId) 
 
   if (!actions.length || isHistoryLoad) return;
 
+  var initialBrowserTabIds = _getConvTabs(convId).map(function(t) { return t.id; });
+
   // Only skip pre-opening the internal browser pane when Playwright MCP is explicitly enabled.
   // Installation/running status alone should not hijack ordinary browser-action requests.
   var hasNav = actions.some(function(a) { return a.action === 'navigate' || a.action === 'new-tab'; });
@@ -1063,7 +1096,7 @@ function extractAndRenderBrowserActions(html, messageEl, isHistoryLoad, convId) 
   }
 
   // Run all actions sequentially
-  _runBrowserActionSequence(widgets, convId);
+  _runBrowserActionSequence(widgets, convId, initialBrowserTabIds);
 }
 
 function _markRemainingCancelled(widgets, fromIndex) {
@@ -1091,8 +1124,13 @@ function _collapseCompletedChainActionMessage(widgets) {
   msgEl.setAttribute('aria-hidden', 'true');
 }
 
-async function _runBrowserActionSequence(widgets, convId) {
+async function _runBrowserActionSequence(widgets, convId, initialBrowserTabIds) {
   var conv = getConv(convId || state.currentId);
+  var initialTabIds = Array.isArray(initialBrowserTabIds)
+    ? initialBrowserTabIds.slice()
+    : _getConvTabs(convId).map(function(t) { return t.id; });
+  var shouldCloseDisposableTab = initialTabIds.length === 0 && _isDisposableBrowserActionSequence(widgets);
+  var keepBrowserOpen = false;
   var i = 0;
   for (; i < widgets.length; i++) {
     if (conv && conv._cancelled) { _markRemainingCancelled(widgets, i); return; }
@@ -1134,6 +1172,7 @@ async function _runBrowserActionSequence(widgets, convId) {
                 continue;
               }
               if (navBotChoice === 'login') {
+                keepBrowserOpen = true;
                 appendAINotice('**Action needed:** Please log in or solve the CAPTCHA in the browser panel, then say "done" or "continue".', convId);
                 break;
               }
@@ -1183,6 +1222,7 @@ async function _runBrowserActionSequence(widgets, convId) {
             continue;
           }
           if (extBotChoice === 'login') {
+            keepBrowserOpen = true;
             appendAINotice('**Action needed:** Please log in or solve the CAPTCHA in the browser panel, then say "done" or "continue".', convId);
             break;
           }
@@ -1279,11 +1319,13 @@ async function _runBrowserActionSequence(widgets, convId) {
       }
       // If ask-user, show message in chat and stop sequence for manual step
       if (result.manual) {
+        keepBrowserOpen = true;
         var notice = '**Action needed:** ' + (result.message || 'Please complete the step in the browser panel, then say "done" or "continue".');
         appendAINotice(notice, convId);
         break;
       }
     } catch(e) {
+      keepBrowserOpen = true;
       if (statusEl) { statusEl.className = 'ba-status err'; statusEl.textContent = 'Error: ' + e.message; }
       if (blockEl)  { blockEl.classList.remove('running'); }
       dbg('browser-action error: ' + e.message, 'err');
@@ -1306,6 +1348,9 @@ async function _runBrowserActionSequence(widgets, convId) {
     }
   }
   if (i >= widgets.length) _collapseCompletedChainActionMessage(widgets);
+  if (shouldCloseDisposableTab && !keepBrowserOpen && i >= widgets.length) {
+    _closeDisposableBrowserTabIfUnused(convId, initialTabIds);
+  }
 }
 
 // ── Bot / CAPTCHA / block detection ───────────────────────────────────────

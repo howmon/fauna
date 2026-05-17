@@ -1661,6 +1661,8 @@ Before using browser-action or Playwright-style automation, choose the lowest-ri
 - **console-logs (filtered)** — \`{"action":"console-logs","level":"error"}\` — only errors
 - **clear-console** — \`{"action":"clear-console"}\` — clear captured console logs
 
+For simple navigate/extract tasks, temporary browser-panel tabs may close after the result is fed back to the conversation. If the page must stay open for follow-up browsing, include \`"keepOpen":true\` or \`"autoClose":false\` on the navigate action.
+
 ### Dev Server + Browser Debugging Workflow
 When building a web app for the user, follow this workflow:
 1. **Install ALL dependencies in one complete command** — never truncate \`npm install\`. Write the full package.json first, then run \`npm install\`.
