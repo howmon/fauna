@@ -211,6 +211,19 @@ function sanitizeWriteFileBlocks(rawBuffer) {
     return pattern.test(trimmed);
   }
 
+  function looksLikeMarkdownWrite(mode, suffix) {
+    if (mode !== 'write-file' && mode !== 'append-file') return false;
+    var target = String(suffix || '').toLowerCase();
+    return /\.(md|markdown|mdx)\b/.test(target) || /(implementation[_-]?guide|readme|runbook|handbook|playbook|architecture|spec|report|plan|strategy|guide)/i.test(target);
+  }
+
+  function nextSuggestionsStart(from) {
+    var re = /(?:^|\n)([`~]{3,})suggestions\b[^\n]*\n/g;
+    re.lastIndex = from;
+    var m = re.exec(text);
+    return m ? (m.index + (m[0][0] === '\n' ? 1 : 0)) : -1;
+  }
+
   while (pos < text.length) {
     var lineEnd = nextLineEnd(pos);
     var line = text.slice(pos, lineEnd);
@@ -228,15 +241,37 @@ function sanitizeWriteFileBlocks(rawBuffer) {
     var scan = contentStart;
     var closeStart = -1;
     var closeEnd = -1;
+    var lastCloseStart = -1;
+    var lastCloseEnd = -1;
+    var scanLimit = text.length;
+    if (looksLikeMarkdownWrite(mode, langSuffix) && fence[0] === '`' && fence.length <= 3) {
+      var suggestionsAt = nextSuggestionsStart(contentStart);
+      if (suggestionsAt !== -1) scanLimit = suggestionsAt;
+    }
     while (scan < text.length) {
       var candidateEnd = nextLineEnd(scan);
       var candidate = text.slice(scan, candidateEnd);
+      if (scan >= scanLimit) break;
       if (isClosingFence(candidate, fence[0], fence.length)) {
-        closeStart = scan;
-        closeEnd = candidateEnd;
-        break;
+        if (closeStart === -1) {
+          closeStart = scan;
+          closeEnd = candidateEnd;
+        }
+        lastCloseStart = scan;
+        lastCloseEnd = candidateEnd;
+        if (!looksLikeMarkdownWrite(mode, langSuffix) || fence.length > 3) break;
       }
       scan = candidateEnd;
+    }
+
+    if (lastCloseStart !== -1 && looksLikeMarkdownWrite(mode, langSuffix) && fence.length <= 3) {
+      closeStart = lastCloseStart;
+      closeEnd = lastCloseEnd;
+      var trailingWriteText = text.slice(closeEnd, scanLimit).trim();
+      if (trailingWriteText.length > 120 && /(^|\n)#{1,6}\s+|(^|\n)[-*]\s+|(^|\n)```|\b(API|Database|Service|Setup|Testing|Next Steps|Implementation)\b/i.test(trailingWriteText)) {
+        closeStart = scanLimit;
+        closeEnd = scanLimit;
+      }
     }
 
     if (closeStart === -1) {

@@ -481,7 +481,7 @@ function compactLongAssistantMessage(msgEl, sourceText) {
   var body = msgEl.querySelector('.msg-body');
   if (!body) return;
 
-  var raw = String(sourceText || body.innerText || '');
+  var raw = String(body.innerText || sourceText || '');
   var plain = raw
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
@@ -494,7 +494,7 @@ function compactLongAssistantMessage(msgEl, sourceText) {
 
   var preserveSelector = [
     '.msg-shell-verification', '.shell-exec-block', '.wf-block', '.figma-exec-block',
-    '.ba-block', '.artifact-card', '.suggestions-row', '.gen-ui-root', '.create-agent-card',
+    '.ba-block', '.cot-block', '.artifact-card', '.suggestions-row', '.gen-ui-root', '.create-agent-card',
     '.patch-agent-card', '.task-create-card', '.process-cluster'
   ].join(',');
   var children = Array.from(body.children || []);
