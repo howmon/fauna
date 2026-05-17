@@ -1001,7 +1001,7 @@ async function streamResponse(conv) {
         dbg('  code blocks found: shell-exec=' + shellBlocks, 'info');
 
         extractAndRenderFigmaExec(buffer, msgEl);
-        var suppressShellAutoRun = !!conv._suppressShellAutoRunOnce;
+        var suppressShellAutoRun = !!(conv._suppressShellAutoRunOnce || conv._writeRepairMode);
         extractAndRenderShellExec(buffer, msgEl, suppressShellAutoRun, convId);
         extractAndRenderBrowserActions(buffer, msgEl, false, convId);
         if (typeof extractAndRenderBrowserExtActions === 'function') extractAndRenderBrowserExtActions(buffer, msgEl, false, convId);
@@ -1062,7 +1062,7 @@ async function streamResponse(conv) {
       bodyEl.innerHTML = renderBuffer ? renderMarkdown(renderBuffer) : '';
       if (typeof initMermaidInContainer === 'function') initMermaidInContainer(bodyEl);
       extractAndRenderFigmaExec(buffer, msgEl);
-      var suppressShellAutoRunFinal = !!conv._suppressShellAutoRunOnce;
+      var suppressShellAutoRunFinal = !!(conv._suppressShellAutoRunOnce || conv._writeRepairMode);
       extractAndRenderShellExec(buffer, msgEl, suppressShellAutoRunFinal, convId);  // auto-run continues in background unless explicitly suppressed
       extractAndRenderBrowserActions(buffer, msgEl, false, convId);
       if (typeof extractAndRenderBrowserExtActions === 'function') extractAndRenderBrowserExtActions(buffer, msgEl, false, convId);

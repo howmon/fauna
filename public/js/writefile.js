@@ -154,6 +154,7 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
         dbg('file-plan: ' + written.length + ' file(s) written', 'ok');
         if (storeId) delete _wfContentStore[storeId];
         results.forEach(function(r) { if (r.op !== 'skip') trackConvFile(wid, r.path, r.bytes); });
+        clearWriteRepairMode(wid);
       });
 
     } else if (isReplace) {
@@ -182,6 +183,7 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
         dbg('replace-string: patched → ' + d.path, 'ok');
         if (storeId) delete _wfContentStore[storeId];
         trackConvFile(wid, d.path, d.bytes);
+        clearWriteRepairMode(wid);
       });
 
     } else if (isPatch) {
@@ -196,6 +198,7 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
         dbg('apply-patch: ' + n + ' file(s) patched', 'ok');
         if (storeId) delete _wfContentStore[storeId];
         if (d.results) d.results.forEach(function(r) { if (r.op !== 'delete') trackConvFile(wid, r.path, r.bytes); });
+        clearWriteRepairMode(wid);
       });
 
     } else {
@@ -211,7 +214,8 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
         dbg('write-file: ' + (isAppend ? 'appended' : 'wrote') + ' → ' + d.path, 'ok');
         if (storeId) delete _wfContentStore[storeId];
         trackConvFile(wid, d.path, d.bytes);
-        if (!isAppend) validateWrittenFile(d.path, content || '', widget);
+        if (isAppend) validateWrittenFileFromDisk(d.path, widget, wid);
+        else validateWrittenFile(d.path, content || '', widget);
         // Inline SVG preview
         var _wfExt = (d.path || filePath).split('.').pop().toLowerCase();
         if (_wfExt === 'svg' && content && !isAppend) _injectWfSvgPreview(widget, content);
@@ -235,6 +239,26 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
   }
 }
 
+function clearWriteRepairMode(convId) {
+  var targetConv = getConv(convId || state.currentId);
+  if (!targetConv) return;
+  delete targetConv._writeRepairMode;
+  delete targetConv._suppressShellAutoRunOnce;
+}
+
+function validateWrittenFileFromDisk(filePath, widget, convId) {
+  fetch('/api/read-file', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: filePath })
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (!d.ok) throw new Error(d.error || 'read failed');
+    validateWrittenFile(d.path || filePath, d.content || '', widget);
+  }).catch(function(e) {
+    markWriteFileFailed(widget, filePath, 'Could not validate final appended file: ' + e.message, convId);
+  });
+}
+
 // ── Post-write file validation — catches truncated/broken files early ─────────
 // Validates JS/TS files with `node --check`, HTML by closing tag, CSS by braces.
 // On failure, feed a constrained repair request back to the AI.
@@ -253,13 +277,18 @@ function validateWrittenFile(filePath, content, widget) {
       if (d.exitCode !== 0) {
         var err = (d.stderr || d.stdout || 'Syntax error').trim().slice(0, 600);
         markWriteFileFailed(widget, filePath, err, convId);
+      } else {
+        clearWriteRepairMode(convId);
       }
     }).catch(function() {});
 
   } else if (ext === 'html') {
     if (!content.includes('</html>') && !content.includes('</body>')) {
       markWriteFileFailed(widget, filePath, 'HTML appears truncated — missing closing </html> tag', convId);
+      return false;
     }
+    clearWriteRepairMode(convId);
+    return true;
 
   } else if (ext === 'css') {
     var open = (content.match(/\{/g) || []).length;
@@ -267,7 +296,10 @@ function validateWrittenFile(filePath, content, widget) {
     if (open !== close) {
       markWriteFileFailed(widget, filePath,
         'CSS has unbalanced braces (' + open + ' open, ' + close + ' close) — likely truncated', convId);
+      return false;
     }
+    clearWriteRepairMode(convId);
+    return true;
 
   } else if (ext === 'md' || ext === 'markdown') {
     // Check for unclosed code blocks
@@ -275,7 +307,7 @@ function validateWrittenFile(filePath, content, widget) {
     if (codeBlockMarkers % 2 !== 0) {
       markWriteFileFailed(widget, filePath,
         'Markdown has unclosed code block (``` count: ' + codeBlockMarkers + ') — likely truncated', convId);
-      return;
+      return false;
     }
     
     // Check for common truncation indicators
@@ -310,7 +342,7 @@ function validateWrittenFile(filePath, content, widget) {
       if (looksLikeDanglingMarkdownEnding(lastLine)) {
         markWriteFileFailed(widget, filePath,
           'Markdown ends mid-sentence or mid-word — likely truncated. Last line: "' + lastLine.slice(-50) + '"', convId);
-        return;
+        return false;
       }
       
       // Ends with unfinished markdown syntax (but NOT diagram elements)
@@ -320,7 +352,7 @@ function validateWrittenFile(filePath, content, widget) {
       if (!isDiagramLine && lastLine.match(/^#+\s*$|^\s*[-*]\s*$|^\s*\d+\.\s*$/)) {
         markWriteFileFailed(widget, filePath,
           'Markdown ends with unfinished heading/list marker — likely truncated', convId);
-        return;
+        return false;
       }
     }
     
@@ -328,8 +360,10 @@ function validateWrittenFile(filePath, content, widget) {
     if (content.length < 500 && (filePath.match(/strategy|document|report|plan/i))) {
       markWriteFileFailed(widget, filePath,
         'File appears suspiciously short (' + content.length + ' bytes) for a ' + filePath.match(/strategy|document|report|plan/i)[0] + ' — likely incomplete', convId);
-      return;
+      return false;
     }
+    clearWriteRepairMode(convId);
+    return true;
 
   } else if (ext === 'json') {
     // Quick JSON validation for truncation
@@ -339,9 +373,14 @@ function validateWrittenFile(filePath, content, widget) {
       var errorMsg = e.message || 'JSON parse error';
       if (errorMsg.includes('Unexpected end') || errorMsg.includes('Unexpected token')) {
         markWriteFileFailed(widget, filePath, 'JSON is invalid or truncated: ' + errorMsg, convId);
+        return false;
       }
     }
+    clearWriteRepairMode(convId);
+    return true;
   }
+  clearWriteRepairMode(convId);
+  return true;
 }
 
 function _injectWfSvgPreview(widget, svgContent) {
@@ -367,7 +406,13 @@ function markWriteFileFailed(widget, filePath, errorMsg, convId) {
   dbg('write-file validation failed [' + filePath + ']: ' + errorMsg, 'err');
 
   var targetConv = getConv(convId);
-  if (!targetConv || (targetConv._autoFeedDepth || 0) >= 3) return;
+  if (!targetConv) return;
+  targetConv._writeRepairMode = true;
+  targetConv._suppressShellAutoRunOnce = true;
+  if (typeof cancelShellAutoRunsForMessage === 'function') {
+    cancelShellAutoRunsForMessage(widget.closest('.msg'), 'write-file validation failed');
+  }
+  if ((targetConv._autoFeedDepth || 0) >= 3) return;
   targetConv._autoFeedDepth = (targetConv._autoFeedDepth || 0) + 1;
 
   var isLikelyTruncation = /truncated|unclosed|unexpected end|missing closing|mid-sentence|mid-word|unfinished|too short|incomplete/i.test(errorMsg || '');

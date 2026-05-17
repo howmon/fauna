@@ -61,6 +61,32 @@ function _scheduleShellAutoRun(execId, shellKey, delay, attemptsLeft) {
   }, delay);
 }
 
+function cancelShellAutoRunsForMessage(messageEl, reason) {
+  if (!messageEl) return;
+  Array.from(messageEl.querySelectorAll('.shell-exec-block')).forEach(function(widget) {
+    var shellKey = widget.dataset.shellKey;
+    if (shellKey && _shellAutoRunPending[shellKey]) delete _shellAutoRunPending[shellKey];
+    if (widget.dataset.result) return;
+    widget.dataset.autoRun = 'false';
+    var header = widget.querySelector('.shell-exec-header');
+    if (header && !header.querySelector('.shell-exec-repair-badge')) {
+      var badge = document.createElement('span');
+      badge.className = 'shell-exec-autorun-badge shell-exec-repair-badge';
+      badge.style.background = 'var(--fau-surface2)';
+      badge.style.color = 'var(--fau-text-dim)';
+      badge.textContent = 'manual — write repair';
+      var btns = header.querySelector('.shell-exec-btns');
+      header.insertBefore(badge, btns || null);
+    }
+    var resultEl = widget.querySelector('.shell-exec-result');
+    if (resultEl) {
+      resultEl.style.display = '';
+      resultEl.innerHTML = '<span class="se-meta">Auto-run cancelled because a file write failed validation. Use structured file repair instead.</span>';
+    }
+  });
+  if (reason) dbg('cancelled pending shell auto-runs: ' + reason, 'warn');
+}
+
 function _ensureShellVerificationBanner(msgEl) {
   if (!msgEl) return null;
   var body = msgEl.querySelector('.msg-body');
