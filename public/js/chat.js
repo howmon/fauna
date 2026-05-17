@@ -1141,6 +1141,7 @@ async function maybeCompressConversation(conv) {
       indicator.className = 'msg system-msg conv-archive-divider';
       indicator.innerHTML = renderContextArchiveDivider(conv);
       getConvInner(conv.id).appendChild(indicator);
+      if (typeof reconcileBusyState === 'function') reconcileBusyState();
     }
   } catch (e) {
     dbg('summarize error: ' + e.message, 'warn');

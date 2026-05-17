@@ -174,13 +174,16 @@ function updateMessageShellVerification(msgEl) {
     banner.className = 'msg-shell-verification warn';
     banner.innerHTML = '<i class="ti ti-alert-triangle"></i><span>Shell results are incomplete. ' + empty + ' command' + (empty === 1 ? '' : 's') + ' produced no output, so the assistant text above remains unverified.</span>';
     _updateShellNarrativeVisibility(msgEl, true);
+    if (typeof reconcileBusyState === 'function') reconcileBusyState();
+    else if (typeof setBusy === 'function') setBusy(false);
     return;
   }
 
   banner.className = 'msg-shell-verification done';
   banner.innerHTML = '<i class="ti ti-check"></i><span>Shell results received. Review command output below before trusting any success claims in the assistant message.</span>';
   _updateShellNarrativeVisibility(msgEl, false);
-  if (typeof setBusy === 'function') setBusy(false);
+  if (typeof reconcileBusyState === 'function') reconcileBusyState();
+  else if (typeof setBusy === 'function') setBusy(false);
 }
 
 function _resolveShellFilePath(filePath, cwd) {
@@ -600,7 +603,8 @@ function stopActiveShellWorkForCurrentConversation() {
     }
   });
   activeWidgets.forEach(function(widget) { updateMessageShellVerification(widget.closest('.msg')); });
-  if (typeof setBusy === 'function') setBusy(false);
+  if (typeof reconcileBusyState === 'function') reconcileBusyState();
+  else if (typeof setBusy === 'function') setBusy(false);
   return stopped;
 }
 
@@ -616,7 +620,8 @@ function syncShellRunningPills() {
     if (show) visibleCount += 1;
   });
   container.style.display = visibleCount ? 'flex' : 'none';
-  if (typeof setBusy === 'function') setBusy(visibleCount > 0 || hasActiveShellWorkForCurrentConversation());
+  if (typeof reconcileBusyState === 'function') reconcileBusyState();
+  else if (typeof setBusy === 'function') setBusy(visibleCount > 0 || hasActiveShellWorkForCurrentConversation());
 }
 
 function clearShellRunningPillsForConversation(convId) {

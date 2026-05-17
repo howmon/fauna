@@ -620,6 +620,13 @@ function _applyBusyState(busy) {
   if (stopEl) stopEl.className = '';
 }
 
+function reconcileBusyState() {
+  var activeConv = getConv(state.currentId);
+  var hasStream = !!(activeConv && activeConv._streaming);
+  var hasShellWork = typeof hasActiveShellWorkForCurrentConversation === 'function' && hasActiveShellWorkForCurrentConversation();
+  _applyBusyState(hasStream || hasShellWork);
+}
+
 function showMessages() {
   document.getElementById('empty-state').classList.add('hidden');
   document.getElementById('messages').style.display = 'block';
