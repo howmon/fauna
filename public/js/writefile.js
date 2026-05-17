@@ -18,11 +18,16 @@ function _wfArtifactType(filePath) {
 }
 
 function _wfArtifactContainer(widget) {
-  var container = widget.querySelector('.wf-artifact-link');
+  var body = widget && widget.closest ? widget.closest('.msg-body') : null;
+  var host = body || widget;
+  if (!host) return null;
+  var container = host.querySelector(':scope > .wf-created-artifacts');
   if (!container) {
     container = document.createElement('div');
-    container.className = 'wf-artifact-link';
-    widget.appendChild(container);
+    container.className = 'wf-created-artifacts';
+    host.appendChild(container);
+  } else if (body) {
+    body.appendChild(container);
   }
   return container;
 }
@@ -58,11 +63,12 @@ function _wfAddArtifactFromDisk(widget, filePath) {
   if (!filePath || typeof previewFilePath !== 'function') return;
   // Prefer the artifact pane's existing file previewer when final content must be read from disk.
   var row = document.createElement('div');
-  row.className = 'wf-artifact-link';
+  row.className = 'wf-created-file-action';
   row.innerHTML = '<button class="artifact-card-open wf-open-created" type="button"><i class="ti ti-eye"></i> View created file</button>';
   var btn = row.querySelector('button');
   btn.onclick = function() { previewFilePath(filePath); };
-  widget.appendChild(row);
+  var container = _wfArtifactContainer(widget);
+  if (container) container.appendChild(row);
 }
 
 function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {

@@ -2454,6 +2454,27 @@ body { animation: none; }
   border-top: 1px solid rgba(30,200,130,.14);
   background: rgba(30,200,130,.035);
 }
+.wf-created-artifacts {
+  margin: 12px 0 0;
+  padding: 10px;
+  border: 1px solid var(--fau-border);
+  border-radius: var(--radius-sm);
+  background: var(--fau-surface);
+}
+.wf-created-artifacts .artifact-card {
+  margin: 0;
+  max-width: none;
+}
+.wf-created-artifacts .artifact-card + .artifact-card,
+.wf-created-artifacts .artifact-card + .wf-created-file-action,
+.wf-created-artifacts .wf-created-file-action + .artifact-card,
+.wf-created-artifacts .wf-created-file-action + .wf-created-file-action {
+  margin-top: 8px;
+}
+.wf-created-file-action {
+  display: flex;
+  justify-content: flex-end;
+}
 .wf-artifact-link .artifact-card {
   margin: 0;
   max-width: 100%;
