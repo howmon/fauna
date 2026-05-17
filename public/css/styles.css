@@ -632,12 +632,18 @@ button .ti, label .ti { pointer-events: none; }
 /* ── Archive divider ──────────────────────────────────────────────── */
 .conv-archive-divider .msg-body { font-style: normal !important; text-align: left !important; }
 .conv-archive-divider-inner {
-  display: flex; align-items: center; gap: 7px;
+  display: flex; flex-direction: column; align-items: stretch; gap: 7px;
   padding: 6px 12px; border: 1px dashed var(--fau-border);
   border-radius: 8px; font-size: 11.5px; color: var(--fau-text-muted);
   background: var(--fau-surface2);
 }
+.conv-archive-head { display: flex; align-items: center; gap: 7px; }
 .conv-archive-divider-inner i { font-size: 13px; flex-shrink: 0; opacity: .7; }
+.conv-archive-summary {
+  max-height: 180px; overflow-y: auto; white-space: pre-wrap;
+  padding: 8px 10px; border-radius: 6px; background: var(--fau-surface);
+  color: var(--fau-text-dim); line-height: 1.45;
+}
 .conv-archive-view-btn {
   margin-left: auto; font-size: 10px; background: none;
   border: 1px solid var(--fau-border); border-radius: 4px;

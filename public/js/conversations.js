@@ -287,13 +287,9 @@ function loadConversation(id) {
       // Divider showing where archive ends and active context begins
       var divider = document.createElement('div');
       divider.className = 'msg system-msg conv-archive-divider';
-      divider.innerHTML = '<div class="msg-body conv-archive-divider-inner">' +
-        '<i class="ti ti-history"></i>' +
-        '<span>Older messages archived — full history preserved above, AI context starts here</span>' +
-        (conv.contextSummary
-          ? '<button onclick="showContextSummary(\'' + conv.id + '\')" class="conv-archive-view-btn">View summary</button>'
-          : '') +
-      '</div>';
+      divider.innerHTML = typeof renderContextArchiveDivider === 'function'
+        ? renderContextArchiveDivider(conv)
+        : '<div class="msg-body conv-archive-divider-inner"><span>Older messages archived — full history preserved above, AI context starts here</span></div>';
       convInner.appendChild(divider);
     }
 

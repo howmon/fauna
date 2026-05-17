@@ -302,6 +302,7 @@ function validateWrittenFile(filePath, content, widget) {
     return true;
 
   } else if (ext === 'md' || ext === 'markdown') {
+    var importantDocMatch = filePath.match(/(implementation[_-]?guide|guide|handbook|spec|strategy|report|plan|architecture|runbook)/i);
     // Check for unclosed code blocks
     var codeBlockMarkers = (content.match(/```/g) || []).length;
     if (codeBlockMarkers % 2 !== 0) {
@@ -313,6 +314,12 @@ function validateWrittenFile(filePath, content, widget) {
     // Check for common truncation indicators
     var trimmed = content.trimEnd();
     var lastLine = trimmed.split('\n').pop() || '';
+
+    if (/^#{1,6}\s+\S/.test(lastLine.trim()) && trimmed.split('\n').length > 3) {
+      markWriteFileFailed(widget, filePath,
+        'Markdown ends immediately after a heading ("' + lastLine.trim().slice(0, 80) + '") — likely truncated', convId);
+      return false;
+    }
 
     function looksLikeCompleteMarkdownEnding(line) {
       var s = String(line || '').trim();
@@ -356,10 +363,11 @@ function validateWrittenFile(filePath, content, widget) {
       }
     }
     
-    // Check for suspiciously short "strategy" or "document" files (< 500 bytes)
-    if (content.length < 500 && (filePath.match(/strategy|document|report|plan/i))) {
+    // Check for suspiciously short long-form deliverables. This catches cases where
+    // an inner ``` fence was mistaken for the outer write-file fence.
+    if (importantDocMatch && (content.length < 4000 || trimmed.split('\n').length < 80)) {
       markWriteFileFailed(widget, filePath,
-        'File appears suspiciously short (' + content.length + ' bytes) for a ' + filePath.match(/strategy|document|report|plan/i)[0] + ' — likely incomplete', convId);
+        'File appears suspiciously short (' + content.length + ' bytes, ' + trimmed.split('\n').length + ' lines) for a ' + importantDocMatch[0] + ' — likely incomplete', convId);
       return false;
     }
     clearWriteRepairMode(convId);

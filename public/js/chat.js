@@ -1139,11 +1139,7 @@ async function maybeCompressConversation(conv) {
     if (state.currentId === conv.id) {
       var indicator = document.createElement('div');
       indicator.className = 'msg system-msg conv-archive-divider';
-      indicator.innerHTML = '<div class="msg-body conv-archive-divider-inner">' +
-        '<i class="ti ti-history"></i>' +
-        '<span>Older messages archived — full history preserved above, AI context starts here</span>' +
-        '<button onclick="showContextSummary(\'' + conv.id + '\')" class="conv-archive-view-btn">View summary</button>' +
-      '</div>';
+      indicator.innerHTML = renderContextArchiveDivider(conv);
       getConvInner(conv.id).appendChild(indicator);
     }
   } catch (e) {
@@ -1151,6 +1147,17 @@ async function maybeCompressConversation(conv) {
   } finally {
     conv._summarizing = false;
   }
+}
+
+function renderContextArchiveDivider(conv) {
+  var summary = conv && conv.contextSummary ? String(conv.contextSummary) : '';
+  return '<div class="msg-body conv-archive-divider-inner">' +
+    '<div class="conv-archive-head">' +
+      '<i class="ti ti-history"></i>' +
+      '<span>Older messages archived — full history preserved above, AI context starts here</span>' +
+    '</div>' +
+    (summary ? '<div class="conv-archive-summary">' + escHtml(summary) + '</div>' : '') +
+  '</div>';
 }
 
 function showContextSummary(convId) {
