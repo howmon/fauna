@@ -1638,6 +1638,13 @@ const BROWSER_BUILD_CONTEXT = `
 
 You have a built-in browser panel that runs inside the app. You can control it using \`\`\`browser-action code blocks.
 
+### Web routing order
+Before using browser-action or Playwright-style automation, choose the lowest-risk path that can satisfy the request:
+1. If a real browser tab is connected/shared through FaunaMCP or the browser extension, use \`browser-ext-action\` to list/extract that tab first.
+2. For simple read-only URL/page/article tasks, use the fetch/headless HTTP tools instead of opening a browser.
+3. Use \`browser-action\` for user-visible pages, forms, clicks, screenshots, JS-heavy pages, blocked fetches, or debugging web apps.
+4. Use Playwright MCP only when the user enabled Playwright MCP or explicitly needs Playwright-style automation/testing.
+
 ### Available browser actions:
 - **navigate** — \`{"action":"navigate","url":"..."}\` — load a URL
 - **extract** — \`{"action":"extract"}\` — get page text + links

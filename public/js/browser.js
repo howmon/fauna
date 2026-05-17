@@ -633,15 +633,22 @@ async function _executeBrowserActionViaExtension(action) {
 }
 
 async function executeBrowserAction(action) {
-  // ── 1. Playwright (external visible browser — default) ──────────────────
-  var pwResult = await _executeBrowserActionViaPlaywright(action);
-  if (pwResult) return pwResult;
+  // Routing order mirrors VS Code/Copilot's lower-risk web flow:
+  // 1. Built-in browser webview for normal browser-action blocks.
+  // 2. Playwright MCP only when explicitly enabled, or as a final fallback for
+  //    actions the webview cannot perform. Shared real-browser tabs are handled
+  //    through browser-ext-action, not by hijacking browser-action.
+  var preferPlaywright = !!(typeof state !== 'undefined' && state.playwrightMCPEnabled);
+  if (preferPlaywright) {
+    var preferredPwResult = await _executeBrowserActionViaPlaywright(action);
+    if (preferredPwResult) return preferredPwResult;
+  }
 
-  // ── 2 & 3. Browser extension + internal webview (existing logic) ────────
+  // ── Browser extension + internal webview + optional Playwright fallback ──
   var wv = getActiveWebview();
 
   if (action.action === 'navigate') {
-    if (!wv && _extConnectedBrowsers.length) {
+    if (!wv && _extConnectedBrowsers.length && action.preferExtension) {
       var extNav = await _executeBrowserActionViaExtension(action);
       if (extNav) return extNav;
     }
@@ -661,8 +668,10 @@ async function executeBrowserAction(action) {
     return { ok: true, url: wv.getURL() };
 
   } else if (!wv) {
-    var extResult = await _executeBrowserActionViaExtension(action);
-    if (extResult) return extResult;
+    if (!preferPlaywright) {
+      var fallbackPwResult = await _executeBrowserActionViaPlaywright(action);
+      if (fallbackPwResult) return fallbackPwResult;
+    }
     throw new Error('Browser pane not open and no browser extension tab is available — send a navigate action first');
 
   } else if (action.action === 'type') {
@@ -1034,16 +1043,13 @@ function extractAndRenderBrowserActions(html, messageEl, isHistoryLoad, convId) 
 
   if (!actions.length || isHistoryLoad) return;
 
-  // Only pre-open the internal browser pane when Playwright MCP is NOT available.
-  // If Playwright is handling actions, opening the pane is noise — it will never be used.
+  // Only skip pre-opening the internal browser pane when Playwright MCP is explicitly enabled.
+  // Installation/running status alone should not hijack ordinary browser-action requests.
   var hasNav = actions.some(function(a) { return a.action === 'navigate' || a.action === 'new-tab'; });
   if (hasNav) {
-    fetch('/api/playwright-mcp/status').then(function(r) { return r.json(); }).then(function(d) {
-      if (!d.installed && !d.running) { try { openBrowserPane(); } catch(e) { dbg('openBrowserPane: ' + e.message, 'err'); } }
-    }).catch(function() {
-      // Server not reachable — open pane as safe fallback
+    if (!(typeof state !== 'undefined' && state.playwrightMCPEnabled)) {
       try { openBrowserPane(); } catch(e) { dbg('openBrowserPane: ' + e.message, 'err'); }
-    });
+    }
   }
 
   // In chain messages (auto-fed responses), hide narration prose — only show the action widgets

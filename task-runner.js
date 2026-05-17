@@ -134,7 +134,7 @@ async function _autonomyLoop(task, state) {
     toolGuidance.push('You CANNOT use shell commands for this task — shell access is disabled.');
   }
   if (perms.browser) {
-    toolGuidance.push('You CAN use ```browser-ext-action blocks to interact with web pages via the browser extension. ALWAYS use ```browser-ext-action (not ```browser-action). Put ONE action per block. After navigate, use ```browser-ext-action\n{"action":"wait","ms":2000}\n``` before taking a snapshot.');
+    toolGuidance.push('You CAN use ```browser-ext-action blocks to interact with web pages via the browser extension. ALWAYS use ```browser-ext-action (not ```browser-action). Prefer existing/shared tabs first: start with tab:list or extract when the user refers to an open page. Open a new tab only when no relevant shared tab exists or the task gives a new URL. Put ONE action per block. After navigate, use ```browser-ext-action\n{"action":"wait","ms":2000}\n``` before taking a snapshot.');
   } else {
     toolGuidance.push('You CANNOT use browser actions — browser access is disabled for this task.');
   }
