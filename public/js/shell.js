@@ -241,13 +241,15 @@ async function _createArtifactForFilePath(filePath) {
   var existing = state.artifacts.find(function(a) { return a.path === filePath; });
   if (existing) return existing.id;
 
-  var existsRes;
+  var existsData;
   try {
-    existsRes = await fetch('/api/preview-file?path=' + encodeURIComponent(filePath), { method: 'HEAD' });
+    var existsRes = await fetch('/api/preview-file/status?path=' + encodeURIComponent(filePath));
+    existsData = await existsRes.json().catch(function() { return null; });
   } catch (_) {
     return null;
   }
-  if (!existsRes || !existsRes.ok) return null;
+  if (!existsData || !existsData.exists) return null;
+  if (existsData.path) filePath = existsData.path;
 
   var ext = (filePath.split('.').pop() || '').toLowerCase();
   var title = filePath.split('/').pop() || filePath;

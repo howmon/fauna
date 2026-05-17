@@ -4439,7 +4439,7 @@ app.post('/api/replace-string', (req, res) => {
     }
     const original = fs.readFileSync(abs, 'utf8');
     if (!original.includes(old_string)) {
-      return res.status(422).json({ error: 'old_string not found in file', path: abs });
+      return res.json({ ok: false, error: 'old_string not found in file', path: abs, code: 'OLD_STRING_NOT_FOUND' });
     }
     // Checkpoint before modifying (AutoRecovery)
     checkpointFile(abs);
@@ -6921,12 +6921,25 @@ app.post('/api/shell-stdin', (req, res) => {
 });
 
 // ── Preview-file existence check ──────────────────────────────────────────
+// GET /api/preview-file/status?path=... → 200 { exists } without noisy 404 probes
+app.get('/api/preview-file/status', (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath) return res.json({ ok: false, exists: false, error: 'path required' });
+  try {
+    const abs = resolvePath(String(filePath));
+    const exists = fs.existsSync(abs) && fs.statSync(abs).isFile();
+    res.json({ ok: true, exists, path: abs });
+  } catch (e) {
+    res.json({ ok: false, exists: false, error: e.message });
+  }
+});
+
 // HEAD /api/preview-file?path=... → 200 if file exists, 404 if not
 app.head('/api/preview-file', (req, res) => {
   const filePath = req.query.path;
   if (!filePath) return res.status(400).end();
   try {
-    const abs = path.isAbsolute(filePath) ? filePath : path.join(os.homedir(), filePath);
+    const abs = resolvePath(String(filePath));
     if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
       res.setHeader('Content-Type', 'application/octet-stream');
       res.status(200).end();
@@ -6935,6 +6948,21 @@ app.head('/api/preview-file', (req, res) => {
     }
   } catch (_) {
     res.status(404).end();
+  }
+});
+
+// GET /api/preview-file?path=... → stream a local file for iframe previews
+app.get('/api/preview-file', (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).json({ error: 'path required' });
+  try {
+    const abs = resolvePath(String(filePath));
+    if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+      return res.status(404).json({ error: 'File not found', path: abs });
+    }
+    res.sendFile(abs);
+  } catch (e) {
+    res.status(404).json({ error: e.message });
   }
 });
 
