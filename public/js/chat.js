@@ -1021,6 +1021,7 @@ async function streamResponse(conv) {
         if (typeof extractAndRenderTaskCreate === 'function') extractAndRenderTaskCreate(buffer, msgEl);
         if (typeof extractAndRenderGenUI === 'function') extractAndRenderGenUI(buffer, msgEl, false);
         wrapInChainOfThought(msgEl);
+        if (typeof compactProcessClusters === 'function') compactProcessClusters(msgEl);
         extractAndRenderSuggestions(buffer, msgEl);
         if (state._lastMsgWasDesktopTask) {
           injectOrganizerCard(msgEl, buffer);

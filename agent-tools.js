@@ -10,6 +10,7 @@ import vm from 'vm';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
+import crypto from 'crypto';
 import { checkFilePath, checkNetworkAccess, checkShellCommand, getSandboxedEnv, getResourceLimits, audit } from './agent-sandbox.js';
 
 const _require = createRequire(import.meta.url);
@@ -287,7 +288,7 @@ function getBuiltInToolDefinitions(permissions) {
       type: 'function',
       function: {
         name: 'agent_write_file',
-        description: 'Write content to a file (full overwrite). Use agent_str_replace for targeted edits. Access is restricted to: ' + permissions.fileWrite.join(', '),
+        description: 'Write content to one file (full overwrite). Prefer agent_write_files for multiple new project files, and agent_str_replace for targeted edits. Access is restricted to: ' + permissions.fileWrite.join(', '),
         parameters: {
           type: 'object',
           properties: {
@@ -295,6 +296,32 @@ function getBuiltInToolDefinitions(permissions) {
             content: { type: 'string', description: 'Content to write' },
           },
           required: ['path', 'content'],
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'agent_write_files',
+        description: 'Write multiple project files in one structured operation. This avoids markdown fence truncation for complex projects. Each entry may include sha256 for final content verification. Access is restricted to: ' + permissions.fileWrite.join(', '),
+        parameters: {
+          type: 'object',
+          properties: {
+            files: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  path: { type: 'string', description: 'File path to write' },
+                  content: { type: 'string', description: 'Full file content' },
+                  append: { type: 'boolean', description: 'Append instead of overwrite' },
+                  sha256: { type: 'string', description: 'Optional SHA-256 of the final on-disk content' },
+                },
+                required: ['path', 'content'],
+              },
+            },
+          },
+          required: ['files'],
         },
       },
     });
@@ -453,6 +480,31 @@ async function executeBuiltInTool(toolName, args, permissions, agentName, onOutp
         return 'File written: ' + abs + ' (' + Buffer.byteLength(args.content || '') + ' bytes)';
       } catch (e) {
         return 'Error writing file: ' + e.message;
+      }
+    }
+
+    case 'agent_write_files': {
+      const files = Array.isArray(args.files) ? args.files : [];
+      if (!files.length) return 'Error: files array is required';
+      const results = [];
+      try {
+        for (const item of files) {
+          if (!item || !item.path) return 'Error: each file entry requires path';
+          if (item.content === undefined) return 'Error: missing content for ' + item.path;
+          const abs = path.resolve(String(item.path).replace(/^~/, HOME));
+          const check = checkFilePath(abs, 'write', permissions, agentName);
+          if (!check.allowed) return 'BLOCKED: ' + check.reason;
+          fs.mkdirSync(path.dirname(abs), { recursive: true });
+          let finalContent = String(item.content ?? '');
+          if (item.append && fs.existsSync(abs)) finalContent = fs.readFileSync(abs, 'utf8') + finalContent;
+          const sha256 = crypto.createHash('sha256').update(Buffer.from(finalContent, 'utf8')).digest('hex');
+          if (item.sha256 && item.sha256 !== sha256) return 'Error: sha256 mismatch for ' + abs + ': expected ' + item.sha256 + ', got ' + sha256;
+          fs.writeFileSync(abs, finalContent, 'utf8');
+          results.push({ path: abs, bytes: Buffer.byteLength(finalContent), sha256, op: item.append ? 'append' : 'write' });
+        }
+        return 'Files written: ' + JSON.stringify(results);
+      } catch (e) {
+        return 'Error writing files: ' + e.message;
       }
     }
 

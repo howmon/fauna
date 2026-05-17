@@ -619,6 +619,7 @@ button .ti, label .ti { pointer-events: none; }
 
 /* ── Ephemeral tool status stack ──────────────────────────────────── */
 .tool-status-stack { display: flex; flex-direction: column; gap: 3px; padding: 6px 0 2px; }
+.tool-status-stack:not(:empty) { max-height: 172px; overflow-y: auto; padding-right: 4px; }
 .tool-status-line { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fau-text-muted); transition: opacity .25s; }
 .tool-status-line .tool-status-icon { font-size: 11px; opacity: .7; }
 .tool-status-shimmer {
@@ -809,6 +810,59 @@ button .ti, label .ti { pointer-events: none; }
   font-size: 11.5px; color: var(--fau-text-dim);
 }
 .cot-pill .ti { font-size: 12px; color: var(--accent2); }
+
+/* Compact large batches of tool/process widgets into an expandable timeline. */
+.process-cluster {
+  margin: 8px 0;
+  border: 1px solid var(--fau-border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--fau-surface) 88%, var(--accent) 12%);
+  overflow: hidden;
+}
+.process-cluster > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.process-cluster > summary::-webkit-details-marker { display: none; }
+.process-cluster-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-dim);
+  color: var(--accent2);
+  flex-shrink: 0;
+}
+.process-cluster-title { font-weight: 700; font-size: 12px; color: var(--fau-text); }
+.process-cluster-meta { flex: 1; min-width: 0; color: var(--fau-text-muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.process-cluster-action { font-size: 10.5px; color: var(--accent2); border: 1px solid var(--accent-glow); border-radius: 999px; padding: 2px 7px; flex-shrink: 0; }
+.process-cluster[open] .process-cluster-action { color: var(--fau-text-muted); }
+.process-cluster[open] .process-cluster-action::before { content: 'Hide'; }
+.process-cluster[open] .process-cluster-action { font-size: 0; }
+.process-cluster[open] .process-cluster-action::before { font-size: 10.5px; }
+.process-cluster-content {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 0 10px 10px;
+  border-top: 1px solid var(--fau-border);
+}
+.process-cluster:not([open]) .process-cluster-content { display: none; }
+.process-cluster-content > .cot-pill,
+.process-cluster-content > .wf-block,
+.process-cluster-content > .shell-exec-block,
+.process-cluster-content > .figma-exec-block,
+.process-cluster-content > .ba-block { margin: 0 !important; }
 
 /* ── Reasoning / chain-of-thought panel ───────────────────────────────── */
 .reasoning-panel {

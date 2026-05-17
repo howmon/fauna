@@ -194,27 +194,65 @@ function setDefaultSavePath(path) {
 
 
 function sanitizeWriteFileBlocks(rawBuffer) {
-  // write-file and append-file
-  rawBuffer = rawBuffer.replace(/```(write-file|append-file)([:/][^\n]*)\n([\s\S]*?)```/g, function(match, mode, langSuffix, content) {
-    var filePath = langSuffix.replace(/^[:/]/, '').trim();
+  if (!rawBuffer) return rawBuffer;
+  var text = String(rawBuffer);
+  var out = '';
+  var pos = 0;
+  var blockStart = /^([`~]{3,})(write-file|append-file|replace-string|apply-patch)([^\r\n]*)\r?\n/;
+
+  function nextLineEnd(from) {
+    var nl = text.indexOf('\n', from);
+    return nl === -1 ? text.length : nl + 1;
+  }
+
+  function isClosingFence(line, fenceChar, fenceLen) {
+    var trimmed = line.replace(/\r?\n$/, '');
+    var pattern = new RegExp('^' + fenceChar.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '{' + fenceLen + ',}[ \t]*$');
+    return pattern.test(trimmed);
+  }
+
+  while (pos < text.length) {
+    var lineEnd = nextLineEnd(pos);
+    var line = text.slice(pos, lineEnd);
+    var match = line.match(blockStart);
+    if (!match) {
+      out += line;
+      pos = lineEnd;
+      continue;
+    }
+
+    var fence = match[1];
+    var mode = match[2];
+    var langSuffix = match[3] || '';
+    var contentStart = lineEnd;
+    var scan = contentStart;
+    var closeStart = -1;
+    var closeEnd = -1;
+    while (scan < text.length) {
+      var candidateEnd = nextLineEnd(scan);
+      var candidate = text.slice(scan, candidateEnd);
+      if (isClosingFence(candidate, fence[0], fence.length)) {
+        closeStart = scan;
+        closeEnd = candidateEnd;
+        break;
+      }
+      scan = candidateEnd;
+    }
+
+    if (closeStart === -1) {
+      out += text.slice(pos);
+      console.warn('[fauna] Unterminated ' + mode + ' block left untouched to avoid partial file write');
+      return out;
+    }
+
+    var content = text.slice(contentStart, closeStart);
+    var filePath = mode === 'apply-patch' ? '(patch)' : langSuffix.replace(/^[:/]/, '').trim();
     var id = 'wf-' + Date.now() + '-' + Math.random().toString(36).slice(2);
     _wfContentStore[id] = { path: filePath, content: content, mode: mode };
-    return '```write-file-ready:' + id + ':' + filePath + '\n```';
-  });
-  // replace-string:/path  (SEARCH/REPLACE format inside)
-  rawBuffer = rawBuffer.replace(/```replace-string([:/][^\n]*)\n([\s\S]*?)```/g, function(match, langSuffix, content) {
-    var filePath = langSuffix.replace(/^[:/]/, '').trim();
-    var id = 'wf-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-    _wfContentStore[id] = { path: filePath, content: content, mode: 'replace-string' };
-    return '```write-file-ready:' + id + ':' + filePath + '\n```';
-  });
-  // apply-patch  (no path in the fence — paths go inside the patch body)
-  rawBuffer = rawBuffer.replace(/```apply-patch[ \t]*\n([\s\S]*?)```/g, function(match, content) {
-    var id = 'wf-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-    _wfContentStore[id] = { path: '(patch)', content: content, mode: 'apply-patch' };
-    return '```write-file-ready:' + id + ':(patch)\n```';
-  });
-  return rawBuffer;
+    out += '```write-file-ready:' + id + ':' + filePath + '\n```';
+    pos = closeEnd;
+  }
+  return out;
 }
 
 // ── Utilities (loaded early since most files need these) ──────────────────

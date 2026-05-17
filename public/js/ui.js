@@ -556,6 +556,7 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
     extractArtifactsFromBuffer(content, el, false);
     if (typeof extractAndRenderGenUI === 'function') extractAndRenderGenUI(content, el, true);
     wrapInChainOfThought(el);
+    if (typeof compactProcessClusters === 'function') compactProcessClusters(el);
   }
 
   // Inject committed reasoning panel for historical AI messages

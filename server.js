@@ -4229,6 +4229,43 @@ app.put('/api/write-file-stream', (req, res) => {
   }
 });
 
+// ── Bulk write plan — VS Code-style structured file operations ───────────
+// POST { cwd?, files:[{ path, content, append?, encoding?, sha256? }] }
+// sha256, when supplied, is checked against the final on-disk file content.
+app.post('/api/write-files', (req, res) => {
+  const { cwd, files } = req.body || {};
+  if (!Array.isArray(files) || files.length === 0) {
+    return res.status(400).json({ ok: false, error: 'files array required' });
+  }
+  try {
+    const context = getMutationContext(req.body);
+    const results = [];
+    for (const item of files) {
+      if (!item || !item.path) throw new Error('Each file entry requires path');
+      if (item.content === undefined) throw new Error('Missing content for ' + item.path);
+      const encoding = item.encoding || 'utf8';
+      const abs = resolvePath(item.path, cwd);
+      assertWriteAllowed(abs, context);
+      checkpointFile(abs);
+      let finalContent = String(item.content ?? '');
+      if (item.append && fs.existsSync(abs)) {
+        finalContent = fs.readFileSync(abs, encoding) + finalContent;
+      }
+      const finalBuffer = Buffer.from(finalContent, encoding);
+      const sha256 = crypto.createHash('sha256').update(finalBuffer).digest('hex');
+      if (item.sha256 && item.sha256 !== sha256) {
+        throw new Error('sha256 mismatch for ' + abs + ': expected ' + item.sha256 + ', got ' + sha256);
+      }
+      atomicWriteFile(abs, finalContent, encoding);
+      const bytes = fs.statSync(abs).size;
+      results.push({ path: abs, bytes, sha256, op: item.append ? 'append' : 'write' });
+    }
+    res.json({ ok: true, results, sandboxed: !!context });
+  } catch (e) {
+    sendMutationError(res, e);
+  }
+});
+
 // ── Append to file ────────────────────────────────────────────────────────
 // POST { path, content, encoding?, cwd? } → { ok, path, bytes }
 app.post('/api/append-file', (req, res) => {

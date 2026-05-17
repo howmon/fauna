@@ -390,3 +390,49 @@ function wrapGroupInCOT(elements, icon, label) {
 // Keep old name as alias for single-element calls
 function wrapInCOT(el, icon, label) { wrapGroupInCOT([el], icon, label); }
 
+function compactProcessClusters(msgEl) {
+  if (!msgEl) return;
+  var body = msgEl.querySelector('.msg-body');
+  if (!body) return;
+  var selectors = '.cot-pill,.wf-block,.shell-exec-block,.figma-exec-block,.ba-block';
+  var containers = [body].concat(Array.from(body.querySelectorAll('.prose,.cot-block-content')));
+  containers.forEach(function(container) {
+    if (!container || container.closest('.process-cluster')) return;
+    var children = Array.from(container.children || []);
+    var run = [];
+    function flush() {
+      if (run.length < 6) { run = []; return; }
+      var shellCount = run.filter(function(el) { return el.classList.contains('shell-exec-block') || /shell command/i.test(el.textContent || ''); }).length;
+      var writeCount = run.filter(function(el) { return el.classList.contains('wf-block') || /write-file|append-file|replace-string|apply-patch/i.test(el.textContent || ''); }).length;
+      var labelParts = [];
+      if (writeCount) labelParts.push(writeCount + ' file ' + (writeCount === 1 ? 'write' : 'writes'));
+      if (shellCount) labelParts.push(shellCount + ' shell ' + (shellCount === 1 ? 'command' : 'commands'));
+      var title = labelParts.length ? labelParts.join(' · ') : run.length + ' operations';
+
+      var details = document.createElement('details');
+      details.className = 'process-cluster';
+      details.innerHTML = '<summary>' +
+        '<span class="process-cluster-icon"><i class="ti ti-list-check"></i></span>' +
+        '<span class="process-cluster-title">Process timeline</span>' +
+        '<span class="process-cluster-meta">' + escHtml(title) + '</span>' +
+        '<span class="process-cluster-action">Show details</span>' +
+      '</summary>';
+      var content = document.createElement('div');
+      content.className = 'process-cluster-content';
+      details.appendChild(content);
+      run[0].parentNode.insertBefore(details, run[0]);
+      run.forEach(function(el) { content.appendChild(el); });
+      run = [];
+    }
+    children.forEach(function(child) {
+      if (child.matches && child.matches(selectors)) {
+        run.push(child);
+      } else {
+        flush();
+        run = [];
+      }
+    });
+    flush();
+  });
+}
+

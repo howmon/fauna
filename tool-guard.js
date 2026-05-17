@@ -20,7 +20,7 @@ const SHELL_TOOLS = new Set([
 ]);
 
 const FILE_TOOLS = new Set([
-  'agent_read_file', 'agent_write_file', 'agent_str_replace',
+  'agent_read_file', 'agent_write_file', 'agent_write_files', 'agent_str_replace',
   'read_file', 'write_file', 'create_file',
 ]);
 
@@ -54,6 +54,7 @@ const TOOL_LABELS = {
   // File
   agent_read_file:     (a) => `Reading ${a?.path || a?.file || 'file'}`,
   agent_write_file:    (a) => `Writing ${a?.path || a?.file || 'file'}`,
+  agent_write_files:   (a) => `Writing ${Array.isArray(a?.files) ? a.files.length : 'multiple'} files`,
   agent_str_replace:   (a) => `Editing ${a?.path || a?.file || 'file'}`,
   read_file:           (a) => `Reading ${a?.path || a?.file || 'file'}`,
   write_file:          (a) => `Writing ${a?.path || a?.file || 'file'}`,
