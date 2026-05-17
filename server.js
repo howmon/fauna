@@ -4498,7 +4498,15 @@ function _summarizePatchPlan(plan) {
 function _buildPatchPlan(patchText, cwd, context) {
   const lines   = patchText.split('\n');
   const plan = [];
+  const touchedPaths = new Set();
   let i = 0;
+
+  function assertUniquePatchTarget(targetPath) {
+    if (touchedPaths.has(targetPath)) {
+      throw new Error('Duplicate patch target: ' + targetPath + ' — combine all hunks for a file under one Update File/Add File/Delete File section');
+    }
+    touchedPaths.add(targetPath);
+  }
 
   while (i < lines.length && !lines[i].trim().startsWith('*** Begin Patch')) i++;
   if (i >= lines.length) throw new Error('"*** Begin Patch" not found');
@@ -4511,6 +4519,7 @@ function _buildPatchPlan(patchText, cwd, context) {
     if (line.startsWith('*** Add File: ')) {
       const filePath = resolvePath(line.slice('*** Add File: '.length).trim(), cwd);
       assertWriteAllowed(filePath, context);
+      assertUniquePatchTarget(filePath);
       if (fs.existsSync(filePath)) throw new Error('Add File target already exists: ' + filePath);
       i++;
       const contentLines = [];
@@ -4526,6 +4535,7 @@ function _buildPatchPlan(patchText, cwd, context) {
     } else if (line.startsWith('*** Delete File: ')) {
       const filePath = resolvePath(line.slice('*** Delete File: '.length).trim(), cwd);
       assertWriteAllowed(filePath, context);
+      assertUniquePatchTarget(filePath);
       if (!fs.existsSync(filePath)) throw new Error('File not found: ' + filePath);
       plan.push({ path: filePath, op: 'delete' });
       i++;
@@ -4540,6 +4550,9 @@ function _buildPatchPlan(patchText, cwd, context) {
         assertWriteAllowed(newPath, context);
         i++;
       }
+
+      assertUniquePatchTarget(origPath);
+      if (newPath && newPath !== origPath) assertUniquePatchTarget(newPath);
 
       let fileContent = fs.readFileSync(origPath, 'utf8');
 

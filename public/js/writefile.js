@@ -120,8 +120,24 @@ function extractAndRenderWriteFile(messageEl, isHistoryLoad, convId) {
       return true;
     }
 
+    function historyStatusText() {
+      if (isPlan) {
+        try {
+          var plan = JSON.parse(content || '{}');
+          var count = plan && Array.isArray(plan.files) ? plan.files.length : 0;
+          return 'Loaded file plan' + (count ? ' (' + count + ' file' + (count === 1 ? '' : 's') + ')' : '');
+        } catch (_) {
+          return 'Loaded file plan';
+        }
+      }
+      if (isPatch) return 'Loaded patch (' + lines + ' lines)';
+      if (isReplace) return 'Loaded replace edit';
+      if (isAppend) return 'Loaded append (' + lines + ' lines)';
+      return 'Loaded file write (' + lines + ' lines)';
+    }
+
     if (isHistoryLoad) {
-      updateWriteFileStatus('wf-block done', isPlan ? 'file plan' : lines + ' lines');
+      updateWriteFileStatus('wf-block done', historyStatusText());
       return;
     }
 
