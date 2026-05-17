@@ -95,13 +95,29 @@ function updateMessageShellVerification(msgEl) {
     _updateShellNarrativeVisibility(msgEl, false);
     return;
   }
+
+  var verificationWidgets = widgets.filter(function(widget) {
+    var resultEl = widget.querySelector('.shell-exec-result');
+    if (resultEl && resultEl.classList.contains('running')) return true;
+    if (widget.dataset.result) return true;
+    if (widget.dataset.autoRun === 'true') return true;
+    return false;
+  });
+
+  if (!verificationWidgets.length) {
+    if (banner) banner.remove();
+    _updateShellNarrativeVisibility(msgEl, false);
+    if (typeof setBusy === 'function') setBusy(false);
+    return;
+  }
+
   banner = _ensureShellVerificationBanner(msgEl);
   if (!banner) return;
 
   var completed = 0;
   var running = 0;
   var empty = 0;
-  widgets.forEach(function(widget) {
+  verificationWidgets.forEach(function(widget) {
     var resultEl = widget.querySelector('.shell-exec-result');
     if (resultEl && resultEl.classList.contains('running')) running += 1;
     var result = _parseShellExecResult(widget);
@@ -120,9 +136,9 @@ function updateMessageShellVerification(msgEl) {
     return;
   }
 
-  if (running > 0 || completed < widgets.length) {
+  if (running > 0 || completed < verificationWidgets.length) {
     banner.className = 'msg-shell-verification pending';
-    banner.innerHTML = '<i class="ti ti-loader"></i><span>Shell verification in progress — ' + completed + ' of ' + widgets.length + ' command' + (widgets.length === 1 ? '' : 's') + ' produced results.</span>';
+    banner.innerHTML = '<i class="ti ti-loader"></i><span>Shell verification in progress — ' + completed + ' of ' + verificationWidgets.length + ' command' + (verificationWidgets.length === 1 ? '' : 's') + ' produced results.</span>';
     _updateShellNarrativeVisibility(msgEl, true);
     if (typeof setBusy === 'function') setBusy(true);
     return;
@@ -446,6 +462,7 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
     widget.dataset.execId = execId;
     widget.dataset.shellKey = shellKey;
     widget.dataset.convId = convId || state.currentId || ''; // route auto-feed to correct conv
+    widget.dataset.autoRun = autoRun ? 'true' : 'false';
     widget.innerHTML =
       '<div class="shell-exec-header">' +
         '<i class="ti ti-terminal-2"></i>' +
@@ -526,6 +543,9 @@ function stopActiveShellWorkForCurrentConversation() {
   activeWidgets.forEach(function(widget) {
     var execId = widget.dataset.execId;
     var shellKey = widget.dataset.shellKey || '';
+    var resultEl = widget.querySelector('.shell-exec-result');
+    var isRunning = resultEl && resultEl.classList.contains('running');
+    var isPendingAutoRun = shellKey && _shellAutoRunPending[shellKey];
     if (shellKey && _shellAutoRunPending[shellKey]) {
       delete _shellAutoRunPending[shellKey];
       stopped += 1;
@@ -535,8 +555,7 @@ function stopActiveShellWorkForCurrentConversation() {
       stopped += 1;
       return;
     }
-    if (!widget.dataset.result) {
-      var resultEl = widget.querySelector('.shell-exec-result');
+    if (!widget.dataset.result && (isRunning || isPendingAutoRun || widget.dataset.autoRun === 'true')) {
       if (resultEl) {
         resultEl.style.display = 'block';
         resultEl.className = 'shell-exec-result';
