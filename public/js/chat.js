@@ -80,19 +80,47 @@ async function gatherSystemContext(text) {
 
 // ── Suggested next steps ──────────────────────────────────────────────────
 // Parse ```suggestions blocks and render clickable CTA buttons after the message.
-function extractAndRenderSuggestions(buffer, msgEl) {
+function _fallbackSuggestionsFromMessage(buffer) {
+  var text = String(buffer || '');
+  if (!text.trim()) return [];
+  if (/validation failed|truncated|incomplete|failed|error|not found|exception/i.test(text)) {
+    return ['Fix the issue', 'Show the relevant logs', 'Try a safer approach'];
+  }
+  if (/test|vitest|npm test|playwright|coverage/i.test(text)) {
+    return ['Run the tests', 'Fix failing tests', 'Summarize test coverage'];
+  }
+  if (/(wrote|written|created|generated|saved).*(file|document|guide|markdown|project)|IMPLEMENTATION_GUIDE|README|runbook|spec/i.test(text)) {
+    return ['Verify generated files', 'Open the generated document', 'Continue implementation'];
+  }
+  if (/build|npm run build|electron-builder|compiled|packag/i.test(text)) {
+    return ['Run the app', 'Review build warnings', 'Package a release'];
+  }
+  if (/code|patch|changed|updated|implemented|fixed/i.test(text)) {
+    return ['Review the changes', 'Run verification', 'Continue refining'];
+  }
+  return ['Continue', 'Verify the result', 'Summarize what changed'];
+}
+
+function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
   var match = buffer.match(/```suggestions\n([\s\S]*?)```/);
-  if (!match) return;
   var items;
-  try { items = JSON.parse(match[1].trim()); } catch (_) { return; }
+  if (match) {
+    try { items = JSON.parse(match[1].trim()); } catch (_) { return; }
+  } else if (allowFallback !== false) {
+    items = _fallbackSuggestionsFromMessage(buffer);
+  } else {
+    return;
+  }
   if (!Array.isArray(items) || !items.length) return;
+  if (msgEl.classList && msgEl.classList.contains('chain-msg')) return;
 
   // Suggestions are conversation-level CTAs: keep only the latest bar visible.
   var scope = msgEl.closest('.conv-inner') || msgEl.parentElement || document;
   Array.from(scope.querySelectorAll('.suggestion-bar')).forEach(function(old) { old.remove(); });
 
   var bar = document.createElement('div');
-  bar.className = 'suggestion-bar';
+  bar.className = 'suggestion-bar' + (match ? '' : ' suggestion-bar-fallback');
+  bar.setAttribute('aria-label', 'Recommended actions');
 
   items.slice(0, 4).forEach(function(label) {
     var btn = document.createElement('button');
@@ -1018,7 +1046,7 @@ async function streamResponse(conv) {
         delete conv._suppressShellAutoRunOnce;
         if (typeof compactProcessClusters === 'function') compactProcessClusters(msgEl);
         if (typeof compactLongAssistantMessage === 'function') compactLongAssistantMessage(msgEl, buffer);
-        extractAndRenderSuggestions(buffer, msgEl);
+        extractAndRenderSuggestions(buffer, msgEl, true);
         if (state._lastMsgWasDesktopTask) {
           injectOrganizerCard(msgEl, buffer);
           state._lastMsgWasDesktopTask = false;
