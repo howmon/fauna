@@ -198,6 +198,7 @@ function sanitizeWriteFileBlocks(rawBuffer) {
   var text = String(rawBuffer);
   var out = '';
   var pos = 0;
+  var extracted = [];
   var blockStart = /^([`~]{3,})(write-file|append-file|replace-string|apply-patch|file-plan|workspace-edit|bulk-edit)([^\r\n]*)\r?\n/;
 
   function nextLineEnd(from) {
@@ -222,6 +223,32 @@ function sanitizeWriteFileBlocks(rawBuffer) {
     re.lastIndex = from;
     var m = re.exec(text);
     return m ? (m.index + (m[0][0] === '\n' ? 1 : 0)) : -1;
+  }
+
+  function shortTargetLabel(target) {
+    target = String(target || '').trim();
+    if (!target) return '';
+    var parts = target.split(/[\\/]/);
+    return parts[parts.length - 1] || target;
+  }
+
+  function activityLabel(mode, target) {
+    var shortTarget = shortTargetLabel(target);
+    if (mode === 'file-plan' || mode === 'workspace-edit' || mode === 'bulk-edit') return 'Applying workspace file plan';
+    if (mode === 'append-file') return 'Appending to ' + (shortTarget || 'file');
+    if (mode === 'replace-string') return 'Updating ' + (shortTarget || 'file');
+    if (mode === 'apply-patch') return 'Applying patch';
+    return 'Creating ' + (shortTarget || 'file');
+  }
+
+  function streamingActivityHtml(mode, target) {
+    var label = activityLabel(mode, target);
+    return '<div class="tool-status-stack file-write-stream-status">' +
+      '<div class="tool-status-line">' +
+        '<span class="tool-status-icon"><i class="ti ti-file-code"></i></span>' +
+        '<span class="tool-status-shimmer">' + escHtml(label) + '</span>' +
+      '</div>' +
+    '</div>\n';
   }
 
   while (pos < text.length) {
@@ -271,6 +298,7 @@ function sanitizeWriteFileBlocks(rawBuffer) {
       if (trailingWriteText.length > 120 && /(^|\n)#{1,6}\s+|(^|\n)[-*]\s+|(^|\n)```|\b(API|Database|Service|Setup|Testing|Next Steps|Implementation)\b/i.test(trailingWriteText)) {
         closeStart = scanLimit;
         closeEnd = scanLimit;
+        if (typeof dbg === 'function') dbg('write-file sanitizer: markdown tail consumed as payload (' + trailingWriteText.length + ' trailing chars)', 'warn');
       }
     }
 
@@ -285,10 +313,16 @@ function sanitizeWriteFileBlocks(rawBuffer) {
     var filePath = mode === 'apply-patch' ? '(patch)' : isFilePlan ? '(file plan)' : langSuffix.replace(/^[:/]/, '').trim();
     var id = 'wf-' + Date.now() + '-' + Math.random().toString(36).slice(2);
     _wfContentStore[id] = { path: filePath, content: content, mode: isFilePlan ? 'file-plan' : mode };
+    extracted.push({ id: id, mode: mode, path: filePath, chars: content.length, lines: content ? content.split('\n').length : 0 });
     out += isFilePlan
       ? '```file-plan-ready:' + id + ':' + filePath + '\n```'
       : '```write-file-ready:' + id + ':' + filePath + '\n```';
     pos = closeEnd;
+  }
+  if (extracted.length && typeof dbg === 'function') {
+    dbg('write-file sanitizer: extracted ' + extracted.length + ' block(s): ' + extracted.map(function(item) {
+      return item.mode + ' ' + item.path + ' [' + item.chars + 'ch/' + item.lines + ' lines id=' + item.id + ']';
+    }).join('; '), 'info');
   }
   return out;
 }
@@ -324,6 +358,32 @@ function redactWriteFileBlocksForStreaming(rawBuffer) {
     return m ? (m.index + (m[0][0] === '\n' ? 1 : 0)) : -1;
   }
 
+  function shortTargetLabel(target) {
+    target = String(target || '').trim();
+    if (!target) return '';
+    var parts = target.split(/[\\/]/);
+    return parts[parts.length - 1] || target;
+  }
+
+  function activityLabel(mode, target) {
+    var shortTarget = shortTargetLabel(target);
+    if (mode === 'file-plan' || mode === 'workspace-edit' || mode === 'bulk-edit') return 'Applying workspace file plan';
+    if (mode === 'append-file') return 'Appending to ' + (shortTarget || 'file');
+    if (mode === 'replace-string') return 'Updating ' + (shortTarget || 'file');
+    if (mode === 'apply-patch') return 'Applying patch';
+    return 'Creating ' + (shortTarget || 'file');
+  }
+
+  function streamingActivityHtml(mode, target) {
+    var label = activityLabel(mode, target);
+    return '<div class="tool-status-stack file-write-stream-status">' +
+      '<div class="tool-status-line">' +
+        '<span class="tool-status-icon"><i class="ti ti-file-code"></i></span>' +
+        '<span class="tool-status-shimmer">' + escHtml(label) + '</span>' +
+      '</div>' +
+    '</div>\n';
+  }
+
   while (pos < text.length) {
     var lineEnd = nextLineEnd(pos);
     var line = text.slice(pos, lineEnd);
@@ -339,7 +399,7 @@ function redactWriteFileBlocksForStreaming(rawBuffer) {
     var langSuffix = match[3] || '';
     var isPlan = mode === 'file-plan' || mode === 'workspace-edit' || mode === 'bulk-edit';
     var target = mode === 'apply-patch' ? 'apply-patch' : isPlan ? 'workspace file plan' : langSuffix.replace(/^[:/]/, '').trim();
-    out += '```' + (isPlan ? 'file-plan-streaming' : 'write-file-streaming') + '\n' + mode + (target ? ': ' + target : '') + '\n```\n';
+    out += streamingActivityHtml(mode, target);
 
     var contentStart = lineEnd;
     var scan = contentStart;

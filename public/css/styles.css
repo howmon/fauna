@@ -622,6 +622,8 @@ button .ti, label .ti { pointer-events: none; }
 .tool-status-stack:not(:empty) { max-height: 172px; overflow-y: auto; padding-right: 4px; }
 .tool-status-line { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fau-text-muted); transition: opacity .25s; }
 .tool-status-line .tool-status-icon { font-size: 11px; opacity: .7; }
+.file-write-stream-status { margin-top: 2px; }
+.file-write-stream-status .tool-status-icon { color: var(--accent2); }
 .tool-status-shimmer {
   background: linear-gradient(90deg, var(--fau-text-muted), var(--accent2, #a78bfa), var(--fau-text-muted));
   background-size: 200% auto; background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
