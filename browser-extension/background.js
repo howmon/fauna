@@ -396,24 +396,81 @@ async function execInTab(tabId, func, args = []) {
   }
 }
 
+function _isHostAccessError(err) {
+  var msg = String((err && err.message) || err || '');
+  return /Cannot access contents of the page|host permission|Missing host permission|Cannot access a chrome:\/\/ URL/i.test(msg);
+}
+
+function _isConnectError(err) {
+  var msg = String((err && err.message) || err || '');
+  return /Receiving end does not exist|Could not establish connection|No tab with id/i.test(msg);
+}
+
+function _permissionPatternFromUrl(url) {
+  try {
+    var u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return u.protocol + '//' + u.hostname + '/*';
+  } catch (_) {
+    return null;
+  }
+}
+
+async function _ensureTabHostPermission(tab) {
+  var pattern = _permissionPatternFromUrl(tab && tab.url);
+  if (!pattern) {
+    throw new Error('Cannot access this page. Open an http(s) site or grant extension access for this page type.');
+  }
+  if (!chrome.permissions || typeof chrome.permissions.contains !== 'function' || typeof chrome.permissions.request !== 'function') {
+    return;
+  }
+  var has = await chrome.permissions.contains({ origins: [pattern] }).catch(function() { return true; });
+  if (has) return;
+  var granted = await chrome.permissions.request({ origins: [pattern] }).catch(function() { return false; });
+  if (!granted) {
+    throw new Error('Site access not granted for ' + pattern + '. In extension settings, allow access on this site or on all sites.');
+  }
+}
+
+async function _injectContentScript(tab) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+  } catch (err) {
+    if (_isHostAccessError(err)) {
+      await _ensureTabHostPermission(tab);
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+      return;
+    }
+    throw err;
+  }
+}
+
 async function msgTab(tab, msg) {
   if (!tab) throw new Error('No active tab');
-  return await chrome.tabs.sendMessage(tab.id, msg);
+  try {
+    return await chrome.tabs.sendMessage(tab.id, msg);
+  } catch (err) {
+    if (_isConnectError(err)) {
+      await _injectContentScript(tab);
+      return await chrome.tabs.sendMessage(tab.id, msg);
+    }
+    throw err;
+  }
 }
 
 // ── Extract ───────────────────────────────────────────────────────────────
 
 async function cmdExtract({ maxChars = 12000 } = {}, tab) {
   if (!tab) return { ok: false, error: 'No active tab' };
-  let data;
   try {
-    data = await msgTab(tab, { action: 'extract', maxChars });
-  } catch (_) {
-    // Content script not yet injected (extension freshly installed) — inject and retry
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
-    data = await msgTab(tab, { action: 'extract', maxChars });
+    var data = await msgTab(tab, { action: 'extract', maxChars });
+    return { ok: true, ...data };
+  } catch (err) {
+    if (_isHostAccessError(err)) {
+      return { ok: false, error: 'Cannot access this page. Grant site access to the extension for this site and try again.' };
+    }
+    throw err;
   }
-  return { ok: true, ...data };
 }
 
 async function cmdExtractForms({} = {}, tab) {
@@ -424,14 +481,15 @@ async function cmdExtractForms({} = {}, tab) {
 
 async function cmdExtractAssets({} = {}, tab) {
   if (!tab) return { ok: false, error: 'No active tab' };
-  let data;
   try {
-    data = await msgTab(tab, { action: 'extract-assets' });
-  } catch (_) {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
-    data = await msgTab(tab, { action: 'extract-assets' });
+    var data = await msgTab(tab, { action: 'extract-assets' });
+    return { ok: true, ...data };
+  } catch (err) {
+    if (_isHostAccessError(err)) {
+      return { ok: false, error: 'Cannot access this page. Grant site access to the extension for this site and try again.' };
+    }
+    throw err;
   }
-  return { ok: true, ...data };
 }
 
 // ── DevTools helpers — all use chrome.debugger CDP ────────────────────────

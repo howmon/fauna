@@ -353,7 +353,7 @@ app.post('/api/ext/command', async (req, res) => {
       const { status, data } = await forwardExtCommandToRelay({ action, params, tabId, clientId, timeout: req.body?.timeout || 30000 });
       return res.status(status).json(data);
     } catch (e) {
-      return res.status(503).json({ ok: false, error: e.message });
+      return res.json({ ok: false, error: e.message || 'Browser extension not connected' });
     }
   }
 
@@ -364,7 +364,7 @@ app.post('/api/ext/command', async (req, res) => {
         const { status, data } = await forwardExtCommandToRelay({ action, params, tabId, timeout: req.body?.timeout || 30000 });
         return res.status(status).json(data);
       } catch (e) {
-        return res.status(503).json({ ok: false, error: e.message });
+        return res.json({ ok: false, error: e.message || 'Browser extension not connected' });
       }
     }
     // tab:list is often used as a capability probe by the UI.
@@ -372,7 +372,7 @@ app.post('/api/ext/command', async (req, res) => {
     if (action === 'tab:list') {
       return res.json({ ok: false, error: 'Browser extension not connected', tabs: [] });
     }
-    return res.status(503).json({ ok: false, error: 'Browser extension not connected' });
+    return res.json({ ok: false, error: 'Browser extension not connected' });
   }
 
   const client = clientId
