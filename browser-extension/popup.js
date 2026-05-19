@@ -46,9 +46,11 @@ function showFeedback(msg, type = '') {
   }
 
   // Listen for status updates from background while popup is open
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === 'fauna:status') setStatus(msg.connected, msg.mcpConnected);
-  });
+  if (chrome.runtime && chrome.runtime.onMessage && typeof chrome.runtime.onMessage.addListener === 'function') {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg.type === 'fauna:status') setStatus(msg.connected, msg.mcpConnected);
+    });
+  }
 })();
 
 // ── Actions ───────────────────────────────────────────────────────────────

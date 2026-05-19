@@ -113,29 +113,31 @@ function escHtml(str) {
   await refreshTabInfo();
 
   // Listen for messages from background
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === 'fauna:status') {
-      setStatus(msg.connected);
-    }
-    if (msg.type === 'fauna:event') {
-      addLogEntry(msg.event, msg.data);
-      // Also refresh tab info on navigation events
-      if (msg.event === 'page:loaded' || msg.event === 'tab:activated') {
-        refreshTabInfo();
+  if (chrome.runtime && chrome.runtime.onMessage && typeof chrome.runtime.onMessage.addListener === 'function') {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg.type === 'fauna:status') {
+        setStatus(msg.connected);
       }
-    }
-    if (msg.type === 'fauna:picker-selected') {
-      showPickedElement(msg.data);
-      showFeedback('Element picked!', 'ok');
-      btnPickEl.classList.remove('picking');
-      btnPickEl.disabled = false;
-    }
-    if (msg.type === 'fauna:picker-cancelled') {
-      btnPickEl.classList.remove('picking');
-      btnPickEl.disabled = false;
-      showFeedback('Picker cancelled');
-    }
-  });
+      if (msg.type === 'fauna:event') {
+        addLogEntry(msg.event, msg.data);
+        // Also refresh tab info on navigation events
+        if (msg.event === 'page:loaded' || msg.event === 'tab:activated') {
+          refreshTabInfo();
+        }
+      }
+      if (msg.type === 'fauna:picker-selected') {
+        showPickedElement(msg.data);
+        showFeedback('Element picked!', 'ok');
+        btnPickEl.classList.remove('picking');
+        btnPickEl.disabled = false;
+      }
+      if (msg.type === 'fauna:picker-cancelled') {
+        btnPickEl.classList.remove('picking');
+        btnPickEl.disabled = false;
+        showFeedback('Picker cancelled');
+      }
+    });
+  }
 
   // Keep tab info fresh when the active tab changes
   chrome.tabs.onActivated.addListener(() => refreshTabInfo());

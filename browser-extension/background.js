@@ -24,6 +24,7 @@ let reconnectDelay  = RECONNECT_BASE_MS;
 let pingTimer       = null;
 let connected       = false;
 let pendingCmds     = new Map(); // cmdId → { resolve, reject, timeoutId }
+let preflightInFlight = false;
 
 // ── State — FaunaMCP relay ────────────────────────────────────────────────
 
@@ -38,38 +39,55 @@ let contextMenusReady = Promise.resolve();
 
 function connect() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  if (preflightInFlight) return;
 
   clearTimeout(reconnectTimer);
-  ws = new WebSocket(FAUNA_WS_URL);
 
-  ws.addEventListener('open', () => {
-    connected = true;
-    reconnectDelay = RECONNECT_BASE_MS;
-    console.log('[fauna-ext] connected to Fauna');
-    updateBadge(true);
-    sendHello();
-    startPing();
-    broadcastStatus();
-  });
+  // Avoid noisy ws:// connection-refused errors when Fauna is not running.
+  // Preflight localhost first, then open WS only when reachable.
+  preflightInFlight = true;
+  fetch(FAUNA_ORIGIN + '/api/ext/status', { method: 'GET' })
+    .then(() => {
+      ws = new WebSocket(FAUNA_WS_URL);
 
-  ws.addEventListener('message', async (evt) => {
-    let msg;
-    try { msg = JSON.parse(evt.data); } catch { return; }
-    await handleServerMessage(msg);
-  });
+      ws.addEventListener('open', () => {
+        connected = true;
+        reconnectDelay = RECONNECT_BASE_MS;
+        console.log('[fauna-ext] connected to Fauna');
+        updateBadge(true);
+        sendHello();
+        startPing();
+        broadcastStatus();
+      });
 
-  ws.addEventListener('close', () => {
-    connected = false;
-    ws = null;
-    stopPing();
-    updateBadge(false);
-    broadcastStatus();
-    scheduleReconnect();
-  });
+      ws.addEventListener('message', async (evt) => {
+        let msg;
+        try { msg = JSON.parse(evt.data); } catch { return; }
+        await handleServerMessage(msg);
+      });
 
-  ws.addEventListener('error', () => {
-    // close fires after error — reconnect handled there
-  });
+      ws.addEventListener('close', () => {
+        connected = false;
+        ws = null;
+        stopPing();
+        updateBadge(false);
+        broadcastStatus();
+        scheduleReconnect();
+      });
+
+      ws.addEventListener('error', () => {
+        // close fires after error — reconnect handled there
+      });
+    })
+    .catch(() => {
+      connected = false;
+      updateBadge(false);
+      broadcastStatus();
+      scheduleReconnect();
+    })
+    .finally(() => {
+      preflightInFlight = false;
+    });
 }
 
 function scheduleReconnect() {
@@ -1069,6 +1087,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 // ── Message bus (popup → background) ─────────────────────────────────────
 
+if (chrome.runtime && chrome.runtime.onMessage && typeof chrome.runtime.onMessage.addListener === 'function') {
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg.type === 'get-status') {
     reply({ connected, mcpConnected });
@@ -1137,6 +1156,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   }
   return false;
 });
+}
 
 // ── Service worker keepalive (alarms) ─────────────────────────────────────
 
