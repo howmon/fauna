@@ -465,12 +465,56 @@ async function cmdExtract({ maxChars = 12000 } = {}, tab) {
   try {
     var data = await msgTab(tab, { action: 'extract', maxChars });
     return { ok: true, ...data };
-  } catch (err) {
-    if (_isHostAccessError(err)) {
-      return { ok: false, error: 'Cannot access this page. Grant site access to the extension for this site and try again.' };
+  } catch (err1) {
+    try {
+      return await _extractViaDebugger(tab, maxChars);
+    } catch (err2) {
+      if (_isHostAccessError(err1) || _isHostAccessError(err2)) {
+        return { ok: false, error: 'Cannot access this page. Grant site access to the extension for this site and try again.' };
+      }
+      return { ok: false, error: (err2 && err2.message) || (err1 && err1.message) || 'Page extraction failed' };
     }
-    throw err;
   }
+}
+
+async function _extractViaDebugger(tab, maxChars) {
+  var limit = Math.max(500, Math.min(Number(maxChars) || 12000, 50000));
+  return await _debuggerSession(tab.id, async (target) => {
+    await chrome.debugger.sendCommand(target, 'Runtime.enable', {});
+    const evalResult = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+      expression: `(function(){
+        var txt = '';
+        try { txt = ((document.body && document.body.innerText) || '').trim(); } catch (_) {}
+        if (!txt) {
+          try { txt = ((document.documentElement && document.documentElement.innerText) || '').trim(); } catch (_) {}
+        }
+        var links = [];
+        try {
+          links = Array.from(document.querySelectorAll('a[href]')).slice(0, 30).map(function(a){
+            return { text: (a.innerText || '').trim().slice(0, 120), href: a.href };
+          });
+        } catch (_) {}
+        return JSON.stringify({
+          title: document.title || '',
+          url: location.href || '',
+          text: (txt || '').slice(0, ${limit}),
+          links: links
+        });
+      })()`,
+      returnByValue: true,
+      awaitPromise: false,
+    });
+    var data = {};
+    try { data = JSON.parse(evalResult?.result?.value || '{}'); } catch (_) { data = {}; }
+    return {
+      ok: true,
+      title: data.title || tab.title || '',
+      url: data.url || tab.url || '',
+      text: data.text || '',
+      links: Array.isArray(data.links) ? data.links : [],
+      method: 'debugger'
+    };
+  });
 }
 
 async function cmdExtractForms({} = {}, tab) {
