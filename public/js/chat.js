@@ -23,6 +23,58 @@ function _isBrowserTabReferenceAttachment(att) {
   return !!(att && att.extSource && (att.tabId || att.clientId || att.browser));
 }
 
+async function _buildLiveBrowserAttachmentContext(attachments) {
+  if (!attachments || !attachments.length) return '';
+  var refs = attachments.filter(_isBrowserTabReferenceAttachment);
+  if (!refs.length) return '';
+
+  var chunks = [];
+  for (var i = 0; i < refs.length; i++) {
+    var att = refs[i];
+    var body = { action: 'extract', params: { maxChars: 8000 } };
+    if (att.tabId) body.tabId = att.tabId;
+    if (att.clientId) body.clientId = att.clientId;
+    else if (att.browser) body.browser = String(att.browser).replace(/\s+\(\d+\)$/, '');
+
+    var d = null;
+    try {
+      var r = await fetch('/api/ext/command', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      });
+      d = await r.json().catch(function() { return null; });
+      if ((!d || d.ok === false) && body.clientId && String(body.clientId).startsWith('relay-')) {
+        // Relay route may fail even when direct extraction works.
+        var retryBody = { action: 'extract', params: { maxChars: 8000 } };
+        if (att.tabId) retryBody.tabId = att.tabId;
+        if (att.browser) retryBody.browser = String(att.browser).replace(/\s+\(\d+\)$/, '');
+        var r2 = await fetch('/api/ext/command', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(retryBody)
+        });
+        var d2 = await r2.json().catch(function() { return null; });
+        if (d2 && d2.ok) d = d2;
+      }
+    } catch (_) {}
+
+    if (d && d.ok) {
+      var title = d.title || att.name || 'Browser tab';
+      var url = d.url || att.sourceUri || '';
+      var text = (d.text || d.content || '').trim();
+      if (!text) text = '(No text extracted)';
+      chunks.push(
+        '```\n' +
+        '// Live browser tab context (resolved at send time)\n' +
+        '// Title: ' + title + '\n' +
+        (url ? ('// URL: ' + url + '\n') : '') +
+        text + '\n' +
+        '```'
+      );
+    }
+  }
+
+  if (!chunks.length) return '';
+  return '\n\n[Resolved live browser tab context]\n' + chunks.join('\n\n');
+}
+
 // Short confirmations — user is approving a plan the AI just described
 var CONFIRM_PATTERNS = /^(yes|proceed|do it|go ahead|execute|run it|ok|okay|sure|do this|confirm|apply|start|make it so|go|yep|yup|do that|please do|please proceed|sounds good|let'?s? do it)[\.\!\?]?$/i;
 
@@ -316,6 +368,11 @@ async function sendMessage(opts) {
     });
   }
 
+  var displayContent = content;
+  // Resolve browser tab references to live context at send-time (keeps visible message compact)
+  var liveBrowserCtx = await _buildLiveBrowserAttachmentContext(state.pendingAttachments);
+  if (liveBrowserCtx) content += liveBrowserCtx;
+
   // Inject live system context when the message is about system tasks
   var sysContext = await gatherSystemContext(text);
   var apiContent = sysContext ? content + sysContext : content;
@@ -326,7 +383,7 @@ async function sendMessage(opts) {
   var userMsg = {
     role: 'user',
     content: apiContent,
-    _displayText: text,
+    _displayText: displayContent,
     images: pendingImages.length ? pendingImages : undefined,
     attachments: state.pendingAttachments.map(function(a) {
       return {
@@ -349,7 +406,7 @@ async function sendMessage(opts) {
 
   bumpConvToTop(conv.id);
   saveConversations();
-  appendMessageDOM('user', content, userMsg.attachments, true);
+  appendMessageDOM('user', displayContent, userMsg.attachments, true);
   showMessages();
   clearAttachments();
 
@@ -397,12 +454,17 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
     }
   });
 
+  var displayContent = content;
+  // Resolve browser tab references to live context at send-time (keeps visible message compact)
+  var liveBrowserCtx = await _buildLiveBrowserAttachmentContext(attachments);
+  if (liveBrowserCtx) content += liveBrowserCtx;
+
   // Show the user message in chat
   var userMsg = { role: 'user', content: content, images: pendingImages.length ? pendingImages : undefined };
   conv.messages.push(userMsg);
 
   saveConversations();
-  appendMessageDOM('user', content, null, true);
+  appendMessageDOM('user', displayContent, null, true);
   showMessages();
   clearAttachments();
   forceScrollBottom();
