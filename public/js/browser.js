@@ -1526,7 +1526,7 @@ async function executeExtAction(action) {
     body: JSON.stringify(body)
   });
   var d = await r.json();
-  if (!r.ok) throw new Error(d.error || 'Extension command failed');
+  if (!r.ok || (d && d.ok === false)) throw new Error((d && d.error) || 'Extension command failed');
   return d;
 }
 

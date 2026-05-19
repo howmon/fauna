@@ -367,6 +367,11 @@ app.post('/api/ext/command', async (req, res) => {
         return res.status(503).json({ ok: false, error: e.message });
       }
     }
+    // tab:list is often used as a capability probe by the UI.
+    // Return a non-5xx response to avoid noisy console "Failed to load resource" logs.
+    if (action === 'tab:list') {
+      return res.json({ ok: false, error: 'Browser extension not connected', tabs: [] });
+    }
     return res.status(503).json({ ok: false, error: 'Browser extension not connected' });
   }
 
