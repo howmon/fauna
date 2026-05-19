@@ -19,6 +19,10 @@ var DESKTOP_ORG_PATTERNS = [
   /sort\s+(my\s+)?(desktop|files|downloads)/i
 ];
 
+function _isBrowserTabReferenceAttachment(att) {
+  return !!(att && att.extSource && (att.tabId || att.clientId || att.browser));
+}
+
 // Short confirmations — user is approving a plan the AI just described
 var CONFIRM_PATTERNS = /^(yes|proceed|do it|go ahead|execute|run it|ok|okay|sure|do this|confirm|apply|start|make it so|go|yep|yup|do that|please do|please proceed|sounds good|let'?s? do it)[\.\!\?]?$/i;
 
@@ -302,7 +306,12 @@ async function sendMessage(opts) {
         if (att.tabId) meta.push('tabId=' + att.tabId);
         if (att.clientId) meta.push('clientId=' + att.clientId);
         var header = '// ' + label + '\n// Ref: ' + ref + (meta.length ? '\n// Meta: ' + meta.join(', ') : '');
-        content += '\n\n```\n' + header + '\n' + (att.content || '') + '\n```';
+        if (_isBrowserTabReferenceAttachment(att)) {
+          var note = 'Browser tab context attached as reference only. Query this tab live via browser extension actions when needed.';
+          content += '\n\n```\n' + header + '\n// ' + note + '\n```';
+        } else {
+          content += '\n\n```\n' + header + '\n' + (att.content || '') + '\n```';
+        }
       }
     });
   }
@@ -323,7 +332,7 @@ async function sendMessage(opts) {
       return {
         type: a.type,
         name: a.name,
-        content: a.type === 'image' ? undefined : a.content,
+        content: a.type === 'image' || _isBrowserTabReferenceAttachment(a) ? undefined : a.content,
         sourceUri: a.sourceUri,
         extSource: a.extSource,
         browser: a.browser,
@@ -366,14 +375,25 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
     if (att.type === 'image') {
       pendingImages.push({ base64: att.base64, mime: att.mime, name: att.name });
     } else {
-      var label = att.type === 'url' ? 'URL: ' + att.name : 'File: ' + att.name;
+      var label = att.extSource === 'page'      ? 'Browser page: '      + att.name
+                : att.extSource === 'selection' ? 'Browser selection from ' + (att.sourceUri || att.name)
+                : att.type === 'url'            ? 'URL: ' + att.name
+                : 'File: ' + att.name;
       var ref = att.sourceUri || ('attachment://' + encodeURIComponent(att.name || 'file'));
       var meta = [];
       if (att.mime) meta.push('mime=' + att.mime);
       if (att.size) meta.push('bytes=' + att.size);
       if (att.warning) meta.push('warning=' + att.warning);
+      if (att.browser) meta.push('browser=' + att.browser);
+      if (att.tabId) meta.push('tabId=' + att.tabId);
+      if (att.clientId) meta.push('clientId=' + att.clientId);
       var header = '// ' + label + '\n// Ref: ' + ref + (meta.length ? '\n// Meta: ' + meta.join(', ') : '');
-      content += '\n\n```\n' + header + '\n' + (att.content || '') + '\n```';
+      if (_isBrowserTabReferenceAttachment(att)) {
+        var note = 'Browser tab context attached as reference only. Query this tab live via browser extension actions when needed.';
+        content += '\n\n```\n' + header + '\n// ' + note + '\n```';
+      } else {
+        content += '\n\n```\n' + header + '\n' + (att.content || '') + '\n```';
+      }
     }
   });
 
