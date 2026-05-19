@@ -2571,6 +2571,25 @@ const FIGMA_WS_URL     = 'ws://localhost:3335';
 const FIGMA_RULES_FILE = path.join(CONFIG_DIR, 'figma-rules.json');
 const DEFAULT_MCP_PATH = path.join(os.homedir(), 'FigmaExtensions', 'CopilotMCP', 'server', 'index.js');
 
+function _sanitizeUserMcpPath(rawPath) {
+  if (!rawPath || typeof rawPath !== 'string') return null;
+  const p = path.resolve(rawPath);
+  // User-configured overrides must stay inside HOME for safety.
+  if (!p.endsWith('.js') || !p.startsWith(os.homedir())) return null;
+  return p;
+}
+
+function _mcpPathCandidates() {
+  const cfg = readSavedConfig();
+  const userPath = _sanitizeUserMcpPath(cfg.mcpServerPath);
+  const bundledPath = path.join(process.resourcesPath || '', 'mcp-server', 'server', 'index.js');
+  const devPath = path.join(__dirname, 'relay', 'server', 'index.js');
+  const candidates = [];
+  if (userPath) candidates.push(userPath);
+  candidates.push(bundledPath, devPath, DEFAULT_MCP_PATH);
+  return [...new Set(candidates.filter(Boolean))];
+}
+
 // ── MCP server process management ────────────────────────────────────────
 
 let mcpProcess    = null;
@@ -2599,13 +2618,9 @@ function findNodeBinary() {
 }
 
 function getMcpServerPath() {
-  const cfg = readSavedConfig();
-  const p = path.resolve(cfg.mcpServerPath || DEFAULT_MCP_PATH);
-  // Only allow .js files under the user's home directory
-  if (!p.endsWith('.js') || !p.startsWith(os.homedir())) {
-    return DEFAULT_MCP_PATH;
-  }
-  return p;
+  const candidates = _mcpPathCandidates();
+  const existing = candidates.find(p => fs.existsSync(p));
+  return existing || candidates[0] || DEFAULT_MCP_PATH;
 }
 
 function isMcpRunning() {
@@ -2617,7 +2632,11 @@ function startMcpServer() {
 
   const serverPath = getMcpServerPath();
   if (!fs.existsSync(serverPath)) {
-    return { ok: false, error: `MCP server not found at: ${serverPath}` };
+    return {
+      ok: false,
+      error: `MCP server not found at: ${serverPath}`,
+      candidates: _mcpPathCandidates(),
+    };
   }
 
   const nodeBin = findNodeBinary();
@@ -3424,8 +3443,16 @@ async function callCustomMcpTool(toolName, args) {
 // Start trying to connect immediately when the server starts
 // Also auto-start the MCP server if it's not already running
 setTimeout(() => {
-  if (mcpAutoStart) startMcpServer();
-  else figmaConnect();
+  if (mcpAutoStart) {
+    const started = startMcpServer();
+    if (!started.ok) {
+      // If the local relay cannot start, still try connecting to an already running relay.
+      console.log('[Figma] Local MCP auto-start skipped:', started.error || 'unknown reason');
+      figmaConnect();
+    }
+  } else {
+    figmaConnect();
+  }
   // Start custom MCP auto-detection
   startCustomMcpAutoDetection();
   // Pre-warm Playwright MCP if available so it shows READY immediately

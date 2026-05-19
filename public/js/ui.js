@@ -1,3 +1,11 @@
+function toggleBrowserMCP() {
+  state.playwrightMCPEnabled = !state.playwrightMCPEnabled;
+  localStorage.setItem('fauna-playwright-mcp', state.playwrightMCPEnabled ? 'true' : 'false');
+  // Optionally, update UI badge or status here if needed
+  showToast('Browser MCP ' + (state.playwrightMCPEnabled ? 'enabled' : 'disabled'));
+  // Optionally, call backend endpoint if needed:
+  // fetch('/api/playwright-mcp/toggle', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: state.playwrightMCPEnabled }) });
+}
 // ── Debug logger ──────────────────────────────────────────────────────────
 var _debugLogs = [];
 function dbg(msg, type) {

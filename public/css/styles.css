@@ -6861,6 +6861,8 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
   padding: 12px 14px;
   border-bottom: 1px solid var(--fau-border);
 }
+.mcp-builtin-row-clickable { cursor: pointer; }
+.mcp-builtin-row-clickable:hover { background: var(--fau-surface2); }
 .mcp-builtin-row:last-child { border-bottom: none; }
 .mcp-builtin-icon {
   width: 32px; height: 32px; border-radius: 7px;
@@ -6871,6 +6873,7 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 .mcp-builtin-info { flex: 1; min-width: 0; }
 .mcp-builtin-name { font-size: 13px; font-weight: 500; color: var(--fau-text); }
 .mcp-builtin-desc { font-size: 11px; color: var(--fau-text-muted); margin-top: 1px; }
+.mcp-builtin-status { display: inline-flex; align-items: center; gap: 8px; }
 .mcp-status-pill {
   font-size: 10px; font-weight: 600; text-transform: uppercase;
   letter-spacing: .04em; padding: 2px 7px; border-radius: 20px;
@@ -6878,6 +6881,19 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 .mcp-status-pill.active   { background: rgba(46,164,79,.15); color: #2ea44f; }
 .mcp-status-pill.ready    { background: rgba(9,105,218,.12); color: #0969da; }
 .mcp-status-pill.inactive { background: var(--fau-surface2); color: var(--fau-text-muted); }
+.mcp-inline-toggle {
+  border: 1px solid var(--fau-border);
+  background: var(--fau-surface2);
+  color: var(--fau-text);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.mcp-inline-toggle:hover { border-color: var(--accent); color: var(--accent); }
 
 /* ── Automations Panel — Two-Panel Layout ─────────────────────────────── */
 .tasks-panel-body { display: none; } /* no longer used — nav col + content col handle layout */

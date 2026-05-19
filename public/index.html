@@ -754,21 +754,21 @@
       <div class="mcp-builtin-list">
 
         <!-- Figma MCP -->
-        <div class="mcp-builtin-row" id="mcp-builtin-figma">
+        <div class="mcp-builtin-row mcp-builtin-row-clickable" id="mcp-builtin-figma" onclick="toggleFigmaMCP();mcpBuiltinPollStatus()" title="Click to enable or disable Figma MCP for this chat">
           <div class="mcp-builtin-icon"><i class="ti ti-brand-figma"></i></div>
           <div class="mcp-builtin-info">
             <div class="mcp-builtin-name">Figma MCP</div>
-            <div class="mcp-builtin-desc">Read and write Figma design files via the FaunaMCP plugin.</div>
+            <div class="mcp-builtin-desc">Read and write Figma design files via MCP. Click this row to enable or disable for the current chat.</div>
           </div>
           <div class="mcp-builtin-status" id="mcp-builtin-figma-status"></div>
         </div>
 
         <!-- Playwright MCP -->
-        <div class="mcp-builtin-row" id="mcp-builtin-playwright">
+        <div class="mcp-builtin-row mcp-builtin-row-clickable" id="mcp-builtin-playwright" onclick="toggleBrowserMCP();mcpBuiltinPollStatus()" title="Click to enable or disable Browser MCP for this chat">
           <div class="mcp-builtin-icon"><i class="ti ti-brand-chrome"></i></div>
           <div class="mcp-builtin-info">
             <div class="mcp-builtin-name">Browser MCP</div>
-            <div class="mcp-builtin-desc">Automate and control the browser via Playwright.</div>
+            <div class="mcp-builtin-desc">Automate and control the browser via Playwright. Click this row to enable or disable for the current chat.</div>
           </div>
           <div class="mcp-builtin-status" id="mcp-builtin-playwright-status"></div>
         </div>
@@ -1362,7 +1362,12 @@ Examples:
       return '<span class="mcp-status-pill inactive">Inactive</span>';
     }
 
-    if (figmaEl) figmaEl.innerHTML = pill(figmaEnabled, figmaAvail);
+    if (figmaEl) {
+      var figmaToggleLabel = figmaEnabled ? 'Disable' : 'Enable';
+      figmaEl.innerHTML =
+        pill(figmaEnabled, figmaAvail) +
+        '<button class="mcp-inline-toggle" onclick="event.stopPropagation();toggleFigmaMCP();mcpBuiltinPollStatus()">' + figmaToggleLabel + '</button>';
+    }
     if (pwEl)    pwEl.innerHTML    = pill(pwEnabled,    pwAvail);
 
     // If Playwright is installed but not yet running, pre-warm it silently
@@ -2012,7 +2017,7 @@ Examples:
     <div class="setup-section-label"><i class="ti ti-server"></i> MCP Server</div>
 
     <div class="setup-card">
-      <p class="setup-card-desc">The Figma MCP server runs automatically when Fauna opens. Both the plugin and extension connect through it.</p>
+      <p class="setup-card-desc">Fauna attempts to start the local Figma relay on launch. If unavailable, enable Figma MCP from MCP Servers and connect via FaunaMCP/plugin.</p>
       <div id="setup-mcp-status-row" class="setup-status-row">
         <span id="setup-mcp-icon">…</span>
         <span id="setup-mcp-text">Checking…</span>
@@ -2255,7 +2260,7 @@ Examples:
       <p>Two integration modes are available:</p>
       <dl class="help-dl">
         <dt>Figma MCP (recommended)</dt>
-        <dd>Connects via the Model Context Protocol. The AI gets live read and write access to your Figma file — components, layers, variables, and more. Enable it by toggling the <strong>Figma MCP</strong> section in the sidebar.</dd>
+        <dd>Connects via the Model Context Protocol. The AI gets live read and write access to your Figma file — components, layers, variables, and more. Enable it from <strong>Settings → MCP Servers</strong> by clicking the <strong>Figma MCP</strong> row (or from the top-bar + menu).</dd>
         <dt>FaunaMCP Plugin</dt>
         <dd>A Figma plugin bundled with this app that runs a local relay. The AI writes <code>figma-exec</code> blocks containing Figma Plugin API JavaScript; the plugin executes them inside Figma. Use <strong>Figma Plugin Setup</strong> (plug icon in sidebar) to install it.</dd>
       </dl>
