@@ -424,7 +424,7 @@ async function _ensureTabHostPermission(tab) {
   if (!chrome.permissions || typeof chrome.permissions.contains !== 'function' || typeof chrome.permissions.request !== 'function') {
     return;
   }
-  var has = await chrome.permissions.contains({ origins: [pattern] }).catch(function() { return true; });
+  var has = await chrome.permissions.contains({ origins: [pattern] }).catch(function() { return false; });
   if (has) return;
   var granted = await chrome.permissions.request({ origins: [pattern] }).catch(function() { return false; });
   if (!granted) {

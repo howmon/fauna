@@ -12,13 +12,15 @@
     "activeTab",
     "tabs",
     "scripting",
-    "permissions",
     "storage",
     "contextMenus",
     "alarms",
     "sidePanel",
     "debugger",
     "notifications"
+  ],
+  "optional_host_permissions": [
+    "<all_urls>"
   ],
   "commands": {
     "toggle-sidebar": {
