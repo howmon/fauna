@@ -752,27 +752,30 @@
     <div class="settings-section">
       <div class="settings-section-title">Built-in Servers</div>
       <div class="mcp-builtin-list">
-
         <!-- Figma MCP -->
         <div class="mcp-builtin-row mcp-builtin-row-clickable" id="mcp-builtin-figma" onclick="toggleFigmaMCP();mcpBuiltinPollStatus()" title="Click to enable or disable Figma MCP for this chat">
           <div class="mcp-builtin-icon"><i class="ti ti-brand-figma"></i></div>
           <div class="mcp-builtin-info">
             <div class="mcp-builtin-name">Figma MCP</div>
             <div class="mcp-builtin-desc">Read and write Figma design files via MCP. Click this row to enable or disable for the current chat.</div>
+            <div style="margin-top:8px;display:flex;gap:6px">
+              <button class="settings-row-btn" style="flex:1;min-width:120px" onclick="event.stopPropagation();downloadFigmaPlugin()"><i class="ti ti-download"></i> Download Figma Plugin</button>
+            </div>
           </div>
           <div class="mcp-builtin-status" id="mcp-builtin-figma-status"></div>
         </div>
-
         <!-- Playwright MCP -->
         <div class="mcp-builtin-row mcp-builtin-row-clickable" id="mcp-builtin-playwright" onclick="toggleBrowserMCP();mcpBuiltinPollStatus()" title="Click to enable or disable Browser MCP for this chat">
           <div class="mcp-builtin-icon"><i class="ti ti-brand-chrome"></i></div>
           <div class="mcp-builtin-info">
             <div class="mcp-builtin-name">Browser MCP</div>
             <div class="mcp-builtin-desc">Automate and control the browser via Playwright. Click this row to enable or disable for the current chat.</div>
+            <div style="margin-top:8px;display:flex;gap:6px">
+              <button class="settings-row-btn" style="flex:1;min-width:120px" onclick="event.stopPropagation();downloadBrowserExt()"><i class="ti ti-download"></i> Download Browser Extension</button>
+            </div>
           </div>
           <div class="mcp-builtin-status" id="mcp-builtin-playwright-status"></div>
         </div>
-
       </div>
     </div>
 
@@ -1259,7 +1262,6 @@ Examples:
   </div><!-- /.settings-scroll -->
   </div><!-- /#settings-content-col -->
 
-  <script>
   function openUserSettings() {
     openSettingsPage('account');
   }

@@ -542,27 +542,45 @@ function copyPluginPath() {
 async function downloadFigmaPlugin() {
   var btn = document.getElementById('figma-download-btn');
   var result = document.getElementById('figma-install-result');
-  btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader"></i> Choosing folder…';
-  result.className = 'setup-inline-result'; result.textContent = '';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="ti ti-loader"></i> Choosing folder…';
+  }
+  if (result) {
+    result.className = 'setup-inline-result';
+    result.textContent = '';
+  }
   try {
     var r = await fetch('/api/figma/plugin-download', { method: 'POST' });
     var d = await r.json();
     if (d.ok) {
-      result.className = 'setup-inline-result ok';
-      result.innerHTML = '<i class="ti ti-check"></i> Saved to ' + d.downloadDir;
-      document.getElementById('figma-plugin-path').textContent = d.downloadDir + '/manifest.json';
+      if (result) {
+        result.className = 'setup-inline-result ok';
+        result.innerHTML = '<i class="ti ti-check"></i> Saved to ' + d.downloadDir;
+      }
+      var figmaPath = document.getElementById('figma-plugin-path');
+      if (figmaPath) figmaPath.textContent = d.downloadDir + '/manifest.json';
       showToast('Plugin saved to ' + d.downloadDir);
     } else if (d.cancelled) {
       // user cancelled the dialog
     } else {
-      result.className = 'setup-inline-result err';
-      result.innerHTML = '<i class="ti ti-x"></i> ' + (d.error || 'Unknown error');
+      if (result) {
+        result.className = 'setup-inline-result err';
+        result.innerHTML = '<i class="ti ti-x"></i> ' + (d.error || 'Unknown error');
+      }
+      showToast(d.error || 'Could not save Figma plugin');
     }
   } catch (e) {
-    result.className = 'setup-inline-result err';
-    result.innerHTML = '<i class="ti ti-x"></i> ' + e.message;
+    if (result) {
+      result.className = 'setup-inline-result err';
+      result.innerHTML = '<i class="ti ti-x"></i> ' + e.message;
+    }
+    showToast(e.message || 'Could not save Figma plugin');
   }
-  btn.disabled = false; btn.innerHTML = '<i class="ti ti-file-download"></i> Save to Folder…';
+  if (btn) {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="ti ti-file-download"></i> Save to Folder…';
+  }
 }
 
 // ── Browser Extension install / download ──────────────────────────────────
@@ -640,27 +658,45 @@ function copyBrowserExtPath() {
 async function downloadBrowserExt() {
   var btn = document.getElementById('browser-ext-download-btn');
   var result = document.getElementById('browser-ext-install-result');
-  btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader"></i> Choosing folder…';
-  result.className = 'setup-inline-result'; result.textContent = '';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="ti ti-loader"></i> Choosing folder…';
+  }
+  if (result) {
+    result.className = 'setup-inline-result';
+    result.textContent = '';
+  }
   try {
     var r = await fetch('/api/browser-ext/download', { method: 'POST' });
     var d = await r.json();
     if (d.ok) {
-      result.className = 'setup-inline-result ok';
-      result.innerHTML = '<i class="ti ti-check"></i> Saved to ' + d.downloadDir;
-      document.getElementById('browser-ext-path').textContent = d.downloadDir;
+      if (result) {
+        result.className = 'setup-inline-result ok';
+        result.innerHTML = '<i class="ti ti-check"></i> Saved to ' + d.downloadDir;
+      }
+      var browserPath = document.getElementById('browser-ext-path');
+      if (browserPath) browserPath.textContent = d.downloadDir;
       showToast('Extension saved to ' + d.downloadDir);
     } else if (d.cancelled) {
       // user cancelled
     } else {
-      result.className = 'setup-inline-result err';
-      result.innerHTML = '<i class="ti ti-x"></i> ' + (d.error || 'Unknown error');
+      if (result) {
+        result.className = 'setup-inline-result err';
+        result.innerHTML = '<i class="ti ti-x"></i> ' + (d.error || 'Unknown error');
+      }
+      showToast(d.error || 'Could not save browser extension');
     }
   } catch (e) {
-    result.className = 'setup-inline-result err';
-    result.innerHTML = '<i class="ti ti-x"></i> ' + e.message;
+    if (result) {
+      result.className = 'setup-inline-result err';
+      result.innerHTML = '<i class="ti ti-x"></i> ' + e.message;
+    }
+    showToast(e.message || 'Could not save browser extension');
   }
-  btn.disabled = false; btn.innerHTML = '<i class="ti ti-file-download"></i> Save to Folder…';
+  if (btn) {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="ti ti-file-download"></i> Save to Folder…';
+  }
 }
 
 // ── Collapsible setup instructions toggle ─────────────────────────────────
