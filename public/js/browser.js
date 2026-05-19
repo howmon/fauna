@@ -2052,12 +2052,24 @@ async function _loadExtTabs() {
     '<div class="ext-menu-empty" style="padding:10px"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i></div>';
 
   try {
-    // Fetch tabs from all connected browsers in parallel (route by unique clientId)
+    // Prefer direct extension clients when available to avoid relay-vs-direct mismatches.
+    var hasDirectClients = _extConnectedBrowsers.some(function(b) {
+      var id = String((b && b.id) || '');
+      return id && !id.startsWith('relay-') && id !== 'faunamcp';
+    });
+    var tabSources = hasDirectClients
+      ? _extConnectedBrowsers.filter(function(b) {
+          var id = String((b && b.id) || '');
+          return id && !id.startsWith('relay-') && id !== 'faunamcp';
+        })
+      : _extConnectedBrowsers;
+
+    // Fetch tabs from all selected browsers in parallel (route by unique clientId)
     // Count browser name occurrences to label duplicates (e.g. "Edge (1)", "Edge (2)")
     var _browserCounts = {};
-    _extConnectedBrowsers.forEach(function(b) { _browserCounts[b.browser] = (_browserCounts[b.browser] || 0) + 1; });
+    tabSources.forEach(function(b) { _browserCounts[b.browser] = (_browserCounts[b.browser] || 0) + 1; });
     var _browserSeen = {};
-    var results = await Promise.all(_extConnectedBrowsers.map(function(b) {
+    var results = await Promise.all(tabSources.map(function(b) {
       _browserSeen[b.browser] = (_browserSeen[b.browser] || 0) + 1;
       var displayName = _browserCounts[b.browser] > 1
         ? b.browser + ' (' + _browserSeen[b.browser] + ')'
@@ -2183,15 +2195,28 @@ async function extGrabPage(tabId, browser, clientId) {
   if (menu) menu.style.display = 'none';
 
   try {
+    var requestBrowser = String(browser || '').replace(/\s+\(\d+\)$/, '');
     var body = { action: 'extract' };
     if (tabId) body.tabId = tabId;
     if (clientId) body.clientId = clientId;
-    else if (browser) body.browser = browser;
+    else if (requestBrowser) body.browser = requestBrowser;
     var r = await fetch('/api/ext/command', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
     var d = await r.json();
+    if ((!d || d.ok === false) && clientId && String(clientId).startsWith('relay-')) {
+      // Relay route failed: retry via direct route to match manual "Send page to Fauna" behavior.
+      var retryBody = { action: 'extract' };
+      if (tabId) retryBody.tabId = tabId;
+      if (requestBrowser) retryBody.browser = requestBrowser;
+      var r2 = await fetch('/api/ext/command', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(retryBody)
+      });
+      var d2 = await r2.json();
+      if (d2 && d2.ok) d = d2;
+    }
     if (!d.ok && d.error) throw new Error(d.error);
 
     var title   = d.title || d.url || 'Browser page';
