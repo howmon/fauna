@@ -16,7 +16,6 @@
     "alarms",
     "notifications"
   ],
-  "optional_host_permissions": ["<all_urls>"],
   "host_permissions": ["<all_urls>"],
 
   "commands": {

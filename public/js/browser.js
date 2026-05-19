@@ -2231,7 +2231,64 @@ async function extGrabPage(tabId, browser, clientId) {
     }
     if (typeof showToast === 'function') showToast('Page content added to context');
   } catch (e) {
-    if (typeof showToast === 'function') showToast('Failed: ' + e.message);
+    // Fallback path: when text extraction is blocked for this tab, try snapshot and tab metadata
+    // so tab selection still yields useful context in standalone Fauna.
+    try {
+      var infoBody = { action: 'tab:info' };
+      if (tabId) infoBody.tabId = tabId;
+      if (clientId) infoBody.clientId = clientId;
+      else if (browser) infoBody.browser = browser;
+      var infoR = await fetch('/api/ext/command', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(infoBody)
+      });
+      var infoD = await infoR.json().catch(function() { return {}; });
+
+      var snapBody = { full: false };
+      if (tabId) snapBody.tabId = tabId;
+      if (clientId) snapBody.clientId = clientId;
+      else if (browser) snapBody.browser = browser;
+      var snapR = await fetch('/api/ext/snapshot', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(snapBody)
+      });
+      var snapD = await snapR.json().catch(function() { return {}; });
+
+      var b64 = snapD && (snapD.screenshot || snapD.base64);
+      if (b64 && typeof addAttachment === 'function') {
+        var snapTitle = (infoD && infoD.title) || (snapD && snapD.title) || (snapD && snapD.url) || 'Browser tab';
+        var shortSnap = snapTitle.length > 40 ? snapTitle.slice(0, 37) + '…' : snapTitle;
+        addAttachment({
+          type: 'image',
+          extSource: 'snapshot',
+          name: 'Snapshot — ' + shortSnap,
+          base64: b64,
+          mime: (snapD && snapD.mime) || 'image/png',
+          tabId: tabId,
+          clientId: clientId,
+          browser: browser
+        });
+      }
+
+      if (typeof addAttachment === 'function') {
+        var url = (infoD && infoD.url) || (snapD && snapD.url) || '';
+        var title = (infoD && infoD.title) || (snapD && snapD.title) || url || 'Browser tab';
+        var infoText =
+          (url ? 'Source: ' + url + '\n' : '') +
+          (title ? 'Title: ' + title + '\n\n' : '') +
+          'Full page text extraction was blocked for this tab. A snapshot was attached when available.';
+        addAttachment({ type: 'url', extSource: 'page', name: (browser ? browser + ': ' : '') + title, content: infoText, sourceUri: url, tabId: tabId, clientId: clientId, browser: browser });
+      }
+
+      if (typeof showToast === 'function') showToast('Tab added using fallback (snapshot/metadata).');
+      return;
+    } catch (_) {}
+
+    var msg = (e && e.message) ? e.message : String(e || 'Unknown error');
+    if (/Cannot access this page\. Grant site access to the extension/i.test(msg)) {
+      msg = 'Tab picker could not read this tab. In browser extension settings set Site access to On all sites (not On click), then retry.';
+    }
+    if (typeof showToast === 'function') showToast('Failed: ' + msg);
   }
 }
 
