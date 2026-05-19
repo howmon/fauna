@@ -203,17 +203,6 @@ function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
   bar.appendChild(otherBtn);
 
   msgEl.appendChild(bar);
-
-  // Keep recommendation CTA bar at the end even when async widgets render later.
-  function ensureLast() {
-    if (bar && bar.parentElement === msgEl && msgEl.lastElementChild !== bar) {
-      msgEl.appendChild(bar);
-    }
-  }
-  requestAnimationFrame(ensureLast);
-  setTimeout(ensureLast, 0);
-  setTimeout(ensureLast, 250);
-  setTimeout(ensureLast, 800);
 }
 
 // Send a message directly into the conversation (supports vision/array content).
