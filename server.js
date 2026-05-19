@@ -3127,7 +3127,22 @@ async function probeBrowserMcp() {
 
 async function autoDetectBrowserMcp() {
   const servers = readCustomMcpServers();
-  const existing = servers.find(s => s.url === 'http://localhost:3341/mcp' || s.id === 'fauna-browser-mcp-auto');
+
+  // Legacy cleanup: this server used to be auto-created on startup.
+  const legacyIdx = servers.findIndex(s => s.id === 'fauna-browser-mcp-auto' || s.autoDetected === true);
+  if (legacyIdx !== -1) {
+    const legacy = servers[legacyIdx];
+    if (customMcpClients.has(legacy.id)) {
+      customMcpClients.get(legacy.id).reset();
+      customMcpClients.delete(legacy.id);
+    }
+    if (customMcpProcesses.has(legacy.id)) {
+      try { customMcpProcesses.get(legacy.id).process.kill('SIGTERM'); } catch (_) {}
+      customMcpProcesses.delete(legacy.id);
+    }
+    servers.splice(legacyIdx, 1);
+    writeCustomMcpServers(servers);
+  }
   
   const available = await probeBrowserMcp();
 
@@ -3183,32 +3198,7 @@ async function autoDetectBrowserMcp() {
     }
   } catch (_) {}
 
-  if (existing) return; // Already registered
-
-  // Auto-add it
-  const newServer = {
-    id: 'fauna-browser-mcp-auto',
-    name: 'Browser MCP (FaunaMCP)',
-    transport: 'http',
-    url: 'http://localhost:3341/mcp',
-    autoDetected: true,
-    running: false
-  };
-  servers.push(newServer);
-  writeCustomMcpServers(servers);
-  console.log('[custom-mcp] Auto-detected browser MCP at localhost:3341');
-  
-  // Auto-start it
-  try {
-    const client = new HttpMcpClient(newServer.url);
-    await client.getTools();
-    customMcpClients.set(newServer.id, client);
-    newServer.running = true;
-    writeCustomMcpServers(servers);
-    console.log('[custom-mcp] Browser MCP auto-started');
-  } catch (e) {
-    console.error('[custom-mcp] Failed to auto-start browser MCP:', e.message);
-  }
+  // Intentionally do not auto-register Browser MCP as a custom server.
 }
 
 function startCustomMcpAutoDetection() {
