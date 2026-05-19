@@ -1690,6 +1690,10 @@ async function refreshPermissions() {
       allReqOk ? 'All required permissions granted' : 'Some permissions need your attention'; // plain text hint
     document.getElementById('ob-checking-hint').style.color =
       allReqOk ? 'var(--success)' : 'var(--fau-text-muted)';
+    // Automatically mark onboarding as done if all required permissions are granted
+    if (allReqOk) {
+      localStorage.setItem('fauna-chat-onboarding-done', '1');
+    }
   } catch (e) {
     document.getElementById('ob-checking-hint').textContent = 'Could not check permissions';
   }
