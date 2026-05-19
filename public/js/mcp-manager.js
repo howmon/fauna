@@ -65,7 +65,11 @@ var mcpMgr = (function () {
     const opts = { method, headers: { 'Content-Type': 'application/json' } };
     if (body !== undefined) opts.body = JSON.stringify(body);
     const r = await fetch(path, opts);
-    return r.json();
+    const data = await r.json().catch(function () { return {}; });
+    if (!r.ok) {
+      throw new Error(data.error || ('Request failed: ' + r.status));
+    }
+    return data;
   }
 
   // ── Load & render server list ──────────────────────────────────────────────
@@ -625,13 +629,11 @@ var mcpMgr = (function () {
     }
 
     try {
-      var result;
       if (_editingId) {
-        result = await _api('PUT', '/api/custom-mcp-servers/' + _editingId, payload);
+        await _api('PUT', '/api/custom-mcp-servers/' + _editingId, payload);
       } else {
-        result = await _api('POST', '/api/custom-mcp-servers', payload);
+        await _api('POST', '/api/custom-mcp-servers', payload);
       }
-      if (!result.ok) { alert('Error: ' + (result.error || 'Unknown error')); return; }
       hideForm();
     } catch (e) {
       alert('Failed to save: ' + e.message);
