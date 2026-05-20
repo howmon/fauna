@@ -607,11 +607,20 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
 function sendButtonAction() {
   var conv = getConv(state.currentId);
   var sendBtn = document.getElementById('send-btn');
-  if ((conv && conv._streaming) || (sendBtn && sendBtn.classList.contains('is-stopping'))) stopGeneration();
+  if (_hasActiveConversationWork() || (sendBtn && sendBtn.classList.contains('is-stopping'))) stopGeneration();
   else sendMessage();
 }
 
 var _busyClearTimer = null;
+
+function _hasActiveConversationWork() {
+  var activeConv = getConv(state.currentId);
+  var hasStream = !!(activeConv && activeConv._streaming);
+  var hasShellWork = typeof hasActiveShellWorkForCurrentConversation === 'function' && hasActiveShellWorkForCurrentConversation();
+  var hasPendingShellVerification = typeof hasPendingShellVerificationForCurrentConversation === 'function' && hasPendingShellVerificationForCurrentConversation();
+  var hasDelegation = typeof window._delegStop === 'function';
+  return hasStream || hasShellWork || hasPendingShellVerification || hasDelegation;
+}
 
 function setBusy(busy) {
   if (_busyClearTimer) {
@@ -621,9 +630,7 @@ function setBusy(busy) {
   if (!busy) {
     _busyClearTimer = setTimeout(function() {
       _busyClearTimer = null;
-      var activeConv = getConv(state.currentId);
-      if (activeConv && activeConv._streaming) return;
-      if (typeof hasActiveShellWorkForCurrentConversation === 'function' && hasActiveShellWorkForCurrentConversation()) return;
+      if (_hasActiveConversationWork()) return;
       _applyBusyState(false);
     }, 650);
     return;
@@ -632,7 +639,7 @@ function setBusy(busy) {
 }
 
 function _applyBusyState(busy) {
-  if (!busy && typeof hasActiveShellWorkForCurrentConversation === 'function' && hasActiveShellWorkForCurrentConversation()) busy = true;
+  if (!busy && _hasActiveConversationWork()) busy = true;
   var sendBtn = document.getElementById('send-btn');
   if (sendBtn) {
     sendBtn.disabled = false;
@@ -648,10 +655,7 @@ function _applyBusyState(busy) {
 }
 
 function reconcileBusyState() {
-  var activeConv = getConv(state.currentId);
-  var hasStream = !!(activeConv && activeConv._streaming);
-  var hasShellWork = typeof hasActiveShellWorkForCurrentConversation === 'function' && hasActiveShellWorkForCurrentConversation();
-  _applyBusyState(hasStream || hasShellWork);
+  _applyBusyState(_hasActiveConversationWork());
 }
 
 function showMessages() {
