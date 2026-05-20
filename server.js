@@ -5700,6 +5700,217 @@ app.put('/api/store/agents/:slug', express.json(), (req, res) => {
   storeProxy(req, res, 'PUT', '/agents/' + slug, req.body);
 });
 
+// ── Cross-Device Sync — Private Drafts ────────────────────────────────────
+//
+// Backend contract (implemented on agentstore.pointlabel.com or compatible):
+//   GET    /api/drafts                  → { drafts: [{ slug, updatedAt, size }] }
+//   GET    /api/drafts/:slug            → application/zip, header X-Updated-At
+//   PUT    /api/drafts/:slug            → body application/zip,
+//                                          header X-Updated-At (ms epoch);
+//                                          → { ok, updatedAt }
+//   DELETE /api/drafts/:slug            → { ok }
+// All require Authorization: Bearer <store-token>.
+// Conflict policy: last-write-wins by X-Updated-At.
+
+let _archiverMod = null;
+async function _archiver() {
+  if (!_archiverMod) _archiverMod = (await import('archiver')).default;
+  return _archiverMod;
+}
+
+function _syncLocalUpdatedAt(name) {
+  const dir = path.join(AGENTS_DIR, name);
+  if (!fs.existsSync(dir)) return 0;
+  try {
+    const metaPath = path.join(dir, '.meta.json');
+    if (fs.existsSync(metaPath)) {
+      const m = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+      if (m.updatedAt) return Number(m.updatedAt) || 0;
+    }
+  } catch (_) {}
+  try {
+    let max = 0;
+    const walk = (p) => {
+      for (const item of fs.readdirSync(p)) {
+        const full = path.join(p, item);
+        const st = fs.statSync(full);
+        if (st.isDirectory()) walk(full);
+        else if (st.mtimeMs > max) max = st.mtimeMs;
+      }
+    };
+    walk(dir);
+    return Math.floor(max);
+  } catch (_) { return 0; }
+}
+
+function _syncStampUpdatedAt(name, ts) {
+  const dir = path.join(AGENTS_DIR, name);
+  if (!fs.existsSync(dir)) return;
+  const metaPath = path.join(dir, '.meta.json');
+  let meta = {};
+  try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')); } catch (_) {}
+  meta.updatedAt = ts;
+  try { fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2)); } catch (_) {}
+}
+
+async function _syncZipAgentDir(name) {
+  const dir = path.join(AGENTS_DIR, name);
+  if (!fs.existsSync(path.join(dir, 'agent.json'))) {
+    throw new Error('Agent not found: ' + name);
+  }
+  const archiver = await _archiver();
+  return await new Promise((resolve, reject) => {
+    const a = archiver('zip', { zlib: { level: 6 } });
+    const chunks = [];
+    a.on('data', c => chunks.push(c));
+    a.on('end', () => resolve(Buffer.concat(chunks)));
+    a.on('error', reject);
+    a.directory(dir, false);
+    a.finalize();
+  });
+}
+
+// Push one agent to the user's private drafts on the store backend.
+app.post('/api/store/sync/push/:name', async (req, res) => {
+  const auth = req.headers['authorization'];
+  if (!auth) return res.status(401).json({ error: 'Sign in to the store first' });
+  const name = req.params.name.replace(/[^a-zA-Z0-9_-]/g, '');
+  try {
+    const updatedAt = Date.now();
+    _syncStampUpdatedAt(name, updatedAt);
+    const zip = await _syncZipAgentDir(name);
+    const upstream = await fetch(STORE_BACKEND_URL + '/drafts/' + encodeURIComponent(name), {
+      method: 'PUT',
+      headers: {
+        Authorization: auth,
+        'Content-Type': 'application/zip',
+        'X-Updated-At': String(updatedAt),
+      },
+      body: zip,
+    });
+    const status = upstream.status;
+    let body = null;
+    try { body = await upstream.json(); } catch (_) { body = { ok: status < 400 }; }
+    if (status >= 400) return res.status(status).json(body);
+    res.json({ ok: true, updatedAt, size: zip.length });
+  } catch (e) {
+    res.status(500).json({ error: 'Sync push failed: ' + e.message });
+  }
+});
+
+// Delete a draft from the remote (e.g. after local delete)
+app.delete('/api/store/sync/:name', async (req, res) => {
+  const auth = req.headers['authorization'];
+  if (!auth) return res.status(401).json({ error: 'Sign in to the store first' });
+  const name = req.params.name.replace(/[^a-zA-Z0-9_-]/g, '');
+  try {
+    const upstream = await fetch(STORE_BACKEND_URL + '/drafts/' + encodeURIComponent(name), {
+      method: 'DELETE',
+      headers: { Authorization: auth },
+    });
+    const status = upstream.status;
+    let body = null;
+    try { body = await upstream.json(); } catch (_) { body = { ok: status < 400 }; }
+    res.status(status).json(body);
+  } catch (e) {
+    res.status(502).json({ error: 'Sync delete failed: ' + e.message });
+  }
+});
+
+// List remote drafts (status/inspection).
+app.get('/api/store/sync', async (req, res) => {
+  const auth = req.headers['authorization'];
+  if (!auth) return res.status(401).json({ error: 'Sign in to the store first' });
+  try {
+    const upstream = await fetch(STORE_BACKEND_URL + '/drafts', {
+      headers: { Authorization: auth, Accept: 'application/json' },
+    });
+    const status = upstream.status;
+    const data = await upstream.json().catch(() => ({}));
+    res.status(status).json(data);
+  } catch (e) {
+    res.status(502).json({ error: 'Sync list failed: ' + e.message });
+  }
+});
+
+// Pull all remote drafts newer than the local copy (LWW by updatedAt).
+app.post('/api/store/sync/pull', async (req, res) => {
+  const auth = req.headers['authorization'];
+  if (!auth) return res.status(401).json({ error: 'Sign in to the store first' });
+  try {
+    const idxRes = await fetch(STORE_BACKEND_URL + '/drafts', {
+      headers: { Authorization: auth, Accept: 'application/json' },
+    });
+    if (!idxRes.ok) {
+      const text = await idxRes.text();
+      return res.status(idxRes.status).json({ error: 'List failed: ' + text });
+    }
+    const idx = await idxRes.json();
+    const drafts = Array.isArray(idx.drafts) ? idx.drafts : [];
+    const report = { pulled: [], skipped: [], failed: [] };
+
+    for (const d of drafts) {
+      const slug = String(d.slug || '').replace(/[^a-zA-Z0-9_-]/g, '');
+      if (!slug) { report.failed.push({ slug: d.slug, reason: 'invalid slug' }); continue; }
+      if (BUILTIN_AGENT_NAMES && BUILTIN_AGENT_NAMES.includes(slug.toLowerCase())) {
+        report.skipped.push({ slug, reason: 'builtin name' });
+        continue;
+      }
+      const remoteUpdated = Number(d.updatedAt) || 0;
+      const localUpdated = _syncLocalUpdatedAt(slug);
+      if (remoteUpdated > 0 && localUpdated >= remoteUpdated) {
+        report.skipped.push({ slug, reason: 'local newer or equal', localUpdated, remoteUpdated });
+        continue;
+      }
+      const tmp = path.join(os.tmpdir(), 'agent-sync-pull-' + Date.now() + '-' + slug);
+      try {
+        const zipRes = await fetch(STORE_BACKEND_URL + '/drafts/' + encodeURIComponent(slug), {
+          headers: { Authorization: auth },
+        });
+        if (!zipRes.ok) { report.failed.push({ slug, reason: 'fetch ' + zipRes.status }); continue; }
+        const buf = Buffer.from(await zipRes.arrayBuffer());
+        fs.mkdirSync(tmp, { recursive: true });
+        const zipPath = path.join(tmp, 'agent.zip');
+        fs.writeFileSync(zipPath, buf);
+        execSync(`unzip -o -q "${zipPath}" -d "${tmp}/extracted"`, { timeout: 30000 });
+        const extracted = path.join(tmp, 'extracted');
+        let agentRoot = extracted;
+        if (!fs.existsSync(path.join(extracted, 'agent.json'))) {
+          const dirs = fs.readdirSync(extracted).filter(x => fs.statSync(path.join(extracted, x)).isDirectory());
+          for (const x of dirs) {
+            if (fs.existsSync(path.join(extracted, x, 'agent.json'))) { agentRoot = path.join(extracted, x); break; }
+          }
+        }
+        if (!fs.existsSync(path.join(agentRoot, 'agent.json'))) {
+          report.failed.push({ slug, reason: 'no agent.json in zip' });
+          continue;
+        }
+        const destDir = path.join(AGENTS_DIR, slug);
+        if (fs.existsSync(destDir)) fs.rmSync(destDir, { recursive: true, force: true });
+        fs.mkdirSync(destDir, { recursive: true });
+        const copyRecursive = (src, dst) => {
+          for (const item of fs.readdirSync(src)) {
+            const s = path.join(src, item);
+            const dd = path.join(dst, item);
+            if (fs.statSync(s).isDirectory()) { fs.mkdirSync(dd, { recursive: true }); copyRecursive(s, dd); }
+            else fs.copyFileSync(s, dd);
+          }
+        };
+        copyRecursive(agentRoot, destDir);
+        _syncStampUpdatedAt(slug, remoteUpdated || Date.now());
+        report.pulled.push({ slug, updatedAt: remoteUpdated });
+      } catch (e) {
+        report.failed.push({ slug, reason: e.message });
+      } finally {
+        try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+      }
+    }
+    res.json({ ok: true, ...report });
+  } catch (e) {
+    res.status(502).json({ error: 'Sync pull failed: ' + e.message });
+  }
+});
+
 // Categories
 app.get('/api/store/categories', (req, res) => {
   storeProxy(req, res, 'GET', '/categories');
