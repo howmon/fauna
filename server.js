@@ -96,6 +96,10 @@ const PORT   = 3737;
 const IS_WIN = process.platform === 'win32';
 const PATH_SEP = IS_WIN ? ';' : ':';
 const FAUNA_CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
+const WORKIQ_CONFIG_FILES = [
+  path.join(os.homedir(), '.workiq.json'),
+  path.join(os.homedir(), '.work-iq-cli', '.workiq.json'),
+];
 
 // Module-level AI caller — set during startServer(), used by permission guard etc.
 let internalAICaller = async () => '';
@@ -662,14 +666,312 @@ app.post('/api/enterprise-auth/sign-out', (_req, res) => {
 });
 
 // ── WorkIQ (stub — workiq-integration.js not wired) ──────────────────────
+function _readWorkiqConfig() {
+  for (const configPath of WORKIQ_CONFIG_FILES) {
+    if (!fs.existsSync(configPath)) continue;
+    try {
+      const data = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      if (data && typeof data === 'object' && !Array.isArray(data)) {
+        return { path: configPath, data };
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
+function _resolveWorkiqBinary() {
+  const roots = [
+    path.join(process.resourcesPath || '', 'app.asar.unpacked', 'node_modules'),
+    path.join(process.resourcesPath || '', 'node_modules'),
+    path.join(__dirname, 'node_modules'),
+  ].filter(Boolean);
+
+  const packageDir = roots
+    .map(root => path.join(root, '@microsoft', 'workiq'))
+    .find(dir => fs.existsSync(path.join(dir, 'package.json')));
+  if (!packageDir) return null;
+
+  let platformDir;
+  if (process.platform === 'win32') {
+    platformDir = 'win-' + process.arch;
+    const nativeDir = path.join(packageDir, 'bin', platformDir);
+    if (!fs.existsSync(nativeDir) && process.arch !== 'x64') platformDir = 'win-x64';
+  } else if (process.platform === 'darwin') {
+    platformDir = 'osx-' + process.arch;
+  } else {
+    platformDir = 'linux-' + process.arch;
+  }
+
+  const binaryName = process.platform === 'win32' ? 'workiq.exe' : 'workiq';
+  let binaryPath = path.join(packageDir, 'bin', platformDir, binaryName);
+  if (binaryPath.includes('app.asar' + path.sep)) {
+    const unpackedPath = binaryPath.replace('app.asar' + path.sep, 'app.asar.unpacked' + path.sep);
+    if (fs.existsSync(unpackedPath)) binaryPath = unpackedPath;
+  }
+  if (!fs.existsSync(binaryPath)) return null;
+
+  if (process.platform !== 'win32') {
+    try {
+      fs.accessSync(binaryPath, fs.constants.X_OK);
+    } catch (_) {
+      try { fs.chmodSync(binaryPath, 0o755); } catch (_) {}
+    }
+  }
+
+  let version = null;
+  try {
+    version = JSON.parse(fs.readFileSync(path.join(packageDir, 'package.json'), 'utf8')).version || null;
+  } catch (_) {}
+
+  return { binaryPath, version };
+}
+
+function _workiqSignedIn(config) {
+  if (!config || typeof config !== 'object') return false;
+  return !!(
+    config.DefaultAccount ||
+    config.defaultAccount ||
+    config.Account ||
+    config.account ||
+    config.AccountId ||
+    config.accountId ||
+    config.UserPrincipalName ||
+    config.userPrincipalName
+  );
+}
+
+function _parseWorkiqConfigOutput(text) {
+  const parsed = {};
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const idx = trimmed.indexOf('=');
+    if (idx === -1) continue;
+    const key = trimmed.slice(0, idx).trim();
+    const value = trimmed.slice(idx + 1).trim();
+    if (key) parsed[key] = value;
+  }
+  return parsed;
+}
+
+async function _probeWorkiqConfig() {
+  try {
+    const result = await _runWorkiq(['config'], 10000);
+    return { ok: true, values: _parseWorkiqConfigOutput(result.stdout || result.stderr || '') };
+  } catch (e) {
+    return { ok: false, error: e.message || 'Failed to read WorkIQ config' };
+  }
+}
+
+async function _readWorkiqStatus() {
+  const resolved = _resolveWorkiqBinary();
+  const configInfo = _readWorkiqConfig();
+  const config = configInfo?.data || null;
+  const probe = resolved ? await _probeWorkiqConfig() : { ok: false, error: 'not-installed' };
+  const probeValues = probe.ok ? probe.values : null;
+  const eulaAccepted = !!(
+    (config && (
+      config['I-accept-EULA'] ||
+      config['i-accept-eula'] ||
+      config.acceptedEula ||
+      config.acceptEula
+    )) ||
+    (probeValues && (
+      probeValues['I-accept-EULA'] === 'true' ||
+      probeValues['i-accept-eula'] === 'true'
+    ))
+  );
+  const signedIn = _workiqSignedIn(config) || !!(
+    probeValues && (
+      probeValues.DefaultAccount ||
+      probeValues.defaultAccount ||
+      probeValues.Account ||
+      probeValues.account
+    )
+  );
+  let state = 'not-installed';
+  if (resolved) state = 'installed';
+  if (resolved && !eulaAccepted) state = 'needs-eula';
+  else if (resolved && eulaAccepted && !signedIn) state = 'needs-sign-in';
+  else if (resolved && signedIn) state = 'cached-account';
+  return {
+    available: !!resolved,
+    installed: !!resolved,
+    version: resolved?.version || null,
+    binaryPath: resolved?.binaryPath || null,
+    configPath: configInfo?.path || null,
+    probeOk: !!probe.ok,
+    probeError: probe.ok ? null : probe.error,
+    eulaAccepted,
+    signedIn,
+    connected: signedIn,
+    state,
+  };
+}
+
+function _getWorkiqTools() {
+  if (!_resolveWorkiqBinary()) return [];
+  return [{
+    type: 'function',
+    function: {
+      name: 'workiq_ask',
+      description: 'Query Microsoft 365 through WorkIQ for meetings, email, documents, Teams messages, and people. Use this for questions about the user\'s Microsoft work data.',
+      parameters: {
+        type: 'object',
+        properties: {
+          question: { type: 'string', description: 'The WorkIQ question to ask, in natural language.' },
+          tenantId: { type: 'string', description: 'Optional Microsoft Entra tenant ID to target for authentication.' },
+        },
+        required: ['question'],
+        additionalProperties: false,
+      },
+    },
+  }];
+}
+
+async function _ensureWorkiqEulaAccepted() {
+  const status = await _readWorkiqStatus();
+  if (!status.available) throw new Error('WorkIQ is not installed in this Fauna build');
+  if (status.eulaAccepted) return;
+  await _runWorkiq(['accept-eula']);
+}
+
+function _runWorkiq(args, timeoutMs = 60000) {
+  const resolved = _resolveWorkiqBinary();
+  if (!resolved) throw new Error('WorkIQ is not installed in this Fauna build');
+  return new Promise((resolve, reject) => {
+    _execFile(
+      resolved.binaryPath,
+      args,
+      { timeout: timeoutMs, maxBuffer: 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) {
+          const msg = String(stderr || stdout || err.message || 'WorkIQ command failed').trim();
+          reject(new Error(msg));
+          return;
+        }
+        resolve({ stdout: String(stdout || ''), stderr: String(stderr || '') });
+      },
+    );
+  });
+}
+
+async function _askWorkiq(question, tenantId) {
+  await _ensureWorkiqEulaAccepted();
+  const resolved = _resolveWorkiqBinary();
+  if (!resolved) throw new Error('WorkIQ is not installed in this Fauna build');
+  const args = ['ask'];
+  if (tenantId) args.push('-t', String(tenantId));
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(resolved.binaryPath, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      try { child.kill('SIGTERM'); } catch (_) {}
+      if (!settled) {
+        settled = true;
+        reject(new Error('WorkIQ ask timed out. Complete any sign-in prompt in your browser, then try again.'));
+      }
+    }, 120000);
+
+    child.stdout.on('data', chunk => { stdout += chunk.toString(); });
+    child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+    child.on('error', err => {
+      clearTimeout(timer);
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
+    child.on('close', code => {
+      clearTimeout(timer);
+      if (settled) return;
+      settled = true;
+      const out = String(stdout || '').trim();
+      const err = String(stderr || '').trim();
+      if (code === 0 && out) return resolve(out);
+      if (code === 0 && !out && err) return resolve(err);
+      reject(new Error(err || out || ('WorkIQ ask failed with exit code ' + code)));
+    });
+
+    child.stdin.write(String(question || '').trim() + '\n');
+    child.stdin.end();
+  });
+}
+
+function _classifyWorkiqProbeError(message) {
+  const text = String(message || '').toLowerCase();
+  if (
+    text.includes('timed out') ||
+    text.includes('sign in') ||
+    text.includes('signin') ||
+    text.includes('login') ||
+    text.includes('authenticate') ||
+    text.includes('browser') ||
+    text.includes('consent') ||
+    text.includes('device code')
+  ) {
+    return 'auth-required';
+  }
+  return 'error';
+}
+
 app.get('/api/workiq/status', (_req, res) => {
-  res.json({ connected: false, available: false });
+  _readWorkiqStatus().then(status => res.json(status)).catch(e => {
+    res.status(500).json({ ok: false, error: e.message || 'Failed to read WorkIQ status' });
+  });
 });
-app.post('/api/workiq/connect', (_req, res) => {
-  res.status(501).json({ ok: false, error: 'WorkIQ not configured' });
+app.post('/api/workiq/connect', async (_req, res) => {
+  try {
+    await _runWorkiq(['accept-eula']);
+    res.json({
+      ok: true,
+      ...(await _readWorkiqStatus()),
+      message: 'WorkIQ is ready. The first WorkIQ query may prompt you to sign in to Microsoft 365.',
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || 'Failed to prepare WorkIQ' });
+  }
 });
-app.post('/api/workiq/sign-out', (_req, res) => {
-  res.json({ ok: true });
+app.post('/api/workiq/sign-out', async (_req, res) => {
+  try {
+    await _runWorkiq(['logout']);
+    res.json({ ok: true, ...(await _readWorkiqStatus()), message: 'Signed out of WorkIQ.' });
+  } catch (e) {
+    const msg = e.message || 'Failed to sign out of WorkIQ';
+    if (/not signed in|no account|no cached/i.test(msg)) {
+      res.json({ ok: true, ...(await _readWorkiqStatus()), message: 'WorkIQ was already signed out.' });
+      return;
+    }
+    res.status(500).json({ ok: false, error: msg });
+  }
+});
+app.post('/api/workiq/test', express.json({ limit: '256kb' }), async (req, res) => {
+  const question = (req.body?.question || 'What meetings do I have today?').trim();
+  if (!question) return res.status(400).json({ ok: false, error: 'question required' });
+  try {
+    const answer = await _askWorkiq(question, req.body?.tenantId);
+    res.json({
+      ok: true,
+      liveState: 'connected',
+      question,
+      answer,
+      preview: String(answer || '').slice(0, 400),
+      ...(await _readWorkiqStatus()),
+    });
+  } catch (e) {
+    const error = e.message || 'WorkIQ test failed';
+    const liveState = _classifyWorkiqProbeError(error);
+    const code = liveState === 'auth-required' ? 401 : 500;
+    res.status(code).json({
+      ok: false,
+      liveState,
+      error,
+      question,
+      ...(await _readWorkiqStatus()),
+    });
+  }
 });
 
 // ── Fauna self-update ─────────────────────────────────────────────────────
@@ -1529,7 +1831,7 @@ app.post('/api/chat', async (req, res) => {
     allMessages.push(...trimmed);
     console.log(`[chat] context: ${trimmed.length}/${messages.length} msgs, ~${charCount} chars (sys: ${systemPrompt.length}ch)`);
 
-    // Fetch Figma MCP tools and inject layout knowledge if requested
+    // Fetch built-in MCP-like tools and inject layout knowledge if requested
     let mcpTools;
     if (useFigmaMCP) {
       try { mcpTools = await figmaMCP.getTools(); } catch (_) {
@@ -1537,6 +1839,7 @@ app.post('/api/chat', async (req, res) => {
         mcpTools = [FigmaMCPClient.FIGMA_EXECUTE_TOOL];
       }
     }
+    mcpTools = [...(mcpTools || []), ..._getWorkiqTools()];
 
     // Load agent tools if an agent is active
     let agentToolHandlers = null; // Map<name, executeFn>
@@ -1789,6 +2092,9 @@ app.post('/api/chat', async (req, res) => {
             // Route to self-tools first (memory, models, settings, etc.)
             if (isSelfTool(toolName)) {
               result = executeSelfTool(toolName, args, selfToolContext);
+            }
+            else if (toolName === 'workiq_ask') {
+              result = await _askWorkiq(args.question, args.tenantId);
             }
             // Route to agent tool handler if available, otherwise Figma MCP
             else if (agentToolHandlers?.has(toolName)) {

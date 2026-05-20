@@ -8,6 +8,7 @@
 exports.default = async function(context) {
   const fs   = require('fs');
   const path = require('path');
+  const { execFileSync, spawnSync } = require('child_process');
 
   // 1. Spotlight guard
   const noIndex = path.join(context.appOutDir, '.metadata_never_index');
@@ -20,6 +21,14 @@ exports.default = async function(context) {
     if (!appName) return;
     resDir = path.join(context.appOutDir, appName, 'Contents', 'Resources');
   } catch (_) { return; }
+
+  // Re-sign bundled WorkIQ binaries for macOS broker-compatible CLI-caller mode.
+  try {
+    resignWorkiqBinaries({ fs, path, execFileSync, spawnSync, resDir, baseDir: __dirname, logPrefix: '[afterPack]' });
+  } catch (e) {
+    console.error('[afterPack] WorkIQ re-sign failed:', e.message);
+    throw e;
+  }
 
   const unpackedMods = path.join(resDir, 'app.asar.unpacked', 'node_modules');
   const softeriaPkg  = path.join(unpackedMods, '@softeria', 'ms-365-mcp-server', 'package.json');
@@ -170,3 +179,63 @@ function copyDirSync(src, dest, fs, path) {
     }
   }
 }
+
+function resignWorkiqBinaries(opts) {
+  const { fs, path, execFileSync, spawnSync, resDir, baseDir, logPrefix } = opts;
+  if (process.platform !== 'darwin') return;
+
+  const entitlementsPath = path.join(baseDir, 'assets', 'entitlements.workiq.plist');
+  if (!fs.existsSync(entitlementsPath)) {
+    throw new Error('entitlements file not found at ' + entitlementsPath);
+  }
+
+  for (const archDir of ['osx-arm64', 'osx-x64']) {
+    const workiqBin = path.join(
+      resDir,
+      'app.asar.unpacked',
+      'node_modules',
+      '@microsoft',
+      'workiq',
+      'bin',
+      archDir,
+      'workiq',
+    );
+    if (!fs.existsSync(workiqBin)) continue;
+
+    execFileSync(
+      'codesign',
+      [
+        '--sign',
+        '-',
+        '--force',
+        '--options',
+        'runtime',
+        '--identifier',
+        'workiq',
+        '--entitlements',
+        entitlementsPath,
+        workiqBin,
+      ],
+      { stdio: 'inherit' },
+    );
+
+    const entitlements = execFileSync('codesign', ['-d', '--entitlements', '-', workiqBin], {
+      encoding: 'utf8',
+    });
+    if (entitlements.includes('keychain-access-groups')) {
+      throw new Error('workiq (' + archDir + ') still carries keychain-access-groups after re-sign');
+    }
+    if (entitlements.includes('application-groups')) {
+      throw new Error('workiq (' + archDir + ') still carries application-groups after re-sign');
+    }
+
+    const dv = spawnSync('codesign', ['-dv', workiqBin], { encoding: 'utf8' });
+    const identifierLine = (dv.stderr || '').match(/Identifier=(\S+)/);
+    if (!identifierLine || identifierLine[1] !== 'workiq') {
+      throw new Error('workiq (' + archDir + ') identifier is not "workiq" after re-sign');
+    }
+    console.log(logPrefix + ' re-signed workiq (' + archDir + ') with runtime-only entitlements');
+  }
+}
+
+exports.resignWorkiqBinaries = resignWorkiqBinaries;

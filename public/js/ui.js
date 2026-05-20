@@ -364,9 +364,163 @@ async function loadSettingsState() {
 async function loadEnterpriseAuthStatus() {}
 async function enterpriseSignIn() {}
 async function enterpriseSignOut() {}
-async function loadWorkiqStatus() {}
-async function workiqConnect() {}
-async function workiqSignOut() {}
+async function loadWorkiqStatus() {
+  var dot = document.getElementById('workiq-settings-dot');
+  var label = document.getElementById('workiq-settings-label');
+  var status = document.getElementById('workiq-status');
+  var connectBtn = document.getElementById('workiq-connect-btn');
+  var testBtn = document.getElementById('workiq-test-btn');
+  var signOutBtn = document.getElementById('workiq-signout-btn');
+  if (!dot || !label || !status || !connectBtn || !testBtn || !signOutBtn) return;
+
+  label.textContent = 'Checking…';
+  status.textContent = '';
+
+  try {
+    var r = await fetch('/api/workiq/status');
+    var d = await r.json();
+    if (!d.available) {
+      dot.style.background = '#f87171';
+      label.textContent = 'WorkIQ not installed in this build';
+      connectBtn.innerHTML = '<i class="ti ti-package-import"></i> Install dependency';
+      connectBtn.disabled = true;
+      testBtn.disabled = true;
+      signOutBtn.style.display = 'none';
+      status.className = 'settings-status err';
+      status.textContent = 'Add @microsoft/workiq to Fauna and rebuild to enable Microsoft 365 integration.';
+      return;
+    }
+
+    connectBtn.disabled = false;
+    testBtn.disabled = false;
+    if (d.state === 'cached-account') {
+      dot.style.background = '#4ade80';
+      label.textContent = 'WorkIQ has a cached account' + (d.version ? ' v' + d.version : '');
+      connectBtn.innerHTML = '<i class="ti ti-check"></i> Ready';
+      signOutBtn.style.display = '';
+      status.className = 'settings-status ok';
+      status.textContent = 'WorkIQ has a cached Microsoft 365 account. Fauna cannot confirm token freshness until a WorkIQ query runs.';
+      return;
+    }
+
+    if (d.state === 'needs-sign-in') {
+      dot.style.background = '#fbbf24';
+      label.textContent = 'WorkIQ ready — sign-in required on first query';
+      connectBtn.innerHTML = '<i class="ti ti-refresh"></i> Re-run setup';
+      signOutBtn.style.display = 'none';
+      status.className = 'settings-status';
+      status.textContent = 'WorkIQ is installed and the EULA is accepted, but no cached account was detected. The first WorkIQ query may open Microsoft sign-in in your browser.';
+      return;
+    }
+
+    if (d.state === 'installed' || d.state === 'needs-eula') {
+    dot.style.background = '#60a5fa';
+    label.textContent = 'WorkIQ installed — EULA not yet accepted';
+    connectBtn.innerHTML = '<i class="ti ti-plug-connected"></i> Accept EULA';
+    signOutBtn.style.display = 'none';
+    status.className = 'settings-status';
+    status.textContent = 'Accept the WorkIQ EULA once before using Microsoft 365 queries.';
+      return;
+    }
+
+    dot.style.background = '#94a3b8';
+    label.textContent = 'WorkIQ installed — state unclear';
+    signOutBtn.style.display = 'none';
+    status.className = 'settings-status';
+    status.textContent = d.probeError || 'WorkIQ is installed, but Fauna could not fully determine its sign-in state.';
+  } catch (e) {
+    dot.style.background = '#f87171';
+    label.textContent = 'Unable to reach WorkIQ status';
+    connectBtn.disabled = false;
+    signOutBtn.style.display = 'none';
+    status.className = 'settings-status err';
+    status.textContent = e.message || 'Failed to load WorkIQ status.';
+  }
+}
+async function workiqConnect() {
+  var status = document.getElementById('workiq-status');
+  var btn = document.getElementById('workiq-connect-btn');
+  if (!status || !btn) return;
+  btn.disabled = true;
+  status.className = 'settings-status';
+  status.textContent = 'Preparing WorkIQ…';
+  try {
+    var r = await fetch('/api/workiq/connect', { method: 'POST' });
+    var d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'Failed to prepare WorkIQ');
+    status.className = 'settings-status ok';
+    status.textContent = d.message || 'WorkIQ is ready.';
+    await loadWorkiqStatus();
+  } catch (e) {
+    status.className = 'settings-status err';
+    status.textContent = e.message || 'Failed to prepare WorkIQ.';
+  } finally {
+    btn.disabled = false;
+  }
+}
+async function workiqSignOut() {
+  var status = document.getElementById('workiq-status');
+  var btn = document.getElementById('workiq-signout-btn');
+  if (!status || !btn) return;
+  btn.disabled = true;
+  status.className = 'settings-status';
+  status.textContent = 'Signing out…';
+  try {
+    var r = await fetch('/api/workiq/sign-out', { method: 'POST' });
+    var d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'Failed to sign out of WorkIQ');
+    status.className = 'settings-status ok';
+    status.textContent = d.message || 'Signed out of WorkIQ.';
+    await loadWorkiqStatus();
+  } catch (e) {
+    status.className = 'settings-status err';
+    status.textContent = e.message || 'Failed to sign out of WorkIQ.';
+  } finally {
+    btn.disabled = false;
+  }
+}
+async function workiqTest() {
+  var status = document.getElementById('workiq-status');
+  var btn = document.getElementById('workiq-test-btn');
+  if (!status || !btn) return;
+  btn.disabled = true;
+  status.className = 'settings-status';
+  status.textContent = 'Testing WorkIQ…';
+  try {
+    var r = await fetch('/api/workiq/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: 'What meetings do I have today?' })
+    });
+    var d = await r.json();
+    if (!r.ok || d.error) {
+      if (d.liveState === 'auth-required') {
+        status.className = 'settings-status';
+        status.textContent = 'WorkIQ is installed, but a live query needs Microsoft sign-in or consent. Complete the browser prompt, then test again.';
+      } else {
+        throw new Error(d.error || 'WorkIQ test failed');
+      }
+    } else {
+      status.className = 'settings-status ok';
+      status.textContent = 'Live WorkIQ query succeeded. ' + (d.preview || '').slice(0, 180);
+    }
+    await loadWorkiqStatus();
+  } catch (e) {
+    status.className = 'settings-status err';
+    status.textContent = e.message || 'WorkIQ test failed.';
+  } finally {
+    btn.disabled = false;
+  }
+}
+function openWorkiqDocs() {
+  fetch('/api/open-url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: 'https://github.com/microsoft/work-iq#-alternative-standalone-mcp-installation' })
+  }).catch(function() {
+    window.open('https://github.com/microsoft/work-iq', '_blank');
+  });
+}
 
 async function savePat() {
   var input  = document.getElementById('pat-input');

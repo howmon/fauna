@@ -698,6 +698,25 @@
       </div>
     </div>
 
+    <div class="settings-section">
+      <div class="settings-section-title">Microsoft 365 / WorkIQ</div>
+      <div id="workiq-settings-status" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:var(--fau-surface2);border:1px solid var(--fau-border)">
+        <span id="workiq-settings-dot" style="width:8px;height:8px;border-radius:50%;background:#444;flex-shrink:0"></span>
+        <span id="workiq-settings-label" style="font-size:12px;color:var(--fau-text-muted)">Checking…</span>
+        <button onclick="loadWorkiqStatus()" style="margin-left:auto;background:none;border:none;color:var(--fau-text-muted);cursor:pointer;font-size:11px;padding:2px 6px;border-radius:4px" title="Refresh"><i class="ti ti-refresh"></i></button>
+      </div>
+      <div class="settings-hint">
+        WorkIQ provides natural-language access to Microsoft 365 data like meetings, email, documents, and Teams. Fauna manages the local WorkIQ CLI for you.
+      </div>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+        <button id="workiq-connect-btn" class="settings-row-btn" style="flex:1;min-width:160px" onclick="workiqConnect()"><i class="ti ti-plug-connected"></i> Accept EULA</button>
+        <button id="workiq-test-btn" class="settings-row-btn" style="flex:1;min-width:160px" onclick="workiqTest()"><i class="ti ti-activity-heartbeat"></i> Test WorkIQ</button>
+        <button class="settings-row-btn" style="flex:1;min-width:160px" onclick="openWorkiqDocs()"><i class="ti ti-book"></i> WorkIQ Docs</button>
+        <button id="workiq-signout-btn" class="settings-row-btn danger" style="flex:1;min-width:160px;display:none" onclick="workiqSignOut()"><i class="ti ti-logout"></i> Sign out</button>
+      </div>
+      <div id="workiq-status" class="settings-status"></div>
+    </div>
+
   </div>
 
   <!-- ── Account ────────────────────────────────────────────────── -->
