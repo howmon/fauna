@@ -1365,6 +1365,36 @@ Examples:
       return '<span class="mcp-status-pill inactive">Inactive</span>';
     }
 
+    // Render endpoint info (port/ws) under the description
+    function renderEndpoint(rowId, ep) {
+      if (!ep) return;
+      var row = document.getElementById(rowId);
+      if (!row) return;
+      var info = row.querySelector('.mcp-builtin-info');
+      if (!info) return;
+      var mount = info.querySelector('.mcp-builtin-endpoint');
+      if (!mount) {
+        mount = document.createElement('div');
+        mount.className = 'mcp-builtin-endpoint';
+        mount.style.cssText = 'margin-top:6px;font-size:11px;color:var(--fau-text-muted);font-family:var(--fau-font-mono,ui-monospace,Menlo,monospace);display:flex;flex-wrap:wrap;gap:8px';
+        // Place before the buttons row when present
+        var btns = info.querySelector('div[style*="display:flex"]');
+        if (btns) info.insertBefore(mount, btns);
+        else info.appendChild(mount);
+      }
+      mount.innerHTML = '';
+      Object.keys(ep).forEach(function(k) {
+        if (k === 'transport') return;
+        var v = ep[k];
+        if (v === null || v === undefined || v === '') return;
+        var span = document.createElement('span');
+        span.textContent = k + ': ' + v;
+        mount.appendChild(span);
+      });
+    }
+    renderEndpoint('mcp-builtin-figma',      figmaStatus.endpoint);
+    renderEndpoint('mcp-builtin-playwright', pwStatus.endpoint);
+
     if (figmaEl) {
       var figmaToggleLabel = figmaEnabled ? 'Disable' : 'Enable';
       figmaEl.innerHTML =

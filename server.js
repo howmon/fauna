@@ -1184,7 +1184,9 @@ app.get('/api/token', (req, res) => {
 
 app.get('/api/models', async (req, res) => {
   try {
-    const token = getGhToken();
+    const cfg     = readSavedConfig();
+    const hasPat  = !!(cfg.pat && cfg.pat.trim());
+    const token   = getGhToken();
     const r = await fetch('https://api.githubcopilot.com/models', {
       headers: {
         Authorization:            `Bearer ${token}`,
@@ -1197,10 +1199,14 @@ app.get('/api/models', async (req, res) => {
     const body = await r.json();
     const raw  = Array.isArray(body.data) ? body.data : [];
 
+    // When the user explicitly supplied a PAT we trust them and keep every
+    // chat model the API exposes (skip the picker-only filter). When auth
+    // comes from the CLI/keychain/env, narrow to picker-enabled models —
+    // anything else triggers "model not available for integrator copilot-4-cli".
     const apiModels = raw
       .filter(m => {
         if (m?.capabilities?.type !== 'chat') return false;
-        if (m.model_picker_enabled === false) return false;
+        if (!hasPat && m.model_picker_enabled === false) return false;
         if (m.policy && m.policy.state && m.policy.state !== 'enabled') return false;
         return true;
       })
@@ -1222,16 +1228,9 @@ app.get('/api/models', async (req, res) => {
         };
       });
 
-    // Union with FALLBACK_MODELS so known/well-named models (e.g. extra Gemini
-    // variants, preview families) still appear even when Copilot's /models
-    // endpoint hasn't enabled them for this account yet. If a fallback-only
-    // model isn't actually supported via /chat/completions, the request-time
-    // fallback in the chat handler will route around it.
-    const byId = new Map();
-    for (const m of apiModels)      byId.set(m.id, m);
-    for (const m of FALLBACK_MODELS) if (!byId.has(m.id)) byId.set(m.id, m);
-
-    const models = Array.from(byId.values()).sort((a, b) =>
+    // Only models the live Copilot API actually exposes for this account.
+    // FALLBACK_MODELS is reserved for the offline/error path below.
+    const models = apiModels.sort((a, b) =>
       (a.vendor || '').localeCompare(b.vendor || '') ||
       (a.name   || '').localeCompare(b.name   || '')
     );
@@ -3610,6 +3609,11 @@ app.get('/api/figma/status', (req, res) => {
     activeSystem:  figmaState.activeSystem,
     mcpRunning:    isMcpRunning(),
     mcpPid:        mcpProcess?.pid ?? null,
+    endpoint: {
+      wsUrl:   FIGMA_WS_URL,
+      wsPort:  3335,
+      httpPort: 3336,
+    },
   });
 });
 
@@ -7105,7 +7109,16 @@ app.get('/api/playwright-mcp/status', async (req, res) => {
   if (_playwrightMcpInstalled === null) {
     try { await import('@playwright/mcp'); _playwrightMcpInstalled = true; } catch (_) { _playwrightMcpInstalled = false; }
   }
-  res.json({ installed: _playwrightMcpInstalled, running: !!_playwrightMcpClient });
+  res.json({
+    installed: _playwrightMcpInstalled,
+    running:   !!_playwrightMcpClient,
+    endpoint: {
+      transport:  'stdio',
+      extensionWs: 'ws://localhost:3340',
+      faunaExtWs:  'ws://localhost:3737/ext',
+      extensionPort: 3340,
+    },
+  });
 });
 
 // Pre-warm the Playwright MCP client (no-op if already running)
