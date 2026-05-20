@@ -11,14 +11,145 @@ function bumpConvToTop(id) {
   }
 }
 
-function saveConversations() {
-  // Strip transient runtime fields before persisting
-  var toSave = state.conversations.map(function(conv) {
-    var c = {};
-    Object.keys(conv).forEach(function(k) { if (k[0] !== '_') c[k] = conv[k]; });
-    return c;
+function _trimStoredText(value, maxLen) {
+  if (typeof value !== 'string') return value;
+  if (value.length <= maxLen) return value;
+  return value.slice(0, maxLen) + '\n…[truncated for local cache]';
+}
+
+function _sanitizeStoredMessage(msg, opts) {
+  opts = opts || {};
+  var keepAttachments = !!opts.keepAttachments;
+  var copy = {};
+  Object.keys(msg || {}).forEach(function(k) {
+    if (k[0] !== '_') copy[k] = msg[k];
   });
-  localStorage.setItem('fauna-convs', JSON.stringify(toSave));
+
+  if (Array.isArray(copy.content)) {
+    copy.content = copy.content
+      .filter(function(part) { return part && part.type === 'text'; })
+      .map(function(part) { return part.text; })
+      .join('\n');
+  }
+  copy.content = _trimStoredText(typeof copy.content === 'string' ? copy.content : JSON.stringify(copy.content || ''), 12000);
+
+  if (typeof msg._displayText === 'string') {
+    copy._displayText = _trimStoredText(msg._displayText, 6000);
+  }
+
+  if (Array.isArray(copy.images) && copy.images.length) {
+    copy.images = copy.images.map(function(img) {
+      return {
+        name: img && img.name,
+        mime: img && img.mime,
+        omitted: true
+      };
+    });
+  }
+
+  if (Array.isArray(copy.attachments) && copy.attachments.length) {
+    copy.attachments = copy.attachments.map(function(att) {
+      var next = {
+        type: att && att.type,
+        name: att && att.name,
+        sourceUri: att && att.sourceUri,
+        extSource: att && att.extSource,
+        browser: att && att.browser,
+        tabId: att && att.tabId,
+        clientId: att && att.clientId,
+        size: att && att.size,
+        warning: att && att.warning,
+        mime: att && att.mime
+      };
+      if (keepAttachments && att && typeof att.content === 'string') next.content = _trimStoredText(att.content, 4000);
+      return next;
+    });
+  }
+
+  return copy;
+}
+
+function _serializeConversationForStorage(conv, opts) {
+  opts = opts || {};
+  var copy = {};
+  Object.keys(conv || {}).forEach(function(k) {
+    if (k[0] !== '_') copy[k] = conv[k];
+  });
+
+  var recentLimit = opts.recentLimit || 24;
+  var archiveLimit = opts.archiveLimit || 40;
+  copy.messages = (conv.messages || []).slice(-recentLimit).map(function(msg) {
+    return _sanitizeStoredMessage(msg, { keepAttachments: !!opts.keepAttachments });
+  });
+
+  if (Array.isArray(conv.archivedMessages) && conv.archivedMessages.length) {
+    copy.archivedMessages = conv.archivedMessages.slice(-archiveLimit).map(function(msg) {
+      return _sanitizeStoredMessage(msg, { keepAttachments: false });
+    });
+  }
+
+  if (Array.isArray(conv.artifacts) && conv.artifacts.length) {
+    copy.artifacts = conv.artifacts.slice(-10).map(function(artifact) {
+      var stored = Object.assign({}, artifact);
+      if (stored.base64) delete stored.base64;
+      if (typeof stored.content === 'string') stored.content = _trimStoredText(stored.content, 12000);
+      return stored;
+    });
+  }
+
+  if (typeof copy.contextSummary === 'string') copy.contextSummary = _trimStoredText(copy.contextSummary, 12000);
+  if (typeof copy.systemPrompt === 'string') copy.systemPrompt = _trimStoredText(copy.systemPrompt, 12000);
+  return copy;
+}
+
+function _serializeConversationForServer(conv) {
+  return _serializeConversationForStorage(conv, {
+    recentLimit: 60,
+    archiveLimit: 120,
+    keepAttachments: true
+  });
+}
+
+function saveConversations() {
+  var storageModes = [
+    { recentLimit: 24, archiveLimit: 40, keepAttachments: true },
+    { recentLimit: 12, archiveLimit: 20, keepAttachments: false },
+    { recentLimit: 6, archiveLimit: 0, keepAttachments: false }
+  ];
+  var saved = false;
+  for (var i = 0; i < storageModes.length; i++) {
+    try {
+      var toSave = state.conversations.map(function(conv) {
+        return _serializeConversationForStorage(conv, storageModes[i]);
+      });
+      localStorage.setItem('fauna-convs', JSON.stringify(toSave));
+      saved = true;
+      break;
+    } catch (err) {
+      if (!err || err.name !== 'QuotaExceededError') throw err;
+    }
+  }
+  if (!saved) {
+    try {
+      var minimal = state.conversations.map(function(conv) {
+        return {
+          id: conv.id,
+          title: conv.title,
+          model: conv.model,
+          systemPrompt: _trimStoredText(conv.systemPrompt || '', 4000),
+          contextSummary: _trimStoredText(conv.contextSummary || '', 4000),
+          createdAt: conv.createdAt,
+          updatedAt: conv.updatedAt,
+          projectId: conv.projectId,
+          titleManual: conv.titleManual,
+          titleSource: conv.titleSource,
+          titleUpdatedAt: conv.titleUpdatedAt,
+          messages: (conv.messages || []).slice(-2).map(function(msg) { return _sanitizeStoredMessage(msg, { keepAttachments: false }); })
+        };
+      });
+      localStorage.setItem('fauna-convs', JSON.stringify(minimal));
+    } catch (_) {}
+  }
   // Sync current conversation to server (fire-and-forget)
   _syncConvToServer(state.currentId);
 }
@@ -36,8 +167,7 @@ function _syncConvToServer(id) {
 function _flushConvToServer(id) {
   var conv = getConv(id);
   if (!conv) return;
-  var c = {};
-  Object.keys(conv).forEach(function(k) { if (k[0] !== '_') c[k] = conv[k]; });
+  var c = _serializeConversationForServer(conv);
   fetch('/api/conversations/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c) }).catch(function() {});
 }
 
@@ -56,8 +186,7 @@ window.addEventListener('beforeunload', _flushAllPendingSyncs);
 // Sync ALL conversations to server (used on init/migration)
 function _syncAllConvsToServer() {
   state.conversations.forEach(function(conv) {
-    var c = {};
-    Object.keys(conv).forEach(function(k) { if (k[0] !== '_') c[k] = conv[k]; });
+    var c = _serializeConversationForServer(conv);
     fetch('/api/conversations/' + conv.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c) }).catch(function() {});
   });
 }
@@ -225,7 +354,9 @@ function loadConversation(id) {
   var conv = getConv(id);
   if (!conv) return;
 
-  state.model  = conv.model || state.model;
+  state.model  = typeof normalizeSupportedModel === 'function'
+    ? normalizeSupportedModel(conv.model || state.model, { conv: conv, notify: false })
+    : (conv.model || state.model);
   document.getElementById('model-select').value = state.model;
   // Sync toolbar model label
   var _tbLbl = document.getElementById('tb-model-label');

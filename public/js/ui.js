@@ -106,6 +106,29 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', fu
 
 var allModels = [];
 
+function getSupportedModelFallback(preferred) {
+  var choices = /^gpt-5/i.test(preferred || '')
+    ? ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'gpt-5.1', 'gpt-4.1']
+    : ['claude-sonnet-4.6', 'gpt-4.1', 'gpt-4.1-mini', 'gemini-2.0-flash'];
+  for (var i = 0; i < choices.length; i++) {
+    var found = allModels.find(function(m) { return m.id === choices[i]; });
+    if (found) return found.id;
+  }
+  return allModels[0] ? allModels[0].id : 'gpt-4.1';
+}
+
+function normalizeSupportedModel(id, opts) {
+  opts = opts || {};
+  if (!id) return getSupportedModelFallback('');
+  if (allModels.find(function(m) { return m.id === id; })) return id;
+  var fallback = getSupportedModelFallback(id);
+  state.model = fallback;
+  localStorage.setItem('fauna-model', fallback);
+  if (opts.conv) opts.conv.model = fallback;
+  if (opts.notify && typeof showToast === 'function') showToast('Model not supported here. Switched to ' + fallback);
+  return fallback;
+}
+
 async function loadModels() {
   try {
     const r = await fetch('/api/models');
@@ -118,6 +141,7 @@ async function loadModels() {
     { id: 'gpt-4.1-mini',      name: 'GPT-4.1 mini',      vendor: 'OpenAI' },
     { id: 'gemini-2.0-flash',  name: 'Gemini 2.0 Flash',  vendor: 'Google' },
   ];
+  state.model = normalizeSupportedModel(state.model, { notify: false });
   populateModelSelect();
 }
 
@@ -154,22 +178,24 @@ function populateModelSelect() {
 }
 
 function onModelChange(id) {
-  state.model = id;
-  localStorage.setItem('fauna-model', id);
+  var normalized = normalizeSupportedModel(id, { notify: false });
+  state.model = normalized;
+  localStorage.setItem('fauna-model', normalized);
   if (state.currentId && typeof getConv === 'function') {
     var conv = getConv(state.currentId);
     if (conv) {
-      conv.model = id;
+      conv.model = state.model;
       saveConversations();
     }
   }
-  var m = allModels.find(m => m.id === id);
-  if (m) showToast('Model: ' + m.name);
+  var m = allModels.find(m => m.id === state.model);
+  if (id !== normalized && typeof showToast === 'function') showToast('Model not supported here. Switched to ' + normalized);
+  else if (m) showToast('Model: ' + m.name);
   // Sync hidden select + toolbar label
   var sel = document.getElementById('model-select');
-  if (sel) sel.value = id;
+  if (sel) sel.value = state.model;
   var lbl = document.getElementById('tb-model-label');
-  if (lbl) lbl.textContent = m ? m.name : id;
+  if (lbl) lbl.textContent = m ? m.name : state.model;
 }
 
 // ── Auth & Settings ───────────────────────────────────────────────────────
@@ -726,6 +752,71 @@ function _toBase64(buffer) {
   return btoa(binary);
 }
 
+function _readFileAsDataUrl(file) {
+  return new Promise(function(resolve, reject) {
+    var reader = new FileReader();
+    reader.onload = function(ev) { resolve(String(ev.target.result || '')); };
+    reader.onerror = function() { reject(reader.error || new Error('Failed to read image')); };
+    reader.readAsDataURL(file);
+  });
+}
+
+function _loadImageElement(src) {
+  return new Promise(function(resolve, reject) {
+    var img = new Image();
+    img.onload = function() { resolve(img); };
+    img.onerror = function() { reject(new Error('Failed to decode image')); };
+    img.src = src;
+  });
+}
+
+async function _normalizeImageAttachment(file, preferredName) {
+  var mime = file.type || 'image/png';
+  var name = preferredName || file.name || ('image-' + Date.now() + '.png');
+  var originalSize = file.size || 0;
+  var rawUrl = await _readFileAsDataUrl(file);
+  var rawBase64 = rawUrl.split(',')[1] || '';
+
+  // Keep already-small images as-is to avoid unnecessary quality loss.
+  if (originalSize && originalSize <= 1024 * 1024) {
+    return { type: 'image', name: name, base64: rawBase64, mime: mime, size: originalSize };
+  }
+
+  try {
+    var img = await _loadImageElement(rawUrl);
+    var maxDim = 1280;
+    var scale = Math.min(1, maxDim / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+    var width = Math.max(1, Math.round((img.naturalWidth || 1) * scale));
+    var height = Math.max(1, Math.round((img.naturalHeight || 1) * scale));
+    var canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    var ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Canvas unavailable');
+    ctx.drawImage(img, 0, 0, width, height);
+
+    var outputMime = /image\/(png|webp|jpeg|jpg)/i.test(mime) ? 'image/jpeg' : mime;
+    var qualities = outputMime === 'image/jpeg' ? [0.72, 0.6, 0.5, 0.42] : [undefined];
+    var bestUrl = rawUrl;
+    for (var i = 0; i < qualities.length; i++) {
+      var candidate = qualities[i] === undefined ? canvas.toDataURL(outputMime) : canvas.toDataURL(outputMime, qualities[i]);
+      bestUrl = candidate;
+      var candidateBytes = Math.ceil(((candidate.split(',')[1] || '').length * 3) / 4);
+      if (candidateBytes <= 700 * 1024) break;
+    }
+
+    return {
+      type: 'image',
+      name: name.replace(/\.(png|webp|jpe?g)$/i, '') + '.jpg',
+      base64: bestUrl.split(',')[1] || rawBase64,
+      mime: outputMime,
+      size: Math.ceil((((bestUrl.split(',')[1] || '').length) * 3) / 4)
+    };
+  } catch (_) {
+    return { type: 'image', name: name, base64: rawBase64, mime: mime, size: originalSize };
+  }
+}
+
 function _readTextFile(file) {
   return new Promise(function(resolve, reject) {
     var reader = new FileReader();
@@ -771,14 +862,7 @@ async function _extractDocumentText(file) {
 
 async function _processSingleAttachment(file) {
   if (file.type && file.type.startsWith('image/')) {
-    var mime = file.type || 'image/png';
-    var name = file.name || ('image-' + Date.now() + '.png');
-    var reader = new FileReader();
-    reader.onload = function(ev) {
-      var base64 = ev.target.result.split(',')[1];
-      addAttachment({ type: 'image', name: name, base64: base64, mime: mime });
-    };
-    reader.readAsDataURL(file);
+    addAttachment(await _normalizeImageAttachment(file));
     return;
   }
 
@@ -865,8 +949,11 @@ function renderAttachBar() {
 function _renderChip(att, i) {
   var extCls = att.extSource ? ' pending-chip-ext' : '';
   if (att.type === 'image') {
+    var thumb = att.base64
+      ? '<img class="pending-img-thumb" src="data:' + att.mime + ';base64,' + att.base64 + '" title="' + escHtml(att.name) + '">'
+      : '<span class="pending-img-thumb pending-img-thumb-fallback" title="Preview unavailable"><i class="ti ti-photo"></i></span>';
     return '<div class="pending-chip pending-chip-image' + extCls + '">' +
-      '<img class="pending-img-thumb" src="data:' + att.mime + ';base64,' + att.base64 + '" title="' + escHtml(att.name) + '">' +
+      thumb +
       '<span class="chip-name" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(att.name) + '</span>' +
       '<button class="chip-remove" onclick="removeAttachment(' + i + ')"><i class="ti ti-x"></i></button>' +
     '</div>';
@@ -1234,12 +1321,7 @@ input.addEventListener('paste', function(e) {
       var mime = items[i].type;
       var ext  = mime.split('/')[1] || 'png';
       var name = 'image-' + Date.now() + '.' + ext;
-      var reader = new FileReader();
-      reader.onload = function(ev) {
-        var base64 = ev.target.result.split(',')[1];
-        addAttachment({ type: 'image', name: name, base64: base64, mime: mime });
-      };
-      reader.readAsDataURL(blob);
+      _normalizeImageAttachment(blob, name).then(addAttachment).catch(function() {});
       return;
     }
   }
@@ -1294,14 +1376,7 @@ function openImageAttach() {
   inp.multiple = true;
   inp.onchange = function() {
     Array.from(inp.files).forEach(function(file) {
-      var mime = file.type || 'image/png';
-      var name = file.name || ('image-' + Date.now() + '.png');
-      var reader = new FileReader();
-      reader.onload = function(ev) {
-        var base64 = ev.target.result.split(',')[1];
-        addAttachment({ type: 'image', name: name, base64: base64, mime: mime });
-      };
-      reader.readAsDataURL(file);
+      _normalizeImageAttachment(file).then(addAttachment).catch(function() {});
     });
   };
   inp.click();

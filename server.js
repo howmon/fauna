@@ -1121,6 +1121,8 @@ const FALLBACK_MODELS = [
   { id: 'gemini-2.0-flash',      name: 'Gemini 2.0 Flash',      vendor: 'Google',    fast: true  },
 ];
 
+const CHAT_COMPLETIONS_UNSUPPORTED_RE = /^gpt-5\.5($|[-.])/i;
+
 // ── Auth check ────────────────────────────────────────────────────────────
 
 app.get('/api/auth', (req, res) => {
@@ -1188,6 +1190,7 @@ app.get('/api/models', async (req, res) => {
       .filter(m => {
         if (FALLBACK_MODELS.find(f => f.id === m.id)) return false;
         if (EXCLUDE_RE.test(m.id)) return false;
+        if (CHAT_COMPLETIONS_UNSUPPORTED_RE.test(m.id)) return false;
         // Must look like a known model family
         if (!/^(gpt|claude|gemini|o[1-9]|minimax|deepseek|phi|llama|mistral)/i.test(m.id)) return false;
         return true;
@@ -1441,7 +1444,9 @@ app.post('/api/chat', async (req, res) => {
   res.on('close',  _psRelease);
   const { messages = [], model = 'claude-sonnet-4.6', systemPrompt = '', useFigmaMCP = false, contextSummary = '',
           thinkingBudget = 'high', maxContextTurns = 20, agentName = null,
-          projectId = null, projectContextIds = null, isDelegation = false } = req.body;
+          projectId = null, projectContextIds = null, isDelegation = false,
+          clientContext = 'app', noTools = false } = req.body;
+  const isCLI = clientContext === 'cli';
 
   // Track the active conversation model so heartbeat/workflows/teams use the same one
   _activeModel = model;
@@ -1477,13 +1482,14 @@ app.post('/api/chat', async (req, res) => {
       const entries = [...figmaFiles.values()].map(f => `- "${f.fileName}" (fileKey: ${f.fileKey}, page: ${f.currentPage})`).join('\n');
       figmaFilesCtx = `\n## Connected Figma Documents\nThe following Figma documents are currently open with the plugin running:\n${entries}\nWhen using figma_execute, pass the fileKey parameter to target a specific document. If omitted, the most recently active document is used.\nIMPORTANT: Dev Mode MCP tools (get_screenshot, get_design_context, get_metadata, etc.) always operate on whichever file is currently focused in Figma — they do NOT accept a fileKey parameter. If you need to read from or screenshot a specific file, use figma_execute with the fileKey parameter instead.`;
     }
+    const cliHint = isCLI ? `\n\n## Output Format\nYou are running in a terminal CLI. Respond in plain, readable text. Do NOT use markdown headers (###), horizontal rules (---), or emojis. Use plain bullet points (- or *) only when a list genuinely helps. Be concise and direct. Never emit browser-action or browser-ext-action code blocks — those do not work in the terminal.` : '';
     const fullSystem = [
-      systemPrompt.trim(),
+      systemPrompt.trim() + cliHint,
       isDelegation ? '' : projectCtx,
       factsCtx,
-      isDelegation ? '' : BROWSER_BUILD_CONTEXT,
-      isDelegation ? '' : buildBrowserExtContext(),
-      isDelegation ? '' : GEN_UI_CATALOG_PROMPT,
+      (isDelegation || isCLI || noTools) ? '' : BROWSER_BUILD_CONTEXT,
+      (isDelegation || isCLI || noTools) ? '' : buildBrowserExtContext(),
+      (isDelegation || isCLI || noTools) ? '' : GEN_UI_CATALOG_PROMPT,
       contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '',
       figmaFilesCtx
     ].filter(Boolean).join('\n');
@@ -1599,7 +1605,7 @@ app.post('/api/chat', async (req, res) => {
         }
       },
     };
-    mcpTools = [...(mcpTools || []), ...SELF_TOOL_DEFS];
+    if (!isCLI && !noTools) mcpTools = [...(mcpTools || []), ...SELF_TOOL_DEFS];
 
     // Agentic loop — re-runs if model calls tools (max 12 iterations)
     let continueLoop = true;
@@ -1655,6 +1661,11 @@ app.post('/api/chat', async (req, res) => {
         if (apiErr.message?.includes('max_tokens') && params.max_tokens) {
           params.max_completion_tokens = params.max_tokens;
           delete params.max_tokens;
+          stream = await client.chat.completions.create(params);
+        } else if (CHAT_COMPLETIONS_UNSUPPORTED_RE.test(params.model) || apiErr.message?.includes('/chat/completions endpoint')) {
+          const fallbackModel = /^gpt-5/i.test(params.model) ? 'gpt-5.4' : 'gpt-4.1';
+          console.log(`[chat] model "${params.model}" not supported via chat.completions, falling back to "${fallbackModel}"`);
+          params.model = fallbackModel;
           stream = await client.chat.completions.create(params);
         } else {
           throw apiErr;
