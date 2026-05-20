@@ -1174,22 +1174,62 @@ app.get('/api/token', (req, res) => {
 });
 
 // ── Model list ────────────────────────────────────────────────────────────
+//
+// Use GitHub Copilot's /models endpoint directly (instead of the OpenAI SDK's
+// models.list()) because the SDK strips out `capabilities` and
+// `model_picker_enabled`, which are the official signals for "this model is a
+// chat-completions model that VS Code's picker would show". Without those, we
+// were exposing embeddings/responses-only/disabled models in the dropdown and
+// users hit "model X is not accessible via the /chat/completions endpoint".
 
 app.get('/api/models', async (req, res) => {
   try {
-    const client   = getCopilotClient();
-    const response = await client.models.list();
-    const EXCLUDE_RE = /embed|whisper|tts|dall|goldeneye|accounts\/|routers\/|realtime|audio|search|computer-use|\d{4}[-_]\d{2}[-_]\d{2}|^\d{4}-/i;
-    const models = (response.data || [])
-      .filter(m => !EXCLUDE_RE.test(m.id))
-      .map(m => ({
-        id: m.id,
-        name: m.id,
-        provider: 'github-copilot',
-        vendor: m.id.includes('claude') ? 'Anthropic' : m.id.includes('gemini') ? 'Google' : 'OpenAI',
-        fast: m.id.includes('mini') || m.id.includes('haiku') || m.id.includes('flash'),
-        supportedInChat: !CHAT_COMPLETIONS_UNSUPPORTED_RE.test(m.id)
-      }));
+    const token = getGhToken();
+    const r = await fetch('https://api.githubcopilot.com/models', {
+      headers: {
+        Authorization:            `Bearer ${token}`,
+        'Editor-Version':         'vscode/1.85.0',
+        'Copilot-Integration-Id': 'vscode-chat',
+        Accept:                   'application/json'
+      }
+    });
+    if (!r.ok) throw new Error(`models endpoint ${r.status}`);
+    const body = await r.json();
+    const raw  = Array.isArray(body.data) ? body.data : [];
+
+    const models = raw
+      .filter(m => {
+        // Must be a chat-completions model
+        if (m?.capabilities?.type !== 'chat') return false;
+        // Must be in the user's picker (drops disabled / preview-only / hidden)
+        if (m.model_picker_enabled === false) return false;
+        // Drop policy-disabled models
+        if (m.policy && m.policy.state && m.policy.state !== 'enabled') return false;
+        return true;
+      })
+      .map(m => {
+        const family   = m.capabilities?.family || m.id || '';
+        const isFast   = !!(m.capabilities?.tokenizer && /mini|haiku|flash|small|nano/i.test(m.id));
+        const vendor   = m.vendor
+          || (/claude/i.test(family)  ? 'Anthropic'
+            : /gemini/i.test(family)  ? 'Google'
+            : /minimax/i.test(family) ? 'Minimax'
+            : /grok/i.test(family)    ? 'xAI'
+            : 'OpenAI');
+        return {
+          id:     m.id,
+          name:   m.name || m.id,
+          vendor,
+          fast:   isFast,
+          vision: !!m.capabilities?.supports?.vision,
+          tools:  !!m.capabilities?.supports?.tool_calls,
+        };
+      })
+      // Stable sort: vendor then name
+      .sort((a, b) =>
+        a.vendor.localeCompare(b.vendor) || a.name.localeCompare(b.name)
+      );
+
     res.json({ models: models.length ? models : FALLBACK_MODELS });
   } catch (e) {
     res.json({ models: FALLBACK_MODELS });

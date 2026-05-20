@@ -106,28 +106,17 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', fu
 
 var allModels = [];
 
-function getSupportedModelFallback(preferred) {
-  var choices = /^gpt-5/i.test(preferred || '')
-    ? ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'gpt-5.1', 'gpt-4.1']
-    : ['claude-sonnet-4.6', 'gpt-4.1', 'gpt-4.1-mini', 'gemini-2.0-flash'];
-  for (var i = 0; i < choices.length; i++) {
-    var found = allModels.find(function(m) { return m.id === choices[i] && m.supportedInChat !== false; });
-    if (found) return found.id;
-  }
-  var firstSupported = allModels.find(function(m) { return m.supportedInChat !== false; });
-  return firstSupported ? firstSupported.id : (allModels[0] ? allModels[0].id : 'gpt-4.1');
+function getSupportedModelFallback(_preferred) {
+  if (!allModels.length) return 'gpt-4.1';
+  return allModels[0].id;
 }
 
-function normalizeSupportedModel(id, opts) {
-  opts = opts || {};
-  if (!id) return getSupportedModelFallback('');
-  if (allModels.find(function(m) { return m.id === id && m.supportedInChat !== false; })) return id;
-  var fallback = getSupportedModelFallback(id);
-  state.model = fallback;
-  localStorage.setItem('fauna-model', fallback);
-  if (opts.conv) opts.conv.model = fallback;
-  if (opts.notify && typeof showToast === 'function') showToast('Model not supported here. Switched to ' + fallback);
-  return fallback;
+// Kept for back-compat with call sites; no longer rewrites unknown ids,
+// just returns them as-is. /api/models is now the source of truth and only
+// returns chat-compatible models, so client-side coercion was causing
+// spurious "switched to X" behavior.
+function normalizeSupportedModel(id, _opts) {
+  return id || getSupportedModelFallback('');
 }
 
 async function loadModels() {
@@ -142,7 +131,11 @@ async function loadModels() {
     { id: 'gpt-4.1-mini',      name: 'GPT-4.1 mini',      vendor: 'OpenAI' },
     { id: 'gemini-2.0-flash',  name: 'Gemini 2.0 Flash',  vendor: 'Google' },
   ];
-  state.model = normalizeSupportedModel(state.model, { notify: false });
+  // Only fall back if saved model is genuinely missing from the picker.
+  if (!state.model || !allModels.find(function(m) { return m.id === state.model; })) {
+    state.model = getSupportedModelFallback(state.model);
+    localStorage.setItem('fauna-model', state.model);
+  }
   populateModelSelect();
 }
 
@@ -150,43 +143,57 @@ function populateModelSelect() {
   var sel = document.getElementById('model-select');
   sel.innerHTML = '';
 
-  var grp = document.createElement('optgroup');
-  grp.label = 'GitHub CLI';
+  // Group by vendor (Anthropic, OpenAI, Google, …) in a stable order.
+  var order = ['Anthropic', 'OpenAI', 'Google', 'xAI', 'Minimax'];
+  var byVendor = {};
   allModels.forEach(function(m) {
-    var opt = document.createElement('option');
-    opt.value = m.id;
-    opt.textContent = m.name + (m.supportedInChat === false ? ' (CLI only)' : (m.fast ? ' ·' : ''));
-    opt.selected = m.id === state.model;
-    opt.disabled = m.supportedInChat === false;
-    grp.appendChild(opt);
+    var v = m.vendor || 'Other';
+    (byVendor[v] = byVendor[v] || []).push(m);
   });
-  sel.appendChild(grp);
+  var vendors = Object.keys(byVendor).sort(function(a, b) {
+    var ai = order.indexOf(a), bi = order.indexOf(b);
+    if (ai === -1 && bi === -1) return a.localeCompare(b);
+    if (ai === -1) return 1;
+    if (bi === -1) return -1;
+    return ai - bi;
+  });
+
+  vendors.forEach(function(v) {
+    var grp = document.createElement('optgroup');
+    grp.label = v;
+    byVendor[v].forEach(function(m) {
+      var opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.name + (m.fast ? ' ·' : '');
+      opt.selected = m.id === state.model;
+      grp.appendChild(opt);
+    });
+    sel.appendChild(grp);
+  });
 
   // Sync toolbar label
-  var cur = allModels.find(m => m.id === state.model);
+  var cur = allModels.find(function(m) { return m.id === state.model; });
   var lbl = document.getElementById('tb-model-label');
   if (lbl) lbl.textContent = cur ? cur.name : (state.model || 'Model');
 }
 
 function onModelChange(id) {
-  var normalized = normalizeSupportedModel(id, { notify: false });
-  state.model = normalized;
-  localStorage.setItem('fauna-model', normalized);
+  state.model = id;
+  localStorage.setItem('fauna-model', id);
   if (state.currentId && typeof getConv === 'function') {
     var conv = getConv(state.currentId);
     if (conv) {
-      conv.model = state.model;
+      conv.model = id;
       saveConversations();
     }
   }
-  var m = allModels.find(m => m.id === state.model);
-  if (id !== normalized && typeof showToast === 'function') showToast('Model not supported here. Switched to ' + normalized);
-  else if (m) showToast('Model: ' + m.name);
+  var m = allModels.find(function(mm) { return mm.id === id; });
+  if (m && typeof showToast === 'function') showToast('Model: ' + m.name);
   // Sync hidden select + toolbar label
   var sel = document.getElementById('model-select');
-  if (sel) sel.value = state.model;
+  if (sel) sel.value = id;
   var lbl = document.getElementById('tb-model-label');
-  if (lbl) lbl.textContent = m ? m.name : state.model;
+  if (lbl) lbl.textContent = m ? m.name : id;
 }
 
 // ── Auth & Settings ───────────────────────────────────────────────────────
