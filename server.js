@@ -1179,29 +1179,17 @@ app.get('/api/models', async (req, res) => {
   try {
     const client   = getCopilotClient();
     const response = await client.models.list();
-    // Only expose models that match our known-working list or are clearly chat models
-    const apiIds  = new Set((response.data || []).map(m => m.id));
-    // Return known models that are actually available, plus any new ones from API
-    const known   = FALLBACK_MODELS.filter(m => apiIds.has(m.id));
-    // Add any API models not in fallback list that look like chat-completions models
-    // Exclude: embeddings, whisper, tts, dall-e, codex, internal routers, dated snapshots, non-chat
-    const EXCLUDE_RE = /embed|whisper|tts|dall|codex|goldeneye|accounts\/|routers\/|realtime|audio|search|computer-use|\d{4}[-_]\d{2}[-_]\d{2}|^\d{4}-/i;
-    const extra   = (response.data || [])
-      .filter(m => {
-        if (FALLBACK_MODELS.find(f => f.id === m.id)) return false;
-        if (EXCLUDE_RE.test(m.id)) return false;
-        if (CHAT_COMPLETIONS_UNSUPPORTED_RE.test(m.id)) return false;
-        // Must look like a known model family
-        if (!/^(gpt|claude|gemini|o[1-9]|minimax|deepseek|phi|llama|mistral)/i.test(m.id)) return false;
-        return true;
-      })
+    const EXCLUDE_RE = /embed|whisper|tts|dall|goldeneye|accounts\/|routers\/|realtime|audio|search|computer-use|\d{4}[-_]\d{2}[-_]\d{2}|^\d{4}-/i;
+    const models = (response.data || [])
+      .filter(m => !EXCLUDE_RE.test(m.id))
       .map(m => ({
-        id:     m.id,
-        name:   m.id.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        id: m.id,
+        name: m.id,
+        provider: 'github-copilot',
         vendor: m.id.includes('claude') ? 'Anthropic' : m.id.includes('gemini') ? 'Google' : 'OpenAI',
-        fast:   m.id.includes('mini') || m.id.includes('haiku') || m.id.includes('flash')
+        fast: m.id.includes('mini') || m.id.includes('haiku') || m.id.includes('flash'),
+        supportedInChat: !CHAT_COMPLETIONS_UNSUPPORTED_RE.test(m.id)
       }));
-    const models = [...known, ...extra];
     res.json({ models: models.length ? models : FALLBACK_MODELS });
   } catch (e) {
     res.json({ models: FALLBACK_MODELS });

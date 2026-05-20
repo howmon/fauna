@@ -111,16 +111,17 @@ function getSupportedModelFallback(preferred) {
     ? ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'gpt-5.1', 'gpt-4.1']
     : ['claude-sonnet-4.6', 'gpt-4.1', 'gpt-4.1-mini', 'gemini-2.0-flash'];
   for (var i = 0; i < choices.length; i++) {
-    var found = allModels.find(function(m) { return m.id === choices[i]; });
+    var found = allModels.find(function(m) { return m.id === choices[i] && m.supportedInChat !== false; });
     if (found) return found.id;
   }
-  return allModels[0] ? allModels[0].id : 'gpt-4.1';
+  var firstSupported = allModels.find(function(m) { return m.supportedInChat !== false; });
+  return firstSupported ? firstSupported.id : (allModels[0] ? allModels[0].id : 'gpt-4.1');
 }
 
 function normalizeSupportedModel(id, opts) {
   opts = opts || {};
   if (!id) return getSupportedModelFallback('');
-  if (allModels.find(function(m) { return m.id === id; })) return id;
+  if (allModels.find(function(m) { return m.id === id && m.supportedInChat !== false; })) return id;
   var fallback = getSupportedModelFallback(id);
   state.model = fallback;
   localStorage.setItem('fauna-model', fallback);
@@ -149,27 +150,17 @@ function populateModelSelect() {
   var sel = document.getElementById('model-select');
   sel.innerHTML = '';
 
-  // 4 groups: GitHub CLI, OpenAI, Anthropic, Google
-  var groups = {
-    'GitHub CLI':  allModels.filter(m => m.provider === 'copilot'),
-    'OpenAI':      allModels.filter(m => m.provider === 'openai'),
-    'Anthropic':   allModels.filter(m => m.provider === 'anthropic'),
-    'Google':      allModels.filter(m => m.provider === 'google'),
-  };
-
-  Object.entries(groups).forEach(([label, models]) => {
-    if (!models.length) return;
-    var grp = document.createElement('optgroup');
-    grp.label = label;
-    models.forEach(m => {
-      var opt = document.createElement('option');
-      opt.value = m.id;
-      opt.textContent = m.name + (m.fast ? ' ·' : '');
-      opt.selected = m.id === state.model;
-      grp.appendChild(opt);
-    });
-    sel.appendChild(grp);
+  var grp = document.createElement('optgroup');
+  grp.label = 'GitHub CLI';
+  allModels.forEach(function(m) {
+    var opt = document.createElement('option');
+    opt.value = m.id;
+    opt.textContent = m.name + (m.supportedInChat === false ? ' (CLI only)' : (m.fast ? ' ·' : ''));
+    opt.selected = m.id === state.model;
+    opt.disabled = m.supportedInChat === false;
+    grp.appendChild(opt);
   });
+  sel.appendChild(grp);
 
   // Sync toolbar label
   var cur = allModels.find(m => m.id === state.model);
