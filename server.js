@@ -1197,20 +1197,16 @@ app.get('/api/models', async (req, res) => {
     const body = await r.json();
     const raw  = Array.isArray(body.data) ? body.data : [];
 
-    const models = raw
+    const apiModels = raw
       .filter(m => {
-        // Must be a chat-completions model
         if (m?.capabilities?.type !== 'chat') return false;
-        // Must be in the user's picker (drops disabled / preview-only / hidden)
         if (m.model_picker_enabled === false) return false;
-        // Drop policy-disabled models
         if (m.policy && m.policy.state && m.policy.state !== 'enabled') return false;
         return true;
       })
       .map(m => {
-        const family   = m.capabilities?.family || m.id || '';
-        const isFast   = !!(m.capabilities?.tokenizer && /mini|haiku|flash|small|nano/i.test(m.id));
-        const vendor   = m.vendor
+        const family = m.capabilities?.family || m.id || '';
+        const vendor = m.vendor
           || (/claude/i.test(family)  ? 'Anthropic'
             : /gemini/i.test(family)  ? 'Google'
             : /minimax/i.test(family) ? 'Minimax'
@@ -1220,15 +1216,25 @@ app.get('/api/models', async (req, res) => {
           id:     m.id,
           name:   m.name || m.id,
           vendor,
-          fast:   isFast,
+          fast:   /mini|haiku|flash|small|nano/i.test(m.id),
           vision: !!m.capabilities?.supports?.vision,
           tools:  !!m.capabilities?.supports?.tool_calls,
         };
-      })
-      // Stable sort: vendor then name
-      .sort((a, b) =>
-        a.vendor.localeCompare(b.vendor) || a.name.localeCompare(b.name)
-      );
+      });
+
+    // Union with FALLBACK_MODELS so known/well-named models (e.g. extra Gemini
+    // variants, preview families) still appear even when Copilot's /models
+    // endpoint hasn't enabled them for this account yet. If a fallback-only
+    // model isn't actually supported via /chat/completions, the request-time
+    // fallback in the chat handler will route around it.
+    const byId = new Map();
+    for (const m of apiModels)      byId.set(m.id, m);
+    for (const m of FALLBACK_MODELS) if (!byId.has(m.id)) byId.set(m.id, m);
+
+    const models = Array.from(byId.values()).sort((a, b) =>
+      (a.vendor || '').localeCompare(b.vendor || '') ||
+      (a.name   || '').localeCompare(b.name   || '')
+    );
 
     res.json({ models: models.length ? models : FALLBACK_MODELS });
   } catch (e) {
