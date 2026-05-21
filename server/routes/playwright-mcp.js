@@ -100,11 +100,15 @@ export function registerPlaywrightMcpRoutes(app, {
     res.json({
       installed: _playwrightMcpInstalled,
       running:   !!_playwrightMcpClient,
+      // Browser MCP card endpoints — mirror what faunaMCP-main exposes
+      // (the bundled browser-server, auto-spawned by custom-mcp bridge,
+      // listens on WS 3340 for the Chrome/Edge extension and on HTTP 3341
+      // as a Streamable HTTP MCP endpoint at /mcp).
       endpoint: {
-        transport:  'stdio',
-        extensionWs: 'ws://localhost:3340',
-        faunaExtWs:  'ws://localhost:3737/ext',
-        extensionPort: 3340,
+        wsUrl:    'ws://localhost:3340',
+        wsPort:   3340,
+        httpUrl:  'http://localhost:3341/mcp',
+        httpPort: 3341,
       },
     });
   });
