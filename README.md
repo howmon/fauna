@@ -65,7 +65,7 @@ A cross-platform Electron app. Streaming AI with real shell execution, browser c
 - Generative UI — 18 reactive inline components rendered in chat
 - Projects — group conversations, artifacts, and file contexts
 - Playbook — learned instructions injected into future sessions
-- Smart context summarization — auto-compresses history at 30k chars
+- Token-aware auto-compaction. Manual `/compact` slash command, toggle in Settings.
 - Multi-conversation with DOM isolation — background tasks keep running
 
 ---
