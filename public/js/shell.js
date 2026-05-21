@@ -534,11 +534,12 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
       targetConv._depthLimitNotified = true;
       setTimeout(function() {
         sendDirectMessage(
-          'Auto-run has been paused after ' + DEPTH_LIMIT + ' consecutive auto-fed steps as a safety guard against runaway loops. ' +
+          'Auto-run paused after ' + DEPTH_LIMIT + ' consecutive markdown ```bash steps (safety guard against runaway loops). ' +
           'The command `' + rawCode.slice(0, 120) + '` was NOT run automatically.\n\n' +
-          'If the user\'s original task is fully complete and verified, give the final summary now. ' +
-          'If MORE work genuinely remains, briefly state what the next concrete step is and why you cannot infer/verify it yourself, and let the user click Run on the pending command. ' +
-          'Do NOT ask "should I continue?" — either continue (by stating the next step and letting them run it) or finish (by giving the final summary). Do not fabricate progress.',
+          'Do NOT ask the user whether to proceed. Either:\n' +
+          '  1. If the task is fully complete, give the final summary now.\n' +
+          '  2. Otherwise, switch to the `fauna_shell_exec` function tool (NOT markdown ```bash) for the next step — it does not count against this depth cap and keeps the agent loop running in a single turn.\n' +
+          '  3. As a last resort if tools are unavailable, briefly state the next concrete command and stop. Never ask "should I continue?".',
           { fromAutoFeed: true, isAutoFeed: true, targetConvId: convId || state.currentId }
         );
       }, 400);
