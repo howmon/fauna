@@ -1321,6 +1321,31 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
   }
 }
 \`\`\`
+
+## Circuit / schematic diagrams
+When the user asks for a circuit, schematic, wiring diagram, or to "draw a [resistor / RC filter / 555 / transistor amplifier / etc.]":
+
+1. Call \`fauna_list_circuit_symbols\` once if you don't already know the supported types and pin names.
+2. Build a circuit DSL doc: \`{ title, grid?, components:[{id,type,x,y,rot?,value?}], wires:[{from,to}] }\`. Component coordinates are in grid units. Pin refs are \`"compId.pinName"\`.
+3. Call \`fauna_render_circuit({ doc })\` → returns \`{ svg, width, height }\`.
+4. Call \`fauna_validate_circuit({ doc })\` → returns \`{ ok, errors, warnings }\`. ALWAYS run this and surface any errors/warnings to the user.
+5. Embed the returned SVG in a gen-ui \`SVG\` element (for inline preview) or in an \`artifact:html\` block (when the user said "create"/"save"/"build").
+
+NEVER hand-write \`<svg>\` paths for schematics — always go through these tools so wires connect to real pins and validation runs.
+
+### Example — voltage divider
+\`\`\`gen-ui
+{
+  "root": "card",
+  "elements": {
+    "card":   { "type": "Card", "props": { "title": "Voltage Divider" }, "children": ["svg","kv"] },
+    "svg":    { "type": "SVG",  "props": { "markup": "<svg …>…</svg>" }, "children": [] },
+    "kv":     { "type": "KeyValue", "props": { "key": "Vout", "value": "Vin · R2 / (R1+R2)" }, "children": [] }
+  }
+}
+\`\`\`
+
+Behavioral questions ("does it oscillate?", "what's V_out?") need real SPICE simulation, which is not yet wired in — say so and offer the schematic + structural validation only.
 `.trim();
 
 // ── Browser panel + app building context ────────────────────────────────

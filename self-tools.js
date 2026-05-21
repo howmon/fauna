@@ -13,6 +13,9 @@ import {
 import {
   createProject, getAllProjects, getProject,
 } from './project-manager.js';
+import { renderCircuit } from './lib/circuit-renderer.js';
+import { validateCircuit } from './lib/circuit-validate.js';
+import { SYMBOLS, listSymbolTypes } from './lib/circuit-symbols.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -279,6 +282,79 @@ export const SELF_TOOL_DEFS = [
       },
     },
   },
+
+  // ── Circuit diagrams ──
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_list_circuit_symbols',
+      description: 'List the component types supported by fauna_render_circuit/fauna_validate_circuit, with their pin names and directions. Call this FIRST when the user asks for a circuit/schematic so you know the available symbols.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_render_circuit',
+      description: 'Render a circuit schematic from a JSON DSL. Returns SVG markup the caller can embed in a gen-ui SVG block or an artifact. Component coords are in grid units (default 10 px). Wires reference "compId.pinName". Use fauna_list_circuit_symbols first to learn pin names.',
+      parameters: {
+        type: 'object',
+        properties: {
+          doc: {
+            type: 'object',
+            description: 'Circuit DSL document',
+            properties: {
+              title: { type: 'string' },
+              grid: { type: 'number', description: 'Grid size in SVG units (default 10)' },
+              components: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string', description: 'Unique component instance id, e.g. "r1"' },
+                    type: { type: 'string', description: 'Symbol type, e.g. "resistor"' },
+                    x: { type: 'number' },
+                    y: { type: 'number' },
+                    rot: { type: 'number', enum: [0, 90, 180, 270] },
+                    value: { type: 'string', description: 'Value label, e.g. "10k", "1uF", "2N3904"' },
+                    props: { type: 'object' },
+                  },
+                  required: ['id', 'type', 'x', 'y'],
+                },
+              },
+              wires: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    from: { description: 'Either "compId.pinName" or { x, y } in grid units' },
+                    to:   { description: 'Either "compId.pinName" or { x, y } in grid units' },
+                  },
+                  required: ['from', 'to'],
+                },
+              },
+            },
+            required: ['components'],
+          },
+        },
+        required: ['doc'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_validate_circuit',
+      description: 'Structural lint of a circuit DSL (no simulation). Detects power shorts, dangling pins, floating islands, duplicate drivers, reversed polarized components, and missing decoupling. ALWAYS call this after fauna_render_circuit and surface errors/warnings to the user.',
+      parameters: {
+        type: 'object',
+        properties: {
+          doc: { type: 'object', description: 'Circuit DSL document (same shape as fauna_render_circuit)' },
+        },
+        required: ['doc'],
+      },
+    },
+  },
 ];
 
 // ── Tool executor ───────────────────────────────────────────────────────
@@ -354,6 +430,37 @@ export function executeSelfTool(toolName, args, context = {}) {
         return JSON.stringify({ ok: false, error: e.message });
       }
     }
+    // ── Circuit tools ──
+    case 'fauna_list_circuit_symbols': {
+      const types = listSymbolTypes().map(t => {
+        const s = SYMBOLS[t];
+        return {
+          type: t,
+          pins: Object.entries(s.pins).map(([name, def]) => ({ name, dir: def.dir })),
+          aliases: s.pinAliases ? Object.keys(s.pinAliases) : [],
+          polarized: !!s.polarized,
+          isPower: s.isPower || null,
+        };
+      });
+      return JSON.stringify({ ok: true, types });
+    }
+    case 'fauna_render_circuit': {
+      try {
+        const result = renderCircuit(args.doc);
+        return JSON.stringify({ ok: true, ...result });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+    case 'fauna_validate_circuit': {
+      try {
+        const result = validateCircuit(args.doc);
+        return JSON.stringify(result);
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+
     case 'fauna_write_files': {
       try {
         const started = Date.now();
