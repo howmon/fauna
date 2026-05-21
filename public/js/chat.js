@@ -186,6 +186,23 @@ function _summaryTextForSuggestions(msgEl) {
 }
 
 function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
+  // Don't show CTAs while the conversation is mid-task: if a shell command is
+  // still running / pending auto-run, or an auto-feed chain is in flight, the
+  // assistant is about to continue speaking and the suggestion bar would be
+  // premature.  The next assistant message's `done` event will retry.
+  try {
+    var _convId = (typeof state !== 'undefined' && state) ? state.currentId : null;
+    var _conv   = (typeof getConv === 'function' && _convId) ? getConv(_convId) : null;
+    if (_conv) {
+      if (_conv._streaming) return;
+      if ((_conv._autoFeedDepth || 0) > 0) return;
+    }
+    if (typeof hasActiveShellWorkForCurrentConversation === 'function' &&
+        hasActiveShellWorkForCurrentConversation()) return;
+    if (typeof hasPendingShellVerificationForCurrentConversation === 'function' &&
+        hasPendingShellVerificationForCurrentConversation()) return;
+  } catch (_) { /* fall through */ }
+
   var match = buffer.match(/```suggestions\n([\s\S]*?)```/);
   var items;
   if (match) {
