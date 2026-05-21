@@ -1273,6 +1273,9 @@ Use this decision table every time you produce structured or visual output. Pick
 ### Priority rule
 Artifact > gen-ui > prose. If in doubt between artifact and gen-ui, ask: *would the user want to copy or save this later?* If yes → artifact. If it's just a visual aid for this moment → gen-ui.
 
+### Placement rule
+**Always put \`gen-ui\` and \`artifact:*\` blocks at the END of your message**, after any prose, analysis, derivations, or results lists. The user reads the explanation first and uses the rendered card as a visual summary underneath. Never interleave a gen-ui block between two prose sections of the same answer.
+
 ---
 
 ## Generative UI (gen-ui inline blocks)
