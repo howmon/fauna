@@ -1389,20 +1389,68 @@ Examples:
       if (!mount) {
         mount = document.createElement('div');
         mount.className = 'mcp-builtin-endpoint';
-        mount.style.cssText = 'margin-top:6px;font-size:11px;color:var(--fau-text-muted);font-family:var(--fau-font-mono,ui-monospace,Menlo,monospace);display:flex;flex-wrap:wrap;gap:8px';
         // Place before the buttons row when present
         var btns = info.querySelector('div[style*="display:flex"]');
         if (btns) info.insertBefore(mount, btns);
         else info.appendChild(mount);
       }
-      mount.innerHTML = '';
-      Object.keys(ep).forEach(function(k) {
+      // Normalize the raw endpoint blob into clean labeled rows.
+      // Each row: { label, value } where label is "WS" / "HTTP" (with an
+      // optional " (Fauna)" / " (Ext)" hint) and value is the full URL.
+      function labelFor(key, value) {
+        var k = key.toLowerCase();
+        var hint = '';
+        if (k.indexOf('faunaext') >= 0)      hint = ' (Fauna)';
+        else if (k.indexOf('ext') >= 0)      hint = ' (Ext)';
+        if (typeof value === 'string') {
+          if (/^wss?:\/\//.test(value))  return 'WS'   + hint;
+          if (/^https?:\/\//.test(value)) return 'HTTP' + hint;
+        }
+        if (k.indexOf('ws') >= 0)   return 'WS'   + hint;
+        if (k.indexOf('http') >= 0) return 'HTTP' + hint;
+        return key;
+      }
+      var rows = [];
+      var keys = Object.keys(ep);
+      // First pass: full URLs
+      keys.forEach(function(k) {
+        if (k === 'transport') return;
+        var v = ep[k];
+        if (typeof v !== 'string') return;
+        if (!/^(wss?|https?):\/\//.test(v)) return;
+        rows.push({ label: labelFor(k, v), value: v });
+      });
+      // Second pass: bare port numbers that aren't already covered by a URL above
+      keys.forEach(function(k) {
         if (k === 'transport') return;
         var v = ep[k];
         if (v === null || v === undefined || v === '') return;
-        var span = document.createElement('span');
-        span.textContent = k + ': ' + v;
-        mount.appendChild(span);
+        if (typeof v === 'string' && /^(wss?|https?):\/\//.test(v)) return;
+        var portStr = String(v);
+        var alreadyShown = rows.some(function(r) { return r.value.indexOf(':' + portStr) >= 0; });
+        if (alreadyShown) return;
+        rows.push({ label: labelFor(k, v), value: portStr });
+      });
+
+      mount.innerHTML = '';
+      rows.forEach(function(r) {
+        var rowEl = document.createElement('div');
+        rowEl.className = 'mcp-endpoint-row';
+        rowEl.innerHTML =
+          '<span class="mcp-endpoint-label">' + escHtml(r.label) + '</span>' +
+          '<code class="mcp-endpoint-value">' + escHtml(r.value) + '</code>' +
+          '<button class="mcp-endpoint-copy" type="button" title="Copy to clipboard">Copy</button>';
+        var btn = rowEl.querySelector('.mcp-endpoint-copy');
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          try {
+            navigator.clipboard.writeText(r.value);
+            var orig = btn.textContent;
+            btn.textContent = 'Copied';
+            setTimeout(function() { btn.textContent = orig; }, 1200);
+          } catch (_) {}
+        });
+        mount.appendChild(rowEl);
       });
     }
     renderEndpoint('mcp-builtin-figma',      figmaStatus.endpoint);
