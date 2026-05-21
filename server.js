@@ -85,6 +85,7 @@ import { createTeamsBundle } from './server/routes/teams.js';
 import { registerDocsAndExtRoutes } from './server/routes/docs-and-ext.js';
 import { registerSchedulingAndGuardRoutes } from './server/routes/scheduling-and-guard.js';
 import { registerRegionAndStdinRoutes } from './server/routes/region-and-stdin.js';
+import { registerPermissionsRoutes } from './server/routes/permissions.js';
 import { createAgentDirIterator } from './server/lib/agents-iter.js';
 import {
   resolvePath, atomicWriteFile, checkpointFile,
@@ -1158,71 +1159,8 @@ app.get('/api/system-context', (req, res) => {
   });
 });
 
-// ── macOS Permissions check ───────────────────────────────────────────────
-
-function checkFullDiskAccess() {
-  if (IS_WIN) return 'not-applicable';  // macOS-only permission concept
-  // Probe files that are always protected by Full Disk Access on macOS 10.15+
-  const probes = [
-    path.join(os.homedir(), 'Library', 'Safari', 'History.db'),
-    path.join(os.homedir(), 'Library', 'Messages', 'chat.db'),
-    '/Library/Application Support/com.apple.TCC/TCC.db',
-  ];
-  for (const p of probes) {
-    try {
-      fs.accessSync(p, fs.constants.R_OK);
-      return 'granted';
-    } catch (e) {
-      if (e.code === 'EPERM' || e.code === 'EACCES') return 'denied';
-      // ENOENT = file doesn't exist but we had access — try next probe
-    }
-  }
-  return 'not-determined';
-}
-
-app.get('/api/permissions', (req, res) => {
-  const result = {};
-
-  // GitHub auth
-  try { getGhToken(); result.auth = 'granted'; }
-  catch (_) { result.auth = 'denied'; }
-
-  if (IS_WIN) {
-    // macOS-only permissions do not exist on Windows — mark them so the UI hides them
-    result.screenRecording = 'not-applicable';
-    result.accessibility   = 'not-applicable';
-    result.fullDiskAccess  = 'not-applicable';
-    result.automation      = 'not-applicable';
-  } else {
-    // Screen Recording — Electron systemPreferences API
-    result.screenRecording = systemPreferences?.getMediaAccessStatus?.('screen') ?? 'unknown';
-
-    // Accessibility — Electron systemPreferences API
-    result.accessibility = (systemPreferences?.isTrustedAccessibilityClient?.(false) === true)
-      ? 'granted' : 'denied';
-
-    // Full Disk Access — file system probe
-    result.fullDiskAccess = checkFullDiskAccess();
-
-    // Automation — marked as auto-prompted (can't check without potentially prompting)
-    result.automation = 'auto-prompted';
-  }
-
-  res.json(result);
-});
-
-// Trigger Screen Recording permission prompt via desktopCapturer
-app.post('/api/permissions/request-screen', async (req, res) => {
-  try {
-    if (!desktopCapturer) throw new Error('desktopCapturer not available');
-    await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } });
-    const status = systemPreferences?.getMediaAccessStatus?.('screen') ?? 'unknown';
-    res.json({ status });
-  } catch (e) {
-    res.json({ status: systemPreferences?.getMediaAccessStatus?.('screen') ?? 'unknown', error: e.message });
-  }
-});
-
+// ── macOS Permissions routes moved → server/routes/permissions.js ──
+registerPermissionsRoutes(app, { isWin: IS_WIN, getGhToken, getSystemPreferences: () => systemPreferences, getDesktopCapturer: () => desktopCapturer });
 // ── Memory / Preferences / Facts ──────────────────────────────────────────
 const { loadPrefs } = registerMemoryPrefsFactsRoutes(app, { configDir: CONFIG_DIR });
 
