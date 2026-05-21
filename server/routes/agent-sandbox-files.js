@@ -28,7 +28,7 @@ import crypto from 'crypto';
 import { performance } from 'perf_hooks';
 import { exec as _exec } from 'child_process';
 
-import { RECOVERY_DIR } from '../../lib/instruction-files.js';
+import { RECOVERY_DIR } from '../copilot/auth.js';
 import {
   resolvePath, atomicWriteFile, checkpointFile,
   getMutationContext, assertWriteAllowed, sendMutationError,

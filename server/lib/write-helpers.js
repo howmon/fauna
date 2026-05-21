@@ -10,7 +10,7 @@ import os from 'os';
 import path from 'path';
 
 import { checkFilePath } from '../../agent-sandbox.js';
-import { RECOVERY_DIR } from '../../lib/instruction-files.js';
+import { RECOVERY_DIR } from '../copilot/auth.js';
 
 let _getAgentManifest = () => null;
 export function setAgentManifestGetter(fn) {
