@@ -66,6 +66,7 @@ import { registerEnterpriseStubRoutes } from './server/routes/enterprise.js';
 import { registerAuthRoutes } from './server/routes/auth.js';
 import { createExtBridge } from './server/bridges/ext.js';
 import { createCustomMcpBridge } from './server/bridges/custom-mcp.js';
+import { createFigmaBridge } from './server/bridges/figma.js';
 import {
   getTeamsSettings, updateTeamsSettings, startTeamsBridge, stopTeamsBridge, testConnection as teamsTestConnection,
 } from './teams-bridge.js';
@@ -126,17 +127,29 @@ const extBridge = createExtBridge({
 extBridge.register(app);
 
 // ── Custom MCP bridge moved → server/bridges/custom-mcp.js ──
-// `findNodeBinary` and `figmaState` are referenced lazily inside the bridge,
-// so their later declarations in this file are fine — closures resolve at
-// request / auto-detect time, not at module load.
+// `findNodeBinary` is hoisted; figma getter resolves at request time.
 const customMcp = createCustomMcpBridge({
   faunaConfigDir: FAUNA_CONFIG_DIR,
   extBridge,
-  getFigmaConnected: () => figmaState.connected,
+  getFigmaConnected: () => figma.isConnected(),
   bundledBrowserServerPath: path.join(__dirname, 'faunaMCP-main', 'browser-server', 'index.js'),
   findNodeBinary,
 });
 customMcp.register(app);
+
+// ── Figma bridge moved → server/bridges/figma.js ──
+const figma = createFigmaBridge({
+  configDir: CONFIG_DIR,
+  bundledMcpServerPath: path.join(process.resourcesPath || '', 'mcp-server', 'server', 'index.js'),
+  devMcpServerPath: path.join(__dirname, 'relay', 'server', 'index.js'),
+  defaultMcpPath: path.join(os.homedir(), 'FigmaExtensions', 'CopilotMCP', 'server', 'index.js'),
+  bundledPluginPath: path.join(process.resourcesPath || '', 'figma-plugin'),
+  devPluginPath: path.join(__dirname, 'assets', 'figma-plugin'),
+  readSavedConfig,
+  findNodeBinary,
+  isWin: IS_WIN,
+});
+figma.register(app);
 
 app.get('/api/runs', (_req, res) => {
   res.json([]);
@@ -773,8 +786,9 @@ app.post('/api/chat', async (req, res) => {
     const factsCtx = isDelegation ? '' : factsForSystemPrompt(20);
     // Inject connected Figma file info so AI can target the right document
     let figmaFilesCtx = '';
-    if (useFigmaMCP && figmaFiles.size > 0) {
-      const entries = [...figmaFiles.values()].map(f => `- "${f.fileName}" (fileKey: ${f.fileKey}, page: ${f.currentPage})`).join('\n');
+    const _figmaFilesList = figma.listFiles();
+    if (useFigmaMCP && _figmaFilesList.length > 0) {
+      const entries = _figmaFilesList.map(f => `- "${f.fileName}" (fileKey: ${f.fileKey}, page: ${f.currentPage})`).join('\n');
       figmaFilesCtx = `\n## Connected Figma Documents\nThe following Figma documents are currently open with the plugin running:\n${entries}\nWhen using figma_execute, pass the fileKey parameter to target a specific document. If omitted, the most recently active document is used.\nIMPORTANT: Dev Mode MCP tools (get_screenshot, get_design_context, get_metadata, etc.) always operate on whichever file is currently focused in Figma — they do NOT accept a fileKey parameter. If you need to read from or screenshot a specific file, use figma_execute with the fileKey parameter instead.`;
     }
     const cliHint = isCLI ? `\n\n## Output Format\nYou are running in a terminal CLI. Respond in plain, readable text. Do NOT use markdown headers (###), horizontal rules (---), or emojis. Use plain bullet points (- or *) only when a list genuinely helps. Be concise and direct. Never emit browser-action or browser-ext-action code blocks — those do not work in the terminal.` : '';
@@ -833,9 +847,9 @@ app.post('/api/chat', async (req, res) => {
     // Fetch Figma MCP tools and inject layout knowledge if requested
     let mcpTools;
     if (useFigmaMCP) {
-      try { mcpTools = await figmaMCP.getTools(); } catch (_) {
+      try { mcpTools = await figma.getMcpTools(); } catch (_) {
         // Fallback: always expose figma_execute even when port-3845 is unavailable
-        mcpTools = [FigmaMCPClient.FIGMA_EXECUTE_TOOL];
+        mcpTools = [figma.executeToolDef];
       }
     }
 
@@ -1101,9 +1115,9 @@ app.post('/api/chat', async (req, res) => {
               console.log(`[chat] Agent tool: ${toolName}`);
               result = await agentToolHandlers.get(toolName)(args);
             } else {
-              figmaLog('🔧 ' + toolName + (toolName === 'figma_execute' ? ': ' + (args.code || '').slice(0, 80).replace(/\n/g,' ') + '…' : ''), 'cmd');
-              result = await figmaMCP.callTool(toolName, args);
-              figmaLog('✓ ' + toolName + ' done', 'ok');
+              figma.log('🔧 ' + toolName + (toolName === 'figma_execute' ? ': ' + (args.code || '').slice(0, 80).replace(/\n/g,' ') + '…' : ''), 'cmd');
+              result = await figma.callMcpTool(toolName, args);
+              figma.log('✓ ' + toolName + ' done', 'ok');
             }
 
             // Truncate oversized results (screenshots, large contexts)
@@ -1114,7 +1128,7 @@ app.post('/api/chat', async (req, res) => {
             allMessages.push({ role: 'tool', tool_call_id: tc.id, content: typeof result === 'string' ? result : JSON.stringify(result) });
           } catch (e) {
             allMessages.push({ role: 'tool', tool_call_id: tc.id, content: `Error: ${e.message}` });
-            figmaLog('✗ ' + toolName + ': ' + e.message, 'err');
+            figma.log('✗ ' + toolName + ': ' + e.message, 'err');
           }
         }
         if (continueLoop) { /* loop continues to get next AI response */ }
@@ -1873,408 +1887,12 @@ app.post('/api/browse', async (req, res) => {
   }
 });
 
-// ── Figma bridge ──────────────────────────────────────────────────────────
-// Connects as a "controller" to the CopilotMCP WS relay at port 3335.
-// When the Figma plugin (CopilotMCP/CopilotChat plugin in Figma desktop) is open,
-// this bridge can execute arbitrary Figma Plugin API code and query design state.
-
-const FIGMA_WS_URL     = 'ws://localhost:3335';
-const FIGMA_RULES_FILE = path.join(CONFIG_DIR, 'figma-rules.json');
-const DEFAULT_MCP_PATH = path.join(os.homedir(), 'FigmaExtensions', 'CopilotMCP', 'server', 'index.js');
-
-function _sanitizeUserMcpPath(rawPath) {
-  if (!rawPath || typeof rawPath !== 'string') return null;
-  const p = path.resolve(rawPath);
-  // User-configured overrides must stay inside HOME for safety.
-  if (!p.endsWith('.js') || !p.startsWith(os.homedir())) return null;
-  return p;
-}
-
-function _mcpPathCandidates() {
-  const cfg = readSavedConfig();
-  const userPath = _sanitizeUserMcpPath(cfg.mcpServerPath);
-  const bundledPath = path.join(process.resourcesPath || '', 'mcp-server', 'server', 'index.js');
-  const devPath = path.join(__dirname, 'relay', 'server', 'index.js');
-  const candidates = [];
-  if (userPath) candidates.push(userPath);
-  candidates.push(bundledPath, devPath, DEFAULT_MCP_PATH);
-  return [...new Set(candidates.filter(Boolean))];
-}
-
-// ── MCP server process management ────────────────────────────────────────
-
-let mcpProcess    = null;
-let mcpLogs       = [];       // last 200 stderr lines
-let mcpAutoStart  = true;     // start with the app by default
-
-function findNodeBinary() {
-  const candidates = IS_WIN ? [
-    'C:\\Program Files\\nodejs\\node.exe',
-    path.join(os.homedir(), 'AppData', 'Roaming', 'nvm', 'current', 'node.exe'),
-    path.join(os.homedir(), 'scoop', 'shims', 'node.exe'),
-  ] : [
-    '/opt/homebrew/bin/node',   // Apple Silicon Homebrew
-    '/usr/local/bin/node',      // Intel Homebrew
-    '/opt/homebrew/opt/node/bin/node',
-    '/usr/bin/node',
-    '/usr/local/bin/node',
-  ];
-  const binName = IS_WIN ? 'node.exe' : 'node';
-  const pathDirs = (process.env.PATH || '').split(PATH_SEP);
-  for (const dir of pathDirs) candidates.push(path.join(dir, binName));
-  for (const p of candidates) {
-    try { fs.accessSync(p, fs.constants.X_OK); return p; } catch (_) {}
-  }
-  return null;
-}
-
-function getMcpServerPath() {
-  const candidates = _mcpPathCandidates();
-  const existing = candidates.find(p => fs.existsSync(p));
-  return existing || candidates[0] || DEFAULT_MCP_PATH;
-}
-
-function isMcpRunning() {
-  return mcpProcess !== null && mcpProcess.exitCode === null;
-}
-
-function startMcpServer() {
-  if (isMcpRunning()) return { ok: true, already: true };
-
-  const serverPath = getMcpServerPath();
-  if (!fs.existsSync(serverPath)) {
-    return {
-      ok: false,
-      error: `MCP server not found at: ${serverPath}`,
-      candidates: _mcpPathCandidates(),
-    };
-  }
-
-  const nodeBin = findNodeBinary();
-  if (!nodeBin) return { ok: false, error: IS_WIN
-    ? 'Node.js binary not found. Install Node.js from nodejs.org or via winget/scoop.'
-    : 'Node.js binary not found. Install Node.js via Homebrew.' };
-
-  mcpLogs = [];
-  const serverDir = path.dirname(serverPath);
-
-  const mcpEnvPATH = IS_WIN
-    ? (process.env.PATH || '')
-    : `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || '/usr/bin:/bin'}`;
-
-  mcpProcess = spawn(nodeBin, [serverPath], {
-    cwd: serverDir,
-    stdio: ['ignore', 'ignore', 'pipe'],  // stdin/stdout ignored; capture stderr for logs
-    env: { ...process.env, PATH: mcpEnvPATH }
-  });
-
-  mcpProcess.stderr.on('data', chunk => {
-    const lines = chunk.toString().split('\n').filter(Boolean);
-    for (const line of lines) {
-      mcpLogs.push({ t: Date.now(), msg: line });
-      if (mcpLogs.length > 200) mcpLogs.shift();
-    }
-  });
-
-  mcpProcess.on('exit', (code, signal) => {
-    const reason = signal ? `signal ${signal}` : `code ${code}`;
-    mcpLogs.push({ t: Date.now(), msg: `[App] MCP server exited (${reason})` });
-    mcpProcess = null;
-    // Auto-reconnect WS after brief delay (process may restart)
-    figmaState.connected = false;
-    figmaState.fileInfo  = null;
-  });
-
-  mcpProcess.on('error', err => {
-    mcpLogs.push({ t: Date.now(), msg: `[App] Failed to start: ${err.message}` });
-    mcpProcess = null;
-  });
-
-  // Reconnect WS bridge after server has had time to start
-  setTimeout(() => {
-    if (figmaState.pendingReconnect) clearTimeout(figmaState.pendingReconnect);
-    figmaConnect();
-  }, 1200);
-
-  return { ok: true };
-}
-
-function stopMcpServer() {
-  if (!isMcpRunning()) return { ok: true, already: true };
-  mcpProcess.kill('SIGTERM');
-  // Force-kill after 3 s if it hasn't exited
-  setTimeout(() => { if (isMcpRunning()) mcpProcess.kill('SIGKILL'); }, 3000);
-  return { ok: true };
-}
-
-// ── MCP server endpoints ──────────────────────────────────────────────────
-
-app.get('/api/figma/mcp-status', (req, res) => {
-  res.json({
-    running: isMcpRunning(),
-    pid:     mcpProcess?.pid ?? null,
-    path:    getMcpServerPath(),
-    logs:    mcpLogs.slice(-50),
-  });
-});
-
-app.post('/api/figma/mcp-start', (req, res) => {
-  const result = startMcpServer();
-  res.json(result);
-});
-
-app.post('/api/figma/mcp-stop', (req, res) => {
-  const result = stopMcpServer();
-  res.json(result);
-});
-
-app.get('/api/figma/mcp-logs', (req, res) => {
-  const since = parseInt(req.query.since || '0', 10);
-  res.json(mcpLogs.filter(l => l.t > since));
-});
-
-// ── WS bridge fields ──────────────────────────────────────────────────────
-
-let figmaWs      = null;
-let figmaState   = { connected: false, fileInfo: null, activeSystem: null, pendingReconnect: null };
-const figmaFiles   = new Map(); // fileKey → { fileName, fileKey, currentPage, currentPageId, timestamp }
-const figmaPending = new Map(); // id → { resolve, reject, timer }
-
-function readFigmaRules() {
-  try { return JSON.parse(fs.readFileSync(FIGMA_RULES_FILE, 'utf8')); }
-  catch (_) { return []; }
-}
-function writeFigmaRules(rules) {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(FIGMA_RULES_FILE, JSON.stringify(rules, null, 2));
-}
-
-function figmaConnect() {
-  if (figmaWs && figmaWs.readyState < 2) return; // already open or connecting
-  try {
-    const WS = _require('ws');
-    figmaWs = new WS(FIGMA_WS_URL);
-
-    figmaWs.on('open', () => {
-      figmaState.connected = true;
-      figmaState.pendingReconnect = null;
-      figmaWs.send(JSON.stringify({ type: 'client-hello', clientName: 'Copilot Chat App' }));
-      console.log('[Figma] Controller connected to relay');
-    });
-
-    figmaWs.on('message', raw => {
-      let msg; try { msg = JSON.parse(raw.toString()); } catch (_) { return; }
-
-      if (msg.type === 'FILE_INFO') {
-        figmaState.fileInfo = { fileName: msg.fileName, fileKey: msg.fileKey, currentPage: msg.currentPage, currentPageId: msg.currentPageId };
-        // Track all connected Figma files
-        if (msg.fileKey) {
-          figmaFiles.set(msg.fileKey, { fileName: msg.fileName, fileKey: msg.fileKey, currentPage: msg.currentPage, currentPageId: msg.currentPageId, timestamp: Date.now() });
-        }
-      }
-      // Plugin disconnected — remove from tracked files
-      if (msg.type === 'plugin-disconnected' && msg.fileKey) {
-        figmaFiles.delete(msg.fileKey);
-      }
-      if (msg.type === 'active-system') {
-        figmaState.activeSystem = { id: msg.id, name: msg.name };
-      }
-      // Route execute-result back to waiting callers
-      if (msg.id && figmaPending.has(msg.id)) {
-        const { resolve, timer } = figmaPending.get(msg.id);
-        clearTimeout(timer); figmaPending.delete(msg.id); resolve(msg);
-      }
-    });
-
-    figmaWs.on('close', () => {
-      figmaState.connected = false;
-      figmaState.fileInfo  = null;
-      figmaFiles.clear();
-      // Immediately reject all in-flight requests so they don't hang for 30 s
-      for (const [id, { reject, timer }] of figmaPending) {
-        clearTimeout(timer);
-        figmaPending.delete(id);
-        reject(new Error('Figma relay disconnected — please reconnect the plugin'));
-      }
-      console.log('[Figma] Relay disconnected — retrying in 5 s');
-      figmaState.pendingReconnect = setTimeout(figmaConnect, 5000);
-    });
-
-    figmaWs.on('error', () => {
-      // Suppress — handled in close
-    });
-
-    // Heartbeat: ping every 20 s so dead TCP connections are detected quickly
-    const pingInterval = setInterval(() => {
-      if (!figmaWs || figmaWs.readyState !== 1) { clearInterval(pingInterval); return; }
-      try { figmaWs.ping(); } catch (_) {}
-    }, 20000);
-    figmaWs.once('close', () => clearInterval(pingInterval));
-  } catch (e) {
-    console.log('[Figma] WS module not available:', e.message);
-  }
-}
-
-// ── Figma progress logger ─────────────────────────────────────────────────
-function figmaLog(message, level = 'info') {
-  if (figmaWs && figmaWs.readyState === 1) {
-    figmaWs.send(JSON.stringify({ type: 'progress-log', message, level }));
-  }
-}
-
-// ── Figma Dev Mode MCP Client ─────────────────────────────────────────────
-// Connects to Figma's built-in MCP server at http://127.0.0.1:3845/mcp
-// Provides AI with design context, variables, screenshots, and more.
-
-const FIGMA_MCP_URL = 'http://127.0.0.1:3845/mcp';
-
-class FigmaMCPClient {
-  constructor() { this.sessionId = null; this.toolsCache = null; }
-
-  async _post(body, timeoutMs = 30000) {
-    const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' };
-    if (this.sessionId) headers['mcp-session-id'] = this.sessionId;
-    const res = await fetch(FIGMA_MCP_URL, {
-      method: 'POST', headers, body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs)
-    });
-    if (!this.sessionId) this.sessionId = res.headers.get('mcp-session-id');
-    const text = await res.text();
-    // SSE: join all data: lines from the last event block
-    // Multiple data: lines in one event are continuations (joined with \n)
-    // Multiple events are separated by blank lines — we want the last one with JSON-RPC result
-    let jsonStr = null;
-    for (const block of text.split(/\n\n+/).filter(Boolean)) {
-      const lines = block.split('\n').filter(l => l.startsWith('data: ')).map(l => l.slice(6));
-      if (lines.length > 0) jsonStr = lines.join('\n');
-    }
-    if (!jsonStr) jsonStr = text;
-    return JSON.parse(jsonStr);
-  }
-
-  async init() {
-    const r = await this._post({ jsonrpc: '2.0', method: 'initialize',
-      params: { protocolVersion: '2024-11-05', capabilities: {},
-        clientInfo: { name: 'CopilotChat', version: '1.0.0' } }, id: 1 });
-    return r.result;
-  }
-
-  // figma_execute is always available — independent of port-3845 (Figma Dev Mode MCP)
-  static get FIGMA_EXECUTE_TOOL() {
-    return {
-      type: 'function',
-      function: {
-        name: 'figma_execute',
-        description: 'Execute Figma Plugin API JavaScript code to CREATE, MODIFY, or DELETE nodes in the open Figma file. Use this instead of the REST API — no PAT required. The code runs inside the Figma plugin context and has full access to the figma object (figma.currentPage, figma.createFrame, figma.createText, etc). IMPORTANT: figma.getNodeById() returns null when the ID does not exist in the current file — ALWAYS null-check before accessing properties (e.g. `var node = figma.getNodeById(id); if (!node) return "Node not found"; ...`). When accessing .componentProperties or .componentPropertyDefinitions on any node, always wrap in try/catch (e.g. `let props; try { props = node.componentProperties || {}; } catch(_) { props = {}; }`) to avoid "Component set for node has existing errors" on broken components. When multiple Figma files are open, use the fileKey parameter to target a specific file.',
-        parameters: {
-          type: 'object',
-          properties: {
-            code: { type: 'string', description: 'Valid Figma Plugin API JavaScript to execute. Must be synchronous or use async/await. Return a value with `return` to get output.' },
-            fileKey: { type: 'string', description: 'Optional Figma file key to target. When omitted, targets the most recently active file. Use this when multiple Figma files are open to avoid cross-document mixups.' }
-          },
-          required: ['code']
-        }
-      }
-    };
-  }
-
-  async getTools() {
-    // Always include figma_execute even if the Figma Dev Mode MCP (port 3845) is unreachable
-    if (this.toolsCache) return this.toolsCache;
-    try {
-      if (!this.sessionId) await this.init();
-      const r = await this._post({ jsonrpc: '2.0', method: 'tools/list', params: {}, id: 2 });
-      this.toolsCache = (r.result?.tools || []).map(t => ({
-        type: 'function',
-        function: { name: t.name, description: t.description, parameters: t.inputSchema || { type: 'object', properties: {} } }
-      }));
-      // Remove any figma_execute the remote server may have to avoid duplicates
-      this.toolsCache = this.toolsCache.filter(t => t.function.name !== 'figma_execute');
-    } catch (_) {
-      // Port-3845 unavailable — serve figma_execute on its own
-      this.toolsCache = [];
-    }
-    this.toolsCache.push(FigmaMCPClient.FIGMA_EXECUTE_TOOL);
-    return this.toolsCache;
-  }
-
-  async callTool(name, args) {
-    // figma_execute is a local tool — route through the port-3335 plugin relay
-    if (name === 'figma_execute') {
-      let code = args.code;
-      const targetFileKey = args.fileKey || null;
-      let result = await figmaSend({ type: 'execute-code', code }, 30000, targetFileKey);
-
-      // Auto-recover from unloaded font errors: parse the fonts out of the error,
-      // prepend loadFontAsync calls, and retry once.
-      if (result.error && result.error.includes('unloaded font')) {
-        const fontCalls = [];
-        const re = /figma\.loadFontAsync\(\s*\{[^}]+\}\s*\)/g;
-        let m;
-        const seen = new Set();
-        while ((m = re.exec(result.error)) !== null) {
-          const call = 'await ' + m[0] + '.catch(()=>{});';
-          if (!seen.has(call)) { seen.add(call); fontCalls.push(call); }
-        }
-        if (fontCalls.length) {
-          const wrappedCode = '// auto-load missing fonts\n' + fontCalls.join('\n') + '\n\n' + code;
-          result = await figmaSend({ type: 'execute-code', code: wrappedCode }, 30000, targetFileKey);
-        }
-      }
-
-      if (result.error) throw new Error(result.error);
-      return typeof result.result !== 'undefined' ? JSON.stringify(result.result) : 'Done';
-    }
-    if (!this.sessionId) await this.init();
-    // Use shorter timeout for screenshot-type calls that tend to hang when targeting wrong file
-    const timeoutMs = /screenshot/i.test(name) ? 15000 : 30000;
-    const r = await this._post({ jsonrpc: '2.0', method: 'tools/call',
-      params: { name, arguments: args }, id: Date.now() }, timeoutMs);
-    if (r.error) throw new Error(r.error.message);
-    const content = r.result?.content || [];
-    return content.map(c => c.text || JSON.stringify(c)).join('\n');
-  }
-
-  reset() { this.sessionId = null; this.toolsCache = null; }
-}
-
-const figmaMCP = new FigmaMCPClient();
-
-app.get('/api/figma-mcp/status', async (req, res) => {
-  try {
-    const tools = await figmaMCP.getTools();
-    res.json({ ok: true, connected: true, toolCount: tools.length, tools: tools.map(t => t.function.name) });
-  } catch (e) {
-    res.json({ ok: false, connected: false, error: e.message, tools: [] });
-  }
-});
-
-app.post('/api/figma-mcp/call', async (req, res) => {
-  const { name, arguments: args = {} } = req.body;
-  if (!name) return res.status(400).json({ error: 'name required' });
-  try {
-    const result = await figmaMCP.callTool(name, args);
-    res.json({ ok: true, result });
-  } catch (e) {
-    figmaMCP.reset();
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
+// ── Figma bridge moved → server/bridges/figma.js ──
 // ── Custom MCP routes/state moved → server/bridges/custom-mcp.js ──
 // Start trying to connect immediately when the server starts
 // Also auto-start the MCP server if it's not already running
 setTimeout(() => {
-  if (mcpAutoStart) {
-    const started = startMcpServer();
-    if (!started.ok) {
-      // If the local relay cannot start, still try connecting to an already running relay.
-      console.log('[Figma] Local MCP auto-start skipped:', started.error || 'unknown reason');
-      figmaConnect();
-    }
-  } else {
-    figmaConnect();
-  }
+  figma.start();
   // Start custom MCP auto-detection
   customMcp.startAutoDetect();
   // Pre-warm Playwright MCP if available so it shows READY immediately
@@ -2287,167 +1905,7 @@ setTimeout(() => {
     } catch (_) {}
   })();
 }, 500);  // slight delay so the main server is fully up first
-
-function figmaSend(command, timeoutMs = 30000, targetFileKey = null) {
-  return new Promise((resolve, reject) => {
-    if (!figmaWs || figmaWs.readyState !== 1) {
-      return reject(new Error(
-        figmaState.pendingReconnect
-          ? 'Figma relay is reconnecting — please try again in a moment'
-          : 'Not connected to Figma relay — ensure the CopilotMCP plugin is open in Figma'
-      ));
-    }
-    const id    = `ctrl-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const timer = setTimeout(() => { figmaPending.delete(id); reject(new Error('Figma execution timed out — the operation may have been too large or the plugin became unresponsive')); }, timeoutMs);
-    figmaPending.set(id, { resolve, reject, timer });
-    const payload = { ...command, id };
-    if (targetFileKey) payload.fileKey = targetFileKey;
-    figmaWs.send(JSON.stringify(payload));
-  });
-}
-
-const PLUGIN_INSTALL_DIR = path.join(CONFIG_DIR, 'figma-plugin');
-
-function getBundledPluginDir() {
-  // In packaged Electron app, extraResources land at process.resourcesPath/figma-plugin
-  // In dev (node server.js), fall back to the local assets folder
-  const packed = path.join(process.resourcesPath || '', 'figma-plugin');
-  if (fs.existsSync(packed)) return packed;
-  return path.join(__dirname, 'assets', 'figma-plugin');
-}
-
-app.get('/api/figma/plugin-info', (req, res) => {
-  const installed = fs.existsSync(path.join(PLUGIN_INSTALL_DIR, 'manifest.json'));
-  res.json({
-    installed,
-    installDir:   installed ? PLUGIN_INSTALL_DIR : null,
-    bundledDir:   getBundledPluginDir(),
-  });
-});
-
-app.post('/api/figma/plugin-install', (req, res) => {
-  try {
-    const src = getBundledPluginDir();
-    if (!fs.existsSync(src)) return res.status(404).json({ error: 'Bundled plugin not found' });
-
-    fs.mkdirSync(PLUGIN_INSTALL_DIR, { recursive: true });
-    for (const file of ['manifest.json', 'code.js', 'ui.html']) {
-      fs.copyFileSync(path.join(src, file), path.join(PLUGIN_INSTALL_DIR, file));
-    }
-    res.json({ ok: true, installDir: PLUGIN_INSTALL_DIR });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post('/api/figma/plugin-download', (req, res) => {
-  try {
-    const src = getBundledPluginDir();
-    if (!fs.existsSync(src)) return res.status(404).json({ error: 'Bundled plugin not found' });
-
-    // Use osascript on macOS or PowerShell on Windows to open a folder picker
-    let chosenDir;
-    if (process.platform === 'darwin') {
-      try {
-        chosenDir = execSync(
-          `osascript -e 'set f to choose folder with prompt "Choose where to save the Figma plugin"' -e 'POSIX path of f'`,
-          { encoding: 'utf8', timeout: 60000 }
-        ).trim();
-      } catch (_) {
-        return res.json({ ok: false, cancelled: true });
-      }
-    } else {
-      // Windows fallback
-      try {
-        chosenDir = execSync(
-          `powershell -Command "[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = 'Choose where to save the Figma plugin'; if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath } else { throw 'cancelled' }"`,
-          { encoding: 'utf8', timeout: 60000 }
-        ).trim();
-      } catch (_) {
-        return res.json({ ok: false, cancelled: true });
-      }
-    }
-    if (!chosenDir) return res.json({ ok: false, cancelled: true });
-
-    const destDir = path.join(chosenDir, 'CopilotFigmaMCPPlugin');
-    fs.mkdirSync(destDir, { recursive: true });
-    for (const file of fs.readdirSync(src)) {
-      fs.copyFileSync(path.join(src, file), path.join(destDir, file));
-    }
-    res.json({ ok: true, downloadDir: destDir });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ── Figma API endpoints ───────────────────────────────────────────────────
-
-app.get('/api/figma/status', (req, res) => {
-  const figmaConnected = figmaState.connected && !!figmaState.fileInfo;
-  res.json({
-    relayConnected: figmaState.connected,
-    figmaConnected,
-    fileInfo:      figmaState.fileInfo,
-    connectedFiles: [...figmaFiles.values()],
-    activeSystem:  figmaState.activeSystem,
-    mcpRunning:    isMcpRunning(),
-    mcpPid:        mcpProcess?.pid ?? null,
-    endpoint: {
-      wsUrl:   FIGMA_WS_URL,
-      wsPort:  3335,
-      httpPort: 3336,
-    },
-  });
-});
-
-app.post('/api/figma/connect', (req, res) => {
-  if (figmaState.pendingReconnect) clearTimeout(figmaState.pendingReconnect);
-  figmaConnect();
-  res.json({ ok: true });
-});
-
-app.post('/api/figma/execute', async (req, res) => {
-  const { code, timeout, fileKey } = req.body;
-  if (!code) return res.status(400).json({ error: 'code required' });
-  try {
-    const result = await figmaSend({ type: 'execute-code', code }, timeout || 15000, fileKey || null);
-    res.json({ ok: true, result: result.result, error: result.error });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// ── Figma Rules endpoints ─────────────────────────────────────────────────
-
-app.get('/api/figma/rules', (req, res) => {
-  res.json(readFigmaRules());
-});
-
-app.post('/api/figma/rules', (req, res) => {
-  const { text, enabled = true } = req.body;
-  if (!text || !text.trim()) return res.status(400).json({ error: 'text required' });
-  const rules = readFigmaRules();
-  const rule  = { id: Date.now().toString(), text: text.trim(), enabled };
-  rules.push(rule);
-  writeFigmaRules(rules);
-  res.json(rule);
-});
-
-app.put('/api/figma/rules/:id', (req, res) => {
-  const rules  = readFigmaRules();
-  const idx    = rules.findIndex(r => r.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Rule not found' });
-  rules[idx]   = { ...rules[idx], ...req.body, id: rules[idx].id };
-  writeFigmaRules(rules);
-  res.json(rules[idx]);
-});
-
-app.delete('/api/figma/rules/:id', (req, res) => {
-  const rules = readFigmaRules();
-  const next  = rules.filter(r => r.id !== req.params.id);
-  writeFigmaRules(next);
-  res.json({ ok: true });
-});
+// ── Figma plugin/status/rules routes moved → server/bridges/figma.js ──
 
 // ── Shell execution ───────────────────────────────────────────────────────
 // Runs arbitrary shell commands and returns stdout/stderr/exit code.
@@ -6377,21 +5835,12 @@ export function startServer(port) {
 
     // Clean up MCP child process and Figma timers on exit
     function fullCleanup() {
-      // Cancel the Figma reconnect loop so it can't keep the event loop alive
-      if (figmaState.pendingReconnect) {
-        clearTimeout(figmaState.pendingReconnect);
-        figmaState.pendingReconnect = null;
-      }
-      // Close the WS connection
-      if (figmaWs) {
-        try { figmaWs.terminate(); } catch (_) {}
-        figmaWs = null;
-      }
+      // Figma bridge: cancel reconnect, close WS, kill MCP child
+      figma.cleanup();
       // Stop custom MCP auto-detection polling + kill processes
       customMcp.cleanup();
       // Kill MCP child
       stopScheduler();
-      if (isMcpRunning()) mcpProcess.kill('SIGKILL');
     }
     process.on('exit',    () => fullCleanup());
     process.on('SIGTERM', () => { fullCleanup(); process.exit(0); });
