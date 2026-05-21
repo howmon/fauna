@@ -6,18 +6,13 @@
 import express    from 'express';
 import OpenAI     from 'openai';
 import localtunnel from 'localtunnel';
-import { execSync, exec as _exec, execFile as _execFile, spawn } from 'child_process';
+import { execSync, exec as _exec, spawn } from 'child_process';
 import crypto     from 'crypto';
 import path       from 'path';
 import os         from 'os';
 import fs         from 'fs';
-import { performance } from 'perf_hooks';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
-import { WebSocketServer } from 'ws';
-import { checkFilePath, checkNetworkAccess, checkShellCommand, getSandboxedEnv, getResourceLimits, audit, getAuditLog } from './agent-sandbox.js';
-import { getAgentTools, startAgentMCPServers, stopAgentMCPServers, executeBuiltInTool, executeCustomTool } from './agent-tools.js';
-import { scanAgent } from './agent-scanner.js';
 import { createTask, getTask, getAllTasks, updateTask, deleteTask, startScheduler, stopScheduler } from './task-manager.js';
 import { runTask, pauseTask, stopTask, steerTask, isTaskRunning, subscribe } from './task-runner.js';
 import {
@@ -25,35 +20,14 @@ import {
   touchProject, linkConversation, linkTask,
   addSource, removeSource, syncSource, listFiles, readSourceFile, resolveSourceFilePath,
   addContext, updateContext, removeContext, contextFromArtifact,
-  getProjectSystemContext, buildContextPayload,
 } from './project-manager.js';
-import { loadInstructionFiles, _safeReadInstructionFile, _isPathInside, _realPathOrResolve, INSTRUCTION_FILE_LIMIT, INSTRUCTION_TOTAL_LIMIT } from './lib/instruction-files.js';
+import { loadInstructionFiles } from './lib/instruction-files.js';
+import { runDecay } from './memory-store.js';
+import { startHeartbeat } from './heartbeat.js';
+import { startWorkflowTimer } from './workflow-manager.js';
 import {
-  remember as factsRemember, recall as factsRecall, forget as factsForget,
-  listFacts, getFact, runDecay, formatForSystemPrompt as factsForSystemPrompt,
-  exportFacts, importFacts, getStats as factsGetStats,
-} from './memory-store.js';
-import { SELF_TOOL_DEFS, executeSelfTool, isSelfTool } from './self-tools.js';
-import {
-  getSettings as hbGetSettings, updateSettings as hbUpdateSettings,
-  getLog as hbGetLog, clearLog as hbClearLog,
-  runHeartbeat, startHeartbeat, stopHeartbeat,
-} from './heartbeat.js';
-import {
-  createWorkflow, getWorkflow, getAllWorkflows, updateWorkflow, deleteWorkflow,
-  getHistory as wfGetHistory, runWorkflow, startWorkflowTimer, stopWorkflowTimer, parseSchedule,
-} from './workflow-manager.js';
-import {
-  isCommandSafe, addAutoAllow, getAutoAllowList, removeAutoAllow, clearAutoAllow,
-  checkCommandPermission, explainCommand,
-} from './permission-guard.js';
-import { ToolGuardContext, formatToolLabel, getToolCategory } from './tool-guard.js';
-import {
-  CONFIG_DIR, CONFIG_FILE, RECOVERY_DIR,
-  findGhBinary, readTokenFromKeychain, readTokenFromConfig,
-  readSavedConfig, writeSavedConfig, getGhToken, getCopilotClient,
+  CONFIG_DIR, readSavedConfig, getGhToken, getCopilotClient,
 } from './server/copilot/auth.js';
-import { GEN_UI_CATALOG_PROMPT } from './server/prompts/gen-ui-catalog.js';
 import { BROWSER_BUILD_CONTEXT, buildBrowserExtContext } from './server/prompts/browser-context.js';
 import { registerFetchUrlRoutes } from './server/routes/fetch-url.js';
 import { registerSummarizeRoutes } from './server/routes/summarize.js';
@@ -97,15 +71,11 @@ import { registerFaunaUpdateRoutes } from './server/routes/fauna-update.js';
 import { createAgentDirIterator } from './server/lib/agents-iter.js';
 import { buildShellEnv } from './server/lib/shell-env.js';
 import {
-  resolvePath, atomicWriteFile, checkpointFile,
+  resolvePath,
   setAgentManifestGetter as _setAgentManifestGetter,
 } from './server/lib/write-helpers.js';
-import {
-  getTeamsSettings, updateTeamsSettings, startTeamsBridge, stopTeamsBridge, testConnection as teamsTestConnection,
-} from './teams-bridge.js';
-import {
-  getBotConfig, updateBotConfig, getBotStatus, startBot, stopBot, initBotManager,
-} from './teams-bot-manager.js';
+import { startTeamsBridge } from './teams-bridge.js';
+import { initBotManager } from './teams-bot-manager.js';
 import QRCode     from 'qrcode';
 
 // Electron APIs — available when server runs inside the Electron main process.
