@@ -5,11 +5,11 @@
 
 import path from 'path';
 import fs from 'fs';
+import { findNodeBinary } from '../lib/find-node-binary.js';
 
 export function registerPlaywrightMcpRoutes(app, {
   express,
   require: _require,
-  findNodeBinary,
   isWin,
 }) {
   let _playwrightMcpClient = null;

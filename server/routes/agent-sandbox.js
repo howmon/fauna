@@ -12,10 +12,11 @@ import {
   getSandboxedEnv, getResourceLimits, audit, getAuditLog,
 } from '../../agent-sandbox.js';
 import { resolvePath, atomicWriteFile, checkpointFile } from '../lib/write-helpers.js';
+import { validateExternalUrl } from '../lib/url-validate.js';
 
 const IS_WIN = process.platform === 'win32';
 
-export function registerAgentSandboxRoutes(app, { agentsDir, validateExternalUrl }) {
+export function registerAgentSandboxRoutes(app, { agentsDir }) {
   // Helper: look up an agent manifest by name
   function getAgentManifest(name) {
     if (!name) return null;

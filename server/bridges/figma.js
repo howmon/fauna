@@ -37,6 +37,7 @@ import fs from 'fs';
 import path from 'path';
 import { execSync, spawn } from 'child_process';
 import { WebSocket as WS } from 'ws';
+import { findNodeBinary } from '../lib/find-node-binary.js';
 
 export function createFigmaBridge({
   configDir,
@@ -46,7 +47,6 @@ export function createFigmaBridge({
   bundledPluginPath,
   devPluginPath,
   readSavedConfig,
-  findNodeBinary,
   isWin = process.platform === 'win32',
 }) {
   // ── Constants ───────────────────────────────────────────────────────────

@@ -132,13 +132,12 @@ const extBridge = createExtBridge({
 extBridge.register(app);
 
 // ── Custom MCP bridge moved → server/bridges/custom-mcp.js ──
-// `findNodeBinary` is hoisted; figma getter resolves at request time.
+// figma getter resolves at request time.
 const customMcp = createCustomMcpBridge({
   faunaConfigDir: FAUNA_CONFIG_DIR,
   extBridge,
   getFigmaConnected: () => figma.isConnected(),
   bundledBrowserServerPath: path.join(__dirname, 'faunaMCP-main', 'browser-server', 'index.js'),
-  findNodeBinary,
 });
 customMcp.register(app);
 
@@ -151,7 +150,6 @@ const figma = createFigmaBridge({
   bundledPluginPath: path.join(process.resourcesPath || '', 'figma-plugin'),
   devPluginPath: path.join(__dirname, 'assets', 'figma-plugin'),
   readSavedConfig,
-  findNodeBinary,
   isWin: IS_WIN,
 });
 figma.register(app);
@@ -334,7 +332,6 @@ registerStoreRoutes(app, {
 const playwrightMcp = registerPlaywrightMcpRoutes(app, {
   express,
   require: _require,
-  findNodeBinary,
   isWin: IS_WIN,
 });
 registerChatRoute(app, {
@@ -374,7 +371,7 @@ registerAgentBuilderRoutes(app, { agentsDir: AGENTS_DIR });
 
 // ── Agent sandbox routes moved → server/routes/agent-sandbox.js ──
 {
-  const { getAgentManifest } = registerAgentSandboxRoutes(app, { agentsDir: AGENTS_DIR, validateExternalUrl });
+  const { getAgentManifest } = registerAgentSandboxRoutes(app, { agentsDir: AGENTS_DIR });
   _setAgentManifestGetter(getAgentManifest);
 }
 

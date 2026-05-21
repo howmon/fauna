@@ -21,6 +21,7 @@
 import fs from 'fs';
 import path from 'path';
 import { exec as _exec, spawn } from 'child_process';
+import { findNodeBinary } from '../lib/find-node-binary.js';
 
 class HttpMcpClient {
   constructor(url) {
@@ -147,7 +148,6 @@ export function createCustomMcpBridge({
   extBridge,
   getFigmaConnected = () => false,
   bundledBrowserServerPath = null,
-  findNodeBinary = null,
 }) {
   const CUSTOM_MCP_FILE = path.join(faunaConfigDir, 'custom-mcp-servers.json');
   const customMcpClients = new Map();   // serverId → HttpMcpClient
@@ -211,7 +211,7 @@ export function createCustomMcpBridge({
       extBridge.setRelayBrowsers([]);
       if (!bundledBrowserServerProc && bundledBrowserServerPath && fs.existsSync(bundledBrowserServerPath)) {
         try {
-          const nodeBin = findNodeBinary ? findNodeBinary() : process.execPath;
+          const nodeBin = findNodeBinary() || process.execPath;
           if (nodeBin) {
             bundledBrowserServerProc = spawn(nodeBin, [bundledBrowserServerPath], {
               cwd: path.dirname(bundledBrowserServerPath),
