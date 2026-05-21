@@ -485,7 +485,7 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
     var execId  = 'se-' + _shellStableHash(shellKey);
     var targetConv = getConv(convId || state.currentId);
     var depth = targetConv ? (targetConv._autoFeedDepth || 0) : 0;
-    var DEPTH_LIMIT = 5;
+    var DEPTH_LIMIT = 12;
     // Only the first block in this response may auto-run; subsequent blocks must be manually triggered.
     var autoRun = !noAutoRun && state.autoRunShell && depth < DEPTH_LIMIT && _autoRunIdx === 0;
     var depthLimited = !noAutoRun && state.autoRunShell && depth >= DEPTH_LIMIT;
@@ -534,9 +534,11 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
       targetConv._depthLimitNotified = true;
       setTimeout(function() {
         sendDirectMessage(
-          'Auto-run has been paused after ' + DEPTH_LIMIT + ' consecutive steps as a safety measure. ' +
-          'The command `' + rawCode.slice(0, 120) + '` was NOT run automatically. ' +
-          'Please summarise what has been completed so far and ask the user if they want to continue.',
+          'Auto-run has been paused after ' + DEPTH_LIMIT + ' consecutive auto-fed steps as a safety guard against runaway loops. ' +
+          'The command `' + rawCode.slice(0, 120) + '` was NOT run automatically.\n\n' +
+          'If the user\'s original task is fully complete and verified, give the final summary now. ' +
+          'If MORE work genuinely remains, briefly state what the next concrete step is and why you cannot infer/verify it yourself, and let the user click Run on the pending command. ' +
+          'Do NOT ask "should I continue?" — either continue (by stating the next step and letting them run it) or finish (by giving the final summary). Do not fabricate progress.',
           { fromAutoFeed: true, isAutoFeed: true, targetConvId: convId || state.currentId }
         );
       }, 400);
