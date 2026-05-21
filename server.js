@@ -70,6 +70,8 @@ import { registerMarkdownPdfAndYoutubeRoutes } from './server/routes/markdown-pd
 import { registerFaunaUpdateRoutes } from './server/routes/fauna-update.js';
 import { createAgentDirIterator } from './server/lib/agents-iter.js';
 import { buildShellEnv } from './server/lib/shell-env.js';
+import { createInternalAICaller } from './server/lib/ai-caller.js';
+import { createPowerSaveGuard } from './server/lib/power-save.js';
 import {
   resolvePath,
   setAgentManifestGetter as _setAgentManifestGetter,
@@ -90,21 +92,7 @@ try {
 } catch (_) {}
 
 // Power-save blocker — keeps screen/CPU awake while any chat request is active.
-let _psBlockerId = null;
-let _psActiveCount = 0;
-function _psAcquire() {
-  _psActiveCount++;
-  if (_psActiveCount === 1 && powerSaveBlocker && _psBlockerId === null) {
-    _psBlockerId = powerSaveBlocker.start('prevent-display-sleep');
-  }
-}
-function _psRelease() {
-  _psActiveCount = Math.max(0, _psActiveCount - 1);
-  if (_psActiveCount === 0 && powerSaveBlocker && _psBlockerId !== null) {
-    try { powerSaveBlocker.stop(_psBlockerId); } catch (_) {}
-    _psBlockerId = null;
-  }
-}
+const _powerSave = createPowerSaveGuard(powerSaveBlocker);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app    = express();
@@ -339,8 +327,8 @@ registerChatRoute(app, {
   agentsDir: AGENTS_DIR,
   browserBuildContext: BROWSER_BUILD_CONTEXT,
   buildBrowserExtContext: () => buildBrowserExtContext(extBridge),
-  psAcquire: () => _psAcquire(),
-  psRelease: () => _psRelease(),
+  psAcquire: () => _powerSave.acquire(),
+  psRelease: () => _powerSave.release(),
   setActiveModel: (m) => { _activeModel = m; },
   getMainWindows: () => (_ElectronBrowserWindow?.getAllWindows?.() || []),
   sendNotification: (title, body) => {
@@ -446,32 +434,10 @@ export function startServer(port) {
     try { runDecay(); } catch (_) {}
 
     // Internal AI caller for heartbeat and workflows — defaults to active conversation model
-    internalAICaller = async (prompt, model) => {
-      const useModel = model || _activeModel || 'gpt-4.1';
-      const client = getCopilotClient();
-      const callModel = async (m) => {
-        const resp = await client.chat.completions.create({
-          model: m,
-          messages: [{ role: 'user', content: prompt }],
-          max_tokens: 2000,
-        });
-        return resp.choices[0]?.message?.content?.trim() || '';
-      };
-      try {
-        return await callModel(useModel);
-      } catch (e) {
-        // If model not supported, retry with fallback
-        if (e.status === 400 && useModel !== _activeModel && _activeModel) {
-          console.log(`[ai-caller] model "${useModel}" not supported, falling back to "${_activeModel}"`);
-          return await callModel(_activeModel);
-        }
-        if (e.status === 400 && useModel !== 'gpt-4.1') {
-          console.log(`[ai-caller] model "${useModel}" not supported, falling back to "gpt-4.1"`);
-          return await callModel('gpt-4.1');
-        }
-        throw e;
-      }
-    };
+    internalAICaller = createInternalAICaller({
+      getCopilotClient,
+      getActiveModel: () => _activeModel,
+    });
     const internalNotifier = (title, body) => {
       try {
         const { Notification: ElectronNotification } = _require('electron');
