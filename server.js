@@ -86,6 +86,7 @@ import { registerDocsAndExtRoutes } from './server/routes/docs-and-ext.js';
 import { registerSchedulingAndGuardRoutes } from './server/routes/scheduling-and-guard.js';
 import { registerRegionAndStdinRoutes } from './server/routes/region-and-stdin.js';
 import { registerPermissionsRoutes } from './server/routes/permissions.js';
+import { registerSystemContextRoutes } from './server/routes/system-context.js';
 import { createAgentDirIterator } from './server/lib/agents-iter.js';
 import {
   resolvePath, atomicWriteFile, checkpointFile,
@@ -1110,55 +1111,8 @@ app.post('/api/organize-desktop', (req, res) => {
   });
 });
 
-// ── System context ────────────────────────────────────────────────────────
-// Returns enough system info for the AI to build an accurate context prompt.
-
-app.get('/api/system-context', (req, res) => {
-  const { auth, screenRecording, accessibility, fullDiskAccess, automation } = (() => {
-    const r = {};
-    try { getGhToken(); r.auth = 'granted'; } catch (_) { r.auth = 'denied'; }
-    if (IS_WIN) {
-      r.screenRecording = 'not-applicable';
-      r.accessibility   = 'not-applicable';
-      r.fullDiskAccess  = 'not-applicable';
-      r.automation      = 'not-applicable';
-    } else {
-      r.screenRecording = systemPreferences?.getMediaAccessStatus?.('screen') ?? 'unknown';
-      r.accessibility   = (systemPreferences?.isTrustedAccessibilityClient?.(false) === true) ? 'granted' : 'denied';
-      r.fullDiskAccess  = checkFullDiskAccess();
-      r.automation      = 'auto-prompted';
-    }
-    return r;
-  })();
-
-  // Collect installed agents (name + displayName only)
-  const installedAgents = [];
-  try {
-    for (const entry of fs.readdirSync(AGENTS_DIR)) {
-      const mp = path.join(AGENTS_DIR, entry, 'agent.json');
-      if (fs.existsSync(mp)) {
-        try {
-          const m = JSON.parse(fs.readFileSync(mp, 'utf8'));
-          if (!m._parentAgent) installedAgents.push({ name: m.name || entry, displayName: m.displayName || m.name || entry });
-        } catch (_) {}
-      }
-    }
-  } catch (_) {}
-
-  res.json({
-    os:       IS_WIN ? 'Windows' : 'macOS',
-    release:  os.release(),
-    hostname: os.hostname(),
-    user:     os.userInfo().username,
-    home:     os.homedir(),
-    desktop:  path.join(os.homedir(), 'Desktop'),
-    cwd:      process.cwd(),
-    shell:    SHELL_BIN,
-    permissions: { auth, screenRecording, accessibility, fullDiskAccess, automation },
-    installedAgents,
-  });
-});
-
+// ── System context route moved → server/routes/system-context.js ──
+registerSystemContextRoutes(app, { isWin: IS_WIN, shellBin: SHELL_BIN, agentsDir: AGENTS_DIR, getGhToken, getSystemPreferences: () => systemPreferences });
 // ── macOS Permissions routes moved → server/routes/permissions.js ──
 registerPermissionsRoutes(app, { isWin: IS_WIN, getGhToken, getSystemPreferences: () => systemPreferences, getDesktopCapturer: () => desktopCapturer });
 // ── Memory / Preferences / Facts ──────────────────────────────────────────
