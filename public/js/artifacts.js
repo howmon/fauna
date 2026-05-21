@@ -19,6 +19,14 @@ function addArtifact(spec) {
   state.artifacts.push(artifact);
   if (state.artifacts.length > 20) state.artifacts.shift();
   renderArtifactTabs();
+  // If the pane is already open with nothing selected, auto-show this artifact so
+  // it doesn't appear empty when a fresh artifact streams in.
+  var pane = document.getElementById('artifact-pane');
+  if (pane && pane.classList.contains('open') && !state.activeArtifact) {
+    state.activeArtifact = id;
+    if (typeof renderArtifactContent === 'function') renderArtifactContent();
+    renderArtifactTabs();
+  }
   // Lazy-load image data if only a path was provided
   if (artifact.type === 'image' && artifact.path && !artifact.base64) {
     fetchArtifactImage(id, artifact.path);

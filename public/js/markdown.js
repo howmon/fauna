@@ -177,6 +177,9 @@ function renderMarkdown(text) {
   var cleaned = keep.join('\n');
   // Strip suggestion blocks — rendered as clickable CTA buttons, not code
   cleaned = cleaned.replace(/```suggestions\n[\s\S]*?```\n?/g, '');
+  // Collapse runs of 3+ newlines left by stripped blocks so they don't render
+  // as a tall stack of empty paragraphs between surrounding content.
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n').replace(/^\n+|\n+$/g, '');
   
   // Pre-process mermaid blocks before markdown parsing
   // Replace ```mermaid blocks with placeholder divs
