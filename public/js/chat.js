@@ -157,13 +157,46 @@ function _fallbackSuggestionsFromMessage(buffer) {
   return ['Continue', 'Verify the result', 'Summarize what changed'];
 }
 
+// Extract the trailing "summary" text of a rendered message: the visible prose
+// that remains AFTER tool-activity blocks have been collapsed into <details>.
+// This is what the assistant actually wrote to wrap up the task, so it's the
+// right source for contextual recommended-action suggestions.
+function _summaryTextForSuggestions(msgEl) {
+  if (!msgEl) return '';
+  var body = msgEl.querySelector('.msg-body') || msgEl;
+  // Clone so we can strip collapsed activity/tool blocks without mutating the DOM.
+  var clone = body.cloneNode(true);
+  var stripSel = [
+    'details', '.cot-block', '.long-response-details', '.process-cluster',
+    '.shell-exec-block', '.wf-block', '.figma-exec-block', '.ba-block',
+    '.suggestion-bar', '.create-agent-card', '.patch-agent-card',
+    '.task-create-card', '.gen-ui-root', '.artifact-card'
+  ].join(',');
+  Array.from(clone.querySelectorAll(stripSel)).forEach(function(n) { n.remove(); });
+  var text = (clone.innerText || clone.textContent || '').trim();
+  // Prefer the last non-empty paragraph(s) — that's the closing summary.
+  if (text) {
+    var paras = text.split(/\n{2,}/).map(function(p) { return p.trim(); }).filter(Boolean);
+    if (paras.length) {
+      // Use up to the last 2 paragraphs to give the matcher enough signal.
+      return paras.slice(-2).join('\n\n');
+    }
+  }
+  return text;
+}
+
 function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
   var match = buffer.match(/```suggestions\n([\s\S]*?)```/);
   var items;
   if (match) {
     try { items = JSON.parse(match[1].trim()); } catch (_) { return; }
   } else if (allowFallback !== false) {
-    items = _fallbackSuggestionsFromMessage(buffer);
+    // Generate fallback suggestions from the trailing summary text only — not
+    // the entire raw buffer — so CTAs are contextual to the task's conclusion
+    // rather than mid-process noise (errors that were already fixed, build
+    // chatter, intermediate tool output, etc.).
+    var summaryText = _summaryTextForSuggestions(msgEl);
+    items = _fallbackSuggestionsFromMessage(summaryText || buffer);
   } else {
     return;
   }
