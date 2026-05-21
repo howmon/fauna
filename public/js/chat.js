@@ -699,10 +699,17 @@ async function streamResponse(conv) {
     _currentAgentInfo = { name: activeAgent.name, displayName: activeAgent.displayName, icon: activeAgent.manifest.icon || 'ti-robot' };
   }
   var msgEl  = createMessageEl('ai', _currentAgentInfo);
+  if (!msgEl) {
+    console.error('[chat] createMessageEl returned null — aborting stream setup');
+    conv._streaming = false;
+    if (isActive()) setBusy(false);
+    return;
+  }
   msgEl.dataset.streamingLive = '1';
   var bodyEl = msgEl.querySelector('.msg-body');
   function _ensureLiveMessageAttached() {
     if (!conv._streaming) return;
+    if (!msgEl) return;
     if (msgEl.isConnected) return;
     var inner = getConvInner(convId);
     if (!inner) return;
