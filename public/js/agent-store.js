@@ -87,11 +87,19 @@ function openAgentStore() {
 function closeAgentStore() {
   storeState.open = false;
   var panel = document.getElementById('agent-store-panel');
+  var embeddedInSettings = panel && !!panel.closest('#settings-panel');
   if (panel) {
     panel.classList.remove('open');
-    if (!panel.closest('#settings-panel')) {
+    if (!embeddedInSettings) {
       setTimeout(function() { panel.style.display = 'none'; }, 250);
     }
+  }
+  // When the store is shown inside the Settings (Plugins) panel, callers that
+  // close the store are navigating away (Use, Edit) — close Settings too so
+  // the activated agent / builder is visible underneath.
+  if (embeddedInSettings && typeof toggleSettings === 'function') {
+    var settingsPanel = document.getElementById('settings-panel');
+    if (settingsPanel && settingsPanel.classList.contains('open')) toggleSettings();
   }
 }
 
