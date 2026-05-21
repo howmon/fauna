@@ -69,6 +69,7 @@ import { createCustomMcpBridge } from './server/bridges/custom-mcp.js';
 import { createFigmaBridge } from './server/bridges/figma.js';
 import { registerWorkspaceRoutes } from './server/routes/workspace.js';
 import { registerStoreRoutes } from './server/routes/store.js';
+import { registerChatMiscRoutes } from './server/routes/chat-misc.js';
 import {
   getTeamsSettings, updateTeamsSettings, startTeamsBridge, stopTeamsBridge, testConnection as teamsTestConnection,
 } from './teams-bridge.js';
@@ -649,6 +650,9 @@ When building a web app for the user, follow this workflow:
 - The browser keeps login sessions across pages (cookies persist). No need to re-authenticate.
 - Each conversation has its own browser tabs — they don't interfere with other conversations.
 `;
+
+// Wire smaller chat routes (debug-prompt / chat-summary / composition planner).
+registerChatMiscRoutes(app, { browserBuildContext: BROWSER_BUILD_CONTEXT });
 
 // ── Browser Extension (Fauna Web Extension) context ─────────────────────────
 // Injected dynamically when at least one browser extension is connected.
@@ -1333,44 +1337,7 @@ app.post('/api/git/branch-name', async (req, res) => {
 
 // ── Workspace discovery route moved → server/routes/workspace.js ──
 
-app.post('/api/chat/debug-prompt', (req, res) => {
-  const { systemPrompt = '', contextSummary = '', clientContext = 'app', noTools = false, promptLayers } = req.body || {};
-
-  // ── Layer-inspection mode (called by /debug-prompt slash command) ──────
-  // Client sends an array of named prompt layers; we return a per-layer
-  // breakdown with char counts, truncation flags, and final order so users
-  // can verify which instruction files were included without calling the model.
-  if (Array.isArray(promptLayers)) {
-    const layers = promptLayers.map((l, i) => ({
-      order: i + 1,
-      name: l.name || `layer-${i + 1}`,
-      source: l.source || l.name || '',
-      chars: (l.content || '').length,
-      truncated: l.truncated || false,
-      included: (l.content || '').length > 0,
-    }));
-    const totalChars = layers.reduce((sum, l) => sum + l.chars, 0);
-    return res.json({ ok: true, mode: 'layers', layers, totalChars });
-  }
-
-  // ── Legacy single-system-prompt mode ──────────────────────────────────
-  const isCLI = clientContext === 'cli';
-  const cliHint = isCLI ? `\n\n## Output Format
-You are running in a terminal CLI. Respond in plain, readable text. Do NOT use markdown headers (###), horizontal rules (---), or emojis. Use plain bullet points (- or *) only when a list genuinely helps. Be concise and direct. Never emit browser-action or browser-ext-action code blocks — those do not work in the terminal.` : '';
-  const sections = [
-    { name: 'client system prompt', content: systemPrompt.trim() + cliHint },
-    { name: 'browser build context', content: noTools || isCLI ? '' : BROWSER_BUILD_CONTEXT },
-    { name: 'task context summary', content: contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '' },
-  ].filter(s => s.content);
-  const fullSystem = sections.map(s => s.content).join('\n');
-  res.json({
-    ok: true,
-    mode: 'legacy',
-    sections: sections.map(s => ({ name: s.name, chars: s.content.length })),
-    chars: fullSystem.length,
-    systemPrompt: fullSystem,
-  });
-});
+// ── /api/chat/debug-prompt moved → server/routes/chat-misc.js ──
 
 // ── File Filter / Indexing (Feature E) ────────────────────────────────────
 // Returns whether a file should be indexed/read (excludes binaries, junk, etc.)
@@ -2975,85 +2942,8 @@ app.get('/api/agents/:name/tests', (req, res) => {
     res.json({ testCases: Array.isArray(cases) ? cases : [] });
   } catch (_) { res.json({ testCases: [] }); }
 });
-
-// Generate a conversation summary for agent context handoff
-app.post('/api/chat-summary', async (req, res) => {
-  const { messages } = req.body;
-  if (!messages) return res.status(400).json({ error: 'messages required' });
-  try {
-    const client = getCopilotClient();
-    const response = await client.chat.completions.create({
-      model: 'claude-sonnet-4.6',
-      max_tokens: 500,
-      messages: [
-        { role: 'system', content: 'Summarise the following conversation in 3-5 concise sentences, capturing the key topics, decisions, and any pending questions. Be factual and brief.' },
-        { role: 'user', content: typeof messages === 'string' ? messages : JSON.stringify(messages) }
-      ]
-    });
-    const summary = response.choices?.[0]?.message?.content || '';
-    res.json({ summary });
-  } catch (e) {
-    res.json({ summary: '' });
-  }
-});
-
-// ── Multi-agent composition planner ────────────────────────────────────────
-// Given a task and a list of agents, determine which agent handles which sub-task.
-app.post('/api/composition/plan', async (req, res) => {
-  const { task, agents, conversationContext } = req.body;
-  if (!task || !agents || !agents.length) return res.status(400).json({ error: 'task and agents required' });
-
-  const agentDescriptions = agents.map(a =>
-    `- **${a.displayName}** (\`${a.name}\`): ${a.description || 'No description'}` +
-    (a.systemPrompt ? `\n  Capabilities: ${a.systemPrompt.substring(0, 300)}` : '')
-  ).join('\n');
-
-  try {
-    const client = getCopilotClient();
-    const response = await client.chat.completions.create({
-      model: 'claude-sonnet-4.6',
-      max_tokens: 1500,
-      messages: [
-        { role: 'system', content: `You are a task planner for a multi-agent system. Given a user task and a list of available agents with their capabilities, create an execution plan that assigns specific sub-tasks to each agent based on their strengths.
-
-Rules:
-- Every agent in the list MUST be assigned a sub-task (they were all explicitly selected by the user)
-- Sub-tasks should be complementary, not overlapping
-- Each agent should focus on what they're best at
-- If agents have sequential dependencies (e.g. design first, then documentation), specify the order
-- Be specific about what each agent should do
-
-Respond in this exact JSON format:
-{
-  "plan": [
-    { "agent": "agent-name", "task": "specific instructions for this agent", "order": 1 },
-    { "agent": "agent-name", "task": "specific instructions for this agent", "order": 2 }
-  ],
-  "reasoning": "brief explanation of why tasks were divided this way",
-  "mode": "sequential"
-}
-
-The "order" field determines execution sequence. Agents with the same order number run in parallel.
-The "mode" should be "sequential" when later agents depend on earlier agents' output, or "parallel" when they can work independently.` },
-        { role: 'user', content: `## Task\n${task}\n\n## Available Agents\n${agentDescriptions}${conversationContext ? '\n\n## Conversation Context\n' + conversationContext : ''}` }
-      ]
-    });
-
-    const raw = response.choices?.[0]?.message?.content || '{}';
-    // Extract JSON from potential markdown code blocks
-    const jsonMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, raw];
-    const plan = JSON.parse(jsonMatch[1].trim());
-    res.json(plan);
-  } catch (e) {
-    // Fallback: simple sequential split
-    const fallbackPlan = {
-      plan: agents.map((a, i) => ({ agent: a.name, task: task, order: i + 1 })),
-      reasoning: 'Fallback: running agents sequentially on the full task',
-      mode: 'sequential'
-    };
-    res.json(fallbackPlan);
-  }
-});
+// ── /api/chat-summary moved → server/routes/chat-misc.js ──
+// ── /api/composition/plan moved → server/routes/chat-misc.js ──
 
 // Execute a single agent tool (for testing / manual invocation)
 app.post('/api/agents/:name/tool/:tool', async (req, res) => {
