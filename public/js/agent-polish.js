@@ -292,6 +292,62 @@ async function runComposition(agentNames, mode, userMessage, conv) {
   _compositionState.active = false;
 }
 
+/**
+ * POST to /api/chat (SSE endpoint) and accumulate `content` deltas into one
+ * string.  Replaces the broken `await r.json()` pattern which buffered the
+ * entire stream and returned empty — making both sequential and parallel
+ * compositions slow AND silent.
+ *
+ * Returns: { content, error }
+ */
+async function _runAgentChatSSE(body, onDelta) {
+  try {
+    var resp = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok || !resp.body) {
+      return { content: '', error: 'HTTP ' + resp.status };
+    }
+    var reader = resp.body.getReader();
+    var decoder = new TextDecoder();
+    var buf = '';
+    var content = '';
+    var errMsg = '';
+    while (true) {
+      var chunk = await reader.read();
+      if (chunk.done) break;
+      buf += decoder.decode(chunk.value, { stream: true });
+      // SSE frames are separated by blank lines (\n\n)
+      var frames = buf.split('\n\n');
+      buf = frames.pop();
+      for (var fi = 0; fi < frames.length; fi++) {
+        var frame = frames[fi];
+        // Each frame may have multiple `data:` lines — concatenate them.
+        var dataLines = frame.split('\n').filter(function(l) { return l.indexOf('data:') === 0; });
+        if (!dataLines.length) continue;
+        var payload = dataLines.map(function(l) { return l.slice(5).replace(/^ /, ''); }).join('\n').trim();
+        if (!payload || payload === '[DONE]') continue;
+        try {
+          var evt = JSON.parse(payload);
+          if (evt.type === 'content' && typeof evt.content === 'string') {
+            content += evt.content;
+            if (typeof onDelta === 'function') {
+              try { onDelta(evt.content); } catch (_) {}
+            }
+          } else if (evt.type === 'error' && evt.error) {
+            errMsg = String(evt.error);
+          }
+        } catch (_) { /* skip malformed frame */ }
+      }
+    }
+    return { content: content, error: errMsg };
+  } catch (e) {
+    return { content: '', error: (e && e.message) || String(e) };
+  }
+}
+
 async function runSequentialComposition(agentNames, userMessage, conv) {
   var input = userMessage;
   for (var i = 0; i < agentNames.length; i++) {
@@ -300,34 +356,19 @@ async function runSequentialComposition(agentNames, userMessage, conv) {
     var agent = findAgent(name);
     if (!agent) continue;
 
-    // Activate agent
     await activateAgent(name, conv, true);
 
     var start = Date.now();
-    // Send message through the chat pipeline
-    try {
-      var r = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [{ role: 'user', content: input }],
-          agentName: name,
-          agentSystemPrompt: getAgentSystemPrompt(),
-          agentPermissions: agent.permissions
-        })
-      });
-      var d = await r.json();
-      var response = '';
-      if (d.choices && d.choices[0]) {
-        response = d.choices[0].message ? d.choices[0].message.content : '';
-      }
-      _compositionState.results.push({ agentName: name, response: response, duration: Date.now() - start });
-
-      // Next agent gets prior output as input
-      input = 'Previous agent (' + agent.displayName + ') produced:\n\n' + response + '\n\nOriginal task: ' + userMessage;
-    } catch (e) {
-      _compositionState.results.push({ agentName: name, response: 'Error: ' + e.message, duration: Date.now() - start });
-    }
+    var result = await _runAgentChatSSE({
+      messages: [{ role: 'user', content: input }],
+      agentName: name,
+      agentSystemPrompt: getAgentSystemPrompt(),
+      agentPermissions: agent.permissions,
+      autoCompact: false,
+    });
+    var response = result.content || (result.error ? ('Error: ' + result.error) : '');
+    _compositionState.results.push({ agentName: name, response: response, duration: Date.now() - start });
+    input = 'Previous agent (' + agent.displayName + ') produced:\n\n' + response + '\n\nOriginal task: ' + userMessage;
   }
 
   deactivateAgent(conv);
@@ -340,21 +381,15 @@ async function runParallelComposition(agentNames, userMessage, conv) {
     if (!agent) return Promise.resolve({ agentName: name, response: 'Agent not found', duration: 0 });
 
     var start = Date.now();
-    return fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messages: [{ role: 'user', content: userMessage }],
-        agentName: name,
-        agentSystemPrompt: agent.systemPrompt || '',
-        agentPermissions: agent.permissions
-      })
-    }).then(function(r) { return r.json(); }).then(function(d) {
-      var response = '';
-      if (d.choices && d.choices[0]) response = d.choices[0].message ? d.choices[0].message.content : '';
+    return _runAgentChatSSE({
+      messages: [{ role: 'user', content: userMessage }],
+      agentName: name,
+      agentSystemPrompt: agent.systemPrompt || '',
+      agentPermissions: agent.permissions,
+      autoCompact: false,
+    }).then(function(result) {
+      var response = result.content || (result.error ? ('Error: ' + result.error) : '');
       return { agentName: name, response: response, duration: Date.now() - start };
-    }).catch(function(e) {
-      return { agentName: name, response: 'Error: ' + e.message, duration: Date.now() - start };
     });
   });
 
