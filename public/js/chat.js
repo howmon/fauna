@@ -1007,6 +1007,35 @@ async function streamResponse(conv) {
             dbg('widget_tool_pending: ' + evt.widgetId + '/' + evt.name, 'cmd');
             window.faunaDynamicWidgets.handleToolPending(evt);
           }
+          if (evt.type === 'client_tool_pending') {
+            // Server-initiated client-tool RPC — currently routes 'browser' to
+            // the in-app webview via executeBrowserAction(). Same pattern as
+            // widget_tool_pending but for built-in renderer capabilities.
+            (function(ev) {
+              dbg('client_tool_pending: ' + ev.name + ' callId=' + ev.callId, 'cmd');
+              var doneCalled = false;
+              function reply(payload) {
+                if (doneCalled) return;
+                doneCalled = true;
+                fetch('/api/client-tool-result', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(Object.assign({ callId: ev.callId }, payload)),
+                }).catch(function(e) { dbg('client-tool-result post failed: ' + e.message, 'err'); });
+              }
+              try {
+                if (ev.name === 'browser' && typeof executeBrowserAction === 'function') {
+                  executeBrowserAction(ev.args || {})
+                    .then(function(r) { reply({ result: r }); })
+                    .catch(function(e) { reply({ error: e && e.message ? e.message : String(e) }); });
+                } else {
+                  reply({ error: 'Unknown client tool: ' + ev.name });
+                }
+              } catch (err) {
+                reply({ error: err && err.message ? err.message : String(err) });
+              }
+            })(evt);
+          }
           if (evt.type === 'tool_output') {
             // Live shell output — append to a collapsible output block
             // Also accumulate for use in the waiting-for-input context

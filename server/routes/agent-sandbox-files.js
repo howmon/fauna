@@ -294,6 +294,12 @@ function _applyPatch(patchText, cwd, context) {
   return _commitPatchPlan(_buildPatchPlan(patchText, cwd, context));
 }
 
+// Exported for use by native function tools (self-tools.js / fauna_apply_patch).
+// Returns the same per-file results array as the /api/apply-patch HTTP route.
+export function applyPatchText(patchText, cwd, context) {
+  return _applyPatch(patchText, cwd, context);
+}
+
 export function registerAgentSandboxFileRoutes(app) {
   // ── /api/write-file ─────────────────────────────────────────────────────
   app.post('/api/write-file', (req, res) => {

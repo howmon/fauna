@@ -341,6 +341,11 @@ registerChatRoute(app, {
   },
   callPlaywrightMcpTool: (tool, args) => playwrightMcp.callTool(tool, args),
   resetPlaywrightMcpClient: () => playwrightMcp.reset(),
+  // Shell exec deps for the native fauna_shell_exec tool
+  shellBin: SHELL_BIN,
+  isWin: IS_WIN,
+  augmentedPath: AUGMENTED_PATH,
+  shellProcs: _shellProcs,
 });
 // Legacy agents dir: ~/.config/copilot-chat/agents (kept for backward compatibility)
 const LEGACY_AGENTS_DIR = path.join(CONFIG_DIR, 'agents');
