@@ -607,6 +607,19 @@
         Skip the permission prompt for all shell commands. <strong>Use with caution</strong> — all commands will execute without confirmation.
       </div>
     </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">Experimental</div>
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none">
+        <input type="checkbox" id="dynamic-widgets-toggle"
+          onchange="setEnableDynamicWidgets(this.checked)"
+          style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+        <span style="font-size:12.5px;color:var(--fau-text)">Enable dynamic widgets <span style="color:var(--fau-text-muted);font-weight:normal">(GenUI 2.0)</span></span>
+      </label>
+      <div class="settings-hint" style="margin-top:4px">
+        Lets the AI render interactive sandboxed widgets (3D viewers, dashboards, custom controls) with their own per-task tools — no pre-built tool list. Save useful widgets to your <a href="#" onclick="switchSettingsPage('playbook',document.querySelector('[data-page=playbook]'));return false;">playbook</a> to re-launch them later.
+      </div>
+    </div>
   </div>
 
   <!-- ── Appearance ─────────────────────────────────────────────── -->
@@ -1900,6 +1913,7 @@ Examples:
 <script src="js/agent-polish.js"></script>
 <script src="js/agent-sync.js"></script>
 <script src="js/gen-ui.js"></script>
+<script src="js/dynamic-widgets.js"></script>
 <script src="js/chat.js"></script>
 <script src="js/voice.js"></script>
 <script src="js/automation-schedule.js"></script>

@@ -321,6 +321,10 @@ async function loadSettingsState() {
   var bpCb = document.getElementById('bypass-perms-toggle');
   if (bpCb) bpCb.checked = state.bypassCommandPermissions;
 
+  // Sync dynamic widgets (experimental) checkbox
+  var dwCb = document.getElementById('dynamic-widgets-toggle');
+  if (dwCb) dwCb.checked = !!state.enableDynamicWidgets;
+
   // Sync thinking budget
   var tb = document.getElementById('thinking-budget-select');
   if (tb) tb.value = state.thinkingBudget;
@@ -1628,6 +1632,15 @@ function setAutoRunShell(val) {
 function setBypassCommandPermissions(val) {
   state.bypassCommandPermissions = val;
   localStorage.setItem('fauna-bypass-cmd-perms', val ? 'true' : 'false');
+}
+
+// Toggle the experimental Dynamic Widgets feature from Settings
+function setEnableDynamicWidgets(val) {
+  state.enableDynamicWidgets = val;
+  localStorage.setItem('fauna-dynamic-widgets', val ? 'true' : 'false');
+  if (typeof showToast === 'function') {
+    showToast('Dynamic widgets ' + (val ? 'enabled' : 'disabled'));
+  }
 }
 
 var _thinkingHints = {

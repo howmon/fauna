@@ -25,7 +25,11 @@ import path from 'path';
 import { getCopilotClient } from '../copilot/auth.js';
 import { FALLBACK_MODELS, CHAT_COMPLETIONS_UNSUPPORTED_RE } from '../copilot/models.js';
 import { GEN_UI_CATALOG_PROMPT } from '../prompts/gen-ui-catalog.js';
-import { SELF_TOOL_DEFS, executeSelfTool, isSelfTool } from '../../self-tools.js';
+import { SELF_TOOL_DEFS, DYNAMIC_WIDGET_TOOL_DEFS, executeSelfTool, isSelfTool } from '../../self-tools.js';
+import {
+  extractWidgetRegistrations, buildEphemeralToolDefs,
+  isWidgetTool, parseWidgetToolName,
+} from '../../lib/dynamic-widgets.js';
 import { ToolGuardContext, formatToolLabel } from '../../tool-guard.js';
 import { getAgentTools, startAgentMCPServers } from '../../agent-tools.js';
 import { formatForSystemPrompt as factsForSystemPrompt, getStats as factsGetStats } from '../../memory-store.js';
@@ -44,6 +48,28 @@ export function registerChatRoute(app, {
   callPlaywrightMcpTool,
   resetPlaywrightMcpClient = () => {},
 }) {
+  // ── Dynamic Widget RPC bridge ────────────────────────────────────────
+  // When the model calls a widget tool, chat.js opens a pending call here
+  // and emits SSE to the frontend. The frontend forwards to the iframe and
+  // POSTs the result back to /api/widget-tool-result, which resolves the
+  // awaiting promise so the model loop continues.
+  /** @type {Map<string,{resolve:(v:any)=>void,reject:(e:Error)=>void,timer:NodeJS.Timeout}>} */
+  const widgetPendingCalls = new Map();
+  const WIDGET_TOOL_TIMEOUT_MS = 15000;
+
+  app.post('/api/widget-tool-result', (req, res) => {
+    const { callId, result, error } = req.body || {};
+    const pending = widgetPendingCalls.get(callId);
+    if (!pending) {
+      return res.status(404).json({ ok: false, error: 'Unknown or expired callId' });
+    }
+    widgetPendingCalls.delete(callId);
+    clearTimeout(pending.timer);
+    if (error) pending.reject(new Error(String(error)));
+    else pending.resolve(result);
+    res.json({ ok: true });
+  });
+
   app.post('/api/chat', async (req, res) => {
     psAcquire();
     res.on('finish', psRelease);
@@ -51,7 +77,8 @@ export function registerChatRoute(app, {
     const { messages = [], model = 'claude-sonnet-4.6', systemPrompt = '', useFigmaMCP = false, contextSummary = '',
             thinkingBudget = 'high', maxContextTurns = 20, agentName = null,
             projectId = null, projectContextIds = null, isDelegation = false,
-            clientContext = 'app', noTools = false } = req.body;
+            clientContext = 'app', noTools = false,
+            enableDynamicWidgets = false } = req.body;
     const isCLI = clientContext === 'cli';
 
     // Track the active conversation model so heartbeat/workflows/teams use the same one
@@ -187,6 +214,14 @@ export function registerChatRoute(app, {
       }
 
       // ── Self-tools — LLM-callable tools (memory, models, settings, etc.) ──
+      // Live widget registry — persists across the chat turn so save-to-playbook
+      // and ephemeral tool dispatch can look up the widget bundle.
+      const liveWidgets = new Map(); // widgetId → { widgetId, tools, bundle }
+      // Pre-seed from message history so saved widgets survive multi-turn conversations.
+      for (const reg of extractWidgetRegistrations(allMessages)) {
+        liveWidgets.set(reg.widgetId, reg);
+      }
+
       const selfToolContext = {
         getModels: () => FALLBACK_MODELS,
         getSettings: () => ({
@@ -194,6 +229,7 @@ export function registerChatRoute(app, {
           thinkingBudget,
           maxContextTurns,
           figmaMCPEnabled: useFigmaMCP,
+          enableDynamicWidgets,
           factsCount: factsGetStats().total,
         }),
         sendToRenderer: (channel, data) => {
@@ -206,8 +242,14 @@ export function registerChatRoute(app, {
           try { sendNotification(title, body); }
           catch (_) { console.log(`[notification] ${title}: ${body}`); }
         },
+        sendSse: (obj) => send(obj),
+        registerLiveWidget: (id, reg) => liveWidgets.set(id, reg),
+        getLiveWidget: (id) => liveWidgets.get(id) || null,
       };
-      if (!isCLI && !noTools) mcpTools = [...(mcpTools || []), ...SELF_TOOL_DEFS];
+      if (!isCLI && !noTools) {
+        mcpTools = [...(mcpTools || []), ...SELF_TOOL_DEFS];
+        if (enableDynamicWidgets) mcpTools = [...mcpTools, ...DYNAMIC_WIDGET_TOOL_DEFS];
+      }
 
       // Agentic loop — re-runs if model calls tools (max 12 iterations)
       let continueLoop = true;
@@ -253,6 +295,16 @@ export function registerChatRoute(app, {
         }
 
         if (mcpTools?.length) params.tools = mcpTools;
+
+        // Inject ephemeral widget tools — re-scanned each turn so widgets
+        // emitted earlier in this same request become callable on the next
+        // iteration of the agentic loop.
+        if (enableDynamicWidgets) {
+          const ephemeral = buildEphemeralToolDefs(extractWidgetRegistrations(allMessages));
+          if (ephemeral.length) {
+            params.tools = [...(params.tools || []), ...ephemeral];
+          }
+        }
         params.stream_options = { include_usage: true };
 
         let stream;
@@ -397,8 +449,29 @@ export function registerChatRoute(app, {
             try {
               let result;
 
-              // Route to self-tools first (memory, models, settings, etc.)
-              if (isSelfTool(toolName)) {
+              // Route to widget RPC bridge first (ephemeral, per-conversation tools).
+              if (isWidgetTool(toolName)) {
+                const parsed = parseWidgetToolName(toolName);
+                const reg = parsed && Array.from(liveWidgets.values()).find(r =>
+                  r.widgetId.replace(/[^a-z0-9]/gi, '').slice(0, 24) === parsed.widgetIdSlug
+                );
+                if (!reg) {
+                  result = JSON.stringify({ ok: false, error: `Widget for "${toolName}" is no longer live in this conversation.` });
+                } else {
+                  const callId = 'wc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+                  const rpcResult = await new Promise((resolve, reject) => {
+                    const timer = setTimeout(() => {
+                      widgetPendingCalls.delete(callId);
+                      reject(new Error(`Widget tool "${parsed.toolName}" timed out after ${WIDGET_TOOL_TIMEOUT_MS}ms`));
+                    }, WIDGET_TOOL_TIMEOUT_MS);
+                    widgetPendingCalls.set(callId, { resolve, reject, timer });
+                    send({ type: 'widget_tool_pending', callId, widgetId: reg.widgetId, name: parsed.toolName, args });
+                  }).catch(err => ({ ok: false, error: err.message }));
+                  result = typeof rpcResult === 'string' ? rpcResult : JSON.stringify(rpcResult);
+                }
+              }
+              // Route to self-tools (memory, models, settings, etc.)
+              else if (isSelfTool(toolName)) {
                 result = await executeSelfTool(toolName, args, selfToolContext);
               }
               // Route to agent tool handler if available, otherwise Figma MCP

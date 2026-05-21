@@ -890,7 +890,7 @@ async function streamResponse(conv) {
     var _ctxUsage = null;
 
     // Build chat request body — include agent info when active
-    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: state.figmaMCPEnabled, usePlaywrightMCP: state.playwrightMCPEnabled || false, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns };
+    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: state.figmaMCPEnabled, usePlaywrightMCP: state.playwrightMCPEnabled || false, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets };
     if (typeof isAgentActive === 'function' && isAgentActive()) {
       chatBody.agentName = getActiveAgentName();
       chatBody.agentPermissions = getActiveAgentPermissions();
@@ -955,6 +955,17 @@ async function streamResponse(conv) {
             var toolLabel = evt.label || evt.name || 'tool';
             _addToolStatus(toolLabel);
             if (isActive()) scrollBottom();
+          }
+          if (evt.type === 'widget_emitted' && window.faunaDynamicWidgets) {
+            dbg('widget_emitted: ' + evt.widgetId, 'ok');
+            // Render the widget after the current message bubble so it sits inline.
+            var msgEl = (typeof getActiveMessageEl === 'function') ? getActiveMessageEl() : null;
+            window.faunaDynamicWidgets.mountWidget(evt, msgEl || document.querySelector('#chat-stream') || document.body);
+            scheduleRender && scheduleRender();
+          }
+          if (evt.type === 'widget_tool_pending' && window.faunaDynamicWidgets) {
+            dbg('widget_tool_pending: ' + evt.widgetId + '/' + evt.name, 'cmd');
+            window.faunaDynamicWidgets.handleToolPending(evt);
           }
           if (evt.type === 'tool_output') {
             // Live shell output — append to a collapsible output block

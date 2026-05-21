@@ -16,6 +16,7 @@ var state = {
   _sessionAllowAllCommands: false, // per-session flag, not persisted
   figmaMCPEnabled: localStorage.getItem('fauna-figma-mcp') === 'true',   // default OFF
   playwrightMCPEnabled: localStorage.getItem('fauna-playwright-mcp') === 'true', // default OFF
+  enableDynamicWidgets: localStorage.getItem('fauna-dynamic-widgets') === 'true', // experimental, default OFF
   thinkingBudget: localStorage.getItem('fauna-thinking-budget') || 'high',
   maxContextTurns: parseInt(localStorage.getItem('fauna-max-turns') || '20', 10),
   defaultSavePath: localStorage.getItem('fauna-default-save-path') || null, // user-specified default directory for file saves
