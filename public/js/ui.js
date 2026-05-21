@@ -1162,6 +1162,7 @@ var promptMap = {
   'What\'s using my disk?':  'What\'s using the most disk space on my Mac? Check my home folder and show the top offenders.',
   'Open a website':          'Open https://github.com in the browser panel.',
   'Show Q1 metrics':         'Show me a dashboard card with these Q1 metrics: Revenue $128,400 (up 12%), NPS 94 (down 2), CSAT 73% (up 5%). Use the gen-ui components to render it inline.',
+  'Design a circuit':        'Design an RC low-pass filter with a 1 kHz cutoff driven by a 5V square wave. Render the schematic, validate it, then simulate the transient response and tell me the actual cutoff frequency and -3 dB point.',
   'Build a dashboard':       'Build an interactive dashboard as an HTML artifact. It should include a chart and some stats. The data is:\n\n',
   'Explain code':            'Please explain the following code:\n\n```\n// Paste your code here\n```',
   'Write a script':          'Write and run a script that ',

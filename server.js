@@ -1345,7 +1345,16 @@ NEVER hand-write \`<svg>\` paths for schematics — always go through these tool
 }
 \`\`\`
 
-Behavioral questions ("does it oscillate?", "what's V_out?") need real SPICE simulation, which is not yet wired in — say so and offer the schematic + structural validation only.
+Behavioral questions ("does it oscillate?", "what's V_out?", "what's the LED current?") can now be answered:
+
+6. Call \`fauna_simulate_circuit({ doc, analysis })\` with one of:
+   - \`{ type: "op" }\` — operating-point voltages and currents at every node
+   - \`{ type: "tran", step: "1u", stop: "10m" }\` — transient waveforms (time-domain)
+   - \`{ type: "ac", sweep: "dec", points: 20, fstart: "1", fstop: "1Meg" }\` — small-signal frequency response
+   - \`{ type: "dc", source: "Vvin", start: "0", stop: "5", step: "0.1" }\` — DC sweep of a named source
+   The result returns \`{ ok, available, netlist, results: { plots:[{ plotname, variables, points, data, nodeVoltages? }] } }\`.
+   If \`available\` is \`false\` (ngspice not installed), surface the install hint (\`brew install ngspice\` / \`apt install ngspice\`) and still show the netlist.
+   For waveforms, summarise key numbers (period, peak-to-peak, settling time) rather than dumping the whole array; large datasets are auto-sampled to ≤200 points.
 `.trim();
 
 // ── Browser panel + app building context ────────────────────────────────
@@ -1857,7 +1866,7 @@ app.post('/api/chat', async (req, res) => {
 
             // Route to self-tools first (memory, models, settings, etc.)
             if (isSelfTool(toolName)) {
-              result = executeSelfTool(toolName, args, selfToolContext);
+              result = await executeSelfTool(toolName, args, selfToolContext);
             }
             // Route to agent tool handler if available, otherwise Figma MCP
             else if (agentToolHandlers?.has(toolName)) {

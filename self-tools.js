@@ -16,6 +16,7 @@ import {
 import { renderCircuit } from './lib/circuit-renderer.js';
 import { validateCircuit } from './lib/circuit-validate.js';
 import { SYMBOLS, listSymbolTypes } from './lib/circuit-symbols.js';
+import { simulateCircuit } from './lib/circuit-simulate.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -355,6 +356,37 @@ export const SELF_TOOL_DEFS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_simulate_circuit',
+      description: 'Compile the circuit DSL to a SPICE netlist and run ngspice to compute real behaviour (operating-point voltages/currents, transient waveforms, AC sweeps, DC sweeps). Requires `ngspice` on PATH; if missing, returns the netlist and an install hint. Use this for questions like "does it oscillate", "what is V_out", "what current flows".',
+      parameters: {
+        type: 'object',
+        properties: {
+          doc: { type: 'object', description: 'Circuit DSL document (same shape as fauna_render_circuit)' },
+          analysis: {
+            type: 'object',
+            description: 'Analysis spec. Defaults to operating point if omitted.',
+            properties: {
+              type: { type: 'string', enum: ['op', 'tran', 'ac', 'dc'] },
+              step: { type: 'string', description: 'tran step, e.g. "1u"' },
+              stop: { type: 'string', description: 'tran stop, e.g. "10m"' },
+              start: { type: 'string' },
+              uic: { type: 'boolean', description: 'tran: use initial conditions' },
+              sweep: { type: 'string', enum: ['dec', 'oct', 'lin'], description: 'ac sweep mode' },
+              points: { type: 'number', description: 'ac points per decade/octave or linear count' },
+              fstart: { type: 'string', description: 'ac start frequency, e.g. "1"' },
+              fstop: { type: 'string', description: 'ac stop frequency, e.g. "1Meg"' },
+              source: { type: 'string', description: 'dc sweep source name (must match an emitted V<id>)' },
+            },
+            required: ['type'],
+          },
+        },
+        required: ['doc'],
+      },
+    },
+  },
 ];
 
 // ── Tool executor ───────────────────────────────────────────────────────
@@ -459,6 +491,26 @@ export function executeSelfTool(toolName, args, context = {}) {
       } catch (e) {
         return JSON.stringify({ ok: false, error: e.message });
       }
+    }
+    case 'fauna_simulate_circuit': {
+      return simulateCircuit(args.doc, args.analysis)
+        .then(r => {
+          // Trim data arrays to keep tool-output payloads reasonable.
+          if (r.results && r.results.plots) {
+            for (const p of r.results.plots) {
+              if (p.points > 200) {
+                const stride = Math.ceil(p.points / 200);
+                const sampled = {};
+                for (const v of p.variables) sampled[v] = p.data[v].filter((_, i) => i % stride === 0);
+                p.data = sampled;
+                p.sampledFrom = p.points;
+                p.points = sampled[p.variables[0]].length;
+              }
+            }
+          }
+          return JSON.stringify(r);
+        })
+        .catch(e => JSON.stringify({ ok: false, error: e.message }));
     }
 
     case 'fauna_write_files': {
