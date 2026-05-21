@@ -36,6 +36,8 @@ import { ToolGuardContext, formatToolLabel } from '../../tool-guard.js';
 import { getAgentTools, startAgentMCPServers } from '../../agent-tools.js';
 import { formatForSystemPrompt as factsForSystemPrompt, getStats as factsGetStats } from '../../memory-store.js';
 import { getProjectSystemContext, buildContextPayload } from '../../project-manager.js';
+import { estimateTokens, computeBudget } from '../lib/token-budget.js';
+import { summarizeHistory } from '../lib/summarize-history.js';
 
 export function registerChatRoute(app, {
   figma,
@@ -173,12 +175,16 @@ export function registerChatRoute(app, {
       ].filter(Boolean).join('\n');
       if (fullSystem) allMessages.push({ role: 'system', content: fullSystem });
 
-      // ── Context trimming ──────────────────────────────────────────────────
-      const MAX_HISTORY_CHARS = 200000;
-      const MAX_MSG_CHARS     = 40000; // cap any single message (shell outputs can be huge)
-      const TURN_LIMIT        = maxContextTurns >= 100 ? Infinity : maxContextTurns;
+      // ── Context trimming (token-aware, scoped) ───────────────────────────
+      // Budget is computed per-model: window − systemTokens − reservedOutput,
+      // then scaled by the model's compactAt threshold.  Body messages must
+      // fit inside `bodyTokenLimit`; the system prompt is NOT charged.
+      const systemTokens   = estimateTokens(fullSystem);
+      const budget         = computeBudget({ model, systemTokens });
+      const MAX_MSG_TOKENS = 8_000; // cap any single message (~30KB of text)
+      const TURN_LIMIT     = maxContextTurns >= 100 ? Infinity : maxContextTurns;
 
-      // 1. Strip old image payloads and cap oversized messages
+      // 1. Strip old image payloads and cap oversized messages (token-based)
       const stripped = messages.map((m, i) => {
         let content = m.content;
 
@@ -188,9 +194,16 @@ export function registerChatRoute(app, {
           content = textOnly + '\n[screenshot attached earlier — not repeated]';
         }
 
-        // Cap very long text messages (e.g. large shell outputs fed back as context)
-        if (typeof content === 'string' && content.length > MAX_MSG_CHARS) {
-          content = content.slice(0, MAX_MSG_CHARS) + `\n…[truncated — ${content.length - MAX_MSG_CHARS} chars omitted]`;
+        // Cap any single message at MAX_MSG_TOKENS (shell outputs can be huge).
+        // We cap by characters using the same heuristic the estimator uses so
+        // the post-cap message reliably fits under the token limit.
+        if (typeof content === 'string') {
+          const tokens = estimateTokens(content);
+          if (tokens > MAX_MSG_TOKENS) {
+            const charCap = MAX_MSG_TOKENS * 4; // headroom over CHARS_PER_TOKEN
+            content = content.slice(0, charCap) +
+              `\n…[truncated — ${tokens - MAX_MSG_TOKENS} tokens omitted]`;
+          }
         }
 
         return { ...m, content };
@@ -199,18 +212,88 @@ export function registerChatRoute(app, {
       // 2. Always keep first msg + as many recent msgs as fit within token budget
       const first = stripped[0];
       const rest  = stripped.slice(1);
+
+      // 2a. Auto-compaction (Phase 3, flag-gated). When the total body would
+      // blow the budget, summarize the middle slice into a single synthetic
+      // system message before the keep-recent loop runs.  Safeguards:
+      //   - flag-gated via FAUNA_AUTO_COMPACT (or autoCompact request flag)
+      //   - never summarizes the last `KEEP_TAIL` messages (current turn)
+      //   - never re-summarizes a slice that already contains a context_summary
+      //   - on summarizer failure, falls back silently to plain trimming
+      const autoCompactEnabled = (
+        process.env.FAUNA_AUTO_COMPACT === '1' ||
+        req.body?.autoCompact === true
+      );
+      const KEEP_TAIL = 4;
+      const totalBodyTokens = stripped.reduce((acc, m) => acc + estimateTokens(m), 0);
+      let compactedInfo = null;
+      if (autoCompactEnabled &&
+          totalBodyTokens > budget.bodyTokenLimit &&
+          rest.length > KEEP_TAIL + 4) {
+        const tail = rest.slice(-KEEP_TAIL);
+        const middle = rest.slice(0, -KEEP_TAIL);
+        const alreadyHasSummary = middle.some(m => m && m.name === 'context_summary');
+        if (!alreadyHasSummary) {
+          try {
+            send({ type: 'context_compacting', count: middle.length });
+            const summary = await summarizeHistory(middle, {
+              client,
+              model: 'gpt-4o-mini',
+              signal: upstreamAbort.signal,
+            });
+            if (summary && summary.length > 50) {
+              const synthetic = {
+                role: 'system',
+                name: 'context_summary',
+                content:
+                  `## Conversation Summary (compacted ${middle.length} earlier messages)\n` +
+                  summary,
+              };
+              stripped.splice(1, middle.length, synthetic);
+              // rebuild rest after splice
+              rest.length = 0;
+              for (let i = 1; i < stripped.length; i++) rest.push(stripped[i]);
+              compactedInfo = {
+                before: middle.length,
+                after: 1,
+                summaryTokens: estimateTokens(synthetic),
+                summary,
+              };
+              console.log(`[chat] auto-compacted ${middle.length} msgs → 1 summary (${compactedInfo.summaryTokens}t)`);
+            }
+          } catch (e) {
+            console.warn('[chat] auto-compaction failed, continuing with plain trim:', e?.message || e);
+          }
+        }
+      }
+
       const recent = [];
-      let charCount = (typeof first?.content === 'string' ? first.content.length : 500);
+      let bodyTokens = first ? estimateTokens(first) : 0;
       for (let i = rest.length - 1; i >= 0; i--) {
         if (recent.length >= TURN_LIMIT) break;
-        const len = typeof rest[i].content === 'string' ? rest[i].content.length : 500;
-        if (charCount + len > MAX_HISTORY_CHARS) break;
+        const t = estimateTokens(rest[i]);
+        if (bodyTokens + t > budget.bodyTokenLimit) break;
         recent.unshift(rest[i]);
-        charCount += len;
+        bodyTokens += t;
       }
       const trimmed = first ? [first, ...recent] : recent;
       allMessages.push(...trimmed);
-      console.log(`[chat] context: ${trimmed.length}/${messages.length} msgs, ~${charCount} chars (sys: ${systemPrompt.length}ch)`);
+      console.log(
+        `[chat] context: ${trimmed.length}/${messages.length} msgs, ` +
+        `~${bodyTokens}/${budget.bodyTokenLimit} body tokens ` +
+        `(sys: ${systemTokens}t, model: ${budget.matched}, window: ${budget.window})`
+      );
+      if (compactedInfo) {
+        send({
+          type: 'context_compacted',
+          before: compactedInfo.before,
+          after: compactedInfo.after,
+          summaryTokens: compactedInfo.summaryTokens,
+          summary: compactedInfo.summary,
+          bodyTokens,
+          limit: budget.bodyTokenLimit,
+        });
+      }
 
       // Fetch Figma MCP tools and inject layout knowledge if requested
       let mcpTools;

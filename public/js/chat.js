@@ -331,6 +331,17 @@ async function sendMessage(opts) {
   if (!text && !state.pendingAttachments.length) { dbg('sendMessage: empty input', 'warn'); return; }
   dbg('sendMessage: ' + text.slice(0,80), 'info');
 
+  // ── Slash commands ───────────────────────────────────────────────────
+  // `/compact` — force-summarize this conversation now, regardless of size.
+  // Mirrors Codex's `/compact` and the server's auto-compaction path.
+  if (text === '/compact' || text === '/compact ') {
+    input.value = '';
+    resizeTextarea(input);
+    dbg('/compact requested — forcing summarization', 'cmd');
+    await maybeCompressConversation(conv, { force: true });
+    return;
+  }
+
   // Handle multi-agent composition: @agent1 + @agent2 [parallel] message
   var compParsed = typeof parseCompositionMention === 'function' ? parseCompositionMention(text) : null;
   if (compParsed) {
@@ -1049,6 +1060,35 @@ async function streamResponse(conv) {
               }
             })(evt);
           }
+          if (evt.type === 'context_compacting') {
+            dbg('context auto-compacting ' + (evt.count || '?') + ' messages…', 'info');
+          }
+          if (evt.type === 'context_compacted') {
+            // Server-side auto-compaction: persist the new summary on this conv
+            // so subsequent /api/chat calls send it as contextSummary and the
+            // server can skip re-summarizing the same span.
+            dbg('context compacted: ' + evt.before + ' → ' + evt.after +
+                ' (~' + evt.summaryTokens + 't summary, ' +
+                evt.bodyTokens + '/' + evt.limit + 't body)', 'ok');
+            try {
+              var _ccConvId = (typeof state !== 'undefined' && state) ? state.currentId : null;
+              var _ccConv = (typeof getConv === 'function' && _ccConvId) ? getConv(_ccConvId) : null;
+              if (_ccConv && evt.summary && typeof evt.summary === 'string') {
+                _ccConv.contextSummary = evt.summary;
+                if (typeof saveConversations === 'function') saveConversations();
+                if (state && state.currentId === _ccConv.id &&
+                    typeof renderContextArchiveDivider === 'function' &&
+                    typeof getConvInner === 'function') {
+                  var _ccIndicator = document.createElement('div');
+                  _ccIndicator.className = 'msg system-msg conv-archive-divider';
+                  _ccIndicator.innerHTML = renderContextArchiveDivider(_ccConv);
+                  getConvInner(_ccConv.id).appendChild(_ccIndicator);
+                }
+              }
+            } catch (_ccErr) {
+              dbg('context_compacted handler failed: ' + (_ccErr && _ccErr.message), 'warn');
+            }
+          }
           if (evt.type === 'tool_output') {
             // Live shell output — append to a collapsible output block
             // Also accumulate for use in the waiting-for-input context
@@ -1316,7 +1356,8 @@ async function streamResponse(conv) {
 var SUMMARIZE_THRESHOLD = 30000;  // trigger when raw history exceeds this
 var SUMMARIZE_KEEP_RECENT = 6;    // always keep the last N messages verbatim after summary
 
-async function maybeCompressConversation(conv) {
+async function maybeCompressConversation(conv, opts) {
+  opts = opts || {};
   if (conv._summarizing) return;  // already in progress
 
   // Calculate total raw size of conversation
@@ -1325,11 +1366,22 @@ async function maybeCompressConversation(conv) {
   }, 0);
 
   // Only summarize if we're over threshold and have enough messages to make it worthwhile
-  if (totalChars < SUMMARIZE_THRESHOLD || conv.messages.length < 8) return;
+  // (unless explicitly forced via /compact slash command)
+  if (!opts.force) {
+    if (totalChars < SUMMARIZE_THRESHOLD || conv.messages.length < 8) return;
+  } else {
+    if (conv.messages.length < 4) {
+      dbg('/compact: not enough history to summarize (' + conv.messages.length + ' msgs)', 'warn');
+      return;
+    }
+  }
 
   // Messages to summarize: everything except the last N (keep recent verbatim)
   var toSummarize = conv.messages.slice(0, -SUMMARIZE_KEEP_RECENT);
-  if (toSummarize.length < 4) return;
+  if (toSummarize.length < 4) {
+    if (opts.force) toSummarize = conv.messages.slice(0, -2);
+    if (toSummarize.length < 2) return;
+  }
 
   dbg('↻ summarizing ' + toSummarize.length + ' old messages (~' + totalChars + ' chars)…', 'info');
   conv._summarizing = true;
