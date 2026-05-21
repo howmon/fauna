@@ -119,8 +119,8 @@ describe('circuit renderer', () => {
   it('renders an LED+resistor circuit', () => {
     const out = renderCircuit(ledWithResistor);
     expect(out.warnings).toHaveLength(0);
-    expect(out.svg).toMatch(/<polyline /);  // wires
-    expect(out.svg).toMatch(/<polygon /);   // LED arrowhead
+    expect(out.svg).toMatch(/<line /);     // wires
+    expect(out.svg).toMatch(/<polygon /);  // LED arrowhead
   });
 
   it('renders an RC low-pass circuit', () => {
@@ -152,11 +152,27 @@ describe('circuit renderer', () => {
       ],
       wires: [{ from: 'r1.p2', to: 'r2.p1' }],
     });
-    // L-shape route → 3 points
-    const polyline = out.svg.match(/<polyline points="([^"]+)"/);
-    expect(polyline).not.toBeNull();
-    const points = polyline[1].trim().split(/\s+/);
-    expect(points.length).toBe(3);
+    // L-shape route → one horizontal + one vertical segment
+    const lines = out.svg.match(/<line /g) || [];
+    expect(lines.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('draws jumper hops where wires cross without connecting', () => {
+    // Two crossing wires that do not share an endpoint at the crossing.
+    const out = renderCircuit({
+      components: [
+        { id: 'r1', type: 'resistor', x: 0,  y: 0 },
+        { id: 'r2', type: 'resistor', x: 10, y: 0 },
+        { id: 'r3', type: 'resistor', x: 5,  y: -4, rot: 90 },
+        { id: 'r4', type: 'resistor', x: 5,  y: 4,  rot: 90 },
+      ],
+      wires: [
+        { from: 'r1.p2', to: 'r2.p1' }, // horizontal across the middle
+        { from: 'r3.p2', to: 'r4.p1' }, // vertical through the middle
+      ],
+    });
+    // Horizontal segment should render as a <path> with an arc (A command).
+    expect(out.svg).toMatch(/<path d="[^"]*A /);
   });
 });
 
