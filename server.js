@@ -70,6 +70,15 @@ import { createFigmaBridge } from './server/bridges/figma.js';
 import { registerWorkspaceRoutes } from './server/routes/workspace.js';
 import { registerStoreRoutes } from './server/routes/store.js';
 import { registerChatMiscRoutes } from './server/routes/chat-misc.js';
+import { registerChatRoute } from './server/routes/chat.js';
+import { registerGitRoutes } from './server/routes/git.js';
+import { registerBrowseRoutes } from './server/bridges/playwright-browse.js';
+import { registerShellExecRoutes } from './server/routes/shell-exec.js';
+import { registerAgentSandboxFileRoutes } from './server/routes/agent-sandbox-files.js';
+import {
+  resolvePath, atomicWriteFile, checkpointFile,
+  setAgentManifestGetter as _setAgentManifestGetter,
+} from './server/lib/write-helpers.js';
 import {
   getTeamsSettings, updateTeamsSettings, startTeamsBridge, stopTeamsBridge, testConnection as teamsTestConnection,
 } from './teams-bridge.js';
@@ -118,6 +127,9 @@ const FAUNA_CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
 let internalAICaller = async () => '';
 // Track the model currently in use for conversations so features inherit it
 let _activeModel = 'gpt-4.1';
+
+// killId → ChildProcess (for user-initiated shell-exec cancel)
+const _shellProcs = new Map();
 
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ limit: '25mb', extended: false }));
@@ -417,6 +429,9 @@ async function _writePdfWithPlaywright(fullHtml, absPath, pageSize, landscape) {
   const pw = await import('playwright-core');
   const chromium = pw.chromium || pw.default?.chromium;
   if (!chromium) throw new Error('playwright-core loaded but chromium not found');
+  const _EDGE_PATH   = '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
+  const _CHROME_PATH = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  const BROWSER_PATH = fs.existsSync(_EDGE_PATH) ? _EDGE_PATH : _CHROME_PATH;
   if (!fs.existsSync(BROWSER_PATH)) throw new Error('No supported Chrome/Edge executable found for PDF generation');
   const browser = await chromium.launch({
     executablePath: BROWSER_PATH,
@@ -749,587 +764,9 @@ app.post('/api/summarize', async (req, res) => {
 });
 
 
-app.post('/api/chat', async (req, res) => {
-  _psAcquire();
-  res.on('finish', _psRelease);
-  res.on('close',  _psRelease);
-  const { messages = [], model = 'claude-sonnet-4.6', systemPrompt = '', useFigmaMCP = false, contextSummary = '',
-          thinkingBudget = 'high', maxContextTurns = 20, agentName = null,
-          projectId = null, projectContextIds = null, isDelegation = false,
-          clientContext = 'app', noTools = false } = req.body;
-  const isCLI = clientContext === 'cli';
+// ── /api/chat moved → server/routes/chat.js ──
 
-  // Track the active conversation model so heartbeat/workflows/teams use the same one
-  _activeModel = model;
-
-  res.writeHead(200, {
-    'Content-Type':    'text/event-stream',
-    'Cache-Control':   'no-cache',
-    'Connection':      'keep-alive',
-    'X-Accel-Buffering': 'no',
-    'Access-Control-Allow-Origin': 'http://localhost:3737'
-  });
-
-  const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
-
-  try {
-    const client = getCopilotClient();
-    const allMessages = [];
-
-    // Build project context from active project (name, root, sources, pinned/enabled contexts)
-    let projectCtx = '';
-    if (projectId) {
-      projectCtx = projectContextIds && projectContextIds.length
-        ? buildContextPayload(projectId, projectContextIds)
-        : getProjectSystemContext(projectId);
-    }
-
-    // Build system prompt — append project context, facts memory, context summary and browser context
-    // For delegation (sub-agent) calls, skip heavy shared context to reduce token cost
-    const factsCtx = isDelegation ? '' : factsForSystemPrompt(20);
-    // Inject connected Figma file info so AI can target the right document
-    let figmaFilesCtx = '';
-    const _figmaFilesList = figma.listFiles();
-    if (useFigmaMCP && _figmaFilesList.length > 0) {
-      const entries = _figmaFilesList.map(f => `- "${f.fileName}" (fileKey: ${f.fileKey}, page: ${f.currentPage})`).join('\n');
-      figmaFilesCtx = `\n## Connected Figma Documents\nThe following Figma documents are currently open with the plugin running:\n${entries}\nWhen using figma_execute, pass the fileKey parameter to target a specific document. If omitted, the most recently active document is used.\nIMPORTANT: Dev Mode MCP tools (get_screenshot, get_design_context, get_metadata, etc.) always operate on whichever file is currently focused in Figma — they do NOT accept a fileKey parameter. If you need to read from or screenshot a specific file, use figma_execute with the fileKey parameter instead.`;
-    }
-    const cliHint = isCLI ? `\n\n## Output Format\nYou are running in a terminal CLI. Respond in plain, readable text. Do NOT use markdown headers (###), horizontal rules (---), or emojis. Use plain bullet points (- or *) only when a list genuinely helps. Be concise and direct. Never emit browser-action or browser-ext-action code blocks — those do not work in the terminal.` : '';
-    const fullSystem = [
-      systemPrompt.trim() + cliHint,
-      isDelegation ? '' : projectCtx,
-      factsCtx,
-      (isDelegation || isCLI || noTools) ? '' : BROWSER_BUILD_CONTEXT,
-      (isDelegation || isCLI || noTools) ? '' : buildBrowserExtContext(),
-      (isDelegation || isCLI || noTools) ? '' : GEN_UI_CATALOG_PROMPT,
-      contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '',
-      figmaFilesCtx
-    ].filter(Boolean).join('\n');
-    if (fullSystem) allMessages.push({ role: 'system', content: fullSystem });
-
-    // ── Context trimming ──────────────────────────────────────────────────
-    // Target: ~60k chars of conversation history (well inside 128k context window)
-    const MAX_HISTORY_CHARS = 200000;
-    const MAX_MSG_CHARS     = 40000; // cap any single message (shell outputs can be huge)
-    const TURN_LIMIT        = maxContextTurns >= 100 ? Infinity : maxContextTurns;
-
-    // 1. Strip old image payloads and cap oversized messages
-    const stripped = messages.map((m, i) => {
-      let content = m.content;
-
-      // Strip image bytes from non-latest vision messages
-      if (Array.isArray(content) && i < messages.length - 1) {
-        const textOnly = content.filter(c => c.type === 'text').map(c => c.text).join('\n');
-        content = textOnly + '\n[screenshot attached earlier — not repeated]';
-      }
-
-      // Cap very long text messages (e.g. large shell outputs fed back as context)
-      if (typeof content === 'string' && content.length > MAX_MSG_CHARS) {
-        content = content.slice(0, MAX_MSG_CHARS) + `\n…[truncated — ${content.length - MAX_MSG_CHARS} chars omitted]`;
-      }
-
-      return { ...m, content };
-    });
-
-    // 2. Always keep first msg + as many recent msgs as fit within token budget
-    const first = stripped[0];
-    const rest  = stripped.slice(1);
-    const recent = [];
-    let charCount = (typeof first?.content === 'string' ? first.content.length : 500);
-    for (let i = rest.length - 1; i >= 0; i--) {
-      if (recent.length >= TURN_LIMIT) break;
-      const len = typeof rest[i].content === 'string' ? rest[i].content.length : 500;
-      if (charCount + len > MAX_HISTORY_CHARS) break;
-      recent.unshift(rest[i]);
-      charCount += len;
-    }
-    const trimmed = first ? [first, ...recent] : recent;
-    allMessages.push(...trimmed);
-    console.log(`[chat] context: ${trimmed.length}/${messages.length} msgs, ~${charCount} chars (sys: ${systemPrompt.length}ch)`);
-
-    // Fetch Figma MCP tools and inject layout knowledge if requested
-    let mcpTools;
-    if (useFigmaMCP) {
-      try { mcpTools = await figma.getMcpTools(); } catch (_) {
-        // Fallback: always expose figma_execute even when port-3845 is unavailable
-        mcpTools = [figma.executeToolDef];
-      }
-    }
-
-    // Load agent tools if an agent is active
-    let agentToolHandlers = null; // Map<name, executeFn>
-    if (agentName) {
-      const safeAgentName = agentName.replace(/[^a-zA-Z0-9_-]/g, '');
-      const agentDir = path.join(AGENTS_DIR, safeAgentName);
-      const manifestPath = path.join(agentDir, 'agent.json');
-      let manifest = null;
-
-      // Try to load installed agent manifest
-      if (fs.existsSync(manifestPath)) {
-        try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch (_) {}
-      }
-
-      // For built-in agents, use the permissions from the request body
-      const permissions = manifest?.permissions || req.body.agentPermissions || {};
-      const effectiveManifest = manifest || { name: safeAgentName, permissions };
-
-      const { definitions: agentToolDefs, handlers } = getAgentTools(
-        fs.existsSync(agentDir) ? agentDir : null,
-        effectiveManifest,
-        safeAgentName
-      );
-      agentToolHandlers = handlers;
-
-      // Merge agent tools with MCP tools
-      const allTools = [...(mcpTools || []), ...agentToolDefs];
-      if (allTools.length) mcpTools = allTools;
-
-      // Start any MCP servers the agent requires
-      if (effectiveManifest.permissions?.mcp?.length) {
-        try { await startAgentMCPServers(effectiveManifest, safeAgentName); } catch (_) {}
-      }
-
-      console.log(`[chat] Agent "${safeAgentName}" active — ${agentToolDefs.length} tools registered`);
-    }
-
-    // ── Self-tools — LLM-callable tools (memory, models, settings, etc.) ──
-    const selfToolContext = {
-      getModels: () => FALLBACK_MODELS,
-      getSettings: () => ({
-        model,
-        thinkingBudget,
-        maxContextTurns,
-        figmaMCPEnabled: useFigmaMCP,
-        factsCount: factsGetStats().total,
-      }),
-      sendToRenderer: (channel, data) => {
-        try {
-          const wins = _ElectronBrowserWindow?.getAllWindows?.() || [];
-          for (const w of wins) w.webContents?.send?.(channel, data);
-        } catch (_) {}
-      },
-      sendNotification: (title, body) => {
-        try {
-          const { Notification: ElectronNotification } = _require('electron');
-          new ElectronNotification({ title, body }).show();
-        } catch (_) {
-          console.log(`[notification] ${title}: ${body}`);
-        }
-      },
-    };
-    if (!isCLI && !noTools) mcpTools = [...(mcpTools || []), ...SELF_TOOL_DEFS];
-
-    // Agentic loop — re-runs if model calls tools (max 12 iterations)
-    let continueLoop = true;
-    let toolCallCount = 0;
-    let continueCount = 0; // track auto-continue on length finish
-    const MAX_TOOL_CALLS = 50;
-    const MAX_CONTINUES = 6; // max auto-continue attempts for truncated output
-    const MAX_RESULT_CHARS = 40000; // prevent context overflow from large tool responses
-    const toolCallsSeen = new Map(); // deduplicate identical calls
-
-    // ── Tool guard — pre-call checks, category limits, browser discipline ──
-    const toolGuard = new ToolGuardContext({
-      send,
-      onPermissionRequest: async (toolName, args, info) => {
-        // For now, send SSE event and auto-allow (Phase 2 will add interactive prompt)
-        send({ type: 'tool_permission_request', name: toolName, args, label: info.label, category: info.category });
-        return 'allow';
-      },
-    });
-
-    while (continueLoop) {
-      if (res.writableEnded) break;
-
-      // o-series and gpt-5+ models require max_completion_tokens instead of max_tokens
-      const useCompletionTokens = /^(o[1-9]|gpt-5)/.test(model);
-      const params = { model, messages: allMessages, stream: true };
-      // Claude models support much larger outputs — use 32K to avoid truncating artifacts
-      const defaultMaxTokens = model.includes('claude') ? 32768 : 16384;
-      if (useCompletionTokens) { params.max_completion_tokens = defaultMaxTokens; }
-      else { params.max_tokens = defaultMaxTokens; }
-
-      // Thinking budget — Claude models use `thinking`, o-series use `reasoning_effort`
-      if (thinkingBudget !== 'off') {
-        const budgetTokens = { low: 1024, medium: 5000, high: 10000, max: 32000 }[thinkingBudget] || 10000;
-        if (model.includes('claude')) {
-          params.thinking = { type: 'enabled', budget_tokens: budgetTokens };
-          const minTokens = budgetTokens + 4000;
-          if (useCompletionTokens) { params.max_completion_tokens = Math.max(params.max_completion_tokens, minTokens); }
-          else { params.max_tokens = Math.max(params.max_tokens, minTokens); }
-        } else if (/^o[1-9]/.test(model)) {
-          params.reasoning_effort = thinkingBudget === 'max' ? 'high' : thinkingBudget === 'low' ? 'low' : 'medium';
-        }
-      }
-
-      if (mcpTools?.length) params.tools = mcpTools;
-      params.stream_options = { include_usage: true };
-
-      let stream;
-      try {
-        stream = await client.chat.completions.create(params);
-      } catch (apiErr) {
-        // Auto-recover: if max_tokens is unsupported, switch to max_completion_tokens
-        if (apiErr.message?.includes('max_tokens') && params.max_tokens) {
-          params.max_completion_tokens = params.max_tokens;
-          delete params.max_tokens;
-          stream = await client.chat.completions.create(params);
-        } else if (CHAT_COMPLETIONS_UNSUPPORTED_RE.test(params.model) || apiErr.message?.includes('/chat/completions endpoint')) {
-          const fallbackModel = /^gpt-5/i.test(params.model) ? 'gpt-5.4' : 'gpt-4.1';
-          console.log(`[chat] model "${params.model}" not supported via chat.completions, falling back to "${fallbackModel}"`);
-          params.model = fallbackModel;
-          stream = await client.chat.completions.create(params);
-        } else {
-          throw apiErr;
-        }
-      }
-
-      const pendingCalls = [];
-      let finishReason = null;
-      let assistantText = '';
-      let streamUsage = null;
-
-      let sawReasoning = false;
-      let reasoningStart = null;
-
-      for await (const chunk of stream) {
-        if (res.writableEnded) { continueLoop = false; break; }
-        if (chunk.usage) streamUsage = chunk.usage;
-        const delta = chunk.choices?.[0]?.delta;
-        finishReason = chunk.choices?.[0]?.finish_reason || finishReason;
-        if (!delta) continue;
-
-        // ── Claude extended thinking blocks ────────────────────────────────
-        // Anthropic returns thinking as content array items with type='thinking'
-        if (Array.isArray(delta.content)) {
-          for (const block of delta.content) {
-            if (block.type === 'thinking' && block.thinking) {
-              if (reasoningStart === null) reasoningStart = Date.now();
-              if (!sawReasoning) {
-                sawReasoning = true;
-                send({ type: 'reasoning' });
-              }
-            } else if (block.type === 'text' && block.text) {
-              assistantText += block.text;
-              send({ type: 'content', content: block.text });
-            }
-          }
-        }
-
-        // ── Standard text delta ────────────────────────────────────────────
-        if (typeof delta.content === 'string' && delta.content) {
-          assistantText += delta.content;
-          send({ type: 'content', content: delta.content });
-        }
-
-        // ── o-series reasoning summary delta ──────────────────────────────
-        if (delta.reasoning_content) {
-          if (reasoningStart === null) reasoningStart = Date.now();
-          if (!sawReasoning) {
-            sawReasoning = true;
-            send({ type: 'reasoning' });
-          }
-        }
-
-        // ── Tool call accumulation ─────────────────────────────────────────
-        if (delta?.tool_calls) {
-          for (const tc of delta.tool_calls) {
-            const i = tc.index ?? 0;
-            if (!pendingCalls[i]) pendingCalls[i] = { id: '', type: 'function', function: { name: '', arguments: '' } };
-            if (tc.id) pendingCalls[i].id += tc.id;
-            if (tc.function?.name) pendingCalls[i].function.name += tc.function.name;
-            if (tc.function?.arguments) pendingCalls[i].function.arguments += tc.function.arguments;
-          }
-        }
-      }
-
-      if (finishReason === 'tool_calls' && pendingCalls.length > 0) {
-        const calls = pendingCalls.filter(tc => tc && tc.function?.name);
-        if (!calls.length) { send({ type: 'done', finish_reason: finishReason }); continueLoop = false; break; }
-        allMessages.push({ role: 'assistant', tool_calls: calls });
-        for (const tc of calls) {
-          const toolName = tc.function.name;
-          const callKey  = toolName + '|' + tc.function.arguments;
-          toolCallCount++;
-
-          // Hard stop: too many tool calls (legacy global limit as safety net)
-          if (toolCallCount > MAX_TOOL_CALLS) {
-            allMessages.push({ role: 'tool', tool_call_id: tc.id, content: 'Tool call limit reached (' + MAX_TOOL_CALLS + '). Summarize what you have done so far and tell the user to continue the task in a follow-up message if needed.' });
-            continue;
-          }
-
-          // Deduplicate: same tool + same args already called
-          if (toolCallsSeen.has(callKey)) {
-            allMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolCallsSeen.get(callKey) });
-            continue;
-          }
-
-          // ── Pre-tool-call guard ─────────────────────────────────────────
-          const args = JSON.parse(tc.function.arguments || '{}');
-          const guardResult = await toolGuard.check(toolName, args);
-
-          if (guardResult.action === 'deny') {
-            allMessages.push({ role: 'tool', tool_call_id: tc.id, content: guardResult.reason });
-            continue;
-          }
-
-          // inject_snapshot: force a browser snapshot before the blind action
-          if (guardResult.action === 'inject_snapshot') {
-            send({ type: 'tool_call', name: 'browser_snapshot', label: 'Taking browser snapshot (auto)' });
-            try {
-              let snapResult;
-              try {
-                snapResult = await _callPlaywrightMcpTool('browser_snapshot', {});
-              } catch (connErr) {
-                // Auto-reconnect once if the subprocess died
-                if (/closed|disconnect|EPIPE|EOF/i.test(connErr.message)) {
-                  _playwrightMcpClient = null;
-                  _playwrightMcpClientPromise = null;
-                  snapResult = await _callPlaywrightMcpTool('browser_snapshot', {});
-                } else { throw connErr; }
-              }
-              const snapContent = Array.isArray(snapResult?.content)
-                ? snapResult.content.map(c => c.text || '').join('\n')
-                : JSON.stringify(snapResult);
-              // Insert snapshot as a separate tool message so the model sees it
-              allMessages.push({ role: 'tool', tool_call_id: tc.id, content: '[Auto-snapshot before ' + toolName + ']\n' + snapContent.slice(0, MAX_RESULT_CHARS) });
-              toolGuard.resetBrowserRate();
-              // The original tool call is consumed — model will re-decide after seeing the snapshot
-              continue;
-            } catch (snapErr) {
-              // Snapshot failed — allow the original action to proceed
-              console.log('[tool-guard] auto-snapshot failed:', snapErr.message);
-            }
-          }
-
-          // Send human-readable tool status to the client
-          const toolLabel = formatToolLabel(toolName, args);
-          send({ type: 'tool_call', name: toolName, label: toolLabel });
-
-          try {
-            let result;
-
-            // Route to self-tools first (memory, models, settings, etc.)
-            if (isSelfTool(toolName)) {
-              result = await executeSelfTool(toolName, args, selfToolContext);
-            }
-            // Route to agent tool handler if available, otherwise Figma MCP
-            else if (agentToolHandlers?.has(toolName)) {
-              console.log(`[chat] Agent tool: ${toolName}`);
-              result = await agentToolHandlers.get(toolName)(args);
-            } else {
-              figma.log('🔧 ' + toolName + (toolName === 'figma_execute' ? ': ' + (args.code || '').slice(0, 80).replace(/\n/g,' ') + '…' : ''), 'cmd');
-              result = await figma.callMcpTool(toolName, args);
-              figma.log('✓ ' + toolName + ' done', 'ok');
-            }
-
-            // Truncate oversized results (screenshots, large contexts)
-            if (typeof result === 'string' && result.length > MAX_RESULT_CHARS) {
-              result = result.slice(0, MAX_RESULT_CHARS) + `\n\n[Truncated — ${result.length} chars total]`;
-            }
-            toolCallsSeen.set(callKey, result);
-            allMessages.push({ role: 'tool', tool_call_id: tc.id, content: typeof result === 'string' ? result : JSON.stringify(result) });
-          } catch (e) {
-            allMessages.push({ role: 'tool', tool_call_id: tc.id, content: `Error: ${e.message}` });
-            figma.log('✗ ' + toolName + ': ' + e.message, 'err');
-          }
-        }
-        if (continueLoop) { /* loop continues to get next AI response */ }
-        else { send({ type: 'done', finish_reason: 'tool_limit' }); }
-      } else if (finishReason === 'length' && continueCount < MAX_CONTINUES) {
-        // Model hit token limit mid-output — auto-continue so the response finishes seamlessly
-        continueCount++;
-        console.log('[chat] finish_reason=length — auto-continuing (' + assistantText.length + ' chars so far, attempt ' + continueCount + '/' + MAX_CONTINUES + ')');
-        allMessages.push({ role: 'assistant', content: assistantText });
-        allMessages.push({ role: 'user', content: 'Your previous response was cut off mid-output. Continue EXACTLY where you left off — do NOT repeat anything already written. Do NOT narrate or explain, just output the remaining content.' });
-        // keep continueLoop = true
-      } else {
-        // If tools were called but no text was produced, prompt a summary so the user sees something
-        if (toolCallCount > 0 && !assistantText.trim() && continueCount < MAX_CONTINUES) {
-          continueCount++;
-          console.log('[chat] tool calls completed but no text output — prompting summary');
-          allMessages.push({ role: 'assistant', content: '' });
-          allMessages.push({ role: 'user', content: '[System: Your tool calls completed but you produced no visible response. Briefly summarize what you did for the user.]' });
-          // keep continueLoop = true
-        } else {
-          send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
-            reasoning: sawReasoning ? { durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
-          });
-          continueLoop = false;
-        }
-      }
-    }
-  } catch (err) {
-    send({ type: 'error', error: err.message });
-  }
-
-  if (!res.writableEnded) res.end();
-});
-
-// ── Git Repo Discovery ────────────────────────────────────────────────────
-// Find recently-used git repos on the system (for slash commands in a chat-first app)
-app.get('/api/git/repos', (req, res) => {
-  const home = os.homedir();
-  // Search common dev directories for git repos (max depth 3, fast scan)
-  const searchDirs = ['', '/Projects', '/Developer', '/repos', '/src', '/code', '/work', '/Documents', '/Desktop'].map(d => home + d);
-  const repos = [];
-  const seen = new Set();
-  for (const base of searchDirs) {
-    if (!fs.existsSync(base)) continue;
-    try {
-      // Depth 1: direct children with .git
-      const entries = fs.readdirSync(base, { withFileTypes: true });
-      for (const e of entries) {
-        if (!e.isDirectory() || e.name.startsWith('.') || e.name === 'node_modules') continue;
-        const full = path.join(base, e.name);
-        if (seen.has(full)) continue;
-        const gitDir = path.join(full, '.git');
-        if (fs.existsSync(gitDir)) {
-          seen.add(full);
-          let branch = '';
-          try { branch = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim().replace('ref: refs/heads/', ''); } catch (_) {}
-          let mtime = 0;
-          try { mtime = fs.statSync(gitDir).mtimeMs; } catch (_) {}
-          repos.push({ path: full, name: e.name, branch, mtime });
-        }
-        // Depth 2: grandchildren
-        try {
-          const sub = fs.readdirSync(full, { withFileTypes: true });
-          for (const s of sub) {
-            if (!s.isDirectory() || s.name.startsWith('.') || s.name === 'node_modules') continue;
-            const sfull = path.join(full, s.name);
-            if (seen.has(sfull)) continue;
-            if (fs.existsSync(path.join(sfull, '.git'))) {
-              seen.add(sfull);
-              let sbranch = '';
-              try { sbranch = fs.readFileSync(path.join(sfull, '.git', 'HEAD'), 'utf8').trim().replace('ref: refs/heads/', ''); } catch (_) {}
-              let smtime = 0;
-              try { smtime = fs.statSync(path.join(sfull, '.git')).mtimeMs; } catch (_) {}
-              repos.push({ path: sfull, name: s.name, branch: sbranch, mtime: smtime });
-            }
-          }
-        } catch (_) {}
-      }
-    } catch (_) {}
-  }
-  // Sort by most recently modified .git dir
-  repos.sort((a, b) => b.mtime - a.mtime);
-  res.json({ repos: repos.slice(0, 30) });
-});
-
-// ── Git Smart Commit (Feature A) ──────────────────────────────────────────
-// Detects repo convention, generates message from diff, commits.
-app.post('/api/git/commit', async (req, res) => {
-  const { cwd, amend = false, stageAll = false } = req.body;
-  const workDir = cwd || os.homedir();
-  const run = (cmd) => new Promise((resolve, reject) => {
-    _exec(cmd, { cwd: workDir, env: { ...process.env, PATH: AUGMENTED_PATH }, timeout: 30000, maxBuffer: 5 * 1024 * 1024, shell: SHELL_BIN },
-      (err, stdout, stderr) => resolve({ ok: !err, stdout: stdout || '', stderr: stderr || '', exitCode: err?.code ?? 0 }));
-  });
-
-  try {
-    // 1. Check status
-    const status = await run('git status --porcelain');
-    if (!status.stdout.trim() && !amend) return res.json({ ok: false, error: 'Nothing to commit — working tree clean.' });
-
-    // 2. Stage if needed
-    const staged = await run('git diff --cached --name-only');
-    if (!staged.stdout.trim()) {
-      if (stageAll || !staged.stdout.trim()) await run('git add -A');
-      const recheck = await run('git diff --cached --name-only');
-      if (!recheck.stdout.trim()) return res.json({ ok: false, error: 'No changes to commit after staging.' });
-    }
-
-    // 3. Detect convention from recent commits
-    const recentLog = await run('git log --oneline -20 2>/dev/null');
-    const userLog = await run('git log --oneline --author="$(git config user.name)" -10 2>/dev/null');
-
-    // 4. Get diff
-    const diffStat = await run('git diff --cached --stat');
-    const diff = await run('git diff --cached');
-    const diffText = diff.stdout.slice(0, 8000); // cap for LLM context
-
-    // 5. Generate commit message via LLM
-    const client = getCopilotClient();
-    const conventionHint = detectCommitConvention(recentLog.stdout);
-    const genMessages = [
-      { role: 'system', content: `You are an expert at writing concise, meaningful git commit messages. Analyse the diff and write a commit message following the repository's convention.\n\nConvention detected: ${conventionHint}\n\nRules:\n- Subject line ≤ 72 chars, follow the convention\n- Optional body explains WHY, not a file-by-file inventory\n- Reference issue/ticket numbers from branch names when visible\n- Output ONLY the commit message (subject + optional body separated by blank line). No markdown, no fencing, no explanation.` },
-      { role: 'user', content: `Recent commits:\n${recentLog.stdout.slice(0, 1500)}\n\nUser commits:\n${userLog.stdout.slice(0, 1000)}\n\nDiff stat:\n${diffStat.stdout}\n\nDiff:\n${diffText}` }
-    ];
-    const completion = await client.chat.completions.create({ model: 'gpt-4.1-mini', messages: genMessages, max_tokens: 300, stream: false });
-    let commitMsg = (completion.choices[0]?.message?.content || '').trim();
-    if (!commitMsg) return res.json({ ok: false, error: 'LLM returned empty commit message.' });
-
-    // Clean quotes if wrapped
-    if (commitMsg.startsWith('"') && commitMsg.endsWith('"')) commitMsg = commitMsg.slice(1, -1);
-
-    // 6. Commit
-    const msgParts = commitMsg.split(/\n\n/);
-    const subject = msgParts[0];
-    const body = msgParts.slice(1).join('\n\n');
-    let commitCmd = `git commit -m ${JSON.stringify(subject)}`;
-    if (body) commitCmd += ` -m ${JSON.stringify(body)}`;
-    if (amend) commitCmd += ' --amend';
-    const commitResult = await run(commitCmd);
-
-    // 7. Verify
-    const verify = await run('git log --oneline -1');
-    res.json({
-      ok: commitResult.ok,
-      message: commitMsg,
-      commitHash: verify.stdout.trim().split(' ')[0],
-      output: commitResult.stdout + commitResult.stderr,
-      convention: conventionHint,
-    });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-function detectCommitConvention(logOutput) {
-  const lines = (logOutput || '').split('\n').filter(Boolean);
-  const conventional = lines.filter(l => /^[a-f0-9]+ (feat|fix|chore|docs|style|refactor|test|perf|ci|build|revert)(\(.+\))?:/.test(l));
-  if (conventional.length > lines.length * 0.4) return 'Conventional Commits (type(scope): subject)';
-  const gitmoji = lines.filter(l => /^[a-f0-9]+ [\u{1F300}-\u{1FAD6}:]/u.test(l));
-  if (gitmoji.length > lines.length * 0.3) return 'Gitmoji';
-  const ticketed = lines.filter(l => /^[a-f0-9]+ \[?[A-Z]+-\d+\]?/.test(l));
-  if (ticketed.length > lines.length * 0.3) return 'Ticket-prefixed (e.g. PROJ-123)';
-  return 'Free-form (imperative mood, capitalize first word)';
-}
-
-// ── Git Branch Name Generation (Feature G) ────────────────────────────────
-app.post('/api/git/branch-name', async (req, res) => {
-  const { description, cwd } = req.body;
-  if (!description) return res.status(400).json({ error: 'description required' });
-  try {
-    const client = getCopilotClient();
-    const completion = await client.chat.completions.create({
-      model: 'gpt-4.1-mini',
-      messages: [
-        { role: 'system', content: 'You are an expert in crafting pithy branch names for Git repos. Given a task description, reply with ONLY a brief branch name (8-50 chars, lowercase, alphanumeric + hyphens only). No quotes, no explanation.' },
-        { role: 'user', content: description }
-      ],
-      max_tokens: 60,
-      stream: false,
-    });
-    let name = (completion.choices[0]?.message?.content || '').trim().replace(/[^a-zA-Z0-9-]/g, '').toLowerCase();
-    if (name.length < 4) name = 'feature-' + name;
-    if (name.length > 50) name = name.slice(0, 50);
-
-    // Optionally create the branch
-    if (req.body.create && cwd) {
-      const result = await new Promise((resolve) => {
-        _exec(`git checkout -b ${name}`, { cwd, env: { ...process.env, PATH: AUGMENTED_PATH }, shell: SHELL_BIN },
-          (err, stdout, stderr) => resolve({ ok: !err, stdout, stderr }));
-      });
-      return res.json({ ok: result.ok, name, created: result.ok, output: result.stdout + result.stderr });
-    }
-
-    res.json({ ok: true, name });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
+// ── Git routes + detectCommitConvention moved → server/routes/git.js ──
 
 // ── Workspace Discovery (Feature C) ──────────────────────────────────────
 // Scans a directory and returns project context (build commands, architecture, etc.)
@@ -1456,299 +893,8 @@ app.post('/api/fetch-url', async (req, res) => {
   }
 });
 
-// ── Browser (Playwright) — full JS-rendered page browsing ─────────────────
-// Uses the installed Google Chrome to load pages with full JS execution,
-// bypassing anti-bot measures that block simple fetch requests.
-// Inspired by github.com/ntegrals/openbrowser (MIT).
-
-const CHROME_PATH = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const EDGE_PATH   = '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
-const BROWSER_PATH = fs.existsSync(EDGE_PATH) ? EDGE_PATH : CHROME_PATH;
-const EDGE_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36 Edg/146.0.3856.62';
-const CHROME_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.153 Safari/537.36';
-const BROWSE_UA = fs.existsSync(EDGE_PATH) ? EDGE_UA : CHROME_UA;
-let _browserInstance = null;
-let _browsePage = null;          // persistent reusable page (keeps cookies/session)
-let _playwrightAvailable = null; // null = unchecked, true/false after first attempt
-const _shellProcs = new Map();   // killId → ChildProcess (for user-initiated cancel)
-
-async function getBrowser() {
-  // If we already know playwright isn't available, fail fast
-  if (_playwrightAvailable === false) throw new Error('playwright-core not available in this environment');
-
-  // Reset stale/crashed instances
-  if (_browserInstance) {
-    try {
-      if (!_browserInstance.isConnected()) _browserInstance = null;
-    } catch { _browserInstance = null; }
-  }
-
-  if (_browserInstance) return _browserInstance;
-
-  // Try puppeteer-extra + stealth first (best bot-detection bypass)
-  try {
-    const puppeteerExtra = _require('puppeteer-extra');
-    const StealthPlugin   = _require('puppeteer-extra-plugin-stealth');
-    puppeteerExtra.use(StealthPlugin());
-    // Use the real Edge user data dir so Akamai sees an established browser session with cookies/history
-    const edgeUserDataDir = ISEDGE
-      ? path.join(os.homedir(), 'Library', 'Application Support', 'Microsoft Edge')
-      : null;
-    const launchOpts = {
-      executablePath: BROWSER_PATH,
-      headless: false,
-      args: [
-        '--no-sandbox',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-dev-shm-usage',
-        '--disable-setuid-sandbox',
-        '--window-size=1280,900',
-        '--window-position=-2000,-2000',
-        '--lang=en-US,en',
-        '--profile-directory=Default',
-      ],
-    };
-    if (edgeUserDataDir) launchOpts.userDataDir = edgeUserDataDir;
-    _browserInstance = await puppeteerExtra.launch(launchOpts);
-    _browserInstance._isPuppeteer = true;  // flag for browse endpoint
-    _playwrightAvailable = true;
-    return _browserInstance;
-  } catch (pErr) {
-    _browserInstance = null;
-    // Fall through to playwright-core
-  }
-
-  try {
-    const pw = await import('playwright-core');
-    const chromium = pw.chromium || pw.default?.chromium;
-    if (!chromium) throw new Error('playwright-core loaded but chromium not found — check module exports');
-    _browserInstance = await chromium.launch({
-      executablePath: BROWSER_PATH,
-      headless: false,
-      args: [
-        '--no-sandbox',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-dev-shm-usage',
-        '--disable-setuid-sandbox',
-        '--disable-infobars',
-        '--window-size=1280,900',
-        '--window-position=-2000,-2000',
-        '--lang=en-US,en',
-        '--disable-web-security',
-      ],
-    });
-    _playwrightAvailable = true;
-    return _browserInstance;
-  } catch (err) {
-    _browserInstance = null;
-    if (err.message.includes('playwright-core') || err.message.includes('Cannot find module')) {
-      _playwrightAvailable = false;
-    }
-    throw err;
-  }
-}
-
-const ISEDGE = fs.existsSync(EDGE_PATH);
-const SEC_CH_UA = ISEDGE
-  ? '"Microsoft Edge";v="146", "Chromium";v="146", "Not/A)Brand";v="24"'
-  : '"Google Chrome";v="146", "Chromium";v="146", "Not/A)Brand";v="24"';
-
-// Returns a persistent page that reuses cookies/session across browse calls.
-async function getBrowsePage() {
-  // Check if existing page is still usable
-  if (_browsePage) {
-    try {
-      await _browsePage.evaluate(() => true);
-      return _browsePage;
-    } catch {
-      _browsePage = null;
-    }
-  }
-
-  const browser = await getBrowser();
-  const isPuppeteer = !!browser._isPuppeteer;
-
-  let page;
-  if (isPuppeteer) {
-    page = await browser.newPage();
-    await page.setUserAgent(BROWSE_UA);
-    await page.setViewport({ width: 1280, height: 900 });
-    await page.setExtraHTTPHeaders({
-      'Accept-Language': 'en-US,en;q=0.9',
-      'sec-ch-ua': SEC_CH_UA,
-      'sec-ch-ua-mobile': '?0',
-      'sec-ch-ua-platform': '"macOS"',
-    });
-  } else {
-    const context = await browser.newContext({
-      userAgent: BROWSE_UA,
-      viewport: { width: 1280, height: 900 },
-      locale: 'en-US',
-      timezoneId: 'America/New_York',
-      extraHTTPHeaders: {
-        'Accept-Language': 'en-US,en;q=0.9',
-        'sec-ch-ua': SEC_CH_UA,
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"macOS"',
-      },
-    });
-    await context.addInitScript(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    });
-    page = await context.newPage();
-  }
-
-  _browsePage = page;
-  return page;
-}
-
-const _warmedDomains = new Set(); // domains we've already visited the homepage for
-
-async function navigateWithWarmup(page, url) {
-  const origin = new URL(url).origin;
-  const targetPath = new URL(url).pathname;
-  const isHomepage = targetPath === '/' || targetPath === '';
-
-  // If navigating to a deep page on a domain we haven't warmed up, visit homepage first
-  if (!isHomepage && !_warmedDomains.has(origin)) {
-    await page.goto(origin, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-    // Brief pause to let Akamai set session cookies
-    await new Promise(r => setTimeout(r, 1500));
-    _warmedDomains.add(origin);
-  }
-
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  if (!_warmedDomains.has(origin)) _warmedDomains.add(origin);
-}
-
-function htmlToMarkdown(html, baseUrl) {
-  try {
-    const TurndownService = _require('turndown');
-    const td = new TurndownService({
-      headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced'
-    });
-    td.remove(['script', 'style', 'nav', 'footer', 'header', 'aside', 'noscript', 'svg', 'iframe']);
-    // Make relative URLs absolute
-    if (baseUrl) {
-      html = html.replace(/href="([^"]+)"/g, (m, href) => {
-        try { return `href="${new URL(href, baseUrl).href}"`; } catch { return m; }
-      });
-    }
-    return td.turndown(html);
-  } catch {
-    // Fallback: strip tags
-    return html.replace(/<[^>]+>/g, ' ').replace(/\s{2,}/g, ' ').trim();
-  }
-}
-
-// Simple curl-based fallback when Playwright isn't available
-async function fetchUrlFallback(url, maxChars = 12000) {
-  return new Promise((resolve, reject) => {
-    _execFile('curl', ['-sL', '--max-time', '15', '-A', BROWSE_UA, '--', url],
-      { maxBuffer: 5 * 1024 * 1024 },
-      (err, stdout) => {
-        if (err) return reject(err);
-        const html = stdout || '';
-        const title = (html.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1] || '';
-        const content = htmlToMarkdown(html, url);
-        resolve({ url, title, content: content.slice(0, maxChars), chars: content.length, fallback: true });
-      }
-    );
-  });
-}
-
-app.get('/api/browse-check', async (req, res) => {
-  const chromePath = BROWSER_PATH;
-  const chromeExists = fs.existsSync(chromePath);
-  let playwrightOk = false;
-  let playwrightError = null;
-  try {
-    const pw = await import('playwright-core');
-    playwrightOk = !!(pw.chromium || pw.default?.chromium);
-  } catch (e) {
-    playwrightError = e.message;
-  }
-  res.json({ chromeExists, chromeExePath: chromePath, playwrightOk, playwrightError });
-});
-
-app.post('/api/browse', async (req, res) => {
-  const { url, action = 'extract', selector, text, waitFor, maxChars = 12000 } = req.body;
-  if (!url) return res.status(400).json({ error: 'url required' });
-
-  let page;
-  try {
-    page = await getBrowsePage();
-
-    // Navigate with homepage warm-up for domains that use referrer-based bot protection
-    await navigateWithWarmup(page, url);
-
-    // Detect challenge page (Akamai "Powered and protected", Cloudflare "Just a moment")
-    const isChallenge = async () => {
-      const title = await page.title().catch(() => '');
-      const body  = await page.evaluate(() => document.body?.innerText?.slice(0, 200) || '').catch(() => '');
-      return title === '' || /access denied|just a moment|checking your browser|powered and protected|enable javascript/i.test(title + ' ' + body);
-    };
-
-    // If we landed on a challenge, wait for real content to appear (poll title + handle reloads)
-    if (await isChallenge()) {
-      await page.waitForFunction(
-        () => {
-          const t = document.title;
-          if (!t) return false;
-          return !/access denied|just a moment|checking your browser|powered and protected/i.test(t);
-        },
-        { timeout: 25000 }
-      ).catch(() => {});
-    }
-    try { await page.waitForLoadState('networkidle', { timeout: 8000 }); } catch {}
-
-    if (waitFor) {
-      try { await page.waitForSelector(waitFor, { timeout: 8000 }); } catch {}
-    }
-
-    let result = {};
-
-    if (action === 'extract' || action === 'navigate') {
-      const title   = await page.title();
-      const pageUrl = page.url();
-      const html    = await page.content();
-      const md      = htmlToMarkdown(html, pageUrl);
-      const stillBlocked = await isChallenge();
-      result = { url: pageUrl, title, content: md.slice(0, maxChars), chars: md.length };
-      if (stillBlocked) result.blocked = true;
-
-    } else if (action === 'screenshot') {
-      const buf = await page.screenshot({ type: 'jpeg', quality: 70 });
-      result = { url: page.url(), screenshot: buf.toString('base64'), mime: 'image/jpeg' };
-
-    } else if (action === 'click') {
-      await page.click(selector || text, { timeout: 5000 });
-      const html = await page.content();
-      result = { url: page.url(), content: htmlToMarkdown(html, page.url()).slice(0, maxChars) };
-
-    } else if (action === 'type') {
-      await page.fill(selector, text);
-      result = { ok: true };
-
-    } else if (action === 'eval') {
-      const evalResult = await page.evaluate(text);
-      result = { result: JSON.stringify(evalResult) };
-    }
-
-    try { await page.close(); } catch {}
-    res.json(result);
-  } catch (err) {
-    if (page) { try { await page.close(); } catch {} }
-    // Playwright failed — try curl fallback for extract actions
-    if ((action === 'extract' || action === 'navigate') && _playwrightAvailable !== false) {
-      try {
-        const fallback = await fetchUrlFallback(url, maxChars);
-        return res.json(fallback);
-      } catch { /* fall through to error */ }
-    }
-    res.status(500).json({ error: err.message });
-  }
-});
+// ── Browser (Playwright) routes moved → server/bridges/playwright-browse.js ──
+registerBrowseRoutes(app, { require: _require });
 
 // ── Figma bridge moved → server/bridges/figma.js ──
 // ── Custom MCP routes/state moved → server/bridges/custom-mcp.js ──
@@ -1794,116 +940,19 @@ registerWorkspaceRoutes(app, {
   configDir: CONFIG_DIR,
 });
 
-// ── Permission decision endpoint (from inline chat prompt) ────────────────
-app.post('/api/shell-permission', async (req, res) => {
-  const { command, decision } = req.body;
-  if (!command || !decision) return res.status(400).json({ error: 'command and decision required' });
-  if (decision === 'auto-allow') {
-    const firstWord = command.trim().split(/\s/)[0];
-    addAutoAllow(firstWord);
-  }
-  res.json({ ok: true });
+// ── Git routes moved → server/routes/git.js ──
+registerGitRoutes(app, { augmentedPath: AUGMENTED_PATH, shellBin: SHELL_BIN });
+
+// ── Shell execution routes moved → server/routes/shell-exec.js ──
+registerShellExecRoutes(app, {
+  shellProcs: _shellProcs,
+  augmentedPath: AUGMENTED_PATH,
+  shellBin: SHELL_BIN,
+  isWin: IS_WIN,
+  getInternalAICaller: () => internalAICaller,
 });
 
-app.post('/api/shell-exec', async (req, res) => {
-  const { command, cwd, killId, stream, bypassPermissions } = req.body;
-  if (!command) return res.status(400).json({ error: 'command required' });
-
-  // Permission guard — check if command is safe or requires approval
-  if (!bypassPermissions && !isCommandSafe(command)) {
-    // Get explanation and return it to the frontend for inline prompting
-    let explanation = '';
-    if (internalAICaller) {
-      try { explanation = await explainCommand(command, internalAICaller); } catch (_) {}
-    }
-    return res.json({ permissionRequired: true, command, explanation });
-  }
-
-  const workDir = cwd || os.homedir();
-  const env = {
-    ...process.env,
-    PATH: AUGMENTED_PATH,
-    HOME: os.homedir(),
-    USER: os.userInfo().username,
-    ...(IS_WIN ? {} : { SHELL: '/bin/zsh', TERM: 'xterm-256color' }),
-  };
-
-  // Streaming mode - send SSE events as output arrives
-  if (stream) {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders();
-
-    const child = spawn(SHELL_BIN, IS_WIN ? ['-Command', command] : ['-c', command], {
-      cwd: workDir,
-      env,
-      timeout: 300000,
-      maxBuffer: 10 * 1024 * 1024,
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-    
-    if (child.stdout) {
-      child.stdout.on('data', (chunk) => {
-        const text = chunk.toString();
-        res.write(`data: ${JSON.stringify({ type: 'stdout', text })}\n\n`);
-      });
-    }
-    
-    if (child.stderr) {
-      child.stderr.on('data', (chunk) => {
-        const text = chunk.toString();
-        res.write(`data: ${JSON.stringify({ type: 'stderr', text })}\n\n`);
-      });
-    }
-    
-    child.on('exit', (code) => {
-      if (killId) _shellProcs.delete(killId);
-      res.write(`data: ${JSON.stringify({ type: 'exit', exitCode: code || 0 })}\n\n`);
-      res.end();
-    });
-    
-    child.on('error', (err) => {
-      res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
-      res.end();
-    });
-    
-    if (killId) _shellProcs.set(killId, child);
-    return;
-  }
-
-  // Non-streaming mode - wait for completion and return JSON
-  const child = _exec(command, { cwd: workDir, env, timeout: 300000, maxBuffer: 10 * 1024 * 1024, shell: SHELL_BIN },
-    (err, stdout, stderr) => {
-      if (killId) _shellProcs.delete(killId);
-      if (err?.killed && !stdout && !stderr) {
-        return res.json({ ok: false, exitCode: 130, stdout: '', stderr: 'Process killed by user', command, cwd: workDir, killed: true });
-      }
-      res.json({
-        ok:       !err || err.killed === false && (err.code === 0 || stdout),
-        exitCode: err?.code ?? 0,
-        stdout:   stdout || '',
-        stderr:   stderr || '',
-        command,
-        cwd: workDir,
-      });
-    }
-  );
-  if (killId) _shellProcs.set(killId, child);
-});
-
-app.post('/api/shell-kill', (req, res) => {
-  const { killId } = req.body;
-  if (!killId) return res.status(400).json({ error: 'killId required' });
-  const child = _shellProcs.get(killId);
-  if (child) {
-    try { child.kill('SIGTERM'); } catch {}
-    _shellProcs.delete(killId);
-    res.json({ ok: true });
-  } else {
-    res.json({ ok: false, error: 'process not found or already done' });
-  }
-});
+// ── Shell-permission / shell-exec / shell-kill moved → server/routes/shell-exec.js ──
 
 // ── Write file (no shell / no truncation) ─────────────────────────────────
 // VS Code lesson: bypass shell entirely — put content in the HTTP body (20 MB limit).
@@ -2572,6 +1621,30 @@ registerStoreRoutes(app, {
   agentsDir: AGENTS_DIR,
   storeBackendUrl: process.env.AGENT_STORE_URL || 'https://agentstore.pointlabel.com/api',
   builtinAgentNames: ['research', 'coder', 'writer', 'designer'],
+});
+
+// Wire main /api/chat streaming handler.
+// Late-bound deps (playwright client, _ElectronBrowserWindow) are passed via
+// closures so they resolve at request time, after module init completes.
+registerChatRoute(app, {
+  figma,
+  agentsDir: AGENTS_DIR,
+  browserBuildContext: BROWSER_BUILD_CONTEXT,
+  buildBrowserExtContext: () => buildBrowserExtContext(),
+  psAcquire: () => _psAcquire(),
+  psRelease: () => _psRelease(),
+  setActiveModel: (m) => { _activeModel = m; },
+  getMainWindows: () => (_ElectronBrowserWindow?.getAllWindows?.() || []),
+  sendNotification: (title, body) => {
+    try {
+      const { Notification: ElectronNotification } = _require('electron');
+      new ElectronNotification({ title, body }).show();
+    } catch (_) {
+      console.log(`[notification] ${title}: ${body}`);
+    }
+  },
+  callPlaywrightMcpTool: (tool, args) => _callPlaywrightMcpTool(tool, args),
+  resetPlaywrightMcpClient: () => { _playwrightMcpClient = null; _playwrightMcpClientPromise = null; },
 });
 // Legacy agents dir: ~/.config/copilot-chat/agents (kept for backward compatibility)
 const LEGACY_AGENTS_DIR = path.join(CONFIG_DIR, 'agents');
@@ -3629,6 +2702,10 @@ function getAgentManifest(name) {
   if (!fs.existsSync(manifestPath)) return null;
   try { return JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch (_) { return null; }
 }
+
+// Late-bind the manifest getter used inside server/lib/write-helpers.js so that
+// agent-sandbox-files routes (and other modules) can resolve agent permissions.
+_setAgentManifestGetter(getAgentManifest);
 
 // Sandboxed shell execution
 app.post('/api/agent/shell-exec', (req, res) => {
