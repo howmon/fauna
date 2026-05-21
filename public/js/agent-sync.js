@@ -9,6 +9,18 @@
   var lastPushAt = Object.create(null); // slug → ms
   var pullInFlight = false;
   var pulledThisSession = false;
+  var syncDisabled = false;             // true if backend doesn't expose sync yet
+
+  // Treat these statuses as "sync endpoint not deployed" — disable for the session.
+  function isUnsupportedStatus(s) {
+    return s === 404 || s === 405 || s === 406 || s === 501;
+  }
+
+  function disableSync(reason) {
+    if (syncDisabled) return;
+    syncDisabled = true;
+    console.info('[agent-sync] disabled for this session:', reason);
+  }
 
   function storeToken() {
     try { return localStorage.getItem('store-token') || ''; } catch (_) { return ''; }
@@ -28,6 +40,7 @@
   }
 
   function schedulePush(slug) {
+    if (syncDisabled) return;
     if (!storeToken()) return;
     if (!slug) return;
     if (pending[slug]) clearTimeout(pending[slug]);
@@ -38,37 +51,50 @@
   }
 
   function pushAgent(slug) {
+    if (syncDisabled) return Promise.resolve();
     if (!storeToken()) return Promise.resolve();
     lastPushAt[slug] = Date.now();
     return fetch('/api/store/sync/push/' + encodeURIComponent(slug), {
       method: 'POST',
       headers: authHeaders(),
     }).then(function(r) {
-      if (!r.ok && r.status !== 401) {
-        console.warn('[agent-sync] push failed', slug, r.status);
+      if (r.ok) return;
+      if (isUnsupportedStatus(r.status)) {
+        disableSync('push ' + slug + ' → ' + r.status);
+        return;
       }
+      console.warn('[agent-sync] push failed', slug, r.status);
     }).catch(function(e) {
       console.warn('[agent-sync] push error', slug, e && e.message);
     });
   }
 
   function deleteRemote(slug) {
+    if (syncDisabled) return Promise.resolve();
     if (!storeToken() || !slug) return Promise.resolve();
     return fetch('/api/store/sync/' + encodeURIComponent(slug), {
       method: 'DELETE',
       headers: authHeaders(),
+    }).then(function(r) {
+      if (!r.ok && isUnsupportedStatus(r.status)) disableSync('delete → ' + r.status);
     }).catch(function() {});
   }
 
   function pullAll() {
+    if (syncDisabled) return Promise.resolve(null);
     if (!storeToken()) return Promise.resolve(null);
     if (pullInFlight) return Promise.resolve(null);
     pullInFlight = true;
     return fetch('/api/store/sync/pull', {
       method: 'POST',
       headers: authHeaders(),
-    }).then(function(r) { return r.ok ? r.json() : null; })
-      .catch(function() { return null; })
+    }).then(function(r) {
+      if (!r.ok) {
+        if (isUnsupportedStatus(r.status)) disableSync('pull → ' + r.status);
+        return null;
+      }
+      return r.json();
+    }).catch(function() { return null; })
       .then(function(report) {
         pullInFlight = false;
         if (report && (report.pulled || []).length) {
