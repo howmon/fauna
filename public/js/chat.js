@@ -1096,10 +1096,15 @@ async function streamResponse(conv) {
                 if (state && state.currentId === _ccConv.id &&
                     typeof renderContextArchiveDivider === 'function' &&
                     typeof getConvInner === 'function') {
-                  var _ccIndicator = document.createElement('div');
-                  _ccIndicator.className = 'msg system-msg conv-archive-divider';
+                  var _ccInner = getConvInner(_ccConv.id);
+                  // Reuse existing divider if present — never stack duplicates.
+                  var _ccIndicator = _ccInner.querySelector('.conv-archive-divider');
+                  if (!_ccIndicator) {
+                    _ccIndicator = document.createElement('div');
+                    _ccIndicator.className = 'msg system-msg conv-archive-divider';
+                    _ccInner.appendChild(_ccIndicator);
+                  }
                   _ccIndicator.innerHTML = renderContextArchiveDivider(_ccConv);
-                  getConvInner(_ccConv.id).appendChild(_ccIndicator);
                 }
               }
             } catch (_ccErr) {
@@ -1435,10 +1440,14 @@ async function maybeCompressConversation(conv, opts) {
 
     // Show an indicator in the active conversation
     if (state.currentId === conv.id) {
-      var indicator = document.createElement('div');
-      indicator.className = 'msg system-msg conv-archive-divider';
+      var _inner = getConvInner(conv.id);
+      var indicator = _inner.querySelector('.conv-archive-divider');
+      if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.className = 'msg system-msg conv-archive-divider';
+        _inner.appendChild(indicator);
+      }
       indicator.innerHTML = renderContextArchiveDivider(conv);
-      getConvInner(conv.id).appendChild(indicator);
       if (typeof reconcileBusyState === 'function') reconcileBusyState();
     }
   } catch (e) {

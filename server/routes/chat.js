@@ -227,20 +227,29 @@ export function registerChatRoute(app, {
       const KEEP_TAIL = 4;
       const totalBodyTokens = stripped.reduce((acc, m) => acc + estimateTokens(m), 0);
       let compactedInfo = null;
-      if (autoCompactEnabled &&
-          totalBodyTokens > budget.bodyTokenLimit &&
-          rest.length > KEEP_TAIL + 4) {
-        const tail = rest.slice(-KEEP_TAIL);
+      const _overBudget = totalBodyTokens > budget.bodyTokenLimit;
+      if (autoCompactEnabled && _overBudget && rest.length > KEEP_TAIL + 4) {
         const middle = rest.slice(0, -KEEP_TAIL);
         const alreadyHasSummary = middle.some(m => m && m.name === 'context_summary');
+        console.log(`[chat] auto-compact: bodyTokens=${totalBodyTokens} > limit=${budget.bodyTokenLimit}, summarizing ${middle.length} msgs (skip=${alreadyHasSummary})`);
         if (!alreadyHasSummary) {
+          // Bound the summarizer call so it can't stall the main turn.
+          const _compactTimeout = setTimeout(() => {
+            try { upstreamAbort.abort(); } catch (_) {}
+          }, 30_000);
+          const _compactAbort = new AbortController();
+          const _onMainAbort = () => { try { _compactAbort.abort(); } catch (_) {} };
+          upstreamAbort.signal.addEventListener('abort', _onMainAbort, { once: true });
           try {
             send({ type: 'context_compacting', count: middle.length });
-            const summary = await summarizeHistory(middle, {
-              client,
-              model: 'gpt-4o-mini',
-              signal: upstreamAbort.signal,
-            });
+            const summary = await Promise.race([
+              summarizeHistory(middle, {
+                client,
+                model: 'gpt-4o-mini',
+                signal: _compactAbort.signal,
+              }),
+              new Promise(resolve => setTimeout(() => resolve(''), 25_000)),
+            ]);
             if (summary && summary.length > 50) {
               const synthetic = {
                 role: 'system',
@@ -250,7 +259,6 @@ export function registerChatRoute(app, {
                   summary,
               };
               stripped.splice(1, middle.length, synthetic);
-              // rebuild rest after splice
               rest.length = 0;
               for (let i = 1; i < stripped.length; i++) rest.push(stripped[i]);
               compactedInfo = {
@@ -260,9 +268,14 @@ export function registerChatRoute(app, {
                 summary,
               };
               console.log(`[chat] auto-compacted ${middle.length} msgs → 1 summary (${compactedInfo.summaryTokens}t)`);
+            } else {
+              console.log('[chat] auto-compact produced empty summary; falling back to plain trim');
             }
           } catch (e) {
             console.warn('[chat] auto-compaction failed, continuing with plain trim:', e?.message || e);
+          } finally {
+            clearTimeout(_compactTimeout);
+            upstreamAbort.signal.removeEventListener('abort', _onMainAbort);
           }
         }
       }

@@ -65,12 +65,15 @@ export async function summarizeHistory(messages, { client, model = 'gpt-4o-mini'
   const params = { model, messages: prompt, stream: false };
   if (/^(o[1-9]|gpt-5)/.test(model)) params.max_completion_tokens = maxTokens;
   else params.max_tokens = maxTokens;
-  if (signal) params.signal = signal;
+  // NOTE: signal goes in the SDK's request-options arg (second param), NOT in
+  // the body params object — putting it in `params` makes the OpenAI SDK try to
+  // JSON-serialize an AbortSignal which throws and aborts the whole request.
 
   try {
+    const reqOpts = signal ? { signal } : undefined;
     let resp;
     try {
-      resp = await client.chat.completions.create(params, signal ? { signal } : undefined);
+      resp = await client.chat.completions.create(params, reqOpts);
     } catch (modelErr) {
       // Retry once with a known-good fallback if the requested model is rejected.
       const fallback = 'gpt-4o-mini';
@@ -78,7 +81,7 @@ export async function summarizeHistory(messages, { client, model = 'gpt-4o-mini'
         console.warn('[summarize-history] model "' + model + '" failed (' + (modelErr?.message || modelErr) + ') — retrying with ' + fallback);
         const retry = { ...params, model: fallback, max_tokens: maxTokens };
         delete retry.max_completion_tokens;
-        resp = await client.chat.completions.create(retry, signal ? { signal } : undefined);
+        resp = await client.chat.completions.create(retry, reqOpts);
       } else {
         throw modelErr;
       }
