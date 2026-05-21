@@ -256,7 +256,12 @@ export function registerChatRoute(app, {
                 name: 'context_summary',
                 content:
                   `## Conversation Summary (compacted ${middle.length} earlier messages)\n` +
-                  summary,
+                  summary +
+                  '\n\n---\n' +
+                  'IMPORTANT: This summary is a compressed view of earlier turns. ' +
+                  'Do NOT assume any task is complete based on this summary alone. ' +
+                  'If items appear under "OPEN / UNVERIFIED", treat them as still pending. ' +
+                  'Before reporting success, re-verify by reading current file state or running the relevant commands again.',
               };
               stripped.splice(1, middle.length, synthetic);
               rest.length = 0;
