@@ -57,6 +57,7 @@ import { FALLBACK_MODELS, CHAT_COMPLETIONS_UNSUPPORTED_RE } from './server/copil
 import { GEN_UI_CATALOG_PROMPT } from './server/prompts/gen-ui-catalog.js';
 import { BROWSER_BUILD_CONTEXT, buildBrowserExtContext } from './server/prompts/browser-context.js';
 import { registerFetchUrlRoutes } from './server/routes/fetch-url.js';
+import { registerSummarizeRoutes } from './server/routes/summarize.js';
 import { registerConversationRoutes } from './server/routes/conversations.js';
 import { registerProjectRunRoutes } from './server/routes/project-runs.js';
 import { registerProjectRoutes } from './server/routes/projects.js';
@@ -325,42 +326,8 @@ registerChatMiscRoutes(app, { browserBuildContext: BROWSER_BUILD_CONTEXT });
 
 // ── Browser Extension context moved → server/prompts/browser-context.js ──
 
-// ── Context summarization endpoint ───────────────────────────────────────────
-app.post('/api/summarize', async (req, res) => {
-  const { messages = [], model = 'claude-sonnet-4.6' } = req.body;
-  if (!messages.length) return res.json({ summary: '' });
-  try {
-    const client = getCopilotClient();
-    const prompt = [
-      { role: 'system', content:
-        'You are a concise task-state summarizer. ' +
-        'Given a conversation, produce a compact summary (max 400 words) covering:\n' +
-        '1. The original task/goal\n' +
-        '2. What has already been completed (files created, commands run, results)\n' +
-        '3. Current state and any pending steps\n' +
-        '4. Key facts discovered (paths, errors, findings)\n' +
-        'Write in past tense. Be specific — include file paths, command names, and exact results. ' +
-        'Omit greetings, filler, and markdown formatting.'
-      },
-      ...messages.map(m => ({
-        role: m.role,
-        content: typeof m.content === 'string'
-          ? m.content.slice(0, 3000)
-          : (m.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n').slice(0, 3000)
-      })),
-      { role: 'user', content: 'Summarize the conversation above as a compact task-state note.' }
-    ];
-    const sumParams = { model, messages: prompt, stream: false };
-    if (/^(o[1-9]|gpt-5)/.test(model)) { sumParams.max_completion_tokens = 600; }
-    else { sumParams.max_tokens = 600; }
-    const resp = await client.chat.completions.create(sumParams);
-    const summary = resp.choices[0]?.message?.content?.trim() || '';
-    res.json({ summary });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
+// ── /api/summarize moved → server/routes/summarize.js ──
+registerSummarizeRoutes(app, { getCopilotClient });
 
 // ── /api/chat moved → server/routes/chat.js ──
 
