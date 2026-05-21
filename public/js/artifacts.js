@@ -627,16 +627,58 @@ function previewCodeBlock(codeId, lang) {
 
 // Extract ```artifact:TYPE blocks that AI can emit directly
 // injectCards=false when called from appendMessageDOM (history load — cards injected from restored state.artifacts)
+//
+// Parsing strategy: line-based scanner that balances inner code fences.
+// If the outer artifact fence is exactly 3 backticks and the artifact
+// contains a ```mermaid / ```code block inside, naïve regex would close
+// at the inner fence. We track inner-fence open/close state when the outer
+// fence is 3, and require >= fenceLen backticks for closing when 4+.
+function _scanArtifactBlocks(buffer) {
+  var lines = buffer.split('\n');
+  var out = [];
+  var i = 0;
+  while (i < lines.length) {
+    var openMatch = lines[i].match(/^(`{3,})artifact:(.+?)\s*$/);
+    if (!openMatch) { i++; continue; }
+    var fenceLen = openMatch[1].length;
+    var spec = openMatch[2].trim();
+    var content = [];
+    var innerOpen = false;
+    var closed = false;
+    var j = i + 1;
+    for (; j < lines.length; j++) {
+      var l = lines[j];
+      var fence = l.match(/^(`{3,})(\S*)\s*$/);
+      if (!fence) { content.push(l); continue; }
+      var thisLen = fence[1].length;
+      var hasLang = !!fence[2];
+      if (fenceLen >= 4) {
+        if (thisLen >= fenceLen && !hasLang) { closed = true; break; }
+        content.push(l);
+      } else {
+        if (innerOpen) {
+          if (!hasLang && thisLen === 3) { innerOpen = false; content.push(l); continue; }
+          content.push(l);
+        } else {
+          if (hasLang) { innerOpen = true; content.push(l); }
+          else if (thisLen === 3) { closed = true; break; }
+          else { content.push(l); }
+        }
+      }
+    }
+    out.push({ spec: spec, content: content.join('\n'), unterminated: !closed });
+    i = closed ? j + 1 : lines.length;
+  }
+  return out;
+}
+
 function extractArtifactsFromBuffer(buffer, msgEl, injectCards) {
   if (injectCards === undefined) injectCards = true;
   var container = msgEl ? (msgEl.querySelector('.msg-body') || msgEl) : null;
-  // Backreference: opening backtick count (3+) must match closing count.
-  // This lets ````artifact:... ```` survive nested ``` code blocks inside the content.
-  var re = /(`{3,})artifact:([^\n]+)\n([\s\S]*?)\1/g;
-  var match;
-  while ((match = re.exec(buffer)) !== null) {
-    var spec    = match[2].trim();
-    var content = match[3];
+  var blocks = _scanArtifactBlocks(buffer);
+  for (var b = 0; b < blocks.length; b++) {
+    var spec    = blocks[b].spec;
+    var content = blocks[b].content;
     var parts   = spec.split(':');
     var type    = parts[0];
     var title   = parts.slice(1).join(':') || type;
