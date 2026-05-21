@@ -1363,6 +1363,10 @@ function stopGeneration() {
   if (typeof stopActiveShellWorkForCurrentConversation === 'function') {
     stoppedShell = stopActiveShellWorkForCurrentConversation() || 0;
   }
+  var stoppedBrowser = 0;
+  if (typeof stopActiveBrowserWorkForCurrentConversation === 'function') {
+    stoppedBrowser = stopActiveBrowserWorkForCurrentConversation(state.currentId) || 0;
+  }
   conv._cancelled = true;
   if (conv._abortController) conv._abortController.abort();
   // Also stop any active delegation
@@ -1371,5 +1375,8 @@ function stopGeneration() {
   conv._abortController = null;
   setBusy(false);
   renderConvList();
-  showToast(stoppedShell ? 'Shell verification stopped' : 'Generation stopped');
+  var msg = 'Generation stopped';
+  if (stoppedShell) msg = 'Shell verification stopped';
+  else if (stoppedBrowser) msg = 'Browser action stopped';
+  showToast(msg);
 }

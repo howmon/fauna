@@ -687,15 +687,32 @@ async function executeBrowserAction(action) {
     wv = getActiveWebview();
     if (!wv) throw new Error('No browser tab available');
 
-    // Wait for did-stop-loading (or 15s timeout) then a flat settle for SPA JS to run
+    var navConv = (typeof getConv === 'function') ? getConv() : null;
+    // Wait for did-stop-loading (or 15s timeout) then a flat settle for SPA JS to run.
+    // Also resolve early if the user pressed Stop — stopActiveBrowserWorkForCurrentConversation
+    // already calls wv.stop() (which fires did-stop-loading), but poll _cancelled as a
+    // belt-and-braces guard in case the event was missed.
     var loadDone = new Promise(function(resolve) {
-      var onStop = function() { wv.removeEventListener('did-stop-loading', onStop); resolve(); };
+      var done = false;
+      var finish = function() { if (done) return; done = true; resolve(); };
+      var onStop = function() { wv.removeEventListener('did-stop-loading', onStop); finish(); };
       wv.addEventListener('did-stop-loading', onStop);
-      setTimeout(resolve, 15000);
+      var cancelPoll = setInterval(function() {
+        if (navConv && navConv._cancelled) { clearInterval(cancelPoll); finish(); }
+      }, 100);
+      setTimeout(function() { clearInterval(cancelPoll); finish(); }, 15000);
     });
     browserNavigateTo(action.url);
     await loadDone;
-    await new Promise(function(r) { setTimeout(r, 1200); }); // flat settle for SPA hydration
+    if (navConv && navConv._cancelled) return { ok: false, cancelled: true };
+    // Brief settle for SPA hydration, but bail fast if the user hits Stop.
+    await new Promise(function(r) {
+      var t = setTimeout(function() { clearInterval(p); r(); }, 1200);
+      var p = setInterval(function() {
+        if (navConv && navConv._cancelled) { clearInterval(p); clearTimeout(t); r(); }
+      }, 100);
+    });
+    if (navConv && navConv._cancelled) return { ok: false, cancelled: true };
     return { ok: true, url: wv.getURL() };
 
   } else if (!wv) {
@@ -1463,6 +1480,34 @@ async function _handleBotBlockIfNeeded(extractResult, url, convId) {
 
   var choice = await _showBotBlockOptions(pageUrl, title, convId);
   return choice;
+}
+
+// Interrupt any active browser work (webview loads, in-flight ext-action
+// requests) so the user's Stop press actually unsticks long-running navigates
+// or page evals. Called by stopGeneration() in chat.js. Returns the number
+// of webviews stopped, so the toast can reflect that the action was useful.
+function stopActiveBrowserWorkForCurrentConversation(convId) {
+  var stopped = 0;
+  try {
+    // 1) Stop any in-progress loads on this conv's webview tabs. This fires
+    //    did-stop-loading, which unsticks the navigate() await in
+    //    executeBrowserAction so _runBrowserActionSequence can see _cancelled
+    //    and mark the remaining widgets as cancelled.
+    var tabs = (typeof _getConvTabs === 'function') ? _getConvTabs(convId) : [];
+    tabs.forEach(function(t) {
+      if (t && t.wv && typeof t.wv.stop === 'function') {
+        try { t.wv.stop(); stopped++; } catch (_) {}
+      }
+    });
+    // 2) Fallback: stop any other webview elements in the DOM in case a tab
+    //    wasn't registered yet (e.g. mid-creation).
+    Array.from(document.querySelectorAll('webview')).forEach(function(wv) {
+      if (typeof wv.stop === 'function') {
+        try { wv.stop(); } catch (_) {}
+      }
+    });
+  } catch (_) {}
+  return stopped;
 }
 
 // Send browser page/eval result to AI. Retries if the conv is still streaming.
