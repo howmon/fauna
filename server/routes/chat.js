@@ -106,9 +106,17 @@ export function registerChatRoute(app, {
     res.on('close',  psRelease);
 
     // Phase 7: cancel upstream model stream when the client disconnects (Stop button).
+    // IMPORTANT: do NOT listen on `req.on('close')` — that event fires as soon as the
+    // request body stream finishes (after body-parser drains the POST body), which is
+    // BEFORE the upstream OpenAI call starts. That would abort the upstream immediately
+    // and produce an empty 34ms response. The canonical pattern is `res.on('close')`
+    // guarded by `!res.writableEnded` — only true when the client genuinely disconnected
+    // before we finished writing the SSE stream.
     const upstreamAbort = new AbortController();
-    const cancelUpstream = () => { try { upstreamAbort.abort(); } catch (_) {} };
-    req.on('close', cancelUpstream);
+    const cancelUpstream = () => {
+      if (res.writableEnded) return; // normal completion, not a real client abort
+      try { upstreamAbort.abort(); } catch (_) {}
+    };
     res.on('close', cancelUpstream);
     const { messages = [], model = 'claude-sonnet-4.6', systemPrompt = '', useFigmaMCP = false, contextSummary = '',
             thinkingBudget = 'high', maxContextTurns = 20, agentName = null,
@@ -644,14 +652,16 @@ export function registerChatRoute(app, {
         }
       }
     } catch (err) {
-      // Suppress noise from intentional aborts (Stop button / client disconnect)
-      if (upstreamAbort.signal.aborted || err.name === 'AbortError' || /aborted|abort/i.test(err?.message || '')) {
+      // Suppress noise from intentional aborts (Stop button / client disconnect).
+      // Only treat as abort if we actually aborted the controller — checking the
+      // error message text alone is too loose and swallows real upstream errors
+      // whose messages happen to mention "abort".
+      if (upstreamAbort.signal.aborted) {
         console.log('[chat] upstream aborted by client');
       } else {
         try { send({ type: 'error', error: err.message }); } catch (_) {}
       }
     } finally {
-      try { req.off('close', cancelUpstream); } catch (_) {}
       try { res.off('close', cancelUpstream); } catch (_) {}
     }
 
