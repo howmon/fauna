@@ -235,7 +235,20 @@ function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
   };
   bar.appendChild(otherBtn);
 
-  msgEl.appendChild(bar);
+  // Always render the recommended-actions bar AFTER the latest assistant
+  // message in the conversation, not on whichever message happened to emit
+  // the ```suggestions block. Otherwise an intermediate message's bar can
+  // end up visually above the final summary (e.g. after compaction inserts
+  // an archive divider between them).
+  var convInner = msgEl.closest('.conv-inner');
+  if (convInner) {
+    var lastMsg = convInner.querySelector('.msg.assistant:last-of-type') ||
+                  Array.from(convInner.querySelectorAll('.msg.assistant')).pop() ||
+                  msgEl;
+    lastMsg.appendChild(bar);
+  } else {
+    msgEl.appendChild(bar);
+  }
 }
 
 // Send a message directly into the conversation (supports vision/array content).

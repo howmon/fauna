@@ -19,18 +19,18 @@ A cross-platform Electron app. Streaming AI with real shell execution, browser c
 
 **Shell Execution**
 - Runs `bash`, `python3`, `node`, `swift`, `osascript`, PowerShell
-- Auto-run mode (no click needed) + auto-feed (output piped back to AI automatically)
-- Screenshot capture — images auto-attach to next AI turn
+- Native `fauna_shell_exec` function tool (Codex-style) — server-side execution inside a single agent turn, no client round-trips, no "want me to continue?" half-stops
+- Markdown ```bash blocks supported as a fallback (auto-run / auto-feed) for models without tool-call support
+- Streaming stdout/stderr, AbortController-based cancel on the Stop button, screenshot capture auto-attaches to next AI turn
 
 **Interactive Browser**
 - Built-in browser pane with multi-tab support per conversation
-- AI controls it: navigate, type, click, extract, eval, ask-user
+- Native `fauna_browser` function tool drives navigate / click / type / extract / evaluate / screenshot from inside the agent loop
 - Headless mode with stealth anti-bot detection (uses your real Edge profile)
 
 **File Editing**
-- `replace-string` — surgical find/replace
-- `apply-patch` — multi-file unified diffs
-- `write-file` / `stream-write` — new files or large rewrites
+- Native function tools (preferred): `fauna_read_file`, `fauna_replace_string` (exact unique-match), `fauna_apply_patch` (multi-file unified-diff DSL), `fauna_write_file` / `fauna_write_files` (atomic, with `minLines` / `sha256` guards)
+- Markdown fallback when tools are unavailable: `replace-string`, `apply-patch`, `write-file` / `stream-write`, `file-plan`
 - Auto-recovery checkpoints before every write
 
 **Figma**
@@ -74,10 +74,16 @@ A cross-platform Electron app. Streaming AI with real shell execution, browser c
 
 ```
 User message
-  → AI responds with tool blocks
-      bash / browser-action / write-file / figma_execute / artifact:TYPE
-  → Tools auto-execute (shell auto-runs, output fed back)
-  → AI continues loop (up to 25 tool calls/turn) until task complete
+  → AI streams response with native function tool calls
+      fauna_shell_exec / fauna_read_file / fauna_replace_string /
+      fauna_apply_patch / fauna_browser / fauna_write_file /
+      figma_execute / artifact:TYPE
+  → Server executes each tool, pushes role:tool result back into the
+      same conversation, re-invokes the model — all in ONE HTTP response
+  → Loop continues (up to 50 tool calls/turn) until the model emits a
+      tool-free final message. No client round-trips, no half-stops.
+  → Markdown tool fences (```bash, ```browser-action, etc.) remain as a
+      fallback path for models that don't support function tools.
   → Background conversations keep running when you switch away
 ```
 

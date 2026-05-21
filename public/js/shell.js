@@ -584,11 +584,15 @@ function hasPendingShellVerificationForCurrentConversation() {
   var activeWidgets = Array.from(document.querySelectorAll('.shell-exec-block')).filter(_shellWidgetBelongsToActiveConversation);
   if (!activeWidgets.length) return false;
   return activeWidgets.some(function(widget) {
+    // If a result has been recorded, the widget is done — the `autoRun="true"`
+    // dataset flag stays set after creation and would otherwise mark every
+    // historical auto-run widget as "still pending" forever, keeping the Stop
+    // button stuck on after the task is complete.
+    if (widget.dataset.result) return false;
     var resultEl = widget.querySelector('.shell-exec-result');
     var isRunning = !!(resultEl && resultEl.classList.contains('running'));
     var isPendingAutoRun = !!(widget.dataset.shellKey && _shellAutoRunPending[widget.dataset.shellKey]);
-    if (isRunning || isPendingAutoRun || widget.dataset.autoRun === 'true') return true;
-    return !widget.dataset.result;
+    return isRunning || isPendingAutoRun || widget.dataset.autoRun === 'true';
   });
 }
 
