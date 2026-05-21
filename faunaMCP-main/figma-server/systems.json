@@ -1,0 +1,13 @@
+{
+  "activeSystem": "default",
+  "systems": [
+    {
+      "id": "default",
+      "name": "Default",
+      "figmaFileKey": "",
+      "componentIndex": "components/default.json",
+      "tokenIndex": "tokens/default.json",
+      "description": "Default placeholder. Use register_design_system to add a real Figma design system."
+    }
+  ]
+}

@@ -23,6 +23,7 @@ import { z }                             from 'zod';
 import { createServer }                  from 'http';
 import { randomUUID }                    from 'crypto';
 import fs                                from 'fs';
+import os                                from 'os';
 import path                              from 'path';
 import https                             from 'https';
 import { fileURLToPath }                 from 'url';
@@ -31,13 +32,43 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ── Design system registry ────────────────────────────────────────────────
 
-const SYSTEMS_PATH = path.join(__dirname, 'systems.json');
+// When the relay runs from inside a packaged .app, the Resources dir is
+// read-only — so we keep a writable copy under the user's app-data folder
+// and fall back to the bundled template for reads.
+function userDataDir() {
+  const platform = process.platform;
+  if (platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', 'FaunaMCP');
+  if (platform === 'win32')  return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'FaunaMCP');
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'FaunaMCP');
+}
+
+const BUNDLED_SYSTEMS_PATH = path.join(__dirname, 'systems.json');
+const USER_SYSTEMS_PATH    = path.join(userDataDir(), 'systems.json');
+const SYSTEMS_PATH         = USER_SYSTEMS_PATH;
+
+const DEFAULT_SYSTEMS = {
+  activeSystem: 'default',
+  systems: [{
+    id: 'default',
+    name: 'Default',
+    figmaFileKey: '',
+    componentIndex: 'components/default.json',
+    tokenIndex: 'tokens/default.json',
+    description: 'Default placeholder. Use register_design_system to add a real Figma design system.'
+  }]
+};
 
 function loadSystems() {
-  return JSON.parse(fs.readFileSync(SYSTEMS_PATH, 'utf8'));
+  for (const p of [USER_SYSTEMS_PATH, BUNDLED_SYSTEMS_PATH]) {
+    try {
+      if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8'));
+    } catch (_) { /* fall through */ }
+  }
+  return JSON.parse(JSON.stringify(DEFAULT_SYSTEMS));
 }
 function saveSystems(data) {
-  fs.writeFileSync(SYSTEMS_PATH, JSON.stringify(data, null, 2));
+  try { fs.mkdirSync(path.dirname(USER_SYSTEMS_PATH), { recursive: true }); } catch (_) {}
+  fs.writeFileSync(USER_SYSTEMS_PATH, JSON.stringify(data, null, 2));
 }
 
 function getActiveSystem() {
