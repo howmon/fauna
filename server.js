@@ -95,6 +95,7 @@ import { registerDesktopOrganizerRoutes } from './server/routes/desktop-organize
 import { registerMarkdownPdfAndYoutubeRoutes } from './server/routes/markdown-pdf-and-youtube.js';
 import { registerFaunaUpdateRoutes } from './server/routes/fauna-update.js';
 import { createAgentDirIterator } from './server/lib/agents-iter.js';
+import { buildShellEnv } from './server/lib/shell-env.js';
 import {
   resolvePath, atomicWriteFile, checkpointFile,
   setAgentManifestGetter as _setAgentManifestGetter,
@@ -301,21 +302,8 @@ setTimeout(() => {
 }, 500);  // slight delay so the main server is fully up first
 // ── Figma plugin/status/rules routes moved → server/bridges/figma.js ──
 
-// ── Shell execution ───────────────────────────────────────────────────────
-// Runs arbitrary shell commands and returns stdout/stderr/exit code.
-// On macOS/Linux, PATH is augmented with Homebrew and common locations.
-// On Windows, PowerShell is used as the default shell.
-
-const AUGMENTED_PATH = IS_WIN
-  ? (process.env.PATH || '')
-  : [
-      '/opt/homebrew/bin', '/opt/homebrew/sbin',
-      '/usr/local/bin', '/usr/local/sbin',
-      '/usr/bin', '/usr/sbin', '/bin', '/sbin',
-      process.env.PATH || ''
-    ].join(':');
-
-const SHELL_BIN = IS_WIN ? 'powershell.exe' : '/bin/zsh';
+// ── Shell execution environment moved → server/lib/shell-env.js ──
+const { augmentedPath: AUGMENTED_PATH, shellBin: SHELL_BIN } = buildShellEnv(IS_WIN);
 
 // ── Workspace discovery routes moved → server/routes/workspace.js ──
 registerWorkspaceRoutes(app, {
