@@ -1326,10 +1326,12 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 When the user asks for a circuit, schematic, wiring diagram, or to "draw a [resistor / RC filter / 555 / transistor amplifier / etc.]":
 
 1. Call \`fauna_list_circuit_symbols\` once if you don't already know the supported types and pin names.
-2. Build a circuit DSL doc: \`{ title, grid?, components:[{id,type,x,y,rot?,value?}], wires:[{from,to}] }\`. Component coordinates are in grid units. Pin refs are \`"compId.pinName"\`.
-3. Call \`fauna_render_circuit({ doc })\` → returns \`{ svg, width, height }\`.
-4. Call \`fauna_validate_circuit({ doc })\` → returns \`{ ok, errors, warnings }\`. ALWAYS run this and surface any errors/warnings to the user.
-5. Embed the returned SVG in a gen-ui \`SVG\` element (for inline preview) or in an \`artifact:html\` block (when the user said "create"/"save"/"build").
+2. Build a circuit DSL doc: \`{ title, grid?, components:[{id,type,x,y,rot?,value?,spice?}], wires:[{from,to}] }\`. Component coordinates are in grid units. Pin refs are \`"compId.pinName"\`.
+3. **Keep \`value\` SHORT** (≤10 chars) — it's just the visible label. Use \`"10k"\`, \`"1u"\`, \`"BC547"\`, \`"5V"\`. For \`vsource\`, put any long SPICE expression (e.g. \`"PULSE(0 5 0 1u 1u 0.5m 1m)"\`, \`"SIN(0 1 1k)"\`) in the **\`spice\`** field, NOT \`value\`. Example: \`value:"5V pulse", spice:"PULSE(0 5 0 1u 1u 0.5m 1m)"\`.
+4. **Space components generously**: at least 4 grid units between adjacent components (a resistor's bbox is 60 SVG units ≈ 6 grid units at the default grid=10). Snap everything to integer grid coords and avoid overlapping bboxes.
+5. Call \`fauna_render_circuit({ doc })\` → returns \`{ svg, width, height }\`.
+6. Call \`fauna_validate_circuit({ doc })\` → returns \`{ ok, errors, warnings }\`. ALWAYS run this and surface any errors/warnings to the user.
+7. Embed the returned SVG in a gen-ui \`SVG\` element (for inline preview) or in an \`artifact:html\` block (when the user said "create"/"save"/"build").
 
 NEVER hand-write \`<svg>\` paths for schematics — always go through these tools so wires connect to real pins and validation runs.
 
