@@ -11,6 +11,39 @@
 //
 // Actions: copy_text, open_url, toggle_visible, setState
 
+// ── JSON recovery helper ──────────────────────────────────────────────────
+// Escape unescaped control characters (newline, tab, etc.) that appear
+// inside JSON string literals. Used as a fallback when JSON.parse rejects
+// raw model output that embedded multi-line markup directly into a string.
+function _sanitizeJsonControlChars(raw) {
+  var out = '';
+  var inStr = false;
+  var esc = false;
+  for (var i = 0; i < raw.length; i++) {
+    var ch = raw.charAt(i);
+    var code = raw.charCodeAt(i);
+    if (inStr) {
+      if (esc) { out += ch; esc = false; continue; }
+      if (ch === '\\') { out += ch; esc = true; continue; }
+      if (ch === '"') { out += ch; inStr = false; continue; }
+      if (code < 0x20) {
+        if (ch === '\n') out += '\\n';
+        else if (ch === '\r') out += '\\r';
+        else if (ch === '\t') out += '\\t';
+        else if (ch === '\b') out += '\\b';
+        else if (ch === '\f') out += '\\f';
+        else out += '\\u' + ('0000' + code.toString(16)).slice(-4);
+        continue;
+      }
+      out += ch;
+    } else {
+      if (ch === '"') inStr = true;
+      out += ch;
+    }
+  }
+  return out;
+}
+
 // ── State store (per-spec instance) ──────────────────────────────────────
 
 function _genUiCreateState(initialState) {
@@ -1238,11 +1271,18 @@ function extractAndRenderGenUI(buffer, msgEl, isHistoryLoad) {
     try {
       spec = JSON.parse(raw.trim());
     } catch (e) {
-      var errEl = document.createElement('div');
-      errEl.className = 'gui-parse-error';
-      errEl.innerHTML = '<i class="ti ti-alert-circle"></i> <strong>gen-ui:</strong> JSON parse error — ' + escHtml(e.message);
-      pre.replaceWith(errEl);
-      return;
+      // Recovery: LLMs frequently embed literal newlines/tabs inside string
+      // values (e.g. multi-line SVG markup). JSON disallows raw control chars
+      // in strings — escape them and retry once before giving up.
+      try {
+        spec = JSON.parse(_sanitizeJsonControlChars(raw.trim()));
+      } catch (e2) {
+        var errEl = document.createElement('div');
+        errEl.className = 'gui-parse-error';
+        errEl.innerHTML = '<i class="ti ti-alert-circle"></i> <strong>gen-ui:</strong> JSON parse error — ' + escHtml(e.message);
+        pre.replaceWith(errEl);
+        return;
+      }
     }
     if (!spec || !spec.root || !spec.elements) {
       // Tolerate a bare component shorthand: { type, props, children }

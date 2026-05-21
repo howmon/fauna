@@ -327,8 +327,8 @@
       <div class="empty-sub">Your AI desktop agent — code, shell, web, forms, Figma, and more.</div>
       <div class="empty-grid">
         <div class="empty-card" onclick="usePrompt(this)"><strong>What's using my disk?</strong>Find large files and free up space</div>
-        <div class="empty-card" onclick="usePrompt(this)"><strong>Open a website</strong>Browse any URL in the browser panel</div>
         <div class="empty-card" onclick="usePrompt(this)"><strong>Show Q1 metrics</strong>Revenue, NPS and CSAT as a live dashboard card</div>
+        <div class="empty-card" onclick="usePrompt(this)"><strong>Design a circuit</strong>Schematic + SPICE simulation (e.g. RC filter, LED driver)</div>
         <div class="empty-card" onclick="usePrompt(this)"><strong>Build a dashboard</strong>Generate an interactive HTML artifact</div>
         <div class="empty-card" onclick="usePrompt(this)"><strong>Explain code</strong>Paste code and get a clear explanation</div>
         <div class="empty-card" onclick="usePrompt(this)"><strong>Write a script</strong>Describe it and run it right here</div>
@@ -605,6 +605,19 @@
       </label>
       <div class="settings-hint" style="margin-top:4px">
         Skip the permission prompt for all shell commands. <strong>Use with caution</strong> — all commands will execute without confirmation.
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">Experimental</div>
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none">
+        <input type="checkbox" id="dynamic-widgets-toggle"
+          onchange="setEnableDynamicWidgets(this.checked)"
+          style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+        <span style="font-size:12.5px;color:var(--fau-text)">Enable dynamic widgets <span style="color:var(--fau-text-muted);font-weight:normal">(GenUI 2.0)</span></span>
+      </label>
+      <div class="settings-hint" style="margin-top:4px">
+        Lets the AI render interactive sandboxed widgets (3D viewers, dashboards, custom controls) with their own per-task tools — no pre-built tool list. Save useful widgets to your <a href="#" onclick="switchSettingsPage('playbook',document.querySelector('[data-page=playbook]'));return false;">playbook</a> to re-launch them later.
       </div>
     </div>
   </div>
@@ -1376,20 +1389,72 @@ Examples:
       if (!mount) {
         mount = document.createElement('div');
         mount.className = 'mcp-builtin-endpoint';
-        mount.style.cssText = 'margin-top:6px;font-size:11px;color:var(--fau-text-muted);font-family:var(--fau-font-mono,ui-monospace,Menlo,monospace);display:flex;flex-wrap:wrap;gap:8px';
         // Place before the buttons row when present
         var btns = info.querySelector('div[style*="display:flex"]');
         if (btns) info.insertBefore(mount, btns);
         else info.appendChild(mount);
       }
-      mount.innerHTML = '';
-      Object.keys(ep).forEach(function(k) {
+      // Normalize the raw endpoint blob into clean labeled rows.
+      // Each row: { label, value } where label is "WS" / "HTTP" (with an
+      // optional " (Fauna)" / " (Ext)" hint) and value is the full URL.
+      function labelFor(key, value) {
+        var k = key.toLowerCase();
+        var hint = '';
+        if (k.indexOf('faunaext') >= 0)      hint = ' (Fauna)';
+        else if (k.indexOf('ext') >= 0)      hint = ' (Ext)';
+        if (typeof value === 'string') {
+          if (/^wss?:\/\//.test(value))  return 'WS'   + hint;
+          if (/^https?:\/\//.test(value)) return 'HTTP' + hint;
+        }
+        if (k.indexOf('ws') >= 0)   return 'WS'   + hint;
+        if (k.indexOf('http') >= 0) return 'HTTP' + hint;
+        return key;
+      }
+      var rows = [];
+      var keys = Object.keys(ep);
+      // First pass: full URLs
+      keys.forEach(function(k) {
+        if (k === 'transport') return;
+        var v = ep[k];
+        if (typeof v !== 'string') return;
+        if (!/^(wss?|https?):\/\//.test(v)) return;
+        rows.push({ label: labelFor(k, v), value: v });
+      });
+      // Second pass: bare port numbers that aren't already covered by a URL above
+      keys.forEach(function(k) {
         if (k === 'transport') return;
         var v = ep[k];
         if (v === null || v === undefined || v === '') return;
-        var span = document.createElement('span');
-        span.textContent = k + ': ' + v;
-        mount.appendChild(span);
+        if (typeof v === 'string' && /^(wss?|https?):\/\//.test(v)) return;
+        var portStr = String(v);
+        var alreadyShown = rows.some(function(r) { return r.value.indexOf(':' + portStr) >= 0; });
+        if (alreadyShown) return;
+        // Synthesize a clean URL when the server gave us only a port number.
+        var label = labelFor(k, v);
+        var scheme = label.indexOf('HTTP') === 0 ? 'http' : 'ws';
+        var url = scheme + '://localhost:' + portStr + (scheme === 'http' ? '/mcp' : '');
+        rows.push({ label: label, value: url });
+      });
+
+      mount.innerHTML = '';
+      rows.forEach(function(r) {
+        var rowEl = document.createElement('div');
+        rowEl.className = 'mcp-endpoint-row';
+        rowEl.innerHTML =
+          '<span class="mcp-endpoint-label">' + escHtml(r.label) + '</span>' +
+          '<code class="mcp-endpoint-value">' + escHtml(r.value) + '</code>' +
+          '<button class="mcp-endpoint-copy" type="button" title="Copy to clipboard">Copy</button>';
+        var btn = rowEl.querySelector('.mcp-endpoint-copy');
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          try {
+            navigator.clipboard.writeText(r.value);
+            var orig = btn.textContent;
+            btn.textContent = 'Copied';
+            setTimeout(function() { btn.textContent = orig; }, 1200);
+          } catch (_) {}
+        });
+        mount.appendChild(rowEl);
       });
     }
     renderEndpoint('mcp-builtin-figma',      figmaStatus.endpoint);
@@ -1900,6 +1965,7 @@ Examples:
 <script src="js/agent-polish.js"></script>
 <script src="js/agent-sync.js"></script>
 <script src="js/gen-ui.js"></script>
+<script src="js/dynamic-widgets.js"></script>
 <script src="js/chat.js"></script>
 <script src="js/voice.js"></script>
 <script src="js/automation-schedule.js"></script>

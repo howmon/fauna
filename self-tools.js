@@ -13,6 +13,15 @@ import {
 import {
   createProject, getAllProjects, getProject,
 } from './project-manager.js';
+import { renderCircuit } from './lib/circuit-renderer.js';
+import { validateCircuit } from './lib/circuit-validate.js';
+import { SYMBOLS, listSymbolTypes } from './lib/circuit-symbols.js';
+import { simulateCircuit } from './lib/circuit-simulate.js';
+import { packWidgetResult } from './lib/dynamic-widgets.js';
+import {
+  savePlaybookEntry, listPlaybookEntries, getPlaybookEntry,
+  touchPlaybookEntry, deletePlaybookEntry,
+} from './playbook-store.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -279,6 +288,201 @@ export const SELF_TOOL_DEFS = [
       },
     },
   },
+
+  // ── Circuit diagrams ──
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_list_circuit_symbols',
+      description: 'List the component types supported by fauna_render_circuit/fauna_validate_circuit, with their pin names and directions. Call this FIRST when the user asks for a circuit/schematic so you know the available symbols.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_render_circuit',
+      description: 'Render a circuit schematic from a JSON DSL. Returns SVG markup the caller can embed in a gen-ui SVG block or an artifact. Component coords are in grid units (default 10 px). Wires reference "compId.pinName". Use fauna_list_circuit_symbols first to learn pin names.',
+      parameters: {
+        type: 'object',
+        properties: {
+          doc: {
+            type: 'object',
+            description: 'Circuit DSL document',
+            properties: {
+              title: { type: 'string' },
+              grid: { type: 'number', description: 'Grid size in SVG units (default 10)' },
+              components: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string', description: 'Unique component instance id, e.g. "r1"' },
+                    type: { type: 'string', description: 'Symbol type, e.g. "resistor"' },
+                    x: { type: 'number' },
+                    y: { type: 'number' },
+                    rot: { type: 'number', enum: [0, 90, 180, 270] },
+                    value: { type: 'string', description: 'Short display label (≤10 chars), e.g. "10k", "1uF", "5V". Long strings are truncated.' },
+                    spice: { type: 'string', description: 'Optional. Full SPICE source expression for vsource (e.g. "PULSE(0 5 0 1u 1u 0.5m 1m)", "SIN(0 1 1k)"). Used only by the simulator; keep `value` short for display.' },
+                    props: { type: 'object' },
+                  },
+                  required: ['id', 'type', 'x', 'y'],
+                },
+              },
+              wires: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    from: { description: 'Either "compId.pinName" or { x, y } in grid units' },
+                    to:   { description: 'Either "compId.pinName" or { x, y } in grid units' },
+                  },
+                  required: ['from', 'to'],
+                },
+              },
+            },
+            required: ['components'],
+          },
+        },
+        required: ['doc'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_validate_circuit',
+      description: 'Structural lint of a circuit DSL (no simulation). Detects power shorts, dangling pins, floating islands, duplicate drivers, reversed polarized components, and missing decoupling. ALWAYS call this after fauna_render_circuit and surface errors/warnings to the user.',
+      parameters: {
+        type: 'object',
+        properties: {
+          doc: { type: 'object', description: 'Circuit DSL document (same shape as fauna_render_circuit)' },
+        },
+        required: ['doc'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_simulate_circuit',
+      description: 'Compile the circuit DSL to a SPICE netlist and run ngspice to compute real behaviour (operating-point voltages/currents, transient waveforms, AC sweeps, DC sweeps). Requires `ngspice` on PATH; if missing, returns the netlist and an install hint. Use this for questions like "does it oscillate", "what is V_out", "what current flows".',
+      parameters: {
+        type: 'object',
+        properties: {
+          doc: { type: 'object', description: 'Circuit DSL document (same shape as fauna_render_circuit)' },
+          analysis: {
+            type: 'object',
+            description: 'Analysis spec. Defaults to operating point if omitted.',
+            properties: {
+              type: { type: 'string', enum: ['op', 'tran', 'ac', 'dc'] },
+              step: { type: 'string', description: 'tran step, e.g. "1u"' },
+              stop: { type: 'string', description: 'tran stop, e.g. "10m"' },
+              start: { type: 'string' },
+              uic: { type: 'boolean', description: 'tran: use initial conditions' },
+              sweep: { type: 'string', enum: ['dec', 'oct', 'lin'], description: 'ac sweep mode' },
+              points: { type: 'number', description: 'ac points per decade/octave or linear count' },
+              fstart: { type: 'string', description: 'ac start frequency, e.g. "1"' },
+              fstop: { type: 'string', description: 'ac stop frequency, e.g. "1Meg"' },
+              source: { type: 'string', description: 'dc sweep source name (must match an emitted V<id>)' },
+            },
+            required: ['type'],
+          },
+        },
+        required: ['doc'],
+      },
+    },
+  },
+];
+
+// ── Dynamic Widget tool definitions (gated by enableDynamicWidgets flag) ──
+// These are registered only when the user opts in via Settings.
+export const DYNAMIC_WIDGET_TOOL_DEFS = [
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_emit_widget',
+      description:
+        'Render an interactive, sandboxed HTML/JS widget in the chat and register its actions as ephemeral tools for the rest of this conversation. Use this whenever the user wants something interactive (3D viewer, kanban, sliders, custom dashboard) — the widget defines the buttons/controls and YOU call them via the registered tool names (w_<id>__<name>). Bundle.html is the inner DOM, bundle.js is the widget script which calls `widget.on("toolName", async (args) => result)` to wire each tool, and `widget.emit(event, data)` to push state. No network access inside the widget.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Short human title shown above the widget.' },
+          bundle: {
+            type: 'object',
+            description: 'The widget code bundle.',
+            properties: {
+              html: { type: 'string', description: 'Inner HTML for the widget body.' },
+              css:  { type: 'string', description: 'Optional CSS for the widget.' },
+              js:   { type: 'string', description: 'JS that calls widget.on(name, fn) for each declared tool.' },
+            },
+            required: ['html', 'js'],
+          },
+          tools: {
+            type: 'array',
+            description: 'Tool manifest — each entry becomes callable as w_<widgetId>__<name>.',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string', description: 'Tool name, [a-z][a-z0-9_]*.' },
+                description: { type: 'string' },
+                parameters: { type: 'object', description: 'JSON Schema for the tool arguments.' },
+              },
+              required: ['name'],
+            },
+          },
+        },
+        required: ['bundle', 'tools'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_save_widget_to_playbook',
+      description:
+        'Save the most recently emitted widget (by widgetId) into the playbook under a memorable name so the user can re-launch it on future tasks. Optionally add a description and tags.',
+      parameters: {
+        type: 'object',
+        properties: {
+          widgetId: { type: 'string', description: 'The widgetId returned by fauna_emit_widget.' },
+          name: { type: 'string', description: 'Human-readable name, e.g. "3D Model Viewer".' },
+          description: { type: 'string' },
+          tags: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['widgetId', 'name'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_list_playbook',
+      description: 'List saved playbook widgets the user can re-launch. Returns metadata only (no bundle source).',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Optional name/description filter.' },
+          tag: { type: 'string', description: 'Optional tag filter.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_load_widget_from_playbook',
+      description:
+        'Re-mount a previously saved widget from the playbook. This calls fauna_emit_widget internally with the saved bundle and tool manifest — the widget will be live for the rest of this conversation.',
+      parameters: {
+        type: 'object',
+        properties: {
+          idOrName: { type: 'string', description: 'Playbook entry id or name.' },
+        },
+        required: ['idOrName'],
+      },
+    },
+  },
 ];
 
 // ── Tool executor ───────────────────────────────────────────────────────
@@ -354,6 +558,57 @@ export function executeSelfTool(toolName, args, context = {}) {
         return JSON.stringify({ ok: false, error: e.message });
       }
     }
+    // ── Circuit tools ──
+    case 'fauna_list_circuit_symbols': {
+      const types = listSymbolTypes().map(t => {
+        const s = SYMBOLS[t];
+        return {
+          type: t,
+          pins: Object.entries(s.pins).map(([name, def]) => ({ name, dir: def.dir })),
+          aliases: s.pinAliases ? Object.keys(s.pinAliases) : [],
+          polarized: !!s.polarized,
+          isPower: s.isPower || null,
+        };
+      });
+      return JSON.stringify({ ok: true, types });
+    }
+    case 'fauna_render_circuit': {
+      try {
+        const result = renderCircuit(args.doc);
+        return JSON.stringify({ ok: true, ...result });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+    case 'fauna_validate_circuit': {
+      try {
+        const result = validateCircuit(args.doc);
+        return JSON.stringify(result);
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+    case 'fauna_simulate_circuit': {
+      return simulateCircuit(args.doc, args.analysis)
+        .then(r => {
+          // Trim data arrays to keep tool-output payloads reasonable.
+          if (r.results && r.results.plots) {
+            for (const p of r.results.plots) {
+              if (p.points > 200) {
+                const stride = Math.ceil(p.points / 200);
+                const sampled = {};
+                for (const v of p.variables) sampled[v] = p.data[v].filter((_, i) => i % stride === 0);
+                p.data = sampled;
+                p.sampledFrom = p.points;
+                p.points = sampled[p.variables[0]].length;
+              }
+            }
+          }
+          return JSON.stringify(r);
+        })
+        .catch(e => JSON.stringify({ ok: false, error: e.message }));
+    }
+
     case 'fauna_write_files': {
       try {
         const started = Date.now();
@@ -376,14 +631,104 @@ export function executeSelfTool(toolName, args, context = {}) {
       }
     }
 
+    // ── Dynamic Widgets ─────────────────────────────────────────────────
+    case 'fauna_emit_widget':
+      return _emitWidget(args, context);
+
+    case 'fauna_save_widget_to_playbook': {
+      try {
+        const reg = context.getLiveWidget?.(args.widgetId);
+        if (!reg) {
+          return JSON.stringify({ ok: false, error: `Widget "${args.widgetId}" not found in this conversation. Emit it first with fauna_emit_widget.` });
+        }
+        const result = savePlaybookEntry({
+          name: args.name,
+          description: args.description,
+          tags: args.tags,
+          bundle: reg.bundle,
+          tools: reg.tools,
+        });
+        return JSON.stringify(result);
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+
+    case 'fauna_list_playbook':
+      return JSON.stringify(listPlaybookEntries({ tag: args.tag, query: args.query }));
+
+    case 'fauna_load_widget_from_playbook': {
+      const entry = getPlaybookEntry(args.idOrName);
+      if (!entry) return JSON.stringify({ ok: false, error: `No playbook entry "${args.idOrName}"` });
+      touchPlaybookEntry(entry.id);
+      return _emitWidget({
+        title: entry.name,
+        bundle: entry.bundle,
+        tools: entry.tools,
+        _fromPlaybook: entry.id,
+      }, context);
+    }
+
     default:
       return JSON.stringify({ ok: false, error: `Unknown self-tool: ${toolName}` });
   }
 }
 
+// ── Dynamic Widget helpers ────────────────────────────────────────────
+function _emitWidget(args, context) {
+  try {
+    if (!args?.bundle?.html || !args?.bundle?.js) {
+      return JSON.stringify({ ok: false, error: 'bundle.html and bundle.js required' });
+    }
+    if (!Array.isArray(args.tools)) {
+      return JSON.stringify({ ok: false, error: 'tools array required' });
+    }
+    const widgetId = 'w' + Date.now().toString(36) + crypto.randomBytes(2).toString('hex');
+    const tools = args.tools.map(t => ({
+      name: t.name,
+      description: t.description || '',
+      parameters: t.parameters || { type: 'object', properties: {} },
+    }));
+    const registration = { widgetId, tools, bundle: args.bundle };
+
+    // Register the live widget so subsequent save-to-playbook / RPC routing
+    // can find its bundle. The context wires both functions in chat.js.
+    context.registerLiveWidget?.(widgetId, registration);
+
+    // Notify the frontend via SSE so the iframe is mounted in the chat UI.
+    context.sendSse?.({
+      type: 'widget_emitted',
+      widgetId,
+      title: args.title || null,
+      bundle: args.bundle,
+      tools: tools.map(t => ({ name: t.name, description: t.description })),
+      fromPlaybook: args._fromPlaybook || null,
+    });
+
+    // Pack a tool_result the model can see. We strip the bundle from the
+    // model-visible payload — the model doesn't need to re-read its own code,
+    // and including it would balloon the context window.
+    return packWidgetResult(
+      {
+        ok: true,
+        widgetId,
+        title: args.title || null,
+        exposed: tools.map(t => `w_${widgetId.replace(/[^a-z0-9]/gi,'').slice(0,24)}__${t.name}`),
+        note: 'Widget is now live. Call the exposed tool names to interact with it.',
+      },
+      { widgetId, tools },
+    );
+  } catch (e) {
+    return JSON.stringify({ ok: false, error: e.message });
+  }
+}
+
 // ── Check if a tool name is a self-tool ─────────────────────────────────
 
-const SELF_TOOL_NAMES = new Set(SELF_TOOL_DEFS.map(d => d.function.name));
+const SELF_TOOL_NAMES = new Set([
+  ...SELF_TOOL_DEFS.map(d => d.function.name),
+  ...DYNAMIC_WIDGET_TOOL_DEFS.map(d => d.function.name),
+]);
 export function isSelfTool(name) {
   return SELF_TOOL_NAMES.has(name);
 }

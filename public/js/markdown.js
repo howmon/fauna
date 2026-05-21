@@ -144,11 +144,42 @@ marked.use({
 });
 
 function renderMarkdown(text) {
-  // Strip artifact fenced blocks before rendering — they're shown as entity cards, not code fences
-  // Backreference: match same number of opening/closing backticks (3+) so nested ``` inside artifacts are preserved
-  var cleaned = (text || '').replace(/(`{3,})artifact:[^\n]+\n[\s\S]*?\1\n?/g, '');
+  // Strip artifact fenced blocks before rendering — they're shown as entity cards, not code fences.
+  // Line-based balanced scanner: when the outer artifact fence is 3 backticks
+  // and the artifact contains a ```lang inner block, naïve regex would close
+  // at the inner fence and leak the rest into chat. This handles both 3- and
+  // 4+ backtick outer fences correctly.
+  var srcLines = (text || '').split('\n');
+  var keep = [];
+  var i = 0;
+  while (i < srcLines.length) {
+    var open = srcLines[i].match(/^(`{3,})artifact:.+?\s*$/);
+    if (!open) { keep.push(srcLines[i]); i++; continue; }
+    var fenceLen = open[1].length;
+    var innerOpen = false;
+    var j = i + 1;
+    var closed = false;
+    for (; j < srcLines.length; j++) {
+      var l = srcLines[j];
+      var fence = l.match(/^(`{3,})(\S*)\s*$/);
+      if (!fence) continue;
+      var thisLen = fence[1].length;
+      var hasLang = !!fence[2];
+      if (fenceLen >= 4) {
+        if (thisLen >= fenceLen && !hasLang) { closed = true; break; }
+      } else {
+        if (innerOpen) { if (!hasLang && thisLen === 3) innerOpen = false; }
+        else { if (hasLang) innerOpen = true; else if (thisLen === 3) { closed = true; break; } }
+      }
+    }
+    i = closed ? j + 1 : srcLines.length;
+  }
+  var cleaned = keep.join('\n');
   // Strip suggestion blocks — rendered as clickable CTA buttons, not code
   cleaned = cleaned.replace(/```suggestions\n[\s\S]*?```\n?/g, '');
+  // Collapse runs of 3+ newlines left by stripped blocks so they don't render
+  // as a tall stack of empty paragraphs between surrounding content.
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n').replace(/^\n+|\n+$/g, '');
   
   // Pre-process mermaid blocks before markdown parsing
   // Replace ```mermaid blocks with placeholder divs

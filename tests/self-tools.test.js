@@ -41,7 +41,7 @@ describe('self-tools', () => {
 
   describe('SELF_TOOL_DEFS', () => {
     it('exports 11 tool definitions', () => {
-      expect(SELF_TOOL_DEFS).toHaveLength(11);
+      expect(SELF_TOOL_DEFS).toHaveLength(17);
     });
 
     it('each tool has required OpenAI function format', () => {
