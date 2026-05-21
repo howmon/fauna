@@ -193,14 +193,23 @@ function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
   // NOTE: do NOT gate on `_autoFeedDepth` — that counter stays elevated after
   // the chain ends (only resets on a new user turn), which would hide CTAs on
   // the final assistant message of any auto-feed sequence.
+  // Pending-shell checks are scoped to THIS message only — an unrun shell
+  // block on an earlier bubble shouldn't suppress CTAs on later bubbles.
   try {
     var _convId = (typeof state !== 'undefined' && state) ? state.currentId : null;
     var _conv   = (typeof getConv === 'function' && _convId) ? getConv(_convId) : null;
     if (_conv && _conv._streaming) return;
-    if (typeof hasActiveShellWorkForCurrentConversation === 'function' &&
-        hasActiveShellWorkForCurrentConversation()) return;
-    if (typeof hasPendingShellVerificationForCurrentConversation === 'function' &&
-        hasPendingShellVerificationForCurrentConversation()) return;
+    if (msgEl) {
+      var _localWidgets = msgEl.querySelectorAll('.shell-exec-block');
+      for (var _i = 0; _i < _localWidgets.length; _i++) {
+        var _w = _localWidgets[_i];
+        var _resEl = _w.querySelector('.shell-exec-result');
+        var _isRunning = !!(_resEl && _resEl.classList.contains('running'));
+        var _isPendingAuto = !!(typeof _shellAutoRunPending !== 'undefined' &&
+                                _w.dataset.shellKey && _shellAutoRunPending[_w.dataset.shellKey]);
+        if (_isRunning || _isPendingAuto) return;
+      }
+    }
   } catch (_) { /* fall through */ }
 
   var match = buffer.match(/```suggestions\n([\s\S]*?)```/);
