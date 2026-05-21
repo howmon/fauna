@@ -1429,7 +1429,11 @@ Examples:
         var portStr = String(v);
         var alreadyShown = rows.some(function(r) { return r.value.indexOf(':' + portStr) >= 0; });
         if (alreadyShown) return;
-        rows.push({ label: labelFor(k, v), value: portStr });
+        // Synthesize a clean URL when the server gave us only a port number.
+        var label = labelFor(k, v);
+        var scheme = label.indexOf('HTTP') === 0 ? 'http' : 'ws';
+        var url = scheme + '://localhost:' + portStr + (scheme === 'http' ? '/mcp' : '');
+        rows.push({ label: label, value: url });
       });
 
       mount.innerHTML = '';
