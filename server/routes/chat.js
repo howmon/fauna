@@ -213,16 +213,16 @@ export function registerChatRoute(app, {
       const first = stripped[0];
       const rest  = stripped.slice(1);
 
-      // 2a. Auto-compaction (Phase 3, flag-gated). When the total body would
-      // blow the budget, summarize the middle slice into a single synthetic
-      // system message before the keep-recent loop runs.  Safeguards:
-      //   - flag-gated via FAUNA_AUTO_COMPACT (or autoCompact request flag)
+      // 2a. Auto-compaction (Phase 3). When the total body would blow the
+      // budget, summarize the middle slice into a single synthetic system
+      // message before the keep-recent loop runs.  Safeguards:
+      //   - default ON; opt out via FAUNA_AUTO_COMPACT=0 or autoCompact:false
       //   - never summarizes the last `KEEP_TAIL` messages (current turn)
       //   - never re-summarizes a slice that already contains a context_summary
       //   - on summarizer failure, falls back silently to plain trimming
       const autoCompactEnabled = (
-        process.env.FAUNA_AUTO_COMPACT === '1' ||
-        req.body?.autoCompact === true
+        process.env.FAUNA_AUTO_COMPACT !== '0' &&
+        req.body?.autoCompact !== false
       );
       const KEEP_TAIL = 4;
       const totalBodyTokens = stripped.reduce((acc, m) => acc + estimateTokens(m), 0);

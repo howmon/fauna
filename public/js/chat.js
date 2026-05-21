@@ -954,7 +954,7 @@ async function streamResponse(conv) {
     var _ctxUsage = null;
 
     // Build chat request body — include agent info when active
-    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: state.figmaMCPEnabled, usePlaywrightMCP: state.playwrightMCPEnabled || false, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets };
+    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: state.figmaMCPEnabled, usePlaywrightMCP: state.playwrightMCPEnabled || false, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false };
     if (typeof isAgentActive === 'function' && isAgentActive()) {
       chatBody.agentName = getActiveAgentName();
       chatBody.agentPermissions = getActiveAgentPermissions();
