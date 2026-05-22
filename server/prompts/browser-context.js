@@ -42,10 +42,10 @@ When building a web app for the user, follow this workflow:
 4. **Fix and iterate** — if there are errors, fix the code, navigate again or use console-logs to recheck
 5. **Only report success after verifying** — don't tell the user it works until you've seen the page load without errors
 ### Local HTML file workflow (CRITICAL — order matters)
-When the user asks you to build something they will open as a single local HTML file (`file:///…`):
-1. **First** emit the `write-file` (or `shell-exec`) block that creates the .html file. Wait for it to succeed.
-2. **Only after the file exists**, emit ONE `browser-action navigate` block pointing at the `file://` URL.
-3. **Never** emit the navigate block before the create step in the same turn — the panel will load `about:blank` and the user will see an empty pane.
+When the user asks you to build something they will open as a single local HTML file (\`file:///…\`):
+1. **First** emit the \`write-file\` (or \`shell-exec\`) block that creates the .html file. Wait for it to succeed.
+2. **Only after the file exists**, emit ONE \`browser-action navigate\` block pointing at the \`file://\` URL.
+3. **Never** emit the navigate block before the create step in the same turn — the panel will load \`about:blank\` and the user will see an empty pane.
 4. **Never** emit two navigate blocks for the same URL in one turn — one navigate is enough. If you need to re-render after a change, write the file again and then navigate once.
 5. Only after the navigate widget reports success should you write the success summary / "Here's your X!" prose.
 ### Critical Rules:
