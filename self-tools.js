@@ -884,6 +884,28 @@ function _emitWidget(args, context) {
     }));
     const registration = { widgetId, tools, bundle: args.bundle };
 
+    // Mirror the bundle to a temp folder inside ~/Documents/Fauna so the user
+    // can inspect / re-open / share the generated widget files outside the
+    // chat UI. This is best-effort — failure here must not break emission.
+    let savedPath = null;
+    try {
+      const root = process.env.FAUNA_DOCS || path.join(os.homedir(), 'Documents', 'Fauna');
+      const dir = path.join(root, '.widgets-temp', widgetId);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'index.html'), String(args.bundle.html || ''), 'utf8');
+      fs.writeFileSync(path.join(dir, 'widget.js'),  String(args.bundle.js   || ''), 'utf8');
+      if (args.bundle.css) fs.writeFileSync(path.join(dir, 'widget.css'), String(args.bundle.css), 'utf8');
+      fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({
+        widgetId,
+        title: args.title || null,
+        createdAt: new Date().toISOString(),
+        tools: tools.map(t => ({ name: t.name, description: t.description })),
+      }, null, 2), 'utf8');
+      savedPath = dir;
+    } catch (e) {
+      console.warn('[fauna_emit_widget] could not mirror widget to disk:', e.message);
+    }
+
     // Register the live widget so subsequent save-to-playbook / RPC routing
     // can find its bundle. The context wires both functions in chat.js.
     context.registerLiveWidget?.(widgetId, registration);
@@ -907,7 +929,9 @@ function _emitWidget(args, context) {
         widgetId,
         title: args.title || null,
         exposed: tools.map(t => `w_${widgetId.replace(/[^a-z0-9]/gi,'').slice(0,24)}__${t.name}`),
-        note: 'Widget is now live. Call the exposed tool names to interact with it.',
+        savedPath,
+        note: 'Widget is now live. Call the exposed tool names to interact with it.' +
+          (savedPath ? ` Files mirrored to ${savedPath}` : ''),
       },
       { widgetId, tools },
     );

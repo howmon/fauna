@@ -445,8 +445,43 @@ function createTray() {
 
 // ── App lifecycle ─────────────────────────────────────────────────────────
 
+// Default Fauna documents folder — a single, predictable place on disk for
+// non-project files Fauna generates for the user (markdown reports, exports,
+// scratch HTML, downloads, etc.). Created once on first launch. Exposed via
+// /api/system-context so the chat prompt knows the canonical path.
+function ensureFaunaDocsFolder() {
+  try {
+    const docs = app.getPath('documents') || path.join(os.homedir(), 'Documents');
+    const fauna = path.join(docs, 'Fauna');
+    if (!fs.existsSync(fauna)) {
+      fs.mkdirSync(fauna, { recursive: true });
+      // First-run README so the folder is obviously discoverable.
+      const readme = path.join(fauna, 'README.md');
+      if (!fs.existsSync(readme)) {
+        fs.writeFileSync(readme,
+          '# Fauna\n\n' +
+          'This folder is the default save location for files Fauna generates ' +
+          'outside of any specific project \u2014 reports, markdown notes, exports, ' +
+          'scratch HTML, screenshots, etc.\n\n' +
+          'You can rename or move files here freely. Fauna will keep writing new ' +
+          'untitled files into this folder unless you set a project root.\n',
+          'utf8'
+        );
+      }
+    }
+    return fauna;
+  } catch (e) {
+    console.warn('[fauna] could not create Documents/Fauna folder:', e.message);
+    return null;
+  }
+}
+
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(buildMenu());
+
+  // Ensure ~/Documents/Fauna exists and stash the path for the server route.
+  const faunaDocs = ensureFaunaDocsFolder();
+  if (faunaDocs) process.env.FAUNA_DOCS = faunaDocs;
 
   try {
     await startServer(PORT);

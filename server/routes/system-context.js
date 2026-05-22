@@ -39,6 +39,7 @@ export function registerSystemContextRoutes(app, {
       user:     os.userInfo().username,
       home:     os.homedir(),
       desktop:  path.join(os.homedir(), 'Desktop'),
+      faunaDocs: process.env.FAUNA_DOCS || path.join(os.homedir(), 'Documents', 'Fauna'),
       cwd:      process.cwd(),
       shell:    shellBin,
       permissions: { auth, screenRecording, accessibility, fullDiskAccess, automation },

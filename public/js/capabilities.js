@@ -16,6 +16,7 @@ function getCapabilitiesContext() {
   var p = lastPermState;
   var home    = sysCtx.home    || '~';
   var desktop = sysCtx.desktop || (home + '/Desktop');
+  var faunaDocs = sysCtx.faunaDocs || (home + '/Documents/Fauna');
   var user    = sysCtx.user    || 'user';
 
   var grants = [];
@@ -76,6 +77,8 @@ function getCapabilitiesContext() {
     '',
     '## Environment',
     '- User: ' + user + ' | Home: ' + home + ' | Desktop: ' + desktop,
+    '- Default Fauna folder (use this for non-project files): ' + faunaDocs,
+    '  When the user asks you to save / generate / write a file and has NOT set a project root and has NOT specified a path, write into this folder. It is created automatically at app startup and is the canonical place for ad-hoc outputs (reports, markdown notes, exported data, scratch HTML, etc.). Do NOT scatter files in /tmp, the home directory, or the Desktop unless the user asks for it explicitly.',
     isWin
       ? '- Shell: PowerShell | OS: Windows'
       : '- Shell: /bin/zsh | Arch: Apple Silicon (arm64)',
