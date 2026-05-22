@@ -331,6 +331,7 @@ function getAgentSystemPrompt() {
     parts.push('');
     parts.push('#### Guidelines');
     parts.push('- CRITICAL: When delegating, output ONLY the [DELEGATE:...] blocks — no prose, no partial answers, no explanations before them. The sub-agents will do the work; your job here is only to dispatch.');
+    parts.push('- BEFORE emitting any [DELEGATE:] blocks, mentally review every sub-agent listed above and decide which ones are relevant for the current request. Do NOT default to the first or most familiar sub-agent — pick based on stated specialization.');
     parts.push('- Analyze the user\'s request and break it into clear sub-tasks, one per agent.');
     parts.push('- Provide specific, self-contained instructions in each delegation block so the sub-agent has everything it needs.');
     parts.push('- Keep each delegation small enough to describe in 2-3 sentences. If a task is bigger, split it into multiple delegations.');

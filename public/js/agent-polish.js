@@ -735,17 +735,12 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
   // Show delegation result cards
   showDelegationResults(results, inner);
 
-  // Synthesis fast-path: when the orchestrator delegated exactly one task and
-  // it didn't fail, skip the extra synthesis round-trip and use the sub-agent's
-  // response directly.  This saves a full model call (often 10-30s) when the
-  // "orchestration" was really just dispatch-of-one.
-  var synthesis;
-  var successResults = results.filter(function(r) { return !r.error && !r.cancelled; });
-  if (results.length === 1 && successResults.length === 1) {
-    synthesis = successResults[0].response || '';
-  } else {
-    synthesis = await synthesizeDelegationResults(results, originalMessage, conv);
-  }
+  // Always run synthesis — even when only one delegation completed.  The
+  // synthesis call is what gives the orchestrator a chance to emit further
+  // [DELEGATE:] blocks for the next round of a multi-phase workflow.
+  // Skipping it (as a single-delegation fast-path) breaks orchestrators that
+  // execute phases serially across rounds.
+  var synthesis = await synthesizeDelegationResults(results, originalMessage, conv);
 
   // Final header update
   if (headerEl) {
