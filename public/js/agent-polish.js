@@ -639,6 +639,33 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
       if (timeEl && row && row.classList.contains('working'))
         timeEl.textContent = ((Date.now() - start) / 1000).toFixed(0) + 's';
     }, 500);
+    // Live preview area inside the row so the user sees the sub-agent's
+    // output streaming in instead of just a spinner for 80+ seconds.
+    var livePreview = null;
+    if (row) {
+      livePreview = row.querySelector('.delegation-live-preview');
+      if (!livePreview) {
+        livePreview = document.createElement('div');
+        livePreview.className = 'delegation-live-preview';
+        livePreview.style.cssText = 'margin-top:6px;padding:6px 8px;font-size:11px;line-height:1.4;color:var(--fau-text-muted);background:var(--fau-bg-3,rgba(255,255,255,.03));border-radius:4px;max-height:120px;overflow:auto;white-space:pre-wrap;display:none';
+        row.appendChild(livePreview);
+      }
+    }
+    var _liveBuf = '';
+    var _liveRaf = 0;
+    function _liveOnDelta(chunk) {
+      if (!livePreview) return;
+      _liveBuf += chunk;
+      if (_liveRaf) return;
+      _liveRaf = requestAnimationFrame(function() {
+        _liveRaf = 0;
+        livePreview.style.display = '';
+        // Show only the trailing window so long outputs don't bloat the DOM.
+        var tail = _liveBuf.length > 1500 ? '…' + _liveBuf.slice(-1500) : _liveBuf;
+        livePreview.textContent = tail;
+        livePreview.scrollTop = livePreview.scrollHeight;
+      });
+    }
     var userContent = del.task + (priorResultsText ? '\n\n---\nPrevious agent results for context:\n' + priorResultsText : '');
     return fetch('/api/chat', {
       method: 'POST',
@@ -655,12 +682,13 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
         thinkingBudget: state.thinkingBudget || 'high',
         systemPrompt: '## Active Agent: ' + agent.displayName + '\n\n' + (agent.systemPrompt || '') + '\n\nYou are being delegated a task by an orchestrator agent. Complete the task thoroughly and return your result.\n\n## Verification Before Completion (REQUIRED)\nBefore emitting your completion signal, you MUST verify your work:\n- File edits: read back the changed section to confirm it landed correctly.\n- Shell commands: check exit codes and scan output for errors.\n- Figma: confirm the execution result shows success.\n- If you cannot verify, state what you could NOT confirm.\n- NEVER emit [TASK_COMPLETE] if any step produced errors you did not resolve.\n\n## Completion Signal (REQUIRED)\nYou MUST end your response with a verification summary and exactly one of these markers on its own line:\n- `[TASK_COMPLETE]` — task finished successfully AND verified\n- `[TASK_PARTIAL: <what remains>]` — made progress but could not fully finish\n- `[TASK_BLOCKED: <reason>]` — could not proceed due to a blocker\n- `[TASK_FAILED: <reason>]` — attempted but failed\n\nFormat your ending as:\n### Verification\n- ✓ <what you checked and confirmed>\n- ✗ <what failed or could not be checked> (if any)\n[TASK_COMPLETE]'
       })
-    }).then(function(r) { return readDelegationStream(r, abortCtrl.signal); })
+    }).then(function(r) { return readDelegationStream(r, abortCtrl.signal, _liveOnDelta); })
     .then(function(text) {
       clearInterval(timerTick);
       var dur = Date.now() - start;
       if (row) { row.classList.remove('working'); row.classList.add('done'); }
       if (timeEl) timeEl.textContent = (dur / 1000).toFixed(1) + 's';
+      if (livePreview) livePreview.style.display = 'none';
       return { agentName: del.agentName, displayName: agent.displayName, icon: agent.icon || 'ti-robot', task: del.task, response: text, duration: dur, status: _parseTaskStatus(text) };
     }).catch(function(e) {
       clearInterval(timerTick);
@@ -707,8 +735,17 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
   // Show delegation result cards
   showDelegationResults(results, inner);
 
-  // Synthesize: send results back to orchestrator for final response
-  var synthesis = await synthesizeDelegationResults(results, originalMessage, conv);
+  // Synthesis fast-path: when the orchestrator delegated exactly one task and
+  // it didn't fail, skip the extra synthesis round-trip and use the sub-agent's
+  // response directly.  This saves a full model call (often 10-30s) when the
+  // "orchestration" was really just dispatch-of-one.
+  var synthesis;
+  var successResults = results.filter(function(r) { return !r.error && !r.cancelled; });
+  if (results.length === 1 && successResults.length === 1) {
+    synthesis = successResults[0].response || '';
+  } else {
+    synthesis = await synthesizeDelegationResults(results, originalMessage, conv);
+  }
 
   // Final header update
   if (headerEl) {
@@ -721,7 +758,7 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
 /**
  * Read SSE stream from a delegation fetch response and return the full text.
  */
-async function readDelegationStream(response, signal) {
+async function readDelegationStream(response, signal, onContent) {
   var reader = response.body.getReader();
   var decoder = new TextDecoder();
   var partial = '';
@@ -741,7 +778,12 @@ async function readDelegationStream(response, signal) {
       if (raw === '[DONE]') continue;
       try {
         var evt = JSON.parse(raw);
-        if (evt.type === 'content') text += evt.content;
+        if (evt.type === 'content' && typeof evt.content === 'string') {
+          text += evt.content;
+          if (typeof onContent === 'function') {
+            try { onContent(evt.content); } catch (_) {}
+          }
+        }
       } catch (_) {}
     }
   }
