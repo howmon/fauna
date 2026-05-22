@@ -72,7 +72,7 @@ async function _buildLiveBrowserAttachmentContext(attachments) {
   }
 
   if (!chunks.length) return '';
-  return '\n\n[Resolved live browser tab context]\n' + chunks.join('\n\n');
+  return '\n\n[Resolved live browser tab context — already extracted from the user\'s shared browser tab via the extension. Use this content directly to answer. Do NOT call `fauna_browser` or emit `browser-action` / `browser-ext-action` blocks to re-fetch this page unless the user explicitly asks for newer data or a specific interaction (click/type/navigate). The in-app `fauna_browser` webview is a SEPARATE, blank browser unrelated to this tab — opening it will not show this content.]\n' + chunks.join('\n\n');
 }
 
 // Short confirmations — user is approving a plan the AI just described
@@ -442,7 +442,7 @@ async function sendMessage(opts) {
         if (att.clientId) meta.push('clientId=' + att.clientId);
         var header = '// ' + label + '\n// Ref: ' + ref + (meta.length ? '\n// Meta: ' + meta.join(', ') : '');
         if (_isBrowserTabReferenceAttachment(att)) {
-          var note = 'Browser tab context attached as reference only. Query this tab live via browser extension actions when needed.';
+          var note = 'Browser tab attached via the extension; its live content is resolved inline below (if extraction succeeded). Use that content directly — do NOT open the in-app `fauna_browser` webview to re-fetch it (that is a different, blank browser).';
           content += '\n\n```\n' + header + '\n// ' + note + '\n```';
         } else {
           content += '\n\n```\n' + header + '\n' + (att.content || '') + '\n```';
@@ -529,7 +529,7 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
       if (att.clientId) meta.push('clientId=' + att.clientId);
       var header = '// ' + label + '\n// Ref: ' + ref + (meta.length ? '\n// Meta: ' + meta.join(', ') : '');
       if (_isBrowserTabReferenceAttachment(att)) {
-        var note = 'Browser tab context attached as reference only. Query this tab live via browser extension actions when needed.';
+        var note = 'Browser tab attached via the extension; its live content is resolved inline below (if extraction succeeded). Use that content directly — do NOT open the in-app `fauna_browser` webview to re-fetch it (that is a different, blank browser).';
         content += '\n\n```\n' + header + '\n// ' + note + '\n```';
       } else {
         content += '\n\n```\n' + header + '\n' + (att.content || '') + '\n```';
