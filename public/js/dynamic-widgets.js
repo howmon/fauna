@@ -49,6 +49,10 @@
           'document.getElementById("root").innerHTML+="<pre style=\\"color:#f85149;white-space:pre-wrap\\">Widget script error: "+(err&&err.message||err)+"</pre>";' +
         '}' +
         'parent.postMessage({source:"fauna-widget",widgetId:widget.id,type:"ready"},"*");' +
+        // Auto-resize: report content height to parent so the iframe grows to fit.
+        'function _reportH(){var h=Math.max(document.documentElement.scrollHeight,document.body?document.body.scrollHeight:0);parent.postMessage({source:"fauna-widget",widgetId:widget.id,type:"event",event:"resize",data:{height:h}},"*");}' +
+        'setTimeout(_reportH,50);setTimeout(_reportH,300);setTimeout(_reportH,1000);' +
+        'try{if(window.ResizeObserver){var _ro=new ResizeObserver(_reportH);_ro.observe(document.documentElement);if(document.body)_ro.observe(document.body);}}catch(_){}' +
       '})();</script></body></html>';
   }
 
@@ -79,7 +83,7 @@
     iframe.setAttribute('sandbox', 'allow-scripts');
     iframe.setAttribute('referrerpolicy', 'no-referrer');
     iframe.setAttribute('loading', 'lazy');
-    iframe.style.cssText = 'width:100%;border:0;display:block;min-height:240px;background:transparent';
+    iframe.style.cssText = 'width:100%;border:0;display:block;height:520px;min-height:420px;background:transparent';
     iframe.srcdoc = _buildSrcdoc(widgetId, evt.bundle);
 
     // Auto-resize: widgets that emit { source:'fauna-widget', type:'event', event:'resize', data:{height} }
@@ -155,7 +159,7 @@
     var mounted = window._faunaDynamicWidgets.mounted.get(m.widgetId);
     if (!mounted) return;
     if (m.type === 'event' && m.event === 'resize' && m.data && typeof m.data.height === 'number') {
-      var h = Math.max(120, Math.min(1200, m.data.height));
+      var h = Math.max(240, Math.min(1600, m.data.height));
       mounted.iframe.style.height = h + 'px';
     }
   });

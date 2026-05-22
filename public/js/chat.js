@@ -1048,12 +1048,16 @@ async function streamResponse(conv) {
           }
           if (evt.type === 'widget_emitted' && window.faunaDynamicWidgets) {
             dbg('widget_emitted: ' + evt.widgetId, 'ok');
-            // Render the widget after the current message bubble so it sits inline.
-            // NOTE: use a distinct local name — `var msgEl` here would hoist and
-            // overwrite the outer streamResponse() msgEl (function-scoped var),
-            // breaking later access at stream end.
-            var _widgetAnchor = (typeof getActiveMessageEl === 'function') ? getActiveMessageEl() : null;
-            window.faunaDynamicWidgets.mountWidget(evt, _widgetAnchor || document.querySelector('#chat-stream') || document.body);
+            // Mount inside the current AI bubble (after .msg-body) so subsequent
+            // bodyEl.innerHTML re-renders during streaming don't wipe the iframe.
+            // Falls back to the conv inner container, then chat scroll, then body.
+            _ensureLiveMessageAttached();
+            var _widgetAnchor = (msgEl && msgEl.isConnected) ? msgEl
+                              : (typeof getConvInner === 'function' ? getConvInner(convId) : null)
+                              || document.getElementById('messages-inner')
+                              || document.body;
+            window.faunaDynamicWidgets.mountWidget(evt, _widgetAnchor);
+            if (isActive()) scrollBottom();
             scheduleRender && scheduleRender();
           }
           if (evt.type === 'widget_tool_pending' && window.faunaDynamicWidgets) {

@@ -378,6 +378,14 @@
                 <i class="ti ti-link"></i><span>Add URL</span>
               </button>
               <div class="tb-pm-sep"></div>
+              <div id="tb-agent-item-wrap" style="position:relative">
+                <button class="tb-pm-item" id="tb-agent-item" onclick="toggleTbAgentMenu(event)">
+                  <i class="ti ti-robot"></i><span>Agent</span>
+                  <span id="tb-agent-item-state" class="tb-pm-badge">none</span>
+                </button>
+                <div id="tb-agent-menu" style="display:none"></div>
+              </div>
+              <div class="tb-pm-sep"></div>
               <button class="tb-pm-item" id="tb-figma-item" onclick="toggleFigmaMCP();closeTbPlusMenu()">
                 <i class="ti ti-vector-triangle"></i><span>Figma MCP</span>
                 <span id="tb-figma-item-state" class="tb-pm-badge">off</span>
@@ -1493,9 +1501,16 @@ Examples:
     m.style.display = _tbPlusOpen ? '' : 'none';
     if (_tbPlusOpen) {
       _refreshTbFigmaItem();
+      _refreshTbAgentItem();
       // Refresh ext + figma status so badges show live state
       if (typeof refreshExtStatus === 'function') refreshExtStatus();
       if (typeof pollFigmaStatus === 'function') pollFigmaStatus().then(_refreshTbFigmaItem);
+      // Refresh agent list so newly installed agents appear without a reload
+      if (typeof loadInstalledAgents === 'function') {
+        loadInstalledAgents().then(function() {
+          if (_tbAgentOpen) _renderTbAgentMenu();
+        });
+      }
       setTimeout(function() {
         document.addEventListener('click', _closeTbPlusOutside, { once: true, capture: true });
       }, 0);
@@ -1505,6 +1520,9 @@ Examples:
     _tbPlusOpen = false;
     var m = document.getElementById('tb-plus-menu');
     if (m) m.style.display = 'none';
+    _tbAgentOpen = false;
+    var am = document.getElementById('tb-agent-menu');
+    if (am) am.style.display = 'none';
   }
   function _closeTbPlusOutside(e) {
     var wrap = document.getElementById('tb-plus-wrap');
@@ -1533,6 +1551,160 @@ Examples:
     } else {
       badge.textContent = 'off'; badge.className = 'tb-pm-badge';
     }
+  }
+
+  // ── Agent submenu inside the + menu ────────────────────────────────────
+  var _tbAgentOpen = false;
+  var _tbAgentFilter = '';
+  function toggleTbAgentMenu(e) {
+    if (e) e.stopPropagation();
+    _tbAgentOpen = !_tbAgentOpen;
+    var menu = document.getElementById('tb-agent-menu');
+    if (!menu) return;
+    menu.style.display = _tbAgentOpen ? '' : 'none';
+    if (_tbAgentOpen) {
+      _tbAgentFilter = '';
+      _renderTbAgentMenu();
+      setTimeout(function() {
+        var inp = document.getElementById('tb-agent-search');
+        if (inp) inp.focus();
+      }, 20);
+    }
+  }
+  function _refreshTbAgentItem() {
+    var badge = document.getElementById('tb-agent-item-state');
+    if (!badge) return;
+    var active = (typeof activeAgent !== 'undefined' && activeAgent) ? activeAgent : null;
+    if (active) {
+      badge.textContent = active.displayName || active.name;
+      badge.className = 'tb-pm-badge tb-pm-badge-on';
+    } else {
+      badge.textContent = 'none';
+      badge.className = 'tb-pm-badge';
+    }
+  }
+  function _renderTbAgentMenu() {
+    var menu = document.getElementById('tb-agent-menu');
+    if (!menu) return;
+    var list = (typeof installedAgents !== 'undefined' && Array.isArray(installedAgents)) ? installedAgents : [];
+    var activeName = (typeof activeAgent !== 'undefined' && activeAgent) ? activeAgent.name : null;
+
+    function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
+    function normIcon(ic) {
+      if (!ic) return 'ti-robot';
+      var s = String(ic).trim();
+      if (s.indexOf('ti-') === 0) return s;
+      return 'ti-robot';
+    }
+
+    var header =
+      '<div class="tb-am-search-wrap">' +
+        '<i class="ti ti-search"></i>' +
+        '<input id="tb-agent-search" type="text" placeholder="Search agents…" ' +
+          'value="' + esc(_tbAgentFilter) + '" ' +
+          'oninput="_tbAgentSetFilter(this.value)" ' +
+          'onclick="event.stopPropagation()">' +
+        (_tbAgentFilter ? '<button class="tb-am-search-clear" onclick="_tbAgentSetFilter(\'\');var i=document.getElementById(\'tb-agent-search\');if(i)i.focus()" title="Clear"><i class="ti ti-x"></i></button>' : '') +
+      '</div>';
+
+    var footer =
+      '<div class="tb-am-sep"></div>' +
+      '<div class="tb-am-actions">' +
+        '<button class="tb-am-action" onclick="_tbAgentOpenStore()"><i class="ti ti-apps"></i><span>Agent Store</span></button>' +
+        '<button class="tb-am-action" onclick="_tbAgentOpenBuilder()"><i class="ti ti-plus"></i><span>New Agent</span></button>' +
+      '</div>';
+
+    // Filter
+    var q = (_tbAgentFilter || '').trim().toLowerCase();
+    var filtered = !q ? list.slice() : list.filter(function(a) {
+      var hay = ((a.displayName || '') + ' ' + (a.name || '') + ' ' + (a.description || '')).toLowerCase();
+      return hay.indexOf(q) !== -1;
+    });
+
+    if (!list.length) {
+      menu.innerHTML = header +
+        '<div class="tb-am-empty"><i class="ti ti-robot-off" style="font-size:16px;display:block;margin-bottom:4px"></i>' +
+        'No agents installed<br><span style="font-size:10px;color:var(--fau-text-muted)">Browse the Agent Store to install one</span></div>' +
+        footer;
+      return;
+    }
+
+    var body = '';
+    // "Default mode" option (clears all agents) — shown only when no filter or "default" matches
+    if (!q || 'default'.indexOf(q) !== -1 || 'no agent'.indexOf(q) !== -1) {
+      body += '<div class="tb-am-item' + (activeName ? '' : ' tb-am-active') +
+        '" onclick="_tbAgentSelectDefault()">' +
+        '<i class="ti ti-message-circle tb-am-icon"></i>' +
+        '<div class="tb-am-body">' +
+          '<div class="tb-am-name">Default (no agent)</div>' +
+          '<div class="tb-am-desc">Standard chat without a specialized agent</div>' +
+        '</div>' +
+        (activeName ? '' : '<i class="ti ti-check tb-am-check"></i>') +
+        '</div>';
+    }
+    if (filtered.length) {
+      for (var i = 0; i < filtered.length; i++) {
+        var a = filtered[i];
+        var icon = normIcon(a.icon);
+        var name = esc(a.displayName || a.name);
+        var desc = esc(a.description || '');
+        var isActive = activeName === a.name;
+        body += '<div class="tb-am-item' + (isActive ? ' tb-am-active' : '') +
+          '" onclick="_tbAgentSelect(\'' + esc(a.name).replace(/'/g, "\\'") + '\')">' +
+          '<i class="ti ' + icon + ' tb-am-icon"></i>' +
+          '<div class="tb-am-body">' +
+            '<div class="tb-am-name">' + name + '</div>' +
+            (desc ? '<div class="tb-am-desc">' + desc + '</div>' : '') +
+          '</div>' +
+          (isActive ? '<i class="ti ti-check tb-am-check"></i>' : '') +
+          '</div>';
+      }
+    } else if (q) {
+      body += '<div class="tb-am-empty" style="padding:10px 12px">No agents match "<b>' + esc(_tbAgentFilter) + '</b>"</div>';
+    }
+
+    menu.innerHTML = header + '<div class="tb-am-list">' + body + '</div>' + footer;
+  }
+  function _tbAgentSetFilter(v) {
+    _tbAgentFilter = String(v || '');
+    var menu = document.getElementById('tb-agent-menu');
+    if (!menu) return;
+    // Re-render keeping focus + selection on the search input
+    var prev = document.getElementById('tb-agent-search');
+    var caret = prev ? prev.selectionStart : null;
+    _renderTbAgentMenu();
+    var inp = document.getElementById('tb-agent-search');
+    if (inp) {
+      inp.focus();
+      if (caret != null) { try { inp.setSelectionRange(caret, caret); } catch (_) {} }
+    }
+  }
+  function _tbAgentOpenStore() {
+    _tbAgentOpen = false; closeTbPlusMenu();
+    if (typeof openAgentStore === 'function') openAgentStore();
+    else if (typeof openSettings === 'function') openSettings('plugins');
+    else showToast && showToast('Agent Store unavailable');
+  }
+  function _tbAgentOpenBuilder() {
+    _tbAgentOpen = false; closeTbPlusMenu();
+    if (typeof openAgentBuilder === 'function') openAgentBuilder();
+    else showToast && showToast('Agent Builder unavailable');
+  }
+  function _tbAgentSelect(name) {
+    if (typeof showAgentChip === 'function') showAgentChip(name);
+    _tbAgentOpen = false;
+    var menu = document.getElementById('tb-agent-menu');
+    if (menu) menu.style.display = 'none';
+    closeTbPlusMenu();
+    setTimeout(_refreshTbAgentItem, 50);
+  }
+  function _tbAgentSelectDefault() {
+    if (typeof removeAgentChip === 'function') removeAgentChip();
+    _tbAgentOpen = false;
+    var menu = document.getElementById('tb-agent-menu');
+    if (menu) menu.style.display = 'none';
+    closeTbPlusMenu();
+    setTimeout(_refreshTbAgentItem, 50);
   }
 
   // ── Toolbar model picker ───────────────────────────────────────────────
