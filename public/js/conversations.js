@@ -224,6 +224,25 @@ function setConversationTitle(id, title, opts) {
   if (document.getElementById('all-convs-page')?.style.display !== 'none') renderAllConvsPage();
 }
 
+// Open a conversation in a new app window (multi-window support).
+// Falls back gracefully when the preload bridge is unavailable (e.g. when
+// the UI is loaded outside of Electron).
+function openConvInNewWindow(id, e) {
+  if (e) e.stopPropagation();
+  if (!id) return;
+  if (window.faunaApp && typeof window.faunaApp.openWindow === 'function') {
+    window.faunaApp.openWindow({ convId: id, projectId: state.activeProjectId || null });
+    return;
+  }
+  // Browser fallback: open a new tab with the same query params.
+  try {
+    var params = new URLSearchParams();
+    params.set('conv', id);
+    if (state.activeProjectId) params.set('project', state.activeProjectId);
+    window.open(window.location.pathname + '?' + params.toString(), '_blank');
+  } catch (_) {}
+}
+
 async function renameConversation(id, e) {
   if (e) e.stopPropagation();
   var conv = getConv(id || state.currentId);
@@ -369,6 +388,8 @@ function loadConversation(id) {
   var topbarTitle = document.getElementById('topbar-title');
   topbarTitle.textContent = conv.title;
   topbarTitle.title = conv.title;
+  // Reflect conversation in window title so the tray menu can list it
+  try { document.title = conv.title ? ('Fauna — ' + conv.title) : 'Fauna'; } catch (_) {}
 
   // Switch browser pane to this conversation's tabs
   _showConvBrowserTabs(id);
@@ -533,6 +554,7 @@ function renderConvList() {
     d.onclick = () => loadConversation(conv.id);
     d.innerHTML = (conv._streaming ? '<i class="ti ti-loader-2 conv-streaming-icon"></i>' : '') +
       '<span class="conv-label" title="' + escHtml(conv.title) + '">' + escHtml(conv.title) + '</span>' +
+      '<button class="conv-rename" onclick="openConvInNewWindow(\'' + conv.id + '\', event)" title="Open in new window"><i class="ti ti-external-link"></i></button>' +
       '<button class="conv-rename" onclick="renameConversation(\'' + conv.id + '\', event)" title="Rename"><i class="ti ti-pencil"></i></button>' +
       '<button class="conv-del" onclick="deleteConversation(\'' + conv.id + '\', event)"><i class="ti ti-trash"></i></button>';
     list.appendChild(d);
@@ -593,6 +615,7 @@ function renderAllConvsPage() {
       '<i class="ti ti-message all-convs-icon"></i>' +
       '<span class="all-convs-title" title="' + escHtml(title) + '">' + escHtml(title) + '</span>' +
       '<span class="all-convs-date">' + (c.createdAt ? new Date(c.createdAt).toLocaleDateString() : '') + '</span>' +
+      '<button class="all-convs-rename" onclick="event.stopPropagation();openConvInNewWindow(\'' + c.id + '\', event)" title="Open in new window"><i class="ti ti-external-link"></i></button>' +
       '<button class="all-convs-rename" onclick="event.stopPropagation();renameConversation(\'' + c.id + '\', event)" title="Rename"><i class="ti ti-pencil"></i></button>' +
       '<button class="all-convs-del" onclick="event.stopPropagation();deleteConversation(\'' + c.id + '\', event);renderAllConvsPage()"><i class="ti ti-trash"></i></button>' +
     '</div>';

@@ -22,13 +22,14 @@ app.commandLine.appendSwitch('auto-select-desktop-capture-source', 'Entire scree
 if (IS_WIN) app.disableHardwareAcceleration();
 
 let mainWindow;
+const windows = new Set();
 let widgetWindow = null;
 let tray = null;
 
 // ── Window ────────────────────────────────────────────────────────────────
 
-async function createWindow() {
-  mainWindow = new BrowserWindow({
+async function createWindow({ convId, projectId } = {}) {
+  const win = new BrowserWindow({
     width:  1260,
     height:  840,
     minWidth:  740,
@@ -45,51 +46,75 @@ async function createWindow() {
       nodeIntegration:  false,
       webviewTag:       true,
       spellcheck:       true,
+      preload:          path.join(__dirname, 'main-preload.js'),
     },
     show: false,
   });
 
+  windows.add(win);
+  mainWindow = win;
+
   // Grant microphone permission for localhost (required for Web Speech API / voice control)
-  mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
+  win.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
     const allowed = ['media', 'microphone', 'audioCapture', 'clipboard-read', 'clipboard-write', 'clipboard-sanitized-write'];
     callback(allowed.includes(permission));
   });
 
-  mainWindow.loadURL(`http://localhost:${PORT}`);
+  const params = new URLSearchParams();
+  if (convId)    params.set('conv',    convId);
+  if (projectId) params.set('project', projectId);
+  const qs = params.toString();
+  win.loadURL(`http://localhost:${PORT}${qs ? '?' + qs : ''}`);
 
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
-    mainWindow.focus();
+  win.once('ready-to-show', () => {
+    win.show();
+    win.focus();
   });
   // Fallback: if ready-to-show is delayed (common on Windows), show after 4 s
-  setTimeout(() => { if (mainWindow && !mainWindow.isVisible()) mainWindow.show(); }, 4000);
+  setTimeout(() => { if (!win.isDestroyed() && !win.isVisible()) win.show(); }, 4000);
 
   // Open external links in the default browser, not in Electron
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
   });
 
-  mainWindow.webContents.on('will-navigate', (e, url) => {
+  win.webContents.on('will-navigate', (e, url) => {
     if (!url.startsWith(`http://localhost:${PORT}`)) {
       e.preventDefault();
       shell.openExternal(url);
     }
   });
 
+  // Track focus so menu actions target the most recently used window
+  win.on('focus', () => { mainWindow = win; refreshTray(); });
+
   // Clear the reference when the window is destroyed so stale calls don't throw
-  mainWindow.on('closed', () => { mainWindow = null; });
+  win.on('closed', () => {
+    windows.delete(win);
+    if (mainWindow === win) {
+      mainWindow = [...windows].pop() || null;
+    }
+    refreshTray();
+  });
+
+  // Rebuild the tray menu when the page title changes (conversation switch)
+  win.webContents.on('page-title-updated', () => refreshTray());
+
+  return win;
 }
 
 // ── Native menu ───────────────────────────────────────────────────────────
 
 function js(code) {
-  mainWindow?.webContents?.executeJavaScript(code).catch(() => {});
+  const target = BrowserWindow.getFocusedWindow() || mainWindow;
+  target?.webContents?.executeJavaScript(code).catch(() => {});
 }
 
 function toggleDetachedDevTools() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  const wc = mainWindow.webContents;
+  const target = BrowserWindow.getFocusedWindow() || mainWindow;
+  if (!target || target.isDestroyed()) return;
+  const wc = target.webContents;
   if (wc.isDevToolsOpened()) wc.closeDevTools();
   else wc.openDevTools({ mode: 'detach' });
 }
@@ -121,6 +146,7 @@ function buildMenu() {
       label: 'File',
       submenu: [
         { label: 'New Conversation', accelerator: 'Cmd+N', click: () => js('newConversation()') },
+        { label: 'New Window',       accelerator: 'Cmd+Shift+N', click: () => createWindow() },
         { type: 'separator' },
         { label: 'Clear Conversation', accelerator: 'Cmd+K', click: () => js('clearConversation()') },
         { type: 'separator' },
@@ -421,6 +447,43 @@ ipcMain.handle('capture-region', async () => {
 
 // ── Tray ──────────────────────────────────────────────────────────────────
 
+function _windowLabel(win) {
+  let title = '';
+  try { title = win.webContents?.getTitle() || ''; } catch (_) {}
+  // Strip the leading "Fauna — " so the menu stays compact
+  title = title.replace(/^Fauna\s*[—-]\s*/, '').trim();
+  if (!title || /^Fauna$/i.test(title)) title = 'Untitled';
+  if (title.length > 48) title = title.slice(0, 45) + '…';
+  return title;
+}
+
+function _buildTrayMenu() {
+  const wins = [...windows].filter(w => w && !w.isDestroyed());
+  const windowItems = wins.length
+    ? wins.map((w, i) => ({
+        label: (i + 1) + '. ' + _windowLabel(w),
+        type: 'checkbox',
+        checked: w === BrowserWindow.getFocusedWindow(),
+        click: () => { if (w.isMinimized()) w.restore(); w.show(); w.focus(); },
+      }))
+    : [{ label: 'No windows open', enabled: false }];
+
+  return Menu.buildFromTemplate([
+    { label: 'Windows', enabled: false },
+    ...windowItems,
+    { type: 'separator' },
+    { label: 'New Window', accelerator: IS_MAC ? 'Cmd+Shift+N' : 'Ctrl+Shift+N', click: () => createWindow() },
+    { label: 'Toggle Task Widget', click: () => toggleWidget() },
+    { type: 'separator' },
+    { label: 'Quit Fauna', click: () => { app.isQuitting = true; app.quit(); } },
+  ]);
+}
+
+function refreshTray() {
+  if (!tray || tray.isDestroyed?.()) return;
+  tray.setContextMenu(_buildTrayMenu());
+}
+
 function createTray() {
   // Use a small template image for the tray (16x16)
   const iconPath = path.join(__dirname, 'assets', 'icon.png');
@@ -430,14 +493,7 @@ function createTray() {
 
   tray = new Tray(img);
   tray.setToolTip('Fauna');
-
-  const contextMenu = Menu.buildFromTemplate([
-    { label: 'Show Fauna', click: () => { mainWindow?.show(); mainWindow?.focus(); } },
-    { label: 'Toggle Task Widget', click: () => toggleWidget() },
-    { type: 'separator' },
-    { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } },
-  ]);
-  tray.setContextMenu(contextMenu);
+  refreshTray();
 
   // Click tray icon to toggle widget
   tray.on('click', () => toggleWidget());
@@ -534,3 +590,9 @@ if (!gotLock) {
     }
   });
 }
+
+// Renderer-driven request to open another window (multi-window support).
+ipcMain.on('fauna:open-window', (_event, payload) => {
+  const { convId, projectId } = payload || {};
+  createWindow({ convId, projectId });
+});

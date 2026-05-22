@@ -1,5 +1,19 @@
 // ── Init ──────────────────────────────────────────────────────────────────
 
+// Parse per-window launch parameters (?conv=...&project=...) used by the
+// multi-window feature. These override the persisted active conversation /
+// project for THIS window only; we never write them back to localStorage so
+// closing a secondary window does not change the default the primary window
+// boots into.
+function _faunaLaunchParams() {
+  try {
+    var p = new URLSearchParams(window.location.search || '');
+    return { convId: p.get('conv') || null, projectId: p.get('project') || null };
+  } catch (_) {
+    return { convId: null, projectId: null };
+  }
+}
+
 // Hydrate: merge server-side conversations into localStorage
 async function _hydrateServerConvs() {
   try {
@@ -70,6 +84,11 @@ loadFigmaRules();
 loadMemoryFromServer();
 
 document.addEventListener('DOMContentLoaded', async () => {
+  var launch = _faunaLaunchParams();
+  // Apply ?project= BEFORE loadProjects() so its validation honors the override
+  // without persisting it (in-memory only for this window).
+  if (launch.projectId) state.activeProjectId = launch.projectId;
+
   await loadSysCtx();
   await loadModels();
   // Load projects and render the switcher
@@ -107,8 +126,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   window.addEventListener('focus', function() { _hydrateServerConvs(); });
 
   // Load last conversation or show empty state
-  if (state.conversations.length) loadConversation(state.conversations[0].id);
-  else showEmpty();
+  if (launch.convId && getConv(launch.convId)) {
+    loadConversation(launch.convId);
+  } else if (state.conversations.length) {
+    loadConversation(state.conversations[0].id);
+  } else {
+    showEmpty();
+  }
 
   // One-time migration: sync localStorage conversations to server for CLI/mobile access
   if (!localStorage.getItem('fauna-convs-synced') && state.conversations.length) {
