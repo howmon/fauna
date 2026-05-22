@@ -503,7 +503,8 @@ export const DYNAMIC_WIDGET_TOOL_DEFS = [
     function: {
       name: 'fauna_emit_widget',
       description:
-        'Render an interactive, sandboxed HTML/JS widget in the chat and register its actions as ephemeral tools for the rest of this conversation. Use this whenever the user wants something interactive (3D viewer, kanban, sliders, custom dashboard) — the widget defines the buttons/controls and YOU call them via the registered tool names (w_<id>__<name>). Bundle.html is the inner DOM, bundle.js is the widget script which calls `widget.on("toolName", async (args) => result)` to wire each tool, and `widget.emit(event, data)` to push state. No network access inside the widget.',
+        'Render an interactive, sandboxed HTML/JS widget in the chat and register its actions as ephemeral tools for the rest of this conversation. Use this whenever the user wants something interactive (3D viewer, kanban, sliders, custom dashboard) — the widget defines the buttons/controls and YOU call them via the registered tool names (w_<id>__<name>). Bundle.html is the inner DOM, bundle.js is the widget script which calls `widget.on("toolName", async (args) => result)` to wire each tool, and `widget.emit(event, data)` to push state. No network access inside the widget. ' +
+        'DO NOT use this for media playback or playlists — for audio, video, podcast lists, YouTube embeds, image carousels, or any "play these items" request, use the inline gen-ui ```gen-ui block with the built-in `MediaPlayer`, `Playlist`, or `Carousel` components instead (they are native, accessible, and savable to projects). Reserve `fauna_emit_widget` for genuinely interactive controls that have no gen-ui equivalent.',
       parameters: {
         type: 'object',
         properties: {
