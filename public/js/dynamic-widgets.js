@@ -53,6 +53,20 @@
         'function _reportH(){var h=Math.max(document.documentElement.scrollHeight,document.body?document.body.scrollHeight:0);parent.postMessage({source:"fauna-widget",widgetId:widget.id,type:"event",event:"resize",data:{height:h}},"*");}' +
         'setTimeout(_reportH,50);setTimeout(_reportH,300);setTimeout(_reportH,1000);' +
         'try{if(window.ResizeObserver){var _ro=new ResizeObserver(_reportH);_ro.observe(document.documentElement);if(document.body)_ro.observe(document.body);}}catch(_){}' +
+        // Snapshot handler: parent asks for an image of the widget. We try the
+        // first <canvas> first (works for 3D / chart widgets), then fall back to
+        // an SVG-foreignObject rasterisation of <body>.
+        'window.addEventListener("message",function(ev){' +
+          'var d=ev.data||{};if(d.source!=="fauna-host"||d.widgetId!==widget.id||d.type!=="snapshot")return;' +
+          'var reqId=d.reqId;var reply={source:"fauna-widget",widgetId:widget.id,type:"snapshot_result",reqId:reqId};' +
+          'try{' +
+            'var cv=document.querySelector("canvas");' +
+            'if(cv&&cv.toDataURL){reply.dataUrl=cv.toDataURL("image/png");parent.postMessage(reply,"*");return;}' +
+            'var w=document.documentElement.scrollWidth||640;var h=document.documentElement.scrollHeight||480;' +
+            'var svg=\'<svg xmlns="http://www.w3.org/2000/svg" width="\'+w+\'" height="\'+h+\'"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml">\'+document.documentElement.outerHTML.replace(/<script[\\s\\S]*?<\\/script>/g,"")+\'</div></foreignObject></svg>\';' +
+            'reply.svg=svg;parent.postMessage(reply,"*");' +
+          '}catch(err){reply.error=String(err&&err.message||err);parent.postMessage(reply,"*");}' +
+        '});' +
       '})();</script></body></html>';
   }
 
@@ -67,16 +81,23 @@
     wrap.style.cssText = 'margin:10px 0;border:1px solid var(--fau-border,#2a2a2a);border-radius:10px;overflow:hidden;background:var(--fau-surface,#161616)';
 
     var header = document.createElement('div');
-    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:8px 12px;font-size:12px;color:var(--fau-text-dim,#888);background:var(--fau-surface2,#1c1c1c);border-bottom:1px solid var(--fau-border,#2a2a2a)';
+    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;font-size:12px;color:var(--fau-text-dim,#888);background:var(--fau-surface2,#1c1c1c);border-bottom:1px solid var(--fau-border,#2a2a2a)';
     var titleText = evt.title || 'Dynamic Widget';
     var toolsCount = (evt.tools || []).length;
+    var btnStyle = 'background:transparent;border:1px solid var(--fau-border,#2a2a2a);color:var(--fau-text-dim,#888);border-radius:6px;padding:3px 7px;font-size:11px;cursor:pointer;display:inline-flex;align-items:center;gap:4px;line-height:1';
+    function _esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];});}
     header.innerHTML =
-      '<span><i class="ti ti-bolt" style="margin-right:6px"></i>' +
-        (titleText.replace(/</g, '&lt;')) +
+      '<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1"><i class="ti ti-bolt" style="margin-right:6px"></i>' +
+        _esc(titleText) +
         ' <span style="opacity:0.6">· ' + toolsCount + ' action' + (toolsCount === 1 ? '' : 's') + '</span>' +
       '</span>' +
-      '<span style="display:flex;gap:6px">' +
-        '<button class="fauna-widget-save" title="Save to playbook" style="background:transparent;border:1px solid var(--fau-border,#2a2a2a);color:var(--fau-text-dim,#888);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer"><i class="ti ti-bookmark"></i> Save</button>' +
+      '<span style="display:flex;gap:4px;flex-shrink:0">' +
+        '<button class="fauna-widget-zoom-out" title="Shrink"        style="' + btnStyle + '"><i class="ti ti-minus"></i></button>' +
+        '<button class="fauna-widget-zoom-in"  title="Enlarge"       style="' + btnStyle + '"><i class="ti ti-plus"></i></button>' +
+        '<button class="fauna-widget-fs"       title="Fullscreen"    style="' + btnStyle + '"><i class="ti ti-maximize"></i></button>' +
+        '<button class="fauna-widget-dl-img"   title="Download image"        style="' + btnStyle + '"><i class="ti ti-photo-down"></i></button>' +
+        '<button class="fauna-widget-dl-html"  title="Download HTML"  style="' + btnStyle + '"><i class="ti ti-file-code"></i></button>' +
+        '<button class="fauna-widget-save"     title="Save to playbook"      style="' + btnStyle + '"><i class="ti ti-bookmark"></i></button>' +
       '</span>';
 
     var iframe = document.createElement('iframe');
@@ -95,7 +116,7 @@
     var mount = targetEl || document.body;
     mount.appendChild(wrap);
 
-    window._faunaDynamicWidgets.mounted.set(widgetId, { iframe, wrap, tools: evt.tools || [] });
+    window._faunaDynamicWidgets.mounted.set(widgetId, { iframe, wrap, tools: evt.tools || [], bundle: evt.bundle, title: titleText });
 
     // Wire "Save to playbook" — sends a chat message asking the agent to save.
     var saveBtn = header.querySelector('.fauna-widget-save');
@@ -108,6 +129,102 @@
         } else {
           saveBtn.textContent = 'Ask the agent: save widget ' + widgetId;
         }
+      };
+    }
+
+    // ── Zoom (resize iframe height) ────────────────────────────────────
+    var ZOOM_STEP = 120;
+    var MIN_H = 240, MAX_H = 2000;
+    function _curH() { return parseInt(iframe.style.height, 10) || iframe.offsetHeight || 520; }
+    function _setH(h) {
+      h = Math.max(MIN_H, Math.min(MAX_H, Math.round(h)));
+      iframe.style.height = h + 'px';
+    }
+    var zoomIn  = header.querySelector('.fauna-widget-zoom-in');
+    var zoomOut = header.querySelector('.fauna-widget-zoom-out');
+    if (zoomIn)  zoomIn.onclick  = function () { _setH(_curH() + ZOOM_STEP); };
+    if (zoomOut) zoomOut.onclick = function () { _setH(_curH() - ZOOM_STEP); };
+
+    // ── Fullscreen ─────────────────────────────────────────────────────
+    var fsBtn = header.querySelector('.fauna-widget-fs');
+    if (fsBtn) {
+      fsBtn.onclick = function () {
+        var el = wrap;
+        var inFs = document.fullscreenElement === el;
+        if (inFs) {
+          if (document.exitFullscreen) document.exitFullscreen();
+        } else if (el.requestFullscreen) {
+          el.requestFullscreen().catch(function () {});
+        }
+      };
+      document.addEventListener('fullscreenchange', function () {
+        var inFs = document.fullscreenElement === wrap;
+        fsBtn.innerHTML = '<i class="ti ' + (inFs ? 'ti-minimize' : 'ti-maximize') + '"></i>';
+        if (inFs) {
+          wrap.dataset._prevH = iframe.style.height || '';
+          iframe.style.height = '100vh';
+        } else if (wrap.dataset._prevH !== undefined) {
+          iframe.style.height = wrap.dataset._prevH;
+          delete wrap.dataset._prevH;
+        }
+      });
+    }
+
+    // ── Download bundle as standalone .html ───────────────────────────
+    var dlHtmlBtn = header.querySelector('.fauna-widget-dl-html');
+    if (dlHtmlBtn) {
+      dlHtmlBtn.onclick = function () {
+        try {
+          var html = _buildSrcdoc(widgetId, evt.bundle);
+          var blob = new Blob([html], { type: 'text/html' });
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement('a');
+          a.href = url;
+          a.download = (titleText || 'widget').replace(/[^a-z0-9-_]+/gi, '_').toLowerCase() + '.html';
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
+        } catch (e) { try { dbg('widget html download failed: ' + (e && e.message), 'err'); } catch (_) {} }
+      };
+    }
+
+    // ── Download snapshot image (asks widget for canvas/SVG) ──────────
+    var dlImgBtn = header.querySelector('.fauna-widget-dl-img');
+    if (dlImgBtn) {
+      dlImgBtn.onclick = function () {
+        var reqId = 'snap_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        var done = false;
+        function _onSnap(e) {
+          var m = e.data || {};
+          if (m.source !== 'fauna-widget' || m.widgetId !== widgetId || m.type !== 'snapshot_result' || m.reqId !== reqId) return;
+          if (done) return;
+          done = true;
+          window.removeEventListener('message', _onSnap);
+          var fileBase = (titleText || 'widget').replace(/[^a-z0-9-_]+/gi, '_').toLowerCase();
+          if (m.dataUrl) {
+            var a = document.createElement('a');
+            a.href = m.dataUrl; a.download = fileBase + '.png';
+            document.body.appendChild(a); a.click(); a.remove();
+          } else if (m.svg) {
+            var blob = new Blob([m.svg], { type: 'image/svg+xml' });
+            var url = URL.createObjectURL(blob);
+            var a2 = document.createElement('a');
+            a2.href = url; a2.download = fileBase + '.svg';
+            document.body.appendChild(a2); a2.click(); a2.remove();
+            setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
+          } else {
+            try { dbg('widget snapshot empty: ' + (m.error || 'no canvas'), 'warn'); } catch (_) {}
+          }
+        }
+        window.addEventListener('message', _onSnap);
+        setTimeout(function () {
+          if (done) return;
+          done = true;
+          window.removeEventListener('message', _onSnap);
+          try { dbg('widget snapshot timed out', 'warn'); } catch (_) {}
+        }, 4000);
+        try {
+          iframe.contentWindow.postMessage({ source: 'fauna-host', widgetId: widgetId, type: 'snapshot', reqId: reqId }, '*');
+        } catch (e) { done = true; window.removeEventListener('message', _onSnap); }
       };
     }
   }

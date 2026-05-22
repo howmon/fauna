@@ -7333,3 +7333,10 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
   border-radius: 50%;
   pointer-events: none;
 }
+
+/* ── Dynamic widget toolbar ───────────────────────────────────────── */
+.fauna-dynamic-widget button[class^="fauna-widget-"]{transition:background .12s, color .12s, border-color .12s}
+.fauna-dynamic-widget button[class^="fauna-widget-"]:hover{background:var(--fau-surface3, var(--fau-surface2)) !important;color:var(--fau-text) !important;border-color:var(--fau-border2, var(--fau-border)) !important}
+.fauna-dynamic-widget button[class^="fauna-widget-"]:active{transform:translateY(1px)}
+.fauna-dynamic-widget:fullscreen{margin:0;border-radius:0;border:0;background:#000}
+.fauna-dynamic-widget:fullscreen iframe{height:100vh !important}
