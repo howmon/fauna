@@ -210,6 +210,17 @@ export function createCustomMcpBridge({
     if (!available) {
       extBridge.setRelayBrowsers([]);
       if (!bundledBrowserServerProc && bundledBrowserServerPath && fs.existsSync(bundledBrowserServerPath)) {
+        // Race guard: re-probe :3341 immediately before spawning. The 10s
+        // poll interval can miss a FaunaMCP launch that happened seconds
+        // ago; without this second check Fauna's bundled child would call
+        // killPortOwner(3340, 3341) and SIGKILL FaunaMCP's relay.
+        const stillUnavailable = !(await probeBrowserMcp());
+        if (!stillUnavailable) {
+          faunaMcpBrowserConnected = true;
+          if (!faunaMcpConnectedAt) faunaMcpConnectedAt = new Date().toISOString();
+          extBridge.broadcastStatus();
+          return;
+        }
         try {
           const nodeBin = findNodeBinary() || process.execPath;
           if (nodeBin) {

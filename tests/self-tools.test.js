@@ -40,8 +40,11 @@ describe('self-tools', () => {
   });
 
   describe('SELF_TOOL_DEFS', () => {
-    it('exports 11 tool definitions', () => {
-      expect(SELF_TOOL_DEFS).toHaveLength(17);
+    it('exports the expected number of tool definitions', () => {
+      // Bumped from 17 → 22 after adding fauna_shell_exec, fauna_read_file,
+      // fauna_replace_string, fauna_apply_patch, fauna_browser (Codex-style
+      // native tool migration, Phases 2–4).
+      expect(SELF_TOOL_DEFS).toHaveLength(22);
     });
 
     it('each tool has required OpenAI function format', () => {
@@ -95,6 +98,43 @@ describe('self-tools', () => {
     it('returns error for unknown tool', () => {
       const result = JSON.parse(executeSelfTool('unknown_tool', {}, mockContext));
       expect(result.error).toBeDefined();
+    });
+  });
+
+  describe('Codex-style native tools', () => {
+    it('registers all 5 new native tools', () => {
+      const names = SELF_TOOL_DEFS.map((d) => d.function.name);
+      ['fauna_shell_exec', 'fauna_read_file', 'fauna_replace_string', 'fauna_apply_patch', 'fauna_browser'].forEach((n) => {
+        expect(names).toContain(n);
+        expect(isSelfTool(n)).toBe(true);
+      });
+    });
+
+    it('fauna_shell_exec delegates to context.runShell', async () => {
+      const runShell = vi.fn(async () => 'ok');
+      const result = await executeSelfTool('fauna_shell_exec', { command: 'echo hi' }, { ...mockContext, runShell });
+      expect(runShell).toHaveBeenCalledWith({ command: 'echo hi' });
+      expect(result).toBe('ok');
+    });
+
+    it('fauna_browser returns clean error when no client RPC is wired', async () => {
+      const result = JSON.parse(await executeSelfTool('fauna_browser', { action: 'navigate', url: 'https://example.com' }, mockContext));
+      expect(result.ok).toBe(false);
+      expect(result.error).toMatch(/not available/);
+    });
+
+    it('fauna_browser delegates to context.callClientTool', async () => {
+      const callClientTool = vi.fn(async () => 'page-content');
+      const result = await executeSelfTool('fauna_browser', { action: 'extract' }, { ...mockContext, callClientTool });
+      expect(callClientTool).toHaveBeenCalledWith('browser', { action: 'extract' }, { timeoutMs: 60000 });
+      expect(result).toBe('page-content');
+    });
+
+    it('fauna_apply_patch delegates to context.applyPatch', () => {
+      const applyPatch = vi.fn(() => [{ file: 'a.js', ok: true }]);
+      const result = JSON.parse(executeSelfTool('fauna_apply_patch', { patch: '*** Begin Patch\n*** End Patch' }, { ...mockContext, applyPatch }));
+      expect(applyPatch).toHaveBeenCalled();
+      expect(result.ok).toBe(true);
     });
   });
 });

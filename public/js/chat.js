@@ -157,13 +157,72 @@ function _fallbackSuggestionsFromMessage(buffer) {
   return ['Continue', 'Verify the result', 'Summarize what changed'];
 }
 
+// Extract the trailing "summary" text of a rendered message: the visible prose
+// that remains AFTER tool-activity blocks have been collapsed into <details>.
+// This is what the assistant actually wrote to wrap up the task, so it's the
+// right source for contextual recommended-action suggestions.
+function _summaryTextForSuggestions(msgEl) {
+  if (!msgEl) return '';
+  var body = msgEl.querySelector('.msg-body') || msgEl;
+  // Clone so we can strip collapsed activity/tool blocks without mutating the DOM.
+  var clone = body.cloneNode(true);
+  var stripSel = [
+    'details', '.cot-block', '.long-response-details', '.process-cluster',
+    '.shell-exec-block', '.wf-block', '.figma-exec-block', '.ba-block',
+    '.suggestion-bar', '.create-agent-card', '.patch-agent-card',
+    '.task-create-card', '.gen-ui-root', '.artifact-card'
+  ].join(',');
+  Array.from(clone.querySelectorAll(stripSel)).forEach(function(n) { n.remove(); });
+  var text = (clone.innerText || clone.textContent || '').trim();
+  // Prefer the last non-empty paragraph(s) — that's the closing summary.
+  if (text) {
+    var paras = text.split(/\n{2,}/).map(function(p) { return p.trim(); }).filter(Boolean);
+    if (paras.length) {
+      // Use up to the last 2 paragraphs to give the matcher enough signal.
+      return paras.slice(-2).join('\n\n');
+    }
+  }
+  return text;
+}
+
 function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
+  // Don't show CTAs while the conversation is mid-task: if a shell command is
+  // still running / pending auto-run, or the stream is still in flight, the
+  // assistant is about to continue speaking and the suggestion bar would be
+  // premature.  The next assistant message's `done` event will retry.
+  // NOTE: do NOT gate on `_autoFeedDepth` — that counter stays elevated after
+  // the chain ends (only resets on a new user turn), which would hide CTAs on
+  // the final assistant message of any auto-feed sequence.
+  // Pending-shell checks are scoped to THIS message only — an unrun shell
+  // block on an earlier bubble shouldn't suppress CTAs on later bubbles.
+  try {
+    var _convId = (typeof state !== 'undefined' && state) ? state.currentId : null;
+    var _conv   = (typeof getConv === 'function' && _convId) ? getConv(_convId) : null;
+    if (_conv && _conv._streaming) return;
+    if (msgEl) {
+      var _localWidgets = msgEl.querySelectorAll('.shell-exec-block');
+      for (var _i = 0; _i < _localWidgets.length; _i++) {
+        var _w = _localWidgets[_i];
+        var _resEl = _w.querySelector('.shell-exec-result');
+        var _isRunning = !!(_resEl && _resEl.classList.contains('running'));
+        var _isPendingAuto = !!(typeof _shellAutoRunPending !== 'undefined' &&
+                                _w.dataset.shellKey && _shellAutoRunPending[_w.dataset.shellKey]);
+        if (_isRunning || _isPendingAuto) return;
+      }
+    }
+  } catch (_) { /* fall through */ }
+
   var match = buffer.match(/```suggestions\n([\s\S]*?)```/);
   var items;
   if (match) {
     try { items = JSON.parse(match[1].trim()); } catch (_) { return; }
   } else if (allowFallback !== false) {
-    items = _fallbackSuggestionsFromMessage(buffer);
+    // Generate fallback suggestions from the trailing summary text only — not
+    // the entire raw buffer — so CTAs are contextual to the task's conclusion
+    // rather than mid-process noise (errors that were already fixed, build
+    // chatter, intermediate tool output, etc.).
+    var summaryText = _summaryTextForSuggestions(msgEl);
+    items = _fallbackSuggestionsFromMessage(summaryText || buffer);
   } else {
     return;
   }
@@ -202,7 +261,20 @@ function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
   };
   bar.appendChild(otherBtn);
 
-  msgEl.appendChild(bar);
+  // Always render the recommended-actions bar AFTER the latest assistant
+  // message in the conversation, not on whichever message happened to emit
+  // the ```suggestions block. Otherwise an intermediate message's bar can
+  // end up visually above the final summary (e.g. after compaction inserts
+  // an archive divider between them).
+  var convInner = msgEl.closest('.conv-inner');
+  if (convInner) {
+    var lastMsg = convInner.querySelector('.msg.assistant:last-of-type') ||
+                  Array.from(convInner.querySelectorAll('.msg.assistant')).pop() ||
+                  msgEl;
+    lastMsg.appendChild(bar);
+  } else {
+    msgEl.appendChild(bar);
+  }
 }
 
 // Send a message directly into the conversation (supports vision/array content).
@@ -284,6 +356,17 @@ async function sendMessage(opts) {
   var text  = input.value.trim();
   if (!text && !state.pendingAttachments.length) { dbg('sendMessage: empty input', 'warn'); return; }
   dbg('sendMessage: ' + text.slice(0,80), 'info');
+
+  // ── Slash commands ───────────────────────────────────────────────────
+  // `/compact` — force-summarize this conversation now, regardless of size.
+  // Mirrors Codex's `/compact` and the server's auto-compaction path.
+  if (text === '/compact' || text === '/compact ') {
+    input.value = '';
+    resizeTextarea(input);
+    dbg('/compact requested — forcing summarization', 'cmd');
+    await maybeCompressConversation(conv, { force: true });
+    return;
+  }
 
   // Handle multi-agent composition: @agent1 + @agent2 [parallel] message
   var compParsed = typeof parseCompositionMention === 'function' ? parseCompositionMention(text) : null;
@@ -897,7 +980,7 @@ async function streamResponse(conv) {
     var _ctxUsage = null;
 
     // Build chat request body — include agent info when active
-    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: state.figmaMCPEnabled, usePlaywrightMCP: state.playwrightMCPEnabled || false, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets };
+    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: state.figmaMCPEnabled, usePlaywrightMCP: state.playwrightMCPEnabled || false, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false };
     if (typeof isAgentActive === 'function' && isAgentActive()) {
       chatBody.agentName = getActiveAgentName();
       chatBody.agentPermissions = getActiveAgentPermissions();
@@ -973,6 +1056,69 @@ async function streamResponse(conv) {
           if (evt.type === 'widget_tool_pending' && window.faunaDynamicWidgets) {
             dbg('widget_tool_pending: ' + evt.widgetId + '/' + evt.name, 'cmd');
             window.faunaDynamicWidgets.handleToolPending(evt);
+          }
+          if (evt.type === 'client_tool_pending') {
+            // Server-initiated client-tool RPC — currently routes 'browser' to
+            // the in-app webview via executeBrowserAction(). Same pattern as
+            // widget_tool_pending but for built-in renderer capabilities.
+            (function(ev) {
+              dbg('client_tool_pending: ' + ev.name + ' callId=' + ev.callId, 'cmd');
+              var doneCalled = false;
+              function reply(payload) {
+                if (doneCalled) return;
+                doneCalled = true;
+                fetch('/api/client-tool-result', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(Object.assign({ callId: ev.callId }, payload)),
+                }).catch(function(e) { dbg('client-tool-result post failed: ' + e.message, 'err'); });
+              }
+              try {
+                if (ev.name === 'browser' && typeof executeBrowserAction === 'function') {
+                  executeBrowserAction(ev.args || {})
+                    .then(function(r) { reply({ result: r }); })
+                    .catch(function(e) { reply({ error: e && e.message ? e.message : String(e) }); });
+                } else {
+                  reply({ error: 'Unknown client tool: ' + ev.name });
+                }
+              } catch (err) {
+                reply({ error: err && err.message ? err.message : String(err) });
+              }
+            })(evt);
+          }
+          if (evt.type === 'context_compacting') {
+            dbg('context auto-compacting ' + (evt.count || '?') + ' messages…', 'info');
+          }
+          if (evt.type === 'context_compacted') {
+            // Server-side auto-compaction: persist the new summary on this conv
+            // so subsequent /api/chat calls send it as contextSummary and the
+            // server can skip re-summarizing the same span.
+            dbg('context compacted: ' + evt.before + ' → ' + evt.after +
+                ' (~' + evt.summaryTokens + 't summary, ' +
+                evt.bodyTokens + '/' + evt.limit + 't body)', 'ok');
+            try {
+              var _ccConvId = (typeof state !== 'undefined' && state) ? state.currentId : null;
+              var _ccConv = (typeof getConv === 'function' && _ccConvId) ? getConv(_ccConvId) : null;
+              if (_ccConv && evt.summary && typeof evt.summary === 'string') {
+                _ccConv.contextSummary = evt.summary;
+                if (typeof saveConversations === 'function') saveConversations();
+                if (state && state.currentId === _ccConv.id &&
+                    typeof renderContextArchiveDivider === 'function' &&
+                    typeof getConvInner === 'function') {
+                  var _ccInner = getConvInner(_ccConv.id);
+                  // Reuse existing divider if present — never stack duplicates.
+                  var _ccIndicator = _ccInner.querySelector('.conv-archive-divider');
+                  if (!_ccIndicator) {
+                    _ccIndicator = document.createElement('div');
+                    _ccIndicator.className = 'msg system-msg conv-archive-divider';
+                    _ccInner.appendChild(_ccIndicator);
+                  }
+                  _ccIndicator.innerHTML = renderContextArchiveDivider(_ccConv);
+                }
+              }
+            } catch (_ccErr) {
+              dbg('context_compacted handler failed: ' + (_ccErr && _ccErr.message), 'warn');
+            }
           }
           if (evt.type === 'tool_output') {
             // Live shell output — append to a collapsible output block
@@ -1241,7 +1387,8 @@ async function streamResponse(conv) {
 var SUMMARIZE_THRESHOLD = 30000;  // trigger when raw history exceeds this
 var SUMMARIZE_KEEP_RECENT = 6;    // always keep the last N messages verbatim after summary
 
-async function maybeCompressConversation(conv) {
+async function maybeCompressConversation(conv, opts) {
+  opts = opts || {};
   if (conv._summarizing) return;  // already in progress
 
   // Calculate total raw size of conversation
@@ -1250,11 +1397,22 @@ async function maybeCompressConversation(conv) {
   }, 0);
 
   // Only summarize if we're over threshold and have enough messages to make it worthwhile
-  if (totalChars < SUMMARIZE_THRESHOLD || conv.messages.length < 8) return;
+  // (unless explicitly forced via /compact slash command)
+  if (!opts.force) {
+    if (totalChars < SUMMARIZE_THRESHOLD || conv.messages.length < 8) return;
+  } else {
+    if (conv.messages.length < 4) {
+      dbg('/compact: not enough history to summarize (' + conv.messages.length + ' msgs)', 'warn');
+      return;
+    }
+  }
 
   // Messages to summarize: everything except the last N (keep recent verbatim)
   var toSummarize = conv.messages.slice(0, -SUMMARIZE_KEEP_RECENT);
-  if (toSummarize.length < 4) return;
+  if (toSummarize.length < 4) {
+    if (opts.force) toSummarize = conv.messages.slice(0, -2);
+    if (toSummarize.length < 2) return;
+  }
 
   dbg('↻ summarizing ' + toSummarize.length + ' old messages (~' + totalChars + ' chars)…', 'info');
   conv._summarizing = true;
@@ -1291,10 +1449,14 @@ async function maybeCompressConversation(conv) {
 
     // Show an indicator in the active conversation
     if (state.currentId === conv.id) {
-      var indicator = document.createElement('div');
-      indicator.className = 'msg system-msg conv-archive-divider';
+      var _inner = getConvInner(conv.id);
+      var indicator = _inner.querySelector('.conv-archive-divider');
+      if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.className = 'msg system-msg conv-archive-divider';
+        _inner.appendChild(indicator);
+      }
       indicator.innerHTML = renderContextArchiveDivider(conv);
-      getConvInner(conv.id).appendChild(indicator);
       if (typeof reconcileBusyState === 'function') reconcileBusyState();
     }
   } catch (e) {
@@ -1330,6 +1492,10 @@ function stopGeneration() {
   if (typeof stopActiveShellWorkForCurrentConversation === 'function') {
     stoppedShell = stopActiveShellWorkForCurrentConversation() || 0;
   }
+  var stoppedBrowser = 0;
+  if (typeof stopActiveBrowserWorkForCurrentConversation === 'function') {
+    stoppedBrowser = stopActiveBrowserWorkForCurrentConversation(state.currentId) || 0;
+  }
   conv._cancelled = true;
   if (conv._abortController) conv._abortController.abort();
   // Also stop any active delegation
@@ -1338,5 +1504,8 @@ function stopGeneration() {
   conv._abortController = null;
   setBusy(false);
   renderConvList();
-  showToast(stoppedShell ? 'Shell verification stopped' : 'Generation stopped');
+  var msg = 'Generation stopped';
+  if (stoppedShell) msg = 'Shell verification stopped';
+  else if (stoppedBrowser) msg = 'Browser action stopped';
+  showToast(msg);
 }

@@ -289,6 +289,106 @@ export const SELF_TOOL_DEFS = [
     },
   },
 
+  // ── Shell exec (native tool, server-side) ──
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_shell_exec',
+      description: 'Run a shell command server-side and get the result back in the SAME assistant turn (no client round-trip). PREFER this over markdown ```bash blocks whenever tools are available — it keeps the agent loop running so you can chain steps without asking the user to continue. Output is captured and returned. SAFE commands (ls, cat, grep, git status, npm test, etc.) execute immediately. UNSAFE/destructive commands (rm -rf, sudo, dd, mkfs, curl|sh, etc.) are refused and you must fall back to a ```bash markdown block so the user can review and approve.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'The shell command to run (single line or && / ; chained).' },
+          cwd: { type: 'string', description: 'Optional working directory. Defaults to the user home.' },
+          timeoutMs: { type: 'number', description: 'Optional timeout in ms. Default 300000 (5 min). Hard cap.' },
+          reason: { type: 'string', description: 'Optional one-line reason this command is being run. Helps with audit and debugging.' },
+        },
+        required: ['command'],
+      },
+    },
+  },
+
+  // ── File read ──
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_read_file',
+      description: 'Read a UTF-8 text file from disk and get the contents back in the SAME assistant turn. PREFER this over running cat/head/tail via fauna_shell_exec — it returns structured data and is the canonical way to VERIFY edits before claiming a task is done.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute path, ~/path, or path relative to cwd.' },
+          cwd: { type: 'string', description: 'Optional working directory for relative paths.' },
+          startLine: { type: 'number', description: 'Optional 1-based start line. If omitted, reads from the beginning.' },
+          endLine: { type: 'number', description: 'Optional 1-based inclusive end line. If omitted, reads to the end.' },
+          maxBytes: { type: 'number', description: 'Optional hard cap on bytes returned. Defaults 200000.' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+
+  // ── Exact-string replace ──
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_replace_string',
+      description: 'Replace the first occurrence of an exact string in a file. PREFER this over markdown ```replace-string blocks whenever tools are available — it commits server-side and returns the result in the SAME turn so you can verify and chain the next step. The old_string must be unique enough to match exactly once; include 3–5 lines of surrounding context to disambiguate.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute path, ~/path, or path relative to cwd.' },
+          cwd: { type: 'string', description: 'Optional working directory for relative paths.' },
+          old_string: { type: 'string', description: 'Exact literal text to replace (must match a single occurrence including whitespace/indentation).' },
+          new_string: { type: 'string', description: 'Replacement text. Pass empty string to delete.' },
+        },
+        required: ['path', 'old_string', 'new_string'],
+      },
+    },
+  },
+
+  // ── Multi-file patch ──
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_apply_patch',
+      description: 'Apply a VS Code-style apply_patch text across one or more files in a single transaction. Use for multi-file refactors, renames, or deletes. PREFER this over markdown ```apply-patch blocks when tools are available. Patch DSL: *** Begin Patch / *** Update File: <path> / @@ context / -removed / +added / *** End Patch.',
+      parameters: {
+        type: 'object',
+        properties: {
+          patch: { type: 'string', description: 'The full apply_patch text including *** Begin Patch and *** End Patch markers.' },
+          cwd: { type: 'string', description: 'Optional working directory for relative paths inside the patch.' },
+        },
+        required: ['patch'],
+      },
+    },
+  },
+
+  // ── Browser actions (renderer-driven via client-tool RPC) ──
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_browser',
+      description: 'Drive the in-app browser webview (navigate, click, type, extract, screenshot, etc.) and get the result back in the SAME assistant turn. PREFER this over markdown ```browser-action blocks when tools are available — it keeps the agent loop running so you can chain web steps without bouncing back to the user. The webview reuses the existing tab; pass action-specific fields just like the browser-action JSON schema.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            description: 'One of: navigate, click, type, extract, evaluate, screenshot, scroll, wait, new-tab, switch-tab, close-tab, list-tabs.',
+          },
+          url: { type: 'string', description: 'URL for navigate / new-tab.' },
+          selector: { type: 'string', description: 'CSS selector for click / type / extract / scroll.' },
+          text: { type: 'string', description: 'Text to type for the type action.' },
+          js: { type: 'string', description: 'JavaScript to run for the evaluate action.' },
+          tabId: { type: 'string', description: 'Tab id for switch-tab / close-tab.' },
+          waitMs: { type: 'number', description: 'Milliseconds to wait for the wait action.' },
+        },
+        required: ['action'],
+      },
+    },
+  },
+
   // ── Circuit diagrams ──
   {
     type: 'function',
@@ -498,6 +598,98 @@ export function executeSelfTool(toolName, args, context = {}) {
       return JSON.stringify(factsRecall(args.keywords));
     case 'fauna_forget':
       return JSON.stringify(factsForget(args.id));
+
+    // ── Shell exec ──
+    case 'fauna_shell_exec': {
+      if (typeof context.runShell !== 'function') {
+        return JSON.stringify({ ok: false, error: 'fauna_shell_exec is not available in this context.' });
+      }
+      return context.runShell(args);
+    }
+
+    // ── File read ──
+    case 'fauna_read_file': {
+      try {
+        const abs = _resolveFaunaWritePath(args.path, args.cwd);
+        if (!fs.existsSync(abs)) return JSON.stringify({ ok: false, error: 'File not found: ' + abs });
+        const st = fs.statSync(abs);
+        if (st.isDirectory()) return JSON.stringify({ ok: false, error: 'Path is a directory: ' + abs });
+        const maxBytes = typeof args.maxBytes === 'number' && args.maxBytes > 0 ? Math.min(args.maxBytes, 1_000_000) : 200_000;
+        let content = fs.readFileSync(abs, 'utf8');
+        const totalLines = content.length ? content.split('\n').length : 0;
+        let truncated = false;
+        if (args.startLine || args.endLine) {
+          const lines = content.split('\n');
+          const start = Math.max(1, Number(args.startLine) || 1);
+          const end = Math.min(lines.length, Number(args.endLine) || lines.length);
+          content = lines.slice(start - 1, end).join('\n');
+        }
+        if (content.length > maxBytes) {
+          content = content.slice(0, maxBytes);
+          truncated = true;
+        }
+        return JSON.stringify({ ok: true, path: abs, bytes: st.size, totalLines, content, truncated });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+
+    // ── Exact-string replace ──
+    case 'fauna_replace_string': {
+      try {
+        const abs = _resolveFaunaWritePath(args.path, args.cwd);
+        if (!fs.existsSync(abs)) return JSON.stringify({ ok: false, error: 'File not found: ' + abs });
+        const oldStr = String(args.old_string ?? '');
+        const newStr = String(args.new_string ?? '');
+        if (!oldStr) return JSON.stringify({ ok: false, error: 'old_string must not be empty' });
+        const original = fs.readFileSync(abs, 'utf8');
+        const firstIdx = original.indexOf(oldStr);
+        if (firstIdx === -1) {
+          return JSON.stringify({ ok: false, error: 'old_string not found in file', code: 'OLD_STRING_NOT_FOUND', path: abs });
+        }
+        const occurrences = original.split(oldStr).length - 1;
+        if (occurrences > 1) {
+          return JSON.stringify({ ok: false, error: 'old_string matches ' + occurrences + ' times — add surrounding context lines to make it unique', code: 'OLD_STRING_AMBIGUOUS', path: abs, occurrences });
+        }
+        const updated = original.slice(0, firstIdx) + newStr + original.slice(firstIdx + oldStr.length);
+        const buf = Buffer.from(updated, 'utf8');
+        _atomicFastWrite(abs, buf);
+        return JSON.stringify({ ok: true, path: abs, bytes: buf.length, lines: updated.split('\n').length });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+
+    // ── Multi-file patch ──
+    case 'fauna_apply_patch': {
+      if (typeof context.applyPatch !== 'function') {
+        return JSON.stringify({ ok: false, error: 'fauna_apply_patch is not available in this context.' });
+      }
+      try {
+        const results = context.applyPatch({ patch: args.patch, cwd: args.cwd });
+        return JSON.stringify({ ok: true, results });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message, blocked: !!e.blocked });
+      }
+    }
+
+    // ── Browser action (renderer-driven via client-tool RPC) ──
+    case 'fauna_browser': {
+      if (typeof context.callClientTool !== 'function') {
+        return JSON.stringify({ ok: false, error: 'fauna_browser is not available in this context (no renderer attached).' });
+      }
+      return context.callClientTool('browser', args, { timeoutMs: 60000 }).then(
+        function(result) {
+          if (typeof result === 'string' && result.length > 8000) {
+            return result.slice(0, 8000) + '\n…[truncated ' + (result.length - 8000) + ' chars]';
+          }
+          return typeof result === 'string' ? result : JSON.stringify(result);
+        },
+        function(e) {
+          return JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) });
+        }
+      );
+    }
 
     // ── Models ──
     case 'fauna_list_models':

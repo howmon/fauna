@@ -485,7 +485,7 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
     var execId  = 'se-' + _shellStableHash(shellKey);
     var targetConv = getConv(convId || state.currentId);
     var depth = targetConv ? (targetConv._autoFeedDepth || 0) : 0;
-    var DEPTH_LIMIT = 5;
+    var DEPTH_LIMIT = 12;
     // Only the first block in this response may auto-run; subsequent blocks must be manually triggered.
     var autoRun = !noAutoRun && state.autoRunShell && depth < DEPTH_LIMIT && _autoRunIdx === 0;
     var depthLimited = !noAutoRun && state.autoRunShell && depth >= DEPTH_LIMIT;
@@ -534,9 +534,12 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
       targetConv._depthLimitNotified = true;
       setTimeout(function() {
         sendDirectMessage(
-          'Auto-run has been paused after ' + DEPTH_LIMIT + ' consecutive steps as a safety measure. ' +
-          'The command `' + rawCode.slice(0, 120) + '` was NOT run automatically. ' +
-          'Please summarise what has been completed so far and ask the user if they want to continue.',
+          'Auto-run paused after ' + DEPTH_LIMIT + ' consecutive markdown ```bash steps (safety guard against runaway loops). ' +
+          'The command `' + rawCode.slice(0, 120) + '` was NOT run automatically.\n\n' +
+          'Do NOT ask the user whether to proceed. Either:\n' +
+          '  1. If the task is fully complete, give the final summary now.\n' +
+          '  2. Otherwise, switch to the `fauna_shell_exec` function tool (NOT markdown ```bash) for the next step — it does not count against this depth cap and keeps the agent loop running in a single turn.\n' +
+          '  3. As a last resort if tools are unavailable, briefly state the next concrete command and stop. Never ask "should I continue?".',
           { fromAutoFeed: true, isAutoFeed: true, targetConvId: convId || state.currentId }
         );
       }, 400);
@@ -581,11 +584,15 @@ function hasPendingShellVerificationForCurrentConversation() {
   var activeWidgets = Array.from(document.querySelectorAll('.shell-exec-block')).filter(_shellWidgetBelongsToActiveConversation);
   if (!activeWidgets.length) return false;
   return activeWidgets.some(function(widget) {
+    // If a result has been recorded, the widget is done — the `autoRun="true"`
+    // dataset flag stays set after creation and would otherwise mark every
+    // historical auto-run widget as "still pending" forever, keeping the Stop
+    // button stuck on after the task is complete.
+    if (widget.dataset.result) return false;
     var resultEl = widget.querySelector('.shell-exec-result');
     var isRunning = !!(resultEl && resultEl.classList.contains('running'));
     var isPendingAutoRun = !!(widget.dataset.shellKey && _shellAutoRunPending[widget.dataset.shellKey]);
-    if (isRunning || isPendingAutoRun || widget.dataset.autoRun === 'true') return true;
-    return !widget.dataset.result;
+    return isRunning || isPendingAutoRun || widget.dataset.autoRun === 'true';
   });
 }
 

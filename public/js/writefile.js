@@ -585,16 +585,18 @@ function markWriteFileFailed(widget, filePath, errorMsg, convId) {
   targetConv._autoFeedDepth = (targetConv._autoFeedDepth || 0) + 1;
 
   var isLikelyTruncation = /truncated|unclosed|unexpected end|missing closing|mid-sentence|mid-word|unfinished|too short|incomplete/i.test(errorMsg || '');
-  var msg = 'The file write validation failed. Repair it using structured file operations only.\n\n' +
+  var msg = 'The file write validation failed. Repair it in the SAME turn using structured file operations — do NOT ask the user how to proceed.\n\n' +
     '**File:** `' + filePath + '`\n**Error:**\n```\n' + errorMsg + '\n```\n\n' +
     '**Rules for the repair response:**\n' +
-    '- Do NOT emit `shell-exec`, bash, zsh, Python, `cat`, heredocs, or other shell commands.\n' +
+    '- PREFER native function tools when available:\n' +
+    '  • `fauna_write_file` or `fauna_write_files` for a complete corrected file (with `minLines` / `minBytes` / `sha256`).\n' +
+    '  • `fauna_replace_string` for a localized fix to a single unique occurrence.\n' +
+    '  • `fauna_apply_patch` for multi-file corrections.\n' +
+    '  • `fauna_read_file` first if you need to inspect the current content — do NOT shell out to cat/head/sed.\n' +
+    '- FALLBACK only when tools are unavailable: structured markdown blocks (`file-plan`, `replace-string`, `append-file`).\n' +
+    '- Do NOT emit `shell-exec`, bash, zsh, Python, `cat`, heredocs, or other shell commands for the repair.\n' +
     '- Do NOT narrate a backup/recreate plan. Output the actual structured fix.\n' +
-    '- Prefer one `file-plan` block for a complete corrected final file, with `expected_file_count`, `minLines`, and `minBytes`.\n' +
-    '- For a tiny known missing tail, `append-file` is allowed, but only append the missing tail.\n' +
-    '- For localized syntax mistakes, use `replace-string`.\n' +
-    (isLikelyTruncation ? '- Because this looks truncated, use `file-plan` unless you know the exact missing tail.\n' : '') +
-    'If you need the current content, ask to read the file first; do not run shell commands.';
+    (isLikelyTruncation ? '- Because this looks truncated, use `fauna_write_file` (or `file-plan` as fallback) with the full corrected content unless you know the exact missing tail.\n' : '');
   setTimeout(function() {
     sendDirectMessage(msg, { fromAutoFeed: true, isAutoFeed: true, isWriteFileFeed: true, suppressShellAutoRun: true, targetConvId: convId });
   }, 800);

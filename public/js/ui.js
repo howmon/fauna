@@ -325,6 +325,10 @@ async function loadSettingsState() {
   var dwCb = document.getElementById('dynamic-widgets-toggle');
   if (dwCb) dwCb.checked = !!state.enableDynamicWidgets;
 
+  // Sync auto-compact checkbox
+  var acCb = document.getElementById('auto-compact-toggle');
+  if (acCb) acCb.checked = !!state.autoCompact;
+
   // Sync thinking budget
   var tb = document.getElementById('thinking-budget-select');
   if (tb) tb.value = state.thinkingBudget;
@@ -1640,6 +1644,16 @@ function setEnableDynamicWidgets(val) {
   localStorage.setItem('fauna-dynamic-widgets', val ? 'true' : 'false');
   if (typeof showToast === 'function') {
     showToast('Dynamic widgets ' + (val ? 'enabled' : 'disabled'));
+  }
+}
+
+// Toggle automatic context compaction (server summarizes older turns when
+// the conversation exceeds the model's body-token budget).
+function setAutoCompact(val) {
+  state.autoCompact = !!val;
+  localStorage.setItem('fauna-auto-compact', val ? 'true' : 'false');
+  if (typeof showToast === 'function') {
+    showToast('Auto-compaction ' + (val ? 'enabled' : 'disabled'));
   }
 }
 

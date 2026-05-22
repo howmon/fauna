@@ -292,6 +292,62 @@ async function runComposition(agentNames, mode, userMessage, conv) {
   _compositionState.active = false;
 }
 
+/**
+ * POST to /api/chat (SSE endpoint) and accumulate `content` deltas into one
+ * string.  Replaces the broken `await r.json()` pattern which buffered the
+ * entire stream and returned empty — making both sequential and parallel
+ * compositions slow AND silent.
+ *
+ * Returns: { content, error }
+ */
+async function _runAgentChatSSE(body, onDelta) {
+  try {
+    var resp = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok || !resp.body) {
+      return { content: '', error: 'HTTP ' + resp.status };
+    }
+    var reader = resp.body.getReader();
+    var decoder = new TextDecoder();
+    var buf = '';
+    var content = '';
+    var errMsg = '';
+    while (true) {
+      var chunk = await reader.read();
+      if (chunk.done) break;
+      buf += decoder.decode(chunk.value, { stream: true });
+      // SSE frames are separated by blank lines (\n\n)
+      var frames = buf.split('\n\n');
+      buf = frames.pop();
+      for (var fi = 0; fi < frames.length; fi++) {
+        var frame = frames[fi];
+        // Each frame may have multiple `data:` lines — concatenate them.
+        var dataLines = frame.split('\n').filter(function(l) { return l.indexOf('data:') === 0; });
+        if (!dataLines.length) continue;
+        var payload = dataLines.map(function(l) { return l.slice(5).replace(/^ /, ''); }).join('\n').trim();
+        if (!payload || payload === '[DONE]') continue;
+        try {
+          var evt = JSON.parse(payload);
+          if (evt.type === 'content' && typeof evt.content === 'string') {
+            content += evt.content;
+            if (typeof onDelta === 'function') {
+              try { onDelta(evt.content); } catch (_) {}
+            }
+          } else if (evt.type === 'error' && evt.error) {
+            errMsg = String(evt.error);
+          }
+        } catch (_) { /* skip malformed frame */ }
+      }
+    }
+    return { content: content, error: errMsg };
+  } catch (e) {
+    return { content: '', error: (e && e.message) || String(e) };
+  }
+}
+
 async function runSequentialComposition(agentNames, userMessage, conv) {
   var input = userMessage;
   for (var i = 0; i < agentNames.length; i++) {
@@ -300,34 +356,19 @@ async function runSequentialComposition(agentNames, userMessage, conv) {
     var agent = findAgent(name);
     if (!agent) continue;
 
-    // Activate agent
     await activateAgent(name, conv, true);
 
     var start = Date.now();
-    // Send message through the chat pipeline
-    try {
-      var r = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [{ role: 'user', content: input }],
-          agentName: name,
-          agentSystemPrompt: getAgentSystemPrompt(),
-          agentPermissions: agent.permissions
-        })
-      });
-      var d = await r.json();
-      var response = '';
-      if (d.choices && d.choices[0]) {
-        response = d.choices[0].message ? d.choices[0].message.content : '';
-      }
-      _compositionState.results.push({ agentName: name, response: response, duration: Date.now() - start });
-
-      // Next agent gets prior output as input
-      input = 'Previous agent (' + agent.displayName + ') produced:\n\n' + response + '\n\nOriginal task: ' + userMessage;
-    } catch (e) {
-      _compositionState.results.push({ agentName: name, response: 'Error: ' + e.message, duration: Date.now() - start });
-    }
+    var result = await _runAgentChatSSE({
+      messages: [{ role: 'user', content: input }],
+      agentName: name,
+      agentSystemPrompt: getAgentSystemPrompt(),
+      agentPermissions: agent.permissions,
+      autoCompact: false,
+    });
+    var response = result.content || (result.error ? ('Error: ' + result.error) : '');
+    _compositionState.results.push({ agentName: name, response: response, duration: Date.now() - start });
+    input = 'Previous agent (' + agent.displayName + ') produced:\n\n' + response + '\n\nOriginal task: ' + userMessage;
   }
 
   deactivateAgent(conv);
@@ -340,21 +381,15 @@ async function runParallelComposition(agentNames, userMessage, conv) {
     if (!agent) return Promise.resolve({ agentName: name, response: 'Agent not found', duration: 0 });
 
     var start = Date.now();
-    return fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messages: [{ role: 'user', content: userMessage }],
-        agentName: name,
-        agentSystemPrompt: agent.systemPrompt || '',
-        agentPermissions: agent.permissions
-      })
-    }).then(function(r) { return r.json(); }).then(function(d) {
-      var response = '';
-      if (d.choices && d.choices[0]) response = d.choices[0].message ? d.choices[0].message.content : '';
+    return _runAgentChatSSE({
+      messages: [{ role: 'user', content: userMessage }],
+      agentName: name,
+      agentSystemPrompt: agent.systemPrompt || '',
+      agentPermissions: agent.permissions,
+      autoCompact: false,
+    }).then(function(result) {
+      var response = result.content || (result.error ? ('Error: ' + result.error) : '');
       return { agentName: name, response: response, duration: Date.now() - start };
-    }).catch(function(e) {
-      return { agentName: name, response: 'Error: ' + e.message, duration: Date.now() - start };
     });
   });
 
@@ -604,6 +639,33 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
       if (timeEl && row && row.classList.contains('working'))
         timeEl.textContent = ((Date.now() - start) / 1000).toFixed(0) + 's';
     }, 500);
+    // Live preview area inside the row so the user sees the sub-agent's
+    // output streaming in instead of just a spinner for 80+ seconds.
+    var livePreview = null;
+    if (row) {
+      livePreview = row.querySelector('.delegation-live-preview');
+      if (!livePreview) {
+        livePreview = document.createElement('div');
+        livePreview.className = 'delegation-live-preview';
+        livePreview.style.cssText = 'margin-top:6px;padding:6px 8px;font-size:11px;line-height:1.4;color:var(--fau-text-muted);background:var(--fau-bg-3,rgba(255,255,255,.03));border-radius:4px;max-height:120px;overflow:auto;white-space:pre-wrap;display:none';
+        row.appendChild(livePreview);
+      }
+    }
+    var _liveBuf = '';
+    var _liveRaf = 0;
+    function _liveOnDelta(chunk) {
+      if (!livePreview) return;
+      _liveBuf += chunk;
+      if (_liveRaf) return;
+      _liveRaf = requestAnimationFrame(function() {
+        _liveRaf = 0;
+        livePreview.style.display = '';
+        // Show only the trailing window so long outputs don't bloat the DOM.
+        var tail = _liveBuf.length > 1500 ? '…' + _liveBuf.slice(-1500) : _liveBuf;
+        livePreview.textContent = tail;
+        livePreview.scrollTop = livePreview.scrollHeight;
+      });
+    }
     var userContent = del.task + (priorResultsText ? '\n\n---\nPrevious agent results for context:\n' + priorResultsText : '');
     return fetch('/api/chat', {
       method: 'POST',
@@ -620,12 +682,13 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
         thinkingBudget: state.thinkingBudget || 'high',
         systemPrompt: '## Active Agent: ' + agent.displayName + '\n\n' + (agent.systemPrompt || '') + '\n\nYou are being delegated a task by an orchestrator agent. Complete the task thoroughly and return your result.\n\n## Verification Before Completion (REQUIRED)\nBefore emitting your completion signal, you MUST verify your work:\n- File edits: read back the changed section to confirm it landed correctly.\n- Shell commands: check exit codes and scan output for errors.\n- Figma: confirm the execution result shows success.\n- If you cannot verify, state what you could NOT confirm.\n- NEVER emit [TASK_COMPLETE] if any step produced errors you did not resolve.\n\n## Completion Signal (REQUIRED)\nYou MUST end your response with a verification summary and exactly one of these markers on its own line:\n- `[TASK_COMPLETE]` — task finished successfully AND verified\n- `[TASK_PARTIAL: <what remains>]` — made progress but could not fully finish\n- `[TASK_BLOCKED: <reason>]` — could not proceed due to a blocker\n- `[TASK_FAILED: <reason>]` — attempted but failed\n\nFormat your ending as:\n### Verification\n- ✓ <what you checked and confirmed>\n- ✗ <what failed or could not be checked> (if any)\n[TASK_COMPLETE]'
       })
-    }).then(function(r) { return readDelegationStream(r, abortCtrl.signal); })
+    }).then(function(r) { return readDelegationStream(r, abortCtrl.signal, _liveOnDelta); })
     .then(function(text) {
       clearInterval(timerTick);
       var dur = Date.now() - start;
       if (row) { row.classList.remove('working'); row.classList.add('done'); }
       if (timeEl) timeEl.textContent = (dur / 1000).toFixed(1) + 's';
+      if (livePreview) livePreview.style.display = 'none';
       return { agentName: del.agentName, displayName: agent.displayName, icon: agent.icon || 'ti-robot', task: del.task, response: text, duration: dur, status: _parseTaskStatus(text) };
     }).catch(function(e) {
       clearInterval(timerTick);
@@ -672,7 +735,11 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
   // Show delegation result cards
   showDelegationResults(results, inner);
 
-  // Synthesize: send results back to orchestrator for final response
+  // Always run synthesis — even when only one delegation completed.  The
+  // synthesis call is what gives the orchestrator a chance to emit further
+  // [DELEGATE:] blocks for the next round of a multi-phase workflow.
+  // Skipping it (as a single-delegation fast-path) breaks orchestrators that
+  // execute phases serially across rounds.
   var synthesis = await synthesizeDelegationResults(results, originalMessage, conv);
 
   // Final header update
@@ -686,7 +753,7 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
 /**
  * Read SSE stream from a delegation fetch response and return the full text.
  */
-async function readDelegationStream(response, signal) {
+async function readDelegationStream(response, signal, onContent) {
   var reader = response.body.getReader();
   var decoder = new TextDecoder();
   var partial = '';
@@ -706,7 +773,12 @@ async function readDelegationStream(response, signal) {
       if (raw === '[DONE]') continue;
       try {
         var evt = JSON.parse(raw);
-        if (evt.type === 'content') text += evt.content;
+        if (evt.type === 'content' && typeof evt.content === 'string') {
+          text += evt.content;
+          if (typeof onContent === 'function') {
+            try { onContent(evt.content); } catch (_) {}
+          }
+        }
       } catch (_) {}
     }
   }
@@ -780,7 +852,7 @@ async function synthesizeDelegationResults(results, originalMessage, conv) {
   if (!activeAgent) return '';
 
   // Build a synthesis prompt with all results
-  var parts = ['The following agents completed their delegated tasks. Synthesize their results into a unified response for the user.\n'];
+  var parts = ['You are continuing orchestration. The following sub-agents just returned results. Your FIRST job is to decide whether more rounds of delegation are needed per your plan. Only summarize for the user if the entire plan is complete.\n'];
   parts.push('**Original user request:** ' + originalMessage + '\n');
   var unverifiedAgents = [];
   for (var i = 0; i < results.length; i++) {
@@ -795,13 +867,18 @@ async function synthesizeDelegationResults(results, originalMessage, conv) {
     }
   }
   parts.push('---');
-  parts.push('Now synthesize the above results into a clear, unified response. Check each agent\'s status marker:');
-  parts.push('- COMPLETE tasks: include their results directly');
-  parts.push('- PARTIAL/BLOCKED/FAILED tasks: flag what still needs attention');
+  parts.push('## Decision (do this FIRST)');
+  parts.push('1. Re-read your orchestrator plan above. Are there more rounds/phases defined that have not yet run?');
+  parts.push('2. If YES → emit the next [DELEGATE:agents/name]task[/DELEGATE] block(s) and STOP. Forward any data the next round needs (paste relevant JSON into the task). Do NOT write a user-facing summary — that comes only at the end.');
+  parts.push('3. If NO (all phases done) → write a concise unified summary for the user with NO [DELEGATE] blocks.');
+  parts.push('');
+  parts.push('## Handling sub-agent statuses');
+  parts.push('- COMPLETE: use the result, proceed.');
+  parts.push('- PARTIAL: this is NOT a stop signal. Use the partial output that was returned and proceed to the next planned round. Note the limitation in the next delegation task so the downstream agent works around it.');
+  parts.push('- BLOCKED/FAILED: only stop if the next round genuinely cannot proceed without the missing data. Otherwise forward what you have and continue.');
   if (unverifiedAgents.length > 0) {
-    parts.push('- ⚠️ UNVERIFIED: The following agents claimed COMPLETE but did NOT include a verification section: ' + unverifiedAgents.join(', ') + '. Flag this in your synthesis — their results may need manual verification.');
+    parts.push('- ⚠️ UNVERIFIED: ' + unverifiedAgents.join(', ') + ' claimed COMPLETE without a verification section. Note this in your final summary if/when you write one.');
   }
-  parts.push('Highlight key findings and note any conflicts or complementary insights between agents.');
 
   var synthContent = parts.join('\n');
 
@@ -814,7 +891,7 @@ async function synthesizeDelegationResults(results, originalMessage, conv) {
         model: state.model,
         useFigmaMCP: state.figmaMCPEnabled || false,
         thinkingBudget: state.thinkingBudget || 'high',
-        systemPrompt: '## Active Agent: ' + activeAgent.displayName + ' (Orchestrator — Synthesis Phase)\n\n' + (activeAgent.systemPrompt || '') + '\n\nYou are synthesizing results from delegated agents. If your workflow has more phases to execute, output the next [DELEGATE:agents/name]task[/DELEGATE] block(s). If all phases are complete, provide a unified summary response with no [DELEGATE] blocks.'
+        systemPrompt: '## Active Agent: ' + activeAgent.displayName + ' (Orchestrator — Continuation Phase)\n\n' + (activeAgent.systemPrompt || '') + '\n\n## Continuation Rules (override conflicting instructions)\n- Your plan above defines rounds/phases. If any planned round has not yet executed, you MUST emit its [DELEGATE:agents/name]task[/DELEGATE] block(s) now and output nothing else.\n- Treat sub-agent [TASK_PARTIAL] as success-with-caveats — forward the partial output to the next round, do NOT stop.\n- Only write a user-facing summary AFTER the final planned round completes. A summary written prematurely halts orchestration.\n- When the plan defines parallel rounds, emit ALL delegations for that round in the SAME response so they run concurrently.'
       })
     });
     return await readDelegationStream(response);
