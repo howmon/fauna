@@ -390,6 +390,12 @@ function loadConversation(id) {
   topbarTitle.title = conv.title;
   // Reflect conversation in window title so the tray menu can list it
   try { document.title = conv.title ? ('Fauna — ' + conv.title) : 'Fauna'; } catch (_) {}
+  // Tell the main process which conv this window is on (for next-launch restore)
+  try {
+    if (window.faunaApp && typeof window.faunaApp.reportWindowState === 'function') {
+      window.faunaApp.reportWindowState({ convId: id, projectId: state.activeProjectId || null });
+    }
+  } catch (_) {}
 
   // Switch browser pane to this conversation's tabs
   _showConvBrowserTabs(id);

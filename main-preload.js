@@ -16,4 +16,17 @@ contextBridge.exposeInMainWorld('faunaApp', {
     };
     ipcRenderer.send('fauna:open-window', payload);
   },
+
+  /**
+   * Report the renderer's currently active conversation / project so the main
+   * process can persist it for next-launch restore.
+   * @param {{convId?: string|null, projectId?: string|null}} [opts]
+   */
+  reportWindowState(opts) {
+    const payload = {
+      convId:    opts && typeof opts.convId    === 'string' ? opts.convId    : null,
+      projectId: opts && typeof opts.projectId === 'string' ? opts.projectId : null,
+    };
+    ipcRenderer.send('fauna:report-window-state', payload);
+  },
 });

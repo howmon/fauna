@@ -26,10 +26,54 @@ const windows = new Set();
 let widgetWindow = null;
 let tray = null;
 
+// ── Window state persistence ─────────────────────────────────────
+// Persists the set of open windows (active conversation, project, bounds)
+// so relaunching Fauna restores the previous workspace.
+const WINDOW_STATE_FILE = path.join(os.homedir(), '.config', 'fauna', 'window-state.json');
+
+function _readWindowState() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(WINDOW_STATE_FILE, 'utf8'));
+    if (Array.isArray(raw)) return raw;
+    if (raw && Array.isArray(raw.windows)) return raw.windows;
+  } catch (_) {}
+  return [];
+}
+
+function _writeWindowState(entries) {
+  try {
+    const dir = path.dirname(WINDOW_STATE_FILE);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(WINDOW_STATE_FILE, JSON.stringify({ windows: entries }, null, 2));
+  } catch (e) {
+    console.warn('[fauna] failed to write window state:', e.message);
+  }
+}
+
+function _snapshotWindows() {
+  const out = [];
+  for (const win of windows) {
+    if (!win || win.isDestroyed()) continue;
+    let bounds = null;
+    try { bounds = win.getNormalBounds ? win.getNormalBounds() : win.getBounds(); } catch (_) {}
+    const st = win._faunaState || {};
+    out.push({
+      convId:    st.convId    || null,
+      projectId: st.projectId || null,
+      bounds,
+    });
+  }
+  return out;
+}
+
+function persistWindowState() {
+  _writeWindowState(_snapshotWindows());
+}
+
 // ── Window ────────────────────────────────────────────────────────────────
 
-async function createWindow({ convId, projectId } = {}) {
-  const win = new BrowserWindow({
+async function createWindow({ convId, projectId, bounds } = {}) {
+  const winOpts = {
     width:  1260,
     height:  840,
     minWidth:  740,
@@ -49,10 +93,25 @@ async function createWindow({ convId, projectId } = {}) {
       preload:          path.join(__dirname, 'main-preload.js'),
     },
     show: false,
-  });
+  };
+  // Restore saved geometry if it's still on a visible display
+  if (bounds && Number.isFinite(bounds.x) && Number.isFinite(bounds.y) &&
+      Number.isFinite(bounds.width) && Number.isFinite(bounds.height)) {
+    try {
+      const display = screen.getDisplayMatching(bounds);
+      if (display) {
+        winOpts.x = bounds.x;
+        winOpts.y = bounds.y;
+        winOpts.width  = Math.max(bounds.width,  winOpts.minWidth);
+        winOpts.height = Math.max(bounds.height, winOpts.minHeight);
+      }
+    } catch (_) {}
+  }
+  const win = new BrowserWindow(winOpts);
 
   windows.add(win);
   mainWindow = win;
+  win._faunaState = { convId: convId || null, projectId: projectId || null };
 
   // Grant microphone permission for localhost (required for Web Speech API / voice control)
   win.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
@@ -89,6 +148,15 @@ async function createWindow({ convId, projectId } = {}) {
   // Track focus so menu actions target the most recently used window
   win.on('focus', () => { mainWindow = win; refreshTray(); });
 
+  // Persist geometry whenever it changes (debounced)
+  let _saveTimer = null;
+  const _scheduleSave = () => {
+    if (_saveTimer) clearTimeout(_saveTimer);
+    _saveTimer = setTimeout(persistWindowState, 500);
+  };
+  win.on('move',   _scheduleSave);
+  win.on('resize', _scheduleSave);
+
   // Clear the reference when the window is destroyed so stale calls don't throw
   win.on('closed', () => {
     windows.delete(win);
@@ -96,6 +164,8 @@ async function createWindow({ convId, projectId } = {}) {
       mainWindow = [...windows].pop() || null;
     }
     refreshTray();
+    // Don't overwrite the file while the user is quitting (before-quit handles it)
+    if (!app.isQuitting) persistWindowState();
   });
 
   // Rebuild the tray menu when the page title changes (conversation switch)
@@ -539,15 +609,25 @@ app.whenReady().then(async () => {
   const faunaDocs = ensureFaunaDocsFolder();
   if (faunaDocs) process.env.FAUNA_DOCS = faunaDocs;
 
-  try {
-    await startServer(PORT);
-  } catch (err) {
+  await startServer(PORT).catch(err => {
     console.error('[Electron] Server failed to start:', err.message);
     app.quit();
-    return;
-  }
+    throw err;
+  });
 
-  await createWindow();
+  // Restore previously open windows; fall back to a single new window.
+  const saved = _readWindowState();
+  if (saved.length) {
+    for (const entry of saved) {
+      await createWindow({
+        convId:    entry.convId    || null,
+        projectId: entry.projectId || null,
+        bounds:    entry.bounds    || null,
+      });
+    }
+  } else {
+    await createWindow();
+  }
 
   // Create tray icon and task widget
   createTray();
@@ -571,6 +651,8 @@ app.on('window-all-closed', () => {
 // reconnect loop) cannot keep the process alive and cause a phantom restart.
 app.on('before-quit', () => {
   app.isQuitting = true;
+  // Snapshot which windows were open + their conv/project so we restore them next launch
+  try { persistWindowState(); } catch (_) {}
   if (app.isReady()) globalShortcut.unregisterAll();
   // Give Electron ~300 ms to close windows, then hard-exit the Node process.
   setTimeout(() => process.exit(0), 300);
@@ -595,4 +677,17 @@ if (!gotLock) {
 ipcMain.on('fauna:open-window', (_event, payload) => {
   const { convId, projectId } = payload || {};
   createWindow({ convId, projectId });
+});
+
+// Renderer reports the active conversation / project for its window so we can
+// restore the same workspace next launch.
+ipcMain.on('fauna:report-window-state', (event, payload) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return;
+  const { convId, projectId } = payload || {};
+  win._faunaState = {
+    convId:    typeof convId    === 'string' ? convId    : null,
+    projectId: typeof projectId === 'string' ? projectId : null,
+  };
+  persistWindowState();
 });
