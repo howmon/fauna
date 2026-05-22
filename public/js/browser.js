@@ -1979,6 +1979,16 @@ var _extConnectedBrowsers = []; // [{id, browser, version, connectedAt}]
                     (d.title ? 'Title: '  + d.title + '\n\n' : '') +
                     (d.text  || '');
       if (typeof addAttachment === 'function') {
+        // Replace any prior unsent send-page from the same browser to avoid pileup
+        if (state && Array.isArray(state.pendingAttachments)) {
+          for (var _i = state.pendingAttachments.length - 1; _i >= 0; _i--) {
+            var _a = state.pendingAttachments[_i];
+            if (_a && _a.extSource === 'page' && _a.browser === bName) {
+              if (typeof removeAttachment === 'function') removeAttachment(_i);
+              else state.pendingAttachments.splice(_i, 1);
+            }
+          }
+        }
         addAttachment({ type: 'url', extSource: 'page', name: bName + ': ' + short,
                         content: content, sourceUri: d.url, tabId: d.tabId, clientId: msg.id, browser: bName });
       }
@@ -1990,8 +2000,20 @@ var _extConnectedBrowsers = []; // [{id, browser, version, connectedAt}]
       var snapTitle = d.title || d.url || bName + ' tab';
       var shortSnap = snapTitle.length > 40 ? snapTitle.slice(0, 37) + '…' : snapTitle;
       if (typeof addAttachment === 'function') {
+        // Replace any prior unsent ext snapshot from the same browser. Repeated
+        // snapshots accumulating in state.pendingAttachments (each ~100-500KB
+        // base64) were ballooning memory and freezing the renderer.
+        if (state && Array.isArray(state.pendingAttachments)) {
+          for (var _j = state.pendingAttachments.length - 1; _j >= 0; _j--) {
+            var _b = state.pendingAttachments[_j];
+            if (_b && _b.extSource === 'snapshot') {
+              if (typeof removeAttachment === 'function') removeAttachment(_j);
+              else state.pendingAttachments.splice(_j, 1);
+            }
+          }
+        }
         addAttachment({ type: 'image', extSource: 'snapshot', name: 'Snapshot — ' + shortSnap,
-                        base64: d.base64, mime: d.mime || 'image/png' });
+                        base64: d.base64, mime: d.mime || 'image/png', browser: bName });
       }
       _showExtToast('Snapshot from ' + bName + ' added');
     }

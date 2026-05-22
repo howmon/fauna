@@ -913,6 +913,21 @@ async function handleFiles(files) {
 }
 
 function addAttachment(att) {
+  // Defensive cap — prevents unbounded growth (e.g. repeated browser-extension
+  // snapshots, paste loops) from ballooning memory and freezing the renderer.
+  // Base64 images can be hundreds of KB each; without a cap, hundreds of items
+  // stall renderAttachBar and saveConversations.
+  var MAX_PENDING = 24;
+  if (state.pendingAttachments.length >= MAX_PENDING) {
+    // Drop the oldest non-user-added attachment first (extension-sourced), else
+    // fall back to dropping the absolute oldest.
+    var dropIdx = -1;
+    for (var i = 0; i < state.pendingAttachments.length; i++) {
+      if (state.pendingAttachments[i] && state.pendingAttachments[i].extSource) { dropIdx = i; break; }
+    }
+    if (dropIdx < 0) dropIdx = 0;
+    state.pendingAttachments.splice(dropIdx, 1);
+  }
   state.pendingAttachments.push(att);
   renderAttachBar();
 }
