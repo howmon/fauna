@@ -1049,8 +1049,11 @@ async function streamResponse(conv) {
           if (evt.type === 'widget_emitted' && window.faunaDynamicWidgets) {
             dbg('widget_emitted: ' + evt.widgetId, 'ok');
             // Render the widget after the current message bubble so it sits inline.
-            var msgEl = (typeof getActiveMessageEl === 'function') ? getActiveMessageEl() : null;
-            window.faunaDynamicWidgets.mountWidget(evt, msgEl || document.querySelector('#chat-stream') || document.body);
+            // NOTE: use a distinct local name — `var msgEl` here would hoist and
+            // overwrite the outer streamResponse() msgEl (function-scoped var),
+            // breaking later access at stream end.
+            var _widgetAnchor = (typeof getActiveMessageEl === 'function') ? getActiveMessageEl() : null;
+            window.faunaDynamicWidgets.mountWidget(evt, _widgetAnchor || document.querySelector('#chat-stream') || document.body);
             scheduleRender && scheduleRender();
           }
           if (evt.type === 'widget_tool_pending' && window.faunaDynamicWidgets) {
@@ -1194,6 +1197,12 @@ async function streamResponse(conv) {
 
     if (isActive()) {
       _ensureLiveMessageAttached();
+      if (!msgEl || !bodyEl) {
+        dbg('streamResponse: msgEl/bodyEl missing at stream end — skipping post-render', 'warn');
+        conv._streaming = false;
+        setBusy(false);
+        return;
+      }
       delete msgEl.dataset.streamingLive;
       bodyEl.classList.remove('streaming-cursor');
       if (!_reasoning) _updateReasoningPanel(null, true);
