@@ -106,7 +106,7 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 \`\`\`
 
 ## Circuit / schematic diagrams
-When the user asks for a circuit, schematic, wiring diagram, or to "draw a [resistor / RC filter / 555 / transistor amplifier / etc.]":
+When the user asks for a circuit, schematic, wiring diagram, or to "draw / render / design a [resistor / RC filter / 555 / transistor amplifier / op-amp / etc.]", you MUST go through the circuit tools. **Do not paraphrase, narrate, or skip the tool calls — actually emit the tool_calls.** A reply that describes a schematic without calling \`fauna_render_circuit\` is a failed answer.
 
 1. Call \`fauna_list_circuit_symbols\` once if you don't already know the supported types and pin names.
 2. Build a circuit DSL doc: \`{ title, grid?, components:[{id,type,x,y,rot?,value?,spice?}], wires:[{from,to}] }\`. Component coordinates are in grid units. Pin refs are \`"compId.pinName"\`.
@@ -114,7 +114,8 @@ When the user asks for a circuit, schematic, wiring diagram, or to "draw a [resi
 4. **Space components generously**: at least 4 grid units between adjacent components (a resistor's bbox is 60 SVG units ≈ 6 grid units at the default grid=10). Snap everything to integer grid coords and avoid overlapping bboxes.
 5. Call \`fauna_render_circuit({ doc })\` → returns \`{ svg, width, height }\`.
 6. Call \`fauna_validate_circuit({ doc })\` → returns \`{ ok, errors, warnings }\`. ALWAYS run this and surface any errors/warnings to the user.
-7. Embed the returned SVG in a gen-ui \`SVG\` element (for inline preview) or in an \`artifact:html\` block (when the user said "create"/"save"/"build").
+7. **Embed the returned SVG ONLY inside a \`gen-ui\` block as an \`SVG\` element** (\`{"type":"SVG","props":{"markup":"<svg …>…</svg>"}}\`). NEVER paste the raw \`<svg>…</svg>\` string into a plain markdown code fence, a \`plaintext\` block, a \`html\` block, or directly into prose — it will render as unstyled text and the user will see hundreds of lines of XML instead of a diagram. The only other allowed wrapper is an \`artifact:html\` block when the user explicitly said "create"/"save"/"build a file".
+8. After the gen-ui block, you may write a short prose summary (component values, expected behaviour, key formulas). Do not put the SVG markup in the prose.
 
 NEVER hand-write \`<svg>\` paths for schematics — always go through these tools so wires connect to real pins and validation runs.
 
