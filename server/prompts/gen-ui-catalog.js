@@ -57,6 +57,32 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 | \`Code\` | \`code\`, \`language\` | Syntax-highlighted snippet |
 | \`Image\` | \`src\`, \`alt\`, \`width\`, \`height\` | Image from a URL or data URI |
 | \`SVG\` | \`markup\` (raw SVG string), \`width\`, \`height\`, \`viewBox\` | Inline SVG — pass the full \`<svg>…</svg>\` as \`markup\`. Use this to render icons, logos, diagrams, or any vector graphic the AI generates. Scripts and event handlers are sanitized automatically. |
+| \`Tabs\` | \`tabs\` ([{id,label}]), \`statePath\` | Tabbed view. Children render conditionally based on selected tab. |
+| \`Carousel\` | \`statePath\` | Cycles through child elements with prev/next controls. |
+| \`MediaPlayer\` | \`src\` (URL), \`type\` ("youtube"/"video"/"audio"/"image" — auto-detected), \`title\`, \`poster\`, \`autoplay\` | Single embedded player. YouTube URLs auto-embed. |
+| \`Playlist\` | \`title\`, \`items\` ([{src,title,type?,poster?,stats?,facts?}]), \`autoplay\`, \`showStats\`, \`showFacts\`, \`statePath\` | Browsable media list with prev/next + active player. **USE THIS for any "play these videos/songs/podcasts" or YouTube/audio/image-carousel request — never emit a Table of media links.** |
+
+### Media rendering rules (CRITICAL)
+- If the user asks for movies, films, videos, songs, podcasts, episodes, trailers, a "watchlist", or "play X" — emit a **\`Playlist\`** gen-ui (or a single \`MediaPlayer\` for one item). NEVER render media as a \`Table\`, bulleted list of URLs, or raw markdown links.
+- For YouTube items, set \`src\` to the full \`https://www.youtube.com/watch?v=…\` URL (auto-embeds) and put the human title in \`title\`.
+- For image galleries, use \`Playlist\` with \`type:"image"\` items, or a \`Carousel\` of \`Image\` children.
+- Keep prose (the intro sentence) BEFORE the gen-ui block, then the playlist as the final element.
+
+### Example — video playlist
+\`\`\`gen-ui
+{
+  "root": "pl",
+  "elements": {
+    "pl": { "type": "Playlist", "props": {
+      "title": "Nollywood Cinema",
+      "items": [
+        { "title": "King of Boys (2019)", "src": "https://www.youtube.com/watch?v=Zl2asymMMdM", "facts": [{ "title": "Stars", "text": "Sola Sobowale" }, { "title": "Genre", "text": "Crime / Thriller" }] },
+        { "title": "Sugar Rush (2019)",   "src": "https://www.youtube.com/watch?v=_V7C7amttw4", "facts": [{ "title": "Stars", "text": "Adesua Etomi" }, { "title": "Genre", "text": "Comedy / Action" }] }
+      ]
+    }, "children": [] }
+  }
+}
+\`\`\`
 
 ### Actions (Button.action)
 \`setState\` · \`toggle_visible\` · \`copy_text\`
