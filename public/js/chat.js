@@ -29,6 +29,7 @@ async function _buildLiveBrowserAttachmentContext(attachments) {
   if (!refs.length) return '';
 
   var chunks = [];
+  var failedRefs = [];
   for (var i = 0; i < refs.length; i++) {
     var att = refs[i];
     var body = { action: 'extract', params: { maxChars: 8000 } };
@@ -68,11 +69,23 @@ async function _buildLiveBrowserAttachmentContext(attachments) {
         text + '\n' +
         '```'
       );
+    } else {
+      failedRefs.push(att);
     }
   }
 
-  if (!chunks.length) return '';
-  return '\n\n[Resolved live browser tab context — already extracted from the user\'s shared browser tab via the extension. Use this content directly to answer. Do NOT call `fauna_browser` or emit `browser-action` / `browser-ext-action` blocks to re-fetch this page unless the user explicitly asks for newer data or a specific interaction (click/type/navigate). The in-app `fauna_browser` webview is a SEPARATE, blank browser unrelated to this tab — opening it will not show this content.]\n' + chunks.join('\n\n');
+  if (!chunks.length && !failedRefs.length) return '';
+
+  var header = '';
+  if (chunks.length) {
+    header = '\n\n[Resolved live browser tab context — already extracted from the user\'s shared browser tab via the extension. Use this content directly to answer. Do NOT call `fauna_browser` or emit `browser-action` / `browser-ext-action` blocks to re-fetch this page unless the user explicitly asks for newer data or a specific interaction (click/type/navigate). The in-app `fauna_browser` webview is a SEPARATE, blank browser unrelated to this tab — opening it will not show this content.]\n';
+  }
+  var body2 = chunks.join('\n\n');
+  if (failedRefs.length) {
+    var failNote = '\n\n[Browser-extension tab attached but live extraction returned no content. If you need the page text, emit ONE ```browser-ext-action block with {"action":"extract"} (and tabId/clientId from the attachment Meta line). Do NOT call `fauna_browser` — that drives a separate in-app webview that does not share state with the user\'s real browser tab and will be blank.]';
+    body2 += failNote;
+  }
+  return header + body2;
 }
 
 // Short confirmations — user is approving a plan the AI just described
