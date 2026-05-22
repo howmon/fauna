@@ -1047,6 +1047,16 @@ function extractAndRenderBrowserActions(html, messageEl, isHistoryLoad, convId) 
     return { el: el, id: baId, action: action };
   }
 
+  // Dedupe key: collapses two identical browser-action blocks in the same message
+  // into a single widget. The LLM occasionally emits the same `navigate` block
+  // twice (e.g. once before writing the file, then again after), which used to
+  // render two widgets pointing at the same URL.
+  var _seenKeys = Object.create(null);
+  function _actionKey(a) {
+    if (!a || typeof a !== 'object') return '';
+    try { return (a.action || '') + '|' + JSON.stringify(a); } catch(_) { return ''; }
+  }
+
   codeBlocks.forEach(function(code) {
     var pre = code.parentElement;
     var raw = code.textContent.trim();
@@ -1073,6 +1083,16 @@ function extractAndRenderBrowserActions(html, messageEl, isHistoryLoad, convId) 
         pre.remove(); return;
       }
     }
+
+    // Drop duplicates of any action we've already created a widget for in this message.
+    parsedLines = parsedLines.filter(function(entry) {
+      var k = _actionKey(entry.action);
+      if (!k) return true;
+      if (_seenKeys[k]) { dbg('browser-action: dropping duplicate ' + k, 'info'); return false; }
+      _seenKeys[k] = true;
+      return true;
+    });
+    if (!parsedLines.length) { pre.remove(); return; }
 
     // Replace <pre> with first widget, then insert remaining widgets after it
     var insertAfter = null;
