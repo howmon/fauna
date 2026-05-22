@@ -852,7 +852,7 @@ async function synthesizeDelegationResults(results, originalMessage, conv) {
   if (!activeAgent) return '';
 
   // Build a synthesis prompt with all results
-  var parts = ['The following agents completed their delegated tasks. Synthesize their results into a unified response for the user.\n'];
+  var parts = ['You are continuing orchestration. The following sub-agents just returned results. Your FIRST job is to decide whether more rounds of delegation are needed per your plan. Only summarize for the user if the entire plan is complete.\n'];
   parts.push('**Original user request:** ' + originalMessage + '\n');
   var unverifiedAgents = [];
   for (var i = 0; i < results.length; i++) {
@@ -867,13 +867,18 @@ async function synthesizeDelegationResults(results, originalMessage, conv) {
     }
   }
   parts.push('---');
-  parts.push('Now synthesize the above results into a clear, unified response. Check each agent\'s status marker:');
-  parts.push('- COMPLETE tasks: include their results directly');
-  parts.push('- PARTIAL/BLOCKED/FAILED tasks: flag what still needs attention');
+  parts.push('## Decision (do this FIRST)');
+  parts.push('1. Re-read your orchestrator plan above. Are there more rounds/phases defined that have not yet run?');
+  parts.push('2. If YES → emit the next [DELEGATE:agents/name]task[/DELEGATE] block(s) and STOP. Forward any data the next round needs (paste relevant JSON into the task). Do NOT write a user-facing summary — that comes only at the end.');
+  parts.push('3. If NO (all phases done) → write a concise unified summary for the user with NO [DELEGATE] blocks.');
+  parts.push('');
+  parts.push('## Handling sub-agent statuses');
+  parts.push('- COMPLETE: use the result, proceed.');
+  parts.push('- PARTIAL: this is NOT a stop signal. Use the partial output that was returned and proceed to the next planned round. Note the limitation in the next delegation task so the downstream agent works around it.');
+  parts.push('- BLOCKED/FAILED: only stop if the next round genuinely cannot proceed without the missing data. Otherwise forward what you have and continue.');
   if (unverifiedAgents.length > 0) {
-    parts.push('- ⚠️ UNVERIFIED: The following agents claimed COMPLETE but did NOT include a verification section: ' + unverifiedAgents.join(', ') + '. Flag this in your synthesis — their results may need manual verification.');
+    parts.push('- ⚠️ UNVERIFIED: ' + unverifiedAgents.join(', ') + ' claimed COMPLETE without a verification section. Note this in your final summary if/when you write one.');
   }
-  parts.push('Highlight key findings and note any conflicts or complementary insights between agents.');
 
   var synthContent = parts.join('\n');
 
@@ -886,7 +891,7 @@ async function synthesizeDelegationResults(results, originalMessage, conv) {
         model: state.model,
         useFigmaMCP: state.figmaMCPEnabled || false,
         thinkingBudget: state.thinkingBudget || 'high',
-        systemPrompt: '## Active Agent: ' + activeAgent.displayName + ' (Orchestrator — Synthesis Phase)\n\n' + (activeAgent.systemPrompt || '') + '\n\nYou are synthesizing results from delegated agents. If your workflow has more phases to execute, output the next [DELEGATE:agents/name]task[/DELEGATE] block(s). If all phases are complete, provide a unified summary response with no [DELEGATE] blocks.'
+        systemPrompt: '## Active Agent: ' + activeAgent.displayName + ' (Orchestrator — Continuation Phase)\n\n' + (activeAgent.systemPrompt || '') + '\n\n## Continuation Rules (override conflicting instructions)\n- Your plan above defines rounds/phases. If any planned round has not yet executed, you MUST emit its [DELEGATE:agents/name]task[/DELEGATE] block(s) now and output nothing else.\n- Treat sub-agent [TASK_PARTIAL] as success-with-caveats — forward the partial output to the next round, do NOT stop.\n- Only write a user-facing summary AFTER the final planned round completes. A summary written prematurely halts orchestration.\n- When the plan defines parallel rounds, emit ALL delegations for that round in the SAME response so they run concurrently.'
       })
     });
     return await readDelegationStream(response);
