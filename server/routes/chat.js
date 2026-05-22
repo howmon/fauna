@@ -296,6 +296,35 @@ export function registerChatRoute(app, {
       }
       const trimmed = first ? [first, ...recent] : recent;
       allMessages.push(...trimmed);
+
+      // ── Per-turn tool nudge: circuits / schematics ────────────────────────
+      // The model frequently tries to answer schematic requests analytically and
+      // skips the render tool. When the latest user message clearly asks for a
+      // schematic, force a system reminder so the next assistant step calls the
+      // tools instead of dumping prose or raw SVG.
+      try {
+        const lastUser = [...messages].reverse().find(m => m && m.role === 'user');
+        const lastText = typeof lastUser?.content === 'string'
+          ? lastUser.content
+          : Array.isArray(lastUser?.content)
+            ? lastUser.content.filter(c => c.type === 'text').map(c => c.text).join('\n')
+            : '';
+        const CIRCUIT_RE = /\b(schematic|circuit|wiring diagram|netlist|breadboard|rc (low|high)[- ]?pass|low[- ]?pass filter|high[- ]?pass filter|band[- ]?pass|op[- ]?amp|555 timer|transistor amp(?:lifier)?|voltage divider|h[- ]?bridge|rectifier|flip[- ]?flop|d[- ]?type latch|kicad|spice)\b/i;
+        if (lastText && CIRCUIT_RE.test(lastText) && !isCLI && !noTools) {
+          allMessages.push({
+            role: 'system',
+            content:
+              '[Circuit/schematic request detected] You MUST render this using the circuit tools before writing any prose summary. Required sequence for THIS turn:\n' +
+              '1. (Optional) fauna_list_circuit_symbols — only if you are unsure of pin names.\n' +
+              '2. fauna_render_circuit({ doc }) — returns { svg, width, height }.\n' +
+              '3. fauna_validate_circuit({ doc }) — surface any errors/warnings.\n' +
+              '4. (Optional) fauna_simulate_circuit({ doc, analysis }) — for behaviour questions; if ngspice is missing, surface the install hint and continue with the analytical answer.\n' +
+              '5. Emit ONE gen-ui block whose root contains an SVG element: { "type":"SVG", "props":{ "markup":"<svg …>…</svg>" } } using the markup returned by fauna_render_circuit verbatim.\n' +
+              '6. After the gen-ui block, write the prose summary (component values, expected behaviour, key formulas).\n' +
+              'Forbidden: pasting the raw <svg> into a plaintext/html/markdown code fence; describing the schematic without calling fauna_render_circuit; computing analytically only.'
+          });
+        }
+      } catch (_) { /* non-fatal */ }
       console.log(
         `[chat] context: ${trimmed.length}/${messages.length} msgs, ` +
         `~${bodyTokens}/${budget.bodyTokenLimit} body tokens ` +
