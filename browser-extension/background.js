@@ -1028,10 +1028,31 @@ function showNotification(id, title, message, iconUrl) {
 
 // ── Push events (tab → Fauna) ─────────────────────────────────────────────
 
+// Strip large fields (base64 snapshot, full HTML/text dumps) before broadcasting
+// to the sidepanel. The activity log only needs lightweight metadata; passing
+// multi-hundred-KB payloads through chrome.runtime.sendMessage every event
+// causes the sidepanel UI to freeze under repeated snapshots.
+function _liteForSidebar(data) {
+  if (!data || typeof data !== 'object') return data;
+  var out = {};
+  for (var k in data) {
+    if (!Object.prototype.hasOwnProperty.call(data, k)) continue;
+    if (k === 'base64' || k === 'html' || k === 'rawHtml' || k === 'screenshot') continue;
+    var v = data[k];
+    // Truncate very long strings (e.g. full page text)
+    if (typeof v === 'string' && v.length > 4000) {
+      out[k] = v.slice(0, 4000);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
 function pushEvent(eventType, data) {
   send({ type: 'event', event: eventType, data });
-  // Also broadcast to the sidebar so it can update its activity feed
-  chrome.runtime.sendMessage({ type: 'fauna:event', event: eventType, data }).catch(() => {});
+  // Broadcast a LIGHTWEIGHT copy to the sidebar — never the base64/HTML blobs.
+  chrome.runtime.sendMessage({ type: 'fauna:event', event: eventType, data: _liteForSidebar(data) }).catch(() => {});
 }
 
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
