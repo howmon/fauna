@@ -72,7 +72,7 @@ function persistWindowState() {
 
 // ── Window ────────────────────────────────────────────────────────────────
 
-async function createWindow({ convId, projectId, bounds } = {}) {
+async function createWindow({ convId, projectId, bounds, blank } = {}) {
   const winOpts = {
     width:  1260,
     height:  840,
@@ -122,6 +122,7 @@ async function createWindow({ convId, projectId, bounds } = {}) {
   const params = new URLSearchParams();
   if (convId)    params.set('conv',    convId);
   if (projectId) params.set('project', projectId);
+  if (blank)     params.set('blank',   '1');
   const qs = params.toString();
   win.loadURL(`http://localhost:${PORT}${qs ? '?' + qs : ''}`);
 
@@ -216,7 +217,7 @@ function buildMenu() {
       label: 'File',
       submenu: [
         { label: 'New Conversation', accelerator: 'Cmd+N', click: () => js('newConversation()') },
-        { label: 'New Window',       accelerator: 'Cmd+Shift+N', click: () => createWindow() },
+        { label: 'New Window',       accelerator: 'Cmd+Shift+N', click: () => createWindow({ blank: true }) },
         { type: 'separator' },
         { label: 'Clear Conversation', accelerator: 'Cmd+K', click: () => js('clearConversation()') },
         { type: 'separator' },
@@ -542,7 +543,7 @@ function _buildTrayMenu() {
     { label: 'Windows', enabled: false },
     ...windowItems,
     { type: 'separator' },
-    { label: 'New Window', accelerator: IS_MAC ? 'Cmd+Shift+N' : 'Ctrl+Shift+N', click: () => createWindow() },
+    { label: 'New Window', accelerator: IS_MAC ? 'Cmd+Shift+N' : 'Ctrl+Shift+N', click: () => createWindow({ blank: true }) },
     { label: 'Toggle Task Widget', click: () => toggleWidget() },
     { type: 'separator' },
     { label: 'Quit Fauna', click: () => { app.isQuitting = true; app.quit(); } },
@@ -675,8 +676,8 @@ if (!gotLock) {
 
 // Renderer-driven request to open another window (multi-window support).
 ipcMain.on('fauna:open-window', (_event, payload) => {
-  const { convId, projectId } = payload || {};
-  createWindow({ convId, projectId });
+  const { convId, projectId, blank } = payload || {};
+  createWindow({ convId, projectId, blank });
 });
 
 // Renderer reports the active conversation / project for its window so we can

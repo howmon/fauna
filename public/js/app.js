@@ -8,9 +8,13 @@
 function _faunaLaunchParams() {
   try {
     var p = new URLSearchParams(window.location.search || '');
-    return { convId: p.get('conv') || null, projectId: p.get('project') || null };
+    return {
+      convId:    p.get('conv')    || null,
+      projectId: p.get('project') || null,
+      blank:     p.get('blank')   === '1',
+    };
   } catch (_) {
-    return { convId: null, projectId: null };
+    return { convId: null, projectId: null, blank: false };
   }
 }
 
@@ -128,6 +132,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Load last conversation or show empty state
   if (launch.convId && getConv(launch.convId)) {
     loadConversation(launch.convId);
+  } else if (launch.blank) {
+    // New window opened explicitly blank — do not auto-load the most recent conv
+    showEmpty();
   } else if (state.conversations.length) {
     loadConversation(state.conversations[0].id);
   } else {
