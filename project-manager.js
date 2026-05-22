@@ -111,13 +111,33 @@ function uid(prefix) {
 
 export function createProject(opts = {}) {
   const projects = readProjects();
+  const name = (opts.name || 'New Project').slice(0, 120);
+  let rootPath = opts.rootPath || null;
+  // If no folder is set, auto-create one under ~/Documents/Fauna/<sanitized name>
+  if (!rootPath) {
+    try {
+      const safe = name.trim().replace(/[<>:"/\\|?*\x00-\x1f]+/g, '_').replace(/\s+/g, ' ').slice(0, 80) || 'Untitled Project';
+      const base = path.join(os.homedir(), 'Documents', 'Fauna');
+      let candidate = path.join(base, safe);
+      let n = 2;
+      while (fs.existsSync(candidate)) {
+        candidate = path.join(base, `${safe} (${n++})`);
+        if (n > 999) break;
+      }
+      fs.mkdirSync(candidate, { recursive: true });
+      rootPath = candidate;
+    } catch (e) {
+      console.warn('[projects] failed to auto-create root folder:', e?.message || e);
+      rootPath = null;
+    }
+  }
   const project = {
     id:              uid('proj'),
-    name:            (opts.name || 'New Project').slice(0, 120),
+    name,
     description:     opts.description || '',
     icon:            opts.icon || null,
     color:           ACCENT_COLORS.includes(opts.color) ? opts.color : 'teal',
-    rootPath:        opts.rootPath || null,
+    rootPath,
     sources:         [],
     contexts:        [],
     connectors:      [],
@@ -125,9 +145,9 @@ export function createProject(opts = {}) {
     taskIds:         [],
     defaultAgent:    opts.defaultAgent || null,
     permissions: {
-      shell:     opts.permissions?.shell ?? (opts.rootPath ? { cwd: opts.rootPath } : true),
-      fileRead:  opts.permissions?.fileRead  || (opts.rootPath ? [opts.rootPath] : []),
-      fileWrite: opts.permissions?.fileWrite || (opts.rootPath ? [opts.rootPath] : []),
+      shell:     opts.permissions?.shell ?? (rootPath ? { cwd: rootPath } : true),
+      fileRead:  opts.permissions?.fileRead  || (rootPath ? [rootPath] : []),
+      fileWrite: opts.permissions?.fileWrite || (rootPath ? [rootPath] : []),
       browser:   opts.permissions?.browser ?? false,
     },
     createdAt:    now(),
@@ -144,7 +164,37 @@ export function getProject(id) {
 }
 
 export function getAllProjects() {
-  return readProjects();
+  const projects = readProjects();
+  // Backfill: any project without a rootPath gets one under ~/Documents/Fauna
+  let dirty = false;
+  for (const p of projects) {
+    if (p.rootPath) continue;
+    try {
+      const safe = String(p.name || 'Untitled Project').trim()
+        .replace(/[<>:"/\\|?*\x00-\x1f]+/g, '_').replace(/\s+/g, ' ').slice(0, 80) || 'Untitled Project';
+      const base = path.join(os.homedir(), 'Documents', 'Fauna');
+      let candidate = path.join(base, safe);
+      let n = 2;
+      while (fs.existsSync(candidate)) {
+        candidate = path.join(base, `${safe} (${n++})`);
+        if (n > 999) break;
+      }
+      fs.mkdirSync(candidate, { recursive: true });
+      p.rootPath = candidate;
+      p.permissions = p.permissions || {};
+      if (p.permissions.shell === undefined || p.permissions.shell === true) p.permissions.shell = { cwd: candidate };
+      if (!Array.isArray(p.permissions.fileRead)  || p.permissions.fileRead.length  === 0) p.permissions.fileRead  = [candidate];
+      if (!Array.isArray(p.permissions.fileWrite) || p.permissions.fileWrite.length === 0) p.permissions.fileWrite = [candidate];
+      p.updatedAt = now();
+      dirty = true;
+    } catch (e) {
+      console.warn('[projects] backfill rootPath failed for', p.id, e?.message || e);
+    }
+  }
+  if (dirty) {
+    try { writeProjects(projects); } catch (e) { console.warn('[projects] backfill save failed:', e?.message || e); }
+  }
+  return projects;
 }
 
 export function updateProject(id, patch = {}) {

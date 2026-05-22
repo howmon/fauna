@@ -92,6 +92,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Apply ?project= BEFORE loadProjects() so its validation honors the override
   // without persisting it (in-memory only for this window).
   if (launch.projectId) state.activeProjectId = launch.projectId;
+  // Blank new-window: also exit any active project (in-memory only; do not
+  // touch localStorage so other windows keep their selection).
+  else if (launch.blank) state.activeProjectId = null;
 
   await loadSysCtx();
   await loadModels();
