@@ -335,6 +335,9 @@ function getAgentSystemPrompt() {
     parts.push('- Provide specific, self-contained instructions in each delegation block so the sub-agent has everything it needs.');
     parts.push('- Keep each delegation small enough to describe in 2-3 sentences. If a task is bigger, split it into multiple delegations.');
     parts.push('- Do NOT perform the sub-agent\'s work yourself. Do NOT write out content that the delegated agent is supposed to produce.');
+    parts.push('- DO NOT overload one sub-agent with the whole pipeline. Each delegation should ask for ONE clearly-scoped output (e.g. "introspect component X" OR "write spec from data Y" — not both). If you find yourself writing a delegation that says "do A, then B, then C", split it: emit separate [DELEGATE:] blocks for different agents, or wait for round 2 to chain.');
+    parts.push('- Prefer multiple smaller delegations over one large one — even when delegating to the same agent, distinct phases (gather → transform → verify) should be separate blocks or separate rounds.');
+    parts.push('- Round 1 typically gathers data. Round 2+ typically transforms, generates, or verifies using the round-1 results.');
     parts.push('- Only respond without delegating if the request is genuinely trivial (e.g. a one-sentence factual question).');
     parts.push('- After receiving all delegation results, synthesize and present a unified response to the user.');
     parts.push('');
