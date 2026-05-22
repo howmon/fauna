@@ -560,7 +560,7 @@ function createMessageEl(role, agentInfo) {
   return div;
 }
 
-function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML, reasoning) {
+function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML, reasoning, widgets) {
   var el     = createMessageEl(role, agentInfo);
   var body   = el.querySelector('.msg-body');
   if (!animate) el.style.animation = 'none';
@@ -617,6 +617,16 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
   }
 
   getConvInner(state.currentId).appendChild(el);
+
+  // Remount any dynamic widgets that were emitted in this historical message.
+  // We mount AFTER the element is in the DOM so the iframe sizes correctly.
+  if (role === 'assistant' && widgets && widgets.length && window.faunaDynamicWidgets) {
+    widgets.forEach(function(w) {
+      if (!w || !w.widgetId || !w.bundle) return;
+      try { window.faunaDynamicWidgets.mountWidget(w, el); }
+      catch (e) { try { dbg('widget remount failed: ' + (e && e.message), 'warn'); } catch (_) {} }
+    });
+  }
 }
 
 function sendButtonAction() {

@@ -790,6 +790,9 @@ async function streamResponse(conv) {
   }
   msgEl.dataset.streamingLive = '1';
   var bodyEl = msgEl.querySelector('.msg-body');
+  // Track widgets emitted during this assistant turn so they can be persisted
+  // on the message and remounted after a reload.
+  var _streamWidgets = [];
   function _ensureLiveMessageAttached() {
     if (!conv._streaming) return;
     if (!msgEl) return;
@@ -1048,6 +1051,14 @@ async function streamResponse(conv) {
           }
           if (evt.type === 'widget_emitted' && window.faunaDynamicWidgets) {
             dbg('widget_emitted: ' + evt.widgetId, 'ok');
+            // Persist a serialisable snapshot so the widget can be remounted on reload.
+            _streamWidgets.push({
+              widgetId: evt.widgetId,
+              title:    evt.title,
+              bundle:   evt.bundle,
+              tools:    evt.tools || [],
+              fromPlaybook: !!evt.fromPlaybook,
+            });
             // Mount inside the current AI bubble (after .msg-body) so subsequent
             // bodyEl.innerHTML re-renders during streaming don't wipe the iframe.
             // Falls back to the conv inner container, then chat scroll, then body.
@@ -1188,6 +1199,7 @@ async function streamResponse(conv) {
     var aiMsg = { role: 'assistant', content: buffer };
     if (_currentAgentInfo) aiMsg.agentInfo = _currentAgentInfo;
     if (_reasoning) aiMsg.reasoning = { durationSeconds: _reasoning.durationSeconds != null ? _reasoning.durationSeconds : (_reasoning.startedAt ? Math.round((Date.now() - _reasoning.startedAt) / 1000) : null) };
+    if (_streamWidgets.length) aiMsg.widgets = _streamWidgets;
     conv.messages.push(aiMsg);
     conv._streaming = false;
     conv._abortController = null;
