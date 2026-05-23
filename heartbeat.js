@@ -18,15 +18,19 @@ let _log = [];
 let _aiCaller = null;     // function(prompt) → string
 let _notifier = null;     // function(title, body)
 let _powerSave = null;    // optional { acquire, release } guard
+let _alertSink = null;    // optional function(alert) — pushed to widget via SSE
 
 // ── Default settings ────────────────────────────────────────────────────
 
 const DEFAULTS = {
   enabled: false,
   intervalMinutes: 30,
-  prompt: 'Check my system status. If anything needs immediate attention, prefix your response with HEARTBEAT_URGENT|source|summary. Otherwise respond with HEARTBEAT_OK followed by a brief summary.',
+  prompt: 'Check my system status. If anything needs immediate attention, prefix your response with HEARTBEAT_URGENT|source|summary|recommended_action (the |recommended_action segment is optional but encouraged). Otherwise respond with HEARTBEAT_OK followed by a brief summary.',
   schedule: { days: [1, 2, 3, 4, 5], startHour: 9, endHour: 17 }, // weekdays 9am-5pm
   model: '',  // empty = use active conversation model
+  // Notification surfaces — each toggleable independently from the widget.
+  osNotify: true,      // fire native OS notification on urgent
+  widgetNotify: true,  // push alert to widget panel via SSE on urgent
 };
 
 // ── Persistence ────────────────────────────────────────────────────────
@@ -56,6 +60,8 @@ export function updateSettings(patch) {
   if (patch.prompt !== undefined) _settings.prompt = String(patch.prompt).slice(0, 2000);
   if (patch.schedule) _settings.schedule = { ..._settings.schedule, ...patch.schedule };
   if (patch.model !== undefined) _settings.model = String(patch.model);
+  if (patch.osNotify !== undefined) _settings.osNotify = !!patch.osNotify;
+  if (patch.widgetNotify !== undefined) _settings.widgetNotify = !!patch.widgetNotify;
   _save();
   _reschedule();
   return _settings;
@@ -117,8 +123,25 @@ export async function runHeartbeat(force = false) {
     status = parsed.status;
     urgent = parsed.urgent;
 
-    if (urgent && _notifier) {
-      _notifier('🫀 Heartbeat Alert', urgent.summary + (urgent.source ? ` (${urgent.source})` : ''));
+    if (urgent) {
+      const alert = {
+        id: 'hb-' + startTime.toString(36) + '-' + Math.random().toString(36).slice(2, 8),
+        timestamp: startTime,
+        source: urgent.source,
+        summary: urgent.summary,
+        action: urgent.action || '',
+      };
+      // OS notification surface — toggleable.
+      if (_settings.osNotify !== false && _notifier) {
+        const body = urgent.summary +
+          (urgent.source ? ` (${urgent.source})` : '') +
+          (urgent.action ? `\nSuggested: ${urgent.action}` : '');
+        _notifier('🫀 Heartbeat Alert', body);
+      }
+      // Widget notification surface — toggleable.
+      if (_settings.widgetNotify !== false && _alertSink) {
+        try { _alertSink(alert); } catch (e) { console.warn('[heartbeat] alert sink failed:', e?.message || e); }
+      }
     }
   } catch (e) {
     status = 'error';
@@ -151,15 +174,19 @@ function _parseResponse(text) {
   }
   text = String(text || '');
 
-  // Look for HEARTBEAT_URGENT|source|summary. Anchored at a line boundary
-  // (multiline flag) so a quoted example earlier in the response doesn't
-  // trigger a false positive, and case-insensitive in case the model
-  // varies casing. Summary is captured up to end-of-line.
-  const urgentMatch = text.match(/^[\s>*-]*HEARTBEAT_URGENT\|([^|\n]*)\|([^\n]+)/im);
+  // Look for HEARTBEAT_URGENT|source|summary|action — action segment optional.
+  // Anchored at a line boundary (multiline flag) so a quoted example earlier
+  // in the response doesn't trigger a false positive, and case-insensitive
+  // in case the model varies casing.
+  const urgentMatch = text.match(/^[\s>*-]*HEARTBEAT_URGENT\|([^|\n]*)\|([^|\n]+)(?:\|([^\n]+))?/im);
   if (urgentMatch) {
     return {
       status: 'urgent',
-      urgent: { source: urgentMatch[1].trim(), summary: urgentMatch[2].trim() },
+      urgent: {
+        source:  urgentMatch[1].trim(),
+        summary: urgentMatch[2].trim(),
+        action: (urgentMatch[3] || '').trim(),
+      },
     };
   }
   // HEARTBEAT_OK — also anchor + case-insensitive.
@@ -191,6 +218,12 @@ export function startHeartbeat(aiCaller, notifier) {
 
 export function setHeartbeatPowerSave(guard) {
   _powerSave = guard && typeof guard.acquire === 'function' ? guard : null;
+}
+
+// Wire a sink for urgent-alert notifications destined for the widget panel.
+// `sink` is called as `sink({ id, timestamp, source, summary, action })`.
+export function setHeartbeatAlertSink(sink) {
+  _alertSink = typeof sink === 'function' ? sink : null;
 }
 
 export function stopHeartbeat() {

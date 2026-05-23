@@ -414,9 +414,151 @@ function connectSSE() {
   }
 }
 
+// ── Heartbeat alerts ─────────────────────────────────────────────────────
+// Subscribes to /api/heartbeat/alerts/stream. Renders urgent items with
+// summary + suggested action in a panel at the top of the widget so the
+// user can act on them while the main app is minimised.
+
+const HB_ALERTS_API = '/api/heartbeat/alerts';
+const HB_SETTINGS_API = '/api/heartbeat/settings';
+let _alerts = [];         // active (not dismissed) alerts
+let _alertsEvsrc = null;
+let _hbSettings = null;   // mirror of /api/heartbeat/settings for the toggle
+
+function _alertsEl() { return document.getElementById('alerts-panel'); }
+function _badgeEl()  { return document.getElementById('alert-badge'); }
+function _alertsBtn(){ return document.getElementById('btn-alerts'); }
+
+function _fmtTs(ts) {
+  try {
+    const d = new Date(ts);
+    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  } catch (_) { return ''; }
+}
+function _esc(s) { return String(s || '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+
+function renderAlerts() {
+  const panel = _alertsEl();
+  const badge = _badgeEl();
+  if (!panel || !badge) return;
+  const muted = _hbSettings && _hbSettings.widgetNotify === false;
+  if (!_alerts.length || muted) {
+    panel.classList.add('hidden');
+    panel.innerHTML = '';
+    badge.classList.add('hidden');
+    badge.textContent = '0';
+    return;
+  }
+  panel.classList.remove('hidden');
+  panel.innerHTML = _alerts.map(a => `
+    <div class="alert-card" data-id="${_esc(a.id)}">
+      <div class="alert-head">
+        <i class="ti ti-alert-triangle"></i>
+        <span class="alert-source">${_esc(a.source || 'heartbeat')}</span>
+        <span class="alert-ts">${_fmtTs(a.timestamp)}</span>
+      </div>
+      <div class="alert-summary">${_esc(a.summary)}</div>
+      ${a.action ? `<div class="alert-action">${_esc(a.action)}</div>` : ''}
+      <div class="alert-row">
+        <button class="alert-btn act-open"   data-id="${_esc(a.id)}">Open in Fauna</button>
+        <button class="alert-btn dismiss act-dismiss" data-id="${_esc(a.id)}">Dismiss</button>
+      </div>
+    </div>
+  `).join('');
+  badge.textContent = String(_alerts.length);
+  badge.classList.remove('hidden');
+}
+
+function _dismissAlert(id) {
+  _alerts = _alerts.filter(a => a.id !== id);
+  renderAlerts();
+  fetch(`${HB_ALERTS_API}/${encodeURIComponent(id)}/dismiss`, { method: 'POST' }).catch(() => {});
+}
+
+function connectAlertsSSE() {
+  if (_alertsEvsrc) { _alertsEvsrc.close(); _alertsEvsrc = null; }
+  try {
+    _alertsEvsrc = new EventSource(`${HB_ALERTS_API}/stream`);
+    _alertsEvsrc.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'snapshot' && Array.isArray(msg.alerts)) {
+          _alerts = msg.alerts;
+          renderAlerts();
+        } else if (msg.type === 'alert' && msg.alert) {
+          // Avoid duplicates if snapshot already included it.
+          if (!_alerts.some(a => a.id === msg.alert.id)) {
+            _alerts = [msg.alert, ..._alerts];
+            renderAlerts();
+          }
+        } else if (msg.type === 'dismissed' && msg.id) {
+          _alerts = _alerts.filter(a => a.id !== msg.id);
+          renderAlerts();
+        }
+      } catch (_) {}
+    };
+    _alertsEvsrc.onerror = () => {
+      _alertsEvsrc.close();
+      _alertsEvsrc = null;
+      setTimeout(connectAlertsSSE, 5000);
+    };
+  } catch (_) {
+    setTimeout(connectAlertsSSE, 5000);
+  }
+}
+
+async function loadHbSettings() {
+  try {
+    const r = await fetch(HB_SETTINGS_API);
+    if (r.ok) {
+      _hbSettings = await r.json();
+      _applyAlertsButtonState();
+      renderAlerts();
+    }
+  } catch (_) {}
+}
+
+function _applyAlertsButtonState() {
+  const btn = _alertsBtn();
+  if (!btn) return;
+  const on = !_hbSettings || _hbSettings.widgetNotify !== false;
+  btn.classList.toggle('alerts-off', !on);
+  btn.title = on ? 'Heartbeat alerts: on (click to mute)' : 'Heartbeat alerts: off (click to enable)';
+}
+
+async function toggleAlerts() {
+  const next = !(_hbSettings && _hbSettings.widgetNotify === false) ? false : true;
+  // Optimistic UI
+  _hbSettings = { ...(_hbSettings || {}), widgetNotify: next };
+  _applyAlertsButtonState();
+  renderAlerts();
+  try {
+    const r = await fetch(HB_SETTINGS_API, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ widgetNotify: next }),
+    });
+    if (r.ok) _hbSettings = await r.json();
+  } catch (_) {}
+  _applyAlertsButtonState();
+  renderAlerts();
+}
+
+// Wire alert UI events (panel uses event delegation since cards are recreated).
+document.addEventListener('click', (e) => {
+  const dismiss = e.target.closest('.act-dismiss');
+  if (dismiss) { _dismissAlert(dismiss.dataset.id); return; }
+  const open = e.target.closest('.act-open');
+  if (open && window.widgetAPI?.openInApp) { window.widgetAPI.openInApp(); return; }
+});
+const _btnAlerts = document.getElementById('btn-alerts');
+if (_btnAlerts) _btnAlerts.addEventListener('click', toggleAlerts);
+
 // ── Init ──────────────────────────────────────────────────────────────────
 
 fetchTasks();
 connectSSE();
+loadHbSettings();
+connectAlertsSSE();
 // Fallback poll every 30s for missed SSE events
 _pollTimer = setInterval(fetchTasks, 30000);

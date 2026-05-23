@@ -17,6 +17,7 @@
     </div>
     <div class="titlebar-btns">
       <button id="btn-new"       class="tb-btn" title="New automation"><i class="ti ti-plus"></i></button>
+      <button id="btn-alerts"    class="tb-btn" title="Heartbeat alerts: on"><i class="ti ti-bell"></i><span id="alert-badge" class="alert-badge hidden">0</span></button>
       <button id="btn-open-app"  class="tb-btn" title="Open in Fauna"><i class="ti ti-layout-sidebar"></i></button>
       <button id="btn-pin"       class="tb-btn" title="Pin on top"><i class="ti ti-pin"></i></button>
       <button id="btn-close"     class="tb-btn" title="Hide widget"><i class="ti ti-x"></i></button>
@@ -53,6 +54,9 @@
       <button id="qa-submit" class="primary">Create</button>
     </div>
   </div>
+
+  <!-- Heartbeat alert panel (urgent items, surfaces while app is minimized) -->
+  <div id="alerts-panel" class="hidden"></div>
 
   <!-- Tabs: Active / Recent -->
   <div id="tab-bar">

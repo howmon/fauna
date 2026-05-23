@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   getSettings, updateSettings, getLog, clearLog,
   runHeartbeat, startHeartbeat, stopHeartbeat,
+  setHeartbeatAlertSink,
 } from '../heartbeat.js';
 
 // Mock fs
@@ -220,6 +221,78 @@ describe('heartbeat', () => {
         const r = await runHeartbeat(true);
         expect(r.status).toBe('ok');
       }
+    });
+  });
+
+  // ── Notification widget feature ────────────────────────────────────
+  describe('notification widget (alert sink + toggles)', () => {
+    it('parses optional |action 4th field', async () => {
+      const aiCaller = vi.fn().mockResolvedValue('HEARTBEAT_URGENT|email|Boss replied|Open the thread and respond');
+      startHeartbeat(aiCaller, vi.fn());
+      updateSettings({ enabled: true });
+      const r = await runHeartbeat(true);
+      expect(r.status).toBe('urgent');
+      expect(r.urgent.source).toBe('email');
+      expect(r.urgent.summary).toContain('Boss');
+      expect(r.urgent.action).toContain('Open the thread');
+    });
+
+    it('omitting action still parses summary correctly', async () => {
+      const aiCaller = vi.fn().mockResolvedValue('HEARTBEAT_URGENT|jira|PROD-123 is down');
+      startHeartbeat(aiCaller, vi.fn());
+      updateSettings({ enabled: true });
+      const r = await runHeartbeat(true);
+      expect(r.urgent.summary).toBe('PROD-123 is down');
+      expect(r.urgent.action).toBe('');
+    });
+
+    it('publishes urgent alerts to the alert sink with id+timestamp', async () => {
+      const sink = vi.fn();
+      setHeartbeatAlertSink(sink);
+      const aiCaller = vi.fn().mockResolvedValue('HEARTBEAT_URGENT|cal|Standup in 5m|Join the Teams call');
+      startHeartbeat(aiCaller, vi.fn());
+      updateSettings({ enabled: true });
+      await runHeartbeat(true);
+      expect(sink).toHaveBeenCalledTimes(1);
+      const alert = sink.mock.calls[0][0];
+      expect(alert.id).toMatch(/^hb-/);
+      expect(alert.source).toBe('cal');
+      expect(alert.summary).toBe('Standup in 5m');
+      expect(alert.action).toBe('Join the Teams call');
+      expect(typeof alert.timestamp).toBe('number');
+      setHeartbeatAlertSink(null);
+    });
+
+    it('suppresses widget alert when widgetNotify is false (OS still fires)', async () => {
+      const sink = vi.fn();
+      const notifier = vi.fn();
+      setHeartbeatAlertSink(sink);
+      startHeartbeat(vi.fn().mockResolvedValue('HEARTBEAT_URGENT|email|x'), notifier);
+      updateSettings({ enabled: true, widgetNotify: false, osNotify: true });
+      await runHeartbeat(true);
+      expect(sink).not.toHaveBeenCalled();
+      expect(notifier).toHaveBeenCalled();
+      setHeartbeatAlertSink(null);
+    });
+
+    it('suppresses OS notification when osNotify is false (widget still fires)', async () => {
+      const sink = vi.fn();
+      const notifier = vi.fn();
+      setHeartbeatAlertSink(sink);
+      startHeartbeat(vi.fn().mockResolvedValue('HEARTBEAT_URGENT|email|x'), notifier);
+      updateSettings({ enabled: true, widgetNotify: true, osNotify: false });
+      await runHeartbeat(true);
+      expect(sink).toHaveBeenCalled();
+      expect(notifier).not.toHaveBeenCalled();
+      setHeartbeatAlertSink(null);
+    });
+
+    it('does not crash if no sink is set', async () => {
+      setHeartbeatAlertSink(null);
+      startHeartbeat(vi.fn().mockResolvedValue('HEARTBEAT_URGENT|x|y'), vi.fn());
+      updateSettings({ enabled: true });
+      const r = await runHeartbeat(true);
+      expect(r.status).toBe('urgent');
     });
   });
 });

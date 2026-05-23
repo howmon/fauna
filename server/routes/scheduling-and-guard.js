@@ -14,6 +14,7 @@ import {
 import {
   isCommandSafe, addAutoAllow, getAutoAllowList, removeAutoAllow, clearAutoAllow,
 } from '../../permission-guard.js';
+import * as alertHub from '../lib/alert-hub.js';
 
 export function registerSchedulingAndGuardRoutes(app) {
   // ── Heartbeat Monitoring ────────────────────────────────────────────────
@@ -42,6 +43,32 @@ export function registerSchedulingAndGuardRoutes(app) {
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
+  });
+
+  // ── Heartbeat Alerts (widget notification panel) ────────────────────
+  // Server-Sent Events stream: pushes { type: 'snapshot' | 'alert' | 'dismissed' }
+  // events. Used by the floating widget window so urgent items surface even
+  // when the main app is minimised.
+  app.get('/api/heartbeat/alerts/stream', (req, res) => {
+    res.set({
+      'Content-Type':  'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection':    'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.flushHeaders?.();
+    alertHub.subscribe(res);
+  });
+
+  // Snapshot — non-streaming fallback for clients that can't keep an SSE open.
+  app.get('/api/heartbeat/alerts', (req, res) => {
+    res.json(alertHub.listActive());
+  });
+
+  app.post('/api/heartbeat/alerts/:id/dismiss', (req, res) => {
+    const ok = alertHub.dismiss(req.params.id);
+    if (!ok) return res.status(400).json({ ok: false, error: 'id required' });
+    res.json({ ok: true });
   });
 
   // ── Scheduled Workflows ─────────────────────────────────────────────────

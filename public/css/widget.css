@@ -411,3 +411,71 @@ body {
   transition: all .12s;
 }
 .empty-cta:hover { background: var(--w-accent); border-color: transparent; color: #fff; }
+
+/* ── Heartbeat alerts panel ─────────────────────────────────────────── */
+#alerts-panel {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 6px 10px 0 10px;
+}
+#alerts-panel.hidden { display: none; }
+.alert-card {
+  background: linear-gradient(135deg, rgba(220,70,90,0.18), rgba(120,30,80,0.18));
+  border: 1px solid rgba(220,70,90,0.55);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 4px;
+  animation: alertPulse 0.6s ease-out;
+}
+@keyframes alertPulse {
+  0%   { transform: translateY(-4px); opacity: 0; }
+  100% { transform: translateY(0);    opacity: 1; }
+}
+.alert-card.muted {
+  background: var(--w-surface);
+  border-color: var(--w-border);
+}
+.alert-head {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; opacity: 0.85;
+}
+.alert-head .ti { font-size: 13px; color: #ff8190; }
+.alert-card.muted .alert-head .ti { color: var(--w-accent); }
+.alert-source { font-weight: 600; opacity: 0.9; }
+.alert-ts { margin-left: auto; opacity: 0.55; font-size: 10px; }
+.alert-summary { font-size: 13px; line-height: 1.35; }
+.alert-action {
+  font-size: 11px;
+  background: rgba(255,255,255,0.05);
+  border-left: 2px solid var(--w-accent);
+  padding: 4px 6px;
+  border-radius: 0 4px 4px 0;
+  opacity: 0.9;
+}
+.alert-action::before { content: 'Suggested: '; opacity: 0.7; font-weight: 600; }
+.alert-row { display: flex; gap: 6px; justify-content: flex-end; margin-top: 2px; }
+.alert-btn {
+  background: var(--w-surface2);
+  border: 1px solid var(--w-border);
+  color: var(--w-text, #e6e6e6);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.alert-btn:hover { background: var(--w-accent); border-color: transparent; color: #fff; }
+.alert-btn.dismiss { opacity: 0.7; }
+
+/* Bell badge in titlebar */
+.alert-badge {
+  background: #ff5577;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 8px;
+  padding: 1px 5px;
+  margin-left: 3px;
+  min-width: 14px;
+  text-align: center;
+}
+.alert-badge.hidden { display: none; }
+.tb-btn.alerts-off { opacity: 0.4; }

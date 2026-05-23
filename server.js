@@ -23,7 +23,8 @@ import {
 } from './project-manager.js';
 import { loadInstructionFiles } from './lib/instruction-files.js';
 import { runDecay } from './memory-store.js';
-import { startHeartbeat, setHeartbeatPowerSave } from './heartbeat.js';
+import { startHeartbeat, setHeartbeatPowerSave, setHeartbeatAlertSink } from './heartbeat.js';
+import * as alertHub from './server/lib/alert-hub.js';
 import { startWorkflowTimer, setWorkflowPowerSave } from './workflow-manager.js';
 import {
   CONFIG_DIR, readSavedConfig, getGhToken, getCopilotClient,
@@ -468,6 +469,9 @@ export function startServer(port) {
     // Start heartbeat and workflow timers
     setHeartbeatPowerSave(_powerSave);
     setWorkflowPowerSave(_powerSave);
+    // Push urgent heartbeat alerts to the widget panel via the alert hub.
+    try { setHeartbeatAlertSink(alertHub.publish); }
+    catch (e) { console.warn('[server] alert-hub wire failed:', e?.message || e); }
     startHeartbeat(internalAICaller, internalNotifier);
     startWorkflowTimer(internalAICaller, internalNotifier);
     startTeamsBridge(internalAICaller, internalNotifier);
