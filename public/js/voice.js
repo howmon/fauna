@@ -1490,15 +1490,20 @@ function startDictation() {
       _dictMediaRecorder.start(100);
       _dictSetState('listening');
 
-      // VAD: stop on silence after speech detected
+      // VAD: stop on silence after speech detected. Also drives a CSS
+      // variable on #input-wrap so the border can pulse with audio energy.
       var buf       = new Float32Array(analyser.fftSize);
       var hadSpeech = false;
       var silenceMs = 0;
+      var wrap      = document.getElementById('input-wrap');
       var maxTimer  = setTimeout(function() { _dictStopRecording(); }, DICT_MAX_MS);
       var vadTimer  = setInterval(function() {
         if (_dictState !== 'listening') { clearInterval(vadTimer); clearTimeout(maxTimer); return; }
         analyser.getFloatTimeDomainData(buf);
         var rms = _rms(buf);
+        // Map RMS → 0..1 with a soft compressor; 0.05 is loud-but-not-clipped.
+        var lvl = Math.min(1, Math.max(0, rms * 18));
+        if (wrap) wrap.style.setProperty('--voice-level', lvl.toFixed(3));
         if (rms > DICT_RMS_THRESHOLD) {
           hadSpeech = true;
           silenceMs = 0;
@@ -1539,7 +1544,11 @@ async function _dictTranscribe() {
   // Ensure model is downloaded before first transcription
   if (!_whisperModelReady) {
     var modelOk = await _ensureWhisperModel();
-    if (!modelOk) { _dictSetState('idle'); return; }
+    if (!modelOk) {
+      _dictSetState('idle');
+      if (typeof showToast === 'function') showToast('Voice model not ready');
+      return;
+    }
   }
 
   var blobType = (_dictChunks[0] && _dictChunks[0].type) || 'audio/webm';
@@ -1557,7 +1566,11 @@ async function _dictTranscribe() {
       throw new Error((data && (data.message || data.error)) || ('HTTP ' + resp.status));
     }
     var text = (data.text || '').replace(WHISPER_NOISE_TOKENS, '').trim();
-    if (text) _dictHandleTranscript(text);
+    if (text) {
+      _dictHandleTranscript(text);
+    } else {
+      if (typeof showToast === 'function') showToast('Didn\u2019t catch that');
+    }
   } catch (err) {
     console.warn('[dictate] transcribe error:', err);
     if (typeof showToast === 'function') showToast('Dictation failed — try again');

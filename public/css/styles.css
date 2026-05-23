@@ -1148,6 +1148,37 @@ body.is-resizing webview { pointer-events: none !important; }
   transition: border-color .15s;
 }
 #input-wrap:focus-within { border-color: color-mix(in srgb, var(--accent) 50%, var(--fau-border)); }
+
+/* ── Voice dictation feedback ──────────────────────────────────────────
+   While dictating, --voice-level is updated in real time (0..1) from the
+   VAD loop. The pseudo-element renders a glowing halo whose intensity
+   tracks that value so the user can see their voice "synapse". */
+#input-wrap.dictating,
+#input-wrap.dictating-processing { position: relative; }
+#input-wrap.dictating {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--fau-border));
+  box-shadow:
+    0 0 0 calc(1px + 2px * var(--voice-level, 0)) color-mix(in srgb, var(--accent) calc(20% + 40% * var(--voice-level, 0)), transparent),
+    0 0 calc(8px + 22px * var(--voice-level, 0)) color-mix(in srgb, var(--accent) calc(15% + 35% * var(--voice-level, 0)), transparent);
+  transition: box-shadow 80ms linear, border-color 120ms linear;
+}
+#input-wrap.dictating::before {
+  content: '';
+  position: absolute; inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--accent) calc(30% + 50% * var(--voice-level, 0)), transparent);
+  opacity: calc(.4 + .6 * var(--voice-level, 0));
+  transition: opacity 80ms linear, border-color 80ms linear;
+}
+#input-wrap.dictating-processing {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--fau-border));
+  animation: dictateProcessingPulse 1.2s ease-in-out infinite;
+}
+@keyframes dictateProcessingPulse {
+  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent), 0 0 10px color-mix(in srgb, var(--accent) 20%, transparent); }
+  50%      { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 22px color-mix(in srgb, var(--accent) 40%, transparent); }
+}
 /* Main single-line row: + · textarea · mic · stop · send */
 #textarea-row {
   display: flex; align-items: flex-end; gap: 6px;
