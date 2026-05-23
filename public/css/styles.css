@@ -1151,25 +1151,27 @@ body.is-resizing webview { pointer-events: none !important; }
 
 /* ── Voice dictation feedback ──────────────────────────────────────────
    While dictating, --voice-level is updated in real time (0..1) from the
-   VAD loop. The pseudo-element renders a glowing halo whose intensity
-   tracks that value so the user can see their voice "synapse". */
+   VAD loop. A continuous pulse animation guarantees visibility even at
+   complete silence; the halo intensifies with measured audio energy. */
 #input-wrap.dictating,
 #input-wrap.dictating-processing { position: relative; }
 #input-wrap.dictating {
-  border-color: color-mix(in srgb, var(--accent) 60%, var(--fau-border));
-  box-shadow:
-    0 0 0 calc(1px + 2px * var(--voice-level, 0)) color-mix(in srgb, var(--accent) calc(20% + 40% * var(--voice-level, 0)), transparent),
-    0 0 calc(8px + 22px * var(--voice-level, 0)) color-mix(in srgb, var(--accent) calc(15% + 35% * var(--voice-level, 0)), transparent);
-  transition: box-shadow 80ms linear, border-color 120ms linear;
+  border-color: color-mix(in srgb, var(--accent) 75%, var(--fau-border));
+  animation: dictateIdlePulse 1.6s ease-in-out infinite;
 }
 #input-wrap.dictating::before {
   content: '';
-  position: absolute; inset: -1px;
-  border-radius: inherit;
+  position: absolute; inset: -2px;
+  border-radius: 16px;
   pointer-events: none;
-  border: 1px solid color-mix(in srgb, var(--accent) calc(30% + 50% * var(--voice-level, 0)), transparent);
-  opacity: calc(.4 + .6 * var(--voice-level, 0));
-  transition: opacity 80ms linear, border-color 80ms linear;
+  box-shadow:
+    0 0 0 calc(1px + 3px * var(--voice-level, 0)) color-mix(in srgb, var(--accent) calc(30% + 50% * var(--voice-level, 0)), transparent),
+    0 0 calc(14px + 30px * var(--voice-level, 0)) color-mix(in srgb, var(--accent) calc(30% + 40% * var(--voice-level, 0)), transparent);
+  transition: box-shadow 70ms linear;
+}
+@keyframes dictateIdlePulse {
+  0%, 100% { border-color: color-mix(in srgb, var(--accent) 60%, var(--fau-border)); }
+  50%      { border-color: color-mix(in srgb, var(--accent) 95%, var(--fau-border)); }
 }
 #input-wrap.dictating-processing {
   border-color: color-mix(in srgb, var(--accent) 50%, var(--fau-border));
@@ -1177,8 +1179,64 @@ body.is-resizing webview { pointer-events: none !important; }
 }
 @keyframes dictateProcessingPulse {
   0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent), 0 0 10px color-mix(in srgb, var(--accent) 20%, transparent); }
-  50%      { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 22px color-mix(in srgb, var(--accent) 40%, transparent); }
+  50%      { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 50%, transparent), 0 0 26px color-mix(in srgb, var(--accent) 45%, transparent); }
 }
+
+/* Live caption bubble pinned above the input wrap */
+.dict-bubble {
+  position: absolute;
+  left: 12px; right: 12px;
+  bottom: calc(100% + 8px);
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--fau-surface2) 92%, var(--accent));
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--fau-border));
+  border-radius: 12px;
+  box-shadow: 0 6px 22px rgba(0,0,0,.25), 0 0 18px color-mix(in srgb, var(--accent) 25%, transparent);
+  color: var(--fau-text);
+  font-size: 13px; line-height: 1.35;
+  max-height: 96px; overflow: hidden;
+  z-index: 60;
+  animation: dictBubbleIn 160ms ease-out;
+  transition: opacity 280ms ease, transform 280ms ease;
+}
+.dict-bubble.hide { opacity: 0; transform: translateY(4px); }
+.dict-bubble .dict-bubble-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; flex: 0 0 22px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+  color: var(--accent);
+  font-size: 13px;
+}
+.dict-bubble.listening .dict-bubble-icon { animation: dictBubbleMicPulse 1s ease-in-out infinite; }
+.dict-bubble .dict-bubble-text {
+  flex: 1 1 auto; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  direction: rtl; text-align: left; /* keep latest words visible on overflow */
+}
+.dict-bubble .dict-bubble-text:empty::before {
+  content: 'Listening\2026';
+  color: color-mix(in srgb, var(--fau-text) 65%, transparent);
+  font-style: italic;
+}
+.dict-bubble.processing .dict-bubble-text:empty::before { content: 'Transcribing\2026'; }
+.dict-bubble.done       .dict-bubble-text:empty::before { content: ''; }
+.dict-bubble .dict-bubble-dots {
+  display: inline-flex; gap: 3px; flex: 0 0 auto;
+}
+.dict-bubble .dict-bubble-dots span {
+  width: 4px; height: 4px; border-radius: 50%;
+  background: var(--accent);
+  opacity: .35;
+  animation: dictBubbleDot 1s ease-in-out infinite;
+}
+.dict-bubble .dict-bubble-dots span:nth-child(2) { animation-delay: .15s; }
+.dict-bubble .dict-bubble-dots span:nth-child(3) { animation-delay: .3s; }
+.dict-bubble.done .dict-bubble-dots { display: none; }
+@keyframes dictBubbleDot     { 0%,100% { opacity:.25; transform:scale(.8); } 50% { opacity:1; transform:scale(1.15); } }
+@keyframes dictBubbleMicPulse{ 0%,100% { transform:scale(1); } 50% { transform:scale(1.18); } }
+@keyframes dictBubbleIn      { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
 /* Main single-line row: + · textarea · mic · stop · send */
 #textarea-row {
   display: flex; align-items: flex-end; gap: 6px;

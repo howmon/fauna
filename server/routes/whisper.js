@@ -85,12 +85,19 @@ export function registerWhisperRoutes(app, {
     }
     const ts     = Date.now();
     const ctHeader = req.headers['content-type'] || '';
-    const ext = ctHeader.includes('ogg') ? 'ogg' : ctHeader.includes('mp4') ? 'mp4' : 'webm';
+    const isWav  = ctHeader.includes('wav') || ctHeader.includes('wave') || (req.body.length >= 4 && req.body.slice(0,4).toString('ascii') === 'RIFF');
+    const ext = isWav ? 'wav' : (ctHeader.includes('ogg') ? 'ogg' : ctHeader.includes('mp4') ? 'mp4' : 'webm');
     const tmpIn  = path.join(os.tmpdir(), `fauna_voice_${ts}.${ext}`);
     const tmpWav = path.join(os.tmpdir(), `fauna_voice_${ts}.wav`);
     try {
       fs.writeFileSync(tmpIn, req.body);
       console.log('[transcribe] wrote', req.body.length, 'bytes to', tmpIn, '(content-type:', ctHeader, ')');
+      // Fast path: client already sent WAV — skip ffmpeg entirely.
+      let ffOk = false;
+      if (isWav) {
+        fs.copyFileSync(tmpIn, tmpWav);
+        ffOk = true;
+      }
       // Verify webm magic bytes (first 4 bytes should be 0x1A45DFA3 for EBML)
       if (ext === 'webm' && req.body.length >= 4) {
         const magic = req.body.readUInt32BE(0);
@@ -159,23 +166,24 @@ export function registerWhisperRoutes(app, {
         });
       });
 
-      let ffOk = false;
+      let ffOk2 = ffOk;
+      if (!ffOk2) {
       // Strategy 1: explicit input format from file
       try {
         await tryFfmpeg(['-y', '-loglevel', 'error', '-f', inputFmt, '-i', tmpIn, '-ar', '16000', '-ac', '1', '-f', 'wav', tmpWav], false);
-        ffOk = true;
+        ffOk2 = true;
       } catch (e1) {
         console.warn('[transcribe] ffmpeg strategy 1 failed:', e1.message);
         // Strategy 2: let ffmpeg probe the file (no -f)
         try {
           await tryFfmpeg(['-y', '-loglevel', 'error', '-i', tmpIn, '-ar', '16000', '-ac', '1', '-f', 'wav', tmpWav], false);
-          ffOk = true;
+          ffOk2 = true;
         } catch (e2) {
           console.warn('[transcribe] ffmpeg strategy 2 failed:', e2.message);
           // Strategy 3: pipe via stdin with explicit format
           try {
             await tryFfmpeg(['-y', '-loglevel', 'error', '-f', inputFmt, '-i', 'pipe:0', '-ar', '16000', '-ac', '1', '-f', 'wav', tmpWav], true);
-            ffOk = true;
+            ffOk2 = true;
           } catch (e3) {
             console.error('[transcribe] all ffmpeg strategies failed:', e3.message);
             const finalErr = new Error(`ffmpeg failed (exit 1). ${e3.message}`);
@@ -184,7 +192,8 @@ export function registerWhisperRoutes(app, {
           }
         }
       }
-      void ffOk;
+      }
+      void ffOk2;
       // Run whisper-cli directly (bypasses nodejs-whisper JS wrapper which breaks inside asar)
       let whisperBin = null;
       {

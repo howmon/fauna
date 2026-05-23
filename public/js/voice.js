@@ -1418,7 +1418,9 @@ function _dictCommitFinal(text) {
 function _dictHandleTranscript(text) {
   text = text.trim();
   _dictSetState('idle');
-  if (!text) return;
+  if (!text) { _dictBubbleHide(); return; }
+  _dictBubbleSet('done', text);
+  _dictBubbleHide(1200);
 
   // Check for conversation commands first
   for (var i = 0; i < _DICTATION_CONV_CMDS.length; i++) {
@@ -1457,6 +1459,66 @@ function _speakConvNavigate(dir) {
 var DICT_SILENCE_MS    = 1500;  // ms of silence before auto-stop
 var DICT_MAX_MS        = 30000; // absolute max recording length
 var DICT_RMS_THRESHOLD = 0.004; // energy floor (same as wake word VAD)
+var DICT_INTERIM_MS    = 1800;  // how often to re-transcribe partial audio
+
+// Live caption bubble pinned above #input-wrap.
+function _dictEnsureBubble() {
+  var wrap = document.getElementById('input-wrap');
+  if (!wrap) return null;
+  var b = document.getElementById('dict-live-bubble');
+  if (b) return b;
+  b = document.createElement('div');
+  b.id = 'dict-live-bubble';
+  b.className = 'dict-bubble';
+  b.innerHTML = '<span class="dict-bubble-icon"><i class="ti ti-microphone"></i></span>'
+              + '<span class="dict-bubble-text"></span>'
+              + '<span class="dict-bubble-dots"><span></span><span></span><span></span></span>';
+  wrap.appendChild(b);
+  return b;
+}
+function _dictBubbleSet(state, text) {
+  var b = _dictEnsureBubble();
+  if (!b) return;
+  b.classList.remove('listening', 'processing', 'done', 'hide');
+  if (state) b.classList.add(state);
+  var t = b.querySelector('.dict-bubble-text');
+  if (t) t.textContent = text || '';
+  b.style.display = '';
+}
+function _dictBubbleHide(delay) {
+  var b = document.getElementById('dict-live-bubble');
+  if (!b) return;
+  b.classList.add('hide');
+  setTimeout(function() { if (b && b.parentNode) b.parentNode.removeChild(b); }, delay || 350);
+}
+
+var _dictInterimInFlight = false;
+var _dictLastInterim     = '';
+async function _dictInterimTranscribe() {
+  if (_dictInterimInFlight)        return;
+  if (_dictState !== 'listening')  return;
+  if (!_dictChunks.length)         return;
+  if (!_whisperModelReady)         return; // don't trigger a model download mid-recording
+  _dictInterimInFlight = true;
+  try {
+    var blobType = (_dictChunks[0] && _dictChunks[0].type) || 'audio/webm';
+    var blob = new Blob(_dictChunks.slice(), { type: blobType });
+    var resp = await fetch('/api/transcribe?interim=1', {
+      method:  'POST',
+      headers: { 'Content-Type': blobType },
+      body:    blob,
+    });
+    if (!resp.ok) return;
+    var data = await resp.json();
+    if (!data || data.ok === false) return;
+    var text = (data.text || '').replace(WHISPER_NOISE_TOKENS, '').trim();
+    if (text && text !== _dictLastInterim && _dictState === 'listening') {
+      _dictLastInterim = text;
+      _dictBubbleSet('listening', text);
+    }
+  } catch (_) { /* interim is best-effort */ }
+  finally { _dictInterimInFlight = false; }
+}
 
 function startDictation() {
   // Toggle off if already running
@@ -1467,9 +1529,10 @@ function startDictation() {
 
   navigator.mediaDevices.getUserMedia({ audio: true, video: false })
     .then(function(stream) {
-      _dictStream   = stream;
-      _dictChunks   = [];
-      _dictAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      _dictStream     = stream;
+      _dictChunks     = [];
+      _dictLastInterim = '';
+      _dictAudioCtx   = new (window.AudioContext || window.webkitAudioContext)();
 
       // Route through silent gain so Chromium doesn't cull the graph
       var source    = _dictAudioCtx.createMediaStreamSource(stream);
@@ -1487,8 +1550,9 @@ function startDictation() {
         if (e.data && e.data.size > 0) _dictChunks.push(e.data);
       };
       _dictMediaRecorder.onstop = function() { _dictTranscribe(); };
-      _dictMediaRecorder.start(100);
+      _dictMediaRecorder.start(250);
       _dictSetState('listening');
+      _dictBubbleSet('listening', '');
 
       // VAD: stop on silence after speech detected. Also drives a CSS
       // variable on #input-wrap so the border can pulse with audio energy.
@@ -1497,12 +1561,23 @@ function startDictation() {
       var silenceMs = 0;
       var wrap      = document.getElementById('input-wrap');
       var maxTimer  = setTimeout(function() { _dictStopRecording(); }, DICT_MAX_MS);
+      var interimTimer = setInterval(function() {
+        if (_dictState !== 'listening') { clearInterval(interimTimer); return; }
+        // Flush a chunk into ondataavailable so the snapshot includes recent audio
+        try { if (_dictMediaRecorder && _dictMediaRecorder.state === 'recording') _dictMediaRecorder.requestData(); } catch (_) {}
+        // Small delay so the chunk lands before we POST it
+        setTimeout(_dictInterimTranscribe, 60);
+      }, DICT_INTERIM_MS);
       var vadTimer  = setInterval(function() {
-        if (_dictState !== 'listening') { clearInterval(vadTimer); clearTimeout(maxTimer); return; }
+        if (_dictState !== 'listening') {
+          clearInterval(vadTimer); clearInterval(interimTimer); clearTimeout(maxTimer);
+          if (wrap) wrap.style.setProperty('--voice-level', '0');
+          return;
+        }
         analyser.getFloatTimeDomainData(buf);
         var rms = _rms(buf);
-        // Map RMS → 0..1 with a soft compressor; 0.05 is loud-but-not-clipped.
-        var lvl = Math.min(1, Math.max(0, rms * 18));
+        // Boosted mapping so quiet speech still moves the halo visibly.
+        var lvl = Math.min(1, Math.max(0, rms * 45));
         if (wrap) wrap.style.setProperty('--voice-level', lvl.toFixed(3));
         if (rms > DICT_RMS_THRESHOLD) {
           hadSpeech = true;
@@ -1511,6 +1586,7 @@ function startDictation() {
           silenceMs += 100;
           if (silenceMs >= DICT_SILENCE_MS) {
             clearInterval(vadTimer);
+            clearInterval(interimTimer);
             clearTimeout(maxTimer);
             _dictStopRecording();
           }
@@ -1536,6 +1612,7 @@ function _dictStopRecording() {
     _dictAudioCtx = null;
   }
   _dictSetState('processing');
+  _dictBubbleSet('processing', _dictLastInterim || 'Transcribing…');
 }
 
 async function _dictTranscribe() {
@@ -1569,10 +1646,12 @@ async function _dictTranscribe() {
     if (text) {
       _dictHandleTranscript(text);
     } else {
+      _dictBubbleHide();
       if (typeof showToast === 'function') showToast('Didn\u2019t catch that');
     }
   } catch (err) {
     console.warn('[dictate] transcribe error:', err);
+    _dictBubbleHide();
     if (typeof showToast === 'function') showToast('Dictation failed — try again');
   } finally {
     _dictSetState('idle');
