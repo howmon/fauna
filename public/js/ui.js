@@ -568,9 +568,12 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
   if (attachments && attachments.length) {
     var chips = attachments.map(a => {
       if (a.type === 'image') {
-        return '<span class="attach-chip attach-chip-image">' +
-          (a.base64 ? '<img class="attach-img-thumb" src="data:' + (a.mime||'image/png') + ';base64,' + a.base64 + '">' : '<i class="ti ti-photo"></i>') +
-          '<span>' + escHtml(a.name) + '</span></span>';
+        var nm  = a.name || 'image';
+        var src = a.base64 ? ('data:' + (a.mime||'image/png') + ';base64,' + a.base64) : '';
+        var thumb = src
+          ? '<img class="attach-img-thumb" src="' + src + '" title="' + escHtml(nm) + ' — click to view" onclick="openImageLightbox(this.src,\'' + escHtml(nm).replace(/'/g, '&#39;') + '\')">'
+          : '<i class="ti ti-photo"></i>';
+        return '<span class="attach-chip attach-chip-image">' + thumb + '<span>' + escHtml(nm) + '</span></span>';
       }
       return '<span class="attach-chip"><span class="chip-icon">' + (a.type === 'url' ? '<i class="ti ti-link"></i>' : '<i class="ti ti-paperclip"></i>') + '</span>' + escHtml(a.name) + '</span>';
     }).join('');
@@ -953,6 +956,45 @@ function clearAttachments() {
   renderAttachBar();
 }
 
+// ── Image lightbox ────────────────────────────────────────────────
+function openImageLightbox(src, caption) {
+  if (!src) return;
+  var box = document.getElementById('img-lightbox');
+  if (!box) return;
+  var img = document.getElementById('img-lightbox-img');
+  var cap = document.getElementById('img-lightbox-caption');
+  var dl  = document.getElementById('img-lightbox-download');
+  img.src = src;
+  img.alt = caption || '';
+  if (cap) { cap.textContent = caption || ''; cap.style.display = caption ? '' : 'none'; }
+  if (dl)  { dl.href = src; dl.setAttribute('download', (caption || 'image').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 80) || 'image'); }
+  box.classList.add('show');
+  // Esc to close
+  if (!box._escBound) {
+    box._escBound = true;
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && box.classList.contains('show')) closeImageLightbox();
+    });
+  }
+}
+window.openImageLightbox = openImageLightbox;
+
+function closeImageLightbox(e) {
+  // Backdrop click: only close when the click landed on the overlay itself,
+  // not on the inner image or controls.
+  if (e && e.target && e.target.id !== 'img-lightbox' && e.target.id !== 'img-lightbox-img' /* allow clicks on image to not close */) {
+    // For close button / download we want to allow their handlers; if click was on close (X), still close.
+    if (e.target.closest && e.target.closest('#img-lightbox-download')) return; // let download proceed
+  }
+  if (e && e.target && (e.target.id === 'img-lightbox-img' || (e.target.closest && e.target.closest('#img-lightbox-download')))) return;
+  var box = document.getElementById('img-lightbox');
+  if (!box) return;
+  box.classList.remove('show');
+  var img = document.getElementById('img-lightbox-img');
+  if (img) img.src = '';
+}
+window.closeImageLightbox = closeImageLightbox;
+
 var _attachBarExpanded = false;
 var ATTACH_BAR_MAX = 3;
 
@@ -984,12 +1026,14 @@ function renderAttachBar() {
 function _renderChip(att, i) {
   var extCls = att.extSource ? ' pending-chip-ext' : '';
   if (att.type === 'image') {
-    var thumb = att.base64
-      ? '<img class="pending-img-thumb" src="data:' + att.mime + ';base64,' + att.base64 + '" title="' + escHtml(att.name) + '">'
+    var src  = att.base64 ? ('data:' + (att.mime || 'image/png') + ';base64,' + att.base64) : '';
+    var name = att.name || 'image';
+    var thumb = src
+      ? '<img class="pending-img-thumb" src="' + src + '" title="' + escHtml(name) + ' — click to view" onclick="event.stopPropagation();openImageLightbox(this.src,\'' + escHtml(name).replace(/'/g, '&#39;') + '\')">'
       : '<span class="pending-img-thumb pending-img-thumb-fallback" title="Preview unavailable"><i class="ti ti-photo"></i></span>';
     return '<div class="pending-chip pending-chip-image' + extCls + '">' +
       thumb +
-      '<span class="chip-name" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(att.name) + '</span>' +
+      '<span class="chip-name" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(name) + '</span>' +
       '<button class="chip-remove" onclick="removeAttachment(' + i + ')"><i class="ti ti-x"></i></button>' +
     '</div>';
   }

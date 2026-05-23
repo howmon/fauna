@@ -686,10 +686,48 @@ button .ti, label .ti { pointer-events: none; }
   border-radius: 20px; padding: 3px 10px; font-size: 11px; color: var(--fau-text-dim);
 }
 .attach-chip-image { padding: 3px 8px 3px 3px; border-radius: 8px; }
-.attach-img-thumb  { height: 22px; width: 22px; object-fit: cover; border-radius: 5px; }
+.attach-img-thumb  { height: 22px; width: 22px; object-fit: cover; border-radius: 5px; cursor: zoom-in; }
+.attach-img-thumb:hover { opacity: .85; }
 .pending-chip-image { padding: 4px 8px 4px 4px; align-items: center; border-radius: 8px; }
-.pending-img-thumb  { height: 48px; width: 64px; object-fit: cover; border-radius: 5px; flex-shrink: 0; cursor: pointer; }
+.pending-img-thumb  { height: 48px; width: 64px; object-fit: cover; border-radius: 5px; flex-shrink: 0; cursor: zoom-in; }
 .pending-img-thumb:hover { opacity: .85; }
+
+/* ── Image lightbox ─────────────────────────────────────────────── */
+#img-lightbox {
+  display: none; position: fixed; inset: 0; z-index: 10000;
+  background: rgba(0, 0, 0, 0.88);
+  align-items: center; justify-content: center;
+  padding: 40px;
+  animation: fauLightboxFade .14s ease;
+}
+#img-lightbox.show { display: flex; }
+#img-lightbox-img {
+  max-width: 100%; max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  background: #111;
+}
+#img-lightbox-close, #img-lightbox-download {
+  position: absolute; top: 16px;
+  width: 36px; height: 36px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; border: none;
+  background: rgba(255, 255, 255, 0.12); color: #fff;
+  cursor: pointer; font-size: 18px; text-decoration: none;
+  transition: background .12s ease;
+}
+#img-lightbox-close:hover, #img-lightbox-download:hover { background: rgba(255, 255, 255, 0.22); }
+#img-lightbox-close    { right: 16px; }
+#img-lightbox-download { right: 60px; }
+#img-lightbox-caption {
+  position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+  max-width: 80%; padding: 6px 14px;
+  background: rgba(0, 0, 0, 0.5); color: #fff;
+  border-radius: 16px; font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+@keyframes fauLightboxFade { from { opacity: 0 } to { opacity: 1 } }
 
 /* ── Markdown styles ─────────────────────────────────────────────── */
 .msg-body h1,.msg-body h2,.msg-body h3 { margin: 1em 0 .4em; line-height: 1.3; }
