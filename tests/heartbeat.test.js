@@ -13,11 +13,15 @@ vi.mock('fs', async () => {
       ...actual,
       readFileSync: vi.fn(() => JSON.stringify({ settings: {}, log: [] })),
       writeFileSync: vi.fn(),
+      renameSync: vi.fn(),
+      unlinkSync: vi.fn(),
       mkdirSync: vi.fn(),
       existsSync: vi.fn(() => true),
     },
     readFileSync: vi.fn(() => JSON.stringify({ settings: {}, log: [] })),
     writeFileSync: vi.fn(),
+    renameSync: vi.fn(),
+    unlinkSync: vi.fn(),
     mkdirSync: vi.fn(),
     existsSync: vi.fn(() => true),
   };
@@ -125,6 +129,97 @@ describe('heartbeat', () => {
       await runHeartbeat(true);
       const log = getLog();
       expect(log.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ── PR4.3 — _parseResponse robustness ───────────────────────────────
+  describe('PR4.3 response parsing (object/list/quote variants)', () => {
+    it('extracts content from a chat-completion-shaped object', async () => {
+      const aiCaller = vi.fn().mockResolvedValue({
+        choices: [{ message: { content: 'HEARTBEAT_URGENT|email|Boss replied' } }],
+      });
+      const notifier = vi.fn();
+      startHeartbeat(aiCaller, notifier);
+      updateSettings({ enabled: true });
+      const r = await runHeartbeat(true);
+      expect(r.status).toBe('urgent');
+      expect(r.urgent.source).toBe('email');
+      expect(r.urgent.summary).toContain('Boss');
+      expect(notifier).toHaveBeenCalled();
+    });
+
+    it('extracts content from a { content } object', async () => {
+      const aiCaller = vi.fn().mockResolvedValue({ content: 'HEARTBEAT_OK' });
+      startHeartbeat(aiCaller, vi.fn());
+      updateSettings({ enabled: true });
+      const r = await runHeartbeat(true);
+      expect(r.status).toBe('ok');
+    });
+
+    it('handles markdown list-prefixed token: "- HEARTBEAT_URGENT|..."', async () => {
+      const aiCaller = vi.fn().mockResolvedValue('- HEARTBEAT_URGENT|slack|DM from PM');
+      const notifier = vi.fn();
+      startHeartbeat(aiCaller, notifier);
+      updateSettings({ enabled: true });
+      const r = await runHeartbeat(true);
+      expect(r.status).toBe('urgent');
+      expect(r.urgent.source).toBe('slack');
+      expect(notifier).toHaveBeenCalled();
+    });
+
+    it('handles quote-prefixed token: "> HEARTBEAT_OK"', async () => {
+      const aiCaller = vi.fn().mockResolvedValue('> HEARTBEAT_OK');
+      startHeartbeat(aiCaller, vi.fn());
+      updateSettings({ enabled: true });
+      const r = await runHeartbeat(true);
+      expect(r.status).toBe('ok');
+    });
+
+    it('handles case-insensitive token', async () => {
+      const aiCaller = vi.fn().mockResolvedValue('heartbeat_urgent|calendar|Standup in 5m');
+      const notifier = vi.fn();
+      startHeartbeat(aiCaller, notifier);
+      updateSettings({ enabled: true });
+      const r = await runHeartbeat(true);
+      expect(r.status).toBe('urgent');
+      expect(r.urgent.source).toBe('calendar');
+      expect(notifier).toHaveBeenCalled();
+    });
+
+    it('does NOT match a quoted example inside prose', async () => {
+      // Anchored regex must not be tripped by a "for example, HEARTBEAT_URGENT|..." substring mid-line.
+      const aiCaller = vi.fn().mockResolvedValue(
+        'I reviewed everything. For example HEARTBEAT_URGENT|x|y would mean trouble. All clear though.'
+      );
+      const notifier = vi.fn();
+      startHeartbeat(aiCaller, notifier);
+      updateSettings({ enabled: true });
+      const r = await runHeartbeat(true);
+      expect(r.status).toBe('ok');
+      expect(notifier).not.toHaveBeenCalled();
+    });
+
+    it('still finds token when preceded by other lines', async () => {
+      const aiCaller = vi.fn().mockResolvedValue(
+        'Summary of inbox:\n- nothing pressing\n\nHEARTBEAT_URGENT|jira|PROD-123 is on fire'
+      );
+      const notifier = vi.fn();
+      startHeartbeat(aiCaller, notifier);
+      updateSettings({ enabled: true });
+      const r = await runHeartbeat(true);
+      expect(r.status).toBe('urgent');
+      expect(r.urgent.source).toBe('jira');
+      expect(notifier).toHaveBeenCalled();
+    });
+
+    it('treats null/undefined/empty responses as ok (no crash)', async () => {
+      for (const value of [null, undefined, '', {}]) {
+        const aiCaller = vi.fn().mockResolvedValue(value);
+        startHeartbeat(aiCaller, vi.fn());
+        updateSettings({ enabled: true });
+        const r = await runHeartbeat(true);
+        expect(r.status).toBe('ok');
+      }
     });
   });
 });

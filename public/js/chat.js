@@ -1117,6 +1117,61 @@ async function streamResponse(conv) {
               }
             })(evt);
           }
+          if (evt.type === 'tool_permission_request') {
+            // Legacy mode (no callId): server emits as a passive notice and auto-allows.
+            // RPC mode (callId present, FAUNA_PROMPT_PERMISSION=1): show a modal and POST
+            // /api/tool-permission-result with the user's decision. Default-deny on close.
+            (function(ev) {
+              dbg('tool_permission_request: ' + ev.name + (ev.callId ? ' callId=' + ev.callId : ' (advisory)'), 'cmd');
+              if (!ev.callId) return; // advisory only
+              try {
+                var bd = document.createElement('div');
+                bd.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;display:flex;align-items:center;justify-content:center;font-family:system-ui,-apple-system,sans-serif;';
+                var box = document.createElement('div');
+                box.style.cssText = 'max-width:520px;background:#1e1e1e;color:#e6e6e6;border:1px solid #555;border-radius:8px;padding:18px 20px;box-shadow:0 10px 30px rgba(0,0,0,0.5);';
+                var argsPreview = '';
+                try { argsPreview = JSON.stringify(ev.args || {}, null, 2); } catch (_) { argsPreview = String(ev.args || ''); }
+                if (argsPreview.length > 1200) argsPreview = argsPreview.slice(0, 1200) + '\n…(truncated)';
+                box.innerHTML =
+                  '<div style="font-size:14px;font-weight:600;margin-bottom:6px;">Tool permission requested</div>' +
+                  '<div style="font-size:13px;margin-bottom:10px;opacity:0.85;">' +
+                  (ev.label ? String(ev.label).replace(/[<>&]/g, '') : String(ev.name || '').replace(/[<>&]/g, '')) +
+                  (ev.category ? ' <span style="opacity:0.7;">(' + String(ev.category).replace(/[<>&]/g, '') + ')</span>' : '') +
+                  '</div>' +
+                  '<pre style="font-size:11px;background:#111;border:1px solid #333;border-radius:4px;padding:8px;max-height:240px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0 0 14px 0;">' +
+                  argsPreview.replace(/[<>&]/g, function(c){ return c==='<'?'&lt;':c==='>'?'&gt;':'&amp;'; }) +
+                  '</pre>' +
+                  '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
+                  '<button data-act="deny"  style="padding:6px 14px;border-radius:4px;border:1px solid #888;background:#2a2a2a;color:#eee;cursor:pointer;">Deny</button>' +
+                  '<button data-act="allow" style="padding:6px 14px;border-radius:4px;border:1px solid #4a90e2;background:#4a90e2;color:#fff;cursor:pointer;font-weight:600;">Allow</button>' +
+                  '</div>';
+                bd.appendChild(box);
+                var decided = false;
+                function reply(decision) {
+                  if (decided) return;
+                  decided = true;
+                  try { bd.remove(); } catch (_) {}
+                  fetch('/api/tool-permission-result', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ callId: ev.callId, decision: decision }),
+                  }).catch(function(e) { dbg('tool-permission-result post failed: ' + e.message, 'err'); });
+                }
+                box.querySelector('[data-act="allow"]').addEventListener('click', function(){ reply('allow'); });
+                box.querySelector('[data-act="deny"]').addEventListener('click',  function(){ reply('deny');  });
+                bd.addEventListener('click', function(e){ if (e.target === bd) reply('deny'); });
+                document.body.appendChild(bd);
+              } catch (err) {
+                dbg('tool_permission_request UI failed: ' + (err && err.message ? err.message : err), 'err');
+                // Best-effort fallback: deny so the server doesn't hang for 30s.
+                fetch('/api/tool-permission-result', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ callId: ev.callId, decision: 'deny' }),
+                }).catch(function(){});
+              }
+            })(evt);
+          }
           if (evt.type === 'context_compacting') {
             dbg('context auto-compacting ' + (evt.count || '?') + ' messages…', 'info');
           }

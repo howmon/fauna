@@ -5,7 +5,8 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { withTimeout, withRetry } from './server/lib/async-utils.js';
+import { loadJson, saveJsonAtomic } from './server/lib/json-store.js';
+import { runScheduledAI } from './server/lib/scheduled-ai.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
 const HB_FILE    = path.join(CONFIG_DIR, 'heartbeat.json');
@@ -32,20 +33,14 @@ const DEFAULTS = {
 
 function _load() {
   if (_settings) return _settings;
-  try {
-    const data = JSON.parse(fs.readFileSync(HB_FILE, 'utf8'));
-    _settings = { ...DEFAULTS, ...data.settings };
-    _log = Array.isArray(data.log) ? data.log.slice(-LOG_MAX) : [];
-  } catch (_) {
-    _settings = { ...DEFAULTS };
-    _log = [];
-  }
+  const data = loadJson(HB_FILE, { settings: {}, log: [] });
+  _settings = { ...DEFAULTS, ...(data.settings || {}) };
+  _log = Array.isArray(data.log) ? data.log.slice(-LOG_MAX) : [];
   return _settings;
 }
 
 function _save() {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(HB_FILE, JSON.stringify({ settings: _settings, log: _log }, null, 2));
+  saveJsonAtomic(HB_FILE, { settings: _settings, log: _log });
 }
 
 // ── Public API ──────────────────────────────────────────────────────────
@@ -104,18 +99,19 @@ export async function runHeartbeat(force = false) {
   let status = 'ok';
   let urgent = null;
 
-  // Hold the screen-wake lock across the AI call so macOS doesn't App-Nap
-  // mid-request and stall the scheduled run.
-  let _psHeld = false;
-  try { if (_powerSave) { _powerSave.acquire(); _psHeld = true; } } catch (_) {}
-
   try {
-    // Bound AI call with timeout + 3-attempt exponential retry so transient
-    // network/quota blips don't silently miss the heartbeat window.
-    response = await withRetry(
-      () => withTimeout(_aiCaller(_settings.prompt, _settings.model), 30000, 'heartbeat AI call'),
-      { attempts: 3, baseMs: 1000 }
-    );
+    // Shared helper: bounded timeout + 3-attempt exponential retry +
+    // power-save hold around the AI call (PR2.1 / PR4.4).
+    response = await runScheduledAI({
+      aiCaller: _aiCaller,
+      prompt:   _settings.prompt,
+      model:    _settings.model,
+      label:    'heartbeat AI call',
+      timeoutMs: 30000,
+      attempts: 3,
+      baseMs:   1000,
+      powerSave: _powerSave,
+    });
     // Parse structured response
     const parsed = _parseResponse(response);
     status = parsed.status;
@@ -127,8 +123,6 @@ export async function runHeartbeat(force = false) {
   } catch (e) {
     status = 'error';
     response = e.message;
-  } finally {
-    if (_psHeld) { try { _powerSave.release(); } catch (_) {} }
   }
 
   const entry = {

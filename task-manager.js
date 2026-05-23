@@ -5,6 +5,7 @@
 import fs   from 'fs';
 import path from 'path';
 import os   from 'os';
+import { saveJsonAtomic } from './server/lib/json-store.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
 const TASKS_FILE = path.join(CONFIG_DIR, 'tasks.json');
@@ -250,13 +251,8 @@ function readTasks() {
 }
 
 function writeTasks(tasks) {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.mkdirSync(path.dirname(TASKS_BACKUP_FILE), { recursive: true });
-  const body = JSON.stringify(Array.isArray(tasks) ? tasks : [], null, 2);
-  const tmp = TASKS_FILE + '.tmp';
-  fs.writeFileSync(tmp, body);
-  fs.renameSync(tmp, TASKS_FILE);
-  fs.writeFileSync(TASKS_BACKUP_FILE, body);
+  const arr = Array.isArray(tasks) ? tasks : [];
+  saveJsonAtomic(TASKS_FILE, arr, { backupPath: TASKS_BACKUP_FILE });
 }
 
 // ── CRUD ─────────────────────────────────────────────────────────────────

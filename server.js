@@ -388,6 +388,19 @@ const teamsBundle = createTeamsBundle({
 // ── Heartbeat + Workflows + Permission Guard routes moved → server/routes/scheduling-and-guard.js ──
 registerSchedulingAndGuardRoutes(app);
 
+// ── Internal AI caller telemetry (PR4.7) ───────────────────────────────────
+app.get('/api/internal-ai/telemetry', (req, res) => {
+  try {
+    const tel = (typeof internalAICaller?.getTelemetry === 'function')
+      ? internalAICaller.getTelemetry()
+      : null;
+    if (!tel) return res.json({ enabled: false });
+    res.json({ enabled: true, ...tel });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── Teams routes moved → server/routes/teams.js ──
 teamsBundle.registerRoutes(app);
 

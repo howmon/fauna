@@ -5,7 +5,8 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { withTimeout, withRetry } from './server/lib/async-utils.js';
+import { loadJson, saveJsonAtomic } from './server/lib/json-store.js';
+import { runScheduledAI } from './server/lib/scheduled-ai.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
 const WF_FILE    = path.join(CONFIG_DIR, 'workflows.json');
@@ -21,26 +22,13 @@ let _notifier = null;   // function(title, body)
 
 function _load() {
   if (_workflows) return _workflows;
-  try {
-    _workflows = JSON.parse(fs.readFileSync(WF_FILE, 'utf8'));
-    if (!Array.isArray(_workflows)) _workflows = [];
-  } catch (_) {
-    _workflows = [];
-  }
+  const data = loadJson(WF_FILE, []);
+  _workflows = Array.isArray(data) ? data : [];
   return _workflows;
 }
 
 function _save() {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  // Atomic write: temp file + rename to prevent corruption on crash mid-write.
-  const tmp = WF_FILE + '.tmp-' + process.pid + '-' + Date.now();
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(_workflows, null, 2));
-    fs.renameSync(tmp, WF_FILE);
-  } catch (e) {
-    try { fs.unlinkSync(tmp); } catch (_) {}
-    throw e;
-  }
+  saveJsonAtomic(WF_FILE, _workflows);
 }
 
 function _uid() {
@@ -191,11 +179,18 @@ export async function runWorkflow(id) {
         ? `Previous step output:\n${prevOutput}\n\n---\n\n${step.prompt}`
         : step.prompt;
       // Bound each step with a timeout + retry. One hung step previously
-      // blocked the entire 60s scheduler tick for all workflows.
-      const output = await withRetry(
-        () => withTimeout(_aiCaller(prompt, wf.model), 60000, 'workflow step "' + step.name + '"'),
-        { attempts: 2, baseMs: 1500 }
-      );
+      // blocked the entire 60s scheduler tick for all workflows. PR2.3.
+      // (Power-save is acquired once outside this loop for the whole run.)
+      const output = await runScheduledAI({
+        aiCaller: _aiCaller,
+        prompt,
+        model:    wf.model,
+        label:    'workflow step "' + step.name + '"',
+        timeoutMs: 60000,
+        attempts: 2,
+        baseMs:   1500,
+        powerSave: null,
+      });
       prevOutput = output;
       run.steps.push({
         id: step.id,
