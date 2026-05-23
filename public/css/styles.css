@@ -519,7 +519,10 @@ button .ti, label .ti { pointer-events: none; }
 #voice-overlay-text {
   font-size: 22px; font-family: var(--font); color: #fff;
   font-weight: 500; max-width: 560px; text-align: center; min-height: 32px;
+  line-height: 1.35; padding: 0 24px; word-wrap: break-word;
+  transition: color .15s ease;
 }
+#voice-overlay-text.placeholder { color: rgba(255,255,255,.55); font-weight: 400; }
 #voice-overlay-hint {
   font-size: 12px; color: rgba(255,255,255,.38); letter-spacing: .06em;
   text-transform: uppercase;

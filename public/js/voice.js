@@ -338,17 +338,130 @@ function _setVoicePillState(st) {
 
 // ── Voice overlay ─────────────────────────────────────────────────────────
 
+var _liveTranscript      = '';       // best-known transcript while listening
+var _liveSR              = null;     // webkitSpeechRecognition instance (live captions)
+var _liveSRRunning       = false;
+var _voiceKeysBound      = false;
+
 function _showVoiceOverlay(transcript) {
-  var ov = document.getElementById('voice-overlay');
-  var tx = document.getElementById('voice-overlay-text');
+  var ov   = document.getElementById('voice-overlay');
+  var tx   = document.getElementById('voice-overlay-text');
+  var hint = document.getElementById('voice-overlay-hint');
   if (!ov) return;
   ov.classList.add('visible');
-  if (tx) tx.textContent = transcript || 'Listening…';
+  _liveTranscript = transcript && transcript !== 'Listening…' ? transcript : '';
+  if (tx) {
+    tx.textContent = _liveTranscript || 'Listening…';
+    tx.classList.toggle('placeholder', !_liveTranscript);
+  }
+  if (hint) hint.textContent = 'Enter to send · Esc to cancel';
+  _bindVoiceOverlayKeys();
+  _startLiveCaptions();
 }
 
 function _hideVoiceOverlay() {
   var ov = document.getElementById('voice-overlay');
   if (ov) ov.classList.remove('visible');
+  _stopLiveCaptions();
+  _liveTranscript = '';
+}
+
+function _updateLiveTranscript(text, isFinal) {
+  var t = (text || '').trim();
+  if (!t) return;
+  _liveTranscript = t;
+  var tx = document.getElementById('voice-overlay-text');
+  if (tx) {
+    tx.textContent = t;
+    tx.classList.remove('placeholder');
+  }
+}
+
+function _startLiveCaptions() {
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR || _liveSRRunning) return;
+  try {
+    _liveSR = new SR();
+    _liveSR.continuous     = true;
+    _liveSR.interimResults = true;
+    _liveSR.lang           = (navigator.language || 'en-US');
+    _liveSR.onresult = function(ev) {
+      var finalText = '';
+      var interim   = '';
+      for (var i = ev.resultIndex; i < ev.results.length; i++) {
+        var r = ev.results[i];
+        if (r.isFinal) finalText += r[0].transcript;
+        else           interim   += r[0].transcript;
+      }
+      _updateLiveTranscript((finalText + ' ' + interim).trim(), !!finalText);
+    };
+    _liveSR.onerror = function() { _liveSRRunning = false; };
+    _liveSR.onend   = function() {
+      _liveSRRunning = false;
+      // Auto-restart if the overlay is still visible (some browsers stop after silence)
+      var ov = document.getElementById('voice-overlay');
+      if (ov && ov.classList.contains('visible')) {
+        try { _liveSR.start(); _liveSRRunning = true; } catch (_) {}
+      }
+    };
+    _liveSR.start();
+    _liveSRRunning = true;
+  } catch (_) {
+    _liveSR = null;
+    _liveSRRunning = false;
+  }
+}
+
+function _stopLiveCaptions() {
+  if (_liveSR) {
+    try { _liveSR.onend = null; _liveSR.stop(); } catch (_) {}
+    _liveSR = null;
+  }
+  _liveSRRunning = false;
+}
+
+function _bindVoiceOverlayKeys() {
+  if (_voiceKeysBound) return;
+  _voiceKeysBound = true;
+  document.addEventListener('keydown', function(ev) {
+    var ov = document.getElementById('voice-overlay');
+    if (!ov || !ov.classList.contains('visible')) return;
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      _cancelListening();
+    } else if (ev.key === 'Enter' && !ev.shiftKey && !ev.metaKey && !ev.ctrlKey) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      _submitListening();
+    }
+  }, true);
+}
+
+// User pressed Escape: end conversation mode and hide overlay
+function _cancelListening() {
+  // Stop any in-flight recording without dispatching to transcribe
+  if (_mediaRecorder && _mediaRecorder.state !== 'inactive') {
+    try { _mediaRecorder.onstop = null; _mediaRecorder.stop(); } catch (_) {}
+  }
+  _recordChunks = [];
+  _endConversationMode();
+}
+
+// User pressed Enter: send whatever live transcript we have right now
+function _submitListening() {
+  var t = (_liveTranscript || '').trim();
+  // Stop the audio recorder so it doesn't also fire a second transcribe
+  if (_mediaRecorder && _mediaRecorder.state !== 'inactive') {
+    try { _mediaRecorder.onstop = null; _mediaRecorder.stop(); } catch (_) {}
+  }
+  _recordChunks = [];
+  _stopLiveCaptions();
+  if (!t) {
+    // Nothing captured yet — just keep listening
+    return;
+  }
+  _exitCommandMode(t);
 }
 
 // ── Command routing ───────────────────────────────────────────────────────
