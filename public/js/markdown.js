@@ -56,8 +56,23 @@ marked.use({
       // The shell-exec pipeline already serializes execution, feeds results back to the AI,
       // and hard-stops on empty output, so regular bash/sh/python blocks can use it safely.
       var RUNNABLE_LANGS = { bash:1, sh:1, zsh:1, shell:1, python:1, python3:1, node:1, nodejs:1, ruby:1, perl:1, console:1 };
-      if (RUNNABLE_LANGS[lang]) {
+      var langLower = (lang || '').toLowerCase();
+      if (RUNNABLE_LANGS[langLower]) {
         return '<pre data-special-lang="shell-exec"><code class="language-shell-exec">' + escHtml(rawText) + '</code></pre>';
+      }
+      // Sniff unlabeled / plaintext / text fences for obvious shell content.
+      // Models sometimes emit ``` (no language tag) or ```plaintext when they
+      // mean a runnable command — without this the block stays inert and the
+      // task stalls. Only triggers when the first non-blank line clearly
+      // starts with a shell-style token to avoid false positives on prose.
+      if (langLower === '' || langLower === 'plaintext' || langLower === 'text') {
+        var firstLine = (rawText.match(/^[ \t]*([^\n]+)/) || [,''])[1].trim();
+        // Strip leading prompt markers like "$ " or "> " before sniffing.
+        firstLine = firstLine.replace(/^[$>][ \t]+/, '');
+        var SHELL_SNIFF = /^(?:#!\/|[A-Z_][A-Z0-9_]*=|sudo\b|cd\b|ls\b|cat\b|echo\b|mkdir\b|rm\b|cp\b|mv\b|grep\b|find\b|sed\b|awk\b|tar\b|chmod\b|chown\b|touch\b|head\b|tail\b|wc\b|sort\b|uniq\b|xargs\b|tee\b|which\b|whoami\b|pwd\b|export\b|source\b|kill\b|ps\b|top\b|df\b|du\b|env\b|set\b|unset\b|TMPF=|TMP=|python3?\b|node\b|npm\b|npx\b|yarn\b|pnpm\b|deno\b|bun\b|ruby\b|perl\b|php\b|go\b|cargo\b|rustc\b|java\b|javac\b|gcc\b|clang\b|make\b|cmake\b|git\b|gh\b|brew\b|apt\b|apt-get\b|yum\b|dnf\b|pacman\b|pip3?\b|pipx\b|poetry\b|conda\b|curl\b|wget\b|ssh\b|scp\b|rsync\b|nc\b|ping\b|traceroute\b|dig\b|nslookup\b|docker\b|podman\b|kubectl\b|helm\b|terraform\b|ansible\b|aws\b|gcloud\b|az\b|psql\b|mysql\b|sqlite3?\b|redis-cli\b|mongo\b|jq\b|yq\b)/;
+        if (firstLine && SHELL_SNIFF.test(firstLine)) {
+          return '<pre data-special-lang="shell-exec"><code class="language-shell-exec">' + escHtml(rawText) + '</code></pre>';
+        }
       }
       if (lang === 'figma-exec' || lang === 'figma_exec') {
         return '<pre data-special-lang="figma-exec"><code class="language-figma-exec">' + escHtml(rawText) + '</code></pre>';
