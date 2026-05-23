@@ -2065,12 +2065,17 @@ var _extConnectedBrowsers = []; // [{id, browser, version, connectedAt}]
       };
     }
     connect();
-    // On wake/restore: close stale connection and reconnect immediately
+    // On wake/restore: close stale connection and reconnect immediately.
+    // Covers both tab-visibility flips and OS network-suspend wake.
     document.addEventListener('visibilitychange', function() {
       if (document.visibilityState === 'visible') {
         retries = 0;
         connect();
       }
+    });
+    window.addEventListener('online', function () {
+      retries = 0;
+      connect();
     });
   }
 

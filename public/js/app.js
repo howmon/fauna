@@ -81,6 +81,24 @@ function _startConversationRealtimeSync() {
   } catch (_) {}
 }
 
+// When the OS suspends network I/O (sleep, App Nap, long backgrounding) the
+// SSE socket dies with ERR_NETWORK_IO_SUSPENDED. Reconnect immediately on
+// wake / network-online instead of waiting for the back-off retry.
+(function () {
+  function _wakeReconnectConvStream() {
+    var src = window._conversationEvents;
+    if (src) {
+      try { src.close(); } catch (_) {}
+      window._conversationEvents = null;
+    }
+    if (typeof _startConversationRealtimeSync === 'function') _startConversationRealtimeSync();
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') _wakeReconnectConvStream();
+  });
+  window.addEventListener('online', _wakeReconnectConvStream);
+}());
+
 // Pre-load rules so getFigmaContext() works when chat starts
 loadFigmaRules();
 
