@@ -408,24 +408,16 @@ async function browserScreenshot() {
     _restoreBrowserPaneWidthInner();
     var handle = document.getElementById('browser-resize-handle');
     if (!handle) return;
+    var pane = document.getElementById('browser-pane');
 
-    handle.addEventListener('mousedown', function(e) {
-      e.preventDefault();
-      var pane = document.getElementById('browser-pane');
-      var startX = e.clientX;
-      var startW = pane.getBoundingClientRect().width;
-      pane.classList.add('resizing');
-
-      function onMove(e) {
-        setWidth(startW + (startX - e.clientX));
-      }
-      function onUp() {
-        document.getElementById('browser-pane').classList.remove('resizing');
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-      }
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
+    window.installPaneResize({
+      handle: handle,
+      classTarget: pane,
+      getStartWidth: function () { return pane.getBoundingClientRect().width; },
+      onMove: function (dx, startW) {
+        // Handle is on the left edge — dragging left widens the pane.
+        setWidth(startW - dx);
+      },
     });
 
     handle.addEventListener('dblclick', function() {

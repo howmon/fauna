@@ -126,27 +126,16 @@ function closeArtifactPane() {
   document.addEventListener('DOMContentLoaded', function () {
     var handle = document.getElementById('artifact-resize-handle');
     if (!handle) return;
+    var pane = document.getElementById('artifact-pane');
 
-    var startX, startW;
-
-    handle.addEventListener('mousedown', function (e) {
-      e.preventDefault();
-      var pane = document.getElementById('artifact-pane');
-      startX = e.clientX;
-      startW = pane.getBoundingClientRect().width;
-      pane.classList.add('resizing');
-
-      function onMove(e) {
-        var delta = startX - e.clientX; // dragging left = wider
-        setWidth(startW + delta);
-      }
-      function onUp() {
-        document.getElementById('artifact-pane').classList.remove('resizing');
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-      }
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
+    window.installPaneResize({
+      handle: handle,
+      classTarget: pane,
+      getStartWidth: function () { return pane.getBoundingClientRect().width; },
+      onMove: function (dx, startW) {
+        // Handle is on the left edge — dragging left widens the pane.
+        setWidth(startW - dx);
+      },
     });
 
     // Double-click handle → reset to default width

@@ -1203,27 +1203,19 @@ function toggleSidebar() {
 
     var handle = document.getElementById('sidebar-resize-handle');
     if (!handle) return;
+    var sb = document.getElementById('sidebar');
 
-    handle.addEventListener('mousedown', function(e) {
-      e.preventDefault();
-      var sb = document.getElementById('sidebar');
-      var startX = e.clientX;
-      var startW = sb.getBoundingClientRect().width;
-      sb.classList.add('resizing');
-
-      function onMove(e) {
-        var w = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startW + (e.clientX - startX)));
+    window.installPaneResize({
+      handle: handle,
+      classTarget: sb,
+      getStartWidth: function () { return sb.getBoundingClientRect().width; },
+      onMove: function (dx, startW) {
+        var w = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startW + dx));
         applySidebarWidth(w);
-      }
-      function onUp(e) {
-        sb.classList.remove('resizing');
-        var finalW = sb.getBoundingClientRect().width;
-        localStorage.setItem(STORAGE_KEY, Math.round(finalW));
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-      }
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
+      },
+      onEnd: function () {
+        localStorage.setItem(STORAGE_KEY, Math.round(sb.getBoundingClientRect().width));
+      },
     });
 
     handle.addEventListener('dblclick', function() {

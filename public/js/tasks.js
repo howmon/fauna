@@ -255,24 +255,17 @@ function _initAutoResizeHandle() {
   var savedW = parseInt(localStorage.getItem('fauna-auto-nav-w'), 10);
   if (savedW && savedW >= 160 && savedW <= 520) navCol.style.width = savedW + 'px';
 
-  var startX, startW;
-  handle.addEventListener('mousedown', function(e) {
-    e.preventDefault();
-    startX = e.clientX;
-    startW = navCol.offsetWidth;
-    panel.classList.add('resizing');
-    function onMove(e) {
-      var w = Math.min(Math.max(startW + e.clientX - startX, 160), 520);
+  window.installPaneResize({
+    handle: handle,
+    classTarget: panel,
+    getStartWidth: function () { return navCol.offsetWidth; },
+    onMove: function (dx, startW) {
+      var w = Math.min(Math.max(startW + dx, 160), 520);
       navCol.style.width = w + 'px';
-    }
-    function onUp() {
-      panel.classList.remove('resizing');
+    },
+    onEnd: function () {
       localStorage.setItem('fauna-auto-nav-w', navCol.offsetWidth);
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    }
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    },
   });
 }
 

@@ -125,6 +125,13 @@ button .ti, label .ti { pointer-events: none; }
   position: relative;
 }
 #sidebar.resizing { transition: none; user-select: none; }
+
+/* While any pane is being resized, prevent iframes/webviews from swallowing
+   pointer events — without this the drag handle gets "stuck" the moment the
+   cursor passes over an HTML artifact preview or the browser-pane webview. */
+body.is-resizing { cursor: col-resize !important; user-select: none; }
+body.is-resizing iframe,
+body.is-resizing webview { pointer-events: none !important; }
 #sidebar-resize-handle {
   position: absolute; right: -4px; top: 0; bottom: 0; width: 8px;
   cursor: col-resize; z-index: 10;

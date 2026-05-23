@@ -308,24 +308,18 @@ function _initHubResize() {
   if (saved && saved >= HUB_MIN && saved <= HUB_MAX) {
     document.documentElement.style.setProperty('--hub-w', saved + 'px');
   }
-  handle.addEventListener('mousedown', function(e) {
-    e.preventDefault();
-    var startX = e.clientX;
-    var startW = hub.getBoundingClientRect().width;
-    hub.classList.add('resizing');
-    function onMove(e) {
-      var w = Math.min(HUB_MAX, Math.max(HUB_MIN, startW - (e.clientX - startX)));
+  window.installPaneResize({
+    handle: handle,
+    classTarget: hub,
+    getStartWidth: function () { return hub.getBoundingClientRect().width; },
+    onMove: function (dx, startW) {
+      // Hub sits on the right — dragging left widens it.
+      var w = Math.min(HUB_MAX, Math.max(HUB_MIN, startW - dx));
       document.documentElement.style.setProperty('--hub-w', w + 'px');
-    }
-    function onUp() {
-      hub.classList.remove('resizing');
-      var finalW = hub.getBoundingClientRect().width;
-      localStorage.setItem(HUB_KEY, Math.round(finalW));
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    }
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    },
+    onEnd: function () {
+      localStorage.setItem(HUB_KEY, Math.round(hub.getBoundingClientRect().width));
+    },
   });
   handle.addEventListener('dblclick', function() {
     document.documentElement.style.setProperty('--hub-w', '460px');
@@ -1719,23 +1713,16 @@ function _initRunResize() {
   var RUN_MIN = 180, RUN_MAX = 700, RUN_KEY = 'fauna-run-sources-width';
   var saved = parseInt(localStorage.getItem(RUN_KEY), 10);
   if (saved && saved >= RUN_MIN && saved <= RUN_MAX) sources.style.width = saved + 'px';
-  handle.addEventListener('mousedown', function(e) {
-    e.preventDefault();
-    var startX = e.clientX;
-    var startW = sources.getBoundingClientRect().width;
-    document.body.classList.add('proj-run-resizing');
-    function onMove(e) {
-      var w = Math.min(RUN_MAX, Math.max(RUN_MIN, startW + (e.clientX - startX)));
+  window.installPaneResize({
+    handle: handle,
+    getStartWidth: function () { return sources.getBoundingClientRect().width; },
+    onMove: function (dx, startW) {
+      var w = Math.min(RUN_MAX, Math.max(RUN_MIN, startW + dx));
       sources.style.width = w + 'px';
-    }
-    function onUp() {
-      document.body.classList.remove('proj-run-resizing');
+    },
+    onEnd: function () {
       localStorage.setItem(RUN_KEY, Math.round(sources.getBoundingClientRect().width));
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    }
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    },
   });
   handle.addEventListener('dblclick', function() {
     sources.style.width = '340px';
