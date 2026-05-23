@@ -1250,8 +1250,19 @@ async function streamResponse(conv) {
       }
     }
   } catch (err) {
-    dbg('stream error: ' + err.message, 'err');
-    if (err.name !== 'AbortError') buffer += (buffer ? '\n\n' : '') + err.message;
+    dbg('stream error: ' + err.message + ' (name=' + err.name + ' code=' + (err.code || '-') + ')', 'err');
+    // Electron/Chromium throws TypeError("network error") when a streaming
+    // fetch's underlying socket is closed without a clean EOF — common
+    // when a long tool call (or App Nap) leaves the SSE channel idle.
+    // Treat it as a soft failure with a user-friendly hint instead of
+    // pasting the raw "network error" message into the AI bubble.
+    if (err.name === 'AbortError') {
+      // user pressed Stop — nothing to do
+    } else if (/network error|Failed to fetch/i.test(err.message || '')) {
+      buffer += (buffer ? '\n\n' : '') + '_⚠ Connection to the model stream was interrupted before the response finished. The partial output above is what was received; press Send again to retry._';
+    } else {
+      buffer += (buffer ? '\n\n' : '') + err.message;
+    }
   } finally {
     _clearToolStatuses();
     if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }

@@ -191,6 +191,17 @@ export function registerChatRoute(app, {
 
     const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
 
+    // SSE keep-alive: when a long tool call (or upstream silence) leaves the
+    // socket without data for several seconds, Electron Chromium kills the
+    // streaming fetch with `TypeError: network error`. A periodic comment
+    // line keeps the chunked transfer alive without polluting the event
+    // stream (clients ignore lines that don't start with `data:` / `event:`).
+    const _sseHeartbeat = setInterval(() => {
+      if (res.writableEnded) return;
+      try { res.write(': ping\n\n'); } catch (_) {}
+    }, 4000);
+    res.on('close', () => clearInterval(_sseHeartbeat));
+
     try {
       const client = getCopilotClient();
       const allMessages = [];
@@ -488,7 +499,9 @@ export function registerChatRoute(app, {
               command,
             });
           }
-          send({ type: 'tool_call', name: 'fauna_shell_exec', label: 'Running: ' + command.slice(0, 80) + (command.length > 80 ? '…' : '') });
+          // (No tool_call SSE emit here — the outer dispatcher in chat.js
+          // already sends one event per call. Emitting again here caused a
+          // visible duplicate in the client status panel.)
           const result = await runShell({
             command,
             cwd,
@@ -964,6 +977,7 @@ export function registerChatRoute(app, {
       }
     } finally {
       try { res.off('close', cancelUpstream); } catch (_) {}
+      clearInterval(_sseHeartbeat);
     }
 
     if (!res.writableEnded) res.end();
