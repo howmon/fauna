@@ -420,10 +420,10 @@ function connectSSE() {
 // user can act on them while the main app is minimised.
 
 const HB_ALERTS_API = '/api/heartbeat/alerts';
-const HB_SETTINGS_API = '/api/heartbeat/settings';
+const ALERT_SETTINGS_API = '/api/widget/alerts/settings';
 let _alerts = [];         // active (not dismissed) alerts
 let _alertsEvsrc = null;
-let _hbSettings = null;   // mirror of /api/heartbeat/settings for the toggle
+let _alertSettings = null; // mirror of /api/widget/alerts/settings
 
 function _alertsEl() { return document.getElementById('alerts-panel'); }
 function _badgeEl()  { return document.getElementById('alert-badge'); }
@@ -441,7 +441,7 @@ function renderAlerts() {
   const panel = _alertsEl();
   const badge = _badgeEl();
   if (!panel || !badge) return;
-  const muted = _hbSettings && _hbSettings.widgetNotify === false;
+  const muted = _alertSettings && _alertSettings.enabled === false;
   if (!_alerts.length || muted) {
     panel.classList.add('hidden');
     panel.innerHTML = '';
@@ -450,10 +450,16 @@ function renderAlerts() {
     return;
   }
   panel.classList.remove('hidden');
-  panel.innerHTML = _alerts.map(a => `
-    <div class="alert-card" data-id="${_esc(a.id)}">
+  panel.innerHTML = _alerts.map(a => {
+    const src = String(a.source || 'heartbeat').toLowerCase();
+    const kind = (src === 'chat' || src === 'workflow') ? src : 'heartbeat';
+    const icon = kind === 'chat' ? 'ti-message-circle-2'
+              : kind === 'workflow' ? 'ti-checkbox'
+              : 'ti-alert-triangle';
+    return `
+    <div class="alert-card kind-${kind}" data-id="${_esc(a.id)}">
       <div class="alert-head">
-        <i class="ti ti-alert-triangle"></i>
+        <i class="ti ${icon}"></i>
         <span class="alert-source">${_esc(a.source || 'heartbeat')}</span>
         <span class="alert-ts">${_fmtTs(a.timestamp)}</span>
       </div>
@@ -463,8 +469,8 @@ function renderAlerts() {
         <button class="alert-btn act-open"   data-id="${_esc(a.id)}">Open in Fauna</button>
         <button class="alert-btn dismiss act-dismiss" data-id="${_esc(a.id)}">Dismiss</button>
       </div>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
   badge.textContent = String(_alerts.length);
   badge.classList.remove('hidden');
 }
@@ -509,9 +515,9 @@ function connectAlertsSSE() {
 
 async function loadHbSettings() {
   try {
-    const r = await fetch(HB_SETTINGS_API);
+    const r = await fetch(ALERT_SETTINGS_API);
     if (r.ok) {
-      _hbSettings = await r.json();
+      _alertSettings = await r.json();
       _applyAlertsButtonState();
       renderAlerts();
     }
@@ -521,24 +527,24 @@ async function loadHbSettings() {
 function _applyAlertsButtonState() {
   const btn = _alertsBtn();
   if (!btn) return;
-  const on = !_hbSettings || _hbSettings.widgetNotify !== false;
+  const on = !_alertSettings || _alertSettings.enabled !== false;
   btn.classList.toggle('alerts-off', !on);
-  btn.title = on ? 'Heartbeat alerts: on (click to mute)' : 'Heartbeat alerts: off (click to enable)';
+  btn.title = on ? 'Notifications: on (click to mute)' : 'Notifications: off (click to enable)';
 }
 
 async function toggleAlerts() {
-  const next = !(_hbSettings && _hbSettings.widgetNotify === false) ? false : true;
+  const next = !(_alertSettings && _alertSettings.enabled === false) ? false : true;
   // Optimistic UI
-  _hbSettings = { ...(_hbSettings || {}), widgetNotify: next };
+  _alertSettings = { ...(_alertSettings || {}), enabled: next };
   _applyAlertsButtonState();
   renderAlerts();
   try {
-    const r = await fetch(HB_SETTINGS_API, {
+    const r = await fetch(ALERT_SETTINGS_API, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ widgetNotify: next }),
+      body: JSON.stringify({ enabled: next }),
     });
-    if (r.ok) _hbSettings = await r.json();
+    if (r.ok) _alertSettings = await r.json();
   } catch (_) {}
   _applyAlertsButtonState();
   renderAlerts();

@@ -71,6 +71,15 @@ export function registerSchedulingAndGuardRoutes(app) {
     res.json({ ok: true });
   });
 
+  // Master enable/disable for the widget notification panel. Covers
+  // heartbeat urgencies *and* chat/workflow completion notifications.
+  app.get('/api/widget/alerts/settings', (req, res) => {
+    res.json(alertHub.getSettings());
+  });
+  app.put('/api/widget/alerts/settings', (req, res) => {
+    res.json(alertHub.updateSettings(req.body || {}));
+  });
+
   // ── Scheduled Workflows ─────────────────────────────────────────────────
   app.get('/api/workflows', (req, res) => {
     res.json(getAllWorkflows());

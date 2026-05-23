@@ -339,6 +339,17 @@ registerChatRoute(app, {
     } catch (_) {
       console.log(`[notification] ${title}: ${body}`);
     }
+    // Mirror chat completion notifications into the widget alert panel
+    // so users can pick them up while the main window is minimised.
+    try {
+      alertHub.publish({
+        id: 'chat-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
+        timestamp: Date.now(),
+        source: 'chat',
+        summary: title || 'Fauna',
+        action: body || '',
+      });
+    } catch (_) {}
   },
   callPlaywrightMcpTool: (tool, args) => playwrightMcp.callTool(tool, args),
   resetPlaywrightMcpClient: () => playwrightMcp.reset(),
@@ -465,6 +476,20 @@ export function startServer(port) {
         console.log(`[notification] ${title}: ${body}`);
       }
     };
+    // Workflow notifier also feeds the widget panel; heartbeat keeps its
+    // direct sink wiring below so urgencies carry the parsed action field.
+    const workflowNotifier = (title, body) => {
+      internalNotifier(title, body);
+      try {
+        alertHub.publish({
+          id: 'wf-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
+          timestamp: Date.now(),
+          source: 'workflow',
+          summary: title || 'Workflow',
+          action: body || '',
+        });
+      } catch (_) {}
+    };
 
     // Start heartbeat and workflow timers
     setHeartbeatPowerSave(_powerSave);
@@ -473,8 +498,8 @@ export function startServer(port) {
     try { setHeartbeatAlertSink(alertHub.publish); }
     catch (e) { console.warn('[server] alert-hub wire failed:', e?.message || e); }
     startHeartbeat(internalAICaller, internalNotifier);
-    startWorkflowTimer(internalAICaller, internalNotifier);
-    startTeamsBridge(internalAICaller, internalNotifier);
+    startWorkflowTimer(internalAICaller, workflowNotifier);
+    startTeamsBridge(internalAICaller, workflowNotifier);
     initBotManager();
     server.on('error', reject);
 

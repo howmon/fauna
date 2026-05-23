@@ -434,6 +434,20 @@ body {
   background: var(--w-surface);
   border-color: var(--w-border);
 }
+/* Non-urgent variants: chat & workflow completions. Same layout, calmer
+   palette so users can distinguish them from heartbeat urgencies. */
+.alert-card.kind-chat {
+  background: linear-gradient(135deg, rgba(80,140,220,0.18), rgba(40,90,160,0.18));
+  border-color: rgba(80,140,220,0.55);
+  animation: none;
+}
+.alert-card.kind-chat .alert-head .ti { color: #8ab4ff; }
+.alert-card.kind-workflow {
+  background: linear-gradient(135deg, rgba(90,180,130,0.18), rgba(40,120,90,0.18));
+  border-color: rgba(90,180,130,0.55);
+  animation: none;
+}
+.alert-card.kind-workflow .alert-head .ti { color: #7adfa3; }
 .alert-head {
   display: flex; align-items: center; gap: 6px;
   font-size: 11px; opacity: 0.85;
