@@ -26,6 +26,8 @@ import { runDecay } from './memory-store.js';
 import { startHeartbeat, setHeartbeatPowerSave, setHeartbeatAlertSink } from './heartbeat.js';
 import * as alertHub from './server/lib/alert-hub.js';
 import { startWorkflowTimer, setWorkflowPowerSave } from './workflow-manager.js';
+import { createWorkflow, getAllWorkflows } from './workflow-manager.js';
+import { seedDefaults } from './server/lib/seed-defaults.js';
 import {
   CONFIG_DIR, readSavedConfig, getGhToken, getCopilotClient,
 } from './server/copilot/auth.js';
@@ -500,6 +502,16 @@ export function startServer(port) {
     startHeartbeat(internalAICaller, internalNotifier);
     startWorkflowTimer(internalAICaller, workflowNotifier);
     startTeamsBridge(internalAICaller, workflowNotifier);
+    // First-launch seed of sample automations. No-op once the marker file
+    // exists or the user already has tasks/workflows configured.
+    try {
+      seedDefaults({
+        readTasks: getAllTasks,
+        createTask,
+        getAllWorkflows,
+        createWorkflow,
+      });
+    } catch (e) { console.warn('[server] seedDefaults failed:', e?.message || e); }
     initBotManager();
     server.on('error', reject);
 
