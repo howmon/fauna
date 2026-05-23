@@ -851,6 +851,18 @@ async function _transcribeBlobs(chunks, mode) {
   }
   console.log('[voice] POSTing', blob.size, 'bytes to /api/transcribe, mode:', mode);
   _vadState = 'transcribing';
+  // Surface the transcribing state in the overlay so the user knows the
+  // utterance was captured and is being processed. The Web Speech API
+  // (used for live captions) is unavailable in Electron, so the overlay
+  // otherwise gets stuck at "Listening…" the whole time.
+  (function () {
+    var tx = document.getElementById('voice-overlay-text');
+    var ov = document.getElementById('voice-overlay');
+    if (tx && ov && ov.classList.contains('visible') && !_liveTranscript) {
+      tx.textContent = 'Transcribing…';
+      tx.classList.add('placeholder');
+    }
+  }());
   try {
     var resp = await fetch('/api/transcribe', {
       method: 'POST',
@@ -1138,10 +1150,18 @@ function _exitCommandMode(transcript) {
   }
 
   if (_conversationMode) {
-    // Stay in conversation mode — route command, then re-enter after a pause
-    _hideVoiceOverlay();
-    _setVoicePillState('active');
-    if (t) _routeVoiceCommand(t);
+    // Stay in conversation mode — route command, then re-enter after a pause.
+    // Display the captured transcript briefly so the user sees what was heard
+    // before the overlay closes.
+    if (t) {
+      _updateLiveTranscript(t, true);
+      _setVoicePillState('active');
+      setTimeout(_hideVoiceOverlay, 1100);
+      _routeVoiceCommand(t);
+    } else {
+      _hideVoiceOverlay();
+      _setVoicePillState('active');
+    }
     // Re-enter will be triggered after TTS finishes (or immediately if no TTS)
     if (!window._voiceAwaitingReply) {
       setTimeout(_reenterCommandMode, 1200);
@@ -1150,9 +1170,14 @@ function _exitCommandMode(transcript) {
   } else {
     // Original non-persistent behavior
     _playVoiceChime('dismiss');
-    _hideVoiceOverlay();
+    if (t) {
+      _updateLiveTranscript(t, true);
+      setTimeout(_hideVoiceOverlay, 1100);
+      _routeVoiceCommand(t);
+    } else {
+      _hideVoiceOverlay();
+    }
     _setVoicePillState(_voiceEnabled ? 'listening' : 'off');
-    if (t) _routeVoiceCommand(t);
   }
 }
 
