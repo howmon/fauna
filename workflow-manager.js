@@ -5,6 +5,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { withTimeout, withRetry } from './server/lib/async-utils.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
 const WF_FILE    = path.join(CONFIG_DIR, 'workflows.json');
@@ -13,6 +14,7 @@ const HISTORY_MAX = 10; // runs per workflow
 let _workflows = null;
 let _timer = null;
 let _aiCaller = null;   // function(prompt, model) → string
+let _powerSave = null;  // optional { acquire, release } guard
 let _notifier = null;   // function(title, body)
 
 // ── Persistence ────────────────────────────────────────────────────────
@@ -30,7 +32,15 @@ function _load() {
 
 function _save() {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(WF_FILE, JSON.stringify(_workflows, null, 2));
+  // Atomic write: temp file + rename to prevent corruption on crash mid-write.
+  const tmp = WF_FILE + '.tmp-' + process.pid + '-' + Date.now();
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(_workflows, null, 2));
+    fs.renameSync(tmp, WF_FILE);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    throw e;
+  }
 }
 
 function _uid() {
@@ -168,6 +178,11 @@ export async function runWorkflow(id) {
   };
 
   let prevOutput = '';
+  // Hold the screen-wake lock for the entire workflow so a long-running
+  // multi-step run isn't paused by App-Nap or display sleep.
+  let _psHeld = false;
+  try { if (_powerSave) { _powerSave.acquire(); _psHeld = true; } } catch (_) {}
+  try {
   for (const step of wf.steps) {
     const stepStart = Date.now();
     try {
@@ -175,7 +190,12 @@ export async function runWorkflow(id) {
       const prompt = prevOutput
         ? `Previous step output:\n${prevOutput}\n\n---\n\n${step.prompt}`
         : step.prompt;
-      const output = await _aiCaller(prompt, wf.model);
+      // Bound each step with a timeout + retry. One hung step previously
+      // blocked the entire 60s scheduler tick for all workflows.
+      const output = await withRetry(
+        () => withTimeout(_aiCaller(prompt, wf.model), 60000, 'workflow step "' + step.name + '"'),
+        { attempts: 2, baseMs: 1500 }
+      );
       prevOutput = output;
       run.steps.push({
         id: step.id,
@@ -195,6 +215,9 @@ export async function runWorkflow(id) {
       run.status = 'error';
       break;
     }
+  }
+  } finally {
+    if (_psHeld) { try { _powerSave.release(); } catch (_) {} }
   }
 
   if (run.status === 'running') run.status = 'completed';
@@ -257,6 +280,10 @@ export function startWorkflowTimer(aiCaller, notifier) {
   if (_timer) clearInterval(_timer);
   _timer = setInterval(_tick, 60 * 1000);
   console.log('[workflows] Timer started (60s tick)');
+}
+
+export function setWorkflowPowerSave(guard) {
+  _powerSave = guard && typeof guard.acquire === 'function' ? guard : null;
 }
 
 export function stopWorkflowTimer() {

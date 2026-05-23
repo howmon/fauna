@@ -38,6 +38,7 @@ import { formatForSystemPrompt as factsForSystemPrompt, getStats as factsGetStat
 import { getProjectSystemContext, buildContextPayload } from '../../project-manager.js';
 import { estimateTokens, computeBudget } from '../lib/token-budget.js';
 import { summarizeHistory } from '../lib/summarize-history.js';
+import { withTimeout } from '../lib/async-utils.js';
 
 export function registerChatRoute(app, {
   figma,
@@ -102,6 +103,26 @@ export function registerChatRoute(app, {
     res.json({ ok: true });
   });
 
+  // ── Permission-request RPC ── opt-in via FAUNA_PROMPT_PERMISSION=1.
+  // When enabled, the chat loop sends `tool_permission_request` with a
+  // callId and awaits a POST here with { callId, decision: 'allow'|'deny' }.
+  // Falls back to deny on timeout so an absent UI cannot silently approve.
+  /** @type {Map<string,{resolve:(v:string)=>void,timer:NodeJS.Timeout}>} */
+  const permissionPendingCalls = new Map();
+  const PERMISSION_TIMEOUT_MS = 30000;
+
+  app.post('/api/tool-permission-result', (req, res) => {
+    const { callId, decision } = req.body || {};
+    const pending = permissionPendingCalls.get(callId);
+    if (!pending) {
+      return res.status(404).json({ ok: false, error: 'Unknown or expired callId' });
+    }
+    permissionPendingCalls.delete(callId);
+    clearTimeout(pending.timer);
+    pending.resolve(decision === 'allow' ? 'allow' : 'deny');
+    res.json({ ok: true });
+  });
+
   app.post('/api/chat', async (req, res) => {
     psAcquire();
     res.on('finish', psRelease);
@@ -115,9 +136,39 @@ export function registerChatRoute(app, {
     // guarded by `!res.writableEnded` — only true when the client genuinely disconnected
     // before we finished writing the SSE stream.
     const upstreamAbort = new AbortController();
+    // Track callIds opened by THIS request so a client disconnect rejects
+    // only its own pending widget / client-tool round-trips (the Maps are
+    // shared across all concurrent /api/chat requests).
+    const ownedWidgetCallIds = new Set();
+    const ownedClientToolCallIds = new Set();
+    const ownedPermissionCallIds = new Set();
     const cancelUpstream = () => {
       if (res.writableEnded) return; // normal completion, not a real client abort
       try { upstreamAbort.abort(); } catch (_) {}
+      for (const callId of ownedWidgetCallIds) {
+        const pending = widgetPendingCalls.get(callId);
+        if (!pending) continue;
+        try { clearTimeout(pending.timer); } catch (_) {}
+        try { pending.reject(new Error('Client disconnected')); } catch (_) {}
+        widgetPendingCalls.delete(callId);
+      }
+      ownedWidgetCallIds.clear();
+      for (const callId of ownedClientToolCallIds) {
+        const pending = clientToolPendingCalls.get(callId);
+        if (!pending) continue;
+        try { clearTimeout(pending.timer); } catch (_) {}
+        try { pending.reject(new Error('Client disconnected')); } catch (_) {}
+        clientToolPendingCalls.delete(callId);
+      }
+      ownedClientToolCallIds.clear();
+      for (const callId of ownedPermissionCallIds) {
+        const pending = permissionPendingCalls.get(callId);
+        if (!pending) continue;
+        try { clearTimeout(pending.timer); } catch (_) {}
+        try { pending.resolve('deny'); } catch (_) {}
+        permissionPendingCalls.delete(callId);
+      }
+      ownedPermissionCallIds.clear();
     };
     res.on('close', cancelUpstream);
     const { messages = [], model = 'claude-sonnet-4.6', systemPrompt = '', useFigmaMCP = false, contextSummary = '',
@@ -478,6 +529,7 @@ export function registerChatRoute(app, {
               reject(new Error('Client tool "' + name + '" timed out after ' + timeoutMs + 'ms'));
             }, timeoutMs);
             clientToolPendingCalls.set(callId, { resolve, reject, timer });
+            ownedClientToolCallIds.add(callId);
             // Cancel pending client tool calls if the upstream stream is aborted
             const onAbort = () => {
               if (!clientToolPendingCalls.has(callId)) return;
@@ -496,6 +548,27 @@ export function registerChatRoute(app, {
         if (enableDynamicWidgets) mcpTools = [...mcpTools, ...DYNAMIC_WIDGET_TOOL_DEFS];
       }
 
+      // Detect tool-name collisions across the merged set (figma + agent +
+      // self-tools + widgets). Duplicates cause silent shadowing in the
+      // routing block below — the first match wins, but the model sees only
+      // one definition and may guess wrong args. Drop later duplicates and
+      // log so the conflict surfaces in build logs.
+      if (Array.isArray(mcpTools) && mcpTools.length) {
+        const seenToolNames = new Set();
+        const deduped = [];
+        for (const t of mcpTools) {
+          const tname = t?.function?.name || t?.name;
+          if (!tname) { deduped.push(t); continue; }
+          if (seenToolNames.has(tname)) {
+            console.warn(`[chat] dropping duplicate tool definition: "${tname}" — first registration wins`);
+            continue;
+          }
+          seenToolNames.add(tname);
+          deduped.push(t);
+        }
+        mcpTools = deduped;
+      }
+
       // Agentic loop — re-runs if model calls tools (max 12 iterations)
       let continueLoop = true;
       let toolCallCount = 0;
@@ -512,12 +585,28 @@ export function registerChatRoute(app, {
       const HALF_STOP_RE = /\b(want me to (continue|proceed|go ahead|keep going|do that|move on)|shall i (continue|proceed|go ahead|keep going)|should i (continue|proceed|go ahead|keep going)|do you want me to|let me know (if|when) you (want|'?d like) (me )?to|ready for the next (step|one|part)|ready to (continue|proceed)|on your (go|signal|word)|just (say|let me know) (the word|when)|happy to (continue|proceed|keep going) if)/i;
 
       // ── Tool guard — pre-call checks, category limits, browser discipline ──
+      const PROMPT_PERMISSION = process.env.FAUNA_PROMPT_PERMISSION === '1';
       const toolGuard = new ToolGuardContext({
         send,
         onPermissionRequest: async (toolName, args, info) => {
-          // For now, send SSE event and auto-allow (Phase 2 will add interactive prompt)
-          send({ type: 'tool_permission_request', name: toolName, args, label: info.label, category: info.category });
-          return 'allow';
+          // Default (legacy): emit the SSE event and auto-allow. Set
+          // FAUNA_PROMPT_PERMISSION=1 to require an explicit decision via
+          // /api/tool-permission-result; on timeout the call is denied.
+          if (!PROMPT_PERMISSION) {
+            send({ type: 'tool_permission_request', name: toolName, args, label: info.label, category: info.category });
+            return 'allow';
+          }
+          return await new Promise((resolve) => {
+            const callId = 'tp_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+            const timer = setTimeout(() => {
+              permissionPendingCalls.delete(callId);
+              ownedPermissionCallIds.delete(callId);
+              resolve('deny');
+            }, PERMISSION_TIMEOUT_MS);
+            permissionPendingCalls.set(callId, { resolve, timer });
+            ownedPermissionCallIds.add(callId);
+            send({ type: 'tool_permission_request', callId, name: toolName, args, label: info.label, category: info.category });
+          });
         },
       });
 
@@ -648,7 +737,10 @@ export function registerChatRoute(app, {
             // Hard stop: too many tool calls (legacy global limit as safety net)
             if (toolCallCount > MAX_TOOL_CALLS) {
               allMessages.push({ role: 'tool', tool_call_id: tc.id, content: 'Tool call limit reached (' + MAX_TOOL_CALLS + ' calls). If the user\'s task is genuinely complete and verified, give the final summary now. If concrete work remains, state the exact next step that must be taken and why it could not be inferred — do NOT ask the user whether to proceed.' });
-              continue;
+              // Reject the remaining queued calls so the loop terminates cleanly
+              // instead of re-iterating and spamming the same limit message.
+              continueLoop = false;
+              break;
             }
 
             // Deduplicate: same tool + same args already called
@@ -717,6 +809,7 @@ export function registerChatRoute(app, {
                       reject(new Error(`Widget tool "${parsed.toolName}" timed out after ${WIDGET_TOOL_TIMEOUT_MS}ms`));
                     }, WIDGET_TOOL_TIMEOUT_MS);
                     widgetPendingCalls.set(callId, { resolve, reject, timer });
+                    ownedWidgetCallIds.add(callId);
                     send({ type: 'widget_tool_pending', callId, widgetId: reg.widgetId, name: parsed.toolName, args });
                   }).catch(err => ({ ok: false, error: err.message }));
                   result = typeof rpcResult === 'string' ? rpcResult : JSON.stringify(rpcResult);
@@ -732,16 +825,43 @@ export function registerChatRoute(app, {
                 result = await agentToolHandlers.get(toolName)(args);
               } else {
                 figma.log('🔧 ' + toolName + (toolName === 'figma_execute' ? ': ' + (args.code || '').slice(0, 80).replace(/\n/g,' ') + '…' : ''), 'cmd');
-                result = await figma.callMcpTool(toolName, args);
+                // Bound MCP calls so a hung Figma plugin / server doesn't
+                // freeze the agentic loop for the rest of the turn.
+                result = await withTimeout(
+                  figma.callMcpTool(toolName, args),
+                  30000,
+                  'figma tool "' + toolName + '"'
+                );
                 figma.log('✓ ' + toolName + ' done', 'ok');
               }
 
-              // Truncate oversized results (screenshots, large contexts)
+              // Truncate oversized results (screenshots, large contexts).
+              // Keep head + tail so errors/stack traces at the end of long
+              // tool output (e.g. shell, build logs) survive the truncation
+              // window — losing the failing tail is what confuses the model.
               if (typeof result === 'string' && result.length > MAX_RESULT_CHARS) {
-                result = result.slice(0, MAX_RESULT_CHARS) + `\n\n[Truncated — ${result.length} chars total]`;
+                const original = result.length;
+                const tailBudget = Math.min(2000, Math.floor(MAX_RESULT_CHARS * 0.1));
+                const headBudget = MAX_RESULT_CHARS - tailBudget;
+                result =
+                  result.slice(0, headBudget) +
+                  `\n\n[\u2026 truncated ${original - MAX_RESULT_CHARS} chars; showing first ${headBudget} + last ${tailBudget} of ${original} total \u2026]\n\n` +
+                  result.slice(-tailBudget);
               }
               toolCallsSeen.set(callKey, result);
-              allMessages.push({ role: 'tool', tool_call_id: tc.id, content: typeof result === 'string' ? result : JSON.stringify(result) });
+              // Safe serialize — non-string results may contain circular refs
+              // or unserializable values; never let that crash the SSE stream.
+              let toolContent;
+              if (typeof result === 'string') {
+                toolContent = result;
+              } else {
+                try {
+                  toolContent = JSON.stringify(result);
+                } catch (serErr) {
+                  toolContent = JSON.stringify({ ok: false, error: 'tool result not serializable: ' + serErr.message });
+                }
+              }
+              allMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolContent });
             } catch (e) {
               allMessages.push({ role: 'tool', tool_call_id: tc.id, content: `Error: ${e.message}` });
               figma.log('✗ ' + toolName + ': ' + e.message, 'err');

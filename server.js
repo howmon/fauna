@@ -23,8 +23,8 @@ import {
 } from './project-manager.js';
 import { loadInstructionFiles } from './lib/instruction-files.js';
 import { runDecay } from './memory-store.js';
-import { startHeartbeat } from './heartbeat.js';
-import { startWorkflowTimer } from './workflow-manager.js';
+import { startHeartbeat, setHeartbeatPowerSave } from './heartbeat.js';
+import { startWorkflowTimer, setWorkflowPowerSave } from './workflow-manager.js';
 import {
   CONFIG_DIR, readSavedConfig, getGhToken, getCopilotClient,
 } from './server/copilot/auth.js';
@@ -453,6 +453,8 @@ export function startServer(port) {
     };
 
     // Start heartbeat and workflow timers
+    setHeartbeatPowerSave(_powerSave);
+    setWorkflowPowerSave(_powerSave);
     startHeartbeat(internalAICaller, internalNotifier);
     startWorkflowTimer(internalAICaller, internalNotifier);
     startTeamsBridge(internalAICaller, internalNotifier);

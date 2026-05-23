@@ -5,6 +5,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { withTimeout, withRetry } from './server/lib/async-utils.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
 const HB_FILE    = path.join(CONFIG_DIR, 'heartbeat.json');
@@ -15,6 +16,7 @@ let _settings = null;
 let _log = [];
 let _aiCaller = null;     // function(prompt) → string
 let _notifier = null;     // function(title, body)
+let _powerSave = null;    // optional { acquire, release } guard
 
 // ── Default settings ────────────────────────────────────────────────────
 
@@ -102,8 +104,18 @@ export async function runHeartbeat(force = false) {
   let status = 'ok';
   let urgent = null;
 
+  // Hold the screen-wake lock across the AI call so macOS doesn't App-Nap
+  // mid-request and stall the scheduled run.
+  let _psHeld = false;
+  try { if (_powerSave) { _powerSave.acquire(); _psHeld = true; } } catch (_) {}
+
   try {
-    response = await _aiCaller(_settings.prompt, _settings.model);
+    // Bound AI call with timeout + 3-attempt exponential retry so transient
+    // network/quota blips don't silently miss the heartbeat window.
+    response = await withRetry(
+      () => withTimeout(_aiCaller(_settings.prompt, _settings.model), 30000, 'heartbeat AI call'),
+      { attempts: 3, baseMs: 1000 }
+    );
     // Parse structured response
     const parsed = _parseResponse(response);
     status = parsed.status;
@@ -115,6 +127,8 @@ export async function runHeartbeat(force = false) {
   } catch (e) {
     status = 'error';
     response = e.message;
+  } finally {
+    if (_psHeld) { try { _powerSave.release(); } catch (_) {} }
   }
 
   const entry = {
@@ -122,7 +136,7 @@ export async function runHeartbeat(force = false) {
     durationMs: Date.now() - startTime,
     status,
     urgent,
-    response: response.slice(0, 2000),
+    response: String(response || '').slice(0, 2000),
   };
   _log.push(entry);
   if (_log.length > LOG_MAX) _log.splice(0, _log.length - LOG_MAX);
@@ -132,16 +146,30 @@ export async function runHeartbeat(force = false) {
 }
 
 function _parseResponse(text) {
-  // Look for HEARTBEAT_URGENT|source|summary
-  const urgentMatch = text.match(/HEARTBEAT_URGENT\|([^|]*)\|(.+)/);
+  // The AI caller can return a string OR a chat-completion object. Normalise
+  // first so .match doesn't blow up on objects (previous behaviour silently
+  // skipped parsing and always reported 'ok').
+  if (text && typeof text === 'object') {
+    text = text?.choices?.[0]?.message?.content
+        ?? text?.content
+        ?? text?.text
+        ?? '';
+  }
+  text = String(text || '');
+
+  // Look for HEARTBEAT_URGENT|source|summary. Anchored at a line boundary
+  // (multiline flag) so a quoted example earlier in the response doesn't
+  // trigger a false positive, and case-insensitive in case the model
+  // varies casing. Summary is captured up to end-of-line.
+  const urgentMatch = text.match(/^[\s>*-]*HEARTBEAT_URGENT\|([^|\n]*)\|([^\n]+)/im);
   if (urgentMatch) {
     return {
       status: 'urgent',
       urgent: { source: urgentMatch[1].trim(), summary: urgentMatch[2].trim() },
     };
   }
-  // HEARTBEAT_OK
-  if (text.includes('HEARTBEAT_OK')) {
+  // HEARTBEAT_OK — also anchor + case-insensitive.
+  if (/^[\s>*-]*HEARTBEAT_OK\b/im.test(text)) {
     return { status: 'ok', urgent: null };
   }
   // Fallback: treat any response as informational
@@ -165,6 +193,10 @@ export function startHeartbeat(aiCaller, notifier) {
   _notifier = notifier;
   _load();
   _reschedule();
+}
+
+export function setHeartbeatPowerSave(guard) {
+  _powerSave = guard && typeof guard.acquire === 'function' ? guard : null;
 }
 
 export function stopHeartbeat() {

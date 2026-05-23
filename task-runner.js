@@ -38,7 +38,12 @@ async function runTask(taskId, opts = {}) {
 
   if (_runningTasks.has(taskId)) {
     console.log('[task-runner] Task already running:', task.title);
-    return;
+    // Reject (rather than silently return undefined) so callers don't
+    // hang awaiting a promise that never settles. Use a sentinel code
+    // so callers can detect the duplicate-run case cleanly.
+    const err = new Error('Task already running: ' + task.title);
+    err.code = 'TASK_ALREADY_RUNNING';
+    throw err;
   }
 
   const ac = new AbortController();

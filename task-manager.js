@@ -80,6 +80,26 @@ function rruleMatchesNow(rrule, lastRunAt) {
         last.getMinutes() === now.getMinutes()) return false;
   }
 
+  // Honour INTERVAL — without this an INTERVAL=2 rule fires every period
+  // instead of every Nth period. We approximate by requiring at least
+  // (interval - 1) full periods have elapsed since lastRunAt; first run
+  // (no lastRunAt) is always allowed once the hour:minute filter passes.
+  const interval = r.interval && r.interval > 1 ? r.interval : 1;
+  if (interval > 1 && lastRunAt) {
+    const elapsedMs = now.getTime() - new Date(lastRunAt).getTime();
+    const periodMs = (
+      r.freq === 'MINUTELY' ? 60_000 :
+      r.freq === 'HOURLY'   ? 3_600_000 :
+      r.freq === 'DAILY'    ? 86_400_000 :
+      r.freq === 'WEEKLY'   ? 7 * 86_400_000 :
+      r.freq === 'MONTHLY'  ? 28 * 86_400_000 :  // conservative lower bound
+      r.freq === 'YEARLY'   ? 365 * 86_400_000 :
+      0
+    );
+    // Use 0.95 fudge so a slightly-early tick at the boundary still fires.
+    if (periodMs && elapsedMs < (interval - 1) * periodMs * 0.95) return false;
+  }
+
   switch (r.freq) {
     case 'MINUTELY': return true;
     case 'HOURLY':   return (!r.byMinute || r.byMinute.includes(m));
@@ -416,6 +436,26 @@ let _onTaskDue = null;  // callback: (task) => void — set by server.js
 function startScheduler(onTaskDue) {
   _onTaskDue = onTaskDue;
   if (_schedulerTimer) clearInterval(_schedulerTimer);
+  // Recovery sweep: any task still marked 'running' at startup is orphaned
+  // (the previous process crashed mid-run or was force-killed). Without
+  // recovery, recurring tasks would never re-arm because completeTask/
+  // failTask never fires.
+  try {
+    const stuck = readTasks().filter(t => t.status === 'running');
+    for (const t of stuck) {
+      const isRecurring = t.schedule?.type === 'recurring';
+      const rruleStr = isRecurring ? (t.schedule.rrule || _cronToRrule(t.schedule.cron)) : null;
+      updateTask(t.id, {
+        status: isRecurring ? 'scheduled' : 'failed',
+        nextRunAt: rruleStr ? nextRruleOccurrence(rruleStr) : t.nextRunAt,
+        _historyEvent: 'recovered',
+        _historyDetail: 'orphan task reset on scheduler start',
+      });
+      console.log('[task-mgr] Recovered orphan task:', t.title || t.id);
+    }
+  } catch (e) {
+    console.warn('[task-mgr] Orphan recovery sweep failed:', e?.message || e);
+  }
   _schedulerTimer = setInterval(() => _tick(), 30000); // every 30s
   console.log('[task-mgr] Scheduler started (30s interval)');
 }

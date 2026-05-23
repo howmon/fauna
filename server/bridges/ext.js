@@ -20,6 +20,23 @@ export function createExtBridge({ getFaunaMcpState }) {
   const extClients = new Map();
   const extPendingCommands = new Map();
   const extEventClients = new Set();
+
+  // Per-client rate-limit on /api/ext/command. A misbehaving caller (or a
+  // tool loop bug) could otherwise drive an extension at unbounded rate.
+  // We use a rolling 1-second window per clientId|tabId|origin key.
+  const RATE_WINDOW_MS = 1000;
+  const RATE_MAX = 20; // 20 commands/sec/key
+  const _extRate = new Map(); // key -> [timestamps]
+  function _checkRate(key) {
+    const now = Date.now();
+    const cutoff = now - RATE_WINDOW_MS;
+    let arr = _extRate.get(key);
+    if (!arr) { arr = []; _extRate.set(key, arr); }
+    while (arr.length && arr[0] < cutoff) arr.shift();
+    if (arr.length >= RATE_MAX) return false;
+    arr.push(now);
+    return true;
+  }
   let faunaMcpRelayBrowsers = [];  // [{id, browser, version, connectedAt, activeTab}]
 
   function extBrowserName(userAgent = '') {
@@ -86,6 +103,21 @@ export function createExtBridge({ getFaunaMcpState }) {
       return;
     }
 
+    if (msg.type === 'ext:bye') {
+      // Graceful disconnect. Flag the client so close-handler emits a
+      // 'bye' SSE instead of the generic status-changed broadcast and
+      // closes the socket immediately.
+      client.byeReason = msg.reason || 'client_requested';
+      sendSse('message', {
+        event: 'ext:bye',
+        id: client.id,
+        browser: client.browser,
+        reason: client.byeReason,
+      });
+      try { client.ws.close(1000, 'bye'); } catch (_) {}
+      return;
+    }
+
     if (msg.type === 'result' && msg.id && extPendingCommands.has(msg.id)) {
       const pending = extPendingCommands.get(msg.id);
       extPendingCommands.delete(msg.id);
@@ -136,11 +168,14 @@ export function createExtBridge({ getFaunaMcpState }) {
       ws.on('message', raw => handleMessage(client, raw));
       ws.on('close', () => {
         extClients.delete(id);
+        // Reject any pending commands tied to this client (by id OR by ws ref,
+        // in case the client reconnected with a fresh id leaving the old
+        // socket's pending calls orphaned).
         for (const [cmdId, pending] of Array.from(extPendingCommands.entries())) {
-          if (pending.clientId === id) {
+          if (pending.clientId === id || pending.ws === ws) {
             extPendingCommands.delete(cmdId);
             clearTimeout(pending.timeoutId);
-            pending.reject(new Error('Browser extension disconnected'));
+            try { pending.reject(new Error('Browser extension disconnected')); } catch (_) {}
           }
         }
         broadcastStatus();
@@ -189,8 +224,37 @@ export function createExtBridge({ getFaunaMcpState }) {
     });
 
     app.post('/api/ext/command', async (req, res) => {
+      // Origin guard: this endpoint can drive the user's browser remotely, so
+      // reject cross-origin requests. The Fauna UI is same-origin (no Origin
+      // header on fetch), the browser extension uses chrome-extension://,
+      // and Electron app pages may use file:// / app://. Anything else
+      // (e.g. a malicious web page hitting localhost:3737) is rejected.
+      const origin = req.headers.origin || '';
+      if (origin) {
+        const port = req.socket?.localPort || 3737;
+        const allowed = (
+          origin === `http://localhost:${port}` ||
+          origin === `http://127.0.0.1:${port}` ||
+          origin.startsWith('chrome-extension://') ||
+          origin.startsWith('moz-extension://') ||
+          origin.startsWith('safari-web-extension://') ||
+          origin === 'app://-' ||
+          origin === 'null'
+        );
+        if (!allowed) {
+          return res.status(403).json({ ok: false, error: 'origin not allowed' });
+        }
+      }
+
       const { action, params = {}, tabId, browser, clientId } = req.body || {};
       if (!action) return res.status(400).json({ ok: false, error: 'action required' });
+
+      // Per-client rate limit (20 cmds/sec). Returns 429 with Retry-After.
+      const rateKey = (clientId || browser || origin || req.ip || 'anon') + '|' + (tabId ?? '*');
+      if (!_checkRate(rateKey)) {
+        res.setHeader('Retry-After', '1');
+        return res.status(429).json({ ok: false, error: 'ext command rate limit exceeded' });
+      }
 
       if (isRelayExtClientId(clientId)) {
         try {
@@ -226,7 +290,9 @@ export function createExtBridge({ getFaunaMcpState }) {
             ? clients.find(c => c.browser === browser) || clients[0]
             : clients[0];
       const id = 'cmd-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-      const timeoutMs = Math.max(1000, Math.min(Number(req.body.timeout) || 30000, 120000));
+      // Cap caller-supplied timeout at 30s. The previous 120s cap meant a
+      // single hung extension could block downstream tasks for two minutes.
+      const timeoutMs = Math.max(1000, Math.min(Number(req.body.timeout) || 30000, 30000));
 
       try {
         const result = await new Promise((resolve, reject) => {
@@ -234,10 +300,25 @@ export function createExtBridge({ getFaunaMcpState }) {
             extPendingCommands.delete(id);
             reject(new Error('Browser extension command timed out'));
           }, timeoutMs);
-          extPendingCommands.set(id, { resolve, reject, timeoutId, clientId: client.id });
+          extPendingCommands.set(id, { resolve, reject, timeoutId, clientId: client.id, ws: client.ws });
           client.ws.send(JSON.stringify({ type: 'cmd', id, action, params, tabId }));
         });
-        res.json({ ok: true, ...result });
+        // Cap oversized string fields in the result so a misbehaving
+        // extension cannot blow the agent context window. 200KB per field
+        // is well above any reasonable DOM excerpt but well below process
+        // memory pressure; chat.js applies its own 40KB cap downstream.
+        const EXT_FIELD_CAP = 200_000;
+        const capped = result && typeof result === 'object' ? { ...result } : result;
+        if (capped && typeof capped === 'object') {
+          for (const k of Object.keys(capped)) {
+            const v = capped[k];
+            if (typeof v === 'string' && v.length > EXT_FIELD_CAP) {
+              capped[k] = v.slice(0, EXT_FIELD_CAP) +
+                `\n\n[truncated: ${v.length - EXT_FIELD_CAP} more chars]`;
+            }
+          }
+        }
+        res.json({ ok: true, ...capped });
       } catch (e) {
         res.status(500).json({ ok: false, error: e.message });
       }
@@ -283,7 +364,7 @@ export function createExtBridge({ getFaunaMcpState }) {
             extPendingCommands.delete(id);
             reject(new Error('Screenshot timed out'));
           }, 30000);
-          extPendingCommands.set(id, { resolve, reject, timeoutId, clientId: client.id });
+          extPendingCommands.set(id, { resolve, reject, timeoutId, clientId: client.id, ws: client.ws });
           client.ws.send(JSON.stringify({ type: 'cmd', id, action, params: { full }, tabId }));
         });
         res.json({ ok: true, ...result });
