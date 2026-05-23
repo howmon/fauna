@@ -85,20 +85,20 @@ describe('seedDefaults', () => {
     expect(deps.createWorkflow).not.toHaveBeenCalled();
   });
 
-  it('does not seed when user already has tasks (writes marker instead)', () => {
+  it('seeds even when user already has tasks (additive)', () => {
     const deps = makeDeps({ tasks: [{ id: 'task-mine', title: 'mine' }] });
     const out = seedDefaults(deps);
-    expect(out.seeded).toBe(false);
-    expect(out.reason).toBe('already-has-data');
-    expect(deps.createTask).not.toHaveBeenCalled();
+    expect(out.seeded).toBe(true);
+    expect(deps.createTask).toHaveBeenCalled();
+    expect(deps.createWorkflow).toHaveBeenCalled();
   });
 
-  it('does not seed when user already has workflows (writes marker instead)', () => {
+  it('seeds even when user already has workflows (additive)', () => {
     const deps = makeDeps({ workflows: [{ id: 'wf-mine', name: 'mine' }] });
     const out = seedDefaults(deps);
-    expect(out.seeded).toBe(false);
-    expect(out.reason).toBe('already-has-data');
-    expect(deps.createWorkflow).not.toHaveBeenCalled();
+    expect(out.seeded).toBe(true);
+    expect(deps.createTask).toHaveBeenCalled();
+    expect(deps.createWorkflow).toHaveBeenCalled();
   });
 
   it('includes all four task kinds in the seed set', () => {

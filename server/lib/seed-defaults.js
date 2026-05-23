@@ -125,11 +125,10 @@ function _sampleWorkflows() {
 /**
  * Seed default automations on first launch.
  *
- * Skips entirely if:
- *  - the marker file exists (user has been seeded before, even if they
- *    deleted everything — we respect that), OR
- *  - tasks.json or workflows.json already has entries (don't touch
- *    a pre-existing setup).
+ * The marker file `~/.config/fauna/seeded.json` is the only gate — once it
+ * exists we never seed again, even if the user deletes every sample. To
+ * re-seed (e.g. for a demo) delete the marker file. Pre-existing user
+ * tasks/workflows are preserved; samples are appended alongside them.
  *
  * @param {object} deps
  * @param {() => any[]} deps.readTasks
@@ -142,15 +141,6 @@ export function seedDefaults({ readTasks, createTask, getAllWorkflows, createWor
   try {
     if (fs.existsSync(MARKER_FILE)) {
       return { seeded: false, taskIds: [], workflowIds: [], reason: 'marker-present' };
-    }
-    const existingTasks = readTasks() || [];
-    const existingWfs   = getAllWorkflows() || [];
-    if (existingTasks.length > 0 || existingWfs.length > 0) {
-      // User already has data — write marker so we never touch them, but
-      // don't add samples on top of their setup.
-      try { fs.mkdirSync(CONFIG_DIR, { recursive: true }); } catch (_) {}
-      saveJsonAtomic(MARKER_FILE, { at: new Date().toISOString(), reason: 'skipped-non-empty' });
-      return { seeded: false, taskIds: [], workflowIds: [], reason: 'already-has-data' };
     }
 
     const taskIds = [];
