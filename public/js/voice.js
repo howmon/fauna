@@ -123,6 +123,17 @@ function _playVoiceChime(type) {
       // Rising two-tone: wake word matched
       osc.frequency.setValueAtTime(820, ctx.currentTime);
       osc.frequency.exponentialRampToValueAtTime(1100, ctx.currentTime + 0.14);
+    } else if (type === 'complete') {
+      // Pleasant 3-note rising arpeggio (C5 → E5 → G5): turn complete
+      osc.frequency.setValueAtTime(523.25, ctx.currentTime);          // C5
+      osc.frequency.setValueAtTime(659.25, ctx.currentTime + 0.10);   // E5
+      osc.frequency.setValueAtTime(783.99, ctx.currentTime + 0.20);   // G5
+      gain.gain.setValueAtTime(0.18, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.42);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.45);
+      osc.onended = function() { ctx.close(); };
+      return;
     } else {
       // Falling: command captured / dismissed
       osc.frequency.setValueAtTime(700, ctx.currentTime);
@@ -133,6 +144,20 @@ function _playVoiceChime(type) {
     osc.onended = function() { ctx.close(); };
   } catch (_) {}
 }
+
+// ── Per-setting helpers (read/write a single key on the persisted voice settings) ─
+function getVoiceSetting(key, defaultValue) {
+  var s = _loadVoiceSettings();
+  return s[key] === undefined ? defaultValue : s[key];
+}
+
+function setVoiceSetting(key, val) {
+  var s = _loadVoiceSettings();
+  s[key] = val;
+  _saveVoiceSettings(s);
+}
+window.getVoiceSetting = getVoiceSetting;
+window.setVoiceSetting = setVoiceSetting;
 
 // ── Text-to-speech ────────────────────────────────────────────────────────
 
@@ -180,6 +205,123 @@ function _hideResponseCard() {
   if (_speakTimer) { clearTimeout(_speakTimer); _speakTimer = null; }
   var card = document.getElementById('voice-response-card');
   if (card) card.classList.remove('visible');
+}
+
+// ── Assistant-turn-complete hook ──────────────────────────────────────────
+// Called from chat.js when an assistant reply finishes streaming.
+// Honors three independent settings (all default off except chime):
+//   chimeOnComplete   — play a brief chime
+//   readSummary       — TTS-read a short summary of the reply
+//   readSuggestions   — also TTS-read recommended actions
+//   handsFreeReply    — after speaking, open the mic so the user can reply
+//                       without saying the wake word again (requires voice enabled)
+function _summarizeForTTS(buffer) {
+  if (!buffer) return '';
+  var t = String(buffer)
+    .replace(/```[\s\S]*?```/g, '')              // strip fenced blocks (incl. suggestions/shell/etc.)
+    .replace(/<details[\s\S]*?<\/details>/gi, '') // strip thinking blocks
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')     // markdown links → text
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')        // images → drop
+    .replace(/<[^>]+>/g, ' ')                    // any HTML tags → space
+    .replace(/[#*_~`>|]/g, '')                   // markdown punctuation
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return '';
+  // Prefer first 1–2 sentences (max ~280 chars) — keep the spoken summary short.
+  var sentences = t.match(/[^.!?]+[.!?]+/g) || [t];
+  var out = '';
+  for (var i = 0; i < sentences.length && out.length < 220; i++) {
+    out += (out ? ' ' : '') + sentences[i].trim();
+  }
+  if (out.length > 280) out = out.slice(0, 277) + '…';
+  return out;
+}
+
+function _extractSuggestionItems(buffer) {
+  if (!buffer) return [];
+  var m = String(buffer).match(/```suggestions\n([\s\S]*?)```/);
+  if (!m) return [];
+  try {
+    var arr = JSON.parse(m[1].trim());
+    return Array.isArray(arr) ? arr.slice(0, 4).map(function(x) { return String(x); }) : [];
+  } catch (_) { return []; }
+}
+
+function _onAssistantTurnComplete(buffer, _msgEl) {
+  try {
+    // Skip if the existing voice-conversation path is already handling this turn —
+    // it speaks a longer version of the reply and re-enters command mode on its own.
+    if (window._voiceAwaitingReply) return;
+
+    var chime           = getVoiceSetting('chimeOnComplete',  true);
+    var readSummary     = getVoiceSetting('readSummary',      false);
+    var readSuggestions = getVoiceSetting('readSuggestions',  false);
+    var handsFreeReply  = getVoiceSetting('handsFreeReply',   false);
+
+    if (chime) _playVoiceChime('complete');
+
+    var spoken = '';
+    if (readSummary) spoken = _summarizeForTTS(buffer);
+    if (readSuggestions) {
+      var items = _extractSuggestionItems(buffer);
+      if (items.length) {
+        spoken += (spoken ? ' ' : '') + 'Recommended next: ' + items.join('; ') + '.';
+      }
+    }
+
+    if (!spoken) {
+      // No TTS requested — optionally still re-open the mic for hands-free reply.
+      if (handsFreeReply && _voiceEnabled) _startHandsFreeReply();
+      return;
+    }
+
+    // Speak the summary. If hands-free reply is on, re-open mic after TTS ends.
+    if (handsFreeReply && _voiceEnabled) {
+      _speakThenListen(spoken);
+    } else {
+      _speak(spoken);
+    }
+  } catch (e) {
+    console.warn('[voice] onAssistantTurnComplete error:', e);
+  }
+}
+window._onAssistantTurnComplete = _onAssistantTurnComplete;
+
+// Speak text, then open the mic for an immediate reply (no wake word).
+function _speakThenListen(text) {
+  if (!window.speechSynthesis || !text) {
+    _startHandsFreeReply();
+    return;
+  }
+  window.speechSynthesis.cancel();
+  _ttsActive     = true;
+  _ttsResumeText = text;
+  var utt = new SpeechSynthesisUtterance(text);
+  utt.rate   = 1.05;
+  utt.pitch  = 1.0;
+  utt.volume = 0.9;
+  var voices = window.speechSynthesis.getVoices();
+  var preferred = voices.find(function(v) {
+    return /samantha|karen|daniel|google us|zira/i.test(v.name);
+  }) || voices.find(function(v) { return v.lang === 'en-US'; });
+  if (preferred) utt.voice = preferred;
+  _showResponseCard(text);
+  var done = function() {
+    _ttsActive = false; _ttsResumeText = null; _hideResponseCard();
+    setTimeout(_startHandsFreeReply, 250);
+  };
+  utt.onend   = done;
+  utt.onerror = done;
+  window.speechSynthesis.speak(utt);
+}
+
+// Open mic for a single follow-up reply without requiring the wake word.
+function _startHandsFreeReply() {
+  if (!_voiceEnabled) return;
+  // Make sure the mic listener is running first.
+  if (!_micStream) { _startWakeListener(); /* let the user trigger mic from gesture if needed */ }
+  _conversationMode = true;
+  _reenterCommandMode();
 }
 
 // ── Mic pill state ────────────────────────────────────────────────────────
@@ -998,6 +1140,15 @@ function _loadVoiceSettingsUI() {
   _syncVoiceToggleUI(s.enabled || false);
   var wakeInput = document.getElementById('voice-wake-input');
   if (wakeInput) wakeInput.value = getWakeWord();
+  // Turn-complete behavior toggles (default: chime on, everything else off)
+  var chimeEl = document.getElementById('voice-chime-toggle');
+  if (chimeEl) chimeEl.checked = s.chimeOnComplete !== false;
+  var sumEl = document.getElementById('voice-read-summary-toggle');
+  if (sumEl) sumEl.checked = !!s.readSummary;
+  var sugEl = document.getElementById('voice-read-suggestions-toggle');
+  if (sugEl) sugEl.checked = !!s.readSuggestions;
+  var hfEl = document.getElementById('voice-handsfree-toggle');
+  if (hfEl) hfEl.checked = !!s.handsFreeReply;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────

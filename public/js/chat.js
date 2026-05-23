@@ -1359,6 +1359,13 @@ async function streamResponse(conv) {
         scrollBottom();
         setBusy(false);
 
+        // Voice: turn-complete hook (chime + optional summary/suggestions TTS + hands-free reply).
+        // No-ops when _voiceAwaitingReply is true — the wake-word voice-conv branch below
+        // already handles TTS and re-entry for that path.
+        if (typeof _onAssistantTurnComplete === 'function') {
+          try { _onAssistantTurnComplete(buffer, msgEl); } catch (_) {}
+        }
+
         // Voice conversational reply: speak the AI response back
         if (window._voiceAwaitingReply && buffer && typeof _speak === 'function') {
           window._voiceAwaitingReply = false;

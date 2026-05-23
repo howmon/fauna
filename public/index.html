@@ -764,6 +764,41 @@
         <div class="settings-hint">Default: <strong>fauna</strong>. Speak this word to activate voice input.</div>
       </div>
     </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">Turn-complete behavior</div>
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none;margin-top:4px">
+        <input type="checkbox" id="voice-chime-toggle"
+          onchange="setVoiceSetting('chimeOnComplete', this.checked)"
+          style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+        <span style="font-size:12.5px;color:var(--fau-text)">Chime when reply finishes</span>
+      </label>
+      <div class="settings-hint" style="margin-top:2px;margin-left:23px">A short rising tone signals that Fauna is done. Independent of voice control.</div>
+
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none;margin-top:10px">
+        <input type="checkbox" id="voice-read-summary-toggle"
+          onchange="setVoiceSetting('readSummary', this.checked)"
+          style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+        <span style="font-size:12.5px;color:var(--fau-text)">Read a spoken summary of the reply</span>
+      </label>
+      <div class="settings-hint" style="margin-top:2px;margin-left:23px">Uses system text-to-speech. Strips markdown and code blocks; max ~280 chars.</div>
+
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none;margin-top:10px">
+        <input type="checkbox" id="voice-read-suggestions-toggle"
+          onchange="setVoiceSetting('readSuggestions', this.checked)"
+          style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+        <span style="font-size:12.5px;color:var(--fau-text)">Read recommended next actions</span>
+      </label>
+      <div class="settings-hint" style="margin-top:2px;margin-left:23px">Speaks the suggestion chips after the summary (if any).</div>
+
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none;margin-top:10px">
+        <input type="checkbox" id="voice-handsfree-toggle"
+          onchange="setVoiceSetting('handsFreeReply', this.checked)"
+          style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+        <span style="font-size:12.5px;color:var(--fau-text)">Open mic for follow-up after speaking</span>
+      </label>
+      <div class="settings-hint" style="margin-top:2px;margin-left:23px">When voice control is on, Fauna re-opens the mic after the spoken summary so you can reply without the wake word.</div>
+    </div>
   </div>
 
   <!-- ── Plugins ──────────────────────────────────────────────── -->
