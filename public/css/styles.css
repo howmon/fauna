@@ -7216,6 +7216,13 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 /* Output panel */
 .plr-node-output { display: none; border-top: 1px solid var(--fau-border); background: var(--fau-bg-2,rgba(0,0,0,.25)); padding: 0 10px 8px 32px; }
 .plr-out-pre { margin: 6px 0 0; padding: 8px 10px; background: rgba(0,0,0,.3); border-radius: 5px; border: 1px solid var(--fau-border); font-family: 'JetBrains Mono', 'Menlo', monospace; font-size: 10.5px; line-height: 1.6; color: var(--fau-text); white-space: pre-wrap; word-break: break-all; max-height: 260px; overflow-y: auto; }
+/* Notify-node helpers: explicit entry point back into the conversation */
+.plr-row-open-btn { background: none; border: none; color: var(--fau-text-muted); cursor: pointer; padding: 2px 4px; border-radius: 4px; display: inline-flex; align-items: center; }
+.plr-row-open-btn:hover { color: var(--accent, #6aa9ff); background: rgba(255,255,255,.06); }
+.plr-row-open-btn .ti { font-size: 14px; }
+.plr-open-conv-btn { display: inline-flex; align-items: center; gap: 5px; margin: 6px 0 2px; padding: 5px 10px; background: var(--accent, #4f8cff); color: #fff; border: none; border-radius: 5px; font-size: 11.5px; font-weight: 500; cursor: pointer; font-family: var(--font); }
+.plr-open-conv-btn:hover { opacity: .9; }
+.plr-open-conv-btn .ti { font-size: 13px; }
 .auto-detail-footer { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-top: 1px solid var(--fau-border); flex-shrink: 0; }
 .auto-detail-save-status { font-size: 11px; color: var(--fau-text-muted); }
 .auto-detail-save-status.saving { color: var(--fau-text-dim); }

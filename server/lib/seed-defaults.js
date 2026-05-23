@@ -73,7 +73,7 @@ function _sampleTasks() {
       kind: 'pipeline',
       title: 'Sample: Research → Summarize → Action items',
       description:
-        'A 3-node pipeline that takes a topic, gathers what is known, condenses it, and proposes concrete next actions. Click to open the visual builder.',
+        'A 4-node pipeline that takes a topic, gathers what is known, condenses it, proposes concrete next actions, then drops the final result into a new conversation in Chat (open the conv labelled "Research result: …" to read it).',
       schedule: { type: 'manual' },
       context: '',
       permissions: { shell: false, browser: false, figma: false },
@@ -88,10 +88,13 @@ function _sampleTasks() {
             prompt: 'Distill the research into a 3-sentence executive summary suitable for an exec who has 30 seconds.' },
           { id: 'node-actions',  label: 'Actions',   type: 'prompt', x: 620, y: 120,
             prompt: 'Propose 3 concrete next actions with owner-suggestions and a rough effort estimate (S/M/L).' },
+          { id: 'node-notify',   label: 'Send to chat', type: 'notify', x: 880, y: 120,
+            title: 'Research result: {{input}}' },
         ],
         edges: [
           { source: 'node-research', target: 'node-summary' },
           { source: 'node-summary',  target: 'node-actions' },
+          { source: 'node-actions',  target: 'node-notify'  },
         ],
       },
     },

@@ -26,6 +26,14 @@ function _plrToggle(idx) {
   }
 }
 
+/** Open the conversation produced by a notify node. Closes the automation
+ *  detail overlay and loads the conversation in the main chat panel. */
+function _plrOpenConv(convId) {
+  if (!convId) return;
+  closeAutomationDetail();
+  if (typeof loadConversation === 'function') loadConversation(convId);
+}
+
 /** Open a new chat pre-loaded with pipeline failure context so AI can help fix it. */
 function _plrAskFix() {
   if (!_plrRunNodes || !_plrRunNodes.length) return;
@@ -1212,6 +1220,10 @@ function _renderPipelineLastRun(nodes, task) {
     }
     var typeIcon  = _NODE_TYPE_ICONS[n.type] || 'ti-point';
     var hasOutput = !!(n.output && n.output.trim());
+    // Notify nodes store the produced conversation id in `output`. Surface
+    // it as an explicit "Open conversation" button so the user has a clear
+    // entry point from the automation result back into the chat.
+    var notifyConvId = (n.type === 'notify' && hasOutput && /^conv-/.test(n.output.trim())) ? n.output.trim() : '';
 
     var chevron = hasOutput
       ? '<i class="ti ' + (isOpen ? 'ti-chevron-down' : 'ti-chevron-right') + ' plr-chev" id="plr-chev-' + idx + '"></i>'
@@ -1220,11 +1232,24 @@ function _renderPipelineLastRun(nodes, task) {
     var isOpen = !!_plrExpanded[idx];
     var outputPanel = hasOutput
       ? '<div id="plr-out-' + idx + '" class="plr-node-output" style="display:' + (isOpen ? 'block' : 'none') + '">' +
+          (notifyConvId
+            ? '<button class="plr-open-conv-btn" onclick="event.stopPropagation();_plrOpenConv(\'' + notifyConvId + '\')">' +
+                '<i class="ti ti-message-forward"></i> Open conversation' +
+              '</button>'
+            : '') +
           '<pre class="plr-out-pre">' + escHtml(n.output.trim()) + '</pre>' +
         '</div>'
       : '';
 
     var rowClick = hasOutput ? ' onclick="_plrToggle(' + idx + ')"' : '';
+
+    // Inline shortcut on the node row itself for notify nodes so the user
+    // can jump straight to the conversation without expanding the panel.
+    var inlineOpenBtn = notifyConvId
+      ? '<button class="plr-row-open-btn" title="Open conversation" onclick="event.stopPropagation();_plrOpenConv(\'' + notifyConvId + '\')">' +
+          '<i class="ti ti-external-link"></i>' +
+        '</button>'
+      : '';
 
     return '<div class="plr-node ' + cls + '">' +
       '<div class="plr-node-row"' + rowClick + (hasOutput ? ' style="cursor:pointer"' : '') + '>' +
@@ -1237,6 +1262,7 @@ function _renderPipelineLastRun(nodes, task) {
             ? '<span class="plr-node-error">' + escHtml(n.error.slice(0, 120)) + '</span>'
             : '') +
         '</div>' +
+        inlineOpenBtn +
       '</div>' +
       outputPanel +
     '</div>';
