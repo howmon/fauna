@@ -7395,3 +7395,45 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 .fauna-dynamic-widget button[class^="fauna-widget-"]:active{transform:translateY(1px)}
 .fauna-dynamic-widget:fullscreen{margin:0;border-radius:0;border:0;background:#000}
 .fauna-dynamic-widget:fullscreen iframe{height:100vh !important}
+
+/* ── In-conversation text-selection menu ───────────────────────────────── */
+.selection-menu {
+  position: fixed;
+  z-index: 9000;
+  display: inline-flex;
+  gap: 2px;
+  padding: 4px;
+  background: var(--fau-surface);
+  border: 1px solid var(--fau-border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.28), 0 2px 6px rgba(0,0,0,.18);
+  font-size: 12px;
+  user-select: none;
+  -webkit-user-select: none;
+  animation: selMenuIn .12s ease-out;
+}
+.selection-menu.hidden { display: none; }
+.selection-menu button {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fau-text);
+  padding: 4px 8px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  white-space: nowrap;
+}
+.selection-menu button:hover {
+  background: var(--fau-surface2);
+  border-color: var(--fau-border);
+}
+.selection-menu button:active { transform: translateY(1px); }
+.selection-menu button i { font-size: 14px; opacity: .85; }
+@keyframes selMenuIn {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
