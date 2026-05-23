@@ -19,7 +19,11 @@
   function disableSync(reason) {
     if (syncDisabled) return;
     syncDisabled = true;
-    console.info('[agent-sync] disabled for this session:', reason);
+    // Quiet by default — the store backend is optional. Surface via debug
+    // only so the console stays clean for users who never opted into sync.
+    if (typeof console !== 'undefined' && console.debug) {
+      console.debug('[agent-sync] disabled for this session:', reason);
+    }
   }
 
   function storeToken() {

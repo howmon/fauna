@@ -574,6 +574,9 @@ export function registerChatRoute(app, {
       let toolCallCount = 0;
       let continueCount = 0; // track auto-continue on length finish
       let halfStopNudgeCount = 0; // Codex-style: re-prompt model if it asks the user to continue mid-task
+      let prevPreamble = '';       // narration emitted on the previous tool-call iteration
+      let narrationRepeats = 0;    // consecutive iterations with near-identical preamble
+      let narrationNudgeFired = false; // only inject the coaching nudge once per request
       const MAX_TOOL_CALLS = 50;
       const MAX_CONTINUES = 6; // max auto-continue attempts for truncated output
       const MAX_HALF_STOP_NUDGES = 2; // re-prompt at most twice before letting the model stop
@@ -728,7 +731,40 @@ export function registerChatRoute(app, {
         if (finishReason === 'tool_calls' && pendingCalls.length > 0) {
           const calls = pendingCalls.filter(tc => tc && tc.function?.name);
           if (!calls.length) { send({ type: 'done', finish_reason: finishReason }); continueLoop = false; break; }
-          allMessages.push({ role: 'assistant', tool_calls: calls });
+          // Include the streamed preamble in the assistant turn so the model can
+          // see its own previous narration next iteration. Without this, the
+          // model is blind to what it just said and tends to re-narrate the
+          // same explanation ("the built-in browser is getting blocked, let me
+          // try X instead") every loop without making progress.
+          const preambleForCtx = (typeof assistantText === 'string' ? assistantText : '').trim();
+          allMessages.push({ role: 'assistant', content: preambleForCtx || null, tool_calls: calls });
+
+          // Narration-repetition guard: if the preamble is very similar to the
+          // previous iteration's preamble, count it. After two repeats, inject
+          // a coaching nudge so the model breaks the loop with a different
+          // action or a final summary. After four, hard-stop.
+          const _preambleSim = (a, b) => {
+            const A = (a || '').toLowerCase().replace(/\s+/g, ' ').trim();
+            const B = (b || '').toLowerCase().replace(/\s+/g, ' ').trim();
+            if (!A || !B) return 0;
+            if (A === B) return 1;
+            const short = A.length < B.length ? A : B;
+            const long  = A.length < B.length ? B : A;
+            if (long.includes(short) && short.length >= 40) return 0.95;
+            // Word-set overlap as a cheap similarity proxy
+            const wa = new Set(A.split(/\W+/).filter(w => w.length > 3));
+            const wb = new Set(B.split(/\W+/).filter(w => w.length > 3));
+            if (!wa.size || !wb.size) return 0;
+            let inter = 0; for (const w of wa) if (wb.has(w)) inter++;
+            return inter / Math.max(wa.size, wb.size);
+          };
+          if (preambleForCtx.length >= 40 && _preambleSim(preambleForCtx, prevPreamble) >= 0.75) {
+            narrationRepeats++;
+          } else {
+            narrationRepeats = 0;
+          }
+          prevPreamble = preambleForCtx;
+
           for (const tc of calls) {
             const toolName = tc.function.name;
             const callKey  = toolName + '|' + tc.function.arguments;
@@ -866,6 +902,21 @@ export function registerChatRoute(app, {
               allMessages.push({ role: 'tool', tool_call_id: tc.id, content: `Error: ${e.message}` });
               figma.log('✗ ' + toolName + ': ' + e.message, 'err');
             }
+          }
+          // After tools have run, decide whether the model is stuck repeating
+          // itself. Inject a coaching message once, then hard-stop if it keeps
+          // happening — better to surface what was attempted than to spam the
+          // user with eight identical preambles.
+          if (continueLoop && narrationRepeats >= 4) {
+            console.log('[chat] narration-repetition guard tripped — stopping loop');
+            allMessages.push({ role: 'user', content: '[System: You have repeated the same explanation ' + (narrationRepeats + 1) + ' times without making progress. Stop calling tools. Give the user a brief honest summary of what you tried, what failed, and one concrete alternative they could try (e.g., a manual step, a different site, or supplying credentials).]' });
+            // Let the next iteration produce a final answer, but no more tools.
+            // We do that by appending and continuing — the model will see the
+            // directive and (typically) emit text only.
+          } else if (continueLoop && !narrationNudgeFired && narrationRepeats >= 2) {
+            narrationNudgeFired = true;
+            console.log('[chat] narration-repetition guard — injecting coaching nudge');
+            allMessages.push({ role: 'user', content: '[System: You are repeating the same explanation each turn without making progress. Do NOT narrate the same plan again. Either (a) take a materially different action — different tool, different site, different approach — or (b) stop and give the user a final summary of what was tried and what they can do next.]' });
           }
           if (continueLoop) { /* loop continues to get next AI response */ }
           else { send({ type: 'done', finish_reason: 'tool_limit' }); }

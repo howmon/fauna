@@ -320,6 +320,12 @@ export function registerStoreRoutes(app, {
         headers: { Authorization: auth, Accept: 'application/json' },
       });
       if (!idxRes.ok) {
+        // 404 from the upstream means the store backend doesn't expose
+        // cross-device draft sync. Treat that as "nothing to pull" rather
+        // than surfacing a noisy 404 to the renderer console.
+        if (idxRes.status === 404) {
+          return res.json({ pulled: [], skipped: [], failed: [], note: 'sync-not-deployed' });
+        }
         const text = await idxRes.text();
         return res.status(idxRes.status).json({ error: 'List failed: ' + text });
       }
