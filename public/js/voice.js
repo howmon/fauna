@@ -253,7 +253,7 @@ function _onAssistantTurnComplete(buffer, _msgEl) {
     // it speaks a longer version of the reply and re-enters command mode on its own.
     if (window._voiceAwaitingReply) return;
 
-    var chime           = getVoiceSetting('chimeOnComplete',  true);
+    var chime           = getVoiceSetting('chimeOnComplete',  false);
     var readSummary     = getVoiceSetting('readSummary',      false);
     var readSuggestions = getVoiceSetting('readSuggestions',  false);
     var handsFreeReply  = getVoiceSetting('handsFreeReply',   false);
@@ -1140,9 +1140,9 @@ function _loadVoiceSettingsUI() {
   _syncVoiceToggleUI(s.enabled || false);
   var wakeInput = document.getElementById('voice-wake-input');
   if (wakeInput) wakeInput.value = getWakeWord();
-  // Turn-complete behavior toggles (default: chime on, everything else off)
+  // Turn-complete behavior toggles (all default off)
   var chimeEl = document.getElementById('voice-chime-toggle');
-  if (chimeEl) chimeEl.checked = s.chimeOnComplete !== false;
+  if (chimeEl) chimeEl.checked = !!s.chimeOnComplete;
   var sumEl = document.getElementById('voice-read-summary-toggle');
   if (sumEl) sumEl.checked = !!s.readSummary;
   var sugEl = document.getElementById('voice-read-suggestions-toggle');
