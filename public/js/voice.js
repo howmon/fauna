@@ -817,6 +817,70 @@ function _bestMime() {
   return '';
 }
 
+// ── Client-side audio → WAV conversion ────────────────────────────────
+// Bypasses server ffmpeg (which is flaky decoding MediaRecorder's WebM/Opus
+// output) by decoding to PCM in the browser and shipping a clean 16 kHz
+// mono WAV. whisper.cpp consumes WAV natively.
+var _wavDecodeCtx = null;
+function _getWavDecodeCtx() {
+  if (_wavDecodeCtx) return _wavDecodeCtx;
+  try { _wavDecodeCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (_) {}
+  return _wavDecodeCtx;
+}
+function _encodeWav16kMono(audioBuffer) {
+  // Resample to 16 kHz mono by averaging channels and linear interpolation.
+  var srcRate = audioBuffer.sampleRate;
+  var dstRate = 16000;
+  var srcLen  = audioBuffer.length;
+  var srcCh0  = audioBuffer.getChannelData(0);
+  var srcCh1  = audioBuffer.numberOfChannels > 1 ? audioBuffer.getChannelData(1) : null;
+  var mono    = new Float32Array(srcLen);
+  for (var i = 0; i < srcLen; i++) mono[i] = srcCh1 ? (srcCh0[i] + srcCh1[i]) * 0.5 : srcCh0[i];
+
+  var ratio  = srcRate / dstRate;
+  var dstLen = Math.floor(srcLen / ratio);
+  var out16  = new Int16Array(dstLen);
+  for (var j = 0; j < dstLen; j++) {
+    var pos = j * ratio;
+    var i0  = Math.floor(pos);
+    var i1  = Math.min(i0 + 1, srcLen - 1);
+    var f   = pos - i0;
+    var s   = mono[i0] * (1 - f) + mono[i1] * f;
+    if (s > 1) s = 1; else if (s < -1) s = -1;
+    out16[j] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+  }
+
+  // Build WAV (RIFF) container
+  var dataBytes = out16.length * 2;
+  var buf = new ArrayBuffer(44 + dataBytes);
+  var dv  = new DataView(buf);
+  function w4(off, s) { for (var k = 0; k < 4; k++) dv.setUint8(off + k, s.charCodeAt(k)); }
+  w4(0, 'RIFF');     dv.setUint32(4, 36 + dataBytes, true);
+  w4(8, 'WAVE');     w4(12, 'fmt ');
+  dv.setUint32(16, 16, true);          // PCM chunk size
+  dv.setUint16(20, 1, true);           // PCM format
+  dv.setUint16(22, 1, true);           // mono
+  dv.setUint32(24, dstRate, true);
+  dv.setUint32(28, dstRate * 2, true); // byte rate
+  dv.setUint16(32, 2, true);           // block align
+  dv.setUint16(34, 16, true);          // bits/sample
+  w4(36, 'data');    dv.setUint32(40, dataBytes, true);
+  var pcm = new DataView(buf, 44);
+  for (var n = 0; n < out16.length; n++) pcm.setInt16(n * 2, out16[n], true);
+  return new Blob([buf], { type: 'audio/wav' });
+}
+async function _blobToWav(blob) {
+  var ctx = _getWavDecodeCtx();
+  if (!ctx) throw new Error('No AudioContext');
+  var ab  = await blob.arrayBuffer();
+  var buf = await new Promise(function(resolve, reject) {
+    // Use callback form to support broader Electron Chromium versions.
+    var p = ctx.decodeAudioData(ab.slice(0), resolve, reject);
+    if (p && typeof p.then === 'function') p.then(resolve, reject);
+  });
+  return _encodeWav16kMono(buf);
+}
+
 async function _transcribeBlobs(chunks, mode) {
   if (!chunks.length) {
     _vadState    = 'idle';
@@ -851,6 +915,18 @@ async function _transcribeBlobs(chunks, mode) {
   }
   console.log('[voice] POSTing', blob.size, 'bytes to /api/transcribe, mode:', mode);
   _vadState = 'transcribing';
+  // Convert WebM/Opus → WAV in-browser so the server doesn't have to run
+  // ffmpeg (which is flaky on MediaRecorder output). Falls back to the
+  // original blob if decode fails.
+  var sendBlob = blob;
+  var sendType = blobType;
+  try {
+    var wav = await _blobToWav(blob);
+    sendBlob = wav;
+    sendType = 'audio/wav';
+  } catch (eDec) {
+    console.warn('[voice] WAV pre-encode failed, sending original blob:', eDec && eDec.message);
+  }
   // Surface the transcribing state in the overlay so the user knows the
   // utterance was captured and is being processed. The Web Speech API
   // (used for live captions) is unavailable in Electron, so the overlay
@@ -866,8 +942,8 @@ async function _transcribeBlobs(chunks, mode) {
   try {
     var resp = await fetch('/api/transcribe', {
       method: 'POST',
-      headers: { 'Content-Type': blobType },
-      body: blob,
+      headers: { 'Content-Type': sendType },
+      body: sendBlob,
     });
     var data = await resp.json();
     if (!resp.ok || (data && data.ok === false)) {
@@ -1503,10 +1579,15 @@ async function _dictInterimTranscribe() {
   try {
     var blobType = (_dictChunks[0] && _dictChunks[0].type) || 'audio/webm';
     var blob = new Blob(_dictChunks.slice(), { type: blobType });
+    var sendBlob = blob, sendType = blobType;
+    try {
+      var wav = await _blobToWav(blob);
+      sendBlob = wav; sendType = 'audio/wav';
+    } catch (_) { /* fall through with original blob */ }
     var resp = await fetch('/api/transcribe?interim=1', {
       method:  'POST',
-      headers: { 'Content-Type': blobType },
-      body:    blob,
+      headers: { 'Content-Type': sendType },
+      body:    sendBlob,
     });
     if (!resp.ok) return;
     var data = await resp.json();
@@ -1631,11 +1712,18 @@ async function _dictTranscribe() {
   var blobType = (_dictChunks[0] && _dictChunks[0].type) || 'audio/webm';
   var blob = new Blob(_dictChunks, { type: blobType });
   _dictChunks = [];
+  var sendBlob = blob, sendType = blobType;
+  try {
+    var wav = await _blobToWav(blob);
+    sendBlob = wav; sendType = 'audio/wav';
+  } catch (eDec) {
+    console.warn('[dictate] WAV pre-encode failed, sending original blob:', eDec && eDec.message);
+  }
   try {
     var resp = await fetch('/api/transcribe', {
       method: 'POST',
-      headers: { 'Content-Type': blobType },
-      body: blob,
+      headers: { 'Content-Type': sendType },
+      body: sendBlob,
     });
     var data = await resp.json();
     if (!resp.ok || (data && data.ok === false)) {
