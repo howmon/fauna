@@ -151,7 +151,12 @@ export function registerWhisperRoutes(app, {
           const detail = ffStderr.trim().split('\n').pop() || '';
           fail(new Error(`ffmpeg exit ${code ?? ('signal:' + signal)}: ${detail}`));
         });
-        ff.on('error', err => fail(new Error('ffmpeg spawn error: ' + err.message)));
+        ff.on('error', err => {
+          var msg = 'ffmpeg spawn error: ' + err.message;
+          var wrapped = new Error(msg);
+          if (err.code === 'ENOENT') wrapped.code = 'FFMPEG_BROKEN';
+          fail(wrapped);
+        });
       });
 
       let ffOk = false;
@@ -173,7 +178,9 @@ export function registerWhisperRoutes(app, {
             ffOk = true;
           } catch (e3) {
             console.error('[transcribe] all ffmpeg strategies failed:', e3.message);
-            throw new Error(`ffmpeg failed (exit 1). ${e3.message}`);
+            const finalErr = new Error(`ffmpeg failed (exit 1). ${e3.message}`);
+            if (e3.code) finalErr.code = e3.code;
+            throw finalErr;
           }
         }
       }
