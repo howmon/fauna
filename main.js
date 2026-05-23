@@ -469,18 +469,26 @@ ipcMain.handle('capture-region', async () => {
 
   const fullScreenshot = primarySource.thumbnail;
 
-  // Create overlay window for region selection
+  // Create overlay window for region selection.
+  // NOTE: do NOT use `fullscreen: true` on macOS — it triggers the native
+  // Spaces fullscreen zoom animation. `simpleFullscreen` is borderless and
+  // appears instantly without animation.
   const overlay = new BrowserWindow({
     x: 0, y: 0, width, height,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
-    fullscreen: true,
+    simpleFullscreen: true,
     skipTaskbar: true,
     resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
     hasShadow: false,
+    enableLargerThanScreen: true,
     webPreferences: { nodeIntegration: true, contextIsolation: false },
   });
+  overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
   const overlayPath = path.join(__dirname, 'public', 'capture-overlay.html');
   await overlay.loadFile(overlayPath);

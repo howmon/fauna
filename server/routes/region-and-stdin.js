@@ -45,14 +45,20 @@ export function registerRegionAndStdinRoutes(app, {
       }
       const fullScreenshot = sources[0].thumbnail;
 
-      // Overlay for region selection
+      // Overlay for region selection.
+      // NOTE: do NOT use `fullscreen: true` on macOS — it triggers the native
+      // Spaces fullscreen zoom animation. `simpleFullscreen` is borderless and
+      // appears instantly without animation.
       const overlay = new _ElectronBrowserWindow({
         x: 0, y: 0, width, height,
         frame: false, transparent: true, alwaysOnTop: true,
-        fullscreen: true, skipTaskbar: true, resizable: false, hasShadow: false,
+        simpleFullscreen: true, skipTaskbar: true, resizable: false,
+        movable: false, minimizable: false, maximizable: false,
+        hasShadow: false, enableLargerThanScreen: true,
         title: 'Region Capture',
         webPreferences: { nodeIntegration: true, contextIsolation: false },
       });
+      overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
       const overlayPath = path.join(appDir, 'public', 'capture-overlay.html');
       await overlay.loadFile(overlayPath);
       overlay.webContents.send('set-screenshot', fullScreenshot.toDataURL());
