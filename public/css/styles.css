@@ -52,35 +52,38 @@
 
 /* ── Design Tokens — Light ──────────────────────────────────────────── */
 [data-theme="light"] {
-  --fau-bg:          #f5f5f5;
-  --fau-sidebar:     #fafafa;
+  /* Warm off-white palette (Linear / Notion inspired) — adds depth and
+     warmth instead of flat clinical gray. Surface is pure white so cards
+     "lift" off the cream background. */
+  --fau-bg:          #f8f6f2;
+  --fau-sidebar:     #f1eee7;
   --fau-surface:     #ffffff;
-  --fau-surface2:    #f0f0f0;
-  --fau-surface3:    #e8e8e8;
-  --fau-border:      #d1d1d1;
-  --fau-border2:     rgba(0,0,0,.06);
-  --accent:      #0D9488;
-  --accent2:     #0F766E;
-  --accent-dim:  rgba(15, 189, 186, 0.08);
-  --accent-glow: rgba(15, 189, 186, 0.14);
-  --fau-text:        #242424;
-  --fau-text-dim:    #616161;
-  --fau-text-muted:  #8a8a8a;
+  --fau-surface2:    #f3f0ea;
+  --fau-surface3:    #eae6dc;
+  --fau-border:      #e2ddd0;
+  --fau-border2:     rgba(60,45,20,.05);
+  --accent:      #0F766E;
+  --accent2:     #0D9488;
+  --accent-dim:  rgba(15, 118, 110, 0.10);
+  --accent-glow: rgba(15, 118, 110, 0.18);
+  --fau-text:        #1f2421;
+  --fau-text-dim:    #5c5852;
+  --fau-text-muted:  #928d83;
   --success:     #107c10;
   --error:       #c4314b;
   --warn:        #d48c00;
-  --fau-user-bg:     #e8f0fe;
-  --fau-ai-bg:       #fafafa;
+  --fau-user-bg:     #e6efec;
+  --fau-ai-bg:       #fbfaf6;
   --radius:      8px;
   --radius-sm:   4px;
-  --shadow-2:    0 1px 2px rgba(0,0,0,.08);
-  --shadow-4:    0 2px 4px rgba(0,0,0,.08);
-  --shadow-8:    0 4px 8px rgba(0,0,0,.08);
-  --shadow-16:   0 8px 16px rgba(0,0,0,.12);
-  --shadow-28:   0 14px 28px rgba(0,0,0,.14);
-  --fau-code-bg:     #f6f8fa;
-  --fau-code-header: #eff1f3;
-  --fau-code-inline-color: #05a0ae;
+  --shadow-2:    0 1px 2px rgba(60,45,20,.06);
+  --shadow-4:    0 2px 6px rgba(60,45,20,.07);
+  --shadow-8:    0 6px 14px rgba(60,45,20,.08);
+  --shadow-16:   0 10px 24px rgba(60,45,20,.10);
+  --shadow-28:   0 18px 36px rgba(60,45,20,.12);
+  --fau-code-bg:     #f3f1eb;
+  --fau-code-header: #ebe8e0;
+  --fau-code-inline-color: #0d6964;
   /* Project color palette */
   --proj-teal:   #0D9488;
   --proj-teal2:  #0F766E;
@@ -93,6 +96,20 @@
   color-scheme: light;
 }
 html, body { height: 100%; background: var(--fau-bg); color: var(--fau-text); font-family: var(--font); font-size: 14px; line-height: 1.6; overflow: hidden; }
+
+/* Subtle warm ambient backdrop for light mode — adds depth without
+   distracting. Two soft accent-tinted radial glows give the cream
+   background a hint of warmth and atmosphere. */
+[data-theme="light"] body::before {
+  content: '';
+  position: fixed; inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(900px 600px at 0% 0%,   rgba(15,118,110,.045), transparent 60%),
+    radial-gradient(1200px 800px at 100% 100%, rgba(199,151,99,.05),  transparent 65%);
+}
+[data-theme="light"] #app { position: relative; z-index: 1; }
 
 /* ── Transition for theme changes ──────────────────────────────────── */
 html.theme-transition, html.theme-transition *, html.theme-transition *::before, html.theme-transition *::after {
