@@ -950,8 +950,19 @@ function removeAttachment(idx) {
   renderAttachBar();
 }
 
-function clearAttachments() {
-  state.pendingAttachments = [];
+function clearAttachments(opts) {
+  // After a message is sent we want browser-tab attachments to stick (the
+  // user explicitly attached them to keep the page context alive across a
+  // multi-turn task — same UX as an active agent chip). The chip's X button
+  // still removes them manually.
+  if (opts && opts.preservePersistent) {
+    var keep = (state.pendingAttachments || []).filter(function(att) {
+      return typeof _isBrowserTabReferenceAttachment === 'function' && _isBrowserTabReferenceAttachment(att);
+    });
+    state.pendingAttachments = keep;
+  } else {
+    state.pendingAttachments = [];
+  }
   _attachBarExpanded = false;
   renderAttachBar();
 }
@@ -1025,26 +1036,31 @@ function renderAttachBar() {
 
 function _renderChip(att, i) {
   var extCls = att.extSource ? ' pending-chip-ext' : '';
+  var isPersistent = typeof _isBrowserTabReferenceAttachment === 'function' && _isBrowserTabReferenceAttachment(att);
+  if (isPersistent) extCls += ' pending-chip-pinned';
+  var pinnedTitle = isPersistent ? ' title="Pinned to this conversation — stays attached until you remove it"' : '';
   if (att.type === 'image') {
     var src  = att.base64 ? ('data:' + (att.mime || 'image/png') + ';base64,' + att.base64) : '';
     var name = att.name || 'image';
     var thumb = src
       ? '<img class="pending-img-thumb" src="' + src + '" title="' + escHtml(name) + ' — click to view" onclick="event.stopPropagation();openImageLightbox(this.src,\'' + escHtml(name).replace(/'/g, '&#39;') + '\')">'
       : '<span class="pending-img-thumb pending-img-thumb-fallback" title="Preview unavailable"><i class="ti ti-photo"></i></span>';
-    return '<div class="pending-chip pending-chip-image' + extCls + '">' +
+    return '<div class="pending-chip pending-chip-image' + extCls + '"' + pinnedTitle + '>' +
       thumb +
       '<span class="chip-name" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(name) + '</span>' +
-      '<button class="chip-remove" onclick="removeAttachment(' + i + ')"><i class="ti ti-x"></i></button>' +
+      (isPersistent ? '<i class="ti ti-pin chip-pin-ind" title="Pinned"></i>' : '') +
+      '<button class="chip-remove" onclick="removeAttachment(' + i + ')" title="Remove"><i class="ti ti-x"></i></button>' +
     '</div>';
   }
   var icon = att.extSource === 'page'      ? '<i class="ti ti-world-www"></i>'
            : att.extSource === 'selection' ? '<i class="ti ti-text-scan-2"></i>'
            : att.type === 'url'            ? '<i class="ti ti-link"></i>'
            : '<i class="ti ti-paperclip"></i>';
-  return '<div class="pending-chip' + extCls + '">' +
+  return '<div class="pending-chip' + extCls + '"' + pinnedTitle + '>' +
     '<span class="chip-icon">' + icon + '</span>' +
     '<span class="chip-name">' + escHtml(att.name) + '</span>' +
-    '<button class="chip-remove" onclick="removeAttachment(' + i + ')"><i class="ti ti-x"></i></button>' +
+    (isPersistent ? '<i class="ti ti-pin chip-pin-ind" title="Pinned"></i>' : '') +
+    '<button class="chip-remove" onclick="removeAttachment(' + i + ')" title="Remove"><i class="ti ti-x"></i></button>' +
   '</div>';
 }
 

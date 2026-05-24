@@ -504,7 +504,7 @@ async function sendMessage(opts) {
   saveConversations();
   appendMessageDOM('user', displayContent, userMsg.attachments, true);
   showMessages();
-  clearAttachments();
+  clearAttachments({ preservePersistent: true });
 
   input.value = '';
   resizeTextarea(input);
@@ -562,7 +562,7 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
   saveConversations();
   appendMessageDOM('user', displayContent, null, true);
   showMessages();
-  clearAttachments();
+  clearAttachments({ preservePersistent: true });
   forceScrollBottom();
 
   // Use per-conv DOM container so switching away doesn't hide/destroy the progress UI

@@ -1049,6 +1049,14 @@ body.is-resizing webview { pointer-events: none !important; }
 }
 .pending-chip-ext .chip-icon { color: #818cf8; }
 .pending-chip-ext .chip-remove:hover { color: var(--error); }
+/* Pinned chips (browser-tab refs) — stay attached across sends until X'd */
+.pending-chip-pinned {
+  border-color: #6366f166;
+  box-shadow: 0 0 0 1px #6366f133 inset;
+}
+.pending-chip-pinned .chip-pin-ind {
+  font-size: 11px; color: #a5b4fc; margin: 0 2px 0 0; opacity: .8;
+}
 /* Extension push-event toast */
 .ext-toast {
   position: fixed;
