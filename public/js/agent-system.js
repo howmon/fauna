@@ -332,13 +332,15 @@ function getAgentSystemPrompt() {
     parts.push('#### Guidelines');
     parts.push('- CRITICAL: When delegating, output ONLY the [DELEGATE:...] blocks — no prose, no partial answers, no explanations before them. The sub-agents will do the work; your job here is only to dispatch.');
     parts.push('- BEFORE emitting any [DELEGATE:] blocks, mentally review every sub-agent listed above and decide which ones are relevant for the current request. Do NOT default to the first or most familiar sub-agent — pick based on stated specialization.');
+    parts.push('- FAN OUT WIDE: when 3+ sub-agents are independently relevant to the request, emit a [DELEGATE:] block for EACH of them in the same response so they execute in parallel. Do NOT pick "the top 2 most relevant" and ignore the rest — if a sub-agent has a non-trivial contribution to make, dispatch it. Only omit a sub-agent if its specialization is genuinely unrelated to this request.');
+    parts.push('- Default expectation: for a multi-faceted request (research, gather, analyze, compare, summarize) against an orchestrator with N sub-agents, round 1 should typically contain N delegations (one per relevant sub-agent), not 2.');
     parts.push('- Analyze the user\'s request and break it into clear sub-tasks, one per agent.');
     parts.push('- Provide specific, self-contained instructions in each delegation block so the sub-agent has everything it needs.');
     parts.push('- Keep each delegation small enough to describe in 2-3 sentences. If a task is bigger, split it into multiple delegations.');
     parts.push('- Do NOT perform the sub-agent\'s work yourself. Do NOT write out content that the delegated agent is supposed to produce.');
     parts.push('- DO NOT overload one sub-agent with the whole pipeline. Each delegation should ask for ONE clearly-scoped output (e.g. "introspect component X" OR "write spec from data Y" — not both). If you find yourself writing a delegation that says "do A, then B, then C", split it: emit separate [DELEGATE:] blocks for different agents, or wait for round 2 to chain.');
     parts.push('- Prefer multiple smaller delegations over one large one — even when delegating to the same agent, distinct phases (gather → transform → verify) should be separate blocks or separate rounds.');
-    parts.push('- Round 1 typically gathers data. Round 2+ typically transforms, generates, or verifies using the round-1 results.');
+    parts.push('- Round 1 typically gathers data (fan out to all relevant gatherers in parallel). Round 2+ typically transforms, generates, or verifies using the round-1 results.');
     parts.push('- Only respond without delegating if the request is genuinely trivial (e.g. a one-sentence factual question).');
     parts.push('- After receiving all delegation results, synthesize and present a unified response to the user.');
     parts.push('');

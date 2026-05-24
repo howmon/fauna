@@ -667,6 +667,21 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
       });
     }
     var userContent = del.task + (priorResultsText ? '\n\n---\nPrevious agent results for context:\n' + priorResultsText : '');
+    // Bundled sub-agents inherit the orchestrator's permissions — the user
+    // approved them on the orchestrator and almost never sets per-sub-agent
+    // permissions, so without this merge sub-agents lose shell/browser/etc.
+    // The sub-agent's own permissions still apply where the orchestrator
+    // doesn't grant something (union, not override).
+    var parentPerms = (activeAgent && activeAgent.permissions) || {};
+    var subPerms = agent.permissions || {};
+    var mergedPerms = Object.assign({}, subPerms, parentPerms);
+    // Array-valued perms (mcp, allowedCommands, etc.) — union them.
+    if (Array.isArray(parentPerms.mcp) || Array.isArray(subPerms.mcp)) {
+      mergedPerms.mcp = Array.from(new Set([].concat(parentPerms.mcp || [], subPerms.mcp || [])));
+    }
+    if (Array.isArray(parentPerms.allowedCommands) || Array.isArray(subPerms.allowedCommands)) {
+      mergedPerms.allowedCommands = Array.from(new Set([].concat(parentPerms.allowedCommands || [], subPerms.allowedCommands || [])));
+    }
     return fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -677,8 +692,8 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
         agentName: agent.name,
         isDelegation: true,
         agentSystemPrompt: agent.systemPrompt || '',
-        agentPermissions: agent.permissions || {},
-        useFigmaMCP: !!(agent.permissions && agent.permissions.figma) || !!(activeAgent && activeAgent.permissions && activeAgent.permissions.figma) || state.figmaMCPEnabled || false,
+        agentPermissions: mergedPerms,
+        useFigmaMCP: !!mergedPerms.figma || state.figmaMCPEnabled || false,
         thinkingBudget: state.thinkingBudget || 'high',
         systemPrompt: '## Active Agent: ' + agent.displayName + '\n\n' + (agent.systemPrompt || '') + '\n\nYou are being delegated a task by an orchestrator agent. Complete the task thoroughly and return your result.\n\n## Verification Before Completion (REQUIRED)\nBefore emitting your completion signal, you MUST verify your work:\n- File edits: read back the changed section to confirm it landed correctly.\n- Shell commands: check exit codes and scan output for errors.\n- Figma: confirm the execution result shows success.\n- If you cannot verify, state what you could NOT confirm.\n- NEVER emit [TASK_COMPLETE] if any step produced errors you did not resolve.\n\n## Completion Signal (REQUIRED)\nYou MUST end your response with a verification summary and exactly one of these markers on its own line:\n- `[TASK_COMPLETE]` — task finished successfully AND verified\n- `[TASK_PARTIAL: <what remains>]` — made progress but could not fully finish\n- `[TASK_BLOCKED: <reason>]` — could not proceed due to a blocker\n- `[TASK_FAILED: <reason>]` — attempted but failed\n\nFormat your ending as:\n### Verification\n- ✓ <what you checked and confirmed>\n- ✗ <what failed or could not be checked> (if any)\n[TASK_COMPLETE]'
       })

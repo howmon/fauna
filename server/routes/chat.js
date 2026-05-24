@@ -225,12 +225,17 @@ export function registerChatRoute(app, {
         figmaFilesCtx = `\n## Connected Figma Documents\nThe following Figma documents are currently open with the plugin running:\n${entries}\nWhen using figma_execute, pass the fileKey parameter to target a specific document. If omitted, the most recently active document is used.\nIMPORTANT: Dev Mode MCP tools (get_screenshot, get_design_context, get_metadata, etc.) always operate on whichever file is currently focused in Figma — they do NOT accept a fileKey parameter. If you need to read from or screenshot a specific file, use figma_execute with the fileKey parameter instead.`;
       }
       const cliHint = isCLI ? `\n\n## Output Format\nYou are running in a terminal CLI. Respond in plain, readable text. Do NOT use markdown headers (###), horizontal rules (---), or emojis. Use plain bullet points (- or *) only when a list genuinely helps. Be concise and direct. Never emit browser-action or browser-ext-action code blocks — those do not work in the terminal.` : '';
+      // Sub-agents (isDelegation=true) need to know about the same browser /
+      // browser-ext / gen-UI tooling the orchestrator has, otherwise they
+      // refuse tasks that depend on those tools ("I only have fauna_browser,
+      // not browser-ext-action"). The token cost is small; skipping it
+      // breaks orchestrator pipelines that hand off browsing work.
       const fullSystem = [
         systemPrompt.trim() + cliHint,
         isDelegation ? '' : projectCtx,
         factsCtx,
-        (isDelegation || isCLI || noTools) ? '' : browserBuildContext,
-        (isDelegation || isCLI || noTools) ? '' : buildBrowserExtContext(),
+        (isCLI || noTools) ? '' : browserBuildContext,
+        (isCLI || noTools) ? '' : buildBrowserExtContext(),
         (isDelegation || isCLI || noTools) ? '' : GEN_UI_CATALOG_PROMPT,
         contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '',
         figmaFilesCtx
@@ -426,9 +431,17 @@ export function registerChatRoute(app, {
           try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch (_) {}
         }
 
-        // For built-in agents, use the permissions from the request body
-        const permissions = manifest?.permissions || req.body.agentPermissions || {};
-        const effectiveManifest = manifest || { name: safeAgentName, permissions };
+        // For built-in agents, use the permissions from the request body.
+        // For delegated sub-agents, the orchestrator's permissions are merged
+        // into req.body.agentPermissions client-side — those represent what
+        // the user actually approved, so they win over the sub-agent's
+        // (often empty) stored manifest.
+        const permissions = isDelegation
+          ? (req.body.agentPermissions || manifest?.permissions || {})
+          : (manifest?.permissions || req.body.agentPermissions || {});
+        const effectiveManifest = manifest
+          ? Object.assign({}, manifest, { permissions })
+          : { name: safeAgentName, permissions };
 
         const { definitions: agentToolDefs, handlers } = getAgentTools(
           fs.existsSync(agentDir) ? agentDir : null,
