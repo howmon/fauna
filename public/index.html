@@ -661,6 +661,7 @@
       <div class="auth-tabs">
         <button class="auth-tab active" onclick="switchAuthTab('cli')">GitHub CLI</button>
         <button class="auth-tab" onclick="switchAuthTab('keys')">API Keys</button>
+        <button class="auth-tab" onclick="switchAuthTab('local')">Local Models</button>
       </div>
 
       <div id="auth-tab-cli" class="auth-tab-pane">
@@ -724,6 +725,51 @@
         <div style="display:flex;gap:6px">
           <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('google')">Save</button>
           <button class="settings-row-btn danger" onclick="clearProviderKey('google')" id="provider-google-clear" style="display:none">Remove</button>
+        </div>
+      </div>
+
+      <div id="auth-tab-local" class="auth-tab-pane" style="display:none">
+        <div class="settings-hint" style="margin-bottom:12px">
+          Run models on your own machine via Ollama, LM Studio, llama.cpp, or any OpenAI-compatible endpoint. Traffic never leaves your computer.
+        </div>
+
+        <div class="settings-label"><span>Detected local backends</span>
+          Auto-discovers Ollama, LM Studio, llama.cpp, vLLM, Jan, and Text-Gen-WebUI on standard ports.
+        </div>
+        <div id="local-llm-discover-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px">
+          <div style="font-size:12px;color:var(--fau-text-dim)">Click <em>Refresh</em> to scan.</div>
+        </div>
+        <button class="settings-row-btn" onclick="discoverLocalLLM()" style="margin-bottom:14px"><i class="ti ti-refresh"></i> Refresh</button>
+
+        <div class="settings-label" style="margin-top:8px"><span>Custom endpoint</span>
+          Provide any OpenAI-compatible <code style="font-size:11px;background:var(--fau-surface3);padding:1px 4px;border-radius:3px">/v1</code> URL.
+        </div>
+        <div class="settings-input-row">
+          <input id="local-llm-baseurl" class="settings-input" type="text" placeholder="http://localhost:11434/v1" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="settings-input-row" style="margin-top:6px">
+          <input id="local-llm-apikey" class="settings-input" type="password" placeholder="API key (optional)" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="settings-input-row" style="margin-top:6px">
+          <input id="local-llm-model" class="settings-input" type="text" placeholder="Default model id (e.g. llama3.1:8b)" autocomplete="off" spellcheck="false">
+        </div>
+        <div id="local-llm-status" class="settings-status"></div>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="settings-row-btn" onclick="testLocalLLM()"><i class="ti ti-plug-connected"></i> Test</button>
+          <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveLocalLLM()">Save &amp; Enable</button>
+          <button class="settings-row-btn danger" onclick="clearLocalLLM()" id="local-llm-clear-btn" style="display:none">Disable</button>
+        </div>
+
+        <div class="settings-label" style="margin-top:14px"><span>Capability overrides</span>
+          Most local models don't support OpenAI tool-calling. Enable only if your model is known to. When off, Fauna uses markdown-fence tool protocol (works with any model).
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="local-llm-override-tools"> Model supports native tool_calls</label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="local-llm-override-vision"> Model supports vision (image input)</label>
+        </div>
+
+        <div class="settings-hint" style="margin-top:12px">
+          Quick start: <code style="font-size:11px;background:var(--fau-surface3);padding:1px 4px;border-radius:3px">brew install ollama &amp;&amp; ollama serve &amp;&amp; ollama pull qwen2.5-coder:14b</code>, then click Refresh.
         </div>
       </div>
     </div>
@@ -2171,6 +2217,7 @@ Examples:
 <script src="js/state.js"></script>
 <script src="js/pane-resize.js"></script>
 <script src="js/ui.js"></script>
+<script src="js/local-llm.js"></script>
 <script src="js/markdown.js"></script>
 <script src="js/artifacts.js"></script>
 <script src="js/capabilities.js"></script>

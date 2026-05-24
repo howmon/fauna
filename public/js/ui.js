@@ -131,6 +131,8 @@ async function loadModels() {
     { id: 'gpt-4.1-mini',      name: 'GPT-4.1 mini',      vendor: 'OpenAI' },
     { id: 'gemini-2.0-flash',  name: 'Gemini 2.0 Flash',  vendor: 'Google' },
   ];
+  // Append local models if a local-LLM backend is configured.
+  await _mergeLocalModelsInto(allModels);
   // Only fall back if saved model is genuinely missing from the picker.
   if (!state.model || !allModels.find(function(m) { return m.id === state.model; })) {
     state.model = getSupportedModelFallback(state.model);
@@ -139,12 +141,55 @@ async function loadModels() {
   populateModelSelect();
 }
 
+// Fetches /api/llm/config + /api/llm/models and pushes each local model into
+// `arr` tagged with `local: true`, `providerId`, `baseURL`, and `apiKey` so
+// chat.js can echo them back in the request body. Vendor is forced to 'Local'
+// so the picker groups them at the bottom.
+async function _mergeLocalModelsInto(arr) {
+  try {
+    var cfgR = await fetch('/api/llm/config');
+    var cfgD = await cfgR.json();
+    var cfg  = cfgD.config;
+    if (!cfg || cfg.providerId === 'copilot') return;
+    var mR = await fetch('/api/llm/models');
+    var mD = await mR.json();
+    var localModels = (mD.models || []).map(function(m) {
+      return {
+        id:     m.id,
+        name:   m.name || m.id,
+        vendor: 'Local',
+        local:  true,
+        providerId: cfg.providerId,
+        baseURL:    cfg.baseURL,
+        apiKey:     cfg.apiKey,
+        // Conservative defaults — picker shows no vision/tools badge unless
+        // user explicitly turned the override on.
+        vision: !!(cfg.overrides && cfg.overrides.vision),
+        tools:  !!(cfg.overrides && cfg.overrides.tools),
+      };
+    });
+    // If the user typed a default model that the endpoint didn't return,
+    // still surface it so it can be selected.
+    if (cfg.defaultModel && !localModels.find(function(m) { return m.id === cfg.defaultModel; })) {
+      localModels.unshift({
+        id: cfg.defaultModel, name: cfg.defaultModel, vendor: 'Local',
+        local: true, providerId: cfg.providerId, baseURL: cfg.baseURL, apiKey: cfg.apiKey,
+        vision: !!(cfg.overrides && cfg.overrides.vision),
+        tools:  !!(cfg.overrides && cfg.overrides.tools),
+      });
+    }
+    arr.push.apply(arr, localModels);
+  } catch (e) {
+    console.warn('[local-llm] merge failed', e);
+  }
+}
+
 function populateModelSelect() {
   var sel = document.getElementById('model-select');
   sel.innerHTML = '';
 
   // Group by vendor (Anthropic, OpenAI, Google, …) in a stable order.
-  var order = ['Anthropic', 'OpenAI', 'Google', 'xAI', 'Minimax'];
+  var order = ['Anthropic', 'OpenAI', 'Google', 'xAI', 'Minimax', 'Local'];
   var byVendor = {};
   allModels.forEach(function(m) {
     var v = m.vendor || 'Other';
@@ -519,7 +564,10 @@ function switchAuthTab(tab) {
   document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
   document.getElementById('auth-tab-cli').style.display = tab === 'cli' ? '' : 'none';
   document.getElementById('auth-tab-keys').style.display = tab === 'keys' ? '' : 'none';
+  var localPane = document.getElementById('auth-tab-local');
+  if (localPane) localPane.style.display = tab === 'local' ? '' : 'none';
   event.target.classList.add('active');
+  if (tab === 'local' && typeof initLocalLLMSettings === 'function') initLocalLLMSettings();
 }
 
 async function refreshModelList() {

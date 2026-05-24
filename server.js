@@ -42,6 +42,7 @@ import { registerProjectRoutes } from './server/routes/projects.js';
 import { registerTaskRoutes } from './server/routes/tasks.js';
 import { registerUtilityRoutes } from './server/routes/utilities.js';
 import { registerProviderRoutes } from './server/routes/providers.js';
+import { registerLLMRoutes } from './server/routes/llm.js';
 import { registerMobileRoutes } from './server/routes/mobile.js';
 import { registerEnterpriseStubRoutes } from './server/routes/enterprise.js';
 import { registerAuthRoutes } from './server/routes/auth.js';
@@ -209,6 +210,7 @@ registerMarkdownPdfAndYoutubeRoutes(app, { express, getElectronBrowserWindow: ()
 // ── /api/auth + /api/token routes moved → server/routes/auth.js ──
 // ── /api/models moved → server/routes/models.js ──
 registerModelsRoutes(app, { readSavedConfig, getGhToken });
+registerLLMRoutes(app);
 
 // ── Figma layout knowledge ───────────────────────────────────────────────
 // Injected into the system prompt when Figma MCP is enabled.
