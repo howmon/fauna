@@ -1,6 +1,6 @@
 {
   "name": "figma-fauna-mcp",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "module",
   "description": "MCP server that drives Figma via pluggable design-system component registries",
   "main": "server/index.js",
