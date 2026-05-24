@@ -219,7 +219,10 @@ function populateModelSelect() {
   // Sync toolbar label
   var cur = allModels.find(function(m) { return m.id === state.model; });
   var lbl = document.getElementById('tb-model-label');
-  if (lbl) lbl.textContent = cur ? cur.name : (state.model || 'Model');
+  if (lbl) {
+    var suffix = cur && cur.local ? ' · local' : '';
+    lbl.textContent = (cur ? cur.name : (state.model || 'Model')) + suffix;
+  }
 }
 
 function onModelChange(id) {
@@ -233,12 +236,12 @@ function onModelChange(id) {
     }
   }
   var m = allModels.find(function(mm) { return mm.id === id; });
-  if (m && typeof showToast === 'function') showToast('Model: ' + m.name);
+  if (m && typeof showToast === 'function') showToast('Model: ' + m.name + (m.local ? ' (local)' : ''));
   // Sync hidden select + toolbar label
   var sel = document.getElementById('model-select');
   if (sel) sel.value = id;
   var lbl = document.getElementById('tb-model-label');
-  if (lbl) lbl.textContent = m ? m.name : id;
+  if (lbl) lbl.textContent = (m ? m.name : id) + (m && m.local ? ' · local' : '');
 }
 
 // ── Auth & Settings ───────────────────────────────────────────────────────

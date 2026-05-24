@@ -247,7 +247,14 @@ export function registerChatRoute(app, {
         (isCLI || noTools) ? '' : buildBrowserExtContext(),
         (isDelegation || isCLI || noTools) ? '' : GEN_UI_CATALOG_PROMPT,
         contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '',
-        figmaFilesCtx
+        figmaFilesCtx,
+        // When running against a local model that doesn't support OpenAI tool
+        // calling, tell it explicitly — otherwise it will hallucinate tool
+        // invocations in prose. The user can still ask for code, advice, or
+        // explanations; only the agentic tools are unavailable.
+        (!llmSupports.tools && llmProviderId !== 'copilot')
+          ? '\n## Tool Availability\nYou are running on a local model that does not support tool calls in this session. Do NOT pretend to call shell, browser, file, or MCP tools — there is no execution environment. Answer the user directly in plain text or markdown. If the user asks for an action requiring tools, tell them to switch to a Copilot model.'
+          : ''
       ].filter(Boolean).join('\n');
       if (fullSystem) allMessages.push({ role: 'system', content: fullSystem });
 
