@@ -100,6 +100,11 @@ The user has the Fauna browser extension connected in their **real ${browserLabe
 #### Screenshots
 - **snapshot** — \`{"action":"snapshot"}\` — screenshot the visible area (image injected into AI)
 - **snapshot-full** — \`{"action":"snapshot-full"}\` — full-page screenshot
+- **viewport sizing** — both snapshot actions accept optional \`width\`, \`height\`, \`deviceScaleFactor\` (default 1), and \`mobile\` (default false). Examples:
+  - Desktop hero: \`{"action":"snapshot-full","width":1440,"height":900}\`
+  - Mobile portrait: \`{"action":"snapshot-full","width":375,"height":812,"mobile":true,"deviceScaleFactor":2}\`
+  Viewport-sized captures use the Chrome DevTools Protocol to emulate the requested viewport, capture, then restore — the user's actual window size is not affected.
+- ⛔ NEVER capture screenshots by injecting \`html2canvas\` (or any other DOM-to-canvas library) through \`eval\`. That path is broken: the resulting base64 cannot fit in an eval response and trying to chunk it via \`substring\` is slow and lossy. Use \`snapshot\` / \`snapshot-full\` — the image is delivered straight to you as a vision attachment without any string serialization.
 
 #### Tab management
 - **tab:list** — \`{"action":"tab:list"}\` — list all open tabs (id, title, url, active)

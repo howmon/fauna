@@ -820,9 +820,14 @@ async function cmdWait({ ms = 1000 } = {}) {
 // Uses the DevTools Protocol to capture a JPEG regardless of which app has
 // OS focus.  Attaches, captures, detaches.  Chrome shows a brief infobar
 // during the capture but it is the only reliable headless-friendly method.
-async function captureViaDebugger(tabId, timeoutMs = 3000) {
+// Optional viewport: { width, height, deviceScaleFactor=1, mobile=false }
+// overrides device metrics for the capture so the model can request a
+// specific viewport (e.g. 1440×900 desktop or 375×812 mobile) without
+// resorting to html2canvas via eval.
+async function captureViaDebugger(tabId, timeoutMs = 3000, viewport = null) {
   const target = { tabId };
   let attached = false;
+  let metricsOverridden = false;
   try {
     await Promise.race([
       chrome.debugger.attach(target, '1.3').then(() => { attached = true; }),
@@ -834,19 +839,36 @@ async function captureViaDebugger(tabId, timeoutMs = 3000) {
     attached = true;
   }
   try {
+    if (viewport && viewport.width && viewport.height) {
+      await chrome.debugger.sendCommand(target, 'Emulation.setDeviceMetricsOverride', {
+        width: Math.floor(viewport.width),
+        height: Math.floor(viewport.height),
+        deviceScaleFactor: viewport.deviceScaleFactor || 1,
+        mobile: !!viewport.mobile
+      });
+      metricsOverridden = true;
+      // Give the page a tick to relayout at the new viewport.
+      await new Promise(r => setTimeout(r, 250));
+    }
     const result = await Promise.race([
       chrome.debugger.sendCommand(target, 'Page.captureScreenshot', { format: 'jpeg', quality: 75 }),
       new Promise((_, rej) => setTimeout(() => rej(new Error('debugger captureScreenshot timed out')), timeoutMs))
     ]);
     return result.data; // base64 JPEG
   } finally {
+    if (metricsOverridden) {
+      try { await chrome.debugger.sendCommand(target, 'Emulation.clearDeviceMetricsOverride', {}); } catch (_) {}
+    }
     if (attached) chrome.debugger.detach(target).catch(() => {});
   }
 }
 
-async function cmdSnapshot({} = {}, tab) {
+async function cmdSnapshot(params = {}, tab) {
   if (!tab) return { ok: false, error: 'No active tab' };
   const errors = [];
+  const viewport = (params && (params.width || params.height))
+    ? { width: params.width, height: params.height, deviceScaleFactor: params.deviceScaleFactor, mobile: params.mobile }
+    : null;
 
   // Helper: captureVisibleTab with hard timeout — hangs when OS focus is elsewhere
   function captureWithTimeout(windowId, timeoutMs) {
@@ -858,19 +880,26 @@ async function cmdSnapshot({} = {}, tab) {
     ]);
   }
 
-  console.log('[Fauna] cmdSnapshot starting for tab', tab.id, tab.url);
+  console.log('[Fauna] cmdSnapshot starting for tab', tab.id, tab.url, viewport ? `viewport=${viewport.width}x${viewport.height}` : '');
 
   // Attempt 1: chrome.debugger DevTools Protocol — most reliable, works without OS focus
-  // 3s attach + 3s capture = 6s max
+  // 3s attach + 3s capture = 6s max. ALSO the only path that supports viewport override.
   try {
-    const base64 = await captureViaDebugger(tab.id, 3000);
+    const base64 = await captureViaDebugger(tab.id, 3000, viewport);
     if (base64) {
       console.log('[Fauna] cmdSnapshot succeeded via debugger');
-      return { ok: true, base64, mime: 'image/jpeg', type: 'viewport', method: 'debugger' };
+      return { ok: true, base64, mime: 'image/jpeg', type: 'viewport', method: 'debugger', viewport: viewport || undefined };
     }
   } catch (e) {
     console.log('[Fauna] debugger attempt failed:', e.message);
     errors.push('debugger: ' + e.message);
+  }
+
+  // Viewport overrides only work via debugger — if that failed and a viewport
+  // was requested, don't fall back to captureVisibleTab (it would capture at
+  // the user's actual window size, not the requested viewport).
+  if (viewport) {
+    return { ok: false, error: 'Viewport-sized snapshot requires the debugger path: ' + errors.join('; ') };
   }
 
   // Attempt 2: captureVisibleTab without touching focus (2s)
@@ -926,10 +955,45 @@ async function compressToJpeg(base64png, maxWidth = 1280, quality = 0.75) {
   }
 }
 
-async function cmdSnapshotFull({} = {}, tab) {
+async function cmdSnapshotFull(params = {}, tab) {
   if (!tab) return { ok: false, error: 'No active tab' };
 
-  // Get page dimensions
+  const viewport = (params && (params.width || params.height))
+    ? { width: params.width, height: params.height, deviceScaleFactor: params.deviceScaleFactor, mobile: params.mobile }
+    : null;
+
+  // Viewport-sized full capture: use debugger Emulation override and
+  // CDP's built-in full-page capture (captureBeyondViewport) so we don't
+  // need scroll-stitch at a forced viewport — far more reliable than
+  // html2canvas via eval.
+  if (viewport && viewport.width && viewport.height) {
+    const target = { tabId: tab.id };
+    let attached = false;
+    try {
+      await chrome.debugger.attach(target, '1.3');
+      attached = true;
+      await chrome.debugger.sendCommand(target, 'Emulation.setDeviceMetricsOverride', {
+        width: Math.floor(viewport.width),
+        height: Math.floor(viewport.height),
+        deviceScaleFactor: viewport.deviceScaleFactor || 1,
+        mobile: !!viewport.mobile
+      });
+      await new Promise(r => setTimeout(r, 350)); // let the page relayout
+      const result = await chrome.debugger.sendCommand(target, 'Page.captureScreenshot', {
+        format: 'jpeg', quality: 80, captureBeyondViewport: true
+      });
+      return { ok: true, base64: result.data, mime: 'image/jpeg', type: 'full-page', viewport };
+    } catch (e) {
+      return { ok: false, error: 'Viewport full-snapshot failed: ' + (e.message || e) };
+    } finally {
+      if (attached) {
+        try { await chrome.debugger.sendCommand(target, 'Emulation.clearDeviceMetricsOverride', {}); } catch (_) {}
+        chrome.debugger.detach(target).catch(() => {});
+      }
+    }
+  }
+
+  // Get page dimensions (no viewport override path)
   let dims;
   try {
     dims = await msgTab(tab, { action: 'get-dims' });
