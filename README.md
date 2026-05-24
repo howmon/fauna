@@ -61,6 +61,13 @@ A cross-platform Electron app. Streaming AI with real shell execution, browser c
 - Custom tools run in isolated VM — no `process`, `require`, or `fs`
 - 300s timeout, 5MB output cap, 5 concurrent tools
 
+**Automation**
+- Workflows — recorded multi-step agent runs, replayable on demand
+- Heartbeat — scheduled background conversations (cron-style)
+- Task runner — concurrent background tasks with status pane
+- Teams Bridge — drive Fauna from a Microsoft Teams chat
+- Browser extension — Chrome side panel + CDP screenshot/automation
+
 **Other**
 - Artifact pane — HTML, Markdown, JSON, CSV, charts, 30-day retention
 - Generative UI — 18 reactive inline components rendered in chat
@@ -172,7 +179,7 @@ Inside the REPL: `/store` searches Agent Store, `/store show <slug>` previews an
 - [ ] Plugin system beyond agents
 - [ ] MCP server marketplace
 - [ ] Mobile companion app
-- [ ] Workflow recorder and replay
+- [x] Workflow recorder and replay
 
 ---
 
