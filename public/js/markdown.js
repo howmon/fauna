@@ -195,6 +195,16 @@ function renderMarkdown(text) {
   // Collapse runs of 3+ newlines left by stripped blocks so they don't render
   // as a tall stack of empty paragraphs between surrounding content.
   cleaned = cleaned.replace(/\n{3,}/g, '\n\n').replace(/^\n+|\n+$/g, '');
+
+  // Repair fences that the model glued onto prose without a newline, e.g.
+  //   "...refresh the case study.```browser-ext-action\n{...}\n```"
+  // Marked requires opening fences at column 0, so without this the fence is
+  // parsed as inline code, the special-language renderer never fires, and the
+  // downstream extractor (browser-ext, shell-exec, write-file, etc.) finds 0
+  // blocks. Insert the missing newline before any ```<lang> that follows a
+  // non-newline character. Safe because real fenced blocks already start a
+  // new line, so this only rewrites malformed cases.
+  cleaned = cleaned.replace(/([^\n])(```[a-zA-Z][\w:.\/-]*)/g, '$1\n$2');
   
   // Pre-process mermaid blocks before markdown parsing
   // Replace ```mermaid blocks with placeholder divs
