@@ -787,6 +787,7 @@ async function runShellExec(execId, opts) {
 
     // ── Handle permission-required response (inline prompt) ──
     var contentType = r.headers.get('content-type') || '';
+    var jsonCompleted = null; // set when server returned a finished JSON result (e.g. sandbox endpoint)
     if (contentType.includes('application/json')) {
       var jsonResp = await r.json();
       if (jsonResp.permissionRequired) {
@@ -813,6 +814,11 @@ async function runShellExec(execId, opts) {
         }
         return;
       }
+      // Successful completed JSON result (sandbox endpoint always returns this
+      // shape — it never streams). Cannot call r.body.getReader() now: the
+      // body is already locked by the r.json() above. Stash the result and
+      // skip the SSE loop.
+      jsonCompleted = jsonResp;
     }
 
     // ── Streaming mode: parse SSE events ──
@@ -821,13 +827,19 @@ async function runShellExec(execId, opts) {
     var exitCode = 0;
     var errMsg = '';
 
-    var reader = r.body.getReader();
-    var decoder = new TextDecoder();
-    var sseBuf = '';
+    if (jsonCompleted) {
+      stdoutBuf = jsonCompleted.stdout || '';
+      stderrBuf = jsonCompleted.stderr || '';
+      exitCode = jsonCompleted.exitCode || 0;
+      errMsg = jsonCompleted.error || '';
+    } else {
+      var reader = r.body.getReader();
+      var decoder = new TextDecoder();
+      var sseBuf = '';
 
-    while (true) {
-      var chunk = await reader.read();
-      if (chunk.done) break;
+      while (true) {
+        var chunk = await reader.read();
+        if (chunk.done) break;
       if (!widget.isConnected) break;
       sseBuf += decoder.decode(chunk.value, { stream: true });
 
@@ -860,6 +872,7 @@ async function runShellExec(execId, opts) {
         } catch (_) {}
       }
     }
+    } // end else (streaming branch)
 
     // Build a compat result object matching the old JSON response shape
     var d = {
