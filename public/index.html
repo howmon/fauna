@@ -661,7 +661,7 @@
       <div class="auth-tabs">
         <button class="auth-tab active" onclick="switchAuthTab('cli')">GitHub CLI</button>
         <button class="auth-tab" onclick="switchAuthTab('keys')">API Keys</button>
-        <button class="auth-tab" onclick="switchAuthTab('local')">Local Models</button>
+        <button class="auth-tab" onclick="switchAuthTab('local')">Custom Endpoints</button>
       </div>
 
       <div id="auth-tab-cli" class="auth-tab-pane">
@@ -730,8 +730,13 @@
 
       <div id="auth-tab-local" class="auth-tab-pane" style="display:none">
         <div class="settings-hint" style="margin-bottom:12px">
-          Run models on your own machine via Ollama, LM Studio, llama.cpp, or any OpenAI-compatible endpoint. Traffic never leaves your computer.
+          Point Fauna at any OpenAI-compatible <code style="font-size:11px;background:var(--fau-surface3);padding:1px 4px;border-radius:3px">/v1</code> endpoint &mdash; local (Ollama, LM Studio, llama.cpp, vLLM, Jan) or hosted (NVIDIA NIM, Together, Groq, Fireworks, DeepInfra, Mistral, &hellip;).
         </div>
+
+        <div class="settings-label"><span>Hosted presets</span>
+          One-click setup for major OpenAI-compatible cloud providers. Bring your own API key.
+        </div>
+        <div id="local-llm-presets" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px"></div>
 
         <div class="settings-label"><span>Detected local backends</span>
           Auto-discovers Ollama, LM Studio, llama.cpp, vLLM, Jan, and Text-Gen-WebUI on standard ports.

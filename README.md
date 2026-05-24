@@ -15,7 +15,7 @@ A cross-platform Electron app. Streaming AI with real shell execution, browser c
 **AI & Models**
 - Streaming responses from GitHub Copilot, OpenAI, Anthropic, and Google
 - Bring your own API keys — models fetched live from each provider's API
-- **Local AI models** — run privately on your machine via Ollama, LM Studio, llama.cpp, vLLM, Jan, Text-Gen-WebUI, or any OpenAI-compatible `/v1` endpoint. Auto-discovery on standard ports, per-model capability overrides for tools/vision. Traffic never leaves your computer.
+- **Local & custom-endpoint models** — run privately via Ollama, LM Studio, llama.cpp, vLLM, Jan, Text-Gen-WebUI, or point at any hosted OpenAI-compatible `/v1` (NVIDIA NIM, Groq, Together, Fireworks, DeepInfra, Mistral, DeepSeek, OpenRouter, …). Auto-discovery on standard local ports, one-click presets for major hosted providers, per-model capability overrides.
 - Switch models mid-conversation; per-conversation system prompts and thinking budget controls
 
 **Shell Execution**
@@ -124,17 +124,17 @@ npm run dist     # build
 **Auth:** Settings → Authentication → paste a GitHub PAT or API key.  
 **Figma:** Figma Desktop → Preferences → Enable Dev Mode MCP Server → toggle 🔷 MCP in toolbar.
 
-### Local AI Models
+### Custom Endpoints (local & hosted OpenAI-compatible)
 
-Fauna can talk to any local OpenAI-compatible endpoint — your tokens, your hardware, no cloud round-trip.
+Fauna can talk to any OpenAI-compatible `/v1` endpoint — local backends or hosted providers. Your tokens, your choice of host.
 
-**Setup:** Settings → Authentication → **Local Models** tab.
+**Setup:** Settings → Authentication → **Custom Endpoints** tab.
 
-- **Refresh** auto-discovers Ollama (`localhost:11434/v1`), LM Studio (`localhost:1234/v1`), llama.cpp (`localhost:8080/v1`), vLLM (`localhost:8000/v1`), Jan (`localhost:1337/v1`), and Text-Gen-WebUI (`localhost:5000/v1`).
-- Or paste any custom `/v1` URL + optional API key + a default model id, click **Test**, then **Save & Enable**.
-- Local models appear in the model picker under the **Local** vendor group with a `· local` suffix. Pick one to route that conversation through your local backend; switch back to Copilot/OpenAI/Anthropic/Google at any time.
-- **Capability overrides** — by default Fauna assumes local models don't support OpenAI `tool_calls` or vision. Enable the checkbox for either if your model is known to handle them. When tools are off, Fauna still streams chat normally but the agent loop (shell, browser, file edits) is disabled to avoid hallucinated tool invocations.
-- **Disable** reverts to Copilot.
+- **Hosted presets** — one-click setup for NVIDIA NIM, Groq, Together AI, Fireworks AI, DeepInfra, Mistral, DeepSeek, and OpenRouter. Click a preset, paste your API key, Save.
+- **Refresh** auto-discovers local backends: Ollama (`localhost:11434/v1`), LM Studio (`localhost:1234/v1`), llama.cpp (`localhost:8080/v1`), vLLM (`localhost:8000/v1`), Jan (`localhost:1337/v1`), Text-Gen-WebUI (`localhost:5000/v1`).
+- Or paste any custom `/v1` URL + optional API key + default model id, click **Test**, then **Save & Enable**.
+- Custom models appear in the model picker under the **Custom** vendor group with a `· custom` suffix. Switch back to Copilot at any time.
+- **Capability overrides** — by default Fauna assumes the endpoint doesn't support OpenAI `tool_calls` or vision. Enable the checkbox for either if your model handles them. When tools are off, Fauna streams chat normally but the agent loop (shell, browser, file edits) is disabled to avoid hallucinated tool invocations.
 
 **Quick start with Ollama:**
 
@@ -142,7 +142,7 @@ Fauna can talk to any local OpenAI-compatible endpoint — your tokens, your har
 brew install ollama
 ollama serve &
 ollama pull qwen2.5-coder:14b
-# In Fauna: Settings → Authentication → Local Models → Refresh → Use → Save & Enable
+# In Fauna: Settings → Authentication → Custom Endpoints → Refresh → Use → Save & Enable
 ```
 
 Config persists at `$FAUNA_CONFIG_DIR/local-llm.json` (defaults to `~/.config/copilot-chat/local-llm.json`).
@@ -175,7 +175,7 @@ Inside the REPL: `/store` searches Agent Store, `/store show <slug>` previews an
 - [ ] Agent analytics — usage, token costs, success rates
 - [ ] Conversation branching
 - [ ] Voice input/output
-- [x] Local model support (Ollama, llama.cpp, LM Studio, vLLM, any OpenAI-compatible `/v1`)
+- [x] Local model support (Ollama, llama.cpp, LM Studio, vLLM, NVIDIA NIM, Groq, Together, Fireworks, any OpenAI-compatible `/v1`)
 - [ ] Plugin system beyond agents
 - [ ] MCP server marketplace
 - [ ] Mobile companion app

@@ -37,6 +37,7 @@
     } catch (e) {
       console.warn('[local-llm] init failed', e);
     }
+    _renderPresets();
     var cfg = window.faunaLocalLLM.config;
     var baseEl  = document.getElementById('local-llm-baseurl');
     var keyEl   = document.getElementById('local-llm-apikey');
@@ -170,6 +171,48 @@
   function escapeHtml(s) {
     return String(s || '').replace(/[&<>"']/g, function(c) {
       return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  }
+
+  // One-click presets for major OpenAI-compatible hosted providers. Each fills
+  // the form with the right baseURL + a sensible default model and a key
+  // placeholder hint; the user still has to paste their own API key.
+  var PRESETS = [
+    { id: 'nvidia',    label: 'NVIDIA NIM',    baseURL: 'https://integrate.api.nvidia.com/v1', defaultModel: 'nvidia/llama-3.3-nemotron-super-49b-v1', tools: true,  vision: false, hint: 'nvapi-…' },
+    { id: 'groq',      label: 'Groq',          baseURL: 'https://api.groq.com/openai/v1',       defaultModel: 'llama-3.3-70b-versatile',                tools: true,  vision: false, hint: 'gsk_…' },
+    { id: 'together',  label: 'Together AI',   baseURL: 'https://api.together.xyz/v1',          defaultModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo', tools: true,  vision: false, hint: 'api-…' },
+    { id: 'fireworks', label: 'Fireworks AI',  baseURL: 'https://api.fireworks.ai/inference/v1', defaultModel: 'accounts/fireworks/models/llama-v3p3-70b-instruct', tools: true, vision: false, hint: 'fw_…' },
+    { id: 'deepinfra', label: 'DeepInfra',     baseURL: 'https://api.deepinfra.com/v1/openai',  defaultModel: 'meta-llama/Meta-Llama-3.1-70B-Instruct',  tools: false, vision: false, hint: '' },
+    { id: 'mistral',   label: 'Mistral',       baseURL: 'https://api.mistral.ai/v1',            defaultModel: 'mistral-large-latest',                   tools: true,  vision: false, hint: '' },
+    { id: 'deepseek',  label: 'DeepSeek',      baseURL: 'https://api.deepseek.com/v1',          defaultModel: 'deepseek-chat',                          tools: true,  vision: false, hint: '' },
+    { id: 'openrouter',label: 'OpenRouter',    baseURL: 'https://openrouter.ai/api/v1',         defaultModel: 'anthropic/claude-3.5-sonnet',            tools: true,  vision: true,  hint: 'sk-or-…' },
+  ];
+
+  function _renderPresets() {
+    var wrap = document.getElementById('local-llm-presets');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    PRESETS.forEach(function(p) {
+      var btn = document.createElement('button');
+      btn.className = 'settings-row-btn';
+      btn.textContent = p.label;
+      btn.title = p.baseURL;
+      btn.onclick = function() {
+        document.getElementById('local-llm-baseurl').value = p.baseURL;
+        document.getElementById('local-llm-model').value   = p.defaultModel;
+        var keyEl = document.getElementById('local-llm-apikey');
+        if (keyEl && p.hint) keyEl.placeholder = p.hint;
+        var oT = document.getElementById('local-llm-override-tools');
+        var oV = document.getElementById('local-llm-override-vision');
+        if (oT) oT.checked = !!p.tools;
+        if (oV) oV.checked = !!p.vision;
+        var statusEl = document.getElementById('local-llm-status');
+        if (statusEl) {
+          statusEl.textContent = 'Loaded ' + p.label + ' preset. Paste your API key and click Test or Save.';
+          statusEl.style.color = 'var(--fau-text-dim)';
+        }
+      };
+      wrap.appendChild(btn);
     });
   }
 

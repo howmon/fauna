@@ -157,7 +157,7 @@ async function _mergeLocalModelsInto(arr) {
       return {
         id:     m.id,
         name:   m.name || m.id,
-        vendor: 'Local',
+        vendor: 'Custom',
         local:  true,
         providerId: cfg.providerId,
         baseURL:    cfg.baseURL,
@@ -172,7 +172,7 @@ async function _mergeLocalModelsInto(arr) {
     // still surface it so it can be selected.
     if (cfg.defaultModel && !localModels.find(function(m) { return m.id === cfg.defaultModel; })) {
       localModels.unshift({
-        id: cfg.defaultModel, name: cfg.defaultModel, vendor: 'Local',
+        id: cfg.defaultModel, name: cfg.defaultModel, vendor: 'Custom',
         local: true, providerId: cfg.providerId, baseURL: cfg.baseURL, apiKey: cfg.apiKey,
         vision: !!(cfg.overrides && cfg.overrides.vision),
         tools:  !!(cfg.overrides && cfg.overrides.tools),
@@ -189,7 +189,7 @@ function populateModelSelect() {
   sel.innerHTML = '';
 
   // Group by vendor (Anthropic, OpenAI, Google, …) in a stable order.
-  var order = ['Anthropic', 'OpenAI', 'Google', 'xAI', 'Minimax', 'Local'];
+  var order = ['Anthropic', 'OpenAI', 'Google', 'xAI', 'Minimax', 'Custom'];
   var byVendor = {};
   allModels.forEach(function(m) {
     var v = m.vendor || 'Other';
@@ -220,7 +220,7 @@ function populateModelSelect() {
   var cur = allModels.find(function(m) { return m.id === state.model; });
   var lbl = document.getElementById('tb-model-label');
   if (lbl) {
-    var suffix = cur && cur.local ? ' · local' : '';
+    var suffix = cur && cur.local ? ' · custom' : '';
     lbl.textContent = (cur ? cur.name : (state.model || 'Model')) + suffix;
   }
 }
@@ -236,12 +236,12 @@ function onModelChange(id) {
     }
   }
   var m = allModels.find(function(mm) { return mm.id === id; });
-  if (m && typeof showToast === 'function') showToast('Model: ' + m.name + (m.local ? ' (local)' : ''));
+  if (m && typeof showToast === 'function') showToast('Model: ' + m.name + (m.local ? ' (custom)' : ''));
   // Sync hidden select + toolbar label
   var sel = document.getElementById('model-select');
   if (sel) sel.value = id;
   var lbl = document.getElementById('tb-model-label');
-  if (lbl) lbl.textContent = (m ? m.name : id) + (m && m.local ? ' · local' : '');
+  if (lbl) lbl.textContent = (m ? m.name : id) + (m && m.local ? ' · custom' : '');
 }
 
 // ── Auth & Settings ───────────────────────────────────────────────────────
