@@ -997,6 +997,20 @@ async function streamResponse(conv) {
 
     // Build chat request body — include agent info when active
     var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: state.figmaMCPEnabled, usePlaywrightMCP: state.playwrightMCPEnabled || false, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false };
+    // If the selected model is a Local model, echo provider info so the
+    // server routes the request to the configured OpenAI-compatible endpoint
+    // instead of Copilot. Lookup is by id in the picker-model list.
+    if (typeof allModels !== 'undefined') {
+      var _selectedModel = allModels.find(function(m) { return m.id === state.model; });
+      if (_selectedModel && _selectedModel.local) {
+        chatBody.llm = {
+          providerId: _selectedModel.providerId,
+          baseURL:    _selectedModel.baseURL,
+          apiKey:     _selectedModel.apiKey,
+          model:      _selectedModel.id,
+        };
+      }
+    }
     if (typeof isAgentActive === 'function' && isAgentActive()) {
       chatBody.agentName = getActiveAgentName();
       chatBody.agentPermissions = getActiveAgentPermissions();

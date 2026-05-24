@@ -23,6 +23,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { getCopilotClient } from '../copilot/auth.js';
+import { getLLMClient } from '../llm/registry.js';
 import { FALLBACK_MODELS, CHAT_COMPLETIONS_UNSUPPORTED_RE } from '../copilot/models.js';
 import { GEN_UI_CATALOG_PROMPT } from '../prompts/gen-ui-catalog.js';
 import { SELF_TOOL_DEFS, DYNAMIC_WIDGET_TOOL_DEFS, executeSelfTool, isSelfTool } from '../../self-tools.js';
@@ -203,7 +204,15 @@ export function registerChatRoute(app, {
     res.on('close', () => clearInterval(_sseHeartbeat));
 
     try {
-      const client = getCopilotClient();
+      // Resolve provider — req.body.llm picks an explicit provider/baseURL/
+      // apiKey (sent by the UI when a Local model is selected). Falls back to
+      // saved local-llm.json, then to Copilot. `llmSupports` is the merged
+      // capability map (provider defaults + per-config overrides) and gates
+      // tools/vision/usage_events later in the loop.
+      const _llm = getLLMClient(req.body && req.body.llm);
+      const client = _llm.client;
+      const llmSupports = _llm.supports || { tools: true, vision: true, streaming: true, usageEvents: true };
+      const llmProviderId = _llm.providerId;
       const allMessages = [];
 
       // Build project context from active project (name, root, sources, pinned/enabled contexts)
@@ -674,7 +683,36 @@ export function registerChatRoute(app, {
             params.tools = [...(params.tools || []), ...ephemeral];
           }
         }
-        params.stream_options = { include_usage: true };
+        // Capability gating for non-Copilot providers. Most local
+        // OpenAI-compatible endpoints either reject `tools` outright or
+        // silently ignore them — strip them when supports.tools=false. The
+        // agentic loop still works because shell/browser/etc. are also
+        // exposed through markdown-fence widgets in the system prompt.
+        if (!llmSupports.tools) {
+          delete params.tools;
+          delete params.tool_choice;
+        }
+        // `stream_options.include_usage` is OpenAI-specific. Ollama/llama.cpp
+        // tolerate it but vLLM and some others 400 on unknown fields.
+        if (llmSupports.usageEvents) {
+          params.stream_options = { include_usage: true };
+        }
+        // Vision gating: when the active provider/model doesn't support image
+        // input, replace each image_url content part with a short text note so
+        // the model at least knows the user attached something but no longer
+        // crashes on the unsupported content type.
+        if (!llmSupports.vision) {
+          params.messages = params.messages.map(function(m) {
+            if (!m || !Array.isArray(m.content)) return m;
+            var stripped = m.content.map(function(part) {
+              if (part && (part.type === 'image_url' || part.type === 'image' || part.image_url)) {
+                return { type: 'text', text: '[image attached — vision not supported by current model]' };
+              }
+              return part;
+            });
+            return Object.assign({}, m, { content: stripped });
+          });
+        }
 
         let stream;
         try {
