@@ -1815,6 +1815,31 @@ async function _runExtActionSequence(widgets, convId) {
           var snapUrl = snapTabInfo.url || 'browser';
           var snapLabel = snapUrl.length > 60 ? snapUrl.slice(0, 57) + '…' : snapUrl;
 
+          // Optional savePath: persist the screenshot to disk so the model can
+          // reference it as a real file (e.g. in case-study folders, README
+          // images, etc.) instead of falling back to fabricated SVG mockups.
+          var savedPath = '';
+          var saveError = '';
+          if (w.action.savePath) {
+            try {
+              var saveRes = await fetch('/api/write-file', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  path: w.action.savePath,
+                  content: result.base64,
+                  encoding: 'base64'
+                })
+              });
+              var saveJson = await saveRes.json().catch(function() { return {}; });
+              if (saveRes.ok && saveJson.ok) {
+                savedPath = saveJson.path || w.action.savePath;
+              } else {
+                saveError = saveJson.error || ('HTTP ' + saveRes.status);
+              }
+            } catch (e) { saveError = e.message || String(e); }
+          }
+
           // Show thumbnail in chat
           var thumbEl = document.createElement('div');
           thumbEl.className = 'msg system-msg';
@@ -1822,14 +1847,20 @@ async function _runExtActionSequence(widgets, convId) {
             '<img src="data:' + snapMime + ';base64,' + result.base64 + '" ' +
             'style="max-width:120px;max-height:80px;border-radius:6px;border:1px solid rgba(255,255,255,.1);cursor:pointer" ' +
             'onclick="window.open(this.src,\'_blank\')" title="Click to enlarge">' +
-            '<span style="opacity:.7"><i class="ti ti-camera" style="margin-right:4px"></i>Snapshot from ' + escHtml(snapLabel) + '</span>' +
-            '</div>';
+            '<span style="opacity:.7"><i class="ti ti-camera" style="margin-right:4px"></i>Snapshot from ' + escHtml(snapLabel) +
+            (savedPath ? ' → saved to <code>' + escHtml(savedPath) + '</code>' : '') +
+            (saveError ? ' <span style="color:#f87171">save failed: ' + escHtml(saveError) + '</span>' : '') +
+            '</span></div>';
           var convInner = document.getElementById('conv-' + (convId || state.currentId));
           if (convInner) { convInner.appendChild(thumbEl); scrollBottom(); }
 
+          var feedText = '[Browser extension snapshot' + (w.action.action === 'snapshot-full' ? ' (full page)' : '') +
+            '] from: ' + snapUrl;
+          if (savedPath) feedText += '\nSaved to disk at: ' + savedPath;
+          else if (saveError) feedText += '\nSave to disk FAILED (' + saveError + ') — only available as vision attachment.';
+
           await sendDirectMessage(
-            '[Browser extension snapshot' + (w.action.action === 'snapshot-full' ? ' (full page)' : '') +
-            '] from: ' + snapUrl,
+            feedText,
             { image: 'data:' + snapMime + ';base64,' + result.base64, isBrowserFeed: true, targetConvId: convId }
           );
         }

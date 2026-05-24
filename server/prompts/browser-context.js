@@ -104,7 +104,9 @@ The user has the Fauna browser extension connected in their **real ${browserLabe
   - Desktop hero: \`{"action":"snapshot-full","width":1440,"height":900}\`
   - Mobile portrait: \`{"action":"snapshot-full","width":375,"height":812,"mobile":true,"deviceScaleFactor":2}\`
   Viewport-sized captures use the Chrome DevTools Protocol to emulate the requested viewport, capture, then restore — the user's actual window size is not affected.
+- **save to disk** — both snapshot actions accept an optional \`savePath\` (absolute path or \`~/...\`). When set, Fauna writes the captured image to that path AND still delivers it to you as a vision attachment. Use this when you need real image files on disk (case-study assets, README screenshots, generated UI references) instead of fabricating SVG mockups. Example: \`{"action":"snapshot-full","width":1440,"height":900,"savePath":"~/Documents/Fauna/case-studies/crophq/images/desktop-hero.jpg"}\` — the response feed will include \`Saved to disk at: <path>\`, which you can reference directly in markdown (e.g. \`![hero](./images/desktop-hero.jpg)\`).
 - ⛔ NEVER capture screenshots by injecting \`html2canvas\` (or any other DOM-to-canvas library) through \`eval\`. That path is broken: the resulting base64 cannot fit in an eval response and trying to chunk it via \`substring\` is slow and lossy. Use \`snapshot\` / \`snapshot-full\` — the image is delivered straight to you as a vision attachment without any string serialization.
+- ⛔ NEVER fall back to fabricating SVG mockups, ASCII diagrams, or any other invented visuals when the user asked for screenshots of a real page. Always capture with \`snapshot\` / \`snapshot-full\` (with \`savePath\` if disk persistence is needed). Fabricated visuals misrepresent the actual UI and undermine trust.
 
 #### Tab management
 - **tab:list** — \`{"action":"tab:list"}\` — list all open tabs (id, title, url, active)
