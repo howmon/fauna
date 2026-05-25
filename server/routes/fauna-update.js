@@ -23,6 +23,18 @@ export function registerFaunaUpdateRoutes(app, {
 }) {
   let _faunaUpdateJob = null;
 
+  function _faunaAppVersion() {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(appDir, 'package.json'), 'utf8'));
+      if (pkg && pkg.version) return pkg.version;
+    } catch (_) {}
+    try {
+      const _electronApp = getElectronApp();
+      if (_electronApp && typeof _electronApp.getVersion === 'function') return _electronApp.getVersion();
+    } catch (_) {}
+    return null;
+  }
+
   function _faunaLog(msg) {
     if (!_faunaUpdateJob) return;
     _faunaUpdateJob.logs = _faunaUpdateJob.logs || [];
@@ -66,7 +78,7 @@ export function registerFaunaUpdateRoutes(app, {
   }
 
   app.get('/api/fauna/update-status', (_req, res) => {
-    res.json({ job: _faunaUpdateJob || { phase: 'idle', updateAvailable: false } });
+    res.json({ job: _faunaUpdateJob || { phase: 'idle', updateAvailable: false }, version: _faunaAppVersion() });
   });
 
   app.post('/api/fauna/check-update', async (_req, res) => {

@@ -1337,7 +1337,7 @@ Examples:
     <div class="settings-page-title">About</div>
     <div class="settings-section">
       <div class="settings-hint" style="line-height:1.7">
-        <strong style="color:var(--fau-text)">Fauna</strong> v1.0.0<br>
+        <strong style="color:var(--fau-text)">Fauna</strong> <span id="about-version">v…</span><br>
         Multi-provider AI assistant — use GitHub Copilot, OpenAI, Anthropic, or Google models.<br><br>
         <strong style="color:var(--fau-text)">Model routing:</strong><br>
         • Models from API Keys → sent directly to that provider<br>
@@ -1999,6 +1999,10 @@ Examples:
 
   function _renderFaunaUpdateStatus(data) {
     _faunaUpdateLastData = data || {};
+    if (data && data.version) {
+      var vEl = document.getElementById('about-version');
+      if (vEl) vEl.textContent = 'v' + data.version;
+    }
     var el = document.getElementById('fauna-update-status');
     var btn = document.getElementById('fauna-update-install-btn');
     if (!el) return;
