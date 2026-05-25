@@ -4,6 +4,7 @@ import fs       from 'fs';
 import os       from 'os';
 import { fileURLToPath } from 'url';
 import { startServer }   from './server.js';
+import { getResidentAudio } from './server/voice/resident-audio.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT      = 3737;
@@ -25,6 +26,8 @@ let mainWindow;
 const windows = new Set();
 let widgetWindow = null;
 let tray = null;
+let audioWindow = null;     // hidden BrowserWindow that owns the mic
+let residentAudio = null;   // ResidentAudio EventEmitter (Phase 1)
 
 // ── Window state persistence ─────────────────────────────────────
 // Persists the set of open windows (active conversation, project, bounds)
@@ -547,12 +550,15 @@ function _buildTrayMenu() {
       }))
     : [{ label: 'No windows open', enabled: false }];
 
+  const voiceEnabled = !!residentAudio?.isEnabled();
   return Menu.buildFromTemplate([
     { label: 'Windows', enabled: false },
     ...windowItems,
     { type: 'separator' },
     { label: 'New Window', accelerator: IS_MAC ? 'Cmd+Shift+N' : 'Ctrl+Shift+N', click: () => createWindow({ blank: true }) },
     { label: 'Toggle Task Widget', click: () => toggleWidget() },
+    { type: 'separator' },
+    { label: 'Listen in background', type: 'checkbox', checked: voiceEnabled, click: () => toggleResidentVoice() },
     { type: 'separator' },
     { label: 'Quit Fauna', click: () => { app.isQuitting = true; app.quit(); } },
   ]);
@@ -561,6 +567,70 @@ function _buildTrayMenu() {
 function refreshTray() {
   if (!tray || tray.isDestroyed?.()) return;
   tray.setContextMenu(_buildTrayMenu());
+}
+
+// ── Hidden audio-capture window (resident voice, Phase 1) ────────────────
+function createAudioWindow() {
+  if (audioWindow && !audioWindow.isDestroyed()) return audioWindow;
+  const win = new BrowserWindow({
+    width: 320,
+    height: 60,
+    show: false,            // never visible to the user
+    skipTaskbar: true,
+    focusable: false,
+    frame: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration:  false,
+      sandbox:          false,
+      backgroundThrottling: false,   // critical: keep mic running when no UI focused
+      preload:          path.join(__dirname, 'audio-preload.js'),
+    },
+  });
+  // Grant mic permission for this window's session
+  win.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(['media', 'microphone', 'audioCapture'].includes(permission));
+  });
+  win.loadFile(path.join(__dirname, 'public', 'audio-capture.html'));
+  win.on('closed', () => { if (audioWindow === win) audioWindow = null; });
+  audioWindow = win;
+  return win;
+}
+
+function _initResidentAudio() {
+  if (residentAudio) return residentAudio;
+  residentAudio = getResidentAudio({ appDir: __dirname });
+  residentAudio.attachWindowFactory(() => createAudioWindow());
+
+  // Forward IPC from the hidden audio window into the broker. The same
+  // `ipcMain.on` handler receives messages from both `ipcRenderer.send` and
+  // `ipcRenderer.postMessage` — only postMessage can transfer ArrayBuffers
+  // without a copy, which is why audio-preload uses postMessage for frames.
+  const channels = ['voice:ready', 'voice:frame', 'voice:speech-start', 'voice:speech-end', 'voice:error'];
+  for (const ch of channels) {
+    ipcMain.on(ch, (_event, payload) => residentAudio.handleIpc(ch, payload));
+  }
+
+  // Surface state changes to the tray menu.
+  residentAudio.on('state', () => refreshTray());
+
+  // Phase-1 visibility: log VAD events so we can verify end-to-end without
+  // a UI yet. Later phases replace these listeners with wake-word + agent.
+  residentAudio.on('speech-start', ({ ts }) => console.log('[voice] speech-start', new Date(ts).toISOString()));
+  residentAudio.on('speech-end',   ({ ts, durationMs }) => console.log('[voice] speech-end', new Date(ts).toISOString(), durationMs + 'ms'));
+
+  // Auto-start if user previously enabled it.
+  if (residentAudio.isEnabled()) residentAudio.setEnabled(true);
+  return residentAudio;
+}
+
+function toggleResidentVoice() {
+  if (!residentAudio) _initResidentAudio();
+  residentAudio.setEnabled(!residentAudio.isEnabled());
 }
 
 function createTray() {
@@ -641,6 +711,9 @@ app.whenReady().then(async () => {
   // Create tray icon and task widget
   createTray();
 
+  // Initialise resident voice broker (auto-starts mic if user enabled it previously)
+  _initResidentAudio();
+
   // Global shortcut: Ctrl+Shift+T (Cmd+Shift+T is used by the menu for the in-app panel)
   globalShortcut.register('Ctrl+Shift+Space', () => toggleWidget());
 
@@ -662,6 +735,7 @@ app.on('before-quit', () => {
   app.isQuitting = true;
   // Snapshot which windows were open + their conv/project so we restore them next launch
   try { persistWindowState(); } catch (_) {}
+  try { residentAudio?.shutdown(); } catch (_) {}
   if (app.isReady()) globalShortcut.unregisterAll();
   // Give Electron ~300 ms to close windows, then hard-exit the Node process.
   setTimeout(() => process.exit(0), 300);
