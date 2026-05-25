@@ -353,6 +353,7 @@ async function sendMessage(opts) {
   if (!opts.fromAutoFeed) conv._autoFeedDepth = 0; // user-initiated → reset chain
   if (!opts.fromAutoFeed) conv._depthLimitNotified = false;
   if (!opts.fromAutoFeed) conv._chainMode = false; // user msg → not a chain continuation
+  if (!opts.fromAutoFeed) { delete conv._writeRepairMode; delete conv._suppressShellAutoRunOnce; } // new user turn clears prior write-repair gate
   if (conv._streaming) {
     // Safety: if streaming flag is stale (>90s), force reset
     if (Date.now() - (conv._streamingStart || 0) > 90000) {
