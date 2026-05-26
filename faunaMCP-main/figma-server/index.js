@@ -195,6 +195,7 @@ function getFigmaDocsSection(section) {
     '- Keep spacing scales consistent (4/8 multiples).',
     '- Ensure readable text hierarchy and predictable alignment.',
     '- Prefer responsive frame constraints for app/page shells.',
+    '- When recreating a web page or any page in Figma, default every child to FILL, only HUG icons/avatars/buttons/badges, never nest a layoutMode=NONE frame inside autolayout, use SPACE_BETWEEN for header/topbar rows, and after building, resize the outer frame to verify everything reflows.',
   ].join('\n');
 
   const api = [
