@@ -6,6 +6,13 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('faunaApp', {
   /**
+   * Per-process nonce required by privileged UI-only routes
+   * (e.g. /api/agent-builder/*). Read from process.env in the main
+   * process at app start.
+   */
+  uiNonce: process.env.FAUNA_UI_NONCE || '',
+
+  /**
    * Open a new Fauna window, optionally pre-selecting a conversation/project.
    * @param {{convId?: string, projectId?: string}} [opts]
    */

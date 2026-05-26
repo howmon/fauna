@@ -3,6 +3,7 @@ import path     from 'path';
 import fs       from 'fs';
 import os       from 'os';
 import { fileURLToPath } from 'url';
+import crypto   from 'crypto';
 import { startServer }   from './server.js';
 import { getResidentAudio } from './server/voice/resident-audio.js';
 import { getUtterancePipeline } from './server/voice/utterance-pipeline.js';
@@ -871,6 +872,12 @@ app.whenReady().then(async () => {
   // Ensure ~/Documents/Fauna exists and stash the path for the server route.
   const faunaDocs = ensureFaunaDocsFolder();
   if (faunaDocs) process.env.FAUNA_DOCS = faunaDocs;
+
+  // Mint a per-process nonce that gates privileged UI-only routes (e.g.
+  // /api/agent-builder/*). Exposed to renderers via main-preload.js so
+  // only the in-app UI can read it — not the LAN, not the localtunnel,
+  // not the resident voice path, not any other localhost browser tab.
+  process.env.FAUNA_UI_NONCE = crypto.randomBytes(32).toString('hex');
 
   await startServer(PORT).catch(err => {
     console.error('[Electron] Server failed to start:', err.message);

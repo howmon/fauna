@@ -4,6 +4,47 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fauna</title>
+<script>
+  // Auto-attach the per-process UI nonce on same-origin fetch / XHR so the
+  // server can distinguish in-app UI calls from other localhost browsers,
+  // the localtunnel proxy, or any non-UI bridge. Set by main-preload.js.
+  (function () {
+    try {
+      var n = (window.faunaApp && window.faunaApp.uiNonce) || '';
+      if (!n) return;
+      var origFetch = window.fetch;
+      window.fetch = function (input, init) {
+        try {
+          var url = (typeof input === 'string') ? input : (input && input.url) || '';
+          var sameOrigin = url.startsWith('/') ||
+            url.startsWith(location.origin) ||
+            url.startsWith('http://127.0.0.1') ||
+            url.startsWith('http://localhost');
+          if (sameOrigin) {
+            init = init || {};
+            var h = new Headers(init.headers || (typeof input !== 'string' && input.headers) || {});
+            if (!h.has('x-fauna-ui')) h.set('x-fauna-ui', n);
+            init.headers = h;
+          }
+        } catch (_) {}
+        return origFetch.call(this, input, init);
+      };
+      var origOpen = XMLHttpRequest.prototype.open;
+      var origSend = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.open = function (m, u) {
+        this.__faunaSameOrigin = !u || u.startsWith('/') ||
+          u.startsWith(location.origin) ||
+          u.startsWith('http://127.0.0.1') ||
+          u.startsWith('http://localhost');
+        return origOpen.apply(this, arguments);
+      };
+      XMLHttpRequest.prototype.send = function () {
+        try { if (this.__faunaSameOrigin) this.setRequestHeader('x-fauna-ui', n); } catch (_) {}
+        return origSend.apply(this, arguments);
+      };
+    } catch (_) {}
+  })();
+</script>
 <link id="hljs-theme" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.10.0/dist/tabler-icons.min.css">
 <script src="https://cdn.jsdelivr.net/npm/marked@13/marked.min.js"></script>
