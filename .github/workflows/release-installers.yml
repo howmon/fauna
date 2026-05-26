@@ -19,7 +19,7 @@ env:
 
 jobs:
   build-mac-arm64:
-    name: Build macOS DMG (arm64)
+    name: Build macOS DMG (arm64) - Fauna + FaunaMCP
     runs-on: macos-14
 
     steps:
@@ -51,8 +51,21 @@ jobs:
           path: dist/*.dmg
           if-no-files-found: error
 
+      - name: Install FaunaMCP dependencies
+        run: npm --prefix faunaMCP-main ci
+
+      - name: Build FaunaMCP macOS arm64 DMG
+        run: npm --prefix faunaMCP-main run dist:mac:arm64
+
+      - name: Upload FaunaMCP macOS arm64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: faunamcp-mac-arm64-dmg
+          path: faunaMCP-main/dist/*.dmg
+          if-no-files-found: error
+
   build-mac-x64:
-    name: Build macOS DMG (x64)
+    name: Build macOS DMG (x64) - Fauna + FaunaMCP
     runs-on: macos-13
 
     steps:
@@ -84,8 +97,21 @@ jobs:
           path: dist/*.dmg
           if-no-files-found: error
 
+      - name: Install FaunaMCP dependencies
+        run: npm --prefix faunaMCP-main ci
+
+      - name: Build FaunaMCP macOS x64 DMG
+        run: npm --prefix faunaMCP-main run dist:mac:x64
+
+      - name: Upload FaunaMCP macOS x64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: faunamcp-mac-x64-dmg
+          path: faunaMCP-main/dist/*.dmg
+          if-no-files-found: error
+
   build-win-x64:
-    name: Build Windows EXE (x64)
+    name: Build Windows EXE (x64) - Fauna + FaunaMCP
     runs-on: windows-latest
 
     steps:
@@ -115,6 +141,19 @@ jobs:
         with:
           name: fauna-win-x64-exe
           path: dist/*.exe
+          if-no-files-found: error
+
+      - name: Install FaunaMCP dependencies
+        run: npm --prefix faunaMCP-main ci
+
+      - name: Build FaunaMCP Windows x64 NSIS installer
+        run: npm --prefix faunaMCP-main run dist:win -- --x64
+
+      - name: Upload FaunaMCP Windows x64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: faunamcp-win-x64-exe
+          path: faunaMCP-main/dist/*.exe
           if-no-files-found: error
 
   publish-release:
@@ -151,6 +190,12 @@ jobs:
           append_body: true
           body: |
             Automated installer artifacts:
+            Fauna:
+            - macOS DMG (arm64)
+            - macOS DMG (x64)
+            - Windows EXE (x64)
+
+            FaunaMCP:
             - macOS DMG (arm64)
             - macOS DMG (x64)
             - Windows EXE (x64)

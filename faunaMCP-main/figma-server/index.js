@@ -151,6 +151,281 @@ function searchTokens(query, system) {
   return results.slice(0, 25);
 }
 
+function _kebabCase(input) {
+  return String(input || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase();
+}
+
+function _toImportPath(name) {
+  const base = _kebabCase(name || 'component');
+  if (!base) return '@/components/component';
+  return '@/components/' + base;
+}
+
+function _formatValue(v) {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return String(v);
+  try { return JSON.stringify(v); } catch (_) { return String(v); }
+}
+
+function getFigmaDocsSection(section) {
+  const rules = [
+    '# Figma MCP Rules (Fauna)',
+    '',
+    '## Critical checklist',
+    '1. Confirm connection with figma_status.',
+    '2. Read current context with get_selection or list_pages before major edits.',
+    '3. Prefer tokenized values (apply_token/search_tokens) over hard-coded colors and spacing.',
+    '4. If multiple files are connected, pass file_key explicitly (or pin files in the Fauna picker).',
+    '5. After writes, verify with get_selection or figma_execute readback.',
+    '',
+    '## Non-negotiable guardrails',
+    '- Never delete/flatten large structures without explicit user intent.',
+    '- For component instances, prefer property overrides over detaching instances.',
+    '- Keep Auto Layout intact; avoid absolute positioning unless requested.',
+  ].join('\n');
+
+  const layout = [
+    '# Layout Guidance',
+    '',
+    '- Use Auto Layout for containers and interactive components.',
+    '- Keep spacing scales consistent (4/8 multiples).',
+    '- Ensure readable text hierarchy and predictable alignment.',
+    '- Prefer responsive frame constraints for app/page shells.',
+  ].join('\n');
+
+  const api = [
+    '# Tooling Workflow',
+    '',
+    'Typical sequence:',
+    '1. figma_status',
+    '2. list_pages / get_selection',
+    '3. search_components + search_tokens',
+    '4. figma_execute or layout tools',
+    '5. get_component_map / get_unmapped_components for code mapping checks',
+  ].join('\n');
+
+  const tokens = [
+    '# Token Guidance',
+    '',
+    '- Use index_tokens per system before heavy token search.',
+    '- Apply tokens with apply_token when possible.',
+    '- For code mapping, include variable names and mode values in output.',
+  ].join('\n');
+
+  const icons = [
+    '# Icons & Vector Guidance',
+    '',
+    '- Use components for icons when available in the design system.',
+    '- Keep icon sizing aligned to container constraints.',
+    '- Avoid destructive path rewrites unless necessary.',
+  ].join('\n');
+
+  const index = [
+    '# Figma MCP Docs (Fauna)',
+    '',
+    'Sections:',
+    '- rules',
+    '- layout',
+    '- api',
+    '- tokens',
+    '- icons',
+    '',
+    'Call figma_docs with no section first, then load a focused section as needed.',
+    '',
+    rules,
+  ].join('\n');
+
+  if (!section) return index;
+  if (section === 'rules') return rules;
+  if (section === 'layout') return layout;
+  if (section === 'api') return api;
+  if (section === 'tokens') return tokens;
+  if (section === 'icons') return icons;
+  return index;
+}
+
+async function getComponentMapData({ file_key = null, frame_id = null } = {}) {
+  const code = `
+const targetNode = ${frame_id ? `figma.getNodeById(${JSON.stringify(frame_id)})` : 'figma.currentPage'};
+if (!targetNode) return { error: 'Target node not found' };
+
+function walk(node, out) {
+  if (!node) return;
+  if (node.type === 'INSTANCE') out.push(node);
+  if (node.children && Array.isArray(node.children)) {
+    for (const ch of node.children) walk(ch, out);
+  }
+}
+
+const instances = [];
+walk(targetNode, instances);
+
+const rows = [];
+const byKey = {};
+for (const inst of instances.slice(0, 1000)) {
+  let main = null;
+  let description = '';
+  let setName = '';
+  let componentName = '';
+  try { main = inst.mainComponent || null; } catch (_) { main = null; }
+  if (main) {
+    componentName = main.name || '';
+    description = main.description || '';
+    try {
+      const p = main.parent;
+      if (p && p.type === 'COMPONENT_SET') setName = p.name || '';
+    } catch (_) {}
+  }
+
+  let props = {};
+  try {
+    const cp = inst.componentProperties || {};
+    for (const k of Object.keys(cp)) {
+      const v = cp[k] || {};
+      props[k] = (v && Object.prototype.hasOwnProperty.call(v, 'value')) ? v.value : v;
+    }
+  } catch (_) { props = {}; }
+
+  const variantPairs = Object.keys(props).map(k => String(k) + '=' + String(props[k]));
+  const variantLabel = variantPairs.join(', ');
+  const baseName = setName || componentName || inst.name || 'component';
+  const suggestedImport = '@/components/' + String(baseName)
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase();
+
+  rows.push({
+    id: inst.id,
+    name: inst.name || '',
+    componentName,
+    componentSetName: setName,
+    variantLabel,
+    properties: props,
+    description,
+    suggestedImport,
+    hasMapping: !!String(description || '').trim(),
+  });
+
+  const key = (setName || componentName || inst.name || 'unknown') + '|' + variantLabel;
+  byKey[key] = byKey[key] || {
+    key,
+    componentSetName: setName,
+    componentName,
+    variantLabel,
+    suggestedImport,
+    usageCount: 0,
+    hasMapping: false,
+  };
+  byKey[key].usageCount += 1;
+  if (String(description || '').trim()) byKey[key].hasMapping = true;
+}
+
+return {
+  scope: { id: targetNode.id, name: targetNode.name || targetNode.type, type: targetNode.type },
+  instances: rows,
+  uniqueComponents: Object.values(byKey),
+};
+`;
+
+  const res = await sendToFigma({ type: 'execute-code', code }, 30000, file_key || null);
+  if (res.error) throw new Error(res.error);
+  if (res.result && res.result.error) throw new Error(res.result.error);
+  return res.result || { scope: null, instances: [], uniqueComponents: [] };
+}
+
+async function getDesignRulesData({ file_key = null } = {}) {
+  const code = `
+function rgbaToHex(c) {
+  if (!c) return '';
+  const r = Math.round((c.r || 0) * 255);
+  const g = Math.round((c.g || 0) * 255);
+  const b = Math.round((c.b || 0) * 255);
+  const a = Math.round((c.a == null ? 1 : c.a) * 255);
+  const to2 = n => n.toString(16).padStart(2, '0').toUpperCase();
+  return '#' + to2(r) + to2(g) + to2(b) + (a < 255 ? to2(a) : '');
+}
+
+const paintStyles = await (figma.getLocalPaintStylesAsync ? figma.getLocalPaintStylesAsync() : Promise.resolve([]));
+const textStyles  = await (figma.getLocalTextStylesAsync ? figma.getLocalTextStylesAsync() : Promise.resolve([]));
+const comps       = await (figma.getLocalComponentsAsync ? figma.getLocalComponentsAsync() : Promise.resolve([]));
+const collections = await (figma.getLocalVariableCollectionsAsync ? figma.getLocalVariableCollectionsAsync() : Promise.resolve([]));
+const vars        = await (figma.getLocalVariablesAsync ? figma.getLocalVariablesAsync() : Promise.resolve([]));
+
+const colors = paintStyles.slice(0, 400).map(s => {
+  const p = Array.isArray(s.paints) ? s.paints.find(x => x && x.type === 'SOLID' && x.visible !== false) : null;
+  return { name: s.name, id: s.id, hex: p ? rgbaToHex(p.color ? { ...p.color, a: p.opacity == null ? 1 : p.opacity } : null) : '' };
+});
+
+const typography = textStyles.slice(0, 400).map(s => ({
+  name: s.name,
+  id: s.id,
+  fontFamily: s.fontName?.family || '',
+  fontStyle: s.fontName?.style || '',
+  fontSize: s.fontSize || null,
+  lineHeight: s.lineHeight || null,
+  letterSpacing: s.letterSpacing || null,
+}));
+
+const modeNameByCollection = {};
+for (const c of collections) {
+  const mm = {};
+  for (const m of (c.modes || [])) mm[m.modeId] = m.name;
+  modeNameByCollection[c.id] = mm;
+}
+
+const variables = vars.slice(0, 1200).map(v => {
+  const names = modeNameByCollection[v.variableCollectionId] || {};
+  const values = {};
+  for (const [modeId, val] of Object.entries(v.valuesByMode || {})) {
+    const modeName = names[modeId] || modeId;
+    values[modeName] = val && val.type === 'VARIABLE_ALIAS' ? { alias: val.id } : val;
+  }
+  return {
+    name: v.name,
+    id: v.id,
+    key: v.key,
+    resolvedType: v.resolvedType,
+    collectionId: v.variableCollectionId,
+    scopes: v.scopes || [],
+    values,
+  };
+});
+
+const components = comps.slice(0, 1000).map(c => ({
+  id: c.id,
+  key: c.key,
+  name: c.name,
+  description: c.description || '',
+  componentPropertyDefinitions: c.componentPropertyDefinitions || {},
+}));
+
+return {
+  file: { name: figma.root?.name || '', key: figma.fileKey || 'unknown' },
+  counts: {
+    colorStyles: colors.length,
+    textStyles: typography.length,
+    collections: collections.length,
+    variables: variables.length,
+    components: components.length,
+  },
+  colorStyles: colors,
+  textStyles: typography,
+  collections: collections.map(c => ({ id: c.id, name: c.name, modes: (c.modes || []).map(m => ({ id: m.modeId, name: m.name })) })),
+  variables,
+  components,
+};
+`;
+
+  const res = await sendToFigma({ type: 'execute-code', code }, 30000, file_key || null);
+  if (res.error) throw new Error(res.error);
+  return res.result || {};
+}
+
 // ── GitHub Copilot token ──────────────────────────────────────────────────
 
 function getCopilotToken() {
@@ -739,6 +1014,107 @@ mcp.tool('figma_get_console_logs',
     if (logs.length === 0) return { content: [{ type: 'text', text: 'No console logs yet.' }] };
     const lines = logs.map(l => `[${new Date(l.timestamp).toLocaleTimeString()}] ${l.level.toUpperCase()}: ${l.message}`);
     return { content: [{ type: 'text', text: lines.join('\n') }] };
+  }
+);
+
+mcp.tool('figma_docs',
+  'Get API reference and design rules for Fauna Figma MCP. Call with no args first for quick-start + critical rules.',
+  {
+    section: z.enum(['rules', 'layout', 'api', 'tokens', 'icons']).optional().describe('Optional docs section; omit for quick-start + critical rules')
+  },
+  async ({ section }) => {
+    return { content: [{ type: 'text', text: getFigmaDocsSection(section || null) }] };
+  }
+);
+
+mcp.tool('figma_rules',
+  'Generate a design-system rule sheet from the current Figma file (styles, variables, components).',
+  {
+    file_key: z.string().optional().describe('Target a specific connected file (defaults to active file)')
+  },
+  async ({ file_key }) => {
+    const data = await getDesignRulesData({ file_key: file_key || null });
+    const lines = [];
+    lines.push('# Design System Rules');
+    lines.push('');
+    lines.push(`File: ${data.file?.name || 'Unknown'} (${data.file?.key || 'unknown'})`);
+    lines.push(`Counts: colorStyles=${data.counts?.colorStyles || 0}, textStyles=${data.counts?.textStyles || 0}, collections=${data.counts?.collections || 0}, variables=${data.counts?.variables || 0}, components=${data.counts?.components || 0}`);
+    lines.push('');
+
+    if (Array.isArray(data.colorStyles) && data.colorStyles.length) {
+      lines.push('## Color Styles');
+      data.colorStyles.slice(0, 200).forEach(s => {
+        lines.push(`- ${s.name}: ${s.hex || '(non-solid/complex style)'}`);
+      });
+      lines.push('');
+    }
+
+    if (Array.isArray(data.textStyles) && data.textStyles.length) {
+      lines.push('## Typography Styles');
+      data.textStyles.slice(0, 200).forEach(s => {
+        const lh = _formatValue(s.lineHeight && s.lineHeight.value != null ? s.lineHeight.value : s.lineHeight);
+        lines.push(`- ${s.name}: ${s.fontFamily} ${s.fontStyle} ${s.fontSize || ''}${lh ? ` / lh:${lh}` : ''}`.trim());
+      });
+      lines.push('');
+    }
+
+    if (Array.isArray(data.variables) && data.variables.length) {
+      lines.push('## Variables');
+      data.variables.slice(0, 400).forEach(v => {
+        const modePairs = Object.entries(v.values || {}).map(([k, val]) => `${k}=${_formatValue(val)}`);
+        lines.push(`- ${v.name} (${v.resolvedType}) :: ${modePairs.join(' | ')}`);
+      });
+      lines.push('');
+    }
+
+    if (Array.isArray(data.components) && data.components.length) {
+      lines.push('## Components');
+      data.components.slice(0, 300).forEach(c => {
+        const mapped = String(c.description || '').trim() ? 'mapped' : 'unmapped';
+        const importPath = _toImportPath(c.name || 'component');
+        lines.push(`- ${c.name} [${mapped}] -> ${importPath}`);
+      });
+      lines.push('');
+    }
+
+    lines.push('_Generated by figma_rules. Re-run when the design system changes._');
+    return { content: [{ type: 'text', text: lines.join('\n') }] };
+  }
+);
+
+mcp.tool('get_component_map',
+  'Scan component instances in the current page/frame and extract mapping metadata from component descriptions.',
+  {
+    frame_id: z.string().optional().describe('Optional frame or node id to scope the scan (defaults to current page)'),
+    file_key: z.string().optional().describe('Target a specific connected file (defaults to active file)')
+  },
+  async ({ frame_id, file_key }) => {
+    const data = await getComponentMapData({ file_key: file_key || null, frame_id: frame_id || null });
+    return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+  }
+);
+
+mcp.tool('get_unmapped_components',
+  'Find component instances that are missing code mapping metadata (empty component description).',
+  {
+    frame_id: z.string().optional().describe('Optional frame or node id to scope the scan (defaults to current page)'),
+    file_key: z.string().optional().describe('Target a specific connected file (defaults to active file)')
+  },
+  async ({ frame_id, file_key }) => {
+    const data = await getComponentMapData({ file_key: file_key || null, frame_id: frame_id || null });
+    const unmapped = (data.instances || []).filter(x => !x.hasMapping);
+    const mapped = (data.instances || []).filter(x => x.hasMapping);
+    const summary = {
+      scope: data.scope,
+      totalInstances: (data.instances || []).length,
+      mappedInstances: mapped.length,
+      unmappedInstances: unmapped.length,
+      unmapped,
+      recommendation: unmapped.length
+        ? 'Some instances are missing mapping metadata. Add component descriptions (e.g., import path) in Figma and re-run.'
+        : 'All detected instances have mapping metadata.',
+    };
+    return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }] };
   }
 );
 
