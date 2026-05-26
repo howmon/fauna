@@ -176,7 +176,8 @@ export function registerChatRoute(app, {
             thinkingBudget = 'high', maxContextTurns = 20, agentName = null,
             projectId = null, projectContextIds = null, isDelegation = false,
             clientContext = 'app', noTools = false,
-            enableDynamicWidgets = false } = req.body;
+          enableDynamicWidgets = false,
+          selectedFigmaFileKeys = [] } = req.body;
     const isCLI = clientContext === 'cli';
 
     // Track the active conversation model so heartbeat/workflows/teams use the same one
@@ -232,6 +233,17 @@ export function registerChatRoute(app, {
       if (useFigmaMCP && _figmaFilesList.length > 0) {
         const entries = _figmaFilesList.map(f => `- "${f.fileName}" (fileKey: ${f.fileKey}, page: ${f.currentPage})`).join('\n');
         figmaFilesCtx = `\n## Connected Figma Documents\nThe following Figma documents are currently open with the plugin running:\n${entries}\nWhen using figma_execute, pass the fileKey parameter to target a specific document. If omitted, the most recently active document is used.\nIMPORTANT: Dev Mode MCP tools (get_screenshot, get_design_context, get_metadata, etc.) always operate on whichever file is currently focused in Figma — they do NOT accept a fileKey parameter. If you need to read from or screenshot a specific file, use figma_execute with the fileKey parameter instead.`;
+        const selected = Array.isArray(selectedFigmaFileKeys)
+          ? selectedFigmaFileKeys.filter(k => typeof k === 'string' && _figmaFilesList.some(f => f.fileKey === k))
+          : [];
+        if (selected.length) {
+          const selectedEntries = selected
+            .map(k => _figmaFilesList.find(f => f.fileKey === k))
+            .filter(Boolean)
+            .map(f => `- "${f.fileName}" (fileKey: ${f.fileKey}, page: ${f.currentPage})`)
+            .join('\n');
+          figmaFilesCtx += `\n\n## User-selected Figma Targets\nPrefer these files for write actions in this turn:\n${selectedEntries}\nWhen calling figma_execute without fileKey:\n- If exactly one selected file exists, use it.\n- If multiple selected files exist, prefer the most recently active selected file.`;
+        }
       }
       const cliHint = isCLI ? `\n\n## Output Format\nYou are running in a terminal CLI. Respond in plain, readable text. Do NOT use markdown headers (###), horizontal rules (---), or emojis. Use plain bullet points (- or *) only when a list genuinely helps. Be concise and direct. Never emit browser-action or browser-ext-action code blocks — those do not work in the terminal.` : '';
       // Sub-agents (isDelegation=true) need to know about the same browser /
@@ -931,6 +943,14 @@ export function registerChatRoute(app, {
                 console.log(`[chat] Agent tool: ${toolName}`);
                 result = await agentToolHandlers.get(toolName)(args);
               } else {
+                if (toolName === 'figma_execute' && args && !args.fileKey) {
+                  const connectedByKey = new Map((figma.listFiles() || []).map(f => [f.fileKey, f]));
+                  const selectedConnected = (Array.isArray(selectedFigmaFileKeys) ? selectedFigmaFileKeys : [])
+                    .map(k => connectedByKey.get(k))
+                    .filter(Boolean)
+                    .sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+                  if (selectedConnected.length) args.fileKey = selectedConnected[0].fileKey;
+                }
                 figma.log('🔧 ' + toolName + (toolName === 'figma_execute' ? ': ' + (args.code || '').slice(0, 80).replace(/\n/g,' ') + '…' : ''), 'cmd');
                 // Bound MCP calls so a hung Figma plugin / server doesn't
                 // freeze the agentic loop for the rest of the turn.

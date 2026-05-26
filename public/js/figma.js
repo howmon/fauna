@@ -9,6 +9,25 @@ var figmaMCPChecking      = true; // suppress the "unavailable" flash on first l
 var figmaMCPFailStreak    = 0;    // consecutive fetch failures — only disable after 3
 var figmaMCPWasConnected  = false; // track whether we ever had a confirmed connection
 
+function updateFigmaSectionStatusLabel() {
+  var secStat = document.getElementById('figma-mcp-section-status');
+  if (!secStat) return;
+  var enabled = !!(state && state.figmaMCPEnabled);
+  var localRelayRunning = !!(figmaStatus && figmaStatus.mcpRunning);
+  var externalRelayConnected = !!(figmaStatus && figmaStatus.relaySource === 'external' && figmaStatus.relayConnected);
+  var relayReady = !!(localRelayRunning || externalRelayConnected);
+  var modeLabel = enabled ? 'ON' : 'OFF';
+  var relayLabel = localRelayRunning
+    ? 'local running'
+    : (externalRelayConnected ? 'external connected' : 'stopped');
+  secStat.textContent = (enabled ? '● ' : '○ ') + modeLabel + ' · relay ' + relayLabel;
+  if (enabled && !relayReady) {
+    secStat.style.color = '#f2c661';
+  } else {
+    secStat.style.color = enabled ? '#62d794' : 'var(--fau-text-muted)';
+  }
+}
+
 // Initialise figmaMCPEnabled — loaded from localStorage in state declaration above
 async function checkFigmaMCPStatus() {
   try {
@@ -38,18 +57,14 @@ async function checkFigmaMCPStatus() {
 function updateFigmaMCPBadge() {
   var badge   = document.getElementById('figma-mcp-badge');
   var banner  = document.getElementById('figma-mode-banner');
-  var secStat = document.getElementById('figma-mcp-section-status');
   if (!badge) return;
   var connected = !!figmaMCPStatus.connected;
   var enabled   = !!state.figmaMCPEnabled;
 
   if (banner) banner.style.display = (connected && enabled) ? 'flex' : 'none';
 
-  // Section header status label
-  if (secStat) {
-    secStat.textContent = enabled ? '● ON' : '○ OFF';
-    secStat.style.color = enabled ? '#62d794' : 'var(--fau-text-muted)';
-  }
+  // Section header status label mirrors picker state text.
+  updateFigmaSectionStatusLabel();
 
   // badge is kept permanently offscreen — only update its data attrs for JS compat.
   // Visual Figma state is shown via the figma-mode-banner (above input-wrap) and
@@ -60,6 +75,7 @@ function updateFigmaMCPBadge() {
 
   // Sync plus menu Figma item badge
   if (typeof _refreshTbFigmaItem === 'function') _refreshTbFigmaItem();
+  if (typeof _refreshTbFigmaPicker === 'function') _refreshTbFigmaPicker();
 }
 
 function setFigmaSectionVisible(show) {
@@ -168,6 +184,37 @@ function updateFigmaStatusUI() {
     fmeta.textContent = 'Click Start to launch';
     badge.style.display = 'none';
   }
+
+  _syncPinnedFigmaAttachments();
+  updateFigmaSectionStatusLabel();
+  if (typeof _refreshTbFigmaPicker === 'function') _refreshTbFigmaPicker();
+}
+
+function _syncPinnedFigmaAttachments() {
+  if (!state || !Array.isArray(state.pendingAttachments) || !state.pendingAttachments.length) return;
+  var connected = new Map();
+  (figmaStatus.connectedFiles || []).forEach(function(f) {
+    if (f && f.fileKey) connected.set(f.fileKey, f);
+  });
+  var changed = false;
+  for (var i = 0; i < state.pendingAttachments.length; i++) {
+    var a = state.pendingAttachments[i];
+    if (!a || !(a.type === 'figma_file' || a.extSource === 'figma') || !a.fileKey) continue;
+    var live = connected.get(a.fileKey);
+    var disconnected = !live;
+    if (!!a.figmaDisconnected !== disconnected) {
+      a.figmaDisconnected = disconnected;
+      changed = true;
+    }
+    if (live) {
+      var nextName = live.fileName || a.name;
+      var nextPage = live.currentPage || '';
+      if (nextName && a.name !== nextName) { a.name = nextName; changed = true; }
+      if ((a.currentPage || '') !== nextPage) { a.currentPage = nextPage; changed = true; }
+      if (live.timestamp && a.timestamp !== live.timestamp) { a.timestamp = live.timestamp; changed = true; }
+    }
+  }
+  if (changed && typeof renderAttachBar === 'function') renderAttachBar();
 }
 
 function toggleFigmaSection() {
@@ -341,12 +388,13 @@ function getFigmaContext() {
 
 // ── Figma-exec block execution ────────────────────────────────────────────
 
-function extractAndRenderFigmaExec(html, messageEl) {
+function extractAndRenderFigmaExec(html, messageEl, autoRun) {
   // After markdown rendering, replace <code class="language-figma-exec"> blocks
   // with interactive execution widgets
   var container = messageEl.querySelector('.prose') || messageEl;
   var codeBlocks = container.querySelectorAll('code.language-figma-exec');
   if (!codeBlocks.length) return;
+  var execIds = [];
   codeBlocks.forEach(function(code) {
     var pre = code.parentElement;
     var rawCode = code.textContent;
@@ -362,6 +410,7 @@ function extractAndRenderFigmaExec(html, messageEl) {
       '<div class="figma-exec-result" id="' + execId + '" style="display:none"></div>';
     widget.dataset.code = rawCode;
     pre.parentNode.replaceChild(widget, pre);
+    execIds.push(execId);
   });
 
   // In chain messages (auto-fed responses), hide narration prose — only show the figma widgets
@@ -373,12 +422,36 @@ function extractAndRenderFigmaExec(html, messageEl) {
     });
     messageEl.classList.add('chain-figma-only');
   }
+
+  // Live assistant turns should execute figma-exec blocks automatically.
+  // History re-renders pass autoRun=false to avoid replaying old mutations.
+  if (autoRun) {
+    setTimeout(function() {
+      execIds.forEach(function(id) {
+        runFigmaExec(id, { auto: true }).catch(function() {});
+      });
+    }, 0);
+  }
 }
 
-async function runFigmaExec(execId) {
-  var widget = document.getElementById(execId).parentElement;
-  var code   = widget.dataset.code;
+async function runFigmaExec(execId, opts) {
+  opts = opts || {};
   var resultEl = document.getElementById(execId);
+  if (!resultEl) return;
+  if (resultEl.dataset.running === '1') return;
+  resultEl.dataset.running = '1';
+
+  var widget = resultEl.parentElement;
+  if (!widget) {
+    delete resultEl.dataset.running;
+    return;
+  }
+  var code   = widget.dataset.code;
+  var runBtn = widget.querySelector('.figma-exec-run');
+  if (runBtn) {
+    runBtn.disabled = true;
+    runBtn.innerHTML = opts.auto ? '<i class="ti ti-loader"></i> Auto-running…' : '<i class="ti ti-loader"></i> Running…';
+  }
   resultEl.style.display = 'block';
   resultEl.className = 'figma-exec-result running';
   resultEl.innerHTML = '<i class="ti ti-loader"></i> Running…';
@@ -406,6 +479,12 @@ async function runFigmaExec(execId) {
     resultEl.className = 'figma-exec-result err';
     resultEl.innerHTML = '<i class="ti ti-x"></i> ' + e.message;
     _autoFeedFigmaResult(code, false, e.message);
+  } finally {
+    delete resultEl.dataset.running;
+    if (runBtn) {
+      runBtn.disabled = false;
+      runBtn.innerHTML = '<i class="ti ti-player-play"></i> Run';
+    }
   }
 }
 

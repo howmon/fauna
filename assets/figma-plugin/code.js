@@ -23,11 +23,20 @@ figma.showUI(__html__, { width: 320, height: 200, title: "Fauna MCP" });
 })();
 
 // ── Announce file identity to the relay (sent on startup + reconnect) ─────
+// Stable local key derived from root name so reconnects reuse the same slot.
+var _stableLocalKey = null;
+function getFileKey() {
+  if (figma.fileKey) return figma.fileKey;
+  if (!_stableLocalKey) {
+    _stableLocalKey = 'local-' + figma.root.name.replace(/\s+/g, '-').toLowerCase().slice(0, 40);
+  }
+  return _stableLocalKey;
+}
 function sendFileInfo() {
   figma.ui.postMessage({
     type: 'FILE_INFO',
     fileName:      figma.root.name,
-    fileKey:       figma.fileKey || ('local-' + Date.now()),
+    fileKey:       getFileKey(),
     currentPage:   figma.currentPage.name,
     currentPageId: figma.currentPage.id
   });

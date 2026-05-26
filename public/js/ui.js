@@ -626,7 +626,10 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
           : '<i class="ti ti-photo"></i>';
         return '<span class="attach-chip attach-chip-image">' + thumb + '<span>' + escHtml(nm) + '</span></span>';
       }
-      return '<span class="attach-chip"><span class="chip-icon">' + (a.type === 'url' ? '<i class="ti ti-link"></i>' : '<i class="ti ti-paperclip"></i>') + '</span>' + escHtml(a.name) + '</span>';
+      var icon = a.type === 'url' ? '<i class="ti ti-link"></i>'
+               : (a.type === 'figma_file' || a.extSource === 'figma') ? '<i class="ti ti-vector-triangle"></i>'
+               : '<i class="ti ti-paperclip"></i>';
+      return '<span class="attach-chip"><span class="chip-icon">' + icon + '</span>' + escHtml(a.name) + '</span>';
     }).join('');
     body.innerHTML = '<div class="msg-attachments">' + chips + '</div>';
   }
@@ -641,7 +644,7 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
     // Sanitize write-file blocks — re-populates _wfContentStore from saved message content
     var renderContent = sanitizeWriteFileBlocks(content);
     body.innerHTML += renderMarkdown(renderContent);
-    extractAndRenderFigmaExec(content, el);
+    extractAndRenderFigmaExec(content, el, false); // history load — never auto-run old actions
     extractAndRenderShellExec(content, el, true); // history load — never auto-run old commands
     extractAndRenderBrowserActions(content, el, true);
     if (typeof extractAndRenderBrowserExtActions === 'function') extractAndRenderBrowserExtActions(content, el, true);
@@ -1008,7 +1011,9 @@ function clearAttachments(opts) {
   // still removes them manually.
   if (opts && opts.preservePersistent) {
     var keep = (state.pendingAttachments || []).filter(function(att) {
-      return typeof _isBrowserTabReferenceAttachment === 'function' && _isBrowserTabReferenceAttachment(att);
+      var isBrowserPinned = typeof _isBrowserTabReferenceAttachment === 'function' && _isBrowserTabReferenceAttachment(att);
+      var isFigmaPinned = !!(att && (att.type === 'figma_file' || att.extSource === 'figma') && att.fileKey);
+      return isBrowserPinned || isFigmaPinned;
     });
     state.pendingAttachments = keep;
   } else {
@@ -1086,8 +1091,12 @@ function renderAttachBar() {
 }
 
 function _renderChip(att, i) {
-  var extCls = att.extSource ? ' pending-chip-ext' : '';
-  var isPersistent = typeof _isBrowserTabReferenceAttachment === 'function' && _isBrowserTabReferenceAttachment(att);
+  var isFigmaAttachment = !!(att && (att.type === 'figma_file' || att.extSource === 'figma'));
+  var extCls = (att.extSource && !isFigmaAttachment) ? ' pending-chip-ext' : '';
+  if (isFigmaAttachment) extCls += ' pending-chip-figma';
+  var isBrowserPersistent = typeof _isBrowserTabReferenceAttachment === 'function' && _isBrowserTabReferenceAttachment(att);
+  var isFigmaPersistent = !!(isFigmaAttachment && att.fileKey);
+  var isPersistent = isBrowserPersistent || isFigmaPersistent;
   if (isPersistent) extCls += ' pending-chip-pinned';
   var pinnedTitle = isPersistent ? ' title="Pinned to this conversation — stays attached until you remove it"' : '';
   if (att.type === 'image') {
@@ -1105,7 +1114,9 @@ function _renderChip(att, i) {
   }
   var icon = att.extSource === 'page'      ? '<i class="ti ti-world-www"></i>'
            : att.extSource === 'selection' ? '<i class="ti ti-text-scan-2"></i>'
+           : att.extSource === 'figma'     ? '<i class="ti ti-vector-triangle"></i>'
            : att.type === 'url'            ? '<i class="ti ti-link"></i>'
+           : att.type === 'figma_file'     ? '<i class="ti ti-vector-triangle"></i>'
            : '<i class="ti ti-paperclip"></i>';
   return '<div class="pending-chip' + extCls + '"' + pinnedTitle + '>' +
     '<span class="chip-icon">' + icon + '</span>' +
@@ -1612,6 +1623,10 @@ function _restoreHistoryAttachments(attachments) {
         browser: a.browser || undefined,
         tabId: a.tabId || undefined,
         clientId: a.clientId || undefined,
+        fileKey: a.fileKey || undefined,
+        currentPage: a.currentPage || undefined,
+        timestamp: a.timestamp || undefined,
+        figmaDisconnected: !!a.figmaDisconnected,
         size: a.size || undefined,
         warning: a.warning || undefined
       });
