@@ -73,6 +73,9 @@ jobs:
       - name: Install FaunaMCP dependencies
         run: npm --prefix faunaMCP-main ci
 
+      - name: Install FaunaMCP relay sub-dependencies
+        run: npm --prefix faunaMCP-main run install:relays
+
       - name: Build FaunaMCP macOS arm64 DMG
         env:
           CSC_LINK: ${{ secrets.APPLE_CERT_P12_BASE64 }}
@@ -154,6 +157,9 @@ jobs:
 
       - name: Install FaunaMCP dependencies
         run: npm --prefix faunaMCP-main ci
+
+      - name: Install FaunaMCP relay sub-dependencies
+        run: npm --prefix faunaMCP-main run install:relays
 
       - name: Build FaunaMCP macOS x64 DMG
         env:
