@@ -66,7 +66,7 @@ jobs:
 
   build-mac-x64:
     name: Build macOS DMG (x64) - Fauna + FaunaMCP
-    runs-on: macos-13
+    runs-on: macos-14
 
     steps:
       - name: Checkout
