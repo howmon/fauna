@@ -24,10 +24,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -45,7 +45,7 @@ jobs:
         run: npx electron-builder --mac dmg --arm64 --publish never
 
       - name: Upload macOS arm64 artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: fauna-mac-arm64-dmg
           path: dist/*.dmg
@@ -58,7 +58,7 @@ jobs:
         run: npm --prefix faunaMCP-main run dist:mac:arm64
 
       - name: Upload FaunaMCP macOS arm64 artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: faunamcp-mac-arm64-dmg
           path: faunaMCP-main/dist/*.dmg
@@ -70,10 +70,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -91,7 +91,7 @@ jobs:
         run: npx electron-builder --mac dmg --x64 --publish never
 
       - name: Upload macOS x64 artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: fauna-mac-x64-dmg
           path: dist/*.dmg
@@ -104,7 +104,7 @@ jobs:
         run: npm --prefix faunaMCP-main run dist:mac:x64
 
       - name: Upload FaunaMCP macOS x64 artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: faunamcp-mac-x64-dmg
           path: faunaMCP-main/dist/*.dmg
@@ -112,14 +112,14 @@ jobs:
 
   build-win-x64:
     name: Build Windows EXE (x64) - Fauna + FaunaMCP
-    runs-on: windows-latest
+    runs-on: windows-2025
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -137,7 +137,7 @@ jobs:
         run: npx electron-builder --win nsis --x64 --publish never
 
       - name: Upload Windows x64 artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: fauna-win-x64-exe
           path: dist/*.exe
@@ -150,7 +150,7 @@ jobs:
         run: npm --prefix faunaMCP-main run dist:win -- --x64
 
       - name: Upload FaunaMCP Windows x64 artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: faunamcp-win-x64-exe
           path: faunaMCP-main/dist/*.exe
@@ -166,7 +166,7 @@ jobs:
 
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: release-assets
 
