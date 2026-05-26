@@ -49,10 +49,17 @@ jobs:
         run: npx electron-builder --mac dmg --arm64 --publish never
 
       - name: Notarize and staple Fauna macOS arm64 DMG
-        if: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' }}
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
+          if [[ -z "$APPLE_ID" || -z "$APPLE_TEAM_ID" || -z "$APPLE_APP_SPECIFIC_PASSWORD" ]]; then
+            echo "Notarization secrets missing; skipping Fauna arm64 notarization"
+            exit 0
+          fi
           for f in dist/*.dmg; do
-            xcrun notarytool submit "$f" --wait --apple-id "${{ secrets.APPLE_ID }}" --team-id "${{ secrets.APPLE_TEAM_ID }}" --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}"
+            xcrun notarytool submit "$f" --wait --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD"
             xcrun stapler staple -v "$f"
           done
 
@@ -73,10 +80,17 @@ jobs:
         run: npm --prefix faunaMCP-main run dist:mac:arm64
 
       - name: Notarize and staple FaunaMCP macOS arm64 DMG
-        if: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' }}
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
+          if [[ -z "$APPLE_ID" || -z "$APPLE_TEAM_ID" || -z "$APPLE_APP_SPECIFIC_PASSWORD" ]]; then
+            echo "Notarization secrets missing; skipping FaunaMCP arm64 notarization"
+            exit 0
+          fi
           for f in faunaMCP-main/dist/*.dmg; do
-            xcrun notarytool submit "$f" --wait --apple-id "${{ secrets.APPLE_ID }}" --team-id "${{ secrets.APPLE_TEAM_ID }}" --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}"
+            xcrun notarytool submit "$f" --wait --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD"
             xcrun stapler staple -v "$f"
           done
 
@@ -117,10 +131,17 @@ jobs:
         run: npx electron-builder --mac dmg --x64 --publish never
 
       - name: Notarize and staple Fauna macOS x64 DMG
-        if: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' }}
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
+          if [[ -z "$APPLE_ID" || -z "$APPLE_TEAM_ID" || -z "$APPLE_APP_SPECIFIC_PASSWORD" ]]; then
+            echo "Notarization secrets missing; skipping Fauna x64 notarization"
+            exit 0
+          fi
           for f in dist/*.dmg; do
-            xcrun notarytool submit "$f" --wait --apple-id "${{ secrets.APPLE_ID }}" --team-id "${{ secrets.APPLE_TEAM_ID }}" --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}"
+            xcrun notarytool submit "$f" --wait --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD"
             xcrun stapler staple -v "$f"
           done
 
@@ -141,10 +162,17 @@ jobs:
         run: npm --prefix faunaMCP-main run dist:mac:x64
 
       - name: Notarize and staple FaunaMCP macOS x64 DMG
-        if: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' }}
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
+          if [[ -z "$APPLE_ID" || -z "$APPLE_TEAM_ID" || -z "$APPLE_APP_SPECIFIC_PASSWORD" ]]; then
+            echo "Notarization secrets missing; skipping FaunaMCP x64 notarization"
+            exit 0
+          fi
           for f in faunaMCP-main/dist/*.dmg; do
-            xcrun notarytool submit "$f" --wait --apple-id "${{ secrets.APPLE_ID }}" --team-id "${{ secrets.APPLE_TEAM_ID }}" --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}"
+            xcrun notarytool submit "$f" --wait --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD"
             xcrun stapler staple -v "$f"
           done
 
