@@ -61,6 +61,7 @@ import { registerAgentRoutes } from './server/routes/agents.js';
 import { registerAgentBuilderRoutes } from './server/routes/agent-builder.js';
 import { registerAgentSandboxRoutes } from './server/routes/agent-sandbox.js';
 import { registerMemoryPrefsFactsRoutes } from './server/routes/memory-prefs-facts.js';
+import { registerVoiceSettingsRoutes } from './server/routes/voice-settings.js';
 import { registerWhisperRoutes } from './server/routes/whisper.js';
 import { registerPlaywrightMcpRoutes } from './server/routes/playwright-mcp.js';
 import { createTeamsBundle } from './server/routes/teams.js';
@@ -244,6 +245,7 @@ registerFileFilterRoutes(app);
 
 // ── /api/fetch-url moved → server/routes/fetch-url.js ──
 registerFetchUrlRoutes(app);
+registerVoiceSettingsRoutes(app);
 
 // ── Browser (Playwright) routes moved → server/bridges/playwright-browse.js ──
 registerBrowseRoutes(app, { require: _require });

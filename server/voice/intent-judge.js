@@ -71,6 +71,7 @@ export function classify(input) {
     ttsSpeaking = false,
     lastAddressedTs = 0,
     now = Date.now(),
+    followUpWindowMs = FOLLOW_UP_WINDOW_MS,
   } = input || {};
 
   const trimmed = String(text).trim();
@@ -88,7 +89,7 @@ export function classify(input) {
   // 3. Follow-up: recent addressed turn + non-trivial utterance + not just
   //    an acknowledgement noise.
   const sinceLast = now - (lastAddressedTs || 0);
-  if (lastAddressedTs && sinceLast <= FOLLOW_UP_WINDOW_MS) {
+  if (lastAddressedTs && sinceLast <= followUpWindowMs) {
     if (trimmed.length >= MIN_FOLLOW_UP_LEN && !looksLikeAck(trimmed)) {
       return { intent: 'follow-up', command: trimmed };
     }

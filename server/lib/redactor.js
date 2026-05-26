@@ -15,6 +15,22 @@
 // whether to drop the input entirely, surface a warning, or annotate
 // the stored record.
 
+// Module-level defaults consulted whenever scrubSecrets() is called
+// without explicit opts. Mutate via setDefaultScrubOpts() (the voice
+// settings store does this on every change).
+let _defaultOpts = { email: false, phone: false, creditCard: true };
+
+export function setDefaultScrubOpts(opts) {
+  if (!opts || typeof opts !== 'object') return;
+  _defaultOpts = {
+    email:      !!opts.email,
+    phone:      !!opts.phone,
+    creditCard: opts.creditCard !== false,
+  };
+}
+
+export function getDefaultScrubOpts() { return { ..._defaultOpts }; }
+
 const PATTERNS = [
   // ── Asymmetric keys / certs ─────────────────────────────────────
   // Whole PEM-encoded private key blocks (RSA, EC, DSA, OPENSSH, generic).
@@ -81,14 +97,17 @@ const PII_PATTERNS = {
  * @param {boolean} [opts.creditCard=true]   — redact Luhn-valid card numbers
  * @returns {{ text: string, redactions: Array<{type:string,count:number}>, count: number, mutated: boolean }}
  */
-export function scrubSecrets(text, opts = {}) {
+export function scrubSecrets(text, opts) {
+  // Merge with module-level defaults so callers that don't know about
+  // user prefs (memory-store, playbook-store) still pick up the toggles.
+  const effective = { ..._defaultOpts, ...(opts || {}) };
   if (typeof text !== 'string' || !text) {
     return { text: text || '', redactions: [], count: 0, mutated: false };
   }
   const enable = {
-    email:      !!opts.email,
-    phone:      !!opts.phone,
-    creditCard: opts.creditCard !== false,
+    email:      !!effective.email,
+    phone:      !!effective.phone,
+    creditCard: effective.creditCard !== false,
   };
   const counts = new Map();
   let out = text;

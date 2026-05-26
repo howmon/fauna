@@ -93,7 +93,16 @@ class Tts extends EventEmitter {
     this.engine    = pickEngine();
     this.queue     = [];   // {text, opts, resolve}
     this.active    = null; // {child, resolve, cancelled}
+    this.defaults  = { voice: '', rate: null, enabled: true };
     this.onStateChange = typeof onStateChange === 'function' ? onStateChange : null;
+  }
+
+  /** Configure engine-level defaults (voice, rate, master enable). */
+  setDefaults({ voice, rate, enabled } = {}) {
+    if (typeof voice    === 'string')                 this.defaults.voice   = voice;
+    if (rate === null || rate === '' || rate === undefined) this.defaults.rate = null;
+    else if (Number.isFinite(Number(rate)))           this.defaults.rate    = Number(rate);
+    if (typeof enabled  === 'boolean')                this.defaults.enabled = enabled;
   }
 
   isSpeaking() { return !!this.active; }
@@ -105,8 +114,13 @@ class Tts extends EventEmitter {
    */
   speak(text, opts = {}) {
     return new Promise((resolve) => {
+      if (!this.defaults.enabled) return resolve({ done: true, disabled: true });
       if (!text || !String(text).trim()) return resolve({ done: true });
-      this.queue.push({ text: String(text), opts, resolve });
+      // Merge per-call opts on top of stored defaults.
+      const merged = { ...this.defaults, ...(opts || {}) };
+      if (!merged.voice) delete merged.voice;
+      if (merged.rate === null || merged.rate === undefined) delete merged.rate;
+      this.queue.push({ text: String(text), opts: merged, resolve });
       this._drain();
     });
   }
@@ -185,4 +199,51 @@ let _instance = null;
 export function getTts(opts = {}) {
   if (!_instance) _instance = new Tts(opts);
   return _instance;
+}
+
+/**
+ * Enumerate available TTS voices on the host. Best-effort and may return
+ * an empty array on Linux (espeak/spd-say don't expose a uniform listing
+ * across distros). Used by the voice-settings UI.
+ *
+ * @returns {Promise<Array<{name:string, language?:string}>>}
+ */
+export async function listVoices() {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const exec = promisify(execFile);
+
+  try {
+    if (IS_MAC) {
+      const { stdout } = await exec('/usr/bin/say', ['-v', '?'], { timeout: 4000 });
+      return stdout.split('\n').map(line => {
+        // "Alex                en_US    # Most...what?"
+        const m = line.match(/^(\S(?:[^#]*?\S)?)\s{2,}([a-z]{2,3}(?:[_-][A-Za-z0-9]+)?)/);
+        if (!m) return null;
+        return { name: m[1].trim(), language: m[2] };
+      }).filter(Boolean);
+    }
+    if (IS_WIN) {
+      const ps = "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name + '|' + $_.VoiceInfo.Culture.Name }";
+      const { stdout } = await exec('powershell.exe', ['-NoProfile', '-Command', ps], { timeout: 6000 });
+      return stdout.split(/\r?\n/).map(line => {
+        const [name, language] = line.split('|');
+        if (!name) return null;
+        return { name: name.trim(), language: (language || '').trim() };
+      }).filter(Boolean);
+    }
+    // Linux: espeak-ng --voices gives a fixed-column listing.
+    if (existsSync('/usr/bin/espeak-ng') || existsSync('/usr/local/bin/espeak-ng')) {
+      const { stdout } = await exec('espeak-ng', ['--voices'], { timeout: 4000 });
+      const lines = stdout.split('\n').slice(1); // skip header
+      return lines.map(line => {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 4) return null;
+        return { name: parts[3], language: parts[1] };
+      }).filter(Boolean);
+    }
+    return [];
+  } catch (_) {
+    return [];
+  }
 }

@@ -32,6 +32,7 @@ class UtterancePipeline extends EventEmitter {
     augmentedPath,
     wakeWords,
     wakeRequired = true,
+    followUpWindowMs,             // optional override; otherwise judge default
     judge = ruleBasedJudge,
     getContext,                  // () => { ttsSpeaking, lastAddressedTs }
   } = {}) {
@@ -41,6 +42,7 @@ class UtterancePipeline extends EventEmitter {
     this.augmentedPath = augmentedPath;
     this.wakeWords     = Array.isArray(wakeWords) && wakeWords.length ? wakeWords : DEFAULT_WAKE_WORDS;
     this.wakeRequired  = !!wakeRequired;
+    this.followUpWindowMs = Number.isFinite(followUpWindowMs) ? followUpWindowMs : undefined;
     this.judge         = judge;
     this.getContext    = typeof getContext === 'function' ? getContext : (() => ({ ttsSpeaking: false, lastAddressedTs: 0 }));
 
@@ -57,6 +59,10 @@ class UtterancePipeline extends EventEmitter {
     if (Array.isArray(words) && words.length) this.wakeWords = words;
   }
   setWakeRequired(req) { this.wakeRequired = !!req; }
+  setFollowUpWindowMs(ms) {
+    const n = Number(ms);
+    if (Number.isFinite(n) && n > 0) this.followUpWindowMs = n;
+  }
 
   shutdown() {
     if (this.residentAudio) this.residentAudio.off('speech-end', this._onSpeechEnd);
@@ -136,6 +142,7 @@ class UtterancePipeline extends EventEmitter {
       ttsSpeaking: !!ctx.ttsSpeaking,
       lastAddressedTs: ctx.lastAddressedTs || 0,
       now: ts,
+      followUpWindowMs: this.followUpWindowMs,
     });
 
     // Honour the legacy `wakeRequired = false` escape hatch: if wake-word

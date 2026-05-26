@@ -9,6 +9,8 @@ import { getUtterancePipeline } from './server/voice/utterance-pipeline.js';
 import { getTts } from './server/voice/tts.js';
 import { getVoiceChat } from './server/voice/voice-chat.js';
 import { getDictation } from './server/voice/dictation.js';
+import { getSettings, onSettingsChange, DEFAULT_DICTATION_ACCEL_MAC, DEFAULT_DICTATION_ACCEL_OTHER } from './server/voice/settings.js';
+import { setDefaultScrubOpts } from './server/lib/redactor.js';
 import { buildShellEnv } from './server/lib/shell-env.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -570,10 +572,12 @@ function _buildTrayMenu() {
     { label: 'Toggle Task Widget', click: () => toggleWidget() },
     { type: 'separator' },
     { label: 'Listen in background', type: 'checkbox', checked: voiceEnabled, click: () => toggleResidentVoice() },
-    { label: 'Dictate (' + (IS_MAC ? 'Cmd+Opt+D' : 'Ctrl+Alt+D') + ')',
+    { label: 'Dictate (' + ((getSettings().dictationAccel || '').trim() || (IS_MAC ? 'Cmd+Opt+D' : 'Ctrl+Alt+D')) + ')',
       enabled: !dictation?.isActive(),
       click: () => { try { dictation?.start(); } catch (_) {} } },
     { label: 'Stop speaking', enabled: ttsSpeaking, click: () => { try { tts?.stop(); } catch (_) {} } },
+    { type: 'separator' },
+    { label: 'Voice settings…', click: () => openVoiceSettingsWindow() },
     { type: 'separator' },
     { label: 'Quit Fauna', click: () => { app.isQuitting = true; app.quit(); } },
   ]);
@@ -582,6 +586,32 @@ function _buildTrayMenu() {
 function refreshTray() {
   if (!tray || tray.isDestroyed?.()) return;
   tray.setContextMenu(_buildTrayMenu());
+}
+
+// ── Voice settings window (Phase 7) ──────────────────────────────────────
+let voiceSettingsWindow = null;
+function openVoiceSettingsWindow() {
+  if (voiceSettingsWindow && !voiceSettingsWindow.isDestroyed()) {
+    voiceSettingsWindow.show();
+    voiceSettingsWindow.focus();
+    return voiceSettingsWindow;
+  }
+  const win = new BrowserWindow({
+    width: 760,
+    height: 760,
+    title: 'Fauna — Voice settings',
+    backgroundColor: '#0d1117',
+    autoHideMenuBar: true,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration:  false,
+      sandbox:          true,
+    },
+  });
+  win.loadURL(`http://127.0.0.1:${PORT}/voice-settings.html`);
+  win.on('closed', () => { if (voiceSettingsWindow === win) voiceSettingsWindow = null; });
+  voiceSettingsWindow = win;
+  return win;
 }
 
 // ── Hidden audio-capture window (resident voice, Phase 1) ────────────────
@@ -638,10 +668,14 @@ function _initResidentAudio() {
   // Phase-3: provide live context (TTS state) so the intent judge can
   // classify interrupts and follow-ups correctly.
   const { augmentedPath } = buildShellEnv(IS_WIN);
+  const _vs0 = getSettings();
   utterancePipeline = getUtterancePipeline({
     residentAudio,
     appDir: __dirname,
     augmentedPath,
+    wakeWords:        _vs0.wakeWords,
+    wakeRequired:     _vs0.wakeRequired,
+    followUpWindowMs: _vs0.followUpWindowMs,
     getContext: () => ({ ttsSpeaking: !!tts?.isSpeaking() }),
   });
   utterancePipeline.on('utterance:transcribed', ({ text, intent, command, durationMs }) => {
@@ -657,6 +691,16 @@ function _initResidentAudio() {
       refreshTray();
     },
   });
+  try {
+    tts.setDefaults({ voice: _vs0.ttsVoice, rate: _vs0.ttsRate, enabled: _vs0.ttsEnabled });
+  } catch (_) {}
+  try {
+    setDefaultScrubOpts({
+      email:      !!_vs0.redactEmail,
+      phone:      !!_vs0.redactPhone,
+      creditCard: !!_vs0.redactCreditCard,
+    });
+  } catch (_) {}
 
   // Phase-4b: voice-chat dispatcher — bridges addressed utterances into
   // the real /api/chat SSE endpoint, streams the reply sentence-by-sentence
@@ -860,15 +904,47 @@ app.whenReady().then(async () => {
   // Global shortcut: Ctrl+Shift+T (Cmd+Shift+T is used by the menu for the in-app panel)
   globalShortcut.register('Ctrl+Shift+Space', () => toggleWidget());
 
-  // Phase-5: dictation hotkey. Tap to start recording, tap again to stop;
-  // transcript is copied to the clipboard and a notification confirms it.
-  // Cmd+Opt+D on macOS, Ctrl+Alt+D elsewhere — chosen so it doesn't collide
-  // with any common app shortcut.
-  const DICTATE_ACCEL = IS_MAC ? 'Cmd+Alt+D' : 'Ctrl+Alt+D';
-  const dictateOk = globalShortcut.register(DICTATE_ACCEL, () => {
-    try { dictation?.toggle(); } catch (e) { console.warn('[dictation] toggle failed:', e.message); }
+  // Phase-5/7: dictation hotkey, sourced from voice-settings (live editable
+  // via the settings UI). Falls back to platform default if user cleared it.
+  let _dictateAccel = (getSettings().dictationAccel || '').trim() ||
+    (IS_MAC ? DEFAULT_DICTATION_ACCEL_MAC : DEFAULT_DICTATION_ACCEL_OTHER);
+  function _registerDictateAccel(accel) {
+    if (!accel) return false;
+    return globalShortcut.register(accel, () => {
+      try { dictation?.toggle(); } catch (e) { console.warn('[dictation] toggle failed:', e.message); }
+    });
+  }
+  if (!_registerDictateAccel(_dictateAccel)) {
+    console.warn('[dictation] failed to register hotkey:', _dictateAccel);
+  }
+
+  // Phase-7: hot-apply voice settings changes (TTS voice/rate/enabled,
+  // wake config, dictation accel, redaction defaults).
+  onSettingsChange((s) => {
+    try { utterancePipeline?.setWakeWords(s.wakeWords); } catch (_) {}
+    try { utterancePipeline?.setWakeRequired(s.wakeRequired); } catch (_) {}
+    try { utterancePipeline?.setFollowUpWindowMs(s.followUpWindowMs); } catch (_) {}
+    try { tts?.setDefaults({ voice: s.ttsVoice, rate: s.ttsRate, enabled: s.ttsEnabled }); } catch (_) {}
+    try {
+      setDefaultScrubOpts({
+        email:      !!s.redactEmail,
+        phone:      !!s.redactPhone,
+        creditCard: !!s.redactCreditCard,
+      });
+    } catch (_) {}
+    const desired = (s.dictationAccel || '').trim() ||
+      (IS_MAC ? DEFAULT_DICTATION_ACCEL_MAC : DEFAULT_DICTATION_ACCEL_OTHER);
+    if (desired !== _dictateAccel) {
+      try { globalShortcut.unregister(_dictateAccel); } catch (_) {}
+      if (_registerDictateAccel(desired)) {
+        _dictateAccel = desired;
+        console.log('[dictation] hotkey changed to', desired);
+      } else {
+        console.warn('[dictation] failed to register new hotkey:', desired);
+      }
+    }
+    refreshTray();
   });
-  if (!dictateOk) console.warn('[dictation] failed to register hotkey:', DICTATE_ACCEL);
 
   // macOS: re-open window when dock icon is clicked
   app.on('activate', () => {
