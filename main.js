@@ -5,6 +5,8 @@ import os       from 'os';
 import { fileURLToPath } from 'url';
 import { startServer }   from './server.js';
 import { getResidentAudio } from './server/voice/resident-audio.js';
+import { getUtterancePipeline } from './server/voice/utterance-pipeline.js';
+import { buildShellEnv } from './server/lib/shell-env.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT      = 3737;
@@ -28,6 +30,7 @@ let widgetWindow = null;
 let tray = null;
 let audioWindow = null;     // hidden BrowserWindow that owns the mic
 let residentAudio = null;   // ResidentAudio EventEmitter (Phase 1)
+let utterancePipeline = null; // UtterancePipeline (Phase 2)
 
 // ── Window state persistence ─────────────────────────────────────
 // Persists the set of open windows (active conversation, project, bounds)
@@ -618,8 +621,20 @@ function _initResidentAudio() {
   // Surface state changes to the tray menu.
   residentAudio.on('state', () => refreshTray());
 
-  // Phase-1 visibility: log VAD events so we can verify end-to-end without
-  // a UI yet. Later phases replace these listeners with wake-word + agent.
+  // Phase-2: build the utterance pipeline (Whisper transcribe + wake word).
+  // It subscribes to `speech-end` on residentAudio internally.
+  const { augmentedPath } = buildShellEnv(IS_WIN);
+  utterancePipeline = getUtterancePipeline({
+    residentAudio,
+    appDir: __dirname,
+    augmentedPath,
+  });
+  utterancePipeline.on('utterance:transcribed', ({ text, addressed, command, durationMs }) => {
+    console.log('[voice] transcribed', `(${durationMs}ms)`, JSON.stringify(text), addressed ? '→ ADDRESSED' : '(ignored)', addressed && command ? `cmd=${JSON.stringify(command)}` : '');
+  });
+  utterancePipeline.on('error', (e) => console.warn('[voice] pipeline error:', e.message));
+
+  // Phase-1 visibility: log raw VAD events too (helpful while tuning).
   residentAudio.on('speech-start', ({ ts }) => console.log('[voice] speech-start', new Date(ts).toISOString()));
   residentAudio.on('speech-end',   ({ ts, durationMs }) => console.log('[voice] speech-end', new Date(ts).toISOString(), durationMs + 'ms'));
 
@@ -735,6 +750,7 @@ app.on('before-quit', () => {
   app.isQuitting = true;
   // Snapshot which windows were open + their conv/project so we restore them next launch
   try { persistWindowState(); } catch (_) {}
+  try { utterancePipeline?.shutdown(); } catch (_) {}
   try { residentAudio?.shutdown(); } catch (_) {}
   if (app.isReady()) globalShortcut.unregisterAll();
   // Give Electron ~300 ms to close windows, then hard-exit the Node process.
