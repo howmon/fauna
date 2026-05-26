@@ -39,7 +39,7 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "assets/icon.icns",
-      "identity": "-",
+      "identity": "Solomon Abey (8E66MTW257)",
       "target": [
         { "target": "dmg", "arch": ["arm64", "x64"] }
       ]
