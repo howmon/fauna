@@ -263,21 +263,22 @@ jobs:
           fi
 
       - name: Upload assets to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.tag.outputs.value }}
-          files: |
-            release-assets/**/*.dmg
-            release-assets/**/*.exe
-          append_body: true
-          body: |
-            Automated installer artifacts:
-            Fauna:
-            - macOS DMG (arm64)
-            - macOS DMG (x64)
-            - Windows EXE (x64)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.value }}"
 
-            FaunaMCP:
-            - macOS DMG (arm64)
-            - macOS DMG (x64)
-            - Windows EXE (x64)
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --notes "Automated installer artifacts"
+          fi
+
+          shopt -s globstar nullglob
+          files=(release-assets/**/*.dmg release-assets/**/*.exe)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No release assets found to upload"
+            exit 1
+          fi
+
+          gh release upload "$TAG" "${files[@]}" --clobber
