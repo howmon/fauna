@@ -1655,6 +1655,15 @@ function _renderRunOutput(t) {
   var total = stats.actionsTotal || 0;
   var when = r.completedAt ? new Date(r.completedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
 
+  // Detect when the pipeline's final output is a conversation id produced
+  // by a `notify` node — e.g. "conv-task-1779760322818-z9cf". In that case
+  // surface a "View conversation" button instead of a raw id string.
+  var convId = null;
+  if (isOk) {
+    var m = /^\s*(conv-[a-z0-9-]+)\s*$/i.exec(text || '');
+    if (m) convId = m[1];
+  }
+
   var expanded = _outputExpanded.has(t.id);
   // Truncation threshold for collapsed view
   var PREVIEW_LEN = 320;
@@ -1701,6 +1710,9 @@ function _renderRunOutput(t) {
           statsHtml +
         '</div>' +
         '<div class="aro-text">' + escHtml(displayText) + (needsExpand && !expanded ? '…' : '') + '</div>' +
+        (convId ? '<button class="plr-open-conv-btn aro-open-conv-btn" onclick="_plrOpenConv(\'' + convId + '\')">' +
+            '<i class="ti ti-message"></i> View conversation' +
+          '</button>' : '') +
         (needsExpand ? '<button class="aro-expand-btn" onclick="taskToggleOutput(\'' + t.id + '\')">'
           + (expanded ? 'Show less' : 'Show more') + '</button>' : '') +
       '</div>' +
