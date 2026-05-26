@@ -1806,8 +1806,47 @@ Examples:
   }
 
   async function _tbFigmaToggleMCP() {
-    if (typeof toggleFigmaMCP === 'function') await toggleFigmaMCP();
-    if (typeof pollFigmaStatus === 'function') await pollFigmaStatus();
+    var btn = document.querySelector('#tb-figma-menu .tb-fm-toggle');
+    if (btn) btn.disabled = true;
+    try {
+      if (typeof pollFigmaStatus === 'function') await pollFigmaStatus();
+
+      var enabled = !!(typeof state !== 'undefined' && state && state.figmaMCPEnabled);
+      var status = (typeof figmaStatus !== 'undefined' && figmaStatus) ? figmaStatus : {};
+      var relayReady = !!(status.relayConnected || status.mcpRunning || status.externalRelayAvailable || status.relaySource === 'external');
+
+      if (!enabled) {
+        if (!relayReady) {
+          try {
+            await fetch('/api/figma/mcp-start', { method: 'POST' });
+          } catch (_) {}
+        } else if (!status.relayConnected && status.externalRelayAvailable) {
+          try {
+            await fetch('/api/figma/connect', { method: 'POST' });
+          } catch (_) {}
+        }
+
+        if (typeof pollFigmaStatus === 'function') await pollFigmaStatus();
+        if (typeof toggleFigmaMCP === 'function' && state && !state.figmaMCPEnabled) {
+          await toggleFigmaMCP();
+        }
+      } else {
+        if (typeof toggleFigmaMCP === 'function' && state && state.figmaMCPEnabled) {
+          await toggleFigmaMCP();
+        }
+
+        status = (typeof figmaStatus !== 'undefined' && figmaStatus) ? figmaStatus : {};
+        if (status.mcpRunning) {
+          try {
+            await fetch('/api/figma/mcp-stop', { method: 'POST' });
+          } catch (_) {}
+        }
+      }
+
+      if (typeof pollFigmaStatus === 'function') await pollFigmaStatus();
+    } finally {
+      if (btn) btn.disabled = false;
+    }
     _refreshTbFigmaItem();
     _renderTbFigmaMenu();
   }
@@ -1872,12 +1911,17 @@ Examples:
     var files = _tbFigmaSortFiles(status.connectedFiles || []);
     var pinned = _tbFigmaPinnedSet();
 
+    var relayReady = !!(status.relayConnected || status.mcpRunning || status.externalRelayAvailable || status.relaySource === 'external');
+    var relayLabel = relayReady ? 'running' : 'stopped';
+    var modeLabel = enabled ? 'ON' : 'OFF';
+
     var head =
       '<div class="tb-fm-head">' +
         '<span class="tb-fm-title">Pick Figma files</span>' +
-        '<button class="tb-fm-toggle ' + (enabled ? 'on' : '') + '" onclick="_tbFigmaToggleMCP()">' + (enabled ? 'Disable MCP' : 'Enable MCP') + '</button>' +
+        '<button class="tb-fm-toggle ' + (enabled ? 'on' : '') + '" onclick="_tbFigmaToggleMCP()">' + (enabled ? 'Turn OFF MCP' : 'Turn ON MCP') + '</button>' +
       '</div>' +
       '<div class="tb-fm-sub">' +
+        ('MCP: ' + modeLabel + ' · Relay: ' + relayLabel + (files.length ? ' · ' : '<br>')) +
         (files.length
           ? (files.length + ' connected · ' + pinned.size + ' pinned')
           : 'No connected files. Open the FaunaMCP plugin in Figma.') +

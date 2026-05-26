@@ -9,6 +9,21 @@ var figmaMCPChecking      = true; // suppress the "unavailable" flash on first l
 var figmaMCPFailStreak    = 0;    // consecutive fetch failures — only disable after 3
 var figmaMCPWasConnected  = false; // track whether we ever had a confirmed connection
 
+function updateFigmaSectionStatusLabel() {
+  var secStat = document.getElementById('figma-mcp-section-status');
+  if (!secStat) return;
+  var enabled = !!(state && state.figmaMCPEnabled);
+  var relayReady = !!(figmaStatus && (figmaStatus.relayConnected || figmaStatus.mcpRunning || figmaStatus.externalRelayAvailable || figmaStatus.relaySource === 'external'));
+  var modeLabel = enabled ? 'ON' : 'OFF';
+  var relayLabel = relayReady ? 'running' : 'stopped';
+  secStat.textContent = (enabled ? '● ' : '○ ') + modeLabel + ' · relay ' + relayLabel;
+  if (enabled && !relayReady) {
+    secStat.style.color = '#f2c661';
+  } else {
+    secStat.style.color = enabled ? '#62d794' : 'var(--fau-text-muted)';
+  }
+}
+
 // Initialise figmaMCPEnabled — loaded from localStorage in state declaration above
 async function checkFigmaMCPStatus() {
   try {
@@ -38,18 +53,14 @@ async function checkFigmaMCPStatus() {
 function updateFigmaMCPBadge() {
   var badge   = document.getElementById('figma-mcp-badge');
   var banner  = document.getElementById('figma-mode-banner');
-  var secStat = document.getElementById('figma-mcp-section-status');
   if (!badge) return;
   var connected = !!figmaMCPStatus.connected;
   var enabled   = !!state.figmaMCPEnabled;
 
   if (banner) banner.style.display = (connected && enabled) ? 'flex' : 'none';
 
-  // Section header status label
-  if (secStat) {
-    secStat.textContent = enabled ? '● ON' : '○ OFF';
-    secStat.style.color = enabled ? '#62d794' : 'var(--fau-text-muted)';
-  }
+  // Section header status label mirrors picker state text.
+  updateFigmaSectionStatusLabel();
 
   // badge is kept permanently offscreen — only update its data attrs for JS compat.
   // Visual Figma state is shown via the figma-mode-banner (above input-wrap) and
@@ -171,6 +182,7 @@ function updateFigmaStatusUI() {
   }
 
   _syncPinnedFigmaAttachments();
+  updateFigmaSectionStatusLabel();
   if (typeof _refreshTbFigmaPicker === 'function') _refreshTbFigmaPicker();
 }
 
