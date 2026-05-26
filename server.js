@@ -66,6 +66,7 @@ import { registerWhisperRoutes } from './server/routes/whisper.js';
 import { registerPlaywrightMcpRoutes } from './server/routes/playwright-mcp.js';
 import { createTeamsBundle } from './server/routes/teams.js';
 import { registerDocsAndExtRoutes } from './server/routes/docs-and-ext.js';
+import { startFaunaTmpJanitor } from './server/lib/fauna-tmp.js';
 import { registerSchedulingAndGuardRoutes } from './server/routes/scheduling-and-guard.js';
 import { registerRegionAndStdinRoutes } from './server/routes/region-and-stdin.js';
 import { registerPermissionsRoutes } from './server/routes/permissions.js';
@@ -453,6 +454,10 @@ registerRegionAndStdinRoutes(app, { require: _require, appDir: __dirname, getEle
 registerWhisperRoutes(app, { express, faunaConfigDir: FAUNA_CONFIG_DIR, augmentedPath: AUGMENTED_PATH, appDir: __dirname });
 // ── Document/attachment + browser-ext routes moved → server/routes/docs-and-ext.js ──
 registerDocsAndExtRoutes(app, { faunaConfigDir: FAUNA_CONFIG_DIR, appDir: __dirname });
+// Sweep ~/Documents/Fauna/tmp on boot and once per day, removing anything
+// older than 30 days. Whisper audio, pandoc input, and base64 attachments
+// stage their work there so a failed operation leaves a recoverable copy.
+startFaunaTmpJanitor(30);
 // ── Playwright MCP routes moved → server/routes/playwright-mcp.js ──
 registerProjectRunRoutes(app, {
   express,

@@ -8,6 +8,7 @@ import os from 'os';
 import path from 'path';
 import { spawn } from 'child_process';
 import { createRequire } from 'module';
+import { faunaTmpFile } from '../lib/fauna-tmp.js';
 
 const _require = createRequire(import.meta.url);
 
@@ -83,12 +84,14 @@ export function registerWhisperRoutes(app, {
     if (!req.body || req.body.length === 0) {
       return res.status(400).json({ ok: false, error: 'Empty audio body' });
     }
-    const ts     = Date.now();
     const ctHeader = req.headers['content-type'] || '';
     const isWav  = ctHeader.includes('wav') || ctHeader.includes('wave') || (req.body.length >= 4 && req.body.slice(0,4).toString('ascii') === 'RIFF');
     const ext = isWav ? 'wav' : (ctHeader.includes('ogg') ? 'ogg' : ctHeader.includes('mp4') ? 'mp4' : 'webm');
-    const tmpIn  = path.join(os.tmpdir(), `fauna_voice_${ts}.${ext}`);
-    const tmpWav = path.join(os.tmpdir(), `fauna_voice_${ts}.wav`);
+    // Use ~/Documents/Fauna/tmp so the file survives OS temp purges and
+    // the user can recover an audio clip that failed to transcribe within
+    // 30 days (see server/lib/fauna-tmp.js for the cleanup janitor).
+    const tmpIn  = faunaTmpFile('.' + ext, 'voice');
+    const tmpWav = faunaTmpFile('.wav', 'voice');
     try {
       fs.writeFileSync(tmpIn, req.body);
       console.log('[transcribe] wrote', req.body.length, 'bytes to', tmpIn, '(content-type:', ctHeader, ')');

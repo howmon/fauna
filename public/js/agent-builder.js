@@ -1527,11 +1527,18 @@ function _buildPatchAgentCard(config) {  var card = document.createElement('div'
     '</div>';
   (function(cfg) {
     card.querySelector('.ca-open-btn').addEventListener('click', async function() {
-      // Load the full agent from disk first, then merge AI's suggestions on top
+      // Load the full agent from disk first, then merge AI's suggestions on top.
+      // If the agent doesn't exist on disk yet (AI emitted patch-agent for an
+      // agent that was never saved), fall back to opening the builder in
+      // fresh-create mode pre-populated with the AI's fields so the user can
+      // save it for the first time.
+      var existing = null;
       try {
         var r = await fetch('/api/agents/' + encodeURIComponent(cfg.name));
-        if (!r.ok) throw new Error('not found');
-        var existing = await r.json();
+        if (r.ok) existing = await r.json();
+      } catch (_) { /* network error — treat as missing */ }
+
+      if (existing) {
         // Merge: AI-supplied fields overwrite the fetched ones, but we keep everything from disk
         var merged = Object.assign({}, existing, {
           displayName: cfg.displayName || existing.displayName,
@@ -1545,16 +1552,36 @@ function _buildPatchAgentCard(config) {  var card = document.createElement('div'
           shared: cfg.shared || existing._shared || '',
         });
         openAgentBuilder(cfg.name);
-        // Wait for builder to open then patch the state
         setTimeout(function() {
           Object.assign(builderState.data, merged);
           builderState.editing = true;
           builderState._nameManual = true;
           renderBuilderPanel();
         }, 200);
-      } catch (e) {
-        showToast('Could not load agent "' + cfg.name + '": ' + e.message);
+        return;
       }
+
+      // Fallback: agent not on disk yet — open a fresh builder pre-filled with
+      // the AI's patch fields. User saves to create it for the first time.
+      openAgentBuilder();
+      setTimeout(function() {
+        Object.assign(builderState.data, {
+          name: cfg.name || '',
+          displayName: cfg.displayName || cfg.name || '',
+          description: cfg.description || '',
+          systemPrompt: cfg.systemPrompt || '',
+          category: cfg.category || builderState.data.category,
+          icon: cfg.icon || builderState.data.icon,
+          permissions: cfg.permissions || builderState.data.permissions,
+          tools: cfg.tools || [],
+          subAgents: cfg.subAgents || [],
+          shared: cfg.shared || '',
+        });
+        builderState.editing = null;
+        builderState._nameManual = true;
+        renderBuilderPanel();
+      }, 200);
+      showToast('Agent "' + cfg.name + '" not saved yet — opened in builder so you can save it.');
     });
   })(config);
   return card;
