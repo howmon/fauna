@@ -9,6 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
+import { scrubSecrets } from './server/lib/redactor.js';
 
 const MAX_ENTRIES    = 100;
 const MAX_BUNDLE_KB  = 256;          // per-entry cap
@@ -98,15 +99,30 @@ export function savePlaybookEntry(input) {
   }
   _validateTools(input.tools || []);
 
+  // Phase 6: scrub any inadvertent secret material out of the description
+  // and the bundle source. Widgets are reusable across sessions, so a
+  // hard-coded token in handler JS would leak the next time the
+  // playbook is recalled.
+  const safeDescription = scrubSecrets(input.description || '').text;
+  const safeHtml = scrubSecrets(input.bundle.html).text;
+  const safeCss  = scrubSecrets(input.bundle.css || '').text;
+  const safeJs   = scrubSecrets(input.bundle.js).text;
+  const redactionReport = [
+    scrubSecrets(input.description || ''),
+    scrubSecrets(input.bundle.html),
+    scrubSecrets(input.bundle.css || ''),
+    scrubSecrets(input.bundle.js),
+  ].reduce((acc, r) => acc + (r.count || 0), 0);
+
   // Dedup by name (case-insensitive) — replace existing entry to allow updates
   const idx = entries.findIndex(e => e.name.toLowerCase() === input.name.trim().toLowerCase());
   const now = Date.now();
   const entry = {
     id: idx >= 0 ? entries[idx].id : _uid(),
     name: input.name.trim(),
-    description: (input.description || '').trim(),
+    description: safeDescription.trim(),
     tags: Array.isArray(input.tags) ? input.tags.filter(t => typeof t === 'string').slice(0, 8) : [],
-    bundle: { html: input.bundle.html, css: input.bundle.css || '', js: input.bundle.js },
+    bundle: { html: safeHtml, css: safeCss, js: safeJs },
     tools: (input.tools || []).map(t => ({
       name: t.name,
       description: t.description || '',
@@ -115,6 +131,7 @@ export function savePlaybookEntry(input) {
     createdAt: idx >= 0 ? entries[idx].createdAt : now,
     lastUsedAt: now,
     useCount: idx >= 0 ? entries[idx].useCount : 0,
+    ...(redactionReport > 0 ? { redactedCount: redactionReport } : {}),
   };
 
   if (idx >= 0) entries[idx] = entry;
@@ -127,7 +144,7 @@ export function savePlaybookEntry(input) {
   }
 
   _save();
-  return { ok: true, id: entry.id, replaced: idx >= 0 };
+  return { ok: true, id: entry.id, replaced: idx >= 0, ...(redactionReport > 0 ? { redactedCount: redactionReport } : {}) };
 }
 
 export function listPlaybookEntries({ tag = null, query = null } = {}) {

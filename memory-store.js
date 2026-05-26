@@ -8,6 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { scrubSecrets } from './server/lib/redactor.js';
 
 const CONFIG_DIR  = path.join(os.homedir(), '.config', 'fauna');
 const FACTS_FILE  = path.join(CONFIG_DIR, 'facts.json');
@@ -60,8 +61,15 @@ export function remember(text, category = 'fact') {
   if (trimmed.length > MAX_CHARS) return { ok: false, error: `Text exceeds ${MAX_CHARS} characters (got ${trimmed.length})` };
   if (!CATEGORIES.includes(category)) return { ok: false, error: `Invalid category. Use: ${CATEGORIES.join(', ')}` };
 
+  // Phase 6: scrub secrets BEFORE persisting. We replace the value in-place
+  // so the surrounding fact context ("my prod API key for service X is ...")
+  // is preserved — useful for recall — while the secret itself never
+  // touches disk.
+  const scrub = scrubSecrets(trimmed);
+  const safeText = scrub.text;
+
   // Dedup: check for exact normalized match
-  const norm = _normalize(trimmed);
+  const norm = _normalize(safeText);
   const existing = facts.find(f => _normalize(f.text) === norm);
   if (existing) {
     existing.lastAccessedAt = Date.now();
@@ -79,14 +87,15 @@ export function remember(text, category = 'fact') {
   const fact = {
     id: _uid(),
     category,
-    text: trimmed,
+    text: safeText,
     createdAt: Date.now(),
     lastAccessedAt: Date.now(),
     accessCount: 0,
+    ...(scrub.mutated ? { redactions: scrub.redactions } : {}),
   };
   facts.push(fact);
   _save();
-  return { ok: true, id: fact.id, deduplicated: false };
+  return { ok: true, id: fact.id, deduplicated: false, ...(scrub.mutated ? { redacted: scrub.redactions } : {}) };
 }
 
 export function recall(keywords) {

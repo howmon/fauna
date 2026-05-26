@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, shell, nativeImage, nativeTheme, Notification, dialog, screen } from 'electron';
+import { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, shell, nativeImage, nativeTheme, Notification, dialog, screen, clipboard } from 'electron';
 import path     from 'path';
 import fs       from 'fs';
 import os       from 'os';
@@ -8,6 +8,7 @@ import { getResidentAudio } from './server/voice/resident-audio.js';
 import { getUtterancePipeline } from './server/voice/utterance-pipeline.js';
 import { getTts } from './server/voice/tts.js';
 import { getVoiceChat } from './server/voice/voice-chat.js';
+import { getDictation } from './server/voice/dictation.js';
 import { buildShellEnv } from './server/lib/shell-env.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -35,6 +36,8 @@ let residentAudio = null;   // ResidentAudio EventEmitter (Phase 1)
 let utterancePipeline = null; // UtterancePipeline (Phase 2)
 let tts = null;             // Tts engine (Phase 4)
 let voiceChat = null;       // VoiceChat dispatcher (Phase 4b)
+let dictation = null;       // Dictation orchestrator (Phase 5)
+let dictationWindow = null; // hidden BrowserWindow for the dictation mic
 
 // ── Window state persistence ─────────────────────────────────────
 // Persists the set of open windows (active conversation, project, bounds)
@@ -567,6 +570,9 @@ function _buildTrayMenu() {
     { label: 'Toggle Task Widget', click: () => toggleWidget() },
     { type: 'separator' },
     { label: 'Listen in background', type: 'checkbox', checked: voiceEnabled, click: () => toggleResidentVoice() },
+    { label: 'Dictate (' + (IS_MAC ? 'Cmd+Opt+D' : 'Ctrl+Alt+D') + ')',
+      enabled: !dictation?.isActive(),
+      click: () => { try { dictation?.start(); } catch (_) {} } },
     { label: 'Stop speaking', enabled: ttsSpeaking, click: () => { try { tts?.stop(); } catch (_) {} } },
     { type: 'separator' },
     { label: 'Quit Fauna', click: () => { app.isQuitting = true; app.quit(); } },
@@ -694,6 +700,74 @@ function _initResidentAudio() {
   return residentAudio;
 }
 
+// ── Hidden dictation-capture window (Phase 5) ────────────────────────────
+function createDictationWindow() {
+  // Always fresh — the dictation orchestrator closes it after each pass.
+  if (dictationWindow && !dictationWindow.isDestroyed()) return dictationWindow;
+  const win = new BrowserWindow({
+    width: 320,
+    height: 60,
+    show: false,
+    skipTaskbar: true,
+    focusable: false,
+    frame: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration:  false,
+      sandbox:          false,
+      backgroundThrottling: false,
+      preload:          path.join(__dirname, 'dictation-preload.js'),
+    },
+  });
+  win.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(['media', 'microphone', 'audioCapture'].includes(permission));
+  });
+  win.loadFile(path.join(__dirname, 'public', 'dictation-capture.html'));
+  win.on('closed', () => { if (dictationWindow === win) dictationWindow = null; });
+  dictationWindow = win;
+  return win;
+}
+
+function _initDictation() {
+  if (dictation) return dictation;
+  const { augmentedPath } = buildShellEnv(IS_WIN);
+  dictation = getDictation({ appDir: __dirname, augmentedPath, residentAudio });
+  dictation.attachWindowFactory(() => createDictationWindow());
+
+  // Renderer → main IPC fan-in. Result channel uses postMessage to transfer
+  // the PCM ArrayBuffer; the same `ipcMain.on` handler receives both kinds.
+  const channels = ['dictation:ready', 'dictation:level', 'dictation:result', 'dictation:error'];
+  for (const ch of channels) {
+    ipcMain.on(ch, (_event, payload) => dictation.handleIpc(ch, payload));
+  }
+
+  dictation.on('state', ({ state }) => {
+    console.log('[dictation] state =', state);
+    refreshTray();
+  });
+  dictation.on('error', (e) => {
+    console.warn('[dictation] error:', e.message);
+    try { new Notification({ title: 'Dictation error', body: e.message }).show(); } catch (_) {}
+  });
+  dictation.on('transcribed', ({ text, empty, durationMs, elapsedMs }) => {
+    console.log('[dictation] transcribed', `(${durationMs}ms rec / ${elapsedMs}ms whisper)`, JSON.stringify(text));
+    if (empty || !text) {
+      try { new Notification({ title: 'Dictation', body: 'Nothing transcribed.' }).show(); } catch (_) {}
+      return;
+    }
+    try { clipboard.writeText(text); } catch (_) {}
+    try {
+      const preview = text.length > 90 ? text.slice(0, 87) + '…' : text;
+      new Notification({ title: 'Dictation — copied to clipboard', body: preview }).show();
+    } catch (_) {}
+  });
+  return dictation;
+}
+
 function toggleResidentVoice() {
   if (!residentAudio) _initResidentAudio();
   residentAudio.setEnabled(!residentAudio.isEnabled());
@@ -780,8 +854,21 @@ app.whenReady().then(async () => {
   // Initialise resident voice broker (auto-starts mic if user enabled it previously)
   _initResidentAudio();
 
+  // Initialise dictation orchestrator (idle until shortcut fires)
+  _initDictation();
+
   // Global shortcut: Ctrl+Shift+T (Cmd+Shift+T is used by the menu for the in-app panel)
   globalShortcut.register('Ctrl+Shift+Space', () => toggleWidget());
+
+  // Phase-5: dictation hotkey. Tap to start recording, tap again to stop;
+  // transcript is copied to the clipboard and a notification confirms it.
+  // Cmd+Opt+D on macOS, Ctrl+Alt+D elsewhere — chosen so it doesn't collide
+  // with any common app shortcut.
+  const DICTATE_ACCEL = IS_MAC ? 'Cmd+Alt+D' : 'Ctrl+Alt+D';
+  const dictateOk = globalShortcut.register(DICTATE_ACCEL, () => {
+    try { dictation?.toggle(); } catch (e) { console.warn('[dictation] toggle failed:', e.message); }
+  });
+  if (!dictateOk) console.warn('[dictation] failed to register hotkey:', DICTATE_ACCEL);
 
   // macOS: re-open window when dock icon is clicked
   app.on('activate', () => {
@@ -803,6 +890,7 @@ app.on('before-quit', () => {
   try { persistWindowState(); } catch (_) {}
   try { voiceChat?.cancel(); } catch (_) {}
   try { tts?.shutdown(); } catch (_) {}
+  try { dictation?.shutdown(); } catch (_) {}
   try { utterancePipeline?.shutdown(); } catch (_) {}
   try { residentAudio?.shutdown(); } catch (_) {}
   if (app.isReady()) globalShortcut.unregisterAll();
