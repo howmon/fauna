@@ -20,22 +20,34 @@ import { EventEmitter } from 'events';
 
 import { transcribePcm, isWhisperReady } from './transcribe-pcm.js';
 import { matchWake, DEFAULT_WAKE_WORDS } from './wake-word.js';
+import { ruleBasedJudge } from './intent-judge.js';
 
 const MIN_UTTERANCE_MS = 250;   // skip clicks/keystrokes shorter than this
 const MAX_QUEUE        = 4;
 
 class UtterancePipeline extends EventEmitter {
-  constructor({ residentAudio, appDir, augmentedPath, wakeWords, wakeRequired = true } = {}) {
+  constructor({
+    residentAudio,
+    appDir,
+    augmentedPath,
+    wakeWords,
+    wakeRequired = true,
+    judge = ruleBasedJudge,
+    getContext,                  // () => { ttsSpeaking, lastAddressedTs }
+  } = {}) {
     super();
     this.residentAudio = residentAudio;
     this.appDir        = appDir;
     this.augmentedPath = augmentedPath;
     this.wakeWords     = Array.isArray(wakeWords) && wakeWords.length ? wakeWords : DEFAULT_WAKE_WORDS;
     this.wakeRequired  = !!wakeRequired;
+    this.judge         = judge;
+    this.getContext    = typeof getContext === 'function' ? getContext : (() => ({ ttsSpeaking: false, lastAddressedTs: 0 }));
 
     this.queue   = [];
     this.busy    = false;
     this.dropped = 0;
+    this._lastAddressedTs = 0;   // updated when an addressed turn fires
 
     this._onSpeechEnd = this._onSpeechEnd.bind(this);
     if (residentAudio) residentAudio.on('speech-end', this._onSpeechEnd);
@@ -106,12 +118,52 @@ class UtterancePipeline extends EventEmitter {
     }
 
     const wake = matchWake(text, { wakeWords: this.wakeWords });
-    const addressed = this.wakeRequired ? wake.matched : true;
-    const command   = wake.matched ? wake.command : text;
 
-    this.emit('utterance:transcribed', { ts, durationMs, text, addressed, command });
-    if (addressed) this.emit('utterance:addressed', { ts, text, command });
-    else           this.emit('utterance:ignored',   { ts, text });
+    // Pull live context (TTS speaking? recent addressed turn?) from the
+    // injected provider so the judge is pure + testable.
+    let ctx = { ttsSpeaking: false, lastAddressedTs: this._lastAddressedTs };
+    try { ctx = { ...ctx, ...(this.getContext() || {}) }; } catch (_) {}
+    // Always prefer the pipeline's own record of last-addressed (more
+    // accurate than caller-provided if they forgot to update it).
+    if (this._lastAddressedTs > (ctx.lastAddressedTs || 0)) {
+      ctx.lastAddressedTs = this._lastAddressedTs;
+    }
+
+    const verdict = this.judge.classify({
+      text,
+      wakeMatched: wake.matched,
+      command:     wake.command,
+      ttsSpeaking: !!ctx.ttsSpeaking,
+      lastAddressedTs: ctx.lastAddressedTs || 0,
+      now: ts,
+    });
+
+    // Honour the legacy `wakeRequired = false` escape hatch: if wake-word
+    // gating is off and the judge said 'ignore', upgrade to 'addressed'.
+    let intent  = verdict.intent;
+    let command = verdict.command || text;
+    if (!this.wakeRequired && intent === 'ignore') {
+      intent  = 'addressed';
+      command = text;
+    }
+
+    const addressed = intent === 'addressed' || intent === 'follow-up';
+
+    this.emit('utterance:transcribed', { ts, durationMs, text, addressed, command, intent });
+    this.emit('utterance:intent',      { ts, text, intent, command });
+
+    switch (intent) {
+      case 'interrupt':
+        this.emit('utterance:interrupt', { ts, text });
+        break;
+      case 'addressed':
+      case 'follow-up':
+        this._lastAddressedTs = ts;
+        this.emit('utterance:addressed', { ts, text, command, followUp: intent === 'follow-up' });
+        break;
+      default:
+        this.emit('utterance:ignored', { ts, text });
+    }
   }
 }
 

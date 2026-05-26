@@ -6,6 +6,8 @@ import { fileURLToPath } from 'url';
 import { startServer }   from './server.js';
 import { getResidentAudio } from './server/voice/resident-audio.js';
 import { getUtterancePipeline } from './server/voice/utterance-pipeline.js';
+import { getTts } from './server/voice/tts.js';
+import { getVoiceChat } from './server/voice/voice-chat.js';
 import { buildShellEnv } from './server/lib/shell-env.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -31,6 +33,8 @@ let tray = null;
 let audioWindow = null;     // hidden BrowserWindow that owns the mic
 let residentAudio = null;   // ResidentAudio EventEmitter (Phase 1)
 let utterancePipeline = null; // UtterancePipeline (Phase 2)
+let tts = null;             // Tts engine (Phase 4)
+let voiceChat = null;       // VoiceChat dispatcher (Phase 4b)
 
 // ── Window state persistence ─────────────────────────────────────
 // Persists the set of open windows (active conversation, project, bounds)
@@ -554,6 +558,7 @@ function _buildTrayMenu() {
     : [{ label: 'No windows open', enabled: false }];
 
   const voiceEnabled = !!residentAudio?.isEnabled();
+  const ttsSpeaking  = !!tts?.isSpeaking();
   return Menu.buildFromTemplate([
     { label: 'Windows', enabled: false },
     ...windowItems,
@@ -562,6 +567,7 @@ function _buildTrayMenu() {
     { label: 'Toggle Task Widget', click: () => toggleWidget() },
     { type: 'separator' },
     { label: 'Listen in background', type: 'checkbox', checked: voiceEnabled, click: () => toggleResidentVoice() },
+    { label: 'Stop speaking', enabled: ttsSpeaking, click: () => { try { tts?.stop(); } catch (_) {} } },
     { type: 'separator' },
     { label: 'Quit Fauna', click: () => { app.isQuitting = true; app.quit(); } },
   ]);
@@ -623,16 +629,61 @@ function _initResidentAudio() {
 
   // Phase-2: build the utterance pipeline (Whisper transcribe + wake word).
   // It subscribes to `speech-end` on residentAudio internally.
+  // Phase-3: provide live context (TTS state) so the intent judge can
+  // classify interrupts and follow-ups correctly.
   const { augmentedPath } = buildShellEnv(IS_WIN);
   utterancePipeline = getUtterancePipeline({
     residentAudio,
     appDir: __dirname,
     augmentedPath,
+    getContext: () => ({ ttsSpeaking: !!tts?.isSpeaking() }),
   });
-  utterancePipeline.on('utterance:transcribed', ({ text, addressed, command, durationMs }) => {
-    console.log('[voice] transcribed', `(${durationMs}ms)`, JSON.stringify(text), addressed ? '→ ADDRESSED' : '(ignored)', addressed && command ? `cmd=${JSON.stringify(command)}` : '');
+  utterancePipeline.on('utterance:transcribed', ({ text, intent, command, durationMs }) => {
+    console.log('[voice] transcribed', `(${durationMs}ms)`, JSON.stringify(text), '→', intent, intent !== 'ignore' && command ? `cmd=${JSON.stringify(command)}` : '');
   });
   utterancePipeline.on('error', (e) => console.warn('[voice] pipeline error:', e.message));
+
+  // Phase-4: TTS engine. The onStateChange callback auto-mutes the resident
+  // mic while Fauna is speaking so it can't transcribe its own voice.
+  tts = getTts({
+    onStateChange: (speaking) => {
+      try { residentAudio?.setMuted(!!speaking); } catch (_) {}
+      refreshTray();
+    },
+  });
+
+  // Phase-4b: voice-chat dispatcher — bridges addressed utterances into
+  // the real /api/chat SSE endpoint, streams the reply sentence-by-sentence
+  // into TTS so playback starts as soon as the first sentence is ready.
+  voiceChat = getVoiceChat({ port: PORT, tts });
+  voiceChat.on('first-token', () => console.log('[voice] first-token'));
+  voiceChat.on('done',        ({ reply }) => console.log('[voice] reply done:', (reply || '').slice(0, 120)));
+  voiceChat.on('aborted',     ()         => console.log('[voice] reply aborted'));
+  voiceChat.on('error',       ({ error }) => console.warn('[voice] reply error:', error));
+
+  // Phase-4 placeholder dispatch: until the chat router is wired in, just
+  // confirm we heard the user. Replace this handler with the agent call
+  // when Phase 4b lands.
+  utterancePipeline.on('utterance:addressed', ({ command, followUp }) => {
+    if (!command) {
+      // Bare wake word with no command: short acknowledgement so the user
+      // knows Fauna is listening.
+      tts.speak('Yes?').catch(() => {});
+      return;
+    }
+    console.log('[voice] dispatch', followUp ? '(follow-up)' : '(addressed)', JSON.stringify(command));
+    voiceChat.ask(command).catch((e) => console.warn('[voice] ask failed:', e.message));
+  });
+
+  // Phase-3: an interrupt utterance ('stop', 'wait', 'cancel'...) while
+  // Fauna is speaking immediately kills TTS playback and aborts any
+  // in-flight upstream chat request. The TTS state change unmutes the mic,
+  // so the user can keep talking right after.
+  utterancePipeline.on('utterance:interrupt', () => {
+    console.log('[voice] interrupt');
+    try { voiceChat?.cancel(); } catch (_) {}
+    try { tts?.stop(); } catch (_) {}
+  });
 
   // Phase-1 visibility: log raw VAD events too (helpful while tuning).
   residentAudio.on('speech-start', ({ ts }) => console.log('[voice] speech-start', new Date(ts).toISOString()));
@@ -750,6 +801,8 @@ app.on('before-quit', () => {
   app.isQuitting = true;
   // Snapshot which windows were open + their conv/project so we restore them next launch
   try { persistWindowState(); } catch (_) {}
+  try { voiceChat?.cancel(); } catch (_) {}
+  try { tts?.shutdown(); } catch (_) {}
   try { utterancePipeline?.shutdown(); } catch (_) {}
   try { residentAudio?.shutdown(); } catch (_) {}
   if (app.isReady()) globalShortcut.unregisterAll();

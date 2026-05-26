@@ -102,12 +102,38 @@ class ResidentAudio extends EventEmitter {
     this.windowFactory = null; // () => BrowserWindow (hidden)
     this.listening = false;
     this.speaking = false;
+    this.muted = false;        // when true: drop frames + suppress VAD events (used during TTS)
     this.ring = new PcmRing(RING_BUFFER_MS, SAMPLE_RATE);
     this.utterance = null;     // { startTs, frames:[Int16Array], samples:0 }
     this.maxUtteranceTimer = null;
   }
 
   isEnabled() { return !!this.cfg.resident; }
+
+  /**
+   * Mute / unmute the capture pipeline. While muted:
+   *   - incoming PCM frames are discarded (not appended to the ring buffer)
+   *   - any in-flight utterance is aborted
+   *   - VAD events from the renderer are ignored
+   * Intended for use during TTS playback so Fauna does not transcribe its
+   * own voice. Browser AEC + this hard mute combine to make self-trigger
+   * impossible.
+   */
+  setMuted(on) {
+    const next = !!on;
+    if (next === this.muted) return;
+    this.muted = next;
+    if (next && this.speaking) {
+      // Abort whatever we were collecting; emit a synthetic end with no PCM.
+      this.speaking = false;
+      this._abortUtterance();
+      this._emitState();
+      this.emit('speech-end', { ts: Date.now(), durationMs: 0, pcm: null, reason: 'muted' });
+    } else {
+      this._emitState();
+    }
+  }
+  isMuted() { return !!this.muted; }
 
   /**
    * main.js calls this with a factory that creates the hidden BrowserWindow
@@ -193,12 +219,14 @@ class ResidentAudio extends EventEmitter {
       enabled:   !!this.cfg.resident,
       listening: !!this.listening,
       speaking:  !!this.speaking,
+      muted:     !!this.muted,
     });
   }
 
   _onFrame(payload) {
     // payload.pcm is an ArrayBuffer (Int16 PCM @ 16kHz mono) shipped via IPC
     if (!payload || !payload.pcm) return;
+    if (this.muted) return;     // drop frames entirely during TTS playback
     const int16 = new Int16Array(payload.pcm);
     this.ring.push(int16);
     if (this.utterance) {
@@ -212,6 +240,7 @@ class ResidentAudio extends EventEmitter {
   }
 
   _onSpeechStart(payload) {
+    if (this.muted) return;
     if (this.speaking) return;
     this.speaking = true;
     const ts = payload?.ts || Date.now();
@@ -231,6 +260,7 @@ class ResidentAudio extends EventEmitter {
   }
 
   _onSpeechEnd(payload) {
+    if (this.muted) return;
     if (!this.speaking) return;
     this.speaking = false;
     const ts = payload?.ts || Date.now();
