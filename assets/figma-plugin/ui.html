@@ -73,7 +73,7 @@ function connect() {
   };
 
   ws.onerror = function() {
-    addLog('Connection error — is the MCP server running? (npm start in server/)', 'err');
+    addLog('Connection error — start Fauna app or run: node relay/server/index.js', 'err');
   };
 
   // Command from MCP server → forward to Figma plugin sandbox
