@@ -43,7 +43,18 @@ jobs:
         run: npm run build:whisper
 
       - name: Build macOS arm64 DMG
+        env:
+          CSC_LINK: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
         run: npx electron-builder --mac dmg --arm64 --publish never
+
+      - name: Notarize and staple Fauna macOS arm64 DMG
+        if: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' }}
+        run: |
+          for f in dist/*.dmg; do
+            xcrun notarytool submit "$f" --wait --apple-id "${{ secrets.APPLE_ID }}" --team-id "${{ secrets.APPLE_TEAM_ID }}" --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}"
+            xcrun stapler staple -v "$f"
+          done
 
       - name: Upload macOS arm64 artifact
         uses: actions/upload-artifact@v5
@@ -56,7 +67,18 @@ jobs:
         run: npm --prefix faunaMCP-main ci
 
       - name: Build FaunaMCP macOS arm64 DMG
+        env:
+          CSC_LINK: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
         run: npm --prefix faunaMCP-main run dist:mac:arm64
+
+      - name: Notarize and staple FaunaMCP macOS arm64 DMG
+        if: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' }}
+        run: |
+          for f in faunaMCP-main/dist/*.dmg; do
+            xcrun notarytool submit "$f" --wait --apple-id "${{ secrets.APPLE_ID }}" --team-id "${{ secrets.APPLE_TEAM_ID }}" --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}"
+            xcrun stapler staple -v "$f"
+          done
 
       - name: Upload FaunaMCP macOS arm64 artifact
         uses: actions/upload-artifact@v5
@@ -89,7 +111,18 @@ jobs:
         run: npm run build:whisper
 
       - name: Build macOS x64 DMG
+        env:
+          CSC_LINK: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
         run: npx electron-builder --mac dmg --x64 --publish never
+
+      - name: Notarize and staple Fauna macOS x64 DMG
+        if: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' }}
+        run: |
+          for f in dist/*.dmg; do
+            xcrun notarytool submit "$f" --wait --apple-id "${{ secrets.APPLE_ID }}" --team-id "${{ secrets.APPLE_TEAM_ID }}" --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}"
+            xcrun stapler staple -v "$f"
+          done
 
       - name: Upload macOS x64 artifact
         uses: actions/upload-artifact@v5
@@ -102,7 +135,18 @@ jobs:
         run: npm --prefix faunaMCP-main ci
 
       - name: Build FaunaMCP macOS x64 DMG
+        env:
+          CSC_LINK: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
         run: npm --prefix faunaMCP-main run dist:mac:x64
+
+      - name: Notarize and staple FaunaMCP macOS x64 DMG
+        if: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' }}
+        run: |
+          for f in faunaMCP-main/dist/*.dmg; do
+            xcrun notarytool submit "$f" --wait --apple-id "${{ secrets.APPLE_ID }}" --team-id "${{ secrets.APPLE_TEAM_ID }}" --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}"
+            xcrun stapler staple -v "$f"
+          done
 
       - name: Upload FaunaMCP macOS x64 artifact
         uses: actions/upload-artifact@v5
