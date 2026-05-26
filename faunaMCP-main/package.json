@@ -8,10 +8,15 @@
     "postinstall": "node -e \"console.log('postinstall: run npm run install:relays separately if needed')\"",
     "install:relays": "npm --prefix browser-server ci && npm --prefix figma-server ci",
     "start": "electron .",
+    "predist": "npm run install:relays",
     "dist": "electron-builder",
+    "predist:mac": "npm run install:relays",
     "dist:mac": "electron-builder --mac",
+    "predist:mac:arm64": "npm run install:relays",
     "dist:mac:arm64": "electron-builder --mac --arm64",
+    "predist:mac:x64": "npm run install:relays",
     "dist:mac:x64": "electron-builder --mac --x64",
+    "predist:win": "npm run install:relays",
     "dist:win": "electron-builder --win"
   },
   "build": {
