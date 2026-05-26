@@ -13,9 +13,13 @@ function updateFigmaSectionStatusLabel() {
   var secStat = document.getElementById('figma-mcp-section-status');
   if (!secStat) return;
   var enabled = !!(state && state.figmaMCPEnabled);
-  var relayReady = !!(figmaStatus && (figmaStatus.relayConnected || figmaStatus.mcpRunning || figmaStatus.externalRelayAvailable || figmaStatus.relaySource === 'external'));
+  var localRelayRunning = !!(figmaStatus && figmaStatus.mcpRunning);
+  var externalRelayConnected = !!(figmaStatus && figmaStatus.relaySource === 'external' && figmaStatus.relayConnected);
+  var relayReady = !!(localRelayRunning || externalRelayConnected);
   var modeLabel = enabled ? 'ON' : 'OFF';
-  var relayLabel = relayReady ? 'running' : 'stopped';
+  var relayLabel = localRelayRunning
+    ? 'local running'
+    : (externalRelayConnected ? 'external connected' : 'stopped');
   secStat.textContent = (enabled ? '● ' : '○ ') + modeLabel + ' · relay ' + relayLabel;
   if (enabled && !relayReady) {
     secStat.style.color = '#f2c661';

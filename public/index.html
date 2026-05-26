@@ -1815,7 +1815,9 @@ Examples:
 
       var enabled = !!(typeof state !== 'undefined' && state && state.figmaMCPEnabled);
       var status = (typeof figmaStatus !== 'undefined' && figmaStatus) ? figmaStatus : {};
-      var relayReady = !!(status.relayConnected || status.mcpRunning || status.externalRelayAvailable || status.relaySource === 'external');
+      var localRelayRunning = !!status.mcpRunning;
+      var externalRelayConnected = !!(status.relaySource === 'external' && status.relayConnected);
+      var relayReady = !!(localRelayRunning || externalRelayConnected || status.externalRelayAvailable);
 
       if (!enabled) {
         if (!relayReady) {
@@ -1913,8 +1915,11 @@ Examples:
     var files = _tbFigmaSortFiles(status.connectedFiles || []);
     var pinned = _tbFigmaPinnedSet();
 
-    var relayReady = !!(status.relayConnected || status.mcpRunning || status.externalRelayAvailable || status.relaySource === 'external');
-    var relayLabel = relayReady ? 'running' : 'stopped';
+    var localRelayRunning = !!status.mcpRunning;
+    var externalRelayConnected = !!(status.relaySource === 'external' && status.relayConnected);
+    var relayLabel = localRelayRunning
+      ? 'local running'
+      : (externalRelayConnected ? 'external connected' : 'stopped');
     var modeLabel = enabled ? 'ON' : 'OFF';
 
     var head =

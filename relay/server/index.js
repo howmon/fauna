@@ -537,6 +537,14 @@ function getConnectedPluginKeys() {
 wss.on('connection', ws => {
   let fileKey = null;
   let conn    = null;
+  function notifyControllersPluginDisconnected(disconnectedFileKey) {
+    if (!disconnectedFileKey) return;
+    for (const c of clients.values()) {
+      if (c.isController && c.ws.readyState === 1) {
+        c.ws.send(JSON.stringify({ type: 'plugin-disconnected', fileKey: disconnectedFileKey }));
+      }
+    }
+  }
   let identifyTimer = setTimeout(() => {
     if (!fileKey) { process.stderr.write('[MCP] No FILE_INFO in 30 s — closing\n'); ws.close(); }
   }, 30000);
@@ -548,7 +556,17 @@ wss.on('connection', ws => {
     // ── FILE_INFO: plugin identifies itself ───────────────────────────────
     if (msg.type === 'FILE_INFO') {
       clearTimeout(identifyTimer);
-      fileKey = msg.fileKey || ('file-' + Date.now());
+      const nextFileKey = msg.fileKey || ('file-' + Date.now());
+
+      // If this same connection re-identifies with a new key, remove the stale key
+      // so the picker does not show duplicate phantom entries.
+      if (conn && fileKey && fileKey !== nextFileKey && clients.get(fileKey) === conn) {
+        clients.delete(fileKey);
+        docsPrimedByTarget.delete(fileKey);
+        notifyControllersPluginDisconnected(fileKey);
+      }
+
+      fileKey = nextFileKey;
       const existing = clients.get(fileKey);
       if (existing && existing.gracePeriodTimer) {
         clearTimeout(existing.gracePeriodTimer);
@@ -703,6 +721,7 @@ wss.on('connection', ws => {
       if (clients.get(fileKey) !== conn) return;
       clients.delete(fileKey);
       docsPrimedByTarget.delete(fileKey);
+      notifyControllersPluginDisconnected(fileKey);
       if (activeFileKey === fileKey) {
         activeFileKey = [...clients.keys()].find(k => {
           const c = clients.get(k);
