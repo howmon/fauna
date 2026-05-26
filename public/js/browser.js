@@ -2040,6 +2040,14 @@ var _extConnectedBrowsers = []; // [{id, browser, version, connectedAt}]
 
     if (msg.event === 'user:snapshot') {
       if (!d.base64) return;
+      var _snapB64 = d.base64;
+      var _snapMime = d.mime || 'image/png';
+      // Strip any accidental `data:` prefix so the chip's <img> src doesn't
+      // get a double-prefixed (broken) data URL.
+      if (typeof _snapB64 === 'string') {
+        var _snapM = _snapB64.match(/^data:([^;]+);base64,(.+)$/);
+        if (_snapM) { _snapMime = _snapM[1]; _snapB64 = _snapM[2]; }
+      }
       var snapTitle = d.title || d.url || bName + ' tab';
       var shortSnap = snapTitle.length > 40 ? snapTitle.slice(0, 37) + '…' : snapTitle;
       if (typeof addAttachment === 'function') {
@@ -2056,7 +2064,7 @@ var _extConnectedBrowsers = []; // [{id, browser, version, connectedAt}]
           }
         }
         addAttachment({ type: 'image', extSource: 'snapshot', name: 'Snapshot — ' + shortSnap,
-                        base64: d.base64, mime: d.mime || 'image/png', browser: bName });
+                        base64: _snapB64, mime: _snapMime, browser: bName });
       }
       _showExtToast('Snapshot from ' + bName + ' added');
     }
@@ -2407,6 +2415,14 @@ async function extGrabSnapshot(tabId, browser, clientId) {
 
     var b64 = d.screenshot || d.base64;
     var mime = d.mime || 'image/png';
+    // Some paths (older extensions, debugger CDP) may include a full
+    // `data:image/...;base64,` prefix. Strip it so the chip doesn't end up
+    // building `data:image/png;base64,data:image/jpeg;base64,...` which
+    // renders as a broken image.
+    if (typeof b64 === 'string') {
+      var m = b64.match(/^data:([^;]+);base64,(.+)$/);
+      if (m) { mime = m[1]; b64 = m[2]; }
+    }
     if (!b64) throw new Error('No image data returned');
 
     var snapTitle = d.title || d.url || 'Browser tab';
