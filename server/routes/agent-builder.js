@@ -12,13 +12,26 @@ import { getCopilotClient } from '../copilot/auth.js';
 
 const BUILTIN_AGENT_NAMES = ['research', 'coder', 'writer', 'designer'];
 
+// Whitelist of models callers may request. Anything outside this falls back
+// to the default. Keeps a hostile or buggy client from pinning us to a model
+// we don't control or charge for.
+const ALLOWED_BUILDER_MODELS = new Set([
+  'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini',
+  'claude-sonnet-4.6', 'claude-sonnet-4', 'claude-3-5-sonnet',
+  'o1', 'o1-mini', 'o3-mini',
+]);
+function safeBuilderModel(requested, fallback = 'gpt-4.1') {
+  if (typeof requested !== 'string') return fallback;
+  return ALLOWED_BUILDER_MODELS.has(requested) ? requested : fallback;
+}
+
 export function registerAgentBuilderRoutes(app, { agentsDir }) {
   // AI-generate agent config from a natural language description
   app.post('/api/agent-builder/generate', async (req, res) => {
     const { description, model: reqModel } = req.body;
     if (!description || !description.trim()) return res.status(400).json({ error: 'description required' });
     // Use the model the client is currently using, fall back to gpt-4.1 which is reliably available
-    const model = reqModel || 'gpt-4.1';
+    const model = safeBuilderModel(reqModel, 'gpt-4.1');
     try {
       const client = getCopilotClient();
       const response = await client.chat.completions.create({
@@ -230,7 +243,7 @@ Quality criteria to check:
     const messages = [{ role: 'system', content: auditSystemMsg }, { role: 'user', content: userMsg }];
 
     // Try with user's current model first, then fallback models
-    const modelsToTry = [reqModel, 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o'].filter(Boolean);
+    const modelsToTry = [safeBuilderModel(reqModel, 'gpt-4.1'), 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o'].filter(Boolean);
     const client = getCopilotClient();
     let lastError = null;
 
@@ -298,7 +311,7 @@ Rules:
     const userMsg = `Agent: ${displayName || agentName || 'Unnamed'}\nDescription: ${description || 'N/A'}\n\nFull system prompt (${tokenEst} tokens):\n${systemPrompt.trim()}`;
     const messages = [{ role: 'system', content: decomposeMsg }, { role: 'user', content: userMsg }];
 
-    const modelsToTry = [reqModel, 'gpt-4.1', 'claude-sonnet-4.6'].filter(Boolean);
+    const modelsToTry = [safeBuilderModel(reqModel, 'gpt-4.1'), 'gpt-4.1', 'claude-sonnet-4.6'].filter(Boolean);
     const client = getCopilotClient();
     let lastError = null;
 

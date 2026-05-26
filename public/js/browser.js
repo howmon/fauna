@@ -2040,6 +2040,14 @@ var _extConnectedBrowsers = []; // [{id, browser, version, connectedAt}]
 
     if (msg.event === 'user:snapshot') {
       if (!d.base64) return;
+      var _snapB64 = d.base64;
+      var _snapMime = d.mime || 'image/png';
+      // Strip any accidental `data:` prefix so the chip's <img> src doesn't
+      // get a double-prefixed (broken) data URL.
+      if (typeof _snapB64 === 'string') {
+        var _snapM = _snapB64.match(/^data:([^;]+);base64,(.+)$/);
+        if (_snapM) { _snapMime = _snapM[1]; _snapB64 = _snapM[2]; }
+      }
       var snapTitle = d.title || d.url || bName + ' tab';
       var shortSnap = snapTitle.length > 40 ? snapTitle.slice(0, 37) + '…' : snapTitle;
       if (typeof addAttachment === 'function') {
@@ -2056,7 +2064,7 @@ var _extConnectedBrowsers = []; // [{id, browser, version, connectedAt}]
           }
         }
         addAttachment({ type: 'image', extSource: 'snapshot', name: 'Snapshot — ' + shortSnap,
-                        base64: d.base64, mime: d.mime || 'image/png', browser: bName });
+                        base64: _snapB64, mime: _snapMime, browser: bName });
       }
       _showExtToast('Snapshot from ' + bName + ' added');
     }
@@ -2244,16 +2252,18 @@ async function _loadExtTabs() {
           try { domain = new URL(tab.url).hostname; } catch (_) { domain = tab.url || ''; }
           var shortDomain = domain.length > 35 ? domain.slice(0, 32) + '…' : domain;
           var bAttr = ' data-browser="' + escHtml(res.browser) + '" data-client-id="' + escHtml(cId) + '"';
+          var rowClick = 'extGrabPage(' + tab.id + ',\'' + escHtml(res.browser) + '\',\'' + escHtml(cId) + '\')';
+          var snapClick = 'extGrabSnapshot(' + tab.id + ',\'' + escHtml(res.browser) + '\',\'' + escHtml(cId) + '\')';
 
-          html += '<div class="ext-tab-item"' + bAttr + '>' +
+          html += '<div class="ext-tab-item"' + bAttr + ' onclick="' + rowClick + '" title="Insert page content">' +
             (tab.active ? '<span class="ext-tab-active-dot" title="Active tab"></span>' : '<span style="width:5px;flex-shrink:0"></span>') +
             '<div class="ext-tab-info">' +
               '<div class="ext-tab-title">' + escHtml(shortTitle) + '</div>' +
               '<div class="ext-tab-url">' + escHtml(shortDomain) + '</div>' +
             '</div>' +
             '<div class="ext-tab-actions">' +
-              '<button onclick="extGrabPage(' + tab.id + ',\'' + escHtml(res.browser) + '\',\'' + escHtml(cId) + '\')" title="Insert page content"><i class="ti ti-file-text"></i></button>' +
-              '<button onclick="extGrabSnapshot(' + tab.id + ',\'' + escHtml(res.browser) + '\',\'' + escHtml(cId) + '\')" title="Insert screenshot"><i class="ti ti-camera"></i></button>' +
+              '<button onclick="event.stopPropagation();' + rowClick + '" title="Insert page content"><i class="ti ti-file-text"></i></button>' +
+              '<button onclick="event.stopPropagation();' + snapClick + '" title="Insert screenshot"><i class="ti ti-camera"></i></button>' +
             '</div>' +
           '</div>';
         });
@@ -2311,7 +2321,11 @@ async function extGrabPage(tabId, browser, clientId) {
 
   try {
     var requestBrowser = String(browser || '').replace(/\s+\(\d+\)$/, '');
-    var body = { action: 'extract' };
+    // Cap the primary extract at 10s. If the content script is stuck (PDF
+    // viewer, restricted page, slow SPA), we want to fall through to the
+    // metadata fallback quickly instead of blocking the UI on the full
+    // server-side 30s ceiling.
+    var body = { action: 'extract', timeout: 10000 };
     if (tabId) body.tabId = tabId;
     if (clientId) body.clientId = clientId;
     else if (requestBrowser) body.browser = requestBrowser;
@@ -2322,7 +2336,7 @@ async function extGrabPage(tabId, browser, clientId) {
     var d = await r.json();
     if ((!d || d.ok === false) && clientId && String(clientId).startsWith('relay-')) {
       // Relay route failed: retry via direct route to match manual "Send page to Fauna" behavior.
-      var retryBody = { action: 'extract' };
+      var retryBody = { action: 'extract', timeout: 10000 };
       if (tabId) retryBody.tabId = tabId;
       if (requestBrowser) retryBody.browser = requestBrowser;
       var r2 = await fetch('/api/ext/command', {
@@ -2346,10 +2360,13 @@ async function extGrabPage(tabId, browser, clientId) {
     }
     if (typeof showToast === 'function') showToast('Page content added to context');
   } catch (e) {
-    // Fallback path: when text extraction is blocked for this tab, try snapshot and tab metadata
-    // so tab selection still yields useful context in standalone Fauna.
+    // Fallback path: when text extraction is blocked for this tab, attach
+    // just the tab metadata so tab selection still yields useful context.
+    // We deliberately do NOT pull a snapshot here — the user picked "Attach
+    // tab", not "Attach snapshot"; that's a separate menu action. Attaching
+    // both used to double-attach and roughly double the latency.
     try {
-      var infoBody = { action: 'tab:info' };
+      var infoBody = { action: 'tab:info', timeout: 6000 };
       if (tabId) infoBody.tabId = tabId;
       if (clientId) infoBody.clientId = clientId;
       else if (browser) infoBody.browser = browser;
@@ -2359,43 +2376,17 @@ async function extGrabPage(tabId, browser, clientId) {
       });
       var infoD = await infoR.json().catch(function() { return {}; });
 
-      var snapBody = { full: false };
-      if (tabId) snapBody.tabId = tabId;
-      if (clientId) snapBody.clientId = clientId;
-      else if (browser) snapBody.browser = browser;
-      var snapR = await fetch('/api/ext/snapshot', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(snapBody)
-      });
-      var snapD = await snapR.json().catch(function() { return {}; });
-
-      var b64 = snapD && (snapD.screenshot || snapD.base64);
-      if (b64 && typeof addAttachment === 'function') {
-        var snapTitle = (infoD && infoD.title) || (snapD && snapD.title) || (snapD && snapD.url) || 'Browser tab';
-        var shortSnap = snapTitle.length > 40 ? snapTitle.slice(0, 37) + '…' : snapTitle;
-        addAttachment({
-          type: 'image',
-          extSource: 'snapshot',
-          name: 'Snapshot — ' + shortSnap,
-          base64: b64,
-          mime: (snapD && snapD.mime) || 'image/png',
-          tabId: tabId,
-          clientId: clientId,
-          browser: browser
-        });
-      }
-
       if (typeof addAttachment === 'function') {
-        var url = (infoD && infoD.url) || (snapD && snapD.url) || '';
-        var title = (infoD && infoD.title) || (snapD && snapD.title) || url || 'Browser tab';
+        var url = (infoD && infoD.url) || '';
+        var title = (infoD && infoD.title) || url || 'Browser tab';
         var infoText =
           (url ? 'Source: ' + url + '\n' : '') +
           (title ? 'Title: ' + title + '\n\n' : '') +
-          'Full page text extraction was blocked for this tab. A snapshot was attached when available.';
+          'Full page text extraction was blocked for this tab. Use the "Attach snapshot" action if you need a screenshot.';
         addAttachment({ type: 'url', extSource: 'page', name: (browser ? browser + ': ' : '') + title, content: infoText, sourceUri: url, tabId: tabId, clientId: clientId, browser: browser });
       }
 
-      if (typeof showToast === 'function') showToast('Tab added using fallback (snapshot/metadata).');
+      if (typeof showToast === 'function') showToast('Tab added (metadata only — extraction blocked).');
       return;
     } catch (_) {}
 
@@ -2426,6 +2417,14 @@ async function extGrabSnapshot(tabId, browser, clientId) {
 
     var b64 = d.screenshot || d.base64;
     var mime = d.mime || 'image/png';
+    // Some paths (older extensions, debugger CDP) may include a full
+    // `data:image/...;base64,` prefix. Strip it so the chip doesn't end up
+    // building `data:image/png;base64,data:image/jpeg;base64,...` which
+    // renders as a broken image.
+    if (typeof b64 === 'string') {
+      var m = b64.match(/^data:([^;]+);base64,(.+)$/);
+      if (m) { mime = m[1]; b64 = m[2]; }
+    }
     if (!b64) throw new Error('No image data returned');
 
     var snapTitle = d.title || d.url || 'Browser tab';

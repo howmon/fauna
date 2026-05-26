@@ -7,8 +7,22 @@ import os from 'os';
 import path from 'path';
 import { execSync } from 'child_process';
 import { createRequire } from 'module';
+import { buildShellEnv } from '../lib/shell-env.js';
+import { faunaTmpFile } from '../lib/fauna-tmp.js';
 
 const _require = createRequire(import.meta.url);
+const { augmentedPath: _AUGMENTED_PATH } = buildShellEnv(process.platform === 'win32');
+// execSync env that includes Homebrew + common Unix dirs so pdftotext,
+// pandoc, textutil, etc. resolve even from inside the Electron bundle
+// where the inherited PATH is `/usr/bin:/bin:/usr/sbin:/sbin`.
+const _EXEC_ENV = { ...process.env, PATH: _AUGMENTED_PATH };
+function _tryExec(cmd, opts = {}) {
+  try {
+    return execSync(cmd, { encoding: 'utf8', env: _EXEC_ENV, timeout: 15000, ...opts }).trim();
+  } catch (_) {
+    return '';
+  }
+}
 
 export function registerDocsAndExtRoutes(app, { faunaConfigDir, appDir }) {
   // ── Document extraction / write ─────────────────────────────────────────
@@ -50,8 +64,10 @@ export function registerDocsAndExtRoutes(app, { faunaConfigDir, appDir }) {
     if (!docPath || content === undefined) return res.status(400).json({ error: 'path and content required' });
     const abs = path.isAbsolute(docPath) ? docPath : path.join(os.homedir(), docPath);
     try {
-      // Try pandoc to convert plain text back to docx format
-      const tmpTxt = path.join(os.tmpdir(), `fauna_doc_in_${Date.now()}.txt`);
+      // Stage the new content under ~/Documents/Fauna/tmp so a failed pandoc
+      // conversion leaves a recoverable copy (vs. /var/folders which the OS
+      // can purge at any time). See server/lib/fauna-tmp.js.
+      const tmpTxt = faunaTmpFile('.txt', 'doc_in');
       fs.writeFileSync(tmpTxt, content, 'utf8');
       const ext = path.extname(abs).toLowerCase().slice(1);
       try {
@@ -60,7 +76,9 @@ export function registerDocsAndExtRoutes(app, { faunaConfigDir, appDir }) {
         // Fallback: just write as .txt alongside (the path stays the same)
         fs.writeFileSync(abs, content, 'utf8');
       }
-      try { fs.unlinkSync(tmpTxt); } catch (_) {}
+      // Intentionally keep tmpTxt — the janitor in server/lib/fauna-tmp.js
+      // sweeps anything older than 30 days, but until then the user has a
+      // plain-text recovery copy if pandoc mangled the docx output.
       res.json({ ok: true, path: abs });
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -72,31 +90,41 @@ export function registerDocsAndExtRoutes(app, { faunaConfigDir, appDir }) {
     const { name = 'file', mime = 'application/octet-stream', base64 } = req.body || {};
     if (!base64) return res.status(400).json({ error: 'base64 required' });
     const ext  = (name.split('.').pop() || '').toLowerCase();
-    const buf  = Buffer.from(base64, 'base64');
-    const tmp  = path.join(os.tmpdir(), `fauna_attach_${Date.now()}.${ext || 'bin'}`);
+    let buf;
+    try { buf = Buffer.from(base64, 'base64'); }
+    catch (e) { return res.status(400).json({ error: 'invalid base64' }); }
+    // Stage attachments under ~/Documents/Fauna/tmp so a failed extraction
+    // leaves a recoverable copy. The janitor sweeps them after 30 days.
+    const tmp  = faunaTmpFile('.' + (ext || 'bin'), 'attach');
     try {
       fs.writeFileSync(tmp, buf);
       let text = '';
       if (['pdf'].includes(ext)) {
-        text = execSync(`pdftotext ${JSON.stringify(tmp)} - 2>/dev/null`, { encoding: 'utf8', timeout: 15000 }).trim();
+        text = _tryExec(`pdftotext ${JSON.stringify(tmp)} -`);
       } else if (['doc','docx','odt','rtf','pages'].includes(ext)) {
-        try {
-          text = execSync(`pandoc -t plain ${JSON.stringify(tmp)} 2>/dev/null`, { encoding: 'utf8', timeout: 15000 }).trim();
-        } catch (_) {
-          try { text = execSync(`textutil -convert txt -stdout ${JSON.stringify(tmp)} 2>/dev/null`, { encoding: 'utf8', timeout: 10000 }).trim(); } catch (_2) {}
-        }
+        text = _tryExec(`pandoc -t plain ${JSON.stringify(tmp)}`);
+        if (!text) text = _tryExec(`textutil -convert txt -stdout ${JSON.stringify(tmp)}`, { timeout: 10000 });
       } else if (['xls','xlsx','csv'].includes(ext)) {
-        text = execSync(`strings ${JSON.stringify(tmp)} 2>/dev/null | head -200`, { encoding: 'utf8', timeout: 10000 }).trim();
+        text = _tryExec(`strings ${JSON.stringify(tmp)} | head -200`, { timeout: 10000 });
       } else {
         // Generic: try as text
         text = buf.slice(0, 200000).toString('utf8');
       }
-      res.json({ ok: true, text, name, mime });
+      // Never 500 for a missing converter — the renderer can still attach the
+      // file as a binary blob. Just return empty text with a hint.
+      res.json({
+        ok: true,
+        text: text || '',
+        name,
+        mime,
+        ...(text ? {} : { note: `No text extracted (converter for .${ext} not installed or file unreadable).` }),
+      });
     } catch (e) {
       res.status(500).json({ error: e.message });
-    } finally {
-      try { fs.unlinkSync(tmp); } catch (_) {}
     }
+    // Intentionally do NOT unlink `tmp` — the janitor in server/lib/fauna-tmp.js
+    // sweeps files older than 30 days. Keeping the staged attachment around
+    // means a failed extraction is still recoverable from ~/Documents/Fauna/tmp.
   });
 
   // ── Browser extension install / download ────────────────────────────────

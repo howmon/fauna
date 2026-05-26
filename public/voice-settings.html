@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Fauna — Voice settings</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg:#0d1117; --bg2:#161b22; --bg3:#1f2733;
+      --fg:#e6edf3; --fg-dim:#7d8590; --accent:#f6a13a;
+      --ok:#3fb950; --warn:#d29922; --err:#f85149;
+      --border:#30363d; --radius:8px;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin:0; padding:0; background:var(--bg); color:var(--fg); font:13.5px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }
+    body { padding:24px 32px 80px; max-width:780px; margin:0 auto; }
+    h1 { font-size:22px; margin:0 0 4px; }
+    .subtitle { color:var(--fg-dim); margin:0 0 28px; font-size:12.5px; }
+    section { background:var(--bg2); border:1px solid var(--border); border-radius:var(--radius); padding:18px 20px; margin:0 0 18px; }
+    section h2 { font-size:14px; margin:0 0 4px; letter-spacing:.02em; text-transform:uppercase; color:var(--accent); font-weight:600; }
+    section .desc { color:var(--fg-dim); font-size:12.5px; margin:0 0 14px; }
+    label { display:block; margin:14px 0 4px; font-weight:500; }
+    .row { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
+    .row > div { display:flex; flex-direction:column; }
+    input[type="text"], input[type="number"], select, textarea {
+      background:var(--bg3); color:var(--fg); border:1px solid var(--border);
+      border-radius:6px; padding:8px 10px; font:13px ui-monospace, monospace;
+      width:100%;
+    }
+    textarea { resize:vertical; min-height:64px; font-family:inherit; }
+    input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent); }
+    .check { display:flex; align-items:center; gap:8px; margin:8px 0; cursor:pointer; user-select:none; }
+    .check input { width:auto; }
+    .actions { position:fixed; bottom:0; left:0; right:0; padding:14px 32px; background:var(--bg);
+      border-top:1px solid var(--border); display:flex; gap:10px; justify-content:flex-end; align-items:center; }
+    .actions .status { color:var(--fg-dim); margin-right:auto; font-size:12.5px; }
+    button { background:var(--accent); color:#000; border:0; border-radius:6px; padding:9px 16px;
+      font-weight:600; cursor:pointer; font-size:13px; }
+    button.ghost { background:transparent; color:var(--fg); border:1px solid var(--border); }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    .hint { color:var(--fg-dim); font-size:12px; margin-top:4px; }
+    .kbd { font-family:ui-monospace, monospace; background:var(--bg3); border:1px solid var(--border);
+      border-radius:4px; padding:1px 6px; font-size:12px; }
+    .pill { display:inline-block; padding:1px 8px; border-radius:99px; font-size:11px;
+      background:var(--bg3); border:1px solid var(--border); color:var(--fg-dim); margin-left:6px; }
+  </style>
+</head>
+<body>
+  <h1>Voice settings</h1>
+  <p class="subtitle">All values persist to <span class="kbd">~/.config/fauna/voice-settings.json</span>. Changes apply immediately.</p>
+
+  <section>
+    <h2>Wake word</h2>
+    <p class="desc">When <b>Listen in background</b> is on, Fauna only acts on utterances that include one of these phrases.</p>
+    <label for="wakeWords">Wake phrases <span class="pill">one per line</span></label>
+    <textarea id="wakeWords" rows="4" placeholder="fauna&#10;hey fauna"></textarea>
+    <label class="check"><input type="checkbox" id="wakeRequired"> Require wake word for new utterances</label>
+    <label for="followUpWindowMs">Follow-up window (ms) <span class="pill">no wake word needed</span></label>
+    <input id="followUpWindowMs" type="number" min="2000" max="60000" step="500" />
+    <p class="hint">After Fauna answers you, anything you say within this window counts as a follow-up.</p>
+  </section>
+
+  <section>
+    <h2>Speech (TTS)</h2>
+    <p class="desc">Uses your operating system's built-in text-to-speech.</p>
+    <label class="check"><input type="checkbox" id="ttsEnabled"> Speak responses out loud</label>
+    <div class="row">
+      <div>
+        <label for="ttsVoice">Voice</label>
+        <select id="ttsVoice"><option value="">— engine default —</option></select>
+      </div>
+      <div>
+        <label for="ttsRate">Rate</label>
+        <input id="ttsRate" type="number" placeholder="default" />
+        <p class="hint">macOS: words/min (default ≈175). Linux: WPM. Windows: -10..10.</p>
+      </div>
+    </div>
+    <button class="ghost" id="testVoice" type="button">Test voice</button>
+  </section>
+
+  <section>
+    <h2>Dictation</h2>
+    <p class="desc">Press the shortcut to start recording, press again to stop. Transcript is copied to the clipboard.</p>
+    <label for="dictationAccel">Hotkey</label>
+    <input id="dictationAccel" type="text" placeholder="Cmd+Alt+D" />
+    <p class="hint">Electron accelerator syntax — e.g. <span class="kbd">Cmd+Shift+D</span>, <span class="kbd">Ctrl+Alt+Space</span>.</p>
+    <label class="check"><input type="checkbox" id="dictationPasteOnFinish"> Auto-paste into the focused window (experimental)</label>
+  </section>
+
+  <section>
+    <h2>Privacy &amp; redaction</h2>
+    <p class="desc">Applied before anything is written to <span class="kbd">facts.json</span> or <span class="kbd">playbooks.json</span>. Cloud keys, JWTs, and tokens are always redacted.</p>
+    <label class="check"><input type="checkbox" id="redactEmail"> Redact email addresses</label>
+    <label class="check"><input type="checkbox" id="redactPhone"> Redact phone numbers</label>
+    <label class="check"><input type="checkbox" id="redactCreditCard"> Redact credit-card numbers (Luhn validated)</label>
+  </section>
+
+  <section>
+    <h2>Tool budget</h2>
+    <p class="desc">Limits how many tools are pitched to the model per turn (relevance-ranked).</p>
+    <div class="row">
+      <div>
+        <label for="toolTopK">Top-K tools</label>
+        <input id="toolTopK" type="number" min="1" max="64" />
+      </div>
+      <div>
+        <label for="toolMustKeep">Always-include tools <span class="pill">comma-separated</span></label>
+        <input id="toolMustKeep" type="text" placeholder="agent_read_file, agent_write_file" />
+      </div>
+    </div>
+  </section>
+
+  <div class="actions">
+    <span class="status" id="status"></span>
+    <button class="ghost" id="reset" type="button">Reset to defaults</button>
+    <button id="save" type="button">Save</button>
+  </div>
+
+  <script src="./js/voice-settings.js"></script>
+</body>
+</html>

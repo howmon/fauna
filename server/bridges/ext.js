@@ -320,7 +320,10 @@ export function createExtBridge({ getFaunaMcpState }) {
         }
         res.json({ ok: true, ...capped });
       } catch (e) {
-        res.status(500).json({ ok: false, error: e.message });
+        // Return 200 with ok:false so the client can react without the
+        // browser logging a noisy "Failed to load resource" 500. The
+        // /api/ext/snapshot endpoint already uses this pattern.
+        res.json({ ok: false, error: e.message });
       }
     });
 

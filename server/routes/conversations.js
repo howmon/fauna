@@ -1,22 +1,28 @@
+import { createConversationStore, PayloadTooLargeError, migrateLegacyToSplit } from '../lib/conversation-store.js';
+
 export function registerConversationRoutes(app, deps) {
   const { fs, path, configDir, getCopilotClient } = deps;
-  const conversationsFile = path.join(configDir, 'conversations.json');
+  // The store abstracts away single-file vs split-file storage. Reads/writes
+  // are async and serialized through a per-id mutex inside the store. Mode
+  // is selected via FAUNA_CONV_STORAGE (default 'single' for compatibility).
+  const store = deps.conversationStore || createConversationStore({ configDir });
   const conversationSseClients = new Set();
 
-  function readServerConversations() {
-    try {
-      const data = JSON.parse(fs.readFileSync(conversationsFile, 'utf8'));
-      return Array.isArray(data) ? data : [];
-    } catch (_) {
-      return [];
-    }
-  }
-
-  function writeServerConversations(conversations) {
-    fs.mkdirSync(configDir, { recursive: true });
-    const tmp = conversationsFile + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(Array.isArray(conversations) ? conversations : [], null, 2));
-    fs.renameSync(tmp, conversationsFile);
+  // If split mode is active and no split layout exists yet, run the one-time
+  // migration in the background so existing users move forward seamlessly
+  // the first time they opt in. Failures are logged, not fatal.
+  const mode = (process.env.FAUNA_CONV_STORAGE || '').toLowerCase();
+  if (mode === 'split' || mode === 'split-only') {
+    migrateLegacyToSplit({ configDir })
+      .then(r => {
+        if (r.skipped) return;
+        if (r.errors?.length) {
+          console.warn('[conversations] migration completed with errors:', r);
+        } else if (r.migrated) {
+          console.log(`[conversations] migrated ${r.migrated} conversations to split layout`);
+        }
+      })
+      .catch(e => console.error('[conversations] migration failed:', e.message));
   }
 
   function sendConversationEvent(type, payload = {}) {
@@ -26,20 +32,27 @@ export function registerConversationRoutes(app, deps) {
     }
   }
 
-  app.get('/api/conversations', (req, res) => {
+  app.get('/api/conversations', async (req, res) => {
     const full = req.query.full === '1' || req.query.full === 'true';
-    const conversations = readServerConversations()
-      .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
-    if (full) return res.json(conversations);
-    res.json(conversations.map(conv => ({
-      id: conv.id,
-      title: conv.title,
-      model: conv.model,
-      projectId: conv.projectId,
-      createdAt: conv.createdAt,
-      updatedAt: conv.updatedAt,
-      messageCount: Array.isArray(conv.messages) ? conv.messages.length : 0,
-    })));
+    try {
+      const out = await store.list({ full });
+      res.json(out);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Migrate the legacy single-file `conversations.json` into the per-conv
+  // split layout. Idempotent and non-destructive: leaves the legacy file in
+  // place and writes a timestamped backup. Safe to call repeatedly.
+  app.post('/api/conversations/_migrate', async (req, res) => {
+    try {
+      const force = req.query.force === '1' || req.query.force === 'true' || req.body?.force === true;
+      const result = await migrateLegacyToSplit({ configDir, force });
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   app.get('/api/conversations/stream', (req, res) => {
@@ -58,30 +71,38 @@ export function registerConversationRoutes(app, deps) {
     });
   });
 
-  app.get('/api/conversations/:id', (req, res) => {
-    const conv = readServerConversations().find(c => c.id === req.params.id);
-    if (!conv) return res.status(404).json({ error: 'Conversation not found' });
-    res.json(conv);
+  app.get('/api/conversations/:id', async (req, res) => {
+    try {
+      const conv = await store.get(req.params.id);
+      if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+      res.json(conv);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
-  app.put('/api/conversations/:id', (req, res) => {
-    const conversations = readServerConversations();
-    const idx = conversations.findIndex(c => c.id === req.params.id);
-    const conv = { ...(req.body || {}), id: req.params.id, updatedAt: req.body?.updatedAt || Date.now() };
-    if (!conv.createdAt) conv.createdAt = Date.now();
-    if (idx >= 0) conversations[idx] = { ...conversations[idx], ...conv };
-    else conversations.push(conv);
-    writeServerConversations(conversations);
-    sendConversationEvent('upsert', { conversation: conv });
-    res.json({ ok: true, conversation: conv });
+  app.put('/api/conversations/:id', async (req, res) => {
+    try {
+      const incoming = { ...(req.body || {}), id: req.params.id };
+      const conv = await store.put(req.params.id, incoming);
+      sendConversationEvent('upsert', { conversation: conv });
+      res.json({ ok: true, conversation: conv });
+    } catch (e) {
+      if (e instanceof PayloadTooLargeError) {
+        return res.status(413).json({ error: e.message, detail: e.detail });
+      }
+      res.status(500).json({ error: e.message });
+    }
   });
 
-  app.delete('/api/conversations/:id', (req, res) => {
-    const conversations = readServerConversations();
-    const next = conversations.filter(c => c.id !== req.params.id);
-    writeServerConversations(next);
-    sendConversationEvent('delete', { id: req.params.id });
-    res.json({ ok: true, deleted: conversations.length - next.length });
+  app.delete('/api/conversations/:id', async (req, res) => {
+    try {
+      const deleted = await store.del(req.params.id);
+      sendConversationEvent('delete', { id: req.params.id });
+      res.json({ ok: true, deleted });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   app.post('/api/conversation-title', async (req, res) => {

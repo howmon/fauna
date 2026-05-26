@@ -1,9 +1,18 @@
-import { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, shell, nativeImage, nativeTheme, Notification, dialog, screen } from 'electron';
+import { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, shell, nativeImage, nativeTheme, Notification, dialog, screen, clipboard } from 'electron';
 import path     from 'path';
 import fs       from 'fs';
 import os       from 'os';
 import { fileURLToPath } from 'url';
+import crypto   from 'crypto';
 import { startServer }   from './server.js';
+import { getResidentAudio } from './server/voice/resident-audio.js';
+import { getUtterancePipeline } from './server/voice/utterance-pipeline.js';
+import { getTts } from './server/voice/tts.js';
+import { getVoiceChat } from './server/voice/voice-chat.js';
+import { getDictation } from './server/voice/dictation.js';
+import { getSettings, onSettingsChange, DEFAULT_DICTATION_ACCEL_MAC, DEFAULT_DICTATION_ACCEL_OTHER } from './server/voice/settings.js';
+import { setDefaultScrubOpts } from './server/lib/redactor.js';
+import { buildShellEnv } from './server/lib/shell-env.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT      = 3737;
@@ -25,6 +34,13 @@ let mainWindow;
 const windows = new Set();
 let widgetWindow = null;
 let tray = null;
+let audioWindow = null;     // hidden BrowserWindow that owns the mic
+let residentAudio = null;   // ResidentAudio EventEmitter (Phase 1)
+let utterancePipeline = null; // UtterancePipeline (Phase 2)
+let tts = null;             // Tts engine (Phase 4)
+let voiceChat = null;       // VoiceChat dispatcher (Phase 4b)
+let dictation = null;       // Dictation orchestrator (Phase 5)
+let dictationWindow = null; // hidden BrowserWindow for the dictation mic
 
 // ── Window state persistence ─────────────────────────────────────
 // Persists the set of open windows (active conversation, project, bounds)
@@ -547,12 +563,22 @@ function _buildTrayMenu() {
       }))
     : [{ label: 'No windows open', enabled: false }];
 
+  const voiceEnabled = !!residentAudio?.isEnabled();
+  const ttsSpeaking  = !!tts?.isSpeaking();
   return Menu.buildFromTemplate([
     { label: 'Windows', enabled: false },
     ...windowItems,
     { type: 'separator' },
     { label: 'New Window', accelerator: IS_MAC ? 'Cmd+Shift+N' : 'Ctrl+Shift+N', click: () => createWindow({ blank: true }) },
     { label: 'Toggle Task Widget', click: () => toggleWidget() },
+    { type: 'separator' },
+    { label: 'Listen in background', type: 'checkbox', checked: voiceEnabled, click: () => toggleResidentVoice() },
+    { label: 'Dictate (' + ((getSettings().dictationAccel || '').trim() || (IS_MAC ? 'Cmd+Opt+D' : 'Ctrl+Alt+D')) + ')',
+      enabled: !dictation?.isActive(),
+      click: () => { try { dictation?.start(); } catch (_) {} } },
+    { label: 'Stop speaking', enabled: ttsSpeaking, click: () => { try { tts?.stop(); } catch (_) {} } },
+    { type: 'separator' },
+    { label: 'Voice settings…', click: () => openVoiceSettingsWindow() },
     { type: 'separator' },
     { label: 'Quit Fauna', click: () => { app.isQuitting = true; app.quit(); } },
   ]);
@@ -561,6 +587,235 @@ function _buildTrayMenu() {
 function refreshTray() {
   if (!tray || tray.isDestroyed?.()) return;
   tray.setContextMenu(_buildTrayMenu());
+}
+
+// ── Voice settings window (Phase 7) ──────────────────────────────────────
+let voiceSettingsWindow = null;
+function openVoiceSettingsWindow() {
+  if (voiceSettingsWindow && !voiceSettingsWindow.isDestroyed()) {
+    voiceSettingsWindow.show();
+    voiceSettingsWindow.focus();
+    return voiceSettingsWindow;
+  }
+  const win = new BrowserWindow({
+    width: 760,
+    height: 760,
+    title: 'Fauna — Voice settings',
+    backgroundColor: '#0d1117',
+    autoHideMenuBar: true,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration:  false,
+      sandbox:          true,
+    },
+  });
+  win.loadURL(`http://127.0.0.1:${PORT}/voice-settings.html`);
+  win.on('closed', () => { if (voiceSettingsWindow === win) voiceSettingsWindow = null; });
+  voiceSettingsWindow = win;
+  return win;
+}
+
+// ── Hidden audio-capture window (resident voice, Phase 1) ────────────────
+function createAudioWindow() {
+  if (audioWindow && !audioWindow.isDestroyed()) return audioWindow;
+  const win = new BrowserWindow({
+    width: 320,
+    height: 60,
+    show: false,            // never visible to the user
+    skipTaskbar: true,
+    focusable: false,
+    frame: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration:  false,
+      sandbox:          false,
+      backgroundThrottling: false,   // critical: keep mic running when no UI focused
+      preload:          path.join(__dirname, 'audio-preload.js'),
+    },
+  });
+  // Grant mic permission for this window's session
+  win.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(['media', 'microphone', 'audioCapture'].includes(permission));
+  });
+  win.loadFile(path.join(__dirname, 'public', 'audio-capture.html'));
+  win.on('closed', () => { if (audioWindow === win) audioWindow = null; });
+  audioWindow = win;
+  return win;
+}
+
+function _initResidentAudio() {
+  if (residentAudio) return residentAudio;
+  residentAudio = getResidentAudio({ appDir: __dirname });
+  residentAudio.attachWindowFactory(() => createAudioWindow());
+
+  // Forward IPC from the hidden audio window into the broker. The same
+  // `ipcMain.on` handler receives messages from both `ipcRenderer.send` and
+  // `ipcRenderer.postMessage` — only postMessage can transfer ArrayBuffers
+  // without a copy, which is why audio-preload uses postMessage for frames.
+  const channels = ['voice:ready', 'voice:frame', 'voice:speech-start', 'voice:speech-end', 'voice:error'];
+  for (const ch of channels) {
+    ipcMain.on(ch, (_event, payload) => residentAudio.handleIpc(ch, payload));
+  }
+
+  // Surface state changes to the tray menu.
+  residentAudio.on('state', () => refreshTray());
+
+  // Phase-2: build the utterance pipeline (Whisper transcribe + wake word).
+  // It subscribes to `speech-end` on residentAudio internally.
+  // Phase-3: provide live context (TTS state) so the intent judge can
+  // classify interrupts and follow-ups correctly.
+  const { augmentedPath } = buildShellEnv(IS_WIN);
+  const _vs0 = getSettings();
+  utterancePipeline = getUtterancePipeline({
+    residentAudio,
+    appDir: __dirname,
+    augmentedPath,
+    wakeWords:        _vs0.wakeWords,
+    wakeRequired:     _vs0.wakeRequired,
+    followUpWindowMs: _vs0.followUpWindowMs,
+    getContext: () => ({ ttsSpeaking: !!tts?.isSpeaking() }),
+  });
+  utterancePipeline.on('utterance:transcribed', ({ text, intent, command, durationMs }) => {
+    console.log('[voice] transcribed', `(${durationMs}ms)`, JSON.stringify(text), '→', intent, intent !== 'ignore' && command ? `cmd=${JSON.stringify(command)}` : '');
+  });
+  utterancePipeline.on('error', (e) => console.warn('[voice] pipeline error:', e.message));
+
+  // Phase-4: TTS engine. The onStateChange callback auto-mutes the resident
+  // mic while Fauna is speaking so it can't transcribe its own voice.
+  tts = getTts({
+    onStateChange: (speaking) => {
+      try { residentAudio?.setMuted(!!speaking); } catch (_) {}
+      refreshTray();
+    },
+  });
+  try {
+    tts.setDefaults({ voice: _vs0.ttsVoice, rate: _vs0.ttsRate, enabled: _vs0.ttsEnabled });
+  } catch (_) {}
+  try {
+    setDefaultScrubOpts({
+      email:      !!_vs0.redactEmail,
+      phone:      !!_vs0.redactPhone,
+      creditCard: !!_vs0.redactCreditCard,
+    });
+  } catch (_) {}
+
+  // Phase-4b: voice-chat dispatcher — bridges addressed utterances into
+  // the real /api/chat SSE endpoint, streams the reply sentence-by-sentence
+  // into TTS so playback starts as soon as the first sentence is ready.
+  voiceChat = getVoiceChat({ port: PORT, tts });
+  voiceChat.on('first-token', () => console.log('[voice] first-token'));
+  voiceChat.on('done',        ({ reply }) => console.log('[voice] reply done:', (reply || '').slice(0, 120)));
+  voiceChat.on('aborted',     ()         => console.log('[voice] reply aborted'));
+  voiceChat.on('error',       ({ error }) => console.warn('[voice] reply error:', error));
+
+  // Phase-4 placeholder dispatch: until the chat router is wired in, just
+  // confirm we heard the user. Replace this handler with the agent call
+  // when Phase 4b lands.
+  utterancePipeline.on('utterance:addressed', ({ command, followUp }) => {
+    if (!command) {
+      // Bare wake word with no command: short acknowledgement so the user
+      // knows Fauna is listening.
+      tts.speak('Yes?').catch(() => {});
+      return;
+    }
+    console.log('[voice] dispatch', followUp ? '(follow-up)' : '(addressed)', JSON.stringify(command));
+    voiceChat.ask(command).catch((e) => console.warn('[voice] ask failed:', e.message));
+  });
+
+  // Phase-3: an interrupt utterance ('stop', 'wait', 'cancel'...) while
+  // Fauna is speaking immediately kills TTS playback and aborts any
+  // in-flight upstream chat request. The TTS state change unmutes the mic,
+  // so the user can keep talking right after.
+  utterancePipeline.on('utterance:interrupt', () => {
+    console.log('[voice] interrupt');
+    try { voiceChat?.cancel(); } catch (_) {}
+    try { tts?.stop(); } catch (_) {}
+  });
+
+  // Phase-1 visibility: log raw VAD events too (helpful while tuning).
+  residentAudio.on('speech-start', ({ ts }) => console.log('[voice] speech-start', new Date(ts).toISOString()));
+  residentAudio.on('speech-end',   ({ ts, durationMs }) => console.log('[voice] speech-end', new Date(ts).toISOString(), durationMs + 'ms'));
+
+  // Auto-start if user previously enabled it.
+  if (residentAudio.isEnabled()) residentAudio.setEnabled(true);
+  return residentAudio;
+}
+
+// ── Hidden dictation-capture window (Phase 5) ────────────────────────────
+function createDictationWindow() {
+  // Always fresh — the dictation orchestrator closes it after each pass.
+  if (dictationWindow && !dictationWindow.isDestroyed()) return dictationWindow;
+  const win = new BrowserWindow({
+    width: 320,
+    height: 60,
+    show: false,
+    skipTaskbar: true,
+    focusable: false,
+    frame: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration:  false,
+      sandbox:          false,
+      backgroundThrottling: false,
+      preload:          path.join(__dirname, 'dictation-preload.js'),
+    },
+  });
+  win.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(['media', 'microphone', 'audioCapture'].includes(permission));
+  });
+  win.loadFile(path.join(__dirname, 'public', 'dictation-capture.html'));
+  win.on('closed', () => { if (dictationWindow === win) dictationWindow = null; });
+  dictationWindow = win;
+  return win;
+}
+
+function _initDictation() {
+  if (dictation) return dictation;
+  const { augmentedPath } = buildShellEnv(IS_WIN);
+  dictation = getDictation({ appDir: __dirname, augmentedPath, residentAudio });
+  dictation.attachWindowFactory(() => createDictationWindow());
+
+  // Renderer → main IPC fan-in. Result channel uses postMessage to transfer
+  // the PCM ArrayBuffer; the same `ipcMain.on` handler receives both kinds.
+  const channels = ['dictation:ready', 'dictation:level', 'dictation:result', 'dictation:error'];
+  for (const ch of channels) {
+    ipcMain.on(ch, (_event, payload) => dictation.handleIpc(ch, payload));
+  }
+
+  dictation.on('state', ({ state }) => {
+    console.log('[dictation] state =', state);
+    refreshTray();
+  });
+  dictation.on('error', (e) => {
+    console.warn('[dictation] error:', e.message);
+    try { new Notification({ title: 'Dictation error', body: e.message }).show(); } catch (_) {}
+  });
+  dictation.on('transcribed', ({ text, empty, durationMs, elapsedMs }) => {
+    console.log('[dictation] transcribed', `(${durationMs}ms rec / ${elapsedMs}ms whisper)`, JSON.stringify(text));
+    if (empty || !text) {
+      try { new Notification({ title: 'Dictation', body: 'Nothing transcribed.' }).show(); } catch (_) {}
+      return;
+    }
+    try { clipboard.writeText(text); } catch (_) {}
+    try {
+      const preview = text.length > 90 ? text.slice(0, 87) + '…' : text;
+      new Notification({ title: 'Dictation — copied to clipboard', body: preview }).show();
+    } catch (_) {}
+  });
+  return dictation;
+}
+
+function toggleResidentVoice() {
+  if (!residentAudio) _initResidentAudio();
+  residentAudio.setEnabled(!residentAudio.isEnabled());
 }
 
 function createTray() {
@@ -618,6 +873,12 @@ app.whenReady().then(async () => {
   const faunaDocs = ensureFaunaDocsFolder();
   if (faunaDocs) process.env.FAUNA_DOCS = faunaDocs;
 
+  // Mint a per-process nonce that gates privileged UI-only routes (e.g.
+  // /api/agent-builder/*). Exposed to renderers via main-preload.js so
+  // only the in-app UI can read it — not the LAN, not the localtunnel,
+  // not the resident voice path, not any other localhost browser tab.
+  process.env.FAUNA_UI_NONCE = crypto.randomBytes(32).toString('hex');
+
   await startServer(PORT).catch(err => {
     console.error('[Electron] Server failed to start:', err.message);
     app.quit();
@@ -641,8 +902,56 @@ app.whenReady().then(async () => {
   // Create tray icon and task widget
   createTray();
 
+  // Initialise resident voice broker (auto-starts mic if user enabled it previously)
+  _initResidentAudio();
+
+  // Initialise dictation orchestrator (idle until shortcut fires)
+  _initDictation();
+
   // Global shortcut: Ctrl+Shift+T (Cmd+Shift+T is used by the menu for the in-app panel)
   globalShortcut.register('Ctrl+Shift+Space', () => toggleWidget());
+
+  // Phase-5/7: dictation hotkey, sourced from voice-settings (live editable
+  // via the settings UI). Falls back to platform default if user cleared it.
+  let _dictateAccel = (getSettings().dictationAccel || '').trim() ||
+    (IS_MAC ? DEFAULT_DICTATION_ACCEL_MAC : DEFAULT_DICTATION_ACCEL_OTHER);
+  function _registerDictateAccel(accel) {
+    if (!accel) return false;
+    return globalShortcut.register(accel, () => {
+      try { dictation?.toggle(); } catch (e) { console.warn('[dictation] toggle failed:', e.message); }
+    });
+  }
+  if (!_registerDictateAccel(_dictateAccel)) {
+    console.warn('[dictation] failed to register hotkey:', _dictateAccel);
+  }
+
+  // Phase-7: hot-apply voice settings changes (TTS voice/rate/enabled,
+  // wake config, dictation accel, redaction defaults).
+  onSettingsChange((s) => {
+    try { utterancePipeline?.setWakeWords(s.wakeWords); } catch (_) {}
+    try { utterancePipeline?.setWakeRequired(s.wakeRequired); } catch (_) {}
+    try { utterancePipeline?.setFollowUpWindowMs(s.followUpWindowMs); } catch (_) {}
+    try { tts?.setDefaults({ voice: s.ttsVoice, rate: s.ttsRate, enabled: s.ttsEnabled }); } catch (_) {}
+    try {
+      setDefaultScrubOpts({
+        email:      !!s.redactEmail,
+        phone:      !!s.redactPhone,
+        creditCard: !!s.redactCreditCard,
+      });
+    } catch (_) {}
+    const desired = (s.dictationAccel || '').trim() ||
+      (IS_MAC ? DEFAULT_DICTATION_ACCEL_MAC : DEFAULT_DICTATION_ACCEL_OTHER);
+    if (desired !== _dictateAccel) {
+      try { globalShortcut.unregister(_dictateAccel); } catch (_) {}
+      if (_registerDictateAccel(desired)) {
+        _dictateAccel = desired;
+        console.log('[dictation] hotkey changed to', desired);
+      } else {
+        console.warn('[dictation] failed to register new hotkey:', desired);
+      }
+    }
+    refreshTray();
+  });
 
   // macOS: re-open window when dock icon is clicked
   app.on('activate', () => {
@@ -662,6 +971,11 @@ app.on('before-quit', () => {
   app.isQuitting = true;
   // Snapshot which windows were open + their conv/project so we restore them next launch
   try { persistWindowState(); } catch (_) {}
+  try { voiceChat?.cancel(); } catch (_) {}
+  try { tts?.shutdown(); } catch (_) {}
+  try { dictation?.shutdown(); } catch (_) {}
+  try { utterancePipeline?.shutdown(); } catch (_) {}
+  try { residentAudio?.shutdown(); } catch (_) {}
   if (app.isReady()) globalShortcut.unregisterAll();
   // Give Electron ~300 ms to close windows, then hard-exit the Node process.
   setTimeout(() => process.exit(0), 300);

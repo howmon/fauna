@@ -61,10 +61,12 @@ import { registerAgentRoutes } from './server/routes/agents.js';
 import { registerAgentBuilderRoutes } from './server/routes/agent-builder.js';
 import { registerAgentSandboxRoutes } from './server/routes/agent-sandbox.js';
 import { registerMemoryPrefsFactsRoutes } from './server/routes/memory-prefs-facts.js';
+import { registerVoiceSettingsRoutes } from './server/routes/voice-settings.js';
 import { registerWhisperRoutes } from './server/routes/whisper.js';
 import { registerPlaywrightMcpRoutes } from './server/routes/playwright-mcp.js';
 import { createTeamsBundle } from './server/routes/teams.js';
 import { registerDocsAndExtRoutes } from './server/routes/docs-and-ext.js';
+import { startFaunaTmpJanitor } from './server/lib/fauna-tmp.js';
 import { registerSchedulingAndGuardRoutes } from './server/routes/scheduling-and-guard.js';
 import { registerRegionAndStdinRoutes } from './server/routes/region-and-stdin.js';
 import { registerPermissionsRoutes } from './server/routes/permissions.js';
@@ -244,6 +246,7 @@ registerFileFilterRoutes(app);
 
 // ── /api/fetch-url moved → server/routes/fetch-url.js ──
 registerFetchUrlRoutes(app);
+registerVoiceSettingsRoutes(app);
 
 // ── Browser (Playwright) routes moved → server/bridges/playwright-browse.js ──
 registerBrowseRoutes(app, { require: _require });
@@ -374,6 +377,21 @@ const iterAgentDirs = createAgentDirIterator({ agentsDir: AGENTS_DIR, legacyAgen
 // ── Agent management routes moved → server/routes/agents.js ──
 registerAgentRoutes(app, { express, agentsDir: AGENTS_DIR, iterAgentDirs, builtinAgentNames: ['research', 'coder', 'writer', 'designer'] });
 // ── Agent Builder routes moved → server/routes/agent-builder.js ──
+// Privileged authoring surface — only the in-app Electron renderer may hit
+// it. Requires both loopback origin AND the per-process UI nonce minted by
+// main.js, exposed to the renderer via main-preload.js and auto-attached
+// as the `x-fauna-ui` header by the fetch shim in public/index.html.
+app.use('/api/agent-builder', (req, res, next) => {
+  const ip = (req.ip || req.connection?.remoteAddress || '').replace(/^::ffff:/, '');
+  if (ip !== '127.0.0.1' && ip !== '::1') {
+    return res.status(403).json({ error: 'agent-builder restricted to local UI' });
+  }
+  const expected = process.env.FAUNA_UI_NONCE;
+  if (!expected || req.get('x-fauna-ui') !== expected) {
+    return res.status(403).json({ error: 'agent-builder restricted to local UI' });
+  }
+  next();
+});
 registerAgentBuilderRoutes(app, { agentsDir: AGENTS_DIR });
 
 // ── Agent store routes (proxy + sync + admin + notifications) moved → server/routes/store.js ──
@@ -436,6 +454,10 @@ registerRegionAndStdinRoutes(app, { require: _require, appDir: __dirname, getEle
 registerWhisperRoutes(app, { express, faunaConfigDir: FAUNA_CONFIG_DIR, augmentedPath: AUGMENTED_PATH, appDir: __dirname });
 // ── Document/attachment + browser-ext routes moved → server/routes/docs-and-ext.js ──
 registerDocsAndExtRoutes(app, { faunaConfigDir: FAUNA_CONFIG_DIR, appDir: __dirname });
+// Sweep ~/Documents/Fauna/tmp on boot and once per day, removing anything
+// older than 30 days. Whisper audio, pandoc input, and base64 attachments
+// stage their work there so a failed operation leaves a recoverable copy.
+startFaunaTmpJanitor(30);
 // ── Playwright MCP routes moved → server/routes/playwright-mcp.js ──
 registerProjectRunRoutes(app, {
   express,
@@ -455,8 +477,12 @@ registerProjectRunRoutes(app, {
 
 export function startServer(port) {
   return new Promise((resolve, reject) => {
-    const server = app.listen(port, '0.0.0.0', () => {
-      console.log(`\n  ✦ Copilot Chat  →  http://127.0.0.1:${port}\n`);
+    // Loopback-only bind. Remote access (mobile app) goes through the
+    // localtunnel client in mobile.js, which proxies back to 127.0.0.1.
+    // Set FAUNA_BIND_HOST=0.0.0.0 to opt back into LAN exposure.
+    const host = process.env.FAUNA_BIND_HOST || '127.0.0.1';
+    const server = app.listen(port, host, () => {
+      console.log(`\n  ✦ Copilot Chat  →  http://127.0.0.1:${port}  (bind=${host})\n`);
       resolve(server);
     });
     extBridge.attach(server);
