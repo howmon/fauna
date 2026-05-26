@@ -144,6 +144,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Hydrate conversations: merge server-side conversations with localStorage
   // This ensures conversations from CLI/mobile are visible, and standalone app
   // doesn't lose conversations when Electron's localStorage resets (new build, etc.)
+  // First, if the client cache is in IndexedDB mode, fill in message bodies
+  // from IDB before we ask the server for missing convs.
+  if (window.FaunaConvCache && window.FaunaConvCache.getMode() === 'indexeddb') {
+    try { await window.FaunaConvCache.hydrateBodies(state.conversations); } catch (_) {}
+  }
   await _hydrateServerConvs();
   _startConversationRealtimeSync();
 

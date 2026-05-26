@@ -111,6 +111,16 @@ function _serializeConversationForServer(conv) {
 }
 
 function saveConversations() {
+  // IndexedDB mode delegates to the cache module: slim index in localStorage
+  // (sync), bodies in IDB (async). Falls through silently in legacy mode.
+  if (window.FaunaConvCache && window.FaunaConvCache.getMode() === 'indexeddb') {
+    try {
+      window.FaunaConvCache.saveAll(state.conversations, _serializeConversationForStorage);
+      _syncConvToServer(state.currentId);
+      return;
+    } catch (_) { /* fall through to legacy path on any failure */ }
+  }
+
   var storageModes = [
     { recentLimit: 24, archiveLimit: 40, keepAttachments: true },
     { recentLimit: 12, archiveLimit: 20, keepAttachments: false },
@@ -530,6 +540,7 @@ function deleteConversation(id, e) {
   if (typeof clearShellRunningPillsForConversation === 'function') clearShellRunningPillsForConversation(id);
   state.conversations = state.conversations.filter(c => c.id !== id);
   saveConversations();
+  if (window.FaunaConvCache) window.FaunaConvCache.removeOne(id);
   fetch('/api/conversations/' + id, { method: 'DELETE' }).catch(function() {});
   if (state.currentId === id) {
     purgeConvDom(id);

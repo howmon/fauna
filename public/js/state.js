@@ -6,7 +6,9 @@ if (!localStorage.getItem('fauna-figma-mcp-explicit')) {
 }
 
 var state = {
-  conversations: JSON.parse(localStorage.getItem('fauna-convs') || '[]'),
+  conversations: ((typeof window !== 'undefined' && window.FaunaConvCache)
+                    ? window.FaunaConvCache.loadSync()
+                    : JSON.parse(localStorage.getItem('fauna-convs') || '[]')),
   currentId:     null,
   model:         localStorage.getItem('fauna-model') || 'claude-sonnet-4.6',
   systemPrompt:  localStorage.getItem('fauna-sys')   || '',
