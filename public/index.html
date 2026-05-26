@@ -850,6 +850,102 @@
       </label>
       <div class="settings-hint" style="margin-top:2px;margin-left:23px">When voice control is on, Fauna re-opens the mic after the spoken summary so you can reply without the wake word.</div>
     </div>
+
+    <!-- ── Resident voice (always-on background mic, Whisper) ─── -->
+    <div class="settings-section" data-resident-voice>
+      <div class="settings-section-title">Background voice (Whisper, always-on)</div>
+      <div class="settings-hint" style="margin-bottom:10px">
+        Independent of the Chromium voice control above. Runs in a hidden window using Whisper for transcription —
+        works even when no Fauna window is focused. Toggle from the tray icon: <strong>“Listen in background”</strong>.
+        All values persist to <code style="font-family:ui-monospace,monospace">~/.config/fauna/voice-settings.json</code>.
+      </div>
+
+      <label class="settings-label"><span>Wake phrases</span></label>
+      <textarea id="rv-wakeWords" class="settings-input" rows="3"
+        placeholder="fauna&#10;hey fauna"
+        style="width:100%;resize:vertical;font-family:ui-monospace,monospace;font-size:12.5px"></textarea>
+      <div class="settings-hint">One per line. Required when “Require wake word” is on.</div>
+
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none;margin-top:10px">
+        <input type="checkbox" id="rv-wakeRequired"
+          style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+        <span style="font-size:12.5px;color:var(--fau-text)">Require wake word for new utterances</span>
+      </label>
+
+      <label class="settings-label" style="margin-top:10px"><span>Follow-up window (ms)</span></label>
+      <input id="rv-followUpWindowMs" class="settings-input" type="number" min="2000" max="60000" step="500"
+        style="width:160px">
+      <div class="settings-hint">After Fauna answers, anything you say within this window counts as a follow-up — no wake word required.</div>
+    </div>
+
+    <div class="settings-section" data-resident-voice>
+      <div class="settings-section-title">Speech output (TTS)</div>
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none">
+        <input type="checkbox" id="rv-ttsEnabled"
+          style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+        <span style="font-size:12.5px;color:var(--fau-text)">Speak replies out loud (background voice)</span>
+      </label>
+
+      <label class="settings-label" style="margin-top:10px"><span>Voice</span></label>
+      <select id="rv-ttsVoice" class="settings-input" style="width:100%">
+        <option value="">— engine default —</option>
+      </select>
+
+      <label class="settings-label" style="margin-top:10px"><span>Rate</span></label>
+      <input id="rv-ttsRate" class="settings-input" type="number" placeholder="default" style="width:160px">
+      <div class="settings-hint">macOS: words/min (default ≈175). Linux: WPM. Windows: -10..10.</div>
+    </div>
+
+    <div class="settings-section" data-resident-voice>
+      <div class="settings-section-title">Dictation</div>
+      <div class="settings-hint" style="margin-bottom:8px">Tap the global hotkey to start recording, tap again to stop. Transcript is copied to your clipboard.</div>
+      <label class="settings-label"><span>Hotkey</span></label>
+      <input id="rv-dictationAccel" class="settings-input" type="text" placeholder="Cmd+Alt+D" style="width:260px">
+      <div class="settings-hint">Electron accelerator syntax — e.g. <code style="font-family:ui-monospace,monospace">Cmd+Shift+D</code>, <code style="font-family:ui-monospace,monospace">Ctrl+Alt+Space</code>.</div>
+
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none;margin-top:10px">
+        <input type="checkbox" id="rv-dictationPasteOnFinish"
+          style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+        <span style="font-size:12.5px;color:var(--fau-text)">Auto-paste into focused window (experimental)</span>
+      </label>
+    </div>
+
+    <div class="settings-section" data-resident-voice>
+      <div class="settings-section-title">Privacy &amp; redaction</div>
+      <div class="settings-hint" style="margin-bottom:8px">Applied before anything is written to <code style="font-family:ui-monospace,monospace">facts.json</code> or <code style="font-family:ui-monospace,monospace">playbooks.json</code>. Cloud keys, JWTs, and tokens are always redacted.</div>
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none">
+        <input type="checkbox" id="rv-redactEmail"
+          style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+        <span style="font-size:12.5px;color:var(--fau-text)">Redact email addresses</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none;margin-top:6px">
+        <input type="checkbox" id="rv-redactPhone"
+          style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+        <span style="font-size:12.5px;color:var(--fau-text)">Redact phone numbers</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none;margin-top:6px">
+        <input type="checkbox" id="rv-redactCreditCard"
+          style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+        <span style="font-size:12.5px;color:var(--fau-text)">Redact credit-card numbers (Luhn validated)</span>
+      </label>
+    </div>
+
+    <div class="settings-section" data-resident-voice>
+      <div class="settings-section-title">Tool budget</div>
+      <div class="settings-hint" style="margin-bottom:8px">Limits how many tools are pitched to the model per turn (relevance-ranked).</div>
+      <label class="settings-label"><span>Top-K tools</span></label>
+      <input id="rv-toolTopK" class="settings-input" type="number" min="1" max="64" style="width:120px">
+
+      <label class="settings-label" style="margin-top:10px"><span>Always-include (comma-separated)</span></label>
+      <input id="rv-toolMustKeep" class="settings-input" type="text"
+        placeholder="agent_read_file, agent_write_file" style="width:100%">
+
+      <div class="settings-input-row" style="margin-top:14px;gap:8px">
+        <button class="settings-row-btn" onclick="rvSaveSettings()">Save background voice settings</button>
+        <button class="settings-row-btn" onclick="rvResetSettings()" style="opacity:.85">Reset to defaults</button>
+        <span id="rv-status" style="font-size:12px;color:var(--fau-text-dim);margin-left:8px"></span>
+      </div>
+    </div>
   </div>
 
   <!-- ── Plugins ──────────────────────────────────────────────── -->
@@ -2249,6 +2345,7 @@ Examples:
 <script src="js/dynamic-widgets.js"></script>
 <script src="js/chat.js"></script>
 <script src="js/voice.js"></script>
+<script src="js/voice-resident-settings.js"></script>
 <script src="js/automation-schedule.js"></script>
 <script src="js/automation-canvas.js"></script>
 <script src="js/automation-builder.js"></script>
