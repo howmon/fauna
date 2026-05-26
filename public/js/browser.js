@@ -2311,7 +2311,11 @@ async function extGrabPage(tabId, browser, clientId) {
 
   try {
     var requestBrowser = String(browser || '').replace(/\s+\(\d+\)$/, '');
-    var body = { action: 'extract' };
+    // Cap the primary extract at 10s. If the content script is stuck (PDF
+    // viewer, restricted page, slow SPA), we want to fall through to the
+    // metadata fallback quickly instead of blocking the UI on the full
+    // server-side 30s ceiling.
+    var body = { action: 'extract', timeout: 10000 };
     if (tabId) body.tabId = tabId;
     if (clientId) body.clientId = clientId;
     else if (requestBrowser) body.browser = requestBrowser;
@@ -2322,7 +2326,7 @@ async function extGrabPage(tabId, browser, clientId) {
     var d = await r.json();
     if ((!d || d.ok === false) && clientId && String(clientId).startsWith('relay-')) {
       // Relay route failed: retry via direct route to match manual "Send page to Fauna" behavior.
-      var retryBody = { action: 'extract' };
+      var retryBody = { action: 'extract', timeout: 10000 };
       if (tabId) retryBody.tabId = tabId;
       if (requestBrowser) retryBody.browser = requestBrowser;
       var r2 = await fetch('/api/ext/command', {
@@ -2346,10 +2350,13 @@ async function extGrabPage(tabId, browser, clientId) {
     }
     if (typeof showToast === 'function') showToast('Page content added to context');
   } catch (e) {
-    // Fallback path: when text extraction is blocked for this tab, try snapshot and tab metadata
-    // so tab selection still yields useful context in standalone Fauna.
+    // Fallback path: when text extraction is blocked for this tab, attach
+    // just the tab metadata so tab selection still yields useful context.
+    // We deliberately do NOT pull a snapshot here — the user picked "Attach
+    // tab", not "Attach snapshot"; that's a separate menu action. Attaching
+    // both used to double-attach and roughly double the latency.
     try {
-      var infoBody = { action: 'tab:info' };
+      var infoBody = { action: 'tab:info', timeout: 6000 };
       if (tabId) infoBody.tabId = tabId;
       if (clientId) infoBody.clientId = clientId;
       else if (browser) infoBody.browser = browser;
@@ -2359,43 +2366,17 @@ async function extGrabPage(tabId, browser, clientId) {
       });
       var infoD = await infoR.json().catch(function() { return {}; });
 
-      var snapBody = { full: false };
-      if (tabId) snapBody.tabId = tabId;
-      if (clientId) snapBody.clientId = clientId;
-      else if (browser) snapBody.browser = browser;
-      var snapR = await fetch('/api/ext/snapshot', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(snapBody)
-      });
-      var snapD = await snapR.json().catch(function() { return {}; });
-
-      var b64 = snapD && (snapD.screenshot || snapD.base64);
-      if (b64 && typeof addAttachment === 'function') {
-        var snapTitle = (infoD && infoD.title) || (snapD && snapD.title) || (snapD && snapD.url) || 'Browser tab';
-        var shortSnap = snapTitle.length > 40 ? snapTitle.slice(0, 37) + '…' : snapTitle;
-        addAttachment({
-          type: 'image',
-          extSource: 'snapshot',
-          name: 'Snapshot — ' + shortSnap,
-          base64: b64,
-          mime: (snapD && snapD.mime) || 'image/png',
-          tabId: tabId,
-          clientId: clientId,
-          browser: browser
-        });
-      }
-
       if (typeof addAttachment === 'function') {
-        var url = (infoD && infoD.url) || (snapD && snapD.url) || '';
-        var title = (infoD && infoD.title) || (snapD && snapD.title) || url || 'Browser tab';
+        var url = (infoD && infoD.url) || '';
+        var title = (infoD && infoD.title) || url || 'Browser tab';
         var infoText =
           (url ? 'Source: ' + url + '\n' : '') +
           (title ? 'Title: ' + title + '\n\n' : '') +
-          'Full page text extraction was blocked for this tab. A snapshot was attached when available.';
+          'Full page text extraction was blocked for this tab. Use the "Attach snapshot" action if you need a screenshot.';
         addAttachment({ type: 'url', extSource: 'page', name: (browser ? browser + ': ' : '') + title, content: infoText, sourceUri: url, tabId: tabId, clientId: clientId, browser: browser });
       }
 
-      if (typeof showToast === 'function') showToast('Tab added using fallback (snapshot/metadata).');
+      if (typeof showToast === 'function') showToast('Tab added (metadata only — extraction blocked).');
       return;
     } catch (_) {}
 
