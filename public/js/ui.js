@@ -644,7 +644,7 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
     // Sanitize write-file blocks — re-populates _wfContentStore from saved message content
     var renderContent = sanitizeWriteFileBlocks(content);
     body.innerHTML += renderMarkdown(renderContent);
-    extractAndRenderFigmaExec(content, el);
+    extractAndRenderFigmaExec(content, el, false); // history load — never auto-run old actions
     extractAndRenderShellExec(content, el, true); // history load — never auto-run old commands
     extractAndRenderBrowserActions(content, el, true);
     if (typeof extractAndRenderBrowserExtActions === 'function') extractAndRenderBrowserExtActions(content, el, true);

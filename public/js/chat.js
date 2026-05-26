@@ -1453,7 +1453,7 @@ async function streamResponse(conv) {
 
         var writeResults = await extractAndRenderWriteFile(msgEl, false, convId);
         var writeFailed = Array.isArray(writeResults) && writeResults.some(function(r) { return r.status === 'rejected'; });
-        extractAndRenderFigmaExec(buffer, msgEl);
+        extractAndRenderFigmaExec(buffer, msgEl, true);
         var suppressShellAutoRun = !!(conv._suppressShellAutoRunOnce || conv._writeRepairMode || writeFailed);
         extractAndRenderShellExec(buffer, msgEl, suppressShellAutoRun, convId);
         extractAndRenderBrowserActions(buffer, msgEl, false, convId);
@@ -1524,7 +1524,7 @@ async function streamResponse(conv) {
       if (typeof initMermaidInContainer === 'function') initMermaidInContainer(bodyEl);
       var bgWriteResults = await extractAndRenderWriteFile(msgEl, false, convId);
       var bgWriteFailed = Array.isArray(bgWriteResults) && bgWriteResults.some(function(r) { return r.status === 'rejected'; });
-      extractAndRenderFigmaExec(buffer, msgEl);
+      extractAndRenderFigmaExec(buffer, msgEl, true);
       var suppressShellAutoRunFinal = !!(conv._suppressShellAutoRunOnce || conv._writeRepairMode || bgWriteFailed);
       extractAndRenderShellExec(buffer, msgEl, suppressShellAutoRunFinal, convId);  // auto-run continues in background unless explicitly suppressed
       extractAndRenderBrowserActions(buffer, msgEl, false, convId);

@@ -372,12 +372,13 @@ function getFigmaContext() {
 
 // ── Figma-exec block execution ────────────────────────────────────────────
 
-function extractAndRenderFigmaExec(html, messageEl) {
+function extractAndRenderFigmaExec(html, messageEl, autoRun) {
   // After markdown rendering, replace <code class="language-figma-exec"> blocks
   // with interactive execution widgets
   var container = messageEl.querySelector('.prose') || messageEl;
   var codeBlocks = container.querySelectorAll('code.language-figma-exec');
   if (!codeBlocks.length) return;
+  var execIds = [];
   codeBlocks.forEach(function(code) {
     var pre = code.parentElement;
     var rawCode = code.textContent;
@@ -393,6 +394,7 @@ function extractAndRenderFigmaExec(html, messageEl) {
       '<div class="figma-exec-result" id="' + execId + '" style="display:none"></div>';
     widget.dataset.code = rawCode;
     pre.parentNode.replaceChild(widget, pre);
+    execIds.push(execId);
   });
 
   // In chain messages (auto-fed responses), hide narration prose — only show the figma widgets
@@ -404,12 +406,36 @@ function extractAndRenderFigmaExec(html, messageEl) {
     });
     messageEl.classList.add('chain-figma-only');
   }
+
+  // Live assistant turns should execute figma-exec blocks automatically.
+  // History re-renders pass autoRun=false to avoid replaying old mutations.
+  if (autoRun) {
+    setTimeout(function() {
+      execIds.forEach(function(id) {
+        runFigmaExec(id, { auto: true }).catch(function() {});
+      });
+    }, 0);
+  }
 }
 
-async function runFigmaExec(execId) {
-  var widget = document.getElementById(execId).parentElement;
-  var code   = widget.dataset.code;
+async function runFigmaExec(execId, opts) {
+  opts = opts || {};
   var resultEl = document.getElementById(execId);
+  if (!resultEl) return;
+  if (resultEl.dataset.running === '1') return;
+  resultEl.dataset.running = '1';
+
+  var widget = resultEl.parentElement;
+  if (!widget) {
+    delete resultEl.dataset.running;
+    return;
+  }
+  var code   = widget.dataset.code;
+  var runBtn = widget.querySelector('.figma-exec-run');
+  if (runBtn) {
+    runBtn.disabled = true;
+    runBtn.innerHTML = opts.auto ? '<i class="ti ti-loader"></i> Auto-running…' : '<i class="ti ti-loader"></i> Running…';
+  }
   resultEl.style.display = 'block';
   resultEl.className = 'figma-exec-result running';
   resultEl.innerHTML = '<i class="ti ti-loader"></i> Running…';
@@ -437,6 +463,12 @@ async function runFigmaExec(execId) {
     resultEl.className = 'figma-exec-result err';
     resultEl.innerHTML = '<i class="ti ti-x"></i> ' + e.message;
     _autoFeedFigmaResult(code, false, e.message);
+  } finally {
+    delete resultEl.dataset.running;
+    if (runBtn) {
+      runBtn.disabled = false;
+      runBtn.innerHTML = '<i class="ti ti-player-play"></i> Run';
+    }
   }
 }
 
