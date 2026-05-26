@@ -28,6 +28,11 @@ function resolveSignedAppPath(context) {
 }
 
 function notarizeAndStapleIfConfigured(context) {
+  if (process.env.APPLE_NOTARIZE_IN_AFTER_SIGN !== '1') {
+    process.stderr.write('[afterSign] Skipping notarization in afterSign (set APPLE_NOTARIZE_IN_AFTER_SIGN=1 to enable).\n');
+    return;
+  }
+
   const appPath = resolveSignedAppPath(context);
   if (!appPath || !fs.existsSync(appPath)) {
     process.stderr.write('[afterSign] Skipping notarization: signed app path not found.\n');
@@ -47,7 +52,7 @@ function notarizeAndStapleIfConfigured(context) {
     return;
   }
 
-  const submitArgs = ['notarytool', 'submit', appPath, '--wait'];
+  const submitArgs = ['notarytool', 'submit', appPath, '--force', '--wait'];
   if (hasProfile) {
     submitArgs.push('--keychain-profile', keychainProfile);
   } else {
