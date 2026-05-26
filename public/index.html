@@ -388,15 +388,17 @@
 
     <!-- Input area -->
     <div id="input-area">
-      <!-- Agent chip bar floats above the input wrap -->
-      <div id="agent-chip-bar" style="display:none"></div>
-      <!-- Pending attachments inline above wrap -->
-      <div id="attach-bar"></div>
-      <!-- Figma active banner (above wrap) -->
-      <div id="figma-mode-banner" style="display:none;align-items:center;gap:6px;padding:5px 10px;margin:0 auto 6px;max-width:820px;background:rgba(98,215,148,.1);border:1px solid rgba(98,215,148,.25);border-radius:8px;font-size:11px;color:#62d794">
-        <i class="ti ti-vector-triangle"></i>
-        <span>Figma MCP active — AI will read &amp; write your Figma file</span>
-        <button onclick="toggleFigmaMCP()" style="margin-left:auto;background:none;border:none;color:#62d794;cursor:pointer;font-size:11px;opacity:.8" title="Disable Figma MCP"><i class="ti ti-x" style="font-size:10px"></i> disable</button>
+      <div id="composer-context-rail">
+        <!-- Agent chip bar floats above the input wrap -->
+        <div id="agent-chip-bar" style="display:none"></div>
+        <!-- Pending attachments inline above wrap -->
+        <div id="attach-bar"></div>
+        <!-- Figma active banner (above wrap) -->
+        <div id="figma-mode-banner" style="display:none" role="status" aria-live="polite">
+          <i class="ti ti-vector-triangle"></i>
+          <span>Figma MCP active — AI will read and write your Figma file</span>
+          <button id="figma-mode-disable-btn" onclick="toggleFigmaMCP()" title="Disable Figma MCP"><i class="ti ti-x"></i> Disable</button>
+        </div>
       </div>
       <div id="input-wrap">
         <!-- Agent autocomplete dropdown -->

@@ -1091,9 +1091,11 @@ function renderAttachBar() {
 }
 
 function _renderChip(att, i) {
-  var extCls = att.extSource ? ' pending-chip-ext' : '';
+  var isFigmaAttachment = !!(att && (att.type === 'figma_file' || att.extSource === 'figma'));
+  var extCls = (att.extSource && !isFigmaAttachment) ? ' pending-chip-ext' : '';
+  if (isFigmaAttachment) extCls += ' pending-chip-figma';
   var isBrowserPersistent = typeof _isBrowserTabReferenceAttachment === 'function' && _isBrowserTabReferenceAttachment(att);
-  var isFigmaPersistent = !!(att && (att.type === 'figma_file' || att.extSource === 'figma') && att.fileKey);
+  var isFigmaPersistent = !!(isFigmaAttachment && att.fileKey);
   var isPersistent = isBrowserPersistent || isFigmaPersistent;
   if (isPersistent) extCls += ' pending-chip-pinned';
   var pinnedTitle = isPersistent ? ' title="Pinned to this conversation — stays attached until you remove it"' : '';
