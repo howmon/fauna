@@ -2252,16 +2252,18 @@ async function _loadExtTabs() {
           try { domain = new URL(tab.url).hostname; } catch (_) { domain = tab.url || ''; }
           var shortDomain = domain.length > 35 ? domain.slice(0, 32) + '…' : domain;
           var bAttr = ' data-browser="' + escHtml(res.browser) + '" data-client-id="' + escHtml(cId) + '"';
+          var rowClick = 'extGrabPage(' + tab.id + ',\'' + escHtml(res.browser) + '\',\'' + escHtml(cId) + '\')';
+          var snapClick = 'extGrabSnapshot(' + tab.id + ',\'' + escHtml(res.browser) + '\',\'' + escHtml(cId) + '\')';
 
-          html += '<div class="ext-tab-item"' + bAttr + '>' +
+          html += '<div class="ext-tab-item"' + bAttr + ' onclick="' + rowClick + '" title="Insert page content">' +
             (tab.active ? '<span class="ext-tab-active-dot" title="Active tab"></span>' : '<span style="width:5px;flex-shrink:0"></span>') +
             '<div class="ext-tab-info">' +
               '<div class="ext-tab-title">' + escHtml(shortTitle) + '</div>' +
               '<div class="ext-tab-url">' + escHtml(shortDomain) + '</div>' +
             '</div>' +
             '<div class="ext-tab-actions">' +
-              '<button onclick="extGrabPage(' + tab.id + ',\'' + escHtml(res.browser) + '\',\'' + escHtml(cId) + '\')" title="Insert page content"><i class="ti ti-file-text"></i></button>' +
-              '<button onclick="extGrabSnapshot(' + tab.id + ',\'' + escHtml(res.browser) + '\',\'' + escHtml(cId) + '\')" title="Insert screenshot"><i class="ti ti-camera"></i></button>' +
+              '<button onclick="event.stopPropagation();' + rowClick + '" title="Insert page content"><i class="ti ti-file-text"></i></button>' +
+              '<button onclick="event.stopPropagation();' + snapClick + '" title="Insert screenshot"><i class="ti ti-camera"></i></button>' +
             '</div>' +
           '</div>';
         });
