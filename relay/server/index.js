@@ -284,9 +284,12 @@ wss.on('connection', ws => {
       // Send current state to controller
       const sys = getActiveSystem();
       ws.send(JSON.stringify({ type: 'active-system', id: sys.id, name: sys.name }));
-      if (activeFileKey) {
-        const activConn = clients.get(activeFileKey);
-        if (activConn && activConn.fileInfo) ws.send(JSON.stringify({ type: 'FILE_INFO', ...activConn.fileInfo }));
+      // Announce all currently connected plugin files so a newly connected
+      // controller can populate its full file list immediately.
+      for (const c of clients.values()) {
+        if (!c.isController && c.fileInfo) {
+          ws.send(JSON.stringify({ type: 'FILE_INFO', ...c.fileInfo }));
+        }
       }
       return;
     }
