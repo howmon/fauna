@@ -146,6 +146,9 @@ jobs:
       - name: Install FaunaMCP dependencies
         run: npm --prefix faunaMCP-main ci
 
+      - name: Install FaunaMCP relay sub-dependencies
+        run: npm --prefix faunaMCP-main run install:relays
+
       - name: Build FaunaMCP Windows x64 NSIS installer
         run: npm --prefix faunaMCP-main run dist:win -- --x64
 

@@ -5,8 +5,8 @@
   "description": "FaunaMCP — Unified MCP relay tray utility. Bridges the Fauna browser extension and Figma plugin to any MCP-capable AI tool.",
   "main": "main.js",
   "scripts": {
-    "postinstall": "npm run install:relays",
-    "install:relays": "npm --prefix browser-server install && npm --prefix figma-server install",
+    "postinstall": "node -e \"console.log('postinstall: run npm run install:relays separately if needed')\"",
+    "install:relays": "npm --prefix browser-server ci && npm --prefix figma-server ci",
     "start": "electron .",
     "dist": "electron-builder",
     "dist:mac": "electron-builder --mac",

@@ -35,7 +35,7 @@
   },
   "scripts": {
     "prepare:relay": "npm --prefix relay ci --omit=dev --no-audit --no-fund",
-    "build:whisper": "node -e \"const fs=require('fs'),cp=require('child_process'),p=require('path');const d=p.join('node_modules','nodejs-whisper','cpp','whisper.cpp');const bin=p.join(d,'build','bin','whisper-cli');if(fs.existsSync(bin)){console.log('[whisper] whisper-cli already built');process.exit(0)}if(!fs.existsSync(d)){console.error('[whisper] nodejs-whisper not installed');process.exit(0)}console.log('[whisper] building whisper.cpp via cmake...');cp.execSync('cmake -B build',{cwd:d,stdio:'inherit'});cp.execSync('cmake --build build --config Release -j',{cwd:d,stdio:'inherit'});\"",
+    "build:whisper": "node -e \"const fs=require('fs'),cp=require('child_process'),p=require('path');if(process.platform==='win32'){console.log('[whisper] skipping native whisper.cpp build on Windows');process.exit(0)}const d=p.join('node_modules','nodejs-whisper','cpp','whisper.cpp');const bin=p.join(d,'build','bin','whisper-cli');if(fs.existsSync(bin)){console.log('[whisper] whisper-cli already built');process.exit(0)}if(!fs.existsSync(d)){console.error('[whisper] nodejs-whisper not installed');process.exit(0)}console.log('[whisper] building whisper.cpp via cmake...');cp.execSync('cmake -B build',{cwd:d,stdio:'inherit'});cp.execSync('cmake --build build --config Release -j',{cwd:d,stdio:'inherit'});\"",
     "start": "electron .",
     "cli": "node cli.js",
     "serve": "node cli.js --server",
