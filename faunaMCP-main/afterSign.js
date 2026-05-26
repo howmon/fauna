@@ -20,6 +20,47 @@ const os   = require('os');
 const fs   = require('fs');
 const { execSync, execFileSync } = require('child_process');
 
+function resolveSignedAppPath(context) {
+  const appOutDir = context?.appOutDir;
+  const productFilename = context?.packager?.appInfo?.productFilename;
+  if (!appOutDir || !productFilename) return null;
+  return path.join(appOutDir, `${productFilename}.app`);
+}
+
+function notarizeAndStapleIfConfigured(context) {
+  const appPath = resolveSignedAppPath(context);
+  if (!appPath || !fs.existsSync(appPath)) {
+    process.stderr.write('[afterSign] Skipping notarization: signed app path not found.\n');
+    return;
+  }
+
+  const keychainProfile = process.env.APPLE_NOTARY_PROFILE || '';
+  const appleId = process.env.APPLE_ID || '';
+  const applePassword = process.env.APPLE_APP_SPECIFIC_PASSWORD || '';
+  const teamId = process.env.APPLE_TEAM_ID || '';
+
+  const hasProfile = Boolean(keychainProfile);
+  const hasDirectCreds = Boolean(appleId && applePassword && teamId);
+
+  if (!hasProfile && !hasDirectCreds) {
+    process.stderr.write('[afterSign] Skipping notarization: provide APPLE_NOTARY_PROFILE or APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID.\n');
+    return;
+  }
+
+  const submitArgs = ['notarytool', 'submit', appPath, '--wait'];
+  if (hasProfile) {
+    submitArgs.push('--keychain-profile', keychainProfile);
+  } else {
+    submitArgs.push('--apple-id', appleId, '--password', applePassword, '--team-id', teamId);
+  }
+
+  process.stderr.write(`[afterSign] Submitting for notarization: ${appPath}\n`);
+  execFileSync('xcrun', submitArgs, { stdio: 'inherit' });
+
+  process.stderr.write(`[afterSign] Stapling notarization ticket: ${appPath}\n`);
+  execFileSync('xcrun', ['stapler', 'staple', '-v', appPath], { stdio: 'inherit' });
+}
+
 const BUGGY_DETACH = [
   '    if ret:',
   '        hdiutil("detach", "-force", device, plist=False)',
@@ -71,4 +112,7 @@ exports.default = async function afterSign(_context) {
     execSync('pkill -x mds_stores', { stdio: 'ignore' });
     await new Promise(r => setTimeout(r, 600));
   } catch (_) {}
+
+  // 3. Notarize + staple when credentials are configured
+  notarizeAndStapleIfConfigured(_context);
 };
