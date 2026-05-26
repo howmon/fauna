@@ -60,6 +60,7 @@ function updateFigmaMCPBadge() {
 
   // Sync plus menu Figma item badge
   if (typeof _refreshTbFigmaItem === 'function') _refreshTbFigmaItem();
+  if (typeof _refreshTbFigmaPicker === 'function') _refreshTbFigmaPicker();
 }
 
 function setFigmaSectionVisible(show) {
@@ -168,6 +169,36 @@ function updateFigmaStatusUI() {
     fmeta.textContent = 'Click Start to launch';
     badge.style.display = 'none';
   }
+
+  _syncPinnedFigmaAttachments();
+  if (typeof _refreshTbFigmaPicker === 'function') _refreshTbFigmaPicker();
+}
+
+function _syncPinnedFigmaAttachments() {
+  if (!state || !Array.isArray(state.pendingAttachments) || !state.pendingAttachments.length) return;
+  var connected = new Map();
+  (figmaStatus.connectedFiles || []).forEach(function(f) {
+    if (f && f.fileKey) connected.set(f.fileKey, f);
+  });
+  var changed = false;
+  for (var i = 0; i < state.pendingAttachments.length; i++) {
+    var a = state.pendingAttachments[i];
+    if (!a || !(a.type === 'figma_file' || a.extSource === 'figma') || !a.fileKey) continue;
+    var live = connected.get(a.fileKey);
+    var disconnected = !live;
+    if (!!a.figmaDisconnected !== disconnected) {
+      a.figmaDisconnected = disconnected;
+      changed = true;
+    }
+    if (live) {
+      var nextName = live.fileName || a.name;
+      var nextPage = live.currentPage || '';
+      if (nextName && a.name !== nextName) { a.name = nextName; changed = true; }
+      if ((a.currentPage || '') !== nextPage) { a.currentPage = nextPage; changed = true; }
+      if (live.timestamp && a.timestamp !== live.timestamp) { a.timestamp = live.timestamp; changed = true; }
+    }
+  }
+  if (changed && typeof renderAttachBar === 'function') renderAttachBar();
 }
 
 function toggleFigmaSection() {

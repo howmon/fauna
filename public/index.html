@@ -427,10 +427,13 @@
                 <div id="tb-agent-menu" style="display:none"></div>
               </div>
               <div class="tb-pm-sep"></div>
-              <button class="tb-pm-item" id="tb-figma-item" onclick="toggleFigmaMCP();closeTbPlusMenu()">
-                <i class="ti ti-vector-triangle"></i><span>Figma MCP</span>
-                <span id="tb-figma-item-state" class="tb-pm-badge">off</span>
-              </button>
+              <div id="tb-figma-item-wrap" style="position:relative">
+                <button class="tb-pm-item" id="tb-figma-item" onclick="toggleTbFigmaMenu(event)">
+                  <i class="ti ti-vector-triangle"></i><span>Figma MCP</span>
+                  <span id="tb-figma-item-state" class="tb-pm-badge">off</span>
+                </button>
+                <div id="tb-figma-menu" style="display:none"></div>
+              </div>
               <div id="tb-ext-item-wrap" style="position:relative">
                 <span id="ext-toolbar-badge" onclick="toggleExtTabMenu()" title="Web Browser MCP — click to see tabs">
                   <i class="ti ti-browser"></i>
@@ -1746,6 +1749,9 @@ Examples:
     _tbAgentOpen = false;
     var am = document.getElementById('tb-agent-menu');
     if (am) am.style.display = 'none';
+    _tbFigmaOpen = false;
+    var fm = document.getElementById('tb-figma-menu');
+    if (fm) fm.style.display = 'none';
   }
   function _closeTbPlusOutside(e) {
     var wrap = document.getElementById('tb-plus-wrap');
@@ -1765,15 +1771,141 @@ Examples:
     var enabled    = typeof state !== 'undefined' && state.figmaMCPEnabled;
     // Use actual relay connection state, not the always-true figmaMCPStatus.connected
     var relayReady = typeof figmaStatus !== 'undefined' && (figmaStatus.relayConnected || figmaStatus.mcpRunning);
-    if (enabled && relayReady) {
-      badge.textContent = 'on'; badge.className = 'tb-pm-badge tb-pm-badge-on';
-    } else if (!enabled && relayReady) {
-      badge.textContent = 'ready'; badge.className = 'tb-pm-badge tb-pm-badge-ready';
-    } else if (enabled) {
-      badge.textContent = 'on'; badge.className = 'tb-pm-badge tb-pm-badge-warn';
-    } else {
-      badge.textContent = 'off'; badge.className = 'tb-pm-badge';
+    var selectedCount = 0;
+    try {
+      if (typeof getSelectedFigmaFileKeys === 'function') {
+        selectedCount = getSelectedFigmaFileKeys().length;
+      }
+    } catch (_) {}
+
+    function _setBadge(base, cls) {
+      badge.textContent = selectedCount > 0 ? (base + ' · ' + selectedCount) : base;
+      badge.className = cls;
     }
+
+    if (enabled && relayReady) {
+      _setBadge('on', 'tb-pm-badge tb-pm-badge-on');
+    } else if (!enabled && relayReady) {
+      _setBadge('ready', 'tb-pm-badge tb-pm-badge-ready');
+    } else if (enabled) {
+      _setBadge('on', 'tb-pm-badge tb-pm-badge-warn');
+    } else {
+      _setBadge('off', 'tb-pm-badge');
+    }
+  }
+
+  // ── Figma picker inside the + menu ───────────────────────────────────
+  var _tbFigmaOpen = false;
+  function toggleTbFigmaMenu(e) {
+    if (e) e.stopPropagation();
+    _tbFigmaOpen = !_tbFigmaOpen;
+    var menu = document.getElementById('tb-figma-menu');
+    if (!menu) return;
+    menu.style.display = _tbFigmaOpen ? '' : 'none';
+    if (_tbFigmaOpen) _renderTbFigmaMenu();
+  }
+
+  async function _tbFigmaToggleMCP() {
+    if (typeof toggleFigmaMCP === 'function') await toggleFigmaMCP();
+    if (typeof pollFigmaStatus === 'function') await pollFigmaStatus();
+    _refreshTbFigmaItem();
+    _renderTbFigmaMenu();
+  }
+
+  function _tbFigmaEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+    });
+  }
+
+  function _tbFigmaPinnedSet() {
+    var out = new Set();
+    var list = (typeof state !== 'undefined' && state && Array.isArray(state.pendingAttachments)) ? state.pendingAttachments : [];
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i];
+      if (a && (a.type === 'figma_file' || a.extSource === 'figma') && a.fileKey) out.add(a.fileKey);
+    }
+    return out;
+  }
+
+  function _tbFigmaSortFiles(files) {
+    return (files || []).slice().sort(function(a, b) {
+      var at = Number(a && a.timestamp) || 0;
+      var bt = Number(b && b.timestamp) || 0;
+      return bt - at;
+    });
+  }
+
+  async function _tbFigmaTogglePin(fileKey) {
+    if (!fileKey) return;
+    var files = _tbFigmaSortFiles((typeof figmaStatus !== 'undefined' && figmaStatus && figmaStatus.connectedFiles) || []);
+    var f = files.find(function(x) { return x && x.fileKey === fileKey; });
+    var list = (typeof state !== 'undefined' && state && Array.isArray(state.pendingAttachments)) ? state.pendingAttachments : [];
+    var idx = -1;
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i];
+      if (a && (a.type === 'figma_file' || a.extSource === 'figma') && a.fileKey === fileKey) { idx = i; break; }
+    }
+    if (idx >= 0) {
+      if (typeof removeAttachment === 'function') removeAttachment(idx);
+    } else if (f && typeof addAttachment === 'function') {
+      addAttachment({
+        type: 'figma_file',
+        extSource: 'figma',
+        name: f.fileName || ('Figma ' + f.fileKey),
+        sourceUri: 'figma://' + encodeURIComponent(f.fileKey),
+        fileKey: f.fileKey,
+        currentPage: f.currentPage || '',
+        timestamp: f.timestamp || Date.now(),
+        content: ''
+      });
+    }
+    _refreshTbFigmaItem();
+    _renderTbFigmaMenu();
+  }
+
+  function _renderTbFigmaMenu() {
+    var menu = document.getElementById('tb-figma-menu');
+    if (!menu) return;
+    var enabled = !!(typeof state !== 'undefined' && state && state.figmaMCPEnabled);
+    var status = (typeof figmaStatus !== 'undefined' && figmaStatus) ? figmaStatus : {};
+    var files = _tbFigmaSortFiles(status.connectedFiles || []);
+    var pinned = _tbFigmaPinnedSet();
+
+    var head =
+      '<div class="tb-fm-head">' +
+        '<span class="tb-fm-title">Pick Figma files</span>' +
+        '<button class="tb-fm-toggle ' + (enabled ? 'on' : '') + '" onclick="_tbFigmaToggleMCP()">' + (enabled ? 'Disable MCP' : 'Enable MCP') + '</button>' +
+      '</div>' +
+      '<div class="tb-fm-sub">' +
+        (files.length
+          ? (files.length + ' connected · ' + pinned.size + ' pinned')
+          : 'No connected files. Open the FaunaMCP plugin in Figma.') +
+      '</div>';
+
+    if (!files.length) {
+      menu.innerHTML = head + '<div class="tb-fm-empty">No Figma files detected yet.</div>';
+      return;
+    }
+
+    var rows = files.map(function(f) {
+      var isPinned = pinned.has(f.fileKey);
+      var page = f.currentPage ? ('Page: ' + _tbFigmaEsc(f.currentPage)) : 'Page unknown';
+      return '<div class="tb-fm-row">' +
+        '<div class="tb-fm-meta">' +
+          '<div class="tb-fm-name" title="' + _tbFigmaEsc(f.fileName || f.fileKey) + '">' + _tbFigmaEsc(f.fileName || f.fileKey) + '</div>' +
+          '<div class="tb-fm-page">' + page + '</div>' +
+        '</div>' +
+        '<button class="tb-fm-pin ' + (isPinned ? 'on' : '') + '" onclick="_tbFigmaTogglePin(\'' + String(f.fileKey || '').replace(/\\/g,'\\\\').replace(/'/g, "\\'") + '\')">' + (isPinned ? 'Unpin' : 'Pin') + '</button>' +
+      '</div>';
+    }).join('');
+
+    menu.innerHTML = head + '<div class="tb-fm-list">' + rows + '</div>';
+  }
+
+  function _refreshTbFigmaPicker() {
+    if (_tbFigmaOpen) _renderTbFigmaMenu();
+    _refreshTbFigmaItem();
   }
 
   // ── Agent submenu inside the + menu ────────────────────────────────────

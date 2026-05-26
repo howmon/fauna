@@ -23,6 +23,27 @@ function _isBrowserTabReferenceAttachment(att) {
   return !!(att && att.extSource && (att.tabId || att.clientId || att.browser));
 }
 
+function _isFigmaFileReferenceAttachment(att) {
+  return !!(att && (att.type === 'figma_file' || att.extSource === 'figma') && att.fileKey);
+}
+
+function _getSelectedFigmaFileKeysFromAttachments(attachments) {
+  var list = Array.isArray(attachments) ? attachments : (state && state.pendingAttachments) || [];
+  var seen = new Set();
+  var out = [];
+  for (var i = 0; i < list.length; i++) {
+    var a = list[i];
+    if (_isFigmaFileReferenceAttachment(a) && !seen.has(a.fileKey)) {
+      seen.add(a.fileKey);
+      out.push(a.fileKey);
+    }
+  }
+  return out;
+}
+window.getSelectedFigmaFileKeys = function() {
+  return _getSelectedFigmaFileKeysFromAttachments();
+};
+
 async function _buildLiveBrowserAttachmentContext(attachments) {
   if (!attachments || !attachments.length) return '';
   var refs = attachments.filter(_isBrowserTabReferenceAttachment);
@@ -444,6 +465,7 @@ async function sendMessage(opts) {
       } else {
         var label = att.extSource === 'page'      ? 'Browser page: '      + att.name
                   : att.extSource === 'selection' ? 'Browser selection from ' + (att.sourceUri || att.name)
+                  : _isFigmaFileReferenceAttachment(att) ? 'Figma file: ' + att.name
                   : att.type === 'url'            ? 'URL: ' + att.name
                   : 'File: ' + att.name;
         var ref = att.sourceUri || ('attachment://' + encodeURIComponent(att.name || 'file'));
@@ -454,10 +476,15 @@ async function sendMessage(opts) {
         if (att.browser) meta.push('browser=' + att.browser);
         if (att.tabId) meta.push('tabId=' + att.tabId);
         if (att.clientId) meta.push('clientId=' + att.clientId);
+        if (att.fileKey) meta.push('fileKey=' + att.fileKey);
+        if (att.currentPage) meta.push('page=' + att.currentPage);
         var header = '// ' + label + '\n// Ref: ' + ref + (meta.length ? '\n// Meta: ' + meta.join(', ') : '');
         if (_isBrowserTabReferenceAttachment(att)) {
           var note = 'Browser tab attached via the extension; its live content is resolved inline below (if extraction succeeded). Use that content directly — do NOT open the in-app `fauna_browser` webview to re-fetch it (that is a different, blank browser).';
           content += '\n\n```\n' + header + '\n// ' + note + '\n```';
+        } else if (_isFigmaFileReferenceAttachment(att)) {
+          var figmaNote = 'Selected Figma target. Prefer this file when calling figma_execute. If multiple Figma files are selected, use the fileKey explicitly.';
+          content += '\n\n```\n' + header + '\n// ' + figmaNote + '\n```';
         } else {
           content += '\n\n```\n' + header + '\n' + (att.content || '') + '\n```';
         }
@@ -486,12 +513,16 @@ async function sendMessage(opts) {
       return {
         type: a.type,
         name: a.name,
-        content: a.type === 'image' || _isBrowserTabReferenceAttachment(a) ? undefined : a.content,
+        content: a.type === 'image' || _isBrowserTabReferenceAttachment(a) || _isFigmaFileReferenceAttachment(a) ? undefined : a.content,
         sourceUri: a.sourceUri,
         extSource: a.extSource,
         browser: a.browser,
         tabId: a.tabId,
         clientId: a.clientId,
+        fileKey: a.fileKey,
+        currentPage: a.currentPage,
+        timestamp: a.timestamp,
+        figmaDisconnected: !!a.figmaDisconnected,
         size: a.size,
         warning: a.warning,
         base64: a.type === 'image' ? a.base64 : undefined,
@@ -531,6 +562,7 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
     } else {
       var label = att.extSource === 'page'      ? 'Browser page: '      + att.name
                 : att.extSource === 'selection' ? 'Browser selection from ' + (att.sourceUri || att.name)
+                : _isFigmaFileReferenceAttachment(att) ? 'Figma file: ' + att.name
                 : att.type === 'url'            ? 'URL: ' + att.name
                 : 'File: ' + att.name;
       var ref = att.sourceUri || ('attachment://' + encodeURIComponent(att.name || 'file'));
@@ -541,10 +573,15 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
       if (att.browser) meta.push('browser=' + att.browser);
       if (att.tabId) meta.push('tabId=' + att.tabId);
       if (att.clientId) meta.push('clientId=' + att.clientId);
+      if (att.fileKey) meta.push('fileKey=' + att.fileKey);
+      if (att.currentPage) meta.push('page=' + att.currentPage);
       var header = '// ' + label + '\n// Ref: ' + ref + (meta.length ? '\n// Meta: ' + meta.join(', ') : '');
       if (_isBrowserTabReferenceAttachment(att)) {
         var note = 'Browser tab attached via the extension; its live content is resolved inline below (if extraction succeeded). Use that content directly — do NOT open the in-app `fauna_browser` webview to re-fetch it (that is a different, blank browser).';
         content += '\n\n```\n' + header + '\n// ' + note + '\n```';
+      } else if (_isFigmaFileReferenceAttachment(att)) {
+        var figmaNote = 'Selected Figma target. Prefer this file when calling figma_execute. If multiple Figma files are selected, use the fileKey explicitly.';
+        content += '\n\n```\n' + header + '\n// ' + figmaNote + '\n```';
       } else {
         content += '\n\n```\n' + header + '\n' + (att.content || '') + '\n```';
       }
@@ -690,6 +727,7 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
         timeEl.textContent = ((Date.now() - start) / 1000).toFixed(0) + 's';
     }, 500);
     var userContent = task + (priorResultsText ? '\n\n---\nPrevious agent results for context:\n' + priorResultsText : '');
+    var selectedFigmaFileKeys = _getSelectedFigmaFileKeysFromAttachments(attachments);
     return fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -700,6 +738,7 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
         agentName: agent.name,
         isDelegation: true,
         useFigmaMCP: !!(agent.permissions && agent.permissions.figma),
+        selectedFigmaFileKeys,
         usePlaywrightMCP: !!(agent.permissions && agent.permissions.browser),
         thinkingBudget: state.thinkingBudget || 'high',
         systemPrompt: '## Active Agent: ' + agent.displayName + '\n\n' + (agent.systemPrompt || '') + '\n\nYou are running as one of several agents in a multi-agent session. Complete your assigned task thoroughly.'
@@ -997,7 +1036,7 @@ async function streamResponse(conv) {
     var _ctxUsage = null;
 
     // Build chat request body — include agent info when active
-    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: state.figmaMCPEnabled, usePlaywrightMCP: state.playwrightMCPEnabled || false, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false };
+    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: state.figmaMCPEnabled, usePlaywrightMCP: state.playwrightMCPEnabled || false, selectedFigmaFileKeys: _getSelectedFigmaFileKeysFromAttachments(state.pendingAttachments), contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false };
     // If the selected model is a Local model, echo provider info so the
     // server routes the request to the configured OpenAI-compatible endpoint
     // instead of Copilot. Lookup is by id in the picker-model list.

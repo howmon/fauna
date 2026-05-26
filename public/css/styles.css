@@ -1543,6 +1543,63 @@ body.is-resizing webview { pointer-events: none !important; }
 }
 #tb-agent-menu .tb-am-action i { font-size: 13px; }
 
+/* ── Figma picker inside the plus menu ────────────────────────────── */
+#tb-figma-item-wrap { position: relative; }
+#tb-figma-menu {
+  position: absolute; bottom: calc(100% + 2px); left: calc(100% + 4px);
+  min-width: 290px; max-width: 360px; max-height: 360px; overflow-y: auto;
+  background: var(--fau-surface); border: 1px solid var(--fau-border); border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.5); z-index: 900;
+  padding: 8px; font-size: 12px;
+}
+#tb-figma-menu .tb-fm-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-bottom: 4px;
+}
+#tb-figma-menu .tb-fm-title {
+  color: var(--fau-text); font-weight: 600;
+}
+#tb-figma-menu .tb-fm-toggle {
+  border: 1px solid var(--fau-border); background: var(--fau-surface2);
+  color: var(--fau-text-dim); border-radius: 6px; padding: 4px 8px;
+  font-size: 11px; cursor: pointer;
+}
+#tb-figma-menu .tb-fm-toggle:hover { color: var(--fau-text); }
+#tb-figma-menu .tb-fm-toggle.on {
+  color: #62d794; border-color: rgba(98,215,148,.45); background: rgba(98,215,148,.12);
+}
+#tb-figma-menu .tb-fm-sub {
+  color: var(--fau-text-muted); font-size: 10.5px; margin-bottom: 7px;
+}
+#tb-figma-menu .tb-fm-empty {
+  padding: 10px 8px; color: var(--fau-text-dim); font-size: 11px;
+  border: 1px dashed var(--fau-border); border-radius: 8px;
+}
+#tb-figma-menu .tb-fm-list { display: flex; flex-direction: column; gap: 6px; }
+#tb-figma-menu .tb-fm-row {
+  display: flex; align-items: center; gap: 8px;
+  border: 1px solid var(--fau-border); border-radius: 8px;
+  background: var(--fau-surface2); padding: 7px 8px;
+}
+#tb-figma-menu .tb-fm-meta { flex: 1; min-width: 0; }
+#tb-figma-menu .tb-fm-name {
+  color: var(--fau-text); font-size: 11.5px; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#tb-figma-menu .tb-fm-page {
+  color: var(--fau-text-muted); font-size: 10px; margin-top: 2px;
+}
+#tb-figma-menu .tb-fm-pin {
+  border: 1px solid var(--fau-border); background: var(--fau-surface);
+  color: var(--fau-text-dim); border-radius: 6px;
+  padding: 4px 8px; min-width: 58px;
+  font-size: 11px; cursor: pointer;
+}
+#tb-figma-menu .tb-fm-pin:hover { color: var(--fau-text); }
+#tb-figma-menu .tb-fm-pin.on {
+  color: #62d794; border-color: rgba(98,215,148,.45); background: rgba(98,215,148,.12);
+}
+
 /* ── Toolbar model picker ──────────────────────────────────────────── */
 #tb-model-wrap { position: relative; flex-shrink: 0; margin-left: 2px; }
 #tb-model-btn {
