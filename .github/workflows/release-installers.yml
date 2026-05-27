@@ -59,7 +59,29 @@ jobs:
             exit 0
           fi
           for f in dist/*.dmg; do
-            xcrun notarytool submit "$f" --wait --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD"
+            echo "Submitting $f for notarization..."
+            submission_json="$(xcrun notarytool submit "$f" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --output-format json)"
+            submission_id="$(printf '%s' "$submission_json" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+            echo "Submission ID: $submission_id"
+
+            ok=0
+            for attempt in 1 2 3; do
+              if xcrun notarytool wait "$submission_id" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --timeout 20m; then
+                ok=1
+                break
+              fi
+              if [[ "$attempt" -lt 3 ]]; then
+                echo "notarytool wait timed out/failed for $f (attempt $attempt). Retrying wait..."
+                sleep 20
+              fi
+            done
+
+            if [[ "$ok" -ne 1 ]]; then
+              echo "Notarization wait failed for $f"
+              xcrun notarytool log "$submission_id" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" || true
+              exit 1
+            fi
+
             xcrun stapler staple -v "$f"
           done
 
@@ -93,7 +115,29 @@ jobs:
             exit 0
           fi
           for f in faunaMCP-main/dist/*.dmg; do
-            xcrun notarytool submit "$f" --wait --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD"
+            echo "Submitting $f for notarization..."
+            submission_json="$(xcrun notarytool submit "$f" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --output-format json)"
+            submission_id="$(printf '%s' "$submission_json" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+            echo "Submission ID: $submission_id"
+
+            ok=0
+            for attempt in 1 2 3; do
+              if xcrun notarytool wait "$submission_id" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --timeout 20m; then
+                ok=1
+                break
+              fi
+              if [[ "$attempt" -lt 3 ]]; then
+                echo "notarytool wait timed out/failed for $f (attempt $attempt). Retrying wait..."
+                sleep 20
+              fi
+            done
+
+            if [[ "$ok" -ne 1 ]]; then
+              echo "Notarization wait failed for $f"
+              xcrun notarytool log "$submission_id" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" || true
+              exit 1
+            fi
+
             xcrun stapler staple -v "$f"
           done
 
@@ -144,7 +188,29 @@ jobs:
             exit 0
           fi
           for f in dist/*.dmg; do
-            xcrun notarytool submit "$f" --wait --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD"
+            echo "Submitting $f for notarization..."
+            submission_json="$(xcrun notarytool submit "$f" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --output-format json)"
+            submission_id="$(printf '%s' "$submission_json" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+            echo "Submission ID: $submission_id"
+
+            ok=0
+            for attempt in 1 2 3; do
+              if xcrun notarytool wait "$submission_id" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --timeout 20m; then
+                ok=1
+                break
+              fi
+              if [[ "$attempt" -lt 3 ]]; then
+                echo "notarytool wait timed out/failed for $f (attempt $attempt). Retrying wait..."
+                sleep 20
+              fi
+            done
+
+            if [[ "$ok" -ne 1 ]]; then
+              echo "Notarization wait failed for $f"
+              xcrun notarytool log "$submission_id" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" || true
+              exit 1
+            fi
+
             xcrun stapler staple -v "$f"
           done
 
@@ -178,7 +244,29 @@ jobs:
             exit 0
           fi
           for f in faunaMCP-main/dist/*.dmg; do
-            xcrun notarytool submit "$f" --wait --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD"
+            echo "Submitting $f for notarization..."
+            submission_json="$(xcrun notarytool submit "$f" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --output-format json)"
+            submission_id="$(printf '%s' "$submission_json" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+            echo "Submission ID: $submission_id"
+
+            ok=0
+            for attempt in 1 2 3; do
+              if xcrun notarytool wait "$submission_id" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --timeout 20m; then
+                ok=1
+                break
+              fi
+              if [[ "$attempt" -lt 3 ]]; then
+                echo "notarytool wait timed out/failed for $f (attempt $attempt). Retrying wait..."
+                sleep 20
+              fi
+            done
+
+            if [[ "$ok" -ne 1 ]]; then
+              echo "Notarization wait failed for $f"
+              xcrun notarytool log "$submission_id" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" || true
+              exit 1
+            fi
+
             xcrun stapler staple -v "$f"
           done
 
