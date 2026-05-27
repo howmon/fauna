@@ -43,8 +43,9 @@ describe('self-tools', () => {
     it('exports the expected number of tool definitions', () => {
       // Bumped from 17 → 22 after adding fauna_shell_exec, fauna_read_file,
       // fauna_replace_string, fauna_apply_patch, fauna_browser (Codex-style
-      // native tool migration, Phases 2–4).
-      expect(SELF_TOOL_DEFS).toHaveLength(22);
+      // native tool migration, Phases 2–4). Bumped to 24 after adding
+      // fauna_list_windows and fauna_arrange_windows.
+      expect(SELF_TOOL_DEFS).toHaveLength(24);
     });
 
     it('each tool has required OpenAI function format', () => {

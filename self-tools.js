@@ -22,6 +22,11 @@ import {
   savePlaybookEntry, listPlaybookEntries, getPlaybookEntry,
   touchPlaybookEntry, deletePlaybookEntry,
 } from './playbook-store.js';
+import {
+  listVisibleWindows as macListVisibleWindows,
+  arrangeWindows as macArrangeWindows,
+  getScreenBounds as macGetScreenBounds,
+} from './server/lib/mac-window-context.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -493,6 +498,46 @@ export const SELF_TOOL_DEFS = [
       },
     },
   },
+
+  // ── Desktop window context (macOS) ──
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_list_windows',
+      description: 'macOS only. List the apps the user currently has visible on their desktop, including each window\'s title, position (x,y) and size (w,h), plus which app is frontmost and the main screen bounds. Use this whenever the user asks "what apps are open", "which window is focused", "tile / arrange / move my windows", or you need spatial context before calling fauna_arrange_windows. Requires Accessibility permission for Fauna.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_arrange_windows',
+      description: 'macOS only. Move and/or resize specific app windows. Pass an array of moves; each move targets one app and sets {x,y,w,h} in screen coordinates. Use fauna_list_windows first to get exact app names and the screen size — then compute coords (e.g. half-screen split, quadrants). windowIndex defaults to 1 (frontmost window of that app); use windowTitle for exact-match targeting. Requires Accessibility permission for Fauna.',
+      parameters: {
+        type: 'object',
+        properties: {
+          moves: {
+            type: 'array',
+            description: 'List of per-window placements.',
+            items: {
+              type: 'object',
+              properties: {
+                app: { type: 'string', description: 'Process name as shown by fauna_list_windows (e.g. "Safari", "Visual Studio Code").' },
+                x: { type: 'number', description: 'Target left edge in screen pixels.' },
+                y: { type: 'number', description: 'Target top edge in screen pixels.' },
+                w: { type: 'number', description: 'Target width in pixels.' },
+                h: { type: 'number', description: 'Target height in pixels.' },
+                windowIndex: { type: 'number', description: '1-based window index for the app. Defaults to 1.' },
+                windowTitle: { type: 'string', description: 'Exact window title to match instead of using windowIndex.' },
+              },
+              required: ['app'],
+            },
+          },
+        },
+        required: ['moves'],
+      },
+    },
+  },
 ];
 
 // ── Dynamic Widget tool definitions (gated by enableDynamicWidgets flag) ──
@@ -860,6 +905,23 @@ export function executeSelfTool(toolName, args, context = {}) {
         tools: entry.tools,
         _fromPlaybook: entry.id,
       }, context);
+    }
+
+    // ── Desktop window context (macOS) ──
+    case 'fauna_list_windows': {
+      return Promise.all([
+        macListVisibleWindows().catch(e => ({ ok: false, error: e.message })),
+        macGetScreenBounds().catch(() => ({ ok: false })),
+      ]).then(([info, screen]) => JSON.stringify({
+        ...info,
+        screen: screen && screen.ok ? screen : null,
+      }));
+    }
+    case 'fauna_arrange_windows': {
+      const moves = Array.isArray(args && args.moves) ? args.moves : [];
+      return macArrangeWindows(moves)
+        .then(r => JSON.stringify(r))
+        .catch(e => JSON.stringify({ ok: false, error: e.message }));
     }
 
     default:

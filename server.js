@@ -72,6 +72,7 @@ import { registerRegionAndStdinRoutes } from './server/routes/region-and-stdin.j
 import { registerPermissionsRoutes } from './server/routes/permissions.js';
 import { registerSystemContextRoutes } from './server/routes/system-context.js';
 import { registerDesktopOrganizerRoutes } from './server/routes/desktop-organizer.js';
+import { registerWindowContextRoutes } from './server/routes/window-context.js';
 import { registerMarkdownPdfAndYoutubeRoutes } from './server/routes/markdown-pdf-and-youtube.js';
 import { registerFaunaUpdateRoutes } from './server/routes/fauna-update.js';
 import { createAgentDirIterator } from './server/lib/agents-iter.js';
@@ -404,6 +405,8 @@ registerAgentBuilderRoutes(app, { agentsDir: AGENTS_DIR });
 
 // ── Desktop organizer route moved → server/routes/desktop-organizer.js ──
 registerDesktopOrganizerRoutes(app);
+// ── Window context (running apps + arrange) ──
+registerWindowContextRoutes(app);
 // ── System context route moved → server/routes/system-context.js ──
 registerSystemContextRoutes(app, { isWin: IS_WIN, shellBin: SHELL_BIN, agentsDir: AGENTS_DIR, getGhToken, getSystemPreferences: () => systemPreferences });
 // ── macOS Permissions routes moved → server/routes/permissions.js ──

@@ -8,7 +8,18 @@ var SYSTEM_TASK_PATTERNS = [
   /list\s+(file|app|process|program)/i, /show\s+(me\s+)?(what|the)/i,
   /open\s+app/i, /running\s+app/i, /installed\s+app/i,
   /take\s+screenshot/i, /screenshot/i,
-  /disk\s+space/i, /storage/i, /find\s+file/i
+  /disk\s+space/i, /storage/i, /find\s+file/i,
+  /\bwindow(s)?\b/i, /\b(tile|arrange|resize|move)\s+(my\s+)?(window|app)/i,
+  /what.*(apps?|windows?).*open/i, /which.*apps?.*open/i, /frontmost/i, /focused\s+app/i
+];
+
+// Patterns that indicate the user wants live window/app context (Codex-style)
+var WINDOW_CONTEXT_PATTERNS = [
+  /what.*(apps?|windows?).*open/i, /which.*apps?.*open/i,
+  /\b(list|show).*(apps?|windows?)/i,
+  /frontmost/i, /focused\s+app/i, /running\s+app/i,
+  /\b(tile|arrange|resize|move|stack|split)\s+(my\s+)?(window|app)/i,
+  /side[- ]by[- ]side/i
 ];
 
 // Patterns that specifically indicate a desktop file organization task (for organizer card)
@@ -162,6 +173,28 @@ async function gatherSystemContext(text) {
       });
       var d2 = await r2.json();
       if (d2.stdout) ctx.push('Disk usage:\n```\n' + d2.stdout.trim() + '\n```');
+    } catch (_) {}
+  }
+
+  // Gather running apps / windows (Codex-style) when intent matches
+  if (WINDOW_CONTEXT_PATTERNS.some(function(p) { return p.test(text); })) {
+    try {
+      var rw = await fetch('/api/window-context');
+      var dw = await rw.json();
+      if (dw && dw.ok && Array.isArray(dw.apps)) {
+        var lines = dw.apps.slice(0, 30).map(function(a) {
+          var wins = (a.windows || []).slice(0, 4).map(function(w) {
+            return '    • "' + (w.title || '(untitled)') + '" ' + w.w + '×' + w.h + ' @ (' + w.x + ',' + w.y + ')';
+          }).join('\n');
+          return '  - ' + a.name + (a.frontmost ? ' [frontmost]' : '') +
+            ' pid=' + a.pid + ' windows=' + (a.windows || []).length +
+            (wins ? '\n' + wins : '');
+        }).join('\n');
+        var scr = dw.screen ? ' (screen ' + dw.screen.width + '×' + dw.screen.height + ')' : '';
+        ctx.push('Visible apps and windows' + scr + ':\n```\n' + lines + '\n```\nTo arrange windows, POST {moves:[{app,x,y,w,h}]} to /api/window-arrange.');
+      } else if (dw && dw.needsAccessibility) {
+        ctx.push('Window context unavailable: Accessibility permission needed for Fauna in System Settings → Privacy & Security → Accessibility.');
+      }
     } catch (_) {}
   }
 

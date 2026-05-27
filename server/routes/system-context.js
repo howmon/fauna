@@ -6,6 +6,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { computePermissions } from './permissions.js';
+import { listVisibleWindows } from '../lib/mac-window-context.js';
 
 export function registerSystemContextRoutes(app, {
   isWin,
@@ -14,7 +15,7 @@ export function registerSystemContextRoutes(app, {
   getGhToken,
   getSystemPreferences,
 }) {
-  app.get('/api/system-context', (req, res) => {
+  app.get('/api/system-context', async (req, res) => {
     const { auth, screenRecording, accessibility, fullDiskAccess, automation } =
       computePermissions({ isWin, getGhToken, systemPreferences: getSystemPreferences() });
 
@@ -32,6 +33,27 @@ export function registerSystemContextRoutes(app, {
       }
     } catch (_) {}
 
+    // Optional: include a compact summary of visible apps (Codex-style
+    // "what's open" context). Opt-in via ?apps=1 so the default GET stays
+    // cheap; pulling this requires Accessibility permission on macOS.
+    let runningApps = null;
+    if (!isWin && req.query?.apps) {
+      try {
+        const info = await listVisibleWindows({ timeoutMs: 4000 });
+        if (info.ok) {
+          runningApps = info.apps.map(a => ({
+            name: a.name,
+            pid: a.pid,
+            frontmost: !!a.frontmost,
+            windowCount: (a.windows || []).length,
+            windows: (a.windows || []).slice(0, 5).map(w => ({
+              title: w.title, x: w.x, y: w.y, w: w.w, h: w.h,
+            })),
+          }));
+        }
+      } catch (_) {}
+    }
+
     res.json({
       os:       isWin ? 'Windows' : 'macOS',
       release:  os.release(),
@@ -44,6 +66,7 @@ export function registerSystemContextRoutes(app, {
       shell:    shellBin,
       permissions: { auth, screenRecording, accessibility, fullDiskAccess, automation },
       installedAgents,
+      runningApps,
     });
   });
 }
