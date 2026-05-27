@@ -26,7 +26,7 @@ import {
   listVisibleWindows as macListVisibleWindows,
   arrangeWindows as macArrangeWindows,
   getScreenBounds as macGetScreenBounds,
-} from './server/lib/mac-window-context.js';
+} from './server/lib/window-context.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -504,7 +504,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_list_windows',
-      description: 'macOS only. List the apps the user currently has visible on their desktop, including each window\'s title, position (x,y) and size (w,h), plus which app is frontmost and the main screen bounds. Use this whenever the user asks "what apps are open", "which window is focused", "tile / arrange / move my windows", or you need spatial context before calling fauna_arrange_windows. Requires Accessibility permission for Fauna.',
+      description: 'List the apps the user currently has visible on their desktop, including each window\'s title, position (x,y) and size (w,h), plus which app is frontmost and the main screen bounds. Use this whenever the user asks "what apps are open", "which window is focused", "tile / arrange / move my windows", or you need spatial context before calling fauna_arrange_windows. Works on macOS (requires Accessibility permission for Fauna) and Windows (uses User32).',
       parameters: { type: 'object', properties: {} },
     },
   },
@@ -512,7 +512,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_arrange_windows',
-      description: 'macOS only. Move and/or resize specific app windows. Pass an array of moves; each move targets one app and sets {x,y,w,h} in screen coordinates. Use fauna_list_windows first to get exact app names and the screen size — then compute coords (e.g. half-screen split, quadrants). windowIndex defaults to 1 (frontmost window of that app); use windowTitle for exact-match targeting. Requires Accessibility permission for Fauna.',
+      description: 'Move and/or resize specific app windows. Pass an array of moves; each move targets one app and sets {x,y,w,h} in screen coordinates. Use fauna_list_windows first to get exact app names and the screen size — then compute coords (e.g. half-screen split, quadrants). windowIndex defaults to 1 (frontmost window of that app); use windowTitle for exact-match targeting. Works on macOS (requires Accessibility permission) and Windows (uses User32 SetWindowPos).',
       parameters: {
         type: 'object',
         properties: {

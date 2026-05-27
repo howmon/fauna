@@ -6,7 +6,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { computePermissions } from './permissions.js';
-import { listVisibleWindows } from '../lib/mac-window-context.js';
+import { listVisibleWindows } from '../lib/window-context.js';
 
 export function registerSystemContextRoutes(app, {
   isWin,
@@ -37,7 +37,7 @@ export function registerSystemContextRoutes(app, {
     // "what's open" context). Opt-in via ?apps=1 so the default GET stays
     // cheap; pulling this requires Accessibility permission on macOS.
     let runningApps = null;
-    if (!isWin && req.query?.apps) {
+    if (req.query?.apps) {
       try {
         const info = await listVisibleWindows({ timeoutMs: 4000 });
         if (info.ok) {

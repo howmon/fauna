@@ -2,7 +2,7 @@
 // surfaces backed by server/lib/mac-window-context.js. macOS-only; on
 // Windows the endpoints return an explicit ok:false so callers can skip.
 
-import { listVisibleWindows, arrangeWindows, getScreenBounds } from '../lib/mac-window-context.js';
+import { listVisibleWindows, arrangeWindows, getScreenBounds } from '../lib/window-context.js';
 
 export function registerWindowContextRoutes(app) {
   // GET /api/window-context — running visible apps with their windows.
