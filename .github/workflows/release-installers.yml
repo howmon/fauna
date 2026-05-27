@@ -281,4 +281,32 @@ jobs:
             exit 1
           fi
 
-          gh release upload "$TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          declare -A unique
+          for f in "${files[@]}"; do
+            base="$(basename "$f")"
+            unique["$base"]="$f"
+          done
+
+          uploaded=0
+          for base in "${!unique[@]}"; do
+            file="${unique[$base]}"
+            echo "Uploading $base from $file"
+            ok=0
+            for attempt in 1 2 3; do
+              if gh release upload "$TAG" "$file" --repo "$GITHUB_REPOSITORY" --clobber; then
+                ok=1
+                uploaded=$((uploaded + 1))
+                break
+              fi
+              if [[ "$attempt" -lt 3 ]]; then
+                echo "Upload failed for $base (attempt $attempt). Retrying..."
+                sleep 2
+              fi
+            done
+            if [[ "$ok" -ne 1 ]]; then
+              echo "Failed to upload $base after retries"
+              exit 1
+            fi
+          done
+
+          echo "Uploaded $uploaded unique assets"
