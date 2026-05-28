@@ -26,6 +26,7 @@ import { getCopilotClient } from '../copilot/auth.js';
 import { getLLMClient } from '../llm/registry.js';
 import { FALLBACK_MODELS, CHAT_COMPLETIONS_UNSUPPORTED_RE } from '../copilot/models.js';
 import { GEN_UI_CATALOG_PROMPT } from '../prompts/gen-ui-catalog.js';
+import { FAUNA_CORE_GUIDELINES } from '../prompts/core-guidelines.js';
 import { SELF_TOOL_DEFS, DYNAMIC_WIDGET_TOOL_DEFS, executeSelfTool, isSelfTool } from '../../self-tools.js';
 import { runShell, formatShellResultForLLM, isCommandSafe } from '../lib/shell-runner.js';
 import { applyPatchText } from './agent-sandbox-files.js';
@@ -281,7 +282,10 @@ export function registerChatRoute(app, {
       // not browser-ext-action"). The token cost is small; skipping it
       // breaks orchestrator pipelines that hand off browsing work.
       const fullSystem = [
-        systemPrompt.trim() + cliHint,
+        // Core guidelines: persistence, formatting, frontend quality, search defaults.
+        // Baked into every conversation (skipped for delegation sub-agents to save tokens —
+        // the orchestrator already enforces these and re-stating them in delegates wastes context).
+        isDelegation ? '' : FAUNA_CORE_GUIDELINES,
         isDelegation ? '' : projectCtx,
         factsCtx,
         (isCLI || noTools) ? '' : browserBuildContext,
@@ -296,7 +300,11 @@ export function registerChatRoute(app, {
         (!llmSupports.tools && llmProviderId !== 'copilot')
           ? '\n## Tool Availability\nYou are running on a local model that does not support tool calls in this session. Do NOT pretend to call shell, browser, file, or MCP tools — there is no execution environment. Answer the user directly in plain text or markdown. If the user asks for an action requiring tools, tell them to switch to a Copilot model.'
           : '',
+        // Autonomous mode adds the DONE/BLOCKED/NEEDS-INPUT marker contract,
+        // acceptance criteria, and QA gate. Baseline persistence already lives
+        // in FAUNA_CORE_GUIDELINES — this block only adds the verified-completion contract.
         autonomousMode
+          ? '\n## Autonomous Completion Contract\nThis conversation is running until done.
           ? '\n## Autonomous Mode (Run Until Done)\nThis conversation is in autonomous mode. Treat the user request as a self-contained job and drive it to completion without asking permission between steps.\n- Do NOT ask "want me to continue?", "shall I proceed?", "ready for the next step?" or any equivalent half-stop.\n- Plan briefly, then execute. Re-plan and continue when a tool fails — try a materially different approach instead of repeating the same one.\n- Stop ONLY when the task is fully complete and you have verified the result, OR when you are genuinely blocked by missing information or credentials only the user can supply. In that case, state precisely what is needed in one short message.\n- Prefer making concrete progress every turn over narrating intent. If you already explained the plan, do not repeat it; act.\n- Your FINAL message MUST start with exactly one of these markers on its own line: `DONE:` (work verified complete), `BLOCKED:` (cannot proceed without external action), or `NEEDS-INPUT:` (require user info). After the marker, list which acceptance criteria you verified and how.'
             + (effectiveAcceptance ? `\n\n## Acceptance Criteria\n${effectiveAcceptance}\n\nDo not emit DONE: until every criterion above is verifiably satisfied. Cite the verification (tool output, test run, file path) for each one in your final message.` : '')
             + (qaCommand ? `\n\n## QA Gate\nBefore you emit DONE:, fauna will automatically run \`${qaCommand}\` and feed the result back as a tool message. If it fails, you must address the failure and continue — do NOT emit DONE: on a failing QA run.` : '')

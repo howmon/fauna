@@ -666,6 +666,28 @@ export function getProjectSystemContext(projectId) {
       out += `- **${src.name}** (${src.type})${loc}\n`;
     }
   }
+  // Auto-load AGENTS.md / FAUNA.md / CLAUDE.md from the project root if present.
+  // Mirrors the convention used by Codex, Claude Code, and Aider — projects can
+  // drop a markdown file at the repo root with conventions, build commands,
+  // and constraints, and any agent working in that root will pick it up.
+  if (p.rootPath) {
+    const candidates = ['AGENTS.md', 'FAUNA.md', 'CLAUDE.md'];
+    for (const name of candidates) {
+      try {
+        const full = path.join(p.rootPath, name);
+        if (fs.existsSync(full)) {
+          const stat = fs.statSync(full);
+          if (stat.size > 0 && stat.size < 64 * 1024) {
+            const body = fs.readFileSync(full, 'utf8').trim();
+            if (body) {
+              out += `\n### Project Conventions (from ${name})\n${body}\n`;
+              break; // first match wins
+            }
+          }
+        }
+      } catch (_) { /* ignore */ }
+    }
+  }
   if (pinned.length) {
     out += '\n### Pinned Project Contexts\n';
     for (const ctx of pinned) {

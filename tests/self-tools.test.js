@@ -47,8 +47,9 @@ describe('self-tools', () => {
       // fauna_list_windows and fauna_arrange_windows. Bumped to 28 after
       // adding fauna_feature_request_create, fauna_backlog_list,
       // fauna_backlog_prioritize, fauna_consult_debate (autonomous agent
-      // platform — backlog + chain-of-debate phases).
-      expect(SELF_TOOL_DEFS).toHaveLength(28);
+      // platform — backlog + chain-of-debate phases). Bumped to 29 after
+      // adding fauna_plan (Codex-style TODO tool with invariants).
+      expect(SELF_TOOL_DEFS).toHaveLength(29);
     });
 
     it('each tool has required OpenAI function format', () => {

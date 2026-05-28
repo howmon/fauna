@@ -244,7 +244,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_write_file',
-      description: 'Fast VS Code-style file write. Prefer this over markdown write-file blocks whenever tools are available. Writes server-side with temp+rename and returns path/bytes/sha256 without rendering file bytes in chat.',
+      description: 'Write a brand-new file or fully replace one. PREFER fauna_apply_patch for edits to existing files — only reach for fauna_write_file when the file does not exist yet or you are replacing it wholesale. Writes server-side with temp+rename and returns path/bytes/sha256 without rendering file bytes in chat.',
       parameters: {
         type: 'object',
         properties: {
@@ -339,7 +339,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_replace_string',
-      description: 'Replace the first occurrence of an exact string in a file. PREFER this over markdown ```replace-string blocks whenever tools are available — it commits server-side and returns the result in the SAME turn so you can verify and chain the next step. The old_string must be unique enough to match exactly once; include 3–5 lines of surrounding context to disambiguate.',
+      description: 'Replace one exact string in a file. Use only when a single localized change is clearer than a patch. For anything beyond one small substitution — multi-line edits, multiple hunks, or multi-file changes — PREFER fauna_apply_patch. The old_string must be unique; include 3–5 lines of surrounding context to disambiguate.',
       parameters: {
         type: 'object',
         properties: {
@@ -358,7 +358,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_apply_patch',
-      description: 'Apply a VS Code-style apply_patch text across one or more files in a single transaction. Use for multi-file refactors, renames, or deletes. PREFER this over markdown ```apply-patch blocks when tools are available. Patch DSL: *** Begin Patch / *** Update File: <path> / @@ context / -removed / +added / *** End Patch.',
+      description: 'PRIMARY edit tool. Apply a freeform patch across one or more files in a single transaction — use for any edit to an existing file, including small one-hunk changes. Faster and cheaper than fauna_write_file (no full-file re-render) and safer than fauna_replace_string for anything more than one substitution. Do NOT re-read the file after a successful apply — the tool already confirms. Patch DSL: *** Begin Patch / *** Update File: <path> / @@ context / -removed / +added / *** End Patch.',
       parameters: {
         type: 'object',
         properties: {
@@ -591,6 +591,34 @@ export const SELF_TOOL_DEFS = [
           projectId: { type: 'string', description: 'Project id. Defaults to the active project.' },
           method:    { type: 'string', enum: ['rice', 'moscow'], description: 'Prioritization method.' },
         },
+      },
+    },
+  },
+  // ── Plan (TODOs) ─────────────────────────────────────────────────────
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_plan',
+      description: 'Maintain a structured TODO list for the current task. Use a plan when: the task is non-trivial and spans multiple actions; there are logical phases or dependencies where sequencing matters; the user asked for more than one thing in a single prompt; you generate additional steps mid-flight. Invariants: exactly ONE item in_progress at a time; mark items completed individually (no batch completions); set an item to in_progress BEFORE working it (never jump pending → completed); finish with all items completed or explicitly canceled before ending the turn. High-quality plan example: [{"id":1,"title":"Add CLI entry with file args","status":"completed"},{"id":2,"title":"Parse Markdown via CommonMark","status":"in-progress"},{"id":3,"title":"Apply semantic HTML template","status":"not-started"},{"id":4,"title":"Handle code blocks, images, links","status":"not-started"},{"id":5,"title":"Add error handling for invalid files","status":"not-started"}]. Low-quality plan (avoid — too vague): [{"title":"Create CLI tool"},{"title":"Add Markdown parser"},{"title":"Convert to HTML"}]. Pass the FULL list every call (both existing and new items).',
+      parameters: {
+        type: 'object',
+        properties: {
+          items: {
+            type: 'array',
+            description: 'Complete current plan. Must include ALL items, in order.',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'number', description: 'Sequential 1-based id.' },
+                title: { type: 'string', description: 'Concise action-oriented label (3-7 words).' },
+                status: { type: 'string', enum: ['not-started', 'in-progress', 'completed', 'cancelled'] },
+              },
+              required: ['id', 'title', 'status'],
+            },
+          },
+          explanation: { type: 'string', description: 'Optional rationale for plan changes (added items, reorders, status flips). Required when you cancel an item.' },
+        },
+        required: ['items'],
       },
     },
   },
@@ -1023,6 +1051,43 @@ export function executeSelfTool(toolName, args, context = {}) {
       const r = prioritizeBacklog(pid, { method: args.method || 'rice' });
       if (!r) return JSON.stringify({ ok: false, error: 'project not found' });
       return JSON.stringify(r);
+    }
+
+    // ── Plan (TODOs) ──
+    case 'fauna_plan': {
+      const items = Array.isArray(args.items) ? args.items : [];
+      if (!items.length) return JSON.stringify({ ok: false, error: 'items required (non-empty array)' });
+      const norm = [];
+      const errors = [];
+      let inProgress = 0;
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i] || {};
+        const id = Number.isFinite(it.id) ? it.id : i + 1;
+        const title = String(it.title || '').trim();
+        const status = String(it.status || 'not-started');
+        if (!title) errors.push(`item ${i + 1}: missing title`);
+        if (!['not-started', 'in-progress', 'completed', 'cancelled'].includes(status)) {
+          errors.push(`item ${i + 1}: invalid status "${status}"`);
+        }
+        if (status === 'in-progress') inProgress++;
+        norm.push({ id, title, status });
+      }
+      if (inProgress > 1) errors.push(`exactly one item may be in_progress at a time (found ${inProgress})`);
+      if (errors.length) return JSON.stringify({ ok: false, error: errors.join('; '), plan: norm });
+      // Surface to renderer so the UI can render a checklist (best-effort).
+      try {
+        if (typeof context.sendToRenderer === 'function') {
+          context.sendToRenderer('fauna:plan-update', { items: norm, explanation: args.explanation || '' });
+        }
+      } catch (_) {}
+      const total = norm.length;
+      const done = norm.filter(x => x.status === 'completed').length;
+      const cur = norm.find(x => x.status === 'in-progress');
+      return JSON.stringify({
+        ok: true,
+        items: norm,
+        summary: `${done}/${total} complete${cur ? `; current: ${cur.title}` : ''}`,
+      });
     }
 
     // ── Chain of debate ──

@@ -1,64 +1,44 @@
 // Built-in browser panel and Fauna Web Extension prompt context.
 //
-// These two strings are injected into the AI system prompt so the model
-// knows how to use the in-app browser panel (`browser-action`) and, when
-// connected, the user's real browser via the extension (`browser-ext-action`).
+// PRIMARY interface for the in-app browser panel is the native
+// `fauna_browser` tool (see self-tools.js). That tool returns results in the
+// SAME turn so the agent loop can chain steps without bouncing back to the
+// user. The ```browser-action fenced-code path below remains as a legacy
+// fallback for compatibility with older conversations; new turns should
+// always prefer the tool.
 
 export const BROWSER_BUILD_CONTEXT = `
 ## Built-in Browser Panel
 
-You have a built-in browser panel that runs inside the app. You can control it using \`\`\`browser-action code blocks.
+You have a built-in browser panel that runs inside the app. Drive it with the native \`fauna_browser\` tool (action: navigate, click, type, extract, evaluate, screenshot, scroll, wait, new-tab, switch-tab, close-tab, list-tabs). The tool returns the result in the same turn so you can chain steps without waiting on the user.
 
 ### Web routing order
-Before using browser-action or Playwright-style automation, choose the lowest-risk path that can satisfy the request:
-1. If a real browser tab is connected/shared through FaunaMCP or the browser extension, use \`browser-ext-action\` to list/extract that tab first.
-2. For simple read-only URL/page/article tasks, use the fetch/headless HTTP tools instead of opening a browser.
-3. Use \`browser-action\` for user-visible pages, forms, clicks, screenshots, JS-heavy pages, blocked fetches, or debugging web apps.
-4. Use Playwright MCP only when the user enabled Playwright MCP or explicitly needs Playwright-style automation/testing.
-
-### Available browser actions:
-- **navigate** — \`{"action":"navigate","url":"..."}\` — load a URL
-- **extract** — \`{"action":"extract"}\` — get page text + links
-- **eval** — \`{"action":"eval","js":"..."}\` — run JS in the page
-- **click** — \`{"action":"click","selector":"..."}\` — click an element
-- **type** — \`{"action":"type","selector":"...","value":"..."}\` — type into an input
-- **wait** — \`{"action":"wait","ms":1500}\` — wait N milliseconds
-- **new-tab** — \`{"action":"new-tab","url":"..."}\` — open a new browser tab (optionally with URL)
-- **switch-tab** — \`{"action":"switch-tab","index":0}\` — switch to tab by 0-based index
-- **close-tab** — \`{"action":"close-tab","index":0}\` — close a tab
-- **list-tabs** — \`{"action":"list-tabs"}\` — list all open tabs
-- **extract-all** — \`{"action":"extract-all"}\` — extract text from ALL tabs
-- **console-logs** — \`{"action":"console-logs"}\` — read console errors/warnings/logs from the active tab
-- **console-logs (filtered)** — \`{"action":"console-logs","level":"error"}\` — only errors
-- **clear-console** — \`{"action":"clear-console"}\` — clear captured console logs
-
-For simple navigate/extract tasks, temporary browser-panel tabs may close after the result is fed back to the conversation. If the page must stay open for follow-up browsing, include \`"keepOpen":true\` or \`"autoClose":false\` on the navigate action.
+Before reaching for the browser, pick the lowest-risk path that satisfies the request:
+1. If a real browser tab is shared via the Fauna Web Extension, use \`browser-ext-action\` (extension) to read that tab first.
+2. For simple read-only URL / page / article tasks, use a fetch / headless HTTP tool instead of opening a browser.
+3. Use \`fauna_browser\` for user-visible pages, forms, clicks, screenshots, JS-heavy pages, blocked fetches, or debugging web apps.
+4. Use Playwright MCP only when the user enabled it or explicitly asked for Playwright-style automation/testing.
 
 ### Dev Server + Browser Debugging Workflow
-When building a web app for the user, follow this workflow:
-1. **Install ALL dependencies in one complete command** — never truncate \`npm install\`. Write the full package.json first, then run \`npm install\`.
-2. **Start dev server in background** — use \`&\` or run it as a background process, then wait a moment
-3. **Open in browser** — navigate to \`http://localhost:PORT\` in a new tab. Console errors/warnings from localhost pages are **automatically included** in the page extract — check them!
-4. **Fix and iterate** — if there are errors, fix the code, navigate again or use console-logs to recheck
-5. **Only report success after verifying** — don't tell the user it works until you've seen the page load without errors
-### Local HTML file workflow (CRITICAL — order matters)
-When the user asks you to build something they will open as a single local HTML file (\`file:///…\`):
-1. **First** emit the \`write-file\` (or \`shell-exec\`) block that creates the .html file. Wait for it to succeed.
-2. **Only after the file exists**, emit ONE \`browser-action navigate\` block pointing at the \`file://\` URL.
-3. **Never** emit the navigate block before the create step in the same turn — the panel will load \`about:blank\` and the user will see an empty pane.
-4. **Never** emit two navigate blocks for the same URL in one turn — one navigate is enough. If you need to re-render after a change, write the file again and then navigate once.
-5. Only after the navigate widget reports success should you write the success summary / "Here's your X!" prose.
-### Critical Rules:
-- **ZERO NARRATION before actions.** NEVER write text before a browser-action, browser-ext-action, or shell command block. No "Let me...", "I'll...", "I need to...", "Let me search...", "Let me use...", "I'll try...". Just emit the action block with nothing before it. This is the #1 rule — violating it wastes the user's time.
-- **NEVER truncate shell commands or code blocks**. Write them fully in one go. Never stop mid-line or say "let me continue".
-- **Batch browser actions** when possible. If you need to do multiple actions (e.g. eval + extract), emit them all in one fenced block as JSONL (one JSON object per line) instead of separate blocks.
-- **Be silent DURING browser action sequences**. When you receive auto-fed browser results and need to do more actions, respond ONLY with the next action block — no commentary. But when you're DONE (no more actions needed), give the user a brief summary of what you accomplished and any relevant findings.
-- **ALWAYS write complete files**. When creating a file, write ALL of it in one code block. Never split a file across multiple blocks.
-- **ALWAYS write complete package.json** before running npm install — don't rely on incremental installs.
-- **Use console-logs to debug** — after loading a page, check for errors before telling the user it's done.
-- **If your output was cut off**, you will be automatically asked to continue. Just pick up exactly where you left off.
-- The browser keeps login sessions across pages (cookies persist). No need to re-authenticate.
-- Each conversation has its own browser tabs — they don't interfere with other conversations.
+When building a web app for the user:
+1. Install ALL dependencies in one complete \`npm install\` (never truncate). Write the full package.json first.
+2. Start the dev server in the background.
+3. Call \`fauna_browser\` with \`action:"navigate"\` pointing at \`http://localhost:PORT\`. Console errors from localhost are auto-included in the extract — check them.
+4. Fix and iterate. Only report success once you have seen the page load without errors.
+
+### Local HTML file workflow (order matters)
+When the user asks for a single local HTML file they will open via \`file:///…\`:
+1. First write the .html file (\`fauna_write_file\` or \`fauna_apply_patch\`). Wait for success.
+2. THEN call \`fauna_browser\` once with \`action:"navigate"\` and the \`file://\` URL.
+3. Never navigate before the create step; never emit two navigates for the same URL in one turn.
+
+### Critical rules
+- Prefer the \`fauna_browser\` tool over the legacy \`\`\`browser-action fenced block. The fenced block is kept only for backward compatibility and forces a user round-trip.
+- The browser keeps login sessions across pages (cookies persist).
+- Each conversation has its own browser tabs.
+
+### Legacy fenced-block fallback
+If you must emit a \`\`\`browser-action fenced block (older client, missing tool support), use the same JSON shape as the tool: \`{"action":"navigate","url":"..."}\` etc., one JSON object per line for batched actions.
 `;
 
 // Injected dynamically when at least one browser extension is connected.
