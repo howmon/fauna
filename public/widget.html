@@ -12,21 +12,21 @@
   <!-- Title bar (draggable) -->
   <div id="titlebar">
     <div class="titlebar-left">
-      <i class="ti ti-bolt titlebar-icon"></i>
-      <span class="titlebar-label">Automations</span>
+      <i class="ti ti-sparkles titlebar-icon"></i>
+      <span class="titlebar-label">Fauna</span>
     </div>
     <div class="titlebar-btns">
-      <button id="btn-new"       class="tb-btn" title="New automation"><i class="ti ti-plus"></i></button>
-      <button id="btn-ask"       class="tb-btn" title="Ask Fauna (⌘⇧J)"><i class="ti ti-sparkles"></i></button>
-      <button id="btn-alerts"    class="tb-btn" title="Heartbeat alerts: on"><i class="ti ti-bell"></i><span id="alert-badge" class="alert-badge hidden">0</span></button>
-      <button id="btn-open-app"  class="tb-btn" title="Open in Fauna"><i class="ti ti-layout-sidebar"></i></button>
-      <button id="btn-pin"       class="tb-btn" title="Pin on top"><i class="ti ti-pin"></i></button>
-      <button id="btn-close"     class="tb-btn" title="Hide widget"><i class="ti ti-x"></i></button>
+      <button id="btn-tasks-toggle" class="tb-btn" title="Show automations"><i class="ti ti-list-check"></i></button>
+      <button id="btn-new"          class="tb-btn hidden" title="New automation"><i class="ti ti-plus"></i></button>
+      <button id="btn-alerts"       class="tb-btn hidden" title="Heartbeat alerts: on"><i class="ti ti-bell"></i><span id="alert-badge" class="alert-badge hidden">0</span></button>
+      <button id="btn-open-app"     class="tb-btn" title="Open in Fauna"><i class="ti ti-layout-sidebar"></i></button>
+      <button id="btn-pin"          class="tb-btn" title="Pin on top"><i class="ti ti-pin"></i></button>
+      <button id="btn-close"        class="tb-btn" title="Hide widget"><i class="ti ti-x"></i></button>
     </div>
   </div>
 
-  <!-- Ask Fauna (Clippy-style quick prompt) -->
-  <div id="ask-bar" class="hidden">
+  <!-- Ask Fauna (Clippy-style quick prompt) — always visible in chat mode -->
+  <div id="ask-bar">
     <div class="ask-row">
       <i class="ti ti-sparkles ask-icon"></i>
       <input id="ask-input" type="text" placeholder="Ask Fauna anything about what you're doing…" autocomplete="off">
@@ -34,7 +34,7 @@
     </div>
     <div class="ask-hint">
       <label class="ask-ctx"><input type="checkbox" id="ask-ctx" checked> Include screen context</label>
-      <span class="ask-kbd">Esc to close</span>
+      <span class="ask-kbd">⌘⇧J</span>
     </div>
   </div>
 
@@ -84,22 +84,25 @@
   <!-- Heartbeat alert panel (urgent items, surfaces while app is minimized) -->
   <div id="alerts-panel" class="hidden"></div>
 
-  <!-- Tabs: Active / Recent -->
-  <div id="tab-bar">
-    <button class="tab-btn active" data-tab="active">Active</button>
-    <button class="tab-btn" data-tab="recent">Recent</button>
-  </div>
+  <!-- Automations area (hidden by default; toggled by the list-check button) -->
+  <div id="tasks-area" class="hidden">
+    <!-- Tabs: Active / Recent -->
+    <div id="tab-bar">
+      <button class="tab-btn active" data-tab="active">Active</button>
+      <button class="tab-btn" data-tab="recent">Recent</button>
+    </div>
 
-  <!-- Task list -->
-  <div id="task-list"></div>
+    <!-- Task list -->
+    <div id="task-list"></div>
 
-  <!-- Empty state -->
-  <div id="empty-state" class="hidden">
-    <i class="ti ti-clock-plus empty-icon"></i>
-    <div class="empty-text">No automations</div>
-    <button class="empty-cta" id="btn-empty-new">
-      <i class="ti ti-plus"></i> New automation
-    </button>
+    <!-- Empty state -->
+    <div id="empty-state" class="hidden">
+      <i class="ti ti-clock-plus empty-icon"></i>
+      <div class="empty-text">No automations</div>
+      <button class="empty-cta" id="btn-empty-new">
+        <i class="ti ti-plus"></i> New automation
+      </button>
+    </div>
   </div>
 
   <script src="js/widget.js"></script>

@@ -384,29 +384,34 @@ const $askBar    = document.getElementById('ask-bar');
 const $askInput  = document.getElementById('ask-input');
 const $askSend   = document.getElementById('ask-send');
 const $askCtx    = document.getElementById('ask-ctx');
-const $btnAsk    = document.getElementById('btn-ask');
 const $askResp   = document.getElementById('ask-response');
 const $askBody   = document.getElementById('ask-resp-body');
 const $askStatus = document.getElementById('ask-resp-status');
 const $askRespOpen  = document.getElementById('ask-resp-open');
 const $askRespClear = document.getElementById('ask-resp-clear');
+const $tasksArea     = document.getElementById('tasks-area');
+const $btnTasksToggle = document.getElementById('btn-tasks-toggle');
+const $btnNew        = document.getElementById('btn-new');
+const $btnAlerts     = document.getElementById('btn-alerts');
 
 let _askAbort = null;
 let _askLastPrompt = '';
 
-function openAskBar() {
-  $askBar?.classList.remove('hidden');
-  setTimeout(() => $askInput?.focus(), 30);
-}
-function closeAskBar() {
-  $askBar?.classList.add('hidden');
-  if ($askInput) $askInput.value = '';
-}
+function focusAsk() { setTimeout(() => $askInput?.focus(), 30); }
 function showResp() { $askResp?.classList.remove('hidden'); }
 function hideResp() {
   $askResp?.classList.add('hidden');
   if ($askBody) $askBody.textContent = '';
   if ($askStatus) { $askStatus.textContent = ''; $askStatus.classList.remove('thinking'); }
+}
+
+function toggleTasksArea(show) {
+  const willShow = show !== undefined ? !!show : $tasksArea?.classList.contains('hidden');
+  if (!$tasksArea) return;
+  $tasksArea.classList.toggle('hidden', !willShow);
+  $btnNew?.classList.toggle('hidden', !willShow);
+  $btnAlerts?.classList.toggle('hidden', !willShow);
+  $btnTasksToggle?.classList.toggle('active', willShow);
 }
 
 function _askEscape(s) {
@@ -425,7 +430,7 @@ async function sendAsk() {
   if (!text) return;
   const withContext = $askCtx?.checked !== false;
   _askLastPrompt = text;
-  closeAskBar();
+  if ($askInput) $askInput.value = '';
   showResp();
   if ($askStatus) { $askStatus.textContent = 'Thinking…'; $askStatus.classList.add('thinking'); }
   if ($askBody) $askBody.innerHTML = '';
@@ -496,17 +501,20 @@ async function sendAsk() {
   }
 }
 
-$btnAsk?.addEventListener('click', () => {
-  if ($askBar?.classList.contains('hidden')) openAskBar(); else closeAskBar();
-});
+$btnTasksToggle?.addEventListener('click', () => toggleTasksArea());
 $askSend?.addEventListener('click', sendAsk);
 $askInput?.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAsk(); }
-  else if (e.key === 'Escape') { e.preventDefault(); closeAskBar(); }
+  else if (e.key === 'Escape') {
+    e.preventDefault();
+    if (!$askResp?.classList.contains('hidden')) hideResp();
+    else if ($askInput) $askInput.value = '';
+  }
 });
 $askRespClear?.addEventListener('click', () => {
   try { _askAbort?.abort(); } catch (_) {}
   hideResp();
+  focusAsk();
 });
 $askRespOpen?.addEventListener('click', () => {
   // Escape hatch: surface the prompt in the main app for follow-up.
@@ -515,8 +523,9 @@ $askRespOpen?.addEventListener('click', () => {
   } catch (_) {}
 });
 if (window.widgetAPI?.onFocusAsk) {
-  window.widgetAPI.onFocusAsk(() => openAskBar());
+  window.widgetAPI.onFocusAsk(() => focusAsk());
 }
+focusAsk();
 
 // ── Fetch ─────────────────────────────────────────────────────────────────
 

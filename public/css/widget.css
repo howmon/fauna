@@ -2,21 +2,22 @@
 *,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --w-bg:       #131318;
-  --w-surface:  #1d1d24;
-  --w-surface2: #252530;
-  --w-border:   #2e2e3a;
-  --w-accent:   #7b8cde;
-  --w-accent2:  #5e7cf0;
-  --w-text:     #e8e8f0;
-  --w-text-dim: #9999b0;
-  --w-text-mut: #55556a;
-  --w-success:  #5fcf7a;
-  --w-error:    #f06e6e;
-  --w-warn:     #f2bc61;
+  /* Match standard Fauna app palette (styles.css :root dark theme) */
+  --w-bg:       #1b1b1b;
+  --w-surface:  #242424;
+  --w-surface2: #2e2e2e;
+  --w-border:   #404040;
+  --w-accent:   #789996;
+  --w-accent2:  #cccccc;
+  --w-text:     #f5f5f5;
+  --w-text-dim: #b4b4b4;
+  --w-text-mut: #7a7a7a;
+  --w-success:  #6ccb5f;
+  --w-error:    #f36e6e;
+  --w-warn:     #f2c661;
   --w-info:     #60b8f5;
   --w-radius:   8px;
-  --w-font:     -apple-system,BlinkMacSystemFont,'Segoe UI Variable','Segoe UI',system-ui,sans-serif;
+  --w-font:     'Segoe UI Variable','Segoe UI',-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
   --w-mono:     'Cascadia Code','JetBrains Mono','Fira Code',ui-monospace,monospace;
 }
 
@@ -529,7 +530,7 @@ body {
   width: 28px; height: 28px;
   display: flex; align-items: center; justify-content: center;
   background: var(--w-accent);
-  color: #000;
+  color: #fff;
   border: none;
   border-radius: 6px;
   cursor: pointer;
@@ -603,3 +604,9 @@ body {
   margin: 2px 0;
   font-family: ui-monospace, Menlo, monospace;
 }
+
+/* ── Layout: chat-first ─────────────────────────────────────── */
+.tb-btn.active { background: var(--w-surface2); color: var(--w-accent); }
+#ask-response { flex: 1; min-height: 120px; max-height: none; }
+#tasks-area { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+#tasks-area #task-list { flex: 1; overflow-y: auto; }
