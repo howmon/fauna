@@ -310,7 +310,6 @@ export function registerChatRoute(app, {
         factsCtx,
         (isCLI || noTools) ? '' : browserBuildContext,
         (isCLI || noTools) ? '' : buildBrowserExtContext(),
-            + (deployCommand ? `\n\n## Deploy Gate\nThe user has APPROVED deploying this run. After QA passes (or after DONE: when no QA is configured), fauna will automatically run \`${deployCommand}\`. Treat the deploy output as part of the verification — if it fails, do NOT emit DONE: until the deploy succeeds or you escalate with BLOCKED:.` : '')
         (isDelegation || isCLI || noTools) ? '' : GEN_UI_CATALOG_PROMPT,
         contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '',
         figmaFilesCtx,
