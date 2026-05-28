@@ -12,6 +12,7 @@ import {
 } from './memory-store.js';
 import {
   createProject, getAllProjects, getProject,
+  addBacklogItem, listBacklog, prioritizeBacklog,
 } from './project-manager.js';
 import { renderCircuit } from './lib/circuit-renderer.js';
 import { validateCircuit } from './lib/circuit-validate.js';
@@ -538,6 +539,82 @@ export const SELF_TOOL_DEFS = [
       },
     },
   },
+  // ── Backlog (feature intake + prioritization) ──────────────────────────
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_feature_request_create',
+      description: 'Append a feature request or backlog item to the active project backlog. Use when the user describes wanting something new, when reflection surfaces a gap, or when debate produces a follow-up. Returns the created item id.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Short title (<= 200 chars).' },
+          body:  { type: 'string', description: 'Details, acceptance criteria, links (<= 4000 chars).' },
+          tags:  { type: 'array', items: { type: 'string' }, description: 'Optional tags (e.g. must/should/could/wont for MoSCoW, or feature/bug/chore).' },
+          rice:  {
+            type: 'object',
+            description: 'Optional RICE estimate. All numbers 0-10.',
+            properties: {
+              reach: { type: 'number' }, impact: { type: 'number' },
+              confidence: { type: 'number' }, effort: { type: 'number' },
+            },
+          },
+          projectId: { type: 'string', description: 'Project id. Defaults to the active project.' },
+        },
+        required: ['title'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_backlog_list',
+      description: 'List backlog items for a project, ordered by score when prioritized. Useful before triage or planning.',
+      parameters: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Project id. Defaults to the active project.' },
+          status:    { type: 'string', description: 'Filter: new | groomed | in-progress | done | dropped.' },
+          limit:     { type: 'number', description: 'Max items (default 50).' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_backlog_prioritize',
+      description: 'Score and rank backlog items. method="rice" (default) computes RICE = reach*impact*confidence/effort. method="moscow" buckets by must/should/could/wont tags.',
+      parameters: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Project id. Defaults to the active project.' },
+          method:    { type: 'string', enum: ['rice', 'moscow'], description: 'Prioritization method.' },
+        },
+      },
+    },
+  },
+  // ── Chain of debate (multi-perspective sub-agents + judge) ─────────────
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_consult_debate',
+      description: 'Run a structured chain-of-debate over a hard decision. Invokes N independent perspectives in parallel (no tools), cross-presents them for critique, then a judge synthesizes a recommendation. Use BEFORE committing to an ambiguous architectural choice or when the user explicitly asks for multiple opinions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          question: { type: 'string', description: 'The decision or question to debate.' },
+          context:  { type: 'string', description: 'Relevant background (existing approach, constraints). Optional but improves quality.' },
+          perspectives: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Named perspectives, e.g. ["security", "performance", "simplicity"]. 2-5 recommended. Defaults to ["pragmatist","skeptic","architect"].',
+          },
+        },
+        required: ['question'],
+      },
+    },
+  },
 ];
 
 // ── Dynamic Widget tool definitions (gated by enableDynamicWidgets flag) ──
@@ -922,6 +999,78 @@ export function executeSelfTool(toolName, args, context = {}) {
       return macArrangeWindows(moves)
         .then(r => JSON.stringify(r))
         .catch(e => JSON.stringify({ ok: false, error: e.message }));
+    }
+
+    // ── Backlog ──
+    case 'fauna_feature_request_create': {
+      const pid = args.projectId || context.activeProjectId;
+      if (!pid) return JSON.stringify({ ok: false, error: 'projectId required (no active project)' });
+      const entry = addBacklogItem(pid, {
+        title: args.title, body: args.body, tags: args.tags, rice: args.rice,
+        source: 'agent',
+      });
+      if (!entry) return JSON.stringify({ ok: false, error: 'project not found' });
+      return JSON.stringify({ ok: true, id: entry.id, projectId: pid, item: entry });
+    }
+    case 'fauna_backlog_list': {
+      const pid = args.projectId || context.activeProjectId;
+      if (!pid) return JSON.stringify({ ok: false, error: 'projectId required (no active project)' });
+      return JSON.stringify({ ok: true, items: listBacklog(pid, { status: args.status, limit: args.limit }) });
+    }
+    case 'fauna_backlog_prioritize': {
+      const pid = args.projectId || context.activeProjectId;
+      if (!pid) return JSON.stringify({ ok: false, error: 'projectId required (no active project)' });
+      const r = prioritizeBacklog(pid, { method: args.method || 'rice' });
+      if (!r) return JSON.stringify({ ok: false, error: 'project not found' });
+      return JSON.stringify(r);
+    }
+
+    // ── Chain of debate ──
+    case 'fauna_consult_debate': {
+      if (typeof context.callLLM !== 'function') {
+        return JSON.stringify({ ok: false, error: 'LLM bridge not available in this context' });
+      }
+      const question = String(args.question || '').trim();
+      if (!question) return JSON.stringify({ ok: false, error: 'question required' });
+      const ctx = String(args.context || '');
+      const perspectives = Array.isArray(args.perspectives) && args.perspectives.length
+        ? args.perspectives.slice(0, 5).map(String)
+        : ['pragmatist', 'skeptic', 'architect'];
+
+      return (async () => {
+        const round1 = await Promise.all(perspectives.map(p => context.callLLM({
+          system: `You are the "${p}" perspective in a structured debate. Give a sharp, opinionated 4-6 sentence answer from your perspective only. Do not hedge. No preamble.`,
+          user: (ctx ? `Context:\n${ctx}\n\n` : '') + `Question: ${question}`,
+          maxTokens: 350,
+          temperature: 0.6,
+        }).then(text => ({ perspective: p, text }))));
+
+        const proposalsText = round1.map(r => `### ${r.perspective}\n${r.text}`).join('\n\n');
+
+        const round2 = await Promise.all(round1.map(r => context.callLLM({
+          system: `You are the "${r.perspective}" perspective. Critique the OTHER perspectives' proposals below. 3-5 sentences. Where do they fail? What did they miss? Be specific. No preamble.`,
+          user: `Question: ${question}\n\nAll proposals:\n${proposalsText}\n\nYour own proposal was:\n${r.text}\n\nCritique the others.`,
+          maxTokens: 300,
+          temperature: 0.5,
+        }).then(text => ({ perspective: r.perspective, text }))));
+
+        const critiquesText = round2.map(c => `### ${c.perspective} critiques\n${c.text}`).join('\n\n');
+
+        const judge = await context.callLLM({
+          system: 'You are an impartial judge. Read the proposals and critiques, then output: (1) the single recommended decision in one sentence, (2) the top 2-3 reasons, (3) explicit risks/tradeoffs, (4) any open questions. Be concrete and short.',
+          user: `Question: ${question}\n\nProposals:\n${proposalsText}\n\nCritiques:\n${critiquesText}`,
+          maxTokens: 500,
+          temperature: 0.3,
+        });
+
+        return JSON.stringify({
+          ok: true,
+          question,
+          perspectives: round1,
+          critiques: round2,
+          recommendation: judge,
+        });
+      })();
     }
 
     default:

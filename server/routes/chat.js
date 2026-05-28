@@ -35,8 +35,8 @@ import {
 } from '../../lib/dynamic-widgets.js';
 import { ToolGuardContext, formatToolLabel } from '../../tool-guard.js';
 import { getAgentTools, startAgentMCPServers } from '../../agent-tools.js';
-import { formatForSystemPrompt as factsForSystemPrompt, getStats as factsGetStats } from '../../memory-store.js';
-import { getProjectSystemContext, buildContextPayload, getProject } from '../../project-manager.js';
+import { formatForSystemPrompt as factsForSystemPrompt, getStats as factsGetStats, remember as factsRemember } from '../../memory-store.js';
+import { getProjectSystemContext, buildContextPayload, getProject, appendAutonomousRunLog } from '../../project-manager.js';
 import { estimateTokens, computeBudget } from '../lib/token-budget.js';
 import { summarizeHistory } from '../lib/summarize-history.js';
 import { withTimeout } from '../lib/async-utils.js';
@@ -178,6 +178,8 @@ export function registerChatRoute(app, {
             clientContext = 'app', noTools = false,
           enableDynamicWidgets = false,
           autonomousMode: bodyAutonomousMode = null,
+          acceptanceCriteria: bodyAcceptance = null,
+          qa: bodyQa = null,
           selectedFigmaFileKeys = [] } = req.body;
     const isCLI = clientContext === 'cli';
 
@@ -186,12 +188,26 @@ export function registerChatRoute(app, {
     // client as `autonomousMode` on the request body, so it takes precedence
     // over the project setting here. Off by default.
     let _projectAutonomous = false;
+    let _projectRecord = null;
     if (projectId) {
-      try { _projectAutonomous = !!getProject(projectId)?.autonomousMode; } catch (_) {}
+      try { _projectRecord = getProject(projectId) || null; } catch (_) {}
+      _projectAutonomous = !!_projectRecord?.autonomousMode;
     }
     const autonomousMode = (bodyAutonomousMode === true || bodyAutonomousMode === false)
       ? bodyAutonomousMode
       : _projectAutonomous;
+
+    // Acceptance criteria + QA gate (only meaningful when autonomousMode).
+    // Per-conversation override wins; otherwise fall back to project record.
+    const effectiveAcceptance = (typeof bodyAcceptance === 'string' && bodyAcceptance.trim())
+      ? bodyAcceptance.trim()
+      : (_projectRecord?.acceptanceCriteria || '').trim();
+    const effectiveQa = (bodyQa && typeof bodyQa === 'object')
+      ? bodyQa
+      : (_projectRecord?.qa || null);
+    const qaCommand = autonomousMode && effectiveQa && typeof effectiveQa.command === 'string'
+      ? effectiveQa.command.trim()
+      : '';
 
     // Track the active conversation model so heartbeat/workflows/teams use the same one
     setActiveModel(model);
@@ -281,7 +297,9 @@ export function registerChatRoute(app, {
           ? '\n## Tool Availability\nYou are running on a local model that does not support tool calls in this session. Do NOT pretend to call shell, browser, file, or MCP tools — there is no execution environment. Answer the user directly in plain text or markdown. If the user asks for an action requiring tools, tell them to switch to a Copilot model.'
           : '',
         autonomousMode
-          ? '\n## Autonomous Mode (Run Until Done)\nThis conversation is in autonomous mode. Treat the user request as a self-contained job and drive it to completion without asking permission between steps.\n- Do NOT ask "want me to continue?", "shall I proceed?", "ready for the next step?" or any equivalent half-stop.\n- Plan briefly, then execute. Re-plan and continue when a tool fails — try a materially different approach instead of repeating the same one.\n- Stop ONLY when the task is fully complete and you have verified the result, OR when you are genuinely blocked by missing information or credentials only the user can supply. In that case, state precisely what is needed in one short message.\n- Prefer making concrete progress every turn over narrating intent. If you already explained the plan, do not repeat it; act.'
+          ? '\n## Autonomous Mode (Run Until Done)\nThis conversation is in autonomous mode. Treat the user request as a self-contained job and drive it to completion without asking permission between steps.\n- Do NOT ask "want me to continue?", "shall I proceed?", "ready for the next step?" or any equivalent half-stop.\n- Plan briefly, then execute. Re-plan and continue when a tool fails — try a materially different approach instead of repeating the same one.\n- Stop ONLY when the task is fully complete and you have verified the result, OR when you are genuinely blocked by missing information or credentials only the user can supply. In that case, state precisely what is needed in one short message.\n- Prefer making concrete progress every turn over narrating intent. If you already explained the plan, do not repeat it; act.\n- Your FINAL message MUST start with exactly one of these markers on its own line: `DONE:` (work verified complete), `BLOCKED:` (cannot proceed without external action), or `NEEDS-INPUT:` (require user info). After the marker, list which acceptance criteria you verified and how.'
+            + (effectiveAcceptance ? `\n\n## Acceptance Criteria\n${effectiveAcceptance}\n\nDo not emit DONE: until every criterion above is verifiably satisfied. Cite the verification (tool output, test run, file path) for each one in your final message.` : '')
+            + (qaCommand ? `\n\n## QA Gate\nBefore you emit DONE:, fauna will automatically run \`${qaCommand}\` and feed the result back as a tool message. If it fails, you must address the failure and continue — do NOT emit DONE: on a failing QA run.` : '')
           : ''
       ].filter(Boolean).join('\n');
       if (fullSystem) allMessages.push({ role: 'system', content: fullSystem });
@@ -517,6 +535,7 @@ export function registerChatRoute(app, {
 
       const selfToolContext = {
         getModels: () => FALLBACK_MODELS,
+        activeProjectId: projectId || null,
         getSettings: () => ({
           model,
           thinkingBudget,
@@ -612,6 +631,26 @@ export function registerChatRoute(app, {
             send({ type: 'client_tool_pending', callId, name, args });
           });
         },
+
+        // Non-streaming LLM call for self-tools (e.g. fauna_consult_debate).
+        // Reuses the same client/model as the active turn. No tools, no stream.
+        callLLM: async ({ system, user, model: m, maxTokens = 1024, temperature = 0.4 } = {}) => {
+          try {
+            const messages = [];
+            if (system) messages.push({ role: 'system', content: String(system) });
+            messages.push({ role: 'user', content: String(user || '') });
+            const resp = await client.chat.completions.create({
+              model: m || model,
+              messages,
+              max_tokens: maxTokens,
+              temperature,
+              stream: false,
+            }, { signal: upstreamAbort.signal });
+            return resp?.choices?.[0]?.message?.content || '';
+          } catch (e) {
+            return '[debate-error] ' + (e?.message || String(e));
+          }
+        },
       };
       if (!isCLI && !noTools) {
         mcpTools = [...(mcpTools || []), ...SELF_TOOL_DEFS];
@@ -647,6 +686,12 @@ export function registerChatRoute(app, {
       let prevPreamble = '';       // narration emitted on the previous tool-call iteration
       let narrationRepeats = 0;    // consecutive iterations with near-identical preamble
       let narrationNudgeFired = false; // only inject the coaching nudge once per request
+      // Autonomous mode: per-run state for the DONE/BLOCKED marker gate, the
+      // QA gate, and the start-time used in the run-log JSONL entry.
+      let markerNudgeFired = false;
+      let qaRan = false;
+      let qaResultSummary = null;
+      const autonomousStartedAt = Date.now();
       // Autonomous mode raises the safety caps so the loop runs until the
       // task is genuinely done. The narration-repeat + per-tool timeouts
       // remain in place — autonomous does NOT mean unbounded.
@@ -662,6 +707,14 @@ export function registerChatRoute(app, {
       // Half-stop detector: model finishes mid-task by asking the user whether to proceed.
       // Matches the explicit phrases blacklisted in the system prompt's persistence section.
       const HALF_STOP_RE = /\b(want me to (continue|proceed|go ahead|keep going|do that|move on)|shall i (continue|proceed|go ahead|keep going)|should i (continue|proceed|go ahead|keep going)|do you want me to|let me know (if|when) you (want|'?d like) (me )?to|ready for the next (step|one|part)|ready to (continue|proceed)|on your (go|signal|word)|just (say|let me know) (the word|when)|happy to (continue|proceed|keep going) if)/i;
+
+      // Autonomous-mode terminal marker: model MUST begin its final message
+      // with one of DONE: / BLOCKED: / NEEDS-INPUT: so we can route reflection.
+      const MARKER_RE = /^\s*(DONE|BLOCKED|NEEDS-INPUT)\s*:/i;
+      const finalStatusFromText = (text) => {
+        const m = String(text || '').match(MARKER_RE);
+        return m ? m[1].toUpperCase() : null;
+      };
 
       // ── Tool guard — pre-call checks, category limits, browser discipline ──
       const PROMPT_PERMISSION = process.env.FAUNA_PROMPT_PERMISSION === '1';
@@ -1058,10 +1111,113 @@ export function registerChatRoute(app, {
             allMessages.push({ role: 'user', content: '[System: Do not ask whether to continue. Proceed with the next concrete step toward completing the original request, using tools as needed. Only stop when the task is fully resolved and verified — at which point give a final summary without any "want me to continue?" question.]' });
             // keep continueLoop = true
           } else {
-            send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
-              reasoning: sawReasoning ? { durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
-            });
-            continueLoop = false;
+            // ── Autonomous-mode terminal gates ──────────────────────────
+            // 1. DONE/BLOCKED/NEEDS-INPUT marker check (one retry only).
+            // 2. QA gate: when marker is DONE: and a qa.command is set,
+            //    run it once and re-loop if it fails.
+            // Only engage when the model produced terminal text and we have
+            // not been re-prompting for half-stops or narration.
+            const finalMarker = autonomousMode ? finalStatusFromText(assistantText) : null;
+
+            if (autonomousMode && assistantText.trim() && !finalMarker && !markerNudgeFired) {
+              markerNudgeFired = true;
+              console.log('[chat] autonomous: missing terminal marker — nudging once');
+              allMessages.push({ role: 'assistant', content: assistantText });
+              allMessages.push({ role: 'user', content: '[System: Autonomous mode requires your FINAL message to begin with one of `DONE:`, `BLOCKED:`, or `NEEDS-INPUT:` on its own line. Re-emit your final summary with the correct marker. If the work is verifiably complete (including any acceptance criteria), use DONE:.]' });
+              // keep continueLoop = true
+            } else if (autonomousMode && finalMarker === 'DONE' && qaCommand && !qaRan) {
+              qaRan = true;
+              console.log('[chat] autonomous QA gate: running `' + qaCommand + '`');
+              try {
+                send({ type: 'tool_call', name: 'autonomous_qa_gate', args: { command: qaCommand } });
+                const qaResultJson = await selfToolContext.runShell({
+                  command: qaCommand,
+                  cwd: _projectRecord?.rootPath || undefined,
+                  reason: 'autonomous qa gate',
+                });
+                let parsed = null;
+                try { parsed = JSON.parse(qaResultJson); } catch (_) {}
+                const qaOk = parsed && (parsed.ok === true || parsed.exitCode === 0);
+                qaResultSummary = {
+                  ok: !!qaOk,
+                  exitCode: parsed?.exitCode ?? null,
+                  command: qaCommand,
+                };
+                send({ type: 'tool_result', name: 'autonomous_qa_gate', result: qaResultJson });
+
+                if (qaOk) {
+                  // Pass — let the model emit its final response unchanged.
+                  send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
+                    reasoning: sawReasoning ? { durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
+                  });
+                  continueLoop = false;
+                } else {
+                  // Fail — feed the result back and keep looping.
+                  allMessages.push({ role: 'assistant', content: assistantText });
+                  allMessages.push({ role: 'user', content: '[System: The QA gate `' + qaCommand + '` FAILED. Output:\n\n' + (qaResultJson || '(no output)').slice(0, 4000) + '\n\nDo NOT emit DONE: until QA passes. Diagnose the failure, fix it, and re-run the work. If the failure is environmental and out of scope, use BLOCKED: with a precise reason.]' });
+                  // keep continueLoop = true
+                }
+              } catch (qaErr) {
+                console.warn('[chat] autonomous QA gate threw:', qaErr?.message || qaErr);
+                qaResultSummary = { ok: false, error: qaErr?.message || String(qaErr), command: qaCommand };
+                send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
+                  reasoning: sawReasoning ? { durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
+                });
+                continueLoop = false;
+              }
+            } else {
+              send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
+                reasoning: sawReasoning ? { durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
+              });
+              continueLoop = false;
+            }
+
+            // Once-per-run: when autonomous mode terminates, write a JSONL log
+            // entry and fire a cheap no-tools reflection turn that extracts
+            // 0-3 short lessons into long-term memory. Failures here must not
+            // affect the user-visible response.
+            if (autonomousMode && !continueLoop) {
+              const finalStatus = finalMarker || 'UNMARKED';
+              try {
+                appendAutonomousRunLog(projectId, {
+                  convId: req.body?.conversationId || null,
+                  model,
+                  toolCallCount,
+                  finalStatus,
+                  qaResult: qaResultSummary,
+                  durationMs: Date.now() - autonomousStartedAt,
+                  startedAt: autonomousStartedAt,
+                });
+              } catch (e) { console.warn('[chat] autonomous run log failed:', e?.message || e); }
+
+              // Fire reflection in the background — do not await; it must not
+              // block the SSE 'done' that already fired above.
+              (async () => {
+                try {
+                  const transcriptForReflection = allMessages
+                    .filter(m => m.role !== 'system')
+                    .slice(-12)
+                    .map(m => `[${m.role}] ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`)
+                    .join('\n').slice(0, 8000);
+                  const reflection = await selfToolContext.callLLM({
+                    system: 'You extract durable lessons from agent transcripts. Output STRICT JSON of the form {"facts":[{"text":"...","category":"preference|fact|decision|context"}]} with 0 to 3 short, specific lessons. No prose, no markdown, JSON only.',
+                    user: 'Final status: ' + finalStatus + '\n\nRecent transcript:\n' + transcriptForReflection,
+                    maxTokens: 400,
+                    temperature: 0.2,
+                  });
+                  const jsonMatch = String(reflection || '').match(/\{[\s\S]*\}/);
+                  if (!jsonMatch) return;
+                  const parsed = JSON.parse(jsonMatch[0]);
+                  const facts = Array.isArray(parsed?.facts) ? parsed.facts.slice(0, 3) : [];
+                  for (const f of facts) {
+                    if (f && typeof f.text === 'string' && f.text.trim()) {
+                      try { factsRemember(f.text.trim(), f.category || 'fact'); } catch (_) {}
+                    }
+                  }
+                  if (facts.length) console.log('[chat] autonomous reflection saved ' + facts.length + ' fact(s)');
+                } catch (e) { console.warn('[chat] reflection failed:', e?.message || e); }
+              })();
+            }
           }
         }
       }

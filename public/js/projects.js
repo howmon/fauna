@@ -410,6 +410,29 @@ function switchProjectHubTab(tab) {
   _renderProjectHubBody(proj);
 }
 
+function _escHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function _renderBacklogListHtml(items) {
+  if (!Array.isArray(items) || !items.length) return '<div class="proj-backlog-empty">No backlog items yet.</div>';
+  var rows = items.slice(0, 10).map(function(it) {
+    var score = (it.score == null) ? '—' : it.score;
+    var status = it.status || 'new';
+    return '<div class="proj-backlog-item">' +
+      '<div class="proj-backlog-item-head">' +
+        '<span class="proj-backlog-score" title="score">' + _escHtml(score) + '</span>' +
+        '<span class="proj-backlog-title">' + _escHtml(it.title || 'Untitled') + '</span>' +
+        '<span class="proj-backlog-status proj-backlog-status-' + _escHtml(status) + '">' + _escHtml(status) + '</span>' +
+      '</div>' +
+      (it.body ? '<div class="proj-backlog-body">' + _escHtml(String(it.body).slice(0, 200)) + '</div>' : '') +
+    '</div>';
+  }).join('');
+  return rows;
+}
+
 function _renderProjectHubBody(proj) {
   var body = document.getElementById('project-hub-body');
   if (!body) return;
@@ -2532,6 +2555,21 @@ function _renderSettingsTab(proj) {
       '</label>' +
       '<div class="proj-settings-hint">When on, the agent loops with higher tool-call and continuation caps and is instructed not to half-stop. Per-conversation setting overrides this.</div>' +
     '</div>' +
+    '<div class="proj-settings-row">' +
+      '<label>Acceptance criteria</label>' +
+      '<textarea id="proj-set-acceptance" rows="4" placeholder="One bullet per criterion. e.g.\n- All tests pass\n- /api/health returns 200\n- README updated">' + _escHtml(proj.acceptanceCriteria || '') + '</textarea>' +
+      '<div class="proj-settings-hint">Injected into the system prompt for autonomous runs. The agent must verify each item before emitting DONE:.</div>' +
+    '</div>' +
+    '<div class="proj-settings-row">' +
+      '<label>QA gate command</label>' +
+      '<input type="text" id="proj-set-qa-cmd" placeholder="npm test" value="' + _escHtml((proj.qa && proj.qa.command) || '') + '">' +
+      '<div class="proj-settings-hint">Runs automatically before the autonomous agent can emit DONE:. A non-zero exit blocks completion and feeds output back to the model.</div>' +
+    '</div>' +
+    '<div class="proj-settings-row">' +
+      '<label>Backlog</label>' +
+      '<div id="proj-set-backlog" class="proj-backlog-list">' + _renderBacklogListHtml(proj.backlog || []) + '</div>' +
+      '<div class="proj-settings-hint">Top items by score. Use <code>fauna_feature_request_create</code> and <code>fauna_backlog_prioritize</code> tools to manage from chat.</div>' +
+    '</div>' +
     '<div class="proj-settings-actions">' +
       '<button class="proj-action-btn" onclick="saveProjectSettings()"><i class="ti ti-check"></i> Save</button>' +
       '<button class="proj-action-btn proj-danger-btn" onclick="confirmDeleteProject()"><i class="ti ti-trash"></i> Delete project</button>' +
@@ -2582,10 +2620,14 @@ async function saveProjectSettings() {
   var root = (document.getElementById('proj-set-root') || {}).value || null;
   var allowEdit = !!(document.getElementById('proj-set-allow-edit') || {}).checked;
   var autonomous = !!(document.getElementById('proj-set-autonomous') || {}).checked;
+  var acceptance = (document.getElementById('proj-set-acceptance') || {}).value || '';
+  var qaCmd = (document.getElementById('proj-set-qa-cmd') || {}).value || '';
+  var existingQa = (proj.qa && typeof proj.qa === 'object') ? proj.qa : {};
+  var qa = { command: qaCmd, browserSmoke: existingQa.browserSmoke || '', requireScreenshot: !!existingQa.requireScreenshot };
   try {
     var r = await fetch('/api/projects/' + proj.id, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, description: desc, rootPath: root || null, color: proj.color, allowFileEditing: allowEdit, autonomousMode: autonomous })
+      body: JSON.stringify({ name, description: desc, rootPath: root || null, color: proj.color, allowFileEditing: allowEdit, autonomousMode: autonomous, acceptanceCriteria: acceptance, qa: qa })
     });
     if (!r.ok) throw new Error((await r.json()).error);
     await _refreshProject(proj.id);

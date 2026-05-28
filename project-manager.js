@@ -149,6 +149,18 @@ export function createProject(opts = {}) {
     // directive injected). Per-conversation `config.autonomousMode` overrides
     // this. See server/routes/chat.js for the effective resolution order.
     autonomousMode:  opts.autonomousMode === true,
+    // Free-text acceptance criteria injected into the system prompt when
+    // autonomous mode is on. The model must explicitly satisfy each item
+    // before emitting the DONE: marker.
+    acceptanceCriteria: opts.acceptanceCriteria || '',
+    // QA gate. Before the autonomous loop is allowed to terminate, fauna
+    // runs `qa.command` (shell), optionally drives a browser smoke check,
+    // and feeds the result back as a tool message. The model can only emit
+    // DONE: once QA passes.
+    qa: opts.qa || { command: '', browserSmoke: '', requireScreenshot: false },
+    // Lightweight backlog: feature requests + grooming notes the agent can
+    // append, list, and prioritize without leaving the project.
+    backlog: Array.isArray(opts.backlog) ? opts.backlog : [],
     permissions: {
       shell:     opts.permissions?.shell ?? (rootPath ? { cwd: rootPath } : true),
       fileRead:  opts.permissions?.fileRead  || (rootPath ? [rootPath] : []),
@@ -208,7 +220,7 @@ export function updateProject(id, patch = {}) {
   if (idx === -1) return null;
   const p = projects[idx];
   // Allowed top-level fields
-  const allowed = ['name', 'description', 'icon', 'color', 'rootPath', 'defaultAgent', 'permissions', 'allowFileEditing', 'design', 'autonomousMode'];
+  const allowed = ['name', 'description', 'icon', 'color', 'rootPath', 'defaultAgent', 'permissions', 'allowFileEditing', 'design', 'autonomousMode', 'acceptanceCriteria', 'qa', 'backlog'];
   for (const k of allowed) {
     if (patch[k] !== undefined) p[k] = patch[k];
   }
@@ -759,4 +771,99 @@ export async function listRepos(projectId, connId, accessToken) {
     return ((data.values) || []).map(r => ({ name: r.name, fullName: r.full_name, url: r.links?.clone?.find(l => l.name === 'https')?.href, defaultBranch: r.mainbranch?.name || 'main', private: r.is_private }));
   }
   return [];
+}
+
+// ── Backlog helpers (Phase 3 — feature intake + prioritization) ──────────
+// Backlog items live on the project record itself so they roll up with
+// project export and don't require a separate store. Items are small.
+
+const _RICE_DEFAULTS = { reach: 1, impact: 1, confidence: 1, effort: 1 };
+
+export function addBacklogItem(projectId, item = {}) {
+  const projects = readProjects();
+  const p = projects.find(x => x.id === projectId);
+  if (!p) return null;
+  if (!Array.isArray(p.backlog)) p.backlog = [];
+  const entry = {
+    id: uid('bk'),
+    title: String(item.title || '').slice(0, 200) || 'Untitled item',
+    body:  String(item.body  || '').slice(0, 4000),
+    status: item.status || 'new', // new | groomed | in-progress | done | dropped
+    score: null,
+    rice: { ..._RICE_DEFAULTS, ...(item.rice || {}) },
+    tags: Array.isArray(item.tags) ? item.tags.slice(0, 10).map(String) : [],
+    source: item.source || 'agent', // agent | user | reflection
+    createdAt: now(),
+    updatedAt: now(),
+  };
+  p.backlog.unshift(entry);
+  // Soft cap — projects shouldn't carry unbounded backlogs.
+  if (p.backlog.length > 500) p.backlog.length = 500;
+  p.updatedAt = now();
+  writeProjects(projects);
+  return entry;
+}
+
+export function listBacklog(projectId, { status = null, limit = 200 } = {}) {
+  const p = getProject(projectId);
+  if (!p) return [];
+  const items = Array.isArray(p.backlog) ? p.backlog.slice() : [];
+  return (status ? items.filter(i => i.status === status) : items).slice(0, limit);
+}
+
+// Compute a RICE score for each item and persist `score` + `status: 'groomed'`.
+// `method` is 'rice' (default) or 'moscow'. MoSCoW just buckets by tags.
+export function prioritizeBacklog(projectId, { method = 'rice' } = {}) {
+  const projects = readProjects();
+  const p = projects.find(x => x.id === projectId);
+  if (!p) return null;
+  if (!Array.isArray(p.backlog) || !p.backlog.length) return { ok: true, items: [] };
+  for (const item of p.backlog) {
+    if (method === 'moscow') {
+      const tag = (item.tags || []).map(t => t.toLowerCase());
+      item.score = tag.includes('must') ? 4 : tag.includes('should') ? 3 : tag.includes('could') ? 2 : tag.includes('wont') ? 1 : 0;
+    } else {
+      const r = { ..._RICE_DEFAULTS, ...(item.rice || {}) };
+      const effort = Math.max(0.25, Number(r.effort) || 1);
+      item.score = Math.round(((Number(r.reach) || 0) * (Number(r.impact) || 0) * (Number(r.confidence) || 0)) / effort * 100) / 100;
+    }
+    if (item.status === 'new') item.status = 'groomed';
+    item.updatedAt = now();
+  }
+  p.backlog.sort((a, b) => (b.score || 0) - (a.score || 0));
+  p.updatedAt = now();
+  writeProjects(projects);
+  return { ok: true, items: p.backlog.slice(0, 50) };
+}
+
+export function updateBacklogItem(projectId, itemId, patch = {}) {
+  const projects = readProjects();
+  const p = projects.find(x => x.id === projectId);
+  if (!p || !Array.isArray(p.backlog)) return null;
+  const it = p.backlog.find(x => x.id === itemId);
+  if (!it) return null;
+  const allow = ['title', 'body', 'status', 'rice', 'tags'];
+  for (const k of allow) if (patch[k] !== undefined) it[k] = patch[k];
+  it.updatedAt = now();
+  p.updatedAt = now();
+  writeProjects(projects);
+  return it;
+}
+
+// ── Autonomous-run telemetry (Phase 5) ───────────────────────────────────
+// Append-only JSONL log per project per day. Lives under
+// ~/.config/fauna/autonomous-runs/<projectId>-YYYY-MM-DD.jsonl
+const AUTONOMOUS_RUNS_DIR = path.join(CONFIG_DIR, 'autonomous-runs');
+
+export function appendAutonomousRunLog(projectId, runData = {}) {
+  try {
+    fs.mkdirSync(AUTONOMOUS_RUNS_DIR, { recursive: true });
+    const day = new Date().toISOString().slice(0, 10);
+    const file = path.join(AUTONOMOUS_RUNS_DIR, `${projectId || 'global'}-${day}.jsonl`);
+    fs.appendFileSync(file, JSON.stringify({ ts: Date.now(), ...runData }) + '\n');
+    return file;
+  } catch (e) {
+    console.warn('[autonomous-runs] failed to append log:', e?.message || e);
+    return null;
+  }
 }
