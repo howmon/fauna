@@ -81,14 +81,10 @@ export function buildVideoStudioWidget(job) {
     <br><br>
     <label>Duration (s) <input type="text" id="set-duration"></label>
   </div>
-</div>
-<script>
-${widgetScript(port, jobId)}
-</script>
-</body></html>`;
+</div>`;
 
   return {
-    bundle: { html, js: '' },
+    bundle: { html, js: widgetScript(port, jobId) },
     title: 'Video Studio · ' + (job.params.subject || 'untitled'),
     tools: [
       { name: 'run_all',       description: 'Run the full pipeline (script → terms → audio → subtitle → footage → render).', parameters: { type: 'object', properties: {} } },

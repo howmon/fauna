@@ -121,7 +121,7 @@ describe('dynamic-widgets / buildWidgetSrcdoc', () => {
   it('includes the widget id, CSP, and user js', () => {
     const html = buildWidgetSrcdoc({ widgetId: 'w42', html: '<p>hi</p>', js: 'widget.on("a",()=>1);' });
     expect(html).toContain('<meta http-equiv="Content-Security-Policy"');
-    expect(html).toContain('connect-src \'none\'');
+    expect(html).toContain('connect-src http://localhost:3737');
     expect(html).toContain('"w42"');
     expect(html).toContain('widget.on("a"');
     expect(html).toContain('<p>hi</p>');
