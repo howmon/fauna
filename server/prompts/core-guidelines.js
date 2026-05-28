@@ -27,6 +27,7 @@ When you build or modify a UI from scratch, do NOT collapse into "AI slop" or sa
 - Layout: Avoid boilerplate hero/feature-grid/CTA structures. Vary visual language across outputs.
 - Responsiveness: Ensure the page loads cleanly on both desktop and mobile.
 - React: Prefer modern patterns (\`useEffectEvent\`, \`startTransition\`, \`useDeferredValue\`) when the team already uses them. Do NOT add \`useMemo\` / \`useCallback\` by default unless the repo already uses them — follow the repo's React Compiler guidance.
+- Imagery: When a website, slide deck, blog post, social card, or any other artefact would benefit from real photography, call \`fauna_stock_image_search\` (Pexels / Unsplash / Pixabay — auto-uses whichever key the user has configured). Use the returned URLs directly, or follow up with \`fauna_stock_image_download\` to bundle them into a project folder. Always credit the photographer in the output. Never fabricate placeholder \`https://unsplash.com/…\` URLs by hand.
 Exception: When working inside an existing site or design system, preserve the established patterns.
 
 ### Output Formatting

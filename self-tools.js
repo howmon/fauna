@@ -31,6 +31,11 @@ import {
 import { buildVideoStudioWidget } from './server/video/widget-bundle.js';
 import { getCopilotClient as videoGetCopilotClient } from './server/copilot/auth.js';
 import {
+  searchStockImages,
+  downloadStockImages,
+  availableImageProviders,
+} from './server/media/stock-images.js';
+import {
   savePlaybookEntry, listPlaybookEntries, getPlaybookEntry,
   touchPlaybookEntry, deletePlaybookEntry,
 } from './playbook-store.js';
@@ -1390,6 +1395,70 @@ export const SELF_TOOL_DEFS = [
       parameters: { type: 'object', properties: {} },
     },
   },
+  // ── Stock imagery (Pexels / Unsplash / Pixabay) ────────────────────────
+  // Use these any time you need real photographs for a generated artefact
+  // (websites, slide decks, social cards, marketing copy, etc.). The tool
+  // automatically picks whichever provider key the user has configured and
+  // falls back to the next one if a search returns nothing.
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_stock_image_search',
+      description:
+        'Search Pexels / Unsplash / Pixabay for photographs and return remote URLs + credit info. Auto-uses whichever provider key the user has configured (fallback in that order). Returns {ok, results:[{url, thumb, width, height, photographer, sourceUrl, source}]}. Use BEFORE generating websites, slide decks, blog posts, or anything that benefits from real imagery. To embed straight away use the returned url; to bundle into a project folder follow up with fauna_stock_image_download.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query:     { type: 'string', description: 'Search phrase, e.g. "mountain sunset", "developer at laptop".' },
+          aspect:    { type: 'string', enum: ['landscape', 'portrait', 'square'], description: 'Preferred orientation. Defaults to landscape.' },
+          count:     { type: 'number', description: 'Max results (1–24). Default 6.' },
+          providers: { type: 'array', items: { type: 'string', enum: ['pexels', 'unsplash', 'pixabay'] }, description: 'Optional explicit order; default = auto by available keys.' },
+          mode:      { type: 'string', enum: ['first', 'merge'], description: '"first" (default) returns the first provider that has hits; "merge" concatenates all.' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_stock_image_download',
+      description:
+        'Download stock images (typically the results of fauna_stock_image_search) to a local folder so they can be referenced from generated HTML, slide decks, PDFs, etc. Returns the same items with an added `path` field per image. Always credit the photographer (returned in the search results) in any produced artefact.',
+      parameters: {
+        type: 'object',
+        properties: {
+          items: {
+            type: 'array',
+            description: 'Image objects to download — each must include at least {url, source}. Pass results from fauna_stock_image_search directly.',
+            items: {
+              type: 'object',
+              properties: {
+                url:    { type: 'string' },
+                source: { type: 'string' },
+                photographer: { type: 'string' },
+                sourceUrl:    { type: 'string' },
+                width:  { type: 'number' },
+                height: { type: 'number' },
+              },
+              required: ['url'],
+            },
+          },
+          destDir: { type: 'string', description: 'Absolute folder path to save into (will be created). Use a project-scoped path like ~/Documents/Fauna/assets/<project>/.' },
+          prefix:  { type: 'string', description: 'Filename prefix. Default "img".' },
+        },
+        required: ['items', 'destDir'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_stock_image_providers',
+      description: 'List which stock-image providers the user has configured keys for (Pexels / Unsplash / Pixabay).',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
 ];
 
 // ── Dynamic Widget tool definitions (gated by enableDynamicWidgets flag) ──
@@ -2000,6 +2069,48 @@ export function executeSelfTool(toolName, args, context = {}) {
         stepsDone: j.stepsDone, finalPath: j.artifacts.finalPath,
       }));
       return JSON.stringify({ ok: true, jobs });
+    }
+
+    // ── Stock imagery ─────────────────────────────────────────────────────
+    case 'fauna_stock_image_search': {
+      return (async () => {
+        try {
+          const res = await searchStockImages(String(args.query || ''), {
+            aspect: args.aspect || 'landscape',
+            count: Number(args.count) > 0 ? Number(args.count) : 6,
+            providers: Array.isArray(args.providers) ? args.providers : null,
+            mode: args.mode === 'merge' ? 'merge' : 'first',
+          });
+          return JSON.stringify(res);
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: e.message, results: [] });
+        }
+      })();
+    }
+    case 'fauna_stock_image_download': {
+      return (async () => {
+        try {
+          if (!Array.isArray(args.items) || !args.items.length) {
+            return JSON.stringify({ ok: false, error: 'items array required' });
+          }
+          if (!args.destDir || typeof args.destDir !== 'string') {
+            return JSON.stringify({ ok: false, error: 'destDir required' });
+          }
+          const destDir = args.destDir.startsWith('~')
+            ? path.join(os.homedir(), args.destDir.slice(1))
+            : args.destDir;
+          const results = await downloadStockImages(args.items, {
+            destDir,
+            prefix: typeof args.prefix === 'string' ? args.prefix : 'img',
+          });
+          return JSON.stringify({ ok: true, destDir, count: results.length, results });
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: e.message });
+        }
+      })();
+    }
+    case 'fauna_stock_image_providers': {
+      return JSON.stringify({ ok: true, providers: availableImageProviders() });
     }
 
     default:
