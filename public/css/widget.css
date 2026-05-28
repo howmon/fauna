@@ -493,3 +493,58 @@ body {
 }
 .alert-badge.hidden { display: none; }
 .tb-btn.alerts-off { opacity: 0.4; }
+
+/* ── Ask Fauna (Clippy-style quick prompt) ───────────────────── */
+#ask-bar {
+  padding: 10px 12px;
+  background: var(--w-surface);
+  border-bottom: 1px solid var(--w-border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.ask-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--w-bg);
+  border: 1px solid var(--w-border);
+  border-radius: 8px;
+  padding: 4px 6px 4px 10px;
+}
+.ask-row:focus-within { border-color: var(--w-accent); }
+.ask-icon { color: var(--w-accent); font-size: 14px; }
+#ask-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--w-text);
+  font-family: var(--w-font);
+  font-size: 13px;
+  padding: 6px 0;
+}
+.ask-send {
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--w-accent);
+  color: #000;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.ask-send:hover { filter: brightness(1.1); }
+.ask-send:disabled { opacity: 0.4; cursor: not-allowed; }
+.ask-hint {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10.5px;
+  color: var(--w-text-dim);
+  padding: 0 4px;
+}
+.ask-ctx { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.ask-ctx input { margin: 0; cursor: pointer; }
+.ask-kbd { opacity: 0.7; font-family: ui-monospace, Menlo, monospace; }

@@ -52,7 +52,9 @@ describe('self-tools', () => {
       // Bumped to 30 after adding fauna_mouse (cursor control via Quartz/PowerShell).
       // Bumped to 33 after adding fauna_mouse_position, fauna_keyboard, fauna_ui_tree
       // (full desktop-agent toolkit via cached Swift helper / UIAutomation).
-      expect(SELF_TOOL_DEFS).toHaveLength(33);
+      // Bumped to 34 after adding fauna_screen_context (Clippy-style one-call
+      // snapshot — frontmost app + window + AX clickable nodes).
+      expect(SELF_TOOL_DEFS).toHaveLength(34);
     });
 
     it('each tool has required OpenAI function format', () => {

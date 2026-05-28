@@ -2097,3 +2097,32 @@ document.addEventListener('DOMContentLoaded', function() {
     setTimeout(openOnboarding, 600);
   }
 });
+
+// ── Companion "Ask Fauna" handoff ────────────────────────────────────
+// Triggered by the widget (Ctrl/Cmd+Shift+J or the ⚡ Ask button) via
+// main.js → renderer dispatch. Starts a fresh conversation pre-loaded
+// with the user's text and (optionally) instructs the agent to call
+// fauna_screen_context first.
+window.addEventListener('fauna:ask-prompt', function (e) {
+  try {
+    const text = String(e?.detail?.text || '').trim();
+    if (!text) return;
+    const withContext = e?.detail?.withContext !== false;
+    if (typeof newConversation === 'function') newConversation();
+    const $input = document.getElementById('msg-input');
+    if ($input) {
+      const prefix = withContext
+        ? '[Companion mode] First call fauna_screen_context to see what app/window I am looking at, then answer:\n\n'
+        : '';
+      $input.value = prefix + text;
+      $input.focus();
+      // Trigger autoresize if the app uses one
+      $input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    if (typeof sendMessage === 'function') {
+      setTimeout(() => { try { sendMessage(); } catch (_) {} }, 80);
+    }
+  } catch (err) {
+    console.warn('[fauna:ask-prompt] handler failed:', err.message);
+  }
+});

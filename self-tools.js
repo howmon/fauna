@@ -245,6 +245,35 @@ func uiTree(maxDepth: Int, clickableOnly: Bool) -> String {
   return "{\\"app\\":" + jsonStr(app.localizedName ?? "") + ",\\"tree\\":" + nodeToJSON(node, clickableOnly: clickableOnly) + "}"
 }
 
+func frontmostApp() -> String {
+  guard let app = NSWorkspace.shared.frontmostApplication else { return "{\\"error\\":\\"no frontmost app\\"}" }
+  let pid = app.processIdentifier
+  let axApp = AXUIElementCreateApplication(pid)
+  var winTitle = ""
+  var winX = 0, winY = 0, winW = 0, winH = 0
+  var winV: CFTypeRef?
+  if AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &winV) == .success, let win = winV {
+    let w = win as! AXUIElement
+    winTitle = axString(w, kAXTitleAttribute as String) ?? ""
+    if let r = axRect(w) { winX = Int(r.minX); winY = Int(r.minY); winW = Int(r.width); winH = Int(r.height) }
+  }
+  var screens = "["
+  for (i, sc) in NSScreen.screens.enumerated() {
+    if i > 0 { screens += "," }
+    let f = sc.frame
+    screens += "{\\"index\\":\\(i),\\"x\\":\\(Int(f.minX)),\\"y\\":\\(Int(f.minY)),\\"w\\":\\(Int(f.width)),\\"h\\":\\(Int(f.height))}"
+  }
+  screens += "]"
+  var out = "{"
+  out += "\\"app\\":" + jsonStr(app.localizedName ?? "")
+  out += ",\\"bundleId\\":" + jsonStr(app.bundleIdentifier ?? "")
+  out += ",\\"pid\\":\\(pid)"
+  out += ",\\"window\\":{\\"title\\":" + jsonStr(winTitle) + ",\\"x\\":\\(winX),\\"y\\":\\(winY),\\"w\\":\\(winW),\\"h\\":\\(winH)}"
+  out += ",\\"screens\\":" + screens
+  out += "}"
+  return out
+}
+
 switch cmd {
   case "mouse_move":     mouseMove(d(2), d(3))
   case "mouse_click":    mouseClick(d(2), d(3))
@@ -263,13 +292,16 @@ switch cmd {
     let clickOnly = s(3) == "1"
     print(uiTree(maxDepth: depth, clickableOnly: clickOnly))
     exit(0)
+  case "frontmost_app":
+    print(frontmostApp())
+    exit(0)
   default:
     FileHandle.standardError.write("unknown cmd: \\(cmd)\\n".data(using: .utf8)!); exit(2)
 }
 print("ok")
 `;
 
-const FAUNA_HELPER_VERSION = 'v2'; // bump to force rebuild
+const FAUNA_HELPER_VERSION = 'v3'; // bump to force rebuild
 let _faunaHelperPath = null;
 
 async function _getFaunaHelper() {
@@ -317,6 +349,25 @@ async function _faunaMouse(args) {
   }
   if (action === 'scroll' && !Number.isFinite(args.dy)) {
     throw new Error('dy required for scroll');
+  }
+
+  // Click-preview HUD — flash a visible target ring at (x,y) just before the
+  // click fires so the user can see what Fauna is about to interact with.
+  // Skipped for `move`/`scroll` (no discrete target) and when args.silent===true.
+  const previewKind = action === 'click' ? 'click'
+                    : action === 'double_click' ? 'click'
+                    : action === 'right_click' ? 'right'
+                    : action === 'drag' ? 'drag'
+                    : null;
+  if (previewKind && !args.silent && typeof global.__faunaShowClickPreview === 'function') {
+    try {
+      global.__faunaShowClickPreview({
+        kind: previewKind, x: args.x, y: args.y,
+        toX: args.toX, toY: args.toY,
+      });
+      // Brief delay so the user actually sees the ring before the click lands.
+      await new Promise(r => setTimeout(r, 240));
+    } catch (_) {}
   }
 
   if (plat === 'darwin') {
@@ -478,6 +529,76 @@ $out | ConvertTo-Json -Depth 30 -Compress
     const r = await _runCmd('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps]);
     if (r.code !== 0) return { ok: false, error: 'ui_tree failed', stderr: (r.stderr || '').slice(0, 500) };
     try { return { ok: true, ...JSON.parse(r.stdout) }; } catch (e) { return { ok: false, error: 'bad output' }; }
+  }
+  return { ok: false, error: 'unsupported platform: ' + plat };
+}
+
+// fauna_screen_context — one-call snapshot of what the user is looking at.
+// Bundles: frontmost app + window bounds + display list + clickable AX nodes
+// (top N flattened, with screen-space coords). Designed for Clippy-style
+// companion mode so the model can answer "what am I looking at?" in one tool
+// round-trip instead of chaining fauna_list_windows + fauna_ui_tree.
+function _flattenAX(node, out, max) {
+  if (!node || out.length >= max) return;
+  if (node.role && node.title !== undefined) {
+    const clickable = /Button|Link|CheckBox|RadioButton|MenuItem|MenuButton|PopUpButton|TextField|TextArea|SearchField|Tab|Cell/i.test(node.role || '');
+    if (clickable || (node.title && node.title.length > 0 && node.title.length < 80)) {
+      out.push({
+        role: node.role,
+        title: (node.title || '').slice(0, 80),
+        x: node.x, y: node.y, w: node.w, h: node.h,
+        path: node.path,
+        cx: Math.round((node.x || 0) + (node.w || 0) / 2),
+        cy: Math.round((node.y || 0) + (node.h || 0) / 2),
+      });
+    }
+  }
+  if (Array.isArray(node.children)) {
+    for (const c of node.children) {
+      if (out.length >= max) break;
+      _flattenAX(c, out, max);
+    }
+  }
+}
+
+async function _faunaScreenContext(args) {
+  const plat = process.platform;
+  const max = Math.max(5, Math.min(120, Number(args?.maxNodes) || 40));
+  const depth = Math.max(3, Math.min(15, Number(args?.depth) || 8));
+  if (plat === 'darwin') {
+    const helper = await _getFaunaHelper();
+    const [frontR, treeR] = await Promise.all([
+      _runCmd(helper, ['frontmost_app']),
+      _runCmd(helper, ['ui_tree', String(depth), '0']),
+    ]);
+    if (frontR.code !== 0) {
+      const e = _classifyHelperError(frontR.stderr);
+      return { ok: false, error: e || ('frontmost_app failed (exit ' + frontR.code + ')'), stderr: (frontR.stderr || '').slice(0, 500) };
+    }
+    let front, tree;
+    try { front = JSON.parse(frontR.stdout); } catch (_) { front = { error: 'bad frontmost output' }; }
+    try { tree = treeR.code === 0 ? JSON.parse(treeR.stdout) : null; } catch (_) { tree = null; }
+    const nodes = [];
+    if (tree?.tree) _flattenAX(tree.tree, nodes, max);
+    return {
+      ok: true,
+      platform: 'darwin',
+      app: front.app,
+      bundleId: front.bundleId,
+      pid: front.pid,
+      window: front.window,
+      screens: front.screens,
+      nodes,
+      nodeCount: nodes.length,
+      truncated: nodes.length >= max,
+    };
+  }
+  if (plat === 'win32') {
+    const ui = await _faunaUITree({ maxDepth: depth, clickableOnly: false });
+    if (!ui.ok) return ui;
+    const nodes = [];
+    if (ui.tree) _flattenAX(ui.tree, nodes, max);
+    return { ok: true, platform: 'win32', app: ui.app || '', window: { title: ui.app || '' }, screens: [], nodes, nodeCount: nodes.length, truncated: nodes.length >= max };
   }
   return { ok: false, error: 'unsupported platform: ' + plat };
 }
@@ -1000,6 +1121,7 @@ export const SELF_TOOL_DEFS = [
           toX: { type: 'number', description: 'Drag release x (required for drag).' },
           toY: { type: 'number', description: 'Drag release y (required for drag).' },
           dy: { type: 'number', description: 'Scroll amount in wheel lines (required for scroll). Positive scrolls down.' },
+          silent: { type: 'boolean', description: 'If true, suppress the visible click-preview ring (HUD flash). Default false — every click/drag/right-click briefly highlights the target so the user can see what is about to be clicked.' },
         },
         required: ['action'],
       },
@@ -1039,6 +1161,20 @@ export const SELF_TOOL_DEFS = [
         properties: {
           maxDepth: { type: 'number', description: 'Max tree depth (default 8, max 20). Deeper = more detail, more tokens.' },
           clickableOnly: { type: 'boolean', description: 'If true, mark only clickable roles (button, link, text field, menu item, etc).' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_screen_context',
+      description: 'ONE-CALL snapshot of what the user is currently looking at on their computer. Returns: frontmost app (name, bundleId, pid), focused window (title + screen bounds), display list, and a FLATTENED list of clickable/named Accessibility nodes (role, title, x/y/w/h, plus precomputed cx/cy center coords ready for fauna_mouse). Prefer this over chaining fauna_list_windows + fauna_ui_tree when starting a task in companion/Clippy mode — it gives the model immediate situational awareness in a single round-trip. Pass maxNodes (default 40) and depth (default 8) to control verbosity. macOS requires Accessibility permission.',
+      parameters: {
+        type: 'object',
+        properties: {
+          maxNodes: { type: 'number', description: 'Max flattened nodes returned (default 40, range 5-120).' },
+          depth:    { type: 'number', description: 'Max AX tree depth to walk (default 8, range 3-15).' },
         },
       },
     },
@@ -1543,6 +1679,9 @@ export function executeSelfTool(toolName, args, context = {}) {
     }
     case 'fauna_ui_tree': {
       return _faunaUITree(args || {}).then(r => JSON.stringify(r)).catch(e => JSON.stringify({ ok: false, error: e.message }));
+    }
+    case 'fauna_screen_context': {
+      return _faunaScreenContext(args || {}).then(r => JSON.stringify(r)).catch(e => JSON.stringify({ ok: false, error: e.message }));
     }
 
     // ── Backlog ──

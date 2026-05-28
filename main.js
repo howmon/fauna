@@ -441,6 +441,139 @@ ipcMain.on('widget:open-in-app', () => {
   }
 });
 
+// ── Widget: Ask Fauna (Clippy-style quick prompt) ────────────────────
+// The widget sends a one-shot text prompt; we open/show the main window
+// and forward the prompt to the renderer, which starts a new conversation
+// pre-loaded with the user's text. Optional `withContext:true` causes the
+// renderer to first call fauna_screen_context and inline the snapshot.
+ipcMain.on('widget:ask', (_e, payload) => {
+  const text = (payload?.text || '').toString().trim();
+  if (!text) return;
+  const withContext = payload?.withContext !== false; // default ON
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show();
+    mainWindow.focus();
+    const safe = JSON.stringify({ text, withContext });
+    mainWindow.webContents.executeJavaScript(
+      `window.dispatchEvent(new CustomEvent('fauna:ask-prompt', { detail: ${safe} }))`
+    ).catch(() => {});
+  }
+});
+
+// ── Click-preview HUD ───────────────────────────────────────────────
+// A frameless, transparent, click-through overlay window that briefly
+// flashes a target ring at (x,y) in screen coords before fauna_mouse
+// click / double_click / right_click / drag fires. Gives the user a
+// visible "Fauna is about to click here" cue — Clippy-style safety.
+let clickHudWindow = null;
+function _ensureClickHud() {
+  if (clickHudWindow && !clickHudWindow.isDestroyed()) return clickHudWindow;
+  const primary = screen.getPrimaryDisplay();
+  const { x, y, width, height } = primary.bounds;
+  clickHudWindow = new BrowserWindow({
+    x, y, width, height,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    focusable: false,
+    hasShadow: false,
+    backgroundColor: '#00000000',
+    show: false,
+    webPreferences: { contextIsolation: true, nodeIntegration: false },
+  });
+  clickHudWindow.setIgnoreMouseEvents(true, { forward: false });
+  if (typeof clickHudWindow.setVisibleOnAllWorkspaces === 'function') {
+    clickHudWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  }
+  if (typeof clickHudWindow.setAlwaysOnTop === 'function') {
+    clickHudWindow.setAlwaysOnTop(true, 'screen-saver');
+  }
+  // Tiny inline HTML — no external network.
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+    html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden;pointer-events:none;}
+    .ring{position:absolute;border-radius:50%;pointer-events:none;
+      box-shadow:0 0 0 3px rgba(0,200,255,.9),0 0 20px rgba(0,200,255,.6),inset 0 0 0 2px rgba(255,255,255,.9);
+      animation:pop .28s ease-out forwards;}
+    .ring.right{box-shadow:0 0 0 3px rgba(255,120,80,.9),0 0 20px rgba(255,120,80,.6),inset 0 0 0 2px rgba(255,255,255,.9);}
+    .ring.drag{box-shadow:0 0 0 3px rgba(160,255,120,.9),0 0 20px rgba(160,255,120,.6),inset 0 0 0 2px rgba(255,255,255,.9);}
+    @keyframes pop{0%{transform:scale(.4);opacity:.2}40%{transform:scale(1.2);opacity:1}100%{transform:scale(1);opacity:0}}
+    .line{position:absolute;height:3px;background:linear-gradient(90deg,rgba(160,255,120,.9),rgba(0,200,255,.9));pointer-events:none;
+      box-shadow:0 0 8px rgba(160,255,120,.7);transform-origin:0 50%;animation:fade .35s ease-out forwards;}
+    @keyframes fade{0%{opacity:0}30%{opacity:1}100%{opacity:0}}
+  </style></head><body>
+  <script>
+    const SIZE = 44;
+    window.faunaShowClick = function(x, y, kind){
+      const r = document.createElement('div');
+      r.className = 'ring' + (kind ? ' ' + kind : '');
+      r.style.left = (x - SIZE/2) + 'px';
+      r.style.top  = (y - SIZE/2) + 'px';
+      r.style.width = SIZE + 'px';
+      r.style.height = SIZE + 'px';
+      document.body.appendChild(r);
+      setTimeout(() => r.remove(), 400);
+    };
+    window.faunaShowDrag = function(x1, y1, x2, y2){
+      window.faunaShowClick(x1, y1, 'drag');
+      window.faunaShowClick(x2, y2, 'drag');
+      const dx = x2 - x1, dy = y2 - y1;
+      const len = Math.sqrt(dx*dx + dy*dy);
+      const ang = Math.atan2(dy, dx) * 180 / Math.PI;
+      const l = document.createElement('div');
+      l.className = 'line';
+      l.style.left = x1 + 'px';
+      l.style.top  = (y1 - 1) + 'px';
+      l.style.width = len + 'px';
+      l.style.transform = 'rotate(' + ang + 'deg)';
+      document.body.appendChild(l);
+      setTimeout(() => l.remove(), 450);
+    };
+  </script>
+  </body></html>`;
+  clickHudWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+  clickHudWindow.on('closed', () => { clickHudWindow = null; });
+  return clickHudWindow;
+}
+
+ipcMain.on('fauna:click-preview', (_e, payload) => {
+  showClickPreview(payload);
+});
+
+// Direct in-process hook so self-tools.js (loaded in this same main process)
+// can flash the HUD without going through IPC. Returns a Promise that
+// resolves after the visual delay (~280ms) so callers can `await` before
+// issuing the actual click.
+function showClickPreview(payload) {
+  try {
+    const w = _ensureClickHud();
+    const kind = String(payload?.kind || 'click');
+    const displays = screen.getAllDisplays();
+    const minX = Math.min(...displays.map(d => d.bounds.x));
+    const minY = Math.min(...displays.map(d => d.bounds.y));
+    const maxX = Math.max(...displays.map(d => d.bounds.x + d.bounds.width));
+    const maxY = Math.max(...displays.map(d => d.bounds.y + d.bounds.height));
+    w.setBounds({ x: minX, y: minY, width: maxX - minX, height: maxY - minY });
+    if (!w.isVisible()) w.showInactive();
+    const x = Number(payload?.x) - minX;
+    const y = Number(payload?.y) - minY;
+    if (kind === 'drag') {
+      const tx = Number(payload?.toX) - minX;
+      const ty = Number(payload?.toY) - minY;
+      w.webContents.executeJavaScript(`faunaShowDrag(${x},${y},${tx},${ty})`).catch(() => {});
+    } else {
+      w.webContents.executeJavaScript(`faunaShowClick(${x},${y},${JSON.stringify(kind)})`).catch(() => {});
+    }
+  } catch (e) {
+    console.warn('[click-preview] failed:', e.message);
+  }
+}
+global.__faunaShowClickPreview = showClickPreview;
+
 // ── Show native notification (from server / self-tools) ──────────────
 ipcMain.on('show-notification', (event, { title, body }) => {
   new Notification({ title: title || 'Fauna', body: body || '' }).show();
@@ -910,6 +1043,18 @@ app.whenReady().then(async () => {
 
   // Global shortcut: Ctrl+Shift+T (Cmd+Shift+T is used by the menu for the in-app panel)
   globalShortcut.register('Ctrl+Shift+Space', () => toggleWidget());
+
+  // Companion "Ask Fauna" hotkey — opens the widget and focuses the ask input.
+  globalShortcut.register('CommandOrControl+Shift+J', () => {
+    createWidget();
+    setTimeout(() => {
+      try {
+        widgetWindow?.show();
+        widgetWindow?.focus();
+        widgetWindow?.webContents.send('widget:focus-ask');
+      } catch (_) {}
+    }, 50);
+  });
 
   // Phase-5/7: dictation hotkey, sourced from voice-settings (live editable
   // via the settings UI). Falls back to platform default if user cleared it.

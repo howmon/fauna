@@ -17,10 +17,24 @@
     </div>
     <div class="titlebar-btns">
       <button id="btn-new"       class="tb-btn" title="New automation"><i class="ti ti-plus"></i></button>
+      <button id="btn-ask"       class="tb-btn" title="Ask Fauna (⌘⇧J)"><i class="ti ti-sparkles"></i></button>
       <button id="btn-alerts"    class="tb-btn" title="Heartbeat alerts: on"><i class="ti ti-bell"></i><span id="alert-badge" class="alert-badge hidden">0</span></button>
       <button id="btn-open-app"  class="tb-btn" title="Open in Fauna"><i class="ti ti-layout-sidebar"></i></button>
       <button id="btn-pin"       class="tb-btn" title="Pin on top"><i class="ti ti-pin"></i></button>
       <button id="btn-close"     class="tb-btn" title="Hide widget"><i class="ti ti-x"></i></button>
+    </div>
+  </div>
+
+  <!-- Ask Fauna (Clippy-style quick prompt) -->
+  <div id="ask-bar" class="hidden">
+    <div class="ask-row">
+      <i class="ti ti-sparkles ask-icon"></i>
+      <input id="ask-input" type="text" placeholder="Ask Fauna anything about what you're doing…" autocomplete="off">
+      <button id="ask-send" class="ask-send" title="Send (Enter)"><i class="ti ti-arrow-up"></i></button>
+    </div>
+    <div class="ask-hint">
+      <label class="ask-ctx"><input type="checkbox" id="ask-ctx" checked> Include screen context</label>
+      <span class="ask-kbd">Esc to close</span>
     </div>
   </div>
 

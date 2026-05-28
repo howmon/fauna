@@ -378,6 +378,42 @@ if (window.widgetAPI?.onPinChanged) {
   });
 }
 
+// ── Ask Fauna (Clippy-style quick prompt) ────────────────────────────────
+
+const $askBar   = document.getElementById('ask-bar');
+const $askInput = document.getElementById('ask-input');
+const $askSend  = document.getElementById('ask-send');
+const $askCtx   = document.getElementById('ask-ctx');
+const $btnAsk   = document.getElementById('btn-ask');
+
+function openAskBar() {
+  $askBar?.classList.remove('hidden');
+  setTimeout(() => $askInput?.focus(), 30);
+}
+function closeAskBar() {
+  $askBar?.classList.add('hidden');
+  if ($askInput) $askInput.value = '';
+}
+function sendAsk() {
+  const text = ($askInput?.value || '').trim();
+  if (!text) return;
+  const withContext = $askCtx?.checked !== false;
+  try { window.widgetAPI?.ask?.(text, { withContext }); } catch (_) {}
+  closeAskBar();
+}
+
+$btnAsk?.addEventListener('click', () => {
+  if ($askBar?.classList.contains('hidden')) openAskBar(); else closeAskBar();
+});
+$askSend?.addEventListener('click', sendAsk);
+$askInput?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAsk(); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeAskBar(); }
+});
+if (window.widgetAPI?.onFocusAsk) {
+  window.widgetAPI.onFocusAsk(() => openAskBar());
+}
+
 // ── Fetch ─────────────────────────────────────────────────────────────────
 
 async function fetchTasks() {
