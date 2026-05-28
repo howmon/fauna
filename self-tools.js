@@ -822,7 +822,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_browser',
-      description: 'Drive the in-app browser webview (navigate, click, type, extract, screenshot, etc.) and get the result back in the SAME assistant turn. PREFER this over markdown ```browser-action blocks when tools are available — it keeps the agent loop running so you can chain web steps without bouncing back to the user. The webview reuses the existing tab; pass action-specific fields just like the browser-action JSON schema.',
+      description: 'Drive the in-app WEB browser webview (navigate to http(s):// or file:// URLs, click/type DOM selectors, extract HTML, evaluate JS, take page screenshot, etc.). ONLY use this for actual web pages or local HTML files. DO NOT use this for desktop apps (Figma desktop, Slack desktop, VS Code, Finder, native macOS/Windows UIs) — those require fauna_mouse / fauna_keyboard / fauna_ui_tree / fauna_arrange_windows instead. DO NOT call this just to "take a screenshot" of the user\'s screen — there is no screen capture here, only the current webview page. DO NOT open it speculatively at the start of a task; only call it once you have decided you need a web URL. PREFER this over markdown ```browser-action fenced blocks when web automation is genuinely needed.',
       parameters: {
         type: 'object',
         properties: {

@@ -12,11 +12,18 @@ export const BROWSER_BUILD_CONTEXT = `
 
 You have a built-in browser panel that runs inside the app. Drive it with the native \`fauna_browser\` tool (action: navigate, click, type, extract, evaluate, screenshot, scroll, wait, new-tab, switch-tab, close-tab, list-tabs). The tool returns the result in the same turn so you can chain steps without waiting on the user.
 
+### When NOT to use \`fauna_browser\` (read this first)
+\`fauna_browser\` ONLY controls a web webview inside Fauna. It cannot see, click, or interact with anything outside that webview. Do NOT call it for:
+- Desktop apps (Figma desktop, Slack desktop, VS Code, Finder, Terminal, native dialogs/modals) — use \`fauna_mouse\`, \`fauna_keyboard\`, \`fauna_ui_tree\`, \`fauna_arrange_windows\` instead.
+- Taking a screenshot of the user's screen / another window — \`action:"screenshot"\` only captures the in-app webview, NOT the desktop. For a real screen capture, use \`fauna_shell_exec\` with \`screencapture\` (macOS) or PowerShell (Windows).
+- "Just to look around" or speculative exploration at the start of a task. Only open it once you have a concrete web URL to visit.
+- Re-fetching a page the user already shared via the Fauna Web Extension (use the inline \`[Resolved live browser tab context]\` instead).
+
 ### Web routing order
 Before reaching for the browser, pick the lowest-risk path that satisfies the request:
 1. If a real browser tab is shared via the Fauna Web Extension, use \`browser-ext-action\` (extension) to read that tab first.
 2. For simple read-only URL / page / article tasks, use a fetch / headless HTTP tool instead of opening a browser.
-3. Use \`fauna_browser\` for user-visible pages, forms, clicks, screenshots, JS-heavy pages, blocked fetches, or debugging web apps.
+3. Use \`fauna_browser\` for user-visible web pages, forms, clicks, screenshots of a web page, JS-heavy pages, blocked fetches, or debugging web apps.
 4. Use Playwright MCP only when the user enabled it or explicitly asked for Playwright-style automation/testing.
 
 ### Dev Server + Browser Debugging Workflow
