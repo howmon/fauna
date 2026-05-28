@@ -1310,7 +1310,8 @@ export const SELF_TOOL_DEFS = [
     function: {
       name: 'fauna_video_create',
       description:
-        'Create a short-form video generation job and emit the Video Studio preview widget. The pipeline (script → terms → audio → subtitle → footage → render) starts automatically and streams progress; the widget shows live updates. Use whenever the user asks to make / generate / produce a video, short, Reel, TikTok, or Shorts. Do NOT also call fauna_video_run_all — it\'s already running. Set autorun:false only if the user wants to edit the params before kicking off render.',
+        'Create a short-form video generation job and emit the Video Studio preview widget. The pipeline (script → terms → audio → subtitle → footage → render) starts automatically and streams progress; the widget shows live updates. Use whenever the user asks to make / generate / produce a video, short, Reel, TikTok, or Shorts. Do NOT also call fauna_video_run_all — it\'s already running. Set autorun:false only if the user wants to edit the params before kicking off render. ' +
+        'AFTER calling this tool, keep your chat reply to ONE short sentence (e.g. "On it — Video Studio is below."). The widget already shows the subject, duration, aspect, voice, progress chips, and iteration buttons — do NOT re-list any of that in chat, and do NOT suggest next actions like "you can edit the script" / "switch to 16:9" since those buttons are visible in the widget itself.',
       parameters: {
         type: 'object',
         properties: {

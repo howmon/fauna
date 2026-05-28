@@ -175,7 +175,8 @@ function streamProgress() {
     try {
       const evt = JSON.parse(e.data);
       $('progress').textContent = evt.message || (evt.step + ' ' + evt.status);
-      if (evt.status === 'completed' || evt.status === 'failed') refresh();
+      // Refresh on every event so step chips + script panel reflect live state.
+      refresh();
     } catch (_) {}
   };
 }
