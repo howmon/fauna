@@ -380,11 +380,19 @@ if (window.widgetAPI?.onPinChanged) {
 
 // ── Ask Fauna (Clippy-style quick prompt) ────────────────────────────────
 
-const $askBar   = document.getElementById('ask-bar');
-const $askInput = document.getElementById('ask-input');
-const $askSend  = document.getElementById('ask-send');
-const $askCtx   = document.getElementById('ask-ctx');
-const $btnAsk   = document.getElementById('btn-ask');
+const $askBar    = document.getElementById('ask-bar');
+const $askInput  = document.getElementById('ask-input');
+const $askSend   = document.getElementById('ask-send');
+const $askCtx    = document.getElementById('ask-ctx');
+const $btnAsk    = document.getElementById('btn-ask');
+const $askResp   = document.getElementById('ask-response');
+const $askBody   = document.getElementById('ask-resp-body');
+const $askStatus = document.getElementById('ask-resp-status');
+const $askRespOpen  = document.getElementById('ask-resp-open');
+const $askRespClear = document.getElementById('ask-resp-clear');
+
+let _askAbort = null;
+let _askLastPrompt = '';
 
 function openAskBar() {
   $askBar?.classList.remove('hidden');
@@ -394,12 +402,98 @@ function closeAskBar() {
   $askBar?.classList.add('hidden');
   if ($askInput) $askInput.value = '';
 }
-function sendAsk() {
+function showResp() { $askResp?.classList.remove('hidden'); }
+function hideResp() {
+  $askResp?.classList.add('hidden');
+  if ($askBody) $askBody.textContent = '';
+  if ($askStatus) { $askStatus.textContent = ''; $askStatus.classList.remove('thinking'); }
+}
+
+function _askEscape(s) {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function _renderRespMarkdown(text) {
+  // Minimal markdown: bold + inline code only — keeps the widget light.
+  let html = _askEscape(text);
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  return html;
+}
+
+async function sendAsk() {
   const text = ($askInput?.value || '').trim();
   if (!text) return;
   const withContext = $askCtx?.checked !== false;
-  try { window.widgetAPI?.ask?.(text, { withContext }); } catch (_) {}
+  _askLastPrompt = text;
   closeAskBar();
+  showResp();
+  if ($askStatus) { $askStatus.textContent = 'Thinking…'; $askStatus.classList.add('thinking'); }
+  if ($askBody) $askBody.innerHTML = '';
+
+  // Abort any prior in-flight ask.
+  try { _askAbort?.abort(); } catch (_) {}
+  _askAbort = new AbortController();
+
+  const prefix = withContext
+    ? '[Companion mode] First call fauna_screen_context to see what app/window I am looking at, then answer concisely:\n\n'
+    : '';
+  const body = {
+    messages: [{ role: 'user', content: prefix + text }],
+    model: 'claude-sonnet-4.6',
+    clientContext: 'widget',
+    thinkingBudget: 'low',
+    maxContextTurns: 4,
+  };
+
+  let answer = '';
+  try {
+    const res = await fetch(BASE + '/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: _askAbort.signal,
+    });
+    if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let partial = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      partial += dec.decode(value, { stream: true });
+      const lines = partial.split('\n');
+      partial = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const raw = line.slice(6);
+        if (raw === '[DONE]') continue;
+        let evt;
+        try { evt = JSON.parse(raw); } catch (_) { continue; }
+        if (evt.type === 'content' && evt.content) {
+          answer += evt.content;
+          if ($askBody) $askBody.innerHTML = _renderRespMarkdown(answer);
+          if ($askStatus) $askStatus.classList.remove('thinking');
+        } else if (evt.type === 'tool_call') {
+          if ($askStatus) {
+            $askStatus.textContent = '↻ ' + (evt.label || evt.name || 'tool');
+            $askStatus.classList.add('thinking');
+          }
+        } else if (evt.type === 'error') {
+          answer += '\n\nError: ' + (evt.error || 'unknown');
+          if ($askBody) $askBody.innerHTML = _renderRespMarkdown(answer);
+        }
+        if ($askBody) $askBody.scrollTop = $askBody.scrollHeight;
+      }
+    }
+    if ($askStatus) { $askStatus.textContent = ''; $askStatus.classList.remove('thinking'); }
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      if ($askBody) $askBody.textContent = (answer ? answer + '\n\n' : '') + 'Error: ' + err.message;
+      if ($askStatus) { $askStatus.textContent = 'Failed'; $askStatus.classList.remove('thinking'); }
+    }
+  } finally {
+    _askAbort = null;
+  }
 }
 
 $btnAsk?.addEventListener('click', () => {
@@ -409,6 +503,16 @@ $askSend?.addEventListener('click', sendAsk);
 $askInput?.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAsk(); }
   else if (e.key === 'Escape') { e.preventDefault(); closeAskBar(); }
+});
+$askRespClear?.addEventListener('click', () => {
+  try { _askAbort?.abort(); } catch (_) {}
+  hideResp();
+});
+$askRespOpen?.addEventListener('click', () => {
+  // Escape hatch: surface the prompt in the main app for follow-up.
+  try {
+    window.widgetAPI?.ask?.(_askLastPrompt, { withContext: $askCtx?.checked !== false, openMain: true });
+  } catch (_) {}
 });
 if (window.widgetAPI?.onFocusAsk) {
   window.widgetAPI.onFocusAsk(() => openAskBar());

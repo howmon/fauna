@@ -442,14 +442,16 @@ ipcMain.on('widget:open-in-app', () => {
 });
 
 // ── Widget: Ask Fauna (Clippy-style quick prompt) ────────────────────
-// The widget sends a one-shot text prompt; we open/show the main window
-// and forward the prompt to the renderer, which starts a new conversation
-// pre-loaded with the user's text. Optional `withContext:true` causes the
-// renderer to first call fauna_screen_context and inline the snapshot.
+// Companion mode runs ENTIRELY in the widget — it streams /api/chat
+// directly from the widget renderer (same localhost origin) so the
+// main app window stays out of the user's way. This IPC is kept only
+// as an opt-in escape hatch: pass openMain:true to surface the main
+// window (e.g. for long answers the user wants to inspect later).
 ipcMain.on('widget:ask', (_e, payload) => {
+  if (!payload?.openMain) return;
   const text = (payload?.text || '').toString().trim();
   if (!text) return;
-  const withContext = payload?.withContext !== false; // default ON
+  const withContext = payload?.withContext !== false;
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.show();
     mainWindow.focus();

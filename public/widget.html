@@ -38,6 +38,18 @@
     </div>
   </div>
 
+  <!-- Ask Fauna response panel (streams answer in-widget) -->
+  <div id="ask-response" class="hidden">
+    <div class="ask-resp-header">
+      <i class="ti ti-sparkles"></i>
+      <span class="ask-resp-title">Fauna</span>
+      <span id="ask-resp-status" class="ask-resp-status"></span>
+      <button id="ask-resp-open" class="ask-resp-btn" title="Open full conversation in Fauna"><i class="ti ti-external-link"></i></button>
+      <button id="ask-resp-clear" class="ask-resp-btn" title="Clear"><i class="ti ti-x"></i></button>
+    </div>
+    <div id="ask-resp-body" class="ask-resp-body"></div>
+  </div>
+
   <!-- Quick-add bar (slides down) -->
   <div id="quick-add" class="hidden">
     <input id="qa-title"  type="text" placeholder="Automation title…" autocomplete="off">
