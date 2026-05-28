@@ -307,35 +307,60 @@ export async function gatherFootage({ terms, audioDurationSec, outDir, aspect = 
   const downloaded = [];
   const seenUrls = new Set();
 
+  // Round-robin across terms so the final reel doesn't end up being 6 clips
+  // of the same query. Each pass we take ONE fresh clip per term; if a term
+  // runs out of unseen candidates we just skip it on the next pass.
   const matsDir = path.join(outDir, 'materials');
   fs.mkdirSync(matsDir, { recursive: true });
 
-  let termIdx = 0;
-  while (downloaded.length < needed && termIdx < terms.length * 3) {
-    const term = terms[termIdx % terms.length];
-    termIdx++;
-    let candidates;
+  // Cache search results so we don't re-hit the API each pass.
+  const cache = new Map(); // term -> candidates[]
+  const cursor = new Map(); // term -> next index into candidates
+
+  async function _getCandidates(term) {
+    if (cache.has(term)) return cache.get(term);
     try {
-      candidates = await tier.search(term);
+      const r = (await tier.search(term)) || [];
+      cache.set(term, r);
+      cursor.set(term, 0);
+      return r;
     } catch (e) {
       onProgress?.(`Search failed for "${term}": ${e.message}`);
-      continue;
+      cache.set(term, []);
+      cursor.set(term, 0);
+      return [];
     }
-    if (!candidates || !candidates.length) continue;
-    for (const cand of candidates) {
+  }
+
+  let passes = 0;
+  const MAX_PASSES = 8;
+  while (downloaded.length < needed && passes < MAX_PASSES) {
+    let pickedThisPass = 0;
+    for (const term of terms) {
       if (downloaded.length >= needed) break;
-      if (seenUrls.has(cand.url)) continue;
-      seenUrls.add(cand.url);
+      const candidates = await _getCandidates(term);
+      let idx = cursor.get(term) || 0;
+      let pick = null;
+      while (idx < candidates.length) {
+        const c = candidates[idx++];
+        if (!seenUrls.has(c.url)) { pick = c; break; }
+      }
+      cursor.set(term, idx);
+      if (!pick) continue;
+      seenUrls.add(pick.url);
       const filename = `clip-${String(downloaded.length + 1).padStart(2, '0')}.mp4`;
       const outPath = path.join(matsDir, filename);
       try {
         onProgress?.(`Downloading clip ${downloaded.length + 1}/${needed} (${term})`);
-        await downloadClip(cand.url, outPath, { photo: !!cand._photo, aspect, durationSec: maxClipDuration });
-        downloaded.push({ path: outPath, source: cand.source, term });
+        await downloadClip(pick.url, outPath, { photo: !!pick._photo, aspect, durationSec: maxClipDuration });
+        downloaded.push({ path: outPath, source: pick.source, term });
+        pickedThisPass++;
       } catch (e) {
-        onProgress?.(`Skipping ${cand.url}: ${e.message}`);
+        onProgress?.(`Skipping ${pick.url}: ${e.message}`);
       }
     }
+    passes++;
+    if (pickedThisPass === 0) break; // every term exhausted
   }
 
   if (!downloaded.length) {

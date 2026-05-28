@@ -92,6 +92,10 @@ async function concatClips(clipPaths, outPath, { jobDir }) {
  */
 export async function buildCombined({ clips, jobDir, aspect, audioDurationSec, maxClipDuration = 5, fps = 30, onProgress }) {
   const normDir = path.join(jobDir, 'normalised');
+  // Wipe + recreate every render — cached normalised clips bake in the previous
+  // aspect ratio, so reusing them silently produces letterboxed output when the
+  // user switches between 9:16 / 16:9 / 1:1.
+  if (fs.existsSync(normDir)) fs.rmSync(normDir, { recursive: true, force: true });
   fs.mkdirSync(normDir, { recursive: true });
 
   // Normalise each unique clip once.
@@ -99,9 +103,7 @@ export async function buildCombined({ clips, jobDir, aspect, audioDurationSec, m
   const normalised = [];
   for (let i = 0; i < clips.length; i++) {
     const out = path.join(normDir, `n-${String(i+1).padStart(2,'0')}.mp4`);
-    if (!fs.existsSync(out)) {
-      await normaliseClip(clips[i].path, out, { aspect, maxClipDuration, fps });
-    }
+    await normaliseClip(clips[i].path, out, { aspect, maxClipDuration, fps });
     normalised.push(out);
   }
 

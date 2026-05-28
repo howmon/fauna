@@ -43,14 +43,16 @@ function _run(cmd, args, opts = {}) {
  * Returns duration in seconds.
  */
 export async function probeDuration(audioFile) {
+  let stderr = '';
   try {
-    await _run(FFMPEG, ['-i', audioFile, '-f', 'null', '-'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const r = await _run(FFMPEG, ['-i', audioFile, '-f', 'null', '-'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    stderr = r.stderr || '';
   } catch (e) {
-    // ffmpeg always exits non-zero for `-f null -` on inputs without filter chain;
-    // parse stderr anyway.
-    const m = String(e.message).match(/Duration:\s*(\d+):(\d+):([\d.]+)/);
-    if (m) return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+    // ffmpeg often exits non-zero for `-f null -`; the message embeds stderr tail.
+    stderr = String(e.message || '');
   }
+  const m = stderr.match(/Duration:\s*(\d+):(\d+):([\d.]+)/);
+  if (m) return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
   return 0;
 }
 
