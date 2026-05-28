@@ -20,6 +20,17 @@ import { SYMBOLS, listSymbolTypes } from './lib/circuit-symbols.js';
 import { simulateCircuit } from './lib/circuit-simulate.js';
 import { packWidgetResult } from './lib/dynamic-widgets.js';
 import {
+  createJob as videoCreateJob,
+  getJob as videoGetJob,
+  listJobs as videoListJobs,
+  patchJob as videoPatchJob,
+  runStep as videoRunStep,
+  runAll as videoRunAll,
+  subscribe as videoSubscribe,
+} from './server/video/job.js';
+import { buildVideoStudioWidget } from './server/video/widget-bundle.js';
+import { getCopilotClient as videoGetCopilotClient } from './server/copilot/auth.js';
+import {
   savePlaybookEntry, listPlaybookEntries, getPlaybookEntry,
   touchPlaybookEntry, deletePlaybookEntry,
 } from './playbook-store.js';
@@ -1283,6 +1294,102 @@ export const SELF_TOOL_DEFS = [
       },
     },
   },
+  // ── Video Studio (MoneyPrinterTurbo-style short-form video generator) ────
+  // Pipeline: script → terms → audio → subtitle → footage → render
+  // Each step is idempotent + resumable. Tool calls stream progress as
+  // tool_call events. fauna_video_create emits the Video Studio widget
+  // so the user sees a live preview + can iterate (edit script, swap voice,
+  // re-render, etc.) without leaving the chat.
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_video_create',
+      description:
+        'Create a short-form video generation job and emit the Video Studio preview widget. The pipeline (script → terms → audio → subtitle → footage → render) starts automatically and streams progress; the widget shows live updates. Use whenever the user asks to make / generate / produce a video, short, Reel, TikTok, or Shorts. Do NOT also call fauna_video_run_all — it\'s already running. Set autorun:false only if the user wants to edit the params before kicking off render.',
+      parameters: {
+        type: 'object',
+        properties: {
+          subject: { type: 'string', description: 'What the video is about (drives the script).' },
+          durationSec: { type: 'number', description: 'Target spoken duration in seconds (default 30, range 8–120).' },
+          aspect: { type: 'string', enum: ['9:16', '16:9', '1:1'], description: 'Aspect ratio (default 9:16 vertical).' },
+          voice: { type: 'string', description: 'TTS voice name. macOS: try Samantha, Alex, Daniel. Optional.' },
+          language: { type: 'string', description: "Language code (default 'en')." },
+          localFolder: { type: 'string', description: 'Optional absolute path to a folder of local mp4 clips. If set, skips stock search.' },
+          autorun: { type: 'boolean', description: 'Auto-start the pipeline (default true). Set false to let the user/model edit params first.' },
+        },
+        required: ['subject'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_video_run_all',
+      description: 'Run the entire pipeline for a job end-to-end (script → render). Idempotent — already-completed steps are skipped. Streams progress as tool_call events.',
+      parameters: {
+        type: 'object',
+        properties: { jobId: { type: 'string' } },
+        required: ['jobId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_video_step',
+      description: 'Run a single pipeline step. Use to re-run a specific step after editing (e.g. step="render" after the user tweaks the script).',
+      parameters: {
+        type: 'object',
+        properties: {
+          jobId: { type: 'string' },
+          step: { type: 'string', enum: ['script', 'terms', 'audio', 'subtitle', 'materials', 'render'] },
+        },
+        required: ['jobId', 'step'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_video_patch',
+      description: 'Edit a job between steps. Set any of {subject, durationSec, aspect, voice, language, script, terms, bgmFile}. Patching script auto-invalidates audio/subtitle/render so they re-run; changing voice invalidates audio onward; aspect invalidates materials+render.',
+      parameters: {
+        type: 'object',
+        properties: {
+          jobId: { type: 'string' },
+          subject: { type: 'string' },
+          durationSec: { type: 'number' },
+          aspect: { type: 'string', enum: ['9:16', '16:9', '1:1'] },
+          voice: { type: 'string' },
+          language: { type: 'string' },
+          script: { type: 'string' },
+          terms: { type: 'array', items: { type: 'string' } },
+          bgmFile: { type: 'string' },
+        },
+        required: ['jobId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_video_get',
+      description: 'Return current job state — params, artifacts, steps completed, error info, and asset paths (final.mp4, audio.mp3, subtitles.srt).',
+      parameters: {
+        type: 'object',
+        properties: { jobId: { type: 'string' } },
+        required: ['jobId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_video_list',
+      description: 'List all video jobs (most recent first). Returns id, subject, state, and timestamps.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
 ];
 
 // ── Dynamic Widget tool definitions (gated by enableDynamicWidgets flag) ──
@@ -1793,9 +1900,123 @@ export function executeSelfTool(toolName, args, context = {}) {
       })();
     }
 
+    // ── Video Studio ─────────────────────────────────────────────────────
+    case 'fauna_video_create': {
+      try {
+        const job = videoCreateJob({
+          subject: args.subject,
+          durationSec: args.durationSec,
+          aspect: args.aspect,
+          voice: args.voice,
+          language: args.language,
+          localFolder: args.localFolder,
+        });
+        const built = buildVideoStudioWidget(job);
+        const widgetResult = _emitWidget({
+          bundle: { html: built.bundle.html, js: built.bundle.js || '// inline' },
+          tools: built.tools,
+          title: built.title,
+          _videoJob: job.id,
+        }, context);
+        // Auto-start the pipeline unless explicitly disabled. Streams progress
+        // as tool_call events; runs in the background so this handler returns
+        // immediately and the widget mounts right away.
+        if (args.autorun !== false) {
+          const client = videoGetCopilotClient();
+          videoRunAll(job.id, { client }).catch(err => {
+            try { context.sendSse?.({ type: 'tool_call', name: 'fauna_video_step', label: `pipeline failed: ${err.message}` }); } catch (_) {}
+          });
+          const unsub = videoSubscribe(job.id, (evt) => {
+            try { context.sendSse?.({ type: 'tool_call', name: 'fauna_video_step', label: `${evt.step}: ${evt.message || evt.status}` }); } catch (_) {}
+            if (evt.status === 'completed' && evt.step === 'render') unsub();
+            if (evt.status === 'failed') unsub();
+          });
+        }
+        return widgetResult;
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+    case 'fauna_video_run_all': {
+      const jobId = String(args.jobId || '');
+      if (!jobId) return JSON.stringify({ ok: false, error: 'jobId required' });
+      // Stream progress events to chat as tool_call labels.
+      const unsub = videoSubscribe(jobId, (evt) => {
+        try { context.sendSse?.({ type: 'tool_call', name: 'fauna_video_step', label: `${evt.step}: ${evt.message || evt.status}` }); } catch (_) {}
+      });
+      return (async () => {
+        try {
+          const client = videoGetCopilotClient();
+          await videoRunAll(jobId, { client });
+          const job = videoGetJob(jobId);
+          return JSON.stringify({
+            ok: true,
+            jobId,
+            stepsDone: job.stepsDone,
+            finalPath: job.artifacts.finalPath,
+            footageSource: job.artifacts.footageSource,
+            durationSec: job.artifacts.audioDurationSec,
+          });
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: e.message, jobId });
+        } finally {
+          try { unsub(); } catch (_) {}
+        }
+      })();
+    }
+    case 'fauna_video_step': {
+      const jobId = String(args.jobId || '');
+      const step = String(args.step || '');
+      if (!jobId || !step) return JSON.stringify({ ok: false, error: 'jobId and step required' });
+      return (async () => {
+        try {
+          const client = videoGetCopilotClient();
+          const job = await videoRunStep(jobId, step, { client });
+          return JSON.stringify({ ok: true, jobId, step, stepsDone: job.stepsDone, artifacts: _videoArtifactSummary(job) });
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: e.message, jobId, step });
+        }
+      })();
+    }
+    case 'fauna_video_patch': {
+      try {
+        const jobId = String(args.jobId || '');
+        if (!jobId) return JSON.stringify({ ok: false, error: 'jobId required' });
+        const { jobId: _ignored, ...patch } = args;
+        const r = videoPatchJob(jobId, patch);
+        return JSON.stringify({ ok: true, jobId, invalidated: r.invalidated, stepsDone: r.job.stepsDone });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+    case 'fauna_video_get': {
+      const job = videoGetJob(String(args.jobId || ''));
+      if (!job) return JSON.stringify({ ok: false, error: 'not found' });
+      return JSON.stringify({ ok: true, job: { ...job, artifacts: _videoArtifactSummary(job) } });
+    }
+    case 'fauna_video_list': {
+      const jobs = videoListJobs().map(j => ({
+        id: j.id, subject: j.params.subject, state: j.state, createdAt: j.createdAt,
+        stepsDone: j.stepsDone, finalPath: j.artifacts.finalPath,
+      }));
+      return JSON.stringify({ ok: true, jobs });
+    }
+
     default:
       return JSON.stringify({ ok: false, error: `Unknown self-tool: ${toolName}` });
   }
+}
+
+function _videoArtifactSummary(job) {
+  const a = job.artifacts || {};
+  return {
+    script: a.script ? a.script.slice(0, 500) + (a.script.length > 500 ? '…' : '') : null,
+    terms: a.terms || null,
+    audioFile: a.audioFile, audioDurationSec: a.audioDurationSec,
+    subtitlePath: a.subtitlePath,
+    footageSource: a.footageSource, clipsCount: (a.clips || []).length,
+    finalPath: a.finalPath,
+  };
 }
 
 // ── Dynamic Widget helpers ────────────────────────────────────────────

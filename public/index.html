@@ -775,6 +775,48 @@
           <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('google')">Save</button>
           <button class="settings-row-btn danger" onclick="clearProviderKey('google')" id="provider-google-clear" style="display:none">Remove</button>
         </div>
+
+        <div class="settings-label" style="margin-top:20px;padding-top:14px;border-top:1px solid var(--fau-border)"><span>Stock media (Video Studio)</span></div>
+        <div class="settings-hint" style="margin-bottom:10px">
+          Optional API keys for stock footage. The Video Studio tries each in order — Pexels → Pixabay → Unsplash (stills, ken-burns) → browser-extension scrape → local folder. Any combination works; missing keys are silently skipped.
+        </div>
+
+        <div class="settings-label"><span>Pexels <a href="#" onclick="window.open('https://www.pexels.com/api/new/','_blank');return false" style="font-weight:normal;font-size:11px;margin-left:6px">Get key →</a></span></div>
+        <div class="settings-input-row">
+          <input id="provider-pexels-input" class="settings-input" type="password" placeholder="563492ad6f9170000…" autocomplete="off" spellcheck="false"
+            onkeydown="if(event.key==='Enter')saveProviderKey('pexels')">
+          <button class="settings-row-btn" onclick="toggleProviderKeyVisibility('pexels')" title="Show/hide"><i class="ti ti-eye"></i></button>
+        </div>
+        <div id="provider-pexels-status" class="settings-status"></div>
+        <div style="display:flex;gap:6px">
+          <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('pexels')">Save</button>
+          <button class="settings-row-btn danger" onclick="clearProviderKey('pexels')" id="provider-pexels-clear" style="display:none">Remove</button>
+        </div>
+
+        <div class="settings-label" style="margin-top:12px"><span>Pixabay <a href="#" onclick="window.open('https://pixabay.com/api/docs/','_blank');return false" style="font-weight:normal;font-size:11px;margin-left:6px">Get key →</a></span></div>
+        <div class="settings-input-row">
+          <input id="provider-pixabay-input" class="settings-input" type="password" placeholder="12345678-abc…" autocomplete="off" spellcheck="false"
+            onkeydown="if(event.key==='Enter')saveProviderKey('pixabay')">
+          <button class="settings-row-btn" onclick="toggleProviderKeyVisibility('pixabay')" title="Show/hide"><i class="ti ti-eye"></i></button>
+        </div>
+        <div id="provider-pixabay-status" class="settings-status"></div>
+        <div style="display:flex;gap:6px">
+          <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('pixabay')">Save</button>
+          <button class="settings-row-btn danger" onclick="clearProviderKey('pixabay')" id="provider-pixabay-clear" style="display:none">Remove</button>
+        </div>
+
+        <div class="settings-label" style="margin-top:12px"><span>Unsplash <a href="#" onclick="window.open('https://unsplash.com/oauth/applications','_blank');return false" style="font-weight:normal;font-size:11px;margin-left:6px">Get key →</a></span></div>
+        <div class="settings-hint" style="margin:-4px 0 4px;font-size:11px">Photos only — Video Studio applies a ken-burns zoom to turn each still into a 5s clip.</div>
+        <div class="settings-input-row">
+          <input id="provider-unsplash-input" class="settings-input" type="password" placeholder="Access Key…" autocomplete="off" spellcheck="false"
+            onkeydown="if(event.key==='Enter')saveProviderKey('unsplash')">
+          <button class="settings-row-btn" onclick="toggleProviderKeyVisibility('unsplash')" title="Show/hide"><i class="ti ti-eye"></i></button>
+        </div>
+        <div id="provider-unsplash-status" class="settings-status"></div>
+        <div style="display:flex;gap:6px">
+          <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('unsplash')">Save</button>
+          <button class="settings-row-btn danger" onclick="clearProviderKey('unsplash')" id="provider-unsplash-clear" style="display:none">Remove</button>
+        </div>
       </div>
 
       <div id="auth-tab-local" class="auth-tab-pane" style="display:none">

@@ -7,6 +7,12 @@ const KNOWN_PROVIDERS = [
   { id: 'openai',    name: 'OpenAI',    placeholder: 'sk-…'     },
   { id: 'anthropic', name: 'Anthropic', placeholder: 'sk-ant-…' },
   { id: 'google',    name: 'Google',    placeholder: 'AIza…'    },
+  // Stock media providers — used by Video Studio (server/video/footage.js).
+  // All three are optional; missing tiers fall through to browser-extension
+  // scrape and local folders.
+  { id: 'pexels',    name: 'Pexels',    placeholder: '563492ad6f9170000…' },
+  { id: 'pixabay',   name: 'Pixabay',   placeholder: '12345678-abc…' },
+  { id: 'unsplash',  name: 'Unsplash',  placeholder: 'Access Key…' },
 ];
 
 function keyPreview(k) { return k ? k.slice(0, 4) + '…' + k.slice(-4) : ''; }
