@@ -144,6 +144,11 @@ export function createProject(opts = {}) {
     conversationIds: [],
     taskIds:         [],
     defaultAgent:    opts.defaultAgent || null,
+    // When true, conversations under this project default to an autonomous
+    // agent loop (raised tool-call cap, no half-stop nudges, persistence
+    // directive injected). Per-conversation `config.autonomousMode` overrides
+    // this. See server/routes/chat.js for the effective resolution order.
+    autonomousMode:  opts.autonomousMode === true,
     permissions: {
       shell:     opts.permissions?.shell ?? (rootPath ? { cwd: rootPath } : true),
       fileRead:  opts.permissions?.fileRead  || (rootPath ? [rootPath] : []),
@@ -203,7 +208,7 @@ export function updateProject(id, patch = {}) {
   if (idx === -1) return null;
   const p = projects[idx];
   // Allowed top-level fields
-  const allowed = ['name', 'description', 'icon', 'color', 'rootPath', 'defaultAgent', 'permissions', 'allowFileEditing', 'design'];
+  const allowed = ['name', 'description', 'icon', 'color', 'rootPath', 'defaultAgent', 'permissions', 'allowFileEditing', 'design', 'autonomousMode'];
   for (const k of allowed) {
     if (patch[k] !== undefined) p[k] = patch[k];
   }

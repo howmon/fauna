@@ -264,6 +264,22 @@ async function renameConversation(id, e) {
   setConversationTitle(conv.id, next, { manual: true });
 }
 
+// Toggle the per-conversation autonomous (run-until-done) flag. Writes
+// `conv.config.autonomousMode` and lets the existing debounced save flush
+// PUT /api/conversations/:id. The chat route reads this on each request and
+// scales the agentic loop caps + injects a persistence directive.
+function toggleConvAutonomous(id, e) {
+  if (e) e.stopPropagation();
+  var conv = getConv(id || state.currentId);
+  if (!conv) return;
+  if (!conv.config || typeof conv.config !== 'object') conv.config = {};
+  var next = !conv.config.autonomousMode;
+  conv.config.autonomousMode = next;
+  if (typeof saveConversations === 'function') saveConversations();
+  if (typeof renderConvList === 'function') renderConvList();
+  if (typeof showToast === 'function') showToast('Autonomous mode: ' + (next ? 'on' : 'off'));
+}
+
 async function maybeUpdateConversationTitle(conv) {
   if (!conv || conv.titleManual || conv._titleUpdating) return;
   if (!conv.messages || conv.messages.length < 2) return;
@@ -571,6 +587,7 @@ function renderConvList() {
     d.onclick = () => loadConversation(conv.id);
     d.innerHTML = (conv._streaming ? '<i class="ti ti-loader-2 conv-streaming-icon"></i>' : '') +
       '<span class="conv-label" title="' + escHtml(conv.title) + '">' + escHtml(conv.title) + '</span>' +
+      '<button class="conv-rename" onclick="toggleConvAutonomous(\'' + conv.id + '\', event)" title="' + (conv.config && conv.config.autonomousMode ? 'Autonomous mode: on — click to disable' : 'Autonomous mode: off — click to enable') + '"><i class="ti ti-bolt"' + (conv.config && conv.config.autonomousMode ? ' style="color:#ffb800"' : '') + '></i></button>' +
       '<button class="conv-rename" onclick="openConvInNewWindow(\'' + conv.id + '\', event)" title="Open in new window"><i class="ti ti-external-link"></i></button>' +
       '<button class="conv-rename" onclick="renameConversation(\'' + conv.id + '\', event)" title="Rename"><i class="ti ti-pencil"></i></button>' +
       '<button class="conv-del" onclick="deleteConversation(\'' + conv.id + '\', event)"><i class="ti ti-trash"></i></button>';

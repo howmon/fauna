@@ -2523,6 +2523,15 @@ function _renderSettingsTab(proj) {
       '</label>' +
       '<div class="proj-settings-hint">When on, you and agents can modify files in this project\'s sources directly from the file viewer.</div>' +
     '</div>' +
+    '<div class="proj-settings-row">' +
+      '<label>Autonomous mode</label>' +
+      '<label class="proj-toggle-label">' +
+        '<input type="checkbox" id="proj-set-autonomous" class="proj-toggle-input"' + (proj.autonomousMode ? ' checked' : '') + '>' +
+        '<span class="proj-toggle-track"><span class="proj-toggle-thumb"></span></span>' +
+        '<span class="proj-toggle-text">Run until done</span>' +
+      '</label>' +
+      '<div class="proj-settings-hint">When on, the agent loops with higher tool-call and continuation caps and is instructed not to half-stop. Per-conversation setting overrides this.</div>' +
+    '</div>' +
     '<div class="proj-settings-actions">' +
       '<button class="proj-action-btn" onclick="saveProjectSettings()"><i class="ti ti-check"></i> Save</button>' +
       '<button class="proj-action-btn proj-danger-btn" onclick="confirmDeleteProject()"><i class="ti ti-trash"></i> Delete project</button>' +
@@ -2572,10 +2581,11 @@ async function saveProjectSettings() {
   var desc = (document.getElementById('proj-set-desc') || {}).value || '';
   var root = (document.getElementById('proj-set-root') || {}).value || null;
   var allowEdit = !!(document.getElementById('proj-set-allow-edit') || {}).checked;
+  var autonomous = !!(document.getElementById('proj-set-autonomous') || {}).checked;
   try {
     var r = await fetch('/api/projects/' + proj.id, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, description: desc, rootPath: root || null, color: proj.color, allowFileEditing: allowEdit })
+      body: JSON.stringify({ name, description: desc, rootPath: root || null, color: proj.color, allowFileEditing: allowEdit, autonomousMode: autonomous })
     });
     if (!r.ok) throw new Error((await r.json()).error);
     await _refreshProject(proj.id);

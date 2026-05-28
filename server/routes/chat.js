@@ -36,7 +36,7 @@ import {
 import { ToolGuardContext, formatToolLabel } from '../../tool-guard.js';
 import { getAgentTools, startAgentMCPServers } from '../../agent-tools.js';
 import { formatForSystemPrompt as factsForSystemPrompt, getStats as factsGetStats } from '../../memory-store.js';
-import { getProjectSystemContext, buildContextPayload } from '../../project-manager.js';
+import { getProjectSystemContext, buildContextPayload, getProject } from '../../project-manager.js';
 import { estimateTokens, computeBudget } from '../lib/token-budget.js';
 import { summarizeHistory } from '../lib/summarize-history.js';
 import { withTimeout } from '../lib/async-utils.js';
@@ -177,8 +177,21 @@ export function registerChatRoute(app, {
             projectId = null, projectContextIds = null, isDelegation = false,
             clientContext = 'app', noTools = false,
           enableDynamicWidgets = false,
+          autonomousMode: bodyAutonomousMode = null,
           selectedFigmaFileKeys = [] } = req.body;
     const isCLI = clientContext === 'cli';
+
+    // Effective autonomous-mode flag — explicit body value wins, then project
+    // default. Per-conversation `config.autonomousMode` is forwarded by the
+    // client as `autonomousMode` on the request body, so it takes precedence
+    // over the project setting here. Off by default.
+    let _projectAutonomous = false;
+    if (projectId) {
+      try { _projectAutonomous = !!getProject(projectId)?.autonomousMode; } catch (_) {}
+    }
+    const autonomousMode = (bodyAutonomousMode === true || bodyAutonomousMode === false)
+      ? bodyAutonomousMode
+      : _projectAutonomous;
 
     // Track the active conversation model so heartbeat/workflows/teams use the same one
     setActiveModel(model);
@@ -266,6 +279,9 @@ export function registerChatRoute(app, {
         // explanations; only the agentic tools are unavailable.
         (!llmSupports.tools && llmProviderId !== 'copilot')
           ? '\n## Tool Availability\nYou are running on a local model that does not support tool calls in this session. Do NOT pretend to call shell, browser, file, or MCP tools — there is no execution environment. Answer the user directly in plain text or markdown. If the user asks for an action requiring tools, tell them to switch to a Copilot model.'
+          : '',
+        autonomousMode
+          ? '\n## Autonomous Mode (Run Until Done)\nThis conversation is in autonomous mode. Treat the user request as a self-contained job and drive it to completion without asking permission between steps.\n- Do NOT ask "want me to continue?", "shall I proceed?", "ready for the next step?" or any equivalent half-stop.\n- Plan briefly, then execute. Re-plan and continue when a tool fails — try a materially different approach instead of repeating the same one.\n- Stop ONLY when the task is fully complete and you have verified the result, OR when you are genuinely blocked by missing information or credentials only the user can supply. In that case, state precisely what is needed in one short message.\n- Prefer making concrete progress every turn over narrating intent. If you already explained the plan, do not repeat it; act.'
           : ''
       ].filter(Boolean).join('\n');
       if (fullSystem) allMessages.push({ role: 'system', content: fullSystem });
@@ -631,11 +647,17 @@ export function registerChatRoute(app, {
       let prevPreamble = '';       // narration emitted on the previous tool-call iteration
       let narrationRepeats = 0;    // consecutive iterations with near-identical preamble
       let narrationNudgeFired = false; // only inject the coaching nudge once per request
-      const MAX_TOOL_CALLS = 50;
-      const MAX_CONTINUES = 6; // max auto-continue attempts for truncated output
-      const MAX_HALF_STOP_NUDGES = 2; // re-prompt at most twice before letting the model stop
+      // Autonomous mode raises the safety caps so the loop runs until the
+      // task is genuinely done. The narration-repeat + per-tool timeouts
+      // remain in place — autonomous does NOT mean unbounded.
+      const MAX_TOOL_CALLS = autonomousMode ? 200 : 50;
+      const MAX_CONTINUES = autonomousMode ? 12 : 6; // max auto-continue attempts for truncated output
+      const MAX_HALF_STOP_NUDGES = autonomousMode ? 8 : 2; // re-prompt at most twice before letting the model stop
       const MAX_RESULT_CHARS = 40000; // prevent context overflow from large tool responses
       const toolCallsSeen = new Map(); // deduplicate identical calls
+      if (autonomousMode) {
+        console.log('[chat] autonomousMode=on (projectId=' + (projectId || 'none') + ') caps: tools=' + MAX_TOOL_CALLS + ' continues=' + MAX_CONTINUES + ' halfStop=' + MAX_HALF_STOP_NUDGES);
+      }
 
       // Half-stop detector: model finishes mid-task by asking the user whether to proceed.
       // Matches the explicit phrases blacklisted in the system prompt's persistence section.
