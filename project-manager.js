@@ -158,6 +158,12 @@ export function createProject(opts = {}) {
     // and feeds the result back as a tool message. The model can only emit
     // DONE: once QA passes.
     qa: opts.qa || { command: '', browserSmoke: '', requireScreenshot: false },
+    // Deploy gate. After QA passes (or after DONE: when no QA is configured),
+    // fauna runs `deploy.command` ONLY when `deploy.confirm` has been satisfied
+    // — i.e. the user explicitly approved this run via the client (sets a
+    // deployApproved flag on the request body). Mirrors Codex's pluggable
+    // publishConfirmHook chain. Off by default; opt in per project.
+    deploy: opts.deploy || { command: '', confirm: 'always', notes: '' },
     // Lightweight backlog: feature requests + grooming notes the agent can
     // append, list, and prioritize without leaving the project.
     backlog: Array.isArray(opts.backlog) ? opts.backlog : [],
@@ -220,7 +226,7 @@ export function updateProject(id, patch = {}) {
   if (idx === -1) return null;
   const p = projects[idx];
   // Allowed top-level fields
-  const allowed = ['name', 'description', 'icon', 'color', 'rootPath', 'defaultAgent', 'permissions', 'allowFileEditing', 'design', 'autonomousMode', 'acceptanceCriteria', 'qa', 'backlog'];
+  const allowed = ['name', 'description', 'icon', 'color', 'rootPath', 'defaultAgent', 'permissions', 'allowFileEditing', 'design', 'autonomousMode', 'acceptanceCriteria', 'qa', 'deploy', 'backlog'];
   for (const k of allowed) {
     if (patch[k] !== undefined) p[k] = patch[k];
   }

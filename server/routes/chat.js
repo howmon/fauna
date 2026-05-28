@@ -181,6 +181,8 @@ export function registerChatRoute(app, {
           autonomousMode: bodyAutonomousMode = null,
           acceptanceCriteria: bodyAcceptance = null,
           qa: bodyQa = null,
+          deploy: bodyDeploy = null,
+          deployApproved: bodyDeployApproved = false,
           selectedFigmaFileKeys = [] } = req.body;
     const isCLI = clientContext === 'cli';
 
@@ -208,6 +210,24 @@ export function registerChatRoute(app, {
       : (_projectRecord?.qa || null);
     const qaCommand = autonomousMode && effectiveQa && typeof effectiveQa.command === 'string'
       ? effectiveQa.command.trim()
+      : '';
+
+    // Deploy gate (Codex-style publish hook). Runs ONLY when autonomous,
+    // a command is configured, AND the client passed deployApproved:true on
+    // this request. confirm:'always' (default) requires per-run approval;
+    // confirm:'never' disables the gate entirely; confirm:'once' is reserved
+    // for future per-session approval and currently behaves like 'always'.
+    const effectiveDeploy = (bodyDeploy && typeof bodyDeploy === 'object')
+      ? bodyDeploy
+      : (_projectRecord?.deploy || null);
+    const deployConfirmMode = (effectiveDeploy?.confirm || 'always').toLowerCase();
+    const deployCommand = autonomousMode
+      && effectiveDeploy
+      && typeof effectiveDeploy.command === 'string'
+      && effectiveDeploy.command.trim()
+      && deployConfirmMode !== 'never'
+      && !!bodyDeployApproved
+      ? effectiveDeploy.command.trim()
       : '';
 
     // Track the active conversation model so heartbeat/workflows/teams use the same one
@@ -290,6 +310,7 @@ export function registerChatRoute(app, {
         factsCtx,
         (isCLI || noTools) ? '' : browserBuildContext,
         (isCLI || noTools) ? '' : buildBrowserExtContext(),
+            + (deployCommand ? `\n\n## Deploy Gate\nThe user has APPROVED deploying this run. After QA passes (or after DONE: when no QA is configured), fauna will automatically run \`${deployCommand}\`. Treat the deploy output as part of the verification — if it fails, do NOT emit DONE: until the deploy succeeds or you escalate with BLOCKED:.` : '')
         (isDelegation || isCLI || noTools) ? '' : GEN_UI_CATALOG_PROMPT,
         contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '',
         figmaFilesCtx,
@@ -699,6 +720,8 @@ export function registerChatRoute(app, {
       let markerNudgeFired = false;
       let qaRan = false;
       let qaResultSummary = null;
+      let deployRan = false;
+      let deployResultSummary = null;
       const autonomousStartedAt = Date.now();
       // Autonomous mode raises the safety caps so the loop runs until the
       // task is genuinely done. The narration-repeat + per-tool timeouts
@@ -1127,6 +1150,43 @@ export function registerChatRoute(app, {
             // not been re-prompting for half-stops or narration.
             const finalMarker = autonomousMode ? finalStatusFromText(assistantText) : null;
 
+            // Helper: run the deploy gate (if configured + approved + not yet
+            // run) before emitting 'done'. Returns true when the deploy
+            // failed and the loop should continue, false when we should
+            // finalize the stream.
+            const tryDeployGate = async () => {
+              if (!autonomousMode || finalMarker !== 'DONE' || !deployCommand || deployRan) {
+                return false;
+              }
+              deployRan = true;
+              console.log('[chat] autonomous deploy gate: running `' + deployCommand + '`');
+              try {
+                send({ type: 'tool_call', name: 'autonomous_deploy_gate', args: { command: deployCommand } });
+                const deployResultJson = await selfToolContext.runShell({
+                  command: deployCommand,
+                  cwd: _projectRecord?.rootPath || undefined,
+                  reason: 'autonomous deploy gate',
+                });
+                let parsed = null;
+                try { parsed = JSON.parse(deployResultJson); } catch (_) {}
+                const deployOk = parsed && (parsed.ok === true || parsed.exitCode === 0);
+                deployResultSummary = {
+                  ok: !!deployOk,
+                  exitCode: parsed?.exitCode ?? null,
+                  command: deployCommand,
+                };
+                send({ type: 'tool_result', name: 'autonomous_deploy_gate', result: deployResultJson });
+                if (deployOk) return false;
+                allMessages.push({ role: 'assistant', content: assistantText });
+                allMessages.push({ role: 'user', content: '[System: The deploy gate `' + deployCommand + '` FAILED. Output:\n\n' + (deployResultJson || '(no output)').slice(0, 4000) + '\n\nDo NOT emit DONE: until the deploy succeeds or you escalate with BLOCKED: and a precise reason.]' });
+                return true;
+              } catch (deployErr) {
+                console.warn('[chat] autonomous deploy gate threw:', deployErr?.message || deployErr);
+                deployResultSummary = { ok: false, error: deployErr?.message || String(deployErr), command: deployCommand };
+                return false; // hard failure — let the stream finalize, surface in run log
+              }
+            };
+
             if (autonomousMode && assistantText.trim() && !finalMarker && !markerNudgeFired) {
               markerNudgeFired = true;
               console.log('[chat] autonomous: missing terminal marker — nudging once');
@@ -1154,11 +1214,16 @@ export function registerChatRoute(app, {
                 send({ type: 'tool_result', name: 'autonomous_qa_gate', result: qaResultJson });
 
                 if (qaOk) {
-                  // Pass — let the model emit its final response unchanged.
-                  send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
-                    reasoning: sawReasoning ? { durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
-                  });
-                  continueLoop = false;
+                  // QA passed — try deploy gate, then finalize.
+                  const deployFailed = await tryDeployGate();
+                  if (deployFailed) {
+                    // keep continueLoop = true
+                  } else {
+                    send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
+                      reasoning: sawReasoning ? { durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
+                    });
+                    continueLoop = false;
+                  }
                 } else {
                   // Fail — feed the result back and keep looping.
                   allMessages.push({ role: 'assistant', content: assistantText });
@@ -1168,6 +1233,17 @@ export function registerChatRoute(app, {
               } catch (qaErr) {
                 console.warn('[chat] autonomous QA gate threw:', qaErr?.message || qaErr);
                 qaResultSummary = { ok: false, error: qaErr?.message || String(qaErr), command: qaCommand };
+                send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
+                  reasoning: sawReasoning ? { durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
+                });
+                continueLoop = false;
+              }
+            } else if (autonomousMode && finalMarker === 'DONE' && deployCommand && !deployRan) {
+              // DONE: with no QA configured but a deploy gate exists.
+              const deployFailed = await tryDeployGate();
+              if (deployFailed) {
+                // keep continueLoop = true
+              } else {
                 send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
                   reasoning: sawReasoning ? { durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
                 });
@@ -1193,6 +1269,7 @@ export function registerChatRoute(app, {
                   toolCallCount,
                   finalStatus,
                   qaResult: qaResultSummary,
+                  deployResult: deployResultSummary,
                   durationMs: Date.now() - autonomousStartedAt,
                   startedAt: autonomousStartedAt,
                 });

@@ -26,6 +26,7 @@ When you build or modify a UI from scratch, do NOT collapse into "AI slop" or sa
 - Background: Avoid flat single-color backgrounds. Use gradients, shapes, or subtle patterns to build atmosphere.
 - Layout: Avoid boilerplate hero/feature-grid/CTA structures. Vary visual language across outputs.
 - Responsiveness: Ensure the page loads cleanly on both desktop and mobile.
+- React: Prefer modern patterns (\`useEffectEvent\`, \`startTransition\`, \`useDeferredValue\`) when the team already uses them. Do NOT add \`useMemo\` / \`useCallback\` by default unless the repo already uses them — follow the repo's React Compiler guidance.
 Exception: When working inside an existing site or design system, preserve the established patterns.
 
 ### Output Formatting
