@@ -49,6 +49,258 @@ function _runCmd(cmd, argv, input) {
   });
 }
 
+// ── Native helper (macOS) ─────────────────────────────────────────────
+// Single Swift binary built once and cached, dispatching sub-commands via
+// argv. Drops latency from ~1s (swift interpreter) to ~10ms per call.
+
+const FAUNA_HELPER_SWIFT = `
+import Foundation
+import CoreGraphics
+import ApplicationServices
+import AppKit
+
+let args = CommandLine.arguments
+let cmd = args.count > 1 ? args[1] : ""
+func d(_ i: Int) -> Double { return args.count > i ? (Double(args[i]) ?? 0) : 0 }
+func s(_ i: Int) -> String { return args.count > i ? args[i] : "" }
+
+func mouseMove(_ x: Double, _ y: Double) {
+  if let e = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: .left) { e.post(tap: .cghidEventTap) }
+}
+func mouseClick(_ x: Double, _ y: Double, right: Bool = false, clicks: Int = 1) {
+  let down: CGEventType = right ? .rightMouseDown : .leftMouseDown
+  let up: CGEventType   = right ? .rightMouseUp   : .leftMouseUp
+  let btn: CGMouseButton = right ? .right : .left
+  for i in 1...clicks {
+    if let e = CGEvent(mouseEventSource: nil, mouseType: down, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: btn) {
+      e.setIntegerValueField(.mouseEventClickState, value: Int64(i)); e.post(tap: .cghidEventTap)
+    }
+    if let e = CGEvent(mouseEventSource: nil, mouseType: up, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: btn) {
+      e.setIntegerValueField(.mouseEventClickState, value: Int64(i)); e.post(tap: .cghidEventTap)
+    }
+    if clicks > 1 { Thread.sleep(forTimeInterval: 0.05) }
+  }
+}
+func mouseDrag(_ x1: Double, _ y1: Double, _ x2: Double, _ y2: Double) {
+  if let e = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: CGPoint(x: x1, y: y1), mouseButton: .left) { e.post(tap: .cghidEventTap) }
+  Thread.sleep(forTimeInterval: 0.05)
+  let steps = 20
+  for i in 1...steps {
+    let t = Double(i) / Double(steps)
+    let x = x1 + (x2 - x1) * t; let y = y1 + (y2 - y1) * t
+    if let e = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: .left) { e.post(tap: .cghidEventTap) }
+    Thread.sleep(forTimeInterval: 0.01)
+  }
+  if let e = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: CGPoint(x: x2, y: y2), mouseButton: .left) { e.post(tap: .cghidEventTap) }
+}
+func mouseScroll(_ dy: Double) {
+  if let e = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: Int32(-dy), wheel2: 0, wheel3: 0) { e.post(tap: .cghidEventTap) }
+}
+func mousePosition() -> (Double, Double) {
+  let p = NSEvent.mouseLocation
+  let h = NSScreen.main?.frame.height ?? 0
+  return (p.x, h - p.y)
+}
+
+// ── Keyboard ───────────────────────────────────────────────────────────
+// US-QWERTY virtual key map for common keys
+let kVK: [String: CGKeyCode] = [
+  "a":0,"s":1,"d":2,"f":3,"h":4,"g":5,"z":6,"x":7,"c":8,"v":9,"b":11,"q":12,"w":13,
+  "e":14,"r":15,"y":16,"t":17,"1":18,"2":19,"3":20,"4":21,"6":22,"5":23,"=":24,"9":25,
+  "7":26,"-":27,"8":28,"0":29,"]":30,"o":31,"u":32,"[":33,"i":34,"p":35,"l":37,"j":38,
+  "'":39,"k":40,";":41,"\\\\":42,",":43,"/":44,"n":45,"m":46,".":47,"\`":50,
+  "return":36,"enter":36,"tab":48,"space":49," ":49,"delete":51,"backspace":51,
+  "escape":53,"esc":53,"left":123,"right":124,"down":125,"up":126,
+  "f1":122,"f2":120,"f3":99,"f4":118,"f5":96,"f6":97,"f7":98,"f8":100,"f9":101,"f10":109,"f11":103,"f12":111,
+  "home":115,"end":119,"pageup":116,"pagedown":121
+]
+let kFlags: [String: CGEventFlags] = [
+  "cmd":.maskCommand,"command":.maskCommand,"meta":.maskCommand,"super":.maskCommand,
+  "shift":.maskShift,"alt":.maskAlternate,"option":.maskAlternate,"opt":.maskAlternate,
+  "ctrl":.maskControl,"control":.maskControl,"fn":.maskSecondaryFn
+]
+
+func typeText(_ text: String) {
+  // CGEventKeyboardSetUnicodeString — types arbitrary Unicode without VK mapping
+  for ch in text {
+    let s = String(ch)
+    let utf16 = Array(s.utf16)
+    if let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) {
+      utf16.withUnsafeBufferPointer { buf in down.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: buf.baseAddress) }
+      down.post(tap: .cghidEventTap)
+    }
+    if let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) {
+      utf16.withUnsafeBufferPointer { buf in up.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: buf.baseAddress) }
+      up.post(tap: .cghidEventTap)
+    }
+  }
+}
+
+func pressCombo(_ combo: String) -> Bool {
+  // "cmd+shift+a" -> flags + base key
+  let parts = combo.lowercased().split(separator: "+").map { String($0).trimmingCharacters(in: .whitespaces) }
+  var flags: CGEventFlags = []
+  var base: CGKeyCode? = nil
+  for p in parts {
+    if let f = kFlags[p] { flags.insert(f) }
+    else if let k = kVK[p] { base = k }
+  }
+  guard let key = base else { return false }
+  if let down = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: true) {
+    down.flags = flags; down.post(tap: .cghidEventTap)
+  }
+  if let up = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: false) {
+    up.flags = flags; up.post(tap: .cghidEventTap)
+  }
+  return true
+}
+
+// ── Accessibility (UI tree) ────────────────────────────────────────────
+func axString(_ el: AXUIElement, _ attr: String) -> String? {
+  var v: CFTypeRef?
+  if AXUIElementCopyAttributeValue(el, attr as CFString, &v) == .success, let s = v as? String { return s }
+  return nil
+}
+func axRect(_ el: AXUIElement) -> CGRect? {
+  var posV: CFTypeRef?
+  var sizV: CFTypeRef?
+  guard AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &posV) == .success,
+        AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sizV) == .success,
+        let pos = posV, let siz = sizV else { return nil }
+  var p = CGPoint.zero, s = CGSize.zero
+  AXValueGetValue(pos as! AXValue, .cgPoint, &p)
+  AXValueGetValue(siz as! AXValue, .cgSize, &s)
+  return CGRect(origin: p, size: s)
+}
+func axChildren(_ el: AXUIElement) -> [AXUIElement] {
+  var v: CFTypeRef?
+  if AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &v) == .success, let arr = v as? [AXUIElement] { return arr }
+  return []
+}
+
+let CLICKABLE_ROLES: Set<String> = ["AXButton","AXLink","AXCheckBox","AXRadioButton","AXMenuItem","AXMenuButton","AXPopUpButton","AXTextField","AXTextArea","AXSearchField","AXTabGroup","AXCell"]
+
+struct UINode { var role: String; var title: String; var x: Int; var y: Int; var w: Int; var h: Int; var path: String; var children: [UINode] }
+
+func walk(_ el: AXUIElement, _ path: String, _ depth: Int, _ maxDepth: Int) -> UINode? {
+  let role = axString(el, kAXRoleAttribute as String) ?? "?"
+  let title = axString(el, kAXTitleAttribute as String) ?? axString(el, kAXValueAttribute as String) ?? axString(el, kAXDescriptionAttribute as String) ?? ""
+  let rect = axRect(el) ?? .zero
+  var node = UINode(role: role, title: title, x: Int(rect.minX), y: Int(rect.minY), w: Int(rect.width), h: Int(rect.height), path: path, children: [])
+  if depth < maxDepth {
+    let kids = axChildren(el)
+    for (i, k) in kids.enumerated() {
+      if let n = walk(k, path + "/" + String(i), depth + 1, maxDepth) { node.children.append(n) }
+    }
+  }
+  return node
+}
+
+func nodeToJSON(_ n: UINode, clickableOnly: Bool) -> String {
+  var out = "{"
+  out += "\\"role\\":" + jsonStr(n.role)
+  out += ",\\"title\\":" + jsonStr(n.title)
+  out += ",\\"x\\":\\(n.x),\\"y\\":\\(n.y),\\"w\\":\\(n.w),\\"h\\":\\(n.h)"
+  out += ",\\"path\\":" + jsonStr(n.path)
+  if clickableOnly && CLICKABLE_ROLES.contains(n.role) {
+    out += ",\\"clickable\\":true"
+  }
+  if !n.children.isEmpty {
+    out += ",\\"children\\":["
+    out += n.children.map { nodeToJSON($0, clickableOnly: clickableOnly) }.joined(separator: ",")
+    out += "]"
+  }
+  out += "}"
+  return out
+}
+func jsonStr(_ s: String) -> String {
+  var out = "\\""
+  for c in s {
+    switch c {
+      case "\\"": out += "\\\\\\""
+      case "\\\\": out += "\\\\\\\\"
+      case "\\n": out += "\\\\n"
+      case "\\r": out += "\\\\r"
+      case "\\t": out += "\\\\t"
+      default:
+        if c.asciiValue != nil && c.asciiValue! < 0x20 { out += String(format: "\\\\u%04x", c.asciiValue!) }
+        else { out.append(c) }
+    }
+  }
+  out += "\\""
+  return out
+}
+
+func uiTree(maxDepth: Int, clickableOnly: Bool) -> String {
+  guard let app = NSWorkspace.shared.frontmostApplication else { return "{\\"error\\":\\"no frontmost app\\"}" }
+  let pid = app.processIdentifier
+  let axApp = AXUIElementCreateApplication(pid)
+  var winV: CFTypeRef?
+  guard AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &winV) == .success, let win = winV else {
+    // Fall back to app root
+    let n = walk(axApp, "", 0, maxDepth) ?? UINode(role: "AXApplication", title: app.localizedName ?? "", x: 0, y: 0, w: 0, h: 0, path: "", children: [])
+    return "{\\"app\\":" + jsonStr(app.localizedName ?? "") + ",\\"tree\\":" + nodeToJSON(n, clickableOnly: clickableOnly) + "}"
+  }
+  let node = walk(win as! AXUIElement, "", 0, maxDepth) ?? UINode(role: "AXWindow", title: "", x: 0, y: 0, w: 0, h: 0, path: "", children: [])
+  return "{\\"app\\":" + jsonStr(app.localizedName ?? "") + ",\\"tree\\":" + nodeToJSON(node, clickableOnly: clickableOnly) + "}"
+}
+
+switch cmd {
+  case "mouse_move":     mouseMove(d(2), d(3))
+  case "mouse_click":    mouseClick(d(2), d(3))
+  case "mouse_double":   mouseClick(d(2), d(3), clicks: 2)
+  case "mouse_right":    mouseClick(d(2), d(3), right: true)
+  case "mouse_drag":     mouseDrag(d(2), d(3), d(4), d(5))
+  case "mouse_scroll":   mouseScroll(d(2))
+  case "mouse_position":
+    let (x, y) = mousePosition()
+    print("{\\"x\\":\\(x),\\"y\\":\\(y)}")
+    exit(0)
+  case "type":           typeText(s(2))
+  case "key":            if !pressCombo(s(2)) { FileHandle.standardError.write("bad combo\\n".data(using: .utf8)!); exit(3) }
+  case "ui_tree":
+    let depth = Int(s(2)) ?? 8
+    let clickOnly = s(3) == "1"
+    print(uiTree(maxDepth: depth, clickableOnly: clickOnly))
+    exit(0)
+  default:
+    FileHandle.standardError.write("unknown cmd: \\(cmd)\\n".data(using: .utf8)!); exit(2)
+}
+print("ok")
+`;
+
+const FAUNA_HELPER_VERSION = 'v2'; // bump to force rebuild
+let _faunaHelperPath = null;
+
+async function _getFaunaHelper() {
+  if (process.platform !== 'darwin') throw new Error('fauna-helper is macOS-only');
+  if (_faunaHelperPath && fs.existsSync(_faunaHelperPath)) return _faunaHelperPath;
+  const dir = path.join(HOME, 'Library', 'Application Support', '@eichho', 'fauna', 'bin');
+  fs.mkdirSync(dir, { recursive: true });
+  const sha = crypto.createHash('sha256').update(FAUNA_HELPER_SWIFT).update(FAUNA_HELPER_VERSION).digest('hex').slice(0, 12);
+  const bin = path.join(dir, 'fauna-helper-' + sha);
+  if (fs.existsSync(bin)) { _faunaHelperPath = bin; return bin; }
+  const src = path.join(dir, 'fauna-helper-' + sha + '.swift');
+  fs.writeFileSync(src, FAUNA_HELPER_SWIFT, 'utf8');
+  const r = await _runCmd('/usr/bin/swiftc', ['-O', '-o', bin, src]);
+  if (r.code !== 0) {
+    if (/swiftc: not found|No such file/.test(r.stderr)) {
+      throw new Error('Swift toolchain missing. Install Xcode Command Line Tools: xcode-select --install');
+    }
+    throw new Error('fauna-helper compile failed: ' + (r.stderr || '').slice(0, 500));
+  }
+  _faunaHelperPath = bin;
+  return bin;
+}
+
+function _classifyHelperError(stderr) {
+  const s = stderr || '';
+  if (/not (?:trusted|permitted)|accessibility|denied|kAXError|AXError/i.test(s)) {
+    return 'Accessibility permission missing for Fauna. Grant in System Settings → Privacy & Security → Accessibility, then quit and relaunch Fauna.';
+  }
+  return null;
+}
+
 async function _faunaMouse(args) {
   const action = String(args.action || '').trim();
   if (!action) throw new Error('action required');
@@ -68,79 +320,22 @@ async function _faunaMouse(args) {
   }
 
   if (plat === 'darwin') {
-    const swift = `
-import CoreGraphics
-import Foundation
-let args = CommandLine.arguments
-let action = args.count > 1 ? args[1] : ""
-func d(_ i: Int) -> Double { return args.count > i ? (Double(args[i]) ?? 0) : 0 }
-func move(_ x: Double, _ y: Double) {
-  if let e = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: .left) { e.post(tap: .cghidEventTap) }
-}
-func click(_ x: Double, _ y: Double, right: Bool = false, clicks: Int = 1) {
-  let down: CGEventType = right ? .rightMouseDown : .leftMouseDown
-  let up: CGEventType   = right ? .rightMouseUp   : .leftMouseUp
-  let btn: CGMouseButton = right ? .right : .left
-  for i in 1...clicks {
-    if let e = CGEvent(mouseEventSource: nil, mouseType: down, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: btn) {
-      e.setIntegerValueField(.mouseEventClickState, value: Int64(i))
-      e.post(tap: .cghidEventTap)
-    }
-    if let e = CGEvent(mouseEventSource: nil, mouseType: up, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: btn) {
-      e.setIntegerValueField(.mouseEventClickState, value: Int64(i))
-      e.post(tap: .cghidEventTap)
-    }
-    if clicks > 1 { Thread.sleep(forTimeInterval: 0.05) }
-  }
-}
-func drag(_ x1: Double, _ y1: Double, _ x2: Double, _ y2: Double) {
-  if let e = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: CGPoint(x: x1, y: y1), mouseButton: .left) { e.post(tap: .cghidEventTap) }
-  Thread.sleep(forTimeInterval: 0.05)
-  let steps = 20
-  for i in 1...steps {
-    let t = Double(i) / Double(steps)
-    let x = x1 + (x2 - x1) * t
-    let y = y1 + (y2 - y1) * t
-    if let e = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: .left) { e.post(tap: .cghidEventTap) }
-    Thread.sleep(forTimeInterval: 0.01)
-  }
-  if let e = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: CGPoint(x: x2, y: y2), mouseButton: .left) { e.post(tap: .cghidEventTap) }
-}
-func scroll(_ dy: Double) {
-  if let e = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: Int32(-dy), wheel2: 0, wheel3: 0) { e.post(tap: .cghidEventTap) }
-}
-switch action {
-  case "move": move(d(2), d(3))
-  case "click": click(d(2), d(3))
-  case "double_click": click(d(2), d(3), clicks: 2)
-  case "right_click": click(d(2), d(3), right: true)
-  case "drag": drag(d(2), d(3), d(4), d(5))
-  case "scroll": scroll(d(2))
-  default: FileHandle.standardError.write("unknown action\\n".data(using: .utf8)!); exit(2)
-}
-print("ok")
-`;
-    const swiftArgs = ['-', action];
-    if (action === 'scroll') swiftArgs.push(String(args.dy));
-    else if (action === 'drag') swiftArgs.push(String(args.x), String(args.y), String(args.toX), String(args.toY));
-    else if (needsXY) swiftArgs.push(String(args.x), String(args.y));
-    const r = await _runCmd('/usr/bin/swift', swiftArgs, swift);
+    const helper = await _getFaunaHelper();
+    const cmdMap = { move: 'mouse_move', click: 'mouse_click', double_click: 'mouse_double', right_click: 'mouse_right', drag: 'mouse_drag', scroll: 'mouse_scroll' };
+    const argv = [cmdMap[action]];
+    if (action === 'scroll') argv.push(String(args.dy));
+    else if (action === 'drag') argv.push(String(args.x), String(args.y), String(args.toX), String(args.toY));
+    else argv.push(String(args.x), String(args.y));
+    const r = await _runCmd(helper, argv);
     if (r.code !== 0) {
-      const stderr = r.stderr || '';
-      if (/not (?:trusted|permitted)|accessibility|denied/i.test(stderr)) {
-        return { ok: false, error: 'Accessibility permission missing for Fauna. Grant in System Settings → Privacy & Security → Accessibility, then quit and relaunch Fauna.', stderr: stderr.slice(0, 500) };
-      }
-      if (/swift: not found|No such file/.test(stderr)) {
-        return { ok: false, error: 'Swift toolchain not found. Install Xcode Command Line Tools: xcode-select --install' };
-      }
-      return { ok: false, error: 'mouse command failed (exit ' + r.code + ')', stderr: stderr.slice(0, 500) };
+      const e = _classifyHelperError(r.stderr);
+      return { ok: false, error: e || ('mouse command failed (exit ' + r.code + ')'), stderr: (r.stderr || '').slice(0, 500) };
     }
     return { ok: true, action, platform: 'darwin' };
   }
 
   // win32
   const ps = `
-Add-Type -AssemblyName System.Windows.Forms
 $signature = @'
 [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
 [DllImport("user32.dll")] public static extern void mouse_event(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo);
@@ -151,9 +346,7 @@ function Do-Click($x, $y, $btn, $clicks) {
   $mouse::SetCursorPos([int]$x, [int]$y)
   $down = if ($btn -eq 'right') { 0x0008 } else { 0x0002 }
   $up   = if ($btn -eq 'right') { 0x0010 } else { 0x0004 }
-  for ($i = 0; $i -lt $clicks; $i++) {
-    $mouse::mouse_event($down, 0, 0, 0, 0); $mouse::mouse_event($up, 0, 0, 0, 0)
-  }
+  for ($i = 0; $i -lt $clicks; $i++) { $mouse::mouse_event($down, 0, 0, 0, 0); $mouse::mouse_event($up, 0, 0, 0, 0) }
 }
 switch ($action) {
   'move'         { $mouse::SetCursorPos([int]$args[1], [int]$args[2]) }
@@ -161,25 +354,132 @@ switch ($action) {
   'double_click' { Do-Click $args[1] $args[2] 'left' 2 }
   'right_click'  { Do-Click $args[1] $args[2] 'right' 1 }
   'drag' {
-    $mouse::SetCursorPos([int]$args[1], [int]$args[2])
-    $mouse::mouse_event(0x0002, 0, 0, 0, 0)
+    $mouse::SetCursorPos([int]$args[1], [int]$args[2]); $mouse::mouse_event(0x0002, 0, 0, 0, 0)
     Start-Sleep -Milliseconds 50
-    $mouse::SetCursorPos([int]$args[3], [int]$args[4])
-    $mouse::mouse_event(0x0004, 0, 0, 0, 0)
+    $mouse::SetCursorPos([int]$args[3], [int]$args[4]); $mouse::mouse_event(0x0004, 0, 0, 0, 0)
   }
-  'scroll' {
-    $mouse::mouse_event(0x0800, 0, 0, [int]([double]$args[1] * -120), 0)
-  }
+  'scroll' { $mouse::mouse_event(0x0800, 0, 0, [int]([double]$args[1] * -120), 0) }
 }
 Write-Output 'ok'
 `;
-    const argv = ['-NoProfile', '-NonInteractive', '-Command', ps, '-Args', action];
-    if (action === 'scroll') argv.push(String(args.dy));
-    else if (action === 'drag') argv.push(String(args.x), String(args.y), String(args.toX), String(args.toY));
-    else if (needsXY) argv.push(String(args.x), String(args.y));
-    const r = await _runCmd('powershell.exe', argv);
-    if (r.code !== 0) return { ok: false, error: 'mouse command failed (exit ' + r.code + ')', stderr: (r.stderr || '').slice(0, 500) };
+  const argv = ['-NoProfile', '-NonInteractive', '-Command', ps, '-Args', action];
+  if (action === 'scroll') argv.push(String(args.dy));
+  else if (action === 'drag') argv.push(String(args.x), String(args.y), String(args.toX), String(args.toY));
+  else if (needsXY) argv.push(String(args.x), String(args.y));
+  const r = await _runCmd('powershell.exe', argv);
+  if (r.code !== 0) return { ok: false, error: 'mouse command failed (exit ' + r.code + ')', stderr: (r.stderr || '').slice(0, 500) };
+  return { ok: true, action, platform: 'win32' };
+}
+
+async function _faunaMousePosition() {
+  const plat = process.platform;
+  if (plat === 'darwin') {
+    const helper = await _getFaunaHelper();
+    const r = await _runCmd(helper, ['mouse_position']);
+    if (r.code !== 0) return { ok: false, error: _classifyHelperError(r.stderr) || 'failed', stderr: (r.stderr || '').slice(0, 300) };
+    try { return { ok: true, ...JSON.parse(r.stdout.trim()) }; } catch (e) { return { ok: false, error: 'bad output: ' + r.stdout.slice(0, 200) }; }
+  }
+  if (plat === 'win32') {
+    const ps = `Add-Type -AssemblyName System.Windows.Forms; $p = [System.Windows.Forms.Cursor]::Position; Write-Output ("{""x"":" + $p.X + ",""y"":" + $p.Y + "}")`;
+    const r = await _runCmd('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps]);
+    if (r.code !== 0) return { ok: false, error: 'failed', stderr: (r.stderr || '').slice(0, 300) };
+    try { return { ok: true, ...JSON.parse(r.stdout.trim()) }; } catch (e) { return { ok: false, error: 'bad output' }; }
+  }
+  return { ok: false, error: 'unsupported platform: ' + plat };
+}
+
+async function _faunaKeyboard(args) {
+  const plat = process.platform;
+  const action = String(args.action || '').trim();
+  if (action !== 'type' && action !== 'key') throw new Error('action must be "type" or "key"');
+  if (action === 'type' && typeof args.text !== 'string') throw new Error('text required for action=type');
+  if (action === 'key'  && typeof args.combo !== 'string') throw new Error('combo required for action=key (e.g. "cmd+c", "shift+tab")');
+
+  if (plat === 'darwin') {
+    const helper = await _getFaunaHelper();
+    const argv = action === 'type' ? ['type', args.text] : ['key', args.combo];
+    const r = await _runCmd(helper, argv);
+    if (r.code !== 0) {
+      const e = _classifyHelperError(r.stderr);
+      return { ok: false, error: e || ('keyboard command failed (exit ' + r.code + ')'), stderr: (r.stderr || '').slice(0, 500) };
+    }
+    return { ok: true, action, platform: 'darwin' };
+  }
+  if (plat === 'win32') {
+    // SendKeys-style; combo translated to SendKeys notation
+    let sendStr;
+    if (action === 'type') {
+      // Escape SendKeys special chars
+      sendStr = args.text.replace(/([+^%~(){}[\]])/g, '{$1}');
+    } else {
+      const parts = args.combo.toLowerCase().split('+').map(p => p.trim());
+      const modMap = { cmd: '^', ctrl: '^', control: '^', shift: '+', alt: '%', meta: '^' };
+      const keyMap = { enter: '{ENTER}', tab: '{TAB}', escape: '{ESC}', esc: '{ESC}', backspace: '{BACKSPACE}', delete: '{DELETE}', space: ' ', up: '{UP}', down: '{DOWN}', left: '{LEFT}', right: '{RIGHT}', home: '{HOME}', end: '{END}' };
+      let mods = '', key = '';
+      for (const p of parts) {
+        if (modMap[p]) mods += modMap[p];
+        else key = keyMap[p] || p;
+      }
+      sendStr = mods + key;
+    }
+    const ps = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait(${JSON.stringify(sendStr)}); Write-Output 'ok'`;
+    const r = await _runCmd('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps]);
+    if (r.code !== 0) return { ok: false, error: 'keyboard failed (exit ' + r.code + ')', stderr: (r.stderr || '').slice(0, 500) };
     return { ok: true, action, platform: 'win32' };
+  }
+  return { ok: false, error: 'unsupported platform: ' + plat };
+}
+
+async function _faunaUITree(args) {
+  const plat = process.platform;
+  const maxDepth = Math.max(1, Math.min(20, Number(args.maxDepth) || 8));
+  const clickableOnly = !!args.clickableOnly;
+  if (plat === 'darwin') {
+    const helper = await _getFaunaHelper();
+    const r = await _runCmd(helper, ['ui_tree', String(maxDepth), clickableOnly ? '1' : '0']);
+    if (r.code !== 0) {
+      const e = _classifyHelperError(r.stderr);
+      return { ok: false, error: e || ('ui_tree failed (exit ' + r.code + ')'), stderr: (r.stderr || '').slice(0, 500) };
+    }
+    try {
+      const parsed = JSON.parse(r.stdout);
+      return { ok: true, ...parsed };
+    } catch (e) {
+      return { ok: false, error: 'bad output: ' + r.stdout.slice(0, 200) };
+    }
+  }
+  if (plat === 'win32') {
+    // PowerShell UIAutomation traversal
+    const ps = `
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$root = [System.Windows.Automation.AutomationElement]::FocusedElement
+if ($null -eq $root) { Write-Output '{"error":"no focused element"}'; exit 0 }
+function NodeToObj($el, $depth, $maxDepth, $path) {
+  $r = $el.Current
+  $rect = $r.BoundingRectangle
+  $obj = [ordered]@{
+    role = $r.ControlType.ProgrammaticName
+    title = $r.Name
+    x = [int]$rect.X; y = [int]$rect.Y; w = [int]$rect.Width; h = [int]$rect.Height
+    path = $path
+  }
+  if ($depth -lt $maxDepth) {
+    $kids = $el.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+    $children = @()
+    for ($i = 0; $i -lt $kids.Count; $i++) { $children += (NodeToObj $kids[$i] ($depth + 1) $maxDepth ($path + "/" + $i)) }
+    if ($children.Count -gt 0) { $obj.children = $children }
+  }
+  return $obj
+}
+$out = [ordered]@{ app = (Get-Process -Id ([System.Diagnostics.Process]::GetCurrentProcess().Id)).MainWindowTitle; tree = (NodeToObj $root 0 ${maxDepth} '') }
+$out | ConvertTo-Json -Depth 30 -Compress
+`;
+    const r = await _runCmd('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps]);
+    if (r.code !== 0) return { ok: false, error: 'ui_tree failed', stderr: (r.stderr || '').slice(0, 500) };
+    try { return { ok: true, ...JSON.parse(r.stdout) }; } catch (e) { return { ok: false, error: 'bad output' }; }
+  }
+  return { ok: false, error: 'unsupported platform: ' + plat };
 }
 
 function _resolveFaunaWritePath(filePath, cwd) {
@@ -690,7 +990,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_mouse',
-      description: 'Control the user\'s mouse cursor: move, click, double-click, right-click, drag, or scroll. Uses macOS Quartz (built-in Python) on darwin and PowerShell on Windows — no extra binaries required. REQUIRES Accessibility permission for Fauna on macOS. Coordinates are in screen pixels (origin top-left). Use fauna_list_windows first if you need the screen size. Actions: "move" (just move), "click" (move + left click), "double_click", "right_click", "drag" (press at x,y then release at toX,toY), "scroll" (wheel scroll dy lines at current position; positive=down).',
+      description: 'Control the user\'s mouse cursor: move, click, double-click, right-click, drag, or scroll. Uses macOS Quartz (built-in Swift) on darwin and PowerShell on Windows — no extra binaries required. REQUIRES Accessibility permission for Fauna on macOS. Coordinates are in screen pixels (origin top-left). Use fauna_list_windows first if you need the screen size, or fauna_ui_tree to find clickable elements symbolically. Actions: "move" (just move), "click" (move + left click), "double_click", "right_click", "drag" (press at x,y then release at toX,toY), "scroll" (wheel scroll dy lines at current position; positive=down).',
       parameters: {
         type: 'object',
         properties: {
@@ -702,6 +1002,44 @@ export const SELF_TOOL_DEFS = [
           dy: { type: 'number', description: 'Scroll amount in wheel lines (required for scroll). Positive scrolls down.' },
         },
         required: ['action'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_mouse_position',
+      description: 'Read the current mouse cursor position (x, y in screen pixels, top-left origin). Use to verify moves or capture where the user is pointing. REQUIRES Accessibility permission for Fauna on macOS.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_keyboard',
+      description: 'Type text or press a key combo on the user\'s machine. action="type" types literal text (Unicode-safe). action="key" presses a combo like "cmd+c", "shift+tab", "ctrl+alt+delete". Modifier names: cmd/command/meta, shift, alt/option, ctrl/control, fn. Key names: a-z, 0-9, return/enter, tab, space, escape/esc, delete/backspace, up/down/left/right, home/end, pageup/pagedown, f1-f12. REQUIRES Accessibility permission for Fauna on macOS.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['type', 'key'], description: 'type=literal text, key=combo press.' },
+          text: { type: 'string', description: 'Text to type (action=type).' },
+          combo: { type: 'string', description: 'Key combo like "cmd+c" (action=key).' },
+        },
+        required: ['action'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_ui_tree',
+      description: 'Get the Accessibility tree of the user\'s focused window — every button, link, text field, menu item, etc. with role, title, screen bounds (x,y,w,h), and tree path. Use this BEFORE fauna_mouse to click elements symbolically (read coordinates from the tree) instead of guessing pixels. Pass clickableOnly=true to filter to interactive elements only. macOS uses AXUIElement; Windows uses UI Automation. REQUIRES Accessibility permission for Fauna on macOS.',
+      parameters: {
+        type: 'object',
+        properties: {
+          maxDepth: { type: 'number', description: 'Max tree depth (default 8, max 20). Deeper = more detail, more tokens.' },
+          clickableOnly: { type: 'boolean', description: 'If true, mark only clickable roles (button, link, text field, menu item, etc).' },
+        },
       },
     },
   },
@@ -1196,6 +1534,15 @@ export function executeSelfTool(toolName, args, context = {}) {
     }
     case 'fauna_mouse': {
       return _faunaMouse(args || {}).then(r => JSON.stringify(r)).catch(e => JSON.stringify({ ok: false, error: e.message }));
+    }
+    case 'fauna_mouse_position': {
+      return _faunaMousePosition().then(r => JSON.stringify(r)).catch(e => JSON.stringify({ ok: false, error: e.message }));
+    }
+    case 'fauna_keyboard': {
+      return _faunaKeyboard(args || {}).then(r => JSON.stringify(r)).catch(e => JSON.stringify({ ok: false, error: e.message }));
+    }
+    case 'fauna_ui_tree': {
+      return _faunaUITree(args || {}).then(r => JSON.stringify(r)).catch(e => JSON.stringify({ ok: false, error: e.message }));
     }
 
     // ── Backlog ──
