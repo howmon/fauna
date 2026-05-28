@@ -253,6 +253,22 @@ function openConvInNewWindow(id, e) {
   } catch (_) {}
 }
 
+// Open a fresh app window that will start a new conversation. Mirrors the
+// hover affordance on conv rows, but for the "New chat" sidebar button.
+// Always opens a non-project-scoped window — use the in-project hover
+// affordance on individual conversations to keep the project context.
+function newConversationInNewWindow(e) {
+  if (e) { e.stopPropagation(); e.preventDefault(); }
+  if (window.faunaApp && typeof window.faunaApp.openWindow === 'function') {
+    window.faunaApp.openWindow({});
+    return;
+  }
+  // Browser fallback: open the app root in a new tab with no project param.
+  try {
+    window.open(window.location.pathname, '_blank');
+  } catch (_) {}
+}
+
 async function renameConversation(id, e) {
   if (e) e.stopPropagation();
   var conv = getConv(id || state.currentId);

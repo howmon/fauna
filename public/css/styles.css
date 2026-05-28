@@ -6728,9 +6728,27 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
   text-align: left;
   transition: background .13s, color .13s;
 }
-#new-chat-main-btn { font-weight: 500; color: var(--fau-text); }
+#new-chat-main-btn { font-weight: 500; color: var(--fau-text); position: relative; }
 #new-chat-main-btn:hover { background: var(--fau-surface2); }
 #sidebar-search-btn:hover { background: var(--fau-surface2); color: var(--fau-text); }
+
+/* Hover-revealed "open in new window" affordance on the New chat row.
+   Mirrors the pattern on .conv-item .conv-rename. */
+#new-chat-open-window {
+  margin-left: auto;
+  opacity: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 4px;
+  border-radius: 4px;
+  color: var(--fau-text-muted);
+  transition: opacity .12s, color .12s, background .12s;
+  font-size: 13px;
+}
+#new-chat-main-btn:hover #new-chat-open-window,
+#new-chat-open-window:focus { opacity: 1; }
+#new-chat-open-window:hover { color: var(--accent2); background: var(--accent-dim); }
 
 /* Sidebar primary nav */
 #sidebar-nav {
