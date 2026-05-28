@@ -19,9 +19,9 @@
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
-import ffmpegStatic from 'ffmpeg-static';
+import { FFMPEG_PATH } from './ffmpeg-path.js';
 
-const FFMPEG = ffmpegStatic || 'ffmpeg';
+const FFMPEG = FFMPEG_PATH;
 
 function _run(cmd, args, { onProgress } = {}) {
   return new Promise((resolve, reject) => {

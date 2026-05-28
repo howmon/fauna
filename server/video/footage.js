@@ -16,7 +16,7 @@ import path from 'path';
 import os from 'os';
 import { spawn } from 'child_process';
 import { pipeline } from 'stream/promises';
-import ffmpegPath from 'ffmpeg-static';
+import { FFMPEG_PATH } from './ffmpeg-path.js';
 
 const PEXELS_KEYS_FILE = path.join(os.homedir(), '.config', 'fauna', 'provider-keys.json');
 
@@ -268,7 +268,7 @@ async function _downloadPhotoAsClip(url, outFile, { aspect = '9:16', durationSec
       '-an',
       outFile,
     ];
-    const p = spawn(ffmpegPath, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const p = spawn(FFMPEG_PATH, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     let err = '';
     p.stderr.on('data', d => { err += d.toString(); });
     p.on('close', code => {

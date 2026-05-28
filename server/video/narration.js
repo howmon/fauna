@@ -21,11 +21,11 @@
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
-import ffmpegStatic from 'ffmpeg-static';
+import { FFMPEG_PATH } from './ffmpeg-path.js';
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
-const FFMPEG = ffmpegStatic || 'ffmpeg';
+const FFMPEG = FFMPEG_PATH;
 
 function _run(cmd, args, opts = {}) {
   return new Promise((resolve, reject) => {
