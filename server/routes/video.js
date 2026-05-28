@@ -14,6 +14,17 @@ import {
 } from '../video/job.js';
 
 export function registerVideoRoutes(app, { getCopilotClient }) {
+  // CORS: the Video Studio widget runs in a sandboxed iframe (null origin) so
+  // its fetch / EventSource requests are cross-origin. Loopback-only routes,
+  // safe to allow * here.
+  app.use('/api/video', (req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+  });
+
   app.get('/api/video/jobs', (_req, res) => {
     res.json({ ok: true, jobs: listJobs() });
   });
