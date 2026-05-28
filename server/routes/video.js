@@ -63,7 +63,8 @@ export function registerVideoRoutes(app, { getCopilotClient }) {
       if (!STEPS.includes(req.params.step)) {
         return res.status(400).json({ ok: false, error: 'unknown step' });
       }
-      const job = await runStep(req.params.id, req.params.step, { client: getCopilotClient?.() });
+      const force = req.body?.force === true || req.query.force === '1';
+      const job = await runStep(req.params.id, req.params.step, { client: getCopilotClient?.(), force });
       res.json({ ok: true, job });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });

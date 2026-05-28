@@ -53,9 +53,12 @@ function _dimsFor(aspect) {
  */
 async function normaliseClip(inPath, outPath, { aspect, maxClipDuration, fps = 30 }) {
   const { w, h } = _dimsFor(aspect);
+  // Crop-fill (cover): scale so the clip covers the frame, then center-crop
+  // off the excess. Avoids letterboxing/pillarboxing when the source aspect
+  // doesn't match the target (e.g. a portrait clip composed into a 16:9 frame).
   const vf = [
-    `scale=${w}:${h}:force_original_aspect_ratio=decrease`,
-    `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=black`,
+    `scale=${w}:${h}:force_original_aspect_ratio=increase`,
+    `crop=${w}:${h}`,
     `setsar=1`,
     `fps=${fps}`,
   ].join(',');

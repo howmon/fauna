@@ -59,6 +59,7 @@ export function buildVideoStudioWidget(job) {
   <div class="err" id="err"></div>
   <div class="actions">
     <button class="primary" id="btn-run">Generate Video</button>
+    <button class="ghost" id="btn-regen-script">Regenerate script</button>
     <button class="ghost" id="btn-rerender">Re-render only</button>
     <button class="ghost" id="btn-save-script">Save script</button>
     <button class="ghost" id="btn-open">Open file</button>
@@ -199,6 +200,18 @@ async function rerender() {
   await fetch(BASE + '/api/video/jobs/' + JOB_ID + '/step/render', { method: 'POST' });
   refresh();
 }
+async function regenerateScript() {
+  $('btn-regen-script').disabled = true;
+  try {
+    await fetch(BASE + '/api/video/jobs/' + JOB_ID + '/step/script', {
+      method: 'POST', headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify({ force: true }),
+    });
+  } finally {
+    $('btn-regen-script').disabled = false;
+    refresh();
+  }
+}
 async function saveScript() {
   await fetch(BASE + '/api/video/jobs/' + JOB_ID + '/patch', {
     method: 'POST', headers: { 'Content-Type':'application/json' },
@@ -215,6 +228,7 @@ async function openFile() {
 }
 
 $('btn-run').addEventListener('click', runAll);
+$('btn-regen-script').addEventListener('click', regenerateScript);
 $('btn-rerender').addEventListener('click', rerender);
 $('btn-save-script').addEventListener('click', saveScript);
 $('btn-open').addEventListener('click', openFile);

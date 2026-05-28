@@ -24,12 +24,12 @@ const STEPS = ['script', 'terms', 'audio', 'subtitle', 'materials', 'render'];
 
 // Which earlier-step invalidates which later-steps.
 const INVALIDATES = {
-  script:    ['audio', 'subtitle', 'render'],
+  script:    ['terms', 'audio', 'subtitle', 'materials', 'render'],
   terms:     ['materials', 'render'],
   voice:     ['audio', 'subtitle', 'render'],
   aspect:    ['materials', 'render'],
   music:     ['render'],
-  duration:  ['script', 'audio', 'subtitle', 'render'],
+  duration:  ['script', 'terms', 'audio', 'subtitle', 'materials', 'render'],
 };
 
 const _emitters = new Map(); // jobId → EventEmitter
@@ -186,7 +186,13 @@ export async function runStep(jobId, step, opts = {}) {
   const job = _readJob(jobId);
   if (!job) throw new Error('job not found');
 
-  if (job.stepsDone.includes(step)) {
+  // `force` re-runs even if the step is already done (and invalidates
+  // any downstream steps that depend on it).
+  if (opts.force) {
+    const invalid = new Set([step, ...(INVALIDATES[step] || [])]);
+    job.stepsDone = job.stepsDone.filter(s => !invalid.has(s));
+    _writeJob(job);
+  } else if (job.stepsDone.includes(step)) {
     _emit(jobId, { step, status: 'cached', message: `${step}: cached` });
     return job;
   }

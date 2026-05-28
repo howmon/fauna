@@ -29,10 +29,25 @@ function _loadKey(provider) {
 
 function _aspectFor(target) {
   // target like '9:16' (portrait) or '16:9' (landscape)
-  if (target === '9:16') return { orient: 'portrait', minW: 1080, minH: 1920 };
-  if (target === '16:9') return { orient: 'landscape', minW: 1920, minH: 1080 };
-  if (target === '1:1')  return { orient: 'square', minW: 1080, minH: 1080 };
-  return { orient: 'landscape', minW: 1280, minH: 720 };
+  if (target === '9:16') return { orient: 'portrait', minW: 1080, minH: 1920, ratio: 9 / 16 };
+  if (target === '16:9') return { orient: 'landscape', minW: 1920, minH: 1080, ratio: 16 / 9 };
+  if (target === '1:1')  return { orient: 'square', minW: 1080, minH: 1080, ratio: 1 };
+  return { orient: 'landscape', minW: 1280, minH: 720, ratio: 16 / 9 };
+}
+
+// Keep only candidates whose actual pixel ratio matches the target aspect.
+// Stock APIs honor `orientation` loosely (Pexels returns vertical-ish clips
+// for landscape queries, etc.) — enforce here so we never end up scaling a
+// portrait clip into a 16:9 frame.
+function _matchesAspect(items, aspect) {
+  if (!items?.length) return items;
+  const { ratio } = _aspectFor(aspect);
+  const tol = 0.15; // ±15% of target ratio
+  return items.filter((it) => {
+    if (!it.width || !it.height) return true; // unknown dims, let it through
+    const r = it.width / it.height;
+    return Math.abs(r - ratio) / ratio <= tol;
+  });
 }
 
 // ── Tier 1: Pexels API ────────────────────────────────────────────────────
@@ -205,12 +220,15 @@ export function searchLocal(_term, { folder } = {}) {
 
 // ── Resolver — find the first working tier ────────────────────────────────
 export async function resolveTier({ aspect = '9:16', localFolder, port = 3737 } = {}) {
-  if (_loadKey('pexels')) return { name: 'pexels-api', search: (t) => searchPexels(t, { aspect }) };
-  if (_loadKey('pixabay')) return { name: 'pixabay-api', search: (t) => searchPixabay(t, { aspect }) };  if (_loadKey('unsplash')) return { name: 'unsplash-api', search: (t) => searchUnsplash(t, { aspect }) };  // Probe extension availability.
+  const wrap = (fn) => async (t) => _matchesAspect(await fn(t), aspect);
+  if (_loadKey('pexels')) return { name: 'pexels-api', search: wrap((t) => searchPexels(t, { aspect })) };
+  if (_loadKey('pixabay')) return { name: 'pixabay-api', search: wrap((t) => searchPixabay(t, { aspect })) };
+  if (_loadKey('unsplash')) return { name: 'unsplash-api', search: wrap((t) => searchUnsplash(t, { aspect })) };
+  // Probe extension availability.
   try {
     const r = await fetch(`http://localhost:${port}/api/ext/status`);
     const j = await r.json();
-    if (j?.browsers?.length) return { name: 'ext-scrape', search: (t) => searchExtensionScrape(t, { aspect, port }) };
+    if (j?.browsers?.length) return { name: 'ext-scrape', search: wrap((t) => searchExtensionScrape(t, { aspect, port })) };
   } catch (_) {}
   if (localFolder) return { name: 'local', search: (t) => searchLocal(t, { folder: localFolder }) };
   return null;
@@ -311,6 +329,10 @@ export async function gatherFootage({ terms, audioDurationSec, outDir, aspect = 
   // of the same query. Each pass we take ONE fresh clip per term; if a term
   // runs out of unseen candidates we just skip it on the next pass.
   const matsDir = path.join(outDir, 'materials');
+  // Always start from a clean slate so a previous aspect's clips never leak
+  // through (e.g. switching 9:16 → 16:9 must re-download landscape footage,
+  // not letterbox the old portrait files).
+  if (fs.existsSync(matsDir)) fs.rmSync(matsDir, { recursive: true, force: true });
   fs.mkdirSync(matsDir, { recursive: true });
 
   // Cache search results so we don't re-hit the API each pass.
