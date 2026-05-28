@@ -32,8 +32,155 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
+import { spawn } from 'child_process';
 
 const HOME = os.homedir();
+
+function _runCmd(cmd, argv, input) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, argv);
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', d => { stdout += d.toString(); });
+    child.stderr.on('data', d => { stderr += d.toString(); });
+    child.on('error', reject);
+    child.on('close', code => resolve({ code, stdout, stderr }));
+    if (input != null) { child.stdin.end(input); } else { child.stdin.end(); }
+  });
+}
+
+async function _faunaMouse(args) {
+  const action = String(args.action || '').trim();
+  if (!action) throw new Error('action required');
+  const plat = process.platform;
+  if (plat !== 'darwin' && plat !== 'win32') {
+    throw new Error('fauna_mouse supports macOS and Windows only (current: ' + plat + ')');
+  }
+  const needsXY = ['move', 'click', 'double_click', 'right_click', 'drag'].includes(action);
+  if (needsXY && (!Number.isFinite(args.x) || !Number.isFinite(args.y))) {
+    throw new Error('x and y required for action ' + action);
+  }
+  if (action === 'drag' && (!Number.isFinite(args.toX) || !Number.isFinite(args.toY))) {
+    throw new Error('toX and toY required for drag');
+  }
+  if (action === 'scroll' && !Number.isFinite(args.dy)) {
+    throw new Error('dy required for scroll');
+  }
+
+  if (plat === 'darwin') {
+    const swift = `
+import CoreGraphics
+import Foundation
+let args = CommandLine.arguments
+let action = args.count > 1 ? args[1] : ""
+func d(_ i: Int) -> Double { return args.count > i ? (Double(args[i]) ?? 0) : 0 }
+func move(_ x: Double, _ y: Double) {
+  if let e = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: .left) { e.post(tap: .cghidEventTap) }
+}
+func click(_ x: Double, _ y: Double, right: Bool = false, clicks: Int = 1) {
+  let down: CGEventType = right ? .rightMouseDown : .leftMouseDown
+  let up: CGEventType   = right ? .rightMouseUp   : .leftMouseUp
+  let btn: CGMouseButton = right ? .right : .left
+  for i in 1...clicks {
+    if let e = CGEvent(mouseEventSource: nil, mouseType: down, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: btn) {
+      e.setIntegerValueField(.mouseEventClickState, value: Int64(i))
+      e.post(tap: .cghidEventTap)
+    }
+    if let e = CGEvent(mouseEventSource: nil, mouseType: up, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: btn) {
+      e.setIntegerValueField(.mouseEventClickState, value: Int64(i))
+      e.post(tap: .cghidEventTap)
+    }
+    if clicks > 1 { Thread.sleep(forTimeInterval: 0.05) }
+  }
+}
+func drag(_ x1: Double, _ y1: Double, _ x2: Double, _ y2: Double) {
+  if let e = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: CGPoint(x: x1, y: y1), mouseButton: .left) { e.post(tap: .cghidEventTap) }
+  Thread.sleep(forTimeInterval: 0.05)
+  let steps = 20
+  for i in 1...steps {
+    let t = Double(i) / Double(steps)
+    let x = x1 + (x2 - x1) * t
+    let y = y1 + (y2 - y1) * t
+    if let e = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: .left) { e.post(tap: .cghidEventTap) }
+    Thread.sleep(forTimeInterval: 0.01)
+  }
+  if let e = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: CGPoint(x: x2, y: y2), mouseButton: .left) { e.post(tap: .cghidEventTap) }
+}
+func scroll(_ dy: Double) {
+  if let e = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: Int32(-dy), wheel2: 0, wheel3: 0) { e.post(tap: .cghidEventTap) }
+}
+switch action {
+  case "move": move(d(2), d(3))
+  case "click": click(d(2), d(3))
+  case "double_click": click(d(2), d(3), clicks: 2)
+  case "right_click": click(d(2), d(3), right: true)
+  case "drag": drag(d(2), d(3), d(4), d(5))
+  case "scroll": scroll(d(2))
+  default: FileHandle.standardError.write("unknown action\\n".data(using: .utf8)!); exit(2)
+}
+print("ok")
+`;
+    const swiftArgs = ['-', action];
+    if (action === 'scroll') swiftArgs.push(String(args.dy));
+    else if (action === 'drag') swiftArgs.push(String(args.x), String(args.y), String(args.toX), String(args.toY));
+    else if (needsXY) swiftArgs.push(String(args.x), String(args.y));
+    const r = await _runCmd('/usr/bin/swift', swiftArgs, swift);
+    if (r.code !== 0) {
+      const stderr = r.stderr || '';
+      if (/not (?:trusted|permitted)|accessibility|denied/i.test(stderr)) {
+        return { ok: false, error: 'Accessibility permission missing for Fauna. Grant in System Settings → Privacy & Security → Accessibility, then quit and relaunch Fauna.', stderr: stderr.slice(0, 500) };
+      }
+      if (/swift: not found|No such file/.test(stderr)) {
+        return { ok: false, error: 'Swift toolchain not found. Install Xcode Command Line Tools: xcode-select --install' };
+      }
+      return { ok: false, error: 'mouse command failed (exit ' + r.code + ')', stderr: stderr.slice(0, 500) };
+    }
+    return { ok: true, action, platform: 'darwin' };
+  }
+
+  // win32
+  const ps = `
+Add-Type -AssemblyName System.Windows.Forms
+$signature = @'
+[DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+[DllImport("user32.dll")] public static extern void mouse_event(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo);
+'@
+$mouse = Add-Type -MemberDefinition $signature -Name MouseInput -Namespace FaunaMouse -PassThru
+$action = $args[0]
+function Do-Click($x, $y, $btn, $clicks) {
+  $mouse::SetCursorPos([int]$x, [int]$y)
+  $down = if ($btn -eq 'right') { 0x0008 } else { 0x0002 }
+  $up   = if ($btn -eq 'right') { 0x0010 } else { 0x0004 }
+  for ($i = 0; $i -lt $clicks; $i++) {
+    $mouse::mouse_event($down, 0, 0, 0, 0); $mouse::mouse_event($up, 0, 0, 0, 0)
+  }
+}
+switch ($action) {
+  'move'         { $mouse::SetCursorPos([int]$args[1], [int]$args[2]) }
+  'click'        { Do-Click $args[1] $args[2] 'left' 1 }
+  'double_click' { Do-Click $args[1] $args[2] 'left' 2 }
+  'right_click'  { Do-Click $args[1] $args[2] 'right' 1 }
+  'drag' {
+    $mouse::SetCursorPos([int]$args[1], [int]$args[2])
+    $mouse::mouse_event(0x0002, 0, 0, 0, 0)
+    Start-Sleep -Milliseconds 50
+    $mouse::SetCursorPos([int]$args[3], [int]$args[4])
+    $mouse::mouse_event(0x0004, 0, 0, 0, 0)
+  }
+  'scroll' {
+    $mouse::mouse_event(0x0800, 0, 0, [int]([double]$args[1] * -120), 0)
+  }
+}
+Write-Output 'ok'
+`;
+    const argv = ['-NoProfile', '-NonInteractive', '-Command', ps, '-Args', action];
+    if (action === 'scroll') argv.push(String(args.dy));
+    else if (action === 'drag') argv.push(String(args.x), String(args.y), String(args.toX), String(args.toY));
+    else if (needsXY) argv.push(String(args.x), String(args.y));
+    const r = await _runCmd('powershell.exe', argv);
+    if (r.code !== 0) return { ok: false, error: 'mouse command failed (exit ' + r.code + ')', stderr: (r.stderr || '').slice(0, 500) };
+    return { ok: true, action, platform: 'win32' };
+}
 
 function _resolveFaunaWritePath(filePath, cwd) {
   if (!filePath) throw new Error('path required');
@@ -539,6 +686,25 @@ export const SELF_TOOL_DEFS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_mouse',
+      description: 'Control the user\'s mouse cursor: move, click, double-click, right-click, drag, or scroll. Uses macOS Quartz (built-in Python) on darwin and PowerShell on Windows — no extra binaries required. REQUIRES Accessibility permission for Fauna on macOS. Coordinates are in screen pixels (origin top-left). Use fauna_list_windows first if you need the screen size. Actions: "move" (just move), "click" (move + left click), "double_click", "right_click", "drag" (press at x,y then release at toX,toY), "scroll" (wheel scroll dy lines at current position; positive=down).',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['move', 'click', 'double_click', 'right_click', 'drag', 'scroll'], description: 'What to do.' },
+          x: { type: 'number', description: 'Target x in screen pixels (required for move/click/double_click/right_click/drag).' },
+          y: { type: 'number', description: 'Target y in screen pixels (required for move/click/double_click/right_click/drag).' },
+          toX: { type: 'number', description: 'Drag release x (required for drag).' },
+          toY: { type: 'number', description: 'Drag release y (required for drag).' },
+          dy: { type: 'number', description: 'Scroll amount in wheel lines (required for scroll). Positive scrolls down.' },
+        },
+        required: ['action'],
+      },
+    },
+  },
   // ── Backlog (feature intake + prioritization) ──────────────────────────
   {
     type: 'function',
@@ -1027,6 +1193,9 @@ export function executeSelfTool(toolName, args, context = {}) {
       return macArrangeWindows(moves)
         .then(r => JSON.stringify(r))
         .catch(e => JSON.stringify({ ok: false, error: e.message }));
+    }
+    case 'fauna_mouse': {
+      return _faunaMouse(args || {}).then(r => JSON.stringify(r)).catch(e => JSON.stringify({ ok: false, error: e.message }));
     }
 
     // ── Backlog ──

@@ -49,7 +49,8 @@ describe('self-tools', () => {
       // fauna_backlog_prioritize, fauna_consult_debate (autonomous agent
       // platform — backlog + chain-of-debate phases). Bumped to 29 after
       // adding fauna_plan (Codex-style TODO tool with invariants).
-      expect(SELF_TOOL_DEFS).toHaveLength(29);
+      // Bumped to 30 after adding fauna_mouse (cursor control via Quartz/PowerShell).
+      expect(SELF_TOOL_DEFS).toHaveLength(30);
     });
 
     it('each tool has required OpenAI function format', () => {
