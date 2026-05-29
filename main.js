@@ -107,6 +107,10 @@ async function createWindow({ convId, projectId, bounds, blank } = {}) {
       webviewTag:       true,
       spellcheck:       true,
       preload:          path.join(__dirname, 'main-preload.js'),
+      // Prevent macOS from suspending renderer network I/O (SSE streams) when
+      // the window is occluded or backgrounded — fixes ERR_NETWORK_IO_SUSPENDED
+      // on /api/conversations/stream and /api/ext/events.
+      backgroundThrottling: false,
     },
     show: false,
   };
