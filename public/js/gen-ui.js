@@ -44,6 +44,41 @@ function _sanitizeJsonControlChars(raw) {
   return out;
 }
 
+// Second-pass recovery: when the model emits an unescaped \" inside a string
+// value (e.g. \`"text": "She said "hi""\`), JSON.parse rejects with
+// "Unterminated string". We look at each \" while inside a string — if the
+// next non-whitespace character is NOT a structural close (\`,\`, \`}\`, \`]\`,
+// \`:\`) and not end-of-input, treat it as a content quote and escape it.
+function _escapeStrayQuotes(raw) {
+  var out = '';
+  var inStr = false;
+  var esc = false;
+  for (var i = 0; i < raw.length; i++) {
+    var ch = raw.charAt(i);
+    if (inStr) {
+      if (esc) { out += ch; esc = false; continue; }
+      if (ch === '\\') { out += ch; esc = true; continue; }
+      if (ch === '"') {
+        // Lookahead: skip whitespace, see what's next.
+        var j = i + 1;
+        while (j < raw.length && (raw.charAt(j) === ' ' || raw.charAt(j) === '\t' || raw.charAt(j) === '\n' || raw.charAt(j) === '\r')) j++;
+        var next = j < raw.length ? raw.charAt(j) : '';
+        if (next === ',' || next === '}' || next === ']' || next === ':' || next === '') {
+          out += ch; inStr = false; continue;
+        }
+        // Stray quote inside a string — escape it.
+        out += '\\"';
+        continue;
+      }
+      out += ch;
+    } else {
+      if (ch === '"') inStr = true;
+      out += ch;
+    }
+  }
+  return out;
+}
+
 // ── State store (per-spec instance) ──────────────────────────────────────
 
 function _genUiCreateState(initialState) {
@@ -1273,15 +1308,20 @@ function extractAndRenderGenUI(buffer, msgEl, isHistoryLoad) {
     } catch (e) {
       // Recovery: LLMs frequently embed literal newlines/tabs inside string
       // values (e.g. multi-line SVG markup). JSON disallows raw control chars
-      // in strings — escape them and retry once before giving up.
+      // in strings — escape them and retry. If that still fails, try once
+      // more with stray-quote escaping (handles \`"text": "She said "hi""\`).
       try {
         spec = JSON.parse(_sanitizeJsonControlChars(raw.trim()));
       } catch (e2) {
-        var errEl = document.createElement('div');
-        errEl.className = 'gui-parse-error';
-        errEl.innerHTML = '<i class="ti ti-alert-circle"></i> <strong>gen-ui:</strong> JSON parse error — ' + escHtml(e.message);
-        pre.replaceWith(errEl);
-        return;
+        try {
+          spec = JSON.parse(_escapeStrayQuotes(_sanitizeJsonControlChars(raw.trim())));
+        } catch (e3) {
+          var errEl = document.createElement('div');
+          errEl.className = 'gui-parse-error';
+          errEl.innerHTML = '<i class="ti ti-alert-circle"></i> <strong>gen-ui:</strong> JSON parse error — ' + escHtml(e.message);
+          pre.replaceWith(errEl);
+          return;
+        }
       }
     }
     if (!spec || !spec.root || !spec.elements) {
