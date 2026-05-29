@@ -86,7 +86,32 @@ export function registerShellExecRoutes(app, {
       // If this looks like a dev server (npm run dev, vite, next dev, …)
       // register it in the global dev-server registry so the user can list /
       // stop / restart it from the UI.
-      try { registerDevServer(child, { command, cwd: workDir, killId }); } catch (_) {}
+      let _regId = null;
+      try {
+        _regId = registerDevServer(child, { command, cwd: workDir, killId });
+      } catch (_) {}
+
+      // For dev servers: detach immediately. Otherwise the SSE stream stays
+      // open forever, the input bar pill stays orange, and the user can't
+      // send another message in the same conversation. The child keeps
+      // running inside the registry; the user manages it from Settings →
+      // Dev Servers. Pipe a tiny note back so the widget records a result.
+      if (isDev) {
+        if (killId) shellProcs.delete(killId);
+        try { child.stdout && child.stdout.removeAllListeners('data'); } catch (_) {}
+        try { child.stderr && child.stderr.removeAllListeners('data'); } catch (_) {}
+        try { child.unref(); } catch (_) {}
+        res.write(`data: ${JSON.stringify({
+          type: 'dev_server_detached',
+          id: _regId,
+          command,
+          cwd: workDir,
+          message: 'Dev server started in background. Manage it from Settings → Dev Servers.',
+        })}\n\n`);
+        res.write(`data: ${JSON.stringify({ type: 'exit', exitCode: 0, detached: true })}\n\n`);
+        res.end();
+        return;
+      }
 
       if (child.stdout) {
         child.stdout.on('data', (chunk) => {

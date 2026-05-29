@@ -62,6 +62,7 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
+import * as devServerRegistry from './server/lib/dev-server-registry.js';
 
 const HOME = os.homedir();
 
@@ -952,6 +953,23 @@ export const SELF_TOOL_DEFS = [
     },
   },
 
+  // ── Dev-server registry (list / stop / restart background dev servers) ──
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_dev_servers',
+      description: 'List, stop, or restart background dev servers (npm run dev, vite, next dev, php -S, uvicorn, …) that were started earlier in this or any other conversation. When a dev-server command is launched via fauna_shell_exec or a ```bash block, the server is detached and registered here — it does NOT come back via shell output. Use this tool to check status, restart after a code change, or stop a port when the user is done. Action `list` returns every tracked server with id, label, cwd, port (if detected), status, command, and startedAt. Action `stop` SIGTERMs by id. Action `restart` kills and respawns the same command in the same cwd.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['list', 'stop', 'restart'], description: 'What to do.' },
+          id: { type: 'string', description: 'Registry id from a prior list call. Required for stop/restart.' },
+        },
+        required: ['action'],
+      },
+    },
+  },
+
   // ── File read ──
   {
     type: 'function',
@@ -1723,6 +1741,39 @@ export function executeSelfTool(toolName, args, context = {}) {
         return JSON.stringify({ ok: false, error: 'fauna_shell_exec is not available in this context.' });
       }
       return context.runShell(args);
+    }
+
+    // ── Dev-server registry ──
+    case 'fauna_dev_servers': {
+      try {
+        const action = String(args.action || '').toLowerCase();
+        if (action === 'list') {
+          const servers = devServerRegistry.list();
+          return JSON.stringify({
+            ok: true,
+            count: servers.length,
+            servers,
+            note: servers.length
+              ? 'These are running in the background. Use action:"stop" or action:"restart" with the id.'
+              : 'No dev servers running.',
+          });
+        }
+        if (action === 'stop') {
+          if (!args.id) return JSON.stringify({ ok: false, error: 'id is required for action:"stop"' });
+          const stopped = devServerRegistry.kill(args.id);
+          return JSON.stringify({ ok: !!stopped, id: args.id, stopped: !!stopped });
+        }
+        if (action === 'restart') {
+          if (!args.id) return JSON.stringify({ ok: false, error: 'id is required for action:"restart"' });
+          const isWin = process.platform === 'win32';
+          const shellBin = isWin ? 'powershell.exe' : '/bin/zsh';
+          const result = devServerRegistry.restart(args.id, { shellBin, isWin, augmentedPath: process.env.PATH });
+          return JSON.stringify({ ok: !!result, id: args.id, result });
+        }
+        return JSON.stringify({ ok: false, error: 'Unknown action. Use list, stop, or restart.' });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
     }
 
     // ── File read ──

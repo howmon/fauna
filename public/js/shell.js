@@ -731,6 +731,9 @@ function hasActiveShellWorkForCurrentConversation() {
   var activeWidgets = Array.from(document.querySelectorAll('.shell-exec-block')).filter(_shellWidgetBelongsToActiveConversation);
   if (!activeWidgets.length) return false;
   var hasRunning = activeWidgets.some(function(widget) {
+    // Dev servers run in the background — they never count as blocking work
+    // for the input bar. The user manages them from Settings → Dev Servers.
+    if (widget.dataset.devServer === '1') return false;
     var resultEl = widget.querySelector('.shell-exec-result');
     return resultEl && resultEl.classList.contains('running');
   });
@@ -836,6 +839,65 @@ function hideShellRunningPill(execId) {
   var pill = document.getElementById('pill-' + execId);
   if (pill) pill.remove();
   syncShellRunningPills();
+}
+
+// Non-blocking pill for dev servers. Lives in a separate container so it
+// doesn't count toward `hasActiveShellWorkForCurrentConversation` and the
+// send button stays enabled. Clicking it opens Settings → Dev Servers.
+function showDevServerPill(regId, code, convId) {
+  var container = document.getElementById('dev-server-pills');
+  if (!container) {
+    var anchor = document.getElementById('shell-running-pills');
+    if (!anchor || !anchor.parentNode) return;
+    container = document.createElement('div');
+    container.id = 'dev-server-pills';
+    container.className = 'dev-server-pills';
+    anchor.parentNode.insertBefore(container, anchor.nextSibling);
+  }
+  // De-dupe by registry id when present
+  var pillId = 'devpill-' + (regId || ('x-' + Date.now()));
+  if (document.getElementById(pillId)) { syncDevServerPills(); return; }
+  var label = (function() {
+    var s = String(code || '').replace(/^[^&]*&&\s*/, '').trim();
+    // Pick a meaningful binary token
+    var m = s.match(/\b(npm|pnpm|yarn|bun)\s+(?:run\s+)?[\w:-]+|\bvite\b|\bnext\s+dev\b|\bphp\s+-S[^\s]*\s*[^\s]*|\b(?:uvicorn|gunicorn|nodemon|tsx|ts-node-dev|serve|http-server)\b[^|;]*/i);
+    var pick = m ? m[0] : s.split(/\s+/).slice(0, 2).join(' ');
+    return pick.length > 30 ? pick.slice(0, 30) + '…' : pick;
+  })();
+  var pill = document.createElement('span');
+  pill.className = 'dev-server-pill';
+  pill.id = pillId;
+  pill.dataset.convId = convId || (typeof state !== 'undefined' ? (state.currentId || '') : '');
+  pill.title = 'Dev server running — click to manage in Settings';
+  pill.innerHTML =
+    '<i class="ti ti-server-bolt"></i>' +
+    '<span class="pill-label">' + escHtml(label) + '</span>' +
+    '<i class="ti ti-external-link" style="opacity:.65;font-size:11px"></i>';
+  pill.onclick = function() {
+    try {
+      if (typeof switchPage === 'function') switchPage('settings');
+      setTimeout(function() {
+        var nav = document.querySelector('[data-page="dev-servers"]');
+        if (nav && typeof nav.click === 'function') nav.click();
+      }, 50);
+    } catch (_) {}
+  };
+  container.appendChild(pill);
+  syncDevServerPills();
+}
+
+function syncDevServerPills() {
+  var container = document.getElementById('dev-server-pills');
+  if (!container) return;
+  var activeConvId = (typeof state !== 'undefined' && state.currentId) ? state.currentId : '';
+  var visible = 0;
+  Array.from(container.children).forEach(function(pill) {
+    var pillConvId = pill.dataset.convId || '';
+    var show = !pillConvId || pillConvId === activeConvId;
+    pill.style.display = show ? '' : 'none';
+    if (show) visible += 1;
+  });
+  container.style.display = visible ? 'flex' : 'none';
 }
 
 function killShellExec(execId) {
@@ -1025,7 +1087,29 @@ async function runShellExec(execId, opts) {
             _showShellInput(execId, killId, sseEvt.hint, resultEl);
           } else if (sseEvt.type === 'exit') {
             exitCode = sseEvt.exitCode || 0;
+            if (sseEvt.detached) {
+              // Dev server was registered and the stream was closed. Keep the
+              // widget in a "started" state without leaving it pinned to the
+              // input bar as a blocking running pill.
+              widget.dataset.devServer = '1';
+              if (!stdoutBuf && !stderrBuf) {
+                stdoutBuf = 'Dev server started in background. Manage it from Settings → Dev Servers.';
+              }
+            }
             _removeShellInput(execId);
+          } else if (sseEvt.type === 'dev_server_detached') {
+            widget.dataset.devServer = '1';
+            widget.dataset.devServerId = sseEvt.id || '';
+            stdoutBuf = (stdoutBuf ? stdoutBuf + '\n' : '') + (sseEvt.message || 'Dev server started in background.');
+            resultEl.textContent = stdoutBuf;
+            // Stop the running spinner UI immediately and free the input bar.
+            clearInterval(timerInterval);
+            resultEl.className = 'shell-exec-result';
+            hideShellRunningPill(execId);
+            if (typeof showDevServerPill === 'function') {
+              showDevServerPill(sseEvt.id || execId, sseEvt.command || code, convId2);
+            }
+            if (typeof reconcileBusyState === 'function') reconcileBusyState();
           } else if (sseEvt.type === 'error') {
             errMsg = sseEvt.error || 'Unknown error';
           }
