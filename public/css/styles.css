@@ -201,10 +201,19 @@ body.is-resizing webview { pointer-events: none !important; }
   opacity: 0; pointer-events: none;
   background: var(--fau-surface2);
   border-radius: 6px; padding: 2px;
-  box-shadow: -8px 0 12px -4px var(--fau-surface2);
+  box-shadow: -12px 0 14px -2px var(--fau-surface2), -24px 0 14px -8px var(--fau-surface2);
   transition: opacity .12s;
 }
-.conv-item.active .conv-actions { background: var(--accent-dim); box-shadow: -8px 0 12px -4px var(--accent-dim); }
+.conv-item.active .conv-actions {
+  /* Active row uses translucent accent-dim, which would let the title text
+     bleed through the action buttons. Composite over the surface color so
+     the buttons stay legible while still tinting toward the accent. */
+  background:
+    linear-gradient(var(--accent-dim), var(--accent-dim)),
+    var(--fau-surface2);
+  background-blend-mode: normal;
+  box-shadow: -12px 0 14px -2px var(--fau-surface2), -24px 0 14px -8px var(--fau-surface2);
+}
 .conv-item:hover .conv-actions { opacity: 1; pointer-events: auto; }
 .conv-item .conv-rename,
 .conv-item .conv-del {
