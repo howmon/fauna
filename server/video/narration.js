@@ -22,6 +22,7 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import { FFMPEG_PATH } from './ffmpeg-path.js';
+import { synthesizeKokoro, parseVoiceSpec } from './kokoro.js';
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
@@ -58,9 +59,44 @@ export async function probeDuration(audioFile) {
 
 async function _ttsMac(text, voice, outAiff) {
   const args = [];
-  if (voice) args.push('-v', voice);
+  const v = voice || await _pickBestMacVoice();
+  if (v) args.push('-v', v);
   args.push('-o', outAiff, '--', text);
   await _run('/usr/bin/say', args);
+}
+
+// Cache the auto-picked voice for the process lifetime.
+let _bestMacVoiceCache = undefined;
+
+/**
+ * Find the highest-quality installed macOS voice for English narration.
+ * Premium > Enhanced > the long-standing default "Samantha". If the user
+ * hasn't installed a premium/enhanced voice, returns null so `say` uses
+ * the system default (which is the original ugly voice — hence the prompt
+ * upstream to install one).
+ */
+async function _pickBestMacVoice() {
+  if (_bestMacVoiceCache !== undefined) return _bestMacVoiceCache;
+  try {
+    const { stdout } = await _run('/usr/bin/say', ['-v', '?']);
+    const lines = stdout.split('\n');
+    const en = lines.filter(l => /\b(en_US|en_GB|en_AU|en_IE)\b/.test(l));
+    const find = (re) => {
+      const hit = en.find(l => re.test(l));
+      if (!hit) return null;
+      // The voice name is everything before the first run of 2+ spaces.
+      const m = hit.match(/^(.+?)\s{2,}/);
+      return m ? m[1].trim() : null;
+    };
+    _bestMacVoiceCache =
+      find(/\(Premium\)/i) ||
+      find(/\(Enhanced\)/i) ||
+      find(/^Samantha\b/) ||
+      null;
+  } catch (_) {
+    _bestMacVoiceCache = null;
+  }
+  return _bestMacVoiceCache;
 }
 
 async function _ttsLinux(text, voice, outWav) {
@@ -94,21 +130,43 @@ async function _ttsWin(text, voice, outWav) {
  * @param {object} args
  * @param {string} args.text       — full script
  * @param {string} args.outFile    — absolute path to write (must end .mp3)
- * @param {string} [args.voice]    — engine-specific voice name (e.g. 'Samantha' on Mac)
- * @returns {Promise<{audioFile:string, durationSec:number}>}
+ * @param {string} [args.voice]    — engine-specific voice name. Prefix with
+ *                                   "kokoro:" (e.g. "kokoro:af_bella") to use
+ *                                   the bundled high-quality neural engine;
+ *                                   otherwise the OS-native TTS is used.
+ * @param {(p:{phase:string,fraction?:number})=>void} [args.onProgress]
+ * @returns {Promise<{audioFile:string, durationSec:number, engine:string, voice:string|null}>}
  */
-export async function synthesize({ text, outFile, voice }) {
+export async function synthesize({ text, outFile, voice, onProgress }) {
   if (!text || !text.trim()) throw new Error('text is required');
   if (!outFile) throw new Error('outFile is required');
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
+
+  const spec = parseVoiceSpec(voice);
+
+  // ── Kokoro neural TTS path ─────────────────────────────────────────────
+  if (spec.engine === 'kokoro') {
+    const wav = outFile.replace(/\.mp3$/i, '') + '.tmp.wav';
+    try {
+      const r = await synthesizeKokoro({ text, outWav: wav, voice: spec.voiceId, onProgress });
+      // Transcode WAV → MP3 to match downstream mux expectations.
+      await _run(FFMPEG, ['-y', '-i', wav, '-codec:a', 'libmp3lame', '-b:a', '192k', '-ar', '44100', outFile]);
+      const durationSec = await probeDuration(outFile);
+      return { audioFile: outFile, durationSec, engine: 'kokoro', voice: r.voice };
+    } finally {
+      try { fs.unlinkSync(wav); } catch (_) {}
+    }
+  }
+
+  // ── OS-native fallback (say / espeak / SAPI) ───────────────────────────
 
   // 1) Native TTS → intermediate audio file
   const tmpExt = IS_MAC ? '.aiff' : '.wav';
   const tmp = outFile.replace(/\.mp3$/i, '') + '.tmp' + tmpExt;
   try {
-    if (IS_MAC) await _ttsMac(text, voice, tmp);
-    else if (IS_WIN) await _ttsWin(text, voice, tmp);
-    else await _ttsLinux(text, voice, tmp);
+    if (IS_MAC) await _ttsMac(text, spec.voiceId, tmp);
+    else if (IS_WIN) await _ttsWin(text, spec.voiceId, tmp);
+    else await _ttsLinux(text, spec.voiceId, tmp);
   } catch (e) {
     throw new Error(`TTS engine failed: ${e.message}`);
   }
@@ -121,7 +179,7 @@ export async function synthesize({ text, outFile, voice }) {
   }
 
   const durationSec = await probeDuration(outFile);
-  return { audioFile: outFile, durationSec };
+  return { audioFile: outFile, durationSec, engine: 'native', voice: spec.voiceId };
 }
 
 // ── Subtitle generation (character-proportional) ──────────────────────────

@@ -241,9 +241,16 @@ export async function runStep(jobId, step, opts = {}) {
           text: job.artifacts.script,
           outFile: audioFile,
           voice: job.params.voice,
+          onProgress: (p) => {
+            if (typeof onProgress === 'function') {
+              onProgress({ step: 'audio', phase: p.phase, fraction: p.fraction });
+            }
+          },
         });
         job.artifacts.audioFile = r.audioFile;
         job.artifacts.audioDurationSec = r.durationSec;
+        job.artifacts.audioEngine = r.engine;
+        job.artifacts.audioVoice = r.voice;
         break;
       }
       case 'subtitle': {

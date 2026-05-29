@@ -138,7 +138,12 @@ function paint() {
   const isRunning = typeof state.state === 'string' && state.state.startsWith('running:');
   $('btn-run').disabled = isRunning;
   $('btn-run').textContent = isRunning ? 'Generating…' : 'Generate Video';
-  if (a.script != null) $('script-text').value = a.script;
+  // Don't clobber the textarea while the user is editing it. We still update
+  // when the panel is unfocused so streamed refreshes (e.g. after Regenerate
+  // script) bring in fresh copy.
+  if (a.script != null && document.activeElement !== $('script-text')) {
+    $('script-text').value = a.script;
+  }
   if (Array.isArray(a.terms)) {
     const c = $('terms-chips'); c.innerHTML = '';
     a.terms.forEach(t => { const d = document.createElement('span'); d.className = 'chip'; d.textContent = t; c.appendChild(d); });
@@ -201,6 +206,10 @@ async function runAll() {
   $('btn-run').disabled = true;
   $('progress').textContent = 'Starting…';
   try {
+    // If the user edited the script textarea but didn't click Save, persist
+    // it first so the pipeline picks up the new copy (and invalidates audio /
+    // subtitle / render downstream).
+    await syncScriptIfDirty();
     const r = await fetch(BASE + '/api/video/jobs/' + JOB_ID + '/run-all', { method: 'POST' });
     const j = await r.json();
     if (!j.ok) $('err').textContent = j.error || 'Run failed';
@@ -210,8 +219,25 @@ async function runAll() {
   }
 }
 async function rerender() {
+  await syncScriptIfDirty();
   await fetch(BASE + '/api/video/jobs/' + JOB_ID + '/step/render', { method: 'POST' });
   refresh();
+}
+
+// If the script textarea has unsaved edits, patch the job so downstream
+// steps (audio/subtitle/render) are invalidated before we kick off work.
+async function syncScriptIfDirty() {
+  const current = $('script-text').value;
+  const saved = state?.artifacts?.script;
+  if (current == null || current === saved) return;
+  await fetch(BASE + '/api/video/jobs/' + JOB_ID + '/patch', {
+    method: 'POST', headers: { 'Content-Type':'application/json' },
+    body: JSON.stringify({ script: current }),
+  });
+  // Refresh local state so subsequent calls see the new artifact + cleared
+  // stepsDone.
+  const r = await fetch(BASE + '/api/video/jobs/' + JOB_ID);
+  if (r.ok) state = await r.json();
 }
 async function regenerateScript() {
   $('btn-regen-script').disabled = true;

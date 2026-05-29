@@ -18,7 +18,7 @@
 // in order. stop() drains the queue and kills the active child process.
 //
 // Engines are intentionally minimal — easy to swap later for edge-tts,
-// piper, or coqui without changing callers.
+// kokoro, or coqui without changing callers.
 
 import { EventEmitter } from 'events';
 import { spawn } from 'child_process';
