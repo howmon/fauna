@@ -19,7 +19,7 @@ import os from 'os';
 import { exec as _exec, spawn } from 'child_process';
 
 import { isCommandSafe, addAutoAllow, explainCommand } from '../../permission-guard.js';
-import { maybeRegister as registerDevServer } from '../lib/dev-server-registry.js';
+import { maybeRegister as registerDevServer, isDevServerCommand } from '../lib/dev-server-registry.js';
 
 export function registerShellExecRoutes(app, {
   shellProcs,
@@ -70,10 +70,15 @@ export function registerShellExecRoutes(app, {
       res.setHeader('Connection', 'keep-alive');
       res.flushHeaders();
 
+      // Dev servers (npm run dev, vite, next dev, …) should run indefinitely
+      // so they show up in the Dev Servers settings page. Killing them at
+      // 5min defeats the whole point of the registry.
+      const isDev = isDevServerCommand(command);
       const child = spawn(shellBin, isWin ? ['-Command', command] : ['-c', command], {
         cwd: workDir,
         env,
-        timeout: 300000,
+        // 0 = no timeout. For non-dev commands keep the 5min safety net.
+        timeout: isDev ? 0 : 300000,
         maxBuffer: 10 * 1024 * 1024,
         stdio: ['pipe', 'pipe', 'pipe']
       });

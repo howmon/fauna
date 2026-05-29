@@ -29,7 +29,9 @@ import { GEN_UI_CATALOG_PROMPT } from '../prompts/gen-ui-catalog.js';
 import { FAUNA_CORE_GUIDELINES } from '../prompts/core-guidelines.js';
 import { SELF_TOOL_DEFS, DYNAMIC_WIDGET_TOOL_DEFS, executeSelfTool, isSelfTool } from '../../self-tools.js';
 import { runShell, formatShellResultForLLM, isCommandSafe } from '../lib/shell-runner.js';
-import { maybeRegister as registerDevServer } from '../lib/dev-server-registry.js';
+import { maybeRegister as registerDevServer, isDevServerCommand } from '../lib/dev-server-registry.js';
+import { spawn as _spawnDetached } from 'child_process';
+import os from 'os';
 import { applyPatchText } from './agent-sandbox-files.js';
 import {
   extractWidgetRegistrations, buildEphemeralToolDefs,
@@ -602,6 +604,36 @@ export function registerChatRoute(app, {
               refused: true,
               error: 'This command requires explicit user approval. Re-emit it as a ```bash markdown block so the user can review and Run it. Do not retry fauna_shell_exec with the same command.',
               command,
+            });
+          }
+          // Dev/preview servers (npm run dev, vite, next dev, php -S, …)
+          // would block the AI turn forever waiting for stdout to close.
+          // Detach them, register with the global Dev Servers registry, and
+          // return immediately so the AI can move on. The user manages the
+          // process from Settings → Dev Servers.
+          if (isDevServerCommand(command)) {
+            const workDir = cwd || os.homedir();
+            const env = {
+              ...process.env,
+              ...(augmentedPath ? { PATH: augmentedPath } : {}),
+              HOME: os.homedir(),
+              USER: os.userInfo().username,
+              ...(isWin ? {} : { SHELL: '/bin/zsh', TERM: 'xterm-256color' }),
+            };
+            const child = _spawnDetached(
+              shellBin,
+              isWin ? ['-Command', command] : ['-c', command],
+              { cwd: workDir, env, stdio: ['pipe', 'pipe', 'pipe'] },
+            );
+            try { registerDevServer(child, { command, cwd: workDir }); } catch (_) {}
+            // Surface a tool_call note in the UI without waiting.
+            try { send({ type: 'tool_output', output: 'Dev server started in background — manage from Settings → Dev Servers.\n', stream: 'stdout' }); } catch (_) {}
+            return JSON.stringify({
+              ok: true,
+              backgrounded: true,
+              command,
+              cwd: workDir,
+              note: 'Dev server started in the background and tracked in the Dev Servers registry. The user can stop/restart it from Settings → Dev Servers. Do NOT wait for it to exit; continue with the next plan step.',
             });
           }
           // (No tool_call SSE emit here — the outer dispatcher in chat.js
