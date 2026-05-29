@@ -471,14 +471,14 @@ export function registerChatRoute(app, {
           allMessages.push({
             role: 'system',
             content:
-              '[Circuit/schematic request detected] You MUST render this using the circuit tools before writing any prose summary. Required sequence for THIS turn:\n' +
+              '[Circuit/schematic request detected] You MUST render this using the circuit tools. Required sequence for THIS turn:\n' +
               '1. (Optional) fauna_list_circuit_symbols — only if you are unsure of pin names.\n' +
               '2. fauna_render_circuit({ doc }) — returns { svg, width, height }.\n' +
               '3. fauna_validate_circuit({ doc }) — surface any errors/warnings.\n' +
               '4. (Optional) fauna_simulate_circuit({ doc, analysis }) — for behaviour questions; if ngspice is missing, surface the install hint and continue with the analytical answer.\n' +
-              '5. Emit ONE gen-ui block whose root contains an SVG element: { "type":"SVG", "props":{ "markup":"<svg …>…</svg>" } } using the markup returned by fauna_render_circuit verbatim.\n' +
-              '6. After the gen-ui block, write the prose summary (component values, expected behaviour, key formulas).\n' +
-              'Forbidden: pasting the raw <svg> into a plaintext/html/markdown code fence; describing the schematic without calling fauna_render_circuit; computing analytically only.'
+              '5. Write the prose answer FIRST (component values, expected behaviour, key formulas, SPICE netlist if relevant).\n' +
+              '6. Then, at the END of the message, emit ONE gen-ui block whose root contains an SVG element: { "type":"SVG", "props":{ "markup":"<svg …>…</svg>" } } using the markup returned by fauna_render_circuit verbatim. The schematic should be the LAST thing in the message, not the first.\n' +
+              'Forbidden: pasting the raw <svg> into a plaintext/html/markdown code fence; describing the schematic without calling fauna_render_circuit; computing analytically only; placing the gen-ui SVG block above the analysis.'
           });
         }
       } catch (_) { /* non-fatal */ }

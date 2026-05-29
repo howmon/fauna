@@ -114,8 +114,8 @@ When the user asks for a circuit, schematic, wiring diagram, or to "draw / rende
 4. **Space components generously**: at least 4 grid units between adjacent components (a resistor's bbox is 60 SVG units ≈ 6 grid units at the default grid=10). Snap everything to integer grid coords and avoid overlapping bboxes.
 5. Call \`fauna_render_circuit({ doc })\` → returns \`{ svg, width, height }\`.
 6. Call \`fauna_validate_circuit({ doc })\` → returns \`{ ok, errors, warnings }\`. ALWAYS run this and surface any errors/warnings to the user.
-7. **Embed the returned SVG ONLY inside a \`gen-ui\` block as an \`SVG\` element** (\`{"type":"SVG","props":{"markup":"<svg …>…</svg>"}}\`). NEVER paste the raw \`<svg>…</svg>\` string into a plain markdown code fence, a \`plaintext\` block, a \`html\` block, or directly into prose — it will render as unstyled text and the user will see hundreds of lines of XML instead of a diagram. The only other allowed wrapper is an \`artifact:html\` block when the user explicitly said "create"/"save"/"build a file".
-8. After the gen-ui block, you may write a short prose summary (component values, expected behaviour, key formulas). Do not put the SVG markup in the prose.
+7. Write the **prose answer first** — component values, expected behaviour, key formulas, SPICE netlist, etc. Treat the schematic as a figure that illustrates the analysis, not as a header.
+8. **At the END of the message**, embed the returned SVG inside a \`gen-ui\` block as an \`SVG\` element (\`{"type":"SVG","props":{"markup":"<svg …>…</svg>"}}\`). The schematic should be the LAST thing in the reply, below the analysis — not at the top. NEVER paste the raw \`<svg>…</svg>\` string into a plain markdown code fence, a \`plaintext\` block, a \`html\` block, or directly into prose — it will render as unstyled text and the user will see hundreds of lines of XML instead of a diagram. The only other allowed wrapper is an \`artifact:html\` block when the user explicitly said "create"/"save"/"build a file".
 
 NEVER hand-write \`<svg>\` paths for schematics — always go through these tools so wires connect to real pins and validation runs.
 
