@@ -56,7 +56,8 @@ describe('self-tools', () => {
       // snapshot — frontmost app + window + AX clickable nodes).
       // Bumped to 45 after adding Kokoro fauna_speak + fauna_podcast.
       // Bumped to 48 after adding fauna_lesson_create + fauna_lesson_get + fauna_list_lesson_kinds.
-      expect(SELF_TOOL_DEFS).toHaveLength(48);
+      // Bumped to 50 after adding fauna_db_migration + fauna_verify_build (opinionated app-build mode).
+      expect(SELF_TOOL_DEFS).toHaveLength(50);
     });
 
     it('each tool has required OpenAI function format', () => {

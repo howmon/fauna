@@ -56,6 +56,7 @@ import {
   arrangeWindows as macArrangeWindows,
   getScreenBounds as macGetScreenBounds,
 } from './server/lib/window-context.js';
+import { scaffoldTemplate, listTemplates } from './server/app-templates.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -779,15 +780,56 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_create_project',
-      description: 'Create a new project in Fauna. Returns the project object with its ID.',
+      description: 'Create a new project in Fauna. Returns the project object with its ID. When the user wants to build an app/site/tool, set `template` to scaffold a working starter (e.g. vite-react-ts, vite-react-ts-sqlite). Defaults to no template (empty project record only).',
       parameters: {
         type: 'object',
         properties: {
           name: { type: 'string', description: 'Project name' },
           description: { type: 'string', description: 'Short description' },
-          rootPath: { type: 'string', description: 'Absolute path to the project root directory' },
+          rootPath: { type: 'string', description: 'Absolute path to the project root directory. If template is set and the folder is empty (or missing), the template is unpacked here.' },
+          template: {
+            type: 'string',
+            enum: ['none', 'vite-react-ts', 'vite-react-ts-sqlite'],
+            description: 'Starter to scaffold. "vite-react-ts" = static Vite+React+TS (no server, no DB). "vite-react-ts-sqlite" = Vite+React+TS + Hono server + better-sqlite3 + migrations dir. Default "none".',
+          },
         },
         required: ['name'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_db_migration',
+      description: 'Create a new SQL migration file with a mandatory markdown summary header. Used when building apps with SQLite. Stamps the file as `migrations/NNNN_<slug>.sql` in the active project root. The header documents purpose, tables changed, indexes added, and rollback notes — required for every schema change. Validates that the SQL parses (basic syntax check). Use this every time you add or alter a table; do NOT hand-write migration files.',
+      parameters: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Project id. Defaults to active project.' },
+          name: { type: 'string', description: 'Short snake_case name describing the change, e.g. "create_users", "add_email_index". Becomes the filename slug.' },
+          purpose: { type: 'string', description: 'One-sentence why. Goes into the markdown header.' },
+          tablesChanged: { type: 'array', items: { type: 'string' }, description: 'Tables this migration creates/alters/drops.' },
+          rollbackNotes: { type: 'string', description: 'How to undo this migration (or "irreversible — backup first").' },
+          sql: { type: 'string', description: 'The raw SQL for the migration. MUST parametrize any embedded data with `?`. Should include `created_at`/`updated_at` defaults on new tables.' },
+        },
+        required: ['name', 'purpose', 'sql'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_verify_build',
+      description: 'Verify a scaffolded app actually builds. Runs `npm run build` (or the script you specify) in the project root, returns exit code + last 80 lines of output. MANDATORY before marking a build/scaffold plan complete — do NOT claim success without calling this and seeing exitCode:0.',
+      parameters: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Project id. Defaults to active project.' },
+          cwd: { type: 'string', description: 'Explicit working directory (overrides projectId rootPath).' },
+          script: { type: 'string', description: 'npm script to run. Default "build".' },
+          timeoutMs: { type: 'number', description: 'Hard cap in ms (default 180000 = 3min).' },
+        },
+        required: [],
       },
     },
   },
@@ -1775,11 +1817,119 @@ export function executeSelfTool(toolName, args, context = {}) {
     // ── Projects ──
     case 'fauna_create_project': {
       const proj = createProject({ name: args.name, description: args.description, rootPath: args.rootPath });
-      return JSON.stringify({ ok: true, project: { id: proj.id, name: proj.name, rootPath: proj.rootPath } });
+      let scaffold = null;
+      const template = args.template && args.template !== 'none' ? args.template : null;
+      if (template) {
+        try {
+          if (!proj.rootPath) {
+            return JSON.stringify({ ok: false, error: 'rootPath is required when template is set', project: { id: proj.id, name: proj.name } });
+          }
+          scaffold = scaffoldTemplate({ template, rootPath: proj.rootPath, projectName: proj.name, fs, path });
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: `template scaffold failed: ${e.message}`, project: { id: proj.id, name: proj.name, rootPath: proj.rootPath } });
+        }
+      }
+      return JSON.stringify({
+        ok: true,
+        project: { id: proj.id, name: proj.name, rootPath: proj.rootPath },
+        scaffold,
+        nextSteps: scaffold
+          ? [`cd ${proj.rootPath}`, 'npm install', 'npm run dev']
+          : null,
+      });
     }
     case 'fauna_list_projects': {
       const all = getAllProjects();
       return JSON.stringify(all.map(p => ({ id: p.id, name: p.name, rootPath: p.rootPath, description: p.description })));
+    }
+
+    // ── DB migration scaffolding (SQLite app templates) ──
+    case 'fauna_db_migration': {
+      const pid = args.projectId || context.activeProjectId;
+      let root = null;
+      if (pid) {
+        const proj = getProject(pid);
+        if (!proj) return JSON.stringify({ ok: false, error: 'project not found' });
+        root = proj.rootPath;
+      }
+      root = args.cwd || root;
+      if (!root) return JSON.stringify({ ok: false, error: 'projectId with rootPath or cwd required' });
+      const name = String(args.name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+      if (!name) return JSON.stringify({ ok: false, error: 'name required (snake_case, e.g. "create_users")' });
+      const sql = String(args.sql || '').trim();
+      if (!sql) return JSON.stringify({ ok: false, error: 'sql required' });
+      // Basic SQL parse check: must contain at least one statement, balanced parens, no obvious string-concat patterns.
+      const opens = (sql.match(/\(/g) || []).length;
+      const closes = (sql.match(/\)/g) || []).length;
+      if (opens !== closes) return JSON.stringify({ ok: false, error: `unbalanced parens in SQL (${opens} open, ${closes} close)` });
+      if (/\$\{|`\s*\+|"\s*\+\s*[a-z]/i.test(sql)) {
+        return JSON.stringify({ ok: false, error: 'SQL appears to use string concatenation. Parametrize with ? placeholders instead.' });
+      }
+      const dir = path.join(root, 'migrations');
+      fs.mkdirSync(dir, { recursive: true });
+      // Find next sequential number.
+      const existing = fs.readdirSync(dir).filter(f => /^\d{4}_.+\.sql$/.test(f)).sort();
+      const lastNum = existing.length ? parseInt(existing[existing.length - 1].slice(0, 4), 10) : 0;
+      const num = String(lastNum + 1).padStart(4, '0');
+      const filename = `${num}_${name}.sql`;
+      const filePath = path.join(dir, filename);
+      const tables = Array.isArray(args.tablesChanged) ? args.tablesChanged.filter(Boolean) : [];
+      const header = [
+        `-- # ${num}_${name}`,
+        `-- **Purpose**: ${String(args.purpose || '').replace(/\n/g, ' ')}`,
+        `-- **Tables changed**: ${tables.length ? tables.join(', ') : '(none specified)'}`,
+        `-- **Rollback**: ${String(args.rollbackNotes || 'not documented').replace(/\n/g, ' ')}`,
+        '',
+      ].join('\n');
+      fs.writeFileSync(filePath, header + sql + (sql.endsWith('\n') ? '' : '\n'));
+      return JSON.stringify({ ok: true, path: filePath, filename, num });
+    }
+
+    // ── Verify build (mandatory before claiming an app-scaffold complete) ──
+    case 'fauna_verify_build': {
+      const pid = args.projectId || context.activeProjectId;
+      let root = args.cwd || null;
+      if (!root && pid) {
+        const proj = getProject(pid);
+        if (!proj) return JSON.stringify({ ok: false, error: 'project not found' });
+        root = proj.rootPath;
+      }
+      if (!root) return JSON.stringify({ ok: false, error: 'projectId with rootPath or cwd required' });
+      if (!fs.existsSync(path.join(root, 'package.json'))) {
+        return JSON.stringify({ ok: false, error: `no package.json found in ${root}` });
+      }
+      const script = String(args.script || 'build');
+      const timeoutMs = Math.max(10000, Math.min(900000, Number(args.timeoutMs) || 180000));
+      return new Promise((resolve) => {
+        const started = Date.now();
+        const child = spawn('npm', ['run', script], { cwd: root, env: process.env });
+        let out = '';
+        let timedOut = false;
+        const timer = setTimeout(() => {
+          timedOut = true;
+          try { child.kill('SIGKILL'); } catch (_) {}
+        }, timeoutMs);
+        child.stdout.on('data', d => { out += d.toString(); });
+        child.stderr.on('data', d => { out += d.toString(); });
+        child.on('close', (code) => {
+          clearTimeout(timer);
+          const lines = out.split('\n');
+          const tail = lines.slice(-80).join('\n');
+          resolve(JSON.stringify({
+            ok: code === 0 && !timedOut,
+            exitCode: code,
+            timedOut,
+            ms: Date.now() - started,
+            cwd: root,
+            script,
+            tail,
+          }));
+        });
+        child.on('error', (err) => {
+          clearTimeout(timer);
+          resolve(JSON.stringify({ ok: false, error: err.message, cwd: root, script }));
+        });
+      });
     }
 
     // ── Instructions ──
