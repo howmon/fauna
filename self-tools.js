@@ -1414,7 +1414,7 @@ export const SELF_TOOL_DEFS = [
     function: {
       name: 'fauna_speak',
       description:
-        'Synthesize text into an audio file with the bundled Kokoro neural TTS, returning a URL the renderer can play. Use this when the user asks to "read aloud", "read me this article", "say this", "narrate", or otherwise wants spoken audio for a single chunk of text. After calling it, emit a gen-ui block with a MediaPlayer (type:"audio", src: returned url, title: <short label>, autoplay:true) so the audio plays inline. Do NOT use this for multi-speaker podcasts — use fauna_podcast for that. Returns {ok, url, durationSec, voice}.',
+        'Synthesize text into an audio file with the bundled Kokoro neural TTS, returning a URL the renderer can play. Use this when the user asks to "read aloud", "read me this article", "say this", "narrate", or otherwise wants spoken audio for a single chunk of text. After calling it, emit a gen-ui block with a MediaPlayer (type:"audio", src: returned url, title: <short label>) so the audio appears inline. Do NOT set autoplay — the user clicks Play when ready. Do NOT use this for multi-speaker podcasts — use fauna_podcast for that. Returns {ok, url, durationSec, voice}.',
       parameters: {
         type: 'object',
         properties: {
@@ -1430,7 +1430,7 @@ export const SELF_TOOL_DEFS = [
     function: {
       name: 'fauna_podcast',
       description:
-        'Generate a multi-voice podcast / dialogue from an ordered list of speaker turns and return ONE audio URL covering all turns concatenated with natural pauses between speakers. Use this when the user asks for a "podcast", "dialogue", "conversation", "interview", "two-host", or "multi-voice" reading — including "make a podcast from this article" (you script the back-and-forth first, then call this). After calling it, emit a gen-ui block with a MediaPlayer (type:"audio", src: returned url, title:<show title>, autoplay:true). Returns {ok, url, durationSec, segmentCount}.',
+        'Generate a multi-voice podcast / dialogue from an ordered list of speaker turns and return ONE audio URL covering all turns concatenated with natural pauses between speakers. Use this when the user asks for a "podcast", "dialogue", "conversation", "interview", "two-host", or "multi-voice" reading — including "make a podcast from this article" (you script the back-and-forth first, then call this). After calling it, emit a gen-ui block with a MediaPlayer (type:"audio", src: returned url, title:<show title>). Do NOT set autoplay — the user clicks Play when ready. Returns {ok, url, durationSec, segmentCount}.',
       parameters: {
         type: 'object',
         properties: {
