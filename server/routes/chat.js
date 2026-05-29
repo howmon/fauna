@@ -738,6 +738,21 @@ export function registerChatRoute(app, {
       // Matches the explicit phrases blacklisted in the system prompt's persistence section.
       const HALF_STOP_RE = /\b(want me to (continue|proceed|go ahead|keep going|do that|move on)|shall i (continue|proceed|go ahead|keep going)|should i (continue|proceed|go ahead|keep going)|do you want me to|let me know (if|when) you (want|'?d like) (me )?to|ready for the next (step|one|part)|ready to (continue|proceed)|on your (go|signal|word)|just (say|let me know) (the word|when)|happy to (continue|proceed|keep going) if)/i;
 
+      // Forward-promise detector: model ends its turn with "I'll do X" / "Let me try Y"
+      // but never calls the tool. This shows up after a failed/partial action where the
+      // model narrates the next attempt and then halts. Only flagged when the FINAL
+      // sentence is forward-looking — guards against false positives in long summaries
+      // that legitimately mention "I'll" earlier on.
+      const FORWARD_PROMISE_RE = /^\s*(i('?ll| will| am going to| ?'m going to)|let me|now i('?ll| will)|next,?\s*i('?ll| will)|i need to|i should|i'?m about to|going to)\b/i;
+      const endsWithForwardPromise = (text) => {
+        const trimmed = String(text || '').trim();
+        if (!trimmed) return false;
+        // Last non-empty sentence.
+        const parts = trimmed.split(/(?<=[.!?\n])\s+/).map(s => s.trim()).filter(Boolean);
+        const last = parts[parts.length - 1] || trimmed;
+        return FORWARD_PROMISE_RE.test(last);
+      };
+
       // Autonomous-mode terminal marker: model MUST begin its final message
       // with one of DONE: / BLOCKED: / NEEDS-INPUT: so we can route reflection.
       const MARKER_RE = /^\s*(DONE|BLOCKED|NEEDS-INPUT)\s*:/i;
@@ -1139,6 +1154,14 @@ export function registerChatRoute(app, {
             console.log('[chat] half-stop detected — injecting persistence nudge (' + halfStopNudgeCount + '/' + MAX_HALF_STOP_NUDGES + ')');
             allMessages.push({ role: 'assistant', content: assistantText });
             allMessages.push({ role: 'user', content: '[System: Do not ask whether to continue. Proceed with the next concrete step toward completing the original request, using tools as needed. Only stop when the task is fully resolved and verified — at which point give a final summary without any "want me to continue?" question.]' });
+            // keep continueLoop = true
+          } else if (toolCallCount > 0 && assistantText.trim() && halfStopNudgeCount < MAX_HALF_STOP_NUDGES && endsWithForwardPromise(assistantText)) {
+            // Forward-promise stop: model said "I'll do X" / "Let me try Y" but never
+            // actually called the tool. Nudge it to execute that promised step now.
+            halfStopNudgeCount++;
+            console.log('[chat] forward-promise stop detected — injecting execute nudge (' + halfStopNudgeCount + '/' + MAX_HALF_STOP_NUDGES + ')');
+            allMessages.push({ role: 'assistant', content: assistantText });
+            allMessages.push({ role: 'user', content: '[System: You just stated an intended next action ("I\'ll …" / "Let me …") but did not execute it. Do that step NOW with the appropriate tool call. Do not narrate intent without acting on it.]' });
             // keep continueLoop = true
           } else {
             // ── Autonomous-mode terminal gates ──────────────────────────

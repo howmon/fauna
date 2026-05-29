@@ -381,6 +381,9 @@ function ensureStreamingPlaceholder(conv) {
   if (!conv || !conv._streaming) return;
   var convInner = getConvInner(conv.id);
   if (!convInner) return;
+  // A new assistant turn is starting — strip any stale recommended-actions
+  // bar from a previous bubble so it can't sit between two assistant messages.
+  Array.from(convInner.querySelectorAll('.suggestion-bar')).forEach(function(old) { old.remove(); });
   var liveMessages = Array.from(convInner.querySelectorAll('.msg.ai[data-streaming-live="1"]'));
   if (liveMessages.length) {
     liveMessages.slice(1).forEach(function(el) { el.remove(); });
