@@ -78,7 +78,25 @@ export function buildVideoStudioWidget(job) {
   <div class="panel hidden" id="panel-settings">
     <label>Aspect <select id="set-aspect"><option value="9:16">9:16 vertical</option><option value="16:9">16:9 landscape</option><option value="1:1">1:1 square</option></select></label>
     <br><br>
-    <label>Voice <input type="text" id="set-voice" placeholder="e.g. Samantha (mac)"></label>
+    <label>Voice <select id="set-voice">
+      <optgroup label="Kokoro — neural (bundled)">
+        <option value="kokoro:af_bella">Bella (US, female)</option>
+        <option value="kokoro:af_heart">Heart (US, female)</option>
+        <option value="kokoro:af_nicole">Nicole (US, female)</option>
+        <option value="kokoro:af_sarah">Sarah (US, female)</option>
+        <option value="kokoro:af_nova">Nova (US, female)</option>
+        <option value="kokoro:am_michael">Michael (US, male)</option>
+        <option value="kokoro:am_fenrir">Fenrir (US, male)</option>
+        <option value="kokoro:am_puck">Puck (US, male)</option>
+        <option value="kokoro:bf_emma">Emma (UK, female)</option>
+        <option value="kokoro:bf_isabella">Isabella (UK, female)</option>
+        <option value="kokoro:bm_george">George (UK, male)</option>
+        <option value="kokoro:bm_fable">Fable (UK, male)</option>
+      </optgroup>
+      <optgroup label="System (lower quality, no download)">
+        <option value="">OS default</option>
+      </optgroup>
+    </select></label>
     <br><br>
     <label>Duration (s) <input type="text" id="set-duration"></label>
   </div>

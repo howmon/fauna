@@ -97,7 +97,7 @@ export function createJob(params = {}) {
       subject: String(params.subject || '').trim(),
       durationSec: Math.max(8, Math.min(120, Number(params.durationSec) || 30)),
       aspect: ['9:16', '16:9', '1:1'].includes(params.aspect) ? params.aspect : '9:16',
-      voice: params.voice || null,
+      voice: params.voice || 'kokoro:af_bella',
       language: params.language || 'en',
       localFolder: params.localFolder || null,
       bgmFile: params.bgmFile || null,
