@@ -1320,6 +1320,27 @@ function extractAndRenderGenUI(buffer, msgEl, isHistoryLoad) {
 
     pre.replaceWith(wrapper);
   });
+
+  // ── Hoist schematic/SVG gen-ui blocks to the END of the message body ──
+  // Models frequently emit the gen-ui block before the prose analysis even
+  // when instructed otherwise, which buries the written summary below a
+  // large diagram. When a gen-ui wrapper contains an SVG (typical for
+  // circuit schematics rendered via fauna_render_circuit), move it to be
+  // the last child of .msg-body so the prose analysis reads first.
+  try {
+    var body = msgEl.querySelector('.msg-body') || msgEl;
+    var guis = body.querySelectorAll(':scope > .gui-root, :scope .gui-root');
+    guis.forEach(function(wrap) {
+      if (!wrap.querySelector('svg')) return;
+      // Skip if it's already the last meaningful child of the body.
+      var parent = wrap.parentNode;
+      if (!parent) return;
+      // Only hoist within the top-level message body, not nested containers.
+      if (parent !== body) return;
+      if (parent.lastElementChild === wrap) return;
+      parent.appendChild(wrap);
+    });
+  } catch (_) { /* non-fatal */ }
 }
 
 function _genUiShouldSuppressForShellMessage(msgEl) {
