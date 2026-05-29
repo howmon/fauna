@@ -98,9 +98,11 @@ export function registerShellExecRoutes(app, {
       // Dev Servers. Pipe a tiny note back so the widget records a result.
       if (isDev) {
         if (killId) shellProcs.delete(killId);
-        try { child.stdout && child.stdout.removeAllListeners('data'); } catch (_) {}
-        try { child.stderr && child.stderr.removeAllListeners('data'); } catch (_) {}
-        try { child.unref(); } catch (_) {}
+        // IMPORTANT: do NOT call removeAllListeners('data') on stdout/stderr
+        // here — the registry already attached its own listeners to sniff the
+        // port and stream tail buffer. Stripping them would (a) blind the
+        // registry and (b) cause the child to eventually exit because its
+        // stdout buffer fills with no reader, dropping the entry from list().
         res.write(`data: ${JSON.stringify({
           type: 'dev_server_detached',
           id: _regId,
