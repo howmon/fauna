@@ -1267,7 +1267,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_plan',
-      description: 'Maintain a structured TODO list for the current task. Use a plan when: the task is non-trivial and spans multiple actions; there are logical phases or dependencies where sequencing matters; the user asked for more than one thing in a single prompt; you generate additional steps mid-flight. Invariants: exactly ONE item in_progress at a time; mark items completed individually (no batch completions); set an item to in_progress BEFORE working it (never jump pending → completed); finish with all items completed or explicitly canceled before ending the turn. High-quality plan example: [{"id":1,"title":"Add CLI entry with file args","status":"completed"},{"id":2,"title":"Parse Markdown via CommonMark","status":"in-progress"},{"id":3,"title":"Apply semantic HTML template","status":"not-started"},{"id":4,"title":"Handle code blocks, images, links","status":"not-started"},{"id":5,"title":"Add error handling for invalid files","status":"not-started"}]. Low-quality plan (avoid — too vague): [{"title":"Create CLI tool"},{"title":"Add Markdown parser"},{"title":"Convert to HTML"}]. Pass the FULL list every call (both existing and new items).',
+      description: 'Maintain a structured TODO list for the current task. Use a plan when: the task is non-trivial and spans multiple actions; there are logical phases or dependencies where sequencing matters; the user asked for more than one thing in a single prompt; you generate additional steps mid-flight. Invariants: exactly ONE item in_progress at a time; mark items completed individually (no batch completions); set an item to in_progress BEFORE working it (never jump pending → completed); finish with all items completed or explicitly canceled before ending the turn. MANDATORY: every plan MUST end with a verification/testing item that actually checks the work (e.g. "Verify build succeeds and tests pass", "Run app and confirm output matches spec", "Lint + execute end-to-end smoke test"). Do NOT mark the verify item completed unless you actually ran the check (shell, test runner, build, manual probe) and observed the expected result — claiming "done" without proof is a failure. If verification fails, add a fix item and re-run verify. High-quality plan example: [{"id":1,"title":"Add CLI entry with file args","status":"completed"},{"id":2,"title":"Parse Markdown via CommonMark","status":"in-progress"},{"id":3,"title":"Apply semantic HTML template","status":"not-started"},{"id":4,"title":"Handle code blocks, images, links","status":"not-started"},{"id":5,"title":"Add error handling for invalid files","status":"not-started"},{"id":6,"title":"Verify: run on sample.md and diff against expected.html","status":"not-started"}]. Low-quality plan (avoid — too vague AND missing verify): [{"title":"Create CLI tool"},{"title":"Add Markdown parser"},{"title":"Convert to HTML"}]. Pass the FULL list every call (both existing and new items).',
       parameters: {
         type: 'object',
         properties: {
@@ -1998,6 +1998,13 @@ export function executeSelfTool(toolName, args, context = {}) {
       }
       if (inProgress > 1) errors.push(`exactly one item may be in_progress at a time (found ${inProgress})`);
       if (errors.length) return JSON.stringify({ ok: false, error: errors.join('; '), plan: norm });
+      // Soft check: every plan must end with a verification/testing step.
+      // We don't reject — just surface a hint back to the model so it adds one.
+      const VERIFY_RE = /\b(verif|test|confirm|validat|smoke|e2e|qa|check|prove)/i;
+      const last = norm[norm.length - 1];
+      const hasVerify = !!(last && VERIFY_RE.test(last.title));
+      const verifyHint = hasVerify ? null
+        : 'Plan is missing a final verification/testing step. Add an item like "Verify: <how you will prove it works>" before ending the turn.';
       // Surface to renderer so the UI can render a checklist (best-effort).
       try {
         if (typeof context.sendToRenderer === 'function') {
@@ -2017,6 +2024,7 @@ export function executeSelfTool(toolName, args, context = {}) {
         ok: true,
         items: norm,
         summary: `${done}/${total} complete${cur ? `; current: ${cur.title}` : ''}`,
+        hint: verifyHint || undefined,
       });
     }
 
