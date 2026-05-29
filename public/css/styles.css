@@ -6561,17 +6561,28 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 .proj-terminal-echo { color: #58a6ff; }
 
 /* Ports dashboard table */
-.proj-ports-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.proj-ports-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+.proj-ports-table col.proj-ports-col-process { width: 28%; }
+.proj-ports-table col.proj-ports-col-folder  { width: 22%; }
+.proj-ports-table col.proj-ports-col-port    { width: 80px; }
+.proj-ports-table col.proj-ports-col-command { width: auto; }
+.proj-ports-table col.proj-ports-col-actions { width: 200px; }
 .proj-ports-table th {
   text-align: left; padding: 10px 16px; font-size: 11px; font-weight: 600;
   color: var(--fau-text-dim); text-transform: uppercase; letter-spacing: .05em;
   border-bottom: 1px solid var(--fau-border); background: var(--fau-surface2);
 }
-.proj-ports-row td { padding: 10px 16px; border-bottom: 1px solid var(--fau-border); vertical-align: middle; }
+.proj-ports-row td {
+  padding: 10px 16px; border-bottom: 1px solid var(--fau-border); vertical-align: middle;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .proj-run-cmd-badge {
+  display: inline-block; max-width: 100%;
   background: var(--fau-surface2); border: 1px solid var(--fau-border);
   padding: 2px 7px; border-radius: 4px; font-size: 11px;
   font-family: var(--mono-font, monospace); color: var(--fau-text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  vertical-align: middle;
 }
 
 /* ── Save to Project button ────────────────────────────────────────────── */

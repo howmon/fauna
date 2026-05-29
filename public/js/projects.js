@@ -3141,16 +3141,29 @@ function _renderDevServersList(runs) {
     var stopBtn = isActive
       ? '<button class="proj-action-btn" style="padding:3px 10px;font-size:11px;color:var(--error-light)" onclick="stopProjectRun(\'' + r.runId + '\',' + pidArg + ').then(function(){setTimeout(renderDevServersPage,400)})">Stop</button>'
       : '';
-    return '<tr class="proj-ports-row">' +
-      '<td>' + statusDot + ' ' + _projEsc(r.name) + '</td>' +
-      '<td style="font-size:11px;color:var(--fau-text-muted)">' + _projEsc(r.srcName || '') + '</td>' +
+    // The Process column shows the short label (e.g. "npm run dev"); hover
+    // the row to see the full cwd / command tooltip.
+    var procLabel = _projEsc(r.name);
+    var folderLabel = _projEsc(r.srcName || '~');
+    var fullCmd = _projEsc(r.cmd || '');
+    return '<tr class="proj-ports-row" title="' + fullCmd + '">' +
+      '<td>' + statusDot + ' <span style="vertical-align:middle">' + procLabel + '</span></td>' +
+      '<td style="font-size:11.5px;color:var(--fau-text-muted)" title="' + folderLabel + '">' + folderLabel + '</td>' +
       '<td style="font-variant-numeric:tabular-nums">' + portStr + '</td>' +
-      '<td><code class="proj-run-cmd-badge">' + _projEsc(r.cmd.length > 50 ? r.cmd.slice(0,50) + '…' : r.cmd) + '</code></td>' +
-      '<td style="white-space:nowrap;text-align:right">' + openBtn + ' ' + restartBtn + ' ' + stopBtn + '</td>' +
+      '<td><code class="proj-run-cmd-badge" title="' + fullCmd + '">' + fullCmd + '</code></td>' +
+      '<td style="white-space:nowrap;text-align:right">' +
+        [openBtn, restartBtn, stopBtn].filter(Boolean).join(' ') +
+      '</td>' +
     '</tr>';
   }).join('');
   host.innerHTML =
-    '<table class="proj-ports-table" style="width:100%"><thead>' +
+    '<table class="proj-ports-table"><colgroup>' +
+      '<col class="proj-ports-col-process">' +
+      '<col class="proj-ports-col-folder">' +
+      '<col class="proj-ports-col-port">' +
+      '<col class="proj-ports-col-command">' +
+      '<col class="proj-ports-col-actions">' +
+    '</colgroup><thead>' +
       '<tr><th>Process</th><th>Folder</th><th>Port</th><th>Command</th><th></th></tr>' +
     '</thead><tbody>' + rows + '</tbody></table>';
 }

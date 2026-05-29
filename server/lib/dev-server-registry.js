@@ -102,15 +102,60 @@ function _emit() {
 function _shortLabel(cmd) {
   const s = String(cmd || '').trim();
   if (!s) return '';
-  // Strip leading `cd … && ` clutter — keep the actual command.
-  const cleaned = s.replace(/^cd\s+[^&;]+(?:&&|;)\s*/i, '');
-  return cleaned.length > 80 ? cleaned.slice(0, 77) + '…' : cleaned;
+  // Strip leading `pkill … ; sleep N ; cd <path> &&` boilerplate the AI often
+  // chains in front of `npm run dev`. Keep only the actual server command.
+  let cleaned = s
+    .replace(/^\s*pkill\s+[^;&]+[;&]\s*/i, '')
+    .replace(/^\s*sleep\s+\d+\s*[;&]+\s*/i, '')
+    .replace(/^\s*cd\s+[^&;]+(?:&&|;)\s*/i, '')
+    .replace(/\s+2>\s*\/dev\/null/g, '')
+    .replace(/\s+>\s*\/dev\/null/g, '')
+    .trim();
+  // Pick the most informative noun-phrase for the column. e.g.
+  //   "npm run dev -- --port 5173 --host"  →  "npm run dev"
+  //   "vite --host"                        →  "vite"
+  //   "next dev -p 3000"                   →  "next dev"
+  //   "php -S 127.0.0.1:8000 -t public"    →  "php -S"
+  const NICE = [
+    /^(npm|pnpm|yarn|bun)\s+(?:run\s+)?[\w:-]+/i,
+    /^(vite|next|nuxt|astro|remix|svelte-kit|sveltekit|rspack|webpack|parcel|esbuild)(?:\s+\w+)?/i,
+    /^(nodemon|tsx|ts-node-dev|ts-node)\b/i,
+    /^(php\s+-S|uvicorn|gunicorn|flask|fastapi|rails\s+s(?:erver)?|hanami\s+s|mix\s+phx\.server)/i,
+    /^(deno\s+(?:run|task)|bun\s+run|bun\s+\w+)/i,
+    /^(go\s+run|cargo\s+run|dotnet\s+run|gradle\s+\w+)/i,
+    /^(serve|http-server|live-server|browser-sync)\b/i,
+  ];
+  for (const re of NICE) {
+    const m = cleaned.match(re);
+    if (m) return m[0];
+  }
+  // Fallback: first two whitespace-separated tokens, then ellipsize.
+  const head = cleaned.split(/\s+/).slice(0, 3).join(' ');
+  return head.length > 32 ? head.slice(0, 30) + '…' : head;
 }
 
-function _shortCwd(cwd) {
+function _shortCwd(cwd, command) {
+  // Prefer the explicit `cd <path>` baked into the command — that's the
+  // folder the dev server actually runs from. The spawn-level cwd is often
+  // the user's home because they invoked the chain from there.
+  if (command) {
+    const m = String(command).match(/\bcd\s+("([^"]+)"|'([^']+)'|(\S+))/i);
+    if (m) {
+      const raw = (m[2] || m[3] || m[4] || '').trim();
+      if (raw) return _formatHome(raw);
+    }
+  }
   if (!cwd) return '';
+  return _formatHome(cwd);
+}
+
+function _formatHome(p) {
   const home = os.homedir();
-  return cwd.startsWith(home) ? '~' + cwd.slice(home.length) : cwd;
+  let out = p.startsWith(home) ? '~' + p.slice(home.length) : p;
+  // Display only the trailing two segments for narrow columns.
+  const parts = out.split('/');
+  if (parts.length > 3) out = '…/' + parts.slice(-2).join('/');
+  return out;
 }
 
 export function list() {
@@ -120,7 +165,7 @@ export function list() {
     command: e.command,
     label: e.label,
     cwd: e.cwd,
-    cwdShort: _shortCwd(e.cwd),
+    cwdShort: _shortCwd(e.cwd, e.command),
     port: e.port,
     status: e.status,
     startedAt: e.startedAt,
