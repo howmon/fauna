@@ -871,6 +871,27 @@ const RUNTIME_JS = `
   });
   speedSel.addEventListener('change', () => { audio.playbackRate = Number(speedSel.value) || 1; });
 
+  // ── Download buttons — sandboxed iframe (allow-scripts only) blocks the
+  // \`download\` attribute and direct navigation. Relay the request to the
+  // parent via widget.emit, where the parent has same-origin access and can
+  // trigger the download cleanly.
+  function _relayDownload(ev) {
+    const a = ev.currentTarget;
+    if (!a) return;
+    ev.preventDefault();
+    const href = a.getAttribute('href') || '';
+    const filename = a.getAttribute('download') || '';
+    try {
+      if (window.widget && typeof window.widget.emit === 'function') {
+        window.widget.emit('download', { url: href, filename: filename });
+      }
+    } catch (_) {}
+  }
+  const dlMp4 = document.getElementById('download-mp4');
+  if (dlMp4) dlMp4.addEventListener('click', _relayDownload);
+  const dlHtml = document.getElementById('download-html');
+  if (dlHtml) dlHtml.addEventListener('click', _relayDownload);
+
   audio.addEventListener('timeupdate', () => { checkActions(); updateTime(); });
   audio.addEventListener('play',  () => { playBtn.textContent = '⏸'; });
   audio.addEventListener('pause', () => { playBtn.textContent = '▶'; });

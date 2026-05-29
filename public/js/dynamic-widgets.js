@@ -279,6 +279,25 @@
       var h = Math.max(240, Math.min(1600, m.data.height));
       mounted.iframe.style.height = h + 'px';
     }
+    if (m.type === 'event' && m.event === 'download' && m.data && m.data.url) {
+      // Widgets inside an allow-scripts sandbox cannot trigger downloads
+      // themselves. Relay the request through the parent document, which is
+      // same-origin with the server and can use the <a download> mechanism.
+      try {
+        var url = String(m.data.url);
+        if (/^\/(?!\/)/.test(url)) url = window.location.origin + url;
+        var a = document.createElement('a');
+        a.href = url;
+        if (m.data.filename) a.download = String(m.data.filename);
+        a.rel = 'noopener';
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function () { try { a.remove(); } catch (_) {} }, 1000);
+      } catch (err) {
+        console.error('[dynamic-widgets] download relay failed', err);
+      }
+    }
   });
 
   // Public API used by public/js/chat.js when it sees the SSE events.
