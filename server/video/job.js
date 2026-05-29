@@ -109,6 +109,9 @@ export function createJob(params = {}) {
       terms: null,             // string[]
       audioFile: null,         // mp3 path
       audioDurationSec: null,
+      audioEngine: null,
+      audioVoice: null,
+      audioCues: null,         // [{index,start,end,text}] when engine produced exact timings
       subtitlePath: null,
       footageSource: null,
       clips: [],               // [{path, source, term}]
@@ -251,6 +254,9 @@ export async function runStep(jobId, step, opts = {}) {
         job.artifacts.audioDurationSec = r.durationSec;
         job.artifacts.audioEngine = r.engine;
         job.artifacts.audioVoice = r.voice;
+        // Per-sentence engines (Kokoro) return exact cue timings; stash them
+        // so the subtitle step doesn't have to re-estimate from char counts.
+        job.artifacts.audioCues = Array.isArray(r.cues) ? r.cues : null;
         break;
       }
       case 'subtitle': {
@@ -260,6 +266,7 @@ export async function runStep(jobId, step, opts = {}) {
           script: job.artifacts.script,
           audioDurationSec: job.artifacts.audioDurationSec,
           outFile: subFile,
+          cues: job.artifacts.audioCues || undefined,
         });
         job.artifacts.subtitlePath = subFile;
         break;

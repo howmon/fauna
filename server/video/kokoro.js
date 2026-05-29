@@ -91,6 +91,45 @@ export async function synthesizeKokoro({ text, outWav, voice, onProgress }) {
 }
 
 /**
+ * Synthesize a list of script segments (e.g. one sentence per line) into
+ * individual WAV files. Returns each segment's actual audio duration so
+ * subtitle cues can be timed exactly — char-proportional estimates drift
+ * because Kokoro speaks different sentences at noticeably different rates
+ * (especially around punctuation, numbers, and short interjections).
+ *
+ * @param {object} args
+ * @param {string[]} args.segments  — script broken into cue-sized chunks
+ * @param {string}   args.outDir    — directory for per-segment .wav files
+ * @param {string}  [args.voice]
+ * @param {(p:{phase:string,fraction?:number,index?:number,total?:number})=>void} [args.onProgress]
+ * @returns {Promise<Array<{index:number,text:string,wavFile:string,durationSec:number}>>}
+ */
+export async function synthesizeKokoroSegments({ segments, outDir, voice, onProgress }) {
+  if (!Array.isArray(segments) || !segments.length) throw new Error('segments required');
+  if (!outDir) throw new Error('outDir required');
+  const voiceId = voice || DEFAULT_KOKORO_VOICE;
+  fs.mkdirSync(outDir, { recursive: true });
+
+  const tts = await _getTTS({ onProgress });
+  const total = segments.length;
+  const out = [];
+  for (let i = 0; i < total; i++) {
+    const text = segments[i];
+    if (onProgress) onProgress({ phase: 'synthesize', fraction: i / total, index: i, total });
+    const audio = await tts.generate(text, { voice: voiceId });
+    const wavFile = path.join(outDir, `seg-${String(i).padStart(4, '0')}.wav`);
+    await audio.save(wavFile);
+    // RawAudio: samples in `audio.audio` (Float32Array), `sampling_rate` Hz.
+    const samples = audio?.audio?.length || 0;
+    const sr = audio?.sampling_rate || 24000;
+    const durationSec = samples / sr;
+    out.push({ index: i, text, wavFile, durationSec });
+  }
+  if (onProgress) onProgress({ phase: 'synthesize', fraction: 1, index: total, total });
+  return out;
+}
+
+/**
  * List available Kokoro voices (American/British, male/female).
  * Returns the static catalog from the model card so callers don't have to
  * load the model just to populate a dropdown.

@@ -22,7 +22,7 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import { FFMPEG_PATH } from './ffmpeg-path.js';
-import { synthesizeKokoro, parseVoiceSpec } from './kokoro.js';
+import { synthesizeKokoro, synthesizeKokoroSegments, parseVoiceSpec } from './kokoro.js';
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
@@ -146,15 +146,43 @@ export async function synthesize({ text, outFile, voice, onProgress }) {
 
   // ── Kokoro neural TTS path ─────────────────────────────────────────────
   if (spec.engine === 'kokoro') {
-    const wav = outFile.replace(/\.mp3$/i, '') + '.tmp.wav';
+    // Synthesize one WAV per cue-sized sentence so we know the exact
+    // duration of each subtitle line — char-proportional estimates drift
+    // noticeably (numbers, abbreviations, short interjections all speak
+    // faster/slower than their length suggests).
+    const segments = splitIntoCues(text);
+    if (!segments.length) throw new Error('script has no spoken content');
+    const segDir = outFile + '.segments';
+    let segs;
     try {
-      const r = await synthesizeKokoro({ text, outWav: wav, voice: spec.voiceId, onProgress });
-      // Transcode WAV → MP3 to match downstream mux expectations.
-      await _run(FFMPEG, ['-y', '-i', wav, '-codec:a', 'libmp3lame', '-b:a', '192k', '-ar', '44100', outFile]);
-      const durationSec = await probeDuration(outFile);
-      return { audioFile: outFile, durationSec, engine: 'kokoro', voice: r.voice };
+      segs = await synthesizeKokoroSegments({
+        segments,
+        outDir: segDir,
+        voice: spec.voiceId,
+        onProgress,
+      });
+
+      // Concat per-segment WAVs → single MP3 via ffmpeg concat demuxer.
+      const listFile = path.join(segDir, 'concat.txt');
+      fs.writeFileSync(listFile, segs.map(s => `file '${s.wavFile.replace(/'/g, "'\\''")}'`).join('\n'), 'utf8');
+      await _run(FFMPEG, [
+        '-y', '-f', 'concat', '-safe', '0', '-i', listFile,
+        '-codec:a', 'libmp3lame', '-b:a', '192k', '-ar', '44100', outFile,
+      ]);
+
+      // Build exact-timed cues from the actual per-segment durations.
+      const cues = [];
+      let cursor = 0;
+      for (let i = 0; i < segs.length; i++) {
+        const start = cursor;
+        const end = cursor + segs[i].durationSec;
+        cues.push({ index: i + 1, start, end, text: segs[i].text });
+        cursor = end;
+      }
+      const durationSec = cursor || await probeDuration(outFile);
+      return { audioFile: outFile, durationSec, engine: 'kokoro', voice: spec.voiceId, cues };
     } finally {
-      try { fs.unlinkSync(wav); } catch (_) {}
+      try { fs.rmSync(segDir, { recursive: true, force: true }); } catch (_) {}
     }
   }
 
@@ -245,10 +273,14 @@ export function cuesToSrt(cues) {
 
 /**
  * Generate subtitle file from script + audio duration.
+ * If `cues` is provided (e.g. from per-sentence Kokoro synthesis), uses
+ * those exact timings instead of char-proportional estimates.
  * Returns { subtitlePath, cues }.
  */
-export function writeSubtitles({ script, audioDurationSec, outFile }) {
-  const cues = buildCues(script, audioDurationSec);
+export function writeSubtitles({ script, audioDurationSec, outFile, cues: precomputed }) {
+  const cues = (Array.isArray(precomputed) && precomputed.length)
+    ? precomputed
+    : buildCues(script, audioDurationSec);
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
   fs.writeFileSync(outFile, cuesToSrt(cues), 'utf8');
   return { subtitlePath: outFile, cues };
