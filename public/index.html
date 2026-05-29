@@ -258,7 +258,6 @@
         <button class="topbar-btn" id="topbar-overflow-btn" onclick="toggleTopbarMenu(event)" title="More options"><i class="ti ti-dots"></i></button>
         <div id="topbar-menu" class="topbar-menu" style="display:none">
           <button class="topbar-menu-item" id="topbar-move-to-project-btn" onclick="openMoveConversationToProject();closeTopbarMenu()" title="Move this conversation to a project"><i class="ti ti-folder-symlink"></i> Move to Project</button>
-          <button class="topbar-menu-item" id="topbar-ports-btn" onclick="openPortsDashboard();closeTopbarMenu()" title="Active ports" style="display:none"><i class="ti ti-server"></i> Ports <span id="topbar-ports-count" class="topbar-menu-badge">0</span></button>
           <div class="topbar-menu-divider"></div>
           <button class="topbar-menu-item" onclick="toggleSysPanel();closeTopbarMenu()" title="Edit system prompt for this conversation"><i class="ti ti-terminal-2"></i> System Prompt</button>
           <button class="topbar-menu-item" onclick="clearConversation();closeTopbarMenu()" title="Clear messages"><i class="ti ti-trash"></i> Clear conversation</button>
@@ -603,6 +602,9 @@
       </button>
       <button class="settings-nav-item" data-page="permissions" onclick="switchSettingsPage('permissions',this)">
         <i class="ti ti-shield-lock"></i> Permissions
+      </button>
+      <button class="settings-nav-item" data-page="dev-servers" onclick="switchSettingsPage('dev-servers',this);renderDevServersPage()">
+        <i class="ti ti-server"></i> Dev Servers <span id="settings-dev-servers-count" class="topbar-menu-badge" style="display:none;margin-left:auto">0</span>
       </button>
       <button class="settings-nav-item" data-page="help" onclick="switchSettingsPage('help',this)">
         <i class="ti ti-help-circle"></i> Help &amp; Reference
@@ -1559,6 +1561,20 @@ Examples:
         <button type="button" class="settings-row-btn" style="flex:1;min-width:140px" onclick="window.open('https://github.com/howmon/fauna','_blank')"><i class="ti ti-brand-github"></i> Repository</button>
       </div>
       <div class="settings-hint" style="margin-top:6px;font-size:10.5px">Build &amp; Install downloads Fauna main, compiles the platform package, then launches the installer/relauncher when supported.</div>
+    </div>
+  </div>
+
+  <!-- ── Dev Servers ─────────────────────────────────────────── -->
+  <div class="settings-page" data-page="dev-servers">
+    <div class="settings-page-title" style="display:flex;align-items:center;gap:10px">
+      <span>Dev Servers</span>
+      <button class="settings-row-btn" style="margin-left:auto;padding:4px 10px;font-size:11.5px" onclick="renderDevServersPage()"><i class="ti ti-refresh"></i> Refresh</button>
+    </div>
+    <div class="settings-section">
+      <div class="settings-hint" style="margin-bottom:12px">Long-running dev/preview servers Fauna spawned via shell commands (npm run dev, vite, next dev, php -S, uvicorn, …). Manage them here so ports don’t pile up.</div>
+      <div id="dev-servers-list">
+        <div style="padding:24px;text-align:center;color:var(--fau-text-muted);font-size:13px">Loading…</div>
+      </div>
     </div>
   </div>
 

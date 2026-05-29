@@ -3077,7 +3077,10 @@ function _fileIcon(ext) {
   return (ext && map[ext]) || 'ti-file';
 }
 
-// ── Global Ports Dashboard ────────────────────────────────────────────────
+// ── Global Dev-Server Dashboard ───────────────────────────────────────────
+// Lives inside Settings → Dev Servers. The poll keeps the nav-item count
+// badge in sync; renderDevServersPage() repaints the table when the page
+// is open. Topbar overflow no longer hosts this UI.
 
 var _portsPollingInterval = null;
 
@@ -3092,53 +3095,77 @@ async function _pollPorts() {
     var r = await fetch('/api/runs');
     var runs = await r.json();
     var active = runs.filter(function(r) { return r.status === 'running' || r.status === 'starting'; });
-    var btn = document.getElementById('topbar-ports-btn');
-    var cnt = document.getElementById('topbar-ports-count');
-    if (btn) btn.style.display = active.length ? '' : 'none';
-    if (cnt) cnt.textContent = active.length;
+    var settingsCnt = document.getElementById('settings-dev-servers-count');
+    if (settingsCnt) {
+      settingsCnt.textContent = active.length;
+      settingsCnt.style.display = active.length ? '' : 'none';
+    }
+    // Re-render the page if it's currently visible.
+    var pageEl = document.querySelector('#settings-panel .settings-page[data-page="dev-servers"]');
+    if (pageEl && pageEl.classList.contains('active')) {
+      _renderDevServersList(runs);
+    }
   } catch(_) {}
 }
 
-function openPortsDashboard() {
-  fetch('/api/runs').then(function(r) { return r.json(); }).then(function(runs) {
-    var rows = runs.map(function(r) {
-      var isActive = r.status === 'running' || r.status === 'starting';
-      var portStr = r.port ? ':' + r.port : '(no port)';
-      var statusDot = '<span class="proj-run-status-dot proj-run-status-' + r.status + '"></span>';
-      var pidArg = r.projectId ? ("'" + r.projectId + "'") : 'null';
-      var openBtn = r.port && isActive
-        ? '<button class="proj-action-btn" style="padding:3px 10px;font-size:11px" onclick="openRunInBrowser(\'http://localhost:' + r.port + '\');document.querySelector(\'.proj-modal-overlay\').remove()">Open</button>'
-        : '';
-      var restartBtn = isActive && !r.projectId
-        ? '<button class="proj-action-btn" style="padding:3px 10px;font-size:11px" onclick="restartDevServerRun(\'' + r.runId + '\').then(function(){setTimeout(function(){document.querySelector(\'.proj-modal-overlay\').remove();openPortsDashboard()},400)})">Restart</button>'
-        : '';
-      var stopBtn = isActive
-        ? '<button class="proj-action-btn" style="padding:3px 10px;font-size:11px;color:var(--error-light)" onclick="stopProjectRun(\'' + r.runId + '\',' + pidArg + ').then(function(){setTimeout(function(){document.querySelector(\'.proj-modal-overlay\')&&document.querySelector(\'.proj-modal-overlay\').remove();openPortsDashboard()},400)})">Stop</button>'
-        : '';
-      return '<tr class="proj-ports-row">' +
-        '<td>' + statusDot + ' ' + _projEsc(r.name) + '</td>' +
-        '<td>' + _projEsc(r.srcName || '') + '</td>' +
-        '<td style="font-variant-numeric:tabular-nums">' + portStr + '</td>' +
-        '<td><code class="proj-run-cmd-badge">' + _projEsc(r.cmd.length > 40 ? r.cmd.slice(0,40) + '…' : r.cmd) + '</code></td>' +
-        '<td style="white-space:nowrap">' + openBtn + ' ' + restartBtn + ' ' + stopBtn + '</td>' +
-      '</tr>';
-    }).join('');
-
-    var html = runs.length
-      ? '<table class="proj-ports-table"><thead><tr><th>Process</th><th>Folder</th><th>Port</th><th>Command</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
-      : '<div class="proj-hub-empty" style="padding:32px"><i class="ti ti-server" style="font-size:28px;opacity:.3"></i><div>No active processes</div></div>';
-
-    var overlay = document.createElement('div');
-    overlay.className = 'proj-modal-overlay';
-    overlay.innerHTML =
-      '<div class="proj-modal" style="max-width:720px;width:90vw">' +
-        '<div class="proj-modal-header">' +
-          '<span class="proj-modal-title"><i class="ti ti-server"></i> Active Ports</span>' +
-          '<button class="proj-icon-btn" onclick="this.closest(\'.proj-modal-overlay\').remove()"><i class="ti ti-x"></i></button>' +
-        '</div>' +
-        '<div class="proj-modal-body" style="padding:0;overflow:auto;max-height:60vh">' + html + '</div>' +
-      '</div>';
-    overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
-    document.body.appendChild(overlay);
-  }).catch(function() {});
+function renderDevServersPage() {
+  fetch('/api/runs')
+    .then(function(r) { return r.json(); })
+    .then(_renderDevServersList)
+    .catch(function() {});
 }
+
+function _renderDevServersList(runs) {
+  var host = document.getElementById('dev-servers-list');
+  if (!host) return;
+  if (!runs.length) {
+    host.innerHTML =
+      '<div style="padding:40px;text-align:center;color:var(--fau-text-muted)">' +
+        '<i class="ti ti-server" style="font-size:32px;opacity:.35;display:block;margin-bottom:8px"></i>' +
+        '<div style="font-size:13px">No dev servers running</div>' +
+        '<div style="font-size:11.5px;opacity:.7;margin-top:4px">Servers Fauna spawns (npm run dev, vite, next dev, …) will appear here.</div>' +
+      '</div>';
+    return;
+  }
+  var rows = runs.map(function(r) {
+    var isActive = r.status === 'running' || r.status === 'starting';
+    var portStr = r.port ? ':' + r.port : '<span style="opacity:.5">—</span>';
+    var statusDot = '<span class="proj-run-status-dot proj-run-status-' + r.status + '"></span>';
+    var pidArg = r.projectId ? ("'" + r.projectId + "'") : 'null';
+    var openBtn = r.port && isActive
+      ? '<button class="proj-action-btn" style="padding:3px 10px;font-size:11px" onclick="openRunInBrowser(\'http://localhost:' + r.port + '\')">Open</button>'
+      : '';
+    var restartBtn = isActive && !r.projectId
+      ? '<button class="proj-action-btn" style="padding:3px 10px;font-size:11px" onclick="restartDevServerRun(\'' + r.runId + '\').then(function(){setTimeout(renderDevServersPage,400)})">Restart</button>'
+      : '';
+    var stopBtn = isActive
+      ? '<button class="proj-action-btn" style="padding:3px 10px;font-size:11px;color:var(--error-light)" onclick="stopProjectRun(\'' + r.runId + '\',' + pidArg + ').then(function(){setTimeout(renderDevServersPage,400)})">Stop</button>'
+      : '';
+    return '<tr class="proj-ports-row">' +
+      '<td>' + statusDot + ' ' + _projEsc(r.name) + '</td>' +
+      '<td style="font-size:11px;color:var(--fau-text-muted)">' + _projEsc(r.srcName || '') + '</td>' +
+      '<td style="font-variant-numeric:tabular-nums">' + portStr + '</td>' +
+      '<td><code class="proj-run-cmd-badge">' + _projEsc(r.cmd.length > 50 ? r.cmd.slice(0,50) + '…' : r.cmd) + '</code></td>' +
+      '<td style="white-space:nowrap;text-align:right">' + openBtn + ' ' + restartBtn + ' ' + stopBtn + '</td>' +
+    '</tr>';
+  }).join('');
+  host.innerHTML =
+    '<table class="proj-ports-table" style="width:100%"><thead>' +
+      '<tr><th>Process</th><th>Folder</th><th>Port</th><th>Command</th><th></th></tr>' +
+    '</thead><tbody>' + rows + '</tbody></table>';
+}
+
+// Backwards-compat alias — anything still calling openPortsDashboard() now
+// routes the user into Settings → Dev Servers.
+function openPortsDashboard() {
+  if (typeof toggleSettings === 'function') {
+    var panel = document.getElementById('settings-panel');
+    if (panel && !panel.classList.contains('open')) toggleSettings();
+  }
+  if (typeof switchSettingsPage === 'function') {
+    var btn = document.querySelector('#settings-panel .settings-nav-item[data-page="dev-servers"]');
+    switchSettingsPage('dev-servers', btn);
+  }
+  renderDevServersPage();
+}
+
