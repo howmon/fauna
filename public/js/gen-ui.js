@@ -437,8 +437,8 @@ function _guiBuildMediaEl(src, type, opts) {
   if (src) {
     if (src.startsWith('file://')) {
       src = '/api/serve-media?path=' + encodeURIComponent(src.replace(/^file:\/\//, ''));
-    } else if (/^\/[^/]|^~\//.test(src)) {
-      // bare absolute path (/Users/... or ~/...)
+    } else if (/^~\//.test(src) || (/^\/[^/]/.test(src) && !/^\/api\//.test(src))) {
+      // bare absolute path (/Users/... or ~/...) — but NOT an existing /api/... route
       src = '/api/serve-media?path=' + encodeURIComponent(src);
     }
   }

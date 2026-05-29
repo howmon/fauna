@@ -4,114 +4,75 @@
   <img src="https://raw.githubusercontent.com/howmon/fauna/main/assets/icon.png" alt="Fauna" width="128" height="128">
 </p>
 
-A cross-platform Electron app. Streaming AI with real shell execution, browser control, Figma integration, file editing, and a full agent system.
-
-**macOS** (Apple Silicon & Intel) · **Windows** (x64 & ARM64)
+Streaming AI with real shell, browser, Figma, file editing, voice, video, and a full agent system. **macOS** (Apple Silicon & Intel) · **Windows** (x64 & ARM64).
 
 ---
 
 ## Features
 
-**AI & Models**
-- Streaming responses from GitHub Copilot, OpenAI, Anthropic, and Google
-- Bring your own API keys — models fetched live from each provider's API
-- **Local & custom-endpoint models** — run privately via Ollama, LM Studio, llama.cpp, vLLM, Jan, Text-Gen-WebUI, or point at any hosted OpenAI-compatible `/v1` (NVIDIA NIM, Groq, Together, Fireworks, DeepInfra, Mistral, DeepSeek, OpenRouter, …). Auto-discovery on standard local ports, one-click presets for major hosted providers, per-model capability overrides.
-- Switch models mid-conversation; per-conversation system prompts and thinking budget controls
+**Models** — GitHub Copilot, OpenAI, Anthropic, Google. Plus any OpenAI-compatible `/v1` (Ollama, LM Studio, llama.cpp, vLLM, NVIDIA NIM, Groq, Together, Fireworks, DeepInfra, Mistral, DeepSeek, OpenRouter). Switch mid-conversation; per-conversation system prompts and thinking budgets.
 
-**Shell Execution**
-- Runs `bash`, `python3`, `node`, `swift`, `osascript`, PowerShell
-- Native `fauna_shell_exec` function tool (Codex-style) — server-side execution inside a single agent turn, no client round-trips, no "want me to continue?" half-stops
-- Markdown ```bash blocks supported as a fallback (auto-run / auto-feed) for models without tool-call support
-- Streaming stdout/stderr, AbortController-based cancel on the Stop button, screenshot capture auto-attaches to next AI turn
+**Agent loop** — Native function tools run server-side in one HTTP response (up to 50 calls/turn) with no client round-trips and no "want me to continue?" stops. Markdown fences (```bash, etc.) are kept as a fallback for models without tool calls.
 
-**Interactive Browser**
-- Built-in browser pane with multi-tab support per conversation
-- Native `fauna_browser` function tool drives navigate / click / type / extract / evaluate / screenshot from inside the agent loop
-- Headless mode with stealth anti-bot detection (uses your real Edge profile)
+**Shell** — `bash`, `python3`, `node`, `swift`, `osascript`, PowerShell. Streaming stdout/stderr, cancel via Stop, auto-attached screenshots.
 
-**File Editing**
-- Native function tools (preferred): `fauna_read_file`, `fauna_replace_string` (exact unique-match), `fauna_apply_patch` (multi-file unified-diff DSL), `fauna_write_file` / `fauna_write_files` (atomic, with `minLines` / `sha256` guards)
-- Markdown fallback when tools are unavailable: `replace-string`, `apply-patch`, `write-file` / `stream-write`, `file-plan`
-- Auto-recovery checkpoints before every write
+**Browser** — Built-in multi-tab pane plus headless `fauna_browser` with stealth (uses your real Edge profile): navigate / click / type / extract / evaluate / screenshot.
 
-**Figma**
-- Dev Mode MCP (port 3845) — reads context, writes via `figma_execute` Plugin API
-- Design spec generation — full A11y component specs using design system components
-- Legacy WebSocket relay plugin also supported
+**Files** — `fauna_read_file`, `fauna_replace_string` (exact match), `fauna_apply_patch` (multi-file diffs), `fauna_write_file(s)` (atomic, `minLines` / `sha256` guards). Auto-recovery checkpoints.
 
-**Agents**
-- Builder wizard (7 steps) — name, system prompt, permissions, custom tools, test cases, security scan, publish
-- AI-generated agents from a natural-language description
-- Self-modifying — AI can patch agents mid-conversation; changes require user review
-- Learnings journal — successful strategies recorded and injected into future sessions
+**Figma** — Dev Mode MCP (port 3845) + Plugin API via `figma_execute`. Full A11y design-spec generation against design-system components.
 
-**Agent Store**
-- Browse, install, publish community agents
-- Security scan required (score ≥ 80) to publish
-- Auto-update with version history and rollback
+**Voice** — Wake-word, push-to-talk dictation, full voice chat. Whisper transcription, Kokoro TTS, resident always-listening mode. Settings → Voice.
 
-**Multi-Agent Orchestration**
-- Parallel: `@a + @b [parallel] message` — all agents run concurrently
-- Sequential: `@a + @b message` — output chains agent to agent
-- Delegation: orchestrator agent delegates via `[DELEGATE:name]` blocks
+**Whiteboard lessons** — `fauna_lesson_create` generates a multi-scene interactive whiteboard with synced narration, KaTeX, pen-drawn diagrams. Source a `.pptx`, `.docx`, `.pdf`, `.md`, `.html`, or URL — speaker notes included. Download as **MP4** or as a **portable HTML+audio zip** for any web host.
 
-**Agent Security**
-- File access restricted to declared paths (`.ssh`, `.aws` always blocked)
-- Shell commands filtered against dangerous patterns
-- Custom tools run in isolated VM — no `process`, `require`, or `fs`
-- 300s timeout, 5MB output cap, 5 concurrent tools
+**Video** — Storyteller pipeline (`fauna_video_create`) stitches stock footage + narration + burned-in subs with ffmpeg in 9:16, 16:9, or 1:1. Background music, voice mix, captions, all configurable.
 
-**Automation**
-- Workflows — recorded multi-step agent runs, replayable on demand
-- Heartbeat — scheduled background conversations (cron-style)
-- Task runner — concurrent background tasks with status pane
-- Teams Bridge — drive Fauna from a Microsoft Teams chat
-- Browser extension — Chrome side panel + CDP screenshot/automation
+**Podcasts** — Two-host conversational podcasts from a topic or document, voiced with Kokoro.
 
-**Other**
-- Artifact pane — HTML, Markdown, JSON, CSV, charts, 30-day retention
-- Generative UI — 18 reactive inline components rendered in chat
-- Projects — group conversations, artifacts, and file contexts
-- Playbook — learned instructions injected into future sessions
-- Token-aware auto-compaction. Manual `/compact` slash command, toggle in Settings.
-- Multi-conversation with DOM isolation — background tasks keep running
+**Generative UI** — 18+ reactive inline components, plus dynamic widgets the model writes on the fly (circuit simulator, charts, calculators).
+
+**Agents** — Builder wizard (name, prompt, perms, tools, tests, security scan, publish), or generate one from a description. Self-modifying with user review. Learnings journal injects past wins into new sessions.
+
+**Agent Store** — Browse, install, publish. Security scan score ≥ 80 to publish. Versioned with rollback.
+
+**Multi-agent** — Parallel `@a + @b [parallel] msg`, sequential `@a + @b msg`, or orchestrator `[DELEGATE:name]` blocks.
+
+**Sandbox** — Declared file paths only (`.ssh`/`.aws` always blocked). Shell command filtering. Custom tools run in isolated VM with 300s timeout, 5MB cap, 5 concurrent slots.
+
+**Automation** — Recorded workflows, cron-style heartbeat conversations, background task runner with status pane, Microsoft Teams bridge, Chrome side-panel extension with CDP automation.
+
+**Other** — Artifacts pane (HTML/MD/JSON/CSV/charts, 30-day retention), Projects (group convos + contexts), Playbook (learned instructions), token-aware auto-compaction (`/compact`), multi-conversation with DOM isolation. Mobile companion app (Expo, in `/mobile`).
 
 ---
 
 ## How It Works
 
 ```
-User message
-  → AI streams response with native function tool calls
-      fauna_shell_exec / fauna_read_file / fauna_replace_string /
-      fauna_apply_patch / fauna_browser / fauna_write_file /
-      figma_execute / artifact:TYPE
-  → Server executes each tool, pushes role:tool result back into the
-      same conversation, re-invokes the model — all in ONE HTTP response
-  → Loop continues (up to 50 tool calls/turn) until the model emits a
-      tool-free final message. No client round-trips, no half-stops.
-  → Markdown tool fences (```bash, ```browser-action, etc.) remain as a
-      fallback path for models that don't support function tools.
-  → Background conversations keep running when you switch away
-```
+User → AI streams response with native function tool calls
+     → Server runs each tool, feeds role:tool result back, re-invokes model
+     → Loop continues until model emits a tool-free message (one HTTP response)
+     → Background conversations keep running when you switch away
 
-```
 [Fauna — port 3737]
-  ├── /api/chat          streaming AI + agentic tool loop
-  ├── /api/shell-exec    bash / PowerShell execution
-  ├── /api/browse        headless browser (stealth)
-  ├── /api/write-file    atomic file writes
-  ├── /api/agents        agent CRUD, scan, learnings
-  ├── /api/store         browse, install, publish
-  ├── GET :3845/mcp      Figma Dev Mode MCP
-  └── WS  :3335          Figma relay plugin
+  ├── /api/chat              streaming AI + agentic tool loop
+  ├── /api/shell-exec        bash / PowerShell
+  ├── /api/browse            stealth headless browser
+  ├── /api/write-file        atomic file writes
+  ├── /api/agents /store     agent CRUD, browse, publish
+  ├── /api/lesson-*          whiteboard lessons + MP4 / HTML export
+  ├── /api/video             storyteller video render
+  ├── /api/kokoro-tts        Kokoro voice synth
+  ├── /api/whisper           transcription
+  ├── GET :3845/mcp          Figma Dev Mode MCP
+  └── WS  :3335              Figma relay plugin
 ```
 
 ---
 
 ## Setup
 
-**Prerequisites:** Node.js 18+ · GitHub Copilot subscription, an API key (OpenAI / Anthropic / Google), or a local OpenAI-compatible endpoint (Ollama, LM Studio, llama.cpp, vLLM, …)
+**Prereqs:** Node.js 18+ · Copilot subscription, an API key (OpenAI / Anthropic / Google), or any OpenAI-compatible endpoint.
 
 ```bash
 git clone https://github.com/howmon/FaunaApp.git
@@ -121,68 +82,53 @@ npm start        # dev
 npm run dist     # build
 ```
 
-**Auth:** Settings → Authentication → paste a GitHub PAT or API key.  
+**Auth:** Settings → Authentication → paste GitHub PAT or API key.
 **Figma:** Figma Desktop → Preferences → Enable Dev Mode MCP Server → toggle 🔷 MCP in toolbar.
 
 ### Custom Endpoints (local & hosted OpenAI-compatible)
 
-Fauna can talk to any OpenAI-compatible `/v1` endpoint — local backends or hosted providers. Your tokens, your choice of host.
-
-**Setup:** Settings → Authentication → **Custom Endpoints** tab.
-
-- **Hosted presets** — one-click setup for NVIDIA NIM, Groq, Together AI, Fireworks AI, DeepInfra, Mistral, DeepSeek, and OpenRouter. Click a preset, paste your API key, Save.
-- **Refresh** auto-discovers local backends: Ollama (`localhost:11434/v1`), LM Studio (`localhost:1234/v1`), llama.cpp (`localhost:8080/v1`), vLLM (`localhost:8000/v1`), Jan (`localhost:1337/v1`), Text-Gen-WebUI (`localhost:5000/v1`).
-- Or paste any custom `/v1` URL + optional API key + default model id, click **Test**, then **Save & Enable**.
-- Custom models appear in the model picker under the **Custom** vendor group with a `· custom` suffix. Switch back to Copilot at any time.
-- **Capability overrides** — by default Fauna assumes the endpoint doesn't support OpenAI `tool_calls` or vision. Enable the checkbox for either if your model handles them. When tools are off, Fauna streams chat normally but the agent loop (shell, browser, file edits) is disabled to avoid hallucinated tool invocations.
-
-**Quick start with Ollama:**
+Settings → Authentication → **Custom Endpoints**. Hosted presets for NVIDIA NIM / Groq / Together / Fireworks / DeepInfra / Mistral / DeepSeek / OpenRouter. **Refresh** auto-discovers Ollama (11434), LM Studio (1234), llama.cpp (8080), vLLM (8000), Jan (1337), Text-Gen-WebUI (5000). Or paste any `/v1` URL. Per-endpoint tool-call and vision overrides. Config at `$FAUNA_CONFIG_DIR/local-llm.json`.
 
 ```bash
-brew install ollama
-ollama serve &
+brew install ollama && ollama serve &
 ollama pull qwen2.5-coder:14b
-# In Fauna: Settings → Authentication → Custom Endpoints → Refresh → Use → Save & Enable
+# Fauna → Settings → Custom Endpoints → Refresh → Use → Save & Enable
 ```
 
-Config persists at `$FAUNA_CONFIG_DIR/local-llm.json` (defaults to `~/.config/copilot-chat/local-llm.json`).
+### Standalone updates / FaunaMCP
 
-### Fauna standalone updates
-
-The desktop app can check `https://github.com/howmon/fauna` main for updates from Help → Check for Fauna Updates or Settings → About → App Updates. Build & Install downloads the main branch zip, extracts it into Fauna app data, runs `npm install`, builds the platform package, and launches the installer/relauncher on macOS or Windows.
-
-### FaunaMCP standalone
-
-Fauna can use the standalone [FaunaMCP app](https://github.com/howmon/faunaMCP) for shared browser and Figma MCP tooling. Start FaunaMCP first, then Fauna will auto-detect `http://localhost:3341/mcp` for browser MCP tools and `ws://localhost:3335` for the Figma plugin relay. When those are present, Fauna reuses the standalone app instead of starting duplicate bundled relay processes. You can get the source directly from [howmon/faunaMCP](https://github.com/howmon/faunaMCP), download the current main branch as a zip with [faunaMCP main.zip](https://github.com/howmon/faunaMCP/archive/refs/heads/main.zip), or use Settings → Browser use → FaunaMCP App → Build & Install to let Fauna download, compile, and install the standalone app when needed. The in-app installer supports macOS and Windows builds; Windows uses PowerShell extraction, `npm.cmd`, and the generated NSIS installer.
+Help → Check for Fauna Updates pulls the main branch zip and rebuilds. For shared browser/Figma MCP across apps, install [howmon/faunaMCP](https://github.com/howmon/faunaMCP) — Fauna auto-detects `http://localhost:3341/mcp` and `ws://localhost:3335`.
 
 ### CLI (no Electron)
 
 ```bash
 npm install -g @eichho/fauna
-fauna                          # interactive REPL
+fauna                          # REPL
 fauna --server                 # server only
 fauna -q "summarize this repo" # one-shot
 echo "explain this" | fauna    # pipe mode
 ```
 
-Inside the REPL: `/store` searches Agent Store, `/store show <slug>` previews an agent, `/store install <slug>` installs it, `/projects` manages project context, and `/mcps` checks MCP/browser bridge status.
+Slash commands: `/store`, `/store install <slug>`, `/projects`, `/mcps`, `/compact`.
 
 ---
 
 ## Roadmap
 
+- [x] Local model support (Ollama, llama.cpp, LM Studio, vLLM, …, any OpenAI `/v1`)
+- [x] Workflow recorder and replay
+- [x] Voice input/output (wake-word, dictation, voice chat, TTS)
+- [x] Whiteboard lessons with MP4 + HTML export
+- [x] Mobile companion app (Expo, in `/mobile`)
 - [ ] Linux builds (AppImage / Snap)
 - [ ] Agent analytics — usage, token costs, success rates
 - [ ] Conversation branching
-- [ ] Voice input/output
-- [x] Local model support (Ollama, llama.cpp, LM Studio, vLLM, NVIDIA NIM, Groq, Together, Fireworks, any OpenAI-compatible `/v1`)
 - [ ] Plugin system beyond agents
 - [ ] MCP server marketplace
-- [ ] Mobile companion app
-- [x] Workflow recorder and replay
 
 ---
 
 ## License
 
 MIT — [Solomon Abey](https://github.com/howmon)
+
