@@ -2818,6 +2818,28 @@ body { animation: none; }
 .shell-exec-result .se-err    { color: #f87171; }
 .shell-exec-result.running    { color: #1ec882; font-style: italic; }
 
+/* Inline file editor (replaces nano/vim/vi blocks) */
+.shell-exec-block.shell-exec-editor { border-color: rgba(74, 144, 226, .35); }
+.shell-exec-editor-path {
+  font-family: var(--mono); font-size: 11.5px; color: var(--fau-text-muted);
+  background: var(--fau-surface); padding: 2px 8px; border-radius: 4px;
+  margin-left: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 360px;
+}
+.shell-exec-editor-status {
+  padding: 5px 12px; font-size: 11px; color: var(--fau-text-muted);
+  border-top: 1px solid var(--fau-border); background: var(--fau-code-bg);
+}
+.shell-exec-editor-textarea {
+  width: 100%; min-height: 160px; max-height: 420px; resize: vertical;
+  background: var(--fau-code-bg); color: var(--fau-text);
+  border: none; border-top: 1px solid var(--fau-border);
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
+  padding: 10px 12px; box-sizing: border-box;
+  outline: none;
+}
+.shell-exec-editor-textarea:focus { background: var(--fau-bg); }
+
 /* ── Inline permission prompt ─────────────────────────────────────── */
 .shell-permission-prompt {
   background: transparent !important; border-top: none !important;

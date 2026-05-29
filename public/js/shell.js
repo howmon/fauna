@@ -34,6 +34,149 @@ function _findShellWidget(execId, shellKey) {
   return candidates.find(function(candidate) { return candidate.dataset.shellKey === shellKey; }) || null;
 }
 
+// ── Interactive-command detection ───────────────────────────────────────
+// nano / vim / vi / pico / emacs / micro opening a file → render an inline
+// editor instead of trying to run the TUI (which would hang with no output).
+// Returns { tool, filePath, fullCommand } or null.
+function _detectInteractiveEditor(rawCode) {
+  if (!rawCode) return null;
+  // Strip leading comment lines so we can see the real command.
+  var lines = String(rawCode).split('\n');
+  var firstCmd = null;
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (!line || line.charAt(0) === '#') continue;
+    firstCmd = line;
+    break;
+  }
+  if (!firstCmd) return null;
+  // Match `nano <path>` / `vim <path>` / `vi <path>` (with optional flags before path).
+  // Allow trailing comments and pipes (rare). Only intercept SIMPLE forms.
+  var m = firstCmd.match(/^(?:sudo\s+)?(nano|vim|vi|pico|emacs|micro)\s+(?:-[^\s]+\s+)*([^\s|;&<>]+)\s*$/i);
+  if (!m) return null;
+  // Skip if combined with anything that looks risky / piped.
+  if (/[|;&]|>>|>/.test(firstCmd.replace(m[0], ''))) return null;
+  var rawPath = m[2].replace(/^['"]|['"]$/g, '');
+  return { tool: m[1].toLowerCase(), filePath: rawPath, fullCommand: firstCmd };
+}
+
+// Other purely-interactive TUIs that can't run headless. Same skip-autorun,
+// but no editor affordance — just a clear "run this in Terminal yourself" notice.
+function _isPurelyInteractiveTui(rawCode) {
+  if (!rawCode) return false;
+  var lines = String(rawCode).split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (!line || line.charAt(0) === '#') continue;
+    return /^(?:sudo\s+)?(top|htop|btop|man|less|more|ssh|telnet|mysql|psql|sqlite3|redis-cli|mongo|gdb|lldb)\b(?!.*[|<])/i.test(line);
+  }
+  return false;
+}
+
+function _resolveHomePath(p) {
+  if (!p) return p;
+  if (p.charAt(0) === '~') {
+    return p.replace(/^~/, '__HOME__'); // server resolves relative paths against $HOME; passing '~' literal won't work
+  }
+  return p;
+}
+
+// Render an inline file editor in place of a `nano <file>` shell block.
+// Loads file content (or empty), shows textarea + Save. After save, marks the
+// widget complete and (optionally) feeds a short summary to the AI.
+function _renderInlineFileEditor(widget, info) {
+  widget.classList.add('shell-exec-editor');
+  widget.dataset.autoRun = 'false';
+  var execId = widget.dataset.execId;
+  // Path resolution: shell uses ~ for $HOME. We hand the literal string to
+  // /api/read-file which already expands relative-to-home if not absolute.
+  var displayPath = info.filePath;
+  // Heuristic: turn ~/foo into /Users/<me>/foo client-side for read-file.
+  // (server's read-file treats non-absolute as relative to homedir, but ~/x
+  // is technically absolute-looking with a literal ~, so normalize it.)
+  var requestPath = displayPath;
+  if (requestPath.charAt(0) === '~') requestPath = requestPath.slice(1).replace(/^\//, '');
+  widget.innerHTML =
+    '<div class="shell-exec-header">' +
+      '<i class="ti ti-edit"></i>' +
+      '<span>Edit file</span>' +
+      '<code class="shell-exec-editor-path">' + escHtml(displayPath) + '</code>' +
+      '<span class="shell-exec-autorun-badge" style="background:var(--fau-surface2);color:var(--fau-text-dim)">interactive — fill in below</span>' +
+      '<div class="shell-exec-btns">' +
+        '<button class="shell-exec-run" id="' + execId + '-save"><i class="ti ti-device-floppy"></i> Save</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="shell-exec-editor-status" id="' + execId + '-edit-status">Loading…</div>' +
+    '<textarea class="shell-exec-editor-textarea" id="' + execId + '-textarea" spellcheck="false" placeholder="Loading…"></textarea>';
+
+  var statusEl = widget.querySelector('#' + execId + '-edit-status');
+  var taEl = widget.querySelector('#' + execId + '-textarea');
+  var saveBtn = widget.querySelector('#' + execId + '-save');
+
+  fetch('/api/read-file', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: requestPath }),
+  }).then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d }; }); })
+    .then(function(out) {
+      if (out.ok && out.d && out.d.content != null) {
+        taEl.value = out.d.content;
+        statusEl.textContent = 'Loaded ' + (out.d.bytes || 0) + ' bytes';
+        widget.dataset.absPath = out.d.path || requestPath;
+      } else {
+        taEl.value = '';
+        statusEl.textContent = 'New file (does not exist yet) — fill in and Save';
+        widget.dataset.absPath = requestPath;
+      }
+      taEl.placeholder = info.tool === 'nano' && /\.env$/.test(displayPath)
+        ? 'KEY=value\nANOTHER_KEY=value'
+        : '';
+    })
+    .catch(function(e) {
+      statusEl.textContent = 'Read failed: ' + (e && e.message ? e.message : e);
+      taEl.placeholder = '';
+    });
+
+  saveBtn.addEventListener('click', function() {
+    var content = taEl.value;
+    var absPath = widget.dataset.absPath || requestPath;
+    saveBtn.disabled = true;
+    statusEl.textContent = 'Saving…';
+    fetch('/api/write-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: absPath, content: content }),
+    }).then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d }; }); })
+      .then(function(out) {
+        if (!out.ok) {
+          statusEl.textContent = 'Save failed: ' + (out.d && out.d.error ? out.d.error : 'unknown');
+          saveBtn.disabled = false;
+          return;
+        }
+        statusEl.textContent = 'Saved ' + (out.d.bytes || 0) + ' bytes';
+        saveBtn.innerHTML = '<i class="ti ti-check"></i> Saved';
+        widget.dataset.result = JSON.stringify({
+          ok: true,
+          exitCode: 0,
+          stdout: 'File saved: ' + (out.d.path || absPath) + ' (' + (out.d.bytes || 0) + ' bytes)\n',
+          stderr: '',
+          command: info.fullCommand,
+        });
+        var msg = widget.closest('.msg');
+        if (msg && typeof updateMessageShellVerification === 'function') updateMessageShellVerification(msg);
+        // Auto-feed a short ack so the AI knows the user filled in their secret.
+        if (typeof feedShellResultToAI === 'function') {
+          setTimeout(function() { try { feedShellResultToAI(execId); } catch (_) {} }, 200);
+        }
+      })
+      .catch(function(e) {
+        statusEl.textContent = 'Save failed: ' + (e && e.message ? e.message : e);
+        saveBtn.disabled = false;
+      });
+  });
+}
+
+
 function _scheduleShellAutoRun(execId, shellKey, delay, attemptsLeft) {
   _shellAutoRunPending[shellKey] = { execId: execId, attemptsLeft: attemptsLeft };
   setTimeout(function() {
@@ -501,6 +644,23 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
     widget.dataset.shellKey = shellKey;
     widget.dataset.convId = convId || state.currentId || ''; // route auto-feed to correct conv
     widget.dataset.autoRun = autoRun ? 'true' : 'false';
+
+    // ── Interactive-command interception ──
+    // nano/vim/vi/pico/emacs <file> → render inline editor instead of running.
+    var editorInfo = _detectInteractiveEditor(rawCode);
+    if (editorInfo) {
+      pre.parentNode.replaceChild(widget, pre);
+      _renderInlineFileEditor(widget, editorInfo);
+      updateMessageShellVerification(messageEl);
+      return; // skip the rest of the rendering / auto-run path
+    }
+    // top/htop/less/man/mysql REPL/etc. → don't auto-run, show notice.
+    if (_isPurelyInteractiveTui(rawCode)) {
+      widget.dataset.autoRun = 'false';
+      autoRun = false;
+      pendingSerial = false;
+    }
+
     widget.innerHTML =
       '<div class="shell-exec-header">' +
         '<i class="ti ti-terminal-2"></i>' +
