@@ -134,7 +134,8 @@ function browserAddTab(url, convId) {
   if (state.currentId === cid) browserSwitchTab(tabId, cid);
   else { b.activeTabId = tabId; wv.style.display = 'none'; }
   if (url) {
-    if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+    // Accept http(s)://, file://, about:, data:; anything else gets https:// prepended.
+    if (!/^(https?:|file:|about:|data:)/i.test(url)) url = 'https://' + url;
     tab.url = url;
     // Wait for dom-ready before loadURL — calling it before dom-ready throws
     _waitForDomReady(wv).then(function() { wv.loadURL(url).catch(function() {}); });
@@ -294,7 +295,7 @@ function closeBrowserPane() {
 
 function browserNavigateTo(url) {
   if (!url) return;
-  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  if (!/^(https?:|file:|about:|data:)/i.test(url)) url = 'https://' + url;
   _ensureBrowserTab();
   var wv = getActiveWebview();
   if (!wv) return;
