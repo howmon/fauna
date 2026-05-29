@@ -252,7 +252,7 @@ registerFileFilterRoutes(app);
 registerFetchUrlRoutes(app);
 registerVoiceSettingsRoutes(app);
 registerKokoroTtsRoutes(app);
-registerLessonRoutes(app);
+registerLessonRoutes(app, { getElectronBrowserWindow: () => _ElectronBrowserWindow });
 
 // ── Browser (Playwright) routes moved → server/bridges/playwright-browse.js ──
 registerBrowseRoutes(app, { require: _require });

@@ -40,6 +40,7 @@ export function buildLessonWidget({ lessonId, lesson, port = 3737 }) {
       <option value="2">2×</option>
     </select>
     <span id="scene-label"></span>
+    <a id="download-mp4" href="/api/lesson-video/${lessonId}?download=1" download="lesson.mp4" title="Download MP4 video (renders on first click — may take a minute)">⬇ MP4</a>
   </div>
   <div id="scene-list"></div>
 </div>
@@ -112,6 +113,11 @@ html, body { margin: 0; padding: 0; background: var(--ui-bg); color: var(--ui-fg
   border-radius: 4px; padding: 4px; font-size: 13px;
 }
 #scene-label { color: var(--ui-muted); margin-left: 8px; white-space: nowrap; }
+#download-mp4 {
+  background: #303035; color: var(--ui-fg); text-decoration: none;
+  border-radius: 6px; padding: 6px 12px; font-size: 13px; margin-left: auto;
+}
+#download-mp4:hover { background: #404048; }
 #scene-list {
   display: flex; gap: 4px; padding: 6px 14px; overflow-x: auto;
   background: #18181b; border-top: 1px solid #303035; max-height: 60px;
@@ -906,6 +912,41 @@ const RUNTIME_JS = `
       parent.postMessage({ type:'rpc-reply', id: m.id, ok:false, error: e.message }, '*');
     }
   });
+
+  // ── Static render hook (used by offscreen video renderer) ───────────
+  // Renders the END-STATE of a scene immediately with no animation, so an
+  // offscreen Electron BrowserWindow can capturePage() each scene to a PNG
+  // and ffmpeg can stitch them with the per-scene mp3s into a downloadable
+  // mp4. Animations (stroke-dashoffset transitions, fade-ins, type_text
+  // setTimeouts) are short-circuited to their final values after runAction.
+  window.__renderSceneStatic = function(idx) {
+    if (idx < 0 || idx >= LESSON.scenes.length) return false;
+    const scene = LESSON.scenes[idx];
+    if (scene.keep !== true) resetCanvas();
+    sceneIndex = idx;
+    if (Array.isArray(scene.actions)) {
+      for (const a of scene.actions) {
+        try { runAction(a); } catch (e) { console.warn('[lesson static] action failed', a, e); }
+      }
+    }
+    // Force every pen-drawn path to its final drawn state (no transition).
+    board.querySelectorAll('path,line,circle').forEach(el => {
+      if (!el.style) return;
+      if (el.style.strokeDashoffset || el.style.transition && /stroke-dashoffset/.test(el.style.transition)) {
+        el.style.transition = 'none';
+        el.style.strokeDashoffset = '0';
+      }
+    });
+    // Force any fading-in groups to fully visible.
+    board.querySelectorAll('g.prop-node').forEach(g => {
+      g.style.transition = 'none';
+      g.style.opacity = '1';
+      g.classList.remove('fade-in');
+      g.classList.remove('fade-out');
+    });
+    return true;
+  };
+  window.__sceneCount = function() { return LESSON.scenes.length; };
 
   // ── Boot ────────────────────────────────────────────────────────────
   loadScene(0, { autoplay: false });
