@@ -339,6 +339,7 @@ function getCapabilitiesContext() {
     '',
     '## Suggested Next Steps (MANDATORY)',
     '- ALWAYS end your response with a ```suggestions block when you finish a task, answer a question, or reach a stopping point.',
+    '- ⚠️ The ```suggestions block is NEVER a substitute for the actual answer. ALWAYS write the prose answer (or task summary) FIRST, THEN append the ```suggestions block after it. A response that contains only a ```suggestions block (with no visible prose) renders as a blank bubble — that is a hard failure. If the user asked a question like "give me an app idea" or "what should I build", the bulk of your reply must be the actual idea(s) in prose; the suggestions are just follow-up buttons.',
     '- The block renders as clickable CTA buttons in the UI — the user can tap one instead of typing.',
     '- ⚠️ NEVER write suggestions as numbered lists, bullet points, or prose (e.g. "Want me to continue? I can: 1. …"). ALWAYS use the ```suggestions code block instead — that is the ONLY way buttons appear.',
     '- Emit a ```suggestions fenced block with a JSON array of exactly 3 short action labels (max ~60 chars each).',

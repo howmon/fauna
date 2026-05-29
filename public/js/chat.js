@@ -1529,6 +1529,16 @@ async function streamResponse(conv) {
         renderConvList();
       } else {
         bodyEl.innerHTML = renderBuffer ? renderMarkdown(renderBuffer) : '<span style="color:var(--fau-text-muted)">No response.</span>';
+        // If everything in the buffer was a special fenced block (e.g. just
+        // a ```suggestions JSON, or only tool-call fences that get hoisted
+        // into widgets), the rendered body is visually empty. Surface a
+        // friendly placeholder so the user isn't staring at a blank bubble.
+        try {
+          var _visibleText = (bodyEl.innerText || bodyEl.textContent || '').trim();
+          if (renderBuffer && !_visibleText) {
+            bodyEl.innerHTML = '<span style="color:var(--fau-text-muted)">(no summary — the model returned tool actions only. Try asking again, or use the buttons below.)</span>';
+          }
+        } catch (_) { /* non-fatal */ }
         if (typeof initMermaidInContainer === 'function') initMermaidInContainer(bodyEl);
 
         var shellBlocks = (msgEl.querySelectorAll('code.language-shell-exec')||[]).length;
