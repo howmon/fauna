@@ -714,6 +714,23 @@ function setBusy(busy) {
       _busyClearTimer = null;
       if (_hasActiveConversationWork()) return;
       _applyBusyState(false);
+      // Now that the stop button is no longer red, retry rendering suggestions
+      // on the latest assistant message — they were suppressed earlier while
+      // an auto-feed chain or shell verification was still in flight.
+      try {
+        var conv = getConv(state.currentId);
+        var convInner = document.querySelector('.conv-inner');
+        var lastMsg = convInner && (
+          convInner.querySelector('.msg.assistant:last-of-type') ||
+          Array.from(convInner.querySelectorAll('.msg.assistant')).pop()
+        );
+        if (conv && lastMsg && typeof extractAndRenderSuggestions === 'function') {
+          var lastAssistant = (conv.messages || []).slice().reverse().find(function(m) {
+            return m && m.role === 'assistant' && typeof m.content === 'string';
+          });
+          if (lastAssistant) extractAndRenderSuggestions(lastAssistant.content, lastMsg, true);
+        }
+      } catch (_) {}
     }, 650);
     return;
   }

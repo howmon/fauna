@@ -266,6 +266,10 @@ function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
     var _convId = (typeof state !== 'undefined' && state) ? state.currentId : null;
     var _conv   = (typeof getConv === 'function' && _convId) ? getConv(_convId) : null;
     if (_conv && _conv._streaming) return;
+    // Don't show CTAs while the stop button is red — any background work
+    // (auto-feed chains, shell verification, delegations) means the assistant
+    // is about to keep talking.
+    if (typeof _hasActiveConversationWork === 'function' && _hasActiveConversationWork()) return;
     if (msgEl) {
       var _localWidgets = msgEl.querySelectorAll('.shell-exec-block');
       for (var _i = 0; _i < _localWidgets.length; _i++) {
