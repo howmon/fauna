@@ -54,7 +54,9 @@ describe('self-tools', () => {
       // (full desktop-agent toolkit via cached Swift helper / UIAutomation).
       // Bumped to 34 after adding fauna_screen_context (Clippy-style one-call
       // snapshot — frontmost app + window + AX clickable nodes).
-      expect(SELF_TOOL_DEFS).toHaveLength(45);
+      // Bumped to 45 after adding Kokoro fauna_speak + fauna_podcast.
+      // Bumped to 48 after adding fauna_lesson_create + fauna_lesson_get + fauna_list_lesson_kinds.
+      expect(SELF_TOOL_DEFS).toHaveLength(48);
     });
 
     it('each tool has required OpenAI function format', () => {

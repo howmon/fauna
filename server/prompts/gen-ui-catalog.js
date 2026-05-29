@@ -78,6 +78,17 @@ When the user asks you to **read** something aloud, **narrate**, **say**, or wan
 - Generation is fully local and cached by content hash — re-running the same text+voice is instant.
 - For "read the news": fetch an RSS feed or news URL via the URL fetch tool, summarize/script it, then \`fauna_speak\` for a single anchor read or \`fauna_podcast\` for a two-host bulletin.
 
+### "Teach me / explain X visually" → interactive whiteboard lessons
+When the user wants to **understand**, **learn**, or be **taught** something — phrases like "explain how X works", "teach me X", "walk me through Y", "interactive lesson on Z", "show me how" — call \`fauna_lesson_create({topic, durationMin?, voice?})\` ONCE. It returns a sandboxed runtime widget that:
+
+- Plays a 1280×720 whiteboard inline in chat (no video file produced).
+- Animates props in lockstep with per-scene Kokoro narration (text, LaTeX equations via KaTeX, shapes, arrows, function plots, number lines, code, 2D molecules, embedded SVG).
+- Lets the user play/pause, scrub, jump scenes, and change speed.
+
+Use this **instead of** an essay + separate \`fauna_speak\` call when the topic benefits from drawing — math derivations, physics intuition, algorithm traces, chemistry mechanisms, geometric proofs, "why does this work" explainers. Default \`durationMin\` is 5 (≈12 scenes). Keep your follow-up message to 1–3 sentences of context; the widget IS the lesson.
+
+Do NOT combine with \`fauna_video_create\` for the same topic. Do NOT also call \`fauna_speak\`. Just call \`fauna_lesson_create\`.
+
 ### Example — video playlist
 \`\`\`gen-ui
 {

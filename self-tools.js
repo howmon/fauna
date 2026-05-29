@@ -36,6 +36,13 @@ import {
   probeKokoroDuration,
 } from './server/routes/kokoro-tts.js';
 import {
+  createLesson as lessonCreate,
+  loadLesson as lessonLoad,
+  LESSON_KINDS,
+  ACTION_DOS as LESSON_ACTIONS,
+} from './server/lesson/generator.js';
+import { buildLessonWidget } from './server/lesson/widget-bundle.js';
+import {
   searchStockImages,
   downloadStockImages,
   availableImageProviders,
@@ -1446,6 +1453,40 @@ export const SELF_TOOL_DEFS = [
       },
     },
   },
+  // ── Interactive whiteboard lessons (live-animated, audio-synced) ───────
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_lesson_create',
+      description:
+        'Generate an interactive whiteboard lesson and mount it INLINE in chat as a sandboxed runtime widget — NOT a video file. The widget shows a 1280×720 whiteboard that animates props (text, LaTeX equations, shapes, arrows, function plots, number lines, code, molecules, embedded svg/circuits) in sync with per-scene Kokoro narration. Use this whenever the user wants to be TAUGHT something visually — "explain", "teach me", "walk me through", "interactive lesson on", "show me how X works", anything where a moving illustration would help more than prose. Returns immediately after audio synthesis; the widget then plays scene-by-scene on user gesture. Do NOT also produce a separate fauna_speak / fauna_video_create call for the same topic.',
+      parameters: {
+        type: 'object',
+        properties: {
+          topic: { type: 'string', description: 'What the lesson teaches. Be specific: "How does the derivative of sin(x) become cos(x)?", "Pythagorean theorem with a visual proof", "Why does ice float on water?".' },
+          durationMin: { type: 'number', description: 'Target length in minutes (1–10). Default 5. Longer = more scenes; expect ~2.5 scenes per minute.' },
+          voice: { type: 'string', description: 'Kokoro voice id for narration. Defaults to af_bella. Pick a calm voice for math/science (am_michael, bf_emma).' },
+        },
+        required: ['topic'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_lesson_get',
+      description: 'Load a previously generated lesson document by id. Returns the full DSL JSON including scene narration, actions, and audio URLs. Useful for inspection or re-mounting.',
+      parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_list_lesson_kinds',
+      description: 'Return the catalog of prop kinds and action verbs available to lesson DSLs. Call this before drafting a lesson manually if you need a reference; otherwise fauna_lesson_create handles DSL generation internally.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
   // ── Stock imagery (Pexels / Unsplash / Pixabay) ────────────────────────
   // Use these any time you need real photographs for a generated artefact
   // (websites, slide decks, social cards, marketing copy, etc.). The tool
@@ -2162,6 +2203,61 @@ export function executeSelfTool(toolName, args, context = {}) {
           return JSON.stringify({ ok: false, error: e.message });
         }
       })();
+    }
+
+    // ── Interactive whiteboard lessons ───────────────────────────────────
+    case 'fauna_lesson_create': {
+      return (async () => {
+        try {
+          const topic = String(args.topic || '').trim();
+          if (!topic) return JSON.stringify({ ok: false, error: 'topic required' });
+          const durationMin = Math.max(1, Math.min(10, Number(args.durationMin) || 5));
+          const client = videoGetCopilotClient();
+          // Stream phase updates to chat so the user sees progress.
+          const onProgress = (evt) => {
+            try {
+              const label = evt.phase === 'script' ? 'Drafting lesson script…'
+                : evt.phase === 'audio-start' ? `Synthesizing audio for ${evt.sceneCount} scenes…`
+                : evt.phase === 'audio' ? `Audio scene ${evt.sceneIndex + 1}/${evt.total}`
+                : evt.phase;
+              context.sendSse?.({ type: 'tool_call', name: 'fauna_lesson_step', label });
+            } catch (_) {}
+          };
+          const { id, lesson, warnings } = await lessonCreate({
+            topic, durationMin, voice: args.voice, client, onProgress,
+          });
+          const built = buildLessonWidget({ lessonId: id, lesson });
+          const widgetResult = _emitWidget({
+            bundle: { html: built.bundle.html, js: built.bundle.js },
+            tools: built.tools,
+            title: built.title,
+            _lessonId: id,
+          }, context);
+          // Augment the widget-emit result with summary metadata so the model
+          // can reference scene/title info in its follow-up message.
+          try {
+            const obj = JSON.parse(widgetResult);
+            obj.lessonId = id;
+            obj.title = lesson.title;
+            obj.sceneCount = lesson.scenes.length;
+            obj.durationSec = lesson.scenes.reduce((a, s) => a + (s.audioDurationSec || 0), 0);
+            if (warnings?.length) obj.warnings = warnings;
+            return JSON.stringify(obj);
+          } catch (_) { return widgetResult; }
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: e.message });
+        }
+      })();
+    }
+    case 'fauna_lesson_get': {
+      const id = String(args.id || '');
+      if (!id) return JSON.stringify({ ok: false, error: 'id required' });
+      const lesson = lessonLoad(id);
+      if (!lesson) return JSON.stringify({ ok: false, error: 'lesson not found' });
+      return JSON.stringify({ ok: true, id, lesson });
+    }
+    case 'fauna_list_lesson_kinds': {
+      return JSON.stringify({ ok: true, kinds: LESSON_KINDS, actions: LESSON_ACTIONS });
     }
 
     // ── Stock imagery ─────────────────────────────────────────────────────
