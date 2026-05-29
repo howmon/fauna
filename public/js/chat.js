@@ -1582,6 +1582,40 @@ async function streamResponse(conv) {
         scrollBottom();
         setBusy(false);
 
+        // ── Auto-continue when the plan isn't done ────────────────────────
+        // If a fauna_plan is in flight and still has incomplete items (or the
+        // model ended with a "say continue" stall phrase), feed a continuation
+        // prompt automatically instead of making the user press Continue.
+        try {
+          var _MAX_PLAN_CHAIN = 12;
+          var _depth = conv._autoFeedDepth || 0;
+          var _remaining = (_currentPlan && Array.isArray(_currentPlan.items))
+            ? _currentPlan.items.filter(function(it) {
+                return it && it.status !== 'completed' && it.status !== 'cancelled';
+              }) : [];
+          var _stallRe = /\b(say|just say|reply with|type)\s+["“']?continue["”']?|continue (?:in )?(?:next|the next) message|continue next message|let me know (?:if|when) (?:you|to)|shall I (?:proceed|continue)|want me to continue|ready for the next/i;
+          var _stalled = _stallRe.test(buffer || '');
+          var _shouldContinue = !conv._cancelled
+            && !conv._streaming
+            && !writeFailed
+            && _depth < _MAX_PLAN_CHAIN
+            && (_remaining.length > 0 || _stalled);
+          if (_shouldContinue) {
+            dbg('plan auto-continue: remaining=' + _remaining.length + ' stalled=' + _stalled + ' depth=' + _depth, 'info');
+            conv._autoFeedDepth = _depth + 1;
+            var nextTitle = _remaining[0] && _remaining[0].title ? _remaining[0].title : '';
+            var msg = '[System: the plan is not yet complete. ' +
+              (nextTitle ? 'Next step: "' + nextTitle + '". ' : '') +
+              'Do NOT ask the user "want me to continue?" — keep going. Resume work on the next incomplete plan step, narrating with fauna_substep before each tool call. Only stop after every plan item is marked completed and the final fauna_verify_build (or equivalent verification) has passed.]';
+            // Defer slightly so the current done handler fully unwinds first.
+            setTimeout(function() {
+              try {
+                sendDirectMessage(msg, { fromAutoFeed: true, isAutoFeed: true, targetConvId: convId });
+              } catch (_) {}
+            }, 80);
+          }
+        } catch (_) { /* non-fatal */ }
+
         // Voice: turn-complete hook (chime + optional summary/suggestions TTS + hands-free reply).
         // No-ops when _voiceAwaitingReply is true — the wake-word voice-conv branch below
         // already handles TTS and re-entry for that path.
