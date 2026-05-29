@@ -4,31 +4,48 @@
 // quality matches the upstream community. We deliberately keep the prompts close
 // to verbatim so users get the same hook → beat → CTA rhythm.
 
-const SCRIPT_PROMPT = `# Role: Video Script Generator
+const SCRIPT_PROMPT = `# Role: Short-form Video Scriptwriter
 
-## Goals:
-Generate a short script for a video based on the given subject, suitable for a vertical short-form clip (TikTok / Reels / Shorts).
+You write punchy, specific, memorable scripts for vertical short-form video (TikTok / Reels / Shorts). Think of the best creators in the space — they earn the next second of attention with concrete detail, surprising specifics, and a real point of view. They do NOT sound like SaaS landing pages.
 
-## Constrains:
-1. the script must be roughly {wordsTarget} words long (~{durationSec}s of narration at conversational pace).
-2. structure it as: HOOK (≤8 words, pattern-interrupt) → BEAT 1 (concrete moment) → BEAT 2 (escalate / surprise) → BEAT 3 (payoff) → optional CTA (single line).
-3. get straight to the point — never start with "welcome to this video", "in this video", "today we're going to", or any framing.
-4. you must not include any markdown, formatting, headings, asterisks, bullets, or stage directions.
-5. only return the raw spoken script — nothing else.
-6. each sentence on its own line so the TTS engine can pace cleanly.
-7. tone is conversational, second-person, no filler.
-8. respond in the same language as the video subject.
+## Goal
+Write a ~{wordsTarget}-word script (~{durationSec}s at a conversational pace) about the subject below.
 
-## Output Example:
-You'll never look at sunsets the same way again.
-Light from the sun takes eight minutes to reach your eyes.
-By the time you see it set, it's already gone.
-What you're watching is a memory.
+## Structure
+- HOOK (≤8 words): a concrete image, a number, a confession, or an unexpected claim. NOT a rhetorical question. NOT "X is lying to you". NOT "Most people don't realise…".
+- BEAT 1: a real moment with a sensory detail (a time of day, a place, a sound, a thing a person did).
+- BEAT 2: a sharp turn — escalate, contradict, or zoom in. Reveal something specific.
+- BEAT 3: the payoff. A single sentence that lands.
+- (Optional) CTA: max one line, only if it feels earned. Otherwise skip it.
 
-## Subject:
+## Hard Rules
+1. NEVER use these openers or any close variant: "Your X is lying to you", "Most apps just X", "Most people don't realise", "Welcome to", "In this video", "Today we're going to", "Here's the truth about", "Stop doing X".
+2. NEVER use marketing words: "game-changer", "revolutionary", "seamlessly", "powerful", "amazing", "next-level", "supercharge", "unlock", "elevate", "transform" (as a verb).
+3. NEVER list features in a sentence ("it does X, Y, and Z"). Show one feature through a specific scene instead.
+4. NEVER use em-dashes to glue two SaaS clauses together.
+5. Concrete > abstract. "Tuesday 2pm, your focus dropped" beats "when productivity dips".
+6. Second person, present tense, contractions, conversational. Read it aloud — if it sounds like a press release, rewrite.
+7. Each sentence on its own line (helps TTS pacing).
+8. Output ONLY the raw spoken script. No markdown, no headings, no stage directions, no quotation marks around the whole thing.
+9. Match the language of the subject.
+
+## Good Example (subject: a focus-aware task app)
+3:14 pm. You opened Slack instead of the doc that's due.
+Your task list didn't notice. It still says "draft the proposal" like nothing happened.
+Fauna noticed. It saw the tab switch, the typing slow down, the seventh time you checked your phone.
+So it moved the proposal to tomorrow morning and put something easier in front of you.
+You finished three things before five. The proposal got done before coffee the next day.
+
+## Bad Example (do NOT write like this)
+Your to-do list is lying to you.
+Most apps just collect tasks — they never tell you when to actually do them.
+Fauna fixes that by turning your list into a live schedule.
+(reason: generic opener, SaaS-feature sentence, no concrete moment, no payoff)
+
+## Subject
 {subject}
 
-Now write the script.`;
+Now write the script. Start with the hook line directly — no preamble, no labels.`;
 
 const TERMS_PROMPT = `# Role: Video Search Terms Generator
 
@@ -90,7 +107,7 @@ export async function generateScript({ subject, durationSec = 30, language = 'en
   const r = await client.chat.completions.create({
     model,
     messages: [{ role: 'user', content: prompt }],
-    temperature: 0.8,
+    temperature: 1.0,
     max_tokens: 1024,
   });
   const raw = r?.choices?.[0]?.message?.content || '';
