@@ -2257,7 +2257,7 @@ export function executeSelfTool(toolName, args, context = {}) {
       return JSON.stringify({ ok: true, id, lesson });
     }
     case 'fauna_list_lesson_kinds': {
-      return JSON.stringify({ ok: true, kinds: LESSON_KINDS, actions: LESSON_ACTIONS });
+      return JSON.stringify({ ok: true, kinds: LESSON_KINDS, actions: [...LESSON_ACTIONS] });
     }
 
     // ── Stock imagery ─────────────────────────────────────────────────────

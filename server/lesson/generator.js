@@ -61,7 +61,7 @@ export const LESSON_KINDS = {
 };
 
 // ── DSL validator ──────────────────────────────────────────────────────
-const ACTION_DOS = new Set([
+export const ACTION_DOS = new Set([
   'write', 'draw', 'fade-in', 'fade-out', 'highlight',
   'connect', 'plot', 'type', 'move', 'rotate', 'scale',
   'circle', 'underline', 'arrow', 'erase', 'flash',
