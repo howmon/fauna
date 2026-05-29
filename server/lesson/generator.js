@@ -59,6 +59,8 @@ export const LESSON_KINDS = {
   molecule:{ props: ['atoms', 'bonds'],                                notes: '2D structural formula. atoms: [{el,x,y}], bonds: [{a,b,order}]. (3D ball-stick variant deferred to next pack.)' },
   // Circuit pack — re-uses the existing renderCircuit() from lib/.
   circuit: { props: ['doc'],                                           notes: 'Circuit schematic. doc is the same DSL accepted by fauna_render_circuit.' },
+  // Composite — high-level so the LLM doesn't have to place every node by hand.
+  flow:    { props: ['nodes', 'direction', 'shape', 'color', 'labelPos', 'showArrows'], notes: 'Sequence / pipeline / lifecycle diagram. nodes: [{label, color?, fill?}]. direction: "horizontal"(default)|"vertical". shape: "circle"(default)|"rect". labelPos: "below"(default)|"inside"|"above". showArrows: true(default) — draws arrows between consecutive nodes. The runtime auto-spaces nodes evenly across the available canvas width/height starting from the prop\'s (x,y) — USE THIS for any "step 1 → step 2 → step 3" / "phase 1 → phase 2" / "process flow" / "lifecycle" diagram instead of placing individual shape+text+arrow props.' },
 };
 
 // ── DSL validator ──────────────────────────────────────────────────────
@@ -196,6 +198,19 @@ ${_kindsCatalog()}
 6. Coordinates are in the 1280×720 canvas. Leave a 60px margin. Plan layout per-scene: pick distinct (x,y) for every prop so NOTHING overlaps. Title at top (y≈60). Diagrams in the middle band (y 180–520). Labels/captions below their referent. For "text" props longer than ~40 chars, ALWAYS set a "w" (width in px) so it wraps — e.g. {kind:"text", content:"...", w: 1100}. Default font size for body text is 24–28px; titles 36–48px. Never let text run past x+w > 1220.
 7. **Each scene starts on a FRESH, EMPTY canvas by default.** Re-introduce the title/header as its own prop on each scene if you want it visible. If a scene needs to build on the previous scene's drawing (cumulative), add \`"keep": true\` at the scene level — but use this sparingly. Default behavior (fresh canvas) is almost always what you want.
 8. Aim for 3–7 actions per scene. More than 10 is too busy.
+9. **For ANY sequence / pipeline / lifecycle / process / "step 1 → step 2" diagram, use ONE \`flow\` prop — never hand-place shape+text+arrow props for these.** A flow prop renders all nodes evenly spaced, auto-connects them with arrows, and positions labels correctly. Example:
+   \`\`\`
+   "props": {
+     "lifecycle": { "kind": "flow", "nodes": [
+       {"label":"Alpha","color":"#f59e0b"},
+       {"label":"Beta","color":"#3b82f6"},
+       {"label":"Stable","color":"#22c55e"},
+       {"label":"Deprecated","color":"#ef4444"}
+     ], "direction":"horizontal", "shape":"circle", "labelPos":"below" }
+   },
+   "scenes":[{ "id":"lc", "actions":[ {"at":"start","do":"draw","prop":"lifecycle","x":80,"y":260} ] }]
+   \`\`\`
+   The \`x,y\` is the top-left of the flow's bounding box; you can also pass \`w\` (defaults to canvas width minus margin) and \`h\` (defaults to 240).
 
 Generate the lesson now.`;
 }

@@ -521,6 +521,98 @@ const RUNTIME_JS = `
         }
         break;
       }
+      case 'flow': {
+        if (!g.querySelector('g.flow-root')) {
+          const root = document.createElementNS(SVG_NS, 'g');
+          root.classList.add('flow-root');
+          const nodes = Array.isArray(prop.nodes) ? prop.nodes : [];
+          const direction = prop.direction === 'vertical' ? 'vertical' : 'horizontal';
+          const shape = prop.shape === 'rect' ? 'rect' : 'circle';
+          const labelPos = (prop.labelPos === 'inside' || prop.labelPos === 'above') ? prop.labelPos : 'below';
+          const showArrows = prop.showArrows !== false;
+          // Available size — bounded so we never overflow the canvas.
+          const availW = Math.max(200, Math.min(CANVAS_W - x - 40, action.w || prop.w || (CANVAS_W - x - 60)));
+          const availH = Math.max(120, Math.min(CANVAS_H - y - 40, action.h || prop.h || 240));
+          const n = nodes.length || 1;
+          const NODE_R = shape === 'circle' ? Math.max(28, Math.min(60, ((direction === 'horizontal' ? availW : availH) / n) * 0.22)) : 0;
+          const NODE_W = shape === 'rect' ? Math.max(80, Math.min(180, ((direction === 'horizontal' ? availW : availH) / n) * 0.55)) : NODE_R * 2;
+          const NODE_H = shape === 'rect' ? 56 : NODE_R * 2;
+          // Step from CENTER to CENTER along the layout axis.
+          const stepAxis = direction === 'horizontal' ? availW : availH;
+          const step = n > 1 ? (stepAxis - NODE_W) / (n - 1) : 0;
+          const positions = [];
+          for (let i = 0; i < n; i++) {
+            let cx, cy;
+            if (direction === 'horizontal') {
+              cx = (NODE_W / 2) + i * step;
+              cy = availH / 2;
+            } else {
+              cx = availW / 2;
+              cy = (NODE_H / 2) + i * step;
+            }
+            positions.push({ cx, cy });
+          }
+          // Arrows first so they sit under the nodes.
+          if (showArrows && n > 1) {
+            for (let i = 0; i < n - 1; i++) {
+              const a = positions[i], b = positions[i + 1];
+              const dx = b.cx - a.cx, dy = b.cy - a.cy;
+              const L = Math.hypot(dx, dy) || 1;
+              const padA = (shape === 'circle' ? NODE_R : NODE_W / 2) + 6;
+              const padB = (shape === 'circle' ? NODE_R : NODE_W / 2) + 10;
+              const sx = a.cx + (dx / L) * padA, sy = a.cy + (dy / L) * padA;
+              const ex = b.cx - (dx / L) * padB, ey = b.cy - (dy / L) * padB;
+              const ln = document.createElementNS(SVG_NS, 'line');
+              ln.setAttribute('x1', String(sx)); ln.setAttribute('y1', String(sy));
+              ln.setAttribute('x2', String(ex)); ln.setAttribute('y2', String(ey));
+              ln.setAttribute('stroke', prop.color || '#1a1a1a');
+              ln.setAttribute('stroke-width', '2');
+              ln.setAttribute('marker-end', 'url(#arrowhead)');
+              root.appendChild(ln);
+            }
+          }
+          // Nodes + labels.
+          for (let i = 0; i < n; i++) {
+            const node = nodes[i] || {};
+            const { cx, cy } = positions[i];
+            const fill = node.fill || _flowFill(node.color);
+            const stroke = node.color || _flowStroke(i);
+            if (shape === 'circle') {
+              const c = document.createElementNS(SVG_NS, 'circle');
+              c.setAttribute('cx', String(cx)); c.setAttribute('cy', String(cy));
+              c.setAttribute('r', String(NODE_R));
+              c.setAttribute('fill', fill); c.setAttribute('stroke', stroke); c.setAttribute('stroke-width', '2');
+              root.appendChild(c);
+            } else {
+              const r = document.createElementNS(SVG_NS, 'rect');
+              r.setAttribute('x', String(cx - NODE_W / 2)); r.setAttribute('y', String(cy - NODE_H / 2));
+              r.setAttribute('width', String(NODE_W)); r.setAttribute('height', String(NODE_H));
+              r.setAttribute('rx', '8'); r.setAttribute('ry', '8');
+              r.setAttribute('fill', fill); r.setAttribute('stroke', stroke); r.setAttribute('stroke-width', '2');
+              root.appendChild(r);
+            }
+            const label = String(node.label || '');
+            if (label) {
+              const t = document.createElementNS(SVG_NS, 'text');
+              let ly;
+              if (labelPos === 'inside') {
+                ly = cy + 5; t.setAttribute('fill', stroke);
+              } else if (labelPos === 'above') {
+                ly = cy - (shape === 'circle' ? NODE_R : NODE_H / 2) - 10; t.setAttribute('fill', '#1a1a1a');
+              } else {
+                ly = cy + (shape === 'circle' ? NODE_R : NODE_H / 2) + 22; t.setAttribute('fill', '#1a1a1a');
+              }
+              t.setAttribute('x', String(cx)); t.setAttribute('y', String(ly));
+              t.setAttribute('text-anchor', 'middle');
+              t.setAttribute('font-size', '16'); t.setAttribute('font-weight', '600');
+              t.textContent = label;
+              root.appendChild(t);
+            }
+          }
+          g.appendChild(root);
+        }
+        break;
+      }
       default:
         // Unknown kind: render a debug stub.
         if (!g.querySelector('text')) {
@@ -539,6 +631,23 @@ const RUNTIME_JS = `
   }
   function _atomTextColor(el) {
     return (el === 'C' || el === 'Br') ? '#fff' : '#000';
+  }
+
+  // Flow palette — translucent fills paired with the stroke color so the
+  // diagram reads well on the cream whiteboard background.
+  const _FLOW_PALETTE = ['#f59e0b', '#3b82f6', '#22c55e', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16'];
+  function _flowStroke(i) { return _FLOW_PALETTE[i % _FLOW_PALETTE.length]; }
+  function _flowFill(color) {
+    if (!color) return 'rgba(0,0,0,0.04)';
+    // Convert hex to rgba with low alpha so node interiors don't compete with labels.
+    const hex = String(color).trim();
+    const m = /^#([0-9a-f]{6})$/i.exec(hex);
+    if (m) {
+      const n = parseInt(m[1], 16);
+      const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+      return 'rgba(' + r + ',' + g + ',' + b + ',0.18)';
+    }
+    return color;
   }
 
   function _resolveAnchor(ref, action) {
