@@ -1087,7 +1087,7 @@ async function streamResponse(conv) {
     var _ctxUsage = null;
 
     // Build chat request body — include agent info when active
-    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: state.figmaMCPEnabled, usePlaywrightMCP: state.playwrightMCPEnabled || false, selectedFigmaFileKeys: _getSelectedFigmaFileKeysFromAttachments(state.pendingAttachments), contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false };
+    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: state.figmaMCPEnabled, usePlaywrightMCP: state.playwrightMCPEnabled || false, selectedFigmaFileKeys: _getSelectedFigmaFileKeysFromAttachments(state.pendingAttachments), contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false, conversationId: (conv && conv.id) || null };
     // Autonomous-mode (run-until-done) flag. Per-conversation override wins;
     // otherwise the server falls back to the active project's setting.
     // `false` is forwarded explicitly so a conversation can opt OUT of a

@@ -567,6 +567,7 @@ export function registerChatRoute(app, {
       const selfToolContext = {
         getModels: () => FALLBACK_MODELS,
         activeProjectId: projectId || null,
+        convId: req.body?.conversationId || null,
         getSettings: () => ({
           model,
           thinkingBudget,

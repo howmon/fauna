@@ -64,6 +64,13 @@ import crypto from 'crypto';
 import { spawn } from 'child_process';
 import * as devServerRegistry from './server/lib/dev-server-registry.js';
 
+// Per-conversation active plan state. Survives across the multiple
+// /api/chat requests that the client's plan auto-continue feature fires
+// off when a turn is split — without this, the one-plan-per-turn guard
+// in fauna_plan resets every hop and the model is free to drop a new
+// disjoint plan after a failure.
+const _activePlansByConv = new Map();
+
 const HOME = os.homedir();
 
 function _runCmd(cmd, argv, input) {
@@ -2229,6 +2236,16 @@ export function executeSelfTool(toolName, args, context = {}) {
       // existing list by appending new ones — never replace it with a
       // disjoint shorter list because a step failed.
       try {
+        // Per-conversation persistence so the guard survives the client's
+        // plan auto-continue mechanism, which posts a fresh /api/chat
+        // request (and thus a fresh selfToolContext) each hop. Without
+        // this, the model can drop a brand-new plan in the next request
+        // because `context._activePlanState` was just initialised empty.
+        const convId = context && context.convId;
+        if (convId && !context._activePlanState) {
+          const stored = _activePlansByConv.get(convId);
+          if (stored) context._activePlanState = stored;
+        }
         const prev = context && context._activePlanState;
         if (prev && Array.isArray(prev.items) && prev.items.length) {
           const norm_ = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -2251,6 +2268,12 @@ export function executeSelfTool(toolName, args, context = {}) {
         }
         if (context) {
           context._activePlanState = { items: norm, explanation: args.explanation || '' };
+          const convId2 = context.convId;
+          if (convId2) {
+            const allDone = norm.every(it => it.status === 'completed' || it.status === 'cancelled');
+            if (allDone) _activePlansByConv.delete(convId2);
+            else _activePlansByConv.set(convId2, context._activePlanState);
+          }
         }
       } catch (_) { /* non-fatal */ }
 
