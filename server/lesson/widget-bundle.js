@@ -85,8 +85,8 @@ const CSS = `
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; background: var(--ui-bg); color: var(--ui-fg); font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; height: 100%; overflow: hidden; }
 #root { display: grid; grid-template-rows: 1fr auto auto; height: 100vh; gap: 0; }
-#canvas-wrap { position: relative; background: var(--bg); overflow: hidden; }
-#board { width: 100%; height: 100%; display: block; }
+#canvas-wrap { position: relative; background: var(--bg); overflow: hidden; display: flex; align-items: center; justify-content: center; }
+#board { width: 100%; height: 100%; display: block; overflow: hidden; background: var(--bg); }
 #overlay { position: absolute; inset: 0; pointer-events: none; }
 #cue-strip {
   position: absolute; left: 0; right: 0; bottom: 0;
@@ -124,6 +124,17 @@ html, body { margin: 0; padding: 0; background: var(--ui-bg); color: var(--ui-fg
 .scene-chip:hover { background: #404048; }
 .scene-chip.active { background: var(--accent); border-color: var(--accent); }
 .prop-node { transform-box: fill-box; transform-origin: center; }
+.prop-text-fo { overflow: visible; }
+.prop-text-box {
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  line-height: 1.35;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  white-space: normal;
+}
+.prop-text-box.font-serif { font-family: Georgia, "Times New Roman", serif; }
+.prop-text-box.font-hand { font-family: "Caveat", "Bradley Hand", cursive; }
 .prop-text { fill: var(--ink); font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
 .prop-text.font-serif { font-family: Georgia, "Times New Roman", serif; }
 .prop-text.font-hand { font-family: "Caveat", "Bradley Hand", cursive; }
@@ -234,24 +245,33 @@ const RUNTIME_JS = `
 
     switch (prop.kind) {
       case 'text': {
-        if (!g.querySelector('text')) {
-          const t = document.createElementNS(SVG_NS, 'text');
-          t.classList.add('prop-text');
-          if (prop.font) t.classList.add('font-' + prop.font);
-          t.setAttribute('font-size', String(prop.fontSize || 28));
-          if (prop.color) t.setAttribute('fill', prop.color);
-          t.textContent = String(prop.content || '');
-          g.appendChild(t);
+        if (!g.querySelector('foreignObject')) {
+          const maxW = Math.max(200, Math.min(CANVAS_W - x - 40, prop.w || (CANVAS_W - x - 60)));
+          const fo = document.createElementNS(SVG_NS, 'foreignObject');
+          fo.setAttribute('width', String(maxW));
+          fo.setAttribute('height', String(prop.h || 400));
+          fo.classList.add('prop-text-fo');
+          const div = document.createElement('div');
+          const fontClass = prop.font ? (' font-' + prop.font) : '';
+          div.className = 'prop-text-box' + fontClass;
+          div.style.fontSize = (prop.fontSize || 28) + 'px';
+          if (prop.color) div.style.color = prop.color;
+          if (prop.align) div.style.textAlign = prop.align;
+          if (prop.weight) div.style.fontWeight = String(prop.weight);
+          div.textContent = String(prop.content || '');
+          fo.appendChild(div);
+          g.appendChild(fo);
         }
         break;
       }
       case 'latex': {
         if (!g.querySelector('foreignObject')) {
+          const maxW = Math.max(200, Math.min(CANVAS_W - x - 40, prop.w || 800));
           const fo = document.createElementNS(SVG_NS, 'foreignObject');
-          fo.setAttribute('width', '600'); fo.setAttribute('height', '120');
+          fo.setAttribute('width', String(maxW)); fo.setAttribute('height', String(prop.h || 200));
           fo.classList.add('prop-latex');
           const div = document.createElement('div');
-          div.style.cssText = 'display:inline-block;color:#1a1a1a;';
+          div.style.cssText = 'display:inline-block;color:#1a1a1a;max-width:100%;overflow-x:auto;';
           try {
             if (window.katex) window.katex.render(String(prop.tex || ''), div, { displayMode: !!prop.display, throwOnError: false });
             else div.textContent = prop.tex;
@@ -741,9 +761,15 @@ const RUNTIME_JS = `
   // ── Scene playback ──────────────────────────────────────────────────
   function loadScene(idx, opts = {}) {
     if (idx < 0 || idx >= LESSON.scenes.length) return;
+    const scene = LESSON.scenes[idx];
+    // Clear previous scene's props unless the new scene opts in to a
+    // cumulative canvas via {keep:true}. This prevents titles/diagrams
+    // from stacking on top of each other across scenes.
+    if (opts.preserveCanvas !== true && scene.keep !== true) {
+      resetCanvas();
+    }
     sceneIndex = idx;
     sceneState[idx].ranActions = new Set();
-    const scene = LESSON.scenes[idx];
     audio.src = scene.audioUrl || '';
     audio.load();
     sceneLbl.textContent = (idx + 1) + ' / ' + LESSON.scenes.length + ' · ' + (scene.id || '');
@@ -797,7 +823,7 @@ const RUNTIME_JS = `
     const chip = document.createElement('div');
     chip.className = 'scene-chip';
     chip.textContent = (i+1) + '. ' + (s.id || ('scene ' + (i+1)));
-    chip.addEventListener('click', () => { resetCanvas(); loadScene(i, { autoplay: true }); });
+    chip.addEventListener('click', () => { loadScene(i, { autoplay: true }); });
     sceneList.appendChild(chip);
   });
 
@@ -811,7 +837,7 @@ const RUNTIME_JS = `
     if (audio.paused) audio.play().catch(()=>{}); else audio.pause();
   });
   prevBtn.addEventListener('click', () => {
-    if (sceneIndex > 0) { resetCanvas(); replayUpTo(sceneIndex - 1); loadScene(sceneIndex - 1); }
+    if (sceneIndex > 0) { loadScene(sceneIndex - 1); }
   });
   nextBtn.addEventListener('click', () => {
     if (sceneIndex < LESSON.scenes.length - 1) { loadScene(sceneIndex + 1); }
@@ -826,7 +852,7 @@ const RUNTIME_JS = `
       if (i === LESSON.scenes.length - 1) idx = i;
     }
     if (idx !== sceneIndex) {
-      resetCanvas(); replayUpTo(idx - 1); loadScene(idx, { autoplay: false });
+      loadScene(idx, { autoplay: false });
     }
     const local = total - sceneStarts[idx];
     try { audio.currentTime = Math.max(0, local); } catch (_) {}
@@ -866,7 +892,7 @@ const RUNTIME_JS = `
           let idx = -1;
           if (typeof m.args?.scene === 'number') idx = m.args.scene;
           else if (typeof m.args?.scene === 'string') idx = LESSON.scenes.findIndex(s => s.id === m.args.scene);
-          if (idx >= 0) { resetCanvas(); replayUpTo(idx - 1); loadScene(idx); }
+          if (idx >= 0) { loadScene(idx); }
           break;
         }
         case 'set_speed':  audio.playbackRate = Math.max(0.5, Math.min(2, Number(m.args?.rate) || 1)); speedSel.value = String(audio.playbackRate); break;

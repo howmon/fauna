@@ -44,7 +44,7 @@ function _run(cmd, args) {
 // Adding a new pack = adding entries here + a handler in the runtime.
 export const LESSON_KINDS = {
   // Universal
-  text:    { props: ['content', 'fontSize', 'color', 'font'],          notes: 'Plain text label. content (string), fontSize (default 28), color (CSS), font ("sans"|"serif"|"hand"). Coordinates set via action.' },
+  text:    { props: ['content', 'fontSize', 'color', 'font', 'w', 'align', 'weight'], notes: 'Plain text label that wraps. content (string), fontSize (default 28), color (CSS), font ("sans"|"serif"|"hand"), w (max width in px BEFORE wrapping — REQUIRED for any text > ~40 chars), align ("left"|"center"|"right"), weight (e.g. 600).' },
   latex:   { props: ['tex', 'display'],                                notes: 'LaTeX expression. tex (string, e.g. "\\\\int 2x dx"), display (true=block,false=inline).' },
   shape:   { props: ['shape', 'w', 'h', 'fill', 'stroke', 'r'],        notes: 'shape: "rect"|"circle"|"ellipse"|"line"|"triangle". w/h or r in pixels; fill/stroke CSS.' },
   arrow:   { props: ['from', 'to', 'label', 'curve', 'color'],         notes: 'Arrow between two anchor points or two prop ids. from/to: {x,y} OR "<propId>" (uses prop center). label optional. curve (number, 0=straight). Triggered by {do:"draw"} or {do:"connect"}.' },
@@ -182,8 +182,8 @@ ${_kindsCatalog()}
 3. Narration is the actual spoken transcript. The tutor does not say "let's draw X" — they just teach, and the actions illustrate.
 4. Keep prop ids short and snake_case (e.g. "eq_main", "graph1", "u_label").
 5. LaTeX in "latex" props must use double-backslashes inside JSON strings: "\\\\int", "\\\\frac{a}{b}". Use $-free TeX (no $ delimiters).
-6. Coordinates are in the 1280×720 canvas. Leave a 60px margin. Avoid overlapping props horizontally; spread content across the canvas.
-7. Scenes flow left-to-right / top-to-bottom on a persistent whiteboard. Use "erase" sparingly (only when you genuinely want to clear and start fresh).
+6. Coordinates are in the 1280×720 canvas. Leave a 60px margin. Plan layout per-scene: pick distinct (x,y) for every prop so NOTHING overlaps. Title at top (y≈60). Diagrams in the middle band (y 180–520). Labels/captions below their referent. For "text" props longer than ~40 chars, ALWAYS set a "w" (width in px) so it wraps — e.g. {kind:"text", content:"...", w: 1100}. Default font size for body text is 24–28px; titles 36–48px. Never let text run past x+w > 1220.
+7. **Each scene starts on a FRESH, EMPTY canvas by default.** Re-introduce the title/header as its own prop on each scene if you want it visible. If a scene needs to build on the previous scene's drawing (cumulative), add \`"keep": true\` at the scene level — but use this sparingly. Default behavior (fresh canvas) is almost always what you want.
 8. Aim for 3–7 actions per scene. More than 10 is too busy.
 
 Generate the lesson now.`;
