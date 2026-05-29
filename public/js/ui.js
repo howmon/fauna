@@ -1311,8 +1311,8 @@ var promptMap = {
   'Design a circuit':        'Design an RC low-pass filter with a 1 kHz cutoff driven by a 5V square wave. Render the schematic, validate it, then simulate the transient response and tell me the actual cutoff frequency and -3 dB point.',
   'Build a dashboard':       'Build an interactive dashboard as an HTML artifact. It should include a chart and some stats. The data is:\n\n',
   'Explain code':            'Please explain the following code:\n\n```\n// Paste your code here\n```',
-  'Write a script':          'Write and run a script that ',
-  'Search the web':          'Search the web and give me a summary of: ',
+  'Teach me something':      'Create an interactive whiteboard lesson that teaches: ',
+  'Make a podcast':          'Make a two-host podcast about: ',
   'Debug an error':          'I\'m getting this error:\n\n```\n// Paste error here\n```\n\nHere\'s my code:\n\n```\n// Paste code here\n```',
 };
 
