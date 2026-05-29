@@ -27,6 +27,7 @@ import {
 } from '../video/kokoro.js';
 import { FFMPEG_PATH } from '../video/ffmpeg-path.js';
 import { splitIntoCues } from '../video/narration.js';
+import { extractSourceText } from './source-extract.js';
 
 const LESSONS_ROOT = path.join(os.homedir(), '.fauna', 'lessons');
 
@@ -113,14 +114,24 @@ function _kindsCatalog() {
   return lines.join('\n');
 }
 
-function _scriptUserPrompt({ topic, durationMin, voice }) {
+function _scriptUserPrompt({ topic, durationMin, voice, sourceText, sourceKind }) {
   const sceneCount = Math.max(3, Math.min(20, Math.round(durationMin * 2.5))); // ~24s avg per scene
+  const sourceBlock = sourceText ? `
+
+## Source material (${sourceKind || 'document'}) — GROUND THE LESSON IN THIS
+
+The user supplied this source. Treat it as canonical: cover its main points in order, preserve key terminology and numbers, and do NOT invent facts that contradict it. Where the source has slides, you may map roughly one scene per slide (combine trivial slides, split dense ones).
+
+<<<SOURCE_BEGIN>>>
+${sourceText}
+<<<SOURCE_END>>>
+` : '';
   return `# Lesson DSL
 
 Design a whiteboard lesson on this topic:
 
   ${topic}
-
+${sourceBlock}
 Target spoken duration: ~${durationMin} minute(s).
 Aim for ~${sceneCount} scenes (each 15–40 seconds of narration). Each scene is a single conceptual beat with its own narration and a small set of animated actions.
 
@@ -189,10 +200,10 @@ ${_kindsCatalog()}
 Generate the lesson now.`;
 }
 
-export async function generateLessonDSL({ topic, durationMin = 5, voice, client, model = 'claude-sonnet-4.6' }) {
+export async function generateLessonDSL({ topic, durationMin = 5, voice, client, model = 'claude-sonnet-4.6', sourceText, sourceKind }) {
   if (!topic || !String(topic).trim()) throw new Error('topic is required');
   if (!client) throw new Error('client is required');
-  const user = _scriptUserPrompt({ topic, durationMin, voice });
+  const user = _scriptUserPrompt({ topic, durationMin, voice, sourceText, sourceKind });
   const r = await client.chat.completions.create({
     model,
     messages: [
@@ -307,10 +318,20 @@ export async function synthesizeLessonAudio({ lesson, lessonId, onProgress }) {
  * Full pipeline: LLM → DSL → validate → audio. Returns the synthesized
  * lesson and the id used for filesystem storage.
  */
-export async function createLesson({ topic, durationMin = 5, voice, client, model, onProgress }) {
+export async function createLesson({ topic, durationMin = 5, voice, client, model, onProgress, source }) {
   const id = 'L_' + Date.now().toString(36) + crypto.randomBytes(2).toString('hex');
+  let sourceText, sourceKind;
+  if (source) {
+    if (onProgress) onProgress({ phase: 'source', source });
+    const ext = await extractSourceText(source);
+    if (ext?.ok) {
+      sourceText = ext.text;
+      sourceKind = ext.kind;
+      if (!topic || !String(topic).trim()) topic = `Teach the contents of this ${ext.kind} source`;
+    }
+  }
   if (onProgress) onProgress({ phase: 'script' });
-  const dsl = await generateLessonDSL({ topic, durationMin, voice, client, model });
+  const dsl = await generateLessonDSL({ topic, durationMin, voice, client, model, sourceText, sourceKind });
   const v = validateLesson(dsl);
   if (!v.ok) throw new Error('lesson DSL invalid: ' + v.errors.join('; '));
   if (onProgress) onProgress({ phase: 'audio-start', sceneCount: dsl.scenes.length });

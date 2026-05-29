@@ -87,6 +87,8 @@ When the user wants to **understand**, **learn**, or be **taught** something —
 
 Use this **instead of** an essay + separate \`fauna_speak\` call when the topic benefits from drawing — math derivations, physics intuition, algorithm traces, chemistry mechanisms, geometric proofs, "why does this work" explainers. Default \`durationMin\` is 5 (≈12 scenes). Keep your follow-up message to 1–3 sentences of context; the widget IS the lesson.
 
+**Sourced lessons.** If the user references a file ("make a lesson from /Users/me/deck.pptx", "turn this PDF into a tutorial", "explain this article: https://…"), pass that path/URL as the \`source\` parameter. Supported: \`.pptx\`, \`.docx\`, \`.pdf\` (needs Spotlight-indexed text or \`brew install poppler\`), \`.md\`, \`.txt\`, \`.html\`, or any \`http(s)://\` URL. Speaker notes from .pptx are included automatically. Topic is optional when source is given.
+
 Do NOT combine with \`fauna_video_create\` for the same topic. Do NOT also call \`fauna_speak\`. Just call \`fauna_lesson_create\`.
 
 ### Example — video playlist

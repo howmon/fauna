@@ -1459,15 +1459,16 @@ export const SELF_TOOL_DEFS = [
     function: {
       name: 'fauna_lesson_create',
       description:
-        'Generate an interactive whiteboard lesson and mount it INLINE in chat as a sandboxed runtime widget — NOT a video file. The widget shows a 1280×720 whiteboard that animates props (text, LaTeX equations, shapes, arrows, function plots, number lines, code, molecules, embedded svg/circuits) in sync with per-scene Kokoro narration. Use this whenever the user wants to be TAUGHT something visually — "explain", "teach me", "walk me through", "interactive lesson on", "show me how X works", anything where a moving illustration would help more than prose. Returns immediately after audio synthesis; the widget then plays scene-by-scene on user gesture. Do NOT also produce a separate fauna_speak / fauna_video_create call for the same topic.',
+        'Generate an interactive whiteboard lesson and mount it INLINE in chat as a sandboxed runtime widget — NOT a video file. The widget shows a 1280×720 whiteboard that animates props (text, LaTeX equations, shapes, arrows, function plots, number lines, code, molecules, embedded svg/circuits) in sync with per-scene Kokoro narration. Use this whenever the user wants to be TAUGHT something visually — "explain", "teach me", "walk me through", "interactive lesson on", "show me how X works", anything where a moving illustration would help more than prose. You can also ground the lesson in a specific document by passing `source` (a local file path to a .pptx / .docx / .pdf / .md / .txt / .html, or a URL) — the slide deck or article text is extracted and fed to the script generator so the lesson follows that material. Returns immediately after audio synthesis; the widget then plays scene-by-scene on user gesture. Do NOT also produce a separate fauna_speak / fauna_video_create call for the same topic.',
       parameters: {
         type: 'object',
         properties: {
-          topic: { type: 'string', description: 'What the lesson teaches. Be specific: "How does the derivative of sin(x) become cos(x)?", "Pythagorean theorem with a visual proof", "Why does ice float on water?".' },
+          topic: { type: 'string', description: 'What the lesson teaches. Be specific: "How does the derivative of sin(x) become cos(x)?", "Pythagorean theorem with a visual proof", "Why does ice float on water?". Optional if `source` is given (we will use "Teach the contents of this source").' },
+          source: { type: 'string', description: 'Optional ground-truth material. Either (a) an absolute path or ~/path to a local .pptx, .docx, .pdf, .md, .txt, or .html file, or (b) an http(s):// URL to a web page or slide. The text content (and pptx speaker notes) is extracted and used as canonical source for the lesson script. Use this when the user says things like "make a lesson from this deck", "turn this PDF into a tutorial", "explain this article visually".' },
           durationMin: { type: 'number', description: 'Target length in minutes (1–10). Default 5. Longer = more scenes; expect ~2.5 scenes per minute.' },
           voice: { type: 'string', description: 'Kokoro voice id for narration. Defaults to af_bella. Pick a calm voice for math/science (am_michael, bf_emma).' },
         },
-        required: ['topic'],
+        required: [],
       },
     },
   },
@@ -2210,13 +2211,15 @@ export function executeSelfTool(toolName, args, context = {}) {
       return (async () => {
         try {
           const topic = String(args.topic || '').trim();
-          if (!topic) return JSON.stringify({ ok: false, error: 'topic required' });
+          const source = args.source ? String(args.source).trim() : null;
+          if (!topic && !source) return JSON.stringify({ ok: false, error: 'topic or source required' });
           const durationMin = Math.max(1, Math.min(10, Number(args.durationMin) || 5));
           const client = videoGetCopilotClient();
           // Stream phase updates to chat so the user sees progress.
           const onProgress = (evt) => {
             try {
-              const label = evt.phase === 'script' ? 'Drafting lesson script…'
+              const label = evt.phase === 'source' ? `Extracting source: ${evt.source}…`
+                : evt.phase === 'script' ? 'Drafting lesson script…'
                 : evt.phase === 'audio-start' ? `Synthesizing audio for ${evt.sceneCount} scenes…`
                 : evt.phase === 'audio' ? `Audio scene ${evt.sceneIndex + 1}/${evt.total}`
                 : evt.phase;
@@ -2224,7 +2227,7 @@ export function executeSelfTool(toolName, args, context = {}) {
             } catch (_) {}
           };
           const { id, lesson, warnings } = await lessonCreate({
-            topic, durationMin, voice: args.voice, client, onProgress,
+            topic, source, durationMin, voice: args.voice, client, onProgress,
           });
           const built = buildLessonWidget({ lessonId: id, lesson });
           const widgetResult = _emitWidget({
