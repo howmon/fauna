@@ -2171,6 +2171,38 @@ export function executeSelfTool(toolName, args, context = {}) {
       const hasVerify = !!(last && VERIFY_RE.test(last.title));
       const verifyHint = hasVerify ? null
         : 'Plan is missing a final verification/testing step. Add an item like "Verify: <how you will prove it works>" before ending the turn.';
+
+      // ── One-plan-per-turn enforcement ──────────────────────────────────
+      // Once a plan is in flight in this turn, subsequent fauna_plan calls
+      // must either (a) flip statuses on the SAME items or (b) extend the
+      // existing list by appending new ones — never replace it with a
+      // disjoint shorter list because a step failed.
+      try {
+        const prev = context && context._activePlanState;
+        if (prev && Array.isArray(prev.items) && prev.items.length) {
+          const norm_ = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+          const prevTitles = new Set(prev.items.map(it => norm_(it.title)));
+          const newTitles  = norm.map(it => norm_(it.title));
+          const overlap = newTitles.filter(t => prevTitles.has(t)).length;
+          const overlapRatio = overlap / Math.max(prev.items.length, norm.length);
+          // Replacement detected: new list is materially different and not
+          // a strict superset of the previous one.
+          const isExtension = norm.length >= prev.items.length && overlap >= prev.items.length;
+          if (!isExtension && overlapRatio < 0.7) {
+            return JSON.stringify({
+              ok: false,
+              refused: true,
+              error: 'A plan is already in flight for this turn. Do NOT start a new plan because a step failed — instead: (1) call fauna_substep to narrate the recovery, (2) try a different approach for the failing step, and (3) only call fauna_plan again with the SAME items (status flips only) or with the original list + APPENDED new items. Sending a brand-new shorter/different list is a hard error.',
+              activePlan: prev.items,
+              rejectedAttempt: norm,
+            });
+          }
+        }
+        if (context) {
+          context._activePlanState = { items: norm, explanation: args.explanation || '' };
+        }
+      } catch (_) { /* non-fatal */ }
+
       // Surface to renderer so the UI can render a checklist (best-effort).
       try {
         if (typeof context.sendToRenderer === 'function') {
