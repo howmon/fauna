@@ -883,6 +883,9 @@ async function streamResponse(conv) {
   // Track widgets emitted during this assistant turn so they can be persisted
   // on the message and remounted after a reload.
   var _streamWidgets = [];
+  // Track the most recent plan emitted by fauna_plan so it persists on the
+  // message and can be remounted after a reload.
+  var _currentPlan = null;
   function _ensureLiveMessageAttached() {
     if (!conv._streaming) return;
     if (!msgEl) return;
@@ -1160,6 +1163,14 @@ async function streamResponse(conv) {
             _addToolStatus(toolLabel);
             if (isActive()) scrollBottom();
           }
+          if (evt.type === 'plan_update') {
+            _currentPlan = { items: Array.isArray(evt.items) ? evt.items : [], explanation: evt.explanation || '' };
+            _ensureLiveMessageAttached();
+            if (typeof window.renderPlanPanel === 'function' && msgEl) {
+              window.renderPlanPanel(msgEl, _currentPlan, true);
+            }
+            if (isActive()) scrollBottom();
+          }
           if (evt.type === 'widget_emitted' && window.faunaDynamicWidgets) {
             dbg('widget_emitted: ' + evt.widgetId, 'ok');
             // Persist a serialisable snapshot so the widget can be remounted on reload.
@@ -1377,6 +1388,7 @@ async function streamResponse(conv) {
     if (_currentAgentInfo) aiMsg.agentInfo = _currentAgentInfo;
     if (_reasoning) aiMsg.reasoning = { durationSeconds: _reasoning.durationSeconds != null ? _reasoning.durationSeconds : (_reasoning.startedAt ? Math.round((Date.now() - _reasoning.startedAt) / 1000) : null) };
     if (_streamWidgets.length) aiMsg.widgets = _streamWidgets;
+    if (_currentPlan && _currentPlan.items && _currentPlan.items.length) aiMsg.plan = _currentPlan;
     conv.messages.push(aiMsg);
     conv._streaming = false;
     conv._abortController = null;

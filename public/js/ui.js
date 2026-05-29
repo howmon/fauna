@@ -611,7 +611,91 @@ function createMessageEl(role, agentInfo) {
   return div;
 }
 
-function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML, reasoning, widgets) {
+// Renders / updates a condensed plan checklist inside an assistant message
+// bubble. Idempotent — if a .plan-panel already exists it is reused so
+// status flips don't blow away animation state. Status icons:
+//   completed   → ti-circle-check  (green)
+//   in-progress → spinner (loader animation)
+//   cancelled   → ti-x (muted)
+//   not-started → empty circle (muted)
+// `isLive` controls whether the panel shows a "working" label vs a final
+// "Plan" header. Exposed on window for chat.js + ui.js history rehydrate.
+window.renderPlanPanel = function renderPlanPanel(msgEl, plan, isLive) {
+  if (!msgEl || !plan || !Array.isArray(plan.items)) return;
+  var items = plan.items;
+  var panel = msgEl.querySelector('.plan-panel');
+  var bodyAnchor = msgEl.querySelector('.msg-body');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.className = 'plan-panel';
+    panel.dataset.open = '1';
+    var headerBtn = document.createElement('button');
+    headerBtn.className = 'plan-toggle';
+    headerBtn.type = 'button';
+    headerBtn.innerHTML =
+      '<i class="ti ti-list-check plan-header-icon"></i>' +
+      '<span class="plan-label">Plan</span>' +
+      '<span class="plan-summary"></span>' +
+      '<i class="ti ti-chevron-down plan-chevron"></i>';
+    var listEl = document.createElement('ul');
+    listEl.className = 'plan-list';
+    panel.appendChild(headerBtn);
+    panel.appendChild(listEl);
+    headerBtn.addEventListener('click', function() {
+      panel.dataset.open = panel.dataset.open === '1' ? '0' : '1';
+    });
+    if (bodyAnchor) msgEl.insertBefore(panel, bodyAnchor);
+    else msgEl.appendChild(panel);
+  }
+  var listEl2 = panel.querySelector('.plan-list');
+  var summaryEl = panel.querySelector('.plan-summary');
+  // Diff render — keep existing rows where ids match so we don't trash DOM.
+  var existingById = {};
+  Array.from(listEl2.children).forEach(function(li) {
+    var id = li.getAttribute('data-id');
+    if (id) existingById[id] = li;
+  });
+  var seen = {};
+  items.forEach(function(it, idx) {
+    var id = String(it.id != null ? it.id : (idx + 1));
+    seen[id] = true;
+    var li = existingById[id];
+    if (!li) {
+      li = document.createElement('li');
+      li.className = 'plan-item';
+      li.setAttribute('data-id', id);
+      li.innerHTML =
+        '<span class="plan-icon"></span>' +
+        '<span class="plan-text"></span>';
+      listEl2.appendChild(li);
+    }
+    li.dataset.status = it.status || 'not-started';
+    var iconEl = li.querySelector('.plan-icon');
+    var textEl = li.querySelector('.plan-text');
+    var iconHtml = '';
+    if (it.status === 'completed') {
+      iconHtml = '<i class="ti ti-circle-check-filled"></i>';
+    } else if (it.status === 'in-progress') {
+      iconHtml = '<i class="ti ti-loader-2 plan-spin"></i>';
+    } else if (it.status === 'cancelled') {
+      iconHtml = '<i class="ti ti-circle-x"></i>';
+    } else {
+      iconHtml = '<i class="ti ti-circle"></i>';
+    }
+    iconEl.innerHTML = iconHtml;
+    textEl.textContent = it.title || '';
+  });
+  // Drop rows for items no longer in the plan.
+  Object.keys(existingById).forEach(function(id) {
+    if (!seen[id]) existingById[id].remove();
+  });
+  var done = items.filter(function(x){ return x.status === 'completed'; }).length;
+  var total = items.length;
+  if (summaryEl) summaryEl.textContent = total ? (done + '/' + total) : '';
+  panel.dataset.live = isLive ? '1' : '0';
+};
+
+function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML, reasoning, widgets, plan) {
   var el     = createMessageEl(role, agentInfo);
   var body   = el.querySelector('.msg-body');
   if (!animate) el.style.animation = 'none';
@@ -674,6 +758,11 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
   }
 
   getConvInner(state.currentId).appendChild(el);
+
+  // Remount the plan checklist if this historical message had one.
+  if (role === 'assistant' && plan && plan.items && plan.items.length && typeof window.renderPlanPanel === 'function') {
+    try { window.renderPlanPanel(el, plan, false); } catch (_) {}
+  }
 
   // Remount any dynamic widgets that were emitted in this historical message.
   // We mount AFTER the element is in the DOM so the iframe sizes correctly.

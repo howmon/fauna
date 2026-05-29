@@ -2004,6 +2004,12 @@ export function executeSelfTool(toolName, args, context = {}) {
           context.sendToRenderer('fauna:plan-update', { items: norm, explanation: args.explanation || '' });
         }
       } catch (_) {}
+      // Stream into the live chat bubble so the user sees the plan inline.
+      try {
+        if (typeof context.sendSse === 'function') {
+          context.sendSse({ type: 'plan_update', items: norm, explanation: args.explanation || '' });
+        }
+      } catch (_) {}
       const total = norm.length;
       const done = norm.filter(x => x.status === 'completed').length;
       const cur = norm.find(x => x.status === 'in-progress');

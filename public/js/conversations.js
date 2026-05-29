@@ -484,7 +484,7 @@ function loadConversation(id) {
           convInner.appendChild(autoNote);
           return;
         }
-        appendMessageDOM(m.role, m.content, m.attachments, false, m.agentInfo || null, m._isHTML || false, m.reasoning || null, m.widgets || null);
+        appendMessageDOM(m.role, m.content, m.attachments, false, m.agentInfo || null, m._isHTML || false, m.reasoning || null, m.widgets || null, m.plan || null);
       });
 
       // Divider showing where archive ends and active context begins
@@ -518,7 +518,7 @@ function loadConversation(id) {
         convInner.appendChild(autoNote);
         return;
       }
-      appendMessageDOM(m.role, m.content, m.attachments, false, m.agentInfo || null, m._isHTML || false, m.reasoning || null, m.widgets || null);
+      appendMessageDOM(m.role, m.content, m.attachments, false, m.agentInfo || null, m._isHTML || false, m.reasoning || null, m.widgets || null, m.plan || null);
     });
   }
 
