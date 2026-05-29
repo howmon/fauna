@@ -4,10 +4,12 @@
 import fs from 'fs';
 import { lessonAudioPath, loadLesson } from '../lesson/generator.js';
 import { renderLessonVideo, lessonVideoPath } from '../lesson/video-render.js';
+import { buildLessonHtmlBundle, lessonHtmlBundlePath } from '../lesson/html-export.js';
 
 // In-flight video render promises keyed by lessonId, so concurrent requests
 // (e.g. double-click on the download button) share one render job.
 const _videoJobs = new Map();
+const _htmlJobs = new Map();
 
 export function registerLessonRoutes(app, { getElectronBrowserWindow } = {}) {
   app.get('/api/lesson-audio/:lessonId/:filename', (req, res) => {
@@ -96,5 +98,37 @@ export function registerLessonRoutes(app, { getElectronBrowserWindow } = {}) {
       res.writeHead(200, headers);
       fs.createReadStream(mp4).pipe(res);
     }
+  });
+
+  // Build (on first request) and stream a portable HTML+audio zip suitable
+  // for upload to any static web host.
+  app.get('/api/lesson-html/:id', async (req, res) => {
+    const id = String(req.params.id || '');
+    if (!/^L_[a-z0-9]{8,32}$/i.test(id)) return res.status(400).json({ ok: false, error: 'bad id' });
+    const lesson = loadLesson(id);
+    if (!lesson) return res.status(404).json({ ok: false, error: 'lesson not found' });
+    const force = req.query.force === '1';
+    const wantDownload = req.query.download === '1';
+    const zipFile = lessonHtmlBundlePath(id);
+    try {
+      if (force || !fs.existsSync(zipFile) || fs.statSync(zipFile).size === 0) {
+        if (!_htmlJobs.has(id)) {
+          _htmlJobs.set(id, buildLessonHtmlBundle({ lessonId: id, force }).finally(() => _htmlJobs.delete(id)));
+        }
+        await _htmlJobs.get(id);
+      }
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: 'bundle failed: ' + err.message });
+    }
+    if (!fs.existsSync(zipFile)) return res.status(500).json({ ok: false, error: 'zip missing after build' });
+    const stat = fs.statSync(zipFile);
+    const safeTitle = String(lesson.title || 'lesson').replace(/[^a-z0-9._-]+/gi, '_').slice(0, 60) || 'lesson';
+    const headers = {
+      'Content-Type': 'application/zip',
+      'Content-Length': stat.size,
+    };
+    if (wantDownload) headers['Content-Disposition'] = `attachment; filename="${safeTitle}-bundle.zip"`;
+    res.writeHead(200, headers);
+    fs.createReadStream(zipFile).pipe(res);
   });
 }

@@ -41,6 +41,7 @@ export function buildLessonWidget({ lessonId, lesson, port = 3737 }) {
     </select>
     <span id="scene-label"></span>
     <a id="download-mp4" href="/api/lesson-video/${lessonId}?download=1" download="lesson.mp4" title="Download MP4 video (renders on first click — may take a minute)">⬇ MP4</a>
+    <a id="download-html" href="/api/lesson-html/${lessonId}?download=1" download="lesson-bundle.zip" title="Download self-contained HTML + audio zip — upload to any website">⬇ HTML</a>
   </div>
   <div id="scene-list"></div>
 </div>
@@ -118,6 +119,11 @@ html, body { margin: 0; padding: 0; background: var(--ui-bg); color: var(--ui-fg
   border-radius: 6px; padding: 6px 12px; font-size: 13px; margin-left: auto;
 }
 #download-mp4:hover { background: #404048; }
+#download-html {
+  background: #303035; color: var(--ui-fg); text-decoration: none;
+  border-radius: 6px; padding: 6px 12px; font-size: 13px;
+}
+#download-html:hover { background: #404048; }
 #scene-list {
   display: flex; gap: 4px; padding: 6px 14px; overflow-x: auto;
   background: #18181b; border-top: 1px solid #303035; max-height: 60px;
