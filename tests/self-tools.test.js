@@ -54,7 +54,7 @@ describe('self-tools', () => {
       // (full desktop-agent toolkit via cached Swift helper / UIAutomation).
       // Bumped to 34 after adding fauna_screen_context (Clippy-style one-call
       // snapshot — frontmost app + window + AX clickable nodes).
-      expect(SELF_TOOL_DEFS).toHaveLength(43);
+      expect(SELF_TOOL_DEFS).toHaveLength(45);
     });
 
     it('each tool has required OpenAI function format', () => {

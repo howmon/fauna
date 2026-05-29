@@ -62,6 +62,7 @@ import { registerAgentBuilderRoutes } from './server/routes/agent-builder.js';
 import { registerAgentSandboxRoutes } from './server/routes/agent-sandbox.js';
 import { registerMemoryPrefsFactsRoutes } from './server/routes/memory-prefs-facts.js';
 import { registerVoiceSettingsRoutes } from './server/routes/voice-settings.js';
+import { registerKokoroTtsRoutes } from './server/routes/kokoro-tts.js';
 import { registerWhisperRoutes } from './server/routes/whisper.js';
 import { registerVideoRoutes } from './server/routes/video.js';
 import { registerPlaywrightMcpRoutes } from './server/routes/playwright-mcp.js';
@@ -249,6 +250,7 @@ registerFileFilterRoutes(app);
 // ── /api/fetch-url moved → server/routes/fetch-url.js ──
 registerFetchUrlRoutes(app);
 registerVoiceSettingsRoutes(app);
+registerKokoroTtsRoutes(app);
 
 // ── Browser (Playwright) routes moved → server/bridges/playwright-browse.js ──
 registerBrowseRoutes(app, { require: _require });

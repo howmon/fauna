@@ -68,6 +68,16 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 - For image galleries, use \`Playlist\` with \`type:"image"\` items, or a \`Carousel\` of \`Image\` children.
 - Keep prose (the intro sentence) BEFORE the gen-ui block, then the playlist as the final element.
 
+### "Read this aloud" / podcasts (Kokoro TTS)
+When the user asks you to **read** something aloud, **narrate**, **say**, or wants a **podcast / dialogue / interview** generated from text:
+
+- **Single voice ("read me this article", "read this", "say this")** → call \`fauna_speak({text, voice?})\`. It returns \`{url, durationSec, voice}\`. Then emit a gen-ui \`MediaPlayer\` with \`type:"audio"\`, \`src:<url>\`, \`autoplay:true\`, and a short \`title\`.
+  - If the source is a URL/article, call \`/api/fetch-url\` first (via the appropriate tool) to grab the article text, then pass the cleaned prose (no markdown) to \`fauna_speak\`.
+- **Multi-voice ("make a podcast", "two-host conversation", "interview")** → script the back-and-forth as alternating turns, then call \`fauna_podcast({segments:[{voice,text}, …]})\`. Use different voices for each host (e.g. \`am_michael\` + \`bf_emma\` for a male US host + female UK guest). Emit a gen-ui \`MediaPlayer\` with the returned URL.
+- Default voice: \`af_bella\` (warm US female). Other good picks: \`af_heart\`, \`am_michael\`, \`am_puck\`, \`bf_emma\`, \`bm_george\`.
+- Generation is fully local and cached by content hash — re-running the same text+voice is instant.
+- For "read the news": fetch an RSS feed or news URL via the URL fetch tool, summarize/script it, then \`fauna_speak\` for a single anchor read or \`fauna_podcast\` for a two-host bulletin.
+
 ### Example — video playlist
 \`\`\`gen-ui
 {

@@ -31,6 +31,11 @@ import {
 import { buildVideoStudioWidget } from './server/video/widget-bundle.js';
 import { getCopilotClient as videoGetCopilotClient } from './server/copilot/auth.js';
 import {
+  synthSingleKokoro,
+  synthKokoroPodcast,
+  probeKokoroDuration,
+} from './server/routes/kokoro-tts.js';
+import {
   searchStockImages,
   downloadStockImages,
   availableImageProviders,
@@ -1396,6 +1401,51 @@ export const SELF_TOOL_DEFS = [
       parameters: { type: 'object', properties: {} },
     },
   },
+  // ── Kokoro TTS — ad-hoc "speak this" and multi-voice podcasts ──────────
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_speak',
+      description:
+        'Synthesize text into an audio file with the bundled Kokoro neural TTS, returning a URL the renderer can play. Use this when the user asks to "read aloud", "read me this article", "say this", "narrate", or otherwise wants spoken audio for a single chunk of text. After calling it, emit a gen-ui block with a MediaPlayer (type:"audio", src: returned url, title: <short label>, autoplay:true) so the audio plays inline. Do NOT use this for multi-speaker podcasts — use fauna_podcast for that. Returns {ok, url, durationSec, voice}.',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'The text to read aloud. Plain text, may contain punctuation. Max ~20000 chars. Strip markdown formatting first if reading a markdown article.' },
+          voice: { type: 'string', description: 'Optional Kokoro voice id. Defaults to af_bella. Other good picks: af_heart (warm), am_michael (US male), bf_emma (UK female), bm_george (UK male). Accepts "kokoro:<id>" or bare id.' },
+        },
+        required: ['text'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_podcast',
+      description:
+        'Generate a multi-voice podcast / dialogue from an ordered list of speaker turns and return ONE audio URL covering all turns concatenated with natural pauses between speakers. Use this when the user asks for a "podcast", "dialogue", "conversation", "interview", "two-host", or "multi-voice" reading — including "make a podcast from this article" (you script the back-and-forth first, then call this). After calling it, emit a gen-ui block with a MediaPlayer (type:"audio", src: returned url, title:<show title>, autoplay:true). Returns {ok, url, durationSec, segmentCount}.',
+      parameters: {
+        type: 'object',
+        properties: {
+          segments: {
+            type: 'array',
+            description: 'Ordered speaker turns. Each turn is {voice, text}. Alternate voices for hosts/guests. Example: [{voice:"am_michael",text:"Welcome back to the show…"},{voice:"bf_emma",text:"Thanks Mike, today we\'re digging into…"}]',
+            items: {
+              type: 'object',
+              properties: {
+                voice: { type: 'string', description: 'Kokoro voice id (e.g. "af_bella", "am_michael", "bf_emma", "bm_george"). Accepts "kokoro:<id>" or bare id.' },
+                text:  { type: 'string', description: 'What this speaker says on this turn. One or more sentences.' },
+              },
+              required: ['voice', 'text'],
+            },
+          },
+          gapSec: { type: 'number', description: 'Silence (seconds) inserted between consecutive turns. Default 0.35.' },
+          title: { type: 'string', description: 'Optional podcast title (used only for caller context — not embedded in the audio).' },
+        },
+        required: ['segments'],
+      },
+    },
+  },
   // ── Stock imagery (Pexels / Unsplash / Pixabay) ────────────────────────
   // Use these any time you need real photographs for a generated artefact
   // (websites, slide decks, social cards, marketing copy, etc.). The tool
@@ -2070,6 +2120,48 @@ export function executeSelfTool(toolName, args, context = {}) {
         stepsDone: j.stepsDone, finalPath: j.artifacts.finalPath,
       }));
       return JSON.stringify({ ok: true, jobs });
+    }
+
+    // ── Kokoro TTS — ad-hoc speak + multi-voice podcasts ─────────────────
+    case 'fauna_speak': {
+      return (async () => {
+        try {
+          const text = String(args.text || '').trim();
+          if (!text) return JSON.stringify({ ok: false, error: 'text required' });
+          if (text.length > 20000) return JSON.stringify({ ok: false, error: 'text too long (>20000 chars)' });
+          const { id, file, voice } = await synthSingleKokoro({ text, voice: args.voice });
+          const durationSec = await probeKokoroDuration(file);
+          return JSON.stringify({
+            ok: true,
+            id,
+            url: `/api/kokoro-audio/${id}.mp3`,
+            durationSec,
+            voice,
+          });
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: e.message });
+        }
+      })();
+    }
+    case 'fauna_podcast': {
+      return (async () => {
+        try {
+          const segments = Array.isArray(args.segments) ? args.segments : null;
+          if (!segments || !segments.length) return JSON.stringify({ ok: false, error: 'segments required' });
+          const gapSec = Number.isFinite(args.gapSec) ? Number(args.gapSec) : 0.35;
+          const { id, file } = await synthKokoroPodcast({ segments, gapSec });
+          const durationSec = await probeKokoroDuration(file);
+          return JSON.stringify({
+            ok: true,
+            id,
+            url: `/api/kokoro-audio/${id}.mp3`,
+            durationSec,
+            segmentCount: segments.length,
+          });
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: e.message });
+        }
+      })();
     }
 
     // ── Stock imagery ─────────────────────────────────────────────────────
