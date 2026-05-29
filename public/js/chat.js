@@ -221,7 +221,14 @@ function _fallbackSuggestionsFromMessage(buffer) {
   if (/code|patch|changed|updated|implemented|fixed/i.test(text)) {
     return ['Review the changes', 'Run verification', 'Continue refining'];
   }
-  return ['Continue', 'Verify the result', 'Summarize what changed'];
+  // Q&A / brainstorm / idea responses — let the user act on or extend the idea
+  // rather than offering meaningless "Continue / Verify the result" buttons.
+  if (/\b(idea|app|product|build|saas|dashboard|tool|concept|feature|mvp)\b/i.test(text)) {
+    return ['Build this app', 'Refine the idea', 'Suggest another angle'];
+  }
+  // Default: keep it action-relevant to the assistant having just spoken,
+  // not the stale "Continue / Verify / Summarize" triplet.
+  return ['Tell me more', 'Try a different angle', 'Make it concrete'];
 }
 
 // Extract the trailing "summary" text of a rendered message: the visible prose
@@ -894,9 +901,12 @@ async function streamResponse(conv) {
       if (existing !== msgEl) existing.remove();
     });
     inner.appendChild(msgEl);
-    // Keep any conversation-level suggestion bar pinned to the very bottom.
-    var bar = inner.querySelector(':scope > .suggestion-bar');
-    if (bar) inner.appendChild(bar);
+    // A new live message is taking the bottom slot. Drop any existing
+    // conversation-level suggestion bar: it was generated against an earlier
+    // (incomplete) turn and would now appear ABOVE the just-attached summary.
+    // The current message's `done` handler will regenerate a fresh, contextual
+    // bar at the proper position.
+    Array.from(inner.querySelectorAll(':scope > .suggestion-bar')).forEach(function(b) { b.remove(); });
     if (isActive()) { showMessages(); forceScrollBottom(); }
   }
   function _streamingStatusHtml(label) {
