@@ -202,13 +202,27 @@ async function rerender() {
 }
 async function regenerateScript() {
   $('btn-regen-script').disabled = true;
+  $('btn-regen-script').textContent = 'Regenerating…';
   try {
-    await fetch(BASE + '/api/video/jobs/' + JOB_ID + '/step/script', {
+    const r = await fetch(BASE + '/api/video/jobs/' + JOB_ID + '/step/script?force=1', {
       method: 'POST', headers: { 'Content-Type':'application/json' },
       body: JSON.stringify({ force: true }),
     });
+    const j = await r.json();
+    if (!j.ok) {
+      $('err').textContent = j.error || 'Regenerate failed';
+    } else if (j.job?.artifacts?.script) {
+      // Overwrite the textarea immediately so the user sees the new copy
+      // even if a subsequent refresh races.
+      $('script-text').value = j.job.artifacts.script;
+      state = j.job;
+      paint();
+    }
+  } catch (e) {
+    $('err').textContent = String(e.message || e);
   } finally {
     $('btn-regen-script').disabled = false;
+    $('btn-regen-script').textContent = 'Regenerate script';
     refresh();
   }
 }
