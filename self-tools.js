@@ -1332,6 +1332,22 @@ export const SELF_TOOL_DEFS = [
       },
     },
   },
+  // ── Plan substep narration (live "what I'm doing right now" under current step) ──
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_substep',
+      description: 'Stream a tiny "what I am doing right now" line that appears NESTED under the current in-progress plan step. Use this INSTEAD of long narrative prose between actions. Each call replaces the previous live substep for that step (the user only sees the latest). When the parent plan item flips to completed, all its substeps collapse into a click-to-expand history. Keep messages SHORT (3-8 words, action verbs): "Reading vite.config.ts", "Wiring API route", "Creating migration 0001_init". Call this BEFORE each tool action or whenever you would otherwise write a status sentence.',
+      parameters: {
+        type: 'object',
+        properties: {
+          stepId: { type: 'number', description: 'The plan item id (from fauna_plan) this substep belongs to. If omitted, attaches to the current in-progress item.' },
+          message: { type: 'string', description: 'Short action-oriented status (3-8 words).' },
+        },
+        required: ['message'],
+      },
+    },
+  },
   // ── Chain of debate (multi-perspective sub-agents + judge) ─────────────
   {
     type: 'function',
@@ -2176,6 +2192,18 @@ export function executeSelfTool(toolName, args, context = {}) {
         summary: `${done}/${total} complete${cur ? `; current: ${cur.title}` : ''}`,
         hint: verifyHint || undefined,
       });
+    }
+
+    case 'fauna_substep': {
+      const message = String(args.message || '').trim();
+      if (!message) return JSON.stringify({ ok: false, error: 'message required' });
+      const stepId = Number.isFinite(args.stepId) ? args.stepId : null;
+      try {
+        if (typeof context.sendSse === 'function') {
+          context.sendSse({ type: 'substep_update', stepId, message });
+        }
+      } catch (_) {}
+      return JSON.stringify({ ok: true });
     }
 
     // ── Chain of debate ──

@@ -1039,11 +1039,24 @@ body.is-resizing webview { pointer-events: none !important; }
   list-style: none; margin: 0; padding: 6px 0;
 }
 .plan-item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 4px 14px;
+  display: block; padding: 0;
   font-size: 13px; line-height: 1.45;
   color: var(--fau-text);
 }
+.plan-item-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 14px; cursor: pointer;
+  border-radius: 4px;
+}
+.plan-item[data-has-substeps="1"] .plan-item-row:hover { background: var(--fau-surface2, rgba(255,255,255,.04)); }
+.plan-item[data-has-substeps="0"] .plan-item-row { cursor: default; }
+.plan-item-chevron {
+  font-size: 13px; color: var(--fau-text-muted); opacity: 0;
+  transition: transform .15s ease, opacity .15s ease;
+}
+.plan-item[data-has-substeps="1"] .plan-item-chevron { opacity: .55; }
+.plan-item[data-expanded="1"] .plan-item-chevron { transform: rotate(0deg); opacity: .9; }
+.plan-item:not([data-expanded="1"]) .plan-item-chevron { transform: rotate(-90deg); }
 .plan-item[data-status="not-started"] { color: var(--fau-text-muted); }
 .plan-item[data-status="cancelled"]   { color: var(--fau-text-muted); text-decoration: line-through; }
 .plan-icon {
@@ -1056,6 +1069,28 @@ body.is-resizing webview { pointer-events: none !important; }
 .plan-item[data-status="cancelled"]   .plan-icon { color: var(--fau-text-muted); opacity: 0.6; }
 .plan-spin { animation: spin 1s linear infinite; display: inline-block; }
 .plan-text { flex: 1; }
+
+/* ── Plan substeps (nested live narration) ─────────────────── */
+.plan-substeps {
+  list-style: none; margin: 0;
+  padding: 2px 0 6px 40px;
+  font-size: 12px; line-height: 1.4;
+  color: var(--fau-text-muted);
+}
+.plan-substep {
+  display: flex; align-items: center; gap: 6px;
+  padding: 2px 0;
+  animation: planSubstepFadeIn .18s ease;
+}
+.plan-substep-dot {
+  font-size: 8px; color: var(--fau-text-muted); opacity: .7;
+  width: 12px; flex-shrink: 0;
+}
+.plan-substep .plan-spin { font-size: 12px; color: var(--accent, #4a90e2); opacity: 1; }
+@keyframes planSubstepFadeIn {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 
 /* ── Attachment bar ────────────────────────────────────────────────── */
 #input-wrap.drag-over { border-color: var(--accent); background: var(--accent-dim); }

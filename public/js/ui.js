@@ -665,10 +665,21 @@ window.renderPlanPanel = function renderPlanPanel(msgEl, plan, isLive) {
       li.className = 'plan-item';
       li.setAttribute('data-id', id);
       li.innerHTML =
-        '<span class="plan-icon"></span>' +
-        '<span class="plan-text"></span>';
+        '<div class="plan-item-row">' +
+          '<span class="plan-icon"></span>' +
+          '<span class="plan-text"></span>' +
+          '<i class="ti ti-chevron-down plan-item-chevron"></i>' +
+        '</div>' +
+        '<ul class="plan-substeps"></ul>';
+      // Click toggles substep visibility for this step.
+      var row = li.querySelector('.plan-item-row');
+      row.addEventListener('click', function(e) {
+        e.stopPropagation();
+        li.dataset.expanded = li.dataset.expanded === '1' ? '0' : '1';
+      });
       listEl2.appendChild(li);
     }
+    var prevStatus = li.dataset.status;
     li.dataset.status = it.status || 'not-started';
     var iconEl = li.querySelector('.plan-icon');
     var textEl = li.querySelector('.plan-text');
@@ -684,6 +695,39 @@ window.renderPlanPanel = function renderPlanPanel(msgEl, plan, isLive) {
     }
     iconEl.innerHTML = iconHtml;
     textEl.textContent = it.title || '';
+
+    // ── Substeps: live shows only latest under in-progress; completed collapses ──
+    var subs = Array.isArray(it.substeps) ? it.substeps : [];
+    var subsEl = li.querySelector('.plan-substeps');
+    var hasSubs = subs.length > 0;
+    li.dataset.hasSubsteps = hasSubs ? '1' : '0';
+    // Auto-collapse expanded view when status flips to completed (transient → archived).
+    if (prevStatus === 'in-progress' && it.status === 'completed') li.dataset.expanded = '0';
+    if (hasSubs) {
+      // Render either ALL substeps (when user expanded the step) or just the LATEST
+      // (when item is in-progress, condensed live view). Completed items hide subs
+      // entirely unless expanded.
+      var expanded = li.dataset.expanded === '1';
+      var toShow;
+      if (expanded) toShow = subs.slice();
+      else if (it.status === 'in-progress') toShow = subs.slice(-1);
+      else toShow = []; // completed/cancelled/not-started → hide unless expanded
+      // Re-render only when content changes to avoid blowing animations.
+      var signature = (expanded ? 'A:' : 'L:') + toShow.length + ':' + (toShow[toShow.length-1] || '');
+      if (subsEl.dataset.signature !== signature) {
+        subsEl.dataset.signature = signature;
+        subsEl.innerHTML = toShow.map(function(s, i) {
+          var isLast = i === toShow.length - 1;
+          var dot = (isLast && it.status === 'in-progress')
+            ? '<i class="ti ti-loader-2 plan-spin plan-substep-dot"></i>'
+            : '<i class="ti ti-point-filled plan-substep-dot"></i>';
+          return '<li class="plan-substep">' + dot + '<span>' + escHtml(s) + '</span></li>';
+        }).join('');
+      }
+    } else {
+      subsEl.innerHTML = '';
+      subsEl.dataset.signature = '';
+    }
   });
   // Drop rows for items no longer in the plan.
   Object.keys(existingById).forEach(function(id) {

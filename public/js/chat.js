@@ -1164,12 +1164,38 @@ async function streamResponse(conv) {
             if (isActive()) scrollBottom();
           }
           if (evt.type === 'plan_update') {
-            _currentPlan = { items: Array.isArray(evt.items) ? evt.items : [], explanation: evt.explanation || '' };
+            // Preserve existing substeps by id when the model resends the full plan.
+            var prevSubs = {};
+            if (_currentPlan && Array.isArray(_currentPlan.items)) {
+              _currentPlan.items.forEach(function(it) { if (it && it.id != null) prevSubs[it.id] = it.substeps || []; });
+            }
+            var newItems = Array.isArray(evt.items) ? evt.items.map(function(it) {
+              var keep = prevSubs[it.id] || [];
+              return Object.assign({}, it, { substeps: keep });
+            }) : [];
+            _currentPlan = { items: newItems, explanation: evt.explanation || '' };
             _ensureLiveMessageAttached();
             if (typeof window.renderPlanPanel === 'function' && msgEl) {
               window.renderPlanPanel(msgEl, _currentPlan, true);
             }
             if (isActive()) scrollBottom();
+          }
+          if (evt.type === 'substep_update') {
+            if (!_currentPlan) _currentPlan = { items: [], explanation: '' };
+            // Find target step: explicit stepId or current in-progress.
+            var sid = (typeof evt.stepId === 'number') ? evt.stepId : null;
+            var target = null;
+            if (sid != null) target = _currentPlan.items.find(function(it){ return it.id === sid; });
+            if (!target) target = _currentPlan.items.find(function(it){ return it.status === 'in-progress'; });
+            if (target) {
+              if (!Array.isArray(target.substeps)) target.substeps = [];
+              target.substeps.push(String(evt.message || ''));
+              if (target.substeps.length > 50) target.substeps.shift();
+              _ensureLiveMessageAttached();
+              if (typeof window.renderPlanPanel === 'function' && msgEl) {
+                window.renderPlanPanel(msgEl, _currentPlan, true);
+              }
+            }
           }
           if (evt.type === 'widget_emitted' && window.faunaDynamicWidgets) {
             dbg('widget_emitted: ' + evt.widgetId, 'ok');
