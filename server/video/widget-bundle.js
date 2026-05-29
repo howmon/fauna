@@ -149,11 +149,24 @@ function paint() {
   const prev = $('preview');
   prev.className = 'preview' + (p.aspect === '16:9' ? ' landscape' : '');
   if (a.finalPath) {
-    prev.innerHTML = '';
-    const v = document.createElement('video');
-    v.src = BASE + '/api/video/jobs/' + JOB_ID + '/file?path=final';
-    v.controls = true; v.preload = 'metadata';
-    prev.appendChild(v);
+    // Cache-bust on every render completion so the <video> doesn't keep
+    // showing the previous mp4 (same URL, identical bytes from the browser
+    // cache's perspective).
+    const bust = encodeURIComponent(state.updatedAt || Date.now());
+    const newSrc = BASE + '/api/video/jobs/' + JOB_ID + '/file?path=final&v=' + bust;
+    let v = prev.querySelector('video');
+    if (!v) {
+      prev.classList.remove('placeholder');
+      prev.innerHTML = '';
+      v = document.createElement('video');
+      v.controls = true; v.preload = 'metadata';
+      prev.appendChild(v);
+    }
+    if (v.dataset.src !== newSrc) {
+      v.dataset.src = newSrc;
+      v.src = newSrc;
+      v.load();
+    }
   } else {
     prev.classList.add('placeholder');
     prev.innerHTML = '<span>No video yet — run the pipeline.</span>';
