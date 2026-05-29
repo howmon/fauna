@@ -647,6 +647,10 @@ window.renderPlanPanel = function renderPlanPanel(msgEl, plan, isLive) {
     if (bodyAnchor) msgEl.insertBefore(panel, bodyAnchor);
     else msgEl.appendChild(panel);
   }
+  // Stash the latest plan ref on the panel so per-item click handlers (which
+  // capture only the initial closure) can re-trigger a render to surface
+  // archived substeps after the plan finishes streaming.
+  panel._planRef = plan;
   var listEl2 = panel.querySelector('.plan-list');
   var summaryEl = panel.querySelector('.plan-summary');
   // Diff render — keep existing rows where ids match so we don't trash DOM.
@@ -671,11 +675,16 @@ window.renderPlanPanel = function renderPlanPanel(msgEl, plan, isLive) {
           '<i class="ti ti-chevron-down plan-item-chevron"></i>' +
         '</div>' +
         '<ul class="plan-substeps"></ul>';
-      // Click toggles substep visibility for this step.
+      // Click toggles substep visibility for this step. Re-invoke
+      // renderPlanPanel inline so an expand click after the plan has
+      // finished still surfaces the archived substep history (no
+      // plan_update will fire again once streaming is done).
       var row = li.querySelector('.plan-item-row');
       row.addEventListener('click', function(e) {
         e.stopPropagation();
         li.dataset.expanded = li.dataset.expanded === '1' ? '0' : '1';
+        var cachedPlan = panel._planRef;
+        if (cachedPlan) window.renderPlanPanel(msgEl, cachedPlan, panel.dataset.live === '1');
       });
       listEl2.appendChild(li);
     }
