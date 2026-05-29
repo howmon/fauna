@@ -2132,6 +2132,8 @@ async function startProjectRun(srcId) {
 
 async function stopProjectRun(runId, projectId) {
   var pid = projectId || (state.activeProjectId);
+  // Dev-server registry entries (no project) live at /api/runs/:id (DELETE).
+  if (!pid) return stopDevServerRun(runId);
   try {
     var r = await fetch('/api/projects/' + pid + '/runs/' + runId, { method: 'DELETE' });
     if (!r.ok) throw new Error((await r.json()).error);
@@ -2139,6 +2141,24 @@ async function stopProjectRun(runId, projectId) {
     if (_runOpenLogId === runId) _runLogClose();
     await _runRefresh();
   } catch(e) { _showToast('Stop failed: ' + e.message, true); }
+}
+
+async function stopDevServerRun(runId) {
+  try {
+    var r = await fetch('/api/runs/' + encodeURIComponent(runId), { method: 'DELETE' });
+    var j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'stop failed');
+    _showToast('Stopped');
+  } catch(e) { _showToast('Stop failed: ' + e.message, true); }
+}
+
+async function restartDevServerRun(runId) {
+  try {
+    var r = await fetch('/api/runs/' + encodeURIComponent(runId) + '/restart', { method: 'POST' });
+    var j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'restart failed');
+    _showToast('Restarting…');
+  } catch(e) { _showToast('Restart failed: ' + e.message, true); }
 }
 
 async function dismissProjectRun(runId, projectId) {
@@ -3085,23 +3105,27 @@ function openPortsDashboard() {
       var isActive = r.status === 'running' || r.status === 'starting';
       var portStr = r.port ? ':' + r.port : '(no port)';
       var statusDot = '<span class="proj-run-status-dot proj-run-status-' + r.status + '"></span>';
+      var pidArg = r.projectId ? ("'" + r.projectId + "'") : 'null';
       var openBtn = r.port && isActive
         ? '<button class="proj-action-btn" style="padding:3px 10px;font-size:11px" onclick="openRunInBrowser(\'http://localhost:' + r.port + '\');document.querySelector(\'.proj-modal-overlay\').remove()">Open</button>'
         : '';
+      var restartBtn = isActive && !r.projectId
+        ? '<button class="proj-action-btn" style="padding:3px 10px;font-size:11px" onclick="restartDevServerRun(\'' + r.runId + '\').then(function(){setTimeout(function(){document.querySelector(\'.proj-modal-overlay\').remove();openPortsDashboard()},400)})">Restart</button>'
+        : '';
       var stopBtn = isActive
-        ? '<button class="proj-action-btn" style="padding:3px 10px;font-size:11px;color:var(--error-light)" onclick="stopProjectRun(\'' + r.runId + '\',\'' + r.projectId + '\').then(function(){openPortsDashboard()});document.querySelector(\'.proj-modal-overlay\').remove()">Stop</button>'
+        ? '<button class="proj-action-btn" style="padding:3px 10px;font-size:11px;color:var(--error-light)" onclick="stopProjectRun(\'' + r.runId + '\',' + pidArg + ').then(function(){setTimeout(function(){document.querySelector(\'.proj-modal-overlay\')&&document.querySelector(\'.proj-modal-overlay\').remove();openPortsDashboard()},400)})">Stop</button>'
         : '';
       return '<tr class="proj-ports-row">' +
         '<td>' + statusDot + ' ' + _projEsc(r.name) + '</td>' +
-        '<td>' + _projEsc(r.srcName) + '</td>' +
+        '<td>' + _projEsc(r.srcName || '') + '</td>' +
         '<td style="font-variant-numeric:tabular-nums">' + portStr + '</td>' +
         '<td><code class="proj-run-cmd-badge">' + _projEsc(r.cmd.length > 40 ? r.cmd.slice(0,40) + '…' : r.cmd) + '</code></td>' +
-        '<td style="white-space:nowrap">' + openBtn + ' ' + stopBtn + '</td>' +
+        '<td style="white-space:nowrap">' + openBtn + ' ' + restartBtn + ' ' + stopBtn + '</td>' +
       '</tr>';
     }).join('');
 
     var html = runs.length
-      ? '<table class="proj-ports-table"><thead><tr><th>Process</th><th>Source</th><th>Port</th><th>Command</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+      ? '<table class="proj-ports-table"><thead><tr><th>Process</th><th>Folder</th><th>Port</th><th>Command</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
       : '<div class="proj-hub-empty" style="padding:32px"><i class="ti ti-server" style="font-size:28px;opacity:.3"></i><div>No active processes</div></div>';
 
     var overlay = document.createElement('div');

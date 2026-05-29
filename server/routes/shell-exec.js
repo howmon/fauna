@@ -19,6 +19,7 @@ import os from 'os';
 import { exec as _exec, spawn } from 'child_process';
 
 import { isCommandSafe, addAutoAllow, explainCommand } from '../../permission-guard.js';
+import { maybeRegister as registerDevServer } from '../lib/dev-server-registry.js';
 
 export function registerShellExecRoutes(app, {
   shellProcs,
@@ -77,6 +78,11 @@ export function registerShellExecRoutes(app, {
         stdio: ['pipe', 'pipe', 'pipe']
       });
 
+      // If this looks like a dev server (npm run dev, vite, next dev, …)
+      // register it in the global dev-server registry so the user can list /
+      // stop / restart it from the UI.
+      try { registerDevServer(child, { command, cwd: workDir, killId }); } catch (_) {}
+
       if (child.stdout) {
         child.stdout.on('data', (chunk) => {
           const text = chunk.toString();
@@ -124,6 +130,7 @@ export function registerShellExecRoutes(app, {
       }
     );
     if (killId) shellProcs.set(killId, child);
+    try { registerDevServer(child, { command, cwd: workDir, killId }); } catch (_) {}
   });
 
   app.post('/api/shell-kill', (req, res) => {

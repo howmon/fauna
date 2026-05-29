@@ -56,6 +56,8 @@ import { registerChatRoute } from './server/routes/chat.js';
 import { registerGitRoutes } from './server/routes/git.js';
 import { registerBrowseRoutes } from './server/bridges/playwright-browse.js';
 import { registerShellExecRoutes } from './server/routes/shell-exec.js';
+import { registerDevServerRoutes } from './server/routes/dev-servers.js';
+import * as _devServerRegistry from './server/lib/dev-server-registry.js';
 import { registerAgentSandboxFileRoutes } from './server/routes/agent-sandbox-files.js';
 import { registerAgentRoutes } from './server/routes/agents.js';
 import { registerAgentBuilderRoutes } from './server/routes/agent-builder.js';
@@ -153,7 +155,38 @@ const figma = createFigmaBridge({
 figma.register(app);
 
 app.get('/api/runs', (_req, res) => {
-  res.json([]);
+  // Surface the global dev-server registry so the existing Ports dashboard
+  // (public/js/projects.js#openPortsDashboard) can list / stop / restart
+  // dev servers spawned via shell-exec. Shaped to match what the dashboard
+  // already expects: { runId, projectId, name, srcName, cmd, port, status }.
+  const runs = _devServerRegistry.list().map((e) => ({
+    runId: e.id,
+    projectId: null,
+    name: e.label || e.command,
+    srcName: e.cwdShort || '',
+    cmd: e.command,
+    port: e.port,
+    status: e.status === 'starting' ? 'starting'
+          : e.status === 'running'  ? 'running'
+          : e.status === 'stopping' ? 'running'
+          : 'stopped',
+    startedAt: e.startedAt,
+  }));
+  res.json(runs);
+});
+
+// Stop / restart a tracked dev-server entry from the Ports dashboard.
+app.delete('/api/runs/:runId', (req, res) => {
+  const result = _devServerRegistry.kill(req.params.runId);
+  res.json(result);
+});
+app.post('/api/runs/:runId/restart', (req, res) => {
+  const result = _devServerRegistry.restart(req.params.runId, {
+    shellBin: SHELL_BIN,
+    isWin: IS_WIN,
+    augmentedPath: AUGMENTED_PATH,
+  });
+  res.json(result);
 });
 
 registerConversationRoutes(app, {
@@ -293,6 +326,16 @@ registerShellExecRoutes(app, {
   shellBin: SHELL_BIN,
   isWin: IS_WIN,
   getInternalAICaller: () => internalAICaller,
+});
+
+// ── Dev-server registry routes ─────────────────────────────────────────
+// Tracks long-running dev/preview servers (npm run dev, vite, next dev, …)
+// spawned via shell-exec so the user can list / stop / restart them from
+// the UI instead of accumulating orphaned ports.
+registerDevServerRoutes(app, {
+  shellBin: SHELL_BIN,
+  isWin: IS_WIN,
+  augmentedPath: AUGMENTED_PATH,
 });
 
 // ── Shell-permission / shell-exec / shell-kill moved → server/routes/shell-exec.js ──

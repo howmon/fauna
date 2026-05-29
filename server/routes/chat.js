@@ -29,6 +29,7 @@ import { GEN_UI_CATALOG_PROMPT } from '../prompts/gen-ui-catalog.js';
 import { FAUNA_CORE_GUIDELINES } from '../prompts/core-guidelines.js';
 import { SELF_TOOL_DEFS, DYNAMIC_WIDGET_TOOL_DEFS, executeSelfTool, isSelfTool } from '../../self-tools.js';
 import { runShell, formatShellResultForLLM, isCommandSafe } from '../lib/shell-runner.js';
+import { maybeRegister as registerDevServer } from '../lib/dev-server-registry.js';
 import { applyPatchText } from './agent-sandbox-files.js';
 import {
   extractWidgetRegistrations, buildEphemeralToolDefs,
@@ -624,7 +625,10 @@ export function registerChatRoute(app, {
               const id = 'tool_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
               shellProcs.set(id, child);
               child.on('exit', () => shellProcs.delete(id));
-            } : null,
+              try { registerDevServer(child, { command, cwd, killId: id }); } catch (_) {}
+            } : (child) => {
+              try { registerDevServer(child, { command, cwd }); } catch (_) {}
+            },
           });
           return formatShellResultForLLM(result);
         },
