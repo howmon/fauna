@@ -95,6 +95,11 @@
       "node_modules/playwright/**",
       "node_modules/@microsoft/workiq/**",
       "node_modules/@softeria/ms-365-mcp-server/**",
+      "node_modules/kokoro-js/**",
+      "node_modules/@huggingface/transformers/**",
+      "node_modules/onnxruntime-node/**",
+      "node_modules/onnxruntime-common/**",
+      "node_modules/onnxruntime-web/**",
       "fauna-bot/server/**",
       "fauna-bot/node_modules/**"
     ],

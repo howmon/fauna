@@ -1318,7 +1318,7 @@ export const SELF_TOOL_DEFS = [
           subject: { type: 'string', description: 'What the video is about (drives the script).' },
           durationSec: { type: 'number', description: 'Target spoken duration in seconds (default 30, range 8–120).' },
           aspect: { type: 'string', enum: ['9:16', '16:9', '1:1'], description: 'Aspect ratio (default 9:16 vertical).' },
-          voice: { type: 'string', description: 'TTS voice name. macOS: try Samantha, Alex, Daniel. Optional.' },
+          voice: { type: 'string', description: 'TTS voice. Defaults to kokoro:af_bella (bundled high-quality neural). Override with another Kokoro voice like kokoro:am_michael, kokoro:bf_emma, kokoro:bm_george, etc. Leave unset unless the user asks for a specific voice.' },
           language: { type: 'string', description: "Language code (default 'en')." },
           localFolder: { type: 'string', description: 'Optional absolute path to a folder of local mp4 clips. If set, skips stock search.' },
           autorun: { type: 'boolean', description: 'Auto-start the pipeline (default true). Set false to let the user/model edit params first.' },

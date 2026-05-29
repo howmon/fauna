@@ -34,6 +34,16 @@ let _ttsPromise = null;
 async function _getTTS({ onProgress } = {}) {
   if (_ttsPromise) return _ttsPromise;
   _ttsPromise = (async () => {
+    // Force transformers.js to use a writable cache OUTSIDE the Electron
+    // app.asar bundle. Its Node default is `<package_dir>/.cache/...`, which
+    // gets packed into asar and then onnxruntime fails with "system error
+    // number 20" (ENOTDIR) trying to read the model from inside the asar.
+    const transformers = await import('@huggingface/transformers');
+    if (transformers?.env) {
+      transformers.env.cacheDir = path.join(CACHE_DIR, 'hub');
+      // Belt-and-braces: never try to load from /models/ inside the app.
+      transformers.env.allowLocalModels = false;
+    }
     const { KokoroTTS } = await import('kokoro-js');
     if (onProgress) onProgress({ phase: 'load-model', fraction: 0 });
     const tts = await KokoroTTS.from_pretrained(MODEL_ID, {
