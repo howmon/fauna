@@ -1569,6 +1569,10 @@ body.is-resizing webview { pointer-events: none !important; }
   position: relative; display: flex; align-items: center;
   cursor: default; gap: 4px;
 }
+#ctx-meter-label {
+  font-size: 11px; color: var(--fau-text-muted);
+  white-space: nowrap; line-height: 1;
+}
 #ctx-meter-popover {
   display: none;
   position: absolute; bottom: calc(100% + 8px); right: 0;
