@@ -27,7 +27,7 @@ import { getLLMClient } from '../llm/registry.js';
 import { FALLBACK_MODELS, CHAT_COMPLETIONS_UNSUPPORTED_RE } from '../copilot/models.js';
 import { GEN_UI_CATALOG_PROMPT, GEN_UI_SHORT_HINT } from '../prompts/gen-ui-catalog.js';
 import { FAUNA_CORE_GUIDELINES, FAUNA_FRONTEND_QUALITY } from '../prompts/core-guidelines.js';
-import { computeContextFlags } from '../prompts/context-gating.js';
+import { computeContextFlags, computeToolFlags, filterToolSchemas } from '../prompts/context-gating.js';
 import { SELF_TOOL_DEFS, DYNAMIC_WIDGET_TOOL_DEFS, executeSelfTool, isSelfTool, getActivePlanForConv } from '../../self-tools.js';
 import { runShell, formatShellResultForLLM, isCommandSafe } from '../lib/shell-runner.js';
 import { maybeRegister as registerDevServer, isDevServerCommand } from '../lib/dev-server-registry.js';
@@ -785,6 +785,26 @@ export function registerChatRoute(app, {
           deduped.push(t);
         }
         mcpTools = deduped;
+      }
+
+      // ── Tool-schema gating ────────────────────────────────────────────
+      // Filter fauna_* tools down to clusters the current turn actually
+      // needs. Saves ~6-10k tokens on typical turns (the full 56-tool set
+      // is ~12k tokens). Foreign tools (figma MCP, installed agent tools,
+      // widget runtime tools) are always kept.
+      if (Array.isArray(mcpTools) && mcpTools.length && !noTools) {
+        try {
+          const _beforeCount = mcpTools.length;
+          const _beforeBytes = JSON.stringify(mcpTools).length;
+          const _toolFlags = computeToolFlags({ messages, systemPrompt, isDelegation, isCLI, noTools });
+          mcpTools = filterToolSchemas(mcpTools, _toolFlags);
+          const _afterBytes = JSON.stringify(mcpTools).length;
+          if (_afterBytes < _beforeBytes) {
+            console.log(`[chat] tool-schema gated: ${_beforeCount}→${mcpTools.length} tools, ${_beforeBytes}→${_afterBytes} chars (saved ~${Math.round((_beforeBytes - _afterBytes) / 4)} tokens) flags=${Object.keys(_toolFlags).filter(k => _toolFlags[k]).join(',')}`);
+          }
+        } catch (e) {
+          console.warn('[chat] tool-schema gating failed, sending full set:', e?.message || e);
+        }
       }
 
       // Agentic loop — re-runs if model calls tools (max 12 iterations)
