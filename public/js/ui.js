@@ -1596,8 +1596,10 @@ function updateContextMeter(data) {
   var pct = Math.min((totalUsed / limit) * 100, 100);
 
   // Circular ring: r=9, circumference≈56.55
+  // Use inline style (not attribute) because CSS .ctx-ring-arc sets
+  // stroke-dashoffset: 56.55 which overrides SVG presentation attrs.
   var offset = (56.55 * (1 - pct / 100)).toFixed(2);
-  fill.setAttribute('stroke-dashoffset', offset);
+  fill.style.strokeDashoffset = offset;
   var cls = 'ctx-ring-arc';
   if (pct > 80) cls += ' ctx-meter-danger';
   else if (pct > 50) cls += ' ctx-meter-warn';
