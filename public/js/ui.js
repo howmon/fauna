@@ -1600,8 +1600,13 @@ function updateContextMeter(data) {
   // stroke-dashoffset: 56.55 which overrides SVG presentation attrs.
   var offset = (56.55 * (1 - pct / 100)).toFixed(2);
   fill.style.strokeDashoffset = offset;
+  var hue = Math.max(0, 140 - (pct * 1.4));
+  var sat = 70 + Math.min(20, pct * 0.2);
+  var lit = 50 + Math.min(8, pct * 0.08);
+  fill.style.stroke = 'hsl(' + hue.toFixed(0) + ',' + sat.toFixed(0) + '%,' + lit.toFixed(0) + '%)';
   var cls = 'ctx-ring-arc';
-  if (pct > 80) cls += ' ctx-meter-danger';
+  if (pct > 90) cls += ' ctx-meter-critical';
+  else if (pct > 80) cls += ' ctx-meter-danger';
   else if (pct > 50) cls += ' ctx-meter-warn';
   fill.setAttribute('class', cls);
 

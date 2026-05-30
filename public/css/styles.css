@@ -1555,10 +1555,17 @@ body.is-resizing webview { pointer-events: none !important; }
   fill: none; stroke: var(--accent); stroke-width: 2.5;
   stroke-dasharray: 56.55; stroke-dashoffset: 56.55;
   stroke-linecap: round;
-  transition: stroke-dashoffset .4s ease, stroke .3s;
+  transition: stroke-dashoffset .4s ease, stroke .3s ease;
 }
-.ctx-ring-arc.ctx-meter-warn    { stroke: var(--warn); }
-.ctx-ring-arc.ctx-meter-danger  { stroke: var(--error); }
+/* Color is set inline via HSL gradient by JS; classes only drive effects */
+.ctx-ring-arc.ctx-meter-critical {
+  animation: ctx-ring-pulse 1.2s ease-in-out infinite;
+  filter: drop-shadow(0 0 3px currentColor);
+}
+@keyframes ctx-ring-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .55; }
+}
 /* figma-mcp-badge permanently offscreen — JS compat shim only */
 .figma-mcp-badge-hidden {
   position: fixed; left: -9999px; width: 1px; height: 1px;
