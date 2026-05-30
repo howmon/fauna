@@ -1790,37 +1790,23 @@ async function maybeCompressConversation(conv, opts) {
   }
 }
 
-// Codex-parity: live token-usage bar above the composer. Driven by the
-// `token_usage` SSE event emitted from server/routes/chat.js after every
-// model iteration. Updates a slim progress bar showing prompt-token usage
-// against the active model's context window.
+// Codex-parity: live token-usage forwarded into the existing #ctx-meter ring
+// in the composer toolbar (the same line as "⏎ send · ⇧⏎ newline"). Driven by
+// the `token_usage` SSE event emitted from server/routes/chat.js after every
+// model iteration. We just shape the payload to match updateContextMeter()'s
+// expected `{ usage:{ prompt_tokens, completion_tokens }, model }` contract.
 function renderTokenUsageBar(evt) {
-  var bar   = document.getElementById('token-usage-bar');
-  var fill  = document.getElementById('token-usage-fill');
-  var label = document.getElementById('token-usage-label');
-  if (!bar || !fill || !label) return;
-  var window_ = Number(evt && evt.window) || 0;
-  // Use the latest prompt-token count: that's what is actually charged to the
-  // window on the NEXT iteration (completion tokens for this iter become
-  // history for the next). Falls back to total if prompt is missing.
-  var used = Number(evt && (evt.prompt || evt.total)) || 0;
-  if (!window_ || !used) {
-    bar.style.display = 'none';
-    return;
-  }
-  var pct = Math.max(0, Math.min(100, (used / window_) * 100));
-  fill.style.width = pct.toFixed(1) + '%';
-  bar.classList.toggle('warn', pct >= 60 && pct < 85);
-  bar.classList.toggle('crit', pct >= 85);
-  var fmt = function(n) {
-    if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k';
-    return String(n);
-  };
-  label.textContent = fmt(used) + ' / ' + fmt(window_) + ' (' + pct.toFixed(0) + '%)';
-  bar.title = 'Context window: ' + used.toLocaleString() + ' / ' + window_.toLocaleString() +
-              ' tokens (' + pct.toFixed(1) + '%) — model ' + (evt.model || '?') +
-              ' — ' + (evt.iterations || 0) + ' iter';
-  bar.style.display = 'flex';
+  if (typeof updateContextMeter !== 'function') return;
+  try {
+    updateContextMeter({
+      usage: {
+        prompt_tokens:     Number(evt && evt.prompt)     || 0,
+        completion_tokens: Number(evt && evt.completion) || 0,
+        total_tokens:      Number(evt && evt.total)      || 0,
+      },
+      model: (evt && evt.model) || '',
+    });
+  } catch (_) { /* non-fatal */ }
 }
 
 function renderContextArchiveDivider(conv) {
