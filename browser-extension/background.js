@@ -571,35 +571,124 @@ async function _debuggerSession(tabId, fn, timeoutMs = 15000) {
   }
 }
 
-// Capture console messages by injecting a Runtime listener, loading the page,
-// then reading buffered entries via Log.enable + Runtime.getProperties trick.
-// Simplest reliable approach: evaluate a log-capture shim and read it back.
+// Capture console messages by injecting a shim that hooks console.*,
+// window.onerror, and unhandledrejection — plus subscribing to CDP
+// Runtime.exceptionThrown so native exceptions that never flow through
+// console.error are still captured.
 async function cmdDevtoolsConsole({ limit = 100 } = {}, tab) {
   if (!tab) return { ok: false, error: 'No active tab' };
   return await _debuggerSession(tab.id, async (target) => {
     await chrome.debugger.sendCommand(target, 'Runtime.enable', {});
-    // Read existing console entries via Log domain
     await chrome.debugger.sendCommand(target, 'Log.enable', {});
-    // Inject a shim to collect future + past entries via console override
-    const shimResult = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
-      expression: `(function(){
-        if (!window.__faunaConsoleBuf__) {
-          window.__faunaConsoleBuf__ = [];
+
+    // Subscribe to native Runtime.exceptionThrown / Log.entryAdded events
+    // for the duration of this call and push them into the page-side
+    // buffer via Runtime.evaluate. Listener stays scoped to this session.
+    const onEvent = (source, method, params) => {
+      if (!source || source.tabId !== tab.id) return;
+      let entry = null;
+      if (method === 'Runtime.exceptionThrown' && params && params.exceptionDetails) {
+        const d = params.exceptionDetails;
+        const msg = (d.exception && (d.exception.description || d.exception.value)) || d.text || 'Uncaught exception';
+        entry = {
+          level: 'error',
+          source: 'runtime.exception',
+          args: [String(msg)],
+          line: d.lineNumber || 0,
+          col: d.columnNumber || 0,
+          url: d.url || '',
+          ts: Date.now(),
+        };
+      } else if (method === 'Log.entryAdded' && params && params.entry) {
+        const e = params.entry;
+        // Surface browser-level warnings/errors (network, deprecation,
+        // security, CSP, etc.) that don't appear via console.*.
+        if (e.level === 'error' || e.level === 'warning') {
+          entry = {
+            level: e.level === 'warning' ? 'warn' : 'error',
+            source: 'log.' + (e.source || 'other'),
+            args: [String(e.text || '')],
+            line: e.lineNumber || 0,
+            url: e.url || '',
+            ts: e.timestamp ? Math.round(e.timestamp) : Date.now(),
+          };
+        }
+      }
+      if (!entry) return;
+      // Push asynchronously; ignore failures (page may be navigating).
+      chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+        expression: `(function(e){try{(window.__faunaConsoleBuf__=window.__faunaConsoleBuf__||[]).push(e);if(window.__faunaConsoleBuf__.length>500)window.__faunaConsoleBuf__.shift();}catch(_){}})(${JSON.stringify(entry)})`,
+        returnByValue: false,
+      }).catch(() => {});
+    };
+    chrome.debugger.onEvent.addListener(onEvent);
+
+    try {
+      // Inject a shim that hooks console.*, window.onerror, and
+      // unhandledrejection. Idempotent — second call is a no-op.
+      await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+        expression: `(function(){
+          if (window.__faunaConsoleShimInstalled__) return;
+          window.__faunaConsoleShimInstalled__ = true;
+          window.__faunaConsoleBuf__ = window.__faunaConsoleBuf__ || [];
+          var BUF = window.__faunaConsoleBuf__;
+          var push = function(entry){
+            BUF.push(entry);
+            if (BUF.length > 500) BUF.shift();
+          };
+          var fmt = function(a){
+            try {
+              if (a instanceof Error) return (a.stack || a.message || String(a));
+              if (typeof a === 'string') return a;
+              return JSON.stringify(a);
+            } catch (_) { return String(a); }
+          };
           var _orig = {log:console.log,warn:console.warn,error:console.error,info:console.info,debug:console.debug};
           ['log','warn','error','info','debug'].forEach(function(l){
             console[l] = function(){
-              window.__faunaConsoleBuf__.push({level:l, args:Array.from(arguments).map(function(a){try{return JSON.stringify(a);}catch(e){return String(a);}}), ts:Date.now()});
-              if(window.__faunaConsoleBuf__.length > 500) window.__faunaConsoleBuf__.shift();
-              _orig[l].apply(console,arguments);
+              push({level:l, source:'console.'+l, args:Array.from(arguments).map(fmt), ts:Date.now()});
+              try { _orig[l].apply(console, arguments); } catch (_) {}
             };
           });
-        }
-        return JSON.stringify(window.__faunaConsoleBuf__.slice(-${Math.min(limit,500)}));
-      })()`,
-      returnByValue: true, awaitPromise: false,
-    });
-    const entries = JSON.parse(shimResult?.result?.value || '[]');
-    return { ok: true, entries, count: entries.length, url: tab.url };
+          window.addEventListener('error', function(ev){
+            push({
+              level: 'error',
+              source: 'window.onerror',
+              args: [String((ev.error && (ev.error.stack || ev.error.message)) || ev.message || 'Uncaught error')],
+              line: ev.lineno || 0,
+              col:  ev.colno || 0,
+              url:  ev.filename || '',
+              ts:   Date.now(),
+            });
+          }, true);
+          window.addEventListener('unhandledrejection', function(ev){
+            var r = ev.reason;
+            push({
+              level: 'error',
+              source: 'unhandledrejection',
+              args: [String((r && (r.stack || r.message)) || (typeof r === 'string' ? r : JSON.stringify(r)) || 'Unhandled rejection')],
+              ts: Date.now(),
+            });
+          }, true);
+        })()`,
+        returnByValue: false,
+      });
+
+      // Give native CDP events a brief tick to deliver any pending entries
+      // (e.g. exceptions thrown right at the moment of attach).
+      await new Promise((r) => setTimeout(r, 120));
+
+      // Read the buffer back out.
+      const lim = Math.min(Math.max(Number(limit) || 100, 1), 500);
+      const read = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+        expression: `JSON.stringify((window.__faunaConsoleBuf__||[]).slice(-${lim}))`,
+        returnByValue: true, awaitPromise: false,
+      });
+      const entries = JSON.parse(read?.result?.value || '[]');
+      return { ok: true, entries, count: entries.length, url: tab.url };
+    } finally {
+      try { chrome.debugger.onEvent.removeListener(onEvent); } catch (_) {}
+    }
   });
 }
 

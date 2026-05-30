@@ -131,6 +131,30 @@ function browserAddTab(url, convId) {
     tab.consoleLogs.push(entry);
     if (tab.consoleLogs.length > 150) tab.consoleLogs.shift();
   });
+  // Inject a window.onerror + unhandledrejection shim on every navigation so
+  // uncaught native exceptions (which DON'T flow through console-message)
+  // are still captured into tab.consoleLogs via console.error.
+  var _injectErrorShim = function() {
+    try {
+      wv.executeJavaScript(
+        '(function(){' +
+          'if (window.__faunaErrShim__) return;' +
+          'window.__faunaErrShim__ = true;' +
+          'window.addEventListener("error", function(ev){' +
+            'try { console.error("[uncaught] " + ((ev.error && (ev.error.stack || ev.error.message)) || ev.message || "Error") + (ev.filename ? " @ " + ev.filename + ":" + ev.lineno + ":" + ev.colno : "")); } catch(_){ }' +
+          '}, true);' +
+          'window.addEventListener("unhandledrejection", function(ev){' +
+            'var r = ev.reason;' +
+            'try { console.error("[unhandledrejection] " + ((r && (r.stack || r.message)) || (typeof r === "string" ? r : JSON.stringify(r)) || "Unhandled rejection")); } catch(_){ }' +
+          '}, true);' +
+        '})();',
+        false
+      ).catch(function() {});
+    } catch (_) {}
+  };
+  wv.addEventListener('dom-ready', _injectErrorShim);
+  wv.addEventListener('did-navigate', _injectErrorShim);
+  wv.addEventListener('did-navigate-in-page', _injectErrorShim);
   if (state.currentId === cid) browserSwitchTab(tabId, cid);
   else { b.activeTabId = tabId; wv.style.display = 'none'; }
   if (url) {
