@@ -1809,6 +1809,14 @@ function renderTokenUsageBar(evt) {
   } catch (_) { /* non-fatal */ }
 }
 
+// Hide the ctx-meter ring (e.g. when starting a fresh conversation that has
+// no token_usage history yet). Called from newConversation() and from
+// loadConversation() when the target conv has no recorded usage.
+function resetContextMeter() {
+  var meter = document.getElementById('ctx-meter');
+  if (meter) meter.style.display = 'none';
+}
+
 function renderContextArchiveDivider(conv) {
   var summary = conv && conv.contextSummary ? String(conv.contextSummary) : '';
   return '<div class="msg-body conv-archive-divider-inner">' +

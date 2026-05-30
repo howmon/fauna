@@ -342,6 +342,8 @@ function newConversation() {
   loadConversation(id);
   // Clear agents — only pinned agents auto-populate in new chats
   if (typeof resetAgentChipsToPinned === 'function') resetAgentChipsToPinned();
+  // Reset the live context-window ring — fresh conv has no usage yet
+  if (typeof resetContextMeter === 'function') resetContextMeter();
   renderConvList();
   document.getElementById('msg-input').focus();
 }
@@ -444,6 +446,16 @@ function loadConversation(id) {
 
   // Switch browser pane to this conversation's tabs
   _showConvBrowserTabs(id);
+
+  // Sync the ctx-meter ring to this conv's last recorded token_usage (if any).
+  // Without this the meter would still show counts from the previous conv.
+  try {
+    if (conv.tokenUsage && typeof renderTokenUsageBar === 'function') {
+      renderTokenUsageBar(conv.tokenUsage);
+    } else if (typeof resetContextMeter === 'function') {
+      resetContextMeter();
+    }
+  } catch (_) {}
 
   // Show this conv's DOM (keeping all others alive in background)
   var convInner = showConvDom(id);
