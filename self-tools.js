@@ -71,6 +71,17 @@ import * as devServerRegistry from './server/lib/dev-server-registry.js';
 // disjoint plan after a failure.
 const _activePlansByConv = new Map();
 
+// Codex-parity: expose the active plan for a conversation so the chat route
+// can re-inject it into the system prompt every turn. This keeps the model
+// honest about "what's done / what's left" at low token cost (one compact
+// checklist instead of re-summarizing the whole transcript).
+export function getActivePlanForConv(convId) {
+  if (!convId) return null;
+  const state = _activePlansByConv.get(convId);
+  if (!state || !Array.isArray(state.items) || !state.items.length) return null;
+  return { items: state.items, explanation: state.explanation || '' };
+}
+
 const HOME = os.homedir();
 
 function _runCmd(cmd, argv, input) {
@@ -953,6 +964,7 @@ export const SELF_TOOL_DEFS = [
           command: { type: 'string', description: 'The shell command to run (single line or && / ; chained).' },
           cwd: { type: 'string', description: 'Optional working directory. Defaults to the user home.' },
           timeoutMs: { type: 'number', description: 'Optional timeout in ms. Default 300000 (5 min). Hard cap.' },
+          maxOutputBytes: { type: 'number', description: 'Optional per-stream cap on captured stdout/stderr. Default 100000 chars per stream; hard cap 500000. Use a SMALL value (e.g. 4000) for commands that may dump tons of data you only need a head/tail of — it keeps context lean.' },
           reason: { type: 'string', description: 'Optional one-line reason this command is being run. Helps with audit and debugging.' },
         },
         required: ['command'],

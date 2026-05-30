@@ -27,7 +27,7 @@ import { getLLMClient } from '../llm/registry.js';
 import { FALLBACK_MODELS, CHAT_COMPLETIONS_UNSUPPORTED_RE } from '../copilot/models.js';
 import { GEN_UI_CATALOG_PROMPT } from '../prompts/gen-ui-catalog.js';
 import { FAUNA_CORE_GUIDELINES } from '../prompts/core-guidelines.js';
-import { SELF_TOOL_DEFS, DYNAMIC_WIDGET_TOOL_DEFS, executeSelfTool, isSelfTool } from '../../self-tools.js';
+import { SELF_TOOL_DEFS, DYNAMIC_WIDGET_TOOL_DEFS, executeSelfTool, isSelfTool, getActivePlanForConv } from '../../self-tools.js';
 import { runShell, formatShellResultForLLM, isCommandSafe } from '../lib/shell-runner.js';
 import { maybeRegister as registerDevServer, isDevServerCommand } from '../lib/dev-server-registry.js';
 import { spawn as _spawnDetached } from 'child_process';
@@ -304,6 +304,30 @@ export function registerChatRoute(app, {
       // refuse tasks that depend on those tools ("I only have fauna_browser,
       // not browser-ext-action"). The token cost is small; skipping it
       // breaks orchestrator pipelines that hand off browsing work.
+      // Codex-parity: re-inject the active plan (from fauna_plan / update_plan)
+      // into every turn's system prompt. Cheap (<200 tokens for typical plans)
+      // and keeps the model honest about what's done vs. pending without
+      // forcing it to re-derive that from the transcript.
+      let activePlanCtx = '';
+      try {
+        const _planConvId = req.body?.conversationId || null;
+        const _activePlan = _planConvId ? getActivePlanForConv(_planConvId) : null;
+        if (_activePlan && Array.isArray(_activePlan.items) && _activePlan.items.length) {
+          const _statusGlyph = (s) => s === 'completed' ? '[x]'
+                                : s === 'in_progress' ? '[~]'
+                                : s === 'cancelled' ? '[-]'
+                                : '[ ]';
+          const lines = _activePlan.items.slice(0, 30).map(it =>
+            `${_statusGlyph(it.status)} ${String(it.title || '').slice(0, 180)}`
+          ).join('\n');
+          activePlanCtx =
+            '\n## Active Plan (from fauna_plan — DO NOT restate, just keep advancing it)\n' +
+            (_activePlan.explanation ? _activePlan.explanation + '\n' : '') +
+            lines +
+            '\n\nRules: exactly one item may be `in_progress` at a time. Flip a step to `completed` BEFORE starting the next. Do not jump pending → completed. If scope changes, call `fauna_plan` again with the same items + status updates (or appended new items) — never replace the list with a disjoint one.';
+        }
+      } catch (_) { /* non-fatal */ }
+
       const fullSystem = [
         // Core guidelines: persistence, formatting, frontend quality, search defaults.
         // Baked into every conversation (skipped for delegation sub-agents to save tokens —
@@ -315,6 +339,7 @@ export function registerChatRoute(app, {
         (isCLI || noTools) ? '' : buildBrowserExtContext(),
         (isDelegation || isCLI || noTools) ? '' : GEN_UI_CATALOG_PROMPT,
         contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '',
+        activePlanCtx,
         figmaFilesCtx,
         // When running against a local model that doesn't support OpenAI tool
         // calling, tell it explicitly — otherwise it will hallucinate tool
@@ -592,7 +617,7 @@ export function registerChatRoute(app, {
 
         // fauna_shell_exec adapter — runs server-side, refuses unsafe commands
         // so the user keeps the markdown ```bash review path for risky ops.
-        runShell: async ({ command, cwd, timeoutMs, reason } = {}) => {
+        runShell: async ({ command, cwd, timeoutMs, maxOutputBytes, reason } = {}) => {
           if (!shellBin) {
             return JSON.stringify({ ok: false, error: 'shell exec not configured in this server' });
           }
@@ -647,6 +672,9 @@ export function registerChatRoute(app, {
             isWin,
             augmentedPath,
             timeoutMs: typeof timeoutMs === 'number' ? Math.min(timeoutMs, 600000) : undefined,
+            maxOutputChars: typeof maxOutputBytes === 'number' && maxOutputBytes > 0
+              ? Math.min(maxOutputBytes, 500_000)
+              : undefined,
             signal: upstreamAbort.signal,
             onChunk: (kind, text) => {
               // Forward live stdout/stderr to the client via the existing
@@ -751,6 +779,24 @@ export function registerChatRoute(app, {
       let prevPreamble = '';       // narration emitted on the previous tool-call iteration
       let narrationRepeats = 0;    // consecutive iterations with near-identical preamble
       let narrationNudgeFired = false; // only inject the coaching nudge once per request
+      // Codex-parity: cumulative token usage across every model iteration in
+      // this turn. Emitted via `token_usage` SSE so the client can render a
+      // live "% of window remaining" indicator.
+      let turnUsage = { prompt: 0, completion: 0, total: 0, iterations: 0 };
+      const emitTokenUsage = () => {
+        try {
+          send({
+            type: 'token_usage',
+            prompt: turnUsage.prompt,
+            completion: turnUsage.completion,
+            total: turnUsage.total,
+            iterations: turnUsage.iterations,
+            window: budget.window,
+            bodyTokenLimit: budget.bodyTokenLimit,
+            model: budget.matched,
+          });
+        } catch (_) { /* SSE may be closed */ }
+      };
       // Autonomous mode: per-run state for the DONE/BLOCKED marker gate, the
       // QA gate, and the start-time used in the run-log JSONL entry.
       let markerNudgeFired = false;
@@ -966,6 +1012,16 @@ export function registerChatRoute(app, {
               if (tc.function?.arguments) pendingCalls[i].function.arguments += tc.function.arguments;
             }
           }
+        }
+
+        // Codex-parity: accumulate + broadcast token usage after each model
+        // iteration so the UI can render a live context-window indicator.
+        if (streamUsage) {
+          turnUsage.prompt     += streamUsage.prompt_tokens     || 0;
+          turnUsage.completion += streamUsage.completion_tokens || 0;
+          turnUsage.total      += streamUsage.total_tokens      || 0;
+          turnUsage.iterations += 1;
+          emitTokenUsage();
         }
 
         if (finishReason === 'tool_calls' && pendingCalls.length > 0) {

@@ -1287,6 +1287,38 @@ body.is-resizing webview { pointer-events: none !important; }
   display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
   padding: 0 2px;
 }
+/* Codex-parity: token-usage / context-window indicator above the composer */
+#token-usage-bar {
+  position: relative;
+  align-self: flex-start;
+  display: flex; align-items: center;
+  height: 14px; min-width: 120px; max-width: 240px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fau-text) 7%, var(--fau-surface2));
+  border: 1px solid var(--fau-border);
+  font-size: 10px; line-height: 1;
+  color: var(--fau-text-muted);
+  overflow: hidden;
+  user-select: none;
+}
+#token-usage-fill {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  width: 0%;
+  background: color-mix(in srgb, var(--fau-accent, #6aa3ff) 35%, transparent);
+  transition: width .25s ease, background .25s ease;
+  z-index: 0;
+}
+#token-usage-bar.warn #token-usage-fill {
+  background: color-mix(in srgb, #ffb547 45%, transparent);
+}
+#token-usage-bar.crit #token-usage-fill {
+  background: color-mix(in srgb, #ff6b6b 50%, transparent);
+}
+#token-usage-label {
+  position: relative; z-index: 1;
+  white-space: nowrap;
+}
 #figma-mode-banner {
   display: none;
   align-items: center;

@@ -53,6 +53,7 @@ import { registerWorkspaceRoutes } from './server/routes/workspace.js';
 import { registerStoreRoutes } from './server/routes/store.js';
 import { registerChatMiscRoutes } from './server/routes/chat-misc.js';
 import { registerChatRoute } from './server/routes/chat.js';
+import { primeTokenizer } from './server/lib/token-budget.js';
 import { registerGitRoutes } from './server/routes/git.js';
 import { registerBrowseRoutes } from './server/bridges/playwright-browse.js';
 import { registerShellExecRoutes } from './server/routes/shell-exec.js';
@@ -538,6 +539,11 @@ export function startServer(port) {
       console.log(`\n  ✦ Copilot Chat  →  http://127.0.0.1:${port}  (bind=${host})\n`);
       resolve(server);
     });
+    // Prime tiktoken once — gives exact token counts for cl100k_base models
+    // (OpenAI). Falls back silently to char/3.8 heuristic if unavailable.
+    primeTokenizer().then(loaded => {
+      if (loaded) console.log('[tokens] tiktoken (cl100k_base) primed for exact counts');
+    }).catch(() => {});
     extBridge.attach(server);
     teamsBundle.attachRelay(server);
     startScheduler(task => {

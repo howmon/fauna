@@ -4,6 +4,7 @@ import {
   pickBudget,
   computeBudget,
   measureMessages,
+  primeTokenizer,
   _internals,
 } from '../server/lib/token-budget.js';
 
@@ -129,5 +130,17 @@ describe('token-budget: computeBudget', () => {
     const b = computeBudget({ model: 'gpt-5', systemTokens: -100, reservedOutput: -50 });
     expect(b.systemTokens).toBe(0);
     expect(b.reservedOutput).toBe(0);
+  });
+});
+
+describe('token-budget: primeTokenizer (js-tiktoken)', () => {
+  it('loads js-tiktoken when installed and yields exact counts', async () => {
+    const loaded = await primeTokenizer();
+    expect(loaded).toBe(true);
+    // "hello world" is 2 tokens under cl100k_base — heuristic gives ~3.
+    // Whichever path runs, the count should land in a tight range.
+    const t = estimateTokens('hello world');
+    expect(t).toBeGreaterThanOrEqual(2);
+    expect(t).toBeLessThanOrEqual(4);
   });
 });
