@@ -605,3 +605,76 @@ function getAgentMetaContext() {
   ].join('\n');
 }
 
+// ── Client-side context gating (Codex-parity prompt trimming) ─────────────
+// Mirrors server/prompts/context-gating.js. Decides which heavy capability
+// sections to inject based on the latest user message + sticky scan of
+// the assistant transcript. Saves ~5-7k tokens on trivial turns.
+function computeClientContextFlags(userText, conv) {
+  var msg = String(userText || '').toLowerCase();
+  var EDITING_KW   = /\b(edit|write|create|patch|fix|refactor|implement|update|modify|append|replace|delete|rename|file|script|code|function|class|component|module|import|export|test|lint|build|migrat|debug|bug|error|stack ?trace|exception|crash|repo|commit|diff|merge|conflict|review|pr|pull request)\b|\.(js|ts|tsx|jsx|py|rb|go|rs|java|kt|swift|c|cc|cpp|h|hpp|cs|php|sh|zsh|bash|css|scss|html|md|json|yaml|yml|toml|sql|env)\b/;
+  var BROWSER_KW   = /\b(browse|browser|tab|navigate|website|web ?page|web ?site|url|http|https|click|form|login|sign[- ]?up|register|account|extract|screenshot|playwright|chrome|safari|firefox|cookie|scrape|fetch ?url|crawl|search\s+for|google|youtube|amazon|reddit|github\.com|gmail|outlook|linkedin|twitter|x\.com|facebook|instagram|tiktok)\b/;
+  var AGENT_KW     = /\b(agent|orchestrator|sub[- ]?agent|delegate|create[- ]?agent|patch[- ]?agent|uninstall[- ]?agent|agent builder|install.{0,15}agent|edit.{0,15}agent|fix.{0,15}agent|remove.{0,15}agent|delete.{0,15}agent)\b/;
+  var BUILDING_KW  = /\b(build|create|make|scaffold|generate|spin up|new)\b.{0,40}\b(app|application|site|website|webapp|web ?app|dashboard|tool|saas|crud|prototype|mvp|game|landing ?page|portal|plugin|extension|cli)\b|\b(vite|next\.?js|nextjs|remix|svelte|react|vue|angular|electron|tauri|expo|react ?native|fauna_plan|fauna_create_project|fauna_verify_build|fauna_substep|fauna_db_migration)\b/;
+
+  // Sticky scan: if assistant transcript already used a feature, keep it on.
+  function stickyHas(re) {
+    try {
+      var msgs = (conv && conv.messages) || [];
+      for (var i = msgs.length - 1; i >= 0 && i >= msgs.length - 20; i--) {
+        var m = msgs[i];
+        if (!m || m.role !== 'assistant') continue;
+        var c = typeof m.content === 'string' ? m.content : '';
+        if (re.test(c)) return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+  var BR_STICKY    = /```browser-action|browser-ext-action|fauna_browser|api\/browse\b/;
+  var AG_STICKY    = /```create-agent|```patch-agent|```uninstall-agent|\[DELEGATE:/;
+  var BLD_STICKY   = /fauna_plan|fauna_create_project|fauna_verify_build|fauna_substep|fauna_db_migration|```file-plan/;
+  var ED_STICKY    = /```replace-string|```apply-patch|```write-file|```append-file|```file-plan/;
+
+  return {
+    editing:  EDITING_KW.test(msg)  || stickyHas(ED_STICKY),
+    browser:  BROWSER_KW.test(msg)  || stickyHas(BR_STICKY),
+    agents:   AGENT_KW.test(msg)    || stickyHas(AG_STICKY),
+    building: BUILDING_KW.test(msg) || stickyHas(BLD_STICKY),
+  };
+}
+
+// Returns the capabilities prompt with optional heavy sections sliced out
+// based on flags. Sections are anchored by their ## headers so this is
+// resilient to minor edits in `getCapabilitiesContext`.
+function getCapabilitiesContextGated(flags) {
+  var full = getCapabilitiesContext();
+  if (!flags) return full;
+
+  // Each gate: if flags[flag] is FALSE, remove the slice from startRe to endRe.
+  // Order matters only for clarity — we remove back-to-front to keep indices stable.
+  var gates = [
+    { flag: 'editing',  start: /\n## ⚠️ EDITING & WRITING FILES/, end: /\n## Capabilities\b/ },
+    { flag: 'browser',  start: /\n## Web Request Routing/,        end: /\n## Artifact Pane/ },
+    { flag: 'agents',   start: /\n## Agent Builder/,              end: /\n## Installed Agents\b/ },
+    { flag: 'agents',   start: /\n## Fixing \/ Editing/,          end: /\n## Smart Git Commands/ },
+    { flag: 'building', start: /\n## ⚠️ Building Apps/,           end: null },
+  ];
+
+  for (var i = gates.length - 1; i >= 0; i--) {
+    var g = gates[i];
+    if (flags[g.flag]) continue;
+    var s = full.search(g.start);
+    if (s === -1) continue;
+    var e;
+    if (g.end) {
+      var sub = full.slice(s + 1);
+      var m = sub.search(g.end);
+      e = m === -1 ? full.length : (s + 1 + m);
+    } else {
+      e = full.length;
+    }
+    full = full.slice(0, s) + full.slice(e);
+  }
+
+  return full.replace(/\n{3,}/g, '\n\n');
+}
+

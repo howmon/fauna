@@ -1059,13 +1059,15 @@ async function streamResponse(conv) {
     var userSysPrompt  = document.getElementById('sys-prompt-input').value;
     // Only inject Figma context when user has explicitly enabled Figma MCP
     var figmaCtx       = state.figmaMCPEnabled ? getFigmaContext() : '';
-    var capsCtx        = getCapabilitiesContext();
+    // Extract user text from last user message for keyword-gated context injection
+    var lastUserMsg = conv.messages.slice().reverse().find(function(m) { return m.role === 'user'; });
+    var userText = lastUserMsg ? (typeof lastUserMsg.content === 'string' ? lastUserMsg.content : (lastUserMsg.content.find(function(c){ return c.type === 'text'; }) || {}).text || '') : '';
+    // Client-side context gating: skip ~5-7k tokens of capability prose on trivial turns
+    var _ctxFlags = (typeof computeClientContextFlags === 'function') ? computeClientContextFlags(userText, conv) : null;
+    var capsCtx        = (typeof getCapabilitiesContextGated === 'function') ? getCapabilitiesContextGated(_ctxFlags) : getCapabilitiesContext();
     var agentCtx       = getAgentRulesContext();
     var agentSysCtx    = getAgentSystemPrompt();
     var playbookCtx    = getPlaybookContext();
-    // Extract user text from last user message for keyword-gated memory injection
-    var lastUserMsg = conv.messages.slice().reverse().find(function(m) { return m.role === 'user'; });
-    var userText = lastUserMsg ? (typeof lastUserMsg.content === 'string' ? lastUserMsg.content : (lastUserMsg.content.find(function(c){ return c.type === 'text'; }) || {}).text || '') : '';
     var memoryCtx      = getMemoryContext(userText);
     var repoInstructionsCtx = typeof getRepositoryInstructionsPrompt === 'function' ? getRepositoryInstructionsPrompt() : '';
     var workspaceCtx   = typeof getWorkspaceContextPrompt === 'function' ? getWorkspaceContextPrompt() : '';
