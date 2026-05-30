@@ -25,8 +25,9 @@ import path from 'path';
 import { getCopilotClient } from '../copilot/auth.js';
 import { getLLMClient } from '../llm/registry.js';
 import { FALLBACK_MODELS, CHAT_COMPLETIONS_UNSUPPORTED_RE } from '../copilot/models.js';
-import { GEN_UI_CATALOG_PROMPT } from '../prompts/gen-ui-catalog.js';
-import { FAUNA_CORE_GUIDELINES } from '../prompts/core-guidelines.js';
+import { GEN_UI_CATALOG_PROMPT, GEN_UI_SHORT_HINT } from '../prompts/gen-ui-catalog.js';
+import { FAUNA_CORE_GUIDELINES, FAUNA_FRONTEND_QUALITY } from '../prompts/core-guidelines.js';
+import { computeContextFlags } from '../prompts/context-gating.js';
 import { SELF_TOOL_DEFS, DYNAMIC_WIDGET_TOOL_DEFS, executeSelfTool, isSelfTool, getActivePlanForConv } from '../../self-tools.js';
 import { runShell, formatShellResultForLLM, isCommandSafe } from '../lib/shell-runner.js';
 import { maybeRegister as registerDevServer, isDevServerCommand } from '../lib/dev-server-registry.js';
@@ -328,16 +329,31 @@ export function registerChatRoute(app, {
         }
       } catch (_) { /* non-fatal */ }
 
+      // Compute gating flags once so the array below can read them without
+      // calling computeContextFlags multiple times.
+      const _ctxFlags = (function () {
+        try {
+          return computeContextFlags({ messages, systemPrompt, isDelegation, isCLI, noTools });
+        } catch (_) {
+          return { genui: true, browser: true, frontend: true };
+        }
+      })();
+
       const fullSystem = [
         // Core guidelines: persistence, formatting, frontend quality, search defaults.
         // Baked into every conversation (skipped for delegation sub-agents to save tokens —
         // the orchestrator already enforces these and re-stating them in delegates wastes context).
         isDelegation ? '' : FAUNA_CORE_GUIDELINES,
+        // Codex-parity: heavy capability docs (gen-ui catalog ~5k, browser
+        // ~1.5k, frontend quality ~400) are injected only when the current
+        // turn or conversation actually needs them (see _ctxFlags above).
+        // Saves ~6k tokens on a typical "explain this code" turn.
         isDelegation ? '' : projectCtx,
         factsCtx,
-        (isCLI || noTools) ? '' : browserBuildContext,
-        (isCLI || noTools) ? '' : buildBrowserExtContext(),
-        (isDelegation || isCLI || noTools) ? '' : GEN_UI_CATALOG_PROMPT,
+        (isCLI || noTools) ? '' : (_ctxFlags.browser ? browserBuildContext : ''),
+        (isCLI || noTools) ? '' : (_ctxFlags.browser ? buildBrowserExtContext() : ''),
+        (isDelegation || isCLI || noTools) ? '' : (_ctxFlags.genui ? GEN_UI_CATALOG_PROMPT : GEN_UI_SHORT_HINT),
+        (isDelegation || !_ctxFlags.frontend) ? '' : FAUNA_FRONTEND_QUALITY,
         contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '',
         activePlanCtx,
         figmaFilesCtx,

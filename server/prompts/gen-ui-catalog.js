@@ -1,4 +1,19 @@
 // Extracted from server.js — system-prompt fragment injected for gen-ui rendering.
+//
+// Token-budget note: the full catalog is ~5k tokens. It is now injected
+// only when computeContextFlags() detects the user asked for a widget /
+// chart / circuit / podcast / lesson, OR the conversation has already
+// emitted gen-ui blocks. On all other turns the chat route injects the
+// tiny GEN_UI_SHORT_HINT below instead, which costs ~120 tokens and tells
+// the model the capability exists without dumping every component.
+
+// Always-on, ~120-token reminder. Keeps the model aware that gen-ui /
+// circuits / TTS / lessons exist so it can ask the user (or shape its
+// reply) instead of silently degrading to plain markdown.
+export const GEN_UI_SHORT_HINT = `
+## Rich Output (gen-ui, circuits, audio, lessons)
+You can render interactive widgets inline by emitting a \`\`\`gen-ui code block (dashboards, stats, tables, playlists, tabs, SVG, etc.), schematic circuits via \`fauna_render_circuit\`, narration/podcasts via \`fauna_speak\` / \`fauna_podcast\`, and animated whiteboard lessons via \`fauna_lesson_create\`. The full component catalog and rules are auto-loaded into context the moment the user asks for any of the above. If you don't see the catalog this turn, the user's message wasn't a widget/visual request — answer in plain text or markdown instead.
+`.trim();
 
 export const GEN_UI_CATALOG_PROMPT = `
 ## Output format decision — artifact pane vs inline gen-ui vs plain text
