@@ -107,12 +107,10 @@ function _renderAllProjectsPage() {
             '<i class="ti ti-search"></i>' +
             '<input class="all-agents-search" id="all-projects-search" placeholder="Search projects…" oninput="document.getElementById(\'all-projects-page\')._filter=this.value;_renderAllProjectsPage()">' +
           '</div>' +
+          '<button class="proj-action-btn" onclick="openCreateProjectDialog()"><i class="ti ti-plus"></i> New project</button>' +
           '<button class="all-agents-close" onclick="closeAllProjects()"><i class="ti ti-x"></i></button>' +
         '</div>' +
         '<div id="all-projects-list-body" class="all-projects-list"></div>' +
-        '<div class="all-agents-footer">' +
-          '<button class="proj-action-btn" onclick="openCreateProjectDialog()"><i class="ti ti-plus"></i> New project</button>' +
-        '</div>' +
       '</div>';
     listEl = document.getElementById('all-projects-list-body');
   }
