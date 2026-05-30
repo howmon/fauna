@@ -339,6 +339,43 @@ function updateContextMeterGranular(data) {
   }
   tipParts.push('Model limit: ' + formatTokens(limit));
   tipParts.push('Used: ' + pct.toFixed(1) + '%');
+
+  // System-prompt breakdown — show where the bytes go
+  if (data.sysParts) {
+    var partOrder = [
+      ['capabilities',     'Capabilities'],
+      ['agentSystem',      'Agent prompt'],
+      ['agentRules',       'Agent rules'],
+      ['playbook',         'Playbook'],
+      ['memory',           'Memory'],
+      ['repoInstructions', 'Repo instructions'],
+      ['workspace',        'Workspace'],
+      ['figma',            'Figma'],
+      ['concise',          'Concise directive'],
+      ['user',             'User sys prompt'],
+    ];
+    var hasAny = partOrder.some(function(p) { return (data.sysParts[p[0]] || 0) > 0; });
+    if (hasAny) {
+      tipParts.push('<div style="border-top:1px solid #444;margin-top:6px;padding-top:6px;font-weight:600;opacity:.8">Sys prompt breakdown</div>');
+      partOrder.forEach(function(p) {
+        var chars = data.sysParts[p[0]] || 0;
+        if (chars > 0) {
+          var tok = Math.round(chars / 4);
+          tipParts.push('&nbsp;&nbsp;' + p[1] + ': ~' + formatTokens(tok));
+        }
+      });
+    }
+  }
+  // Active gates — show which client-side context gates fired this turn
+  if (data.gates) {
+    var on = Object.keys(data.gates).filter(function(k) { return data.gates[k]; });
+    var off = Object.keys(data.gates).filter(function(k) { return !data.gates[k]; });
+    if (on.length || off.length) {
+      tipParts.push('<div style="border-top:1px solid #444;margin-top:6px;padding-top:6px;font-weight:600;opacity:.8">Context gates</div>');
+      if (on.length)  tipParts.push('&nbsp;&nbsp;<span style="color:#7fd17f">on:</span> ' + on.join(', '));
+      if (off.length) tipParts.push('&nbsp;&nbsp;<span style="opacity:.5">off:</span> ' + off.join(', '));
+    }
+  }
   var labelText = breakdown + ' = ' + formatTokens(totalUsed) + '/' + formatTokens(limit) + (data.usage ? '' : ' (est.)');
   var popover = document.getElementById('ctx-meter-popover');
   if (popover) popover.innerHTML = tipParts.map(function(l) { return '<div>' + l + '</div>'; }).join('');

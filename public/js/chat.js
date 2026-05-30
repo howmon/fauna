@@ -1087,6 +1087,20 @@ async function streamResponse(conv) {
     var _ctxSysChars = systemPrompt.length;
     var _ctxMsgChars = JSON.stringify(messages).length;
     var _ctxUsage = null;
+    // Granular breakdown of the system prompt so the popover can show where the bytes go
+    var _ctxSysParts = {
+      capabilities: (agentSysCtx ? 0 : (capsCtx || '').length),
+      agentSystem: (agentSysCtx || '').length,
+      agentRules: (agentSysCtx ? 0 : (agentCtx || '').length),
+      playbook: (playbookCtx || '').length,
+      memory: (memoryCtx || '').length,
+      repoInstructions: (repoInstructionsCtx || '').length,
+      workspace: (workspaceCtx || '').length,
+      figma: (figmaCtx || '').length,
+      concise: (conciseDirective || '').length,
+      user: (userSysPrompt || '').length,
+    };
+    var _ctxGates = _ctxFlags || {};
 
     // Build chat request body — include agent info when active
     var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: state.figmaMCPEnabled, usePlaywrightMCP: state.playwrightMCPEnabled || false, selectedFigmaFileKeys: _getSelectedFigmaFileKeysFromAttachments(state.pendingAttachments), contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false, conversationId: (conv && conv.id) || null };
@@ -1442,7 +1456,7 @@ async function streamResponse(conv) {
 
     // Update context meter (granular breakdown)
     var _meterFn = typeof updateContextMeterGranular === 'function' ? updateContextMeterGranular : updateContextMeter;
-    _meterFn({ sysChars: _ctxSysChars, msgChars: _ctxMsgChars, usage: _ctxUsage, outputTokens: tokenCount, model: state.model });
+    _meterFn({ sysChars: _ctxSysChars, msgChars: _ctxMsgChars, usage: _ctxUsage, outputTokens: tokenCount, model: state.model, sysParts: _ctxSysParts, gates: _ctxGates });
 
     // Always save the AI message regardless of which conv is active
     var aiMsg = { role: 'assistant', content: buffer };
