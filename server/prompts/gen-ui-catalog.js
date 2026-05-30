@@ -7,12 +7,20 @@
 // tiny GEN_UI_SHORT_HINT below instead, which costs ~120 tokens and tells
 // the model the capability exists without dumping every component.
 
-// Always-on, ~120-token reminder. Keeps the model aware that gen-ui /
+// Always-on, ~140-token reminder. Keeps the model aware that gen-ui /
 // circuits / TTS / lessons exist so it can ask the user (or shape its
 // reply) instead of silently degrading to plain markdown.
+//
+// CRITICAL: must explicitly forbid emitting a gen-ui block in this mode,
+// otherwise the model guesses the schema (often emitting React JSX or
+// `import` statements) and the client renderer fails with JSON parse error.
 export const GEN_UI_SHORT_HINT = `
-## Rich Output (gen-ui, circuits, audio, lessons)
-You can render interactive widgets inline by emitting a \`\`\`gen-ui code block (dashboards, stats, tables, playlists, tabs, SVG, etc.), schematic circuits via \`fauna_render_circuit\`, narration/podcasts via \`fauna_speak\` / \`fauna_podcast\`, and animated whiteboard lessons via \`fauna_lesson_create\`. The full component catalog and rules are auto-loaded into context the moment the user asks for any of the above. If you don't see the catalog this turn, the user's message wasn't a widget/visual request — answer in plain text or markdown instead.
+## Rich Output Capabilities (catalog NOT loaded this turn)
+This app CAN render: \`\`\`gen-ui widgets (dashboards, stats, tables, playlists, tabs, SVG), \`\`\`artifact:html / artifact:markdown blocks, circuits via \`fauna_render_circuit\`, narration via \`fauna_speak\` / \`fauna_podcast\`, animated lessons via \`fauna_lesson_create\`.
+
+⚠️ HARD RULE FOR THIS TURN: You do NOT have the gen-ui component catalog loaded. DO NOT emit a \`\`\`gen-ui block — its JSON schema is not in your context and you WILL hallucinate the shape (the renderer fails on anything that isn't valid catalog JSON; never emit JSX, \`import\`, \`export\`, or React/Vue/Svelte code inside \`\`\`gen-ui).
+
+When the user asks for a visual/interactive output and you don't see the catalog: either (a) use a \`\`\`artifact:html block with plain HTML+CSS (no framework imports), or (b) ask the user a follow-up like "want me to render that as a dashboard widget?" — the next turn will load the catalog automatically.
 `.trim();
 
 export const GEN_UI_CATALOG_PROMPT = `

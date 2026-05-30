@@ -10,7 +10,7 @@
 // "sticky" and keep injecting the relevant block for the rest of the conv
 // — flipping it off mid-thread would surprise the model.
 
-const GENUI_KW = /\b(dashboard|scorecard|widget|gen[-_ ]?ui|chart|graph|stat\b|metric|kpi|leaderboard|table|playlist|carousel|podcast|narrat(e|ion)|read .* aloud|say this|tts|voiceover|video|movie|episode|gallery|tabs?\b|circuit|schematic|wiring|netlist|spice|op[- ]?amp|transistor|resistor|capacitor|inductor|whiteboard|lesson|teach me|walk me through|explain how|visualiz)/i;
+const GENUI_KW = /\b(dashboard|scorecard|widget|gen[-_ ]?ui|chart|graph|stat\b|stats?\b|metric|metrics|kpi|leaderboard|table|playlist|carousel|podcast|narrat(e|ion)|read .* aloud|say this|tts|voiceover|video|movie|episode|gallery|tabs?\b|circuit|schematic|wiring|netlist|spice|op[- ]?amp|transistor|resistor|capacitor|inductor|whiteboard|lesson|teach me|walk me through|explain how|visualiz|render|display|show me .* (a |an |the )?(chart|graph|widget|dashboard|card|tile|stats?|metrics|breakdown|comparison|leaderboard|summary)|interactive|progress (bar|tracker)|status (card|overview|board)|key[- ]?value)/i;
 
 const BROWSER_KW = /\b(browser|navigate|tab\b|open .* url|fetch .* page|crawl|scrape|click|fill .* form|type into|screenshot|snapshot|dev[- ]?server|localhost|https?:\/\/|extension|playwright|extract page)/i;
 
