@@ -446,18 +446,36 @@ export async function synthesizeLessonAudio({ lesson, lessonId, onProgress }) {
  * Full pipeline: LLM → DSL → validate → audio. Returns the synthesized
  * lesson and the id used for filesystem storage.
  */
-export async function createLesson({ topic, durationMin = 5, voice, client, model, onProgress, source }) {
+export async function createLesson({ topic, durationMin = 5, voice, client, model, onProgress, source, userDataDir }) {
   const id = 'L_' + Date.now().toString(36) + crypto.randomBytes(2).toString('hex');
-  let sourceText, sourceKind, slideImages;
+  let sourceText, sourceKind, slideImages, rasterError;
   if (source) {
     if (onProgress) onProgress({ phase: 'source', source });
-    const ext = await extractSourceText(source);
+    const ext = await extractSourceText(source, {
+      autoInstall: true,
+      userDataDir,
+      onProgress,
+    });
     if (ext?.ok) {
       sourceText = ext.text;
       sourceKind = ext.kind;
       slideImages = ext.slideImages || null;
+      rasterError = ext.rasterError || null;
       if (!topic || !String(topic).trim()) topic = `Teach the contents of this ${ext.kind} source`;
     }
+  }
+
+  // If the user gave us a deck but rasterization failed (typically because
+  // LibreOffice / soffice isn't installed), fail loudly instead of silently
+  // falling back to a generic invented whiteboard. The model can then ask the
+  // user to install LibreOffice and retry, or proceed without `source` for a
+  // generic whiteboard lesson.
+  if (source && sourceKind && ['pptx','ppt','key','odp'].includes(String(sourceKind).toLowerCase()) && !slideImages?.length) {
+    throw new Error(
+      'Slide-fidelity mode unavailable for this deck: ' +
+      (rasterError || 'rasterization produced no images') +
+      '. Tell the user to install LibreOffice (`brew install --cask libreoffice`) and retry. Do NOT silently fall back to a generic whiteboard — the user explicitly shared this deck and expects it to be used verbatim.'
+    );
   }
 
   let dsl;

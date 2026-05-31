@@ -16,7 +16,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { resolveSoffice } from './soffice-runtime.js';
+import { resolveSoffice, attemptInstall } from './soffice-runtime.js';
 
 function _sha1Short(s) {
   return crypto.createHash('sha1').update(s).digest('hex').slice(0, 10);
@@ -87,12 +87,31 @@ async function _pdfToPngs({ pdfPath, outDir, scale = 2.0 }) {
  * @returns {Promise<{ok:true, slides:Array<{index:number,pngPath:string}>, cacheDir:string, count:number}
  *                 | {ok:false, error:string, hint?:object}>}
  */
-export async function rasterizePptx({ pptxPath, cacheDir, userDataDir, scale = 2.0 } = {}) {
+export async function rasterizePptx({ pptxPath, cacheDir, userDataDir, scale = 2.0, autoInstall = false, onProgress } = {}) {
   if (!pptxPath || !fs.existsSync(pptxPath)) {
     return { ok: false, error: 'pptxPath not found: ' + pptxPath };
   }
 
-  const soffice = await resolveSoffice({ userDataDir });
+  let soffice = await resolveSoffice({ userDataDir });
+  if (!soffice.ok && autoInstall) {
+    // First-run auto-install. Requires brew/winget/apt on PATH. We stream
+    // each line of installer output through onProgress so the user sees
+    // progress for what is otherwise a 5-10 minute silent download.
+    if (onProgress) onProgress({ phase: 'soffice-install-start', hint: soffice.hint });
+    const result = await attemptInstall({
+      onLine: (line) => { if (onProgress) onProgress({ phase: 'soffice-install-line', line }); },
+    });
+    if (onProgress) onProgress({ phase: 'soffice-install-done', exitCode: result.exitCode });
+    soffice = await resolveSoffice({ userDataDir });
+    if (!soffice.ok) {
+      return {
+        ok: false,
+        error: 'auto-install of LibreOffice failed (exit ' + result.exitCode + '): ' +
+               (result.stderr || result.stdout || '').slice(-400),
+        hint: soffice.hint,
+      };
+    }
+  }
   if (!soffice.ok) {
     return { ok: false, error: 'LibreOffice (soffice) not found — required to convert PowerPoint slides into images.', hint: soffice.hint };
   }

@@ -244,7 +244,13 @@ async function sendMessage(opts) {
       if (att.type === 'image') {
         pendingImages.push({ base64: att.base64, mime: att.mime, name: att.name });
       } else {
-        var label = att.type === 'url' ? `URL: ${att.name}` : `File: ${att.name}`;
+        // Include the absolute filesystem path when known so the model can
+        // re-read / edit the source file with native tools instead of
+        // searching for it. Falls back to a generic label.
+        var label;
+        if (att.type === 'url') label = 'URL: ' + att.name;
+        else if (att.path)      label = 'File: ' + att.name + ' (path: ' + att.path + ')';
+        else                    label = 'File: ' + att.name;
         content += '\n\n' + '```\n// ' + label + '\n' + att.content + '\n```';
       }
     });

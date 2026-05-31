@@ -1554,7 +1554,7 @@ export const SELF_TOOL_DEFS = [
     function: {
       name: 'fauna_lesson_create',
       description:
-        'Generate an interactive whiteboard lesson and mount it INLINE in chat as a sandboxed runtime widget — NOT a video file. The widget shows a 1280×720 whiteboard that animates props (text, LaTeX equations, shapes, arrows, function plots, number lines, code, molecules, embedded svg/circuits) in sync with per-scene Kokoro narration. Use this whenever the user wants to be TAUGHT something visually — "explain", "teach me", "walk me through", "interactive lesson on", "show me how X works", anything where a moving illustration would help more than prose. You can also ground the lesson in a specific document by passing `source` (a local file path to a .pptx / .docx / .pdf / .md / .txt / .html, or a URL) — the slide deck or article text is extracted and fed to the script generator so the lesson follows that material. Returns immediately after audio synthesis; the widget then plays scene-by-scene on user gesture. Do NOT also produce a separate fauna_speak / fauna_video_create call for the same topic.',
+        'Generate an interactive whiteboard lesson and mount it INLINE in chat as a sandboxed runtime widget — NOT a video file. The widget shows a 1280×720 whiteboard that animates props (text, LaTeX equations, shapes, arrows, function plots, number lines, code, molecules, embedded svg/circuits) in sync with per-scene Kokoro narration. Use this whenever the user wants to be TAUGHT something visually — "explain", "teach me", "walk me through", "interactive lesson on", "show me how X works", anything where a moving illustration would help more than prose. You can also ground the lesson in a specific document by passing `source` (a local file path to a .pptx / .docx / .pdf / .md / .txt / .html, or a URL) — the slide deck or article text is extracted and fed to the script generator so the lesson follows that material. CRITICAL: when the user attaches/shares a .pptx (or .ppt/.key/.odp) deck and asks for a lesson or video, you MUST pass its absolute path as `source`. The attachment fence header includes "(path: /abs/path/to/file.pptx)" — use that exact path. With a pptx source, the lesson auto-switches to STRICT SLIDE MODE: each original slide is rasterized to PNG and used as the backdrop, narration is generated per slide, and no generic whiteboard scenes are drawn. Skipping `source` will produce a generic invented whiteboard that ignores the deck. Returns immediately after audio synthesis; the widget then plays scene-by-scene on user gesture. Do NOT also produce a separate fauna_speak / fauna_video_create call for the same topic.',
       parameters: {
         type: 'object',
         properties: {
@@ -2529,6 +2529,10 @@ export function executeSelfTool(toolName, args, context = {}) {
           const onProgress = (evt) => {
             try {
               const label = evt.phase === 'source' ? `Extracting source: ${evt.source}…`
+                : evt.phase === 'soffice-install-start' ? `LibreOffice not found — auto-installing (${evt.hint?.cmd || 'platform installer'}). This may take several minutes…`
+                : evt.phase === 'soffice-install-line' ? `LibreOffice install: ${evt.line}`
+                : evt.phase === 'soffice-install-done' ? `LibreOffice install ${evt.exitCode === 0 ? 'complete' : 'failed (exit ' + evt.exitCode + ')'}`
+                : evt.phase === 'slides-copy' ? `Copying ${evt.slideCount} slide images…`
                 : evt.phase === 'script' ? 'Drafting lesson script…'
                 : evt.phase === 'audio-start' ? `Synthesizing audio for ${evt.sceneCount} scenes…`
                 : evt.phase === 'audio' ? `Audio scene ${evt.sceneIndex + 1}/${evt.total}`

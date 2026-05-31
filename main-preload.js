@@ -2,7 +2,7 @@
 // Exposes a tiny, vetted API to the renderer so it can ask the main process
 // to spawn additional windows (multi-window support).
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('faunaApp', {
   /**
@@ -38,5 +38,22 @@ contextBridge.exposeInMainWorld('faunaApp', {
       projectId: opts && typeof opts.projectId === 'string' ? opts.projectId : null,
     };
     ipcRenderer.send('fauna:report-window-state', payload);
+  },
+
+  /**
+   * Resolve a DOM File object (from drag-drop or <input type=file>) to its
+   * absolute filesystem path. Returns '' when the File came from a source
+   * without a backing path (e.g. clipboard image, generated blob).
+   * Electron 32+ removed `file.path`; webUtils.getPathForFile is the
+   * supported replacement.
+   */
+  getPathForFile(file) {
+    try {
+      if (!file || typeof file !== 'object') return '';
+      if (webUtils && typeof webUtils.getPathForFile === 'function') {
+        return webUtils.getPathForFile(file) || '';
+      }
+      return (file && typeof file.path === 'string') ? file.path : '';
+    } catch (_) { return ''; }
   },
 });

@@ -24,6 +24,17 @@ function _tryExec(cmd, opts = {}) {
   }
 }
 
+function _stripXml(s) {
+  return String(s)
+    .replace(/<a:br\s*\/?>/g, '\n')
+    .replace(/<\/a:p>/g, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export function registerDocsAndExtRoutes(app, { faunaConfigDir, appDir }) {
   // ── Document extraction / write ─────────────────────────────────────────
   // POST { path } → extract text from a docx/doc/rtf/odt file
@@ -101,11 +112,90 @@ export function registerDocsAndExtRoutes(app, { faunaConfigDir, appDir }) {
       let text = '';
       if (['pdf'].includes(ext)) {
         text = _tryExec(`pdftotext ${JSON.stringify(tmp)} -`);
+        if (!text) {
+          // mdimport-based fallback for sandboxed/no-poppler hosts.
+          text = _tryExec(`mdls -name kMDItemTextContent -raw ${JSON.stringify(tmp)}`);
+          if (text === '(null)') text = '';
+        }
       } else if (['doc','docx','odt','rtf','pages'].includes(ext)) {
         text = _tryExec(`pandoc -t plain ${JSON.stringify(tmp)}`);
         if (!text) text = _tryExec(`textutil -convert txt -stdout ${JSON.stringify(tmp)}`, { timeout: 10000 });
-      } else if (['xls','xlsx','csv'].includes(ext)) {
-        text = _tryExec(`strings ${JSON.stringify(tmp)} | head -200`, { timeout: 10000 });
+        if (!text && ext === 'docx') {
+          // unzip → word/document.xml → strip tags
+          const xml = _tryExec(`unzip -p ${JSON.stringify(tmp)} word/document.xml`, { timeout: 10000, maxBuffer: 16 * 1024 * 1024 });
+          if (xml) text = _stripXml(xml.replace(/<\/w:p>/g, '\n'));
+        }
+      } else if (['pptx','ppt','key','odp'].includes(ext)) {
+        // unzip each slide xml and concatenate
+        const entries = _tryExec(`unzip -Z1 ${JSON.stringify(tmp)}`, { timeout: 10000, maxBuffer: 16 * 1024 * 1024 });
+        const slideRe = /^ppt\/slides\/slide\d+\.xml$/;
+        const notesRe = /^ppt\/notesSlides\/notesSlide\d+\.xml$/;
+        const slides = entries.split('\n').filter(l => slideRe.test(l))
+          .sort((a, b) => parseInt(a.match(/slide(\d+)/)[1], 10) - parseInt(b.match(/slide(\d+)/)[1], 10));
+        const parts = [];
+        for (const s of slides) {
+          const xml = _tryExec(`unzip -p ${JSON.stringify(tmp)} ${JSON.stringify(s)}`, { timeout: 10000, maxBuffer: 16 * 1024 * 1024 });
+          const txt = _stripXml(xml);
+          const n = s.match(/slide(\d+)/)[1];
+          if (txt) parts.push(`# Slide ${n}\n${txt}`);
+        }
+        const notes = entries.split('\n').filter(l => notesRe.test(l));
+        for (const n of notes) {
+          const xml = _tryExec(`unzip -p ${JSON.stringify(tmp)} ${JSON.stringify(n)}`, { timeout: 10000, maxBuffer: 16 * 1024 * 1024 });
+          const txt = _stripXml(xml);
+          const idx = n.match(/notesSlide(\d+)/)[1];
+          if (txt) parts.push(`## Slide ${idx} notes\n${txt}`);
+        }
+        text = parts.join('\n\n');
+      } else if (['xlsx','xlsm','xlsb','ods'].includes(ext)) {
+        // unzip xl/sharedStrings.xml + xl/worksheets/sheet*.xml; strip tags.
+        const entries = _tryExec(`unzip -Z1 ${JSON.stringify(tmp)}`, { timeout: 10000, maxBuffer: 16 * 1024 * 1024 });
+        const sharedXml = _tryExec(`unzip -p ${JSON.stringify(tmp)} xl/sharedStrings.xml`, { timeout: 10000, maxBuffer: 16 * 1024 * 1024 });
+        const sharedStrings = [];
+        if (sharedXml) {
+          const re = /<t[^>]*>([\s\S]*?)<\/t>/g;
+          let m;
+          while ((m = re.exec(sharedXml)) !== null) {
+            sharedStrings.push(m[1].replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;/g,"'"));
+          }
+        }
+        const sheets = entries.split('\n').filter(l => /^xl\/worksheets\/sheet\d+\.xml$/.test(l))
+          .sort((a, b) => parseInt(a.match(/sheet(\d+)/)[1], 10) - parseInt(b.match(/sheet(\d+)/)[1], 10));
+        const parts = [];
+        for (const s of sheets) {
+          const xml = _tryExec(`unzip -p ${JSON.stringify(tmp)} ${JSON.stringify(s)}`, { timeout: 10000, maxBuffer: 16 * 1024 * 1024 });
+          if (!xml) continue;
+          // Parse rows
+          const rows = [];
+          const rowRe = /<row[^>]*>([\s\S]*?)<\/row>/g;
+          let rm;
+          while ((rm = rowRe.exec(xml)) !== null) {
+            const cells = [];
+            const cellRe = /<c[^>]*?(?:\st="([^"]+)")?[^>]*>([\s\S]*?)<\/c>/g;
+            let cm;
+            while ((cm = cellRe.exec(rm[1])) !== null) {
+              const t = cm[1]; const inner = cm[2];
+              const vMatch = /<v[^>]*>([\s\S]*?)<\/v>/.exec(inner);
+              const isMatch = /<is[^>]*>[\s\S]*?<t[^>]*>([\s\S]*?)<\/t>[\s\S]*?<\/is>/.exec(inner);
+              let val = '';
+              if (isMatch) val = isMatch[1];
+              else if (vMatch) {
+                if (t === 's') {
+                  const idx = parseInt(vMatch[1], 10);
+                  if (!isNaN(idx) && sharedStrings[idx] !== undefined) val = sharedStrings[idx];
+                } else val = vMatch[1];
+              }
+              cells.push(val);
+            }
+            if (cells.length) rows.push(cells.join('\t'));
+          }
+          const n = s.match(/sheet(\d+)/)[1];
+          if (rows.length) parts.push(`# Sheet ${n}\n${rows.join('\n')}`);
+        }
+        text = parts.join('\n\n');
+        if (!text) text = _tryExec(`strings ${JSON.stringify(tmp)} | head -500`, { timeout: 10000 });
+      } else if (ext === 'csv' || ext === 'tsv') {
+        text = buf.slice(0, 500000).toString('utf8');
       } else {
         // Generic: try as text
         text = buf.slice(0, 200000).toString('utf8');

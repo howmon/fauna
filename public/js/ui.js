@@ -1097,8 +1097,22 @@ async function _extractDocumentText(file) {
 }
 
 async function _processSingleAttachment(file) {
+  // Resolve absolute filesystem path when available (drag-drop from Finder,
+  // file picker). Lets the model use native edit/read tools directly instead
+  // of burning a turn searching for the file by name.
+  var absPath = '';
+  try {
+    if (window.faunaApp && typeof window.faunaApp.getPathForFile === 'function') {
+      absPath = window.faunaApp.getPathForFile(file) || '';
+    } else if (file && typeof file.path === 'string') {
+      absPath = file.path;
+    }
+  } catch (_) { absPath = ''; }
+
   if (file.type && file.type.startsWith('image/')) {
-    addAttachment(await _normalizeImageAttachment(file));
+    var img = await _normalizeImageAttachment(file);
+    if (absPath) { img.path = absPath; img.sourceUri = 'file://' + absPath; }
+    addAttachment(img);
     return;
   }
 
@@ -1112,7 +1126,8 @@ async function _processSingleAttachment(file) {
       type: 'file',
       name: file.name,
       content: body,
-      sourceUri: extracted.ref,
+      path: absPath || undefined,
+      sourceUri: absPath ? ('file://' + absPath) : extracted.ref,
       size: extracted.size,
       mime: extracted.mime,
       warning: extracted.warning
@@ -1122,7 +1137,8 @@ async function _processSingleAttachment(file) {
       type: 'file',
       name: file.name,
       content: '[Attachment note] Failed to extract text: ' + err.message,
-      sourceUri: 'attachment://' + encodeURIComponent(file.name || ('file-' + Date.now())),
+      path: absPath || undefined,
+      sourceUri: absPath ? ('file://' + absPath) : ('attachment://' + encodeURIComponent(file.name || ('file-' + Date.now()))),
       size: file.size || 0,
       mime: file.type || 'application/octet-stream',
       warning: err.message

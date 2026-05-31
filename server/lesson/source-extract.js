@@ -123,7 +123,7 @@ async function _extractUrl(url) {
  *   - Raw text (≥ 200 chars or contains no path separator) — returned as-is
  * Returns { ok, text, kind, source, truncated }.
  */
-export async function extractSourceText(source) {
+export async function extractSourceText(source, opts = {}) {
   if (!source) return { ok: false, error: 'source is empty' };
   const raw = String(source).trim();
 
@@ -170,7 +170,12 @@ export async function extractSourceText(source) {
   if (ext === '.pptx' || ext === '.ppt' || ext === '.key' || ext === '.odp') {
     try {
       const { rasterizePptx } = await import('./pptx-rasterize.js');
-      const r = await rasterizePptx({ pptxPath: file });
+      const r = await rasterizePptx({
+        pptxPath: file,
+        userDataDir: opts.userDataDir,
+        autoInstall: opts.autoInstall !== false, // default ON — first-run auto-install
+        onProgress: opts.onProgress,
+      });
       if (r.ok) {
         slideImages = r.slides.map(s => s.pngPath);
       } else {
