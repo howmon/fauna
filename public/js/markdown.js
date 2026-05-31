@@ -227,16 +227,30 @@ function renderMarkdown(text) {
 
   // ── Math pre-processing (KaTeX) ──────────────────────────────────────
   // Extract $$...$$, \[...\] (display) and \(...\), $...$ (inline) into
-  // placeholders BEFORE marked.parse so markdown's _ * \ rules don't mangle
-  // LaTeX. Re-inserted post-sanitize. Skips fenced code blocks (already
-  // protected by marked) and inline `code`.
+  // sentinel-string placeholders BEFORE marked.parse so markdown's _ * \
+  // rules don't mangle LaTeX. Re-inserted post-sanitize. Skips fenced code
+  // blocks (already protected by marked) and inline `code`.
+  //
+  // IMPORTANT: placeholders are PLAIN TEXT (\u0001MATH<n>\u0001), NOT HTML
+  // spans. HTML placeholders were unreliable — DOMPurify could drop empty
+  // <span>s or reorder attributes, breaking the post-process regex.
+  // The sentinel chars are control characters that won't appear in normal
+  // text and won't be touched by marked or DOMPurify.
   var mathId = 0;
   var mathBlocks = {};
+  function _expandNested(s) {
+    // Some models mix delimiters (e.g. $...\(...\)...$). When an outer match
+    // captures text containing an inner placeholder sentinel, expand it back
+    // to the raw TeX so KaTeX sees clean LaTeX, not control characters.
+    return s.replace(/\u0001MATH(\d+)\u0001/g, function(_, i) {
+      var m = mathBlocks['m' + i];
+      return m ? m.tex : '';
+    });
+  }
   function mathPlace(tex, display) {
-    var id = 'math-placeholder-' + (mathId++);
-    mathBlocks[id] = { tex: tex, display: display };
-    // Use a span with a unique data attr; marked will pass it through as raw HTML
-    return '<span class="math-placeholder" data-math-id="' + id + '"></span>';
+    var id = 'm' + (mathId++);
+    mathBlocks[id] = { tex: _expandNested(tex.trim()), display: display };
+    return '\u0001MATH' + id.slice(1) + '\u0001';
   }
   // Protect fenced + inline code from the math scanner
   var codeStash = [];
@@ -246,20 +260,24 @@ function renderMarkdown(text) {
   });
   // Display math: $$...$$
   cleaned = cleaned.replace(/\$\$([\s\S]+?)\$\$/g, function(_, tex) {
-    return mathPlace(tex.trim(), true);
+    return mathPlace(tex, true);
   });
   // Display math: \[...\]
   cleaned = cleaned.replace(/\\\[([\s\S]+?)\\\]/g, function(_, tex) {
-    return mathPlace(tex.trim(), true);
+    return mathPlace(tex, true);
   });
   // Inline math: \(...\)
   cleaned = cleaned.replace(/\\\(([\s\S]+?)\\\)/g, function(_, tex) {
-    return mathPlace(tex.trim(), false);
+    return mathPlace(tex, false);
   });
   // Inline math: $...$ — must not match currency ($5, $100M etc.) so require
   // a non-space immediately after the opening $ and before the closing $,
-  // and disallow a digit/letter directly adjacent on the OUTSIDE.
+  // and disallow a digit/letter directly adjacent on the OUTSIDE. Also bail
+  // out if the captured content contains a backslash-escaped dollar (\$),
+  // which usually means the model is using $ as a literal currency symbol
+  // inside math without proper delimiters.
   cleaned = cleaned.replace(/(^|[^\w$])\$(?!\s)([^\n$]+?)(?<!\s)\$(?![\w$])/g, function(m, pre, tex) {
+    if (/\\\$/.test(tex)) return m; // skip — looks like currency, not math
     return pre + mathPlace(tex, false);
   });
   // Restore code blocks
@@ -280,9 +298,11 @@ function renderMarkdown(text) {
       return '<pre class="mermaid">' + escHtml(code) + '</pre>';
     });
 
-    // Replace math placeholders with KaTeX-rendered HTML
-    html = html.replace(/<span class="math-placeholder" data-math-id="([^"]+)"><\/span>/g, function(match, id) {
-      var m = mathBlocks[id];
+    // Replace math placeholders with KaTeX-rendered HTML.
+    // Sentinel format: \u0001MATH<n>\u0001 (control chars survive both
+    // marked.parse and DOMPurify untouched).
+    html = html.replace(/\u0001MATH(\d+)\u0001/g, function(match, n) {
+      var m = mathBlocks['m' + n];
       if (!m) return '';
       if (typeof window !== 'undefined' && window.katex) {
         try {
