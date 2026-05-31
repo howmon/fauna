@@ -118,7 +118,28 @@ function _kindsCatalog() {
 
 function _scriptUserPrompt({ topic, durationMin, voice, sourceText, sourceKind }) {
   const sceneCount = Math.max(3, Math.min(20, Math.round(durationMin * 2.5))); // ~24s avg per scene
-  const sourceBlock = sourceText ? `
+  // When source material is a structured deck/document (pptx, docx, pdf, slide-formatted markdown)
+  // we force STRICT mode: one scene per slide, narration explains THAT slide's content,
+  // no innovation, no reordering, no inventing parallel examples.
+  const isSlideSource = !!sourceText && /\b(pptx|powerpoint|slides?|docx|word|pdf)\b/i.test(sourceKind || '');
+  const slideCount = isSlideSource ? (sourceText.match(/^#\s*Slide\s+\d+/gmi) || []).length : 0;
+  const sourceBlock = sourceText ? (isSlideSource ? `
+
+## Source material (${sourceKind}) — STRICT SLIDE-FOLLOWING MODE
+
+The user uploaded a ${sourceKind}. Your job is to **explain THIS deck**, not invent a new lesson on the same topic. Follow these rules WITHOUT exception:
+
+1. **One scene per slide, in the exact order they appear.** Do NOT merge, split, reorder, skip, or add slides. ${slideCount > 0 ? `The source has ${slideCount} slide(s) → produce exactly ${slideCount} scene(s).` : ''}
+2. **Use the slide's own words.** Every heading, bullet, number, label, and term on a slide must appear (verbatim or near-verbatim) as a prop in that scene. If a slide says "Days of Supply = Avg Inventory / Daily COGS", the scene shows that exact equation — not a "better" rewording.
+3. **Narration EXPLAINS what is on the slide.** Read/elaborate the bullets in order, define terms the slide introduces, walk through any formula/diagram the slide shows. Do NOT add tangential examples, analogies, or content not implied by the slide.
+4. **Layout mirrors the slide.** Title at top, bullets below in slide order, diagrams/equations where the slide places them. Use \`flow\` props for slide-native step diagrams.
+5. **Do NOT be "innovative."** No surprise twists, no extra scenes, no recap scene unless the deck itself has one, no quiz unless the deck has one. The lesson is a faithful narrated walkthrough of the provided deck.
+6. Override the auto scene count — use the slide count instead. Each scene's narration should be ~20-60s of speech proportional to that slide's density.
+
+<<<SOURCE_BEGIN>>>
+${sourceText}
+<<<SOURCE_END>>>
+` : `
 
 ## Source material (${sourceKind || 'document'}) — GROUND THE LESSON IN THIS
 
@@ -127,7 +148,10 @@ The user supplied this source. Treat it as canonical: cover its main points in o
 <<<SOURCE_BEGIN>>>
 ${sourceText}
 <<<SOURCE_END>>>
-` : '';
+`) : '';
+  const sceneTarget = isSlideSource && slideCount > 0
+    ? `Produce EXACTLY ${slideCount} scenes — one per slide, in order.`
+    : `Aim for ~${sceneCount} scenes (each 15–40 seconds of narration). Each scene is a single conceptual beat with its own narration and a small set of animated actions.`;
   return `# Lesson DSL
 
 Design a whiteboard lesson on this topic:
@@ -135,7 +159,7 @@ Design a whiteboard lesson on this topic:
   ${topic}
 ${sourceBlock}
 Target spoken duration: ~${durationMin} minute(s).
-Aim for ~${sceneCount} scenes (each 15–40 seconds of narration). Each scene is a single conceptual beat with its own narration and a small set of animated actions.
+${sceneTarget}
 
 ## Output schema (return ONLY this JSON, nothing else)
 
