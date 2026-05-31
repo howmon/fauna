@@ -335,6 +335,22 @@ const RUNTIME_JS = `
         }
         break;
       }
+      case 'slide': {
+        // Full-canvas slide backdrop. Identical to 'image' but with default
+        // dimensions matching the lesson canvas (1280x720) and aspect-fit
+        // preservation so the original deck visual is never distorted.
+        if (!g.querySelector('image')) {
+          const im = document.createElementNS(SVG_NS, 'image');
+          im.setAttributeNS('http://www.w3.org/1999/xlink', 'href', prop.src || '');
+          im.setAttribute('href', prop.src || '');
+          im.setAttribute('width', String(prop.w || 1280));
+          im.setAttribute('height', String(prop.h || 720));
+          im.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+          im.setAttribute('aria-label', prop.alt || 'slide');
+          g.appendChild(im);
+        }
+        break;
+      }
       case 'svg': {
         if (!g.querySelector('g.svg-inline')) {
           const inner = document.createElementNS(SVG_NS, 'g');

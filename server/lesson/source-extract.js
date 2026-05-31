@@ -161,15 +161,38 @@ export async function extractSourceText(source) {
         throw new Error(`unsupported source type: ${ext}`);
       }
   }
-  return _result(text, kind, file);
+
+  // For deck-like sources, also rasterize each slide into a PNG that the
+  // lesson widget can use as a verbatim backdrop. Failures are non-fatal —
+  // the lesson still works in text-only mode.
+  let slideImages = null;
+  let rasterError = null;
+  if (ext === '.pptx' || ext === '.ppt' || ext === '.key' || ext === '.odp') {
+    try {
+      const { rasterizePptx } = await import('./pptx-rasterize.js');
+      const r = await rasterizePptx({ pptxPath: file });
+      if (r.ok) {
+        slideImages = r.slides.map(s => s.pngPath);
+      } else {
+        rasterError = r.error + (r.hint ? ' (install hint: ' + r.hint.cmd + ')' : '');
+      }
+    } catch (e) {
+      rasterError = 'rasterize failed: ' + (e.message || String(e));
+    }
+  }
+
+  return _result(text, kind, file, { slideImages, rasterError });
 }
 
-function _result(text, kind, source) {
+function _result(text, kind, source, extra) {
   let truncated = false;
   let out = String(text || '').trim();
   if (out.length > MAX_CHARS) {
     out = out.slice(0, MAX_CHARS);
     truncated = true;
   }
-  return { ok: true, text: out, kind, source, truncated, length: out.length };
+  const result = { ok: true, text: out, kind, source, truncated, length: out.length };
+  if (extra && extra.slideImages && extra.slideImages.length) result.slideImages = extra.slideImages;
+  if (extra && extra.rasterError) result.rasterError = extra.rasterError;
+  return result;
 }

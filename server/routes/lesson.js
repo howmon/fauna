@@ -2,7 +2,7 @@
 // lesson JSON for the runtime widget to (re)hydrate state.
 
 import fs from 'fs';
-import { lessonAudioPath, loadLesson } from '../lesson/generator.js';
+import { lessonAudioPath, lessonSlidePath, loadLesson } from '../lesson/generator.js';
 import { renderLessonVideo, lessonVideoPath } from '../lesson/video-render.js';
 import { buildLessonHtmlBundle, lessonHtmlBundlePath } from '../lesson/html-export.js';
 
@@ -47,6 +47,22 @@ export function registerLessonRoutes(app, { getElectronBrowserWindow } = {}) {
     const lesson = loadLesson(id);
     if (!lesson) return res.status(404).json({ ok: false, error: 'not found' });
     res.json({ ok: true, id, lesson });
+  });
+
+  // Per-slide PNG backdrop (strict slide mode). slide-NNN.png served from
+  // the lesson's slides/ subdirectory with long-lived cache headers.
+  app.get('/api/lesson-slide/:lessonId/:filename', (req, res) => {
+    const lessonId = String(req.params.lessonId || '');
+    const filename = String(req.params.filename || '');
+    if (!/^L_[a-z0-9]{8,32}$/i.test(lessonId)) return res.status(400).end();
+    const file = lessonSlidePath(lessonId, filename);
+    if (!file || !fs.existsSync(file)) return res.status(404).end();
+    res.writeHead(200, {
+      'Content-Type': 'image/png',
+      'Content-Length': fs.statSync(file).size,
+      'Cache-Control': 'public, max-age=86400, immutable',
+    });
+    fs.createReadStream(file).pipe(res);
   });
 
   // Build (on first request) and stream the lesson as a downloadable mp4.

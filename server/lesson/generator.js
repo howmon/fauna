@@ -50,6 +50,7 @@ export const LESSON_KINDS = {
   shape:   { props: ['shape', 'w', 'h', 'fill', 'stroke', 'r'],        notes: 'shape: "rect"|"circle"|"ellipse"|"line"|"triangle". w/h or r in pixels; fill/stroke CSS.' },
   arrow:   { props: ['from', 'to', 'label', 'curve', 'color'],         notes: 'Arrow between two anchor points or two prop ids. from/to: {x,y} OR "<propId>" (uses prop center). label optional. curve (number, 0=straight). Triggered by {do:"draw"} or {do:"connect"}.' },
   image:   { props: ['src', 'w', 'h', 'alt'],                          notes: 'Static image (URL or data URI).' },
+  slide:   { props: ['src', 'w', 'h'],                                 notes: 'Full-canvas slide backdrop (PNG of a source PowerPoint/Keynote slide). USE ONLY when the source material is a deck and the generator has been given pre-rendered slide images. Place at (0,0) sized to the full canvas (w=1280,h=720). One per scene, drawn first so it sits behind any other props. Do NOT add other content props on top in v1 strict-slide mode — narration alone walks through the slide.' },
   svg:     { props: ['markup', 'w', 'h'],                              notes: 'Inline SVG markup (scripts stripped). markup must start with <svg>. Use for hand-drawn icons or pre-rendered diagrams.' },
   code:    { props: ['code', 'language'],                              notes: 'Monospace code block. Animated reveal via {do:"type"}.' },
   // Math pack
@@ -275,6 +276,94 @@ export async function generateLessonDSL({ topic, durationMin = 5, voice, client,
   return dsl;
 }
 
+// ── Slide-deck strict mode: deterministic DSL assembly ─────────────────
+// When the source is a PowerPoint/Keynote/PDF deck and we've successfully
+// rasterized the slides to PNGs, we DON'T ask the LLM to invent a layout.
+// Instead we generate narration-only and mechanically build a DSL where
+// each scene shows the original slide image as a full-canvas backdrop.
+// This guarantees pixel-perfect deck fidelity — no overlays, no re-rendered
+// shapes, no hallucinated URLs.
+
+const SLIDE_NARRATION_SYSTEM = `You are a master tutor narrating a slide deck. The user uploaded a deck and wants you to walk through it slide by slide. For EACH slide, produce a natural spoken explanation of what is on that slide — read/elaborate the bullets in order, define terms, walk through any formula or diagram. Do NOT add tangential examples. Do NOT invent content not on the slide. You output ONLY JSON.`;
+
+function _slideNarrationPrompt({ topic, slideTexts, voice }) {
+  const slides = slideTexts.map((t, i) => `--- SLIDE ${i + 1} ---\n${t || '(empty / image-only slide)'}`).join('\n\n');
+  return `Topic / intent the user provided:\n  ${topic || '(none — just walk through the deck)'}\n\nThere are ${slideTexts.length} slides. Produce a narration for each one.\n\nRules:\n- Output ONLY a single JSON object — no prose, no markdown, no code fences.\n- Each narration is the actual spoken transcript: 30–120 words, conversational, second-person ("you can see..." is fine here because the learner is literally looking at the slide).\n- Stick to the slide's own content. If a slide is sparse, keep the narration short.\n- Do NOT say "next slide" or "as shown above" — the visual transition is handled.\n- First slide: brief intro / orient the learner. Last slide: brief wrap-up only if the slide itself is a summary.\n\nSchema:\n\n{\n  "title": "<short title for the lesson, ≤ 60 chars>",\n  "subject": "<one of: math|chemistry|physics|biology|cs|general>",\n  "voice": "${voice || 'kokoro:af_bella'}",\n  "narrations": [\n    "<narration for slide 1>",\n    "<narration for slide 2>",\n    ...\n  ]\n}\n\nThe narrations array MUST have exactly ${slideTexts.length} entries.\n\n## Slides\n\n${slides}\n\nReturn the JSON now.`;
+}
+
+/** LLM call: generate one narration per slide (narration-only, no layout). */
+export async function generateSlideNarrations({ topic, slideTexts, voice, client, model = 'claude-sonnet-4.6' }) {
+  if (!client) throw new Error('client is required');
+  if (!Array.isArray(slideTexts) || !slideTexts.length) throw new Error('slideTexts required');
+  const user = _slideNarrationPrompt({ topic, slideTexts, voice });
+  const r = await client.chat.completions.create({
+    model,
+    messages: [
+      { role: 'system', content: SLIDE_NARRATION_SYSTEM },
+      { role: 'user',   content: user },
+    ],
+    temperature: 0.5,
+    max_tokens: 8192,
+  });
+  let raw = (r?.choices?.[0]?.message?.content || '').trim();
+  if (raw.startsWith('```')) raw = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  const first = raw.indexOf('{');
+  const last = raw.lastIndexOf('}');
+  if (first === -1 || last === -1) throw new Error('LLM returned no JSON for slide narrations');
+  let parsed;
+  try { parsed = JSON.parse(raw.slice(first, last + 1)); }
+  catch (e) { throw new Error('slide narrations JSON parse failed: ' + e.message); }
+  if (!Array.isArray(parsed.narrations)) throw new Error('narrations must be an array');
+  // Pad or trim to match slide count.
+  while (parsed.narrations.length < slideTexts.length) parsed.narrations.push('');
+  if (parsed.narrations.length > slideTexts.length) parsed.narrations = parsed.narrations.slice(0, slideTexts.length);
+  return {
+    title: parsed.title || 'Slide deck walkthrough',
+    subject: parsed.subject || 'general',
+    voice: parsed.voice || voice || 'kokoro:af_bella',
+    narrations: parsed.narrations.map(n => String(n || '').trim()),
+  };
+}
+
+/**
+ * Mechanically assemble a Lesson DSL from slide images + narrations.
+ * One scene per slide. Each scene has exactly one `slide` prop drawn
+ * full-canvas at scene start. No overlays in v1.
+ *
+ * @param {object} opts
+ * @param {string} opts.lessonId
+ * @param {Array<{index:number, slideUrl:string}>} opts.slides   Per-slide image URLs as served by /api/lesson-slide.
+ * @param {string[]} opts.narrations                            Per-slide narration text.
+ * @param {string} opts.title
+ * @param {string} opts.subject
+ * @param {string} opts.voice
+ */
+export function assembleSlideLessonDSL({ slides, narrations, title, subject, voice }) {
+  if (!Array.isArray(slides) || !slides.length) throw new Error('slides required');
+  const props = {};
+  const scenes = [];
+  for (let i = 0; i < slides.length; i++) {
+    const s = slides[i];
+    const propId = 'slide_' + String(i + 1).padStart(3, '0');
+    props[propId] = { kind: 'slide', src: s.slideUrl, w: 1280, h: 720 };
+    scenes.push({
+      id: 'scene_' + String(i + 1).padStart(3, '0'),
+      narration: narrations[i] || `Slide ${i + 1}.`,
+      actions: [
+        { at: 'start', do: 'draw', prop: propId, x: 0, y: 0 },
+      ],
+    });
+  }
+  return {
+    title: title || 'Slide deck walkthrough',
+    subject: subject || 'general',
+    voice: voice || 'kokoro:af_bella',
+    canvas: { width: 1280, height: 720, theme: 'whiteboard' },
+    props,
+    scenes,
+  };
+}
+
 // ── Audio synthesis per scene ───────────────────────────────────────────
 
 function _lessonDir(lessonId) {
@@ -359,18 +448,50 @@ export async function synthesizeLessonAudio({ lesson, lessonId, onProgress }) {
  */
 export async function createLesson({ topic, durationMin = 5, voice, client, model, onProgress, source }) {
   const id = 'L_' + Date.now().toString(36) + crypto.randomBytes(2).toString('hex');
-  let sourceText, sourceKind;
+  let sourceText, sourceKind, slideImages;
   if (source) {
     if (onProgress) onProgress({ phase: 'source', source });
     const ext = await extractSourceText(source);
     if (ext?.ok) {
       sourceText = ext.text;
       sourceKind = ext.kind;
+      slideImages = ext.slideImages || null;
       if (!topic || !String(topic).trim()) topic = `Teach the contents of this ${ext.kind} source`;
     }
   }
-  if (onProgress) onProgress({ phase: 'script' });
-  const dsl = await generateLessonDSL({ topic, durationMin, voice, client, model, sourceText, sourceKind });
+
+  let dsl;
+  // ── STRICT SLIDE MODE ──
+  // If the source produced rasterized slide images, build a deterministic
+  // one-scene-per-slide DSL with the original slide as backdrop. This
+  // guarantees pixel-perfect deck fidelity.
+  if (slideImages && slideImages.length) {
+    if (onProgress) onProgress({ phase: 'slides-copy', slideCount: slideImages.length });
+    fs.mkdirSync(path.join(_lessonDir(id), 'slides'), { recursive: true });
+    const slidesForDsl = [];
+    for (let i = 0; i < slideImages.length; i++) {
+      const src = slideImages[i];
+      const filename = 'slide-' + String(i + 1).padStart(3, '0') + '.png';
+      const dest = path.join(_lessonDir(id), 'slides', filename);
+      try { fs.copyFileSync(src, dest); }
+      catch (e) { throw new Error('failed to copy slide ' + (i + 1) + ': ' + e.message); }
+      slidesForDsl.push({ index: i + 1, slideUrl: '/api/lesson-slide/' + id + '/' + filename });
+    }
+    // Split extracted text back into per-slide chunks for the narrator.
+    // Source-extract emits "# Slide N\n<text>" blocks; split on that.
+    const perSlide = _splitSourceBySlide(sourceText, slideImages.length);
+    if (onProgress) onProgress({ phase: 'script', mode: 'slide-narration' });
+    const narr = await generateSlideNarrations({ topic, slideTexts: perSlide, voice, client, model });
+    dsl = assembleSlideLessonDSL({
+      slides: slidesForDsl, narrations: narr.narrations,
+      title: narr.title, subject: narr.subject, voice: narr.voice,
+    });
+  } else {
+    // Default whiteboard-lesson mode (LLM-generated layout).
+    if (onProgress) onProgress({ phase: 'script' });
+    dsl = await generateLessonDSL({ topic, durationMin, voice, client, model, sourceText, sourceKind });
+  }
+
   const v = validateLesson(dsl);
   if (!v.ok) throw new Error('lesson DSL invalid: ' + v.errors.join('; '));
   if (onProgress) onProgress({ phase: 'audio-start', sceneCount: dsl.scenes.length });
@@ -378,7 +499,40 @@ export async function createLesson({ topic, durationMin = 5, voice, client, mode
   fs.writeFileSync(path.join(_lessonDir(id), 'lesson.draft.json'), JSON.stringify(dsl, null, 2), 'utf8');
   const lesson = await synthesizeLessonAudio({ lesson: dsl, lessonId: id, onProgress });
   fs.writeFileSync(path.join(_lessonDir(id), 'lesson.json'), JSON.stringify(lesson, null, 2), 'utf8');
-  return { id, lesson, warnings: v.warnings };
+  return { id, lesson, warnings: v.warnings, slideCount: slideImages ? slideImages.length : 0 };
+}
+
+/** Split source text emitted by source-extract into one chunk per slide.
+ *  Falls back to even chunking if the "# Slide N" markers aren't present
+ *  (e.g. PDF source with no slide headers). */
+function _splitSourceBySlide(text, expectedCount) {
+  const result = [];
+  if (!text) {
+    for (let i = 0; i < expectedCount; i++) result.push('');
+    return result;
+  }
+  // Split on "# Slide N" headers. Each piece begins with the slide number's
+  // content (preceded by the captured number).
+  const parts = text.split(/^#\s*Slide\s+(\d+)[\t ]*\r?\n/mi);
+  // parts[0] = preamble (usually empty), then alternating [number, body, number, body, ...]
+  const byIdx = new Map();
+  for (let i = 1; i < parts.length; i += 2) {
+    const n = parseInt(parts[i], 10);
+    const body = parts[i + 1] || '';
+    // Strip any trailing "## Slide N notes" section — keep just the slide body.
+    const cleaned = body.split(/^##\s*Slide\s+\d+\s+notes/mi)[0].trim();
+    if (!isNaN(n)) byIdx.set(n, cleaned);
+  }
+  if (byIdx.size > 0) {
+    for (let i = 1; i <= expectedCount; i++) result.push(byIdx.get(i) || '');
+    return result;
+  }
+  // Fallback: distribute text as evenly as possible
+  const chunkSize = Math.ceil(text.length / Math.max(1, expectedCount));
+  for (let i = 0; i < expectedCount; i++) {
+    result.push(text.slice(i * chunkSize, (i + 1) * chunkSize).trim());
+  }
+  return result;
 }
 
 export function loadLesson(lessonId) {
@@ -391,6 +545,12 @@ export function lessonAudioPath(lessonId, fileName) {
   // Only allow our own filename pattern to prevent traversal.
   if (!/^scene\d{2}-[0-9a-f]{8,32}\.mp3$/.test(fileName)) return null;
   return path.join(_lessonDir(lessonId), 'audio', fileName);
+}
+
+export function lessonSlidePath(lessonId, fileName) {
+  // Only allow slide-NNN.png to prevent traversal.
+  if (!/^slide-\d{3}\.png$/.test(fileName)) return null;
+  return path.join(_lessonDir(lessonId), 'slides', fileName);
 }
 
 // Exposed for tests + tool catalog.
