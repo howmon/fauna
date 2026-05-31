@@ -975,7 +975,14 @@ function copyCode(btn) {
 
 // ── File attachment ───────────────────────────────────────────────────────
 
-function openFileAttach() { document.getElementById('file-input').click(); }
+function openFileAttach() {
+  var fi = document.getElementById('file-input');
+  if (!fi) return;
+  // Force multi-select every time in case anything (extension, drag-drop
+  // handler, native module) cleared the attribute.
+  try { fi.multiple = true; fi.setAttribute('multiple', 'multiple'); } catch(_) {}
+  fi.click();
+}
 
 function _toBase64(buffer) {
   var bytes = new Uint8Array(buffer);
@@ -1148,10 +1155,27 @@ async function _processSingleAttachment(file) {
 
 async function handleFiles(files) {
   var list = Array.from(files || []);
-  for (var i = 0; i < list.length; i++) {
-    await _processSingleAttachment(list[i]);
-  }
-  document.getElementById('file-input').value = '';
+  // Process in parallel so one slow / hung extraction (e.g. a large pptx
+  // running through LibreOffice) doesn't make the user think only the first
+  // file was accepted. Each file is independently try/caught so one failure
+  // never blocks the rest.
+  await Promise.all(list.map(function(f) {
+    return _processSingleAttachment(f).catch(function(err) {
+      try { console.warn('[attach] failed to add', f && f.name, err); } catch(_) {}
+      try {
+        addAttachment({
+          type: 'file',
+          name: (f && f.name) || 'attachment',
+          content: '[Attachment note] Failed to add: ' + (err && err.message || err),
+          size: (f && f.size) || 0,
+          mime: (f && f.type) || 'application/octet-stream',
+          warning: String(err && err.message || err),
+        });
+      } catch(_) {}
+    });
+  }));
+  var fi = document.getElementById('file-input');
+  if (fi) fi.value = '';
 }
 
 function addAttachment(att) {

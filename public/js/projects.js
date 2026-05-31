@@ -173,12 +173,18 @@ function _renderAllProjectsPage() {
 async function _confirmDeleteProjectFromList(id) {
   if (!await _projConfirm('Delete this project? This cannot be undone.')) return;
   try {
-    await fetch('/api/projects/' + id, { method: 'DELETE' });
+    var r = await fetch('/api/projects/' + id, { method: 'DELETE' });
+    if (!r.ok) {
+      var msg = 'HTTP ' + r.status;
+      try { var j = await r.json(); if (j && j.error) msg = j.error; } catch(_) {}
+      throw new Error(msg);
+    }
     state.projects = state.projects.filter(function(p) { return p.id !== id; });
     _deleteProjectConversations(id);
     if (state.activeProjectId === id) clearActiveProject();
     renderProjectSidebarList();
     _renderAllProjectsPage();
+    _showToast('Project deleted');
   } catch(e) { _showToast('Delete failed: ' + e.message, true); }
 }
 
