@@ -260,12 +260,15 @@ function openConvInNewWindow(id, e) {
 function newConversationInNewWindow(e) {
   if (e) { e.stopPropagation(); e.preventDefault(); }
   if (window.faunaApp && typeof window.faunaApp.openWindow === 'function') {
-    window.faunaApp.openWindow({});
+    // `blank: true` tells the new window to exit any project context and
+    // start with no active conversation, instead of auto-loading the most
+    // recent conv (which would re-enter that conv's project).
+    window.faunaApp.openWindow({ blank: true });
     return;
   }
   // Browser fallback: open the app root in a new tab with no project param.
   try {
-    window.open(window.location.pathname, '_blank');
+    window.open(window.location.pathname + '?blank=1', '_blank');
   } catch (_) {}
 }
 
