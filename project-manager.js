@@ -112,6 +112,17 @@ function uid(prefix) {
 export function createProject(opts = {}) {
   const projects = readProjects();
   const name = (opts.name || 'New Project').slice(0, 120);
+  // Dedupe: if a project with the same (trimmed, case-insensitive) name already
+  // exists, return it instead of creating a duplicate. Prevents accidental
+  // duplicates from double-clicks, retried tool calls, or agent loops.
+  const _normName = name.trim().toLowerCase();
+  if (_normName) {
+    const existing = projects.find(p => String(p.name || '').trim().toLowerCase() === _normName);
+    if (existing) {
+      try { console.warn('[projects] createProject: returning existing project with same name:', existing.id, name); } catch (_) {}
+      return existing;
+    }
+  }
   let rootPath = opts.rootPath || null;
   // If no folder is set, auto-create one under ~/Documents/Fauna/<sanitized name>
   if (!rootPath) {

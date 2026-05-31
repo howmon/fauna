@@ -87,6 +87,27 @@ function closeAllProjects() {
   if (page) page.style.display = 'none';
 }
 
+async function _dedupeAllProjects() {
+  if (!await _projConfirm('Remove projects with duplicate names? The oldest of each name is kept; the rest are deleted. This cannot be undone.')) return;
+  try {
+    var r = await fetch('/api/projects/dedupe', { method: 'POST' });
+    if (!r.ok) throw new Error((await r.json().catch(function(){return{};})).error || 'Failed');
+    var j = await r.json();
+    var deletedIds = (j && j.deleted) || [];
+    if (deletedIds.length) {
+      // Drop deleted from local state
+      state.projects = (state.projects || []).filter(function(p) { return deletedIds.indexOf(p.id) === -1; });
+      // If the active project was deleted, clear it
+      if (state.activeProjectId && deletedIds.indexOf(state.activeProjectId) !== -1) {
+        await setActiveProject(null);
+      }
+    }
+    _renderAllProjectsPage();
+    renderProjectSidebarList();
+    _showToast('Removed ' + deletedIds.length + ' duplicate project' + (deletedIds.length === 1 ? '' : 's'));
+  } catch (e) { _showToast('Error: ' + e.message, true); }
+}
+
 function _renderAllProjectsPage() {
   var page = document.getElementById('all-projects-page');
   if (!page) return;
@@ -108,6 +129,7 @@ function _renderAllProjectsPage() {
             '<input class="all-agents-search" id="all-projects-search" placeholder="Search projects…" oninput="document.getElementById(\'all-projects-page\')._filter=this.value;_renderAllProjectsPage()">' +
           '</div>' +
           '<button class="proj-action-btn" onclick="openCreateProjectDialog()"><i class="ti ti-plus"></i> New project</button>' +
+          '<button class="proj-action-btn" onclick="_dedupeAllProjects()" title="Remove projects with duplicate names (keeps the oldest)"><i class="ti ti-broom"></i> Remove duplicates</button>' +
           '<button class="all-agents-close" onclick="closeAllProjects()"><i class="ti ti-x"></i></button>' +
         '</div>' +
         '<div id="all-projects-list-body" class="all-projects-list"></div>' +
@@ -266,6 +288,20 @@ async function setActiveProject(id) {
   updateProjectIndicator();
   if (typeof renderConvList === 'function') renderConvList();
   if (typeof renderTasks === 'function') renderTasks();
+  // If the project hub is open, re-render it for the newly-active project (or close it if we exited)
+  if (state.projectHubOpen) {
+    var _hubProj = _activeProject();
+    if (_hubProj) {
+      _renderProjectHub(_hubProj);
+    } else {
+      closeProjectHub();
+    }
+  }
+  // Refresh the All Projects page so the Active badge / button states update
+  var _allProjPage = document.getElementById('all-projects-page');
+  if (_allProjPage && _allProjPage.style.display !== 'none') {
+    _renderAllProjectsPage();
+  }
 
   // Navigate to a conversation appropriate for the new project context
   if (id) {

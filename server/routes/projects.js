@@ -30,6 +30,24 @@ export function registerProjectRoutes(app, deps) {
     catch (e) { res.status(400).json({ error: e.message }); }
   });
 
+  // Bulk-remove duplicate projects (same trimmed, case-insensitive name).
+  // Keeps the oldest one of each name and deletes the rest. Returns the list
+  // of deleted ids.
+  app.post('/api/projects/dedupe', (_req, res) => {
+    try {
+      const all = getAllProjects();
+      const seen = new Map(); // name -> kept project
+      const deleted = [];
+      for (const p of all.slice().sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')))) {
+        const key = String(p.name || '').trim().toLowerCase();
+        if (!key) continue;
+        if (!seen.has(key)) { seen.set(key, p); continue; }
+        if (deleteProject(p.id)) deleted.push(p.id);
+      }
+      res.json({ ok: true, deleted, keptCount: seen.size });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   app.get('/api/projects/:id', (req, res) => {
     const project = getProject(req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
