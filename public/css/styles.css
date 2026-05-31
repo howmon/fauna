@@ -1593,6 +1593,23 @@ body.is-resizing webview { pointer-events: none !important; }
 #ctx-meter:hover #ctx-meter-popover,
 #ctx-meter:focus-within #ctx-meter-popover { display: block; }
 
+/* ── KaTeX math in chat ───────────────────────────────────────────── */
+.katex { color: inherit; font-size: 1em; }
+.katex-display {
+  margin: .6em 0; overflow-x: auto; overflow-y: hidden;
+  padding: 2px 0;
+}
+.katex-display > .katex { display: inline-block; text-align: initial; }
+.math-fallback {
+  font-family: var(--font-mono, monospace);
+  color: var(--fau-text-muted); background: var(--fau-surface2);
+  padding: 1px 4px; border-radius: 3px;
+}
+.math-error {
+  color: var(--error); background: var(--fau-surface2);
+  padding: 1px 4px; border-radius: 3px;
+}
+
 /* ── Toolbar plus menu ─────────────────────────────────────────────── */
 #tb-plus-wrap { position: relative; flex-shrink: 0; }
 /* #tb-plus-btn size/style handled in #textarea-row #tb-plus-btn above */

@@ -224,12 +224,54 @@ function renderMarkdown(text) {
     mermaidBlocks[id] = code.trim(); // preserve partial diagram; will re-render when fence closes
     return '<div class="mermaid-placeholder" data-mermaid-id="' + id + '"></div>';
   });
+
+  // ── Math pre-processing (KaTeX) ──────────────────────────────────────
+  // Extract $$...$$, \[...\] (display) and \(...\), $...$ (inline) into
+  // placeholders BEFORE marked.parse so markdown's _ * \ rules don't mangle
+  // LaTeX. Re-inserted post-sanitize. Skips fenced code blocks (already
+  // protected by marked) and inline `code`.
+  var mathId = 0;
+  var mathBlocks = {};
+  function mathPlace(tex, display) {
+    var id = 'math-placeholder-' + (mathId++);
+    mathBlocks[id] = { tex: tex, display: display };
+    // Use a span with a unique data attr; marked will pass it through as raw HTML
+    return '<span class="math-placeholder" data-math-id="' + id + '"></span>';
+  }
+  // Protect fenced + inline code from the math scanner
+  var codeStash = [];
+  cleaned = cleaned.replace(/```[\s\S]*?```|`[^`\n]+`/g, function(m) {
+    codeStash.push(m);
+    return '\u0000CODE' + (codeStash.length - 1) + '\u0000';
+  });
+  // Display math: $$...$$
+  cleaned = cleaned.replace(/\$\$([\s\S]+?)\$\$/g, function(_, tex) {
+    return mathPlace(tex.trim(), true);
+  });
+  // Display math: \[...\]
+  cleaned = cleaned.replace(/\\\[([\s\S]+?)\\\]/g, function(_, tex) {
+    return mathPlace(tex.trim(), true);
+  });
+  // Inline math: \(...\)
+  cleaned = cleaned.replace(/\\\(([\s\S]+?)\\\)/g, function(_, tex) {
+    return mathPlace(tex.trim(), false);
+  });
+  // Inline math: $...$ — must not match currency ($5, $100M etc.) so require
+  // a non-space immediately after the opening $ and before the closing $,
+  // and disallow a digit/letter directly adjacent on the OUTSIDE.
+  cleaned = cleaned.replace(/(^|[^\w$])\$(?!\s)([^\n$]+?)(?<!\s)\$(?![\w$])/g, function(m, pre, tex) {
+    return pre + mathPlace(tex, false);
+  });
+  // Restore code blocks
+  cleaned = cleaned.replace(/\u0000CODE(\d+)\u0000/g, function(_, i) {
+    return codeStash[+i] || '';
+  });
   
   try {
     var html = marked.parse(cleaned);
     // Sanitise HTML to prevent XSS from AI-generated or injected content
     html = typeof DOMPurify !== 'undefined'
-      ? DOMPurify.sanitize(html, { ADD_ATTR: ['data-special-lang', 'data-lang', 'data-wf-id', 'data-wf-path', 'onclick', 'data-code-id', 'data-mermaid-id'], ADD_TAGS: ['iframe'] })
+      ? DOMPurify.sanitize(html, { ADD_ATTR: ['data-special-lang', 'data-lang', 'data-wf-id', 'data-wf-path', 'onclick', 'data-code-id', 'data-mermaid-id', 'data-math-id'], ADD_TAGS: ['iframe'] })
       : html;
     
     // Replace placeholders with actual mermaid divs
@@ -237,7 +279,30 @@ function renderMarkdown(text) {
       var code = mermaidBlocks[id] || '';
       return '<pre class="mermaid">' + escHtml(code) + '</pre>';
     });
-    
+
+    // Replace math placeholders with KaTeX-rendered HTML
+    html = html.replace(/<span class="math-placeholder" data-math-id="([^"]+)"><\/span>/g, function(match, id) {
+      var m = mathBlocks[id];
+      if (!m) return '';
+      if (typeof window !== 'undefined' && window.katex) {
+        try {
+          return window.katex.renderToString(m.tex, {
+            displayMode: !!m.display,
+            throwOnError: false,
+            output: 'html',
+            strict: 'ignore',
+          });
+        } catch (e) {
+          return '<code class="math-error">' + escHtml(m.tex) + '</code>';
+        }
+      }
+      // KaTeX not loaded yet — fall back to escaped raw TeX wrapped so it's
+      // visually recognisable. (Should be rare; KaTeX is in <head>.)
+      return (m.display ? '<div class="math-fallback">' : '<span class="math-fallback">') +
+             (m.display ? '$$' : '$') + escHtml(m.tex) + (m.display ? '$$' : '$') +
+             (m.display ? '</div>' : '</span>');
+    });
+
     return html;
   }
   catch (e) { return escHtml(cleaned); }
