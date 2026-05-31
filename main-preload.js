@@ -14,12 +14,15 @@ contextBridge.exposeInMainWorld('faunaApp', {
 
   /**
    * Open a new Fauna window, optionally pre-selecting a conversation/project.
-   * @param {{convId?: string, projectId?: string}} [opts]
+   * Pass blank:true to open a fresh window with no project context (used by
+   * the "open new chat in new window" affordance).
+   * @param {{convId?: string, projectId?: string, blank?: boolean}} [opts]
    */
   openWindow(opts) {
     const payload = {
       convId:    opts && typeof opts.convId    === 'string' ? opts.convId    : null,
       projectId: opts && typeof opts.projectId === 'string' ? opts.projectId : null,
+      blank:     !!(opts && opts.blank),
     };
     ipcRenderer.send('fauna:open-window', payload);
   },
