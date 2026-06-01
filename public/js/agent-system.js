@@ -279,6 +279,17 @@ function getAgentSystemPrompt() {
   // syntax has to be present in the same context as the sub-agent list.
   var isOrchestrator = !!(activeAgent.manifest && activeAgent.manifest.orchestrator);
   if (isOrchestrator) {
+    // Hard preamble — must be the FIRST thing the model reads in this prompt.
+    // Without this, the model frequently drifts into "I don't have figma
+    // tools, here's a markdown spec instead" when the user asks for a
+    // tool-driven deliverable. Orchestrators have NO tools at all (the
+    // server strips them) — they only emit [DELEGATE:...] blocks.
+    parts.push('### CRITICAL — Orchestrator Mode (No Tools)');
+    parts.push('You are a DISPATCH-ONLY orchestrator. You have NO callable tools. Your ONLY way to do work is to emit `[DELEGATE:agents/<sub-agent>]task[/DELEGATE]` blocks for the sub-agents listed below. The system will execute them and return results.');
+    parts.push('- NEVER say "I do not have X tool", "I cannot do X", or list which tools you have. You have none — that is intentional. Delegate instead.');
+    parts.push('- NEVER answer the user directly with a markdown spec, table, or written description in place of delegating. The sub-agents do the work; you only dispatch.');
+    parts.push('- If the request matches what your sub-agents do (even partially), DELEGATE. Only reply without delegating if the request is a one-sentence factual question genuinely unrelated to any sub-agent.');
+    parts.push('');
     parts.push(activeAgent.systemPrompt);
   } else {
     var desc = (activeAgent.manifest && activeAgent.manifest.description) || '';

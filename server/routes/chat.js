@@ -594,8 +594,22 @@ export function registerChatRoute(app, {
         );
         agentToolHandlers = handlers;
 
+        // Orchestrators are dispatch-only: they MUST emit [DELEGATE:...] blocks
+        // and never call tools themselves. If we leave the built-in tool defs
+        // (agent_shell_exec / agent_fetch_url / file ops) in the catalog, the
+        // model treats them as the available toolset and drifts into "I only
+        // have shell and fetch, I can't do figma" instead of delegating. This
+        // mirrors the client-side `noTools=true` intent — strip them on the
+        // server side too. Sub-agents invoked via runOne() are NOT orchestrators
+        // themselves and still get their full toolset.
+        const isOrchestratorTurn = !!(effectiveManifest.orchestrator) && !isDelegation;
+        const filteredAgentToolDefs = isOrchestratorTurn ? [] : agentToolDefs;
+        if (isOrchestratorTurn && agentToolDefs.length) {
+          console.log(`[chat] orchestrator "${safeAgentName}" — stripping ${agentToolDefs.length} built-in agent tools (dispatch-only)`);
+        }
+
         // Merge agent tools with MCP tools
-        const allTools = [...(mcpTools || []), ...agentToolDefs];
+        const allTools = [...(mcpTools || []), ...filteredAgentToolDefs];
         if (allTools.length) mcpTools = allTools;
 
         // Start any MCP servers the agent requires

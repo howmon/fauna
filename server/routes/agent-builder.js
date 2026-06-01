@@ -46,8 +46,8 @@ The JSON must have these fields:
 - "description": string (1-2 sentence description)
 - "category": one of "productivity","development","design","research","writing","data","other"
 - "icon": one of "ti-robot","ti-code","ti-search","ti-pencil","ti-vector-triangle","ti-database","ti-chart-bar","ti-terminal-2","ti-world-www","ti-shield-check","ti-brain","ti-bolt","ti-bug","ti-git-merge","ti-palette","ti-mail","ti-file-analytics","ti-api","ti-cpu","ti-cloud","ti-package","ti-wand"
-- "orchestrator": boolean — set true if the agent's purpose involves coordinating multiple specialized sub-agents (e.g. "generate a report using 3 agents", "multi-step pipeline", "spec writer with sections"). Set false for single-purpose agents.
-- "systemPrompt": string (detailed system prompt). For orchestrators: 100-200 words, dispatch-only — must output ONLY [DELEGATE:agents/sub-agent-name]task[/DELEGATE] blocks, describe inputs to resolve, and list the sub-agents in a dispatch table. For pipelines where step N depends on step N-1, emit ONE block at a time — the system loops automatically, returning results before the next delegation. For parallel work, emit all blocks at once. For regular agents: 200-800 words defining role, capabilities, workflow, output format.
+- "orchestrator": boolean — DEFAULT FALSE. Only set true when the user EXPLICITLY asks for multiple sub-agents, a multi-step pipeline, or fan-out work that genuinely benefits from parallel specialists (e.g. "render 6 sections in parallel", "pipeline with researcher + writer + reviewer"). A single complex task — even one with internal phases — is NOT an orchestrator; the regular agent loop already handles multi-step work via tool calls. When in doubt, set false. Orchestrators have NO callable tools and can ONLY emit [DELEGATE:] blocks; if the agent needs to call figma_execute, run shell commands, or fetch URLs itself, it MUST NOT be an orchestrator.
+- "systemPrompt": string (detailed system prompt). For orchestrators: 100-200 words, DISPATCH-ONLY — open with a hard rule that the agent has NO tools and may ONLY emit [DELEGATE:agents/sub-agent-name]task[/DELEGATE] blocks. Forbid sentences like "I do not have X tool" or "I cannot do X". List the sub-agents in a dispatch table. For pipelines where step N depends on step N-1, emit ONE block at a time — the system loops automatically, returning results before the next delegation. For parallel work, emit all blocks at once. For regular agents: 200-800 words defining role, capabilities, workflow, output format.
 - "shared": string — only for orchestrators (empty string otherwise). Shared infrastructure prompt appended to every sub-agent automatically. Put common facts, APIs, component keys, helpers, or conventions here so sub-agents don't repeat them.
 - "subAgents": array — only for orchestrators (empty array otherwise). Each sub-agent has:
   - "name": string (lowercase slug, e.g. "section-overview")
@@ -71,10 +71,10 @@ The JSON must have these fields:
   - "input": string (a user message to test)
   - "expectedOutput": string (a substring that should appear in the response)
 
-ORCHESTRATOR EXAMPLE — if the user asks for a "report writer with a research agent and a writing agent":
+ORCHESTRATOR EXAMPLE — only when the user EXPLICITLY asks for multiple agents (e.g. "report writer with a research agent and a writing agent"):
 {
   "orchestrator": true,
-  "systemPrompt": "You coordinate report generation. Resolve the topic, then output ONLY [DELEGATE:] blocks.\\n\\n## Dispatch\\n[DELEGATE:agents/researcher]Research the topic and return key facts, sources, and a summary[/DELEGATE]\\n[DELEGATE:agents/writer]Write a polished report from the research findings[/DELEGATE]",
+  "systemPrompt": "You are a dispatch-only orchestrator. You have NO tools. Your ONLY way to do work is to emit [DELEGATE:agents/<name>]task[/DELEGATE] blocks for the sub-agents below.\\n\\nRULES:\\n- NEVER say \\"I do not have X tool\\" or \\"I cannot do X\\" — you have none, that is intentional. Delegate instead.\\n- NEVER answer the user with a markdown spec or written description in place of delegating.\\n- Resolve the topic from the user message, then emit ONLY [DELEGATE:] blocks.\\n\\n## Dispatch\\n[DELEGATE:agents/researcher]Research the topic and return key facts, sources, and a summary[/DELEGATE]\\n[DELEGATE:agents/writer]Write a polished report from the research findings[/DELEGATE]",
   "shared": "Output reports in Markdown. Use headers ##, bullet points, and concise language.",
   "subAgents": [
     { "name": "researcher", "displayName": "Researcher", "icon": "ti-search", "description": "Finds and summarizes facts on a topic.", "systemPrompt": "You research a given topic and return structured findings: key facts, sources, and a short summary." },
@@ -83,7 +83,21 @@ ORCHESTRATOR EXAMPLE — if the user asks for a "report writer with a research a
   "tools": []
 }
 
-Set permissions conservatively — only enable what the agent truly needs.` },
+NON-ORCHESTRATOR EXAMPLE — single-purpose agent that does the work directly using its own tools/permissions (this is the DEFAULT shape for most requests, including "spec writer", "figma component renderer", "code reviewer", "data extractor", etc.):
+{
+  "orchestrator": false,
+  "subAgents": [],
+  "shared": "",
+  "permissions": { "shell": false, "browser": false, "figma": true, "fileRead": [], "fileWrite": [], "network": { "allowedDomains": [], "blockAll": false }, "mcp": [] },
+  "systemPrompt": "You generate Figma design specs for a selected component. Workflow: (1) call figma get_metadata + get_code on the selection to introspect it, (2) plan the spec sections, (3) emit figma_execute calls to render each section onto a new page. Always render via figma_execute — never reply with a markdown spec when the user asks you to create it in Figma."
+}
+
+Set permissions conservatively — only enable what the agent truly needs.
+
+VALIDATION RULES (the system will reject your output if violated):
+- If orchestrator is true, subAgents MUST have at least 2 entries and tools MUST be []. The systemPrompt MUST contain the literal text "[DELEGATE:" (proving it knows the dispatch syntax).
+- If orchestrator is false, subAgents MUST be [] and shared MUST be "".
+- A request for figma rendering, single-file analysis, or any single-tool workflow is NOT an orchestrator — set false and grant the appropriate permissions instead.` },
           { role: 'user', content: description.trim() }
         ]
       });
@@ -92,6 +106,42 @@ Set permissions conservatively — only enable what the agent truly needs.` },
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (!jsonMatch) return res.status(500).json({ error: 'Failed to generate valid agent config' });
       const config = JSON.parse(jsonMatch[0]);
+
+      // Sanity-check + auto-correct the generated config so we never ship an
+      // orchestrator that the model will silently break (no sub-agents → it
+      // has nothing to delegate to, no DELEGATE syntax → it won't even try).
+      // Without this guard the LLM happily marks routine single-purpose agents
+      // (spec writers, figma renderers) as orchestrators, which strips their
+      // tools server-side and leaves them replying "I don't have any tools".
+      try {
+        if (config.orchestrator === true) {
+          const subs = Array.isArray(config.subAgents) ? config.subAgents.filter(a => a && a.name) : [];
+          const promptHasDelegate = typeof config.systemPrompt === 'string' && config.systemPrompt.indexOf('[DELEGATE:') !== -1;
+          if (subs.length < 2 || !promptHasDelegate) {
+            // Downgrade to a regular agent — orchestrators with <2 sub-agents
+            // or no DELEGATE syntax cannot function as designed.
+            console.warn(`[agent-builder] downgrading "${config.name || 'unnamed'}" from orchestrator → regular (subs=${subs.length}, hasDelegate=${promptHasDelegate})`);
+            config.orchestrator = false;
+            config.subAgents = [];
+            config.shared = '';
+          } else {
+            // Valid orchestrator — force tools=[] and prepend the no-tools
+            // preamble if the model omitted it.
+            config.tools = [];
+            const preamble = 'You are a DISPATCH-ONLY orchestrator. You have NO callable tools. Your ONLY way to do work is to emit [DELEGATE:agents/<name>]task[/DELEGATE] blocks for the sub-agents below. NEVER say "I do not have X tool" or "I cannot do X" — you have none, that is intentional. NEVER answer with a markdown spec or written description in place of delegating.';
+            if (typeof config.systemPrompt !== 'string' || config.systemPrompt.indexOf('DISPATCH-ONLY') === -1) {
+              config.systemPrompt = preamble + '\n\n' + (config.systemPrompt || '');
+            }
+          }
+        } else {
+          // Non-orchestrators must not carry sub-agents/shared infrastructure.
+          config.subAgents = [];
+          config.shared = '';
+        }
+      } catch (validationErr) {
+        console.warn('[agent-builder] post-generation validation failed:', validationErr?.message || validationErr);
+      }
+
       res.json(config);
     } catch (e) {
       res.status(500).json({ error: 'Generation failed: ' + e.message });
