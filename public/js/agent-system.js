@@ -279,6 +279,20 @@ function getAgentSystemPrompt() {
   // syntax has to be present in the same context as the sub-agent list.
   var isOrchestrator = !!(activeAgent.manifest && activeAgent.manifest.orchestrator);
   if (isOrchestrator) {
+    // Pre-compute canonical sub-agent slug list so we can pin it at the top
+    // AND repeat it after the user-authored body. The user's systemPrompt
+    // often contains a stale dispatch table with slugs that no longer match
+    // the bundled sub-agent folders — the model then emits those phantom
+    // names and every delegation silently fails. Listing the real slugs in
+    // the highest-recency block fixes that drift.
+    var _subs = (activeAgent.manifest && activeAgent.manifest._subAgents) || [];
+    var _slugLines = [];
+    for (var _si = 0; _si < _subs.length; _si++) {
+      var _s = _subs[_si];
+      if (!_s || !_s.name) continue;
+      _slugLines.push('  - `agents/' + _s.name + '` — ' + (_s.displayName || _s.name) + (_s.description ? ': ' + String(_s.description).slice(0, 120) : ''));
+    }
+
     // Hard preamble — must be the FIRST thing the model reads in this prompt.
     // Without this, the model frequently drifts into "I don't have figma
     // tools, here's a markdown spec instead" when the user asks for a
@@ -289,8 +303,22 @@ function getAgentSystemPrompt() {
     parts.push('- NEVER say "I do not have X tool", "I cannot do X", or list which tools you have. You have none — that is intentional. Delegate instead.');
     parts.push('- NEVER answer the user directly with a markdown spec, table, or written description in place of delegating. The sub-agents do the work; you only dispatch.');
     parts.push('- If the request matches what your sub-agents do (even partially), DELEGATE. Only reply without delegating if the request is a one-sentence factual question genuinely unrelated to any sub-agent.');
+    if (_slugLines.length) {
+      parts.push('');
+      parts.push('#### Valid Sub-Agent Slugs (use these EXACT names — any other slug will be silently dropped)');
+      for (var _sl = 0; _sl < _slugLines.length; _sl++) parts.push(_slugLines[_sl]);
+      parts.push('');
+      parts.push('If the instructions below this point reference a slug that is NOT in the list above (e.g. a stale dispatch table from a previous version of this agent), IGNORE that slug and use the closest matching slug from the list above instead. The list above is authoritative.');
+    }
     parts.push('');
     parts.push(activeAgent.systemPrompt);
+    if (_slugLines.length) {
+      parts.push('');
+      parts.push('### Reminder — Authoritative Sub-Agent Slugs');
+      parts.push('Any `[DELEGATE:agents/<name>]` you emit MUST use one of:');
+      for (var _sl2 = 0; _sl2 < _slugLines.length; _sl2++) parts.push(_slugLines[_sl2]);
+      parts.push('Names not in this list will fail. If your dispatch table above used different slugs, those are stale — use the slugs in this list.');
+    }
   } else {
     var desc = (activeAgent.manifest && activeAgent.manifest.description) || '';
     // First non-empty line of the systemPrompt is a decent fallback summary

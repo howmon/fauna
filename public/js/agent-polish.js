@@ -450,9 +450,12 @@ function parseDelegations(buffer) {
     // Strip agents/ prefix — orchestrators may emit [DELEGATE:agents/name]
     var name = rawName.replace(/^agents\//, '');
     var task = match[2].trim();
-    if (name && task && (findAgent(name) || findSubAgent(name))) {
-      delegations.push({ agentName: name, task: task });
-    }
+    if (!name || !task) continue;
+    var resolved = findAgent(name) || findSubAgent(name);
+    // Surface unresolved names as sentinel entries instead of silently dropping —
+    // executeDelegations renders them as errors so the user sees the failure
+    // rather than a stalled turn.
+    delegations.push({ agentName: name, task: task, _unresolved: !resolved });
   }
   return delegations;
 }
@@ -630,7 +633,16 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
   function runOne(del, idx, priorResultsText) {
     if (cancelled) return Promise.resolve({ agentName: del.agentName, response: 'Cancelled', duration: 0, cancelled: true });
     var agent = resolveAgent(del.agentName);
-    if (!agent) return Promise.resolve({ agentName: del.agentName, response: 'Agent not found', duration: 0, error: true });
+    if (!agent || del._unresolved) {
+      var row0 = document.getElementById('deleg-row-' + idx + '-' + uid);
+      if (row0) {
+        row0.classList.remove('pending', 'working');
+        row0.classList.add('error');
+        var st0 = row0.querySelector('.delegation-agent-status');
+        if (st0) st0.innerHTML = '<i class="ti ti-alert-triangle" style="font-size:11px;color:#e06c75"></i>';
+      }
+      return Promise.resolve({ agentName: del.agentName, displayName: del.agentName, icon: 'ti-alert-triangle', task: del.task, response: 'Unknown sub-agent `' + del.agentName + '` — orchestrator emitted a name that is not in its sub-agent list. [TASK_FAILED: unknown agent]', duration: 0, error: true, status: 'failed' });
+    }
     var row = document.getElementById('deleg-row-' + idx + '-' + uid);
     var timeEl = document.getElementById('deleg-time-' + idx + '-' + uid);
     if (row) { row.classList.remove('pending'); row.classList.add('working'); row.querySelector('.delegation-agent-status').innerHTML = '<span class="delegation-spinner"></span>'; }
@@ -653,7 +665,25 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
     }
     var _liveBuf = '';
     var _liveRaf = 0;
+    // Per-delegation watchdog: abort if no streamed chunk arrives for STALL_MS,
+    // or total runtime exceeds HARD_MS. Linked to the parent abortCtrl so the
+    // main Stop button still cancels everything. Generous defaults — figma /
+    // shell sub-agents with high thinking budget can legitimately sit silent
+    // for minutes between tool calls.
+    var STALL_MS = 240000;   // 4 min of silence
+    var HARD_MS = 900000;    // 15 min total
+    var delCtrl = new AbortController();
+    var onParentAbort = function() { try { delCtrl.abort(); } catch (_) {} };
+    if (abortCtrl.signal.aborted) onParentAbort();
+    else abortCtrl.signal.addEventListener('abort', onParentAbort, { once: true });
+    var stallTimer = setTimeout(function() { try { delCtrl.abort(); } catch (_) {} }, STALL_MS);
+    var hardTimer = setTimeout(function() { try { delCtrl.abort(); } catch (_) {} }, HARD_MS);
+    function _resetStall() {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(function() { try { delCtrl.abort(); } catch (_) {} }, STALL_MS);
+    }
     function _liveOnDelta(chunk) {
+      _resetStall();
       if (!livePreview) return;
       _liveBuf += chunk;
       if (_liveRaf) return;
@@ -685,7 +715,7 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
     return fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      signal: abortCtrl.signal,
+      signal: delCtrl.signal,
       body: JSON.stringify({
         messages: [{ role: 'user', content: userContent }],
         model: state.model,
@@ -697,9 +727,11 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
         thinkingBudget: state.thinkingBudget || 'high',
         systemPrompt: '## Active Agent: ' + agent.displayName + '\n\n' + (agent.systemPrompt || '') + '\n\nYou are being delegated a task by an orchestrator agent. Complete the task thoroughly and return your result.\n\n## Verification Before Completion (REQUIRED)\nBefore emitting your completion signal, you MUST verify your work:\n- File edits: read back the changed section to confirm it landed correctly.\n- Shell commands: check exit codes and scan output for errors.\n- Figma: confirm the execution result shows success.\n- If you cannot verify, state what you could NOT confirm.\n- NEVER emit [TASK_COMPLETE] if any step produced errors you did not resolve.\n\n## Completion Signal (REQUIRED)\nYou MUST end your response with a verification summary and exactly one of these markers on its own line:\n- `[TASK_COMPLETE]` — task finished successfully AND verified\n- `[TASK_PARTIAL: <what remains>]` — made progress but could not fully finish\n- `[TASK_BLOCKED: <reason>]` — could not proceed due to a blocker\n- `[TASK_FAILED: <reason>]` — attempted but failed\n\nFormat your ending as:\n### Verification\n- ✓ <what you checked and confirmed>\n- ✗ <what failed or could not be checked> (if any)\n[TASK_COMPLETE]'
       })
-    }).then(function(r) { return readDelegationStream(r, abortCtrl.signal, _liveOnDelta); })
+    }).then(function(r) { return readDelegationStream(r, delCtrl.signal, _liveOnDelta); })
     .then(function(text) {
       clearInterval(timerTick);
+      clearTimeout(stallTimer); clearTimeout(hardTimer);
+      try { abortCtrl.signal.removeEventListener('abort', onParentAbort); } catch (_) {}
       var dur = Date.now() - start;
       if (row) { row.classList.remove('working'); row.classList.add('done'); }
       if (timeEl) timeEl.textContent = (dur / 1000).toFixed(1) + 's';
@@ -707,11 +739,20 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
       return { agentName: del.agentName, displayName: agent.displayName, icon: agent.icon || 'ti-robot', task: del.task, response: text, duration: dur, status: _parseTaskStatus(text) };
     }).catch(function(e) {
       clearInterval(timerTick);
+      clearTimeout(stallTimer); clearTimeout(hardTimer);
+      try { abortCtrl.signal.removeEventListener('abort', onParentAbort); } catch (_) {}
       var dur = Date.now() - start;
-      var isCancelled = e.name === 'AbortError' || cancelled;
-      if (row) { row.classList.remove('working'); row.classList.add(isCancelled ? 'cancelled' : 'error'); }
+      var isParentCancel = cancelled || abortCtrl.signal.aborted;
+      var isAbort = e.name === 'AbortError';
+      var isTimeout = isAbort && !isParentCancel;
+      var rowClass = isParentCancel ? 'cancelled' : (isTimeout ? 'error' : 'error');
+      if (row) { row.classList.remove('working'); row.classList.add(rowClass); }
       if (timeEl) timeEl.textContent = (dur / 1000).toFixed(1) + 's';
-      return { agentName: del.agentName, displayName: agent.displayName || del.agentName, icon: 'ti-robot', task: del.task, response: isCancelled ? 'Cancelled' : 'Error: ' + e.message, duration: dur, error: !isCancelled, cancelled: isCancelled, status: isCancelled ? 'cancelled' : 'error' };
+      var msg = isParentCancel ? 'Cancelled'
+              : isTimeout ? ('Timed out after ' + Math.round(dur/1000) + 's of no response. [TASK_FAILED: timeout]')
+              : ('Error: ' + e.message + ' [TASK_FAILED: ' + e.message + ']');
+      var status = isParentCancel ? 'cancelled' : (isTimeout ? 'failed' : 'failed');
+      return { agentName: del.agentName, displayName: agent.displayName || del.agentName, icon: 'ti-robot', task: del.task, response: msg, duration: dur, error: !isParentCancel, cancelled: isParentCancel, status: status };
     });
   }
 
@@ -750,15 +791,21 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
   // Show delegation result cards
   showDelegationResults(results, inner);
 
-  // Always run synthesis — even when only one delegation completed.  The
-  // synthesis call is what gives the orchestrator a chance to emit further
-  // [DELEGATE:] blocks for the next round of a multi-phase workflow.
-  // Skipping it (as a single-delegation fast-path) breaks orchestrators that
-  // execute phases serially across rounds.
-  var synthesis = await synthesizeDelegationResults(results, originalMessage, conv);
+  // Run synthesis unless the user explicitly cancelled. Even when every
+  // delegation failed (e.g. all unresolved sub-agent names) we still want the
+  // orchestrator to see the failure context so it can re-delegate with
+  // corrected names or report the failure to the user. Skipping synthesis on
+  // failure leaves the user staring at error rows with no follow-up.
+  var allCancelled = results.length > 0 && results.every(function(r) { return r.cancelled; });
+  var synthesis = '';
+  if (!allCancelled) {
+    synthesis = await synthesizeDelegationResults(results, originalMessage, conv, abortCtrl.signal);
+  } else {
+    if (headerEl) headerEl.innerHTML = '<i class="ti ti-player-stop-filled"></i> Cancelled — skipping synthesis';
+  }
 
   // Final header update
-  if (headerEl) {
+  if (headerEl && !allCancelled) {
     headerEl.innerHTML = '<i class="ti ti-circle-check"></i> Orchestration complete';
   }
 
@@ -862,22 +909,33 @@ function showDelegationResults(results, container) {
 
 /**
  * Send delegation results back to the orchestrator for synthesis.
+ * @param {AbortSignal} [signal] - optional abort signal from the parent delegation
  */
-async function synthesizeDelegationResults(results, originalMessage, conv) {
+async function synthesizeDelegationResults(results, originalMessage, conv, signal) {
   if (!activeAgent) return '';
 
-  // Build a synthesis prompt with all results
+  // Build a synthesis prompt with all results. Sub-agent responses are
+  // truncated (mirroring the 4000-char cap used for sequential prior-results
+  // context) so a long chain doesn't inflate the orchestrator context every
+  // round.
+  var SYNTH_RESP_CAP = 4000;
   var parts = ['You are continuing orchestration. The following sub-agents just returned results. Your FIRST job is to decide whether more rounds of delegation are needed per your plan. Only summarize for the user if the entire plan is complete.\n'];
   parts.push('**Original user request:** ' + originalMessage + '\n');
   var unverifiedAgents = [];
+  var failedAgents = [];
   for (var i = 0; i < results.length; i++) {
     var r = results[i];
     parts.push('---');
     parts.push('**' + (r.displayName || r.agentName) + '** (task: ' + r.task.substring(0, 200) + ') — status: ' + (r.status || 'unknown') + ':');
-    parts.push(r.response);
+    var resp = (r.response || '') + '';
+    if (resp.length > SYNTH_RESP_CAP) {
+      resp = resp.substring(0, SYNTH_RESP_CAP) + '\n…[truncated ' + (r.response.length - SYNTH_RESP_CAP) + ' chars]';
+    }
+    parts.push(resp);
     parts.push('');
-    // Check if agent included a verification section
-    if (r.status === 'complete' && !/### Verification/i.test(r.response) && !/✓.*(?:confirmed|verified|checked)/i.test(r.response)) {
+    if (r.status === 'failed' || r.status === 'blocked' || r.error) {
+      failedAgents.push(r.displayName || r.agentName);
+    } else if (r.status === 'complete' && !/### Verification/i.test(r.response) && !/✓.*(?:confirmed|verified|checked)/i.test(r.response)) {
       unverifiedAgents.push(r.displayName || r.agentName);
     }
   }
@@ -889,18 +947,33 @@ async function synthesizeDelegationResults(results, originalMessage, conv) {
   parts.push('');
   parts.push('## Handling sub-agent statuses');
   parts.push('- COMPLETE: use the result, proceed.');
-  parts.push('- PARTIAL: this is NOT a stop signal. Use the partial output that was returned and proceed to the next planned round. Note the limitation in the next delegation task so the downstream agent works around it.');
-  parts.push('- BLOCKED/FAILED: only stop if the next round genuinely cannot proceed without the missing data. Otherwise forward what you have and continue.');
+  parts.push('- PARTIAL: forward the partial output and proceed only if the next round can still produce a useful result.');
+  if (failedAgents.length > 0) {
+    parts.push('- ⚠️ FAILED/BLOCKED: ' + failedAgents.join(', ') + ' did NOT produce usable output. Do NOT silently forward placeholder data to the next round. Either (a) re-delegate the SAME failed step with a corrected task (only if the failure looks recoverable), or (b) STOP and write a brief user-facing summary explaining what failed and why. Do NOT invent data the failed agent was supposed to return.');
+  } else {
+    parts.push('- BLOCKED/FAILED: only stop if the next round genuinely cannot proceed without the missing data. Otherwise forward what you have and continue.');
+  }
   if (unverifiedAgents.length > 0) {
     parts.push('- ⚠️ UNVERIFIED: ' + unverifiedAgents.join(', ') + ' claimed COMPLETE without a verification section. Note this in your final summary if/when you write one.');
   }
 
   var synthContent = parts.join('\n');
 
+  // 5min timeout — orchestrator synthesis with noTools and high thinking
+  // budget can take a while when results are large.
+  var ownCtrl = new AbortController();
+  var timeoutId = setTimeout(function() { try { ownCtrl.abort(); } catch (_) {} }, 300000);
+  var onParentAbort = function() { try { ownCtrl.abort(); } catch (_) {} };
+  if (signal) {
+    if (signal.aborted) onParentAbort();
+    else signal.addEventListener('abort', onParentAbort, { once: true });
+  }
+
   try {
     var response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: ownCtrl.signal,
       body: JSON.stringify({
         messages: [{ role: 'user', content: synthContent }],
         model: state.model,
@@ -910,9 +983,13 @@ async function synthesizeDelegationResults(results, originalMessage, conv) {
         systemPrompt: '## Active Agent: ' + activeAgent.displayName + ' (Orchestrator — Continuation Phase)\n\n' + (activeAgent.systemPrompt || '') + '\n\n## Continuation Rules (override conflicting instructions)\n- Your plan above defines rounds/phases. If any planned round has not yet executed, you MUST emit its [DELEGATE:agents/name]task[/DELEGATE] block(s) now and output nothing else.\n- Treat sub-agent [TASK_PARTIAL] as success-with-caveats — forward the partial output to the next round, do NOT stop.\n- Only write a user-facing summary AFTER the final planned round completes. A summary written prematurely halts orchestration.\n- When the plan defines parallel rounds, emit ALL delegations for that round in the SAME response so they run concurrently.'
       })
     });
-    return await readDelegationStream(response);
+    return await readDelegationStream(response, ownCtrl.signal);
   } catch (e) {
+    if (e.name === 'AbortError') return 'Synthesis cancelled or timed out after 90s.';
     return 'Synthesis error: ' + e.message;
+  } finally {
+    clearTimeout(timeoutId);
+    if (signal) { try { signal.removeEventListener('abort', onParentAbort); } catch (_) {} }
   }
 }
 
