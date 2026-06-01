@@ -19,6 +19,7 @@ var state = {
   figmaMCPEnabled: localStorage.getItem('fauna-figma-mcp') === 'true',   // default OFF
   playwrightMCPEnabled: localStorage.getItem('fauna-playwright-mcp') === 'true', // default OFF
   enableDynamicWidgets: localStorage.getItem('fauna-dynamic-widgets') === 'true', // experimental, default OFF
+  enableConvExport: localStorage.getItem('fauna-conv-export') === 'true', // experimental, default OFF — adds transcript export UI
   autoCompact: localStorage.getItem('fauna-auto-compact') !== 'false', // default ON — auto-summarize when context exceeds budget
   thinkingBudget: localStorage.getItem('fauna-thinking-budget') || 'high',
   maxContextTurns: parseInt(localStorage.getItem('fauna-max-turns') || '20', 10),

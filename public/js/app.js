@@ -116,6 +116,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   await loadSysCtx();
   await loadModels();
+  // Apply the diagnostic transcript-export visibility (hidden by default).
+  if (typeof _applyConvExportVisibility === 'function') _applyConvExportVisibility();
   // Load projects and render the switcher
   if (typeof loadProjects === 'function') await loadProjects();
   if (typeof renderProjectSwitcher === 'function') renderProjectSwitcher();

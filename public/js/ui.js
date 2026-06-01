@@ -374,6 +374,11 @@ async function loadSettingsState() {
   var dwCb = document.getElementById('dynamic-widgets-toggle');
   if (dwCb) dwCb.checked = !!state.enableDynamicWidgets;
 
+  // Sync transcript export (experimental) checkbox and apply visibility
+  var ceCb = document.getElementById('conv-export-toggle');
+  if (ceCb) ceCb.checked = !!state.enableConvExport;
+  if (typeof _applyConvExportVisibility === 'function') _applyConvExportVisibility();
+
   // Sync auto-compact checkbox
   var acCb = document.getElementById('auto-compact-toggle');
   if (acCb) acCb.checked = !!state.autoCompact;
@@ -2006,6 +2011,23 @@ function setEnableDynamicWidgets(val) {
   if (typeof showToast === 'function') {
     showToast('Dynamic widgets ' + (val ? 'enabled' : 'disabled'));
   }
+}
+
+// Toggle the diagnostic transcript export UI (hidden by default — when off,
+// the topbar menu item and per-conv download icon are not rendered).
+function setEnableConvExport(val) {
+  state.enableConvExport = !!val;
+  localStorage.setItem('fauna-conv-export', val ? 'true' : 'false');
+  _applyConvExportVisibility();
+  if (typeof renderConvList === 'function') renderConvList();
+  if (typeof showToast === 'function') {
+    showToast('Transcript export ' + (val ? 'enabled' : 'disabled'));
+  }
+}
+
+function _applyConvExportVisibility() {
+  var btn = document.getElementById('topbar-export-conv-btn');
+  if (btn) btn.style.display = (state && state.enableConvExport) ? '' : 'none';
 }
 
 // Toggle automatic context compaction (server summarizes older turns when

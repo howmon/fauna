@@ -262,6 +262,7 @@
           <button class="topbar-menu-item" id="topbar-move-to-project-btn" onclick="openMoveConversationToProject();closeTopbarMenu()" title="Move this conversation to a project"><i class="ti ti-folder-symlink"></i> Move to Project</button>
           <div class="topbar-menu-divider"></div>
           <button class="topbar-menu-item" onclick="toggleSysPanel();closeTopbarMenu()" title="Edit system prompt for this conversation"><i class="ti ti-terminal-2"></i> System Prompt</button>
+          <button class="topbar-menu-item" id="topbar-export-conv-btn" style="display:none" onclick="exportConversation();closeTopbarMenu()" title="Download the full transcript, tool calls, and settings as a JSON bundle"><i class="ti ti-download"></i> Export conversation</button>
           <button class="topbar-menu-item" onclick="clearConversation();closeTopbarMenu()" title="Clear messages"><i class="ti ti-trash"></i> Clear conversation</button>
           <button class="topbar-menu-item" onclick="toggleDebugLog();closeTopbarMenu()" id="debug-btn"><i class="ti ti-bug"></i> Debug log</button>
         </div>
@@ -692,6 +693,16 @@
       </label>
       <div class="settings-hint" style="margin-top:4px">
         Lets the AI render interactive sandboxed widgets (3D viewers, dashboards, custom controls) with their own per-task tools — no pre-built tool list. Save useful widgets to your <a href="#" onclick="switchSettingsPage('playbook',document.querySelector('[data-page=playbook]'));return false;">playbook</a> to re-launch them later.
+      </div>
+
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none;margin-top:14px">
+        <input type="checkbox" id="conv-export-toggle"
+          onchange="setEnableConvExport(this.checked)"
+          style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+        <span style="font-size:12.5px;color:var(--fau-text)">Enable transcript export <span style="color:var(--fau-text-muted);font-weight:normal">(diagnostic)</span></span>
+      </label>
+      <div class="settings-hint" style="margin-top:4px">
+        Adds an &quot;Export conversation&quot; action (topbar menu + per-conv download icon) that saves the full transcript, tool calls, settings, and recent debug log as a JSON file for troubleshooting.
       </div>
     </div>
   </div>

@@ -625,6 +625,9 @@ function renderConvList() {
         '<button class="conv-rename" onclick="toggleConvAutonomous(\'' + conv.id + '\', event)" title="' + (conv.config && conv.config.autonomousMode ? 'Autonomous mode: on — click to disable' : 'Autonomous mode: off — click to enable') + '"><i class="ti ti-bolt"' + (conv.config && conv.config.autonomousMode ? ' style="color:#ffb800"' : '') + '></i></button>' +
         '<button class="conv-rename" onclick="openConvInNewWindow(\'' + conv.id + '\', event)" title="Open in new window"><i class="ti ti-external-link"></i></button>' +
         '<button class="conv-rename" onclick="renameConversation(\'' + conv.id + '\', event)" title="Rename"><i class="ti ti-pencil"></i></button>' +
+        ((typeof state !== 'undefined' && state.enableConvExport)
+          ? '<button class="conv-rename" onclick="exportConversation(\'' + conv.id + '\', event)" title="Export transcript (JSON)"><i class="ti ti-download"></i></button>'
+          : '') +
         '<button class="conv-del" onclick="deleteConversation(\'' + conv.id + '\', event)"><i class="ti ti-trash"></i></button>' +
       '</span>';
     list.appendChild(d);
@@ -711,4 +714,156 @@ function toggleSidebarSection(section) {
       chevron.classList.toggle('ti-chevron-right', !isHidden);
     }
   }
+}
+
+// ── Conversation export (HAR-style transcript bundle) ─────────────────────
+//
+// Produces a single JSON file containing the full conversation transcript,
+// tool-call activity blocks (parsed out of assistant message content for easy
+// review), per-message metadata (agent, reasoning, widgets, plan), the active
+// settings snapshot, and the in-memory client debug log. Mirrors the spirit
+// of an HTTP Archive (HAR) file: one self-contained artifact you can hand off
+// for offline review of "what happened in this conversation".
+//
+// Stored conversations don't carry a structured tool_calls field on assistant
+// messages — tool activity is emitted into the assistant content as fenced
+// blocks (```cot, ```wf, ```shell-exec, ```figma-exec, ```ba ...). We pull
+// those fences out into a parallel `tools` array per message so consumers
+// don't have to re-parse markdown to see what tools ran.
+function _extractToolBlocksFromContent(content) {
+  if (!content || typeof content !== 'string') return [];
+  var out = [];
+  // Match every activity-related fence the chat renderer uses, including the
+  // shell command/output pair (bash + shell-output) and the inline tool-call
+  // descriptors (cot/wf/ba) and direct-exec fences (shell-exec/figma-exec).
+  // Body is captured verbatim so JSON/SQL/shell payloads survive intact.
+  var re = /```(cot|wf|shell-exec|figma-exec|ba|bash|sh|zsh|shell-output|tool-output|tool_output)\b([^\n]*)\n([\s\S]*?)```/g;
+  var m;
+  while ((m = re.exec(content)) !== null) {
+    var kind = m[1];
+    var header = (m[2] || '').trim();
+    var body = m[3] || '';
+    var parsed = null;
+    // cot/wf/ba blocks are usually JSON payloads; try to parse for convenience.
+    if (kind === 'cot' || kind === 'wf' || kind === 'ba') {
+      try { parsed = JSON.parse(body); } catch (_) { /* leave raw */ }
+    }
+    out.push({
+      kind: kind,
+      // Classify so consumers can filter quickly: 'call' = model invoked something;
+      // 'output' = result fed back to the model; 'cmd' = shell command source.
+      role: (kind === 'shell-output' || kind === 'tool-output' || kind === 'tool_output') ? 'output'
+        : (kind === 'bash' || kind === 'sh' || kind === 'zsh') ? 'cmd'
+        : 'call',
+      header: header || null,
+      body: parsed == null ? body : undefined,
+      parsed: parsed || undefined,
+      offset: m.index,
+    });
+  }
+  return out;
+}
+
+function _buildConversationExport(conv) {
+  var messages = Array.isArray(conv.messages) ? conv.messages : [];
+  var exported = {
+    formatVersion: 1,
+    format: 'fauna.transcript.v1',
+    exportedAt: new Date().toISOString(),
+    app: {
+      name: 'Fauna',
+      // Pulled from window.FAUNA_BUILD if main.js has injected it; otherwise null.
+      version: (typeof window !== 'undefined' && window.FAUNA_BUILD && window.FAUNA_BUILD.version) || null,
+      build: (typeof window !== 'undefined' && window.FAUNA_BUILD && window.FAUNA_BUILD.commit) || null,
+      userAgent: (typeof navigator !== 'undefined' ? navigator.userAgent : null),
+    },
+    conversation: {
+      id: conv.id,
+      title: conv.title || '',
+      model: conv.model || null,
+      projectId: conv.projectId || null,
+      agentName: conv.agentName || (conv._activeAgent && conv._activeAgent.name) || null,
+      createdAt: conv.createdAt || null,
+      updatedAt: conv.updatedAt || null,
+      systemPrompt: conv.systemPrompt || null,
+      contextSummary: conv.contextSummary || null,
+      config: conv.config || null,
+      messageCount: messages.length,
+    },
+    settings: (typeof state !== 'undefined' && state) ? {
+      model: state.model,
+      thinkingBudget: state.thinkingBudget,
+      maxContextTurns: state.maxContextTurns,
+      figmaMCPEnabled: !!state.figmaMCPEnabled,
+      playwrightMCPEnabled: !!state.playwrightMCPEnabled,
+      enableDynamicWidgets: !!state.enableDynamicWidgets,
+      autoCompact: state.autoCompact !== false,
+    } : null,
+    messages: messages.map(function(m, i) {
+      var entry = {
+        index: i,
+        role: m.role,
+        content: m.content == null ? '' : m.content,
+      };
+      if (m.timestamp) entry.timestamp = m.timestamp;
+      if (m.agentInfo) entry.agentInfo = m.agentInfo;
+      if (m.reasoning) entry.reasoning = m.reasoning;
+      if (m.widgets) entry.widgets = m.widgets;
+      if (m.plan) entry.plan = m.plan;
+      if (m.attachments) entry.attachments = m.attachments;
+      if (m.role === 'assistant') {
+        var tools = _extractToolBlocksFromContent(entry.content);
+        if (tools.length) entry.tools = tools;
+      }
+      return entry;
+    }),
+    clientDebugLog: (typeof _debugLogs !== 'undefined' && Array.isArray(_debugLogs)) ? _debugLogs.slice(-2000) : [],
+  };
+  return exported;
+}
+
+function exportConversation(id, e) {
+  if (e) e.stopPropagation();
+  // Gated experimental feature — hidden from the UI by default. Refuse if the
+  // user hasn't explicitly opted in via Settings → Experimental.
+  if (typeof state === 'undefined' || !state.enableConvExport) {
+    if (typeof showToast === 'function') showToast('Transcript export is disabled. Enable it under Settings → Experimental.');
+    return;
+  }
+  var conv = null;
+  if (id) {
+    conv = (state.conversations || []).find(function(c) { return c.id === id; });
+  }
+  if (!conv) conv = (state.conversations || []).find(function(c) { return c.id === state.currentId; });
+  if (!conv) {
+    if (typeof showToast === 'function') showToast('No conversation to export');
+    return;
+  }
+  var bundle;
+  try {
+    bundle = _buildConversationExport(conv);
+  } catch (err) {
+    if (typeof showToast === 'function') showToast('Export failed: ' + (err && err.message ? err.message : String(err)));
+    return;
+  }
+  var json = JSON.stringify(bundle, null, 2);
+  var blob = new Blob([json], { type: 'application/json' });
+  var url = URL.createObjectURL(blob);
+  var safeTitle = (conv.title || 'conversation').replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'conversation';
+  var stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'fauna-' + safeTitle + '-' + stamp + '.transcript.json';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function() {
+    try { document.body.removeChild(a); } catch (_) {}
+    URL.revokeObjectURL(url);
+  }, 0);
+  if (typeof showToast === 'function') showToast('Conversation exported');
+}
+
+// Expose on window so inline onclick handlers (and the topbar menu) can call it.
+if (typeof window !== 'undefined') {
+  window.exportConversation = exportConversation;
 }
