@@ -166,6 +166,7 @@ async function _mergeLocalModelsInto(arr) {
         // user explicitly turned the override on.
         vision: !!(cfg.overrides && cfg.overrides.vision),
         tools:  !!(cfg.overrides && cfg.overrides.tools),
+        contextWindow: m.contextWindow || m.context_length || m.context_window || undefined,
       };
     });
     // If the user typed a default model that the endpoint didn't return,
@@ -1601,6 +1602,14 @@ var MODEL_CONTEXT_LIMITS = {
 };
 
 function getModelLimit(model) {
+  // Prefer the live capability reported by /api/models (GitHub Copilot's
+  // capabilities.limits.max_context_window_tokens, or the local provider's
+  // context_length) so non-hardcoded models (Gemini 1M, Qwen 256k, etc.) get
+  // an accurate meter instead of the 128k default.
+  try {
+    var live = (allModels || []).find(function(m) { return m && m.id === model; });
+    if (live && Number(live.contextWindow) > 0) return Number(live.contextWindow);
+  } catch (_) {}
   if (MODEL_CONTEXT_LIMITS[model]) return MODEL_CONTEXT_LIMITS[model];
   // Fuzzy match
   for (var key in MODEL_CONTEXT_LIMITS) {

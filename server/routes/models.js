@@ -47,6 +47,13 @@ export function registerModelsRoutes(app, { readSavedConfig, getGhToken }) {
               : /minimax/i.test(family) ? 'Minimax'
               : /grok/i.test(family)    ? 'xAI'
               : 'OpenAI');
+          const limits = m.capabilities?.limits || {};
+          // Copilot reports the real per-model context window under
+          // capabilities.limits.max_context_window_tokens. Fall back to the
+          // prompt token cap when only that is exposed.
+          const contextWindow = limits.max_context_window_tokens
+            || limits.max_prompt_tokens
+            || undefined;
           return {
             id:     m.id,
             name:   m.name || m.id,
@@ -54,6 +61,8 @@ export function registerModelsRoutes(app, { readSavedConfig, getGhToken }) {
             fast:   /mini|haiku|flash|small|nano/i.test(m.id),
             vision: !!m.capabilities?.supports?.vision,
             tools:  !!m.capabilities?.supports?.tool_calls,
+            contextWindow,
+            maxOutputTokens: limits.max_output_tokens || undefined,
           };
         });
 
