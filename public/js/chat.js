@@ -1168,6 +1168,15 @@ async function streamResponse(conv) {
       user: (userSysPrompt || '').length,
     };
     var _ctxGates = _ctxFlags || {};
+    // Stash for renderTokenUsageBar() so live token_usage SSE events can still
+    // render the granular popover (sys-prompt breakdown + gates) — the SSE
+    // payload only carries token totals, not these per-turn structural pieces.
+    _lastMeterCtx = {
+      sysChars: _ctxSysChars,
+      msgChars: _ctxMsgChars,
+      sysParts: _ctxSysParts,
+      gates:    _ctxGates,
+    };
 
     // Build chat request body — include agent info when active
     // If the user has any Figma file attached to this turn (via the plugin),
@@ -1902,9 +1911,20 @@ async function maybeCompressConversation(conv, opts) {
 // model iteration. We just shape the payload to match updateContextMeter()'s
 // expected `{ usage:{ prompt_tokens, completion_tokens }, model }` contract.
 function renderTokenUsageBar(evt) {
-  if (typeof updateContextMeter !== 'function') return;
+  // Prefer the granular updater so the hover popover keeps showing the full
+  // sys-prompt / messages / gates breakdown instead of just the one-line
+  // "in: + out: = total · billed:" summary.
+  var fn = (typeof updateContextMeterGranular === 'function')
+    ? updateContextMeterGranular
+    : (typeof updateContextMeter === 'function' ? updateContextMeter : null);
+  if (!fn) return;
   try {
-    updateContextMeter({
+    var ctx = _lastMeterCtx || {};
+    fn({
+      sysChars: ctx.sysChars || 0,
+      msgChars: ctx.msgChars || 0,
+      sysParts: ctx.sysParts || null,
+      gates:    ctx.gates    || null,
       usage: {
         prompt_tokens:     Number(evt && evt.prompt)     || 0,
         completion_tokens: Number(evt && evt.completion) || 0,
@@ -1919,6 +1939,11 @@ function renderTokenUsageBar(evt) {
     });
   } catch (_) { /* non-fatal */ }
 }
+
+// Last per-turn meter context (sysChars/sysParts/gates) captured at stream
+// start so token_usage SSE events can render the granular popover breakdown
+// instead of falling back to the one-line summary.
+var _lastMeterCtx = null;
 
 // Hide the ctx-meter ring (e.g. when starting a fresh conversation that has
 // no token_usage history yet). Called from newConversation() and from

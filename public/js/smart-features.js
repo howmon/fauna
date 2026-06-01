@@ -379,6 +379,14 @@ function updateContextMeterGranular(data) {
       });
     }
   }
+  // Billed totals — when the turn made multiple model calls (tool loops) the
+  // raw prompt_tokens only reflects the final call, so surface the summed
+  // billed figures so users see the real spend.
+  if (data.billed && (data.billed.total || data.billed.prompt) && data.iterations > 1) {
+    tipParts.push('<div style="border-top:1px solid #444;margin-top:6px;padding-top:6px;font-weight:600;opacity:.8">Billed (across ' + data.iterations + ' calls)</div>');
+    if (data.billed.prompt) tipParts.push('&nbsp;&nbsp;Prompt: ' + formatTokens(data.billed.prompt));
+    if (data.billed.total)  tipParts.push('&nbsp;&nbsp;Total: '  + formatTokens(data.billed.total));
+  }
   // Active gates — show which client-side context gates fired this turn
   if (data.gates) {
     var on = Object.keys(data.gates).filter(function(k) { return data.gates[k]; });
@@ -390,6 +398,9 @@ function updateContextMeterGranular(data) {
     }
   }
   var labelText = breakdown + ' = ' + formatTokens(totalUsed) + '/' + formatTokens(limit) + (data.usage ? '' : ' (est.)');
+  if (data.billed && data.billed.total && data.iterations > 1) {
+    labelText += ' · billed:' + formatTokens(data.billed.total) + ' across ' + data.iterations + ' calls';
+  }
   var popover = document.getElementById('ctx-meter-popover');
   if (popover) popover.innerHTML = tipParts.map(function(l) { return '<div>' + l + '</div>'; }).join('');
   meter.setAttribute('data-ctx-tip', labelText);
