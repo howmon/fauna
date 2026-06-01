@@ -338,13 +338,17 @@ function updateContextMeterGranular(data) {
   if (data.usage) {
     breakdown = 'in:' + formatTokens(promptTokens) + ' + out:' + formatTokens(completionTokens);
   }
+  var pctOf = function(tok) {
+    if (!limit) return '';
+    return ' <span style="opacity:.55">(' + ((tok / limit) * 100).toFixed(1) + '%)</span>';
+  };
   var tipParts = [
-    'System prompt: ~' + formatTokens(sysTokens) + ' tokens',
-    'Messages: ~' + formatTokens(msgTokens) + ' tokens',
+    'System prompt: ~' + formatTokens(sysTokens) + ' tokens' + pctOf(sysTokens),
+    'Messages: ~' + formatTokens(msgTokens) + ' tokens' + pctOf(msgTokens),
   ];
   if (data.usage) {
-    tipParts.push('Actual in: ' + formatTokens(promptTokens));
-    tipParts.push('Actual out: ' + formatTokens(completionTokens));
+    tipParts.push('Actual in: ' + formatTokens(promptTokens) + pctOf(promptTokens));
+    tipParts.push('Actual out: ' + formatTokens(completionTokens) + pctOf(completionTokens));
   }
   tipParts.push('Model limit: ' + formatTokens(limit));
   tipParts.push('Used: ' + pct.toFixed(1) + '%');
@@ -370,7 +374,7 @@ function updateContextMeterGranular(data) {
         var chars = data.sysParts[p[0]] || 0;
         if (chars > 0) {
           var tok = Math.round(chars / 4);
-          tipParts.push('&nbsp;&nbsp;' + p[1] + ': ~' + formatTokens(tok));
+          tipParts.push('&nbsp;&nbsp;' + p[1] + ': ~' + formatTokens(tok) + pctOf(tok));
         }
       });
     }
