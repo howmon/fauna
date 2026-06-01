@@ -950,57 +950,47 @@ export function registerChatRoute(app, {
         },
       });
 
-      // ── Pre-seed agent instructions (defense against model skipping the
-      // MANDATORY FIRST STEP directive). For non-orchestrator agents we ship
-      // a slim system prompt that tells the model to call
-      // `fauna_get_agent_instructions` first — but the model sometimes
-      // ignores it and just freelances. Pre-loading the instructions as a
-      // completed tool result makes that skip impossible.
-      // Only fires when:
-      //   - an agent is active
-      //   - the agent has a systemPrompt (i.e. there's something to inject)
-      //   - it's not already present in allMessages from a prior turn
-      //   - the model has tool-calling (otherwise nothing to fake)
-      if (agentName && Array.isArray(mcpTools) && mcpTools.length) {
+      // ── Inject agent instructions as an AUTHORITATIVE second system message.
+      // The slim agent system prompt directs the model to call
+      // `fauna_get_agent_instructions` first, but Claude sometimes skips it.
+      // A tool-result pre-seed is also too weak — the model treats it as
+      // reference data. Pushing the full manifest.systemPrompt as a second
+      // system-role message ensures the rules are followed verbatim.
+      // Guarded so duplicate injection across iterations cannot happen
+      // (the marker line is unique and idempotent-checked).
+      if (agentName) {
         try {
-          const alreadySeeded = allMessages.some(m =>
-            m && m.role === 'tool' && typeof m.content === 'string' &&
-            m.content.includes('"_seeded_agent_instructions":true')
+          const SEED_MARKER = '### AGENT INSTRUCTIONS (AUTHORITATIVE) ###';
+          const alreadyInjected = allMessages.some(m =>
+            m && m.role === 'system' && typeof m.content === 'string' &&
+            m.content.includes(SEED_MARKER)
           );
-          if (!alreadySeeded) {
+          if (!alreadyInjected) {
             const safeAgentName = agentName.replace(/[^a-zA-Z0-9_-]/g, '');
             const manifestPath = path.join(agentsDir, safeAgentName, 'agent.json');
             if (fs.existsSync(manifestPath)) {
               const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
               const isOrchestrator = !!(manifest && manifest.orchestrator);
               if (!isOrchestrator && manifest.systemPrompt) {
-                const seedId = 'seed_' + Date.now().toString(36);
-                const seedResult = JSON.stringify({
-                  ok: true,
-                  _seeded_agent_instructions: true,
-                  name: manifest.name || safeAgentName,
-                  displayName: manifest.displayName || safeAgentName,
-                  description: manifest.description || '',
-                  instructions: manifest.systemPrompt,
-                  permissions: manifest.permissions || {},
-                  _note: 'These are the authoritative instructions for the active agent. Follow them exactly — they override conflicting guidance about output format or tool choice in the system prompt.',
-                });
-                allMessages.push({
-                  role: 'assistant',
-                  content: '',
-                  tool_calls: [{
-                    id: seedId,
-                    type: 'function',
-                    function: { name: 'fauna_get_agent_instructions', arguments: '{}' },
-                  }],
-                });
-                allMessages.push({ role: 'tool', tool_call_id: seedId, content: seedResult });
-                console.log(`[chat] pre-seeded agent instructions for "${safeAgentName}" (${manifest.systemPrompt.length} chars)`);
+                const body = [
+                  SEED_MARKER,
+                  `Active agent: ${manifest.displayName || manifest.name || safeAgentName}`,
+                  '',
+                  'The following are the authoritative operating instructions for this agent.',
+                  'They OVERRIDE any conflicting guidance about output format, tool choice, or workflow in earlier system messages.',
+                  'Follow every section, every checklist item, and every formatting rule below exactly. Do not summarize, paraphrase, or skip steps.',
+                  '',
+                  '--- BEGIN AGENT INSTRUCTIONS ---',
+                  manifest.systemPrompt,
+                  '--- END AGENT INSTRUCTIONS ---',
+                ].join('\n');
+                allMessages.push({ role: 'system', content: body });
+                console.log(`[chat] injected agent instructions as system message for "${safeAgentName}" (${manifest.systemPrompt.length} chars)`);
               }
             }
           }
         } catch (e) {
-          console.log('[chat] agent-instruction pre-seed failed:', e.message);
+          console.log('[chat] agent-instruction injection failed:', e.message);
         }
       }
 
