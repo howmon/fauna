@@ -564,6 +564,7 @@ export function registerChatRoute(app, {
 
       // Load agent tools if an agent is active
       let agentToolHandlers = null; // Map<name, executeFn>
+      let isOrchestratorTurn = false; // hoisted so the post-stream recovery loop can see it
       if (agentName) {
         const safeAgentName = agentName.replace(/[^a-zA-Z0-9_-]/g, '');
         const agentDir = path.join(agentsDir, safeAgentName);
@@ -602,9 +603,10 @@ export function registerChatRoute(app, {
         // mirrors the client-side `noTools=true` intent — strip them on the
         // server side too. Sub-agents invoked via runOne() are NOT orchestrators
         // themselves and still get their full toolset.
-        const isOrchestratorTurn = !!(effectiveManifest.orchestrator) && !isDelegation;
-        const filteredAgentToolDefs = isOrchestratorTurn ? [] : agentToolDefs;
-        if (isOrchestratorTurn && agentToolDefs.length) {
+        const isOrchestratorTurnLocal = !!(effectiveManifest.orchestrator) && !isDelegation;
+        isOrchestratorTurn = isOrchestratorTurnLocal;
+        const filteredAgentToolDefs = isOrchestratorTurnLocal ? [] : agentToolDefs;
+        if (isOrchestratorTurnLocal && agentToolDefs.length) {
           console.log(`[chat] orchestrator "${safeAgentName}" — stripping ${agentToolDefs.length} built-in agent tools (dispatch-only)`);
         }
 
@@ -841,6 +843,7 @@ export function registerChatRoute(app, {
       let prevPreamble = '';       // narration emitted on the previous tool-call iteration
       let narrationRepeats = 0;    // consecutive iterations with near-identical preamble
       let narrationNudgeFired = false; // only inject the coaching nudge once per request
+      let orchestratorNudgeCount = 0; // orchestrator emitted no [DELEGATE:] — re-prompt
       // Codex-parity: token usage across every model iteration in this turn.
       // `prompt` tracks the PEAK prompt size (true context-window fullness —
       // each iteration resends the conversation, so summing would massively
@@ -1432,6 +1435,16 @@ export function registerChatRoute(app, {
             console.log('[chat] forward-promise stop detected — injecting execute nudge (' + halfStopNudgeCount + '/' + MAX_HALF_STOP_NUDGES + ')');
             allMessages.push({ role: 'assistant', content: assistantText });
             allMessages.push({ role: 'user', content: '[System: You just stated an intended next action ("I\'ll …" / "Let me …") but did not execute it. Do that step NOW with the appropriate tool call. Do not narrate intent without acting on it.]' });
+            // keep continueLoop = true
+          } else if (isOrchestratorTurn && assistantText.trim() && !/\[DELEGATE:/i.test(assistantText) && orchestratorNudgeCount < 2) {
+            // Orchestrator emitted prose / hallucinated tool-call JSON instead
+            // of a real [DELEGATE:...] block. Coach it and re-loop. Models
+            // sometimes output `{"name":"figma_x","arguments":{}}` as plain
+            // text — that's a hallucinated tool call, not delegation.
+            orchestratorNudgeCount++;
+            console.log('[chat] orchestrator emitted no [DELEGATE:] block — nudging (' + orchestratorNudgeCount + '/2)');
+            allMessages.push({ role: 'assistant', content: assistantText });
+            allMessages.push({ role: 'user', content: '[System: You are an orchestrator with NO callable tools. Your previous reply contained no `[DELEGATE:agents/<name>]...[/DELEGATE]` block — that is the ONLY way you can act. JSON like `{"name":"x","arguments":{}}` is NOT a tool call; it does nothing. Re-emit your response now as one or more `[DELEGATE:agents/<sub-agent-name>]concise task[/DELEGATE]` blocks targeting the sub-agents listed in your prompt. No prose before or after.]' });
             // keep continueLoop = true
           } else {
             // ── Autonomous-mode terminal gates ──────────────────────────
