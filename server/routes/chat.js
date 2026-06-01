@@ -565,6 +565,7 @@ export function registerChatRoute(app, {
       // Load agent tools if an agent is active
       let agentToolHandlers = null; // Map<name, executeFn>
       let isOrchestratorTurn = false; // hoisted so the post-stream recovery loop can see it
+      let orchestratorSubAgentNames = []; // hoisted for the [DELEGATE:] validation nudge
       if (agentName) {
         const safeAgentName = agentName.replace(/[^a-zA-Z0-9_-]/g, '');
         const agentDir = path.join(agentsDir, safeAgentName);
@@ -608,6 +609,35 @@ export function registerChatRoute(app, {
         const filteredAgentToolDefs = isOrchestratorTurnLocal ? [] : agentToolDefs;
         if (isOrchestratorTurnLocal && agentToolDefs.length) {
           console.log(`[chat] orchestrator "${safeAgentName}" — stripping ${agentToolDefs.length} built-in agent tools (dispatch-only)`);
+        }
+
+        // Enumerate the orchestrator's bundled sub-agent names so the post-stream
+        // validator can detect when the model emits [DELEGATE:agents/<bogus>] for
+        // an agent that does not exist (the client-side parseDelegations silently
+        // drops such blocks, leaving the user with an apparently stalled response).
+        if (isOrchestratorTurnLocal) {
+          try {
+            let subRefs = Array.isArray(effectiveManifest.agents) ? effectiveManifest.agents.slice() : null;
+            if (!subRefs) {
+              const agentsSubDir = path.join(agentDir, 'agents');
+              if (fs.existsSync(agentsSubDir) && fs.statSync(agentsSubDir).isDirectory()) {
+                subRefs = fs.readdirSync(agentsSubDir).filter(d => {
+                  try { return fs.existsSync(path.join(agentsSubDir, d, 'agent.json')); } catch (_) { return false; }
+                }).map(d => 'agents/' + d);
+              }
+            }
+            if (subRefs && subRefs.length) {
+              for (const subRef of subRefs) {
+                const subManifestPath = path.join(agentDir, subRef, 'agent.json');
+                if (fs.existsSync(subManifestPath)) {
+                  try {
+                    const sub = JSON.parse(fs.readFileSync(subManifestPath, 'utf8'));
+                    if (sub && sub.name) orchestratorSubAgentNames.push(sub.name);
+                  } catch (_) {}
+                }
+              }
+            }
+          } catch (_) {}
         }
 
         // Merge agent tools with MCP tools
@@ -1436,15 +1466,48 @@ export function registerChatRoute(app, {
             allMessages.push({ role: 'assistant', content: assistantText });
             allMessages.push({ role: 'user', content: '[System: You just stated an intended next action ("I\'ll …" / "Let me …") but did not execute it. Do that step NOW with the appropriate tool call. Do not narrate intent without acting on it.]' });
             // keep continueLoop = true
-          } else if (isOrchestratorTurn && assistantText.trim() && !/\[DELEGATE:/i.test(assistantText) && orchestratorNudgeCount < 2) {
-            // Orchestrator emitted prose / hallucinated tool-call JSON instead
-            // of a real [DELEGATE:...] block. Coach it and re-loop. Models
-            // sometimes output `{"name":"figma_x","arguments":{}}` as plain
-            // text — that's a hallucinated tool call, not delegation.
+          } else if (isOrchestratorTurn && assistantText.trim() && orchestratorNudgeCount < 2 && (() => {
+            // Detect three orchestrator failure modes:
+            //   (1) no [DELEGATE:...] block at all
+            //   (2) [DELEGATE:] blocks present but every target is an
+            //       unknown sub-agent (model invented a name) — the client
+            //       silently drops these so the user sees a stalled reply
+            //   (3) hallucinated function-calling JSON ({"name":"x",...})
+            //       leaked into the visible text, even alongside a valid block
+            const delegRe = /\[DELEGATE:(?:agents\/)?([\w-]+)\]/gi;
+            const names = []; let m;
+            while ((m = delegRe.exec(assistantText)) !== null) names.push(m[1]);
+            const knownSet = new Set(orchestratorSubAgentNames);
+            const validNames = orchestratorSubAgentNames.length
+              ? names.filter(n => knownSet.has(n))
+              : names; // no manifest sub-agents → can't validate, trust the model
+            const invalidNames = orchestratorSubAgentNames.length
+              ? names.filter(n => !knownSet.has(n))
+              : [];
+            const hasHallucinatedToolJson = /\{\s*"name"\s*:\s*"[\w-]+"\s*,\s*"(?:arguments|parameters)"\s*:/i.test(assistantText);
+            const noValid = validNames.length === 0;
+            return noValid || hasHallucinatedToolJson || invalidNames.length > 0;
+          })()) {
+            // Orchestrator emitted prose / hallucinated tool-call JSON / unknown
+            // sub-agent names instead of a real, executable [DELEGATE:...] block.
+            // Coach it and re-loop. JSON like `{"name":"x","arguments":{}}` is
+            // NOT a tool call; it does nothing.
             orchestratorNudgeCount++;
-            console.log('[chat] orchestrator emitted no [DELEGATE:] block — nudging (' + orchestratorNudgeCount + '/2)');
+            const delegRe2 = /\[DELEGATE:(?:agents\/)?([\w-]+)\]/gi;
+            const namesEmitted = []; let mm;
+            while ((mm = delegRe2.exec(assistantText)) !== null) namesEmitted.push(mm[1]);
+            const invalid = orchestratorSubAgentNames.length
+              ? namesEmitted.filter(n => !orchestratorSubAgentNames.includes(n))
+              : [];
+            console.log(`[chat] orchestrator delegation invalid — nudging (${orchestratorNudgeCount}/2). emitted=${JSON.stringify(namesEmitted)} valid=${JSON.stringify(orchestratorSubAgentNames)}`);
+            const validList = orchestratorSubAgentNames.length
+              ? '\n\nYour ONLY valid sub-agents are: ' + orchestratorSubAgentNames.map(n => '`agents/' + n + '`').join(', ') + '. Use these names EXACTLY — any other name will be silently dropped.'
+              : '';
+            const invalidNote = invalid.length
+              ? '\n\nYou tried to delegate to ' + invalid.map(n => '`' + n + '`').join(', ') + ' which do not exist.'
+              : '';
             allMessages.push({ role: 'assistant', content: assistantText });
-            allMessages.push({ role: 'user', content: '[System: You are an orchestrator with NO callable tools. Your previous reply contained no `[DELEGATE:agents/<name>]...[/DELEGATE]` block — that is the ONLY way you can act. JSON like `{"name":"x","arguments":{}}` is NOT a tool call; it does nothing. Re-emit your response now as one or more `[DELEGATE:agents/<sub-agent-name>]concise task[/DELEGATE]` blocks targeting the sub-agents listed in your prompt. No prose before or after.]' });
+            allMessages.push({ role: 'user', content: '[System: Your previous reply did not produce an executable delegation. You are an orchestrator with NO callable tools. JSON like `{"name":"x","arguments":{}}` or `{"name":"x","parameters":{}}` is NOT a tool call; it does nothing.' + invalidNote + validList + '\n\nRe-emit your response NOW as one or more `[DELEGATE:agents/<exact-sub-agent-name>]concise task[/DELEGATE]` blocks. No prose before or after, no JSON, no markdown — just the delegation block(s).]' });
             // keep continueLoop = true
           } else {
             // ── Autonomous-mode terminal gates ──────────────────────────
