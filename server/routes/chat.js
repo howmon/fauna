@@ -619,6 +619,8 @@ export function registerChatRoute(app, {
         getModels: () => FALLBACK_MODELS,
         activeProjectId: projectId || null,
         convId: req.body?.conversationId || null,
+        activeAgentName: agentName || null,
+        agentsDir,
         getSettings: () => ({
           model,
           thinkingBudget,

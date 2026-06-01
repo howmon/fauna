@@ -1056,6 +1056,48 @@ async function streamResponse(conv) {
         return { role: m.role, content: m.content };
       });
 
+    // ── Figma-agent inline override ──────────────────────────────────────
+    // System-prompt directives lose to recency when the agent body is huge
+    // (e.g. Component Spec Recreator ships ~35KB of detail). Append a hard
+    // override to the LAST USER MESSAGE — that's the strongest signal the
+    // model honors. Triggers only when:
+    //   - an agent with permissions.figma is active
+    //   - the user message clearly asks to create / build / render / generate
+    // The directive forbids narrating a markdown spec and requires
+    // figma_execute calls.
+    try {
+      if (typeof activeAgent !== 'undefined' && activeAgent && activeAgent.permissions && activeAgent.permissions.figma) {
+        var _lastIdx = messages.length - 1;
+        var _last = messages[_lastIdx];
+        if (_last && _last.role === 'user') {
+          var _lastText = typeof _last.content === 'string'
+            ? _last.content
+            : (Array.isArray(_last.content) ? (_last.content.find(function(c){ return c && c.type === 'text'; }) || {}).text || '' : '');
+          // Heuristic: any verb that implies creating/rendering Figma output.
+          var _createRe = /\b(create|build|render|generate|make|produce|recreate|reproduce|draft|spec(?!ifically)|design)\b/i;
+          if (_createRe.test(_lastText)) {
+            var _override = '\n\n---\n[SYSTEM OVERRIDE — non-negotiable]\n' +
+              'Your output for this turn MUST be one or more `figma_execute` tool calls that render the deliverable IN FIGMA. ' +
+              'Do NOT respond with a markdown spec, table, summary, or written description of what you would do. ' +
+              'Read-only Dev Mode tools (get_code, get_metadata, get_design_context, get_screenshot) are for INSPECTION only — they are NEVER the final answer. ' +
+              'If figma_execute is genuinely unavailable, say so in one sentence and stop. Otherwise: call figma_execute now.';
+            if (typeof _last.content === 'string') {
+              messages[_lastIdx] = { role: 'user', content: _last.content + _override };
+            } else if (Array.isArray(_last.content)) {
+              var _newContent = _last.content.slice();
+              var _textIdx = _newContent.findIndex(function(c){ return c && c.type === 'text'; });
+              if (_textIdx >= 0) {
+                _newContent[_textIdx] = Object.assign({}, _newContent[_textIdx], { text: (_newContent[_textIdx].text || '') + _override });
+              } else {
+                _newContent.unshift({ type: 'text', text: _override });
+              }
+              messages[_lastIdx] = { role: 'user', content: _newContent };
+            }
+          }
+        }
+      }
+    } catch (_e) {}
+
     var userSysPrompt  = document.getElementById('sys-prompt-input').value;
     // Only inject Figma context when user has explicitly enabled Figma MCP
     var figmaCtx       = state.figmaMCPEnabled ? getFigmaContext() : '';
@@ -1079,7 +1121,32 @@ async function streamResponse(conv) {
       'Security warnings and irreversible actions: always be explicit and clear.\n' +
       'Pattern: [thing] [action] [reason]. Not: "Sure! I\'d be happy to help you with that. The issue is likely..."';
 
-    var systemPrompt   = [agentSysCtx ? agentSysCtx + '\n\n' + getAgentMetaContext() : (capsCtx + agentCtx), playbookCtx, memoryCtx, repoInstructionsCtx, workspaceCtx, figmaCtx, conciseDirective, userSysPrompt].filter(Boolean).join('\n\n');
+    // When an agent is active, its system prompt is the source of truth and
+    // MUST win over the generic conciseDirective. Two problems if we don't
+    // reorder/strengthen this:
+    //   1. conciseDirective explicitly lists "specs" as something to write
+    //      verbosely — Opus reads that as license to dump a markdown spec
+    //      even when the agent says "render in Figma via figma_execute".
+    //   2. Recency bias: whatever is last in the system prompt wins ties.
+    // So: put agentSysCtx LAST (highest priority) and append a hard
+    // tool-use override when the agent has figma permission.
+    var agentToolDirective = '';
+    if (agentSysCtx && typeof activeAgent !== 'undefined' && activeAgent && activeAgent.permissions && activeAgent.permissions.figma) {
+      agentToolDirective = '## CRITICAL — Tool Use Overrides Narration\n' +
+        'You are an agent with Figma write access. Your job is to RENDER output IN Figma using the `figma_execute` tool, not to narrate it as markdown.\n' +
+        '- DO NOT respond with a markdown spec, table, or written description when the user asks you to create/build/render/produce something in Figma.\n' +
+        '- Read-only Dev Mode MCP tools (get_code, get_metadata, get_screenshot) are for INSPECTION only — never the final output.\n' +
+        '- The final deliverable for every render request MUST be one or more `figma_execute` calls that actually place nodes on the canvas.\n' +
+        '- Only fall back to a markdown description if `figma_execute` is genuinely unavailable (no Figma file connected) — and say so explicitly.';
+    }
+
+    var systemPrompt;
+    if (agentSysCtx) {
+      // Agent active → agent prompt LAST so it wins recency bias.
+      systemPrompt = [playbookCtx, memoryCtx, repoInstructionsCtx, workspaceCtx, figmaCtx, conciseDirective, userSysPrompt, agentSysCtx + '\n\n' + getAgentMetaContext(), agentToolDirective].filter(Boolean).join('\n\n');
+    } else {
+      systemPrompt = [capsCtx + agentCtx, playbookCtx, memoryCtx, repoInstructionsCtx, workspaceCtx, figmaCtx, conciseDirective, userSysPrompt].filter(Boolean).join('\n\n');
+    }
 
     dbg('► fetch /api/chat model=' + state.model + ' msgs=' + messages.length + ' sysPrompt=' + systemPrompt.length + 'ch', 'cmd');
 
@@ -1112,7 +1179,11 @@ async function streamResponse(conv) {
     var _hasFigmaAttachment = (state.pendingAttachments || []).some(function(a) {
       return a && (a.type === 'figma_file' || a.extSource === 'figma');
     });
-    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: !!state.figmaMCPEnabled || _hasFigmaAttachment, usePlaywrightMCP: state.playwrightMCPEnabled || false, selectedFigmaFileKeys: _selectedFigmaKeys, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false, conversationId: (conv && conv.id) || null };
+    // Agents with figma permission ALWAYS need useFigmaMCP — otherwise the
+    // server gates out figma_execute and the agent silently falls back to
+    // narrating a markdown spec instead of rendering in Figma.
+    var _agentNeedsFigma = (typeof activeAgent !== 'undefined' && activeAgent && activeAgent.permissions && activeAgent.permissions.figma) === true;
+    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: !!state.figmaMCPEnabled || _hasFigmaAttachment || _agentNeedsFigma, usePlaywrightMCP: state.playwrightMCPEnabled || false, selectedFigmaFileKeys: _selectedFigmaKeys, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false, conversationId: (conv && conv.id) || null };
     // Autonomous-mode (run-until-done) flag. Per-conversation override wins;
     // otherwise the server falls back to the active project's setting.
     // `false` is forwarded explicitly so a conversation can opt OUT of a

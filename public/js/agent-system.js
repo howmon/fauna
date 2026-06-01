@@ -265,7 +265,41 @@ function getAgentSystemPrompt() {
   var parts = [];
   parts.push('## Active Agent: ' + activeAgent.displayName);
   parts.push('');
-  parts.push(activeAgent.systemPrompt);
+
+  // For non-orchestrator agents, do NOT dump the full systemPrompt body here.
+  // Instead, ship a SHORT description + a hard directive telling the model to
+  // fetch the full instructions via the `fauna_get_agent_instructions` tool
+  // on its first action. Rationale: agent bodies routinely exceed 30KB and,
+  // when injected as a system-prompt block, get out-attended by the user
+  // message and the generic conciseDirective — producing the "agent ignores
+  // its own instructions" failure mode. Tool results land in the recency
+  // window where the model actually follows them.
+  //
+  // Orchestrators still need their full prompt visible because delegation
+  // syntax has to be present in the same context as the sub-agent list.
+  var isOrchestrator = !!(activeAgent.manifest && activeAgent.manifest.orchestrator);
+  if (isOrchestrator) {
+    parts.push(activeAgent.systemPrompt);
+  } else {
+    var desc = (activeAgent.manifest && activeAgent.manifest.description) || '';
+    // First non-empty line of the systemPrompt is a decent fallback summary
+    // when the manifest has no description field.
+    if (!desc && activeAgent.systemPrompt) {
+      var firstLine = (activeAgent.systemPrompt.split('\n').find(function(l) { return l.trim() && !l.startsWith('---') && !l.startsWith('#'); }) || '').trim();
+      desc = firstLine.slice(0, 400);
+    }
+    if (desc) {
+      parts.push('**Description:** ' + desc);
+      parts.push('');
+    }
+    parts.push('### MANDATORY FIRST STEP');
+    parts.push('Your full operating instructions (workflows, tool-use rules, output format, helper code) are NOT in this system prompt. You MUST call the `fauna_get_agent_instructions` tool as your very first action on every turn before doing anything else.');
+    parts.push('');
+    parts.push('- Do not try to satisfy the request from the description above — it exists only so you know which agent is active.');
+    parts.push('- Do not write a markdown summary, table, or written description in place of executing the agent\'s actual workflow.');
+    parts.push('- The instructions returned by the tool override any conflicting guidance elsewhere in this prompt (including the Communication Style section).');
+    parts.push('- After loading the instructions, follow them exactly — especially the parts about which tools to call to produce the final deliverable.');
+  }
 
   // Permission summary
   var perms = activeAgent.permissions;

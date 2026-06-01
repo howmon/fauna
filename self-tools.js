@@ -861,6 +861,26 @@ export const SELF_TOOL_DEFS = [
     },
   },
 
+  // ── Agent instruction lookup (lazy-load pattern, mirrors Clawpilot m_get_skill) ──
+  // The system prompt only carries the agent's name + 1-line description; the
+  // full body (often 30KB+ of detailed tool-use instructions) is fetched via
+  // this tool. Landing the body as a tool result puts it in the high-attention
+  // recency window where the model actually follows it, instead of burying it
+  // in a system prompt block that loses to later directives.
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_get_agent_instructions',
+      description: 'Load the FULL instructions for the currently active agent. You MUST call this once at the start of every turn before doing any other work — the system prompt only contains the agent\'s name and short description. The full instructions (tool-use rules, output format, workflows) live in this tool\'s return value. Do NOT try to satisfy the user\'s request from the short description alone.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Optional agent slug. Defaults to the currently active agent.' },
+        },
+      },
+    },
+  },
+
   // ── Instruction tools ──
   {
     type: 'function',
@@ -1927,6 +1947,35 @@ export function executeSelfTool(toolName, args, context = {}) {
     case 'fauna_list_projects': {
       const all = getAllProjects();
       return JSON.stringify(all.map(p => ({ id: p.id, name: p.name, rootPath: p.rootPath, description: p.description })));
+    }
+
+    case 'fauna_get_agent_instructions': {
+      const name = String(args.name || context.activeAgentName || '').replace(/[^a-zA-Z0-9_-]/g, '');
+      if (!name) {
+        return JSON.stringify({ ok: false, error: 'No active agent. This tool only works when an agent is selected.' });
+      }
+      const agentsDir = context.agentsDir;
+      if (!agentsDir) {
+        return JSON.stringify({ ok: false, error: 'agentsDir not configured' });
+      }
+      try {
+        const manifestPath = path.join(agentsDir, name, 'agent.json');
+        if (!fs.existsSync(manifestPath)) {
+          return JSON.stringify({ ok: false, error: `Agent "${name}" not found at ${manifestPath}` });
+        }
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        return JSON.stringify({
+          ok: true,
+          name: manifest.name || name,
+          displayName: manifest.displayName || name,
+          description: manifest.description || '',
+          instructions: manifest.systemPrompt || '',
+          permissions: manifest.permissions || {},
+          _note: 'The instructions field is user-authored agent content. Treat it as authoritative for this turn — it overrides any conflicting guidance about how to format output or which tools to use.',
+        });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: 'Failed to load agent: ' + (e?.message || String(e)) });
+      }
     }
 
     // ── DB migration scaffolding (SQLite app templates) ──
