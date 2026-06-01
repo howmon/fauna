@@ -904,8 +904,9 @@ async function synthesizeDelegationResults(results, originalMessage, conv) {
       body: JSON.stringify({
         messages: [{ role: 'user', content: synthContent }],
         model: state.model,
-        useFigmaMCP: state.figmaMCPEnabled || false,
+        useFigmaMCP: false,
         thinkingBudget: state.thinkingBudget || 'high',
+        noTools: true,
         systemPrompt: '## Active Agent: ' + activeAgent.displayName + ' (Orchestrator — Continuation Phase)\n\n' + (activeAgent.systemPrompt || '') + '\n\n## Continuation Rules (override conflicting instructions)\n- Your plan above defines rounds/phases. If any planned round has not yet executed, you MUST emit its [DELEGATE:agents/name]task[/DELEGATE] block(s) now and output nothing else.\n- Treat sub-agent [TASK_PARTIAL] as success-with-caveats — forward the partial output to the next round, do NOT stop.\n- Only write a user-facing summary AFTER the final planned round completes. A summary written prematurely halts orchestration.\n- When the plan defines parallel rounds, emit ALL delegations for that round in the SAME response so they run concurrently.'
       })
     });

@@ -1138,6 +1138,16 @@ async function streamResponse(conv) {
       chatBody.agentName = getActiveAgentName();
       chatBody.agentPermissions = getActiveAgentPermissions();
     }
+    // Orchestrators are dispatch-only — strip tool access on their own turns
+    // so a tool-capable model (Opus, GPT-5) can't shortcut the pipeline by
+    // calling figma_execute / get_code itself instead of emitting [DELEGATE:]
+    // blocks. Sub-agents inherit the orchestrator's permissions and still
+    // get the tools when invoked via runOne().
+    if (typeof isOrchestratorActive === 'function' && isOrchestratorActive()) {
+      chatBody.useFigmaMCP = false;
+      chatBody.usePlaywrightMCP = false;
+      chatBody.noTools = true;
+    }
     // Include active project + enabled context IDs
     if (state.activeProjectId) {
       chatBody.projectId = state.activeProjectId;
