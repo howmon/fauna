@@ -1103,7 +1103,16 @@ async function streamResponse(conv) {
     var _ctxGates = _ctxFlags || {};
 
     // Build chat request body — include agent info when active
-    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: state.figmaMCPEnabled, usePlaywrightMCP: state.playwrightMCPEnabled || false, selectedFigmaFileKeys: _getSelectedFigmaFileKeysFromAttachments(state.pendingAttachments), contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false, conversationId: (conv && conv.id) || null };
+    // If the user has any Figma file attached to this turn (via the plugin),
+    // implicitly enable Figma MCP for the request even when the global toggle
+    // is off — otherwise the model is told a file is selected but has no
+    // figma_execute / Dev Mode tools available, which is the confusing
+    // "where are my figma tools?" failure mode.
+    var _selectedFigmaKeys = _getSelectedFigmaFileKeysFromAttachments(state.pendingAttachments);
+    var _hasFigmaAttachment = (state.pendingAttachments || []).some(function(a) {
+      return a && (a.type === 'figma_file' || a.extSource === 'figma');
+    });
+    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: !!state.figmaMCPEnabled || _hasFigmaAttachment, usePlaywrightMCP: state.playwrightMCPEnabled || false, selectedFigmaFileKeys: _selectedFigmaKeys, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false, conversationId: (conv && conv.id) || null };
     // Autonomous-mode (run-until-done) flag. Per-conversation override wins;
     // otherwise the server falls back to the active project's setting.
     // `false` is forwarded explicitly so a conversation can opt OUT of a

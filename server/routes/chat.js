@@ -548,7 +548,17 @@ export function registerChatRoute(app, {
       if (useFigmaMCP) {
         try { mcpTools = await figma.getMcpTools(); } catch (_) {
           // Fallback: always expose figma_execute even when port-3845 is unavailable
-          mcpTools = [figma.executeToolDef];
+          mcpTools = [];
+        }
+        // figma_execute (plugin bridge) is independent of the Dev Mode MCP
+        // server on port 3845 — it talks to the Figma plugin directly via the
+        // local relay. Always expose it whenever Figma is enabled, otherwise
+        // the model receives Dev Mode tools (which need the file focused in
+        // Figma desktop) but cannot script the plugin, leading to the
+        // "I don't have a figma_execute tool" failure mode.
+        if (!Array.isArray(mcpTools)) mcpTools = [];
+        if (!mcpTools.some(t => t && t.function && t.function.name === 'figma_execute')) {
+          mcpTools.push(figma.executeToolDef);
         }
       }
 
