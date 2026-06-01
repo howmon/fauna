@@ -1666,6 +1666,9 @@ function updateContextMeter(data) {
 
   var popover = document.getElementById('ctx-meter-popover');
   var labelText = 'in:' + formatTokens(promptTokens) + ' + out:' + formatTokens(completionTokens) + ' = ' + formatTokens(totalUsed) + '/' + formatTokens(limit) + (data.usage ? '' : ' (est.)');
+  if (data.billed && data.billed.total && data.iterations > 1) {
+    labelText += ' · billed:' + formatTokens(data.billed.total) + ' across ' + data.iterations + ' calls';
+  }
   if (popover) popover.textContent = labelText;
   // Inline label next to the ring so users can see usage at a glance
   // (formerly the function bailed early when this element was missing).

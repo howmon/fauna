@@ -827,10 +827,16 @@ export function registerChatRoute(app, {
       let prevPreamble = '';       // narration emitted on the previous tool-call iteration
       let narrationRepeats = 0;    // consecutive iterations with near-identical preamble
       let narrationNudgeFired = false; // only inject the coaching nudge once per request
-      // Codex-parity: cumulative token usage across every model iteration in
-      // this turn. Emitted via `token_usage` SSE so the client can render a
-      // live "% of window remaining" indicator.
-      let turnUsage = { prompt: 0, completion: 0, total: 0, iterations: 0 };
+      // Codex-parity: token usage across every model iteration in this turn.
+      // `prompt` tracks the PEAK prompt size (true context-window fullness —
+      // each iteration resends the conversation, so summing would massively
+      // double-count). `completion` is cumulative (new tokens generated).
+      // `billedPrompt` / `billedTotal` track the actual API-billed totals
+      // for cost tracking (kept separate from window-fullness display).
+      let turnUsage = {
+        prompt: 0, completion: 0, total: 0, iterations: 0,
+        billedPrompt: 0, billedTotal: 0,
+      };
       const emitTokenUsage = () => {
         try {
           send({
@@ -838,6 +844,8 @@ export function registerChatRoute(app, {
             prompt: turnUsage.prompt,
             completion: turnUsage.completion,
             total: turnUsage.total,
+            billedPrompt: turnUsage.billedPrompt,
+            billedTotal: turnUsage.billedTotal,
             iterations: turnUsage.iterations,
             window: budget.window,
             bodyTokenLimit: budget.bodyTokenLimit,
@@ -860,6 +868,30 @@ export function registerChatRoute(app, {
       const MAX_CONTINUES = autonomousMode ? 12 : 6; // max auto-continue attempts for truncated output
       const MAX_HALF_STOP_NUDGES = autonomousMode ? 8 : 2; // re-prompt at most twice before letting the model stop
       const MAX_RESULT_CHARS = 40000; // prevent context overflow from large tool responses
+      // Per-tool tighter caps for tools whose results are typically large JSON
+      // dumps (figma node trees, etc.). Write-confirm responses are small so
+      // unaffected; only introspection blobs hit the cap.
+      const PER_TOOL_MAX_CHARS = {
+        // figma_execute introspection blobs can be large but truncating too
+        // aggressively causes the model to re-introspect (which costs MORE
+        // tokens). 20k is a balance: half the default, still room for one
+        // full node tree, and stale-shrink elides older calls anyway.
+        figma_execute: 20000,
+      };
+      // Tools whose results must never be stale-shrunk — typically tools that
+      // inject persistent instructions/rules that the model needs to keep
+      // referring to throughout the turn.
+      const STALE_SHRINK_EXEMPT = new Set([
+        'fauna_get_agent_instructions',
+      ]);
+      // Stale-tool-result shrinking: when the same tool is called many times
+      // in a turn, prior results from that tool become dead weight in context.
+      // After pushing a new tool result, we walk back through allMessages and
+      // replace older tool messages from the same tool name with a short stub,
+      // keeping only the last STALE_KEEP_PER_TOOL results verbatim per tool.
+      const STALE_SHRINK_ENABLED = process.env.FAUNA_STALE_TOOL_SHRINK !== '0';
+      const STALE_KEEP_PER_TOOL = 2;
+      const toolNameByCallId = new Map(); // call_id -> tool name (for stale shrink)
       const toolCallsSeen = new Map(); // deduplicate identical calls
       if (autonomousMode) {
         console.log('[chat] autonomousMode=on (projectId=' + (projectId || 'none') + ') caps: tools=' + MAX_TOOL_CALLS + ' continues=' + MAX_CONTINUES + ' halfStop=' + MAX_HALF_STOP_NUDGES);
@@ -917,6 +949,60 @@ export function registerChatRoute(app, {
           });
         },
       });
+
+      // ── Pre-seed agent instructions (defense against model skipping the
+      // MANDATORY FIRST STEP directive). For non-orchestrator agents we ship
+      // a slim system prompt that tells the model to call
+      // `fauna_get_agent_instructions` first — but the model sometimes
+      // ignores it and just freelances. Pre-loading the instructions as a
+      // completed tool result makes that skip impossible.
+      // Only fires when:
+      //   - an agent is active
+      //   - the agent has a systemPrompt (i.e. there's something to inject)
+      //   - it's not already present in allMessages from a prior turn
+      //   - the model has tool-calling (otherwise nothing to fake)
+      if (agentName && Array.isArray(mcpTools) && mcpTools.length) {
+        try {
+          const alreadySeeded = allMessages.some(m =>
+            m && m.role === 'tool' && typeof m.content === 'string' &&
+            m.content.includes('"_seeded_agent_instructions":true')
+          );
+          if (!alreadySeeded) {
+            const safeAgentName = agentName.replace(/[^a-zA-Z0-9_-]/g, '');
+            const manifestPath = path.join(agentsDir, safeAgentName, 'agent.json');
+            if (fs.existsSync(manifestPath)) {
+              const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+              const isOrchestrator = !!(manifest && manifest.orchestrator);
+              if (!isOrchestrator && manifest.systemPrompt) {
+                const seedId = 'seed_' + Date.now().toString(36);
+                const seedResult = JSON.stringify({
+                  ok: true,
+                  _seeded_agent_instructions: true,
+                  name: manifest.name || safeAgentName,
+                  displayName: manifest.displayName || safeAgentName,
+                  description: manifest.description || '',
+                  instructions: manifest.systemPrompt,
+                  permissions: manifest.permissions || {},
+                  _note: 'These are the authoritative instructions for the active agent. Follow them exactly — they override conflicting guidance about output format or tool choice in the system prompt.',
+                });
+                allMessages.push({
+                  role: 'assistant',
+                  content: '',
+                  tool_calls: [{
+                    id: seedId,
+                    type: 'function',
+                    function: { name: 'fauna_get_agent_instructions', arguments: '{}' },
+                  }],
+                });
+                allMessages.push({ role: 'tool', tool_call_id: seedId, content: seedResult });
+                console.log(`[chat] pre-seeded agent instructions for "${safeAgentName}" (${manifest.systemPrompt.length} chars)`);
+              }
+            }
+          }
+        } catch (e) {
+          console.log('[chat] agent-instruction pre-seed failed:', e.message);
+        }
+      }
 
       while (continueLoop) {
         if (res.writableEnded) break;
@@ -1064,11 +1150,21 @@ export function registerChatRoute(app, {
 
         // Codex-parity: accumulate + broadcast token usage after each model
         // iteration so the UI can render a live context-window indicator.
+        // `prompt` = peak (latest iteration's prompt size — true context
+        // fullness, since each call resends the same conversation).
+        // `completion` / `total` = cumulative across iterations (new output).
+        // `billedPrompt` / `billedTotal` = sum of all per-call prompts for
+        // cost accounting only.
         if (streamUsage) {
-          turnUsage.prompt     += streamUsage.prompt_tokens     || 0;
-          turnUsage.completion += streamUsage.completion_tokens || 0;
-          turnUsage.total      += streamUsage.total_tokens      || 0;
-          turnUsage.iterations += 1;
+          const ip = streamUsage.prompt_tokens     || 0;
+          const ic = streamUsage.completion_tokens || 0;
+          const it = streamUsage.total_tokens      || (ip + ic);
+          if (ip > turnUsage.prompt) turnUsage.prompt = ip; // peak
+          turnUsage.completion += ic;
+          turnUsage.total       = turnUsage.prompt + turnUsage.completion;
+          turnUsage.billedPrompt += ip;
+          turnUsage.billedTotal  += it;
+          turnUsage.iterations  += 1;
           emitTokenUsage();
         }
 
@@ -1227,13 +1323,14 @@ export function registerChatRoute(app, {
               // Keep head + tail so errors/stack traces at the end of long
               // tool output (e.g. shell, build logs) survive the truncation
               // window — losing the failing tail is what confuses the model.
-              if (typeof result === 'string' && result.length > MAX_RESULT_CHARS) {
+              const resultCap = PER_TOOL_MAX_CHARS[toolName] || MAX_RESULT_CHARS;
+              if (typeof result === 'string' && result.length > resultCap) {
                 const original = result.length;
-                const tailBudget = Math.min(2000, Math.floor(MAX_RESULT_CHARS * 0.1));
-                const headBudget = MAX_RESULT_CHARS - tailBudget;
+                const tailBudget = Math.min(2000, Math.floor(resultCap * 0.1));
+                const headBudget = resultCap - tailBudget;
                 result =
                   result.slice(0, headBudget) +
-                  `\n\n[\u2026 truncated ${original - MAX_RESULT_CHARS} chars; showing first ${headBudget} + last ${tailBudget} of ${original} total \u2026]\n\n` +
+                  `\n\n[\u2026 truncated ${original - resultCap} chars; showing first ${headBudget} + last ${tailBudget} of ${original} total \u2026]\n\n` +
                   result.slice(-tailBudget);
               }
               toolCallsSeen.set(callKey, result);
@@ -1250,6 +1347,34 @@ export function registerChatRoute(app, {
                 }
               }
               allMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolContent });
+              toolNameByCallId.set(tc.id, toolName);
+
+              // Stale-tool-result shrink: keep only the last STALE_KEEP_PER_TOOL
+              // results from this tool verbatim; replace older ones with a stub.
+              // Massive savings for agents that call e.g. figma_execute 10+ times
+              // in a single turn — earlier introspection blobs almost never need
+              // to be re-read once the model has acted on them.
+              if (STALE_SHRINK_ENABLED && !STALE_SHRINK_EXEMPT.has(toolName)) {
+                let keepRemaining = STALE_KEEP_PER_TOOL;
+                let _shrunkCount = 0;
+                let _shrunkChars = 0;
+                for (let i = allMessages.length - 1; i >= 0; i--) {
+                  const m = allMessages[i];
+                  if (!m || m.role !== 'tool' || !m.tool_call_id) continue;
+                  if (toolNameByCallId.get(m.tool_call_id) !== toolName) continue;
+                  if (keepRemaining > 0) { keepRemaining--; continue; }
+                  // Already shrunk? skip.
+                  if (typeof m.content === 'string' && m.content.startsWith('[stale: ')) continue;
+                  const origLen = typeof m.content === 'string' ? m.content.length : 0;
+                  if (origLen < 200) continue; // not worth shrinking tiny results
+                  m.content = `[stale: ${toolName} result elided — ${origLen} chars superseded by later ${toolName} call(s) in this turn]`;
+                  _shrunkCount++;
+                  _shrunkChars += origLen;
+                }
+                if (_shrunkCount > 0) {
+                  console.log(`[chat] stale-shrink: ${toolName} elided ${_shrunkCount} prior result(s), saved ${_shrunkChars} chars`);
+                }
+              }
             } catch (e) {
               allMessages.push({ role: 'tool', tool_call_id: tc.id, content: `Error: ${e.message}` });
               figma.log('✗ ' + toolName + ': ' + e.message, 'err');

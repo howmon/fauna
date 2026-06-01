@@ -1910,6 +1910,11 @@ function renderTokenUsageBar(evt) {
         completion_tokens: Number(evt && evt.completion) || 0,
         total_tokens:      Number(evt && evt.total)      || 0,
       },
+      billed: {
+        prompt: Number(evt && evt.billedPrompt) || 0,
+        total:  Number(evt && evt.billedTotal)  || 0,
+      },
+      iterations: Number(evt && evt.iterations) || 0,
       model: (evt && evt.model) || '',
     });
   } catch (_) { /* non-fatal */ }
