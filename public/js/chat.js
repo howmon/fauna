@@ -1248,6 +1248,7 @@ async function streamResponse(conv) {
     // Extract user text from last user message for keyword-gated context injection
     var lastUserMsg = conv.messages.slice().reverse().find(function(m) { return m.role === 'user'; });
     var userText = lastUserMsg ? (typeof lastUserMsg.content === 'string' ? lastUserMsg.content : (lastUserMsg.content.find(function(c){ return c.type === 'text'; }) || {}).text || '') : '';
+    var _userHasUrl = /\bhttps?:\/\/\S+/i.test(userText);
     // Client-side context gating: skip ~5-7k tokens of capability prose on trivial turns
     var _ctxFlags = (typeof computeClientContextFlags === 'function') ? computeClientContextFlags(userText, conv) : null;
     var capsCtx        = (typeof getCapabilitiesContextGated === 'function') ? getCapabilitiesContextGated(_ctxFlags) : getCapabilitiesContext();
@@ -1264,6 +1265,13 @@ async function streamResponse(conv) {
       'Write FULL verbose content only when producing: code blocks, file content, specs, documents, artifacts, commit messages.\n' +
       'Security warnings and irreversible actions: always be explicit and clear.\n' +
       'Pattern: [thing] [action] [reason]. Not: "Sure! I\'d be happy to help you with that. The issue is likely..."';
+    var urlRoutingDirective = _userHasUrl
+      ? '## URL Handling Override\n' +
+        'The user provided at least one URL in this turn. Do NOT claim you cannot inspect a URL by default.\n' +
+        '- For simple read-only URL inspection, use fetch-url style retrieval first.\n' +
+        '- For JS-rendered pages, interactions, or live browsing, use fauna_browser (or browser-ext-action when an extension-attached tab is present).\n' +
+        '- If retrieval genuinely fails, report the concrete failure and then ask for input.'
+      : '';
 
     // When an agent is active, its system prompt is the source of truth and
     // MUST win over the generic conciseDirective. Two problems if we don't
@@ -1287,9 +1295,9 @@ async function streamResponse(conv) {
     var systemPrompt;
     if (agentSysCtx) {
       // Agent active → agent prompt LAST so it wins recency bias.
-      systemPrompt = [playbookCtx, memoryCtx, repoInstructionsCtx, workspaceCtx, figmaCtx, conciseDirective, userSysPrompt, agentSysCtx + '\n\n' + getAgentMetaContext(), agentToolDirective].filter(Boolean).join('\n\n');
+      systemPrompt = [playbookCtx, memoryCtx, repoInstructionsCtx, workspaceCtx, figmaCtx, conciseDirective, urlRoutingDirective, userSysPrompt, agentSysCtx + '\n\n' + getAgentMetaContext(), agentToolDirective].filter(Boolean).join('\n\n');
     } else {
-      systemPrompt = [capsCtx + agentCtx, playbookCtx, memoryCtx, repoInstructionsCtx, workspaceCtx, figmaCtx, conciseDirective, userSysPrompt].filter(Boolean).join('\n\n');
+      systemPrompt = [capsCtx + agentCtx, playbookCtx, memoryCtx, repoInstructionsCtx, workspaceCtx, figmaCtx, conciseDirective, urlRoutingDirective, userSysPrompt].filter(Boolean).join('\n\n');
     }
 
     dbg('► fetch /api/chat model=' + state.model + ' msgs=' + messages.length + ' sysPrompt=' + systemPrompt.length + 'ch', 'cmd');
@@ -1332,11 +1340,15 @@ async function streamResponse(conv) {
     var _hasFigmaAttachment = (state.pendingAttachments || []).some(function(a) {
       return a && (a.type === 'figma_file' || a.extSource === 'figma');
     });
+    var _hasBrowserAttachment = (state.pendingAttachments || []).some(function(a) {
+      return _isBrowserTabReferenceAttachment(a);
+    });
     // Agents with figma permission ALWAYS need useFigmaMCP — otherwise the
     // server gates out figma_execute and the agent silently falls back to
     // narrating a markdown spec instead of rendering in Figma.
     var _agentNeedsFigma = (typeof activeAgent !== 'undefined' && activeAgent && activeAgent.permissions && activeAgent.permissions.figma) === true;
-    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: !!state.figmaMCPEnabled || _hasFigmaAttachment || _agentNeedsFigma, usePlaywrightMCP: state.playwrightMCPEnabled || false, selectedFigmaFileKeys: _selectedFigmaKeys, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false, conversationId: (conv && conv.id) || null };
+    var _agentNeedsBrowser = (typeof activeAgent !== 'undefined' && activeAgent && activeAgent.permissions && activeAgent.permissions.browser) === true;
+    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: !!state.figmaMCPEnabled || _hasFigmaAttachment || _agentNeedsFigma, usePlaywrightMCP: !!state.playwrightMCPEnabled || _hasBrowserAttachment || _agentNeedsBrowser || _userHasUrl, selectedFigmaFileKeys: _selectedFigmaKeys, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false, conversationId: (conv && conv.id) || null };
     // Autonomous-mode (run-until-done) flag. Per-conversation override wins;
     // otherwise the server falls back to the active project's setting.
     // `false` is forwarded explicitly so a conversation can opt OUT of a

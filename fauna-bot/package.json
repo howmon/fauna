@@ -9,7 +9,7 @@
     "dev": "node --watch server/index.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "dependencies": {
     "botbuilder": "^4.23.3",
