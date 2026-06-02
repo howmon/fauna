@@ -41,6 +41,15 @@
       autoLibs.push('https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js');
     }
     var autoLibTags = autoLibs.map(function(u){ return '<script src="' + u + '"><\/script>'; }).join('');
+    // If html is empty but js needs a canvas (common 3D widget pattern),
+    // inject a default <canvas> filling the iframe so getElementById doesn't
+    // return null and the WebGLRenderer can mount.
+    var bodyHtml = html;
+    if (!String(html || '').trim()) {
+      var m = /getElementById\(['"]([\w-]+)['"]\)/.exec(js);
+      var id = m ? m[1] : 'c';
+      bodyHtml = '<canvas id="' + id + '" style="display:block;width:100%;height:100%"></canvas>';
+    }
     // Mirror lib/dynamic-widgets.js buildWidgetSrcdoc — kept inline so the
     // frontend doesn't need to round-trip the assembled HTML over the wire.
     return '<!doctype html><html><head>' +
@@ -49,7 +58,7 @@
       autoLibTags +
       '<style>html,body{margin:0;padding:0;font-family:system-ui,-apple-system,sans-serif;color:#e6e6e6;background:transparent}' +
       css + '</style></head><body>' +
-      '<div id="root">' + html + '</div>' +
+      '<div id="root" style="width:100vw;height:100vh">' + bodyHtml + '</div>' +
       '<script>(function(){' +
         'var handlers={};' +
         'var widget={id:' + JSON.stringify(widgetId) + ',' +
