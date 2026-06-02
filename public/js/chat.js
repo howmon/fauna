@@ -55,10 +55,41 @@ window.getSelectedFigmaFileKeys = function() {
   return _getSelectedFigmaFileKeysFromAttachments();
 };
 
-async function _buildLiveBrowserAttachmentContext(attachments) {
+async function _buildLiveBrowserAttachmentContext(attachments, opts) {
   if (!attachments || !attachments.length) return '';
   var refs = attachments.filter(_isBrowserTabReferenceAttachment);
   if (!refs.length) return '';
+
+  // Dedup: if the prior user message in this conversation already carried
+  // the same tabId(s), the model still has that snapshot — re-injecting
+  // 8KB of identical page text on every turn wastes context AND amplifies
+  // the "do not re-fetch" guardrail to the point where the model refuses
+  // even when the user explicitly asks. Skip refs already seen.
+  try {
+    var conv = (opts && opts.conv) || null;
+    if (conv && Array.isArray(conv.messages)) {
+      var lastUser = null;
+      for (var j = conv.messages.length - 1; j >= 0; j--) {
+        if (conv.messages[j] && conv.messages[j].role === 'user') { lastUser = conv.messages[j]; break; }
+      }
+      var seenTabIds = new Set();
+      if (lastUser && Array.isArray(lastUser.attachments)) {
+        for (var k = 0; k < lastUser.attachments.length; k++) {
+          var pa = lastUser.attachments[k];
+          if (pa && pa.tabId) seenTabIds.add(String(pa.tabId));
+        }
+      }
+      if (seenTabIds.size) {
+        refs = refs.filter(function(r) { return !r.tabId || !seenTabIds.has(String(r.tabId)); });
+      }
+    }
+  } catch (_) {}
+
+  if (!refs.length) {
+    // All refs were already shown in the prior turn — leave a tiny pointer
+    // instead of the full payload so the model knows the context is fresh.
+    return '\n\n[Same browser tab(s) as the previous turn — content already in context above. If the user is asking for a new interaction (click/type/navigate) or fresher data, use `browser-ext-action` now.]';
+  }
 
   var chunks = [];
   var failedRefs = [];
@@ -110,7 +141,7 @@ async function _buildLiveBrowserAttachmentContext(attachments) {
 
   var header = '';
   if (chunks.length) {
-    header = '\n\n[Resolved live browser tab context — already extracted from the user\'s shared browser tab via the extension. Use this content directly to answer. Do NOT call `fauna_browser` or emit `browser-action` / `browser-ext-action` blocks to re-fetch this page unless the user explicitly asks for newer data or a specific interaction (click/type/navigate). The in-app `fauna_browser` webview is a SEPARATE, blank browser unrelated to this tab — opening it will not show this content.]\n';
+    header = '\n\n[Resolved live browser tab context — already extracted from the user\'s shared browser tab via the extension. PRIORITY RULE: if the user\'s message in this turn explicitly asks you to use the browser, navigate, click, type, refresh, or fetch newer data, you MUST emit a `browser-ext-action` block for that — the user\'s explicit request always wins. Otherwise (no explicit browser request), just answer from the inline content below and do not re-fetch the same page. Note: `fauna_browser` is a SEPARATE in-app webview unrelated to the user\'s real tab and will be blank — prefer `browser-ext-action` for any interaction with the attached tab.]\n';
   }
   var body2 = chunks.join('\n\n');
   if (failedRefs.length) {
@@ -649,7 +680,7 @@ async function sendMessage(opts) {
 
   var displayContent = content;
   // Resolve browser tab references to live context at send-time (keeps visible message compact)
-  var liveBrowserCtx = await _buildLiveBrowserAttachmentContext(state.pendingAttachments);
+  var liveBrowserCtx = await _buildLiveBrowserAttachmentContext(state.pendingAttachments, { conv: conv });
   if (liveBrowserCtx) content += liveBrowserCtx;
 
   // Inject live system context when the message is about system tasks
@@ -745,7 +776,7 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
 
   var displayContent = content;
   // Resolve browser tab references to live context at send-time (keeps visible message compact)
-  var liveBrowserCtx = await _buildLiveBrowserAttachmentContext(attachments);
+  var liveBrowserCtx = await _buildLiveBrowserAttachmentContext(attachments, { conv: conv });
   if (liveBrowserCtx) content += liveBrowserCtx;
 
   // Show the user message in chat
