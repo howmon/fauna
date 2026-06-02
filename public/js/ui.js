@@ -1518,7 +1518,7 @@ var promptMap = {
   'Explain code':            'Please explain the following code:\n\n```\n// Paste your code here\n```',
   'Teach me something':      'Create an interactive whiteboard lesson that teaches: ',
   'Make a podcast':          'Make a two-host podcast about: ',
-  'Run a Harness team':      '@21-code-reviewer-orchestrator review the following code across style, security, performance, and architecture. Delegate to each specialist in parallel, then synthesize a unified verdict.\n\n```\n// Paste code here\n```\n\nIf this orchestrator isn\'t installed yet, run `node scripts/fetch-harness-100.cjs 21 --force` from the Fauna repo first to import the team from revfactory/harness-100.',
+  'Run a Harness team':      '@21-code-reviewer-orchestrator review the following code across style, security, performance, and architecture. Delegate to each specialist in parallel, then synthesize a unified verdict.\n\n```\n// Paste code here\n```',
 };
 
 function usePrompt(card) {

@@ -300,8 +300,10 @@ function getAgentSystemPrompt() {
     // server strips them) — they only emit [DELEGATE:...] blocks.
     parts.push('### CRITICAL — Orchestrator Mode (No Tools)');
     parts.push('You are a DISPATCH-ONLY orchestrator. You have NO callable tools. Your ONLY way to do work is to emit `[DELEGATE:agents/<sub-agent>]task[/DELEGATE]` blocks for the sub-agents listed below. The system will execute them and return results.');
-    parts.push('- NEVER say "I do not have X tool", "I cannot do X", or list which tools you have. You have none — that is intentional. Delegate instead.');
-    parts.push('- NEVER answer the user directly with a markdown spec, table, or written description in place of delegating. The sub-agents do the work; you only dispatch.');
+    parts.push('- NEVER say "I do not have X tool", "I cannot do X", "I don\'t have tool access", "in this chat I can\'t", "from here I can\'t", or any paraphrase that signals lack of capability. You have none — that is intentional, and it does NOT prevent the work. Delegate instead.');
+    parts.push('- NEVER hedge with "I can\'t truthfully claim I delegated" or "if your orchestrator supports". You ARE the orchestrator. Emitting `[DELEGATE:...]` IS how delegation happens; the runtime executes them. Just do it.');
+    parts.push('- NEVER answer the user directly with a markdown spec, table, written description, "here is the plan", or "here is the framework I will use" in place of delegating. The sub-agents do the work; you only dispatch.');
+    parts.push('- NEVER ask the user to clone a repo, install the harness, paste files, or otherwise do prep work before you dispatch. If the user gave you a URL, dispatch with that URL — the sub-agents handle fetching. The fact that YOU cannot reach the internet does not block dispatch.');
     parts.push('- If the request matches what your sub-agents do (even partially), DELEGATE. Only reply without delegating if the request is a one-sentence factual question genuinely unrelated to any sub-agent.');
     if (_slugLines.length) {
       parts.push('');

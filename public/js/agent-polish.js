@@ -463,12 +463,53 @@ function parseDelegations(buffer) {
 /**
  * Find a sub-agent from the active orchestrator's bundled _subAgents.
  * Returns the sub-agent manifest or null.
+ *
+ * Models routinely emit phantom slugs based on the user's prose
+ * ("style-specialist" instead of "21-code-reviewer-style-inspector") even
+ * when the system prompt lists the real slugs. Rather than dropping these
+ * silently and stalling the turn, we fall back to a best-effort fuzzy match
+ * on the token tail: if the phantom name appears as a suffix of exactly one
+ * real slug (after stripping team prefixes like "21-code-reviewer-"), use it.
+ * If the suffix is ambiguous we also try token-overlap scoring.
  */
 function findSubAgent(name) {
   if (!activeAgent || !activeAgent.manifest || !activeAgent.manifest._subAgents) return null;
   var subs = activeAgent.manifest._subAgents;
+  // 1. exact match (existing behavior)
   for (var i = 0; i < subs.length; i++) {
     if (subs[i].name === name) return subs[i];
+  }
+  // 2. fuzzy match — only attempt if the phantom name looks like a slug,
+  //    not a path. Normalize both sides to lowercase token sets.
+  var phantom = String(name || '').toLowerCase();
+  if (!phantom || phantom.indexOf('/') !== -1) return null;
+  var phantomTokens = phantom.split(/[-_]/).filter(Boolean);
+  if (!phantomTokens.length) return null;
+  // Drop common filler words that models add to slugs.
+  var FILLER = { specialist:1, agent:1, expert:1, reviewer:1, sub:1 };
+  var phantomCore = phantomTokens.filter(function(t) { return !FILLER[t]; });
+  if (!phantomCore.length) phantomCore = phantomTokens;
+  var best = null;
+  var bestScore = 0;
+  for (var j = 0; j < subs.length; j++) {
+    var slug = String(subs[j].name || '').toLowerCase();
+    var slugTokens = slug.split(/[-_]/).filter(Boolean);
+    if (!slugTokens.length) continue;
+    // Suffix match: phantom slug equals tail of real slug.
+    if (slug.endsWith('-' + phantom) || slug === phantom) {
+      return subs[j];
+    }
+    // Token overlap on the non-filler core.
+    var overlap = 0;
+    for (var k = 0; k < phantomCore.length; k++) {
+      if (slugTokens.indexOf(phantomCore[k]) !== -1) overlap++;
+    }
+    if (overlap > bestScore) { bestScore = overlap; best = subs[j]; }
+  }
+  // Require at least one strong content token to match to avoid wild guesses.
+  if (best && bestScore >= 1) {
+    try { console.warn('[agent] fuzzy-resolved phantom sub-agent slug "' + name + '" → "' + best.name + '" (score=' + bestScore + ')'); } catch (_) {}
+    return best;
   }
   return null;
 }
