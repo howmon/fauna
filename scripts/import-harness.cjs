@@ -45,6 +45,11 @@ async function main() {
   for (const w of warnings) console.warn('warn:', w);
 
   let imported = 0, skipped = 0;
+  // Slug remap so orchestrator cross-references survive prefixing.
+  const remap = new Map();
+  for (const { manifest } of agents) {
+    if (manifest.name) remap.set(manifest.name, prefix ? prefix + '-' + manifest.name : manifest.name);
+  }
   for (const { manifest, systemPromptBody } of agents) {
     let slug = manifest.name;
     if (prefix) slug = prefix + '-' + slug;
@@ -58,9 +63,22 @@ async function main() {
     fs.mkdirSync(destDir, { recursive: true });
     const final = { ...manifest, name: slug, systemPromptFile: 'system-prompt.md' };
     delete final.systemPrompt;
+    if (Array.isArray(final.agents) && final.agents.length) {
+      const remapped = [];
+      const dropped = [];
+      for (const ref of final.agents) {
+        if (remap.has(ref)) remapped.push(remap.get(ref));
+        else dropped.push(ref);
+      }
+      final.agents = remapped;
+      if (remapped.length) final.orchestrator = true;
+      if (dropped.length) console.warn('warn: orchestrator', slug, 'references unknown sub-agents (dropped):', dropped.join(', '));
+    }
     fs.writeFileSync(path.join(destDir, 'agent.json'), JSON.stringify(final, null, 2));
     fs.writeFileSync(path.join(destDir, 'system-prompt.md'), systemPromptBody || '');
-    console.log('imported:', slug, final._meta?.harnessPattern ? `[${final._meta.harnessPattern}]` : '');
+    const tag = final._meta?.harnessPattern ? `[${final._meta.harnessPattern}]` : '';
+    const orchTag = final.orchestrator ? ` orchestrator->[${final.agents.join(',')}]` : '';
+    console.log('imported:', slug, tag + orchTag);
     imported++;
   }
 

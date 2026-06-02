@@ -68,17 +68,27 @@ export function registerAgentRoutes(app, {
               ? '\n\n---\n## Shared Infrastructure\n\n' + fs.readFileSync(sharedPromptPath, 'utf8')
               : '';
             for (const subRef of subRefs) {
-              const subDir = path.join(agentDir, subRef);
+              // Two resolution modes:
+              //   1. "agents/<name>" or any path containing '/' — nested under this agent's dir
+              //   2. bare "<slug>" — flat peer at <agentsDir>/<slug> (Harness hierarchical pattern)
+              const safeRef = String(subRef).replace(/\.\.+/g, '');
+              const isNested = safeRef.includes('/');
+              const subDir = isNested ? path.join(agentDir, safeRef) : path.join(agentsDir, safeRef);
               const subManifestPath = path.join(subDir, 'agent.json');
               if (fs.existsSync(subManifestPath)) {
                 try {
                   const sub = JSON.parse(fs.readFileSync(subManifestPath, 'utf8'));
                   sub._dir = subDir;
-                  // Load sub-agent system prompt and append shared infrastructure
+                  // Load sub-agent system prompt and append shared infrastructure.
+                  // For flat peers, also fall back to manifest.systemPromptFile.
+                  let subBody = sub.systemPrompt || '';
                   const subPromptPath = path.join(subDir, 'system-prompt.md');
-                  if (fs.existsSync(subPromptPath)) {
-                    sub.systemPrompt = fs.readFileSync(subPromptPath, 'utf8') + sharedPrompt;
+                  if (fs.existsSync(subPromptPath)) subBody = fs.readFileSync(subPromptPath, 'utf8');
+                  else if (sub.systemPromptFile) {
+                    const altPath = path.join(subDir, sub.systemPromptFile);
+                    if (fs.existsSync(altPath)) subBody = fs.readFileSync(altPath, 'utf8');
                   }
+                  sub.systemPrompt = subBody + sharedPrompt;
                   manifest._subAgents.push(sub);
                 } catch (_) {}
               }
@@ -128,15 +138,21 @@ export function registerAgentRoutes(app, {
         const sharedPath = path.join(agentDir, 'shared.md');
         if (fs.existsSync(sharedPath)) manifest._shared = fs.readFileSync(sharedPath, 'utf8');
         for (const subRef of subRefs) {
-          const subDir = path.join(agentDir, subRef);
+          const safeRef = String(subRef).replace(/\.\.+/g, '');
+          const isNested = safeRef.includes('/');
+          const subDir = isNested ? path.join(agentDir, safeRef) : path.join(agentsDir, safeRef);
           const subManifestPath = path.join(subDir, 'agent.json');
           if (fs.existsSync(subManifestPath)) {
             try {
               const sub = JSON.parse(fs.readFileSync(subManifestPath, 'utf8'));
+              let subBody = sub.systemPrompt || '';
               const subPromptPath = path.join(subDir, 'system-prompt.md');
-              if (fs.existsSync(subPromptPath)) {
-                sub.systemPrompt = fs.readFileSync(subPromptPath, 'utf8');
+              if (fs.existsSync(subPromptPath)) subBody = fs.readFileSync(subPromptPath, 'utf8');
+              else if (sub.systemPromptFile) {
+                const altPath = path.join(subDir, sub.systemPromptFile);
+                if (fs.existsSync(altPath)) subBody = fs.readFileSync(altPath, 'utf8');
               }
+              sub.systemPrompt = subBody;
               manifest._subAgents.push(sub);
             } catch (_) {}
           }
@@ -341,6 +357,16 @@ export function registerAgentRoutes(app, {
 
       const results = { imported: [], skipped: [], skills: [], warnings: [...warnings] };
 
+      // Build slug remap (originalName -> finalSlug) so orchestrator
+      // cross-references survive prefixing.
+      const remap = new Map();
+      for (const { manifest } of agents) {
+        const orig = manifest.name;
+        if (!orig) continue;
+        const finalSlug = slugPrefix ? slugPrefix + '-' + orig : orig;
+        remap.set(orig, finalSlug);
+      }
+
       // Write agents
       for (const { manifest, systemPromptBody } of agents) {
         let slug = manifest.name;
@@ -360,9 +386,27 @@ export function registerAgentRoutes(app, {
         // Reference body via system-prompt.md instead of inlining in JSON.
         delete finalManifest.systemPrompt;
         finalManifest.systemPromptFile = 'system-prompt.md';
+        // Remap sub-agent refs to prefixed slugs, drop any that didn't import.
+        if (Array.isArray(finalManifest.agents) && finalManifest.agents.length) {
+          const remapped = [];
+          const dropped = [];
+          for (const ref of finalManifest.agents) {
+            if (remap.has(ref)) remapped.push(remap.get(ref));
+            else dropped.push(ref);
+          }
+          finalManifest.agents = remapped;
+          if (remapped.length) finalManifest.orchestrator = true;
+          if (dropped.length) results.warnings.push('Orchestrator ' + slug + ' references unknown sub-agents (dropped): ' + dropped.join(', '));
+        }
         fs.writeFileSync(path.join(destDir, 'agent.json'), JSON.stringify(finalManifest, null, 2));
         fs.writeFileSync(path.join(destDir, 'system-prompt.md'), systemPromptBody || '');
-        results.imported.push({ name: slug, displayName: finalManifest.displayName, pattern: finalManifest._meta?.harnessPattern || null });
+        results.imported.push({
+          name: slug,
+          displayName: finalManifest.displayName,
+          pattern: finalManifest._meta?.harnessPattern || null,
+          orchestrator: !!finalManifest.orchestrator,
+          subAgents: finalManifest.agents || [],
+        });
       }
 
       // Write skills to global pool (_skills/) — they're typically shared
