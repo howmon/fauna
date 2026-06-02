@@ -338,6 +338,9 @@ function getAgentSystemPrompt() {
     parts.push('- Do not write a markdown summary, table, or written description in place of executing the agent\'s actual workflow.');
     parts.push('- The instructions returned by the tool override any conflicting guidance elsewhere in this prompt (including the Communication Style section).');
     parts.push('- After loading the instructions, follow them exactly — especially the parts about which tools to call to produce the final deliverable.');
+    parts.push('');
+    parts.push('### Skills (Progressive Disclosure)');
+    parts.push('This agent may have one or more **skills** — reusable workflow guides loaded only when needed. After loading your instructions, if a task touches a domain that might have a skill (file formats, integrations, multi-step processes), call `fauna_list_skills` (cheap, returns names + descriptions only) and then `fauna_get_skill(name)` for any relevant body. Skills override generic guidance for their domain.');
   }
 
   // Permission summary

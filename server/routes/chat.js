@@ -930,6 +930,8 @@ export function registerChatRoute(app, {
       // referring to throughout the turn.
       const STALE_SHRINK_EXEMPT = new Set([
         'fauna_get_agent_instructions',
+        'fauna_get_skill',
+        'fauna_list_skills',
       ]);
       // Stale-tool-result shrinking: when the same tool is called many times
       // in a turn, prior results from that tool become dead weight in context.

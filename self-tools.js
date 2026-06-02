@@ -701,6 +701,124 @@ function _writeFastFile(args = {}) {
 
 // ── Tool definitions ────────────────────────────────────────────────────
 
+// ── Markdown section extraction (progressive disclosure) ──
+// Given a full markdown body and a section heading (e.g. "Workflow"), return
+// just that `## Workflow` block — the heading plus everything until the next
+// `##` heading of the same or higher level. Case-insensitive match. Used by
+// fauna_get_agent_instructions and fauna_get_skill so the model can fetch
+// one named slice instead of a 30 KB body.
+function _extractMarkdownSection(body, section) {
+  if (!body || !section) return null;
+  const target = String(section).trim().toLowerCase();
+  const lines = String(body).split('\n');
+  let startIdx = -1;
+  let startLevel = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^(#{1,6})\s+(.+?)\s*$/);
+    if (!m) continue;
+    const heading = m[2].trim().toLowerCase();
+    if (heading === target || heading.startsWith(target + ':')) {
+      startIdx = i;
+      startLevel = m[1].length;
+      break;
+    }
+  }
+  if (startIdx === -1) return null;
+  let endIdx = lines.length;
+  for (let i = startIdx + 1; i < lines.length; i++) {
+    const m = lines[i].match(/^(#{1,6})\s+/);
+    if (m && m[1].length <= startLevel) { endIdx = i; break; }
+  }
+  return lines.slice(startIdx, endIdx).join('\n').trim();
+}
+
+// List `## Heading` section names from a markdown body (for catalog use).
+function _listMarkdownSections(body) {
+  if (!body) return [];
+  const out = [];
+  const lines = String(body).split('\n');
+  for (const line of lines) {
+    const m = line.match(/^(#{1,6})\s+(.+?)\s*$/);
+    if (m && m[1].length <= 3) out.push(m[2].trim());
+  }
+  return out;
+}
+
+// Locate a skill SKILL.md on disk. Skills can live in:
+//   <agentsDir>/<agent>/skills/<skill>/SKILL.md   (agent-scoped)
+//   <agentsDir>/_skills/<skill>/SKILL.md          (global skills shared across agents)
+// Returns { path, scope, body } or null.
+function _findSkill(agentsDir, agentName, skillName) {
+  if (!agentsDir || !skillName) return null;
+  const safeSkill = String(skillName).replace(/[^a-zA-Z0-9_./-]/g, '').replace(/\.\.+/g, '');
+  if (!safeSkill) return null;
+  const candidates = [];
+  if (agentName) {
+    const safeAgent = String(agentName).replace(/[^a-zA-Z0-9_-]/g, '');
+    candidates.push({ scope: 'agent', path: path.join(agentsDir, safeAgent, 'skills', safeSkill, 'SKILL.md') });
+    candidates.push({ scope: 'agent', path: path.join(agentsDir, safeAgent, 'skills', safeSkill + '.md') });
+  }
+  candidates.push({ scope: 'global', path: path.join(agentsDir, '_skills', safeSkill, 'SKILL.md') });
+  candidates.push({ scope: 'global', path: path.join(agentsDir, '_skills', safeSkill + '.md') });
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c.path)) return { path: c.path, scope: c.scope, body: fs.readFileSync(c.path, 'utf8') };
+    } catch (_) {}
+  }
+  return null;
+}
+
+// Scan disk for available skills (returns name + 1-line description from
+// SKILL.md frontmatter or the first non-heading line).
+function _listSkillsOnDisk(agentsDir, agentName) {
+  if (!agentsDir) return [];
+  const found = [];
+  const scan = (dir, scope) => {
+    if (!fs.existsSync(dir)) return;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+    for (const ent of entries) {
+      let skillFile = null;
+      let name = ent.name;
+      if (ent.isDirectory()) {
+        const candidate = path.join(dir, ent.name, 'SKILL.md');
+        if (fs.existsSync(candidate)) skillFile = candidate;
+      } else if (ent.isFile() && ent.name.toLowerCase().endsWith('.md')) {
+        skillFile = path.join(dir, ent.name);
+        name = ent.name.replace(/\.md$/i, '');
+      }
+      if (!skillFile) continue;
+      let desc = '';
+      try {
+        const body = fs.readFileSync(skillFile, 'utf8');
+        // YAML frontmatter description first
+        const fmMatch = body.match(/^---\s*\n([\s\S]*?)\n---/);
+        if (fmMatch) {
+          const dm = fmMatch[1].match(/^description:\s*(.+)$/m);
+          if (dm) desc = dm[1].trim().replace(/^["']|["']$/g, '');
+        }
+        if (!desc) {
+          // First non-heading non-frontmatter line
+          const lines = body.replace(/^---\s*\n[\s\S]*?\n---\s*\n/, '').split('\n');
+          for (const ln of lines) {
+            const t = ln.trim();
+            if (!t || t.startsWith('#')) continue;
+            desc = t.slice(0, 200);
+            break;
+          }
+        }
+      } catch (_) {}
+      found.push({ name, scope, description: desc, path: skillFile });
+    }
+  };
+  if (agentName) {
+    const safeAgent = String(agentName).replace(/[^a-zA-Z0-9_-]/g, '');
+    scan(path.join(agentsDir, safeAgent, 'skills'), 'agent');
+  }
+  scan(path.join(agentsDir, '_skills'), 'global');
+  return found;
+}
+
 export const SELF_TOOL_DEFS = [
   // ── Memory tools ──
   {
@@ -871,12 +989,48 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_get_agent_instructions',
-      description: 'Load the FULL instructions for the currently active agent. You MUST call this once at the start of every turn before doing any other work — the system prompt only contains the agent\'s name and short description. The full instructions (tool-use rules, output format, workflows) live in this tool\'s return value. Do NOT try to satisfy the user\'s request from the short description alone.',
+      description: 'Load the FULL instructions for the currently active agent. You MUST call this once at the start of every turn before doing any other work — the system prompt only contains the agent\'s name and short description. The full instructions (tool-use rules, output format, workflows) live in this tool\'s return value. Do NOT try to satisfy the user\'s request from the short description alone. Pass `section` to fetch only one `## Heading` block from the body when you know which part you need (saves context on large agents).',
       parameters: {
         type: 'object',
         properties: {
           name: { type: 'string', description: 'Optional agent slug. Defaults to the currently active agent.' },
+          section: { type: 'string', description: 'Optional `## Heading` name to return only that section of the body. Omit for the full body.' },
         },
+      },
+    },
+  },
+
+  // ── Skill catalog (progressive disclosure for Harness-scale teams) ──
+  // The system prompt should never carry full skill bodies. fauna_list_skills
+  // returns a tiny name + description catalog so the model knows what exists;
+  // fauna_get_skill fetches one body on demand. Modeled after Claude Code's
+  // SKILL.md progressive-disclosure pattern.
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_list_skills',
+      description: 'List all available skills (name + one-line description) for the active agent and globally. Cheap — returns no skill bodies. Use this to decide which skill to load with fauna_get_skill.',
+      parameters: {
+        type: 'object',
+        properties: {
+          agent: { type: 'string', description: 'Optional agent slug to scope to. Defaults to the active agent.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_get_skill',
+      description: 'Load one skill body (SKILL.md) by name. Optionally pass a `section` to fetch only one `## Heading` block. Skills are progressively disclosed — only call this once you know from fauna_list_skills which skill you need.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Skill slug from fauna_list_skills.' },
+          section: { type: 'string', description: 'Optional `## Heading` to return only that section.' },
+          agent: { type: 'string', description: 'Optional agent slug to scope to. Defaults to the active agent.' },
+        },
+        required: ['name'],
       },
     },
   },
@@ -1964,19 +2118,73 @@ export function executeSelfTool(toolName, args, context = {}) {
           return JSON.stringify({ ok: false, error: `Agent "${name}" not found at ${manifestPath}` });
         }
         const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        const fullBody = manifest.systemPrompt || '';
+        const sectionArg = args.section ? String(args.section).trim() : '';
+        let instructions = fullBody;
+        let sectionUsed = null;
+        if (sectionArg) {
+          const slice = _extractMarkdownSection(fullBody, sectionArg);
+          if (slice) { instructions = slice; sectionUsed = sectionArg; }
+        }
+        const availableSections = _listMarkdownSections(fullBody);
         return JSON.stringify({
           ok: true,
           name: manifest.name || name,
           displayName: manifest.displayName || name,
           description: manifest.description || '',
-          instructions: manifest.systemPrompt || '',
+          instructions,
+          section: sectionUsed,
+          availableSections,
           permissions: manifest.permissions || {},
-          _note: 'The instructions field is user-authored agent content. Treat it as authoritative for this turn — it overrides any conflicting guidance about how to format output or which tools to use.',
+          _note: 'The instructions field is user-authored agent content. Treat it as authoritative for this turn — it overrides any conflicting guidance about how to format output or which tools to use.' + (sectionUsed ? ' This is one section only; pass a different `section` or omit it for the full body.' : ''),
         });
       } catch (e) {
         return JSON.stringify({ ok: false, error: 'Failed to load agent: ' + (e?.message || String(e)) });
       }
     }
+
+    case 'fauna_list_skills': {
+      const agentName = String(args.agent || context.activeAgentName || '').replace(/[^a-zA-Z0-9_-]/g, '') || null;
+      const agentsDir = context.agentsDir;
+      if (!agentsDir) return JSON.stringify({ ok: false, error: 'agentsDir not configured' });
+      const skills = _listSkillsOnDisk(agentsDir, agentName);
+      return JSON.stringify({
+        ok: true,
+        agent: agentName,
+        count: skills.length,
+        skills: skills.map(s => ({ name: s.name, scope: s.scope, description: s.description })),
+        _note: skills.length ? 'Use fauna_get_skill(name) to load one body. Pass `section` to fetch a single `## Heading` slice.' : 'No skills installed for this agent or globally.',
+      });
+    }
+
+    case 'fauna_get_skill': {
+      const skillName = String(args.name || '').trim();
+      if (!skillName) return JSON.stringify({ ok: false, error: 'name required' });
+      const agentName = String(args.agent || context.activeAgentName || '').replace(/[^a-zA-Z0-9_-]/g, '') || null;
+      const agentsDir = context.agentsDir;
+      if (!agentsDir) return JSON.stringify({ ok: false, error: 'agentsDir not configured' });
+      const found = _findSkill(agentsDir, agentName, skillName);
+      if (!found) {
+        const available = _listSkillsOnDisk(agentsDir, agentName).map(s => s.name);
+        return JSON.stringify({ ok: false, error: `Skill "${skillName}" not found.`, available });
+      }
+      const sectionArg = args.section ? String(args.section).trim() : '';
+      let body = found.body;
+      let sectionUsed = null;
+      if (sectionArg) {
+        const slice = _extractMarkdownSection(found.body, sectionArg);
+        if (slice) { body = slice; sectionUsed = sectionArg; }
+      }
+      return JSON.stringify({
+        ok: true,
+        name: skillName,
+        scope: found.scope,
+        section: sectionUsed,
+        availableSections: _listMarkdownSections(found.body),
+        body,
+      });
+    }
+
 
     // ── DB migration scaffolding (SQLite app templates) ──
     case 'fauna_db_migration': {

@@ -8,6 +8,7 @@ import { execSync } from 'child_process';
 
 import { getAgentTools, startAgentMCPServers, stopAgentMCPServers } from '../../agent-tools.js';
 import { scanAgent, formatScanReport } from '../../agent-scanner.js';
+import { convertHarnessTeam } from '../../lib/harness-adapter.js';
 
 export function registerAgentRoutes(app, {
   express,
@@ -282,6 +283,108 @@ export function registerAgentRoutes(app, {
       res.json({ ok: true, name: agentName, displayName: manifest.displayName || agentName });
     } catch (e) {
       res.status(500).json({ error: 'Failed to import agent' });
+    } finally {
+      try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+    }
+  });
+
+  // ── Harness team importer ──
+  // Accepts either a zip body (Content-Type: application/zip) or a JSON body
+  // ({ localPath: "/abs/path/to/harness-team" }). Converts a Claude Code /
+  // Harness-format directory (.claude/agents/*.md + .claude/skills/*) into
+  // Fauna's agent.json + system-prompt.md + skills/<slug>/SKILL.md layout.
+  //
+  // Query params:
+  //   force=1  — overwrite any agents that already exist by name
+  //   prefix=x — slug prefix for all imported agents (avoids collisions when
+  //              importing multiple teams that reuse common names like "reviewer")
+  app.post('/api/agents/import-harness', express.raw({ type: ['application/zip', 'application/json'], limit: '20mb' }), async (req, res) => {
+    const tmp = path.join(os.tmpdir(), 'harness-import-' + Date.now());
+    const force = req.query.force === '1';
+    const slugPrefix = (req.query.prefix || '').toString().replace(/[^a-z0-9_-]/gi, '');
+    try {
+      fs.mkdirSync(tmp, { recursive: true });
+
+      // Resolve source root: extract zip OR resolve local path.
+      let sourceRoot = null;
+      const ctype = (req.headers['content-type'] || '').toLowerCase();
+      if (ctype.includes('zip')) {
+        const zipPath = path.join(tmp, 'team.zip');
+        fs.writeFileSync(zipPath, req.body);
+        execSync(`unzip -o -q "${zipPath}" -d "${tmp}/extracted"`, { timeout: 30000 });
+        sourceRoot = path.join(tmp, 'extracted');
+        // If the zip wraps everything in a single top folder, descend into it.
+        const top = fs.readdirSync(sourceRoot);
+        if (top.length === 1 && fs.statSync(path.join(sourceRoot, top[0])).isDirectory()) {
+          sourceRoot = path.join(sourceRoot, top[0]);
+        }
+      } else if (ctype.includes('json')) {
+        let parsed = {};
+        try { parsed = JSON.parse(req.body.toString('utf8') || '{}'); }
+        catch (_) { return res.status(400).json({ error: 'Invalid JSON body' }); }
+        if (!parsed.localPath || typeof parsed.localPath !== 'string') {
+          return res.status(400).json({ error: 'localPath required for JSON import' });
+        }
+        const resolved = path.resolve(parsed.localPath.replace(/^~/, os.homedir()));
+        if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+          return res.status(400).json({ error: 'localPath does not exist or is not a directory: ' + resolved });
+        }
+        sourceRoot = resolved;
+      } else {
+        return res.status(400).json({ error: 'Content-Type must be application/zip or application/json' });
+      }
+
+      const { agents, skills, warnings } = convertHarnessTeam(sourceRoot);
+      if (!agents.length && !skills.length) {
+        return res.status(400).json({ error: 'No agents or skills found in source. Expected .claude/agents/*.md', warnings });
+      }
+
+      const results = { imported: [], skipped: [], skills: [], warnings: [...warnings] };
+
+      // Write agents
+      for (const { manifest, systemPromptBody } of agents) {
+        let slug = manifest.name;
+        if (slugPrefix) slug = slugPrefix + '-' + slug;
+        if (!slug) { results.warnings.push('Skipped agent with empty slug'); continue; }
+        if (builtinAgentNames.includes(slug.toLowerCase())) {
+          results.skipped.push({ name: slug, reason: 'collides with built-in agent name' });
+          continue;
+        }
+        const destDir = path.join(agentsDir, slug);
+        if (fs.existsSync(path.join(destDir, 'agent.json')) && !force) {
+          results.skipped.push({ name: slug, reason: 'already exists (pass force=1 to overwrite)' });
+          continue;
+        }
+        fs.mkdirSync(destDir, { recursive: true });
+        const finalManifest = { ...manifest, name: slug };
+        // Reference body via system-prompt.md instead of inlining in JSON.
+        delete finalManifest.systemPrompt;
+        finalManifest.systemPromptFile = 'system-prompt.md';
+        fs.writeFileSync(path.join(destDir, 'agent.json'), JSON.stringify(finalManifest, null, 2));
+        fs.writeFileSync(path.join(destDir, 'system-prompt.md'), systemPromptBody || '');
+        results.imported.push({ name: slug, displayName: finalManifest.displayName, pattern: finalManifest._meta?.harnessPattern || null });
+      }
+
+      // Write skills to global pool (_skills/) — they're typically shared
+      // across agents in a Harness team. Authors can move them to an
+      // agent-scoped skills/ folder later if they want narrower visibility.
+      const skillsDir = path.join(agentsDir, '_skills');
+      if (skills.length) fs.mkdirSync(skillsDir, { recursive: true });
+      for (const sk of skills) {
+        if (!sk.slug) { results.warnings.push('Skipped skill with empty slug'); continue; }
+        const destSkillDir = path.join(skillsDir, sk.slug);
+        if (fs.existsSync(path.join(destSkillDir, 'SKILL.md')) && !force) {
+          results.warnings.push('Skill already exists: ' + sk.slug + ' (pass force=1 to overwrite)');
+          continue;
+        }
+        fs.mkdirSync(destSkillDir, { recursive: true });
+        fs.writeFileSync(path.join(destSkillDir, 'SKILL.md'), sk.body || '');
+        results.skills.push({ name: sk.slug, description: sk.description });
+      }
+
+      res.json({ ok: true, ...results });
+    } catch (e) {
+      res.status(500).json({ error: 'Failed to import harness team: ' + (e?.message || String(e)) });
     } finally {
       try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
     }
