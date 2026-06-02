@@ -434,7 +434,9 @@ function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
     }
   } catch (_) { /* fall through */ }
 
-  var match = buffer.match(/```suggestions\n([\s\S]*?)```/);
+  // Tolerant of trailing spaces, casing (Suggestions/SUGGESTIONS), CRLF, and
+  // 4-backtick fences. Captures the JSON body for parsing.
+  var match = buffer.match(/`{3,4}\s*suggestions[ \t]*\r?\n([\s\S]*?)`{3,4}/i);
   var items;
   if (match) {
     try { items = JSON.parse(match[1].trim()); } catch (_) { return; }
@@ -1866,7 +1868,7 @@ async function streamResponse(conv) {
         delete conv._suppressShellAutoRunOnce;
         if (typeof compactProcessClusters === 'function') compactProcessClusters(msgEl);
         if (typeof compactLongAssistantMessage === 'function') compactLongAssistantMessage(msgEl, buffer);
-        extractAndRenderSuggestions(buffer, msgEl, true);
+        extractAndRenderSuggestions(buffer, msgEl, false);
         if (state._lastMsgWasDesktopTask) {
           injectOrganizerCard(msgEl, buffer);
           state._lastMsgWasDesktopTask = false;

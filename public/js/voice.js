@@ -239,7 +239,7 @@ function _summarizeForTTS(buffer) {
 
 function _extractSuggestionItems(buffer) {
   if (!buffer) return [];
-  var m = String(buffer).match(/```suggestions\n([\s\S]*?)```/);
+  var m = String(buffer).match(/`{3,4}\s*suggestions[ \t]*\r?\n([\s\S]*?)`{3,4}/i);
   if (!m) return [];
   try {
     var arr = JSON.parse(m[1].trim());

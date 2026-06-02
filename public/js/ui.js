@@ -798,7 +798,7 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
     (typeof wrapInActivityDetails === 'function' ? wrapInActivityDetails : wrapInChainOfThought)(el);
     if (typeof compactProcessClusters === 'function') compactProcessClusters(el);
     if (typeof compactLongAssistantMessage === 'function') compactLongAssistantMessage(el, content);
-    if (typeof extractAndRenderSuggestions === 'function') extractAndRenderSuggestions(content, el, true);
+    if (typeof extractAndRenderSuggestions === 'function') extractAndRenderSuggestions(content, el, false);
   }
 
   // Inject committed compact thinking status for historical AI messages.
@@ -876,7 +876,7 @@ function setBusy(busy) {
           var lastAssistant = (conv.messages || []).slice().reverse().find(function(m) {
             return m && m.role === 'assistant' && typeof m.content === 'string';
           });
-          if (lastAssistant) extractAndRenderSuggestions(lastAssistant.content, lastMsg, true);
+          if (lastAssistant) extractAndRenderSuggestions(lastAssistant.content, lastMsg, false);
         }
       } catch (_) {}
     }, 650);

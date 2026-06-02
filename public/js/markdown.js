@@ -196,7 +196,7 @@ function renderMarkdown(text) {
   }
   var cleaned = keep.join('\n');
   // Strip suggestion blocks — rendered as clickable CTA buttons, not code
-  cleaned = cleaned.replace(/```suggestions\n[\s\S]*?```\n?/g, '');
+  cleaned = cleaned.replace(/`{3,4}\s*suggestions[ \t]*\r?\n[\s\S]*?`{3,4}\n?/gi, '');
   // Collapse runs of 3+ newlines left by stripped blocks so they don't render
   // as a tall stack of empty paragraphs between surrounding content.
   cleaned = cleaned.replace(/\n{3,}/g, '\n\n').replace(/^\n+|\n+$/g, '');
