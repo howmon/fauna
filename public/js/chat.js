@@ -206,6 +206,25 @@ async function gatherSystemContext(text) {
 function _fallbackSuggestionsFromMessage(buffer) {
   var text = String(buffer || '');
   if (!text.trim()) return [];
+
+  // Highest priority: assistant explicitly asked the user to reply with a
+  // specific word/phrase to continue. Surface that as the primary CTA so the
+  // user doesn't have to type it. Catches patterns like:
+  //   Reply "continue" and I'll pick up at …
+  //   Say "go" to proceed
+  //   Type 'yes' to confirm
+  var replyMatch = text.match(/(?:reply|say|type|respond(?:\s+with)?)\s+["'`]?([a-z][\w\s-]{0,20})["'`]?\s+(?:and|to)\b/i);
+  if (replyMatch) {
+    var word = replyMatch[1].trim();
+    if (word) return [word.charAt(0).toUpperCase() + word.slice(1), 'Show what was done', 'Stop here'];
+  }
+
+  // Paused-mid-task signals (tool limits, per-turn caps, partial progress) —
+  // the assistant is mid-workflow and needs to resume, not brainstorm.
+  if (/(?:per-turn|tool limit|hit the limit|paused|partial|still to build|to be continued|pick up where|resume)/i.test(text)) {
+    return ['Continue', 'Show what was done', 'Stop here'];
+  }
+
   if (/validation failed|truncated|incomplete|failed|error|not found|exception/i.test(text)) {
     return ['Fix the issue', 'Show the relevant logs', 'Try a safer approach'];
   }
@@ -221,9 +240,12 @@ function _fallbackSuggestionsFromMessage(buffer) {
   if (/code|patch|changed|updated|implemented|fixed/i.test(text)) {
     return ['Review the changes', 'Run verification', 'Continue refining'];
   }
-  // Q&A / brainstorm / idea responses — let the user act on or extend the idea
-  // rather than offering meaningless "Continue / Verify the result" buttons.
-  if (/\b(idea|app|product|build|saas|dashboard|tool|concept|feature|mvp)\b/i.test(text)) {
+  // Q&A / brainstorm / idea responses — let the user act on or extend the
+  // idea rather than offering meaningless "Continue / Verify the result"
+  // buttons. Require a stronger brainstorm signal than a single keyword
+  // (the old `\bidea|app|build\b` matcher fired on "Building spec" / "spec
+  // page" in paused-mid-task messages).
+  if (/\b(what if|how about|consider|could be|might (?:work|be)|brainstorm|here are .* ideas?|some ideas?|possible (?:apps?|products?|directions?))\b/i.test(text)) {
     return ['Build this app', 'Refine the idea', 'Suggest another angle'];
   }
   // Default: keep it action-relevant to the assistant having just spoken,
