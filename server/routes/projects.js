@@ -19,6 +19,7 @@ export function registerProjectRoutes(app, deps) {
     updateContext,
     removeContext,
     contextFromArtifact,
+    buildProjectProfile,
   } = deps;
 
   app.get('/api/projects', (_req, res) => {
@@ -160,6 +161,29 @@ export function registerProjectRoutes(app, deps) {
     const project = getProject(req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     res.json(project.contexts || []);
+  });
+
+  // Profile: aggregated "what fauna knows about this project". Optional `q`
+  // query string scopes the dynamic + context buckets to a query. Cached
+  // statically per scope for 60s; dynamic + context recompute every call.
+  app.get('/api/projects/:id/profile', async (req, res) => {
+    const project = getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (typeof buildProjectProfile !== 'function') {
+      return res.status(501).json({ error: 'profile builder not wired' });
+    }
+    try {
+      const profile = await buildProjectProfile(req.params.id, {
+        q: req.query.q || '',
+        includeContext: req.query.includeContext !== 'false',
+        staticLimit:  req.query.staticLimit  ? Number(req.query.staticLimit)  : undefined,
+        dynamicLimit: req.query.dynamicLimit ? Number(req.query.dynamicLimit) : undefined,
+        contextLimit: req.query.contextLimit ? Number(req.query.contextLimit) : undefined,
+      });
+      res.json(profile);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   app.post('/api/projects/:id/contexts', (req, res) => {

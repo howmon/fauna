@@ -164,7 +164,11 @@ export function patchJob(jobId, patch = {}) {
       if (INVALIDATES[k]) INVALIDATES[k].forEach(s => invalidated.add(s));
     } else if (k === 'script') {
       job.artifacts.script = String(v);
-      INVALIDATES.script.forEach(s => invalidated.add(s));
+      // A manual script edit only invalidates artifacts derived directly
+      // from the script text. Terms + materials are preserved because the
+      // user typically edits the script to better fit what's already there;
+      // a full regenerate (runStep('script', {force:true})) still cascades.
+      ['audio', 'subtitle', 'render'].forEach(s => invalidated.add(s));
     } else if (k === 'terms') {
       job.artifacts.terms = Array.isArray(v) ? v.map(String) : null;
       INVALIDATES.terms.forEach(s => invalidated.add(s));

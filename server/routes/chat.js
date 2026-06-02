@@ -40,7 +40,9 @@ import {
 } from '../../lib/dynamic-widgets.js';
 import { ToolGuardContext, formatToolLabel } from '../../tool-guard.js';
 import { getAgentTools, startAgentMCPServers } from '../../agent-tools.js';
-import { formatForSystemPrompt as factsForSystemPrompt, getStats as factsGetStats, remember as factsRemember } from '../../memory-store.js';
+import { formatForSystemPrompt as factsForSystemPrompt, getStats as factsGetStats, remember as factsRemember, projectContainerTag } from '../../memory-store.js';
+import { buildProjectProfile, formatProfileForPrompt } from '../lib/profile.js';
+import { extractFacts as extractMemoryFacts } from '../lib/memory-extractor.js';
 import { getProjectSystemContext, buildContextPayload, getProject, appendAutonomousRunLog } from '../../project-manager.js';
 import { estimateTokens, computeBudget } from '../lib/token-budget.js';
 import { summarizeHistory } from '../lib/summarize-history.js';
@@ -280,7 +282,38 @@ export function registerChatRoute(app, {
 
       // Build system prompt — append project context, facts memory, context summary and browser context.
       // For delegation (sub-agent) calls, skip heavy shared context to reduce token cost.
-      const factsCtx = isDelegation ? '' : factsForSystemPrompt(20);
+      // Facts are scoped to the active project (with global facts always included);
+      // this prevents project A's preferences from leaking into project B.
+      // When the project opts into embeddings, swap in the richer profile (static + dynamic + context passages).
+      let factsCtx = '';
+      if (!isDelegation) {
+        const _memCfg = _projectRecord?.memoryConfig || {};
+        if (projectId && _memCfg.embeddingsEnabled) {
+          try {
+            const lastUser = [...messages].reverse().find(m => m && m.role === 'user');
+            const qText = typeof lastUser?.content === 'string'
+              ? lastUser.content
+              : Array.isArray(lastUser?.content)
+                ? lastUser.content.filter(p => p?.type === 'text').map(p => p.text).join(' ')
+                : '';
+            const profile = await buildProjectProfile(projectId, { q: qText });
+            factsCtx = formatProfileForPrompt(profile);
+          } catch (_) {
+            // Fall back to flat facts on any profile error.
+            factsCtx = factsForSystemPrompt({
+              limit: 20,
+              containerTag: projectContainerTag(projectId),
+              includeGlobal: true,
+            });
+          }
+        } else {
+          factsCtx = factsForSystemPrompt({
+            limit: 20,
+            containerTag: projectId ? projectContainerTag(projectId) : null,
+            includeGlobal: true,
+          });
+        }
+      }
       // Inject connected Figma file info so AI can target the right document
       let figmaFilesCtx = '';
       const _figmaFilesList = figma.listFiles();
@@ -1680,6 +1713,34 @@ export function registerChatRoute(app, {
                   if (facts.length) console.log('[chat] autonomous reflection saved ' + facts.length + ' fact(s)');
                 } catch (e) { console.warn('[chat] reflection failed:', e?.message || e); }
               })();
+            }
+
+            // Phase 1: generic auto-extraction. Runs at end-of-loop for any
+            // project whose memoryConfig.autoExtract is 'every-turn'. Cheap,
+            // fire-and-forget, gated to avoid duplicate work in sub-agent and
+            // CLI calls.
+            if (!continueLoop && !isDelegation && !isCLI && projectId && _projectRecord) {
+              const _mcfg = _projectRecord.memoryConfig || {};
+              if (_mcfg.autoExtract === 'every-turn' && Array.isArray(allMessages) && allMessages.length >= 2) {
+                (async () => {
+                  try {
+                    const aiCaller = (prompt) => selfToolContext.callLLM({
+                      user: prompt, maxTokens: 800, temperature: 0.2,
+                    });
+                    const r = await extractMemoryFacts({
+                      messages: allMessages,
+                      projectId,
+                      conversationId: req.body?.conversationId || null,
+                      aiCaller,
+                      autoApprove: _mcfg.requireApproval !== true,
+                    });
+                    if (r.applied || r.proposals.length) {
+                      try { send({ type: 'memory_proposal', applied: r.applied, pending: r.proposals.filter(p => p.status === 'pending').length }); } catch (_) {}
+                      console.log(`[chat] memory-extractor: applied=${r.applied} skipped=${r.skipped} pending=${r.proposals.filter(p => p.status === 'pending').length}`);
+                    }
+                  } catch (e) { console.warn('[chat] memory-extractor failed:', e?.message || e); }
+                })();
+              }
             }
           }
         }

@@ -1,0 +1,166 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+globalThis.__memFs = globalThis.__memFs || new Map();
+vi.mock('fs', async () => {
+  const actual = await vi.importActual('fs');
+  const enoent = () => Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+  const memFs = globalThis.__memFs;
+  const api = {
+    readFileSync: vi.fn((p) => { if (memFs.has(p)) return memFs.get(p); throw enoent(); }),
+    writeFileSync: vi.fn((p, d) => { memFs.set(p, d); }),
+    mkdirSync: vi.fn(),
+    existsSync: vi.fn((p) => memFs.has(p)),
+    unlinkSync: vi.fn((p) => { memFs.delete(p); }),
+  };
+  return { ...actual, default: { ...actual, ...api }, ...api };
+});
+
+const { _resetCache: resetFacts, remember, projectContainerTag } = await import('../memory-store.js');
+const { _resetCache: resetCtx, ingestDocument } = await import('../server/lib/context-store.js');
+const { _resetCache: resetEmbed } = await import('../server/lib/embeddings.js');
+const { invalidateStaticCache } = await import('../server/lib/profile.js');
+const { handleMcpRequest, _internals } = await import('../server/routes/mcp.js');
+
+const VOCAB = ['postgres', 'react', 'typescript'];
+const stubEmbed = (texts) => texts.map(t => VOCAB.map(v => String(t).toLowerCase().includes(v) ? 1 : 0));
+
+beforeEach(() => {
+  globalThis.__memFs.clear();
+  resetFacts();
+  resetCtx();
+  resetEmbed();
+  invalidateStaticCache();
+  vi.clearAllMocks();
+});
+
+function rpc(method, params, id = 1) {
+  return handleMcpRequest({ jsonrpc: '2.0', id, method, params });
+}
+
+describe('MCP server', () => {
+  it('initialize returns protocol version + capabilities', async () => {
+    const r = await rpc('initialize');
+    expect(r.result.protocolVersion).toBe('2024-11-05');
+    expect(r.result.capabilities.tools).toBeDefined();
+    expect(r.result.serverInfo.name).toBe('fauna');
+  });
+
+  it('tools/list returns the curated tool catalog', async () => {
+    const r = await rpc('tools/list');
+    const names = r.result.tools.map(t => t.name);
+    expect(names).toContain('fauna_remember');
+    expect(names).toContain('fauna_recall');
+    expect(names).toContain('fauna_context_search');
+    expect(names).toContain('fauna_profile');
+    expect(names).toContain('fauna_sync_github');
+  });
+
+  it('ping returns empty result', async () => {
+    const r = await rpc('ping');
+    expect(r.result).toEqual({});
+  });
+
+  it('returns method-not-found for unknown methods', async () => {
+    const r = await rpc('totally/madeup');
+    expect(r.error.code).toBe(-32601);
+  });
+
+  it('tools/call rejects missing name', async () => {
+    const r = await rpc('tools/call', {});
+    expect(r.error.code).toBe(-32602);
+  });
+
+  it('tools/call -> fauna_remember persists a fact', async () => {
+    const r = await rpc('tools/call', {
+      name: 'fauna_remember',
+      arguments: { text: 'user prefers TypeScript', projectId: 'p1' },
+    });
+    expect(r.result.isError).toBe(false);
+    const parsed = JSON.parse(r.result.content[0].text);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.id).toMatch(/^fact-/);
+  });
+
+  it('tools/call -> fauna_recall returns matching facts', async () => {
+    remember('user uses Postgres', { containerTag: projectContainerTag('p2') });
+    remember('weather is sunny', { containerTag: projectContainerTag('p2') });
+    const r = await rpc('tools/call', {
+      name: 'fauna_recall',
+      arguments: { keywords: 'postgres', projectId: 'p2' },
+    });
+    const parsed = JSON.parse(r.result.content[0].text);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].text).toMatch(/Postgres/);
+  });
+
+  it('tools/call -> fauna_context_search returns chunks', async () => {
+    await ingestDocument({
+      text: 'Postgres tuning and pooling tips.',
+      sourceId: 'd1', containerTag: 'global',
+    }, { embedder: stubEmbed });
+    const r = await rpc('tools/call', {
+      name: 'fauna_context_search',
+      arguments: { query: 'postgres', scope: 'global' },
+    });
+    const hits = JSON.parse(r.result.content[0].text);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits[0].sourceType).toBe('note');
+  });
+
+  it('tools/call -> unknown tool reports isError=true', async () => {
+    const r = await rpc('tools/call', { name: 'fauna_does_not_exist', arguments: {} });
+    expect(r.result.isError).toBe(true);
+    expect(r.result.content[0].text).toMatch(/unknown tool/);
+  });
+
+  it('tools/call -> fauna_profile returns three buckets', async () => {
+    remember('static thing', { containerTag: projectContainerTag('p3'), kind: 'static' });
+    remember('dynamic thing', { containerTag: projectContainerTag('p3'), kind: 'dynamic' });
+    const r = await rpc('tools/call', {
+      name: 'fauna_profile',
+      arguments: { projectId: 'p3' },
+    });
+    const profile = JSON.parse(r.result.content[0].text);
+    expect(profile.containerTag).toBe('project:p3');
+    expect(profile.static.length).toBeGreaterThan(0);
+    expect(profile.dynamic.length).toBeGreaterThan(0);
+  });
+
+  it('resources/list enumerates ingested docs as fauna:// URIs', async () => {
+    await ingestDocument({
+      text: 'doc body', sourceId: 'src-1', sourcePath: '/notes/a.md',
+      title: 'Note A', containerTag: 'global',
+    }, { embedder: stubEmbed });
+    const r = await rpc('resources/list');
+    expect(r.result.resources.length).toBe(1);
+    expect(r.result.resources[0].uri).toMatch(/^fauna:\/\/doc\//);
+    expect(r.result.resources[0].name).toBe('Note A');
+  });
+
+  it('resources/read reassembles chunks in order', async () => {
+    // Long enough to split into multiple chunks.
+    const para = 'Postgres '.repeat(300);
+    const ing = await ingestDocument({
+      text: para, sourceId: 'big', containerTag: 'global',
+    }, { embedder: stubEmbed });
+    const r = await rpc('resources/read', { uri: `fauna://doc/${ing.docId}` });
+    expect(r.result.contents.length).toBeGreaterThan(0);
+    expect(r.result.contents[0].text).toMatch(/Postgres/);
+  });
+
+  it('resources/read rejects bad URIs', async () => {
+    const r = await rpc('resources/read', { uri: 'http://nope' });
+    expect(r.error.code).toBe(-32602);
+  });
+
+  it('resources/read returns error for unknown docId', async () => {
+    const r = await rpc('resources/read', { uri: 'fauna://doc/nonexistent' });
+    expect(r.error.code).toBe(-32602);
+  });
+
+  it('_resolveContainerTag picks global vs project scope', () => {
+    expect(_internals._resolveContainerTag({ scope: 'global' })).toBe('global');
+    expect(_internals._resolveContainerTag({ projectId: 'x' })).toBe('project:x');
+    expect(_internals._resolveContainerTag({})).toBe('global');
+  });
+});

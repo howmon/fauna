@@ -3,6 +3,7 @@ import fs from 'fs';
 import {
   remember, recall, forget, listFacts, getFact, runDecay,
   formatForSystemPrompt, exportFacts, importFacts, getStats, _resetCache,
+  supersede, projectContainerTag, agentContainerTag,
 } from '../memory-store.js';
 
 // Mock fs to avoid real file I/O
@@ -184,6 +185,109 @@ describe('memory-store', () => {
       expect(stats.total).toBe(1);
       expect(stats.maxFacts).toBeDefined();
       expect(stats.categories).toBeDefined();
+    });
+  });
+
+  // ── Phase 0: scoping, kinds, expiry, supersedence ──
+
+  describe('containerTag scoping', () => {
+    it('isolates facts to a project containerTag', () => {
+      remember('uses dark mode', { containerTag: projectContainerTag('proj-a') });
+      remember('uses light mode', { containerTag: projectContainerTag('proj-b') });
+
+      const aOnly = recall('mode', { containerTag: projectContainerTag('proj-a'), includeGlobal: false });
+      expect(aOnly).toHaveLength(1);
+      expect(aOnly[0].text).toContain('dark');
+    });
+
+    it('includes global facts by default when querying a project', () => {
+      remember('global pref', { containerTag: 'global' });
+      remember('project pref', { containerTag: projectContainerTag('proj-a') });
+
+      const merged = recall('pref', { containerTag: projectContainerTag('proj-a') });
+      expect(merged).toHaveLength(2);
+    });
+
+    it('formatForSystemPrompt filters by containerTag', () => {
+      remember('alpha fact', { containerTag: projectContainerTag('proj-a') });
+      remember('beta fact', { containerTag: projectContainerTag('proj-b') });
+
+      const aPrompt = formatForSystemPrompt({ containerTag: projectContainerTag('proj-a'), includeGlobal: false });
+      expect(aPrompt).toContain('alpha');
+      expect(aPrompt).not.toContain('beta');
+    });
+
+    it('allows same text in different containers without dedup', () => {
+      const r1 = remember('same text', { containerTag: projectContainerTag('proj-a') });
+      const r2 = remember('same text', { containerTag: projectContainerTag('proj-b') });
+      expect(r1.deduplicated).toBeFalsy();
+      expect(r2.deduplicated).toBeFalsy();
+      expect(r1.id).not.toBe(r2.id);
+    });
+  });
+
+  describe('legacy signature compatibility', () => {
+    it('remember(text, "preference") still works', () => {
+      const r = remember('legacy call', 'preference');
+      expect(r.ok).toBe(true);
+      const list = listFacts('preference');
+      expect(list).toHaveLength(1);
+    });
+
+    it('formatForSystemPrompt(20) still works', () => {
+      remember('legacy format');
+      expect(formatForSystemPrompt(20)).toContain('legacy format');
+    });
+  });
+
+  describe('supersede()', () => {
+    it('marks old fact superseded and links replacement', () => {
+      const { id: oldId } = remember('user uses Vim');
+      const r = supersede(oldId, 'user switched to Cursor');
+      expect(r.ok).toBe(true);
+      expect(r.supersededId).toBe(oldId);
+
+      const recalled = recall('editor');
+      // Old fact should not appear in recall
+      const texts = recalled.map(f => f.text);
+      expect(texts).not.toContain('user uses Vim');
+    });
+
+    it('superseded facts are hidden from formatForSystemPrompt', () => {
+      const { id } = remember('lives in NYC');
+      supersede(id, 'lives in SF');
+      const prompt = formatForSystemPrompt();
+      expect(prompt).not.toContain('NYC');
+      expect(prompt).toContain('SF');
+    });
+  });
+
+  describe('temporal / expiresAt', () => {
+    it('expired facts are excluded from recall', () => {
+      remember('exam tomorrow', { kind: 'temporal', expiresAt: Date.now() - 1000 });
+      remember('long-term goal', {});
+      const results = recall('');
+      const texts = results.map(f => f.text);
+      expect(texts).not.toContain('exam tomorrow');
+      expect(texts).toContain('long-term goal');
+    });
+
+    it('runDecay removes expired temporal facts', () => {
+      remember('expired soon', { kind: 'temporal', expiresAt: Date.now() - 1000 });
+      remember('still valid');
+      const r = runDecay();
+      expect(r.removed).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe('helpers', () => {
+    it('projectContainerTag returns scoped tag', () => {
+      expect(projectContainerTag('abc')).toBe('project:abc');
+      expect(projectContainerTag(null)).toBe('global');
+    });
+
+    it('agentContainerTag returns scoped tag', () => {
+      expect(agentContainerTag('bug-hunter')).toBe('agent:bug-hunter');
     });
   });
 });

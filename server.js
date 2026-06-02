@@ -39,6 +39,7 @@ import { registerFileFilterRoutes } from './server/routes/file-filter.js';
 import { registerConversationRoutes } from './server/routes/conversations.js';
 import { registerProjectRunRoutes } from './server/routes/project-runs.js';
 import { registerProjectRoutes } from './server/routes/projects.js';
+import { buildProjectProfile } from './server/lib/profile.js';
 import { registerTaskRoutes } from './server/routes/tasks.js';
 import { registerUtilityRoutes } from './server/routes/utilities.js';
 import { registerProviderRoutes } from './server/routes/providers.js';
@@ -64,6 +65,8 @@ import { registerAgentRoutes } from './server/routes/agents.js';
 import { registerAgentBuilderRoutes } from './server/routes/agent-builder.js';
 import { registerAgentSandboxRoutes } from './server/routes/agent-sandbox.js';
 import { registerMemoryPrefsFactsRoutes } from './server/routes/memory-prefs-facts.js';
+import { registerConnectorRoutes } from './server/routes/connectors.js';
+import { registerMcpRoutes } from './server/routes/mcp.js';
 import { registerVoiceSettingsRoutes } from './server/routes/voice-settings.js';
 import { registerKokoroTtsRoutes } from './server/routes/kokoro-tts.js';
 import { registerLessonRoutes } from './server/routes/lesson.js';
@@ -231,6 +234,7 @@ registerProjectRoutes(app, {
   updateContext,
   removeContext,
   contextFromArtifact,
+  buildProjectProfile,
 });
 
 registerProviderRoutes(app, { faunaConfigDir: FAUNA_CONFIG_DIR });
@@ -462,6 +466,8 @@ registerSystemContextRoutes(app, { isWin: IS_WIN, shellBin: SHELL_BIN, agentsDir
 registerPermissionsRoutes(app, { isWin: IS_WIN, getGhToken, getSystemPreferences: () => systemPreferences, getDesktopCapturer: () => desktopCapturer });
 // ── Memory / Preferences / Facts ──────────────────────────────────────────
 const { loadPrefs } = registerMemoryPrefsFactsRoutes(app, { configDir: CONFIG_DIR });
+registerConnectorRoutes(app);
+registerMcpRoutes(app, { faunaConfigDir: FAUNA_CONFIG_DIR });
 
 const teamsBundle = createTeamsBundle({
   iterAgentDirs: () => iterAgentDirs(),

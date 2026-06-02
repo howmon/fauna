@@ -178,6 +178,16 @@ export function createProject(opts = {}) {
     // Lightweight backlog: feature requests + grooming notes the agent can
     // append, list, and prioritize without leaving the project.
     backlog: Array.isArray(opts.backlog) ? opts.backlog : [],
+    // Per-project memory engine config. Mirrors supermemory's container-scoped
+    // settings. Defaults are conservative: auto-extraction runs on conversation
+    // save (cheap, one LLM call) and proposals are auto-approved.
+    memoryConfig: Object.assign({
+      autoExtract: 'on-save',       // 'off' | 'on-save' | 'every-turn'
+      requireApproval: false,       // when true, proposals stay pending
+      retentionDays: 60,            // overrides global DECAY_DAYS for this scope
+      contradictionResolution: 'auto', // 'auto' | 'off'
+      embeddingsEnabled: false,     // Phase 2 toggle
+    }, opts.memoryConfig || {}),
     permissions: {
       shell:     opts.permissions?.shell ?? (rootPath ? { cwd: rootPath } : true),
       fileRead:  opts.permissions?.fileRead  || (rootPath ? [rootPath] : []),
@@ -237,7 +247,7 @@ export function updateProject(id, patch = {}) {
   if (idx === -1) return null;
   const p = projects[idx];
   // Allowed top-level fields
-  const allowed = ['name', 'description', 'icon', 'color', 'rootPath', 'defaultAgent', 'permissions', 'allowFileEditing', 'design', 'autonomousMode', 'acceptanceCriteria', 'qa', 'deploy', 'backlog'];
+  const allowed = ['name', 'description', 'icon', 'color', 'rootPath', 'defaultAgent', 'permissions', 'allowFileEditing', 'design', 'autonomousMode', 'acceptanceCriteria', 'qa', 'deploy', 'backlog', 'memoryConfig'];
   for (const k of allowed) {
     if (patch[k] !== undefined) p[k] = patch[k];
   }

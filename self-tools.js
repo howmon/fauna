@@ -8,8 +8,15 @@
 
 import {
   remember as factsRemember, recall as factsRecall, forget as factsForget,
-  listFacts, getStats as factsGetStats,
+  listFacts, getStats as factsGetStats, projectContainerTag,
 } from './memory-store.js';
+import {
+  ingestDocument as ctxIngest,
+  searchContext as ctxSearch,
+  listDocuments as ctxListDocs,
+  deleteDocument as ctxDeleteDoc,
+  getStats as ctxGetStats,
+} from './server/lib/context-store.js';
 import {
   createProject, getAllProjects, getProject,
   addBacklogItem, listBacklog, prioritizeBacklog,
@@ -825,12 +832,16 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_remember',
-      description: 'Remember a fact about the user. Use when the user shares preferences, makes decisions, or gives context you should recall later. Categories: preference, fact, decision, context.',
+      description: 'Remember a fact about the user. Use when the user shares preferences, makes decisions, or gives context you should recall later. Facts are scoped to the active project by default; pass scope="global" for facts that should apply across all projects. Use kind="temporal" with expiresAt for time-bound facts ("exam tomorrow").',
       parameters: {
         type: 'object',
         properties: {
           text: { type: 'string', description: 'The fact to remember (max 500 chars)' },
           category: { type: 'string', enum: ['preference', 'fact', 'decision', 'context'], description: 'Category' },
+          scope: { type: 'string', enum: ['project', 'global'], description: 'Scope. Defaults to project when a project is active, otherwise global.' },
+          kind: { type: 'string', enum: ['static', 'dynamic', 'temporal'], description: 'Lifetime kind. static=long-term, dynamic=recent activity, temporal=expires.' },
+          expiresAt: { type: 'number', description: 'Optional unix ms timestamp. Required for kind="temporal".' },
+          supersedes: { type: 'string', description: 'Optional id of an existing fact this one replaces (e.g. user changed their mind).' },
         },
         required: ['text'],
       },
@@ -840,11 +851,12 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_recall',
-      description: 'Search your memory for facts about the user. Returns matching facts scored by relevance and recency. Call with empty keywords for the most recent facts.',
+      description: 'Search your memory for facts about the user. Returns matching facts scored by relevance and recency. Call with empty keywords for the most recent facts. Scope defaults to the active project (with global facts included).',
       parameters: {
         type: 'object',
         properties: {
           keywords: { type: 'string', description: 'Space-separated keywords to search for' },
+          scope: { type: 'string', enum: ['project', 'global', 'all'], description: 'Search scope. "all" searches every project.' },
         },
       },
     },
@@ -860,6 +872,70 @@ export const SELF_TOOL_DEFS = [
           id: { type: 'string', description: 'The fact ID to forget' },
         },
         required: ['id'],
+      },
+    },
+  },
+
+  // ── Context (RAG) tools ──
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_context_search',
+      description: 'Semantic + keyword search over ingested context documents (READMEs, design docs, source files, notes). Use to ground answers in project-specific material the user has added. Returns the top matching passages with source info.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Natural-language query.' },
+          scope: { type: 'string', enum: ['project', 'global', 'all'], description: 'Search scope. Defaults to project (with global included).' },
+          limit: { type: 'number', description: 'Max passages to return (default 8, max 20).' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_context_ingest',
+      description: 'Ingest a document into the context store. The text is chunked and embedded for later semantic search. Re-ingesting the same sourceId replaces the prior chunks.',
+      parameters: {
+        type: 'object',
+        properties: {
+          text:       { type: 'string', description: 'Raw document text.' },
+          sourceId:   { type: 'string', description: 'Stable identifier (e.g. file path or URL). Reused to replace prior chunks.' },
+          sourcePath: { type: 'string', description: 'Display path.' },
+          sourceType: { type: 'string', enum: ['file', 'url', 'note', 'pasted'], description: 'Origin kind (default note).' },
+          title:      { type: 'string', description: 'Optional display title.' },
+          scope:      { type: 'string', enum: ['project', 'global'], description: 'Scope (default project when active).' },
+        },
+        required: ['text'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_context_list',
+      description: 'List ingested context documents (without their text) so you can confirm what is available before searching or delete stale entries.',
+      parameters: {
+        type: 'object',
+        properties: {
+          scope: { type: 'string', enum: ['project', 'global', 'all'], description: 'Filter scope.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_context_delete',
+      description: 'Delete an ingested context document by docId (from fauna_context_list).',
+      parameters: {
+        type: 'object',
+        properties: {
+          docId: { type: 'string', description: 'The docId to delete.' },
+        },
+        required: ['docId'],
       },
     },
   },
@@ -1921,12 +1997,89 @@ export const DYNAMIC_WIDGET_TOOL_DEFS = [
 export function executeSelfTool(toolName, args, context = {}) {
   switch (toolName) {
     // ── Memory ──
-    case 'fauna_remember':
-      return JSON.stringify(factsRemember(args.text, args.category));
-    case 'fauna_recall':
-      return JSON.stringify(factsRecall(args.keywords));
+    case 'fauna_remember': {
+      const scope = args.scope === 'global' ? 'global' : 'project';
+      const containerTag = scope === 'project' && context.activeProjectId
+        ? projectContainerTag(context.activeProjectId)
+        : 'global';
+      return JSON.stringify(factsRemember(args.text, {
+        category: args.category,
+        containerTag,
+        kind: args.kind,
+        expiresAt: args.expiresAt,
+        supersedes: args.supersedes,
+      }));
+    }
+    case 'fauna_recall': {
+      const scope = args.scope || (context.activeProjectId ? 'project' : 'global');
+      let recallOpts = {};
+      if (scope === 'project' && context.activeProjectId) {
+        recallOpts = { containerTag: projectContainerTag(context.activeProjectId), includeGlobal: true };
+      } else if (scope === 'global') {
+        recallOpts = { containerTag: 'global', includeGlobal: true };
+      }
+      // scope='all' falls through with no containerTag filter
+      return JSON.stringify(factsRecall(args.keywords, recallOpts));
+    }
     case 'fauna_forget':
       return JSON.stringify(factsForget(args.id));
+
+    // ── Context (RAG) ──
+    case 'fauna_context_search': {
+      const scope = args.scope || (context.activeProjectId ? 'project' : 'global');
+      let searchOpts = { limit: Math.min(20, Math.max(1, args.limit || 8)) };
+      if (scope === 'project' && context.activeProjectId) {
+        searchOpts.containerTag = projectContainerTag(context.activeProjectId);
+        searchOpts.includeGlobal = true;
+      } else if (scope === 'global') {
+        searchOpts.containerTag = 'global';
+        searchOpts.includeGlobal = true;
+      }
+      return ctxSearch(args.query, searchOpts)
+        .then(results => JSON.stringify({
+          ok: true,
+          count: results.length,
+          results: results.map(r => ({
+            docId: r.chunk.docId,
+            chunkId: r.chunk.id,
+            score: Number(r.score.toFixed(4)),
+            sourcePath: r.chunk.sourcePath,
+            sourceType: r.chunk.sourceType,
+            title: r.chunk.title,
+            text: r.chunk.text,
+          })),
+        }))
+        .catch(e => JSON.stringify({ ok: false, error: e.message }));
+    }
+    case 'fauna_context_ingest': {
+      const scope = args.scope === 'global' ? 'global' : 'project';
+      const containerTag = scope === 'project' && context.activeProjectId
+        ? projectContainerTag(context.activeProjectId)
+        : 'global';
+      return ctxIngest({
+        text: args.text,
+        sourceId: args.sourceId,
+        sourcePath: args.sourcePath,
+        sourceType: args.sourceType,
+        title: args.title,
+        containerTag,
+      }).then(r => JSON.stringify(r))
+        .catch(e => JSON.stringify({ ok: false, error: e.message }));
+    }
+    case 'fauna_context_list': {
+      const scope = args.scope || (context.activeProjectId ? 'project' : 'all');
+      const opts = {};
+      if (scope === 'project' && context.activeProjectId) {
+        opts.containerTag = projectContainerTag(context.activeProjectId);
+        opts.includeGlobal = true;
+      } else if (scope === 'global') {
+        opts.containerTag = 'global';
+        opts.includeGlobal = true;
+      }
+      return JSON.stringify({ documents: ctxListDocs(opts), stats: ctxGetStats() });
+    }
+    case 'fauna_context_delete':
+      return JSON.stringify(ctxDeleteDoc(args.docId));
 
     // ── Shell exec ──
     case 'fauna_shell_exec': {

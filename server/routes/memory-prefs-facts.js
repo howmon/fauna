@@ -9,6 +9,9 @@ import {
   remember as factsRemember, recall as factsRecall, forget as factsForget,
   listFacts, runDecay, exportFacts, importFacts, getStats as factsGetStats,
 } from '../../memory-store.js';
+import {
+  listProposals, approveProposal, rejectProposal, getProposalStats,
+} from '../lib/memory-extractor.js';
 
 export function registerMemoryPrefsFactsRoutes(app, { configDir }) {
   const MEMORY_FILE = path.join(configDir, 'memory.json');
@@ -233,6 +236,30 @@ export function registerMemoryPrefsFactsRoutes(app, { configDir }) {
     const result = importFacts(facts);
     if (!result.ok) return res.status(400).json(result);
     res.json(result);
+  });
+
+  // ── Memory proposals (Phase 1 auto-extraction queue) ────────────────────
+
+  app.get('/api/memory/proposals', (req, res) => {
+    const status = req.query.status ? String(req.query.status) : null;
+    const projectId = req.query.projectId ? String(req.query.projectId) : null;
+    const limit = req.query.limit ? Math.max(1, Math.min(500, parseInt(req.query.limit, 10) || 100)) : 100;
+    res.json({
+      proposals: listProposals({ status, projectId, limit }),
+      stats: getProposalStats(),
+    });
+  });
+
+  app.post('/api/memory/proposals/:id/approve', (req, res) => {
+    const r = approveProposal(req.params.id);
+    if (!r.ok) return res.status(400).json(r);
+    res.json(r);
+  });
+
+  app.post('/api/memory/proposals/:id/reject', (req, res) => {
+    const r = rejectProposal(req.params.id, req.body?.reason);
+    if (!r.ok) return res.status(400).json(r);
+    res.json(r);
   });
 
   return { loadPrefs };

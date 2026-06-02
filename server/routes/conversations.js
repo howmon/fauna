@@ -1,4 +1,6 @@
 import { createConversationStore, PayloadTooLargeError, migrateLegacyToSplit } from '../lib/conversation-store.js';
+import { extractFacts as extractMemoryFacts } from '../lib/memory-extractor.js';
+import { getProject } from '../../project-manager.js';
 
 export function registerConversationRoutes(app, deps) {
   const { fs, path, configDir, getCopilotClient } = deps;
@@ -30,6 +32,59 @@ export function registerConversationRoutes(app, deps) {
     for (const client of conversationSseClients) {
       try { client.write(`data: ${data}\n\n`); } catch (_) {}
     }
+  }
+
+  // ── Memory extraction (Phase 1) ────────────────────────────────────
+  // Debounce per conversation: while edits stream in, we coalesce to a
+  // single extraction 8s after the last write. Skipped when no project is
+  // attached or when the project disables auto-extract.
+  const _extractTimers = new Map(); // convId -> Timeout
+  const EXTRACT_DEBOUNCE_MS = 8000;
+
+  function _scheduleMemoryExtraction(conv) {
+    if (!conv || !conv.id || !conv.projectId) return;
+    const project = getProject(conv.projectId);
+    if (!project) return;
+    const mcfg = project.memoryConfig || {};
+    if (mcfg.autoExtract !== 'on-save') return;
+    const messages = Array.isArray(conv.messages) ? conv.messages : [];
+    if (messages.length < 2) return;
+
+    const existing = _extractTimers.get(conv.id);
+    if (existing) clearTimeout(existing);
+    const t = setTimeout(async () => {
+      _extractTimers.delete(conv.id);
+      try {
+        const client = getCopilotClient();
+        const aiCaller = async (prompt) => {
+          const resp = await client.chat.completions.create({
+            model: 'gpt-4.1',
+            messages: [{ role: 'user', content: prompt }],
+            max_tokens: 800,
+            temperature: 0.2,
+          });
+          return resp?.choices?.[0]?.message?.content || '';
+        };
+        const r = await extractMemoryFacts({
+          messages,
+          projectId: conv.projectId,
+          conversationId: conv.id,
+          aiCaller,
+          autoApprove: mcfg.requireApproval !== true,
+        });
+        if (r.applied || r.proposals.length) {
+          sendConversationEvent('memory_proposal', {
+            conversationId: conv.id,
+            projectId: conv.projectId,
+            applied: r.applied,
+            pending: r.proposals.filter(p => p.status === 'pending').length,
+          });
+        }
+      } catch (e) {
+        console.warn('[conversations] memory extraction failed:', e?.message || e);
+      }
+    }, EXTRACT_DEBOUNCE_MS);
+    _extractTimers.set(conv.id, t);
   }
 
   app.get('/api/conversations', async (req, res) => {
@@ -87,6 +142,10 @@ export function registerConversationRoutes(app, deps) {
       const conv = await store.put(req.params.id, incoming);
       sendConversationEvent('upsert', { conversation: conv });
       res.json({ ok: true, conversation: conv });
+      // Phase 1: fire-and-forget memory extraction when the active project's
+      // memoryConfig.autoExtract === 'on-save'. Debounced per-conversation so
+      // rapid typing in the UI doesn't trigger N parallel LLM calls.
+      try { _scheduleMemoryExtraction(conv); } catch (_) { /* non-fatal */ }
     } catch (e) {
       if (e instanceof PayloadTooLargeError) {
         return res.status(413).json({ error: e.message, detail: e.detail });
