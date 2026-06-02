@@ -1065,7 +1065,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_get_agent_instructions',
-      description: 'Load the FULL instructions for the currently active agent. You MUST call this once at the start of every turn before doing any other work — the system prompt only contains the agent\'s name and short description. The full instructions (tool-use rules, output format, workflows) live in this tool\'s return value. Do NOT try to satisfy the user\'s request from the short description alone. Pass `section` to fetch only one `## Heading` block from the body when you know which part you need (saves context on large agents).',
+      description: 'Load the FULL instructions for the currently active agent. If an agent is active (the system prompt will say "Active Agent: <name>"), you MUST call this once at the start of every turn before doing any other work — the system prompt only contains the agent\'s name and short description, and the full instructions (tool-use rules, output format, workflows) live in this tool\'s return value. If NO agent is active, do NOT call this tool — it is a no-op in that case and you already have your full default tool set. Pass `section` to fetch only one `## Heading` block from the body when you know which part you need (saves context on large agents).',
       parameters: {
         type: 'object',
         properties: {
@@ -2259,7 +2259,16 @@ export function executeSelfTool(toolName, args, context = {}) {
     case 'fauna_get_agent_instructions': {
       const name = String(args.name || context.activeAgentName || '').replace(/[^a-zA-Z0-9_-]/g, '');
       if (!name) {
-        return JSON.stringify({ ok: false, error: 'No active agent. This tool only works when an agent is selected.' });
+        // No agent is active — this is a normal state, not an error. Return
+        // ok:true with an empty body and a friendly note so the model keeps
+        // working with the tools it already has instead of catastrophizing
+        // into "I have no tools / I'm blocked".
+        return JSON.stringify({
+          ok: true,
+          activeAgent: null,
+          instructions: '',
+          note: 'No agent is currently active. This is normal — you have your full default tool set (figma_*, browser-ext-action, fauna_shell_exec, file edit tools, memory tools, etc.). Proceed with the user request using those tools directly. Do NOT call this tool again this turn.',
+        });
       }
       const agentsDir = context.agentsDir;
       if (!agentsDir) {

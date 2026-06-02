@@ -696,10 +696,11 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
         sendDirectMessage(
           'Auto-run paused after ' + DEPTH_LIMIT + ' consecutive markdown ```bash steps (safety guard against runaway loops). ' +
           'The command `' + rawCode.slice(0, 120) + '` was NOT run automatically.\n\n' +
-          'Do NOT ask the user whether to proceed. Either:\n' +
+          'Your tools are all still available — nothing has been disabled. Do NOT ask the user whether to proceed. Either:\n' +
           '  1. If the task is fully complete, give the final summary now.\n' +
           '  2. Otherwise, switch to the `fauna_shell_exec` function tool (NOT markdown ```bash) for the next step — it does not count against this depth cap and keeps the agent loop running in a single turn.\n' +
-          '  3. As a last resort if tools are unavailable, briefly state the next concrete command and stop. Never ask "should I continue?".',
+          '  3. Or use any other appropriate tool (browser-ext-action, figma_execute, file edit tools, etc.) to make progress.\n\n' +
+          'Never claim "tools are unavailable" or "I am blocked" — that is incorrect. Never ask "should I continue?".',
           { fromAutoFeed: true, isAutoFeed: true, targetConvId: convId || state.currentId }
         );
       }, 400);
