@@ -10,7 +10,7 @@
 // "sticky" and keep injecting the relevant block for the rest of the conv
 // — flipping it off mid-thread would surprise the model.
 
-const GENUI_KW = /\b(dashboard|scorecard|widget|gen[-_ ]?ui|chart|graph|stat\b|stats?\b|metric|metrics|kpi|leaderboard|table|playlist|carousel|podcast|narrat(e|ion)|read .* aloud|say this|tts|voiceover|video|movie|episode|gallery|tabs?\b|circuit|schematic|wiring|netlist|spice|op[- ]?amp|transistor|resistor|capacitor|inductor|whiteboard|lesson|teach me|walk me through|explain how|visualiz|render|display|show me .* (a |an |the )?(chart|graph|widget|dashboard|card|tile|stats?|metrics|breakdown|comparison|leaderboard|summary)|interactive|progress (bar|tracker)|status (card|overview|board)|key[- ]?value)/i;
+const GENUI_KW = /\b(dashboard|scorecard|widget|gen[-_ ]?ui|chart|graph|stat\b|stats?\b|metric|metrics|kpi|leaderboard|table|playlist|carousel|podcast|narrat(e|ion)|read .* aloud|say this|tts|voiceover|video|movie|episode|gallery|tabs?\b|circuit|schematic|wiring|netlist|spice|op[- ]?amp|transistor|resistor|capacitor|inductor|whiteboard|lesson|teach me|walk me through|explain how|visualiz|render|display|show me .* (a |an |the )?(chart|graph|widget|dashboard|card|tile|stats?|metrics|breakdown|comparison|leaderboard|summary)|interactive|progress (bar|tracker)|status (card|overview|board)|key[- ]?value|3d|three[-_. ]?js|webgl|babylon|aframe|model[- ]?viewer|gltf|\.glb\b|\.obj\b|\.stl\b|\.fbx\b|blender|mesh|scene\b|orbit ?controls|product (render|shot|viewer))/i;
 
 const BROWSER_KW = /\b(browser|navigate|tab\b|open .* url|fetch .* page|crawl|scrape|click|fill .* form|type into|screenshot|snapshot|dev[- ]?server|localhost|https?:\/\/|extension|playwright|extract page)/i;
 
@@ -140,7 +140,7 @@ const TOOL_KW = {
   voice:      /\b(speak|say (this|that|it)|read .* aloud|tts|voice ?over|narrat|podcast|episode|audio)\b/i,
   lesson:     /\b(lesson|teach me|walk me through|tutorial|course|explain how|step[- ]?by[- ]?step|learn(ing)? plan)\b/i,
   images:     /\b(stock ?images?|unsplash|pexels|pixabay|royalty[- ]?free|hero ?images?|illustration|photos? (search|of)|find .* (image|photo)|download .* (image|photo))\b/i,
-  widget:     /\b(widget|dashboard|chart|graph|gen[-_ ]?ui|scorecard|kpi|metric|leaderboard|playlist|carousel|tabs?\b|gallery|stat\b)\b/i,
+  widget:     /(\b(widget|dashboard|chart|graph|gen[-_ ]?ui|scorecard|kpi|metric|leaderboard|playlist|carousel|tabs?|gallery|stat|interactive|kanban|slider|3d|three[-_. ]?js|webgl|babylon|aframe|model[- ]?viewer|gltf|blender|mesh|orbit ?controls|product (render|shot|viewer))\b|\.(glb|obj|stl|fbx)\b)/i,
   backlog:    /\b(backlog|feature request|roadmap|prioriti[sz]e|ticket|issue|jira|todo list|user story)\b/i,
   debate:     /\b(debate|consult|second opinion|cross[- ]?check|compare models|ask another model|deliberate|brainstorm)\b/i,
 };

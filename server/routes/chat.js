@@ -822,6 +822,14 @@ export function registerChatRoute(app, {
       if (!isCLI && !noTools) {
         mcpTools = [...(mcpTools || []), ...SELF_TOOL_DEFS];
         if (enableDynamicWidgets) mcpTools = [...mcpTools, ...DYNAMIC_WIDGET_TOOL_DEFS];
+        // When no agent is active, strip `fauna_get_agent_instructions` — its
+        // tool description carries a hard "MUST call this once at the start
+        // of every turn" directive, which the model otherwise obeys even
+        // though there are no agent instructions to fetch (it returns an
+        // empty body). Skill tools stay: they also expose global skills.
+        if (!agentName) {
+          mcpTools = mcpTools.filter(t => (t?.function?.name || t?.name) !== 'fauna_get_agent_instructions');
+        }
       }
 
       // Detect tool-name collisions across the merged set (figma + agent +

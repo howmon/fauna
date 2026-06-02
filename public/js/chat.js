@@ -203,9 +203,90 @@ async function gatherSystemContext(text) {
 
 // ── Suggested next steps ──────────────────────────────────────────────────
 // Parse ```suggestions blocks and render clickable CTA buttons after the message.
+
+// Pull the most recent USER message from the active conversation so the
+// fallback can craft suggestions that reference the actual topic instead of
+// generic "Tell me more" / "Try a different angle" / "Make it concrete".
+function _lastUserPromptText() {
+  try {
+    var convId = (typeof state !== 'undefined' && state) ? state.currentId : null;
+    var conv   = (typeof getConv === 'function' && convId) ? getConv(convId) : null;
+    if (!conv || !Array.isArray(conv.messages)) return '';
+    for (var i = conv.messages.length - 1; i >= 0; i--) {
+      var m = conv.messages[i];
+      if (m && m.role === 'user' && typeof m.content === 'string' && m.content.trim()) {
+        // Strip any "[Current date and time: …]" footer the client appends.
+        return m.content.replace(/\n*\[Current date and time:[^\]]*\]\s*$/i, '').trim();
+      }
+    }
+  } catch (_) {}
+  return '';
+}
+
+// Extract a 1-3 word topic phrase from the user's most recent prompt so
+// fallback labels can reference it ("Refine the 3D model" instead of
+// "Try a different angle"). Drops generic verbs, filler, and stop words.
+function _topicFromUserPrompt(promptText) {
+  var t = String(promptText || '').toLowerCase().trim();
+  if (!t) return '';
+  // Strip a leading imperative verb so the noun phrase surfaces.
+  t = t.replace(/^(please\s+)?(can you\s+|could you\s+|i (?:want|need|would like)(?: to)?\s+)?(create|make|build|design|generate|write|draw|render|show|give|find|fetch|fix|debug|update|edit|add|implement|explain|tell|help)\s+(me\s+)?(a |an |the |some |us\s+|us a |us an )?/i, '');
+  // Take the first 4 words, drop trailing punctuation.
+  var words = t.split(/\s+/).slice(0, 4).join(' ').replace(/[^a-z0-9\s\-.]/gi, '').trim();
+  if (!words || words.length < 3) return '';
+  // Skip if it's just stopwords.
+  if (/^(this|that|it|them|something|anything|help|please|now)$/i.test(words)) return '';
+  return words.length > 32 ? words.slice(0, 32).replace(/\s+\S*$/, '') : words;
+}
+
+// If the assistant ended with an "options menu" (numbered list, "reply with
+// one word", etc.), pull each option out as a CTA. This is the single most
+// common case where the model legitimately needs the user to pick — making
+// those picks one-click instead of "type the word" is a huge UX win.
+function _suggestionsFromOptionsMenu(text) {
+  var src = String(text || '');
+  if (!src.trim()) return null;
+
+  // Look only at the trailing third of the message — the menu always lives at
+  // the end, never mid-prose.
+  var tail = src.length > 800 ? src.slice(-1200) : src;
+
+  // Pattern A: numbered list "1. xxx" / "1) xxx" (2-5 items).
+  var numbered = tail.match(/(?:^|\n)\s*\d+[.)]\s+([^\n]{3,80})/g);
+  if (numbered && numbered.length >= 2 && numbered.length <= 6) {
+    var picks = numbered.slice(0, 4).map(function(line) {
+      return line.replace(/^\s*\d+[.)]\s+/, '').trim()
+        // Strip trailing "or" / ", or" connectors.
+        .replace(/,?\s+or\s*$/i, '')
+        // Collapse leading "a/an/the".
+        .replace(/^(an?|the)\s+/i, '')
+        // Cap length so buttons stay compact.
+        .slice(0, 56);
+    }).filter(Boolean);
+    if (picks.length >= 2) return picks;
+  }
+
+  // Pattern B: "Reply with one word: - `openscad` - `obj` …" — backticked
+  // single-token options at the tail.
+  var oneWord = tail.match(/(?:reply|respond|type|say|pick|choose)\s+(?:with\s+)?(?:one\s+word|one\s+of)?[\s:]*([\s\S]{0,400})$/i);
+  if (oneWord) {
+    var opts = (oneWord[1].match(/`([a-z][\w\s-]{0,20})`/gi) || [])
+      .map(function(w) { return w.replace(/`/g, '').trim(); })
+      .filter(Boolean);
+    if (opts.length >= 2 && opts.length <= 6) return opts.slice(0, 4);
+  }
+
+  return null;
+}
+
 function _fallbackSuggestionsFromMessage(buffer) {
   var text = String(buffer || '');
   if (!text.trim()) return [];
+
+  // Highest priority: the assistant offered an explicit menu of choices.
+  // Surface each choice as a button so the user clicks instead of typing.
+  var menu = _suggestionsFromOptionsMenu(text);
+  if (menu && menu.length) return menu;
 
   // Highest priority: assistant explicitly asked the user to reply with a
   // specific word/phrase to continue. Surface that as the primary CTA so the
@@ -248,8 +329,18 @@ function _fallbackSuggestionsFromMessage(buffer) {
   if (/\b(what if|how about|consider|could be|might (?:work|be)|brainstorm|here are .* ideas?|some ideas?|possible (?:apps?|products?|directions?))\b/i.test(text)) {
     return ['Build this app', 'Refine the idea', 'Suggest another angle'];
   }
-  // Default: keep it action-relevant to the assistant having just spoken,
-  // not the stale "Continue / Verify / Summarize" triplet.
+
+  // Topical default — reference the user's actual ask so buttons stay
+  // contextual instead of falling back to the meaningless "Tell me more /
+  // Try a different angle / Make it concrete" triplet.
+  var topic = _topicFromUserPrompt(_lastUserPromptText());
+  if (topic) {
+    return [
+      'Refine the ' + topic,
+      'Show me an alternative',
+      'Explain how this works',
+    ];
+  }
   return ['Tell me more', 'Try a different angle', 'Make it concrete'];
 }
 
