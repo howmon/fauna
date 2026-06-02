@@ -27,8 +27,12 @@
     var autoLibs = [];
     function _refs(re){ return re.test(js) || re.test(html); }
     function _has(re){ return re.test(combined); }
+    // Pin THREE to 0.149.x for classic global addons (THREE.OrbitControls).
     if (_refs(/\bTHREE\b/) && !_has(/three(\.min)?\.js|three@|unpkg\.com\/three|cdn\.jsdelivr\.net\/npm\/three|esm\.sh\/three/i)) {
-      autoLibs.push('https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js');
+      autoLibs.push('https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js');
+      if (_has(/THREE\.OrbitControls\b/)) {
+        autoLibs.push('https://cdn.jsdelivr.net/npm/three@0.149.0/examples/js/controls/OrbitControls.js');
+      }
     }
     if (_refs(/\bChart\b/) && !_has(/chart(\.min)?\.js|chart\.js@|unpkg\.com\/chart\.js|cdn\.jsdelivr\.net\/npm\/chart\.js/i)) {
       autoLibs.push('https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js');
