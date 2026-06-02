@@ -20,14 +20,15 @@
     var html = String(bundle.html || '');
     var css  = String(bundle.css  || '');
     var js   = String(bundle.js   || '');
-    // Three.js sanity-rewrite: classic `examples/js/` addons were removed
-    // after r148. If the model hand-loads three@0.150+ those addon URLs 404
-    // and the user sees "Uncaught (in promise) Event" from script onerror.
-    // Pin any such reference back to 0.149.0 so global addons keep resolving.
+    // Three.js sanity-rewrite: classic `examples/js/` addons (OrbitControls
+    // etc.) were REMOVED in r148. r147 is the last release that ships them
+    // on the npm/CDN package. If the model hand-loads three@>=0.148, the
+    // OrbitControls URL 404s and THREE.OrbitControls is undefined → "is not
+    // a constructor". Pin any such reference back to 0.147.0.
     function _pinThree(src) {
       return src.replace(
         /(unpkg\.com\/three@|cdn\.jsdelivr\.net\/npm\/three@|esm\.sh\/three@)0\.(\d+)\.(\d+)/g,
-        function (m, prefix, minor) { return Number(minor) > 149 ? prefix + '0.149.0' : m; }
+        function (m, prefix, minor) { return Number(minor) > 147 ? prefix + '0.147.0' : m; }
       );
     }
     html = _pinThree(html);
@@ -41,9 +42,9 @@
     function _has(re){ return re.test(combined); }
     // Pin THREE to 0.149.x for classic global addons (THREE.OrbitControls).
     if (_refs(/\bTHREE\b/) && !_has(/three(\.min)?\.js|three@|unpkg\.com\/three|cdn\.jsdelivr\.net\/npm\/three|esm\.sh\/three/i)) {
-      autoLibs.push('https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js');
+      autoLibs.push('https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js');
       if (_has(/THREE\.OrbitControls\b/)) {
-        autoLibs.push('https://cdn.jsdelivr.net/npm/three@0.149.0/examples/js/controls/OrbitControls.js');
+        autoLibs.push('https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js');
       }
     }
     if (_refs(/\bChart\b/) && !_has(/chart(\.min)?\.js|chart\.js@|unpkg\.com\/chart\.js|cdn\.jsdelivr\.net\/npm\/chart\.js/i)) {
