@@ -20,6 +20,18 @@
     var html = String(bundle.html || '');
     var css  = String(bundle.css  || '');
     var js   = String(bundle.js   || '');
+    // Three.js sanity-rewrite: classic `examples/js/` addons were removed
+    // after r148. If the model hand-loads three@0.150+ those addon URLs 404
+    // and the user sees "Uncaught (in promise) Event" from script onerror.
+    // Pin any such reference back to 0.149.0 so global addons keep resolving.
+    function _pinThree(src) {
+      return src.replace(
+        /(unpkg\.com\/three@|cdn\.jsdelivr\.net\/npm\/three@|esm\.sh\/three@)0\.(\d+)\.(\d+)/g,
+        function (m, prefix, minor) { return Number(minor) > 149 ? prefix + '0.149.0' : m; }
+      );
+    }
+    html = _pinThree(html);
+    js   = _pinThree(js);
     // Auto-inject common libs when the widget references their globals but
     // the html/js doesn't already load them. Keeps simple 3D / chart widgets
     // from blowing up with "THREE is not defined" etc.
