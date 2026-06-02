@@ -20,11 +20,29 @@
     var html = String(bundle.html || '');
     var css  = String(bundle.css  || '');
     var js   = String(bundle.js   || '');
+    // Auto-inject common libs when the widget references their globals but
+    // the html/js doesn't already load them. Keeps simple 3D / chart widgets
+    // from blowing up with "THREE is not defined" etc.
+    var combined = html + '\n' + js;
+    var autoLibs = [];
+    function _refs(re){ return re.test(js) || re.test(html); }
+    function _has(re){ return re.test(combined); }
+    if (_refs(/\bTHREE\b/) && !_has(/three(\.min)?\.js|three@|unpkg\.com\/three|cdn\.jsdelivr\.net\/npm\/three|esm\.sh\/three/i)) {
+      autoLibs.push('https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js');
+    }
+    if (_refs(/\bChart\b/) && !_has(/chart(\.min)?\.js|chart\.js@|unpkg\.com\/chart\.js|cdn\.jsdelivr\.net\/npm\/chart\.js/i)) {
+      autoLibs.push('https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js');
+    }
+    if (_refs(/\bd3\b/) && !_has(/d3(\.min)?\.js|d3@|unpkg\.com\/d3|cdn\.jsdelivr\.net\/npm\/d3/i)) {
+      autoLibs.push('https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js');
+    }
+    var autoLibTags = autoLibs.map(function(u){ return '<script src="' + u + '"><\/script>'; }).join('');
     // Mirror lib/dynamic-widgets.js buildWidgetSrcdoc — kept inline so the
     // frontend doesn't need to round-trip the assembled HTML over the wire.
     return '<!doctype html><html><head>' +
       '<meta charset="utf-8">' +
       '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\' https://cdnjs.cloudflare.com https://unpkg.com https://cdn.jsdelivr.net https://esm.sh; script-src-elem \'unsafe-inline\' https://cdnjs.cloudflare.com https://unpkg.com https://cdn.jsdelivr.net https://esm.sh; style-src \'unsafe-inline\' https://cdnjs.cloudflare.com https://unpkg.com https://cdn.jsdelivr.net; img-src data: blob: https: http://localhost:3737; media-src blob: data: https: http://localhost:3737; font-src data: https://cdnjs.cloudflare.com https://unpkg.com https://cdn.jsdelivr.net; connect-src http://localhost:3737 ws://localhost:3737; frame-src \'none\'">' +
+      autoLibTags +
       '<style>html,body{margin:0;padding:0;font-family:system-ui,-apple-system,sans-serif;color:#e6e6e6;background:transparent}' +
       css + '</style></head><body>' +
       '<div id="root">' + html + '</div>' +
