@@ -53,9 +53,14 @@ marked.use({
         return '<pre data-special-lang="file-plan"><code class="language-file-plan" data-wf-id="' + escHtml(planId) + '" data-wf-path="(file plan)"></code></pre>';
       }
       // Runnable script langs — treat as shell-exec so they auto-run when autoRunShell is on.
-      // The shell-exec pipeline already serializes execution, feeds results back to the AI,
-      // and hard-stops on empty output, so regular bash/sh/python blocks can use it safely.
-      var RUNNABLE_LANGS = { bash:1, sh:1, zsh:1, shell:1, python:1, python3:1, node:1, nodejs:1, ruby:1, perl:1, console:1 };
+      // ONLY pure shell tags. Models use `python`/`node`/`ruby`/`perl`/`console` constantly
+      // for *displaying* code, not for *running* it; piping their source straight into zsh
+      // produces nonsense errors that then get fed back to the model in a tight loop
+      // (see transcript 2026-06-02T17-42-08: a ```python``` excerpt was executed three
+      // times as if it were shell, each time emitting `zsh: no matches found: ...`).
+      // If the user genuinely wants `python -c '...'` or `node -e '...'`, the model can
+      // wrap it in a ```bash fence — that is the unambiguous, explicit form.
+      var RUNNABLE_LANGS = { bash:1, sh:1, zsh:1, shell:1 };
       var langLower = (lang || '').toLowerCase();
       if (RUNNABLE_LANGS[langLower]) {
         return '<pre data-special-lang="shell-exec"><code class="language-shell-exec">' + escHtml(rawText) + '</code></pre>';
