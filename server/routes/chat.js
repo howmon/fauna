@@ -915,6 +915,15 @@ export function registerChatRoute(app, {
       let narrationRepeats = 0;    // consecutive iterations with near-identical preamble
       let narrationNudgeFired = false; // only inject the coaching nudge once per request
       let orchestratorNudgeCount = 0; // orchestrator emitted no [DELEGATE:] — re-prompt
+      // Widget-claim verifier state. We track whether `fauna_emit_widget`
+      // was successfully called this turn; if the assistant's final text
+      // claims to have rendered/attached/rebuilt a widget without one,
+      // we re-prompt once with tool_choice pinned to `fauna_emit_widget`
+      // so the model cannot get away with describing it in prose.
+      let widgetEmittedThisTurn = false;
+      let widgetClaimNudges = 0;
+      const MAX_WIDGET_CLAIM_NUDGES = 1;
+      let forceEmitWidgetNext = false; // set when re-prompting; consumed by params builder
       // Codex-parity: token usage across every model iteration in this turn.
       // `prompt` tracks the PEAK prompt size (true context-window fullness —
       // each iteration resends the conversation, so summing would massively
@@ -1118,6 +1127,13 @@ export function registerChatRoute(app, {
           if (ephemeral.length) {
             params.tools = [...(params.tools || []), ...ephemeral];
           }
+        }
+        // Widget-claim verifier: if a prior iteration detected the model
+        // promising a widget without calling `fauna_emit_widget`, force the
+        // next response to invoke that tool. Consumed once.
+        if (forceEmitWidgetNext && Array.isArray(params.tools) && params.tools.some(t => t?.function?.name === 'fauna_emit_widget')) {
+          params.tool_choice = { type: 'function', function: { name: 'fauna_emit_widget' } };
+          forceEmitWidgetNext = false;
         }
         // Capability gating for non-Copilot providers. Most local
         // OpenAI-compatible endpoints either reject `tools` outright or
@@ -1428,6 +1444,15 @@ export function registerChatRoute(app, {
               }
               allMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolContent });
               toolNameByCallId.set(tc.id, toolName);
+              // Verifier bookkeeping: record that the model actually emitted
+              // a widget this turn so the post-stream check doesn't false-flag
+              // a legitimate "Here is the widget" message.
+              if (toolName === 'fauna_emit_widget') {
+                try {
+                  const parsed = typeof toolContent === 'string' ? JSON.parse(toolContent) : toolContent;
+                  if (parsed && parsed.ok !== false) widgetEmittedThisTurn = true;
+                } catch (_) { /* assume ok if not JSON */ widgetEmittedThisTurn = true; }
+              }
 
               // Stale-tool-result shrink: keep only the last STALE_KEEP_PER_TOOL
               // results from this tool verbatim; replace older ones with a stub.
@@ -1508,6 +1533,23 @@ export function registerChatRoute(app, {
             console.log('[chat] forward-promise stop detected — injecting execute nudge (' + halfStopNudgeCount + '/' + MAX_HALF_STOP_NUDGES + ')');
             allMessages.push({ role: 'assistant', content: assistantText });
             allMessages.push({ role: 'user', content: '[System: You just stated an intended next action ("I\'ll …" / "Let me …") but did not execute it. Do that step NOW with the appropriate tool call. Do not narrate intent without acting on it.]' });
+            // keep continueLoop = true
+          } else if (
+            enableDynamicWidgets &&
+            !widgetEmittedThisTurn &&
+            widgetClaimNudges < MAX_WIDGET_CLAIM_NUDGES &&
+            assistantText.trim() &&
+            /\b(?:i\s+(?:rebuilt|made|created|attached|built|added|wired up|put together)\s+(?:it|the|a|an|this|that)?[^.\n]{0,60}(?:widget|viewer|3d|interactive|rotatable|scene|model|dashboard|playground|simulator)|here(?:'s|\s+is)\s+(?:the|your|a|an)?[^.\n]{0,40}(?:widget|3d\b|viewer|interactive|rotatable|scene)|i(?:'ve| have)\s+(?:rebuilt|attached|emitted|rendered|added|created)\s+(?:it|the|a|an)?[^.\n]{0,40}(?:widget|viewer|3d|scene|interactive))/i.test(assistantText)
+          ) {
+            // Widget-claim verifier: assistant text says it produced/rebuilt
+            // a widget but no `fauna_emit_widget` tool call landed this turn.
+            // Force a re-prompt with tool_choice pinned to the emit tool so
+            // the model has to back its claim with an actual artifact.
+            widgetClaimNudges++;
+            console.log('[chat] widget-claim without emit detected — forcing re-emit (' + widgetClaimNudges + '/' + MAX_WIDGET_CLAIM_NUDGES + ')');
+            allMessages.push({ role: 'assistant', content: assistantText });
+            allMessages.push({ role: 'user', content: '[System: Your previous reply claimed you rendered/attached/rebuilt a widget, but you never called `fauna_emit_widget` in this turn. Words alone render nothing. Call `fauna_emit_widget` NOW with the full bundle (html + js, plus any tools). Do not narrate the change — emit it.]' });
+            forceEmitWidgetNext = true;
             // keep continueLoop = true
           } else if (isOrchestratorTurn && assistantText.trim() && orchestratorNudgeCount < 2 && (() => {
             // Detect three orchestrator failure modes:
