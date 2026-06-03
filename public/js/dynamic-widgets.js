@@ -20,6 +20,21 @@
     var html = String(bundle.html || '');
     var css  = String(bundle.css  || '');
     var js   = String(bundle.js   || '');
+    // Sanitize bundle.html into an inner DOM fragment. Model sometimes emits
+    // a full `<!doctype html>…<body>…</body></html>` — extract the body's
+    // inner contents and strip stray doctype/html/head/body/meta/title tags
+    // plus any relative-path `<script src="./bundle.js">` references that
+    // only resolve in dev and break (CSP error) when downloaded standalone.
+    var _bodyM = html.match(/<body\b[^>]*>([\s\S]*?)<\/body\s*>/i);
+    if (_bodyM) html = _bodyM[1];
+    html = html
+      .replace(/<!doctype[^>]*>/gi, '')
+      .replace(/<\/?(?:html|head|body)\b[^>]*>/gi, '')
+      .replace(/<meta\b[^>]*>/gi, '')
+      .replace(/<title\b[^>]*>[\s\S]*?<\/title\s*>/gi, '')
+      .replace(/<script\b[^>]*\bsrc\s*=\s*["'](?!https?:|data:|blob:)[^"']*["'][^>]*>\s*<\/script\s*>/gi, '')
+      .replace(/<script\b[^>]*\bsrc\s*=\s*["'](?!https?:|data:|blob:)[^"']*["'][^>]*\/>/gi, '')
+      .trim();
     // Three.js loading strategy: use an importmap pointing at the latest
     // stable release (r180). This lets the bundle use either modern ESM
     // (`import * as THREE from 'three'`, `import { OrbitControls } from
