@@ -26,7 +26,23 @@
     // plus any relative-path `<script src="./bundle.js">` references that
     // only resolve in dev and break (CSP error) when downloaded standalone.
     var _bodyM = html.match(/<body\b[^>]*>([\s\S]*?)<\/body\s*>/i);
-    if (_bodyM) html = _bodyM[1];
+    if (_bodyM) {
+      // Salvage <style>, stylesheet/preconnect/preload <link>s, and CDN
+      // <script src="https://...">s from <head> — legitimate widgets like
+      // the lesson player keep their CSS + KaTeX assets there.
+      var _headM = html.match(/<head\b[^>]*>([\s\S]*?)<\/head\s*>/i);
+      var _salvage = '';
+      if (_headM) {
+        var _head = _headM[1];
+        var _styles = _head.match(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi) || [];
+        var _links = (_head.match(/<link\b[^>]*>/gi) || []).filter(function (t) {
+          return /\brel\s*=\s*["']?(stylesheet|preconnect|dns-prefetch|preload|modulepreload)["']?/i.test(t);
+        });
+        var _cdnScripts = (_head.match(/<script\b[^>]*\bsrc\s*=\s*["'](?:https?:|data:|blob:)[^"']*["'][^>]*>\s*<\/script\s*>/gi) || []);
+        _salvage = _links.concat(_styles).concat(_cdnScripts).join('\n');
+      }
+      html = (_salvage ? _salvage + '\n' : '') + _bodyM[1];
+    }
     html = html
       .replace(/<!doctype[^>]*>/gi, '')
       .replace(/<\/?(?:html|head|body)\b[^>]*>/gi, '')
