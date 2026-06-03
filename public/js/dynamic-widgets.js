@@ -20,40 +20,68 @@
     var html = String(bundle.html || '');
     var css  = String(bundle.css  || '');
     var js   = String(bundle.js   || '');
-    // Three.js sanity-rewrite: classic `examples/js/` addons (OrbitControls
-    // etc.) were REMOVED in r148. r147 is the last release that ships them
-    // on the npm/CDN package. If the model hand-loads three@>=0.148, the
-    // OrbitControls URL 404s and THREE.OrbitControls is undefined → "is not
-    // a constructor". Pin any such reference back to 0.147.0.
-    function _pinThree(src) {
-      return src.replace(
-        /(unpkg\.com\/three@|cdn\.jsdelivr\.net\/npm\/three@|esm\.sh\/three@)0\.(\d+)\.(\d+)/g,
-        function (m, prefix, minor) { return Number(minor) > 147 ? prefix + '0.147.0' : m; }
-      );
-    }
-    html = _pinThree(html);
-    js   = _pinThree(js);
-    // Auto-inject common libs when the widget references their globals but
-    // the html/js doesn't already load them. Keeps simple 3D / chart widgets
-    // from blowing up with "THREE is not defined" etc.
+    // Three.js loading strategy: use an importmap pointing at the latest
+    // stable release (r180). This lets the bundle use either modern ESM
+    // (`import * as THREE from 'three'`, `import { OrbitControls } from
+    // 'three/addons/controls/OrbitControls.js'`) OR the classic-global style
+    // (`new THREE.OrbitControls(...)`). For the classic style we inject a
+    // back-compat preamble that imports the same modules and re-attaches
+    // them on the global `THREE`.
+    var THREE_VERSION = '0.180.0';
     var combined = html + '\n' + js;
-    var autoLibs = [];
     function _refs(re){ return re.test(js) || re.test(html); }
     function _has(re){ return re.test(combined); }
-    // Pin THREE to 0.149.x for classic global addons (THREE.OrbitControls).
-    if (_refs(/\bTHREE\b/) && !_has(/three(\.min)?\.js|three@|unpkg\.com\/three|cdn\.jsdelivr\.net\/npm\/three|esm\.sh\/three/i)) {
-      autoLibs.push('https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js');
-      if (_has(/THREE\.OrbitControls\b/)) {
-        autoLibs.push('https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js');
+    var refsThree = _refs(/\bTHREE\b/) || _has(/\bfrom\s+['"]three(\/|['"])/);
+    var hasHandLoadedThree = _has(/three(\.min|\.module(\.min)?)?\.js\b|three@|three\/addons/i);
+    var useImportmap = refsThree && !hasHandLoadedThree;
+
+    var importMapTag = '';
+    var backCompatPreamble = '';
+    if (useImportmap) {
+      importMapTag = '<script type="importmap">' +
+        '{"imports":{' +
+          '"three":"https://cdn.jsdelivr.net/npm/three@' + THREE_VERSION + '/build/three.module.min.js",' +
+          '"three/addons/":"https://cdn.jsdelivr.net/npm/three@' + THREE_VERSION + '/examples/jsm/"' +
+        '}}<\/script>';
+      var imps = ["import * as THREE from 'three';"];
+      var atts = ['window.THREE = THREE;'];
+      function _addon(name, path){
+        if (new RegExp('THREE\\.' + name + '\\b').test(combined)) {
+          imps.push("import { " + name + " } from 'three/addons/" + path + "';");
+          atts.push('THREE.' + name + ' = ' + name + ';');
+        }
       }
+      _addon('OrbitControls', 'controls/OrbitControls.js');
+      _addon('MapControls', 'controls/MapControls.js');
+      _addon('TrackballControls', 'controls/TrackballControls.js');
+      _addon('TransformControls', 'controls/TransformControls.js');
+      _addon('DragControls', 'controls/DragControls.js');
+      _addon('PointerLockControls', 'controls/PointerLockControls.js');
+      _addon('GLTFLoader', 'loaders/GLTFLoader.js');
+      _addon('DRACOLoader', 'loaders/DRACOLoader.js');
+      _addon('OBJLoader', 'loaders/OBJLoader.js');
+      _addon('FBXLoader', 'loaders/FBXLoader.js');
+      _addon('RGBELoader', 'loaders/RGBELoader.js');
+      _addon('EXRLoader', 'loaders/EXRLoader.js');
+      _addon('SVGLoader', 'loaders/SVGLoader.js');
+      _addon('FontLoader', 'loaders/FontLoader.js');
+      _addon('TextGeometry', 'geometries/TextGeometry.js');
+      _addon('RoomEnvironment', 'environments/RoomEnvironment.js');
+      _addon('EffectComposer', 'postprocessing/EffectComposer.js');
+      _addon('RenderPass', 'postprocessing/RenderPass.js');
+      _addon('UnrealBloomPass', 'postprocessing/UnrealBloomPass.js');
+      backCompatPreamble = '<script type="module">' + imps.join('') + atts.join('') + '<\/script>';
     }
+
+    // Chart.js + d3 still ship UMD bundles — load as classic globals.
+    var autoLibs = [];
     if (_refs(/\bChart\b/) && !_has(/chart(\.min)?\.js|chart\.js@|unpkg\.com\/chart\.js|cdn\.jsdelivr\.net\/npm\/chart\.js/i)) {
       autoLibs.push('https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js');
     }
     if (_refs(/\bd3\b/) && !_has(/d3(\.min)?\.js|d3@|unpkg\.com\/d3|cdn\.jsdelivr\.net\/npm\/d3/i)) {
       autoLibs.push('https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js');
     }
-    var autoLibTags = autoLibs.map(function(u){ return '<script src="' + u + '"><\/script>'; }).join('');
+    var autoLibTags = importMapTag + autoLibs.map(function(u){ return '<script src="' + u + '"><\/script>'; }).join('');
     // If html is empty but js needs a canvas (common 3D widget pattern),
     // inject a default <canvas> filling the iframe so getElementById doesn't
     // return null and the WebGLRenderer can mount.
@@ -63,6 +91,41 @@
       var id = m ? m[1] : 'c';
       bodyHtml = '<canvas id="' + id + '" style="display:block;width:100%;height:100%"></canvas>';
     }
+
+    // Snapshot + resize glue — appended to whichever bundle script we emit.
+    var glueJs =
+      'function _reportH(){var h=Math.max(document.documentElement.scrollHeight,document.body?document.body.scrollHeight:0);parent.postMessage({source:"fauna-widget",widgetId:' + JSON.stringify(widgetId) + ',type:"event",event:"resize",data:{height:h}},"*");}' +
+      'setTimeout(_reportH,50);setTimeout(_reportH,300);setTimeout(_reportH,1000);' +
+      'try{if(window.ResizeObserver){var _ro=new ResizeObserver(_reportH);_ro.observe(document.documentElement);if(document.body)_ro.observe(document.body);}}catch(_){}' +
+      'window.addEventListener("message",function(ev){' +
+        'var d=ev.data||{};if(d.source!=="fauna-host"||d.widgetId!==' + JSON.stringify(widgetId) + '||d.type!=="snapshot")return;' +
+        'var reqId=d.reqId;var reply={source:"fauna-widget",widgetId:' + JSON.stringify(widgetId) + ',type:"snapshot_result",reqId:reqId};' +
+        'try{' +
+          'var cv=document.querySelector("canvas");' +
+          'if(cv&&cv.toDataURL){reply.dataUrl=cv.toDataURL("image/png");parent.postMessage(reply,"*");return;}' +
+          'var w=document.documentElement.scrollWidth||640;var h=document.documentElement.scrollHeight||480;' +
+          'var svg=\'<svg xmlns="http://www.w3.org/2000/svg" width="\'+w+\'" height="\'+h+\'"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml">\'+document.documentElement.outerHTML.replace(/<script[\\s\\S]*?<\\/script>/g,"")+\'</div></foreignObject></svg>\';' +
+          'reply.svg=svg;parent.postMessage(reply,"*");' +
+        '}catch(err){reply.error=String(err&&err.message||err);parent.postMessage(reply,"*");}' +
+      '});' +
+      'parent.postMessage({source:"fauna-widget",widgetId:' + JSON.stringify(widgetId) + ',type:"ready"},"*");';
+
+    var bundleScript;
+    if (useImportmap) {
+      // ES module bundle — top-level `import` works; isolation is automatic.
+      // Errors surface via the global error/unhandledrejection handlers.
+      bundleScript =
+        '<script type="module">\n' + js + '\n<\/script>' +
+        '<script type="module">' + glueJs + '<\/script>';
+    } else {
+      // Classic bundle — wrap in IIFE + try/catch for back-compat with bundles
+      // that rely on implicit globals.
+      bundleScript =
+        '<script>(function(){try{' + js + '}catch(err){' +
+          'document.getElementById("root").innerHTML+="<pre style=\\"color:#f85149;white-space:pre-wrap\\">Widget script error: "+(err&&err.message||err)+"</pre>";' +
+        '}' + glueJs + '})();<\/script>';
+    }
+
     // Mirror lib/dynamic-widgets.js buildWidgetSrcdoc — kept inline so the
     // frontend doesn't need to round-trip the assembled HTML over the wire.
     return '<!doctype html><html><head>' +
@@ -72,6 +135,11 @@
       '<style>html,body{margin:0;padding:0;font-family:system-ui,-apple-system,sans-serif;color:#e6e6e6;background:transparent}' +
       css + '</style></head><body>' +
       '<div id="root" style="width:100vw;height:100vh">' + bodyHtml + '</div>' +
+      // Global error handlers — catch SyntaxError + import-loader 404s + uncaught
+      // runtime errors + unhandled promise rejections from module bundles.
+      '<script>(function(){function show(msg){try{var r=document.getElementById("root");if(!r)return;r.innerHTML+=\'<pre style="color:#f85149;white-space:pre-wrap;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;padding:8px;margin:8px;border:1px solid rgba(248,81,73,.4);border-radius:6px;background:rgba(248,81,73,.08)">Widget script error: \'+msg+\'</pre>\';}catch(_){}}window.addEventListener("error",function(ev){show((ev&&(ev.message||(ev.error&&ev.error.message)))||"unknown error");});window.addEventListener("unhandledrejection",function(ev){var r=ev&&ev.reason;show((r&&(r.message||String(r)))||"unhandled promise rejection");});})();<\/script>' +
+      // Widget API setup — synchronous classic <script> so window.widget is
+      // ready before any deferred <script type="module"> bundle runs.
       '<script>(function(){' +
         'var handlers={};' +
         'var widget={id:' + JSON.stringify(widgetId) + ',' +
@@ -89,29 +157,10 @@
             'parent.postMessage(reply,"*");' +
           '}' +
         '});' +
-        'try{' + js + '}catch(err){' +
-          'document.getElementById("root").innerHTML+="<pre style=\\"color:#f85149;white-space:pre-wrap\\">Widget script error: "+(err&&err.message||err)+"</pre>";' +
-        '}' +
-        'parent.postMessage({source:"fauna-widget",widgetId:widget.id,type:"ready"},"*");' +
-        // Auto-resize: report content height to parent so the iframe grows to fit.
-        'function _reportH(){var h=Math.max(document.documentElement.scrollHeight,document.body?document.body.scrollHeight:0);parent.postMessage({source:"fauna-widget",widgetId:widget.id,type:"event",event:"resize",data:{height:h}},"*");}' +
-        'setTimeout(_reportH,50);setTimeout(_reportH,300);setTimeout(_reportH,1000);' +
-        'try{if(window.ResizeObserver){var _ro=new ResizeObserver(_reportH);_ro.observe(document.documentElement);if(document.body)_ro.observe(document.body);}}catch(_){}' +
-        // Snapshot handler: parent asks for an image of the widget. We try the
-        // first <canvas> first (works for 3D / chart widgets), then fall back to
-        // an SVG-foreignObject rasterisation of <body>.
-        'window.addEventListener("message",function(ev){' +
-          'var d=ev.data||{};if(d.source!=="fauna-host"||d.widgetId!==widget.id||d.type!=="snapshot")return;' +
-          'var reqId=d.reqId;var reply={source:"fauna-widget",widgetId:widget.id,type:"snapshot_result",reqId:reqId};' +
-          'try{' +
-            'var cv=document.querySelector("canvas");' +
-            'if(cv&&cv.toDataURL){reply.dataUrl=cv.toDataURL("image/png");parent.postMessage(reply,"*");return;}' +
-            'var w=document.documentElement.scrollWidth||640;var h=document.documentElement.scrollHeight||480;' +
-            'var svg=\'<svg xmlns="http://www.w3.org/2000/svg" width="\'+w+\'" height="\'+h+\'"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml">\'+document.documentElement.outerHTML.replace(/<script[\\s\\S]*?<\\/script>/g,"")+\'</div></foreignObject></svg>\';' +
-            'reply.svg=svg;parent.postMessage(reply,"*");' +
-          '}catch(err){reply.error=String(err&&err.message||err);parent.postMessage(reply,"*");}' +
-        '});' +
-      '})();</script></body></html>';
+      '})();<\/script>' +
+      backCompatPreamble +
+      bundleScript +
+      '</body></html>';
   }
 
   function mountWidget(evt, targetEl) {
