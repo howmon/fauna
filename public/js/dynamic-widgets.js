@@ -34,6 +34,14 @@
     var refsThree = _refs(/\bTHREE\b/) || _has(/\bfrom\s+['"]three(\/|['"])/);
     var hasHandLoadedThree = _has(/three(\.min|\.module(\.min)?)?\.js\b|three@|three\/addons/i);
     var useImportmap = refsThree && !hasHandLoadedThree;
+    // Detect top-level ES module syntax independently. If the bundle uses
+    // static `import ... from ...` / `export ...` / side-effect `import '...'`,
+    // it MUST be emitted as <script type="module"> or the browser throws
+    // "Cannot use import statement outside a module" at parse time. Separate
+    // from the importmap decision (e.g. bundle that imports directly from an
+    // esm.sh URL hand-loads three but still needs module wrapping).
+    var usesEsmSyntax = /^[ \t]*(import|export)\s+(?!\()/m.test(js);
+    var useModuleBundle = useImportmap || usesEsmSyntax;
 
     var importMapTag = '';
     var backCompatPreamble = '';
@@ -111,7 +119,7 @@
       'parent.postMessage({source:"fauna-widget",widgetId:' + JSON.stringify(widgetId) + ',type:"ready"},"*");';
 
     var bundleScript;
-    if (useImportmap) {
+    if (useModuleBundle) {
       // ES module bundle — top-level `import` works; isolation is automatic.
       // Errors surface via the global error/unhandledrejection handlers.
       bundleScript =
