@@ -17,6 +17,7 @@ import {
   deleteDocument as ctxDeleteDoc,
   getStats as ctxGetStats,
 } from './server/lib/context-store.js';
+import { retrieveOutput } from './server/lib/tool-output-cache.js';
 import {
   createProject, getAllProjects, getProject,
   addBacklogItem, listBacklog, prioritizeBacklog,
@@ -1955,6 +1956,20 @@ export const SELF_TOOL_DEFS = [
       parameters: { type: 'object', properties: {} },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_retrieve_output',
+      description: 'Retrieve the FULL original output of an earlier tool call that was compressed/offloaded. When a tool result ends with a marker like `retrieve with fauna_retrieve_output("<hash>")`, call this with that hash to get back the complete uncompressed content (e.g. the dropped rows of a large array or the elided middle of a long log). Only call this when you genuinely need the dropped detail — the compressed view usually suffices.',
+      parameters: {
+        type: 'object',
+        properties: {
+          hash: { type: 'string', description: 'The 12-char hash from the offload marker.' },
+        },
+        required: ['hash'],
+      },
+    },
+  },
 ];
 
 // ── Dynamic Widget tool definitions (gated by enableDynamicWidgets flag) ──
@@ -3135,6 +3150,14 @@ export function executeSelfTool(toolName, args, context = {}) {
     }
     case 'fauna_image_gen_status': {
       return JSON.stringify({ ok: true, available: availableImageGen() });
+    }
+
+    case 'fauna_retrieve_output': {
+      const original = retrieveOutput(args.hash);
+      if (original == null) {
+        return JSON.stringify({ ok: false, error: `No offloaded output found for hash "${args.hash}". It may have expired or never been stashed.` });
+      }
+      return original;
     }
 
     default:

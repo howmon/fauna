@@ -29,6 +29,8 @@ import { GEN_UI_CATALOG_PROMPT, GEN_UI_SHORT_HINT } from '../prompts/gen-ui-cata
 import { FAUNA_CORE_GUIDELINES, FAUNA_FRONTEND_QUALITY } from '../prompts/core-guidelines.js';
 import { computeContextFlags, computeToolFlags, filterToolSchemas } from '../prompts/context-gating.js';
 import { SELF_TOOL_DEFS, DYNAMIC_WIDGET_TOOL_DEFS, executeSelfTool, isSelfTool, getActivePlanForConv } from '../../self-tools.js';
+import { compressToolOutput } from '../lib/compress-tool-output.js';
+import { stashOutput } from '../lib/tool-output-cache.js';
 import { runShell, formatShellResultForLLM, isCommandSafe } from '../lib/shell-runner.js';
 import { maybeRegister as registerDevServer, isDevServerCommand } from '../lib/dev-server-registry.js';
 import { spawn as _spawnDetached } from 'child_process';
@@ -43,6 +45,7 @@ import { getAgentTools, startAgentMCPServers } from '../../agent-tools.js';
 import { formatForSystemPrompt as factsForSystemPrompt, getStats as factsGetStats, remember as factsRemember, projectContainerTag } from '../../memory-store.js';
 import { buildProjectProfile, formatProfileForPrompt } from '../lib/profile.js';
 import { extractFacts as extractMemoryFacts } from '../lib/memory-extractor.js';
+import { extractCorrections } from '../lib/failure-learning.js';
 import { getProjectSystemContext, buildContextPayload, getProject, appendAutonomousRunLog } from '../../project-manager.js';
 import { estimateTokens, computeBudget } from '../lib/token-budget.js';
 import { summarizeHistory } from '../lib/summarize-history.js';
@@ -372,40 +375,55 @@ export function registerChatRoute(app, {
         }
       })();
 
+      // Cache-stable layout (headroom CacheAligner idea): the provider's
+      // prompt cache only hits while the PREFIX stays byte-identical across
+      // turns. So we group blocks into three zones, most-stable first:
+      //   1. STABLE PREFIX  — constant for the whole conversation/session.
+      //   2. MONOTONIC DOCS — gated capability docs that flip on once and
+      //      then stay (sticky), so they extend the cacheable region.
+      //   3. VOLATILE SUFFIX — project state, facts, summaries, plan: these
+      //      change turn-to-turn, so they go last where a cache miss is cheap.
       const fullSystem = [
+        // ── 1. STABLE PREFIX ───────────────────────────────────────────────
         // Core guidelines: persistence, formatting, frontend quality, search defaults.
         // Baked into every conversation (skipped for delegation sub-agents to save tokens —
         // the orchestrator already enforces these and re-stating them in delegates wastes context).
         isDelegation ? '' : FAUNA_CORE_GUIDELINES,
-        // Codex-parity: heavy capability docs (gen-ui catalog ~5k, browser
-        // ~1.5k, frontend quality ~400) are injected only when the current
-        // turn or conversation actually needs them (see _ctxFlags above).
-        // Saves ~6k tokens on a typical "explain this code" turn.
-        isDelegation ? '' : projectCtx,
-        factsCtx,
-        (isCLI || noTools) ? '' : (_ctxFlags.browser ? browserBuildContext : ''),
-        (isCLI || noTools) ? '' : (_ctxFlags.browser ? buildBrowserExtContext() : ''),
-        (isDelegation || isCLI || noTools) ? '' : (_ctxFlags.genui ? GEN_UI_CATALOG_PROMPT : GEN_UI_SHORT_HINT),
-        (isDelegation || !_ctxFlags.frontend) ? '' : FAUNA_FRONTEND_QUALITY,
-        contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '',
-        activePlanCtx,
-        figmaFilesCtx,
         // When running against a local model that doesn't support OpenAI tool
         // calling, tell it explicitly — otherwise it will hallucinate tool
-        // invocations in prose. The user can still ask for code, advice, or
-        // explanations; only the agentic tools are unavailable.
+        // invocations in prose. Constant per session, so it lives in the prefix.
         (!llmSupports.tools && llmProviderId !== 'copilot')
           ? '\n## Tool Availability\nYou are running on a local model that does not support tool calls in this session. Do NOT pretend to call shell, browser, file, or MCP tools — there is no execution environment. Answer the user directly in plain text or markdown. If the user asks for an action requiring tools, tell them to switch to a Copilot model.'
           : '',
         // Autonomous mode adds the DONE/BLOCKED/NEEDS-INPUT marker contract,
-        // acceptance criteria, and QA gate. Baseline persistence already lives
-        // in FAUNA_CORE_GUIDELINES — this block only adds the verified-completion contract.
+        // acceptance criteria, and QA gate. Constant for the whole run, so it
+        // belongs in the stable prefix (acceptance criteria are fixed up-front).
         autonomousMode
           ? '\n## Autonomous Completion Contract\nThis conversation is running until done. Your FINAL message MUST start with exactly one of these markers on its own line: `DONE:` (work verified complete), `BLOCKED:` (cannot proceed without external action), or `NEEDS-INPUT:` (require user info). After the marker, list which acceptance criteria you verified and how.'
             + (effectiveAcceptance ? `\n\n## Acceptance Criteria\n${effectiveAcceptance}\n\nDo not emit DONE: until every criterion above is verifiably satisfied. Cite the verification (tool output, test run, file path) for each one in your final message.` : '')
             + (qaCommand ? `\n\n## QA Gate\nBefore you emit DONE:, fauna will automatically run \`${qaCommand}\` and feed the result back as a tool message. If it fails, you must address the failure and continue — do NOT emit DONE: on a failing QA run.` : '')
             + (deployCommand ? `\n\n## Deploy Gate\nThe user has APPROVED deploying this run. After QA passes (or after DONE: when no QA is configured), fauna will automatically run \`${deployCommand}\`. Treat the deploy output as part of the verification — if it fails, do NOT emit DONE: until the deploy succeeds or you escalate with BLOCKED:.` : '')
-          : ''
+          : '',
+        // ── 2. MONOTONIC capability docs ───────────────────────────────────
+        // Codex-parity: heavy capability docs (gen-ui catalog ~5k, browser
+        // ~1.5k, frontend quality ~400) are injected only when the current
+        // turn or conversation actually needs them (see _ctxFlags above).
+        // Saves ~6k tokens on a typical "explain this code" turn. The sticky
+        // flags make these monotonic (once on, stay on) so they sit right
+        // after the stable prefix and rarely break the cache once present.
+        (isCLI || noTools) ? '' : (_ctxFlags.browser ? browserBuildContext : ''),
+        (isCLI || noTools) ? '' : (_ctxFlags.browser ? buildBrowserExtContext() : ''),
+        (isDelegation || isCLI || noTools) ? '' : (_ctxFlags.genui ? GEN_UI_CATALOG_PROMPT : GEN_UI_SHORT_HINT),
+        (isDelegation || !_ctxFlags.frontend) ? '' : FAUNA_FRONTEND_QUALITY,
+        // ── 3. VOLATILE SUFFIX ─────────────────────────────────────────────
+        // These change turn-to-turn (project edits, fact access/scoring,
+        // growing summary, plan updates), so a cache miss here is unavoidable
+        // and cheap — keep them last to protect the cacheable prefix above.
+        isDelegation ? '' : projectCtx,
+        factsCtx,
+        contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '',
+        activePlanCtx,
+        figmaFilesCtx,
       ].filter(Boolean).join('\n');
       if (fullSystem) allMessages.push({ role: 'system', content: fullSystem });
 
@@ -975,6 +993,17 @@ export function registerChatRoute(app, {
         // full node tree, and stale-shrink elides older calls anyway.
         figma_execute: 20000,
       };
+      // Latest user message text — feeds the relevance scorer in
+      // compressToolOutput so query-relevant rows survive compression.
+      const _lastUserQuery = (() => {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const m = messages[i];
+          if (!m || m.role !== 'user') continue;
+          if (typeof m.content === 'string') return m.content;
+          if (Array.isArray(m.content)) return m.content.filter((p) => p && typeof p.text === 'string').map((p) => p.text).join(' ');
+        }
+        return '';
+      })();
       // Tools whose results must never be stale-shrunk — typically tools that
       // inject persistent instructions/rules that the model needs to keep
       // referring to throughout the turn.
@@ -1426,13 +1455,20 @@ export function registerChatRoute(app, {
               // window — losing the failing tail is what confuses the model.
               const resultCap = PER_TOOL_MAX_CHARS[toolName] || MAX_RESULT_CHARS;
               if (typeof result === 'string' && result.length > resultCap) {
-                const original = result.length;
-                const tailBudget = Math.min(2000, Math.floor(resultCap * 0.1));
-                const headBudget = resultCap - tailBudget;
-                result =
-                  result.slice(0, headBudget) +
-                  `\n\n[\u2026 truncated ${original - resultCap} chars; showing first ${headBudget} + last ${tailBudget} of ${original} total \u2026]\n\n` +
-                  result.slice(-tailBudget);
+                // Structure-aware compression: keep first/last items, error
+                // rows, query-relevant rows + a sample (JSON) or head/tail +
+                // error lines (logs) — instead of a blind char slice that can
+                // drop the failing row/line out of the middle.
+                const compressed = compressToolOutput(result, { cap: resultCap, query: _lastUserQuery });
+                if (compressed.modified) {
+                  // Reversible offload: stash the full original so the model can
+                  // retrieve the dropped content on demand instead of re-running
+                  // the tool. Append the retrieval pointer when the stash sticks.
+                  const hash = stashOutput(compressed.original);
+                  result = hash
+                    ? compressed.text + `\n[full original (${result.length} chars) offloaded \u2014 retrieve with fauna_retrieve_output("${hash}")]`
+                    : compressed.text;
+                }
               }
               toolCallsSeen.set(callKey, result);
               // Safe serialize — non-string results may contain circular refs
@@ -1760,6 +1796,22 @@ export function registerChatRoute(app, {
                   if (facts.length) console.log('[chat] autonomous reflection saved ' + facts.length + ' fact(s)');
                 } catch (e) { console.warn('[chat] reflection failed:', e?.message || e); }
               })();
+            }
+
+            // Failure→fix learning (headroom `learn`): pair each failed tool
+            // call with the next successful one and persist the concrete
+            // correction (wrong path → right path, failed cmd → working cmd)
+            // as a fact, so future turns avoid the same wasted retries. Pure +
+            // LLM-free, so it's safe to run synchronously at end-of-loop.
+            if (!continueLoop && !isDelegation && !isCLI && projectId && Array.isArray(allMessages)) {
+              try {
+                const corrections = extractCorrections(allMessages);
+                let savedCorrections = 0;
+                for (const c of corrections) {
+                  try { const r = factsRemember(c.text, c.category); if (r && r.ok) savedCorrections++; } catch (_) {}
+                }
+                if (savedCorrections) console.log(`[chat] failure-learning saved ${savedCorrections} correction(s)`);
+              } catch (e) { console.warn('[chat] failure-learning failed:', e?.message || e); }
             }
 
             // Phase 1: generic auto-extraction. Runs at end-of-loop for any

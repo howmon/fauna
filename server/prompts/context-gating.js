@@ -89,7 +89,7 @@ const TOOL_CLUSTERS = {
     'fauna_remember', 'fauna_recall', 'fauna_forget',
     'fauna_get_settings', 'fauna_save_instruction', 'fauna_send_notification',
     'fauna_list_models', 'fauna_switch_model', 'fauna_set_thinking_budget',
-    'fauna_list_projects',
+    'fauna_list_projects', 'fauna_retrieve_output',
   ]),
   // Code editing + shell. The most-used cluster. Triggered by almost any
   // engineering request.

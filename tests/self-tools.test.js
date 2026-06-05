@@ -60,7 +60,8 @@ describe('self-tools', () => {
       // Bumped to 59 — Phase 3 adds 4 context tools (search/ingest/list/delete).
       // Bumped to 62 after adding AI image generation (fauna_image_generate +
       // fauna_image_edit + fauna_image_gen_status).
-      expect(SELF_TOOL_DEFS).toHaveLength(62);
+      // Bumped to 63 after adding fauna_retrieve_output (reversible tool-output offload).
+      expect(SELF_TOOL_DEFS).toHaveLength(63);
     });
 
     it('each tool has required OpenAI function format', () => {
