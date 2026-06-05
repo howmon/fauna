@@ -55,6 +55,16 @@ describe('storyteller prompt assembly', () => {
     expect(cleaned).not.toContain('`');
     expect(cleaned).not.toContain('- ');
   });
+
+  it('unwraps a script wrapped in a single code fence (not delete it)', () => {
+    const cleaned = _internals._stripMarkdown('```\nTuesday, 2pm.\nYou opened the wrong tab.\n```');
+    expect(cleaned).toBe('Tuesday, 2pm.\nYou opened the wrong tab.');
+  });
+
+  it('unwraps a fenced script that carries a language tag', () => {
+    const cleaned = _internals._stripMarkdown('```text\n3:14 pm. You opened Slack.\n```');
+    expect(cleaned).toBe('3:14 pm. You opened Slack.');
+  });
 });
 
 describe('generateScript resilience', () => {

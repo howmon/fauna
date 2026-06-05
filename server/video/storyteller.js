@@ -83,8 +83,15 @@ function _interp(tpl, vars) {
 }
 
 function _stripMarkdown(s) {
-  return String(s || '')
-    .replace(/```[\s\S]*?```/g, '')        // fenced code
+  let out = String(s || '');
+  // Models often disobey "no markdown" and wrap the whole script in a single
+  // ```fence```. Unwrap it (keep the inner script) rather than deleting the
+  // block — deleting it leaves an empty string and the pipeline then reports
+  // "LLM returned empty script" even though the model produced a fine script.
+  const wholeFence = out.match(/^\s*```[\w-]*\s*\n([\s\S]*?)\n?\s*```\s*$/);
+  if (wholeFence) out = wholeFence[1];
+  return out
+    .replace(/```[\w-]*\n?/g, '')           // stray fence markers (keep content)
     .replace(/^\s*#+\s.*$/gm, '')           // headings
     .replace(/[*_`>]/g, '')                  // emphasis chars
     .replace(/^\s*[-•]\s+/gm, '')           // bullets
@@ -126,7 +133,13 @@ export async function generateScript({ subject, durationSec = 30, language = 'en
       }), SCRIPT_TIMEOUT_MS, 'video script generation');
       const raw = r?.choices?.[0]?.message?.content || '';
       const script = _stripMarkdown(raw);
-      if (!script) throw new Error('LLM returned empty script');
+      if (!script) {
+        // Distinguish a truly-empty completion from one that stripped to empty
+        // (e.g. the model returned only markdown/headings). Helps diagnose
+        // recurring "empty script" failures without re-running the pipeline.
+        console.warn('[storyteller] empty script after strip (attempt ' + (attempt + 1) + '); raw length=' + raw.length + (raw.length ? ' preview=' + JSON.stringify(raw.slice(0, 120)) : ''));
+        throw new Error('LLM returned empty script');
+      }
       return { script, wordCount: _wordCount(script), language };
     } catch (e) {
       lastErr = e;
