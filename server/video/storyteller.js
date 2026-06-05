@@ -12,6 +12,23 @@ import { withTimeout } from '../lib/async-utils.js';
 // when the upstream API is healthy.
 const SCRIPT_TIMEOUT_MS = 90_000;
 
+// Some Copilot-served models (observed with Claude Sonnet on certain prompts)
+// return an empty `choices: []` while still consuming the entire output-token
+// budget — the model "thinks" itself out of any visible content. Retrying the
+// SAME model just burns time, so on an empty completion we fall through to a
+// known-reliable fallback. gpt-4.1 produces this kind of short script in ~100
+// tokens, so it's both cheaper and far more dependable here.
+const SCRIPT_FALLBACK_MODEL = 'gpt-4.1';
+
+// Build the ordered list of models to try: the requested model first, then the
+// fallback (de-duped so we never call the same model twice).
+function _modelChain(primary) {
+  const chain = [];
+  if (primary) chain.push(primary);
+  if (SCRIPT_FALLBACK_MODEL && SCRIPT_FALLBACK_MODEL !== primary) chain.push(SCRIPT_FALLBACK_MODEL);
+  return chain.length ? chain : [SCRIPT_FALLBACK_MODEL];
+}
+
 const SCRIPT_PROMPT = `# Role: Short-form Video Scriptwriter
 
 You write punchy, specific, memorable scripts for vertical short-form video (TikTok / Reels / Shorts). Think of the best creators in the space — they earn the next second of attention with concrete detail, surprising specifics, and a real point of view. They do NOT sound like SaaS landing pages.
@@ -119,14 +136,17 @@ export async function generateScript({ subject, durationSec = 30, language = 'en
   // ~2.4 words/sec is conversational US English. Slow voices ~2.0, fast ~2.8.
   const wordsTarget = Math.max(20, Math.round(durationSec * 2.4));
   const prompt = _interp(SCRIPT_PROMPT, { subject, durationSec, wordsTarget });
-  // One retry: an empty completion or a transient API hiccup on the first call
-  // shouldn't surface as a hard 500. The second attempt is bounded by the same
-  // timeout so the worst case stays predictable.
+  // Try the requested model, then a reliable fallback. An empty completion or
+  // a transient API hiccup shouldn't surface as a hard 500: the most common
+  // real-world failure is the primary model returning empty `choices`, so the
+  // fallback model is what actually rescues the job. Each attempt is bounded by
+  // the same timeout so the worst case stays predictable.
+  const models = _modelChain(model);
   let lastErr;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (const m of models) {
     try {
       const r = await withTimeout(client.chat.completions.create({
-        model,
+        model: m,
         messages: [{ role: 'user', content: prompt }],
         temperature: 1.0,
         max_tokens: 1024,
@@ -134,18 +154,19 @@ export async function generateScript({ subject, durationSec = 30, language = 'en
       const raw = r?.choices?.[0]?.message?.content || '';
       const script = _stripMarkdown(raw);
       if (!script) {
-        // Distinguish a truly-empty completion from one that stripped to empty
-        // (e.g. the model returned only markdown/headings). Helps diagnose
-        // recurring "empty script" failures without re-running the pipeline.
-        console.warn('[storyteller] empty script after strip (attempt ' + (attempt + 1) + '); raw length=' + raw.length + (raw.length ? ' preview=' + JSON.stringify(raw.slice(0, 120)) : ''));
-        throw new Error('LLM returned empty script');
+        // An empty body with choices:[] (some models burn the whole token
+        // budget producing nothing) vs. content that stripped to empty — log
+        // both so recurring failures are diagnosable without re-running.
+        const noChoices = !(r?.choices?.length);
+        console.warn('[storyteller] empty script from model=' + m + (noChoices ? ' (no choices returned)' : ' after strip; raw length=' + raw.length) + '; trying next model if any');
+        throw new Error('LLM returned empty script (model=' + m + ')');
       }
-      return { script, wordCount: _wordCount(script), language };
+      return { script, wordCount: _wordCount(script), language, model: m };
     } catch (e) {
       lastErr = e;
     }
   }
-  throw new Error('Script generation failed after a retry: ' + (lastErr?.message || lastErr));
+  throw new Error('Script generation failed (tried ' + models.join(', ') + '): ' + (lastErr?.message || lastErr));
 }
 
 /**
@@ -156,13 +177,22 @@ export async function generateTerms({ subject, script, client, model = 'claude-s
   if (!script) throw new Error('script is required');
   if (!client) throw new Error('client is required');
   const prompt = _interp(TERMS_PROMPT, { subject: subject || '', script });
-  const r = await withTimeout(client.chat.completions.create({
-    model,
-    messages: [{ role: 'user', content: prompt }],
-    temperature: 0.5,
-    max_tokens: 256,
-  }), SCRIPT_TIMEOUT_MS, 'video terms generation');
-  const raw = r?.choices?.[0]?.message?.content || '';
+  // Same fallback strategy as generateScript: if the primary model returns an
+  // empty body, try the reliable fallback before giving up. Terms have a hard
+  // fallback below (chunk the script), but a real model response is far better.
+  let raw = '';
+  for (const m of _modelChain(model)) {
+    try {
+      const r = await withTimeout(client.chat.completions.create({
+        model: m,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.5,
+        max_tokens: 256,
+      }), SCRIPT_TIMEOUT_MS, 'video terms generation');
+      raw = r?.choices?.[0]?.message?.content || '';
+      if (raw.trim()) break;
+    } catch (_) { /* try next model */ }
+  }
   // Try clean JSON, then fall back to a bracket-extraction regex.
   let terms = null;
   try { terms = JSON.parse(raw); } catch (_) {}

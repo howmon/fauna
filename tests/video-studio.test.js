@@ -68,24 +68,26 @@ describe('storyteller prompt assembly', () => {
 });
 
 describe('generateScript resilience', () => {
-  it('retries once when the first completion is empty', async () => {
+  it('falls back to the next model when the first completion is empty', async () => {
     const client = mockClient(['', 'Tuesday, 2pm. You opened the wrong tab.']);
     const r = await generateScript({ subject: 'focus', client });
     expect(r.script).toContain('Tuesday');
     expect(client.calls).toHaveLength(2);
+    // The successful attempt should report the fallback model it used.
+    expect(r.model).toBe('gpt-4.1');
   });
 
-  it('retries once when the first call throws, then succeeds', async () => {
+  it('falls back to the next model when the first call throws, then succeeds', async () => {
     const client = mockClient([new Error('upstream 503'), 'A real script line.']);
     const r = await generateScript({ subject: 'focus', client });
     expect(r.script).toContain('real script');
     expect(client.calls).toHaveLength(2);
   });
 
-  it('throws an actionable error after both attempts fail', async () => {
+  it('throws an actionable error after every model fails', async () => {
     const client = mockClient([new Error('boom'), new Error('boom again')]);
     await expect(generateScript({ subject: 'focus', client }))
-      .rejects.toThrow(/failed after a retry/i);
+      .rejects.toThrow(/Script generation failed \(tried/i);
     expect(client.calls).toHaveLength(2);
   });
 
