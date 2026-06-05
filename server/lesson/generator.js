@@ -28,8 +28,14 @@ import {
 import { FFMPEG_PATH } from '../video/ffmpeg-path.js';
 import { splitIntoCues } from '../video/narration.js';
 import { extractSourceText } from './source-extract.js';
+import { withTimeout } from '../lib/async-utils.js';
 
 const LESSONS_ROOT = path.join(os.homedir(), '.fauna', 'lessons');
+
+// Hard cap on a single lesson-script LLM call so a stalled completion fails
+// fast instead of hanging the tool call for minutes. The DSL is small enough
+// that a healthy generation finishes well inside this window.
+const LESSON_SCRIPT_TIMEOUT_MS = 120_000;
 
 function _run(cmd, args) {
   return new Promise((resolve, reject) => {
@@ -240,11 +246,17 @@ ${_kindsCatalog()}
 Generate the lesson now.`;
 }
 
-export async function generateLessonDSL({ topic, durationMin = 5, voice, client, model = 'claude-sonnet-4.6', sourceText, sourceKind }) {
+export async function generateLessonDSL({ topic, durationMin = 5, voice, client, model = 'claude-sonnet-4.6', sourceText, sourceKind, repair }) {
   if (!topic || !String(topic).trim()) throw new Error('topic is required');
   if (!client) throw new Error('client is required');
-  const user = _scriptUserPrompt({ topic, durationMin, voice, sourceText, sourceKind });
-  const r = await client.chat.completions.create({
+  let user = _scriptUserPrompt({ topic, durationMin, voice, sourceText, sourceKind });
+  // Repair pass: feed the previous attempt's problems back so the model fixes
+  // them in place rather than regenerating blind.
+  if (repair?.errors?.length) {
+    user += '\n\n## Your previous attempt was rejected\nFix every problem below and return a corrected JSON object. Output ONLY the JSON — no prose, no code fences.\n'
+      + repair.errors.map(e => '- ' + e).join('\n');
+  }
+  const r = await withTimeout(client.chat.completions.create({
     model,
     messages: [
       { role: 'system', content: SCRIPT_SYSTEM },
@@ -252,7 +264,7 @@ export async function generateLessonDSL({ topic, durationMin = 5, voice, client,
     ],
     temperature: 0.7,
     max_tokens: 8192,
-  });
+  }), LESSON_SCRIPT_TIMEOUT_MS, 'lesson script generation');
   const raw = (r?.choices?.[0]?.message?.content || '').trim();
   // Strip ``` fences if the model defied instructions.
   let body = raw;
@@ -505,9 +517,40 @@ export async function createLesson({ topic, durationMin = 5, voice, client, mode
       title: narr.title, subject: narr.subject, voice: narr.voice,
     });
   } else {
-    // Default whiteboard-lesson mode (LLM-generated layout).
+    // Default whiteboard-lesson mode (LLM-generated layout). Generate, then
+    // validate. If the model returned un-parseable or invalid DSL, do ONE
+    // internal repair pass (feeding the problems back) before giving up. This
+    // keeps a transient formatting failure contained inside a single tool
+    // call instead of forcing the agent to blindly re-invoke the whole
+    // expensive pipeline — the multi-minute retry loop we want to avoid.
     if (onProgress) onProgress({ phase: 'script' });
-    dsl = await generateLessonDSL({ topic, durationMin, voice, client, model, sourceText, sourceKind });
+    let problems = null;
+    try {
+      dsl = await generateLessonDSL({ topic, durationMin, voice, client, model, sourceText, sourceKind });
+      const v0 = validateLesson(dsl);
+      if (!v0.ok) problems = v0.errors;
+    } catch (e) {
+      problems = [e.message];
+    }
+    if (problems) {
+      if (onProgress) onProgress({ phase: 'script-repair', errors: problems });
+      try {
+        dsl = await generateLessonDSL({
+          topic, durationMin, voice, client, model, sourceText, sourceKind,
+          repair: { errors: problems },
+        });
+      } catch (e) {
+        const err = new Error('Lesson script generation failed twice (' + e.message + '). Do NOT retry fauna_lesson_create for the same topic — fall back to fauna_video_create or deliver the lesson as written notes.');
+        err.code = 'LESSON_GEN_FAILED';
+        throw err;
+      }
+      const vr = validateLesson(dsl);
+      if (!vr.ok) {
+        const err = new Error('Lesson layout still invalid after a repair pass (' + vr.errors.join('; ') + '). Do NOT retry fauna_lesson_create for the same topic — fall back to fauna_video_create or deliver the lesson as written notes.');
+        err.code = 'LESSON_DSL_INVALID';
+        throw err;
+      }
+    }
   }
 
   const v = validateLesson(dsl);

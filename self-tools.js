@@ -3038,6 +3038,7 @@ export async function executeSelfTool(toolName, args, context = {}) {
                 : evt.phase === 'soffice-install-done' ? `LibreOffice install ${evt.exitCode === 0 ? 'complete' : 'failed (exit ' + evt.exitCode + ')'}`
                 : evt.phase === 'slides-copy' ? `Copying ${evt.slideCount} slide images…`
                 : evt.phase === 'script' ? 'Drafting lesson script…'
+                : evt.phase === 'script-repair' ? 'Lesson layout needed fixes — regenerating once…'
                 : evt.phase === 'audio-start' ? `Synthesizing audio for ${evt.sceneCount} scenes…`
                 : evt.phase === 'audio' ? `Audio scene ${evt.sceneIndex + 1}/${evt.total}`
                 : evt.phase;
@@ -3066,7 +3067,7 @@ export async function executeSelfTool(toolName, args, context = {}) {
             return JSON.stringify(obj);
           } catch (_) { return widgetResult; }
         } catch (e) {
-          return JSON.stringify({ ok: false, error: e.message });
+          return JSON.stringify({ ok: false, error: e.message, code: e.code || undefined });
         }
       })();
     }

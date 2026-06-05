@@ -9,6 +9,7 @@ import path from 'path';
 import os from 'os';
 
 import { _internals } from '../server/video/storyteller.js';
+import { generateScript } from '../server/video/storyteller.js';
 import { splitIntoCues, buildCues, cuesToSrt } from '../server/video/narration.js';
 import { createJob, getJob, listJobs, patchJob, deleteJob } from '../server/video/job.js';
 import { SELF_TOOL_DEFS } from '../self-tools.js';
@@ -16,6 +17,25 @@ import { SELF_TOOL_DEFS } from '../self-tools.js';
 const JOBS_ROOT = path.join(os.homedir(), '.config', 'fauna', 'video-jobs');
 const _createdInTest = [];
 function track(j) { _createdInTest.push(j.id); return j; }
+
+// Mock OpenAI-shaped client: each call shifts the next canned completion and
+// records the attempt so we can assert retry behavior.
+function mockClient(responses) {
+  const calls = [];
+  return {
+    calls,
+    chat: {
+      completions: {
+        create: async () => {
+          calls.push(1);
+          const next = responses.shift();
+          if (next instanceof Error) throw next;
+          return { choices: [{ message: { content: next } }] };
+        },
+      },
+    },
+  };
+}
 
 describe('storyteller prompt assembly', () => {
   it('interpolates subject + wordsTarget', () => {
@@ -34,6 +54,36 @@ describe('storyteller prompt assembly', () => {
     expect(cleaned).not.toContain('**');
     expect(cleaned).not.toContain('`');
     expect(cleaned).not.toContain('- ');
+  });
+});
+
+describe('generateScript resilience', () => {
+  it('retries once when the first completion is empty', async () => {
+    const client = mockClient(['', 'Tuesday, 2pm. You opened the wrong tab.']);
+    const r = await generateScript({ subject: 'focus', client });
+    expect(r.script).toContain('Tuesday');
+    expect(client.calls).toHaveLength(2);
+  });
+
+  it('retries once when the first call throws, then succeeds', async () => {
+    const client = mockClient([new Error('upstream 503'), 'A real script line.']);
+    const r = await generateScript({ subject: 'focus', client });
+    expect(r.script).toContain('real script');
+    expect(client.calls).toHaveLength(2);
+  });
+
+  it('throws an actionable error after both attempts fail', async () => {
+    const client = mockClient([new Error('boom'), new Error('boom again')]);
+    await expect(generateScript({ subject: 'focus', client }))
+      .rejects.toThrow(/failed after a retry/i);
+    expect(client.calls).toHaveLength(2);
+  });
+
+  it('rejects an empty subject before calling the model', async () => {
+    const client = mockClient(['unused']);
+    await expect(generateScript({ subject: '   ', client }))
+      .rejects.toThrow(/subject is required/i);
+    expect(client.calls).toHaveLength(0);
   });
 });
 

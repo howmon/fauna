@@ -67,7 +67,12 @@ export function registerVideoRoutes(app, { getCopilotClient }) {
       const job = await runStep(req.params.id, req.params.step, { client: getCopilotClient?.(), force });
       res.json({ ok: true, job });
     } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
+      // Distinguish user-fixable input problems (missing subject, prerequisite
+      // step not run) from genuine server/LLM failures so the widget can show
+      // an actionable message instead of a blanket 500.
+      const msg = e.message || String(e);
+      const isValidation = /required|must be generated first|not found/i.test(msg);
+      res.status(isValidation ? 400 : 500).json({ ok: false, error: msg });
     }
   });
 

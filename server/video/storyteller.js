@@ -4,6 +4,14 @@
 // quality matches the upstream community. We deliberately keep the prompts close
 // to verbatim so users get the same hook → beat → CTA rhythm.
 
+import { withTimeout } from '../lib/async-utils.js';
+
+// Hard cap on a single script/terms LLM call so a stalled completion fails
+// fast instead of hanging the pipeline (and the Video Studio widget) for
+// minutes. These are small generations that finish well inside this window
+// when the upstream API is healthy.
+const SCRIPT_TIMEOUT_MS = 90_000;
+
 const SCRIPT_PROMPT = `# Role: Short-form Video Scriptwriter
 
 You write punchy, specific, memorable scripts for vertical short-form video (TikTok / Reels / Shorts). Think of the best creators in the space — they earn the next second of attention with concrete detail, surprising specifics, and a real point of view. They do NOT sound like SaaS landing pages.
@@ -104,16 +112,27 @@ export async function generateScript({ subject, durationSec = 30, language = 'en
   // ~2.4 words/sec is conversational US English. Slow voices ~2.0, fast ~2.8.
   const wordsTarget = Math.max(20, Math.round(durationSec * 2.4));
   const prompt = _interp(SCRIPT_PROMPT, { subject, durationSec, wordsTarget });
-  const r = await client.chat.completions.create({
-    model,
-    messages: [{ role: 'user', content: prompt }],
-    temperature: 1.0,
-    max_tokens: 1024,
-  });
-  const raw = r?.choices?.[0]?.message?.content || '';
-  const script = _stripMarkdown(raw);
-  if (!script) throw new Error('LLM returned empty script');
-  return { script, wordCount: _wordCount(script), language };
+  // One retry: an empty completion or a transient API hiccup on the first call
+  // shouldn't surface as a hard 500. The second attempt is bounded by the same
+  // timeout so the worst case stays predictable.
+  let lastErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await withTimeout(client.chat.completions.create({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 1.0,
+        max_tokens: 1024,
+      }), SCRIPT_TIMEOUT_MS, 'video script generation');
+      const raw = r?.choices?.[0]?.message?.content || '';
+      const script = _stripMarkdown(raw);
+      if (!script) throw new Error('LLM returned empty script');
+      return { script, wordCount: _wordCount(script), language };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw new Error('Script generation failed after a retry: ' + (lastErr?.message || lastErr));
 }
 
 /**
@@ -124,12 +143,12 @@ export async function generateTerms({ subject, script, client, model = 'claude-s
   if (!script) throw new Error('script is required');
   if (!client) throw new Error('client is required');
   const prompt = _interp(TERMS_PROMPT, { subject: subject || '', script });
-  const r = await client.chat.completions.create({
+  const r = await withTimeout(client.chat.completions.create({
     model,
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.5,
     max_tokens: 256,
-  });
+  }), SCRIPT_TIMEOUT_MS, 'video terms generation');
   const raw = r?.choices?.[0]?.message?.content || '';
   // Try clean JSON, then fall back to a bracket-extraction regex.
   let terms = null;
