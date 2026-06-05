@@ -58,7 +58,9 @@ describe('self-tools', () => {
       // Bumped to 48 after adding fauna_lesson_create + fauna_lesson_get + fauna_list_lesson_kinds.
       // Bumped to 50 after adding fauna_db_migration + fauna_verify_build (opinionated app-build mode).
       // Bumped to 59 — Phase 3 adds 4 context tools (search/ingest/list/delete).
-      expect(SELF_TOOL_DEFS).toHaveLength(59);
+      // Bumped to 62 after adding AI image generation (fauna_image_generate +
+      // fauna_image_edit + fauna_image_gen_status).
+      expect(SELF_TOOL_DEFS).toHaveLength(62);
     });
 
     it('each tool has required OpenAI function format', () => {

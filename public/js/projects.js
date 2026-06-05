@@ -142,49 +142,60 @@ function _renderAllProjectsPage() {
     return;
   }
 
-  listEl.innerHTML = projects.map(function(p) {
+  var header =
+    '<div class="all-proj-row all-proj-row-head">' +
+      '<span class="all-proj-col-name">Project</span>' +
+      '<span class="all-proj-col-desc">Description</span>' +
+      '<span class="all-proj-col-num" title="Sources"><i class="ti ti-source-code"></i></span>' +
+      '<span class="all-proj-col-num" title="Conversations"><i class="ti ti-messages"></i></span>' +
+      '<span class="all-proj-col-num" title="Tasks"><i class="ti ti-checklist"></i></span>' +
+      '<span class="all-proj-col-actions"></span>' +
+    '</div>';
+
+  var rows = projects.map(function(p) {
     var convCount = (state.conversations || []).filter(function(c) { return c.projectId === p.id; }).length;
     var taskCount = (p.taskIds || []).length;
     var srcCount  = (p.sources  || []).length;
     var isActive  = p.id === state.activeProjectId;
-    return '<div class="all-proj-card' + (isActive ? ' active' : '') + '">' +
-      '<div class="all-proj-card-top">' +
-        '<span class="proj-dot proj-color-' + _projEsc(p.color) + '" style="width:10px;height:10px;flex-shrink:0"></span>' +
-        '<span class="all-proj-card-name">' + _projEsc(p.name) + '</span>' +
+    return '<div class="all-proj-row' + (isActive ? ' active' : '') + '">' +
+      '<span class="all-proj-col-name">' +
+        '<span class="proj-dot proj-color-' + _projEsc(p.color) + '" style="width:9px;height:9px;flex-shrink:0"></span>' +
+        '<span class="all-proj-name-text">' + _projEsc(p.name) + '</span>' +
         (isActive ? '<span class="all-proj-active-badge">Active</span>' : '') +
-      '</div>' +
-      (p.description ? '<div class="all-proj-card-desc">' + _projEsc(p.description) + '</div>' : '') +
-      '<div class="all-proj-card-meta">' +
-        '<span><i class="ti ti-source-code"></i> ' + srcCount + ' source' + (srcCount !== 1 ? 's' : '') + '</span>' +
-        '<span><i class="ti ti-messages"></i> ' + convCount + ' conv' + (convCount !== 1 ? 's' : '') + '</span>' +
-        '<span><i class="ti ti-checklist"></i> ' + taskCount + ' task' + (taskCount !== 1 ? 's' : '') + '</span>' +
-      '</div>' +
-      '<div class="all-proj-card-actions">' +
+      '</span>' +
+      '<span class="all-proj-col-desc">' + (p.description ? _projEsc(p.description) : '<span class="all-proj-dim">—</span>') + '</span>' +
+      '<span class="all-proj-col-num">' + srcCount + '</span>' +
+      '<span class="all-proj-col-num">' + convCount + '</span>' +
+      '<span class="all-proj-col-num">' + taskCount + '</span>' +
+      '<span class="all-proj-col-actions">' +
         (isActive
           ? '<button class="proj-action-btn" onclick="openProjectHub();closeAllProjects()"><i class="ti ti-layout-sidebar-right-expand"></i> Open Hub</button>' +
             '<button class="proj-icon-btn" onclick="clearActiveProject();closeAllProjects()" title="Leave project"><i class="ti ti-door-exit"></i></button>'
           : '<button class="proj-action-btn" onclick="setActiveProject(\'' + _projEsc(p.id) + '\');closeAllProjects()"><i class="ti ti-player-play"></i> Activate</button>') +
         '<button class="proj-icon-btn" style="color:var(--fau-text-muted)" onclick="_confirmDeleteProjectFromList(\'' + _projEsc(p.id) + '\')" title="Delete project"><i class="ti ti-trash"></i></button>' +
-      '</div>' +
+      '</span>' +
     '</div>';
   }).join('');
+
+  listEl.innerHTML = header + rows;
 }
 
 async function _confirmDeleteProjectFromList(id) {
   if (!await _projConfirm('Delete this project? This cannot be undone.')) return;
   try {
     var r = await fetch('/api/projects/' + id, { method: 'DELETE' });
-    if (!r.ok) {
+    if (!r.ok && r.status !== 404) {
       var msg = 'HTTP ' + r.status;
       try { var j = await r.json(); if (j && j.error) msg = j.error; } catch(_) {}
       throw new Error(msg);
     }
+    // 404 = already gone on the server; either way drop it from local state
     state.projects = state.projects.filter(function(p) { return p.id !== id; });
     _deleteProjectConversations(id);
     if (state.activeProjectId === id) clearActiveProject();
     renderProjectSidebarList();
     _renderAllProjectsPage();
-    _showToast('Project deleted');
+    _showToast(r.status === 404 ? 'Removed stale project' : 'Project deleted');
   } catch(e) { _showToast('Delete failed: ' + e.message, true); }
 }
 

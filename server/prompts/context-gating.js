@@ -119,6 +119,7 @@ const TOOL_CLUSTERS = {
   lesson: new Set(['fauna_lesson_create', 'fauna_lesson_get', 'fauna_list_lesson_kinds']),
   images: new Set([
     'fauna_stock_image_search', 'fauna_stock_image_download', 'fauna_stock_image_providers',
+    'fauna_image_generate', 'fauna_image_edit', 'fauna_image_gen_status',
   ]),
   widget: new Set([
     'fauna_emit_widget', 'fauna_save_widget_to_playbook',
@@ -139,7 +140,7 @@ const TOOL_KW = {
   video:      /\b(video|movie|reel|short|clip|render .* mp4|moneyprinter|kdenlive|premiere|capcut|narration|voiceover|render scene)\b/i,
   voice:      /\b(speak|say (this|that|it)|read .* aloud|tts|voice ?over|narrat|podcast|episode|audio)\b/i,
   lesson:     /\b(lesson|teach me|walk me through|tutorial|course|explain how|step[- ]?by[- ]?step|learn(ing)? plan)\b/i,
-  images:     /\b(stock ?images?|unsplash|pexels|pixabay|royalty[- ]?free|hero ?images?|illustration|photos? (search|of)|find .* (image|photo)|download .* (image|photo))\b/i,
+  images:     /\b(stock ?images?|unsplash|pexels|pixabay|royalty[- ]?free|hero ?images?|illustration|photos? (search|of)|find .* (image|photo)|download .* (image|photo)|generate .* (image|photo|logo|icon|art|picture)|create .* (image|logo|icon|illustration|picture)|make .* (image|logo|icon|picture)|ai[- ]?(image|art)|dall[- ]?e|gpt[- ]?image|text[- ]?to[- ]?image|render .* (image|logo|icon)|edit .* (image|photo)|inpaint|transparent (background|png)|logo|icon)\b/i,
   widget:     /(\b(widget|dashboard|chart|graph|gen[-_ ]?ui|scorecard|kpi|metric|leaderboard|playlist|carousel|tabs?|gallery|stat|interactive|kanban|slider|3d|three[-_. ]?js|webgl|babylon|aframe|model[- ]?viewer|gltf|blender|mesh|orbit ?controls|product (render|shot|viewer))\b|\.(glb|obj|stl|fbx)\b)/i,
   backlog:    /\b(backlog|feature request|roadmap|prioriti[sz]e|ticket|issue|jira|todo list|user story)\b/i,
   debate:     /\b(debate|consult|second opinion|cross[- ]?check|compare models|ask another model|deliberate|brainstorm)\b/i,

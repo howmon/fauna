@@ -55,6 +55,11 @@ import {
   availableImageProviders,
 } from './server/media/stock-images.js';
 import {
+  generateImage,
+  editImage,
+  availableImageGen,
+} from './server/media/image-gen.js';
+import {
   savePlaybookEntry, listPlaybookEntries, getPlaybookEntry,
   touchPlaybookEntry, deletePlaybookEntry,
 } from './playbook-store.js';
@@ -1897,6 +1902,59 @@ export const SELF_TOOL_DEFS = [
       parameters: { type: 'object', properties: {} },
     },
   },
+
+  // ── AI image generation (OpenAI GPT Image) ─────────────────────────────
+  // Original, model-generated imagery (vs. stock photos). Requires the user's
+  // OpenAI key. Writes PNGs to disk and returns a /api/serve-media URL per
+  // image so they can be shown in chat or referenced from generated artefacts.
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_image_generate',
+      description:
+        'Generate ORIGINAL images from a text prompt using OpenAI GPT Image (gpt-image-1). Use this when the user wants a custom/illustrated/logo/concept image that stock photos cannot provide (prefer fauna_stock_image_search for real photographs). Writes PNG(s) to disk and returns {ok, results:[{path, url, revisedPrompt}]} where url is a /api/serve-media link you can embed directly in chat markdown as ![alt](url). Requires an OpenAI key (Settings → Authentication → API Keys). For low-quality fast drafts use quality "low"; use "high" for final assets, dense text, or detailed scenes. Set background "transparent" for logos/icons/cutouts.',
+      parameters: {
+        type: 'object',
+        properties: {
+          prompt:     { type: 'string', description: 'Detailed description of the image to generate.' },
+          size:       { type: 'string', enum: ['1024x1024', '1536x1024', '1024x1536', 'auto'], description: 'Output size. 1024x1024 square (default/fastest), 1536x1024 landscape, 1024x1536 portrait, or auto.' },
+          quality:    { type: 'string', enum: ['low', 'medium', 'high', 'auto'], description: 'low = fast drafts/thumbnails; high = final assets, dense text, fine detail. Default auto.' },
+          background: { type: 'string', enum: ['transparent', 'opaque', 'auto'], description: 'Use "transparent" for logos, icons, stickers, and cutouts (PNG alpha). Default auto.' },
+          count:      { type: 'number', description: 'Number of variations to generate (1–4). Default 1.' },
+          destDir:    { type: 'string', description: 'Optional absolute/~ folder to save into. Defaults to ~/.config/fauna/generated_images. Use a project assets folder when bundling into a project.' },
+        },
+        required: ['prompt'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_image_edit',
+      description:
+        'Edit / inpaint an EXISTING image with a text prompt using OpenAI GPT Image. Provide the path to a source PNG/JPG and a prompt describing the change. Optionally provide a mask PNG (transparent areas = regions to edit). Returns {ok, results:[{path, url}]}. Requires an OpenAI key.',
+      parameters: {
+        type: 'object',
+        properties: {
+          imagePath: { type: 'string', description: 'Absolute/~ path to the source image to edit.' },
+          prompt:    { type: 'string', description: 'Description of the edit to apply.' },
+          maskPath:  { type: 'string', description: 'Optional absolute/~ path to a mask PNG; transparent pixels mark the region to regenerate.' },
+          size:      { type: 'string', enum: ['1024x1024', '1536x1024', '1024x1536', 'auto'], description: 'Output size. Default auto.' },
+          quality:   { type: 'string', enum: ['low', 'medium', 'high', 'auto'], description: 'Default auto.' },
+          destDir:   { type: 'string', description: 'Optional folder to save into. Defaults to ~/.config/fauna/generated_images.' },
+        },
+        required: ['imagePath', 'prompt'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_image_gen_status',
+      description: 'Check whether AI image generation is available (i.e. whether the user has configured an OpenAI key).',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
 ];
 
 // ── Dynamic Widget tool definitions (gated by enableDynamicWidgets flag) ──
@@ -3041,9 +3099,59 @@ export function executeSelfTool(toolName, args, context = {}) {
       return JSON.stringify({ ok: true, providers: availableImageProviders() });
     }
 
+    // ── AI image generation (OpenAI GPT Image) ─────────────────────────────
+    case 'fauna_image_generate': {
+      return (async () => {
+        try {
+          const res = await generateImage(String(args.prompt || ''), {
+            size:       args.size || 'auto',
+            quality:    args.quality || 'auto',
+            background: args.background || 'auto',
+            count:      Number(args.count) > 0 ? Number(args.count) : 1,
+            destDir:    args.destDir || _imageGenProjectDir(context),
+          });
+          return JSON.stringify(res);
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: e.message, results: [] });
+        }
+      })();
+    }
+    case 'fauna_image_edit': {
+      return (async () => {
+        try {
+          const res = await editImage({
+            imagePath: args.imagePath,
+            prompt:    String(args.prompt || ''),
+            maskPath:  args.maskPath || null,
+            size:      args.size || 'auto',
+            quality:   args.quality || 'auto',
+            destDir:   args.destDir || _imageGenProjectDir(context),
+          });
+          return JSON.stringify(res);
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: e.message, results: [] });
+        }
+      })();
+    }
+    case 'fauna_image_gen_status': {
+      return JSON.stringify({ ok: true, available: availableImageGen() });
+    }
+
     default:
       return JSON.stringify({ ok: false, error: `Unknown self-tool: ${toolName}` });
   }
+}
+
+// When a project is active, generated images land in <rootPath>/assets so they
+// travel with the project; otherwise image-gen falls back to its global dir.
+function _imageGenProjectDir(context) {
+  try {
+    const id = context?.activeProjectId;
+    if (!id) return null;
+    const proj = getProject(id);
+    if (proj?.rootPath) return path.join(proj.rootPath, 'assets');
+  } catch (_) {}
+  return null;
 }
 
 function _videoArtifactSummary(job) {

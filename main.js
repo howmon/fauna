@@ -88,7 +88,7 @@ function persistWindowState() {
 
 // ── Window ────────────────────────────────────────────────────────────────
 
-async function createWindow({ convId, projectId, bounds, blank } = {}) {
+async function createWindow({ convId, projectId, bounds, blank, restored } = {}) {
   const winOpts = {
     width:  1260,
     height:  840,
@@ -143,6 +143,10 @@ async function createWindow({ convId, projectId, bounds, blank } = {}) {
   if (convId)    params.set('conv',    convId);
   if (projectId) params.set('project', projectId);
   if (blank)     params.set('blank',   '1');
+  // Mark windows restored from saved state so the renderer treats an absent
+  // project as authoritative ("this window is not in a project") instead of
+  // falling back to the global last-active-project default in localStorage.
+  if (restored)  params.set('restored', '1');
   const qs = params.toString();
   win.loadURL(`http://localhost:${PORT}${qs ? '?' + qs : ''}`);
 
@@ -1032,6 +1036,7 @@ app.whenReady().then(async () => {
         convId:    entry.convId    || null,
         projectId: entry.projectId || null,
         bounds:    entry.bounds    || null,
+        restored:  true,
       });
     }
   } else {

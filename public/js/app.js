@@ -12,9 +12,10 @@ function _faunaLaunchParams() {
       convId:    p.get('conv')    || null,
       projectId: p.get('project') || null,
       blank:     p.get('blank')   === '1',
+      restored:  p.get('restored') === '1',
     };
   } catch (_) {
-    return { convId: null, projectId: null, blank: false };
+    return { convId: null, projectId: null, blank: false, restored: false };
   }
 }
 
@@ -113,6 +114,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Blank new-window: also exit any active project (in-memory only; do not
   // touch localStorage so other windows keep their selection).
   else if (launch.blank) state.activeProjectId = null;
+  // Restored window with no persisted project: this window was explicitly not
+  // in a project last session, so honor that instead of falling back to the
+  // global last-active-project default (otherwise non-project conversations
+  // wrongly reopen inside the project with the project menu showing).
+  else if (launch.restored) state.activeProjectId = null;
 
   await loadSysCtx();
   await loadModels();
