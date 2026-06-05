@@ -61,7 +61,8 @@ describe('self-tools', () => {
       // Bumped to 62 after adding AI image generation (fauna_image_generate +
       // fauna_image_edit + fauna_image_gen_status).
       // Bumped to 63 after adding fauna_retrieve_output (reversible tool-output offload).
-      expect(SELF_TOOL_DEFS).toHaveLength(63);
+      // Bumped to 64 after adding fauna_doctor (aggregated capability self-diagnostic).
+      expect(SELF_TOOL_DEFS).toHaveLength(64);
     });
 
     it('each tool has required OpenAI function format', () => {
@@ -74,46 +75,46 @@ describe('self-tools', () => {
   });
 
   describe('executeSelfTool()', () => {
-    it('fauna_remember stores a fact', () => {
-      const result = JSON.parse(executeSelfTool('fauna_remember', { text: 'Test fact' }, mockContext));
+    it('fauna_remember stores a fact', async () => {
+      const result = JSON.parse(await executeSelfTool('fauna_remember', { text: 'Test fact' }, mockContext));
       expect(result.ok).toBe(true);
     });
 
-    it('fauna_recall returns facts', () => {
-      const result = JSON.parse(executeSelfTool('fauna_recall', { keywords: 'test' }, mockContext));
+    it('fauna_recall returns facts', async () => {
+      const result = JSON.parse(await executeSelfTool('fauna_recall', { keywords: 'test' }, mockContext));
       expect(Array.isArray(result)).toBe(true);
     });
 
-    it('fauna_forget removes a fact', () => {
-      const result = JSON.parse(executeSelfTool('fauna_forget', { id: 'mock-id' }, mockContext));
+    it('fauna_forget removes a fact', async () => {
+      const result = JSON.parse(await executeSelfTool('fauna_forget', { id: 'mock-id' }, mockContext));
       expect(result.ok).toBe(true);
     });
 
-    it('fauna_list_models returns models from context', () => {
-      const result = JSON.parse(executeSelfTool('fauna_list_models', {}, mockContext));
+    it('fauna_list_models returns models from context', async () => {
+      const result = JSON.parse(await executeSelfTool('fauna_list_models', {}, mockContext));
       expect(Array.isArray(result)).toBe(true);
       expect(result[0].id).toBe('gpt-4.1');
     });
 
-    it('fauna_switch_model sends event to renderer', () => {
-      const result = JSON.parse(executeSelfTool('fauna_switch_model', { model: 'gpt-4.1' }, mockContext));
+    it('fauna_switch_model sends event to renderer', async () => {
+      const result = JSON.parse(await executeSelfTool('fauna_switch_model', { model: 'gpt-4.1' }, mockContext));
       expect(result.ok).toBe(true);
       expect(mockContext.sendToRenderer).toHaveBeenCalled();
     });
 
-    it('fauna_get_settings returns settings', () => {
-      const result = JSON.parse(executeSelfTool('fauna_get_settings', {}, mockContext));
+    it('fauna_get_settings returns settings', async () => {
+      const result = JSON.parse(await executeSelfTool('fauna_get_settings', {}, mockContext));
       expect(result.model).toBe('gpt-4.1');
     });
 
-    it('fauna_send_notification calls notifier', () => {
-      const result = JSON.parse(executeSelfTool('fauna_send_notification', { title: 'Test', body: 'Hello' }, mockContext));
+    it('fauna_send_notification calls notifier', async () => {
+      const result = JSON.parse(await executeSelfTool('fauna_send_notification', { title: 'Test', body: 'Hello' }, mockContext));
       expect(result.ok).toBe(true);
       expect(mockContext.sendNotification).toHaveBeenCalledWith('Test', 'Hello');
     });
 
-    it('returns error for unknown tool', () => {
-      const result = JSON.parse(executeSelfTool('unknown_tool', {}, mockContext));
+    it('returns error for unknown tool', async () => {
+      const result = JSON.parse(await executeSelfTool('unknown_tool', {}, mockContext));
       expect(result.error).toBeDefined();
     });
   });
@@ -147,9 +148,9 @@ describe('self-tools', () => {
       expect(result).toBe('page-content');
     });
 
-    it('fauna_apply_patch delegates to context.applyPatch', () => {
+    it('fauna_apply_patch delegates to context.applyPatch', async () => {
       const applyPatch = vi.fn(() => [{ file: 'a.js', ok: true }]);
-      const result = JSON.parse(executeSelfTool('fauna_apply_patch', { patch: '*** Begin Patch\n*** End Patch' }, { ...mockContext, applyPatch }));
+      const result = JSON.parse(await executeSelfTool('fauna_apply_patch', { patch: '*** Begin Patch\n*** End Patch' }, { ...mockContext, applyPatch }));
       expect(applyPatch).toHaveBeenCalled();
       expect(result.ok).toBe(true);
     });

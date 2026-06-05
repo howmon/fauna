@@ -412,6 +412,7 @@ ${B}Agent Store${R}
 ${B}Tools${R}
   ${CY}/browse${R} <url>         fetch & summarize a URL
   ${CY}/shell${R} <cmd>          run a shell command
+  ${CY}/doctor${R}               run capability self-diagnostic
   ${CY}/mcps${R}                 status of MCPs and browser bridge
   ${CY}/mcp start${R} <id>       start custom MCP server
   ${CY}/mcp stop${R} <id>        stop custom MCP server
@@ -634,6 +635,22 @@ ${B}System${R}
       if (data.exitCode !== 0 && data.exitCode != null) {
         console.log(`${YL}exit: ${data.exitCode}${R}`);
       }
+    } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
+  },
+
+  '/doctor': async () => {
+    try {
+      const report = await apiGet('/api/doctor');
+      const ICON = { ok: '✅', warn: '⚠️', fail: '❌' };
+      for (const c of report.checks || []) {
+        console.log(`  ${ICON[c.status] || '•'} ${B}${c.name}${R} — ${c.message}`);
+        if (c.fix && c.status !== 'ok') console.log(`     ${DM}fix: ${c.fix}${R}`);
+      }
+      const { ok = 0, warn = 0, fail = 0 } = report.counts || {};
+      const summary = `${ok}/${report.total} healthy`
+        + (warn ? `, ${warn} optional` : '')
+        + (fail ? `, ${fail} failing` : '') + '.';
+      console.log(`\n${fail ? RD : (warn ? YL : GR)}${summary}${R}`);
     } catch (e) { console.log(`${RD}Failed: ${e.message}${R}`); }
   },
 

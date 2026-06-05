@@ -6,14 +6,26 @@
 //   POST /api/chat/debug-prompt   — prompt-layer inspection or legacy preview
 //   POST /api/chat-summary        — short summary of a conversation
 //   POST /api/composition/plan    — multi-agent task planner
+//   GET  /api/doctor              — aggregated capability self-diagnostic
 //
 // Deps:
 //   - browserBuildContext : the bundled "browser build context" system prompt
 //                           string (used by debug-prompt legacy mode)
 
 import { getCopilotClient } from '../copilot/auth.js';
+import { runDoctor } from '../lib/doctor.js';
 
 export function registerChatMiscRoutes(app, { browserBuildContext = '' } = {}) {
+  // ── /api/doctor ─────────────────────────────────────────────────────────
+  // Fan out to every capability probe and return one health report.
+  app.get('/api/doctor', async (_req, res) => {
+    try {
+      const report = await runDoctor();
+      res.json({ ok: true, ...report });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
   // ── /api/chat/debug-prompt ──────────────────────────────────────────────
   app.post('/api/chat/debug-prompt', (req, res) => {
     const { systemPrompt = '', contextSummary = '', clientContext = 'app', noTools = false, promptLayers } = req.body || {};

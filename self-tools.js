@@ -18,6 +18,7 @@ import {
   getStats as ctxGetStats,
 } from './server/lib/context-store.js';
 import { retrieveOutput } from './server/lib/tool-output-cache.js';
+import { runDoctor } from './server/lib/doctor.js';
 import {
   createProject, getAllProjects, getProject,
   addBacklogItem, listBacklog, prioritizeBacklog,
@@ -1970,6 +1971,14 @@ export const SELF_TOOL_DEFS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_doctor',
+      description: 'Run a self-diagnostic that probes Fauna\'s optional integrations (headless browser, LibreOffice slide rendering, AI image-gen, stock-photo providers, local LLM, memory and context stores) and returns a structured health report. Call this when a capability seems missing or a task fails for environmental reasons (e.g. "slide render failed", "image-gen unavailable", "can\'t open this page") so you can see what is configured and what the fix is — instead of guessing. Returns {ok, checks:[{name, status:"ok"|"warn"|"fail", message, fix?}], counts, total}.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
 ];
 
 // ── Dynamic Widget tool definitions (gated by enableDynamicWidgets flag) ──
@@ -2068,7 +2077,7 @@ export const DYNAMIC_WIDGET_TOOL_DEFS = [
 // Returns { result: string } for each tool call.
 // `context` provides access to runtime state (models list, IPC sender, etc.)
 
-export function executeSelfTool(toolName, args, context = {}) {
+export async function executeSelfTool(toolName, args, context = {}) {
   switch (toolName) {
     // ── Memory ──
     case 'fauna_remember': {
@@ -3158,6 +3167,11 @@ export function executeSelfTool(toolName, args, context = {}) {
         return JSON.stringify({ ok: false, error: `No offloaded output found for hash "${args.hash}". It may have expired or never been stashed.` });
       }
       return original;
+    }
+
+    case 'fauna_doctor': {
+      const report = await runDoctor();
+      return JSON.stringify({ ok: true, ...report });
     }
 
     default:
