@@ -17,6 +17,28 @@ function _trimStoredText(value, maxLen) {
   return value.slice(0, maxLen) + '\n…[truncated for local cache]';
 }
 
+// Fence-aware trim for message content. Special fenced blocks (gen-ui specs,
+// artifacts, etc.) are re-parsed when a conversation is reopened, so cutting
+// in the middle of one corrupts it — e.g. a gen-ui JSON spec truncated at the
+// raw char limit throws "Expected property name or '}'" on reload. We trim at
+// a point that never falls inside a fenced block: if the cut lands inside a
+// fence, we extend past its closing delimiter so the block survives whole.
+function _trimStoredMessageContent(value, maxLen) {
+  if (typeof value !== 'string') return value;
+  if (value.length <= maxLen) return value;
+  var cut = maxLen;
+  var fenceRe = /(^|\n)(```|~~~)[^\n]*\n[\s\S]*?\n\2[ \t]*(?=\n|$)/g;
+  var m;
+  while ((m = fenceRe.exec(value)) !== null) {
+    var start = m.index + (m[1] ? m[1].length : 0);
+    var end = m.index + m[0].length;
+    if (start >= cut) break;            // fence begins after the cut — safe
+    if (end > cut) { cut = end; break; } // cut lands inside fence — keep it whole
+  }
+  if (cut >= value.length) return value;
+  return value.slice(0, cut) + '\n…[truncated for local cache]';
+}
+
 function _sanitizeStoredMessage(msg, opts) {
   opts = opts || {};
   var keepAttachments = !!opts.keepAttachments;
@@ -31,7 +53,7 @@ function _sanitizeStoredMessage(msg, opts) {
       .map(function(part) { return part.text; })
       .join('\n');
   }
-  copy.content = _trimStoredText(typeof copy.content === 'string' ? copy.content : JSON.stringify(copy.content || ''), 12000);
+  copy.content = _trimStoredMessageContent(typeof copy.content === 'string' ? copy.content : JSON.stringify(copy.content || ''), 12000);
 
   if (typeof msg._displayText === 'string') {
     copy._displayText = _trimStoredText(msg._displayText, 6000);
