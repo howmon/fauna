@@ -37,6 +37,23 @@ const LESSONS_ROOT = path.join(os.homedir(), '.fauna', 'lessons');
 // that a healthy generation finishes well inside this window.
 const LESSON_SCRIPT_TIMEOUT_MS = 120_000;
 
+// Some Copilot-served models (observed with Claude Sonnet on certain prompts)
+// return an empty `choices: []` while still consuming the entire output-token
+// budget — they produce no visible content at all. Retrying the SAME model
+// just burns ~2 min and then the agent retries the whole tool, so on an empty
+// completion we fall through to a known-reliable fallback. gpt-4.1 produces
+// this kind of structured JSON dependably.
+const LESSON_FALLBACK_MODEL = 'gpt-4.1';
+
+// Ordered list of models to try: the requested model first, then the fallback
+// (de-duped so we never call the same model twice).
+function _modelChain(primary) {
+  const chain = [];
+  if (primary) chain.push(primary);
+  if (LESSON_FALLBACK_MODEL && LESSON_FALLBACK_MODEL !== primary) chain.push(LESSON_FALLBACK_MODEL);
+  return chain.length ? chain : [LESSON_FALLBACK_MODEL];
+}
+
 function _run(cmd, args) {
   return new Promise((resolve, reject) => {
     const p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -256,16 +273,35 @@ export async function generateLessonDSL({ topic, durationMin = 5, voice, client,
     user += '\n\n## Your previous attempt was rejected\nFix every problem below and return a corrected JSON object. Output ONLY the JSON — no prose, no code fences.\n'
       + repair.errors.map(e => '- ' + e).join('\n');
   }
-  const r = await withTimeout(client.chat.completions.create({
-    model,
-    messages: [
-      { role: 'system', content: SCRIPT_SYSTEM },
-      { role: 'user',   content: user },
-    ],
-    temperature: 0.7,
-    max_tokens: 8192,
-  }), LESSON_SCRIPT_TIMEOUT_MS, 'lesson script generation');
-  const raw = (r?.choices?.[0]?.message?.content || '').trim();
+  // Try the requested model, then a reliable fallback. The most common
+  // real-world failure is the primary model returning empty `choices`, so the
+  // fallback model is what actually rescues the call. Each attempt is bounded
+  // by the same timeout so the worst case stays predictable.
+  const models = _modelChain(model);
+  let raw = '';
+  let lastErr;
+  for (const m of models) {
+    try {
+      const r = await withTimeout(client.chat.completions.create({
+        model: m,
+        messages: [
+          { role: 'system', content: SCRIPT_SYSTEM },
+          { role: 'user',   content: user },
+        ],
+        temperature: 0.7,
+        max_tokens: 8192,
+      }), LESSON_SCRIPT_TIMEOUT_MS, 'lesson script generation');
+      raw = (r?.choices?.[0]?.message?.content || '').trim();
+      if (raw) break;
+      const noChoices = !(r?.choices?.length);
+      console.warn('[lesson] empty DSL from model=' + m + (noChoices ? ' (no choices returned)' : '') + '; trying next model if any');
+      lastErr = new Error('LLM returned empty response (model=' + m + ')');
+    } catch (e) {
+      lastErr = e;
+      console.warn('[lesson] DSL generation error from model=' + m + ': ' + (e?.message || e) + '; trying next model if any');
+    }
+  }
+  if (!raw) throw new Error('Lesson script generation failed (tried ' + models.join(', ') + '): ' + (lastErr?.message || lastErr));
   // Strip ``` fences if the model defied instructions.
   let body = raw;
   if (body.startsWith('```')) {
@@ -308,16 +344,33 @@ export async function generateSlideNarrations({ topic, slideTexts, voice, client
   if (!client) throw new Error('client is required');
   if (!Array.isArray(slideTexts) || !slideTexts.length) throw new Error('slideTexts required');
   const user = _slideNarrationPrompt({ topic, slideTexts, voice });
-  const r = await client.chat.completions.create({
-    model,
-    messages: [
-      { role: 'system', content: SLIDE_NARRATION_SYSTEM },
-      { role: 'user',   content: user },
-    ],
-    temperature: 0.5,
-    max_tokens: 8192,
-  });
-  let raw = (r?.choices?.[0]?.message?.content || '').trim();
+  // Same fallback strategy as generateLessonDSL: if the primary model returns
+  // an empty body, try the reliable fallback before giving up.
+  const models = _modelChain(model);
+  let raw = '';
+  let lastErr;
+  for (const m of models) {
+    try {
+      const r = await withTimeout(client.chat.completions.create({
+        model: m,
+        messages: [
+          { role: 'system', content: SLIDE_NARRATION_SYSTEM },
+          { role: 'user',   content: user },
+        ],
+        temperature: 0.5,
+        max_tokens: 8192,
+      }), LESSON_SCRIPT_TIMEOUT_MS, 'lesson slide narrations');
+      raw = (r?.choices?.[0]?.message?.content || '').trim();
+      if (raw) break;
+      const noChoices = !(r?.choices?.length);
+      console.warn('[lesson] empty slide narrations from model=' + m + (noChoices ? ' (no choices returned)' : '') + '; trying next model if any');
+      lastErr = new Error('LLM returned empty response (model=' + m + ')');
+    } catch (e) {
+      lastErr = e;
+      console.warn('[lesson] slide narrations error from model=' + m + ': ' + (e?.message || e) + '; trying next model if any');
+    }
+  }
+  if (!raw) throw new Error('Slide narration generation failed (tried ' + models.join(', ') + '): ' + (lastErr?.message || lastErr));
   if (raw.startsWith('```')) raw = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
   const first = raw.indexOf('{');
   const last = raw.lastIndexOf('}');

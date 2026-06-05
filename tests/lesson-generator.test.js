@@ -6,12 +6,15 @@ import { generateLessonDSL, validateLesson } from '../server/lesson/generator.js
 // was given so we can assert the repair prompt is wired up correctly.
 function mockClient(responses) {
   const calls = [];
+  const models = [];
   return {
     calls,
+    models,
     chat: {
       completions: {
-        create: async ({ messages }) => {
+        create: async ({ messages, model }) => {
           calls.push(messages);
+          models.push(model);
           const content = responses.shift();
           return { choices: [{ message: { content } }] };
         },
@@ -44,6 +47,22 @@ describe('generateLessonDSL', () => {
   it('throws a clear error when the model returns no JSON', async () => {
     const client = mockClient(['I cannot do that.']);
     await expect(generateLessonDSL({ topic: 'x', client })).rejects.toThrow(/no JSON object/);
+  });
+
+  it('falls back to the next model when the primary returns empty', async () => {
+    // First (primary) model returns an empty body; fallback returns valid DSL.
+    const client = mockClient(['', VALID_DSL]);
+    const dsl = await generateLessonDSL({ topic: 'x', client, model: 'claude-sonnet-4.6' });
+    expect(validateLesson(dsl).ok).toBe(true);
+    expect(client.calls).toHaveLength(2);
+    expect(client.models).toEqual(['claude-sonnet-4.6', 'gpt-4.1']);
+  });
+
+  it('throws an actionable error after every model returns empty', async () => {
+    const client = mockClient(['', '']);
+    await expect(generateLessonDSL({ topic: 'x', client, model: 'claude-sonnet-4.6' }))
+      .rejects.toThrow(/Lesson script generation failed \(tried/i);
+    expect(client.calls).toHaveLength(2);
   });
 
   it('injects previous errors into the prompt on a repair pass', async () => {
