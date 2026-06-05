@@ -1868,7 +1868,7 @@ async function streamResponse(conv) {
         delete conv._suppressShellAutoRunOnce;
         if (typeof compactProcessClusters === 'function') compactProcessClusters(msgEl);
         if (typeof compactLongAssistantMessage === 'function') compactLongAssistantMessage(msgEl, buffer);
-        extractAndRenderSuggestions(buffer, msgEl, false);
+        extractAndRenderSuggestions(buffer, msgEl, true);
         if (state._lastMsgWasDesktopTask) {
           injectOrganizerCard(msgEl, buffer);
           state._lastMsgWasDesktopTask = false;
