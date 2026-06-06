@@ -595,6 +595,27 @@ function loadConversation(id) {
   renderConvList();
   scrollBottom();
   if (typeof _updateMoveToProjectBtn === 'function') _updateMoveToProjectBtn();
+
+  // Ensure the recommended-actions bar is present for the latest assistant turn.
+  // loadConversation only builds the message DOM on FIRST open (guarded by
+  // !convInner.hasChildNodes()), and suggestion generation is otherwise only
+  // triggered from appendMessageDOM. So switching back to an already-rendered
+  // conversation — or one whose suggestions failed to generate the first time —
+  // would never (re)trigger generation, leaving the bar permanently missing.
+  // Trigger it here when idle and not already shown.
+  if (!conv._streaming && typeof _generateContextualSuggestions === 'function') {
+    setTimeout(function() {
+      if (state.currentId !== id) return;
+      var conv2 = getConv(id);
+      if (!conv2 || conv2._streaming) return;
+      if (typeof _hasActiveConversationWork === 'function' && _hasActiveConversationWork()) return;
+      var ci = (typeof getConvInner === 'function') ? getConvInner(id) : null;
+      if (!ci || ci.querySelector('.suggestion-bar')) return; // already shown
+      var lastEl = ci.querySelector('.msg.assistant:last-of-type')
+        || Array.from(ci.querySelectorAll('.msg.assistant')).pop();
+      if (lastEl) _generateContextualSuggestions(lastEl);
+    }, 150);
+  }
 }
 
 function clearConversation() {
