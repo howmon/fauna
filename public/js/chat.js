@@ -439,15 +439,20 @@ function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
   var match = buffer.match(/`{3,4}\s*suggestions[ \t]*\r?\n([\s\S]*?)`{3,4}/i);
   if (match) {
     // The model emitted an explicit ```suggestions block — render it directly.
-    var items;
-    try { items = JSON.parse(match[1].trim()); } catch (_) { return; }
-    if (Array.isArray(items) && items.length) _renderSuggestionBar(items, msgEl, false);
-    return;
+    // If it's malformed or empty, DON'T bail: fall through to model-generated
+    // contextual suggestions so the bar still appears.
+    var items = null;
+    try { items = JSON.parse(match[1].trim()); } catch (_) { items = null; }
+    if (Array.isArray(items) && items.length) {
+      _renderSuggestionBar(items, msgEl, false);
+      return;
+    }
+    // else: fall through to contextual generation below.
   }
 
-  // No explicit block. Generate REAL contextual suggestions with a fast model
-  // (via the existing Copilot connection — no separate AI key). The caller can
-  // opt out by passing allowFallback === false (e.g. mid-chain bubbles).
+  // No usable explicit block. Generate REAL contextual suggestions with a fast
+  // model (via the existing Copilot connection — no separate AI key). The
+  // caller can opt out by passing allowFallback === false (e.g. mid-chain).
   if (allowFallback === false) return;
   _generateContextualSuggestions(msgEl);
 }
@@ -545,8 +550,11 @@ function _doGenerateContextualSuggestions(convId) {
 
   // Cache (in-memory only; `_`-prefixed keys are stripped before storage) so we
   // don't re-call the model when the same turn is re-rendered within a session.
-  if (Array.isArray(lastAssistant._suggestions)) {
-    if (lastAssistant._suggestions.length) _renderSuggestionBar(lastAssistant._suggestions, msgEl, false);
+  // Only a NON-EMPTY cache short-circuits — a stale/empty array (e.g. a prior
+  // transient failure) must fall through and regenerate, otherwise the bar
+  // would stay hidden for that turn forever.
+  if (Array.isArray(lastAssistant._suggestions) && lastAssistant._suggestions.length) {
+    _renderSuggestionBar(lastAssistant._suggestions, msgEl, false);
     return;
   }
 

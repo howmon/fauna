@@ -20,7 +20,28 @@ const IS_WIN    = process.platform === 'win32';
 const IS_MAC    = process.platform === 'darwin';
 const FAUNAMCP_REPO_URL = 'https://github.com/howmon/faunaMCP';
 
+// Capture the user's REAL OS color-scheme preference BEFORE we force the app
+// into dark mode. Fauna's own chrome is always dark, but embedded <webview>
+// browser tabs should render web pages the way a normal browser would (i.e.
+// following the OS), not inherit the app's forced-dark prefers-color-scheme.
+const OS_PREFERS_DARK = nativeTheme.shouldUseDarkColors;
 nativeTheme.themeSource = 'dark';
+
+// Emulate the real OS color scheme on an embedded browser <webview>'s
+// webContents. Without this, the app-global `nativeTheme.themeSource = 'dark'`
+// makes every web page report `prefers-color-scheme: dark` and render its dark
+// variant (with different text rendering) — unlike a regular browser.
+function applyBrowserColorScheme(wc) {
+  try {
+    if (!wc || wc.isDestroyed()) return;
+    if (!wc.debugger.isAttached()) wc.debugger.attach('1.3');
+    wc.debugger.sendCommand('Emulation.setEmulatedMedia', {
+      features: [{ name: 'prefers-color-scheme', value: OS_PREFERS_DARK ? 'dark' : 'light' }],
+    });
+  } catch (_) {
+    // Debugger may already be attached (e.g. user opened DevTools) — ignore.
+  }
+}
 
 // Enable Web Speech API (backed by SFSpeechRecognizer on macOS)
 app.commandLine.appendSwitch('enable-features', 'WebSpeechAPI');
@@ -195,6 +216,16 @@ async function createWindow({ convId, projectId, bounds, blank, restored } = {})
 
   // Rebuild the tray menu when the page title changes (conversation switch)
   win.webContents.on('page-title-updated', () => refreshTray());
+
+  // Embedded browser tabs are <webview>s that otherwise inherit the app's
+  // forced-dark nativeTheme. Emulate the real OS color scheme on each attached
+  // webview so web pages render like a regular browser, and re-apply on every
+  // navigation since emulation is cleared when the renderer/frame is replaced.
+  win.webContents.on('did-attach-webview', (_e, wc) => {
+    if (!wc) return;
+    applyBrowserColorScheme(wc);
+    wc.on('did-finish-load', () => applyBrowserColorScheme(wc));
+  });
 
   return win;
 }

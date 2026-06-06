@@ -357,6 +357,9 @@ body.is-resizing webview { pointer-events: none !important; }
   padding: 8px 12px;
   background: var(--fau-surface);
   flex-shrink: 0;
+  /* Animate in sync with the sidebar width transition (.2s) so the hamburger
+     glides past the traffic lights instead of teleporting when collapsing. */
+  transition: padding .2s;
 }
 #toggle-sidebar {
   background: none; border: none; color: var(--fau-text-dim); cursor: pointer;
@@ -2053,12 +2056,10 @@ body.is-resizing webview { pointer-events: none !important; }
   -webkit-app-region: drag;
   user-select: none;
 }
-/* When sidebar collapses, topbar starts at x=0 — shift content past traffic lights (~78px) */
+/* When the sidebar collapses, the topbar starts at x=0 — shift its content past
+   the traffic lights (~78px) and add a little top clearance. */
 #sidebar.collapsed + #main #topbar {
   padding-left: 82px;
-}
-/* Also add top padding to topbar when sidebar is hidden so content clears traffic lights */
-#sidebar.collapsed + #main #topbar {
   padding-top: 10px;
 }
 
@@ -2086,6 +2087,11 @@ body.win-platform #sidebar-header {
 }
 body.win-platform #topbar {
   padding-right: 0;              /* controls are flush to the right edge */
+}
+/* No traffic lights on Windows — don't shift the hamburger when collapsed */
+body.win-platform #sidebar.collapsed + #main #topbar {
+  padding-left: 12px;
+  padding-top: 8px;
 }
 /* Everything interactive must opt out of drag */
 button, input, textarea, select, a, label,
@@ -3318,10 +3324,10 @@ body { animation: none; }
   background: var(--fau-sidebar);
   display: flex; flex-direction: column;
   transition: width .22s cubic-bezier(.4,0,.2,1), min-width .22s, max-width .22s;
-  flex-shrink: 0;
+  flex-shrink: 1;
   position: relative;
 }
-#artifact-pane.open { min-width: 280px; max-width: 900px; border-left: 1px solid var(--fau-border); }
+#artifact-pane.open { min-width: 280px; max-width: min(900px, calc(100vw - 360px)); border-left: 1px solid var(--fau-border); }
 #artifact-pane.resizing { transition: none; user-select: none; }
 #artifact-resize-handle {
   position: absolute; left: 0; top: 0; bottom: 0; width: 5px;
