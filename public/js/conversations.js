@@ -347,7 +347,15 @@ async function maybeUpdateConversationTitle(conv) {
     if (!r.ok) return;
     var data = await r.json();
     var title = normalizeConversationTitle(data.title);
-    if (title && title !== conv.title && !conv.titleManual) setConversationTitle(conv.id, title, { manual: false });
+    // Guard against locking in junk. A transient empty model response used to
+    // return a bare "New conversation" placeholder; applying it would overwrite
+    // a previously-good title AND set titleUpdatedAt, after which the 45s guard
+    // blocked all future regeneration — the title stayed wrong forever.
+    var isPlaceholder = /^(new conversation|new chat|conversation|untitled)$/i.test(title);
+    if (!title || isPlaceholder || conv.titleManual || title === conv.title) return;
+    var curIsPlaceholder = /^(new conversation|new chat|conversation|untitled)$/i.test(conv.title || '');
+    if (data.source === 'fallback' && !curIsPlaceholder) return; // don't downgrade a real title to a first-message slug
+    setConversationTitle(conv.id, title, { manual: false });
   } catch (_) {
   } finally {
     conv._titleUpdating = false;

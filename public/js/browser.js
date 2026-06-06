@@ -2117,7 +2117,7 @@ var _extConnectedBrowsers = []; // [{id, browser, version, connectedAt}]
     function connect() {
       if (current) { try { current.close(); } catch (_) {} current = null; }
       if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
-      var es = new EventSource('/api/ext/events');
+      var es = new EventSource(window.faunaStreamUrl ? window.faunaStreamUrl('/api/ext/events') : '/api/ext/events');
       current = es;
       es.onmessage = function(e) { retries = 0; _handleExtEvent(e); };
       es.onerror = function() {

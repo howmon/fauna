@@ -566,7 +566,11 @@ function _doGenerateContextualSuggestions(convId) {
     body: JSON.stringify({ messages: recent, model: 'gpt-4.1-mini' })
   }).then(function(r) { return r.json(); }).then(function(data) {
     var items = (data && Array.isArray(data.suggestions)) ? data.suggestions : [];
-    lastAssistant._suggestions = items; // cache result (even if empty)
+    // Only cache REAL results. Caching an empty array (transient model failure /
+    // rate-limit) would permanently suppress the recommended-actions bar for
+    // this turn, since the cache short-circuits before re-fetching. Leaving it
+    // uncached lets the setBusy retry (and any later re-render) try again.
+    if (items.length) lastAssistant._suggestions = items;
     // Stale guards: a newer turn started, conv switched, or streaming resumed.
     if (conv._sugReqId !== reqId) return;
     if (typeof state !== 'undefined' && state && state.currentId !== convId) return;

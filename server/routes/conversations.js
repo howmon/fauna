@@ -136,6 +136,14 @@ export function registerConversationRoutes(app, deps) {
   });
 
   app.get('/api/conversations/stream', (req, res) => {
+    // Allow the alternate-loopback-host EventSource (page on localhost, stream
+    // on 127.0.0.1 or vice-versa) so persistent streams use a separate socket
+    // pool from request traffic. See faunaStreamUrl() in public/js/state.js.
+    const _o = req.headers.origin;
+    if (_o && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(_o)) {
+      res.setHeader('Access-Control-Allow-Origin', _o);
+      res.setHeader('Vary', 'Origin');
+    }
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -209,17 +217,38 @@ export function registerConversationRoutes(app, deps) {
         if (local) return res.json({ title: local, source: 'local', model: getMiniModelId() });
       }
 
+      // Copilot fallback chain — claude-* models can intermittently return
+      // empty choices on this endpoint, which previously yielded a bare
+      // "New conversation" placeholder that the client would lock in. Try the
+      // requested model first, then fall back to the reliable OpenAI minis so a
+      // transient empty response doesn't poison the title.
       const client = getCopilotClient();
-      const titleModel = reqModel || 'gpt-4.1';
-      const completion = await client.chat.completions.create({
-        model: titleModel,
-        messages: titleMessages,
-        max_tokens: 50,
-        temperature: 0.7,
-      });
+      const chain = [reqModel || 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1']
+        .filter((m, i, a) => m && a.indexOf(m) === i);
+      for (const m of chain) {
+        try {
+          const completion = await client.chat.completions.create({
+            model: m,
+            messages: titleMessages,
+            max_tokens: 50,
+            temperature: 0.7,
+          });
+          const title = _cleanTitle(completion.choices?.[0]?.message?.content);
+          if (title) return res.json({ title, source: 'copilot', model: m });
+        } catch (e) {
+          console.error(`[conversation-title] model=${m} error:`, e.message);
+        }
+      }
 
-      const title = _cleanTitle(completion.choices[0]?.message?.content) || 'New conversation';
-      res.json({ title, source: 'copilot' });
+      // Every model failed/returned empty. Derive a slug from the first user
+      // message rather than fabricating a generic placeholder, and tag the
+      // source so the client can decline to overwrite a good existing title.
+      const firstUser = messages.find(m => m.role === 'user');
+      const raw = (firstUser && typeof firstUser.content === 'string') ? firstUser.content.trim() : '';
+      const slug = raw
+        ? raw.replace(/\s+/g, ' ').slice(0, 60).replace(/[^a-zA-Z0-9 ,.'!?-]/g, '').trim()
+        : '';
+      res.json({ title: slug || 'New conversation', source: slug ? 'fallback' : 'none' });
     } catch (err) {
       console.error('[conversation-title] Error:', err.message);
       try {
@@ -227,11 +256,11 @@ export function registerConversationRoutes(app, deps) {
         const firstUser = messages.find(m => m.role === 'user');
         const raw = (firstUser && firstUser.content) ? firstUser.content.trim() : '';
         const fallback = raw
-          ? raw.replace(/\s+/g, ' ').slice(0, 60).replace(/[^a-zA-Z0-9 ,.'!?-]/g, '').trim() || 'New conversation'
-          : 'New conversation';
-        res.json({ title: fallback });
+          ? raw.replace(/\s+/g, ' ').slice(0, 60).replace(/[^a-zA-Z0-9 ,.'!?-]/g, '').trim()
+          : '';
+        res.json({ title: fallback || 'New conversation', source: fallback ? 'fallback' : 'none' });
       } catch (_) {
-        res.json({ title: 'New conversation' });
+        res.json({ title: 'New conversation', source: 'none' });
       }
     }
   });

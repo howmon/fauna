@@ -1437,7 +1437,7 @@ function _stopTaskPolling() {
 function _connectTaskSSE() {
   _disconnectTaskSSE();
   try {
-    _taskSSE = new EventSource('/api/tasks/stream');
+    _taskSSE = new EventSource(window.faunaStreamUrl ? window.faunaStreamUrl('/api/tasks/stream') : '/api/tasks/stream');
     _taskSSE.onmessage = function(e) {
       try {
         var evt = JSON.parse(e.data);

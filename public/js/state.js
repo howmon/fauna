@@ -5,6 +5,27 @@ if (!localStorage.getItem('fauna-figma-mcp-explicit')) {
   localStorage.setItem('fauna-figma-mcp-explicit', '1');
 }
 
+// Build a URL for a long-lived SSE stream on the *alternate* loopback host so
+// persistent EventSource sockets land in a different Chromium socket-pool
+// group than the page's request/response traffic. Chromium caps HTTP/1.1 at
+// 6 sockets per host-group, shared across all windows in a session; with each
+// window holding 2+ always-on SSE sockets, 3 windows saturate the pool and
+// chat POSTs (same host) queue forever ("Fauna is thinking…"). Routing the
+// streams to 127.0.0.1 while the page stays on localhost (or vice-versa) gives
+// the streams their own pool, so request traffic is never starved. The server
+// echoes Access-Control-Allow-Origin for these cross-origin GETs. Remote hosts
+// (mobile tunnel / LAN IP) keep the relative same-origin path.
+if (typeof window !== 'undefined') {
+  window.faunaStreamUrl = function (path) {
+    try {
+      var h = location.hostname;
+      var alt = h === 'localhost' ? '127.0.0.1' : (h === '127.0.0.1' ? 'localhost' : null);
+      if (!alt) return path; // remote/tunnel: keep same-origin
+      return location.protocol + '//' + alt + (location.port ? ':' + location.port : '') + path;
+    } catch (_) { return path; }
+  };
+}
+
 var state = {
   conversations: ((typeof window !== 'undefined' && window.FaunaConvCache)
                     ? window.FaunaConvCache.loadSync()

@@ -63,7 +63,8 @@ async function _hydrateServerConvs() {
 function _startConversationRealtimeSync() {
   if (!window.EventSource || window._conversationEvents) return;
   try {
-    var source = new EventSource('/api/conversations/stream');
+    var _convStreamUrl = (window.faunaStreamUrl ? window.faunaStreamUrl('/api/conversations/stream') : '/api/conversations/stream');
+    var source = new EventSource(_convStreamUrl);
     window._conversationEvents = source;
     var timer = null;
     source.onmessage = function(evt) {

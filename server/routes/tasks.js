@@ -36,6 +36,11 @@ export function registerTaskRoutes(app, deps) {
   });
 
   app.get('/api/tasks/stream', (req, res) => {
+    const _o = req.headers.origin;
+    if (_o && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(_o)) {
+      res.setHeader('Access-Control-Allow-Origin', _o);
+      res.setHeader('Vary', 'Origin');
+    }
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
