@@ -5,6 +5,9 @@
 //
 // Returns a string summary (possibly empty on failure).  Never throws.
 
+import { tryMini } from '../llm/local-mini.js';
+
+
 /** Normalize one conversation message into {role, content}. */
 export function normalizeMessage(m) {
   if (!m || typeof m !== 'object') return null;
@@ -57,7 +60,6 @@ const SYSTEM_PROMPT =
  */
 export async function summarizeHistory(messages, { client, model = 'gpt-4o-mini', maxTokens = 600, signal } = {}) {
   if (!Array.isArray(messages) || messages.length === 0) return '';
-  if (!client || !client.chat || !client.chat.completions) return '';
 
   const normalized = messages.map(normalizeMessage).filter(Boolean);
   if (!normalized.length) return '';
@@ -67,6 +69,16 @@ export async function summarizeHistory(messages, { client, model = 'gpt-4o-mini'
     ...normalized,
     { role: 'user', content: 'Summarize the conversation above as a compact task-state note.' },
   ];
+
+  // Local fallback: if there's no Copilot client (e.g. no AI key / offline),
+  // summarize with the bundled mini model when its weights are cached. Copilot
+  // stays the primary path when available — it's faster and more accurate for
+  // this accuracy-critical, turn-blocking task — so this only runs when there's
+  // no usable client.
+  if (!client || !client.chat || !client.chat.completions) {
+    const local = await tryMini(prompt, { maxTokens, temperature: 0.2 });
+    return (local || '').trim();
+  }
 
   const params = { model, messages: prompt, stream: false };
   if (/^(o[1-9]|gpt-5)/.test(model)) params.max_completion_tokens = maxTokens;
@@ -95,6 +107,8 @@ export async function summarizeHistory(messages, { client, model = 'gpt-4o-mini'
     return (resp?.choices?.[0]?.message?.content || '').trim();
   } catch (e) {
     console.error('[summarize-history] failed:', e && (e.stack || e.message || e));
-    return '';
+    // Last-resort local fallback when the remote summarizer fails entirely.
+    const local = await tryMini(prompt, { maxTokens, temperature: 0.2 });
+    return (local || '').trim();
   }
 }

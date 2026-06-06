@@ -1,6 +1,22 @@
 import { createConversationStore, PayloadTooLargeError, migrateLegacyToSplit } from '../lib/conversation-store.js';
 import { extractFacts as extractMemoryFacts } from '../lib/memory-extractor.js';
 import { getProject } from '../../project-manager.js';
+import { generateMini, tryMini, isModelCached as isMiniCached, warmupMini, getMiniModelId } from '../llm/local-mini.js';
+
+// Normalize a model-generated title: strip wrapping quotes, a leading "Title:"
+// label, surrounding whitespace/markdown, and collapse to a single short line.
+// Small local models sometimes add quotes or a prefix despite instructions.
+function _cleanTitle(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  let t = raw.trim();
+  // Take only the first non-empty line (models may add explanation after).
+  t = (t.split(/\r?\n/).find(l => l.trim()) || '').trim();
+  t = t.replace(/^\s*(?:title|conversation title)\s*[:\-]\s*/i, '');
+  t = t.replace(/^["'`*_\s]+|["'`*_.\s]+$/g, '');
+  t = t.replace(/\s+/g, ' ').trim();
+  return t.slice(0, 80);
+}
+
 
 export function registerConversationRoutes(app, deps) {
   const { fs, path, configDir, getCopilotClient } = deps;
@@ -56,7 +72,16 @@ export function registerConversationRoutes(app, deps) {
       _extractTimers.delete(conv.id);
       try {
         const client = getCopilotClient();
+        // Local-first memory extraction: the bundled mini model handles this
+        // short, structured (JSON facts) task with no AI key. If the local
+        // weights aren't cached or it returns nothing usable, fall back to
+        // Copilot so a fact is never silently dropped.
         const aiCaller = async (prompt) => {
+          const local = await tryMini(
+            [{ role: 'user', content: prompt }],
+            { maxTokens: 800, temperature: 0.2 }
+          );
+          if (local) return local;
           const resp = await client.chat.completions.create({
             model: 'gpt-4.1',
             messages: [{ role: 'user', content: prompt }],
@@ -169,15 +194,23 @@ export function registerConversationRoutes(app, deps) {
       const { messages = [], model: reqModel } = req.body;
       if (!messages.length) return res.status(400).json({ error: 'No messages provided' });
 
-      const client = getCopilotClient();
-      const titleModel = reqModel || 'gpt-4.1';
       const systemPrompt = 'You are a helpful assistant that generates short, descriptive titles for conversations. Generate a concise title (3-6 words) that captures the main topic. Return ONLY the title, no quotes, no explanation.';
-
       const titleMessages = [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: 'Generate a short title for this conversation:\n\n' + messages.map(m => `${m.role}: ${m.content}`).join('\n\n') },
       ];
 
+      // Local-first: titles are short and latency-tolerant, so prefer the
+      // bundled mini model when its weights are cached (works with no AI key /
+      // offline). Falls through to Copilot when not cached or it returns junk.
+      const localRaw = await tryMini(titleMessages, { maxTokens: 24, temperature: 0.5 });
+      if (localRaw) {
+        const local = _cleanTitle(localRaw);
+        if (local) return res.json({ title: local, source: 'local', model: getMiniModelId() });
+      }
+
+      const client = getCopilotClient();
+      const titleModel = reqModel || 'gpt-4.1';
       const completion = await client.chat.completions.create({
         model: titleModel,
         messages: titleMessages,
@@ -185,8 +218,8 @@ export function registerConversationRoutes(app, deps) {
         temperature: 0.7,
       });
 
-      const title = (completion.choices[0]?.message?.content || 'New conversation').trim();
-      res.json({ title });
+      const title = _cleanTitle(completion.choices[0]?.message?.content) || 'New conversation';
+      res.json({ title, source: 'copilot' });
     } catch (err) {
       console.error('[conversation-title] Error:', err.message);
       try {
@@ -251,7 +284,6 @@ export function registerConversationRoutes(app, deps) {
         return res.status(400).json({ error: 'No messages provided' });
       }
 
-      const client = getCopilotClient();
       const convText = messages
         .map(m => `${m.role}: ${typeof m.content === 'string' ? m.content : ''}`)
         .join('\n\n')
@@ -261,8 +293,29 @@ export function registerConversationRoutes(app, deps) {
         { role: 'user', content: 'Conversation so far:\n\n' + convText + '\n\nReturn the JSON array of 3 suggestions now.' },
       ];
 
-      // Light/fast model first, with one reliable fallback. claude-* can return
-      // empty choices on this endpoint, so default to the OpenAI minis.
+      // 1. Local mini model FIRST — fully in-process, no API/network at
+      // inference time. Only used inline once the weights are already cached;
+      // otherwise we kick off a background download and fall through to Copilot
+      // for THIS request so the user isn't blocked on a multi-hundred-MB fetch.
+      if (process.env.FAUNA_DISABLE_LOCAL_MINI !== '1') {
+        if (isMiniCached()) {
+          try {
+            const raw = await generateMini(sugMessages, { maxTokens: 120, temperature: 0.4 });
+            const local = _parseSuggestionArray(raw);
+            if (local.length) return res.json({ suggestions: local, source: 'local', model: getMiniModelId() });
+          } catch (e) {
+            console.error('[conversation-suggestions] local model error:', e.message);
+          }
+        } else {
+          // Warm the cache in the background for next time; don't await.
+          warmupMini().catch(() => {});
+        }
+      }
+
+      // 2. Copilot fallback — fast/light model via the existing connection
+      // (discovered gh token, no separate AI key). claude-* can return empty
+      // choices on this endpoint, so default to the OpenAI minis.
+      const client = getCopilotClient();
       const primary = reqModel || 'gpt-4.1-mini';
       const chain = [primary, 'gpt-4.1'].filter((m, i, a) => a.indexOf(m) === i);
       let suggestions = [];
@@ -280,7 +333,7 @@ export function registerConversationRoutes(app, deps) {
           console.error(`[conversation-suggestions] model=${m} error:`, e.message);
         }
       }
-      res.json({ suggestions });
+      res.json({ suggestions, source: 'copilot' });
     } catch (err) {
       console.error('[conversation-suggestions] Error:', err.message);
       res.json({ suggestions: [] });
