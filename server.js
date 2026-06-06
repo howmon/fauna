@@ -13,7 +13,7 @@ import os         from 'os';
 import fs         from 'fs';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
-import { createTask, getTask, getAllTasks, updateTask, deleteTask, startScheduler, stopScheduler } from './task-manager.js';
+import { createTask, getTask, getAllTasks, updateTask, deleteTask, startScheduler, stopScheduler, enableWebhook, disableWebhook, rotateWebhookToken, getTaskByWebhookToken, markWebhookFired } from './task-manager.js';
 import { runTask, pauseTask, stopTask, steerTask, isTaskRunning, subscribe } from './task-runner.js';
 import {
   createProject, getProject, getAllProjects, updateProject, deleteProject,
@@ -41,6 +41,7 @@ import { registerProjectRunRoutes } from './server/routes/project-runs.js';
 import { registerProjectRoutes } from './server/routes/projects.js';
 import { buildProjectProfile } from './server/lib/profile.js';
 import { registerTaskRoutes } from './server/routes/tasks.js';
+import { registerWebhookRoutes } from './server/routes/webhooks.js';
 import { registerUtilityRoutes } from './server/routes/utilities.js';
 import { registerProviderRoutes } from './server/routes/providers.js';
 import { registerLLMRoutes } from './server/routes/llm.js';
@@ -212,6 +213,16 @@ registerTaskRoutes(app, {
   steerTask,
   isTaskRunning,
   subscribe,
+  enableWebhook,
+  disableWebhook,
+  rotateWebhookToken,
+});
+
+registerWebhookRoutes(app, {
+  getTaskByWebhookToken,
+  markWebhookFired,
+  runTask,
+  isTaskRunning,
 });
 
 registerProjectRoutes(app, {

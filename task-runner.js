@@ -52,6 +52,7 @@ async function runTask(taskId, opts = {}) {
     reasoning: [],   // chain-of-reasoning entries: { step, intent, actions[], outcome }
     stats: { actionsTotal: 0, actionsOk: 0, actionsFailed: 0 },
     nodeResults: [], // pipeline per-node results: { id, label, type, status, output, error }
+    triggerPayload: opts.triggerPayload != null ? opts.triggerPayload : null, // inbound webhook body
   };
   _runningTasks.set(taskId, state);
 
@@ -123,6 +124,9 @@ async function _autonomyLoop(task, state) {
 
   if (task.actions && task.actions.length) {
     userPrompt += '\n\nPlanned steps:\n' + task.actions.map((a, i) => `${i + 1}. ${a.type || a.action}: ${JSON.stringify(a)}`).join('\n');
+  }
+  if (state.triggerPayload != null && state.triggerPayload !== '') {
+    userPrompt += '\n\nWebhook payload:\n' + String(state.triggerPayload).slice(0, 8000);
   }
   userPrompt += '\n\nExecute this task autonomously. When done, say "TASK_COMPLETE" followed by a brief summary. If you cannot complete the task, say "TASK_FAILED" followed by the reason.';
 
@@ -631,7 +635,9 @@ async function _runPipeline(task, state) {
       switch (node.type) {
 
         case 'trigger':
-          output = input ?? '';
+          // Inbound webhook payload (if any) becomes the trigger output so
+          // downstream nodes can consume the request body.
+          output = (input != null ? input : (state.triggerPayload != null ? state.triggerPayload : '')) ?? '';
           break;
 
         case 'prompt':

@@ -11,6 +11,9 @@ export function registerTaskRoutes(app, deps) {
     steerTask,
     isTaskRunning,
     subscribe,
+    enableWebhook,
+    disableWebhook,
+    rotateWebhookToken,
   } = deps;
 
   function taskWithRuntime(task) {
@@ -103,5 +106,22 @@ export function registerTaskRoutes(app, deps) {
     const ok = steerTask(req.params.id, req.body?.message || '');
     if (!ok) return res.status(409).json({ error: 'Task is not running' });
     res.json({ ok: true });
+  });
+
+  function hookUrl(req, token) {
+    return `${req.protocol}://${req.get('host')}/api/hooks/${token}`;
+  }
+
+  app.post('/api/tasks/:id/webhook', (req, res) => {
+    const fn = req.body && req.body.rotate ? rotateWebhookToken : enableWebhook;
+    const task = fn(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    res.json({ ok: true, webhook: task.webhook, url: hookUrl(req, task.webhook.token) });
+  });
+
+  app.delete('/api/tasks/:id/webhook', (req, res) => {
+    const task = disableWebhook(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    res.json({ ok: true, webhook: task.webhook || null });
   });
 }

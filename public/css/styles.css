@@ -7610,6 +7610,11 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 .auto-kind-tab:hover { border-color: var(--fau-text-muted); color: var(--fau-text); }
 .auto-kind-tab.active { background: var(--accent-dim, rgba(99,102,241,.1)); border-color: var(--accent); color: var(--accent); }
 .auto-perms { display: flex; gap: 8px; flex-wrap: wrap; }
+.auto-webhook { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.auto-webhook-on { display: flex; align-items: center; gap: 6px; }
+.auto-webhook-url { flex: 1; min-width: 0; background: var(--fau-surface2); border: 1px solid var(--fau-border); border-radius: 6px; padding: 6px 8px; font-size: 11px; color: var(--fau-text); font-family: var(--font-mono, monospace); outline: none; }
+.auto-webhook-url:focus { border-color: var(--accent); }
+.auto-webhook-hint { font-size: 11px; color: var(--fau-text-muted); line-height: 1.4; }
 .auto-perm-toggle { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; font-size: 12px; color: var(--fau-text-dim); padding: 3px 7px; border: 1px solid transparent; border-radius: 6px; user-select: none; }
 .auto-perm-toggle input { display: none; }
 .auto-perm-toggle:has(input:checked) { border-color: var(--accent); color: var(--accent); background: var(--accent-dim, rgba(99,102,241,.1)); }

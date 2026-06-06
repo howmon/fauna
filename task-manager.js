@@ -2,9 +2,10 @@
 // Manages tasks/automations stored in ~/.config/fauna/tasks.json
 // Supports cron (RRULE), heartbeat (thread-watching), and pipeline (node graph) kinds.
 
-import fs   from 'fs';
-import path from 'path';
-import os   from 'os';
+import fs     from 'fs';
+import path   from 'path';
+import os     from 'os';
+import crypto from 'crypto';
 import { saveJsonAtomic } from './server/lib/json-store.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
@@ -277,6 +278,7 @@ function createTask(opts) {
     },
     targetConvId: opts.targetConvId || null,            // heartbeat: conversation to watch
     pipeline:    opts.pipeline || null,                 // pipeline: { nodes, edges }
+    webhook:     opts.webhook || null,                  // inbound trigger: { enabled, token, lastFiredAt }
     agents:      _normalizeAgents(opts.agents || opts.agent),
     actions:     opts.actions || [],
     context:     opts.context || '',
@@ -585,11 +587,72 @@ function failTask(id, error) {
   return getTask(id);
 }
 
+// ── Webhook (inbound trigger) ──────────────────────────────────────────────
+// Opt-in, token-gated inbound triggers. A task with an enabled webhook can be
+// fired by POST/GET /api/hooks/:token; the request payload is fed into the
+// pipeline's trigger node (or appended to an autonomy task's context).
+
+function _genWebhookToken() {
+  return crypto.randomBytes(24).toString('hex'); // 192-bit, URL-safe
+}
+
+function enableWebhook(id) {
+  const tasks = readTasks();
+  const task = tasks.find(t => t.id === id);
+  if (!task) return null;
+  if (!task.webhook || !task.webhook.token) {
+    task.webhook = { enabled: true, token: _genWebhookToken(), lastFiredAt: null };
+  } else {
+    task.webhook.enabled = true;
+  }
+  task.updatedAt = new Date().toISOString();
+  writeTasks(tasks);
+  return task;
+}
+
+function disableWebhook(id) {
+  const tasks = readTasks();
+  const task = tasks.find(t => t.id === id);
+  if (!task) return null;
+  if (task.webhook) {
+    task.webhook.enabled = false;
+    task.updatedAt = new Date().toISOString();
+    writeTasks(tasks);
+  }
+  return task;
+}
+
+function rotateWebhookToken(id) {
+  const tasks = readTasks();
+  const task = tasks.find(t => t.id === id);
+  if (!task) return null;
+  task.webhook = { enabled: true, token: _genWebhookToken(), lastFiredAt: task.webhook?.lastFiredAt || null };
+  task.updatedAt = new Date().toISOString();
+  writeTasks(tasks);
+  return task;
+}
+
+function getTaskByWebhookToken(token) {
+  if (!token || typeof token !== 'string') return null;
+  const tasks = readTasks();
+  return tasks.find(t => t.webhook && t.webhook.enabled && t.webhook.token === token) || null;
+}
+
+function markWebhookFired(id) {
+  const tasks = readTasks();
+  const task = tasks.find(t => t.id === id);
+  if (!task || !task.webhook) return;
+  task.webhook.lastFiredAt = Date.now();
+  writeTasks(tasks);
+}
+
 export {
   readTasks, writeTasks,
   createTask, getTask, getAllTasks, updateTask, deleteTask,
   startScheduler, stopScheduler,
   completeTask, failTask,
+  // Webhook (inbound trigger)
+  enableWebhook, disableWebhook, rotateWebhookToken, getTaskByWebhookToken, markWebhookFired,
   // RRULE engine
   parseRrule, rruleMatchesNow, nextRruleOccurrence, humanizeRrule,
   // legacy compat

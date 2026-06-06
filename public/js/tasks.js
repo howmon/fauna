@@ -594,6 +594,8 @@ function _renderDetail() {
         '<textarea class="auto-detail-textarea" rows="2" placeholder="Extra context or variables…" ' +
           'oninput="_draftChange(\'context\',this.value)">' + escHtml(_draft.context) + '</textarea>' +
       '</div>' +
+      // Inbound webhook trigger (saved automations only)
+      _webhookFieldHtml() +
     '</div>' +
     // Footer
     '<div class="auto-detail-footer">' +
@@ -1517,6 +1519,72 @@ async function createTaskFromAI(taskData) {
 }
 
 // ── Task Actions (retained for buttons in list rows) ─────────────────────
+
+// ── Inbound webhook trigger ────────────────────────────────────────────────
+
+function _webhookFieldHtml() {
+  if (!_draft || !_draft.id) return '';
+  var task = _tasksCache.find(function(t) { return t.id === _draft.id; });
+  var wh = task && task.webhook;
+  var enabled = !!(wh && wh.enabled && wh.token);
+  var url = enabled ? (location.origin + '/api/hooks/' + wh.token) : '';
+  return '<div class="auto-field-row">' +
+    '<label class="auto-field-lbl">Webhook trigger</label>' +
+    '<div class="auto-webhook">' +
+      (enabled
+        ? '<div class="auto-webhook-on">' +
+            '<input id="auto-webhook-url" class="auto-webhook-url" type="text" readonly value="' + escHtml(url) + '" onclick="this.select()">' +
+            '<button class="auto-footer-btn" onclick="copyWebhookUrl()" title="Copy URL"><i class="ti ti-copy"></i></button>' +
+            '<button class="auto-footer-btn" onclick="webhookRotate()" title="Rotate token"><i class="ti ti-refresh"></i></button>' +
+            '<button class="auto-footer-btn danger" onclick="webhookDisable()" title="Disable"><i class="ti ti-x"></i></button>' +
+          '</div>' +
+          '<div class="auto-webhook-hint">POST or GET this URL to run this automation. The request body is fed into the trigger node.</div>'
+        : '<button class="auto-footer-btn" onclick="webhookEnable(false)"><i class="ti ti-webhook"></i> Enable inbound webhook</button>' +
+          '<div class="auto-webhook-hint">Generate a secret URL that external services can call to trigger this automation.</div>') +
+    '</div>' +
+  '</div>';
+}
+
+async function webhookEnable(rotate) {
+  if (!_draft || !_draft.id) return;
+  try {
+    var r = await fetch('/api/tasks/' + _draft.id + '/webhook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rotate: !!rotate }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    await fetchTasks();
+    _renderDetail();
+    showToast(rotate ? 'Webhook token rotated' : 'Webhook enabled');
+  } catch (e) { showToast('Failed: ' + e.message); }
+}
+
+function webhookRotate() {
+  if (!confirm('Rotate the webhook token? The current URL will stop working.')) return;
+  webhookEnable(true);
+}
+
+async function webhookDisable() {
+  if (!_draft || !_draft.id) return;
+  try {
+    await fetch('/api/tasks/' + _draft.id + '/webhook', { method: 'DELETE' });
+    await fetchTasks();
+    _renderDetail();
+    showToast('Webhook disabled');
+  } catch (e) { showToast('Failed: ' + e.message); }
+}
+
+function copyWebhookUrl() {
+  var el = document.getElementById('auto-webhook-url');
+  if (!el) return;
+  el.select();
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(el.value);
+    else document.execCommand('copy');
+    showToast('Webhook URL copied');
+  } catch (_) { showToast('Copy failed — select and copy manually'); }
+}
 
 async function taskRun(id) {
   try {
