@@ -37,6 +37,10 @@ var pipelineCanvas = (function () {
     notify:    { label: 'Open in Chat', icon: 'ti-message-forward', color: '#f59e0b', ports: { in: ['in'],  out: ['out'] } },
     delay:     { label: 'Delay',     icon: 'ti-clock-pause',       color: '#6b7280', ports: { in: ['in'],  out: ['out'] } },
     code:      { label: 'Code',      icon: 'ti-code',              color: '#8b5cf6', ports: { in: ['in'],  out: ['out'] } },
+    http:      { label: 'HTTP Request', icon: 'ti-api',            color: '#0891b2', ports: { in: ['in'],  out: ['out'] }, credential: true },
+    slack:     { label: 'Slack',     icon: 'ti-brand-slack',       color: '#4a154b', ports: { in: ['in'],  out: ['out'] }, credential: true },
+    split:     { label: 'Split Out', icon: 'ti-arrows-split-2',    color: '#0d9488', ports: { in: ['in'],  out: ['out'] } },
+    merge:     { label: 'Merge',     icon: 'ti-arrows-join-2',     color: '#7c3aed', ports: { in: ['in1', 'in2'], out: ['out'] } },
   };
 
   var NODE_W = 160;
@@ -142,6 +146,10 @@ var pipelineCanvas = (function () {
       getNodeById: function(id) {
         var s = _canvases[canvasId];
         return s ? s.nodes.find(function(n) { return n.id === id; }) : null;
+      },
+      getSelectedId: function() {
+        var s = _canvases[canvasId];
+        return s ? s.selected : null;
       },
       getViewport: function() {
         var s = _canvases[canvasId];

@@ -7816,6 +7816,12 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
   font-size: 12px; color: var(--fau-text-dim); cursor: pointer; font-family: var(--font); text-align: left;
 }
 .pb-node-menu-item:hover { background: var(--fau-surface2); color: var(--fau-text); }
+.pb-node-menu-cat {
+  font-size: 9px; font-weight: 700; color: var(--fau-text-muted); text-transform: uppercase;
+  letter-spacing: .6px; padding: 8px 8px 3px; position: sticky; top: 0;
+  background: var(--fau-surface, #1a1a28);
+}
+.pb-node-menu-cat:first-child { padding-top: 2px; }
 .pb-field-row { display: flex; flex-direction: column; gap: 4px; }
 .pb-field-lbl { font-size: 10px; font-weight: 600; color: var(--fau-text-muted); text-transform: uppercase; letter-spacing: .4px; }
 .pb-field-input, .pb-field-textarea, .pb-field-select {

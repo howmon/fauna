@@ -9,12 +9,53 @@
 var _pbCanvas   = null;   // canvas controller
 var _pbTaskId   = null;   // task being edited
 var _pbDirty    = false;
+var _pbCredentials = [];   // cached credential metadata (no secret values)
+var _pbCredTypes   = ['apiKey','bearer','basic','oauth2','custom'];
+var _pbConnectors  = {};   // type -> action-node descriptor (label/icon/fields)
+
+// Load credential metadata for the picker. Never receives secret values.
+async function _pbLoadCredentials() {
+  try {
+    var r = await fetch('/api/credentials');
+    if (!r.ok) return;
+    var data = await r.json();
+    _pbCredentials = data.credentials || [];
+    if (data.types) _pbCredTypes = data.types;
+  } catch (_) { /* offline / standalone */ }
+}
+
+// Load the connector catalog (action-node registry descriptors) and merge it
+// into the canvas node-type table so connectors appear in the palette and
+// render generic config forms from their `fields` metadata.
+async function _pbLoadConnectors() {
+  try {
+    var r = await fetch('/api/action-nodes');
+    if (!r.ok) return;
+    var data = await r.json();
+    (data.nodes || []).forEach(function(d) {
+      _pbConnectors[d.type] = d;
+      if (typeof pipelineCanvas !== 'undefined' && pipelineCanvas.NODE_TYPES && !pipelineCanvas.NODE_TYPES[d.type]) {
+        pipelineCanvas.NODE_TYPES[d.type] = {
+          label: d.label, icon: d.icon || 'ti-plug', color: d.color || '#64748b',
+          ports: { in: ['in'], out: ['out'] }, credential: !!d.credentialType,
+        };
+      }
+    });
+  } catch (_) { /* offline / standalone */ }
+}
 
 // ── Open / Close ─────────────────────────────────────────────────────────
 
 function openPipelineBuilder(taskId) {
   _pbTaskId = taskId || null;
   _pbDirty  = false;
+  _pbLoadCredentials();
+  // Merge the connector catalog into NODE_TYPES before rendering so connectors
+  // show up in the palette. If it resolves after the menu is built, rebuild it.
+  _pbLoadConnectors().then(function() {
+    var menu = document.getElementById('pb-node-menu');
+    if (menu) menu.innerHTML = _nodeMenuItems();
+  });
 
   // Ensure overlay exists
   var overlay = document.getElementById('pipeline-builder-overlay');
@@ -75,7 +116,7 @@ function _buildOverlayHTML(overlay, pipeline) {
       // Add node dropdown
       '<div style="position:relative;">' +
         '<button class="pb-btn" onclick="_pbToggleNodeMenu()" id="pb-add-btn"><i class="ti ti-plus"></i> Add Node</button>' +
-        '<div id="pb-node-menu" style="display:none;position:absolute;top:100%;left:0;z-index:10;background:var(--fau-surface,#1a1a28);border:1px solid var(--fau-border,#2a2a3a);border-radius:8px;padding:6px;min-width:160px;margin-top:4px;box-shadow:0 8px 24px rgba(0,0,0,.4);">' +
+        '<div id="pb-node-menu" style="display:none;position:absolute;top:100%;left:0;z-index:10;background:var(--fau-surface,#1a1a28);border:1px solid var(--fau-border,#2a2a3a);border-radius:8px;padding:6px;min-width:160px;margin-top:4px;box-shadow:0 8px 24px rgba(0,0,0,.4);max-height:min(60vh,440px);overflow-y:auto;">' +
           _nodeMenuItems() +
         '</div>' +
       '</div>' +
@@ -110,12 +151,38 @@ function _buildOverlayHTML(overlay, pipeline) {
 
 function _nodeMenuItems() {
   var types = Object.keys(pipelineCanvas.NODE_TYPES);
-  return types.map(function(t) {
+  var seen = {};
+  // Category groups (in display order). Any type not listed falls into "Other".
+  var groups = [
+    { label: 'Flow',            types: ['trigger', 'condition', 'loop', 'delay', 'split', 'merge', 'webhook'] },
+    { label: 'AI & Agents',     types: ['prompt', 'agent', 'code', 'openai', 'anthropic', 'groq', 'mistral', 'perplexity', 'openrouter', 'together', 'deepseek', 'xai'] },
+    { label: 'Actions',         types: ['shell', 'browser', 'figma', 'http', 'notify'] },
+    { label: 'Chat & Messaging',types: ['slack', 'discord', 'teams', 'googlechat', 'mattermost', 'rocketchat', 'telegram', 'ntfy', 'pushover', 'pushbullet'] },
+    { label: 'Dev & Project',   types: ['github', 'gitlab', 'jira', 'linear', 'trello', 'notion', 'airtable'] },
+    { label: 'Business & Email',types: ['hubspot', 'stripe', 'sendgrid', 'mailgun', 'resend', 'twilio'] },
+  ];
+
+  function itemHtml(t) {
     var def = pipelineCanvas.NODE_TYPES[t];
+    if (!def) return '';
     return '<button class="pb-node-menu-item" onclick="_pbAddNode(\'' + t + '\')">' +
       '<i class="ti ' + def.icon + '" style="color:' + def.color + ';width:16px;"></i> ' + def.label +
     '</button>';
-  }).join('');
+  }
+
+  var html = '';
+  groups.forEach(function(g) {
+    var items = g.types.filter(function(t) { return pipelineCanvas.NODE_TYPES[t]; });
+    if (!items.length) return;
+    items.forEach(function(t) { seen[t] = true; });
+    html += '<div class="pb-node-menu-cat">' + g.label + '</div>' + items.map(itemHtml).join('');
+  });
+  // Anything registered but not categorized (e.g. new connectors) goes last.
+  var rest = types.filter(function(t) { return !seen[t]; });
+  if (rest.length) {
+    html += '<div class="pb-node-menu-cat">Other</div>' + rest.map(itemHtml).join('');
+  }
+  return html;
 }
 
 // ── Toolbar actions ──────────────────────────────────────────────────────
@@ -224,7 +291,27 @@ function _configFieldsForType(node) {
     html += _pbFieldInput(nid, 'url', 'URL', config.url || '', 'https://...');
     html += _pbFieldSelect(nid, 'method', 'Method', ['GET','POST','PUT','DELETE'], config.method || 'POST');
     html += _pbFieldTextarea(nid, 'body', 'Body (JSON)', config.body || '', '{"key": "{{input}}"}');
-  }  if (node.type === 'notify') {
+  }
+  if (node.type === 'http') {
+    html += _pbFieldInput(nid, 'url', 'URL', config.url || '', 'https://api.example.com/...');
+    html += _pbFieldSelect(nid, 'method', 'Method', ['GET','POST','PUT','PATCH','DELETE'], config.method || 'GET');
+    html += _pbFieldTextarea(nid, 'headers', 'Headers (JSON)', config.headers || '', '{"X-Custom": "value"}');
+    html += _pbFieldTextarea(nid, 'body', 'Body', config.body || '', 'Request body. Defaults to the piped input. Use {{ $json.x }}.');
+    html += _pbFieldSelect(nid, 'responseFormat', 'Response', ['text','binary'], config.responseFormat || 'text');
+    html += _pbFieldCredential(nid, config.credentialId || '');
+  }
+  if (node.type === 'split') {
+    html += _pbFieldInput(nid, 'field', 'Array field (optional)', config.field || '', 'Leave blank to split the input itself; or a field name holding an array');
+  }
+  if (node.type === 'merge') {
+    html += _pbFieldSelect(nid, 'mode', 'Merge mode', ['append','combine'], config.mode || 'append');
+  }
+  if (node.type === 'slack') {
+    html += _pbFieldInput(nid, 'channel', 'Channel', config.channel || '', '#general or channel ID');
+    html += _pbFieldTextarea(nid, 'text', 'Message', config.text || '', 'Message text. Defaults to the piped input. Use {{ $json.x }}.');
+    html += _pbFieldCredential(nid, config.credentialId || '', 'Bot token (bearer credential)');
+  }
+  if (node.type === 'notify') {
     html += _pbFieldInput(nid, 'title', 'Conversation title', config.title || '', 'e.g. Daily standup summary');
   }  if (node.type === 'delay') {
     html += _pbFieldInput(nid, 'ms', 'Delay (ms)', config.ms || '1000', 'Milliseconds to wait');
@@ -242,6 +329,24 @@ function _configFieldsForType(node) {
   }
   if (node.type === 'agent') {
     html += _pbFieldInput(nid, 'agentName', 'Agent name', config.agentName || '', 'Name of the agent to invoke');
+  }
+
+  // Connector nodes from the action-node registry render their config form
+  // generically from the descriptor's `fields` metadata (unless the type has a
+  // hardcoded form above, e.g. http/slack).
+  if (!html && _pbConnectors[node.type] && _pbConnectors[node.type].fields) {
+    _pbConnectors[node.type].fields.forEach(function(f) {
+      var val = config[f.key] != null ? config[f.key] : (f.default || '');
+      if (f.type === 'credential') {
+        html += _pbFieldCredential(nid, config.credentialId || '', f.hint);
+      } else if (f.type === 'select') {
+        html += _pbFieldSelect(nid, f.key, f.label, f.options || [], val);
+      } else if (f.type === 'textarea') {
+        html += _pbFieldTextarea(nid, f.key, f.label, val, f.placeholder || '');
+      } else {
+        html += _pbFieldInput(nid, f.key, f.label, val, f.placeholder || '');
+      }
+    });
   }
 
   return html;
@@ -270,6 +375,23 @@ function _pbFieldSelect(nid, key, label, options, value) {
   return '<div class="pb-field-row">' +
     '<label class="pb-field-lbl">' + label + '</label>' +
     '<select class="pb-field-select" onchange="_pbUpdateNodeConfig(\'' + nid + '\',\'' + key + '\',this.value)">' + opts + '</select>' +
+  '</div>';
+}
+
+// Credential picker — populated from the in-memory _pbCredentials cache.
+function _pbFieldCredential(nid, value, hint) {
+  var opts = '<option value="">— none —</option>';
+  (_pbCredentials || []).forEach(function(c) {
+    opts += '<option value="' + _esc(c.id) + '"' + (value === c.id ? ' selected' : '') + '>' +
+      _esc(c.name) + ' (' + _esc(c.type) + ')</option>';
+  });
+  return '<div class="pb-field-row">' +
+    '<label class="pb-field-lbl">Credential</label>' +
+    '<div style="display:flex;gap:6px;align-items:center;flex:1;">' +
+      '<select class="pb-field-select" style="flex:1" onchange="_pbUpdateNodeConfig(\'' + nid + '\',\'credentialId\',this.value)">' + opts + '</select>' +
+      '<button class="pb-btn" title="Manage credentials" onclick="_pbOpenCredentials()"><i class="ti ti-key"></i></button>' +
+    '</div>' +
+    (hint ? '<div style="font-size:11px;color:var(--fau-text-muted,#888);margin-top:4px;flex-basis:100%">' + _esc(hint) + '</div>' : '') +
   '</div>';
 }
 
@@ -335,4 +457,132 @@ async function savePipelineToTask(taskId) {
 
 function _esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Credentials manager (modal) ───────────────────────────────────────────
+// Lets the user add/remove encrypted credentials. Secret values are only ever
+// SENT (on create); the list/read surface returns metadata only.
+
+var _CRED_TYPE_FIELDS = {
+  apiKey: ['apiKey'],
+  bearer: ['token'],
+  basic:  ['username', 'password'],
+  oauth2: ['accessToken', 'refreshToken', 'clientId', 'clientSecret', 'tokenUrl'],
+  custom: [],
+};
+
+async function _pbOpenCredentials() {
+  await _pbLoadCredentials();
+  var modal = document.getElementById('pb-cred-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'pb-cred-modal';
+    modal.style.cssText = 'position:fixed;inset:0;z-index:9500;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.5);';
+    modal.addEventListener('click', function(e) { if (e.target === modal) _pbCloseCredentials(); });
+    document.body.appendChild(modal);
+  }
+  _pbRenderCredentials();
+}
+
+function _pbCloseCredentials() {
+  var modal = document.getElementById('pb-cred-modal');
+  if (modal) modal.remove();
+  // Re-render the inspector so newly-added credentials show up in pickers.
+  if (typeof _pbReselectCurrent === 'function') _pbReselectCurrent();
+}
+
+function _pbReselectCurrent() {
+  if (!_pbCanvas || typeof _pbCanvas.getNodeById !== 'function') return;
+  // The canvas exposes the selected id via getPipeline()._selectedId when set;
+  // fall back to re-rendering nothing if unavailable.
+  var sel = (_pbCanvas.getSelectedId && _pbCanvas.getSelectedId()) || null;
+  if (sel && typeof _renderConfigPanel === 'function') _renderConfigPanel(sel);
+}
+
+function _pbCredTypeFields(type) {
+  var t = _CRED_TYPE_FIELDS[type] || [];
+  if (type === 'custom') return [{ key: 'apiKey', label: 'Value' }];
+  return t.map(function(k){ return { key: k, label: k }; });
+}
+
+function _pbRenderCredentials() {
+  var modal = document.getElementById('pb-cred-modal');
+  if (!modal) return;
+  var rows = (_pbCredentials || []).map(function(c) {
+    return '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--fau-border,#2a2a3a);">' +
+      '<i class="ti ti-key" style="opacity:.6"></i>' +
+      '<span style="flex:1;font-size:13px;color:var(--fau-text,#fff)">' + _esc(c.name) + '</span>' +
+      '<span style="font-size:11px;color:var(--fau-text-muted,#888)">' + _esc(c.type) + (c.encrypted ? '' : ' • plaintext') + '</span>' +
+      '<button class="pb-btn danger" onclick="_pbDeleteCredential(\'' + _esc(c.id) + '\')"><i class="ti ti-trash"></i></button>' +
+    '</div>';
+  }).join('') || '<div style="font-size:12px;color:var(--fau-text-muted,#888);padding:12px 0">No credentials yet.</div>';
+
+  var typeOpts = _pbCredTypes.map(function(t){ return '<option value="'+t+'">'+t+'</option>'; }).join('');
+
+  modal.innerHTML =
+    '<div style="background:var(--fau-surface,#1a1a24);border:1px solid var(--fau-border,#2a2a3a);border-radius:10px;width:440px;max-width:92vw;max-height:84vh;overflow:auto;padding:18px;">' +
+      '<div style="display:flex;align-items:center;margin-bottom:12px;">' +
+        '<span style="font-size:14px;font-weight:600;color:var(--fau-text,#fff);flex:1">Credentials</span>' +
+        '<button class="pb-btn" onclick="_pbCloseCredentials()"><i class="ti ti-x"></i></button>' +
+      '</div>' +
+      '<div>' + rows + '</div>' +
+      '<div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--fau-border,#2a2a3a);">' +
+        '<div style="font-size:12px;font-weight:600;color:var(--fau-text,#fff);margin-bottom:8px">Add credential</div>' +
+        '<div class="pb-field-row"><label class="pb-field-lbl">Name</label>' +
+          '<input id="pb-cred-name" class="pb-field-input" placeholder="e.g. Slack bot token"></div>' +
+        '<div class="pb-field-row"><label class="pb-field-lbl">Type</label>' +
+          '<select id="pb-cred-type" class="pb-field-select" onchange="_pbRenderCredFields()">' + typeOpts + '</select></div>' +
+        '<div id="pb-cred-fields"></div>' +
+        '<button class="pb-btn primary" style="width:100%;margin-top:8px" onclick="_pbCreateCredential()"><i class="ti ti-plus"></i> Add credential</button>' +
+      '</div>' +
+    '</div>';
+  _pbRenderCredFields();
+}
+
+function _pbRenderCredFields() {
+  var host = document.getElementById('pb-cred-fields');
+  var typeEl = document.getElementById('pb-cred-type');
+  if (!host || !typeEl) return;
+  var fields = _pbCredTypeFields(typeEl.value);
+  host.innerHTML = fields.map(function(f) {
+    var isSecret = !/^(username|clientId|tokenUrl)$/.test(f.key);
+    return '<div class="pb-field-row"><label class="pb-field-lbl">' + _esc(f.label) + '</label>' +
+      '<input class="pb-field-input" data-cred-field="' + _esc(f.key) + '" ' +
+        'type="' + (isSecret ? 'password' : 'text') + '" autocomplete="off"></div>';
+  }).join('');
+}
+
+async function _pbCreateCredential() {
+  var modal = document.getElementById('pb-cred-modal');
+  if (!modal) return;
+  var name = (document.getElementById('pb-cred-name') || {}).value || '';
+  var type = (document.getElementById('pb-cred-type') || {}).value || 'apiKey';
+  var data = {};
+  modal.querySelectorAll('[data-cred-field]').forEach(function(el) {
+    if (el.value) data[el.getAttribute('data-cred-field')] = el.value;
+  });
+  if (!name.trim()) { if (typeof showToast === 'function') showToast('Credential name required'); return; }
+  try {
+    var r = await fetch('/api/credentials', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name, type: type, data: data }),
+    });
+    if (!r.ok) { var e = await r.json().catch(function(){return{};}); throw new Error(e.error || ('HTTP ' + r.status)); }
+    await _pbLoadCredentials();
+    _pbRenderCredentials();
+    if (typeof showToast === 'function') showToast('Credential added');
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('Failed: ' + e.message);
+  }
+}
+
+async function _pbDeleteCredential(id) {
+  if (!confirm('Delete this credential? Nodes using it will stop authenticating.')) return;
+  try {
+    await fetch('/api/credentials/' + id, { method: 'DELETE' });
+    await _pbLoadCredentials();
+    _pbRenderCredentials();
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('Failed: ' + e.message);
+  }
 }

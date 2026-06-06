@@ -4,9 +4,16 @@
 // infrastructure (browser actions, shell exec, agents, tools) works.
 
 import { getTask, updateTask, completeTask, failTask } from './task-manager.js';
+import { buildContext as _buildExprContext, interpolate as _exprInterpolate, hasExpression as _hasExpression } from './server/lib/expr-engine.js';
+import { getActionNode } from './server/lib/action-nodes.js';
+import { resolveCredential as _resolveCredential } from './credentials-store.js';
+import { toItems as _toItems, toItem as _toItem, isItemArray as _isItemArray, brandItems as _brandItems, displayOutput as _displayOutput } from './server/lib/items.js';
 
 const PORT = 3737;
 const _runningTasks = new Map(); // taskId → { abortController, step, startedAt }
+// Per-pipeline expression context, keyed by the run's nodeOutputs object so
+// concurrent pipelines never collide. Updated synchronously at each node.
+const _exprCtxByOutputs = new WeakMap();
 
 function _abortError() {
   const err = new Error('Stopped by user');
@@ -583,6 +590,10 @@ async function _runPipeline(task, state) {
   const nodes = pipeline.nodes;
   const edges = pipeline.edges || [];
 
+  // nodeId -> label map for $node["Label"] expression access
+  const _nodeLabels = {};
+  nodes.forEach(n => { if (n.label) _nodeLabels[n.id] = n.label; });
+
   // Topological sort (Kahn's algorithm)
   const inDeg = {};
   const adj   = {};    // nodeId → [{ to, fromPort, toPort }]
@@ -619,9 +630,13 @@ async function _runPipeline(task, state) {
     const node = nodes.find(n => n.id === nid);
     if (!node) continue;
 
-    // Resolve input: output of the first upstream node
-    const inEdge = edges.find(e => e.to === nid);
-    const input  = inEdge ? (nodeOutputs[inEdge.from] ?? null) : null;
+    // Resolve inputs. `inputs` holds every upstream branch's output (for the
+    // merge node); `input` is the first non-skipped upstream value (legacy
+    // single-input behaviour for every other node).
+    const inEdges = edges.filter(e => e.to === nid);
+    const liveEdges = inEdges.filter(e => !skipped.has(e.from));
+    const inputs = liveEdges.map(e => nodeOutputs[e.from] ?? null);
+    const input  = inputs.length ? inputs[0] : null;
 
     state.step++;
     _emit(task.id, 'step', { step: state.step, nodeId: nid, nodeType: node.type });
@@ -629,7 +644,9 @@ async function _runPipeline(task, state) {
 
     let output;
     const cfg = node.config || {};
-
+    // Publish this node's expression context (input + items + label map) for
+    // _interpolate. `items` powers $items/$item/$binary in expressions.
+    _exprCtxByOutputs.set(nodeOutputs, { input, items: _toItems(input), labels: _nodeLabels, creds: {} });
     try {
       _throwIfAborted(state.abortController.signal);
       switch (node.type) {
@@ -792,8 +809,93 @@ async function _runPipeline(task, state) {
           break;
         }
 
-        default:
-          output = input;
+        case 'split': {
+          // Split Out — expand an array (or a field of the input) into a
+          // multi-item array so downstream nodes fan out, one run per item.
+          let src = input;
+          if (cfg.field) {
+            const obj = _maybeParse(input);
+            src = obj && typeof obj === 'object' ? obj[cfg.field] : undefined;
+          } else {
+            src = _maybeParse(input);
+          }
+          output = Array.isArray(src)
+            ? _brandItems(src.map(v => ({ json: v })))
+            : _toItems(input);
+          break;
+        }
+
+        case 'merge': {
+          // Merge — recombine multiple upstream branches into one item array.
+          //   append (default): concatenate all branches' items
+          //   combine / byIndex: shallow-merge json by position
+          const mode = cfg.mode || 'append';
+          const branches = inputs.map(v => _toItems(v));
+          if (mode === 'combine' || mode === 'byIndex') {
+            const maxLen = branches.reduce((m, a) => Math.max(m, a.length), 0);
+            const merged = [];
+            for (let i = 0; i < maxLen; i++) {
+              const json = {};
+              const binary = {};
+              branches.forEach(a => {
+                if (!a[i]) return;
+                const j = _maybeParse(a[i].json);
+                if (j && typeof j === 'object' && !Array.isArray(j)) Object.assign(json, j);
+                else json['value' + (Object.keys(json).length)] = j;
+                if (a[i].binary) Object.assign(binary, a[i].binary);
+              });
+              const item = { json };
+              if (Object.keys(binary).length) item.binary = binary;
+              merged.push(item);
+            }
+            output = _brandItems(merged);
+          } else {
+            output = _brandItems([].concat(...branches));
+          }
+          break;
+        }
+
+        default: {
+          // Pluggable connector nodes (HTTP, Slack, …) from the action-node
+          // registry. Falls through to pass-through for unknown types.
+          const actionDef = getActionNode(node.type);
+          if (actionDef && typeof actionDef.run === 'function') {
+            const resolveCred = (id) => { try { return _resolveCredential(id); } catch (_) { return null; } };
+            // Per-item fan-out: when the input is a multi-item array, run the
+            // connector once per item (n8n semantics) and collect an item array.
+            if (_isItemArray(input) && input.length > 1) {
+              const collected = [];
+              let failed = null;
+              for (const it of input) {
+                _throwIfAborted(state.abortController.signal);
+                const r = await actionDef.run({
+                  input: it.json,
+                  item: it,
+                  cfg,
+                  interp: (s) => _interpolate(s, nodeOutputs, it),
+                  resolveCred,
+                  signal: state.abortController.signal,
+                });
+                if (typeof r === 'string' && r.startsWith('Node error')) { failed = r; break; }
+                collected.push(_toItem(r));
+              }
+              output = failed != null ? failed : _brandItems(collected);
+            } else {
+              const single = _isItemArray(input) ? (input[0] || { json: null }) : null;
+              output = await actionDef.run({
+                input: single ? single.json : input,
+                item: single,
+                cfg,
+                interp: (s) => _interpolate(s, nodeOutputs, single),
+                resolveCred,
+                signal: state.abortController.signal,
+              });
+            }
+            _throwIfAborted(state.abortController.signal);
+          } else {
+            output = input;
+          }
+        }
       }
     } catch (e) {
       if (e.name === 'AbortError' || state.abortController.signal.aborted) throw _abortError();
@@ -806,11 +908,12 @@ async function _runPipeline(task, state) {
     }
     nodeOutputs[nid] = output;
     state.stats.actionsTotal++;
-    const _outStr = String(output);
-    const _isError = _outStr.startsWith('Node error') ||
+    const _outStr = _displayOutput(output);
+    const _isError = typeof output === 'string' && (
+                     _outStr.startsWith('Node error') ||
                      _outStr.startsWith('Code error') ||
                      _outStr.startsWith('BLOCKED:') ||
-                     _outStr.startsWith('Condition error');
+                     _outStr.startsWith('Condition error'));
     const ok = !_isError;
     if (ok) state.stats.actionsOk++; else state.stats.actionsFailed++;
     state.nodeResults.push({
@@ -821,12 +924,12 @@ async function _runPipeline(task, state) {
       output: ok ? _outStr.slice(0, 300) : null,
       error: ok ? null : _outStr.replace(/^Node error: |^Code error: |^BLOCKED: |^Condition error: /, ''),
     });
-    state.reasoning.push({ step: state.step, intent: node.label, actions: [{ type: node.type, action: node.label, ok }], outcome: String(output).slice(0, 200) });
+    state.reasoning.push({ step: state.step, intent: node.label, actions: [{ type: node.type, action: node.label, ok }], outcome: _displayOutput(output).slice(0, 200) });
   }
 
   // Final output = last node's output
   const lastId = order[order.length - 1];
-  const summary = String(nodeOutputs[lastId] || 'Pipeline completed').slice(0, 500);
+  const summary = (_displayOutput(nodeOutputs[lastId]) || 'Pipeline completed').slice(0, 500);
 
   // If any node failed, mark the whole pipeline as failed
   if (state.stats.actionsFailed > 0) {
@@ -841,13 +944,39 @@ async function _runPipeline(task, state) {
   _emit(task.id, 'completed', { summary });
 }
 
-// Variable interpolation: {{nodeId.output}} or {{nodeId}}
-function _interpolate(str, nodeOutputs) {
+// Best-effort JSON parse for the split/merge field helpers.
+function _maybeParse(val) {
+  if (typeof val !== 'string') return val;
+  const t = val.trim();
+  if (!t || (t[0] !== '{' && t[0] !== '[')) return val;
+  try { return JSON.parse(t); } catch (_) { return val; }
+}
+
+// Variable interpolation: legacy {{nodeId}} / {{nodeId.output}} substitution,
+// plus n8n-style {{ $json.x }} expressions via the sandboxed expr-engine.
+// `currentItem` (optional) scopes $json/$item/$binary to one item on fan-out.
+function _interpolate(str, nodeOutputs, currentItem) {
   if (!str) return str;
-  return String(str).replace(/\{\{(\w+)(?:\.output)?\}\}/g, (_, id) => {
+  // Legacy: bare node-id references (word chars only — never matches $-exprs).
+  let s = String(str).replace(/\{\{\s*(\w+)(?:\.output)?\s*\}\}/g, (_m, id) => {
     const v = nodeOutputs[id];
-    return v !== undefined && v !== null ? String(v) : '';
+    return v !== undefined && v !== null ? _displayOutput(v) : '';
   });
+  // New: $-namespaced expressions ({{ $json.x }}, {{ $node["L"].output }}, …).
+  if (_hasExpression(s)) {
+    const meta = _exprCtxByOutputs.get(nodeOutputs) || {};
+    const ctx = _buildExprContext({
+      input: currentItem ? currentItem.json : meta.input,
+      items: meta.items,
+      item: currentItem || undefined,
+      nodeOutputs,
+      labels: meta.labels,
+      creds: meta.creds,
+    });
+    const out = _exprInterpolate(s, ctx);
+    s = typeof out === 'object' ? JSON.stringify(out) : String(out);
+  }
+  return s;
 }
 
 export {

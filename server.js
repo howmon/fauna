@@ -67,6 +67,8 @@ import { registerAgentBuilderRoutes } from './server/routes/agent-builder.js';
 import { registerAgentSandboxRoutes } from './server/routes/agent-sandbox.js';
 import { registerMemoryPrefsFactsRoutes } from './server/routes/memory-prefs-facts.js';
 import { registerConnectorRoutes } from './server/routes/connectors.js';
+import { registerCredentialRoutes } from './server/routes/credentials.js';
+import { registerActionNodeRoutes } from './server/routes/action-nodes.js';
 import { registerMcpRoutes } from './server/routes/mcp.js';
 import { registerVoiceSettingsRoutes } from './server/routes/voice-settings.js';
 import { registerKokoroTtsRoutes } from './server/routes/kokoro-tts.js';
@@ -478,6 +480,8 @@ registerPermissionsRoutes(app, { isWin: IS_WIN, getGhToken, getSystemPreferences
 // ── Memory / Preferences / Facts ──────────────────────────────────────────
 const { loadPrefs } = registerMemoryPrefsFactsRoutes(app, { configDir: CONFIG_DIR });
 registerConnectorRoutes(app);
+registerCredentialRoutes(app);
+registerActionNodeRoutes(app);
 registerMcpRoutes(app, { faunaConfigDir: FAUNA_CONFIG_DIR });
 
 const teamsBundle = createTeamsBundle({

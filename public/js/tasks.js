@@ -1074,10 +1074,30 @@ async function _acGeneratePipeline() {
   var agentList = (typeof getAllAgents === 'function') ? getAllAgents() : [];
   var agentNames = agentList.slice(0, 20).map(function(a) { return (a.displayName || a.name) + ' (' + a.name + ')'; }).join(', ');
 
+  // Fetch the connector catalog so the model knows which integration nodes
+  // exist and what config fields each expects.
+  var connectorLine = '';
+  try {
+    var cr = await fetch('/api/action-nodes');
+    if (cr.ok) {
+      var cd = await cr.json();
+      var conns = (cd.nodes || []).filter(function(n) { return n.type !== 'http' && n.type !== 'slack'; });
+      if (conns.length) {
+        connectorLine = 'CONNECTOR node types (config fields in parentheses): ' + conns.map(function(n) {
+          var keys = (n.fields || []).map(function(f) { return f.key; }).filter(function(k) { return k !== 'credentialId'; });
+          return n.type + (keys.length ? ' (' + keys.join(', ') + ')' : '');
+        }).join('; ') + '. Connectors that need auth take a "credentialId" in config; set it only if the user named a credential.';
+      }
+    }
+  } catch (_) { /* offline */ }
+
   var systemPrompt = [
     'You are a pipeline builder assistant. Convert the user\'s natural-language description into a JSON pipeline.',
-    'Available node types: trigger, prompt, condition, shell, browser, figma, agent, loop, webhook, delay, code, notify.',
+    'Available node types: trigger, prompt, condition, shell, browser, figma, agent, loop, webhook, delay, code, notify, http, slack, split, merge.',
     'Use notify as the last node when the user wants to post the result to chat or see it in a new conversation. notify config: { title: "optional title" }.',
+    'http node config: { method, url, headers, body, credentialId } — for authed REST calls. slack node config: { channel, text, credentialId } — posts a message (needs a bearer credential).',
+    connectorLine,
+    'ITEM ARRAYS (n8n-style): split node config: { field } — expands an array (or a named array field of the input) into multiple items; downstream nodes then run once PER ITEM (fan-out). merge node config: { mode } where mode is "append" (concatenate branches) or "combine" (merge by index); a merge node may have two inputs (in1, in2). Use split+merge when the user wants to process a list of things and recombine the results.',
     'Available agents: ' + (agentNames || 'none defined yet') + '.',
     'Return ONLY valid JSON with this exact schema:',
     '{"nodes":[{"id":"n1","type":"trigger","label":"Start","x":100,"y":200,"config":{}},',
@@ -1085,6 +1105,7 @@ async function _acGeneratePipeline() {
     '"edges":[{"id":"e1","from":"n1","fromPort":"out","to":"n2","toPort":"in"}]}',
     'Layout nodes left-to-right, x increments of 240, y around 200. For condition nodes use ports "true"/"false".',
     'INTERPOLATION: To reference a prior node\'s output in a prompt or code config, use {{nodeId}} where nodeId is the "id" field of that node (e.g. {{n2}}, {{n3}}). NEVER use {{code.output}}, {{prompt.output}}, or any other form — only {{nodeId}}.',
+    'EXPRESSIONS (advanced): you may also use {{ $json.field }} to read a field of the upstream JSON output, or {{ $node["Label"].json.x }} to read a named node\'s output. Use plain {{nodeId}} unless field access is needed.',
     'CODE NODES: The "code" field must contain complete, executable JavaScript. It receives the prior node output as `input` (a string). It MUST end with a `return` statement that returns a string. Never leave the code as just a comment.',
     'No markdown, no explanation — raw JSON only.',
   ].join('\n');
@@ -1180,8 +1201,20 @@ var _NODE_TYPE_ICONS = {
   trigger: 'ti-bolt', prompt: 'ti-message', agent: 'ti-robot',
   shell: 'ti-terminal-2', browser: 'ti-world-www', figma: 'ti-brand-figma',
   condition: 'ti-git-branch', loop: 'ti-refresh', webhook: 'ti-webhook', notify: 'ti-message-forward',
-  delay: 'ti-clock-pause', code: 'ti-code',
+  delay: 'ti-clock-pause', code: 'ti-code', http: 'ti-api', slack: 'ti-brand-slack',
+  split: 'ti-arrows-split-2', merge: 'ti-arrows-join-2',
 };
+
+// Augment the icon map with connector icons from the action-node registry so
+// connector nodes render their real icon in the read-only run view.
+(function _loadConnectorIcons() {
+  try {
+    fetch('/api/action-nodes').then(function(r) { return r.ok ? r.json() : null; }).then(function(d) {
+      if (!d || !d.nodes) return;
+      d.nodes.forEach(function(n) { if (n.icon && !_NODE_TYPE_ICONS[n.type]) _NODE_TYPE_ICONS[n.type] = n.icon; });
+    }).catch(function() {});
+  } catch (_) {}
+})();
 
 function _renderPipelineLastRun(nodes, task) {
   // Store for global access by _plrToggle / _plrAskFix
