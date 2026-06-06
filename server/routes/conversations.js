@@ -1,7 +1,7 @@
 import { createConversationStore, PayloadTooLargeError, migrateLegacyToSplit } from '../lib/conversation-store.js';
 import { extractFacts as extractMemoryFacts } from '../lib/memory-extractor.js';
 import { getProject } from '../../project-manager.js';
-import { generateMini, tryMini, isModelCached as isMiniCached, warmupMini, getMiniModelId } from '../llm/local-mini.js';
+import { generateMini, tryMini, isModelCached as isMiniCached, warmupMini, getMiniModelId, isLocalMiniEnabled } from '../llm/local-mini.js';
 
 // Normalize a model-generated title: strip wrapping quotes, a leading "Title:"
 // label, surrounding whitespace/markdown, and collapse to a single short line.
@@ -297,7 +297,9 @@ export function registerConversationRoutes(app, deps) {
       // inference time. Only used inline once the weights are already cached;
       // otherwise we kick off a background download and fall through to Copilot
       // for THIS request so the user isn't blocked on a multi-hundred-MB fetch.
-      if (process.env.FAUNA_DISABLE_LOCAL_MINI !== '1') {
+      // Opt-in only (see isLocalMiniEnabled): loading onnxruntime in the main
+      // process can crash the app on failure, so it's off unless enabled.
+      if (isLocalMiniEnabled()) {
         if (isMiniCached()) {
           try {
             const raw = await generateMini(sugMessages, { maxTokens: 120, temperature: 0.4 });

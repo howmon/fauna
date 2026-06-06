@@ -30,6 +30,24 @@ const MODEL_ID = (process.env.FAUNA_LOCAL_MINI_MODEL || DEFAULT_MINI_MODEL).trim
 // only ships a different quant (e.g. q4f16, int8, fp16).
 const MODEL_DTYPE = (process.env.FAUNA_LOCAL_MINI_DTYPE || 'q4').trim();
 
+// IMPORTANT — opt-in by default.
+//
+// The server (and therefore this module) runs in the Electron MAIN process, and
+// onnxruntime-node creates the inference session synchronously on the calling
+// thread. If that native load fails (e.g. OOM while allocating the model's
+// initialized tensors) it raises a SIGTRAP that JavaScript try/catch CANNOT
+// intercept — it crashes the entire app. We observed exactly this with the
+// ~1GB Qwen2.5-1.5B q4 model (CPUAllocator::Alloc -> _posix_memalign -> trap).
+//
+// Until the model is isolated in a separate child/utility process, loading it
+// in-process is unsafe to do automatically. So it is DISABLED unless the user
+// explicitly opts in via FAUNA_ENABLE_LOCAL_MINI=1. FAUNA_DISABLE_LOCAL_MINI=1
+// remains a hard kill switch that wins over everything.
+export function isLocalMiniEnabled() {
+  if (process.env.FAUNA_DISABLE_LOCAL_MINI === '1') return false;
+  return process.env.FAUNA_ENABLE_LOCAL_MINI === '1';
+}
+
 // Point the transformers.js / HF cache at ~/.fauna/local-mini BEFORE the module
 // loads. Setting all three covers the various env vars different versions of
 // transformers.js / huggingface-hub respect. (Same approach as kokoro.js.)
@@ -46,6 +64,11 @@ let _pipePromise = null;
 let _genChain = Promise.resolve();
 
 async function _getPipeline({ onProgress } = {}) {
+  // Hard guard: never load the native model unless explicitly opted in. A
+  // failed load crashes the whole app (see isLocalMiniEnabled note above).
+  if (!isLocalMiniEnabled()) {
+    throw new Error('local-mini disabled (set FAUNA_ENABLE_LOCAL_MINI=1 to enable)');
+  }
   if (_pipePromise) return _pipePromise;
   _pipePromise = (async () => {
     // Force transformers.js to use a writable cache OUTSIDE the Electron
@@ -112,6 +135,8 @@ export function getMiniModelId() { return MODEL_ID; }
  * @param {(p:{phase:string,fraction?:number,file?:string})=>void} [onProgress]
  */
 export function warmupMini(onProgress) {
+  // No-op when disabled — don't even attempt to touch onnxruntime.
+  if (!isLocalMiniEnabled()) return Promise.resolve(null);
   return _getPipeline({ onProgress });
 }
 
@@ -127,6 +152,9 @@ export function warmupMini(onProgress) {
  * @returns {Promise<string>} the assistant's reply text
  */
 export async function generateMini(messages, opts = {}) {
+  if (!isLocalMiniEnabled()) {
+    throw new Error('local-mini disabled (set FAUNA_ENABLE_LOCAL_MINI=1 to enable)');
+  }
   if (!Array.isArray(messages) || !messages.length) {
     throw new Error('generateMini requires a non-empty messages array');
   }
@@ -186,7 +214,7 @@ function _extractText(output) {
  * @returns {Promise<string|null>}
  */
 export async function tryMini(messages, opts = {}) {
-  if (process.env.FAUNA_DISABLE_LOCAL_MINI === '1') return null;
+  if (!isLocalMiniEnabled()) return null;
   if (!Array.isArray(messages) || !messages.length) return null;
   if (!isModelCached()) {
     // Warm the cache in the background for next time; don't block this request.

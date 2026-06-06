@@ -459,7 +459,7 @@ function _renderSuggestionBar(items, msgEl, isFallback) {
   if (msgEl.classList && msgEl.classList.contains('chain-msg')) return;
 
   // Suggestions are conversation-level CTAs: keep only the latest bar visible.
-  var scope = msgEl.closest('.conv-inner') || msgEl.parentElement || document;
+  var scope = msgEl.closest('[data-conv-messages]') || msgEl.parentElement || document;
   Array.from(scope.querySelectorAll('.suggestion-bar')).forEach(function(old) { old.remove(); });
 
   var bar = document.createElement('div');
@@ -491,12 +491,13 @@ function _renderSuggestionBar(items, msgEl, isFallback) {
   bar.appendChild(otherBtn);
 
   // Always render the recommended-actions bar AFTER the latest assistant
-  // message in the conversation. Keep it as a direct child of `.conv-inner`
-  // (NOT nested inside a message) so subsequent message bubbles, tool cards,
-  // or streaming prose always render ABOVE it. Otherwise, when the model
-  // emits ```suggestions early and the long summary arrives in a later
-  // message bubble, the bar gets stuck above the summary.
-  var convInner = msgEl.closest('.conv-inner');
+  // message in the conversation. Keep it as a direct child of the conversation
+  // container (the per-conversation `[data-conv-messages]` div, NOT nested
+  // inside a message) so subsequent message bubbles, tool cards, or streaming
+  // prose always render ABOVE it. Otherwise, when the model emits
+  // ```suggestions early and the long summary arrives in a later message
+  // bubble, the bar gets stuck above the summary.
+  var convInner = msgEl.closest('[data-conv-messages]');
   if (convInner) {
     convInner.appendChild(bar);
   } else {
@@ -530,8 +531,13 @@ function _doGenerateContextualSuggestions(convId) {
   }
   if (!lastAssistant) return;
 
-  // Locate the latest assistant message element in the DOM.
-  var convInner = document.querySelector('.conv-inner');
+  // Locate the latest assistant message element in the active conversation's
+  // container. The per-conversation container is the `[data-conv-messages]`
+  // div returned by getConvInner (rendered with display:contents) — NOT a
+  // `.conv-inner` element, which does not exist in the DOM.
+  var convInner = (typeof getConvInner === 'function')
+    ? getConvInner(convId)
+    : document.querySelector('[data-conv-messages="' + convId + '"]');
   if (!convInner) return;
   var msgEl = convInner.querySelector('.msg.assistant:last-of-type')
     || Array.from(convInner.querySelectorAll('.msg.assistant')).pop();
@@ -568,7 +574,9 @@ function _doGenerateContextualSuggestions(convId) {
     if (typeof _hasActiveConversationWork === 'function' && _hasActiveConversationWork()) return;
     if (!items.length) return;
     // Re-locate the message element in case the DOM changed.
-    var ci = document.querySelector('.conv-inner');
+    var ci = (typeof getConvInner === 'function')
+      ? getConvInner(convId)
+      : document.querySelector('[data-conv-messages="' + convId + '"]');
     var el = ci && (ci.querySelector('.msg.assistant:last-of-type') || Array.from(ci.querySelectorAll('.msg.assistant')).pop());
     if (el) _renderSuggestionBar(items, el, false);
   }).catch(function() { /* network error — leave no bar */ });

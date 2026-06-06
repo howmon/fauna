@@ -867,7 +867,9 @@ function setBusy(busy) {
       // an auto-feed chain or shell verification was still in flight.
       try {
         var conv = getConv(state.currentId);
-        var convInner = document.querySelector('.conv-inner');
+        var convInner = (typeof getConvInner === 'function')
+          ? getConvInner(state.currentId)
+          : document.querySelector('[data-conv-messages]');
         var lastMsg = convInner && (
           convInner.querySelector('.msg.assistant:last-of-type') ||
           Array.from(convInner.querySelectorAll('.msg.assistant')).pop()
