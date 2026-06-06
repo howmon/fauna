@@ -202,4 +202,88 @@ export function registerConversationRoutes(app, deps) {
       }
     }
   });
+
+  // Real, model-generated "recommended next actions" for a conversation.
+  // Uses the existing Copilot connection (the discovered gh token — no separate
+  // AI key) with a fast/light model. Returns a JSON array of short, contextual
+  // user-facing follow-up actions. On any failure returns an empty list so the
+  // UI simply shows no suggestion bar (no canned/regex fallback).
+  const SUGGESTION_SYSTEM_PROMPT = [
+    'You generate the user\'s most likely next actions in a chat with an AI coding/assistant app.',
+    'Given the conversation, return exactly 3 short, specific follow-up actions the USER might take next.',
+    'Phrase each as a concise action the user would click — an imperative the assistant can act on',
+    '(e.g. "Run the tests", "Explain the auth flow", "Add error handling", "Show me an example").',
+    'Rules:',
+    '- Each suggestion ≤ 6 words.',
+    '- Make them genuinely relevant to what was JUST discussed — not generic filler.',
+    '- No duplicates. No numbering. No trailing punctuation.',
+    '- Return ONLY a JSON array of 3 strings. No prose, no markdown, no code fences.',
+  ].join('\n');
+
+  function _parseSuggestionArray(raw) {
+    let s = String(raw || '').trim();
+    s = s.replace(/^```[\w-]*\s*\n?/, '').replace(/\n?\s*```\s*$/, '').trim();
+    const start = s.indexOf('[');
+    const end = s.lastIndexOf(']');
+    if (start === -1 || end === -1 || end <= start) return [];
+    let arr;
+    try { arr = JSON.parse(s.slice(start, end + 1)); } catch (_) { return []; }
+    if (!Array.isArray(arr)) return [];
+    const seen = new Set();
+    const out = [];
+    for (const item of arr) {
+      if (typeof item !== 'string') continue;
+      const v = item.trim().replace(/\s+/g, ' ').slice(0, 60);
+      if (!v) continue;
+      const key = v.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(v);
+      if (out.length >= 4) break;
+    }
+    return out;
+  }
+
+  app.post('/api/conversation-suggestions', async (req, res) => {
+    try {
+      const { messages = [], model: reqModel } = req.body;
+      if (!Array.isArray(messages) || !messages.length) {
+        return res.status(400).json({ error: 'No messages provided' });
+      }
+
+      const client = getCopilotClient();
+      const convText = messages
+        .map(m => `${m.role}: ${typeof m.content === 'string' ? m.content : ''}`)
+        .join('\n\n')
+        .slice(0, 8000);
+      const sugMessages = [
+        { role: 'system', content: SUGGESTION_SYSTEM_PROMPT },
+        { role: 'user', content: 'Conversation so far:\n\n' + convText + '\n\nReturn the JSON array of 3 suggestions now.' },
+      ];
+
+      // Light/fast model first, with one reliable fallback. claude-* can return
+      // empty choices on this endpoint, so default to the OpenAI minis.
+      const primary = reqModel || 'gpt-4.1-mini';
+      const chain = [primary, 'gpt-4.1'].filter((m, i, a) => a.indexOf(m) === i);
+      let suggestions = [];
+      for (const m of chain) {
+        try {
+          const completion = await client.chat.completions.create({
+            model: m,
+            messages: sugMessages,
+            max_tokens: 120,
+            temperature: 0.4,
+          });
+          suggestions = _parseSuggestionArray(completion.choices?.[0]?.message?.content);
+          if (suggestions.length) break;
+        } catch (e) {
+          console.error(`[conversation-suggestions] model=${m} error:`, e.message);
+        }
+      }
+      res.json({ suggestions });
+    } catch (err) {
+      console.error('[conversation-suggestions] Error:', err.message);
+      res.json({ suggestions: [] });
+    }
+  });
 }

@@ -437,20 +437,25 @@ function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
   // Tolerant of trailing spaces, casing (Suggestions/SUGGESTIONS), CRLF, and
   // 4-backtick fences. Captures the JSON body for parsing.
   var match = buffer.match(/`{3,4}\s*suggestions[ \t]*\r?\n([\s\S]*?)`{3,4}/i);
-  var items;
   if (match) {
+    // The model emitted an explicit ```suggestions block — render it directly.
+    var items;
     try { items = JSON.parse(match[1].trim()); } catch (_) { return; }
-  } else if (allowFallback !== false) {
-    // Generate fallback suggestions from the trailing summary text only — not
-    // the entire raw buffer — so CTAs are contextual to the task's conclusion
-    // rather than mid-process noise (errors that were already fixed, build
-    // chatter, intermediate tool output, etc.).
-    var summaryText = _summaryTextForSuggestions(msgEl);
-    items = _fallbackSuggestionsFromMessage(summaryText || buffer);
-  } else {
+    if (Array.isArray(items) && items.length) _renderSuggestionBar(items, msgEl, false);
     return;
   }
-  if (!Array.isArray(items) || !items.length) return;
+
+  // No explicit block. Generate REAL contextual suggestions with a fast model
+  // (via the existing Copilot connection — no separate AI key). The caller can
+  // opt out by passing allowFallback === false (e.g. mid-chain bubbles).
+  if (allowFallback === false) return;
+  _generateContextualSuggestions(msgEl);
+}
+
+// Render a recommended-actions bar for the given items below the latest
+// assistant message. Shared by the explicit-block and model-generated paths.
+function _renderSuggestionBar(items, msgEl, isFallback) {
+  if (!Array.isArray(items) || !items.length || !msgEl) return;
   if (msgEl.classList && msgEl.classList.contains('chain-msg')) return;
 
   // Suggestions are conversation-level CTAs: keep only the latest bar visible.
@@ -458,7 +463,7 @@ function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
   Array.from(scope.querySelectorAll('.suggestion-bar')).forEach(function(old) { old.remove(); });
 
   var bar = document.createElement('div');
-  bar.className = 'suggestion-bar' + (match ? '' : ' suggestion-bar-fallback');
+  bar.className = 'suggestion-bar' + (isFallback ? ' suggestion-bar-fallback' : '');
   bar.setAttribute('aria-label', 'Recommended actions');
 
   items.slice(0, 4).forEach(function(label) {
@@ -498,6 +503,77 @@ function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
     msgEl.appendChild(bar);
   }
 }
+
+// Debounced trigger so history-load (which calls this once per message) and
+// live streaming both result in a single API call targeting the FINAL
+// assistant message of the conversation.
+var _sugGenTimers = {};
+function _generateContextualSuggestions(msgEl) {
+  var convId = (typeof state !== 'undefined' && state) ? state.currentId : null;
+  if (!convId) return;
+  clearTimeout(_sugGenTimers[convId]);
+  _sugGenTimers[convId] = setTimeout(function() { _doGenerateContextualSuggestions(convId); }, 400);
+}
+
+function _doGenerateContextualSuggestions(convId) {
+  var conv = (typeof getConv === 'function') ? getConv(convId) : null;
+  if (!conv) return;
+  // Only the active conversation gets a live suggestion bar.
+  if (typeof state !== 'undefined' && state && state.currentId !== convId) return;
+  if (conv._streaming) return;
+  if (typeof _hasActiveConversationWork === 'function' && _hasActiveConversationWork()) return;
+
+  var msgs = Array.isArray(conv.messages) ? conv.messages : [];
+  var lastAssistant = null;
+  for (var i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i] && msgs[i].role === 'assistant') { lastAssistant = msgs[i]; break; }
+  }
+  if (!lastAssistant) return;
+
+  // Locate the latest assistant message element in the DOM.
+  var convInner = document.querySelector('.conv-inner');
+  if (!convInner) return;
+  var msgEl = convInner.querySelector('.msg.assistant:last-of-type')
+    || Array.from(convInner.querySelectorAll('.msg.assistant')).pop();
+  if (!msgEl) return;
+
+  // Cache (in-memory only; `_`-prefixed keys are stripped before storage) so we
+  // don't re-call the model when the same turn is re-rendered within a session.
+  if (Array.isArray(lastAssistant._suggestions)) {
+    if (lastAssistant._suggestions.length) _renderSuggestionBar(lastAssistant._suggestions, msgEl, false);
+    return;
+  }
+
+  // Build a small context payload: the last few messages, trimmed.
+  var recent = msgs.slice(-4).map(function(m) {
+    var c = typeof m.content === 'string'
+      ? m.content
+      : (Array.isArray(m.content) ? (m.content.find(function(p){ return p && p.type === 'text'; }) || {}).text || '' : '');
+    return { role: m.role, content: String(c || '').slice(0, 2000) };
+  }).filter(function(m) { return m.content.trim(); });
+  if (!recent.length) return;
+
+  var reqId = (conv._sugReqId = (conv._sugReqId || 0) + 1);
+  fetch('/api/conversation-suggestions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages: recent, model: 'gpt-4.1-mini' })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    var items = (data && Array.isArray(data.suggestions)) ? data.suggestions : [];
+    lastAssistant._suggestions = items; // cache result (even if empty)
+    // Stale guards: a newer turn started, conv switched, or streaming resumed.
+    if (conv._sugReqId !== reqId) return;
+    if (typeof state !== 'undefined' && state && state.currentId !== convId) return;
+    if (conv._streaming) return;
+    if (typeof _hasActiveConversationWork === 'function' && _hasActiveConversationWork()) return;
+    if (!items.length) return;
+    // Re-locate the message element in case the DOM changed.
+    var ci = document.querySelector('.conv-inner');
+    var el = ci && (ci.querySelector('.msg.assistant:last-of-type') || Array.from(ci.querySelectorAll('.msg.assistant')).pop());
+    if (el) _renderSuggestionBar(items, el, false);
+  }).catch(function() { /* network error — leave no bar */ });
+}
+
 
 // Send a message directly into the conversation (supports vision/array content).
 // Used by auto-feed when a screenshot was taken.
