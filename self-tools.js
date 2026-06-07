@@ -27,6 +27,11 @@ import { renderCircuit } from './lib/circuit-renderer.js';
 import { validateCircuit } from './lib/circuit-validate.js';
 import { SYMBOLS, listSymbolTypes } from './lib/circuit-symbols.js';
 import { simulateCircuit } from './lib/circuit-simulate.js';
+import { listFootprints } from './lib/circuit-footprints.js';
+import { layoutPcb, routePcb } from './lib/circuit-pcb.js';
+import { renderBoard } from './lib/circuit-board-renderer.js';
+import { checkBoard } from './lib/circuit-pcb-drc.js';
+import { buildGuide } from './lib/circuit-guide.js';
 import { packWidgetResult } from './lib/dynamic-widgets.js';
 import {
   createJob as videoCreateJob,
@@ -1432,7 +1437,79 @@ export const SELF_TOOL_DEFS = [
     },
   },
 
-  // ── Desktop window context (macOS) ──
+  // ── PCB: footprints / board layout / etchings / DRC / build guide ──
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_list_footprints',
+      description: 'List the physical PCB footprints (land patterns) available for each circuit component type, with variants (tht/smd). Call this when the user wants a PCB / board layout so you know which parts have footprints.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_layout_pcb',
+      description: 'Turn a circuit DSL into a physical board model: places footprints, assigns nets to copper pads, sizes the board, and (by default) auto-routes copper traces (etchings) on two layers with vias, leaving unroutable nets as airwires. Returns the board model. Use this BEFORE fauna_render_pcb / fauna_check_board / fauna_build_guide.',
+      parameters: {
+        type: 'object',
+        properties: {
+          doc: { type: 'object', description: 'Circuit DSL document (same shape as fauna_render_circuit)' },
+          route: { type: 'boolean', description: 'Auto-route copper traces. Default true.' },
+          variants: { type: 'object', description: 'Per-type footprint variant override, e.g. { "resistor": "smd" }.' },
+          placements: { type: 'object', description: 'Manual component placement in mm: { compId: { x, y, rot } }.' },
+          board: { type: 'object', description: 'Fixed board size in mm: { w, h }. Auto-sized when omitted.' },
+        },
+        required: ['doc'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_render_pcb',
+      description: 'Render a board model (from fauna_layout_pcb) as an SVG top view: FR-4 substrate, copper traces/etchings (top=red, bottom=blue), tinned solder pads + plated drill holes, silkscreen refdes, vias, and ratsnest airwires. Returns SVG markup to embed in a gen-ui SVG block. Pass the board returned by fauna_layout_pcb.',
+      parameters: {
+        type: 'object',
+        properties: {
+          doc: { type: 'object', description: 'Circuit DSL — laid out + routed automatically if `board` is not supplied.' },
+          board: { type: 'object', description: 'Pre-computed board model from fauna_layout_pcb (preferred).' },
+          layers: { type: 'object', description: 'Layer visibility flags, e.g. { "copperBottom": false, "ratsnest": false }.' },
+          pxmm: { type: 'number', description: 'Pixels per millimetre (default 8).' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_check_board',
+      description: 'Design-rule check (DRC) of a routed board: copper clearance (pad↔pad, trace↔trace, trace↔pad), drill spacing, board-edge clearance, and unrouted nets. Returns { ok, errors, warnings, stats }. ALWAYS run after fauna_layout_pcb and surface violations.',
+      parameters: {
+        type: 'object',
+        properties: {
+          doc: { type: 'object', description: 'Circuit DSL — laid out + routed automatically if `board` is not supplied.' },
+          board: { type: 'object', description: 'Pre-computed routed board model from fauna_layout_pcb (preferred).' },
+          clearance: { type: 'number', description: 'Minimum copper clearance in mm (default 0.25).' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_build_guide',
+      description: 'Generate a complete build guide for a circuit: bill of materials, assembly order (low-profile parts first), polarity/pin-1 callouts, soldering steps, and a simulation-backed "test & verify" section with expected node voltages. Returns a structured guide + Markdown. Uses ngspice for expected readings when available; degrades gracefully otherwise.',
+      parameters: {
+        type: 'object',
+        properties: {
+          doc: { type: 'object', description: 'Circuit DSL document (same shape as fauna_render_circuit)' },
+          analysis: { type: 'object', description: 'Optional simulation analysis spec (defaults to operating point).' },
+        },
+        required: ['doc'],
+      },
+    },
+  },
   {
     type: 'function',
     function: {
@@ -2596,6 +2673,53 @@ export async function executeSelfTool(toolName, args, context = {}) {
           }
           return JSON.stringify(r);
         })
+        .catch(e => JSON.stringify({ ok: false, error: e.message }));
+    }
+
+    case 'fauna_list_footprints': {
+      return JSON.stringify({ ok: true, footprints: listFootprints() });
+    }
+    case 'fauna_layout_pcb': {
+      try {
+        let board = layoutPcb(args.doc, {
+          variants: args.variants, placements: args.placements, board: args.board,
+        });
+        if (board.ok && args.route !== false) board = routePcb(board);
+        // Keep payloads compact: drop the per-cell ratsnest points already implied by pads.
+        return JSON.stringify({ ok: board.ok, ...board });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+    case 'fauna_render_pcb': {
+      try {
+        let board = args.board;
+        if (!board) {
+          board = layoutPcb(args.doc, {});
+          if (board.ok) board = routePcb(board);
+        }
+        const result = renderBoard(board, { layers: args.layers, pxmm: args.pxmm });
+        return JSON.stringify({ ok: true, ...result });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+    case 'fauna_check_board': {
+      try {
+        let board = args.board;
+        if (!board) {
+          board = layoutPcb(args.doc, {});
+          if (board.ok) board = routePcb(board);
+        }
+        const result = checkBoard(board, { clearance: args.clearance });
+        return JSON.stringify(result);
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+    case 'fauna_build_guide': {
+      return buildGuide(args.doc, { analysis: args.analysis })
+        .then(g => JSON.stringify(g))
         .catch(e => JSON.stringify({ ok: false, error: e.message }));
     }
 

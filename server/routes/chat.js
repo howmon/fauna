@@ -561,7 +561,22 @@ export function registerChatRoute(app, {
           : Array.isArray(lastUser?.content)
             ? lastUser.content.filter(c => c.type === 'text').map(c => c.text).join('\n')
             : '';
-        const CIRCUIT_RE = /\b(schematic|circuit|wiring diagram|netlist|breadboard|rc (low|high)[- ]?pass|low[- ]?pass filter|high[- ]?pass filter|band[- ]?pass|op[- ]?amp|555 timer|transistor amp(?:lifier)?|voltage divider|h[- ]?bridge|rectifier|flip[- ]?flop|d[- ]?type latch|kicad|spice)\b/i;
+        const CIRCUIT_RE = /\b(schematic|circuit|wiring diagram|netlist|breadboard|rc (low|high)[- ]?pass|low[- ]?pass filter|high[- ]?pass filter|band[- ]?pass|op[- ]?amp|555 timer|transistor amp(?:lifier)?|amplifier|voltage divider|voltage regulator|power supply|\bpsu\b|inverter|oscillator|multivibrator|astable|h[- ]?bridge|full[- ]?bridge|half[- ]?bridge|push[- ]?pull|darlington|schmitt trigger|comparator|led driver|relay driver|buck converter|boost converter|buck[- ]?boost|rectifier|flip[- ]?flop|d[- ]?type latch|wheatstone bridge|common[- ]?(emitter|collector)|kicad|spice)\b/i;
+        const PCB_RE = /\b(pcb|printed circuit board|board layout|copper (trace|pour|layer)|etch(?:ing|ed)?|solder(?:ing)?|trace routing|autoroute|footprint|land pattern|gerber|silkscreen|bill of materials|\bbom\b|build guide|assembly (guide|instructions))\b/i;
+        if (lastText && PCB_RE.test(lastText) && !isCLI && !noTools) {
+          allMessages.push({
+            role: 'system',
+            content:
+              '[PCB / board / soldering / build-guide request detected] Use the board tools. Required sequence for THIS turn:\n' +
+              '1. (Optional) fauna_list_circuit_symbols / fauna_list_footprints — only if unsure of pins or available parts.\n' +
+              '2. fauna_layout_pcb({ doc }) — places footprints and auto-routes copper traces (etchings); returns the board model. Reuse the SAME `doc` you would pass to fauna_render_circuit.\n' +
+              '3. fauna_check_board({ board }) — run DRC; surface any clearance/unrouted violations.\n' +
+              '4. (Optional) fauna_build_guide({ doc }) — for BOM / assembly order / soldering steps / sim-backed test readings; render its `markdown` in your answer.\n' +
+              '5. Write the prose answer FIRST (board summary, layer notes, any DRC findings, BOM/steps if a guide was requested).\n' +
+              '6. Then call fauna_render_pcb({ board }) and emit ONE gen-ui block at the END whose root contains the returned SVG: { "type":"SVG", "props":{ "markup":"<svg …>…</svg>" } }.\n' +
+              'Forbidden: pasting raw <svg> into a code fence; inventing copper/footprints without the tools; placing the board SVG above the analysis.'
+          });
+        }
         if (lastText && CIRCUIT_RE.test(lastText) && !isCLI && !noTools) {
           allMessages.push({
             role: 'system',
@@ -573,7 +588,7 @@ export function registerChatRoute(app, {
               '4. (Optional) fauna_simulate_circuit({ doc, analysis }) — for behaviour questions; if ngspice is missing, surface the install hint and continue with the analytical answer.\n' +
               '5. Write the prose answer FIRST (component values, expected behaviour, key formulas, SPICE netlist if relevant).\n' +
               '6. Then, at the END of the message, emit ONE gen-ui block whose root contains an SVG element: { "type":"SVG", "props":{ "markup":"<svg …>…</svg>" } } using the markup returned by fauna_render_circuit verbatim. The schematic should be the LAST thing in the message, not the first.\n' +
-              'Forbidden: pasting the raw <svg> into a plaintext/html/markdown code fence; describing the schematic without calling fauna_render_circuit; computing analytically only; placing the gen-ui SVG block above the analysis.'
+              'Forbidden: hand-authoring or hand-positioning your own <svg> markup instead of using fauna_render_circuit\'s output (this is slow and renders warped); pasting the raw <svg> into a plaintext/html/markdown code fence; describing the schematic without calling fauna_render_circuit; computing analytically only; placing the gen-ui SVG block above the analysis.'
           });
         }
       } catch (_) { /* non-fatal */ }

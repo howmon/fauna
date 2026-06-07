@@ -62,7 +62,9 @@ describe('self-tools', () => {
       // fauna_image_edit + fauna_image_gen_status).
       // Bumped to 63 after adding fauna_retrieve_output (reversible tool-output offload).
       // Bumped to 64 after adding fauna_doctor (aggregated capability self-diagnostic).
-      expect(SELF_TOOL_DEFS).toHaveLength(64);
+      // Bumped to 69 after adding the PCB toolset: fauna_list_footprints,
+      // fauna_layout_pcb, fauna_render_pcb, fauna_check_board, fauna_build_guide.
+      expect(SELF_TOOL_DEFS).toHaveLength(69);
     });
 
     it('each tool has required OpenAI function format', () => {
@@ -153,6 +155,63 @@ describe('self-tools', () => {
       const result = JSON.parse(await executeSelfTool('fauna_apply_patch', { patch: '*** Begin Patch\n*** End Patch' }, { ...mockContext, applyPatch }));
       expect(applyPatch).toHaveBeenCalled();
       expect(result.ok).toBe(true);
+    });
+  });
+
+  describe('PCB / board tools', () => {
+    const rc = {
+      title: 'RC',
+      components: [
+        { id: 'vcc', type: 'vcc', x: 0, y: 0, value: '5' },
+        { id: 'r1', type: 'resistor', x: 2, y: 0, value: '1k' },
+        { id: 'c1', type: 'capacitor', x: 4, y: 0, value: '1u' },
+        { id: 'gnd', type: 'gnd', x: 4, y: 2 },
+      ],
+      wires: [
+        { from: 'vcc.p', to: 'r1.p1' },
+        { from: 'r1.p2', to: 'c1.p1' },
+        { from: 'c1.p2', to: 'gnd.p' },
+      ],
+    };
+
+    it('registers the 5 PCB tools', () => {
+      const names = SELF_TOOL_DEFS.map((d) => d.function.name);
+      ['fauna_list_footprints', 'fauna_layout_pcb', 'fauna_render_pcb', 'fauna_check_board', 'fauna_build_guide'].forEach((n) => {
+        expect(names).toContain(n);
+        expect(isSelfTool(n)).toBe(true);
+      });
+    });
+
+    it('fauna_list_footprints returns the footprint catalog', async () => {
+      const r = JSON.parse(await executeSelfTool('fauna_list_footprints', {}, mockContext));
+      expect(r.ok).toBe(true);
+      expect(r.footprints.length).toBeGreaterThan(0);
+    });
+
+    it('fauna_layout_pcb places parts and auto-routes copper', async () => {
+      const r = JSON.parse(await executeSelfTool('fauna_layout_pcb', { doc: rc }, mockContext));
+      expect(r.ok).toBe(true);
+      expect(r.components).toHaveLength(4);
+      expect(r.traces.length).toBeGreaterThan(0); // routed
+    });
+
+    it('fauna_render_pcb produces board SVG', async () => {
+      const r = JSON.parse(await executeSelfTool('fauna_render_pcb', { doc: rc }, mockContext));
+      expect(r.ok).toBe(true);
+      expect(r.svg).toContain('<svg');
+    });
+
+    it('fauna_check_board runs DRC', async () => {
+      const r = JSON.parse(await executeSelfTool('fauna_check_board', { doc: rc }, mockContext));
+      expect(r.ok).toBe(true);
+      expect(r.stats.pads).toBeGreaterThan(0);
+    });
+
+    it('fauna_build_guide returns a BOM + markdown', async () => {
+      const r = JSON.parse(await executeSelfTool('fauna_build_guide', { doc: rc, analysis: { type: 'op' } }, mockContext));
+      expect(r.ok).toBe(true);
+      expect(r.bom.length).toBeGreaterThan(0);
+      expect(r.markdown).toMatch(/Build Guide/);
     });
   });
 });

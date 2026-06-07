@@ -183,12 +183,12 @@ describe('circuit renderer', () => {
       wires: [],
     });
     expect(out.warnings).toHaveLength(0);
-    // The component group is rotated 90°, so each text label must carry a
-    // counter-rotation (rotate(-90 ...)) to stay readable/upright.
-    const texts = out.svg.match(/<text[^>]*>/g) || [];
-    const labelTexts = texts.filter(t => /rotate\(/.test(t));
-    expect(labelTexts.length).toBeGreaterThanOrEqual(2); // id + value
-    expect(out.svg).toMatch(/<text[^>]*transform="rotate\(-90 /);
+    // Labels are emitted by the renderer in world-space, always upright — so no
+    // text element carries a rotate() transform even when the glyph is rotated.
+    expect(out.svg).not.toMatch(/<text[^>]*transform="rotate\(/);
+    // Both the refdes and the value must still be present.
+    expect(out.svg).toContain('>R1<');
+    expect(out.svg).toContain('>1.59k<');
   });
 
   it('does not add counter-rotation to labels of unrotated components', () => {
@@ -197,6 +197,39 @@ describe('circuit renderer', () => {
       wires: [],
     });
     expect(out.svg).not.toMatch(/<text[^>]*transform="rotate\(/);
+  });
+
+  it('de-collides refdes/value labels on tightly packed components', () => {
+    const out = renderCircuit({
+      components: [
+        { id: 'R1', type: 'resistor', x: 0, y: 0, value: '150k' },
+        { id: 'C1', type: 'capacitor', x: 1, y: 0, value: '100nF' },
+        { id: 'R2', type: 'resistor', x: 3, y: 0, value: '150k' },
+      ],
+      wires: [],
+    });
+    // Pull the renderer's label layer (anchored <text> with no font-weight).
+    const labels = [...out.svg.matchAll(
+      /<text x="(-?[\d.]+)" y="(-?[\d.]+)" text-anchor="(\w+)"[^>]*>([^<]+)<\/text>/g
+    )].map(m => ({ x: +m[1], y: +m[2], anchor: m[3], text: m[4] }));
+    expect(labels.length).toBe(6); // id + value for 3 parts
+
+    const CW = 6, CH = 12;
+    const box = (L) => {
+      const w = L.text.length * CW;
+      let x0 = L.x - w / 2, x1 = L.x + w / 2;
+      if (L.anchor === 'start') { x0 = L.x; x1 = L.x + w; }
+      if (L.anchor === 'end')   { x0 = L.x - w; x1 = L.x; }
+      return { x0, x1, y0: L.y - CH * 0.8, y1: L.y + CH * 0.2 };
+    };
+    let overlaps = 0;
+    for (let i = 0; i < labels.length; i++) {
+      for (let j = i + 1; j < labels.length; j++) {
+        const a = box(labels[i]), b = box(labels[j]);
+        if (a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1) overlaps++;
+      }
+    }
+    expect(overlaps).toBe(0);
   });
 
   it('renders every symbol in the catalog without unknown-type warnings', () => {
