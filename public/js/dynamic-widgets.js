@@ -84,6 +84,10 @@
         '}}<\/script>';
       var imps = ["import * as THREE from 'three';"];
       var atts = ['window.THREE = THREE;'];
+      // Guard frustum culling against meshes with undefined/disposed geometry
+      // (otherwise `Frustum.intersectsObject` throws every frame and kills the
+      // render loop).
+      atts.push("(function(){var F=THREE.Frustum&&THREE.Frustum.prototype;if(F&&F.intersectsObject&&!F.__faunaGuarded){var o=F.intersectsObject;F.intersectsObject=function(b){if(!b||!b.geometry)return false;try{return o.call(this,b);}catch(_){return false;}};F.__faunaGuarded=true;}})();");
       function _addon(name, path){
         if (new RegExp('THREE\\.' + name + '\\b').test(combined)) {
           imps.push("import { " + name + " } from 'three/addons/" + path + "';");
