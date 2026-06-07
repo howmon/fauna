@@ -175,6 +175,42 @@ describe('circuit renderer', () => {
     expect(out.svg).toMatch(/<path d="[^"]*A /);
   });
 
+  it('draws a junction dot where a wire taps the interior of another wire', () => {
+    // A horizontal rail spanning x=0..6 (grid units); a second wire taps its
+    // midpoint and drops down. The tap is a real 3-way node → needs a dot.
+    const out = renderCircuit({
+      components: [
+        { id: 'A', type: 'vcc', x: 0, y: 0 },
+        { id: 'B', type: 'gnd', x: 6, y: 0 },
+        { id: 'C', type: 'gnd', x: 3, y: 4 },
+      ],
+      wires: [
+        { from: { x: 0, y: 0 }, to: { x: 6, y: 0 } }, // through-rail
+        { from: { x: 3, y: 0 }, to: { x: 3, y: 4 } }, // taps the rail's interior
+      ],
+    });
+    const dots = (out.svg.match(/<circle /g) || []).length;
+    expect(dots).toBeGreaterThanOrEqual(1);
+  });
+
+  it('does not draw a junction dot at a pure (no-connect) wire crossing', () => {
+    const out = renderCircuit({
+      components: [
+        { id: 'r1', type: 'resistor', x: 0,  y: 0 },
+        { id: 'r2', type: 'resistor', x: 10, y: 0 },
+        { id: 'r3', type: 'resistor', x: 5,  y: -4, rot: 90 },
+        { id: 'r4', type: 'resistor', x: 5,  y: 4,  rot: 90 },
+      ],
+      wires: [
+        { from: 'r1.p2', to: 'r2.p1' },
+        { from: 'r3.p2', to: 'r4.p1' },
+      ],
+    });
+    // Crossing wires that share no endpoint must hop, never connect with a dot.
+    expect(out.svg).toMatch(/<path d="[^"]*A /);
+    expect(out.svg).not.toMatch(/<circle /);
+  });
+
   it('keeps id/value labels upright for rotated components', () => {
     const out = renderCircuit({
       components: [
