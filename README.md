@@ -20,6 +20,8 @@ Streaming AI with real shell, browser, Figma, file editing, voice, video, and a 
 
 **Files** — `fauna_read_file`, `fauna_replace_string` (exact match), `fauna_apply_patch` (multi-file diffs), `fauna_write_file(s)` (atomic, `minLines` / `sha256` guards). Auto-recovery checkpoints.
 
+**Memory & RAG** — Hybrid lexical + semantic recall over remembered facts and ingested documents, with project/tag scoping and an allowlist pre-filter for two-stage retrieval. Optional TurboQuant embedding quantization shrinks stored vectors ~6× (4-bit) / ~12× (2-bit) with near-lossless ranking — off by default, see Setup.
+
 **Figma** — Dev Mode MCP (port 3845) + Plugin API via `figma_execute`. Full A11y design-spec generation against design-system components.
 
 **Voice** — Wake-word, push-to-talk dictation, full voice chat. Whisper transcription, Kokoro TTS, resident always-listening mode. Settings → Voice.
@@ -93,6 +95,16 @@ Settings → Authentication → **Custom Endpoints**. Hosted presets for NVIDIA 
 brew install ollama && ollama serve &
 ollama pull qwen2.5-coder:14b
 # Fauna → Settings → Custom Endpoints → Refresh → Use → Save & Enable
+```
+
+### Embedding quantization (optional)
+
+Pure-JS TurboQuant scalar quantization for stored embeddings. **Off by default** and fully backward-compatible — existing fp32 vectors keep working, and search auto-detects each vector's format. Enable it to cut embedding storage ~6× (4-bit) / ~12× (2-bit) with effectively unchanged retrieval quality.
+
+```bash
+export FAUNA_QUANTIZE_EMBEDDINGS=1   # turn on (default: off)
+export FAUNA_QUANTIZE_BITS=4         # 4 (default) or 2
+node scripts/quantize-embeddings.cjs # migrate existing vectors in place
 ```
 
 ### Standalone updates / FaunaMCP
