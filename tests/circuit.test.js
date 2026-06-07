@@ -198,6 +198,19 @@ describe('circuit renderer', () => {
     });
     expect(out.svg).not.toMatch(/<text[^>]*transform="rotate\(/);
   });
+
+  it('renders every symbol in the catalog without unknown-type warnings', () => {
+    for (const type of listSymbolTypes()) {
+      const out = renderCircuit({
+        components: [{ id: 'x1', type, x: 0, y: 0, value: '1k' }],
+        wires: [],
+      });
+      expect(out.warnings.some(w => w.code === 'UNKNOWN_TYPE'), `${type} unknown`).toBe(false);
+      expect(out.svg, `${type} empty svg`).toContain('<svg');
+      // Each glyph emits at least one drawn primitive.
+      expect(/<(line|path|polygon|polyline|rect|circle|text)\b/.test(out.svg), `${type} no glyph`).toBe(true);
+    }
+  });
 });
 
 // ── Validator tests ─────────────────────────────────────────────────────
