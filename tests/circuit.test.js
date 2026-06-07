@@ -174,6 +174,30 @@ describe('circuit renderer', () => {
     // Horizontal segment should render as a <path> with an arc (A command).
     expect(out.svg).toMatch(/<path d="[^"]*A /);
   });
+
+  it('keeps id/value labels upright for rotated components', () => {
+    const out = renderCircuit({
+      components: [
+        { id: 'R1', type: 'resistor', x: 0, y: 0, rot: 90, value: '1.59k' },
+      ],
+      wires: [],
+    });
+    expect(out.warnings).toHaveLength(0);
+    // The component group is rotated 90°, so each text label must carry a
+    // counter-rotation (rotate(-90 ...)) to stay readable/upright.
+    const texts = out.svg.match(/<text[^>]*>/g) || [];
+    const labelTexts = texts.filter(t => /rotate\(/.test(t));
+    expect(labelTexts.length).toBeGreaterThanOrEqual(2); // id + value
+    expect(out.svg).toMatch(/<text[^>]*transform="rotate\(-90 /);
+  });
+
+  it('does not add counter-rotation to labels of unrotated components', () => {
+    const out = renderCircuit({
+      components: [{ id: 'R1', type: 'resistor', x: 0, y: 0, value: '10k' }],
+      wires: [],
+    });
+    expect(out.svg).not.toMatch(/<text[^>]*transform="rotate\(/);
+  });
 });
 
 // ── Validator tests ─────────────────────────────────────────────────────
