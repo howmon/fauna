@@ -211,6 +211,13 @@ describe('circuit renderer', () => {
     expect(out.svg).not.toMatch(/<circle /);
   });
 
+  it('stamps engine-rendered SVG with the data-fauna-circuit provenance marker', () => {
+    const out = renderCircuit(voltageDivider);
+    // The marker lives on the root <svg> so the chat verifier and UI can prove
+    // this came from the engine rather than being hand-authored by the model.
+    expect(out.svg).toMatch(/<svg[^>]*\bdata-fauna-circuit="v1"/);
+  });
+
   it('keeps id/value labels upright for rotated components', () => {
     const out = renderCircuit({
       components: [

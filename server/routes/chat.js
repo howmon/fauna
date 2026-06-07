@@ -147,6 +147,10 @@ export function registerChatRoute(app, {
     // guarded by `!res.writableEnded` — only true when the client genuinely disconnected
     // before we finished writing the SSE stream.
     const upstreamAbort = new AbortController();
+    // Set true when the idle watchdog aborts a genuinely-stalled upstream
+    // stream (no chunks at all for STREAM_IDLE_MS). Distinguishes a stall from
+    // a user-initiated Stop so the catch can surface a recoverable error.
+    let streamStalled = false;
     // Track callIds opened by THIS request so a client disconnect rejects
     // only its own pending widget / client-tool round-trips (the Maps are
     // shared across all concurrent /api/chat requests).
@@ -549,6 +553,10 @@ export function registerChatRoute(app, {
       const trimmed = first ? [first, ...recent] : recent;
       allMessages.push(...trimmed);
 
+      // Set true when the latest user message reads as a circuit/schematic
+      // request — consumed by the post-stream hand-authored-SVG verifier.
+      let circuitRequested = false;
+
       // ── Per-turn tool nudge: circuits / schematics ────────────────────────
       // The model frequently tries to answer schematic requests analytically and
       // skips the render tool. When the latest user message clearly asks for a
@@ -578,6 +586,7 @@ export function registerChatRoute(app, {
           });
         }
         if (lastText && CIRCUIT_RE.test(lastText) && !isCLI && !noTools) {
+          circuitRequested = true;
           allMessages.push({
             role: 'system',
             content:
@@ -957,6 +966,12 @@ export function registerChatRoute(app, {
       let widgetClaimNudges = 0;
       const MAX_WIDGET_CLAIM_NUDGES = 1;
       let forceEmitWidgetNext = false; // set when re-prompting; consumed by params builder
+      // Hand-authored-circuit verifier state. If the model emits an <svg> for a
+      // circuit request that lacks the engine provenance marker (data-fauna-*),
+      // the SVG was invented rather than produced by fauna_render_circuit — we
+      // re-prompt once to force a real render.
+      let circuitHandauthNudges = 0;
+      const MAX_CIRCUIT_HANDAUTH_NUDGES = 1;
       // Codex-parity: token usage across every model iteration in this turn.
       // `prompt` tracks the PEAK prompt size (true context-window fullness —
       // each iteration resends the conversation, so summing would massively
@@ -1243,7 +1258,25 @@ export function registerChatRoute(app, {
         let sawReasoning = false;
         let reasoningStart = null;
 
+        // Idle watchdog. Claude streams thinking + text + tool-argument deltas
+        // continuously, so a *total* absence of chunks for STREAM_IDLE_MS means
+        // the upstream genuinely stalled (not merely "thinking"). The SSE
+        // keep-alive above only protects the client socket; it does nothing for
+        // an upstream that goes silent mid-generation, which otherwise hangs the
+        // `for await` forever. Aborting converts that into a recoverable error.
+        let lastChunkAt = Date.now();
+        const STREAM_IDLE_MS = 120000;
+        const _idleWatch = setInterval(() => {
+          if (res.writableEnded) return;
+          if (Date.now() - lastChunkAt > STREAM_IDLE_MS) {
+            streamStalled = true;
+            try { upstreamAbort.abort(); } catch (_) {}
+          }
+        }, 5000);
+
+        try {
         for await (const chunk of stream) {
+          lastChunkAt = Date.now();
           if (res.writableEnded) { continueLoop = false; break; }
           if (chunk.usage) streamUsage = chunk.usage;
           const delta = chunk.choices?.[0]?.delta;
@@ -1291,6 +1324,9 @@ export function registerChatRoute(app, {
               if (tc.function?.arguments) pendingCalls[i].function.arguments += tc.function.arguments;
             }
           }
+        }
+        } finally {
+          clearInterval(_idleWatch);
         }
 
         // Codex-parity: accumulate + broadcast token usage after each model
@@ -1607,6 +1643,22 @@ export function registerChatRoute(app, {
             allMessages.push({ role: 'user', content: '[System: Your previous reply claimed you rendered/attached/rebuilt a widget, but you never called `fauna_emit_widget` in this turn. Words alone render nothing. Call `fauna_emit_widget` NOW with the full bundle (html + js, plus any tools). Do not narrate the change — emit it.]' });
             forceEmitWidgetNext = true;
             // keep continueLoop = true
+          } else if (
+            circuitRequested &&
+            circuitHandauthNudges < MAX_CIRCUIT_HANDAUTH_NUDGES &&
+            assistantText.trim() &&
+            /<svg\b/i.test(assistantText) &&
+            !/data-fauna-(?:circuit|pcb)/.test(assistantText)
+          ) {
+            // Hand-authored-circuit verifier: the model put an <svg> schematic
+            // in its reply for a circuit request, but it lacks the engine's
+            // provenance marker — so it was hand-drawn, not produced by
+            // fauna_render_circuit. Re-prompt once to force a real render.
+            circuitHandauthNudges++;
+            console.log('[chat] hand-authored circuit SVG detected (no engine provenance marker) — forcing real render (' + circuitHandauthNudges + '/' + MAX_CIRCUIT_HANDAUTH_NUDGES + ')');
+            allMessages.push({ role: 'assistant', content: assistantText });
+            allMessages.push({ role: 'user', content: '[System: The schematic in your reply is hand-authored SVG, not output from fauna_render_circuit — it lacks the engine provenance marker. Hand-drawn schematics are forbidden: they render warped and are unverified. Call fauna_render_circuit({ doc }) NOW, then emit ONE gen-ui SVG block using its returned `svg` markup VERBATIM (do not redraw, reposition, or edit it). Keep the schematic as the LAST thing in the message.]' });
+            // keep continueLoop = true
           } else if (isOrchestratorTurn && assistantText.trim() && orchestratorNudgeCount < 2 && (() => {
             // Detect three orchestrator failure modes:
             //   (1) no [DELEGATE:...] block at all
@@ -1864,7 +1916,15 @@ export function registerChatRoute(app, {
       // Only treat as abort if we actually aborted the controller — checking the
       // error message text alone is too loose and swallows real upstream errors
       // whose messages happen to mention "abort".
-      if (upstreamAbort.signal.aborted) {
+      if (streamStalled) {
+        console.log('[chat] upstream stream stalled (no chunks for >120s) — aborting turn');
+        try {
+          send({
+            type: 'error',
+            error: 'The model stopped responding (no data for over 2 minutes). This can happen on very large generations. Please try again — and if it recurs, lower the thinking budget or simplify the request.'
+          });
+        } catch (_) {}
+      } else if (upstreamAbort.signal.aborted) {
         console.log('[chat] upstream aborted by client');
       } else {
         try { send({ type: 'error', error: err.message }); } catch (_) {}

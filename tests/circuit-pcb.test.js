@@ -114,6 +114,12 @@ describe('renderBoard', () => {
     expect(out.warnings).toHaveLength(0);
   });
 
+  it('stamps engine-rendered board SVG with the data-fauna-pcb provenance marker', () => {
+    const b = layoutPcb(rc);
+    const out = renderBoard(b);
+    expect(out.svg).toMatch(/<svg[^>]*\bdata-fauna-pcb="v1"/);
+  });
+
   it('respects layer visibility flags', () => {
     const b = layoutPcb(rc);
     const out = renderBoard(b, { layers: { ratsnest: false, substrate: false } });
