@@ -4,6 +4,7 @@ import {
   remember, recall, forget, listFacts, getFact, runDecay,
   formatForSystemPrompt, exportFacts, importFacts, getStats, _resetCache,
   supersede, projectContainerTag, agentContainerTag,
+  recallHybrid,
 } from '../memory-store.js';
 
 // Mock fs to avoid real file I/O
@@ -288,6 +289,33 @@ describe('memory-store', () => {
 
     it('agentContainerTag returns scoped tag', () => {
       expect(agentContainerTag('bug-hunter')).toBe('agent:bug-hunter');
+    });
+  });
+
+  describe('recallHybrid() allowlist', () => {
+    it('restricts candidates to the allowlisted fact ids', () => {
+      const a = remember('alpha widget config');
+      const b = remember('beta widget config');
+      const c = remember('gamma widget config');
+      const allowed = recallHybrid('widget', null, { allowlist: [a.id, b.id] });
+      const ids = allowed.map(f => f.id);
+      expect(ids).toContain(a.id);
+      expect(ids).toContain(b.id);
+      expect(ids).not.toContain(c.id);
+    });
+
+    it('accepts a Set allowlist', () => {
+      const a = remember('one fact about cats');
+      remember('another fact about cats');
+      const out = recallHybrid('cats', null, { allowlist: new Set([a.id]) });
+      expect(out.map(f => f.id)).toEqual([a.id]);
+    });
+
+    it('returns the normal candidate set when no allowlist is given', () => {
+      remember('red apple');
+      remember('green apple');
+      const out = recallHybrid('apple', null, {});
+      expect(out.length).toBe(2);
     });
   });
 });

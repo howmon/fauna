@@ -20,6 +20,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
+import { quantize, isQuantized, prepareQuery as _qPrepare, quantizedCosine } from './quantize.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
 const CACHE_FILE = path.join(CONFIG_DIR, 'embeddings-cache.json');
@@ -68,6 +69,73 @@ export function cosine(a, b) {
   }
   if (na === 0 || nb === 0) return 0;
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+// ── Quantized storage (TurboQuant-style, opt-in) ────────────────────────────
+//
+// When FAUNA_QUANTIZE_EMBEDDINGS=1, stored embeddings are kept as compact
+// quantized records (~8x smaller at 4-bit) instead of fp32 arrays. The scoring
+// path below transparently handles BOTH shapes, so existing fp32 facts keep
+// working and quantized facts are scored via the rotated-query estimator.
+
+/** Whether new embeddings should be stored quantized. */
+export function quantizeEnabled() {
+  return process.env.FAUNA_QUANTIZE_EMBEDDINGS === '1';
+}
+
+/** Bit-width for quantized storage (2 or 4; default 4). */
+function _quantBits() {
+  return process.env.FAUNA_QUANTIZE_BITS === '2' ? 2 : 4;
+}
+
+/**
+ * Quantize a float vector into a compact storage record.
+ * @param {number[]} vec
+ * @param {object} [opts] {bits}
+ */
+export function quantizeEmbedding(vec, opts = {}) {
+  return quantize(vec, { bits: opts.bits || _quantBits() });
+}
+
+/**
+ * Normalize a freshly-produced embedding for storage: returns a quantized
+ * record when quantization is enabled, otherwise the original float array.
+ * @param {number[]} vec
+ * @returns {number[]|object}
+ */
+export function prepareForStorage(vec) {
+  if (!Array.isArray(vec) || !vec.length) return vec;
+  return quantizeEnabled() ? quantizeEmbedding(vec) : vec;
+}
+
+/**
+ * Prepare a query vector for scoring against a mix of fp32 and quantized
+ * stored embeddings. Rotate once, reuse across the whole candidate loop.
+ * @param {number[]} vec
+ * @returns {{raw:number[], q:{rot:Float64Array, norm:number}}|null}
+ */
+export function prepareQuery(vec) {
+  if (!Array.isArray(vec) || !vec.length) return null;
+  return { raw: vec, q: _qPrepare(vec) };
+}
+
+/**
+ * Score a prepared query against one stored embedding (fp32 array OR quantized
+ * record). Returns cosine similarity (clamped ≥ 0 is the caller's choice).
+ * @param {{raw:number[], q:object}|null} prepared  from prepareQuery()
+ * @param {number[]|object} stored
+ * @returns {number}
+ */
+export function scoreStored(prepared, stored) {
+  if (!prepared || stored == null) return 0;
+  if (isQuantized(stored)) return quantizedCosine(prepared.q, stored);
+  if (Array.isArray(stored)) return cosine(prepared.raw, stored);
+  return 0;
+}
+
+/** True if a stored embedding value is present (fp32 array or quantized). */
+export function hasEmbedding(stored) {
+  return Array.isArray(stored) ? stored.length > 0 : isQuantized(stored);
 }
 
 /**

@@ -157,6 +157,23 @@ describe('context-store', () => {
     expect(r[0].chunk.sourceId).toBe('a');
   });
 
+  it('searchChunks restricts candidates to an allowlist of docIds', async () => {
+    const a = await ingestDocument({ text: 'alpha typescript', sourceId: 'a', containerTag: 'global' }, { embedder: stubEmbed });
+    await ingestDocument({ text: 'beta typescript', sourceId: 'b', containerTag: 'global' }, { embedder: stubEmbed });
+    const r = searchChunks({ query: 'typescript', allowlist: [a.docId] });
+    expect(r.length).toBeGreaterThan(0);
+    expect(r.every(x => x.chunk.docId === a.docId)).toBe(true);
+  });
+
+  it('searchChunks allowlist accepts a Set and matches chunk ids', async () => {
+    await ingestDocument({ text: 'alpha typescript', sourceId: 'a', containerTag: 'global' }, { embedder: stubEmbed });
+    const all = searchChunks({ query: 'typescript' });
+    const keepId = all[0].chunk.id;
+    const r = searchChunks({ query: 'typescript', allowlist: new Set([keepId]) });
+    expect(r).toHaveLength(1);
+    expect(r[0].chunk.id).toBe(keepId);
+  });
+
   it('listDocuments groups chunks by docId', async () => {
     await ingestDocument({ text: 'x '.repeat(2000), sourceId: 'big', containerTag: 'global' }, { embedder: stubEmbed });
     await ingestDocument({ text: 'small', sourceId: 'sm',  containerTag: 'global' }, { embedder: stubEmbed });

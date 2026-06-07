@@ -23,7 +23,7 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import { chunkText } from './chunker.js';
-import { embedTexts, cosine, DEFAULT_EMBED_MODEL } from './embeddings.js';
+import { embedTexts, DEFAULT_EMBED_MODEL, prepareQuery, scoreStored, hasEmbedding, prepareForStorage } from './embeddings.js';
 
 const CONFIG_DIR  = path.join(os.homedir(), '.config', 'fauna');
 const CHUNKS_FILE = path.join(CONFIG_DIR, 'context-chunks.json');
@@ -114,7 +114,7 @@ export async function ingestDocument(input, opts = {}) {
     start: p.start,
     end: p.end,
     containerTag,
-    embedding: vectors[i] || null,
+    embedding: vectors[i] ? prepareForStorage(vectors[i]) : null,
     embeddingModel: model,
     createdAt: now,
   }));
@@ -143,6 +143,8 @@ export async function ingestDocument(input, opts = {}) {
  * @param {boolean}  [args.includeGlobal=true]
  * @param {number}   [args.limit=8]
  * @param {number}   [args.semanticWeight=0.7]
+ * @param {Iterable<string>} [args.allowlist]  restrict the dense rerank to
+ *        these chunk ids or docIds (a candidate set from another system).
  * @returns {Array<{chunk:object, score:number, lex:number, sem:number}>}
  */
 export function searchChunks(args = {}) {
@@ -157,7 +159,12 @@ export function searchChunks(args = {}) {
   const lexicalWeight = 1 - Math.max(0, Math.min(1, semanticWeight));
   const semW = 1 - lexicalWeight;
 
+  const allowSet = args.allowlist != null
+    ? (args.allowlist instanceof Set ? args.allowlist : new Set(args.allowlist))
+    : null;
+
   const all = _load().filter(c => {
+    if (allowSet && !allowSet.has(c.id) && !allowSet.has(c.docId)) return false;
     if (!containerTag) return true;
     const tag = c.containerTag || GLOBAL_TAG;
     return tag === containerTag || (includeGlobal && tag === GLOBAL_TAG);
@@ -165,6 +172,7 @@ export function searchChunks(args = {}) {
   if (!all.length) return [];
 
   const hasQueryVec = Array.isArray(queryVec) && queryVec.length > 0;
+  const prepared = hasQueryVec ? prepareQuery(queryVec) : null;
   const terms = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
 
   const scored = all.map(c => {
@@ -175,8 +183,8 @@ export function searchChunks(args = {}) {
       for (const t of terms) if (text.includes(t)) hits++;
       lex = hits / terms.length;
     }
-    const sem = (hasQueryVec && Array.isArray(c.embedding))
-      ? Math.max(0, cosine(queryVec, c.embedding))
+    const sem = (prepared && hasEmbedding(c.embedding))
+      ? Math.max(0, scoreStored(prepared, c.embedding))
       : 0;
     const blended = (lex * lexicalWeight) + (sem * semW);
     return { chunk: c, score: blended, lex, sem };

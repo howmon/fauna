@@ -9,7 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { scrubSecrets } from './server/lib/redactor.js';
-import { cosine } from './server/lib/embeddings.js';
+import { prepareQuery, scoreStored, hasEmbedding, prepareForStorage } from './server/lib/embeddings.js';
 
 const CONFIG_DIR  = path.join(os.homedir(), '.config', 'fauna');
 const FACTS_FILE  = path.join(CONFIG_DIR, 'facts.json');
@@ -296,7 +296,8 @@ export function attachEmbedding(id, vector, model) {
   const f = facts.find(x => x.id === id);
   if (!f) return { ok: false, error: 'Fact not found' };
   if (!Array.isArray(vector) || !vector.length) return { ok: false, error: 'Empty vector' };
-  f.embedding = vector;
+  // Store fp32 by default; compact quantized record when enabled.
+  f.embedding = prepareForStorage(vector);
   if (model) f.embeddingModel = model;
   _save();
   return { ok: true };
@@ -309,8 +310,27 @@ export function attachEmbedding(id, vector, model) {
 export function listFactsWithoutEmbedding(opts = {}) {
   const limit = typeof opts.limit === 'number' && opts.limit > 0 ? opts.limit : 100;
   return _load()
-    .filter(f => !f.supersededBy && !Array.isArray(f.embedding))
+    .filter(f => !f.supersededBy && !hasEmbedding(f.embedding))
     .slice(0, limit);
+}
+
+/**
+ * Convert any fp32-array embeddings already on disk into compact quantized
+ * records. Idempotent — facts already quantized (or without an embedding) are
+ * left untouched. Returns the number of facts converted.
+ */
+export function requantizeEmbeddings() {
+  const facts = _load();
+  let converted = 0;
+  for (const f of facts) {
+    if (Array.isArray(f.embedding) && f.embedding.length) {
+      f.embedding = prepareForStorage(f.embedding);
+      // prepareForStorage only quantizes when the flag is on; count real changes.
+      if (!Array.isArray(f.embedding)) converted++;
+    }
+  }
+  if (converted) _save();
+  return { converted };
 }
 
 /**
@@ -328,6 +348,9 @@ export function listFactsWithoutEmbedding(opts = {}) {
  * @param {string}  [opts.kind]
  * @param {number}  [opts.limit=20]
  * @param {number}  [opts.semanticWeight=0.6]  weight given to cosine vs lex
+ * @param {Iterable<string>} [opts.allowlist]  restrict the dense rerank to
+ *        these fact ids (a candidate set produced by another system, e.g. a
+ *        keyword pass or metadata query). Skips scoring for non-allowed facts.
  * @returns {Fact[]}
  */
 export function recallHybrid(keywords, queryVec, opts = {}) {
@@ -341,10 +364,15 @@ export function recallHybrid(keywords, queryVec, opts = {}) {
   const lexicalWeight = 1 - semanticWeight;
   const now = Date.now();
 
+  const allowSet = opts.allowlist != null
+    ? (opts.allowlist instanceof Set ? opts.allowlist : new Set(opts.allowlist))
+    : null;
+
   const eligible = _load().filter(f => {
     if (f.supersededBy) return false;
     if (f.expiresAt && f.expiresAt <= now) return false;
     if (kindFilter && (f.kind || 'static') !== kindFilter) return false;
+    if (allowSet && !allowSet.has(f.id)) return false;
     if (containerTag) {
       const tag = f.containerTag || GLOBAL_TAG;
       if (tag !== containerTag && !(includeGlobal && tag === GLOBAL_TAG)) return false;
@@ -354,6 +382,7 @@ export function recallHybrid(keywords, queryVec, opts = {}) {
   if (!eligible.length) return [];
 
   const hasQueryVec = Array.isArray(queryVec) && queryVec.length > 0;
+  const prepared = hasQueryVec ? prepareQuery(queryVec) : null;
   const terms = (keywords || '').toLowerCase().split(/\s+/).filter(Boolean);
 
   const scored = eligible.map(f => {
@@ -366,8 +395,8 @@ export function recallHybrid(keywords, queryVec, opts = {}) {
       for (const t of terms) if (text.includes(t)) hits++;
       lex = hits / terms.length;
     }
-    const sem = (hasQueryVec && Array.isArray(f.embedding))
-      ? Math.max(0, cosine(queryVec, f.embedding))
+    const sem = (prepared && hasEmbedding(f.embedding))
+      ? Math.max(0, scoreStored(prepared, f.embedding))
       : 0;
     // Recency nudge — same shape as recall() so behavior is consistent.
     const daysSinceAccess = (now - (f.lastAccessedAt || f.createdAt)) / (1000 * 60 * 60 * 24);
