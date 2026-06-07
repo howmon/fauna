@@ -218,6 +218,44 @@ describe('circuit renderer', () => {
     expect(out.svg).toMatch(/<svg[^>]*\bdata-fauna-circuit="v1"/);
   });
 
+  it('pushes labels off neighbouring component symbol bodies', () => {
+    // Two parts deliberately packed so their glyphs overlap — the kind of
+    // dense cluster (gate resistor + pulldown + MOSFET) that made the inverter
+    // schematic crowd refdes/value text onto the transistor body.
+    const out = renderCircuit({
+      components: [
+        { id: 'q1',  type: 'nmos',     x: 4, y: 0,        value: 'IRFZ44' },
+        { id: 'gs1', type: 'resistor', x: 3, y: 0, rot: 90, value: '10k' },
+      ],
+      wires: [],
+    });
+    // World-space glyph boxes (grid=16). resistor 60×20 rot90 → 20×60.
+    const boxes = {
+      q1:  { x0: 64 - 20, y0: -22, x1: 64 + 20, y1: 22 },  // nmos 40×44 @ (64,0)
+      gs1: { x0: 48 - 10, y0: -30, x1: 48 + 10, y1: 30 },  // res rot90 @ (48,0)
+    };
+    // Each label's owner (by text) — labels may only sit on their OWN body.
+    const owner = { q1: 'q1', IRFZ44: 'q1', gs1: 'gs1', '10k': 'gs1' };
+    const re = /<text x="(-?[\d.]+)" y="(-?[\d.]+)" text-anchor="(\w+)"[^>]*>([^<]+)<\/text>/g;
+    const CW = 6.0, H = 12;
+    let m, checked = 0;
+    while ((m = re.exec(out.svg)) !== null) {
+      const x = +m[1], y = +m[2], anchor = m[3], text = m[4];
+      const w = text.length * CW;
+      const x0 = anchor === 'start' ? x : anchor === 'end' ? x - w : x - w / 2;
+      const x1 = anchor === 'start' ? x + w : anchor === 'end' ? x : x + w / 2;
+      const lb = { x0, x1, y0: y - H * 0.8, y1: y + H * 0.2 };
+      const own = owner[text];
+      for (const [id, s] of Object.entries(boxes)) {
+        if (id === own) continue; // a label may rest on its own glyph
+        const hit = lb.x0 < s.x1 && s.x0 < lb.x1 && lb.y0 < s.y1 && s.y0 < lb.y1;
+        expect(hit, `label "${text}" overlaps foreign body ${id}`).toBe(false);
+      }
+      checked++;
+    }
+    expect(checked).toBeGreaterThanOrEqual(4);
+  });
+
   it('keeps id/value labels upright for rotated components', () => {
     const out = renderCircuit({
       components: [
