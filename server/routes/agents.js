@@ -9,6 +9,7 @@ import { execSync } from 'child_process';
 import { getAgentTools, startAgentMCPServers, stopAgentMCPServers } from '../../agent-tools.js';
 import { scanAgent, formatScanReport } from '../../agent-scanner.js';
 import { convertHarnessTeam } from '../../lib/harness-adapter.js';
+import { synthesizeManifest as _synthesizeManifest } from '../lib/agent-manifest.js';
 
 export function registerAgentRoutes(app, {
   express,
@@ -17,51 +18,8 @@ export function registerAgentRoutes(app, {
   builtinAgentNames = [],
 }) {
   // Synthesize a manifest for an agent folder that was dropped in WITHOUT an
-  // agent.json (e.g. a Claude-style folder with AGENT.md + skills/, or a bare
-  // system-prompt.md). Returns a manifest object so the agent still appears
-  // under "Local" and is usable, or null if the folder doesn't look like an
-  // agent. The agent.json is NOT written to disk — synthesis is purely
-  // in-memory; saving from the Agent Builder is what persists a real manifest.
-  function _synthesizeManifest(agentDir, name) {
-    // Skip internal/hidden folders (e.g. "_skills", ".git").
-    if (/^[._]/.test(name)) return null;
-    // Find a prompt source file, case-insensitively.
-    let entries;
-    try { entries = fs.readdirSync(agentDir); } catch (_) { return null; }
-    const findFile = (re) => entries.find((f) => re.test(f) && (() => {
-      try { return fs.statSync(path.join(agentDir, f)).isFile(); } catch (_) { return false; }
-    })());
-    const promptFile = findFile(/^agent\.md$/i)
-      || findFile(/^system-prompt\.md$/i)
-      || findFile(/^prompt\.md$/i)
-      || findFile(/^readme\.md$/i)
-      || findFile(/^skill\.md$/i);
-    if (!promptFile) return null;
-    let body = '';
-    try { body = fs.readFileSync(path.join(agentDir, promptFile), 'utf8'); } catch (_) { return null; }
-    if (!body.trim()) return null;
-    // Derive display name from the first H1, else title-case the folder slug.
-    const h1 = (body.match(/^\s*#\s+(.+?)\s*$/m) || [])[1];
-    const displayName = (h1 && h1.trim())
-      || name.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-    // Description: first non-empty, non-heading, non-bold-only line.
-    let description = '';
-    for (const line of body.split('\n')) {
-      const t = line.trim();
-      if (!t || t.startsWith('#')) continue;
-      description = t.replace(/^\*\*|\*\*$/g, '').replace(/^[*_>-]\s*/, '').trim();
-      if (description) break;
-    }
-    return {
-      name,
-      displayName,
-      description: description.slice(0, 200),
-      icon: 'ti-robot',
-      systemPrompt: body,
-      _synthesized: true,
-      _promptFile: promptFile,
-    };
-  }
+  // agent.json. Shared with the chat route and self-tools via
+  // server/lib/agent-manifest.js (imported above as _synthesizeManifest).
 
   // List all installed agents
   app.get('/api/agents', (req, res) => {

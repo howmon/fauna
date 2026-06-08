@@ -82,6 +82,7 @@ import os from 'os';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
 import * as devServerRegistry from './server/lib/dev-server-registry.js';
+import { loadAgentManifest } from './server/lib/agent-manifest.js';
 
 // Per-conversation active plan state. Survives across the multiple
 // /api/chat requests that the client's plan auto-continue feature fires
@@ -2435,11 +2436,13 @@ export async function executeSelfTool(toolName, args, context = {}) {
         return JSON.stringify({ ok: false, error: 'agentsDir not configured' });
       }
       try {
-        const manifestPath = path.join(agentsDir, name, 'agent.json');
-        if (!fs.existsSync(manifestPath)) {
-          return JSON.stringify({ ok: false, error: `Agent "${name}" not found at ${manifestPath}` });
+        // loadAgentManifest resolves a real agent.json OR synthesizes a
+        // manifest from a dropped AGENT.md / system-prompt.md folder, so
+        // instructions are retrievable even without an agent.json.
+        const manifest = loadAgentManifest(agentsDir, name);
+        if (!manifest) {
+          return JSON.stringify({ ok: false, error: `Agent "${name}" not found in ${agentsDir}` });
         }
-        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
         const fullBody = manifest.systemPrompt || '';
         const sectionArg = args.section ? String(args.section).trim() : '';
         let instructions = fullBody;

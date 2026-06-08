@@ -50,6 +50,7 @@ import { getProjectSystemContext, buildContextPayload, getProject, appendAutonom
 import { estimateTokens, computeBudget } from '../lib/token-budget.js';
 import { summarizeHistory } from '../lib/summarize-history.js';
 import { withTimeout } from '../lib/async-utils.js';
+import { loadAgentManifest } from '../lib/agent-manifest.js';
 
 export function registerChatRoute(app, {
   figma,
@@ -1141,9 +1142,11 @@ export function registerChatRoute(app, {
           );
           if (!alreadyInjected) {
             const safeAgentName = agentName.replace(/[^a-zA-Z0-9_-]/g, '');
-            const manifestPath = path.join(agentsDir, safeAgentName, 'agent.json');
-            if (fs.existsSync(manifestPath)) {
-              const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            // loadAgentManifest resolves a real agent.json OR synthesizes a
+            // manifest for a dropped AGENT.md / system-prompt.md folder, so
+            // instructions flow into context even without an agent.json.
+            const manifest = loadAgentManifest(agentsDir, safeAgentName);
+            if (manifest) {
               const isOrchestrator = !!(manifest && manifest.orchestrator);
               if (!isOrchestrator && manifest.systemPrompt) {
                 const body = [
