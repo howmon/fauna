@@ -343,6 +343,11 @@ async function setActiveProject(id, opts) {
   if (id) {
     localStorage.setItem('fauna-active-project', id);
     await _refreshProject(id);
+    // Bump local lastActiveAt so the project immediately re-sorts to the top of
+    // the sidebar list (the backend touch below is async and won't be reflected
+    // by the refresh above, which already ran).
+    var _lp = (state.projects || []).find(function(p) { return p.id === id; });
+    if (_lp) _lp.lastActiveAt = Date.now();
     // Reset context enabled state to defaults (all pinned = on, unpinned = off)
     state.projectContextEnabled = {};
     var proj = _activeProject();
@@ -383,8 +388,12 @@ async function setActiveProject(id, opts) {
   // don't recurse or yank the user away from the chat they just clicked.
   if (!navigate) return;
   if (id) {
-    // Enter project: load most recent project conversation, or start a new one
-    var projConvs = state.conversations.filter(function(c) { return c.projectId === id; });
+    // Enter project: load the most recent conversation in the project, or start
+    // a new one only if the project has no conversations yet.
+    var projConvs = state.conversations.filter(function(c) { return c.projectId === id; })
+      .sort(function(a, b) {
+        return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
+      });
     if (projConvs.length) {
       loadConversation(projConvs[0].id);
     } else {

@@ -362,15 +362,19 @@ async function maybeUpdateConversationTitle(conv) {
   }
 }
 
-function newConversation() {
+function newConversation(opts) {
+  opts = opts || {};
+  // `quick` forces a project-less conversation even when a project is active,
+  // so the Quick chats "New chat" button never files into the current project.
+  var projectId = opts.quick ? null : (state.activeProjectId || null);
   var id = 'c' + Date.now();
   var conv = { id, title: 'New conversation', messages: [], model: state.model, systemPrompt: state.systemPrompt, createdAt: Date.now() };
-  if (state.activeProjectId) conv.projectId = state.activeProjectId;
+  if (projectId) conv.projectId = projectId;
   state.conversations.unshift(conv);
   saveConversations();
   // Notify backend about the link
-  if (state.activeProjectId) {
-    fetch('/api/projects/' + state.activeProjectId + '/conversations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ convId: id }) }).catch(function(){});
+  if (projectId) {
+    fetch('/api/projects/' + projectId + '/conversations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ convId: id }) }).catch(function(){});
   }
   loadConversation(id);
   // Clear agents — only pinned agents auto-populate in new chats
@@ -732,7 +736,9 @@ function renderAllConvsPage() {
   var page = document.getElementById('all-convs-page');
   if (!page) return;
   var filter = page._filter || '';
-  var convs = state.conversations;
+  var convs = (state.conversations || []).slice().sort(function(a, b) {
+    return (b.updatedAt || b.createdAt || 0) > (a.updatedAt || a.createdAt || 0) ? 1 : -1;
+  });
   if (filter) {
     var f = filter.toLowerCase();
     convs = convs.filter(function(c) { return String(c.title || 'Conversation').toLowerCase().includes(f); });
@@ -741,40 +747,74 @@ function renderAllConvsPage() {
   // If the page is already built, only update the list body
   var listEl = document.getElementById('all-convs-list-body');
   if (!listEl) {
-    // First render — build full structure
-    var html = '<div class="all-agents-header">' +
-      '<div class="all-agents-title"><i class="ti ti-messages"></i> All Conversations</div>' +
-      '<div class="all-agents-search-wrap">' +
-        '<i class="ti ti-search"></i>' +
-        '<input class="all-agents-search" id="all-convs-search" placeholder="Search conversations\u2026" value="' + escHtml(filter) + '" oninput="document.getElementById(\'all-convs-page\')._filter=this.value;renderAllConvsPage()">' +
-      '</div>' +
-      '<button class="builder-btn primary small" onclick="closeAllConversations();newConversation()"><i class="ti ti-plus"></i> New</button>' +
-      '<button class="all-agents-close" onclick="closeAllConversations()"><i class="ti ti-x"></i></button>' +
-    '</div>';
-    html += '<div class="all-agents-body"><div id="all-convs-list-body" class="all-convs-list"></div></div>';
-    page.innerHTML = html;
+    // First render — build full structure (mirrors the All Projects datagrid)
+    page.innerHTML =
+      '<div class="all-agents-page-inner">' +
+        '<div class="all-agents-header">' +
+          '<div class="all-agents-title"><i class="ti ti-messages"></i> All Conversations</div>' +
+          '<div class="all-agents-search-wrap">' +
+            '<i class="ti ti-search"></i>' +
+            '<input class="all-agents-search" id="all-convs-search" placeholder="Search conversations\u2026" value="' + escHtml(filter) + '" oninput="document.getElementById(\'all-convs-page\')._filter=this.value;renderAllConvsPage()">' +
+          '</div>' +
+          '<button class="proj-action-btn" onclick="closeAllConversations();newConversation()"><i class="ti ti-plus"></i> New chat</button>' +
+          '<button class="all-agents-close" onclick="closeAllConversations()"><i class="ti ti-x"></i></button>' +
+        '</div>' +
+        '<div id="all-convs-list-body" class="all-convs-list"></div>' +
+      '</div>';
     listEl = document.getElementById('all-convs-list-body');
   }
 
-  // Render just the list items
-  var items = '';
-  for (var i = 0; i < convs.length; i++) {
-    var c = convs[i];
+  if (!convs.length) {
+    listEl.innerHTML = '<div class="proj-hub-empty" style="padding:40px"><i class="ti ti-messages-off" style="font-size:28px;opacity:.3"></i><div>No conversations found</div></div>';
+    return;
+  }
+
+  var projName = function(id) {
+    if (!id) return null;
+    var p = (state.projects || []).find(function(x) { return x.id === id; });
+    return p || null;
+  };
+
+  var header =
+    '<div class="all-conv-row all-conv-row-head">' +
+      '<span class="all-conv-col-name">Conversation</span>' +
+      '<span class="all-conv-col-proj">Project</span>' +
+      '<span class="all-conv-col-num" title="Messages"><i class="ti ti-message-2"></i></span>' +
+      '<span class="all-conv-col-date">Updated</span>' +
+      '<span class="all-conv-col-actions"></span>' +
+    '</div>';
+
+  var rows = convs.map(function(c) {
     var title = c.title || 'Conversation';
     var isActive = c.id === state.currentId;
-    items += '<div class="all-convs-item' + (isActive ? ' active' : '') + '" onclick="closeAllConversations();loadConversation(\'' + c.id + '\')">'+
-      '<i class="ti ti-message all-convs-icon"></i>' +
-      '<span class="all-convs-title" title="' + escHtml(title) + '">' + escHtml(title) + '</span>' +
-      '<span class="all-convs-date">' + (c.createdAt ? new Date(c.createdAt).toLocaleDateString() : '') + '</span>' +
-      '<button class="all-convs-rename" onclick="event.stopPropagation();openConvInNewWindow(\'' + c.id + '\', event)" title="Open in new window"><i class="ti ti-external-link"></i></button>' +
-      '<button class="all-convs-rename" onclick="event.stopPropagation();renameConversation(\'' + c.id + '\', event)" title="Rename"><i class="ti ti-pencil"></i></button>' +
-      '<button class="all-convs-del" onclick="event.stopPropagation();deleteConversation(\'' + c.id + '\', event);renderAllConvsPage()"><i class="ti ti-trash"></i></button>' +
+    var msgCount = (c.messages || []).length;
+    var when = c.updatedAt || c.createdAt;
+    var proj = projName(c.projectId);
+    var cid = escHtml(c.id);
+    return '<div class="all-conv-row' + (isActive ? ' active' : '') + '" onclick="closeAllConversations();loadConversation(\'' + cid + '\')">' +
+      '<span class="all-conv-col-name">' +
+        (c._streaming
+          ? '<i class="ti ti-loader-2 conv-streaming-icon"></i>'
+          : '<i class="ti ti-message all-conv-icon"></i>') +
+        '<span class="all-conv-name-text" title="' + escHtml(title) + '">' + escHtml(title) + '</span>' +
+        (isActive ? '<span class="all-proj-active-badge">Active</span>' : '') +
+      '</span>' +
+      '<span class="all-conv-col-proj">' +
+        (proj
+          ? '<span class="all-conv-proj-badge"><span class="proj-dot proj-color-' + escHtml(proj.color || 'blue') + '" style="width:8px;height:8px;flex-shrink:0"></span>' + escHtml(proj.name) + '</span>'
+          : '<span class="all-proj-dim">—</span>') +
+      '</span>' +
+      '<span class="all-conv-col-num">' + msgCount + '</span>' +
+      '<span class="all-conv-col-date">' + (when ? new Date(when).toLocaleDateString() : '<span class="all-proj-dim">—</span>') + '</span>' +
+      '<span class="all-conv-col-actions">' +
+        '<button class="proj-icon-btn" onclick="event.stopPropagation();openConvInNewWindow(\'' + cid + '\', event)" title="Open in new window"><i class="ti ti-external-link"></i></button>' +
+        '<button class="proj-icon-btn" onclick="event.stopPropagation();renameConversation(\'' + cid + '\', event)" title="Rename"><i class="ti ti-pencil"></i></button>' +
+        '<button class="proj-icon-btn" style="color:var(--fau-text-muted)" onclick="event.stopPropagation();deleteConversation(\'' + cid + '\', event);renderAllConvsPage()" title="Delete"><i class="ti ti-trash"></i></button>' +
+      '</span>' +
     '</div>';
-  }
-  if (!convs.length) {
-    items = '<div class="store-empty"><i class="ti ti-messages-off"></i><p>No conversations found</p></div>';
-  }
-  listEl.innerHTML = items;
+  }).join('');
+
+  listEl.innerHTML = header + rows;
 }
 
 function toggleSidebarSection(section) {

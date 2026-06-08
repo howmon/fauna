@@ -111,7 +111,7 @@
         <span>Quick chats</span>
         <i class="ti ti-loader-2 conv-streaming-icon section-streaming" id="conv-section-streaming" style="display:none" title="A chat is running"></i>
         <span style="flex:1"></span>
-        <button class="section-plus-btn" onclick="event.stopPropagation();newConversation()" title="New chat"><i class="ti ti-edit" style="font-size:12px"></i></button>
+        <button class="section-plus-btn" onclick="event.stopPropagation();newConversation({ quick: true })" title="New chat"><i class="ti ti-edit" style="font-size:12px"></i></button>
       </div>
       <div id="conv-section-body">
         <div id="conv-list"></div>
