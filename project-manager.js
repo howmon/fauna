@@ -684,7 +684,10 @@ export function getProjectSystemContext(projectId) {
   const pinned = p.contexts.filter(c => c.pinned);
   let out = `## Active Project: ${p.name}\n`;
   if (p.description) out += `${p.description}\n`;
-  if (p.rootPath) out += `Root path: ${p.rootPath}\n`;
+  if (p.rootPath) {
+    out += `Root path: ${p.rootPath}\n`;
+    out += `Working directory: shell and file tools default to this project root. Run commands here unless a source below points elsewhere. Do NOT operate on other projects' directories.\n`;
+  }
   if (p.sources && p.sources.length) {
     out += '\n### Sources\n';
     for (const src of p.sources) {

@@ -773,6 +773,17 @@ export function registerChatRoute(app, {
           if (!command || typeof command !== 'string') {
             return JSON.stringify({ ok: false, error: 'command (string) required' });
           }
+          // When the model doesn't pin a cwd, default to the ACTIVE PROJECT's
+          // root rather than $HOME. Otherwise commands run from the home dir,
+          // the model has to guess paths, and it can stray into a different
+          // project's directory (cross-project context bleed). An explicit
+          // cwd from the model always wins.
+          let effectiveCwd = cwd;
+          if (!effectiveCwd && _projectRecord?.rootPath) {
+            try {
+              if (fs.existsSync(_projectRecord.rootPath)) effectiveCwd = _projectRecord.rootPath;
+            } catch (_) { /* ignore — fall back below */ }
+          }
           if (!isCommandSafe(command)) {
             return JSON.stringify({
               ok: false,
@@ -787,7 +798,7 @@ export function registerChatRoute(app, {
           // return immediately so the AI can move on. The user manages the
           // process from Settings → Dev Servers.
           if (isDevServerCommand(command)) {
-            const workDir = cwd || os.homedir();
+            const workDir = effectiveCwd || os.homedir();
             const env = {
               ...process.env,
               ...(augmentedPath ? { PATH: augmentedPath } : {}),
@@ -816,7 +827,7 @@ export function registerChatRoute(app, {
           // visible duplicate in the client status panel.)
           const result = await runShell({
             command,
-            cwd,
+            cwd: effectiveCwd,
             shellBin,
             isWin,
             augmentedPath,
@@ -835,9 +846,9 @@ export function registerChatRoute(app, {
               const id = 'tool_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
               shellProcs.set(id, child);
               child.on('exit', () => shellProcs.delete(id));
-              try { registerDevServer(child, { command, cwd, killId: id }); } catch (_) {}
+              try { registerDevServer(child, { command, cwd: effectiveCwd, killId: id }); } catch (_) {}
             } : (child) => {
-              try { registerDevServer(child, { command, cwd }); } catch (_) {}
+              try { registerDevServer(child, { command, cwd: effectiveCwd }); } catch (_) {}
             },
           });
           return formatShellResultForLLM(result);
