@@ -6400,7 +6400,7 @@ body.win-platform .acv-header {
 .proj-folder.active > .proj-folder-header { background: var(--accent-dim); color: var(--fau-text); }
 .proj-folder.active > .proj-folder-header .proj-folder-name { color: var(--accent2); font-weight: 600; }
 .proj-folder-chevron {
-  font-size: 13px; flex-shrink: 0; opacity: 0; color: var(--fau-text-muted);
+  font-size: 13px; flex-shrink: 0; opacity: .4; color: var(--fau-text-muted);
   transition: transform .15s, opacity .12s;
 }
 .proj-folder-header:hover .proj-folder-chevron,
