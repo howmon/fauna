@@ -42,30 +42,83 @@ async function _refreshProject(id) {
   } catch(e) {}
 }
 
-// ── Project Sidebar List ──────────────────────────────────────────────────
+// ── Project Sidebar Tree ──────────────────────────────────────────────────
+// Each project renders as a collapsible folder containing its conversations.
+// Folders are collapsed by default except the active project; the user's manual
+// expand/collapse choices are remembered per-project in localStorage.
+
+var _expandedProjects = (function() {
+  try { return JSON.parse(localStorage.getItem('fauna-proj-expanded') || '{}') || {}; }
+  catch (e) { return {}; }
+})();
+
+function _saveExpandedProjects() {
+  try { localStorage.setItem('fauna-proj-expanded', JSON.stringify(_expandedProjects)); } catch (e) {}
+}
+
+function _isProjectExpanded(id) {
+  // Explicit user choice wins; otherwise only the active project is open.
+  if (Object.prototype.hasOwnProperty.call(_expandedProjects, id)) return !!_expandedProjects[id];
+  return id === state.activeProjectId;
+}
+
+function toggleProjectFolder(id, e) {
+  if (e) e.stopPropagation();
+  _expandedProjects[id] = !_isProjectExpanded(id);
+  _saveExpandedProjects();
+  renderProjectSidebarList();
+}
+
+// Open a new chat inside a project without leaving the current view chrome.
+function newConversationInProject(id, e) {
+  if (e) e.stopPropagation();
+  _expandedProjects[id] = true;
+  _saveExpandedProjects();
+  if (state.activeProjectId !== id) setActiveProject(id, { navigate: false });
+  if (typeof newConversation === 'function') newConversation();
+}
 
 function renderProjectSidebarList() {
   var el = document.getElementById('proj-sidebar-list');
   if (!el) return;
-  var MAX = 5;
+  var MAX = 8;
+  var MAX_CONVS = 6;
   var projects = (state.projects || []).slice().sort(function(a, b) {
     return (b.lastActiveAt || 0) > (a.lastActiveAt || 0) ? 1 : -1;
   });
   var visible = projects.slice(0, MAX);
+  var allConvs = state.conversations || [];
 
   el.innerHTML = visible.map(function(p) {
     var isActive = p.id === state.activeProjectId;
-    return '<div class="proj-sidebar-item' + (isActive ? ' active' : '') + '" onclick="setActiveProject(\'' + _projEsc(p.id) + '\')">' +
+    var expanded = _isProjectExpanded(p.id);
+    var pid = _projEsc(p.id);
+
+    var header = '<div class="proj-folder-header' + (isActive ? ' active' : '') + '" onclick="toggleProjectFolder(\'' + pid + '\', event)">' +
+      '<i class="ti ti-chevron-right proj-folder-chevron"></i>' +
       '<span class="proj-dot proj-color-' + _projEsc(p.color) + '"></span>' +
-      '<span class="proj-sidebar-item-name">' + _projEsc(p.name) + '</span>' +
-      '<span class="proj-sidebar-item-actions">' +
-        (isActive
-          ? '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();openProjectHub()" title="Open hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>' +
-            '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();clearActiveProject()" title="Leave project"><i class="ti ti-door-exit"></i></button>'
-          : '') +
-        '<button class="proj-sidebar-del-btn" onclick="event.stopPropagation();_confirmDeleteProjectFromList(\'' + _projEsc(p.id) + '\')" title="Delete project"><i class="ti ti-trash"></i></button>' +
+      '<span class="proj-folder-name">' + _projEsc(p.name) + '</span>' +
+      '<span class="proj-folder-actions">' +
+        '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();newConversationInProject(\'' + pid + '\', event)" title="New chat in project"><i class="ti ti-edit"></i></button>' +
+        '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();setActiveProject(\'' + pid + '\');openProjectHub()" title="Open hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>' +
+        '<button class="proj-sidebar-del-btn" onclick="event.stopPropagation();_confirmDeleteProjectFromList(\'' + pid + '\')" title="Delete project"><i class="ti ti-trash"></i></button>' +
       '</span>' +
     '</div>';
+
+    var body = '';
+    if (expanded) {
+      var convs = allConvs.filter(function(c) { return c.projectId === p.id; });
+      var rows = convs.slice(0, MAX_CONVS).map(function(c) {
+        return (typeof _convRowHtml === 'function') ? _convRowHtml(c) : '';
+      }).join('');
+      if (!convs.length) rows = '<div class="proj-folder-empty">No chats yet</div>';
+      var more = convs.length > MAX_CONVS
+        ? '<div class="proj-folder-showall" onclick="event.stopPropagation();setActiveProject(\'' + pid + '\', { navigate: false });openAllConversations()">All chats (' + convs.length + ')</div>'
+        : '';
+      body = '<div class="proj-folder-body">' + rows + more + '</div>';
+    }
+
+    return '<div class="proj-folder' + (isActive ? ' active' : '') + (expanded ? ' expanded' : '') + '" data-proj-id="' + pid + '">' + header + body + '</div>';
   }).join('') || '<div class="proj-sidebar-empty">No projects yet</div>';
 
   var showAll = document.getElementById('proj-show-all');
@@ -280,7 +333,9 @@ function updateProjectIndicator() {
   }
 }
 
-async function setActiveProject(id) {
+async function setActiveProject(id, opts) {
+  opts = opts || {};
+  var navigate = opts.navigate !== false;
   state.activeProjectId = id;
   if (id) {
     localStorage.setItem('fauna-active-project', id);
@@ -320,7 +375,10 @@ async function setActiveProject(id) {
     _renderAllProjectsPage();
   }
 
-  // Navigate to a conversation appropriate for the new project context
+  // Navigate to a conversation appropriate for the new project context. Skipped
+  // when activation is a side-effect of opening a chat (navigate:false), so we
+  // don't recurse or yank the user away from the chat they just clicked.
+  if (!navigate) return;
   if (id) {
     // Enter project: load most recent project conversation, or start a new one
     var projConvs = state.conversations.filter(function(c) { return c.projectId === id; });

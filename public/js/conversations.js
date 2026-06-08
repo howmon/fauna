@@ -453,6 +453,13 @@ function loadConversation(id) {
   var conv = getConv(id);
   if (!conv) return;
 
+  // Tree model: opening a chat auto-activates the project that owns it (or
+  // deactivates any project for a quick chat). No explicit enter/exit step.
+  var ownerProj = conv.projectId || null;
+  if (ownerProj !== (state.activeProjectId || null) && typeof setActiveProject === 'function') {
+    setActiveProject(ownerProj, { navigate: false });
+  }
+
   state.model  = typeof normalizeSupportedModel === 'function'
     ? normalizeSupportedModel(conv.model || state.model, { conv: conv, notify: false })
     : (conv.model || state.model);
@@ -653,38 +660,37 @@ function deleteConversation(id, e) {
   renderConvList();
 }
 
+// Shared conversation-row markup, used by both the Quick chats list and the
+// per-project folders in the sidebar tree.
+function _convRowHtml(conv) {
+  return '<div class="conv-item' + (conv.id === state.currentId ? ' active' : '') + '" onclick="loadConversation(\'' + conv.id + '\')">' +
+    (conv._streaming ? '<i class="ti ti-loader-2 conv-streaming-icon"></i>' : '') +
+    '<span class="conv-label" title="' + escHtml(conv.title) + '">' + escHtml(conv.title) + '</span>' +
+    '<span class="conv-actions">' +
+      '<button class="conv-rename" onclick="toggleConvAutonomous(\'' + conv.id + '\', event)" title="' + (conv.config && conv.config.autonomousMode ? 'Autonomous mode: on — click to disable' : 'Autonomous mode: off — click to enable') + '"><i class="ti ti-bolt"' + (conv.config && conv.config.autonomousMode ? ' style="color:#ffb800"' : '') + '></i></button>' +
+      '<button class="conv-rename" onclick="openConvInNewWindow(\'' + conv.id + '\', event)" title="Open in new window"><i class="ti ti-external-link"></i></button>' +
+      '<button class="conv-rename" onclick="renameConversation(\'' + conv.id + '\', event)" title="Rename"><i class="ti ti-pencil"></i></button>' +
+      ((typeof state !== 'undefined' && state.enableConvExport)
+        ? '<button class="conv-rename" onclick="exportConversation(\'' + conv.id + '\', event)" title="Export transcript (JSON)"><i class="ti ti-download"></i></button>'
+        : '') +
+      '<button class="conv-del" onclick="deleteConversation(\'' + conv.id + '\', event)"><i class="ti ti-trash"></i></button>' +
+    '</span>' +
+  '</div>';
+}
+
 function renderConvList() {
   var list = document.getElementById('conv-list');
-  list.innerHTML = '';
-  var MAX_VISIBLE = 5;
-  var convs = state.conversations;
-  if (state.activeProjectId) {
-    // Project active: show only that project's conversations
-    convs = convs.filter(function(c) { return c.projectId === state.activeProjectId; });
-  } else {
-    // No project active: hide all project-linked conversations — they live in the project
-    convs = convs.filter(function(c) { return !c.projectId; });
-  }
+  if (!list) return;
+  var MAX_VISIBLE = 6;
+  // Quick chats = conversations that do not belong to any project. Project
+  // conversations are rendered inside their project folders instead.
+  var convs = state.conversations.filter(function(c) { return !c.projectId; });
   var visible = convs.slice(0, MAX_VISIBLE);
-  visible.forEach(conv => {
-    var d = document.createElement('div');
-    d.className = 'conv-item' + (conv.id === state.currentId ? ' active' : '');
-    d.onclick = () => loadConversation(conv.id);
-    d.innerHTML = (conv._streaming ? '<i class="ti ti-loader-2 conv-streaming-icon"></i>' : '') +
-      '<span class="conv-label" title="' + escHtml(conv.title) + '">' + escHtml(conv.title) + '</span>' +
-      '<span class="conv-actions">' +
-        '<button class="conv-rename" onclick="toggleConvAutonomous(\'' + conv.id + '\', event)" title="' + (conv.config && conv.config.autonomousMode ? 'Autonomous mode: on — click to disable' : 'Autonomous mode: off — click to enable') + '"><i class="ti ti-bolt"' + (conv.config && conv.config.autonomousMode ? ' style="color:#ffb800"' : '') + '></i></button>' +
-        '<button class="conv-rename" onclick="openConvInNewWindow(\'' + conv.id + '\', event)" title="Open in new window"><i class="ti ti-external-link"></i></button>' +
-        '<button class="conv-rename" onclick="renameConversation(\'' + conv.id + '\', event)" title="Rename"><i class="ti ti-pencil"></i></button>' +
-        ((typeof state !== 'undefined' && state.enableConvExport)
-          ? '<button class="conv-rename" onclick="exportConversation(\'' + conv.id + '\', event)" title="Export transcript (JSON)"><i class="ti ti-download"></i></button>'
-          : '') +
-        '<button class="conv-del" onclick="deleteConversation(\'' + conv.id + '\', event)"><i class="ti ti-trash"></i></button>' +
-      '</span>';
-    list.appendChild(d);
-  });
+  list.innerHTML = visible.map(_convRowHtml).join('');
   var showAll = document.getElementById('conv-show-all');
   if (showAll) showAll.style.display = convs.length > MAX_VISIBLE ? '' : 'none';
+  // Keep the project folder tree in sync with the latest conversation data.
+  if (typeof renderProjectSidebarList === 'function') renderProjectSidebarList();
 }
 
 function openAllConversations() {

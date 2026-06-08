@@ -98,30 +98,41 @@
       </button>
     </nav>
 
-    <!-- Active project strip -->
-    <div id="sidebar-active-project" style="display:none">
-      <span id="sidebar-active-project-dot" class="proj-dot"></span>
-      <span id="sidebar-active-project-name"></span>
-      <button id="sidebar-active-project-hub" onclick="openProjectHub()" title="Open project hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>
-      <button id="sidebar-active-project-clear" onclick="clearActiveProject()" title="Leave project"><i class="ti ti-door-exit"></i></button>
-    </div>
+    <!-- Active project strip removed: projects now live as collapsible folders
+         in the sidebar tree below, so there is no separate enter/exit state. -->
 
     <!-- ── Scrollable middle area ──────────────────────────────── -->
     <div id="sidebar-scroll">
 
-    <!-- Hidden JS-compat stubs (projects + agents) -->
-    <div id="projects-section" style="display:none">
-      <div id="projects-section-header">
-        <i class="ti ti-folders"></i>
+    <!-- ── Quick chats (conversations outside any project) ──────── -->
+    <div id="conv-section">
+      <div id="conv-section-header" onclick="toggleSidebarSection('conv')">
+        <i class="ti ti-chevron-down section-chevron"></i>
+        <span>Quick chats</span>
+        <span style="flex:1"></span>
+        <button class="section-plus-btn" onclick="event.stopPropagation();newConversation()" title="New chat"><i class="ti ti-edit" style="font-size:12px"></i></button>
+      </div>
+      <div id="conv-section-body">
+        <div id="conv-list"></div>
+        <div id="conv-show-all" class="sidebar-show-all" onclick="openAllConversations()" style="display:none">All chats</div>
+      </div>
+    </div>
+
+    <!-- ── Projects (each a collapsible folder of its conversations) ── -->
+    <div id="projects-section">
+      <div id="projects-section-header" onclick="toggleSidebarSection('projects')">
+        <i class="ti ti-chevron-down section-chevron"></i>
         <span>Projects</span>
         <span style="flex:1"></span>
-        <button class="section-plus-btn" onclick="openCreateProjectDialog()" title="New project"><i class="ti ti-plus"></i></button>
+        <button class="section-plus-btn" onclick="event.stopPropagation();openCreateProjectDialog()" title="New project"><i class="ti ti-plus"></i></button>
       </div>
       <div id="projects-section-body">
         <div id="proj-sidebar-list"></div>
         <div id="proj-show-all" class="sidebar-show-all" onclick="openAllProjects()" style="display:none">All projects</div>
       </div>
     </div>
+
+    <!-- Agents section: kept for JS compat, hidden in sidebar -->
     <div id="agents-section" style="display:none">
       <div id="agents-section-header">
         <i class="ti ti-robot"></i>
@@ -133,19 +144,6 @@
       <div id="agents-section-body">
         <div id="agent-list"></div>
         <div id="agents-show-all" class="sidebar-show-all" onclick="openAllAgents()" style="display:none">All agents</div>
-      </div>
-    </div>
-
-    <!-- ── Chats ────────────────────────────────────────────────── -->
-    <div id="conv-section">
-      <div id="conv-section-header">
-        <span>Chats</span>
-        <span style="flex:1"></span>
-        <button class="section-plus-btn" onclick="newConversation()" title="New chat"><i class="ti ti-edit" style="font-size:12px"></i></button>
-      </div>
-      <div id="conv-section-body">
-        <div id="conv-list"></div>
-        <div id="conv-show-all" class="sidebar-show-all" onclick="openAllConversations()" style="display:none">All chats</div>
       </div>
     </div>
 
