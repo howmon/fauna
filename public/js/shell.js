@@ -73,6 +73,26 @@ function _isPurelyInteractiveTui(rawCode) {
   return false;
 }
 
+// Fire-and-forget GUI launchers (`open`, `open -R`, `open -a`, `code`, `xdg-open`).
+// These hand off to a desktop app and exit 0 with NO stdout/stderr on success.
+// Auto-feeding their empty result back into the chain just makes the model
+// guess another variant (`open` → `open -R` → `open subfolder` → …), producing a
+// tool storm for a request as simple as "open the folder". When one of these
+// succeeds silently we end the auto-feed chain; the user can still click
+// "Feed to AI" manually if they want the model to react.
+function _isFireAndForgetGuiCommand(rawCode) {
+  if (!rawCode) return false;
+  var lines = String(rawCode).split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (!line || line.charAt(0) === '#') continue;
+    // Single, un-chained launcher invocation only (no pipes / redirects / && etc.).
+    if (/[|;&]|>>|>|<|\$\(|`/.test(line)) return false;
+    return /^(?:open|xdg-open|code|code-insiders|cursor)\b/i.test(line);
+  }
+  return false;
+}
+
 function _resolveHomePath(p) {
   if (!p) return p;
   if (p.charAt(0) === '~') {
@@ -1209,8 +1229,22 @@ async function runShellExec(execId, opts) {
     // Auto-feed output back to AI always when autoFeed is set —
     // the AI needs to know about empty results and failures, not just successes
     if (opts.autoFeed) {
-      dbg('  ↳ auto-feeding output to AI' + (d._screenshot ? ' with screenshot' : ''), 'info');
-      setTimeout(function() { feedShellResultToAI(execId, { silent: true }); }, 600);
+      // Exception: a fire-and-forget GUI launcher that succeeded with no output
+      // has nothing useful to verify. Feeding its empty result back only invites
+      // the model to retry endless `open`/`code` variants (tool storm). End the
+      // chain here — the manual "Feed to AI" button remains available.
+      var _silentLauncher = exitCode === 0
+        && !(d.stdout && d.stdout.trim())
+        && !(d.stderr && d.stderr.trim())
+        && !d._screenshot
+        && (!d._verifiedPaths || !d._verifiedPaths.length)
+        && _isFireAndForgetGuiCommand(code);
+      if (_silentLauncher) {
+        dbg('  ↳ auto-feed skipped — fire-and-forget GUI launcher succeeded silently', 'info');
+      } else {
+        dbg('  ↳ auto-feeding output to AI' + (d._screenshot ? ' with screenshot' : ''), 'info');
+        setTimeout(function() { feedShellResultToAI(execId, { silent: true }); }, 600);
+      }
     }
   } catch (e) {
     clearInterval(timerInterval);

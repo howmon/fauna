@@ -1126,6 +1126,86 @@ async function importAgentFromFile(file) {
   }
 }
 
+// Resolve a dropped DOM File/folder to its absolute filesystem path (Electron).
+function _resolveDroppedPath(file) {
+  try {
+    if (!file) return '';
+    if (window.faunaApp && typeof window.faunaApp.getPathForFile === 'function') {
+      return window.faunaApp.getPathForFile(file) || '';
+    }
+    return (file && typeof file.path === 'string') ? file.path : '';
+  } catch (_) { return ''; }
+}
+
+// Open the native folder picker, then import the chosen directory as an agent.
+async function openAgentFolderPicker() {
+  try {
+    var r = await fetch('/api/pick-folder', { method: 'POST' });
+    var data = await r.json();
+    if (!data || !data.ok || !data.folderPath) return; // cancelled
+    importAgentFromFolder(data.folderPath);
+  } catch (e) {
+    showToast('Could not open folder picker');
+  }
+}
+
+// Import an agent from a local folder (drag-and-drop or folder picker). Works
+// for proper Fauna agents (agent.json) and AGENT.md / system-prompt.md folders.
+async function importAgentFromFolder(localPath) {
+  if (_importInProgress) { showToast('Import already in progress'); return; }
+  _importInProgress = true;
+  showImportModal('importing');
+  updateImportStatus('reading', 'Reading folder…');
+
+  async function post(force) {
+    var r = await fetch('/api/agents/import-folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ localPath: localPath, force: !!force })
+    });
+    return { status: r.status, result: await r.json() };
+  }
+
+  try {
+    var resp = await post(false);
+    var result = resp.result;
+
+    if (result.error) {
+      // 409: an agent with the same name already exists — offer to overwrite.
+      if (resp.status === 409) {
+        if (confirm(result.error + '\n\nReinstall and overwrite the existing agent?')) {
+          resp = await post(true);
+          result = resp.result;
+          if (result.error) { showImportResult('error', 'Import failed: ' + result.error); _importInProgress = false; return; }
+        } else { closeImportModal(); return; }
+      } else {
+        showImportResult('error', 'Import failed: ' + result.error);
+        _importInProgress = false;
+        return;
+      }
+    }
+
+    if (result.scanReport && typeof result.scanReport.score === 'number') {
+      updateImportStatus('scanned', 'Security score: ' + result.scanReport.score + '/100');
+      _scanCache[result.name] = result.scanReport;
+    }
+
+    await loadInstalledAgents();
+    renderAgentList();
+
+    var note = result.synthesized
+      ? '<br><span class="builder-hint">Generated a manifest from AGENT.md — open it in the Agent Builder to refine.</span>'
+      : '';
+    showImportResult('success',
+      (result.alreadyInPlace ? 'Registered "' : 'Imported "') +
+      escHtml(result.displayName || result.name) + '"' + note
+    );
+  } catch (e) {
+    showImportResult('error', 'Import failed: ' + (e.message || 'Unknown error'));
+  }
+  _importInProgress = false;
+}
+
 function showImportScanResult(scanReport, buf, checksum, fileName) {
   var badge = scanReport.score >= 90 ? '<i class="ti ti-circle-check" style="color:#22c55e"></i>' : scanReport.score >= 80 ? '<i class="ti ti-alert-triangle" style="color:#eab308"></i>' : '<i class="ti ti-circle-x" style="color:#ef4444"></i>';
   var status = scanReport.passed ? 'PASSED' : 'FAILED';
@@ -1325,13 +1405,20 @@ function initAgentImportDragDrop() {
     e.preventDefault();
     section.classList.remove('agent-drop-active');
     var files = e.dataTransfer.files;
+    // Prefer a .zip package if one was dropped.
     for (var i = 0; i < files.length; i++) {
-      if (files[i].name.endsWith('.zip')) {
+      if (files[i].name && files[i].name.toLowerCase().endsWith('.zip')) {
         importAgentFromFile(files[i]);
         return;
       }
     }
-    showToast('Drop a .zip agent package to import');
+    // Otherwise treat a dropped folder as an agent directory (Electron exposes
+    // its absolute path via webUtils.getPathForFile).
+    for (var j = 0; j < files.length; j++) {
+      var p = _resolveDroppedPath(files[j]);
+      if (p) { importAgentFromFolder(p); return; }
+    }
+    showToast('Drop an agent folder or a .zip package to import');
   });
 }
 
@@ -1876,6 +1963,14 @@ function renderAgentActionsPage() {
         '<div class="agent-action-info">' +
           '<div class="agent-action-title">Import Agent</div>' +
           '<div class="agent-action-desc">Import a .zip agent package from your file system. It will be security-scanned before install.</div>' +
+        '</div>' +
+        '<i class="ti ti-chevron-right agent-action-arrow"></i>' +
+      '</div>' +
+      '<div class="agent-action-card" onclick="closeAgentActionsPage();openAgentFolderPicker()">' +
+        '<div class="agent-action-icon"><i class="ti ti-folder-plus"></i></div>' +
+        '<div class="agent-action-info">' +
+          '<div class="agent-action-title">Import Folder</div>' +
+          '<div class="agent-action-desc">Pick or drag in an agent folder. Works with Fauna agents and AGENT.md / system-prompt.md folders.</div>' +
         '</div>' +
         '<i class="ti ti-chevron-right agent-action-arrow"></i>' +
       '</div>' +

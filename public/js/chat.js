@@ -1184,6 +1184,7 @@ async function streamResponse(conv) {
   var _streamStartedAt = Date.now();
   var _lastLiveRenderHtml = '';
   var _lastToolOutputAccum = ''; // rolling last ~1000 chars of tool_output for input context
+  var _toolOutputBlockChars = 0; // chars of live output kept in the CURRENT shell-output view block (capped)
   var _reasoning = null; // { startedAt, durationSeconds } — compact thinking status only
   if (typeof resetDesignArtifactState === 'function') resetDesignArtifactState();
 
@@ -1538,6 +1539,7 @@ async function streamResponse(conv) {
           if (evt.type === 'tool_call') {
             dbg('tool_call: ' + evt.name, 'cmd');
             _lastToolOutputAccum = ''; // reset per tool invocation
+            _toolOutputBlockChars = 0;  // reset view-cap counter per tool invocation
             // Ephemeral tool status — shown as shimmer stack, not baked into buffer
             var toolLabel = evt.label || evt.name || 'tool';
             _addToolStatus(toolLabel);
@@ -1749,15 +1751,32 @@ async function streamResponse(conv) {
             _lastToolOutputAccum = ((_lastToolOutputAccum || '') + evt.output).slice(-1000);
             if (!buffer.includes('```shell-output\n')) {
               buffer += '```shell-output\n';
+              _toolOutputBlockChars = 0;
             }
-            // Insert before the closing ``` if present, otherwise just append
-            var closingIdx = buffer.lastIndexOf('\n```\n');
-            if (closingIdx > buffer.lastIndexOf('```shell-output\n')) {
-              buffer = buffer.slice(0, closingIdx) + evt.output + buffer.slice(closingIdx);
-            } else {
-              buffer += evt.output;
+            // Cap how much live output we keep in the RENDER buffer. A runaway
+            // command (find /, ls -R, cat of a huge file) can otherwise stream
+            // megabytes into the markdown buffer, and re-rendering that on every
+            // chunk freezes the UI (observed: ~15MB buffer, 175ms/render). The
+            // FULL result is still sent to the model server-side (capped
+            // separately in runShell), so trimming the on-screen copy never
+            // starves the model.
+            var TOOL_OUTPUT_VIEW_CAP = 200000;
+            if (_toolOutputBlockChars < TOOL_OUTPUT_VIEW_CAP) {
+              var _piece = evt.output || '';
+              if (_toolOutputBlockChars + _piece.length >= TOOL_OUTPUT_VIEW_CAP) {
+                _piece = _piece.slice(0, Math.max(0, TOOL_OUTPUT_VIEW_CAP - _toolOutputBlockChars)) +
+                  '\n…[live output truncated in view — full result was sent to the model]\n';
+              }
+              _toolOutputBlockChars += _piece.length;
+              // Insert before the closing ``` if present, otherwise just append
+              var closingIdx = buffer.lastIndexOf('\n```\n');
+              if (closingIdx > buffer.lastIndexOf('```shell-output\n')) {
+                buffer = buffer.slice(0, closingIdx) + _piece + buffer.slice(closingIdx);
+              } else {
+                buffer += _piece;
+              }
+              scheduleRender();
             }
-            scheduleRender();
           }
           if (evt.type === 'tool_waiting_for_input') {
             dbg('tool waiting for input: killId=' + evt.killId + ' hint=' + evt.hint, 'warn');

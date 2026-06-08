@@ -16,6 +16,53 @@ export function registerAgentRoutes(app, {
   iterAgentDirs,
   builtinAgentNames = [],
 }) {
+  // Synthesize a manifest for an agent folder that was dropped in WITHOUT an
+  // agent.json (e.g. a Claude-style folder with AGENT.md + skills/, or a bare
+  // system-prompt.md). Returns a manifest object so the agent still appears
+  // under "Local" and is usable, or null if the folder doesn't look like an
+  // agent. The agent.json is NOT written to disk — synthesis is purely
+  // in-memory; saving from the Agent Builder is what persists a real manifest.
+  function _synthesizeManifest(agentDir, name) {
+    // Skip internal/hidden folders (e.g. "_skills", ".git").
+    if (/^[._]/.test(name)) return null;
+    // Find a prompt source file, case-insensitively.
+    let entries;
+    try { entries = fs.readdirSync(agentDir); } catch (_) { return null; }
+    const findFile = (re) => entries.find((f) => re.test(f) && (() => {
+      try { return fs.statSync(path.join(agentDir, f)).isFile(); } catch (_) { return false; }
+    })());
+    const promptFile = findFile(/^agent\.md$/i)
+      || findFile(/^system-prompt\.md$/i)
+      || findFile(/^prompt\.md$/i)
+      || findFile(/^readme\.md$/i)
+      || findFile(/^skill\.md$/i);
+    if (!promptFile) return null;
+    let body = '';
+    try { body = fs.readFileSync(path.join(agentDir, promptFile), 'utf8'); } catch (_) { return null; }
+    if (!body.trim()) return null;
+    // Derive display name from the first H1, else title-case the folder slug.
+    const h1 = (body.match(/^\s*#\s+(.+?)\s*$/m) || [])[1];
+    const displayName = (h1 && h1.trim())
+      || name.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+    // Description: first non-empty, non-heading, non-bold-only line.
+    let description = '';
+    for (const line of body.split('\n')) {
+      const t = line.trim();
+      if (!t || t.startsWith('#')) continue;
+      description = t.replace(/^\*\*|\*\*$/g, '').replace(/^[*_>-]\s*/, '').trim();
+      if (description) break;
+    }
+    return {
+      name,
+      displayName,
+      description: description.slice(0, 200),
+      icon: 'ti-robot',
+      systemPrompt: body,
+      _synthesized: true,
+      _promptFile: promptFile,
+    };
+  }
+
   // List all installed agents
   app.get('/api/agents', (req, res) => {
     try {
@@ -25,7 +72,17 @@ export function registerAgentRoutes(app, {
         if (seen.has(name)) continue; // user dir takes precedence over local
         const manifestPath = path.join(agentDir, 'agent.json');
         if (!fs.statSync(agentDir).isDirectory()) continue;
-        if (!fs.existsSync(manifestPath)) continue;
+        if (!fs.existsSync(manifestPath)) {
+          // No agent.json — try to synthesize one from AGENT.md / system-prompt.md
+          // so folders dropped into the agents dir still show up under "Local".
+          const synth = _synthesizeManifest(agentDir, name);
+          if (!synth) continue;
+          seen.add(name);
+          synth._dir = agentDir;
+          synth._source = source;
+          agents.push(synth);
+          continue;
+        }
         try {
           const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
           // Skip sub-agents (they live inside a parent's agents/ folder)
@@ -108,7 +165,17 @@ export function registerAgentRoutes(app, {
     const name = req.params.name.replace(/[^a-zA-Z0-9_-]/g, '');
     const agentDir = path.join(agentsDir, name);
     const manifestPath = path.join(agentDir, 'agent.json');
-    if (!fs.existsSync(manifestPath)) return res.status(404).json({ error: 'Agent not found' });
+    if (!fs.existsSync(manifestPath)) {
+      // Fall back to a synthesized manifest for agent.json-less folders so the
+      // Agent Builder can open (and let the user save a real one).
+      try {
+        if (fs.existsSync(agentDir) && fs.statSync(agentDir).isDirectory()) {
+          const synth = _synthesizeManifest(agentDir, name);
+          if (synth) { synth._dir = agentDir; return res.json(synth); }
+        }
+      } catch (_) {}
+      return res.status(404).json({ error: 'Agent not found' });
+    }
     try {
       const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
       if (manifest.systemPromptFile) {
@@ -301,6 +368,102 @@ export function registerAgentRoutes(app, {
       res.status(500).json({ error: 'Failed to import agent' });
     } finally {
       try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+    }
+  });
+
+  // Import an agent from a local FOLDER (drag-and-drop a directory, or pick one
+  // via the native folder dialog). Body: JSON { localPath, force? }.
+  // Accepts both proper Fauna agents (with agent.json) and agent.json-less
+  // folders (AGENT.md / system-prompt.md), which get a synthesized manifest.
+  app.post('/api/agents/import-folder', express.json({ limit: '1mb' }), (req, res) => {
+    try {
+      const localPath = String((req.body && req.body.localPath) || '').trim();
+      if (!localPath) return res.status(400).json({ error: 'localPath is required' });
+      let stat;
+      try { stat = fs.statSync(localPath); } catch (_) { return res.status(400).json({ error: 'Folder not found: ' + localPath }); }
+      if (!stat.isDirectory()) {
+        return res.status(400).json({ error: 'Not a folder — drop a directory, or use the .zip importer for packages' });
+      }
+
+      // Resolve the agent root: the folder itself, or one level deep if it
+      // wraps a single agent subfolder containing agent.json.
+      let agentRoot = localPath;
+      let manifest = null;
+      if (fs.existsSync(path.join(agentRoot, 'agent.json'))) {
+        try { manifest = JSON.parse(fs.readFileSync(path.join(agentRoot, 'agent.json'), 'utf8')); }
+        catch (e) { return res.status(400).json({ error: 'Invalid agent.json: ' + e.message }); }
+      } else {
+        let descended = false;
+        try {
+          const dirs = fs.readdirSync(localPath).filter(d => {
+            try { return fs.statSync(path.join(localPath, d)).isDirectory(); } catch (_) { return false; }
+          });
+          for (const d of dirs) {
+            if (fs.existsSync(path.join(localPath, d, 'agent.json'))) {
+              agentRoot = path.join(localPath, d);
+              manifest = JSON.parse(fs.readFileSync(path.join(agentRoot, 'agent.json'), 'utf8'));
+              descended = true;
+              break;
+            }
+          }
+        } catch (_) {}
+        if (!descended) {
+          // No agent.json anywhere — synthesize from AGENT.md / system-prompt.md.
+          const synth = _synthesizeManifest(agentRoot, path.basename(agentRoot));
+          if (!synth) {
+            return res.status(400).json({ error: 'Folder does not look like an agent — no agent.json or AGENT.md / system-prompt.md found' });
+          }
+          manifest = synth;
+        }
+      }
+
+      const slug = String(manifest.name || path.basename(agentRoot)).replace(/[^a-zA-Z0-9_-]/g, '');
+      if (!slug) return res.status(400).json({ error: 'Could not determine a valid agent name from the folder' });
+      if (/^[._]/.test(slug)) return res.status(400).json({ error: 'Agent folder name cannot start with "." or "_"' });
+      if (builtinAgentNames.includes(slug.toLowerCase())) {
+        return res.status(409).json({ error: 'Cannot import an agent with a built-in name: ' + slug });
+      }
+
+      const destDir = path.join(agentsDir, slug);
+
+      // Folder is already inside the agents dir — nothing to copy, just confirm.
+      if (path.resolve(destDir) === path.resolve(agentRoot)) {
+        return res.json({ ok: true, name: slug, displayName: manifest.displayName || slug, alreadyInPlace: true, synthesized: !!manifest._synthesized });
+      }
+
+      const force = req.body.force === true || req.query.force === '1';
+      if (fs.existsSync(path.join(destDir, 'agent.json')) && !force) {
+        return res.status(409).json({ error: 'An agent named "' + slug + '" already exists. Reinstall to overwrite.' });
+      }
+
+      // Security scan before copying (only when a real manifest is present).
+      let scanReport = null;
+      if (!manifest._synthesized && fs.existsSync(path.join(agentRoot, 'agent.json'))) {
+        try { scanReport = scanAgent(agentRoot); } catch (_) {}
+      }
+
+      // Preserve .meta.json across forced re-imports.
+      let savedMeta = null;
+      if (force && fs.existsSync(path.join(destDir, '.meta.json'))) {
+        try { savedMeta = fs.readFileSync(path.join(destDir, '.meta.json')); } catch (_) {}
+      }
+      if (force && fs.existsSync(destDir)) fs.rmSync(destDir, { recursive: true, force: true });
+      fs.mkdirSync(destDir, { recursive: true });
+      const copyRecursive = (src, dst) => {
+        for (const item of fs.readdirSync(src)) {
+          const s = path.join(src, item);
+          const d = path.join(dst, item);
+          let st; try { st = fs.statSync(s); } catch (_) { continue; }
+          if (st.isDirectory()) { fs.mkdirSync(d, { recursive: true }); copyRecursive(s, d); }
+          else fs.copyFileSync(s, d);
+        }
+      };
+      copyRecursive(agentRoot, destDir);
+      if (savedMeta) { try { fs.writeFileSync(path.join(destDir, '.meta.json'), savedMeta); } catch (_) {} }
+
+      res.json({ ok: true, name: slug, displayName: manifest.displayName || slug, synthesized: !!manifest._synthesized, scanReport });
+    } catch (e) {
+      res.status(500).json({ error: 'Failed to import folder: ' + (e.message || 'unknown error') });
     }
   });
 
