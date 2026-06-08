@@ -429,7 +429,7 @@
               <div id="tb-agent-item-wrap" style="position:relative">
                 <button class="tb-pm-item" id="tb-agent-item" onclick="toggleTbAgentMenu(event)">
                   <i class="ti ti-robot"></i><span>Agent</span>
-                  <span id="tb-agent-item-state" class="tb-pm-badge">none</span>
+                  <span id="tb-agent-item-state" class="tb-pm-chevron"><i class="ti ti-chevron-right"></i></span>
                 </button>
                 <div id="tb-agent-menu" style="display:none"></div>
               </div>
@@ -2066,6 +2066,7 @@ Examples:
         if (inp) inp.focus();
       }, 20);
     }
+    _refreshTbAgentItem();
   }
   function _refreshTbAgentItem() {
     var badge = document.getElementById('tb-agent-item-state');
@@ -2075,8 +2076,9 @@ Examples:
       badge.textContent = active.displayName || active.name;
       badge.className = 'tb-pm-badge tb-pm-badge-on';
     } else {
-      badge.textContent = 'none';
-      badge.className = 'tb-pm-badge';
+      // No active agent — show a chevron to signal this row opens a submenu.
+      badge.innerHTML = '<i class="ti ti-chevron-' + (_tbAgentOpen ? 'down' : 'right') + '"></i>';
+      badge.className = 'tb-pm-chevron';
     }
   }
   function _renderTbAgentMenu() {

@@ -1647,6 +1647,9 @@ body.is-resizing webview { pointer-events: none !important; }
 .tb-pm-badge-on    { background: rgba(46,164,79,.15); color: #2ea44f; }
 .tb-pm-badge-warn  { background: rgba(251,191,36,.12); color: #f0b429; }
 .tb-pm-badge-ready { background: rgba(99,179,237,.12); color: #63b3ed; }
+/* Chevron shown when the Agent row has no active agent — signals a submenu */
+.tb-pm-chevron { margin-left: auto; display: flex; align-items: center; color: var(--fau-text-muted); }
+.tb-pm-chevron i { font-size: 13px; width: auto; }
 /* Ext badge inside the plus menu */
 #tb-ext-item-wrap { position: relative; }
 #ext-toolbar-badge {
