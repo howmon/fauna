@@ -93,11 +93,14 @@ function renderProjectSidebarList() {
     var isActive = p.id === state.activeProjectId;
     var expanded = _isProjectExpanded(p.id);
     var pid = _projEsc(p.id);
+    var projConvs = allConvs.filter(function(c) { return c.projectId === p.id; });
+    var anyStreaming = projConvs.some(function(c) { return c._streaming; });
 
     var header = '<div class="proj-folder-header' + (isActive ? ' active' : '') + '" onclick="toggleProjectFolder(\'' + pid + '\', event)">' +
       '<i class="ti ti-chevron-right proj-folder-chevron"></i>' +
       '<span class="proj-dot proj-color-' + _projEsc(p.color) + '"></span>' +
       '<span class="proj-folder-name">' + _projEsc(p.name) + '</span>' +
+      (anyStreaming ? '<i class="ti ti-loader-2 conv-streaming-icon proj-folder-streaming" title="A chat in this project is running"></i>' : '') +
       '<span class="proj-folder-actions">' +
         '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();newConversationInProject(\'' + pid + '\', event)" title="New chat in project"><i class="ti ti-edit"></i></button>' +
         '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();setActiveProject(\'' + pid + '\');openProjectHub()" title="Open hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>' +
@@ -107,7 +110,7 @@ function renderProjectSidebarList() {
 
     var body = '';
     if (expanded) {
-      var convs = allConvs.filter(function(c) { return c.projectId === p.id; });
+      var convs = projConvs;
       var rows = convs.slice(0, MAX_CONVS).map(function(c) {
         return (typeof _convRowHtml === 'function') ? _convRowHtml(c) : '';
       }).join('');

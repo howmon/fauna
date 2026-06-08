@@ -109,6 +109,7 @@
       <div id="conv-section-header" onclick="toggleSidebarSection('conv')">
         <i class="ti ti-chevron-down section-chevron"></i>
         <span>Quick chats</span>
+        <i class="ti ti-loader-2 conv-streaming-icon section-streaming" id="conv-section-streaming" style="display:none" title="A chat is running"></i>
         <span style="flex:1"></span>
         <button class="section-plus-btn" onclick="event.stopPropagation();newConversation()" title="New chat"><i class="ti ti-edit" style="font-size:12px"></i></button>
       </div>
@@ -123,6 +124,7 @@
       <div id="projects-section-header" onclick="toggleSidebarSection('projects')">
         <i class="ti ti-chevron-down section-chevron"></i>
         <span>Projects</span>
+        <i class="ti ti-loader-2 conv-streaming-icon section-streaming" id="projects-section-streaming" style="display:none" title="A chat in a project is running"></i>
         <span style="flex:1"></span>
         <button class="section-plus-btn" onclick="event.stopPropagation();openCreateProjectDialog()" title="New project"><i class="ti ti-plus"></i></button>
       </div>

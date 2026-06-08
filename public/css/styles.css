@@ -227,6 +227,7 @@ body.is-resizing webview { pointer-events: none !important; }
 .conv-item .conv-del:hover { color: #f87171; background: rgba(239,68,68,.1); }
 .conv-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .conv-streaming-icon { font-size: 11px; opacity: .65; flex-shrink: 0; animation: spin 1.2s linear infinite; }
+.section-streaming { font-size: 12px; color: var(--accent); opacity: .9; }
 
 /* ── Sidebar section headers ───────────────────────────────────── */
 #conv-section-header,
@@ -6377,6 +6378,9 @@ body.win-platform .acv-header {
 .proj-folder.active > .proj-folder-header .proj-folder-chevron { opacity: .8; }
 .proj-folder.expanded > .proj-folder-header .proj-folder-chevron { transform: rotate(90deg); opacity: .8; }
 .proj-folder-name { flex: 1; font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.proj-folder-streaming { font-size: 12px; color: var(--accent); flex-shrink: 0; margin-left: 2px; opacity: .9; }
+/* When the row is hovered the action buttons appear; let the spinner yield space to them */
+.proj-folder-header:hover .proj-folder-streaming { display: none; }
 .proj-folder-actions {
   display: flex; align-items: center; gap: 2px; opacity: 0; transition: opacity .15s;
   flex-shrink: 0;

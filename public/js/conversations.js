@@ -691,6 +691,27 @@ function renderConvList() {
   if (showAll) showAll.style.display = convs.length > MAX_VISIBLE ? '' : 'none';
   // Keep the project folder tree in sync with the latest conversation data.
   if (typeof renderProjectSidebarList === 'function') renderProjectSidebarList();
+  _updateSectionStreamingIndicators();
+}
+
+// Section headers show a spinner when their section is COLLAPSED but holds a
+// running conversation, so ongoing work stays visible even when the inner
+// rows (which carry their own spinners) are hidden.
+function _updateSectionStreamingIndicators() {
+  var convs = state.conversations || [];
+  var quickRunning = convs.some(function(c) { return !c.projectId && c._streaming; });
+  var projRunning = convs.some(function(c) { return c.projectId && c._streaming; });
+  var pairs = [
+    ['conv-section-body', 'conv-section-streaming', quickRunning],
+    ['projects-section-body', 'projects-section-streaming', projRunning]
+  ];
+  pairs.forEach(function(p) {
+    var icon = document.getElementById(p[1]);
+    if (!icon) return;
+    var body = document.getElementById(p[0]);
+    var collapsed = body && body.style.display === 'none';
+    icon.style.display = (p[2] && collapsed) ? '' : 'none';
+  });
 }
 
 function openAllConversations() {
@@ -771,6 +792,7 @@ function toggleSidebarSection(section) {
       chevron.classList.toggle('ti-chevron-right', !isHidden);
     }
   }
+  _updateSectionStreamingIndicators();
 }
 
 // ── Conversation export (HAR-style transcript bundle) ─────────────────────
