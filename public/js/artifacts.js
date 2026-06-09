@@ -87,6 +87,17 @@ function removeArtifact(id) {
   var idx = state.artifacts.findIndex(function(a) { return a.id === id; });
   if (idx === -1) return;
   state.artifacts.splice(idx, 1);
+  // Also remove from the persisted conversation list, otherwise the artifact
+  // reappears whenever state.artifacts is rebuilt from conv.artifacts (e.g. on
+  // conversation reload or when the next artifact streams in).
+  var conv = getConv(state.currentId);
+  if (conv && Array.isArray(conv.artifacts)) {
+    var cidx = conv.artifacts.findIndex(function(a) { return a.id === id; });
+    if (cidx !== -1) {
+      conv.artifacts.splice(cidx, 1);
+      saveConversations();
+    }
+  }
   if (state.activeArtifact === id) {
     state.activeArtifact = state.artifacts.length ? state.artifacts[state.artifacts.length - 1].id : null;
   }
