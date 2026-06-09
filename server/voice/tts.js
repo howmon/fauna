@@ -1,8 +1,11 @@
 // ── Text-to-Speech (Phase 4) ─────────────────────────────────────────────
 //
-// Pluggable, cancel-able TTS for the resident voice loop. Picks a sensible
-// system-native engine by default so there are no extra runtime deps:
+// Pluggable, cancel-able TTS for the resident voice loop. Uses the bundled
+// Kokoro neural engine by default (high-quality, fully local) and falls back
+// to a system-native engine when an explicit OS voice is requested or Kokoro
+// is unavailable:
 //
+//   default  → Kokoro (kokoro-js)    (neural, ~90 MB model, cached locally)
 //   macOS    → /usr/bin/say          (excellent voices, "-r" for rate)
 //   Linux    → espeak-ng → spd-say   (whichever is on PATH)
 //   Windows  → PowerShell SAPI       (System.Speech.Synthesis.SpeechSynthesizer)
@@ -17,12 +20,15 @@
 // short streamed chunks (from a future Phase-4b LLM token stream) play
 // in order. stop() drains the queue and kills the active child process.
 //
-// Engines are intentionally minimal — easy to swap later for edge-tts,
-// kokoro, or coqui without changing callers.
+// Voice resolution: an empty voice, "kokoro", or "kokoro:<id>" uses the
+// Kokoro neural engine. Any other string is treated as a native OS voice
+// name and routed to the platform engine above.
 
 import { EventEmitter } from 'events';
 import { spawn } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, mkdtempSync, rmSync } from 'fs';
+import os from 'os';
+import path from 'path';
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
@@ -35,6 +41,33 @@ function which(bin) {
   }
   return null;
 }
+
+// A voice spec is "Kokoro" when it's empty, the bare word "kokoro", or
+// prefixed "kokoro:". Anything else is a native OS voice name.
+function isKokoroVoice(voice) {
+  const s = String(voice == null ? '' : voice).trim().toLowerCase();
+  return s === '' || s === 'kokoro' || s.startsWith('kokoro:');
+}
+
+// Spawn the platform audio player for a finished WAV file. Returns a
+// ChildProcess whose lifetime equals playback (so stop() can kill it).
+function spawnAudioPlayer(wavFile) {
+  if (IS_MAC) {
+    return spawn('/usr/bin/afplay', [wavFile], { stdio: ['ignore', 'ignore', 'pipe'] });
+  }
+  if (IS_WIN) {
+    const safe = wavFile.replace(/'/g, "''");
+    const ps = `$p = New-Object System.Media.SoundPlayer('${safe}'); $p.PlaySync();`;
+    return spawn('powershell.exe', ['-NoProfile', '-Command', ps], { stdio: ['ignore', 'ignore', 'pipe'] });
+  }
+  const player = which('ffplay') || which('aplay') || which('paplay');
+  if (!player) return null;
+  const args = /ffplay/.test(player)
+    ? ['-nodisp', '-autoexit', '-loglevel', 'quiet', wavFile]
+    : [wavFile];
+  return spawn(player, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+}
+
 
 // ── Engine implementations ──────────────────────────────────────────────
 //
@@ -133,11 +166,15 @@ class Tts extends EventEmitter {
       try { item.resolve({ cancelled: true }); } catch (_) {}
     }
     const a = this.active;
-    if (a && a.child && !a.child.killed) {
+    if (a) {
+      // Mark cancelled even if the child hasn't spawned yet (e.g. Kokoro is
+      // still synthesizing) so the prepare step aborts before playback.
       a.cancelled = true;
-      try { a.child.kill(IS_WIN ? 'SIGTERM' : 'SIGINT'); } catch (_) {}
-      // Fallback hard kill after 250ms.
-      setTimeout(() => { try { a.child.kill('SIGKILL'); } catch (_) {} }, 250);
+      if (a.child && !a.child.killed) {
+        try { a.child.kill(IS_WIN ? 'SIGTERM' : 'SIGINT'); } catch (_) {}
+        // Fallback hard kill after 250ms.
+        setTimeout(() => { try { a.child.kill('SIGKILL'); } catch (_) {} }, 250);
+      }
     }
   }
 
@@ -156,20 +193,92 @@ class Tts extends EventEmitter {
     const item = this.queue.shift();
     if (!item) return;
 
+    const opts = item.opts || {};
+    // Resolve which engine to use. Empty / "kokoro" / "kokoro:<id>" → Kokoro
+    // neural engine (default). Any explicit OS voice name → native engine.
+    const voiceSpec = opts.voice != null ? opts.voice : this.defaults.voice;
+    const useKokoro = isKokoroVoice(voiceSpec);
+
+    // Reserve the active slot BEFORE any async work so a concurrent _drain()
+    // (or stop()) can't start a second item. The placeholder has child=null;
+    // stop() sets cancelled=true and we honor it once the child exists.
+    const handle = { child: null, resolve: item.resolve, cancelled: false };
+    this._setActive(handle);
+
+    if (useKokoro) {
+      this._startKokoro(item, handle)
+        .then((child) => { this._attachChild(item, handle, child, /*allowNativeFallback*/ true); })
+        .catch((e) => {
+          // Kokoro unavailable (e.g. offline first-run, model load error) —
+          // fall back to the native engine so speech still happens.
+          if (handle.cancelled) { this._finishCancelled(item, handle); return; }
+          try {
+            const nativeOpts = { ...opts };
+            delete nativeOpts.voice; // drop the kokoro pseudo-voice
+            const child = this.engine.run(item.text, nativeOpts);
+            this._attachChild(item, handle, child, /*allowNativeFallback*/ false);
+          } catch (err) {
+            this._setActive(null);
+            try { item.resolve({ error: 'tts failed: ' + (e.message || err.message) }); } catch (_) {}
+            this._drain();
+          }
+        });
+      return;
+    }
+
+    // Native path (explicit OS voice).
     let child;
     try {
-      child = this.engine.run(item.text, item.opts || {});
+      child = this.engine.run(item.text, opts);
     } catch (e) {
+      this._setActive(null);
       try { item.resolve({ error: e.message }); } catch (_) {}
       return this._drain();
     }
+    this._attachChild(item, handle, child, /*allowNativeFallback*/ false);
+  }
+
+  // Synthesize the item's text with Kokoro to a temp WAV, then return a
+  // platform audio-player child process for it. Resolves to null if the
+  // item was cancelled mid-synthesis or no audio player is available.
+  async _startKokoro(item, handle) {
+    const { synthesizeKokoro, parseVoiceSpec } = await import('../video/kokoro.js');
+    const spec = parseVoiceSpec(item.opts?.voice != null ? item.opts.voice : this.defaults.voice);
+    const voiceId = spec.engine === 'kokoro' ? spec.voiceId : undefined;
+
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'fauna-tts-'));
+    const wavFile = path.join(tmpDir, 'speech.wav');
+    const cleanup = () => { try { rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {} };
+
+    try {
+      await synthesizeKokoro({ text: item.text, outWav: wavFile, voice: voiceId });
+    } catch (e) {
+      cleanup();
+      throw e;
+    }
+    if (handle.cancelled) { cleanup(); return null; }
+
+    const child = spawnAudioPlayer(wavFile);
+    if (!child) { cleanup(); throw new Error('no audio player available on this system'); }
+    child.once('close', cleanup);
+    child.once('error', cleanup);
+    return child;
+  }
+
+  // Wire a spawned child (native engine or Kokoro player) into the active
+  // handle and resolve the item when it finishes / is cancelled.
+  _attachChild(item, handle, child, allowNativeFallback) {
+    if (handle.cancelled) {
+      if (child && !child.killed) { try { child.kill('SIGKILL'); } catch (_) {} }
+      return this._finishCancelled(item, handle);
+    }
     if (!child) {
+      this._setActive(null);
       try { item.resolve({ error: 'no TTS engine available on this system' }); } catch (_) {}
       return this._drain();
     }
 
-    const handle = { child, resolve: item.resolve, cancelled: false };
-    this._setActive(handle);
+    handle.child = child;
 
     let stderr = '';
     child.stderr?.on('data', d => { stderr += d.toString(); });
@@ -187,6 +296,13 @@ class Tts extends EventEmitter {
       this._drain();
     });
   }
+
+  _finishCancelled(item, handle) {
+    this._setActive(null);
+    try { item.resolve({ cancelled: true }); } catch (_) {}
+    this._drain();
+  }
+
 
   shutdown() {
     this.stop();
@@ -213,37 +329,52 @@ export async function listVoices() {
   const { promisify } = await import('node:util');
   const exec = promisify(execFile);
 
+  // Kokoro neural voices are always available (bundled, local). List them
+  // first so the default engine's voices appear at the top of the dropdown.
+  // Values use the "kokoro:<id>" form so the engine routes correctly.
+  let kokoroVoices = [];
+  try {
+    const { listKokoroVoices } = await import('../video/kokoro.js');
+    kokoroVoices = (listKokoroVoices() || []).map(v => ({
+      name: `kokoro:${v.id}`,
+      language: `Kokoro · ${v.label}`,
+    }));
+  } catch (_) {}
+
   try {
     if (IS_MAC) {
       const { stdout } = await exec('/usr/bin/say', ['-v', '?'], { timeout: 4000 });
-      return stdout.split('\n').map(line => {
+      const native = stdout.split('\n').map(line => {
         // "Alex                en_US    # Most...what?"
         const m = line.match(/^(\S(?:[^#]*?\S)?)\s{2,}([a-z]{2,3}(?:[_-][A-Za-z0-9]+)?)/);
         if (!m) return null;
         return { name: m[1].trim(), language: m[2] };
       }).filter(Boolean);
+      return kokoroVoices.concat(native);
     }
     if (IS_WIN) {
       const ps = "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name + '|' + $_.VoiceInfo.Culture.Name }";
       const { stdout } = await exec('powershell.exe', ['-NoProfile', '-Command', ps], { timeout: 6000 });
-      return stdout.split(/\r?\n/).map(line => {
+      const native = stdout.split(/\r?\n/).map(line => {
         const [name, language] = line.split('|');
         if (!name) return null;
         return { name: name.trim(), language: (language || '').trim() };
       }).filter(Boolean);
+      return kokoroVoices.concat(native);
     }
     // Linux: espeak-ng --voices gives a fixed-column listing.
     if (existsSync('/usr/bin/espeak-ng') || existsSync('/usr/local/bin/espeak-ng')) {
       const { stdout } = await exec('espeak-ng', ['--voices'], { timeout: 4000 });
       const lines = stdout.split('\n').slice(1); // skip header
-      return lines.map(line => {
+      const native = lines.map(line => {
         const parts = line.trim().split(/\s+/);
         if (parts.length < 4) return null;
         return { name: parts[3], language: parts[1] };
       }).filter(Boolean);
+      return kokoroVoices.concat(native);
     }
-    return [];
+    return kokoroVoices;
   } catch (_) {
-    return [];
+    return kokoroVoices;
   }
 }

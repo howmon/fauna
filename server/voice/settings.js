@@ -25,7 +25,7 @@ export const DEFAULTS = Object.freeze({
   followUpWindowMs: 12000,
 
   // TTS defaults
-  ttsVoice: '',                  // empty = engine default
+  ttsVoice: '',                  // empty = Kokoro neural (default engine)
   ttsRate:  null,                // null = engine default (mac wpm, linux wpm, win -10..10)
   ttsEnabled: true,
 
