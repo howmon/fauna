@@ -1064,23 +1064,54 @@ function mdFileChoose(target, convId) {
   if (!payload) { closeMdFileModal(); return; }
   _mdFilePending = null;
 
-  if (target === 'new') {
-    if (typeof newConversation === 'function') newConversation();
-  } else if (target === 'conv' && convId) {
-    if (typeof loadConversation === 'function') loadConversation(convId);
-  } else { // 'current'
+  if (target === 'preview') {
+    // Open the document in the artifact panel without attaching to a chat.
+    // Ensure there's a conversation to host the artifact (artifacts persist
+    // to the active conversation).
     if (!(state.currentId && getConv(state.currentId)) && typeof newConversation === 'function') {
       newConversation();
     }
+    _previewMdFile(payload);
+  } else {
+    if (target === 'new') {
+      if (typeof newConversation === 'function') newConversation();
+    } else if (target === 'conv' && convId) {
+      if (typeof loadConversation === 'function') loadConversation(convId);
+    } else { // 'current'
+      if (!(state.currentId && getConv(state.currentId)) && typeof newConversation === 'function') {
+        newConversation();
+      }
+    }
+    _attachMdFile(payload);
   }
-
-  _attachMdFile(payload);
 
   // Continue with any further queued files, else close.
   if (_mdFileQueue.length) {
     _showNextMdFile();
   } else {
     closeMdFileModal();
+  }
+}
+
+function _previewMdFile(payload) {
+  if (!payload) return;
+  var absPath = payload.path || '';
+  if (typeof addArtifact !== 'function') {
+    // No artifact subsystem available — fall back to attaching.
+    _attachMdFile(payload);
+    return;
+  }
+  var id = addArtifact({
+    type: 'markdown',
+    title: payload.name || 'document.md',
+    content: payload.content || '',
+    path: absPath || undefined,
+    sourceUri: absPath ? ('file://' + absPath) : undefined,
+  });
+  if (typeof openArtifact === 'function') openArtifact(id);
+  else if (typeof openArtifactPane === 'function') openArtifactPane();
+  if (typeof showToast === 'function') {
+    showToast('Previewing ' + (payload.name || 'document'));
   }
 }
 

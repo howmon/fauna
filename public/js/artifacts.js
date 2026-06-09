@@ -31,12 +31,18 @@ function addArtifact(spec) {
   if (artifact.type === 'image' && artifact.path && !artifact.base64) {
     fetchArtifactImage(id, artifact.path);
   }
-  // Persist to current conversation (strip large binary so localStorage stays small)
+  // Persist to current conversation (strip large payloads so localStorage stays small)
   var conv = getConv(state.currentId);
   if (conv) {
     if (!conv.artifacts) conv.artifacts = [];
     var stored = Object.assign({}, artifact);
     if (stored.base64 && stored.base64.length > 20000) delete stored.base64;
+    // For file-backed text artifacts we can reload the full content from disk,
+    // so don't bloat localStorage with large inline copies — it re-hydrates on view.
+    if (stored.path && _artifactShouldHydrateFromDisk(stored) &&
+        typeof stored.content === 'string' && stored.content.length > 20000) {
+      delete stored.content;
+    }
     conv.artifacts.push(stored);
     if (conv.artifacts.length > 20) conv.artifacts.shift();
     saveConversations();

@@ -2580,13 +2580,16 @@ Examples:
   <div id="mdfile-modal-box">
     <div id="mdfile-modal-title"><i class="ti ti-markdown"></i> Open Markdown file</div>
     <div id="mdfile-modal-name"></div>
-    <div id="mdfile-modal-sub">Associate this document with a conversation:</div>
+    <div id="mdfile-modal-sub">Add this document to a conversation, or preview it in the artifact panel:</div>
     <div id="mdfile-modal-actions">
       <button class="panel-btn primary" style="flex:0;padding:8px 14px" onclick="mdFileChoose('new')">
         <i class="ti ti-plus"></i> New conversation
       </button>
       <button class="panel-btn secondary" id="mdfile-current-btn" style="flex:0;padding:8px 14px" onclick="mdFileChoose('current')">
         <i class="ti ti-message"></i> Add to current
+      </button>
+      <button class="panel-btn secondary" style="flex:0;padding:8px 14px" onclick="mdFileChoose('preview')">
+        <i class="ti ti-eye"></i> Preview as artifact
       </button>
     </div>
     <div id="mdfile-modal-recent-label">Or add to a recent conversation:</div>
