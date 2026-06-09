@@ -53,6 +53,9 @@
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap">
 <link rel="stylesheet" href="css/styles.css">
 <!-- QR code generated server-side via /api/mobile/pair -->
 </head>
@@ -711,13 +714,23 @@
   <div class="settings-page" data-page="appearance">
     <div class="settings-page-title">Appearance</div>
     <div class="settings-section">
-      <div class="settings-section-title">Theme</div>
+      <div class="settings-section-title">Color theme</div>
+      <div id="preset-grid" class="preset-grid"></div>
+      <div class="settings-hint">Pick an accent palette. Applies instantly and is remembered. Default is <strong>Cyber</strong>.</div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-title">Font</div>
+      <div id="font-grid" class="preset-grid"></div>
+      <div class="settings-hint">Choose the interface typeface. <strong>Theme default</strong> follows the selected color theme.</div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-title">Mode</div>
       <div style="display:flex;gap:10px">
         <button class="settings-row-btn" style="flex:1" onclick="applyTheme('dark')"><i class="ti ti-moon"></i> Dark</button>
         <button class="settings-row-btn" style="flex:1" onclick="applyTheme('light')"><i class="ti ti-sun"></i> Light</button>
         <button class="settings-row-btn" style="flex:1" onclick="toggleTheme()"><i class="ti ti-rotate"></i> Toggle</button>
       </div>
-      <div class="settings-hint">Switch between dark and light mode.</div>
+      <div class="settings-hint">Switch between dark and light mode. Each color theme has both.</div>
     </div>
   </div>
 
@@ -1663,6 +1676,10 @@ Examples:
     }
     if (page === 'permissions') {
       if (typeof refreshPermissions === 'function') refreshPermissions();
+    }
+    if (page === 'appearance') {
+      if (typeof renderPresetPicker === 'function') renderPresetPicker();
+      if (typeof renderFontPicker === 'function') renderFontPicker();
     }
     if (page === 'help') {
       // Move help content into the settings page on first open

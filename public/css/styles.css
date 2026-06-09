@@ -4,95 +4,254 @@
 /* Hide agent badge from topbar permanently */
 #agent-badge { display: none !important; }
 
-/* ── Design Tokens — Dark (default) ─────────────────────────────────── */
+/* ══ THEME PRESETS ══════════════════════════════════════════════════════
+   Each preset supplies ONLY a raw OKLCH palette (--color-* semantic tokens,
+   the --viz-1 accent, and --theme-font). The --fau-* / --accent aliases the
+   whole app consumes are derived ONCE in the two "SHARED ALIASES" blocks far
+   below, so adding a preset = adding one DARK + one LIGHT palette block and a
+   swatch in Settings → Appearance. Nothing else.
+
+   Presets are chosen via  <html data-preset="…" data-theme="…">  (set by
+   applyPreset()/applyTheme() in public/js/ui.js). "cyber" is the default and
+   also matches bare :root / [data-theme] so the right palette is shown before
+   JS runs. A more-specific [data-preset="x"] block (0,2,0) overrides the
+   default (0,1,0); the LIGHT block is always listed AFTER its DARK sibling so
+   it wins in light mode (equal specificity → source order). ════════════════ */
+
+/* ── Cyber · emerald (hue 155) — DEFAULT — DARK ──────────────────────── */
+:root,
+[data-theme="dark"],
+[data-theme="dark"][data-preset="cyber"] {
+  --color-background:     oklch(0.180 0.015 155);
+  --color-pageBackground: oklch(0.220 0.018 155);
+  --color-surface:        oklch(0.260 0.020 155);
+  --color-text:           oklch(0.960 0.016 155);
+  --color-muted:          oklch(0.840 0.014 155);
+  --color-primary:        oklch(0.667 0.025 155);
+  --color-border:         oklch(0.380 0.015 155);
+  --color-borderStrong:   oklch(0.650 0.020 155);
+  --color-subtleSurface:  oklch(0.310 0.018 155);
+  --color-success:        oklch(0.780 0.160 150);
+  --color-warning:        oklch(0.760 0.180 85);
+  --color-danger:         oklch(0.720 0.190 20);
+  --viz-1:                oklch(0.720 0.160 155);
+  --theme-font: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+}
+/* ── Cyber — LIGHT ───────────────────────────────────────────────────── */
+[data-theme="light"],
+[data-theme="light"][data-preset="cyber"] {
+  --color-background:     oklch(0.985 0.010 155);
+  --color-pageBackground: oklch(0.990 0.014 155);
+  --color-surface:        oklch(0.950 0.015 155);
+  --color-text:           oklch(0.240 0.030 155);
+  --color-muted:          oklch(0.450 0.020 155);
+  --color-primary:        oklch(0.455 0.040 155);
+  --color-border:         oklch(0.860 0.015 155);
+  --color-borderStrong:   oklch(0.550 0.020 155);
+  --color-subtleSurface:  oklch(0.965 0.010 155);
+  --color-inputSurface:   oklch(0.990 0.006 155);
+  --color-success:        oklch(0.510 0.160 150);
+  --color-warning:        oklch(0.530 0.180 85);
+  --color-danger:         oklch(0.530 0.190 20);
+  --viz-1:                oklch(0.580 0.180 155);
+  --theme-font: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+}
+
+/* ── Minimal · blue-gray (hue 258) — DARK ────────────────────────────── */
+[data-theme="dark"][data-preset="minimal"] {
+  --color-background:     oklch(0.180 0.015 258);
+  --color-pageBackground: oklch(0.220 0.018 258);
+  --color-surface:        oklch(0.260 0.020 258);
+  --color-text:           oklch(0.960 0.016 258);
+  --color-muted:          oklch(0.840 0.014 258);
+  --color-primary:        oklch(0.760 0.025 258);
+  --color-border:         oklch(0.380 0.015 258);
+  --color-borderStrong:   oklch(0.650 0.020 258);
+  --color-subtleSurface:  oklch(0.310 0.018 258);
+  --color-success:        oklch(0.780 0.160 150);
+  --color-warning:        oklch(0.760 0.180 85);
+  --color-danger:         oklch(0.720 0.190 20);
+  --viz-1:                oklch(0.720 0.160 258);
+  --theme-font: 'Space Grotesk', 'Segoe UI Variable', 'Segoe UI', -apple-system, system-ui, sans-serif;
+}
+/* ── Minimal — LIGHT ─────────────────────────────────────────────────── */
+[data-theme="light"][data-preset="minimal"] {
+  --color-background:     oklch(0.985 0.010 258);
+  --color-pageBackground: oklch(0.980 0.014 258);
+  --color-surface:        oklch(0.950 0.015 258);
+  --color-text:           oklch(0.240 0.030 258);
+  --color-muted:          oklch(0.450 0.020 258);
+  --color-primary:        oklch(0.445 0.045 258);
+  --color-border:         oklch(0.860 0.015 258);
+  --color-borderStrong:   oklch(0.550 0.020 258);
+  --color-subtleSurface:  oklch(0.965 0.010 258);
+  --color-inputSurface:   oklch(0.990 0.006 258);
+  --color-success:        oklch(0.510 0.160 150);
+  --color-warning:        oklch(0.530 0.180 85);
+  --color-danger:         oklch(0.530 0.190 20);
+  --viz-1:                oklch(0.580 0.180 258);
+  --theme-font: 'Space Grotesk', 'Segoe UI Variable', 'Segoe UI', -apple-system, system-ui, sans-serif;
+}
+
+/* ── Ember · amber (hue 45) — DARK ───────────────────────────────────── */
+[data-theme="dark"][data-preset="ember"] {
+  --color-background:     oklch(0.180 0.015 45);
+  --color-pageBackground: oklch(0.220 0.018 45);
+  --color-surface:        oklch(0.260 0.020 45);
+  --color-text:           oklch(0.960 0.016 45);
+  --color-muted:          oklch(0.840 0.014 45);
+  --color-primary:        oklch(0.760 0.040 45);
+  --color-border:         oklch(0.380 0.018 45);
+  --color-borderStrong:   oklch(0.650 0.025 45);
+  --color-subtleSurface:  oklch(0.310 0.020 45);
+  --color-success:        oklch(0.780 0.160 150);
+  --color-warning:        oklch(0.760 0.180 85);
+  --color-danger:         oklch(0.720 0.190 20);
+  --viz-1:                oklch(0.760 0.150 55);
+  --theme-font: 'Space Grotesk', 'Segoe UI Variable', 'Segoe UI', -apple-system, system-ui, sans-serif;
+}
+/* ── Ember — LIGHT ───────────────────────────────────────────────────── */
+[data-theme="light"][data-preset="ember"] {
+  --color-background:     oklch(0.985 0.012 65);
+  --color-pageBackground: oklch(0.990 0.016 65);
+  --color-surface:        oklch(0.955 0.018 65);
+  --color-text:           oklch(0.250 0.035 45);
+  --color-muted:          oklch(0.460 0.030 45);
+  --color-primary:        oklch(0.560 0.110 50);
+  --color-border:         oklch(0.870 0.020 65);
+  --color-borderStrong:   oklch(0.560 0.040 50);
+  --color-subtleSurface:  oklch(0.970 0.012 65);
+  --color-inputSurface:   oklch(0.992 0.008 65);
+  --color-success:        oklch(0.510 0.160 150);
+  --color-warning:        oklch(0.530 0.180 85);
+  --color-danger:         oklch(0.530 0.190 20);
+  --viz-1:                oklch(0.640 0.170 50);
+  --theme-font: 'Space Grotesk', 'Segoe UI Variable', 'Segoe UI', -apple-system, system-ui, sans-serif;
+}
+
+/* ── Violet · purple (hue 295) — DARK ────────────────────────────────── */
+[data-theme="dark"][data-preset="violet"] {
+  --color-background:     oklch(0.180 0.018 295);
+  --color-pageBackground: oklch(0.220 0.020 295);
+  --color-surface:        oklch(0.260 0.024 295);
+  --color-text:           oklch(0.960 0.016 295);
+  --color-muted:          oklch(0.840 0.016 295);
+  --color-primary:        oklch(0.760 0.050 295);
+  --color-border:         oklch(0.380 0.020 295);
+  --color-borderStrong:   oklch(0.650 0.028 295);
+  --color-subtleSurface:  oklch(0.310 0.024 295);
+  --color-success:        oklch(0.780 0.160 150);
+  --color-warning:        oklch(0.760 0.180 85);
+  --color-danger:         oklch(0.720 0.190 20);
+  --viz-1:                oklch(0.740 0.160 295);
+  --theme-font: 'Space Grotesk', 'Segoe UI Variable', 'Segoe UI', -apple-system, system-ui, sans-serif;
+}
+/* ── Violet — LIGHT ──────────────────────────────────────────────────── */
+[data-theme="light"][data-preset="violet"] {
+  --color-background:     oklch(0.985 0.012 295);
+  --color-pageBackground: oklch(0.990 0.016 295);
+  --color-surface:        oklch(0.952 0.018 295);
+  --color-text:           oklch(0.250 0.035 295);
+  --color-muted:          oklch(0.460 0.030 295);
+  --color-primary:        oklch(0.500 0.150 295);
+  --color-border:         oklch(0.865 0.020 295);
+  --color-borderStrong:   oklch(0.560 0.040 295);
+  --color-subtleSurface:  oklch(0.968 0.012 295);
+  --color-inputSurface:   oklch(0.992 0.008 295);
+  --color-success:        oklch(0.510 0.160 150);
+  --color-warning:        oklch(0.530 0.180 85);
+  --color-danger:         oklch(0.530 0.190 20);
+  --viz-1:                oklch(0.580 0.190 295);
+  --theme-font: 'Space Grotesk', 'Segoe UI Variable', 'Segoe UI', -apple-system, system-ui, sans-serif;
+}
+
+/* ══ SHARED ALIASES ════════════════════════════════════════════════════
+   Preset-agnostic: maps Fauna's --fau-* / --accent vars from the active
+   preset's --color-* + --viz-1. Uses color-mix so tints/translucency track
+   the accent of whatever preset is active. DARK first, LIGHT after (so the
+   light block wins in light mode). ════════════════════════════════════════ */
 :root, [data-theme="dark"] {
-  --fau-bg:          #1b1b1b;
-  --fau-sidebar: #1f1f1f;
-  --fau-surface:     #242424;
-  --fau-surface2:    #2e2e2e;
-  --fau-surface3:    #383838;
-  --fau-border:      #404040;
+  --fau-bg:          var(--color-background);
+  --fau-sidebar:     var(--color-pageBackground);
+  --fau-surface:     var(--color-surface);
+  --fau-surface2:    var(--color-subtleSurface);
+  --fau-surface3:    color-mix(in oklab, var(--color-subtleSurface) 65%, var(--color-borderStrong) 35%);
+  --fau-border:      var(--color-border);
   --fau-border2:     rgba(255,255,255,.07);
-  --accent: #789996;
-  --accent2: #cccccc;
-  --accent-dim: rgba(71, 236, 245, 0.12);
-  --accent-glow: rgb(105 111 111 / 22%);
-  --fau-text:        #f5f5f5;
-  --fau-text-dim:    #b4b4b4;
-  --fau-text-muted: #7a7a7a;
-  --success:     #6ccb5f;
-  --error:       #f36e6e;
-  --warn:        #f2c661;
-  --fau-user-bg: #303435;
-  --fau-ai-bg:       #1f1f1f;
+  --accent:          var(--viz-1);
+  --accent2:         color-mix(in oklab, var(--viz-1) 72%, white 28%);
+  --accent-dim:      color-mix(in oklab, var(--viz-1) 15%, transparent);
+  --accent-glow:     color-mix(in oklab, var(--viz-1) 24%, transparent);
+  --fau-text:        var(--color-text);
+  --fau-text-dim:    var(--color-muted);
+  --fau-text-muted:  var(--color-borderStrong);
+  --success:     var(--color-success);
+  --error:       var(--color-danger);
+  --warn:        var(--color-warning);
+  --fau-user-bg: color-mix(in oklab, var(--color-surface) 86%, var(--viz-1) 14%);
+  --fau-ai-bg:       var(--color-pageBackground);
   --radius:      8px;
   --radius-sm:   4px;
-  --font:        'Segoe UI Variable','Segoe UI',-apple-system,system-ui,sans-serif;
-  --mono:        'Cascadia Code','JetBrains Mono','Fira Code','Consolas',monospace;
+  --font:        var(--theme-font, 'Segoe UI Variable','Segoe UI',-apple-system,system-ui,sans-serif);
+  --mono:        'JetBrains Mono','Cascadia Code','Fira Code','Consolas',ui-monospace,monospace;
   --shadow-2:    0 1px 2px rgba(0,0,0,.24);
   --shadow-4:    0 2px 4px rgba(0,0,0,.28);
   --shadow-8:    0 4px 8px rgba(0,0,0,.28);
   --shadow-16:   0 8px 16px rgba(0,0,0,.28);
   --shadow-28:   0 14px 28px rgba(0,0,0,.32);
-  --fau-code-bg:     #161616;
-  --fau-code-header: #1c1c1c;
-  --fau-code-inline-color: #c6e8e2;
-  /* Project color palette */
-  --proj-teal:   #789996;
-  --proj-teal2:  #0D9488;
-  --proj-purple: #8764B8;
-  --proj-green:  #4D9A5E;
-  --proj-orange: #C67A3E;
-  --proj-red:    #C4474F;
-  --proj-violet: #6C5CE7;
-  --proj-pink:   #B8539A;
+  --fau-code-bg:     color-mix(in oklab, var(--color-background) 64%, black 36%);
+  --fau-code-header: color-mix(in oklab, var(--color-background) 82%, black 18%);
+  --fau-code-inline-color: color-mix(in oklab, var(--viz-1) 70%, var(--color-text) 30%);
+  /* Project color palette — fixed categorical hues (recognizable across themes) */
+  --proj-teal:   oklch(0.760 0.130 173);
+  --proj-teal2:  oklch(0.660 0.150 195);
+  --proj-purple: oklch(0.740 0.150 305);
+  --proj-green:  oklch(0.760 0.160 145);
+  --proj-orange: oklch(0.780 0.150 60);
+  --proj-red:    oklch(0.680 0.190 25);
+  --proj-violet: oklch(0.700 0.170 290);
+  --proj-pink:   oklch(0.740 0.150 350);
   color-scheme: dark;
 }
-
-
-/* ── Design Tokens — Light ──────────────────────────────────────────── */
 [data-theme="light"] {
-  /* Warm off-white palette (Linear / Notion inspired) — adds depth and
-     warmth instead of flat clinical gray. Surface is pure white so cards
-     "lift" off the cream background. */
-  --fau-bg:          #f8f6f2;
-  --fau-sidebar:     #f1eee7;
-  --fau-surface:     #ffffff;
-  --fau-surface2:    #f3f0ea;
-  --fau-surface3:    #eae6dc;
-  --fau-border:      #e2ddd0;
-  --fau-border2:     rgba(60,45,20,.05);
-  --accent:      #0F766E;
-  --accent2:     #0D9488;
-  --accent-dim:  rgba(15, 118, 110, 0.10);
-  --accent-glow: rgba(15, 118, 110, 0.18);
-  --fau-text:        #1f2421;
-  --fau-text-dim:    #5c5852;
-  --fau-text-muted:  #928d83;
-  --success:     #107c10;
-  --error:       #c4314b;
-  --warn:        #d48c00;
-  --fau-user-bg:     #e6efec;
-  --fau-ai-bg:       #fbfaf6;
+  --fau-bg:          var(--color-background);
+  --fau-sidebar:     var(--color-subtleSurface);
+  --fau-surface:     var(--color-inputSurface);
+  --fau-surface2:    var(--color-surface);
+  --fau-surface3:    color-mix(in oklab, var(--color-surface) 60%, var(--color-border) 40%);
+  --fau-border:      var(--color-border);
+  --fau-border2:     rgba(30,40,60,.05);
+  --accent:          var(--viz-1);
+  --accent2:         color-mix(in oklab, var(--viz-1) 80%, black 20%);
+  --accent-dim:      color-mix(in oklab, var(--viz-1) 10%, transparent);
+  --accent-glow:     color-mix(in oklab, var(--viz-1) 18%, transparent);
+  --fau-text:        var(--color-text);
+  --fau-text-dim:    var(--color-muted);
+  --fau-text-muted:  var(--color-borderStrong);
+  --success:     var(--color-success);
+  --error:       var(--color-danger);
+  --warn:        var(--color-warning);
+  --fau-user-bg: color-mix(in oklab, var(--color-surface) 84%, var(--viz-1) 16%);
+  --fau-ai-bg:       var(--color-pageBackground);
   --radius:      8px;
   --radius-sm:   4px;
-  --shadow-2:    0 1px 2px rgba(60,45,20,.06);
-  --shadow-4:    0 2px 6px rgba(60,45,20,.07);
-  --shadow-8:    0 6px 14px rgba(60,45,20,.08);
-  --shadow-16:   0 10px 24px rgba(60,45,20,.10);
-  --shadow-28:   0 18px 36px rgba(60,45,20,.12);
-  --fau-code-bg:     #f3f1eb;
-  --fau-code-header: #ebe8e0;
-  --fau-code-inline-color: #0d6964;
-  /* Project color palette */
-  --proj-teal:   #0D9488;
-  --proj-teal2:  #0F766E;
-  --proj-purple: #8764B8;
-  --proj-green:  #2E7D4F;
-  --proj-orange: #C67A3E;
-  --proj-red:    #C4474F;
-  --proj-violet: #6C5CE7;
-  --proj-pink:   #B8539A;
+  --shadow-2:    0 1px 2px rgba(30,40,60,.06);
+  --shadow-4:    0 2px 6px rgba(30,40,60,.07);
+  --shadow-8:    0 6px 14px rgba(30,40,60,.08);
+  --shadow-16:   0 10px 24px rgba(30,40,60,.10);
+  --shadow-28:   0 18px 36px rgba(30,40,60,.12);
+  --fau-code-bg:     color-mix(in oklab, var(--color-surface) 70%, var(--color-border) 30%);
+  --fau-code-header: color-mix(in oklab, var(--color-surface) 55%, var(--color-border) 45%);
+  --fau-code-inline-color: color-mix(in oklab, var(--viz-1) 78%, var(--color-text) 22%);
+  /* Project color palette — fixed categorical hues */
+  --proj-teal:   oklch(0.560 0.130 173);
+  --proj-teal2:  oklch(0.500 0.150 195);
+  --proj-purple: oklch(0.520 0.170 305);
+  --proj-green:  oklch(0.540 0.150 145);
+  --proj-orange: oklch(0.620 0.160 55);
+  --proj-red:    oklch(0.540 0.200 25);
+  --proj-violet: oklch(0.500 0.180 290);
+  --proj-pink:   oklch(0.560 0.160 350);
   color-scheme: light;
 }
 html, body { height: 100%; background: var(--fau-bg); color: var(--fau-text); font-family: var(--font); font-size: 14px; line-height: 1.6; overflow: hidden; }
@@ -106,8 +265,8 @@ html, body { height: 100%; background: var(--fau-bg); color: var(--fau-text); fo
   pointer-events: none;
   z-index: 0;
   background:
-    radial-gradient(900px 600px at 0% 0%,   rgba(15,118,110,.045), transparent 60%),
-    radial-gradient(1200px 800px at 100% 100%, rgba(199,151,99,.05),  transparent 65%);
+    radial-gradient(900px 600px at 0% 0%,   color-mix(in oklab, var(--viz-1) 6%, transparent), transparent 60%),
+    radial-gradient(1200px 800px at 100% 100%, color-mix(in oklab, var(--viz-1) 5%, transparent),  transparent 65%);
 }
 [data-theme="light"] #app { position: relative; z-index: 1; }
 
@@ -1915,6 +2074,36 @@ body.is-resizing webview { pointer-events: none !important; }
   font-size: 11px; color: var(--fau-text-muted); line-height: 1.5;
 }
 .settings-hint a { color: var(--accent2); }
+
+/* ── Appearance: color-preset picker ───────────────────────────────── */
+.preset-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px; margin-bottom: 10px;
+}
+.preset-card {
+  display: flex; align-items: center; gap: 11px;
+  background: var(--fau-surface2); border: 1px solid var(--fau-border);
+  border-radius: 10px; padding: 11px 13px; cursor: pointer;
+  font-family: var(--font); text-align: left; transition: border-color .15s, background .15s;
+  position: relative;
+}
+.preset-card:hover { border-color: var(--accent); }
+.preset-card.active { border-color: var(--accent); background: var(--accent-dim); }
+.preset-swatch {
+  width: 26px; height: 26px; border-radius: 50%; flex: 0 0 auto;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.18), var(--shadow-4);
+}
+.font-swatch {
+  width: 30px; height: 26px; flex: 0 0 auto; display: flex;
+  align-items: center; justify-content: center;
+  font-size: 15px; font-weight: 600; color: var(--accent2);
+  border-radius: 6px; background: var(--accent-dim);
+}
+.preset-meta { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.preset-name { font-size: 13px; font-weight: 600; color: var(--fau-text); }
+.preset-hint { font-size: 10.5px; color: var(--fau-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.preset-check { margin-left: auto; font-size: 16px; color: var(--accent2); opacity: 0; transition: opacity .15s; }
+.preset-card.active .preset-check { opacity: 1; }
 .self-chat-bridge-body {
   margin-top: 16px;
   display: flex;
@@ -5389,7 +5578,7 @@ textarea.builder-find-active {
 }
 /* All conversations list — datagrid mirroring the All Projects view */
 .all-convs-list {
-  flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px 24px;
+  flex: 1; min-height: 0; overflow-y: auto; padding: 0px 16px 24px;
   display: flex; flex-direction: column; gap: 0;
 }
 .all-conv-row {

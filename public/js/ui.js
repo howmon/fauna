@@ -59,11 +59,92 @@ function clearDebugLog() {
   if (el) el.innerHTML = '';
 }
 
-// ── Theme toggle (light / dark / system) ──────────────────────────────────
+// ── Theme toggle (light / dark / system) + color presets ───────────────────
 function getPreferredTheme() {
   var stored = localStorage.getItem('fauna-theme');
   if (stored === 'light' || stored === 'dark') return stored;
   return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+
+// Available color presets (must match the [data-preset] blocks in styles.css).
+var FAUNA_PRESETS = [
+  { id: 'cyber',   name: 'Cyber',   hint: 'Emerald · JetBrains Mono', swatch: 'oklch(0.720 0.160 155)' },
+  { id: 'minimal', name: 'Minimal', hint: 'Blue-gray · Space Grotesk', swatch: 'oklch(0.720 0.160 258)' },
+  { id: 'ember',   name: 'Ember',   hint: 'Warm amber',                swatch: 'oklch(0.760 0.150 55)'  },
+  { id: 'violet',  name: 'Violet',  hint: 'Royal purple',              swatch: 'oklch(0.740 0.160 295)' }
+];
+var FAUNA_DEFAULT_PRESET = 'cyber';
+
+function getPreferredPreset() {
+  var stored = localStorage.getItem('fauna-preset');
+  if (stored && FAUNA_PRESETS.some(function (p) { return p.id === stored; })) return stored;
+  return FAUNA_DEFAULT_PRESET;
+}
+
+function applyPreset(preset) {
+  if (!FAUNA_PRESETS.some(function (p) { return p.id === preset; })) preset = FAUNA_DEFAULT_PRESET;
+  document.documentElement.setAttribute('data-preset', preset);
+  localStorage.setItem('fauna-preset', preset);
+  renderPresetPicker();
+}
+
+// Build / refresh the preset swatch grid in Settings → Appearance.
+function renderPresetPicker() {
+  var grid = document.getElementById('preset-grid');
+  if (!grid) return;
+  var active = getPreferredPreset();
+  grid.innerHTML = FAUNA_PRESETS.map(function (p) {
+    return '<button type="button" class="preset-card' + (p.id === active ? ' active' : '') + '"' +
+      ' data-preset-id="' + p.id + '" onclick="applyPreset(\'' + p.id + '\')" title="' + p.hint + '">' +
+      '<span class="preset-swatch" style="background:' + p.swatch + '"></span>' +
+      '<span class="preset-meta"><span class="preset-name">' + p.name + '</span>' +
+      '<span class="preset-hint">' + p.hint + '</span></span>' +
+      '<i class="ti ti-check preset-check"></i></button>';
+  }).join('');
+}
+
+// Available interface fonts. 'default' follows the active color preset.
+var FAUNA_FONTS = [
+  { id: 'default', name: 'Theme default', hint: 'Follows color theme', stack: '' },
+  { id: 'inter',   name: 'Inter',         hint: 'Clean modern UI',     stack: "'Inter', 'Segoe UI Variable', 'Segoe UI', -apple-system, system-ui, sans-serif" },
+  { id: 'system',  name: 'System',        hint: 'Classic Fauna',       stack: "'Segoe UI Variable', 'Segoe UI', -apple-system, system-ui, sans-serif" },
+  { id: 'grotesk', name: 'Space Grotesk', hint: 'Geometric sans',      stack: "'Space Grotesk', 'Segoe UI', system-ui, sans-serif" },
+  { id: 'mono',    name: 'JetBrains Mono', hint: 'Monospace / terminal', stack: "'JetBrains Mono', ui-monospace, 'Cascadia Code', monospace" }
+];
+var FAUNA_DEFAULT_FONT = 'system';
+
+function getPreferredFont() {
+  var stored = localStorage.getItem('fauna-font');
+  if (stored && FAUNA_FONTS.some(function (f) { return f.id === stored; })) return stored;
+  return FAUNA_DEFAULT_FONT;
+}
+
+function applyFont(font) {
+  var entry = FAUNA_FONTS.filter(function (f) { return f.id === font; })[0];
+  if (!entry) { entry = FAUNA_FONTS[0]; font = FAUNA_DEFAULT_FONT; }
+  if (entry.stack) {
+    document.documentElement.style.setProperty('--theme-font', entry.stack);
+  } else {
+    document.documentElement.style.removeProperty('--theme-font');
+  }
+  localStorage.setItem('fauna-font', font);
+  renderFontPicker();
+}
+
+// Build / refresh the font picker grid in Settings → Appearance.
+function renderFontPicker() {
+  var grid = document.getElementById('font-grid');
+  if (!grid) return;
+  var active = getPreferredFont();
+  grid.innerHTML = FAUNA_FONTS.map(function (f) {
+    var previewFont = f.stack || "var(--theme-font, sans-serif)";
+    return '<button type="button" class="preset-card' + (f.id === active ? ' active' : '') + '"' +
+      ' data-font-id="' + f.id + '" onclick="applyFont(\'' + f.id + '\')" title="' + f.hint + '">' +
+      '<span class="font-swatch" style="font-family:' + previewFont.replace(/"/g, '&quot;') + '">Ag</span>' +
+      '<span class="preset-meta"><span class="preset-name" style="font-family:' + previewFont.replace(/"/g, '&quot;') + '">' + f.name + '</span>' +
+      '<span class="preset-hint">' + f.hint + '</span></span>' +
+      '<i class="ti ti-check preset-check"></i></button>';
+  }).join('');
 }
 
 function applyTheme(theme) {
@@ -84,6 +165,7 @@ function applyTheme(theme) {
     }
     btn.title = theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode';
   }
+  if (theme === 'light' || theme === 'dark') localStorage.setItem('fauna-theme', theme);
 }
 
 function toggleTheme() {
@@ -95,8 +177,10 @@ function toggleTheme() {
   setTimeout(function() { document.documentElement.classList.remove('theme-transition'); }, 250);
 }
 
-// Apply theme on load
+// Apply theme + color preset on load
 applyTheme(getPreferredTheme());
+applyPreset(getPreferredPreset());
+applyFont(getPreferredFont());
 
 // Listen for system theme changes
 window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', function() {
