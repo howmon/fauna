@@ -7300,14 +7300,14 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 #conv-section-header {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 10px 12px 5px;
-  font-size: 11px;
+  gap: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 12px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .07em;
-  color: var(--fau-text-muted);
-  flex-shrink: 0;
+  color: var(--accent2);
+  transition: color .15s;
+  user-select: none;
 }
 #conv-section-body { flex: 1; overflow-y: auto; min-height: 0; }
 
