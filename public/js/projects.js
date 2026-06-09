@@ -2681,7 +2681,7 @@ function _renderSettingsTab(proj) {
     '<div class="proj-settings-row">' +
       '<label>File editing</label>' +
       '<label class="proj-toggle-label">' +
-        '<input type="checkbox" id="proj-set-allow-edit" class="proj-toggle-input"' + (proj.allowFileEditing ? ' checked' : '') + '>' +
+        '<input type="checkbox" id="proj-set-allow-edit" class="proj-toggle-input"' + (proj.allowFileEditing ? ' checked' : '') + ' onchange="_toggleProjSetting(\'allowFileEditing\', this)">' +
         '<span class="proj-toggle-track"><span class="proj-toggle-thumb"></span></span>' +
         '<span class="proj-toggle-text">Allow editing source files</span>' +
       '</label>' +
@@ -2690,7 +2690,7 @@ function _renderSettingsTab(proj) {
     '<div class="proj-settings-row">' +
       '<label>Autonomous mode</label>' +
       '<label class="proj-toggle-label">' +
-        '<input type="checkbox" id="proj-set-autonomous" class="proj-toggle-input"' + (proj.autonomousMode ? ' checked' : '') + '>' +
+        '<input type="checkbox" id="proj-set-autonomous" class="proj-toggle-input"' + (proj.autonomousMode ? ' checked' : '') + ' onchange="_toggleProjSetting(\'autonomousMode\', this)">' +
         '<span class="proj-toggle-track"><span class="proj-toggle-thumb"></span></span>' +
         '<span class="proj-toggle-text">Run until done</span>' +
       '</label>' +
@@ -2698,12 +2698,12 @@ function _renderSettingsTab(proj) {
     '</div>' +
     '<div class="proj-settings-row">' +
       '<label>Acceptance criteria</label>' +
-      '<textarea id="proj-set-acceptance" rows="4" placeholder="One bullet per criterion. e.g.\n- All tests pass\n- /api/health returns 200\n- README updated">' + _escHtml(proj.acceptanceCriteria || '') + '</textarea>' +
+      '<textarea id="proj-set-acceptance" class="proj-input proj-settings-textarea" rows="4" placeholder="One bullet per criterion. e.g.&#10;- All tests pass&#10;- /api/health returns 200&#10;- README updated">' + _escHtml(proj.acceptanceCriteria || '') + '</textarea>' +
       '<div class="proj-settings-hint">Injected into the system prompt for autonomous runs. The agent must verify each item before emitting DONE:.</div>' +
     '</div>' +
     '<div class="proj-settings-row">' +
       '<label>QA gate command</label>' +
-      '<input type="text" id="proj-set-qa-cmd" placeholder="npm test" value="' + _escHtml((proj.qa && proj.qa.command) || '') + '">' +
+      '<input type="text" id="proj-set-qa-cmd" class="proj-input proj-mono-input" placeholder="npm test" value="' + _escHtml((proj.qa && proj.qa.command) || '') + '">' +
       '<div class="proj-settings-hint">Runs automatically before the autonomous agent can emit DONE:. A non-zero exit blocks completion and feeds output back to the model.</div>' +
     '</div>' +
     '<div class="proj-settings-row">' +
@@ -2753,9 +2753,43 @@ async function addRootAsSource() {
   await _addProjectSource({ type: 'local', path: proj.rootPath });
 }
 
+// Persist a single boolean project setting immediately (no full-form Save
+// needed). Used by the File-editing and Autonomous-mode toggles so they behave
+// like real switches and never silently revert.
+async function _toggleProjSetting(field, el) {
+  var proj = _activeProject();
+  if (!proj || !el) return;
+  var val = !!el.checked;
+  proj[field] = val; // optimistic
+  try {
+    var patch = {};
+    patch[field] = val;
+    var r = await fetch('/api/projects/' + proj.id, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch)
+    });
+    if (!r.ok) throw new Error((await r.json()).error);
+    await _refreshProject(proj.id);
+    if (field === 'allowFileEditing') {
+      // Reflect the new permission in any open file viewer and force the file
+      // tree to reload (cached entries were fetched under the old permission).
+      _hubTreeState.dirCache = {};
+      if (_projMonacoEditor) {
+        try { _projMonacoEditor.updateOptions({ readOnly: !val }); } catch(_) {}
+      }
+    }
+    _showToast(val ? 'Enabled' : 'Disabled');
+  } catch(e) {
+    el.checked = !val;
+    proj[field] = !val;
+    _showToast('Error: ' + e.message, true);
+  }
+}
+
 async function saveProjectSettings() {
   var proj = _activeProject();
   if (!proj) return;
+  var prevRoot = (proj.rootPath || '').trim();
   var name = (document.getElementById('proj-set-name') || {}).value || proj.name;
   var desc = (document.getElementById('proj-set-desc') || {}).value || '';
   var root = (document.getElementById('proj-set-root') || {}).value || null;
@@ -2772,6 +2806,16 @@ async function saveProjectSettings() {
     });
     if (!r.ok) throw new Error((await r.json()).error);
     await _refreshProject(proj.id);
+    // The project folder and/or file-editing permission may have changed —
+    // invalidate the cached file tree (and reset the selected source when the
+    // working folder moved) so the Files tab reloads fresh next time it opens.
+    var newRoot = ((root || '')).trim();
+    if (newRoot !== prevRoot) state._projectFileSrcId = null;
+    _hubTreeState.dirCache = {};
+    _hubTreeState.expanded = {};
+    if (_projMonacoEditor) {
+      try { _projMonacoEditor.updateOptions({ readOnly: !allowEdit }); } catch(_) {}
+    }
     renderProjectSwitcher();
     _renderProjectHub(_activeProject());
     _showToast('Project saved');
@@ -2959,9 +3003,11 @@ async function _projModalBrowse(fieldId) {
   try {
     var r = await fetch('/api/pick-folder', { method: 'POST' });
     var data = await r.json();
-    if (data.cancelled || !data.path) return;
+    // The server returns the chosen directory as `folderPath`.
+    var picked = data.folderPath || data.path;
+    if (data.cancelled || !picked) return;
     var input = document.getElementById('pmf-' + fieldId);
-    if (input) input.value = data.path;
+    if (input) input.value = picked;
   } catch(e) { _showToast('Could not open folder picker', true); }
 }
 

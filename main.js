@@ -107,6 +107,103 @@ function persistWindowState() {
   _writeWindowState(_snapshotWindows());
 }
 
+// ── File associations (open .md with Fauna) ──────────────────────────────
+// Markdown files double-clicked in Finder/Explorer, dropped on the dock icon,
+// or passed on the command line are queued here and handed to a renderer once
+// the app + window are ready. The renderer then offers to start a new
+// conversation or attach the file to an existing one.
+const OPEN_FILE_EXTS = new Set(['.md', '.markdown', '.mdown', '.mkd', '.mkdn', '.txt']);
+const MAX_OPEN_FILE_BYTES = 5 * 1024 * 1024; // 5 MB safety cap
+const pendingOpenFiles = [];
+let appIsReady = false;
+
+function _isAssociatableFile(filePath) {
+  if (!filePath || typeof filePath !== 'string') return false;
+  return OPEN_FILE_EXTS.has(path.extname(filePath).toLowerCase());
+}
+
+// Extract associatable file paths from a process argv array (Windows/Linux pass
+// the opened file as a launch argument rather than via the open-file event).
+function _filesFromArgv(argv) {
+  const out = [];
+  for (const arg of argv || []) {
+    if (typeof arg !== 'string' || arg.startsWith('-')) continue;
+    if (!_isAssociatableFile(arg)) continue;
+    try {
+      if (fs.existsSync(arg) && fs.statSync(arg).isFile()) out.push(path.resolve(arg));
+    } catch (_) {}
+  }
+  return out;
+}
+
+function queueOpenFile(filePath) {
+  if (!_isAssociatableFile(filePath)) return;
+  pendingOpenFiles.push(filePath);
+  flushOpenFiles();
+}
+
+function _readOpenFilePayload(filePath) {
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile()) throw new Error('Not a file');
+  if (stat.size > MAX_OPEN_FILE_BYTES) {
+    throw new Error('File is too large to open (max 5 MB)');
+  }
+  return {
+    path: path.resolve(filePath),
+    name: path.basename(filePath),
+    content: fs.readFileSync(filePath, 'utf8'),
+  };
+}
+
+function flushOpenFiles() {
+  if (!appIsReady || !pendingOpenFiles.length) return;
+
+  let target = (mainWindow && !mainWindow.isDestroyed())
+    ? mainWindow
+    : BrowserWindow.getAllWindows().find(w => !w.isDestroyed());
+
+  // No window yet — create one; createWindow() calls flushOpenFiles() again
+  // once it has loaded.
+  if (!target) {
+    createWindow();
+    return;
+  }
+
+  const deliver = () => {
+    while (pendingOpenFiles.length) {
+      const fp = pendingOpenFiles.shift();
+      try {
+        target.webContents.send('fauna:open-file', _readOpenFilePayload(fp));
+      } catch (err) {
+        console.warn('[fauna] failed to open file', fp, err.message);
+        try {
+          target.webContents.send('fauna:open-file-error', {
+            name: path.basename(fp || ''),
+            error: err.message,
+          });
+        } catch (_) {}
+      }
+    }
+    try { target.show(); target.focus(); } catch (_) {}
+  };
+
+  if (target.webContents.isLoading()) {
+    target.webContents.once('did-finish-load', deliver);
+  } else {
+    deliver();
+  }
+}
+
+// macOS delivers opened documents through the open-file event, which can fire
+// before the app is ready. Register it as early as possible and prevent the
+// default (which would otherwise be ignored).
+app.on('will-finish-launching', () => {
+  app.on('open-file', (event, filePath) => {
+    event.preventDefault();
+    queueOpenFile(filePath);
+  });
+});
+
 // ── Window ────────────────────────────────────────────────────────────────
 
 async function createWindow({ convId, projectId, bounds, blank, restored } = {}) {
@@ -175,6 +272,9 @@ async function createWindow({ convId, projectId, bounds, blank, restored } = {})
     win.show();
     win.focus();
   });
+  // Once the renderer has fully loaded, deliver any files that were opened via
+  // a file association / dock drop / command line while no window was ready.
+  win.webContents.once('did-finish-load', () => flushOpenFiles());
   // Fallback: if ready-to-show is delayed (common on Windows), show after 4 s
   setTimeout(() => { if (!win.isDestroyed() && !win.isVisible()) win.show(); }, 4000);
 
@@ -1074,6 +1174,13 @@ app.whenReady().then(async () => {
     await createWindow();
   }
 
+  // Mark the app ready for file-association delivery and process any markdown
+  // files passed on the command line (Windows/Linux first launch) or queued by
+  // the macOS open-file event before the window existed.
+  appIsReady = true;
+  for (const fp of _filesFromArgv(process.argv.slice(1))) pendingOpenFiles.push(fp);
+  flushOpenFiles();
+
   // Create tray icon and task widget
   createTray();
 
@@ -1173,7 +1280,10 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
+    // Windows/Linux deliver an opened document as a launch argument to the
+    // second instance — queue any markdown files before focusing the window.
+    for (const fp of _filesFromArgv((argv || []).slice(1))) queueOpenFile(fp);
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();

@@ -94,6 +94,21 @@
     "afterPack": "./afterPack.cjs",
     "copyright": "Copyright © 2026 Solomon Abey",
     "icon": "assets/icon.icns",
+    "fileAssociations": [
+      {
+        "ext": [
+          "md",
+          "markdown",
+          "mdown",
+          "mkd"
+        ],
+        "name": "Markdown Document",
+        "description": "Markdown Document",
+        "mimeType": "text/markdown",
+        "role": "Editor",
+        "rank": "Alternate"
+      }
+    ],
     "asarUnpack": [
       "node_modules/nodejs-whisper/**",
       "node_modules/ffmpeg-static/**",

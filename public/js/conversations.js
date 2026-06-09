@@ -986,3 +986,125 @@ function exportConversation(id, e) {
 if (typeof window !== 'undefined') {
   window.exportConversation = exportConversation;
 }
+
+// ── Open Markdown file (file association) ──────────────────────────────────
+// When the user opens a .md file with Fauna (double-click, dock drop, command
+// line), the main process delivers `{ path, name, content }` here. We offer to
+// start a new conversation or attach the document to an existing one.
+var _mdFileQueue = [];
+var _mdFilePending = null;
+
+function handleIncomingMdFile(payload) {
+  if (!payload || typeof payload.content !== 'string') return;
+  _mdFileQueue.push(payload);
+  // Only surface the modal when one isn't already being decided.
+  if (!_mdFilePending) _showNextMdFile();
+}
+
+function _showNextMdFile() {
+  _mdFilePending = _mdFileQueue.shift() || null;
+  if (!_mdFilePending) { closeMdFileModal(); return; }
+
+  var modal = document.getElementById('mdfile-modal');
+  if (!modal) {
+    // No modal (non-Electron host) — just attach to the current conversation.
+    _attachMdFile(_mdFilePending);
+    _mdFilePending = null;
+    return;
+  }
+
+  var nameEl = document.getElementById('mdfile-modal-name');
+  if (nameEl) {
+    nameEl.innerHTML = '<i class="ti ti-file-text"></i> ' +
+      (typeof escHtml === 'function' ? escHtml(_mdFilePending.name) : _mdFilePending.name);
+  }
+
+  // Disable "Add to current" when there is no active conversation.
+  var curBtn = document.getElementById('mdfile-current-btn');
+  if (curBtn) {
+    var hasCurrent = !!(state.currentId && getConv(state.currentId));
+    curBtn.disabled = !hasCurrent;
+    curBtn.style.opacity = hasCurrent ? '' : '0.5';
+    curBtn.style.cursor = hasCurrent ? '' : 'not-allowed';
+  }
+
+  _renderMdFileRecent();
+  modal.classList.add('show');
+}
+
+function _renderMdFileRecent() {
+  var wrap = document.getElementById('mdfile-modal-recent');
+  var label = document.getElementById('mdfile-modal-recent-label');
+  if (!wrap) return;
+  var recent = (state.conversations || [])
+    .filter(function(c) { return c && c.id !== state.currentId; })
+    .slice(0, 6);
+  if (!recent.length) {
+    wrap.innerHTML = '';
+    if (label) label.style.display = 'none';
+    return;
+  }
+  if (label) label.style.display = '';
+  wrap.innerHTML = recent.map(function(c) {
+    var title = c.title || 'Untitled conversation';
+    var safeTitle = typeof escHtml === 'function' ? escHtml(title) : title;
+    return '<button class="mdfile-recent-item" onclick="mdFileChoose(\'conv\', \'' +
+      c.id + '\')"><i class="ti ti-message"></i>' +
+      '<span class="mdfile-recent-title">' + safeTitle + '</span></button>';
+  }).join('');
+}
+
+function closeMdFileModal() {
+  var modal = document.getElementById('mdfile-modal');
+  if (modal) modal.classList.remove('show');
+}
+
+function mdFileChoose(target, convId) {
+  var payload = _mdFilePending;
+  if (!payload) { closeMdFileModal(); return; }
+  _mdFilePending = null;
+
+  if (target === 'new') {
+    if (typeof newConversation === 'function') newConversation();
+  } else if (target === 'conv' && convId) {
+    if (typeof loadConversation === 'function') loadConversation(convId);
+  } else { // 'current'
+    if (!(state.currentId && getConv(state.currentId)) && typeof newConversation === 'function') {
+      newConversation();
+    }
+  }
+
+  _attachMdFile(payload);
+
+  // Continue with any further queued files, else close.
+  if (_mdFileQueue.length) {
+    _showNextMdFile();
+  } else {
+    closeMdFileModal();
+  }
+}
+
+function _attachMdFile(payload) {
+  if (!payload) return;
+  var absPath = payload.path || '';
+  var att = {
+    type: 'file',
+    name: payload.name || 'document.md',
+    content: (payload.content || '').slice(0, 200000),
+    size: (payload.content || '').length,
+    mime: 'text/markdown',
+    sourceUri: absPath ? ('file://' + absPath) : ('attachment://' + encodeURIComponent(payload.name || 'document.md')),
+  };
+  if (absPath) att.path = absPath;
+  if (typeof addAttachment === 'function') addAttachment(att);
+  if (typeof showToast === 'function') {
+    showToast('Attached ' + att.name + ' — type a message to send it');
+  }
+  try { document.getElementById('msg-input')?.focus(); } catch (_) {}
+}
+
+if (typeof window !== 'undefined') {
+  window.handleIncomingMdFile = handleIncomingMdFile;
+  window.closeMdFileModal = closeMdFileModal;
+  window.mdFileChoose = mdFileChoose;
+}

@@ -56,4 +56,33 @@ contextBridge.exposeInMainWorld('faunaApp', {
       return (file && typeof file.path === 'string') ? file.path : '';
     } catch (_) { return ''; }
   },
+
+  /**
+   * Subscribe to markdown files opened via a file association, dock drop, or
+   * the command line. The callback receives `{ path, name, content }`. Returns
+   * an unsubscribe function.
+   * @param {(payload: {path: string, name: string, content: string}) => void} callback
+   */
+  onOpenFile(callback) {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, payload) => {
+      try { callback(payload); } catch (_) {}
+    };
+    ipcRenderer.on('fauna:open-file', handler);
+    return () => ipcRenderer.removeListener('fauna:open-file', handler);
+  },
+
+  /**
+   * Subscribe to errors raised while opening a markdown file (e.g. too large
+   * or unreadable). The callback receives `{ name, error }`.
+   * @param {(payload: {name: string, error: string}) => void} callback
+   */
+  onOpenFileError(callback) {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, payload) => {
+      try { callback(payload); } catch (_) {}
+    };
+    ipcRenderer.on('fauna:open-file-error', handler);
+    return () => ipcRenderer.removeListener('fauna:open-file-error', handler);
+  },
 });

@@ -181,6 +181,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     _syncAllConvsToServer();
     localStorage.setItem('fauna-convs-synced', '1');
   }
+
+  // Markdown files opened via a file association (double-click, dock drop,
+  // command line) are delivered by the main process — prompt the user to start
+  // a new conversation or attach the document to an existing one.
+  try {
+    if (window.faunaApp && typeof window.faunaApp.onOpenFile === 'function') {
+      window.faunaApp.onOpenFile(function(payload) {
+        if (typeof handleIncomingMdFile === 'function') handleIncomingMdFile(payload);
+      });
+    }
+    if (window.faunaApp && typeof window.faunaApp.onOpenFileError === 'function') {
+      window.faunaApp.onOpenFileError(function(payload) {
+        if (typeof showToast === 'function') {
+          showToast('Could not open ' + ((payload && payload.name) || 'file') +
+            ((payload && payload.error) ? ': ' + payload.error : ''));
+        }
+      });
+    }
+  } catch (_) {}
 });
 
 // ── Help panel (redirects to Settings → Help) ─────────────────────────────

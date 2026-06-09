@@ -2015,6 +2015,41 @@ body.is-resizing webview { pointer-events: none !important; }
 #url-modal-status { font-size: 12px; color: var(--fau-text-dim); min-height: 18px; }
 #url-modal-btns { display: flex; gap: 8px; justify-content: flex-end; }
 
+/* ── Open Markdown file modal ──────────────────────────────────────── */
+#mdfile-modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 10001;
+  display: none; align-items: center; justify-content: center;
+}
+#mdfile-modal.show { display: flex; }
+#mdfile-modal-box {
+  background: var(--fau-sidebar); border: 1px solid var(--fau-border);
+  border-radius: var(--radius); padding: 20px; width: 460px; max-width: 90vw;
+  display: flex; flex-direction: column; gap: 12px;
+}
+#mdfile-modal-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+#mdfile-modal-name {
+  font-size: 13px; font-weight: 600; color: var(--fau-text);
+  background: var(--fau-surface2); border: 1px solid var(--fau-border);
+  border-radius: 7px; padding: 8px 12px; word-break: break-all;
+  display: flex; align-items: center; gap: 6px;
+}
+#mdfile-modal-sub, #mdfile-modal-recent-label { font-size: 12px; color: var(--fau-text-dim); }
+#mdfile-modal-recent-label { margin-top: 4px; }
+#mdfile-modal-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+#mdfile-modal-recent { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
+.mdfile-recent-item {
+  display: flex; align-items: center; gap: 8px; text-align: left;
+  background: var(--fau-surface2); border: 1px solid var(--fau-border);
+  color: var(--fau-text); border-radius: 7px; padding: 8px 12px;
+  font-size: 13px; font-family: var(--font); cursor: pointer; width: 100%;
+}
+.mdfile-recent-item:hover { border-color: var(--accent); background: var(--fau-surface); }
+.mdfile-recent-item .ti { color: var(--fau-text-dim); flex: 0 0 auto; }
+.mdfile-recent-item .mdfile-recent-title {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#mdfile-modal-btns { display: flex; gap: 8px; justify-content: flex-end; }
+
 /* ── Generic dialog modal ──────────────────────────────────────────── */
 #dlg-modal {
   position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 10000;
@@ -6064,6 +6099,15 @@ body.win-platform .acv-header {
   transition: border-color .15s;
 }
 .proj-input:focus { border-color: var(--accent); }
+/* Multi-line settings textarea (acceptance criteria) */
+.proj-settings-textarea {
+  min-height: 92px; resize: vertical; line-height: 1.5;
+  font-family: var(--mono); font-size: 12px;
+}
+.proj-settings-textarea::placeholder { color: var(--fau-text-muted); }
+/* Monospace single-line settings input (QA gate command) */
+.proj-mono-input { font-family: var(--mono); font-size: 12px; }
+.proj-mono-input::placeholder { color: var(--fau-text-muted); }
 
 /* ── File tree ─────────────────────────────────────────────────────────── */
 .proj-files-toolbar {
