@@ -211,4 +211,18 @@ function toggleHelp() {
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape' && figmaRulesOpen)  { toggleFigmaRules(); }
   if (e.key === 'Escape' && figmaSetupOpen)  { toggleFigmaSetup(); }
+
+  // Cmd+S (macOS) / Ctrl+S (Windows/Linux) — save the open project file when a
+  // file viewer/editor is active. Falls through to the browser default
+  // otherwise so we never hijack Save in unrelated contexts.
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === 's' || e.key === 'S')) {
+    var hasOpenFile = window._lastProjectFileSrcId && window._lastProjectFilePath;
+    var hasEditor = (typeof _projMonacoEditor !== 'undefined' && _projMonacoEditor) ||
+                    (typeof _explorerMonaco !== 'undefined' && _explorerMonaco);
+    if (hasOpenFile && hasEditor && typeof saveProjectFile === 'function') {
+      e.preventDefault();
+      saveProjectFile();
+    }
+  }
 });
+

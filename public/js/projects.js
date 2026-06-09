@@ -984,6 +984,10 @@ function _mountProjectMonaco(content, lang) {
       scrollbar: { verticalScrollbarSize: 6, horizontalScrollbarSize: 6 },
       padding: { top: 8, bottom: 8 },
     });
+    // Cmd+S (macOS) / Ctrl+S (Windows/Linux) saves the file from inside Monaco.
+    _projMonacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function() {
+      if (typeof saveProjectFile === 'function') saveProjectFile();
+    });
   });
 }
 
@@ -1204,6 +1208,10 @@ function _mountExplorerMonaco(content, lang) {
       wordWrap: 'off', folding: true,
       scrollbar: { verticalScrollbarSize: 6, horizontalScrollbarSize: 6 },
       padding: { top: 8, bottom: 8 },
+    });
+    // Cmd+S (macOS) / Ctrl+S (Windows/Linux) saves the file from inside Monaco.
+    _explorerMonaco.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function() {
+      if (typeof saveProjectFile === 'function') saveProjectFile();
     });
   });
 }
