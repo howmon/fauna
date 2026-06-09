@@ -29,9 +29,13 @@ import { spawn } from 'child_process';
 import { existsSync, mkdtempSync, rmSync } from 'fs';
 import os from 'os';
 import path from 'path';
+import { Worker } from 'worker_threads';
+import { fileURLToPath } from 'url';
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
+
+const KOKORO_WORKER_URL = new URL('./kokoro-worker.js', import.meta.url);
 
 function which(bin) {
   const paths = (process.env.PATH || '').split(IS_WIN ? ';' : ':');
@@ -128,6 +132,11 @@ class Tts extends EventEmitter {
     this.active    = null; // {child, resolve, cancelled}
     this.defaults  = { voice: '', rate: null, enabled: true };
     this.onStateChange = typeof onStateChange === 'function' ? onStateChange : null;
+    // Kokoro synthesis runs on a worker thread (see _synthInWorker) so its
+    // synchronous ONNX inference never blocks the host event loop / UI.
+    this._kokoroWorker  = null;
+    this._kokoroReqSeq  = 0;
+    this._kokoroPending = new Map(); // id → {resolve, reject}
   }
 
   /** Configure engine-level defaults (voice, rate, master enable). */
@@ -241,8 +250,12 @@ class Tts extends EventEmitter {
   // Synthesize the item's text with Kokoro to a temp WAV, then return a
   // platform audio-player child process for it. Resolves to null if the
   // item was cancelled mid-synthesis or no audio player is available.
+  //
+  // Synthesis runs on a worker thread so the (synchronous, multi-second)
+  // ONNX inference never blocks the host event loop — keeping the UI
+  // responsive (switching conversations, moving the window, etc.).
   async _startKokoro(item, handle) {
-    const { synthesizeKokoro, parseVoiceSpec } = await import('../video/kokoro.js');
+    const { parseVoiceSpec } = await import('../video/kokoro.js');
     const spec = parseVoiceSpec(item.opts?.voice != null ? item.opts.voice : this.defaults.voice);
     const voiceId = spec.engine === 'kokoro' ? spec.voiceId : undefined;
 
@@ -251,7 +264,7 @@ class Tts extends EventEmitter {
     const cleanup = () => { try { rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {} };
 
     try {
-      await synthesizeKokoro({ text: item.text, outWav: wavFile, voice: voiceId });
+      await this._synthInWorker({ text: item.text, outWav: wavFile, voice: voiceId });
     } catch (e) {
       cleanup();
       throw e;
@@ -263,6 +276,50 @@ class Tts extends EventEmitter {
     child.once('close', cleanup);
     child.once('error', cleanup);
     return child;
+  }
+
+  // Lazily spin up the Kokoro worker thread and return it. The worker keeps
+  // the model resident across calls.
+  _getKokoroWorker() {
+    if (this._kokoroWorker) return this._kokoroWorker;
+    const worker = new Worker(fileURLToPath(KOKORO_WORKER_URL));
+    worker.on('message', (msg) => {
+      if (!msg || typeof msg.id === 'undefined') return;
+      const pending = this._kokoroPending.get(msg.id);
+      if (!pending) return;
+      this._kokoroPending.delete(msg.id);
+      if (msg.ok) pending.resolve({ voice: msg.voice });
+      else        pending.reject(new Error(msg.error || 'kokoro synthesis failed'));
+    });
+    const fail = (err) => {
+      // Worker died — reject everything in flight and reset so the next
+      // request respawns it (and _startKokoro falls back to native).
+      const e = err instanceof Error ? err : new Error('kokoro worker exited');
+      for (const { reject } of this._kokoroPending.values()) { try { reject(e); } catch (_) {} }
+      this._kokoroPending.clear();
+      if (this._kokoroWorker === worker) this._kokoroWorker = null;
+    };
+    worker.on('error', fail);
+    worker.on('exit', (code) => { if (code !== 0) fail(new Error('kokoro worker exited with code ' + code)); });
+    this._kokoroWorker = worker;
+    return worker;
+  }
+
+  // Run one synthesis on the worker thread. Resolves once the WAV is written.
+  _synthInWorker({ text, outWav, voice }) {
+    return new Promise((resolve, reject) => {
+      let worker;
+      try { worker = this._getKokoroWorker(); }
+      catch (e) { return reject(e); }
+      const id = ++this._kokoroReqSeq;
+      this._kokoroPending.set(id, { resolve, reject });
+      try {
+        worker.postMessage({ id, text, outWav, voice });
+      } catch (e) {
+        this._kokoroPending.delete(id);
+        reject(e);
+      }
+    });
   }
 
   // Wire a spawned child (native engine or Kokoro player) into the active
@@ -306,6 +363,14 @@ class Tts extends EventEmitter {
 
   shutdown() {
     this.stop();
+    if (this._kokoroWorker) {
+      try { this._kokoroWorker.terminate(); } catch (_) {}
+      this._kokoroWorker = null;
+    }
+    for (const { reject } of this._kokoroPending.values()) {
+      try { reject(new Error('tts shutting down')); } catch (_) {}
+    }
+    this._kokoroPending.clear();
     this.removeAllListeners();
     this.onStateChange = null;
   }
