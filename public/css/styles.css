@@ -4187,7 +4187,7 @@ webview {
   max-height: 260px; overflow-y: auto;
   background: var(--fau-bg); border: 1px solid var(--fau-border);
   border-radius: 10px; box-shadow: 0 -4px 20px rgba(0,0,0,.25);
-  z-index: 100; padding: 4px;
+  z-index: 100; padding: 0px;
 }
 .agent-ac-search-wrap {
   position: sticky; top: 0; z-index: 1;
