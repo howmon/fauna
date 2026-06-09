@@ -96,9 +96,6 @@
       <button class="sidebar-nav-item" onclick="toggleTasksPanel()">
         <i class="ti ti-bolt"></i><span>Automations</span>
       </button>
-      <button class="sidebar-nav-item" onclick="openAllProjects()">
-        <i class="ti ti-folder"></i><span>Project</span>
-      </button>
     </nav>
 
     <!-- Active project strip removed: projects now live as collapsible folders
@@ -111,7 +108,7 @@
     <div id="conv-section">
       <div id="conv-section-header" onclick="toggleSidebarSection('conv')">
         <i class="ti ti-chevron-down section-chevron"></i>
-        <span>Quick chats</span>
+        <span>Quick Chats</span>
         <i class="ti ti-loader-2 conv-streaming-icon section-streaming" id="conv-section-streaming" style="display:none" title="A chat is running"></i>
         <span style="flex:1"></span>
         <button class="section-plus-btn" onclick="event.stopPropagation();newConversation({ quick: true })" title="New chat"><i class="ti ti-edit" style="font-size:12px"></i></button>
