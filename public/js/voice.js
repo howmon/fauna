@@ -821,12 +821,6 @@ function _bestMime() {
 // Bypasses server ffmpeg (which is flaky decoding MediaRecorder's WebM/Opus
 // output) by decoding to PCM in the browser and shipping a clean 16 kHz
 // mono WAV. whisper.cpp consumes WAV natively.
-var _wavDecodeCtx = null;
-function _getWavDecodeCtx() {
-  if (_wavDecodeCtx) return _wavDecodeCtx;
-  try { _wavDecodeCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (_) {}
-  return _wavDecodeCtx;
-}
 function _encodeWav16kMono(audioBuffer) {
   // Resample to 16 kHz mono by averaging channels and linear interpolation.
   var srcRate = audioBuffer.sampleRate;
@@ -870,15 +864,49 @@ function _encodeWav16kMono(audioBuffer) {
   return new Blob([buf], { type: 'audio/wav' });
 }
 async function _blobToWav(blob) {
-  var ctx = _getWavDecodeCtx();
-  if (!ctx) throw new Error('No AudioContext');
-  var ab  = await blob.arrayBuffer();
-  var buf = await new Promise(function(resolve, reject) {
-    // Use callback form to support broader Electron Chromium versions.
-    var p = ctx.decodeAudioData(ab.slice(0), resolve, reject);
-    if (p && typeof p.then === 'function') p.then(resolve, reject);
-  });
-  return _encodeWav16kMono(buf);
+  // Use a fresh, short-lived AudioContext per decode. Reusing a single
+  // cached context across many decodes was unreliable in Electron: the
+  // browser auto-suspends AudioContext without a user gesture and
+  // `decodeAudioData` then fails intermittently with
+  // "Unable to decode audio data" on otherwise valid WebM/Opus blobs.
+  var Ctor = window.AudioContext || window.webkitAudioContext;
+  if (!Ctor) throw new Error('No AudioContext');
+  var ctx = new Ctor();
+  try {
+    if (ctx.state === 'suspended' && typeof ctx.resume === 'function') {
+      try { await ctx.resume(); } catch (_) {}
+    }
+    var ab  = await blob.arrayBuffer();
+    var buf = await new Promise(function(resolve, reject) {
+      // Use callback form to support broader Electron Chromium versions.
+      var p = ctx.decodeAudioData(ab.slice(0), resolve, reject);
+      if (p && typeof p.then === 'function') p.then(resolve, reject);
+    });
+    return _encodeWav16kMono(buf);
+  } finally {
+    try { if (ctx.state !== 'closed' && typeof ctx.close === 'function') ctx.close(); } catch (_) {}
+  }
+}
+
+// Inspect the first bytes of a blob and return a short header signature for
+// diagnostics + a coarse validity flag. WebM/Matroska starts with the EBML
+// magic 1A 45 DF A3; OGG starts with 'OggS'; MP4 has 'ftyp' at offset 4.
+async function _sniffAudioBlob(blob) {
+  try {
+    var head = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
+    var hex = '';
+    for (var i = 0; i < head.length; i++) {
+      var h = head[i].toString(16);
+      hex += (h.length === 1 ? '0' + h : h);
+    }
+    var isWebm = head[0] === 0x1A && head[1] === 0x45 && head[2] === 0xDF && head[3] === 0xA3;
+    var isOgg  = head[0] === 0x4F && head[1] === 0x67 && head[2] === 0x67 && head[3] === 0x53; // 'OggS'
+    var isMp4  = head[4] === 0x66 && head[5] === 0x74 && head[6] === 0x79 && head[7] === 0x70; // 'ftyp'
+    var isRiff = head[0] === 0x52 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x46; // 'RIFF'
+    return { hex: hex, valid: (isWebm || isOgg || isMp4 || isRiff), kind: isWebm ? 'webm' : isOgg ? 'ogg' : isMp4 ? 'mp4' : isRiff ? 'wav' : 'unknown' };
+  } catch (_) {
+    return { hex: '', valid: false, kind: 'unknown' };
+  }
 }
 
 async function _transcribeBlobs(chunks, mode) {
@@ -913,7 +941,20 @@ async function _transcribeBlobs(chunks, mode) {
     }
     return;
   }
-  console.log('[voice] POSTing', blob.size, 'bytes to /api/transcribe, mode:', mode);
+  // Sniff the blob header. Some MediaRecorder stop races produce blobs
+  // without the leading container header (no EBML/OggS/ftyp/RIFF magic) —
+  // those are unparseable by both decodeAudioData and ffmpeg, and POSTing
+  // them just produces a noisy 500. Drop them at the source.
+  var sniff = await _sniffAudioBlob(blob);
+  if (!sniff.valid) {
+    console.warn('[voice] dropping blob with bad/missing header — bytes:', blob.size, 'head:', sniff.hex, 'type:', blobType);
+    _vadState = 'idle';
+    if (_conversationMode && mode === 'cmd') {
+      _reenterCommandMode();
+    }
+    return;
+  }
+  console.log('[voice] POSTing', blob.size, 'bytes to /api/transcribe, mode:', mode, 'kind:', sniff.kind);
   _vadState = 'transcribing';
   // Convert WebM/Opus → WAV in-browser so the server doesn't have to run
   // ffmpeg (which is flaky on MediaRecorder output). Falls back to the
@@ -925,7 +966,7 @@ async function _transcribeBlobs(chunks, mode) {
     sendBlob = wav;
     sendType = 'audio/wav';
   } catch (eDec) {
-    console.warn('[voice] WAV pre-encode failed, sending original blob:', eDec && eDec.message);
+    console.warn('[voice] WAV pre-encode failed, sending original blob:', eDec && eDec.message, 'head:', sniff.hex);
   }
   // Surface the transcribing state in the overlay so the user knows the
   // utterance was captured and is being processed. The Web Speech API
@@ -1103,6 +1144,12 @@ function _commitStop() {
     mr.onstop = function() {
       _transcribeBlobs(_recordChunks.slice(), capturedMode);
     };
+    // Request a final timeslice so the last buffered audio is flushed as a
+    // chunk *before* stop() finalises the container. Without this, very
+    // short recordings can finalise with only a header (or no chunks at
+    // all) — producing the "bad/missing header" / "Invalid data found"
+    // failure mode downstream.
+    try { if (typeof mr.requestData === 'function') mr.requestData(); } catch (_) {}
     try { mr.stop(); } catch (_) {}
   }
 }

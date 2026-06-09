@@ -86,6 +86,14 @@ function applyPreset(preset) {
   document.documentElement.setAttribute('data-preset', preset);
   localStorage.setItem('fauna-preset', preset);
   renderPresetPicker();
+  // Preset switch reseats every --color-* / --viz-* token. Re-apply the
+  // user's chroma scaling on the next frame so the override layer wraps
+  // the new palette.
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(function () { applyChroma(getPreferredChroma()); });
+  } else {
+    applyChroma(getPreferredChroma());
+  }
 }
 
 // Build / refresh the preset swatch grid in Settings → Appearance.
@@ -147,6 +155,120 @@ function renderFontPicker() {
   }).join('');
 }
 
+// ── Chroma slider ────────────────────────────────────────────────────────
+// Matches the OKLCH theme generator: slider directly sets a target brand
+// chroma (0.04 → 0.24). Every --color-* and --viz-1 token in the active
+// preset gets its OKLCH chroma scaled by `target / CHROMA_BASELINE` and
+// re-emitted as an inline override on documentElement. Re-runs whenever
+// the user switches theme or preset.
+var FAUNA_CHROMA_TOKENS = [
+  '--color-background', '--color-pageBackground', '--color-surface',
+  '--color-text', '--color-muted', '--color-primary', '--color-primaryHover',
+  '--color-primaryText', '--color-border', '--color-borderStrong',
+  '--color-success', '--color-warning', '--color-danger',
+  '--color-subtleSurface', '--color-subtleText',
+  '--color-pageText', '--color-pageMuted',
+  '--color-inputSurface', '--color-inputText',
+  '--color-tabSurface', '--color-tabText',
+  '--color-tabActiveSurface', '--color-tabActiveText',
+  '--viz-1'
+];
+var FAUNA_CHROMA_BASELINE = 0.16; // reference chroma the presets are tuned around
+var FAUNA_CHROMA_MIN      = 0.04;
+var FAUNA_CHROMA_MAX      = 0.24;
+var FAUNA_CHROMA_DEFAULT  = 0.04;
+
+function getPreferredChroma() {
+  var stored = parseFloat(localStorage.getItem('fauna-chroma'));
+  if (isFinite(stored) && stored >= FAUNA_CHROMA_MIN && stored <= FAUNA_CHROMA_MAX) return stored;
+  return FAUNA_CHROMA_DEFAULT;
+}
+
+// Parse oklch(L C H [/ A]) and return { L, C, H, A, suffix } or null.
+function _parseOklch(raw) {
+  if (!raw) return null;
+  var m = String(raw).match(/oklch\(\s*([\d.+\-eE%]+)\s+([\d.+\-eE%]+)\s+([\d.+\-eE%]+)\s*(\/\s*[\d.+\-eE%]+)?\s*\)/i);
+  if (!m) return null;
+  function num(s) {
+    if (typeof s !== 'string') return NaN;
+    s = s.trim();
+    if (s.charAt(s.length - 1) === '%') return parseFloat(s) / 100;
+    return parseFloat(s);
+  }
+  var L = num(m[1]);
+  var C = num(m[2]);
+  var H = num(m[3]);
+  if (!isFinite(L) || !isFinite(C) || !isFinite(H)) return null;
+  return { L: L, C: C, H: H, alpha: m[4] || '' };
+}
+
+function _formatOklch(parsed) {
+  var alpha = parsed.alpha ? (' ' + parsed.alpha.trim()) : '';
+  var fmt = function (n, d) {
+    if (!isFinite(n)) return '0';
+    var s = n.toFixed(d || 3);
+    // Trim trailing zeros but keep at least one decimal place
+    s = s.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+    return s;
+  };
+  return 'oklch(' + fmt(parsed.L, 3) + ' ' + fmt(Math.max(0, parsed.C), 4) + ' ' + fmt(parsed.H, 1) + alpha + ')';
+}
+
+function applyChroma(value) {
+  var v = parseFloat(value);
+  if (!isFinite(v)) v = FAUNA_CHROMA_DEFAULT;
+  if (v < FAUNA_CHROMA_MIN) v = FAUNA_CHROMA_MIN;
+  if (v > FAUNA_CHROMA_MAX) v = FAUNA_CHROMA_MAX;
+  localStorage.setItem('fauna-chroma', String(v));
+
+  var root  = document.documentElement;
+  var scale = v / FAUNA_CHROMA_BASELINE;
+
+  // First clear any prior inline overrides so getComputedStyle reflects the
+  // raw preset values, not our previous scaling.
+  for (var i = 0; i < FAUNA_CHROMA_TOKENS.length; i++) {
+    root.style.removeProperty(FAUNA_CHROMA_TOKENS[i]);
+  }
+
+  // Force layout to flush the removal before re-reading.
+  // (getComputedStyle is synchronous, but inline-style removal is
+  // immediate-visible without a reflow.)
+  var styles = getComputedStyle(root);
+  for (var j = 0; j < FAUNA_CHROMA_TOKENS.length; j++) {
+    var name = FAUNA_CHROMA_TOKENS[j];
+    var raw  = styles.getPropertyValue(name).trim();
+    if (!raw) continue;
+    var p = _parseOklch(raw);
+    if (!p) continue;
+    p.C = p.C * scale;
+    root.style.setProperty(name, _formatOklch(p));
+  }
+
+  // Update the visible slider value indicator if present.
+  var label = document.getElementById('chroma-value');
+  if (label) label.textContent = v.toFixed(2);
+  var slider = document.getElementById('chroma-slider');
+  if (slider && parseFloat(slider.value) !== v) slider.value = String(v);
+}
+
+function renderChromaSlider() {
+  var slider = document.getElementById('chroma-slider');
+  if (!slider) return;
+  var v = getPreferredChroma();
+  slider.min   = String(FAUNA_CHROMA_MIN);
+  slider.max   = String(FAUNA_CHROMA_MAX);
+  slider.step  = '0.01';
+  slider.value = String(v);
+  var label = document.getElementById('chroma-value');
+  if (label) label.textContent = v.toFixed(2);
+  if (!slider._chromaBound) {
+    slider.addEventListener('input', function (ev) {
+      applyChroma(parseFloat(ev.target.value));
+    });
+    slider._chromaBound = true;
+  }
+}
+
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   // Swap highlight.js stylesheet
@@ -166,6 +288,13 @@ function applyTheme(theme) {
     btn.title = theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode';
   }
   if (theme === 'light' || theme === 'dark') localStorage.setItem('fauna-theme', theme);
+  // Theme switch reseats every --color-* token (dark vs light palette).
+  // Re-apply chroma overrides so they wrap the new palette.
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(function () { applyChroma(getPreferredChroma()); });
+  } else {
+    applyChroma(getPreferredChroma());
+  }
 }
 
 function toggleTheme() {
@@ -181,6 +310,7 @@ function toggleTheme() {
 applyTheme(getPreferredTheme());
 applyPreset(getPreferredPreset());
 applyFont(getPreferredFont());
+applyChroma(getPreferredChroma());
 
 // Listen for system theme changes
 window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', function() {

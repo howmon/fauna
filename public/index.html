@@ -724,6 +724,14 @@
       <div class="settings-hint">Choose the interface typeface. <strong>Theme default</strong> follows the selected color theme.</div>
     </div>
     <div class="settings-section">
+      <div class="settings-section-title">Chroma</div>
+      <div class="chroma-row" style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
+        <input id="chroma-slider" type="range" min="0.04" max="0.24" step="0.01" value="0.04" style="flex:1">
+        <strong id="chroma-value" style="min-width:3ch;text-align:right;font-variant-numeric:tabular-nums">0.04</strong>
+      </div>
+      <div class="settings-hint">OKLCH chroma anchor (<code style="font-size:11px;background:var(--fau-surface3);padding:1px 4px;border-radius:3px">0.04</code>–<code style="font-size:11px;background:var(--fau-surface3);padding:1px 4px;border-radius:3px">0.24</code>). Lower = more muted. Default is <strong>0.04</strong>.</div>
+    </div>
+    <div class="settings-section">
       <div class="settings-section-title">Mode</div>
       <div style="display:flex;gap:10px">
         <button class="settings-row-btn" style="flex:1" onclick="applyTheme('dark')"><i class="ti ti-moon"></i> Dark</button>
@@ -1680,6 +1688,7 @@ Examples:
     if (page === 'appearance') {
       if (typeof renderPresetPicker === 'function') renderPresetPicker();
       if (typeof renderFontPicker === 'function') renderFontPicker();
+      if (typeof renderChromaSlider === 'function') renderChromaSlider();
     }
     if (page === 'help') {
       // Move help content into the settings page on first open
