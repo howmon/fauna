@@ -104,6 +104,17 @@ function _genUiCreateState(initialState) {
       cur[parts[parts.length - 1]] = value;
       listeners.forEach(function(fn) { try { fn(state); } catch(_) {} });
     },
+    // Persist a value without notifying subscribers (avoids re-rendering, e.g.
+    // tearing down a playing media element when dismissing a fact).
+    setQuiet: function(path, value) {
+      var parts = (path || '').replace(/^\//, '').split('/');
+      var cur = state;
+      for (var i = 0; i < parts.length - 1; i++) {
+        if (typeof cur[parts[i]] !== 'object' || cur[parts[i]] === null) cur[parts[i]] = {};
+        cur = cur[parts[i]];
+      }
+      cur[parts[parts.length - 1]] = value;
+    },
     subscribe: function(fn) { listeners.push(fn); },
     snapshot: function() { return state; }
   };
@@ -316,7 +327,13 @@ function _guiRenderPlaylistFacts(facts, store, stateBase) {
       btn.innerHTML = '<i class="ti ti-x"></i>';
       btn.addEventListener('click', function(e) {
         e.stopPropagation();
-        store.set(dismissPath, true);
+        // Persist dismissal without notifying subscribers, then remove just this
+        // card. A full store.set() would re-render the player and reload the
+        // currently-playing media — so we update the DOM in place instead.
+        if (typeof store.setQuiet === 'function') store.setQuiet(dismissPath, true);
+        else store.set(dismissPath, true);
+        if (card.parentNode) card.parentNode.removeChild(card);
+        if (wrap.childNodes.length === 0 && wrap.parentNode) wrap.parentNode.removeChild(wrap);
       });
       card.appendChild(btn);
     }

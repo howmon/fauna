@@ -464,6 +464,12 @@ function loadConversation(id) {
     setActiveProject(ownerProj, { navigate: false });
   }
 
+  // Keep the sidebar tidy: show the section the open chat lives in, collapse
+  // the other. Quick chat → collapse Projects; project chat → collapse Quick chats.
+  if (typeof focusSidebarSectionForConv === 'function') {
+    focusSidebarSectionForConv(!!ownerProj);
+  }
+
   state.model  = typeof normalizeSupportedModel === 'function'
     ? normalizeSupportedModel(conv.model || state.model, { conv: conv, notify: false })
     : (conv.model || state.model);
@@ -819,21 +825,43 @@ function renderAllConvsPage() {
 
 function toggleSidebarSection(section) {
   var bodyMap = { conv: 'conv-section-body', agents: 'agents-section-body', projects: 'projects-section-body' };
+  var body = document.getElementById(bodyMap[section]);
+  if (!body) return;
+  setSidebarSection(section, body.style.display !== 'none');
+}
+
+// Collapse (collapsed=true) or expand a sidebar section, syncing its chevron.
+function setSidebarSection(section, collapsed) {
+  var bodyMap = { conv: 'conv-section-body', agents: 'agents-section-body', projects: 'projects-section-body' };
   var headerMap = { conv: 'conv-section-header', agents: 'agents-section-header', projects: 'projects-section-header' };
   var body = document.getElementById(bodyMap[section]);
   if (!body) return;
-  var isHidden = body.style.display === 'none';
-  body.style.display = isHidden ? '' : 'none';
+  var alreadyCollapsed = body.style.display === 'none';
+  if (alreadyCollapsed === collapsed) return;
+  body.style.display = collapsed ? 'none' : '';
   var header = document.getElementById(headerMap[section]);
   if (header) {
     var chevron = header.querySelector('.section-chevron');
     if (chevron) {
-      chevron.classList.toggle('ti-chevron-down', isHidden);
-      chevron.classList.toggle('ti-chevron-right', !isHidden);
+      chevron.classList.toggle('ti-chevron-down', !collapsed);
+      chevron.classList.toggle('ti-chevron-right', collapsed);
     }
   }
   _updateSectionStreamingIndicators();
 }
+
+// When a chat opens, keep the sidebar tidy by showing only the relevant
+// section: a quick chat collapses Projects; a project chat collapses Quick chats.
+function focusSidebarSectionForConv(isProjectChat) {
+  if (isProjectChat) {
+    setSidebarSection('projects', false);
+    setSidebarSection('conv', true);
+  } else {
+    setSidebarSection('conv', false);
+    setSidebarSection('projects', true);
+  }
+}
+
 
 // ── Conversation export (HAR-style transcript bundle) ─────────────────────
 //
