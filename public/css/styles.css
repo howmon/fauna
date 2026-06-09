@@ -1435,10 +1435,10 @@ body.is-resizing webview { pointer-events: none !important; }
 }
 #composer-context-rail {
   max-width: 820px;
-  margin: 0 auto 8px;
+  margin: 0 auto 0px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 /* Agent chip bar — floats above input-wrap */
 #agent-chip-bar {
