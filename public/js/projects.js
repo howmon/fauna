@@ -2816,6 +2816,19 @@ function _renderGitTargetRow(t) {
     _projEsc(t.label) +
     ' <span class="gh-target-path" title="' + _projEsc(t.cwd) + '">' + _projEsc(_collapseHome(t.cwd)) + '</span>' +
   '</div>';
+  // Folder isn't a git repo yet — show an Initialize action instead of the
+  // full link/ops UI. The user can git init right from here.
+  if (t.isGitRepo === false) {
+    return '<div class="gh-target gh-target-unlinked gh-target-noinit">' +
+      label +
+      '<div class="gh-target-meta">' +
+        '<span class="gh-account-chip gh-account-chip-missing"><i class="ti ti-info-circle"></i> Not a git repository</span>' +
+      '</div>' +
+      '<div class="gh-target-actions">' +
+        '<button class="proj-action-btn" onclick="initGitRepo(\'' + pid + '\', \'' + sid + '\')"><i class="ti ti-git-branch"></i> Initialize git</button>' +
+      '</div>' +
+    '</div>';
+  }
   if (!t.link || !t.link.accountId) {
     return '<div class="gh-target gh-target-unlinked">' +
       label +
@@ -3336,6 +3349,25 @@ async function unlinkGitHubAccount(projId, sourceId) {
     _showToast('Unlinked');
     await _refreshProject(projId);
   } catch (e) { _showToast('Unlink failed: ' + e.message, true); }
+}
+
+// Initialize a plain folder as a git repo (runs `git init -b <branch>`).
+// After it succeeds the section is re-fetched and the row will switch to
+// the normal "Link account" state.
+async function initGitRepo(projId, sourceId) {
+  var branch = window.prompt('Initial branch name:', 'main');
+  if (!branch) return;
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(projId) + '/github/' + encodeURIComponent(sourceId) + '/init', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ initialBranch: branch.trim() }),
+    });
+    var data = null; try { data = await r.json(); } catch (_) {}
+    if (!r.ok) throw new Error((data && data.error) || ('HTTP ' + r.status));
+    _showToast(data && data.alreadyInitialized ? 'Already a git repo' : ('Initialized on branch ' + (data.branch || branch)));
+    delete _ghTargetsCache[projId];
+    await _refreshProject(projId);
+  } catch (e) { _showToast('Init failed: ' + e.message, true); }
 }
 
 async function gitOp(projId, sourceId, op, opts) {

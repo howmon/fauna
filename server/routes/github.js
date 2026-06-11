@@ -140,24 +140,35 @@ async function _gitStatus(cwd) {
 }
 
 /**
- * Enumerate the git-capable targets for a project. The project's rootPath is
- * included as a virtual source with id "__root" so the per-source link map
- * can store its link there. Local sources whose own path is a git repo are
- * each listed separately (deduped against rootPath).
+ * Enumerate ALL local folders the project knows about (rootPath + every
+ * local source), tagged with whether they're git repos. Returning non-git
+ * folders too lets the UI offer "Initialize git" instead of silently hiding
+ * the source. Sources that are not local (e.g. cloned remotes) are skipped.
  */
 function _enumerateTargets(proj) {
   const targets = [];
   const seen = new Set();
   const rootPath = (proj.rootPath || '').trim();
-  if (rootPath && _isGitRepo(rootPath)) {
-    targets.push({ sourceId: ROOT_SOURCE_ID, label: 'Project folder', cwd: rootPath, kind: 'root' });
+  if (rootPath) {
+    targets.push({
+      sourceId:  ROOT_SOURCE_ID,
+      label:     'Project folder',
+      cwd:       rootPath,
+      kind:      'root',
+      isGitRepo: _isGitRepo(rootPath),
+    });
     seen.add(rootPath);
   }
   for (const s of (proj.sources || [])) {
     if (s.type !== 'local' || !s.path) continue;
     if (seen.has(s.path)) continue;
-    if (!_isGitRepo(s.path)) continue;
-    targets.push({ sourceId: s.id, label: s.name || s.path, cwd: s.path, kind: 'source' });
+    targets.push({
+      sourceId:  s.id,
+      label:     s.name || s.path,
+      cwd:       s.path,
+      kind:      'source',
+      isGitRepo: _isGitRepo(s.path),
+    });
     seen.add(s.path);
   }
   return targets;
@@ -332,8 +343,12 @@ export function registerGitHubRoutes(app, deps) {
       const sourceId = String(req.params.sourceId || '').trim();
       if (!sourceId) return res.status(400).json({ error: 'sourceId required' });
       const targets = _enumerateTargets(proj);
-      if (!targets.find(t => t.sourceId === sourceId)) {
-        return res.status(400).json({ error: 'Source is not a git repository (or has been removed).' });
+      const target = targets.find(t => t.sourceId === sourceId);
+      if (!target) {
+        return res.status(400).json({ error: 'Source not found (it may have been removed).' });
+      }
+      if (!target.isGitRepo) {
+        return res.status(400).json({ error: 'Source is not a git repository — initialize it first.' });
       }
       const body = req.body || {};
       const accountId = body.accountId ? String(body.accountId).trim() : '';
@@ -374,6 +389,27 @@ export function registerGitHubRoutes(app, deps) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // Initialize a plain folder as a git repo. Body: { initialBranch?:'main' }.
+  // Idempotent: returns 200 with { alreadyInitialized:true } if the folder is
+  // already a repo so the UI can just re-render.
+  app.post('/api/projects/:id/github/:sourceId/init', async (req, res) => {
+    try {
+      const proj = getProject(req.params.id);
+      if (!proj) return res.status(404).json({ error: 'Project not found' });
+      const sourceId = String(req.params.sourceId || '').trim();
+      if (!sourceId) return res.status(400).json({ error: 'sourceId required' });
+      const targets = _enumerateTargets(proj);
+      const target = targets.find(t => t.sourceId === sourceId);
+      if (!target) return res.status(400).json({ error: 'Source not found.' });
+      if (target.isGitRepo) return res.json({ ok: true, alreadyInitialized: true });
+      const branch = String(req.body?.initialBranch || 'main').trim();
+      if (!/^[A-Za-z0-9._\/-]+$/.test(branch)) return res.status(400).json({ error: 'Invalid branch name.' });
+      const r = await _runGit(target.cwd, ['init', '-b', branch]);
+      if (!r.ok) return res.status(500).json({ error: 'git init failed: ' + _redact(r.stderr || r.stdout) });
+      res.json({ ok: true, alreadyInitialized: false, branch });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   // Helper: resolve { proj, cwd, link, token, branch } for an op on
   // (:id, :sourceId), or send an error response. Returns null on error.
   async function _resolveOpContext(req, res) {
@@ -394,7 +430,9 @@ export function registerGitHubRoutes(app, deps) {
   }
 
   // Helper: resolve { proj, target, cwd } for a LOCAL-only op (branches,
-  // stage, discard, log, diff) — does not require a linked account.
+  // stage, discard, log, diff) — does not require a linked account. The
+  // target must already be a git repo; non-git folders should call /init
+  // first.
   function _resolveLocalContext(req, res) {
     const proj = getProject(req.params.id);
     if (!proj) { res.status(404).json({ error: 'Project not found' }); return null; }
@@ -402,7 +440,8 @@ export function registerGitHubRoutes(app, deps) {
     if (!sourceId) { res.status(400).json({ error: 'sourceId required' }); return null; }
     const targets = _enumerateTargets(proj);
     const target = targets.find(t => t.sourceId === sourceId);
-    if (!target) { res.status(400).json({ error: 'Source is not a git repository (or has been removed).' }); return null; }
+    if (!target) { res.status(400).json({ error: 'Source not found (it may have been removed).' }); return null; }
+    if (!target.isGitRepo) { res.status(400).json({ error: 'Source is not a git repository — initialize it first.' }); return null; }
     return { proj, target, cwd: target.cwd };
   }
 
