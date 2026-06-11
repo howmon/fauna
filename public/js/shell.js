@@ -224,11 +224,44 @@ function _scheduleShellAutoRun(execId, shellKey, delay, attemptsLeft) {
   }, delay);
 }
 
+// Find the next chain-pending shell-exec widget in the same message and
+// schedule it to auto-run. Called after a previous block completes. Skips
+// when auto-exec was turned off mid-flight, when the user already started it
+// manually, or when the prior block failed (exit != 0) — a failure shouldn't
+// silently barrel into the next, possibly destructive, command.
+function _maybeChainNextShellAutoRun(prevWidget, prevExitCode) {
+  if (!prevWidget || prevExitCode !== 0) return;
+  if (!state.autoRunShell) return;
+  var msgEl = prevWidget.closest('.msg');
+  if (!msgEl) return;
+  var widgets = Array.from(msgEl.querySelectorAll('.shell-exec-block'));
+  var startIdx = widgets.indexOf(prevWidget);
+  if (startIdx < 0) return;
+  for (var i = startIdx + 1; i < widgets.length; i++) {
+    var next = widgets[i];
+    if (next.dataset.pendingChain !== '1') continue;
+    var nextExecId   = next.dataset.execId;
+    var nextShellKey = next.dataset.shellKey;
+    if (!nextExecId || _shellAutoRunStarted[nextExecId]) {
+      delete next.dataset.pendingChain;
+      continue;
+    }
+    delete next.dataset.pendingChain;
+    next.dataset.autoRun = 'true';
+    var badge = next.querySelector('.shell-exec-autorun-badge');
+    if (badge) badge.textContent = 'auto-run';
+    dbg('  ↳ chaining next auto-run: ' + nextExecId, 'info');
+    _scheduleShellAutoRun(nextExecId, nextShellKey, 350, 8);
+    return; // only kick the next one; further blocks chain off it in turn
+  }
+}
+
 function cancelShellAutoRunsForMessage(messageEl, reason) {
   if (!messageEl) return;
   Array.from(messageEl.querySelectorAll('.shell-exec-block')).forEach(function(widget) {
     var shellKey = widget.dataset.shellKey;
     if (shellKey && _shellAutoRunPending[shellKey]) delete _shellAutoRunPending[shellKey];
+    if (widget.dataset.pendingChain) delete widget.dataset.pendingChain;
     if (widget.dataset.result) return;
     widget.dataset.autoRun = 'false';
     var header = widget.querySelector('.shell-exec-header');
@@ -638,7 +671,12 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
   dbg('extractAndRenderShellExec: found ' + codeBlocks.length + ' block(s)', 'info');
   if (codeBlocks.length) updateMessageShellVerification(messageEl);
   var shellMsgId = _shellEnsureMessageId(messageEl, convId);
-  var _autoRunIdx = 0; // only the first block in a response auto-runs; rest wait for user
+  // When auto-exec is on we now run ALL blocks in the response sequentially:
+  // the first block is scheduled immediately, every subsequent block is marked
+  // pending-chain and gets started by the previous block's completion handler.
+  // This matches what users expect from "auto execute": every command in the
+  // response runs without per-block manual clicks.
+  var _autoRunIdx = 0;
   codeBlocks.forEach(function(code, blockIdx) {
     var pre = code.parentElement;
     var rawCode = code.textContent.trim();
@@ -649,13 +687,17 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
     var targetConv = getConv(convId || state.currentId);
     var depth = targetConv ? (targetConv._autoFeedDepth || 0) : 0;
     var DEPTH_LIMIT = 12;
-    // Only the first block in this response may auto-run; subsequent blocks must be manually triggered.
-    var autoRun = !noAutoRun && state.autoRunShell && depth < DEPTH_LIMIT && _autoRunIdx === 0;
+    // Eligible-for-auto-run: every block in the response, when auto-exec is on
+    // and we're under the depth cap. Only the FIRST block actually schedules
+    // here; later blocks get tagged `data-pending-chain="1"` and are kicked
+    // off serially when the prior block finishes (see runShellExec tail).
+    var eligible = !noAutoRun && state.autoRunShell && depth < DEPTH_LIMIT;
+    var autoRun = eligible && _autoRunIdx === 0;
+    var chainPending = eligible && _autoRunIdx > 0;
     var depthLimited = !noAutoRun && state.autoRunShell && depth >= DEPTH_LIMIT;
-    var pendingSerial = !noAutoRun && state.autoRunShell && depth < DEPTH_LIMIT && _autoRunIdx > 0;
     var suppressedAutoRun = !!noAutoRun && state.autoRunShell;
-    if (autoRun || pendingSerial) _autoRunIdx++;
-    dbg('  ↳ block: ' + rawCode.slice(0,60) + ' autoRun=' + autoRun + ' depth=' + depth, 'cmd');
+    if (eligible) _autoRunIdx++;
+    dbg('  ↳ block: ' + rawCode.slice(0,60) + ' autoRun=' + autoRun + ' chain=' + chainPending + ' depth=' + depth, 'cmd');
 
     var widget = document.createElement('div');
     widget.className = 'shell-exec-block';
@@ -664,6 +706,9 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
     widget.dataset.shellKey = shellKey;
     widget.dataset.convId = convId || state.currentId || ''; // route auto-feed to correct conv
     widget.dataset.autoRun = autoRun ? 'true' : 'false';
+    // Subsequent auto-run blocks are kicked off by the prior block's completion
+    // handler — mark them so we can find the next one in DOM order.
+    if (chainPending) widget.dataset.pendingChain = '1';
 
     // ── Interactive-command interception ──
     // nano/vim/vi/pico/emacs <file> → render inline editor instead of running.
@@ -678,7 +723,8 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
     if (_isPurelyInteractiveTui(rawCode)) {
       widget.dataset.autoRun = 'false';
       autoRun = false;
-      pendingSerial = false;
+      chainPending = false;
+      delete widget.dataset.pendingChain;
     }
 
     widget.innerHTML =
@@ -686,8 +732,8 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
         '<i class="ti ti-terminal-2"></i>' +
         '<span>Shell Command</span>' +
         (autoRun ? '<span class="shell-exec-autorun-badge">auto-run</span>' : '') +
+        (chainPending ? '<span class="shell-exec-autorun-badge">auto-run (chained)</span>' : '') +
         (suppressedAutoRun ? '<span class="shell-exec-autorun-badge" style="background:var(--fau-surface2);color:var(--fau-text-dim)">manual — structured repair</span>' : '') +
-        (pendingSerial ? '<span class="shell-exec-autorun-badge" style="background:var(--fau-surface2);color:var(--fau-text-dim)">pending — click Run</span>' : '') +
         (depthLimited ? '<span class="shell-exec-autorun-badge" style="background:var(--warn,#f59e0b);color:#000">paused — click Run</span>' : '') +
         '<div class="shell-exec-btns">' +
           '<button class="shell-exec-run" id="' + execId + '-run" ' +
@@ -697,9 +743,9 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
         '</div>' +
       '</div>' +
       '<div class="shell-exec-code">' + escHtml(rawCode) + '</div>' +
-      '<div class="shell-exec-result" id="' + execId + '-result"' + (depthLimited || pendingSerial || suppressedAutoRun ? '' : ' style="display:none"') + '>' +
+      '<div class="shell-exec-result" id="' + execId + '-result"' + (depthLimited || chainPending || suppressedAutoRun ? '' : ' style="display:none"') + '>' +
         (depthLimited ? '<span class="se-meta">Auto-run paused after ' + DEPTH_LIMIT + ' steps — click Run to continue.</span>' : '') +
-        (pendingSerial ? '<span class="se-meta">Waiting for previous command — click Run to execute now.</span>' : '') +
+        (chainPending ? '<span class="se-meta">Queued — will run automatically after the previous command.</span>' : '') +
         (suppressedAutoRun ? '<span class="se-meta">Auto-run disabled for write-file repair. Use file-plan, append-file, or replace-string instead.</span>' : '') +
       '</div>';
     pre.parentNode.replaceChild(widget, pre);
@@ -1225,6 +1271,11 @@ async function runShellExec(execId, opts) {
     widget.dataset.result = JSON.stringify(d);
     updateMessageShellVerification(widget.closest('.msg'));
     if (typeof syncShellRunningPills === 'function') syncShellRunningPills();
+
+    // Chain auto-run: kick off the next pending block in the same message.
+    // Only when the user has auto-exec on AND this block actually succeeded —
+    // a failed step shouldn't silently barrel into the next destructive one.
+    _maybeChainNextShellAutoRun(widget, exitCode);
 
     // Auto-feed output back to AI always when autoFeed is set —
     // the AI needs to know about empty results and failures, not just successes

@@ -160,11 +160,20 @@ async function gatherSystemContext(text) {
   var desktop = sysCtx.desktop || (home + '/Desktop');
   var conv    = state.currentId ? getConv(state.currentId) : null;
 
-  // If user is confirming a plan, inject a command-forcing instruction
+  // If user is confirming a plan, inject a command-forcing instruction.
+  // BUT: if the prior assistant message already contains runnable shell/bash
+  // blocks, the model has nothing new to write — re-prompting would just emit
+  // duplicate commands AND leak the bracketed instruction into the saved user
+  // message (visible in transcripts/exports). With chained auto-run those
+  // pending blocks already executed on their own, so the user's "proceed" is
+  // ack-only; pass it through cleanly.
   if (CONFIRM_PATTERNS.test(text.trim())) {
     var lastAI = conv && conv.messages.slice().reverse().find(function(m) { return m.role === 'assistant'; });
     if (lastAI) {
-      if (DESKTOP_ORG_PATTERNS.some(function(p) { return p.test(lastAI.content || ''); })) state._lastMsgWasDesktopTask = true;
+      var lastContent = lastAI.content || '';
+      var hasRunnableBlocks = /```(?:shell[-_]exec|bash|sh|zsh)\b/i.test(lastContent);
+      if (hasRunnableBlocks) return '';
+      if (DESKTOP_ORG_PATTERNS.some(function(p) { return p.test(lastContent); })) state._lastMsgWasDesktopTask = true;
       return '\n\n[The user has confirmed the plan. Now output the COMPLETE shell commands to execute it — ' +
         'write every command inside code blocks with real content. ' +
         'Do not leave any code block empty. Do not just describe — write the actual commands.\n' +
