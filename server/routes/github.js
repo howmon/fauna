@@ -733,7 +733,7 @@ export function registerGitHubRoutes(app, deps) {
   app.post('/api/projects/:id/github/:sourceId/commit', async (req, res) => {
     const ctx = _resolveLocalContext(req, res);
     if (!ctx) return;
-    const { cwd } = ctx;
+    const { cwd, proj } = ctx;
     const body = req.body || {};
     const message = String(body.message || '').trim() || 'Update from Fauna';
     // Mode 1: caller provided an explicit file selection → stage exactly
@@ -743,17 +743,35 @@ export function registerGitHubRoutes(app, deps) {
       try { paths = body.files.map(p => _validatePathArg(String(p), cwd)); }
       catch (e) { return res.status(400).json({ error: e.message }); }
       const addR = await _runGit(cwd, ['add', '--', ...paths]);
-      if (!addR.ok) return res.status(500).json({ error: 'git add failed', stderr: _redact(addR.stderr) });
+      if (!addR.ok) return res.status(500).json({ error: 'git add failed: ' + (_redact(addR.stderr) || 'unknown'), stderr: _redact(addR.stderr) });
     } else if (body.stageAll !== false) {
       const addR = await _runGit(cwd, ['add', '-A']);
-      if (!addR.ok) return res.status(500).json({ error: 'git add failed', stderr: _redact(addR.stderr) });
+      if (!addR.ok) return res.status(500).json({ error: 'git add failed: ' + (_redact(addR.stderr) || 'unknown'), stderr: _redact(addR.stderr) });
     }
     const stagedR = await _runGit(cwd, ['diff', '--cached', '--name-only']);
     if (!stagedR.stdout.trim()) {
       return res.status(400).json({ error: 'Nothing to commit. Stage at least one file first.' });
     }
-    const commitR = await _runGit(cwd, ['commit', '-m', message]);
-    if (!commitR.ok) return res.status(500).json({ error: 'git commit failed', stderr: _redact(commitR.stderr) });
+    let commitR = await _runGit(cwd, ['commit', '-m', message]);
+    // Identity not configured? Try to repair from the linked GitHub account
+    // (or a sensible default), then retry once. This is the #1 cause of 500s
+    // on a fresh checkout / fresh machine and the user shouldn't have to drop
+    // to a terminal to fix it.
+    if (!commitR.ok && /Please tell me who you are|empty ident name|user\.(name|email)/i.test(commitR.stderr || '')) {
+      const link = (proj.githubIntegrations || {})[String(req.params.sourceId || '')];
+      const acct = link?.accountId ? getGitHubAccountMeta(link.accountId) : null;
+      const fallbackName  = acct?.name  || acct?.login || 'Fauna User';
+      const fallbackEmail = acct?.email || (acct?.login ? acct.login + '@users.noreply.github.com' : 'fauna@local');
+      const setNameR  = await _runGit(cwd, ['config', 'user.name',  fallbackName]);
+      const setMailR  = await _runGit(cwd, ['config', 'user.email', fallbackEmail]);
+      if (setNameR.ok && setMailR.ok) {
+        commitR = await _runGit(cwd, ['commit', '-m', message]);
+      }
+    }
+    if (!commitR.ok) {
+      const stderr = _redact(commitR.stderr) || 'unknown error';
+      return res.status(500).json({ error: 'git commit failed: ' + stderr, stderr });
+    }
     const status = await _gitStatus(cwd);
     res.json({ ok: true, message, commit: commitR.stdout, status });
   });

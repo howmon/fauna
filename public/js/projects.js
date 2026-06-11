@@ -2964,10 +2964,13 @@ async function gitFileOp(projId, sid, op, path) {
   await gitBulkOp(projId, sid, op, [path]);
 }
 
-async function gitBulkOp(projId, sid, op, explicitFiles) {
-  var files = explicitFiles || Array.from(_getGhSel(projId, sid));
+async function gitBulkOp(projId, sourceId, op, explicitFiles) {
+  var files = explicitFiles || Array.from(_getGhSel(projId, sourceId));
   if (!files.length) { _showToast('Select at least one file first', true); return; }
   if (op === 'discard' && !explicitFiles && !confirm('Discard local changes in ' + files.length + ' file(s)? This cannot be undone.')) return;
+  // Use `sid` consistently to mirror the parameter name in the URL builder
+  // below and avoid shadowing surprises.
+  var sid = sourceId;
   try {
     var r = await fetch('/api/projects/' + encodeURIComponent(projId) + '/github/' + encodeURIComponent(sid) + '/' + op, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2979,9 +2982,14 @@ async function gitBulkOp(projId, sid, op, explicitFiles) {
       _getGhSel(projId, sid).clear();
     }
     _showToast(op + ' ok');
+  } catch (e) {
+    _showToast(op + ' failed: ' + e.message, true);
+  } finally {
+    // Always refresh — even on failure the working tree state may have
+    // partially changed and the UI must reflect reality.
     delete _ghTargetsCache[projId];
     _refreshGitHubSection(projId);
-  } catch (e) { _showToast(op + ' failed: ' + e.message, true); }
+  }
 }
 
 // ── Branch picker popover ───────────────────────────────────────────────
@@ -3453,13 +3461,19 @@ async function gitOp(projId, sourceId, op, opts) {
     }
     _showToast(msg);
     if (op === 'commit') _getGhSel(projId, sourceId).clear();
+  } catch (e) {
+    // Surface as much of the real error as we can — the server already
+    // includes the git stderr in `data.error` for commit/push failures.
+    _showToast(op + ' failed: ' + e.message, true);
+  } finally {
+    // Always re-enable buttons AND refresh the section, even on failure.
+    // Otherwise a 500 leaves the UI showing stale "Commit (N selected)" with
+    // disabled buttons and the user has to leave settings and come back to
+    // see the real state.
+    for (var j = 0; j < btnHosts.length; j++) btnHosts[j].disabled = false;
     delete _ghTargetsCache[projId];
     var proj = _activeProject();
     if (proj && proj.id === projId) _refreshGitHubSection(projId);
-  } catch (e) {
-    _showToast(op + ' failed: ' + e.message, true);
-  } finally {
-    for (var j = 0; j < btnHosts.length; j++) btnHosts[j].disabled = false;
   }
 }
 
