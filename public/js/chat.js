@@ -465,11 +465,31 @@ function _renderSuggestionBar(items, msgEl, isFallback) {
 
   // Suggestions are conversation-level CTAs: keep only the latest bar visible.
   var scope = msgEl.closest('[data-conv-messages]') || msgEl.parentElement || document;
-  Array.from(scope.querySelectorAll('.suggestion-bar')).forEach(function(old) { old.remove(); });
+  var existingBars = Array.from(scope.querySelectorAll('.suggestion-bar'));
+
+  // Idempotent re-render: if a bar with the same items + fallback flag is
+  // already in place, do nothing. The CSS `animation: msgIn .25s ease` would
+  // otherwise replay every time a caller (history load, setBusy retry,
+  // loadConversation timer, the cached-render path in
+  // _doGenerateContextualSuggestions, or the streaming `done` path) re-fires
+  // — when two of them land back-to-back, the bar visibly flickers.
+  var newLabels = items.slice(0, 4).map(function(s) { return String(s); });
+  var newSig = (isFallback ? 'fb|' : 'ai|') + newLabels.join('\u0000');
+  for (var _i = 0; _i < existingBars.length; _i++) {
+    if (existingBars[_i].dataset && existingBars[_i].dataset.sugSig === newSig) {
+      // Drop the duplicates (keep the matching one in place).
+      for (var _j = 0; _j < existingBars.length; _j++) {
+        if (_j !== _i) existingBars[_j].remove();
+      }
+      return;
+    }
+  }
+  existingBars.forEach(function(old) { old.remove(); });
 
   var bar = document.createElement('div');
   bar.className = 'suggestion-bar' + (isFallback ? ' suggestion-bar-fallback' : '');
   bar.setAttribute('aria-label', 'Recommended actions');
+  bar.dataset.sugSig = newSig;
 
   items.slice(0, 4).forEach(function(label) {
     var btn = document.createElement('button');
