@@ -487,8 +487,10 @@ export function registerGitHubRoutes(app, deps) {
     try { paths = paths.map(p => _validatePathArg(String(p), cwd)); }
     catch (e) { return res.status(400).json({ error: e.message }); }
     if (!paths.length) return res.status(400).json({ error: 'files[] required' });
-    const r = await _runGit(cwd, ['add', '--', ...paths]);
-    if (!r.ok) return res.status(500).json({ error: 'git add failed', stderr: _redact(r.stderr) });
+    // -f for the same reason as /commit: explicit per-file selection from
+    // the UI overrides .gitignore. The user ticked the box.
+    const r = await _runGit(cwd, ['add', '-f', '--', ...paths]);
+    if (!r.ok) return res.status(500).json({ error: 'git add failed: ' + (_redact(r.stderr) || 'unknown'), stderr: _redact(r.stderr) });
     res.json({ ok: true, status: await _gitStatus(cwd) });
   });
 
@@ -742,9 +744,15 @@ export function registerGitHubRoutes(app, deps) {
       let paths;
       try { paths = body.files.map(p => _validatePathArg(String(p), cwd)); }
       catch (e) { return res.status(400).json({ error: e.message }); }
-      const addR = await _runGit(cwd, ['add', '--', ...paths]);
+      // -f because the user explicitly ticked these paths in the UI; if one
+      // of them is ignored by .gitignore (common for committed-once
+      // node_modules, build output the user actually wants tracked, etc.)
+      // the intent is to override the ignore, not to surface a 500.
+      const addR = await _runGit(cwd, ['add', '-f', '--', ...paths]);
       if (!addR.ok) return res.status(500).json({ error: 'git add failed: ' + (_redact(addR.stderr) || 'unknown'), stderr: _redact(addR.stderr) });
     } else if (body.stageAll !== false) {
+      // Stage-all path keeps .gitignore active — we don't want to silently
+      // sweep up every ignored artifact the user never asked for.
       const addR = await _runGit(cwd, ['add', '-A']);
       if (!addR.ok) return res.status(500).json({ error: 'git add failed: ' + (_redact(addR.stderr) || 'unknown'), stderr: _redact(addR.stderr) });
     }
