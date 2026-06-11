@@ -42,6 +42,13 @@ function _trimStoredMessageContent(value, maxLen) {
 function _sanitizeStoredMessage(msg, opts) {
   opts = opts || {};
   var keepAttachments = !!opts.keepAttachments;
+  // Limits are now caller-controlled so the server-bound payload can keep
+  // full message bodies while the localStorage / IDB cache stays small.
+  // Fall back to the historic 12 000 / 6 000 / 4 000 caps for callers that
+  // don't pass an override (local cache writes).
+  var contentLimit = (typeof opts.contentLimit === 'number') ? opts.contentLimit : 12000;
+  var displayLimit = (typeof opts.displayLimit === 'number') ? opts.displayLimit : 6000;
+  var attachLimit  = (typeof opts.attachLimit  === 'number') ? opts.attachLimit  : 4000;
   var copy = {};
   Object.keys(msg || {}).forEach(function(k) {
     if (k[0] !== '_') copy[k] = msg[k];
@@ -53,10 +60,10 @@ function _sanitizeStoredMessage(msg, opts) {
       .map(function(part) { return part.text; })
       .join('\n');
   }
-  copy.content = _trimStoredMessageContent(typeof copy.content === 'string' ? copy.content : JSON.stringify(copy.content || ''), 12000);
+  copy.content = _trimStoredMessageContent(typeof copy.content === 'string' ? copy.content : JSON.stringify(copy.content || ''), contentLimit);
 
   if (typeof msg._displayText === 'string') {
-    copy._displayText = _trimStoredText(msg._displayText, 6000);
+    copy._displayText = _trimStoredText(msg._displayText, displayLimit);
   }
 
   if (Array.isArray(copy.images) && copy.images.length) {
@@ -83,7 +90,7 @@ function _sanitizeStoredMessage(msg, opts) {
         warning: att && att.warning,
         mime: att && att.mime
       };
-      if (keepAttachments && att && typeof att.content === 'string') next.content = _trimStoredText(att.content, 4000);
+      if (keepAttachments && att && typeof att.content === 'string') next.content = _trimStoredText(att.content, attachLimit);
       return next;
     });
   }
@@ -98,37 +105,68 @@ function _serializeConversationForStorage(conv, opts) {
     if (k[0] !== '_') copy[k] = conv[k];
   });
 
-  var recentLimit = opts.recentLimit || 24;
+  var recentLimit  = opts.recentLimit  || 24;
   var archiveLimit = opts.archiveLimit || 40;
+  var msgOpts = {
+    keepAttachments: !!opts.keepAttachments,
+    contentLimit:    opts.contentLimit,
+    displayLimit:    opts.displayLimit,
+    attachLimit:     opts.attachLimit,
+  };
   copy.messages = (conv.messages || []).slice(-recentLimit).map(function(msg) {
-    return _sanitizeStoredMessage(msg, { keepAttachments: !!opts.keepAttachments });
+    return _sanitizeStoredMessage(msg, msgOpts);
   });
 
   if (Array.isArray(conv.archivedMessages) && conv.archivedMessages.length) {
+    var archMsgOpts = Object.assign({}, msgOpts, { keepAttachments: false });
     copy.archivedMessages = conv.archivedMessages.slice(-archiveLimit).map(function(msg) {
-      return _sanitizeStoredMessage(msg, { keepAttachments: false });
+      return _sanitizeStoredMessage(msg, archMsgOpts);
     });
   }
 
+  // Artifact and prompt limits also default to 12 000 (local cache) but the
+  // server-bound serializer can pass a much larger cap so users see the full
+  // artifact / system prompt when a conversation is reopened.
+  var artifactLimit       = (typeof opts.artifactContentLimit === 'number') ? opts.artifactContentLimit : 12000;
+  var artifactSliceLimit  = (typeof opts.artifactSliceLimit   === 'number') ? opts.artifactSliceLimit   : 10;
+  var contextSummaryLimit = (typeof opts.contextSummaryLimit  === 'number') ? opts.contextSummaryLimit  : 12000;
+  var systemPromptLimit   = (typeof opts.systemPromptLimit    === 'number') ? opts.systemPromptLimit    : 12000;
+
   if (Array.isArray(conv.artifacts) && conv.artifacts.length) {
-    copy.artifacts = conv.artifacts.slice(-10).map(function(artifact) {
+    copy.artifacts = conv.artifacts.slice(-artifactSliceLimit).map(function(artifact) {
       var stored = Object.assign({}, artifact);
       if (stored.base64) delete stored.base64;
-      if (typeof stored.content === 'string') stored.content = _trimStoredText(stored.content, 12000);
+      if (typeof stored.content === 'string') stored.content = _trimStoredText(stored.content, artifactLimit);
       return stored;
     });
   }
 
-  if (typeof copy.contextSummary === 'string') copy.contextSummary = _trimStoredText(copy.contextSummary, 12000);
-  if (typeof copy.systemPrompt === 'string') copy.systemPrompt = _trimStoredText(copy.systemPrompt, 12000);
+  if (typeof copy.contextSummary === 'string') copy.contextSummary = _trimStoredText(copy.contextSummary, contextSummaryLimit);
+  if (typeof copy.systemPrompt   === 'string') copy.systemPrompt   = _trimStoredText(copy.systemPrompt,   systemPromptLimit);
   return copy;
 }
 
+// Server-side cap on a single message body (mirror of MAX_MESSAGE_BYTES in
+// server/lib/conversation-store.js). Stay a hair below so an over-budget
+// content gets trimmed locally with a clean marker instead of bouncing the
+// whole PUT with a 413 that silently drops the update.
+var SERVER_MESSAGE_LIMIT = 4 * 1024 * 1024;
+
 function _serializeConversationForServer(conv) {
   return _serializeConversationForStorage(conv, {
-    recentLimit: 60,
+    recentLimit:  60,
     archiveLimit: 120,
-    keepAttachments: true
+    keepAttachments: true,
+    // Send full content to the server. The local cache trim is purely a
+    // localStorage / IDB quota workaround — the server is the source of
+    // truth and is sized to hold real messages.
+    contentLimit:         SERVER_MESSAGE_LIMIT,
+    displayLimit:         SERVER_MESSAGE_LIMIT,
+    attachLimit:          SERVER_MESSAGE_LIMIT,
+    artifactContentLimit: SERVER_MESSAGE_LIMIT,
+    artifactSliceLimit:   100,
+    contextSummaryLimit:  SERVER_MESSAGE_LIMIT,
+    systemPromptLimit:    SERVER_MESSAGE_LIMIT,
   });
 }
 

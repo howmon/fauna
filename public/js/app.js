@@ -28,15 +28,32 @@ async function _hydrateServerConvs() {
     if (!serverConvs.length) return;
     var localIds = new Set(state.conversations.map(function(c) { return c.id; }));
     var merged = false;
+    // True when the local copy contains content that was trimmed for the
+    // local quota cache — that text needs to be re-pulled from the server.
+    function _isLocallyTruncated(conv) {
+      var msgs = (conv && conv.messages) || [];
+      for (var i = 0; i < msgs.length; i++) {
+        var m = msgs[i];
+        if (m && typeof m.content === 'string' && m.content.indexOf('[truncated for local cache]') !== -1) return true;
+      }
+      if (typeof conv.contextSummary === 'string' && conv.contextSummary.indexOf('[truncated for local cache]') !== -1) return true;
+      if (typeof conv.systemPrompt   === 'string' && conv.systemPrompt.indexOf('[truncated for local cache]')   !== -1) return true;
+      return false;
+    }
     serverConvs.forEach(function(sc) {
       if (!localIds.has(sc.id)) {
         state.conversations.push(sc);
         merged = true;
       } else {
         var local = state.conversations.find(function(c) { return c.id === sc.id; });
-        var serverNewer = (sc.updatedAt || sc.createdAt || 0) > (local.updatedAt || local.createdAt || 0);
-        var serverHasMore = (sc.messages || []).length > (local.messages || []).length;
-        if (local && (serverNewer || serverHasMore)) {
+        var serverNewer    = (sc.updatedAt || sc.createdAt || 0) > (local.updatedAt || local.createdAt || 0);
+        var serverHasMore  = (sc.messages || []).length > (local.messages || []).length;
+        // If the local cache is truncated, the server copy (which now holds
+        // full message bodies) is preferred even when the counts/timestamps
+        // tie. Without this, reopening a long conversation after a restart
+        // keeps showing the "…[truncated for local cache]" placeholder.
+        var localTruncated = _isLocallyTruncated(local);
+        if (local && (serverNewer || serverHasMore || localTruncated)) {
           Object.assign(local, sc);
           merged = true;
         }
