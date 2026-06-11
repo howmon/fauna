@@ -178,6 +178,11 @@ export function createProject(opts = {}) {
     // Lightweight backlog: feature requests + grooming notes the agent can
     // append, list, and prioritize without leaving the project.
     backlog: Array.isArray(opts.backlog) ? opts.backlog : [],
+    // Per-project GitHub link. Either null (no account linked) or:
+    //   { accountId, repo: 'owner/name', defaultBranch, linkedAt }
+    // Tokens are stored encrypted in github-accounts.js / credentials-store.js;
+    // this field only references which account to use for git ops.
+    githubIntegration: opts.githubIntegration || null,
     // Per-project memory engine config. Mirrors supermemory's container-scoped
     // settings. Defaults are conservative: auto-extraction runs on conversation
     // save (cheap, one LLM call) and proposals are auto-approved.
@@ -247,7 +252,7 @@ export function updateProject(id, patch = {}) {
   if (idx === -1) return null;
   const p = projects[idx];
   // Allowed top-level fields
-  const allowed = ['name', 'description', 'icon', 'color', 'rootPath', 'defaultAgent', 'permissions', 'allowFileEditing', 'design', 'autonomousMode', 'acceptanceCriteria', 'qa', 'deploy', 'backlog', 'memoryConfig'];
+  const allowed = ['name', 'description', 'icon', 'color', 'rootPath', 'defaultAgent', 'permissions', 'allowFileEditing', 'design', 'autonomousMode', 'acceptanceCriteria', 'qa', 'deploy', 'backlog', 'memoryConfig', 'githubIntegration'];
   for (const k of allowed) {
     if (patch[k] !== undefined) p[k] = patch[k];
   }

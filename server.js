@@ -39,6 +39,15 @@ import { registerFileFilterRoutes } from './server/routes/file-filter.js';
 import { registerConversationRoutes } from './server/routes/conversations.js';
 import { registerProjectRunRoutes } from './server/routes/project-runs.js';
 import { registerProjectRoutes } from './server/routes/projects.js';
+import { registerGitHubRoutes } from './server/routes/github.js';
+import {
+  listGitHubAccounts,
+  getGitHubAccountMeta,
+  addGitHubAccount,
+  testGitHubAccount,
+  removeGitHubAccount,
+  getGitHubAccountToken,
+} from './github-accounts.js';
 import { buildProjectProfile } from './server/lib/profile.js';
 import { registerTaskRoutes } from './server/routes/tasks.js';
 import { registerWebhookRoutes } from './server/routes/webhooks.js';
@@ -248,6 +257,17 @@ registerProjectRoutes(app, {
   removeContext,
   contextFromArtifact,
   buildProjectProfile,
+});
+
+registerGitHubRoutes(app, {
+  listGitHubAccounts,
+  getGitHubAccountMeta,
+  addGitHubAccount,
+  testGitHubAccount,
+  removeGitHubAccount,
+  getGitHubAccountToken,
+  getProject,
+  updateProject,
 });
 
 registerProviderRoutes(app, { faunaConfigDir: FAUNA_CONFIG_DIR });

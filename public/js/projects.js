@@ -2695,6 +2695,10 @@ function _renderSettingsTab(proj) {
       '</label>' +
       '<div class="proj-settings-hint">When on, you and agents can modify files in this project\'s sources directly from the file viewer.</div>' +
     '</div>' +
+    '<div class="proj-settings-row" id="proj-set-github-row">' +
+      '<label>GitHub</label>' +
+      _renderGitHubSection(proj) +
+    '</div>' +
     '<div class="proj-settings-row">' +
       '<label>Autonomous mode</label>' +
       '<label class="proj-toggle-label">' +
@@ -2759,6 +2763,175 @@ async function addRootAsSource() {
   var proj = _activeProject();
   if (!proj || !proj.rootPath) return;
   await _addProjectSource({ type: 'local', path: proj.rootPath });
+}
+
+// ── GitHub integration (Settings tab) ─────────────────────────────────────
+//
+// Renders the link state + git ops bar. Status is refreshed lazily after the
+// section is inserted into the DOM so the heavy `git status` call doesn't
+// block the initial settings render.
+
+var _ghStatusCache = {}; // projId → last status payload
+
+function _renderGitHubSection(proj) {
+  var link = proj.githubIntegration || null;
+  if (!link || !link.accountId) {
+    return '<div class="gh-section gh-section-unlinked">' +
+      '<div class="gh-unlinked-text">' +
+        '<i class="ti ti-brand-github"></i> No GitHub account linked.' +
+      '</div>' +
+      '<div class="gh-unlinked-actions">' +
+        '<button class="proj-action-btn" onclick="linkGitHubAccountFlow()"><i class="ti ti-plug"></i> Link account</button>' +
+        '<button class="proj-icon-btn" onclick="window.ghAccounts && window.ghAccounts.open()" title="Manage accounts"><i class="ti ti-settings"></i> Manage accounts</button>' +
+      '</div>' +
+      '<div class="proj-settings-hint">Link a GitHub account to commit, pull, push, or sync this project from the hub. Tokens are stored encrypted in your OS keychain.</div>' +
+    '</div>';
+  }
+  var cached = _ghStatusCache[proj.id];
+  var statusHtml = cached
+    ? _renderGitStatusPill(cached.status)
+    : '<span class="gh-status-pill gh-status-loading"><i class="ti ti-loader-2"></i> Checking…</span>';
+  var accountHtml = cached && cached.account ? _renderGitAccountChip(cached.account) :
+    '<span class="gh-account-chip gh-account-chip-loading"><i class="ti ti-loader-2"></i> Loading account…</span>';
+  // Kick off async refresh after the DOM is in place.
+  setTimeout(function() { _refreshGitHubSection(proj.id); }, 0);
+  return '<div class="gh-section gh-section-linked" id="gh-section-' + _projEsc(proj.id) + '">' +
+    '<div class="gh-linked-header">' +
+      accountHtml +
+      '<div class="gh-linked-repo"><i class="ti ti-git-branch"></i> ' + _projEsc(link.repo) +
+        (link.defaultBranch ? '<span class="gh-linked-branch"> &middot; ' + _projEsc(link.defaultBranch) + '</span>' : '') +
+      '</div>' +
+      statusHtml +
+    '</div>' +
+    '<div class="gh-ops-row">' +
+      '<button class="gh-op-btn" onclick="openCommitDialog(\'' + _projEsc(proj.id) + '\')"><i class="ti ti-git-commit"></i> Commit</button>' +
+      '<button class="gh-op-btn" onclick="gitOp(\'' + _projEsc(proj.id) + '\', \'pull\')"><i class="ti ti-arrow-down"></i> Pull</button>' +
+      '<button class="gh-op-btn" onclick="gitOp(\'' + _projEsc(proj.id) + '\', \'push\')"><i class="ti ti-arrow-up"></i> Push</button>' +
+      '<button class="gh-op-btn gh-op-btn-primary" onclick="gitOp(\'' + _projEsc(proj.id) + '\', \'sync\')"><i class="ti ti-refresh"></i> Sync</button>' +
+      '<span class="gh-ops-spacer"></span>' +
+      '<button class="gh-op-btn gh-op-btn-ghost" onclick="linkGitHubAccountFlow()" title="Change account or repo"><i class="ti ti-switch"></i> Switch</button>' +
+      '<button class="gh-op-btn gh-op-btn-ghost" onclick="unlinkGitHubAccount(\'' + _projEsc(proj.id) + '\')" title="Unlink"><i class="ti ti-unlink"></i></button>' +
+    '</div>' +
+  '</div>';
+}
+
+function _renderGitAccountChip(account) {
+  if (!account) return '<span class="gh-account-chip gh-account-chip-missing"><i class="ti ti-alert-triangle"></i> Account removed</span>';
+  var avatar = account.avatarUrl
+    ? '<img class="gh-account-chip-avatar" src="' + _projEsc(account.avatarUrl) + '" alt="">'
+    : '<i class="ti ti-user"></i>';
+  return '<span class="gh-account-chip">' + avatar +
+    '<span class="gh-account-chip-login">' + _projEsc(account.login) + '</span>' +
+  '</span>';
+}
+
+function _renderGitStatusPill(status) {
+  if (!status) return '';
+  if (!status.isRepo) {
+    return '<span class="gh-status-pill gh-status-warn" title="rootPath is not a git repository"><i class="ti ti-alert-triangle"></i> Not a git repo</span>';
+  }
+  var parts = [];
+  if (status.dirty)  parts.push('<span class="gh-status-pill gh-status-dirty"><i class="ti ti-pencil"></i> ' + status.dirty + ' changed</span>');
+  if (status.ahead)  parts.push('<span class="gh-status-pill gh-status-ahead"><i class="ti ti-arrow-up"></i> ' + status.ahead + ' ahead</span>');
+  if (status.behind) parts.push('<span class="gh-status-pill gh-status-behind"><i class="ti ti-arrow-down"></i> ' + status.behind + ' behind</span>');
+  if (!parts.length) parts.push('<span class="gh-status-pill gh-status-clean"><i class="ti ti-check"></i> Clean</span>');
+  if (status.branch) parts.unshift('<span class="gh-status-pill gh-status-branch"><i class="ti ti-git-branch"></i> ' + _projEsc(status.branch) + '</span>');
+  return parts.join('');
+}
+
+async function _refreshGitHubSection(projId) {
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(projId) + '/github');
+    if (!r.ok) return;
+    var data = await r.json();
+    _ghStatusCache[projId] = data;
+    var host = document.getElementById('gh-section-' + projId);
+    if (!host) return;
+    var proj = _activeProject();
+    if (proj && proj.id === projId) {
+      host.outerHTML = _renderGitHubSection(proj);
+    }
+  } catch (_) { /* silent — UI shows the cached state */ }
+}
+
+/**
+ * Two-step link flow: pick an account from the manager, then prompt for the
+ * owner/repo string.
+ */
+async function linkGitHubAccountFlow() {
+  var proj = _activeProject();
+  if (!proj) return;
+  if (!window.ghAccounts) { _showToast('GitHub manager not loaded', true); return; }
+  try {
+    var account = await window.ghAccounts.pickAccount();
+    if (!account) return; // user dismissed
+    var existing = proj.githubIntegration || {};
+    var defaultRepo = existing.repo || (account.login + '/' + (proj.name || 'repo').toLowerCase().replace(/[^a-z0-9._-]+/g, '-'));
+    var repo = window.prompt('Repository (owner/name):', defaultRepo);
+    if (!repo) return;
+    repo = repo.trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '');
+    if (!/^[^\/\s]+\/[^\/\s]+$/.test(repo)) { _showToast('Repo must be in the form "owner/name"', true); return; }
+    var branch = window.prompt('Default branch (leave blank for current):', existing.defaultBranch || '');
+    var body = { accountId: account.id, repo: repo, defaultBranch: branch || null };
+    var r = await fetch('/api/projects/' + encodeURIComponent(proj.id) + '/github', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    var data = null; try { data = await r.json(); } catch (_) {}
+    if (!r.ok) throw new Error((data && data.error) || ('HTTP ' + r.status));
+    _showToast('Linked to ' + repo);
+    delete _ghStatusCache[proj.id];
+    await _refreshProject(proj.id);
+  } catch (e) { _showToast('Link failed: ' + e.message, true); }
+}
+
+async function unlinkGitHubAccount(projId) {
+  if (!confirm('Unlink this project from GitHub? The stored account is not deleted.')) return;
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(projId) + '/github', { method: 'DELETE' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    delete _ghStatusCache[projId];
+    _showToast('Unlinked');
+    await _refreshProject(projId);
+  } catch (e) { _showToast('Unlink failed: ' + e.message, true); }
+}
+
+async function gitOp(projId, op, opts) {
+  opts = opts || {};
+  var btnHosts = document.querySelectorAll('#gh-section-' + projId + ' .gh-op-btn');
+  for (var i = 0; i < btnHosts.length; i++) btnHosts[i].disabled = true;
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(projId) + '/github/' + op, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(opts.body || {}),
+    });
+    var data = null; try { data = await r.json(); } catch (_) {}
+    if (!r.ok) throw new Error((data && data.error) || ('HTTP ' + r.status));
+    var msg = op[0].toUpperCase() + op.slice(1) + ' ok';
+    if (data && data.status) {
+      var s = data.status;
+      var bits = [];
+      if (s.dirty)  bits.push(s.dirty + ' changed');
+      if (s.ahead)  bits.push(s.ahead + ' ahead');
+      if (s.behind) bits.push(s.behind + ' behind');
+      if (!bits.length && s.isRepo) bits.push('clean');
+      if (bits.length) msg += ' — ' + bits.join(', ');
+    }
+    _showToast(msg);
+    delete _ghStatusCache[projId];
+    var proj = _activeProject();
+    if (proj && proj.id === projId) _refreshGitHubSection(projId);
+  } catch (e) {
+    _showToast(op + ' failed: ' + e.message, true);
+  } finally {
+    for (var j = 0; j < btnHosts.length; j++) btnHosts[j].disabled = false;
+  }
+}
+
+function openCommitDialog(projId) {
+  var msg = window.prompt('Commit message:', 'Update from Fauna');
+  if (!msg) return;
+  gitOp(projId, 'commit', { body: { message: msg } });
 }
 
 // Persist a single boolean project setting immediately (no full-form Save
