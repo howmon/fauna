@@ -3069,7 +3069,15 @@ async function checkoutBranch(projId, sid, name) {
 
 async function createBranchFlow(projId, sid) {
   closeBranchPicker();
-  var name = window.prompt('New branch name:');
+  var name = await _projPrompt({
+    title: 'Create branch',
+    label: 'New branch name',
+    placeholder: 'feature/my-change',
+    submit: 'Create',
+    validate: function(v) { return (v || '').trim() ? null : 'Branch name is required.'; },
+  });
+  if (name === null) return;
+  name = name.trim();
   if (!name) return;
   try {
     var r = await fetch('/api/projects/' + encodeURIComponent(projId) + '/github/' + encodeURIComponent(sid) + '/branches', {
@@ -3088,7 +3096,15 @@ async function createBranchFromRemote(projId, sid, remoteName) {
   closeBranchPicker();
   // remoteName is like "origin/feature-x" — propose stripping the remote.
   var suggested = remoteName.replace(/^[^\/]+\//, '');
-  var local = window.prompt('Local branch name for ' + remoteName + ':', suggested);
+  var local = await _projPrompt({
+    title: 'Checkout remote branch',
+    label: 'Local branch name for ' + remoteName,
+    defaultValue: suggested,
+    submit: 'Checkout',
+    validate: function(v) { return (v || '').trim() ? null : 'Branch name is required.'; },
+  });
+  if (local === null) return;
+  local = local.trim();
   if (!local) return;
   try {
     var r = await fetch('/api/projects/' + encodeURIComponent(projId) + '/github/' + encodeURIComponent(sid) + '/branches', {
@@ -3135,7 +3151,15 @@ async function deleteBranch(projId, sid, name) {
 async function openRebaseDialog(projId, sid) {
   var t = _ghTargetsCache[projId] && (_ghTargetsCache[projId].targets || []).find(function(x) { return x.sourceId === sid; });
   var defaultOnto = (t && t.link && t.link.defaultBranch) ? ('origin/' + t.link.defaultBranch) : 'origin/main';
-  var onto = window.prompt('Rebase current branch onto which ref?', defaultOnto);
+  var onto = await _projPrompt({
+    title: 'Rebase',
+    label: 'Rebase current branch onto which ref?',
+    defaultValue: defaultOnto,
+    submit: 'Rebase',
+    validate: function(v) { return (v || '').trim() ? null : 'Target ref is required.'; },
+  });
+  if (onto === null) return;
+  onto = onto.trim();
   if (!onto) return;
   try {
     var r = await fetch('/api/projects/' + encodeURIComponent(projId) + '/github/' + encodeURIComponent(sid) + '/rebase', {
@@ -3151,11 +3175,23 @@ async function openRebaseDialog(projId, sid) {
 }
 
 async function openStashMenu(projId, sid) {
-  var action = window.prompt('Stash action — type "push" to stash all changes, "pop" to apply the latest stash, or "list" to view:');
+  var action = await _projPrompt({
+    title: 'Stash',
+    label: 'Action — type "push", "pop", or "list"',
+    defaultValue: 'push',
+    submit: 'Continue',
+  });
+  if (action === null) return;
+  action = (action || '').trim().toLowerCase();
   if (!action) return;
-  action = action.trim().toLowerCase();
   if (action === 'push') {
-    var msg = window.prompt('Stash message (optional):', '');
+    var msg = await _projPrompt({
+      title: 'Stash changes',
+      label: 'Stash message (optional)',
+      defaultValue: '',
+      submit: 'Stash',
+    });
+    if (msg === null) return;
     await fetch('/api/projects/' + encodeURIComponent(projId) + '/github/' + encodeURIComponent(sid) + '/stash', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: msg || '' }),
@@ -3246,14 +3282,15 @@ async function linkGitHubAccountFlow(sourceId) {
     // Mode selection: link to an existing repo, or create a brand new one on
     // GitHub under this account (user or one of its orgs). The Esc / cancel
     // path returns null and we just bail.
-    var choice = window.prompt(
-      'How should we link "' + (target ? target.label : sourceId) + '"?\n\n' +
-      '  • Type an existing repo as "owner/name"\n' +
-      '  • Type "new" to create a new repo on GitHub\n',
-      existing.repo || (account.login + '/' + defaultName)
-    );
-    if (!choice) return;
+    var choice = await _projPrompt({
+      title: 'Link "' + (target ? target.label : sourceId) + '" to GitHub',
+      label: 'Enter an existing repo as "owner/name", or type "new" to create one.',
+      defaultValue: existing.repo || (account.login + '/' + defaultName),
+      submit: 'Continue',
+    });
+    if (choice === null) return;
     choice = choice.trim();
+    if (!choice) return;
     var repo, defaultBranch = existing.defaultBranch || null;
     if (choice.toLowerCase() === 'new' || choice.toLowerCase() === 'create') {
       var created = await _createGitHubRepoFlow(account, defaultName);
@@ -3263,8 +3300,14 @@ async function linkGitHubAccountFlow(sourceId) {
     } else {
       repo = choice.replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '');
       if (!/^[^\/\s]+\/[^\/\s]+$/.test(repo)) { _showToast('Repo must be in the form "owner/name"', true); return; }
-      var branch = window.prompt('Default branch (leave blank for current):', defaultBranch || '');
-      defaultBranch = branch ? branch.trim() : defaultBranch;
+      var branch = await _projPrompt({
+        title: 'Default branch',
+        label: 'Default branch (leave blank for current)',
+        defaultValue: defaultBranch || '',
+        submit: 'Save',
+      });
+      if (branch === null) return;
+      defaultBranch = branch.trim() || defaultBranch;
     }
     var body = { accountId: account.id, repo: repo, defaultBranch: defaultBranch };
     var r = await fetch('/api/projects/' + encodeURIComponent(proj.id) + '/github/' + encodeURIComponent(sourceId), {
@@ -3282,8 +3325,8 @@ async function linkGitHubAccountFlow(sourceId) {
 /**
  * Walk the user through creating a new repo on GitHub. Loads the owners list
  * for the account (user + any orgs), then collects name / visibility /
- * description. Returns { repo:'owner/name', defaultBranch, htmlUrl } or null
- * if the user cancelled.
+ * description in a single modal. Returns { repo:'owner/name', defaultBranch,
+ * htmlUrl } or null if the user cancelled.
  */
 async function _createGitHubRepoFlow(account, suggestedName) {
   // 1. Discover the owners we can publish under.
@@ -3295,39 +3338,43 @@ async function _createGitHubRepoFlow(account, suggestedName) {
   var owners = (await ownersResp.json()).owners || [];
   if (!owners.length) owners = [{ login: account.login, type: 'User' }];
 
-  // 2. Pick the owner. If there's only one we skip the prompt.
-  var owner = owners[0].login;
-  if (owners.length > 1) {
-    var list = owners.map(function(o, i) { return (i + 1) + '. ' + o.login + (o.type === 'Organization' ? '  (org)' : '  (you)'); }).join('\n');
-    var pick = window.prompt('Owner for the new repo?\n\n' + list + '\n\nEnter the number or login:', '1');
-    if (!pick) return null;
-    pick = pick.trim();
-    var byNum = parseInt(pick, 10);
-    if (!isNaN(byNum) && owners[byNum - 1]) owner = owners[byNum - 1].login;
-    else {
-      var match = owners.find(function(o) { return o.login.toLowerCase() === pick.toLowerCase(); });
-      if (!match) { _showToast('Unknown owner: ' + pick, true); return null; }
-      owner = match.login;
-    }
-  }
+  // 2. Combined modal: owner + name + visibility + description.
+  var ownerOptions = owners.map(function(o) {
+    return { value: o.login, label: o.login + (o.type === 'Organization' ? '  (org)' : '  (you)') };
+  });
+  var values = await new Promise(function(resolve) {
+    _projModal({
+      title: 'Create new GitHub repo',
+      submit: 'Create',
+      fields: [
+        { id: 'owner',       label: 'Owner',                 type: 'select', options: ownerOptions, value: account.login },
+        { id: 'name',        label: 'Repo name',             placeholder: suggestedName, value: suggestedName },
+        { id: 'visibility',  label: 'Visibility',            type: 'select', options: [
+          { value: 'private', label: 'Private' },
+          { value: 'public',  label: 'Public'  },
+        ], value: 'private' },
+        { id: 'description', label: 'Description (optional)' },
+      ],
+      onSubmit: function(v) {
+        var name = (v.name || suggestedName || '').trim();
+        if (!name) return 'Repo name is required.';
+        if (!/^[A-Za-z0-9._-]+$/.test(name)) return 'Use letters, digits, dot, dash, underscore.';
+        resolve({ owner: v.owner, name: name, visibility: v.visibility, description: (v.description || '').trim() });
+        return null;
+      },
+      onCancel: function() { resolve(null); },
+    });
+  });
+  if (!values) return null;
 
-  // 3. Name + visibility + description.
-  var name = window.prompt('New repo name under ' + owner + ':', suggestedName);
-  if (!name) return null;
-  name = name.trim();
-  var vis = window.prompt('Visibility — type "private" or "public":', 'private');
-  if (!vis) return null;
-  var isPrivate = vis.trim().toLowerCase() !== 'public';
-  var description = window.prompt('Description (optional):', '') || '';
-
-  // 4. Create.
+  // 3. Create.
   var r = await fetch('/api/github/accounts/' + encodeURIComponent(account.id) + '/repos', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      owner: owner,
-      name: name,
-      description: description,
-      private: isPrivate,
+      owner: values.owner,
+      name: values.name,
+      description: values.description,
+      private: values.visibility !== 'public',
       autoInit: false,    // never auto-init — the local repo will be pushed up
     }),
   });
@@ -3355,12 +3402,24 @@ async function unlinkGitHubAccount(projId, sourceId) {
 // After it succeeds the section is re-fetched and the row will switch to
 // the normal "Link account" state.
 async function initGitRepo(projId, sourceId) {
-  var branch = window.prompt('Initial branch name:', 'main');
-  if (!branch) return;
+  var branch = await _projPrompt({
+    title: 'Initialize git repository',
+    label: 'Initial branch name',
+    defaultValue: 'main',
+    submit: 'Initialize',
+    validate: function(v) {
+      v = (v || '').trim();
+      if (!v) return 'Branch name is required.';
+      if (!/^[A-Za-z0-9._\/-]+$/.test(v)) return 'Use letters, digits, dot, dash, underscore, or slash.';
+      return null;
+    },
+  });
+  if (branch === null) return;
+  branch = branch.trim();
   try {
     var r = await fetch('/api/projects/' + encodeURIComponent(projId) + '/github/' + encodeURIComponent(sourceId) + '/init', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ initialBranch: branch.trim() }),
+      body: JSON.stringify({ initialBranch: branch }),
     });
     var data = null; try { data = await r.json(); } catch (_) {}
     if (!r.ok) throw new Error((data && data.error) || ('HTTP ' + r.status));
@@ -3404,13 +3463,22 @@ async function gitOp(projId, sourceId, op, opts) {
   }
 }
 
-function openCommitDialog(projId, sourceId) {
+async function openCommitDialog(projId, sourceId) {
   // If the user has explicitly checked some files, commit only those;
   // otherwise fall back to the legacy "stage everything" behaviour. This
   // matches VS Code's "Commit (selected)" vs "Commit all" model.
   var sel = Array.from(_getGhSel(projId, sourceId));
   var hint = sel.length ? ' (' + sel.length + ' selected)' : ' (all changes)';
-  var msg = window.prompt('Commit message' + hint + ':', 'Update from Fauna');
+  var msg = await _projPrompt({
+    title: 'Commit' + hint,
+    label: 'Commit message',
+    defaultValue: 'Update from Fauna',
+    submit: 'Commit',
+    multiline: true,
+    validate: function(v) { return (v || '').trim() ? null : 'Commit message is required.'; },
+  });
+  if (msg === null) return;
+  msg = msg.trim();
   if (!msg) return;
   var body = { message: msg };
   if (sel.length) body.files = sel;
@@ -3769,6 +3837,74 @@ function _showToast(msg, isError) {
 
 // ── Modal helpers (replaces browser prompt/confirm — not supported in Electron) ──
 
+// Electron's renderer process silently returns null from window.prompt()
+// without ever showing UI, so every flow that relied on `var x =
+// window.prompt(…); if (!x) return;` exited as a no-op (e.g. the
+// "Initialize git" button did nothing). _projPrompt() shows a real modal
+// and returns Promise<string|null>. window.confirm() does work in Electron
+// (it shows a native dialog) so it's left alone.
+//
+//   opts = {
+//     title, label, placeholder?, defaultValue?, submit?='OK',
+//     multiline?:false, validate?(value)→errorString|null
+//   }
+function _projPrompt(opts) {
+  opts = opts || {};
+  return new Promise(function(resolve) {
+    var overlay = document.createElement('div');
+    overlay.className = 'proj-picker-overlay';
+    var inputHtml = opts.multiline
+      ? '<textarea class="proj-input proj-modal-textarea" id="_pp-input" placeholder="' + _projEsc(opts.placeholder || '') + '">' + _projEsc(opts.defaultValue || '') + '</textarea>'
+      : '<input class="proj-input" id="_pp-input" type="text" placeholder="' + _projEsc(opts.placeholder || '') + '" autocomplete="off" value="' + _projEsc(opts.defaultValue || '') + '">';
+    overlay.innerHTML =
+      '<div class="proj-picker-panel">' +
+        '<div class="proj-picker-header">' +
+          '<span>' + _projEsc(opts.title || '') + '</span>' +
+          '<button id="_pp-close"><i class="ti ti-x"></i></button>' +
+        '</div>' +
+        '<div class="proj-form">' +
+          '<div class="proj-settings-row">' +
+            (opts.label ? '<label>' + _projEsc(opts.label) + '</label>' : '') +
+            inputHtml +
+          '</div>' +
+        '</div>' +
+        '<div id="_pp-err" class="proj-modal-err" style="display:none"></div>' +
+        '<div class="proj-picker-footer">' +
+          '<button class="proj-action-btn" id="_pp-ok">' + _projEsc(opts.submit || 'OK') + '</button>' +
+          '<button class="proj-action-btn" id="_pp-cancel">Cancel</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    var done = false;
+    function close(value) { if (done) return; done = true; overlay.remove(); resolve(value); }
+    var input = overlay.querySelector('#_pp-input');
+    setTimeout(function() {
+      try { input.focus(); if (!opts.multiline) input.select(); } catch (_) {}
+    }, 50);
+    overlay.querySelector('#_pp-close').onclick  = function() { close(null); };
+    overlay.querySelector('#_pp-cancel').onclick = function() { close(null); };
+    overlay.querySelector('#_pp-ok').onclick = function() {
+      var val = input.value;
+      if (typeof opts.validate === 'function') {
+        var err = opts.validate(val);
+        if (err) {
+          var errEl = overlay.querySelector('#_pp-err');
+          errEl.textContent = err; errEl.style.display = '';
+          return;
+        }
+      }
+      close(val);
+    };
+    overlay.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') { e.preventDefault(); close(null); }
+      if (e.key === 'Enter' && !opts.multiline && e.target.tagName !== 'BUTTON') {
+        e.preventDefault();
+        overlay.querySelector('#_pp-ok').click();
+      }
+    });
+  });
+}
+
 // _projConfirm(message) → Promise<boolean>
 function _projConfirm(message) {
   return new Promise(function(resolve) {
@@ -3796,22 +3932,24 @@ function _projModal(opts) {
   overlay.className = 'proj-picker-overlay';
 
   var fieldsHtml = (opts.fields || []).map(function(f) {
+    var defaultVal = (f.value != null) ? String(f.value) : '';
     var input;
     if (f.type === 'textarea') {
-      input = '<textarea class="proj-input proj-modal-textarea" id="pmf-' + f.id + '" placeholder="' + _projEsc(f.placeholder || '') + '"></textarea>';
+      input = '<textarea class="proj-input proj-modal-textarea" id="pmf-' + f.id + '" placeholder="' + _projEsc(f.placeholder || '') + '">' + _projEsc(defaultVal) + '</textarea>';
     } else if (f.type === 'select') {
       input = '<select class="proj-input" id="pmf-' + f.id + '">' +
         (f.options || []).map(function(o) {
-          return '<option value="' + _projEsc(o.value) + '">' + _projEsc(o.label) + '</option>';
+          var sel = (defaultVal && String(o.value) === defaultVal) ? ' selected' : '';
+          return '<option value="' + _projEsc(o.value) + '"' + sel + '>' + _projEsc(o.label) + '</option>';
         }).join('') +
       '</select>';
     } else if (f.browse) {
       input = '<div style="display:flex;gap:6px;flex:1">' +
-        '<input class="proj-input" id="pmf-' + f.id + '" type="text" placeholder="' + _projEsc(f.placeholder || '') + '" autocomplete="off" style="flex:1">' +
+        '<input class="proj-input" id="pmf-' + f.id + '" type="text" placeholder="' + _projEsc(f.placeholder || '') + '" autocomplete="off" value="' + _projEsc(defaultVal) + '" style="flex:1">' +
         '<button class="proj-action-btn" type="button" onclick="_projModalBrowse(\'' + f.id + '\')" title="Browse"><i class="ti ti-folder-open"></i></button>' +
       '</div>';
     } else {
-      input = '<input class="proj-input" id="pmf-' + f.id + '" type="text" placeholder="' + _projEsc(f.placeholder || '') + '" autocomplete="off">';
+      input = '<input class="proj-input" id="pmf-' + f.id + '" type="text" placeholder="' + _projEsc(f.placeholder || '') + '" autocomplete="off" value="' + _projEsc(defaultVal) + '">';
     }
     return '<div class="proj-settings-row"><label>' + _projEsc(f.label) + '</label>' + input + '</div>';
   }).join('');
@@ -3832,8 +3970,12 @@ function _projModal(opts) {
 
   document.body.appendChild(overlay);
 
-  overlay.querySelector('#_pmclose').onclick  = function() { overlay.remove(); };
-  overlay.querySelector('#_pmcancel').onclick = function() { overlay.remove(); };
+  function cancel() {
+    overlay.remove();
+    if (typeof opts.onCancel === 'function') opts.onCancel();
+  }
+  overlay.querySelector('#_pmclose').onclick  = cancel;
+  overlay.querySelector('#_pmcancel').onclick = cancel;
   // Focus first text/textarea input
   var first = overlay.querySelector('input, textarea');
   if (first) setTimeout(function() { first.focus(); }, 50);
@@ -3859,7 +4001,7 @@ function _projModal(opts) {
     if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'BUTTON') {
       overlay.querySelector('#_pmsubmit').click();
     }
-    if (e.key === 'Escape') overlay.remove();
+    if (e.key === 'Escape') cancel();
   });
 }
 
