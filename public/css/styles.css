@@ -1683,9 +1683,10 @@ body.is-resizing webview { pointer-events: none !important; }
 #stop-btn {
   width: 30px; height: 30px; border-radius: 8px; background: transparent;
   border: none; color: var(--error); cursor: pointer;
-  font-size: 14px; flex-shrink: 0; display: none !important; align-items: center; justify-content: center;
+  font-size: 16px; flex-shrink: 0; display: none !important; align-items: center; justify-content: center;
   transition: all .15s; align-self: flex-end; margin-bottom: 1px;
 }
+#stop-btn i { font-size: 16px; line-height: 1; }
 #stop-btn.show { display: none !important; }
 #stop-btn:hover { background: rgba(248,113,113,.15); border-radius: 8px; }
 /* Bottom bar: hint · ring · model picker */
