@@ -226,6 +226,23 @@ function saveConversations() {
 
 // Debounced per-conversation server sync
 var _syncTimers = {};
+// Last-flushed payload hash per conv id. Used to suppress redundant PUTs
+// when saveConversations() is called repeatedly with identical conv state
+// (UI re-renders, hydrate-merge with no real diff, focus events, etc.) —
+// otherwise the network log fills up with /api/conversations/:id traffic
+// and each PUT bounces back as an SSE upsert that re-triggers hydrate.
+var _lastSyncHash = {};
+
+// FNV-1a 32-bit — fast, no allocations, good enough to spot identical bodies.
+function _hashString(s) {
+  var h = 0x811c9dc5;
+  for (var i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  return h.toString(16);
+}
+
 function _syncConvToServer(id) {
   if (!id) return;
   clearTimeout(_syncTimers[id]);
@@ -238,7 +255,16 @@ function _flushConvToServer(id) {
   var conv = getConv(id);
   if (!conv) return;
   var c = _serializeConversationForServer(conv);
-  fetch('/api/conversations/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c) }).catch(function() {});
+  var body = JSON.stringify(c);
+  var hash = _hashString(body);
+  if (_lastSyncHash[id] === hash) return; // identical to the last successful PUT — skip
+  _lastSyncHash[id] = hash;
+  fetch('/api/conversations/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: body })
+    .catch(function() {
+      // Network error — forget the hash so the next save retries instead of
+      // silently swallowing a real update.
+      delete _lastSyncHash[id];
+    });
 }
 
 // Flush pending syncs immediately (called on beforeunload)
@@ -257,7 +283,12 @@ window.addEventListener('beforeunload', _flushAllPendingSyncs);
 function _syncAllConvsToServer() {
   state.conversations.forEach(function(conv) {
     var c = _serializeConversationForServer(conv);
-    fetch('/api/conversations/' + conv.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c) }).catch(function() {});
+    var body = JSON.stringify(c);
+    var hash = _hashString(body);
+    if (_lastSyncHash[conv.id] === hash) return;
+    _lastSyncHash[conv.id] = hash;
+    fetch('/api/conversations/' + conv.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: body })
+      .catch(function() { delete _lastSyncHash[conv.id]; });
   });
 }
 
