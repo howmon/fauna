@@ -84,30 +84,59 @@ function _redact(s) {
 
 async function _gitStatus(cwd) {
   if (!_isGitRepo(cwd)) {
-    return { isRepo: false, branch: null, ahead: 0, behind: 0, dirty: 0, lines: [] };
+    return { isRepo: false, branch: null, ahead: 0, behind: 0, dirty: 0, files: [], rebasing: false };
   }
   const [branchR, statusR] = await Promise.all([
     _runGit(cwd, ['branch', '--show-current']),
-    _runGit(cwd, ['status', '--porcelain=v1', '--branch']),
+    // -z + NUL terminators make rename parsing unambiguous.
+    _runGit(cwd, ['status', '--porcelain=v1', '--branch', '-z']),
   ]);
   const branch = branchR.ok ? branchR.stdout.trim() : null;
   let ahead = 0, behind = 0;
-  let dirty = 0;
-  const lines = [];
+  const files = [];
   if (statusR.ok) {
-    for (const line of statusR.stdout.split('\n')) {
-      if (line.startsWith('##')) {
-        const m = line.match(/\[(?:ahead (\d+))?(?:, )?(?:behind (\d+))?\]/);
+    // -z output: entries are NUL-separated. Renames split across two NULs
+    // (XY old\0new). Walk the array with an index.
+    const parts = statusR.stdout.split('\0').filter(Boolean);
+    let i = 0;
+    while (i < parts.length) {
+      const entry = parts[i++];
+      if (entry.startsWith('## ')) {
+        const m = entry.match(/\[(?:ahead (\d+))?(?:, )?(?:behind (\d+))?\]/);
         if (m) {
           ahead  = parseInt(m[1] || '0', 10) || 0;
           behind = parseInt(m[2] || '0', 10) || 0;
         }
         continue;
       }
-      if (line.trim()) { dirty++; if (lines.length < 20) lines.push(line); }
+      if (entry.length < 3) continue;
+      const X = entry[0];
+      const Y = entry[1];
+      let pathPart = entry.slice(3);
+      let oldPath = null;
+      if (X === 'R' || X === 'C' || Y === 'R' || Y === 'C') {
+        // The "from" name appears in the next NUL-segment for renames/copies.
+        oldPath = parts[i++] || null;
+      }
+      files.push({
+        path:        pathPart,
+        oldPath,
+        indexStatus: X,           // staged side (' ' = unstaged)
+        workStatus:  Y,           // worktree side (' ' = unmodified)
+        staged:      X !== ' ' && X !== '?',
+        unstaged:    Y !== ' ',
+        untracked:   X === '?' && Y === '?',
+        conflicted:  X === 'U' || Y === 'U' || (X === 'A' && Y === 'A') || (X === 'D' && Y === 'D'),
+      });
     }
   }
-  return { isRepo: true, branch, ahead, behind, dirty, lines };
+  // Detect an in-progress rebase so the UI can surface a Continue/Abort bar.
+  let rebasing = false;
+  try {
+    rebasing = fs.existsSync(path.join(cwd, '.git', 'rebase-merge'))
+            || fs.existsSync(path.join(cwd, '.git', 'rebase-apply'));
+  } catch (_) {}
+  return { isRepo: true, branch, ahead, behind, dirty: files.length, files, rebasing };
 }
 
 /**
@@ -271,16 +300,325 @@ export function registerGitHubRoutes(app, deps) {
     return { proj, target, cwd: target.cwd, link, token, branch };
   }
 
-  app.post('/api/projects/:id/github/:sourceId/commit', async (req, res) => {
-    const ctx = await _resolveOpContext(req, res);
+  // Helper: resolve { proj, target, cwd } for a LOCAL-only op (branches,
+  // stage, discard, log, diff) — does not require a linked account.
+  function _resolveLocalContext(req, res) {
+    const proj = getProject(req.params.id);
+    if (!proj) { res.status(404).json({ error: 'Project not found' }); return null; }
+    const sourceId = String(req.params.sourceId || '').trim();
+    if (!sourceId) { res.status(400).json({ error: 'sourceId required' }); return null; }
+    const targets = _enumerateTargets(proj);
+    const target = targets.find(t => t.sourceId === sourceId);
+    if (!target) { res.status(400).json({ error: 'Source is not a git repository (or has been removed).' }); return null; }
+    return { proj, target, cwd: target.cwd };
+  }
+
+  // Reject paths that try to escape the repo cwd via .. / absolute paths /
+  // shell metacharacters. The CLI also forbids paths starting with -.
+  function _validatePathArg(p, cwd) {
+    if (typeof p !== 'string' || !p) throw new Error('Invalid path');
+    if (p.startsWith('-')) throw new Error('Invalid path');
+    if (/[\u0000\n]/.test(p)) throw new Error('Invalid path');
+    if (path.isAbsolute(p)) throw new Error('Path must be repo-relative');
+    const resolved = path.resolve(cwd, p);
+    const root = path.resolve(cwd) + path.sep;
+    if (resolved !== path.resolve(cwd) && !resolved.startsWith(root)) {
+      throw new Error('Path escapes repo: ' + p);
+    }
+    return p;
+  }
+
+  // Sanitize a single ref name (branch / remote / tag). Forbids the
+  // characters git itself rejects plus shell-y ones.
+  function _validateRef(ref) {
+    if (typeof ref !== 'string' || !ref) throw new Error('Invalid ref');
+    if (ref.startsWith('-')) throw new Error('Invalid ref');
+    if (/[\s\u0000~^:?*\[\\]/.test(ref)) throw new Error('Invalid ref');
+    return ref;
+  }
+
+  // ── File-level: status detail, stage, unstage, discard, diff ────────────
+
+  app.get('/api/projects/:id/github/:sourceId/status', async (req, res) => {
+    const ctx = _resolveLocalContext(req, res);
+    if (!ctx) return;
+    const status = await _gitStatus(ctx.cwd);
+    res.json({ status });
+  });
+
+  app.post('/api/projects/:id/github/:sourceId/stage', async (req, res) => {
+    const ctx = _resolveLocalContext(req, res);
     if (!ctx) return;
     const { cwd } = ctx;
-    const message = String((req.body || {}).message || '').trim() || 'Update from Fauna';
-    const addR = await _runGit(cwd, ['add', '-A']);
-    if (!addR.ok) return res.status(500).json({ error: 'git add failed', stderr: _redact(addR.stderr) });
+    const body = req.body || {};
+    let paths = Array.isArray(body.files) ? body.files : [];
+    try { paths = paths.map(p => _validatePathArg(String(p), cwd)); }
+    catch (e) { return res.status(400).json({ error: e.message }); }
+    if (!paths.length) return res.status(400).json({ error: 'files[] required' });
+    const r = await _runGit(cwd, ['add', '--', ...paths]);
+    if (!r.ok) return res.status(500).json({ error: 'git add failed', stderr: _redact(r.stderr) });
+    res.json({ ok: true, status: await _gitStatus(cwd) });
+  });
+
+  app.post('/api/projects/:id/github/:sourceId/unstage', async (req, res) => {
+    const ctx = _resolveLocalContext(req, res);
+    if (!ctx) return;
+    const { cwd } = ctx;
+    const body = req.body || {};
+    let paths = Array.isArray(body.files) ? body.files : [];
+    try { paths = paths.map(p => _validatePathArg(String(p), cwd)); }
+    catch (e) { return res.status(400).json({ error: e.message }); }
+    if (!paths.length) return res.status(400).json({ error: 'files[] required' });
+    // `git restore --staged` is the modern equivalent of `git reset HEAD --`.
+    const r = await _runGit(cwd, ['restore', '--staged', '--', ...paths]);
+    if (!r.ok) return res.status(500).json({ error: 'git restore --staged failed', stderr: _redact(r.stderr) });
+    res.json({ ok: true, status: await _gitStatus(cwd) });
+  });
+
+  // Discard unstaged changes / delete untracked files. Body: { files:[…] }
+  app.post('/api/projects/:id/github/:sourceId/discard', async (req, res) => {
+    const ctx = _resolveLocalContext(req, res);
+    if (!ctx) return;
+    const { cwd } = ctx;
+    const body = req.body || {};
+    let paths = Array.isArray(body.files) ? body.files : [];
+    try { paths = paths.map(p => _validatePathArg(String(p), cwd)); }
+    catch (e) { return res.status(400).json({ error: e.message }); }
+    if (!paths.length) return res.status(400).json({ error: 'files[] required' });
+    // Two-pass discard so we handle tracked + untracked uniformly: first try
+    // to restore each path; for any path git rejects as "not tracked", fall
+    // back to `git clean -f` so the untracked file is removed.
+    const restoreR = await _runGit(cwd, ['restore', '--worktree', '--source=HEAD', '--', ...paths]);
+    const cleanR   = await _runGit(cwd, ['clean', '-f', '--', ...paths]);
+    if (!restoreR.ok && !cleanR.ok) {
+      return res.status(500).json({ error: 'discard failed', stderr: _redact(restoreR.stderr + '\n' + cleanR.stderr) });
+    }
+    res.json({ ok: true, status: await _gitStatus(cwd) });
+  });
+
+  // Diff of a single file. Query: ?path=…&staged=1
+  app.get('/api/projects/:id/github/:sourceId/diff', async (req, res) => {
+    const ctx = _resolveLocalContext(req, res);
+    if (!ctx) return;
+    const { cwd } = ctx;
+    const p = String(req.query.path || '').trim();
+    if (!p) return res.status(400).json({ error: 'path required' });
+    let safe;
+    try { safe = _validatePathArg(p, cwd); }
+    catch (e) { return res.status(400).json({ error: e.message }); }
+    const args = ['diff', '--no-color'];
+    if (req.query.staged === '1' || req.query.staged === 'true') args.push('--cached');
+    args.push('--', safe);
+    const r = await _runGit(cwd, args);
+    if (!r.ok) return res.status(500).json({ error: 'git diff failed', stderr: _redact(r.stderr) });
+    res.json({ ok: true, diff: r.stdout });
+  });
+
+  // Recent commit log. Query: ?limit=20
+  app.get('/api/projects/:id/github/:sourceId/log', async (req, res) => {
+    const ctx = _resolveLocalContext(req, res);
+    if (!ctx) return;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 200);
+    const fmt = '%H%x09%h%x09%an%x09%ae%x09%ad%x09%s';
+    const r = await _runGit(ctx.cwd, ['log', '-n', String(limit), '--pretty=format:' + fmt, '--date=iso']);
+    if (!r.ok) return res.status(500).json({ error: 'git log failed', stderr: _redact(r.stderr) });
+    const commits = r.stdout.split('\n').filter(Boolean).map(line => {
+      const [sha, short, author, email, date, ...rest] = line.split('\t');
+      return { sha, short, author, email, date, subject: rest.join('\t') };
+    });
+    res.json({ ok: true, commits });
+  });
+
+  // ── Branches ────────────────────────────────────────────────────────────
+
+  app.get('/api/projects/:id/github/:sourceId/branches', async (req, res) => {
+    const ctx = _resolveLocalContext(req, res);
+    if (!ctx) return;
+    const { cwd } = ctx;
+    // refs/heads/* (local) + refs/remotes/* (remote-tracking) with HEAD marker.
+    const r = await _runGit(cwd, ['for-each-ref',
+      '--format=%(HEAD)%09%(refname:short)%09%(refname)%09%(objectname:short)%09%(upstream:short)',
+      'refs/heads', 'refs/remotes']);
+    if (!r.ok) return res.status(500).json({ error: 'git for-each-ref failed', stderr: _redact(r.stderr) });
+    const local = [];
+    const remote = [];
+    for (const line of r.stdout.split('\n').filter(Boolean)) {
+      const [head, shortName, fullRef, sha, upstream] = line.split('\t');
+      const entry = { name: shortName, ref: fullRef, sha, upstream: upstream || null, current: head === '*' };
+      if (fullRef.startsWith('refs/heads/')) local.push(entry);
+      else if (fullRef.startsWith('refs/remotes/')) {
+        // Skip the symbolic origin/HEAD pointer; we already have the local tip.
+        if (/\/HEAD$/.test(fullRef)) continue;
+        remote.push(entry);
+      }
+    }
+    res.json({ ok: true, local, remote });
+  });
+
+  // Create a new branch. Body: { name, from? (defaults to HEAD), checkout?:true }
+  app.post('/api/projects/:id/github/:sourceId/branches', async (req, res) => {
+    const ctx = _resolveLocalContext(req, res);
+    if (!ctx) return;
+    const { cwd } = ctx;
+    const body = req.body || {};
+    let name, from;
+    try {
+      name = _validateRef(String(body.name || '').trim());
+      from = body.from ? _validateRef(String(body.from).trim()) : null;
+    } catch (e) { return res.status(400).json({ error: e.message }); }
+    const args = body.checkout === false ? ['branch', name] : ['checkout', '-b', name];
+    if (from) args.push(from);
+    const r = await _runGit(cwd, args);
+    if (!r.ok) return res.status(500).json({ error: 'create branch failed', stderr: _redact(r.stderr) });
+    res.json({ ok: true, branch: name, status: await _gitStatus(cwd) });
+  });
+
+  // Checkout / switch to an existing branch. Body: { name }
+  app.post('/api/projects/:id/github/:sourceId/checkout', async (req, res) => {
+    const ctx = _resolveLocalContext(req, res);
+    if (!ctx) return;
+    const { cwd } = ctx;
+    let name;
+    try { name = _validateRef(String((req.body || {}).name || '').trim()); }
+    catch (e) { return res.status(400).json({ error: e.message }); }
+    const r = await _runGit(cwd, ['checkout', name]);
+    if (!r.ok) return res.status(500).json({ error: 'checkout failed', stderr: _redact(r.stderr) });
+    res.json({ ok: true, branch: name, status: await _gitStatus(cwd) });
+  });
+
+  // Delete a local branch. Body: { name, force?:true }
+  app.post('/api/projects/:id/github/:sourceId/branches/delete', async (req, res) => {
+    const ctx = _resolveLocalContext(req, res);
+    if (!ctx) return;
+    const { cwd } = ctx;
+    let name;
+    try { name = _validateRef(String((req.body || {}).name || '').trim()); }
+    catch (e) { return res.status(400).json({ error: e.message }); }
+    const flag = (req.body || {}).force ? '-D' : '-d';
+    const r = await _runGit(cwd, ['branch', flag, name]);
+    if (!r.ok) return res.status(500).json({ error: 'delete branch failed', stderr: _redact(r.stderr) });
+    res.json({ ok: true, status: await _gitStatus(cwd) });
+  });
+
+  // ── Rebase ──────────────────────────────────────────────────────────────
+
+  // Rebase onto a ref. Body: { onto } — defaults to '<linkedAccount.defaultBranch>' or upstream.
+  app.post('/api/projects/:id/github/:sourceId/rebase', async (req, res) => {
+    const ctx = _resolveLocalContext(req, res);
+    if (!ctx) return;
+    const { cwd } = ctx;
+    const body = req.body || {};
+    let onto;
+    try {
+      const raw = String(body.onto || '').trim();
+      if (!raw) return res.status(400).json({ error: 'onto required (e.g. "origin/main")' });
+      onto = _validateRef(raw);
+    } catch (e) { return res.status(400).json({ error: e.message }); }
+    const r = await _runGit(cwd, ['rebase', onto]);
+    const status = await _gitStatus(cwd);
+    if (!r.ok) return res.status(500).json({ error: 'git rebase failed', stderr: _redact(r.stderr), status });
+    res.json({ ok: true, stdout: _redact(r.stdout), status });
+  });
+
+  app.post('/api/projects/:id/github/:sourceId/rebase/continue', async (req, res) => {
+    const ctx = _resolveLocalContext(req, res);
+    if (!ctx) return;
+    const r = await _runGit(ctx.cwd, ['rebase', '--continue'], { GIT_EDITOR: ':' });
+    const status = await _gitStatus(ctx.cwd);
+    if (!r.ok) return res.status(500).json({ error: 'rebase --continue failed', stderr: _redact(r.stderr), status });
+    res.json({ ok: true, stdout: _redact(r.stdout), status });
+  });
+
+  app.post('/api/projects/:id/github/:sourceId/rebase/abort', async (req, res) => {
+    const ctx = _resolveLocalContext(req, res);
+    if (!ctx) return;
+    const r = await _runGit(ctx.cwd, ['rebase', '--abort']);
+    const status = await _gitStatus(ctx.cwd);
+    if (!r.ok) return res.status(500).json({ error: 'rebase --abort failed', stderr: _redact(r.stderr), status });
+    res.json({ ok: true, status });
+  });
+
+  // ── Stash ───────────────────────────────────────────────────────────────
+
+  app.get('/api/projects/:id/github/:sourceId/stash', async (req, res) => {
+    const ctx = _resolveLocalContext(req, res);
+    if (!ctx) return;
+    const r = await _runGit(ctx.cwd, ['stash', 'list', '--pretty=format:%gd%x09%gs']);
+    if (!r.ok) return res.status(500).json({ error: 'git stash list failed', stderr: _redact(r.stderr) });
+    const entries = r.stdout.split('\n').filter(Boolean).map(line => {
+      const [ref, subject] = line.split('\t');
+      return { ref, subject };
+    });
+    res.json({ ok: true, entries });
+  });
+
+  app.post('/api/projects/:id/github/:sourceId/stash', async (req, res) => {
+    const ctx = _resolveLocalContext(req, res);
+    if (!ctx) return;
+    const msg = String((req.body || {}).message || '').trim();
+    const args = ['stash', 'push', '--include-untracked'];
+    if (msg) args.push('-m', msg);
+    const r = await _runGit(ctx.cwd, args);
+    const status = await _gitStatus(ctx.cwd);
+    if (!r.ok) return res.status(500).json({ error: 'git stash push failed', stderr: _redact(r.stderr), status });
+    res.json({ ok: true, stdout: r.stdout, status });
+  });
+
+  app.post('/api/projects/:id/github/:sourceId/stash/pop', async (req, res) => {
+    const ctx = _resolveLocalContext(req, res);
+    if (!ctx) return;
+    const ref = (req.body || {}).ref;
+    const args = ['stash', 'pop'];
+    if (ref) {
+      // ref looks like "stash@{0}" — git refs containing {/} are normally
+      // forbidden by _validateRef, so use a narrow whitelist here instead.
+      if (!/^stash@\{\d+\}$/.test(String(ref))) return res.status(400).json({ error: 'invalid stash ref' });
+      args.push(String(ref));
+    }
+    const r = await _runGit(ctx.cwd, args);
+    const status = await _gitStatus(ctx.cwd);
+    if (!r.ok) return res.status(500).json({ error: 'git stash pop failed', stderr: _redact(r.stderr), status });
+    res.json({ ok: true, stdout: r.stdout, status });
+  });
+
+  // ── Network ops requiring a linked account: fetch / pull / push / sync ──
+
+  // Fetch all remotes (or upstream of current branch) using the linked token.
+  app.post('/api/projects/:id/github/:sourceId/fetch', async (req, res) => {
+    const ctx = await _resolveOpContext(req, res);
+    if (!ctx) return;
+    const { cwd, link, token } = ctx;
+    const url = _authenticatedUrl(link.repo, token);
+    // Fetch the linked repo, pruning stale remote refs. Store under the
+    // 'origin' refspec so subsequent rebase/branch lookups work as expected.
+    const r = await _runGit(cwd, ['-c', 'credential.helper=', 'fetch', '--prune', url,
+      '+refs/heads/*:refs/remotes/origin/*']);
+    const status = await _gitStatus(cwd);
+    if (!r.ok) return res.status(500).json({ error: 'git fetch failed', stderr: _redact(r.stderr), status });
+    res.json({ ok: true, stdout: _redact(r.stdout) || _redact(r.stderr), status });
+  });
+
+  app.post('/api/projects/:id/github/:sourceId/commit', async (req, res) => {
+    const ctx = _resolveLocalContext(req, res);
+    if (!ctx) return;
+    const { cwd } = ctx;
+    const body = req.body || {};
+    const message = String(body.message || '').trim() || 'Update from Fauna';
+    // Mode 1: caller provided an explicit file selection → stage exactly
+    // those files. Mode 2: no selection → stage everything (legacy behaviour).
+    if (Array.isArray(body.files) && body.files.length) {
+      let paths;
+      try { paths = body.files.map(p => _validatePathArg(String(p), cwd)); }
+      catch (e) { return res.status(400).json({ error: e.message }); }
+      const addR = await _runGit(cwd, ['add', '--', ...paths]);
+      if (!addR.ok) return res.status(500).json({ error: 'git add failed', stderr: _redact(addR.stderr) });
+    } else if (body.stageAll !== false) {
+      const addR = await _runGit(cwd, ['add', '-A']);
+      if (!addR.ok) return res.status(500).json({ error: 'git add failed', stderr: _redact(addR.stderr) });
+    }
     const stagedR = await _runGit(cwd, ['diff', '--cached', '--name-only']);
     if (!stagedR.stdout.trim()) {
-      return res.status(400).json({ error: 'Nothing to commit. Working tree is clean.' });
+      return res.status(400).json({ error: 'Nothing to commit. Stage at least one file first.' });
     }
     const commitR = await _runGit(cwd, ['commit', '-m', message]);
     if (!commitR.ok) return res.status(500).json({ error: 'git commit failed', stderr: _redact(commitR.stderr) });

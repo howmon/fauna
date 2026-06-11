@@ -2809,6 +2809,7 @@ function _renderGitTargetsBody(projId) {
 }
 
 function _renderGitTargetRow(t) {
+  var pid = _projEsc(t._projId || '');
   var sid = _projEsc(t.sourceId);
   var label = '<div class="gh-target-label">' +
     '<i class="ti ' + (t.kind === 'root' ? 'ti-folder' : 'ti-folder-symlink') + '"></i> ' +
@@ -2829,20 +2830,339 @@ function _renderGitTargetRow(t) {
   var repo = '<span class="gh-linked-repo"><i class="ti ti-git-branch"></i> ' + _projEsc(t.link.repo) +
     (t.link.defaultBranch ? '<span class="gh-linked-branch"> &middot; ' + _projEsc(t.link.defaultBranch) + '</span>' : '') +
   '</span>';
-  var status = _renderGitStatusPill(t.status);
+  var statusPill = _renderGitStatusPill(t.status);
+  var rebaseBanner = (t.status && t.status.rebasing)
+    ? '<div class="gh-rebase-banner"><i class="ti ti-alert-circle"></i> Rebase in progress.' +
+      ' <button class="gh-mini-btn" onclick="gitOp(\'' + pid + '\', \'' + sid + '\', \'rebase/continue\')">Continue</button>' +
+      ' <button class="gh-mini-btn gh-mini-btn-danger" onclick="gitOp(\'' + pid + '\', \'' + sid + '\', \'rebase/abort\')">Abort</button>' +
+    '</div>'
+    : '';
+  var branchPicker = '<div class="gh-branch-picker">' +
+    '<button class="gh-branch-btn" onclick="openBranchPicker(\'' + pid + '\', \'' + sid + '\', this)" title="Branches">' +
+      '<i class="ti ti-git-branch"></i> ' + _projEsc((t.status && t.status.branch) || '(no branch)') +
+      ' <i class="ti ti-chevron-down"></i>' +
+    '</button>' +
+  '</div>';
+  var fileList = _renderGitFileList(t, pid, sid);
   return '<div class="gh-target gh-target-linked">' +
     label +
-    '<div class="gh-target-meta">' + account + repo + status + '</div>' +
-    '<div class="gh-ops-row">' +
-      '<button class="gh-op-btn" onclick="openCommitDialog(\'' + _projEsc(t._projId || '') + '\', \'' + sid + '\')"><i class="ti ti-git-commit"></i> Commit</button>' +
-      '<button class="gh-op-btn" onclick="gitOp(\'' + _projEsc(t._projId || '') + '\', \'' + sid + '\', \'pull\')"><i class="ti ti-arrow-down"></i> Pull</button>' +
-      '<button class="gh-op-btn" onclick="gitOp(\'' + _projEsc(t._projId || '') + '\', \'' + sid + '\', \'push\')"><i class="ti ti-arrow-up"></i> Push</button>' +
-      '<button class="gh-op-btn gh-op-btn-primary" onclick="gitOp(\'' + _projEsc(t._projId || '') + '\', \'' + sid + '\', \'sync\')"><i class="ti ti-refresh"></i> Sync</button>' +
+    '<div class="gh-target-meta">' + account + repo + statusPill + '</div>' +
+    rebaseBanner +
+    '<div class="gh-target-toolbar">' +
+      branchPicker +
       '<span class="gh-ops-spacer"></span>' +
       '<button class="gh-op-btn gh-op-btn-ghost" onclick="linkGitHubAccountFlow(\'' + sid + '\')" title="Change account or repo"><i class="ti ti-switch"></i></button>' +
-      '<button class="gh-op-btn gh-op-btn-ghost" onclick="unlinkGitHubAccount(\'' + _projEsc(t._projId || '') + '\', \'' + sid + '\')" title="Unlink"><i class="ti ti-unlink"></i></button>' +
+      '<button class="gh-op-btn gh-op-btn-ghost" onclick="unlinkGitHubAccount(\'' + pid + '\', \'' + sid + '\')" title="Unlink"><i class="ti ti-unlink"></i></button>' +
+    '</div>' +
+    fileList +
+    '<div class="gh-ops-row">' +
+      '<button class="gh-op-btn gh-op-btn-primary" onclick="openCommitDialog(\'' + pid + '\', \'' + sid + '\')"><i class="ti ti-git-commit"></i> Commit</button>' +
+      '<button class="gh-op-btn" onclick="gitOp(\'' + pid + '\', \'' + sid + '\', \'fetch\')"><i class="ti ti-cloud-download"></i> Fetch</button>' +
+      '<button class="gh-op-btn" onclick="gitOp(\'' + pid + '\', \'' + sid + '\', \'pull\')"><i class="ti ti-arrow-down"></i> Pull</button>' +
+      '<button class="gh-op-btn" onclick="gitOp(\'' + pid + '\', \'' + sid + '\', \'push\')"><i class="ti ti-arrow-up"></i> Push</button>' +
+      '<button class="gh-op-btn" onclick="gitOp(\'' + pid + '\', \'' + sid + '\', \'sync\')"><i class="ti ti-refresh"></i> Sync</button>' +
+      '<button class="gh-op-btn gh-op-btn-ghost" onclick="openRebaseDialog(\'' + pid + '\', \'' + sid + '\')" title="Rebase onto a ref"><i class="ti ti-git-merge"></i> Rebase</button>' +
+      '<button class="gh-op-btn gh-op-btn-ghost" onclick="openStashMenu(\'' + pid + '\', \'' + sid + '\')" title="Stash"><i class="ti ti-archive"></i></button>' +
     '</div>' +
   '</div>';
+}
+
+// Render the changed-files section: a list of porcelain entries with
+// per-file checkboxes (preserved across re-renders via _ghFileSelections),
+// plus quick Stage all / Unstage all / Discard buttons. Hidden when the repo
+// is clean.
+var _ghFileSelections = {}; // (projId+sid) → Set of path strings
+
+function _ghSelKey(projId, sid) { return projId + '|' + sid; }
+function _getGhSel(projId, sid) {
+  var k = _ghSelKey(projId, sid);
+  if (!_ghFileSelections[k]) _ghFileSelections[k] = new Set();
+  return _ghFileSelections[k];
+}
+
+function _renderGitFileList(t, pid, sid) {
+  var files = (t.status && t.status.files) || [];
+  if (!files.length) {
+    return '<div class="gh-files gh-files-empty"><i class="ti ti-check"></i> Working tree clean</div>';
+  }
+  var sel = _getGhSel(pid, sid);
+  // Drop selections for files that no longer exist (handled the commit etc.).
+  var live = new Set(files.map(function(f) { return f.path; }));
+  Array.from(sel).forEach(function(p) { if (!live.has(p)) sel.delete(p); });
+
+  var rows = files.map(function(f) {
+    var status = _gitFileStatusLabel(f);
+    var checked = sel.has(f.path) ? ' checked' : '';
+    var stageBtn = f.staged
+      ? '<button class="gh-mini-btn" title="Unstage" onclick="gitFileOp(\'' + pid + '\', \'' + sid + '\', \'unstage\', \'' + _projEsc(f.path) + '\')"><i class="ti ti-minus"></i></button>'
+      : '<button class="gh-mini-btn" title="Stage"   onclick="gitFileOp(\'' + pid + '\', \'' + sid + '\', \'stage\',   \'' + _projEsc(f.path) + '\')"><i class="ti ti-plus"></i></button>';
+    var discardBtn = '<button class="gh-mini-btn gh-mini-btn-danger" title="Discard changes" onclick="gitFileOp(\'' + pid + '\', \'' + sid + '\', \'discard\', \'' + _projEsc(f.path) + '\')"><i class="ti ti-trash"></i></button>';
+    return '<label class="gh-file-row gh-file-' + status.cls + '">' +
+      '<input type="checkbox" class="gh-file-check" data-path="' + _projEsc(f.path) + '"' + checked +
+        ' onchange="_onGhFileToggle(\'' + pid + '\', \'' + sid + '\', this)">' +
+      '<span class="gh-file-status" title="' + _projEsc(status.title) + '">' + status.short + '</span>' +
+      '<span class="gh-file-path" title="' + _projEsc(f.path) + '">' + _projEsc(f.path) + '</span>' +
+      '<span class="gh-file-actions">' + stageBtn + discardBtn + '</span>' +
+    '</label>';
+  }).join('');
+
+  var hdr = '<div class="gh-files-header">' +
+    '<span class="gh-files-count">' + files.length + ' changed</span>' +
+    '<span class="gh-ops-spacer"></span>' +
+    '<button class="gh-mini-btn" onclick="_ghSelectAll(\'' + pid + '\', \'' + sid + '\', true)">All</button>' +
+    '<button class="gh-mini-btn" onclick="_ghSelectAll(\'' + pid + '\', \'' + sid + '\', false)">None</button>' +
+    '<button class="gh-mini-btn" onclick="gitBulkOp(\'' + pid + '\', \'' + sid + '\', \'stage\')"><i class="ti ti-plus"></i> Stage selected</button>' +
+    '<button class="gh-mini-btn gh-mini-btn-danger" onclick="gitBulkOp(\'' + pid + '\', \'' + sid + '\', \'discard\')"><i class="ti ti-trash"></i> Discard selected</button>' +
+  '</div>';
+  return '<div class="gh-files">' + hdr + '<div class="gh-files-list">' + rows + '</div></div>';
+}
+
+function _gitFileStatusLabel(f) {
+  if (f.conflicted) return { short: '!!', cls: 'conflict', title: 'Conflicted' };
+  if (f.untracked)  return { short: '??', cls: 'untracked', title: 'Untracked' };
+  // index/worktree single-letter convention from `git status --porcelain`
+  var x = f.indexStatus.trim();
+  var y = f.workStatus.trim();
+  var titles = { M: 'Modified', A: 'Added', D: 'Deleted', R: 'Renamed', C: 'Copied', T: 'Type changed' };
+  var primary = x || y;
+  var cls = ({ M: 'modified', A: 'added', D: 'deleted', R: 'renamed', C: 'copied', T: 'modified' })[primary] || 'modified';
+  return { short: (x || '·') + (y || '·'), cls: cls, title: (titles[primary] || 'Changed') + (f.staged ? ' (staged)' : '') };
+}
+
+function _onGhFileToggle(projId, sid, el) {
+  var sel = _getGhSel(projId, sid);
+  var p = el.getAttribute('data-path');
+  if (el.checked) sel.add(p); else sel.delete(p);
+}
+
+function _ghSelectAll(projId, sid, on) {
+  var sel = _getGhSel(projId, sid);
+  var nodes = document.querySelectorAll('#gh-section-' + projId + ' .gh-file-check');
+  nodes.forEach(function(n) {
+    n.checked = !!on;
+    var p = n.getAttribute('data-path');
+    if (on) sel.add(p); else sel.delete(p);
+  });
+}
+
+/** Single-file op convenience wrapper. */
+async function gitFileOp(projId, sid, op, path) {
+  if (op === 'discard' && !confirm('Discard local changes to "' + path + '"? This cannot be undone.')) return;
+  await gitBulkOp(projId, sid, op, [path]);
+}
+
+async function gitBulkOp(projId, sid, op, explicitFiles) {
+  var files = explicitFiles || Array.from(_getGhSel(projId, sid));
+  if (!files.length) { _showToast('Select at least one file first', true); return; }
+  if (op === 'discard' && !explicitFiles && !confirm('Discard local changes in ' + files.length + ' file(s)? This cannot be undone.')) return;
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(projId) + '/github/' + encodeURIComponent(sid) + '/' + op, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ files: files }),
+    });
+    var data = null; try { data = await r.json(); } catch (_) {}
+    if (!r.ok) throw new Error((data && data.error) || ('HTTP ' + r.status));
+    if (op === 'discard' || op === 'stage' || op === 'unstage') {
+      _getGhSel(projId, sid).clear();
+    }
+    _showToast(op + ' ok');
+    delete _ghTargetsCache[projId];
+    _refreshGitHubSection(projId);
+  } catch (e) { _showToast(op + ' failed: ' + e.message, true); }
+}
+
+// ── Branch picker popover ───────────────────────────────────────────────
+
+var _ghBranchPopover = null;
+
+async function openBranchPicker(projId, sid, anchorBtn) {
+  closeBranchPicker();
+  var pop = document.createElement('div');
+  pop.className = 'gh-branch-popover';
+  pop.innerHTML = '<div class="gh-popover-loading"><i class="ti ti-loader-2"></i> Loading branches…</div>';
+  document.body.appendChild(pop);
+  _ghBranchPopover = pop;
+  var rect = anchorBtn.getBoundingClientRect();
+  pop.style.top  = (rect.bottom + 4) + 'px';
+  pop.style.left = rect.left + 'px';
+  // One-shot dismiss when clicking outside.
+  setTimeout(function() {
+    document.addEventListener('mousedown', _onBranchDocDown, true);
+  }, 0);
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(projId) + '/github/' + encodeURIComponent(sid) + '/branches');
+    var data = await r.json();
+    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+    pop.innerHTML = _renderBranchPopover(projId, sid, data);
+  } catch (e) {
+    pop.innerHTML = '<div class="gh-popover-err">' + _projEsc(e.message) + '</div>';
+  }
+}
+
+function closeBranchPicker() {
+  if (_ghBranchPopover) {
+    try { _ghBranchPopover.remove(); } catch (_) {}
+    _ghBranchPopover = null;
+  }
+  document.removeEventListener('mousedown', _onBranchDocDown, true);
+}
+
+function _onBranchDocDown(e) {
+  if (!_ghBranchPopover) return;
+  if (e.target.closest('.gh-branch-popover')) return;
+  closeBranchPicker();
+}
+
+function _renderBranchPopover(projId, sid, data) {
+  var local = (data.local || []).map(function(b) {
+    var cls = b.current ? 'gh-branch-row gh-branch-current' : 'gh-branch-row';
+    var actions = b.current ? '<span class="gh-branch-flag">current</span>' :
+      '<button class="gh-mini-btn" title="Delete branch" onclick="event.stopPropagation();deleteBranch(\'' + projId + '\',\'' + sid + '\',\'' + _projEsc(b.name) + '\')"><i class="ti ti-trash"></i></button>';
+    var click = b.current ? '' : ' onclick="checkoutBranch(\'' + projId + '\',\'' + sid + '\',\'' + _projEsc(b.name) + '\')"';
+    return '<div class="' + cls + '"' + click + '><i class="ti ti-git-branch"></i> ' + _projEsc(b.name) +
+      (b.upstream ? ' <span class="gh-branch-upstream">→ ' + _projEsc(b.upstream) + '</span>' : '') +
+      '<span class="gh-ops-spacer"></span>' + actions + '</div>';
+  }).join('') || '<div class="gh-empty-sub">No local branches.</div>';
+  var remote = (data.remote || []).map(function(b) {
+    return '<div class="gh-branch-row gh-branch-remote" onclick="createBranchFromRemote(\'' + projId + '\',\'' + sid + '\',\'' + _projEsc(b.name) + '\')">' +
+      '<i class="ti ti-cloud"></i> ' + _projEsc(b.name) +
+      '<span class="gh-ops-spacer"></span>' +
+      '<span class="gh-branch-flag">checkout</span>' +
+    '</div>';
+  }).join('') || '';
+  return '<div class="gh-branch-section">' +
+      '<div class="gh-branch-section-title">Local</div>' + local +
+    '</div>' +
+    (remote ? '<div class="gh-branch-section"><div class="gh-branch-section-title">Remote</div>' + remote + '</div>' : '') +
+    '<div class="gh-branch-actions">' +
+      '<button class="gh-op-btn gh-op-btn-primary" onclick="createBranchFlow(\'' + projId + '\',\'' + sid + '\')"><i class="ti ti-plus"></i> New branch from HEAD</button>' +
+    '</div>';
+}
+
+async function checkoutBranch(projId, sid, name) {
+  closeBranchPicker();
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(projId) + '/github/' + encodeURIComponent(sid) + '/checkout', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name }),
+    });
+    var data = null; try { data = await r.json(); } catch (_) {}
+    if (!r.ok) throw new Error((data && data.error) || ('HTTP ' + r.status));
+    _showToast('Switched to ' + name);
+    delete _ghTargetsCache[projId];
+    _refreshGitHubSection(projId);
+  } catch (e) { _showToast('Checkout failed: ' + e.message, true); }
+}
+
+async function createBranchFlow(projId, sid) {
+  closeBranchPicker();
+  var name = window.prompt('New branch name:');
+  if (!name) return;
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(projId) + '/github/' + encodeURIComponent(sid) + '/branches', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim(), checkout: true }),
+    });
+    var data = null; try { data = await r.json(); } catch (_) {}
+    if (!r.ok) throw new Error((data && data.error) || ('HTTP ' + r.status));
+    _showToast('Created and checked out ' + name);
+    delete _ghTargetsCache[projId];
+    _refreshGitHubSection(projId);
+  } catch (e) { _showToast('Create branch failed: ' + e.message, true); }
+}
+
+async function createBranchFromRemote(projId, sid, remoteName) {
+  closeBranchPicker();
+  // remoteName is like "origin/feature-x" — propose stripping the remote.
+  var suggested = remoteName.replace(/^[^\/]+\//, '');
+  var local = window.prompt('Local branch name for ' + remoteName + ':', suggested);
+  if (!local) return;
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(projId) + '/github/' + encodeURIComponent(sid) + '/branches', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: local.trim(), from: remoteName, checkout: true }),
+    });
+    var data = null; try { data = await r.json(); } catch (_) {}
+    if (!r.ok) throw new Error((data && data.error) || ('HTTP ' + r.status));
+    _showToast('Checked out ' + local);
+    delete _ghTargetsCache[projId];
+    _refreshGitHubSection(projId);
+  } catch (e) { _showToast('Checkout failed: ' + e.message, true); }
+}
+
+async function deleteBranch(projId, sid, name) {
+  if (!confirm('Delete local branch "' + name + '"?')) return;
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(projId) + '/github/' + encodeURIComponent(sid) + '/branches/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name }),
+    });
+    var data = null; try { data = await r.json(); } catch (_) {}
+    if (!r.ok) {
+      // Offer force-delete on the typical "not fully merged" failure.
+      if (/not fully merged|merged/i.test((data && (data.error + ' ' + (data.stderr || ''))) || '')) {
+        if (!confirm('Branch is not fully merged. Force delete?')) return;
+        var f = await fetch('/api/projects/' + encodeURIComponent(projId) + '/github/' + encodeURIComponent(sid) + '/branches/delete', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name, force: true }),
+        });
+        var d2 = null; try { d2 = await f.json(); } catch (_) {}
+        if (!f.ok) throw new Error((d2 && d2.error) || 'force-delete failed');
+      } else {
+        throw new Error((data && data.error) || ('HTTP ' + r.status));
+      }
+    }
+    _showToast('Deleted ' + name);
+    delete _ghTargetsCache[projId];
+    _refreshGitHubSection(projId);
+    openBranchPicker(projId, sid, document.querySelector('#gh-section-' + projId + ' .gh-branch-btn'));
+  } catch (e) { _showToast('Delete failed: ' + e.message, true); }
+}
+
+async function openRebaseDialog(projId, sid) {
+  var t = _ghTargetsCache[projId] && (_ghTargetsCache[projId].targets || []).find(function(x) { return x.sourceId === sid; });
+  var defaultOnto = (t && t.link && t.link.defaultBranch) ? ('origin/' + t.link.defaultBranch) : 'origin/main';
+  var onto = window.prompt('Rebase current branch onto which ref?', defaultOnto);
+  if (!onto) return;
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(projId) + '/github/' + encodeURIComponent(sid) + '/rebase', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ onto: onto.trim() }),
+    });
+    var data = null; try { data = await r.json(); } catch (_) {}
+    if (!r.ok) throw new Error((data && data.error) || ('HTTP ' + r.status));
+    _showToast('Rebased onto ' + onto);
+    delete _ghTargetsCache[projId];
+    _refreshGitHubSection(projId);
+  } catch (e) { _showToast('Rebase failed: ' + e.message, true); }
+}
+
+async function openStashMenu(projId, sid) {
+  var action = window.prompt('Stash action — type "push" to stash all changes, "pop" to apply the latest stash, or "list" to view:');
+  if (!action) return;
+  action = action.trim().toLowerCase();
+  if (action === 'push') {
+    var msg = window.prompt('Stash message (optional):', '');
+    await fetch('/api/projects/' + encodeURIComponent(projId) + '/github/' + encodeURIComponent(sid) + '/stash', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg || '' }),
+    }).then(async function(r) {
+      var d = await r.json(); if (!r.ok) throw new Error(d.error);
+      _showToast('Stashed'); delete _ghTargetsCache[projId]; _refreshGitHubSection(projId);
+    }).catch(function(e) { _showToast('Stash failed: ' + e.message, true); });
+  } else if (action === 'pop') {
+    await fetch('/api/projects/' + encodeURIComponent(projId) + '/github/' + encodeURIComponent(sid) + '/stash/pop', { method: 'POST' })
+      .then(async function(r) {
+        var d = await r.json(); if (!r.ok) throw new Error(d.error);
+        _showToast('Stash popped'); delete _ghTargetsCache[projId]; _refreshGitHubSection(projId);
+      }).catch(function(e) { _showToast('Pop failed: ' + e.message, true); });
+  } else if (action === 'list') {
+    var r = await fetch('/api/projects/' + encodeURIComponent(projId) + '/github/' + encodeURIComponent(sid) + '/stash');
+    var d = await r.json();
+    if (!r.ok) { _showToast(d.error, true); return; }
+    if (!d.entries.length) { _showToast('No stashes'); return; }
+    alert(d.entries.map(function(s) { return s.ref + '  ' + s.subject; }).join('\n'));
+  }
 }
 
 function _collapseHome(p) {
@@ -2963,6 +3283,7 @@ async function gitOp(projId, sourceId, op, opts) {
       if (bits.length) msg += ' — ' + bits.join(', ');
     }
     _showToast(msg);
+    if (op === 'commit') _getGhSel(projId, sourceId).clear();
     delete _ghTargetsCache[projId];
     var proj = _activeProject();
     if (proj && proj.id === projId) _refreshGitHubSection(projId);
@@ -2974,9 +3295,16 @@ async function gitOp(projId, sourceId, op, opts) {
 }
 
 function openCommitDialog(projId, sourceId) {
-  var msg = window.prompt('Commit message:', 'Update from Fauna');
+  // If the user has explicitly checked some files, commit only those;
+  // otherwise fall back to the legacy "stage everything" behaviour. This
+  // matches VS Code's "Commit (selected)" vs "Commit all" model.
+  var sel = Array.from(_getGhSel(projId, sourceId));
+  var hint = sel.length ? ' (' + sel.length + ' selected)' : ' (all changes)';
+  var msg = window.prompt('Commit message' + hint + ':', 'Update from Fauna');
   if (!msg) return;
-  gitOp(projId, sourceId, 'commit', { body: { message: msg } });
+  var body = { message: msg };
+  if (sel.length) body.files = sel;
+  gitOp(projId, sourceId, 'commit', { body: body });
 }
 
 // Persist a single boolean project setting immediately (no full-form Save
