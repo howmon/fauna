@@ -250,8 +250,43 @@ const RUNTIME_JS = `
     if (entry.kind && entry.kind !== prop.kind) entry.node.innerHTML = '';
     entry.kind = prop.kind;
     const g = entry.node;
-    const x = Number.isFinite(action.x) ? action.x : (entry.opts.x || 60);
-    const y = Number.isFinite(action.y) ? action.y : (entry.opts.y || 100);
+    // Did the caller (or any earlier action on this prop) actually supply
+    // coordinates? If not, we'll auto-place to avoid collisions.
+    const hasExplicit = Number.isFinite(action.x) || Number.isFinite(action.y)
+      || Number.isFinite(entry.opts.xExplicit) || Number.isFinite(entry.opts.yExplicit);
+    let x = Number.isFinite(action.x) ? action.x : (entry.opts.x || 60);
+    let y = Number.isFinite(action.y) ? action.y : (entry.opts.y || 100);
+    if (Number.isFinite(action.x)) entry.opts.xExplicit = action.x;
+    if (Number.isFinite(action.y)) entry.opts.yExplicit = action.y;
+    // Auto-layout: when the model omits (x,y) on multiple props, every
+    // one of them defaults to (60,100) and they pile on top of each
+    // other (very visible with text/latex blocks — see screenshot bug).
+    // Walk the already-placed props in this scene and shift the new
+    // prop downward past the lowest existing bottom edge.
+    if (!hasExplicit) {
+      let pushTo = y;
+      propNodes.forEach((other, otherId) => {
+        if (otherId === propId) return;
+        if (other.node === g) return;
+        // Only consider visible props (opacity > 0)
+        if (other.node.style.opacity === '0') return;
+        try {
+          const bb = other.node.getBBox();
+          if (!bb || !Number.isFinite(bb.height)) return;
+          // Translate by the group's own transform to get absolute y
+          const tx = other.opts && Number.isFinite(other.opts.y) ? other.opts.y : 0;
+          const bottom = tx + bb.y + bb.height;
+          // If our default y lands inside or above this prop's row,
+          // bump below it (with a small gap).
+          if (pushTo <= bottom + 16) {
+            pushTo = Math.max(pushTo, bottom + 16);
+          }
+        } catch (_) {}
+      });
+      // Don't run off the canvas — clamp so something is always visible.
+      if (pushTo + 40 > CANVAS_H) pushTo = Math.max(100, CANVAS_H - 80);
+      y = pushTo;
+    }
     entry.opts.x = x; entry.opts.y = y;
     placeRoot(g, x, y);
 
