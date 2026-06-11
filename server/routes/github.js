@@ -205,6 +205,99 @@ export function registerGitHubRoutes(app, deps) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ── Owner discovery + repo creation (uses the GitHub REST API) ─────────
+
+  // List the orgs an account can publish into. The account's own user is
+  // implicitly an owner (returned as { login, type:'User' }) and is always
+  // appended first so the picker has a sensible default.
+  app.get('/api/github/accounts/:id/owners', async (req, res) => {
+    const acct = getGitHubAccountMeta(req.params.id);
+    if (!acct) return res.status(404).json({ error: 'Account not found' });
+    const token = getGitHubAccountToken(req.params.id);
+    if (!token) return res.status(400).json({ error: 'Token unavailable' });
+    const owners = [{ login: acct.login, type: 'User', avatarUrl: acct.avatarUrl }];
+    try {
+      const r = await fetch('https://api.github.com/user/orgs?per_page=100', {
+        headers: {
+          'Authorization': 'Bearer ' + token,
+          'Accept': 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'User-Agent': 'fauna-app',
+        },
+      });
+      if (r.ok) {
+        const orgs = await r.json();
+        for (const o of (Array.isArray(orgs) ? orgs : [])) {
+          owners.push({ login: o.login, type: 'Organization', avatarUrl: o.avatar_url || null });
+        }
+      }
+      // 401/403 just means no org scope — fall through with the user only.
+    } catch (e) {
+      return res.status(500).json({ error: 'GitHub unreachable: ' + e.message });
+    }
+    res.json({ owners });
+  });
+
+  // Create a new GitHub repo under the given owner (user or org). Body:
+  //   { owner?, name, description?, private?:true, autoInit?:false }
+  // If `owner` is omitted or equals the account's login, the repo is created
+  // under the user via POST /user/repos. Otherwise it's POST /orgs/:org/repos.
+  app.post('/api/github/accounts/:id/repos', async (req, res) => {
+    const acct = getGitHubAccountMeta(req.params.id);
+    if (!acct) return res.status(404).json({ error: 'Account not found' });
+    const token = getGitHubAccountToken(req.params.id);
+    if (!token) return res.status(400).json({ error: 'Token unavailable' });
+    const body = req.body || {};
+    const name = String(body.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Repo name is required' });
+    // GitHub allows letters, digits, hyphens, underscores, periods. Reject
+    // anything else up front rather than relying on the API error.
+    if (!/^[A-Za-z0-9._-]+$/.test(name)) {
+      return res.status(400).json({ error: 'Repo name may only contain letters, digits, "-", "_", "."' });
+    }
+    const owner = String(body.owner || '').trim() || acct.login;
+    const isUser = owner.toLowerCase() === String(acct.login).toLowerCase();
+    const url = isUser ? 'https://api.github.com/user/repos' : 'https://api.github.com/orgs/' + encodeURIComponent(owner) + '/repos';
+    const payload = {
+      name,
+      description: String(body.description || '').slice(0, 350),
+      private:     body.private !== false,                  // default to PRIVATE — safer for app-created repos
+      auto_init:   body.autoInit === true,                  // off by default so we don't clobber a local repo on first push
+      has_issues:  body.hasIssues !== false,
+      has_wiki:    body.hasWiki !== false,
+    };
+    let r, data;
+    try {
+      r = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer ' + token,
+          'Accept': 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'User-Agent': 'fauna-app',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+      data = await r.json().catch(() => ({}));
+    } catch (e) {
+      return res.status(500).json({ error: 'GitHub unreachable: ' + e.message });
+    }
+    if (!r.ok) {
+      const msg = (data && (data.message || data.errors?.[0]?.message)) || ('HTTP ' + r.status);
+      return res.status(r.status === 422 ? 409 : (r.status >= 400 && r.status < 500 ? r.status : 502))
+                .json({ error: msg });
+    }
+    res.status(201).json({
+      ok: true,
+      repo:          data.full_name,           // "owner/name"
+      htmlUrl:       data.html_url,
+      cloneUrl:      data.clone_url,
+      defaultBranch: data.default_branch || null,
+      private:       !!data.private,
+    });
+  });
+
   // ── Per-project: list all git targets with their link + status ──────────
 
   app.get('/api/projects/:id/github', async (req, res) => {

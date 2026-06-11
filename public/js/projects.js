@@ -3228,15 +3228,32 @@ async function linkGitHubAccountFlow(sourceId) {
     var cached = _ghTargetsCache[proj.id];
     var target = cached && (cached.targets || []).find(function(t) { return t.sourceId === sourceId; });
     var existing = (target && target.link) || {};
-    var defaultRepo = existing.repo || (account.login + '/' +
-      (target && target.label ? target.label : (proj.name || 'repo'))
-        .toLowerCase().replace(/[^a-z0-9._-]+/g, '-'));
-    var repo = window.prompt('Repository (owner/name) for ' + (target ? target.label : sourceId) + ':', defaultRepo);
-    if (!repo) return;
-    repo = repo.trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '');
-    if (!/^[^\/\s]+\/[^\/\s]+$/.test(repo)) { _showToast('Repo must be in the form "owner/name"', true); return; }
-    var branch = window.prompt('Default branch (leave blank for current):', existing.defaultBranch || '');
-    var body = { accountId: account.id, repo: repo, defaultBranch: branch || null };
+    var defaultName = (target && target.label ? target.label : (proj.name || 'repo'))
+      .toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
+    // Mode selection: link to an existing repo, or create a brand new one on
+    // GitHub under this account (user or one of its orgs). The Esc / cancel
+    // path returns null and we just bail.
+    var choice = window.prompt(
+      'How should we link "' + (target ? target.label : sourceId) + '"?\n\n' +
+      '  • Type an existing repo as "owner/name"\n' +
+      '  • Type "new" to create a new repo on GitHub\n',
+      existing.repo || (account.login + '/' + defaultName)
+    );
+    if (!choice) return;
+    choice = choice.trim();
+    var repo, defaultBranch = existing.defaultBranch || null;
+    if (choice.toLowerCase() === 'new' || choice.toLowerCase() === 'create') {
+      var created = await _createGitHubRepoFlow(account, defaultName);
+      if (!created) return;
+      repo = created.repo;
+      defaultBranch = created.defaultBranch || defaultBranch;
+    } else {
+      repo = choice.replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '');
+      if (!/^[^\/\s]+\/[^\/\s]+$/.test(repo)) { _showToast('Repo must be in the form "owner/name"', true); return; }
+      var branch = window.prompt('Default branch (leave blank for current):', defaultBranch || '');
+      defaultBranch = branch ? branch.trim() : defaultBranch;
+    }
+    var body = { accountId: account.id, repo: repo, defaultBranch: defaultBranch };
     var r = await fetch('/api/projects/' + encodeURIComponent(proj.id) + '/github/' + encodeURIComponent(sourceId), {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -3247,6 +3264,67 @@ async function linkGitHubAccountFlow(sourceId) {
     delete _ghTargetsCache[proj.id];
     await _refreshProject(proj.id);
   } catch (e) { _showToast('Link failed: ' + e.message, true); }
+}
+
+/**
+ * Walk the user through creating a new repo on GitHub. Loads the owners list
+ * for the account (user + any orgs), then collects name / visibility /
+ * description. Returns { repo:'owner/name', defaultBranch, htmlUrl } or null
+ * if the user cancelled.
+ */
+async function _createGitHubRepoFlow(account, suggestedName) {
+  // 1. Discover the owners we can publish under.
+  var ownersResp = await fetch('/api/github/accounts/' + encodeURIComponent(account.id) + '/owners');
+  if (!ownersResp.ok) {
+    _showToast('Could not load owners for @' + account.login, true);
+    return null;
+  }
+  var owners = (await ownersResp.json()).owners || [];
+  if (!owners.length) owners = [{ login: account.login, type: 'User' }];
+
+  // 2. Pick the owner. If there's only one we skip the prompt.
+  var owner = owners[0].login;
+  if (owners.length > 1) {
+    var list = owners.map(function(o, i) { return (i + 1) + '. ' + o.login + (o.type === 'Organization' ? '  (org)' : '  (you)'); }).join('\n');
+    var pick = window.prompt('Owner for the new repo?\n\n' + list + '\n\nEnter the number or login:', '1');
+    if (!pick) return null;
+    pick = pick.trim();
+    var byNum = parseInt(pick, 10);
+    if (!isNaN(byNum) && owners[byNum - 1]) owner = owners[byNum - 1].login;
+    else {
+      var match = owners.find(function(o) { return o.login.toLowerCase() === pick.toLowerCase(); });
+      if (!match) { _showToast('Unknown owner: ' + pick, true); return null; }
+      owner = match.login;
+    }
+  }
+
+  // 3. Name + visibility + description.
+  var name = window.prompt('New repo name under ' + owner + ':', suggestedName);
+  if (!name) return null;
+  name = name.trim();
+  var vis = window.prompt('Visibility — type "private" or "public":', 'private');
+  if (!vis) return null;
+  var isPrivate = vis.trim().toLowerCase() !== 'public';
+  var description = window.prompt('Description (optional):', '') || '';
+
+  // 4. Create.
+  var r = await fetch('/api/github/accounts/' + encodeURIComponent(account.id) + '/repos', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      owner: owner,
+      name: name,
+      description: description,
+      private: isPrivate,
+      autoInit: false,    // never auto-init — the local repo will be pushed up
+    }),
+  });
+  var data = null; try { data = await r.json(); } catch (_) {}
+  if (!r.ok) {
+    _showToast('Create failed: ' + ((data && data.error) || ('HTTP ' + r.status)), true);
+    return null;
+  }
+  _showToast('Created ' + data.repo + ' (' + (data.private ? 'private' : 'public') + ')');
+  return data;
 }
 
 async function unlinkGitHubAccount(projId, sourceId) {
