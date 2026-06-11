@@ -470,15 +470,47 @@ export function registerGitHubRoutes(app, deps) {
   }
 
   // Return the subset of `paths` that git considers ignored. Implemented via
-  // `git check-ignore -q --` on each path: exit 0 means ignored, exit 1
-  // means not ignored, exit 128 is an error. `-q` keeps stderr quiet so we
-  // don't pollute logs with redundant info.
+  // `git check-ignore -v --no-index --` on each path: exit 0 means matched
+  // (ignored), exit 1 means not matched, exit 128 is an error. We use
+  // `--no-index` so the check is purely against .gitignore rules and isn't
+  // affected by whether the path is tracked / in the index. Without it,
+  // tracked paths report exit 1 even when an ignore rule exists, and
+  // directories with trailing slashes can produce inconsistent results.
   async function _detectIgnoredPaths(cwd, paths) {
     if (!paths || !paths.length) return [];
+    // Strip trailing slashes — `git status -z` reports untracked dirs as
+    // `dirname/` and check-ignore can be picky about that.
+    const norm = (p) => p.replace(/\/+$/, '');
     const checks = await Promise.all(paths.map(p =>
-      _runGit(cwd, ['check-ignore', '-q', '--', p]).then(r => ({ p, ignored: r.code === 0 }))
+      _runGit(cwd, ['check-ignore', '--no-index', '-q', '--', norm(p)])
+        .then(r => ({ p, ignored: r.code === 0 }))
     ));
     return checks.filter(c => c.ignored).map(c => c.p);
+  }
+
+  // Parse `git add`'s "The following paths are ignored …" error output to
+  // recover the ignored path list when our pre-flight missed them. The error
+  // format (stable across git versions) is:
+  //   The following paths are ignored by one of your .gitignore files:
+  //   path/one
+  //   path/two
+  //   hint: Use -f if you really want to add them.
+  //   …
+  // Lines after the header up to the first `hint:` (or blank) are paths.
+  function _parseIgnoredPathsFromAddStderr(stderr) {
+    const s = String(stderr || '');
+    const headerRe = /paths are ignored by one of your \.gitignore files:\s*\n/i;
+    const m = s.match(headerRe);
+    if (!m) return [];
+    const tail = s.slice(m.index + m[0].length);
+    const out = [];
+    for (const raw of tail.split('\n')) {
+      const line = raw.trim();
+      if (!line) break;
+      if (/^hint:/i.test(line)) break;
+      out.push(line);
+    }
+    return out;
   }
 
   // ── File-level: status detail, stage, unstage, discard, diff ────────────
@@ -509,7 +541,16 @@ export function registerGitHubRoutes(app, deps) {
       });
     }
     const r = await _runGit(cwd, ['add', '--', ...paths]);
-    if (!r.ok) return res.status(500).json({ error: 'git add failed: ' + (_redact(r.stderr) || 'unknown'), stderr: _redact(r.stderr) });
+    if (!r.ok) {
+      const fromErr = _parseIgnoredPathsFromAddStderr(r.stderr);
+      if (fromErr.length) {
+        return res.status(400).json({
+          error: 'Selected ignored by .gitignore: ' + fromErr.join(', ') + '. Unselect those files (or remove them from .gitignore) and try again.',
+          ignoredPaths: fromErr,
+        });
+      }
+      return res.status(500).json({ error: 'git add failed: ' + (_redact(r.stderr) || 'unknown'), stderr: _redact(r.stderr) });
+    }
     res.json({ ok: true, status: await _gitStatus(cwd) });
   });
 
@@ -775,7 +816,20 @@ export function registerGitHubRoutes(app, deps) {
         });
       }
       const addR = await _runGit(cwd, ['add', '--', ...paths]);
-      if (!addR.ok) return res.status(500).json({ error: 'git add failed: ' + (_redact(addR.stderr) || 'unknown'), stderr: _redact(addR.stderr) });
+      if (!addR.ok) {
+        // Last-resort: parse git add's "paths are ignored" error and turn
+        // it into the same structured 400 response the pre-flight would
+        // have produced. This covers cases where check-ignore disagreed
+        // with git add (case-folding, trailing-slash quirks, etc.).
+        const fromErr = _parseIgnoredPathsFromAddStderr(addR.stderr);
+        if (fromErr.length) {
+          return res.status(400).json({
+            error: 'Selected ignored by .gitignore: ' + fromErr.join(', ') + '. Unselect those files (or remove them from .gitignore) and try again.',
+            ignoredPaths: fromErr,
+          });
+        }
+        return res.status(500).json({ error: 'git add failed: ' + (_redact(addR.stderr) || 'unknown'), stderr: _redact(addR.stderr) });
+      }
     } else if (body.stageAll !== false) {
       // Stage-all path: git add -A skips ignored files automatically.
       const addR = await _runGit(cwd, ['add', '-A']);
