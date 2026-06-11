@@ -1015,11 +1015,17 @@ function _buildConversationExport(conv) {
       enableDynamicWidgets: !!state.enableDynamicWidgets,
       autoCompact: state.autoCompact !== false,
     } : null,
-    messages: messages.map(function(m, i) {
+    messages: messages.reduce(function(acc, m, i) {
+      // Drop auto-injected system control nudges that get persisted with
+      // role:'user'. These are never the user's words — they're things
+      // like "[System: the plan is not yet complete. Next step: …]" or
+      // continuation pokes from the runtime. They make exports look like
+      // the user said weird system-y things they never said.
+      if (m.role === 'user' && _isSystemControlMessage(m.content)) return acc;
       var entry = {
         index: i,
         role: m.role,
-        content: m.content == null ? '' : m.content,
+        content: _sanitizeExportContent(m.role, m.content == null ? '' : m.content),
       };
       if (m.timestamp) entry.timestamp = m.timestamp;
       if (m.agentInfo) entry.agentInfo = m.agentInfo;
@@ -1031,11 +1037,43 @@ function _buildConversationExport(conv) {
         var tools = _extractToolBlocksFromContent(entry.content);
         if (tools.length) entry.tools = tools;
       }
-      return entry;
-    }),
+      acc.push(entry);
+      return acc;
+    }, []),
     clientDebugLog: (typeof _debugLogs !== 'undefined' && Array.isArray(_debugLogs)) ? _debugLogs.slice(-2000) : [],
   };
   return exported;
+}
+
+// True when a user-role message is purely a runtime control nudge (no real
+// user text). We match common prefixes used by the planner / continuation
+// loop. Anything that's just a `[System: …]` bracket with no preceding
+// user prose is treated as control noise.
+function _isSystemControlMessage(content) {
+  if (typeof content !== 'string') return false;
+  var t = content.trim();
+  if (!t) return false;
+  if (/^\[System:\s/i.test(t) && t.endsWith(']')) return true;
+  if (/^\[Browser extension snapshot\]/i.test(t)) return true;
+  return false;
+}
+
+// Strip runtime-injected preamble & postscript noise from message content so
+// the exported transcript shows what was actually said. We touch user
+// messages only — assistant output is the model's own words.
+function _sanitizeExportContent(role, content) {
+  if (role !== 'user' || typeof content !== 'string') return content;
+  var s = content;
+  // Strip the leading // Browser page: comment block + its trailing fence.
+  s = s.replace(/^```[\s\S]*?\/\/ Browser page:[\s\S]*?```\s*/m, '');
+  // Strip the bracketed "[Resolved live browser tab context — …]" note.
+  s = s.replace(/^\[Resolved live browser tab context[\s\S]*?\]\s*/m, '');
+  // Strip the trailing live-tab dump (the second triple-backtick block that
+  // starts with `// Live browser tab context`).
+  s = s.replace(/```[\s\S]*?\/\/ Live browser tab context[\s\S]*?```\s*/g, '');
+  // Strip the "[Current date and time: …]" stamp the planner appends.
+  s = s.replace(/\[Current date and time:[^\]]*\]\s*$/m, '');
+  return s.trim();
 }
 
 function exportConversation(id, e) {
