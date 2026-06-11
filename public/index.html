@@ -2603,19 +2603,36 @@ Examples:
   <div id="mdfile-modal-box">
     <div id="mdfile-modal-title"><i class="ti ti-markdown"></i> Open Markdown file</div>
     <div id="mdfile-modal-name"></div>
-    <div id="mdfile-modal-sub">Add this document to a conversation, or preview it in the artifact panel:</div>
+    <div id="mdfile-modal-sub">What would you like to do with this document?</div>
     <div id="mdfile-modal-actions">
-      <button class="panel-btn primary" style="flex:0;padding:8px 14px" onclick="mdFileChoose('new')">
-        <i class="ti ti-plus"></i> New conversation
+      <button class="mdfile-action" onclick="mdFileChoose('new')">
+        <i class="ti ti-plus"></i>
+        <span class="mdfile-action-label">New conversation</span>
+        <span class="mdfile-action-desc">Start a fresh chat with this document attached</span>
       </button>
-      <button class="panel-btn secondary" id="mdfile-current-btn" style="flex:0;padding:8px 14px" onclick="mdFileChoose('current')">
-        <i class="ti ti-message"></i> Add to current
+      <button class="mdfile-action" id="mdfile-current-btn" onclick="mdFileChoose('current')">
+        <i class="ti ti-message"></i>
+        <span class="mdfile-action-label">Add to current chat</span>
+        <span class="mdfile-action-desc">Attach to the conversation that's already open</span>
       </button>
-      <button class="panel-btn secondary" style="flex:0;padding:8px 14px" onclick="mdFileChoose('preview')">
-        <i class="ti ti-eye"></i> Preview as artifact
+      <button class="mdfile-action" id="mdfile-project-btn" onclick="mdFileChoose('project')">
+        <i class="ti ti-folder"></i>
+        <span class="mdfile-action-label">Add to a project</span>
+        <span class="mdfile-action-desc">Make it available across every chat in that project</span>
+      </button>
+      <button class="mdfile-action" onclick="mdFileChoose('preview')">
+        <i class="ti ti-eye"></i>
+        <span class="mdfile-action-label">Preview as artifact</span>
+        <span class="mdfile-action-desc">Open in the side panel without attaching</span>
       </button>
     </div>
-    <div id="mdfile-modal-recent-label">Or add to a recent conversation:</div>
+    <!-- Secondary view: project picker (shown when user clicks 'Add to project') -->
+    <div id="mdfile-modal-projects" style="display:none">
+      <div id="mdfile-modal-projects-label">Which project?</div>
+      <div id="mdfile-modal-projects-list"></div>
+      <button class="mdfile-back-btn" onclick="mdFileBackToActions()"><i class="ti ti-arrow-left"></i> Back</button>
+    </div>
+    <div id="mdfile-modal-recent-label">Or pick a recent conversation:</div>
     <div id="mdfile-modal-recent"></div>
     <div id="mdfile-modal-btns">
       <button class="panel-btn secondary" style="flex:0;padding:7px 14px" onclick="closeMdFileModal()">Cancel</button>

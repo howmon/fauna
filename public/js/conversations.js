@@ -1116,17 +1116,80 @@ function _showNextMdFile() {
       (typeof escHtml === 'function' ? escHtml(_mdFilePending.name) : _mdFilePending.name);
   }
 
-  // Disable "Add to current" when there is no active conversation.
+  // Action cards use the native :disabled attribute (styles in CSS) — no
+  // inline opacity/pointer-events fiddling needed.
   var curBtn = document.getElementById('mdfile-current-btn');
   if (curBtn) {
     var hasCurrent = !!(state.currentId && getConv(state.currentId));
     curBtn.disabled = !hasCurrent;
-    curBtn.style.opacity = hasCurrent ? '' : '0.5';
-    curBtn.style.cursor = hasCurrent ? '' : 'not-allowed';
+  }
+  // 'Add to project' is only useful when a project exists AND the file lives
+  // on disk (project sources are paths, not in-memory blobs).
+  var projBtn = document.getElementById('mdfile-project-btn');
+  if (projBtn) {
+    var hasProjects = !!(state.projects && state.projects.length);
+    var hasPath = !!(_mdFilePending && _mdFilePending.path);
+    projBtn.disabled = !hasProjects || !hasPath;
+    projBtn.title = !hasPath
+      ? 'Project sources need a file on disk (this one was pasted/dropped without a path).'
+      : (!hasProjects ? 'Create a project first.' : 'Add to a project so every chat can see it.');
   }
 
+  // Always start on the primary action grid, not the project sub-view.
+  _mdFileShowActions();
   _renderMdFileRecent();
   modal.classList.add('show');
+}
+
+// Toggle the two sub-views inside the modal: primary actions, or project picker.
+function _mdFileShowActions() {
+  var actions = document.getElementById('mdfile-modal-actions');
+  var projects = document.getElementById('mdfile-modal-projects');
+  var recentLbl = document.getElementById('mdfile-modal-recent-label');
+  var recent = document.getElementById('mdfile-modal-recent');
+  if (actions)  actions.style.display = '';
+  if (projects) projects.style.display = 'none';
+  if (recentLbl) recentLbl.style.display = '';
+  if (recent) recent.style.display = '';
+}
+
+function _mdFileShowProjects() {
+  var actions = document.getElementById('mdfile-modal-actions');
+  var projects = document.getElementById('mdfile-modal-projects');
+  var recentLbl = document.getElementById('mdfile-modal-recent-label');
+  var recent = document.getElementById('mdfile-modal-recent');
+  if (actions)  actions.style.display = 'none';
+  if (recentLbl) recentLbl.style.display = 'none';
+  if (recent) recent.style.display = 'none';
+  if (projects) projects.style.display = '';
+  _renderMdFileProjects();
+}
+
+function mdFileBackToActions() { _mdFileShowActions(); }
+
+function _renderMdFileProjects() {
+  var list = document.getElementById('mdfile-modal-projects-list');
+  if (!list) return;
+  var projs = (state.projects || []).slice().sort(function(a, b) {
+    var au = a.updatedAt || a.createdAt || 0;
+    var bu = b.updatedAt || b.createdAt || 0;
+    return bu - au;
+  });
+  if (!projs.length) {
+    list.innerHTML = '<div style="font-size:12px;color:var(--fau-text-dim);padding:8px 4px">No projects yet. Create one from the sidebar first.</div>';
+    return;
+  }
+  list.innerHTML = projs.map(function(p) {
+    var name = typeof escHtml === 'function' ? escHtml(p.name || 'Untitled project') : (p.name || 'Untitled project');
+    var srcCount = (p.sources || []).length;
+    var sub = srcCount + ' ' + (srcCount === 1 ? 'source' : 'sources');
+    return '<button class="mdfile-project-item" onclick="mdFileChoose(\'project-pick\',\'' +
+      p.id + '\')">' +
+      '<i class="ti ti-folder"></i>' +
+      '<span class="mdfile-project-name">' + name + '</span>' +
+      '<span class="mdfile-project-sub">' + sub + '</span>' +
+    '</button>';
+  }).join('');
 }
 
 function _renderMdFileRecent() {
@@ -1159,6 +1222,12 @@ function closeMdFileModal() {
 function mdFileChoose(target, convId) {
   var payload = _mdFilePending;
   if (!payload) { closeMdFileModal(); return; }
+
+  // 'project' is the entry point — flip the modal to the project picker
+  // sub-view without consuming the pending file. The actual add happens
+  // on 'project-pick'.
+  if (target === 'project') { _mdFileShowProjects(); return; }
+
   _mdFilePending = null;
 
   if (target === 'preview') {
@@ -1169,6 +1238,9 @@ function mdFileChoose(target, convId) {
       newConversation();
     }
     _previewMdFile(payload);
+  } else if (target === 'project-pick') {
+    // convId carries the projectId in this branch.
+    _addMdFileToProject(payload, convId);
   } else {
     if (target === 'new') {
       if (typeof newConversation === 'function') newConversation();
@@ -1187,6 +1259,36 @@ function mdFileChoose(target, convId) {
     _showNextMdFile();
   } else {
     closeMdFileModal();
+  }
+}
+
+// Add the dropped/opened markdown file to a project as a local source.
+// Project sources are paths on disk — if the file was pasted into Fauna
+// without ever touching disk (no payload.path), there's nothing to point at,
+// so the button is disabled in _showNextMdFile().
+async function _addMdFileToProject(payload, projectId) {
+  if (!payload || !projectId) return;
+  if (!payload.path) {
+    if (typeof showToast === 'function') showToast('Cannot add — no file path available', true);
+    return;
+  }
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(projectId) + '/sources', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'local', path: payload.path, name: payload.name || undefined }),
+    });
+    if (!r.ok) {
+      var err = await r.json().catch(function() { return {}; });
+      throw new Error(err.error || ('HTTP ' + r.status));
+    }
+    var proj = (state.projects || []).find(function(p) { return p.id === projectId; });
+    var projName = proj && proj.name ? proj.name : 'project';
+    if (typeof showToast === 'function') showToast('Added ' + (payload.name || 'file') + ' to ' + projName);
+    // Refresh project state so the new source shows up in settings.
+    if (typeof loadProjects === 'function') { try { await loadProjects(); } catch (_) {} }
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('Add to project failed: ' + (e && e.message), true);
   }
 }
 
@@ -1235,4 +1337,5 @@ if (typeof window !== 'undefined') {
   window.handleIncomingMdFile = handleIncomingMdFile;
   window.closeMdFileModal = closeMdFileModal;
   window.mdFileChoose = mdFileChoose;
+  window.mdFileBackToActions = mdFileBackToActions;
 }

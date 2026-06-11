@@ -2225,7 +2225,48 @@ body.is-resizing webview { pointer-events: none !important; }
 }
 #mdfile-modal-sub, #mdfile-modal-recent-label { font-size: 12px; color: var(--fau-text-dim); }
 #mdfile-modal-recent-label { margin-top: 4px; }
-#mdfile-modal-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Action cards — two-column grid, each card is icon + label + one-line desc */
+#mdfile-modal-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.mdfile-action {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  text-align: left; background: var(--fau-surface2);
+  border: 1px solid var(--fau-border); color: var(--fau-text);
+  border-radius: 8px; padding: 12px 14px;
+  font-family: var(--font); cursor: pointer; transition: all .15s;
+}
+.mdfile-action:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-dim, var(--fau-surface));
+}
+.mdfile-action:disabled { opacity: .45; cursor: not-allowed; }
+.mdfile-action > i { font-size: 18px; color: var(--accent); margin-bottom: 2px; }
+.mdfile-action-label { font-size: 13px; font-weight: 600; }
+.mdfile-action-desc { font-size: 11.5px; color: var(--fau-text-dim); line-height: 1.35; }
+
+/* Project picker (secondary view) */
+#mdfile-modal-projects-label { font-size: 12px; color: var(--fau-text-dim); }
+#mdfile-modal-projects-list {
+  display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto;
+}
+.mdfile-project-item {
+  display: flex; align-items: center; gap: 8px; text-align: left;
+  background: var(--fau-surface2); border: 1px solid var(--fau-border);
+  color: var(--fau-text); border-radius: 7px; padding: 9px 12px;
+  font-size: 13px; font-family: var(--font); cursor: pointer; width: 100%;
+  transition: all .15s;
+}
+.mdfile-project-item:hover { border-color: var(--accent); background: var(--fau-surface); }
+.mdfile-project-item .ti { color: var(--fau-text-dim); flex: 0 0 auto; }
+.mdfile-project-item .mdfile-project-name { flex: 1; font-weight: 500; }
+.mdfile-project-item .mdfile-project-sub { font-size: 11px; color: var(--fau-text-dim); }
+.mdfile-back-btn {
+  align-self: flex-start; background: transparent; border: none;
+  color: var(--fau-text-dim); font-size: 12px; font-family: var(--font);
+  cursor: pointer; padding: 4px 0; display: inline-flex; align-items: center; gap: 4px;
+}
+.mdfile-back-btn:hover { color: var(--fau-text); }
+
 #mdfile-modal-recent { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
 .mdfile-recent-item {
   display: flex; align-items: center; gap: 8px; text-align: left;
