@@ -2787,7 +2787,6 @@ function _renderGitHubSection(proj) {
   setTimeout(function() { _refreshGitHubSection(proj.id); }, 0);
   return host;
 }
-
 function _renderGitTargetsBody(projId) {
   var cached = _ghTargetsCache[projId];
   if (!cached) {
@@ -3269,12 +3268,46 @@ async function _refreshGitHubSection(projId) {
     var host = document.getElementById('gh-section-' + projId);
     if (!host) return;
     var proj = _activeProject();
-    if (proj && proj.id === projId) {
-      // Replace only the body to avoid wiping the section header.
-      var headerHtml = host.querySelector('.gh-section-header').outerHTML;
-      host.innerHTML = headerHtml + _renderGitTargetsBody(projId);
+    if (!proj || proj.id !== projId) return;
+    // Replace only the body to avoid wiping the section header. If the
+    // header isn't there for some reason (DOM mutated by another renderer),
+    // fall back to re-rendering the whole section so we never end up in a
+    // state where the cache is fresh but the DOM still shows old data.
+    var headerEl = host.querySelector('.gh-section-header');
+    if (headerEl) {
+      host.innerHTML = headerEl.outerHTML + _renderGitTargetsBody(projId);
+    } else {
+      host.outerHTML = _renderGitHubSection(proj);
     }
-  } catch (_) { /* silent — UI shows the cached state */ }
+    _ensureGitHubSectionPolling(projId);
+  } catch (e) {
+    // Don't swallow silently — at least log so the devtools console has a
+    // trail when refresh fails mid-op.
+    console.warn('[projects] gh refresh failed:', e && e.message);
+  }
+}
+
+// Lightweight polling: while the GitHub section is mounted in the DOM,
+// re-fetch status every few seconds so external changes (terminal commits,
+// IDE saves, dev-server file rewrites, another window's git ops) catch up
+// without the user having to leave settings and come back.
+var _ghPollTimers = {};
+function _ensureGitHubSectionPolling(projId) {
+  if (_ghPollTimers[projId]) return;
+  _ghPollTimers[projId] = setInterval(function() {
+    var host = document.getElementById('gh-section-' + projId);
+    if (!host) {
+      clearInterval(_ghPollTimers[projId]);
+      delete _ghPollTimers[projId];
+      return;
+    }
+    // Only refresh when the section is actually visible — avoids hammering
+    // git when the user has scrolled away or collapsed settings.
+    var rect = host.getBoundingClientRect();
+    var visible = rect.bottom > 0 && rect.top < (window.innerHeight || document.documentElement.clientHeight);
+    if (!visible) return;
+    _refreshGitHubSection(projId);
+  }, 4000);
 }
 
 /**
