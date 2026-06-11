@@ -1,4 +1,12 @@
-// ── GitHub Routes — account management + per-project git operations ───────
+// ── GitHub Routes — account management + per-source git operations ────────
+//
+// A project can have multiple git-capable "targets":
+//   • Its own rootPath (if it's a git repo) — addressed as sourceId "__root".
+//   • Any local source whose `path` itself contains a `.git` directory.
+//
+// Each target gets its own GitHub link (account + repo + defaultBranch), so a
+// project that mixes repos from different owners or accounts can commit each
+// one with the right credentials.
 //
 // Account endpoints (global, shared across projects):
 //   GET    /api/github/accounts              — list metadata
@@ -6,20 +14,19 @@
 //   POST   /api/github/accounts/:id/test     — re-validate token
 //   DELETE /api/github/accounts/:id          — remove account + token
 //
-// Per-project endpoints (require a linked account on the project):
-//   GET    /api/projects/:id/github          — link state + git status
-//   PUT    /api/projects/:id/github          — set link (body: { accountId, repo, defaultBranch })
-//   DELETE /api/projects/:id/github          — unlink
-//   POST   /api/projects/:id/github/commit   — stage + commit (body: { message })
-//   POST   /api/projects/:id/github/pull     — git pull
-//   POST   /api/projects/:id/github/push     — git push
-//   POST   /api/projects/:id/github/sync     — git pull --rebase + push
+// Per-project endpoints:
+//   GET    /api/projects/:id/github                      — list all git targets + link state + status
+//   PUT    /api/projects/:id/github/:sourceId            — set link (body: { accountId, repo, defaultBranch })
+//   DELETE /api/projects/:id/github/:sourceId            — unlink
+//   POST   /api/projects/:id/github/:sourceId/commit     — stage + commit (body: { message })
+//   POST   /api/projects/:id/github/:sourceId/pull       — git pull
+//   POST   /api/projects/:id/github/:sourceId/push       — git push
+//   POST   /api/projects/:id/github/:sourceId/sync       — git pull --rebase + push
 //
 // SECURITY: Tokens are NEVER written to .git/config. For push/pull we set the
-// remote URL inline via `git -c remote.<name>.pushurl=<authenticated-url>` so
-// the credential lives only inside the spawned process's argv for the
-// duration of the call. We also set GIT_TERMINAL_PROMPT=0 to fail-fast
-// instead of hanging on a hidden credential prompt.
+// remote URL inline via the spawn argv so the credential lives only inside
+// the spawned process for the duration of the call. We also set
+// GIT_TERMINAL_PROMPT=0 to fail-fast instead of hanging on a hidden prompt.
 
 import { spawn } from 'child_process';
 import fs   from 'fs';
@@ -27,10 +34,8 @@ import path from 'path';
 
 const GIT_OP_TIMEOUT_MS = 120000;
 
-/**
- * Run `git -C <cwd> <args>` with the given env additions. Returns
- * { ok, code, stdout, stderr }. Never throws — callers inspect the result.
- */
+const ROOT_SOURCE_ID = '__root';
+
 function _runGit(cwd, args, env = {}) {
   return new Promise((resolve) => {
     let stdout = '';
@@ -68,27 +73,15 @@ function _isGitRepo(cwd) {
   } catch (_) { return false; }
 }
 
-/**
- * Build an HTTPS clone URL that embeds a PAT for one-shot use. The
- * `x-access-token` username is the canonical form GitHub accepts for PATs.
- */
 function _authenticatedUrl(repo, token) {
   const safeRepo = String(repo || '').replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '');
   return 'https://x-access-token:' + encodeURIComponent(token) + '@github.com/' + safeRepo + '.git';
 }
 
-/**
- * Redact any embedded `x-access-token:<token>@` from log lines before they
- * reach the renderer.
- */
 function _redact(s) {
   return String(s || '').replace(/x-access-token:[^@\s]+@/g, 'x-access-token:***@');
 }
 
-/**
- * Collect current git status for a project's rootPath: branch, ahead/behind,
- * dirty file count. Always returns a result — never throws.
- */
 async function _gitStatus(cwd) {
   if (!_isGitRepo(cwd)) {
     return { isRepo: false, branch: null, ahead: 0, behind: 0, dirty: 0, lines: [] };
@@ -117,16 +110,38 @@ async function _gitStatus(cwd) {
   return { isRepo: true, branch, ahead, behind, dirty, lines };
 }
 
+/**
+ * Enumerate the git-capable targets for a project. The project's rootPath is
+ * included as a virtual source with id "__root" so the per-source link map
+ * can store its link there. Local sources whose own path is a git repo are
+ * each listed separately (deduped against rootPath).
+ */
+function _enumerateTargets(proj) {
+  const targets = [];
+  const seen = new Set();
+  const rootPath = (proj.rootPath || '').trim();
+  if (rootPath && _isGitRepo(rootPath)) {
+    targets.push({ sourceId: ROOT_SOURCE_ID, label: 'Project folder', cwd: rootPath, kind: 'root' });
+    seen.add(rootPath);
+  }
+  for (const s of (proj.sources || [])) {
+    if (s.type !== 'local' || !s.path) continue;
+    if (seen.has(s.path)) continue;
+    if (!_isGitRepo(s.path)) continue;
+    targets.push({ sourceId: s.id, label: s.name || s.path, cwd: s.path, kind: 'source' });
+    seen.add(s.path);
+  }
+  return targets;
+}
+
 export function registerGitHubRoutes(app, deps) {
   const {
-    // GitHub account store
     listGitHubAccounts,
     getGitHubAccountMeta,
     addGitHubAccount,
     testGitHubAccount,
     removeGitHubAccount,
     getGitHubAccountToken,
-    // Project store
     getProject,
     updateProject,
   } = deps;
@@ -142,9 +157,7 @@ export function registerGitHubRoutes(app, deps) {
     try {
       const acct = await addGitHubAccount(req.body || {});
       res.status(201).json(acct);
-    } catch (e) {
-      res.status(400).json({ error: e.message });
-    }
+    } catch (e) { res.status(400).json({ error: e.message }); }
   });
 
   app.post('/api/github/accounts/:id/test', async (req, res) => {
@@ -152,9 +165,7 @@ export function registerGitHubRoutes(app, deps) {
       const acct = await testGitHubAccount(req.params.id);
       if (!acct) return res.status(404).json({ error: 'Account not found' });
       res.json(acct);
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   app.delete('/api/github/accounts/:id', (req, res) => {
@@ -165,34 +176,49 @@ export function registerGitHubRoutes(app, deps) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // ── Per-project link + git ops ──────────────────────────────────────────
+  // ── Per-project: list all git targets with their link + status ──────────
 
-  // GET link state + git status (no token resolution required).
   app.get('/api/projects/:id/github', async (req, res) => {
     try {
       const proj = getProject(req.params.id);
       if (!proj) return res.status(404).json({ error: 'Project not found' });
-      const link = proj.githubIntegration || null;
-      const account = link?.accountId ? getGitHubAccountMeta(link.accountId) : null;
-      const status = await _gitStatus(proj.rootPath || '');
+      const links = proj.githubIntegrations || {};
+      const targets = _enumerateTargets(proj);
+      // Surface orphan links — entries that point to a source no longer
+      // present — so the UI can offer to clean them up.
+      const targetIds = new Set(targets.map(t => t.sourceId));
+      const orphans = Object.keys(links).filter(k => !targetIds.has(k));
+      const statuses = await Promise.all(targets.map(t => _gitStatus(t.cwd)));
+      const enriched = targets.map((t, i) => {
+        const link = links[t.sourceId] || null;
+        const account = link?.accountId ? getGitHubAccountMeta(link.accountId) : null;
+        return { ...t, link, account, status: statuses[i] };
+      });
       res.json({
-        link,
-        account,
-        status,
         rootPath: proj.rootPath || null,
+        targets: enriched,
+        orphans,
       });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // PUT link / unlink. Body: { accountId, repo, defaultBranch }
-  app.put('/api/projects/:id/github', (req, res) => {
+  // PUT link / unlink for a specific source. Body: { accountId, repo, defaultBranch }
+  app.put('/api/projects/:id/github/:sourceId', (req, res) => {
     try {
       const proj = getProject(req.params.id);
       if (!proj) return res.status(404).json({ error: 'Project not found' });
+      const sourceId = String(req.params.sourceId || '').trim();
+      if (!sourceId) return res.status(400).json({ error: 'sourceId required' });
+      const targets = _enumerateTargets(proj);
+      if (!targets.find(t => t.sourceId === sourceId)) {
+        return res.status(400).json({ error: 'Source is not a git repository (or has been removed).' });
+      }
       const body = req.body || {};
       const accountId = body.accountId ? String(body.accountId).trim() : '';
+      const links = { ...(proj.githubIntegrations || {}) };
       if (!accountId) {
-        const updated = updateProject(proj.id, { githubIntegration: null });
+        delete links[sourceId];
+        const updated = updateProject(proj.id, { githubIntegrations: links });
         return res.json({ link: null, project: updated });
       }
       const account = getGitHubAccountMeta(accountId);
@@ -203,53 +229,55 @@ export function registerGitHubRoutes(app, deps) {
       if (!repo || !/^[^\/\s]+\/[^\/\s]+$/.test(repo)) {
         return res.status(400).json({ error: 'Repo must be in the form "owner/name".' });
       }
-      const link = {
+      links[sourceId] = {
         accountId,
         repo,
         defaultBranch: String(body.defaultBranch || '').trim() || null,
         linkedAt: new Date().toISOString(),
       };
-      const updated = updateProject(proj.id, { githubIntegration: link });
-      res.json({ link, project: updated });
+      const updated = updateProject(proj.id, { githubIntegrations: links });
+      res.json({ link: links[sourceId], project: updated });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  app.delete('/api/projects/:id/github', (req, res) => {
+  app.delete('/api/projects/:id/github/:sourceId', (req, res) => {
     try {
       const proj = getProject(req.params.id);
       if (!proj) return res.status(404).json({ error: 'Project not found' });
-      const updated = updateProject(proj.id, { githubIntegration: null });
+      const sourceId = String(req.params.sourceId || '').trim();
+      const links = { ...(proj.githubIntegrations || {}) };
+      delete links[sourceId];
+      const updated = updateProject(proj.id, { githubIntegrations: links });
       res.json({ ok: true, project: updated });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // Helper: resolve { proj, cwd, link, token, branch } for a git op or send
-  // an error response. Returns null when an error has already been sent.
+  // Helper: resolve { proj, cwd, link, token, branch } for an op on
+  // (:id, :sourceId), or send an error response. Returns null on error.
   async function _resolveOpContext(req, res) {
     const proj = getProject(req.params.id);
     if (!proj) { res.status(404).json({ error: 'Project not found' }); return null; }
-    const link = proj.githubIntegration;
-    if (!link || !link.accountId) { res.status(400).json({ error: 'Project has no linked GitHub account.' }); return null; }
-    const cwd = proj.rootPath;
-    if (!cwd || !_isGitRepo(cwd)) {
-      res.status(400).json({ error: 'Project rootPath is not a git repository. Run `git init` inside it first.' });
-      return null;
-    }
+    const sourceId = String(req.params.sourceId || '').trim();
+    if (!sourceId) { res.status(400).json({ error: 'sourceId required' }); return null; }
+    const targets = _enumerateTargets(proj);
+    const target = targets.find(t => t.sourceId === sourceId);
+    if (!target) { res.status(400).json({ error: 'Source is not a git repository (or has been removed).' }); return null; }
+    const link = (proj.githubIntegrations || {})[sourceId];
+    if (!link || !link.accountId) { res.status(400).json({ error: 'This source has no linked GitHub account.' }); return null; }
     const token = getGitHubAccountToken(link.accountId);
     if (!token) { res.status(400).json({ error: 'Stored token for the linked account is missing or unreadable.' }); return null; }
-    const branchR = await _runGit(cwd, ['branch', '--show-current']);
+    const branchR = await _runGit(target.cwd, ['branch', '--show-current']);
     const branch = branchR.ok ? branchR.stdout.trim() : (link.defaultBranch || 'main');
-    return { proj, cwd, link, token, branch };
+    return { proj, target, cwd: target.cwd, link, token, branch };
   }
 
-  app.post('/api/projects/:id/github/commit', async (req, res) => {
+  app.post('/api/projects/:id/github/:sourceId/commit', async (req, res) => {
     const ctx = await _resolveOpContext(req, res);
     if (!ctx) return;
     const { cwd } = ctx;
     const message = String((req.body || {}).message || '').trim() || 'Update from Fauna';
     const addR = await _runGit(cwd, ['add', '-A']);
     if (!addR.ok) return res.status(500).json({ error: 'git add failed', stderr: _redact(addR.stderr) });
-    // Allow empty? No — fail with a clear message so the UI can tell the user.
     const stagedR = await _runGit(cwd, ['diff', '--cached', '--name-only']);
     if (!stagedR.stdout.trim()) {
       return res.status(400).json({ error: 'Nothing to commit. Working tree is clean.' });
@@ -260,19 +288,18 @@ export function registerGitHubRoutes(app, deps) {
     res.json({ ok: true, message, commit: commitR.stdout, status });
   });
 
-  app.post('/api/projects/:id/github/pull', async (req, res) => {
+  app.post('/api/projects/:id/github/:sourceId/pull', async (req, res) => {
     const ctx = await _resolveOpContext(req, res);
     if (!ctx) return;
     const { cwd, link, token, branch } = ctx;
     const url = _authenticatedUrl(link.repo, token);
-    // Use a one-shot inline remote so the token never lands in .git/config.
     const r = await _runGit(cwd, ['-c', 'credential.helper=', 'pull', url, branch, '--no-rebase']);
     const status = await _gitStatus(cwd);
     if (!r.ok) return res.status(500).json({ error: 'git pull failed', stderr: _redact(r.stderr), status });
     res.json({ ok: true, stdout: _redact(r.stdout), status });
   });
 
-  app.post('/api/projects/:id/github/push', async (req, res) => {
+  app.post('/api/projects/:id/github/:sourceId/push', async (req, res) => {
     const ctx = await _resolveOpContext(req, res);
     if (!ctx) return;
     const { cwd, link, token, branch } = ctx;
@@ -283,12 +310,11 @@ export function registerGitHubRoutes(app, deps) {
     res.json({ ok: true, stdout: _redact(r.stdout) || _redact(r.stderr), status });
   });
 
-  app.post('/api/projects/:id/github/sync', async (req, res) => {
+  app.post('/api/projects/:id/github/:sourceId/sync', async (req, res) => {
     const ctx = await _resolveOpContext(req, res);
     if (!ctx) return;
     const { cwd, link, token, branch } = ctx;
     const url = _authenticatedUrl(link.repo, token);
-    // Pull --rebase first, then push.
     const pullR = await _runGit(cwd, ['-c', 'credential.helper=', 'pull', '--rebase', url, branch]);
     if (!pullR.ok) {
       const status = await _gitStatus(cwd);

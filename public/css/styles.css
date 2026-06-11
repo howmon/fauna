@@ -8413,3 +8413,54 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 .gh-add-hint { font-size: 11px; color: var(--fau-text-dim); line-height: 1.4; }
 .gh-add-hint code { background: var(--fau-surface3, rgba(255,255,255,.06)); padding: 1px 4px; border-radius: 3px; }
 .gh-add-actions { display: flex; justify-content: flex-end; }
+
+/* ── GitHub per-source targets layout ─────────────────────────────────── */
+.gh-section { gap: 12px; }
+.gh-section-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.gh-section-title {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; color: var(--fau-text-dim);
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.gh-targets-loading {
+  display: flex; align-items: center; gap: 6px;
+  color: var(--fau-text-dim); font-size: 12px; padding: 6px 2px;
+}
+.gh-targets-loading .ti { animation: ghSpin 1s linear infinite; }
+.gh-empty-targets { padding: 8px 2px; }
+
+.gh-target {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px;
+  background: var(--fau-surface3, rgba(255,255,255,.04));
+  border: 1px solid var(--fau-border, rgba(255,255,255,.06));
+  border-radius: 6px;
+}
+.gh-target + .gh-target { margin-top: 0; }
+.gh-target-label {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 600; color: var(--fau-text, #e6edf3);
+}
+.gh-target-label .ti { font-size: 15px; color: var(--fau-text-dim); }
+.gh-target-path {
+  font-weight: 400; font-size: 11px; color: var(--fau-text-dim);
+  font-family: var(--mono, ui-monospace, monospace);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 280px;
+}
+.gh-target-meta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+}
+.gh-target-actions { display: flex; gap: 6px; }
+.gh-target-unlinked .gh-target-actions { margin-top: 2px; }
+
+.gh-orphan-note {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: #fbbf24;
+  padding: 6px 8px;
+  background: rgba(251,191,36,.08);
+  border: 1px dashed rgba(251,191,36,.35);
+  border-radius: 6px;
+}
