@@ -2977,7 +2977,13 @@ async function gitBulkOp(projId, sourceId, op, explicitFiles) {
       body: JSON.stringify({ files: files }),
     });
     var data = null; try { data = await r.json(); } catch (_) {}
-    if (!r.ok) throw new Error((data && data.error) || ('HTTP ' + r.status));
+    if (!r.ok) {
+      if (data && Array.isArray(data.ignoredPaths) && data.ignoredPaths.length) {
+        var sel = _getGhSel(projId, sid);
+        data.ignoredPaths.forEach(function(p) { sel.delete(p); });
+      }
+      throw new Error((data && data.error) || ('HTTP ' + r.status));
+    }
     if (op === 'discard' || op === 'stage' || op === 'unstage') {
       _getGhSel(projId, sid).clear();
     }
@@ -3448,7 +3454,15 @@ async function gitOp(projId, sourceId, op, opts) {
       body: JSON.stringify(opts.body || {}),
     });
     var data = null; try { data = await r.json(); } catch (_) {}
-    if (!r.ok) throw new Error((data && data.error) || ('HTTP ' + r.status));
+    if (!r.ok) {
+      // Ignored-paths errors are user-fixable: drop them from the selection
+      // so the next click works without the user having to hunt them down.
+      if (data && Array.isArray(data.ignoredPaths) && data.ignoredPaths.length) {
+        var sel = _getGhSel(projId, sourceId);
+        data.ignoredPaths.forEach(function(p) { sel.delete(p); });
+      }
+      throw new Error((data && data.error) || ('HTTP ' + r.status));
+    }
     var msg = op[0].toUpperCase() + op.slice(1) + ' ok';
     if (data && data.status) {
       var s = data.status;

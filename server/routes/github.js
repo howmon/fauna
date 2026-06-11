@@ -469,6 +469,18 @@ export function registerGitHubRoutes(app, deps) {
     return ref;
   }
 
+  // Return the subset of `paths` that git considers ignored. Implemented via
+  // `git check-ignore -q --` on each path: exit 0 means ignored, exit 1
+  // means not ignored, exit 128 is an error. `-q` keeps stderr quiet so we
+  // don't pollute logs with redundant info.
+  async function _detectIgnoredPaths(cwd, paths) {
+    if (!paths || !paths.length) return [];
+    const checks = await Promise.all(paths.map(p =>
+      _runGit(cwd, ['check-ignore', '-q', '--', p]).then(r => ({ p, ignored: r.code === 0 }))
+    ));
+    return checks.filter(c => c.ignored).map(c => c.p);
+  }
+
   // ── File-level: status detail, stage, unstage, discard, diff ────────────
 
   app.get('/api/projects/:id/github/:sourceId/status', async (req, res) => {
@@ -487,9 +499,16 @@ export function registerGitHubRoutes(app, deps) {
     try { paths = paths.map(p => _validatePathArg(String(p), cwd)); }
     catch (e) { return res.status(400).json({ error: e.message }); }
     if (!paths.length) return res.status(400).json({ error: 'files[] required' });
-    // -f for the same reason as /commit: explicit per-file selection from
-    // the UI overrides .gitignore. The user ticked the box.
-    const r = await _runGit(cwd, ['add', '-f', '--', ...paths]);
+    // Same as /commit: reject ignored paths up front with a clear,
+    // machine-readable error rather than silently force-adding.
+    const ignored = await _detectIgnoredPaths(cwd, paths);
+    if (ignored.length) {
+      return res.status(400).json({
+        error: 'Selected ignored by .gitignore: ' + ignored.join(', ') + '. Unselect those files (or remove them from .gitignore) and try again.',
+        ignoredPaths: ignored,
+      });
+    }
+    const r = await _runGit(cwd, ['add', '--', ...paths]);
     if (!r.ok) return res.status(500).json({ error: 'git add failed: ' + (_redact(r.stderr) || 'unknown'), stderr: _redact(r.stderr) });
     res.json({ ok: true, status: await _gitStatus(cwd) });
   });
@@ -744,15 +763,21 @@ export function registerGitHubRoutes(app, deps) {
       let paths;
       try { paths = body.files.map(p => _validatePathArg(String(p), cwd)); }
       catch (e) { return res.status(400).json({ error: e.message }); }
-      // -f because the user explicitly ticked these paths in the UI; if one
-      // of them is ignored by .gitignore (common for committed-once
-      // node_modules, build output the user actually wants tracked, etc.)
-      // the intent is to override the ignore, not to surface a 500.
-      const addR = await _runGit(cwd, ['add', '-f', '--', ...paths]);
+      // Pre-flight: ask git which of the selected paths are .gitignore'd
+      // and reject early with a clear, machine-readable error. We do NOT
+      // pass `-f` automatically — silently force-committing node_modules
+      // or build/ on the user's behalf is far worse than a clean rejection.
+      const ignored = await _detectIgnoredPaths(cwd, paths);
+      if (ignored.length) {
+        return res.status(400).json({
+          error: 'Selected ignored by .gitignore: ' + ignored.join(', ') + '. Unselect those files (or remove them from .gitignore) and try again.',
+          ignoredPaths: ignored,
+        });
+      }
+      const addR = await _runGit(cwd, ['add', '--', ...paths]);
       if (!addR.ok) return res.status(500).json({ error: 'git add failed: ' + (_redact(addR.stderr) || 'unknown'), stderr: _redact(addR.stderr) });
     } else if (body.stageAll !== false) {
-      // Stage-all path keeps .gitignore active — we don't want to silently
-      // sweep up every ignored artifact the user never asked for.
+      // Stage-all path: git add -A skips ignored files automatically.
       const addR = await _runGit(cwd, ['add', '-A']);
       if (!addR.ok) return res.status(500).json({ error: 'git add failed: ' + (_redact(addR.stderr) || 'unknown'), stderr: _redact(addR.stderr) });
     }
