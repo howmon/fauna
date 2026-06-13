@@ -64,13 +64,86 @@ function builderAutoName(displayName) {
 }
 
 // ── Open / close builder ─────────────────────────────────────────────────
+// The builder is a docked right rail that is always visible. "Open" means
+// expand to full width and render the wizard; "close" means collapse back
+// to the 32px strip (with chevron+label) — the panel never disappears.
+
+var BUILDER_RAIL_LS_KEY = 'fau.builderRail.width';
+var BUILDER_RAIL_DEFAULT_W = 480;
+var BUILDER_RAIL_MIN_W = 360;
+var BUILDER_RAIL_MAX_W = 720;
+var BUILDER_RAIL_COLLAPSED_W = 32;
+
+function _getBuilderRailWidth() {
+  try {
+    var v = parseInt(localStorage.getItem(BUILDER_RAIL_LS_KEY) || '', 10);
+    if (v && v >= BUILDER_RAIL_MIN_W && v <= BUILDER_RAIL_MAX_W) return v;
+  } catch (_) {}
+  return BUILDER_RAIL_DEFAULT_W;
+}
+function _setBuilderRailWidth(px) {
+  px = Math.max(BUILDER_RAIL_MIN_W, Math.min(BUILDER_RAIL_MAX_W, px | 0));
+  try { localStorage.setItem(BUILDER_RAIL_LS_KEY, String(px)); } catch (_) {}
+  document.documentElement.style.setProperty('--fau-builder-rail-w', px + 'px');
+  return px;
+}
+
+function _applyBuilderRailReservedWidth(expanded) {
+  var w = expanded ? _getBuilderRailWidth() : BUILDER_RAIL_COLLAPSED_W;
+  document.documentElement.style.setProperty('--fau-builder-rail-active-w', w + 'px');
+}
+
+// One-time init: apply saved width, render strip if panel is empty, wire
+// up the resize handle. Safe to call multiple times.
+function _initBuilderRail() {
+  var panel = document.getElementById('agent-builder-panel');
+  if (!panel || panel._railInit) return;
+  panel._railInit = true;
+  _setBuilderRailWidth(_getBuilderRailWidth());
+  _applyBuilderRailReservedWidth(panel.classList.contains('expanded'));
+
+  // Resize handle (delegated — works whether the strip or the wizard is mounted)
+  panel.addEventListener('pointerdown', function(e) {
+    var t = e.target.closest('.builder-rail-resize');
+    if (!t) return;
+    if (!panel.classList.contains('expanded')) return;
+    e.preventDefault();
+    var startX = e.clientX;
+    var startW = panel.getBoundingClientRect().width;
+    panel.classList.add('resizing');
+    document.body.style.cursor = 'col-resize';
+    function onMove(ev) {
+      // Rail is anchored to the right; dragging left grows it.
+      var dx = startX - ev.clientX;
+      var nw = _setBuilderRailWidth(startW + dx);
+      _applyBuilderRailReservedWidth(true);
+    }
+    function onUp() {
+      panel.classList.remove('resizing');
+      document.body.style.cursor = '';
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  });
+}
+
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _initBuilderRail);
+  } else {
+    _initBuilderRail();
+  }
+}
 
 async function openAgentBuilder(existingAgentName) {
   resetBuilderState();
+  _initBuilderRail();
   var panel = document.getElementById('agent-builder-panel');
   if (panel) {
-    panel.style.display = 'flex';
-    requestAnimationFrame(function() { panel.classList.add('open'); });
+    panel.classList.add('expanded');
+    _applyBuilderRailReservedWidth(true);
   }
   if (existingAgentName) {
     // Show loading state while agent data is fetched
@@ -82,10 +155,19 @@ async function openAgentBuilder(existingAgentName) {
 
 function closeAgentBuilder() {
   var panel = document.getElementById('agent-builder-panel');
-  if (panel) {
-    panel.classList.remove('open');
-    setTimeout(function() { panel.style.display = 'none'; }, 250);
-  }
+  if (!panel) return;
+  panel.classList.remove('expanded');
+  _applyBuilderRailReservedWidth(false);
+  // Restore the strip view (renderBuilderPanel replaced innerHTML with the wizard)
+  panel.innerHTML =
+    '<div class="builder-rail-resize" id="builder-rail-resize" title="Drag to resize"></div>' +
+    '<div class="builder-rail-strip" id="builder-rail-strip">' +
+      '<button class="builder-rail-toggle" onclick="openAgentBuilder()" title="Open builder"><i class="ti ti-chevron-left"></i></button>' +
+      '<div class="builder-rail-label">Builder</div>' +
+      '<div class="builder-rail-status" id="builder-rail-status">' +
+        '<div class="builder-rail-status-dot" title="No active automation"></div>' +
+      '</div>' +
+    '</div>';
 }
 
 function resetBuilderState() {
@@ -193,10 +275,11 @@ function renderBuilderPanel() {
   navHtml += '</div>';
 
   panel.innerHTML =
+    '<div class="builder-rail-resize" id="builder-rail-resize" title="Drag to resize"></div>' +
     '<div class="builder-header">' +
       '<span class="builder-title"><i class="ti ti-hammer"></i> ' + (builderState.editing ? 'Edit Agent' : 'Create Agent') + '</span>' +
       '<button class="builder-btn-icon" onclick="openAgentCodeView()" title="Code View"><i class="ti ti-code"></i></button>' +
-      '<button class="builder-close" onclick="closeAgentBuilder()"><i class="ti ti-x"></i></button>' +
+      '<button class="builder-close" onclick="closeAgentBuilder()" title="Collapse"><i class="ti ti-chevron-right"></i></button>' +
     '</div>' +
     stepsHtml +
     '<div class="builder-body">' + bodyHtml + '</div>' +

@@ -4535,16 +4535,80 @@ webview {
 .decompose-sub-desc { color: var(--fau-text-dim); }
 .decompose-sub-tokens { font-size: 10.5px; color: var(--fau-text-dim); opacity: 0.7; margin-left: auto; }
 
-/* ── Agent Builder ─────────────────────────────────────────────── */
+/* ── Agent Builder — docked right rail ─────────────────────────── */
+/* The rail is always visible. Two states:
+     • collapsed → 32px strip (vertical label + chevron)
+     • expanded  → uses --fau-builder-rail-w (default 480px), drag-resize
+   #app reserves space via padding-right driven from JS. */
 
 #agent-builder-panel {
-  position: fixed; top: 0; right: -520px; width: 520px; height: 100vh;
+  position: fixed; top: 0; right: 0; height: 100vh;
+  width: 32px;
   background: var(--fau-bg); border-left: 1px solid var(--fau-border);
-  z-index: 1000; flex-direction: column; transition: right .25s ease;
-  box-shadow: -8px 0 30px rgba(0,0,0,.3);
-  padding-top: 36px;
+  z-index: 100; display: flex; flex-direction: column;
+  transition: width .2s ease;
+  box-shadow: -2px 0 12px rgba(0,0,0,.18);
+  overflow: hidden;
 }
-#agent-builder-panel.open { right: 0; }
+#agent-builder-panel.expanded {
+  width: var(--fau-builder-rail-w, 480px);
+  box-shadow: -8px 0 30px rgba(0,0,0,.3);
+}
+#agent-builder-panel.resizing { transition: none; user-select: none; }
+#agent-builder-panel.hidden { width: 0; min-width: 0; border-left: none; box-shadow: none; }
+
+/* Rail strip — visible when collapsed, hidden when expanded. */
+.builder-rail-strip {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center;
+  padding: 12px 0; gap: 8px;
+  background: var(--fau-sidebar);
+  border-left: 1px solid var(--fau-border);
+}
+#agent-builder-panel.expanded .builder-rail-strip { display: none; }
+.builder-rail-toggle {
+  width: 26px; height: 26px; border-radius: 6px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--fau-surface2); color: var(--fau-text-muted);
+  border: 1px solid var(--fau-border); font-size: 14px;
+}
+.builder-rail-toggle:hover { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+.builder-rail-label {
+  writing-mode: vertical-rl; transform: rotate(180deg);
+  font-size: 10.5px; font-weight: 600; color: var(--fau-text-muted);
+  letter-spacing: .5px; text-transform: uppercase;
+  margin-top: 8px; user-select: none;
+}
+.builder-rail-strip:hover .builder-rail-label { color: var(--accent); }
+.builder-rail-status {
+  margin-top: auto; display: flex; flex-direction: column; align-items: center;
+  gap: 6px; padding-bottom: 8px;
+}
+.builder-rail-status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--fau-text-muted); opacity: .35;
+}
+.builder-rail-status-dot.active { background: #4ade80; opacity: 1; box-shadow: 0 0 6px rgba(74,222,128,.6); }
+
+/* Resize handle — visible when expanded. */
+.builder-rail-resize {
+  position: absolute; left: -3px; top: 0; bottom: 0; width: 7px;
+  cursor: col-resize; z-index: 11;
+}
+.builder-rail-resize::after {
+  content: ''; position: absolute; left: 3px; top: 50%; transform: translateY(-50%);
+  width: 2px; height: 32px; background: var(--fau-border); border-radius: 1px;
+  opacity: 0; transition: opacity .15s, background .15s;
+}
+.builder-rail-resize:hover::after,
+#agent-builder-panel.resizing .builder-rail-resize::after {
+  opacity: 1; background: var(--accent);
+}
+#agent-builder-panel:not(.expanded) .builder-rail-resize { display: none; }
+
+/* Reserve room in #app for the rail. */
+#app { padding-right: var(--fau-builder-rail-active-w, 32px); transition: padding-right .2s ease; }
+#app.no-rail-padding { padding-right: 0; }
 
 .builder-header {
   display: flex; align-items: center; padding: 14px 18px;
