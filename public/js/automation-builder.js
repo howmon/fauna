@@ -161,9 +161,9 @@ function _nodeMenuItems() {
   var seen = {};
   // Category groups (in display order). Any type not listed falls into "Other".
   var groups = [
-    { label: 'Flow',            types: ['trigger', 'condition', 'loop', 'delay', 'split', 'merge', 'webhook'] },
+    { label: 'Flow',            types: ['trigger', 'condition', 'loop', 'delay', 'split', 'merge', 'webhook', 'parse-urgent'] },
     { label: 'AI & Agents',     types: ['prompt', 'agent', 'code', 'openai', 'anthropic', 'groq', 'mistral', 'perplexity', 'openrouter', 'together', 'deepseek', 'xai'] },
-    { label: 'Actions',         types: ['shell', 'browser', 'figma', 'http', 'notify'] },
+    { label: 'Actions',         types: ['shell', 'browser', 'figma', 'http', 'notify', 'os-notify'] },
     { label: 'Chat & Messaging',types: ['slack', 'discord', 'teams', 'googlechat', 'mattermost', 'rocketchat', 'telegram', 'ntfy', 'pushover', 'pushbullet'] },
     { label: 'Dev & Project',   types: ['github', 'gitlab', 'jira', 'linear', 'trello', 'notion', 'airtable'] },
     { label: 'Business & Email',types: ['hubspot', 'stripe', 'sendgrid', 'mailgun', 'resend', 'twilio'] },
@@ -342,6 +342,16 @@ function _configFieldsForType(node) {
     html += _pbFieldInput(nid, 'title', 'Conversation title', config.title || '', 'e.g. Daily standup summary');
   }  if (node.type === 'delay') {
     html += _pbFieldInput(nid, 'ms', 'Delay (ms)', config.ms || '1000', 'Milliseconds to wait');
+  }
+  if (node.type === 'os-notify') {
+    html += _pbFieldInput(nid, 'title', 'Title', config.title || '', 'Auto from parse-urgent if blank');
+    html += _pbFieldTextarea(nid, 'body', 'Body', config.body || '', 'Auto from parse-urgent if blank. {{input}} ok.');
+    html += _pbFieldSelect(nid, 'onlyUrgent', 'Only fire on urgent', ['false', 'true'], String(config.onlyUrgent || 'false'));
+    html += _pbFieldSelect(nid, 'os', 'OS notification', ['true', 'false'], String(config.os == null ? 'true' : config.os));
+    html += _pbFieldSelect(nid, 'widget', 'Widget alert hub', ['true', 'false'], String(config.widget == null ? 'true' : config.widget));
+  }
+  if (node.type === 'parse-urgent') {
+    html += '<div class="pb-field-hint" style="font-size:11px;color:var(--fau-text-muted,#888);margin:4px 0 12px;">Parses upstream text for <code>HEARTBEAT_URGENT|source|summary|action</code> or <code>HEARTBEAT_OK</code>. Emits {status, source, summary, action, raw}.</div>';
   }
   if (node.type === 'browser') {
     html += _pbFieldInput(nid, 'url', 'URL', config.url || '', 'Page URL to open/interact with');

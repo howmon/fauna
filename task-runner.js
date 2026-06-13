@@ -11,6 +11,15 @@ import { toItems as _toItems, toItem as _toItem, isItemArray as _isItemArray, br
 
 const PORT = 3737;
 const _runningTasks = new Map(); // taskId → { abortController, step, startedAt }
+
+// Optional hooks injected by server.js so pipeline nodes can fire native OS
+// notifications and push to the widget alert hub without importing electron
+// or alert-hub directly from the runner.
+let _osNotifier = null;       // function(title, body)
+let _alertSinkPub = null;     // function({ id, timestamp, source, summary, action })
+
+export function setOsNotifier(fn) { _osNotifier = typeof fn === 'function' ? fn : null; }
+export function setAlertSink(fn)  { _alertSinkPub = typeof fn === 'function' ? fn : null; }
 // Per-pipeline expression context, keyed by the run's nodeOutputs object so
 // concurrent pipelines never collide. Updated synchronously at each node.
 const _exprCtxByOutputs = new WeakMap();
@@ -751,6 +760,71 @@ async function _runPipeline(task, state) {
             iteration++;
           }
           output = loopInput;
+          break;
+        }
+
+        case 'parse-urgent': {
+          // Inspect the upstream output for HEARTBEAT_URGENT|source|summary|action
+          // or HEARTBEAT_OK markers and emit a structured object downstream:
+          //   { status: 'urgent'|'ok', source, summary, action, raw }
+          // Mirrors the parser in heartbeat.js so a pipeline can replace the
+          // standalone heartbeat module. Always emits an object — downstream
+          // nodes (e.g. condition) can switch on $json.status.
+          const raw = String(input == null ? '' : input);
+          const um = raw.match(/^[\s>*-]*HEARTBEAT_URGENT\|([^|\n]*)\|([^|\n]+)(?:\|([^\n]+))?/im);
+          if (um) {
+            output = {
+              status: 'urgent',
+              source: um[1].trim(),
+              summary: um[2].trim(),
+              action: (um[3] || '').trim(),
+              raw,
+            };
+          } else {
+            output = { status: 'ok', source: '', summary: '', action: '', raw };
+          }
+          break;
+        }
+
+        case 'os-notify': {
+          // Fire a native OS notification AND publish to the widget alert
+          // hub (subject to per-call toggles). Accepts either a plain string
+          // input or a parse-urgent-shaped object.
+          let title = _interpolate(cfg.title || '', nodeOutputs);
+          let body  = _interpolate(cfg.body  || '', nodeOutputs);
+          let source = '';
+          let action = '';
+          let isUrgent = true;
+          if (input && typeof input === 'object' && 'status' in input) {
+            isUrgent = input.status === 'urgent';
+            if (!title) title = isUrgent ? '🫀 Heartbeat Alert' : 'Heartbeat OK';
+            if (!body)  body  = input.summary + (input.source ? ` (${input.source})` : '') +
+                                (input.action ? `\nSuggested: ${input.action}` : '');
+            source = input.source || '';
+            action = input.action || '';
+          } else {
+            if (!title) title = task.title || 'Automation';
+            if (!body)  body  = String(input == null ? '' : input).slice(0, 500);
+          }
+          // Respect node config toggles — onlyUrgent skips the OK case.
+          if (cfg.onlyUrgent === 'true' || cfg.onlyUrgent === true) {
+            if (!isUrgent) { output = input; break; }
+          }
+          if (cfg.os !== 'false' && cfg.os !== false && _osNotifier) {
+            try { _osNotifier(title, body); } catch (e) { console.warn('[task-runner] os-notify failed:', e?.message || e); }
+          }
+          if (cfg.widget !== 'false' && cfg.widget !== false && _alertSinkPub) {
+            try {
+              _alertSinkPub({
+                id: 'pl-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
+                timestamp: Date.now(),
+                source: source || (task.title || 'pipeline'),
+                summary: title,
+                action: action || body,
+              });
+            } catch (e) { console.warn('[task-runner] alert sink failed:', e?.message || e); }
+          }
+          output = input;
           break;
         }
 

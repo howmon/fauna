@@ -41,6 +41,8 @@ var pipelineCanvas = (function () {
     slack:     { label: 'Slack',     icon: 'ti-brand-slack',       color: '#4a154b', ports: { in: ['in'],  out: ['out'] }, credential: true },
     split:     { label: 'Split Out', icon: 'ti-arrows-split-2',    color: '#0d9488', ports: { in: ['in'],  out: ['out'] } },
     merge:     { label: 'Merge',     icon: 'ti-arrows-join-2',     color: '#7c3aed', ports: { in: ['in1', 'in2'], out: ['out'] } },
+    'parse-urgent': { label: 'Parse Alert', icon: 'ti-alert-triangle', color: '#ef4444', ports: { in: ['in'], out: ['out'] } },
+    'os-notify':    { label: 'OS Notify',   icon: 'ti-bell-ringing',  color: '#f43f5e', ports: { in: ['in'], out: ['out'] } },
   };
 
   var NODE_W = 160;

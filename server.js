@@ -14,7 +14,7 @@ import fs         from 'fs';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { createTask, getTask, getAllTasks, updateTask, deleteTask, startScheduler, stopScheduler, enableWebhook, disableWebhook, rotateWebhookToken, getTaskByWebhookToken, markWebhookFired } from './task-manager.js';
-import { runTask, pauseTask, stopTask, steerTask, isTaskRunning, subscribe } from './task-runner.js';
+import { runTask, pauseTask, stopTask, steerTask, isTaskRunning, subscribe, setOsNotifier as setTaskRunnerOsNotifier, setAlertSink as setTaskRunnerAlertSink } from './task-runner.js';
 import {
   createProject, getProject, getAllProjects, updateProject, deleteProject,
   touchProject, linkConversation, linkTask,
@@ -627,6 +627,13 @@ export function startServer(port) {
     // Push urgent heartbeat alerts to the widget panel via the alert hub.
     try { setHeartbeatAlertSink(alertHub.publish); }
     catch (e) { console.warn('[server] alert-hub wire failed:', e?.message || e); }
+    // Same hooks for the pipeline runtime — the os-notify node uses these
+    // to fire native notifications and push to the widget alert hub
+    // without importing electron/alert-hub itself.
+    try {
+      setTaskRunnerOsNotifier(internalNotifier);
+      setTaskRunnerAlertSink(alertHub.publish);
+    } catch (e) { console.warn('[server] task-runner notifier wire failed:', e?.message || e); }
     startHeartbeat(internalAICaller, internalNotifier);
     startWorkflowTimer(internalAICaller, workflowNotifier);
     startTeamsBridge(internalAICaller, workflowNotifier);
