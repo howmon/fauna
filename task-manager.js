@@ -374,7 +374,60 @@ function _migrateTask(t) {
   }
   if (!('targetConvId' in t)) t.targetConvId = null;
   if (!('pipeline' in t)) t.pipeline = null;
+  // Virtualize a pipeline for legacy cron/heartbeat tasks so they're editable
+  // in the docked builder rail like every other automation. The synthesized
+  // pipeline is NOT written back here — it only becomes persistent when the
+  // user saves a change via the builder. Meanwhile the existing scheduler
+  // keeps firing the task via the cron/heartbeat code paths, so behaviour
+  // is unchanged until the user opts in.
+  if (!t.pipeline && (t.kind === 'cron' || t.kind === 'heartbeat')) {
+    t.pipeline = _synthesizePipelineFromTask(t);
+  }
   return t;
+}
+
+// Build a minimal trigger → prompt pipeline from a pre-pipeline task's
+// fields. Used only when the user opens the builder for a legacy task.
+function _synthesizePipelineFromTask(t) {
+  const promptText = _promptTextFromActions(t.actions) || t.description || t.title || '';
+  const trigger = {
+    id: 'n1', type: 'trigger', label: 'Trigger',
+    x: 80, y: 80,
+    config: {},
+  };
+  if (t.kind === 'heartbeat' && t.targetConvId) {
+    trigger.config.subtype = 'thread-watch';
+    trigger.config.targetConvId = t.targetConvId;
+  } else if (t.schedule?.rrule) {
+    trigger.config.subtype = 'schedule';
+    trigger.config.rrule = t.schedule.rrule;
+  } else {
+    trigger.config.subtype = 'manual';
+  }
+  const promptNode = {
+    id: 'n2', type: 'prompt', label: 'Run prompt',
+    x: 300, y: 80,
+    config: { prompt: promptText },
+  };
+  return {
+    nodes: [trigger, promptNode],
+    edges: [{ from: 'n1', to: 'n2', fromPort: 'out', toPort: 'in' }],
+  };
+}
+
+function _promptTextFromActions(actions) {
+  if (!Array.isArray(actions) || !actions.length) return '';
+  // Best-effort: concatenate any string `prompt` / `text` / `instruction`
+  // fields from the action list. Older tasks store a list of objects with
+  // various shapes; pull whatever has prose.
+  const parts = [];
+  for (const a of actions) {
+    if (!a) continue;
+    if (typeof a === 'string') { parts.push(a); continue; }
+    const v = a.prompt || a.text || a.instruction || a.message || '';
+    if (v) parts.push(String(v));
+  }
+  return parts.join('\n\n');
 }
 
 function updateTask(id, updates) {
