@@ -137,6 +137,104 @@ if (typeof document !== 'undefined') {
   }
 }
 
+// ── Live execution overlay ───────────────────────────────────────────────
+// Single source of truth for "what's running right now". Subscribes once to
+// the task-events bus (populated by tasks.js's SSE listener) and:
+//   • toggles .pcv-running / .pcv-ok / .pcv-err on canvas nodes by data-nid
+//   • lights up the rail strip's status dot when any task is running
+// We mark the bus active so tasks.js keeps reconnecting SSE on error even
+// when the user never opened the Tasks panel.
+
+(function _initAutomationLive() {
+  if (typeof window === 'undefined') return;
+  if (window.__faTaskEvents) return; // already initialized (HMR / double-load)
+  window.__faTaskEvents = new EventTarget();
+  window.__faTaskEventsActive = true;
+  var runningTasks = new Set();
+
+  function _setRailDot(active) {
+    var dot = document.querySelector('#builder-rail-status .builder-rail-status-dot');
+    if (!dot) return;
+    dot.classList.toggle('active', !!active);
+    dot.title = active
+      ? (runningTasks.size + ' automation' + (runningTasks.size === 1 ? '' : 's') + ' running')
+      : 'No active automation';
+  }
+
+  function _flashNode(nodeId, cls, autoClearMs) {
+    if (!nodeId) return;
+    // Match every canvas instance (rail builder, overlay builder, etc.)
+    var els = document.querySelectorAll('.pcv-node[data-nid="' + nodeId + '"]');
+    els.forEach(function(el) {
+      el.classList.remove('pcv-running', 'pcv-ok', 'pcv-err');
+      el.classList.add(cls);
+      if (autoClearMs) {
+        setTimeout(function() {
+          // Only clear if this same class is still applied (otherwise a
+          // newer event has already updated the styling).
+          if (el.classList.contains(cls)) el.classList.remove(cls);
+        }, autoClearMs);
+      }
+    });
+  }
+
+  // When a pipeline run starts, clear any leftover ok/err highlights from
+  // the previous run so the canvas starts fresh.
+  function _clearAllNodeStates() {
+    document.querySelectorAll('.pcv-node.pcv-running, .pcv-node.pcv-ok, .pcv-node.pcv-err')
+      .forEach(function(el) { el.classList.remove('pcv-running', 'pcv-ok', 'pcv-err'); });
+  }
+
+  window.__faTaskEvents.addEventListener('task-event', function(e) {
+    var evt = e.detail || {};
+    if (evt.event === 'started') {
+      runningTasks.add(evt.taskId);
+      _setRailDot(true);
+      _clearAllNodeStates();
+    } else if (evt.event === 'completed' || evt.event === 'failed') {
+      runningTasks.delete(evt.taskId);
+      _setRailDot(runningTasks.size > 0);
+      // Mark all currently-running nodes as either ok or err so the canvas
+      // ends with a clean terminal state instead of a pulsing node.
+      document.querySelectorAll('.pcv-node.pcv-running').forEach(function(el) {
+        el.classList.remove('pcv-running');
+        el.classList.add(evt.event === 'failed' ? 'pcv-err' : 'pcv-ok');
+        setTimeout(function() {
+          if (el.classList.contains('pcv-ok') || el.classList.contains('pcv-err')) {
+            // Leave the terminal highlight on briefly so the user can see it.
+          }
+        }, 0);
+      });
+    } else if (evt.event === 'step' && evt.nodeId) {
+      // First mark any previously-running node as ok (it finished), then
+      // mark the new node as running.
+      document.querySelectorAll('.pcv-node.pcv-running').forEach(function(el) {
+        if (el.dataset.nid !== evt.nodeId) {
+          el.classList.remove('pcv-running');
+          el.classList.add('pcv-ok');
+        }
+      });
+      _flashNode(evt.nodeId, 'pcv-running', 0);
+    }
+  });
+
+  // Tasks panel owns the SSE connection. If it's never opened we still
+  // need the stream, so kick it off ourselves once on load.
+  function _bootstrapSSE() {
+    if (typeof _connectTaskSSE === 'function') {
+      try { _connectTaskSSE(); } catch (_) {}
+    } else {
+      // tasks.js not loaded yet — try again shortly.
+      setTimeout(_bootstrapSSE, 500);
+    }
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _bootstrapSSE);
+  } else {
+    _bootstrapSSE();
+  }
+})();
+
 async function openAgentBuilder(existingAgentName) {
   resetBuilderState();
   _initBuilderRail();

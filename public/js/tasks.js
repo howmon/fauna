@@ -1476,6 +1476,14 @@ function _connectTaskSSE() {
     _taskSSE.onmessage = function(e) {
       try {
         var evt = JSON.parse(e.data);
+        // Dispatch every event onto a global bus so other components (the
+        // builder rail's live-execution overlay, the strip status dot, etc.)
+        // can react without needing their own SSE connection.
+        try {
+          if (typeof window !== 'undefined' && window.__faTaskEvents) {
+            window.__faTaskEvents.dispatchEvent(new CustomEvent('task-event', { detail: evt }));
+          }
+        } catch (_) {}
         if (evt.event === 'completed' || evt.event === 'failed' || evt.event === 'started') {
           if (evt.event === 'failed' && evt.taskId) _expandedLogs.add(evt.taskId);
           fetchTasks();
@@ -1506,7 +1514,12 @@ function _connectTaskSSE() {
     };
     _taskSSE.onerror = function() {
       _disconnectTaskSSE();
-      setTimeout(function() { if (tasksPanelOpen) _connectTaskSSE(); }, 5000);
+      // Reconnect aggressively if the live-events bus has subscribers (rail
+      // overlay, strip dot) even when the tasks panel isn't open.
+      var hasGlobalSubs = (typeof window !== 'undefined' && window.__faTaskEventsActive);
+      setTimeout(function() {
+        if (tasksPanelOpen || hasGlobalSubs) _connectTaskSSE();
+      }, 5000);
     };
   } catch (_) {}
 }

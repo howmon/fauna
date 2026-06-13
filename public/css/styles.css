@@ -8243,9 +8243,33 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 .pb-field-input:focus, .pb-field-textarea:focus, .pb-field-select:focus { border-color: var(--accent); }
 
 /* Canvas node styling */
-.pcv-node { transition: box-shadow .1s; }
+.pcv-node { transition: box-shadow .1s, transform .15s; }
 .pcv-node:hover { box-shadow: 0 0 0 2px rgba(99,102,241,.5); }
 .pcv-node.pcv-selected { box-shadow: 0 0 0 3px var(--accent); }
+
+/* Live-execution states — applied by the rail's SSE listener as a pipeline
+   runs. running pulses; ok/err flash briefly then auto-clear. */
+.pcv-node.pcv-running {
+  box-shadow: 0 0 0 3px #38bdf8, 0 0 16px rgba(56,189,248,.45);
+  animation: pcv-pulse 1.2s ease-in-out infinite;
+  z-index: 5 !important;
+}
+.pcv-node.pcv-ok {
+  box-shadow: 0 0 0 3px #4ade80, 0 0 16px rgba(74,222,128,.45);
+}
+.pcv-node.pcv-err {
+  box-shadow: 0 0 0 3px #f87171, 0 0 16px rgba(248,113,113,.5);
+  animation: pcv-shake .25s ease-in-out 2;
+}
+@keyframes pcv-pulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.04); }
+}
+@keyframes pcv-shake {
+  0%, 100% { transform: translateX(0); }
+  25%      { transform: translateX(-3px); }
+  75%      { transform: translateX(3px); }
+}
 
 /* Port affordance */
 .pcv-port { transition: transform .12s, box-shadow .12s, background .12s; }
