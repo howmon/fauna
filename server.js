@@ -23,11 +23,12 @@ import {
 } from './project-manager.js';
 import { loadInstructionFiles } from './lib/instruction-files.js';
 import { runDecay } from './memory-store.js';
-import { startHeartbeat, setHeartbeatPowerSave, setHeartbeatAlertSink } from './heartbeat.js';
+import { setHeartbeatPowerSave, setHeartbeatAlertSink } from './heartbeat.js';
 import * as alertHub from './server/lib/alert-hub.js';
 import { startWorkflowTimer, setWorkflowPowerSave } from './workflow-manager.js';
 import { createWorkflow, getAllWorkflows } from './workflow-manager.js';
 import { seedDefaults } from './server/lib/seed-defaults.js';
+import { migrateHeartbeatToPipeline } from './server/lib/migrate-heartbeat.js';
 import {
   CONFIG_DIR, readSavedConfig, getGhToken, getCopilotClient,
 } from './server/copilot/auth.js';
@@ -634,7 +635,13 @@ export function startServer(port) {
       setTaskRunnerOsNotifier(internalNotifier);
       setTaskRunnerAlertSink(alertHub.publish);
     } catch (e) { console.warn('[server] task-runner notifier wire failed:', e?.message || e); }
-    startHeartbeat(internalAICaller, internalNotifier);
+    // Retire the standalone heartbeat module. On first boot after upgrade
+    // this ports any enabled heartbeat settings into a pipeline task; on
+    // subsequent boots it's a no-op (gated by the marker file). The legacy
+    // module is no longer started — the pipeline task carries the schedule
+    // and the os-notify node carries the alerts.
+    try { migrateHeartbeatToPipeline({ createTask }); }
+    catch (e) { console.warn('[server] heartbeat migration failed:', e?.message || e); }
     startWorkflowTimer(internalAICaller, workflowNotifier);
     startTeamsBridge(internalAICaller, workflowNotifier);
     // First-launch seed of sample automations. No-op once the marker file

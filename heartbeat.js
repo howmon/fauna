@@ -229,3 +229,12 @@ export function setHeartbeatAlertSink(sink) {
 export function stopHeartbeat() {
   if (_timer) { clearInterval(_timer); _timer = null; }
 }
+
+// Used by the one-shot retirement migrator to flip `enabled:false` in
+// heartbeat.json without starting the timer first.
+export function disableHeartbeat() {
+  _load();
+  _settings.enabled = false;
+  _save();
+  stopHeartbeat();
+}
