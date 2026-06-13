@@ -289,9 +289,11 @@ export function registerChatRoute(app, {
       }
 
       // Build system prompt — append project context, facts memory, context summary and browser context.
-      // For delegation (sub-agent) calls, skip heavy shared context to reduce token cost.
       // Facts are scoped to the active project (with global facts always included);
       // this prevents project A's preferences from leaking into project B.
+      // Sub-agent (delegation) calls still get the top-N GLOBAL facts so the
+      // agent remembers user-level preferences across the call boundary; we
+      // just skip project-scoped facts there to keep the delegated prompt small.
       // When the project opts into embeddings, swap in the richer profile (static + dynamic + context passages).
       let factsCtx = '';
       if (!isDelegation) {
@@ -309,18 +311,23 @@ export function registerChatRoute(app, {
           } catch (_) {
             // Fall back to flat facts on any profile error.
             factsCtx = factsForSystemPrompt({
-              limit: 20,
+              limit: 30,
               containerTag: projectContainerTag(projectId),
               includeGlobal: true,
             });
           }
         } else {
           factsCtx = factsForSystemPrompt({
-            limit: 20,
+            limit: 30,
             containerTag: projectId ? projectContainerTag(projectId) : null,
             includeGlobal: true,
           });
         }
+      } else {
+        // Delegation path: 10 globals only, no project scoping.
+        try {
+          factsCtx = factsForSystemPrompt({ limit: 10, containerTag: null, includeGlobal: true });
+        } catch (_) { factsCtx = ''; }
       }
       // Inject connected Figma file info so AI can target the right document
       let figmaFilesCtx = '';
@@ -1054,6 +1061,31 @@ export function registerChatRoute(app, {
         'fauna_get_skill',
         'fauna_list_skills',
       ]);
+      // Tools that are safe to run concurrently within a single model turn.
+      // Restricted to pure reads / searches / introspection — anything that
+      // mutates state (write_file, shell, browser nav/click, figma_execute,
+      // notifications, widget emission, image/video generation) MUST run
+      // sequentially so happens-before semantics are preserved. When the
+      // model emits N parallel-safe calls in one response they go through
+      // Promise.all instead of a serial for-loop, turning a 5×500ms read
+      // batch into a single ~500ms wall-clock window.
+      const PARALLEL_SAFE_TOOLS = new Set([
+        'fauna_read_file', 'fauna_recall', 'fauna_context_search',
+        'fauna_get_settings', 'fauna_get_agent_instructions',
+        'fauna_list_skills', 'fauna_get_skill', 'fauna_list_models',
+        'fauna_list_projects', 'fauna_list_windows', 'fauna_screen_context',
+        'fauna_ui_tree', 'fauna_stock_image_search', 'fauna_stock_image_get',
+        'fauna_list_playbook', 'fauna_load_widget_from_playbook',
+        'fauna_backlog_list', 'fauna_retrieve_output', 'fauna_doctor',
+        'fauna_list_voices', 'fauna_video_list', 'fauna_lesson_list',
+        'fauna_grep', 'fauna_file_search', 'fauna_semantic_search',
+        // Figma read-only introspection (no DOM mutation)
+        'figma_status', 'figma_list_connected_files', 'figma_list_pages',
+        'figma_list_design_systems', 'figma_get_console_logs',
+        'figma_get_selection', 'figma_get_component_map',
+        'figma_get_unmapped_components', 'figma_search_components',
+        'figma_search_tokens', 'figma_docs', 'figma_rules',
+      ]);
       // Stale-tool-result shrinking: when the same tool is called many times
       // in a turn, prior results from that tool become dead weight in context.
       // After pushing a new tool result, we walk back through allMessages and
@@ -1400,63 +1432,24 @@ export function registerChatRoute(app, {
           }
           prevPreamble = preambleForCtx;
 
-          for (const tc of calls) {
-            const toolName = tc.function.name;
-            const callKey  = toolName + '|' + tc.function.arguments;
-            toolCallCount++;
+          // Parallel-safe (read-only) calls go into a queue and run via
+          // Promise.all; sequential calls (writes, shell, browser, figma
+          // execute, etc.) flush the queue first so happens-before semantics
+          // are preserved. This turns a 5-read batch from 5×latency into
+          // 1×latency wall-clock — the single biggest perceived-speed win.
+          const _parallelQueue = [];
+          const _flushParallel = async () => {
+            if (_parallelQueue.length === 0) return;
+            const pending = _parallelQueue.splice(0);
+            await Promise.all(pending);
+          };
 
-            // Hard stop: too many tool calls (legacy global limit as safety net)
-            if (toolCallCount > MAX_TOOL_CALLS) {
-              allMessages.push({ role: 'tool', tool_call_id: tc.id, content: 'Tool call limit reached (' + MAX_TOOL_CALLS + ' calls). If the user\'s task is genuinely complete and verified, give the final summary now. If concrete work remains, state the exact next step that must be taken and why it could not be inferred — do NOT ask the user whether to proceed.' });
-              // Reject the remaining queued calls so the loop terminates cleanly
-              // instead of re-iterating and spamming the same limit message.
-              continueLoop = false;
-              break;
-            }
-
-            // Deduplicate: same tool + same args already called
-            if (toolCallsSeen.has(callKey)) {
-              allMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolCallsSeen.get(callKey) });
-              continue;
-            }
-
-            // ── Pre-tool-call guard ─────────────────────────────────────────
-            const args = JSON.parse(tc.function.arguments || '{}');
-            const guardResult = await toolGuard.check(toolName, args);
-
-            if (guardResult.action === 'deny') {
-              allMessages.push({ role: 'tool', tool_call_id: tc.id, content: guardResult.reason });
-              continue;
-            }
-
-            // inject_snapshot: force a browser snapshot before the blind action
-            if (guardResult.action === 'inject_snapshot') {
-              send({ type: 'tool_call', name: 'browser_snapshot', label: 'Taking browser snapshot (auto)' });
-              try {
-                let snapResult;
-                try {
-                  snapResult = await callPlaywrightMcpTool('browser_snapshot', {});
-                } catch (connErr) {
-                  // Auto-reconnect once if the subprocess died
-                  if (/closed|disconnect|EPIPE|EOF/i.test(connErr.message)) {
-                    resetPlaywrightMcpClient();
-                    snapResult = await callPlaywrightMcpTool('browser_snapshot', {});
-                  } else { throw connErr; }
-                }
-                const snapContent = Array.isArray(snapResult?.content)
-                  ? snapResult.content.map(c => c.text || '').join('\n')
-                  : JSON.stringify(snapResult);
-                // Insert snapshot as a separate tool message so the model sees it
-                allMessages.push({ role: 'tool', tool_call_id: tc.id, content: '[Auto-snapshot before ' + toolName + ']\n' + snapContent.slice(0, MAX_RESULT_CHARS) });
-                toolGuard.resetBrowserRate();
-                // The original tool call is consumed — model will re-decide after seeing the snapshot
-                continue;
-              } catch (snapErr) {
-                // Snapshot failed — allow the original action to proceed
-                console.log('[tool-guard] auto-snapshot failed:', snapErr.message);
-              }
-            }
-
+          // Per-call execution body, extracted so it can run either inside
+          // Promise.all (parallel) or after `await _flushParallel()` (serial).
+          // All shared state mutation (allMessages, toolCallsSeen, etc.)
+          // happens synchronously after the awaited work resolves, which JS's
+          // single-threaded event loop serializes for us.
+          const _executeOneCall = async (tc, args, toolName, callKey) => {
             // Send human-readable tool status to the client
             const toolLabel = formatToolLabel(toolName, args);
             send({ type: 'tool_call', name: toolName, label: toolLabel });
@@ -1590,7 +1583,80 @@ export function registerChatRoute(app, {
               allMessages.push({ role: 'tool', tool_call_id: tc.id, content: `Error: ${e.message}` });
               figma.log('✗ ' + toolName + ': ' + e.message, 'err');
             }
+          }; // end _executeOneCall
+
+          // Dispatcher: classify each call, run parallel-safe ones via the
+          // queue and sequential ones inline (flushing the queue first).
+          for (const tc of calls) {
+            const toolName = tc.function.name;
+            const callKey  = toolName + '|' + tc.function.arguments;
+            toolCallCount++;
+
+            // Hard stop: too many tool calls (legacy global limit as safety net)
+            if (toolCallCount > MAX_TOOL_CALLS) {
+              await _flushParallel();
+              allMessages.push({ role: 'tool', tool_call_id: tc.id, content: 'Tool call limit reached (' + MAX_TOOL_CALLS + ' calls). If the user\'s task is genuinely complete and verified, give the final summary now. If concrete work remains, state the exact next step that must be taken and why it could not be inferred — do NOT ask the user whether to proceed.' });
+              // Reject the remaining queued calls so the loop terminates cleanly
+              // instead of re-iterating and spamming the same limit message.
+              continueLoop = false;
+              break;
+            }
+
+            // Deduplicate: same tool + same args already called
+            if (toolCallsSeen.has(callKey)) {
+              allMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolCallsSeen.get(callKey) });
+              continue;
+            }
+
+            // ── Pre-tool-call guard ─────────────────────────────────────────
+            const args = JSON.parse(tc.function.arguments || '{}');
+            const guardResult = await toolGuard.check(toolName, args);
+
+            if (guardResult.action === 'deny') {
+              allMessages.push({ role: 'tool', tool_call_id: tc.id, content: guardResult.reason });
+              continue;
+            }
+
+            // inject_snapshot: force a browser snapshot before the blind action.
+            // Browser tools are never parallel-safe so this branch is naturally
+            // sequential, but we still flush any pending reads first.
+            if (guardResult.action === 'inject_snapshot') {
+              await _flushParallel();
+              send({ type: 'tool_call', name: 'browser_snapshot', label: 'Taking browser snapshot (auto)' });
+              try {
+                let snapResult;
+                try {
+                  snapResult = await callPlaywrightMcpTool('browser_snapshot', {});
+                } catch (connErr) {
+                  // Auto-reconnect once if the subprocess died
+                  if (/closed|disconnect|EPIPE|EOF/i.test(connErr.message)) {
+                    resetPlaywrightMcpClient();
+                    snapResult = await callPlaywrightMcpTool('browser_snapshot', {});
+                  } else { throw connErr; }
+                }
+                const snapContent = Array.isArray(snapResult?.content)
+                  ? snapResult.content.map(c => c.text || '').join('\n')
+                  : JSON.stringify(snapResult);
+                // Insert snapshot as a separate tool message so the model sees it
+                allMessages.push({ role: 'tool', tool_call_id: tc.id, content: '[Auto-snapshot before ' + toolName + ']\n' + snapContent.slice(0, MAX_RESULT_CHARS) });
+                toolGuard.resetBrowserRate();
+                // The original tool call is consumed — model will re-decide after seeing the snapshot
+                continue;
+              } catch (snapErr) {
+                // Snapshot failed — fall through and execute the original action
+                console.log('[tool-guard] auto-snapshot failed:', snapErr.message);
+              }
+            }
+
+            if (PARALLEL_SAFE_TOOLS.has(toolName)) {
+              _parallelQueue.push(_executeOneCall(tc, args, toolName, callKey));
+            } else {
+              await _flushParallel();
+              await _executeOneCall(tc, args, toolName, callKey);
+            }
           }
+          // Drain any remaining parallel-safe calls before moving on.
+          await _flushParallel();
           // After tools have run, decide whether the model is stuck repeating
           // itself. Inject a coaching message once, then hard-stop if it keeps
           // happening — better to surface what was attempted than to spam the

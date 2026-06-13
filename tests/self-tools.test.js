@@ -64,7 +64,9 @@ describe('self-tools', () => {
       // Bumped to 64 after adding fauna_doctor (aggregated capability self-diagnostic).
       // Bumped to 69 after adding the PCB toolset: fauna_list_footprints,
       // fauna_layout_pcb, fauna_render_pcb, fauna_check_board, fauna_build_guide.
-      expect(SELF_TOOL_DEFS).toHaveLength(69);
+      // Bumped to 71 after adding fauna_file_search + fauna_grep (Copilot-style
+      // first-class retrieval — replace shelling out to find/grep).
+      expect(SELF_TOOL_DEFS).toHaveLength(71);
     });
 
     it('each tool has required OpenAI function format', () => {
@@ -214,4 +216,91 @@ describe('self-tools', () => {
       expect(r.markdown).toMatch(/Build Guide/);
     });
   });
+
+  describe('fauna_file_search + fauna_grep', () => {
+    // Uses the actual repo workspace as the search root. These tools are
+    // pure file-system scanners with built-in skip lists, so running them
+    // against the real tree is the most honest test we can write.
+    const repoRoot = process.cwd();
+
+    it('fauna_file_search finds files by glob', async () => {
+      const r = JSON.parse(await executeSelfTool('fauna_file_search', {
+        pattern: '**/self-tools.js',
+        cwd: repoRoot,
+        maxResults: 10,
+      }, mockContext));
+      expect(r.ok).toBe(true);
+      expect(r.files).toContain('self-tools.js');
+    });
+
+    it('fauna_file_search skips node_modules', async () => {
+      const r = JSON.parse(await executeSelfTool('fauna_file_search', {
+        pattern: '**/package.json',
+        cwd: repoRoot,
+        maxResults: 200,
+      }, mockContext));
+      expect(r.ok).toBe(true);
+      // node_modules has thousands of package.json files; we should only
+      // find a handful from the actual project workspaces (root + mobile +
+      // fauna-bot + relay + etc.) — never more than ~30.
+      expect(r.files.length).toBeLessThan(50);
+      expect(r.files.every(f => !f.includes('node_modules'))).toBe(true);
+    });
+
+    it('fauna_file_search returns ok:false on missing pattern', async () => {
+      const r = JSON.parse(await executeSelfTool('fauna_file_search', { cwd: repoRoot }, mockContext));
+      expect(r.ok).toBe(false);
+    });
+
+    it('fauna_grep finds literal substrings with line numbers', async () => {
+      const r = JSON.parse(await executeSelfTool('fauna_grep', {
+        query: 'PARALLEL_SAFE_TOOLS',
+        include: '**/chat.js',
+        cwd: repoRoot,
+        maxResults: 20,
+      }, mockContext));
+      expect(r.ok).toBe(true);
+      expect(r.count).toBeGreaterThan(0);
+      // Each match should have path + line + text
+      const first = r.matches[0];
+      expect(first.path).toMatch(/chat\.js$/);
+      expect(typeof first.line).toBe('number');
+      expect(first.text).toContain('PARALLEL_SAFE_TOOLS');
+    });
+
+    it('fauna_grep supports regex with alternation', async () => {
+      const r = JSON.parse(await executeSelfTool('fauna_grep', {
+        query: 'PARALLEL_SAFE_TOOLS|STALE_SHRINK_EXEMPT',
+        isRegex: true,
+        include: '**/chat.js',
+        cwd: repoRoot,
+        maxResults: 20,
+      }, mockContext));
+      expect(r.ok).toBe(true);
+      expect(r.count).toBeGreaterThan(1);
+    });
+
+    it('fauna_grep refuses invalid regex with a clear error', async () => {
+      const r = JSON.parse(await executeSelfTool('fauna_grep', {
+        query: '(',
+        isRegex: true,
+        cwd: repoRoot,
+      }, mockContext));
+      expect(r.ok).toBe(false);
+      expect(r.error).toMatch(/invalid regex/);
+    });
+
+    it('fauna_grep caps results at maxResults and reports truncated', async () => {
+      const r = JSON.parse(await executeSelfTool('fauna_grep', {
+        query: 'function',
+        cwd: repoRoot,
+        maxResults: 5,
+      }, mockContext));
+      expect(r.ok).toBe(true);
+      expect(r.matches.length).toBeLessThanOrEqual(5);
+      // 'function' appears thousands of times so truncation should kick in.
+      expect(r.truncated).toBe(true);
+    });
+  });
 });
+

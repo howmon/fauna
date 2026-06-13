@@ -1254,7 +1254,15 @@ async function streamResponse(conv) {
     _ensureLiveMessageAttached();
     if (!isActive() || !bodyEl) return;
     if (renderTimer) return;
-    renderTimer = setTimeout(() => {
+    // Coalesce on the next animation frame instead of a 60ms timeout so the
+    // visible text keeps pace with the token stream (~16ms at 60Hz). This is
+    // the "token-by-token feel" change — render at display rate, not at a
+    // human-perceptible debounce. rAF is dropped to setTimeout(0) when the
+    // tab is backgrounded so we don't busy-spin a hidden conversation.
+    const _schedule = (typeof requestAnimationFrame === 'function')
+      ? requestAnimationFrame
+      : (cb) => setTimeout(cb, 16);
+    renderTimer = _schedule(() => {
       renderTimer = null;
       if (buffer) {
         bodyEl.classList.add('streaming-cursor');
@@ -1281,7 +1289,7 @@ async function streamResponse(conv) {
       } else {
         _ensureStreamingStatus('Fauna is working…');
       }
-    }, 60);
+    });
   }
 
   function _updateReasoningPanel(durationSeconds, completed) {
@@ -1850,7 +1858,15 @@ async function streamResponse(conv) {
     }
   } finally {
     _clearToolStatuses();
-    if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
+    if (renderTimer) {
+      // renderTimer may be either a setTimeout id (fallback) or a rAF handle.
+      // Cancel both — the wrong one is a harmless no-op.
+      try { clearTimeout(renderTimer); } catch (_) {}
+      if (typeof cancelAnimationFrame === 'function') {
+        try { cancelAnimationFrame(renderTimer); } catch (_) {}
+      }
+      renderTimer = null;
+    }
     dbg('■ stream done — buffer=' + buffer.length + 'ch tokens=' + tokenCount, buffer.length ? 'ok' : 'warn');
     dbg('stream timing: elapsed=' + (Date.now() - _streamStartedAt) + 'ms avgCharsPerToken=' + (tokenCount ? Math.round(buffer.length / tokenCount) : 0), 'info');
     dbg('  raw: ' + JSON.stringify(buffer), 'info');

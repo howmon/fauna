@@ -683,6 +683,86 @@ function _resolveFaunaWritePath(filePath, cwd) {
   return resolved;
 }
 
+// Directories we never recurse into during file_search / grep — they are
+// either huge (node_modules), VCS metadata (.git), build output (dist, build),
+// caches (.next, .cache, .turbo, .parcel-cache), or system noise (Library on
+// macOS — would scan ~30GB of mail/photos otherwise). Match by exact name.
+const _FAUNA_SEARCH_SKIP_DIRS = new Set([
+  'node_modules', '.git', 'dist', 'build', 'out', '.next', '.nuxt',
+  '.cache', '.turbo', '.parcel-cache', '.vite', '.svelte-kit',
+  'coverage', '.nyc_output', '.pnpm-store', '__pycache__', '.venv', 'venv',
+  '.gradle', 'target', 'bin', 'obj', '.idea', '.vscode-test',
+  'Library', '.Trash', '.npm', '.yarn', '.bun',
+]);
+
+// Convert a simple glob (*, **, ?) into a RegExp. Anchored on both ends so
+// "**/*.js" matches "src/foo/bar.js" but not "src/foo/bar.js.map".
+function _faunaGlobToRegex(glob) {
+  if (!glob) return null;
+  let re = '';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === '*' && glob[i + 1] === '*') {
+      // ** = any depth (including zero segments). Consume optional /
+      re += '.*';
+      i++;
+      if (glob[i + 1] === '/') i++;
+    } else if (c === '*') {
+      // * = anything except /
+      re += '[^/]*';
+    } else if (c === '?') {
+      re += '[^/]';
+    } else if ('.+^$()|{}[]\\'.includes(c)) {
+      re += '\\' + c;
+    } else {
+      re += c;
+    }
+  }
+  return new RegExp('^' + re + '$');
+}
+
+// Recursive walker yielding relative file paths. Bounded by maxResults and
+// skips _FAUNA_SEARCH_SKIP_DIRS. onFile(relPath) returns false to stop early.
+function _faunaWalk(rootAbs, onFile) {
+  const stack = [''];
+  while (stack.length) {
+    const relDir = stack.pop();
+    const absDir = path.join(rootAbs, relDir);
+    let entries;
+    try { entries = fs.readdirSync(absDir, { withFileTypes: true }); }
+    catch (_) { continue; }
+    for (const ent of entries) {
+      const name = ent.name;
+      if (name.startsWith('.') && name !== '.' && name !== '..') {
+        // Skip dotfiles/dotdirs except a few we want to keep (e.g. .env, .github)
+        // Actually skip all dot-prefixed dirs for safety; users rarely grep them.
+        if (ent.isDirectory()) continue;
+      }
+      if (ent.isDirectory()) {
+        if (_FAUNA_SEARCH_SKIP_DIRS.has(name)) continue;
+        stack.push(path.join(relDir, name));
+      } else if (ent.isFile()) {
+        const rel = path.join(relDir, name);
+        if (onFile(rel) === false) return;
+      }
+    }
+  }
+}
+
+// Cheap binary-file detector: read first 8KB, look for NUL bytes. If found,
+// treat as binary and skip in fauna_grep. Avoids dumping garbage into the
+// model context when someone greps over a repo with PDFs / images / sqlite.
+function _faunaIsBinary(absPath) {
+  try {
+    const fd = fs.openSync(absPath, 'r');
+    const buf = Buffer.alloc(8192);
+    const bytes = fs.readSync(fd, buf, 0, 8192, 0);
+    fs.closeSync(fd);
+    for (let i = 0; i < bytes; i++) if (buf[i] === 0) return true;
+    return false;
+  } catch (_) { return true; }
+}
+
 function _atomicFastWrite(abs, buffer) {
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   const tmp = abs + '.~fauna-fast-' + process.pid + '-' + crypto.randomBytes(4).toString('hex');
@@ -1268,6 +1348,45 @@ export const SELF_TOOL_DEFS = [
           maxBytes: { type: 'number', description: 'Optional hard cap on bytes returned. Defaults 200000.' },
         },
         required: ['path'],
+      },
+    },
+  },
+
+  // ── File search (glob) ──
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_file_search',
+      description: 'Find files by glob pattern. Faster than `find`/`ls` via fauna_shell_exec because it returns structured results and skips heavy directories (node_modules, .git, dist, build). Use this when you know the filename pattern but not the location. Examples: "**/*.test.js", "src/**/auth-*.ts", "*.md".',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: { type: 'string', description: 'Glob pattern. Supports * (single segment) and ** (any depth).' },
+          cwd: { type: 'string', description: 'Optional working directory. Defaults to the repo/home root.' },
+          maxResults: { type: 'number', description: 'Cap on returned file paths. Defaults 100.' },
+        },
+        required: ['pattern'],
+      },
+    },
+  },
+
+  // ── Grep search (text) ──
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_grep',
+      description: 'Search file contents for a pattern (literal or regex) with line numbers. Faster and safer than running `grep -r` via fauna_shell_exec — skips binary files and node_modules, returns structured hits. Use for "find all calls to X" or "where is Y defined". For multiple potential words, use a regex with alternation (e.g. "foo|bar|baz") in a single call rather than separate calls.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Text pattern or regex to search for.' },
+          isRegex: { type: 'boolean', description: 'When true, query is a regex. Defaults false (literal substring).' },
+          caseInsensitive: { type: 'boolean', description: 'Defaults true.' },
+          include: { type: 'string', description: 'Optional glob to restrict searched files (e.g. "**/*.js").' },
+          cwd: { type: 'string', description: 'Optional working directory. Defaults to the repo/home root.' },
+          maxResults: { type: 'number', description: 'Cap on returned matches. Defaults 200.' },
+        },
+        required: ['query'],
       },
     },
   },
@@ -2305,6 +2424,107 @@ export async function executeSelfTool(toolName, args, context = {}) {
           truncated = true;
         }
         return JSON.stringify({ ok: true, path: abs, bytes: st.size, totalLines, content, truncated });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+
+    // ── File search (glob) ──
+    case 'fauna_file_search': {
+      try {
+        const pattern = String(args.pattern || '').trim();
+        if (!pattern) return JSON.stringify({ ok: false, error: 'pattern required' });
+        // Resolve search root. Default to cwd if provided, else the workspace
+        // root we infer from process.cwd() (Fauna may be launched there) and
+        // fall back to HOME.
+        let rootAbs;
+        if (args.cwd) {
+          rootAbs = String(args.cwd).startsWith('/')
+            ? path.resolve(String(args.cwd))
+            : _resolveFaunaWritePath(args.cwd, null);
+        } else {
+          rootAbs = process.cwd() && process.cwd() !== '/' ? process.cwd() : HOME;
+        }
+        if (!rootAbs.startsWith(HOME) && !rootAbs.startsWith('/tmp')) {
+          return JSON.stringify({ ok: false, error: 'cwd outside allowed directories: ' + rootAbs });
+        }
+        const re = _faunaGlobToRegex(pattern);
+        const cap = typeof args.maxResults === 'number' && args.maxResults > 0
+          ? Math.min(args.maxResults, 500)
+          : 100;
+        const hits = [];
+        _faunaWalk(rootAbs, (rel) => {
+          if (re.test(rel)) {
+            hits.push(rel);
+            if (hits.length >= cap) return false;
+          }
+        });
+        return JSON.stringify({ ok: true, root: rootAbs, pattern, count: hits.length, truncated: hits.length >= cap, files: hits });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+
+    // ── Grep search (text in files) ──
+    case 'fauna_grep': {
+      try {
+        const query = String(args.query || '');
+        if (!query) return JSON.stringify({ ok: false, error: 'query required' });
+        let rootAbs;
+        if (args.cwd) {
+          rootAbs = String(args.cwd).startsWith('/')
+            ? path.resolve(String(args.cwd))
+            : _resolveFaunaWritePath(args.cwd, null);
+        } else {
+          rootAbs = process.cwd() && process.cwd() !== '/' ? process.cwd() : HOME;
+        }
+        if (!rootAbs.startsWith(HOME) && !rootAbs.startsWith('/tmp')) {
+          return JSON.stringify({ ok: false, error: 'cwd outside allowed directories: ' + rootAbs });
+        }
+        const flags = (args.caseInsensitive === false ? '' : 'i') + 'g';
+        let re;
+        if (args.isRegex) {
+          try { re = new RegExp(query, flags); }
+          catch (rxErr) { return JSON.stringify({ ok: false, error: 'invalid regex: ' + rxErr.message }); }
+        } else {
+          // Escape literal substring before compiling
+          const esc = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          re = new RegExp(esc, flags);
+        }
+        const includeRe = args.include ? _faunaGlobToRegex(String(args.include)) : null;
+        const cap = typeof args.maxResults === 'number' && args.maxResults > 0
+          ? Math.min(args.maxResults, 1000)
+          : 200;
+        const matches = [];
+        let filesScanned = 0;
+        _faunaWalk(rootAbs, (rel) => {
+          if (includeRe && !includeRe.test(rel)) return;
+          const abs = path.join(rootAbs, rel);
+          try {
+            const st = fs.statSync(abs);
+            // Skip files >2MB — likely generated, hex dumps, or assets
+            if (st.size > 2_000_000) return;
+          } catch (_) { return; }
+          if (_faunaIsBinary(abs)) return;
+          let text;
+          try { text = fs.readFileSync(abs, 'utf8'); } catch (_) { return; }
+          filesScanned++;
+          const lines = text.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            re.lastIndex = 0;
+            if (re.test(lines[i])) {
+              // Truncate single-line hits to keep responses small
+              const line = lines[i].length > 240 ? lines[i].slice(0, 240) + '…' : lines[i];
+              matches.push({ path: rel, line: i + 1, text: line });
+              if (matches.length >= cap) return false;
+            }
+          }
+        });
+        return JSON.stringify({
+          ok: true, root: rootAbs, query, isRegex: !!args.isRegex,
+          filesScanned, count: matches.length, truncated: matches.length >= cap,
+          matches,
+        });
       } catch (e) {
         return JSON.stringify({ ok: false, error: e.message });
       }
