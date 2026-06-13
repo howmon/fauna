@@ -71,12 +71,19 @@ function openPipelineBuilder(taskId) {
 
   // Get pipeline from task, draft, or blank
   var pipeline = { nodes: [], edges: [] };
+  var sourceTask = null;
   if (taskId && typeof _tasksCache !== 'undefined') {
     var task = _tasksCache.find(function(t) { return t.id === taskId; });
     if (task && task.pipeline) pipeline = task.pipeline;
+    if (task) sourceTask = task;
   } else if (!taskId && typeof _draft !== 'undefined' && _draft && _draft.pipeline) {
     pipeline = _draft.pipeline;
+    sourceTask = _draft;
   }
+  // Back-fill the trigger node from task-level schedule/targetConvId so the
+  // builder reflects the saved scheduling state. Only fills empty fields —
+  // pipeline-stored config wins if present, so the rail's edits round-trip.
+  _pbBackfillTriggerFromTask(pipeline, sourceTask);
 
   _buildOverlayHTML(overlay, pipeline);
 
@@ -275,6 +282,26 @@ function _configFieldsForType(node) {
   var nid = node.id;
   var html = '';
 
+  if (node.type === 'trigger') {
+    // The trigger's `subtype` controls how the parent task is scheduled.
+    //   manual       — only runs when the user clicks Run / Run Now
+    //   schedule     — fires on an RRULE (mirrored to task.schedule.rrule on save)
+    //   webhook      — fires on inbound POST /api/tasks/:id/webhook
+    //   thread-watch — fires when a watched conversation gets a new message
+    var sub = config.subtype || 'manual';
+    html += _pbFieldSelect(nid, 'subtype', 'Trigger type',
+      ['manual', 'schedule', 'webhook', 'thread-watch'], sub);
+    if (sub === 'schedule') {
+      html += _pbFieldInput(nid, 'rrule', 'RRULE', config.rrule || '',
+        'e.g. FREQ=DAILY;BYHOUR=9;BYMINUTE=0');
+      html += '<div class="pb-field-hint" style="font-size:11px;color:var(--fau-text-muted,#888);margin-top:-4px;margin-bottom:8px;">Saved to the parent task\'s schedule. Use FREQ + BYHOUR + BYMINUTE for daily, BYDAY for weekly.</div>';
+    } else if (sub === 'thread-watch') {
+      html += _pbFieldInput(nid, 'targetConvId', 'Conversation ID', config.targetConvId || '',
+        'Conversation to watch for new messages');
+    } else if (sub === 'webhook') {
+      html += '<div class="pb-field-hint" style="font-size:11px;color:var(--fau-text-muted,#888);margin:4px 0 12px;">After saving, POST to <code>/api/tasks/&lt;id&gt;/webhook</code> to fire this pipeline. The request body becomes the trigger output.</div>';
+    }
+  }
   if (node.type === 'prompt' || node.type === 'agent') {
     html += _pbFieldTextarea(nid, 'prompt', 'Prompt / instruction', config.prompt || '', 'What should this step do? Use {{prevNode.output}} for variable interpolation.');
   }
@@ -414,20 +441,80 @@ function _pbUpdateNodeConfig(nodeId, key, val) {
 
 // ── Save ─────────────────────────────────────────────────────────────────
 
+// Inverse of _pbExtractTriggerSync — when opening the builder for an
+// existing task, copy task.schedule / task.targetConvId into the trigger
+// node's config so the form reflects reality. Only fills empty config
+// fields, so saved pipeline edits always win on round-trip.
+function _pbBackfillTriggerFromTask(pipeline, task) {
+  if (!pipeline || !Array.isArray(pipeline.nodes) || !task) return;
+  var trigger = pipeline.nodes.find(function(n) { return n.type === 'trigger'; });
+  if (!trigger) return;
+  trigger.config = trigger.config || {};
+  var c = trigger.config;
+  if (c.subtype) return; // builder-side state already authoritative
+  if (task.schedule && task.schedule.rrule) {
+    c.subtype = 'schedule';
+    c.rrule = task.schedule.rrule;
+  } else if (task.targetConvId) {
+    c.subtype = 'thread-watch';
+    c.targetConvId = task.targetConvId;
+  } else {
+    c.subtype = 'manual';
+  }
+}
+
+// Pull schedule / targetConvId out of the pipeline's trigger node so the
+// parent task's scheduling fields stay in sync. Returns an object with
+// any keys that should be patched onto the task.
+//   { schedule?: {...}, targetConvId?: string }
+function _pbExtractTriggerSync(pipeline) {
+  var out = {};
+  if (!pipeline || !Array.isArray(pipeline.nodes)) return out;
+  var trigger = pipeline.nodes.find(function(n) { return n.type === 'trigger'; });
+  if (!trigger) return out;
+  var cfg = trigger.config || {};
+  var sub = cfg.subtype || 'manual';
+  var tz = (Intl && Intl.DateTimeFormat) ? Intl.DateTimeFormat().resolvedOptions().timeZone : null;
+  if (sub === 'schedule' && cfg.rrule && cfg.rrule.trim()) {
+    out.schedule = { type: 'recurring', rrule: cfg.rrule.trim(), at: '', timezone: tz };
+    out.targetConvId = null;
+  } else if (sub === 'thread-watch') {
+    out.targetConvId = (cfg.targetConvId || '').trim() || null;
+    out.schedule = { type: 'manual', rrule: '', at: '', timezone: tz };
+  } else if (sub === 'webhook' || sub === 'manual') {
+    // Manual / webhook → no schedule, no thread watch. Leave alone unless
+    // the previous trigger HAD set them — clear so toggling works both ways.
+    out.schedule = { type: 'manual', rrule: '', at: '', timezone: tz };
+    out.targetConvId = null;
+  }
+  return out;
+}
+
 async function savePipelineToTask(taskId) {
   if (!_pbCanvas) return;
   var pipeline = _pbCanvas.getPipeline();
+  var triggerSync = _pbExtractTriggerSync(pipeline);
 
   try {
     if (taskId) {
+      // Mirror trigger.config.{subtype,rrule,targetConvId} into the parent
+      // task's schedule/targetConvId fields so the existing scheduler and
+      // heartbeat-bridge keep working without a backend change. If the
+      // pipeline trigger says subtype:'schedule' with FREQ=…, the task's
+      // schedule.type flips to 'recurring' with that RRULE.
+      var patch = { pipeline: pipeline };
+      if (triggerSync.schedule) patch.schedule = triggerSync.schedule;
+      if (triggerSync.targetConvId !== undefined) patch.targetConvId = triggerSync.targetConvId;
       await fetch('/api/tasks/' + taskId, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pipeline: pipeline }),
+        body: JSON.stringify(patch),
       });
       // Keep _draft in sync so the main Save form doesn't overwrite with stale pipeline
       if (typeof _draft !== 'undefined' && _draft && _draft.id === taskId) {
         _draft.pipeline = pipeline;
+        if (triggerSync.schedule) _draft.schedule = triggerSync.schedule;
+        if (triggerSync.targetConvId !== undefined) _draft.targetConvId = triggerSync.targetConvId;
       }
       if (typeof showToast === 'function') showToast('Pipeline saved');
       if (typeof fetchTasks === 'function') fetchTasks();
@@ -436,6 +523,8 @@ async function savePipelineToTask(taskId) {
       if (typeof _draft !== 'undefined' && _draft) {
         _draft.pipeline = pipeline;
         _draft.kind = 'pipeline';
+        if (triggerSync.schedule) _draft.schedule = triggerSync.schedule;
+        if (triggerSync.targetConvId !== undefined) _draft.targetConvId = triggerSync.targetConvId;
         if (!_draft.title || !_draft.title.trim()) _draft.title = 'Generated automation';
         if (typeof submitAutomation === 'function') {
           var saved = await submitAutomation();
