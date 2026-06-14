@@ -421,12 +421,16 @@ var _hubResizeInited = false;
 function _initHubResize() {
   if (_hubResizeInited) return;
   _hubResizeInited = true;
-  var HUB_MIN = 300, HUB_MAX = 900, HUB_KEY = 'fauna-hub-width';
+  // HUB_MAX is computed from viewport at drag time so the hub can grow up
+  // to 90% of the window width on a wide monitor without leaving the user
+  // wondering why the handle hit a wall at 900px.
+  var HUB_MIN = 300, HUB_KEY = 'fauna-hub-width';
+  function hubMax() { return Math.max(HUB_MIN, Math.floor(window.innerWidth * 0.9)); }
   var hub = document.getElementById('project-hub');
   var handle = document.getElementById('project-hub-resize-handle');
   if (!hub || !handle) return;
   var saved = parseInt(localStorage.getItem(HUB_KEY), 10);
-  if (saved && saved >= HUB_MIN && saved <= HUB_MAX) {
+  if (saved && saved >= HUB_MIN && saved <= hubMax()) {
     document.documentElement.style.setProperty('--hub-w', saved + 'px');
   }
   window.installPaneResize({
@@ -435,7 +439,7 @@ function _initHubResize() {
     getStartWidth: function () { return hub.getBoundingClientRect().width; },
     onMove: function (dx, startW) {
       // Hub sits on the right — dragging left widens it.
-      var w = Math.min(HUB_MAX, Math.max(HUB_MIN, startW - dx));
+      var w = Math.min(hubMax(), Math.max(HUB_MIN, startW - dx));
       document.documentElement.style.setProperty('--hub-w', w + 'px');
     },
     onEnd: function () {
@@ -443,7 +447,7 @@ function _initHubResize() {
     },
   });
   handle.addEventListener('dblclick', function() {
-    document.documentElement.style.setProperty('--hub-w', '460px');
+    document.documentElement.style.setProperty('--hub-w', '720px');
     localStorage.removeItem(HUB_KEY);
   });
 }
@@ -455,9 +459,17 @@ function openProjectHub(tab) {
   // Migrate legacy ids: 'sources' merged into 'contexts', 'terminal' into 'run'.
   if (tab === 'sources') tab = 'contexts';
   if (tab === 'terminal') tab = 'run';
-  state.projectHubTab = tab || state.projectHubTab || 'files';
+  state.projectHubTab = tab || state.projectHubTab || 'tasks';
   if (state.projectHubTab === 'sources') state.projectHubTab = 'contexts';
   if (state.projectHubTab === 'terminal') state.projectHubTab = 'run';
+  // Legacy 'files' default \u2014 once-off: if the user had no preference and we
+  // landed on 'files' from a stale persisted value, prefer Board.
+  if (state.projectHubTab === 'files' && !tab && !localStorage.getItem('fauna-hub-tab-set')) {
+    state.projectHubTab = 'tasks';
+  }
+  // Remember that this user has now made/accepted a tab choice so we don't
+  // re-override it again next time they open with no explicit `tab` arg.
+  try { localStorage.setItem('fauna-hub-tab-set', '1'); } catch (_) {}
   var hub = document.getElementById('project-hub');
   if (!hub) return;
   hub.style.display = 'flex';

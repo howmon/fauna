@@ -716,11 +716,15 @@ export function pokeNow() {
 }
 
 // Diagnostic: when the picker returns null but the project has AI cards
-// waiting, log a one-line reason AND emit an SSE 'idle' event so the
-// UI can show the user WHY autopilot is silent. Console log is throttled
-// to once per project per minute; SSE event fires every tick (the UI
-// debounces redraws on its side, and a card-state change clears the
-// banner anyway).
+// waiting, build a structured "why is autopilot silent?" snapshot. We
+// emit it over SSE for the UI banner and log a throttled summary.
+//
+// Important: concurrency-cap is NOT a "stuck" condition — it just means
+// autopilot is running at full capacity (working as designed). The
+// `actionable` flag tells the UI whether to surface the banner. When the
+// cap is hit, the only candidates that could be picked are by definition
+// already-claimed/in-flight ones, so we also suppress those mechanical
+// reasons to avoid double-counting.
 const _unpickedLogAt = new Map();
 function _computeIdleReasons(project) {
   const board = getProjectBoard(project.id);
@@ -732,28 +736,43 @@ function _computeIdleReasons(project) {
   const candidates = (board.columns.todo || []).concat(board.columns.in_progress || [])
     .filter(it => it.assignee === 'ai');
   if (!candidates.length) return null;  // nothing to pick, not interesting
+  const capHit  = inFlight >= concurrency;
+  const used    = _quotaUsed(project.id);
+  const quotaHit = !!(dailyQuota && used >= dailyQuota);
   const reasons = [];
-  if (inFlight >= concurrency) reasons.push({ kind: 'concurrency', label: 'concurrency cap', current: inFlight, limit: concurrency });
-  const used = _quotaUsed(project.id);
-  if (dailyQuota && used >= dailyQuota) reasons.push({ kind: 'quota', label: 'daily AI quota reached', current: used, limit: dailyQuota });
-  const claimed   = candidates.filter(it => !!it.claimedBy).length;
-  const locked    = candidates.filter(it => it.lockedByUser).length;
-  const blocked   = candidates.filter(it => it.column === 'todo' && _isBlocked(it, board)).length;
-  const liveTrack = candidates.filter(it => it.column === 'in_progress' && _inFlight.has(it.id)).length;
-  if (claimed)   reasons.push({ kind: 'claimed',   label: 'already claimed',     count: claimed });
-  if (locked)    reasons.push({ kind: 'locked',    label: 'locked by user',      count: locked });
-  if (blocked)   reasons.push({ kind: 'blocked',   label: 'blocked by deps',     count: blocked });
-  if (liveTrack) reasons.push({ kind: 'inflight',  label: 'already in-flight',   count: liveTrack });
+  if (capHit)   reasons.push({ kind: 'concurrency', label: 'concurrency cap', current: inFlight, limit: concurrency });
+  if (quotaHit) reasons.push({ kind: 'quota',       label: 'daily AI quota reached', current: used, limit: dailyQuota });
+  // Per-candidate filters. Skip the "claimed"/"in-flight" tallies when the
+  // concurrency cap is the cause — those cards ARE the in-flight set, and
+  // listing them is redundant noise on a banner that already says "cap reached".
+  if (!capHit) {
+    const claimed   = candidates.filter(it => !!it.claimedBy).length;
+    const liveTrack = candidates.filter(it => it.column === 'in_progress' && _inFlight.has(it.id)).length;
+    if (claimed)   reasons.push({ kind: 'claimed',   label: 'already claimed',   count: claimed });
+    if (liveTrack) reasons.push({ kind: 'inflight',  label: 'already in-flight', count: liveTrack });
+  }
+  const locked  = candidates.filter(it => it.lockedByUser).length;
+  const blocked = candidates.filter(it => it.column === 'todo' && _isBlocked(it, board)).length;
+  if (locked)  reasons.push({ kind: 'locked',  label: 'locked by user',  count: locked });
+  if (blocked) reasons.push({ kind: 'blocked', label: 'blocked by deps', count: blocked });
   if (!reasons.length) reasons.push({ kind: 'unknown', label: 'no candidate matched the picker filter' });
-  return { reasons, candidates: candidates.length };
+  // Actionable = the user should see this. Concurrency cap alone is the
+  // happy path (autopilot is working at max) — don't badge the toolbar
+  // for it. Quota/locked/blocked/unknown all warrant attention.
+  const actionable = reasons.some(r => r.kind !== 'concurrency');
+  return { reasons, candidates: candidates.length, actionable };
 }
 function _logUnpickedReason(project) {
   const info = _computeIdleReasons(project);
   if (!info) return;
   // Emit every tick so the UI badge reflects current state (the SSE handler
-  // diffs and is cheap).
-  _emitBoard({ type: 'idle', projectId: project.id, reasons: info.reasons, candidates: info.candidates });
-  // Console log is throttled to keep stdout readable.
+  // diffs and is cheap). The UI is responsible for honoring `actionable`.
+  _emitBoard({
+    type: 'idle', projectId: project.id,
+    reasons: info.reasons, candidates: info.candidates, actionable: info.actionable,
+  });
+  // Console log is throttled to keep stdout readable. We still log even
+  // when not actionable — operators inspecting stdout want full visibility.
   const last = _unpickedLogAt.get(project.id) || 0;
   if (Date.now() - last < 60_000) return;
   const summary = info.reasons.map(r => {

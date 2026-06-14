@@ -303,8 +303,9 @@ describe('computeIdleReasons', () => {
     expect(quota).toBeTruthy();
     expect(quota.current).toBe(5);
     expect(quota.limit).toBe(5);
+    expect(info.actionable).toBe(true);
   });
-  it('reports concurrency-cap reason when in-flight saturates', () => {
+  it('reports concurrency-cap reason when in-flight saturates, but flags it non-actionable', () => {
     _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true, concurrency: 1 } });
     _db.items.push(_mkItem({ id: 'busy', projectId: 'p1', column: 'in_progress', assignee: 'ai', claimedBy: 'ai:x' }));
     _db.items.push(_mkItem({ id: 'wait', projectId: 'p1', column: 'todo',        assignee: 'ai' }));
@@ -313,6 +314,11 @@ describe('computeIdleReasons', () => {
     expect(conc).toBeTruthy();
     expect(conc.current).toBe(1);
     expect(conc.limit).toBe(1);
+    // Concurrency-cap-only = working as designed, banner should be suppressed.
+    expect(info.actionable).toBe(false);
+    // And we should NOT also list 'claimed' / 'inflight' (those ARE the cap).
+    expect(info.reasons.some(r => r.kind === 'claimed')).toBe(false);
+    expect(info.reasons.some(r => r.kind === 'inflight')).toBe(false);
   });
   it('reports blocked-by-deps reason for todo cards', () => {
     _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true, concurrency: 2 } });

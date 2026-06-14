@@ -6363,7 +6363,7 @@ body.win-platform .acv-header {
 
 /* ── Project Hub Panel ─────────────────────────────────────────────────── */
 .project-hub-panel {
-  position: fixed; top: 0; right: 0; bottom: 0; width: var(--hub-w, 460px);
+  position: fixed; top: 0; right: 0; bottom: 0; width: var(--hub-w, 720px);
   background: var(--fau-surface); border-left: 1px solid var(--fau-border);
   display: none; flex-direction: column; z-index: 500;
   box-shadow: -12px 0 40px rgba(0,0,0,.45);

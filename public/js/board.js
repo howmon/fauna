@@ -347,15 +347,17 @@
   }
 
   // Render the autopilot idle-reason banner inline with the toolbar. The
-  // server attaches a `board.idle = { reasons:[{kind,label,...}], candidates }`
-  // snapshot whenever the picker returned null with AI candidates waiting.
-  // The kanban-worker also pushes 'idle' over SSE every tick.
+  // server attaches a `board.idle = { reasons:[{kind,label,...}], candidates,
+  // actionable }` snapshot whenever the picker returned null with AI
+  // candidates waiting. The kanban-worker also pushes 'idle' over SSE
+  // every tick. We only render when `actionable` — concurrency cap alone
+  // means autopilot is running at full capacity (happy path), not stuck.
   function _updateIdleBanner() {
     var s = window._kbState;
     var el = document.getElementById('kb-idle-banner');
     if (!el) return;
     var info = s.idle;
-    if (!info || !info.reasons || !info.reasons.length || !(s.kanban && s.kanban.autopilot)) {
+    if (!info || !info.reasons || !info.reasons.length || !info.actionable || !(s.kanban && s.kanban.autopilot)) {
       el.style.display = 'none';
       el.innerHTML = '';
       return;
@@ -642,7 +644,11 @@
           // without re-fetching the whole board.
           if (evt.type === 'idle') {
             if (s.scope === 'project') {
-              s.idle = { reasons: evt.reasons || [], candidates: evt.candidates || 0 };
+              s.idle = {
+                reasons: evt.reasons || [],
+                candidates: evt.candidates || 0,
+                actionable: !!evt.actionable,
+              };
               _updateIdleBanner();
             }
             return;
