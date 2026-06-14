@@ -49,12 +49,14 @@ const DEFAULT_AGENT   = 'orchestrator';
 let _runTaskImpl = null;
 let _subscribeImpl = null;
 let _isTaskRunningImpl = null;
+let _steerTaskImpl = null;
 async function _loadRunner() {
   if (_runTaskImpl) return;
   const mod = await import('./task-runner.js');
   _runTaskImpl       = mod.runTask;
   _subscribeImpl     = mod.subscribe;
   _isTaskRunningImpl = mod.isTaskRunning;
+  _steerTaskImpl     = mod.steerTask;
 }
 
 // Emit board events back to the SSE bus so live UIs refresh. Lazy import
@@ -197,6 +199,21 @@ function _buildTaskContext(project, card) {
   lines.push('');
   lines.push('Work item id (for the tool calls): ' + card.id);
   lines.push('Project id: ' + project.id);
+  // Surface the most recent comments so re-spawned runs see human steering
+  // notes (and prior AI status posts). Humans may also drop comments mid-run;
+  // those are injected into the live conversation by `steerCard` below.
+  const comments = Array.isArray(card.comments) ? card.comments.slice(-8) : [];
+  if (comments.length) {
+    lines.push('');
+    lines.push('## Recent comments (newest last)');
+    for (const c of comments) {
+      const who = c.author === 'ai' ? 'AI' : 'HUMAN';
+      const body = String(c.body || '').slice(0, 600).replace(/\s+/g, ' ').trim();
+      if (body) lines.push('- [' + who + '] ' + body);
+    }
+    lines.push('');
+    lines.push('Treat any HUMAN comment above (and any new HUMAN comment that arrives mid-run as a user message) as a direct steering instruction from the user — address it before continuing.');
+  }
   return lines.join('\n');
 }
 
@@ -530,6 +547,32 @@ function _findCard(board, cardId) {
     for (const it of board.columns[col]) if (it.id === cardId) return it;
   }
   return null;
+}
+
+// ── Human steering via card comments ─────────────────────────────────────
+// Called by the POST /api/projects/:id/workitems/:itemId/comments route
+// after a HUMAN comment is persisted. If there's a live task for the card,
+// inject the comment into the running conversation so the model reads it
+// at the top of its next step. Otherwise, no-op — the next poll tick will
+// re-pick the card (which now includes the comment in its task context).
+//
+// Returns { steered: bool, taskId?: string }.
+export async function steerCard(projectId, cardId, message) {
+  try {
+    if (!projectId || !cardId || !message) return { steered: false };
+    const ent = _inFlight.get(cardId);
+    if (!ent || ent.projectId !== projectId) return { steered: false };
+    await _loadRunner();
+    if (typeof _steerTaskImpl !== 'function') return { steered: false };
+    const text = String(message).slice(0, 4000).trim();
+    if (!text) return { steered: false };
+    const formatted = 'A new HUMAN comment was just posted on the Kanban card you are working on. Treat it as direct steering from the user — read it and adjust course before continuing.\n\n> ' + text;
+    const ok = _steerTaskImpl(ent.taskId, formatted);
+    return { steered: !!ok, taskId: ent.taskId };
+  } catch (e) {
+    console.warn('[kanban-worker] steerCard failed:', e?.message || e);
+    return { steered: false };
+  }
 }
 
 // ── Auto-archive sweep ───────────────────────────────────────────────────

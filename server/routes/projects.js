@@ -361,6 +361,15 @@ export function registerProjectRoutes(app, deps) {
     });
     if (!comment) return res.status(404).json({ error: 'Item not found' });
     _emitBoardEvent({ type: 'comment', projectId: req.params.id, itemId: req.params.itemId, comment });
+    // If a HUMAN comment arrives while an autopilot run is in-flight for
+    // this card, inject it into the live conversation so the model reads
+    // it as a steering message at the top of its next step. AI-authored
+    // comments must NOT steer (would self-loop with fauna_workitem_comment).
+    if (author === 'human') {
+      import('../../kanban-worker.js')
+        .then(mod => mod.steerCard && mod.steerCard(req.params.id, req.params.itemId, comment.body))
+        .catch(e => console.warn('[projects-route] steerCard failed:', e?.message || e));
+    }
     res.status(201).json(comment);
   });
 

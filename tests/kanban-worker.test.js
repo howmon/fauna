@@ -82,10 +82,12 @@ vi.mock('../task-manager.js', () => ({
 const _subs = new Map(); // taskId → callback (only one needed per test)
 const _runCalls = [];
 const _runningTasks = new Set();
+const _steerCalls = [];
 vi.mock('../task-runner.js', () => ({
   runTask: vi.fn(id => { _runCalls.push(id); return Promise.resolve({ ok: true }); }),
   subscribe: vi.fn((id, cb) => { _subs.set(id, cb); return () => _subs.delete(id); }),
   isTaskRunning: vi.fn(id => _runningTasks.has(id)),
+  steerTask: vi.fn((id, msg) => { _steerCalls.push({ id, msg }); return _runningTasks.has(id); }),
 }));
 
 vi.mock('../server/routes/projects.js', () => ({
@@ -153,6 +155,7 @@ beforeEach(() => {
   _inflightStore = {};
   __test.inFlight.clear();
   _verify.nextResult = { ok: true, skipped: true };
+  _steerCalls.length = 0;
 });
 
 // ── _comparePickability ──────────────────────────────────────────────────
@@ -529,3 +532,44 @@ describe('zombie task recovery', () => {
     expect(card.assignee).toBe('human');
   });
 });
+
+// ── steerCard — human comment → live task steering ───────────────────────
+describe('steerCard', () => {
+  it('injects the comment into the running task when the card is in-flight', async () => {
+    _runningTasks.add('task-99');
+    __test.inFlight.set('card-9', { taskId: 'task-99', projectId: 'p1', unsubscribe: () => {} });
+
+    const r = await worker.steerCard('p1', 'card-9', 'please use TypeScript instead of JS');
+
+    expect(r.steered).toBe(true);
+    expect(r.taskId).toBe('task-99');
+    expect(_steerCalls.length).toBe(1);
+    expect(_steerCalls[0].id).toBe('task-99');
+    // Must mention HUMAN and contain the original text verbatim.
+    expect(_steerCalls[0].msg).toMatch(/HUMAN/);
+    expect(_steerCalls[0].msg).toContain('please use TypeScript instead of JS');
+  });
+
+  it('no-ops when the card has no in-flight task', async () => {
+    const r = await worker.steerCard('p1', 'card-missing', 'hi');
+    expect(r.steered).toBe(false);
+    expect(_steerCalls.length).toBe(0);
+  });
+
+  it('no-ops when the in-flight entry belongs to a different project', async () => {
+    _runningTasks.add('task-x');
+    __test.inFlight.set('card-x', { taskId: 'task-x', projectId: 'p1', unsubscribe: () => {} });
+    const r = await worker.steerCard('p2', 'card-x', 'hi');
+    expect(r.steered).toBe(false);
+    expect(_steerCalls.length).toBe(0);
+  });
+
+  it('no-ops on empty / whitespace messages', async () => {
+    _runningTasks.add('task-1');
+    __test.inFlight.set('card-1', { taskId: 'task-1', projectId: 'p1', unsubscribe: () => {} });
+    expect((await worker.steerCard('p1', 'card-1', '')).steered).toBe(false);
+    expect((await worker.steerCard('p1', 'card-1', '   ')).steered).toBe(false);
+    expect(_steerCalls.length).toBe(0);
+  });
+});
+
