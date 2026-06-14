@@ -331,15 +331,56 @@ export function registerProjectRoutes(app, deps) {
   app.post('/api/projects/:id/workitems/:itemId/move', (req, res) => {
     if (typeof moveWorkItem !== 'function') return res.status(501).json({ error: 'kanban not wired' });
     const actor = req.get('x-fauna-actor') === 'ai' ? 'ai' : 'human';
-    const r = moveWorkItem(req.params.id, req.params.itemId, req.body || {}, { actor, strict: actor === 'ai' });
+    const patch = req.body || {};
+    const r = moveWorkItem(req.params.id, req.params.itemId, patch, { actor, strict: actor === 'ai' });
     if (!r.ok) return res.status(400).json({ error: r.error });
-    _emitBoardEvent({ type: 'moved', projectId: req.params.id, item: r.item });
+
+    // ── Re-arm autopilot on human drag-back ─────────────────────────────
+    // When a human drags a previously-AI card back into a working column
+    // (todo or in_progress) without explicitly setting an assignee, treat
+    // that as "give it another go." Otherwise the card sits there with
+    // assignee='human' (from the prior handoff) and autopilot ignores it
+    // forever — which is surprising because the user's clear intent was
+    // to put it back in play.
+    //
+    // We only do this when:
+    //   • The actor is a human (the AI controls its own assignee).
+    //   • The body did NOT explicitly set assignee (so we don't override
+    //     a deliberate human assignment).
+    //   • The card has prior AI run history (so we never accidentally
+    //     auto-assign a card a human originally created for themselves).
+    //   • The card landed in todo or in_progress (not done/archived/review).
+    let finalItem = r.item;
+    if (
+      actor === 'human' &&
+      patch.assignee === undefined &&
+      (finalItem.column === 'todo' || finalItem.column === 'in_progress') &&
+      finalItem.assignee !== 'ai' &&
+      Array.isArray(finalItem.runs) && finalItem.runs.some(x => x && x.taskId)
+    ) {
+      const rearm = moveWorkItem(
+        req.params.id, req.params.itemId,
+        { assignee: 'ai', claimedBy: null },
+        { actor: 'human' },
+      );
+      if (rearm.ok) {
+        finalItem = rearm.item;
+        if (typeof addWorkItemComment === 'function') {
+          addWorkItemComment(req.params.id, req.params.itemId, {
+            author: 'ai',
+            body: 'Re-armed by user (dragged back to ' + finalItem.column + ') — autopilot will pick this up on the next poll. Prior failure history will be included in the new run prompt.',
+          });
+        }
+      }
+    }
+
+    _emitBoardEvent({ type: 'moved', projectId: req.params.id, item: finalItem });
     // Poke the autopilot worker — if the human just dragged an AI card into
     // todo or in_progress, the next poll should happen now, not in 15 s.
     import('../../kanban-worker.js')
       .then(mod => mod.pokeNow && mod.pokeNow())
       .catch(() => {});
-    res.json(r.item);
+    res.json(finalItem);
   });
 
   // Claim a card. Body: { by:'ai:<agent>' | 'user:<id>' }
