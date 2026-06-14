@@ -6727,8 +6727,10 @@ body.win-platform .acv-header {
 .proj-color-dot.active { border-color: var(--fau-text); transform: scale(1.15); }
 
 /* ── Picker overlay ────────────────────────────────────────────────────── */
+/* z-index must stay above #kb-live-host (9500) so modals opened from inside
+   the live-task drawer (e.g. the Steer prompt) render in front of it. */
 .proj-picker-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 900;
+  position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 10000;
   display: flex; align-items: center; justify-content: center;
 }
 .proj-picker-panel {
@@ -8952,7 +8954,11 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 }
 #kb-live-host.open .kb-live-backdrop { opacity: 1; pointer-events: auto; }
 .kb-live-panel {
-  position: absolute; top: 0; right: 0; bottom: 0; width: min(480px, 92vw);
+  position: absolute; top: 0; right: 0; bottom: 0;
+  /* Width is set inline by the drag handle (see board.js). Default falls
+     back to min(480px, 92vw) for the first open before the user resizes. */
+  width: var(--kb-live-width, min(480px, 92vw));
+  min-width: 320px; max-width: 95vw;
   display: flex; flex-direction: column;
   background: var(--fau-surface, #1a1d23);
   border-left: 1px solid var(--fau-border);
@@ -8961,6 +8967,20 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
   pointer-events: auto;
 }
 #kb-live-host.open .kb-live-panel { transform: translateX(0); }
+/* While the user is actively dragging the resize handle, suppress the
+   slide transition so the panel tracks the cursor instead of easing. */
+#kb-live-host.kb-live-resizing .kb-live-panel { transition: none; }
+/* Resize handle — thin vertical strip on the left edge of the drawer.
+   Click-drag left/right to widen or narrow. */
+.kb-live-resize {
+  position: absolute; top: 0; bottom: 0; left: -3px; width: 6px;
+  cursor: ew-resize; z-index: 5;
+  background: transparent; transition: background .15s ease;
+}
+.kb-live-resize:hover,
+#kb-live-host.kb-live-resizing .kb-live-resize {
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 40%, transparent);
+}
 .kb-live-head {
   display: flex; align-items: flex-start; gap: 10px;
   padding: 12px 14px; border-bottom: 1px solid var(--fau-border);

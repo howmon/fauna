@@ -562,6 +562,7 @@
     h.innerHTML =
       '<div class="kb-live-backdrop" onclick="closeLiveTaskPanel()"></div>' +
       '<aside class="kb-live-panel" role="dialog" aria-label="Live task viewer">' +
+        '<div class="kb-live-resize" role="separator" aria-orientation="vertical" aria-label="Resize panel" title="Drag to resize"></div>' +
         '<header class="kb-live-head">' +
           '<div class="kb-live-head-main">' +
             '<div class="kb-live-title"><span class="kb-live-dot"></span> <span id="kb-live-title-text">Live task</span></div>' +
@@ -578,7 +579,75 @@
       '</aside>';
     document.body.appendChild(h);
     _liveState.host = h;
+    _liveAttachResize(h);
     return h;
+  }
+
+  // Click-drag the left edge of the drawer to resize. Persists the width
+  // to localStorage so the user's preference survives across opens.
+  var KB_LIVE_WIDTH_KEY = 'fauna.kbLivePanelWidth';
+  function _liveClampWidth(px) {
+    var vw = window.innerWidth || 1024;
+    var min = 320;
+    var max = Math.max(min + 80, Math.floor(vw * 0.95));
+    if (px < min) return min;
+    if (px > max) return max;
+    return px;
+  }
+  function _liveApplyWidth(px) {
+    var panel = _liveState.host && _liveState.host.querySelector('.kb-live-panel');
+    if (!panel) return;
+    panel.style.setProperty('--kb-live-width', px + 'px');
+  }
+  function _liveAttachResize(host) {
+    // Restore persisted width before the first paint so the panel slides
+    // in at the user's chosen size rather than the default.
+    try {
+      var saved = parseInt(localStorage.getItem(KB_LIVE_WIDTH_KEY) || '', 10);
+      if (saved > 0) _liveApplyWidth(_liveClampWidth(saved));
+    } catch (_) {}
+    var handle = host.querySelector('.kb-live-resize');
+    if (!handle) return;
+    var dragging = false;
+    function onDown(e) {
+      dragging = true;
+      host.classList.add('kb-live-resizing');
+      // Disable text selection while dragging.
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    }
+    function onMove(e) {
+      if (!dragging) return;
+      // Panel is anchored to the right edge of the viewport, so width is
+      // distance from cursor X to the right edge.
+      var x = e.clientX != null ? e.clientX
+            : (e.touches && e.touches[0] ? e.touches[0].clientX : null);
+      if (x == null) return;
+      var vw = window.innerWidth || 1024;
+      var width = _liveClampWidth(vw - x);
+      _liveApplyWidth(width);
+    }
+    function onUp() {
+      if (!dragging) return;
+      dragging = false;
+      host.classList.remove('kb-live-resizing');
+      document.body.style.userSelect = '';
+      // Persist current width.
+      try {
+        var panel = host.querySelector('.kb-live-panel');
+        if (panel) {
+          var w = parseInt(panel.style.getPropertyValue('--kb-live-width'), 10);
+          if (w > 0) localStorage.setItem(KB_LIVE_WIDTH_KEY, String(w));
+        }
+      } catch (_) {}
+    }
+    handle.addEventListener('mousedown', onDown);
+    handle.addEventListener('touchstart', onDown, { passive: false });
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchend', onUp);
+    window.addEventListener('touchcancel', onUp);
   }
 
   function _liveFmtElapsed(ms) {
