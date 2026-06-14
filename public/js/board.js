@@ -374,9 +374,10 @@
     host.innerHTML = _renderModal({
       mode: 'new', projectId: pid, item: {
         title: '', body: '', column: 'backlog', assignee: null,
-        priority: 'p2', acceptance: '', tags: [],
+        priority: 'p2', acceptance: '', tags: [], model: null,
       },
     });
+    _populateModelSelect();
   };
 
   window.openWorkItemModal = function(projectId, itemId) {
@@ -385,7 +386,30 @@
     if (!item) return;
     var host = _ensureModalHost();
     host.innerHTML = _renderModal({ mode: 'edit', projectId: projectId, item: item });
+    _populateModelSelect();
   };
+
+  // Populate the model dropdown in the open work-item modal from /api/models.
+  // We add the options lazily so the initial render isn't blocked on a fetch,
+  // and we preserve the currently-selected value (set as data-current on render).
+  function _populateModelSelect() {
+    var sel = document.getElementById('kb-m-model');
+    if (!sel) return;
+    var current = sel.getAttribute('data-current') || '';
+    fetch('/api/models').then(function(r) { return r.json(); }).then(function(d) {
+      var models = (d && d.models) || [];
+      if (!models.length) return;
+      var html = '<option value=""' + (!current ? ' selected' : '') + '>— Default —</option>';
+      models.forEach(function(mod) {
+        var id = mod.id || mod.name;
+        var label = mod.name || mod.id;
+        if (!id) return;
+        html += '<option value="' + _esc(id) + '"' +
+          (current === id ? ' selected' : '') + '>' + _esc(label) + '</option>';
+      });
+      sel.innerHTML = html;
+    }).catch(function() { /* leave the default-only dropdown in place */ });
+  }
 
   function _renderModal(opts) {
     var m = opts.item;
@@ -435,6 +459,12 @@
                 '<i class="ti ' + lockIcon + '"></i> ' + lockLabel +
               '</button>' +
             '</label>' : '') +
+            '<label>Model' +
+              '<select id="kb-m-model" data-current="' + _esc(m.model || '') + '">' +
+                '<option value=""' + (!m.model ? ' selected' : '') + '>— Default —</option>' +
+                (m.model ? '<option value="' + _esc(m.model) + '" selected>' + _esc(m.model) + '</option>' : '') +
+              '</select>' +
+            '</label>' +
           '</div>' +
           '<label class="kb-modal-full">Description' +
             '<textarea id="kb-m-body" rows="5" placeholder="What needs to happen?">' + _esc(m.body) + '</textarea>' +
@@ -475,6 +505,7 @@
       assignee: (document.getElementById('kb-m-assignee') || {}).value || null,
       priority: (document.getElementById('kb-m-priority') || {}).value || 'p2',
       acceptance: (document.getElementById('kb-m-acceptance') || {}).value || '',
+      model: (document.getElementById('kb-m-model') || {}).value || null,
     };
     if (!body.title.trim()) { _toast('Title required', true); return; }
     var url = itemId

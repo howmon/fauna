@@ -917,6 +917,8 @@ function _migrateWorkItem(item) {
   if (item.parentId === undefined)        item.parentId = null;
   if (!Array.isArray(item.blockedBy))     item.blockedBy = [];
   if (item.acceptance === undefined)      item.acceptance = '';
+  // Optional model override for AI runs. null = inherit from settings.
+  if (item.model === undefined)           item.model = null;
   if (!Array.isArray(item.runs))          item.runs = [];
   if (!Array.isArray(item.comments))      item.comments = [];
   if (!item.movedAt)                      item.movedAt = item.updatedAt || item.createdAt || now();
@@ -973,6 +975,7 @@ export function addBacklogItem(projectId, item = {}) {
     parentId: item.parentId || null,
     blockedBy: Array.isArray(item.blockedBy) ? item.blockedBy.slice(0, 20).map(String) : [],
     acceptance: String(item.acceptance || '').slice(0, 4000),
+    model: item.model ? String(item.model).slice(0, 100) : null,
     runs: [],
     comments: [],
     researchOf: item.researchOf || null,
@@ -1043,7 +1046,7 @@ export function updateBacklogItem(projectId, itemId, patch = {}) {
     'title', 'body', 'status', 'rice', 'tags',
     'assignee', 'priority', 'estimateMinutes', 'dueAt',
     'parentId', 'blockedBy', 'acceptance', 'lockedByUser', 'researchOf',
-    'verifyCommand',
+    'verifyCommand', 'model',
   ];
   for (const k of allow) if (patch[k] !== undefined) it[k] = patch[k];
   // Keep column ↔ status mirrored if status was changed externally

@@ -171,6 +171,13 @@ function _pickNext(project) {
 function _buildTaskContext(project, card) {
   const lines = [];
   lines.push('You are working on a Kanban work item from the project "' + project.name + '".');
+  if (project.rootPath) {
+    lines.push('');
+    lines.push('## Project root');
+    lines.push('All file reads, edits, and shell commands for this task MUST stay inside:');
+    lines.push('  ' + project.rootPath);
+    lines.push('Treat this as your working directory. Do NOT touch files outside this root.');
+  }
   lines.push('');
   lines.push('## Work item');
   lines.push('Title: ' + card.title);
@@ -204,11 +211,16 @@ function _spawnTaskForCard(project, card) {
     agents: agentName ? [agentName] : [],
     context: _buildTaskContext(project, card),
     permissions: {
-      shell: true,
+      // Anchor the shell to the project root when we know it, otherwise
+      // fall through to the global default (HOME). Without this the model
+      // would happily grep ~/Downloads or any other unrelated folder.
+      shell: project.rootPath ? { cwd: project.rootPath } : true,
       browser: !!(project.permissions && project.permissions.browser),
       figma: false,
     },
-    model: null,           // inherits from settings
+    // Per-card model override (set via the work-item modal). Falls back
+    // to null which means task-runner inherits from app settings.
+    model: card.model || null,
     maxRetries: 0,         // we handle retry at the card level
     timeout: 30 * 60_000,
     maxSteps: 80,
