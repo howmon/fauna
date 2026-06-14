@@ -8865,6 +8865,22 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 }
 .kb-autopilot-toggle .ti { font-size: 14px; }
 
+/* Autopilot idle-reason banner. Sits inline in the kanban toolbar to
+   surface "why isn't this running?" (quota/concurrency/blocked/etc.)
+   without making the user open devtools or read stdout. */
+.kb-idle-banner {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 12px;
+  background: color-mix(in srgb, #f5a623 14%, transparent);
+  border: 1px solid color-mix(in srgb, #f5a623 50%, transparent);
+  color: var(--fau-text);
+  font-size: 12px; line-height: 1.2;
+  max-width: 520px;
+}
+.kb-idle-banner > .ti { font-size: 14px; color: #f5a623; flex: 0 0 auto; }
+.kb-idle-banner .kb-idle-banner-text { white-space: normal; }
+.kb-idle-banner .kb-idle-banner-cand { color: var(--fau-text-dim); }
+
 /* ── Animated "AI is working" border on in-progress cards ──────────────
    Mirrors the rotating gradient border VS Code shows around the Copilot
    Chat input while it's generating. A conic-gradient is painted on a

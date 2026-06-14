@@ -716,35 +716,53 @@ export function pokeNow() {
 }
 
 // Diagnostic: when the picker returns null but the project has AI cards
-// waiting, log a one-line reason so the user can see WHY autopilot is
-// idle. Throttled to once per project per minute.
+// waiting, log a one-line reason AND emit an SSE 'idle' event so the
+// UI can show the user WHY autopilot is silent. Console log is throttled
+// to once per project per minute; SSE event fires every tick (the UI
+// debounces redraws on its side, and a card-state change clears the
+// banner anyway).
 const _unpickedLogAt = new Map();
-function _logUnpickedReason(project) {
-  const last = _unpickedLogAt.get(project.id) || 0;
-  if (Date.now() - last < 60_000) return;
+function _computeIdleReasons(project) {
   const board = getProjectBoard(project.id);
-  if (!board) return;
+  if (!board) return null;
   const kanban = project.kanban || {};
   const concurrency = Math.max(1, Number(kanban.concurrency) || 1);
   const dailyQuota  = Math.max(0, Number(kanban.dailyAiQuota) || 0);
   const inFlight = _aiInFlight(board);
   const candidates = (board.columns.todo || []).concat(board.columns.in_progress || [])
     .filter(it => it.assignee === 'ai');
-  if (!candidates.length) return;  // nothing to pick, not interesting
+  if (!candidates.length) return null;  // nothing to pick, not interesting
   const reasons = [];
-  if (inFlight >= concurrency) reasons.push('concurrency cap (' + inFlight + '/' + concurrency + ')');
-  if (dailyQuota && _quotaUsed(project.id) >= dailyQuota) reasons.push('daily quota (' + _quotaUsed(project.id) + '/' + dailyQuota + ')');
+  if (inFlight >= concurrency) reasons.push({ kind: 'concurrency', label: 'concurrency cap', current: inFlight, limit: concurrency });
+  const used = _quotaUsed(project.id);
+  if (dailyQuota && used >= dailyQuota) reasons.push({ kind: 'quota', label: 'daily AI quota reached', current: used, limit: dailyQuota });
   const claimed   = candidates.filter(it => !!it.claimedBy).length;
   const locked    = candidates.filter(it => it.lockedByUser).length;
   const blocked   = candidates.filter(it => it.column === 'todo' && _isBlocked(it, board)).length;
   const liveTrack = candidates.filter(it => it.column === 'in_progress' && _inFlight.has(it.id)).length;
-  if (claimed)   reasons.push(claimed + ' already claimed');
-  if (locked)    reasons.push(locked + ' locked by user');
-  if (blocked)   reasons.push(blocked + ' blocked by deps');
-  if (liveTrack) reasons.push(liveTrack + ' already in-flight');
-  if (!reasons.length) reasons.push('unknown — no candidate matched the picker filter');
-  console.log('[kanban-worker] ' + project.name + ': autopilot idle —', reasons.join(', '),
-    '(candidates=' + candidates.length + ')');
+  if (claimed)   reasons.push({ kind: 'claimed',   label: 'already claimed',     count: claimed });
+  if (locked)    reasons.push({ kind: 'locked',    label: 'locked by user',      count: locked });
+  if (blocked)   reasons.push({ kind: 'blocked',   label: 'blocked by deps',     count: blocked });
+  if (liveTrack) reasons.push({ kind: 'inflight',  label: 'already in-flight',   count: liveTrack });
+  if (!reasons.length) reasons.push({ kind: 'unknown', label: 'no candidate matched the picker filter' });
+  return { reasons, candidates: candidates.length };
+}
+function _logUnpickedReason(project) {
+  const info = _computeIdleReasons(project);
+  if (!info) return;
+  // Emit every tick so the UI badge reflects current state (the SSE handler
+  // diffs and is cheap).
+  _emitBoard({ type: 'idle', projectId: project.id, reasons: info.reasons, candidates: info.candidates });
+  // Console log is throttled to keep stdout readable.
+  const last = _unpickedLogAt.get(project.id) || 0;
+  if (Date.now() - last < 60_000) return;
+  const summary = info.reasons.map(r => {
+    if (r.kind === 'concurrency' || r.kind === 'quota') return r.label + ' (' + r.current + '/' + r.limit + ')';
+    if (typeof r.count === 'number') return r.count + ' ' + r.label;
+    return r.label;
+  }).join(', ');
+  console.log('[kanban-worker] ' + project.name + ': autopilot idle —', summary,
+    '(candidates=' + info.candidates + ')');
   _unpickedLogAt.set(project.id, Date.now());
 }
 
@@ -806,4 +824,16 @@ export const __test = {
   recoverZombieTasks: _recoverZombieTasks,
   inflightFile: INFLIGHT_FILE,
   quota: { read: _readQuota, increment: _quotaIncrement, used: _quotaUsed },
+  computeIdleReasons: _computeIdleReasons,
 };
+
+// Public API: compute why autopilot is idle on a project. Returns
+// { reasons: [{kind,label,...}], candidates: number } or null when there
+// are no AI candidates (in which case autopilot is correctly silent).
+// The projects route exposes this via /api/projects/:id/board so the UI
+// can fetch it on demand (in addition to the SSE 'idle' event).
+export function getIdleReasons(projectId) {
+  const p = getAllProjects().find(x => x && x.id === projectId);
+  if (!p) return null;
+  return _computeIdleReasons(p);
+}

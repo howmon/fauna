@@ -108,6 +108,15 @@ function readProjects() {
       p.githubIntegrations.__root = p.githubIntegration;
       delete p.githubIntegration;
     }
+    // Lift the legacy `dailyAiQuota: 10` default to `0` (unlimited). The
+    // quota was an early safety cap, but it silently stops autopilot mid-day
+    // with no UI to raise it. New projects default to 0 (see createProject
+    // below); this migration carries existing projects forward in place.
+    // If a user has explicitly tuned the value to anything other than the
+    // old default, we leave it alone.
+    if (p.kanban && p.kanban.dailyAiQuota === 10) {
+      p.kanban.dailyAiQuota = 0;
+    }
   }
   return raw;
 }
@@ -203,7 +212,7 @@ export function createProject(opts = {}) {
         concurrency: 3,              // max in-flight AI items per project
         archiveDelayMin: 10,         // auto-archive done items after N min
         maxAiRetries: 2,             // failures before card returns to human
-        dailyAiQuota: 10,            // safety cap per UTC day
+        dailyAiQuota: 0,             // 0 = unlimited (no daily safety cap)
         columns: null,               // null = use defaults; or override labels
       }, userKanban);
       // Per-column skill bindings. When the kanban-worker runs a card it

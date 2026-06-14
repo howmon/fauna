@@ -285,6 +285,45 @@ describe('_pickNext', () => {
   });
 });
 
+// ── _computeIdleReasons (autopilot diagnostic) ───────────────────────────
+describe('computeIdleReasons', () => {
+  it('returns null when no AI candidates are waiting', () => {
+    _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true, concurrency: 2, dailyAiQuota: 10 } });
+    _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'todo', assignee: 'human' }));
+    expect(__test.computeIdleReasons(_db.projects[0])).toBe(null);
+  });
+  it('reports daily-quota reason when quota exhausted', () => {
+    _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true, concurrency: 2, dailyAiQuota: 5 } });
+    _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'todo', assignee: 'ai' }));
+    const today = new Date().toISOString().slice(0, 10);
+    _quotaStore = { ['p1:' + today]: 5 };
+    const info = __test.computeIdleReasons(_db.projects[0]);
+    expect(info.candidates).toBe(1);
+    const quota = info.reasons.find(r => r.kind === 'quota');
+    expect(quota).toBeTruthy();
+    expect(quota.current).toBe(5);
+    expect(quota.limit).toBe(5);
+  });
+  it('reports concurrency-cap reason when in-flight saturates', () => {
+    _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true, concurrency: 1 } });
+    _db.items.push(_mkItem({ id: 'busy', projectId: 'p1', column: 'in_progress', assignee: 'ai', claimedBy: 'ai:x' }));
+    _db.items.push(_mkItem({ id: 'wait', projectId: 'p1', column: 'todo',        assignee: 'ai' }));
+    const info = __test.computeIdleReasons(_db.projects[0]);
+    const conc = info.reasons.find(r => r.kind === 'concurrency');
+    expect(conc).toBeTruthy();
+    expect(conc.current).toBe(1);
+    expect(conc.limit).toBe(1);
+  });
+  it('reports blocked-by-deps reason for todo cards', () => {
+    _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true, concurrency: 2 } });
+    _db.items.push(_mkItem({ id: 'blocker', projectId: 'p1', column: 'in_progress', assignee: 'ai', claimedBy: 'ai:x' }));
+    _db.items.push(_mkItem({ id: 'b1', projectId: 'p1', column: 'todo', assignee: 'ai', blockedBy: ['blocker'] }));
+    const info = __test.computeIdleReasons(_db.projects[0]);
+    // Concurrency NOT saturated (cap=2, 1 in flight), so the only reason must be 'blocked'.
+    expect(info.reasons.some(r => r.kind === 'blocked' && r.count === 1)).toBe(true);
+  });
+});
+
 // ── _archiveSweep ────────────────────────────────────────────────────────
 describe('_archiveSweep', () => {
   const oldTs = new Date(Date.now() - 60 * 60_000).toISOString(); // 60 min ago

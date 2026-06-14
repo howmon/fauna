@@ -91,7 +91,8 @@
                 '<input type="number" id="kb-concurrency" min="1" max="10" step="1" ' +
                   'onchange="kbSetConcurrency(this.value)" ' +
                   'style="width:48px;background:var(--fau-surface2);border:1px solid var(--fau-border);border-radius:6px;padding:3px 6px;color:var(--fau-text);font-size:12px;">' +
-              '</label>'
+              '</label>' +
+              '<div id="kb-idle-banner" class="kb-idle-banner" style="display:none"></div>'
             : '') +
         '</div>' +
         '<div class="kb-toolbar-right">' +
@@ -140,7 +141,10 @@
         // Capture project kanban config so the toolbar can render the
         // autopilot toggle in sync with the server.
         s.kanban = (data && data.kanban) || {};
+        // Capture the autopilot idle-reason snapshot (server-attached).
+        s.idle = (data && data.idle) || null;
         _updateAutopilotToggle();
+        _updateIdleBanner();
       }
       _renderGrid();
     }).catch(function(e) {
@@ -340,6 +344,35 @@
     if (cb) cb.checked = !!(s.kanban && s.kanban.autopilot);
     var conc = document.getElementById('kb-concurrency');
     if (conc) conc.value = (s.kanban && Number(s.kanban.concurrency)) || 3;
+  }
+
+  // Render the autopilot idle-reason banner inline with the toolbar. The
+  // server attaches a `board.idle = { reasons:[{kind,label,...}], candidates }`
+  // snapshot whenever the picker returned null with AI candidates waiting.
+  // The kanban-worker also pushes 'idle' over SSE every tick.
+  function _updateIdleBanner() {
+    var s = window._kbState;
+    var el = document.getElementById('kb-idle-banner');
+    if (!el) return;
+    var info = s.idle;
+    if (!info || !info.reasons || !info.reasons.length || !(s.kanban && s.kanban.autopilot)) {
+      el.style.display = 'none';
+      el.innerHTML = '';
+      return;
+    }
+    var parts = info.reasons.map(function(r) {
+      if (r.kind === 'concurrency') return 'parallel cap ' + r.current + '/' + r.limit;
+      if (r.kind === 'quota')       return 'daily AI quota ' + r.current + '/' + r.limit;
+      if (typeof r.count === 'number') return r.count + ' ' + r.label;
+      return r.label;
+    });
+    el.style.display = '';
+    el.innerHTML =
+      '<i class="ti ti-alert-triangle" aria-hidden="true"></i>' +
+      '<span class="kb-idle-banner-text">' +
+        '<strong>Autopilot idle</strong> — ' + _esc(parts.join(' · ')) +
+        ' <span class="kb-idle-banner-cand">(' + info.candidates + ' AI card' + (info.candidates === 1 ? '' : 's') + ' waiting)</span>' +
+      '</span>';
   }
 
   window.kbSetConcurrency = function(value) {
@@ -605,6 +638,17 @@
           if (evt.type === 'ping' || evt.type === 'hello') return;
           // For per-project view, ignore events from other projects.
           if (s.scope === 'project' && evt.projectId && evt.projectId !== s.projectId) return;
+          // 'idle' is a lightweight diagnostic — update the banner inline
+          // without re-fetching the whole board.
+          if (evt.type === 'idle') {
+            if (s.scope === 'project') {
+              s.idle = { reasons: evt.reasons || [], candidates: evt.candidates || 0 };
+              _updateIdleBanner();
+            }
+            return;
+          }
+          // Any structural change (move/claim/comment/etc.) implicitly
+          // clears the idle banner — the upcoming fetch will overwrite it.
           refreshKanbanBoard();
         } catch (_) {}
       };

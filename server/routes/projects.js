@@ -282,10 +282,18 @@ export function registerProjectRoutes(app, deps) {
 
   // ── Kanban / Work Items ───────────────────────────────────────────────
   // Per-project board (cards grouped by column).
-  app.get('/api/projects/:id/board', (req, res) => {
+  app.get('/api/projects/:id/board', async (req, res) => {
     if (typeof getProjectBoard !== 'function') return res.status(501).json({ error: 'kanban not wired' });
     const board = getProjectBoard(req.params.id);
     if (!board) return res.status(404).json({ error: 'Project not found' });
+    // Attach the autopilot idle-reason snapshot so the UI can render
+    // "why isn't this running?" without waiting for the next SSE tick.
+    try {
+      const mod = await import('../../kanban-worker.js');
+      if (typeof mod.getIdleReasons === 'function') {
+        board.idle = mod.getIdleReasons(req.params.id);
+      }
+    } catch (_) { /* worker not loaded — fine, UI just won't show idle */ }
     res.json(board);
   });
 
