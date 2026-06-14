@@ -353,9 +353,11 @@ export async function recoverInterruptedRuns() {
   await _loadRunner();
   const zombies = await _rehydrateInFlight();
   _recoverZombieTasks(zombies);
-  // Also flush stale orphans whose process died WITHOUT writing the
-  // inflight file (e.g. hard kill before first persist).
-  try { _recoverOrphans(); } catch (_) {}
+  // Aggressive sweep — at this point the inflight map is fully rehydrated,
+  // so any AI-claimed in_progress card NOT in `_inFlight` is provably dead.
+  // Release its claim immediately so the next poll re-picks it (the picker
+  // now accepts unclaimed in_progress cards).
+  try { _recoverOrphans({ aggressive: true }); } catch (_) {}
 }
 
 // ── Claim + run one card ─────────────────────────────────────────────────
@@ -626,8 +628,16 @@ function _hasUnansweredHumanComment(card) {
 // restarts (in-memory _inFlight is lost) or when the task-runner silently
 // drops a job. We periodically scan in_progress cards claimed by AI; if
 // none are tracked locally AND the card hasn't moved in ORPHAN_STALE_MS,
-// bounce it back to `todo` so the next poll can claim it again.
-function _recoverOrphans() {
+// release the claim so the next poll can re-pick it.
+//
+// `aggressive=true` skips the stale-time check — used at startup right
+// after `_rehydrateInFlight()` runs, because at that point we KNOW any
+// AI-claimed in_progress card without an inflight entry is dead (no
+// race against an in-progress claim transition). The card is left in
+// `in_progress` (not bounced to todo) so the new picker — which now
+// scans both columns — can grab it again immediately.
+function _recoverOrphans(opts = {}) {
+  const aggressive = opts.aggressive === true;
   const items = listAllWorkItems({ column: 'in_progress', limit: 2000 });
   const now = Date.now();
   for (const it of items) {
@@ -639,20 +649,25 @@ function _recoverOrphans() {
     if (_inFlight.has(it.id)) continue;
     // Honour user lock.
     if (it.lockedByUser) continue;
-    const movedAt = Date.parse(it.movedAt || it.updatedAt || it.createdAt || 0);
-    if (!Number.isFinite(movedAt) || (now - movedAt) < ORPHAN_STALE_MS) continue;
-    // Honour autopilot off — without it, the recovered card just sits in todo, which is fine.
+    if (!aggressive) {
+      const movedAt = Date.parse(it.movedAt || it.updatedAt || it.createdAt || 0);
+      if (!Number.isFinite(movedAt) || (now - movedAt) < ORPHAN_STALE_MS) continue;
+    }
+    // Release the claim in-place (keep column = in_progress). The picker
+    // now accepts unclaimed in_progress cards, so the next poll re-picks.
     const r = moveWorkItem(it.projectId, it.id, {
-      column: 'todo', claimedBy: null,
+      claimedBy: null,
       runEntry: { taskId: null, finishedAt: now, ok: false, recovered: true },
     }, { actor: 'ai', strict: false });
     if (r && r.ok) {
       try {
         addWorkItemComment(it.projectId, it.id, { author: 'ai',
-          body: 'Autopilot recovered this card — it was stuck in_progress with no live task. Reset to todo so it can be picked up again.',
+          body: aggressive
+            ? 'Autopilot restarted — previous run did not survive. Released the claim so the card can be re-picked.'
+            : 'Autopilot recovered this card — it was stuck in_progress with no live task. Released the claim so it can be picked up again.',
         });
       } catch (_) {}
-      appendAutonomousRunLog(it.projectId, { kind: 'kanban_orphan_recovered', cardId: it.id });
+      appendAutonomousRunLog(it.projectId, { kind: 'kanban_orphan_recovered', cardId: it.id, aggressive });
       _emitBoard({ type: 'moved', projectId: it.projectId, itemId: it.id });
     }
   }
