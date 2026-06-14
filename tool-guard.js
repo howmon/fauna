@@ -29,6 +29,47 @@ const FIGMA_TOOLS = new Set([
   'get_annotations', 'get_styles', 'get_selection',
 ]);
 
+// ── Free tools — bookkeeping calls that don't count toward any cap ───────
+// The cap exists to bound model rambling and runaway tool loops on
+// expensive operations (shell, browser, file I/O). Board/task plumbing
+// is cheap, idempotent, and necessary for the agent to keep the system
+// in sync with what it's doing. Counting these against the cap means a
+// long engineering run runs out of budget *before* it can post the
+// closing comment + move the card — which is exactly the bug the user
+// reported ("claim recorded; the move did not — tool cap (30) hit").
+const FREE_TOOLS = new Set([
+  // Kanban / work-item bookkeeping
+  'fauna_workitem_move',
+  'fauna_workitem_claim',
+  'fauna_workitem_comment',
+  'fauna_workitem_update',
+  'fauna_workitem_verify',
+  'fauna_board_scan',
+  'fauna_project_audit',
+  'fauna_list_projects',
+  // Memory / context bookkeeping (already idempotent, capped elsewhere)
+  'fauna_remember',
+  'fauna_recall',
+  'fauna_forget',
+  // Settings / model introspection
+  'fauna_list_models',
+  'fauna_get_settings',
+  'fauna_list_skills',
+  'fauna_get_skill',
+  'fauna_list_references',
+  'fauna_get_reference',
+  'fauna_get_agent_instructions',
+]);
+
+/**
+ * Whether a tool is free (doesn't count toward any cap).
+ * @param {string} name
+ * @returns {boolean}
+ */
+export function isFreeTool(name) {
+  return FREE_TOOLS.has(name);
+}
+
 // ── Human-readable tool descriptions ──────────────────────────────────────
 
 const TOOL_LABELS = {
@@ -152,6 +193,14 @@ export class ToolGuardContext {
    * @returns {Promise<{action: string, reason?: string, inject?: object}>}
    */
   async check(toolName, args) {
+    // ── 0. Free tools — bookkeeping that doesn't count toward any cap ──
+    // Allow immediately without incrementing counters so a long engineering
+    // run can still post comments, move cards, verify, etc. right up to
+    // the moment it actually finishes.
+    if (FREE_TOOLS.has(toolName)) {
+      return { action: 'allow' };
+    }
+
     const category = getToolCategory(toolName);
     this.totalCount++;
     this.categoryCounts[category]++;

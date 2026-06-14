@@ -368,12 +368,15 @@
       if (typeof r.count === 'number') return r.count + ' ' + r.label;
       return r.label;
     });
+    var summary = parts.join(' · ');
+    var waiting = info.candidates + ' waiting';
     el.style.display = '';
+    el.title = 'Autopilot idle — ' + summary + ' (' + info.candidates + ' AI card' + (info.candidates === 1 ? '' : 's') + ' waiting)';
     el.innerHTML =
       '<i class="ti ti-alert-triangle" aria-hidden="true"></i>' +
       '<span class="kb-idle-banner-text">' +
-        '<strong>Autopilot idle</strong> — ' + _esc(parts.join(' · ')) +
-        ' <span class="kb-idle-banner-cand">(' + info.candidates + ' AI card' + (info.candidates === 1 ? '' : 's') + ' waiting)</span>' +
+        '<strong>Idle:</strong> ' + _esc(summary) +
+        ' <span class="kb-idle-banner-cand">· ' + _esc(waiting) + '</span>' +
       '</span>';
   }
 

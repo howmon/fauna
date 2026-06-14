@@ -8818,11 +8818,15 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 /* ── Kanban Board (project Tasks tab + global view) ───────────────────── */
 .kb-toolbar {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; padding: 4px 4px 10px; flex-shrink: 0;
+  gap: 8px 12px; padding: 4px 4px 10px; flex-shrink: 0;
+  flex-wrap: wrap;
 }
-.kb-toolbar-left, .kb-toolbar-right { display: flex; align-items: center; gap: 8px; }
-.kb-filter-group { display: inline-flex; border: 1px solid var(--fau-border); border-radius: 6px; overflow: hidden; }
-.kb-filter-group .kb-chip { border: none; border-radius: 0; border-right: 1px solid var(--fau-border); padding: 4px 10px; }
+.kb-toolbar-left, .kb-toolbar-right {
+  display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap; min-width: 0;
+}
+.kb-filter-group { display: inline-flex; border: 1px solid var(--fau-border); border-radius: 6px; overflow: hidden; flex-shrink: 0; }
+.kb-filter-group .kb-chip { border: none; border-radius: 0; border-right: 1px solid var(--fau-border); padding: 4px 10px; white-space: nowrap; }
 .kb-filter-group .kb-chip:last-child { border-right: none; }
 .kb-chip {
   background: var(--fau-surface2); color: var(--fau-text-dim);
@@ -8830,6 +8834,7 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
   padding: 4px 10px; font-size: 12px; cursor: pointer;
   display: inline-flex; align-items: center; gap: 4px;
   transition: background .12s, color .12s;
+  white-space: nowrap;
 }
 .kb-chip:hover { color: var(--fau-text); background: var(--fau-surface3); }
 .kb-chip.active { color: var(--accent); background: var(--accent-dim); border-color: var(--accent); }
@@ -8838,6 +8843,7 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
   background: var(--fau-surface2); border: 1px solid var(--fau-border); border-radius: 6px;
   padding: 5px 11px; font-size: 12px; color: var(--fau-text-dim); cursor: pointer;
   transition: background .12s, color .12s, border-color .12s;
+  white-space: nowrap; flex-shrink: 0;
 }
 .kb-btn:hover { background: var(--fau-surface3); color: var(--fau-text); }
 .kb-btn.primary { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
@@ -8852,6 +8858,7 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 .kb-toggle-wrap {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 12px; color: var(--fau-text-dim); cursor: pointer;
+  white-space: nowrap; flex-shrink: 0;
 }
 .kb-autopilot-toggle {
   padding: 4px 10px; border-radius: 14px;
@@ -8874,11 +8881,19 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
   background: color-mix(in srgb, #f5a623 14%, transparent);
   border: 1px solid color-mix(in srgb, #f5a623 50%, transparent);
   color: var(--fau-text);
-  font-size: 12px; line-height: 1.2;
-  max-width: 520px;
+  font-size: 12px; line-height: 1.3;
+  max-width: 360px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
 }
 .kb-idle-banner > .ti { font-size: 14px; color: #f5a623; flex: 0 0 auto; }
-.kb-idle-banner .kb-idle-banner-text { white-space: normal; }
+.kb-idle-banner .kb-idle-banner-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
 .kb-idle-banner .kb-idle-banner-cand { color: var(--fau-text-dim); }
 
 /* ── Animated "AI is working" border on in-progress cards ──────────────
