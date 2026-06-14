@@ -20,6 +20,8 @@ import {
   touchProject, linkConversation, linkTask,
   addSource, removeSource, syncSource, listFiles, readSourceFile, resolveSourceFilePath,
   addContext, updateContext, removeContext, contextFromArtifact,
+  addBacklogItem, updateBacklogItem, moveWorkItem, addWorkItemComment,
+  setWorkItemLock, listAllWorkItems, getProjectBoard, prioritizeBacklog,
 } from './project-manager.js';
 import { loadInstructionFiles } from './lib/instruction-files.js';
 import { runDecay } from './memory-store.js';
@@ -258,6 +260,17 @@ registerProjectRoutes(app, {
   removeContext,
   contextFromArtifact,
   buildProjectProfile,
+  // Kanban
+  addBacklogItem,
+  updateBacklogItem,
+  moveWorkItem,
+  addWorkItemComment,
+  setWorkItemLock,
+  listAllWorkItems,
+  getProjectBoard,
+  prioritizeBacklog,
+  // Project audit
+  getInternalAICaller: () => internalAICaller,
 });
 
 registerGitHubRoutes(app, {
@@ -591,6 +604,11 @@ export function startServer(port) {
     startScheduler(task => {
       runTask(task.id, { trigger: 'scheduler' }).catch(e => console.error('[tasks] scheduled run failed:', e.message));
     });
+    // Kick off the Kanban autopilot worker. It only acts on projects with
+    // kanban.autopilot=true (off by default), so it's safe to always start.
+    import('./kanban-worker.js')
+      .then(mod => mod.startKanbanWorker())
+      .catch(e => console.warn('[kanban-worker] failed to start:', e?.message || e));
     // Run fact memory decay on startup (prune facts not accessed in 60 days)
     try { runDecay(); } catch (_) {}
 

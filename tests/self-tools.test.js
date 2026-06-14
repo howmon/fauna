@@ -66,7 +66,13 @@ describe('self-tools', () => {
       // fauna_layout_pcb, fauna_render_pcb, fauna_check_board, fauna_build_guide.
       // Bumped to 71 after adding fauna_file_search + fauna_grep (Copilot-style
       // first-class retrieval — replace shelling out to find/grep).
-      expect(SELF_TOOL_DEFS).toHaveLength(71);
+      // Bumped to 76 after adding the Kanban work-item toolset:
+      // fauna_workitem_move, fauna_workitem_claim, fauna_workitem_comment,
+      // fauna_workitem_update, fauna_board_scan (Phase 3 — AI drives the board).
+      // Bumped to 77 after adding fauna_project_audit (Phase 6 — architecture-aware
+      // feature generation).
+      // Bumped to 78 after adding fauna_workitem_verify (Phase 7 — verification gate).
+      expect(SELF_TOOL_DEFS).toHaveLength(78);
     });
 
     it('each tool has required OpenAI function format', () => {

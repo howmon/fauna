@@ -96,6 +96,9 @@
       <button class="sidebar-nav-item" onclick="toggleTasksPanel()">
         <i class="ti ti-bolt"></i><span>Automations</span>
       </button>
+      <button class="sidebar-nav-item" onclick="toggleBoardPanel()">
+        <i class="ti ti-layout-kanban"></i><span>Board</span>
+      </button>
     </nav>
 
     <!-- Active project strip removed: projects now live as collapsible folders
@@ -2743,6 +2746,7 @@ Examples:
 <script src="js/tasks.js"></script>
 <script src="js/github-accounts.js"></script>
 <script src="js/projects.js"></script>
+<script src="js/board.js"></script>
 <script src="js/design.js"></script>
 <script src="js/selection-menu.js"></script>
 <script src="js/app.js"></script>
@@ -2777,6 +2781,22 @@ Examples:
       </div>
     </div>
   </div>
+</div>
+
+<!-- ── Global Board panel ─────────────────────────────────────── -->
+<div id="board-panel">
+  <div id="board-panel-header">
+    <button id="board-panel-back" onclick="toggleBoardPanel()" title="Back to app">
+      <i class="ti ti-arrow-left"></i>
+      Back
+    </button>
+    <div id="board-panel-title">
+      <i class="ti ti-layout-kanban"></i>
+      <span>All Project Tasks</span>
+    </div>
+    <div id="board-panel-spacer"></div>
+  </div>
+  <div id="board-panel-body"></div>
 </div>
 
 <!-- ── Figma Rules panel ──────────────────────────────────────────── -->

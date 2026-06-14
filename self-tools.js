@@ -22,6 +22,8 @@ import { runDoctor } from './server/lib/doctor.js';
 import {
   createProject, getAllProjects, getProject,
   addBacklogItem, listBacklog, prioritizeBacklog,
+  updateBacklogItem, moveWorkItem, addWorkItemComment,
+  setWorkItemLock, listAllWorkItems, getProjectBoard,
 } from './project-manager.js';
 import { renderCircuit } from './lib/circuit-renderer.js';
 import { validateCircuit } from './lib/circuit-validate.js';
@@ -1745,7 +1747,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_feature_request_create',
-      description: 'Append a feature request or backlog item to the active project backlog. Use when the user describes wanting something new, when reflection surfaces a gap, or when debate produces a follow-up. Returns the created item id.',
+      description: 'Append a feature request or backlog item to the active project backlog (Kanban board). Use when the user describes wanting something new, when reflection surfaces a gap, or when debate produces a follow-up. Returns the created item id. Optional fields let you drop it straight into a column or assign it.',
       parameters: {
         type: 'object',
         properties: {
@@ -1760,7 +1762,11 @@ export const SELF_TOOL_DEFS = [
               confidence: { type: 'number' }, effort: { type: 'number' },
             },
           },
-          projectId: { type: 'string', description: 'Project id. Defaults to the active project.' },
+          column:     { type: 'string', enum: ['backlog', 'todo', 'in_progress', 'review', 'done', 'archived'], description: 'Initial column. Defaults to "backlog". Use "todo" to make it pickable by the autopilot.' },
+          assignee:   { type: 'string', enum: ['ai', 'human'], description: 'Who should pick this up. Omit to leave unassigned.' },
+          priority:   { type: 'string', enum: ['p0', 'p1', 'p2', 'p3'], description: 'Priority bucket. Defaults to p2.' },
+          acceptance: { type: 'string', description: 'Bulletted acceptance criteria the AI worker must satisfy before marking Done.' },
+          projectId:  { type: 'string', description: 'Project id. Defaults to the active project.' },
         },
         required: ['title'],
       },
@@ -1775,7 +1781,8 @@ export const SELF_TOOL_DEFS = [
         type: 'object',
         properties: {
           projectId: { type: 'string', description: 'Project id. Defaults to the active project.' },
-          status:    { type: 'string', description: 'Filter: new | groomed | in-progress | done | dropped.' },
+          status:    { type: 'string', description: 'Filter: new | groomed | in-progress | done | dropped (legacy).' },
+          column:    { type: 'string', enum: ['backlog', 'todo', 'in_progress', 'review', 'done', 'archived'], description: 'Filter by Kanban column.' },
           limit:     { type: 'number', description: 'Max items (default 50).' },
         },
       },
@@ -1785,13 +1792,131 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_backlog_prioritize',
-      description: 'Score and rank backlog items. method="rice" (default) computes RICE = reach*impact*confidence/effort. method="moscow" buckets by must/should/could/wont tags.',
+      description: 'Score and rank backlog items. method="rice" (default) computes RICE = reach*impact*confidence/effort. method="moscow" buckets by must/should/could/wont tags. Also promotes new items into the Todo column so the autopilot can pick them up.',
       parameters: {
         type: 'object',
         properties: {
           projectId: { type: 'string', description: 'Project id. Defaults to the active project.' },
           method:    { type: 'string', enum: ['rice', 'moscow'], description: 'Prioritization method.' },
         },
+      },
+    },
+  },
+  // ── Kanban work items (board automation) ─────────────────────────────
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_workitem_move',
+      description: 'Move a work item between Kanban columns. Use this when you finish a phase of work (move "in_progress" → "review", then "review" → "done"). The AI may only move cards forward (todo → in_progress → review → done → archived). Returns the updated item.',
+      parameters: {
+        type: 'object',
+        properties: {
+          itemId:    { type: 'string', description: 'Work item id (returned by fauna_feature_request_create or fauna_board_scan).' },
+          column:    { type: 'string', enum: ['backlog', 'todo', 'in_progress', 'review', 'done', 'archived'], description: 'Target column.' },
+          claim:     { type: 'boolean', description: 'When true and moving into in_progress, also claims the card as ai:<agent>.' },
+          projectId: { type: 'string', description: 'Project id. Defaults to the active project.' },
+        },
+        required: ['itemId', 'column'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_workitem_claim',
+      description: 'Mark that you are taking ownership of a work item. Sets claimedBy="ai:<agent>" so other AI agents skip it and humans can see who is on the card. Call this right before you start the work, typically alongside a move to in_progress.',
+      parameters: {
+        type: 'object',
+        properties: {
+          itemId:    { type: 'string' },
+          projectId: { type: 'string', description: 'Project id. Defaults to the active project.' },
+        },
+        required: ['itemId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_workitem_comment',
+      description: 'Post a comment on a work item — status update, question for the user, blocker, link to relevant code. Comments appear in the card modal and are visible to humans. Use this to leave breadcrumbs when handing the card off or pausing for input.',
+      parameters: {
+        type: 'object',
+        properties: {
+          itemId:    { type: 'string' },
+          body:      { type: 'string', description: 'Comment body (<= 4000 chars).' },
+          projectId: { type: 'string', description: 'Project id. Defaults to the active project.' },
+        },
+        required: ['itemId', 'body'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_workitem_update',
+      description: 'Edit a work item\'s title, body, acceptance criteria, priority, tags, assignee, or verifyCommand. Use this when you refine a card after research or when you discover the original scope was wrong. Set `verifyCommand` to a shell command (e.g. "npx vitest run tests/my-feature.test.js") so the autopilot can prove the work is done before allowing a move to "done". Does NOT move columns — use fauna_workitem_move for that.',
+      parameters: {
+        type: 'object',
+        properties: {
+          itemId:        { type: 'string' },
+          title:         { type: 'string' },
+          body:          { type: 'string' },
+          acceptance:    { type: 'string' },
+          priority:      { type: 'string', enum: ['p0', 'p1', 'p2', 'p3'] },
+          tags:          { type: 'array', items: { type: 'string' } },
+          assignee:      { type: 'string', enum: ['ai', 'human'] },
+          verifyCommand: { type: 'string', description: 'Per-card shell verifier (e.g. "npx vitest run tests/x.test.js"). Overrides project qa.command. Pass empty string to clear.' },
+          projectId:     { type: 'string', description: 'Project id. Defaults to the active project.' },
+        },
+        required: ['itemId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_board_scan',
+      description: 'List Kanban work items. Scope="project" (default) returns the active project board; scope="global" aggregates across every project. Use this to (a) find your next card to claim, (b) check if a similar card already exists before creating a duplicate, or (c) summarise board status for the user. Returns items with column, assignee, priority, claimedBy, lockedByUser and counts of comments/runs.',
+      parameters: {
+        type: 'object',
+        properties: {
+          scope:     { type: 'string', enum: ['project', 'global'], description: 'project = current project only (default); global = every project.' },
+          column:    { type: 'string', enum: ['backlog', 'todo', 'in_progress', 'review', 'done', 'archived'], description: 'Filter to one column.' },
+          assignee:  { type: 'string', enum: ['ai', 'human'], description: 'Filter to cards assigned to AI or to humans.' },
+          limit:     { type: 'number', description: 'Max items (default 50, max 200).' },
+          projectId: { type: 'string', description: 'Project id when scope="project". Defaults to the active project.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_project_audit',
+      description: 'Audit the active project (or a named project) and propose ≤ N concrete work items based on its architecture. Walks rootPath, summarises the file tree + key config files (package.json, README, etc.), then prompts the model for high-value feature/refactor/test/docs/ci suggestions. New items land in the project backlog with source="reflection" and column="backlog" for human review. Dedup is by normalised title hash. Returns {added:[{id,title,priority}], skipped:[titles], summary:{...}}. Use when the user asks "what should we work on next?", "audit this project", or after you finish a major feature and want to surface follow-ups. Be selective — quality over quantity.',
+      parameters: {
+        type: 'object',
+        properties: {
+          projectId:    { type: 'string', description: 'Project id. Defaults to the active project.' },
+          maxProposals: { type: 'number', description: 'Cap on number of items to propose (default 5, max 10).' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_workitem_verify',
+      description: 'Run the verifier for a Kanban work item and record the result on the card. Resolution order for the command: 1) the card\'s `verifyCommand` (per-card override, settable via fauna_workitem_update), 2) the project\'s `qa.command`, 3) none → skipped pass. Runs the shell command with cwd=project.rootPath, captures stdout/stderr (clipped to 8 KB), times out at 5 min. On exit-code 0 the card is marked verified=true and you may move it to "done"; non-zero blocks the done move. MUST be called before fauna_workitem_move to column="done" on any project that has a verifier — otherwise the move is rejected. The result is also appended as a comment.',
+      parameters: {
+        type: 'object',
+        properties: {
+          itemId:        { type: 'string', description: 'Work item id.' },
+          projectId:     { type: 'string', description: 'Project id. Defaults to the active project.' },
+          timeoutMs:     { type: 'number', description: 'Override the default 5-minute timeout (in ms).' },
+        },
+        required: ['itemId'],
       },
     },
   },
@@ -2273,6 +2398,21 @@ export const DYNAMIC_WIDGET_TOOL_DEFS = [
 // ── Tool executor ───────────────────────────────────────────────────────
 // Returns { result: string } for each tool call.
 // `context` provides access to runtime state (models list, IPC sender, etc.)
+
+// Lazy import of emitBoardEvent from the project routes module — we
+// can't import it at top-level because that file also imports project-manager
+// (no real cycle, but we want zero coupling at module init). When the
+// server hasn't started yet (e.g. in a unit test), the emit is a no-op.
+let _boardEmitter = null;
+async function _emitBoardEventSafe(evt) {
+  try {
+    if (!_boardEmitter) {
+      const mod = await import('./server/routes/projects.js');
+      _boardEmitter = typeof mod.emitBoardEvent === 'function' ? mod.emitBoardEvent : () => {};
+    }
+    _boardEmitter(evt);
+  } catch (_) { /* swallow — board events are best-effort */ }
+}
 
 export async function executeSelfTool(toolName, args, context = {}) {
   switch (toolName) {
@@ -3044,22 +3184,160 @@ export async function executeSelfTool(toolName, args, context = {}) {
       if (!pid) return JSON.stringify({ ok: false, error: 'projectId required (no active project)' });
       const entry = addBacklogItem(pid, {
         title: args.title, body: args.body, tags: args.tags, rice: args.rice,
+        column: args.column, assignee: args.assignee, priority: args.priority,
+        acceptance: args.acceptance,
         source: 'agent',
       });
       if (!entry) return JSON.stringify({ ok: false, error: 'project not found' });
+      _emitBoardEventSafe({ type: 'created', projectId: pid, item: entry });
       return JSON.stringify({ ok: true, id: entry.id, projectId: pid, item: entry });
     }
     case 'fauna_backlog_list': {
       const pid = args.projectId || context.activeProjectId;
       if (!pid) return JSON.stringify({ ok: false, error: 'projectId required (no active project)' });
-      return JSON.stringify({ ok: true, items: listBacklog(pid, { status: args.status, limit: args.limit }) });
+      return JSON.stringify({ ok: true, items: listBacklog(pid, { status: args.status, column: args.column, limit: args.limit }) });
     }
     case 'fauna_backlog_prioritize': {
       const pid = args.projectId || context.activeProjectId;
       if (!pid) return JSON.stringify({ ok: false, error: 'projectId required (no active project)' });
       const r = prioritizeBacklog(pid, { method: args.method || 'rice' });
       if (!r) return JSON.stringify({ ok: false, error: 'project not found' });
+      _emitBoardEventSafe({ type: 'prioritized', projectId: pid });
       return JSON.stringify(r);
+    }
+
+    // ── Kanban work items ──
+    case 'fauna_workitem_move': {
+      const pid = args.projectId || context.activeProjectId;
+      if (!pid)        return JSON.stringify({ ok: false, error: 'projectId required (no active project)' });
+      if (!args.itemId) return JSON.stringify({ ok: false, error: 'itemId required' });
+      if (!args.column) return JSON.stringify({ ok: false, error: 'column required' });
+      const patch = { column: args.column };
+      if (args.claim === true && args.column === 'in_progress') {
+        const agent = context.agentName || 'default';
+        patch.claimedBy = 'ai:' + agent;
+      }
+      const r = moveWorkItem(pid, args.itemId, patch, { actor: 'ai', strict: true });
+      if (!r.ok) return JSON.stringify(r);
+      _emitBoardEventSafe({ type: 'moved', projectId: pid, item: r.item });
+      return JSON.stringify(r);
+    }
+    case 'fauna_workitem_claim': {
+      const pid = args.projectId || context.activeProjectId;
+      if (!pid)        return JSON.stringify({ ok: false, error: 'projectId required (no active project)' });
+      if (!args.itemId) return JSON.stringify({ ok: false, error: 'itemId required' });
+      const agent = context.agentName || 'default';
+      const r = moveWorkItem(pid, args.itemId, { claimedBy: 'ai:' + agent }, { actor: 'ai' });
+      if (!r.ok) return JSON.stringify(r);
+      _emitBoardEventSafe({ type: 'claimed', projectId: pid, item: r.item });
+      return JSON.stringify(r);
+    }
+    case 'fauna_workitem_comment': {
+      const pid = args.projectId || context.activeProjectId;
+      if (!pid)        return JSON.stringify({ ok: false, error: 'projectId required (no active project)' });
+      if (!args.itemId) return JSON.stringify({ ok: false, error: 'itemId required' });
+      if (!args.body)   return JSON.stringify({ ok: false, error: 'body required' });
+      const c = addWorkItemComment(pid, args.itemId, { author: 'ai', body: args.body });
+      if (!c) return JSON.stringify({ ok: false, error: 'item not found' });
+      _emitBoardEventSafe({ type: 'comment', projectId: pid, itemId: args.itemId, comment: c });
+      return JSON.stringify({ ok: true, comment: c });
+    }
+    case 'fauna_workitem_update': {
+      const pid = args.projectId || context.activeProjectId;
+      if (!pid)        return JSON.stringify({ ok: false, error: 'projectId required (no active project)' });
+      if (!args.itemId) return JSON.stringify({ ok: false, error: 'itemId required' });
+      const patch = {};
+      ['title', 'body', 'acceptance', 'priority', 'tags', 'assignee', 'verifyCommand'].forEach(k => {
+        if (args[k] !== undefined) patch[k] = args[k];
+      });
+      const item = updateBacklogItem(pid, args.itemId, patch);
+      if (!item) return JSON.stringify({ ok: false, error: 'item not found' });
+      _emitBoardEventSafe({ type: 'updated', projectId: pid, item });
+      return JSON.stringify({ ok: true, item });
+    }
+    case 'fauna_board_scan': {
+      const scope = args.scope === 'global' ? 'global' : 'project';
+      const limit = Math.min(200, Math.max(1, Number(args.limit) || 50));
+      if (scope === 'global') {
+        const items = listAllWorkItems({
+          column: args.column || null,
+          assignee: args.assignee || null,
+          limit,
+        });
+        return JSON.stringify({ ok: true, scope, count: items.length, items });
+      }
+      const pid = args.projectId || context.activeProjectId;
+      if (!pid) return JSON.stringify({ ok: false, error: 'projectId required (no active project) for scope="project"' });
+      const board = getProjectBoard(pid);
+      if (!board) return JSON.stringify({ ok: false, error: 'project not found' });
+      // Flatten with optional filters
+      let items = [];
+      for (const col of Object.keys(board.columns)) {
+        for (const it of board.columns[col]) items.push(it);
+      }
+      if (args.column)   items = items.filter(i => i.column === args.column);
+      if (args.assignee) items = items.filter(i => i.assignee === args.assignee);
+      return JSON.stringify({ ok: true, scope, projectId: pid, count: items.length, items: items.slice(0, limit) });
+    }
+
+    case 'fauna_project_audit': {
+      const pid = args.projectId || context.activeProjectId;
+      if (!pid) return JSON.stringify({ ok: false, error: 'projectId required (no active project)' });
+      const maxProposals = Math.min(10, Math.max(1, Number(args.maxProposals) || 5));
+      // Prefer the per-turn callLLM (system+user); fall back to a plain caller.
+      let aiCaller = null;
+      if (typeof context.callLLM === 'function') {
+        aiCaller = (prompt) => context.callLLM({
+          system: 'You are an expert engineering reviewer. Output strict JSON only when asked.',
+          user: prompt,
+          maxTokens: 2400,
+          temperature: 0.3,
+        });
+      } else if (typeof context.aiCall === 'function') {
+        aiCaller = context.aiCall;
+      }
+      try {
+        const mod = await import('./lib/project-audit.js');
+        const result = await mod.auditProject(pid, { aiCaller, maxProposals });
+        if (result && result.added && result.added.length) {
+          for (const it of result.added) {
+            _emitBoardEventSafe({ type: 'created', projectId: pid, itemId: it.id });
+          }
+        }
+        // Trim summary in the return value — the hintBlobs can be huge.
+        if (result && result.summary && result.summary.hintBlobs) {
+          result.summary = {
+            ...result.summary,
+            hintBlobs: Object.keys(result.summary.hintBlobs),
+          };
+        }
+        return JSON.stringify(result);
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: 'audit failed: ' + (e?.message || String(e)) });
+      }
+    }
+
+    case 'fauna_workitem_verify': {
+      const pid = args.projectId || context.activeProjectId;
+      if (!pid) return JSON.stringify({ ok: false, error: 'projectId required (no active project)' });
+      if (!args.itemId) return JSON.stringify({ ok: false, error: 'itemId required' });
+      try {
+        const mod = await import('./lib/work-item-verifier.js');
+        const r = await mod.verifyWorkItem(pid, args.itemId, {
+          timeoutMs: args.timeoutMs,
+          runId: null,
+          postComment: true,
+        });
+        _emitBoardEventSafe({ type: 'updated', projectId: pid, itemId: args.itemId });
+        // Clip the output for the tool response (the comment kept the full version).
+        const reply = { ...r };
+        if (typeof reply.output === 'string' && reply.output.length > 1500) {
+          reply.output = reply.output.slice(0, 1500) + '\n…(truncated; full output stored on card)';
+        }
+        return JSON.stringify(reply);
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: 'verify failed: ' + (e?.message || String(e)) });
+      }
     }
 
     // ── Plan (TODOs) ──

@@ -480,7 +480,7 @@ function _renderProjectHub(proj) {
     { id: 'run',      icon: 'ti-player-play',   label: 'Run' },
     { id: 'terminal', icon: 'ti-terminal-2',    label: 'Terminal' },
     { id: 'convs',    icon: 'ti-messages',      label: 'Conversations' },
-    { id: 'tasks',    icon: 'ti-checklist',     label: 'Tasks' },
+    { id: 'tasks',    icon: 'ti-layout-kanban',  label: 'Board' },
     { id: 'settings', icon: 'ti-settings',      label: 'Settings' },
   ];
   // Add Design tab for design projects
@@ -517,6 +517,16 @@ function switchProjectHubTab(tab) {
   // Kill standalone terminal tab shell if leaving (it shares the session pool)
   if (state.projectHubTab === 'terminal' && tab !== 'terminal') {
     _termDisconnectSSE();
+  }
+  // Disconnect Kanban board SSE if leaving the board tab. The board
+  // module owns its own EventSource on window._kbState.sse.
+  if (state.projectHubTab === 'tasks' && tab !== 'tasks') {
+    try {
+      if (window._kbState && window._kbState.sse) {
+        window._kbState.sse.close();
+        window._kbState.sse = null;
+      }
+    } catch (_) { /* ignore */ }
   }
   state.projectHubTab = tab;
   var proj = _activeProject();
@@ -634,7 +644,17 @@ function _renderProjectHubBody(proj) {
   else if (tab === 'run')      { body.innerHTML = _renderRunTabShell(); _runTabLoad(proj); }
   else if (tab === 'terminal') { body.innerHTML = ''; _renderTerminalTab(proj, body); _termTabLoad(proj); }
   else if (tab === 'convs')    body.innerHTML = _renderConvsTab(proj);
-  else if (tab === 'tasks')    body.innerHTML = _renderTasksTab(proj);
+  else if (tab === 'tasks')    {
+    // Kanban board (P2). The board renderer mounts into the body element
+    // itself and manages all subsequent DOM updates + SSE subscription.
+    body.innerHTML = '';
+    if (typeof window.renderKanbanBoard === 'function') {
+      window.renderKanbanBoard({ projectId: proj.id, scope: 'project' }, body);
+    } else {
+      body.innerHTML = '<div class="proj-hub-empty"><i class="ti ti-alert-circle" style="font-size:24px;opacity:.3"></i>' +
+        '<div>Board module failed to load.</div></div>';
+    }
+  }
   else if (tab === 'settings') body.innerHTML = _renderSettingsTab(proj);
 }
 
@@ -2619,26 +2639,13 @@ function _renderConvsTab(proj) {
   }).join('');
 }
 
-// ── Tasks Tab ─────────────────────────────────────────────────────────────
-
+// ── Tasks / Board Tab ────────────────────────────────────────────────────
+// The Kanban board is rendered by public/js/board.js (window.renderKanbanBoard).
+// This helper remains for any legacy call sites that expected a string return;
+// it just shows a hint pointing at the live board.
 function _renderTasksTab(proj) {
-  // Resolve tasks from _tasksCache (defined in tasks.js)
-  var tasks = typeof _tasksCache !== 'undefined'
-    ? _tasksCache.filter(function(t) { return t.projectId === proj.id; })
-    : [];
-  if (!tasks.length) {
-    return '<div class="proj-hub-empty"><i class="ti ti-checklist" style="font-size:28px;opacity:.3"></i>' +
-      '<div>No tasks for this project</div>' +
-      '<button class="proj-action-btn" onclick="closeProjectHub();toggleTasksPanel()"><i class="ti ti-plus"></i> Create a task</button></div>';
-  }
-  return tasks.map(function(t) {
-    var icon = { running:'ti-player-play', completed:'ti-check', failed:'ti-x', pending:'ti-clock', scheduled:'ti-calendar', paused:'ti-player-pause' }[t.status] || 'ti-clock';
-    return '<div class="proj-task-row">' +
-      '<i class="ti ' + icon + ' proj-task-icon task-status-' + t.status + '"></i>' +
-      '<span class="proj-task-name">' + _projEsc(t.title) + '</span>' +
-      '<span class="proj-task-status">' + t.status + '</span>' +
-    '</div>';
-  }).join('');
+  return '<div class="proj-hub-empty"><i class="ti ti-layout-kanban" style="font-size:28px;opacity:.3"></i>' +
+    '<div>Loading board…</div></div>';
 }
 
 // ── Settings Tab ──────────────────────────────────────────────────────────

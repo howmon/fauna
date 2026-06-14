@@ -193,6 +193,17 @@ export function createProject(opts = {}) {
     // Lightweight backlog: feature requests + grooming notes the agent can
     // append, list, and prioritize without leaving the project.
     backlog: Array.isArray(opts.backlog) ? opts.backlog : [],
+    // Kanban / autopilot config. Off by default. When `kanbanAutopilot` is
+    // true, the kanban-worker periodically claims Todo cards assigned to AI
+    // and runs them through the pipeline. See kanban-worker.js.
+    kanban: Object.assign({
+      autopilot: false,            // master switch for AI auto-claim
+      concurrency: 1,              // max in-flight AI items per project
+      archiveDelayMin: 10,         // auto-archive done items after N min
+      maxAiRetries: 2,             // failures before card returns to human
+      dailyAiQuota: 10,            // safety cap per UTC day
+      columns: null,               // null = use defaults; or override labels
+    }, opts.kanban || {}),
     // Per-source GitHub links. Keys are source ids; the special key '__root'
     // refers to the project's own rootPath. Value shape:
     //   { accountId, repo: 'owner/name', defaultBranch, linkedAt }
@@ -268,7 +279,7 @@ export function updateProject(id, patch = {}) {
   if (idx === -1) return null;
   const p = projects[idx];
   // Allowed top-level fields
-  const allowed = ['name', 'description', 'icon', 'color', 'rootPath', 'defaultAgent', 'permissions', 'allowFileEditing', 'design', 'autonomousMode', 'acceptanceCriteria', 'qa', 'deploy', 'backlog', 'memoryConfig', 'githubIntegrations'];
+  const allowed = ['name', 'description', 'icon', 'color', 'rootPath', 'defaultAgent', 'permissions', 'allowFileEditing', 'design', 'autonomousMode', 'acceptanceCriteria', 'qa', 'deploy', 'backlog', 'kanban', 'memoryConfig', 'githubIntegrations'];
   for (const k of allowed) {
     if (patch[k] !== undefined) p[k] = patch[k];
   }
@@ -849,39 +860,144 @@ export async function listRepos(projectId, connId, accessToken) {
 // ── Backlog helpers (Phase 3 — feature intake + prioritization) ──────────
 // Backlog items live on the project record itself so they roll up with
 // project export and don't require a separate store. Items are small.
+//
+// Phase 6+ (Kanban): the legacy `status` field (new|groomed|in-progress|
+// done|dropped) is mirrored onto `column` (backlog|todo|in_progress|review|
+// done|archived). Both fields are kept on disk so older code paths keep
+// working. `_migrateWorkItem` synchronises them on read/write.
 
 const _RICE_DEFAULTS = { reach: 1, impact: 1, confidence: 1, effort: 1 };
+
+// Allowed Kanban columns + canonical transitions. The board accepts manual
+// moves between any two columns (humans drag freely); the worker is
+// restricted to the canonical forward path. See moveWorkItem.
+export const WORK_ITEM_COLUMNS = ['backlog', 'todo', 'in_progress', 'review', 'done', 'archived'];
+export const WORK_ITEM_PRIORITIES = ['p0', 'p1', 'p2', 'p3'];
+
+// Map legacy `status` ↔ new `column`. Done lazily on read; persisted on
+// next write through addBacklogItem / updateBacklogItem / moveWorkItem.
+const _STATUS_TO_COLUMN = {
+  'new':         'backlog',
+  'groomed':     'todo',
+  'in-progress': 'in_progress',
+  'in_progress': 'in_progress',
+  'review':      'review',
+  'done':        'done',
+  'dropped':     'archived',
+  'archived':    'archived',
+};
+const _COLUMN_TO_STATUS = {
+  'backlog':     'new',
+  'todo':        'groomed',
+  'in_progress': 'in-progress',
+  'review':      'in-progress',
+  'done':        'done',
+  'archived':    'dropped',
+};
+
+function _migrateWorkItem(item) {
+  if (!item || typeof item !== 'object') return item;
+  // Derive column from status if missing
+  if (!item.column) {
+    item.column = _STATUS_TO_COLUMN[item.status] || 'backlog';
+  } else if (!WORK_ITEM_COLUMNS.includes(item.column)) {
+    item.column = 'backlog';
+  }
+  // Keep legacy status in sync from column if missing/inconsistent
+  if (!item.status) {
+    item.status = _COLUMN_TO_STATUS[item.column] || 'new';
+  }
+  // Defaults for new Kanban fields
+  if (item.assignee === undefined)        item.assignee = null;          // 'ai' | 'human' | null
+  if (item.claimedBy === undefined)       item.claimedBy = null;         // 'ai:<agent>' | 'user:<id>' | null
+  if (item.lockedByUser === undefined)    item.lockedByUser = false;
+  if (!WORK_ITEM_PRIORITIES.includes(item.priority)) item.priority = item.priority || 'p2';
+  if (item.estimateMinutes === undefined) item.estimateMinutes = null;
+  if (item.dueAt === undefined)           item.dueAt = null;
+  if (item.parentId === undefined)        item.parentId = null;
+  if (!Array.isArray(item.blockedBy))     item.blockedBy = [];
+  if (item.acceptance === undefined)      item.acceptance = '';
+  if (!Array.isArray(item.runs))          item.runs = [];
+  if (!Array.isArray(item.comments))      item.comments = [];
+  if (!item.movedAt)                      item.movedAt = item.updatedAt || item.createdAt || now();
+  if (item.researchOf === undefined)      item.researchOf = null;
+  // ── P7 verification fields ──
+  // verifyCommand: optional per-card shell command to run as a hard gate
+  //   before AI may move the card to 'done'. Falls back to project.qa.command.
+  // verified: last verification outcome, { ok:bool, exitCode, output, ts, runId }
+  //   or null. Reset on every move out of in_progress so stale passes can't
+  //   be reused for a different change.
+  if (item.verifyCommand === undefined)   item.verifyCommand = null;
+  if (item.verified === undefined)        item.verified = null;
+  return item;
+}
+
+// Idempotent: ensure every item in `arr` has the migrated shape.
+function _migrateBacklogArray(arr) {
+  if (!Array.isArray(arr)) return [];
+  for (const item of arr) _migrateWorkItem(item);
+  return arr;
+}
 
 export function addBacklogItem(projectId, item = {}) {
   const projects = readProjects();
   const p = projects.find(x => x.id === projectId);
   if (!p) return null;
   if (!Array.isArray(p.backlog)) p.backlog = [];
+  const ts = now();
+  // Normalise inputs: callers may pass either status or column.
+  const column =
+    item.column && WORK_ITEM_COLUMNS.includes(item.column) ? item.column :
+    item.status ? (_STATUS_TO_COLUMN[item.status] || 'backlog') :
+    'backlog';
+  const assignee =
+    item.assignee === 'ai' || item.assignee === 'human' ? item.assignee : null;
+  const priority =
+    WORK_ITEM_PRIORITIES.includes(item.priority) ? item.priority : 'p2';
   const entry = {
     id: uid('bk'),
     title: String(item.title || '').slice(0, 200) || 'Untitled item',
     body:  String(item.body  || '').slice(0, 4000),
-    status: item.status || 'new', // new | groomed | in-progress | done | dropped
+    status: _COLUMN_TO_STATUS[column] || 'new', // legacy
+    column,                                      // canonical
     score: null,
     rice: { ..._RICE_DEFAULTS, ...(item.rice || {}) },
     tags: Array.isArray(item.tags) ? item.tags.slice(0, 10).map(String) : [],
     source: item.source || 'agent', // agent | user | reflection
-    createdAt: now(),
-    updatedAt: now(),
+    assignee,
+    claimedBy: item.claimedBy || null,
+    lockedByUser: item.lockedByUser === true,
+    priority,
+    estimateMinutes: Number.isFinite(item.estimateMinutes) ? item.estimateMinutes : null,
+    dueAt: item.dueAt || null,
+    parentId: item.parentId || null,
+    blockedBy: Array.isArray(item.blockedBy) ? item.blockedBy.slice(0, 20).map(String) : [],
+    acceptance: String(item.acceptance || '').slice(0, 4000),
+    runs: [],
+    comments: [],
+    researchOf: item.researchOf || null,
+    verifyCommand: item.verifyCommand ? String(item.verifyCommand).slice(0, 1000) : null,
+    verified: null,
+    createdAt: ts,
+    updatedAt: ts,
+    movedAt: ts,
   };
   p.backlog.unshift(entry);
   // Soft cap — projects shouldn't carry unbounded backlogs.
   if (p.backlog.length > 500) p.backlog.length = 500;
-  p.updatedAt = now();
+  p.updatedAt = ts;
   writeProjects(projects);
   return entry;
 }
 
-export function listBacklog(projectId, { status = null, limit = 200 } = {}) {
+export function listBacklog(projectId, { status = null, column = null, limit = 200 } = {}) {
   const p = getProject(projectId);
   if (!p) return [];
-  const items = Array.isArray(p.backlog) ? p.backlog.slice() : [];
-  return (status ? items.filter(i => i.status === status) : items).slice(0, limit);
+  const items = _migrateBacklogArray(Array.isArray(p.backlog) ? p.backlog.slice() : []);
+  let filtered = items;
+  if (column) filtered = filtered.filter(i => i.column === column);
+  else if (status) filtered = filtered.filter(i => i.status === status);
+  return filtered.slice(0, limit);
 }
 
 // Compute a RICE score for each item and persist `score` + `status: 'groomed'`.
@@ -891,6 +1007,7 @@ export function prioritizeBacklog(projectId, { method = 'rice' } = {}) {
   const p = projects.find(x => x.id === projectId);
   if (!p) return null;
   if (!Array.isArray(p.backlog) || !p.backlog.length) return { ok: true, items: [] };
+  _migrateBacklogArray(p.backlog);
   for (const item of p.backlog) {
     if (method === 'moscow') {
       const tag = (item.tags || []).map(t => t.toLowerCase());
@@ -900,7 +1017,13 @@ export function prioritizeBacklog(projectId, { method = 'rice' } = {}) {
       const effort = Math.max(0.25, Number(r.effort) || 1);
       item.score = Math.round(((Number(r.reach) || 0) * (Number(r.impact) || 0) * (Number(r.confidence) || 0)) / effort * 100) / 100;
     }
-    if (item.status === 'new') item.status = 'groomed';
+    // Grooming promotes brand-new cards to the Todo column so the AI worker
+    // can pick them up. We don't touch items already past Todo.
+    if (item.status === 'new' || item.column === 'backlog') {
+      item.status = 'groomed';
+      item.column = 'todo';
+      item.movedAt = now();
+    }
     item.updatedAt = now();
   }
   p.backlog.sort((a, b) => (b.score || 0) - (a.score || 0));
@@ -913,14 +1036,221 @@ export function updateBacklogItem(projectId, itemId, patch = {}) {
   const projects = readProjects();
   const p = projects.find(x => x.id === projectId);
   if (!p || !Array.isArray(p.backlog)) return null;
+  _migrateBacklogArray(p.backlog);
   const it = p.backlog.find(x => x.id === itemId);
   if (!it) return null;
-  const allow = ['title', 'body', 'status', 'rice', 'tags'];
+  const allow = [
+    'title', 'body', 'status', 'rice', 'tags',
+    'assignee', 'priority', 'estimateMinutes', 'dueAt',
+    'parentId', 'blockedBy', 'acceptance', 'lockedByUser', 'researchOf',
+    'verifyCommand',
+  ];
   for (const k of allow) if (patch[k] !== undefined) it[k] = patch[k];
+  // Keep column ↔ status mirrored if status was changed externally
+  if (patch.status !== undefined && _STATUS_TO_COLUMN[patch.status]) {
+    it.column = _STATUS_TO_COLUMN[patch.status];
+  }
+  if (patch.column !== undefined && WORK_ITEM_COLUMNS.includes(patch.column)) {
+    it.column = patch.column;
+    it.status = _COLUMN_TO_STATUS[patch.column] || it.status;
+  }
   it.updatedAt = now();
   p.updatedAt = now();
   writeProjects(projects);
   return it;
+}
+
+// ── Kanban: column move, claim, comment, lock, global list ───────────────
+
+const _AI_FORWARD_PATH = ['todo', 'in_progress', 'review', 'done', 'archived'];
+
+/**
+ * Move a work item between Kanban columns.
+ *
+ * @param projectId
+ * @param itemId
+ * @param patch    { column, assignee?, claimedBy?, runEntry? }
+ * @param opts     { actor: 'human' | 'ai', strict?: bool }
+ *
+ * `strict: true` (used by the worker) restricts moves to the canonical AI
+ * forward path: todo → in_progress → review → done → archived. Backward
+ * moves are rejected unless actor is 'human'.
+ */
+export function moveWorkItem(projectId, itemId, patch = {}, opts = {}) {
+  const actor = opts.actor === 'ai' ? 'ai' : 'human';
+  const strict = opts.strict === true;
+  const projects = readProjects();
+  const p = projects.find(x => x.id === projectId);
+  if (!p || !Array.isArray(p.backlog)) return { ok: false, error: 'project not found' };
+  _migrateBacklogArray(p.backlog);
+  const it = p.backlog.find(x => x.id === itemId);
+  if (!it) return { ok: false, error: 'item not found' };
+
+  const targetCol = patch.column;
+  if (targetCol && !WORK_ITEM_COLUMNS.includes(targetCol)) {
+    return { ok: false, error: 'invalid column: ' + targetCol };
+  }
+
+  // Locked cards: AI cannot move them. Humans can.
+  if (it.lockedByUser && actor === 'ai') {
+    return { ok: false, error: 'item is locked by user' };
+  }
+
+  // AI-claimed cards are only movable by the claiming agent (or any human).
+  if (actor === 'ai' && it.claimedBy && it.claimedBy.startsWith('user:')) {
+    return { ok: false, error: 'item is claimed by a human' };
+  }
+
+  if (targetCol && targetCol !== it.column) {
+    if (strict && actor === 'ai') {
+      const fromIdx = _AI_FORWARD_PATH.indexOf(it.column);
+      const toIdx   = _AI_FORWARD_PATH.indexOf(targetCol);
+      if (fromIdx === -1 || toIdx === -1 || toIdx < fromIdx) {
+        return { ok: false, error: 'AI cannot move ' + it.column + ' → ' + targetCol };
+      }
+    }
+    // ── P7 verification gate ──
+    // AI may only move a card to 'done' when its last verification passed.
+    // Humans are trusted (they can mark anything done manually). The gate
+    // applies regardless of strict mode — verification is non-negotiable.
+    if (actor === 'ai' && targetCol === 'done') {
+      const projectQa = (p.qa && p.qa.command && p.qa.command.trim()) || null;
+      const hasVerifier = !!(it.verifyCommand || projectQa);
+      if (hasVerifier) {
+        const v = it.verified;
+        if (!v || v.ok !== true) {
+          return { ok: false, error: 'cannot move to done without a passing verification (call fauna_workitem_verify first)' };
+        }
+        // Tie verification to the most recent in_progress run so a stale
+        // pass from a previous attempt can't be reused.
+        const lastRun = it.runs.length ? it.runs[it.runs.length - 1] : null;
+        if (lastRun && v.runId && lastRun.taskId && v.runId !== lastRun.taskId) {
+          return { ok: false, error: 'verification is stale (from a previous run) — re-verify before moving to done' };
+        }
+      }
+    }
+    // Reset verified when leaving in_progress backwards or being reassigned.
+    if (it.column === 'in_progress' && targetCol === 'todo') {
+      it.verified = null;
+    }
+    it.column = targetCol;
+    it.status = _COLUMN_TO_STATUS[targetCol] || it.status;
+    it.movedAt = now();
+  }
+  if (patch.assignee !== undefined) {
+    it.assignee = (patch.assignee === 'ai' || patch.assignee === 'human') ? patch.assignee : null;
+  }
+  if (patch.claimedBy !== undefined) it.claimedBy = patch.claimedBy || null;
+  if (patch.runEntry && typeof patch.runEntry === 'object') {
+    it.runs.push({ ts: Date.now(), ...patch.runEntry });
+    if (it.runs.length > 50) it.runs.splice(0, it.runs.length - 50);
+  }
+  it.updatedAt = now();
+  p.updatedAt = now();
+  writeProjects(projects);
+  return { ok: true, item: it };
+}
+
+export function addWorkItemComment(projectId, itemId, { author = 'human', body = '' } = {}) {
+  const projects = readProjects();
+  const p = projects.find(x => x.id === projectId);
+  if (!p || !Array.isArray(p.backlog)) return null;
+  _migrateBacklogArray(p.backlog);
+  const it = p.backlog.find(x => x.id === itemId);
+  if (!it) return null;
+  const comment = {
+    id: uid('cmt'),
+    author: author === 'ai' ? 'ai' : 'human',
+    body: String(body || '').slice(0, 4000),
+    ts: Date.now(),
+  };
+  it.comments.push(comment);
+  if (it.comments.length > 200) it.comments.splice(0, it.comments.length - 200);
+  it.updatedAt = now();
+  p.updatedAt = now();
+  writeProjects(projects);
+  return comment;
+}
+
+export function setWorkItemLock(projectId, itemId, locked) {
+  const projects = readProjects();
+  const p = projects.find(x => x.id === projectId);
+  if (!p || !Array.isArray(p.backlog)) return null;
+  _migrateBacklogArray(p.backlog);
+  const it = p.backlog.find(x => x.id === itemId);
+  if (!it) return null;
+  it.lockedByUser = locked === true;
+  it.updatedAt = now();
+  p.updatedAt = now();
+  writeProjects(projects);
+  return it;
+}
+
+/**
+ * Record the result of a verification run for a work item. The shape is
+ *   { ok:bool, exitCode:number|null, output:string, ts:number, runId:string|null,
+ *     command:string, source:'shell'|'judge' }
+ * `runId` should be the task-runner task id (if any) so moveWorkItem can
+ * detect stale verifications from earlier attempts.
+ */
+export function setWorkItemVerification(projectId, itemId, verification) {
+  const projects = readProjects();
+  const p = projects.find(x => x.id === projectId);
+  if (!p || !Array.isArray(p.backlog)) return null;
+  _migrateBacklogArray(p.backlog);
+  const it = p.backlog.find(x => x.id === itemId);
+  if (!it) return null;
+  if (!verification || typeof verification !== 'object') {
+    it.verified = null;
+  } else {
+    it.verified = {
+      ok:        verification.ok === true,
+      exitCode:  Number.isFinite(verification.exitCode) ? verification.exitCode : null,
+      output:    String(verification.output || '').slice(0, 8000),
+      ts:        Date.now(),
+      runId:     verification.runId || null,
+      command:   String(verification.command || '').slice(0, 1000),
+      source:    verification.source === 'judge' ? 'judge' : 'shell',
+    };
+  }
+  it.updatedAt = now();
+  p.updatedAt = now();
+  writeProjects(projects);
+  return it;
+}
+
+/**
+ * List work items across every project. Filters compose with AND.
+ * Each item is annotated with { projectId, projectName, projectColor }.
+ */
+export function listAllWorkItems({ column = null, assignee = null, claimedBy = null, limit = 1000 } = {}) {
+  const out = [];
+  for (const p of readProjects()) {
+    if (!Array.isArray(p.backlog) || !p.backlog.length) continue;
+    _migrateBacklogArray(p.backlog);
+    for (const it of p.backlog) {
+      if (column && it.column !== column) continue;
+      if (assignee && it.assignee !== assignee) continue;
+      if (claimedBy && it.claimedBy !== claimedBy) continue;
+      out.push({ ...it, projectId: p.id, projectName: p.name, projectColor: p.color });
+      if (out.length >= limit) return out;
+    }
+  }
+  return out;
+}
+
+/**
+ * Get the per-project board grouped by column. Useful for the UI render.
+ */
+export function getProjectBoard(projectId) {
+  const p = getProject(projectId);
+  if (!p) return null;
+  _migrateBacklogArray(p.backlog || []);
+  const columns = Object.fromEntries(WORK_ITEM_COLUMNS.map(c => [c, []]));
+  for (const it of (p.backlog || [])) {
+    (columns[it.column] || columns.backlog).push(it);
+  }
+  return { projectId: p.id, projectName: p.name, columns };
 }
 
 // ── Autonomous-run telemetry (Phase 5) ───────────────────────────────────
