@@ -1113,6 +1113,11 @@ function _applyBusyState(busy) {
       ? '<span class="send-stop-icon" aria-hidden="true"></span>'
       : '<i class="ti ti-send"></i>';
   }
+  // Mirror the busy flag onto #input-wrap so the rotating-gradient border
+  // animation can run while the model is generating. Same visual language
+  // as the AI-running cards on the Kanban board.
+  var wrap = document.getElementById('input-wrap');
+  if (wrap) wrap.classList.toggle('is-busy', !!busy);
   var stopEl = document.getElementById('stop-btn');
   if (stopEl) stopEl.className = '';
 }

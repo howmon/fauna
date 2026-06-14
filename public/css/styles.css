@@ -1506,6 +1506,60 @@ body.is-resizing webview { pointer-events: none !important; }
 }
 #input-wrap:focus-within { border-color: color-mix(in srgb, var(--accent) 50%, var(--fau-border)); }
 
+/* ── Generating border — rotating conic gradient ─────────────────────
+   Same visual language as `.kb-card-live` on the Kanban board. Active
+   whenever setBusy(true) toggles `.is-busy` on the composer wrap (i.e.
+   the model is streaming, a tool is running, a shell command is
+   verifying, or an agent delegation is in flight). Uses the same
+   `--kb-live-angle` custom property declared by the kb-card-live
+   block so we don't double-declare @property. */
+#input-wrap.is-busy {
+  /* Keep the existing focus / dictating styles working — we only paint
+     the animated ring on top via a pseudo-element. Hide the static
+     border so it doesn't show through the gap in the gradient. */
+  border-color: transparent;
+  isolation: isolate;
+}
+#input-wrap.is-busy::after {
+  content: '';
+  position: absolute; inset: -1px;
+  border-radius: 15px;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--kb-live-angle, 0deg),
+    color-mix(in srgb, var(--accent, #6ea8fe) 90%, transparent) 0deg,
+    color-mix(in srgb, var(--accent, #6ea8fe) 15%, transparent) 90deg,
+    #2ecc71 180deg,
+    color-mix(in srgb, var(--accent, #6ea8fe) 15%, transparent) 270deg,
+    color-mix(in srgb, var(--accent, #6ea8fe) 90%, transparent) 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+          mask-composite: exclude;
+  animation: kbCardLiveSpin 3.2s linear infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+/* Children must paint above the ring (input-wrap is already
+   `position: relative`, but its children default to auto z-index). */
+#input-wrap.is-busy > * { position: relative; z-index: 1; }
+/* Don't run the spinner while the user is actively dictating — that
+   pulse animation is the primary signal. Resume once dictation ends
+   and the busy flag flips back. */
+#input-wrap.is-busy.dictating::after,
+#input-wrap.is-busy.dictating-processing::after { display: none; }
+@supports not (background: conic-gradient(from var(--kb-live-angle, 0deg), red, blue)) {
+  #input-wrap.is-busy::after { animation: kbCardLivePulse 1.8s ease-in-out infinite; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #input-wrap.is-busy::after { animation: kbCardLivePulse 2.4s ease-in-out infinite; }
+}
+
 /* ── Voice dictation feedback ──────────────────────────────────────────
    While dictating, --voice-level is updated in real time (0..1) from the
    VAD loop. A continuous pulse animation guarantees visibility even at
@@ -8798,6 +8852,75 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
   color: var(--fau-text);
 }
 .kb-autopilot-toggle .ti { font-size: 14px; }
+
+/* ── Animated "AI is working" border on in-progress cards ──────────────
+   Mirrors the rotating gradient border VS Code shows around the Copilot
+   Chat input while it's generating. A conic-gradient is painted on a
+   pseudo-element behind the card; a CSS mask cuts out the interior so
+   only a 1px ring of the gradient is visible. The whole gradient rotates
+   via a CSS custom property + @property so it animates on the GPU
+   without re-painting the card itself. */
+@property --kb-live-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+.kb-card-live {
+  position: relative;
+  /* Hide the static border — the animated ring replaces it. */
+  border-color: transparent;
+  /* Tiny gap so the ring isn't flush against the column edge. */
+  isolation: isolate;
+}
+.kb-card-live::before {
+  content: '';
+  position: absolute; inset: -1px;
+  border-radius: 8px;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--kb-live-angle),
+    color-mix(in srgb, var(--accent, #6ea8fe) 90%, transparent) 0deg,
+    color-mix(in srgb, var(--accent, #6ea8fe) 20%, transparent) 90deg,
+    #2ecc71 180deg,
+    color-mix(in srgb, var(--accent, #6ea8fe) 20%, transparent) 270deg,
+    color-mix(in srgb, var(--accent, #6ea8fe) 90%, transparent) 360deg
+  );
+  /* Mask carves out the interior so only the ring is painted. */
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+          mask-composite: exclude;
+  animation: kbCardLiveSpin 3.2s linear infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+/* Make sure the card content sits above the ring. */
+.kb-card-live > * { position: relative; z-index: 1; }
+@keyframes kbCardLiveSpin {
+  to { --kb-live-angle: 360deg; }
+}
+/* Fallback for browsers without @property support (Firefox <128): use a
+   shimmering opacity pulse on a static gradient instead of rotation. */
+@supports not (background: conic-gradient(from var(--kb-live-angle), red, blue)) {
+  .kb-card-live::before { animation: kbCardLivePulse 1.8s ease-in-out infinite; }
+  @keyframes kbCardLivePulse {
+    0%, 100% { opacity: .55; }
+    50%      { opacity: 1; }
+  }
+}
+/* Respect users who don't want motion. */
+@media (prefers-reduced-motion: reduce) {
+  .kb-card-live::before { animation: kbCardLivePulse 2.4s ease-in-out infinite; }
+  @keyframes kbCardLivePulse {
+    0%, 100% { opacity: .55; }
+    50%      { opacity: 1; }
+  }
+}
+.kb-card-live:hover { border-color: transparent; }
 
 /* ── Live task pill on cards ──────────────────────────────────────────── */
 .kb-live-pill {

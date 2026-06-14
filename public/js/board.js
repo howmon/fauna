@@ -209,9 +209,11 @@
     // Live-run pill — visible on AI-claimed in_progress cards. Clicking it
     // opens the live task viewer panel (model + chain-of-reasoning + steps).
     var liveBadge = '';
+    var isLive = false;
     if (it.column === 'in_progress' && it.claimedBy && it.claimedBy.indexOf('ai:') === 0) {
       var lastRun = (it.runs && it.runs.length) ? it.runs[it.runs.length - 1] : null;
       if (lastRun && lastRun.taskId) {
+        isLive = true;
         liveBadge = '<button class="kb-live-pill" ' +
           'onclick="event.stopPropagation();openLiveTaskPanel(\'' +
             _esc(lastRun.taskId) + '\',\'' + _esc(it.id) + '\')" ' +
@@ -220,7 +222,7 @@
       }
     }
 
-    return '<div class="kb-card" draggable="true" ' +
+    return '<div class="kb-card' + (isLive ? ' kb-card-live' : '') + '" draggable="true" ' +
         'data-item="' + _esc(it.id) + '" data-col="' + _esc(it.column) + '" data-project="' + _esc(it.projectId || s.projectId) + '" ' +
         'ondragstart="kbDragStart(event)" ondragend="kbDragEnd(event)" ' +
         'onclick="openWorkItemModal(' + pidArg + ',\'' + _esc(it.id) + '\')">' +
@@ -760,14 +762,29 @@
 
   window.kbLiveSteer = function() {
     if (!_liveState.taskId) return;
-    var msg = window.prompt('Steering message — what should the model do next?');
-    if (!msg) return;
-    fetch('/api/tasks/' + encodeURIComponent(_liveState.taskId) + '/steer', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: msg.slice(0, 2000) }),
-    }).then(function(r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
-      .then(function() { _toast('Steering message queued'); })
-      .catch(function(e) { _toast('Steer failed: ' + e.message, true); });
+    var taskId = _liveState.taskId;
+    // window.prompt() throws in Electron — use the existing _projPrompt
+    // modal helper from projects.js (script-global) instead. Falls back to
+    // window.prompt only if the helper isn't loaded (e.g. board opened
+    // outside the main app shell).
+    var ask = (typeof _projPrompt === 'function')
+      ? _projPrompt({
+          title: 'Steer the model',
+          label: 'What should the model do next? The next iteration will see this message.',
+          placeholder: 'e.g. "Skip the verification step and move straight to PR"',
+          submit: 'Send',
+          multiline: true,
+        })
+      : Promise.resolve(window.prompt('Steering message:'));
+
+    Promise.resolve(ask).then(function(msg) {
+      if (!msg || !String(msg).trim()) return;
+      return fetch('/api/tasks/' + encodeURIComponent(taskId) + '/steer', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: String(msg).slice(0, 2000) }),
+      }).then(function(r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
+        .then(function() { _toast('Steering message queued'); });
+    }).catch(function(e) { _toast('Steer failed: ' + e.message, true); });
   };
 
   // ── Exports ────────────────────────────────────────────────────────────
