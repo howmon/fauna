@@ -240,7 +240,15 @@ async function _autonomyLoop(task, state) {
       agentName: _pickAgent(task, state.step),
       thinkingBudget: 'medium',
       maxContextTurns: 100,
-    }, state.abortController.signal);
+    }, state.abortController.signal, (partial) => {
+      // Throttled inside _callChat; surface only the tail so we don't ship
+      // megabytes of growing strings through SSE every 500ms.
+      _emit(task.id, 'partial', {
+        step: state.step,
+        content: partial.slice(-1500),
+        length: partial.length,
+      });
+    });
 
     _throwIfAborted(state.abortController.signal);
     if (!aiResponse) {

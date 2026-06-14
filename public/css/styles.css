@@ -9064,6 +9064,29 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
+/* In-progress streaming preview \u2014 shown while the model's current chat
+   call is still in flight so the panel never sits idle for minutes. */
+.kb-live-step-partial {
+  border-color: color-mix(in srgb, var(--accent, #6ea8fe) 35%, var(--fau-border));
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 5%, var(--fau-surface));
+}
+.kb-live-step-streaming {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: #2ecc71; font-style: normal; font-weight: 600;
+  text-transform: uppercase; font-size: 10px; letter-spacing: .04em;
+}
+.kb-live-step-streaming .kb-live-dot {
+  width: 6px; height: 6px;
+}
+.kb-live-partial-body {
+  margin: 0; padding: 8px 10px; max-height: 240px; overflow: auto;
+  background: var(--fau-surface2); border: 1px solid var(--fau-border);
+  border-radius: 6px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px; line-height: 1.45; color: var(--fau-text);
+  white-space: pre-wrap; word-break: break-word;
+}
+
 .kb-live-foot {
   display: flex; gap: 8px; padding: 10px 14px;
   border-top: 1px solid var(--fau-border); background: var(--fau-surface2);

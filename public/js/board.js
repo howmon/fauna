@@ -786,6 +786,40 @@
     '</div>';
   }
 
+  // Render the model's in-progress output as a soft, scrolling preview at
+  // the top of the stream. Replaced/updated on every partial event; cleared
+  // once the step finishes (reasoning entry arrives) or a new step starts.
+  function _liveRenderPartial(step, content, length) {
+    var stream = document.getElementById('kb-live-stream');
+    if (!stream) return;
+    // Drop the empty-state placeholder once we have anything to show.
+    var empty = stream.querySelector('.kb-live-empty');
+    if (empty) empty.remove();
+    var el = document.getElementById('kb-live-partial');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'kb-live-partial';
+      el.className = 'kb-live-step kb-live-step-partial';
+      stream.insertBefore(el, stream.firstChild);
+    }
+    var lenLabel = (typeof length === 'number' && length > content.length)
+      ? ' · ' + length + ' chars so far'
+      : '';
+    el.innerHTML =
+      '<div class="kb-live-step-head">' +
+        '<span class="kb-live-step-num">STEP ' + (step || '?') + '</span>' +
+        '<span class="kb-live-step-outcome kb-live-step-streaming">' +
+          '<span class="kb-live-dot"></span> streaming' + lenLabel +
+        '</span>' +
+      '</div>' +
+      '<pre class="kb-live-partial-body">' + _esc(String(content || '')) + '</pre>';
+  }
+
+  function _liveClearPartial() {
+    var el = document.getElementById('kb-live-partial');
+    if (el) el.remove();
+  }
+
   function _liveSubscribe(taskId) {
     if (_liveState.sse) { try { _liveState.sse.close(); } catch (_) {} }
     try {
@@ -796,11 +830,21 @@
           // Server publishes flat events shaped { taskId, event, ...payload }.
           if (!msg || msg.taskId !== taskId) return;
           if (msg.event === 'reasoning' && msg.entry) {
+            // A step finished — clear any in-progress partial preview
+            // since the entry now reflects the completed step.
+            _liveClearPartial();
             _liveAppendEntry(msg.entry);
+          } else if (msg.event === 'partial' && msg.content) {
+            // Streaming token deltas from the model's current chat call.
+            // Render in-place so the panel never sits idle while the
+            // model is producing output.
+            _liveRenderPartial(msg.step, msg.content, msg.length);
           } else if (msg.event === 'step') {
-            // Refresh head so step counter / stats stay current.
+            // New step starting — reset partial preview.
+            _liveClearPartial();
             _liveRefreshSnapshot(taskId);
           } else if (msg.event === 'completed' || msg.event === 'failed') {
+            _liveClearPartial();
             _liveRefreshSnapshot(taskId);
           }
         } catch (_) {}
