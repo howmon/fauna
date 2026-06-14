@@ -158,15 +158,28 @@ function _pickNext(project) {
   if (_aiInFlight(board) >= concurrency) return null;
   if (dailyQuota && _quotaUsed(project.id) >= dailyQuota) return null;
 
-  const todo = (board.columns.todo || []).filter(it =>
+  // Pickable from BOTH columns:
+  //   - todo: the normal queue.
+  //   - in_progress with no claim: a human dragged an AI card straight
+  //     into in_progress; autopilot should still take it. (Cards that
+  //     are actively being worked have `claimedBy` set, so they're skipped.)
+  const todoPool = (board.columns.todo || []).filter(it =>
     it.assignee === 'ai' &&
     !it.claimedBy &&
     !it.lockedByUser &&
     !_isBlocked(it, board)
   );
-  if (!todo.length) return null;
-  todo.sort(_comparePickability);
-  return todo[0];
+  const inProgressPool = (board.columns.in_progress || []).filter(it =>
+    it.assignee === 'ai' &&
+    !it.claimedBy &&
+    !it.lockedByUser &&
+    !_inFlight.has(it.id) &&
+    !_isBlocked(it, board)
+  );
+  const pool = todoPool.concat(inProgressPool);
+  if (!pool.length) return null;
+  pool.sort(_comparePickability);
+  return pool[0];
 }
 
 // ── Task synthesis ───────────────────────────────────────────────────────
