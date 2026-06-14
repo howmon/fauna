@@ -14,6 +14,7 @@ export function registerTaskRoutes(app, deps) {
     enableWebhook,
     disableWebhook,
     rotateWebhookToken,
+    getRunningTaskInfo,
   } = deps;
 
   function taskWithRuntime(task) {
@@ -57,6 +58,35 @@ export function registerTaskRoutes(app, deps) {
     const task = getTask(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
     res.json(taskWithRuntime(task));
+  });
+
+  // Snapshot of what an in-flight task is doing right now: model, step,
+  // reasoning entries, latest "current" step. Returns 200 with `running:false`
+  // for tasks that have already finished so the UI can fall back to
+  // task.result.reasoning without a second roundtrip.
+  app.get('/api/tasks/:id/live', (req, res) => {
+    const task = getTask(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    const running = isTaskRunning(req.params.id);
+    const live = running && typeof getRunningTaskInfo === 'function'
+      ? getRunningTaskInfo(req.params.id) : null;
+    res.json({
+      ok: true,
+      running,
+      taskId: task.id,
+      title: task.title,
+      model: task.model || 'claude-sonnet-4.6',
+      agents: Array.isArray(task.agents) ? task.agents : [],
+      status: task.status,
+      startedAt: live ? live.startedAt : null,
+      elapsedMs: live ? live.elapsed : null,
+      step: live ? live.step : (task.result && task.result.totalSteps) || 0,
+      stats: live ? live.stats : (task.result && task.result.stats) || null,
+      current: live ? live.current : null,
+      reasoning: live
+        ? live.reasoning
+        : (task.result && Array.isArray(task.result.reasoning) ? task.result.reasoning : []),
+    });
   });
 
   app.put('/api/tasks/:id', (req, res) => {

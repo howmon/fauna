@@ -576,7 +576,18 @@ function isTaskRunning(taskId) {
 function getRunningTaskInfo(taskId) {
   const state = _runningTasks.get(taskId);
   if (!state) return null;
-  return { step: state.step, startedAt: state.startedAt, elapsed: Date.now() - state.startedAt };
+  // Clone reasoning so callers can't mutate the live array.
+  const reasoning = Array.isArray(state.reasoning) ? state.reasoning.slice() : [];
+  // Last entry is the freshest "what the model is doing right now" line.
+  const current = reasoning.length ? reasoning[reasoning.length - 1] : null;
+  return {
+    step: state.step,
+    startedAt: state.startedAt,
+    elapsed: Date.now() - state.startedAt,
+    reasoning,
+    current,
+    stats: state.stats ? { ...state.stats } : null,
+  };
 }
 
 function getRunningTasks() {

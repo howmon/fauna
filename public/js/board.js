@@ -206,12 +206,26 @@
       ? "'" + _esc(it.projectId) + "'"
       : "'" + _esc(s.projectId) + "'";
 
+    // Live-run pill — visible on AI-claimed in_progress cards. Clicking it
+    // opens the live task viewer panel (model + chain-of-reasoning + steps).
+    var liveBadge = '';
+    if (it.column === 'in_progress' && it.claimedBy && it.claimedBy.indexOf('ai:') === 0) {
+      var lastRun = (it.runs && it.runs.length) ? it.runs[it.runs.length - 1] : null;
+      if (lastRun && lastRun.taskId) {
+        liveBadge = '<button class="kb-live-pill" ' +
+          'onclick="event.stopPropagation();openLiveTaskPanel(\'' +
+            _esc(lastRun.taskId) + '\',\'' + _esc(it.id) + '\')" ' +
+          'title="See what the model is thinking">' +
+          '<span class="kb-live-dot"></span><i class="ti ti-activity"></i> Live</button>';
+      }
+    }
+
     return '<div class="kb-card" draggable="true" ' +
         'data-item="' + _esc(it.id) + '" data-col="' + _esc(it.column) + '" data-project="' + _esc(it.projectId || s.projectId) + '" ' +
         'ondragstart="kbDragStart(event)" ondragend="kbDragEnd(event)" ' +
         'onclick="openWorkItemModal(' + pidArg + ',\'' + _esc(it.id) + '\')">' +
       '<div class="kb-card-top">' +
-        '<div class="kb-card-chips">' + priorityChip + assigneeChip + lockChip + '</div>' +
+        '<div class="kb-card-chips">' + priorityChip + assigneeChip + lockChip + liveBadge + '</div>' +
         '<div class="kb-card-chips-right">' + projectChip + '</div>' +
       '</div>' +
       '<div class="kb-card-title">' + sourceMark + ' ' + _esc(it.title) + '</div>' +
@@ -532,6 +546,191 @@
       s.sse.onerror = function() { /* browser auto-reconnects */ };
     } catch (_) { /* no SSE — board still works without live updates */ }
   }
+
+  // ── Live task viewer ───────────────────────────────────────────────────
+  // Lightweight panel that streams what an autopilot-spawned task is
+  // currently doing: model, elapsed time, step counter, and the per-step
+  // chain-of-reasoning (intent → actions → outcome).
+  var _liveState = { taskId: null, cardId: null, sse: null, host: null, lastStepIds: new Set() };
+
+  function _liveEnsureHost() {
+    if (_liveState.host && document.body.contains(_liveState.host)) return _liveState.host;
+    var h = document.createElement('div');
+    h.id = 'kb-live-host';
+    h.innerHTML =
+      '<div class="kb-live-backdrop" onclick="closeLiveTaskPanel()"></div>' +
+      '<aside class="kb-live-panel" role="dialog" aria-label="Live task viewer">' +
+        '<header class="kb-live-head">' +
+          '<div class="kb-live-head-main">' +
+            '<div class="kb-live-title"><span class="kb-live-dot"></span> <span id="kb-live-title-text">Live task</span></div>' +
+            '<div class="kb-live-sub" id="kb-live-sub">Connecting…</div>' +
+          '</div>' +
+          '<button class="kb-icon-btn" onclick="closeLiveTaskPanel()" title="Close"><i class="ti ti-x"></i></button>' +
+        '</header>' +
+        '<div class="kb-live-meta" id="kb-live-meta"></div>' +
+        '<div class="kb-live-stream" id="kb-live-stream"><div class="kb-live-empty">Waiting for the first step…</div></div>' +
+        '<footer class="kb-live-foot">' +
+          '<button class="kb-btn danger" onclick="kbLiveStop()" title="Tell the task-runner to stop this task"><i class="ti ti-player-stop"></i> Stop run</button>' +
+          '<button class="kb-btn" onclick="kbLiveSteer()" title="Inject a steering message — the next iteration will see it"><i class="ti ti-message-2-share"></i> Steer</button>' +
+        '</footer>' +
+      '</aside>';
+    document.body.appendChild(h);
+    _liveState.host = h;
+    return h;
+  }
+
+  function _liveFmtElapsed(ms) {
+    if (!ms || ms < 0) return '0s';
+    var s = Math.floor(ms / 1000);
+    if (s < 60) return s + 's';
+    var m = Math.floor(s / 60); s = s % 60;
+    if (m < 60) return m + 'm ' + s + 's';
+    var h = Math.floor(m / 60); m = m % 60;
+    return h + 'h ' + m + 'm';
+  }
+
+  function _liveRenderHead(snap) {
+    var titleEl = document.getElementById('kb-live-title-text');
+    var subEl   = document.getElementById('kb-live-sub');
+    var metaEl  = document.getElementById('kb-live-meta');
+    if (!titleEl || !subEl || !metaEl) return;
+    titleEl.textContent = snap.title || 'Task';
+    var status = snap.running ? 'Running' : (snap.status || 'finished');
+    var statusCls = snap.running ? 'kb-live-status-running'
+                   : (snap.status === 'failed' ? 'kb-live-status-failed' : 'kb-live-status-done');
+    subEl.innerHTML =
+      '<span class="kb-live-status ' + statusCls + '">' + _esc(status) + '</span>' +
+      ' &middot; step <strong>' + (snap.step || 0) + '</strong>' +
+      ' &middot; ' + _liveFmtElapsed(snap.elapsedMs || 0);
+    var stats = snap.stats || {};
+    metaEl.innerHTML =
+      '<div class="kb-live-meta-row"><i class="ti ti-cpu"></i> <span>Model</span><code>' + _esc(snap.model || 'default') + '</code></div>' +
+      (snap.agents && snap.agents.length
+        ? '<div class="kb-live-meta-row"><i class="ti ti-robot"></i> <span>Agent</span><code>' + _esc(snap.agents.join(', ')) + '</code></div>'
+        : '') +
+      '<div class="kb-live-meta-row"><i class="ti ti-bolt"></i> <span>Actions</span>' +
+        '<span class="kb-live-stat-num">' + (stats.actionsTotal || 0) + '</span>' +
+        ' <span class="kb-live-stat-ok">' + (stats.actionsOk || 0) + ' ok</span>' +
+        ' <span class="kb-live-stat-fail">' + (stats.actionsFailed || 0) + ' fail</span>' +
+      '</div>';
+  }
+
+  function _liveAppendEntry(entry) {
+    var stream = document.getElementById('kb-live-stream');
+    if (!stream || !entry) return;
+    var key = 'step-' + entry.step;
+    if (_liveState.lastStepIds.has(key)) {
+      // Update existing node in case actions/outcome came in later.
+      var existing = stream.querySelector('[data-step="' + entry.step + '"]');
+      if (existing) existing.outerHTML = _liveStepHtml(entry);
+      return;
+    }
+    var empty = stream.querySelector('.kb-live-empty');
+    if (empty) empty.remove();
+    _liveState.lastStepIds.add(key);
+    stream.insertAdjacentHTML('beforeend', _liveStepHtml(entry));
+    stream.scrollTop = stream.scrollHeight;
+  }
+
+  function _liveStepHtml(entry) {
+    var actions = (entry.actions || []).map(function(a) {
+      var ico = a.ok === false ? 'ti-x' : 'ti-check';
+      var cls = a.ok === false ? 'kb-live-action-fail' : 'kb-live-action-ok';
+      return '<li class="' + cls + '"><i class="ti ' + ico + '"></i> ' +
+        '<span class="kb-live-action-type">' + _esc(a.type || 'action') + '</span> ' +
+        '<span class="kb-live-action-detail">' + _esc((a.action || '').slice(0, 200)) + '</span></li>';
+    }).join('');
+    return '<div class="kb-live-step" data-step="' + entry.step + '">' +
+      '<div class="kb-live-step-head">' +
+        '<span class="kb-live-step-no">Step ' + entry.step + '</span>' +
+        (entry.outcome ? '<span class="kb-live-step-outcome">' + _esc(entry.outcome) + '</span>' : '') +
+      '</div>' +
+      (entry.intent
+        ? '<div class="kb-live-step-intent">' + _esc(String(entry.intent).slice(0, 600)) + '</div>'
+        : '') +
+      (actions ? '<ul class="kb-live-step-actions">' + actions + '</ul>' : '') +
+    '</div>';
+  }
+
+  function _liveSubscribe(taskId) {
+    if (_liveState.sse) { try { _liveState.sse.close(); } catch (_) {} }
+    try {
+      var es = new EventSource('/api/tasks/stream');
+      es.onmessage = function(ev) {
+        try {
+          var msg = JSON.parse(ev.data);
+          // Server publishes flat events shaped { taskId, event, ...payload }.
+          if (!msg || msg.taskId !== taskId) return;
+          if (msg.event === 'reasoning' && msg.entry) {
+            _liveAppendEntry(msg.entry);
+          } else if (msg.event === 'step') {
+            // Refresh head so step counter / stats stay current.
+            _liveRefreshSnapshot(taskId);
+          } else if (msg.event === 'completed' || msg.event === 'failed') {
+            _liveRefreshSnapshot(taskId);
+          }
+        } catch (_) {}
+      };
+      es.onerror = function() { /* browser auto-reconnects */ };
+      _liveState.sse = es;
+    } catch (_) {}
+  }
+
+  function _liveRefreshSnapshot(taskId) {
+    fetch('/api/tasks/' + encodeURIComponent(taskId) + '/live')
+      .then(function(r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
+      .then(function(snap) {
+        if (!snap || snap.taskId !== _liveState.taskId) return; // user closed/switched
+        _liveRenderHead(snap);
+        // Replay any entries we missed (e.g. opened after task already ran).
+        (snap.reasoning || []).forEach(_liveAppendEntry);
+      })
+      .catch(function(e) {
+        var sub = document.getElementById('kb-live-sub');
+        if (sub) sub.textContent = 'Lost connection: ' + e.message;
+      });
+  }
+
+  window.openLiveTaskPanel = function(taskId, cardId) {
+    if (!taskId) return;
+    var host = _liveEnsureHost();
+    host.classList.add('open');
+    _liveState.taskId = taskId;
+    _liveState.cardId = cardId || null;
+    _liveState.lastStepIds = new Set();
+    var stream = document.getElementById('kb-live-stream');
+    if (stream) stream.innerHTML = '<div class="kb-live-empty">Loading…</div>';
+    _liveRefreshSnapshot(taskId);
+    _liveSubscribe(taskId);
+  };
+
+  window.closeLiveTaskPanel = function() {
+    if (_liveState.sse) { try { _liveState.sse.close(); } catch (_) {} _liveState.sse = null; }
+    if (_liveState.host) _liveState.host.classList.remove('open');
+    _liveState.taskId = null;
+    _liveState.cardId = null;
+  };
+
+  window.kbLiveStop = function() {
+    if (!_liveState.taskId) return;
+    if (!confirm('Stop this task? The card will bounce back to Todo.')) return;
+    fetch('/api/tasks/' + encodeURIComponent(_liveState.taskId) + '/stop', { method: 'POST' })
+      .then(function(r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
+      .then(function() { _toast('Stop signal sent'); })
+      .catch(function(e) { _toast('Stop failed: ' + e.message, true); });
+  };
+
+  window.kbLiveSteer = function() {
+    if (!_liveState.taskId) return;
+    var msg = window.prompt('Steering message — what should the model do next?');
+    if (!msg) return;
+    fetch('/api/tasks/' + encodeURIComponent(_liveState.taskId) + '/steer', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg.slice(0, 2000) }),
+    }).then(function(r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
+      .then(function() { _toast('Steering message queued'); })
+      .catch(function(e) { _toast('Steer failed: ' + e.message, true); });
+  };
 
   // ── Exports ────────────────────────────────────────────────────────────
   window.renderKanbanBoard = renderKanbanBoard;

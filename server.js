@@ -14,7 +14,7 @@ import fs         from 'fs';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { createTask, getTask, getAllTasks, updateTask, deleteTask, startScheduler, stopScheduler, enableWebhook, disableWebhook, rotateWebhookToken, getTaskByWebhookToken, markWebhookFired } from './task-manager.js';
-import { runTask, pauseTask, stopTask, steerTask, isTaskRunning, subscribe, setOsNotifier as setTaskRunnerOsNotifier, setAlertSink as setTaskRunnerAlertSink } from './task-runner.js';
+import { runTask, pauseTask, stopTask, steerTask, isTaskRunning, subscribe, setOsNotifier as setTaskRunnerOsNotifier, setAlertSink as setTaskRunnerAlertSink, getRunningTaskInfo } from './task-runner.js';
 import {
   createProject, getProject, getAllProjects, updateProject, deleteProject,
   touchProject, linkConversation, linkTask,
@@ -230,6 +230,7 @@ registerTaskRoutes(app, {
   enableWebhook,
   disableWebhook,
   rotateWebhookToken,
+  getRunningTaskInfo,
 });
 
 registerWebhookRoutes(app, {
