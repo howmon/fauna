@@ -246,6 +246,9 @@ async function _autonomyLoop(task, state) {
       agentName: _pickAgent(task, state.step),
       thinkingBudget: 'medium',
       maxContextTurns: 100,
+      // Headless run — tells /api/chat to use the relaxed tool-guard caps
+      // and auto-allow shell permission prompts (no UI to confirm against).
+      headlessTask: true,
     }, state.abortController.signal, (partial) => {
       // Throttled inside _callChat; surface only the tail so we don't ship
       // megabytes of growing strings through SSE every 500ms.
@@ -645,6 +648,7 @@ async function _verifyAgainstSkills({ task, state, messages, summary, systemProm
     agentName: _pickAgent(task, state.step),
     thinkingBudget: 'low',
     maxContextTurns: 100,
+    headlessTask: true,
   }, signal, (partial) => {
     _emit(task.id, 'partial', {
       step: state.step,
@@ -693,23 +697,32 @@ async function _executeResponseActions(response, task, signal) {
       continue;
     }
     const cwd = (perms.shell && typeof perms.shell === 'object' && perms.shell.cwd) ? perms.shell.cwd : null;
+    // Autonomous tasks run headless — no UI to approve per-command permission
+    // prompts. The task-level grant (perms.shell !== false) IS the permission.
+    // Without bypass, `isCommandSafe` would return permissionRequired:true,
+    // the model would see empty output, and fabricate a "tool limit" excuse.
+    const bypassPermissions = perms.shell !== false;
     try {
       const r = await fetch(`http://localhost:${PORT}/api/shell-exec`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: cmd, cwd }),
+        body: JSON.stringify({ command: cmd, cwd, bypassPermissions }),
         signal,
       });
-      // SSE stream — collect output
-      const text = await r.text();
+      const data = await r.json().catch(() => null);
       let output = '';
-      for (const line of text.split('\n')) {
-        if (!line.startsWith('data: ')) continue;
-        try {
-          const evt = JSON.parse(line.slice(6));
-          if (evt.type === 'output') output += evt.data;
-          if (evt.type === 'exit') output += '\n[exit code: ' + evt.code + ']';
-        } catch (_) {}
+      if (!data) {
+        output = 'Error: shell-exec returned no JSON';
+      } else if (data.permissionRequired) {
+        // Should never trigger now that bypassPermissions is true, but keep
+        // a clear message so a misconfigured task doesn't silently no-op.
+        output = `[blocked by permission guard] ${data.command || cmd}` +
+          (data.explanation ? `\n${data.explanation}` : '');
+      } else {
+        const stdout = String(data.stdout || '');
+        const stderr = String(data.stderr || '');
+        const code = data.exitCode == null ? '?' : data.exitCode;
+        output = stdout + (stderr ? `\n[stderr]\n${stderr}` : '') + `\n[exit code: ${code}]`;
       }
       results.push({ type: 'shell-exec', output: output.slice(0, 8000) });
     } catch (err) {

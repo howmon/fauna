@@ -197,6 +197,8 @@ export function registerChatRoute(app, {
           qa: bodyQa = null,
           deploy: bodyDeploy = null,
           deployApproved: bodyDeployApproved = false,
+          headlessTask: bodyHeadlessTask = false,
+          toolLimits: bodyToolLimits = null,
           selectedFigmaFileKeys = [] } = req.body;
     const isCLI = clientContext === 'cli';
 
@@ -1134,8 +1136,16 @@ export function registerChatRoute(app, {
       // ── Tool guard — pre-call checks, category limits, browser discipline ──
       const PROMPT_PERMISSION = process.env.FAUNA_PROMPT_PERMISSION === '1';
       const toolGuard = new ToolGuardContext({
+        // Headless / autonomous task runs (kanban autopilot, cron) get
+        // relaxed caps so a build → test → review pass can actually finish
+        // a single turn. Interactive chat keeps the conservative caps.
+        autonomous: !!bodyHeadlessTask,
+        limits: bodyToolLimits && typeof bodyToolLimits === 'object' ? bodyToolLimits : null,
         send,
         onPermissionRequest: async (toolName, args, info) => {
+          // Headless tasks have no UI to approve — the task-level shell
+          // permission IS the grant, so auto-allow without prompting.
+          if (bodyHeadlessTask) return 'allow';
           // Default (legacy): emit the SSE event and auto-allow. Set
           // FAUNA_PROMPT_PERMISSION=1 to require an explicit decision via
           // /api/tool-permission-result; on timeout the call is denied.

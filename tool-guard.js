@@ -104,6 +104,19 @@ const CATEGORY_LIMITS = {
 
 const TOTAL_LIMIT = 40;
 
+// Relaxed limits for autonomous task runs (kanban autopilot, cron jobs).
+// Interactive chat keeps the conservative caps so a runaway tool loop
+// doesn't burn through tokens; headless tasks need room to actually finish
+// a build → test → review workflow.
+const AUTONOMOUS_CATEGORY_LIMITS = {
+  browser: 60,
+  shell:   100,
+  file:    100,
+  figma:   100,
+  other:   100,
+};
+const AUTONOMOUS_TOTAL_LIMIT = 300;
+
 // ── Guard context — one per agentic turn ──────────────────────────────────
 
 export class ToolGuardContext {
@@ -115,6 +128,14 @@ export class ToolGuardContext {
     this._browserActionTimestamps = [];  // timestamps of recent browser actions
     this._lastBrowserSnapshotIdx = 0;    // totalCount at last snapshot (0 = fresh start)
     this._recentNavigations = new Map(); // url → { count, lastResult }
+
+    // Effective limits: caller can pass `autonomous:true` for the relaxed
+    // ceiling, OR pass an explicit `limits: { total, browser, shell, ... }`
+    // override (per-field merge over the active baseline).
+    const baseTotal = opts.autonomous ? AUTONOMOUS_TOTAL_LIMIT : TOTAL_LIMIT;
+    const baseCats  = opts.autonomous ? AUTONOMOUS_CATEGORY_LIMITS : CATEGORY_LIMITS;
+    this.totalLimit = (opts.limits && Number.isFinite(opts.limits.total)) ? opts.limits.total : baseTotal;
+    this.categoryLimits = { ...baseCats, ...((opts.limits && typeof opts.limits === 'object') ? opts.limits : {}) };
 
     // Callbacks
     this.onPermissionRequest = opts.onPermissionRequest || null; // async (toolName, args, info) => 'allow'|'deny'
@@ -136,15 +157,15 @@ export class ToolGuardContext {
     this.categoryCounts[category]++;
 
     // ── 1. Total limit ─────────────────────────────────────────────
-    if (this.totalCount > TOTAL_LIMIT) {
+    if (this.totalCount > this.totalLimit) {
       return {
         action: 'deny',
-        reason: `Tool call limit reached (${TOTAL_LIMIT}). Summarize what you have done so far and tell the user to continue in a follow-up message if needed.`,
+        reason: `Tool call limit reached (${this.totalLimit}). Summarize what you have done so far and tell the user to continue in a follow-up message if needed.`,
       };
     }
 
     // ── 2. Per-category limit ──────────────────────────────────────
-    const catLimit = CATEGORY_LIMITS[category] || CATEGORY_LIMITS.other;
+    const catLimit = this.categoryLimits[category] || this.categoryLimits.other;
     if (this.categoryCounts[category] > catLimit) {
       return {
         action: 'deny',
