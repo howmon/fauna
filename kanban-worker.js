@@ -32,10 +32,11 @@ import {
   moveWorkItem, addWorkItemComment, updateBacklogItem, listAllWorkItems,
   appendAutonomousRunLog,
 } from './project-manager.js';
-import { createTask, getTask } from './task-manager.js';
+import { createTask, getTask, getAllTasks } from './task-manager.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
-const QUOTA_FILE = path.join(CONFIG_DIR, 'autonomous-runs', 'board-quota.json');
+const QUOTA_FILE    = path.join(CONFIG_DIR, 'autonomous-runs', 'board-quota.json');
+const INFLIGHT_FILE = path.join(CONFIG_DIR, 'autonomous-runs', 'kanban-inflight.json');
 
 const POLL_MS         = 15_000;
 const ARCHIVE_TICK_MS = 60_000;     // sweep done cards once a minute
@@ -47,11 +48,13 @@ const DEFAULT_AGENT   = 'orchestrator';
 // route → other modules). The worker only needs it at runtime.
 let _runTaskImpl = null;
 let _subscribeImpl = null;
+let _isTaskRunningImpl = null;
 async function _loadRunner() {
   if (_runTaskImpl) return;
   const mod = await import('./task-runner.js');
-  _runTaskImpl   = mod.runTask;
-  _subscribeImpl = mod.subscribe;
+  _runTaskImpl       = mod.runTask;
+  _subscribeImpl     = mod.subscribe;
+  _isTaskRunningImpl = mod.isTaskRunning;
 }
 
 // Emit board events back to the SSE bus so live UIs refresh. Lazy import
@@ -218,6 +221,92 @@ const _pollTimers = { poll: null, archive: null };
 const _inFlight   = new Map();  // cardId → { taskId, projectId, unsubscribe }
 let   _running    = false;
 
+// ── In-flight persistence ────────────────────────────────────────────────
+// The _inFlight map is the only thing standing between an autopilot run
+// and orphan recovery. When the process dies (laptop sleep killing the
+// Electron renderer, OOM, manual quit) we lose the map and the card sits
+// in `in_progress` until the 15-min staleness sweep eventually bounces it
+// back to `todo`. That's 15 min of UX confusion AND we lose the link from
+// card → task so the user can't even open the live viewer.
+//
+// We persist the map to disk on every set/delete (small object, a few
+// dozen entries at most) and rehydrate on worker start so recovery is
+// instant and the live viewer keeps working across restarts.
+
+function _persistInFlight() {
+  try {
+    fs.mkdirSync(path.dirname(INFLIGHT_FILE), { recursive: true });
+    const out = {};
+    for (const [cardId, ent] of _inFlight) {
+      out[cardId] = { taskId: ent.taskId, projectId: ent.projectId, startedAt: ent.startedAt || Date.now() };
+    }
+    fs.writeFileSync(INFLIGHT_FILE, JSON.stringify(out, null, 2));
+  } catch (e) { console.warn('[kanban-worker] inflight write failed:', e?.message || e); }
+}
+
+function _readPersistedInFlight() {
+  try { return JSON.parse(fs.readFileSync(INFLIGHT_FILE, 'utf8')); }
+  catch (_) { return {}; }
+}
+
+// Bring the in-flight map back from disk and resubscribe to any tasks
+// that survived (rare — but if the worker is restarted without the
+// task-runner process dying, e.g. test reload or stop/start of the
+// worker only, we should reattach). Tasks that are NOT running anymore
+// are treated as zombies and handed off to recovery.
+async function _rehydrateInFlight() {
+  await _loadRunner();
+  const persisted = _readPersistedInFlight();
+  const zombies = [];
+  for (const cardId of Object.keys(persisted)) {
+    const ent = persisted[cardId];
+    if (!ent || !ent.taskId || !ent.projectId) continue;
+    const stillRunning = _isTaskRunningImpl && _isTaskRunningImpl(ent.taskId);
+    if (stillRunning) {
+      // Reattach the subscription so finalize-on-completion still works.
+      const unsubscribe = _subscribeImpl(ent.taskId, (ev) => _onTaskEvent(ent.projectId, cardId, ev));
+      _inFlight.set(cardId, { taskId: ent.taskId, projectId: ent.projectId, unsubscribe, startedAt: ent.startedAt });
+    } else {
+      zombies.push({ cardId, ent });
+    }
+  }
+  _persistInFlight();
+  return zombies;
+}
+
+// A zombie is an inflight entry whose task is no longer running. The task
+// itself may show status='running' (the task-runner died before it could
+// write 'failed'). We finalize the card as a failure so the existing
+// retry/handoff logic kicks in. We DO NOT auto-resume — the chat history
+// of a multi-step agent run isn't persisted between steps, so a "resume"
+// would actually be a fresh start with no context, which is what the
+// retry path already provides.
+function _recoverZombieTasks(zombies) {
+  for (const { cardId, ent } of zombies) {
+    const task = (typeof getTask === 'function') ? getTask(ent.taskId) : null;
+    const stalledStatus = task && task.status === 'running' ? 'interrupted (system sleep or restart)' : (task && task.status) || 'unknown';
+    try {
+      _finalizeRunFailure(ent.projectId, cardId, {
+        error: 'Run was interrupted while in progress (' + stalledStatus + '). The work-so-far is preserved on the task — open the live viewer to inspect. Retrying.',
+      });
+    } catch (e) {
+      console.warn('[kanban-worker] zombie recovery failed for', cardId, '—', e?.message || e);
+    }
+  }
+}
+
+// Public hook: called by main.js on `powerMonitor.on('resume')` so we
+// scan immediately when the laptop wakes up instead of waiting for the
+// next 15 s poll.
+export async function recoverInterruptedRuns() {
+  await _loadRunner();
+  const zombies = await _rehydrateInFlight();
+  _recoverZombieTasks(zombies);
+  // Also flush stale orphans whose process died WITHOUT writing the
+  // inflight file (e.g. hard kill before first persist).
+  try { _recoverOrphans(); } catch (_) {}
+}
+
 // ── Claim + run one card ─────────────────────────────────────────────────
 async function _claimAndRun(project, card) {
   await _loadRunner();
@@ -258,7 +347,8 @@ async function _claimAndRun(project, card) {
 
   // Subscribe to task-runner events for completion / failure.
   const unsubscribe = _subscribeImpl(task.id, (ev) => _onTaskEvent(project.id, card.id, ev));
-  _inFlight.set(card.id, { taskId: task.id, projectId: project.id, unsubscribe });
+  _inFlight.set(card.id, { taskId: task.id, projectId: project.id, unsubscribe, startedAt: Date.now() });
+  _persistInFlight();
 
   // Kick off the run.
   Promise.resolve(_runTaskImpl(task.id)).catch(err => {
@@ -282,6 +372,7 @@ function _finalizeRunSuccess(projectId, cardId, ev) {
   const ent = _inFlight.get(cardId);
   if (ent && ent.unsubscribe) ent.unsubscribe();
   _inFlight.delete(cardId);
+  _persistInFlight();
 
   const proj = getProject(projectId);
   if (!proj) return;
@@ -362,6 +453,7 @@ function _finalizeRunFailure(projectId, cardId, ev) {
   const ent = _inFlight.get(cardId);
   if (ent && ent.unsubscribe) ent.unsubscribe();
   _inFlight.delete(cardId);
+  _persistInFlight();
 
   const proj = getProject(projectId);
   if (!proj) return;
@@ -516,7 +608,12 @@ export function startKanbanWorker(opts = {}) {
   const archiveMs = Number(opts.archiveMs) || ARCHIVE_TICK_MS;
   _pollTimers.poll    = setInterval(() => { _pollTick();    }, pollMs);
   _pollTimers.archive = setInterval(() => { _archiveTick(); }, archiveMs);
-  // First tick after a short delay so the rest of the server finishes boot.
+  // First tick after a short delay so the rest of the server finishes
+  // booting. Recovery runs IMMEDIATELY though — we want to surface
+  // interrupted runs the moment the worker comes back up so the user
+  // sees accurate card state, not the stale "in_progress" from before
+  // the crash/sleep.
+  recoverInterruptedRuns().catch(e => console.warn('[kanban-worker] startup recovery failed:', e?.message || e));
   setTimeout(() => { _pollTick(); _archiveTick(); }, 2_000);
   console.log('[kanban-worker] started (poll ' + pollMs + 'ms, archive ' + archiveMs + 'ms)');
 }
@@ -530,6 +627,9 @@ export function stopKanbanWorker() {
     try { ent.unsubscribe && ent.unsubscribe(); } catch (_) {}
   }
   _inFlight.clear();
+  // Note: we deliberately do NOT clear the persisted INFLIGHT_FILE on
+  // stop. If the process is being shut down, we WANT the next start to
+  // see those entries so it can recover them as zombies.
 }
 
 // Test-only: expose internals so we can unit-test pure logic without
@@ -544,5 +644,10 @@ export const __test = {
   finalizeRunSuccess: _finalizeRunSuccess,
   finalizeRunFailure: _finalizeRunFailure,
   inFlight: _inFlight,
+  persistInFlight: _persistInFlight,
+  readPersistedInFlight: _readPersistedInFlight,
+  rehydrateInFlight: _rehydrateInFlight,
+  recoverZombieTasks: _recoverZombieTasks,
+  inflightFile: INFLIGHT_FILE,
   quota: { read: _readQuota, increment: _quotaIncrement, used: _quotaUsed },
 };

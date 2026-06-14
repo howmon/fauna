@@ -111,7 +111,7 @@ describe('GET /api/tasks/:id/live', () => {
     expect(res.body.current.step).toBe(2);
   });
 
-  it('falls back to claude-sonnet-4.6 when the task has no model set', () => {
+  it('returns null model when the task has no model set (UI shows "default")', () => {
     deps.getTask.mockReturnValue({ id: 't', title: 'x', model: null, status: 'running' });
     deps.isTaskRunning.mockReturnValue(true);
     deps.getRunningTaskInfo.mockReturnValue({
@@ -120,7 +120,7 @@ describe('GET /api/tasks/:id/live', () => {
 
     const res = app.invoke('GET', '/api/tasks/:id/live', { params: { id: 't' } });
 
-    expect(res.body.model).toBe('claude-sonnet-4.6');
+    expect(res.body.model).toBeNull();
   });
 
   it('returns persisted reasoning when the task has already finished', () => {
@@ -158,5 +158,28 @@ describe('GET /api/tasks/:id/live', () => {
     expect(res.body.step).toBe(0);
     expect(res.body.stats).toBeNull();
     expect(res.body.current).toBeNull();
+  });
+
+  it('exposes _partialReasoning for a task interrupted mid-run by sleep/crash', () => {
+    deps.getTask.mockReturnValue({
+      id: 't', title: 'x', model: 'gpt-5', status: 'running',
+      _partialReasoning: [
+        { step: 1, intent: 'a', actions: [], outcome: 'done' },
+        { step: 2, intent: 'b', actions: [], outcome: 'done' },
+      ],
+      _partialStats: { actionsTotal: 3, actionsOk: 3, actionsFailed: 0 },
+      _partialStep: 2,
+      _partialUpdatedAt: 1700000000000,
+    });
+    deps.isTaskRunning.mockReturnValue(false);
+
+    const res = app.invoke('GET', '/api/tasks/:id/live', { params: { id: 't' } });
+
+    expect(res.body.running).toBe(false);
+    expect(res.body.interrupted).toBe(true);
+    expect(res.body.interruptedAt).toBe(1700000000000);
+    expect(res.body.step).toBe(2);
+    expect(res.body.stats.actionsOk).toBe(3);
+    expect(res.body.reasoning).toHaveLength(2);
   });
 });

@@ -264,6 +264,7 @@ async function _autonomyLoop(task, state) {
       reasoningEntry.outcome = 'executed ' + actionResults.length + ' action(s)';
       state.reasoning.push(reasoningEntry);
       _emit(task.id, 'reasoning', { entry: reasoningEntry });
+      _persistPartial(task.id, state);
 
       // Feed action results back — the AI decides next step based on real results
       const feedback = actionResults.map((r, i) =>
@@ -289,6 +290,7 @@ async function _autonomyLoop(task, state) {
       reasoningEntry.outcome = 'text-only response';
       state.reasoning.push(reasoningEntry);
       _emit(task.id, 'reasoning', { entry: reasoningEntry });
+      _persistPartial(task.id, state);
 
       if (/TASK_COMPLETE/i.test(aiResponse)) {
         const summary = aiResponse.replace(/[\s\S]*TASK_COMPLETE:?\s*/i, '').trim() || 'Task completed successfully';
@@ -528,6 +530,23 @@ function _summarizeActionResult(action, result) {
 // ── SSE Event Emitter for live monitoring ────────────────────────────────
 
 const _listeners = new Map(); // taskId → Set<callback>
+
+// Flush the in-memory chain-of-reasoning + stats to the persisted task on
+// every reasoning step. Without this, a process killed mid-run (laptop
+// sleep, crash, OOM) loses everything the model already produced and the
+// /api/tasks/:id/live endpoint has nothing to show after recovery.
+// We cap at the most recent 50 entries to keep tasks.json small.
+function _persistPartial(taskId, state) {
+  try {
+    const reasoning = Array.isArray(state.reasoning) ? state.reasoning.slice(-50) : [];
+    updateTask(taskId, {
+      _partialReasoning: reasoning,
+      _partialStats: state.stats ? { ...state.stats } : null,
+      _partialStep: state.step,
+      _partialUpdatedAt: Date.now(),
+    });
+  } catch (_) { /* best-effort */ }
+}
 
 function _emit(taskId, event, data) {
   const cbs = _listeners.get(taskId);

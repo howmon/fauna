@@ -63,29 +63,42 @@ export function registerTaskRoutes(app, deps) {
   // Snapshot of what an in-flight task is doing right now: model, step,
   // reasoning entries, latest "current" step. Returns 200 with `running:false`
   // for tasks that have already finished so the UI can fall back to
-  // task.result.reasoning without a second roundtrip.
+  // task.result.reasoning without a second roundtrip. For tasks killed
+  // mid-run (laptop sleep, crash) we also expose task._partialReasoning so
+  // the user sees what the model was thinking before it was interrupted.
   app.get('/api/tasks/:id/live', (req, res) => {
     const task = getTask(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
     const running = isTaskRunning(req.params.id);
     const live = running && typeof getRunningTaskInfo === 'function'
       ? getRunningTaskInfo(req.params.id) : null;
+    // Resolution order for reasoning when NOT running:
+    //   1. final result.reasoning (clean exit)
+    //   2. _partialReasoning (sleep/crash-killed mid-run)
+    //   3. empty
+    const persistedReasoning = (task.result && Array.isArray(task.result.reasoning))
+      ? task.result.reasoning
+      : (Array.isArray(task._partialReasoning) ? task._partialReasoning : []);
+    const persistedStats = (task.result && task.result.stats) || task._partialStats || null;
+    const persistedStep = (task.result && task.result.totalSteps)
+      || task._partialStep || 0;
     res.json({
       ok: true,
       running,
       taskId: task.id,
       title: task.title,
-      model: task.model || 'claude-sonnet-4.6',
+      model: task.model || null,
       agents: Array.isArray(task.agents) ? task.agents : [],
       status: task.status,
+      // Hint to the UI that this snapshot is from a previous interrupted run.
+      interrupted: !running && task.status === 'running' && !!task._partialUpdatedAt,
+      interruptedAt: !running ? (task._partialUpdatedAt || null) : null,
       startedAt: live ? live.startedAt : null,
       elapsedMs: live ? live.elapsed : null,
-      step: live ? live.step : (task.result && task.result.totalSteps) || 0,
-      stats: live ? live.stats : (task.result && task.result.stats) || null,
+      step: live ? live.step : persistedStep,
+      stats: live ? live.stats : persistedStats,
       current: live ? live.current : null,
-      reasoning: live
-        ? live.reasoning
-        : (task.result && Array.isArray(task.result.reasoning) ? task.result.reasoning : []),
+      reasoning: live ? live.reasoning : persistedReasoning,
     });
   });
 

@@ -76,13 +76,16 @@ vi.mock('../task-manager.js', () => ({
     return t;
   }),
   getTask: vi.fn(id => _createdTasks.find(t => t.id === id) || null),
+  getAllTasks: vi.fn(() => _createdTasks.slice()),
 }));
 
 const _subs = new Map(); // taskId → callback (only one needed per test)
 const _runCalls = [];
+const _runningTasks = new Set();
 vi.mock('../task-runner.js', () => ({
   runTask: vi.fn(id => { _runCalls.push(id); return Promise.resolve({ ok: true }); }),
   subscribe: vi.fn((id, cb) => { _subs.set(id, cb); return () => _subs.delete(id); }),
+  isTaskRunning: vi.fn(id => _runningTasks.has(id)),
 }));
 
 vi.mock('../server/routes/projects.js', () => ({
@@ -105,6 +108,7 @@ async function flushAsync(turns = 5) {
 
 // Stub fs so the quota file doesn't touch ~/.config/fauna/.
 let _quotaStore = {};
+let _inflightStore = {};
 vi.mock('fs', async () => {
   const real = await vi.importActual('fs');
   const overrides = {
@@ -112,11 +116,17 @@ vi.mock('fs', async () => {
       if (typeof p === 'string' && p.includes('board-quota.json')) {
         return JSON.stringify(_quotaStore);
       }
+      if (typeof p === 'string' && p.includes('kanban-inflight.json')) {
+        return JSON.stringify(_inflightStore);
+      }
       return real.readFileSync(p, enc);
     }),
     writeFileSync: vi.fn((p, data) => {
       if (typeof p === 'string' && p.includes('board-quota.json')) {
         _quotaStore = JSON.parse(data); return;
+      }
+      if (typeof p === 'string' && p.includes('kanban-inflight.json')) {
+        _inflightStore = JSON.parse(data); return;
       }
       return real.writeFileSync(p, data);
     }),
@@ -138,7 +148,9 @@ beforeEach(() => {
   _createdTasks.length = 0;
   _runCalls.length = 0;
   _subs.clear();
+  _runningTasks.clear();
   _quotaStore = {};
+  _inflightStore = {};
   __test.inFlight.clear();
   _verify.nextResult = { ok: true, skipped: true };
 });
@@ -412,5 +424,104 @@ describe('_recoverOrphans', () => {
       assignee: 'ai', claimedBy: 'ai:o', movedAt: staleAt(STALE_MIN) }));
     __test.recoverOrphans();
     expect(_db.items[0].column).toBe('todo');
+  });
+});
+
+// ── In-flight persistence + zombie recovery (sleep/crash durability) ────
+//
+// When the laptop sleeps or the process is killed, the in-memory _inFlight
+// Map is lost. These tests verify:
+//   1. Every set/delete on _inFlight writes the map to disk.
+//   2. On worker start (or powerMonitor 'resume'), the persisted file is
+//      read back and split into "still running" vs "zombie" tasks.
+//   3. Zombie tasks trigger _finalizeRunFailure so the existing retry /
+//      hand-back-to-human flow handles them — no card is left stranded.
+
+describe('in-flight persistence', () => {
+  it('writes the in-flight map to disk', () => {
+    __test.inFlight.set('card-a', { taskId: 'task-aaa', projectId: 'p1', startedAt: 1000 });
+    __test.persistInFlight();
+    const stored = __test.readPersistedInFlight();
+    expect(stored['card-a']).toBeDefined();
+    expect(stored['card-a'].taskId).toBe('task-aaa');
+    expect(stored['card-a'].projectId).toBe('p1');
+  });
+
+  it('strips non-serialisable fields like unsubscribe callbacks', () => {
+    const cb = vi.fn();
+    __test.inFlight.set('card-b', { taskId: 'task-bbb', projectId: 'p1', unsubscribe: cb });
+    __test.persistInFlight();
+    const stored = __test.readPersistedInFlight();
+    expect(stored['card-b'].unsubscribe).toBeUndefined();
+    expect(typeof stored['card-b'].startedAt).toBe('number');
+  });
+});
+
+describe('zombie task recovery', () => {
+  it('rehydrates entries whose task IS still running and resubscribes', async () => {
+    _inflightStore = {
+      'card-1': { taskId: 'task-1', projectId: 'p1', startedAt: 1000 },
+    };
+    _runningTasks.add('task-1'); // task-runner says it's still running
+    _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true } });
+    _db.items.push(_mkItem({ id: 'card-1', projectId: 'p1', column: 'in_progress',
+      assignee: 'ai', claimedBy: 'ai:o' }));
+
+    const zombies = await __test.rehydrateInFlight();
+    expect(zombies).toEqual([]);
+    expect(__test.inFlight.has('card-1')).toBe(true);
+    // Subscription was reattached, so the worker can finalize it later.
+    expect(_subs.has('task-1')).toBe(true);
+  });
+
+  it('classifies entries whose task is NOT running as zombies', async () => {
+    _inflightStore = {
+      'card-2': { taskId: 'task-2', projectId: 'p1', startedAt: 1000 },
+    };
+    // _runningTasks intentionally empty → task-runner says task is gone
+    _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true, maxAiRetries: 2 } });
+
+    const zombies = await __test.rehydrateInFlight();
+    expect(zombies).toHaveLength(1);
+    expect(zombies[0].cardId).toBe('card-2');
+    expect(zombies[0].ent.taskId).toBe('task-2');
+    expect(__test.inFlight.has('card-2')).toBe(false);
+  });
+
+  it('finalizes zombies as failures so the retry pipeline takes over', async () => {
+    _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true, maxAiRetries: 2 } });
+    _db.items.push(_mkItem({ id: 'card-3', projectId: 'p1', column: 'in_progress',
+      assignee: 'ai', claimedBy: 'ai:o',
+      runs: [], }));
+
+    __test.recoverZombieTasks([
+      { cardId: 'card-3', ent: { taskId: 'task-3', projectId: 'p1' } },
+    ]);
+
+    // _finalizeRunFailure with attempt count below maxRetries → card back to todo,
+    // claimedBy cleared, run entry recorded with ok:false.
+    const card = _db.items.find(x => x.id === 'card-3');
+    expect(card.column).toBe('todo');
+    expect(card.claimedBy).toBeNull();
+    expect(card.runs.length).toBe(1);
+    expect(card.runs[0].ok).toBe(false);
+    // A comment was posted explaining the interruption.
+    expect(card.comments.some(c => /interrupt/i.test(c.body))).toBe(true);
+  });
+
+  it('hands stuck zombies to a human after maxRetries failures', async () => {
+    _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true, maxAiRetries: 1 } });
+    _db.items.push(_mkItem({ id: 'card-4', projectId: 'p1', column: 'in_progress',
+      assignee: 'ai', claimedBy: 'ai:o',
+      // Already failed once before — recovery is attempt #2 which hits the cap.
+      runs: [{ taskId: 'task-prev', ok: false, finishedAt: Date.now() }] }));
+
+    __test.recoverZombieTasks([
+      { cardId: 'card-4', ent: { taskId: 'task-4', projectId: 'p1' } },
+    ]);
+
+    const card = _db.items.find(x => x.id === 'card-4');
+    expect(card.column).toBe('todo');
+    expect(card.assignee).toBe('human');
   });
 });

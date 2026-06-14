@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, shell, nativeImage, nativeTheme, Notification, dialog, screen, clipboard } from 'electron';
+import { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, shell, nativeImage, nativeTheme, Notification, dialog, screen, clipboard, powerMonitor } from 'electron';
 import path     from 'path';
 import fs       from 'fs';
 import os       from 'os';
@@ -1158,6 +1158,28 @@ app.whenReady().then(async () => {
     app.quit();
     throw err;
   });
+
+  // When the laptop wakes from sleep, immediately scan for autopilot
+  // tasks that were killed mid-run. Without this the user has to wait up
+  // to 15 s for the next worker poll + 15 min for the orphan staleness
+  // window before stuck cards bounce back to `todo`. Hooking
+  // `powerMonitor.resume` collapses that into a moment.
+  try {
+    powerMonitor.on('resume', () => {
+      console.log('[power] resumed — scanning for interrupted autopilot runs');
+      import('./kanban-worker.js')
+        .then(mod => mod.recoverInterruptedRuns && mod.recoverInterruptedRuns())
+        .catch(e => console.warn('[power] resume recovery failed:', e?.message || e));
+    });
+    // `unlock-screen` covers the case where the OS slept the display but
+    // didn't fully suspend (common on plugged-in macs). Same handler is
+    // idempotent so calling it twice is safe.
+    powerMonitor.on('unlock-screen', () => {
+      import('./kanban-worker.js')
+        .then(mod => mod.recoverInterruptedRuns && mod.recoverInterruptedRuns())
+        .catch(() => {});
+    });
+  } catch (e) { console.warn('[power] powerMonitor wire failed:', e?.message || e); }
 
   // Restore previously open windows; fall back to a single new window.
   const saved = _readWindowState();
