@@ -232,6 +232,14 @@ describe('getProjectBoard', () => {
     expect(board.columns.todo.length).toBe(2);
     expect(board.columns.done.length).toBe(1);
   });
+
+  it('exposes kanban config (so the UI can render the autopilot toggle)', () => {
+    seedProject('proj-1', { kanban: { autopilot: true, concurrency: 2 } });
+    const board = getProjectBoard('proj-1');
+    expect(board.kanban).toBeDefined();
+    expect(board.kanban.autopilot).toBe(true);
+    expect(board.kanban.concurrency).toBe(2);
+  });
 });
 
 describe('listAllWorkItems (global board)', () => {

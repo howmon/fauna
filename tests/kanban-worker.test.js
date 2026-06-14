@@ -352,3 +352,65 @@ describe('quota', () => {
     expect(__test.quota.used('p1')).toBe(2);
   });
 });
+
+// ── Orphan recovery ──────────────────────────────────────────────────────
+describe('_recoverOrphans', () => {
+  const STALE_MIN = 16; // > 15 min threshold
+
+  function staleAt(min) { return new Date(Date.now() - min * 60_000).toISOString(); }
+
+  beforeEach(() => {
+    _db.projects.push({ id: 'p1', name: 'P', kanban: {} });
+  });
+
+  it('bounces a stale AI-claimed in_progress card back to todo', () => {
+    _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'in_progress',
+      assignee: 'ai', claimedBy: 'ai:o', movedAt: staleAt(STALE_MIN) }));
+    __test.recoverOrphans();
+    expect(_db.items[0].column).toBe('todo');
+    expect(_db.items[0].claimedBy).toBe(null);
+    // Recovery comment was posted
+    expect(_db.items[0].comments.length).toBeGreaterThanOrEqual(1);
+    expect(_db.items[0].comments[0].body).toMatch(/recovered/i);
+  });
+
+  it('leaves a FRESH in_progress card alone', () => {
+    _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'in_progress',
+      assignee: 'ai', claimedBy: 'ai:o', movedAt: staleAt(2) }));
+    __test.recoverOrphans();
+    expect(_db.items[0].column).toBe('in_progress');
+  });
+
+  it('leaves cards we are still tracking (in _inFlight) alone', () => {
+    _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'in_progress',
+      assignee: 'ai', claimedBy: 'ai:o', movedAt: staleAt(STALE_MIN) }));
+    __test.inFlight.set('c1', { taskId: 't1', projectId: 'p1', unsubscribe: () => {} });
+    __test.recoverOrphans();
+    expect(_db.items[0].column).toBe('in_progress');
+    __test.inFlight.clear();
+  });
+
+  it('skips human-claimed cards (only AI-claimed are recovered)', () => {
+    _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'in_progress',
+      assignee: 'human', claimedBy: 'user:abey', movedAt: staleAt(STALE_MIN) }));
+    __test.recoverOrphans();
+    expect(_db.items[0].column).toBe('in_progress');
+  });
+
+  it('skips lockedByUser cards', () => {
+    _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'in_progress',
+      assignee: 'ai', claimedBy: 'ai:o', lockedByUser: true,
+      movedAt: staleAt(STALE_MIN) }));
+    __test.recoverOrphans();
+    expect(_db.items[0].column).toBe('in_progress');
+  });
+
+  it('recovers even when autopilot is off (so the card is no longer orphaned)', () => {
+    // No autopilot on the project — recovery should still happen because the
+    // user will want the AI badge cleared even if they turn autopilot back on later.
+    _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'in_progress',
+      assignee: 'ai', claimedBy: 'ai:o', movedAt: staleAt(STALE_MIN) }));
+    __test.recoverOrphans();
+    expect(_db.items[0].column).toBe('todo');
+  });
+});

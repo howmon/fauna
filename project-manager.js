@@ -1250,7 +1250,13 @@ export function getProjectBoard(projectId) {
   for (const it of (p.backlog || [])) {
     (columns[it.column] || columns.backlog).push(it);
   }
-  return { projectId: p.id, projectName: p.name, columns };
+  return {
+    projectId: p.id,
+    projectName: p.name,
+    columns,
+    kanban: p.kanban || {},
+    qa: p.qa || null,
+  };
 }
 
 // ── Autonomous-run telemetry (Phase 5) ───────────────────────────────────

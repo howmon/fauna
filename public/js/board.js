@@ -38,6 +38,7 @@
     dragFromCol: null,
     filterAssignee: 'all',     // 'all' | 'ai' | 'human'
     showArchived: false,
+    kanban: {},                // current project's kanban config (autopilot etc)
   };
 
   function _esc(s) {
@@ -79,6 +80,12 @@
           ')"><i class="ti ti-plus"></i> New work item</button>' +
           (s.scope === 'project'
             ? '<button class="kb-btn" onclick="kbPrioritize()" title="Score with RICE and promote new cards into Todo"><i class="ti ti-sort-descending"></i> Prioritise</button>'
+            : '') +
+          (s.scope === 'project'
+            ? '<label class="kb-toggle-wrap kb-autopilot-toggle" title="When on, the AI will claim Todo cards assigned to it and run them automatically.">' +
+                '<input type="checkbox" id="kb-autopilot-cb" onchange="kbToggleAutopilot(this.checked)"> ' +
+                '<span><i class="ti ti-robot"></i> Autopilot</span>' +
+              '</label>'
             : '') +
         '</div>' +
         '<div class="kb-toolbar-right">' +
@@ -124,6 +131,10 @@
             s.items.push(it);
           });
         });
+        // Capture project kanban config so the toolbar can render the
+        // autopilot toggle in sync with the server.
+        s.kanban = (data && data.kanban) || {};
+        _updateAutopilotToggle();
       }
       _renderGrid();
     }).catch(function(e) {
@@ -289,6 +300,34 @@
     }).then(function(r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
       .then(function() { _toast('Prioritised'); refreshKanbanBoard(); })
       .catch(function(e) { _toast('Prioritise failed: ' + e.message, true); });
+  };
+
+  // Sync the autopilot checkbox to whatever the server says. Called after every
+  // board fetch so external toggles (other tabs / API calls) stay reflected.
+  function _updateAutopilotToggle() {
+    var s = window._kbState;
+    var cb = document.getElementById('kb-autopilot-cb');
+    if (!cb) return;
+    cb.checked = !!(s.kanban && s.kanban.autopilot);
+  }
+
+  window.kbToggleAutopilot = function(checked) {
+    var s = window._kbState;
+    if (!s.projectId) return;
+    var nextKanban = Object.assign({}, s.kanban || {}, { autopilot: !!checked });
+    fetch('/api/projects/' + encodeURIComponent(s.projectId), {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kanban: nextKanban }),
+    }).then(function(r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
+      .then(function(proj) {
+        s.kanban = (proj && proj.kanban) || nextKanban;
+        _updateAutopilotToggle();
+        _toast(checked ? 'Autopilot ON — AI will claim Todo cards' : 'Autopilot OFF');
+      })
+      .catch(function(e) {
+        _toast('Autopilot toggle failed: ' + e.message, true);
+        _updateAutopilotToggle(); // revert UI
+      });
   };
 
   // ── Modals (create / edit) ─────────────────────────────────────────────

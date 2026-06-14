@@ -145,7 +145,7 @@ const TOOL_KW = {
   lesson:     /\b(lesson|teach me|walk me through|tutorial|course|explain how|step[- ]?by[- ]?step|learn(ing)? plan)\b/i,
   images:     /\b(stock ?images?|unsplash|pexels|pixabay|royalty[- ]?free|hero ?images?|illustration|photos? (search|of)|find .* (image|photo)|download .* (image|photo)|generate .* (image|photo|logo|icon|art|picture)|create .* (image|logo|icon|illustration|picture)|make .* (image|logo|icon|picture)|ai[- ]?(image|art)|dall[- ]?e|gpt[- ]?image|text[- ]?to[- ]?image|render .* (image|logo|icon)|edit .* (image|photo)|inpaint|transparent (background|png)|logo|icon)\b/i,
   widget:     /(\b(widget|dashboard|chart|graph|gen[-_ ]?ui|scorecard|kpi|metric|leaderboard|playlist|carousel|tabs?|gallery|stat|interactive|kanban|slider|3d|three[-_. ]?js|webgl|babylon|aframe|model[- ]?viewer|gltf|blender|mesh|orbit ?controls|product (render|shot|viewer))\b|\.(glb|obj|stl|fbx)\b)/i,
-  backlog:    /\b(backlog|board|kanban|work ?item|card|column|claim|assign|in[- ]?progress|review|done|archive|feature request|roadmap|prioriti[sz]e|ticket|issue|jira|todo list|user story|audit|architecture|tech debt|what.{1,15}next)\b/i,
+  backlog:    /\b(backlog|task[- ]?board|board|kanban|work ?item|card|column|claim|assign|in[- ]?progress|review|done|archive|feature request|roadmap|prioriti[sz]e|ticket|issue|jira|todo list|user story|audit|architecture|tech debt|what.{1,15}next|add to .{0,15}board)\b/i,
   debate:     /\b(debate|consult|second opinion|cross[- ]?check|compare models|ask another model|deliberate|brainstorm)\b/i,
 };
 

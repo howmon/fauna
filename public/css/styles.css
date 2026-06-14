@@ -8787,6 +8787,17 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 12px; color: var(--fau-text-dim); cursor: pointer;
 }
+.kb-autopilot-toggle {
+  padding: 4px 10px; border-radius: 14px;
+  border: 1px solid var(--fau-border); background: var(--fau-surface2);
+  transition: border-color .15s, background .15s, color .15s;
+}
+.kb-autopilot-toggle:has(input:checked) {
+  border-color: var(--accent, #6ea8fe);
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 14%, transparent);
+  color: var(--fau-text);
+}
+.kb-autopilot-toggle .ti { font-size: 14px; }
 
 .kb-board {
   display: flex; gap: 10px; flex: 1; min-height: 0;

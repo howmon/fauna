@@ -39,6 +39,7 @@ const QUOTA_FILE = path.join(CONFIG_DIR, 'autonomous-runs', 'board-quota.json');
 
 const POLL_MS         = 15_000;
 const ARCHIVE_TICK_MS = 60_000;     // sweep done cards once a minute
+const ORPHAN_STALE_MS = 15 * 60_000; // in_progress cards untouched this long are recovered
 const PRIORITY_ORDER  = { p0: 0, p1: 1, p2: 2, p3: 3 };
 const DEFAULT_AGENT   = 'orchestrator';
 
@@ -439,10 +440,53 @@ function _hasUnansweredHumanComment(card) {
   return false;
 }
 
+// ── Orphan recovery ──────────────────────────────────────────────────────
+// A card may be left stranded in `in_progress` when the worker process
+// restarts (in-memory _inFlight is lost) or when the task-runner silently
+// drops a job. We periodically scan in_progress cards claimed by AI; if
+// none are tracked locally AND the card hasn't moved in ORPHAN_STALE_MS,
+// bounce it back to `todo` so the next poll can claim it again.
+function _recoverOrphans() {
+  const items = listAllWorkItems({ column: 'in_progress', limit: 2000 });
+  const now = Date.now();
+  for (const it of items) {
+    if (!it || !it.projectId) continue;
+    // Only touch AI-claimed cards. Human cards in_progress are the user's.
+    const claimedBy = it.claimedBy || '';
+    if (!claimedBy.startsWith('ai:')) continue;
+    // Skip cards we're actively tracking — the live subscription will finalize them.
+    if (_inFlight.has(it.id)) continue;
+    // Honour user lock.
+    if (it.lockedByUser) continue;
+    const movedAt = Date.parse(it.movedAt || it.updatedAt || it.createdAt || 0);
+    if (!Number.isFinite(movedAt) || (now - movedAt) < ORPHAN_STALE_MS) continue;
+    // Honour autopilot off — without it, the recovered card just sits in todo, which is fine.
+    const r = moveWorkItem(it.projectId, it.id, {
+      column: 'todo', claimedBy: null,
+      runEntry: { taskId: null, finishedAt: now, ok: false, recovered: true },
+    }, { actor: 'ai', strict: false });
+    if (r && r.ok) {
+      try {
+        addWorkItemComment(it.projectId, it.id, { author: 'ai',
+          body: 'Autopilot recovered this card — it was stuck in_progress with no live task. Reset to todo so it can be picked up again.',
+        });
+      } catch (_) {}
+      appendAutonomousRunLog(it.projectId, { kind: 'kanban_orphan_recovered', cardId: it.id });
+      _emitBoard({ type: 'moved', projectId: it.projectId, itemId: it.id });
+    }
+  }
+}
+
 // ── Poll tick ────────────────────────────────────────────────────────────
 async function _pollTick() {
   if (!_running) return;
   try {
+    // Always run orphan recovery first — independent of any project's autopilot
+    // setting. Stale `in_progress` cards are a UX trap (the user sees a card
+    // "running" that has no live task) so we clear them every tick.
+    try { _recoverOrphans(); }
+    catch (e) { console.warn('[kanban-worker] orphan recovery error:', e?.message || e); }
+
     const projects = getAllProjects();
     for (const proj of projects) {
       if (!proj || !(proj.kanban && proj.kanban.autopilot)) continue;
@@ -496,6 +540,7 @@ export const __test = {
   comparePickability: _comparePickability,
   hasUnansweredHumanComment: _hasUnansweredHumanComment,
   archiveSweep: _archiveSweep,
+  recoverOrphans: _recoverOrphans,
   finalizeRunSuccess: _finalizeRunSuccess,
   finalizeRunFailure: _finalizeRunFailure,
   inFlight: _inFlight,
