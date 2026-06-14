@@ -8,6 +8,10 @@ import { buildContext as _buildExprContext, interpolate as _exprInterpolate, has
 import { getActionNode } from './server/lib/action-nodes.js';
 import { resolveCredential as _resolveCredential } from './credentials-store.js';
 import { toItems as _toItems, toItem as _toItem, isItemArray as _isItemArray, brandItems as _brandItems, displayOutput as _displayOutput } from './server/lib/items.js';
+import { findSection as _skillFindSection, parseFrontmatter as _skillParseFrontmatter } from './lib/skill-anatomy.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 
 const PORT = 3737;
 const _runningTasks = new Map(); // taskId → { abortController, step, startedAt }
@@ -186,6 +190,8 @@ async function _autonomyLoop(task, state) {
 
   const systemPrompt = [
     'You are executing an autonomous task. Work step by step.',
+    ..._coreOperatingBehaviors(),
+    ..._skillSystemPromptLines(task),
     ...toolGuidance,
     'FORMATTING RULES for action blocks:',
     '- Put EXACTLY ONE action per code block.',
@@ -317,9 +323,25 @@ async function _autonomyLoop(task, state) {
 
       if (/TASK_COMPLETE/i.test(aiResponse)) {
         const summary = aiResponse.replace(/[\s\S]*TASK_COMPLETE:?\s*/i, '').trim() || 'Task completed successfully';
-        completeTask(task.id, { summary: summary.slice(0, 500) });
-        _emit(task.id, 'completed', { summary: summary.slice(0, 500) });
-        return;
+        // Anti-rationalization gate: if the task has bound skills, force
+        // the model to cite evidence against each skill's Verification
+        // checklist before accepting TASK_COMPLETE. This is the single
+        // most leverage-y guardrail from the addyosmani skill pack —
+        // "seems right" is never sufficient; require evidence.
+        const verified = await _verifyAgainstSkills({
+          task, state, messages, summary,
+          systemPrompt,
+          signal: state.abortController.signal,
+        });
+        if (verified.ok) {
+          completeTask(task.id, { summary: summary.slice(0, 500), verification: verified.evidence });
+          _emit(task.id, 'completed', { summary: summary.slice(0, 500), verification: verified.evidence });
+          return;
+        }
+        // Rejected — push the gate's rebuttal back into the conversation
+        // and continue looping. The verifier already added the assistant
+        // turn (the evidence response) and a user follow-up.
+        continue;
       }
 
       if (/TASK_FAILED/i.test(aiResponse)) {
@@ -340,18 +362,62 @@ async function _autonomyLoop(task, state) {
   _emit(task.id, 'failed', { error: 'max steps exceeded' });
 }
 
-// ── Agent selection — round-robin across assigned agents ─────────────────
+// ── Agent selection — skill-aware with round-robin fallback ──────────────
+//
+// When a task has bound skills (via task.skills or kanban skillBindings) and
+// 2+ agents to pick from, score each agent by how many of the active skills
+// it declares in its agent.json `skills: []` array. Highest score wins;
+// ties fall back to round-robin so the existing rotation behaviour holds
+// when nobody is a clear specialist.
+
+function _readAgentSkills(agentName) {
+  const safe = String(agentName || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!safe) return [];
+  const home = os.homedir();
+  const candidates = [
+    path.join(home, '.config', 'fauna', 'agents', safe, 'agent.json'),
+    path.join(process.cwd(), 'agents', safe, 'agent.json'),
+  ];
+  for (const p of candidates) {
+    try {
+      if (!fs.existsSync(p)) continue;
+      const manifest = JSON.parse(fs.readFileSync(p, 'utf8'));
+      return Array.isArray(manifest.skills) ? manifest.skills : [];
+    } catch (_) {}
+  }
+  return [];
+}
 
 function _pickAgent(task, step) {
   const agents = task.agents || [];
   if (agents.length === 0) return null;          // use default
   if (agents.length === 1) return agents[0];
-  return agents[(step - 1) % agents.length];     // round-robin
+
+  const active = _resolveTaskSkills(task);
+  if (active.length) {
+    const activeSet = new Set(active);
+    const scored = agents.map((name) => {
+      const skills = _readAgentSkills(name);
+      let score = 0;
+      for (const s of skills) if (activeSet.has(s)) score++;
+      return { name, score };
+    });
+    const top = scored.reduce((a, b) => (b.score > a.score ? b : a), scored[0]);
+    if (top.score > 0) {
+      // Tie-break among top scorers via round-robin so we still distribute.
+      const tied = scored.filter((s) => s.score === top.score).map((s) => s.name);
+      return tied[(step - 1) % tied.length];
+    }
+  }
+  return agents[(step - 1) % agents.length];     // round-robin fallback
 }
 
 // ── Call /api/chat via loopback ──────────────────────────────────────────
 
-async function _callChat(params, signal) {
+// Streams the chat SSE response and invokes onDelta(partialContent) at most
+// once every ~500ms while the model is producing tokens. Returns the full
+// assembled assistant text once the stream ends.
+async function _callChat(params, signal, onDelta) {
   try {
     const resp = await fetch(`http://localhost:${PORT}/api/chat`, {
       method: 'POST',
@@ -362,19 +428,49 @@ async function _callChat(params, signal) {
 
     if (!resp.ok) throw new Error('Chat API error: ' + resp.status);
 
-    // Parse SSE stream to collect the full assistant response
-    const text = await resp.text();
+    // Fall back to buffered text() if the response body is not a stream
+    // (e.g. mocked in tests). This keeps test fixtures working.
+    if (!resp.body || typeof resp.body.getReader !== 'function') {
+      const text = await resp.text();
+      return _parseSseToContent(text);
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
     let content = '';
-    for (const line of text.split('\n')) {
-      if (!line.startsWith('data: ')) continue;
-      try {
-        const evt = JSON.parse(line.slice(6));
-        if (evt.type === 'content' && evt.content) content += evt.content;
-        if (evt.type === 'tool_output' && evt.output) content += evt.output;
-        if (evt.type === 'error') {
-          console.error('[task-runner] API error in stream:', evt.error);
+    let lastEmit = 0;
+    const DELTA_INTERVAL_MS = 500;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nlIdx;
+      while ((nlIdx = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, nlIdx);
+        buffer = buffer.slice(nlIdx + 1);
+        const next = _accumulateSseLine(line, content);
+        if (next !== content) {
+          content = next;
+          if (typeof onDelta === 'function') {
+            const now = Date.now();
+            if (now - lastEmit >= DELTA_INTERVAL_MS) {
+              lastEmit = now;
+              try { onDelta(content); } catch (_) {}
+            }
+          }
         }
-      } catch (_) {}
+      }
+    }
+    // Flush any trailing partial line.
+    if (buffer) {
+      content = _accumulateSseLine(buffer, content);
+    }
+    // Final flush so the consumer sees the tail even if it falls inside
+    // the throttle window.
+    if (typeof onDelta === 'function' && content) {
+      try { onDelta(content); } catch (_) {}
     }
     return content || null;
   } catch (err) {
@@ -382,6 +478,198 @@ async function _callChat(params, signal) {
     console.error('[task-runner] Chat call failed:', err.message);
     return null;
   }
+}
+
+// Pure helper — takes one SSE-formatted line and the accumulated content,
+// returns the new accumulated content. Exported via _testables for unit tests.
+function _accumulateSseLine(line, content) {
+  if (!line.startsWith('data: ')) return content;
+  try {
+    const evt = JSON.parse(line.slice(6));
+    if (evt.type === 'content' && evt.content) return content + evt.content;
+    if (evt.type === 'tool_output' && evt.output) return content + evt.output;
+    if (evt.type === 'error') {
+      console.error('[task-runner] API error in stream:', evt.error);
+    }
+  } catch (_) {}
+  return content;
+}
+
+// Buffered fallback parser for when the response body is not streamable.
+function _parseSseToContent(text) {
+  let content = '';
+  for (const line of String(text || '').split('\n')) {
+    content = _accumulateSseLine(line, content);
+  }
+  return content || null;
+}
+
+// ── Anti-rationalization gate ────────────────────────────────────────────
+
+// Returns the list of skill slugs this task should verify against. Reads
+// from task.skills (preferred), then kanban column bindings (via
+// task.kanban.skillBindings[task.kanban.column]) so a card moving through
+// the in_progress column gets that column's skills automatically.
+function _resolveTaskSkills(task) {
+  const out = [];
+  const seen = new Set();
+  const add = (slug) => {
+    const s = String(slug || '').trim();
+    if (!s || seen.has(s)) return;
+    seen.add(s);
+    out.push(s);
+  };
+  if (Array.isArray(task && task.skills)) task.skills.forEach(add);
+  const k = task && task.kanban;
+  if (k && k.skillBindings && k.column) {
+    const bound = k.skillBindings[k.column];
+    if (Array.isArray(bound)) bound.forEach(add);
+  }
+  return out;
+}
+
+// Locate a SKILL.md across the same search roots as self-tools._findSkill.
+// Kept inline to avoid pulling self-tools into the runner.
+function _locateSkillFile(skillName) {
+  const safe = String(skillName || '').replace(/[^a-zA-Z0-9_./-]/g, '').replace(/\.\.+/g, '');
+  if (!safe) return null;
+  const home = os.homedir();
+  const cwd = process.cwd();
+  const roots = [
+    path.join(cwd, 'skills'),
+    path.join(home, '.config', 'fauna', 'skills'),
+    path.join(home, '.config', 'fauna', 'agents', '_skills'),
+    path.join(cwd, 'agentstore', '_skills'),
+  ];
+  for (const root of roots) {
+    const candidates = [
+      path.join(root, safe, 'SKILL.md'),
+      path.join(root, safe + '.md'),
+    ];
+    for (const c of candidates) {
+      try { if (fs.existsSync(c)) return c; } catch (_) {}
+    }
+  }
+  return null;
+}
+
+// Build the Core Operating Behaviors block (compressed from
+// addyosmani/using-agent-skills). Kept under 600 chars to stay cheap.
+function _coreOperatingBehaviors() {
+  return [
+    'CORE OPERATING BEHAVIORS (non-negotiable):',
+    '1. Surface assumptions before acting on ambiguous requirements.',
+    '2. Stop and name confusion rather than guessing through it.',
+    '3. Push back when an approach has clear problems; do not be sycophantic.',
+    '4. Enforce simplicity — if 100 lines suffice, do not write 1000.',
+    '5. Scope discipline — touch only what you were asked to touch.',
+    '6. Verify, do not assume. "Seems right" is never sufficient; cite evidence (test output, build result, file contents).',
+  ];
+}
+
+// Returns prompt lines describing the active skills for this task, with a
+// terse description so the model knows which skill bodies to load with
+// fauna_get_skill if it needs the full workflow.
+function _skillSystemPromptLines(task) {
+  const slugs = _resolveTaskSkills(task);
+  if (!slugs.length) return [];
+  const summaries = [];
+  for (const slug of slugs) {
+    const file = _locateSkillFile(slug);
+    if (!file) { summaries.push(`- ${slug} (not installed)`); continue; }
+    try {
+      const body = fs.readFileSync(file, 'utf8');
+      const { frontmatter } = _skillParseFrontmatter(body);
+      const desc = (frontmatter.description || '').slice(0, 200);
+      summaries.push(`- ${slug}: ${desc}`);
+    } catch (_) { summaries.push(`- ${slug}`); }
+  }
+  return [
+    'ACTIVE SKILLS for this task (call fauna_get_skill(name) to load the full workflow, or fauna_get_skill(name, "Verification") for just the exit criteria):',
+    ...summaries,
+    'You MUST follow each skill\'s Process and pass its Verification before claiming TASK_COMPLETE.',
+  ];
+}
+
+// When the model emits TASK_COMPLETE, require it to cite evidence against
+// each active skill\'s Verification checklist. One additional LLM hop —
+// cheap insurance against "declared victory at step 3 of 10" failures.
+async function _verifyAgainstSkills({ task, state, messages, summary, systemPrompt, signal }) {
+  const slugs = _resolveTaskSkills(task);
+  if (!slugs.length) return { ok: true, evidence: null };
+
+  // Gather Verification + Common Rationalizations sections for the prompt.
+  const sections = [];
+  for (const slug of slugs) {
+    const file = _locateSkillFile(slug);
+    if (!file) continue;
+    let body = '';
+    try { body = fs.readFileSync(file, 'utf8'); } catch (_) { continue; }
+    const verification = _skillFindSection(body, ['Verification', 'Verify', 'Evidence', 'Exit criteria']) || '';
+    const rationalizations = _skillFindSection(body, ['Common Rationalizations', 'Rationalizations']) || '';
+    sections.push({ slug, verification, rationalizations });
+  }
+  if (!sections.length) return { ok: true, evidence: null };
+
+  const gatePrompt = [
+    'GATE: You announced TASK_COMPLETE. Before this is accepted, you must verify against each active skill.',
+    'For EACH skill below, walk its Verification checklist item-by-item and cite concrete evidence (file path + line, command run + output, screenshot, test name + result). Do not paraphrase — quote real output.',
+    'If any item is unverified, do NOT claim TASK_COMPLETE again — instead, run the missing verification step now (use shell-exec / browser-ext-action blocks) and report what you ran.',
+    'If every item passes with evidence, end your response with the literal token: GATE_PASS',
+    'If you discover the task is not actually complete, end your response with: GATE_RETRY <one-line reason>',
+    '',
+    ...sections.flatMap(s => {
+      const out = [`### Skill: ${s.slug}`];
+      if (s.rationalizations) {
+        out.push('Common Rationalizations (do not use any of these as an excuse to skip verification):');
+        out.push(s.rationalizations.slice(0, 2000));
+      }
+      if (s.verification) {
+        out.push('Verification checklist:');
+        out.push(s.verification.slice(0, 2000));
+      }
+      out.push('');
+      return out;
+    }),
+    `Your claimed summary: ${summary.slice(0, 300)}`,
+  ].join('\n');
+
+  _emit(task.id, 'partial', { step: state.step, content: '[verification gate] running…', length: 0 });
+
+  messages.push({ role: 'user', content: gatePrompt });
+
+  const verifyResponse = await _callChat({
+    messages,
+    model: task.model || 'claude-sonnet-4.6',
+    systemPrompt,
+    agentName: _pickAgent(task, state.step),
+    thinkingBudget: 'low',
+    maxContextTurns: 100,
+  }, signal, (partial) => {
+    _emit(task.id, 'partial', {
+      step: state.step,
+      content: '[verification gate] ' + partial.slice(-1200),
+      length: partial.length,
+    });
+  });
+
+  if (!verifyResponse) {
+    // Treat a missing verifier response as a hard fail — do not silently
+    // accept the original TASK_COMPLETE.
+    messages.push({ role: 'assistant', content: '(no verifier response)' });
+    messages.push({ role: 'user', content: 'Verifier returned no response. Re-run your verification steps with real commands and try again.' });
+    return { ok: false, evidence: null };
+  }
+
+  messages.push({ role: 'assistant', content: verifyResponse });
+
+  if (/GATE_PASS\b/.test(verifyResponse)) {
+    return { ok: true, evidence: verifyResponse.slice(0, 4000) };
+  }
+  // Either GATE_RETRY or no token — push back into the loop.
+  const reason = (verifyResponse.match(/GATE_RETRY\s*(.+)/) || [])[1] || 'verification incomplete';
+  messages.push({ role: 'user', content: 'Verification not yet satisfied (' + reason.slice(0, 200) + '). Run the missing verification steps now. Do not say TASK_COMPLETE again until every checklist item has cited evidence.' });
+  return { ok: false, evidence: null };
 }
 
 // ── Extract and execute action blocks from AI response ───────────────────

@@ -77,6 +77,7 @@ import { registerAgentSandboxFileRoutes } from './server/routes/agent-sandbox-fi
 import { registerAgentRoutes } from './server/routes/agents.js';
 import { registerAgentBuilderRoutes } from './server/routes/agent-builder.js';
 import { registerAgentSandboxRoutes } from './server/routes/agent-sandbox.js';
+import { registerSkillRoutes } from './server/routes/skills.js';
 import { registerMemoryPrefsFactsRoutes } from './server/routes/memory-prefs-facts.js';
 import { registerConnectorRoutes } from './server/routes/connectors.js';
 import { registerCredentialRoutes } from './server/routes/credentials.js';
@@ -478,6 +479,8 @@ const iterAgentDirs = createAgentDirIterator({ agentsDir: AGENTS_DIR, legacyAgen
 
 // ── Agent management routes moved → server/routes/agents.js ──
 registerAgentRoutes(app, { express, agentsDir: AGENTS_DIR, iterAgentDirs, builtinAgentNames: ['research', 'coder', 'writer', 'designer'] });
+// ── Skill catalog & import routes → server/routes/skills.js ──
+registerSkillRoutes(app, { express });
 // ── Agent Builder routes moved → server/routes/agent-builder.js ──
 // Privileged authoring surface — only the in-app Electron renderer may hit
 // it. Requires both loopback origin AND the per-process UI nonce minted by

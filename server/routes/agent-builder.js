@@ -432,6 +432,12 @@ Rules:
       if (data.agents && Array.isArray(data.agents) && data.agents.length) {
         manifest.agents = data.agents; // e.g. ['agents/overview', 'agents/usage']
       }
+      // Skill bindings — slugs of SKILL.md packs this agent is fluent in.
+      // Used by task-runner._pickAgent to route work to specialists when
+      // multiple agents are on a task and the task has bound skills.
+      if (data.skills && Array.isArray(data.skills) && data.skills.length) {
+        manifest.skills = data.skills.filter((s) => typeof s === 'string' && s).slice(0, 32);
+      }
       // Compute checksum of the manifest for version tracking
       const manifestJson = JSON.stringify(manifest, null, 2);
       const checksum = crypto.createHash('sha256').update(manifestJson).digest('hex').slice(0, 16);

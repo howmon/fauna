@@ -849,19 +849,40 @@ function _listMarkdownSections(body) {
 // Locate a skill SKILL.md on disk. Skills can live in:
 //   <agentsDir>/<agent>/skills/<skill>/SKILL.md   (agent-scoped)
 //   <agentsDir>/_skills/<skill>/SKILL.md          (global skills shared across agents)
+//   <workspaceRoot>/skills/<skill>/SKILL.md       (repo-level pack, addyosmani layout)
+//   ~/.config/fauna/skills/<skill>/SKILL.md       (user pack installed via /api/skills/import)
 // Returns { path, scope, body } or null.
-function _findSkill(agentsDir, agentName, skillName) {
-  if (!agentsDir || !skillName) return null;
+function _extraSkillRoots(context) {
+  const roots = [];
+  try {
+    const ws = context && context.workspaceRoot;
+    if (ws) roots.push({ root: path.join(ws, 'skills'), scope: 'repo' });
+  } catch (_) {}
+  try {
+    const home = process.env.HOME || process.env.USERPROFILE;
+    if (home) roots.push({ root: path.join(home, '.config', 'fauna', 'skills'), scope: 'user' });
+  } catch (_) {}
+  return roots;
+}
+
+function _findSkill(agentsDir, agentName, skillName, context) {
+  if (!skillName) return null;
   const safeSkill = String(skillName).replace(/[^a-zA-Z0-9_./-]/g, '').replace(/\.\.+/g, '');
   if (!safeSkill) return null;
   const candidates = [];
-  if (agentName) {
-    const safeAgent = String(agentName).replace(/[^a-zA-Z0-9_-]/g, '');
-    candidates.push({ scope: 'agent', path: path.join(agentsDir, safeAgent, 'skills', safeSkill, 'SKILL.md') });
-    candidates.push({ scope: 'agent', path: path.join(agentsDir, safeAgent, 'skills', safeSkill + '.md') });
+  if (agentsDir) {
+    if (agentName) {
+      const safeAgent = String(agentName).replace(/[^a-zA-Z0-9_-]/g, '');
+      candidates.push({ scope: 'agent', path: path.join(agentsDir, safeAgent, 'skills', safeSkill, 'SKILL.md') });
+      candidates.push({ scope: 'agent', path: path.join(agentsDir, safeAgent, 'skills', safeSkill + '.md') });
+    }
+    candidates.push({ scope: 'global', path: path.join(agentsDir, '_skills', safeSkill, 'SKILL.md') });
+    candidates.push({ scope: 'global', path: path.join(agentsDir, '_skills', safeSkill + '.md') });
   }
-  candidates.push({ scope: 'global', path: path.join(agentsDir, '_skills', safeSkill, 'SKILL.md') });
-  candidates.push({ scope: 'global', path: path.join(agentsDir, '_skills', safeSkill + '.md') });
+  for (const r of _extraSkillRoots(context || {})) {
+    candidates.push({ scope: r.scope, path: path.join(r.root, safeSkill, 'SKILL.md') });
+    candidates.push({ scope: r.scope, path: path.join(r.root, safeSkill + '.md') });
+  }
   for (const c of candidates) {
     try {
       if (fs.existsSync(c.path)) return { path: c.path, scope: c.scope, body: fs.readFileSync(c.path, 'utf8') };
@@ -872,9 +893,9 @@ function _findSkill(agentsDir, agentName, skillName) {
 
 // Scan disk for available skills (returns name + 1-line description from
 // SKILL.md frontmatter or the first non-heading line).
-function _listSkillsOnDisk(agentsDir, agentName) {
-  if (!agentsDir) return [];
+function _listSkillsOnDisk(agentsDir, agentName, context) {
   const found = [];
+  const seen = new Set();
   const scan = (dir, scope) => {
     if (!fs.existsSync(dir)) return;
     let entries;
@@ -890,17 +911,18 @@ function _listSkillsOnDisk(agentsDir, agentName) {
         name = ent.name.replace(/\.md$/i, '');
       }
       if (!skillFile) continue;
+      // First-match-wins across scopes — agent overrides global overrides repo overrides user.
+      if (seen.has(name)) continue;
+      seen.add(name);
       let desc = '';
       try {
         const body = fs.readFileSync(skillFile, 'utf8');
-        // YAML frontmatter description first
         const fmMatch = body.match(/^---\s*\n([\s\S]*?)\n---/);
         if (fmMatch) {
           const dm = fmMatch[1].match(/^description:\s*(.+)$/m);
           if (dm) desc = dm[1].trim().replace(/^["']|["']$/g, '');
         }
         if (!desc) {
-          // First non-heading non-frontmatter line
           const lines = body.replace(/^---\s*\n[\s\S]*?\n---\s*\n/, '').split('\n');
           for (const ln of lines) {
             const t = ln.trim();
@@ -913,12 +935,78 @@ function _listSkillsOnDisk(agentsDir, agentName) {
       found.push({ name, scope, description: desc, path: skillFile });
     }
   };
-  if (agentName) {
+  if (agentsDir && agentName) {
     const safeAgent = String(agentName).replace(/[^a-zA-Z0-9_-]/g, '');
     scan(path.join(agentsDir, safeAgent, 'skills'), 'agent');
   }
-  scan(path.join(agentsDir, '_skills'), 'global');
+  if (agentsDir) scan(path.join(agentsDir, '_skills'), 'global');
+  for (const r of _extraSkillRoots(context || {})) scan(r.root, r.scope);
   return found;
+}
+
+// ── References (read-only knowledge — server maps, schemas, glossaries) ──
+// Distinct from skills (workflows). References are looked up when the model
+// needs to recall a fact, not when it needs to execute a procedure.
+function _extraReferenceRoots(context) {
+  const roots = [];
+  try {
+    const ws = context && context.workspaceRoot;
+    if (ws) roots.push({ root: path.join(ws, 'references'), scope: 'repo' });
+    if (ws) roots.push({ root: path.join(ws, 'docs', 'references'), scope: 'repo' });
+  } catch (_) {}
+  try {
+    const home = process.env.HOME || process.env.USERPROFILE;
+    if (home) roots.push({ root: path.join(home, '.config', 'fauna', 'references'), scope: 'user' });
+  } catch (_) {}
+  return roots;
+}
+
+function _listReferencesOnDisk(context) {
+  const found = [];
+  const seen = new Set();
+  for (const r of _extraReferenceRoots(context || {})) {
+    let entries;
+    try { entries = fs.readdirSync(r.root, { withFileTypes: true }); } catch (_) { continue; }
+    for (const ent of entries) {
+      if (!ent.isFile() || !ent.name.toLowerCase().endsWith('.md')) continue;
+      const name = ent.name.replace(/\.md$/i, '');
+      if (seen.has(name)) continue;
+      seen.add(name);
+      let title = name;
+      let desc = '';
+      try {
+        const body = fs.readFileSync(path.join(r.root, ent.name), 'utf8');
+        const h1 = body.match(/^\s*#\s+(.+?)\s*$/m);
+        if (h1) title = h1[1].trim();
+        for (const ln of body.split('\n')) {
+          const t = ln.trim();
+          if (!t || t.startsWith('#') || t.startsWith('---')) continue;
+          desc = t.slice(0, 200);
+          break;
+        }
+      } catch (_) {}
+      found.push({ name, title, scope: r.scope, description: desc, path: path.join(r.root, ent.name) });
+    }
+  }
+  return found;
+}
+
+function _findReference(refName, context) {
+  if (!refName) return null;
+  const safe = String(refName).replace(/[^a-zA-Z0-9_./-]/g, '').replace(/\.\.+/g, '');
+  if (!safe) return null;
+  for (const r of _extraReferenceRoots(context || {})) {
+    const candidates = [
+      path.join(r.root, safe + '.md'),
+      path.join(r.root, safe, 'README.md'),
+    ];
+    for (const c of candidates) {
+      try {
+        if (fs.existsSync(c)) return { path: c, scope: r.scope, body: fs.readFileSync(c, 'utf8') };
+      } catch (_) {}
+    }
+  }
+  return null;
 }
 
 export const SELF_TOOL_DEFS = [
@@ -1200,6 +1288,33 @@ export const SELF_TOOL_DEFS = [
           name: { type: 'string', description: 'Skill slug from fauna_list_skills.' },
           section: { type: 'string', description: 'Optional `## Heading` to return only that section.' },
           agent: { type: 'string', description: 'Optional agent slug to scope to. Defaults to the active agent.' },
+        },
+        required: ['name'],
+      },
+    },
+  },
+
+  // ── Reference catalog (read-only knowledge — server maps, schemas, glossaries) ──
+  // Distinct from skills (workflows). Use references for "what is this?" questions;
+  // use skills for "how do I do this?" workflows.
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_list_references',
+      description: 'List all available reference documents (server maps, schemas, glossaries, architecture notes). Cheap — returns no bodies. References answer "what is this?" questions; for "how do I do this?" workflows, use fauna_list_skills instead.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_get_reference',
+      description: 'Load one reference document by name. Optionally pass a `section` to fetch only one `## Heading` block.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Reference slug from fauna_list_references.' },
+          section: { type: 'string', description: 'Optional `## Heading` to return only that section.' },
         },
         required: ['name'],
       },
@@ -2831,14 +2946,13 @@ export async function executeSelfTool(toolName, args, context = {}) {
     case 'fauna_list_skills': {
       const agentName = String(args.agent || context.activeAgentName || '').replace(/[^a-zA-Z0-9_-]/g, '') || null;
       const agentsDir = context.agentsDir;
-      if (!agentsDir) return JSON.stringify({ ok: false, error: 'agentsDir not configured' });
-      const skills = _listSkillsOnDisk(agentsDir, agentName);
+      const skills = _listSkillsOnDisk(agentsDir, agentName, context);
       return JSON.stringify({
         ok: true,
         agent: agentName,
         count: skills.length,
         skills: skills.map(s => ({ name: s.name, scope: s.scope, description: s.description })),
-        _note: skills.length ? 'Use fauna_get_skill(name) to load one body. Pass `section` to fetch a single `## Heading` slice.' : 'No skills installed for this agent or globally.',
+        _note: skills.length ? 'Use fauna_get_skill(name) to load one body. Pass `section` to fetch a single `## Heading` slice.' : 'No skills installed. Drop a SKILL.md into <repo>/skills/<name>/ or ~/.config/fauna/skills/<name>/.',
       });
     }
 
@@ -2847,10 +2961,9 @@ export async function executeSelfTool(toolName, args, context = {}) {
       if (!skillName) return JSON.stringify({ ok: false, error: 'name required' });
       const agentName = String(args.agent || context.activeAgentName || '').replace(/[^a-zA-Z0-9_-]/g, '') || null;
       const agentsDir = context.agentsDir;
-      if (!agentsDir) return JSON.stringify({ ok: false, error: 'agentsDir not configured' });
-      const found = _findSkill(agentsDir, agentName, skillName);
+      const found = _findSkill(agentsDir, agentName, skillName, context);
       if (!found) {
-        const available = _listSkillsOnDisk(agentsDir, agentName).map(s => s.name);
+        const available = _listSkillsOnDisk(agentsDir, agentName, context).map(s => s.name);
         return JSON.stringify({ ok: false, error: `Skill "${skillName}" not found.`, available });
       }
       const sectionArg = args.section ? String(args.section).trim() : '';
@@ -2863,6 +2976,43 @@ export async function executeSelfTool(toolName, args, context = {}) {
       return JSON.stringify({
         ok: true,
         name: skillName,
+        scope: found.scope,
+        section: sectionUsed,
+        availableSections: _listMarkdownSections(found.body),
+        body,
+      });
+    }
+
+    case 'fauna_list_references': {
+      const refs = _listReferencesOnDisk(context);
+      return JSON.stringify({
+        ok: true,
+        count: refs.length,
+        references: refs.map((r) => ({ name: r.name, title: r.title, scope: r.scope, description: r.description })),
+        _note: refs.length
+          ? 'Use fauna_get_reference(name) to load one body. Pass `section` to fetch a single `## Heading` slice.'
+          : 'No references installed. Drop a .md into <repo>/references/ or <repo>/docs/references/.',
+      });
+    }
+
+    case 'fauna_get_reference': {
+      const refName = String(args.name || '').trim();
+      if (!refName) return JSON.stringify({ ok: false, error: 'name required' });
+      const found = _findReference(refName, context);
+      if (!found) {
+        const available = _listReferencesOnDisk(context).map((r) => r.name);
+        return JSON.stringify({ ok: false, error: `Reference "${refName}" not found.`, available });
+      }
+      const sectionArg = args.section ? String(args.section).trim() : '';
+      let body = found.body;
+      let sectionUsed = null;
+      if (sectionArg) {
+        const slice = _extractMarkdownSection(found.body, sectionArg);
+        if (slice) { body = slice; sectionUsed = sectionArg; }
+      }
+      return JSON.stringify({
+        ok: true,
+        name: refName,
         scope: found.scope,
         section: sectionUsed,
         availableSections: _listMarkdownSections(found.body),

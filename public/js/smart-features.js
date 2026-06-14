@@ -594,6 +594,36 @@ function handleSlashCommand(text) {
     return true;
   }
 
+  // /spec /plan /build /test /review /ship — lifecycle skill activators
+  // Each prepends a brief instruction that names the relevant skill so the
+  // model picks it up (and so the autonomous loop's gate verifies against it).
+  var lifecycle = {
+    '/spec':   { skill: 'spec-driven-development',     verb: 'Write the spec first using the' },
+    '/plan':   { skill: 'incremental-implementation',  verb: 'Plan the slices using the' },
+    '/build':  { skill: 'incremental-implementation',  verb: 'Implement the next slice using the' },
+    '/test':   { skill: 'test-driven-development',     verb: 'Use the' },
+    '/review': { skill: 'code-review-and-quality',     verb: 'Review using the' },
+    '/ship':   { skill: 'code-review-and-quality',     verb: 'Run the final pre-merge checks using the' },
+  };
+  var lcMatch = trimmed.match(/^(\/(?:spec|plan|build|test|review|ship))(?:\s+([\s\S]*))?$/i);
+  if (lcMatch) {
+    var cmd = lcMatch[1].toLowerCase();
+    var rest = (lcMatch[2] || '').trim();
+    var meta = lifecycle[cmd];
+    var prefix = meta.verb + ' `' + meta.skill + '` skill (read it via fauna_get_skill before acting). ';
+    var injected = prefix + (rest || '(no further instructions — proceed against the active task)');
+    var input = document.getElementById('msg-input');
+    if (input) {
+      input.value = injected;
+      resizeTextarea(input);
+      // Drop the cursor at the end so the user can edit if desired, but
+      // don't auto-send — the user pressed the slash, not Enter.
+      input.focus();
+      try { input.selectionStart = input.selectionEnd = input.value.length; } catch (_) {}
+    }
+    return true;
+  }
+
   return false;
 }
 
@@ -604,6 +634,13 @@ var _slashCommands = [
   { name: 'branch', description: 'Generate a branch name from a task description', usage: '/branch <description> [--create]', icon: 'ti-git-branch', needsCwd: false },
   { name: 'discover', description: 'Auto-detect project type, scripts, git info, and conventions', usage: '/discover [path]', icon: 'ti-search', needsCwd: false },
   { name: 'debug-prompt', description: 'Show assembled prompt layers and included instruction files (no model call)', usage: '/debug-prompt', icon: 'ti-layers', needsCwd: false },
+  // Lifecycle skill activators — each one names the canonical SKILL.md the model should follow.
+  { name: 'spec',   description: 'Write the spec before coding (spec-driven-development)',    usage: '/spec [notes]',   icon: 'ti-file-text',    needsCwd: false },
+  { name: 'plan',   description: 'Plan the implementation in thin slices (incremental-implementation)', usage: '/plan [notes]',   icon: 'ti-list-numbers', needsCwd: false },
+  { name: 'build',  description: 'Implement the next slice (incremental-implementation)',    usage: '/build [notes]',  icon: 'ti-hammer',       needsCwd: false },
+  { name: 'test',   description: 'Drive the change with tests (test-driven-development)',    usage: '/test [notes]',   icon: 'ti-test-pipe',    needsCwd: false },
+  { name: 'review', description: 'Multi-axis code review before merge (code-review-and-quality)', usage: '/review [notes]', icon: 'ti-eye',     needsCwd: false },
+  { name: 'ship',   description: 'Run the final pre-merge checks (code-review-and-quality)', usage: '/ship [notes]',   icon: 'ti-rocket',       needsCwd: false },
 ];
 
 var slashAutocompleteOpen = false;

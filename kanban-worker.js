@@ -202,6 +202,12 @@ function _buildTaskContext(project, card) {
 
 function _spawnTaskForCard(project, card) {
   const agentName = (Array.isArray(project.defaultAgent) ? project.defaultAgent[0] : project.defaultAgent) || null;
+  // Resolve column → skill bindings so task-runner can inject the
+  // relevant SKILL.md anatomies into the system prompt and run the
+  // anti-rationalization gate on TASK_COMPLETE.
+  const column = card.column || 'in_progress';
+  const skillBindings = (project.kanban && project.kanban.skillBindings) || {};
+  const boundSkills = Array.isArray(skillBindings[column]) ? skillBindings[column].slice() : [];
   const task = createTask({
     kind: 'cron',
     title: '[board] ' + card.title.slice(0, 100),
@@ -210,6 +216,9 @@ function _spawnTaskForCard(project, card) {
     projectId: project.id,
     agents: agentName ? [agentName] : [],
     context: _buildTaskContext(project, card),
+    // Skill bindings consumed by task-runner._resolveTaskSkills.
+    skills: boundSkills,
+    kanban: { column, skillBindings },
     permissions: {
       // Anchor the shell to the project root when we know it, otherwise
       // fall through to the global default (HOME). Without this the model

@@ -298,6 +298,11 @@ function createTask(opts) {
     convId:      null,
     projectId:   opts.projectId || null,
     projectContextIds: opts.projectContextIds || [],
+    // Optional skill bindings consumed by task-runner._resolveTaskSkills.
+    // `skills` is a flat list; `kanban` carries column + skillBindings
+    // when the task was spawned from a Kanban card.
+    skills:      Array.isArray(opts.skills) ? opts.skills.slice() : [],
+    kanban:      opts.kanban || null,
     createdAt:   new Date().toISOString(),
     updatedAt:   new Date().toISOString(),
   };

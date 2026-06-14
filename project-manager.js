@@ -196,14 +196,30 @@ export function createProject(opts = {}) {
     // Kanban / autopilot config. Off by default. When `kanbanAutopilot` is
     // true, the kanban-worker periodically claims Todo cards assigned to AI
     // and runs them through the pipeline. See kanban-worker.js.
-    kanban: Object.assign({
-      autopilot: false,            // master switch for AI auto-claim
-      concurrency: 3,              // max in-flight AI items per project
-      archiveDelayMin: 10,         // auto-archive done items after N min
-      maxAiRetries: 2,             // failures before card returns to human
-      dailyAiQuota: 10,            // safety cap per UTC day
-      columns: null,               // null = use defaults; or override labels
-    }, opts.kanban || {}),
+    kanban: (function buildKanban() {
+      const userKanban = opts.kanban || {};
+      const merged = Object.assign({
+        autopilot: false,            // master switch for AI auto-claim
+        concurrency: 3,              // max in-flight AI items per project
+        archiveDelayMin: 10,         // auto-archive done items after N min
+        maxAiRetries: 2,             // failures before card returns to human
+        dailyAiQuota: 10,            // safety cap per UTC day
+        columns: null,               // null = use defaults; or override labels
+      }, userKanban);
+      // Per-column skill bindings. When the kanban-worker runs a card it
+      // injects these skill slugs into the autonomous task so the
+      // anti-rationalization gate verifies against them on TASK_COMPLETE.
+      // Defaults map the addyosmani lifecycle to Fauna's columns; user
+      // overrides merge per-column so partial overrides don't drop defaults.
+      merged.skillBindings = Object.assign({
+        backlog:     ['spec-driven-development'],
+        todo:        [],
+        in_progress: ['incremental-implementation', 'test-driven-development'],
+        review:      ['code-review-and-quality'],
+        done:        [],
+      }, userKanban.skillBindings || {});
+      return merged;
+    })(),
     // Per-source GitHub links. Keys are source ids; the special key '__root'
     // refers to the project's own rootPath. Value shape:
     //   { accountId, repo: 'owner/name', defaultBranch, linkedAt }

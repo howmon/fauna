@@ -72,7 +72,9 @@ describe('self-tools', () => {
       // Bumped to 77 after adding fauna_project_audit (Phase 6 — architecture-aware
       // feature generation).
       // Bumped to 78 after adding fauna_workitem_verify (Phase 7 — verification gate).
-      expect(SELF_TOOL_DEFS).toHaveLength(78);
+      // Bumped to 80 after adding fauna_list_references + fauna_get_reference
+      // (Phase 5 — references split from skills).
+      expect(SELF_TOOL_DEFS).toHaveLength(80);
     });
 
     it('each tool has required OpenAI function format', () => {
