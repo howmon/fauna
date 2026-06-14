@@ -198,7 +198,7 @@ export function createProject(opts = {}) {
     // and runs them through the pipeline. See kanban-worker.js.
     kanban: Object.assign({
       autopilot: false,            // master switch for AI auto-claim
-      concurrency: 1,              // max in-flight AI items per project
+      concurrency: 3,              // max in-flight AI items per project
       archiveDelayMin: 10,         // auto-archive done items after N min
       maxAiRetries: 2,             // failures before card returns to human
       dailyAiQuota: 10,            // safety cap per UTC day

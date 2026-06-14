@@ -85,6 +85,12 @@
             ? '<label class="kb-toggle-wrap kb-autopilot-toggle" title="When on, the AI will claim Todo cards assigned to it and run them automatically.">' +
                 '<input type="checkbox" id="kb-autopilot-cb" onchange="kbToggleAutopilot(this.checked)"> ' +
                 '<span><i class="ti ti-robot"></i> Autopilot</span>' +
+              '</label>' +
+              '<label class="kb-toggle-wrap kb-concurrency-wrap" title="Max in-flight AI cards per project. Higher = more cards run in parallel.">' +
+                '<span style="font-size:11px;color:var(--fau-text-dim)">Parallel</span>' +
+                '<input type="number" id="kb-concurrency" min="1" max="10" step="1" ' +
+                  'onchange="kbSetConcurrency(this.value)" ' +
+                  'style="width:48px;background:var(--fau-surface2);border:1px solid var(--fau-border);border-radius:6px;padding:3px 6px;color:var(--fau-text);font-size:12px;">' +
               '</label>'
             : '') +
         '</div>' +
@@ -208,15 +214,23 @@
 
     // Live-run pill — visible on AI-claimed in_progress cards. Clicking it
     // opens the live task viewer panel (model + chain-of-reasoning + steps).
+    // runs[] may end with a `finishedAt`-only entry from a prior failed run,
+    // so we walk backwards to find the most recent entry that actually has a
+    // taskId (the live one). Without this the badge silently disappears after
+    // any recovery / retry until a brand-new run completes.
     var liveBadge = '';
     var isLive = false;
     if (it.column === 'in_progress' && it.claimedBy && it.claimedBy.indexOf('ai:') === 0) {
-      var lastRun = (it.runs && it.runs.length) ? it.runs[it.runs.length - 1] : null;
-      if (lastRun && lastRun.taskId) {
+      var liveTaskId = null;
+      var runs = Array.isArray(it.runs) ? it.runs : [];
+      for (var ri = runs.length - 1; ri >= 0; ri--) {
+        if (runs[ri] && runs[ri].taskId) { liveTaskId = runs[ri].taskId; break; }
+      }
+      if (liveTaskId) {
         isLive = true;
         liveBadge = '<button class="kb-live-pill" ' +
           'onclick="event.stopPropagation();openLiveTaskPanel(\'' +
-            _esc(lastRun.taskId) + '\',\'' + _esc(it.id) + '\')" ' +
+            _esc(liveTaskId) + '\',\'' + _esc(it.id) + '\')" ' +
           'title="See what the model is thinking">' +
           '<span class="kb-live-dot"></span><i class="ti ti-activity"></i> Live</button>';
       }
@@ -323,9 +337,27 @@
   function _updateAutopilotToggle() {
     var s = window._kbState;
     var cb = document.getElementById('kb-autopilot-cb');
-    if (!cb) return;
-    cb.checked = !!(s.kanban && s.kanban.autopilot);
+    if (cb) cb.checked = !!(s.kanban && s.kanban.autopilot);
+    var conc = document.getElementById('kb-concurrency');
+    if (conc) conc.value = (s.kanban && Number(s.kanban.concurrency)) || 3;
   }
+
+  window.kbSetConcurrency = function(value) {
+    var s = window._kbState;
+    if (!s.projectId) return;
+    var n = Math.max(1, Math.min(10, parseInt(value, 10) || 1));
+    var nextKanban = Object.assign({}, s.kanban || {}, { concurrency: n });
+    fetch('/api/projects/' + encodeURIComponent(s.projectId), {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kanban: nextKanban }),
+    }).then(function(r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
+      .then(function(proj) {
+        s.kanban = (proj && proj.kanban) || nextKanban;
+        _updateAutopilotToggle();
+        _toast('Parallel runs set to ' + n);
+      })
+      .catch(function(e) { _toast('Update failed: ' + e.message, true); _updateAutopilotToggle(); });
+  };
 
   window.kbToggleAutopilot = function(checked) {
     var s = window._kbState;

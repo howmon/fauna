@@ -430,8 +430,20 @@ function _finalizeRunSuccess(projectId, cardId, ev) {
       return c && c.column === 'in_progress';
     })();
 
-    if (!stillInProgress) {
-      // The AI tools already moved it (probably to review). Just record the run.
+    // The AI's own tools may have moved the card to 'review' before TASK_COMPLETE
+    // (common kanban convention even though our prompt says go straight to 'done').
+    // Without this check, such cards sit in 'review' forever AND keep counting
+    // toward concurrency, blocking the next claim. Treat 'review' the same as
+    // 'in_progress' for finalization: run/honor verifier, then advance to done.
+    const stuckInReview = (() => {
+      const b = getProjectBoard(projectId);
+      const c = b && b.columns ? _findCard(b, cardId) : null;
+      return c && c.column === 'review' && c.claimedBy && c.claimedBy.indexOf('ai:') === 0;
+    })();
+
+    if (!stillInProgress && !stuckInReview) {
+      // The AI tools already moved it somewhere terminal (done/archived/todo).
+      // Just record the run.
       moveWorkItem(projectId, cardId, {
         runEntry: { taskId: ent && ent.taskId, finishedAt: Date.now(), ok: true, verified: verifyResult && verifyResult.ok },
       }, { actor: 'ai' });
