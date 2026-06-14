@@ -123,6 +123,23 @@ describe('GET /api/tasks/:id/live', () => {
     expect(res.body.model).toBeNull();
   });
 
+  it('prefers _resolvedModel over the raw task.model (autopilot tasks)', () => {
+    // kanban-worker passes model:null to createTask; the runner then writes
+    // back _resolvedModel='claude-sonnet-4.6' so the UI doesn't say "default".
+    deps.getTask.mockReturnValue({
+      id: 't', title: 'x', model: null, status: 'running',
+      _resolvedModel: 'claude-sonnet-4.6',
+    });
+    deps.isTaskRunning.mockReturnValue(true);
+    deps.getRunningTaskInfo.mockReturnValue({
+      step: 1, startedAt: 0, elapsed: 0, reasoning: [], current: null, stats: null,
+    });
+
+    const res = app.invoke('GET', '/api/tasks/:id/live', { params: { id: 't' } });
+
+    expect(res.body.model).toBe('claude-sonnet-4.6');
+  });
+
   it('returns persisted reasoning when the task has already finished', () => {
     deps.getTask.mockReturnValue({
       id: 't', title: 'x', model: 'gpt-5', status: 'completed',

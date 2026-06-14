@@ -684,11 +684,49 @@
         _liveRenderHead(snap);
         // Replay any entries we missed (e.g. opened after task already ran).
         (snap.reasoning || []).forEach(_liveAppendEntry);
+        // If we got the snapshot back but the reasoning array is empty,
+        // the placeholder needs to say something useful — not "Loading…"
+        // which makes the user think the network is stuck. The model is
+        // probably mid-thinking on step 1 (chat call can take 30-90 s).
+        _liveSetEmptyMessage(snap);
       })
       .catch(function(e) {
         var sub = document.getElementById('kb-live-sub');
         if (sub) sub.textContent = 'Lost connection: ' + e.message;
+        var stream = document.getElementById('kb-live-stream');
+        var empty = stream && stream.querySelector('.kb-live-empty');
+        if (empty) empty.textContent = 'Failed to load: ' + e.message;
       });
+  }
+
+  // Update the empty-state placeholder based on what the snapshot tells us.
+  // Most common case: task is running, step ≥ 1, but the model hasn't
+  // produced its first response yet so reasoning is still empty. We make
+  // that explicit instead of saying "Loading…".
+  function _liveSetEmptyMessage(snap) {
+    var stream = document.getElementById('kb-live-stream');
+    if (!stream) return;
+    var empty = stream.querySelector('.kb-live-empty');
+    if (!empty) return; // first real entry already replaced it
+    if (snap.running) {
+      empty.innerHTML =
+        '<div style="font-weight:600;margin-bottom:4px;">Model is thinking…</div>' +
+        '<div style="opacity:.75;font-size:11px;">' +
+          'No reasoning step has finished yet. First responses can take 30–90s ' +
+          'depending on the model. This panel updates live the moment the ' +
+          'first step completes.' +
+        '</div>';
+    } else if (snap.interrupted) {
+      empty.innerHTML =
+        '<div style="font-weight:600;margin-bottom:4px;">Run was interrupted</div>' +
+        '<div style="opacity:.75;font-size:11px;">' +
+          'The task died before producing any reasoning steps ' +
+          '(likely killed during the first chat call). The card has been ' +
+          'returned to Todo for a fresh attempt.' +
+        '</div>';
+    } else {
+      empty.textContent = 'No reasoning recorded for this run.';
+    }
   }
 
   window.openLiveTaskPanel = function(taskId, cardId) {
@@ -699,7 +737,7 @@
     _liveState.cardId = cardId || null;
     _liveState.lastStepIds = new Set();
     var stream = document.getElementById('kb-live-stream');
-    if (stream) stream.innerHTML = '<div class="kb-live-empty">Loading…</div>';
+    if (stream) stream.innerHTML = '<div class="kb-live-empty">Connecting…</div>';
     _liveRefreshSnapshot(taskId);
     _liveSubscribe(taskId);
   };

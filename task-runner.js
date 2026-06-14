@@ -72,8 +72,23 @@ async function runTask(taskId, opts = {}) {
   };
   _runningTasks.set(taskId, state);
 
-  // Ensure task is marked running — clear previous result on re-run
-  updateTask(taskId, { status: 'running', result: null, _historyEvent: 'started', _historyDetail: opts.trigger || 'manual' });
+  // Ensure task is marked running — clear previous result on re-run.
+  // Also persist the *resolved* model so the live viewer can show
+  // "claude-sonnet-4.6" instead of "default" when the task was created
+  // with model:null (e.g. autopilot tasks inherit from settings).
+  const resolvedModel = task.model || 'claude-sonnet-4.6';
+  updateTask(taskId, {
+    status: 'running',
+    result: null,
+    _historyEvent: 'started',
+    _historyDetail: opts.trigger || 'manual',
+    _resolvedModel: resolvedModel,
+    // Clear any stale partial state from a previous interrupted run.
+    _partialReasoning: [],
+    _partialStats: null,
+    _partialStep: 0,
+    _partialUpdatedAt: null,
+  });
 
   // Notify listeners (for SSE streaming to widget/panel)
   _emit(taskId, 'started', { title: task.title });
