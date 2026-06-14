@@ -696,6 +696,17 @@ async function _pollTick() {
   }
 }
 
+// Public hook: called by the move/comment/board routes after any change
+// that might make a new card pickable, so the user doesn't have to wait
+// up to 15 s for the next interval tick.
+let _pokeScheduled = false;
+export function pokeNow() {
+  if (!_running) return;
+  if (_pokeScheduled) return;
+  _pokeScheduled = true;
+  setTimeout(() => { _pokeScheduled = false; _pollTick(); }, 50);
+}
+
 function _archiveTick() {
   if (!_running) return;
   try { _archiveSweep(); }

@@ -452,7 +452,12 @@ function openProjectHub(tab) {
   var proj = _activeProject();
   if (!proj) { openProjectPicker(); return; }
   state.projectHubOpen = true;
+  // Migrate legacy ids: 'sources' merged into 'contexts', 'terminal' into 'run'.
+  if (tab === 'sources') tab = 'contexts';
+  if (tab === 'terminal') tab = 'run';
   state.projectHubTab = tab || state.projectHubTab || 'files';
+  if (state.projectHubTab === 'sources') state.projectHubTab = 'contexts';
+  if (state.projectHubTab === 'terminal') state.projectHubTab = 'run';
   var hub = document.getElementById('project-hub');
   if (!hub) return;
   hub.style.display = 'flex';
@@ -473,19 +478,22 @@ function _renderProjectHub(proj) {
   var nameEl = document.getElementById('project-hub-name');
   if (nameEl) nameEl.textContent = proj.name;
 
+  // Migrate any legacy tab id persisted from older builds.
+  if (state.projectHubTab === 'sources') state.projectHubTab = 'contexts';
+  if (state.projectHubTab === 'terminal') state.projectHubTab = 'run';
+
   var TABS = [
-    { id: 'files',    icon: 'ti-folder',       label: 'Files' },
-    { id: 'contexts', icon: 'ti-file-text',     label: 'Contexts' },
-    { id: 'sources',  icon: 'ti-source-code',   label: 'Sources' },
-    { id: 'run',      icon: 'ti-player-play',   label: 'Run' },
-    { id: 'terminal', icon: 'ti-terminal-2',    label: 'Terminal' },
-    { id: 'convs',    icon: 'ti-messages',      label: 'Conversations' },
     { id: 'tasks',    icon: 'ti-layout-kanban',  label: 'Board' },
+    { id: 'files',    icon: 'ti-folder',       label: 'Files' },
+    // 'contexts' tab now also holds Sources; 'run' tab also holds Terminal.
+    { id: 'contexts', icon: 'ti-file-text',     label: 'Contexts' },
+    { id: 'run',      icon: 'ti-player-play',   label: 'Run' },
+    { id: 'convs',    icon: 'ti-messages',      label: 'Conversations' },
     { id: 'settings', icon: 'ti-settings',      label: 'Settings' },
   ];
   // Add Design tab for design projects
   if (proj.design && proj.design.projectType === 'design') {
-    TABS.splice(1, 0, { id: 'design', icon: 'ti-layout-2', label: 'Design' });
+    TABS.splice(2, 0, { id: 'design', icon: 'ti-layout-2', label: 'Design' });
   }
   var tabsEl = document.getElementById('project-hub-tabs');
   if (tabsEl) {
@@ -500,6 +508,9 @@ function _renderProjectHub(proj) {
 }
 
 function switchProjectHubTab(tab) {
+  // Migrate legacy ids — call sites may still pass 'sources'/'terminal'.
+  if (tab === 'sources') tab = 'contexts';
+  if (tab === 'terminal') tab = 'run';
   // Dispose Monaco if leaving the files tab
   if (state.projectHubTab === 'files' && tab !== 'files') {
     if (_projMonacoEditor) { _projMonacoEditor.dispose(); _projMonacoEditor = null; }
@@ -640,9 +651,9 @@ function _renderProjectHubBody(proj) {
     if (defaultSrcId) loadProjectFileTree(defaultSrcId, '');
   }
   else if (tab === 'contexts') body.innerHTML = _renderContextsTab(proj);
-  else if (tab === 'sources')  body.innerHTML = _renderSourcesTab(proj);
+  else if (tab === 'sources')  body.innerHTML = _renderContextsTab(proj); // legacy alias
   else if (tab === 'run')      { body.innerHTML = _renderRunTabShell(); _runTabLoad(proj); }
-  else if (tab === 'terminal') { body.innerHTML = ''; _renderTerminalTab(proj, body); _termTabLoad(proj); }
+  else if (tab === 'terminal') { body.innerHTML = _renderRunTabShell(); _runTabLoad(proj); } // legacy alias
   else if (tab === 'convs')    body.innerHTML = _renderConvsTab(proj);
   else if (tab === 'tasks')    {
     // Kanban board (P2). The board renderer mounts into the body element
@@ -668,7 +679,7 @@ function _renderFilesTab(proj) {
   var hasAnySrc = (proj.sources && proj.sources.length) || (rootPath && !rootAlreadySrc);
   if (!hasAnySrc) {
     return '<div class="proj-hub-empty"><i class="ti ti-folder-open" style="font-size:28px;opacity:.3"></i><div>No sources yet</div>' +
-      '<button class="proj-action-btn" onclick="switchProjectHubTab(\'sources\')"><i class="ti ti-plus"></i> Add a source</button></div>';
+      '<button class="proj-action-btn" onclick="switchProjectHubTab(\'contexts\')"><i class="ti ti-plus"></i> Add a source</button></div>';
   }
   var srcOptions = '';
   if (rootPath && !rootAlreadySrc) {
@@ -1330,19 +1341,33 @@ async function saveFileAsContext(srcId, filePath) {
 // ── Contexts Tab ──────────────────────────────────────────────────────────
 
 function _renderContextsTab(proj) {
+  // Merged "Contexts" tab now also shows project Sources (folders + repos).
+  // Sources block comes first because they're the data inputs; contexts are
+  // the curated/derived snippets that get pinned into chat.
+  var srcs = proj.sources || [];
+  var srcBlock = '<div class="proj-section-header">' +
+      '<span>' + srcs.length + ' source' + (srcs.length !== 1 ? 's' : '') + '</span>' +
+      '<button class="proj-action-btn" onclick="openAddSourceDialog()"><i class="ti ti-plus"></i> Add source</button>' +
+    '</div>' +
+    (srcs.length ? srcs.map(function(s) { return _renderSourceCard(proj, s); }).join('') :
+      '<div class="proj-hub-empty"><i class="ti ti-folder" style="font-size:28px;opacity:.3"></i>' +
+      '<div>No sources yet</div>' +
+      '<div style="font-size:11px;color:var(--fau-text-dim)">Add a local folder or connect a GitHub/GitLab repo</div></div>');
+
   var ctxs = proj.contexts || [];
   var pinned = ctxs.filter(function(c){ return c.pinned; });
   var unpinned = ctxs.filter(function(c){ return !c.pinned; });
   var sorted = pinned.concat(unpinned);
+  var ctxBlock = '<div class="proj-section-header" style="margin-top:18px">' +
+      '<span>' + ctxs.length + ' context' + (ctxs.length !== 1 ? 's' : '') + '</span>' +
+      '<button class="proj-action-btn" onclick="openAddContextDialog()"><i class="ti ti-plus"></i> Add context</button>' +
+    '</div>' +
+    (sorted.length ? sorted.map(_renderContextCard).join('') :
+      '<div class="proj-hub-empty"><i class="ti ti-files" style="font-size:28px;opacity:.3"></i>' +
+      '<div>No contexts yet</div>' +
+      '<div style="font-size:11px;color:var(--fau-text-dim)">Save files, URLs, or AI artifacts as named contexts</div></div>');
 
-  return '<div class="proj-section-header">' +
-    '<span>' + ctxs.length + ' context' + (ctxs.length !== 1 ? 's' : '') + '</span>' +
-    '<button class="proj-action-btn" onclick="openAddContextDialog()"><i class="ti ti-plus"></i> Add context</button>' +
-  '</div>' +
-  (sorted.length ? sorted.map(_renderContextCard).join('') :
-    '<div class="proj-hub-empty"><i class="ti ti-files" style="font-size:28px;opacity:.3"></i>' +
-    '<div>No contexts yet</div>' +
-    '<div style="font-size:11px;color:var(--fau-text-dim)">Save files, URLs, or AI artifacts as named contexts</div></div>');
+  return srcBlock + ctxBlock;
 }
 
 function _renderContextCard(c) {

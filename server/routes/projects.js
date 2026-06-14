@@ -326,6 +326,11 @@ export function registerProjectRoutes(app, deps) {
     const r = moveWorkItem(req.params.id, req.params.itemId, req.body || {}, { actor, strict: actor === 'ai' });
     if (!r.ok) return res.status(400).json({ error: r.error });
     _emitBoardEvent({ type: 'moved', projectId: req.params.id, item: r.item });
+    // Poke the autopilot worker — if the human just dragged an AI card into
+    // todo or in_progress, the next poll should happen now, not in 15 s.
+    import('../../kanban-worker.js')
+      .then(mod => mod.pokeNow && mod.pokeNow())
+      .catch(() => {});
     res.json(r.item);
   });
 
