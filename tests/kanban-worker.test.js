@@ -95,9 +95,10 @@ vi.mock('../server/routes/projects.js', () => ({
 }));
 
 // ── P7: stub the work-item-verifier so tests don't actually spawn /bin/sh ─
-const _verify = { nextResult: { ok: true, skipped: true } };
+const _verify = { nextResult: { ok: true, skipped: true }, nextResolved: null };
 vi.mock('../lib/work-item-verifier.js', () => ({
   verifyWorkItem: vi.fn(async () => _verify.nextResult),
+  resolveVerifyCommand: vi.fn(() => _verify.nextResolved),
 }));
 
 // Tiny helper to let the worker's fire-and-forget verifier chain settle.
@@ -155,6 +156,7 @@ beforeEach(() => {
   _inflightStore = {};
   __test.inFlight.clear();
   _verify.nextResult = { ok: true, skipped: true };
+  _verify.nextResolved = null;
   _steerCalls.length = 0;
 });
 
@@ -658,6 +660,159 @@ describe('steerCard', () => {
     expect((await worker.steerCard('p1', 'card-1', '')).steered).toBe(false);
     expect((await worker.steerCard('p1', 'card-1', '   ')).steered).toBe(false);
     expect(_steerCalls.length).toBe(0);
+  });
+});
+
+describe('claim-time auto-close (pre-flight verifier)', () => {
+  function _setup({ verifyCommand = null, qa = null } = {}) {
+    const proj = {
+      id: 'p1', name: 'P', defaultAgent: 'claude',
+      kanban: { autopilot: true, dailyAiQuota: 0 },
+      ...(qa ? { qa: { command: qa } } : {}),
+    };
+    const card = _mkItem({
+      id: 'c1', title: 'do the thing', body: 'b', acceptance: 'a',
+      projectId: 'p1',
+      ...(verifyCommand ? { verifyCommand } : {}),
+    });
+    _db.projects.push(proj);
+    _db.items.push(card);
+    return { proj, card };
+  }
+
+  it('auto-closes when card-scoped verifier already passes', async () => {
+    const { proj, card } = _setup({ verifyCommand: 'echo ok' });
+    _verify.nextResolved = { command: 'echo ok', source: 'card' };
+    _verify.nextResult   = { ok: true, skipped: false, command: 'echo ok', source: 'card', exitCode: 0 };
+
+    await __test.claimAndRun(proj, card);
+
+    expect(card.column).toBe('done');
+    expect(_createdTasks.length).toBe(0); // no AI task spawned
+    expect(_runCalls.length).toBe(0);     // task-runner not invoked
+    expect(card.comments.some(c => /pre-flight/i.test(c.body))).toBe(true);
+    // Quota was NOT incremented (no AI run happened).
+    expect(__test.quota.used('p1')).toBe(0);
+  });
+
+  it('auto-closes when project-scoped qa.command already passes', async () => {
+    const { proj, card } = _setup({ qa: 'npm test' });
+    _verify.nextResolved = { command: 'npm test', source: 'project' };
+    _verify.nextResult   = { ok: true, skipped: false, command: 'npm test', source: 'project', exitCode: 0 };
+
+    await __test.claimAndRun(proj, card);
+
+    expect(card.column).toBe('done');
+    expect(_createdTasks.length).toBe(0);
+    expect(card.comments.some(c => /project verifier/i.test(c.body))).toBe(true);
+  });
+
+  it('does NOT auto-close when only an auto-detected verifier exists', async () => {
+    const { proj, card } = _setup();
+    _verify.nextResolved = { command: 'npm test', source: 'auto' };
+    _verify.nextResult   = { ok: true, skipped: false, command: 'npm test', source: 'auto', exitCode: 0 };
+
+    await __test.claimAndRun(proj, card);
+
+    expect(card.column).toBe('in_progress');
+    expect(_createdTasks.length).toBe(1);
+    expect(__test.quota.used('p1')).toBe(1);
+  });
+
+  it('proceeds with normal run when verifier fails', async () => {
+    const { proj, card } = _setup({ verifyCommand: 'npm test' });
+    _verify.nextResolved = { command: 'npm test', source: 'card' };
+    _verify.nextResult   = { ok: false, skipped: false, command: 'npm test', source: 'card', exitCode: 1 };
+
+    await __test.claimAndRun(proj, card);
+
+    expect(card.column).toBe('in_progress');
+    expect(_createdTasks.length).toBe(1);
+    expect(__test.quota.used('p1')).toBe(1);
+  });
+
+  it('proceeds with normal run when no verifier is configured', async () => {
+    const { proj, card } = _setup();
+    _verify.nextResolved = null; // resolveVerifyCommand returns null
+
+    await __test.claimAndRun(proj, card);
+
+    expect(card.column).toBe('in_progress');
+    expect(_createdTasks.length).toBe(1);
+  });
+
+  it('falls through when pre-flight verifier throws', async () => {
+    const { proj, card } = _setup({ verifyCommand: 'broken' });
+    _verify.nextResolved = { command: 'broken', source: 'card' };
+    // Override verifyWorkItem to throw for this case.
+    const verifierMod = await import('../lib/work-item-verifier.js');
+    verifierMod.verifyWorkItem.mockImplementationOnce(async () => {
+      throw new Error('boom');
+    });
+
+    await __test.claimAndRun(proj, card);
+
+    expect(card.column).toBe('in_progress'); // safe fallback
+    expect(_createdTasks.length).toBe(1);
+  });
+});
+
+describe('buildTaskContext failure-history self-unblock', () => {
+  const _project = {
+    id: 'p1', name: 'P', rootPath: '/tmp/p1',
+    kanban: { maxAiRetries: 2 },
+  };
+
+  it('omits failure section when there are no prior failures', () => {
+    const card = _mkItem({ id: 'c1', title: 'fresh card', runs: [] });
+    const ctx = __test.buildTaskContext(_project, card);
+    expect(ctx).not.toMatch(/Prior attempts have failed/);
+    expect(ctx).not.toMatch(/FINAL ATTEMPT/);
+  });
+
+  it('adds diagnose-first block when prior failures exist', () => {
+    const card = _mkItem({ id: 'c1', title: 'flaky card', runs: [
+      { taskId: 't1', ok: false, error: 'Run was interrupted while in progress (failed)' },
+    ]});
+    const ctx = __test.buildTaskContext(_project, card);
+    expect(ctx).toMatch(/Prior attempts have failed/);
+    expect(ctx).toMatch(/attempt #2 on this card/);
+    expect(ctx).toMatch(/Run was interrupted while in progress/);
+    expect(ctx).toMatch(/DIAGNOSE BEFORE CODING/);
+    // 2nd attempt is the final one (maxAiRetries=2) → final-attempt block too.
+    expect(ctx).toMatch(/THIS IS YOUR FINAL ATTEMPT/);
+    expect(ctx).toMatch(/root cause/);
+  });
+
+  it('marks final attempt and demands actionable handoff', () => {
+    const projHigh = { ..._project, kanban: { maxAiRetries: 3 } };
+    const card = _mkItem({ id: 'c1', title: 'flaky', runs: [
+      { taskId: 't1', ok: false, error: 'first fail' },
+      { taskId: 't2', ok: false, error: 'second fail' },
+    ]});
+    const ctx = __test.buildTaskContext(projHigh, card);
+    expect(ctx).toMatch(/attempt #3 on this card/);
+    expect(ctx).toMatch(/THIS IS YOUR FINAL ATTEMPT/);
+    expect(ctx).toMatch(/exact next step a human should take/);
+  });
+
+  it('does NOT mark final attempt when retries remain', () => {
+    const projHigh = { ..._project, kanban: { maxAiRetries: 4 } };
+    const card = _mkItem({ id: 'c1', title: 'flaky', runs: [
+      { taskId: 't1', ok: false, error: 'first fail' },
+    ]});
+    const ctx = __test.buildTaskContext(projHigh, card);
+    expect(ctx).toMatch(/Prior attempts have failed/);
+    expect(ctx).not.toMatch(/THIS IS YOUR FINAL ATTEMPT/);
+  });
+
+  it('ignores successful runs when counting prior failures', () => {
+    const card = _mkItem({ id: 'c1', title: 'mixed', runs: [
+      { taskId: 't1', ok: true },
+      { taskId: 't2', ok: true },
+    ]});
+    const ctx = __test.buildTaskContext(_project, card);
+    expect(ctx).not.toMatch(/Prior attempts have failed/);
   });
 });
 

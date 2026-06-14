@@ -103,7 +103,7 @@ import { registerFaunaUpdateRoutes } from './server/routes/fauna-update.js';
 import { createAgentDirIterator } from './server/lib/agents-iter.js';
 import { buildShellEnv } from './server/lib/shell-env.js';
 import { createInternalAICaller } from './server/lib/ai-caller.js';
-import { createPowerSaveGuard } from './server/lib/power-save.js';
+import { createPowerSaveGuard, attachTaskPowerSaveBlocker } from './server/lib/power-save.js';
 import {
   resolvePath,
   setAgentManifestGetter as _setAgentManifestGetter,
@@ -125,6 +125,9 @@ try {
 
 // Power-save blocker — keeps screen/CPU awake while any chat request is active.
 const _powerSave = createPowerSaveGuard(powerSaveBlocker);
+// Wire the background-task singleton (used by kanban-worker autopilot) to
+// the same Electron API so in-flight AI cards prevent system sleep.
+attachTaskPowerSaveBlocker(powerSaveBlocker);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app    = express();

@@ -33,6 +33,7 @@ import {
   appendAutonomousRunLog,
 } from './project-manager.js';
 import { createTask, getTask, getAllTasks } from './task-manager.js';
+import { taskPowerSave } from './server/lib/power-save.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
 const QUOTA_FILE    = path.join(CONFIG_DIR, 'autonomous-runs', 'board-quota.json');
@@ -230,6 +231,47 @@ function _buildTaskContext(project, card) {
     lines.push('');
     lines.push('Treat any HUMAN comment above (and any new HUMAN comment that arrives mid-run as a user message) as a direct steering instruction from the user — address it before continuing.');
   }
+
+  // ── Failure history + self-unblock instructions ──────────────────────
+  // Each retry is a fresh agent with no memory of the prior attempt's
+  // shell history. Surface the structured failure list so the new agent
+  // can diagnose the recurring root cause instead of repeating the same
+  // path and failing the same way.
+  const failedRuns = Array.isArray(card.runs)
+    ? card.runs.filter(r => r && r.ok === false)
+    : [];
+  if (failedRuns.length > 0) {
+    const projMaxRetries = Math.max(0, Number((project.kanban && project.kanban.maxAiRetries)) || 2);
+    const isFinalAttempt = (failedRuns.length + 1) >= projMaxRetries;
+
+    lines.push('');
+    lines.push('## ⚠️ Prior attempts have failed — DIAGNOSE BEFORE CODING');
+    lines.push('You are attempt #' + (failedRuns.length + 1) + ' on this card. Previous attempt(s) failed with:');
+    for (let i = 0; i < failedRuns.length; i++) {
+      const r = failedRuns[i];
+      const errStr = String(r.error || '(no error recorded)').replace(/\s+/g, ' ').slice(0, 400);
+      lines.push('  ' + (i + 1) + '. ' + errStr);
+    }
+    lines.push('');
+    lines.push('Before changing any code, you MUST use your shell tools to investigate why prior attempts failed. Common patterns:');
+    lines.push('  • "Run was interrupted while in progress" → the task-runner process was killed (system sleep, crash, OOM, parent restart). Check `df -h` for disk space, `vm_stat` / `free -m` for memory pressure, `~/.config/fauna/logs/` for crash traces, and recent edits in the project that may have introduced an infinite loop or memory leak.');
+    lines.push('  • Verification failures → run the verifier yourself first, read its output carefully before assuming the prior diagnosis was right.');
+    lines.push('  • "Module not found" / dependency errors → check `package.json` / `requirements.txt` / venv, run install commands if missing.');
+    lines.push('  • Test timeouts → look for hung child processes (`ps aux | grep node`), zombie test workers.');
+    lines.push('');
+    lines.push('Only after you have a concrete hypothesis for the failure should you start the work itself. Your first tool calls should be diagnostic (read, ls, cat, ps, git log, etc.), not edits.');
+
+    if (isFinalAttempt) {
+      lines.push('');
+      lines.push('### ⚠️ THIS IS YOUR FINAL ATTEMPT');
+      lines.push('If you cannot complete the work this run, autopilot will hand the card back to a human. Before giving up, you MUST post a `fauna_workitem_comment` containing:');
+      lines.push('  1. The root cause you identified (from your shell investigation).');
+      lines.push('  2. The specific blocker that prevents you from finishing (be precise — file paths, error messages, commands you tried).');
+      lines.push('  3. The exact next step a human should take to unblock this (e.g. "run `brew install foo`", "delete `node_modules` and reinstall", "review architectural decision in line X of file Y").');
+      lines.push('Do NOT post a vague "I could not finish" comment — that wastes the human\'s time. A precise handoff with diagnosis is what they need.');
+    }
+  }
+
   return lines.join('\n');
 }
 
@@ -275,6 +317,27 @@ const _pollTimers = { poll: null, archive: null };
 const _inFlight   = new Map();  // cardId → { taskId, projectId, unsubscribe }
 let   _running    = false;
 
+// Wrap _inFlight set/delete so we can ref-count a system-level power-save
+// blocker: the laptop must not sleep while autopilot is mid-run, otherwise
+// the task-runner's event loop pauses and the card stalls (then gets
+// recovered as a zombie 15 min later, with the user wondering what happened).
+// `taskPowerSave` is a no-op until server.js attaches the Electron API.
+function _trackInFlight(cardId, entry) {
+  if (_inFlight.has(cardId)) {
+    // Replacing an existing entry — net ref-count unchanged.
+    _inFlight.set(cardId, entry);
+    return;
+  }
+  _inFlight.set(cardId, entry);
+  try { taskPowerSave.acquire(); } catch (_) {}
+}
+function _untrackInFlight(cardId) {
+  if (!_inFlight.has(cardId)) return false;
+  _inFlight.delete(cardId);
+  try { taskPowerSave.release(); } catch (_) {}
+  return true;
+}
+
 // ── In-flight persistence ────────────────────────────────────────────────
 // The _inFlight map is the only thing standing between an autopilot run
 // and orphan recovery. When the process dies (laptop sleep killing the
@@ -319,7 +382,7 @@ async function _rehydrateInFlight() {
     if (stillRunning) {
       // Reattach the subscription so finalize-on-completion still works.
       const unsubscribe = _subscribeImpl(ent.taskId, (ev) => _onTaskEvent(ent.projectId, cardId, ev));
-      _inFlight.set(cardId, { taskId: ent.taskId, projectId: ent.projectId, unsubscribe, startedAt: ent.startedAt });
+      _trackInFlight(cardId, { taskId: ent.taskId, projectId: ent.projectId, unsubscribe, startedAt: ent.startedAt });
     } else {
       zombies.push({ cardId, ent });
     }
@@ -364,6 +427,56 @@ export async function recoverInterruptedRuns() {
 }
 
 // ── Claim + run one card ─────────────────────────────────────────────────
+
+// Pre-flight verifier check. Returns true if the card was auto-closed
+// (caller should bail out instead of spawning a task). Returns false if
+// the caller should proceed with the normal claim+spawn flow.
+//
+// Honors per-card verifyCommand and project-wide qa.command (both of which
+// the user has explicitly opted into). Skips auto-detected verifiers
+// (`source === 'auto'`, e.g. sniffed `npm test`) because those aren't an
+// intentional gate — a greenfield project where `npm test` passes
+// trivially shouldn't auto-close every new card.
+async function _maybeAutoClose(project, card, claimedItem) {
+  const mod = await import('./lib/work-item-verifier.js');
+  if (!mod.resolveVerifyCommand) return false;
+  const resolved = mod.resolveVerifyCommand(project, claimedItem || card);
+  if (!resolved) return false;
+  if (resolved.source !== 'card' && resolved.source !== 'project') return false;
+
+  const v = await mod.verifyWorkItem(project.id, card.id, {
+    runId: null,
+    postComment: false,
+  });
+  if (!v || v.ok !== true || v.skipped === true) return false;
+
+  // Verifier passed → record + close.
+  const sourceLabel = v.source === 'card' ? 'per-card verifier' : 'project verifier';
+  addWorkItemComment(project.id, card.id, {
+    author: 'ai',
+    body: '🟢 Autopilot pre-flight: the ' + sourceLabel + ' (`' +
+      (v.command || resolved.command) +
+      '`) already passes against the current code — the work appears to be done already. Auto-closing without spawning an AI run.',
+  });
+  const mv = moveWorkItem(project.id, card.id, {
+    column: 'done',
+    runEntry: { taskId: null, finishedAt: Date.now(), ok: true, verified: true, autoClosed: true },
+  }, { actor: 'ai', strict: true });
+  if (!mv.ok) {
+    console.warn('[kanban-worker] auto-close move failed for', card.id, '—', mv.error);
+    return false;
+  }
+  appendAutonomousRunLog(project.id, {
+    kind: 'kanban_auto_close', cardId: card.id, title: card.title,
+    reason: 'verifier-already-passes', source: v.source,
+    command: v.command || resolved.command,
+  });
+  _emitBoard({ type: 'moved', projectId: project.id, item: mv.item });
+  console.log('[kanban-worker] auto-closed already-done card', card.id,
+    '— ' + sourceLabel + ' passed pre-flight');
+  return true;
+}
+
 async function _claimAndRun(project, card) {
   await _loadRunner();
   const agentClaim = 'ai:' + (
@@ -379,8 +492,25 @@ async function _claimAndRun(project, card) {
     console.warn('[kanban-worker] claim failed for', card.id, '—', r.error);
     return;
   }
-  _quotaIncrement(project.id);
   _emitBoard({ type: 'claimed', projectId: project.id, item: r.item });
+
+  // ── Pre-flight: is the card already done? ─────────────────────────────
+  // Run a fast verifier check BEFORE spawning the (expensive) AI task. If
+  // the configured verifier (per-card `verifyCommand` or project-wide
+  // `qa.command`) already passes against the current code, the work has
+  // effectively been done by some other path (manual edit, earlier run,
+  // copy-pasted from another branch). Auto-close instead of burning a
+  // model run on it. See _maybeAutoClose for source-scoping rationale.
+  try {
+    const closed = await _maybeAutoClose(project, card, r.item);
+    if (closed) return;
+  } catch (e) {
+    // Pre-flight failure is non-fatal — fall through and run the task as
+    // we would have without the check.
+    console.warn('[kanban-worker] pre-flight verify error:', e?.message || e);
+  }
+
+  _quotaIncrement(project.id);
 
   // Synthesise + start a task.
   let task;
@@ -403,7 +533,7 @@ async function _claimAndRun(project, card) {
 
   // Subscribe to task-runner events for completion / failure.
   const unsubscribe = _subscribeImpl(task.id, (ev) => _onTaskEvent(project.id, card.id, ev));
-  _inFlight.set(card.id, { taskId: task.id, projectId: project.id, unsubscribe, startedAt: Date.now() });
+  _trackInFlight(card.id, { taskId: task.id, projectId: project.id, unsubscribe, startedAt: Date.now() });
   _persistInFlight();
 
   // Kick off the run.
@@ -427,7 +557,7 @@ function _onTaskEvent(projectId, cardId, ev) {
 function _finalizeRunSuccess(projectId, cardId, ev) {
   const ent = _inFlight.get(cardId);
   if (ent && ent.unsubscribe) ent.unsubscribe();
-  _inFlight.delete(cardId);
+  _untrackInFlight(cardId);
   _persistInFlight();
 
   const proj = getProject(projectId);
@@ -520,7 +650,7 @@ function _finalizeRunSuccess(projectId, cardId, ev) {
 function _finalizeRunFailure(projectId, cardId, ev) {
   const ent = _inFlight.get(cardId);
   if (ent && ent.unsubscribe) ent.unsubscribe();
-  _inFlight.delete(cardId);
+  _untrackInFlight(cardId);
   _persistInFlight();
 
   const proj = getProject(projectId);
@@ -819,7 +949,13 @@ export function stopKanbanWorker() {
   for (const ent of _inFlight.values()) {
     try { ent.unsubscribe && ent.unsubscribe(); } catch (_) {}
   }
+  // Release one power-save ref per in-flight entry before clearing the map,
+  // otherwise we'd leak a system-sleep blocker per stop/start cycle.
+  const heldRefs = _inFlight.size;
   _inFlight.clear();
+  for (let i = 0; i < heldRefs; i++) {
+    try { taskPowerSave.release(); } catch (_) {}
+  }
   // Note: we deliberately do NOT clear the persisted INFLIGHT_FILE on
   // stop. If the process is being shut down, we WANT the next start to
   // see those entries so it can recover them as zombies.
@@ -844,6 +980,9 @@ export const __test = {
   inflightFile: INFLIGHT_FILE,
   quota: { read: _readQuota, increment: _quotaIncrement, used: _quotaUsed },
   computeIdleReasons: _computeIdleReasons,
+  maybeAutoClose: _maybeAutoClose,
+  claimAndRun: _claimAndRun,
+  buildTaskContext: _buildTaskContext,
 };
 
 // Public API: compute why autopilot is idle on a project. Returns
