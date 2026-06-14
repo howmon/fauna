@@ -9106,8 +9106,23 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 .kb-card:hover { border-color: var(--accent); }
 .kb-card:active { cursor: grabbing; }
 .kb-card-dragging { opacity: .4; transform: rotate(-1.5deg); }
-.kb-card-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.kb-card-chips, .kb-card-chips-right { display: inline-flex; gap: 4px; align-items: center; }
+.kb-card-top {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  /* Without overflow:hidden, a long project chip on a narrow card (e.g. when
+     the Live pill widens the left group) will visually bleed past the card's
+     rounded edge. Clip here so the chip's own max-width + ellipsis kick in
+     instead of leaking out. */
+  overflow: hidden;
+  min-width: 0;
+}
+.kb-card-chips, .kb-card-chips-right {
+  display: inline-flex; gap: 4px; align-items: center;
+  /* Allow either group to shrink so ellipsis on .kb-chip-proj actually
+     activates. Without min-width:0, inline-flex containers refuse to shrink
+     below their content's intrinsic width. */
+  min-width: 0;
+}
+.kb-card-chips-right { flex-shrink: 1; }
 .kb-card-title { font-size: 13px; color: var(--fau-text); font-weight: 500; line-height: 1.3; }
 .kb-card-src { color: var(--accent); font-size: 12px; margin-right: 2px; }
 .kb-card-body { font-size: 11px; color: var(--fau-text-dim); line-height: 1.4; }
@@ -9129,6 +9144,10 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 .kb-chip-lock { background: rgba(251,146,60,.18); color: #fb923c; }
 .kb-chip-proj {
   cursor: pointer; max-width: 110px;
+  /* min-width:0 + flex-shrink lets the chip narrow when the card's left
+     group (priority + assignee + Live pill) eats space. Combined with the
+     parent's overflow:hidden the ellipsis activates instead of overflowing. */
+  flex-shrink: 1; min-width: 32px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: var(--fau-text); background: var(--fau-surface3);
   border: 1px solid var(--fau-border);

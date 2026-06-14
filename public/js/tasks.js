@@ -303,6 +303,14 @@ function _renderList() {
     if (proj.length) tasks = proj;
   }
 
+  // Hide Kanban-autopilot tasks from this panel — they're surfaced on the
+  // Board (with their own Live viewer) and were cluttering "Active" here
+  // every time the worker claimed a card. The kanban-worker stamps them
+  // with title prefix "[board] ".
+  tasks = tasks.filter(function(t) {
+    return !(t && typeof t.title === 'string' && t.title.indexOf('[board] ') === 0);
+  });
+
   if (!tasks.length) {
     list.innerHTML = _suggestedTasksHtml();
     return;
