@@ -582,6 +582,56 @@ export function readSourceFile(projectId, srcId, filePath) {
   return { type, size: stat.size, mime, ext, path: rel };
 }
 
+// Create a new empty file or directory within a source. `type` must be
+// 'file' or 'dir'. Parent directories are created automatically. Refuses
+// to overwrite an existing entry. Returns { path, type } of the created
+// entry (path is relative to the source root, forward-slash separated).
+export function createSourceEntry(projectId, srcId, relPath, type) {
+  const p = getProject(projectId);
+  if (!p) throw new Error('Project not found');
+  if (type !== 'file' && type !== 'dir') throw new Error('Invalid type — expected "file" or "dir"');
+
+  let root;
+  if (srcId === '__rootpath__') {
+    if (!p.rootPath) throw new Error('No root folder set for this project');
+    root = p.rootPath;
+  } else {
+    const src = p.sources.find(s => s.id === srcId);
+    if (!src) throw new Error('Source not found');
+    if (src.type !== 'local') throw new Error('Can only create files in local sources');
+    root = src.path;
+  }
+  if (!root || !fs.existsSync(root)) throw new Error('Source directory not available');
+
+  // Normalize: strip leading slashes, reject empty path or just dots
+  const rel = String(relPath || '').replace(/^\/+/, '').replace(/\\/g, '/');
+  if (!rel || rel === '.' || rel === '..') throw new Error('Invalid path');
+
+  // Reject any segment that's a dot reference or contains a null byte
+  const segments = rel.split('/').filter(Boolean);
+  if (!segments.length) throw new Error('Invalid path');
+  for (const seg of segments) {
+    if (seg === '.' || seg === '..') throw new Error('Path traversal not allowed');
+    if (seg.includes('\0')) throw new Error('Invalid filename');
+  }
+
+  const full = path.resolve(path.join(root, rel));
+  const resolvedRoot = path.resolve(root);
+  if (!full.startsWith(resolvedRoot + path.sep) && full !== resolvedRoot) {
+    throw new Error('Path traversal not allowed');
+  }
+  if (fs.existsSync(full)) throw new Error('A file or folder with that name already exists');
+
+  if (type === 'dir') {
+    fs.mkdirSync(full, { recursive: true });
+  } else {
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, '', 'utf8');
+  }
+
+  return { path: rel, type };
+}
+
 // Validate path and return absolute file path + metadata (for the /raw streaming endpoint)
 export function resolveSourceFilePath(projectId, srcId, filePath) {
   const p = getProject(projectId);

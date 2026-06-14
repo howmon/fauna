@@ -680,6 +680,8 @@ function _renderFilesTab(proj) {
   }).join('');
   return '<div class="proj-files-toolbar">' +
     '<select class="proj-src-select" onchange="loadProjectFileTree(this.value, \'\')">' + srcOptions + '</select>' +
+    '<button class="proj-icon-btn" onclick="newProjectEntry(\'hub\', \'\', \'file\')" title="New file"><i class="ti ti-file-plus"></i></button>' +
+    '<button class="proj-icon-btn" onclick="newProjectEntry(\'hub\', \'\', \'dir\')" title="New folder"><i class="ti ti-folder-plus"></i></button>' +
     '<button class="proj-icon-btn" onclick="openProjectFileExplorer()" title="Expand to full screen"><i class="ti ti-arrows-maximize"></i></button>' +
     '<button class="proj-icon-btn" onclick="loadProjectFileTree(document.querySelector(\'.proj-src-select\').value, \'\')" title="Refresh"><i class="ti ti-refresh"></i></button>' +
   '</div>' +
@@ -720,12 +722,17 @@ function _treeRenderLevel(st, path, depth) {
       var chevron = open ? 'ti-chevron-down' : 'ti-chevron-right';
       var folderIco = open ? 'ti-folder-open' : 'ti-folder';
       var children = open ? _treeRenderLevel(st, f.path, depth + 1) : '';
+      var dirPathEsc = _projEsc(f.path);
       return '<div>' +
-        '<div class="proj-file-row proj-tree-dir-row" style="padding-left:' + pad + 'px" onclick="_treeToggleDir(\'' + st._id + '\',\'' + _projEsc(f.path) + '\')">' +
+        '<div class="proj-file-row proj-tree-dir-row" style="padding-left:' + pad + 'px" onclick="_treeToggleDir(\'' + st._id + '\',\'' + dirPathEsc + '\')">' +
           '<i class="ti ' + chevron + ' proj-tree-chevron"></i>' +
           '<i class="ti ' + folderIco + ' proj-file-icon proj-folder-icon"></i>' +
           '<span class="proj-file-name">' + _projEsc(f.name) + '</span>' +
           (hasDot ? '<span class="proj-tree-dot"></span>' : '') +
+          '<span class="proj-tree-actions">' +
+            '<i class="ti ti-file-plus proj-tree-act" title="New file here" onclick="event.stopPropagation();newProjectEntry(\'' + st._id + '\',\'' + dirPathEsc + '\',\'file\')"></i>' +
+            '<i class="ti ti-folder-plus proj-tree-act" title="New folder here" onclick="event.stopPropagation();newProjectEntry(\'' + st._id + '\',\'' + dirPathEsc + '\',\'dir\')"></i>' +
+          '</span>' +
         '</div>' +
         (open ? '<div>' + children + '</div>' : '') +
       '</div>';
@@ -786,6 +793,69 @@ async function _treeInit(st, srcId) {
 async function loadProjectFileTree(srcId /*, subPath ignored — tree always starts at root */) {
   state._projectFileSrcId = srcId;
   await _treeInit(_hubTreeState, srcId);
+}
+
+// Prompt the user for a name then create a new file or directory inside
+// the source rooted under `parentPath` (empty string = source root). On
+// success the parent dir's cache is invalidated, the parent is expanded,
+// the tree is re-rendered, and (for files) the new file is opened.
+async function newProjectEntry(stId, parentPath, type) {
+  var st = stId === 'hub' ? _hubTreeState : _explorerTreeState;
+  if (!st.srcId) { _showToast('Open a source first', true); return; }
+  if (!state.activeProjectId) return;
+  var label = type === 'dir' ? 'New folder name' : 'New file name';
+  var placeholder = type === 'dir' ? 'utils' : 'notes.md';
+  var name = await _projPrompt({
+    title: type === 'dir' ? 'Create folder' : 'Create file',
+    label: label + (parentPath ? ' (in ' + parentPath + ')' : ''),
+    placeholder: placeholder,
+    submit: 'Create',
+    validate: function(v) {
+      v = (v || '').trim();
+      if (!v) return 'Name is required.';
+      if (v.indexOf('\\') !== -1) return 'Use forward slashes for paths.';
+      var segs = v.split('/').filter(Boolean);
+      if (!segs.length) return 'Name is required.';
+      for (var i = 0; i < segs.length; i++) {
+        if (segs[i] === '.' || segs[i] === '..') return 'Path traversal not allowed.';
+      }
+      return null;
+    },
+  });
+  if (name === null) return;
+  name = name.trim();
+  if (!name) return;
+  var relPath = parentPath ? (parentPath.replace(/\/+$/, '') + '/' + name) : name;
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(state.activeProjectId) +
+      '/sources/' + encodeURIComponent(st.srcId) + '/entry', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: relPath, type: type }),
+    });
+    var data = null; try { data = await r.json(); } catch (_) {}
+    if (!r.ok) throw new Error((data && data.error) || ('HTTP ' + r.status));
+    // Refresh the parent dir's cache so the new entry shows up.
+    var parentKey = parentPath || '';
+    try {
+      var rl = await fetch('/api/projects/' + encodeURIComponent(state.activeProjectId) +
+        '/sources/' + encodeURIComponent(st.srcId) + '/files?path=' + encodeURIComponent(parentKey));
+      var files = await rl.json();
+      st.dirCache[parentKey] = rl.ok ? files : [];
+    } catch (_) {}
+    // Make sure the parent is expanded so the new row is visible.
+    if (parentKey) st.expanded[parentKey] = true;
+    _treeRender(st);
+    _showToast((type === 'dir' ? 'Created folder ' : 'Created file ') + relPath);
+    // Auto-open new files for editing.
+    if (type === 'file') {
+      _treeMarkOpened(st, relPath);
+      _treeRender(st);
+      if (stId === 'hub') openProjectFile(st.srcId, relPath);
+      else explorerOpenFile(st.srcId, relPath);
+    }
+  } catch (e) {
+    _showToast('Create failed: ' + e.message, true);
+  }
 }
 
 // ── Monaco file viewer ────────────────────────────────────────────────────
@@ -1084,6 +1154,8 @@ function openProjectFileExplorer() {
         '<i class="ti ti-folder-open" style="color:var(--accent)"></i>' +
         '<span class="proj-explorer-title">' + _projEsc(proj.name) + ' — Files</span>' +
         '<select class="proj-src-select proj-explorer-src-select" id="proj-exp-src" onchange="explorerLoadTree(this.value,\'\')">' + srcOptions + '</select>' +
+        '<button class="proj-icon-btn" onclick="newProjectEntry(\'explorer\', \'\', \'file\')" title="New file"><i class="ti ti-file-plus"></i></button>' +
+        '<button class="proj-icon-btn" onclick="newProjectEntry(\'explorer\', \'\', \'dir\')" title="New folder"><i class="ti ti-folder-plus"></i></button>' +
         '<button class="proj-icon-btn" onclick="explorerLoadTree(document.getElementById(\'proj-exp-src\').value,\'\')" title="Refresh"><i class="ti ti-refresh"></i></button>' +
         '<button class="proj-icon-btn" onclick="closeProjectFileExplorer()" title="Close"><i class="ti ti-x"></i></button>' +
       '</div>' +

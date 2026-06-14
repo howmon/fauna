@@ -6482,6 +6482,16 @@ body.win-platform .acv-header {
   cursor: pointer; font-size: 13px; transition: background .1s;
 }
 .proj-file-row:hover { background: var(--fau-surface2); }
+.proj-tree-actions {
+  display: none; align-items: center; gap: 4px; margin-left: auto;
+  padding-left: 6px;
+}
+.proj-file-row:hover .proj-tree-actions { display: inline-flex; }
+.proj-tree-act {
+  font-size: 14px; color: var(--fau-text-muted); padding: 2px;
+  border-radius: 3px; cursor: pointer; flex-shrink: 0;
+}
+.proj-tree-act:hover { color: var(--accent, #6ea8fe); background: var(--fau-surface3); }
 .proj-file-icon { font-size: 14px; color: var(--fau-text-muted); flex-shrink: 0; }
 .proj-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .proj-file-size { font-size: 10px; color: var(--fau-text-muted); }

@@ -15,6 +15,7 @@ export function registerProjectRoutes(app, deps) {
     listFiles,
     readSourceFile,
     resolveSourceFilePath,
+    createSourceEntry,
     addContext,
     updateContext,
     removeContext,
@@ -177,6 +178,18 @@ export function registerProjectRoutes(app, deps) {
       const { fullPath } = resolveSourceFilePath(req.params.id, req.params.srcId, req.query.path || '');
       fs.writeFileSync(fullPath, req.body?.content ?? '', 'utf8');
       res.json({ ok: true });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  // Create a new empty file or directory inside a source. Body:
+  // { path: "foo/bar.txt", type: "file" | "dir" }.
+  app.post('/api/projects/:id/sources/:srcId/entry', (req, res) => {
+    try {
+      const { path: relPath, type } = req.body || {};
+      const entry = createSourceEntry(req.params.id, req.params.srcId, relPath, type);
+      res.status(201).json(entry);
     } catch (e) {
       res.status(400).json({ error: e.message });
     }
