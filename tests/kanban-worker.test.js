@@ -259,6 +259,14 @@ describe('_pickNext', () => {
     _db.items.push(_mkItem({ id: 'dragged', projectId: 'p1', column: 'in_progress', assignee: 'ai', claimedBy: null }));
     expect(__test.pickNext(_db.projects[0]).id).toBe('dragged');
   });
+  it('picks an in_progress card even when it has unresolved blockers (human override)', () => {
+    _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true, concurrency: 2 } });
+    _db.items.push(_mkItem({ id: 'blocker', projectId: 'p1', column: 'in_progress', claimedBy: 'ai:x' }));
+    // Human dragged this card into in_progress despite the dependency.
+    _db.items.push(_mkItem({ id: 'dragged', projectId: 'p1', column: 'in_progress',
+      assignee: 'ai', claimedBy: null, blockedBy: ['blocker'] }));
+    expect(__test.pickNext(_db.projects[0]).id).toBe('dragged');
+  });
   it('skips in_progress cards already in-flight', () => {
     _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true, concurrency: 2 } });
     _db.items.push(_mkItem({ id: 'live', projectId: 'p1', column: 'in_progress', assignee: 'ai', claimedBy: null }));

@@ -163,6 +163,10 @@ function _pickNext(project) {
   //   - in_progress with no claim: a human dragged an AI card straight
   //     into in_progress; autopilot should still take it. (Cards that
   //     are actively being worked have `claimedBy` set, so they're skipped.)
+  //
+  // We DO apply the blocked-by dependency gate to the todo queue, but NOT
+  // to in_progress drops — placing a card in in_progress is an explicit
+  // human override that says "do this now, ignore dependencies".
   const todoPool = (board.columns.todo || []).filter(it =>
     it.assignee === 'ai' &&
     !it.claimedBy &&
@@ -173,8 +177,7 @@ function _pickNext(project) {
     it.assignee === 'ai' &&
     !it.claimedBy &&
     !it.lockedByUser &&
-    !_inFlight.has(it.id) &&
-    !_isBlocked(it, board)
+    !_inFlight.has(it.id)
   );
   const pool = todoPool.concat(inProgressPool);
   if (!pool.length) return null;
@@ -687,7 +690,12 @@ async function _pollTick() {
     for (const proj of projects) {
       if (!proj || !(proj.kanban && proj.kanban.autopilot)) continue;
       const card = _pickNext(proj);
-      if (!card) continue;
+      if (!card) {
+        // Diagnostic — explain why nothing was picked when there ARE AI
+        // cards waiting. Helps the user see what's blocking autopilot.
+        try { _logUnpickedReason(proj); } catch (_) {}
+        continue;
+      }
       try { await _claimAndRun(proj, card); }
       catch (e) { console.warn('[kanban-worker] claim+run failed:', e?.message || e); }
     }
@@ -705,6 +713,39 @@ export function pokeNow() {
   if (_pokeScheduled) return;
   _pokeScheduled = true;
   setTimeout(() => { _pokeScheduled = false; _pollTick(); }, 50);
+}
+
+// Diagnostic: when the picker returns null but the project has AI cards
+// waiting, log a one-line reason so the user can see WHY autopilot is
+// idle. Throttled to once per project per minute.
+const _unpickedLogAt = new Map();
+function _logUnpickedReason(project) {
+  const last = _unpickedLogAt.get(project.id) || 0;
+  if (Date.now() - last < 60_000) return;
+  const board = getProjectBoard(project.id);
+  if (!board) return;
+  const kanban = project.kanban || {};
+  const concurrency = Math.max(1, Number(kanban.concurrency) || 1);
+  const dailyQuota  = Math.max(0, Number(kanban.dailyAiQuota) || 0);
+  const inFlight = _aiInFlight(board);
+  const candidates = (board.columns.todo || []).concat(board.columns.in_progress || [])
+    .filter(it => it.assignee === 'ai');
+  if (!candidates.length) return;  // nothing to pick, not interesting
+  const reasons = [];
+  if (inFlight >= concurrency) reasons.push('concurrency cap (' + inFlight + '/' + concurrency + ')');
+  if (dailyQuota && _quotaUsed(project.id) >= dailyQuota) reasons.push('daily quota (' + _quotaUsed(project.id) + '/' + dailyQuota + ')');
+  const claimed   = candidates.filter(it => !!it.claimedBy).length;
+  const locked    = candidates.filter(it => it.lockedByUser).length;
+  const blocked   = candidates.filter(it => it.column === 'todo' && _isBlocked(it, board)).length;
+  const liveTrack = candidates.filter(it => it.column === 'in_progress' && _inFlight.has(it.id)).length;
+  if (claimed)   reasons.push(claimed + ' already claimed');
+  if (locked)    reasons.push(locked + ' locked by user');
+  if (blocked)   reasons.push(blocked + ' blocked by deps');
+  if (liveTrack) reasons.push(liveTrack + ' already in-flight');
+  if (!reasons.length) reasons.push('unknown — no candidate matched the picker filter');
+  console.log('[kanban-worker] ' + project.name + ': autopilot idle —', reasons.join(', '),
+    '(candidates=' + candidates.length + ')');
+  _unpickedLogAt.set(project.id, Date.now());
 }
 
 function _archiveTick() {
