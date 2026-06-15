@@ -412,6 +412,44 @@ function _summaryTextForSuggestions(msgEl) {
   return text;
 }
 
+// Guard against rendering a completely blank assistant bubble. Some turns
+// arrive as nothing but a fenced ```suggestions block (or any payload that
+// gets fully hoisted out of the body into a sibling widget / bottom bar) — in
+// that case the `.msg-body` ends up empty after extraction and the user sees
+// the header + suggestion bar with NOTHING in between. Call this AFTER all
+// widget extractions to inject a friendly placeholder when the bubble would
+// otherwise be visually empty.
+function ensureAssistantBubbleNotEmpty(msgEl) {
+  if (!msgEl) return;
+  var body = msgEl.querySelector('.msg-body');
+  if (!body) return;
+  // Anything that's already been hoisted into a visible widget counts as
+  // "not empty" — even a collapsed <details> shows a summary line.
+  var widgetSel = [
+    'details', '.cot-block', '.long-response-details', '.process-cluster',
+    '.shell-exec-block', '.wf-block', '.figma-exec-block', '.ba-block',
+    '.create-agent-card', '.patch-agent-card', '.task-create-card',
+    '.gen-ui-root', '.artifact-card', '.save-instruction-card',
+    '.shell-exec-autorun-badge', 'img', 'video', 'audio', 'svg', 'iframe'
+  ].join(',');
+  var hasWidget = !!body.querySelector(widgetSel);
+  if (hasWidget) return;
+  // Also count sibling artifact cards / gen-ui mounts inserted by the
+  // extractors right after msgEl.
+  var sib = msgEl.nextElementSibling;
+  while (sib) {
+    if (sib.matches && sib.matches('.artifact-card,.gen-ui-root,.task-create-card,.create-agent-card,.patch-agent-card,.save-instruction-card')) return;
+    sib = sib.nextElementSibling;
+  }
+  var visibleText = (body.innerText || body.textContent || '').trim();
+  if (visibleText) return;
+  // Don't replace if the body already has the friendly fallback text we set
+  // up-front in the streaming-done branch (avoid clobbering "No response.").
+  if (body.dataset && body.dataset.emptyPlaceholder === '1') return;
+  body.innerHTML = '<span style="color:var(--fau-text-muted);font-style:italic">(empty response — the model returned only a hidden block. The buttons below show suggested next steps.)</span>';
+  if (body.dataset) body.dataset.emptyPlaceholder = '1';
+}
+
 function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
   // Don't show CTAs while the conversation is mid-task: if a shell command is
   // still running / pending auto-run, or the stream is still in flight, the
@@ -2029,6 +2067,7 @@ async function streamResponse(conv) {
         if (typeof compactProcessClusters === 'function') compactProcessClusters(msgEl);
         if (typeof compactLongAssistantMessage === 'function') compactLongAssistantMessage(msgEl, buffer);
         extractAndRenderSuggestions(buffer, msgEl, true);
+        if (typeof ensureAssistantBubbleNotEmpty === 'function') ensureAssistantBubbleNotEmpty(msgEl);
         if (state._lastMsgWasDesktopTask) {
           injectOrganizerCard(msgEl, buffer);
           state._lastMsgWasDesktopTask = false;
@@ -2137,6 +2176,7 @@ async function streamResponse(conv) {
       if (typeof compactProcessClusters === 'function') compactProcessClusters(msgEl);
       if (typeof compactLongAssistantMessage === 'function') compactLongAssistantMessage(msgEl, buffer);
       if (typeof _wfMoveCreatedArtifactsToEnd === 'function') _wfMoveCreatedArtifactsToEnd(msgEl);
+      if (typeof ensureAssistantBubbleNotEmpty === 'function') ensureAssistantBubbleNotEmpty(msgEl);
       delete conv._suppressShellAutoRunOnce;
     }
   }
