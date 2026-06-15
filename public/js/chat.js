@@ -424,21 +424,23 @@ function ensureAssistantBubbleNotEmpty(msgEl) {
   var body = msgEl.querySelector('.msg-body');
   if (!body) return;
   // Anything that's already been hoisted into a visible widget counts as
-  // "not empty" — even a collapsed <details> shows a summary line.
+  // "not empty" — even a collapsed <details> shows a summary line. Scan the
+  // ENTIRE bubble (msgEl), not just .msg-body, because plan panels and some
+  // other widgets are inserted as siblings of .msg-body inside msgEl.
   var widgetSel = [
     'details', '.cot-block', '.long-response-details', '.process-cluster',
     '.shell-exec-block', '.wf-block', '.figma-exec-block', '.ba-block',
     '.create-agent-card', '.patch-agent-card', '.task-create-card',
     '.gen-ui-root', '.artifact-card', '.save-instruction-card',
-    '.shell-exec-autorun-badge', 'img', 'video', 'audio', 'svg', 'iframe'
+    '.shell-exec-autorun-badge', '.plan-panel', '.shell-empty-warning',
+    'img', 'video', 'audio', 'svg', 'iframe'
   ].join(',');
-  var hasWidget = !!body.querySelector(widgetSel);
-  if (hasWidget) return;
+  if (msgEl.querySelector(widgetSel)) return;
   // Also count sibling artifact cards / gen-ui mounts inserted by the
   // extractors right after msgEl.
   var sib = msgEl.nextElementSibling;
   while (sib) {
-    if (sib.matches && sib.matches('.artifact-card,.gen-ui-root,.task-create-card,.create-agent-card,.patch-agent-card,.save-instruction-card')) return;
+    if (sib.matches && sib.matches('.artifact-card,.gen-ui-root,.task-create-card,.create-agent-card,.patch-agent-card,.save-instruction-card,.plan-panel')) return;
     sib = sib.nextElementSibling;
   }
   var visibleText = (body.innerText || body.textContent || '').trim();
@@ -446,7 +448,12 @@ function ensureAssistantBubbleNotEmpty(msgEl) {
   // Don't replace if the body already has the friendly fallback text we set
   // up-front in the streaming-done branch (avoid clobbering "No response.").
   if (body.dataset && body.dataset.emptyPlaceholder === '1') return;
-  body.innerHTML = '<span style="color:var(--fau-text-muted);font-style:italic">(empty response — the model returned only a hidden block. The buttons below show suggested next steps.)</span>';
+  // Genuinely empty bubble with no widgets and no text — leave it visually
+  // collapsed. The suggestion bar (rendered after this) carries the next
+  // action. A wordy "(empty response — the model returned only a hidden
+  // block…)" placeholder reads like an error to the user when in practice
+  // it just means "tool output already shown above; no extra prose this turn".
+  body.style.display = 'none';
   if (body.dataset) body.dataset.emptyPlaceholder = '1';
 }
 
