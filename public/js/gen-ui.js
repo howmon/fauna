@@ -137,7 +137,19 @@ function _genUiResolve(expr, store) {
     var result = expr.eq !== undefined ? cond == expr.eq : !!cond;
     return result ? _genUiResolve(expr.$then, store) : _genUiResolve(expr.$else, store);
   }
-  return expr;
+  // { $bindState: "/path" } — keep as-is; it's a binding sentinel that
+  // form-field renderers (Input/Select/Checkbox/…) look for explicitly.
+  if (expr.$bindState !== undefined) return expr;
+  // Arrays: resolve each element.
+  if (Array.isArray(expr)) {
+    return expr.map(function(item) { return _genUiResolve(item, store); });
+  }
+  // Plain object: resolve nested fields so dynamic exprs inside
+  // actionParams / options / etc. interpolate (e.g. a Submit button's
+  // send_prompt text reading collected form state).
+  var out = {};
+  Object.keys(expr).forEach(function(k) { out[k] = _genUiResolve(expr[k], store); });
+  return out;
 }
 
 function _genUiProps(rawProps, store) {
@@ -757,7 +769,12 @@ var _genUiComponents = {
     }
     if (props.action) {
       btn.addEventListener('click', function() {
-        _genUiDispatch(props.action, props.actionParams || {}, store, null);
+        // Re-resolve actionParams from the RAW spec at click time, not the
+        // render-time snapshot. Lets a Submit button read whatever is in
+        // form state right now (Input/Checkbox/etc. with $bindState).
+        var rawParams = (el && el.props && el.props.actionParams) || {};
+        var freshParams = _genUiResolve(rawParams, store) || {};
+        _genUiDispatch(props.action, freshParams, store, null);
       });
     }
     return btn;
@@ -1007,6 +1024,176 @@ var _genUiComponents = {
       hintEl2.className = 'gui-field-hint';
       hintEl2.textContent = String(props.hint);
       wrap.appendChild(hintEl2);
+    }
+    return wrap;
+  },
+
+  Textarea: function(el, props, children, store) {
+    // Multiline text input. {label, placeholder, rows, value, error, hint}
+    var wrap = document.createElement('div');
+    wrap.className = 'gui-input-wrap';
+    if (props.label) {
+      var lbl = document.createElement('label');
+      lbl.className = 'gui-input-label';
+      lbl.textContent = props.label;
+      wrap.appendChild(lbl);
+    }
+    var ta = document.createElement('textarea');
+    ta.className = 'gui-input gui-textarea';
+    ta.placeholder = props.placeholder || '';
+    ta.rows = parseInt(props.rows, 10) || 4;
+    // Read raw spec value (not resolved props.value) to detect $bindState.
+    var rawVal = el && el.props ? el.props.value : null;
+    if (rawVal && rawVal.$bindState) {
+      var sp = rawVal.$bindState;
+      ta.value = store.get(sp) != null ? String(store.get(sp)) : '';
+      ta.addEventListener('input', function() { store.set(sp, ta.value); });
+    } else if (props.value != null) {
+      ta.value = String(props.value);
+    }
+    if (props.error) ta.classList.add('gui-field-invalid');
+    wrap.appendChild(ta);
+    if (props.error) {
+      var taErr = document.createElement('div');
+      taErr.className = 'gui-field-error';
+      taErr.textContent = String(props.error);
+      wrap.appendChild(taErr);
+    } else if (props.hint) {
+      var taHint = document.createElement('div');
+      taHint.className = 'gui-field-hint';
+      taHint.textContent = String(props.hint);
+      wrap.appendChild(taHint);
+    }
+    return wrap;
+  },
+
+  Checkbox: function(el, props, children, store) {
+    // Single boolean. {label, value:$bindState, hint}
+    var wrap = document.createElement('label');
+    wrap.className = 'gui-check-wrap';
+    var box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'gui-check';
+    var rawVal = el && el.props ? el.props.value : null;
+    if (rawVal && rawVal.$bindState) {
+      var sp = rawVal.$bindState;
+      box.checked = !!store.get(sp);
+      box.addEventListener('change', function() { store.set(sp, box.checked); });
+    } else {
+      box.checked = !!props.value;
+    }
+    wrap.appendChild(box);
+    if (props.label) {
+      var lbl = document.createElement('span');
+      lbl.className = 'gui-check-label';
+      lbl.textContent = props.label;
+      wrap.appendChild(lbl);
+    }
+    if (props.hint) {
+      var hintEl = document.createElement('div');
+      hintEl.className = 'gui-field-hint gui-check-hint';
+      hintEl.textContent = String(props.hint);
+      wrap.appendChild(hintEl);
+    }
+    return wrap;
+  },
+
+  RadioGroup: function(el, props, children, store) {
+    // Single choice from a small set. Better UX than Select for 3-5 options.
+    // {label, options:[strings | {label,value}], value:$bindState}
+    var wrap = document.createElement('div');
+    wrap.className = 'gui-radio-wrap';
+    if (props.label) {
+      var lbl = document.createElement('div');
+      lbl.className = 'gui-input-label';
+      lbl.textContent = props.label;
+      wrap.appendChild(lbl);
+    }
+    var opts = Array.isArray(props.options) ? props.options : [];
+    var rawVal = el && el.props ? el.props.value : null;
+    var bindPath = rawVal && rawVal.$bindState ? rawVal.$bindState : null;
+    // Unique name so multiple RadioGroups don't conflict.
+    var groupName = 'gui-r-' + Math.random().toString(36).slice(2, 9);
+    var current = bindPath ? store.get(bindPath) : props.value;
+    opts.forEach(function(opt) {
+      var optVal = typeof opt === 'string' ? opt : (opt.value != null ? opt.value : opt.label);
+      var optLbl = typeof opt === 'string' ? opt : (opt.label != null ? opt.label : opt.value);
+      var row = document.createElement('label');
+      row.className = 'gui-radio-row';
+      var r = document.createElement('input');
+      r.type = 'radio';
+      r.name = groupName;
+      r.value = String(optVal);
+      r.className = 'gui-radio';
+      if (current != null && String(current) === String(optVal)) r.checked = true;
+      if (bindPath) {
+        r.addEventListener('change', function() {
+          if (r.checked) store.set(bindPath, optVal);
+        });
+      }
+      row.appendChild(r);
+      var t = document.createElement('span');
+      t.className = 'gui-radio-label';
+      t.textContent = optLbl;
+      row.appendChild(t);
+      wrap.appendChild(row);
+    });
+    if (props.error) {
+      var rerr = document.createElement('div');
+      rerr.className = 'gui-field-error';
+      rerr.textContent = String(props.error);
+      wrap.appendChild(rerr);
+    } else if (props.hint) {
+      var rhint = document.createElement('div');
+      rhint.className = 'gui-field-hint';
+      rhint.textContent = String(props.hint);
+      wrap.appendChild(rhint);
+    }
+    return wrap;
+  },
+
+  Slider: function(el, props, children, store) {
+    // Numeric range input. {label, min, max, step, value:$bindState, showValue}
+    var wrap = document.createElement('div');
+    wrap.className = 'gui-input-wrap gui-slider-wrap';
+    if (props.label) {
+      var lbl = document.createElement('label');
+      lbl.className = 'gui-input-label';
+      lbl.textContent = props.label;
+      wrap.appendChild(lbl);
+    }
+    var row = document.createElement('div');
+    row.className = 'gui-slider-row';
+    var s = document.createElement('input');
+    s.type = 'range';
+    s.className = 'gui-slider';
+    s.min = props.min != null ? String(props.min) : '0';
+    s.max = props.max != null ? String(props.max) : '100';
+    s.step = props.step != null ? String(props.step) : '1';
+    var rawVal = el && el.props ? el.props.value : null;
+    var bindPath = rawVal && rawVal.$bindState ? rawVal.$bindState : null;
+    var initial = bindPath ? store.get(bindPath) : props.value;
+    if (initial != null) s.value = String(initial);
+    var readout = document.createElement('span');
+    readout.className = 'gui-slider-value';
+    readout.textContent = s.value;
+    if (bindPath) {
+      s.addEventListener('input', function() {
+        var n = parseFloat(s.value);
+        store.set(bindPath, isFinite(n) ? n : s.value);
+        readout.textContent = s.value;
+      });
+    } else {
+      s.addEventListener('input', function() { readout.textContent = s.value; });
+    }
+    row.appendChild(s);
+    if (props.showValue !== false) row.appendChild(readout);
+    wrap.appendChild(row);
+    if (props.hint) {
+      var sh = document.createElement('div');
+      sh.className = 'gui-field-hint';
+      sh.textContent = String(props.hint);
+      wrap.appendChild(sh);
     }
     return wrap;
   },

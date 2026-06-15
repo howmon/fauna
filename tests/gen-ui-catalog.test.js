@@ -50,6 +50,26 @@ describe('gen-ui catalog prompt — component coverage', () => {
     expect(GEN_UI_CATALOG_PROMPT).toMatch(/"span":\s*2/);
   });
 
+  it('documents Checkbox/RadioGroup/Slider/Textarea (Phase 8 inputs)', () => {
+    expect(GEN_UI_CATALOG_PROMPT).toMatch(/\|\s*`Checkbox`\s*\|/);
+    expect(GEN_UI_CATALOG_PROMPT).toMatch(/\|\s*`RadioGroup`\s*\|/);
+    expect(GEN_UI_CATALOG_PROMPT).toMatch(/\|\s*`Slider`\s*\|/);
+    expect(GEN_UI_CATALOG_PROMPT).toMatch(/\|\s*`Textarea`\s*\|/);
+  });
+
+  it('teaches the form-submission pattern (Phase 8)', () => {
+    // Keystone instruction must survive prompt edits.
+    expect(GEN_UI_CATALOG_PROMPT).toMatch(/Ask the user for input/i);
+    // The worked Submit example must wire send_prompt + $template into actionParams.
+    const blocks = GEN_UI_CATALOG_PROMPT.match(/```gen-ui[\s\S]*?```/g) || [];
+    const joined = blocks.join('\n');
+    expect(joined).toMatch(/"action":\s*"send_prompt"[\s\S]*?"actionParams"[\s\S]*?"\$template"/);
+    // Submit example uses at least 3 different input primitives.
+    expect(joined).toMatch(/"type":\s*"Slider"/);
+    expect(joined).toMatch(/"type":\s*"RadioGroup"/);
+    expect(joined).toMatch(/"type":\s*"Checkbox"/);
+  });
+
   it('documents $bindState on Input/Select so the agent emits live forms', () => {
     expect(GEN_UI_CATALOG_PROMPT).toMatch(/\$bindState/);
   });

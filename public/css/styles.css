@@ -4073,6 +4073,48 @@ webview {
   font-size: 11px; color: var(--fau-text-muted); margin-top: 4px;
 }
 
+/* Textarea (Phase 8) — multiline variant of .gui-input */
+.gui-textarea {
+  resize: vertical; min-height: 60px; font-family: var(--font); line-height: 1.4;
+}
+
+/* Checkbox (Phase 8) */
+.gui-check-wrap {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 4px 0; cursor: pointer; font-size: 13px; color: var(--fau-text);
+  user-select: none;
+}
+.gui-check {
+  width: 16px; height: 16px; cursor: pointer;
+  accent-color: var(--gui-accent, var(--accent));
+}
+.gui-check-label { line-height: 1.3; }
+.gui-check-hint { width: 100%; margin-left: 24px; }
+
+/* RadioGroup (Phase 8) */
+.gui-radio-wrap { display: flex; flex-direction: column; gap: 4px; }
+.gui-radio-row {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 4px 0; cursor: pointer; font-size: 13px; color: var(--fau-text);
+  user-select: none;
+}
+.gui-radio {
+  width: 16px; height: 16px; cursor: pointer;
+  accent-color: var(--gui-accent, var(--accent));
+}
+
+/* Slider (Phase 8) */
+.gui-slider-wrap { display: flex; flex-direction: column; gap: 6px; }
+.gui-slider-row { display: flex; align-items: center; gap: 10px; }
+.gui-slider {
+  flex: 1; min-width: 0; cursor: pointer;
+  accent-color: var(--gui-accent, var(--accent));
+}
+.gui-slider-value {
+  min-width: 32px; text-align: right; font-variant-numeric: tabular-nums;
+  font-size: 12px; color: var(--fau-text); font-weight: 600;
+}
+
 /* Per-spec theme hook (Phase 5) — spec.theme.font flows here.
  * Accent/surface are referenced inline via var(--gui-accent, fallback)
  * by each component. Font cascades automatically through normal inheritance. */

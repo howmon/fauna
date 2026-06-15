@@ -118,7 +118,11 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 | \`Image\` | \`src\`, \`alt\`, \`width\`, \`height\` | Image from a URL or data URI |
 | \`SVG\` | \`markup\` (raw SVG string), \`width\`, \`height\`, \`viewBox\` | Inline SVG — pass the full \`<svg>…</svg>\` as \`markup\`. Use this to render icons, logos, diagrams, or any vector graphic the AI generates. Scripts and event handlers are sanitized automatically. |
 | \`Input\` | \`label\`, \`type\` (\`"text"\`/\`"email"\`/\`"number"\`/\`"password"\`), \`placeholder\`, \`value\`, \`error\`, \`hint\` | Text field. Two-way bind to state via \`value: { "$bindState": "/path" }\` — keystrokes write back, other widgets reading the same path update live. Pass \`error:"..."\` to show red validation text under the field; \`hint:"..."\` for a muted help line (suppressed when error is set). |
-| \`Select\` | \`label\`, \`options\` (strings or \`{label,value}\`), \`value\`, \`error\`, \`hint\` | Dropdown. Same \`$bindState\`/\`error\`/\`hint\` semantics as \`Input\`. |
+| \`Textarea\` | \`label\`, \`placeholder\`, \`rows\`, \`value\`, \`error\`, \`hint\` | Multiline text. Same \`$bindState\` semantics as \`Input\`. Default \`rows:4\`. |
+| \`Select\` | \`label\`, \`options\` (strings or \`{label,value}\`), \`value\`, \`error\`, \`hint\` | Dropdown. Same \`$bindState\`/\`error\`/\`hint\` semantics as \`Input\`. Use when there are 6+ options or vertical space matters. |
+| \`RadioGroup\` | \`label\`, \`options\` (strings or \`{label,value}\`), \`value\`, \`error\`, \`hint\` | Single-choice visual list. Prefer over \`Select\` when there are 2–5 options. Same \`$bindState\`. |
+| \`Checkbox\` | \`label\`, \`value\`, \`hint\` | Single boolean. \`value: {"$bindState":"/path"}\` for two-way bind. |
+| \`Slider\` | \`label\`, \`min\`, \`max\`, \`step\`, \`value\`, \`showValue\`, \`hint\` | Numeric range. Bind \`value\` to write back as a number. |
 | \`Tabs\` | \`tabs\` ([{id,label}]), \`statePath\` | Tabbed view. Children render conditionally based on selected tab. |
 | \`Carousel\` | \`statePath\` | Cycles through child elements with prev/next controls. |
 | \`MediaPlayer\` | \`src\` (URL), \`type\` ("youtube"/"video"/"audio"/"image" — auto-detected), \`title\`, \`poster\`, \`autoplay\` | Single embedded player. YouTube URLs auto-embed. |
@@ -254,6 +258,76 @@ A recommendation list without action buttons is decoration. The user shouldn't h
     "preview":{ "type": "Card", "props": { "title": "Live preview" }, "children": ["pv-text"] },
     "pv-text":{ "type": "Heading", "props": { "level": 3,
                   "text": { "$template": "Hi \${/name} — \${/role}!" } }, "children": [] }
+  }
+}
+\`\`\`
+
+### Ask the user for input → submit back to chat — CRITICAL pattern
+
+When your reply needs the user to make choices before you can proceed (pick a length, pick a tone, choose which file, set a numeric parameter, opt in/out of sub-steps), don't ask in prose and wait for them to retype an answer. Emit a **gen-ui form** with the relevant input components and a **Submit button** whose \`send_prompt\` text uses \`$template\` to interpolate the collected state. One tap → the values come back as the next user turn.
+
+When to use this:
+- Multi-parameter requests: "Summarize this article" → ask for length (Slider) + tone (RadioGroup) + include-quotes (Checkbox).
+- Disambiguation: 3 candidate files → RadioGroup, one Submit.
+- Configuration: "Generate a logo" → text field for brand name + RadioGroup for style + color picker (Input type="color") + Slider for complexity.
+- Confirmation with options: "Delete these 5 files" → Checkbox per file + Submit.
+
+Submit-button mechanics:
+- Put all form values into \`spec.state\` with sensible defaults.
+- Each input binds via \`value: { "$bindState": "/fieldName" }\`.
+- The Submit Button uses \`action:"send_prompt"\` + \`actionParams: { text: { "$template": "..." } }\`.
+- \`actionParams\` is re-resolved at click time — so the \`$template\` reads the LATEST values the user entered, not the empty defaults.
+
+Picking the right input:
+- 2–5 mutually-exclusive options → \`RadioGroup\`.
+- 6+ options or vertical space matters → \`Select\`.
+- Single boolean → \`Checkbox\`.
+- Free text, single line → \`Input\`. Multi-line → \`Textarea\`.
+- Numeric range with a feel for "more / less" → \`Slider\`.
+
+### Example — multi-field form with Submit
+\`\`\`gen-ui
+{
+  "root": "form",
+  "state": { "length": 150, "tone": "neutral", "quotes": true, "notes": "" },
+  "elements": {
+    "form":   { "type": "Card", "props": { "title": "Summarize this article" }, "children": ["len","tone","q","notes","submit"] },
+
+    "len":    { "type": "Slider", "props": { "label": "Length (words)", "min": 50, "max": 500, "step": 25,
+                  "value": { "$bindState": "/length" } }, "children": [] },
+    "tone":   { "type": "RadioGroup", "props": { "label": "Tone",
+                  "options": ["neutral", "casual", "executive"],
+                  "value": { "$bindState": "/tone" } }, "children": [] },
+    "q":      { "type": "Checkbox", "props": { "label": "Include direct quotes",
+                  "value": { "$bindState": "/quotes" } }, "children": [] },
+    "notes":  { "type": "Textarea", "props": { "label": "Anything else?", "placeholder": "Optional emphasis or constraints...", "rows": 3,
+                  "value": { "$bindState": "/notes" } }, "children": [] },
+
+    "submit": { "type": "Button", "props": { "label": "Summarize", "variant": "primary", "icon": "ti-send",
+                  "action": "send_prompt",
+                  "actionParams": { "text": { "$template": "Summarize the article in \${/length} words, tone: \${/tone}, include quotes: \${/quotes}. Notes: \${/notes}" } } }, "children": [] }
+  }
+}
+\`\`\`
+
+### Example — disambiguation (RadioGroup → Submit)
+\`\`\`gen-ui
+{
+  "root": "card",
+  "state": { "pick": "" },
+  "elements": {
+    "card":   { "type": "Card", "props": { "title": "Which file do you mean?" }, "children": ["msg","pick","go"] },
+    "msg":    { "type": "Text", "props": { "text": "I found 3 candidates. Pick one to continue.", "muted": true }, "children": [] },
+    "pick":   { "type": "RadioGroup", "props": {
+                  "options": [
+                    { "label": "src/auth/login.ts",       "value": "src/auth/login.ts" },
+                    { "label": "src/auth/oauth/login.ts", "value": "src/auth/oauth/login.ts" },
+                    { "label": "tests/login.test.ts",     "value": "tests/login.test.ts" }
+                  ],
+                  "value": { "$bindState": "/pick" } }, "children": [] },
+    "go":     { "type": "Button", "props": { "label": "Use this file", "variant": "primary",
+                  "action": "send_prompt",
+                  "actionParams": { "text": { "$template": "Use \${/pick} for the refactor." } } }, "children": [] }
   }
 }
 \`\`\`
