@@ -751,11 +751,13 @@ function deleteConversation(id, e) {
 // Shared conversation-row markup, used by both the Quick chats list and the
 // per-project folders in the sidebar tree.
 function _convRowHtml(conv) {
+  var dateStr = _convRelativeDate(conv);
   return '<div class="conv-item' + (conv.id === state.currentId ? ' active' : '') + '" onclick="loadConversation(\'' + conv.id + '\')">' +
     (conv._streaming ? '<i class="ti ti-loader-2 conv-streaming-icon"></i>' : '') +
-    '<span class="conv-label" title="' + escHtml(conv.title) + '">' + escHtml(conv.title) + '</span>' +
+    '<span class="conv-label" title="' + escHtml(conv.title) + (dateStr ? ' \u2014 ' + escHtml(dateStr) : '') + '">' + escHtml(conv.title) + '</span>' +
+    (dateStr ? '<span class="conv-date" title="' + escHtml(dateStr) + '">' + escHtml(dateStr) + '</span>' : '') +
     '<span class="conv-actions">' +
-      '<button class="conv-rename" onclick="toggleConvAutonomous(\'' + conv.id + '\', event)" title="' + (conv.config && conv.config.autonomousMode ? 'Autonomous mode: on — click to disable' : 'Autonomous mode: off — click to enable') + '"><i class="ti ti-bolt"' + (conv.config && conv.config.autonomousMode ? ' style="color:#ffb800"' : '') + '></i></button>' +
+      '<button class="conv-rename" onclick="toggleConvAutonomous(\'' + conv.id + '\', event)" title="' + (conv.config && conv.config.autonomousMode ? 'Autonomous mode: on \u2014 click to disable' : 'Autonomous mode: off \u2014 click to enable') + '"><i class="ti ti-bolt"' + (conv.config && conv.config.autonomousMode ? ' style="color:#ffb800"' : '') + '></i></button>' +
       '<button class="conv-rename" onclick="openConvInNewWindow(\'' + conv.id + '\', event)" title="Open in new window"><i class="ti ti-external-link"></i></button>' +
       '<button class="conv-rename" onclick="renameConversation(\'' + conv.id + '\', event)" title="Rename"><i class="ti ti-pencil"></i></button>' +
       ((typeof state !== 'undefined' && state.enableConvExport)
@@ -764,6 +766,47 @@ function _convRowHtml(conv) {
       '<button class="conv-del" onclick="deleteConversation(\'' + conv.id + '\', event)"><i class="ti ti-trash"></i></button>' +
     '</span>' +
   '</div>';
+}
+
+// Pick the best timestamp we can find for a conversation. Legacy records
+// may be missing updatedAt/createdAt entirely, so fall back to the most
+// recent message's timestamp before giving up.
+function _convBestTs(conv) {
+  if (!conv) return 0;
+  if (conv.updatedAt) return conv.updatedAt;
+  if (conv.createdAt) return conv.createdAt;
+  var msgs = conv.messages || [];
+  for (var i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i] && msgs[i].timestamp) return msgs[i].timestamp;
+  }
+  return 0;
+}
+
+// Friendly "Today / Yesterday / Mon / Jun 3 / Jun 3, 2024" formatter for
+// the sidebar + All Conversations list. Older items always get a full
+// date (with year for anything not in the current year) so the user can
+// tell really-old chats apart at a glance \u2014 fixing the "older
+// conversations don't have dates" complaint.
+function _convRelativeDate(conv) {
+  var ts = _convBestTs(conv);
+  if (!ts) return '';
+  var d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  var now = new Date();
+  var startOfDay = function(x) { return new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime(); };
+  var dayMs = 86400000;
+  var dayDiff = Math.round((startOfDay(now) - startOfDay(d)) / dayMs);
+  if (dayDiff === 0) {
+    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+  if (dayDiff === 1) return 'Yesterday';
+  if (dayDiff > 1 && dayDiff < 7) {
+    return d.toLocaleDateString([], { weekday: 'short' });
+  }
+  if (d.getFullYear() === now.getFullYear()) {
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 function renderConvList() {
@@ -872,7 +915,10 @@ function renderAllConvsPage() {
     var title = c.title || 'Conversation';
     var isActive = c.id === state.currentId;
     var msgCount = (c.messages || []).length;
-    var when = c.updatedAt || c.createdAt;
+    // Use the shared best-timestamp helper so legacy conversations with no
+    // explicit updatedAt/createdAt still show a date (falling back to the
+    // last message's timestamp).
+    var dateStr = _convRelativeDate(c);
     var proj = projName(c.projectId);
     var cid = escHtml(c.id);
     return '<div class="all-conv-row' + (isActive ? ' active' : '') + '" onclick="closeAllConversations();loadConversation(\'' + cid + '\')">' +
@@ -889,7 +935,7 @@ function renderAllConvsPage() {
           : '<span class="all-proj-dim">—</span>') +
       '</span>' +
       '<span class="all-conv-col-num">' + msgCount + '</span>' +
-      '<span class="all-conv-col-date">' + (when ? new Date(when).toLocaleDateString() : '<span class="all-proj-dim">—</span>') + '</span>' +
+      '<span class="all-conv-col-date">' + (dateStr ? escHtml(dateStr) : '<span class="all-proj-dim">\u2014</span>') + '</span>' +
       '<span class="all-conv-col-actions">' +
         '<button class="proj-icon-btn" onclick="event.stopPropagation();openConvInNewWindow(\'' + cid + '\', event)" title="Open in new window"><i class="ti ti-external-link"></i></button>' +
         '<button class="proj-icon-btn" onclick="event.stopPropagation();renameConversation(\'' + cid + '\', event)" title="Rename"><i class="ti ti-pencil"></i></button>' +

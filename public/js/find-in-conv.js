@@ -61,9 +61,13 @@
       '<button type="button" class="find-btn" data-act="prev" title="Previous (Shift+Enter)" aria-label="Previous match"><i class="ti ti-chevron-up"></i></button>' +
       '<button type="button" class="find-btn" data-act="next" title="Next (Enter)" aria-label="Next match"><i class="ti ti-chevron-down"></i></button>' +
       '<button type="button" class="find-btn" data-act="close" title="Close (Esc)" aria-label="Close find"><i class="ti ti-x"></i></button>';
-    // Mount over the messages pane so it's visible from any conversation.
-    var host = document.getElementById('messages') || document.body;
-    host.appendChild(bar);
+    // Mount on <body> with position:fixed (see styles.css .find-bar) so the
+    // bar stays visible regardless of how far the messages pane is
+    // scrolled. Previously the bar lived inside #messages (a scrollable
+    // container) and would scroll off-screen the moment we navigated to a
+    // match — which also broke the perception that "find isn't focusing
+    // to the found items".
+    document.body.appendChild(bar);
 
     input    = bar.querySelector('input');
     counter  = bar.querySelector('.find-count');
@@ -201,8 +205,31 @@
     if (!cur) return;
     cur.classList.add('find-hit-active');
     counter.textContent = (currentIdx + 1) + '/' + hits.length;
-    try { cur.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_) {
-      try { cur.scrollIntoView(); } catch (__) {}
+    _scrollHitIntoView(cur);
+  }
+
+  // Centre the hit inside the #messages scroll container. Native
+  // scrollIntoView({block:'center'}) is unreliable here — the find-bar
+  // overlay (fixed) plus the conversation's own nested layout mean the
+  // browser sometimes refuses to scroll, and 'smooth' inside Electron can
+  // race with the bar's z-index. Compute the delta ourselves so the
+  // active match always lands roughly in the middle of the visible area.
+  function _scrollHitIntoView(hit) {
+    var container = document.getElementById('messages');
+    if (!container || !hit) {
+      try { hit.scrollIntoView({ block: 'center' }); } catch (_) {}
+      return;
+    }
+    try {
+      var crect = container.getBoundingClientRect();
+      var hrect = hit.getBoundingClientRect();
+      // Pixel offset of the hit relative to the container's current scroll.
+      var hitTopInContainer = (hrect.top - crect.top) + container.scrollTop;
+      var target = hitTopInContainer - (container.clientHeight / 2) + (hrect.height / 2);
+      target = Math.max(0, Math.min(target, container.scrollHeight - container.clientHeight));
+      container.scrollTo({ top: target, behavior: 'smooth' });
+    } catch (_) {
+      try { hit.scrollIntoView({ block: 'center' }); } catch (__) {}
     }
   }
 
