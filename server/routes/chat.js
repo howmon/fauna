@@ -379,6 +379,48 @@ export function registerChatRoute(app, {
         }
       } catch (_) { /* non-fatal */ }
 
+      // ── Shell-exec reminder (one-shot, only when the previous turn went wrong) ──
+      // If the last assistant message contains an empty ```bash``` / ```shell-exec```
+      // fence, OR a "paste the output" / "run this and let me know" prose pattern
+      // — i.e. the model wasted the user's turn by asking instead of acting — inject
+      // a sharp reminder so it doesn't repeat the mistake. Skipped when there is no
+      // prior assistant message yet.
+      let shellExecReminder = '';
+      try {
+        const _lastAssistant = (() => {
+          for (let i = messages.length - 1; i >= 0; i--) {
+            const m = messages[i];
+            if (m && m.role === 'assistant') return m;
+          }
+          return null;
+        })();
+        const _lastTxt = (() => {
+          const c = _lastAssistant?.content;
+          if (typeof c === 'string') return c;
+          if (Array.isArray(c)) {
+            return c.map(p => (p && p.type === 'text') ? (p.text || '') : '').join('\n');
+          }
+          return '';
+        })();
+        if (_lastTxt) {
+          const _emptyBashRe   = /```(?:bash|shell-exec|shell_exec|sh|zsh)[ \t]*\r?\n[\s\r\n]*```/i;
+          const _askToRunRe    = /\b(paste the output|let me know (?:what|when|if).{0,40}(?:output|see|happens)|run (?:this|the (?:above|following|build|typecheck|test|command)).{0,80}(?:and (?:paste|share|tell|let)|then (?:paste|share|tell|let))|run.{0,40}from the repo root.{0,40}(?:and|so I))/i;
+          const _hadEmpty = _emptyBashRe.test(_lastTxt);
+          const _hadAsk   = _askToRunRe.test(_lastTxt);
+          if (_hadEmpty || _hadAsk) {
+            shellExecReminder =
+              '\n## ⚠️ SHELL-EXEC REMINDER (your previous turn violated the rule)\n' +
+              'Your last assistant message ' +
+              (_hadEmpty ? 'contained an EMPTY ```bash``` block (no command inside). ' : '') +
+              (_hadAsk   ? 'asked the user to "run X and paste the output". ' : '') +
+              'You have the `fauna_shell_exec` tool — CALL IT yourself. ' +
+              'Do not emit prose asking the user to do shell work for you. ' +
+              'Do not emit empty fenced blocks. Do not say "I do not have the output" — that is your fault, not theirs. ' +
+              'For THIS turn: call `fauna_shell_exec` with the real command, wait for the output, then continue.';
+          }
+        }
+      } catch (_) { /* non-fatal */ }
+
       // Compute gating flags once so the array below can read them without
       // calling computeContextFlags multiple times.
       const _ctxFlags = (function () {
@@ -437,6 +479,7 @@ export function registerChatRoute(app, {
         factsCtx,
         contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '',
         activePlanCtx,
+        shellExecReminder,
         figmaFilesCtx,
       ].filter(Boolean).join('\n');
       if (fullSystem) allMessages.push({ role: 'system', content: fullSystem });

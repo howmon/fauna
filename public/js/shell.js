@@ -680,7 +680,29 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
   codeBlocks.forEach(function(code, blockIdx) {
     var pre = code.parentElement;
     var rawCode = code.textContent.trim();
-    if (!rawCode) { dbg('  ↳ skipped empty block', 'warn'); pre.remove(); return; }
+    if (!rawCode) {
+      dbg('  ↳ empty shell block — replacing with model-error notice', 'warn');
+      // Don't silently delete: an empty bash/shell-exec block almost always
+      // means the model emitted a header like "Run this..." but forgot the
+      // actual command (or worse, asked the user to "paste the output"
+      // instead of using fauna_shell_exec). Show a visible scolding so the
+      // user knows what happened and can re-prompt, and so the model sees
+      // the warning in its next turn's context.
+      var warn = document.createElement('div');
+      warn.className = 'shell-empty-warning';
+      warn.innerHTML =
+        '<div class="shell-empty-warning-header">' +
+          '<i class="ti ti-alert-triangle"></i>' +
+          '<span>The model emitted an empty shell block — no command to run.</span>' +
+        '</div>' +
+        '<div class="shell-empty-warning-body">' +
+          'Fauna should call the <code>fauna_shell_exec</code> tool itself ' +
+          'instead of asking you to run something. Try replying ' +
+          '<em>"call fauna_shell_exec yourself"</em> to nudge it.' +
+        '</div>';
+      pre.parentNode.replaceChild(warn, pre);
+      return;
+    }
 
     var shellKey = [convId || state.currentId || '', shellMsgId, blockIdx, _shellStableHash(rawCode)].join(':');
     var execId  = 'se-' + _shellStableHash(shellKey);
