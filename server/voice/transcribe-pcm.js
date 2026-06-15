@@ -15,9 +15,8 @@ import path from 'path';
 import { spawn } from 'child_process';
 
 import { writePcmAsWav } from './wav.js';
-
-const MODEL_DIR  = path.join(os.homedir(), '.config', 'fauna', 'whisper');
-const MODEL_FILE = path.join(MODEL_DIR, 'ggml-base.en.bin');
+import { getSettings } from './settings.js';
+import { isInstalled, modelPathFor, resolveActiveModel } from './whisper-models.js';
 
 let _whisperBinCache = null;
 
@@ -34,11 +33,16 @@ function locateWhisperBin(appDir) {
 }
 
 export function isWhisperReady() {
-  return fs.existsSync(MODEL_FILE);
+  // Ready if *any* installed model exists — the caller can still ask for a
+  // specific one via opts.model, but a fresh install with only 'tiny' should
+  // still be considered "ready" by the dictation orchestrator.
+  return !!resolveActiveModel();
 }
 
 export function getWhisperModelPath() {
-  return MODEL_FILE;
+  const sel = (getSettings().whisperModel || 'base.en');
+  const active = resolveActiveModel(sel);
+  return active ? modelPathFor(active) : modelPathFor('base.en');
 }
 
 /**
@@ -57,9 +61,21 @@ export async function transcribePcm(pcm, opts) {
   if (!Buffer.isBuffer(pcm) || pcm.length === 0) {
     return { ok: false, error: 'Empty PCM buffer' };
   }
-  if (!isWhisperReady()) {
-    return { ok: false, error: 'Whisper model not downloaded yet', code: 'MODEL_MISSING' };
+  // Resolve the model to use: caller override > current setting > any installed.
+  const settings = getSettings();
+  const preferred = opts?.model || settings.whisperModel || 'base.en';
+  const activeAlias = resolveActiveModel(preferred);
+  if (!activeAlias) {
+    return { ok: false, error: 'No Whisper model installed', code: 'MODEL_MISSING' };
   }
+  const modelFile = modelPathFor(activeAlias);
+  if (!isInstalled(activeAlias)) {
+    return { ok: false, error: 'Whisper model "' + activeAlias + '" not installed', code: 'MODEL_MISSING' };
+  }
+  const language = (opts?.language || settings.whisperLanguage || 'auto').toLowerCase();
+  // English-only models can't honour --language other than 'en' — force it.
+  const lang = activeAlias.endsWith('.en') ? 'en' : language;
+
   const whisperBin = locateWhisperBin(appDir);
   if (!whisperBin) {
     return { ok: false, error: 'whisper-cli binary not found', code: 'BIN_MISSING' };
@@ -78,13 +94,24 @@ export async function transcribePcm(pcm, opts) {
     const text = await new Promise((resolve, reject) => {
       let stdout = '';
       let stderr = '';
-      const wp = spawn(whisperBin, [
-        '-m', MODEL_FILE,
+      const wpArgs = [
+        '-m', modelFile,
         '-f', tmpWav,
-        '-l', 'en',
         '-otxt',
         '--no-prints',
-      ], {
+      ];
+      // Whisper-cli auto-detects language when -l is omitted or set to 'auto'.
+      if (lang && lang !== 'auto') {
+        wpArgs.push('-l', lang);
+      } else {
+        wpArgs.push('-l', 'auto');
+      }
+      // Bias the decoder toward custom vocabulary (project names, jargon).
+      // whisper-cli accepts --prompt "<text>"; we pass it as a single argv
+      // entry so spaces don't fragment it.
+      const hot = (opts?.hotWords ?? settings.whisperHotWords ?? '').trim();
+      if (hot) wpArgs.push('--prompt', hot);
+      const wp = spawn(whisperBin, wpArgs, {
         stdio: ['ignore', 'pipe', 'pipe'],
         env:   augmentedPath ? { ...process.env, PATH: augmentedPath } : process.env,
       });

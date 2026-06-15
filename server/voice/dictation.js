@@ -38,12 +38,15 @@ export class Dictation extends EventEmitter {
     this._state         = 'idle';   // idle | starting | recording | transcribing
     this._autoStopTimer = null;
     this._mutedResident = false;
+    this._sessionId     = null;     // string id for the current dictation session
+    this._sessionSeq    = 0;        // monotonic counter for sessionId generation
   }
 
   attachWindowFactory(fn) { this._windowFactory = fn; }
   attachResidentAudio(ra) { this.residentAudio = ra; }
 
   getState() { return this._state; }
+  getSessionId() { return this._sessionId; }
   isActive() { return this._state === 'recording' || this._state === 'starting'; }
 
   start() {
@@ -64,8 +67,12 @@ export class Dictation extends EventEmitter {
         this._mutedResident = true;
       }
       this._win = this._windowFactory();
+      // Assign a session id BEFORE the state event so subscribers can
+      // tag everything they emit downstream with the same id.
+      this._sessionSeq += 1;
+      this._sessionId   = 'd' + Date.now().toString(36) + '-' + this._sessionSeq;
       this._state = 'starting';
-      this.emit('state', { state: this._state });
+      this.emit('state', { state: this._state, sessionId: this._sessionId });
 
       // Safety: if user forgets to stop, finalise after MAX_SECONDS.
       this._autoStopTimer = setTimeout(() => {
@@ -88,9 +95,10 @@ export class Dictation extends EventEmitter {
 
   cancel() {
     if (this._state === 'idle') return;
+    const sid = this._sessionId;
     try { this._win?.webContents?.send?.('dictation:stop', { reason: 'cancelled' }); } catch (_) {}
     this._cleanup();
-    this.emit('state', { state: 'idle', cancelled: true });
+    this.emit('state', { state: 'idle', cancelled: true, sessionId: sid });
   }
 
   toggle() { return this._state === 'idle' ? this.start() : this.stop('toggle'); }
@@ -107,17 +115,18 @@ export class Dictation extends EventEmitter {
   _onReady() {
     if (this._state !== 'starting') return;
     this._state = 'recording';
-    this.emit('state', { state: this._state });
+    this.emit('state', { state: this._state, sessionId: this._sessionId });
   }
 
   async _onResult({ pcm, samples } = {}) {
     if (this._state === 'idle') return; // late delivery after cancel
+    const sid = this._sessionId;
     this._state = 'transcribing';
-    this.emit('state', { state: this._state });
+    this.emit('state', { state: this._state, sessionId: sid });
 
     try {
       if (!pcm || !samples || samples < MIN_SAMPLES) {
-        this.emit('transcribed', { text: '', durationMs: Math.round((samples || 0) / SAMPLE_RATE * 1000), empty: true });
+        this.emit('transcribed', { text: '', durationMs: Math.round((samples || 0) / SAMPLE_RATE * 1000), empty: true, sessionId: sid });
         return;
       }
       const pcmBuf = Buffer.from(pcm);
@@ -140,19 +149,21 @@ export class Dictation extends EventEmitter {
         durationMs: Math.round(samples / SAMPLE_RATE * 1000),
         elapsedMs:  Date.now() - t0,
         empty:      !clean,
+        sessionId:  sid,
       });
     } catch (e) {
       this.emit('error', e);
     } finally {
       this._cleanup();
-      this.emit('state', { state: 'idle' });
+      this.emit('state', { state: 'idle', sessionId: sid });
     }
   }
 
   _onError({ message } = {}) {
+    const sid = this._sessionId;
     this.emit('error', new Error('renderer: ' + (message || 'unknown')));
     this._cleanup();
-    this.emit('state', { state: 'idle' });
+    this.emit('state', { state: 'idle', sessionId: sid });
   }
 
   _cleanup() {
@@ -162,6 +173,7 @@ export class Dictation extends EventEmitter {
     }
     this._win = null;
     this._state = 'idle';
+    this._sessionId = null;
     if (this._mutedResident) {
       try { this.residentAudio?.setMuted?.(false); } catch (_) {}
       this._mutedResident = false;

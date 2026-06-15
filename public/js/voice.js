@@ -1906,7 +1906,115 @@ function _attachDictPTT() {
   window.addEventListener('blur', function() {
     if (_pttActive) _pttEndPress();
   });
+
+  // Window-level keyboard PTT: hold the configured dictation accelerator
+  // to push-to-talk; release to stop. Mirrors VS Code's
+  // `workbench.action.chat.holdToVoiceChatInChatView`. We deliberately
+  // scope to the renderer (not Electron globalShortcut) because the
+  // global API only fires on keydown — true PTT needs keyup too.
+  _attachDictKeyPTT();
 }
+
+// ── Keyboard hold-to-talk ───────────────────────────────────────────────
+var _pttKeySpec     = null;  // parsed accelerator: {key, code, shift, ctrl, alt, meta}
+var _pttKeyDown     = false; // chord currently being held
+function _parseAccel(accel) {
+  if (!accel || typeof accel !== 'string') return null;
+  var parts = accel.split('+').map(function(s) { return s.trim(); }).filter(Boolean);
+  if (!parts.length) return null;
+  var spec = { shift:false, ctrl:false, alt:false, meta:false, key:null, code:null };
+  var IS_MAC = navigator.platform && navigator.platform.toLowerCase().indexOf('mac') >= 0;
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i].toLowerCase();
+    if (p === 'shift') spec.shift = true;
+    else if (p === 'ctrl' || p === 'control') spec.ctrl = true;
+    else if (p === 'alt' || p === 'option' || p === 'opt') spec.alt = true;
+    else if (p === 'cmd' || p === 'command' || p === 'meta' || p === 'super') spec.meta = true;
+    else if (p === 'commandorcontrol' || p === 'cmdorctrl') { if (IS_MAC) spec.meta = true; else spec.ctrl = true; }
+    else {
+      // Normalise the key. Electron accel uses things like "Space", "Plus",
+      // single letters, F-keys. We compare against KeyboardEvent.key (case
+      // insensitive) and KeyboardEvent.code as a fallback for letter keys.
+      var raw = parts[i];
+      spec.key = raw.toLowerCase();
+      if (raw.length === 1 && /[a-z]/i.test(raw)) spec.code = 'Key' + raw.toUpperCase();
+    }
+  }
+  return spec.key ? spec : null;
+}
+function _accelMatchesEvent(spec, ev) {
+  if (!spec) return false;
+  if (!!ev.shiftKey !== !!spec.shift) return false;
+  if (!!ev.ctrlKey  !== !!spec.ctrl)  return false;
+  if (!!ev.altKey   !== !!spec.alt)   return false;
+  if (!!ev.metaKey  !== !!spec.meta)  return false;
+  var k = (ev.key || '').toLowerCase();
+  if (k === spec.key) return true;
+  if (spec.code && ev.code === spec.code) return true;
+  // Tolerate "space" / " ", and Electron's "Plus"/"=" naming differences.
+  if (spec.key === 'space' && k === ' ') return true;
+  return false;
+}
+function _onPttKeyDown(ev) {
+  if (!_pttKeySpec) return;
+  if (ev.repeat) return; // ignore auto-repeat — we already started
+  if (_pttKeyDown) return;
+  if (!_accelMatchesEvent(_pttKeySpec, ev)) return;
+  // Don't fight with typing in normal text fields — only swallow when the
+  // chord is non-trivial (i.e. requires at least one modifier).
+  var hasModifier = _pttKeySpec.shift || _pttKeySpec.ctrl || _pttKeySpec.alt || _pttKeySpec.meta;
+  if (!hasModifier) {
+    var tag = (ev.target && ev.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || (ev.target && ev.target.isContentEditable)) return;
+  }
+  if (!getVoiceSetting('dictPTTEnabled', true)) return;
+  ev.preventDefault();
+  _pttKeyDown = true;
+  _pttBeginPress({ button: 0 });
+}
+function _onPttKeyUp(ev) {
+  if (!_pttKeySpec) return;
+  if (!_pttKeyDown) return;
+  // Release when either the trigger key OR any required modifier is released.
+  var triggerReleased = _accelMatchesEvent(_pttKeySpec, ev) || (ev.key || '').toLowerCase() === _pttKeySpec.key;
+  var modReleased = (_pttKeySpec.shift && !ev.shiftKey)
+                 || (_pttKeySpec.ctrl  && !ev.ctrlKey)
+                 || (_pttKeySpec.alt   && !ev.altKey)
+                 || (_pttKeySpec.meta  && !ev.metaKey);
+  if (!triggerReleased && !modReleased) return;
+  _pttKeyDown = false;
+  _pttEndPress();
+}
+function _refreshPttKeySpec(accel) {
+  _pttKeySpec = _parseAccel(accel);
+}
+async function _attachDictKeyPTT() {
+  window.addEventListener('keydown', _onPttKeyDown, true);
+  window.addEventListener('keyup',   _onPttKeyUp,   true);
+  // Don't latch on if the window loses focus mid-chord.
+  window.addEventListener('blur', function() {
+    if (_pttKeyDown) { _pttKeyDown = false; _pttEndPress(); }
+  });
+  try {
+    var r = await fetch('/api/voice-settings');
+    var j = await r.json();
+    if (j && j.ok && j.settings) _refreshPttKeySpec(j.settings.dictationAccel);
+  } catch (_) {
+    // Fall back to platform default so the feature still works offline.
+    var IS_MAC = navigator.platform && navigator.platform.toLowerCase().indexOf('mac') >= 0;
+    _refreshPttKeySpec(IS_MAC ? 'Cmd+Alt+D' : 'Ctrl+Alt+D');
+  }
+}
+// Expose so the settings page can update the chord live after a save.
+window._refreshPttKeySpec = _refreshPttKeySpec;
+try {
+  var _pttBC = new BroadcastChannel('fauna-voice');
+  _pttBC.onmessage = function(ev) {
+    if (ev && ev.data && ev.data.type === 'dictationAccel') {
+      _refreshPttKeySpec(ev.data.value);
+    }
+  };
+} catch (_) { /* BroadcastChannel may not exist in older Electron */ }
 
 if (typeof document !== 'undefined') {
   if (document.readyState === 'loading') {

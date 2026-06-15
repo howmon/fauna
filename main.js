@@ -1064,16 +1064,16 @@ function _initDictation() {
     ipcMain.on(ch, (_event, payload) => dictation.handleIpc(ch, payload));
   }
 
-  dictation.on('state', ({ state }) => {
-    console.log('[dictation] state =', state);
+  dictation.on('state', ({ state, sessionId }) => {
+    console.log('[dictation]', sessionId || '-', 'state =', state);
     refreshTray();
   });
   dictation.on('error', (e) => {
     console.warn('[dictation] error:', e.message);
     try { new Notification({ title: 'Dictation error', body: e.message }).show(); } catch (_) {}
   });
-  dictation.on('transcribed', ({ text, empty, durationMs, elapsedMs }) => {
-    console.log('[dictation] transcribed', `(${durationMs}ms rec / ${elapsedMs}ms whisper)`, JSON.stringify(text));
+  dictation.on('transcribed', ({ text, empty, durationMs, elapsedMs, sessionId }) => {
+    console.log('[dictation]', sessionId || '-', 'transcribed', `(${durationMs}ms rec / ${elapsedMs}ms whisper)`, JSON.stringify(text));
     if (empty || !text) {
       try { new Notification({ title: 'Dictation', body: 'Nothing transcribed.' }).show(); } catch (_) {}
       return;

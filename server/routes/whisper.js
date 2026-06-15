@@ -9,6 +9,17 @@ import path from 'path';
 import { spawn } from 'child_process';
 import { createRequire } from 'module';
 import { faunaTmpFile } from '../lib/fauna-tmp.js';
+import { getSettings } from '../voice/settings.js';
+import {
+  WHISPER_MODELS,
+  MODEL_INFO,
+  isWhisperAlias,
+  modelPathFor,
+  downloadUrlFor,
+  isInstalled as isModelInstalled,
+  resolveActiveModel,
+  listModels,
+} from '../voice/whisper-models.js';
 
 const _require = createRequire(import.meta.url);
 
@@ -18,18 +29,38 @@ export function registerWhisperRoutes(app, {
   augmentedPath,
   appDir,
 }) {
-  // Model lives at ~/.config/fauna/whisper/ggml-base.en.bin (downloaded on first use)
-  const WHISPER_MODEL_DIR  = path.join(faunaConfigDir, 'whisper');
-  const WHISPER_MODEL_FILE = path.join(WHISPER_MODEL_DIR, 'ggml-base.en.bin');
-  const WHISPER_MODEL_URL  = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin';
+  // Models live at ~/.config/fauna/whisper/ggml-<alias>.bin. The directory is
+  // shared with server/voice/whisper-models.js; we just need to ensure it
+  // exists before any download attempt.
+  const WHISPER_MODEL_DIR = path.join(faunaConfigDir, 'whisper');
 
-  app.get('/api/whisper-model-status', (_req, res) => {
-    const ready = fs.existsSync(WHISPER_MODEL_FILE);
-    const size  = ready ? (() => { try { return fs.statSync(WHISPER_MODEL_FILE).size; } catch (_) { return 0; } })() : 0;
-    res.json({ ready, modelPath: WHISPER_MODEL_FILE, size });
+  function _pickSelectedAlias(reqAlias) {
+    // Explicit query param takes priority, fall back to user setting, then default.
+    if (isWhisperAlias(reqAlias)) return reqAlias;
+    const s = getSettings().whisperModel;
+    if (isWhisperAlias(s)) return s;
+    return 'base.en';
+  }
+
+  app.get('/api/whisper-model-status', (req, res) => {
+    const requested = typeof req.query?.model === 'string' ? req.query.model : null;
+    const alias    = _pickSelectedAlias(requested);
+    const filePath = modelPathFor(alias);
+    const ready    = isModelInstalled(alias);
+    const size     = ready ? (() => { try { return fs.statSync(filePath).size; } catch (_) { return 0; } })() : 0;
+    res.json({
+      ready,
+      model:     alias,
+      modelPath: filePath,
+      size,
+      // Full catalogue so the picker can render install state without an extra round trip.
+      models:    listModels(),
+      active:    resolveActiveModel(alias),
+    });
   });
 
-  // SSE endpoint — download model and stream progress
+  // SSE endpoint — download a Whisper model and stream progress. Accepts
+  // ?model=<alias>; falls back to the currently-selected one.
   app.get('/api/whisper-model-download', (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -38,16 +69,25 @@ export function registerWhisperRoutes(app, {
 
     function send(obj) { res.write(`data: ${JSON.stringify(obj)}\n\n`); }
 
-    if (fs.existsSync(WHISPER_MODEL_FILE)) {
-      send({ pct: 100, ready: true });
+    const requested = typeof req.query?.model === 'string' ? req.query.model : null;
+    const alias     = _pickSelectedAlias(requested);
+    if (!isWhisperAlias(alias)) {
+      send({ error: 'Unknown model alias: ' + (requested || '(none)') });
+      return res.end();
+    }
+    const modelFile = modelPathFor(alias);
+    const modelUrl  = downloadUrlFor(alias);
+
+    if (fs.existsSync(modelFile)) {
+      send({ pct: 100, ready: true, model: alias });
       return res.end();
     }
 
     fs.mkdirSync(WHISPER_MODEL_DIR, { recursive: true });
-    const tmpFile = WHISPER_MODEL_FILE + '.tmp';
+    const tmpFile = modelFile + '.tmp';
 
     // Use curl for download — reliable progress on macOS
-    const dl = spawn('curl', ['-L', '--progress-bar', '-o', tmpFile, WHISPER_MODEL_URL], {
+    const dl = spawn('curl', ['-L', '--progress-bar', '-o', tmpFile, modelUrl], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -57,17 +97,17 @@ export function registerWhisperRoutes(app, {
       const m = str.match(/(\d+(?:\.\d+)?)%/);
       if (m) {
         const pct = Math.round(parseFloat(m[1]));
-        if (pct !== lastPct) { lastPct = pct; send({ pct }); }
+        if (pct !== lastPct) { lastPct = pct; send({ pct, model: alias }); }
       }
     });
 
     dl.on('close', code => {
       if (code === 0 && fs.existsSync(tmpFile)) {
-        fs.renameSync(tmpFile, WHISPER_MODEL_FILE);
-        send({ pct: 100, ready: true });
+        fs.renameSync(tmpFile, modelFile);
+        send({ pct: 100, ready: true, model: alias });
       } else {
         try { fs.unlinkSync(tmpFile); } catch (_) {}
-        send({ error: 'Download failed (exit ' + code + ')' });
+        send({ error: 'Download failed (exit ' + code + ')', model: alias });
       }
       res.end();
     });
@@ -75,12 +115,33 @@ export function registerWhisperRoutes(app, {
     req.on('close', () => { try { dl.kill(); } catch (_) {} });
   });
 
+  // DELETE a downloaded Whisper model. Returns the updated catalogue.
+  app.post('/api/whisper-model-delete', express.json({ limit: '1kb' }), (req, res) => {
+    const alias = String((req.body && req.body.model) || '');
+    if (!isWhisperAlias(alias)) return res.status(400).json({ ok: false, error: 'unknown model' });
+    const filePath = modelPathFor(alias);
+    try {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return res.json({ ok: true, models: listModels() });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   // POST /api/transcribe — audio blob body → { ok, text }
   // Uses nodejs-whisper (ships whisper.cpp binary in node_modules)
   app.post('/api/transcribe', express.raw({ type: ['audio/*', 'application/octet-stream'], limit: '25mb' }), async (req, res) => {
-    if (!fs.existsSync(WHISPER_MODEL_FILE)) {
-      return res.status(503).json({ ok: false, error: 'Whisper model not downloaded yet' });
+    // Pick the active model. Caller may pin one via ?model= for power-user
+    // testing; otherwise honour the user setting and degrade gracefully if
+    // it's not installed yet.
+    const requested  = typeof req.query?.model === 'string' ? req.query.model : null;
+    const settings   = getSettings();
+    const desired    = _pickSelectedAlias(requested);
+    const activeAlias = resolveActiveModel(desired);
+    if (!activeAlias) {
+      return res.status(503).json({ ok: false, error: 'No Whisper model installed' });
     }
+    const WHISPER_MODEL_FILE = modelPathFor(activeAlias);
     if (!req.body || req.body.length === 0) {
       return res.status(400).json({ ok: false, error: 'Empty audio body' });
     }
@@ -216,13 +277,21 @@ export function registerWhisperRoutes(app, {
       const text = await new Promise((resolve, reject) => {
         let stdout = '';
         let stderr = '';
-        const wp = spawn(whisperBin, [
+        // English-only Whisper models reject any -l other than 'en'. Force.
+        const userLang = (settings.whisperLanguage || 'auto').toLowerCase();
+        const lang     = activeAlias.endsWith('.en') ? 'en'
+                       : (userLang && userLang !== 'auto' ? userLang : 'auto');
+        const wpArgs = [
           '-m', WHISPER_MODEL_FILE,
           '-f', tmpWav,
-          '-l', 'en',
+          '-l', lang,
           '-otxt',
           '--no-prints',
-        ], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PATH: augmentedPath } });
+        ];
+        // Inject custom-vocabulary initial prompt (project names, jargon).
+        const hot = (settings.whisperHotWords || '').trim();
+        if (hot) { wpArgs.push('--prompt', hot); }
+        const wp = spawn(whisperBin, wpArgs, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PATH: augmentedPath } });
         wp.stdout.on('data', d => { stdout += d.toString(); });
         wp.stderr.on('data', d => { stderr += d.toString(); });
         wp.on('close', code => {

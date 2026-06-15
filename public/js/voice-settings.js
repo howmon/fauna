@@ -60,6 +60,13 @@ function fillForm(s) {
   $('ttsRate').value            = s.ttsRate ?? '';
   $('dictationAccel').value    = s.dictationAccel || '';
   $('dictationPasteOnFinish').checked = !!s.dictationPasteOnFinish;
+  $('whisperLanguage').value    = s.whisperLanguage || 'auto';
+  $('whisperHotWords').value    = s.whisperHotWords || '';
+  // Whisper model dropdown gets populated by refreshWhisperModels(); we just
+  // remember the desired alias so refreshWhisperModels can select it once
+  // the model list arrives.
+  _pendingWhisperModel = s.whisperModel || 'base.en';
+  refreshWhisperModels();
   $('redactEmail').checked      = !!s.redactEmail;
   $('redactPhone').checked      = !!s.redactPhone;
   $('redactCreditCard').checked = !!s.redactCreditCard;
@@ -99,6 +106,9 @@ function readForm() {
     ttsRate:          rate === '' ? null : Number(rate),
     dictationAccel:   $('dictationAccel').value.trim(),
     dictationPasteOnFinish: $('dictationPasteOnFinish').checked,
+    whisperModel:     $('whisperModel').value || undefined,
+    whisperLanguage:  $('whisperLanguage').value || undefined,
+    whisperHotWords:  $('whisperHotWords').value,
     redactEmail:      $('redactEmail').checked,
     redactPhone:      $('redactPhone').checked,
     redactCreditCard: $('redactCreditCard').checked,
@@ -128,8 +138,20 @@ async function save() {
       body:    JSON.stringify(readForm()),
     });
     const j = await r.json();
-    if (j.ok) { fillForm(j.settings); setStatus('Saved ✓'); }
-    else      { setStatus('Save failed: ' + (j.error || 'unknown'), false); }
+    if (j.ok) {
+      fillForm(j.settings);
+      setStatus('Saved ✓');
+      // If the main window is open, push the new accelerator into its PTT
+      // listener without a reload. (Same-origin → window.opener may be null,
+      // so we BroadcastChannel it.)
+      try {
+        const bc = new BroadcastChannel('fauna-voice');
+        bc.postMessage({ type: 'dictationAccel', value: j.settings.dictationAccel });
+        bc.close();
+      } catch (_) {}
+    } else {
+      setStatus('Save failed: ' + (j.error || 'unknown'), false);
+    }
   } catch (e) {
     setStatus('Save failed: ' + e.message, false);
   } finally {
@@ -171,5 +193,158 @@ async function testVoice() {
 $('save').addEventListener('click', save);
 $('reset').addEventListener('click', reset);
 $('testVoice').addEventListener('click', testVoice);
+
+// ── Whisper model picker ──────────────────────────────────────────────
+// Renders the list of available Whisper.cpp models from
+// GET /api/whisper-model-status and lets the user download / delete each.
+let _pendingWhisperModel = null;
+
+function _fmtBytes(n) {
+  if (!n) return '—';
+  if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB';
+  if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+async function refreshWhisperModels() {
+  const dropdown = $('whisperModel');
+  const list     = $('whisperModelList');
+  const hint     = $('whisperModelHint');
+  if (!dropdown || !list) return;
+  let data;
+  try {
+    const r = await fetch('/api/whisper-model-status');
+    data = await r.json();
+  } catch (e) {
+    list.innerHTML = '<p class="hint" style="color:var(--err)">Failed to load model list: ' + e.message + '</p>';
+    return;
+  }
+  const models = Array.isArray(data.models) ? data.models : [];
+
+  // Repopulate the <select>. We only let the user pick installed models
+  // (selecting an uninstalled one would silently fall back to whatever's
+  // already on disk — confusing). Uninstalled ones go in an optgroup with
+  // a hint to download them below.
+  while (dropdown.options.length) dropdown.remove(0);
+  const installed = models.filter(m => m.installed);
+  const missing   = models.filter(m => !m.installed);
+  for (const m of installed) {
+    const opt = document.createElement('option');
+    opt.value = m.alias;
+    opt.textContent = m.label + (m.sizeBytes ? '  —  ' + _fmtBytes(m.sizeBytes) : '');
+    dropdown.appendChild(opt);
+  }
+  if (!installed.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '(no models installed — download one below)';
+    dropdown.appendChild(opt);
+  }
+
+  // Try to honour the saved selection if it's installed.
+  const wantedRaw = _pendingWhisperModel || data.model;
+  const wanted = wantedRaw && installed.some(m => m.alias === wantedRaw) ? wantedRaw
+               : (installed[0] && installed[0].alias) || '';
+  if (wanted) dropdown.value = wanted;
+  _pendingWhisperModel = null;
+
+  if (hint) {
+    const sel = installed.find(m => m.alias === dropdown.value);
+    hint.textContent = sel ? (sel.speed + ' — ' + _fmtBytes(sel.sizeBytes)) : '';
+  }
+
+  // Render install/delete rows for the full catalogue.
+  list.innerHTML = '';
+  const header = document.createElement('p');
+  header.className = 'hint';
+  header.style.marginBottom = '8px';
+  header.textContent = 'Available models:';
+  list.appendChild(header);
+
+  for (const m of models) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid var(--border)';
+    const label = document.createElement('div');
+    label.style.cssText = 'flex:1;min-width:0';
+    label.innerHTML = '<div><strong>' + m.label + '</strong></div>' +
+      '<div class="hint">~' + m.sizeMB + ' MB — ' + m.speed +
+      (m.installed ? ' — <span style="color:var(--ok)">installed (' + _fmtBytes(m.sizeBytes) + ')</span>' : '') +
+      '</div>';
+    row.appendChild(label);
+    if (m.installed) {
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'ghost';
+      del.textContent = 'Delete';
+      del.addEventListener('click', () => deleteWhisperModel(m.alias));
+      row.appendChild(del);
+    } else {
+      const dl = document.createElement('button');
+      dl.type = 'button';
+      dl.textContent = 'Download';
+      dl.addEventListener('click', () => downloadWhisperModel(m.alias, dl));
+      row.appendChild(dl);
+    }
+    list.appendChild(row);
+  }
+}
+
+async function deleteWhisperModel(alias) {
+  if (!confirm('Delete the ' + alias + ' model file?')) return;
+  try {
+    const r = await fetch('/api/whisper-model-delete', {
+      method:  'POST',
+      headers: { 'content-type': 'application/json' },
+      body:    JSON.stringify({ model: alias }),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      setStatus('Deleted ' + alias);
+      refreshWhisperModels();
+    } else {
+      setStatus('Delete failed: ' + (j.error || 'unknown'), false);
+    }
+  } catch (e) {
+    setStatus('Delete failed: ' + e.message, false);
+  }
+}
+
+function downloadWhisperModel(alias, btn) {
+  const origLabel = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '0%'; }
+  // SSE — stream curl progress events.
+  const es = new EventSource('/api/whisper-model-download?model=' + encodeURIComponent(alias));
+  es.onmessage = (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      if (data.error) {
+        if (btn) { btn.disabled = false; btn.textContent = origLabel || 'Download'; }
+        setStatus('Download failed: ' + data.error, false);
+        es.close();
+        return;
+      }
+      if (typeof data.pct === 'number' && btn) btn.textContent = data.pct + '%';
+      if (data.ready) {
+        es.close();
+        if (btn) { btn.disabled = false; btn.textContent = 'Installed'; }
+        setStatus(alias + ' installed ✓');
+        refreshWhisperModels();
+      }
+    } catch (_) { /* ignore parse errors */ }
+  };
+  es.onerror = () => {
+    es.close();
+    if (btn) { btn.disabled = false; btn.textContent = origLabel || 'Download'; }
+    setStatus('Download stream interrupted', false);
+  };
+}
+
+// Update hint when user changes selection
+$('whisperModel').addEventListener('change', () => {
+  const hint = $('whisperModelHint');
+  if (!hint) return;
+  // We don't keep the full catalogue around, so just clear; refresh on save.
+  hint.textContent = '';
+});
 
 load();
