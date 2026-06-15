@@ -183,6 +183,39 @@ function _genUiDispatch(action, params, store, rootEl) {
       if (url && /^https?:\/\//.test(url)) window.open(url, '_blank', 'noopener');
       break;
     }
+    case 'prefill_chat': {
+      // Drop a suggested prompt into the composer without sending.
+      // Lets a gen-ui Button seed a follow-up the user can edit before hitting send.
+      var inputEl = document.getElementById('msg-input');
+      if (inputEl && params && typeof params.text === 'string') {
+        inputEl.value = params.text;
+        // Fire 'input' so autosize / send-button-enable listeners react.
+        try { inputEl.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+        try { inputEl.focus(); } catch (_) {}
+      }
+      break;
+    }
+    case 'send_prompt': {
+      // Prefill the composer AND auto-submit. One-tap follow-up.
+      var inputEl2 = document.getElementById('msg-input');
+      if (inputEl2 && params && typeof params.text === 'string') {
+        inputEl2.value = params.text;
+        try { inputEl2.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+        if (typeof sendMessage === 'function') {
+          // Defer so the input event finishes before send pulls .value.
+          setTimeout(function() { try { sendMessage(); } catch (_) {} }, 0);
+        }
+      }
+      break;
+    }
+    case 'open_artifact': {
+      // Open an existing artifact in the right pane by id.
+      var aid = params && params.id;
+      if (aid && typeof openArtifact === 'function') {
+        try { openArtifact(aid); } catch (_) {}
+      }
+      break;
+    }
     default: break;
   }
 }
@@ -608,6 +641,25 @@ var _genUiComponents = {
     return span;
   },
 
+  Icon: function(el, props, children, store) {
+    // Tabler glyph wrapper. `name` is the suffix after `ti-`
+    // (e.g. {name:"calendar"} → <i class="ti ti-calendar">).
+    // Strips any `ti-` prefix the model might have included.
+    var raw = String(props.name || props.icon || '').trim().replace(/^ti-/, '');
+    // Whitelist allowed chars to keep CSS class injection impossible.
+    var safe = raw.replace(/[^a-z0-9-]/gi, '');
+    var i = document.createElement('i');
+    i.className = 'ti ti-' + (safe || 'point');
+    i.classList.add('gui-icon');
+    if (props.size != null) {
+      var sz = typeof props.size === 'number' ? props.size + 'px' : String(props.size);
+      i.style.fontSize = sz;
+    }
+    if (props.color) i.style.color = String(props.color);
+    if (props.title) i.title = String(props.title);
+    return i;
+  },
+
   Stat: function(el, props, children, store) {
     var div = document.createElement('div');
     div.className = 'gui-stat';
@@ -628,6 +680,34 @@ var _genUiComponents = {
       div.innerHTML += '<div class="gui-stat-trend ' + (up ? 'up' : 'down') + '">' +
         '<i class="ti ti-trending-' + (up ? 'up' : 'down') + '"></i> ' +
         escHtml(String(Math.abs(props.trend))) + '%</div>';
+    }
+    // Optional sparkline: props.series = [n,n,n,...] — inline SVG path under the value.
+    // Width auto-fills card; height fixed at 32px. Trend color drives stroke.
+    if (Array.isArray(props.series) && props.series.length > 1) {
+      var nums = props.series.map(function(n) { return Number(n); })
+                              .filter(function(n) { return isFinite(n); });
+      if (nums.length > 1) {
+        var w = 140, h = 32, pad = 2;
+        var min = Math.min.apply(null, nums);
+        var max = Math.max.apply(null, nums);
+        var range = max - min || 1;
+        var step = (w - pad * 2) / (nums.length - 1);
+        var pts = nums.map(function(v, i) {
+          var x = pad + i * step;
+          var y = pad + (h - pad * 2) * (1 - (v - min) / range);
+          return x.toFixed(1) + ',' + y.toFixed(1);
+        }).join(' ');
+        var dirUp = nums[nums.length - 1] >= nums[0];
+        var stroke = props.trend != null
+          ? (props.trend > 0 ? 'var(--success)' : 'var(--error)')
+          : (dirUp ? 'var(--success)' : 'var(--error)');
+        div.insertAdjacentHTML(
+          'beforeend',
+          '<svg class="gui-stat-spark" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" aria-hidden="true">' +
+            '<polyline fill="none" stroke="' + stroke + '" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" points="' + pts + '"/>' +
+          '</svg>'
+        );
+      }
     }
     return div;
   },
@@ -862,7 +942,19 @@ var _genUiComponents = {
     } else if (props.value != null) {
       sel.value = String(props.value);
     }
+    if (props.error) sel.classList.add('gui-field-invalid');
     wrap.appendChild(sel);
+    if (props.error) {
+      var errEl = document.createElement('div');
+      errEl.className = 'gui-field-error';
+      errEl.textContent = String(props.error);
+      wrap.appendChild(errEl);
+    } else if (props.hint) {
+      var hintEl = document.createElement('div');
+      hintEl.className = 'gui-field-hint';
+      hintEl.textContent = String(props.hint);
+      wrap.appendChild(hintEl);
+    }
     return wrap;
   },
 
@@ -886,7 +978,88 @@ var _genUiComponents = {
     } else if (props.value != null) {
       inp.value = String(props.value);
     }
+    if (props.error) inp.classList.add('gui-field-invalid');
     wrap.appendChild(inp);
+    if (props.error) {
+      var errEl2 = document.createElement('div');
+      errEl2.className = 'gui-field-error';
+      errEl2.textContent = String(props.error);
+      wrap.appendChild(errEl2);
+    } else if (props.hint) {
+      var hintEl2 = document.createElement('div');
+      hintEl2.className = 'gui-field-hint';
+      hintEl2.textContent = String(props.hint);
+      wrap.appendChild(hintEl2);
+    }
+    return wrap;
+  },
+
+  Rating: function(el, props, children, store) {
+    // Star rating display. {value, max=5, count?}
+    // Half-star not supported — rounds to nearest int for visual.
+    var max = Math.max(1, parseInt(props.max, 10) || 5);
+    var raw = parseFloat(props.value);
+    var val = isFinite(raw) ? Math.max(0, Math.min(max, raw)) : 0;
+    var filled = Math.round(val);
+    var wrap = document.createElement('div');
+    wrap.className = 'gui-rating';
+    var stars = document.createElement('span');
+    stars.className = 'gui-rating-stars';
+    for (var i = 0; i < max; i++) {
+      var star = document.createElement('i');
+      star.className = 'ti ' + (i < filled ? 'ti-star-filled gui-rating-on' : 'ti-star gui-rating-off');
+      stars.appendChild(star);
+    }
+    wrap.appendChild(stars);
+    if (props.showValue !== false && isFinite(raw)) {
+      var num = document.createElement('span');
+      num.className = 'gui-rating-value';
+      num.textContent = (raw % 1 === 0 ? raw.toFixed(1) : String(raw));
+      wrap.appendChild(num);
+    }
+    if (props.count != null) {
+      var c = document.createElement('span');
+      c.className = 'gui-rating-count';
+      var n = parseFloat(props.count);
+      var label = isFinite(n) ? '(' + n.toLocaleString() + ')' : '(' + String(props.count) + ')';
+      c.textContent = label;
+      wrap.appendChild(c);
+    }
+    return wrap;
+  },
+
+  Stepper: function(el, props, children, store) {
+    // Discrete progress indicator. props.steps = [{label, done?, current?}, ...]
+    // Use for shipping status, onboarding flows, multi-step wizards.
+    var steps = Array.isArray(props.steps) ? props.steps : [];
+    var wrap = document.createElement('div');
+    wrap.className = 'gui-stepper';
+    steps.forEach(function(s, i) {
+      var item = document.createElement('div');
+      item.className = 'gui-step';
+      if (s && s.done) item.classList.add('gui-step-done');
+      if (s && s.current) item.classList.add('gui-step-current');
+      var dot = document.createElement('span');
+      dot.className = 'gui-step-dot';
+      // Show check inside done dots, number inside others.
+      if (s && s.done) {
+        dot.innerHTML = '<i class="ti ti-check"></i>';
+      } else {
+        dot.textContent = String(i + 1);
+      }
+      item.appendChild(dot);
+      var lbl = document.createElement('span');
+      lbl.className = 'gui-step-label';
+      lbl.textContent = (s && s.label) || '';
+      item.appendChild(lbl);
+      wrap.appendChild(item);
+      if (i < steps.length - 1) {
+        var bar = document.createElement('span');
+        bar.className = 'gui-step-bar';
+        if (s && s.done) bar.classList.add('gui-step-bar-done');
+        wrap.appendChild(bar);
+      }
+    });
     return wrap;
   },
 
@@ -1280,6 +1453,19 @@ function _genUiRenderElement(id, elements, store, depth) {
 // Renders a gen-ui spec into a container element
 function renderGenUI(spec, container) {
   var store = _genUiCreateState(spec.state || {});
+  // Per-spec theme override: spec.theme = { accent?, font?, surface? }
+  // Maps to CSS custom props on the container so child .gui-* classes can
+  // pick them up via var(--gui-accent, fallback). Only safe values reach
+  // CSS — colors are whitelisted to css color tokens, font names to a
+  // conservative charset.
+  var theme = spec.theme && typeof spec.theme === 'object' ? spec.theme : null;
+  if (theme) {
+    var safeColor = /^(#[0-9a-f]{3,8}|rgb\(|rgba\(|hsl\(|hsla\(|var\(--[a-z0-9-]+\)|[a-z]+)$/i;
+    var safeFont = /^[a-z0-9 ,_'"-]{1,80}$/i;
+    if (theme.accent  && safeColor.test(String(theme.accent)))  container.style.setProperty('--gui-accent',  String(theme.accent));
+    if (theme.surface && safeColor.test(String(theme.surface))) container.style.setProperty('--gui-surface', String(theme.surface));
+    if (theme.font    && safeFont.test(String(theme.font)))     container.style.setProperty('--gui-font',    String(theme.font));
+  }
   try {
     var root = _genUiRenderElement(spec.root, spec.elements || {}, store, 0);
     container.appendChild(root);

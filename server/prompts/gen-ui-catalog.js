@@ -103,7 +103,10 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 | \`Heading\` | \`text\`, \`level\` (1–6) | Heading element |
 | \`Text\` | \`text\`, \`muted\`, \`strong\`, \`small\`, \`code\` | Paragraph |
 | \`Badge\` | \`label\`, \`variant\` ("default"/"success"/"warning"/"error"/"info") | Colored badge |
-| \`Stat\` | \`value\`, \`label\`, \`format\` ("currency"/"percent"/"number"), \`trend\` | Metric display |
+| \`Icon\` | \`name\` (Tabler glyph suffix, e.g. \`"calendar"\`, \`"map-pin"\`, \`"send"\`), \`size\` (px), \`color\` | Inline Tabler icon. ~3000 glyphs at https://tabler.io/icons. Use for visual labels in cards/buttons. |
+| \`Rating\` | \`value\` (number), \`max\` (default 5), \`count\` (review count, optional), \`showValue\` (default true) | Star rating row (e.g. \`{value:4.5, count:128}\` → ★★★★★ 4.5 (128)). Use for products, restaurants, movies, books, anything ranked. |
+| \`Stepper\` | \`steps\` ([{label, done?, current?}, ...]) | Discrete horizontal progress row. Use for shipping status ("Order placed → Shipped → Out for delivery → Delivered"), onboarding flows, multi-step wizards. |
+| \`Stat\` | \`value\`, \`label\`, \`format\` ("currency"/"percent"/"number"), \`trend\`, \`series\` ([n,n,n] optional) | Metric display. Pass \`series:[12,18,22,19,28]\` to add an inline sparkline under the value. |
 | \`Alert\` | \`title\`, \`message\`, \`variant\` ("info"/"success"/"warning"/"error") | Callout banner |
 | \`Button\` | \`label\`, \`variant\` ("default"/"primary"/"danger"), \`action\`, \`actionParams\`, \`icon\`, \`disabled\` | Clickable button |
 | \`Divider\` | \`label\` (optional) | Horizontal rule |
@@ -114,6 +117,8 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 | \`Code\` | \`code\`, \`language\` | Syntax-highlighted snippet |
 | \`Image\` | \`src\`, \`alt\`, \`width\`, \`height\` | Image from a URL or data URI |
 | \`SVG\` | \`markup\` (raw SVG string), \`width\`, \`height\`, \`viewBox\` | Inline SVG — pass the full \`<svg>…</svg>\` as \`markup\`. Use this to render icons, logos, diagrams, or any vector graphic the AI generates. Scripts and event handlers are sanitized automatically. |
+| \`Input\` | \`label\`, \`type\` (\`"text"\`/\`"email"\`/\`"number"\`/\`"password"\`), \`placeholder\`, \`value\`, \`error\`, \`hint\` | Text field. Two-way bind to state via \`value: { "$bindState": "/path" }\` — keystrokes write back, other widgets reading the same path update live. Pass \`error:"..."\` to show red validation text under the field; \`hint:"..."\` for a muted help line (suppressed when error is set). |
+| \`Select\` | \`label\`, \`options\` (strings or \`{label,value}\`), \`value\`, \`error\`, \`hint\` | Dropdown. Same \`$bindState\`/\`error\`/\`hint\` semantics as \`Input\`. |
 | \`Tabs\` | \`tabs\` ([{id,label}]), \`statePath\` | Tabbed view. Children render conditionally based on selected tab. |
 | \`Carousel\` | \`statePath\` | Cycles through child elements with prev/next controls. |
 | \`MediaPlayer\` | \`src\` (URL), \`type\` ("youtube"/"video"/"audio"/"image" — auto-detected), \`title\`, \`poster\`, \`autoplay\` | Single embedded player. YouTube URLs auto-embed. |
@@ -165,11 +170,30 @@ Do NOT combine with \`fauna_video_create\` for the same topic. Do NOT also call 
 \`\`\`
 
 ### Actions (Button.action)
-\`setState\` · \`toggle_visible\` · \`copy_text\`
+\`setState\` · \`toggle_visible\` · \`copy_text\` · \`open_url\` · \`prefill_chat\` · \`send_prompt\` · \`open_artifact\`
+
+### Action reference
+- \`setState\` — \`actionParams: { statePath:"/path", value: any }\` — write a value into the spec's state. Other elements bound via \`{$state:"/path"}\` re-render.
+- \`toggle_visible\` — \`actionParams: { statePath:"/path" }\` — flip a boolean at \`statePath\` (used with element \`visible: { $state:"/path" }\`).
+- \`copy_text\` — \`actionParams: { text:"..." }\` — copy to clipboard; toasts "Copied!".
+- \`open_url\` — \`actionParams: { url:"https://..." }\` — opens an external URL in a new tab.
+- \`prefill_chat\` — \`actionParams: { text:"..." }\` — drops a suggested follow-up prompt into the user's composer **without sending**. Use for "Refine", "Explain more", "Try variation X" affordances where the user might tweak before sending.
+- \`send_prompt\` — \`actionParams: { text:"..." }\` — drops the prompt into the composer AND submits it. Use for one-tap follow-ups like "Read this aloud", "Make me a quiz on this", "Show me the next step", "Generate the audio version".
+- \`open_artifact\` — \`actionParams: { id:"artifact-id" }\` — opens an existing artifact (one you emitted earlier in this turn or a previous turn) in the right pane. Use to surface "View the full doc" / "Open the report" buttons next to a summary card.
+
+### Make recommendations actionable — CRITICAL pattern
+Whenever you recommend, suggest, or list options for the user (movies to watch, recipes to try, articles to read, debugging steps to try, next moves, alternative approaches), every recommendation MUST have at least one action Button. Wrap each suggestion in a small Card and pair it with one or two of:
+- \`send_prompt\` ("Tell me more about X", "Generate that now", "Try option A") — one-tap follow-up
+- \`prefill_chat\` ("Customize this prompt") — when the user likely wants to tweak first
+- \`open_url\` — for an external reference
+- \`open_artifact\` — to reopen something you produced earlier
+
+A recommendation list without action buttons is decoration. The user shouldn't have to retype your suggestion to act on it.
 
 ### Dynamic props
 - \`{ "$state": "/path" }\` — read state value
 - \`{ "$template": "Hello \${/name}!" }\` — string interpolation
+- \`{ "$bindState": "/path" }\` (on Input.value, Select.value) — two-way bind; keystrokes write back to state and any \`{$state:"/path"}\` reader re-renders live
 
 ### Example — dashboard card
 \`\`\`gen-ui
@@ -181,6 +205,136 @@ Do NOT combine with \`fauna_video_create\` for the same topic. Do NOT also call 
     "s1": { "type": "Stat", "props": { "value": "128400", "label": "Revenue", "format": "currency", "trend": 12 }, "children": [] },
     "s2": { "type": "Stat", "props": { "value": "94", "label": "NPS", "format": "number", "trend": -2 }, "children": [] },
     "s3": { "type": "Stat", "props": { "value": "73", "label": "CSAT", "format": "percent", "trend": 5 }, "children": [] }
+  }
+}
+\`\`\`
+
+### Example — actionable recommendations (use this pattern for any "here are some options" reply)
+\`\`\`gen-ui
+{
+  "root": "grid",
+  "elements": {
+    "grid": { "type": "Grid", "props": { "columns": 2, "gap": 12 }, "children": ["c1","c2"] },
+
+    "c1":   { "type": "Card", "props": { "title": "Refactor with state machines" }, "children": ["c1-desc","c1-row"] },
+    "c1-desc": { "type": "Text", "props": { "text": "Replace the nested if/else with XState — predictable transitions, visual debugger.", "muted": true }, "children": [] },
+    "c1-row":  { "type": "Stack", "props": { "direction": "horizontal", "gap": 8 }, "children": ["c1-go","c1-tweak"] },
+    "c1-go":   { "type": "Button", "props": { "label": "Show me the diff", "variant": "primary", "icon": "ti-arrow-right",
+                  "action": "send_prompt",
+                  "actionParams": { "text": "Show me the exact XState refactor for that file — full diff." } }, "children": [] },
+    "c1-tweak":{ "type": "Button", "props": { "label": "Customize",
+                  "action": "prefill_chat",
+                  "actionParams": { "text": "Refactor that file using XState, but keep the existing event names and " } }, "children": [] },
+
+    "c2":   { "type": "Card", "props": { "title": "Add Vitest coverage" }, "children": ["c2-desc","c2-row"] },
+    "c2-desc": { "type": "Text", "props": { "text": "Currently 0% — adding tests around the state transitions will catch regressions during the refactor.", "muted": true }, "children": [] },
+    "c2-row":  { "type": "Stack", "props": { "direction": "horizontal", "gap": 8 }, "children": ["c2-go"] },
+    "c2-go":   { "type": "Button", "props": { "label": "Write the tests", "variant": "primary", "icon": "ti-test-pipe",
+                  "action": "send_prompt",
+                  "actionParams": { "text": "Generate a Vitest spec file covering every state transition." } }, "children": [] }
+  }
+}
+\`\`\`
+
+### Example — form with live preview (Input/Select + $bindState)
+\`\`\`gen-ui
+{
+  "root": "wrap",
+  "state": { "name": "", "role": "Engineer" },
+  "elements": {
+    "wrap":   { "type": "Stack", "props": { "direction": "vertical", "gap": 12 }, "children": ["form","preview"] },
+
+    "form":   { "type": "Card", "props": { "title": "Customize" }, "children": ["name","role"] },
+    "name":   { "type": "Input", "props": { "label": "Your name", "placeholder": "Solomon",
+                  "value": { "$bindState": "/name" } }, "children": [] },
+    "role":   { "type": "Select", "props": { "label": "Role",
+                  "options": ["Engineer", "Designer", "PM", "Founder"],
+                  "value": { "$bindState": "/role" } }, "children": [] },
+
+    "preview":{ "type": "Card", "props": { "title": "Live preview" }, "children": ["pv-text"] },
+    "pv-text":{ "type": "Heading", "props": { "level": 3,
+                  "text": { "$template": "Hi \${/name} — \${/role}!" } }, "children": [] }
+  }
+}
+\`\`\`
+
+### Example — product card with Rating
+\`\`\`gen-ui
+{
+  "root": "card",
+  "elements": {
+    "card":  { "type": "Card", "props": { "title": "Sony WH-1000XM5" }, "children": ["row","rating","price"] },
+    "row":   { "type": "Stack", "props": { "direction": "horizontal", "gap": 8, "align": "center" }, "children": ["icon","desc"] },
+    "icon":  { "type": "Icon", "props": { "name": "headphones", "size": 28 }, "children": [] },
+    "desc":  { "type": "Text", "props": { "text": "Industry-leading noise cancellation, 30h battery.", "muted": true }, "children": [] },
+    "rating":{ "type": "Rating", "props": { "value": 4.7, "count": 12480 }, "children": [] },
+    "price": { "type": "Stat", "props": { "value": "349", "label": "Price", "format": "currency" }, "children": [] }
+  }
+}
+\`\`\`
+
+### Example — shipping status (Stepper)
+\`\`\`gen-ui
+{
+  "root": "card",
+  "elements": {
+    "card":  { "type": "Card", "props": { "title": "Order #A-1042" }, "children": ["steps","eta"] },
+    "steps": { "type": "Stepper", "props": { "steps": [
+                  { "label": "Placed",   "done": true },
+                  { "label": "Shipped",  "done": true },
+                  { "label": "Out for delivery", "current": true },
+                  { "label": "Delivered" }
+                ] }, "children": [] },
+    "eta":   { "type": "KeyValue", "props": { "key": "ETA", "value": "Today, 4–6pm" }, "children": [] }
+  }
+}
+\`\`\`
+
+### Example — Stat with sparkline (series)
+\`\`\`gen-ui
+{
+  "root": "g",
+  "elements": {
+    "g":  { "type": "Grid", "props": { "columns": 2, "gap": 12 }, "children": ["s1","s2"] },
+    "s1": { "type": "Stat", "props": { "value": "28400", "label": "MRR", "format": "currency", "trend": 14,
+              "series": [18200, 19400, 21000, 22500, 24100, 26800, 28400] }, "children": [] },
+    "s2": { "type": "Stat", "props": { "value": "92", "label": "Uptime", "format": "percent", "trend": -1,
+              "series": [99, 98, 99, 95, 93, 94, 92] }, "children": [] }
+  }
+}
+\`\`\`
+
+### Per-spec theme (optional)
+Top-level \`theme: { accent?, font?, surface? }\` lets a single widget skin itself for a brand/project. Accent flows into Rating stars, Stepper done/current dots, and Button.primary; font flows through the whole gen-ui root via CSS inheritance. Use sparingly — the app's default theme already matches the chat surface.
+
+\`\`\`gen-ui
+{
+  "theme": { "accent": "#7C3AED", "font": "Inter, system-ui" },
+  "root": "card",
+  "elements": {
+    "card":   { "type": "Card", "props": { "title": "Acme — Q1 review" }, "children": ["rating","steps"] },
+    "rating": { "type": "Rating", "props": { "value": 4, "count": 312 }, "children": [] },
+    "steps":  { "type": "Stepper", "props": { "steps": [
+                  { "label": "Spec",  "done": true },
+                  { "label": "Build", "done": true },
+                  { "label": "Test",  "current": true },
+                  { "label": "Ship" }
+                ] }, "children": [] }
+  }
+}
+\`\`\`
+
+### Example — form field with validation error
+\`\`\`gen-ui
+{
+  "root": "form",
+  "state": { "email": "not-an-email" },
+  "elements": {
+    "form":  { "type": "Card", "props": { "title": "Sign up" }, "children": ["email"] },
+    "email": { "type": "Input", "props": { "label": "Email", "type": "email",
+                 "value": { "$bindState": "/email" },
+                 "error": "Invalid email format",
+                 "hint": "We'll only use it for receipts." }, "children": [] }
   }
 }
 \`\`\`

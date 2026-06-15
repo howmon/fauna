@@ -4008,6 +4008,76 @@ webview {
 .gui-badge-error   { background: rgba(243,110,110,.15); color: var(--error); border: 1px solid rgba(243,110,110,.3); }
 .gui-badge-info    { background: rgba(120,153,150,.15); color: var(--accent); border: 1px solid rgba(120,153,150,.3); }
 
+/* Icon (Tabler glyph wrapper) — inline alignment + size/color overridable via props */
+.gui-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  vertical-align: -2px; line-height: 1; color: var(--fau-text-dim);
+}
+
+/* Stat sparkline (Phase 4) — sits flush under value/label, accent-driven */
+.gui-stat-spark {
+  display: block; width: 100%; height: 32px; margin-top: 4px;
+  opacity: .85;
+}
+
+/* Rating (Phase 3) */
+.gui-rating { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fau-text-muted); }
+.gui-rating-stars { display: inline-flex; gap: 1px; color: var(--gui-accent, var(--warn)); }
+.gui-rating-on  { color: var(--gui-accent, var(--warn)); }
+.gui-rating-off { color: var(--fau-text-dim); opacity: .35; }
+.gui-rating-value { color: var(--fau-text); font-weight: 600; }
+.gui-rating-count { color: var(--fau-text-muted); }
+
+/* Stepper (Phase 3) — horizontal dot/line row */
+.gui-stepper {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  margin: 6px 0;
+}
+.gui-step { display: inline-flex; align-items: center; gap: 6px; }
+.gui-step-dot {
+  width: 22px; height: 22px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--fau-surface3); color: var(--fau-text-dim);
+  font-size: 11px; font-weight: 600;
+  border: 1px solid transparent;
+}
+.gui-step-label { font-size: 12px; color: var(--fau-text-muted); }
+.gui-step-done .gui-step-dot {
+  background: var(--gui-accent, var(--success));
+  color: #fff;
+}
+.gui-step-done .gui-step-label { color: var(--fau-text); }
+.gui-step-current .gui-step-dot {
+  background: transparent;
+  border-color: var(--gui-accent, var(--accent));
+  color: var(--gui-accent, var(--accent));
+}
+.gui-step-current .gui-step-label { color: var(--fau-text); font-weight: 600; }
+.gui-step-bar {
+  flex: 0 1 24px; min-width: 12px; height: 2px;
+  background: var(--fau-surface3); border-radius: 1px;
+  margin: 0 2px;
+}
+.gui-step-bar-done { background: var(--gui-accent, var(--success)); opacity: .6; }
+
+/* Field validation (Phase 6) — Input/Select error + hint */
+.gui-field-invalid {
+  border-color: var(--error) !important;
+  outline-color: var(--error) !important;
+}
+.gui-field-error {
+  font-size: 11px; color: var(--error); margin-top: 4px;
+  display: flex; align-items: center; gap: 4px;
+}
+.gui-field-hint {
+  font-size: 11px; color: var(--fau-text-muted); margin-top: 4px;
+}
+
+/* Per-spec theme hook (Phase 5) — spec.theme.font flows here.
+ * Accent/surface are referenced inline via var(--gui-accent, fallback)
+ * by each component. Font cascades automatically through normal inheritance. */
+.gui-root { font-family: var(--gui-font, inherit); }
+
 /* Stat */
 .gui-stat {
   background: var(--fau-surface3); border-radius: var(--radius);
