@@ -78,6 +78,87 @@ function newConversationInProject(id, e) {
   if (typeof newConversation === 'function') newConversation();
 }
 
+// ── Breadcrumb chevron popover ────────────────────────────────────────────
+// Click the `>` between the project name and chat title to get a quick menu
+// of every conversation in the active project, plus a "New chat" button.
+// Replaces the previous behaviour where the chevron was decorative-only.
+function _closeBreadcrumbChevronMenu() {
+  var existing = document.getElementById('crumb-chev-menu');
+  if (existing) existing.remove();
+  document.removeEventListener('mousedown', _crumbChevMenuOutside, true);
+  document.removeEventListener('keydown', _crumbChevMenuEscape, true);
+}
+function _crumbChevMenuOutside(e) {
+  var menu = document.getElementById('crumb-chev-menu');
+  if (!menu) return;
+  var sep = document.getElementById('topbar-crumb-sep');
+  if (menu.contains(e.target)) return;
+  if (sep && sep.contains(e.target)) return;
+  _closeBreadcrumbChevronMenu();
+}
+function _crumbChevMenuEscape(e) {
+  if (e.key === 'Escape') _closeBreadcrumbChevronMenu();
+}
+function toggleBreadcrumbChevronMenu(e) {
+  if (e) e.stopPropagation();
+  if (document.getElementById('crumb-chev-menu')) { _closeBreadcrumbChevronMenu(); return; }
+  var proj = _activeProject();
+  if (!proj) return; // chevron only appears when a project is active anyway
+  var anchor = document.getElementById('topbar-crumb-sep');
+  if (!anchor) return;
+  var rect = anchor.getBoundingClientRect();
+
+  var allConvs = (state.conversations || [])
+    .filter(function(c) { return c.projectId === proj.id; })
+    .sort(function(a, b) {
+      return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
+    });
+  var MAX = 12;
+  var visible = allConvs.slice(0, MAX);
+  var pid = _projEsc(proj.id);
+
+  var rows = visible.map(function(c) {
+    var isCurrent = c.id === state.currentId;
+    return '<button type="button" class="crumb-chev-conv' + (isCurrent ? ' active' : '') + '" ' +
+      'onclick="loadConversation(\'' + c.id + '\');_closeBreadcrumbChevronMenu()">' +
+      (c._streaming ? '<i class="ti ti-loader-2 conv-streaming-icon"></i>' : '<i class="ti ti-message"></i>') +
+      '<span class="crumb-chev-conv-title">' + escHtml(c.title || 'Untitled') + '</span>' +
+    '</button>';
+  }).join('') || '<div class="crumb-chev-empty">No chats in this project yet</div>';
+
+  var moreLink = allConvs.length > MAX
+    ? '<button type="button" class="crumb-chev-more" onclick="openAllConversations();_closeBreadcrumbChevronMenu()">' +
+        '<i class="ti ti-list"></i><span>All chats (' + allConvs.length + ')</span>' +
+      '</button>'
+    : '';
+
+  var menu = document.createElement('div');
+  menu.id = 'crumb-chev-menu';
+  menu.className = 'crumb-chev-menu';
+  menu.innerHTML =
+    '<div class="crumb-chev-header">' +
+      '<span class="proj-dot proj-color-' + _projEsc(proj.color) + '"></span>' +
+      '<span class="crumb-chev-proj-name">' + _projEsc(proj.name) + '</span>' +
+      '<button type="button" class="crumb-chev-new" onclick="newConversationInProject(\'' + pid + '\', event);_closeBreadcrumbChevronMenu()" title="New chat in project">' +
+        '<i class="ti ti-edit"></i><span>New chat</span>' +
+      '</button>' +
+    '</div>' +
+    '<div class="crumb-chev-list">' + rows + '</div>' +
+    (moreLink ? '<div class="crumb-chev-footer">' + moreLink + '</div>' : '');
+  document.body.appendChild(menu);
+
+  // Position under the chevron, clamped to viewport
+  var left = Math.max(8, Math.min(rect.left - 8, window.innerWidth - 320));
+  menu.style.left = left + 'px';
+  menu.style.top  = (rect.bottom + 6) + 'px';
+
+  // Outside-click + Escape close
+  setTimeout(function() {
+    document.addEventListener('mousedown', _crumbChevMenuOutside, true);
+    document.addEventListener('keydown', _crumbChevMenuEscape, true);
+  }, 0);
+}
+
 function renderProjectSidebarList() {
   var el = document.getElementById('proj-sidebar-list');
   if (!el) return;

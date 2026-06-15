@@ -237,7 +237,9 @@
           <i class="ti ti-folder-filled"></i>
           <span id="topbar-project-name" class="topbar-crumb-project"></span>
         </span>
-        <i class="ti ti-chevron-right topbar-crumb-sep" id="topbar-crumb-sep" style="display:none"></i>
+        <button type="button" id="topbar-crumb-sep" class="topbar-crumb-sep-btn" style="display:none" onclick="event.stopPropagation();toggleBreadcrumbChevronMenu(event)" title="Browse chats in this project">
+          <i class="ti ti-chevron-right"></i>
+        </button>
         <span id="topbar-title" class="topbar-crumb-conv">New conversation</span>
       </div>
       <!-- hidden compat stubs for existing JS -->

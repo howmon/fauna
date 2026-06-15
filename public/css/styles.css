@@ -563,6 +563,75 @@ body.is-resizing webview { pointer-events: none !important; }
 .topbar-crumb-sep {
   font-size: 11px; color: var(--fau-border); flex-shrink: 0;
 }
+/* Clickable breadcrumb chevron — opens the project chat picker popover. */
+.topbar-crumb-sep-btn {
+  background: none; border: 1px solid transparent;
+  padding: 2px 4px; border-radius: 4px; flex-shrink: 0;
+  color: var(--fau-text-muted); cursor: pointer; line-height: 1;
+  display: inline-flex; align-items: center;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.topbar-crumb-sep-btn:hover { background: var(--fau-surface2); color: var(--fau-text); border-color: var(--fau-border); }
+.topbar-crumb-sep-btn .ti { font-size: 12px; }
+
+/* ── Breadcrumb chevron popover ────────────────────────────────────── */
+.crumb-chev-menu {
+  position: fixed; z-index: 10000;
+  width: 300px; max-height: min(70vh, 500px);
+  display: flex; flex-direction: column;
+  background: var(--fau-surface2); border: 1px solid var(--fau-border);
+  border-radius: var(--radius); box-shadow: 0 12px 32px rgba(0,0,0,.28);
+  padding: 6px; gap: 4px;
+  animation: crumb-chev-fade .12s ease-out;
+}
+@keyframes crumb-chev-fade { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.crumb-chev-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px 8px; border-bottom: 1px solid var(--fau-border);
+}
+.crumb-chev-header .proj-dot { width: 8px; height: 8px; flex-shrink: 0; }
+.crumb-chev-proj-name {
+  flex: 1; font-size: 12px; font-weight: 600; color: var(--fau-text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.crumb-chev-new {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: var(--accent-dim); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent2); border-radius: var(--radius-sm);
+  padding: 4px 8px; font: 600 11.5px/1 var(--font); cursor: pointer;
+  transition: background .1s, border-color .1s, color .1s;
+}
+.crumb-chev-new:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+.crumb-chev-new .ti { font-size: 12px; }
+.crumb-chev-list {
+  flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 1px;
+  padding: 2px 0;
+}
+.crumb-chev-conv {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 7px 8px; font-size: 12.5px; font-family: var(--font);
+  color: var(--fau-text-dim); background: transparent; border: none;
+  border-radius: var(--radius-sm); cursor: pointer; text-align: left;
+  transition: background .1s, color .1s;
+}
+.crumb-chev-conv:hover { background: var(--fau-surface3); color: var(--fau-text); }
+.crumb-chev-conv.active { background: var(--accent-dim); color: var(--accent2); font-weight: 500; }
+.crumb-chev-conv .ti { font-size: 13px; opacity: .65; flex-shrink: 0; }
+.crumb-chev-conv-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.crumb-chev-empty {
+  font-size: 12px; color: var(--fau-text-muted); padding: 14px 8px;
+  text-align: center; font-style: italic;
+}
+.crumb-chev-footer { border-top: 1px solid var(--fau-border); padding-top: 4px; }
+.crumb-chev-more {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; padding: 7px 8px; font-size: 12px; font-family: var(--font);
+  color: var(--fau-text-muted); background: transparent; border: none;
+  border-radius: var(--radius-sm); cursor: pointer; text-align: left;
+  transition: background .1s, color .1s;
+}
+.crumb-chev-more:hover { background: var(--fau-surface3); color: var(--fau-text); }
+.crumb-chev-more .ti { font-size: 13px; }
 #topbar-title, .topbar-crumb-conv {
   font-size: 13px; font-weight: 500; color: var(--fau-text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
