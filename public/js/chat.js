@@ -2096,9 +2096,13 @@ async function streamResponse(conv) {
             _speak(spokenText);
             // Re-enter command mode after TTS finishes (persistent conversation)
             if (typeof _conversationMode !== 'undefined' && _conversationMode && typeof _reenterCommandMode === 'function') {
-              // Wait for TTS to finish, then re-enter
+              // Wait for TTS to finish, then re-enter. _ttsActive is set
+              // by _speak() and cleared on completion (both Kokoro + WebSpeech
+              // paths), so it's a reliable cross-engine "still speaking" flag.
               var _checkTTS = setInterval(function() {
-                if (!window.speechSynthesis.speaking) {
+                var stillSpeaking = (typeof _ttsActive !== 'undefined' && _ttsActive) ||
+                                    (window.speechSynthesis && window.speechSynthesis.speaking);
+                if (!stillSpeaking) {
                   clearInterval(_checkTTS);
                   setTimeout(_reenterCommandMode, 600);
                 }

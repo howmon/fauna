@@ -969,6 +969,28 @@ function _initResidentAudio() {
   try {
     tts.setDefaults({ voice: _vs0.ttsVoice, rate: _vs0.ttsRate, enabled: _vs0.ttsEnabled });
   } catch (_) {}
+
+  // ── Renderer-facing TTS bridge ────────────────────────────────────────
+  // The renderer used to call window.speechSynthesis directly, which on macOS
+  // routes through the OS native voice (Samantha/Karen/Alex) — bypassing the
+  // bundled Kokoro neural engine entirely. Expose the server-side Tts so the
+  // renderer's "speak this reply" path goes through Kokoro (and gets the
+  // mic-auto-mute side effect of onStateChange for free).
+  ipcMain.handle('tts:speak', async (_e, payload) => {
+    try {
+      const text = String((payload && payload.text) || '').slice(0, 4000);
+      if (!text.trim()) return { done: true };
+      const opts = {};
+      if (payload && typeof payload.voice === 'string') opts.voice = payload.voice;
+      if (payload && Number.isFinite(Number(payload.rate))) opts.rate = Number(payload.rate);
+      return await tts.speak(text, opts);
+    } catch (e) {
+      return { error: e?.message || 'tts failed' };
+    }
+  });
+  ipcMain.on('tts:stop', () => { try { tts?.stop(); } catch (_) {} });
+  ipcMain.handle('tts:isSpeaking', () => { try { return !!tts?.isSpeaking(); } catch (_) { return false; } });
+
   try {
     setDefaultScrubOpts({
       email:      !!_vs0.redactEmail,

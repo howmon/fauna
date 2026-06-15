@@ -25,6 +25,18 @@ describe('isFreeTool', () => {
     expect(isFreeTool('figma_execute')).toBe(false);
     expect(isFreeTool('some_random_tool')).toBe(false);
   });
+
+  it('marks read-only research + introspection tools as free', () => {
+    expect(isFreeTool('fauna_grep')).toBe(true);
+    expect(isFreeTool('fauna_file_search')).toBe(true);
+    expect(isFreeTool('fauna_semantic_search')).toBe(true);
+    expect(isFreeTool('fauna_context_search')).toBe(true);
+    expect(isFreeTool('fauna_read_file')).toBe(true);
+    expect(isFreeTool('fauna_list_windows')).toBe(true);
+    expect(isFreeTool('fauna_screen_context')).toBe(true);
+    expect(isFreeTool('figma_status')).toBe(true);
+    expect(isFreeTool('figma_get_selection')).toBe(true);
+  });
 });
 
 describe('ToolGuardContext.check — free tools', () => {
@@ -51,10 +63,11 @@ describe('ToolGuardContext.check — free tools', () => {
   });
 
   it('a long shell-heavy run can still post the closing comment + move', async () => {
-    // Simulate the bug from the user report: 30 "other" calls (the
-    // non-autonomous cap), then a workitem_comment + workitem_move at
-    // the end. Without the free-tool exemption the move would be denied.
-    const g = new ToolGuardContext(); // non-autonomous = other:30, total:40
+    // Simulate the bug from the user report: 30 "other" calls (well under
+    // the bumped non-autonomous cap of 60), then a workitem_comment +
+    // workitem_move at the end. Without the free-tool exemption the move
+    // would be denied.
+    const g = new ToolGuardContext(); // non-autonomous = other:60, total:80
     for (let i = 0; i < 30; i++) {
       const r = await g.check('something_real', {});
       expect(r.action).toBe('allow');
@@ -63,6 +76,33 @@ describe('ToolGuardContext.check — free tools', () => {
     expect((await g.check('fauna_workitem_comment', { body: 'done' })).action).toBe('allow');
     expect((await g.check('fauna_workitem_move', { column: 'done' })).action).toBe('allow');
     expect((await g.check('fauna_workitem_verify', {})).action).toBe('allow');
+  });
+
+  it('read-only research tools (grep / file_search / semantic_search) are free', async () => {
+    // Regression: previously these were "other" and ate the 30-cap, so a
+    // long engineering turn would burn its budget on research and then get
+    // denied when it tried to write files.
+    const g = new ToolGuardContext();
+    for (let i = 0; i < 100; i++) {
+      expect((await g.check('fauna_grep', { q: 'foo' })).action).toBe('allow');
+      expect((await g.check('fauna_file_search', { q: '*.js' })).action).toBe('allow');
+      expect((await g.check('fauna_semantic_search', { q: 'bar' })).action).toBe('allow');
+      expect((await g.check('fauna_read_file', { path: 'x' })).action).toBe('allow');
+    }
+    expect(g.totalCount).toBe(0);
+  });
+
+  it('figma read-only introspection does not eat the figma cap', async () => {
+    const g = new ToolGuardContext();
+    for (let i = 0; i < 50; i++) {
+      expect((await g.check('figma_status', {})).action).toBe('allow');
+      expect((await g.check('figma_get_selection', {})).action).toBe('allow');
+      expect((await g.check('figma_search_components', { q: 'a' })).action).toBe('allow');
+    }
+    expect(g.categoryCounts.figma).toBe(0);
+    // figma_execute (actually mutates) still counts
+    expect((await g.check('figma_execute', { code: 'x' })).action).toBe('allow');
+    expect(g.categoryCounts.figma).toBe(1);
   });
 });
 

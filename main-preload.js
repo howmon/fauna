@@ -85,4 +85,33 @@ contextBridge.exposeInMainWorld('faunaApp', {
     ipcRenderer.on('fauna:open-file-error', handler);
     return () => ipcRenderer.removeListener('fauna:open-file-error', handler);
   },
+
+  /**
+   * Speak `text` through the server-side Tts engine (Kokoro by default).
+   * Resolves when playback finishes (or `{cancelled:true}` on stop). The
+   * renderer used to call window.speechSynthesis directly — that routes
+   * through the OS native voice and bypasses Kokoro entirely, so prefer
+   * this whenever it's available.
+   * @param {string} text
+   * @param {{voice?: string, rate?: number}} [opts]
+   * @returns {Promise<{done?:true, cancelled?:true, error?:string}>}
+   */
+  speak(text, opts) {
+    const payload = {
+      text: String(text == null ? '' : text),
+      voice: opts && typeof opts.voice === 'string' ? opts.voice : undefined,
+      rate:  opts && Number.isFinite(Number(opts.rate)) ? Number(opts.rate) : undefined,
+    };
+    return ipcRenderer.invoke('tts:speak', payload);
+  },
+
+  /** Cancel current + queued TTS playback. */
+  stopSpeak() {
+    ipcRenderer.send('tts:stop');
+  },
+
+  /** Whether the server-side Tts is currently speaking. */
+  isSpeaking() {
+    return ipcRenderer.invoke('tts:isSpeaking');
+  },
 });

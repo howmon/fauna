@@ -193,17 +193,48 @@ function _getMicStream(extra) {
 }
 
 // ── Text-to-speech ────────────────────────────────────────────────────────
+//
+// We always *prefer* the server-side Tts (Kokoro neural) bridged through
+// window.faunaApp.speak. Browsers' window.speechSynthesis on macOS routes
+// through the OS native voice (Samantha/Alex) and bypasses Kokoro
+// entirely — which is the user-reported "fauna is using tts and not
+// kokoro when voice is enabled" bug.
+//
+// WebSpeech is only used as a fallback (no faunaApp bridge / IPC failure).
 
 var _speakTimer = null;
-var _ttsActive  = false;   // true while speechSynthesis is playing
+var _ttsActive  = false;   // true while TTS is playing
 var _ttsResumeText = null; // text saved for false-interruption recovery
 var _ttsResumeTimer = null;
 
+// True iff the renderer can reach the server-side Tts (Kokoro) via preload.
+function _hasKokoroBridge() {
+  return !!(window.faunaApp && typeof window.faunaApp.speak === 'function');
+}
+
 function _speak(text) {
-  if (!window.speechSynthesis || !text) return;
-  window.speechSynthesis.cancel();
+  if (!text) return;
   _ttsActive     = true;
   _ttsResumeText = text;
+  _showResponseCard(text);
+
+  var done = function() {
+    _ttsActive = false;
+    _ttsResumeText = null;
+    _hideResponseCard();
+  };
+
+  if (_hasKokoroBridge()) {
+    // Server-side Tts (Kokoro). Empty voice = use the engine default the
+    // user picked in voice settings (which is also Kokoro by default).
+    try { window.faunaApp.stopSpeak(); } catch (_) {}
+    window.faunaApp.speak(text).then(done, done);
+    return;
+  }
+
+  // Fallback: WebSpeech (OS native voice).
+  if (!window.speechSynthesis) { done(); return; }
+  window.speechSynthesis.cancel();
   var utt = new SpeechSynthesisUtterance(text);
   utt.rate   = 1.05;
   utt.pitch  = 1.0;
@@ -213,13 +244,8 @@ function _speak(text) {
     return /samantha|karen|daniel|google us|zira/i.test(v.name);
   }) || voices.find(function(v) { return v.lang === 'en-US'; });
   if (preferred) utt.voice = preferred;
-
-  // Show response card
-  _showResponseCard(text);
-
-  utt.onend = function() { _ttsActive = false; _ttsResumeText = null; _hideResponseCard(); };
-  utt.onerror = function() { _ttsActive = false; _ttsResumeText = null; _hideResponseCard(); };
-
+  utt.onend   = done;
+  utt.onerror = done;
   window.speechSynthesis.speak(utt);
 }
 
@@ -322,13 +348,24 @@ window._onAssistantTurnComplete = _onAssistantTurnComplete;
 
 // Speak text, then open the mic for an immediate reply (no wake word).
 function _speakThenListen(text) {
-  if (!window.speechSynthesis || !text) {
-    _startHandsFreeReply();
-    return;
-  }
-  window.speechSynthesis.cancel();
+  if (!text) { _startHandsFreeReply(); return; }
   _ttsActive     = true;
   _ttsResumeText = text;
+  _showResponseCard(text);
+
+  var done = function() {
+    _ttsActive = false; _ttsResumeText = null; _hideResponseCard();
+    setTimeout(_startHandsFreeReply, 250);
+  };
+
+  if (_hasKokoroBridge()) {
+    try { window.faunaApp.stopSpeak(); } catch (_) {}
+    window.faunaApp.speak(text).then(done, done);
+    return;
+  }
+
+  if (!window.speechSynthesis) { done(); return; }
+  window.speechSynthesis.cancel();
   var utt = new SpeechSynthesisUtterance(text);
   utt.rate   = 1.05;
   utt.pitch  = 1.0;
@@ -338,11 +375,6 @@ function _speakThenListen(text) {
     return /samantha|karen|daniel|google us|zira/i.test(v.name);
   }) || voices.find(function(v) { return v.lang === 'en-US'; });
   if (preferred) utt.voice = preferred;
-  _showResponseCard(text);
-  var done = function() {
-    _ttsActive = false; _ttsResumeText = null; _hideResponseCard();
-    setTimeout(_startHandsFreeReply, 250);
-  };
   utt.onend   = done;
   utt.onerror = done;
   window.speechSynthesis.speak(utt);
@@ -1101,7 +1133,10 @@ function _startVADLoop() {
           // If no real transcript arrives within 2s, resume speaking from the saved text.
           if (_ttsActive) {
             var savedText = _ttsResumeText;
-            window.speechSynthesis.cancel();
+            // Stop both engines — server-side Kokoro (if bridged) and the
+            // WebSpeech fallback — so barge-in actually silences playback.
+            try { if (_hasKokoroBridge()) window.faunaApp.stopSpeak(); } catch (_) {}
+            try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (_) {}
             _ttsActive = false;
             if (_ttsResumeTimer) clearTimeout(_ttsResumeTimer);
             _ttsResumeTimer = setTimeout(function() {

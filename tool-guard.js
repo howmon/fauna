@@ -59,6 +59,41 @@ const FREE_TOOLS = new Set([
   'fauna_list_references',
   'fauna_get_reference',
   'fauna_get_agent_instructions',
+  // Read-only file / code search — "research" that should not eat the
+  // write budget. fauna_read_file is read-only and idempotent.
+  'fauna_read_file',
+  'fauna_grep',
+  'fauna_file_search',
+  'fauna_semantic_search',
+  'fauna_context_search',
+  // Environment introspection (no side effects)
+  'fauna_list_windows',
+  'fauna_screen_context',
+  'fauna_ui_tree',
+  'fauna_doctor',
+  'fauna_retrieve_output',
+  // Catalogue lookups
+  'fauna_list_voices',
+  'fauna_video_list',
+  'fauna_lesson_list',
+  'fauna_list_playbook',
+  'fauna_load_widget_from_playbook',
+  'fauna_backlog_list',
+  'fauna_stock_image_search',
+  'fauna_stock_image_get',
+  // Figma read-only introspection (figma_execute / write paths stay capped)
+  'figma_status',
+  'figma_list_connected_files',
+  'figma_list_pages',
+  'figma_list_design_systems',
+  'figma_get_console_logs',
+  'figma_get_selection',
+  'figma_get_component_map',
+  'figma_get_unmapped_components',
+  'figma_search_components',
+  'figma_search_tokens',
+  'figma_docs',
+  'figma_rules',
 ]);
 
 /**
@@ -136,14 +171,14 @@ export function getToolCategory(name) {
 // ── Category limits ───────────────────────────────────────────────────────
 
 const CATEGORY_LIMITS = {
-  browser: 15,
-  shell:   20,
-  file:    20,
-  figma:   25,
-  other:   30,
+  browser: 25,
+  shell:   30,
+  file:    40,    // raised: real engineering turns routinely touch >20 files
+  figma:   30,
+  other:   60,    // raised: read/search tools now FREE, but keep headroom for the rest
 };
 
-const TOTAL_LIMIT = 40;
+const TOTAL_LIMIT = 80;  // raised from 40; FREE_TOOLS expansion absorbs the slack
 
 // Relaxed limits for autonomous task runs (kanban autopilot, cron jobs).
 // Interactive chat keeps the conservative caps so a runaway tool loop
@@ -209,7 +244,7 @@ export class ToolGuardContext {
     if (this.totalCount > this.totalLimit) {
       return {
         action: 'deny',
-        reason: `Tool call limit reached (${this.totalLimit}). Summarize what you have done so far and tell the user to continue in a follow-up message if needed.`,
+        reason: `Tool call limit reached (${this.totalLimit} non-free calls in this turn). Do NOT invent a cap excuse — if the work is genuinely complete, give the final summary now. If concrete work remains, state the exact next concrete step in one sentence and stop — the user will continue.`,
       };
     }
 
@@ -218,7 +253,7 @@ export class ToolGuardContext {
     if (this.categoryCounts[category] > catLimit) {
       return {
         action: 'deny',
-        reason: `${category} tool limit reached (${catLimit}). Stop calling ${category} tools and summarize progress. Tell the user to continue in a follow-up if needed.`,
+        reason: `${category} tool limit reached (${catLimit} ${category} calls in this turn). Do NOT phrase this as "the system stopped me" or "tool cap fired" — pick a different approach (e.g. batch remaining ${category} work, switch to another tool category, or summarize what is done). Only stop entirely if the task is genuinely complete.`,
       };
     }
 
