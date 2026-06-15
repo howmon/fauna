@@ -1077,10 +1077,11 @@ function _buildConversationExport(conv) {
       // continuation pokes from the runtime. They make exports look like
       // the user said weird system-y things they never said.
       if (m.role === 'user' && _isSystemControlMessage(m.content)) return acc;
+      var rawContent = m.content == null ? '' : m.content;
       var entry = {
         index: i,
         role: m.role,
-        content: _sanitizeExportContent(m.role, m.content == null ? '' : m.content),
+        content: _sanitizeExportContent(m.role, rawContent),
       };
       if (m.timestamp) entry.timestamp = m.timestamp;
       if (m.agentInfo) entry.agentInfo = m.agentInfo;
@@ -1089,7 +1090,10 @@ function _buildConversationExport(conv) {
       if (m.plan) entry.plan = m.plan;
       if (m.attachments) entry.attachments = m.attachments;
       if (m.role === 'assistant') {
-        var tools = _extractToolBlocksFromContent(entry.content);
+        // Extract from RAW content — sanitize strips shell-output / tool-output
+        // fences out of `content` (they're huge dumps that bury the prose), and
+        // we want them captured here in structured form.
+        var tools = _extractToolBlocksFromContent(rawContent);
         if (tools.length) entry.tools = tools;
       }
       acc.push(entry);
@@ -1114,11 +1118,26 @@ function _isSystemControlMessage(content) {
 }
 
 // Strip runtime-injected preamble & postscript noise from message content so
-// the exported transcript shows what was actually said. We touch user
-// messages only — assistant output is the model's own words.
+// the exported transcript shows what was actually said. For user messages we
+// strip the planner's injected browser/date noise. For assistant messages we
+// strip ```shell-output / ```tool-output / ```tool_output fences — those are
+// raw tool dumps that the streaming buffer inlines for rendering, but are
+// already captured in the separate per-message `tools[]` array. Leaving them
+// in `content` produces 40KB+ assistant messages whose actual prose is buried
+// at the bottom and gets truncated to invisibility by viewers.
 function _sanitizeExportContent(role, content) {
-  if (role !== 'user' || typeof content !== 'string') return content;
+  if (typeof content !== 'string') return content;
   var s = content;
+  if (role === 'assistant') {
+    // Pull every tool-output fence out of the prose. Keep one blank line in
+    // its place so paragraph spacing around the (now extracted) block looks
+    // sane in the export.
+    s = s.replace(/```(?:shell-output|tool-output|tool_output)\b[^\n]*\n[\s\S]*?```\s*/g, '\n');
+    // Collapse runs of blank lines we may have created.
+    s = s.replace(/\n{3,}/g, '\n\n');
+    return s.trim();
+  }
+  if (role !== 'user') return content;
   // Strip the leading // Browser page: comment block + its trailing fence.
   s = s.replace(/^```[\s\S]*?\/\/ Browser page:[\s\S]*?```\s*/m, '');
   // Strip the bracketed "[Resolved live browser tab context — …]" note.
