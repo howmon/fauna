@@ -49,6 +49,7 @@ export const DEFAULTS = Object.freeze({
     ? DEFAULT_DICTATION_ACCEL_MAC
     : DEFAULT_DICTATION_ACCEL_OTHER,
   dictationPasteOnFinish: false, // future: actually inject paste keystroke
+  dictationDeviceId:      '',    // browser MediaDeviceInfo.deviceId; '' = default mic
 
   // Whisper STT
   whisperModel:    'base.en',    // one of: tiny, tiny.en, base, base.en, small, small.en, medium, medium.en, large-v3-turbo
@@ -112,6 +113,12 @@ function _sanitise(cfg) {
     ? out.dictationAccel.trim()
     : DEFAULTS.dictationAccel;
   out.dictationPasteOnFinish = !!out.dictationPasteOnFinish;
+  // deviceId is an opaque browser-assigned token (typically 64-char hex/base64).
+  // We don't try to validate against connected devices — if the saved mic
+  // disappears, getUserMedia falls back to the default automatically.
+  out.dictationDeviceId = typeof out.dictationDeviceId === 'string'
+    ? out.dictationDeviceId.replace(/[^A-Za-z0-9_=+/-]/g, '').slice(0, 256)
+    : '';
 
   // Whisper STT — restrict to a known whitelist so we never spawn whisper-cli
   // against an attacker-controlled filename.

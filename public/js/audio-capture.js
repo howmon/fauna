@@ -53,22 +53,48 @@
   let quietSince = 0;
 
   async function start() {
+    // Honor the user's saved dictation mic if set. Resident audio shares the
+    // same physical device choice \u2014 anything else would be surprising.
+    let deviceId = '';
     try {
-      // Ask for raw audio with browser AEC/NS enabled — this also helps when
+      const r = await fetch('/api/voice-settings');
+      if (r.ok) {
+        const j = await r.json();
+        if (j && j.ok && j.settings && typeof j.settings.dictationDeviceId === 'string') {
+          deviceId = j.settings.dictationDeviceId;
+        }
+      }
+    } catch (_) { /* default mic */ }
+
+    const audioConstraints = {
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl:  true,
+    };
+    if (deviceId) audioConstraints.deviceId = { exact: deviceId };
+
+    try {
+      // Ask for raw audio with browser AEC/NS enabled \u2014 this also helps when
       // Fauna's own TTS plays through the same default output device later.
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl:  true,
-        },
-        video: false,
-      });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: false });
     } catch (e) {
-      showErr('mic permission denied: ' + e.message);
-      setState('error');
-      return;
+      if (deviceId && (e.name === 'OverconstrainedError' || e.name === 'NotFoundError')) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+            video: false,
+          });
+        } catch (e2) {
+          showErr('mic permission denied: ' + e2.message);
+          setState('error');
+          return;
+        }
+      } else {
+        showErr('mic permission denied: ' + e.message);
+        setState('error');
+        return;
+      }
     }
 
     try {

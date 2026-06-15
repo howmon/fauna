@@ -159,6 +159,39 @@ function setVoiceSetting(key, val) {
 window.getVoiceSetting = getVoiceSetting;
 window.setVoiceSetting = setVoiceSetting;
 
+// ── Microphone device pinning ────────────────────────────────────────────
+// The renderer talks to two mic paths (wake-word listener + tap-to-dictate)
+// and both want to honor the user's pinned dictation mic from the server-
+// side voice-settings.json. We cache the deviceId after the first fetch and
+// refresh on BroadcastChannel 'fauna-voice' messages so the settings page
+// can change it live without a reload.
+var _voiceDeviceId = '';
+
+async function _fetchVoiceDeviceId() {
+  try {
+    var r = await fetch('/api/voice-settings');
+    var j = await r.json();
+    if (j && j.ok && j.settings && typeof j.settings.dictationDeviceId === 'string') {
+      _voiceDeviceId = j.settings.dictationDeviceId || '';
+    }
+  } catch (_) { /* default mic */ }
+  return _voiceDeviceId;
+}
+
+// Build a getUserMedia({audio}) constraint that honors the pinned device, with
+// a safe retry-without-deviceId on OverconstrainedError.
+function _getMicStream(extra) {
+  var base = Object.assign({ channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }, extra || {});
+  if (_voiceDeviceId) base.deviceId = { exact: _voiceDeviceId };
+  return navigator.mediaDevices.getUserMedia({ audio: base, video: false }).catch(function(err) {
+    if (_voiceDeviceId && (err.name === 'OverconstrainedError' || err.name === 'NotFoundError')) {
+      delete base.deviceId;
+      return navigator.mediaDevices.getUserMedia({ audio: base, video: false });
+    }
+    throw err;
+  });
+}
+
 // ── Text-to-speech ────────────────────────────────────────────────────────
 
 var _speakTimer = null;
@@ -1330,7 +1363,7 @@ function _startWakeListener() {
   }
   _audioCtx.resume().catch(function(){});
 
-  navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+  _getMicStream()
     .then(function(stream) {
       _micStream    = stream;
       _micSource    = _audioCtx.createMediaStreamSource(stream);  // keep ref — prevents GC disconnect
@@ -1702,7 +1735,7 @@ function startDictation() {
     return;
   }
 
-  navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+  _getMicStream()
     .then(function(stream) {
       _dictStream     = stream;
       _dictChunks     = [];
@@ -1998,7 +2031,12 @@ async function _attachDictKeyPTT() {
   try {
     var r = await fetch('/api/voice-settings');
     var j = await r.json();
-    if (j && j.ok && j.settings) _refreshPttKeySpec(j.settings.dictationAccel);
+    if (j && j.ok && j.settings) {
+      _refreshPttKeySpec(j.settings.dictationAccel);
+      if (typeof j.settings.dictationDeviceId === 'string') {
+        _voiceDeviceId = j.settings.dictationDeviceId || '';
+      }
+    }
   } catch (_) {
     // Fall back to platform default so the feature still works offline.
     var IS_MAC = navigator.platform && navigator.platform.toLowerCase().indexOf('mac') >= 0;
@@ -2010,8 +2048,11 @@ window._refreshPttKeySpec = _refreshPttKeySpec;
 try {
   var _pttBC = new BroadcastChannel('fauna-voice');
   _pttBC.onmessage = function(ev) {
-    if (ev && ev.data && ev.data.type === 'dictationAccel') {
+    if (!ev || !ev.data) return;
+    if (ev.data.type === 'dictationAccel') {
       _refreshPttKeySpec(ev.data.value);
+    } else if (ev.data.type === 'dictationDeviceId') {
+      _voiceDeviceId = typeof ev.data.value === 'string' ? ev.data.value : '';
     }
   };
 } catch (_) { /* BroadcastChannel may not exist in older Electron */ }

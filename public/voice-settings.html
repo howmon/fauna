@@ -86,6 +86,13 @@
     <p class="hint">Electron accelerator syntax — e.g. <span class="kbd">Cmd+Shift+D</span>, <span class="kbd">Ctrl+Alt+Space</span>.</p>
     <label class="check"><input type="checkbox" id="dictationPasteOnFinish"> Auto-paste into the focused window (experimental)</label>
 
+    <label for="dictationDeviceId" style="margin-top:18px">Microphone</label>
+    <div style="display:flex;gap:8px;align-items:center">
+      <select id="dictationDeviceId" style="flex:1"><option value="">System default</option></select>
+      <button id="refreshMics" type="button" class="ghost" title="Re-scan input devices">Re-scan</button>
+    </div>
+    <p class="hint" id="micHint">Device labels appear after you've granted mic permission once.</p>
+
     <label for="dictSilenceMs" style="margin-top:18px">Silence auto-stop (ms)</label>
     <input id="dictSilenceMs" type="number" min="0" max="10000" step="100" placeholder="1500" />
     <p class="hint">Tap-toggle mode stops automatically after this much silence. Set to <span class="kbd">0</span> to disable auto-stop (then you must tap the mic to end). Hold-to-talk ignores this.</p>

@@ -60,6 +60,8 @@ function fillForm(s) {
   $('ttsRate').value            = s.ttsRate ?? '';
   $('dictationAccel').value    = s.dictationAccel || '';
   $('dictationPasteOnFinish').checked = !!s.dictationPasteOnFinish;
+  _pendingDeviceId = s.dictationDeviceId || '';
+  refreshMicList();
   $('whisperLanguage').value    = s.whisperLanguage || 'auto';
   $('whisperHotWords').value    = s.whisperHotWords || '';
   // Whisper model dropdown gets populated by refreshWhisperModels(); we just
@@ -106,6 +108,7 @@ function readForm() {
     ttsRate:          rate === '' ? null : Number(rate),
     dictationAccel:   $('dictationAccel').value.trim(),
     dictationPasteOnFinish: $('dictationPasteOnFinish').checked,
+    dictationDeviceId: $('dictationDeviceId').value || '',
     whisperModel:     $('whisperModel').value || undefined,
     whisperLanguage:  $('whisperLanguage').value || undefined,
     whisperHotWords:  $('whisperHotWords').value,
@@ -146,7 +149,8 @@ async function save() {
       // so we BroadcastChannel it.)
       try {
         const bc = new BroadcastChannel('fauna-voice');
-        bc.postMessage({ type: 'dictationAccel', value: j.settings.dictationAccel });
+        bc.postMessage({ type: 'dictationAccel',   value: j.settings.dictationAccel });
+        bc.postMessage({ type: 'dictationDeviceId', value: j.settings.dictationDeviceId || '' });
         bc.close();
       } catch (_) {}
     } else {
@@ -193,6 +197,56 @@ async function testVoice() {
 $('save').addEventListener('click', save);
 $('reset').addEventListener('click', reset);
 $('testVoice').addEventListener('click', testVoice);
+$('refreshMics').addEventListener('click', () => refreshMicList(true));
+
+// ── Microphone picker ───────────────────────────────────────────────────
+// enumerateDevices() only returns labels after mic permission has been
+// granted to the origin. If we don't see any labels, prompt for permission
+// the first time the user clicks Re-scan.
+let _pendingDeviceId = '';
+
+async function refreshMicList(askPermission) {
+  const sel  = $('dictationDeviceId');
+  const hint = $('micHint');
+  if (!sel) return;
+  try {
+    if (askPermission) {
+      // Quick permission ping; we immediately stop the tracks.
+      try {
+        const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+        s.getTracks().forEach(t => t.stop());
+      } catch (_) { /* user denied — labels stay empty */ }
+    }
+    const all = await navigator.mediaDevices.enumerateDevices();
+    const mics = all.filter(d => d.kind === 'audioinput');
+    // Keep first option (System default), replace the rest.
+    while (sel.options.length > 1) sel.remove(1);
+    let hasLabels = false;
+    for (const d of mics) {
+      const opt = document.createElement('option');
+      opt.value = d.deviceId;
+      opt.textContent = d.label || ('Microphone ' + (d.deviceId || '').slice(0, 8));
+      if (d.label) hasLabels = true;
+      sel.appendChild(opt);
+    }
+    // Restore selection if it still exists.
+    if (_pendingDeviceId && mics.some(d => d.deviceId === _pendingDeviceId)) {
+      sel.value = _pendingDeviceId;
+    } else if (_pendingDeviceId) {
+      // Saved device gone — fall back to default and tell the user.
+      sel.value = '';
+      if (hint) hint.textContent = 'Previously-selected microphone is no longer connected. Reverted to system default.';
+      return;
+    }
+    if (hint) {
+      hint.textContent = hasLabels
+        ? (mics.length + ' input device' + (mics.length === 1 ? '' : 's') + ' detected.')
+        : 'Click Re-scan and grant microphone permission to see device names.';
+    }
+  } catch (e) {
+    if (hint) hint.textContent = 'Failed to list microphones: ' + e.message;
+  }
+}
 
 // ── Whisper model picker ──────────────────────────────────────────────
 // Renders the list of available Whisper.cpp models from

@@ -679,7 +679,16 @@ function loadConversation(id) {
   }
 
   renderConvList();
-  scrollBottom();
+  // Use forceScrollBottom() — not scrollBottom() — because the shared
+  // `_userScrolledUp` latch carries over from whatever the previous conv
+  // looked like, and `display:none → display:contents` swap inside
+  // #messages-inner can briefly leave #messages scrolled to the top of the
+  // new conv. Defer one frame so the new conv's height has settled before
+  // we set scrollTop = scrollHeight.
+  forceScrollBottom();
+  requestAnimationFrame(function() {
+    if (state.currentId === id) forceScrollBottom();
+  });
   if (typeof _updateMoveToProjectBtn === 'function') _updateMoveToProjectBtn();
 
   // Ensure the recommended-actions bar is present for the latest assistant turn.

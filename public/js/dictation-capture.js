@@ -38,15 +38,48 @@
   const MAX_SAMPLES = MAX_SECONDS * TARGET_SR;
 
   async function start() {
+    // Resolve preferred input device from voice-settings (best-effort: if the
+    // server is unreachable or the saved deviceId no longer exists we fall
+    // back to the OS default mic).
+    let deviceId = '';
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: false,
-      });
+      const r = await fetch('/api/voice-settings');
+      if (r.ok) {
+        const j = await r.json();
+        if (j && j.ok && j.settings && typeof j.settings.dictationDeviceId === 'string') {
+          deviceId = j.settings.dictationDeviceId;
+        }
+      }
+    } catch (_) { /* offline or pre-server-ready; default mic is fine */ }
+
+    const audioConstraints = {
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    };
+    if (deviceId) audioConstraints.deviceId = { exact: deviceId };
+
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: false });
     } catch (e) {
-      showErr('mic permission denied: ' + e.message);
-      stateEl.textContent = 'error';
-      return;
+      // If the saved device is gone / blocked, retry once with the default.
+      if (deviceId && (e.name === 'OverconstrainedError' || e.name === 'NotFoundError')) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+            video: false,
+          });
+        } catch (e2) {
+          showErr('mic permission denied: ' + e2.message);
+          stateEl.textContent = 'error';
+          return;
+        }
+      } else {
+        showErr('mic permission denied: ' + e.message);
+        stateEl.textContent = 'error';
+        return;
+      }
     }
     ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: TARGET_SR });
     source = ctx.createMediaStreamSource(stream);
