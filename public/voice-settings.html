@@ -85,6 +85,16 @@
     <input id="dictationAccel" type="text" placeholder="Cmd+Alt+D" />
     <p class="hint">Electron accelerator syntax — e.g. <span class="kbd">Cmd+Shift+D</span>, <span class="kbd">Ctrl+Alt+Space</span>.</p>
     <label class="check"><input type="checkbox" id="dictationPasteOnFinish"> Auto-paste into the focused window (experimental)</label>
+
+    <label for="dictSilenceMs" style="margin-top:18px">Silence auto-stop (ms)</label>
+    <input id="dictSilenceMs" type="number" min="0" max="10000" step="100" placeholder="1500" />
+    <p class="hint">Tap-toggle mode stops automatically after this much silence. Set to <span class="kbd">0</span> to disable auto-stop (then you must tap the mic to end). Hold-to-talk ignores this.</p>
+
+    <label class="check" style="margin-top:14px"><input type="checkbox" id="dictPTTEnabled"> Enable push-to-talk (hold the mic button) <span class="pill">recommended</span></label>
+    <label class="check"><input type="checkbox" id="dictPTTAutoSend"> Auto-send message on push-to-talk release</label>
+    <p class="hint">Hold the <i class="ti ti-microphone"></i> mic button or hotkey to record; release to stop. A short tap still toggles like before.</p>
+
+    <label class="check" style="margin-top:14px"><input type="checkbox" id="voiceAudioCues"> Play short tones on recording start / stop <span class="pill">accessibility</span></label>
   </section>
 
   <section>

@@ -1487,6 +1487,19 @@ var _dictAudioCtx      = null;  // AudioContext for dictation VAD
 var _dictChunks        = [];    // recorded audio chunks
 var _dictState = 'idle'; // 'idle' | 'listening' | 'processing'
 
+// ── Push-to-talk (Phase 8) ──────────────────────────────────────────────
+// Hold-to-talk on the dictate button (or via the hotkey). A short press
+// (< PTT_HOLD_THRESHOLD_MS) still toggles like before; a long press enters
+// PTT mode where VAD silence-auto-stop is disabled and the only thing that
+// stops the recording is releasing the button. Mirrors VS Code's
+// `holdToVoiceChatInChatView` ergonomics.
+var PTT_HOLD_THRESHOLD_MS = 250;
+var _pttHoldTimer        = null;  // setTimeout fired when a press exceeds threshold
+var _pttActive           = false; // recording was started in hold mode
+var _pttSuppressNextClick = false; // ignore the click that follows mouseup of a held press
+var _pttAutoSendPending  = false; // commit transcript then trigger sendButtonAction()
+var _dictPttAttached     = false; // listeners attached once
+
 var _DICTATION_CONV_CMDS = [
   { re: /\bnew\s+conv(ersation)?\b/i,            action: 'new' },
   { re: /\bcreate\s+(a\s+)?conv(ersation)?\b/i,  action: 'new' },
@@ -1498,19 +1511,28 @@ var _DICTATION_CONV_CMDS = [
 function _dictSetState(s) {
   _dictState = s;
   var btn = document.getElementById('dictate-btn');
-  if (!btn) return;
-  btn.classList.remove('recording', 'processing');
-  if (s === 'listening') {
-    btn.classList.add('recording');
-    btn.title = 'Listening\u2026 (silence stops automatically)';
-    btn.innerHTML = '<i class="ti ti-microphone-off"></i>';
-  } else if (s === 'processing') {
-    btn.classList.add('processing');
-    btn.title = 'Transcribing\u2026';
-    btn.innerHTML = '<i class="ti ti-loader"></i>';
-  } else {
-    btn.title = 'Dictate message';
-    btn.innerHTML = '<i class="ti ti-microphone"></i>';
+  var live = document.getElementById('dictate-aria-live');
+  if (btn) {
+    btn.classList.remove('recording', 'processing');
+    if (s === 'listening') {
+      btn.classList.add('recording');
+      btn.title = _pttActive
+        ? 'Push-to-talk — release to stop'
+        : 'Listening\u2026 (silence stops automatically)';
+      btn.innerHTML = '<i class="ti ti-microphone-off"></i>';
+    } else if (s === 'processing') {
+      btn.classList.add('processing');
+      btn.title = 'Transcribing\u2026';
+      btn.innerHTML = '<i class="ti ti-loader"></i>';
+    } else {
+      btn.title = 'Dictate \u00b7 tap to toggle, hold to push-to-talk';
+      btn.innerHTML = '<i class="ti ti-microphone"></i>';
+    }
+  }
+  if (live) {
+    if (s === 'listening')      live.textContent = _pttActive ? 'Push-to-talk recording' : 'Listening';
+    else if (s === 'processing') live.textContent = 'Transcribing';
+    else                          live.textContent = '';
   }
 }
 
@@ -1541,9 +1563,10 @@ function _dictCommitFinal(text) {
 function _dictHandleTranscript(text) {
   text = text.trim();
   _dictSetState('idle');
-  if (!text) { _dictBubbleHide(); return; }
+  if (!text) { _dictBubbleHide(); _pttAutoSendPending = false; return; }
   _dictBubbleSet('done', text);
   _dictBubbleHide(1200);
+  if (getVoiceSetting('voiceAudioCues', true)) _playVoiceChime('complete');
 
   // Check for conversation commands first
   for (var i = 0; i < _DICTATION_CONV_CMDS.length; i++) {
@@ -1558,6 +1581,7 @@ function _dictHandleTranscript(text) {
       } else if (action === 'prev') {
         _speakConvNavigate(-1);
       }
+      _pttAutoSendPending = false;
       return;
     }
   }
@@ -1565,6 +1589,16 @@ function _dictHandleTranscript(text) {
   _dictCommitFinal(text);
   var ta = document.getElementById('msg-input');
   if (ta) { ta.focus(); ta._dictBase = undefined; }
+
+  // PTT auto-send: if the user released the hold-to-talk button with
+  // `dictPTTAutoSend` enabled, fire the send action now that the textarea
+  // has been populated with the final transcript.
+  if (_pttAutoSendPending) {
+    _pttAutoSendPending = false;
+    try {
+      if (typeof sendButtonAction === 'function') sendButtonAction();
+    } catch (e) { console.warn('[dictate] PTT auto-send failed:', e); }
+  }
 }
 
 function _speakConvNavigate(dir) {
@@ -1579,10 +1613,19 @@ function _speakConvNavigate(dir) {
   if (typeof loadConversation === 'function') loadConversation(convs[next].id);
 }
 
-var DICT_SILENCE_MS    = 1500;  // ms of silence before auto-stop
+var DICT_SILENCE_MS    = 1500;  // ms of silence before auto-stop (overridable via voice setting `dictSilenceMs`)
 var DICT_MAX_MS        = 30000; // absolute max recording length
 var DICT_RMS_THRESHOLD = 0.004; // energy floor (same as wake word VAD)
 var DICT_INTERIM_MS    = 1800;  // how often to re-transcribe partial audio
+
+function _dictSilenceMs() {
+  var n = Number(getVoiceSetting('dictSilenceMs', DICT_SILENCE_MS));
+  // Clamp to a reasonable window. 0 disables silence auto-stop (tap-to-stop only).
+  if (!Number.isFinite(n) || n < 0) return DICT_SILENCE_MS;
+  if (n > 0 && n < 300)   return 300;
+  if (n > 10000)          return 10000;
+  return n;
+}
 
 // Live caption bubble pinned above #input-wrap.
 function _dictEnsureBubble() {
@@ -1649,6 +1692,10 @@ async function _dictInterimTranscribe() {
 }
 
 function startDictation() {
+  // PTT mouseup synthesises a click — swallow it so we don't immediately
+  // toggle a fresh recording on top of the one we just stopped.
+  if (_pttSuppressNextClick) { _pttSuppressNextClick = false; return; }
+
   // Toggle off if already running
   if (_dictState === 'listening' || _dictState === 'processing') {
     _dictStopRecording();
@@ -1681,6 +1728,7 @@ function startDictation() {
       _dictMediaRecorder.start(250);
       _dictSetState('listening');
       _dictBubbleSet('listening', '');
+      if (getVoiceSetting('voiceAudioCues', true)) _playVoiceChime('activate');
 
       // VAD: stop on silence after speech detected. Also drives a CSS
       // variable on #input-wrap so the border can pulse with audio energy.
@@ -1712,7 +1760,10 @@ function startDictation() {
           silenceMs = 0;
         } else if (hadSpeech) {
           silenceMs += 100;
-          if (silenceMs >= DICT_SILENCE_MS) {
+          // In PTT mode the only way to stop is releasing the button —
+          // disabled silence-threshold also disables auto-stop.
+          var stopOnSilence = !_pttActive && _dictSilenceMs() > 0;
+          if (stopOnSilence && silenceMs >= _dictSilenceMs()) {
             clearInterval(vadTimer);
             clearInterval(interimTimer);
             clearTimeout(maxTimer);
@@ -1790,6 +1841,78 @@ async function _dictTranscribe() {
     if (typeof showToast === 'function') showToast('Dictation failed — try again');
   } finally {
     _dictSetState('idle');
+  }
+}
+
+// ── Push-to-talk wiring (Phase 8) ────────────────────────────────────────
+// Attach mousedown/touchstart on the dictate button. A press that exceeds
+// PTT_HOLD_THRESHOLD_MS starts a recording in PTT mode (no VAD silence-
+// auto-stop) and the release event stops it. A short press falls through
+// to the existing onclick=startDictation() toggle behaviour. Mirrors VS
+// Code's `holdToVoiceChatInChatView` chord.
+function _pttBeginPress(ev) {
+  // Ignore right-click / aux buttons
+  if (ev && typeof ev.button === 'number' && ev.button !== 0) return;
+  // Don't arm PTT if a recording is already in progress — let the click
+  // toggle it off instead.
+  if (_dictState === 'listening' || _dictState === 'processing') return;
+  if (!getVoiceSetting('dictPTTEnabled', true)) return;
+
+  if (_pttHoldTimer) { clearTimeout(_pttHoldTimer); _pttHoldTimer = null; }
+  _pttHoldTimer = setTimeout(function() {
+    _pttHoldTimer = null;
+    _pttActive    = true;
+    // Start the actual recording. We deliberately reuse startDictation()
+    // so we don't fork the (long) MediaRecorder + VAD setup.
+    try { startDictation(); } catch (e) { console.warn('[ptt] start failed:', e); }
+  }, PTT_HOLD_THRESHOLD_MS);
+}
+
+function _pttEndPress() {
+  if (_pttHoldTimer) {
+    // Released before threshold → not PTT; let the synthetic click handler
+    // run (it will toggle via startDictation()).
+    clearTimeout(_pttHoldTimer);
+    _pttHoldTimer = null;
+    return;
+  }
+  if (!_pttActive) return;
+  _pttActive            = false;
+  _pttSuppressNextClick = true;  // mouseup → click would otherwise re-toggle
+  // Re-arm the suppression in case no synthetic click fires (touch / drag-off).
+  setTimeout(function() { _pttSuppressNextClick = false; }, 400);
+
+  if (getVoiceSetting('dictPTTAutoSend', false)) _pttAutoSendPending = true;
+
+  if (_dictState === 'listening') {
+    _dictStopRecording();
+  }
+}
+
+function _attachDictPTT() {
+  if (_dictPttAttached) return;
+  var btn = document.getElementById('dictate-btn');
+  if (!btn) return;
+  _dictPttAttached = true;
+
+  btn.addEventListener('mousedown',  _pttBeginPress);
+  btn.addEventListener('touchstart', _pttBeginPress, { passive: true });
+  // Any of these end the press; covers drag-off the button too.
+  btn.addEventListener('mouseup',    _pttEndPress);
+  btn.addEventListener('mouseleave', _pttEndPress);
+  btn.addEventListener('touchend',   _pttEndPress);
+  btn.addEventListener('touchcancel',_pttEndPress);
+  // If the user holds the button then escapes, kill the recording too.
+  window.addEventListener('blur', function() {
+    if (_pttActive) _pttEndPress();
+  });
+}
+
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _attachDictPTT, { once: true });
+  } else {
+    _attachDictPTT();
   }
 }
 

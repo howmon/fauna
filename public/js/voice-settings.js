@@ -4,6 +4,30 @@
 const $ = (id) => document.getElementById(id);
 const status = $('status');
 
+// Renderer-only prefs that live in localStorage (shared per-origin with the
+// main window where voice.js reads them via getVoiceSetting). These cover
+// UX toggles that don't need to touch the on-disk JSON.
+const LOCAL_KEY = 'fauna-voice-settings';
+const LOCAL_DEFAULTS = {
+  dictSilenceMs:  1500,
+  dictPTTEnabled: true,
+  dictPTTAutoSend: false,
+  voiceAudioCues: true,
+};
+function _localStore() {
+  try { return JSON.parse(localStorage.getItem(LOCAL_KEY) || '{}'); }
+  catch (_) { return {}; }
+}
+function _localGet(key) {
+  const s = _localStore();
+  return s[key] === undefined ? LOCAL_DEFAULTS[key] : s[key];
+}
+function _localSet(patch) {
+  const s = _localStore();
+  Object.assign(s, patch);
+  localStorage.setItem(LOCAL_KEY, JSON.stringify(s));
+}
+
 function setStatus(msg, ok = true) {
   status.textContent = msg;
   status.style.color = ok ? 'var(--ok)' : 'var(--err)';
@@ -42,6 +66,26 @@ function fillForm(s) {
   $('toolTopK').value           = s.toolTopK;
   $('toolMustKeep').value       = (s.toolMustKeep || []).join(', ');
   loadVoices(s.ttsVoice || '');
+  // Renderer-only prefs (PTT, audio cues, silence threshold)
+  fillLocalForm();
+}
+
+function fillLocalForm() {
+  $('dictSilenceMs').value      = _localGet('dictSilenceMs');
+  $('dictPTTEnabled').checked   = !!_localGet('dictPTTEnabled');
+  $('dictPTTAutoSend').checked  = !!_localGet('dictPTTAutoSend');
+  $('voiceAudioCues').checked   = !!_localGet('voiceAudioCues');
+}
+
+function saveLocalForm() {
+  const raw = $('dictSilenceMs').value.trim();
+  const ms  = raw === '' ? LOCAL_DEFAULTS.dictSilenceMs : Math.max(0, Math.min(10000, parseInt(raw, 10) || 0));
+  _localSet({
+    dictSilenceMs:  ms,
+    dictPTTEnabled: $('dictPTTEnabled').checked,
+    dictPTTAutoSend:$('dictPTTAutoSend').checked,
+    voiceAudioCues: $('voiceAudioCues').checked,
+  });
 }
 
 function readForm() {
@@ -67,12 +111,17 @@ async function load() {
   const r = await fetch('/api/voice-settings');
   const j = await r.json();
   if (j.ok) fillForm(j.settings);
+  // Make sure renderer-only fields populate even if the server call failed.
+  fillLocalForm();
 }
 
 async function save() {
   const btn = $('save');
   btn.disabled = true;
   try {
+    // Renderer-only prefs first — they're cheap and even if the server PATCH
+    // fails the user keeps the PTT/cue choices.
+    saveLocalForm();
     const r = await fetch('/api/voice-settings', {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
@@ -90,6 +139,8 @@ async function save() {
 
 async function reset() {
   if (!confirm('Reset all voice settings to defaults?')) return;
+  // Wipe renderer-only prefs too so the form fully resets.
+  try { localStorage.removeItem(LOCAL_KEY); } catch (_) {}
   const r = await fetch('/api/voice-settings/reset', { method: 'POST' });
   const j = await r.json();
   if (j.ok) { fillForm(j.settings); setStatus('Reset ✓'); }

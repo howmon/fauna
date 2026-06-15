@@ -455,7 +455,8 @@
             </div>
           </div>
           <textarea id="msg-input" placeholder="Ask Fauna anything…" rows="1"></textarea>
-          <button id="dictate-btn" onclick="startDictation()" title="Dictate message"><i class="ti ti-microphone"></i></button>
+          <button id="dictate-btn" onclick="startDictation()" title="Dictate · tap to toggle, hold to push-to-talk" aria-label="Dictate message — tap to toggle, hold to push-to-talk"><i class="ti ti-microphone"></i></button>
+          <span id="dictate-aria-live" aria-live="polite" role="status" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden"></span>
           <button id="capture-btn" onclick="triggerCapture()" title="Capture screen region"><i class="ti ti-screenshot"></i></button>
           <button id="stop-btn" onclick="stopGeneration()" title="Stop generation" aria-label="Stop generation"><i class="ti ti-player-stop-filled"></i></button>
           <button id="send-btn" onclick="sendButtonAction()" title="Send (⌘↵ or ⏎)" aria-label="Send message"><i class="ti ti-send"></i></button>
