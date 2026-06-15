@@ -40,6 +40,16 @@ describe('gen-ui catalog prompt — component coverage', () => {
     expect(GEN_UI_CATALOG_PROMPT).toMatch(/"theme":\s*\{/);
   });
 
+  it('documents flexible Grid columns + span (Phase 7 layout)', () => {
+    // Catalog must teach number-OR-array columns AND child span.
+    expect(GEN_UI_CATALOG_PROMPT).toMatch(/`Grid`[^\n]*columns[^\n]*(array|\[)/i);
+    expect(GEN_UI_CATALOG_PROMPT).toMatch(/span:/);
+    // Dashboard worked example must include a non-uniform columns array.
+    expect(GEN_UI_CATALOG_PROMPT).toMatch(/"columns":\s*\[\s*2\s*,\s*1\s*\]/);
+    // And at least one child uses span.
+    expect(GEN_UI_CATALOG_PROMPT).toMatch(/"span":\s*2/);
+  });
+
   it('documents $bindState on Input/Select so the agent emits live forms', () => {
     expect(GEN_UI_CATALOG_PROMPT).toMatch(/\$bindState/);
   });

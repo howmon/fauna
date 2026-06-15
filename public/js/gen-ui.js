@@ -601,8 +601,25 @@ var _genUiComponents = {
   Grid: function(el, props, children, store) {
     var div = document.createElement('div');
     div.className = 'gui-grid';
-    var cols = props.columns || 2;
-    div.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
+    // columns accepts:
+    //   number          → N equal columns ("repeat(N, 1fr)")
+    //   number[]        → "<n>fr <n>fr ..." (relative widths, e.g. [2,1])
+    //   string[]        → verbatim track list (e.g. ["240px","1fr","1fr"])
+    // Any non-finite/non-positive entry falls back to "1fr".
+    function _trackList(spec) {
+      if (Array.isArray(spec) && spec.length > 0) {
+        return spec.map(function(t) {
+          if (typeof t === 'number' && isFinite(t) && t > 0) return t + 'fr';
+          if (typeof t === 'string' && /^[a-z0-9.%()\-\s]+$/i.test(t)) return t;
+          return '1fr';
+        }).join(' ');
+      }
+      var n = parseInt(spec, 10);
+      if (!isFinite(n) || n < 1) n = 2;
+      return 'repeat(' + n + ', 1fr)';
+    }
+    div.style.gridTemplateColumns = _trackList(props.columns);
+    if (props.rows != null) div.style.gridTemplateRows = _trackList(props.rows);
     if (props.gap) div.style.gap = typeof props.gap === 'number' ? props.gap + 'px' : props.gap;
     children.forEach(function(c) { div.appendChild(c); });
     return div;
@@ -1445,7 +1462,17 @@ function _genUiRenderElement(id, elements, store, depth) {
     unknown.textContent = '[' + (el.type || '?') + ']';
     return unknown;
   }
-  return renderer(el, props, children, store);
+  var rendered = renderer(el, props, children, store);
+  // Universal grid-cell sizing: props.span / props.rowSpan apply
+  // grid-column / grid-row span on the rendered node. No-op when the
+  // parent isn't a CSS grid, so it's safe to set unconditionally.
+  if (rendered && rendered.style) {
+    var sp = parseInt(props.span, 10);
+    if (isFinite(sp) && sp > 1) rendered.style.gridColumn = 'span ' + sp;
+    var rsp = parseInt(props.rowSpan, 10);
+    if (isFinite(rsp) && rsp > 1) rendered.style.gridRow = 'span ' + rsp;
+  }
+  return rendered;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────

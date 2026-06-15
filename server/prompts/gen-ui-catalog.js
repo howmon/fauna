@@ -99,7 +99,7 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 |------|-----------|-------|
 | \`Card\` | \`title\`, \`description\` | Container with optional header |
 | \`Stack\` | \`direction\` ("vertical"/"horizontal"), \`gap\`, \`align\`, \`justify\`, \`wrap\` | Flex layout |
-| \`Grid\` | \`columns\` (number), \`gap\` | CSS grid layout |
+| \`Grid\` | \`columns\` (\`N\` for N equal columns, OR array like \`[2,1]\` → 2fr/1fr, OR \`["240px","1fr","1fr"]\` for fixed/fluid mix), \`rows\` (same shape, optional), \`gap\` | CSS grid layout. Any child can set \`span: N\` / \`rowSpan: N\` to occupy multiple cells (e.g. a wide chart spanning 2 of 3 columns). Use this for dashboard-style multi-band layouts. |
 | \`Heading\` | \`text\`, \`level\` (1–6) | Heading element |
 | \`Text\` | \`text\`, \`muted\`, \`strong\`, \`small\`, \`code\` | Paragraph |
 | \`Badge\` | \`label\`, \`variant\` ("default"/"success"/"warning"/"error"/"info") | Colored badge |
@@ -254,6 +254,57 @@ A recommendation list without action buttons is decoration. The user shouldn't h
     "preview":{ "type": "Card", "props": { "title": "Live preview" }, "children": ["pv-text"] },
     "pv-text":{ "type": "Heading", "props": { "level": 3,
                   "text": { "$template": "Hi \${/name} — \${/role}!" } }, "children": [] }
+  }
+}
+\`\`\`
+
+### Layout patterns — multi-column / multi-row dashboards
+
+For anything that has rows of cards or mixes wide and narrow cells (chart + sidebar, hero stat + tile row, summary above details), reach for \`Grid\` with **non-uniform columns** and **\`span\` on children**, not nested Stacks.
+
+- \`Grid.columns: 3\` — 3 equal columns (shorthand).
+- \`Grid.columns: [2, 1]\` — first column twice as wide as second (fr units).
+- \`Grid.columns: ["240px", "1fr", "1fr"]\` — fixed-width sidebar + two fluid columns.
+- Any child element: \`props.span: 2\` to make it occupy 2 grid columns; \`props.rowSpan: 2\` for height.
+- \`Grid.rows\` accepts the same shape if you need explicit row sizing.
+- Compose vertical sections with an outer \`Stack(direction:"vertical")\` of multiple \`Grid\`s — one per dashboard band.
+
+### Example — multi-band dashboard layout
+\`\`\`gen-ui
+{
+  "root": "page",
+  "elements": {
+    "page":      { "type": "Stack", "props": { "direction": "vertical", "gap": 16 }, "children": ["band1","band2","band3"] },
+
+    "band1":     { "type": "Grid",  "props": { "columns": [2, 1], "gap": 12 }, "children": ["chart","side"] },
+    "chart":     { "type": "Card",  "props": { "title": "Incident flow" }, "children": ["chart-desc"] },
+    "chart-desc":{ "type": "Text",  "props": { "text": "Sankey of incidents → triage → outcome.", "muted": true }, "children": [] },
+    "side":      { "type": "Card",  "props": { "title": "Top alerts" }, "children": ["side-list"] },
+    "side-list": { "type": "List",  "props": { "items": [
+                     { "label": "Lateral movement via SMB", "description": "High · 12 hosts" },
+                     { "label": "Multi-stage phishing",     "description": "High · 4 inboxes" },
+                     { "label": "Credential stuffing",      "description": "Medium · 2 accts" }
+                   ] }, "children": [] },
+
+    "band2":     { "type": "Grid",  "props": { "columns": 3, "gap": 12 }, "children": ["s1","s2","s3"] },
+    "s1":        { "type": "Stat",  "props": { "value": "41", "label": "Automation", "format": "percent", "trend": 13,
+                     "series": [22,28,30,34,38,41] }, "children": [] },
+    "s2":        { "type": "Stat",  "props": { "value": "224", "label": "Hours saved", "format": "number", "trend": 28 }, "children": [] },
+    "s3":        { "type": "Stat",  "props": { "value": "39",  "label": "Open incidents", "trend": -8 }, "children": [] },
+
+    "band3":     { "type": "Grid",  "props": { "columns": ["1fr","1fr","1fr"], "gap": 12 }, "children": ["wide","narrow"] },
+    "wide":      { "type": "Card",  "props": { "span": 2, "title": "Recommended agent sessions" }, "children": ["wide-row"] },
+    "wide-row":  { "type": "Stack", "props": { "direction": "vertical", "gap": 8 }, "children": ["r1","r2"] },
+    "r1":        { "type": "Stack", "props": { "direction": "horizontal", "gap": 8, "justify": "space-between" }, "children": ["r1-txt","r1-btn"] },
+    "r1-txt":    { "type": "Text",  "props": { "text": "Investigate & remediate multi-stage phishing" }, "children": [] },
+    "r1-btn":    { "type": "Button","props": { "label": "Start", "variant": "primary",
+                     "action": "send_prompt", "actionParams": { "text": "Start the phishing remediation session." } }, "children": [] },
+    "r2":        { "type": "Stack", "props": { "direction": "horizontal", "gap": 8, "justify": "space-between" }, "children": ["r2-txt","r2-btn"] },
+    "r2-txt":    { "type": "Text",  "props": { "text": "Triage credential stuffing" }, "children": [] },
+    "r2-btn":    { "type": "Button","props": { "label": "Schedule",
+                     "action": "send_prompt", "actionParams": { "text": "Schedule the credential-stuffing detection job." } }, "children": [] },
+    "narrow":    { "type": "Card",  "props": { "title": "Impact" }, "children": ["narrow-text"] },
+    "narrow-text":{ "type": "Text", "props": { "text": "Agents reduce manual triage by ~40% on average.", "muted": true }, "children": [] }
   }
 }
 \`\`\`
