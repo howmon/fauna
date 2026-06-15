@@ -114,4 +114,10 @@ describe('getToolCategory unchanged', () => {
     expect(getToolCategory('figma_execute')).toBe('figma');
     expect(getToolCategory('mystery_tool')).toBe('other');
   });
+  it('classifies native fauna/agent shell tools as shell (regression)', () => {
+    // These are the actual function names the model sees. Before this fix
+    // they fell into 'other' because SHELL_TOOLS only listed generic names.
+    expect(getToolCategory('fauna_shell_exec')).toBe('shell');
+    expect(getToolCategory('agent_shell_exec')).toBe('shell');
+  });
 });

@@ -733,7 +733,7 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
         '<span>Shell Command</span>' +
         (autoRun ? '<span class="shell-exec-autorun-badge">auto-run</span>' : '') +
         (chainPending ? '<span class="shell-exec-autorun-badge">auto-run (chained)</span>' : '') +
-        (suppressedAutoRun ? '<span class="shell-exec-autorun-badge" style="background:var(--fau-surface2);color:var(--fau-text-dim)">manual — structured repair</span>' : '') +
+        (suppressedAutoRun ? '<span class="shell-exec-autorun-badge" title="Auto-run was paused for this command because the previous step looked like a malformed write-file repair. Click Run to execute." style="background:var(--fau-surface2);color:var(--fau-text-dim)">paused — click Run</span>' : '') +
         (depthLimited ? '<span class="shell-exec-autorun-badge" style="background:var(--warn,#f59e0b);color:#000">paused — click Run</span>' : '') +
         '<div class="shell-exec-btns">' +
           '<button class="shell-exec-run" id="' + execId + '-run" ' +
@@ -746,7 +746,7 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
       '<div class="shell-exec-result" id="' + execId + '-result"' + (depthLimited || chainPending || suppressedAutoRun ? '' : ' style="display:none"') + '>' +
         (depthLimited ? '<span class="se-meta">Auto-run paused after ' + DEPTH_LIMIT + ' steps — click Run to continue.</span>' : '') +
         (chainPending ? '<span class="se-meta">Queued — will run automatically after the previous command.</span>' : '') +
-        (suppressedAutoRun ? '<span class="se-meta">Auto-run disabled for write-file repair. Use file-plan, append-file, or replace-string instead.</span>' : '') +
+        (suppressedAutoRun ? '<span class="se-meta">Auto-run paused — the previous step looked like a malformed write-file repair. Click <b>Run</b> to execute this command, or have Fauna retry with file-plan / append-file / replace-string instead.</span>' : '') +
       '</div>';
     pre.parentNode.replaceChild(widget, pre);
     updateMessageShellVerification(messageEl);

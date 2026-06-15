@@ -16,7 +16,14 @@ const BROWSER_TOOLS = new Set([
 ]);
 
 const SHELL_TOOLS = new Set([
+  // MCP / generic shell tool names
   'shell_exec', 'bash', 'run_command', 'agent_shell',
+  // Native Fauna shell tools — these are the actual function names exposed
+  // to the model (see self-tools.js fauna_shell_exec and agent-tools.js
+  // agent_shell_exec). Omitting them caused both to be miscategorised as
+  // 'other', so the shell cap/permission branch never fired for native
+  // calls and the model's mental model of remaining shell budget was wrong.
+  'fauna_shell_exec', 'agent_shell_exec',
 ]);
 
 const FILE_TOOLS = new Set([

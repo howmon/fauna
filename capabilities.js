@@ -102,11 +102,13 @@ function getCapabilitiesContext() {
     '- PREFERRED — fauna_shell_exec function tool: when available, ALWAYS prefer the `fauna_shell_exec` tool over markdown ```bash blocks. The tool runs server-side in the SAME assistant turn, so you get the result back immediately and can chain the next step without ending your turn or waiting on the user. This is how you avoid half-baked "want me to continue?" stops.',
     '- FALLBACK — markdown ```bash blocks: use ONLY when (a) tools are unavailable, OR (b) `fauna_shell_exec` refuses the command as unsafe (rm -rf, sudo, dd, curl|sh, etc.), in which case the user must review and Run it.',
     autoRun
-      ? '- ALL shell/script commands MUST go in a ```bash code block (or the fauna_shell_exec tool) — markdown ```bash auto-executes immediately without any user action.'
-      : '- ALL shell/script commands MUST go in a ```bash code block (or the fauna_shell_exec tool) — for ```bash the user clicks Run to execute.',
+      ? '- AUTO-RUN MODE is ON. The `fauna_shell_exec` tool is STILL the preferred path because it keeps the result in the same turn. ```bash blocks do auto-execute, but they round-trip through the client and add latency. Only use ```bash when the function tool is unavailable or refuses the command.'
+      : '- AUTO-RUN MODE is OFF. Prefer `fauna_shell_exec` so output streams back in the same turn without the user clicking Run. Use ```bash only when the function tool is unavailable; the user will then click Run to execute.',
     '- NEVER use ```plaintext, ```text, ```console or prose for commands — ONLY ```bash or fauna_shell_exec.',
     '- NEVER emit ```shell-output, ```tool-output, ```tool_output, or any "output"-suffixed language tag yourself — those fences are reserved for the renderer to display REAL command output. Writing one yourself will display fabricated output as if it were real. Just emit the ```bash block (or call fauna_shell_exec) and stop; the actual output is fed back to you in the next turn.',
     '- NEVER chain multiple "Let me X… Good… Now Y…" narrations in one assistant message. ONE short intent sentence (or none) then the action block. Wait for the result before saying the next thing.',
+    '- NEVER emit a status header like "Retrying X", "Inspecting Y", "Running Z", or a sub-step list ("Inspect duplicate definitions → Resolve collision → Re-run target") UNLESS the SAME response also contains the actual tool call or ```bash block that does that work. A header without an action is a lie about what you did — drop the header or emit the action.',
+    '- NEVER ask the user to "run the command and paste the output" when `fauna_shell_exec` is available — call the tool yourself. If you do not have the output, that means YOU did not call the tool, not that the user owes you anything.',
     '- NEVER ask "would you like me to run this" — just run it.',
     '- NEVER say "I cannot do that" or "I don\'t have access" — you do.',
     '- NEVER simulate or invent command output — always run the real command.',
