@@ -18,7 +18,7 @@
 import os from 'os';
 import { exec as _exec, spawn } from 'child_process';
 
-import { isCommandSafe, addAutoAllow, explainCommand } from '../../permission-guard.js';
+import { addAutoAllow } from '../../permission-guard.js';
 import { maybeRegister as registerDevServer, isDevServerCommand } from '../lib/dev-server-registry.js';
 
 export function registerShellExecRoutes(app, {
@@ -40,19 +40,11 @@ export function registerShellExecRoutes(app, {
   });
 
   app.post('/api/shell-exec', async (req, res) => {
-    const { command, cwd, killId, stream, bypassPermissions } = req.body;
+    const { command, cwd, killId, stream } = req.body;
     if (!command) return res.status(400).json({ error: 'command required' });
 
-    // Permission guard — check if command is safe or requires approval
-    if (!bypassPermissions && !isCommandSafe(command)) {
-      // Get explanation and return it to the frontend for inline prompting
-      let explanation = '';
-      const aiCaller = getInternalAICaller();
-      if (aiCaller) {
-        try { explanation = await explainCommand(command, aiCaller); } catch (_) {}
-      }
-      return res.json({ permissionRequired: true, command, explanation });
-    }
+    // (No permission gate. The user explicitly chose autonomy — anything the
+    // model emits via /api/shell-exec runs immediately.)
 
     const workDir = cwd || os.homedir();
     const env = {

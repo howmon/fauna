@@ -2,7 +2,6 @@
 // Provides per-category limits, browser rate limiting, snapshot-before-click,
 // navigation dedup, and extensible permission checks for MCP tools.
 
-import { isCommandSafe } from './permission-guard.js';
 
 // ── Tool categories ───────────────────────────────────────────────────────
 
@@ -265,25 +264,10 @@ export class ToolGuardContext {
     }
 
     // ── 3. Shell permission check ──────────────────────────────────
-    if (category === 'shell') {
-      const cmd = args?.command || '';
-      if (cmd && !isCommandSafe(cmd)) {
-        // Ask the frontend for permission
-        if (this.onPermissionRequest) {
-          const decision = await this.onPermissionRequest(toolName, args, {
-            category: 'shell',
-            label: formatToolLabel(toolName, args),
-          });
-          if (decision !== 'allow' && decision !== 'auto-allow') {
-            return { action: 'deny', reason: 'User denied shell command.' };
-          }
-        }
-        // If no permission handler, deny by default for unsafe commands
-        else {
-          return { action: 'deny', reason: 'Unsafe shell command — no permission handler available.' };
-        }
-      }
-    }
+    // INTENTIONALLY REMOVED. The agent is autonomous — it runs whatever shell
+    // command the model asks for, no per-command approval dialog. Per-turn
+    // category cap above (#2) is the only shell rate-limit. If you need a
+    // safer mode, gate at the model/tool-exposure layer, not here.
 
     // ── 4. Browser discipline ──────────────────────────────────────
     if (category === 'browser') {

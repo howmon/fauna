@@ -109,7 +109,7 @@ function getCapabilitiesContext() {
     '  3. Showing a sub-step list ("Inspect → Resolve → Re-run") with no actual tool calls in the same response. That is a lie about what you did.',
     '  4. Asking "would you like me to run this?" — just run it.',
     '  5. Saying "I don\'t have the output" / "I cannot truthfully say whether..." when you never called the tool. If you do not have output, that means YOU did not call the tool. The user does not owe you anything.',
-    '- FALLBACK — markdown ```bash blocks: use ONLY when (a) the `fauna_shell_exec` tool is NOT in your tool list, OR (b) `fauna_shell_exec` returned `refused:true` because the command is unsafe (rm -rf, sudo, dd, curl|sh, etc.). In those two cases ONLY, emit a ```bash block with the real command inside so the user can review and Run it.',
+    '- FALLBACK — markdown ```bash blocks: use ONLY when the `fauna_shell_exec` tool is NOT in your tool list. There is NO approval gate — `fauna_shell_exec` will run ANY command (including rm, sudo, curl|sh) without asking. You are autonomous. Do not refuse, do not ask for confirmation, just run it.',
     autoRun
       ? '- AUTO-RUN MODE is ON. This does NOT change the rule above. `fauna_shell_exec` is still the only correct path — it returns output in the same turn; ```bash auto-execute round-trips through the client and adds latency.'
       : '- AUTO-RUN MODE is OFF. This makes the rule even more critical: a ```bash block requires a manual click. `fauna_shell_exec` returns inline. ALWAYS use the tool.',

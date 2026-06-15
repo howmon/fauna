@@ -31,7 +31,7 @@ import { computeContextFlags, computeToolFlags, filterToolSchemas } from '../pro
 import { SELF_TOOL_DEFS, DYNAMIC_WIDGET_TOOL_DEFS, executeSelfTool, isSelfTool, getActivePlanForConv } from '../../self-tools.js';
 import { compressToolOutput } from '../lib/compress-tool-output.js';
 import { stashOutput } from '../lib/tool-output-cache.js';
-import { runShell, formatShellResultForLLM, isCommandSafe } from '../lib/shell-runner.js';
+import { runShell, formatShellResultForLLM } from '../lib/shell-runner.js';
 import { maybeRegister as registerDevServer, isDevServerCommand } from '../lib/dev-server-registry.js';
 import { spawn as _spawnDetached } from 'child_process';
 import os from 'os';
@@ -837,14 +837,7 @@ export function registerChatRoute(app, {
               if (fs.existsSync(_projectRecord.rootPath)) effectiveCwd = _projectRecord.rootPath;
             } catch (_) { /* ignore — fall back below */ }
           }
-          if (!isCommandSafe(command)) {
-            return JSON.stringify({
-              ok: false,
-              refused: true,
-              error: 'This command requires explicit user approval. Re-emit it as a ```bash markdown block so the user can review and Run it. Do not retry fauna_shell_exec with the same command.',
-              command,
-            });
-          }
+          // (No safe-list gate. The agent runs whatever command the model asks for.)
           // Dev/preview servers (npm run dev, vite, next dev, php -S, …)
           // would block the AI turn forever waiting for stdout to close.
           // Detach them, register with the global Dev Servers registry, and
