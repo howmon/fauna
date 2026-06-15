@@ -83,7 +83,17 @@ function renderProjectSidebarList() {
   if (!el) return;
   var MAX = 8;
   var MAX_CONVS = 6;
+  // Sort: ACTIVE project always pinned at the top, then everything else by
+  // most-recently-active. The active pin makes Activate clicks visually
+  // unambiguous — the project jumps to row 0 immediately, irrespective of
+  // race conditions between the local lastActiveAt bump and a slower server
+  // /touch round-trip.
+  var activeId = state.activeProjectId || null;
   var projects = (state.projects || []).slice().sort(function(a, b) {
+    if (activeId) {
+      if (a.id === activeId) return -1;
+      if (b.id === activeId) return 1;
+    }
     return (b.lastActiveAt || 0) > (a.lastActiveAt || 0) ? 1 : -1;
   });
   var visible = projects.slice(0, MAX);
