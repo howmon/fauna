@@ -554,10 +554,55 @@ function wrapInActivityDetails(msgEl) {
     var lang   = (pre.dataset.lang || '').toLowerCase();
     var codeEl = pre.querySelector('code');
     if (!codeEl) return;
-    var lines  = (codeEl.innerText || '').split('\n').length;
+    var codeText = codeEl.innerText || '';
+    var lines  = codeText.split('\n').length;
     if (lines < 8) return;
     var label  = (LANG_LABELS[lang] || lang.toUpperCase() || 'Code') + ' · ' + lines + ' lines';
+    // For shell-output blocks specifically, surface any URLs found in the
+    // captured stdout BEFORE collapsing it. Otherwise a 969-line pill hides
+    // exactly the thing the user asked for ("show me the url"). Prefer
+    // localhost / 127.0.0.1 / known dev-server URLs first, then any http(s).
+    var urlsAbove = '';
+    if (lang === 'shell-output' || lang === 'plaintext' || lang === 'text' ||
+        lang === 'console' || lang === 'bash' || lang === 'sh' || lang === 'zsh' || lang === 'shell') {
+      var urlRe = /https?:\/\/[^\s<>"'`]+/g;
+      var found = codeText.match(urlRe) || [];
+      var seen = {};
+      var ordered = [];
+      found.forEach(function(u) {
+        // Trim common trailing punctuation that often glues onto URLs in logs.
+        var clean = u.replace(/[.,;:!?)\]}'"`]+$/, '');
+        if (!seen[clean]) { seen[clean] = 1; ordered.push(clean); }
+      });
+      // Prioritise local dev-server URLs.
+      ordered.sort(function(a, b) {
+        var aLocal = /localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]/.test(a) ? 0 : 1;
+        var bLocal = /localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]/.test(b) ? 0 : 1;
+        return aLocal - bLocal;
+      });
+      var top = ordered.slice(0, 3);
+      if (top.length) {
+        urlsAbove = '<div class="shell-output-urls" style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 4px;font-size:12px">' +
+          top.map(function(u) {
+            return '<a href="' + escHtml(u) + '" target="_blank" rel="noopener noreferrer" ' +
+              'style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:6px;' +
+              'background:var(--fau-surface-2,rgba(255,255,255,0.06));color:var(--fau-link,#7aa2ff);' +
+              'text-decoration:none;border:1px solid var(--fau-border,rgba(255,255,255,0.08))">' +
+              '<i class="ti ti-external-link" style="font-size:11px"></i>' + escHtml(u) + '</a>';
+          }).join('') + '</div>';
+      }
+    }
     wrapGroupInCOT([pre], LANG_ICONS[lang] || 'ti-code', label);
+    if (urlsAbove) {
+      // Insert the URL row immediately BEFORE the freshly wrapped details so
+      // it's always visible without expanding the pill.
+      var details = pre.parentNode && pre.parentNode.parentNode; // pre → .cot-block-content → details
+      if (details && details.parentNode) {
+        var holder = document.createElement('div');
+        holder.innerHTML = urlsAbove;
+        details.parentNode.insertBefore(holder.firstChild, details);
+      }
+    }
   });
 
 }
