@@ -992,8 +992,16 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
   }
 
   if (role === 'user') {
+    // Show ONLY what the user actually typed. Strip every runtime context
+    // injection (browser tab dumps, planner coercion prose, system-context
+    // fences, date stamps) — the model still sees those because they live in
+    // the saved `m.content`, but the bubble shouldn't expose them.
+    var rawForDisplay = content;
+    if (typeof window.sanitizeUserDisplayContent === 'function') {
+      rawForDisplay = window.sanitizeUserDisplayContent(content);
+    }
     // Split off attachment fences for display
-    var display = content.split(/\n\n```\n\/\/ (File|URL):/)[0].trim();
+    var display = rawForDisplay.split(/\n\n```\n\/\/ (File|URL):/)[0].trim();
     body.innerHTML += (display ? escHtml(display).replace(/\n/g, '<br>') : '');
   } else if (isHTML) {
     body.innerHTML += content;

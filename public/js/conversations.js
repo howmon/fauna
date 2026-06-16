@@ -1117,6 +1117,41 @@ function _isSystemControlMessage(content) {
   return false;
 }
 
+// Strip every runtime-injected preamble/postscript out of a user-role message
+// so the bubble shows ONLY what the user actually typed. Used by both the
+// display renderer (ui.js) and the export path (_sanitizeExportContent).
+//
+// We inject context into user messages from a half-dozen places:
+//   - Live browser tab dumps (//  Browser page: / // Live browser tab context)
+//   - The planner's "[The user has confirmed the plan…]" coercion prose
+//   - System-task context fences (Desktop contents, etc.)
+//   - The trailing "[Current date and time: …]" stamp
+// All of that needs to reach the model — none of it should be visible to the
+// user. They typed "proceed", so the bubble should show "proceed".
+function sanitizeUserDisplayContent(content) {
+  if (typeof content !== 'string') return content;
+  var s = content;
+  // Leading "// Browser page:" attachment fence.
+  s = s.replace(/^```[\s\S]*?\/\/ Browser page:[\s\S]*?```\s*/m, '');
+  // "[Resolved live browser tab context — …]" note.
+  s = s.replace(/\[Resolved live browser tab context[\s\S]*?\]\s*/m, '');
+  // "// Live browser tab context" trailing dump.
+  s = s.replace(/```[\s\S]*?\/\/ Live browser tab context[\s\S]*?```\s*/g, '');
+  // Planner's "[The user has confirmed the plan. Now output…]" coercion.
+  s = s.replace(/\n*\[The user has confirmed the plan\.[\s\S]*?\]\s*/g, '');
+  // gatherSystemContext "Current Desktop contents" prose + any other prose
+  // it appends as a `Current ... :\n```...```\n` sandwich. Drop the leading
+  // labelled-fence block when it appears just above/below user text.
+  s = s.replace(/Current Desktop contents \(`ls ~\/Desktop`\):\s*```[\s\S]*?```\s*/g, '');
+  // Trailing "[Current date and time: …]" stamp.
+  s = s.replace(/\n*\[Current date and time:[^\]]*\]\s*$/m, '');
+  // Collapse runs of blank lines we may have created.
+  s = s.replace(/\n{3,}/g, '\n\n');
+  return s.trim();
+}
+// Expose globally so ui.js / chat.js can reuse without an import.
+if (typeof window !== 'undefined') window.sanitizeUserDisplayContent = sanitizeUserDisplayContent;
+
 // Strip runtime-injected preamble & postscript noise from message content so
 // the exported transcript shows what was actually said. For user messages we
 // strip the planner's injected browser/date noise. For assistant messages we
@@ -1127,8 +1162,8 @@ function _isSystemControlMessage(content) {
 // at the bottom and gets truncated to invisibility by viewers.
 function _sanitizeExportContent(role, content) {
   if (typeof content !== 'string') return content;
-  var s = content;
   if (role === 'assistant') {
+    var s = content;
     // Pull every tool-output fence out of the prose. Keep one blank line in
     // its place so paragraph spacing around the (now extracted) block looks
     // sane in the export.
@@ -1138,16 +1173,8 @@ function _sanitizeExportContent(role, content) {
     return s.trim();
   }
   if (role !== 'user') return content;
-  // Strip the leading // Browser page: comment block + its trailing fence.
-  s = s.replace(/^```[\s\S]*?\/\/ Browser page:[\s\S]*?```\s*/m, '');
-  // Strip the bracketed "[Resolved live browser tab context — …]" note.
-  s = s.replace(/^\[Resolved live browser tab context[\s\S]*?\]\s*/m, '');
-  // Strip the trailing live-tab dump (the second triple-backtick block that
-  // starts with `// Live browser tab context`).
-  s = s.replace(/```[\s\S]*?\/\/ Live browser tab context[\s\S]*?```\s*/g, '');
-  // Strip the "[Current date and time: …]" stamp the planner appends.
-  s = s.replace(/\[Current date and time:[^\]]*\]\s*$/m, '');
-  return s.trim();
+  // User-role export reuses the display sanitizer: same noise, same fix.
+  return sanitizeUserDisplayContent(content);
 }
 
 function exportConversation(id, e) {
