@@ -845,12 +845,26 @@ function _updateSectionStreamingIndicators() {
   });
 }
 
-function openAllConversations() {
+function openAllConversations(projectId) {
   var page = document.getElementById('all-convs-page');
   if (!page) return;
   page._filter = '';
+  // Optional pre-filter by project — used when the user clicks "All chats"
+  // under a project folder so the table only shows that project's chats.
+  // Pass null/undefined / '' to show everything.
+  page._projFilter = projectId || '';
   page.innerHTML = '';
   page.style.display = 'flex';
+  renderAllConvsPage();
+}
+
+// Clear the active project filter on the All Conversations page (exposed for
+// the in-header "× clear" chip).
+function clearAllConvsProjectFilter() {
+  var page = document.getElementById('all-convs-page');
+  if (!page) return;
+  page._projFilter = '';
+  page.innerHTML = ''; // force header rebuild so the chip disappears
   renderAllConvsPage();
 }
 
@@ -863,22 +877,42 @@ function renderAllConvsPage() {
   var page = document.getElementById('all-convs-page');
   if (!page) return;
   var filter = page._filter || '';
+  var projFilter = page._projFilter || '';
   var convs = (state.conversations || []).slice().sort(function(a, b) {
     return (b.updatedAt || b.createdAt || 0) > (a.updatedAt || a.createdAt || 0) ? 1 : -1;
   });
+  if (projFilter) {
+    convs = convs.filter(function(c) { return c.projectId === projFilter; });
+  }
   if (filter) {
     var f = filter.toLowerCase();
     convs = convs.filter(function(c) { return String(c.title || 'Conversation').toLowerCase().includes(f); });
   }
 
+  // Resolve the active project filter to a {name,color} object (or null) so
+  // we can render the filter chip in the header and re-render it whenever the
+  // filter changes.
+  var activeProj = projFilter
+    ? (state.projects || []).find(function(p) { return p.id === projFilter; })
+    : null;
+
   // If the page is already built, only update the list body
   var listEl = document.getElementById('all-convs-list-body');
   if (!listEl) {
     // First render — build full structure (mirrors the All Projects datagrid)
+    var titleHtml = activeProj
+      ? '<div class="all-agents-title"><i class="ti ti-messages"></i> All Conversations' +
+          '<span class="all-conv-filter-chip" title="Showing only chats in this project">' +
+            '<span class="proj-dot proj-color-' + escHtml(activeProj.color || 'blue') + '" style="width:8px;height:8px;flex-shrink:0"></span>' +
+            escHtml(activeProj.name) +
+            '<button type="button" class="all-conv-filter-chip-clear" onclick="clearAllConvsProjectFilter()" title="Clear project filter"><i class="ti ti-x"></i></button>' +
+          '</span>' +
+        '</div>'
+      : '<div class="all-agents-title"><i class="ti ti-messages"></i> All Conversations</div>';
     page.innerHTML =
       '<div class="all-agents-page-inner">' +
         '<div class="all-agents-header">' +
-          '<div class="all-agents-title"><i class="ti ti-messages"></i> All Conversations</div>' +
+          titleHtml +
           '<div class="all-agents-search-wrap">' +
             '<i class="ti ti-search"></i>' +
             '<input class="all-agents-search" id="all-convs-search" placeholder="Search conversations\u2026" value="' + escHtml(filter) + '" oninput="document.getElementById(\'all-convs-page\')._filter=this.value;renderAllConvsPage()">' +
@@ -892,7 +926,10 @@ function renderAllConvsPage() {
   }
 
   if (!convs.length) {
-    listEl.innerHTML = '<div class="proj-hub-empty" style="padding:40px"><i class="ti ti-messages-off" style="font-size:28px;opacity:.3"></i><div>No conversations found</div></div>';
+    var emptyMsg = projFilter
+      ? 'No conversations in this project'
+      : 'No conversations found';
+    listEl.innerHTML = '<div class="proj-hub-empty" style="padding:40px"><i class="ti ti-messages-off" style="font-size:28px;opacity:.3"></i><div>' + escHtml(emptyMsg) + '</div></div>';
     return;
   }
 

@@ -127,7 +127,7 @@ function toggleBreadcrumbChevronMenu(e) {
   }).join('') || '<div class="crumb-chev-empty">No chats in this project yet</div>';
 
   var moreLink = allConvs.length > MAX
-    ? '<button type="button" class="crumb-chev-more" onclick="openAllConversations();_closeBreadcrumbChevronMenu()">' +
+    ? '<button type="button" class="crumb-chev-more" onclick="openAllConversations(\'' + pid + '\');_closeBreadcrumbChevronMenu()">' +
         '<i class="ti ti-list"></i><span>All chats (' + allConvs.length + ')</span>' +
       '</button>'
     : '';
@@ -207,7 +207,7 @@ function renderProjectSidebarList() {
       }).join('');
       if (!convs.length) rows = '<div class="proj-folder-empty">No chats yet</div>';
       var more = convs.length > MAX_CONVS
-        ? '<div class="proj-folder-showall" onclick="event.stopPropagation();setActiveProject(\'' + pid + '\', { navigate: false });openAllConversations()">All chats (' + convs.length + ')</div>'
+        ? '<div class="proj-folder-showall" onclick="event.stopPropagation();setActiveProject(\'' + pid + '\', { navigate: false });openAllConversations(\'' + pid + '\')">All chats (' + convs.length + ')</div>'
         : '';
       body = '<div class="proj-folder-body">' + rows + more + '</div>';
     }
