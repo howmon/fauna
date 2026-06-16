@@ -1018,6 +1018,15 @@ export function registerChatRoute(app, {
       let prevPreamble = '';       // narration emitted on the previous tool-call iteration
       let narrationRepeats = 0;    // consecutive iterations with near-identical preamble
       let narrationNudgeFired = false; // only inject the coaching nudge once per request
+      // Silent-burst guard: count consecutive tool_calls iterations where the
+      // model emitted ZERO prose. The narration-repetition guard only fires
+      // when there IS narration to compare; a death-spiral that emits no text
+      // at all (claude-opus-4.6 firing 27 sequential read_file calls over
+      // 9 minutes with finishReason='tool_calls' on every round) slips past
+      // every other guard and the user sees a frozen pill until they abort.
+      // Repro: transcript fauna-TypeError-Undefined-Map-in-React-2026-06-16.
+      let silentBursts = 0;            // iterations in a row with empty assistantText + tool_calls
+      let silentBurstNudgeFired = false; // only inject the coaching nudge once per request
       let orchestratorNudgeCount = 0; // orchestrator emitted no [DELEGATE:] — re-prompt
       // Widget-claim verifier state. We track whether `fauna_emit_widget`
       // was successfully called this turn; if the assistant's final text
@@ -1705,6 +1714,25 @@ export function registerChatRoute(app, {
           }
           // Drain any remaining parallel-safe calls before moving on.
           await _flushParallel();
+          // Silent-burst tally: this iteration ended in tool_calls. If the
+          // model emitted no prose at all, count it. Reset the counter on
+          // any non-empty preamble so an occasional silent round doesn't
+          // accumulate. Threshold rationale: 4 = ~30s of silent reads at
+          // typical opus-4.6 cadence (enough to be a real spiral, not a
+          // legitimate multi-file scan); 7 = hard-stop ceiling.
+          if (preambleForCtx.length === 0) {
+            silentBursts++;
+          } else {
+            silentBursts = 0;
+          }
+          if (continueLoop && silentBursts >= 7) {
+            console.log('[chat] silent-burst guard tripped at ' + silentBursts + ' silent iterations — stopping loop');
+            allMessages.push({ role: 'user', content: '[System: You have run ' + (silentBursts + 1) + ' tool-call rounds in a row without producing any visible response. Stop calling tools NOW. Give the user a brief honest summary of what you investigated, what you found, what (if anything) you fixed, and what the next concrete step would be — in plain prose, no more tool calls.]' });
+          } else if (continueLoop && !silentBurstNudgeFired && silentBursts >= 4) {
+            silentBurstNudgeFired = true;
+            console.log('[chat] silent-burst guard — injecting status-update nudge at ' + silentBursts + ' silent iterations');
+            allMessages.push({ role: 'user', content: '[System: You have run ' + silentBursts + ' tool-call rounds in a row without saying anything to the user. Before any more tools, emit 1–3 sentences in plain prose summarizing: (a) what you have found so far, (b) what hypothesis you are testing, and (c) the specific next action. Do not narrate generic intent — reference concrete file/line evidence from the reads you already did.]' });
+          }
           // After tools have run, decide whether the model is stuck repeating
           // itself. Inject a coaching message once, then hard-stop if it keeps
           // happening — better to surface what was attempted than to spam the
