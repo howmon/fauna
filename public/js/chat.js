@@ -1263,17 +1263,43 @@ async function streamResponse(conv) {
   if (typeof resetDesignArtifactState === 'function') resetDesignArtifactState();
 
   // ── Ephemeral tool status stack (Clawpilot-style) ──────────────────
-  var _toolStatuses = []; // { label, ts }
+  // Track total count + first-tool-ts across the burst so the user sees
+  // "12/n · 1m 47s" instead of just the most recent tool name. Long agentic
+  // bursts (40+ tools, 5+ minutes) otherwise look identical to a hung pill.
+  var _toolStatuses = []; // { label, ts } — last 3 only (display window)
+  var _toolStatusCount = 0;
+  var _toolStatusFirstAt = 0;
+  var _toolStatusTickTimer = null;
   var _toolStatusEl = null;
   function _addToolStatus(label) {
+    if (!_toolStatusCount) _toolStatusFirstAt = Date.now();
+    _toolStatusCount++;
     _toolStatuses.push({ label: label, ts: Date.now() });
     if (_toolStatuses.length > 3) _toolStatuses.shift();
     _renderToolStatuses();
+    // Tick the elapsed counter every second while a burst is in flight so the
+    // pill keeps moving even if no new tools fire for a while.
+    if (!_toolStatusTickTimer) {
+      _toolStatusTickTimer = setInterval(function() {
+        if (_toolStatuses.length) _renderToolStatuses();
+        else { clearInterval(_toolStatusTickTimer); _toolStatusTickTimer = null; }
+      }, 1000);
+    }
   }
   function _clearToolStatuses() {
     _toolStatuses = [];
+    _toolStatusCount = 0;
+    _toolStatusFirstAt = 0;
+    if (_toolStatusTickTimer) { clearInterval(_toolStatusTickTimer); _toolStatusTickTimer = null; }
     if (_toolStatusEl) { _toolStatusEl.remove(); _toolStatusEl = null; }
     _ensureStreamingStatus('Fauna is working…');
+  }
+  function _formatElapsed(ms) {
+    var s = Math.max(0, Math.floor(ms / 1000));
+    if (s < 60) return s + 's';
+    var m = Math.floor(s / 60);
+    var r = s % 60;
+    return r ? (m + 'm ' + r + 's') : (m + 'm');
   }
   function _renderToolStatuses() {
     if (!_toolStatuses.length) { _clearToolStatuses(); return; }
@@ -1285,11 +1311,24 @@ async function streamResponse(conv) {
     }
     var html = '';
     var last = _toolStatuses.length - 1;
+    var elapsed = _toolStatusFirstAt ? _formatElapsed(Date.now() - _toolStatusFirstAt) : '';
     for (var t = 0; t < _toolStatuses.length; t++) {
       var op = t === last ? 1 : t === last - 1 ? 0.6 : 0.4;
+      var labelText = _toolStatuses[t].label;
+      // Append "· N tools · Ms" to the most recent line so the pill visibly
+      // ticks during long bursts. Only show the count when we've seen >1 so
+      // single-tool turns stay clean.
+      var suffix = '';
+      if (t === last && (_toolStatusCount > 1 || elapsed)) {
+        var parts = [];
+        if (_toolStatusCount > 1) parts.push(_toolStatusCount + ' tools');
+        if (elapsed) parts.push(elapsed);
+        if (parts.length) suffix = ' <span style="opacity:0.65;font-variant-numeric:tabular-nums">· ' + parts.join(' · ') + '</span>';
+      }
       html += '<div class="tool-status-line" style="opacity:' + op + '">' +
         '<span class="tool-status-icon">⚡</span>' +
-        '<span class="' + (t === last ? 'tool-status-shimmer' : '') + '">' + escHtml(_toolStatuses[t].label) + '</span>' +
+        '<span class="' + (t === last ? 'tool-status-shimmer' : '') + '">' + escHtml(labelText) + '</span>' +
+        suffix +
       '</div>';
     }
     _toolStatusEl.innerHTML = html;
