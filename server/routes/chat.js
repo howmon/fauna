@@ -431,6 +431,17 @@ export function registerChatRoute(app, {
         }
       })();
 
+      // When the user has explicitly enabled Dynamic Widgets in Settings,
+      // they want fauna_emit_widget available across the whole conversation
+      // — not gated on keyword matches in the latest user turn. Force the
+      // genui catalog on so the model sees the bundle.html / Three.js rules
+      // and knows it CAN call fauna_emit_widget; otherwise the short-hint
+      // path actively forbids `gen-ui` blocks and the model degrades to
+      // plain text. Skip for delegation / CLI surfaces (no rendering target).
+      if (enableDynamicWidgets && !isDelegation && !isCLI && !noTools) {
+        _ctxFlags.genui = true;
+      }
+
       // Cache-stable layout (headroom CacheAligner idea): the provider's
       // prompt cache only hits while the PREFIX stays byte-identical across
       // turns. So we group blocks into three zones, most-stable first:
@@ -995,6 +1006,13 @@ export function registerChatRoute(app, {
           const _beforeCount = mcpTools.length;
           const _beforeBytes = JSON.stringify(mcpTools).length;
           const _toolFlags = computeToolFlags({ messages, systemPrompt, isDelegation, isCLI, noTools });
+          // When the user explicitly enabled Dynamic Widgets in Settings,
+          // keep the widget cluster (fauna_emit_widget + companions) live
+          // for the whole conversation regardless of per-turn keyword
+          // matches — otherwise we add the tools at line 956 only to strip
+          // them right back out here, leaving the model with no way to
+          // render the widget the user just turned the feature on for.
+          if (enableDynamicWidgets) _toolFlags.widget = true;
           mcpTools = filterToolSchemas(mcpTools, _toolFlags);
           const _afterBytes = JSON.stringify(mcpTools).length;
           if (_afterBytes < _beforeBytes) {
