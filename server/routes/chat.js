@@ -1005,9 +1005,14 @@ export function registerChatRoute(app, {
         }
       }
 
-      // Agentic loop — re-runs if model calls tools (max 12 iterations)
+      // Agentic loop — re-runs if model calls tools.
+      // No numeric tool-call cap: the narration-repetition guard (L~1707),
+      // tool-call dedup (toolCallsSeen), and the user's abort button are the
+      // real loop guards. A numeric cap punishes legitimate deep work (a
+      // cross-file refactor reads 30+ files) without catching the actual
+      // failure mode (model that varies args slightly while looping).
       let continueLoop = true;
-      let toolCallCount = 0;
+      let toolCallCount = 0; // kept for telemetry / debug logs only
       let continueCount = 0; // track auto-continue on length finish
       let halfStopNudgeCount = 0; // Codex-style: re-prompt model if it asks the user to continue mid-task
       let prevPreamble = '';       // narration emitted on the previous tool-call iteration
@@ -1066,7 +1071,9 @@ export function registerChatRoute(app, {
       // Autonomous mode raises the safety caps so the loop runs until the
       // task is genuinely done. The narration-repeat + per-tool timeouts
       // remain in place — autonomous does NOT mean unbounded.
-      const MAX_TOOL_CALLS = autonomousMode ? 200 : 50;
+      // MAX_TOOL_CALLS removed: a numeric cap punishes legitimate deep work
+      // (cross-file refactors easily read 30+ files) without catching real
+      // loops. Loop detection is handled by narration-repetition + dedup.
       const MAX_CONTINUES = autonomousMode ? 12 : 6; // max auto-continue attempts for truncated output
       const MAX_HALF_STOP_NUDGES = autonomousMode ? 8 : 2; // re-prompt at most twice before letting the model stop
       const MAX_RESULT_CHARS = 40000; // prevent context overflow from large tool responses
@@ -1134,7 +1141,7 @@ export function registerChatRoute(app, {
       const toolNameByCallId = new Map(); // call_id -> tool name (for stale shrink)
       const toolCallsSeen = new Map(); // deduplicate identical calls
       if (autonomousMode) {
-        console.log('[chat] autonomousMode=on (projectId=' + (projectId || 'none') + ') caps: tools=' + MAX_TOOL_CALLS + ' continues=' + MAX_CONTINUES + ' halfStop=' + MAX_HALF_STOP_NUDGES);
+        console.log('[chat] autonomousMode=on (projectId=' + (projectId || 'none') + ') caps: tools=unlimited continues=' + MAX_CONTINUES + ' halfStop=' + MAX_HALF_STOP_NUDGES);
       }
 
       // Half-stop detector: model finishes mid-task by asking the user whether to proceed.
@@ -1638,15 +1645,10 @@ export function registerChatRoute(app, {
             const callKey  = toolName + '|' + tc.function.arguments;
             toolCallCount++;
 
-            // Hard stop: too many tool calls (legacy global limit as safety net)
-            if (toolCallCount > MAX_TOOL_CALLS) {
-              await _flushParallel();
-              allMessages.push({ role: 'tool', tool_call_id: tc.id, content: 'Tool call limit reached (' + MAX_TOOL_CALLS + ' calls). If the user\'s task is genuinely complete and verified, give the final summary now. If concrete work remains, state the exact next step that must be taken and why it could not be inferred — do NOT ask the user whether to proceed.' });
-              // Reject the remaining queued calls so the loop terminates cleanly
-              // instead of re-iterating and spamming the same limit message.
-              continueLoop = false;
-              break;
-            }
+            // No numeric tool-call cap. Runaway loops are caught by the
+            // narration-repetition guard below + the dedup map; the user can
+            // always abort. A hard ceiling here just punishes legitimate
+            // multi-file refactors without catching the actual failure mode.
 
             // Deduplicate: same tool + same args already called
             if (toolCallsSeen.has(callKey)) {

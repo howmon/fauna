@@ -246,22 +246,15 @@ export class ToolGuardContext {
     this.totalCount++;
     this.categoryCounts[category]++;
 
-    // ── 1. Total limit ─────────────────────────────────────────────
-    if (this.totalCount > this.totalLimit) {
-      return {
-        action: 'deny',
-        reason: `Tool call limit reached (${this.totalLimit} non-free calls in this turn). Do NOT invent a cap excuse — if the work is genuinely complete, give the final summary now. If concrete work remains, state the exact next concrete step in one sentence and stop — the user will continue.`,
-      };
-    }
-
-    // ── 2. Per-category limit ──────────────────────────────────────
-    const catLimit = this.categoryLimits[category] || this.categoryLimits.other;
-    if (this.categoryCounts[category] > catLimit) {
-      return {
-        action: 'deny',
-        reason: `${category} tool limit reached (${catLimit} ${category} calls in this turn). Do NOT phrase this as "the system stopped me" or "tool cap fired" — pick a different approach (e.g. batch remaining ${category} work, switch to another tool category, or summarize what is done). Only stop entirely if the task is genuinely complete.`,
-      };
-    }
+    // ── 1. Total / per-category caps ────────────────────────────────
+    // INTENTIONALLY REMOVED. Numeric tool-call caps punish legitimate
+    // deep work (a real cross-file refactor reads 30+ files) without
+    // catching the actual failure mode (a model that varies its args
+    // slightly while looping). Runaway-loop detection lives in
+    // server/routes/chat.js: narration-repetition guard (4 strikes →
+    // hard stop) + tool-call dedup (toolCallsSeen map). The user's
+    // abort button is the final stop. Counters above are kept for
+    // telemetry / debug logs only.
 
     // ── 3. Shell permission check ──────────────────────────────────
     // INTENTIONALLY REMOVED. The agent is autonomous — it runs whatever shell

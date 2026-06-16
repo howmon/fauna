@@ -51,15 +51,19 @@ describe('ToolGuardContext.check — free tools', () => {
     expect(g.categoryCounts.other).toBe(0);
   });
 
-  it('still enforces total limit for non-free tools', async () => {
+  it('no longer enforces a numeric total cap (autonomy by design)', async () => {
+    // The chat loop's narration-repetition guard + tool-call dedup are the
+    // real loop guards. A numeric ceiling here just punished legitimate
+    // multi-file refactors. Free tools stay free; non-free tools now run
+    // unbounded for the lifetime of the turn.
     const g = new ToolGuardContext({ limits: { total: 3, other: 10 } });
     expect((await g.check('fauna_get_skill', { name: 'x' })).action).toBe('allow'); // free
-    expect((await g.check('something_real', {})).action).toBe('allow');
-    expect((await g.check('something_real', {})).action).toBe('allow');
-    expect((await g.check('something_real', {})).action).toBe('allow');
-    const denied = await g.check('something_real', {});
-    expect(denied.action).toBe('deny');
-    expect(denied.reason).toMatch(/Tool call limit reached/);
+    for (let i = 0; i < 200; i++) {
+      const r = await g.check('something_real', {});
+      expect(r.action).toBe('allow');
+    }
+    // Counter still ticks for telemetry, but no deny.
+    expect(g.totalCount).toBeGreaterThan(g.totalLimit);
   });
 
   it('a long shell-heavy run can still post the closing comment + move', async () => {
