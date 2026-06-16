@@ -366,7 +366,7 @@ function parseBufferSegments(buffer) {
     var prose = buffer.slice(lastIndex, match.index);
     if (prose) segments.push({ type: 'prose', text: prose });
     var lang = (match[1].trim().split(/[\s.]/)[0] || 'code').toLowerCase();
-    segments.push({ type: 'code', lang: lang, lines: match[2].split('\n').length, isLive: false });
+    segments.push({ type: 'code', lang: lang, lines: match[2].split('\n').length, chars: match[2].length, isLive: false });
     lastIndex = match.index + match[0].length;
   }
   var rest = buffer.slice(lastIndex);
@@ -379,7 +379,7 @@ function parseBufferSegments(buffer) {
       var after = rest.slice(fenceIdx).replace(/^```/, '');
       var lm = after.match(/^([^\n]*)\n/);
       var pl = lm ? (lm[1].trim().split(/[\s.]/)[0] || 'code').toLowerCase() : 'code';
-      segments.push({ type: 'code', lang: pl, lines: after.split('\n').length, isLive: true });
+      segments.push({ type: 'code', lang: pl, lines: after.split('\n').length, chars: after.length, isLive: true });
     } else {
       segments.push({ type: 'prose', text: rest });
     }
@@ -416,7 +416,19 @@ function groupLabel(items, isLive) {
       css:'CSS', json:'JSON', markdown:'Document', svg:'SVG',
       'figma-exec':'Figma action', 'shell-exec':'Shell command' };
     var base = labels[lang] || lang.toUpperCase() || 'Code';
-    return base + (items[0].lines > 2 ? ' · ' + items[0].lines + ' lines' : '') + (isLive ? '…' : '');
+    // Live pills must visibly tick while the model streams inside an unclosed
+    // fence — otherwise a long ``` shell-output ``` block (or any code fence)
+    // shows the same "Shell command…" text for many seconds and the bubble
+    // looks frozen even though tokens are flowing. Round chars to the nearest
+    // 25 so the label updates roughly every chunk without thrashing.
+    if (isLive) {
+      var liveLines = items[0].lines || 0;
+      var liveChars = items[0].chars || 0;
+      var rounded = Math.round(liveChars / 25) * 25;
+      var stats = liveLines > 2 ? (liveLines + ' lines, ' + rounded + ' chars') : (rounded + ' chars');
+      return base + ' · ' + stats + '…';
+    }
+    return base + (items[0].lines > 2 ? ' · ' + items[0].lines + ' lines' : '');
   }
   // Multiple — describe by category
   var allShell = items.every(function(i) { return SHELL[i.lang]; });
