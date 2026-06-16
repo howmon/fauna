@@ -278,6 +278,7 @@ html.theme-transition, html.theme-transition *, html.theme-transition *::before,
 /* ── Icon font ─────────────────────────────────────────────────────── */
 .ti { font-size: inherit; line-height: 1; vertical-align: -2px; display: inline-block; }
 button .ti, label .ti { pointer-events: none; }
+#sidebar-logo {margin-bottom: -8px;}
 #sidebar-logo .ti { font-size: 18px; color: var(--accent2); }
 
 /* ── Scrollbar ─────────────────────────────────────────────────────── */
