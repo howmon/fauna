@@ -209,7 +209,19 @@
   function mountWidget(evt, targetEl) {
     var widgetId = evt.widgetId;
     if (!widgetId || !evt.bundle) return;
-    if (window._faunaDynamicWidgets.mounted.has(widgetId)) return; // dedup
+    // Dedup, but only against a LIVE mount. The `mounted` Map is global and
+    // never cleared, so a stale entry left behind by a destroyed msgEl would
+    // permanently block remounts (the iframe renders briefly, the bubble is
+    // rebuilt during a re-render, and the next mountWidget call here is a
+    // no-op — widget "disappears"). Evict disconnected entries and rebuild
+    // the iframe against the fresh anchor.
+    var existing = window._faunaDynamicWidgets.mounted.get(widgetId);
+    if (existing) {
+      var stillLive = existing.wrap && existing.wrap.isConnected
+                   && existing.iframe && existing.iframe.isConnected;
+      if (stillLive) return;
+      window._faunaDynamicWidgets.mounted.delete(widgetId);
+    }
 
     var wrap = document.createElement('div');
     wrap.className = 'fauna-dynamic-widget';
