@@ -338,6 +338,28 @@ export function touchProject(id) {
   if (p) { p.lastActiveAt = now(); writeProjects(projects); }
 }
 
+// Internal: insert (or replace) a project record verbatim. Used by the
+// cross-device sync engine to apply a remote project payload that already
+// has a stable id from another machine. Does NOT run the source-cloning
+// or kanban-seeding side effects of createProject() — sync state is a
+// fact, not a user action.
+export function _adoptProject(project) {
+  if (!project || typeof project !== 'object' || typeof project.id !== 'string') {
+    throw new Error('_adoptProject: project.id required');
+  }
+  const projects = readProjects();
+  const idx = projects.findIndex(p => p.id === project.id);
+  const sanitized = { ...project };
+  // Always stamp updatedAt — caller knows it came from a remote write.
+  if (!sanitized.createdAt) sanitized.createdAt = now();
+  sanitized.updatedAt = now();
+  if (idx === -1) projects.push(sanitized);
+  else projects[idx] = { ...projects[idx], ...sanitized };
+  writeProjects(projects);
+  return sanitized;
+}
+
+
 // Link a conversation to a project
 export function linkConversation(projectId, convId) {
   const projects = readProjects();

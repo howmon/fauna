@@ -583,6 +583,9 @@
       <button class="settings-nav-item" data-page="account" onclick="switchSettingsPage('account',this)">
         <i class="ti ti-user-circle"></i> Account
       </button>
+      <button class="settings-nav-item" data-page="cloud-sync" onclick="switchSettingsPage('cloud-sync',this);window.renderCloudSyncPage&amp;&amp;window.renderCloudSyncPage()">
+        <i class="ti ti-cloud"></i> Fauna Cloud Sync <span id="cloud-sync-pill" class="topbar-menu-badge" style="display:none;margin-left:auto"></span>
+      </button>
       <button class="settings-nav-item" data-page="voice" onclick="switchSettingsPage('voice',this)">
         <i class="ti ti-microphone"></i> Voice
       </button>
@@ -1565,6 +1568,14 @@ Examples:
         </div>
       </div>
     </details>
+  </div>
+
+  <!-- ── Fauna Cloud Sync ──────────────────────────────────────── -->
+  <div class="settings-page" data-page="cloud-sync">
+    <div class="settings-page-title">Fauna Cloud Sync</div>
+    <div class="settings-section" style="padding:0">
+      <div id="cloud-sync-mount" style="padding:20px"></div>
+    </div>
   </div>
 
   <!-- ── Help & Reference ──────────────────────────────────────── -->
@@ -2749,6 +2760,7 @@ Examples:
 <script src="js/automation-builder.js"></script>
 <script src="js/tasks.js"></script>
 <script src="js/github-accounts.js"></script>
+<script src="js/cloud-sync.js"></script>
 <script src="js/projects.js"></script>
 <script src="js/board.js"></script>
 <script src="js/design.js"></script>

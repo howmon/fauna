@@ -15,13 +15,13 @@ import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { createTask, getTask, getAllTasks, updateTask, deleteTask, startScheduler, stopScheduler, enableWebhook, disableWebhook, rotateWebhookToken, getTaskByWebhookToken, markWebhookFired } from './task-manager.js';
 import { runTask, pauseTask, stopTask, steerTask, isTaskRunning, subscribe, setOsNotifier as setTaskRunnerOsNotifier, setAlertSink as setTaskRunnerAlertSink, getRunningTaskInfo } from './task-runner.js';
-import {
-  createProject, getProject, getAllProjects, updateProject, deleteProject,
+import { createProject, getProject, getAllProjects, updateProject, deleteProject,
   touchProject, linkConversation, linkTask,
   addSource, removeSource, syncSource, listFiles, readSourceFile, resolveSourceFilePath,
   addContext, updateContext, removeContext, contextFromArtifact,
   addBacklogItem, updateBacklogItem, moveWorkItem, addWorkItemComment,
   setWorkItemLock, listAllWorkItems, getProjectBoard, prioritizeBacklog,
+  _adoptProject,
 } from './project-manager.js';
 import { loadInstructionFiles } from './lib/instruction-files.js';
 import { runDecay } from './memory-store.js';
@@ -43,6 +43,8 @@ import { registerFileFilterRoutes } from './server/routes/file-filter.js';
 import { registerConversationRoutes } from './server/routes/conversations.js';
 import { registerProjectRunRoutes } from './server/routes/project-runs.js';
 import { registerProjectRoutes } from './server/routes/projects.js';
+import { registerSyncRoutes } from './server/routes/sync.js';
+import { createConversationStore } from './server/lib/conversation-store.js';
 import { registerGitHubRoutes } from './server/routes/github.js';
 import {
   listGitHubAccounts,
@@ -137,6 +139,11 @@ const IS_WIN = process.platform === 'win32';
 const PATH_SEP = IS_WIN ? ';' : ':';
 const FAUNA_CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
 
+// Single conversation store instance shared between the conversation routes
+// and the sync adapter — two stores would mean two independent per-id
+// mutexes and a race on simultaneous local-edit + remote-pull writes.
+const _sharedConversationStore = createConversationStore({ configDir: FAUNA_CONFIG_DIR });
+
 // Module-level AI caller — set during startServer(), used by permission guard etc.
 let internalAICaller = async () => '';
 // Track the model currently in use for conversations so features inherit it
@@ -218,6 +225,7 @@ registerConversationRoutes(app, {
   path,
   configDir: FAUNA_CONFIG_DIR,
   getCopilotClient,
+  conversationStore: _sharedConversationStore,
 });
 
 registerTaskRoutes(app, {
@@ -294,6 +302,15 @@ registerProviderRoutes(app, { faunaConfigDir: FAUNA_CONFIG_DIR });
 registerMobileRoutes(app, { faunaConfigDir: FAUNA_CONFIG_DIR, port: PORT });
 registerEnterpriseStubRoutes(app);
 registerAuthRoutes(app);
+
+// Cross-device sync (Fauna Cloud). Registers /api/sync/* and auto-starts
+// the engine if a bearer is already on disk from a prior session.
+registerSyncRoutes(app, {
+  conversationStore: _sharedConversationStore,
+  projectManager: {
+    getProject, getAllProjects, createProject, updateProject, deleteProject, _adoptProject,
+  },
+});
 
 // ── Store routes moved → server/routes/store.js (registered after AGENTS_DIR is declared) ──
 

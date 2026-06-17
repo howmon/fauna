@@ -1,0 +1,280 @@
+// ── Fauna Cloud Sync — settings page + status pill ────────────────────────
+//
+// Talks to /api/sync/* on the local Express server. Renders into
+// #cloud-sync-mount inside the Settings panel and keeps the sidebar pill
+// (#cloud-sync-pill) updated with the pending push count.
+//
+// State is fetched on each render and after every action (login/logout/
+// sync now). We poll every 15 s while the settings page is visible so the
+// pending-push count reflects in-flight work without needing SSE.
+
+(function () {
+  'use strict';
+
+  var SYNC_BASE = (typeof faunaApiBase === 'function') ? faunaApiBase() : '';
+  var _pollTimer = null;
+
+  function _api(path, opts) {
+    return fetch(SYNC_BASE + path, Object.assign({
+      headers: { 'Content-Type': 'application/json' }
+    }, opts || {})).then(function (r) {
+      return r.json().then(function (body) { return { ok: r.ok, status: r.status, body: body }; });
+    });
+  }
+
+  function _esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function _fmtTime(iso) {
+    if (!iso) return '—';
+    try {
+      var d = new Date(iso);
+      var now = Date.now();
+      var diff = (now - d.getTime()) / 1000;
+      if (diff < 60) return 'just now';
+      if (diff < 3600) return Math.round(diff / 60) + ' min ago';
+      if (diff < 86400) return Math.round(diff / 3600) + ' hr ago';
+      return d.toLocaleDateString();
+    } catch (_) { return iso; }
+  }
+
+  // ── Status pill in the settings nav ───────────────────────────────────
+  function _updatePill(status) {
+    var pill = document.getElementById('cloud-sync-pill');
+    if (!pill) return;
+    if (!status || !status.loggedIn) {
+      pill.style.display = 'none';
+      pill.textContent = '';
+      return;
+    }
+    if (status.pendingPush > 0) {
+      pill.style.display = '';
+      pill.textContent = String(status.pendingPush);
+      pill.title = status.pendingPush + ' change(s) pending push';
+    } else {
+      pill.style.display = '';
+      pill.textContent = '✓';
+      pill.title = 'Synced';
+    }
+  }
+
+  // ── Render: signed-out form ───────────────────────────────────────────
+  function _renderSignedOut(session) {
+    var mount = document.getElementById('cloud-sync-mount');
+    if (!mount) return;
+    mount.innerHTML = [
+      '<div style="max-width:480px">',
+      '  <h3 style="margin-top:0">Sign in to Fauna Cloud</h3>',
+      '  <p class="muted">Sync your conversations and projects across Mac and Windows. Files stay on your machines — only metadata and chat history move through the cloud.</p>',
+      '  <div class="settings-row">',
+      '    <label>Email</label>',
+      '    <input type="email" id="cs-email" class="settings-input" placeholder="you@example.com" autocomplete="username">',
+      '  </div>',
+      '  <div class="settings-row">',
+      '    <label>Password</label>',
+      '    <input type="password" id="cs-password" class="settings-input" autocomplete="current-password">',
+      '  </div>',
+      '  <details style="margin:12px 0">',
+      '    <summary class="muted" style="cursor:pointer">Advanced: server URL</summary>',
+      '    <div class="settings-row" style="margin-top:8px">',
+      '      <input type="url" id="cs-baseurl" class="settings-input" value="' + _esc(session.baseUrl || '') + '" placeholder="https://store.fauna.eichho.com">',
+      '    </div>',
+      '  </details>',
+      '  <div id="cs-error" class="muted" style="color:var(--danger,#c33);min-height:1.2em;margin-bottom:8px"></div>',
+      '  <button class="settings-row-btn primary" id="cs-login-btn">',
+      '    <i class="ti ti-cloud-upload"></i> Sign in &amp; enable sync',
+      '  </button>',
+      '</div>'
+    ].join('\n');
+
+    var btn = document.getElementById('cs-login-btn');
+    if (btn) btn.onclick = _handleLogin;
+    var pw = document.getElementById('cs-password');
+    if (pw) pw.addEventListener('keydown', function (e) { if (e.key === 'Enter') _handleLogin(); });
+  }
+
+  // ── Render: signed-in dashboard ───────────────────────────────────────
+  function _renderSignedIn(session, status) {
+    var mount = document.getElementById('cloud-sync-mount');
+    if (!mount) return;
+    var user = session.user || {};
+    var pending = status.pendingPush || 0;
+    var nsList = (status.namespaces || []).map(_esc).join(', ') || 'none';
+    var lastCursor = '—';
+    try {
+      var c = status.cursors || {};
+      var keys = Object.keys(c);
+      if (keys.length) {
+        var latest = keys.map(function (k) { return c[k]; }).sort().pop();
+        lastCursor = _fmtTime(latest);
+      }
+    } catch (_) {}
+
+    mount.innerHTML = [
+      '<div style="max-width:520px">',
+      '  <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">',
+      '    <div style="width:40px;height:40px;border-radius:50%;background:var(--accent-soft,#e0f2f1);display:flex;align-items:center;justify-content:center">',
+      '      <i class="ti ti-user" style="font-size:22px;color:var(--accent,#0a8a82)"></i>',
+      '    </div>',
+      '    <div>',
+      '      <div style="font-weight:600">' + _esc(user.name || user.email || 'Signed in') + '</div>',
+      '      <div class="muted" style="font-size:12px">' + _esc(user.email || '') + '</div>',
+      '    </div>',
+      '  </div>',
+      '  <div class="settings-section" style="padding:12px;border-radius:8px;background:var(--bg-soft,#f7f7f8);margin-bottom:14px">',
+      '    <div style="display:flex;justify-content:space-between;padding:4px 0">',
+      '      <span class="muted">Status</span>',
+      '      <span><span style="color:' + (status.running ? '#22a06b' : '#c33') + '">●</span> ' +
+            (status.running ? 'Running' : 'Stopped') + '</span>',
+      '    </div>',
+      '    <div style="display:flex;justify-content:space-between;padding:4px 0">',
+      '      <span class="muted">Pending push</span>',
+      '      <span>' + pending + ' change' + (pending === 1 ? '' : 's') + '</span>',
+      '    </div>',
+      '    <div style="display:flex;justify-content:space-between;padding:4px 0">',
+      '      <span class="muted">Namespaces</span>',
+      '      <span style="font-family:monospace;font-size:12px">' + nsList + '</span>',
+      '    </div>',
+      '    <div style="display:flex;justify-content:space-between;padding:4px 0">',
+      '      <span class="muted">Last pull</span>',
+      '      <span>' + _esc(lastCursor) + '</span>',
+      '    </div>',
+      '    <div style="display:flex;justify-content:space-between;padding:4px 0">',
+      '      <span class="muted">Device id</span>',
+      '      <span style="font-family:monospace;font-size:11px">' + _esc((status.nodeId || '').slice(0, 12)) + '…</span>',
+      '    </div>',
+      '  </div>',
+      '  <div style="display:flex;gap:8px;flex-wrap:wrap">',
+      '    <button class="settings-row-btn primary" id="cs-syncnow-btn">',
+      '      <i class="ti ti-refresh"></i> Sync now',
+      '    </button>',
+      (status.running
+        ? '<button class="settings-row-btn" id="cs-pause-btn"><i class="ti ti-pause"></i> Pause sync</button>'
+        : '<button class="settings-row-btn" id="cs-resume-btn"><i class="ti ti-play"></i> Resume sync</button>'),
+      '    <button class="settings-row-btn" id="cs-logout-btn">',
+      '      <i class="ti ti-logout"></i> Sign out',
+      '    </button>',
+      '  </div>',
+      '  <div id="cs-status-line" class="muted" style="margin-top:10px;min-height:1.2em"></div>',
+      '</div>'
+    ].join('\n');
+
+    var bind = function (id, fn) { var b = document.getElementById(id); if (b) b.onclick = fn; };
+    bind('cs-syncnow-btn', _handleSyncNow);
+    bind('cs-pause-btn',   _handlePause);
+    bind('cs-resume-btn',  _handleResume);
+    bind('cs-logout-btn',  _handleLogout);
+  }
+
+  // ── Actions ───────────────────────────────────────────────────────────
+  function _setStatusLine(text, isError) {
+    var el = document.getElementById('cs-status-line') || document.getElementById('cs-error');
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.color = isError ? 'var(--danger,#c33)' : '';
+  }
+
+  function _handleLogin() {
+    var email = (document.getElementById('cs-email') || {}).value || '';
+    var password = (document.getElementById('cs-password') || {}).value || '';
+    var baseUrl = (document.getElementById('cs-baseurl') || {}).value || '';
+    if (!email || !password) { _setStatusLine('Email and password required', true); return; }
+    _setStatusLine('Signing in…', false);
+    _api('/api/sync/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: email, password: password, baseUrl: baseUrl || undefined }),
+    }).then(function (r) {
+      if (!r.ok || !r.body || !r.body.ok) {
+        var msg = (r.body && (r.body.error || r.body.message)) || 'Sign in failed';
+        _setStatusLine(msg, true);
+        return;
+      }
+      window.renderCloudSyncPage();
+      try { if (typeof _showToast === 'function') _showToast('Signed in to Fauna Cloud'); } catch (_) {}
+    }).catch(function (e) { _setStatusLine(e.message || 'Network error', true); });
+  }
+
+  function _handleLogout() {
+    if (!confirm('Sign out of Fauna Cloud? Local data stays; the engine will stop syncing.')) return;
+    _api('/api/sync/logout', { method: 'POST' }).then(function () {
+      window.renderCloudSyncPage();
+    });
+  }
+
+  function _handleSyncNow() {
+    _setStatusLine('Syncing…', false);
+    _api('/api/sync/now', { method: 'POST' }).then(function (r) {
+      if (!r.ok) { _setStatusLine((r.body && r.body.error) || 'Sync failed', true); return; }
+      _setStatusLine('Synced.', false);
+      window.renderCloudSyncPage();
+    }).catch(function (e) { _setStatusLine(e.message || 'Network error', true); });
+  }
+
+  function _handlePause() {
+    _api('/api/sync/stop', { method: 'POST' }).then(function () { window.renderCloudSyncPage(); });
+  }
+
+  function _handleResume() {
+    _api('/api/sync/start', { method: 'POST' }).then(function (r) {
+      if (!r.ok) _setStatusLine((r.body && r.body.error) || 'Could not start sync', true);
+      window.renderCloudSyncPage();
+    });
+  }
+
+  // ── Public entry point ────────────────────────────────────────────────
+  window.renderCloudSyncPage = function () {
+    Promise.all([
+      _api('/api/sync/session'),
+      _api('/api/sync/status'),
+    ]).then(function (results) {
+      var session = (results[0] && results[0].body) || {};
+      var status  = (results[1] && results[1].body) || {};
+      if (session.loggedIn) _renderSignedIn(session, status);
+      else _renderSignedOut(session);
+      _updatePill(Object.assign({ loggedIn: session.loggedIn }, status));
+    }).catch(function (e) {
+      var mount = document.getElementById('cloud-sync-mount');
+      if (mount) mount.innerHTML = '<div class="muted" style="color:var(--danger,#c33)">Could not load sync status: ' + _esc(e.message) + '</div>';
+    });
+  };
+
+  // ── Background pill refresher ─────────────────────────────────────────
+  // Update the sidebar pill (and the page if visible) every 15 s. Stops
+  // when the document is hidden so it doesn't drain power.
+  function _scheduleNextPoll() {
+    if (_pollTimer) clearTimeout(_pollTimer);
+    if (document.hidden) return;
+    _pollTimer = setTimeout(function () {
+      _api('/api/sync/status').then(function (r) {
+        var status = (r && r.body) || {};
+        _api('/api/sync/session').then(function (s) {
+          var session = (s && s.body) || {};
+          _updatePill(Object.assign({ loggedIn: session.loggedIn }, status));
+          // Re-render the page only if it's currently visible to avoid
+          // wiping a typed-but-unsubmitted email/password.
+          var visible = document.querySelector('.settings-page[data-page="cloud-sync"]');
+          if (visible && visible.classList.contains('active') && session.loggedIn) {
+            _renderSignedIn(session, status);
+          }
+          _scheduleNextPoll();
+        });
+      }).catch(function () { _scheduleNextPoll(); });
+    }, 15000);
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) _scheduleNextPoll();
+  });
+
+  // Kick off pill state on load.
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    setTimeout(function () { window.renderCloudSyncPage(); _scheduleNextPoll(); }, 1500);
+  } else {
+    document.addEventListener('DOMContentLoaded', function () {
+      setTimeout(function () { window.renderCloudSyncPage(); _scheduleNextPoll(); }, 1500);
+    });
+  }
+})();

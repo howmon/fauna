@@ -7,6 +7,17 @@ export function registerProjectRoutes(app, deps) {
     return _projCp;
   }
 
+  // Cross-device sync hook. Calling enqueueChange when the engine isn't
+  // running (no Fauna Cloud login) is a no-op, so we can fire it from
+  // every project mutation unconditionally.
+  let _syncEngine = null;
+  async function _enqueueProjectChange(id, op) {
+    try {
+      if (!_syncEngine) _syncEngine = await import('../lib/sync-engine.js');
+      _syncEngine.enqueueChange('project', id, op);
+    } catch (_) { /* engine optional */ }
+  }
+
   const {
     fs,
     createProject,
@@ -72,6 +83,7 @@ export function registerProjectRoutes(app, deps) {
     try {
       const p = createProject(req.body || {});
       res.status(201).json(p);
+      if (p && p.id) _enqueueProjectChange(p.id, 'upsert');
       if (p && p.rootPath) _scheduleInitialAudit(p.id);
     }
     catch (e) { res.status(400).json({ error: e.message }); }
@@ -104,12 +116,14 @@ export function registerProjectRoutes(app, deps) {
   app.put('/api/projects/:id', (req, res) => {
     const project = updateProject(req.params.id, req.body || {});
     if (!project) return res.status(404).json({ error: 'Project not found' });
+    _enqueueProjectChange(project.id, 'upsert');
     res.json(project);
   });
 
   app.patch('/api/projects/:id', (req, res) => {
     const project = updateProject(req.params.id, req.body || {});
     if (!project) return res.status(404).json({ error: 'Project not found' });
+    _enqueueProjectChange(project.id, 'upsert');
     res.json(project);
   });
 
@@ -123,6 +137,7 @@ export function registerProjectRoutes(app, deps) {
   app.delete('/api/projects/:id', (req, res) => {
     const ok = deleteProject(req.params.id);
     if (!ok) return res.status(404).json({ error: 'Project not found' });
+    _enqueueProjectChange(req.params.id, 'delete');
     res.json({ ok: true });
   });
 

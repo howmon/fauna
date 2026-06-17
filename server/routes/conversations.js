@@ -2,6 +2,7 @@ import { createConversationStore, PayloadTooLargeError, migrateLegacyToSplit } f
 import { extractFacts as extractMemoryFacts } from '../lib/memory-extractor.js';
 import { getProject } from '../../project-manager.js';
 import { generateMini, tryMini, isModelCached as isMiniCached, warmupMini, getMiniModelId, isLocalMiniEnabled } from '../llm/local-mini.js';
+import * as syncEngine from '../lib/sync-engine.js';
 
 // Normalize a model-generated title: strip wrapping quotes, a leading "Title:"
 // label, surrounding whitespace/markdown, and collapse to a single short line.
@@ -174,6 +175,8 @@ export function registerConversationRoutes(app, deps) {
       const incoming = { ...(req.body || {}), id: req.params.id };
       const conv = await store.put(req.params.id, incoming);
       sendConversationEvent('upsert', { conversation: conv });
+      // Push to Fauna Cloud if the user is logged in. No-op otherwise.
+      try { syncEngine.enqueueChange('conversation', conv.id, 'upsert'); } catch (_) {}
       res.json({ ok: true, conversation: conv });
       // Phase 1: fire-and-forget memory extraction when the active project's
       // memoryConfig.autoExtract === 'on-save'. Debounced per-conversation so
@@ -191,6 +194,7 @@ export function registerConversationRoutes(app, deps) {
     try {
       const deleted = await store.del(req.params.id);
       sendConversationEvent('delete', { id: req.params.id });
+      try { syncEngine.enqueueChange('conversation', req.params.id, 'delete'); } catch (_) {}
       res.json({ ok: true, deleted });
     } catch (e) {
       res.status(500).json({ error: e.message });
