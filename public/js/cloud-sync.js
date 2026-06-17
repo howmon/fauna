@@ -77,7 +77,7 @@
       '<div style="max-width:520px">',
       '  <h3 style="margin-top:0">Enable Fauna Cloud sync</h3>',
       '  <p class="muted">Sync your conversations and projects across Mac and Windows. Files stay on your machines — only metadata and chat history move through the cloud.</p>',
-      '  <div id="cs-error" class="muted" style="color:var(--danger,#c33);min-height:1.2em;margin:8px 0"></div>',
+      '  <div id="cs-error" class="muted" style="color:var(--color-danger);min-height:1.2em;margin:8px 0"></div>',
       (hasStoreUi
         ? '<button class="settings-row-btn primary" id="cs-store-signin-btn">' +
           '  <i class="ti ti-user"></i> Sign in with your Fauna account' +
@@ -135,35 +135,35 @@
     mount.innerHTML = [
       '<div style="max-width:520px">',
       '  <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">',
-      '    <div style="width:40px;height:40px;border-radius:50%;background:var(--accent-soft,#e0f2f1);display:flex;align-items:center;justify-content:center">',
-      '      <i class="ti ti-user" style="font-size:22px;color:var(--accent,#0a8a82)"></i>',
+      '    <div style="width:40px;height:40px;border-radius:50%;background:var(--color-subtleSurface);border:1px solid var(--color-border);display:flex;align-items:center;justify-content:center">',
+      '      <i class="ti ti-user" style="font-size:22px;color:var(--color-primary)"></i>',
       '    </div>',
       '    <div>',
-      '      <div style="font-weight:600">' + _esc(user.name || user.email || 'Signed in') + '</div>',
-      '      <div class="muted" style="font-size:12px">' + _esc(user.email || '') + '</div>',
+      '      <div style="font-weight:600;color:var(--color-text)">' + _esc(user.name || user.email || 'Signed in') + '</div>',
+      '      <div class="muted" style="font-size:12px;color:var(--color-muted)">' + _esc(user.email || '') + '</div>',
       '    </div>',
       '  </div>',
-      '  <div class="settings-section" style="padding:12px;border-radius:8px;background:var(--bg-soft,#f7f7f8);margin-bottom:14px">',
+      '  <div class="settings-section" style="padding:12px;border-radius:8px;background:var(--color-subtleSurface);border:1px solid var(--color-border);color:var(--color-text);margin-bottom:14px">',
       '    <div style="display:flex;justify-content:space-between;padding:4px 0">',
-      '      <span class="muted">Status</span>',
-      '      <span><span style="color:' + (status.running ? '#22a06b' : '#c33') + '">●</span> ' +
+      '      <span class="muted" style="color:var(--color-muted)">Status</span>',
+      '      <span><span style="color:' + (status.running ? 'var(--color-success)' : 'var(--color-danger)') + '">●</span> ' +
             (status.running ? 'Running' : 'Stopped') + '</span>',
       '    </div>',
       '    <div style="display:flex;justify-content:space-between;padding:4px 0">',
-      '      <span class="muted">Pending push</span>',
+      '      <span class="muted" style="color:var(--color-muted)">Pending push</span>',
       '      <span>' + pending + ' change' + (pending === 1 ? '' : 's') + '</span>',
       '    </div>',
       '    <div style="display:flex;justify-content:space-between;padding:4px 0">',
-      '      <span class="muted">Namespaces</span>',
-      '      <span style="font-family:monospace;font-size:12px">' + nsList + '</span>',
+      '      <span class="muted" style="color:var(--color-muted)">Namespaces</span>',
+      '      <span style="font-family:var(--theme-font, monospace);font-size:12px">' + nsList + '</span>',
       '    </div>',
       '    <div style="display:flex;justify-content:space-between;padding:4px 0">',
-      '      <span class="muted">Last pull</span>',
+      '      <span class="muted" style="color:var(--color-muted)">Last pull</span>',
       '      <span>' + _esc(lastCursor) + '</span>',
       '    </div>',
       '    <div style="display:flex;justify-content:space-between;padding:4px 0">',
-      '      <span class="muted">Device id</span>',
-      '      <span style="font-family:monospace;font-size:11px">' + _esc((status.nodeId || '').slice(0, 12)) + '…</span>',
+      '      <span class="muted" style="color:var(--color-muted)">Device id</span>',
+      '      <span style="font-family:var(--theme-font, monospace);font-size:11px">' + _esc((status.nodeId || '').slice(0, 12)) + '…</span>',
       '    </div>',
       '  </div>',
       '  <div style="display:flex;gap:8px;flex-wrap:wrap">',
@@ -193,7 +193,7 @@
     var el = document.getElementById('cs-status-line') || document.getElementById('cs-error');
     if (!el) return;
     el.textContent = text || '';
-    el.style.color = isError ? 'var(--danger,#c33)' : '';
+    el.style.color = isError ? 'var(--color-danger)' : '';
   }
 
   function _handleLogin() {
@@ -336,7 +336,7 @@
       });
     }).catch(function (e) {
       var mount = document.getElementById('cloud-sync-mount');
-      if (mount) mount.innerHTML = '<div class="muted" style="color:var(--danger,#c33)">Could not load sync status: ' + _esc(e.message) + '</div>';
+      if (mount) mount.innerHTML = '<div class="muted" style="color:var(--color-danger)">Could not load sync status: ' + _esc(e.message) + '</div>';
     });
   };
 
