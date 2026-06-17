@@ -1779,7 +1779,6 @@ body.is-resizing webview { pointer-events: none !important; }
 #send-btn:hover:not(:disabled) { background: var(--accent2); }
 #send-btn:disabled { opacity: .4; cursor: not-allowed; }
 #send-btn.is-stopping {
-  background: var(--mono);
     box-shadow: 0 0 0 0 rgba(243, 110, 110, .38);
     animation: sendStopPulse 1.05s ease-in-out infinite;
     border-radius: 50%;
