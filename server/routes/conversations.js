@@ -176,7 +176,9 @@ export function registerConversationRoutes(app, deps) {
       const conv = await store.put(req.params.id, incoming);
       sendConversationEvent('upsert', { conversation: conv });
       // Push to Fauna Cloud if the user is logged in. No-op otherwise.
-      try { syncEngine.enqueueChange('conversation', conv.id, 'upsert'); } catch (_) {}
+      // The projectId travels with the journal entry so the engine can
+      // group pending pushes by project and honor per-project exclusions.
+      try { syncEngine.enqueueChange('conversation', conv.id, 'upsert', { projectId: conv.projectId }); } catch (_) {}
       res.json({ ok: true, conversation: conv });
       // Phase 1: fire-and-forget memory extraction when the active project's
       // memoryConfig.autoExtract === 'on-save'. Debounced per-conversation so
@@ -194,7 +196,13 @@ export function registerConversationRoutes(app, deps) {
     try {
       const deleted = await store.del(req.params.id);
       sendConversationEvent('delete', { id: req.params.id });
-      try { syncEngine.enqueueChange('conversation', req.params.id, 'delete'); } catch (_) {}
+      // `deleted` carries the prior record; use its projectId so the
+      // tombstone is still attributable for status grouping and so an
+      // excluded project's delete never leaves the device.
+      try {
+        const projectId = deleted && deleted.projectId;
+        syncEngine.enqueueChange('conversation', req.params.id, 'delete', { projectId });
+      } catch (_) {}
       res.json({ ok: true, deleted });
     } catch (e) {
       res.status(500).json({ error: e.message });

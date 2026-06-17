@@ -11,6 +11,10 @@
 //   POST /api/sync/start                    → start engine + return status
 //   POST /api/sync/stop                     → stop engine + return status
 //   POST /api/sync/now                      → force immediate pull+push
+//   GET  /api/sync/prefs                    → { excludedProjects: [...] }
+//   POST /api/sync/prefs    { excludedProjects } → { ok, prefs }
+//   GET  /api/sync/projects                 → [{ id, name, excluded, pending }]
+//   POST /api/sync/projects/:id/exclude { excluded } → { ok, prefs }
 //
 // The actual data movement (PUT /api/sync/objects/…) goes directly from the
 // engine to the agentstore backend — these routes are management-plane only.
@@ -18,6 +22,7 @@
 import * as agentstore from '../lib/agentstore-client.js';
 import * as syncEngine from '../lib/sync-engine.js';
 import * as syncAdapters from '../lib/sync-adapters.js';
+import * as syncPrefs from '../lib/sync-prefs.js';
 
 export function registerSyncRoutes(app, deps = {}) {
   const { conversationStore, projectManager } = deps;
@@ -128,5 +133,68 @@ export function registerSyncRoutes(app, deps = {}) {
   app.post('/api/sync/refresh-profile', async (_req, res) => {
     const r = await agentstore.refreshProfile();
     res.status(r.ok ? 200 : 401).json(r);
+  });
+
+  // ── Per-device sync preferences ────────────────────────────────────
+  // Track which projects this device wants to keep local-only. Stored in
+  // ~/.config/fauna/sync/prefs.json (see server/lib/sync-prefs.js). The
+  // list is NOT synced — "exclude this big project from MY laptop" is the
+  // common case.
+  app.get('/api/sync/prefs', (_req, res) => {
+    res.json(syncPrefs.getPrefs());
+  });
+
+  app.post('/api/sync/prefs', async (req, res) => {
+    const { excludedProjects } = req.body || {};
+    if (!Array.isArray(excludedProjects)) {
+      return res.status(400).json({ ok: false, error: 'excludedProjects must be an array' });
+    }
+    try {
+      const prefs = await syncPrefs.setExcludedProjects(excludedProjects);
+      res.json({ ok: true, prefs });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.post('/api/sync/projects/:id/exclude', async (req, res) => {
+    const id = req.params.id;
+    const excluded = !!(req.body && req.body.excluded);
+    if (!id) return res.status(400).json({ ok: false, error: 'project id required' });
+    try {
+      const prefs = await syncPrefs.setProjectExcluded(id, excluded);
+      res.json({ ok: true, prefs, status: syncEngine.getStatus() });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // Project list joined with pending-push counts + excluded flag, so the
+  // Cloud Sync UI can render per-project rows in a single call.
+  app.get('/api/sync/projects', (_req, res) => {
+    try {
+      const status = syncEngine.getStatus();
+      const byProject = status.pendingByProject || {};
+      const excluded = new Set(status.excludedProjects || []);
+      let projects = [];
+      if (projectManager && typeof projectManager.listProjects === 'function') {
+        projects = projectManager.listProjects() || [];
+      } else if (projectManager && typeof projectManager.getAllProjects === 'function') {
+        projects = projectManager.getAllProjects() || [];
+      }
+      const rows = projects.map(p => ({
+        id: p.id,
+        name: p.name || p.id,
+        icon: p.icon || null,
+        color: p.color || null,
+        excluded: excluded.has(p.id),
+        pending: byProject[p.id] || 0,
+      }));
+      // Pending changes that don't map to any current project (orphans).
+      const orphan = byProject._unassigned || 0;
+      res.json({ projects: rows, unassignedPending: orphan });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
   });
 }

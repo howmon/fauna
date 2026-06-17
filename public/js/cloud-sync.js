@@ -121,7 +121,7 @@
     if (!mount) return;
     var user = session.user || {};
     var pending = status.pendingPush || 0;
-    var nsList = (status.namespaces || []).map(_esc).join(', ') || 'none';
+    var byNs = status.pendingByNamespace || {};
     var lastCursor = '—';
     try {
       var c = status.cursors || {};
@@ -132,8 +132,14 @@
       }
     } catch (_) {}
 
+    // Per-namespace breakdown, e.g. "3 conversation, 1 project". Falls back
+    // to a flat total when the engine hasn't grouped (older build).
+    var nsRows = (status.namespaces || []).map(function (ns) {
+      return _esc(ns) + ': ' + (byNs[ns] || 0);
+    }).join('  ·  ') || 'none';
+
     mount.innerHTML = [
-      '<div style="max-width:520px">',
+      '<div style="max-width:560px">',
       '  <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">',
       '    <div style="width:40px;height:40px;border-radius:50%;background:var(--color-subtleSurface);border:1px solid var(--color-border);display:flex;align-items:center;justify-content:center">',
       '      <i class="ti ti-user" style="font-size:22px;color:var(--color-primary)"></i>',
@@ -154,8 +160,8 @@
       '      <span>' + pending + ' change' + (pending === 1 ? '' : 's') + '</span>',
       '    </div>',
       '    <div style="display:flex;justify-content:space-between;padding:4px 0">',
-      '      <span class="muted" style="color:var(--color-muted)">Namespaces</span>',
-      '      <span style="font-family:var(--theme-font, monospace);font-size:12px">' + nsList + '</span>',
+      '      <span class="muted" style="color:var(--color-muted)">By namespace</span>',
+      '      <span style="font-family:var(--theme-font, monospace);font-size:12px">' + nsRows + '</span>',
       '    </div>',
       '    <div style="display:flex;justify-content:space-between;padding:4px 0">',
       '      <span class="muted" style="color:var(--color-muted)">Last pull</span>',
@@ -166,6 +172,9 @@
       '      <span style="font-family:var(--theme-font, monospace);font-size:11px">' + _esc((status.nodeId || '').slice(0, 12)) + '…</span>',
       '    </div>',
       '  </div>',
+      // Per-project section: rendered async after the initial paint so the
+      // first frame doesn't block on /api/sync/projects.
+      '  <div id="cs-projects" style="margin-bottom:14px"></div>',
       '  <div style="display:flex;gap:8px;flex-wrap:wrap">',
       '    <button class="settings-row-btn primary" id="cs-syncnow-btn">',
       '      <i class="ti ti-refresh"></i> Sync now',
@@ -186,6 +195,83 @@
     bind('cs-pause-btn',   _handlePause);
     bind('cs-resume-btn',  _handleResume);
     bind('cs-logout-btn',  _handleLogout);
+    _renderProjects();
+  }
+
+  // ── Per-project sync controls ─────────────────────────────────────────
+  // Fetches the joined project / pending / excluded list from the server
+  // and renders it. Each row gets a toggle switch — flipping it POSTs to
+  // /api/sync/projects/:id/exclude and re-renders just this section.
+  function _renderProjects() {
+    var host = document.getElementById('cs-projects');
+    if (!host) return;
+    host.innerHTML = '<div class="muted" style="color:var(--color-muted);padding:8px 0">Loading projects…</div>';
+    _api('/api/sync/projects').then(function (r) {
+      if (!r.ok || !r.body) {
+        host.innerHTML = '<div class="muted" style="color:var(--color-danger)">Could not load projects</div>';
+        return;
+      }
+      var projects = (r.body.projects || []).slice();
+      // Show projects with pending work first, then alphabetical.
+      projects.sort(function (a, b) {
+        if ((b.pending || 0) !== (a.pending || 0)) return (b.pending || 0) - (a.pending || 0);
+        return String(a.name || '').localeCompare(String(b.name || ''));
+      });
+      var orphan = r.body.unassignedPending || 0;
+      var rows = projects.map(function (p) {
+        var checked = p.excluded ? '' : 'checked';
+        var pendingBadge = p.pending
+          ? '<span style="font-size:11px;padding:1px 6px;border-radius:10px;background:var(--color-primary);color:var(--color-background);margin-left:6px">' + p.pending + '</span>'
+          : '';
+        return [
+          '<label class="cs-proj-row" data-pid="' + _esc(p.id) + '" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 4px;border-bottom:1px solid var(--color-border)">',
+          '  <span style="display:flex;align-items:center;gap:8px;min-width:0;flex:1">',
+          '    <span style="color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _esc(p.name) + '</span>',
+          '    ' + pendingBadge,
+          '  </span>',
+          '  <input type="checkbox" class="cs-proj-toggle" ' + checked + ' aria-label="Sync this project">',
+          '</label>'
+        ].join('');
+      }).join('');
+      host.innerHTML = [
+        '<div class="settings-section" style="padding:12px;border-radius:8px;background:var(--color-subtleSurface);border:1px solid var(--color-border);color:var(--color-text)">',
+        '  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">',
+        '    <strong style="color:var(--color-text)">Projects</strong>',
+        '    <span class="muted" style="font-size:11px;color:var(--color-muted)">Toggle off to keep a project local-only</span>',
+        '  </div>',
+        rows || '<div class="muted" style="color:var(--color-muted);padding:8px 0">No projects yet.</div>',
+        orphan ? '<div class="muted" style="color:var(--color-muted);padding:8px 0;font-size:12px">+ ' + orphan + ' pending change' + (orphan === 1 ? '' : 's') + ' not attached to a project</div>' : ''
+      ].join('');
+      // Bind the toggles.
+      Array.prototype.forEach.call(host.querySelectorAll('.cs-proj-row'), function (row) {
+        var cb = row.querySelector('.cs-proj-toggle');
+        if (!cb) return;
+        cb.addEventListener('change', function () {
+          var pid = row.getAttribute('data-pid');
+          var excluded = !cb.checked; // unchecked = excluded from sync
+          cb.disabled = true;
+          _api('/api/sync/projects/' + encodeURIComponent(pid) + '/exclude', {
+            method: 'POST',
+            body: JSON.stringify({ excluded: excluded }),
+          }).then(function (resp) {
+            cb.disabled = false;
+            if (!resp.ok || !resp.body || !resp.body.ok) {
+              // Roll back the visual on failure.
+              cb.checked = !cb.checked;
+              _setStatusLine((resp.body && resp.body.error) || 'Could not update project sync', true);
+              return;
+            }
+            _renderProjects();
+          }).catch(function (e) {
+            cb.disabled = false;
+            cb.checked = !cb.checked;
+            _setStatusLine(e.message || 'Network error', true);
+          });
+        });
+      });
+    }).catch(function (e) {
+      host.innerHTML = '<div class="muted" style="color:var(--color-danger)">' + _esc(e.message) + '</div>';
+    });
   }
 
   // ── Actions ───────────────────────────────────────────────────────────

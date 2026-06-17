@@ -33,6 +33,7 @@ import crypto from 'crypto';
 import { EventEmitter } from 'events';
 
 import * as agentstore from './agentstore-client.js';
+import * as syncPrefs from './sync-prefs.js';
 
 // ── Config ────────────────────────────────────────────────────────────────
 const DEFAULT_PULL_INTERVAL_MS = 30_000;
@@ -193,9 +194,14 @@ class Journal {
     this._loaded = true;
   }
 
-  enqueue(ns, id, op) {
+  enqueue(ns, id, op, meta) {
     this.load();
     const entry = { ns, id, op, hlc: tick(), ts: Date.now() };
+    // Optional metadata travels with the entry so getStatus() can group
+    // pending changes by project without re-loading every record.
+    if (meta && typeof meta === 'object') {
+      if (meta.projectId) entry.projectId = String(meta.projectId);
+    }
     this._pending.set(this._key(ns, id), entry);
     // Append synchronously so a crash before the next flush still preserves
     // the work. Worst case we replay a no-op.
@@ -237,6 +243,25 @@ class Journal {
   size() {
     this.load();
     return this._pending.size;
+  }
+
+  /**
+   * Group the pending queue for UI/status reporting:
+   *   { byNamespace: { conversation: 3, project: 1 },
+   *     byProject:   { 'projA': 2, 'projB': 1, _unassigned: 1 } }
+   */
+  summary() {
+    this.load();
+    const byNamespace = Object.create(null);
+    const byProject = Object.create(null);
+    for (const entry of this._pending.values()) {
+      byNamespace[entry.ns] = (byNamespace[entry.ns] || 0) + 1;
+      // For 'project' entries the id IS the project id.
+      const pid = entry.ns === 'project' ? entry.id : entry.projectId;
+      const key = pid || '_unassigned';
+      byProject[key] = (byProject[key] || 0) + 1;
+    }
+    return { byNamespace, byProject };
   }
 }
 
@@ -296,13 +321,17 @@ export function isRunning() { return _running; }
 
 /** Returns a snapshot of pending push queue + cursors, for debugging/UI. */
 export function getStatus() {
+  const summary = _journal.summary();
   return {
     running: _running,
     loggedIn: agentstore.getSession().loggedIn,
     nodeId: _nodeId(),
     pendingPush: _journal.size(),
+    pendingByNamespace: summary.byNamespace,
+    pendingByProject: summary.byProject,
     cursors: { ..._loadCursors() },
     namespaces: Array.from(_adapters.keys()),
+    excludedProjects: Array.from(syncPrefs.getExcludedProjectSet()),
   };
 }
 
@@ -310,15 +339,26 @@ export function getStatus() {
  * Mark a local change as needing push. Adapters call this from inside
  * their save/delete code paths.
  *
- *   syncEngine.enqueueChange('conversation', convId, 'upsert');
+ *   syncEngine.enqueueChange('conversation', convId, 'upsert', { projectId });
+ *
+ * The optional `meta.projectId` is stored on the journal entry so the
+ * status endpoint can show per-project pending counts AND so the prefs
+ * filter can drop changes belonging to excluded projects without having
+ * to re-load the record.
  *
  * No-op if the engine isn't running (so non-logged-in users don't write
- * to the journal at all).
+ * to the journal at all), if the namespace has no adapter, or if the
+ * change belongs to a project the user has chosen to keep local-only.
  */
-export function enqueueChange(ns, id, op) {
+export function enqueueChange(ns, id, op, meta) {
   if (!_running) return;
   if (!_adapters.has(ns)) return;
-  _journal.enqueue(ns, id, op);
+  // Per-project filter. For project records the id IS the projectId; for
+  // conversation records the caller passes projectId in meta. Anything
+  // without a projectId (orphan conversation, etc.) is always synced.
+  const projectId = ns === 'project' ? id : (meta && meta.projectId);
+  if (projectId && syncPrefs.isProjectExcluded(projectId)) return;
+  _journal.enqueue(ns, id, op, meta);
   emitter.emit('queued', { ns, id, op });
   _schedulePush();
 }
@@ -567,6 +607,25 @@ async function _pullNamespace(ns) {
 
 async function _applyRemote(ns, adapter, change) {
   try {
+    // Honor the per-device project exclusion list for INCOMING changes too.
+    // Without this, excluding a project from sync would still let pulls
+    // overwrite the local copy. For 'project' the id IS the projectId;
+    // for 'conversation' we read the payload's projectId (cheap; payload
+    // is already in memory).
+    let projectId = null;
+    if (ns === 'project') {
+      projectId = change.objectId;
+    } else if (!change.deleted && change.payload && typeof change.payload === 'object') {
+      projectId = change.payload.projectId || null;
+    }
+    if (projectId && syncPrefs.isProjectExcluded(projectId)) {
+      // Still advance the cursor so we don't replay this change forever.
+      if (typeof adapter.setLastSeenVersion === 'function') {
+        adapter.setLastSeenVersion(change.objectId, change.clientVersion);
+      }
+      emitter.emit('apply:skipped', { ns, id: change.objectId, reason: 'project-excluded' });
+      return;
+    }
     if (change.deleted) {
       if (typeof adapter.delete === 'function') {
         await adapter.delete(change.objectId, { fromSync: true });
