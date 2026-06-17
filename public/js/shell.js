@@ -93,6 +93,142 @@ function _isFireAndForgetGuiCommand(rawCode) {
   return false;
 }
 
+// ── Shell-block classifier ───────────────────────────────────────────────
+// Models routinely fence non-shell content as ```bash``` (sample output,
+// bare file paths, Python REPL input, etc.). Auto-running those produces
+// nonsense `command not found` / parse errors that then get fed back into
+// the model in a loop. We classify each block so the runner can:
+//   • run anything that looks like a real command (default — autonomy intact)
+//   • skip auto-run on obviously-non-shell content and surface a notice
+//   • fold chained Python REPL input into a single `python3` heredoc so
+//     `python3` → `name = "Solomon"` → `print(name)` works as one session
+// Returns one of:
+//   { kind: 'shell' }                    — runnable as-is
+//   { kind: 'repl-launch', lang }        — bare `python3` / `node` REPL launcher
+//   { kind: 'interpreter-input', lang }  — Python/JS code in a bash fence
+//   { kind: 'bare-path' }                — single path, no command verb
+//   { kind: 'literal' }                  — free-text / program output
+//   { kind: 'empty' }                    — comments / whitespace only
+function _classifyShellBlock(rawCode) {
+  if (!rawCode) return { kind: 'empty' };
+  var lines = String(rawCode).split(/\r?\n/);
+  var first = '';
+  for (var i = 0; i < lines.length; i++) {
+    var ln = lines[i].trim();
+    if (!ln || ln.charAt(0) === '#') continue;
+    first = ln;
+    break;
+  }
+  if (!first) return { kind: 'empty' };
+
+  // Bare REPL launchers (no script arg, no -c/-m). Used as fold targets.
+  if (/^(?:python|python3)(?:\s+-[iIquvOEBsS]+)*\s*$/.test(first)) {
+    return { kind: 'repl-launch', lang: 'python' };
+  }
+  if (/^node(?:\s+-i)?\s*$/.test(first)) {
+    return { kind: 'repl-launch', lang: 'node' };
+  }
+
+  // Python-syntax tells — these shapes don't appear in legal shell.
+  var isPython =
+    /^(?:>>>|\.\.\.)\s/.test(first) ||
+    /^(?:def|class|import|from|elif|raise|yield|nonlocal|global|lambda|async|await|with|try|except|finally|pass)\b/.test(first) ||
+    /^print\s*\(/.test(first) ||
+    // `name = "Solomon"` — Python-style assignment (shell uses `name=value`, no spaces).
+    /^[A-Za-z_][A-Za-z0-9_]*\s+=\s+(?:["'\d({\[]|f["']|None\b|True\b|False\b)/.test(first) ||
+    /^(?:if|while|for)\s+.+:\s*$/.test(first);
+  if (isPython) return { kind: 'interpreter-input', lang: 'python' };
+
+  // JS-syntax tells.
+  var isJs =
+    /^(?:const|let|var)\s+[A-Za-z_$]/.test(first) ||
+    /^console\.(?:log|error|warn|info|debug)\s*\(/.test(first) ||
+    /^function\s+[A-Za-z_$]/.test(first);
+  if (isJs) return { kind: 'interpreter-input', lang: 'node' };
+
+  // Single token that's an absolute path or relative source file with no
+  // args — almost always a file reference rendered as `bash`, not a command.
+  // Running it triggers `command not found` (exit 127).
+  var trimmed = String(rawCode).trim();
+  if (trimmed === first && /^\/[^\s|;&<>$()`]+$/.test(first)) {
+    return { kind: 'bare-path' };
+  }
+  if (trimmed === first &&
+      /^[A-Za-z0-9_./-]+\.(?:py|js|ts|tsx|jsx|json|md|txt|csv|html|css|yaml|yml|toml)$/.test(first) &&
+      !/\s/.test(first)) {
+    return { kind: 'bare-path' };
+  }
+
+  // First token must look like an executable name or an env-var assignment.
+  // Catches free text like "Hello, Solomon" (first token "Hello," has a
+  // trailing comma — not a valid command name).
+  var firstToken = first.split(/\s+/)[0];
+  var execShape  = /^(?:\.{1,2}\/)?[A-Za-z_][A-Za-z0-9._+-]*$/;
+  var pathShape  = /^\/[A-Za-z0-9._/+-]+$/;
+  var envAssign  = /^[A-Za-z_][A-Za-z0-9_]*=/; // shell-style, no spaces
+  if (!execShape.test(firstToken) && !pathShape.test(firstToken) && !envAssign.test(first)) {
+    return { kind: 'literal' };
+  }
+
+  return { kind: 'shell' };
+}
+
+// Plan REPL folds for a list of classifications. Returns:
+//   { foldedInto: { childIdx: parentIdx },
+//     foldedExtra: { parentIdx: [textPieces] } }
+// A `repl-launch python` block followed by `interpreter-input python` (and
+// re-entries of the same REPL) is treated as one session.
+function _planReplFolds(classes, rawCodes) {
+  var foldedInto  = Object.create(null);
+  var foldedExtra = Object.create(null);
+  for (var i = 0; i < classes.length; i++) {
+    var cls = classes[i];
+    if (cls.kind !== 'repl-launch' || cls.lang !== 'python') continue;
+    var pieces = [];
+    for (var j = i + 1; j < classes.length; j++) {
+      var c = classes[j];
+      if (c.kind === 'interpreter-input' && c.lang === cls.lang) {
+        pieces.push(rawCodes[j]);
+        foldedInto[j] = i;
+      } else if (c.kind === 'repl-launch' && c.lang === cls.lang) {
+        foldedInto[j] = i; // absorb re-launch
+      } else {
+        break;
+      }
+    }
+    if (pieces.length) foldedExtra[i] = pieces;
+  }
+  return { foldedInto: foldedInto, foldedExtra: foldedExtra };
+}
+
+function _buildPythonHeredoc(pieces) {
+  var marker = '__FAUNA_PY_EOF__';
+  var joined = pieces.join('\n');
+  while (joined.indexOf(marker) !== -1) {
+    marker = '__FAUNA_PY_EOF_' + Math.random().toString(36).slice(2, 8) + '__';
+  }
+  return "python3 - <<'" + marker + "'\n" + joined + "\n" + marker;
+}
+
+function _classifySkipNoticeHtml(cls) {
+  var label, detail;
+  if (cls.kind === 'interpreter-input') {
+    label  = (cls.lang === 'python' ? 'Python' : 'JavaScript') + ' code (not a shell command)';
+    detail = 'Auto-run skipped. Paste this into the matching REPL, or click <b>Run</b> to force-execute as shell anyway.';
+  } else if (cls.kind === 'bare-path') {
+    label  = 'File path (not a shell command)';
+    detail = 'Auto-run skipped — running a bare path as a command would just emit “command not found”. Click <b>Run</b> to force-execute.';
+  } else if (cls.kind === 'literal') {
+    label  = 'Looks like program output, not a shell command';
+    detail = 'Auto-run skipped. Click <b>Run</b> to force-execute as shell anyway.';
+  } else {
+    label  = 'Non-shell content';
+    detail = 'Auto-run skipped.';
+  }
+  return '<span class="se-meta se-skip-notice"><i class="ti ti-info-circle"></i> ' +
+         escHtml(label) + ' — ' + detail + '</span>';
+}
+
 function _resolveHomePath(p) {
   if (!p) return p;
   if (p.charAt(0) === '~') {
@@ -671,15 +807,51 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
   dbg('extractAndRenderShellExec: found ' + codeBlocks.length + ' block(s)', 'info');
   if (codeBlocks.length) updateMessageShellVerification(messageEl);
   var shellMsgId = _shellEnsureMessageId(messageEl, convId);
+
+  // ── Pre-pass: classify every block + plan Python REPL folds ─────────────
+  // Lets the loop below skip auto-run on obvious non-shell content (file
+  // paths, output lines, raw Python pasted into a bash fence) and combine
+  // chained Python REPL input into a single heredoc invocation instead of
+  // spawning N zsh processes that each try to parse Python syntax.
+  var rawCodes = codeBlocks.map(function(c) { return c.textContent.trim(); });
+  var classes  = rawCodes.map(_classifyShellBlock);
+  var folds    = _planReplFolds(classes, rawCodes);
+  // Mutate the rawCode of any fold-parent so the actual run is a single
+  // python3 heredoc covering the whole REPL session.
+  Object.keys(folds.foldedExtra).forEach(function(parentKey) {
+    var parentIdx = Number(parentKey);
+    rawCodes[parentIdx] = _buildPythonHeredoc(folds.foldedExtra[parentIdx]);
+  });
+
   // When auto-exec is on we now run ALL blocks in the response sequentially:
-  // the first block is scheduled immediately, every subsequent block is marked
-  // pending-chain and gets started by the previous block's completion handler.
-  // This matches what users expect from "auto execute": every command in the
-  // response runs without per-block manual clicks.
+  // the first runnable block is scheduled immediately, every subsequent
+  // runnable block is marked pending-chain and started by the previous
+  // block's completion handler. Non-shell blocks (and folded children) are
+  // skipped — they don't advance the chain counter and they don't auto-run.
   var _autoRunIdx = 0;
   codeBlocks.forEach(function(code, blockIdx) {
     var pre = code.parentElement;
-    var rawCode = code.textContent.trim();
+    var rawCode = rawCodes[blockIdx];
+    var cls     = classes[blockIdx];
+    var foldedParent = folds.foldedInto[blockIdx];
+    var hasFoldedChildren = folds.foldedExtra[blockIdx] && folds.foldedExtra[blockIdx].length > 0;
+
+    // Folded-into-parent: render a thin "absorbed" notice and skip auto-run.
+    if (foldedParent !== undefined) {
+      var foldEl = document.createElement('div');
+      foldEl.className = 'shell-empty-warning shell-fold-notice';
+      foldEl.innerHTML =
+        '<div class="shell-empty-warning-header">' +
+          '<i class="ti ti-arrow-merge"></i>' +
+          '<span>Folded into the ' + (cls.lang === 'python' ? 'Python' : 'REPL') +
+          ' session above (block #' + (foldedParent + 1) + ').</span>' +
+        '</div>' +
+        '<div class="shell-empty-warning-body"><code>' + escHtml(rawCode.slice(0, 200)) + '</code></div>';
+      pre.parentNode.replaceChild(foldEl, pre);
+      return;
+    }
+    // Non-shell content: render the block but suppress auto-run + chain.
+    var classifySkip = (cls.kind === 'interpreter-input' || cls.kind === 'bare-path' || cls.kind === 'literal');
     if (!rawCode) {
       dbg('  ↳ empty shell block — replacing with model-error notice', 'warn');
       // Don't silently delete: an empty bash/shell-exec block almost always
@@ -713,13 +885,20 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
     // and we're under the depth cap. Only the FIRST block actually schedules
     // here; later blocks get tagged `data-pending-chain="1"` and are kicked
     // off serially when the prior block finishes (see runShellExec tail).
-    var eligible = !noAutoRun && state.autoRunShell && depth < DEPTH_LIMIT;
+    // Non-shell content (interpreter input, bare paths, output text) is never
+    // eligible — it would just emit nonsense errors and feed them back to the
+    // model in a loop.
+    var eligible = !noAutoRun && state.autoRunShell && depth < DEPTH_LIMIT && !classifySkip;
     var autoRun = eligible && _autoRunIdx === 0;
     var chainPending = eligible && _autoRunIdx > 0;
-    var depthLimited = !noAutoRun && state.autoRunShell && depth >= DEPTH_LIMIT;
-    var suppressedAutoRun = !!noAutoRun && state.autoRunShell;
+    var depthLimited = !noAutoRun && state.autoRunShell && depth >= DEPTH_LIMIT && !classifySkip;
+    var suppressedAutoRun = !!noAutoRun && state.autoRunShell && !classifySkip;
     if (eligible) _autoRunIdx++;
-    dbg('  ↳ block: ' + rawCode.slice(0,60) + ' autoRun=' + autoRun + ' chain=' + chainPending + ' depth=' + depth, 'cmd');
+    if (hasFoldedChildren) {
+      dbg('  ↳ block: ' + rawCode.slice(0,60) + ' (Python REPL fold: ' + folds.foldedExtra[blockIdx].length + ' pieces) autoRun=' + autoRun + ' chain=' + chainPending, 'cmd');
+    } else {
+      dbg('  ↳ block: ' + rawCode.slice(0,60) + ' autoRun=' + autoRun + ' chain=' + chainPending + ' depth=' + depth + (classifySkip ? ' classified=' + cls.kind : ''), 'cmd');
+    }
 
     var widget = document.createElement('div');
     widget.className = 'shell-exec-block';
@@ -757,6 +936,8 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
         (chainPending ? '<span class="shell-exec-autorun-badge">auto-run (chained)</span>' : '') +
         (suppressedAutoRun ? '<span class="shell-exec-autorun-badge" title="Auto-run was paused for this command because the previous step looked like a malformed write-file repair. Click Run to execute." style="background:var(--fau-surface2);color:var(--fau-text-dim)">paused — click Run</span>' : '') +
         (depthLimited ? '<span class="shell-exec-autorun-badge" style="background:var(--warn,#f59e0b);color:#000">paused — click Run</span>' : '') +
+        (classifySkip ? '<span class="shell-exec-autorun-badge" title="Auto-run skipped — block does not look like a shell command. Click Run to force-execute." style="background:var(--fau-surface2);color:var(--fau-text-dim)">not a shell command</span>' : '') +
+        (hasFoldedChildren ? '<span class="shell-exec-autorun-badge" title="This block runs as one Python session with the folded follow-up blocks." style="background:var(--fau-surface2);color:var(--fau-text-dim)">python session</span>' : '') +
         '<div class="shell-exec-btns">' +
           '<button class="shell-exec-run" id="' + execId + '-run" ' +
             'onclick="runShellExec(\'' + execId + '\')"><i class="ti ti-player-play"></i> Run</button>' +
@@ -765,10 +946,11 @@ function extractAndRenderShellExec(html, messageEl, noAutoRun, convId) {
         '</div>' +
       '</div>' +
       '<div class="shell-exec-code">' + escHtml(rawCode) + '</div>' +
-      '<div class="shell-exec-result" id="' + execId + '-result"' + (depthLimited || chainPending || suppressedAutoRun ? '' : ' style="display:none"') + '>' +
+      '<div class="shell-exec-result" id="' + execId + '-result"' + (depthLimited || chainPending || suppressedAutoRun || classifySkip ? '' : ' style="display:none"') + '>' +
         (depthLimited ? '<span class="se-meta">Auto-run paused after ' + DEPTH_LIMIT + ' steps — click Run to continue.</span>' : '') +
         (chainPending ? '<span class="se-meta">Queued — will run automatically after the previous command.</span>' : '') +
         (suppressedAutoRun ? '<span class="se-meta">Auto-run paused — the previous step looked like a malformed write-file repair. Click <b>Run</b> to execute this command, or have Fauna retry with file-plan / append-file / replace-string instead.</span>' : '') +
+        (classifySkip ? _classifySkipNoticeHtml(cls) : '') +
       '</div>';
     pre.parentNode.replaceChild(widget, pre);
     updateMessageShellVerification(messageEl);

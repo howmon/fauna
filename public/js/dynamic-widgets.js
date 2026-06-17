@@ -296,24 +296,29 @@
     // ── Fullscreen ─────────────────────────────────────────────────────
     var fsBtn = header.querySelector('.fauna-widget-fs');
     if (fsBtn) {
-      fsBtn.onclick = function () {
-        var el = wrap;
-        var inFs = document.fullscreenElement === el;
-        if (inFs) {
-          if (document.exitFullscreen) document.exitFullscreen();
-        } else if (el.requestFullscreen) {
-          el.requestFullscreen().catch(function () {});
-        }
-      };
-      document.addEventListener('fullscreenchange', function () {
-        var inFs = document.fullscreenElement === wrap;
-        fsBtn.innerHTML = '<i class="ti ' + (inFs ? 'ti-minimize' : 'ti-maximize') + '"></i>';
-        if (inFs) {
+      function _setInAppFs(on) {
+        if (on) {
           wrap.dataset._prevH = iframe.style.height || '';
-          iframe.style.height = '100vh';
-        } else if (wrap.dataset._prevH !== undefined) {
-          iframe.style.height = wrap.dataset._prevH;
-          delete wrap.dataset._prevH;
+          wrap.classList.add('fauna-widget-appfs');
+          iframe.style.height = '100%';
+          fsBtn.innerHTML = '<i class="ti ti-minimize"></i>';
+        } else {
+          wrap.classList.remove('fauna-widget-appfs');
+          fsBtn.innerHTML = '<i class="ti ti-maximize"></i>';
+          if (wrap.dataset._prevH !== undefined) {
+            iframe.style.height = wrap.dataset._prevH;
+            delete wrap.dataset._prevH;
+          }
+        }
+      }
+      fsBtn.onclick = function () {
+        var inAppFs = wrap.classList.contains('fauna-widget-appfs');
+        _setInAppFs(!inAppFs);
+      };
+      wrap.addEventListener('keydown', function (e) {
+        if (e && e.key === 'Escape' && wrap.classList.contains('fauna-widget-appfs')) {
+          e.preventDefault();
+          _setInAppFs(false);
         }
       });
     }

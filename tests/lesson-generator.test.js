@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateLessonDSL, validateLesson } from '../server/lesson/generator.js';
+import { generateLessonDSL, validateLesson, _internals } from '../server/lesson/generator.js';
 
 // Minimal mock of the OpenAI-style client generateLessonDSL expects. Each call
 // shifts the next canned completion off the queue and records the messages it
@@ -154,5 +154,40 @@ describe('validateLesson layout checks', () => {
       ]}],
     };
     expect(validateLesson(dsl).ok).toBe(true);
+  });
+
+  it('rejects props that render outside canvas bounds', () => {
+    const dsl = {
+      title: 'T', voice: 'kokoro:af_bella',
+      canvas: { width: 1280, height: 720 },
+      props: {
+        panel: { kind: 'code', code: 'print("hello")', w: 700, h: 300 },
+      },
+      scenes: [{ id: 's1', narration: 'go', actions: [
+        { at: 'start', do: 'draw', prop: 'panel', x: 980, y: 520 },
+      ]}],
+    };
+    const v = validateLesson(dsl);
+    expect(v.ok).toBe(false);
+    expect(v.errors.join('\n')).toMatch(/outside canvas/);
+  });
+});
+
+describe('deterministic lesson fallback', () => {
+  it('builds a DSL that passes validator', () => {
+    const dsl = _internals._buildDeterministicFallbackLesson({
+      topic: 'python',
+      durationMin: 4,
+      voice: 'kokoro:af_bella',
+    });
+    const v = validateLesson(dsl);
+    expect(v.ok).toBe(true);
+  });
+
+  it('never injects note-mode fallback instructions into narration', () => {
+    const dsl = _internals._buildDeterministicFallbackLesson({ topic: 'python' });
+    const text = JSON.stringify(dsl).toLowerCase();
+    expect(text).not.toContain('deliver the lesson as written notes');
+    expect(text).not.toContain('do not retry fauna_lesson_create');
   });
 });

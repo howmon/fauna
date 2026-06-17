@@ -247,6 +247,44 @@ const RUNTIME_JS = `
     }
   }
 
+  function _propDims(prop, action, x, wHint) {
+    const kind = prop && prop.kind;
+    if (kind === 'text') {
+      const w = Number.isFinite(wHint) ? wHint : Math.max(200, Math.min(CANVAS_W - x - 40, prop.w || (CANVAS_W - x - 60)));
+      return { w, h: prop.h || 220 };
+    }
+    if (kind === 'latex') {
+      const w = Number.isFinite(wHint) ? wHint : Math.max(200, Math.min(CANVAS_W - x - 40, prop.w || 800));
+      return { w, h: prop.h || 180 };
+    }
+    if (kind === 'shape') {
+      const w = prop.w || (prop.r ? prop.r * 2 : 80);
+      const h = prop.h || (prop.r ? prop.r * 2 : 80);
+      return { w, h };
+    }
+    if (kind === 'image') return { w: prop.w || 240, h: prop.h || 180 };
+    if (kind === 'slide') return { w: prop.w || CANVAS_W, h: prop.h || CANVAS_H };
+    if (kind === 'code') return { w: prop.w || 700, h: prop.h || 300 };
+    if (kind === 'plot') return { w: action.w || 480, h: action.h || 280 };
+    if (kind === 'numberline') return { w: action.w || 600, h: 80 };
+    if (kind === 'flow') return { w: action.w || prop.w || Math.max(240, CANVAS_W - x - 60), h: action.h || prop.h || 240 };
+    if (kind === 'molecule') return { w: 320, h: 320 };
+    if (kind === 'svg') return { w: prop.w || 200, h: prop.h || 200 };
+    if (kind === 'circuit') return { w: 480, h: 320 };
+    return { w: prop.w || 140, h: prop.h || 80 };
+  }
+
+  function _clampPropXY(x, y, prop, action, wHint) {
+    const pad = 20;
+    const dims = _propDims(prop, action, x, wHint);
+    const maxX = Math.max(pad, CANVAS_W - dims.w - pad);
+    const maxY = Math.max(pad, CANVAS_H - dims.h - pad);
+    return {
+      x: Math.min(Math.max(x, pad), maxX),
+      y: Math.min(Math.max(y, pad), maxY),
+    };
+  }
+
   function renderProp(propId, action) {
     const prop = (LESSON.props && LESSON.props[propId]) || null;
     if (!prop) return null;
@@ -267,12 +305,13 @@ const RUNTIME_JS = `
       const w = (prop.kind === 'text' || prop.kind === 'latex')
         ? Math.min(prop.w || lane.w, lane.w)
         : (prop.w || lane.w);
-      const x = Math.round((CANVAS_W - w) / 2);   // centred horizontally
-      const y = lane.y;
-      entry.opts.x = x; entry.opts.y = y;
-      entry.opts.xExplicit = x; entry.opts.yExplicit = y;
-      placeRoot(g, x, y);
-      _renderPropBody(g, prop, action, x, w);
+      const cx = Math.round((CANVAS_W - w) / 2);   // centred horizontally
+      const cy = lane.y;
+      const clamped = _clampPropXY(cx, cy, prop, action, w);
+      entry.opts.x = clamped.x; entry.opts.y = clamped.y;
+      entry.opts.xExplicit = clamped.x; entry.opts.yExplicit = clamped.y;
+      placeRoot(g, clamped.x, clamped.y);
+      _renderPropBody(g, prop, action, clamped.x, w, lane.maxH);
       return entry;
     }
     // Did the caller (or any earlier action on this prop) actually supply
@@ -319,39 +358,59 @@ const RUNTIME_JS = `
       if (pushTo + 40 > CANVAS_H) pushTo = Math.max(100, CANVAS_H - 80);
       y = pushTo;
     }
-    entry.opts.x = x; entry.opts.y = y;
-    placeRoot(g, x, y);
-    _renderPropBody(g, prop, action, x);
+    const clamped = _clampPropXY(x, y, prop, action);
+    entry.opts.x = clamped.x; entry.opts.y = clamped.y;
+    placeRoot(g, clamped.x, clamped.y);
+    _renderPropBody(g, prop, action, clamped.x);
     return entry;
   }
 
   // ── Slot definitions ────────────────────────────────────────────────
   // Standardized lanes so the LLM doesn't have to invent coordinates.
-  // The 60px margins match the rules in the prompt. The bottom band
-  // ('body-bottom') stays well clear of the new external cue strip and
-  // leaves room for action overlays (highlight rects, underlines).
+  // Each lane carries its own MAX HEIGHT — _renderPropBody auto-fits text
+  // to that height so a wordy title can never visually invade the next
+  // lane (the "Python fundamentals: variables, data types, conditionals…"
+  // overflow-into-body-top bug). Heights are derived from the gap to the
+  // next slot's y, minus a small safety margin.
   const MARGIN = 60;
   const SLOTS = {
-    'title':       { y: 60,                      w: CANVAS_W - MARGIN * 2 },
-    'body-top':    { y: 180,                     w: CANVAS_W - MARGIN * 2 },
-    'body-center': { y: Math.round(CANVAS_H/2) - 40, w: CANVAS_W - MARGIN * 2 },
-    'body-bottom': { y: CANVAS_H - 220,          w: CANVAS_W - MARGIN * 2 },
-    'caption':     { y: CANVAS_H - 120,          w: CANVAS_W - MARGIN * 2 },
+    'title':       { y: 60,                            w: CANVAS_W - MARGIN * 2, maxH: 110 },
+    'body-top':    { y: 180,                           w: CANVAS_W - MARGIN * 2, maxH: 130 },
+    'body-center': { y: Math.round(CANVAS_H/2) - 40,   w: CANVAS_W - MARGIN * 2, maxH: 160 },
+    'body-bottom': { y: CANVAS_H - 220,                w: CANVAS_W - MARGIN * 2, maxH: 90  },
+    'caption':     { y: CANVAS_H - 120,                w: CANVAS_W - MARGIN * 2, maxH: 100 },
   };
 
-  function _renderPropBody(g, prop, action, x, slotW) {
+  // Auto-fit a text/latex div into a given pixel height by reducing its
+  // font-size in 2px steps until it stops overflowing (or hits minFont).
+  // Cheap: each iteration triggers one layout, capped at ~40 iterations.
+  function _fitTextToBox(div, maxH, minFont) {
+    if (!div || !Number.isFinite(maxH) || maxH <= 0) return;
+    let fontSize = parseFloat(div.style.fontSize) || 28;
+    const floor = Math.max(10, minFont || 14);
+    let safety = 40;
+    while (div.scrollHeight > maxH && fontSize > floor && safety-- > 0) {
+      fontSize = Math.max(floor, fontSize - 2);
+      div.style.fontSize = fontSize + 'px';
+    }
+  }
+
+  function _renderPropBody(g, prop, action, x, slotW, slotMaxH) {
     // slotW is the lane width when the prop is slotted; used to override the
     // free-form maxW calc so slotted text wraps inside its lane, not all the
-    // way to the canvas right edge.
+    // way to the canvas right edge. slotMaxH is the lane height — when set
+    // we auto-shrink the text font-size to fit it (so a wordy title cannot
+    // visually overflow into the next slot).
     switch (prop.kind) {
       case 'text': {
         if (!g.querySelector('foreignObject')) {
           const maxW = Number.isFinite(slotW)
             ? slotW
             : Math.max(200, Math.min(CANVAS_W - x - 40, prop.w || (CANVAS_W - x - 60)));
+          const foH  = Number.isFinite(slotMaxH) ? slotMaxH : (prop.h || 400);
           const fo = document.createElementNS(SVG_NS, 'foreignObject');
           fo.setAttribute('width', String(maxW));
-          fo.setAttribute('height', String(prop.h || 400));
+          fo.setAttribute('height', String(foH));
           fo.classList.add('prop-text-fo');
           const div = document.createElement('div');
           const fontClass = prop.font ? (' font-' + prop.font) : '';
@@ -363,6 +422,7 @@ const RUNTIME_JS = `
           div.textContent = String(prop.content || '');
           fo.appendChild(div);
           g.appendChild(fo);
+          if (Number.isFinite(slotMaxH)) _fitTextToBox(div, slotMaxH, 14);
         }
         break;
       }
@@ -371,8 +431,9 @@ const RUNTIME_JS = `
           const maxW = Number.isFinite(slotW)
             ? slotW
             : Math.max(200, Math.min(CANVAS_W - x - 40, prop.w || 800));
+          const foH  = Number.isFinite(slotMaxH) ? slotMaxH : (prop.h || 200);
           const fo = document.createElementNS(SVG_NS, 'foreignObject');
-          fo.setAttribute('width', String(maxW)); fo.setAttribute('height', String(prop.h || 200));
+          fo.setAttribute('width', String(maxW)); fo.setAttribute('height', String(foH));
           fo.classList.add('prop-latex');
           const div = document.createElement('div');
           div.style.cssText = 'display:inline-block;color:#1a1a1a;max-width:100%;overflow-x:auto;';
@@ -382,6 +443,7 @@ const RUNTIME_JS = `
           } catch (e) { div.textContent = prop.tex; }
           fo.appendChild(div);
           g.appendChild(fo);
+          if (Number.isFinite(slotMaxH)) _fitTextToBox(div, slotMaxH, 12);
         }
         break;
       }
@@ -458,11 +520,22 @@ const RUNTIME_JS = `
       case 'code': {
         if (!g.querySelector('foreignObject')) {
           const fo = document.createElementNS(SVG_NS, 'foreignObject');
-          fo.setAttribute('width', '700'); fo.setAttribute('height', '300');
+          fo.setAttribute('width', String(prop.w || 700));
+          fo.setAttribute('height', String(prop.h || 300));
           const pre = document.createElement('pre');
           pre.style.cssText = 'margin:0;padding:10px 14px;background:#1f1f23;color:#f4f4f5;border-radius:8px;font:14px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre;';
-          pre.textContent = String(prop.code || '');
-          pre.dataset.full = String(prop.code || '');
+          const fullCode = String(
+            (action && typeof action.text === 'string' ? action.text : '') ||
+            prop.code ||
+            ''
+          );
+          pre.textContent = fullCode;
+          pre.dataset.full = fullCode;
+          if (!fullCode.trim()) {
+            pre.style.background = 'transparent';
+            pre.style.padding = '0';
+            pre.style.minHeight = '0';
+          }
           if (action.do === 'type') pre.textContent = '';
           fo.appendChild(pre);
           g.appendChild(fo);
@@ -955,8 +1028,12 @@ const RUNTIME_JS = `
         if (!g) break;
         g.style.opacity = '1';
         const pre = g.querySelector('pre');
-        if (pre && pre.dataset.full) {
-          const full = pre.dataset.full;
+        if (pre) {
+          const full = String(pre.dataset.full || action.text || action.code || '');
+          if (!full.trim()) break;
+          pre.dataset.full = full;
+          pre.style.background = '#1f1f23';
+          pre.style.padding = '10px 14px';
           const speed = action.durMs ? Math.max(8, action.durMs / full.length) : 22;
           let i = 0;
           pre.textContent = '';

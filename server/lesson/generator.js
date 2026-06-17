@@ -116,6 +116,14 @@ export function validateLesson(doc) {
           if (!a || typeof a !== 'object') { errors.push(`scenes[${i}].actions[${j}] not an object`); continue; }
           if (!ACTION_DOS.has(a.do)) warnings.push(`unknown action.do "${a.do}" in scene[${i}].actions[${j}] — will be ignored at runtime`);
           if (a.prop && (!doc.props || !doc.props[a.prop])) errors.push(`action references unknown prop "${a.prop}" in scene[${i}]`);
+          if (a.do === 'type' && a.prop && doc.props && doc.props[a.prop] && doc.props[a.prop].kind === 'code') {
+            const propCode = doc.props[a.prop].code;
+            const actionText = (typeof a.text === 'string' && a.text.trim()) || (typeof a.code === 'string' && a.code.trim());
+            const hasPropCode = typeof propCode === 'string' && propCode.trim().length > 0;
+            if (!hasPropCode && !actionText) {
+              errors.push(`scene[${i}].actions[${j}] do:"type" on code prop "${a.prop}" needs action.text (or props.${a.prop}.code)`);
+            }
+          }
         }
       }
     }
@@ -125,6 +133,12 @@ export function validateLesson(doc) {
       if (!p || typeof p !== 'object') { errors.push(`prop "${pid}" is not an object`); continue; }
       if (!p.kind || !LESSON_KINDS[p.kind]) errors.push(`prop "${pid}" has unknown kind "${p.kind}"`);
       if (p.slot && !VALID_SLOTS.has(p.slot)) errors.push(`prop "${pid}" has unknown slot "${p.slot}" (valid: ${[...VALID_SLOTS].join(', ')})`);
+      if (p.kind === 'code') {
+        const hasCode = typeof p.code === 'string' && p.code.trim().length > 0;
+        if (!hasCode) {
+          errors.push(`prop "${pid}" kind "code" requires non-empty code text (set props.${pid}.code)`);
+        }
+      }
     }
   }
   // Per-scene overlap check: for every scene, estimate each prop's bounding
@@ -137,6 +151,8 @@ export function validateLesson(doc) {
     for (let si = 0; si < doc.scenes.length; si++) {
       const scene = doc.scenes[si];
       if (!Array.isArray(scene.actions)) continue;
+      const canvasW = doc.canvas?.width || 1280;
+      const canvasH = doc.canvas?.height || 720;
       const boxes = [];
       for (const a of scene.actions) {
         if (!a || !a.prop) continue;
@@ -165,6 +181,14 @@ export function validateLesson(doc) {
           if (ov > 0.5) {
             errors.push(`scene[${si}]: props "${boxes[i].id}" and "${boxes[j].id}" overlap (~${Math.round(ov * 100)}% of smaller bbox) — give them distinct (x,y) or use a "slot"`);
           }
+        }
+      }
+      // (c) bbox outside canvas bounds
+      for (const b of boxes) {
+        const x2 = b.box.x + b.box.w;
+        const y2 = b.box.y + b.box.h;
+        if (b.box.x < 0 || b.box.y < 0 || x2 > canvasW || y2 > canvasH) {
+          errors.push(`scene[${si}]: prop "${b.id}" renders outside canvas (${Math.round(b.box.x)},${Math.round(b.box.y)},${Math.round(b.box.w)}x${Math.round(b.box.h)}) — move it inside ${canvasW}x${canvasH} or use a slot`);
         }
       }
     }
@@ -612,6 +636,7 @@ export async function synthesizeLessonAudio({ lesson, lessonId, onProgress }) {
  */
 export async function createLesson({ topic, durationMin = 5, voice, client, model, onProgress, source, userDataDir }) {
   const id = 'L_' + Date.now().toString(36) + crypto.randomBytes(2).toString('hex');
+  const generationWarnings = [];
   let sourceText, sourceKind, slideImages, rasterError;
   if (source) {
     if (onProgress) onProgress({ phase: 'source', source });
@@ -692,15 +717,15 @@ export async function createLesson({ topic, durationMin = 5, voice, client, mode
           repair: { errors: problems },
         });
       } catch (e) {
-        const err = new Error('Lesson script generation failed twice (' + e.message + '). Do NOT retry fauna_lesson_create for the same topic — fall back to fauna_video_create or deliver the lesson as written notes.');
-        err.code = 'LESSON_GEN_FAILED';
-        throw err;
+        if (onProgress) onProgress({ phase: 'script-fallback', reason: e.message });
+        dsl = _buildDeterministicFallbackLesson({ topic, durationMin, voice, sourceText, sourceKind });
+        generationWarnings.push('lesson script generation failed after retries; used deterministic fallback lesson');
       }
       const vr = validateLesson(dsl);
       if (!vr.ok) {
-        const err = new Error('Lesson layout still invalid after a repair pass (' + vr.errors.join('; ') + '). Do NOT retry fauna_lesson_create for the same topic — fall back to fauna_video_create or deliver the lesson as written notes.');
-        err.code = 'LESSON_DSL_INVALID';
-        throw err;
+        if (onProgress) onProgress({ phase: 'layout-fallback', errors: vr.errors });
+        dsl = _buildDeterministicFallbackLesson({ topic, durationMin, voice, sourceText, sourceKind });
+        generationWarnings.push('lesson layout remained invalid after repair; used deterministic fallback lesson');
       }
     }
   }
@@ -712,7 +737,7 @@ export async function createLesson({ topic, durationMin = 5, voice, client, mode
   fs.writeFileSync(path.join(_lessonDir(id), 'lesson.draft.json'), JSON.stringify(dsl, null, 2), 'utf8');
   const lesson = await synthesizeLessonAudio({ lesson: dsl, lessonId: id, onProgress });
   fs.writeFileSync(path.join(_lessonDir(id), 'lesson.json'), JSON.stringify(lesson, null, 2), 'utf8');
-  return { id, lesson, warnings: v.warnings, slideCount: slideImages ? slideImages.length : 0 };
+  return { id, lesson, warnings: [...(v.warnings || []), ...generationWarnings], slideCount: slideImages ? slideImages.length : 0 };
 }
 
 /** Split source text emitted by source-extract into one chunk per slide.
@@ -748,6 +773,110 @@ function _splitSourceBySlide(text, expectedCount) {
   return result;
 }
 
+function _buildDeterministicFallbackLesson({ topic, durationMin = 5, voice, sourceText, sourceKind }) {
+  const cleanTopic = String(topic || '').trim() || 'the topic';
+  const sourceHint = sourceText
+    ? ('This lesson is grounded in the provided ' + (sourceKind || 'source') + '.')
+    : 'This lesson is a concise visual walkthrough.';
+  const paceLabel = durationMin <= 3 ? 'quick' : durationMin <= 7 ? 'standard' : 'extended';
+
+  return {
+    title: ('Lesson: ' + cleanTopic).slice(0, 60),
+    subject: 'general',
+    voice: voice || 'kokoro:af_bella',
+    canvas: { width: 1280, height: 720, theme: 'whiteboard' },
+    props: {
+      title: {
+        kind: 'text',
+        content: cleanTopic,
+        fontSize: 44,
+        weight: 700,
+        slot: 'title',
+      },
+      overview: {
+        kind: 'text',
+        content: sourceHint,
+        fontSize: 30,
+        slot: 'body-top',
+      },
+      core: {
+        kind: 'text',
+        content: 'Core idea: break the concept into inputs, process, and output. We will walk each part step-by-step.',
+        fontSize: 28,
+        slot: 'body-center',
+      },
+      code: {
+        kind: 'code',
+        code: '# Quick pattern\nvalue = "' + cleanTopic.replace(/"/g, '') + '"\nprint("Now learning:", value)',
+        language: 'python',
+      },
+      flow: {
+        kind: 'flow',
+        direction: 'horizontal',
+        shape: 'rect',
+        labelPos: 'below',
+        nodes: [
+          { label: 'Input', color: '#3b82f6' },
+          { label: 'Process', color: '#f59e0b' },
+          { label: 'Output', color: '#22c55e' },
+        ],
+      },
+      summary: {
+        kind: 'text',
+        content: 'Summary: identify the input, apply the process, verify the output, and repeat with your own examples.',
+        fontSize: 28,
+        slot: 'body-center',
+      },
+      next: {
+        kind: 'text',
+        content: 'Next step: practice one tiny example and narrate each step out loud.',
+        fontSize: 24,
+        slot: 'caption',
+      },
+    },
+    scenes: [
+      {
+        id: 'intro',
+        narration: 'Welcome. This is a ' + paceLabel + ' lesson on ' + cleanTopic + '. We start with the big picture so you know what to focus on.',
+        actions: [
+          { at: 'start', do: 'write', prop: 'title' },
+          { at: 0.4, do: 'fade-in', prop: 'overview' },
+        ],
+      },
+      {
+        id: 'core-idea',
+        narration: 'Now the core idea. Any topic can be understood as input, process, and output. Keep that frame while you learn details.',
+        actions: [
+          { at: 'start', do: 'write', prop: 'core' },
+        ],
+      },
+      {
+        id: 'example',
+        narration: 'Here is a tiny example. Notice how we declare a value and print a clear result. Small examples make concepts stick quickly.',
+        actions: [
+          { at: 'start', do: 'draw', prop: 'code', x: 220, y: 220 },
+          { at: 0.4, do: 'type', prop: 'code', durMs: 2200 },
+        ],
+      },
+      {
+        id: 'flow',
+        narration: 'Visualize the sequence: input, process, output. If you can map a problem to this flow, you can usually solve it faster.',
+        actions: [
+          { at: 'start', do: 'draw', prop: 'flow', x: 80, y: 260, w: 1120, h: 220 },
+        ],
+      },
+      {
+        id: 'summary',
+        narration: 'Quick recap. Identify inputs, apply a process, and validate outputs. Then practice one variation immediately to lock it in.',
+        actions: [
+          { at: 'start', do: 'write', prop: 'summary' },
+          { at: 0.6, do: 'fade-in', prop: 'next' },
+        ],
+      },
+    ],
+  };
+}
+
 export function loadLesson(lessonId) {
   const f = path.join(_lessonDir(lessonId), 'lesson.json');
   if (!fs.existsSync(f)) return null;
@@ -767,4 +896,4 @@ export function lessonSlidePath(lessonId, fileName) {
 }
 
 // Exposed for tests + tool catalog.
-export const _internals = { _scriptUserPrompt, ACTION_DOS, LESSONS_ROOT };
+export const _internals = { _scriptUserPrompt, ACTION_DOS, LESSONS_ROOT, _buildDeterministicFallbackLesson };

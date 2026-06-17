@@ -4241,7 +4241,7 @@ webview {
 
 /* Button */
 .gui-btn {
-  display: inline-flex; align-items: center; gap: 5px;
+  display: inline-flex; align-items: center; gap: 5px;margin-top:12px;
   font: inherit; font-size: 12px; cursor: pointer;
   border-radius: var(--radius-sm); padding: 5px 12px;
   border: 1px solid var(--fau-border); transition: background .15s, border-color .15s;
@@ -8651,6 +8651,22 @@ mark.find-hit.find-hit-active {
 .fauna-dynamic-widget button[class^="fauna-widget-"]{transition:background .12s, color .12s, border-color .12s}
 .fauna-dynamic-widget button[class^="fauna-widget-"]:hover{background:var(--fau-surface3, var(--fau-surface2)) !important;color:var(--fau-text) !important;border-color:var(--fau-border2, var(--fau-border)) !important}
 .fauna-dynamic-widget button[class^="fauna-widget-"]:active{transform:translateY(1px)}
+.fauna-dynamic-widget.fauna-widget-appfs{
+  position:fixed;
+  inset:0;
+  z-index:9999;
+  margin:0 !important;
+  border-radius:0;
+  border:0;
+  background:#000;
+  display:flex;
+  flex-direction:column;
+}
+.fauna-dynamic-widget.fauna-widget-appfs iframe{
+  flex:1;
+  min-height:0;
+  height:100% !important;
+}
 .fauna-dynamic-widget:fullscreen{margin:0;border-radius:0;border:0;background:#000}
 .fauna-dynamic-widget:fullscreen iframe{height:100vh !important}
 
