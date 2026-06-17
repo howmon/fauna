@@ -2930,11 +2930,233 @@ function _renderSettingsTab(proj) {
       '<div id="proj-set-backlog" class="proj-backlog-list">' + _renderBacklogListHtml(proj.backlog || []) + '</div>' +
       '<div class="proj-settings-hint">Top items by score. Use <code>fauna_feature_request_create</code> and <code>fauna_backlog_prioritize</code> tools to manage from chat.</div>' +
     '</div>' +
+    _renderCheckpointsSection(proj) +
     '<div class="proj-settings-actions">' +
       '<button class="proj-action-btn" onclick="saveProjectSettings()"><i class="ti ti-check"></i> Save</button>' +
       '<button class="proj-action-btn proj-danger-btn" onclick="confirmDeleteProject()"><i class="ti ti-trash"></i> Delete project</button>' +
     '</div>' +
   '</div>';
+}
+
+// ── Project Checkpoints (Settings tab) ───────────────────────────────────
+// Sidecar undo/restore — see server/lib/project-checkpoints.js. Renders the
+// list async after the section mounts so opening Settings stays fast.
+function _renderCheckpointsSection(proj) {
+  var cp = proj.checkpoints || {};
+  var maxCount = Number.isFinite(cp.maxCount) && cp.maxCount > 0 ? cp.maxCount : 50;
+  var maxMB = Number.isFinite(cp.maxBytes) && cp.maxBytes > 0
+    ? Math.round(cp.maxBytes / (1024 * 1024))
+    : 100;
+  var on = function(v) { return v !== false; }; // default true for the toggles
+  var rootSet = !!(proj.rootPath && proj.rootPath.trim());
+  setTimeout(function() { _loadProjCheckpoints(proj.id); }, 0);
+  return (
+    '<div class="proj-settings-row">' +
+      '<label>Checkpoints</label>' +
+      (rootSet
+        ? '<div class="proj-cp-controls">' +
+            '<button class="proj-action-btn" onclick="createProjectCheckpoint()"><i class="ti ti-camera"></i> Snapshot now</button>' +
+            '<input class="proj-input proj-cp-title" id="proj-cp-title" placeholder="(optional label)">' +
+          '</div>' +
+          '<div id="proj-cp-list" class="proj-cp-list"><div class="proj-cp-empty">Loading…</div></div>' +
+          '<div class="proj-cp-settings">' +
+            '<label class="proj-toggle-label">' +
+              '<input type="checkbox" id="proj-cp-auto-destr" class="proj-toggle-input"' + (on(cp.autoSnapshotOnDestructive) ? ' checked' : '') + '>' +
+              '<span class="proj-toggle-track"><span class="proj-toggle-thumb"></span></span>' +
+              '<span class="proj-toggle-text">Auto-snapshot before agent patches</span>' +
+            '</label>' +
+            '<label class="proj-toggle-label">' +
+              '<input type="checkbox" id="proj-cp-include-untracked" class="proj-toggle-input"' + (on(cp.includeUntracked) ? ' checked' : '') + '>' +
+              '<span class="proj-toggle-track"><span class="proj-toggle-thumb"></span></span>' +
+              '<span class="proj-toggle-text">Include untracked files (respects .gitignore)</span>' +
+            '</label>' +
+            '<div class="proj-cp-retention">' +
+              '<label>Keep last <input type="number" min="1" max="500" id="proj-cp-max-count" value="' + maxCount + '" class="proj-input proj-cp-num"></label>' +
+              '<label>Cap <input type="number" min="1" max="10240" id="proj-cp-max-mb" value="' + maxMB + '" class="proj-input proj-cp-num"> MB</label>' +
+              '<button class="proj-action-btn proj-cp-save-btn" onclick="saveCheckpointSettings()"><i class="ti ti-device-floppy"></i> Save settings</button>' +
+            '</div>' +
+          '</div>' +
+          '<div class="proj-settings-hint">Sidecar history of working-tree changes (uses <code>git ls-files</code> when available so <code>node_modules</code> and other ignored paths are skipped). Restore can preview, 3-way merge, or undo.</div>'
+        : '<div class="proj-cp-empty">Set a project folder above to enable checkpoints.</div>') +
+    '</div>'
+  );
+}
+
+async function _loadProjCheckpoints(projectId) {
+  var listEl = document.getElementById('proj-cp-list');
+  if (!listEl) return;
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(projectId) + '/checkpoints');
+    var data = await r.json();
+    if (!data || !data.ok) { listEl.innerHTML = '<div class="proj-cp-empty">Could not load: ' + _escHtml(String((data && data.error) || 'error')) + '</div>'; return; }
+    var items = data.checkpoints || [];
+    if (!items.length) { listEl.innerHTML = '<div class="proj-cp-empty">No checkpoints yet — click <b>Snapshot now</b> above.</div>'; return; }
+    listEl.innerHTML = items.map(function(cp) {
+      var when = _projCpFormatTime(cp.createdAt);
+      var sizeKB = Math.max(1, Math.round((cp.totalBytes || 0) / 1024));
+      var trigger = cp.trigger || 'manual';
+      return (
+        '<div class="proj-cp-item" data-num="' + cp.number + '">' +
+          '<div class="proj-cp-head">' +
+            '<span class="proj-cp-number">#' + cp.number + '</span>' +
+            '<span class="proj-cp-title">' + _escHtml(cp.title || 'Untitled') + '</span>' +
+            '<span class="proj-cp-trigger proj-cp-trigger-' + _escHtml(trigger) + '">' + _escHtml(trigger) + '</span>' +
+          '</div>' +
+          '<div class="proj-cp-meta">' +
+            '<span><i class="ti ti-clock"></i> ' + _escHtml(when) + '</span>' +
+            '<span><i class="ti ti-files"></i> ' + (cp.fileCount || 0) + ' file' + (cp.fileCount === 1 ? '' : 's') + '</span>' +
+            '<span><i class="ti ti-database"></i> ' + sizeKB + ' KB</span>' +
+          '</div>' +
+          '<div class="proj-cp-actions">' +
+            '<button class="proj-cp-btn" onclick="previewProjectCheckpoint(\'' + projectId + '\',' + cp.number + ')"><i class="ti ti-eye"></i> Preview</button>' +
+            '<button class="proj-cp-btn" onclick="restoreProjectCheckpoint(\'' + projectId + '\',' + cp.number + ',\'3way\')"><i class="ti ti-git-merge"></i> Restore (3-way)</button>' +
+            '<button class="proj-cp-btn proj-cp-btn-danger" onclick="restoreProjectCheckpoint(\'' + projectId + '\',' + cp.number + ',\'reverse\')" title="Undo this checkpoint\u2019s changes"><i class="ti ti-arrow-back-up"></i> Undo</button>' +
+            '<button class="proj-cp-btn proj-cp-btn-danger" onclick="deleteProjectCheckpoint(\'' + projectId + '\',' + cp.number + ')"><i class="ti ti-trash"></i></button>' +
+          '</div>' +
+        '</div>'
+      );
+    }).join('');
+  } catch (e) {
+    listEl.innerHTML = '<div class="proj-cp-empty">Error: ' + _escHtml(e.message || String(e)) + '</div>';
+  }
+}
+
+function _projCpFormatTime(iso) {
+  if (!iso) return '';
+  try {
+    var d = new Date(iso);
+    var now = new Date();
+    var sameDay = d.toDateString() === now.toDateString();
+    if (sameDay) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  } catch (_) { return iso; }
+}
+
+async function createProjectCheckpoint() {
+  var proj = _activeProject();
+  if (!proj) return;
+  var titleEl = document.getElementById('proj-cp-title');
+  var title = titleEl ? titleEl.value.trim() : '';
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(proj.id) + '/checkpoints', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: title || undefined, trigger: 'manual' }),
+    });
+    var data = await r.json();
+    if (!data || !data.ok) throw new Error((data && data.error) || 'snapshot failed');
+    if (titleEl) titleEl.value = '';
+    _showToast('Checkpoint #' + data.checkpoint.number + ' saved (' + data.checkpoint.fileCount + ' files)');
+    _loadProjCheckpoints(proj.id);
+  } catch (e) { _showToast('Snapshot failed: ' + e.message, true); }
+}
+
+async function previewProjectCheckpoint(projectId, number) {
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(projectId) + '/checkpoints/' + number + '/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'preview' }),
+    });
+    var data = await r.json();
+    if (!data || !data.ok) throw new Error((data && data.error) || 'preview failed');
+    _showCheckpointPreview(data);
+  } catch (e) { _showToast('Preview failed: ' + e.message, true); }
+}
+
+function _showCheckpointPreview(data) {
+  var existing = document.getElementById('proj-cp-preview');
+  if (existing) existing.remove();
+  var overlay = document.createElement('div');
+  overlay.id = 'proj-cp-preview';
+  overlay.className = 'proj-cp-preview-overlay';
+  var fileLines = (data.files || []).map(function(f) {
+    var icon = f.changeType === 'added' ? 'ti-plus' :
+               f.changeType === 'deleted' ? 'ti-minus' :
+               f.changeType === 'renamed' ? 'ti-arrow-right' :
+               f.changeType === 'untracked' ? 'ti-circle-plus' : 'ti-edit';
+    var size = f.size ? ' · ' + Math.max(1, Math.round((f.size || 0) / 1024)) + ' KB' : '';
+    var note = f.isTruncated ? ' <span class="proj-cp-trunc">(truncated)</span>' : '';
+    return '<div class="proj-cp-file proj-cp-file-' + _escHtml(f.changeType) + '">' +
+      '<i class="ti ' + icon + '"></i> ' + _escHtml(f.path) +
+      '<span class="proj-cp-file-meta">' + _escHtml(f.changeType) + size + '</span>' +
+      note +
+    '</div>';
+  }).join('');
+  var diff = data.patch || '';
+  overlay.innerHTML =
+    '<div class="proj-cp-preview-card">' +
+      '<div class="proj-cp-preview-head">' +
+        '<span class="proj-cp-preview-title"><i class="ti ti-eye"></i> ' + _escHtml(data.title || 'Checkpoint') + '</span>' +
+        '<button class="proj-icon-btn" onclick="document.getElementById(\'proj-cp-preview\').remove()"><i class="ti ti-x"></i></button>' +
+      '</div>' +
+      '<div class="proj-cp-preview-files">' + (fileLines || '<div class="proj-cp-empty">No files in checkpoint.</div>') + '</div>' +
+      (diff ? '<pre class="proj-cp-preview-diff">' + _escHtml(diff) + '</pre>' : '') +
+    '</div>';
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', function(e) {
+    if (e.target === overlay) overlay.remove();
+  });
+}
+
+async function restoreProjectCheckpoint(projectId, number, mode) {
+  var verb = mode === 'reverse' ? 'undo' : (mode === '3way' ? '3-way merge' : (mode === 'forward' ? 'force-restore' : 'restore'));
+  if (!await _projConfirm('Apply ' + verb + ' for checkpoint #' + number + '?\nA "before-restore" snapshot will be created automatically.')) return;
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(projectId) + '/checkpoints/' + number + '/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: mode || '3way' }),
+    });
+    var data = await r.json();
+    if (!data || !data.ok) {
+      var msg = (data && data.error) || 'restore failed';
+      if (data && (data.warnings || []).length) msg += '\n' + data.warnings.join('\n');
+      throw new Error(msg);
+    }
+    var applied = (data.applied || []).length;
+    var conflicts = (data.conflicts || []).length;
+    var warns = (data.warnings || []).length;
+    _showToast('Restored: ' + applied + ' applied' +
+      (conflicts ? ', ' + conflicts + ' conflict' + (conflicts === 1 ? '' : 's') : '') +
+      (warns ? ' (' + warns + ' warning' + (warns === 1 ? '' : 's') + ')' : ''));
+    _loadProjCheckpoints(projectId);
+  } catch (e) { _showToast('Restore failed: ' + e.message, true); }
+}
+
+async function deleteProjectCheckpoint(projectId, number) {
+  if (!await _projConfirm('Delete checkpoint #' + number + '? This cannot be undone.')) return;
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(projectId) + '/checkpoints/' + number, { method: 'DELETE' });
+    var data = await r.json();
+    if (!data || !data.ok) throw new Error((data && data.error) || 'delete failed');
+    _loadProjCheckpoints(projectId);
+  } catch (e) { _showToast('Delete failed: ' + e.message, true); }
+}
+
+async function saveCheckpointSettings() {
+  var proj = _activeProject();
+  if (!proj) return;
+  var auto = !!(document.getElementById('proj-cp-auto-destr') || {}).checked;
+  var inclU = !!(document.getElementById('proj-cp-include-untracked') || {}).checked;
+  var maxCount = Math.max(1, Math.min(500, parseInt((document.getElementById('proj-cp-max-count') || {}).value, 10) || 50));
+  var maxMB    = Math.max(1, Math.min(10240, parseInt((document.getElementById('proj-cp-max-mb') || {}).value, 10) || 100));
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(proj.id) + '/checkpoints/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        autoSnapshotOnDestructive: auto,
+        includeUntracked: inclU,
+        maxCount,
+        maxBytes: maxMB * 1024 * 1024,
+      }),
+    });
+    var data = await r.json();
+    if (!data || !data.ok) throw new Error((data && data.error) || 'save failed');
+    if (data.settings) proj.checkpoints = data.settings;
+    _showToast('Checkpoint settings saved');
+  } catch (e) { _showToast('Save failed: ' + e.message, true); }
 }
 
 function pickProjColor(color) {

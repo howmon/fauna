@@ -301,6 +301,28 @@ export function applyPatchText(patchText, cwd, context) {
 }
 
 export function registerAgentSandboxFileRoutes(app) {
+  // ── Auto-snapshot helper ────────────────────────────────────────────────
+  // Lazy-loaded to avoid a hard dep on project-manager from this route file.
+  // Snapshots the project's working tree before a destructive op so users
+  // can roll back from project settings. No-ops on any error.
+  let _projCpLib = null;
+  let _getProjectFn = null;
+  async function _maybeAutoSnapshot(projectId, trigger) {
+    if (!projectId) return;
+    try {
+      if (!_projCpLib)    _projCpLib = await import('../lib/project-checkpoints.js');
+      if (!_getProjectFn) _getProjectFn = (await import('../../project-manager.js')).getProject;
+      const project = _getProjectFn(projectId);
+      if (!project || !project.rootPath) return;
+      const settings = _projCpLib.getCheckpointSettings(project);
+      if (!settings.autoSnapshotOnDestructive) return;
+      _projCpLib.createCheckpoint(project, {
+        title: 'Auto: before ' + trigger,
+        trigger,
+      });
+    } catch (_) { /* best-effort */ }
+  }
+
   // ── /api/write-file ─────────────────────────────────────────────────────
   app.post('/api/write-file', (req, res) => {
     const { path: filePath, content, fromFile, encoding, cwd } = req.body;
@@ -453,6 +475,11 @@ export function registerAgentSandboxFileRoutes(app) {
     if (!patch) return res.status(400).json({ error: 'patch required' });
     try {
       const context = getMutationContext(req.body);
+      // Auto-snapshot the project before a multi-file patch lands. Best-effort:
+      // requires `projectId` in the body and the project's checkpoints
+      // settings to allow it. Failures (no rootPath, unset settings, > file
+      // cap) are non-fatal — the patch still applies.
+      _maybeAutoSnapshot(req.body?.projectId, 'pre-apply-patch').catch(() => {});
       const results = _applyPatch(patch, cwd, context);
       res.json({ ok: true, results, sandboxed: !!context });
     } catch (e) {

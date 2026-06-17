@@ -1,4 +1,12 @@
 export function registerProjectRoutes(app, deps) {
+  // Project-level checkpoints — sidecar restore for uncommitted work.
+  // Imported lazily so the route file stays self-contained.
+  let _projCp = null;
+  async function _checkpointsLib() {
+    if (!_projCp) _projCp = await import('../lib/project-checkpoints.js');
+    return _projCp;
+  }
+
   const {
     fs,
     createProject,
@@ -491,6 +499,99 @@ export function registerProjectRoutes(app, deps) {
       clearInterval(ping);
       _boardSubscribers.delete(send);
     });
+  });
+
+  // ── Project Checkpoints ─────────────────────────────────────────────
+  // Copilot-worktree-inspired sidecar history. Stores delta packs only
+  // (respects .gitignore via `git ls-files` when the project is a git repo)
+  // so users can undo agent edits even before a commit. See
+  // server/lib/project-checkpoints.js.
+  app.get('/api/projects/:id/checkpoints', async (req, res) => {
+    try {
+      const project = getProject(req.params.id);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      const lib = await _checkpointsLib();
+      res.json({
+        ok: true,
+        settings: lib.getCheckpointSettings(project),
+        checkpoints: lib.listCheckpoints(project.id),
+      });
+    } catch (e) { res.status(500).json({ ok: false, error: e?.message || String(e) }); }
+  });
+
+  app.post('/api/projects/:id/checkpoints', async (req, res) => {
+    try {
+      const project = getProject(req.params.id);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      const lib = await _checkpointsLib();
+      const meta = lib.createCheckpoint(project, {
+        title:    req.body?.title,
+        trigger:  req.body?.trigger || 'manual',
+        note:     req.body?.note,
+        includeUntracked: req.body?.includeUntracked,
+      });
+      res.status(201).json({ ok: true, checkpoint: meta });
+    } catch (e) { res.status(400).json({ ok: false, error: e?.message || String(e) }); }
+  });
+
+  app.get('/api/projects/:id/checkpoints/:number', async (req, res) => {
+    try {
+      const project = getProject(req.params.id);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      const lib = await _checkpointsLib();
+      const meta = lib.readCheckpointMeta(project.id, Number(req.params.number));
+      if (!meta) return res.status(404).json({ error: 'Checkpoint not found' });
+      const includePatch = req.query.patch === '1' || req.query.patch === 'true';
+      res.json({
+        ok: true,
+        checkpoint: meta,
+        patch: includePatch ? lib.readCheckpointPatch(project.id, Number(req.params.number)) : undefined,
+      });
+    } catch (e) { res.status(500).json({ ok: false, error: e?.message || String(e) }); }
+  });
+
+  app.delete('/api/projects/:id/checkpoints/:number', async (req, res) => {
+    try {
+      const project = getProject(req.params.id);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      const lib = await _checkpointsLib();
+      const ok = lib.deleteCheckpoint(project.id, Number(req.params.number));
+      if (!ok) return res.status(404).json({ ok: false, error: 'Checkpoint not found' });
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ ok: false, error: e?.message || String(e) }); }
+  });
+
+  // mode: 'preview' | 'forward' | 'reverse' | '3way'
+  app.post('/api/projects/:id/checkpoints/:number/restore', async (req, res) => {
+    try {
+      const project = getProject(req.params.id);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      const lib = await _checkpointsLib();
+      const result = lib.restoreCheckpoint(project, Number(req.params.number), {
+        mode:  req.body?.mode || req.query?.mode || 'preview',
+        force: !!(req.body?.force),
+      });
+      res.json(result);
+    } catch (e) { res.status(400).json({ ok: false, error: e?.message || String(e) }); }
+  });
+
+  // Update retention/auto-snapshot settings for a project.
+  app.put('/api/projects/:id/checkpoints/settings', (req, res) => {
+    try {
+      const project = getProject(req.params.id);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      const incoming = req.body || {};
+      const cur = project.checkpoints || {};
+      const next = {
+        autoSnapshotOnAgentTurn:   typeof incoming.autoSnapshotOnAgentTurn   === 'boolean' ? incoming.autoSnapshotOnAgentTurn   : cur.autoSnapshotOnAgentTurn,
+        autoSnapshotOnDestructive: typeof incoming.autoSnapshotOnDestructive === 'boolean' ? incoming.autoSnapshotOnDestructive : cur.autoSnapshotOnDestructive,
+        includeUntracked:          typeof incoming.includeUntracked          === 'boolean' ? incoming.includeUntracked          : cur.includeUntracked,
+        maxCount: Number.isFinite(incoming.maxCount) && incoming.maxCount > 0 ? Math.min(500, Math.floor(incoming.maxCount)) : cur.maxCount,
+        maxBytes: Number.isFinite(incoming.maxBytes) && incoming.maxBytes > 0 ? Math.min(10 * 1024 * 1024 * 1024, Math.floor(incoming.maxBytes)) : cur.maxBytes,
+      };
+      const updated = updateProject(project.id, { checkpoints: next });
+      res.json({ ok: true, settings: next, project: updated });
+    } catch (e) { res.status(500).json({ ok: false, error: e?.message || String(e) }); }
   });
 }
 

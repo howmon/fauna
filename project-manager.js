@@ -304,7 +304,7 @@ export function updateProject(id, patch = {}) {
   if (idx === -1) return null;
   const p = projects[idx];
   // Allowed top-level fields
-  const allowed = ['name', 'description', 'icon', 'color', 'rootPath', 'defaultAgent', 'permissions', 'allowFileEditing', 'design', 'autonomousMode', 'acceptanceCriteria', 'qa', 'deploy', 'backlog', 'kanban', 'memoryConfig', 'githubIntegrations'];
+  const allowed = ['name', 'description', 'icon', 'color', 'rootPath', 'defaultAgent', 'permissions', 'allowFileEditing', 'design', 'autonomousMode', 'acceptanceCriteria', 'qa', 'deploy', 'backlog', 'kanban', 'memoryConfig', 'githubIntegrations', 'checkpoints'];
   for (const k of allowed) {
     if (patch[k] !== undefined) p[k] = patch[k];
   }
