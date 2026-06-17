@@ -726,7 +726,7 @@ function renderAgentChips() {
     var agent = findAgent(_agentChips[i]);
     if (!agent) {
       // Ghost chip — agent was uninstalled
-      html += '<div class="agent-chip agent-chip-ghost" title="Agent uninstalled">' +
+      html += '<div class="agent-chip agent-chip-ghost" data-agent-name="' + escHtml(_agentChips[i]) + '" title="Agent uninstalled">' +
         '<i class="ti ti-robot-off" style="font-size:13px;opacity:.5"></i>' +
         '<span class="agent-chip-name" style="text-decoration:line-through;opacity:.5">@' + escHtml(_agentChips[i]) + '</span>' +
         '<button class="agent-chip-remove" onclick="event.stopPropagation();removeAgentChipByName(\'' + escHtml(_agentChips[i]) + '\')" title="Remove"><i class="ti ti-x"></i></button>' +
@@ -737,7 +737,7 @@ function renderAgentChips() {
     var isLoading = !!_loadingAgents[agent.name];
     var isPinned = getPinnedAgents().indexOf(agent.name) >= 0;
     var hasSubs = agent._subAgents && agent._subAgents.length > 0;
-    html += '<div class="agent-chip' + (isActive ? ' active' : '') + (isLoading ? ' loading' : '') + (hasSubs ? ' has-subs' : '') + '" onclick="switchToAgentChip(\'' + escHtml(agent.name) + '\')">' +
+    html += '<div class="agent-chip' + (isActive ? ' active' : '') + (isLoading ? ' loading' : '') + (hasSubs ? ' has-subs' : '') + '" data-agent-name="' + escHtml(agent.name) + '" onclick="switchToAgentChip(\'' + escHtml(agent.name) + '\')">' +
       (isLoading ? '<span class="agent-chip-spinner"></span>' : agentIconHtml(agent)) +
       '<span class="agent-chip-name">@' + escHtml(agent.displayName) + '</span>' +
       (hasSubs ? '<button class="agent-chip-subs-btn" onclick="event.stopPropagation();toggleSubAgentPicker(\'' + escHtml(agent.name) + '\',this)" title="Pick sub-agent"><i class="ti ti-chevron-down" style="font-size:11px"></i></button>' : '') +
@@ -748,6 +748,7 @@ function renderAgentChips() {
   bar.innerHTML = html;
   bar.style.display = 'flex';
   bar._agentName = _agentChips[_agentChips.length - 1];
+  _agentPopoverInit();
 }
 
 function switchToAgentChip(name) {
@@ -879,6 +880,172 @@ function updateAgentChipFromState() {
       renderAgentChips();
     }
   }
+}
+
+// ── Agent chip hover popover ─────────────────────────────────────────────
+// Shows a details card when the user hovers an agent chip: icon, displayName,
+// description, permission summary, and an "Open agent page" action that takes
+// the user into the Agent Builder for that agent. Uses delegation on the
+// #agent-chip-bar container because renderAgentChips() replaces innerHTML.
+
+var _agentPopover = {
+  el: null,
+  agentName: null,
+  showTimer: null,
+  hideTimer: null,
+  initialized: false,
+};
+
+function _agentPopoverPermsSummary(agent) {
+  var p = (agent && agent.permissions) || {};
+  var bits = [];
+  if (p.shell) bits.push('<span class="agent-popover-perm"><i class="ti ti-terminal-2"></i> shell</span>');
+  if (p.browser) bits.push('<span class="agent-popover-perm"><i class="ti ti-world"></i> browser</span>');
+  if (p.figma) bits.push('<span class="agent-popover-perm"><i class="ti ti-vector-triangle"></i> figma</span>');
+  var fr = Array.isArray(p.fileRead) ? p.fileRead.length : 0;
+  var fw = Array.isArray(p.fileWrite) ? p.fileWrite.length : 0;
+  if (fr || fw) bits.push('<span class="agent-popover-perm"><i class="ti ti-file"></i> files</span>');
+  if (p.network && !p.network.blockAll) bits.push('<span class="agent-popover-perm"><i class="ti ti-network"></i> network</span>');
+  return bits.join('');
+}
+
+function _agentPopoverBuild(agent) {
+  var iconHtml = (typeof agentIconHtml === 'function')
+    ? agentIconHtml(agent)
+    : '<i class="ti ' + escHtml(agent.icon || 'ti-robot') + '"></i>';
+  var desc = agent.description || (agent.manifest && agent.manifest.description) || '';
+  var subCount = (agent._subAgents && agent._subAgents.length) || 0;
+  var perms = _agentPopoverPermsSummary(agent);
+  var categoryLabel = agent.category ? '<span class="agent-popover-cat">' + escHtml(agent.category) + '</span>' : '';
+  var builtinBadge = agent.builtin ? '<span class="agent-popover-badge">built-in</span>' : '';
+  var subBadge = subCount ? '<span class="agent-popover-badge">' + subCount + ' sub-agent' + (subCount > 1 ? 's' : '') + '</span>' : '';
+
+  var html =
+    '<div class="agent-popover-head">' +
+      '<span class="agent-popover-icon">' + iconHtml + '</span>' +
+      '<div class="agent-popover-title-wrap">' +
+        '<div class="agent-popover-title">' + escHtml(agent.displayName || agent.name) + '</div>' +
+        '<div class="agent-popover-handle">@' + escHtml(agent.name) + '</div>' +
+      '</div>' +
+    '</div>' +
+    (desc ? '<div class="agent-popover-desc">' + escHtml(desc) + '</div>' : '') +
+    ((categoryLabel || builtinBadge || subBadge) ? '<div class="agent-popover-meta">' + categoryLabel + builtinBadge + subBadge + '</div>' : '') +
+    (perms ? '<div class="agent-popover-perms">' + perms + '</div>' : '') +
+    '<div class="agent-popover-actions">' +
+      '<button class="agent-popover-btn primary" onclick="_agentPopoverOpenPage(\'' + escHtml(agent.name) + '\')">' +
+        '<i class="ti ti-external-link"></i> Open agent page' +
+      '</button>' +
+    '</div>';
+  return html;
+}
+
+function _agentPopoverPosition(el, chip) {
+  // Position above the chip, clamped to the viewport. The chip-bar sits at
+  // the bottom of the input area; pop above so it doesn't cover the input.
+  var rect = chip.getBoundingClientRect();
+  // Append to body so we don't get clipped by overflow:hidden ancestors.
+  el.style.position = 'fixed';
+  el.style.visibility = 'hidden';
+  el.style.left = '0px';
+  el.style.top  = '0px';
+  document.body.appendChild(el);
+  var ew = el.offsetWidth;
+  var eh = el.offsetHeight;
+  var pad = 8;
+  var left = Math.max(pad, Math.min(window.innerWidth - ew - pad, rect.left + rect.width / 2 - ew / 2));
+  var top  = rect.top - eh - 8;
+  if (top < pad) top = rect.bottom + 8; // flip below if no room above
+  el.style.left = left + 'px';
+  el.style.top  = top  + 'px';
+  el.style.visibility = '';
+}
+
+function _agentPopoverShow(chip) {
+  var name = chip && chip.dataset && chip.dataset.agentName;
+  if (!name) return;
+  // Skip ghost chips (uninstalled agents have no detail to show).
+  if (chip.classList.contains('agent-chip-ghost')) return;
+  var agent = findAgent(name);
+  if (!agent) return;
+  // Already shown for this agent — keep it.
+  if (_agentPopover.el && _agentPopover.agentName === name) return;
+  _agentPopoverHide(true);
+
+  var el = document.createElement('div');
+  el.className = 'agent-popover';
+  el.innerHTML = _agentPopoverBuild(agent);
+  el.addEventListener('mouseenter', function() {
+    if (_agentPopover.hideTimer) { clearTimeout(_agentPopover.hideTimer); _agentPopover.hideTimer = null; }
+  });
+  el.addEventListener('mouseleave', function() { _agentPopoverScheduleHide(); });
+  _agentPopover.el = el;
+  _agentPopover.agentName = name;
+  _agentPopoverPosition(el, chip);
+}
+
+function _agentPopoverHide(immediate) {
+  if (_agentPopover.showTimer) { clearTimeout(_agentPopover.showTimer); _agentPopover.showTimer = null; }
+  if (_agentPopover.hideTimer) { clearTimeout(_agentPopover.hideTimer); _agentPopover.hideTimer = null; }
+  if (_agentPopover.el && _agentPopover.el.parentNode) {
+    _agentPopover.el.parentNode.removeChild(_agentPopover.el);
+  }
+  _agentPopover.el = null;
+  _agentPopover.agentName = null;
+}
+
+function _agentPopoverScheduleShow(chip) {
+  if (_agentPopover.showTimer) clearTimeout(_agentPopover.showTimer);
+  _agentPopover.showTimer = setTimeout(function() { _agentPopoverShow(chip); }, 350);
+}
+
+function _agentPopoverScheduleHide() {
+  if (_agentPopover.hideTimer) clearTimeout(_agentPopover.hideTimer);
+  _agentPopover.hideTimer = setTimeout(function() { _agentPopoverHide(true); }, 180);
+}
+
+function _agentPopoverOpenPage(name) {
+  _agentPopoverHide(true);
+  if (typeof openAgentBuilder === 'function') {
+    openAgentBuilder(name);
+  } else if (typeof openAgentStore === 'function') {
+    openAgentStore();
+  }
+}
+
+function _agentPopoverInit() {
+  if (_agentPopover.initialized) return;
+  var bar = document.getElementById('agent-chip-bar');
+  if (!bar) return;
+  _agentPopover.initialized = true;
+
+  bar.addEventListener('mouseover', function(e) {
+    var chip = e.target && e.target.closest && e.target.closest('.agent-chip');
+    if (!chip || !bar.contains(chip)) return;
+    // Don't trigger popover when the user is interacting with chip buttons
+    // (remove / pin / sub-agent picker / spinner) — let those work normally.
+    if (e.target.closest('button')) return;
+    _agentPopoverScheduleShow(chip);
+  });
+  bar.addEventListener('mouseout', function(e) {
+    var chip = e.target && e.target.closest && e.target.closest('.agent-chip');
+    if (!chip) return;
+    // If moving into another element inside the same chip, ignore.
+    var to = e.relatedTarget;
+    if (to && chip.contains(to)) return;
+    // If moving into the popover itself, ignore (the popover will manage its
+    // own hide on its mouseleave).
+    if (to && _agentPopover.el && _agentPopover.el.contains(to)) return;
+    if (_agentPopover.showTimer) { clearTimeout(_agentPopover.showTimer); _agentPopover.showTimer = null; }
+    _agentPopoverScheduleHide();
+  });
+
+  // Hide on scroll / window resize so the popover doesn't get orphaned.
+  window.addEventListener('scroll', function() { _agentPopoverHide(true); }, true);
+  window.addEventListener('resize', function() { _agentPopoverHide(true); });
+  // Hide if user opens the chat input contextually.
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') _agentPopoverHide(true);
+  });
 }
 
 // ── Input handler for @ detection ────────────────────────────────────────

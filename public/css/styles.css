@@ -4686,6 +4686,113 @@ webview {
 }
 @keyframes chip-spin { to { transform: rotate(360deg); } }
 
+/* Hover popover for agent chips — shows agent details + "Open agent page" */
+.agent-popover {
+  position: fixed;
+  z-index: 300;
+  background: var(--fau-surface, #1f1f23);
+  border: 1px solid var(--fau-border, #303035);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  padding: 12px 14px;
+  width: 300px;
+  max-width: calc(100vw - 24px);
+  color: var(--fau-text, #f4f4f5);
+  font-size: 12px;
+  line-height: 1.4;
+  animation: agent-popover-in .12s ease-out;
+}
+@keyframes agent-popover-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.agent-popover-head {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 6px;
+}
+.agent-popover-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  background: var(--fau-surface2, #2a2a2f);
+  border-radius: 6px;
+  font-size: 16px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.agent-popover-icon .agent-custom-icon {
+  width: 22px; height: 22px; border-radius: 4px;
+}
+.agent-popover-title-wrap { min-width: 0; flex: 1; }
+.agent-popover-title {
+  font-size: 13px; font-weight: 600; color: var(--fau-text, #f4f4f5);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.agent-popover-handle {
+  font-size: 11px; color: var(--fau-text-muted, #a1a1aa);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.agent-popover-desc {
+  color: var(--fau-text-dim, #d4d4d8);
+  margin: 6px 0 8px;
+}
+.agent-popover-meta {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  margin-bottom: 6px;
+}
+.agent-popover-cat,
+.agent-popover-badge {
+  display: inline-flex; align-items: center;
+  background: var(--fau-surface2, #2a2a2f);
+  border: 1px solid var(--fau-border, #303035);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  color: var(--fau-text-muted, #a1a1aa);
+  text-transform: lowercase;
+  letter-spacing: .2px;
+}
+.agent-popover-perms {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--fau-border, #303035);
+  margin-bottom: 8px;
+}
+.agent-popover-perm {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 10px; color: var(--fau-text-muted, #a1a1aa);
+}
+.agent-popover-perm .ti { font-size: 12px; }
+.agent-popover-actions {
+  display: flex; gap: 6px;
+  margin-top: 4px;
+}
+.agent-popover-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  flex: 1;
+  background: var(--fau-surface2, #2a2a2f);
+  color: var(--fau-text, #f4f4f5);
+  border: 1px solid var(--fau-border, #303035);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all .12s;
+}
+.agent-popover-btn:hover {
+  background: var(--accent-dim, rgba(99,102,241,.2));
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.agent-popover-btn.primary {
+  background: var(--accent, #2563eb);
+  border-color: var(--accent, #2563eb);
+  color: #fff;
+}
+.agent-popover-btn.primary:hover {
+  filter: brightness(1.1);
+}
+
 /* Sub-agent picker dropdown */
 .sub-agent-picker {
   position: absolute; z-index: 200;
