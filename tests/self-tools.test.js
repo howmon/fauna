@@ -310,5 +310,40 @@ describe('self-tools', () => {
       expect(r.truncated).toBe(true);
     });
   });
+
+  // Regression guard: the "case-study" transcript spammed the same 7-item
+  // plan five times because fauna_plan re-emitted plan_update on every turn
+  // even when the items + statuses were identical. Dedup must skip the
+  // second emit and only fire when something actually changed.
+  describe('fauna_plan plan_update SSE dedup', () => {
+    it('emits plan_update once for identical successive calls, then again on status change', async () => {
+      const sse = vi.fn();
+      const ctx = {
+        ...mockContext,
+        convId: 'dedup-test-' + Date.now(),
+        sendSse: sse,
+      };
+      const items = [
+        { id: 1, title: 'Research', status: 'in-progress' },
+        { id: 2, title: 'Implement', status: 'not-started' },
+        { id: 3, title: 'Verify build', status: 'not-started' },
+      ];
+      await executeSelfTool('fauna_plan', { items }, ctx);
+      await executeSelfTool('fauna_plan', { items }, ctx); // identical → suppressed
+      await executeSelfTool('fauna_plan', { items }, ctx); // identical → suppressed
+      const planEmits = sse.mock.calls.filter(([ev]) => ev?.type === 'plan_update').length;
+      expect(planEmits).toBe(1);
+
+      // Flipping a status counts as a real change → emit again.
+      const advanced = [
+        { id: 1, title: 'Research', status: 'completed' },
+        { id: 2, title: 'Implement', status: 'in-progress' },
+        { id: 3, title: 'Verify build', status: 'not-started' },
+      ];
+      await executeSelfTool('fauna_plan', { items: advanced }, ctx);
+      const planEmits2 = sse.mock.calls.filter(([ev]) => ev?.type === 'plan_update').length;
+      expect(planEmits2).toBe(2);
+    });
+  });
 });
 

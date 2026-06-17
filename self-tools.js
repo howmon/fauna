@@ -92,6 +92,13 @@ import { loadAgentManifest } from './server/lib/agent-manifest.js';
 // in fauna_plan resets every hop and the model is free to drop a new
 // disjoint plan after a failure.
 const _activePlansByConv = new Map();
+// Tracks the last `plan_update` payload signature we emitted per conversation.
+// fauna_plan is allowed to be called every turn (the one-plan-per-turn guard
+// already restricts shape changes), but emitting an SSE / renderer event when
+// nothing has actually changed produces duplicate checklists in the chat log
+// — exactly the spam pattern seen in the memory-context case-study transcript
+// where the SAME 7-item plan rendered 5 times in a row with identical statuses.
+const _lastPlanEmitSigByConv = new Map();
 
 // Codex-parity: expose the active plan for a conversation so the chat route
 // can re-inject it into the system prompt every turn. This keeps the model
@@ -3560,21 +3567,38 @@ export async function executeSelfTool(toolName, args, context = {}) {
           const convId2 = context.convId;
           if (convId2) {
             const allDone = norm.every(it => it.status === 'completed' || it.status === 'cancelled');
-            if (allDone) _activePlansByConv.delete(convId2);
+            if (allDone) {
+              _activePlansByConv.delete(convId2);
+              _lastPlanEmitSigByConv.delete(convId2);
+            }
             else _activePlansByConv.set(convId2, context._activePlanState);
           }
         }
       } catch (_) { /* non-fatal */ }
 
       // Surface to renderer so the UI can render a checklist (best-effort).
+      // Dedup: skip when the (items + explanation) signature matches the last
+      // emit for this conversation. Prevents the "same plan rendered N times
+      // in a row" UX failure when the model re-calls fauna_plan with no real
+      // state change — see the case-study transcript.
+      const _convForEmit = (context && context.convId) || null;
+      const _planSig = JSON.stringify({
+        e: String(args.explanation || ''),
+        i: norm.map(it => ({ id: it.id, t: it.title, s: it.status })),
+      });
+      const _prevSig = _convForEmit ? _lastPlanEmitSigByConv.get(_convForEmit) : null;
+      const _planChanged = _planSig !== _prevSig;
+      if (_planChanged && _convForEmit) {
+        _lastPlanEmitSigByConv.set(_convForEmit, _planSig);
+      }
       try {
-        if (typeof context.sendToRenderer === 'function') {
+        if (_planChanged && typeof context.sendToRenderer === 'function') {
           context.sendToRenderer('fauna:plan-update', { items: norm, explanation: args.explanation || '' });
         }
       } catch (_) {}
       // Stream into the live chat bubble so the user sees the plan inline.
       try {
-        if (typeof context.sendSse === 'function') {
+        if (_planChanged && typeof context.sendSse === 'function') {
           context.sendSse({ type: 'plan_update', items: norm, explanation: args.explanation || '' });
         }
       } catch (_) {}

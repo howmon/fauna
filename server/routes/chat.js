@@ -664,6 +664,25 @@ export function registerChatRoute(app, {
               'Forbidden: hand-authoring or hand-positioning your own <svg> markup instead of using fauna_render_circuit\'s output (this is slow and renders warped); pasting the raw <svg> into a plaintext/html/markdown code fence; describing the schematic without calling fauna_render_circuit; computing analytically only; placing the gen-ui SVG block above the analysis.'
           });
         }
+
+        // ── Bare-continuation nudge ────────────────────────────────────────
+        // When the user replies with just "continue" / "go" / "keep going" /
+        // "next" etc., it's prima facie evidence the previous turn under-
+        // delivered (made a forward promise, asked a question, or stopped
+        // mid-task). Inject a strong directive so the model proceeds with
+        // tools immediately instead of producing yet another status report.
+        // The user-side message stays untouched in the transcript — this is
+        // an additional system message the model sees BEFORE its reply.
+        // Repro: case-study transcript where the user typed "continue" twice
+        // and got two more "I've now confirmed …" preambles in response.
+        const BARE_CONTINUE_RE = /^\s*(?:(?:please|pls|just|ok(?:ay)?|yes|yep|y|sure|cool)[ ,.!]*)?(?:continue|go(?:\s+on)?|keep\s+going|keep\s+at\s+it|proceed|next|carry\s+on|do\s+it|go\s+ahead|finish|complete)[ .!?]*$/i;
+        if (lastText && BARE_CONTINUE_RE.test(lastText) && !isCLI && !noTools) {
+          allMessages.push({
+            role: 'system',
+            content:
+              '[Bare-continuation reply detected] The user typed only "' + lastText.trim().slice(0, 40) + '" — they are forced to ask because the previous turn did not deliver. Do NOT write a status update, a plan recap, or an "I have confirmed / hypothesis / next action" preamble. Take the next concrete tool action toward the ORIGINAL request right now and only respond with prose once you have something to show (a created file, a finished artifact, a verified result). If the original task requires writing files, write them this turn.'
+          });
+        }
       } catch (_) { /* non-fatal */ }
       console.log(
         `[chat] context: ${trimmed.length}/${messages.length} msgs, ` +
@@ -1036,6 +1055,31 @@ export function registerChatRoute(app, {
       let prevPreamble = '';       // narration emitted on the previous tool-call iteration
       let narrationRepeats = 0;    // consecutive iterations with near-identical preamble
       let narrationNudgeFired = false; // only inject the coaching nudge once per request
+      // Template-signature repeat detector — runs alongside narrationRepeats and
+      // catches the failure mode where preambles share an obvious canned shape
+      // (e.g. "I've now confirmed … The hypothesis I'm testing … The specific
+      // next action is …") even though the cited file names rotate. Word-overlap
+      // alone misses these because each preamble swaps in different proper nouns.
+      // Repro: transcript fauna-Fauna-Memory-and-Context-Architecture-2026-06-17.
+      let templateRepeats = 0;
+      let templateNudgeFired = false;
+      // Bag of canned-narration phrases. Any preamble that hits >=2 of these is
+      // "templated"; two templated preambles in a row = repeat. Keep this list
+      // small and high-signal — these are phrases the silent-burst coaching
+      // nudge below literally trained the model on, so the model latches and
+      // re-emits them every turn.
+      const TEMPLATE_PHRASES = [
+        /\bi(?:'ve|\s+have)\s+(?:now\s+)?confirmed\b/i,
+        /\bthe\s+hypothesis\s+i(?:'m|\s+am)\s+testing\b/i,
+        /\bthe\s+specific\s+next\s+action\b/i,
+        /\bthe\s+next\s+(?:concrete\s+)?action\s+is\s+to\b/i,
+        /^\s*so\s+far,?\b/i,
+      ];
+      const _templateHits = (s) => {
+        let n = 0;
+        for (const re of TEMPLATE_PHRASES) { if (re.test(s)) n++; }
+        return n;
+      };
       // Silent-burst guard: count consecutive tool_calls iterations where the
       // model emitted ZERO prose. The narration-repetition guard only fires
       // when there IS narration to compare; a death-spiral that emits no text
@@ -1186,13 +1230,24 @@ export function registerChatRoute(app, {
       // sentence is forward-looking — guards against false positives in long summaries
       // that legitimately mention "I'll" earlier on.
       const FORWARD_PROMISE_RE = /^\s*(i('?ll| will| am going to| ?'m going to)|let me|now i('?ll| will)|next,?\s*i('?ll| will)|i need to|i should|i'?m about to|going to)\b/i;
+      // Third-person variants the model uses to defer work without saying "I'll …".
+      // Triggered the same coaching nudge as FORWARD_PROMISE_RE — see the
+      // memory-context case-study transcript where the model said "The specific
+      // next action is to read …" five turns in a row and the original regex
+      // missed every one because it only matched first-person phrasings.
+      const FORWARD_PROMISE_DEFER_RE = /\b(the\s+(?:specific\s+)?next\s+(?:action|step|move)\s+is\s+to|the\s+next\s+concrete\s+(?:action|step)\s+(?:is|would\s+be)|next\s+up\s+(?:is|will\s+be)\s+to|my\s+next\s+(?:action|step)\s+(?:is|will\s+be)\s+to|then\s+i(?:'ll| will)\s+(?:read|create|run|call|invoke|write|edit|build|test|verify|fetch|search))\b/i;
       const endsWithForwardPromise = (text) => {
         const trimmed = String(text || '').trim();
         if (!trimmed) return false;
         // Last non-empty sentence.
         const parts = trimmed.split(/(?<=[.!?\n])\s+/).map(s => s.trim()).filter(Boolean);
         const last = parts[parts.length - 1] || trimmed;
-        return FORWARD_PROMISE_RE.test(last);
+        if (FORWARD_PROMISE_RE.test(last)) return true;
+        // Deferred-action phrasings can appear anywhere in the last 2 sentences —
+        // the model often writes a long summary and tacks "the next action is …"
+        // at the end without the explicit first-person verb.
+        const tail = parts.slice(-2).join(' ');
+        return FORWARD_PROMISE_DEFER_RE.test(tail);
       };
 
       // Autonomous-mode terminal marker: model MUST begin its final message
@@ -1510,6 +1565,14 @@ export function registerChatRoute(app, {
           } else {
             narrationRepeats = 0;
           }
+          // Template-signature detector — orthogonal to word-overlap similarity.
+          // Catches preambles that share canned phrases even when the specific
+          // file/symbol names rotate (which defeats Jaccard overlap).
+          if (preambleForCtx.length >= 40 && _templateHits(preambleForCtx) >= 2) {
+            templateRepeats++;
+          } else {
+            templateRepeats = 0;
+          }
           prevPreamble = preambleForCtx;
 
           // Parallel-safe (read-only) calls go into a queue and run via
@@ -1749,7 +1812,12 @@ export function registerChatRoute(app, {
           } else if (continueLoop && !silentBurstNudgeFired && silentBursts >= 4) {
             silentBurstNudgeFired = true;
             console.log('[chat] silent-burst guard — injecting status-update nudge at ' + silentBursts + ' silent iterations');
-            allMessages.push({ role: 'user', content: '[System: You have run ' + silentBursts + ' tool-call rounds in a row without saying anything to the user. Before any more tools, emit 1–3 sentences in plain prose summarizing: (a) what you have found so far, (b) what hypothesis you are testing, and (c) the specific next action. Do not narrate generic intent — reference concrete file/line evidence from the reads you already did.]' });
+            // IMPORTANT: do NOT teach the model a fixed template here (e.g.
+            // "summarize (a) findings (b) hypothesis (c) next action") — past
+            // versions did that and the model latched onto the template and
+            // re-emitted the same three-sentence shape every turn. Keep the
+            // instruction action-oriented and template-free.
+            allMessages.push({ role: 'user', content: '[System: You have run ' + silentBursts + ' tool-call rounds in a row without producing visible text. Briefly tell the user — in your own words, NOT a fixed template — what you have actually found (cite file paths or output) and then take the next tool action. Do not write a status report on every turn; just one sentence + the next action.]' });
           }
           // After tools have run, decide whether the model is stuck repeating
           // itself. Inject a coaching message once, then hard-stop if it keeps
@@ -1765,6 +1833,15 @@ export function registerChatRoute(app, {
             narrationNudgeFired = true;
             console.log('[chat] narration-repetition guard — injecting coaching nudge');
             allMessages.push({ role: 'user', content: '[System: You are repeating the same explanation each turn without making progress. Do NOT narrate the same plan again. Either (a) take a materially different action — different tool, different site, different approach — or (b) stop and give the user a final summary of what was tried and what they can do next.]' });
+          } else if (continueLoop && templateRepeats >= 3) {
+            // Hard stop on the canned-template loop — at 3 consecutive
+            // templated preambles we know the user is about to get spammed.
+            console.log('[chat] template-repetition guard tripped at ' + templateRepeats + ' templated preambles — stopping loop');
+            allMessages.push({ role: 'user', content: '[System: You have produced the same canned three-part status update on ' + (templateRepeats + 1) + ' consecutive turns without delivering an artifact. Stop. Skip the "I have confirmed / hypothesis / next action" prose entirely and either (a) call the tool that produces the actual deliverable the user asked for, or (b) emit the final answer/file/summary in this turn. No more status updates.]' });
+          } else if (continueLoop && !templateNudgeFired && templateRepeats >= 2) {
+            templateNudgeFired = true;
+            console.log('[chat] template-repetition guard — injecting break-template nudge at ' + templateRepeats + ' templated preambles');
+            allMessages.push({ role: 'user', content: '[System: Your last two preambles share the same template ("I have confirmed … / hypothesis / next action"). The user does not want a status report on every turn. Drop the template. Either call the next tool with NO preamble at all, or produce the actual deliverable now. If the original task requires creating files, create them this turn.]' });
           }
           if (continueLoop) { /* loop continues to get next AI response */ }
           else { send({ type: 'done', finish_reason: 'tool_limit' }); }
