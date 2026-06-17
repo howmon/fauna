@@ -21,6 +21,7 @@ import os from 'os';
 
 import * as syncEngine from './sync-engine.js';
 import * as pathPortability from './path-portability.js';
+import { installCheckpointAdapter } from './sync-checkpoint-adapter.js';
 
 function _versionsDir() {
   return process.env.FAUNA_SYNC_DIR
@@ -183,4 +184,7 @@ export function installProjectAdapter({ projectManager, onApplied }) {
 export function installAllAdapters({ conversationStore, projectManager, onConversationApplied, onProjectApplied }) {
   if (conversationStore) installConversationAdapter({ store: conversationStore, onApplied: onConversationApplied });
   if (projectManager)    installProjectAdapter({ projectManager, onApplied: onProjectApplied });
+  // Checkpoint adapter has no external deps — it subscribes to
+  // project-checkpoints.js via its built-in change-listener registry.
+  installCheckpointAdapter();
 }

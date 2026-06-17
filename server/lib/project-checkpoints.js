@@ -64,6 +64,25 @@ const FALLBACK_IGNORE_EXACT_FILES = new Set([
 
 // ── Public API ───────────────────────────────────────────────────────────
 
+// Change-listener registry. Lets sync-adapters.js subscribe to checkpoint
+// mutations without creating a circular import. Listener signature:
+//   fn(op, projectId, number)   where op = 'upsert' | 'delete'
+const _changeListeners = new Set();
+
+export function onCheckpointChange(fn) {
+  if (typeof fn !== 'function') return () => {};
+  _changeListeners.add(fn);
+  return function unsubscribe() { _changeListeners.delete(fn); };
+}
+
+function _emitChange(op, projectId, number) {
+  for (const fn of _changeListeners) {
+    try { fn(op, projectId, number); } catch (e) {
+      console.warn('[project-checkpoints] listener threw:', e?.message || e);
+    }
+  }
+}
+
 export function projectCheckpointDir(projectId) {
   return path.join(ROOT_DIR, _safeId(projectId));
 }
@@ -98,6 +117,7 @@ export function deleteCheckpoint(projectId, number) {
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {}
   idx.checkpoints.splice(i, 1);
   _writeIndex(projectId, idx);
+  _emitChange('delete', projectId, Number(number));
   return true;
 }
 
@@ -242,6 +262,7 @@ export function createCheckpoint(project, opts = {}) {
   });
   _writeIndex(projectId, idx);
   _gc(projectId, settings);
+  _emitChange('upsert', projectId, number);
   return meta;
 }
 

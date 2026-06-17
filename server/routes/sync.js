@@ -15,6 +15,7 @@
 //   POST /api/sync/prefs    { excludedProjects } → { ok, prefs }
 //   GET  /api/sync/projects                 → [{ id, name, excluded, pending }]
 //   POST /api/sync/projects/:id/exclude { excluded } → { ok, prefs }
+//   GET  /api/sync/checkpoints?projectId=X  → [{ id, deviceId, number, title, …, isLocal }]
 //
 // The actual data movement (PUT /api/sync/objects/…) goes directly from the
 // engine to the agentstore backend — these routes are management-plane only.
@@ -23,6 +24,7 @@ import * as agentstore from '../lib/agentstore-client.js';
 import * as syncEngine from '../lib/sync-engine.js';
 import * as syncAdapters from '../lib/sync-adapters.js';
 import * as syncPrefs from '../lib/sync-prefs.js';
+import * as syncCheckpoints from '../lib/sync-checkpoint-adapter.js';
 
 export function registerSyncRoutes(app, deps = {}) {
   const { conversationStore, projectManager } = deps;
@@ -193,6 +195,20 @@ export function registerSyncRoutes(app, deps = {}) {
       // Pending changes that don't map to any current project (orphans).
       const orphan = byProject._unassigned || 0;
       res.json({ projects: rows, unassignedPending: orphan });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // List a project's checkpoints — local plus archived copies from any
+  // other device this user has signed in on. Cross-device entries carry
+  // `isLocal: false` so the UI can grey-out the Restore button.
+  app.get('/api/sync/checkpoints', async (req, res) => {
+    const projectId = String(req.query.projectId || '');
+    if (!projectId) return res.status(400).json({ error: 'projectId required' });
+    try {
+      const checkpoints = await syncCheckpoints.listAllForProject(projectId);
+      res.json({ projectId, checkpoints });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
