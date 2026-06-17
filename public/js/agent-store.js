@@ -750,6 +750,10 @@ async function storeLogin() {
     updateTopbarAccount();
     renderStorePanel();
     renderStoreAccountSettings();
+    // Hand the freshly issued bearer to the Cloud Sync engine so the user
+    // doesn't need a second sign-in for sync. Best-effort — the sync UI will
+    // also adopt on its next render if this fails.
+    try { if (typeof window.cloudSyncAdoptToken === 'function') window.cloudSyncAdoptToken(); } catch (_) {}
   } catch (e) {
     if (errorEl) errorEl.textContent = e.message;
   }
@@ -776,6 +780,7 @@ async function storeRegister() {
     renderStorePanel();
     renderStoreAccountSettings();
     showToast('Account created! Check your email for verification.');
+    try { if (typeof window.cloudSyncAdoptToken === 'function') window.cloudSyncAdoptToken(); } catch (_) {}
   } catch (e) {
     if (errorEl) errorEl.textContent = e.message;
   }
@@ -788,6 +793,9 @@ function storeLogout() {
   updateTopbarAccount();
   renderStorePanel();
   renderStoreAccountSettings();
+  // Also revoke the Cloud Sync session so the engine stops pushing under a
+  // stale identity. Best-effort, fire-and-forget.
+  try { fetch('/api/sync/logout', { method: 'POST' }).catch(function () {}); } catch (_) {}
 }
 
 // ── My Agents view (analytics + installed + published agents) ────────────

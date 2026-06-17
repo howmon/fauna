@@ -5,6 +5,7 @@
 //
 //   GET  /api/sync/session                  → { baseUrl, user, loggedIn }
 //   POST /api/sync/login    { email, pwd }  → { ok, user, error? }
+//   POST /api/sync/adopt-token { token }    → { ok, user, error? }
 //   POST /api/sync/logout                   → { ok }
 //   GET  /api/sync/status                   → engine.getStatus()
 //   POST /api/sync/start                    → start engine + return status
@@ -58,6 +59,26 @@ export function registerSyncRoutes(app, deps = {}) {
     try {
       const r = await agentstore.login({ email, password, baseUrl });
       if (!r.ok) return res.status(401).json(r);
+      _ensureAdapters();
+      try { await syncEngine.start(); } catch (_) { /* will retry on next call */ }
+      res.json({ ok: true, user: r.user, status: syncEngine.getStatus() });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // Adopt a bearer token that was issued via another in-app sign-in flow
+  // (e.g. the Agent Store sign-in dialog). Lets the Cloud Sync feature
+  // reuse the existing session instead of asking the user to sign in twice
+  // against the same backend. Body: { token, baseUrl?, user? }.
+  app.post('/api/sync/adopt-token', async (req, res) => {
+    const { token, baseUrl, user } = req.body || {};
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ ok: false, error: 'token is required' });
+    }
+    try {
+      const r = await agentstore.adoptToken({ token, baseUrl, user });
+      if (!r.ok) return res.status(r.status === 401 ? 401 : 400).json(r);
       _ensureAdapters();
       try { await syncEngine.start(); } catch (_) { /* will retry on next call */ }
       res.json({ ok: true, user: r.user, status: syncEngine.getStatus() });

@@ -62,34 +62,53 @@
   }
 
   // ── Render: signed-out form ───────────────────────────────────────────
+  // The Agent Store sign-in dialog already authenticates against the same
+  // backend (see public/js/agent-store.js — token in localStorage['store-token']).
+  // We surface that as the primary path so users don't sign in twice.
+  // Direct email/password lives behind an Advanced disclosure as a fallback
+  // for unusual cases (different server URL, or when the store panel is
+  // unavailable).
   function _renderSignedOut(session) {
     var mount = document.getElementById('cloud-sync-mount');
     if (!mount) return;
+    var hasStoreUi = (typeof window.openStoreAccount === 'function') ||
+                     (typeof window.openAgentStore === 'function');
     mount.innerHTML = [
-      '<div style="max-width:480px">',
-      '  <h3 style="margin-top:0">Sign in to Fauna Cloud</h3>',
+      '<div style="max-width:520px">',
+      '  <h3 style="margin-top:0">Enable Fauna Cloud sync</h3>',
       '  <p class="muted">Sync your conversations and projects across Mac and Windows. Files stay on your machines — only metadata and chat history move through the cloud.</p>',
-      '  <div class="settings-row">',
-      '    <label>Email</label>',
-      '    <input type="email" id="cs-email" class="settings-input" placeholder="you@example.com" autocomplete="username">',
-      '  </div>',
-      '  <div class="settings-row">',
-      '    <label>Password</label>',
-      '    <input type="password" id="cs-password" class="settings-input" autocomplete="current-password">',
-      '  </div>',
-      '  <details style="margin:12px 0">',
-      '    <summary class="muted" style="cursor:pointer">Advanced: server URL</summary>',
-      '    <div class="settings-row" style="margin-top:8px">',
-      '      <input type="url" id="cs-baseurl" class="settings-input" value="' + _esc(session.baseUrl || '') + '" placeholder="https://store.fauna.eichho.com">',
+      '  <div id="cs-error" class="muted" style="color:var(--danger,#c33);min-height:1.2em;margin:8px 0"></div>',
+      (hasStoreUi
+        ? '<button class="settings-row-btn primary" id="cs-store-signin-btn">' +
+          '  <i class="ti ti-user"></i> Sign in with your Fauna account' +
+          '</button>' +
+          '<p class="muted" style="font-size:12px;margin:8px 0 16px">' +
+          '  Opens the same sign-in used by the Agent Store. After signing in, sync starts automatically.' +
+          '</p>'
+        : ''),
+      '  <details style="margin:8px 0">',
+      '    <summary class="muted" style="cursor:pointer">Advanced: sign in with email &amp; password</summary>',
+      '    <div class="settings-row" style="margin-top:10px">',
+      '      <label>Email</label>',
+      '      <input type="email" id="cs-email" class="settings-input" placeholder="you@example.com" autocomplete="username">',
       '    </div>',
+      '    <div class="settings-row">',
+      '      <label>Password</label>',
+      '      <input type="password" id="cs-password" class="settings-input" autocomplete="current-password">',
+      '    </div>',
+      '    <div class="settings-row">',
+      '      <label>Server URL</label>',
+      '      <input type="url" id="cs-baseurl" class="settings-input" value="' + _esc(session.baseUrl || '') + '" placeholder="https://agentstore.pointlabel.com">',
+      '    </div>',
+      '    <button class="settings-row-btn" id="cs-login-btn" style="margin-top:6px">',
+      '      <i class="ti ti-cloud-upload"></i> Sign in &amp; enable sync',
+      '    </button>',
       '  </details>',
-      '  <div id="cs-error" class="muted" style="color:var(--danger,#c33);min-height:1.2em;margin-bottom:8px"></div>',
-      '  <button class="settings-row-btn primary" id="cs-login-btn">',
-      '    <i class="ti ti-cloud-upload"></i> Sign in &amp; enable sync',
-      '  </button>',
       '</div>'
     ].join('\n');
 
+    var storeBtn = document.getElementById('cs-store-signin-btn');
+    if (storeBtn) storeBtn.onclick = _handleStoreSignIn;
     var btn = document.getElementById('cs-login-btn');
     if (btn) btn.onclick = _handleLogin;
     var pw = document.getElementById('cs-password');
@@ -197,9 +216,31 @@
     }).catch(function (e) { _setStatusLine(e.message || 'Network error', true); });
   }
 
+  // Open the existing Agent Store sign-in dialog. When the user completes
+  // sign-in there, the storeLogin() handler in agent-store.js posts the new
+  // token to /api/sync/adopt-token (see hook below). On return, this page
+  // re-renders against the updated session state.
+  function _handleStoreSignIn() {
+    try {
+      if (typeof window.openStoreAccount === 'function') {
+        window.openStoreAccount();
+      } else if (typeof window.openAgentStore === 'function') {
+        window.openAgentStore();
+      }
+    } catch (e) { _setStatusLine(e.message || 'Could not open sign-in', true); }
+  }
+
   function _handleLogout() {
     if (!confirm('Sign out of Fauna Cloud? Local data stays; the engine will stop syncing.')) return;
     _api('/api/sync/logout', { method: 'POST' }).then(function () {
+      // Also clear the Agent Store session so both stay in lock-step.
+      try {
+        localStorage.removeItem('store-token');
+        localStorage.removeItem('store-account');
+        if (typeof window.storeState === 'object' && window.storeState) {
+          window.storeState.account = null;
+        }
+      } catch (_) {}
       window.renderCloudSyncPage();
     });
   }
@@ -224,6 +265,44 @@
     });
   }
 
+  // ── Adopt an existing Agent Store token ──────────────────────────────
+  // The Agent Store sign-in (public/js/agent-store.js) stores its bearer in
+  // localStorage['store-token'] for the SAME agentstore backend the sync
+  // engine talks to. If we see a token there but the sync session isn't
+  // logged in (e.g. fresh install where the user already signed in via
+  // Agent Store), hand the token to the main process so it can decrypt-and-
+  // persist it and start the engine — no second sign-in needed.
+  //
+  // Returns a promise that resolves to true if a token was adopted, false
+  // otherwise. Idempotent: safe to call on every render.
+  function _tryAdoptStoreToken() {
+    var token = null;
+    try { token = localStorage.getItem('store-token'); } catch (_) {}
+    if (!token) return Promise.resolve(false);
+    var acct = null;
+    try { acct = JSON.parse(localStorage.getItem('store-account') || 'null'); } catch (_) {}
+    return _api('/api/sync/adopt-token', {
+      method: 'POST',
+      body: JSON.stringify({
+        token: token,
+        // baseUrl: omitted on purpose — main-process default (FAUNA_AGENTSTORE_URL
+        // or compiled-in fallback) is the single source of truth for the
+        // backend host. /api/store/* already proxies to that same host.
+        user: acct ? { email: acct.email, name: acct.name } : undefined,
+      }),
+    }).then(function (r) {
+      if (!r.ok || !r.body || !r.body.ok) {
+        // Stale token in localStorage — clear it so we don't keep retrying.
+        if (r.status === 401) {
+          try { localStorage.removeItem('store-token'); } catch (_) {}
+          try { localStorage.removeItem('store-account'); } catch (_) {}
+        }
+        return false;
+      }
+      return true;
+    }).catch(function () { return false; });
+  }
+
   // ── Public entry point ────────────────────────────────────────────────
   window.renderCloudSyncPage = function () {
     Promise.all([
@@ -232,14 +311,38 @@
     ]).then(function (results) {
       var session = (results[0] && results[0].body) || {};
       var status  = (results[1] && results[1].body) || {};
-      if (session.loggedIn) _renderSignedIn(session, status);
-      else _renderSignedOut(session);
-      _updatePill(Object.assign({ loggedIn: session.loggedIn }, status));
+      if (session.loggedIn) {
+        _renderSignedIn(session, status);
+        _updatePill(Object.assign({ loggedIn: true }, status));
+        return;
+      }
+      // Not signed in for sync — try to adopt the existing store-token first.
+      return _tryAdoptStoreToken().then(function (adopted) {
+        if (adopted) {
+          // Re-fetch the now-populated session/status and render signed-in.
+          return Promise.all([
+            _api('/api/sync/session'),
+            _api('/api/sync/status'),
+          ]).then(function (r2) {
+            var s2 = (r2[0] && r2[0].body) || {};
+            var st2 = (r2[1] && r2[1].body) || {};
+            if (s2.loggedIn) _renderSignedIn(s2, st2);
+            else _renderSignedOut(s2);
+            _updatePill(Object.assign({ loggedIn: s2.loggedIn }, st2));
+          });
+        }
+        _renderSignedOut(session);
+        _updatePill({ loggedIn: false });
+      });
     }).catch(function (e) {
       var mount = document.getElementById('cloud-sync-mount');
       if (mount) mount.innerHTML = '<div class="muted" style="color:var(--danger,#c33)">Could not load sync status: ' + _esc(e.message) + '</div>';
     });
   };
+
+  // Exposed so other modules (e.g. agent-store.js after a successful login)
+  // can flip the sync engine on without the user reopening this page.
+  window.cloudSyncAdoptToken = _tryAdoptStoreToken;
 
   // ── Background pill refresher ─────────────────────────────────────────
   // Update the sidebar pill (and the page if visible) every 15 s. Stops

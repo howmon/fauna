@@ -59,8 +59,23 @@ function _stateFile() {
     path.join(os.homedir(), '.config', 'fauna', 'agentstore.json');
 }
 
+// Single source of truth for the agentstore backend host. Must match the
+// host used by the Agent Store dialog's proxy (see server.js
+// `storeBackendUrl`) so a bearer issued via one panel is valid against the
+// other. We accept FAUNA_AGENTSTORE_URL (sync-specific override) or
+// AGENT_STORE_URL (Agent Store proxy override, same value with /api appended
+// in some configs). If either is set with a trailing `/api`, strip it —
+// this client appends `/api/...` itself when building request URLs.
+function _normalizeBaseUrl(raw) {
+  return String(raw || '').replace(/\/+api\/?$/i, '').replace(/\/+$/, '');
+}
+
 function _defaultBaseUrl() {
-  return process.env.FAUNA_AGENTSTORE_URL || 'https://store.fauna.eichho.com';
+  return _normalizeBaseUrl(
+    process.env.FAUNA_AGENTSTORE_URL ||
+    process.env.AGENT_STORE_URL ||
+    'https://agentstore.pointlabel.com'
+  );
 }
 
 let _cache = null;
@@ -130,7 +145,7 @@ export function getBaseUrl() {
 
 export async function setBaseUrl(url) {
   const state = _readState();
-  state.baseUrl = String(url || '').replace(/\/+$/, '');
+  state.baseUrl = _normalizeBaseUrl(url);
   await _writeState(state);
 }
 
@@ -159,7 +174,7 @@ export async function login({ email, password, baseUrl } = {}) {
   if (!email || !password) {
     return { ok: false, error: 'Email and password are required' };
   }
-  const url = baseUrl ? String(baseUrl).replace(/\/+$/, '') : getBaseUrl();
+  const url = baseUrl ? _normalizeBaseUrl(baseUrl) : getBaseUrl();
   let body;
   try {
     body = await _rawRequest('POST', '/api/auth/login', { email, password }, { baseUrl: url, retries: 0 });
@@ -195,6 +210,39 @@ export async function refreshProfile() {
     if (e.status === 401) await _writeState({ baseUrl: getBaseUrl(), user: null });
     return { ok: false, error: e.message, status: e.status || 0 };
   }
+}
+
+/**
+ * Adopt an existing bearer token issued elsewhere in the app (e.g. the
+ * Agent Store sign-in flow that stores its token in localStorage). Persists
+ * the token to the encrypted state file and validates it against
+ * /api/auth/me so the sync engine sees a populated user record.
+ *
+ * Returns { ok, user, error? } — same shape as login().
+ */
+export async function adoptToken({ token, baseUrl, user } = {}) {
+  if (!token || typeof token !== 'string') {
+    return { ok: false, error: 'token is required' };
+  }
+  // When the caller doesn't pass a baseUrl, use the current default rather
+  // than whatever's cached in state. This prevents a stale state file from
+  // a previous build (pointing at an old host) from misdirecting adoption.
+  const url = baseUrl ? _normalizeBaseUrl(baseUrl) : _defaultBaseUrl();
+  const stored = _encrypt(token);
+  await _writeState({
+    baseUrl: url,
+    user: user || null,
+    loginAt: new Date().toISOString(),
+    ...stored,
+  });
+  // Validate by hitting /api/auth/me. If it 401s, wipe and report failure
+  // so the caller can prompt for a fresh sign-in.
+  const probe = await refreshProfile();
+  if (!probe.ok) {
+    await _writeState({ baseUrl: url, user: null });
+    return { ok: false, error: probe.error || 'Token rejected by server', status: probe.status };
+  }
+  return { ok: true, user: probe.user };
 }
 
 // ── Public: REST primitives used by sync-engine ───────────────────────────
