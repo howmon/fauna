@@ -24,8 +24,8 @@ export function buildLessonWidget({ lessonId, lesson, port = 3737 }) {
   <div id="canvas-wrap">
     <svg id="board" viewBox="0 0 ${lesson.canvas?.width || 1280} ${lesson.canvas?.height || 720}" preserveAspectRatio="xMidYMid meet"></svg>
     <div id="overlay"></div>
-    <div id="cue-strip"></div>
   </div>
+  <div id="cue-strip"></div>
   <div id="controls">
     <button id="play" title="Play / Pause">▶</button>
     <button id="prev" title="Previous scene">⏮</button>
@@ -86,17 +86,21 @@ const CSS = `
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; background: var(--ui-bg); color: var(--ui-fg); font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; height: 100%; overflow: hidden; }
-#root { display: grid; grid-template-rows: 1fr auto auto; height: 100vh; gap: 0; }
+/* 4 rows: canvas (flex) · caption strip · controls · scene chips. The caption
+   strip is OUT of the canvas — it cannot overlap any prop, regardless of
+   what y coord the model picks. Previously it was a position:absolute child
+   of #canvas-wrap and any text prop in the bottom band collided with it. */
+#root { display: grid; grid-template-rows: 1fr auto auto auto; height: 100vh; gap: 0; }
 #canvas-wrap { position: relative; background: var(--bg); overflow: hidden; display: flex; align-items: center; justify-content: center; }
 #board { width: 100%; height: 100%; display: block; overflow: hidden; background: var(--bg); }
 #overlay { position: absolute; inset: 0; pointer-events: none; }
 #cue-strip {
-  position: absolute; left: 0; right: 0; bottom: 0;
-  padding: 10px 16px; background: linear-gradient(transparent, rgba(253,250,242,0.95));
-  color: var(--ink); font-size: 16px; min-height: 36px;
-  pointer-events: none; text-align: center;
-  font-weight: 500;
+  padding: 10px 20px; background: var(--bg);
+  color: var(--ink); font-size: 16px; min-height: 44px;
+  text-align: center; font-weight: 500;
+  border-top: 1px solid #e5e2d8;
 }
+#cue-strip:empty { min-height: 0; padding: 0; border-top: 0; }
 #controls {
   display: flex; align-items: center; gap: 10px; padding: 8px 14px;
   background: var(--ui-bg); border-top: 1px solid #303035;
@@ -250,6 +254,27 @@ const RUNTIME_JS = `
     if (entry.kind && entry.kind !== prop.kind) entry.node.innerHTML = '';
     entry.kind = prop.kind;
     const g = entry.node;
+    // ── Slot system ─────────────────────────────────────────────────
+    // If the prop declares a layout slot ('title' | 'caption' | 'body-top'
+    // | 'body-center' | 'body-bottom' | 'free'), the runtime snaps the
+    // prop into a managed lane and IGNORES any (x,y) the model supplied.
+    // This frees the LLM from doing canvas arithmetic — which is where
+    // every misrender bug originates — for the 80% of props that just
+    // want to sit in a standard slot.
+    const slot = (prop.slot && SLOTS[prop.slot]) ? prop.slot : null;
+    if (slot) {
+      const lane = SLOTS[slot];
+      const w = (prop.kind === 'text' || prop.kind === 'latex')
+        ? Math.min(prop.w || lane.w, lane.w)
+        : (prop.w || lane.w);
+      const x = Math.round((CANVAS_W - w) / 2);   // centred horizontally
+      const y = lane.y;
+      entry.opts.x = x; entry.opts.y = y;
+      entry.opts.xExplicit = x; entry.opts.yExplicit = y;
+      placeRoot(g, x, y);
+      _renderPropBody(g, prop, action, x, w);
+      return entry;
+    }
     // Did the caller (or any earlier action on this prop) actually supply
     // coordinates? If not, we'll auto-place to avoid collisions.
     const hasExplicit = Number.isFinite(action.x) || Number.isFinite(action.y)
@@ -268,11 +293,16 @@ const RUNTIME_JS = `
       propNodes.forEach((other, otherId) => {
         if (otherId === propId) return;
         if (other.node === g) return;
-        // Only consider visible props (opacity > 0)
-        if (other.node.style.opacity === '0') return;
+        // Only consider props that are actually in the DOM AND visible.
+        // Don't trust inline opacity alone — a prop coming out of a
+        // fade-out still has computed opacity, and a freshly-created
+        // group sits at opacity:0 until its action's runAction sets 1.
+        if (!other.node.isConnected) return;
+        const cs = (window.getComputedStyle ? window.getComputedStyle(other.node) : null);
+        if (cs && (cs.opacity === '0' || cs.display === 'none' || cs.visibility === 'hidden')) return;
         try {
           const bb = other.node.getBBox();
-          if (!bb || !Number.isFinite(bb.height)) return;
+          if (!bb || !Number.isFinite(bb.height) || bb.height < 1) return;
           // Translate by the group's own transform to get absolute y
           const tx = other.opts && Number.isFinite(other.opts.y) ? other.opts.y : 0;
           const bottom = tx + bb.y + bb.height;
@@ -284,16 +314,41 @@ const RUNTIME_JS = `
         } catch (_) {}
       });
       // Don't run off the canvas — clamp so something is always visible.
+      // We reserve the bottom 40px as a safety margin (caption strip lives
+      // outside the canvas now, so this is purely overflow protection).
       if (pushTo + 40 > CANVAS_H) pushTo = Math.max(100, CANVAS_H - 80);
       y = pushTo;
     }
     entry.opts.x = x; entry.opts.y = y;
     placeRoot(g, x, y);
+    _renderPropBody(g, prop, action, x);
+    return entry;
+  }
 
+  // ── Slot definitions ────────────────────────────────────────────────
+  // Standardized lanes so the LLM doesn't have to invent coordinates.
+  // The 60px margins match the rules in the prompt. The bottom band
+  // ('body-bottom') stays well clear of the new external cue strip and
+  // leaves room for action overlays (highlight rects, underlines).
+  const MARGIN = 60;
+  const SLOTS = {
+    'title':       { y: 60,                      w: CANVAS_W - MARGIN * 2 },
+    'body-top':    { y: 180,                     w: CANVAS_W - MARGIN * 2 },
+    'body-center': { y: Math.round(CANVAS_H/2) - 40, w: CANVAS_W - MARGIN * 2 },
+    'body-bottom': { y: CANVAS_H - 220,          w: CANVAS_W - MARGIN * 2 },
+    'caption':     { y: CANVAS_H - 120,          w: CANVAS_W - MARGIN * 2 },
+  };
+
+  function _renderPropBody(g, prop, action, x, slotW) {
+    // slotW is the lane width when the prop is slotted; used to override the
+    // free-form maxW calc so slotted text wraps inside its lane, not all the
+    // way to the canvas right edge.
     switch (prop.kind) {
       case 'text': {
         if (!g.querySelector('foreignObject')) {
-          const maxW = Math.max(200, Math.min(CANVAS_W - x - 40, prop.w || (CANVAS_W - x - 60)));
+          const maxW = Number.isFinite(slotW)
+            ? slotW
+            : Math.max(200, Math.min(CANVAS_W - x - 40, prop.w || (CANVAS_W - x - 60)));
           const fo = document.createElementNS(SVG_NS, 'foreignObject');
           fo.setAttribute('width', String(maxW));
           fo.setAttribute('height', String(prop.h || 400));
@@ -313,7 +368,9 @@ const RUNTIME_JS = `
       }
       case 'latex': {
         if (!g.querySelector('foreignObject')) {
-          const maxW = Math.max(200, Math.min(CANVAS_W - x - 40, prop.w || 800));
+          const maxW = Number.isFinite(slotW)
+            ? slotW
+            : Math.max(200, Math.min(CANVAS_W - x - 40, prop.w || 800));
           const fo = document.createElementNS(SVG_NS, 'foreignObject');
           fo.setAttribute('width', String(maxW)); fo.setAttribute('height', String(prop.h || 200));
           fo.classList.add('prop-latex');
@@ -673,7 +730,6 @@ const RUNTIME_JS = `
           g.appendChild(t);
         }
     }
-    return entry;
   }
 
   function _atomColor(el) {
@@ -1000,9 +1056,15 @@ const RUNTIME_JS = `
   });
 
   function resetCanvas() {
-    // Clear all prop nodes (but keep defs)
+    // Wipe EVERY trace of the previous scene so nothing leaks across the
+    // transition. The original implementation removed prop nodes from the
+    // SVG board but left the #overlay div, in-flight CSS transitions, and
+    // any stale cue text — all visible as ghosts/overlays in the next
+    // scene's first frame.
     Array.from(board.querySelectorAll('g.prop-node')).forEach(n => n.remove());
     propNodes.clear();
+    if (overlay) overlay.innerHTML = '';
+    cueStrip.textContent = '';
   }
 
   playBtn.addEventListener('click', () => {

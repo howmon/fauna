@@ -68,8 +68,8 @@ function _run(cmd, args) {
 // Adding a new pack = adding entries here + a handler in the runtime.
 export const LESSON_KINDS = {
   // Universal
-  text:    { props: ['content', 'fontSize', 'color', 'font', 'w', 'align', 'weight'], notes: 'Plain text label that wraps. content (string), fontSize (default 28), color (CSS), font ("sans"|"serif"|"hand"), w (max width in px BEFORE wrapping — REQUIRED for any text > ~40 chars), align ("left"|"center"|"right"), weight (e.g. 600).' },
-  latex:   { props: ['tex', 'display'],                                notes: 'LaTeX expression. tex (string, e.g. "\\\\int 2x dx"), display (true=block,false=inline).' },
+  text:    { props: ['content', 'fontSize', 'color', 'font', 'w', 'align', 'weight', 'slot'], notes: 'Plain text label that wraps. content (string), fontSize (default 28), color (CSS), font ("sans"|"serif"|"hand"), w (max width in px BEFORE wrapping — REQUIRED for any text > ~40 chars), align ("left"|"center"|"right"), weight (e.g. 600). PREFERRED: set `slot` to one of "title" | "body-top" | "body-center" | "body-bottom" | "caption" and OMIT (x,y,w) — the runtime auto-positions the text in the named lane and your scene cannot end up with overlapping captions.' },
+  latex:   { props: ['tex', 'display', 'slot'],                        notes: 'LaTeX expression. tex (string, e.g. "\\\\int 2x dx"), display (true=block,false=inline). Supports the same `slot` field as text — use it for centred equations.' },
   shape:   { props: ['shape', 'w', 'h', 'fill', 'stroke', 'r'],        notes: 'shape: "rect"|"circle"|"ellipse"|"line"|"triangle". w/h or r in pixels; fill/stroke CSS.' },
   arrow:   { props: ['from', 'to', 'label', 'curve', 'color'],         notes: 'Arrow between two anchor points or two prop ids. from/to: {x,y} OR "<propId>" (uses prop center). label optional. curve (number, 0=straight). Triggered by {do:"draw"} or {do:"connect"}.' },
   image:   { props: ['src', 'w', 'h', 'alt'],                          notes: 'Static image (URL or data URI).' },
@@ -124,9 +124,108 @@ export function validateLesson(doc) {
     for (const [pid, p] of Object.entries(doc.props)) {
       if (!p || typeof p !== 'object') { errors.push(`prop "${pid}" is not an object`); continue; }
       if (!p.kind || !LESSON_KINDS[p.kind]) errors.push(`prop "${pid}" has unknown kind "${p.kind}"`);
+      if (p.slot && !VALID_SLOTS.has(p.slot)) errors.push(`prop "${pid}" has unknown slot "${p.slot}" (valid: ${[...VALID_SLOTS].join(', ')})`);
+    }
+  }
+  // Per-scene overlap check: for every scene, estimate each prop's bounding
+  // box from its action coords + kind-specific size hints. Any two props
+  // whose axis-aligned bboxes overlap by >50% of the smaller area get
+  // flagged as a layout error (the repair pass then re-asks the LLM with
+  // the specific collision). Catches the "two captions at the same y"
+  // failure mode that the runtime can't recover from at render time.
+  if (Array.isArray(doc.scenes)) {
+    for (let si = 0; si < doc.scenes.length; si++) {
+      const scene = doc.scenes[si];
+      if (!Array.isArray(scene.actions)) continue;
+      const boxes = [];
+      for (const a of scene.actions) {
+        if (!a || !a.prop) continue;
+        const prop = doc.props?.[a.prop];
+        if (!prop) continue;
+        // Slotted props won't collide with each other in the same lane
+        // unless the SAME lane is used twice — handled below.
+        const box = _estimatePropBox(prop, a, doc.canvas);
+        if (!box) continue;
+        boxes.push({ id: a.prop, slot: prop.slot || null, box });
+      }
+      // (a) two props slotted into the same lane in the same scene
+      const slotted = boxes.filter(b => b.slot);
+      const slotsUsed = new Map();
+      for (const b of slotted) {
+        if (slotsUsed.has(b.slot) && slotsUsed.get(b.slot) !== b.id) {
+          errors.push(`scene[${si}]: props "${slotsUsed.get(b.slot)}" and "${b.id}" both use slot "${b.slot}" — give one a different slot or move one to a free coordinate`);
+        }
+        slotsUsed.set(b.slot, b.id);
+      }
+      // (b) bbox overlap >50% of smaller
+      for (let i = 0; i < boxes.length; i++) {
+        for (let j = i + 1; j < boxes.length; j++) {
+          if (boxes[i].id === boxes[j].id) continue;
+          const ov = _bboxOverlapRatio(boxes[i].box, boxes[j].box);
+          if (ov > 0.5) {
+            errors.push(`scene[${si}]: props "${boxes[i].id}" and "${boxes[j].id}" overlap (~${Math.round(ov * 100)}% of smaller bbox) — give them distinct (x,y) or use a "slot"`);
+          }
+        }
+      }
     }
   }
   return { ok: errors.length === 0, errors, warnings };
+}
+
+// Valid slot names mirrored from server/lesson/widget-bundle.js SLOTS map.
+// Keep in sync — the runtime treats any unknown slot as free placement.
+const VALID_SLOTS = new Set(['title', 'body-top', 'body-center', 'body-bottom', 'caption']);
+
+// Standardized slot lanes used by validateLesson for bbox estimation. Match
+// the runtime SLOTS exactly (canvas-relative; CANVAS_W=1280, CANVAS_H=720).
+const SLOT_LANES = {
+  'title':       { y: 60,  h: 80 },
+  'body-top':    { y: 180, h: 120 },
+  'body-center': { y: 320, h: 120 },
+  'body-bottom': { y: 500, h: 120 },
+  'caption':     { y: 600, h: 80 },
+};
+
+function _estimatePropBox(prop, action, canvas) {
+  const W = canvas?.width || 1280;
+  const H = canvas?.height || 720;
+  // Slotted: lane defines y/h, centred horizontally with default w.
+  if (prop.slot && SLOT_LANES[prop.slot]) {
+    const lane = SLOT_LANES[prop.slot];
+    const w = Math.min(prop.w || (W - 120), W - 120);
+    return { x: Math.round((W - w) / 2), y: lane.y, w, h: lane.h };
+  }
+  const x = Number.isFinite(action.x) ? action.x : (Number.isFinite(prop.x) ? prop.x : 60);
+  const y = Number.isFinite(action.y) ? action.y : (Number.isFinite(prop.y) ? prop.y : 100);
+  let w, h;
+  switch (prop.kind) {
+    case 'text':       w = prop.w || Math.min(800, W - x - 60); h = Math.max(40, Math.min(400, Math.ceil(String(prop.content || '').length / Math.max(20, (w / ((prop.fontSize || 28) * 0.55)))) * (prop.fontSize || 28) * 1.3)); break;
+    case 'latex':      w = prop.w || 400; h = prop.h || 80;  break;
+    case 'shape':      w = prop.w || (prop.r ? prop.r * 2 : 80); h = prop.h || (prop.r ? prop.r * 2 : 80); break;
+    case 'image':
+    case 'slide':      w = prop.w || (prop.kind === 'slide' ? W : 240); h = prop.h || (prop.kind === 'slide' ? H : 180); break;
+    case 'code':       w = 700; h = 300; break;
+    case 'plot':       w = action.w || 480; h = action.h || 280; break;
+    case 'numberline': w = action.w || 600; h = 80; break;
+    case 'flow':       w = action.w || prop.w || (W - x - 60); h = action.h || prop.h || 240; break;
+    case 'molecule':   w = 320; h = 320; break;
+    case 'arrow':      return null;   // arrows don't claim layout space
+    case 'svg':        w = prop.w || 200; h = prop.h || 200; break;
+    case 'circuit':    w = 480; h = 320; break;
+    default:           w = 100; h = 40;
+  }
+  return { x, y, w, h };
+}
+
+function _bboxOverlapRatio(a, b) {
+  const x1 = Math.max(a.x, b.x);
+  const y1 = Math.max(a.y, b.y);
+  const x2 = Math.min(a.x + a.w, b.x + b.w);
+  const y2 = Math.min(a.y + a.h, b.y + b.h);
+  if (x2 <= x1 || y2 <= y1) return 0;
+  const inter = (x2 - x1) * (y2 - y1);
+  const smaller = Math.min(a.w * a.h, b.w * b.h) || 1;
+  return inter / smaller;
 }
 
 // ── LLM prompt for DSL generation ───────────────────────────────────────
@@ -243,7 +342,7 @@ ${_kindsCatalog()}
 3. Narration is the actual spoken transcript. The tutor does not say "let's draw X" — they just teach, and the actions illustrate.
 4. Keep prop ids short and snake_case (e.g. "eq_main", "graph1", "u_label").
 5. LaTeX in "latex" props must use double-backslashes inside JSON strings: "\\\\int", "\\\\frac{a}{b}". Use $-free TeX (no $ delimiters).
-6. Coordinates are in the 1280×720 canvas. Leave a 60px margin. Plan layout per-scene: pick distinct (x,y) for every prop so NOTHING overlaps. Title at top (y≈60). Diagrams in the middle band (y 180–520). Labels/captions below their referent. For "text" props longer than ~40 chars, ALWAYS set a "w" (width in px) so it wraps — e.g. {kind:"text", content:"...", w: 1100}. Default font size for body text is 24–28px; titles 36–48px. Never let text run past x+w > 1220.
+6. Coordinates are in the 1280×720 canvas. **Prefer the "slot" field over manual (x,y)** for every text or latex prop — it's the single biggest source of layout bugs. Pick from "title" (top, y≈60), "body-top" (y≈180), "body-center" (~middle), "body-bottom" (y≈500), or "caption" (y≈600). Slotted props are auto-centered and auto-wrapped; you do NOT specify x, y, or w. Reach for explicit (x,y) ONLY for diagrams, plots, shapes, arrows, and flows where you genuinely need a specific position. When you DO use explicit coords: leave a 60px margin, never put two props at the same (x,y), Title at top (y≈60), Diagrams in the middle band (y 180–520), Labels below their referent. For "text" props longer than ~40 chars without a slot, set "w" so it wraps. Default font size for body text is 24–28px; titles 36–48px. Never let text run past x+w > 1220.
 7. **Each scene starts on a FRESH, EMPTY canvas by default.** Re-introduce the title/header as its own prop on each scene if you want it visible. If a scene needs to build on the previous scene's drawing (cumulative), add \`"keep": true\` at the scene level — but use this sparingly. Default behavior (fresh canvas) is almost always what you want.
 8. Aim for 3–7 actions per scene. More than 10 is too busy.
 9. **For ANY sequence / pipeline / lifecycle / process / "step 1 → step 2" diagram, use ONE \`flow\` prop — never hand-place shape+text+arrow props for these.** A flow prop renders all nodes evenly spaced, auto-connects them with arrows, and positions labels correctly. Example:

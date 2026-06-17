@@ -77,3 +77,82 @@ describe('generateLessonDSL', () => {
     expect(userMsg).toContain('unknown kind "blob"');
   });
 });
+
+describe('validateLesson layout checks', () => {
+  it('accepts a slotted DSL with no coords', () => {
+    const dsl = {
+      title: 'T', voice: 'kokoro:af_bella',
+      props: {
+        title: { kind: 'text', content: 'Hello', slot: 'title' },
+        body:  { kind: 'text', content: 'World', slot: 'body-center' },
+      },
+      scenes: [{ id: 's1', narration: 'go', actions: [
+        { at: 'start', do: 'write', prop: 'title' },
+        { at: 0.5,     do: 'write', prop: 'body' },
+      ]}],
+    };
+    expect(validateLesson(dsl).ok).toBe(true);
+  });
+
+  it('rejects two props using the same slot in one scene', () => {
+    const dsl = {
+      title: 'T', voice: 'kokoro:af_bella',
+      props: {
+        a: { kind: 'text', content: 'one', slot: 'caption' },
+        b: { kind: 'text', content: 'two', slot: 'caption' },
+      },
+      scenes: [{ id: 's1', narration: 'go', actions: [
+        { at: 'start', do: 'write', prop: 'a' },
+        { at: 0.5,     do: 'write', prop: 'b' },
+      ]}],
+    };
+    const v = validateLesson(dsl);
+    expect(v.ok).toBe(false);
+    expect(v.errors.join('\n')).toMatch(/both use slot "caption"/);
+  });
+
+  it('rejects unknown slot names', () => {
+    const dsl = {
+      title: 'T', voice: 'kokoro:af_bella',
+      props: { a: { kind: 'text', content: 'x', slot: 'middle' } },
+      scenes: [{ id: 's1', narration: 'go', actions: [{ at: 'start', do: 'write', prop: 'a' }]}],
+    };
+    const v = validateLesson(dsl);
+    expect(v.ok).toBe(false);
+    expect(v.errors.join('\n')).toMatch(/unknown slot "middle"/);
+  });
+
+  it('detects two text props with overlapping bboxes from explicit coords', () => {
+    // Two long text captions placed at the same (x,y) — the exact failure
+    // mode visible in the user's "functions_scope" screenshot.
+    const dsl = {
+      title: 'T', voice: 'kokoro:af_bella',
+      props: {
+        cap1: { kind: 'text', content: 'A caption that is fairly long and wraps across the canvas width.', w: 900 },
+        cap2: { kind: 'text', content: 'Another caption right on top of the first one with similar length.', w: 900 },
+      },
+      scenes: [{ id: 's1', narration: 'go', actions: [
+        { at: 'start', do: 'write', prop: 'cap1', x: 100, y: 580 },
+        { at: 0.5,     do: 'write', prop: 'cap2', x: 100, y: 580 },
+      ]}],
+    };
+    const v = validateLesson(dsl);
+    expect(v.ok).toBe(false);
+    expect(v.errors.join('\n')).toMatch(/cap1.*cap2.*overlap|cap2.*cap1.*overlap/);
+  });
+
+  it('allows distinct (x,y) placements that do not overlap', () => {
+    const dsl = {
+      title: 'T', voice: 'kokoro:af_bella',
+      props: {
+        a: { kind: 'text', content: 'Top', w: 600 },
+        b: { kind: 'text', content: 'Bottom', w: 600 },
+      },
+      scenes: [{ id: 's1', narration: 'go', actions: [
+        { at: 'start', do: 'write', prop: 'a', x: 60, y: 80 },
+        { at: 0.5,     do: 'write', prop: 'b', x: 60, y: 500 },
+      ]}],
+    };
+    expect(validateLesson(dsl).ok).toBe(true);
+  });
+});
