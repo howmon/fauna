@@ -38,6 +38,7 @@ import { BROWSER_BUILD_CONTEXT, buildBrowserExtContext } from './server/prompts/
 import { registerFetchUrlRoutes } from './server/routes/fetch-url.js';
 import { registerSummarizeRoutes } from './server/routes/summarize.js';
 import { registerModelsRoutes } from './server/routes/models.js';
+import { registerModelsDebugRoute } from './server/routes/models-debug.js';
 import { registerFileFilterRoutes } from './server/routes/file-filter.js';
 import { registerConversationRoutes } from './server/routes/conversations.js';
 import { registerProjectRunRoutes } from './server/routes/project-runs.js';
@@ -306,6 +307,7 @@ registerMarkdownPdfAndYoutubeRoutes(app, { express, getElectronBrowserWindow: ()
 // ── /api/auth + /api/token routes moved → server/routes/auth.js ──
 // ── /api/models moved → server/routes/models.js ──
 registerModelsRoutes(app, { readSavedConfig, getGhToken });
+registerModelsDebugRoute(app, { readSavedConfig, getGhToken });
 registerLLMRoutes(app);
 
 // ── Figma layout knowledge ───────────────────────────────────────────────
