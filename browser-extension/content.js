@@ -18,6 +18,17 @@
   // ── Message dispatcher ──────────────────────────────────────────────────
 
   chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+    // Wrap reply so calls after the message channel has closed (tab navigated,
+    // SPA route changed, content script context invalidated) become no-ops
+    // instead of unhandled promise rejections — the Chrome console previously
+    // showed "A listener indicated an asynchronous response by returning true,
+    // but the message channel closed before a response was received".
+    let replied = false;
+    const safeReply = (v) => {
+      if (replied) return;
+      replied = true;
+      try { reply(v); } catch (_) { /* channel closed */ }
+    };
     (async () => {
       try {
         let result;
@@ -41,11 +52,11 @@
           case 'picker:stop':   result = stopPicker();  break;
           default:              result = { error: 'Unknown action: ' + msg.action };
         }
-        reply(result);
+        safeReply(result);
       } catch (err) {
-        reply({ error: err.message || String(err) });
+        safeReply({ error: err.message || String(err) });
       }
-    })();
+    })().catch((err) => safeReply({ error: err.message || String(err) }));
     return true; // keep channel open for async
   });
 

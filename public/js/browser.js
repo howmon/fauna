@@ -5,6 +5,38 @@ var _tabIdCounter = 0;
 var _domReadyWebviews = new WeakSet(); // tracks webviews that have fired dom-ready
 var _browserUA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
+// Electron-only feature gate. `<webview>` and its .loadURL/.reload/.goBack
+// methods only exist when this page is rendered by an Electron BrowserWindow
+// with `webviewTag: true` in webPreferences. When the user opens Fauna in a
+// plain Chrome/Safari tab pointed at http://localhost:3737, <webview>
+// collapses to HTMLUnknownElement and every method call throws. Detect once
+// and gate the public API — the rest of the file already null-checks the
+// return value of getActiveWebview(), so making it return null is sufficient
+// to defuse navigate/back/forward/refresh.
+var _isElectronRenderer = (function() {
+  try {
+    return !!(typeof window !== 'undefined' &&
+              window.process &&
+              window.process.versions &&
+              window.process.versions.electron);
+  } catch (_) { return false; }
+})();
+
+var _shownNonElectronNotice = false;
+function _noticeBrowserUnavailable(reason) {
+  if (_shownNonElectronNotice) return;
+  _shownNonElectronNotice = true;
+  var msg = reason || 'The in-app browser only works in the Fauna desktop app. Open this URL from Fauna.app instead of a regular browser tab.';
+  try { if (typeof _showToast === 'function') _showToast(msg, true); } catch (_) {}
+  // Also surface inline in the browser status pill if it's mounted, so the
+  // user sees why navigation is silent even with the toast dismissed.
+  try {
+    var status = document.getElementById('browser-status');
+    if (status) status.textContent = msg;
+  } catch (_) {}
+  console.warn('[browser-pane]', msg);
+}
+
 function _getConvBrowser(convId) {
   var cid = convId || state.currentId;
   if (!cid) return null;
@@ -28,6 +60,14 @@ function _setConvActiveTabId(tabId, convId) {
 }
 
 function getActiveWebview(convId) {
+  // Non-Electron renderer — <webview> tag has no Electron methods, so callers
+  // (browserNavigateTo, browserRefresh, etc.) all bail on the null return
+  // and the user gets a one-time toast explaining why instead of a cascade
+  // of "wv.loadURL is not a function" exceptions.
+  if (!_isElectronRenderer) {
+    _noticeBrowserUnavailable();
+    return null;
+  }
   var tabs = _getConvTabs(convId);
   var activeId = _getConvActiveTabId(convId);
   var tab = tabs.find(function(t) { return t.id === activeId; });

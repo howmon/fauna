@@ -377,7 +377,12 @@ export function createExtBridge({ getFaunaMcpState }) {
         });
         res.json({ ok: true, ...result });
       } catch (e) {
-        res.status(500).json({ ok: false, error: e.message });
+        // Return 200 + ok:false so the renderer doesn't log a red 500 for
+        // recoverable conditions (extension timed out, content script
+        // threw, tab navigated away mid-snapshot). Matches the pattern
+        // documented above for the sibling endpoint and prevents the
+        // "POST /api/ext/snapshot 500" devtools noise during normal use.
+        res.json({ ok: false, error: e.message });
       }
     });
   }
