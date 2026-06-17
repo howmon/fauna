@@ -28,17 +28,16 @@ import { RECOVERY_DIR } from '../copilot/auth.js';
 
 const ROOT_DIR = path.join(RECOVERY_DIR, 'projects');
 
-// Per-file unified-diff size cap (256 KB) — matches Copilot's truncation
-// pattern. Larger diffs are marked `isTruncated:true` and excluded from the
-// patch (the blob version is still kept when possible).
-const MAX_PATCH_BYTES_PER_FILE = 256 * 1024;
-
-// Per-blob byte cap (16 MB). Anything larger is recorded in meta but not
-// snapshotted; restore will warn rather than silently lose data.
-const MAX_BLOB_BYTES = 16 * 1024 * 1024;
-
-// Hard ceiling on files captured per checkpoint (defence against pathological
-// "I just unpacked a tarball" mistakes).
+// No artificial size caps on per-file diffs or blobs — cloud sync needs
+// to handle arbitrarily large content, and capping here would silently
+// strip it. The real upper bound is the agentstore backend's
+// `client_max_body_size` / `post_max_size` plus available local disk.
+//
+// MAX_FILES_PER_CHECKPOINT is kept (not a size cap) as a sanity guard
+// against accidentally checkpointing `node_modules/` or an unpacked
+// tarball — a count of 5000+ almost always means a missing .gitignore.
+const MAX_PATCH_BYTES_PER_FILE = Number.POSITIVE_INFINITY;
+const MAX_BLOB_BYTES           = Number.POSITIVE_INFINITY;
 const MAX_FILES_PER_CHECKPOINT = 5000;
 
 // Default retention.

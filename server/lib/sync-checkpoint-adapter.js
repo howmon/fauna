@@ -29,11 +29,11 @@ import os from 'os';
 import * as syncEngine    from './sync-engine.js';
 import * as checkpointLib from './project-checkpoints.js';
 
-// Per-blob cap shared with project-checkpoints.js, but enforced AGAIN here
-// because the wire payload also includes the patch text. If a patch ever
-// exceeds this we drop the patch body and ship metadata only (the UI can
-// still show "checkpoint #42 was made on Device B" even without the diff).
-const MAX_WIRE_PATCH_BYTES = 1 * 1024 * 1024; // 1 MB
+// No wire-side size cap on patch bodies. Cloud sync needs to handle
+// arbitrarily large diffs; the real ceiling is the agentstore backend's
+// `client_max_body_size` / `post_max_size`. If a push fails because the
+// backend rejects the payload, that surfaces as a normal sync error
+// the user can see in the Cloud Sync panel.
 
 const NAMESPACE = 'checkpoint';
 
@@ -165,16 +165,12 @@ function _loadLocal(projectId, number, myDeviceId) {
   if (!meta) return null;
   let patch = '';
   try { patch = checkpointLib.readCheckpointPatch(projectId, number) || ''; } catch (_) {}
-  // Drop the patch body if it's larger than the wire cap — meta is still
-  // useful for cross-device visibility.
-  const patchTruncated = patch.length > MAX_WIRE_PATCH_BYTES;
   return {
     projectId,
     deviceId: myDeviceId,
     number: Number(number),
     meta,
-    patch: patchTruncated ? '' : patch,
-    patchTruncated,
+    patch,
     syncedAt: new Date().toISOString(),
   };
 }
@@ -238,7 +234,6 @@ export async function listAllForProject(projectId) {
             totalBytes: payload.meta.totalBytes,
             isLocal: false,
             origin: payload.deviceId || dev,
-            patchTruncated: !!payload.patchTruncated,
           });
         } catch (_) { /* skip corrupt entry */ }
       }
