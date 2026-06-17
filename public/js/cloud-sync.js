@@ -239,8 +239,11 @@
         '    <strong style="color:var(--color-text)">Projects</strong>',
         '    <span class="muted" style="font-size:11px;color:var(--color-muted)">Toggle off to keep a project local-only</span>',
         '  </div>',
+        '  <div class="cs-proj-scroll" style="max-height:340px;overflow-y:auto;margin:0 -4px;padding:0 4px">',
         rows || '<div class="muted" style="color:var(--color-muted);padding:8px 0">No projects yet.</div>',
-        orphan ? '<div class="muted" style="color:var(--color-muted);padding:8px 0;font-size:12px">+ ' + orphan + ' pending change' + (orphan === 1 ? '' : 's') + ' not attached to a project</div>' : ''
+        '  </div>',
+        orphan ? '<div class="muted" style="color:var(--color-muted);padding:8px 0 0;font-size:12px">+ ' + orphan + ' pending change' + (orphan === 1 ? '' : 's') + ' not attached to a project</div>' : '',
+        '</div>'
       ].join('');
       // Bind the toggles.
       Array.prototype.forEach.call(host.querySelectorAll('.cs-proj-row'), function (row) {
