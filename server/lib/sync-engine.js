@@ -249,17 +249,23 @@ class Journal {
   constructor() {
     this._pending = new Map();     // key=`${ns}:${id}` → entry
     this._loaded = false;
+    // Approximate line count of the on-disk journal. Incremented on every
+    // append, reset to `_pending.size` after a rewrite. Used to decide
+    // whether a compaction pass is worth doing — see `rewriteFile()`.
+    this._fileLines = 0;
   }
 
   _key(ns, id) { return `${ns}:${id}`; }
 
   load() {
     if (this._loaded) return;
+    let lineCount = 0;
     try {
       const txt = fs.readFileSync(_journalFile(), 'utf8');
       for (const line of txt.split('\n')) {
         const trimmed = line.trim();
         if (!trimmed) continue;
+        lineCount++;
         try {
           const entry = JSON.parse(trimmed);
           if (entry && entry.ns && entry.id) {
@@ -268,6 +274,7 @@ class Journal {
         } catch (_) { /* skip corrupt line */ }
       }
     } catch (_) { /* no journal yet */ }
+    this._fileLines = lineCount;
     this._loaded = true;
   }
 
@@ -285,6 +292,7 @@ class Journal {
     try {
       fs.mkdirSync(_syncDir(), { recursive: true });
       fs.appendFileSync(_journalFile(), JSON.stringify(entry) + '\n');
+      this._fileLines++;
     } catch (e) {
       // Don't let a journal write failure break the user's edit. We'll
       // catch up on the next push because the entry is still in memory.
@@ -307,7 +315,30 @@ class Journal {
     }
   }
 
-  async rewriteFile() {
+  /**
+   * Compact the on-disk journal to match the in-memory pending Map.
+   *
+   * Skipped when the file is still "close enough" to the in-memory state
+   * so we don't pay an O(n) write after every push batch. On a machine
+   * with tens of thousands of pending entries, the naive
+   * "rewrite-after-every-batch" pattern produces O(n²) total bytes
+   * written — multi-GB of churn that competes with the renderer for
+   * disk + CPU and makes the app feel hung. The threshold below caps the
+   * on-disk file at roughly 3× the in-memory size (or 1 000 stale lines,
+   * whichever is larger) which preserves crash-safety without the churn.
+   *
+   * Pass `{ force: true }` to bypass the heuristic — used at shutdown.
+   */
+  async rewriteFile(opts = {}) {
+    const pending = this._pending.size;
+    const stale = Math.max(0, this._fileLines - pending);
+    const force = !!opts.force;
+    // Heuristic: only rewrite when the stale slack is meaningful AND the
+    // file has grown disproportionately to the queue.
+    if (!force) {
+      const slackBudget = Math.max(1000, pending * 2);
+      if (stale < slackBudget) return; // not worth the write
+    }
     await fsp.mkdir(_syncDir(), { recursive: true });
     const tmp = _journalFile() + '.tmp';
     const lines = Array.from(this._pending.values())
@@ -315,6 +346,7 @@ class Journal {
       .join('\n');
     await fsp.writeFile(tmp, lines ? lines + '\n' : '');
     await fsp.rename(tmp, _journalFile());
+    this._fileLines = pending;
   }
 
   size() {
@@ -616,6 +648,8 @@ export async function stop() {
   _running = false;
   if (_pullTimer) { clearTimeout(_pullTimer); _pullTimer = null; }
   if (_pushDebounce) { clearTimeout(_pushDebounce); _pushDebounce = null; }
+  // Compact the journal so we don't carry stale slack into the next run.
+  try { await _journal.rewriteFile({ force: true }); } catch (_) {}
   emitter.emit('stop');
 }
 

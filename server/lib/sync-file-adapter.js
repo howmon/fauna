@@ -72,6 +72,13 @@ const _localHashes = new Map();
 const _recentlyWritten = new Map(); // id → { hash, ts }
 let _scanTimer = null;
 let _scanning = false;
+// Per-project flag: have we completed at least one full scan for this
+// project since the process started? The very first scan after launch
+// seeds `_localHashes` from disk — there's nothing in memory to compare
+// against, so without this gate every file would look "new" and the
+// scanner would re-enqueue the entire tree on every relaunch. That's
+// how you end up with a 50k-entry pending journal after a few restarts.
+const _seededProjects = new Set();
 let _installed = false;
 let _projectManagerRef = null;
 
@@ -364,6 +371,11 @@ export async function _scanOnce() {
     for (const p of projects) {
       if (!p || !p.id || !p.rootPath) continue;
       const root = p.rootPath;
+      // First scan after process start = seed-only pass. We populate
+      // `_localHashes` from disk but do NOT enqueue anything — every file
+      // would otherwise look "new" because the in-memory cache is empty
+      // on launch. Subsequent scans then diff against the seeded hashes.
+      const seedOnly = !_seededProjects.has(p.id);
       const liveIds = new Set();
       let rels = [];
       try { rels = walkProject(root); } catch (_) { continue; }
@@ -388,17 +400,23 @@ export async function _scanOnce() {
             continue;
           }
           _localHashes.set(id, { hash, size: stat.size, mtime: stat.mtimeMs });
-          syncEngine.enqueueChange('project_file', id, 'upsert', { projectId: p.id });
+          if (!seedOnly) {
+            syncEngine.enqueueChange('project_file', id, 'upsert', { projectId: p.id });
+          }
         } catch (_) {}
       }
       // Anything previously known under this project but no longer on disk
-      // → enqueue delete.
-      for (const id of Array.from(_localHashes.keys())) {
-        if (!id.startsWith(p.id + ':')) continue;
-        if (liveIds.has(id)) continue;
-        _localHashes.delete(id);
-        syncEngine.enqueueChange('project_file', id, 'delete', { projectId: p.id });
+      // → enqueue delete. Suppressed on the seed pass (cache is empty so
+      // this loop is a no-op anyway, but be explicit).
+      if (!seedOnly) {
+        for (const id of Array.from(_localHashes.keys())) {
+          if (!id.startsWith(p.id + ':')) continue;
+          if (liveIds.has(id)) continue;
+          _localHashes.delete(id);
+          syncEngine.enqueueChange('project_file', id, 'delete', { projectId: p.id });
+        }
       }
+      _seededProjects.add(p.id);
     }
   } finally {
     _scanning = false;
@@ -412,6 +430,7 @@ export function _resetForTests() {
   _versions.clear();
   _localHashes.clear();
   _recentlyWritten.clear();
+  _seededProjects.clear();
   _installed = false;
   _projectManagerRef = null;
 }

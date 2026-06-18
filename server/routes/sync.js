@@ -66,18 +66,29 @@ export function registerSyncRoutes(app, deps = {}) {
 
   // If a token was already on disk from a prior session, auto-start the
   // engine. This makes Fauna Cloud "just work" across app restarts.
-  (async () => {
-    try {
-      _ensureAdapters();
-      const session = agentstore.getSession();
-      if (session.loggedIn) {
-        await syncEngine.start();
-        console.log('[sync] auto-started for', session.user?.email || '(unknown)');
+  //
+  // Deferred a few seconds so the renderer's initial paint isn't competing
+  // with sync's first push batch — which on a machine with a large pending
+  // journal can monopolise CPU/network for tens of seconds and make the app
+  // appear hung. Honour FAUNA_SYNC_AUTOSTART_DELAY_MS for tests / power users.
+  const AUTOSTART_DELAY_MS = Number(process.env.FAUNA_SYNC_AUTOSTART_DELAY_MS);
+  const _autostartDelay = Number.isFinite(AUTOSTART_DELAY_MS) && AUTOSTART_DELAY_MS >= 0
+    ? AUTOSTART_DELAY_MS
+    : 4000;
+  setTimeout(() => {
+    (async () => {
+      try {
+        _ensureAdapters();
+        const session = agentstore.getSession();
+        if (session.loggedIn) {
+          await syncEngine.start();
+          console.log('[sync] auto-started for', session.user?.email || '(unknown)');
+        }
+      } catch (e) {
+        console.warn('[sync] auto-start failed:', e?.message || e);
       }
-    } catch (e) {
-      console.warn('[sync] auto-start failed:', e?.message || e);
-    }
-  })();
+    })();
+  }, _autostartDelay).unref?.();
 
   app.get('/api/sync/session', (_req, res) => {
     res.json(agentstore.getSession());
