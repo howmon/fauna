@@ -259,10 +259,16 @@
         '<span style="color:var(--color-success)">' + _esc(_fmtTime(progress.lastSyncedAt)) + '</span></div>'
       : '';
 
+    // Last error is rendered on its own block so the full text wraps
+    // and stays readable. Truncating with text-overflow:ellipsis hid the
+    // important parts (status code, upstream reason) behind a hover-only
+    // title attribute, which most users never discover.
     var lastErrorRow = (progress.lastError && !progress.activeOp)
-      ? '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px">' +
-        '<span class="muted" style="color:var(--color-danger)">Last error</span>' +
-        '<span style="color:var(--color-danger);max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + _esc(progress.lastError) + '">' + _esc(progress.lastError) + '</span></div>'
+      ? '<div style="padding:6px 0;font-size:12px;border-top:1px solid var(--color-border);margin-top:4px">' +
+        '<div class="muted" style="color:var(--color-danger);margin-bottom:2px">Last error</div>' +
+        '<div style="color:var(--color-danger);word-break:break-word;font-family:var(--theme-font, monospace);font-size:11px;line-height:1.4">' +
+        _esc(progress.lastError) + '</div>' +
+        '</div>'
       : '';
 
     var e2eBadge = (status.e2e && status.e2e.required && status.e2e.unlocked)
