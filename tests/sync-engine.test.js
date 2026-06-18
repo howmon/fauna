@@ -107,6 +107,10 @@ let engine;
 beforeEach(async () => {
   tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'fauna-sync-'));
   process.env.FAUNA_SYNC_DIR = tmpDir;
+  // Existing tests predate E2E. They exercise journal / HLC / conflict
+  // mechanics with a plaintext mock store, so disable encryption here.
+  // E2E coverage lives in sync-engine-e2e.test.js.
+  process.env.FAUNA_SYNC_E2E = 'off';
   mockClient.store.clear();
   mockClient.log.length = 0;
   // Fresh module each test so module-level state resets.
@@ -119,6 +123,7 @@ afterEach(async () => {
   if (engine) await engine.stop();
   try { await fsp.rm(tmpDir, { recursive: true, force: true }); } catch (_) {}
   delete process.env.FAUNA_SYNC_DIR;
+  delete process.env.FAUNA_SYNC_E2E;
 });
 
 // ── HLC ────────────────────────────────────────────────────────────────────

@@ -28,6 +28,13 @@ import { createRequire } from 'module';
 
 const _require = createRequire(import.meta.url);
 
+// Lazy import of sync-crypto to avoid a circular dependency — sync-crypto
+// imports this module for its REST round-trip. We only call into it after
+// initial module load so the cycle is harmless at runtime.
+async function _crypto() {
+  return await import('./sync-crypto.js');
+}
+
 // ── safeStorage (Electron only) ────────────────────────────────────────────
 let _safeStorage = null;
 let _safeStorageChecked = false;
@@ -163,6 +170,12 @@ export async function logout() {
       await _rawRequest('POST', '/api/auth/logout', null, { token, retries: 0 });
     }
   } catch (_) { /* best effort */ }
+  // Wipe the cached E2E key — don't leave decrypted state behind on a
+  // shared machine.
+  try {
+    const c = await _crypto();
+    c.clearKey();
+  } catch (_) {}
   await _writeState({ baseUrl: getBaseUrl(), user: null });
 }
 
@@ -193,6 +206,18 @@ export async function login({ email, password, baseUrl } = {}) {
     loginAt: new Date().toISOString(),
     ...stored,
   });
+  // Auto-unlock E2E with the same password the user just typed. We MUST
+  // do this with the still-in-memory password — it never gets persisted
+  // anywhere. If provisioning fails (server unreachable, bad response)
+  // we still report login as successful; the engine will surface a
+  // 'locked' event and the UI can prompt for re-entry.
+  try {
+    const c = await _crypto();
+    await c.unlock({ password });
+  } catch (e) {
+    // Non-fatal — leave the user signed in but locked.
+    return { ok: true, user, e2eError: e.message || 'E2E unlock failed' };
+  }
   return { ok: true, user };
 }
 

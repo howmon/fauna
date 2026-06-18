@@ -115,8 +115,81 @@
     if (pw) pw.addEventListener('keydown', function (e) { if (e.key === 'Enter') _handleLogin(); });
   }
 
+  // ── Render: locked (E2E password prompt) ──────────────────────────────
+  // Shown when the sync engine has a valid token but no encryption key.
+  // After the user enters the password we POST /api/sync/unlock; on
+  // success the engine resumes pulls/pushes immediately.
+  function _renderLocked(session) {
+    var mount = document.getElementById('cloud-sync-mount');
+    if (!mount) return;
+    var user = session.user || {};
+    mount.innerHTML = [
+      '<div style="max-width:520px">',
+      '  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">',
+      '    <i class="ti ti-lock" style="font-size:22px;color:var(--color-primary)"></i>',
+      '    <div>',
+      '      <div style="font-weight:600;color:var(--color-text)">End-to-end encryption</div>',
+      '      <div class="muted" style="font-size:12px;color:var(--color-muted)">Signed in as ' + _esc(user.email || user.name || '') + '</div>',
+      '    </div>',
+      '  </div>',
+      '  <div class="settings-section" style="padding:14px;border-radius:8px;background:var(--color-subtleSurface);border:1px solid var(--color-border);color:var(--color-text)">',
+      '    <p style="margin:0 0 8px"><strong>This device is locked.</strong></p>',
+      '    <p class="muted" style="font-size:13px;margin:0 0 12px;color:var(--color-muted)">Your conversations, projects, and files are encrypted on this device with a key derived from your account password. Sync stays paused until you unlock.</p>',
+      '    <p class="muted" style="font-size:12px;margin:0 0 12px;color:var(--color-muted)">The server only ever sees ciphertext. Your password and key never leave this machine.</p>',
+      '    <div class="settings-row" style="margin:0">',
+      '      <label>Password</label>',
+      '      <input type="password" id="cs-unlock-pwd" class="settings-input" autocomplete="current-password" autofocus>',
+      '    </div>',
+      '    <button class="settings-row-btn primary" id="cs-unlock-btn" style="margin-top:8px">',
+      '      <i class="ti ti-lock-open"></i> Unlock sync',
+      '    </button>',
+      '    <div id="cs-unlock-msg" class="muted" style="margin-top:8px;min-height:1.2em;font-size:12px"></div>',
+      '  </div>',
+      '  <div style="margin-top:14px">',
+      '    <button class="settings-row-btn" id="cs-logout-btn"><i class="ti ti-logout"></i> Sign out</button>',
+      '  </div>',
+      '</div>'
+    ].join('\n');
+
+    var btn = document.getElementById('cs-unlock-btn');
+    if (btn) btn.onclick = _handleUnlock;
+    var pw = document.getElementById('cs-unlock-pwd');
+    if (pw) pw.addEventListener('keydown', function (e) { if (e.key === 'Enter') _handleUnlock(); });
+    var lo = document.getElementById('cs-logout-btn');
+    if (lo) lo.onclick = _handleLogout;
+  }
+
+  function _handleUnlock() {
+    var pw = (document.getElementById('cs-unlock-pwd') || {}).value || '';
+    var msg = document.getElementById('cs-unlock-msg');
+    if (!pw) { if (msg) { msg.textContent = 'Password required'; msg.style.color = 'var(--color-danger)'; } return; }
+    if (msg) { msg.textContent = 'Deriving key (this takes a moment)…'; msg.style.color = ''; }
+    _api('/api/sync/unlock', {
+      method: 'POST',
+      body: JSON.stringify({ password: pw }),
+    }).then(function (r) {
+      if (!r.ok || !r.body || !r.body.ok) {
+        var err = (r.body && r.body.error) || 'Unlock failed';
+        if (msg) { msg.textContent = err; msg.style.color = 'var(--color-danger)'; }
+        return;
+      }
+      window.renderCloudSyncPage();
+      try { if (typeof _showToast === 'function') _showToast('Unlocked — sync resumed'); } catch (_) {}
+    }).catch(function (e) {
+      if (msg) { msg.textContent = e.message || 'Network error'; msg.style.color = 'var(--color-danger)'; }
+    });
+  }
+
   // ── Render: signed-in dashboard ───────────────────────────────────────
   function _renderSignedIn(session, status) {
+    // E2E gate: if encryption is required but we don't have a key yet
+    // (typical after Agent Store sign-in, or after a logout/lock), render
+    // the unlock prompt INSTEAD of the dashboard. Sync is paused server-
+    // side until the user enters their password.
+    if (status && status.e2e && status.e2e.required && !status.e2e.unlocked) {
+      _renderLocked(session);
+      return;
+    }
     var mount = document.getElementById('cloud-sync-mount');
     if (!mount) return;
     var user = session.user || {};
@@ -183,6 +256,10 @@
         '<span style="color:var(--color-danger);max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + _esc(progress.lastError) + '">' + _esc(progress.lastError) + '</span></div>'
       : '';
 
+    var e2eBadge = (status.e2e && status.e2e.required && status.e2e.unlocked)
+      ? '<span title="All synced data is end-to-end encrypted on this device" style="display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:2px 8px;border-radius:10px;background:var(--color-subtleSurface);border:1px solid var(--color-success);color:var(--color-success);margin-top:2px"><i class="ti ti-lock"></i> End-to-end encrypted</span>'
+      : '';
+
     mount.innerHTML = [
       '<div style="max-width:560px">',
       '  <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">',
@@ -192,6 +269,7 @@
       '    <div>',
       '      <div style="font-weight:600;color:var(--color-text)">' + _esc(user.name || user.email || 'Signed in') + '</div>',
       '      <div class="muted" style="font-size:12px;color:var(--color-muted)">' + _esc(user.email || '') + '</div>',
+      '      ' + e2eBadge,
       '    </div>',
       '  </div>',
       '  <div class="settings-section" style="padding:12px;border-radius:8px;background:var(--color-subtleSurface);border:1px solid var(--color-border);color:var(--color-text);margin-bottom:14px">',

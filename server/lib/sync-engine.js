@@ -34,6 +34,15 @@ import { EventEmitter } from 'events';
 
 import * as agentstore from './agentstore-client.js';
 import * as syncPrefs from './sync-prefs.js';
+import * as syncCrypto from './sync-crypto.js';
+
+// E2E policy. When enabled (the default) we refuse to push plaintext or to
+// apply pulls we can't decrypt. Set FAUNA_SYNC_E2E=off only for non-prod
+// debugging — it disables the privacy guarantee and is incompatible with
+// any device that has E2E enabled.
+function _e2eRequired() {
+  return String(process.env.FAUNA_SYNC_E2E || 'on').toLowerCase() !== 'off';
+}
 
 // ── Config ────────────────────────────────────────────────────────────────
 const DEFAULT_PULL_INTERVAL_MS = 30_000;
@@ -420,6 +429,10 @@ export function getStatus() {
     namespaces: Array.from(_adapters.keys()),
     excludedProjects: Array.from(syncPrefs.getExcludedProjectSet()),
     progress: { ..._progress, pulledByNs: { ..._progress.pulledByNs } },
+    e2e: {
+      required: _e2eRequired(),
+      unlocked: syncCrypto.hasKey(),
+    },
   };
 }
 
@@ -464,8 +477,22 @@ export async function start(opts = {}) {
   _loadCursors();
   _nodeId(); // ensure persisted
 
+  // E2E: try to restore a previously cached key from the OS keychain so a
+  // re-launch on a known device doesn't require the user to re-enter the
+  // password. Failure is silent — the engine just stays in 'locked' state
+  // and the loops will no-op until unlock() is called.
+  if (_e2eRequired()) {
+    try { await syncCrypto.tryRestoreFromKeychain(); } catch (_) {}
+  }
+
   _running = true;
   emitter.emit('start', getStatus());
+
+  // Surface lock state immediately so the renderer can render an unlock
+  // prompt without waiting for the first push attempt.
+  if (_e2eRequired() && !syncCrypto.hasKey()) {
+    emitter.emit('locked', { reason: 'no-key', op: 'start' });
+  }
 
   // Kick a pull immediately; subsequent pulls are scheduled by the loop.
   _scheduledPullLoop().catch(err => emitter.emit('error', err));
@@ -495,6 +522,33 @@ export async function forceBackfill() {
   await _runBackfillOnce();
   _schedulePush();
   return getStatus();
+}
+
+/**
+ * Unlock end-to-end encryption with the user's password. On success the
+ * engine immediately retries any pending pushes and kicks a pull pass so
+ * the user sees data converge without manual prodding.
+ *
+ * Returns { ok, firstDevice?, error? } — passes the sync-crypto result
+ * through unchanged.
+ */
+export async function unlockE2E({ password } = {}) {
+  const r = await syncCrypto.unlock({ password });
+  if (r.ok) {
+    emitter.emit('unlocked', { firstDevice: !!r.firstDevice });
+    if (_running) {
+      _schedulePush();
+      _pullOnce().catch(err => emitter.emit('error', err));
+    }
+  }
+  return r;
+}
+
+/** Wipe the cached E2E key from memory + disk. Sync stays running but
+ *  is locked; pushes/pulls no-op until unlockE2E() is called again. */
+export function lockE2E() {
+  syncCrypto.clearKey();
+  emitter.emit('locked', { reason: 'manual' });
 }
 
 /** Stop the engine. Pending journal entries persist for the next start. */
@@ -540,6 +594,13 @@ async function _scheduledPullLoop() {
 async function _pushOnce() {
   if (!_running || _inFlightPush) return;
   if (_journal.size() === 0) return;
+  // E2E gate: never push plaintext. Block silently — the journal is
+  // crash-safe and will drain once the user unlocks. We emit a single
+  // 'locked' event so the UI can prompt for the password.
+  if (_e2eRequired() && !syncCrypto.hasKey()) {
+    emitter.emit('locked', { reason: 'no-key', op: 'push' });
+    return;
+  }
   _inFlightPush = true;
   const batch = _journal.drainBatch();
   _progress.activeOp = 'push';
@@ -611,7 +672,12 @@ async function _pushOne(entry) {
   }
 
   const serialized = adapter.serialize ? adapter.serialize(local) : local;
-  const rawBody = JSON.stringify(serialized);
+  const plainBody = JSON.stringify(serialized);
+  // E2E: encrypt the payload before it leaves this machine. AAD binds
+  // the ciphertext to its (ns, id) so the server can't shuffle blobs.
+  const rawBody = _e2eRequired()
+    ? JSON.stringify(syncCrypto.encryptString(plainBody, `${entry.ns}:${entry.id}`))
+    : plainBody;
   // Get last-known server version, if we tracked one. Stored on the
   // adapter as `adapter._lastVersion` map for simplicity — adapters that
   // care about If-Match correctness should expose `getLastSeenVersion(id)`.
@@ -631,9 +697,21 @@ async function _pushOne(entry) {
       // Conflict — pull-merge-retry. Single retry; if it conflicts again
       // we drop to the journal and the next pass will pick it up.
       const remote = err.body || {};
+      // The server payload may be an E2E envelope; decrypt before merging.
+      let remotePlainPayload = remote.serverPayload;
+      if (syncCrypto.isEnvelope(remotePlainPayload)) {
+        try {
+          const plain = syncCrypto.decryptEnvelope(remotePlainPayload, `${entry.ns}:${entry.id}`);
+          remotePlainPayload = JSON.parse(plain);
+        } catch (decErr) {
+          // Can't read the server's copy — refuse to merge blindly.
+          emitter.emit('apply:error', { ns: entry.ns, id: entry.id, error: 'decrypt-conflict: ' + decErr.message });
+          return;
+        }
+      }
       const remoteDeserialized = adapter.deserialize
-        ? adapter.deserialize(remote.serverPayload)
-        : remote.serverPayload;
+        ? adapter.deserialize(remotePlainPayload)
+        : remotePlainPayload;
 
       // Pick the merge winner:
       //   * adapter.merge → caller-defined (e.g. message union)
@@ -665,7 +743,10 @@ async function _pushOne(entry) {
         return;
       }
 
-      const rawRetry = JSON.stringify(adapter.serialize ? adapter.serialize(merged) : merged);
+      const plainRetry = JSON.stringify(adapter.serialize ? adapter.serialize(merged) : merged);
+      const rawRetry = _e2eRequired()
+        ? JSON.stringify(syncCrypto.encryptString(plainRetry, `${entry.ns}:${entry.id}`))
+        : plainRetry;
       const retryRes = await agentstore.requestRaw('PUT', objPath, rawRetry, {
         headers: { 'X-Client-Version': String(entry.hlc) },
       });
@@ -683,6 +764,13 @@ async function _pushOne(entry) {
 
 async function _pullOnce() {
   if (!_running || _inFlightPull) return;
+  // E2E gate: without a key we'd just discard every pulled change as
+  // "can't decrypt". Skip the network round-trip entirely so the user
+  // can unlock and we resume cleanly.
+  if (_e2eRequired() && !syncCrypto.hasKey()) {
+    emitter.emit('locked', { reason: 'no-key', op: 'pull' });
+    return;
+  }
   _inFlightPull = true;
   _progress.activeOp = _inFlightPush ? _progress.activeOp : 'pull';
   _progress.pulledByNs = {};
@@ -742,16 +830,35 @@ async function _pullNamespace(ns) {
 
 async function _applyRemote(ns, adapter, change) {
   try {
+    // E2E: if the payload is an envelope, decrypt FIRST. We need the
+    // plaintext to derive projectId for the per-project exclusion check
+    // below — encrypted envelopes don't expose payload fields by design.
+    let rawPayload = change.payload;
+    if (!change.deleted && syncCrypto.isEnvelope(rawPayload)) {
+      try {
+        const plain = syncCrypto.decryptEnvelope(rawPayload, `${ns}:${change.objectId}`);
+        rawPayload = JSON.parse(plain);
+      } catch (decErr) {
+        emitter.emit('apply:error', { ns, id: change.objectId, error: 'decrypt: ' + decErr.message });
+        return;
+      }
+    } else if (!change.deleted && _e2eRequired() && rawPayload && typeof rawPayload === 'object') {
+      // Plaintext arrived but E2E is required — log and skip rather than
+      // silently writing legacy data. The user can run a migration to
+      // re-encrypt by re-uploading from the source device.
+      emitter.emit('apply:plaintext-skipped', { ns, id: change.objectId });
+      return;
+    }
+
     // Honor the per-device project exclusion list for INCOMING changes too.
     // Without this, excluding a project from sync would still let pulls
     // overwrite the local copy. For 'project' the id IS the projectId;
-    // for 'conversation' we read the payload's projectId (cheap; payload
-    // is already in memory).
+    // for 'conversation' we read the (now-decrypted) payload's projectId.
     let projectId = null;
     if (ns === 'project') {
       projectId = change.objectId;
-    } else if (!change.deleted && change.payload && typeof change.payload === 'object') {
-      projectId = change.payload.projectId || null;
+    } else if (!change.deleted && rawPayload && typeof rawPayload === 'object') {
+      projectId = rawPayload.projectId || null;
     }
     if (projectId && syncPrefs.isProjectExcluded(projectId)) {
       // Still advance the cursor so we don't replay this change forever.
@@ -766,7 +873,7 @@ async function _applyRemote(ns, adapter, change) {
         await adapter.delete(change.objectId, { fromSync: true });
       }
     } else {
-      const payload = adapter.deserialize ? adapter.deserialize(change.payload) : change.payload;
+      const payload = adapter.deserialize ? adapter.deserialize(rawPayload) : rawPayload;
       // If we have a merge function and a local copy, merge first.
       let next = payload;
       if (adapter.merge && typeof adapter.load === 'function') {

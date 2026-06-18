@@ -181,6 +181,16 @@ function _startSyncEventStream() {
             if (p2) window.renderCloudSyncPage();
           }
           return;
+        } else if (msg.type === 'locked' || msg.type === 'unlocked') {
+          // E2E lock state changed — flip the cloud-sync panel between
+          // dashboard and password-prompt views.
+          if (typeof window.renderCloudSyncPage === 'function') {
+            var visible = document.querySelector('.settings-page[data-page="cloud-sync"]');
+            if (visible && visible.classList.contains('active')) {
+              window.renderCloudSyncPage();
+            }
+          }
+          return;
         }
         if (nsTouched.project) {
           if (projTimer) clearTimeout(projTimer);

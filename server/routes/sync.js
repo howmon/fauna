@@ -44,6 +44,8 @@ syncEngine.events.on('apply',     (e) => _broadcastSyncEvent('apply', e));
 syncEngine.events.on('pull:end',  (e) => _broadcastSyncEvent('pull:end', e));
 syncEngine.events.on('push:end',  (e) => _broadcastSyncEvent('push:end', e));
 syncEngine.events.on('bootstrap', (e) => _broadcastSyncEvent('bootstrap', e));
+syncEngine.events.on('locked',    (e) => _broadcastSyncEvent('locked', e));
+syncEngine.events.on('unlocked',  (e) => _broadcastSyncEvent('unlocked', e));
 
 export function registerSyncRoutes(app, deps = {}) {
   const { conversationStore, projectManager } = deps;
@@ -160,6 +162,37 @@ export function registerSyncRoutes(app, deps = {}) {
       res.json(status);
     } catch (e) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── E2E (end-to-end encryption) management ──
+  //
+  // The sync engine refuses to push plaintext or apply encrypted pulls
+  // until a key is derived from the user's password. The login flow
+  // unlocks automatically; for adopt-token sign-ins the renderer prompts
+  // the user and POSTs here.
+  app.post('/api/sync/unlock', async (req, res) => {
+    const { password } = req.body || {};
+    if (!password || typeof password !== 'string') {
+      return res.status(400).json({ ok: false, error: 'password required' });
+    }
+    try {
+      const r = await syncEngine.unlockE2E({ password });
+      if (!r.ok) return res.status(401).json(r);
+      res.json({ ok: true, firstDevice: !!r.firstDevice, status: syncEngine.getStatus() });
+    } catch (e) {
+      res.status(502).json({ ok: false, error: e.message || 'unlock failed' });
+    }
+  });
+
+  // Wipe the cached E2E key from this device. Sync stays running but is
+  // locked; the user has to re-enter the password to push or pull again.
+  app.post('/api/sync/lock', (_req, res) => {
+    try {
+      syncEngine.lockE2E();
+      res.json({ ok: true, status: syncEngine.getStatus() });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
     }
   });
 
