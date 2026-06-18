@@ -44,8 +44,7 @@ const mockClient = vi.hoisted(() => {
       log.push({ method, urlPath, kind: 'ndjson' });
       if (ndjsonError) throw ndjsonError;
       for (const row of ndjsonRows) yield row;
-    },
-  };
+    },  };
 });
 
 vi.mock('../server/lib/agentstore-client.js', () => ({
@@ -220,5 +219,56 @@ describe('snapshot bootstrap', () => {
     // Stream did not error out — second row was applied; unknown skipped.
     expect(summary.skipped).toBeGreaterThanOrEqual(1);
     expect(a.data.get('c1')).toMatchObject({ id: 'c1' });
+  });
+
+  it('does NOT save rows belonging to excluded projects', async () => {
+    // Regression: snapshot pulls everything for the user from the server
+    // (the server has no idea what's excluded per-device) and relies on
+    // `_applyRemote` to drop rows whose projectId is in the local
+    // exclusion list. Covers all four namespaces:
+    //   * project       (projectId === objectId)
+    //   * conversation  (projectId nested in payload)
+    //   * project_file  (projectId nested in payload, objectId prefixed)
+    //   * checkpoint    (projectId nested in payload, objectId prefixed)
+    const syncPrefs = await import('../server/lib/sync-prefs.js');
+    await syncPrefs.setExcludedProjects(['proj-EX']);
+
+    const projAdapter = makeInMemoryAdapter();
+    const convAdapter = makeInMemoryAdapter();
+    const fileAdapter = makeInMemoryAdapter();
+    const cpAdapter = makeInMemoryAdapter();
+    engine.registerAdapter('project', projAdapter);
+    engine.registerAdapter('conversation', convAdapter);
+    engine.registerAdapter('project_file', fileAdapter);
+    engine.registerAdapter('checkpoint', cpAdapter);
+
+    mockClient.setNdjsonRows([
+      // Excluded project — every row should be dropped.
+      { ns: 'project',      objectId: 'proj-EX',                    clientVersion: 1, updatedAt: '2026-01-01T00:00:00.000Z', payloadHash: 'h', payload: { id: 'proj-EX', name: 'Excluded' } },
+      { ns: 'conversation', objectId: 'conv-in-EX',                 clientVersion: 1, updatedAt: '2026-01-02T00:00:00.000Z', payloadHash: 'h', payload: { id: 'conv-in-EX', projectId: 'proj-EX' } },
+      { ns: 'project_file', objectId: 'proj-EX:b64:cmVhZG1l',       clientVersion: 1, updatedAt: '2026-01-03T00:00:00.000Z', payloadHash: 'h', payload: { projectId: 'proj-EX', relPath: 'readme', content: '', encoding: 'utf8' } },
+      { ns: 'checkpoint',   objectId: 'proj-EX:dev1:1',             clientVersion: 1, updatedAt: '2026-01-04T00:00:00.000Z', payloadHash: 'h', payload: { projectId: 'proj-EX', deviceId: 'dev1', number: 1, meta: {}, patch: '' } },
+      // Allowed project — should be saved.
+      { ns: 'project',      objectId: 'proj-OK',                    clientVersion: 1, updatedAt: '2026-01-05T00:00:00.000Z', payloadHash: 'h', payload: { id: 'proj-OK', name: 'Keep' } },
+      { ns: 'conversation', objectId: 'conv-in-OK',                 clientVersion: 1, updatedAt: '2026-01-06T00:00:00.000Z', payloadHash: 'h', payload: { id: 'conv-in-OK', projectId: 'proj-OK' } },
+    ]);
+
+    const done = waitFor('snapshot:end');
+    await engine.start({ pushDebounceMs: 1, pullIntervalMs: 60_000 });
+    await done;
+
+    // Nothing from the excluded project should have landed locally.
+    expect(projAdapter.data.has('proj-EX')).toBe(false);
+    expect(convAdapter.data.has('conv-in-EX')).toBe(false);
+    expect(fileAdapter.data.has('proj-EX:b64:cmVhZG1l')).toBe(false);
+    expect(cpAdapter.data.has('proj-EX:dev1:1')).toBe(false);
+    // Allowed project's rows DID land.
+    expect(projAdapter.data.get('proj-OK')).toMatchObject({ id: 'proj-OK', name: 'Keep' });
+    expect(convAdapter.data.get('conv-in-OK')).toMatchObject({ id: 'conv-in-OK', projectId: 'proj-OK' });
+
+    // And the snapshot URL should have carried the exclusion list so the
+    // server can drop those rows server-side (saves bandwidth).
+    const snapCall = mockClient.log.find(e => e.kind === 'ndjson');
+    expect(snapCall.urlPath).toContain('exclude=proj-EX');
   });
 });

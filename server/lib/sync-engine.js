@@ -793,7 +793,19 @@ async function _pullSnapshotIfFresh() {
   let applied = 0;
   let skipped = 0;
   try {
-    for await (const row of agentstore.requestNdjson('GET', '/api/sync/snapshot')) {
+    // Pass the local exclusion list so the server doesn't ship rows
+    // we'd just drop client-side. Saves bandwidth for big excluded
+    // projects (the original symptom that revealed this — a 500 MB
+    // excluded codebase still streamed in full before).
+    //
+    // Only project / project_file / checkpoint can be filtered server-
+    // side (their projectId is in the object_id). Conversations stay
+    // filtered client-side because their projectId is encrypted.
+    const excluded = Array.from(syncPrefs.getExcludedProjectSet());
+    const qs = excluded.length
+      ? '?exclude=' + excluded.map(encodeURIComponent).join(',')
+      : '';
+    for await (const row of agentstore.requestNdjson('GET', '/api/sync/snapshot' + qs)) {
       if (!_running) break;
       if (!row || typeof row !== 'object' || !row.ns || !row.objectId) {
         skipped++;
@@ -1155,8 +1167,62 @@ async function _pullNamespace(ns) {
   }
 }
 
+/**
+ * Derive the projectId from an objectId for namespaces where the wire
+ * id self-describes the project. Returns null for namespaces whose
+ * objectId is opaque (notably `conversation`) — those need the
+ * decrypted payload.
+ *
+ *   project       → id IS the projectId
+ *   project_file  → `${projectId}:b64:${base64url(relPath)}` (or legacy
+ *                   `${projectId}:${relPath}` — first colon is the split)
+ *   checkpoint    → `${projectId}:${deviceId}:${number}` — last two
+ *                   colons separate deviceId and number
+ */
+function _projectIdFromObjectId(ns, objectId) {
+  if (!objectId || typeof objectId !== 'string') return null;
+  if (ns === 'project') return objectId;
+  if (ns === 'project_file') {
+    const i = objectId.indexOf(':b64:');
+    if (i > 0) return objectId.slice(0, i);
+    // Legacy "${projectId}:${relPath}" — relPath never starts with `b64:`
+    // since the modern encoder always uses the `:b64:` marker, so the
+    // first colon is unambiguous.
+    const j = objectId.indexOf(':');
+    return j > 0 ? objectId.slice(0, j) : null;
+  }
+  if (ns === 'checkpoint') {
+    // projectId may itself contain ':' in theory; the trailing two
+    // segments are always ${deviceId}:${number}.
+    const parts = objectId.split(':');
+    if (parts.length < 3) return null;
+    return parts.slice(0, -2).join(':');
+  }
+  return null;
+}
+
 async function _applyRemote(ns, adapter, change) {
   try {
+    // Cheap exclusion check FIRST — before decryption, before adapter
+    // dispatch. For three of the four sync namespaces the projectId is
+    // already encoded in the objectId itself, so we can drop excluded
+    // rows without paying the AES-GCM cost (matters on the snapshot
+    // bootstrap when a fresh device may receive thousands of files from
+    // an excluded project). Only `conversation` truly requires the
+    // decrypted payload to determine projectId — its objectId is opaque.
+    //
+    // This is also the defense against `payload.projectId` ever being
+    // missing or wrong: for project_file/checkpoint the wire id is the
+    // authoritative source.
+    const earlyProjectId = _projectIdFromObjectId(ns, change.objectId);
+    if (earlyProjectId && syncPrefs.isProjectExcluded(earlyProjectId)) {
+      if (typeof adapter.setLastSeenVersion === 'function') {
+        adapter.setLastSeenVersion(change.objectId, change.clientVersion);
+      }
+      emitter.emit('apply:skipped', { ns, id: change.objectId, reason: 'project-excluded' });
+      return;
+    }
+
     // E2E: if the payload is an envelope, decrypt FIRST. We need the
     // plaintext to derive projectId for the per-project exclusion check
     // below — encrypted envelopes don't expose payload fields by design.
@@ -1177,14 +1243,11 @@ async function _applyRemote(ns, adapter, change) {
       return;
     }
 
-    // Honor the per-device project exclusion list for INCOMING changes too.
-    // Without this, excluding a project from sync would still let pulls
-    // overwrite the local copy. For 'project' the id IS the projectId;
-    // for 'conversation' we read the (now-decrypted) payload's projectId.
-    let projectId = null;
-    if (ns === 'project') {
-      projectId = change.objectId;
-    } else if (!change.deleted && rawPayload && typeof rawPayload === 'object') {
+    // Second exclusion check, for namespaces whose projectId only lives
+    // in the (now-decrypted) payload — i.e. `conversation`. Cheap to
+    // re-run for the others too; idempotent.
+    let projectId = earlyProjectId;
+    if (!projectId && !change.deleted && rawPayload && typeof rawPayload === 'object') {
       projectId = rawPayload.projectId || null;
     }
     if (projectId && syncPrefs.isProjectExcluded(projectId)) {
