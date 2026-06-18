@@ -232,12 +232,23 @@
       // the adapter finishes walking. Render an indeterminate bar with
       // a live counter so the user sees motion instead of "Queueing…"
       // followed by silence.
+      //
+      // For namespaces like project_file the scan itself is the slow
+      // step (SHA-1 every file), so we show the higher of "scanned" and
+      // "enqueued" — `scanned` ticks during the walk, `enqueued` ticks
+      // after the walk while ids are appended to the journal.
       var ns = progress.backfillNs || '…';
+      var nsLabel = (ns === 'project_file') ? 'files'
+        : (ns === 'conversation') ? 'conversations'
+        : (ns === 'project') ? 'projects'
+        : (ns === 'checkpoint') ? 'checkpoints'
+        : _esc(ns);
+      var scanned = Math.max(progress.backfillScanned || 0, progress.backfillEnqueued || 0);
       progressBlock = [
         '<div style="padding:8px 0;border-top:1px solid var(--color-border);margin-top:4px">',
         '  <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">',
-        '    <span style="color:var(--color-primary)">● Queueing existing data (' + _esc(ns) + ')</span>',
-        '    <span style="color:var(--color-muted)">' + (progress.backfillEnqueued || 0) + ' queued</span>',
+        '    <span style="color:var(--color-primary)">● Queueing ' + nsLabel + '</span>',
+        '    <span style="color:var(--color-muted)">' + scanned + ' scanned</span>',
         '  </div>',
         '  <div style="height:6px;background:var(--color-border);border-radius:3px;overflow:hidden;position:relative">',
         '    <div class="cs-indeterminate" style="position:absolute;height:100%;width:35%;background:var(--color-primary);animation:cs-slide 1.2s ease-in-out infinite"></div>',

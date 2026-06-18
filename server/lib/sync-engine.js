@@ -233,7 +233,18 @@ async function _runBackfillOnce() {
       _progress.backfillEnqueued = 0;
       emitter.emit('backfill:ns', { ns });
       try {
-        const rows = await adapter.listAllIds();
+        // Stream-friendly callback so adapters that walk slowly (e.g.
+        // project_file SHA-1's every file) can report incremental scan
+        // progress while they're still building the id list. Without
+        // this the progress bar shows "0 queued" for the entire walk
+        // and then jumps to N at the end — which looks identical to a
+        // hang.
+        const rows = await adapter.listAllIds({
+          onTick: (scanned) => {
+            _progress.backfillScanned = scanned;
+            emitter.emit('backfill:progress', { ns, scanned });
+          },
+        });
         const list = Array.isArray(rows) ? rows : [];
         let count = 0;
         for (let i = 0; i < list.length; i++) {

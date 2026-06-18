@@ -310,10 +310,15 @@ export function installFileAdapter({ projectManager, onApplied } = {}) {
     // freeze the express server for seconds while the engine walked the
     // tree and SHA-1'd every file — that's why "Upload all existing data"
     // appears to hang the whole app.
-    async listAllIds() {
+    //
+    // `opts.onTick(scanned)` is called periodically (every YIELD_EVERY
+    // files) so the backfill driver can surface incremental progress to
+    // the renderer instead of going dark for the entire walk.
+    async listAllIds(opts = {}) {
       const out = [];
       const projects = _listProjects();
       const YIELD_EVERY = 50;
+      const onTick = (typeof opts.onTick === 'function') ? opts.onTick : null;
       let counter = 0;
       for (const p of projects) {
         if (!p || !p.id) continue;
@@ -335,9 +340,13 @@ export function installFileAdapter({ projectManager, onApplied } = {}) {
           out.push({ id: _compositeId(p.id, rel), projectId: p.id });
           counter++;
           if (counter % YIELD_EVERY === 0) {
+            if (onTick) { try { onTick(counter); } catch (_) {} }
             await new Promise(r => setImmediate(r));
           }
         }
+      }
+      if (onTick && counter % YIELD_EVERY !== 0) {
+        try { onTick(counter); } catch (_) {}
       }
       return out;
     },
