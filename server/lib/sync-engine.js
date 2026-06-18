@@ -314,6 +314,25 @@ let _config = {
   pushDebounceMs: DEFAULT_PUSH_DEBOUNCE_MS,
 };
 
+// In-flight progress, surfaced via getStatus() so the renderer can show
+// a live progress bar instead of polling for opaque counter changes.
+//   activeOp:    null | 'push' | 'pull'  — what's running right now
+//   pushed:      records successfully pushed in the current push batch
+//   pushTotal:   batch size at start of the current push
+//   pulledByNs:  { ns: count }   — records applied during the current pull
+//   lastError:   most recent push/pull error message
+//   lastErrorAt: ISO timestamp of that error
+//   lastSyncedAt:ISO timestamp of the last successful push that drained the queue
+let _progress = {
+  activeOp: null,
+  pushed: 0,
+  pushTotal: 0,
+  pulledByNs: {},
+  lastError: null,
+  lastErrorAt: null,
+  lastSyncedAt: null,
+};
+
 // ── Public API ────────────────────────────────────────────────────────────
 
 /** Returns true if a user is logged in and the engine has been started. */
@@ -332,6 +351,7 @@ export function getStatus() {
     cursors: { ..._loadCursors() },
     namespaces: Array.from(_adapters.keys()),
     excludedProjects: Array.from(syncPrefs.getExcludedProjectSet()),
+    progress: { ..._progress, pulledByNs: { ..._progress.pulledByNs } },
   };
 }
 
@@ -432,22 +452,34 @@ async function _pushOnce() {
   if (!_running || _inFlightPush) return;
   if (_journal.size() === 0) return;
   _inFlightPush = true;
-  emitter.emit('push:start');
+  const batch = _journal.drainBatch();
+  _progress.activeOp = 'push';
+  _progress.pushed = 0;
+  _progress.pushTotal = batch.length;
+  emitter.emit('push:start', { total: batch.length });
+  let hadError = false;
   try {
-    const batch = _journal.drainBatch();
     for (const entry of batch) {
       if (!_running) break;
       try {
         await _pushOne(entry);
         _journal.remove(entry.ns, entry.id, entry.hlc);
+        _progress.pushed++;
       } catch (err) {
         // Permanent (4xx other than 409): drop from journal so we don't
         // wedge the queue. Transient: leave in journal for next pass.
         if (err && err.status && err.status >= 400 && err.status < 500 && err.status !== 409) {
           emitter.emit('push:drop', { entry, error: err.message, status: err.status });
           _journal.remove(entry.ns, entry.id, entry.hlc);
+          _progress.pushed++;
+          _progress.lastError = err.message || ('HTTP ' + err.status);
+          _progress.lastErrorAt = new Date().toISOString();
+          hadError = true;
         } else {
           emitter.emit('push:error', { entry, error: err.message });
+          _progress.lastError = err.message || 'Push failed';
+          _progress.lastErrorAt = new Date().toISOString();
+          hadError = true;
           // Stop the batch on the first transient — backoff handled by the
           // pull loop's interval. The journal entry stays so we retry.
           break;
@@ -457,7 +489,13 @@ async function _pushOnce() {
     await _journal.rewriteFile();
   } finally {
     _inFlightPush = false;
-    emitter.emit('push:end', { pending: _journal.size() });
+    _progress.activeOp = _inFlightPull ? 'pull' : null;
+    if (!hadError && _journal.size() === 0) {
+      _progress.lastSyncedAt = new Date().toISOString();
+      _progress.lastError = null;
+      _progress.lastErrorAt = null;
+    }
+    emitter.emit('push:end', { pending: _journal.size(), pushed: _progress.pushed });
   }
 }
 
@@ -557,15 +595,22 @@ async function _pushOne(entry) {
 async function _pullOnce() {
   if (!_running || _inFlightPull) return;
   _inFlightPull = true;
+  _progress.activeOp = _inFlightPush ? _progress.activeOp : 'pull';
+  _progress.pulledByNs = {};
   emitter.emit('pull:start');
   try {
     for (const ns of _adapters.keys()) {
       if (!_running) break;
       await _pullNamespace(ns);
     }
+  } catch (err) {
+    _progress.lastError = err?.message || 'Pull failed';
+    _progress.lastErrorAt = new Date().toISOString();
+    throw err;
   } finally {
     _inFlightPull = false;
-    emitter.emit('pull:end');
+    if (!_inFlightPush) _progress.activeOp = null;
+    emitter.emit('pull:end', { applied: _progress.pulledByNs });
   }
 }
 
@@ -595,6 +640,7 @@ async function _pullNamespace(ns) {
     const changes = Array.isArray(res?.changes) ? res.changes : [];
     for (const change of changes) {
       await _applyRemote(ns, adapter, change);
+      _progress.pulledByNs[ns] = (_progress.pulledByNs[ns] || 0) + 1;
     }
     cursor = res?.nextCursor || cursor;
     if (cursor) {

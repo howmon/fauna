@@ -122,6 +122,7 @@
     var user = session.user || {};
     var pending = status.pendingPush || 0;
     var byNs = status.pendingByNamespace || {};
+    var progress = status.progress || {};
     var lastCursor = '—';
     try {
       var c = status.cursors || {};
@@ -137,6 +138,50 @@
     var nsRows = (status.namespaces || []).map(function (ns) {
       return _esc(ns) + ': ' + (byNs[ns] || 0);
     }).join('  ·  ') || 'none';
+
+    // Live progress block — only shown while a push or pull is in flight.
+    // While pushing, render a real <progress> bar; while pulling, show a
+    // throbber + per-namespace counts. Last-sync / last-error rows always
+    // show.
+    var progressBlock = '';
+    if (progress.activeOp === 'push' && progress.pushTotal > 0) {
+      var pct = Math.min(100, Math.round((progress.pushed / progress.pushTotal) * 100));
+      progressBlock = [
+        '<div style="padding:8px 0;border-top:1px solid var(--color-border);margin-top:4px">',
+        '  <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">',
+        '    <span style="color:var(--color-primary)">● Pushing</span>',
+        '    <span style="color:var(--color-muted)">' + progress.pushed + ' / ' + progress.pushTotal + '</span>',
+        '  </div>',
+        '  <div style="height:6px;background:var(--color-border);border-radius:3px;overflow:hidden">',
+        '    <div style="height:100%;width:' + pct + '%;background:var(--color-primary);transition:width 200ms"></div>',
+        '  </div>',
+        '</div>'
+      ].join('');
+    } else if (progress.activeOp === 'pull') {
+      var pulledTotal = 0;
+      var pulledRows = Object.keys(progress.pulledByNs || {}).map(function (ns) {
+        pulledTotal += progress.pulledByNs[ns];
+        return _esc(ns) + ' ' + progress.pulledByNs[ns];
+      }).join(' · ') || 'checking…';
+      progressBlock = [
+        '<div style="padding:8px 0;border-top:1px solid var(--color-border);margin-top:4px;display:flex;justify-content:space-between;font-size:12px">',
+        '  <span style="color:var(--color-primary)">● Pulling</span>',
+        '  <span style="color:var(--color-muted)">' + pulledRows + '</span>',
+        '</div>'
+      ].join('');
+    }
+
+    var lastSyncRow = progress.lastSyncedAt
+      ? '<div style="display:flex;justify-content:space-between;padding:4px 0">' +
+        '<span class="muted" style="color:var(--color-muted)">Last sync</span>' +
+        '<span style="color:var(--color-success)">' + _esc(_fmtTime(progress.lastSyncedAt)) + '</span></div>'
+      : '';
+
+    var lastErrorRow = (progress.lastError && !progress.activeOp)
+      ? '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px">' +
+        '<span class="muted" style="color:var(--color-danger)">Last error</span>' +
+        '<span style="color:var(--color-danger);max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + _esc(progress.lastError) + '">' + _esc(progress.lastError) + '</span></div>'
+      : '';
 
     mount.innerHTML = [
       '<div style="max-width:560px">',
@@ -171,6 +216,9 @@
       '      <span class="muted" style="color:var(--color-muted)">Device id</span>',
       '      <span style="font-family:var(--theme-font, monospace);font-size:11px">' + _esc((status.nodeId || '').slice(0, 12)) + '…</span>',
       '    </div>',
+      lastSyncRow,
+      lastErrorRow,
+      progressBlock,
       '  </div>',
       // Per-project section: rendered async after the initial paint so the
       // first frame doesn't block on /api/sync/projects.
@@ -336,6 +384,12 @@
 
   function _handleSyncNow() {
     _setStatusLine('Syncing…', false);
+    // Fast-poll for live progress while the sync is running. The POST below
+    // resolves only when the engine finishes; the polling refreshes the
+    // status card every second so the progress bar moves in real time.
+    // Kick the first poll quickly so we catch `activeOp` before the user
+    // wonders if anything is happening.
+    _scheduleNextPoll(200);
     _api('/api/sync/now', { method: 'POST' }).then(function (r) {
       if (!r.ok) { _setStatusLine((r.body && r.body.error) || 'Sync failed', true); return; }
       _setStatusLine('Synced.', false);
@@ -434,11 +488,14 @@
   window.cloudSyncAdoptToken = _tryAdoptStoreToken;
 
   // ── Background pill refresher ─────────────────────────────────────────
-  // Update the sidebar pill (and the page if visible) every 15 s. Stops
-  // when the document is hidden so it doesn't drain power.
-  function _scheduleNextPoll() {
+  // Update the sidebar pill (and the page if visible) every 15 s when idle,
+  // or every 1 s while a push/pull is actively running so the progress bar
+  // moves in real time. Stops when the document is hidden so it doesn't
+  // drain power.
+  function _scheduleNextPoll(delayOverride) {
     if (_pollTimer) clearTimeout(_pollTimer);
     if (document.hidden) return;
+    var delay = (typeof delayOverride === 'number') ? delayOverride : 15000;
     _pollTimer = setTimeout(function () {
       _api('/api/sync/status').then(function (r) {
         var status = (r && r.body) || {};
@@ -451,10 +508,12 @@
           if (visible && visible.classList.contains('active') && session.loggedIn) {
             _renderSignedIn(session, status);
           }
-          _scheduleNextPoll();
+          // Fast-poll while a sync is in flight; slow-poll when idle.
+          var active = status.progress && status.progress.activeOp;
+          _scheduleNextPoll(active ? 1000 : 15000);
         });
       }).catch(function () { _scheduleNextPoll(); });
-    }, 15000);
+    }, delay);
   }
 
   document.addEventListener('visibilitychange', function () {
