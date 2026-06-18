@@ -203,38 +203,73 @@ async function _saveBootstrapState() {
  *
  * Errors are swallowed per-namespace so one bad adapter never blocks the
  * others; the engine just emits an `error` event for visibility.
+ *
+ * Cooperative: yields to the event loop every YIELD_EVERY enqueues so a
+ * 50k-file project_file backfill doesn't freeze the express server while
+ * the renderer is trying to render the progress bar.
  */
+const _BACKFILL_YIELD_EVERY = 50;
 async function _runBackfillOnce() {
   if (!_running) return;
+  if (_inFlightBackfill) return;
+  _inFlightBackfill = true;
   _loadBootstrapState();
-  for (const [ns, adapter] of _adapters.entries()) {
-    if (_bootstrapState[ns]) continue;
-    if (typeof adapter.listAllIds !== 'function') {
-      // Nothing to backfill, but mark done so we don't probe forever.
-      _bootstrapState[ns] = true;
-      continue;
-    }
-    try {
-      const rows = await adapter.listAllIds();
-      const list = Array.isArray(rows) ? rows : [];
-      let count = 0;
-      for (const row of list) {
-        const id = (row && typeof row === 'object') ? row.id : row;
-        if (!id) continue;
-        const meta = (row && typeof row === 'object' && row.projectId)
-          ? { projectId: row.projectId }
-          : undefined;
-        enqueueChange(ns, id, 'upsert', meta);
-        count++;
+  const _wasOp = _progress.activeOp;
+  _progress.activeOp = 'backfill';
+  _progress.backfillNs = null;
+  _progress.backfillScanned = 0;
+  _progress.backfillEnqueued = 0;
+  emitter.emit('backfill:start', {});
+  try {
+    for (const [ns, adapter] of _adapters.entries()) {
+      if (_bootstrapState[ns]) continue;
+      if (typeof adapter.listAllIds !== 'function') {
+        // Nothing to backfill, but mark done so we don't probe forever.
+        _bootstrapState[ns] = true;
+        continue;
       }
-      _bootstrapState[ns] = true;
-      emitter.emit('bootstrap', { ns, count });
-    } catch (err) {
-      emitter.emit('error', err);
-      // Leave _bootstrapState[ns] unset so the next start retries.
+      _progress.backfillNs = ns;
+      _progress.backfillScanned = 0;
+      _progress.backfillEnqueued = 0;
+      emitter.emit('backfill:ns', { ns });
+      try {
+        const rows = await adapter.listAllIds();
+        const list = Array.isArray(rows) ? rows : [];
+        let count = 0;
+        for (let i = 0; i < list.length; i++) {
+          const row = list[i];
+          const id = (row && typeof row === 'object') ? row.id : row;
+          if (!id) continue;
+          const meta = (row && typeof row === 'object' && row.projectId)
+            ? { projectId: row.projectId }
+            : undefined;
+          enqueueChange(ns, id, 'upsert', meta);
+          count++;
+          _progress.backfillScanned = i + 1;
+          _progress.backfillEnqueued = count;
+          // Yield periodically so HTTP requests + SSE flushes can run.
+          // Without this a 50k-id loop blocks the event loop solid for
+          // several seconds and the app appears hung.
+          if ((i + 1) % _BACKFILL_YIELD_EVERY === 0) {
+            emitter.emit('backfill:progress', { ns, scanned: i + 1, total: list.length });
+            await new Promise(r => setImmediate(r));
+          }
+        }
+        _bootstrapState[ns] = true;
+        emitter.emit('bootstrap', { ns, count });
+      } catch (err) {
+        emitter.emit('error', err);
+        // Leave _bootstrapState[ns] unset so the next start retries.
+      }
     }
+    await _saveBootstrapState();
+  } finally {
+    _progress.backfillNs = null;
+    _progress.activeOp = (_wasOp === 'backfill') ? null : _wasOp;
+    if (_progress.activeOp === 'backfill') _progress.activeOp = null;
+    _inFlightBackfill = false;
+    emitter.emit('backfill:end', {});
   }
-  await _saveBootstrapState();
 }
 
 // ── Journal ────────────────────────────────────────────────────────────────
@@ -417,6 +452,7 @@ let _pullTimer = null;
 let _pushDebounce = null;
 let _inFlightPush = false;
 let _inFlightPull = false;
+let _inFlightBackfill = false;
 
 let _config = {
   pullIntervalMs: DEFAULT_PULL_INTERVAL_MS,
@@ -437,6 +473,13 @@ let _progress = {
   pushed: 0,
   pushTotal: 0,
   pulledByNs: {},
+  // Backfill (manual "Upload all existing data") progress. activeOp flips
+  // to 'backfill' while the engine is walking adapter.listAllIds() so the
+  // renderer can show a determinate bar instead of going dark while the
+  // event loop chews through the file walk.
+  backfillNs: null,        // namespace currently being walked
+  backfillScanned: 0,      // ids enumerated so far in the current namespace
+  backfillEnqueued: 0,     // ids actually enqueued (post-filter)
   lastError: null,
   lastErrorAt: null,
   lastSyncedAt: null,
@@ -549,10 +592,24 @@ export async function start(opts = {}) {
  */
 export async function forceBackfill() {
   if (!_running) throw new Error('sync-engine: not running');
+  // Already running? Don't queue a second pass — surface the in-flight
+  // status so the renderer's progress bar keeps ticking instead of
+  // restarting from zero.
+  if (_inFlightBackfill) return getStatus();
   _bootstrapState = {};
   await _saveBootstrapState();
-  await _runBackfillOnce();
-  _schedulePush();
+  // Run the actual walk in the background so the HTTP response returns
+  // immediately. Without this the renderer's POST blocks for as long as
+  // the file walk takes (10s+ on big monorepos) and the user sees the
+  // whole app freeze instead of a progress bar.
+  (async () => {
+    try {
+      await _runBackfillOnce();
+      _schedulePush();
+    } catch (err) {
+      emitter.emit('error', err);
+    }
+  })();
   return getStatus();
 }
 

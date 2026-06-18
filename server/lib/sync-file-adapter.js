@@ -303,9 +303,18 @@ export function installFileAdapter({ projectManager, onApplied } = {}) {
     setLastSeenVersion(id, v) { _versions.set(id, v); },
 
     // Bootstrap: every existing local file across every project.
+    //
+    // Async + cooperative: every BACKFILL_YIELD_EVERY files we yield back
+    // to the event loop via setImmediate, and we use the async fsp.*
+    // variants. Without this a single multi-thousand-file project would
+    // freeze the express server for seconds while the engine walked the
+    // tree and SHA-1'd every file — that's why "Upload all existing data"
+    // appears to hang the whole app.
     async listAllIds() {
       const out = [];
       const projects = _listProjects();
+      const YIELD_EVERY = 50;
+      let counter = 0;
       for (const p of projects) {
         if (!p || !p.id) continue;
         const root = _resolveRoot(p.id);
@@ -317,13 +326,17 @@ export function installFileAdapter({ projectManager, onApplied } = {}) {
           // start doesn't re-enqueue everything we just bootstrapped.
           try {
             const abs = path.join(root, rel);
-            const stat = fs.statSync(abs);
+            const stat = await fsp.stat(abs);
             if (stat.size > MAX_FILE_BYTES) continue;
-            const buf = fs.readFileSync(abs);
+            const buf = await fsp.readFile(abs);
             const hash = _sha1(buf);
             _localHashes.set(_compositeId(p.id, rel), { hash, size: stat.size, mtime: stat.mtimeMs });
           } catch (_) {}
           out.push({ id: _compositeId(p.id, rel), projectId: p.id });
+          counter++;
+          if (counter % YIELD_EVERY === 0) {
+            await new Promise(r => setImmediate(r));
+          }
         }
       }
       return out;

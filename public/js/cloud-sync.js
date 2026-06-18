@@ -226,7 +226,26 @@
     // throbber + per-namespace counts. Last-sync / last-error rows always
     // show.
     var progressBlock = '';
-    if (progress.activeOp === 'push' && progress.pushTotal > 0) {
+    if (progress.activeOp === 'backfill') {
+      // Backfill is enumeration-driven: we know how many ids have been
+      // scanned in the current namespace but the total isn't known until
+      // the adapter finishes walking. Render an indeterminate bar with
+      // a live counter so the user sees motion instead of "Queueing…"
+      // followed by silence.
+      var ns = progress.backfillNs || '…';
+      progressBlock = [
+        '<div style="padding:8px 0;border-top:1px solid var(--color-border);margin-top:4px">',
+        '  <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">',
+        '    <span style="color:var(--color-primary)">● Queueing existing data (' + _esc(ns) + ')</span>',
+        '    <span style="color:var(--color-muted)">' + (progress.backfillEnqueued || 0) + ' queued</span>',
+        '  </div>',
+        '  <div style="height:6px;background:var(--color-border);border-radius:3px;overflow:hidden;position:relative">',
+        '    <div class="cs-indeterminate" style="position:absolute;height:100%;width:35%;background:var(--color-primary);animation:cs-slide 1.2s ease-in-out infinite"></div>',
+        '  </div>',
+        '  <style>@keyframes cs-slide{0%{left:-35%}100%{left:100%}}</style>',
+        '</div>'
+      ].join('');
+    } else if (progress.activeOp === 'push' && progress.pushTotal > 0) {
       var pct = Math.min(100, Math.round((progress.pushed / progress.pushTotal) * 100));
       progressBlock = [
         '<div style="padding:8px 0;border-top:1px solid var(--color-border);margin-top:4px">',

@@ -47,6 +47,10 @@ syncEngine.events.on('bootstrap', (e) => _broadcastSyncEvent('bootstrap', e));
 syncEngine.events.on('locked',    (e) => _broadcastSyncEvent('locked', e));
 syncEngine.events.on('unlocked',  (e) => _broadcastSyncEvent('unlocked', e));
 syncEngine.events.on('password-changed', (e) => _broadcastSyncEvent('password-changed', e));
+syncEngine.events.on('backfill:start',    (e) => _broadcastSyncEvent('backfill:start', e));
+syncEngine.events.on('backfill:ns',       (e) => _broadcastSyncEvent('backfill:ns', e));
+syncEngine.events.on('backfill:progress', (e) => _broadcastSyncEvent('backfill:progress', e));
+syncEngine.events.on('backfill:end',      (e) => _broadcastSyncEvent('backfill:end', e));
 
 export function registerSyncRoutes(app, deps = {}) {
   const { conversationStore, projectManager } = deps;
