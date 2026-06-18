@@ -73,6 +73,7 @@ import fsp from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
+import zlib from 'zlib';
 import { createRequire } from 'module';
 
 import * as agentstore from './agentstore-client.js';
@@ -181,27 +182,72 @@ function _decryptWith(env, key, aad) {
  * ciphertext to its (namespace, id) so the server can't move it between
  * rows.
  *
+ * Optionally gzips the plaintext before encryption. Set `compress: true`
+ * for large or text-heavy payloads (source files, conversation logs)
+ * where the bandwidth + on-disk savings beat the CPU cost. We only emit
+ * the compressed form if it's actually smaller than the raw plaintext —
+ * otherwise short payloads would grow after compression overhead.
+ *
+ * The compression flag rides on the envelope as `z: 1`. The receiving
+ * client (or this same process pulling its own writes back) detects it
+ * via `decryptEnvelope` and gunzips transparently.
+ *
  * @param {string} plaintext  serialized JSON to encrypt
  * @param {string} aad        e.g. `${ns}:${id}`
- * @returns {{ e2e: 1, n: string, c: string }} envelope
+ * @param {{ compress?: boolean }} [opts]
+ * @returns {{ e2e: 1, n: string, c: string, z?: 1 }} envelope
  */
-export function encryptString(plaintext, aad) {
+export function encryptString(plaintext, aad, opts = {}) {
   if (!_mk) throw new Error('E2E locked: no key available');
   if (typeof plaintext !== 'string') throw new Error('plaintext must be a string');
-  return _encryptWith(Buffer.from(plaintext, 'utf8'), _mk, aad);
+
+  const raw = Buffer.from(plaintext, 'utf8');
+  let body = raw;
+  let compressed = false;
+  // Don't bother trying to compress payloads smaller than this — gzip
+  // headers + dict overhead would make them bigger.
+  if (opts.compress && raw.length >= 256) {
+    try {
+      const gz = zlib.gzipSync(raw, { level: zlib.constants.Z_DEFAULT_COMPRESSION });
+      // Only adopt if it actually saved bytes. JSON of an already-
+      // compressed image, for instance, would balloon under gzip.
+      if (gz.length < raw.length) {
+        body = gz;
+        compressed = true;
+      }
+    } catch (_) {
+      // Fall through to uncompressed — encryption is what matters.
+    }
+  }
+
+  const env = _encryptWith(body, _mk, aad);
+  if (compressed) env.z = 1;
+  return env;
 }
 
 /**
  * Decrypts an envelope under the current Master Key. Throws on auth
  * failure (wrong key, tampered data, AAD mismatch). Returns the original
  * UTF-8 plaintext.
+ *
+ * Auto-detects gzipped payloads via `env.z === 1` and decompresses
+ * transparently, so callers don't need to know how the writer chose to
+ * encode the body.
  */
 export function decryptEnvelope(env, aad) {
   if (!_mk) throw new Error('E2E locked: no key available');
-  return _decryptWith(env, _mk, aad).toString('utf8');
+  const plainBuf = _decryptWith(env, _mk, aad);
+  if (env && env.z === 1) {
+    try {
+      return zlib.gunzipSync(plainBuf).toString('utf8');
+    } catch (e) {
+      throw new Error('gunzip failed: ' + (e?.message || e));
+    }
+  }
+  return plainBuf.toString('utf8');
 }
 
-/** Duck-types the envelope shape: { e2e: 1, n: string, c: string }. */
+/** Duck-types the envelope shape: { e2e: 1, n: string, c: string, z?: 1 }. */
 export function isEnvelope(obj) {
   return !!obj
     && typeof obj === 'object'

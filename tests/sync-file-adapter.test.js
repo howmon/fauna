@@ -198,6 +198,52 @@ describe('file adapter load/save/delete', () => {
     await a.delete('proj_a:gone.txt');
     expect(fs.existsSync(path.join(rootA, 'gone.txt'))).toBe(false);
   });
+
+  it('load() gzips compressible payloads and tags encoding gzip+base64', async () => {
+    projA.rootPath = rootA;
+    // Repetitive text (~10 KB) — easily gzippable, so the heuristic
+    // should win and switch to gzip+base64.
+    const body = 'function helloWorld() { return "hello world"; }\n'.repeat(220);
+    await fsp.writeFile(path.join(rootA, 'big.js'), body);
+    const { engine } = await boot({ projects: [projA] });
+    const a = engine.getAdapter('project_file');
+    const payload = await a.load('proj_a:big.js');
+    expect(payload.encoding).toBe('gzip+base64');
+    // Inner content base64 must be smaller than the raw base64 form,
+    // otherwise the heuristic shouldn't have adopted compression.
+    const rawB64Len = Buffer.from(body, 'utf8').toString('base64').length;
+    expect(payload.content.length).toBeLessThan(rawB64Len);
+    // Hash is over the *raw* file bytes so the receiver can verify.
+    expect(payload.hash).toBe(_sha1(Buffer.from(body, 'utf8')));
+  });
+
+  it('save() round-trips gzip+base64 back to the original bytes', async () => {
+    projA.rootPath = rootA;
+    const body = 'console.log("' + 'x'.repeat(500) + '");\n'.repeat(40);
+    await fsp.writeFile(path.join(rootA, 'src.js'), body);
+    const { engine } = await boot({ projects: [projA] });
+    const a = engine.getAdapter('project_file');
+
+    // Snapshot the compressed payload, then wipe the file and re-apply
+    // it through save() — proves the gzip round-trip is byte-exact.
+    const payload = await a.load('proj_a:src.js');
+    expect(payload.encoding).toBe('gzip+base64');
+    await fsp.unlink(path.join(rootA, 'src.js'));
+
+    await a.save('proj_a:src.js', payload);
+    const onDisk = await fsp.readFile(path.join(rootA, 'src.js'), 'utf8');
+    expect(onDisk).toBe(body);
+  });
+
+  it('load() leaves tiny payloads as plain base64 (no inflation)', async () => {
+    projA.rootPath = rootA;
+    await fsp.writeFile(path.join(rootA, 'short.txt'), 'hi');
+    const { engine } = await boot({ projects: [projA] });
+    const a = engine.getAdapter('project_file');
+    const payload = await a.load('proj_a:short.txt');
+    // Below the 256-byte threshold → gzip not even attempted.
+    expect(payload.encoding).toBe('base64');
+  });
 });
 
 describe('listAllIds bootstrap', () => {

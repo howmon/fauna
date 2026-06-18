@@ -895,8 +895,17 @@ async function _pushOne(entry) {
   const plainBody = JSON.stringify(serialized);
   // E2E: encrypt the payload before it leaves this machine. AAD binds
   // the ciphertext to its (ns, id) so the server can't shuffle blobs.
+  // Compress source-file payloads (text, very gzippable) before
+  // encryption — typical 3–10× shrink, which matters when a backfill is
+  // pushing thousands of files. encryptString only emits the compressed
+  // form when it actually saves bytes, so small JSON payloads are
+  // unaffected.
   const rawBody = _e2eRequired()
-    ? JSON.stringify(syncCrypto.encryptString(plainBody, `${entry.ns}:${entry.id}`))
+    ? JSON.stringify(syncCrypto.encryptString(
+        plainBody,
+        `${entry.ns}:${entry.id}`,
+        { compress: true }
+      ))
     : plainBody;
   // Get last-known server version, if we tracked one. Stored on the
   // adapter as `adapter._lastVersion` map for simplicity — adapters that
@@ -965,7 +974,11 @@ async function _pushOne(entry) {
 
       const plainRetry = JSON.stringify(adapter.serialize ? adapter.serialize(merged) : merged);
       const rawRetry = _e2eRequired()
-        ? JSON.stringify(syncCrypto.encryptString(plainRetry, `${entry.ns}:${entry.id}`))
+        ? JSON.stringify(syncCrypto.encryptString(
+            plainRetry,
+            `${entry.ns}:${entry.id}`,
+            { compress: true }
+          ))
         : plainRetry;
       const retryRes = await agentstore.requestRaw('PUT', objPath, rawRetry, {
         headers: { 'X-Client-Version': String(entry.hlc) },

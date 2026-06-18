@@ -96,6 +96,52 @@ describe('isEnvelope', () => {
   });
 });
 
+describe('gzip compression', () => {
+  beforeEach(() => {
+    sc._setKeyForTests(crypto.randomBytes(32));
+  });
+
+  it('round-trips compressed payload back to identical plaintext', () => {
+    // Realistic JSON for a source-file row — text repeats a lot so gzip
+    // shrinks it dramatically.
+    const big = JSON.stringify({
+      path: 'src/components/Widget.tsx',
+      content: 'import React from "react";\n'.repeat(200) + 'export default () => null;\n',
+    });
+    const env = sc.encryptString(big, 'project_file:abc', { compress: true });
+    expect(env.z).toBe(1);
+    const out = sc.decryptEnvelope(env, 'project_file:abc');
+    expect(out).toBe(big);
+  });
+
+  it('skips compression for small payloads where gzip would inflate them', () => {
+    const tiny = '{"x":1}';
+    const env = sc.encryptString(tiny, 'ns:id', { compress: true });
+    // Either no z flag at all (too small to bother) or z absent because
+    // compression didn't win. Either way the decode must round-trip.
+    expect(env.z).toBeUndefined();
+    expect(sc.decryptEnvelope(env, 'ns:id')).toBe(tiny);
+  });
+
+  it('decrypts legacy uncompressed envelopes (no z flag)', () => {
+    // Encryptor without compression option; reader doesn't care.
+    const env = sc.encryptString('hello plaintext world', 'ns:id');
+    expect(env.z).toBeUndefined();
+    expect(sc.decryptEnvelope(env, 'ns:id')).toBe('hello plaintext world');
+  });
+
+  it('compressed ciphertext is materially smaller than uncompressed for repetitive text', () => {
+    const repetitive = 'function foo() { return 42; }\n'.repeat(500);
+    const plain = sc.encryptString(repetitive, 'ns:id');
+    const compressed = sc.encryptString(repetitive, 'ns:id', { compress: true });
+    expect(compressed.z).toBe(1);
+    // Ciphertext is base64 of (gzip(text) + tag) vs base64 of (text + tag).
+    // For repetitive text, the gzip win is enormous — expect at least
+    // 5x smaller, which is conservative for this input.
+    expect(compressed.c.length * 5).toBeLessThan(plain.c.length);
+  });
+});
+
 describe('locked state', () => {
   it('encrypt throws when no key is set', () => {
     expect(sc.hasKey()).toBe(false);

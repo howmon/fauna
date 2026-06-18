@@ -34,6 +34,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import * as syncEngine from './sync-engine.js';
 
 // Directories whose contents are always skipped. Mirrors the list in
@@ -218,14 +219,41 @@ export function installFileAdapter({ projectManager, onApplied } = {}) {
         if (stat.size > MAX_FILE_BYTES) return null;
         const buf = await fsp.readFile(abs);
         const hash = _sha1(buf);
+        // Compress the *raw bytes* before base64-encoding into the JSON
+        // payload. Without this, source files pay the base64 inflation
+        // tax (×1.33) BEFORE the envelope-level gzip ever sees them —
+        // and gzip is poor at compressing base64 text, so the envelope
+        // ends up only marginally smaller than the inflated payload.
+        // Compressing here first means the inner content shrinks 3–10×
+        // for typical source code, and the outer envelope gzip becomes
+        // a near-no-op because the bytes are already compressed.
+        //
+        // We only adopt the compressed form if it actually saves bytes
+        // — pre-compressed formats (images, archives, PDFs, fonts) will
+        // fail the check and ship as plain base64. Same belt-and-braces
+        // discipline as encryptString({ compress: true }).
+        let encoding = 'base64';
+        let bodyBuf = buf;
+        if (buf.length >= 256) {
+          try {
+            const gz = zlib.gzipSync(buf, { level: zlib.constants.Z_DEFAULT_COMPRESSION });
+            if (gz.length < buf.length) {
+              bodyBuf = gz;
+              encoding = 'gzip+base64';
+            }
+          } catch (_) { /* fall through to raw base64 */ }
+        }
         return {
           projectId: split.projectId,
           relPath: split.relPath,
-          encoding: 'base64',
-          content: buf.toString('base64'),
+          encoding,
+          content: bodyBuf.toString('base64'),
           size: stat.size,
           mtime: stat.mtimeMs,
           mode: stat.mode,
+          // hash is always over the RAW file bytes so the receiver can
+          // verify integrity post-decompress without re-deriving the
+          // compression strategy.
           hash,
         };
       } catch (_) { return null; }
@@ -246,10 +274,25 @@ export function installFileAdapter({ projectManager, onApplied } = {}) {
       // passed a legacy `projectId:relPath` id or the new b64 form.
       const cacheKey = _compositeId(split.projectId, relPath);
 
-      // Decode payload to bytes once.
+      // Decode payload to bytes once. Supported encodings:
+      //   'utf8'         — legacy plain-text payload (kept for tests).
+      //   'base64'       — raw file bytes b64-encoded (legacy default).
+      //   'gzip+base64'  — raw file bytes gzipped then b64-encoded.
+      //                    Receiver gunzips after base64-decode so the
+      //                    on-disk bytes are byte-identical to the
+      //                    sender's source file.
       const content = (typeof payload.content === 'string') ? payload.content : '';
       const enc = payload.encoding === 'utf8' ? 'utf8' : 'base64';
-      const buf = Buffer.from(content, enc);
+      let buf = Buffer.from(content, enc);
+      if (payload.encoding === 'gzip+base64') {
+        try {
+          buf = zlib.gunzipSync(buf);
+        } catch (e) {
+          // Corrupt gzip body — refuse to write garbage to the user's
+          // working tree. The push will retry on the next scan.
+          return;
+        }
+      }
       const hash = (typeof payload.hash === 'string' && payload.hash) || _sha1(buf);
 
       // Skip the write if the on-disk copy already matches — prevents
