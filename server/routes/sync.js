@@ -11,6 +11,7 @@
 //   POST /api/sync/start                    → start engine + return status
 //   POST /api/sync/stop                     → stop engine + return status
 //   POST /api/sync/now                      → force immediate pull+push
+//   POST /api/sync/backfill                 → re-enqueue all existing local records
 //   GET  /api/sync/prefs                    → { excludedProjects: [...] }
 //   POST /api/sync/prefs    { excludedProjects } → { ok, prefs }
 //   GET  /api/sync/projects                 → [{ id, name, excluded, pending }]
@@ -125,6 +126,19 @@ export function registerSyncRoutes(app, deps = {}) {
   app.post('/api/sync/now', async (_req, res) => {
     try {
       const status = await syncEngine.syncNow();
+      res.json(status);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Force a full re-backfill of every namespace. Resets the per-namespace
+  // bootstrap markers and re-enqueues every existing local record. Used
+  // when the user wants to seed a fresh device or replay all data after a
+  // server-side wipe.
+  app.post('/api/sync/backfill', async (_req, res) => {
+    try {
+      const status = await syncEngine.forceBackfill();
       res.json(status);
     } catch (e) {
       res.status(500).json({ error: e.message });

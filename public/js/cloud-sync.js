@@ -234,6 +234,11 @@
       '      <i class="ti ti-logout"></i> Sign out',
       '    </button>',
       '  </div>',
+      '  <div style="margin-top:10px">',
+      '    <button class="settings-row-btn" id="cs-backfill-btn" title="Re-enqueue every existing local conversation, project, and checkpoint. Use this on a fresh device or after a server-side reset.">',
+      '      <i class="ti ti-cloud-upload"></i> Upload all existing data',
+      '    </button>',
+      '  </div>',
       '  <div id="cs-status-line" class="muted" style="margin-top:10px;min-height:1.2em"></div>',
       '</div>'
     ].join('\n');
@@ -243,6 +248,7 @@
     bind('cs-pause-btn',   _handlePause);
     bind('cs-resume-btn',  _handleResume);
     bind('cs-logout-btn',  _handleLogout);
+    bind('cs-backfill-btn', _handleBackfill);
     _renderProjects();
   }
 
@@ -406,6 +412,19 @@
       if (!r.ok) _setStatusLine((r.body && r.body.error) || 'Could not start sync', true);
       window.renderCloudSyncPage();
     });
+  }
+
+  // Re-enqueue every existing local record. Useful on a fresh device or
+  // after a server-side wipe — without this the engine only pushes future
+  // mutations and pre-existing data sits untouched on this machine.
+  function _handleBackfill() {
+    _setStatusLine('Queueing existing data…', false);
+    _scheduleNextPoll(200);
+    _api('/api/sync/backfill', { method: 'POST' }).then(function (r) {
+      if (!r.ok) { _setStatusLine((r.body && r.body.error) || 'Backfill failed', true); return; }
+      _setStatusLine('Backfill queued. Watching progress…', false);
+      window.renderCloudSyncPage();
+    }).catch(function (e) { _setStatusLine(e.message || 'Network error', true); });
   }
 
   // ── Adopt an existing Agent Store token ──────────────────────────────

@@ -44,8 +44,7 @@ function _syncDir() {
   return process.env.FAUNA_SYNC_DIR ||
     path.join(os.homedir(), '.config', 'fauna', 'sync');
 }
-function _hlcFile() { return path.join(_syncDir(), 'hlc.json'); }
-function _journalFile() { return path.join(_syncDir(), 'journal.jsonl'); }
+function _hlcFile() { return path.join(_syncDir(), 'hlc.json'); }function _journalFile() { return path.join(_syncDir(), 'journal.jsonl'); }
 function _cursorFile() { return path.join(_syncDir(), 'cursors.json'); }
 function _nodeIdFile() { return path.join(_syncDir(), 'node-id.txt'); }
 
@@ -158,6 +157,75 @@ async function _saveCursors() {
   const tmp = _cursorFile() + '.tmp';
   await fsp.writeFile(tmp, JSON.stringify(_cursors));
   await fsp.rename(tmp, _cursorFile());
+}
+
+// ── Bootstrap state (per-namespace first-run backfill marker) ─────────────
+//
+// Stored at `${_syncDir()}/bootstrap.json` as `{ <ns>: true }`. When a
+// namespace flag is missing we walk the adapter's `listAllIds()` (if it
+// has one) and enqueue an `upsert` for every existing local record so the
+// device's pre-sync data lands in the cloud. Without this, signing a
+// fresh device into an existing user account does nothing until you touch
+// each record manually.
+let _bootstrapState = null;
+function _bootstrapFile() { return path.join(_syncDir(), 'bootstrap.json'); }
+function _loadBootstrapState() {
+  if (_bootstrapState) return _bootstrapState;
+  try {
+    _bootstrapState = JSON.parse(fs.readFileSync(_bootstrapFile(), 'utf8')) || {};
+  } catch (_) {
+    _bootstrapState = {};
+  }
+  return _bootstrapState;
+}
+async function _saveBootstrapState() {
+  try {
+    await fsp.mkdir(_syncDir(), { recursive: true });
+    const tmp = _bootstrapFile() + '.tmp';
+    await fsp.writeFile(tmp, JSON.stringify(_bootstrapState || {}));
+    await fsp.rename(tmp, _bootstrapFile());
+  } catch (_) { /* non-fatal */ }
+}
+
+/**
+ * Walk every registered adapter and, for namespaces not yet bootstrapped,
+ * enqueue an upsert for each existing local id. Marks each namespace
+ * complete and persists the marker so we never re-walk it.
+ *
+ * Errors are swallowed per-namespace so one bad adapter never blocks the
+ * others; the engine just emits an `error` event for visibility.
+ */
+async function _runBackfillOnce() {
+  if (!_running) return;
+  _loadBootstrapState();
+  for (const [ns, adapter] of _adapters.entries()) {
+    if (_bootstrapState[ns]) continue;
+    if (typeof adapter.listAllIds !== 'function') {
+      // Nothing to backfill, but mark done so we don't probe forever.
+      _bootstrapState[ns] = true;
+      continue;
+    }
+    try {
+      const rows = await adapter.listAllIds();
+      const list = Array.isArray(rows) ? rows : [];
+      let count = 0;
+      for (const row of list) {
+        const id = (row && typeof row === 'object') ? row.id : row;
+        if (!id) continue;
+        const meta = (row && typeof row === 'object' && row.projectId)
+          ? { projectId: row.projectId }
+          : undefined;
+        enqueueChange(ns, id, 'upsert', meta);
+        count++;
+      }
+      _bootstrapState[ns] = true;
+      emitter.emit('bootstrap', { ns, count });
+    } catch (err) {
+      emitter.emit('error', err);
+      // Leave _bootstrapState[ns] unset so the next start retries.
+    }
+  }
+  await _saveBootstrapState();
 }
 
 // ── Journal ────────────────────────────────────────────────────────────────
@@ -402,9 +470,30 @@ export async function start(opts = {}) {
   // Kick a pull immediately; subsequent pulls are scheduled by the loop.
   _scheduledPullLoop().catch(err => emitter.emit('error', err));
 
+  // First-run backfill: enqueue every existing local record per adapter
+  // so a freshly-signed-in device pushes its pre-existing data instead of
+  // waiting for the user to touch each one. Idempotent — a per-namespace
+  // marker prevents repeat backfills on every restart.
+  _runBackfillOnce().catch(err => emitter.emit('error', err));
+
   // If we crashed mid-push last run there are still entries — drain them.
   if (_journal.size() > 0) _schedulePush();
 
+  return getStatus();
+}
+
+/**
+ * Force a full re-backfill of every namespace. Used by the
+ * `POST /api/sync/backfill` route when the user wants to replay all
+ * existing local records (e.g. after a server-side wipe or to seed a
+ * second device).
+ */
+export async function forceBackfill() {
+  if (!_running) throw new Error('sync-engine: not running');
+  _bootstrapState = {};
+  await _saveBootstrapState();
+  await _runBackfillOnce();
+  _schedulePush();
   return getStatus();
 }
 

@@ -121,6 +121,16 @@ export function installConversationAdapter({ store, onApplied }) {
     deserialize(payload) { return payload; },
     getLastSeenVersion(id) { return versions.get(id); },
     setLastSeenVersion(id, v) { versions.set(id, v); },
+    // Bootstrap: list every existing local conversation so the engine can
+    // backfill them on first sync. Each entry carries the projectId so
+    // the per-project sync filter applies during the backfill too.
+    async listAllIds() {
+      try {
+        const all = await store.list({ full: true });
+        const rows = Array.isArray(all) ? all : (all && Array.isArray(all.items) ? all.items : []);
+        return rows.map(c => ({ id: c.id, projectId: c.projectId || null })).filter(x => x.id);
+      } catch (_) { return []; }
+    },
   });
 }
 
@@ -177,6 +187,20 @@ export function installProjectAdapter({ projectManager, onApplied }) {
     },
     getLastSeenVersion(id) { return versions.get(id); },
     setLastSeenVersion(id, v) { versions.set(id, v); },
+    // Bootstrap: list every existing local project so the engine can
+    // backfill them on first sync.
+    async listAllIds() {
+      try {
+        const fn = (typeof projectManager.listProjects === 'function')
+          ? projectManager.listProjects.bind(projectManager)
+          : (typeof projectManager.getAllProjects === 'function')
+            ? projectManager.getAllProjects.bind(projectManager)
+            : null;
+        if (!fn) return [];
+        const all = fn() || [];
+        return all.map(p => ({ id: p.id, projectId: p.id })).filter(x => x.id);
+      } catch (_) { return []; }
+    },
   });
 }
 
