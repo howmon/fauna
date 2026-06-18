@@ -358,7 +358,26 @@ async function _rawRequest(method, pathname, body, opts = {}) {
         e.body = parsed;
         e.method = method;
         e.pathname = pathname;
-        // Do not retry 4xx — they're deterministic.
+        // 429 (rate-limited) is transient even though it's 4xx. Honor
+        // Retry-After (seconds) by sleeping that long inside the retry
+        // budget; if we exhaust retries, surface the wait hint to the
+        // caller via e.retryAfterMs so the sync engine can back off
+        // instead of dropping the entry.
+        if (res.status === 429) {
+          const retryAfterRaw = res.headers.get('retry-after');
+          const retryAfterSec = retryAfterRaw ? Math.max(0, parseInt(retryAfterRaw, 10) || 0) : 0;
+          e.retryAfterMs = retryAfterSec * 1000;
+          if (attempt < retries) {
+            // Sleep then retry. Cap so a hostile header can't stall us.
+            const waitMs = Math.min(e.retryAfterMs || 1000, 10_000);
+            await new Promise(r => setTimeout(r, waitMs));
+            attempt++;
+            lastErr = e;
+            continue;
+          }
+          throw e;
+        }
+        // Other 4xx are deterministic — never retry.
         if (res.status >= 400 && res.status < 500) throw e;
         lastErr = e;
       } else {

@@ -464,6 +464,10 @@ let _pushDebounce = null;
 let _inFlightPush = false;
 let _inFlightPull = false;
 let _inFlightBackfill = false;
+// Adaptive back-off (ms) applied to the next push after a 429. Cleared
+// on a successful drain so a brief throttling burst doesn't permanently
+// slow the loop.
+let _pushBackoffMs = 0;
 
 let _config = {
   pullIntervalMs: DEFAULT_PULL_INTERVAL_MS,
@@ -794,9 +798,16 @@ async function _pushOnce() {
         _journal.remove(entry.ns, entry.id, entry.hlc);
         _progress.pushed++;
       } catch (err) {
-        // Permanent (4xx other than 409): drop from journal so we don't
-        // wedge the queue. Transient: leave in journal for next pass.
-        if (err && err.status && err.status >= 400 && err.status < 500 && err.status !== 409) {
+        // Classify the failure:
+        //   * 429 Too Many Requests → transient, keep entry, back off.
+        //   * Other 4xx (not 409)   → permanent / malformed → drop so we
+        //                             don't wedge the queue.
+        //   * Anything else (5xx,
+        //     network, timeout, …)  → transient, keep entry, stop batch.
+        const isRateLimit = err && err.status === 429;
+        const isPermanent4xx = err && err.status && err.status >= 400 && err.status < 500
+                                 && err.status !== 409 && err.status !== 429;
+        if (isPermanent4xx) {
           emitter.emit('push:drop', { entry, error: err.message, status: err.status });
           _journal.remove(entry.ns, entry.id, entry.hlc);
           _progress.pushed++;
@@ -808,8 +819,14 @@ async function _pushOnce() {
           _progress.lastError = err.message || 'Push failed';
           _progress.lastErrorAt = new Date().toISOString();
           hadError = true;
-          // Stop the batch on the first transient — backoff handled by the
-          // pull loop's interval. The journal entry stays so we retry.
+          // Record a back-off hint for the post-batch re-arm. 429 brings
+          // its own Retry-After; for other transients we'll use the
+          // pull-interval default.
+          if (isRateLimit && err.retryAfterMs > 0) {
+            _pushBackoffMs = Math.min(err.retryAfterMs, 60_000);
+          }
+          // Stop the batch on the first transient — the journal entry
+          // stays so we retry next pass.
           break;
         }
       }
@@ -833,10 +850,21 @@ async function _pushOnce() {
     // debounce) so back-to-back batches drain a large backfill in
     // minutes instead of hours. We skip on transient error so a flaky
     // network doesn't hot-loop — the next external trigger picks it up.
+    //
+    // Exception: a 429 sets `_pushBackoffMs` from Retry-After. We honor
+    // it by re-arming after that delay so the user sees progress resume
+    // automatically instead of needing to click Sync now.
     if (!hadError && _running && _journal.size() > 0) {
+      _pushBackoffMs = 0;
       setImmediate(() => {
         _pushOnce().catch(err => emitter.emit('error', err));
       });
+    } else if (hadError && _pushBackoffMs > 0 && _running && _journal.size() > 0) {
+      const delay = _pushBackoffMs;
+      _pushBackoffMs = 0;
+      setTimeout(() => {
+        _pushOnce().catch(err => emitter.emit('error', err));
+      }, delay);
     }
   }
 }
