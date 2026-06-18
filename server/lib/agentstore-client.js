@@ -348,7 +348,8 @@ async function _rawRequest(method, pathname, body, opts = {}) {
         try { parsed = JSON.parse(text); } catch (_) { parsed = text; }
       }
       if (!res.ok) {
-        const e = new Error(_extractError(parsed) || `HTTP ${res.status} ${res.statusText}`);
+        const e = new Error(_extractError(parsed, res.status, res.statusText)
+          || `HTTP ${res.status} ${res.statusText}`);
         e.status = res.status;
         e.body = parsed;
         // Do not retry 4xx — they're deterministic.
@@ -372,9 +373,26 @@ async function _rawRequest(method, pathname, body, opts = {}) {
   throw lastErr || new Error('Request failed');
 }
 
-function _extractError(payload) {
+function _extractError(payload, status, statusText) {
   if (!payload) return null;
-  if (typeof payload === 'string') return payload.slice(0, 500);
+  if (typeof payload === 'string') {
+    // The backend sometimes responds with an HTML error page instead of
+    // JSON (Apache/nginx default 502/503, Laravel debug whoops, captive
+    // portal, etc). Dumping the raw "<!DOCTYPE html ..." into the sync
+    // status panel is useless and scary — surface a sanitized summary.
+    const trimmed = payload.trim();
+    const looksLikeHtml = /^(<!doctype|<html|<\?xml)/i.test(trimmed)
+      || /<\/(html|body|head)>/i.test(trimmed);
+    if (looksLikeHtml) {
+      // Try to pull a <title> for a hint at what the upstream returned
+      // (e.g. "502 Bad Gateway", "Service Unavailable").
+      const titleMatch = trimmed.match(/<title[^>]*>([^<]{1,200})<\/title>/i);
+      const title = titleMatch ? titleMatch[1].trim().replace(/\s+/g, ' ') : null;
+      const code = status ? `HTTP ${status}${statusText ? ' ' + statusText : ''}` : 'Server error';
+      return title ? `${code} — ${title} (upstream returned HTML, not JSON)` : `${code} (upstream returned HTML, not JSON)`;
+    }
+    return trimmed.slice(0, 500);
+  }
   if (typeof payload === 'object') {
     return payload.error || payload.message ||
            (payload.errors ? JSON.stringify(payload.errors).slice(0, 500) : null);
