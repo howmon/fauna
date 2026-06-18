@@ -764,9 +764,26 @@ async function _pushOnce() {
   }
   _inFlightPush = true;
   const batch = _journal.drainBatch();
+  // "Drain session" accounting: when a push starts with no prior session
+  // in flight (lastSyncedAt freshly cleared or pushTotal back to 0), we
+  // open a new session whose total reflects the entire journal — not
+  // just this 50-record slice. As more entries are enqueued mid-drain
+  // (e.g. backfill is still walking), pushTotal ratchets up. This lets
+  // the overall progress bar show smooth motion through tens of
+  // thousands of pending items instead of resetting to 0/50 every batch.
+  const remainingAfterBatch = Math.max(0, _journal.size() - batch.length);
+  if (_progress.pushTotal === 0 || _progress.pushed >= _progress.pushTotal) {
+    // Fresh session
+    _progress.pushed = 0;
+    _progress.pushTotal = batch.length + remainingAfterBatch;
+  } else {
+    // Continuing session — ratchet up if backfill added more work.
+    _progress.pushTotal = Math.max(
+      _progress.pushTotal,
+      _progress.pushed + batch.length + remainingAfterBatch
+    );
+  }
   _progress.activeOp = 'push';
-  _progress.pushed = 0;
-  _progress.pushTotal = batch.length;
   emitter.emit('push:start', { total: batch.length });
   let hadError = false;
   try {
@@ -805,8 +822,22 @@ async function _pushOnce() {
       _progress.lastSyncedAt = new Date().toISOString();
       _progress.lastError = null;
       _progress.lastErrorAt = null;
+      // Close the drain session so the next push starts a fresh bar.
+      _progress.pushed = 0;
+      _progress.pushTotal = 0;
     }
     emitter.emit('push:end', { pending: _journal.size(), pushed: _progress.pushed });
+    // Keep draining: drainBatch() returns at most MAX_PUSH_BATCH records,
+    // so a backlog of 16k items would otherwise stall after a single
+    // 50-record burst. Re-arm immediately (setImmediate, not the 750ms
+    // debounce) so back-to-back batches drain a large backfill in
+    // minutes instead of hours. We skip on transient error so a flaky
+    // network doesn't hot-loop — the next external trigger picks it up.
+    if (!hadError && _running && _journal.size() > 0) {
+      setImmediate(() => {
+        _pushOnce().catch(err => emitter.emit('error', err));
+      });
+    }
   }
 }
 
