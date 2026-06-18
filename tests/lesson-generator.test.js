@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateLessonDSL, validateLesson, _internals } from '../server/lesson/generator.js';
+import { generateLessonDSL, validateLesson, _internals, _buildRepairHints } from '../server/lesson/generator.js';
 
 // Minimal mock of the OpenAI-style client generateLessonDSL expects. Each call
 // shifts the next canned completion off the queue and records the messages it
@@ -189,5 +189,70 @@ describe('deterministic lesson fallback', () => {
     const text = JSON.stringify(dsl).toLowerCase();
     expect(text).not.toContain('deliver the lesson as written notes');
     expect(text).not.toContain('do not retry fauna_lesson_create');
+  });
+});
+
+describe('_buildRepairHints', () => {
+  it('returns empty for an empty error list', () => {
+    expect(_buildRepairHints([])).toEqual([]);
+    expect(_buildRepairHints(undefined)).toEqual([]);
+  });
+
+  it('emits a slot-conflict hint', () => {
+    const hints = _buildRepairHints([
+      'scene[0]: props "a" and "b" both use slot "title" — give one a different slot',
+    ]);
+    expect(hints.join('\n')).toMatch(/competing for the same slot/i);
+  });
+
+  it('emits an overlap hint referencing group / bullets / relTo', () => {
+    const hints = _buildRepairHints([
+      'scene[1]: props "a" and "b" overlap (~78% of smaller bbox)',
+    ]);
+    const joined = hints.join('\n');
+    expect(joined).toMatch(/bullets/);
+    expect(joined).toMatch(/group/);
+    expect(joined).toMatch(/relTo/);
+  });
+
+  it('emits an off-canvas hint with the auto-place shortcut', () => {
+    const hints = _buildRepairHints([
+      'scene[2]: prop "x" renders outside canvas (50,800,200x100)',
+    ]);
+    expect(hints.join('\n')).toMatch(/auto-place/);
+  });
+
+  it('emits hints for invalid group / bullets shapes', () => {
+    const hints = _buildRepairHints([
+      'prop "g" kind "group" requires non-empty children[]',
+      'prop "p" kind "bullets" requires non-empty items[] (array of strings)',
+    ]);
+    expect(hints.some(h => /add children/.test(h))).toBe(true);
+    expect(hints.some(h => /add items/.test(h))).toBe(true);
+  });
+
+  it('emits a relTo hint for unknown anchor', () => {
+    const hints = _buildRepairHints([
+      'prop "caption".relTo references unknown prop "ghost"',
+    ]);
+    expect(hints.join('\n')).toMatch(/non-existent prop id/i);
+  });
+
+  it('emits an align hint with valid values listed', () => {
+    const hints = _buildRepairHints([
+      'prop "p".align "diagonal" not in [below, ...]',
+    ]);
+    expect(hints.join('\n')).toMatch(/belowCenter/);
+    expect(hints.join('\n')).toMatch(/rightOf/);
+  });
+
+  it('de-duplicates hints across multiple identical-class errors', () => {
+    const hints = _buildRepairHints([
+      'scene[0]: props "a" and "b" overlap (~60% of smaller bbox)',
+      'scene[0]: props "c" and "d" overlap (~80% of smaller bbox)',
+      'scene[1]: props "e" and "f" overlap (~70% of smaller bbox)',
+    ]);
+    // All three overlap errors collapse to one hint string.
+    expect(hints.filter(h => /overlap/i.test(h)).length).toBe(1);
   });
 });

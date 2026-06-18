@@ -29,6 +29,7 @@ import { FFMPEG_PATH } from '../video/ffmpeg-path.js';
 import { splitIntoCues } from '../video/narration.js';
 import { extractSourceText } from './source-extract.js';
 import { withTimeout } from '../lib/async-utils.js';
+import { resolveLayouts, VALID_ALIGNS } from './layout.js';
 
 const LESSONS_ROOT = path.join(os.homedir(), '.fauna', 'lessons');
 
@@ -85,7 +86,16 @@ export const LESSON_KINDS = {
   circuit: { props: ['doc'],                                           notes: 'Circuit schematic. doc is the same DSL accepted by fauna_render_circuit.' },
   // Composite — high-level so the LLM doesn't have to place every node by hand.
   flow:    { props: ['nodes', 'direction', 'shape', 'color', 'labelPos', 'showArrows'], notes: 'Sequence / pipeline / lifecycle diagram. nodes: [{label, color?, fill?}]. direction: "horizontal"(default)|"vertical". shape: "circle"(default)|"rect". labelPos: "below"(default)|"inside"|"above". showArrows: true(default) — draws arrows between consecutive nodes. The runtime auto-spaces nodes evenly across the available canvas width/height starting from the prop\'s (x,y) — USE THIS for any "step 1 → step 2 → step 3" / "phase 1 → phase 2" / "process flow" / "lifecycle" diagram instead of placing individual shape+text+arrow props.' },
+  // Layout container — flex-style row/column. The resolver expands children into concrete props with concrete (x,y) before the widget ever sees them, so collisions are impossible by construction.
+  group:   { props: ['direction', 'gap', 'align', 'padding', 'children', 'slot'],   notes: 'Layout container (flex). direction: "row"(default)|"column". gap (px between children, default 24). align (cross-axis: "start"|"center"(default)|"end"). padding (px, number or {x,y}). children: array of inline prop defs ({kind, ...kindFields}) — NO id needed. The group is placed via `slot` OR via an action\'s (x,y); children are auto-arranged with NO overlap. USE THIS for any row/column of items (pills, bullets-as-cards, comparison columns, legend swatches, KPI tiles). Never hand-place 3 shapes side by side again.' },
+  // Bullets sugar — by far the most common LLM pattern. Expands at resolve time into a column group of text props with bullet markers; widget never sees `bullets` directly.
+  bullets: { props: ['items', 'fontSize', 'marker', 'gap', 'align', 'slot'],        notes: 'Stacked bullet list. items: array of strings (one per bullet). fontSize (default 26). marker (default "•", or "–", or "1." for numbered). gap (vertical px between items, default 10). slot (recommended: "body-top"|"body-center"|"body-bottom"). USE THIS for any list of points/steps/features instead of multiple text props — guaranteed no overlap, consistent typography, no coordinate math.' },
 };
+
+// Layout-only fields that may appear on ANY prop and are resolved by
+// server/lesson/layout.js into concrete (x,y) before reaching the widget.
+// Validator allow-list — runtime ignores them entirely.
+export const LAYOUT_PROP_FIELDS = new Set(['relTo', 'align', 'gap']);
 
 // ── DSL validator ──────────────────────────────────────────────────────
 export const ACTION_DOS = new Set([
@@ -139,6 +149,48 @@ export function validateLesson(doc) {
           errors.push(`prop "${pid}" kind "code" requires non-empty code text (set props.${pid}.code)`);
         }
       }
+      // Layout container validation.
+      if (p.kind === 'group') {
+        if (!Array.isArray(p.children) || p.children.length === 0) {
+          errors.push(`prop "${pid}" kind "group" requires non-empty children[]`);
+        } else {
+          for (let ci = 0; ci < p.children.length; ci++) {
+            const c = p.children[ci];
+            if (!c || typeof c !== 'object' || !c.kind || !LESSON_KINDS[c.kind]) {
+              errors.push(`prop "${pid}".children[${ci}] needs a valid {kind, ...}`);
+            }
+            if (c && c.kind === 'group') {
+              errors.push(`prop "${pid}".children[${ci}] cannot itself be a "group" — flatten the structure`);
+            }
+          }
+        }
+        if (p.direction && p.direction !== 'row' && p.direction !== 'column') {
+          errors.push(`prop "${pid}" group.direction must be "row" or "column"`);
+        }
+      }
+      // Bullets sugar validation.
+      if (p.kind === 'bullets') {
+        if (!Array.isArray(p.items) || p.items.length === 0) {
+          errors.push(`prop "${pid}" kind "bullets" requires non-empty items[] (array of strings)`);
+        } else {
+          for (let ii = 0; ii < p.items.length; ii++) {
+            if (typeof p.items[ii] !== 'string' || !p.items[ii].trim()) {
+              errors.push(`prop "${pid}".items[${ii}] must be a non-empty string`);
+            }
+          }
+        }
+      }
+      // Relative-positioning validation (applies to any kind).
+      if (p.relTo) {
+        if (typeof p.relTo !== 'string' || !doc.props[p.relTo]) {
+          errors.push(`prop "${pid}".relTo references unknown prop "${p.relTo}"`);
+        } else if (p.relTo === pid) {
+          errors.push(`prop "${pid}".relTo cannot point to itself`);
+        }
+        if (p.align && !VALID_ALIGNS.has(p.align)) {
+          errors.push(`prop "${pid}".align "${p.align}" not in [${[...VALID_ALIGNS].join(', ')}]`);
+        }
+      }
     }
   }
   // Per-scene overlap check: for every scene, estimate each prop's bounding
@@ -147,6 +199,17 @@ export function validateLesson(doc) {
   // flagged as a layout error (the repair pass then re-asks the LLM with
   // the specific collision). Catches the "two captions at the same y"
   // failure mode that the runtime can't recover from at render time.
+  //
+  // Before bbox-checking, RESOLVE any `kind:"group"` containers and any
+  // `relTo`/`align`/`gap` rel-positioning into concrete (x,y). After this
+  // step the doc carries only flat leaf props at deterministic coords —
+  // the widget never sees a group, and collisions caused by the LLM
+  // hand-stacking items disappear because the layout engine owns spacing.
+  // Skip cleanly when no structural errors yet so we don't resolve on a
+  // half-broken doc.
+  if (errors.length === 0 && Array.isArray(doc.scenes)) {
+    try { resolveLayouts(doc); } catch (e) { errors.push('layout resolver failed: ' + e.message); }
+  }
   if (Array.isArray(doc.scenes)) {
     for (let si = 0; si < doc.scenes.length; si++) {
       const scene = doc.scenes[si];
@@ -250,6 +313,54 @@ function _bboxOverlapRatio(a, b) {
   const inter = (x2 - x1) * (y2 - y1);
   const smaller = Math.min(a.w * a.h, b.w * b.h) || 1;
   return inter / smaller;
+}
+
+// Translate raw validator errors into actionable fix instructions that
+// reference the layout DSL verbs the LLM should reach for. The plain error
+// strings tell the LLM WHAT is wrong; these hints tell it HOW to fix it
+// using `group`, `bullets`, `relTo`, or by simply omitting coordinates.
+// Returns a de-duplicated list of hint strings (may be empty).
+export function _buildRepairHints(errors) {
+  const seen = new Set();
+  const hints = [];
+  function add(h) { if (!seen.has(h)) { seen.add(h); hints.push(h); } }
+  for (const e of errors || []) {
+    if (typeof e !== 'string') continue;
+    // "props "a" and "b" both use slot "title""
+    if (/both use slot/.test(e)) {
+      add('Two props are competing for the same slot. Pick ONE to keep the slot; move the other to a different slot (e.g. "body-top") OR delete one if it duplicates content.');
+    }
+    // "props "a" and "b" overlap (~80% ...)"
+    if (/overlap \(~\d+%/.test(e)) {
+      add('Two props overlap. Pick the simplest fix: (a) if they are a list of related items, wrap them in ONE prop with kind:"bullets" (for text) or kind:"group", direction:"row"|"column" (for shapes/cards); (b) if one is a label/caption for the other, add relTo:"<otherPropId>" + align:"belowCenter" (or "rightOf", etc.) to the label and remove its (x,y); (c) if neither applies, give them slots in different lanes (title / body-top / body-center / body-bottom / caption).');
+    }
+    // "prop "X" renders outside canvas"
+    if (/renders outside canvas/.test(e)) {
+      add('A prop is off-canvas. EASIEST FIX: remove its (x,y,w,h) entirely and let the auto-place engine put it in the body region. Otherwise: ensure 0 ≤ x and x+w ≤ 1280, 0 ≤ y and y+h ≤ 720.');
+    }
+    // "prop "X" kind "group" requires non-empty children[]"
+    if (/kind "group" requires non-empty children/.test(e)) {
+      add('A group has no children — either add children:[{kind:..., ...}, ...] or remove the group entirely.');
+    }
+    if (/kind "bullets" requires non-empty items/.test(e)) {
+      add('A bullets prop has no items — add items:["...", "...", ...] or remove the prop.');
+    }
+    // "prop "X".relTo references unknown prop"
+    if (/relTo references unknown prop/.test(e)) {
+      add('A relTo points at a non-existent prop id. Either change relTo to an actual prop id in this same lesson, or remove relTo and let auto-place position the prop.');
+    }
+    // "align "X" not in [...]"
+    if (/align ".+" not in/.test(e)) {
+      add('Invalid align value. Use one of: below | belowLeft | belowCenter | belowRight | above | aboveLeft | aboveCenter | aboveRight | leftOf | rightOf | center.');
+    }
+    if (/action references unknown prop/.test(e)) {
+      add('An action references a prop id that does not exist in props{}. Either add the missing prop definition, or remove/rename the action.prop to match an existing id.');
+    }
+    if (/has unknown kind/.test(e)) {
+      add('A prop kind is invalid. Valid kinds are: text, latex, shape, arrow, image, slide, svg, code, plot, numberline, molecule, circuit, flow, group, bullets.');
+    }
+  }
+  return hints;
 }
 
 // ── LLM prompt for DSL generation ───────────────────────────────────────
@@ -383,6 +494,47 @@ ${_kindsCatalog()}
    \`\`\`
    The \`x,y\` is the top-left of the flow's bounding box; you can also pass \`w\` (defaults to canvas width minus margin) and \`h\` (defaults to 240).
 
+10. **For ANY row or column of items (pills, bullets-as-cards, KPI tiles, legend swatches, comparison columns), use ONE \`group\` prop — never hand-place sibling shapes/text props.** The group is a flex container; children are auto-spaced with no overlap. The group itself takes a \`slot\` OR an action (x,y). Example — 3 KPI tiles in a row:
+    \`\`\`
+    "props": {
+      "kpis": { "kind": "group", "direction": "row", "gap": 32, "slot": "body-center",
+        "children": [
+          { "kind": "shape", "shape": "rect", "w": 200, "h": 100, "fill": "#4CC9F0" },
+          { "kind": "shape", "shape": "rect", "w": 200, "h": 100, "fill": "#F72585" },
+          { "kind": "shape", "shape": "rect", "w": 200, "h": 100, "fill": "#7209B7" }
+      ]}
+    },
+    "scenes":[{ "id":"k", "actions":[ {"at":"start","do":"fade-in","prop":"kpis"} ] }]
+    \`\`\`
+
+11. **To place a label next to / below / above another prop, use \`relTo\` + \`align\` + \`gap\` instead of guessing coordinates.** The resolver computes (x,y) from the anchor's bbox. \`align\` is one of: \`"below"\` | \`"belowLeft"\` | \`"belowCenter"\` | \`"belowRight"\` | \`"above"\` | \`"aboveLeft"\` | \`"aboveCenter"\` | \`"aboveRight"\` | \`"leftOf"\` | \`"rightOf"\` | \`"center"\`. \`gap\` defaults to 16px. Example — caption under a chart:
+    \`\`\`
+    "props": {
+      "chart":   { "kind": "plot", "fn": "Math.sin(x)", "xRange": [-6,6] },
+      "caption": { "kind": "text", "content": "y = sin(x)", "fontSize": 22, "relTo": "chart", "align": "belowCenter", "gap": 12 }
+    },
+    "scenes":[{ "id":"s", "actions":[
+      {"at":"start","do":"plot","prop":"chart","x":300,"y":160,"w":680,"h":360},
+      {"at":1.5,"do":"fade-in","prop":"caption"}
+    ]}]
+    \`\`\`
+    The anchor prop must itself be positioned (via slot or explicit x,y on its action). Anchors may be chained (B relTo A, C relTo B) up to 8 deep.
+
+12. **For any bullet list / set of points / steps / features, use the \`bullets\` kind — never multiple text props.** It expands into a perfectly-spaced column with consistent typography. Example:
+    \`\`\`
+    "props": {
+      "points": { "kind": "bullets", "slot": "body-center", "items": [
+        "First key idea",
+        "Second key idea",
+        "Third key idea"
+      ]}
+    },
+    "scenes":[{ "id":"p", "actions":[ {"at":"start","do":"fade-in","prop":"points"} ] }]
+    \`\`\`
+    Set \`marker\` to \`"1."\` for numbered lists, \`"–"\` for dashes, or omit for bullets (\`"•"\`).
+
+13. **You may omit (x,y) entirely on a prop.** Any prop without a slot, without (x,y), and without relTo will be auto-placed by the layout engine into the body region with safe spacing. Prefer this to inventing coordinates you're not sure about — wrong coordinates are the #1 source of collision bugs.
+
 Generate the lesson now.`;
 }
 
@@ -391,10 +543,15 @@ export async function generateLessonDSL({ topic, durationMin = 5, voice, client,
   if (!client) throw new Error('client is required');
   let user = _scriptUserPrompt({ topic, durationMin, voice, sourceText, sourceKind });
   // Repair pass: feed the previous attempt's problems back so the model fixes
-  // them in place rather than regenerating blind.
+  // them in place rather than regenerating blind. Translate each error class
+  // into a SPECIFIC fix verb so the LLM doesn't just re-guess coordinates.
   if (repair?.errors?.length) {
+    const hints = _buildRepairHints(repair.errors);
     user += '\n\n## Your previous attempt was rejected\nFix every problem below and return a corrected JSON object. Output ONLY the JSON — no prose, no code fences.\n'
       + repair.errors.map(e => '- ' + e).join('\n');
+    if (hints.length) {
+      user += '\n\n### Recommended fixes (apply these specifically)\n' + hints.map(h => '- ' + h).join('\n');
+    }
   }
   // Try the requested model, then a reliable fallback. The most common
   // real-world failure is the primary model returning empty `choices`, so the
