@@ -89,7 +89,8 @@ const TOOL_CLUSTERS = {
     'fauna_remember', 'fauna_recall', 'fauna_forget',
     'fauna_get_settings', 'fauna_save_instruction', 'fauna_send_notification',
     'fauna_list_models', 'fauna_switch_model', 'fauna_set_thinking_budget',
-    'fauna_list_projects', 'fauna_retrieve_output', 'fauna_doctor',
+    'fauna_list_projects', 'fauna_retrieve_output', 'fauna_write_offloaded',
+    'fauna_doctor',
   ]),
   // Code editing + shell. The most-used cluster. Triggered by almost any
   // engineering request.
@@ -143,7 +144,13 @@ const TOOL_KW = {
   video:      /\b(video|movie|reel|short|clip|render .* mp4|moneyprinter|kdenlive|premiere|capcut|narration|voiceover|render scene)\b/i,
   voice:      /\b(speak|say (this|that|it)|read .* aloud|tts|voice ?over|narrat|podcast|episode|audio)\b/i,
   lesson:     /\b(lesson|teach me|walk me through|tutorial|course|explain how|step[- ]?by[- ]?step|learn(ing)? plan)\b/i,
-  images:     /\b(stock ?images?|unsplash|pexels|pixabay|royalty[- ]?free|hero ?images?|illustration|photos? (search|of)|find .* (image|photo)|download .* (image|photo)|generate .* (image|photo|logo|icon|art|picture)|create .* (image|logo|icon|illustration|picture)|make .* (image|logo|icon|picture)|ai[- ]?(image|art)|dall[- ]?e|gpt[- ]?image|text[- ]?to[- ]?image|render .* (image|logo|icon)|edit .* (image|photo)|inpaint|transparent (background|png)|logo|icon)\b/i,
+  // Bumped the verb list (was just find/download/generate/create/make) after
+  // the "fetch some images into genui from pexel" miss — see transcript
+  // 2026-06-18T22-00 where the user's natural phrasing failed to trigger
+  // the cluster and fauna_stock_image_search got gated out even though the
+  // Pexels key was configured. Also made the provider names tolerant of
+  // common typos (pexels?/pixabay/unsplash with optional trailing s).
+  images:     /\b(stock ?images?|unsplash|pexels?|pixabay|royalty[- ]?free|hero ?images?|illustration|photos? (search|of|from|for)|(find|fetch|get|grab|pull|need|want|show|insert|embed|attach|add|put|drop|use|render|include|download) .* (image|photo|picture|pic|stock|illustration)|images? (from|for|of|into|in)|generate .* (image|photo|logo|icon|art|picture)|create .* (image|logo|icon|illustration|picture)|make .* (image|logo|icon|picture)|ai[- ]?(image|art)|dall[- ]?e|gpt[- ]?image|text[- ]?to[- ]?image|render .* (image|logo|icon)|edit .* (image|photo)|inpaint|transparent (background|png)|logo|icon)\b/i,
   widget:     /(\b(widget|dashboard|chart|graph|gen[-_ ]?ui|scorecard|kpi|metric|leaderboard|playlist|carousel|tabs?|gallery|stat|interactive|kanban|slider|3d|three[-_. ]?js|webgl|babylon|aframe|model[- ]?viewer|gltf|blender|mesh|orbit ?controls|product (render|shot|viewer))\b|\.(glb|obj|stl|fbx)\b)/i,
   backlog:    /\b(backlog|task[- ]?board|board|kanban|work ?item|card|column|claim|assign|in[- ]?progress|review|done|archive|feature request|roadmap|prioriti[sz]e|ticket|issue|jira|todo list|user story|audit|architecture|tech debt|what.{1,15}next|add to .{0,15}board)\b/i,
   debate:     /\b(debate|consult|second opinion|cross[- ]?check|compare models|ask another model|deliberate|brainstorm)\b/i,
