@@ -551,6 +551,65 @@ export function lockE2E() {
   emitter.emit('locked', { reason: 'manual' });
 }
 
+/**
+ * Atomic password change. Combines the server account-password update
+ * and the E2E wrapped-MK rewrap into ONE backend round trip so we can't
+ * end up half-changed (account password updated but wrap still under
+ * the old password, locking the user out of their own data).
+ *
+ * Requires the engine to be unlocked — we need the cached MK to compute
+ * the new wrap. If locked, the caller should prompt the user to unlock
+ * first.
+ *
+ * Returns { ok, error? }.
+ */
+export async function changePassword({ oldPassword, newPassword } = {}) {
+  if (!oldPassword) return { ok: false, error: 'oldPassword required' };
+  if (!newPassword) return { ok: false, error: 'newPassword required' };
+  if (newPassword.length < 8) return { ok: false, error: 'new password must be at least 8 characters' };
+  if (newPassword === oldPassword) return { ok: false, error: 'new password must differ' };
+  if (!syncCrypto.hasKey()) {
+    return { ok: false, error: 'E2E is locked — unlock with current password first' };
+  }
+
+  // Compute the new wrap locally using the still-cached MK + the new
+  // password. The MK itself is unchanged, so all existing payload
+  // ciphertext on the server stays valid.
+  let wrappedMk;
+  try {
+    wrappedMk = syncCrypto.computeWrappedMkForPassword(newPassword);
+  } catch (e) {
+    return { ok: false, error: e.message || 'rewrap failed' };
+  }
+
+  // Atomic backend update: verifies oldPassword, updates account hash,
+  // and writes the new wrappedMk under the same DB transaction. Either
+  // both happen or neither does.
+  let res;
+  try {
+    res = await agentstore.request('POST', '/api/auth/change-password', {
+      oldPassword,
+      newPassword,
+      wrappedMk,
+    });
+  } catch (e) {
+    if (e && e.status === 401) {
+      return { ok: false, error: 'wrong current password' };
+    }
+    return { ok: false, error: e.message || 'change-password failed', status: e?.status };
+  }
+
+  if (!res || res.ok !== true) {
+    return { ok: false, error: (res && res.error) || 'change-password rejected' };
+  }
+
+  // Refresh the on-disk keychain blob (MK content unchanged but the
+  // wrapper has rotated and we want a fresh timestamp).
+  await syncCrypto.rebindAfterRewrap();
+  emitter.emit('password-changed');
+  return { ok: true };
+}
+
 /** Stop the engine. Pending journal entries persist for the next start. */
 export async function stop() {
   if (!_running) return;

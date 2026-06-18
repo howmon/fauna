@@ -312,9 +312,12 @@
       '      <i class="ti ti-logout"></i> Sign out',
       '    </button>',
       '  </div>',
-      '  <div style="margin-top:10px">',
+      '  <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">',
       '    <button class="settings-row-btn" id="cs-backfill-btn" title="Re-enqueue every existing local conversation, project, and checkpoint. Use this on a fresh device or after a server-side reset.">',
       '      <i class="ti ti-cloud-upload"></i> Upload all existing data',
+      '    </button>',
+      '    <button class="settings-row-btn" id="cs-change-pw-btn" title="Change your account password. The Master Key stays the same so all synced data remains accessible \u2014 we just rewrap it under your new password.">',
+      '      <i class="ti ti-key"></i> Change password',
       '    </button>',
       '  </div>',
       '  <div id="cs-status-line" class="muted" style="margin-top:10px;min-height:1.2em"></div>',
@@ -327,6 +330,7 @@
     bind('cs-resume-btn',  _handleResume);
     bind('cs-logout-btn',  _handleLogout);
     bind('cs-backfill-btn', _handleBackfill);
+    bind('cs-change-pw-btn', _handleChangePassword);
     _renderProjects();
   }
 
@@ -503,6 +507,96 @@
       _setStatusLine('Backfill queued. Watching progress…', false);
       window.renderCloudSyncPage();
     }).catch(function (e) { _setStatusLine(e.message || 'Network error', true); });
+  }
+
+  // ── Change password ──────────────────────────────────────────────────
+  // Renders an inline modal with three password fields and POSTs to
+  // /api/sync/change-password. The backend updates the account hash AND
+  // the wrapped Master Key in the same DB transaction, so we can't end
+  // up half-changed (account password updated but the wrap still under
+  // the old password, locking the user out of their own data).
+  //
+  // The Master Key itself does NOT change — the engine just rewraps it
+  // under a freshly derived key, so this is a free operation regardless
+  // of how much synced data the user has.
+  function _handleChangePassword() {
+    if (document.getElementById('cs-pw-modal')) return; // already open
+    var html = [
+      '<div id="cs-pw-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center" role="dialog" aria-modal="true" aria-label="Change password">',
+      '  <div style="background:var(--color-background);border:1px solid var(--color-border);border-radius:10px;padding:22px;width:380px;max-width:92vw;color:var(--color-text)">',
+      '    <h3 style="margin:0 0 6px;color:var(--color-text)"><i class="ti ti-key"></i> Change password</h3>',
+      '    <p class="muted" style="font-size:12px;color:var(--color-muted);margin:0 0 14px;line-height:1.4">',
+      '      Updates your account password AND rotates the encryption wrapper for your synced data in one step. Your Master Key stays the same so all existing data remains accessible.',
+      '    </p>',
+      '    <label style="display:block;font-size:12px;margin-bottom:4px;color:var(--color-muted)">Current password</label>',
+      '    <input type="password" id="cs-pw-old" autocomplete="current-password" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--color-border);background:var(--color-subtleSurface);color:var(--color-text);margin-bottom:10px;box-sizing:border-box">',
+      '    <label style="display:block;font-size:12px;margin-bottom:4px;color:var(--color-muted)">New password (min 8 chars)</label>',
+      '    <input type="password" id="cs-pw-new" autocomplete="new-password" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--color-border);background:var(--color-subtleSurface);color:var(--color-text);margin-bottom:10px;box-sizing:border-box">',
+      '    <label style="display:block;font-size:12px;margin-bottom:4px;color:var(--color-muted)">Confirm new password</label>',
+      '    <input type="password" id="cs-pw-confirm" autocomplete="new-password" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--color-border);background:var(--color-subtleSurface);color:var(--color-text);margin-bottom:14px;box-sizing:border-box">',
+      '    <div id="cs-pw-error" style="color:var(--color-danger);font-size:12px;min-height:1.3em;margin-bottom:10px"></div>',
+      '    <div style="display:flex;gap:8px;justify-content:flex-end">',
+      '      <button class="settings-row-btn" id="cs-pw-cancel">Cancel</button>',
+      '      <button class="settings-row-btn primary" id="cs-pw-submit"><i class="ti ti-check"></i> Change password</button>',
+      '    </div>',
+      '  </div>',
+      '</div>'
+    ].join('');
+    var wrap = document.createElement('div');
+    wrap.innerHTML = html;
+    document.body.appendChild(wrap.firstChild);
+
+    var modal = document.getElementById('cs-pw-modal');
+    var oldPw = document.getElementById('cs-pw-old');
+    var newPw = document.getElementById('cs-pw-new');
+    var confirmPw = document.getElementById('cs-pw-confirm');
+    var errEl = document.getElementById('cs-pw-error');
+    var submitBtn = document.getElementById('cs-pw-submit');
+
+    function close() {
+      if (modal && modal.parentNode) modal.parentNode.removeChild(modal);
+    }
+    function setError(msg) { if (errEl) errEl.textContent = msg || ''; }
+
+    document.getElementById('cs-pw-cancel').onclick = close;
+    // Click outside the dialog body closes too.
+    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+
+    function submit() {
+      var op = oldPw.value || '';
+      var np = newPw.value || '';
+      var cp = confirmPw.value || '';
+      if (!op || !np) { setError('All fields required'); return; }
+      if (np.length < 8) { setError('New password must be at least 8 characters'); return; }
+      if (np === op) { setError('New password must differ from current'); return; }
+      if (np !== cp) { setError('New passwords do not match'); return; }
+
+      submitBtn.disabled = true;
+      setError('');
+      _api('/api/sync/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ oldPassword: op, newPassword: np }),
+      }).then(function (r) {
+        submitBtn.disabled = false;
+        if (!r.ok || !r.body || !r.body.ok) {
+          var msg = (r.body && (r.body.error || r.body.message)) || 'Could not change password';
+          setError(msg);
+          return;
+        }
+        close();
+        try { if (typeof _showToast === 'function') _showToast('Password changed'); } catch (_) {}
+        _setStatusLine('Password changed.', false);
+      }).catch(function (e) {
+        submitBtn.disabled = false;
+        setError(e.message || 'Network error');
+      });
+    }
+
+    submitBtn.onclick = submit;
+    [oldPw, newPw, confirmPw].forEach(function (el) {
+      el.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
+    });
+    setTimeout(function () { try { oldPw.focus(); } catch (_) {} }, 0);
   }
 
   // ── Adopt an existing Agent Store token ──────────────────────────────

@@ -3,7 +3,7 @@
 // Goal: the agentstore server (and anyone with DB access) must never see
 // plaintext payloads. Everything that crosses the wire — conversation
 // bodies, project metadata, file contents — is AES-256-GCM ciphertext
-// keyed off a passphrase the server never receives.
+// keyed off a master key the server never receives in clear.
 //
 // Threat model:
 //   * Server storage is fully untrusted (DB dump, ops snooping, breach).
@@ -15,32 +15,57 @@
 // namespace, objectId, clientVersion (HLC), timestamps, deleted flag,
 // payloadHash. These leak shape and timing only.
 //
-// Key derivation:
-//   masterKey = PBKDF2-SHA256(password, salt, 600_000 iters, 32 bytes)
+// ── KEY HIERARCHY (two-key scheme) ────────────────────────────────────────
+//
+//   Password ──PBKDF2-SHA256(salt, 600k)──► PDK (password-derived key)
+//   random_bytes(32)                       ► MK  (master key — encrypts all data)
+//   wrappedMK = AES-GCM(MK, PDK, aad="e2e:mk")    ◄── stored on the server
+//
+//   For every payload:
+//     payload_envelope = AES-GCM(plaintext, MK, aad=`${ns}:${id}`)
+//
+// Why two keys instead of one? So the user can change their account
+// password without re-encrypting megabytes (or gigabytes) of synced data.
+// Password change is a trivial re-wrap of the 32-byte MK with a freshly
+// derived PDK — none of the payload ciphertext on the server is touched.
 //
 // Envelope wire format (single JSON object replacing the plaintext payload):
 //   { e2e: 1, n: <12-byte nonce, base64>, c: <ciphertext+tag, base64> }
 //
-// AAD = `${ns}:${id}` so a server can't shuffle a ciphertext from one row
-// onto another. AES-GCM with a *fresh random nonce per encryption* (never
-// counter-based — a nonce reuse with the same key is catastrophic for GCM).
+// AAD on payloads = `${ns}:${id}` so a server can't shuffle a ciphertext
+// from one row onto another. AAD on the wrapped-MK = "e2e:mk" so a server
+// can't try to pass off a payload envelope as the wrap.
 //
-// Provisioning flow (first device):
+// AES-GCM with a *fresh random nonce per encryption* (never counter-based —
+// a nonce reuse with the same key is catastrophic for GCM).
+//
+// ── Provisioning flow (first device) ──
 //   1. Login produces a bearer.
-//   2. Client GETs /api/sync/e2e-meta. Server returns { salt, check } where
-//      `salt` is auto-generated server-side on first call (random 16 bytes,
-//      base64) and `check` is null until the client sets it.
-//   3. Client derives a key from password + salt, encrypts a known
-//      plaintext (`E2E:CHECK:v1`) and PUTs the envelope as `check`.
-//   4. Future devices: GET /api/sync/e2e-meta, derive key, decrypt `check`.
-//      If decryption fails → wrong password; refuse to sync (no plaintext
-//      ever leaves until we have the right key).
+//   2. Client GETs /api/sync/e2e-meta. Server returns { salt, wrappedMk }
+//      where `salt` is auto-generated server-side on first call (random
+//      16 bytes, base64) and `wrappedMk` is null until provisioned.
+//   3. Client derives PDK from password+salt, generates a random MK,
+//      wraps MK with PDK, and PUTs the envelope as `wrappedMk`.
 //
-// Locked state:
+// ── Subsequent devices ──
+//   1. GET /api/sync/e2e-meta → { salt, wrappedMk }.
+//   2. Derive PDK from password+salt.
+//   3. Unwrap MK = AES-GCM-decrypt(wrappedMk, PDK, aad="e2e:mk").
+//      Decrypt failure → wrong password (refuse to sync; no data movement).
+//   4. Cache MK locally (in OS keychain via safeStorage).
+//
+// ── Password change ──
+//   1. User enters old + new password.
+//   2. Derive PDK_old, unwrap MK from server's wrappedMk.
+//   3. Derive PDK_new, wrap MK with PDK_new.
+//   4. PUT new wrappedMk. The MK itself never changes, so all existing
+//      payload ciphertext on the server stays valid.
+//
+// ── Locked state ──
 //   * After adoptToken() (Agent Store sign-in) we have a bearer but no
 //     password. The engine refuses to push or apply pulled envelopes
 //     until /api/sync/unlock is called with the password.
-//   * On logout, the cached key is wiped from memory and from the
+//   * On logout, the cached MK is wiped from memory and from the
 //     keychain blob on disk.
 
 import fs from 'fs';
@@ -60,7 +85,7 @@ const KEY_BYTES         = 32;            // AES-256
 const NONCE_BYTES       = 12;            // GCM standard
 const TAG_BYTES         = 16;            // GCM auth tag
 const SALT_BYTES        = 16;
-const CHECK_PLAINTEXT   = 'E2E:CHECK:v1';
+const MK_AAD            = 'e2e:mk';      // bound to the wrap envelope only
 
 // ── safeStorage (Electron only; absent in tests / Node CLI) ──────────────
 let _safeStorage = null;
@@ -85,9 +110,9 @@ function _syncDir() {
 function _keyFile() { return path.join(_syncDir(), 'e2e-key.bin'); }
 
 // ── Module state (in-memory; cleared on logout) ──────────────────────────
-let _key = null;              // Buffer | null
-let _saltB64 = null;          // string | null — cached so we know what to send if user re-enters password
-let _lastEvent = null;        // { type: 'unlocked'|'locked'|'error', message? }
+let _mk = null;               // Buffer | null — Master Key (32 bytes)
+let _saltB64 = null;          // string | null — PBKDF2 salt for PDK
+let _lastEvent = null;
 
 // Optional emitter — wired by sync-engine so route handlers can broadcast.
 const _listeners = new Set();
@@ -119,22 +144,16 @@ export function deriveKey(password, saltB64) {
 }
 
 // ── Envelope crypto ──────────────────────────────────────────────────────
+//
+// _encryptWith / _decryptWith take an explicit key so we can use them for
+// both payload-with-MK and MK-with-PDK. The public encryptString /
+// decryptEnvelope wrap _mk for the common payload path.
 
-/**
- * Encrypts a UTF-8 string under the current key. AAD binds the ciphertext
- * to its (namespace, id) so the server can't move it between rows.
- *
- * @param {string} plaintext  serialized JSON to encrypt
- * @param {string} aad        e.g. `${ns}:${id}`
- * @returns {{ e2e: 1, n: string, c: string }} envelope
- */
-export function encryptString(plaintext, aad) {
-  if (!_key) throw new Error('E2E locked: no key available');
-  if (typeof plaintext !== 'string') throw new Error('plaintext must be a string');
+function _encryptWith(plaintextBuf, key, aad) {
   const nonce = crypto.randomBytes(NONCE_BYTES);
-  const cipher = crypto.createCipheriv('aes-256-gcm', _key, nonce);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
   if (aad) cipher.setAAD(Buffer.from(aad, 'utf8'));
-  const ct = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const ct = Buffer.concat([cipher.update(plaintextBuf), cipher.final()]);
   const tag = cipher.getAuthTag();
   return {
     e2e: 1,
@@ -143,12 +162,7 @@ export function encryptString(plaintext, aad) {
   };
 }
 
-/**
- * Decrypts an envelope. Throws on auth failure (wrong key, tampered data,
- * AAD mismatch). Returns the original UTF-8 plaintext.
- */
-export function decryptEnvelope(env, aad) {
-  if (!_key) throw new Error('E2E locked: no key available');
+function _decryptWith(env, key, aad) {
   if (!isEnvelope(env)) throw new Error('not an E2E envelope');
   const nonce = Buffer.from(env.n, 'base64');
   const blob  = Buffer.from(env.c, 'base64');
@@ -156,11 +170,35 @@ export function decryptEnvelope(env, aad) {
   if (blob.length < TAG_BYTES) throw new Error('ciphertext too short');
   const ct  = blob.subarray(0, blob.length - TAG_BYTES);
   const tag = blob.subarray(blob.length - TAG_BYTES);
-  const decipher = crypto.createDecipheriv('aes-256-gcm', _key, nonce);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
   if (aad) decipher.setAAD(Buffer.from(aad, 'utf8'));
   decipher.setAuthTag(tag);
-  const pt = Buffer.concat([decipher.update(ct), decipher.final()]);
-  return pt.toString('utf8');
+  return Buffer.concat([decipher.update(ct), decipher.final()]);
+}
+
+/**
+ * Encrypts a UTF-8 string under the current Master Key. AAD binds the
+ * ciphertext to its (namespace, id) so the server can't move it between
+ * rows.
+ *
+ * @param {string} plaintext  serialized JSON to encrypt
+ * @param {string} aad        e.g. `${ns}:${id}`
+ * @returns {{ e2e: 1, n: string, c: string }} envelope
+ */
+export function encryptString(plaintext, aad) {
+  if (!_mk) throw new Error('E2E locked: no key available');
+  if (typeof plaintext !== 'string') throw new Error('plaintext must be a string');
+  return _encryptWith(Buffer.from(plaintext, 'utf8'), _mk, aad);
+}
+
+/**
+ * Decrypts an envelope under the current Master Key. Throws on auth
+ * failure (wrong key, tampered data, AAD mismatch). Returns the original
+ * UTF-8 plaintext.
+ */
+export function decryptEnvelope(env, aad) {
+  if (!_mk) throw new Error('E2E locked: no key available');
+  return _decryptWith(env, _mk, aad).toString('utf8');
 }
 
 /** Duck-types the envelope shape: { e2e: 1, n: string, c: string }. */
@@ -174,7 +212,7 @@ export function isEnvelope(obj) {
 
 // ── Key state ────────────────────────────────────────────────────────────
 
-export function hasKey() { return _key !== null; }
+export function hasKey() { return _mk !== null; }
 export function getSaltB64() { return _saltB64; }
 
 /** Test/diagnostics only — never ship a UI that exposes this. */
@@ -182,16 +220,16 @@ export function _setKeyForTests(buf, saltB64) {
   if (!Buffer.isBuffer(buf) || buf.length !== KEY_BYTES) {
     throw new Error('test key must be a 32-byte Buffer');
   }
-  _key = buf;
+  _mk = buf;
   _saltB64 = saltB64 || _saltB64 || Buffer.alloc(SALT_BYTES, 0).toString('base64');
   _emit('unlocked', { source: 'test' });
 }
 
 export function clearKey() {
-  if (_key) {
-    try { _key.fill(0); } catch (_) {}
+  if (_mk) {
+    try { _mk.fill(0); } catch (_) {}
   }
-  _key = null;
+  _mk = null;
   _saltB64 = null;
   try { fs.unlinkSync(_keyFile()); } catch (_) {}
   _emit('locked', { reason: 'cleared' });
@@ -199,19 +237,17 @@ export function clearKey() {
 
 // ── Keychain persistence (between launches on the same device) ───────────
 //
-// We persist the derived key (not the password) to disk encrypted with
-// Electron's safeStorage so the user doesn't have to re-enter their
-// password on every app start. If safeStorage is unavailable (Linux
-// without a keyring, for example) we DO NOT fall back to plaintext —
-// re-derivation on each launch is the correct behavior there.
+// We persist the Master Key (not the password, not the PDK) to disk
+// encrypted with Electron's safeStorage so the user doesn't have to
+// re-enter their password on every app start.
 
 async function _persistKeyToDisk() {
   const ss = _getSafeStorage();
-  if (!ss || !_key || !_saltB64) return false;
+  if (!ss || !_mk || !_saltB64) return false;
   try {
     const blob = ss.encryptString(JSON.stringify({
-      v: 1,
-      key: _key.toString('base64'),
+      v: 2,
+      mk: _mk.toString('base64'),
       salt: _saltB64,
     }));
     await fsp.mkdir(_syncDir(), { recursive: true });
@@ -228,7 +264,8 @@ async function _persistKeyToDisk() {
 
 /**
  * Try to restore a previously cached key from the OS keychain. Returns
- * true on success. Safe to call on every app start.
+ * true on success. Tolerates the v1 single-key blob format from the
+ * pre-MK release so existing devices don't get force-locked on upgrade.
  */
 export async function tryRestoreFromKeychain() {
   const ss = _getSafeStorage();
@@ -237,11 +274,18 @@ export async function tryRestoreFromKeychain() {
     const blob = await fsp.readFile(_keyFile());
     const decoded = ss.decryptString(blob);
     const parsed = JSON.parse(decoded);
-    if (parsed?.v !== 1 || !parsed.key || !parsed.salt) return false;
-    const buf = Buffer.from(parsed.key, 'base64');
-    if (buf.length !== KEY_BYTES) return false;
-    _key = buf;
-    _saltB64 = parsed.salt;
+    let buf = null;
+    if (parsed?.v === 2 && parsed.mk) {
+      buf = Buffer.from(parsed.mk, 'base64');
+    } else if (parsed?.v === 1 && parsed.key) {
+      // Legacy single-key blob (pre two-key release). Treat the cached
+      // PBKDF2-derived key as the MK so we don't lock the user out; the
+      // next unlock() will rebind to a proper wrapped-MK on the server.
+      buf = Buffer.from(parsed.key, 'base64');
+    }
+    if (!buf || buf.length !== KEY_BYTES) return false;
+    _mk = buf;
+    _saltB64 = parsed.salt || null;
     _emit('unlocked', { source: 'keychain' });
     return true;
   } catch (_) {
@@ -249,29 +293,26 @@ export async function tryRestoreFromKeychain() {
   }
 }
 
-// ── Server provisioning (salt + check value) ─────────────────────────────
+// ── Server provisioning (salt + wrapped MK) ──────────────────────────────
 
 async function _fetchMeta() {
-  // Returns { salt, check } from the server. Server auto-generates salt on
-  // first call. `check` is null until this client provisions it.
   return await agentstore.request('GET', '/api/sync/e2e-meta', null);
 }
 
-async function _putCheck(envelope) {
-  return await agentstore.request('PUT', '/api/sync/e2e-meta', { check: envelope });
+async function _putMeta(payload) {
+  return await agentstore.request('PUT', '/api/sync/e2e-meta', payload);
 }
 
 /**
  * Unlock E2E with the user's password. This is the ONLY public path that
- * derives a key. Steps:
+ * derives a key from the password. Steps:
  *
- *   1. Fetch salt + existing check from server.
- *   2. Derive candidate key.
- *   3a. If `check` exists: try to decrypt it with the candidate key.
- *       Match → key is correct, cache and return.
- *       Fail  → wrong password, do NOT cache.
- *   3b. If `check` is null: this is the first device. Encrypt the known
- *       plaintext with the candidate key, PUT it, cache the key.
+ *   1. Fetch salt + existing wrappedMk from server.
+ *   2. Derive PDK = PBKDF2(password, salt).
+ *   3a. If `wrappedMk` exists: unwrap MK with PDK. Auth-tag failure means
+ *       wrong password — reject without touching state.
+ *   3b. If `wrappedMk` is null: this is the first device. Generate a random
+ *       MK, wrap it with PDK, PUT the wrappedMk, cache the MK.
  *
  * Throws on network / 5xx so callers can distinguish "wrong password"
  * (returns ok:false) from "couldn't reach server".
@@ -293,59 +334,94 @@ export async function unlock({ password } = {}) {
     throw new Error('server did not return salt');
   }
 
-  const candidate = deriveKey(password, meta.salt);
+  const pdk = deriveKey(password, meta.salt);
 
-  // ── Existing user: verify against the stored check ──
-  if (meta.check && isEnvelope(meta.check)) {
+  // ── Returning device: unwrap the MK with the freshly derived PDK ──
+  if (meta.wrappedMk && isEnvelope(meta.wrappedMk)) {
+    let mk;
     try {
-      const tmpKey = _key;
-      _key = candidate;
-      const plain = decryptEnvelope(meta.check, 'e2e:check');
-      _key = tmpKey; // restore so we don't half-commit
-      if (plain !== CHECK_PLAINTEXT) {
-        candidate.fill(0);
-        return { ok: false, error: 'wrong password (check mismatch)' };
-      }
+      mk = _decryptWith(meta.wrappedMk, pdk, MK_AAD);
     } catch (_) {
-      candidate.fill(0);
-      _key = null;
+      pdk.fill(0);
       return { ok: false, error: 'wrong password' };
     }
-    _key = candidate;
+    pdk.fill(0);
+    if (mk.length !== KEY_BYTES) {
+      mk.fill(0);
+      return { ok: false, error: 'wrapped MK has wrong length' };
+    }
+    _mk = mk;
     _saltB64 = meta.salt;
     await _persistKeyToDisk();
     _emit('unlocked', { source: 'password' });
     return { ok: true };
   }
 
-  // ── First device: provision the check value ──
-  _key = candidate;
-  _saltB64 = meta.salt;
-  let envelope;
+  // ── First device: generate a fresh random MK, wrap it, persist ──
+  const mk = crypto.randomBytes(KEY_BYTES);
+  let wrapped;
   try {
-    envelope = encryptString(CHECK_PLAINTEXT, 'e2e:check');
+    wrapped = _encryptWith(mk, pdk, MK_AAD);
   } catch (e) {
-    _key = null; _saltB64 = null;
-    candidate.fill(0);
+    mk.fill(0); pdk.fill(0);
     throw e;
   }
   try {
-    await _putCheck(envelope);
+    await _putMeta({ wrappedMk: wrapped });
   } catch (e) {
-    _key = null; _saltB64 = null;
-    candidate.fill(0);
+    mk.fill(0); pdk.fill(0);
     _emit('error', { message: 'put e2e meta failed: ' + (e.message || e) });
     throw e;
   }
+  pdk.fill(0);
+  _mk = mk;
+  _saltB64 = meta.salt;
   await _persistKeyToDisk();
   _emit('unlocked', { source: 'password', firstDevice: true });
   return { ok: true, firstDevice: true };
 }
 
+/**
+ * Compute a fresh wrappedMk envelope for the given password using the
+ * currently-cached MK. Used by the atomic change-password flow, where
+ * the server expects the client to PUT the new wrap inside the same
+ * request that updates the account password.
+ *
+ * Requires the engine to already be unlocked. The returned envelope is
+ * NOT uploaded; callers do that themselves.
+ *
+ * @returns {{ e2e: 1, n: string, c: string }}
+ */
+export function computeWrappedMkForPassword(password) {
+  if (!_mk || !_saltB64) throw new Error('E2E locked: cannot rewrap');
+  if (!password) throw new Error('password required');
+  const pdk = deriveKey(password, _saltB64);
+  let wrap;
+  try {
+    wrap = _encryptWith(_mk, pdk, MK_AAD);
+  } finally {
+    pdk.fill(0);
+  }
+  return wrap;
+}
+
+/**
+ * Adopt a freshly-computed wrapped MK as our local cached state. Called
+ * by the engine after a successful atomic change-password round trip so
+ * a subsequent app launch uses the new wrap (the MK itself is unchanged
+ * but we re-persist the keychain blob to refresh its timestamp).
+ */
+export async function rebindAfterRewrap() {
+  if (!_mk) return false;
+  await _persistKeyToDisk();
+  _emit('unlocked', { source: 'rewrap' });
+  return true;
+}
+
 // Test helper.
 export function _resetForTests() {
-  if (_key) { try { _key.fill(0); } catch (_) {} }
-  _key = null;
+  if (_mk) { try { _mk.fill(0); } catch (_) {} }
+  _mk = null;
   _saltB64 = null;
   _lastEvent = null;
   _listeners.clear();

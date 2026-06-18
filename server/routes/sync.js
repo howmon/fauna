@@ -46,6 +46,7 @@ syncEngine.events.on('push:end',  (e) => _broadcastSyncEvent('push:end', e));
 syncEngine.events.on('bootstrap', (e) => _broadcastSyncEvent('bootstrap', e));
 syncEngine.events.on('locked',    (e) => _broadcastSyncEvent('locked', e));
 syncEngine.events.on('unlocked',  (e) => _broadcastSyncEvent('unlocked', e));
+syncEngine.events.on('password-changed', (e) => _broadcastSyncEvent('password-changed', e));
 
 export function registerSyncRoutes(app, deps = {}) {
   const { conversationStore, projectManager } = deps;
@@ -193,6 +194,23 @@ export function registerSyncRoutes(app, deps = {}) {
       res.json({ ok: true, status: syncEngine.getStatus() });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // Change the user's password (atomic: account hash + wrappedMk rotate
+  // in one backend transaction). Body: { oldPassword, newPassword }.
+  // Engine must be unlocked first — we need the cached MK to rewrap.
+  app.post('/api/sync/change-password', async (req, res) => {
+    const { oldPassword, newPassword } = req.body || {};
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ ok: false, error: 'oldPassword and newPassword required' });
+    }
+    try {
+      const r = await syncEngine.changePassword({ oldPassword, newPassword });
+      if (!r.ok) return res.status(r.status === 401 ? 401 : 400).json(r);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(502).json({ ok: false, error: e.message || 'change-password failed' });
     }
   });
 
