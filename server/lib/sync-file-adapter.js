@@ -75,13 +75,41 @@ let _scanning = false;
 let _installed = false;
 let _projectManagerRef = null;
 
+// Composite id format is `${projectId}:b64:${base64url(relPath)}` so the
+// resulting URL segment (after encodeURIComponent) contains no '/' chars.
+// Apache and nginx both decode %2F → '/' before route matching by default,
+// which would otherwise turn /api/sync/objects/project_file/<id> into a
+// multi-segment path the Laravel router can't match → 404 PAGE NOT FOUND.
+// The `b64:` marker keeps _splitId backward-compatible with any legacy ids
+// (and the simpler test fixtures) that still use the bare relPath form.
+function _b64urlEncode(str) {
+  return Buffer.from(String(str), 'utf8').toString('base64')
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function _b64urlDecode(s) {
+  let b = String(s).replace(/-/g, '+').replace(/_/g, '/');
+  const pad = b.length % 4;
+  if (pad) b += '='.repeat(4 - pad);
+  try { return Buffer.from(b, 'base64').toString('utf8'); }
+  catch (_) { return null; }
+}
 function _compositeId(projectId, relPath) {
-  return `${projectId}:${relPath}`;
+  return `${projectId}:b64:${_b64urlEncode(relPath)}`;
 }
 function _splitId(id) {
   const idx = (typeof id === 'string') ? id.indexOf(':') : -1;
   if (idx === -1) return null;
-  return { projectId: id.slice(0, idx), relPath: id.slice(idx + 1) };
+  const projectId = id.slice(0, idx);
+  const rest = id.slice(idx + 1);
+  if (rest.startsWith('b64:')) {
+    const decoded = _b64urlDecode(rest.slice(4));
+    if (decoded == null) return null;
+    return { projectId, relPath: decoded };
+  }
+  // Legacy / test-fixture form: bare relPath after the first ':'. Kept so
+  // existing rows on the server (and the simple ids used in unit tests)
+  // continue to round-trip.
+  return { projectId, relPath: rest };
 }
 function _sha1(buf) {
   return crypto.createHash('sha1').update(buf).digest('hex');
@@ -206,6 +234,10 @@ export function installFileAdapter({ projectManager, onApplied } = {}) {
       if (!root) return;
       const abs = _safeJoin(root, relPath);
       if (!abs) return;
+      // Canonical cache key so the scanner's _compositeId(...) lookups
+      // match entries inserted here, regardless of whether the caller
+      // passed a legacy `projectId:relPath` id or the new b64 form.
+      const cacheKey = _compositeId(split.projectId, relPath);
 
       // Decode payload to bytes once.
       const content = (typeof payload.content === 'string') ? payload.content : '';
@@ -218,8 +250,8 @@ export function installFileAdapter({ projectManager, onApplied } = {}) {
       try {
         const existing = await fsp.readFile(abs);
         if (_sha1(existing) === hash) {
-          _localHashes.set(id, { hash, size: existing.length, mtime: Date.now() });
-          _markWritten(id, hash);
+          _localHashes.set(cacheKey, { hash, size: existing.length, mtime: Date.now() });
+          _markWritten(cacheKey, hash);
           if (typeof onApplied === 'function' && opts.fromSync) {
             try { onApplied('upsert', { id, projectId: split.projectId, relPath }); } catch (_) {}
           }
@@ -237,8 +269,8 @@ export function installFileAdapter({ projectManager, onApplied } = {}) {
           await fsp.utimes(abs, mt, mt);
         } catch (_) {}
       }
-      _markWritten(id, hash);
-      _localHashes.set(id, { hash, size: buf.length, mtime: Date.now() });
+      _markWritten(cacheKey, hash);
+      _localHashes.set(cacheKey, { hash, size: buf.length, mtime: Date.now() });
       if (typeof onApplied === 'function' && opts.fromSync) {
         try { onApplied('upsert', { id, projectId: split.projectId, relPath }); } catch (_) {}
       }
@@ -252,7 +284,7 @@ export function installFileAdapter({ projectManager, onApplied } = {}) {
       const abs = _safeJoin(root, split.relPath);
       if (!abs) return;
       try { await fsp.unlink(abs); } catch (_) {}
-      _localHashes.delete(id);
+      _localHashes.delete(_compositeId(split.projectId, split.relPath));
       if (typeof onApplied === 'function' && opts.fromSync) {
         try { onApplied('delete', { id, projectId: split.projectId, relPath: split.relPath }); } catch (_) {}
       }

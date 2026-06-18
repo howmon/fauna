@@ -18,6 +18,14 @@ import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
 
+// Mirror the adapter's composite-id format so assertions stay readable
+// without importing private helpers.
+function _eid(projectId, relPath) {
+  const b = Buffer.from(relPath, 'utf8').toString('base64')
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return `${projectId}:b64:${b}`;
+}
+
 let tmpDir, syncDir, rootA, rootB, originalEnv;
 
 beforeEach(async () => {
@@ -205,7 +213,18 @@ describe('listAllIds bootstrap', () => {
     const { engine } = await boot({ projects });
     const a = engine.getAdapter('project_file');
     const ids = (await a.listAllIds()).map(r => r.id).sort();
-    expect(ids).toEqual(['pa:a.txt', 'pb:b.txt', 'pb:src/x.ts']);
+    // Composite ids are emitted in the base64url form so the URL segment
+    // contains no '/' chars (Apache/nginx would otherwise decode %2F → /
+    // before route matching and 404). Decode the relPath portion before
+    // asserting so the test stays readable.
+    const decoded = ids.map(function (id) {
+      const m = id.match(/^([^:]+):b64:(.+)$/);
+      if (!m) return id;
+      let b = m[2].replace(/-/g, '+').replace(/_/g, '/');
+      const pad = b.length % 4; if (pad) b += '='.repeat(4 - pad);
+      return `${m[1]}:${Buffer.from(b, 'base64').toString('utf8')}`;
+    });
+    expect(decoded).toEqual(['pa:a.txt', 'pb:b.txt', 'pb:src/x.ts']);
   });
 });
 
@@ -236,7 +255,8 @@ describe('_scanOnce anti-loop', () => {
     await new Promise(r => setTimeout(r, 25));
     await fsp.writeFile(path.join(rootA, 'edit.txt'), 'v2-changed');
     await adapter._scanOnce();
-    const calls = enqueueSpy.mock.calls.filter(c => c[1] === 'proj_a:edit.txt' && c[2] === 'upsert');
+    const expectedId = _eid('proj_a', 'edit.txt');
+    const calls = enqueueSpy.mock.calls.filter(c => c[1] === expectedId && c[2] === 'upsert');
     expect(calls.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -248,7 +268,8 @@ describe('_scanOnce anti-loop', () => {
     const enqueueSpy = vi.spyOn(engine, 'enqueueChange');
     await fsp.unlink(path.join(rootA, 'doomed.txt'));
     await adapter._scanOnce();
-    const calls = enqueueSpy.mock.calls.filter(c => c[1] === 'proj_a:doomed.txt' && c[2] === 'delete');
+    const expectedId = _eid('proj_a', 'doomed.txt');
+    const calls = enqueueSpy.mock.calls.filter(c => c[1] === expectedId && c[2] === 'delete');
     expect(calls.length).toBeGreaterThanOrEqual(1);
   });
 });
