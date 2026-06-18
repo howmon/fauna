@@ -122,6 +122,15 @@
   function _renderLocked(session) {
     var mount = document.getElementById('cloud-sync-mount');
     if (!mount) return;
+
+    // The locked screen is static — once rendered, there's nothing the
+    // background poller or SSE events should update. Bail early if the
+    // prompt is already mounted so we don't clobber a password the user
+    // is mid-typing. (Without this guard, the 15-second status poll and
+    // every push:end/pull:end SSE event wipe the input.)
+    var existing = document.getElementById('cs-unlock-pwd');
+    if (existing) return;
+
     var user = session.user || {};
     mount.innerHTML = [
       '<div style="max-width:520px">',
