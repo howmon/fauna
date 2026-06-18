@@ -346,7 +346,16 @@ export async function* requestNdjson(method, pathname, { headers, timeoutMs = 30
     res = await fetch(url, { method, headers: finalHeaders, signal: ac.signal });
   } catch (e) {
     clearTimeout(t);
-    throw e;
+    // Wrap the raw `fetch failed` with which endpoint + which host so a
+    // user looking at "Last error" in the sync panel can actually do
+    // something about it (toggle VPN, check Wi-Fi, etc).
+    const reason = _describeNetworkError(e, ac.signal.aborted, timeoutMs);
+    const wrapped = new Error(`${method} ${pathname} → ${reason}`);
+    wrapped.cause = e;
+    wrapped.method = method;
+    wrapped.pathname = pathname;
+    wrapped.network = true;
+    throw wrapped;
   }
 
   if (!res.ok) {
@@ -490,7 +499,21 @@ async function _rawRequest(method, pathname, body, opts = {}) {
       clearTimeout(t);
       // Retry only on network errors / 5xx (lastErr branch).
       if (e?.status && e.status >= 400 && e.status < 500) throw e;
-      lastErr = e;
+      // Wrap the raw network error with the URL we were trying to hit.
+      // Otherwise the user sees a useless "fetch failed" / "AbortError"
+      // in the sync status panel with no clue which endpoint or host
+      // was unreachable. Preserve the original via `.cause` for logs.
+      if (!e?.status) {
+        const reason = _describeNetworkError(e, ac.signal.aborted, timeoutMs);
+        const wrapped = new Error(`${method} ${pathname} → ${reason}`);
+        wrapped.cause = e;
+        wrapped.method = method;
+        wrapped.pathname = pathname;
+        wrapped.network = true;
+        lastErr = wrapped;
+      } else {
+        lastErr = e;
+      }
     }
     attempt++;
     if (attempt <= retries) {
@@ -499,6 +522,34 @@ async function _rawRequest(method, pathname, body, opts = {}) {
     }
   }
   throw lastErr || new Error('Request failed');
+}
+
+/**
+ * Translate the cryptic `fetch failed` / `AbortError` Node throws into
+ * something a non-developer user can act on. We surface the host so a
+ * VPN/DNS/captive-portal issue is obvious from the sync status panel.
+ */
+function _describeNetworkError(err, aborted, timeoutMs) {
+  let host = '';
+  try { host = new URL(getBaseUrl()).host; } catch (_) {}
+  if (aborted) {
+    return `request timed out after ${Math.round(timeoutMs / 1000)}s (host: ${host || 'unknown'})`;
+  }
+  // undici exposes the underlying cause for fetch failures — DNS errors
+  // surface as ENOTFOUND, connection refusals as ECONNREFUSED, TLS
+  // failures with their own codes. Use that when present.
+  const cause = err?.cause;
+  const code = cause?.code || err?.code;
+  if (code === 'ENOTFOUND') return `cannot resolve ${host || 'host'} — check your internet connection or DNS`;
+  if (code === 'ECONNREFUSED') return `${host || 'server'} refused the connection — is the server down?`;
+  if (code === 'ECONNRESET') return `connection to ${host || 'server'} dropped mid-request`;
+  if (code === 'ETIMEDOUT') return `connection to ${host || 'server'} timed out`;
+  if (code === 'EAI_AGAIN') return `DNS lookup for ${host || 'host'} failed (temporary)`;
+  if (code === 'CERT_HAS_EXPIRED' || code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE') {
+    return `TLS certificate problem for ${host || 'host'} (${code})`;
+  }
+  const msg = err?.message || String(err) || 'unknown network error';
+  return `network error (host: ${host || 'unknown'}): ${msg}`;
 }
 
 function _extractError(payload, status, statusText) {

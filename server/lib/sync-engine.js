@@ -1119,6 +1119,13 @@ async function _pullOnce() {
       if (!_running) break;
       await _pullNamespace(ns);
     }
+    // Clear any stale "Last error" from a previous failed pull — a
+    // successful round means the user no longer cares about the prior
+    // network blip. The push path already does the same on success.
+    if (_progress.lastError) {
+      _progress.lastError = null;
+      _progress.lastErrorAt = null;
+    }
   } catch (err) {
     _progress.lastError = err?.message || 'Pull failed';
     _progress.lastErrorAt = new Date().toISOString();
