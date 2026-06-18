@@ -1152,11 +1152,15 @@ export function registerChatRoute(app, {
       // dumps (figma node trees, etc.). Write-confirm responses are small so
       // unaffected; only introspection blobs hit the cap.
       const PER_TOOL_MAX_CHARS = {
-        // figma_execute introspection blobs can be large but truncating too
-        // aggressively causes the model to re-introspect (which costs MORE
-        // tokens). 20k is a balance: half the default, still room for one
-        // full node tree, and stale-shrink elides older calls anyway.
-        figma_execute: 20000,
+        // figma_execute introspection blobs are typically large JSON arrays
+        // (node trees, text extracts, layer audits). The earlier 20 KB cap
+        // was too tight: any non-trivial design file ran straight past it,
+        // forcing the model into batching/retrieval loops that wasted >30 min
+        // on a 30-second job (see the "Track B/C CSV" transcript). 80 KB
+        // fits a ~500-node text extract in a single call; stale-shrink will
+        // elide older figma_execute results anyway so the context-window
+        // cost is bounded.
+        figma_execute: 80000,
       };
       // Latest user message text — feeds the relevance scorer in
       // compressToolOutput so query-relevant rows survive compression.
@@ -1666,9 +1670,26 @@ export function registerChatRoute(app, {
                   // retrieve the dropped content on demand instead of re-running
                   // the tool. Append the retrieval pointer when the stash sticks.
                   const hash = stashOutput(compressed.original);
-                  result = hash
-                    ? compressed.text + `\n[full original (${result.length} chars) offloaded \u2014 retrieve with fauna_retrieve_output("${hash}")]`
-                    : compressed.text;
+                  if (hash) {
+                    // Imperative marker. The previous wording ("retrieve with
+                    // fauna_retrieve_output(...)") was treated as flavor text
+                    // by the model — see the Track B/C CSV transcript where
+                    // the assistant tried 8 batching workarounds instead of
+                    // calling retrieve once. Make the marker prescriptive and
+                    // surface the cheaper write-direct path explicitly.
+                    const fullLen = result.length;
+                    const marker =
+                      '\n\n[fauna] ⚠️ OUTPUT TRUNCATED. The visible content above is a compressed sample; ' +
+                      `the full ${fullLen.toLocaleString()}-char original is offloaded as hash "${hash}".\n` +
+                      'DO NOT write a CSV / log / dump derived from only the visible rows — that will silently drop data.\n' +
+                      'To act on the FULL content, choose ONE of:\n' +
+                      `  • Write to disk directly: fauna_write_offloaded({"hash":"${hash}","path":"<absolute file path>"})  ← preferred, never re-marshals the bytes through your context\n` +
+                      `  • Append to an existing file: fauna_write_offloaded({"hash":"${hash}","path":"<path>","append":true})\n` +
+                      `  • Load back into your context (only if you must reason over it): fauna_retrieve_output({"hash":"${hash}"})`;
+                    result = compressed.text + marker;
+                  } else {
+                    result = compressed.text;
+                  }
                 }
               }
               toolCallsSeen.set(callKey, result);

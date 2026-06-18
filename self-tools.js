@@ -2405,13 +2405,30 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_retrieve_output',
-      description: 'Retrieve the FULL original output of an earlier tool call that was compressed/offloaded. When a tool result ends with a marker like `retrieve with fauna_retrieve_output("<hash>")`, call this with that hash to get back the complete uncompressed content (e.g. the dropped rows of a large array or the elided middle of a long log). Only call this when you genuinely need the dropped detail — the compressed view usually suffices.',
+      description: 'Retrieve the FULL original output of an earlier tool call that was compressed/offloaded. When a tool result ends with a marker like `retrieve with fauna_retrieve_output("<hash>")`, call this with that hash to get back the complete uncompressed content (e.g. the dropped rows of a large array or the elided middle of a long log). Only call this when you genuinely need the dropped detail — the compressed view usually suffices. PREFER fauna_write_offloaded when the goal is just to land the bytes on disk — it bypasses your context entirely.',
       parameters: {
         type: 'object',
         properties: {
           hash: { type: 'string', description: 'The 12-char hash from the offload marker.' },
         },
         required: ['hash'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_write_offloaded',
+      description: 'Write the FULL original of an offloaded tool result directly to disk WITHOUT loading the bytes through your context. Use this whenever you see an offload marker like `[fauna] ⚠️ OUTPUT TRUNCATED ... hash "<hash>"` and your goal is to save that content (CSV, JSON dump, log) to a file. This is dramatically cheaper than fauna_retrieve_output + fauna_write_file because the bytes never pass through the model. Returns {ok, path, bytes, sha256, op}. Set append:true to append to an existing file (use this for batched dumps).',
+      parameters: {
+        type: 'object',
+        properties: {
+          hash: { type: 'string', description: 'The 12-char hash from the offload marker.' },
+          path: { type: 'string', description: 'Absolute or workspace-relative file path to write to.' },
+          append: { type: 'boolean', description: 'Append to an existing file instead of overwriting. Default false.' },
+          backup: { type: 'boolean', description: 'When overwriting an existing file, write a .~fauna-backup-<ts> first. Default false.' },
+        },
+        required: ['hash', 'path'],
       },
     },
   },
@@ -3969,6 +3986,39 @@ export async function executeSelfTool(toolName, args, context = {}) {
         return JSON.stringify({ ok: false, error: `No offloaded output found for hash "${args.hash}". It may have expired or never been stashed.` });
       }
       return original;
+    }
+
+    case 'fauna_write_offloaded': {
+      try {
+        if (!args || !args.hash || !args.path) {
+          return JSON.stringify({ ok: false, error: 'fauna_write_offloaded requires both "hash" and "path"' });
+        }
+        const original = retrieveOutput(args.hash);
+        if (original == null) {
+          return JSON.stringify({ ok: false, error: `No offloaded output found for hash "${args.hash}". It may have expired or never been stashed.` });
+        }
+        const started = Date.now();
+        // Reuse _writeFastFile so we inherit the same path-resolution +
+        // permission-allowlist + atomic-rename semantics as fauna_write_file.
+        // reject_empty:false because some offloaded outputs are legitimately
+        // empty (e.g. an empty array dump that still had a long pretty-print).
+        const result = _writeFastFile({
+          path: args.path,
+          cwd: context && context.cwd,
+          content: original,
+          append: !!args.append,
+          backup: !!args.backup,
+          reject_empty: false,
+        });
+        return JSON.stringify({
+          ok: true,
+          ms: Date.now() - started,
+          result,
+          source: { hash: args.hash, originalChars: original.length },
+        });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
     }
 
     case 'fauna_doctor': {

@@ -141,6 +141,7 @@ const TOOL_LABELS = {
   read_file:           (a) => `Reading ${a?.path || a?.file || 'file'}`,
   write_file:          (a) => `Writing ${a?.path || a?.file || 'file'}`,
   create_file:         (a) => `Creating ${a?.path || a?.file || 'file'}`,
+  fauna_write_offloaded: (a) => `Writing offloaded output to ${a?.path || 'file'}`,
   // Figma
   figma_execute:       ()  => 'Executing Figma plugin code',
   get_screenshot:      ()  => 'Taking Figma screenshot',

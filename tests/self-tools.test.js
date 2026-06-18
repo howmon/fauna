@@ -74,7 +74,10 @@ describe('self-tools', () => {
       // Bumped to 78 after adding fauna_workitem_verify (Phase 7 — verification gate).
       // Bumped to 80 after adding fauna_list_references + fauna_get_reference
       // (Phase 5 — references split from skills).
-      expect(SELF_TOOL_DEFS).toHaveLength(80);
+      // Bumped to 81 after adding fauna_write_offloaded (write the FULL
+      // offloaded original directly to disk without round-tripping bytes
+      // through the model context — fixes Figma CSV export thrash).
+      expect(SELF_TOOL_DEFS).toHaveLength(81);
     });
 
     it('each tool has required OpenAI function format', () => {
