@@ -236,7 +236,10 @@ export function installFileAdapter({ projectManager, onApplied } = {}) {
         let bodyBuf = buf;
         if (buf.length >= 256) {
           try {
-            const gz = zlib.gzipSync(buf, { level: zlib.constants.Z_DEFAULT_COMPRESSION });
+            // BEST_COMPRESSION (9) buys an extra ~10–20% shrink over the
+            // default (6) for source code. Push path only; decompress
+            // cost is identical regardless of level.
+            const gz = zlib.gzipSync(buf, { level: zlib.constants.Z_BEST_COMPRESSION });
             if (gz.length < buf.length) {
               bodyBuf = gz;
               encoding = 'gzip+base64';

@@ -746,12 +746,106 @@ function _schedulePush() {
 async function _scheduledPullLoop() {
   if (!_running) return;
   try {
+    // Fresh-device optimization: if we have no pull cursors at all, the
+    // delta-pull would page through `/api/sync/changes` from epoch — for
+    // a 10k-object corpus that's ~50 paged round trips. Try the streamed
+    // snapshot endpoint first; falls back to the normal pull on any
+    // failure, so a server that doesn't have the endpoint (older
+    // deploys) degrades gracefully.
+    await _pullSnapshotIfFresh();
     await _pullOnce();
   } catch (err) {
     emitter.emit('error', err);
   }
   if (!_running) return;
   _pullTimer = setTimeout(() => _scheduledPullLoop(), _config.pullIntervalMs);
+}
+
+/**
+ * Run the snapshot endpoint exactly once, when this device has no pull
+ * cursor for any registered namespace (the unambiguous "fresh device"
+ * signal). On success, cursors are seeded from the max updatedAt per
+ * namespace observed in the stream, so the very next _pullOnce() picks
+ * up only changes newer than the snapshot.
+ *
+ * No-ops in three cases — all of which fall through to the normal
+ * delta-pull loop:
+ *   * any cursor already set (i.e. not a fresh device)
+ *   * E2E locked (can't decrypt the streamed envelopes anyway)
+ *   * endpoint returns 404 / network failure (older server, transient)
+ */
+async function _pullSnapshotIfFresh() {
+  if (!_running) return;
+  if (_inFlightPull) return;
+  if (_e2eRequired() && !syncCrypto.hasKey()) return;
+
+  const cursors = _loadCursors();
+  // "Fresh" = no cursor for ANY namespace. If even one is set this device
+  // has already seen data and the delta-pull will be cheap.
+  const hasAnyCursor = Object.values(cursors).some(v => v != null && v !== '');
+  if (hasAnyCursor) return;
+
+  _inFlightPull = true;
+  _progress.activeOp = 'snapshot';
+  emitter.emit('snapshot:start');
+
+  const maxUpdatedAt = Object.create(null);
+  let applied = 0;
+  let skipped = 0;
+  try {
+    for await (const row of agentstore.requestNdjson('GET', '/api/sync/snapshot')) {
+      if (!_running) break;
+      if (!row || typeof row !== 'object' || !row.ns || !row.objectId) {
+        skipped++;
+        continue;
+      }
+      const adapter = _adapters.get(row.ns);
+      if (!adapter) { skipped++; continue; }
+      // Reuse the exact same apply path delta-pull uses, so AAD checks,
+      // decryption, project-exclusion filtering, and merge semantics all
+      // behave identically. Construct the "change" object the same shape
+      // `/api/sync/changes` emits.
+      const change = {
+        objectId:      row.objectId,
+        clientVersion: row.clientVersion,
+        updatedAt:     row.updatedAt,
+        payloadHash:   row.payloadHash,
+        deleted:       false,
+        payload:       row.payload,
+      };
+      await _applyRemote(row.ns, adapter, change);
+      applied++;
+      // Track the max updatedAt per namespace so the next delta-pull
+      // starts from exactly the right cursor — newer rows than this will
+      // come through `/api/sync/changes` on the next tick.
+      if (row.updatedAt && (!maxUpdatedAt[row.ns] || row.updatedAt > maxUpdatedAt[row.ns])) {
+        maxUpdatedAt[row.ns] = row.updatedAt;
+      }
+      // Periodic progress beacon so the UI can show the snapshot
+      // climbing instead of looking frozen on huge corpora.
+      if (applied % 100 === 0) {
+        emitter.emit('snapshot:progress', { applied });
+      }
+    }
+    // Seed cursors from what we just applied. The next pull will fetch
+    // anything that landed on the server while we were streaming.
+    for (const [ns, cur] of Object.entries(maxUpdatedAt)) {
+      _cursors[ns] = cur;
+    }
+    if (Object.keys(maxUpdatedAt).length > 0) {
+      await _saveCursors().catch(() => {});
+    }
+    emitter.emit('snapshot:end', { applied, skipped });
+  } catch (err) {
+    // Any failure — 404, network drop, parse error, decrypt error —
+    // gets swallowed. Normal delta-pull continues from whatever cursor
+    // state we have (possibly partial — that's fine, delta-pull is
+    // idempotent and will replay anything we already applied).
+    emitter.emit('snapshot:error', { error: err?.message || String(err), applied });
+  } finally {
+    _inFlightPull = false;
+    if (!_inFlightPush) _progress.activeOp = null;
+  }
 }
 
 // ── Internal: push ────────────────────────────────────────────────────────

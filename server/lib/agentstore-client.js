@@ -305,6 +305,109 @@ export async function requestRaw(method, pathname, rawBody, { headers, timeoutMs
   });
 }
 
+/**
+ * Streamed NDJSON request — yields one parsed JSON object per line.
+ *
+ * Used by the sync snapshot endpoint where we'd otherwise have to buffer
+ * the entire user corpus (potentially hundreds of MB) into memory before
+ * applying any of it. With this we apply rows as they arrive and the
+ * peak memory stays at one parsed payload.
+ *
+ * No retry on failure: a snapshot is intentionally a "best effort, fall
+ * back to delta-pull" operation, and re-streaming from byte zero after a
+ * partial failure would burn bandwidth for no gain. The caller is
+ * expected to track the cursor (max updatedAt per ns) so the next pull
+ * picks up where the stream broke off.
+ *
+ * Timeout is generous (5 min default) because a fresh-device sync of a
+ * 10k-object corpus can take that long on residential bandwidth.
+ *
+ * @yields {object} parsed JSON object from each NDJSON line
+ */
+export async function* requestNdjson(method, pathname, { headers, timeoutMs = 300_000 } = {}) {
+  const token = getToken();
+  if (!token) {
+    const e = new Error('Not logged in');
+    e.status = 401;
+    throw e;
+  }
+  const base = getBaseUrl().replace(/\/+$/, '');
+  const url = base + (pathname.startsWith('/') ? pathname : ('/' + pathname));
+  const finalHeaders = {
+    'Accept': 'application/x-ndjson',
+    'Authorization': `Bearer ${token}`,
+    ...(headers || {}),
+  };
+
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(url, { method, headers: finalHeaders, signal: ac.signal });
+  } catch (e) {
+    clearTimeout(t);
+    throw e;
+  }
+
+  if (!res.ok) {
+    clearTimeout(t);
+    // Read the body to surface a useful error message — short enough that
+    // a 4xx/5xx response won't blow memory.
+    let parsed = null;
+    try {
+      const text = await res.text();
+      try { parsed = JSON.parse(text); } catch (_) { parsed = text; }
+    } catch (_) {}
+    const reason = _extractError(parsed, res.status, res.statusText)
+      || `HTTP ${res.status} ${res.statusText}`;
+    const err = new Error(`${method} ${pathname} → ${reason}`);
+    err.status = res.status;
+    err.body = parsed;
+    throw err;
+  }
+
+  // Some fetch polyfills (and some proxies) collapse the streaming body
+  // into a single text blob. Handle that by falling back to whole-body
+  // split — slower but correct.
+  if (!res.body || typeof res.body.getReader !== 'function') {
+    try {
+      const text = await res.text();
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        yield JSON.parse(trimmed);
+      }
+    } finally { clearTimeout(t); }
+    return;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (value) buffer += decoder.decode(value, { stream: true });
+      // Process complete lines as they accumulate. A 1 GB stream never
+      // grows the buffer beyond the longest single line.
+      let nl;
+      while ((nl = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (line) yield JSON.parse(line);
+      }
+      if (done) break;
+    }
+    const tail = buffer.trim();
+    if (tail) yield JSON.parse(tail);
+  } finally {
+    clearTimeout(t);
+    // Best-effort cancel — if the consumer broke out of the loop early
+    // (e.g. engine stop), release the underlying connection promptly.
+    try { reader.cancel(); } catch (_) {}
+  }
+}
+
 // ── Internal: transport ────────────────────────────────────────────────────
 
 async function _rawRequest(method, pathname, body, opts = {}) {

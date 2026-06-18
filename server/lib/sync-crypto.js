@@ -208,7 +208,12 @@ export function encryptString(plaintext, aad, opts = {}) {
   // headers + dict overhead would make them bigger.
   if (opts.compress && raw.length >= 256) {
     try {
-      const gz = zlib.gzipSync(raw, { level: zlib.constants.Z_DEFAULT_COMPRESSION });
+      // BEST_COMPRESSION (9) over DEFAULT (6) buys ~10–20% extra shrink
+      // on source code and chat logs. We pay it only on the push path
+      // (decrypt is just gunzip, same cost either way), and a sync push
+      // is already I/O bound — the extra CPU is invisible next to the
+      // network round-trip.
+      const gz = zlib.gzipSync(raw, { level: zlib.constants.Z_BEST_COMPRESSION });
       // Only adopt if it actually saved bytes. JSON of an already-
       // compressed image, for instance, would balloon under gzip.
       if (gz.length < raw.length) {
