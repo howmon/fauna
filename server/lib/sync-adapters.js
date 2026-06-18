@@ -22,6 +22,7 @@ import os from 'os';
 import * as syncEngine from './sync-engine.js';
 import * as pathPortability from './path-portability.js';
 import { installCheckpointAdapter } from './sync-checkpoint-adapter.js';
+import { installFileAdapter } from './sync-file-adapter.js';
 
 function _versionsDir() {
   return process.env.FAUNA_SYNC_DIR
@@ -205,10 +206,14 @@ export function installProjectAdapter({ projectManager, onApplied }) {
 }
 
 // ── Convenience: install everything at once from main/server bootstrap ────
-export function installAllAdapters({ conversationStore, projectManager, onConversationApplied, onProjectApplied }) {
+export function installAllAdapters({ conversationStore, projectManager, onConversationApplied, onProjectApplied, onFileApplied }) {
   if (conversationStore) installConversationAdapter({ store: conversationStore, onApplied: onConversationApplied });
   if (projectManager)    installProjectAdapter({ projectManager, onApplied: onProjectApplied });
   // Checkpoint adapter has no external deps — it subscribes to
   // project-checkpoints.js via its built-in change-listener registry.
   installCheckpointAdapter();
+  // True folder sync: watches each project's working folder and ships
+  // individual files under the `project_file` namespace. Skipped if no
+  // projectManager (e.g. headless test setups that only sync conversations).
+  if (projectManager) installFileAdapter({ projectManager, onApplied: onFileApplied });
 }
