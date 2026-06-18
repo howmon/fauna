@@ -118,6 +118,103 @@ function _startConversationRealtimeSync() {
   window.addEventListener('online', _wakeReconnectConvStream);
 }());
 
+// ── Sync engine event stream ──────────────────────────────────────────────
+// Open a long-lived EventSource against /api/sync/events so the renderer
+// re-paints automatically when a remote pull lands. Without this, projects
+// or conversations synced in from another device stay invisible until the
+// user re-opens an overlay or restarts the app.
+//
+// We debounce per-namespace because a single pull cycle can apply hundreds
+// of records and we'd otherwise spam loadProjects() / _hydrateServerConvs().
+function _startSyncEventStream() {
+  if (!window.EventSource || window._syncEvents) return;
+  try {
+    var url = (window.faunaStreamUrl ? window.faunaStreamUrl('/api/sync/events') : '/api/sync/events');
+    var source = new EventSource(url);
+    window._syncEvents = source;
+    var projTimer = null;
+    var convTimer = null;
+    function _refreshProjects() {
+      if (typeof loadProjects !== 'function') return;
+      loadProjects().then(function () {
+        // If the All Projects overlay is open, re-paint it too.
+        var page = document.getElementById('all-projects-page');
+        if (page && page.style.display !== 'none' && typeof _renderAllProjectsPage === 'function') {
+          _renderAllProjectsPage();
+        }
+        // If the Cloud Sync settings panel is open, refresh its project list.
+        if (typeof window.renderCloudSyncPage === 'function') {
+          var cs = document.getElementById('cs-projects');
+          if (cs) window.renderCloudSyncPage();
+        }
+      }).catch(function () {});
+    }
+    function _refreshConvs() {
+      if (typeof _hydrateServerConvs === 'function') _hydrateServerConvs();
+    }
+    source.onmessage = function (evt) {
+      try {
+        var msg = JSON.parse(evt.data || '{}');
+        if (msg.type === 'ready') return;
+        // 'apply' fires once per applied remote change; 'pull:end' fires
+        // once per pull cycle and includes a per-ns count. Either signals
+        // that local state may be stale.
+        var nsTouched = {};
+        if (msg.type === 'apply' && msg.ns) {
+          nsTouched[msg.ns] = true;
+        } else if (msg.type === 'pull:end' && msg.applied) {
+          for (var k in msg.applied) {
+            if (msg.applied[k] > 0) nsTouched[k] = true;
+          }
+        } else if (msg.type === 'bootstrap' && msg.ns) {
+          // Our own bootstrap pushed local data; nothing to refresh, but
+          // the cloud-sync panel might want to redraw if open.
+          if (typeof window.renderCloudSyncPage === 'function') {
+            var panel = document.getElementById('cs-projects');
+            if (panel) window.renderCloudSyncPage();
+          }
+          return;
+        } else if (msg.type === 'push:end') {
+          // Push drained → keep the cloud-sync panel in sync if open.
+          if (typeof window.renderCloudSyncPage === 'function') {
+            var p2 = document.getElementById('cs-projects');
+            if (p2) window.renderCloudSyncPage();
+          }
+          return;
+        }
+        if (nsTouched.project) {
+          if (projTimer) clearTimeout(projTimer);
+          projTimer = setTimeout(_refreshProjects, 200);
+        }
+        if (nsTouched.conversation) {
+          if (convTimer) clearTimeout(convTimer);
+          convTimer = setTimeout(_refreshConvs, 200);
+        }
+      } catch (_) {}
+    };
+    source.onerror = function () {
+      try { source.close(); } catch (_) {}
+      window._syncEvents = null;
+      // Same back-off as the conversation stream.
+      setTimeout(_startSyncEventStream, 2500);
+    };
+  } catch (_) {}
+}
+(function () {
+  function _wakeReconnectSyncStream() {
+    var src = window._syncEvents;
+    if (src) {
+      try { src.close(); } catch (_) {}
+      window._syncEvents = null;
+    }
+    _startSyncEventStream();
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') _wakeReconnectSyncStream();
+  });
+  window.addEventListener('online', _wakeReconnectSyncStream);
+}());
+
 // Pre-load rules so getFigmaContext() works when chat starts
 loadFigmaRules();
 
@@ -177,6 +274,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   await _hydrateServerConvs();
   _startConversationRealtimeSync();
+  _startSyncEventStream();
 
   // Re-hydrate when window regains focus (picks up mobile/CLI conversations)
   window.addEventListener('focus', function() { _hydrateServerConvs(); });

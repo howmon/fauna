@@ -12,6 +12,7 @@
 //   POST /api/sync/stop                     → stop engine + return status
 //   POST /api/sync/now                      → force immediate pull+push
 //   POST /api/sync/backfill                 → re-enqueue all existing local records
+//   GET  /api/sync/events                   → SSE stream of engine apply/pull/push events
 //   GET  /api/sync/prefs                    → { excludedProjects: [...] }
 //   POST /api/sync/prefs    { excludedProjects } → { ok, prefs }
 //   GET  /api/sync/projects                 → [{ id, name, excluded, pending }]
@@ -26,6 +27,23 @@ import * as syncEngine from '../lib/sync-engine.js';
 import * as syncAdapters from '../lib/sync-adapters.js';
 import * as syncPrefs from '../lib/sync-prefs.js';
 import * as syncCheckpoints from '../lib/sync-checkpoint-adapter.js';
+
+// Module-singleton SSE client set + one-time engine emitter wiring so the
+// /api/sync/events broadcasts every interesting engine event without each
+// handler re-subscribing. Safe to import the module repeatedly — the
+// subscription block below only runs once per process.
+const _syncSseClients = new Set();
+function _broadcastSyncEvent(type, payload = {}) {
+  if (_syncSseClients.size === 0) return;
+  const data = JSON.stringify({ type, ...payload, ts: Date.now() });
+  for (const c of _syncSseClients) {
+    try { c.write(`data: ${data}\n\n`); } catch (_) {}
+  }
+}
+syncEngine.events.on('apply',     (e) => _broadcastSyncEvent('apply', e));
+syncEngine.events.on('pull:end',  (e) => _broadcastSyncEvent('pull:end', e));
+syncEngine.events.on('push:end',  (e) => _broadcastSyncEvent('push:end', e));
+syncEngine.events.on('bootstrap', (e) => _broadcastSyncEvent('bootstrap', e));
 
 export function registerSyncRoutes(app, deps = {}) {
   const { conversationStore, projectManager } = deps;
@@ -143,6 +161,38 @@ export function registerSyncRoutes(app, deps = {}) {
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
+  });
+
+  // Live event stream — pushes engine events to the renderer so the UI can
+  // auto-refresh when a pull lands or a push completes. Without this, the
+  // All Projects overlay and conversation list only re-load on manual
+  // navigation, so cross-device updates appear stale.
+  //
+  // Event payloads (one per `data: …\n\n`):
+  //   { type: 'ready' }
+  //   { type: 'apply',     ns, id, deleted }   — a remote change was applied locally
+  //   { type: 'pull:end',  applied: {ns: n} }  — a full pull cycle finished
+  //   { type: 'push:end',  pending, pushed }   — a push batch drained
+  //   { type: 'bootstrap', ns, count }         — first-run backfill enqueued
+  app.get('/api/sync/events', (req, res) => {
+    const _o = req.headers.origin;
+    if (_o && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(_o)) {
+      res.setHeader('Access-Control-Allow-Origin', _o);
+      res.setHeader('Vary', 'Origin');
+    }
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+    res.write(`data: ${JSON.stringify({ type: 'ready', ts: Date.now() })}\n\n`);
+    _syncSseClients.add(res);
+    const keepalive = setInterval(() => {
+      try { res.write(`: keepalive ${Date.now()}\n\n`); } catch (_) {}
+    }, 25000);
+    req.on('close', () => {
+      clearInterval(keepalive);
+      _syncSseClients.delete(res);
+    });
   });
 
   // Profile refresh — useful after a server-side rename / email change.
