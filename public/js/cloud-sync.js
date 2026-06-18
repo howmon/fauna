@@ -13,6 +13,12 @@
 
   var SYNC_BASE = (typeof faunaApiBase === 'function') ? faunaApiBase() : '';
   var _pollTimer = null;
+  // Per-project "starting pending count" so we can render a determinate
+  // % bar. We use a high-water mark seen since the page mounted: the bar
+  // is 0% when current == hwm, 100% when current == 0. Resets to the
+  // current value when the queue clears (so a fresh wave of edits
+  // doesn't show a stale "98%").
+  var _projHwm = Object.create(null);
 
   function _api(path, opts) {
     return fetch(SYNC_BASE + path, Object.assign({
@@ -305,6 +311,15 @@
       ? '<span title="All synced data is end-to-end encrypted on this device" style="display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:2px 8px;border-radius:10px;background:var(--color-subtleSurface);border:1px solid var(--color-success);color:var(--color-success);margin-top:2px"><i class="ti ti-lock"></i> End-to-end encrypted</span>'
       : '';
 
+    // Preserve the existing Projects subtree across the innerHTML rewrite
+    // so per-project bars don't flicker / re-fetch on every 1s poll tick.
+    // We snapshot the inner HTML, restore it below, then update bars
+    // in place using the latest status.
+    var prevProjects = document.getElementById('cs-projects');
+    var prevProjectsHtml = (prevProjects && prevProjects.querySelector('.cs-proj-row'))
+      ? prevProjects.innerHTML
+      : null;
+
     mount.innerHTML = [
       '<div style="max-width:560px">',
       '  <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">',
@@ -376,10 +391,56 @@
     bind('cs-logout-btn',  _handleLogout);
     bind('cs-backfill-btn', _handleBackfill);
     bind('cs-change-pw-btn', _handleChangePassword);
-    _renderProjects();
+    // Only do the full Projects re-render once per signed-in mount; the
+    // poll handler updates per-project bars in place to avoid flicker
+    // and unnecessary /api/sync/projects refetches.
+    if (prevProjectsHtml) {
+      var freshHost = document.getElementById('cs-projects');
+      if (freshHost) {
+        freshHost.innerHTML = prevProjectsHtml;
+        _bindProjectToggles(freshHost);
+      }
+      _updateProjectProgress(status);
+    } else {
+      _renderProjects();
+    }
   }
 
   // ── Per-project sync controls ─────────────────────────────────────────
+  // Wires the per-row checkbox change handler. Extracted so we can re-
+  // attach handlers after preserving the rendered project list across a
+  // _renderSignedIn() innerHTML rewrite.
+  function _bindProjectToggles(host) {
+    if (!host) return;
+    Array.prototype.forEach.call(host.querySelectorAll('.cs-proj-row'), function (row) {
+      var cb = row.querySelector('.cs-proj-toggle');
+      if (!cb || cb._csBound) return;
+      cb._csBound = true;
+      cb.addEventListener('change', function () {
+        var pid = row.getAttribute('data-pid');
+        var excluded = !cb.checked; // unchecked = excluded from sync
+        cb.disabled = true;
+        _api('/api/sync/projects/' + encodeURIComponent(pid) + '/exclude', {
+          method: 'POST',
+          body: JSON.stringify({ excluded: excluded }),
+        }).then(function (resp) {
+          cb.disabled = false;
+          if (!resp.ok || !resp.body || !resp.body.ok) {
+            // Roll back the visual on failure.
+            cb.checked = !cb.checked;
+            _setStatusLine((resp.body && resp.body.error) || 'Could not update project sync', true);
+            return;
+          }
+          _renderProjects();
+        }).catch(function (e) {
+          cb.disabled = false;
+          cb.checked = !cb.checked;
+          _setStatusLine(e.message || 'Network error', true);
+        });
+      });
+    });
+  }
+
   // Fetches the joined project / pending / excluded list from the server
   // and renders it. Each row gets a toggle switch — flipping it POSTs to
   // /api/sync/projects/:id/exclude and re-renders just this section.
@@ -401,14 +462,37 @@
       var orphan = r.body.unassignedPending || 0;
       var rows = projects.map(function (p) {
         var checked = p.excluded ? '' : 'checked';
-        var pendingBadge = p.pending
-          ? '<span style="font-size:11px;padding:1px 6px;border-radius:10px;background:var(--color-primary);color:var(--color-background);margin-left:6px">' + p.pending + '</span>'
-          : '';
+        var pending = p.pending || 0;
+        // Seed / refresh the per-project hwm so the bar has a denominator
+        // to compute against on the very next poll.
+        if (pending > 0) {
+          _projHwm[p.id] = Math.max(_projHwm[p.id] || 0, pending);
+        } else {
+          delete _projHwm[p.id];
+        }
+        var hwm = _projHwm[p.id] || 0;
+        var pct = hwm > 0 ? Math.max(0, Math.min(100, Math.round(((hwm - pending) / hwm) * 100))) : 100;
+        var pendingBadge = pending
+          ? '<span class="cs-proj-badge" style="font-size:11px;padding:1px 6px;border-radius:10px;background:var(--color-primary);color:var(--color-background);margin-left:6px">' + pending + '</span>'
+          : '<span class="cs-proj-badge" style="display:none"></span>';
+        // Progress bar slot: hidden when there's nothing pending and no
+        // history of pending (idle project). Shown otherwise so the user
+        // can see push progress for THIS project tick by tick.
+        var barDisplay = (pending > 0 || hwm > 0) ? 'block' : 'none';
+        var barHtml = [
+          '<div class="cs-proj-progress" style="display:' + barDisplay + ';width:100%;margin-top:4px;height:4px;background:var(--color-border);border-radius:2px;overflow:hidden">',
+          '  <div class="cs-proj-progress-fill" style="height:100%;width:' + pct + '%;background:var(--color-success);transition:width 250ms ease"></div>',
+          '</div>',
+          '<div class="cs-proj-progress-label" style="display:' + barDisplay + ';font-size:10px;color:var(--color-muted);margin-top:2px">' + pct + '% synced</div>'
+        ].join('');
         return [
           '<label class="cs-proj-row" data-pid="' + _esc(p.id) + '" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 4px;border-bottom:1px solid var(--color-border)">',
-          '  <span style="display:flex;align-items:center;gap:8px;min-width:0;flex:1">',
-          '    <span style="color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _esc(p.name) + '</span>',
-          '    ' + pendingBadge,
+          '  <span class="cs-proj-main" style="display:flex;flex-direction:column;min-width:0;flex:1">',
+          '    <span style="display:flex;align-items:center;gap:8px;min-width:0">',
+          '      <span style="color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _esc(p.name) + '</span>',
+          '      ' + pendingBadge,
+          '    </span>',
+          '    ' + barHtml,
           '  </span>',
           '  <input type="checkbox" class="cs-proj-toggle" ' + checked + ' aria-label="Sync this project">',
           '</label>'
@@ -427,34 +511,52 @@
         '</div>'
       ].join('');
       // Bind the toggles.
-      Array.prototype.forEach.call(host.querySelectorAll('.cs-proj-row'), function (row) {
-        var cb = row.querySelector('.cs-proj-toggle');
-        if (!cb) return;
-        cb.addEventListener('change', function () {
-          var pid = row.getAttribute('data-pid');
-          var excluded = !cb.checked; // unchecked = excluded from sync
-          cb.disabled = true;
-          _api('/api/sync/projects/' + encodeURIComponent(pid) + '/exclude', {
-            method: 'POST',
-            body: JSON.stringify({ excluded: excluded }),
-          }).then(function (resp) {
-            cb.disabled = false;
-            if (!resp.ok || !resp.body || !resp.body.ok) {
-              // Roll back the visual on failure.
-              cb.checked = !cb.checked;
-              _setStatusLine((resp.body && resp.body.error) || 'Could not update project sync', true);
-              return;
-            }
-            _renderProjects();
-          }).catch(function (e) {
-            cb.disabled = false;
-            cb.checked = !cb.checked;
-            _setStatusLine(e.message || 'Network error', true);
-          });
-        });
-      });
+      _bindProjectToggles(host);
     }).catch(function (e) {
       host.innerHTML = '<div class="muted" style="color:var(--color-danger)">' + _esc(e.message) + '</div>';
+    });
+  }
+
+  // In-place updater for the per-project bars + pending badge. Called on
+  // every poll tick so the user sees push progress without re-fetching
+  // /api/sync/projects (which would lose scroll position and flicker).
+  function _updateProjectProgress(status) {
+    var host = document.getElementById('cs-projects');
+    if (!host) return;
+    var byProject = (status && status.pendingByProject) || {};
+    var rows = host.querySelectorAll('.cs-proj-row');
+    Array.prototype.forEach.call(rows, function (row) {
+      var pid = row.getAttribute('data-pid');
+      if (!pid) return;
+      var pending = byProject[pid] || 0;
+      // Update hwm: ratchet up on new work, reset when queue drains so
+      // the next wave of edits gets a fresh denominator.
+      if (pending > 0) {
+        _projHwm[pid] = Math.max(_projHwm[pid] || 0, pending);
+      } else if (_projHwm[pid]) {
+        delete _projHwm[pid];
+      }
+      var hwm = _projHwm[pid] || 0;
+      var pct = hwm > 0 ? Math.max(0, Math.min(100, Math.round(((hwm - pending) / hwm) * 100))) : 100;
+      var badge = row.querySelector('.cs-proj-badge');
+      if (badge) {
+        if (pending > 0) {
+          badge.textContent = String(pending);
+          badge.style.display = '';
+        } else {
+          badge.style.display = 'none';
+        }
+      }
+      var bar = row.querySelector('.cs-proj-progress');
+      var fill = row.querySelector('.cs-proj-progress-fill');
+      var label = row.querySelector('.cs-proj-progress-label');
+      var visible = (pending > 0 || hwm > 0) ? 'block' : 'none';
+      if (bar) bar.style.display = visible;
+      if (label) {
+        label.style.display = visible;
+        label.textContent = pct + '% synced';
+      }
+      if (fill) fill.style.width = pct + '%';
     });
   }
 
