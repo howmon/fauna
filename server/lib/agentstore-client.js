@@ -348,10 +348,16 @@ async function _rawRequest(method, pathname, body, opts = {}) {
         try { parsed = JSON.parse(text); } catch (_) { parsed = text; }
       }
       if (!res.ok) {
-        const e = new Error(_extractError(parsed, res.status, res.statusText)
-          || `HTTP ${res.status} ${res.statusText}`);
+        const reason = _extractError(parsed, res.status, res.statusText)
+          || `HTTP ${res.status} ${res.statusText}`;
+        // Prefix with method+path so the user sees *which* endpoint
+        // failed when the message bubbles up to the sync status panel
+        // ("Last error: GET /api/sync/projects → HTTP 404 Not Found").
+        const e = new Error(`${method} ${pathname} → ${reason}`);
         e.status = res.status;
         e.body = parsed;
+        e.method = method;
+        e.pathname = pathname;
         // Do not retry 4xx — they're deterministic.
         if (res.status >= 400 && res.status < 500) throw e;
         lastErr = e;
