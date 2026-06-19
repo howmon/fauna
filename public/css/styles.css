@@ -6839,6 +6839,56 @@ body.win-platform .acv-header {
   cursor: pointer; font-size: 12px; color: var(--fau-text-muted); margin-bottom: 4px;
 }
 .proj-file-back:hover { background: var(--fau-surface2); color: var(--fau-text); }
+/* Drag-and-drop file upload (Files tab) */
+.proj-file-tree.proj-tree-drop-active {
+  outline: 2px dashed var(--accent, #6ea8fe);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 8%, transparent);
+  border-radius: 8px;
+}
+.proj-file-row.proj-tree-drop-row {
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 18%, transparent) !important;
+  outline: 1px solid var(--accent, #6ea8fe);
+  outline-offset: -1px;
+}
+.proj-tree-drop-hint {
+  position: sticky; top: 0; z-index: 2; padding: 6px 10px; margin: 0 0 4px 0;
+  font-size: 11px; color: var(--accent, #6ea8fe);
+  background: var(--fau-surface2); border: 1px dashed var(--accent, #6ea8fe);
+  border-radius: 6px; text-align: center; pointer-events: none;
+}
+/* Right-click context menu (VS Code-style) */
+.proj-ctx-menu {
+  position: fixed; z-index: 10000;
+  min-width: 200px; max-width: 320px;
+  background: var(--fau-surface2, #1f2125);
+  color: var(--fau-text, #e6e6e6);
+  border: 1px solid var(--fau-border, #2a2d33);
+  border-radius: 6px;
+  box-shadow: 0 10px 28px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.3);
+  padding: 4px 0;
+  font-size: 12px;
+  user-select: none;
+}
+.proj-ctx-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 12px;
+  cursor: pointer;
+  color: var(--fau-text, #e6e6e6);
+  white-space: nowrap;
+}
+.proj-ctx-item i.ti {
+  font-size: 14px; width: 16px; text-align: center; opacity: 0.85;
+}
+.proj-ctx-item:hover {
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 22%, transparent);
+}
+.proj-ctx-item-danger { color: #ff8a8a; }
+.proj-ctx-item-danger:hover { background: color-mix(in srgb, #ff5a5a 32%, transparent); color: #fff; }
+.proj-ctx-sep {
+  height: 1px; margin: 4px 6px;
+  background: var(--fau-border, #2a2d33);
+}
 .proj-file-viewer {
   border: 1px solid var(--fau-border); border-radius: 8px; overflow: hidden;
   display: flex; flex-direction: column; min-height: 0;

@@ -679,6 +679,125 @@ export function createSourceEntry(projectId, srcId, relPath, type) {
   return { path: rel, type };
 }
 
+// Write a binary or text blob into a source. Same path-safety rules as
+// createSourceEntry: rejects '..', null bytes, and any segment that
+// escapes the source root. When { overwrite: true } an existing file is
+// replaced; otherwise the call throws. Parent dirs are created on demand.
+// Used by the drag-and-drop upload endpoint. Returns { path, type, size }.
+export function writeSourceFileBytes(projectId, srcId, relPath, buffer, opts = {}) {
+  const p = getProject(projectId);
+  if (!p) throw new Error('Project not found');
+  if (!Buffer.isBuffer(buffer)) throw new Error('writeSourceFileBytes requires a Buffer');
+
+  let root;
+  if (srcId === '__rootpath__') {
+    if (!p.rootPath) throw new Error('No root folder set for this project');
+    root = p.rootPath;
+  } else {
+    const src = p.sources.find(s => s.id === srcId);
+    if (!src) throw new Error('Source not found');
+    if (src.type !== 'local') throw new Error('Can only write to local sources');
+    root = src.path;
+  }
+  if (!root || !fs.existsSync(root)) throw new Error('Source directory not available');
+
+  const rel = String(relPath || '').replace(/^\/+/, '').replace(/\\/g, '/');
+  if (!rel || rel === '.' || rel === '..') throw new Error('Invalid path');
+  const segments = rel.split('/').filter(Boolean);
+  if (!segments.length) throw new Error('Invalid path');
+  for (const seg of segments) {
+    if (seg === '.' || seg === '..') throw new Error('Path traversal not allowed');
+    if (seg.includes('\0')) throw new Error('Invalid filename');
+  }
+
+  const full = path.resolve(path.join(root, rel));
+  const resolvedRoot = path.resolve(root);
+  if (!full.startsWith(resolvedRoot + path.sep) && full !== resolvedRoot) {
+    throw new Error('Path traversal not allowed');
+  }
+  if (fs.existsSync(full)) {
+    if (!opts.overwrite) throw new Error('A file or folder with that name already exists');
+    const stat = fs.statSync(full);
+    if (stat.isDirectory()) throw new Error('Cannot overwrite a directory with a file');
+  }
+
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, buffer);
+  return { path: rel, type: 'file', size: buffer.length };
+}
+
+// Shared safety check: resolve a source-relative path to an absolute
+// filesystem path, refusing traversal. Returns { fullPath, type }.
+// Unlike resolveSourceFilePath this also returns dirs and does not
+// require the path to exist when { mustExist:false } is passed.
+function _resolveSourceEntryPath(projectId, srcId, relPath, { mustExist = true } = {}) {
+  const p = getProject(projectId);
+  if (!p) throw new Error('Project not found');
+
+  let root;
+  if (srcId === '__rootpath__') {
+    if (!p.rootPath) throw new Error('No root folder set for this project');
+    root = p.rootPath;
+  } else {
+    const src = p.sources.find(s => s.id === srcId);
+    if (!src) throw new Error('Source not found');
+    if (src.type !== 'local') throw new Error('Only local sources support this operation');
+    root = src.path;
+  }
+  if (!root || !fs.existsSync(root)) throw new Error('Source directory not available');
+
+  const rel = String(relPath || '').replace(/^\/+/, '').replace(/\\/g, '/');
+  if (!rel || rel === '.' || rel === '..') throw new Error('Invalid path');
+  const segments = rel.split('/').filter(Boolean);
+  for (const seg of segments) {
+    if (seg === '.' || seg === '..') throw new Error('Path traversal not allowed');
+    if (seg.includes('\0')) throw new Error('Invalid filename');
+  }
+  const full = path.resolve(path.join(root, rel));
+  const resolvedRoot = path.resolve(root);
+  if (!full.startsWith(resolvedRoot + path.sep) && full !== resolvedRoot) {
+    throw new Error('Path traversal not allowed');
+  }
+  if (mustExist && !fs.existsSync(full)) throw new Error('File not found');
+  const type = (mustExist && fs.statSync(full).isDirectory()) ? 'dir' : 'file';
+  return { fullPath: full, root: resolvedRoot, rel, type };
+}
+
+// Resolve an arbitrary (file or directory) source-relative path to its
+// absolute filesystem path. Used by the "Reveal in Finder" route.
+export function getSourceEntryAbsolutePath(projectId, srcId, relPath) {
+  const { fullPath, type } = _resolveSourceEntryPath(projectId, srcId, relPath, { mustExist: true });
+  return { fullPath, type };
+}
+
+// Rename a file or directory inside a source. Both paths must resolve
+// inside the same source root. Refuses to overwrite an existing entry.
+// Parent directories of the destination are NOT created — rename does
+// not change the directory structure, only the leaf name (or its
+// immediate parent). Returns { oldPath, newPath, type }.
+export function renameSourceEntry(projectId, srcId, oldRel, newRel) {
+  const oldInfo = _resolveSourceEntryPath(projectId, srcId, oldRel, { mustExist: true });
+  const newInfo = _resolveSourceEntryPath(projectId, srcId, newRel, { mustExist: false });
+  if (fs.existsSync(newInfo.fullPath)) {
+    throw new Error('A file or folder with that name already exists');
+  }
+  fs.mkdirSync(path.dirname(newInfo.fullPath), { recursive: true });
+  fs.renameSync(oldInfo.fullPath, newInfo.fullPath);
+  return { oldPath: oldInfo.rel, newPath: newInfo.rel, type: oldInfo.type };
+}
+
+// Delete a file or directory inside a source. Directories are removed
+// recursively. Returns { path, type }.
+export function deleteSourceEntry(projectId, srcId, relPath) {
+  const info = _resolveSourceEntryPath(projectId, srcId, relPath, { mustExist: true });
+  if (info.type === 'dir') {
+    fs.rmSync(info.fullPath, { recursive: true, force: true });
+  } else {
+    fs.unlinkSync(info.fullPath);
+  }
+  return { path: info.rel, type: info.type };
+}
+
 // Validate path and return absolute file path + metadata (for the /raw streaming endpoint)
 export function resolveSourceFilePath(projectId, srcId, filePath) {
   const p = getProject(projectId);

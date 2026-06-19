@@ -1,3 +1,5 @@
+import express from 'express';
+
 export function registerProjectRoutes(app, deps) {
   // Project-level checkpoints — sidecar restore for uncommitted work.
   // Imported lazily so the route file stays self-contained.
@@ -35,6 +37,11 @@ export function registerProjectRoutes(app, deps) {
     readSourceFile,
     resolveSourceFilePath,
     createSourceEntry,
+    writeSourceFileBytes,
+    deleteSourceEntry,
+    renameSourceEntry,
+    getSourceEntryAbsolutePath,
+    requireElectron,
     addContext,
     updateContext,
     removeContext,
@@ -215,6 +222,136 @@ export function registerProjectRoutes(app, deps) {
       res.status(201).json(entry);
     } catch (e) {
       res.status(400).json({ error: e.message });
+    }
+  });
+
+  // Drag-and-drop upload: write raw bytes to a source path. Path supplied
+  // via ?path=foo/bar.png (URL-encoded). Optional ?overwrite=1 replaces
+  // an existing file; otherwise we 409. Cap matches the chat attachment
+  // limit (25mb) so the UX is symmetric. Bypasses the global express.json()
+  // parser via the explicit raw middleware below.
+  app.post(
+    '/api/projects/:id/sources/:srcId/upload',
+    express.raw({ type: '*/*', limit: '50mb' }),
+    (req, res) => {
+      try {
+        if (typeof writeSourceFileBytes !== 'function') {
+          return res.status(501).json({ error: 'upload not wired on this server' });
+        }
+        const relPath = String(req.query.path || '').trim();
+        if (!relPath) return res.status(400).json({ error: 'path query param required' });
+        const overwrite = req.query.overwrite === '1' || req.query.overwrite === 'true';
+        const buf = Buffer.isBuffer(req.body)
+          ? req.body
+          : Buffer.from(req.body || '');
+        const entry = writeSourceFileBytes(
+          req.params.id, req.params.srcId, relPath, buf, { overwrite },
+        );
+        res.status(201).json(entry);
+      } catch (e) {
+        const msg = e?.message || String(e);
+        const code = /already exists/i.test(msg) ? 409
+          : /traversal|invalid|required|not allowed/i.test(msg) ? 400
+          : 500;
+        res.status(code).json({ error: msg });
+      }
+    },
+  );
+
+  // Rename / move a file or directory inside a source. Body:
+  // { oldPath, newPath }. Both paths are source-relative.
+  app.patch('/api/projects/:id/sources/:srcId/entry', (req, res) => {
+    try {
+      if (typeof renameSourceEntry !== 'function') {
+        return res.status(501).json({ error: 'rename not wired on this server' });
+      }
+      const { oldPath, newPath } = req.body || {};
+      if (!oldPath || !newPath) return res.status(400).json({ error: 'oldPath and newPath required' });
+      const out = renameSourceEntry(req.params.id, req.params.srcId, oldPath, newPath);
+      res.json(out);
+    } catch (e) {
+      const msg = e?.message || String(e);
+      const code = /already exists/i.test(msg) ? 409
+        : /not found/i.test(msg) ? 404
+        : /traversal|invalid|required|not allowed/i.test(msg) ? 400
+        : 500;
+      res.status(code).json({ error: msg });
+    }
+  });
+
+  // Delete a file or directory inside a source. Path supplied via
+  // ?path=foo/bar (URL-encoded). Directories are removed recursively.
+  app.delete('/api/projects/:id/sources/:srcId/entry', (req, res) => {
+    try {
+      if (typeof deleteSourceEntry !== 'function') {
+        return res.status(501).json({ error: 'delete not wired on this server' });
+      }
+      const relPath = String(req.query.path || '').trim();
+      if (!relPath) return res.status(400).json({ error: 'path query param required' });
+      const out = deleteSourceEntry(req.params.id, req.params.srcId, relPath);
+      res.json(out);
+    } catch (e) {
+      const msg = e?.message || String(e);
+      const code = /not found/i.test(msg) ? 404
+        : /traversal|invalid|required|not allowed/i.test(msg) ? 400
+        : 500;
+      res.status(code).json({ error: msg });
+    }
+  });
+
+  // Resolve a source-relative path to its absolute filesystem path
+  // without any side effects. Used by the renderer's Copy Path action.
+  // Returns { fullPath, type }.
+  app.get('/api/projects/:id/sources/:srcId/abspath', (req, res) => {
+    try {
+      if (typeof getSourceEntryAbsolutePath !== 'function') {
+        return res.status(501).json({ error: 'abspath not wired on this server' });
+      }
+      const relPath = String(req.query.path || '').trim();
+      if (!relPath) return res.status(400).json({ error: 'path query param required' });
+      const { fullPath, type } = getSourceEntryAbsolutePath(
+        req.params.id, req.params.srcId, relPath,
+      );
+      res.json({ fullPath, type });
+    } catch (e) {
+      const msg = e?.message || String(e);
+      const code = /not found/i.test(msg) ? 404
+        : /traversal|invalid|required|not allowed/i.test(msg) ? 400
+        : 500;
+      res.status(code).json({ error: msg });
+    }
+  });
+
+  // Reveal a source entry in the OS file manager (Finder / Explorer).
+  // Resolves the source-relative path to its absolute filesystem location
+  // and hands it to Electron's shell.showItemInFolder. Returns the absolute
+  // path in `fullPath` so the renderer can also offer Copy Path / Copy
+  // Relative Path without re-deriving it.
+  app.post('/api/projects/:id/sources/:srcId/reveal', (req, res) => {
+    try {
+      if (typeof getSourceEntryAbsolutePath !== 'function') {
+        return res.status(501).json({ error: 'reveal not wired on this server' });
+      }
+      const relPath = String(req.query.path || '').trim();
+      if (!relPath) return res.status(400).json({ error: 'path query param required' });
+      const { fullPath, type } = getSourceEntryAbsolutePath(
+        req.params.id, req.params.srcId, relPath,
+      );
+      try {
+        const { shell } = requireElectron('electron');
+        shell.showItemInFolder(fullPath);
+      } catch (e) {
+        // Electron not available (e.g. server running outside Electron host)
+        // — still return the resolved path so the caller can copy/use it.
+        return res.json({ ok: false, fullPath, type, error: 'electron unavailable: ' + e.message });
+      }
+      res.json({ ok: true, fullPath, type });
+    } catch (e) {
+      const msg = e?.message || String(e);
+      const code = /not found/i.test(msg) ? 404
+        : /traversal|invalid|required|not allowed/i.test(msg) ? 400
+        : 500;
+      res.status(code).json({ error: msg });
     }
   });
 

@@ -796,8 +796,10 @@ function _renderFilesTab(proj) {
     '<select class="proj-src-select" onchange="loadProjectFileTree(this.value, \'\')">' + srcOptions + '</select>' +
     '<button class="proj-icon-btn" onclick="newProjectEntry(\'hub\', \'\', \'file\')" title="New file"><i class="ti ti-file-plus"></i></button>' +
     '<button class="proj-icon-btn" onclick="newProjectEntry(\'hub\', \'\', \'dir\')" title="New folder"><i class="ti ti-folder-plus"></i></button>' +
+    '<button class="proj-icon-btn" onclick="_triggerProjectUpload(\'hub\', \'\')" title="Upload files"><i class="ti ti-upload"></i></button>' +
     '<button class="proj-icon-btn" onclick="openProjectFileExplorer()" title="Expand to full screen"><i class="ti ti-arrows-maximize"></i></button>' +
     '<button class="proj-icon-btn" onclick="loadProjectFileTree(document.querySelector(\'.proj-src-select\').value, \'\')" title="Refresh"><i class="ti ti-refresh"></i></button>' +
+    '<input id="proj-hub-upload-input" type="file" multiple style="display:none" onchange="_handleProjectUploadPick(\'hub\', this)"/>' +
   '</div>' +
   '<div class="proj-files-layout">' +
     '<div id="proj-file-tree-root" class="proj-file-tree proj-files-tree-col"></div>' +
@@ -838,7 +840,7 @@ function _treeRenderLevel(st, path, depth) {
       var children = open ? _treeRenderLevel(st, f.path, depth + 1) : '';
       var dirPathEsc = _projEsc(f.path);
       return '<div>' +
-        '<div class="proj-file-row proj-tree-dir-row" style="padding-left:' + pad + 'px" onclick="_treeToggleDir(\'' + st._id + '\',\'' + dirPathEsc + '\')">' +
+        '<div class="proj-file-row proj-tree-dir-row" data-dir-path="' + dirPathEsc + '" style="padding-left:' + pad + 'px" onclick="_treeToggleDir(\'' + st._id + '\',\'' + dirPathEsc + '\')">' +
           '<i class="ti ' + chevron + ' proj-tree-chevron"></i>' +
           '<i class="ti ' + folderIco + ' proj-file-icon proj-folder-icon"></i>' +
           '<span class="proj-file-name">' + _projEsc(f.name) + '</span>' +
@@ -853,7 +855,7 @@ function _treeRenderLevel(st, path, depth) {
     } else {
       var opened = !!st.openedFiles[f.path];
       var size = f.size ? '<span class="proj-file-size">' + _fmtSize(f.size) + '</span>' : '';
-      return '<div class="proj-file-row' + (opened ? ' proj-file-opened' : '') + '" style="padding-left:' + pad + 'px" onclick="_treeOpenFile(\'' + st._id + '\',\'' + _projEsc(f.path) + '\')">' +
+      return '<div class="proj-file-row' + (opened ? ' proj-file-opened' : '') + '" data-file-path="' + _projEsc(f.path) + '" style="padding-left:' + pad + 'px" onclick="_treeOpenFile(\'' + st._id + '\',\'' + _projEsc(f.path) + '\')">' +
         '<i class="ti ' + _fileIcon(f.ext) + ' proj-file-icon"></i>' +
         '<span class="proj-file-name">' + _projEsc(f.name) + '</span>' +
         size +
@@ -888,6 +890,499 @@ function _treeOpenFile(stId, filePath) {
   else explorerOpenFile(st.srcId, filePath);
 }
 
+// ── Drag-and-drop upload ─────────────────────────────────────────────────
+// Wire dragover/drop on the tree container. Identifying the target dir:
+//   - drop over a directory row → that directory
+//   - drop over a file row → its parent directory
+//   - drop on empty space → source root
+// Files post one-by-one to /upload as application/octet-stream. Holding
+// Option (Alt) during drop triggers overwrite=1 — without it, collisions
+// surface as "skipped". `webkitGetAsEntry` is preferred so dropped folders
+// recurse; we fall back to `event.dataTransfer.files` (flat) otherwise.
+function _treeBindDnd(st) {
+  var rootId = st._id === 'hub' ? 'proj-file-tree-root' : 'proj-exp-tree';
+  var el = document.getElementById(rootId);
+  if (!el) return;
+  if (el.dataset.dndBound === '1') return;
+  el.dataset.dndBound = '1';
+
+  var hoveredRow = null;
+  function clearHover() {
+    if (hoveredRow) { hoveredRow.classList.remove('proj-tree-drop-row'); hoveredRow = null; }
+  }
+  function setHover(row) {
+    if (row === hoveredRow) return;
+    clearHover();
+    if (row) { row.classList.add('proj-tree-drop-row'); hoveredRow = row; }
+  }
+  function targetDirFor(evt) {
+    var row = evt.target && evt.target.closest && evt.target.closest('.proj-file-row');
+    if (!row) return { dir: '', row: null };
+    var isDir = row.classList.contains('proj-tree-dir-row');
+    if (isDir) {
+      var dirPath = row.getAttribute('data-dir-path');
+      return { dir: dirPath || '', row: row };
+    }
+    var filePath = row.getAttribute('data-file-path') || '';
+    var slash = filePath.lastIndexOf('/');
+    return { dir: slash >= 0 ? filePath.slice(0, slash) : '', row: row };
+  }
+
+  el.addEventListener('dragenter', function(evt) {
+    if (!evt.dataTransfer || !Array.from(evt.dataTransfer.types || []).includes('Files')) return;
+    evt.preventDefault();
+    el.classList.add('proj-tree-drop-active');
+  });
+  el.addEventListener('dragover', function(evt) {
+    if (!evt.dataTransfer || !Array.from(evt.dataTransfer.types || []).includes('Files')) return;
+    evt.preventDefault();
+    evt.dataTransfer.dropEffect = 'copy';
+    el.classList.add('proj-tree-drop-active');
+    var t = targetDirFor(evt);
+    setHover(t.row);
+  });
+  el.addEventListener('dragleave', function(evt) {
+    if (evt.target === el || !el.contains(evt.relatedTarget)) {
+      el.classList.remove('proj-tree-drop-active');
+      clearHover();
+    }
+  });
+  el.addEventListener('drop', async function(evt) {
+    if (!evt.dataTransfer || !Array.from(evt.dataTransfer.types || []).includes('Files')) return;
+    evt.preventDefault();
+    el.classList.remove('proj-tree-drop-active');
+    clearHover();
+    if (!st.srcId) { _showToast('Open a source first', true); return; }
+    var t = targetDirFor(evt);
+    var overwrite = !!evt.altKey;
+    var entries = _treeReadDataTransferEntries(evt.dataTransfer);
+    if (entries.length) {
+      await _treeUploadEntries(st, t.dir, entries, overwrite);
+    } else {
+      var files = Array.from(evt.dataTransfer.files || []);
+      if (!files.length) return;
+      await _treeUploadFlatFiles(st, t.dir, files, overwrite);
+    }
+  });
+}
+
+// ----- Manual upload via the toolbar Upload button --------------------------
+// _triggerProjectUpload opens the hidden file picker; _handleProjectUploadPick
+// reads the selected files and routes them through _treeUploadFlatFiles so
+// the same upload pipeline (toast summary, refresh, overwrite handling) is
+// used for both DnD and manual uploads. `_pendingUploadDir` lets a folder
+// row's context-menu "Upload Files Here…" target a sub-directory.
+
+var _pendingUploadDir = { hub: '', explorer: '' };
+
+function _triggerProjectUpload(stId, dirPath) {
+  var st = stId === 'hub' ? _hubTreeState : _explorerTreeState;
+  if (!st.srcId) { _showToast('Open a source first', true); return; }
+  _pendingUploadDir[stId] = dirPath || '';
+  var inputId = stId === 'hub' ? 'proj-hub-upload-input' : 'proj-explorer-upload-input';
+  var input = document.getElementById(inputId);
+  if (!input) { _showToast('Upload control missing', true); return; }
+  // Reset value so picking the same file twice still fires `change`.
+  input.value = '';
+  input.click();
+}
+
+async function _handleProjectUploadPick(stId, inputEl) {
+  var st = stId === 'hub' ? _hubTreeState : _explorerTreeState;
+  var files = Array.from((inputEl && inputEl.files) || []);
+  var baseDir = _pendingUploadDir[stId] || '';
+  if (!files.length) return;
+  await _treeUploadFlatFiles(st, baseDir, files, false);
+  if (inputEl) inputEl.value = '';
+}
+
+// ----- Right-click context menu ---------------------------------------------
+// VS Code-style popover with file/folder actions. Bound once per tree
+// container (guarded via `data-ctxBound`). Rows expose `data-file-path`
+// (files) or `data-dir-path` (directories); we route through the same
+// helpers regardless of whether the tree is in the hub or the explorer.
+
+var _activeProjCtxMenu = null;
+
+function _treeBindContextMenu(st) {
+  var rootId = st._id === 'hub' ? 'proj-file-tree-root' : 'proj-exp-tree';
+  var el = document.getElementById(rootId);
+  if (!el) return;
+  if (el.dataset.ctxBound === '1') return;
+  el.dataset.ctxBound = '1';
+  el.addEventListener('contextmenu', function(evt) {
+    var row = evt.target && evt.target.closest && evt.target.closest('.proj-file-row');
+    var isDir, targetPath;
+    if (!row) {
+      // Empty-space right-click → root menu (Upload / New file / New folder).
+      isDir = true; targetPath = '';
+    } else {
+      isDir = row.classList.contains('proj-tree-dir-row');
+      targetPath = isDir
+        ? (row.getAttribute('data-dir-path') || '')
+        : (row.getAttribute('data-file-path') || '');
+    }
+    evt.preventDefault();
+    _showProjCtxMenu(st, evt.clientX, evt.clientY, isDir, targetPath);
+  });
+}
+
+function _showProjCtxMenu(st, x, y, isDir, targetPath) {
+  _dismissProjCtxMenu();
+  var items = [];
+  if (isDir) {
+    items.push({ label: 'New File…',          icon: 'ti-file-plus',   handler: function() { newProjectEntry(st._id, targetPath, 'file'); } });
+    items.push({ label: 'New Folder…',        icon: 'ti-folder-plus', handler: function() { newProjectEntry(st._id, targetPath, 'dir');  } });
+    items.push({ label: 'Upload Files Here…', icon: 'ti-upload',      handler: function() { _triggerProjectUpload(st._id, targetPath); } });
+    if (targetPath) {
+      items.push({ sep: true });
+      items.push({ label: 'Reveal in Finder',    icon: 'ti-folder-open',  handler: function() { _treeRevealInFinder(st, targetPath); } });
+      items.push({ label: 'Copy Path',           icon: 'ti-clipboard',     handler: function() { _treeCopyAbsPath(st, targetPath); } });
+      items.push({ label: 'Copy Relative Path',  icon: 'ti-clipboard-text', handler: function() { _treeCopyRelPath(targetPath); } });
+      items.push({ sep: true });
+      items.push({ label: 'Rename…',             icon: 'ti-edit',          handler: function() { _treeRenameEntry(st, targetPath, true); } });
+      items.push({ label: 'Delete',              icon: 'ti-trash', danger: true, handler: function() { _treeDeleteEntry(st, targetPath, true); } });
+    }
+  } else {
+    items.push({ label: 'Open',                  icon: 'ti-file',         handler: function() { _treeOpenFile(st._id, targetPath); } });
+    items.push({ sep: true });
+    items.push({ label: 'Reveal in Finder',      icon: 'ti-folder-open',  handler: function() { _treeRevealInFinder(st, targetPath); } });
+    items.push({ label: 'Copy Path',             icon: 'ti-clipboard',     handler: function() { _treeCopyAbsPath(st, targetPath); } });
+    items.push({ label: 'Copy Relative Path',    icon: 'ti-clipboard-text', handler: function() { _treeCopyRelPath(targetPath); } });
+    items.push({ sep: true });
+    items.push({ label: 'Rename…',               icon: 'ti-edit',          handler: function() { _treeRenameEntry(st, targetPath, false); } });
+    items.push({ label: 'Delete',                icon: 'ti-trash', danger: true, handler: function() { _treeDeleteEntry(st, targetPath, false); } });
+  }
+
+  var menu = document.createElement('div');
+  menu.className = 'proj-ctx-menu';
+  menu.setAttribute('role', 'menu');
+  var html = '';
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    if (it.sep) { html += '<div class="proj-ctx-sep"></div>'; continue; }
+    html += '<div class="proj-ctx-item' + (it.danger ? ' proj-ctx-item-danger' : '') + '" data-idx="' + i + '">' +
+      '<i class="ti ' + (it.icon || 'ti-point') + '"></i>' +
+      '<span>' + _projEsc(it.label) + '</span>' +
+      '</div>';
+  }
+  menu.innerHTML = html;
+  document.body.appendChild(menu);
+  // Position with viewport clamping.
+  var vw = window.innerWidth, vh = window.innerHeight;
+  menu.style.visibility = 'hidden';
+  menu.style.left = '0px'; menu.style.top = '0px';
+  var r = menu.getBoundingClientRect();
+  var px = x, py = y;
+  if (px + r.width  > vw - 4) px = Math.max(4, vw - r.width  - 4);
+  if (py + r.height > vh - 4) py = Math.max(4, vh - r.height - 4);
+  menu.style.left = px + 'px';
+  menu.style.top  = py + 'px';
+  menu.style.visibility = '';
+
+  menu.addEventListener('click', function(e) {
+    var row = e.target.closest && e.target.closest('.proj-ctx-item');
+    if (!row) return;
+    var idx = parseInt(row.getAttribute('data-idx'), 10);
+    var it = items[idx];
+    _dismissProjCtxMenu();
+    if (it && typeof it.handler === 'function') {
+      try { it.handler(); } catch (err) { _showToast(err.message, true); }
+    }
+  });
+  _activeProjCtxMenu = menu;
+  // Defer the global listeners so the same click that opened the menu
+  // doesn't immediately close it.
+  setTimeout(function() {
+    document.addEventListener('mousedown', _projCtxOutsideHandler, true);
+    document.addEventListener('keydown',   _projCtxKeyHandler, true);
+    window.addEventListener('blur',        _dismissProjCtxMenu);
+    window.addEventListener('resize',      _dismissProjCtxMenu);
+    window.addEventListener('scroll',      _dismissProjCtxMenu, true);
+  }, 0);
+}
+
+function _projCtxOutsideHandler(e) {
+  if (!_activeProjCtxMenu) return;
+  if (_activeProjCtxMenu.contains(e.target)) return;
+  _dismissProjCtxMenu();
+}
+function _projCtxKeyHandler(e) {
+  if (e.key === 'Escape') _dismissProjCtxMenu();
+}
+function _dismissProjCtxMenu() {
+  if (!_activeProjCtxMenu) return;
+  _activeProjCtxMenu.remove();
+  _activeProjCtxMenu = null;
+  document.removeEventListener('mousedown', _projCtxOutsideHandler, true);
+  document.removeEventListener('keydown',   _projCtxKeyHandler, true);
+  window.removeEventListener('blur',        _dismissProjCtxMenu);
+  window.removeEventListener('resize',      _dismissProjCtxMenu);
+  window.removeEventListener('scroll',      _dismissProjCtxMenu, true);
+}
+
+async function _treeRevealInFinder(st, relPath) {
+  if (!st.srcId) return;
+  try {
+    var url = '/api/projects/' + encodeURIComponent(state.activeProjectId) +
+      '/sources/' + encodeURIComponent(st.srcId) +
+      '/reveal?path=' + encodeURIComponent(relPath);
+    var r = await fetch(url, { method: 'POST' });
+    var j = await r.json().catch(function() { return {}; });
+    if (!r.ok) { _showToast('Reveal failed: ' + (j.error || ('HTTP ' + r.status)), true); return; }
+    if (j.ok === false) _showToast(j.error || 'Reveal unavailable in this context', true);
+  } catch (e) { _showToast('Reveal failed: ' + e.message, true); }
+}
+
+async function _treeCopyAbsPath(st, relPath) {
+  if (!st.srcId) return;
+  try {
+    var url = '/api/projects/' + encodeURIComponent(state.activeProjectId) +
+      '/sources/' + encodeURIComponent(st.srcId) +
+      '/abspath?path=' + encodeURIComponent(relPath);
+    var r = await fetch(url);
+    var j = await r.json().catch(function() { return {}; });
+    if (!r.ok || !j.fullPath) { _showToast('Copy path failed: ' + (j.error || ('HTTP ' + r.status)), true); return; }
+    await _projCopyToClipboard(j.fullPath);
+    _showToast('Path copied');
+  } catch (e) { _showToast('Copy path failed: ' + e.message, true); }
+}
+
+async function _treeCopyRelPath(relPath) {
+  try {
+    await _projCopyToClipboard(relPath);
+    _showToast('Relative path copied');
+  } catch (e) { _showToast('Copy failed: ' + e.message, true); }
+}
+
+function _projCopyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text);
+  }
+  // Fallback: hidden textarea + execCommand.
+  return new Promise(function(resolve, reject) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      var ok = document.execCommand('copy');
+      ta.remove();
+      ok ? resolve() : reject(new Error('execCommand copy failed'));
+    } catch (e) { reject(e); }
+  });
+}
+
+async function _treeRenameEntry(st, relPath, isDir) {
+  if (!st.srcId) return;
+  var oldName = relPath.split('/').pop();
+  var parent = relPath.split('/').slice(0, -1).join('/');
+  var newName = await _projPrompt({
+    title: isDir ? 'Rename folder' : 'Rename file',
+    label: 'New name',
+    placeholder: oldName,
+    defaultValue: oldName,
+    submit: 'Rename',
+    validate: function(v) {
+      v = (v || '').trim();
+      if (!v) return 'Name is required.';
+      if (v === oldName) return 'Name unchanged.';
+      if (v.indexOf('\\') !== -1) return 'Use forward slashes for paths.';
+      var segs = v.split('/').filter(Boolean);
+      for (var i = 0; i < segs.length; i++) {
+        if (segs[i] === '.' || segs[i] === '..') return 'Path traversal not allowed.';
+      }
+      return null;
+    },
+  });
+  if (!newName) return;
+  newName = newName.trim();
+  var newRel = parent ? (parent + '/' + newName) : newName;
+  try {
+    var url = '/api/projects/' + encodeURIComponent(state.activeProjectId) +
+      '/sources/' + encodeURIComponent(st.srcId) + '/entry';
+    var r = await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ oldPath: relPath, newPath: newRel }),
+    });
+    var j = await r.json().catch(function() { return {}; });
+    if (!r.ok) { _showToast('Rename failed: ' + (j.error || ('HTTP ' + r.status)), true); return; }
+    if (!isDir && st.openedFiles && st.openedFiles[relPath]) {
+      st.openedFiles[newRel] = st.openedFiles[relPath];
+      delete st.openedFiles[relPath];
+    }
+    // Drop cache keys under the old prefix so the refresh picks up the new layout.
+    var keys = Object.keys(st.dirCache);
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      if (k === relPath || k.indexOf(relPath + '/') === 0) delete st.dirCache[k];
+    }
+    await _treeRefreshDirs(st, [parent]);
+    _showToast('Renamed');
+  } catch (e) { _showToast('Rename failed: ' + e.message, true); }
+}
+
+async function _treeDeleteEntry(st, relPath, isDir) {
+  if (!st.srcId) return;
+  var label = isDir ? ('folder "' + relPath + '" and all its contents') : ('file "' + relPath + '"');
+  var ok = await _projConfirm('Permanently delete ' + label + '? This cannot be undone.');
+  if (!ok) return;
+  try {
+    var url = '/api/projects/' + encodeURIComponent(state.activeProjectId) +
+      '/sources/' + encodeURIComponent(st.srcId) +
+      '/entry?path=' + encodeURIComponent(relPath);
+    var r = await fetch(url, { method: 'DELETE' });
+    var j = await r.json().catch(function() { return {}; });
+    if (!r.ok) { _showToast('Delete failed: ' + (j.error || ('HTTP ' + r.status)), true); return; }
+    if (st.openedFiles) {
+      Object.keys(st.openedFiles).forEach(function(k) {
+        if (k === relPath || (isDir && k.indexOf(relPath + '/') === 0)) {
+          delete st.openedFiles[k];
+        }
+      });
+    }
+    var parent = relPath.split('/').slice(0, -1).join('/');
+    var keys = Object.keys(st.dirCache);
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      if (k === relPath || k.indexOf(relPath + '/') === 0) delete st.dirCache[k];
+    }
+    await _treeRefreshDirs(st, [parent]);
+    _showToast('Deleted');
+  } catch (e) { _showToast('Delete failed: ' + e.message, true); }
+}
+
+function _treeReadDataTransferEntries(dt) {
+  var out = [];
+  if (!dt || !dt.items) return out;
+  for (var i = 0; i < dt.items.length; i++) {
+    var it = dt.items[i];
+    if (it.kind !== 'file') continue;
+    var entry = typeof it.webkitGetAsEntry === 'function' ? it.webkitGetAsEntry() : null;
+    if (entry) out.push(entry);
+  }
+  return out;
+}
+
+// Recursively walk a FileSystemEntry and POST every File found. Returns
+// counts so we can summarise in a single toast at the end.
+async function _treeUploadEntries(st, baseDir, entries, overwrite) {
+  var stats = { uploaded: 0, skipped: 0, failed: 0, dirs: new Set([baseDir]) };
+  for (var i = 0; i < entries.length; i++) {
+    await _treeWalkEntry(st, baseDir, entries[i], overwrite, stats);
+  }
+  await _treeRefreshDirs(st, Array.from(stats.dirs));
+  _treeSummariseUpload(stats);
+}
+
+async function _treeWalkEntry(st, baseDir, entry, overwrite, stats) {
+  if (!entry) return;
+  if (entry.isFile) {
+    var file = await new Promise(function(resolve) { entry.file(resolve, function() { resolve(null); }); });
+    if (!file) { stats.failed++; return; }
+    // entry.fullPath starts with '/' and reflects the dropped folder layout.
+    var relInner = entry.fullPath ? entry.fullPath.replace(/^\//, '') : entry.name;
+    var rel = _joinPath(baseDir, relInner);
+    var parent = rel.split('/').slice(0, -1).join('/');
+    stats.dirs.add(parent);
+    var ok = await _treeUploadOne(st, rel, file, overwrite);
+    if (ok === 'uploaded') stats.uploaded++;
+    else if (ok === 'skipped') stats.skipped++;
+    else stats.failed++;
+  } else if (entry.isDirectory) {
+    var reader = entry.createReader();
+    var children = await _readAllDirEntries(reader);
+    for (var i = 0; i < children.length; i++) {
+      await _treeWalkEntry(st, baseDir, children[i], overwrite, stats);
+    }
+  }
+}
+
+function _readAllDirEntries(reader) {
+  return new Promise(function(resolve) {
+    var all = [];
+    function pump() {
+      reader.readEntries(function(batch) {
+        if (!batch.length) { resolve(all); return; }
+        all = all.concat(Array.from(batch));
+        pump();
+      }, function() { resolve(all); });
+    }
+    pump();
+  });
+}
+
+async function _treeUploadFlatFiles(st, baseDir, files, overwrite) {
+  var stats = { uploaded: 0, skipped: 0, failed: 0, dirs: new Set([baseDir]) };
+  for (var i = 0; i < files.length; i++) {
+    var f = files[i];
+    var rel = _joinPath(baseDir, f.name);
+    var ok = await _treeUploadOne(st, rel, f, overwrite);
+    if (ok === 'uploaded') stats.uploaded++;
+    else if (ok === 'skipped') stats.skipped++;
+    else stats.failed++;
+  }
+  await _treeRefreshDirs(st, Array.from(stats.dirs));
+  _treeSummariseUpload(stats);
+}
+
+async function _treeUploadOne(st, relPath, file, overwrite) {
+  try {
+    var buf = await file.arrayBuffer();
+    var url = '/api/projects/' + encodeURIComponent(state.activeProjectId) +
+      '/sources/' + encodeURIComponent(st.srcId) +
+      '/upload?path=' + encodeURIComponent(relPath) +
+      (overwrite ? '&overwrite=1' : '');
+    var r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: buf,
+    });
+    if (r.ok) return 'uploaded';
+    if (r.status === 409) return 'skipped';
+    var msg = '';
+    try { var j = await r.json(); msg = j && j.error; } catch (_) {}
+    _showToast('Upload failed: ' + relPath + ' — ' + (msg || ('HTTP ' + r.status)), true);
+    return 'failed';
+  } catch (e) {
+    _showToast('Upload failed: ' + relPath + ' — ' + e.message, true);
+    return 'failed';
+  }
+}
+
+async function _treeRefreshDirs(st, dirs) {
+  var unique = Array.from(new Set(dirs));
+  // Shallowest first so a parent's cache is loaded before its newly-added subdirs.
+  unique.sort(function(a, b) { return a.split('/').length - b.split('/').length; });
+  for (var i = 0; i < unique.length; i++) {
+    var dir = unique[i];
+    try {
+      var r = await fetch('/api/projects/' + encodeURIComponent(state.activeProjectId) +
+        '/sources/' + encodeURIComponent(st.srcId) +
+        '/files?path=' + encodeURIComponent(dir));
+      var files = await r.json();
+      st.dirCache[dir] = r.ok ? files : [];
+      if (dir) st.expanded[dir] = true;
+    } catch (_) {}
+  }
+  _treeRender(st);
+}
+
+function _treeSummariseUpload(stats) {
+  var parts = [];
+  if (stats.uploaded) parts.push(stats.uploaded + ' uploaded');
+  if (stats.skipped)  parts.push(stats.skipped + ' skipped (exists — hold Option to overwrite)');
+  if (stats.failed)   parts.push(stats.failed + ' failed');
+  if (!parts.length) return;
+  _showToast(parts.join(' · '), stats.failed > 0 && stats.uploaded === 0);
+}
+
+function _joinPath(dir, name) {
+  var clean = String(name || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!dir) return clean;
+  return dir.replace(/\/+$/, '') + '/' + clean;
+}
+
 async function _treeInit(st, srcId) {
   if (!state.activeProjectId) return;
   st.srcId = srcId;
@@ -901,6 +1396,8 @@ async function _treeInit(st, srcId) {
     if (!r.ok) { if (el) el.innerHTML = '<div class="proj-hub-error">' + _projEsc(files.error) + '</div>'; return; }
     st.dirCache[''] = files;
     _treeRender(st);
+    _treeBindDnd(st);
+    _treeBindContextMenu(st);
   } catch(e) { if (el) el.innerHTML = '<div class="proj-hub-error">' + _projEsc(e.message) + '</div>'; }
 }
 
@@ -1270,8 +1767,10 @@ function openProjectFileExplorer() {
         '<select class="proj-src-select proj-explorer-src-select" id="proj-exp-src" onchange="explorerLoadTree(this.value,\'\')">' + srcOptions + '</select>' +
         '<button class="proj-icon-btn" onclick="newProjectEntry(\'explorer\', \'\', \'file\')" title="New file"><i class="ti ti-file-plus"></i></button>' +
         '<button class="proj-icon-btn" onclick="newProjectEntry(\'explorer\', \'\', \'dir\')" title="New folder"><i class="ti ti-folder-plus"></i></button>' +
+        '<button class="proj-icon-btn" onclick="_triggerProjectUpload(\'explorer\', \'\')" title="Upload files"><i class="ti ti-upload"></i></button>' +
         '<button class="proj-icon-btn" onclick="explorerLoadTree(document.getElementById(\'proj-exp-src\').value,\'\')" title="Refresh"><i class="ti ti-refresh"></i></button>' +
         '<button class="proj-icon-btn" onclick="closeProjectFileExplorer()" title="Close"><i class="ti ti-x"></i></button>' +
+        '<input id="proj-explorer-upload-input" type="file" multiple style="display:none" onchange="_handleProjectUploadPick(\'explorer\', this)"/>' +
       '</div>' +
       '<div class="proj-explorer-body">' +
         '<div class="proj-explorer-tree" id="proj-exp-tree"></div>' +
