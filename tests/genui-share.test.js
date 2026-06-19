@@ -98,6 +98,17 @@ describe('POST /api/genui/share', () => {
     expect(r.status).toBe(201);
   });
 
+  it('accepts an array of specs (multi gen-ui per message)', async () => {
+    const r = await _post('/api/genui/share', {
+      spec: [_spec(), { type: 'Text', props: { text: 'hello' } }],
+      title: 'Multi',
+    });
+    expect(r.status).toBe(201);
+    const g = await _get('/api/genui/shared/' + r.body.id);
+    expect(Array.isArray(g.body.spec)).toBe(true);
+    expect(g.body.spec).toHaveLength(2);
+  });
+
   it('rejects missing or invalid spec', async () => {
     const a = await _post('/api/genui/share', { spec: null });
     expect(a.status).toBe(400);
@@ -105,6 +116,10 @@ describe('POST /api/genui/share', () => {
     expect(b.status).toBe(400);
     const c = await _post('/api/genui/share', { spec: { root: 'x' } }); // no elements, no type
     expect(c.status).toBe(400);
+    const d = await _post('/api/genui/share', { spec: [] }); // empty array
+    expect(d.status).toBe(400);
+    const e = await _post('/api/genui/share', { spec: [_spec(), { junk: true }] }); // bad entry
+    expect(e.status).toBe(400);
   });
 
   it('rejects ids with disallowed characters', async () => {

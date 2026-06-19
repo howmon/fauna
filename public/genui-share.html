@@ -20,7 +20,13 @@
       min-height: 100vh; overflow-y: auto;
     }
     .share-shell {
-      max-width: 980px; margin: 0 auto; padding: 28px 24px 64px;
+      /* Browser tabs have far more real estate than the chat bubble.
+         Let the page stretch up to a comfortable reading width but
+         scale padding with the viewport so it never feels cramped or
+         lost in the middle of a 4K display. */
+      max-width: min(1600px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px clamp(16px, 4vw, 56px) 64px;
     }
     .share-header {
       display: flex; align-items: center; gap: 12px;
@@ -79,6 +85,9 @@
       border-radius: 12px;
       padding: 16px;
     }
+    /* When multiple specs are shared in one message, stack them with
+       breathing room so the page reads like the original assistant turn. */
+    #mount .gui-root + .gui-root { margin-top: 18px; }
   </style>
 </head>
 <body>
@@ -159,18 +168,48 @@
           document.title = 'Fauna · ' + title;
         }
         // Reuse the chat's renderGenUI verbatim so theme + components
-        // match exactly.
+        // match exactly. A share may carry a single spec object or an
+        // array of specs (multi gen-ui per assistant message).
         mount.innerHTML = '';
-        var wrap = document.createElement('div');
-        wrap.className = 'gui-root';
-        try {
-          renderGenUI(spec, wrap);
-        } catch (e) {
-          showError('Render error: ' + e.message);
-          return;
+        var specs = Array.isArray(spec) ? spec : [spec];
+        for (var i = 0; i < specs.length; i++) {
+          var wrap = document.createElement('div');
+          wrap.className = 'gui-root';
+          try {
+            renderGenUI(specs[i], wrap);
+          } catch (e) {
+            showError('Render error in spec #' + (i + 1) + ': ' + e.message);
+            continue;
+          }
+          mount.appendChild(wrap);
         }
-        mount.appendChild(wrap);
+        reflowGrids(mount);
         clearError();
+      }
+
+      // The chat renderer pins Grid layouts to a fixed N column count
+      // (`repeat(N, 1fr)`) because the 820px chat bubble doesn't have
+      // much room to play with. On the standalone share page we have a
+      // whole browser tab, so rewrite uniform 1fr grids to a responsive
+      // auto-fit track that wraps on narrow screens *and* expands to
+      // more columns on wide ones. Non-uniform tracks (e.g. '240px 1fr')
+      // are left untouched because the spec author had an intent we
+      // shouldn't second-guess.
+      function reflowGrids(root) {
+        var grids = root.querySelectorAll('.gui-grid');
+        for (var i = 0; i < grids.length; i++) {
+          var g = grids[i];
+          var cur = g.style.gridTemplateColumns || '';
+          var m = cur.match(/^repeat\((\d+)\s*,\s*1fr\)$/);
+          if (!m) continue;
+          var n = parseInt(m[1], 10);
+          if (!(n >= 2)) continue;
+          // min(100%, 260px) keeps the cell from overflowing on phones
+          // while still asking for ~260px before wrapping on desktop.
+          g.style.gridTemplateColumns =
+            'repeat(auto-fit, minmax(min(100%, 260px), 1fr))';
+          g.dataset.guiOriginalCols = String(n);
+        }
       }
 
       // ── initial load ───────────────────────────────────────────────────

@@ -84,6 +84,20 @@ export function registerGenUiShareRoutes(app, { faunaConfigDir, port, appDir } =
   }
 
   function _validSpec(spec) {
+    if (!spec) return false;
+    // Multi-spec share — an assistant message can contain several
+    // gen-ui blocks; the renderer handles either form.
+    if (Array.isArray(spec)) {
+      if (!spec.length) return false;
+      for (const item of spec) {
+        if (!_validSingleSpec(item)) return false;
+      }
+      return true;
+    }
+    return _validSingleSpec(spec);
+  }
+
+  function _validSingleSpec(spec) {
     if (!spec || typeof spec !== 'object') return false;
     // Accept either { root, elements } or a bare { type, props, children }
     // shorthand — the renderer handles both.
@@ -121,7 +135,7 @@ export function registerGenUiShareRoutes(app, { faunaConfigDir, port, appDir } =
     try {
       const body = req.body || {};
       if (!_validSpec(body.spec)) {
-        return res.status(400).json({ error: 'spec is required and must be a gen-ui object ({root,elements} or {type,...})' });
+        return res.status(400).json({ error: 'spec is required and must be a gen-ui object ({root,elements} or {type,...}) or a non-empty array of such objects' });
       }
       let id = body.id != null ? String(body.id) : '';
       if (id && !_safeId(id)) {

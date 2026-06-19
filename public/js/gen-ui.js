@@ -1764,6 +1764,12 @@ function extractAndRenderGenUI(buffer, msgEl, isHistoryLoad) {
     var specJson = raw.trim(); // keep the raw JSON for saving
     var title = _genUiSpecTitle(spec);
 
+    // Stash the parsed spec + derived title on the wrapper so the
+    // message-level "View in Browser" button can collect every gen-ui
+    // block in this assistant message and share them together.
+    wrapper._genUiSpec = spec;
+    wrapper._genUiTitle = title;
+
     var saveBtn = document.createElement('button');
     saveBtn.className = 'gui-footer-btn';
     saveBtn.innerHTML = '<i class="ti ti-folder-plus"></i> Add to Project';
@@ -1774,23 +1780,17 @@ function extractAndRenderGenUI(buffer, msgEl, isHistoryLoad) {
     });
     footer.appendChild(saveBtn);
 
-    // ── "Open in Browser" — POST to /api/genui/share, then open the
-    // returned URL in a normal browser tab. The wrapper remembers its
-    // share id so subsequent clicks update the same URL (and any open
-    // tab re-renders live over SSE). Holding Shift just copies the URL.
-    var shareBtn = document.createElement('button');
-    shareBtn.className = 'gui-footer-btn';
-    shareBtn.innerHTML = '<i class="ti ti-external-link"></i> Open in Browser';
-    shareBtn.title = 'Open this UI at a localhost URL · Shift-click to copy link';
-    shareBtn.addEventListener('click', function(evt) {
-      _genUiShareToBrowser(spec, title, wrapper, shareBtn, !!evt.shiftKey);
-    });
-    footer.appendChild(shareBtn);
-
     wrapper.appendChild(footer);
 
     pre.replaceWith(wrapper);
   });
+
+  // Once all blocks are materialised, surface a single message-level
+  // "View in Browser" button next to Copy / Regen. An assistant message
+  // can render several gen-ui blocks (e.g. a hero card + a stat strip +
+  // a table) and the user wants to mirror the *whole* set in one tab,
+  // not one card at a time.
+  _genUiEnsureMsgShareButton(msgEl);
 
   // ── Hoist schematic/SVG gen-ui blocks to the END of the message body ──
   // Models frequently emit the gen-ui block before the prose analysis even
@@ -1820,14 +1820,76 @@ function _genUiShouldSuppressForShellMessage(msgEl) {
 }
 
 // ── Share to browser ─────────────────────────────────────────────────────
+// Ensures the assistant message bubble has a single "View in Browser"
+// action button alongside Copy / Regen. Called every time gen-ui blocks
+// are (re-)materialised inside the message. Idempotent: if the button
+// already exists it stays put; if all gen-ui wrappers are gone we yank
+// the button so it doesn't lie about what's renderable.
+function _genUiEnsureMsgShareButton(msgEl) {
+  if (!msgEl || !msgEl.classList || !msgEl.classList.contains('ai')) return;
+  var actions = msgEl.querySelector('.msg-actions');
+  if (!actions) return;
+  var wrappers = _genUiCollectMsgWrappers(msgEl);
+  var existing = actions.querySelector('.msg-view-browser-btn');
+  if (!wrappers.length) {
+    if (existing) existing.remove();
+    return;
+  }
+  if (existing) return;
+  var btn = document.createElement('button');
+  btn.className = 'msg-action-btn msg-view-browser-btn';
+  btn.innerHTML = '<i class="ti ti-external-link"></i> View in Browser';
+  btn.title = 'Open this message\u2019s UI in a browser tab · Shift-click to copy link';
+  btn.addEventListener('click', function(evt) {
+    _genUiShareMsgToBrowser(msgEl, btn, !!evt.shiftKey);
+  });
+  actions.appendChild(btn);
+}
+
+function _genUiCollectMsgWrappers(msgEl) {
+  var body = msgEl.querySelector('.msg-body') || msgEl;
+  var nodes = body.querySelectorAll('.gui-root');
+  var out = [];
+  for (var i = 0; i < nodes.length; i++) {
+    if (nodes[i]._genUiSpec) out.push(nodes[i]);
+  }
+  return out;
+}
+
+// Gather every gen-ui spec inside this assistant message and POST them
+// as a single share payload. The message element remembers the assigned
+// share id, so each subsequent click updates the same URL — any open
+// browser tab refreshes live over SSE. Shift-click copies the URL
+// instead of opening it.
+function _genUiShareMsgToBrowser(msgEl, btnEl, copyOnly) {
+  var wrappers = _genUiCollectMsgWrappers(msgEl);
+  if (!wrappers.length) {
+    _genUiShareToast('No gen-ui to share in this message.', true);
+    return;
+  }
+  var payload;
+  var title;
+  if (wrappers.length === 1) {
+    payload = wrappers[0]._genUiSpec;
+    title = wrappers[0]._genUiTitle || 'Shared UI';
+  } else {
+    // Multi-spec share — send the array as-is; the server validates each
+    // entry and the standalone page renders them stacked.
+    payload = wrappers.map(function(w) { return w._genUiSpec; });
+    title = (wrappers[0]._genUiTitle || 'Shared UI') + ' + ' + (wrappers.length - 1) + ' more';
+  }
+  _genUiShareToBrowser(payload, title, msgEl, btnEl, copyOnly);
+}
+
 // POST the parsed spec to /api/genui/share and either open the returned
 // URL in the user's default browser (Electron `shell.openExternal` when
 // available, falling back to `window.open`) or copy the URL when the user
-// shift-clicked. The wrapper element remembers the assigned share id, so
-// every click after the first reuses the same id — that way the open
-// browser tab updates live over SSE instead of being orphaned.
-function _genUiShareToBrowser(spec, title, wrapperEl, btnEl, copyOnly) {
-  var existingId = wrapperEl && wrapperEl.dataset ? wrapperEl.dataset.shareId : '';
+// shift-clicked. The target element (a .gui-root wrapper *or* a .msg
+// bubble) remembers the assigned share id, so every click after the
+// first reuses the same id — that way the open browser tab updates live
+// over SSE instead of being orphaned.
+function _genUiShareToBrowser(spec, title, targetEl, btnEl, copyOnly) {
+  var existingId = targetEl && targetEl.dataset ? targetEl.dataset.shareId : '';
   var origLabel = btnEl ? btnEl.innerHTML : '';
   if (btnEl) {
     btnEl.disabled = true;
@@ -1845,7 +1907,7 @@ function _genUiShareToBrowser(spec, title, wrapperEl, btnEl, copyOnly) {
       return r.json();
     })
     .then(function(data) {
-      if (wrapperEl && wrapperEl.dataset) wrapperEl.dataset.shareId = data.id;
+      if (targetEl && targetEl.dataset) targetEl.dataset.shareId = data.id;
       if (copyOnly) {
         return _genUiCopyText(data.url).then(function() {
           _genUiShareToast('Link copied: ' + data.url);
@@ -1874,7 +1936,7 @@ function _genUiShareToBrowser(spec, title, wrapperEl, btnEl, copyOnly) {
         btnEl.disabled = false;
         // After the first share, swap the label to make the live-link
         // intent obvious. We keep the icon to avoid layout jitter.
-        if (wrapperEl && wrapperEl.dataset && wrapperEl.dataset.shareId) {
+        if (targetEl && targetEl.dataset && targetEl.dataset.shareId) {
           btnEl.innerHTML = '<i class="ti ti-refresh"></i> Update Browser View';
           btnEl.title = 'Push latest spec to the open browser tab · Shift-click to copy link';
         } else {
