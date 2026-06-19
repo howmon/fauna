@@ -439,6 +439,104 @@ describe('_finalizeRunFailure', () => {
   });
 });
 
+// ── Lifecycle notifications (native + widget alert hub) ──────────────────
+describe('lifecycle notifications', () => {
+  const _osCalls = [];
+  const _alertCalls = [];
+  beforeEach(() => {
+    _osCalls.length = 0;
+    _alertCalls.length = 0;
+    worker.setOsNotifier((title, body) => { _osCalls.push({ title, body }); });
+    worker.setAlertSink(alert => { _alertCalls.push(alert); });
+  });
+
+  it('fires "Card complete" on success path landing on done', async () => {
+    _verify.nextResult = { ok: true, skipped: true };
+    _db.projects.push({ id: 'p1', name: 'Proj', kanban: {} });
+    _db.items.push(_mkItem({ id: 'c1', title: 'Ship widget', projectId: 'p1',
+      column: 'in_progress', claimedBy: 'ai:o' }));
+    __test.inFlight.set('c1', { taskId: 'task-1', projectId: 'p1', unsubscribe: () => {} });
+    __test.finalizeRunSuccess('p1', 'c1', { event: 'completed', summary: 'shipped it' });
+    await flushAsync();
+    expect(_osCalls).toHaveLength(1);
+    expect(_osCalls[0].title).toContain('Card complete');
+    expect(_osCalls[0].title).toContain('Ship widget');
+    expect(_osCalls[0].body).toContain('shipped it');
+    expect(_alertCalls).toHaveLength(1);
+    expect(_alertCalls[0].source).toBe('kanban');
+    expect(_alertCalls[0].kind).toBe('kanban_complete');
+    expect(_alertCalls[0].projectId).toBe('p1');
+    expect(_alertCalls[0].cardId).toBe('c1');
+    expect(_alertCalls[0].id).toMatch(/^kb-/);
+  });
+
+  it('fires "Card needs review" when verifier fails (lands in review)', async () => {
+    _verify.nextResult = { ok: false, skipped: false, exitCode: 1 };
+    _db.projects.push({ id: 'p1', name: 'Proj', kanban: {}, qa: { command: 'npm test' } });
+    _db.items.push(_mkItem({ id: 'c1', title: 'Refactor', projectId: 'p1',
+      column: 'in_progress', claimedBy: 'ai:o' }));
+    __test.inFlight.set('c1', { taskId: 'task-1', projectId: 'p1', unsubscribe: () => {} });
+    __test.finalizeRunSuccess('p1', 'c1', { event: 'completed' });
+    await flushAsync();
+    expect(_osCalls).toHaveLength(1);
+    expect(_osCalls[0].title).toContain('Card needs review');
+    expect(_alertCalls[0].kind).toBe('kanban_review');
+  });
+
+  it('fires "Card failed (will retry)" on intermediate failure', () => {
+    _db.projects.push({ id: 'p1', name: 'Proj', kanban: { maxAiRetries: 3 } });
+    _db.items.push(_mkItem({ id: 'c1', title: 'Build', projectId: 'p1',
+      column: 'in_progress', claimedBy: 'ai:o', assignee: 'ai' }));
+    __test.inFlight.set('c1', { taskId: 'task-1', projectId: 'p1', unsubscribe: () => {} });
+    __test.finalizeRunFailure('p1', 'c1', { event: 'failed', error: 'compile error' });
+    expect(_osCalls).toHaveLength(1);
+    expect(_osCalls[0].title).toContain('Card failed (will retry)');
+    expect(_osCalls[0].body).toMatch(/Attempt 1 of 3/);
+    expect(_osCalls[0].body).toContain('compile error');
+    expect(_alertCalls[0].kind).toBe('kanban_fail');
+  });
+
+  it('fires "Card needs you" (out-of-retries) on terminal failure', () => {
+    _db.projects.push({ id: 'p1', name: 'Proj', kanban: { maxAiRetries: 2 } });
+    _db.items.push(_mkItem({ id: 'c1', title: 'Stubborn', projectId: 'p1',
+      column: 'in_progress', claimedBy: 'ai:o', assignee: 'ai',
+      runs: [{ ok: false }],
+    }));
+    __test.inFlight.set('c1', { taskId: 'task-2', projectId: 'p1', unsubscribe: () => {} });
+    __test.finalizeRunFailure('p1', 'c1', { event: 'failed', error: 'still broken' });
+    expect(_osCalls).toHaveLength(1);
+    expect(_osCalls[0].title).toContain('Card needs you');
+    expect(_osCalls[0].body).toContain('Out of retries');
+    expect(_alertCalls[0].kind).toBe('kanban_out_of_retries');
+  });
+
+  it('does not throw when notifier and alert sink are unset', () => {
+    worker.setOsNotifier(null);
+    worker.setAlertSink(null);
+    _db.projects.push({ id: 'p1', name: 'Proj', kanban: { maxAiRetries: 3 } });
+    _db.items.push(_mkItem({ id: 'c1', title: 'X', projectId: 'p1',
+      column: 'in_progress', claimedBy: 'ai:o', assignee: 'ai' }));
+    __test.inFlight.set('c1', { taskId: 't', projectId: 'p1', unsubscribe: () => {} });
+    expect(() => {
+      __test.finalizeRunFailure('p1', 'c1', { event: 'failed', error: 'e' });
+    }).not.toThrow();
+  });
+
+  it('swallows notifier exceptions so the lifecycle path still completes', () => {
+    worker.setOsNotifier(() => { throw new Error('notifier crashed'); });
+    worker.setAlertSink(() => { throw new Error('hub crashed'); });
+    _db.projects.push({ id: 'p1', name: 'Proj', kanban: { maxAiRetries: 3 } });
+    _db.items.push(_mkItem({ id: 'c1', title: 'Y', projectId: 'p1',
+      column: 'in_progress', claimedBy: 'ai:o', assignee: 'ai' }));
+    __test.inFlight.set('c1', { taskId: 't', projectId: 'p1', unsubscribe: () => {} });
+    expect(() => {
+      __test.finalizeRunFailure('p1', 'c1', { event: 'failed', error: 'e' });
+    }).not.toThrow();
+    // Card still moved (retry path).
+    expect(_db.items[0].column).toBe('todo');
+  });
+});
+
 // ── Quota helpers ────────────────────────────────────────────────────────
 describe('quota', () => {
   it('increments and reads back today\'s count', () => {

@@ -679,6 +679,14 @@ export function startServer(port) {
       setTaskRunnerOsNotifier(internalNotifier);
       setTaskRunnerAlertSink(alertHub.publish);
     } catch (e) { console.warn('[server] task-runner notifier wire failed:', e?.message || e); }
+    // Same hooks for the kanban autopilot worker — fires native + widget
+    // alerts on card complete / fail / out-of-retries / needs-review.
+    // Dynamic import keeps this resilient if the module fails to load
+    // (the worker's startKanbanWorker import above uses the same pattern).
+    import('./kanban-worker.js').then(mod => {
+      try { mod.setOsNotifier && mod.setOsNotifier(internalNotifier); } catch (_) {}
+      try { mod.setAlertSink && mod.setAlertSink(alertHub.publish); } catch (_) {}
+    }).catch(e => console.warn('[server] kanban-worker notifier wire failed:', e?.message || e));
     // Retire the standalone heartbeat module. On first boot after upgrade
     // this ports any enabled heartbeat settings into a pipeline task; on
     // subsequent boots it's a no-op (gated by the marker file). The legacy

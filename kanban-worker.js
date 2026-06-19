@@ -73,6 +73,38 @@ async function _emitBoard(evt) {
   } catch (_) { /* swallow */ }
 }
 
+// ── Lifecycle notifications (native toast + widget alert hub) ────────────
+// server.js wires these so the worker can import-free fire OS notifications
+// and publish to the widget alert panel without pulling in electron or the
+// alert-hub module directly. Mirrors the task-runner pattern.
+let _osNotifier = null;       // function(title, body)
+let _alertSinkPub = null;     // function({ id, timestamp, source, summary, action, ... })
+
+export function setOsNotifier(fn) { _osNotifier = typeof fn === 'function' ? fn : null; }
+export function setAlertSink(fn)  { _alertSinkPub = typeof fn === 'function' ? fn : null; }
+
+function _emitAlert({ title, body, projectId, projectName, cardId, cardTitle, kind }) {
+  try {
+    if (_osNotifier) _osNotifier(title, body);
+  } catch (e) { console.warn('[kanban-worker] os-notify failed:', e?.message || e); }
+  try {
+    if (_alertSinkPub) {
+      _alertSinkPub({
+        id: 'kb-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
+        timestamp: Date.now(),
+        source: 'kanban',
+        summary: title,
+        action: body,
+        kind,
+        projectId,
+        projectName,
+        cardId,
+        cardTitle,
+      });
+    }
+  } catch (e) { console.warn('[kanban-worker] alert-hub publish failed:', e?.message || e); }
+}
+
 // ── Quota persistence ────────────────────────────────────────────────────
 function _today() { return new Date().toISOString().slice(0, 10); }
 
@@ -644,6 +676,31 @@ function _finalizeRunSuccess(projectId, cardId, ev) {
       skippedVerify: verifyResult && verifyResult.skipped === true,
     });
     _emitBoard({ type: 'moved', projectId, itemId: cardId });
+
+    // ── Lifecycle notification ────────────────────────────────────────
+    // We notify the user when the card terminally lands somewhere that
+    // needs their attention: 'done' (success) or 'review' (verifier
+    // failed — needs a human). If the AI moved it elsewhere already, we
+    // stay quiet to avoid double-firing on top of whatever moved it.
+    const verifierFailed = verifyResult && verifyResult.ok === false;
+    const cardTitle = (card.title || cardId).toString().slice(0, 120);
+    if (verifierFailed) {
+      _emitAlert({
+        title: 'Card needs review: ' + cardTitle,
+        body: 'Autopilot finished but verification failed — left in review for you.',
+        projectId, projectName: proj.name, cardId, cardTitle,
+        kind: 'kanban_review',
+      });
+    } else if (!stillInProgress && !stuckInReview) {
+      // AI tools already moved it terminal — stay quiet.
+    } else {
+      _emitAlert({
+        title: 'Card complete: ' + cardTitle,
+        body: ((ev.summary || '').toString().slice(0, 200)) || 'Autopilot finished the card.',
+        projectId, projectName: proj.name, cardId, cardTitle,
+        kind: 'kanban_complete',
+      });
+    }
   });
 }
 
@@ -667,6 +724,7 @@ function _finalizeRunFailure(projectId, cardId, ev) {
     body: 'Autopilot attempt ' + (aiFails + 1) + ' failed: ' + err,
   });
 
+  const cardTitle = (card.title || cardId).toString().slice(0, 120);
   if (aiFails + 1 >= maxRetries) {
     // Bounce back to Todo, hand to a human.
     moveWorkItem(projectId, cardId, {
@@ -676,12 +734,24 @@ function _finalizeRunFailure(projectId, cardId, ev) {
     addWorkItemComment(projectId, cardId, { author: 'ai',
       body: 'Out of retries — handing back to a human to unblock.',
     });
+    _emitAlert({
+      title: 'Card needs you: ' + cardTitle,
+      body: 'Out of retries (' + maxRetries + ') — handed back to a human. Last error: ' + err.slice(0, 160),
+      projectId, projectName: proj.name, cardId, cardTitle,
+      kind: 'kanban_out_of_retries',
+    });
   } else {
     // Release the claim so the next tick can re-pick (or another agent).
     moveWorkItem(projectId, cardId, {
       column: 'todo', claimedBy: null,
       runEntry: { taskId: ent && ent.taskId, finishedAt: Date.now(), ok: false, error: err },
     }, { actor: 'human' });
+    _emitAlert({
+      title: 'Card failed (will retry): ' + cardTitle,
+      body: 'Attempt ' + (aiFails + 1) + ' of ' + maxRetries + ' failed: ' + err.slice(0, 200),
+      projectId, projectName: proj.name, cardId, cardTitle,
+      kind: 'kanban_fail',
+    });
   }
 
   appendAutonomousRunLog(projectId, {
@@ -983,6 +1053,7 @@ export const __test = {
   maybeAutoClose: _maybeAutoClose,
   claimAndRun: _claimAndRun,
   buildTaskContext: _buildTaskContext,
+  emitAlert: _emitAlert,
 };
 
 // Public API: compute why autopilot is idle on a project. Returns
