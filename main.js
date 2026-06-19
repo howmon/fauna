@@ -13,6 +13,7 @@ import { getDictation } from './server/voice/dictation.js';
 import { getSettings, onSettingsChange, DEFAULT_DICTATION_ACCEL_MAC, DEFAULT_DICTATION_ACCEL_OTHER } from './server/voice/settings.js';
 import { setDefaultScrubOpts } from './server/lib/redactor.js';
 import { buildShellEnv } from './server/lib/shell-env.js';
+import { createSelfUpdater } from './lib/self-updater.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT      = 3737;
@@ -55,6 +56,7 @@ let mainWindow;
 const windows = new Set();
 let widgetWindow = null;
 let tray = null;
+let _selfUpdater = null;    // self-updater (initialised in app.whenReady)
 let audioWindow = null;     // hidden BrowserWindow that owns the mic
 let residentAudio = null;   // ResidentAudio EventEmitter (Phase 1)
 let utterancePipeline = null; // UtterancePipeline (Phase 2)
@@ -839,6 +841,16 @@ function _buildTrayMenu() {
 
   const voiceEnabled = !!residentAudio?.isEnabled();
   const ttsSpeaking  = !!tts?.isSpeaking();
+  const upd = _selfUpdater?.getState();
+  // Mode labels reflect a tiny state machine: running ⇒ "Updating…"
+  // (disabled), updateAvailable ⇒ "Install Update", else ⇒ "Check for
+  // Updates". Keeping all three on the menu (rather than auto-collapsing)
+  // lets the user see the latest commit short-SHA at a glance.
+  const updLabel = upd?.running    ? `Updating… (${upd.phase})`
+               : upd?.updateAvailable ? `Install Update (${(upd.latestSha || '').slice(0, 7)})`
+               : upd?.checking    ? 'Checking for Updates…'
+               : 'Check for Updates';
+  const updEnabled = !!upd && !!upd.hasRepo && !upd.running && !upd.checking;
   return Menu.buildFromTemplate([
     { label: 'Windows', enabled: false },
     ...windowItems,
@@ -853,6 +865,13 @@ function _buildTrayMenu() {
     { label: 'Stop speaking', enabled: ttsSpeaking, click: () => { try { tts?.stop(); } catch (_) {} } },
     { type: 'separator' },
     { label: 'Voice settings…', click: () => openVoiceSettingsWindow() },
+    { type: 'separator' },
+    { label: updLabel, enabled: updEnabled, click: () => {
+      if (!_selfUpdater) return;
+      const s = _selfUpdater.getState();
+      if (s.updateAvailable) _selfUpdater.installUpdate();
+      else _selfUpdater.checkForUpdates(true);
+    } },
     { type: 'separator' },
     { label: 'Quit Fauna', click: () => { app.isQuitting = true; app.quit(); } },
   ]);
@@ -1227,6 +1246,38 @@ app.whenReady().then(async () => {
 
   // Create tray icon and task widget
   createTray();
+
+  // Self-updater: tracks the `main` branch on GitHub and rebuilds the .app
+  // from source on demand. Works regardless of how the user got the binary
+  // (local `npm run dist`, zip from a colleague, GH release) because we
+  // always rebuild from source. Only runs when packaged — in dev (`npm
+  // start`) the user is already working from a git checkout.
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+    _selfUpdater = createSelfUpdater({
+      app,
+      packageJson: pkg,
+      onStateChange: (s) => {
+        refreshTray();
+        // Push to any open window so an in-app updates panel can render.
+        for (const w of windows) {
+          try { if (!w.isDestroyed()) w.webContents.send('self-updater:state', s); } catch (_) {}
+        }
+      },
+    });
+    ipcMain.handle('self-updater:state',  () => _selfUpdater.getState());
+    ipcMain.handle('self-updater:check',  () => _selfUpdater.checkForUpdates(true));
+    ipcMain.handle('self-updater:install', () => _selfUpdater.installUpdate());
+    // Background check on startup — only when packaged. 5 s delay so the
+    // first paint and IPC handlers are wired before we hit GitHub.
+    if (app.isPackaged) {
+      setTimeout(() => {
+        _selfUpdater.checkForUpdates(false).catch(e => console.warn('[self-updater] startup check:', e?.message || e));
+      }, 5000);
+    }
+  } catch (e) {
+    console.warn('[self-updater] init failed:', e?.message || e);
+  }
 
   // Initialise resident voice broker (auto-starts mic if user enabled it previously)
   _initResidentAudio();
