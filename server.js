@@ -45,6 +45,7 @@ import { registerFileFilterRoutes } from './server/routes/file-filter.js';
 import { registerConversationRoutes } from './server/routes/conversations.js';
 import { registerProjectRunRoutes } from './server/routes/project-runs.js';
 import { registerProjectRoutes } from './server/routes/projects.js';
+import { registerGenUiShareRoutes } from './server/routes/genui-share.js';
 import { registerSyncRoutes } from './server/routes/sync.js';
 import { createConversationStore } from './server/lib/conversation-store.js';
 import { registerGitHubRoutes } from './server/routes/github.js';
@@ -308,6 +309,7 @@ registerGitHubRoutes(app, {
 
 registerProviderRoutes(app, { faunaConfigDir: FAUNA_CONFIG_DIR });
 registerMobileRoutes(app, { faunaConfigDir: FAUNA_CONFIG_DIR, port: PORT });
+registerGenUiShareRoutes(app, { faunaConfigDir: FAUNA_CONFIG_DIR, port: PORT, appDir: __dirname });
 registerEnterpriseStubRoutes(app);
 registerAuthRoutes(app);
 

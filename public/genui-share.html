@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Fauna · Shared UI</title>
+
+  <!-- Match Fauna's exact look: the same stylesheet the app itself uses. -->
+  <link rel="stylesheet" href="/css/styles.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.34.0/dist/tabler-icons.min.css" />
+
+  <style>
+    /* Standalone-only chrome — nothing in here overrides .gui-* component
+       styles, it just gives the page a chat-message-ish frame. */
+    html, body {
+      margin: 0; padding: 0;
+      background: var(--fau-bg);
+      color: var(--fau-text);
+      font-family: var(--font, system-ui, -apple-system, "Segoe UI", sans-serif);
+      min-height: 100vh; overflow-y: auto;
+    }
+    .share-shell {
+      max-width: 980px; margin: 0 auto; padding: 28px 24px 64px;
+    }
+    .share-header {
+      display: flex; align-items: center; gap: 12px;
+      padding-bottom: 14px; margin-bottom: 22px;
+      border-bottom: 1px solid var(--fau-border, #2a2d33);
+    }
+    .share-logo {
+      width: 32px; height: 32px; border-radius: 8px;
+      background: var(--accent, #6ea8fe); color: #fff;
+      display: grid; place-items: center; font-weight: 700; font-size: 14px;
+      flex-shrink: 0;
+    }
+    .share-meta {
+      flex: 1; min-width: 0;
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .share-title {
+      font-size: 15px; font-weight: 600; color: var(--fau-text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .share-sub {
+      font-size: 11px; color: var(--fau-text-dim, #888);
+      display: flex; gap: 10px; align-items: center;
+    }
+    .share-live {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 2px 8px; border-radius: 10px;
+      background: color-mix(in srgb, var(--accent, #6ea8fe) 16%, transparent);
+      color: var(--accent, #6ea8fe); font-size: 10px; font-weight: 600;
+    }
+    .share-live::before {
+      content: ''; width: 6px; height: 6px; border-radius: 50%;
+      background: currentColor; animation: pulse 1.6s ease-in-out infinite;
+    }
+    .share-live.offline {
+      background: color-mix(in srgb, #888 18%, transparent); color: #888;
+    }
+    .share-live.offline::before { animation: none; opacity: 0.5; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+    .share-state {
+      padding: 24px; text-align: center;
+      color: var(--fau-text-dim, #888); font-size: 13px;
+    }
+    .share-state .ti { font-size: 28px; opacity: 0.55; display: block; margin-bottom: 8px; }
+    .share-error {
+      padding: 14px; border-radius: 8px;
+      background: color-mix(in srgb, #ff5a5a 14%, transparent);
+      border: 1px solid color-mix(in srgb, #ff5a5a 35%, transparent);
+      color: #ff8a8a; font-size: 13px; margin-bottom: 18px;
+    }
+    /* Make the gen-ui wrapper feel like the chat embed without the
+       conversation chrome around it. */
+    #mount .gui-root {
+      background: var(--fau-surface, var(--fau-bg));
+      border: 1px solid var(--fau-border, #2a2d33);
+      border-radius: 12px;
+      padding: 16px;
+    }
+  </style>
+</head>
+<body>
+  <main class="share-shell">
+    <header class="share-header">
+      <div class="share-logo" aria-hidden="true">F</div>
+      <div class="share-meta">
+        <div class="share-title" id="share-title">Loading…</div>
+        <div class="share-sub">
+          <span id="share-id-label">Fauna shared UI</span>
+          <span class="share-live" id="share-live" title="Live updates over server-sent events">live</span>
+        </div>
+      </div>
+    </header>
+
+    <div id="error" class="share-error" style="display:none"></div>
+
+    <div id="mount" aria-live="polite">
+      <div class="share-state"><i class="ti ti-loader-2"></i><div>Loading shared UI…</div></div>
+    </div>
+  </main>
+
+  <!--
+    The Fauna chat UI defines `escHtml` inside `public/js/state.js`. We
+    inline it here so we can pull in gen-ui.js by itself, without dragging
+    along chat / project / conversation state.
+  -->
+  <script>
+    function escHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+    // gen-ui's footer button calls these conditionally — providing no-ops
+    // keeps the renderer happy without dragging in project plumbing.
+    window.saveGenUIToProject = function() { /* not available standalone */ };
+  </script>
+
+  <!-- The same renderer the chat uses. -->
+  <script src="/js/gen-ui.js"></script>
+
+  <script>
+    (function() {
+      // ── derive share id ────────────────────────────────────────────────
+      // Path is /genui/<id>. Fallback to ?id= for flexibility.
+      var match = window.location.pathname.match(/^\/genui\/([A-Za-z0-9_-]{1,40})$/);
+      var qs = new URLSearchParams(window.location.search);
+      var shareId = (match && match[1]) || qs.get('id') || '';
+      if (!shareId) {
+        showError('Missing share id in URL — expected /genui/&lt;id&gt;.');
+        return;
+      }
+
+      var mount     = document.getElementById('mount');
+      var titleEl   = document.getElementById('share-title');
+      var idLabel   = document.getElementById('share-id-label');
+      var liveBadge = document.getElementById('share-live');
+      idLabel.textContent = 'id: ' + shareId;
+
+      function showError(msg) {
+        var box = document.getElementById('error');
+        box.style.display = '';
+        box.innerHTML = '<i class="ti ti-alert-circle"></i> ' + escHtml(msg);
+      }
+      function clearError() {
+        document.getElementById('error').style.display = 'none';
+      }
+
+      function setLive(on) {
+        liveBadge.classList.toggle('offline', !on);
+        liveBadge.title = on
+          ? 'Live updates over server-sent events'
+          : 'Disconnected — reconnecting…';
+        liveBadge.textContent = on ? 'live' : 'offline';
+      }
+
+      function renderSpec(spec, title) {
+        if (title) {
+          titleEl.textContent = title;
+          document.title = 'Fauna · ' + title;
+        }
+        // Reuse the chat's renderGenUI verbatim so theme + components
+        // match exactly.
+        mount.innerHTML = '';
+        var wrap = document.createElement('div');
+        wrap.className = 'gui-root';
+        try {
+          renderGenUI(spec, wrap);
+        } catch (e) {
+          showError('Render error: ' + e.message);
+          return;
+        }
+        mount.appendChild(wrap);
+        clearError();
+      }
+
+      // ── initial load ───────────────────────────────────────────────────
+      fetch('/api/genui/shared/' + encodeURIComponent(shareId))
+        .then(function(r) {
+          if (r.status === 404) throw new Error('Share not found — it may have expired.');
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        })
+        .then(function(data) {
+          renderSpec(data.spec, data.title);
+        })
+        .catch(function(e) {
+          mount.innerHTML = '';
+          showError(e.message);
+        });
+
+      // ── live updates over SSE ──────────────────────────────────────────
+      // The server pushes {kind:'update', spec, title} on every share PUT
+      // / POST with the same id, and {kind:'deleted'} when unpublished.
+      // EventSource auto-reconnects, so we just toggle the live badge.
+      var es;
+      function startStream() {
+        try {
+          es = new EventSource('/api/genui/stream/' + encodeURIComponent(shareId));
+          es.onopen = function() { setLive(true); };
+          es.onerror = function() { setLive(false); };
+          es.onmessage = function(ev) {
+            var payload;
+            try { payload = JSON.parse(ev.data); } catch (_) { return; }
+            if (payload.kind === 'update' && payload.spec) {
+              renderSpec(payload.spec, payload.title);
+            } else if (payload.kind === 'deleted') {
+              es.close();
+              setLive(false);
+              showError('This share was unpublished. The view is no longer live.');
+            }
+          };
+        } catch (e) {
+          setLive(false);
+        }
+      }
+      startStream();
+    })();
+  </script>
+</body>
+</html>

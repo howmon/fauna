@@ -1773,6 +1773,20 @@ function extractAndRenderGenUI(buffer, msgEl, isHistoryLoad) {
       }
     });
     footer.appendChild(saveBtn);
+
+    // ── "Open in Browser" — POST to /api/genui/share, then open the
+    // returned URL in a normal browser tab. The wrapper remembers its
+    // share id so subsequent clicks update the same URL (and any open
+    // tab re-renders live over SSE). Holding Shift just copies the URL.
+    var shareBtn = document.createElement('button');
+    shareBtn.className = 'gui-footer-btn';
+    shareBtn.innerHTML = '<i class="ti ti-external-link"></i> Open in Browser';
+    shareBtn.title = 'Open this UI at a localhost URL · Shift-click to copy link';
+    shareBtn.addEventListener('click', function(evt) {
+      _genUiShareToBrowser(spec, title, wrapper, shareBtn, !!evt.shiftKey);
+    });
+    footer.appendChild(shareBtn);
+
     wrapper.appendChild(footer);
 
     pre.replaceWith(wrapper);
@@ -1803,6 +1817,106 @@ function extractAndRenderGenUI(buffer, msgEl, isHistoryLoad) {
 function _genUiShouldSuppressForShellMessage(msgEl) {
   if (!msgEl) return false;
   return !!msgEl.querySelector('.shell-exec-block, code.language-shell-exec, code.language-shell_exec');
+}
+
+// ── Share to browser ─────────────────────────────────────────────────────
+// POST the parsed spec to /api/genui/share and either open the returned
+// URL in the user's default browser (Electron `shell.openExternal` when
+// available, falling back to `window.open`) or copy the URL when the user
+// shift-clicked. The wrapper element remembers the assigned share id, so
+// every click after the first reuses the same id — that way the open
+// browser tab updates live over SSE instead of being orphaned.
+function _genUiShareToBrowser(spec, title, wrapperEl, btnEl, copyOnly) {
+  var existingId = wrapperEl && wrapperEl.dataset ? wrapperEl.dataset.shareId : '';
+  var origLabel = btnEl ? btnEl.innerHTML : '';
+  if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.innerHTML = '<i class="ti ti-loader-2"></i> Sharing…';
+  }
+  var body = { spec: spec, title: title };
+  if (existingId) body.id = existingId;
+  fetch('/api/genui/share', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+    .then(function(r) {
+      if (!r.ok) return r.json().then(function(j) { throw new Error(j.error || ('HTTP ' + r.status)); });
+      return r.json();
+    })
+    .then(function(data) {
+      if (wrapperEl && wrapperEl.dataset) wrapperEl.dataset.shareId = data.id;
+      if (copyOnly) {
+        return _genUiCopyText(data.url).then(function() {
+          _genUiShareToast('Link copied: ' + data.url);
+        });
+      }
+      // Prefer Electron shell.openExternal so the URL actually lands in
+      // the user's default browser (not inside Fauna's BrowserWindow).
+      try {
+        if (window.electronAPI && typeof window.electronAPI.openExternal === 'function') {
+          window.electronAPI.openExternal(data.url);
+        } else if (window.fauna && typeof window.fauna.openExternal === 'function') {
+          window.fauna.openExternal(data.url);
+        } else {
+          window.open(data.url, '_blank', 'noopener');
+        }
+      } catch (_) {
+        window.open(data.url, '_blank', 'noopener');
+      }
+      _genUiShareToast('Opened in browser · ' + data.url);
+    })
+    .catch(function(e) {
+      _genUiShareToast('Share failed: ' + e.message, true);
+    })
+    .then(function() {
+      if (btnEl) {
+        btnEl.disabled = false;
+        // After the first share, swap the label to make the live-link
+        // intent obvious. We keep the icon to avoid layout jitter.
+        if (wrapperEl && wrapperEl.dataset && wrapperEl.dataset.shareId) {
+          btnEl.innerHTML = '<i class="ti ti-refresh"></i> Update Browser View';
+          btnEl.title = 'Push latest spec to the open browser tab · Shift-click to copy link';
+        } else {
+          btnEl.innerHTML = origLabel;
+        }
+      }
+    });
+}
+
+function _genUiCopyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text);
+  }
+  return new Promise(function(resolve, reject) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      var ok = document.execCommand('copy');
+      ta.remove();
+      ok ? resolve() : reject(new Error('execCommand copy failed'));
+    } catch (e) { reject(e); }
+  });
+}
+
+// Reuse the chat-app's toast if it exists; otherwise fall back to a tiny
+// inline pill so this works on pages that don't load chat.js.
+function _genUiShareToast(msg, isErr) {
+  if (typeof _showToast === 'function') { _showToast(msg, !!isErr); return; }
+  var t = document.createElement('div');
+  t.textContent = msg;
+  t.style.cssText = [
+    'position:fixed', 'bottom:24px', 'left:50%', 'transform:translateX(-50%)',
+    'background:' + (isErr ? '#5a1f1f' : '#202329'), 'color:#fff',
+    'padding:10px 16px', 'border-radius:8px', 'font-size:12px',
+    'box-shadow:0 8px 24px rgba(0,0,0,0.4)', 'z-index:99999',
+    'max-width:80vw', 'overflow:hidden', 'text-overflow:ellipsis',
+    'white-space:nowrap',
+  ].join(';');
+  document.body.appendChild(t);
+  setTimeout(function() { t.style.transition = 'opacity .4s'; t.style.opacity = '0'; }, 2600);
+  setTimeout(function() { t.remove(); }, 3100);
 }
 
 // ── Catalog prompt (for system prompt injection) ──────────────────────────
