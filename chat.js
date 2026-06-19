@@ -595,6 +595,7 @@ async function streamResponse(conv) {
     // Extract user text from last user message for keyword-gated memory injection
     var lastUserMsg = conv.messages.slice().reverse().find(function(m) { return m.role === 'user'; });
     var userText = lastUserMsg ? (typeof lastUserMsg.content === 'string' ? lastUserMsg.content : (lastUserMsg.content.find(function(c){ return c.type === 'text'; }) || {}).text || '') : '';
+    var _userHasFigmaUrl = /\bhttps?:\/\/(?:www\.)?figma\.com\/(?:design|file|proto|board)\//i.test(userText);
     var memoryCtx      = getMemoryContext(userText);
     var workspaceCtx   = typeof getWorkspaceContextPrompt === 'function' ? getWorkspaceContextPrompt() : '';
 
@@ -615,7 +616,7 @@ async function streamResponse(conv) {
     var _ctxUsage = null;
 
     // Build chat request body — include agent info when active
-    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: state.figmaMCPEnabled, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns };
+    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: !!state.figmaMCPEnabled || _userHasFigmaUrl, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns };
     if (typeof isAgentActive === 'function' && isAgentActive()) {
       chatBody.agentName = getActiveAgentName();
       chatBody.agentPermissions = getActiveAgentPermissions();

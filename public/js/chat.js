@@ -1469,6 +1469,7 @@ async function streamResponse(conv) {
     var lastUserMsg = conv.messages.slice().reverse().find(function(m) { return m.role === 'user'; });
     var userText = lastUserMsg ? (typeof lastUserMsg.content === 'string' ? lastUserMsg.content : (lastUserMsg.content.find(function(c){ return c.type === 'text'; }) || {}).text || '') : '';
     var _userHasUrl = /\bhttps?:\/\/\S+/i.test(userText);
+    var _userHasFigmaUrl = /\bhttps?:\/\/(?:www\.)?figma\.com\/(?:design|file|proto|board)\//i.test(userText);
     // Client-side context gating: skip ~5-7k tokens of capability prose on trivial turns
     var _ctxFlags = (typeof computeClientContextFlags === 'function') ? computeClientContextFlags(userText, conv) : null;
     var capsCtx        = (typeof getCapabilitiesContextGated === 'function') ? getCapabilitiesContextGated(_ctxFlags) : getCapabilitiesContext();
@@ -1568,7 +1569,7 @@ async function streamResponse(conv) {
     // narrating a markdown spec instead of rendering in Figma.
     var _agentNeedsFigma = (typeof activeAgent !== 'undefined' && activeAgent && activeAgent.permissions && activeAgent.permissions.figma) === true;
     var _agentNeedsBrowser = (typeof activeAgent !== 'undefined' && activeAgent && activeAgent.permissions && activeAgent.permissions.browser) === true;
-    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: !!state.figmaMCPEnabled || _hasFigmaAttachment || _agentNeedsFigma, usePlaywrightMCP: !!state.playwrightMCPEnabled || _hasBrowserAttachment || _agentNeedsBrowser || _userHasUrl, selectedFigmaFileKeys: _selectedFigmaKeys, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false, conversationId: (conv && conv.id) || null };
+    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: !!state.figmaMCPEnabled || _hasFigmaAttachment || _agentNeedsFigma || _userHasFigmaUrl, usePlaywrightMCP: !!state.playwrightMCPEnabled || _hasBrowserAttachment || _agentNeedsBrowser || _userHasUrl, selectedFigmaFileKeys: _selectedFigmaKeys, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false, conversationId: (conv && conv.id) || null };
     // Autonomous-mode (run-until-done) flag. Per-conversation override wins;
     // otherwise the server falls back to the active project's setting.
     // `false` is forwarded explicitly so a conversation can opt OUT of a
