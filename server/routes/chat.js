@@ -620,6 +620,11 @@ export function registerChatRoute(app, {
       // Set true when the latest user message reads as a circuit/schematic
       // request — consumed by the post-stream hand-authored-SVG verifier.
       let circuitRequested = false;
+      // New-project scaffolding guard: when the user asks to create/scaffold a
+      // new project but no project is active, force a fresh cwd so commands
+      // do not bleed into unrelated existing repos.
+      let scaffoldIntentActive = false;
+      let scaffoldIntentCwd = null;
 
       // ── Per-turn tool nudge: circuits / schematics ────────────────────────
       // The model frequently tries to answer schematic requests analytically and
@@ -635,6 +640,26 @@ export function registerChatRoute(app, {
             : '';
         const CIRCUIT_RE = /\b(schematic|circuit|wiring diagram|netlist|breadboard|rc (low|high)[- ]?pass|low[- ]?pass filter|high[- ]?pass filter|band[- ]?pass|op[- ]?amp|555 timer|transistor amp(?:lifier)?|amplifier|voltage divider|voltage regulator|power supply|\bpsu\b|inverter|oscillator|multivibrator|astable|h[- ]?bridge|full[- ]?bridge|half[- ]?bridge|push[- ]?pull|darlington|schmitt trigger|comparator|led driver|relay driver|buck converter|boost converter|buck[- ]?boost|rectifier|flip[- ]?flop|d[- ]?type latch|wheatstone bridge|common[- ]?(emitter|collector)|kicad|spice)\b/i;
         const PCB_RE = /\b(pcb|printed circuit board|board layout|copper (trace|pour|layer)|etch(?:ing|ed)?|solder(?:ing)?|trace routing|autoroute|footprint|land pattern|gerber|silkscreen|bill of materials|\bbom\b|build guide|assembly (guide|instructions))\b/i;
+        const NEW_PROJECT_RE = /\b(create|scaffold|start|spin up|initialize|init|bootstrap|set up)\b[\s\S]{0,60}\b(new|fresh)\b[\s\S]{0,40}\b(project|app|workspace|repo|repository)\b|\bnew\s+(project|app|workspace|repo|repository)\b/i;
+        if (lastText && NEW_PROJECT_RE.test(lastText) && !projectId && !isCLI && !noTools) {
+          scaffoldIntentActive = true;
+          try {
+            const base = path.join(os.homedir(), 'Documents', 'Fauna');
+            fs.mkdirSync(base, { recursive: true });
+            const dir = path.join(base, 'Scaffold-' + Date.now().toString(36));
+            fs.mkdirSync(dir, { recursive: true });
+            scaffoldIntentCwd = dir;
+          } catch (_) {
+            scaffoldIntentCwd = path.join(os.homedir(), 'Documents', 'Fauna');
+          }
+          allMessages.push({
+            role: 'system',
+            content:
+              '[New-project scaffold request detected] The user asked for a fresh project. Do NOT edit or run commands inside pre-existing repositories unless the user explicitly names that path. ' +
+              'Default working directory for this turn is: ' + scaffoldIntentCwd + '. ' +
+              'First step must be scaffolding the new project in this directory (or a child directory), then continue implementation there.'
+          });
+        }
         if (lastText && PCB_RE.test(lastText) && !isCLI && !noTools) {
           allMessages.push({
             role: 'system',
@@ -862,6 +887,9 @@ export function registerChatRoute(app, {
           // project's directory (cross-project context bleed). An explicit
           // cwd from the model always wins.
           let effectiveCwd = cwd;
+          if (!effectiveCwd && scaffoldIntentCwd) {
+            effectiveCwd = scaffoldIntentCwd;
+          }
           if (!effectiveCwd && _projectRecord?.rootPath) {
             try {
               if (fs.existsSync(_projectRecord.rootPath)) effectiveCwd = _projectRecord.rootPath;
