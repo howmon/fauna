@@ -1685,6 +1685,34 @@ function renderGenUI(spec, container) {
     container.appendChild(root);
   } catch (e) {
     container.innerHTML = '<div class="gui-error"><i class="ti ti-alert-circle"></i> Render error: ' + escHtml(e.message) + '</div>';
+    return;
+  }
+  // Make uniform N×1fr Grids reflow based on available width. Authors
+  // pick a column count assuming the chat bubble (~820px), but the same
+  // spec can be opened in a wide browser tab, a narrow split pane, or a
+  // collapsed sidebar. Rewriting only uniform 1fr tracks preserves any
+  // intentional non-uniform layout (e.g. '240px 1fr' sidebars).
+  _genUiReflowGrids(container);
+}
+
+function _genUiReflowGrids(root) {
+  if (!root || typeof root.querySelectorAll !== 'function') return;
+  var grids = root.querySelectorAll('.gui-grid');
+  for (var i = 0; i < grids.length; i++) {
+    var g = grids[i];
+    var cur = g.style.gridTemplateColumns || '';
+    var m = cur.match(/^repeat\((\d+)\s*,\s*1fr\)$/);
+    if (!m) continue;
+    var n = parseInt(m[1], 10);
+    if (!(n >= 2)) continue;
+    // min(100%, 260px) keeps cells from overflowing on phones while
+    // still asking for ~260px before wrapping on desktop. auto-fit lets
+    // the grid use *more* columns than the author asked for when the
+    // container is wide enough (browser tab, big monitor) and *fewer*
+    // when it's narrower (split pane, mobile).
+    g.style.gridTemplateColumns =
+      'repeat(auto-fit, minmax(min(100%, 260px), 1fr))';
+    g.dataset.guiOriginalCols = String(n);
   }
 }
 

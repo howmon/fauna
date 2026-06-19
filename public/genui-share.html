@@ -169,7 +169,9 @@
         }
         // Reuse the chat's renderGenUI verbatim so theme + components
         // match exactly. A share may carry a single spec object or an
-        // array of specs (multi gen-ui per assistant message).
+        // array of specs (multi gen-ui per assistant message). The
+        // renderer itself rewrites uniform N×1fr grids to a responsive
+        // auto-fit track so layouts reflow into the wide page shell.
         mount.innerHTML = '';
         var specs = Array.isArray(spec) ? spec : [spec];
         for (var i = 0; i < specs.length; i++) {
@@ -183,33 +185,7 @@
           }
           mount.appendChild(wrap);
         }
-        reflowGrids(mount);
         clearError();
-      }
-
-      // The chat renderer pins Grid layouts to a fixed N column count
-      // (`repeat(N, 1fr)`) because the 820px chat bubble doesn't have
-      // much room to play with. On the standalone share page we have a
-      // whole browser tab, so rewrite uniform 1fr grids to a responsive
-      // auto-fit track that wraps on narrow screens *and* expands to
-      // more columns on wide ones. Non-uniform tracks (e.g. '240px 1fr')
-      // are left untouched because the spec author had an intent we
-      // shouldn't second-guess.
-      function reflowGrids(root) {
-        var grids = root.querySelectorAll('.gui-grid');
-        for (var i = 0; i < grids.length; i++) {
-          var g = grids[i];
-          var cur = g.style.gridTemplateColumns || '';
-          var m = cur.match(/^repeat\((\d+)\s*,\s*1fr\)$/);
-          if (!m) continue;
-          var n = parseInt(m[1], 10);
-          if (!(n >= 2)) continue;
-          // min(100%, 260px) keeps the cell from overflowing on phones
-          // while still asking for ~260px before wrapping on desktop.
-          g.style.gridTemplateColumns =
-            'repeat(auto-fit, minmax(min(100%, 260px), 1fr))';
-          g.dataset.guiOriginalCols = String(n);
-        }
       }
 
       // ── initial load ───────────────────────────────────────────────────
