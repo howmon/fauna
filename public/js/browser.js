@@ -1672,6 +1672,47 @@ function _getLastBrowserExtTarget() {
   return {};
 }
 
+function _parseBrowserExtActionJson(raw) {
+  if (!raw || typeof raw !== 'string') return { ok: false, error: new Error('Empty browser-ext-action payload') };
+  try {
+    return { ok: true, value: JSON.parse(raw), recovered: false, note: '' };
+  } catch (err) {
+    // Common model failure mode: invalid JSON escape for single quote inside a
+    // JS string (e.g. \' in JSON). Strip that escape and retry.
+    var fixed = raw.replace(/\\'/g, "'");
+    if (fixed !== raw) {
+      try {
+        return { ok: true, value: JSON.parse(fixed), recovered: true, note: "Replaced invalid \\' escapes in JSON string values." };
+      } catch (_) {}
+    }
+    return { ok: false, error: err };
+  }
+}
+
+function _renderBrowserExtParseError(pre, msg) {
+  if (!pre || !pre.parentNode) return;
+  var el = document.createElement('div');
+  el.className = 'ba-block ba-ext ba-parse-error';
+  el.innerHTML =
+    '<div class="ba-header">' +
+      '<i class="ti ti-alert-triangle"></i>' +
+      '<span class="ba-label">Browser Action Parse Error</span>' +
+      '<span class="ba-status err">Invalid JSON</span>' +
+    '</div>' +
+    '<div class="ba-output" style="padding:.45rem .6rem;color:#fca5a5;white-space:pre-wrap">' + escHtml(msg) + '</div>';
+  pre.parentNode.replaceChild(el, pre);
+}
+
+function _feedBrowserExtParseError(raw, err, convId) {
+  var reason = (err && err.message) ? err.message : String(err || 'JSON parse failed');
+  var preview = String(raw || '').slice(0, 600);
+  var feedback = 'browser-ext-action parse error: ' + reason + '\n\n' +
+    'Re-emit ONE valid JSON object only (no prose in the code block).\n' +
+    "Recovery hint: avoid invalid JSON escapes like \\\\' inside strings; if needed, simplify eval JS or build regex via new RegExp().\n\n" +
+    'Failed block preview:\n```json\n' + preview + '\n```';
+  browserFeedAI(feedback, convId).catch(function(){});
+}
+
 function extractAndRenderBrowserExtActions(html, messageEl, isHistoryLoad, convId) {
   var container = messageEl.querySelector('.prose') || messageEl;
   var codeBlocks = container.querySelectorAll('code.language-browser-ext-action, code.language-browser_ext_action');
@@ -1723,23 +1764,32 @@ function extractAndRenderBrowserExtActions(html, messageEl, isHistoryLoad, convI
     var lines = raw.split('\n').map(function(l) { return l.trim(); })
       .filter(function(l) { return l && !/^`{3,}/.test(l); });
     var parsedLines = [];
-    var allJsonl = lines.length > 1 && lines.every(function(l) {
-      try { JSON.parse(l); return true; } catch(_) { return false; }
-    });
+    var parseResults = lines.map(function(l) { return _parseBrowserExtActionJson(l); });
+    var allJsonl = lines.length > 1 && parseResults.every(function(r) { return r.ok; });
     if (allJsonl) {
-      lines.forEach(function(l) {
-        try {
-          var parsedAction = _mapBrowserActionToExtAction(JSON.parse(l));
-          if (parsedAction) parsedLines.push({ raw: l, action: parsedAction });
-        } catch(_) {}
+      lines.forEach(function(l, idx) {
+        var parsed = parseResults[idx];
+        if (!parsed || !parsed.ok) return;
+        var parsedAction = _mapBrowserActionToExtAction(parsed.value);
+        if (parsedAction) parsedLines.push({ raw: l, action: parsedAction });
+        if (parsed && parsed.recovered) {
+          dbg('browser-ext-action parse recovered: ' + (parsed.note || 'sanitized JSON'), 'warn');
+        }
       });
     } else {
-      try {
-        var parsedAction = _mapBrowserActionToExtAction(JSON.parse(raw));
+      var parsedSingle = _parseBrowserExtActionJson(raw);
+      if (parsedSingle.ok) {
+        var parsedAction = _mapBrowserActionToExtAction(parsedSingle.value);
         if (parsedAction) parsedLines.push({ raw: raw, action: parsedAction });
-      } catch(e) {
+        if (parsedSingle.recovered) {
+          dbg('browser-ext-action parse recovered: ' + (parsedSingle.note || 'sanitized JSON'), 'warn');
+        }
+      } else {
+        var e = parsedSingle.error;
         dbg('browser-ext-action parse error: ' + e.message, 'err');
-        pre.remove(); return;
+        _renderBrowserExtParseError(pre, e.message || 'Invalid JSON payload');
+        if (!isHistoryLoad) _feedBrowserExtParseError(raw, e, convId);
+        return;
       }
     }
 
@@ -1977,7 +2027,7 @@ async function _runExtActionSequence(widgets, convId) {
       if (blockEl)  { blockEl.classList.remove('running'); }
       dbg('browser-ext-action error: ' + e.message, 'err');
       var errFeed = 'browser-ext-action `' + w.action.action + '` failed: ' + e.message +
-        '';
+        '\nDo NOT claim completion. Take a corrective browser-ext-action step next (retry, re-target tab, or extract current state).';
       try { await browserFeedAI(errFeed, convId); } catch(_) {}
       break;
     }
