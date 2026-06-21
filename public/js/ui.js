@@ -1316,6 +1316,18 @@ async function _extractDocumentText(file) {
     return { text: text, ref: ref, mime: mime, size: file.size || 0, warning: '' };
   }
 
+  // Video/audio files — don't try to extract text (expensive & unsupported).
+  // Store as metadata-only attachment.
+  if ((mime && (mime.indexOf('video/') === 0 || mime.indexOf('audio/') === 0)) || /\.(mov|mp4|webm|mkv|avi|flv|m4v|3gp|ogv|mp3|wav|flac|m4a|aac|opus|ogg|oga|wma)$/i.test(name)) {
+    return {
+      text: '[' + (mime.indexOf('video/') === 0 ? 'Video' : 'Audio') + ' file — text extraction not supported; file stored for reference]',
+      ref: ref,
+      mime: mime,
+      size: file.size || 0,
+      warning: 'Video/audio files are stored for context but cannot have text extracted'
+    };
+  }
+
   var ab = await file.arrayBuffer();
   var payload = {
     name: name,
@@ -1351,6 +1363,23 @@ async function _processSingleAttachment(file) {
       absPath = file.path;
     }
   } catch (_) { absPath = ''; }
+
+  // Guard against massive files that would freeze the browser during base64 encoding.
+  // Limit general uploads to 100 MB; video/audio/binary to 500 MB (will still be stored but not extracted as text).
+  var MAX_SIZE_MB = (file.type && (file.type.indexOf('video/') === 0 || file.type.indexOf('audio/') === 0)) ? 500 : 100;
+  if (file.size && file.size > MAX_SIZE_MB * 1024 * 1024) {
+    addAttachment({
+      type: 'file',
+      name: file.name,
+      content: '[Attachment note] File too large (' + (file.size / (1024*1024)).toFixed(1) + ' MB, limit ' + MAX_SIZE_MB + ' MB)',
+      path: absPath || undefined,
+      sourceUri: absPath ? ('file://' + absPath) : ('attachment://' + encodeURIComponent(file.name || ('file-' + Date.now()))),
+      size: file.size || 0,
+      mime: file.type || 'application/octet-stream',
+      warning: 'File exceeds ' + MAX_SIZE_MB + ' MB size limit'
+    });
+    return;
+  }
 
   if (file.type && file.type.startsWith('image/')) {
     var img = await _normalizeImageAttachment(file);
