@@ -79,6 +79,41 @@ function _escapeStrayQuotes(raw) {
   return out;
 }
 
+// Third-pass recovery: sometimes the model emits valid JSON followed by
+// extra narrative text in the same gen-ui fence. Extract the first complete
+// JSON object/array and parse only that value.
+function _extractLeadingJsonValue(raw) {
+  var s = String(raw || '');
+  var start = -1;
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charAt(i);
+    if (c === '{' || c === '[') { start = i; break; }
+    if (c !== ' ' && c !== '\t' && c !== '\n' && c !== '\r') return '';
+  }
+  if (start < 0) return '';
+
+  var depth = 0;
+  var inStr = false;
+  var esc = false;
+  for (var j = start; j < s.length; j++) {
+    var ch = s.charAt(j);
+    if (inStr) {
+      if (esc) { esc = false; continue; }
+      if (ch === '\\') { esc = true; continue; }
+      if (ch === '"') { inStr = false; continue; }
+      continue;
+    }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === '{' || ch === '[') { depth++; continue; }
+    if (ch === '}' || ch === ']') {
+      depth--;
+      if (depth === 0) return s.slice(start, j + 1);
+      continue;
+    }
+  }
+  return '';
+}
+
 // ── State store (per-spec instance) ──────────────────────────────────────
 
 function _genUiCreateState(initialState) {
@@ -1748,24 +1783,46 @@ function extractAndRenderGenUI(buffer, msgEl, isHistoryLoad) {
     var code = pre.querySelector('code');
     var raw = code ? code.textContent : pre.textContent;
     var spec;
+    var specJson = raw.trim();
     try {
-      spec = JSON.parse(raw.trim());
+      spec = JSON.parse(specJson);
     } catch (e) {
       // Recovery: LLMs frequently embed literal newlines/tabs inside string
       // values (e.g. multi-line SVG markup). JSON disallows raw control chars
       // in strings — escape them and retry. If that still fails, try once
       // more with stray-quote escaping (handles \`"text": "She said "hi""\`).
       try {
-        spec = JSON.parse(_sanitizeJsonControlChars(raw.trim()));
+        specJson = _sanitizeJsonControlChars(specJson);
+        spec = JSON.parse(specJson);
       } catch (e2) {
         try {
-          spec = JSON.parse(_escapeStrayQuotes(_sanitizeJsonControlChars(raw.trim())));
+          specJson = _escapeStrayQuotes(_sanitizeJsonControlChars(raw.trim()));
+          spec = JSON.parse(specJson);
         } catch (e3) {
-          var errEl = document.createElement('div');
-          errEl.className = 'gui-parse-error';
-          errEl.innerHTML = '<i class="ti ti-alert-circle"></i> <strong>gen-ui:</strong> JSON parse error — ' + escHtml(e.message);
-          pre.replaceWith(errEl);
-          return;
+          // Final recovery: parse only the first complete JSON value when
+          // trailing non-JSON text was appended after the object.
+          var leading = _extractLeadingJsonValue(raw.trim());
+          if (leading) {
+            var leadCandidates = [
+              leading,
+              _sanitizeJsonControlChars(leading),
+              _escapeStrayQuotes(_sanitizeJsonControlChars(leading))
+            ];
+            for (var li = 0; li < leadCandidates.length; li++) {
+              try {
+                specJson = leadCandidates[li];
+                spec = JSON.parse(specJson);
+                break;
+              } catch (_) {}
+            }
+          }
+          if (!spec) {
+            var errEl = document.createElement('div');
+            errEl.className = 'gui-parse-error';
+            errEl.innerHTML = '<i class="ti ti-alert-circle"></i> <strong>gen-ui:</strong> JSON parse error — ' + escHtml(e.message);
+            pre.replaceWith(errEl);
+            return;
+          }
         }
       }
     }
@@ -1789,7 +1846,6 @@ function extractAndRenderGenUI(buffer, msgEl, isHistoryLoad) {
     // ── "Add to Project" footer ──────────────────────────────────────────
     var footer = document.createElement('div');
     footer.className = 'gui-footer';
-    var specJson = raw.trim(); // keep the raw JSON for saving
     var title = _genUiSpecTitle(spec);
 
     // Stash the parsed spec + derived title on the wrapper so the
