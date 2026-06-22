@@ -1959,16 +1959,17 @@ export function registerChatRoute(app, {
             toolCallCount === 0 &&
             assistantText.trim() &&
             /```\s*(?:shell-output)\b/i.test(assistantText) &&
-            (/(save|write|persist|create|store|put)\s+(?:it|this|the|spec|file|to|in|docs|folder|project)/i.test(allMessages.filter(m => m.role === 'user').pop()?.content || '') || /(save|write|store|persist|put).{0,30}(?:docs|folder|file)/i.test(allMessages.filter(m => m.role === 'user').pop()?.content || ''))
+            (/(save|write|persist|create|store|put|export|generate|output|commit|deploy|build)\s+(?:it|this|the|spec|file|to|in|docs|folder|project|directory)/i.test(allMessages.filter(m => m.role === 'user').pop()?.content || '') || /(save|write|store|persist|put|export|generate|output).{0,30}(?:docs|folder|file|directory)/i.test(allMessages.filter(m => m.role === 'user').pop()?.content || ''))
           ) {
-            // CRITICAL: fake-execution claim for a SAVE operation. User asked to
-            // save/write to a folder/file, but assistant emitted a fake shell-output
+            // CRITICAL: fake-execution claim for a SAVE/CREATE operation. User asked to
+            // save/write/export/generate to a folder/file, but assistant emitted a fake shell-output
             // block WITHOUT calling fauna_write_file or fauna_apply_patch. This is the
             // Fauna hallucination bug — assistant pretends success but nothing happened.
-            // Force the model to use the actual tool.
-            console.log('[chat] fake-save-execution detected — forcing fauna_write_file ');
+            // Force the model to use the actual tool with pinned tool_choice.
+            console.log('[chat] fake-save-execution detected (shell-output without tool call) — forcing fauna_write_file with tool_choice constraint');
             allMessages.push({ role: 'assistant', content: assistantText });
-            allMessages.push({ role: 'user', content: '[System: CRITICAL: Your previous response emitted a ` ```shell-output ` block but did NOT call any actual file-write tool (fauna_write_file, fauna_apply_patch, etc.). Markdown fences DO NOT execute — nothing was saved. You MUST use fauna_write_file or fauna_apply_patch to actually write files to disk. Re-emit your response NOW using the correct tool call with the exact file path and content. Do not emit markdown fences and claim success — only tool calls execute.]' });
+            allMessages.push({ role: 'user', content: '[System: CRITICAL: Your previous response emitted a ```shell-output``` block but did NOT call any actual file-write tool (fauna_write_file, fauna_apply_patch, etc.). Markdown fences DO NOT execute — nothing was saved. You MUST use fauna_write_file or fauna_apply_patch to actually write files to disk. Re-emit your response NOW using the correct tool call with the exact file path and content. Do not emit markdown fences and claim success — only tool calls execute.]' });
+            forceToolChoice = 'fauna_write_file';
             // keep continueLoop = true
           } else if (
             circuitRequested &&
@@ -1985,6 +1986,37 @@ export function registerChatRoute(app, {
             console.log('[chat] hand-authored circuit SVG detected (no engine provenance marker) — forcing real render (' + circuitHandauthNudges + '/' + MAX_CIRCUIT_HANDAUTH_NUDGES + ')');
             allMessages.push({ role: 'assistant', content: assistantText });
             allMessages.push({ role: 'user', content: '[System: The schematic in your reply is hand-authored SVG, not output from fauna_render_circuit — it lacks the engine provenance marker. Hand-drawn schematics are forbidden: they render warped and are unverified. Call fauna_render_circuit({ doc }) NOW, then emit ONE gen-ui SVG block using its returned `svg` markup VERBATIM (do not redraw, reposition, or edit it). Keep the schematic as the LAST thing in the message.]' });
+            // keep continueLoop = true
+          } else if (
+            toolCallCount === 0 &&
+            assistantText.trim() &&
+            /(?:now\s+(?:replacing|fixing|updating|adding|creating|generating|writing)|let\s+me\s+(?:replace|fix|update|add|create|generate|write)|going\s+to\s+(?:replace|fix|update|add|create|generate|write))\s+[^.!?\n]*(?:file|code|emoji|component|page|section|batch)/i.test(assistantText) &&
+            assistantText.split('\n').length <= 3 &&
+            (/(replace|fix|update|add|create|generate|write|build)\s+(?:all|the|every)\s+/i.test(allMessages.filter(m => m.role === 'user').pop()?.content || '') || /(replace|fix|update|build)\s+(?:emoji|icon|component|all)/i.test(allMessages.filter(m => m.role === 'user').pop()?.content || ''))
+          ) {
+            // Forward-operation incomplete: assistant claimed to start a batch operation
+            // ("Now replacing...", "Let me fix...") but the response is too short (<=3 lines)
+            // and no tool calls were made. This indicates mid-sentence termination or
+            // hallucination of an upcoming operation without executing it.
+            // Force completion with actual tool calls.
+            console.log('[chat] incomplete-batch-operation detected (forward claim + no tools + short response) — forcing multi-tool retry');
+            allMessages.push({ role: 'assistant', content: assistantText });
+            allMessages.push({ role: 'user', content: '[System: Your previous response started describing a batch operation ("Now replacing...", "Let me...") but stopped before completing it and made no tool calls. Batch operations must be executed via actual tool invocations (e.g., multi_replace_string_in_file, fauna_write_file, fauna_apply_patch), not narrated as future intent. Complete the operation NOW by calling the appropriate tool(s) with all required parameters. Do not narrate intent — only execute.]' });
+            forceToolChoice = 'fauna_write_file';
+            // keep continueLoop = true
+          } else if (
+            toolCallCount === 0 &&
+            assistantText.trim() &&
+            /(?:successfully|completed|added|created|saved|written|generated|replaced|updated|deployed)\s+(?:to|at|in)?\s+(?:docs|folder|file|project|repository)/i.test(assistantText) &&
+            !/\b(?:would|could|should|may|might|will)\b/i.test(assistantText)
+          ) {
+            // Meta-claim hallucination: assistant claims successful execution
+            // ("Successfully saved to...", "Added to project", "Written to file")
+            // but never called any tool. This is a direct false claim.
+            console.log('[chat] meta-execution-claim detected (claimed success without tool call) — forcing actual tool call');
+            allMessages.push({ role: 'assistant', content: assistantText });
+            allMessages.push({ role: 'user', content: '[System: Your response claims a file/operation was successfully completed ("Saved", "Added", "Created", "Written"), but you did not call any file-write tool in this turn. Markdown text claims are not execution. Call the appropriate tool NOW (fauna_write_file, fauna_apply_patch, etc.) with the exact file path and content to back up your claim. Claims without tools = hallucination.]' });
+            forceToolChoice = 'fauna_write_file';
             // keep continueLoop = true
           } else if (isOrchestratorTurn && assistantText.trim() && orchestratorNudgeCount < 2 && (() => {
             // Detect three orchestrator failure modes:
