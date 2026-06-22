@@ -1944,6 +1944,33 @@ export function registerChatRoute(app, {
             forceEmitWidgetNext = true;
             // keep continueLoop = true
           } else if (
+            toolCallCount === 0 &&
+            assistantText.trim() &&
+            /```\s*(?:shell-output|write-file|shell-exec)\b/i.test(assistantText) &&
+            !/(save|write|persist|create)\s+(?:it|this|the|spec|file|to|in)/i.test(allMessages.filter(m => m.role === 'user').pop()?.content || '')
+          ) {
+            // Fake-execution guard: assistant emitted markdown fenced content
+            // (shell-output, write-file, shell-exec) WITHOUT any corresponding tool calls,
+            // AND there's no "save/write/persist" in the user's recent request.
+            // This is usually harmless (showing example code). Skip this guard if the user
+            // explicitly asked for a save/write operation — those get the stronger guard below.
+            // keep continueLoop = false — just emit as-is; this is informational content
+          } else if (
+            toolCallCount === 0 &&
+            assistantText.trim() &&
+            /```\s*(?:shell-output)\b/i.test(assistantText) &&
+            (/(save|write|persist|create|store|put)\s+(?:it|this|the|spec|file|to|in|docs|folder|project)/i.test(allMessages.filter(m => m.role === 'user').pop()?.content || '') || /(save|write|store|persist|put).{0,30}(?:docs|folder|file)/i.test(allMessages.filter(m => m.role === 'user').pop()?.content || ''))
+          ) {
+            // CRITICAL: fake-execution claim for a SAVE operation. User asked to
+            // save/write to a folder/file, but assistant emitted a fake shell-output
+            // block WITHOUT calling fauna_write_file or fauna_apply_patch. This is the
+            // Fauna hallucination bug — assistant pretends success but nothing happened.
+            // Force the model to use the actual tool.
+            console.log('[chat] fake-save-execution detected — forcing fauna_write_file ');
+            allMessages.push({ role: 'assistant', content: assistantText });
+            allMessages.push({ role: 'user', content: '[System: CRITICAL: Your previous response emitted a ` ```shell-output ` block but did NOT call any actual file-write tool (fauna_write_file, fauna_apply_patch, etc.). Markdown fences DO NOT execute — nothing was saved. You MUST use fauna_write_file or fauna_apply_patch to actually write files to disk. Re-emit your response NOW using the correct tool call with the exact file path and content. Do not emit markdown fences and claim success — only tool calls execute.]' });
+            // keep continueLoop = true
+          } else if (
             circuitRequested &&
             circuitHandauthNudges < MAX_CIRCUIT_HANDAUTH_NUDGES &&
             assistantText.trim() &&
