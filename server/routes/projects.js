@@ -51,6 +51,8 @@ export function registerProjectRoutes(app, deps) {
     addBacklogItem,
     updateBacklogItem,
     moveWorkItem,
+    deleteWorkItem,
+    emptyArchivedWorkItems,
     addWorkItemComment,
     setWorkItemLock,
     listAllWorkItems,
@@ -58,29 +60,6 @@ export function registerProjectRoutes(app, deps) {
     prioritizeBacklog,
     getInternalAICaller,
   } = deps;
-
-  // Best-effort: fire an audit shortly after a project is created so the
-  // backlog isn't empty. Async + swallows all errors. Held to a 30s deadline.
-  function _scheduleInitialAudit(projectId) {
-    setTimeout(async () => {
-      try {
-        const aiCaller = typeof getInternalAICaller === 'function'
-          ? getInternalAICaller() : null;
-        if (typeof aiCaller !== 'function') return;
-        const mod = await import('../../lib/project-audit.js');
-        const result = await Promise.race([
-          mod.auditProject(projectId, { aiCaller, maxProposals: 5 }),
-          new Promise((_r, rej) => setTimeout(() => rej(new Error('audit timeout')), 60_000)),
-        ]);
-        if (result && result.added && result.added.length) {
-          for (const it of result.added) {
-            _emitBoardEvent({ type: 'created', projectId, itemId: it.id });
-          }
-          console.log('[project-audit] seeded ' + result.added.length + ' item(s) for ' + projectId);
-        }
-      } catch (e) { console.warn('[project-audit] initial audit failed:', e?.message || e); }
-    }, 2_000);
-  }
 
   app.get('/api/projects', (_req, res) => {
     res.json(getAllProjects());
@@ -91,7 +70,6 @@ export function registerProjectRoutes(app, deps) {
       const p = createProject(req.body || {});
       res.status(201).json(p);
       if (p && p.id) _enqueueProjectChange(p.id, 'upsert');
-      if (p && p.rootPath) _scheduleInitialAudit(p.id);
     }
     catch (e) { res.status(400).json({ error: e.message }); }
   });
@@ -467,6 +445,20 @@ export function registerProjectRoutes(app, deps) {
     res.status(201).json(item);
   });
 
+  // Permanently clear every card in the Archived column.
+  app.delete('/api/projects/:id/workitems/archived', (req, res) => {
+    if (typeof emptyArchivedWorkItems !== 'function') return res.status(501).json({ error: 'kanban not wired' });
+    const out = emptyArchivedWorkItems(req.params.id);
+    if (!out || out.ok === false) return res.status(404).json({ error: (out && out.error) || 'Project not found' });
+    _emitBoardEvent({
+      type: 'archive-cleared',
+      projectId: req.params.id,
+      removedCount: out.removedCount,
+      removedIds: out.removedIds,
+    });
+    res.json(out);
+  });
+
   // Patch a work item (title, body, rice, tags, assignee, priority, etc.)
   app.patch('/api/projects/:id/workitems/:itemId', (req, res) => {
     if (typeof updateBacklogItem !== 'function') return res.status(501).json({ error: 'kanban not wired' });
@@ -476,14 +468,23 @@ export function registerProjectRoutes(app, deps) {
     res.json(item);
   });
 
-  // Soft-archive a work item (sets column='archived'). Hard delete is not
-  // exposed via API — undo from the UI by dragging out of Archived.
+  // Default behavior soft-archives a work item (column='archived').
+  // Use ?hard=1 to permanently delete the card.
   app.delete('/api/projects/:id/workitems/:itemId', (req, res) => {
+    const hard = req.query.hard === '1' || req.query.hard === 'true';
+    if (hard) {
+      if (typeof deleteWorkItem !== 'function') return res.status(501).json({ error: 'kanban not wired' });
+      const del = deleteWorkItem(req.params.id, req.params.itemId);
+      if (!del.ok) return res.status(404).json({ error: del.error });
+      _emitBoardEvent({ type: 'deleted', projectId: req.params.id, itemId: req.params.itemId, item: del.item });
+      return res.json({ ok: true, deleted: true, itemId: req.params.itemId });
+    }
+
     if (typeof moveWorkItem !== 'function') return res.status(501).json({ error: 'kanban not wired' });
     const r = moveWorkItem(req.params.id, req.params.itemId, { column: 'archived' }, { actor: 'human' });
     if (!r.ok) return res.status(404).json({ error: r.error });
     _emitBoardEvent({ type: 'archived', projectId: req.params.id, item: r.item });
-    res.json({ ok: true });
+    res.json({ ok: true, archived: true, itemId: req.params.itemId });
   });
 
   // Move a card. Body: { column, assignee?, claimedBy?, runEntry? }

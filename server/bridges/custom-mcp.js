@@ -22,12 +22,28 @@ import fs from 'fs';
 import path from 'path';
 import { exec as _exec, spawn } from 'child_process';
 import { findNodeBinary } from '../lib/find-node-binary.js';
+import {
+  listCredentials,
+  createCredential,
+  updateCredential,
+  resolveCredential,
+} from '../../credentials-store.js';
 
 class HttpMcpClient {
-  constructor(url) {
+  constructor(url, extraHeaders = {}) {
     this.url = url;
+    this.extraHeaders = extraHeaders || {};
     this.sessionId = null;
     this.toolsCache = null;
+  }
+
+  _headers(sessionId) {
+    const base = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json, text/event-stream',
+    };
+    if (sessionId) base['mcp-session-id'] = sessionId;
+    return { ...base, ...this.extraHeaders };
   }
 
   async _parseSSE(response) {
@@ -68,10 +84,7 @@ class HttpMcpClient {
     });
     const resp = await fetch(this.url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json, text/event-stream'
-      },
+      headers: this._headers(),
       body
     });
     if (!resp.ok) {
@@ -105,11 +118,7 @@ class HttpMcpClient {
   async _post(body) {
     const resp = await fetch(this.url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'mcp-session-id': this.sessionId,
-        'Accept': 'application/json, text/event-stream'
-      },
+      headers: this._headers(this.sessionId),
       body: JSON.stringify(body)
     });
     if (!resp.ok) {
@@ -158,9 +167,99 @@ export function createCustomMcpBridge({
   let faunaMcpConnectedAt = null;
   let bundledBrowserServerProc = null;
 
+  function _normalizeServerRecord(server) {
+    const s = { ...(server || {}) };
+    if (typeof s.running !== 'boolean') s.running = false;
+    if (typeof s.enabled !== 'boolean') s.enabled = true;
+
+    if (!s.lifecycle || typeof s.lifecycle !== 'object') s.lifecycle = {};
+    if (!s.lifecycle.configuredAt) s.lifecycle.configuredAt = new Date().toISOString();
+
+    if (!s.auth || typeof s.auth !== 'object') s.auth = {};
+    if (!s.auth.credentialId && s.oauthCredentialId) s.auth.credentialId = s.oauthCredentialId;
+    if (typeof s.auth.authorized !== 'boolean') s.auth.authorized = false;
+
+    return s;
+  }
+
+  function _oauthCredentialName(serverId) {
+    return `mcp-oauth-${serverId}`;
+  }
+
+  function _findCredentialIdByName(name) {
+    try {
+      const found = listCredentials().find(c => c.name === name);
+      return found ? found.id : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function _getServerToken(server) {
+    const credId = server?.auth?.credentialId || server?.oauthCredentialId;
+    if (!credId) return '';
+    try {
+      const resolved = resolveCredential(credId);
+      return String(
+        resolved?.data?.accessToken ||
+        resolved?.data?.token ||
+        ''
+      ).trim();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function _oauthStatus(server) {
+    const hasTemplateToken = typeof server?.authHeader === 'string' && /\{\{\s*token\s*\}\}/i.test(server.authHeader);
+    const requiresAuth = !!(server?.oauthAuthUrl || hasTemplateToken || server?.auth?.credentialId || server?.oauthCredentialId);
+    const token = _getServerToken(server);
+    return {
+      requiresAuth,
+      authorized: requiresAuth ? !!token : true,
+      hasCredential: !!token,
+    };
+  }
+
+  function _resolveHttpServerDefinition(server) {
+    if (!server.enabled) throw new Error('Server is disabled');
+
+    const token = _getServerToken(server);
+    const status = _oauthStatus(server);
+    const headers = {};
+
+    if (server.authHeader) {
+      let value = String(server.authHeader).trim();
+      if (/\{\{\s*token\s*\}\}/i.test(value)) {
+        if (!token) throw new Error('Authentication required: sign in first to provide token');
+        value = value.replace(/\{\{\s*token\s*\}\}/ig, token);
+      }
+      if (/^authorization\s*:/i.test(value)) {
+        value = value.replace(/^authorization\s*:\s*/i, '');
+      }
+      if (value) headers.Authorization = value;
+    } else if (token) {
+      headers.Authorization = 'Bearer ' + token;
+    }
+
+    if (status.requiresAuth && !status.authorized) {
+      throw new Error('Authentication required: no OAuth token configured');
+    }
+
+    return { url: server.url, headers, authStatus: status };
+  }
+
   function readCustomMcpServers() {
     if (!fs.existsSync(CUSTOM_MCP_FILE)) return [];
-    try { return JSON.parse(fs.readFileSync(CUSTOM_MCP_FILE, 'utf8')); } catch (_) { return []; }
+    try {
+      const raw = JSON.parse(fs.readFileSync(CUSTOM_MCP_FILE, 'utf8'));
+      const list = Array.isArray(raw) ? raw : [];
+      const normalized = list.map(_normalizeServerRecord);
+      if (JSON.stringify(list) !== JSON.stringify(normalized)) writeCustomMcpServers(normalized);
+      return normalized;
+    } catch (_) {
+      return [];
+    }
   }
 
   function writeCustomMcpServers(servers) {
@@ -318,7 +417,14 @@ export function createCustomMcpBridge({
 
   function register(app) {
     app.get('/api/custom-mcp-servers', (req, res) => {
-      res.json(readCustomMcpServers());
+      const servers = readCustomMcpServers().map(s => ({
+        ...s,
+        auth: {
+          ...(s.auth || {}),
+          ..._oauthStatus(s),
+        },
+      }));
+      res.json(servers);
     });
 
     app.post('/api/custom-mcp-servers', (req, res) => {
@@ -338,7 +444,14 @@ export function createCustomMcpBridge({
         env: env || {},
         envPassthrough: envPassthrough || [],
         url: url || null,
-        running: false
+        running: false,
+        enabled: true,
+        lifecycle: {
+          configuredAt: new Date().toISOString(),
+        },
+        auth: {
+          authorized: false,
+        },
       };
       servers.push(newServer);
       writeCustomMcpServers(servers);
@@ -350,7 +463,15 @@ export function createCustomMcpBridge({
       const idx = servers.findIndex(s => s.id === req.params.id);
       if (idx === -1) return res.status(404).json({ error: 'Server not found' });
 
-      const updated = { ...servers[idx], ...req.body, id: servers[idx].id };
+      const allowedKeys = [
+        'name', 'transport', 'command', 'args', 'env', 'envPassthrough',
+        'url', 'cwd', 'authHeader', 'oauthAuthUrl', 'enabled'
+      ];
+      const patch = {};
+      for (const k of allowedKeys) {
+        if (Object.prototype.hasOwnProperty.call(req.body || {}, k)) patch[k] = req.body[k];
+      }
+      const updated = _normalizeServerRecord({ ...servers[idx], ...patch, id: servers[idx].id });
       servers[idx] = updated;
       writeCustomMcpServers(servers);
       res.json(updated);
@@ -379,13 +500,17 @@ export function createCustomMcpBridge({
       const servers = readCustomMcpServers();
       const server = servers.find(s => s.id === req.params.id);
       if (!server) return res.status(404).json({ error: 'Server not found' });
+      if (!server.enabled) return res.status(409).json({ error: 'Server is disabled' });
 
       if (server.transport === 'http') {
         try {
-          const client = new HttpMcpClient(server.url);
+          const resolved = _resolveHttpServerDefinition(server);
+          const client = new HttpMcpClient(resolved.url, resolved.headers);
           await client.getTools();
           customMcpClients.set(server.id, client);
           server.running = true;
+          server.auth = { ...(server.auth || {}), ...resolved.authStatus, lastResolvedAt: new Date().toISOString() };
+          server.lifecycle = { ...(server.lifecycle || {}), lastResolvedAt: new Date().toISOString(), lastStartedAt: new Date().toISOString() };
           writeCustomMcpServers(servers);
           res.json({ ok: true, transport: 'http' });
         } catch (e) {
@@ -393,6 +518,7 @@ export function createCustomMcpBridge({
         }
       } else if (server.transport === 'stdio') {
         try {
+          if (!server.enabled) return res.status(409).json({ error: 'Server is disabled' });
           const env = { ...process.env, ...server.env };
           for (const key of server.envPassthrough || []) {
             if (process.env[key]) env[key] = process.env[key];
@@ -427,6 +553,7 @@ export function createCustomMcpBridge({
 
           customMcpProcesses.set(server.id, { process: proc, logs });
           server.running = true;
+          server.lifecycle = { ...(server.lifecycle || {}), lastResolvedAt: new Date().toISOString(), lastStartedAt: new Date().toISOString() };
           writeCustomMcpServers(servers);
           res.json({ ok: true, pid: proc.pid, transport: 'stdio' });
         } catch (e) {
@@ -461,8 +588,58 @@ export function createCustomMcpBridge({
       res.json({ logs: proc?.logs || [] });
     });
 
-    app.get('/api/custom-mcp-servers/:id/oauth/status', (_req, res) => {
-      res.json({ authorized: false });
+    app.get('/api/custom-mcp-servers/:id/oauth/status', (req, res) => {
+      const server = readCustomMcpServers().find(s => s.id === req.params.id);
+      if (!server) return res.status(404).json({ error: 'Server not found' });
+      const status = _oauthStatus(server);
+      res.json({
+        authorized: status.authorized,
+        requiresAuth: status.requiresAuth,
+        hasCredential: status.hasCredential,
+      });
+    });
+
+    app.post('/api/custom-mcp-servers/:id/oauth/token', (req, res) => {
+      const accessToken = String(req.body?.accessToken || '').trim();
+      if (!accessToken) return res.status(400).json({ error: 'accessToken required' });
+
+      const servers = readCustomMcpServers();
+      const server = servers.find(s => s.id === req.params.id);
+      if (!server) return res.status(404).json({ error: 'Server not found' });
+      if (server.transport !== 'http') return res.status(400).json({ error: 'OAuth token is only supported for HTTP servers' });
+
+      try {
+        const name = _oauthCredentialName(server.id);
+        const existingId = server?.auth?.credentialId || server?.oauthCredentialId || _findCredentialIdByName(name);
+        let credId = existingId;
+
+        if (existingId) {
+          updateCredential(existingId, { type: 'oauth2', data: { accessToken } });
+        } else {
+          const created = createCredential({ name, type: 'oauth2', data: { accessToken } });
+          credId = created.id;
+        }
+
+        server.auth = {
+          ...(server.auth || {}),
+          credentialId: credId,
+          authorized: true,
+          lastResolvedAt: new Date().toISOString(),
+        };
+        server.oauthCredentialId = credId;
+        writeCustomMcpServers(servers);
+
+        if (customMcpClients.has(server.id)) {
+          customMcpClients.get(server.id).reset();
+          customMcpClients.delete(server.id);
+          server.running = false;
+          writeCustomMcpServers(servers);
+        }
+
+        res.json({ ok: true, authorized: true });
+      } catch (e) {
+        res.status(500).json({ error: e.message });
+      }
     });
 
     app.post('/api/custom-mcp-servers/:id/refresh', async (req, res) => {

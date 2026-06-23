@@ -401,6 +401,32 @@ body.is-resizing webview { pointer-events: none !important; }
 }
 .conv-item:hover .conv-date { opacity: 0; }
 .conv-item.active .conv-date { color: var(--fau-text-dim); }
+.proj-task-analytics-pill {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--fau-border);
+  background: var(--fau-surface2);
+  color: var(--fau-text-dim);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 10px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.proj-task-analytics-pill .ti { font-size: 10px; }
+.proj-task-analytics-pill:hover {
+  border-color: var(--accent);
+  color: var(--accent2);
+  background: var(--accent-dim);
+}
+.proj-task-analytics-pill.empty { opacity: .7; }
+.proj-task-analytics-pill.compact {
+  font-size: 9.5px;
+  padding: 1px 6px;
+}
 .conv-streaming-icon { font-size: 11px; opacity: .65; flex-shrink: 0; animation: spin 1.2s linear infinite; }
 .section-streaming { font-size: 12px; color: var(--accent); opacity: .9; }
 
@@ -6087,11 +6113,22 @@ textarea.builder-find-active {
 .all-conv-name-text {
   font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
 }
-.all-conv-col-proj { color: var(--fau-text-muted); overflow: hidden; min-width: 0; }
+.all-conv-col-proj {
+  color: var(--fau-text-muted);
+  overflow: hidden;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 .all-conv-proj-badge {
   display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 12px; color: var(--fau-text-dim);
+}
+.all-conv-col-proj .proj-task-analytics-pill {
+  font-size: 9.5px;
+  padding: 1px 7px;
 }
 .all-conv-col-num {
   text-align: center; color: var(--fau-text-muted); font-variant-numeric: tabular-nums;
@@ -7368,7 +7405,7 @@ body.win-platform .acv-header {
 /* Datagrid rows */
 .all-proj-row {
   display: grid;
-  grid-template-columns: minmax(160px, 1.4fr) minmax(0, 2.6fr) 56px 56px 56px minmax(180px, auto);
+  grid-template-columns: minmax(160px, 1.4fr) minmax(0, 2.6fr) 56px 56px minmax(120px, 0.9fr) minmax(180px, auto);
   align-items: center; gap: 12px;
   padding: 9px 14px; border-bottom: 1px solid var(--fau-border);
   font-size: 13px; color: var(--fau-text); transition: background .1s;
@@ -7395,6 +7432,15 @@ body.win-platform .acv-header {
 }
 .all-proj-col-num {
   text-align: center; color: var(--fau-text-muted); font-variant-numeric: tabular-nums;
+}
+.all-proj-col-analytics {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.all-proj-col-analytics .proj-task-analytics-pill {
+  font-size: 10px;
+  padding: 2px 8px;
 }
 .all-proj-row-head .all-proj-col-num .ti { font-size: 14px; }
 .all-proj-col-actions {

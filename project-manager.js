@@ -1370,6 +1370,43 @@ export function moveWorkItem(projectId, itemId, patch = {}, opts = {}) {
   return { ok: true, item: it };
 }
 
+// Permanently delete a work item from the project backlog.
+// Use `onlyArchived:true` to guard against accidental hard-deletes.
+export function deleteWorkItem(projectId, itemId, { onlyArchived = false } = {}) {
+  const projects = readProjects();
+  const p = projects.find(x => x.id === projectId);
+  if (!p || !Array.isArray(p.backlog)) return { ok: false, error: 'project not found' };
+  _migrateBacklogArray(p.backlog);
+  const idx = p.backlog.findIndex(x => x.id === itemId);
+  if (idx === -1) return { ok: false, error: 'item not found' };
+  const it = p.backlog[idx];
+  if (onlyArchived && it.column !== 'archived') {
+    return { ok: false, error: 'item is not archived' };
+  }
+  p.backlog.splice(idx, 1);
+  p.updatedAt = now();
+  writeProjects(projects);
+  return { ok: true, item: it };
+}
+
+// Permanently remove all items currently in the Archived column.
+export function emptyArchivedWorkItems(projectId) {
+  const projects = readProjects();
+  const p = projects.find(x => x.id === projectId);
+  if (!p || !Array.isArray(p.backlog)) return { ok: false, error: 'project not found' };
+  _migrateBacklogArray(p.backlog);
+  const removed = p.backlog.filter(it => it.column === 'archived');
+  if (!removed.length) return { ok: true, removedCount: 0, removedIds: [] };
+  p.backlog = p.backlog.filter(it => it.column !== 'archived');
+  p.updatedAt = now();
+  writeProjects(projects);
+  return {
+    ok: true,
+    removedCount: removed.length,
+    removedIds: removed.map(it => it.id),
+  };
+}
+
 export function addWorkItemComment(projectId, itemId, { author = 'human', body = '' } = {}) {
   const projects = readProjects();
   const p = projects.find(x => x.id === projectId);

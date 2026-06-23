@@ -10,6 +10,123 @@ function _activeProject() {
   return state.projects.find(function(p) { return p.id === state.activeProjectId; }) || null;
 }
 
+var _projectTaskMetricsCache = Object.create(null);
+var _projectTaskMetricsInflight = Object.create(null);
+
+function _computeProjectTaskMetrics(columns) {
+  columns = columns || {};
+  var counts = {
+    backlog: Array.isArray(columns.backlog) ? columns.backlog.length : 0,
+    todo: Array.isArray(columns.todo) ? columns.todo.length : 0,
+    inProgress: Array.isArray(columns.in_progress) ? columns.in_progress.length : 0,
+    review: Array.isArray(columns.review) ? columns.review.length : 0,
+    done: Array.isArray(columns.done) ? columns.done.length : 0,
+    archived: Array.isArray(columns.archived) ? columns.archived.length : 0,
+  };
+  var total = counts.backlog + counts.todo + counts.inProgress + counts.review + counts.done;
+  var completionPct = total ? Math.round((counts.done / total) * 100) : 0;
+  return {
+    counts: counts,
+    total: total,
+    done: counts.done,
+    completionPct: completionPct,
+  };
+}
+
+function _projectBoardColumnsFromBacklog(backlog) {
+  var columns = {
+    backlog: [],
+    todo: [],
+    in_progress: [],
+    review: [],
+    done: [],
+    archived: [],
+  };
+  var statusToColumn = {
+    'new': 'backlog',
+    'groomed': 'todo',
+    'in-progress': 'in_progress',
+    'done': 'done',
+    'dropped': 'archived',
+  };
+  (backlog || []).forEach(function(it) {
+    var col = (it && it.column) || statusToColumn[it && it.status] || 'backlog';
+    if (!columns[col]) col = 'backlog';
+    columns[col].push(it);
+  });
+  return columns;
+}
+
+function _projectTaskMetricsFromProject(project) {
+  if (!project || !Array.isArray(project.backlog)) return null;
+  return _computeProjectTaskMetrics(_projectBoardColumnsFromBacklog(project.backlog));
+}
+
+function _getProjectTaskMetrics(projectId) {
+  var project = (state.projects || []).find(function(p) { return p.id === projectId; });
+  var fromProject = _projectTaskMetricsFromProject(project);
+  if (fromProject) {
+    _projectTaskMetricsCache[projectId] = fromProject;
+    return fromProject;
+  }
+  return _projectTaskMetricsCache[projectId] || null;
+}
+
+function _projectTaskAnalyticsLabel(metrics) {
+  if (!metrics) return 'No tasks';
+  if (!metrics.total) return 'No tasks';
+  return metrics.completionPct + '% · ' + metrics.done + '/' + metrics.total;
+}
+
+async function refreshProjectTaskMetrics(projectId, opts) {
+  opts = opts || {};
+  if (!projectId) return null;
+  if (_projectTaskMetricsInflight[projectId]) return _projectTaskMetricsInflight[projectId];
+  _projectTaskMetricsInflight[projectId] = (async function() {
+    try {
+      var r = await fetch('/api/projects/' + projectId + '/board');
+      if (!r.ok) return _getProjectTaskMetrics(projectId);
+      var board = await r.json();
+      var metrics = _computeProjectTaskMetrics(board && board.columns);
+      _projectTaskMetricsCache[projectId] = metrics;
+      if (!opts.silent) {
+        renderProjectSidebarList();
+        if (typeof renderConvList === 'function') renderConvList();
+        var page = document.getElementById('all-projects-page');
+        if (page && page.style.display !== 'none') _renderAllProjectsPage();
+      }
+      return metrics;
+    } catch (_) {
+      return _getProjectTaskMetrics(projectId);
+    } finally {
+      delete _projectTaskMetricsInflight[projectId];
+    }
+  })();
+  return _projectTaskMetricsInflight[projectId];
+}
+
+function getProjectTaskAnalyticsInlineHtml(projectId, opts) {
+  opts = opts || {};
+  var metrics = _getProjectTaskMetrics(projectId);
+  var label = _projEsc(_projectTaskAnalyticsLabel(metrics));
+  var cls = 'proj-task-analytics-pill' + (metrics && metrics.total ? '' : ' empty') + (opts.compact ? ' compact' : '');
+  var attr = opts.clickable === false
+    ? ''
+    : ' onclick="openProjectTaskboard(\'' + _projEsc(projectId) + '\', event)" title="Open taskboard"';
+  return '<button type="button" class="' + cls + '"' + attr + '><i class="ti ti-layout-kanban"></i><span>' + label + '</span></button>';
+}
+
+async function openProjectTaskboard(projectId, e) {
+  if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+  if (!projectId) return;
+  await setActiveProject(projectId, { navigate: false });
+  openProjectHub('tasks');
+}
+
+window.openProjectTaskboard = openProjectTaskboard;
+window.getProjectTaskAnalyticsInlineHtml = getProjectTaskAnalyticsInlineHtml;
+window.refreshProjectTaskMetrics = refreshProjectTaskMetrics;
+
 // ── Load / Persist ────────────────────────────────────────────────────────
 
 async function loadProjects() {
@@ -29,6 +146,7 @@ async function loadProjects() {
   renderProjectSidebarList();
   renderProjectContextBar();
   updateProjectIndicator();
+  (state.projects || []).forEach(function(p) { refreshProjectTaskMetrics(p.id, { silent: true }); });
 }
 
 async function _refreshProject(id) {
@@ -191,6 +309,7 @@ function renderProjectSidebarList() {
       '<i class="ti ti-chevron-right proj-folder-chevron"></i>' +
       '<span class="proj-dot proj-color-' + _projEsc(p.color) + '"></span>' +
       '<span class="proj-folder-name">' + _projEsc(p.name) + '</span>' +
+      getProjectTaskAnalyticsInlineHtml(p.id, { compact: true }) +
       (anyStreaming ? '<i class="ti ti-loader-2 conv-streaming-icon proj-folder-streaming" title="A chat in this project is running"></i>' : '') +
       '<span class="proj-folder-actions">' +
         '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();newConversationInProject(\'' + pid + '\', event)" title="New chat in project"><i class="ti ti-edit"></i></button>' +
@@ -295,15 +414,15 @@ function _renderAllProjectsPage() {
       '<span class="all-proj-col-desc">Description</span>' +
       '<span class="all-proj-col-num" title="Sources"><i class="ti ti-source-code"></i></span>' +
       '<span class="all-proj-col-num" title="Conversations"><i class="ti ti-messages"></i></span>' +
-      '<span class="all-proj-col-num" title="Tasks"><i class="ti ti-checklist"></i></span>' +
+      '<span class="all-proj-col-num all-proj-col-analytics" title="Task completion"><i class="ti ti-chart-pie"></i></span>' +
       '<span class="all-proj-col-actions"></span>' +
     '</div>';
 
   var rows = projects.map(function(p) {
     var convCount = (state.conversations || []).filter(function(c) { return c.projectId === p.id; }).length;
-    var taskCount = (p.taskIds || []).length;
     var srcCount  = (p.sources  || []).length;
     var isActive  = p.id === state.activeProjectId;
+    var analyticsHtml = getProjectTaskAnalyticsInlineHtml(p.id, { compact: true });
     return '<div class="all-proj-row' + (isActive ? ' active' : '') + '">' +
       '<span class="all-proj-col-name">' +
         '<span class="proj-dot proj-color-' + _projEsc(p.color) + '" style="width:9px;height:9px;flex-shrink:0"></span>' +
@@ -313,7 +432,7 @@ function _renderAllProjectsPage() {
       '<span class="all-proj-col-desc">' + (p.description ? _projEsc(p.description) : '<span class="all-proj-dim">—</span>') + '</span>' +
       '<span class="all-proj-col-num">' + srcCount + '</span>' +
       '<span class="all-proj-col-num">' + convCount + '</span>' +
-      '<span class="all-proj-col-num">' + taskCount + '</span>' +
+      '<span class="all-proj-col-num all-proj-col-analytics">' + analyticsHtml + '</span>' +
       '<span class="all-proj-col-actions">' +
         (isActive
           ? '<button class="proj-action-btn" onclick="openProjectHub();closeAllProjects()"><i class="ti ti-layout-sidebar-right-expand"></i> Open Hub</button>' +

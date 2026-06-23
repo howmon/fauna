@@ -82,6 +82,9 @@
             ? '<button class="kb-btn" onclick="kbPrioritize()" title="Score with RICE and promote new cards into Todo"><i class="ti ti-sort-descending"></i> Prioritise</button>'
             : '') +
           (s.scope === 'project'
+            ? '<button class="kb-btn danger" onclick="kbEmptyArchive(\'' + _esc(s.projectId) + '\')" title="Permanently delete all archived cards"><i class="ti ti-trash"></i> Empty archive</button>'
+            : '') +
+          (s.scope === 'project'
             ? '<label class="kb-toggle-wrap kb-autopilot-toggle" title="When on, the AI will claim Todo cards assigned to it and run them automatically.">' +
                 '<input type="checkbox" id="kb-autopilot-cb" onchange="kbToggleAutopilot(this.checked)"> ' +
                 '<span><i class="ti ti-robot"></i> Autopilot</span>' +
@@ -552,7 +555,10 @@
         '</div>' +
         '<div class="kb-modal-foot">' +
           (isEdit
-            ? '<button class="kb-btn danger" onclick="kbArchive(\'' + _esc(opts.projectId) + '\',\'' + _esc(m.id) + '\')"><i class="ti ti-archive"></i> Archive</button>'
+            ? '<div class="kb-modal-foot-left">' +
+                '<button class="kb-btn danger" onclick="kbArchive(\'' + _esc(opts.projectId) + '\',\'' + _esc(m.id) + '\')"><i class="ti ti-archive"></i> Archive</button>' +
+                '<button class="kb-btn danger" onclick="kbDelete(\'' + _esc(opts.projectId) + '\',\'' + _esc(m.id) + '\')"><i class="ti ti-trash"></i> Delete</button>' +
+              '</div>'
             : '<span></span>') +
           '<div>' +
             '<button class="kb-btn" onclick="closeWorkItemModal()">Cancel</button>' +
@@ -629,6 +635,27 @@
       .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); })
       .then(function() { _closeModal(); refreshKanbanBoard(); })
       .catch(function(e) { _toast('Archive failed: ' + e.message, true); });
+  };
+
+  window.kbDelete = function(projectId, itemId) {
+    if (!confirm('Permanently delete this work item? This cannot be undone.')) return;
+    fetch('/api/projects/' + encodeURIComponent(projectId) + '/workitems/' +
+      encodeURIComponent(itemId) + '?hard=1', { method: 'DELETE' })
+      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); })
+      .then(function() { _closeModal(); refreshKanbanBoard(); _toast('Work item deleted'); })
+      .catch(function(e) { _toast('Delete failed: ' + e.message, true); });
+  };
+
+  window.kbEmptyArchive = function(projectId) {
+    if (!projectId) return;
+    if (!confirm('Permanently delete all archived work items? This cannot be undone.')) return;
+    fetch('/api/projects/' + encodeURIComponent(projectId) + '/workitems/archived', { method: 'DELETE' })
+      .then(function(r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
+      .then(function(out) {
+        refreshKanbanBoard();
+        _toast((out && out.removedCount ? out.removedCount : 0) + ' archived item(s) deleted');
+      })
+      .catch(function(e) { _toast('Empty archive failed: ' + e.message, true); });
   };
 
   // ── SSE subscription ───────────────────────────────────────────────────

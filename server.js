@@ -23,6 +23,7 @@ import { createProject, getProject, getAllProjects, updateProject, deleteProject
   addContext, updateContext, removeContext, contextFromArtifact,
   addBacklogItem, updateBacklogItem, moveWorkItem, addWorkItemComment,
   setWorkItemLock, listAllWorkItems, getProjectBoard, prioritizeBacklog,
+  deleteWorkItem, emptyArchivedWorkItems,
   _adoptProject,
 } from './project-manager.js';
 import { loadInstructionFiles } from './lib/instruction-files.js';
@@ -292,6 +293,8 @@ registerProjectRoutes(app, {
   listAllWorkItems,
   getProjectBoard,
   prioritizeBacklog,
+  deleteWorkItem,
+  emptyArchivedWorkItems,
   // Project audit
   getInternalAICaller: () => internalAICaller,
 });
