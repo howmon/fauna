@@ -108,8 +108,9 @@ async function refreshProjectTaskMetrics(projectId, opts) {
 function getProjectTaskAnalyticsInlineHtml(projectId, opts) {
   opts = opts || {};
   var metrics = _getProjectTaskMetrics(projectId);
+  if (!metrics || !metrics.total) return '';
   var label = _projEsc(_projectTaskAnalyticsLabel(metrics));
-  var cls = 'proj-task-analytics-pill' + (metrics && metrics.total ? '' : ' empty') + (opts.compact ? ' compact' : '');
+  var cls = 'proj-task-analytics-pill' + (opts.compact ? ' compact' : '');
   var attr = opts.clickable === false
     ? ''
     : ' onclick="openProjectTaskboard(\'' + _projEsc(projectId) + '\', event)" title="Open taskboard"';

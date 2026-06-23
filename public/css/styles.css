@@ -422,7 +422,6 @@ body.is-resizing webview { pointer-events: none !important; }
   color: var(--accent2);
   background: var(--accent-dim);
 }
-.proj-task-analytics-pill.empty { opacity: .7; }
 .proj-task-analytics-pill.compact {
   font-size: 9.5px;
   padding: 1px 6px;
