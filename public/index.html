@@ -667,6 +667,15 @@
       <div class="settings-hint" style="margin-top:4px">
         When the conversation exceeds the model&rsquo;s context budget, older turns are summarized into a single note so the latest messages always fit. You can also force it any time with <code>/compact</code>.
       </div>
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none;margin-top:12px">
+        <input type="checkbox" id="ai-autocomplete-toggle"
+          onchange="setAiAutocomplete(this.checked)"
+          style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
+        <span style="font-size:12.5px;color:var(--fau-text)">Inline AI autocomplete</span>
+      </label>
+      <div class="settings-hint" style="margin-top:4px">
+        As you type, suggests a short continuation as muted &ldquo;ghost text&rdquo; in the composer. Press <code>Tab</code> to accept, <code>&rarr;</code> for one word, or <code>Esc</code> to dismiss.
+      </div>
     </div>
 
     <div class="settings-section">
@@ -2743,6 +2752,7 @@ Examples:
 <script src="js/playbook.js"></script>
 <script src="js/features.js"></script>
 <script src="js/smart-features.js"></script>
+<script src="js/ai-autocomplete.js"></script>
 <script src="js/agents.js"></script>
 <script src="js/agent-system.js"></script>
 <script src="js/agent-builder.js"></script>

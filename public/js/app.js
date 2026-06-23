@@ -268,9 +268,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Agent @mention detection on input
   var msgInput = document.getElementById('msg-input');
-  msgInput.addEventListener('input', function(e) { handleAgentInput(e); if (typeof handleSlashInput === 'function') handleSlashInput(e); });
+  msgInput.addEventListener('input', function(e) { handleAgentInput(e); if (typeof handleSlashInput === 'function') handleSlashInput(e); if (typeof aiAutocompleteOnInput === 'function') aiAutocompleteOnInput(e); });
   msgInput.addEventListener('keydown', function(e) {
     if (typeof handleSlashAutocompleteKey === 'function' && handleSlashAutocompleteKey(e)) return;
+    if (typeof aiAutocompleteOnKeydown === 'function' && aiAutocompleteOnKeydown(e)) return;
     handleAgentAutocompleteKey(e);
   });
 

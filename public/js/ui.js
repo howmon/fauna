@@ -597,6 +597,10 @@ async function loadSettingsState() {
   var acCb = document.getElementById('auto-compact-toggle');
   if (acCb) acCb.checked = !!state.autoCompact;
 
+  // Sync inline AI autocomplete checkbox
+  var aiCb = document.getElementById('ai-autocomplete-toggle');
+  if (aiCb && typeof aiAutocompleteIsEnabled === 'function') aiCb.checked = aiAutocompleteIsEnabled();
+
   // Sync thinking budget
   var tb = document.getElementById('thinking-budget-select');
   if (tb) tb.value = state.thinkingBudget;
@@ -2300,6 +2304,12 @@ function setAutoCompact(val) {
   if (typeof showToast === 'function') {
     showToast('Auto-compaction ' + (val ? 'enabled' : 'disabled'));
   }
+}
+
+// Toggle inline AI autocomplete (ghost text) in the composer. The engine owns
+// the persisted setting; this just forwards the new value.
+function setAiAutocomplete(val) {
+  if (typeof aiAutocompleteSetEnabled === 'function') aiAutocompleteSetEnabled(!!val);
 }
 
 var _thinkingHints = {

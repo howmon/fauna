@@ -40,6 +40,7 @@ import {
 import { BROWSER_BUILD_CONTEXT, buildBrowserExtContext } from './server/prompts/browser-context.js';
 import { registerFetchUrlRoutes } from './server/routes/fetch-url.js';
 import { registerSummarizeRoutes } from './server/routes/summarize.js';
+import { registerComposeSuggestRoutes } from './server/routes/compose-suggest.js';
 import { registerModelsRoutes } from './server/routes/models.js';
 import { registerModelsDebugRoute } from './server/routes/models-debug.js';
 import { registerFileFilterRoutes } from './server/routes/file-filter.js';
@@ -354,6 +355,9 @@ registerChatMiscRoutes(app, { browserBuildContext: BROWSER_BUILD_CONTEXT });
 
 // ── /api/summarize moved → server/routes/summarize.js ──
 registerSummarizeRoutes(app, { getCopilotClient });
+
+// ── /api/compose/suggest — inline composer autocomplete (ghost text) ──
+registerComposeSuggestRoutes(app, { getCopilotClient });
 
 // ── /api/chat moved → server/routes/chat.js ──
 

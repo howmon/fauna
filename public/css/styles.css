@@ -1779,6 +1779,25 @@ body.is-resizing webview { pointer-events: none !important; }
   padding: 4px 0; align-self: flex-end;
 }
 #msg-input::placeholder { color: var(--fau-text-muted); }
+/* AI inline autocomplete (ghost text) — a mirror overlay painted over the
+   textarea. Typed text is transparent so the real textarea text shows through;
+   only the ghost continuation is rendered, muted, at the caret. */
+#ghost-text-overlay {
+  position: absolute;
+  z-index: 2;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  color: transparent;
+  pointer-events: none;
+  overflow: hidden;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+#ghost-text-overlay .ghost-typed { color: transparent; }
+#ghost-text-overlay .ghost-suggestion { color: var(--fau-text-muted); opacity: .62; }
 #dictate-btn, #capture-btn {
   width: 30px; height: 30px; border-radius: 8px; background: transparent;
   border: none; color: var(--fau-text-muted); cursor: pointer;

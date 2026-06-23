@@ -897,6 +897,7 @@ async function sendMessage(opts) {
   clearAttachments({ preservePersistent: true });
 
   input.value = '';
+  if (typeof aiAutocompleteClear === 'function') aiAutocompleteClear();
   resizeTextarea(input);
   forceScrollBottom();
 
