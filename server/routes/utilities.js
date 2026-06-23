@@ -135,6 +135,83 @@ export function registerUtilityRoutes(app, deps) {
     }
   });
 
+  app.get('/api/fetch-image', async (req, res) => {
+    const rawUrl = String(req.query.url || '').trim();
+    if (!rawUrl) return res.status(400).json({ error: 'url required' });
+
+    let parsed;
+    try {
+      parsed = new URL(rawUrl);
+    } catch (_) {
+      return res.status(400).json({ error: 'invalid url' });
+    }
+
+    if (!/^https?:$/.test(parsed.protocol)) {
+      return res.status(400).json({ error: 'only http/https URLs are allowed' });
+    }
+
+    const host = String(parsed.hostname || '').toLowerCase();
+    const isIPv4 = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host);
+    const isLocalHost =
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '::1' ||
+      host === '0.0.0.0' ||
+      host.endsWith('.local');
+    const isPrivateIPv4 = isIPv4 && (
+      /^10\./.test(host) ||
+      /^127\./.test(host) ||
+      /^169\.254\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+    );
+    if (isLocalHost || isPrivateIPv4) {
+      return res.status(403).json({ error: 'private/local hosts are not allowed' });
+    }
+
+    var ctrl = new AbortController();
+    var to = setTimeout(function() {
+      try { ctrl.abort(); } catch (_) {}
+    }, 12000);
+
+    try {
+      const upstream = await fetch(parsed.toString(), {
+        signal: ctrl.signal,
+        redirect: 'follow',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Fauna/2.0 Safari/537.36',
+          'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        },
+      });
+
+      if (!upstream.ok) {
+        return res.status(upstream.status || 502).json({ error: 'upstream fetch failed' });
+      }
+
+      const contentType = String(upstream.headers.get('content-type') || '').toLowerCase();
+      if (!contentType.startsWith('image/')) {
+        return res.status(415).json({ error: 'url did not return an image' });
+      }
+
+      const maxBytes = 10 * 1024 * 1024;
+      const ab = await upstream.arrayBuffer();
+      const buf = Buffer.from(ab);
+      if (buf.length > maxBytes) {
+        return res.status(413).json({ error: 'image too large' });
+      }
+
+      res.setHeader('Content-Type', contentType || 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=600');
+      res.setHeader('Content-Length', String(buf.length));
+      return res.status(200).send(buf);
+    } catch (e) {
+      const msg = e && e.name === 'AbortError' ? 'image fetch timeout' : (e && e.message) || 'image fetch failed';
+      return res.status(502).json({ error: msg });
+    } finally {
+      clearTimeout(to);
+    }
+  });
+
   app.post('/api/pick-folder', async (req, res) => {
     try {
       const { dialog, BrowserWindow } = requireElectron('electron');

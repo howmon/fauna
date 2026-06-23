@@ -305,6 +305,21 @@ function _guiSafeThumbnailUrl(url) {
   return raw;
 }
 
+function _guiResolveImageUrl(rawUrl) {
+  if (!rawUrl) return '';
+  var src = String(rawUrl).trim();
+  if (!src) return '';
+  if (/^data:image\//i.test(src) || /^blob:/i.test(src)) return src;
+  if (/^\/api\//.test(src)) return src;
+  try {
+    var parsed = new URL(src, window.location.origin);
+    if (/^https?:$/i.test(parsed.protocol)) {
+      return '/api/fetch-image?url=' + encodeURIComponent(parsed.href);
+    }
+  } catch (_) {}
+  return src;
+}
+
 function _guiExtractYouTubeId(url) {
   if (!url) return null;
   var raw = String(url).trim();
@@ -594,7 +609,7 @@ function _guiBuildMediaEl(src, type, opts) {
   } else if (type === 'image') {
     var img = document.createElement('img');
     img.className = 'gui-player-image';
-    img.src = src || '';
+    img.src = _guiResolveImageUrl(src || '');
     img.alt = opts.alt || '';
     img.style.maxWidth = '100%';
     return img;
@@ -938,7 +953,7 @@ var _genUiComponents = {
     var img = document.createElement('img');
     img.className = 'gui-image';
     img.alt = props.alt || '';
-    if (props.src && /^https?:\/\/|^data:image\//.test(props.src)) img.src = props.src;
+    if (props.src && /^https?:\/\/|^data:image\//.test(props.src)) img.src = _guiResolveImageUrl(props.src);
     if (props.width) img.style.width = typeof props.width === 'number' ? props.width + 'px' : props.width;
     if (props.height) img.style.height = typeof props.height === 'number' ? props.height + 'px' : props.height;
     img.style.maxWidth = '100%';
@@ -1581,7 +1596,7 @@ var _genUiComponents = {
         } else if ((type === 'image' || item.thumbnail) && (_guiSafeThumbnailUrl(item.thumbnail) || !_guiIsPlaceholderMediaValue(item.src))) {
           thumbEl = document.createElement('img');
           thumbEl.className = 'gui-playlist-thumb';
-          thumbEl.src = _guiSafeThumbnailUrl(item.thumbnail) || item.src;
+          thumbEl.src = _guiResolveImageUrl(_guiSafeThumbnailUrl(item.thumbnail) || item.src);
           thumbEl.alt = '';
           thumbEl.onerror = function() {
             var fallback = _guiBuildMediaFallback(type);
