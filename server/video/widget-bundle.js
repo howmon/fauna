@@ -43,6 +43,12 @@ export function buildVideoStudioWidget(job) {
   .meta { font-size:11px; color:var(--mut); display:flex; gap:10px; flex-wrap:wrap; }
   .progress { font-size:11px; color:var(--accent); min-height:14px; }
   .err { color:var(--err); font-size:12px; }
+  .review { font-size:11.5px; border-radius:6px; padding:8px 10px; border:1px solid var(--border); display:none; }
+  .review.ok { background:rgba(108,203,95,0.08); border-color:#3a5a35; color:var(--ok); }
+  .review.warn { background:rgba(242,198,97,0.08); border-color:#6a5a2a; color:var(--warn); }
+  .review.bad { background:rgba(243,110,110,0.08); border-color:#5a3535; color:var(--err); }
+  .review .review-title { font-weight:600; margin-bottom:3px; }
+  .review ul { margin:2px 0 0; padding-left:16px; }
   select { background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:4px; padding:4px 6px; font:inherit; }
 </style>
 </head><body>
@@ -57,6 +63,7 @@ export function buildVideoStudioWidget(job) {
   <div class="steps" id="steps"></div>
   <div class="progress" id="progress"></div>
   <div class="err" id="err"></div>
+  <div class="review" id="review"></div>
   <div class="actions">
     <button class="primary" id="btn-run">Generate Video</button>
     <button class="ghost" id="btn-regen-script">Regenerate script</button>
@@ -195,6 +202,32 @@ function paint() {
     prev.innerHTML = '<span>No video yet — run the pipeline.</span>';
   }
   $('err').textContent = state.error ? (state.error.step + ': ' + state.error.message) : '';
+  paintReview(a.review);
+}
+
+// Render the post-render self-review verdict (quality gate).
+function paintReview(review) {
+  const el = $('review');
+  if (!el) return;
+  if (!review || (state && typeof state.state === 'string' && state.state.startsWith('running:'))) {
+    el.style.display = 'none';
+    return;
+  }
+  const issues = Array.isArray(review.issues) ? review.issues : [];
+  const warnings = Array.isArray(review.warnings) ? review.warnings : [];
+  if (!issues.length && !warnings.length) {
+    el.className = 'review ok';
+    el.innerHTML = '<div class="review-title">\u2713 Self-review passed</div>';
+    el.style.display = 'block';
+    return;
+  }
+  const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const items = [...issues, ...warnings].map(m => '<li>' + esc(m) + '</li>').join('');
+  el.className = 'review ' + (issues.length ? 'bad' : 'warn');
+  el.innerHTML = '<div class="review-title">' +
+    (issues.length ? '\u26a0 Self-review found problems' : 'Self-review notes') +
+    '</div><ul>' + items + '</ul>';
+  el.style.display = 'block';
 }
 
 // Tabs

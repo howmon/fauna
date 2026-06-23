@@ -18,6 +18,7 @@ import { generateScript, generateTerms } from './storyteller.js';
 import { synthesize, writeSubtitles } from './narration.js';
 import { gatherFootage } from './footage.js';
 import { render } from './render.js';
+import { reviewRender } from './review.js';
 
 const JOBS_ROOT = path.join(os.homedir(), '.config', 'fauna', 'video-jobs');
 const STEPS = ['script', 'terms', 'audio', 'subtitle', 'materials', 'render'];
@@ -309,6 +310,25 @@ export async function runStep(jobId, step, opts = {}) {
         });
         job.artifacts.combinedPath = r.combinedPath;
         job.artifacts.finalPath = r.finalPath;
+
+        // Post-render self-review (OpenMontage-inspired quality gate). Inspect
+        // the finished file for black frames, silent/clipping audio, duration
+        // drift, and missing subtitles. Non-blocking: we keep the render and
+        // surface the verdict so the user/agent can decide whether to re-run.
+        onProgress('Reviewing render quality');
+        const review = await reviewRender({
+          videoFile: r.finalPath,
+          audioDurationSec: job.artifacts.audioDurationSec,
+          aspect: job.params.aspect,
+          expectSubtitles: !!job.artifacts.subtitlePath,
+          subtitlePath: job.artifacts.subtitlePath,
+        });
+        job.artifacts.review = review;
+        if (!review.ok) {
+          _emit(jobId, { step, status: 'review', ok: false, issues: review.issues, warnings: review.warnings });
+        } else if (review.warnings.length) {
+          _emit(jobId, { step, status: 'review', ok: true, warnings: review.warnings });
+        }
         break;
       }
     }
