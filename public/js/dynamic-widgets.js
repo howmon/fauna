@@ -136,10 +136,26 @@
     }
 
     // Snapshot + resize glue — appended to whichever bundle script we emit.
+    // Auto-height is a notorious source of iframe<->parent feedback loops: the
+    // child reports scrollHeight, the parent sets the iframe height, that change
+    // resizes the child viewport, which re-fires the observer, and so on. With a
+    // full-bleed (100vh/100%) widget or scrollbar/sub-pixel oscillation this
+    // never settles and pegs the renderer + GPU. Guards below break the loop:
+    //   • observe only document.body, NOT documentElement (the viewport the
+    //     parent controls — the primary feedback antenna)
+    //   • coalesce reports on a rAF and skip identical heights (kills echo)
+    //   • circuit breaker: if reports run away (>40 in 1s) disconnect the
+    //     observer and freeze, so a pathological widget can never hang the app.
     var glueJs =
-      'function _reportH(){var h=Math.max(document.documentElement.scrollHeight,document.body?document.body.scrollHeight:0);parent.postMessage({source:"fauna-widget",widgetId:' + JSON.stringify(widgetId) + ',type:"event",event:"resize",data:{height:h}},"*");}' +
+      'var _lastH=-1,_rafQ=false,_burst=0,_burstT=0,_ro=null;' +
+      'function _measureH(){return Math.max(document.documentElement.scrollHeight,document.body?document.body.scrollHeight:0);}' +
+      'function _flushH(){_rafQ=false;var now=Date.now();if(now-_burstT>1000){_burst=0;_burstT=now;}' +
+        'if(++_burst>40){if(_ro){try{_ro.disconnect();}catch(_){}_ro=null;}return;}' +
+        'var h=_measureH();if(h===_lastH)return;_lastH=h;' +
+        'parent.postMessage({source:"fauna-widget",widgetId:' + JSON.stringify(widgetId) + ',type:"event",event:"resize",data:{height:h}},"*");}' +
+      'function _reportH(){if(_rafQ)return;_rafQ=true;(window.requestAnimationFrame||function(cb){setTimeout(cb,16);})(_flushH);}' +
       'setTimeout(_reportH,50);setTimeout(_reportH,300);setTimeout(_reportH,1000);' +
-      'try{if(window.ResizeObserver){var _ro=new ResizeObserver(_reportH);_ro.observe(document.documentElement);if(document.body)_ro.observe(document.body);}}catch(_){}' +
+      'try{if(window.ResizeObserver){_ro=new ResizeObserver(_reportH);if(document.body)_ro.observe(document.body);}}catch(_){}' +
       'window.addEventListener("message",function(ev){' +
         'var d=ev.data||{};if(d.source!=="fauna-host"||d.widgetId!==' + JSON.stringify(widgetId) + '||d.type!=="snapshot")return;' +
         'var reqId=d.reqId;var reply={source:"fauna-widget",widgetId:' + JSON.stringify(widgetId) + ',type:"snapshot_result",reqId:reqId};' +
@@ -430,7 +446,11 @@
     if (!mounted) return;
     if (m.type === 'event' && m.event === 'resize' && m.data && typeof m.data.height === 'number') {
       var h = Math.max(240, Math.min(1600, m.data.height));
-      mounted.iframe.style.height = h + 'px';
+      // Only write when it actually changes — re-setting the same height still
+      // triggers a reflow in the child, which can re-fire its ResizeObserver
+      // and feed an auto-height oscillation loop.
+      var curH = parseInt(mounted.iframe.style.height, 10) || 0;
+      if (Math.abs(curH - h) > 1) mounted.iframe.style.height = h + 'px';
     }
     if (m.type === 'event' && m.event === 'download' && m.data && m.data.url) {
       // Widgets inside an allow-scripts sandbox cannot trigger downloads
