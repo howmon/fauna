@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { generateLessonDSL, validateLesson, _internals, _buildRepairHints } from '../server/lesson/generator.js';
 
+const { reviewLesson, _isNeutralColor } = _internals;
+
 // Minimal mock of the OpenAI-style client generateLessonDSL expects. Each call
 // shifts the next canned completion off the queue and records the messages it
 // was given so we can assert the repair prompt is wired up correctly.
@@ -75,6 +77,136 @@ describe('generateLessonDSL', () => {
     expect(userMsg).toMatch(/previous attempt was rejected/i);
     expect(userMsg).toContain('scenes[0].narration required');
     expect(userMsg).toContain('unknown kind "blob"');
+  });
+});
+
+describe('reviewLesson craft rubric', () => {
+  function lesson(props, scenes) {
+    return { title: 'T', voice: 'kokoro:af_bella', props, scenes };
+  }
+
+  it('passes a clean single-accent lesson with no images', () => {
+    const r = reviewLesson(lesson(
+      { t: { kind: 'text', content: 'Hi', slot: 'title' } },
+      [{ id: 's1', narration: 'We start by measuring rate of change directly.', actions: [{ at: 'start', do: 'write', prop: 't' }] }],
+    ));
+    expect(r.ok).toBe(true);
+    expect(r.issues).toHaveLength(0);
+  });
+
+  it('flags stage-direction filler in narration', () => {
+    const r = reviewLesson(lesson(
+      { t: { kind: 'text', content: 'Hi', slot: 'title' } },
+      [{ id: 's1', narration: 'As you can see, this is the derivative.', actions: [{ at: 'start', do: 'write', prop: 't' }] }],
+    ));
+    expect(r.ok).toBe(false);
+    expect(r.issues.join('\n')).toMatch(/narration filler/i);
+  });
+
+  it('flags an image prop missing alt text', () => {
+    const r = reviewLesson(lesson(
+      { img: { kind: 'image', src: 'https://x/y.png' } },
+      [{ id: 's1', narration: 'Look at the structure of the cell membrane.', actions: [{ at: 'start', do: 'draw', prop: 'img', x: 100, y: 100 }] }],
+    ));
+    expect(r.ok).toBe(false);
+    expect(r.issues.join('\n')).toMatch(/accessibility: image/i);
+  });
+
+  it('accepts an image prop with alt text', () => {
+    const r = reviewLesson(lesson(
+      { img: { kind: 'image', src: 'https://x/y.png', alt: 'Cross-section of a plant cell' } },
+      [{ id: 's1', narration: 'Look at the structure of the cell membrane here today.', actions: [{ at: 'start', do: 'draw', prop: 'img', x: 100, y: 100 }] }],
+    ));
+    expect(r.issues.join('\n')).not.toMatch(/accessibility/i);
+  });
+
+  it('flags more than four distinct accent colors lesson-wide', () => {
+    const r = reviewLesson(lesson(
+      {
+        a: { kind: 'shape', shape: 'rect', fill: '#ff0000' },
+        b: { kind: 'shape', shape: 'rect', fill: '#00bb00' },
+        c: { kind: 'shape', shape: 'rect', fill: '#0000ff' },
+        d: { kind: 'shape', shape: 'rect', fill: '#ffaa00' },
+        e: { kind: 'shape', shape: 'rect', fill: '#aa00ff' },
+      },
+      [{ id: 's1', narration: 'Each block represents a different stage of the pipeline today.', actions: [
+        { at: 'start', do: 'draw', prop: 'a', x: 10, y: 10 },
+      ] }],
+    ));
+    expect(r.ok).toBe(false);
+    expect(r.issues.join('\n')).toMatch(/color overload/i);
+  });
+
+  it('counts greys as neutral, not accents', () => {
+    const r = reviewLesson(lesson(
+      {
+        a: { kind: 'shape', shape: 'rect', fill: '#222222' },
+        b: { kind: 'shape', shape: 'rect', fill: '#888888' },
+        c: { kind: 'shape', shape: 'rect', fill: '#cccccc' },
+        d: { kind: 'shape', shape: 'rect', fill: 'white' },
+        e: { kind: 'shape', shape: 'rect', fill: '#4cc9f0' },
+      },
+      [{ id: 's1', narration: 'Only one element is highlighted; the rest stays neutral grey ink.', actions: [
+        { at: 'start', do: 'draw', prop: 'e', x: 10, y: 10 },
+      ] }],
+    ));
+    expect(r.issues.join('\n')).not.toMatch(/color overload/i);
+  });
+
+  it('warns (does not block) on very thin narration', () => {
+    const r = reviewLesson(lesson(
+      { t: { kind: 'text', content: 'Hi', slot: 'title' } },
+      [{ id: 's1', narration: 'Done.', actions: [{ at: 'start', do: 'write', prop: 't' }] }],
+    ));
+    expect(r.ok).toBe(true);
+    expect(r.warnings.join('\n')).toMatch(/thin/i);
+  });
+
+  it('reads flow node colors and group children when counting accents', () => {
+    const r = reviewLesson(lesson(
+      {
+        f: { kind: 'flow', nodes: [
+          { label: 'A', color: '#ff0000' },
+          { label: 'B', color: '#00bb00' },
+          { label: 'C', color: '#0000ff' },
+        ] },
+        g: { kind: 'group', direction: 'row', children: [
+          { kind: 'shape', shape: 'rect', fill: '#ffaa00' },
+          { kind: 'shape', shape: 'rect', fill: '#aa00ff' },
+        ] },
+      },
+      [{ id: 's1', narration: 'Here every stage gets its own color across the diagram now.', actions: [
+        { at: 'start', do: 'draw', prop: 'f', x: 10, y: 10 },
+      ] }],
+    ));
+    expect(r.issues.join('\n')).toMatch(/color overload/i);
+  });
+});
+
+describe('_isNeutralColor', () => {
+  it('treats hex greys, white, black and transparent as neutral', () => {
+    for (const c of ['#000', '#fff', '#333333', '#888', 'white', 'black', 'transparent', 'none', 'gray']) {
+      expect(_isNeutralColor(c)).toBe(true);
+    }
+  });
+  it('treats saturated hues as accents', () => {
+    for (const c of ['#ff0000', '#4cc9f0', 'red', 'rgb(255,0,0)']) {
+      expect(_isNeutralColor(c)).toBe(false);
+    }
+  });
+});
+
+describe('_buildRepairHints craft-review patterns', () => {
+  it('maps review issues to actionable fixes', () => {
+    const hints = _buildRepairHints([
+      'narration filler in scene[0] ("s1"): rewrite to remove the stage direction "as you can see"',
+      'accessibility: image prop "img" has no alt text',
+      'color overload: the lesson uses 6 distinct accent colors',
+    ]);
+    const joined = hints.join('\n');
+    expect(joined).toMatch(/stage directions/i);
+    expect(joined).toMatch(/alt:/i);
+    expect(joined).toMatch(/ONE accent color/i);
   });
 });
 

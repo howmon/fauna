@@ -359,8 +359,147 @@ export function _buildRepairHints(errors) {
     if (/has unknown kind/.test(e)) {
       add('A prop kind is invalid. Valid kinds are: text, latex, shape, arrow, image, slide, svg, code, plot, numberline, molecule, circuit, flow, group, bullets.');
     }
+    // ── Craft-review issues (from reviewLesson) ──
+    if (/narration filler|stage direction/.test(e)) {
+      add('Rewrite the flagged narration as spoken teaching, with NO stage directions. The tutor never says "as you can see" / "here we have" / "let\'s draw" — they just explain the idea while the actions illustrate it.');
+    }
+    if (/has no alt text|accessibility: image/.test(e)) {
+      add('Add a short, descriptive alt:"…" string to every image prop (what the image shows, not "image of").');
+    }
+    if (/color overload|distinct accent colors|accent colors compete/.test(e)) {
+      add('Cut the color palette: ONE accent color per scene for the element you want noticed, everything else in neutral grey/black ink. Keep to at most 4 accent hues across the whole lesson. Reserve red/amber/green for genuine status meaning only.');
+    }
   }
   return hints;
+}
+
+// ── Craft self-review (visual-story-teller-style rubric) ────────────────
+// validateLesson() answers "is the DSL structurally sound and collision-free?"
+// reviewLesson() answers the editorial question the structural validator can't:
+// "is this good teaching craft?" — narration that reads like speech (no stage
+// directions), one accent against neutral ink (no color overload), and
+// accessible imagery (alt text). It returns hard `issues` (worth one repair
+// pass) and advisory `warnings`. Deterministic and side-effect free — safe to
+// run repeatedly and to unit test.
+
+// Stage-direction / filler phrases a tutor should never speak aloud.
+const NARRATION_FILLER = [
+  'as you can see', 'here we have', 'in this scene', "let's draw", 'let us draw',
+  'now we will', 'now we are going to', 'on this slide', 'as shown above',
+  'as shown below', 'in this diagram', 'on the screen',
+];
+
+// A color is "neutral" (free — doesn't count against the accent budget) when it
+// is white, black, a grey, or transparent. Everything else is an accent hue.
+function _isNeutralColor(c) {
+  if (!c || typeof c !== 'string') return true;
+  const s = c.trim().toLowerCase();
+  if (!s) return true;
+  if (['none', 'transparent', 'currentcolor', 'inherit', 'white', 'black'].includes(s)) return true;
+  if (/^(grey|gray|dark|light|dim|slate)?(grey|gray)$/.test(s)) return true;
+  // #rgb / #rgba / #rrggbb / #rrggbbaa
+  let m = s.match(/^#([0-9a-f]{3,8})$/);
+  if (m) {
+    let hex = m[1];
+    if (hex.length === 3 || hex.length === 4) hex = hex.slice(0, 3).split('').map(ch => ch + ch).join('');
+    else hex = hex.slice(0, 6);
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    // Greyscale: channels within a small delta of each other.
+    return (Math.max(r, g, b) - Math.min(r, g, b)) <= 16;
+  }
+  // rgb()/rgba()
+  m = s.match(/^rgba?\(([^)]+)\)/);
+  if (m) {
+    const parts = m[1].split(',').map(p => parseFloat(p));
+    if (parts.length >= 3) {
+      const [r, g, b] = parts;
+      return (Math.max(r, g, b) - Math.min(r, g, b)) <= 16;
+    }
+  }
+  return false; // named hue (e.g. "red", "steelblue") — treat as accent
+}
+
+// Pull every color string referenced by a prop (and any nested flow/group
+// children), normalized to lowercase, excluding neutrals.
+function _propAccentColors(prop, out) {
+  if (!prop || typeof prop !== 'object') return;
+  for (const field of ['color', 'fill', 'stroke']) {
+    const c = prop[field];
+    if (c && !_isNeutralColor(c)) out.add(String(c).trim().toLowerCase());
+  }
+  if (Array.isArray(prop.nodes)) {
+    for (const n of prop.nodes) _propAccentColors(n, out);
+  }
+  if (Array.isArray(prop.children)) {
+    for (const c of prop.children) _propAccentColors(c, out);
+  }
+}
+
+export function reviewLesson(doc) {
+  const issues = [];
+  const warnings = [];
+  if (!doc || typeof doc !== 'object' || !Array.isArray(doc.scenes)) {
+    return { ok: true, issues, warnings };
+  }
+  const props = doc.props || {};
+
+  // Accessibility: images need alt text. (Slides are full-canvas backdrops
+  // narrated aloud — exempt.)
+  for (const [pid, p] of Object.entries(props)) {
+    if (p && p.kind === 'image' && !(typeof p.alt === 'string' && p.alt.trim())) {
+      issues.push(`accessibility: image prop "${pid}" has no alt text — add a descriptive alt:"…" so screen-reader and low-vision learners get the same content`);
+    }
+  }
+
+  // Lesson-wide accent budget (≤ 4 distinct hues across the whole lesson).
+  const lessonColors = new Set();
+  for (const p of Object.values(props)) _propAccentColors(p, lessonColors);
+  if (lessonColors.size > 4) {
+    issues.push(`color overload: the lesson uses ${lessonColors.size} distinct accent colors (${[...lessonColors].slice(0, 8).join(', ')}) — cut to at most 4 across the whole lesson; render secondary elements in neutral grey ink`);
+  }
+
+  for (let si = 0; si < doc.scenes.length; si++) {
+    const scene = doc.scenes[si];
+    if (!scene || typeof scene !== 'object') continue;
+
+    // Narration filler / stage directions.
+    const narr = String(scene.narration || '').toLowerCase();
+    for (const phrase of NARRATION_FILLER) {
+      if (narr.includes(phrase)) {
+        issues.push(`narration filler in scene[${si}] ("${scene.id || si}"): rewrite to remove the stage direction "${phrase}" — the tutor teaches, the actions illustrate`);
+        break; // one issue per scene is enough to trigger a rewrite
+      }
+    }
+    // Thin / padded narration (advisory).
+    const words = narr.split(/\s+/).filter(Boolean).length;
+    if (scene.narration && words > 0 && words < 6) {
+      warnings.push(`scene[${si}] ("${scene.id || si}") narration is very thin (${words} words) — either deepen it or fold the scene into a neighbor`);
+    }
+
+    // Per-scene accent discipline: count distinct hues among props this scene
+    // actually draws.
+    const sceneColors = new Set();
+    let actionCount = 0;
+    if (Array.isArray(scene.actions)) {
+      for (const a of scene.actions) {
+        if (!a) continue;
+        actionCount++;
+        if (a.prop && props[a.prop]) _propAccentColors(props[a.prop], sceneColors);
+        if (a.color && !_isNeutralColor(a.color)) sceneColors.add(String(a.color).trim().toLowerCase());
+      }
+    }
+    if (sceneColors.size > 4) {
+      issues.push(`color overload in scene[${si}] ("${scene.id || si}"): ${sceneColors.size} accent colors compete — keep ONE accent per scene and render the rest in neutral ink`);
+    }
+    // Busy scene (advisory — mirrors the "≤ 10 actions" soft rule).
+    if (actionCount > 10) {
+      warnings.push(`scene[${si}] ("${scene.id || si}") has ${actionCount} actions — split it; one idea per scene reads better`);
+    }
+  }
+
+  return { ok: issues.length === 0, issues, warnings };
 }
 
 // ── LLM prompt for DSL generation ───────────────────────────────────────
@@ -410,12 +549,25 @@ ${sourceText}
   const sceneTarget = isSlideSource && slideCount > 0
     ? `Produce EXACTLY ${slideCount} scenes — one per slide, in order.`
     : `Aim for ~${sceneCount} scenes (each 15–40 seconds of narration). Each scene is a single conceptual beat with its own narration and a small set of animated actions.`;
+  // Editorial framing — only for invented lessons. In strict slide-following
+  // mode the lesson is a faithful walkthrough, so we MUST NOT impose a new
+  // narrative arc or "Big Idea" reframing over the user's own deck.
+  const framingBlock = isSlideSource ? '' : `
+## Before you draft: frame the lesson (think it through; do NOT print this)
+
+1. **Audience & prior knowledge** — who is this for, and what do they already know?
+2. **Objective** — what should the learner be able to DO after watching?
+3. **Big Idea** — the single through-line of the whole lesson, written as ONE decision-oriented sentence (a claim, not a topic). "Derivatives measure instantaneous rate of change — and that one idea unlocks optimization" is a Big Idea; "Calculus basics" is just a topic. Reuse the Big Idea as the lesson title and pay it off in the final scene.
+
+Then sequence the scenes as a narrative arc, not a pile of facts:
+**hook** (open the question or the stakes) → **build** (one concept per scene, each paying off the one before) → **payoff** (resolve the Big Idea) → **recap**. Lead with the hook; never open with a dry definition.
+`;
   return `# Lesson DSL
 
 Design a whiteboard lesson on this topic:
 
   ${topic}
-${sourceBlock}
+${sourceBlock}${framingBlock}
 Target spoken duration: ~${durationMin} minute(s).
 ${sceneTarget}
 
@@ -534,6 +686,14 @@ ${_kindsCatalog()}
     Set \`marker\` to \`"1."\` for numbered lists, \`"–"\` for dashes, or omit for bullets (\`"•"\`).
 
 13. **You may omit (x,y) entirely on a prop.** Any prop without a slot, without (x,y), and without relTo will be auto-placed by the layout engine into the body region with safe spacing. Prefer this to inventing coordinates you're not sure about — wrong coordinates are the #1 source of collision bugs.
+
+14. **Narration is one flowing keynote, not a sentence per scene.** Each scene's narration must connect to the one before it (setup → payoff), read aloud like a person at ~135–150 words/min, use contractions and natural rhythm, and never pad a thin scene to fill time. Speak directly to the learner and teach — the actions illustrate what you say. BANNED filler (do not write these): "as you can see", "here we have", "in this scene", "let's draw", "now we will", "on this slide". A short line is fine; dead air is not.
+
+15. **One accent against neutral ink (declutter).** Pick ONE accent color per scene for the element you want noticed; render everything else in neutral ink (grey/black on the whiteboard). Use at most 4 distinct accent colors across the ENTIRE lesson. Reserve red / amber / green for genuine status or correct-vs-incorrect meaning only. FORBIDDEN: rainbow or jet color ramps for ordered data, decorative gradients, more than 4 hues in a single scene, and color used purely for decoration. If everything is emphasized, nothing is.
+
+16. **Accessibility from the start.** Every \`image\` prop MUST carry descriptive \`alt\` text. Keep high contrast (dark ink on the light whiteboard). NEVER encode meaning by color alone — always pair a colored element with a label, shape, or position so a color-blind learner still gets the point.
+
+17. **Pick the simplest accurate representation; one idea per scene.** Match each beat to the lightest display that still informs: \`bullets\` for a set of points, \`flow\` for a sequence/process/lifecycle, \`plot\` for a function, \`numberline\` for magnitude on a line, \`latex\` for an equation, \`code\` for code. Don't reach for a busy diagram when a single labelled figure or a sentence does the job. Keep every scene to ONE idea — if a scene needs two figures, split it into two scenes.
 
 Generate the lesson now.`;
 }
@@ -885,6 +1045,39 @@ export async function createLesson({ topic, durationMin = 5, voice, client, mode
         generationWarnings.push('lesson layout remained invalid after repair; used deterministic fallback lesson');
       }
     }
+
+    // ── Craft self-review (visual-story-teller-style) ──
+    // The structural validator can't catch teaching-craft problems: stage
+    // directions in the narration, missing image alt text, or color overload.
+    // Run the rubric; if it flags HARD issues, spend ONE repair pass fixing
+    // them. Anything still flagged (or merely advisory) is surfaced as a
+    // warning instead of blocking the lesson.
+    const review = reviewLesson(dsl);
+    if (review.issues.length) {
+      if (onProgress) onProgress({ phase: 'script-review', issues: review.issues });
+      try {
+        const refined = await generateLessonDSL({
+          topic, durationMin, voice, client, model, sourceText, sourceKind,
+          repair: { errors: review.issues },
+        });
+        if (validateLesson(refined).ok) {
+          dsl = refined;
+          const after = reviewLesson(dsl);
+          generationWarnings.push(...after.warnings);
+          generationWarnings.push(...after.issues.map(i => 'craft review (unresolved): ' + i));
+        } else {
+          // The refined draft broke layout — keep the structurally-valid
+          // original and downgrade the craft issues to warnings.
+          generationWarnings.push(...review.issues.map(i => 'craft review (kept original): ' + i));
+          generationWarnings.push(...review.warnings);
+        }
+      } catch (e) {
+        generationWarnings.push(...review.issues.map(i => 'craft review (repair failed): ' + i));
+        generationWarnings.push(...review.warnings);
+      }
+    } else {
+      generationWarnings.push(...review.warnings);
+    }
   }
 
   const v = validateLesson(dsl);
@@ -1053,4 +1246,4 @@ export function lessonSlidePath(lessonId, fileName) {
 }
 
 // Exposed for tests + tool catalog.
-export const _internals = { _scriptUserPrompt, ACTION_DOS, LESSONS_ROOT, _buildDeterministicFallbackLesson };
+export const _internals = { _scriptUserPrompt, ACTION_DOS, LESSONS_ROOT, _buildDeterministicFallbackLesson, reviewLesson, _isNeutralColor };

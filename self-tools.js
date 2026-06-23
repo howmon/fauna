@@ -3855,6 +3855,7 @@ export async function executeSelfTool(toolName, args, context = {}) {
                 : evt.phase === 'slides-copy' ? `Copying ${evt.slideCount} slide images…`
                 : evt.phase === 'script' ? 'Drafting lesson script…'
                 : evt.phase === 'script-repair' ? 'Lesson layout needed fixes — regenerating once…'
+                : evt.phase === 'script-review' ? 'Reviewing teaching craft (narration, color, accessibility)…'
                 : evt.phase === 'script-fallback' ? 'Script generation failed twice; using deterministic fallback lesson…'
                 : evt.phase === 'layout-fallback' ? 'Layout remained invalid; switching to deterministic fallback lesson…'
                 : evt.phase === 'audio-start' ? `Synthesizing audio for ${evt.sceneCount} scenes…`
