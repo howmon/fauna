@@ -152,6 +152,11 @@ export function registerChatRoute(app, {
     // stream (no chunks at all for STREAM_IDLE_MS). Distinguishes a stall from
     // a user-initiated Stop so the catch can surface a recoverable error.
     let streamStalled = false;
+    // Set true when the first-content watchdog aborts a turn that spent too
+    // long in pure thinking (chunks arriving, but no visible text/tool call)
+    // — the idle watchdog above can't catch this because thinking deltas keep
+    // resetting its timer.
+    let thinkingDeadlineHit = false;
     // Track callIds opened by THIS request so a client disconnect rejects
     // only its own pending widget / client-tool round-trips (the Maps are
     // shared across all concurrent /api/chat requests).
@@ -1370,6 +1375,47 @@ export function registerChatRoute(app, {
         }
       }
 
+      // ── Adaptive thinking budget ──────────────────────────────────────────
+      // When the budget is left on "auto" (the default), scale the reasoning
+      // allocation to the turn instead of always sending the maximum. A simple
+      // single-shot question wastes minutes of latency on a 10K-token thinking
+      // pass it never needed; agentic / multi-step turns genuinely benefit.
+      // The resolved level only ever LOWERS latency vs. a fixed "high" default;
+      // an explicit user choice (off/low/medium/high/max) is always respected.
+      const classifyThinkingBudget = ({ text, hasTools, agentName, isDelegation, autonomousMode }) => {
+        // Agentic contexts plan, branch, and self-correct — always worth high.
+        if (agentName || isDelegation || autonomousMode) return 'high';
+        const t = (text || '').trim();
+        const words = t ? t.split(/\s+/).length : 0;
+        // Deep-reasoning signals: design/debug/analysis verbs, embedded code or
+        // stack traces, explicit multi-step phrasing.
+        const COMPLEX_RE = /\b(refactor|debug|implement|architect|design|optimi[sz]e|prove|derive|analy[sz]e|trade-?offs?|step[- ]by[- ]step|migrat(e|ion)|algorithm|complexity|concurren\w*|race condition|deadlock|security|vulnerab\w*|why does|how would|compare|reason through)\b/i;
+        const CODE_RE = /```|\bstack trace\b|\bexception\b|\btraceback\b|=>|\bfunction\b|\bclass\b|^\s*(?:Error|TypeError|ReferenceError):/im;
+        const MULTI_RE = /\b(and then|after that|finally|first[, ].*then|step \d|1\.\s|2\.\s)\b/i;
+        if (COMPLEX_RE.test(t) || CODE_RE.test(t) || MULTI_RE.test(t)) return 'high';
+        if (words > 120) return 'high';
+        if (words > 40) return 'medium';
+        // Short tool-enabled turns (e.g. "check my mail") get a little headroom
+        // for the agentic loop; short plain Q&A gets the minimum.
+        if (hasTools && words > 6) return 'medium';
+        return 'low';
+      };
+      let effectiveThinkingBudget = thinkingBudget;
+      if (thinkingBudget === 'auto') {
+        const _lastUser = [...messages].reverse().find(m => m && m.role === 'user');
+        const _lastUserText = typeof _lastUser?.content === 'string'
+          ? _lastUser.content
+          : Array.isArray(_lastUser?.content)
+            ? _lastUser.content.filter(c => c && c.type === 'text').map(c => c.text).join('\n')
+            : '';
+        effectiveThinkingBudget = classifyThinkingBudget({
+          text: _lastUserText,
+          hasTools: Array.isArray(mcpTools) && mcpTools.length > 0 && !noTools,
+          agentName, isDelegation, autonomousMode,
+        });
+        console.log(`[chat] auto thinking budget → "${effectiveThinkingBudget}" (words=${(_lastUserText || '').trim().split(/\s+/).filter(Boolean).length}, tools=${Array.isArray(mcpTools) ? mcpTools.length : 0})`);
+      }
+
       while (continueLoop) {
         if (res.writableEnded) break;
 
@@ -1382,15 +1428,17 @@ export function registerChatRoute(app, {
         else { params.max_tokens = defaultMaxTokens; }
 
         // Thinking budget — Claude models use `thinking`, o-series use `reasoning_effort`
-        if (thinkingBudget !== 'off') {
-          const budgetTokens = { low: 1024, medium: 5000, high: 10000, max: 32000 }[thinkingBudget] || 10000;
+        let thinkingEnabledThisCall = false;
+        if (effectiveThinkingBudget !== 'off') {
+          const budgetTokens = { low: 1024, medium: 5000, high: 10000, max: 32000 }[effectiveThinkingBudget] || 10000;
           if (model.includes('claude')) {
             params.thinking = { type: 'enabled', budget_tokens: budgetTokens };
+            thinkingEnabledThisCall = true;
             const minTokens = budgetTokens + 4000;
             if (useCompletionTokens) { params.max_completion_tokens = Math.max(params.max_completion_tokens, minTokens); }
             else { params.max_tokens = Math.max(params.max_tokens, minTokens); }
           } else if (/^o[1-9]/.test(model)) {
-            params.reasoning_effort = thinkingBudget === 'max' ? 'high' : thinkingBudget === 'low' ? 'low' : 'medium';
+            params.reasoning_effort = effectiveThinkingBudget === 'max' ? 'high' : effectiveThinkingBudget === 'low' ? 'low' : 'medium';
           }
         }
 
@@ -1471,19 +1519,60 @@ export function registerChatRoute(app, {
         let sawReasoning = false;
         let reasoningStart = null;
 
+        // Surface "Thinking…" the instant the stream opens — don't wait for the
+        // first thinking delta. With a large budget Claude can spend minutes in
+        // reasoning before emitting any thinking/text chunk, during which the UI
+        // would otherwise sit on a generic spinner and look frozen. Emitting the
+        // reasoning signal now starts the client's live "Thinking… Ns" counter.
+        if (thinkingEnabledThisCall && !res.writableEnded) {
+          reasoningStart = Date.now();
+          sawReasoning = true;
+          send({ type: 'reasoning' });
+        }
+
         // Idle watchdog. Claude streams thinking + text + tool-argument deltas
         // continuously, so a *total* absence of chunks for STREAM_IDLE_MS means
         // the upstream genuinely stalled (not merely "thinking"). The SSE
         // keep-alive above only protects the client socket; it does nothing for
         // an upstream that goes silent mid-generation, which otherwise hangs the
         // `for await` forever. Aborting converts that into a recoverable error.
+        //
+        // First-content deadline. The idle watchdog can't catch a turn that
+        // streams thinking deltas steadily but never produces visible text or a
+        // tool call (every delta resets `lastChunkAt`). We separately track
+        // whether any *visible output* has appeared; if not, warn the user at
+        // FIRST_CONTENT_WARN_MS and hard-abort at FIRST_CONTENT_ABORT_MS so a
+        // runaway thinking pass can't hang the turn indefinitely.
         let lastChunkAt = Date.now();
+        const streamStartAt = Date.now();
+        let sawVisibleOutput = false;
+        let firstContentWarned = false;
         const STREAM_IDLE_MS = 120000;
+        const FIRST_CONTENT_WARN_MS = 90000;
+        const FIRST_CONTENT_ABORT_MS = effectiveThinkingBudget === 'max' ? 360000 : 180000;
         const _idleWatch = setInterval(() => {
           if (res.writableEnded) return;
           if (Date.now() - lastChunkAt > STREAM_IDLE_MS) {
             streamStalled = true;
             try { upstreamAbort.abort(); } catch (_) {}
+            return;
+          }
+          if (!sawVisibleOutput) {
+            const thinkingFor = Date.now() - streamStartAt;
+            if (!firstContentWarned && thinkingFor > FIRST_CONTENT_WARN_MS) {
+              firstContentWarned = true;
+              try {
+                send({
+                  type: 'notice',
+                  level: 'info',
+                  message: 'Still thinking — no output yet after ' + Math.round(thinkingFor / 1000) + 's. The model is using a large thinking budget; set Settings → Thinking Budget to Auto or a lower level to speed up simple questions.'
+                });
+              } catch (_) {}
+            }
+            if (thinkingFor > FIRST_CONTENT_ABORT_MS) {
+              thinkingDeadlineHit = true;
+              try { upstreamAbort.abort(); } catch (_) {}
+            }
           }
         }, 5000);
 
@@ -1507,6 +1596,7 @@ export function registerChatRoute(app, {
                 }
               } else if (block.type === 'text' && block.text) {
                 assistantText += block.text;
+                sawVisibleOutput = true;
                 send({ type: 'content', content: block.text });
               }
             }
@@ -1515,6 +1605,7 @@ export function registerChatRoute(app, {
           // ── Standard text delta ────────────────────────────────────────────
           if (typeof delta.content === 'string' && delta.content) {
             assistantText += delta.content;
+            sawVisibleOutput = true;
             send({ type: 'content', content: delta.content });
           }
 
@@ -1529,6 +1620,7 @@ export function registerChatRoute(app, {
 
           // ── Tool call accumulation ─────────────────────────────────────────
           if (delta?.tool_calls) {
+            sawVisibleOutput = true;
             for (const tc of delta.tool_calls) {
               const i = tc.index ?? 0;
               if (!pendingCalls[i]) pendingCalls[i] = { id: '', type: 'function', function: { name: '', arguments: '' } };
@@ -2281,6 +2373,14 @@ export function registerChatRoute(app, {
           send({
             type: 'error',
             error: 'The model stopped responding (no data for over 2 minutes). This can happen on very large generations. Please try again — and if it recurs, lower the thinking budget or simplify the request.'
+          });
+        } catch (_) {}
+      } else if (thinkingDeadlineHit) {
+        console.log('[chat] first-content deadline hit — model never produced output, aborting turn');
+        try {
+          send({
+            type: 'error',
+            error: 'The model spent too long thinking without producing any answer. This usually means the thinking budget is too high for the request — set Settings → Thinking Budget to Auto (or a lower level) and try again.'
           });
         } catch (_) {}
       } else if (upstreamAbort.signal.aborted) {

@@ -2313,6 +2313,7 @@ function setAiAutocomplete(val) {
 }
 
 var _thinkingHints = {
+  auto:   'Scales the thinking budget to each question — low for quick Q&A, high for complex or agentic work.',
   off:    'Model will not use extended thinking.',
   low:    'Quick reasoning pass (~1K tokens). Faster and cheaper.',
   medium: 'Balanced thinking (~5K tokens). Good for most tasks.',

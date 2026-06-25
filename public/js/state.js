@@ -42,7 +42,7 @@ var state = {
   enableDynamicWidgets: localStorage.getItem('fauna-dynamic-widgets') === 'true', // experimental, default OFF
   enableConvExport: localStorage.getItem('fauna-conv-export') === 'true', // experimental, default OFF — adds transcript export UI
   autoCompact: localStorage.getItem('fauna-auto-compact') !== 'false', // default ON — auto-summarize when context exceeds budget
-  thinkingBudget: localStorage.getItem('fauna-thinking-budget') || 'high',
+  thinkingBudget: localStorage.getItem('fauna-thinking-budget') || 'auto',
   maxContextTurns: parseInt(localStorage.getItem('fauna-max-turns') || '20', 10),
   defaultSavePath: localStorage.getItem('fauna-default-save-path') || null, // user-specified default directory for file saves
   // streaming/abortController/_autoFeedDepth are per-conversation (conv._streaming etc.)

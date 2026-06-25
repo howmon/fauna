@@ -640,10 +640,11 @@
       <label class="settings-label">
         <span>Thinking Budget</span>
         <select id="thinking-budget-select" class="settings-input" onchange="setThinkingBudget(this.value)" style="cursor:pointer">
+          <option value="auto" selected>Auto — scale to the question (recommended)</option>
           <option value="off">Off — no extended thinking</option>
           <option value="low">Low — quick reasoning (~1K tokens)</option>
           <option value="medium">Medium — balanced (~5K tokens)</option>
-          <option value="high" selected>High — deep analysis (~10K tokens)</option>
+          <option value="high">High — deep analysis (~10K tokens)</option>
           <option value="max">Max — exhaustive (~32K tokens)</option>
         </select>
         <span style="font-size:11px;color:var(--fau-text-muted)" id="thinking-budget-hint">Extended thinking for complex problems requiring deep analysis.</span>

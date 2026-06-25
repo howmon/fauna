@@ -1261,6 +1261,7 @@ async function streamResponse(conv) {
   var _lastToolOutputAccum = ''; // rolling last ~1000 chars of tool_output for input context
   var _toolOutputBlockChars = 0; // chars of live output kept in the CURRENT shell-output view block (capped)
   var _reasoning = null; // { startedAt, durationSeconds } — compact thinking status only
+  var _reasoningTickTimer = null; // ticks the "Thinking… Ns" counter live until content/done
   if (typeof resetDesignArtifactState === 'function') resetDesignArtifactState();
 
   // ── Ephemeral tool status stack (Clawpilot-style) ──────────────────
@@ -1404,6 +1405,26 @@ async function streamResponse(conv) {
         '<i class="ti ' + (completed ? 'ti-brain' : 'ti-loader-2') + '" ' + (completed ? '' : 'style="animation:spin .8s linear infinite"') + '></i>' +
         '<span class="reasoning-label">' + label + '</span>' +
       '</button>';
+  }
+
+  // Live-tick the "Thinking… Ns" counter once a second so a long pre-content
+  // reasoning pass visibly advances instead of looking frozen. The server now
+  // emits `reasoning` the instant the stream opens, so this starts immediately.
+  // Stops as soon as visible content arrives (thinking phase over) or `done`
+  // finalizes the panel to "Thought for Ns".
+  function _startReasoningTicker() {
+    if (_reasoningTickTimer) return;
+    _reasoningTickTimer = setInterval(function() {
+      // Once tokens stream in, the thinking phase is over — freeze the counter.
+      if (!_reasoning || _reasoning.durationSeconds != null || buffer) {
+        _stopReasoningTicker();
+        return;
+      }
+      _updateReasoningPanel(null, false);
+    }, 1000);
+  }
+  function _stopReasoningTicker() {
+    if (_reasoningTickTimer) { clearInterval(_reasoningTickTimer); _reasoningTickTimer = null; }
   }
 
   try {
@@ -1652,11 +1673,13 @@ async function streamResponse(conv) {
             if (lastClose === -1) buffer += '\n```\n';
           }
 
-          if (evt.type === 'content')   { _clearToolStatuses(); buffer += evt.content; tokenCount++; if (tokenCount === 1) dbg('first token received', 'ok'); if (tokenCount % 25 === 0) dbg('stream chunk: tokens=' + tokenCount + ' buffer=' + buffer.length + 'ch elapsed=' + (Date.now() - _streamStartedAt) + 'ms lastChunk=' + (evt.content || '').length + 'ch', 'info'); if (typeof processDesignStreamChunk === 'function') processDesignStreamChunk(evt.content, buffer); scheduleRender(); }
-          if (evt.type === 'error')     { _clearToolStatuses(); dbg('SSE error: ' + evt.error, 'err'); buffer += '\n\nError: ' + evt.error; scheduleRender(); }
+          if (evt.type === 'content')   { _stopReasoningTicker(); _clearToolStatuses(); buffer += evt.content; tokenCount++; if (tokenCount === 1) dbg('first token received', 'ok'); if (tokenCount % 25 === 0) dbg('stream chunk: tokens=' + tokenCount + ' buffer=' + buffer.length + 'ch elapsed=' + (Date.now() - _streamStartedAt) + 'ms lastChunk=' + (evt.content || '').length + 'ch', 'info'); if (typeof processDesignStreamChunk === 'function') processDesignStreamChunk(evt.content, buffer); scheduleRender(); }
+          if (evt.type === 'error')     { _stopReasoningTicker(); _clearToolStatuses(); dbg('SSE error: ' + evt.error, 'err'); buffer += '\n\nError: ' + evt.error; scheduleRender(); }
+          if (evt.type === 'notice')    { dbg('notice: ' + (evt.message || ''), 'warn'); if (evt.message && typeof showToast === 'function') showToast(evt.message); }
           if (evt.type === 'reasoning') {
             if (!_reasoning) _reasoning = { startedAt: Date.now() };
             _updateReasoningPanel(null, false);
+            _startReasoningTicker();
             scrollBottom();
           }
           if (evt.type === 'tool_call') {
@@ -1914,6 +1937,7 @@ async function streamResponse(conv) {
           }
           if (evt.type === 'done') {
             _clearToolStatuses();
+            _stopReasoningTicker();
             dbg('done: finish_reason=' + evt.finish_reason + ' usage=' + JSON.stringify(evt.usage), evt.finish_reason ? 'ok' : 'warn');
             if (evt.usage) _ctxUsage = evt.usage;
             // Finalize reasoning panel (collapse, freeze duration)
@@ -1944,6 +1968,7 @@ async function streamResponse(conv) {
     }
   } finally {
     _clearToolStatuses();
+    _stopReasoningTicker();
     if (renderTimer) {
       // renderTimer may be either a setTimeout id (fallback) or a rAF handle.
       // Cancel both — the wrong one is a harmless no-op.

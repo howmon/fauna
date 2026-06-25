@@ -1167,11 +1167,11 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_set_thinking_budget',
-      description: 'Set the extended thinking budget for reasoning models. The change takes effect on the next message.',
+      description: 'Set the extended thinking budget for reasoning models. The change takes effect on the next message. Use "auto" to let Fauna scale the budget to each question (low for simple Q&A, high for complex/agentic work).',
       parameters: {
         type: 'object',
         properties: {
-          budget: { type: 'string', enum: ['off', 'low', 'medium', 'high', 'max'], description: 'Thinking budget level' },
+          budget: { type: 'string', enum: ['auto', 'off', 'low', 'medium', 'high', 'max'], description: 'Thinking budget level' },
         },
         required: ['budget'],
       },
