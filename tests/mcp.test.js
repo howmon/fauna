@@ -20,6 +20,7 @@ const { _resetCache: resetCtx, ingestDocument } = await import('../server/lib/co
 const { _resetCache: resetEmbed } = await import('../server/lib/embeddings.js');
 const { invalidateStaticCache } = await import('../server/lib/profile.js');
 const { handleMcpRequest, _internals } = await import('../server/routes/mcp.js');
+const { createCustomMcpBridge } = await import('../server/bridges/custom-mcp.js');
 
 const VOCAB = ['postgres', 'react', 'typescript'];
 const stubEmbed = (texts) => texts.map(t => VOCAB.map(v => String(t).toLowerCase().includes(v) ? 1 : 0));
@@ -162,5 +163,119 @@ describe('MCP server', () => {
     expect(_internals._resolveContainerTag({ scope: 'global' })).toBe('global');
     expect(_internals._resolveContainerTag({ projectId: 'x' })).toBe('project:x');
     expect(_internals._resolveContainerTag({})).toBe('global');
+  });
+});
+
+describe('custom MCP bridge', () => {
+  it('auto-connects enabled HTTP servers during chat tool discovery', async () => {
+    const configDir = '/tmp/fauna-test';
+    const configPath = configDir + '/custom-mcp-servers.json';
+    globalThis.__memFs.set(configPath, JSON.stringify([{
+      id: 'mcp-figma-dev-mode',
+      name: 'Figma dev mode',
+      transport: 'http',
+      url: 'http://127.0.0.1:3845/mcp',
+      enabled: true,
+      running: false,
+      auth: { authorized: true },
+    }]));
+
+    const sse = (payload, headers = {}) => new Response(
+      'event: message\n' + 'data: ' + JSON.stringify(payload) + '\n\n',
+      { status: 200, headers },
+    );
+    const fetchMock = vi.fn(async (_url, options = {}) => {
+      const body = JSON.parse(options.body || '{}');
+      if (body.method === 'initialize') {
+        return sse({ jsonrpc: '2.0', id: body.id, result: {} }, { 'mcp-session-id': 'session-1' });
+      }
+      if (body.method === 'tools/list') {
+        return sse({
+          jsonrpc: '2.0',
+          id: body.id,
+          result: {
+            tools: [{
+              name: 'get_design_context',
+              description: 'Read selected Figma design context',
+              inputSchema: { type: 'object', properties: {} },
+            }],
+          },
+        });
+      }
+      throw new Error('unexpected method ' + body.method);
+    });
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      const bridge = createCustomMcpBridge({
+        faunaConfigDir: configDir,
+        extBridge: { broadcastStatus: vi.fn(), setRelayBrowsers: vi.fn() },
+      });
+      const tools = await bridge.getTools({ autoStartEnabled: true });
+      expect(tools.map(t => t.function.name)).toEqual(['get_design_context']);
+      const saved = JSON.parse(globalThis.__memFs.get(configPath));
+      expect(saved[0].running).toBe(true);
+
+      const status = await bridge.getStatus({ includeTools: true });
+      expect(status.runningCount).toBe(1);
+      expect(status.servers[0].tools).toEqual(['get_design_context']);
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+
+  it('records HTTP auth challenge metadata when startup gets 401', async () => {
+    const configDir = '/tmp/fauna-test-auth';
+    const configPath = configDir + '/custom-mcp-servers.json';
+    globalThis.__memFs.set(configPath, JSON.stringify([{
+      id: 'mcp-hits',
+      name: 'HITS',
+      transport: 'http',
+      url: 'https://hits.example.test/mcp',
+      enabled: true,
+      running: false,
+      auth: { authorized: false },
+    }]));
+
+    const fetchMock = vi.fn(async (url, options = {}) => {
+      if (String(url).includes('/.well-known/oauth-authorization-server')) {
+        return new Response(JSON.stringify({
+          issuer: 'https://hits.example.test',
+          authorization_endpoint: 'https://hits.example.test/oauth/authorize',
+          token_endpoint: 'https://hits.example.test/oauth/token',
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (String(url).includes('/.well-known/')) {
+        return new Response('not found', { status: 404 });
+      }
+      const body = JSON.parse(options.body || '{}');
+      if (body.method === 'initialize') {
+        return new Response('missing token', {
+          status: 401,
+          headers: { 'www-authenticate': 'Bearer resource_metadata="https://hits.example.test/.well-known/oauth-authorization-server"' },
+        });
+      }
+      throw new Error('unexpected request ' + url);
+    });
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      const bridge = createCustomMcpBridge({
+        faunaConfigDir: configDir,
+        extBridge: { broadcastStatus: vi.fn(), setRelayBrowsers: vi.fn() },
+      });
+      await expect(bridge.getTools({ autoStartEnabled: true })).resolves.toEqual([]);
+
+      const saved = JSON.parse(globalThis.__memFs.get(configPath));
+      expect(saved[0].running).toBe(false);
+      expect(saved[0].lifecycle.state).toBe('needs_auth');
+      expect(saved[0].lifecycle.wwwAuthenticate).toMatch(/resource_metadata/);
+      expect(saved[0].lifecycle.authDiscovery.authorizationEndpoint).toBe('https://hits.example.test/oauth/authorize');
+
+      const status = await bridge.getStatus({ includeTools: true });
+      expect(status.servers[0].lifecycle.state).toBe('needs_auth');
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
   });
 });

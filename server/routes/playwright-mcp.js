@@ -153,6 +153,16 @@ export function registerPlaywrightMcpRoutes(app, {
   return {
     callTool: _callPlaywrightMcpTool,
     reset: () => { _playwrightMcpClient = null; _playwrightMcpClientPromise = null; },
+    status: () => ({
+      installed: _playwrightMcpInstalled,
+      running: !!_playwrightMcpClient,
+      endpoint: {
+        wsUrl: 'ws://localhost:3340',
+        wsPort: 3340,
+        httpUrl: 'http://localhost:3341/mcp',
+        httpPort: 3341,
+      },
+    }),
     prewarm: async () => {
       try {
         await import('@playwright/mcp');

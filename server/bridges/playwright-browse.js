@@ -15,9 +15,11 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execFile as _execFile } from 'child_process';
+import { createFaunaBrowserManager } from '../browser/browser-manager.js';
 
 export function registerBrowseRoutes(app, { require: nodeRequire } = {}) {
   const _require = nodeRequire || ((m) => { throw new Error(`require not provided for ${m}`); });
+  const browserManager = createFaunaBrowserManager({ require: _require });
 
   const CHROME_PATH = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   const EDGE_PATH   = '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
@@ -208,91 +210,33 @@ export function registerBrowseRoutes(app, { require: nodeRequire } = {}) {
   }
 
   app.get('/api/browse-check', async (req, res) => {
-    const chromePath = BROWSER_PATH;
-    const chromeExists = fs.existsSync(chromePath);
-    let playwrightOk = false;
-    let playwrightError = null;
     try {
-      const pw = await import('playwright-core');
-      playwrightOk = !!(pw.chromium || pw.default?.chromium);
+      res.json(await browserManager.check());
     } catch (e) {
-      playwrightError = e.message;
+      res.status(500).json({ error: e.message });
     }
-    res.json({ chromeExists, chromeExePath: chromePath, playwrightOk, playwrightError });
+  });
+
+  app.get('/api/browse/status', (_req, res) => {
+    res.json(browserManager.getStatus());
   });
 
   app.post('/api/browse', async (req, res) => {
     const { url, action = 'extract', selector, text, waitFor, maxChars = 12000 } = req.body;
     if (!url) return res.status(400).json({ error: 'url required' });
 
-    let page;
     try {
-      page = await getBrowsePage();
-
-      await navigateWithWarmup(page, url);
-
-      const isChallenge = async () => {
-        const title = await page.title().catch(() => '');
-        const body  = await page.evaluate(() => document.body?.innerText?.slice(0, 200) || '').catch(() => '');
-        return title === '' || /access denied|just a moment|checking your browser|powered and protected|enable javascript/i.test(title + ' ' + body);
-      };
-
-      if (await isChallenge()) {
-        await page.waitForFunction(
-          () => {
-            const t = document.title;
-            if (!t) return false;
-            return !/access denied|just a moment|checking your browser|powered and protected/i.test(t);
-          },
-          { timeout: 25000 }
-        ).catch(() => {});
-      }
-      try { await page.waitForLoadState('networkidle', { timeout: 8000 }); } catch {}
-
-      if (waitFor) {
-        try { await page.waitForSelector(waitFor, { timeout: 8000 }); } catch {}
-      }
-
-      let result = {};
-
-      if (action === 'extract' || action === 'navigate') {
-        const title   = await page.title();
-        const pageUrl = page.url();
-        const html    = await page.content();
-        const md      = htmlToMarkdown(html, pageUrl);
-        const stillBlocked = await isChallenge();
-        result = { url: pageUrl, title, content: md.slice(0, maxChars), chars: md.length };
-        if (stillBlocked) result.blocked = true;
-
-      } else if (action === 'screenshot') {
-        const buf = await page.screenshot({ type: 'jpeg', quality: 70 });
-        result = { url: page.url(), screenshot: buf.toString('base64'), mime: 'image/jpeg' };
-
-      } else if (action === 'click') {
-        await page.click(selector || text, { timeout: 5000 });
-        const html = await page.content();
-        result = { url: page.url(), content: htmlToMarkdown(html, page.url()).slice(0, maxChars) };
-
-      } else if (action === 'type') {
-        await page.fill(selector, text);
-        result = { ok: true };
-
-      } else if (action === 'eval') {
-        const evalResult = await page.evaluate(text);
-        result = { result: JSON.stringify(evalResult) };
-      }
-
-      try { await page.close(); } catch {}
-      res.json(result);
+      res.json(await browserManager.handleAction({ url, action, selector, text, waitFor, maxChars }));
     } catch (err) {
-      if (page) { try { await page.close(); } catch {} }
       if ((action === 'extract' || action === 'navigate') && _playwrightAvailable !== false) {
         try {
-          const fallback = await fetchUrlFallback(url, maxChars);
+          const fallback = await browserManager.fetchUrlFallback(url, maxChars);
           return res.json(fallback);
         } catch { /* fall through to error */ }
       }
       res.status(500).json({ error: err.message });
     }
   });
+
+  return { manager: browserManager, getStatus: () => browserManager.getStatus() };
 }

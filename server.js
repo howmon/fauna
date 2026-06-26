@@ -103,6 +103,7 @@ import { startFaunaTmpJanitor } from './server/lib/fauna-tmp.js';
 import { registerSchedulingAndGuardRoutes } from './server/routes/scheduling-and-guard.js';
 import { registerRegionAndStdinRoutes } from './server/routes/region-and-stdin.js';
 import { registerPermissionsRoutes } from './server/routes/permissions.js';
+import { registerSecurityDashboardRoutes } from './server/routes/security-dashboard.js';
 import { registerSystemContextRoutes } from './server/routes/system-context.js';
 import { registerDesktopOrganizerRoutes } from './server/routes/desktop-organizer.js';
 import { registerWindowContextRoutes } from './server/routes/window-context.js';
@@ -381,7 +382,7 @@ registerKokoroTtsRoutes(app);
 registerLessonRoutes(app, { getElectronBrowserWindow: () => _ElectronBrowserWindow });
 
 // ── Browser (Playwright) routes moved → server/bridges/playwright-browse.js ──
-registerBrowseRoutes(app, { require: _require });
+const browseRoutes = registerBrowseRoutes(app, { require: _require });
 
 // ── Figma bridge moved → server/bridges/figma.js ──
 // ── Custom MCP routes/state moved → server/bridges/custom-mcp.js ──
@@ -474,6 +475,7 @@ const playwrightMcp = registerPlaywrightMcpRoutes(app, {
 });
 registerChatRoute(app, {
   figma,
+  customMcp,
   agentsDir: AGENTS_DIR,
   browserBuildContext: BROWSER_BUILD_CONTEXT,
   buildBrowserExtContext: () => buildBrowserExtContext(extBridge),
@@ -554,6 +556,16 @@ registerWindowContextRoutes(app);
 registerSystemContextRoutes(app, { isWin: IS_WIN, shellBin: SHELL_BIN, agentsDir: AGENTS_DIR, getGhToken, getSystemPreferences: () => systemPreferences });
 // ── macOS Permissions routes moved → server/routes/permissions.js ──
 registerPermissionsRoutes(app, { isWin: IS_WIN, getGhToken, getSystemPreferences: () => systemPreferences, getDesktopCapturer: () => desktopCapturer });
+registerSecurityDashboardRoutes(app, {
+  appDir: __dirname,
+  isWin: IS_WIN,
+  getGhToken,
+  getSystemPreferences: () => systemPreferences,
+  getBrowseStatus: () => browseRoutes?.getStatus?.(),
+  getFigmaStatus: () => ({ connected: figma.isConnected?.() === true }),
+  getCustomMcpStatus: () => customMcp.getRelayState?.(),
+  getPlaywrightMcpStatus: () => playwrightMcp.status?.(),
+});
 // ── Memory / Preferences / Facts ──────────────────────────────────────────
 const { loadPrefs } = registerMemoryPrefsFactsRoutes(app, { configDir: CONFIG_DIR });
 registerConnectorRoutes(app);

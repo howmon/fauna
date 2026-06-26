@@ -67,7 +67,9 @@ var mcpMgr = (function () {
     const r = await fetch(path, opts);
     const data = await r.json().catch(function () { return {}; });
     if (!r.ok) {
-      throw new Error(data.error || ('Request failed: ' + r.status));
+      var err = new Error(data.error || ('Request failed: ' + r.status));
+      Object.assign(err, data, { status: r.status });
+      throw err;
     }
     return data;
   }
@@ -130,32 +132,41 @@ var mcpMgr = (function () {
     }
 
     el.innerHTML = _servers.map(function (s) {
+      var lifecycleState = (s.lifecycle && s.lifecycle.state) || (s.running ? 'running' : 'stopped');
       var statusDot = s.running
         ? '<span class="mcp-dot running" title="Running"></span>'
-        : '<span class="mcp-dot stopped" title="Stopped"></span>';
+        : (lifecycleState === 'needs_auth'
+            ? '<span class="mcp-dot needs-auth" title="Needs authentication"></span>'
+            : '<span class="mcp-dot stopped" title="Stopped"></span>');
       var badge = s.transport === 'http'
         ? '<span class="mcp-transport-badge http">HTTP</span>'
         : '<span class="mcp-transport-badge stdio">STDIO</span>';
-      var startStop = s.transport === 'stdio'
-        ? (s.running
-            ? '<button class="mcp-row-btn" title="Stop" onclick="mcpMgr.stop(\'' + s.id + '\')">' +
-                '<i class="ti ti-player-stop"></i></button>'
-            : '<button class="mcp-row-btn" title="Start" onclick="mcpMgr.start(\'' + s.id + '\')">' +
-                '<i class="ti ti-player-play"></i></button>') +
-          '<button class="mcp-row-btn" title="Authenticate (login)" onclick="mcpMgr.openAuthModal(\'' + s.id + '\')">' +
-            '<i class="ti ti-login-2"></i></button>'
-        : '<button class="mcp-row-btn" title="Refresh tools" onclick="mcpMgr.refreshHttpTools(\'' + s.id + '\')">' +
-            '<i class="ti ti-refresh"></i></button>';
+      var startStop = s.running
+        ? '<button class="mcp-row-btn" title="Stop" onclick="mcpMgr.stop(\'' + s.id + '\')">' +
+            '<i class="ti ti-player-stop"></i></button>'
+        : '<button class="mcp-row-btn" title="Start" onclick="mcpMgr.start(\'' + s.id + '\')">' +
+            '<i class="ti ti-player-play"></i></button>';
+      if (s.transport === 'stdio') {
+        startStop += '<button class="mcp-row-btn" title="Authenticate (login)" onclick="mcpMgr.openAuthModal(\'' + s.id + '\')">' +
+          '<i class="ti ti-login-2"></i></button>';
+      } else {
+        startStop += '<button class="mcp-row-btn" title="Refresh tools" onclick="mcpMgr.refreshHttpTools(\'' + s.id + '\')">' +
+          '<i class="ti ti-refresh"></i></button>';
+      }
       var oauthBadge = '';
       if (s.transport === 'http') {
         var oauthSt = _oauthStatus[s.id];
+        var discoveredAuthUrl = oauthSt && oauthSt.authDiscovery && oauthSt.authDiscovery.authorizationEndpoint;
+        var signInUrl = s.oauthAuthUrl || discoveredAuthUrl || '';
         oauthBadge = oauthSt && oauthSt.authorized
           ? '<span class="mcp-oauth-badge authorized" title="Authorized">✓ Auth</span>'
-          : (s.oauthAuthUrl
+          : (signInUrl
               ? '<span class="mcp-oauth-badge unauthorized" title="Not authorized — click to sign in" ' +
-                  'onclick="mcpMgr.oauthSignIn(\'' + s.id + '\', \'' + _attr(s.oauthAuthUrl) + '\')" ' +
+                  'onclick="mcpMgr.oauthSignIn(\'' + s.id + '\', \'' + _attr(signInUrl) + '\')" ' +
                   'style="cursor:pointer">Sign in</span>'
-              : '');
+              : (lifecycleState === 'needs_auth'
+                  ? '<span class="mcp-oauth-badge unauthorized" title="Authentication required, but no authorization URL was discovered">Needs auth</span>'
+                  : ''));
       }
       return (
         '<div class="mcp-server-row" data-id="' + s.id + '">' +
@@ -582,7 +593,11 @@ var mcpMgr = (function () {
   async function refreshHttpTools(id) {
     try {
       await _api('POST', '/api/custom-mcp-servers/' + id + '/refresh');
-    } catch (_) {}
+      await loadServers();
+    } catch (e) {
+      alert('Failed to refresh tools: ' + e.message);
+      await loadServers();
+    }
   }
 
   // ── Save ──────────────────────────────────────────────────────────────────
@@ -643,8 +658,22 @@ var mcpMgr = (function () {
   // ── Start / stop / remove ─────────────────────────────────────────────────
 
   async function start(id) {
-    await _api('POST', '/api/custom-mcp-servers/' + id + '/start');
-    await loadServers();
+    try {
+      await _api('POST', '/api/custom-mcp-servers/' + id + '/start');
+      await loadServers();
+    } catch (e) {
+      await loadServers();
+      if (e.authRequired) {
+        var authUrl = (e.authDiscovery && e.authDiscovery.authorizationEndpoint) || '';
+        if (authUrl) {
+          oauthSignIn(id, authUrl);
+          return;
+        }
+        alert('Authentication required, but Fauna could not discover an OAuth authorization URL. Add an Authorization header or OAuth authorization URL in Edit.\n\n' + e.message);
+        return;
+      }
+      alert('Failed to start MCP server: ' + e.message);
+    }
   }
 
   async function stop(id) {

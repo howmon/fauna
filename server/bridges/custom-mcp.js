@@ -89,7 +89,11 @@ class HttpMcpClient {
     });
     if (!resp.ok) {
       const text = await resp.text().catch(() => resp.statusText);
-      throw new Error(`Failed to initialize: ${resp.status} ${text}`);
+      const err = new Error(`Failed to initialize: ${resp.status} ${text}`);
+      err.status = resp.status;
+      err.wwwAuthenticate = resp.headers.get('www-authenticate') || '';
+      err.responseText = text;
+      throw err;
     }
     const sid = resp.headers.get('mcp-session-id');
     if (!sid) throw new Error('No session ID returned from MCP server');
@@ -123,7 +127,11 @@ class HttpMcpClient {
     });
     if (!resp.ok) {
       const text = await resp.text().catch(() => resp.statusText);
-      throw new Error(`MCP request failed: ${resp.status} ${text}`);
+      const err = new Error(`MCP request failed: ${resp.status} ${text}`);
+      err.status = resp.status;
+      err.wwwAuthenticate = resp.headers.get('www-authenticate') || '';
+      err.responseText = text;
+      throw err;
     }
     return this._parseSSE(resp);
   }
@@ -267,6 +275,106 @@ export function createCustomMcpBridge({
     fs.writeFileSync(CUSTOM_MCP_FILE, JSON.stringify(servers, null, 2));
   }
 
+  function _isAuthError(err) {
+    return err?.status === 401 || /\b401\b|unauthori[sz]ed|authentication required/i.test(String(err?.message || ''));
+  }
+
+  async function discoverOAuthMetadata(server, err) {
+    const attempted = [];
+    const header = String(err?.wwwAuthenticate || '');
+    const resourceMatch = header.match(/(?:resource_metadata|authorization_uri|as_uri|issuer)="?([^",\s]+)"?/i);
+    const candidates = [];
+    if (resourceMatch) candidates.push(resourceMatch[1]);
+    try {
+      const base = new URL(server.url);
+      const origin = base.origin;
+      const pathPart = base.pathname === '/' ? '' : base.pathname;
+      candidates.push(new URL('/.well-known/oauth-protected-resource' + pathPart, origin).toString());
+      candidates.push(new URL('/.well-known/oauth-authorization-server' + pathPart, origin).toString());
+      candidates.push(new URL('/.well-known/openid-configuration' + pathPart, origin).toString());
+      candidates.push(new URL('/.well-known/oauth-authorization-server', origin).toString());
+      candidates.push(new URL('/.well-known/openid-configuration', origin).toString());
+    } catch (_) {}
+
+    const fetchMetadata = async (url) => {
+      attempted.push(url);
+      const resp = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(3000) });
+      if (!resp.ok) return null;
+      const json = await resp.json();
+      const authServers = Array.isArray(json.authorization_servers) ? json.authorization_servers : [];
+      return { json, authServers, url };
+    };
+
+    for (const url of [...new Set(candidates)]) {
+      try {
+        const found = await fetchMetadata(url);
+        if (!found) continue;
+        let { json, authServers } = found;
+        if (!json.authorization_endpoint && authServers.length) {
+          for (const authServer of authServers) {
+            try {
+              const authBase = new URL(authServer);
+              const authOrigin = authBase.origin;
+              const authPath = authBase.pathname === '/' ? '' : authBase.pathname;
+              const nested = await fetchMetadata(new URL('/.well-known/oauth-authorization-server' + authPath, authOrigin).toString())
+                || await fetchMetadata(new URL('/.well-known/openid-configuration' + authPath, authOrigin).toString())
+                || await fetchMetadata(authServer);
+              if (nested?.json?.authorization_endpoint) {
+                json = nested.json;
+                authServers = nested.authServers;
+                break;
+              }
+            } catch (_) {}
+          }
+        }
+        if (json.authorization_endpoint || json.token_endpoint || json.registration_endpoint || json.issuer || authServers.length) {
+          return {
+            discoveryUrl: url,
+            issuer: json.issuer || null,
+            authorizationEndpoint: json.authorization_endpoint || authServers[0] || null,
+            tokenEndpoint: json.token_endpoint || null,
+            registrationEndpoint: json.registration_endpoint || null,
+            authorizationServers: authServers,
+          };
+        }
+      } catch (_) {}
+    }
+    return { discoveryUrl: null, attempted, wwwAuthenticate: header || null };
+  }
+
+  async function ensureHttpClient(server, servers) {
+    let client = customMcpClients.get(server.id);
+    if (client) return client;
+
+    const resolved = _resolveHttpServerDefinition(server);
+    client = new HttpMcpClient(resolved.url, resolved.headers);
+    try {
+      await client.getTools();
+    } catch (e) {
+      if (_isAuthError(e)) {
+        const authDiscovery = await discoverOAuthMetadata(server, e);
+        server.running = false;
+        server.auth = { ...(server.auth || {}), ...resolved.authStatus, authorized: false, lastResolvedAt: new Date().toISOString() };
+        server.lifecycle = {
+          ...(server.lifecycle || {}),
+          state: 'needs_auth',
+          lastError: e.message,
+          lastErrorAt: new Date().toISOString(),
+          wwwAuthenticate: e.wwwAuthenticate || null,
+          authDiscovery,
+        };
+        writeCustomMcpServers(servers);
+      }
+      throw e;
+    }
+    customMcpClients.set(server.id, client);
+    server.running = true;
+    server.auth = { ...(server.auth || {}), ...resolved.authStatus, authorized: true, lastResolvedAt: new Date().toISOString() };
+    server.lifecycle = { ...(server.lifecycle || {}), state: 'running', lastResolvedAt: new Date().toISOString(), lastStartedAt: new Date().toISOString(), lastError: null, wwwAuthenticate: null };
+    writeCustomMcpServers(servers);
+    return client;
+  }
+
   async function probeBrowserMcp() {
     try {
       const resp = await fetch('http://localhost:3341/health', { method: 'GET', signal: AbortSignal.timeout(2000) });
@@ -381,29 +489,68 @@ export function createCustomMcpBridge({
     customMcpClients.clear();
   }
 
-  async function getTools() {
+  async function getTools({ autoStartEnabled = false } = {}) {
     const servers = readCustomMcpServers();
     const tools = [];
-    for (const server of servers.filter(s => s.running && s.transport === 'http')) {
-      const client = customMcpClients.get(server.id);
-      if (client) {
-        try {
-          const serverTools = await client.getTools();
-          tools.push(...serverTools);
-        } catch (e) {
-          console.error(`[custom-mcp] Failed to get tools from ${server.name}:`, e.message);
-        }
+    for (const server of servers.filter(s => s.enabled && s.transport === 'http' && (s.running || autoStartEnabled))) {
+      try {
+        const client = customMcpClients.get(server.id) || await ensureHttpClient(server, servers);
+        const serverTools = await client.getTools();
+        tools.push(...serverTools);
+      } catch (e) {
+        server.lifecycle = { ...(server.lifecycle || {}), lastError: e.message, lastErrorAt: new Date().toISOString() };
+        writeCustomMcpServers(servers);
+        console.error(`[custom-mcp] Failed to get tools from ${server.name}:`, e.message);
       }
     }
     return tools;
   }
 
+  async function getStatus({ includeTools = false } = {}) {
+    const servers = readCustomMcpServers();
+    let toolCount = 0;
+    const summaries = [];
+    for (const server of servers) {
+      const auth = _oauthStatus(server);
+      const summary = {
+        id: server.id,
+        name: server.name,
+        transport: server.transport,
+        url: server.transport === 'http' ? server.url : null,
+        enabled: !!server.enabled,
+        running: !!server.running,
+        auth,
+        lifecycle: server.lifecycle || {},
+        tools: [],
+      };
+      if (includeTools && server.enabled && server.transport === 'http' && server.running) {
+        const client = customMcpClients.get(server.id);
+        if (client) {
+          try {
+            const serverTools = await client.getTools();
+            summary.tools = serverTools.map(t => t?.function?.name || t?.name).filter(Boolean);
+            toolCount += summary.tools.length;
+          } catch (e) {
+            summary.error = e.message;
+          }
+        }
+      }
+      summaries.push(summary);
+    }
+    return {
+      relay: { connected: faunaMcpBrowserConnected, connectedAt: faunaMcpConnectedAt },
+      servers: summaries,
+      enabledCount: summaries.filter(s => s.enabled).length,
+      runningCount: summaries.filter(s => s.running).length,
+      toolCount,
+    };
+  }
+
   async function callTool(toolName, args) {
     const servers = readCustomMcpServers().filter(s => s.running && s.transport === 'http');
     for (const server of servers) {
-      const client = customMcpClients.get(server.id);
-      if (!client) continue;
       try {
+        const client = customMcpClients.get(server.id) || await ensureHttpClient(server, servers);
         const tools = await client.getTools();
         if (tools.some(t => t.function.name === toolName)) {
           return await client.callTool(toolName, args);
@@ -504,17 +651,16 @@ export function createCustomMcpBridge({
 
       if (server.transport === 'http') {
         try {
-          const resolved = _resolveHttpServerDefinition(server);
-          const client = new HttpMcpClient(resolved.url, resolved.headers);
-          await client.getTools();
-          customMcpClients.set(server.id, client);
-          server.running = true;
-          server.auth = { ...(server.auth || {}), ...resolved.authStatus, lastResolvedAt: new Date().toISOString() };
-          server.lifecycle = { ...(server.lifecycle || {}), lastResolvedAt: new Date().toISOString(), lastStartedAt: new Date().toISOString() };
-          writeCustomMcpServers(servers);
+          await ensureHttpClient(server, servers);
           res.json({ ok: true, transport: 'http' });
         } catch (e) {
-          res.status(500).json({ error: e.message });
+          const fresh = readCustomMcpServers().find(s => s.id === server.id) || server;
+          res.status(_isAuthError(e) ? 401 : 500).json({
+            error: e.message,
+            authRequired: _isAuthError(e),
+            wwwAuthenticate: e.wwwAuthenticate || fresh.lifecycle?.wwwAuthenticate || null,
+            authDiscovery: fresh.lifecycle?.authDiscovery || null,
+          });
         }
       } else if (server.transport === 'stdio') {
         try {
@@ -579,6 +725,7 @@ export function createCustomMcpBridge({
       }
 
       server.running = false;
+      server.lifecycle = { ...(server.lifecycle || {}), state: 'stopped' };
       writeCustomMcpServers(servers);
       res.json({ ok: true });
     });
@@ -596,6 +743,9 @@ export function createCustomMcpBridge({
         authorized: status.authorized,
         requiresAuth: status.requiresAuth,
         hasCredential: status.hasCredential,
+        wwwAuthenticate: server.lifecycle?.wwwAuthenticate || null,
+        authDiscovery: server.lifecycle?.authDiscovery || null,
+        state: server.lifecycle?.state || (server.running ? 'running' : 'stopped'),
       });
     });
 
@@ -626,6 +776,7 @@ export function createCustomMcpBridge({
           authorized: true,
           lastResolvedAt: new Date().toISOString(),
         };
+        server.lifecycle = { ...(server.lifecycle || {}), state: 'authorized', lastError: null, wwwAuthenticate: null };
         server.oauthCredentialId = credId;
         writeCustomMcpServers(servers);
 
@@ -717,6 +868,7 @@ export function createCustomMcpBridge({
     stopAutoDetect,
     cleanup,
     getRelayState: () => ({ connected: faunaMcpBrowserConnected, connectedAt: faunaMcpConnectedAt }),
+    getStatus,
     getTools,
     callTool,
   };

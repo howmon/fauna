@@ -55,7 +55,8 @@
     "version:patch": "node scripts/version.cjs patch",
     "version:minor": "node scripts/version.cjs minor",
     "version:major": "node scripts/version.cjs major",
-    "version:set": "node scripts/version.cjs set"
+    "version:set": "node scripts/version.cjs set",
+    "gen:capabilities": "node scripts/gen-capabilities.cjs"
   },
   "dependencies": {
     "@azure/msal-node": "^5.1.5",

@@ -12,6 +12,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { recordSecurityEvent } from './server/lib/security-events.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
 const PERMS_FILE = path.join(CONFIG_DIR, 'permissions.json');
@@ -158,9 +159,24 @@ export async function checkCommandPermission(command, options = {}) {
       addAutoAllow(firstWord);
       return 'allow';
     }
-    return result === 'allow' ? 'allow' : 'deny';
+    if (result === 'allow') return 'allow';
+    recordSecurityEvent({
+      type: 'permission-denied',
+      severity: 'warn',
+      surface: 'shell',
+      message: 'Shell command denied by user',
+      details: { command, explanation },
+    });
+    return 'deny';
   }
 
   // No dialog available — deny by default
+  recordSecurityEvent({
+    type: 'permission-denied',
+    severity: 'warn',
+    surface: 'shell',
+    message: 'Shell command denied because no permission dialog was available',
+    details: { command, explanation },
+  });
   return 'deny';
 }

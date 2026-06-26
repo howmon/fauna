@@ -1,0 +1,1411 @@
+{
+  "generatedAt": "2026-06-26T01:34:54.490Z",
+  "source": [
+    "self-tools.js:SELF_TOOL_DEFS",
+    "self-tools.js:DYNAMIC_WIDGET_TOOL_DEFS"
+  ],
+  "count": 85,
+  "byCategory": {
+    "file": 9,
+    "desktop": 6,
+    "project": 13,
+    "browser": 1,
+    "other": 16,
+    "assistant": 8,
+    "memory": 7,
+    "shell": 2,
+    "media": 16,
+    "circuit": 7
+  },
+  "tools": [
+    {
+      "name": "fauna_apply_patch",
+      "source": "self",
+      "category": "file",
+      "description": "PRIMARY edit tool. Apply a freeform patch across one or more files in a single transaction — use for any edit to an existing file, including small one-hunk changes. Faster and cheaper than fauna_write_file (no full-file re-render) and safer than fauna_replace_string for anything more than one substitution. Do NOT re-read the file after a successful apply — the tool already confirms. Patch DSL: *** Begin Patch / *** Update File: <path> / @@ context / -removed / +added / *** End Patch.",
+      "required": [
+        "patch"
+      ],
+      "parameters": [
+        "patch",
+        "cwd"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_arrange_windows",
+      "source": "self",
+      "category": "desktop",
+      "description": "Move and/or resize specific app windows. Pass an array of moves; each move targets one app and sets {x,y,w,h} in screen coordinates. Use fauna_list_windows first to get exact app names and the screen size — then compute coords (e.g. half-screen split, quadrants). windowIndex defaults to 1 (frontmost window of that app); use windowTitle for exact-match targeting. Works on macOS (requires Accessibility permission) and Windows (uses User32 SetWindowPos).",
+      "required": [
+        "moves"
+      ],
+      "parameters": [
+        "moves"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_backlog_list",
+      "source": "self",
+      "category": "project",
+      "description": "List backlog items for a project, ordered by score when prioritized. Useful before triage or planning.",
+      "required": [],
+      "parameters": [
+        "projectId",
+        "status",
+        "column",
+        "limit"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_backlog_prioritize",
+      "source": "self",
+      "category": "project",
+      "description": "Score and rank backlog items. method=\"rice\" (default) computes RICE = reach*impact*confidence/effort. method=\"moscow\" buckets by must/should/could/wont tags. Also promotes new items into the Todo column so the autopilot can pick them up.",
+      "required": [],
+      "parameters": [
+        "projectId",
+        "method"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_board_scan",
+      "source": "self",
+      "category": "project",
+      "description": "List Kanban work items. Scope=\"project\" (default) returns the active project board; scope=\"global\" aggregates across every project. Use this to (a) find your next card to claim, (b) check if a similar card already exists before creating a duplicate, or (c) summarise board status for the user. Returns items with column, assignee, priority, claimedBy, lockedByUser and counts of comments/runs.",
+      "required": [],
+      "parameters": [
+        "scope",
+        "column",
+        "assignee",
+        "limit",
+        "projectId"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_browser",
+      "source": "self",
+      "category": "browser",
+      "description": "Drive the in-app WEB browser webview (navigate to http(s):// or file:// URLs, click/type DOM selectors, extract HTML, evaluate JS, take page screenshot, etc.). ONLY use this for actual web pages or local HTML files. DO NOT use this for desktop apps (Figma desktop, Slack desktop, VS Code, Finder, native macOS/Windows UIs) — those require fauna_mouse / fauna_keyboard / fauna_ui_tree / fauna_arrange_windows instead. DO NOT call this just to \"take a screenshot\" of the user's screen — there is no screen capture here, only the current webview page. DO NOT open it speculatively at the start of a task; only call it once you have decided you need a web URL. PREFER this over markdown ```browser-action fenced blocks when web automation is genuinely needed.",
+      "required": [
+        "action"
+      ],
+      "parameters": [
+        "action",
+        "url",
+        "selector",
+        "text",
+        "js",
+        "tabId",
+        "waitMs"
+      ],
+      "sideEffects": [
+        "mutates-state",
+        "network-capable"
+      ]
+    },
+    {
+      "name": "fauna_build_guide",
+      "source": "self",
+      "category": "other",
+      "description": "Generate a complete build guide for a circuit: bill of materials, assembly order (low-profile parts first), polarity/pin-1 callouts, soldering steps, and a simulation-backed \"test & verify\" section with expected node voltages. Returns a structured guide + Markdown. Uses ngspice for expected readings when available; degrades gracefully otherwise.",
+      "required": [
+        "doc"
+      ],
+      "parameters": [
+        "doc",
+        "analysis"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_check_board",
+      "source": "self",
+      "category": "project",
+      "description": "Design-rule check (DRC) of a routed board: copper clearance (pad↔pad, trace↔trace, trace↔pad), drill spacing, board-edge clearance, and unrouted nets. Returns { ok, errors, warnings, stats }. ALWAYS run after fauna_layout_pcb and surface violations.",
+      "required": [],
+      "parameters": [
+        "doc",
+        "board",
+        "clearance"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_consult_debate",
+      "source": "self",
+      "category": "assistant",
+      "description": "Run a structured chain-of-debate over a hard decision. Invokes N independent perspectives in parallel (no tools), cross-presents them for critique, then a judge synthesizes a recommendation. Use BEFORE committing to an ambiguous architectural choice or when the user explicitly asks for multiple opinions.",
+      "required": [
+        "question"
+      ],
+      "parameters": [
+        "question",
+        "context",
+        "perspectives"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_context_delete",
+      "source": "self",
+      "category": "memory",
+      "description": "Delete an ingested context document by docId (from fauna_context_list).",
+      "required": [
+        "docId"
+      ],
+      "parameters": [
+        "docId"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_context_ingest",
+      "source": "self",
+      "category": "memory",
+      "description": "Ingest a document into the context store. The text is chunked and embedded for later semantic search. Re-ingesting the same sourceId replaces the prior chunks.",
+      "required": [
+        "text"
+      ],
+      "parameters": [
+        "text",
+        "sourceId",
+        "sourcePath",
+        "sourceType",
+        "title",
+        "scope"
+      ],
+      "sideEffects": [
+        "file-access"
+      ]
+    },
+    {
+      "name": "fauna_context_list",
+      "source": "self",
+      "category": "memory",
+      "description": "List ingested context documents (without their text) so you can confirm what is available before searching or delete stale entries.",
+      "required": [],
+      "parameters": [
+        "scope"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_context_search",
+      "source": "self",
+      "category": "memory",
+      "description": "Semantic + keyword search over ingested context documents (READMEs, design docs, source files, notes). Use to ground answers in project-specific material the user has added. Returns the top matching passages with source info.",
+      "required": [
+        "query"
+      ],
+      "parameters": [
+        "query",
+        "scope",
+        "limit"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_create_project",
+      "source": "self",
+      "category": "project",
+      "description": "Create a new project in Fauna. Returns the project object with its ID. When the user wants to build an app/site/tool, set `template` to scaffold a working starter (e.g. vite-react-ts, vite-react-ts-sqlite). Defaults to no template (empty project record only).",
+      "required": [
+        "name"
+      ],
+      "parameters": [
+        "name",
+        "description",
+        "rootPath",
+        "template"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_db_migration",
+      "source": "self",
+      "category": "other",
+      "description": "Create a new SQL migration file with a mandatory markdown summary header. Used when building apps with SQLite. Stamps the file as `migrations/NNNN_<slug>.sql` in the active project root. The header documents purpose, tables changed, indexes added, and rollback notes — required for every schema change. Validates that the SQL parses (basic syntax check). Use this every time you add or alter a table; do NOT hand-write migration files.",
+      "required": [
+        "name",
+        "purpose",
+        "sql"
+      ],
+      "parameters": [
+        "projectId",
+        "name",
+        "purpose",
+        "tablesChanged",
+        "rollbackNotes",
+        "sql"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_dev_servers",
+      "source": "self",
+      "category": "shell",
+      "description": "List, stop, or restart background dev servers (npm run dev, vite, next dev, php -S, uvicorn, …) that were started earlier in this or any other conversation. When a dev-server command is launched via fauna_shell_exec or a ```bash block, the server is detached and registered here — it does NOT come back via shell output. Use this tool to check status, restart after a code change, or stop a port when the user is done. Action `list` returns every tracked server with id, label, cwd, port (if detected), status, command, and startedAt. Action `stop` SIGTERMs by id. Action `restart` kills and respawns the same command in the same cwd.",
+      "required": [
+        "action"
+      ],
+      "parameters": [
+        "action",
+        "id"
+      ],
+      "sideEffects": [
+        "executes-process"
+      ]
+    },
+    {
+      "name": "fauna_doctor",
+      "source": "self",
+      "category": "assistant",
+      "description": "Run a self-diagnostic that probes Fauna's optional integrations (headless browser, LibreOffice slide rendering, AI image-gen, stock-photo providers, local LLM, memory and context stores) and returns a structured health report. Call this when a capability seems missing or a task fails for environmental reasons (e.g. \"slide render failed\", \"image-gen unavailable\", \"can't open this page\") so you can see what is configured and what the fix is — instead of guessing. Returns {ok, checks:[{name, status:\"ok\"|\"warn\"|\"fail\", message, fix?}], counts, total}.",
+      "required": [],
+      "parameters": [],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_emit_widget",
+      "source": "dynamic-widget",
+      "category": "other",
+      "description": "Render an interactive, sandboxed HTML/JS widget in the chat and register its actions as ephemeral tools for the rest of this conversation. Use this whenever the user wants something interactive (3D viewer, kanban, sliders, custom dashboard) — the widget defines the buttons/controls and YOU call them via the registered tool names (w_<id>__<name>). Bundle.html is the inner DOM, bundle.js is the widget script which calls `widget.on(\"toolName\", async (args) => result)` to wire each tool, and `widget.emit(event, data)` to push state. No network access inside the widget. CRITICAL: If you say \"I rebuilt it\", \"Here is the widget\", \"I attached the 3D viewer\", \"I made it rotatable\", or anything implying a widget is visible in this turn, you MUST call this tool in the same turn. When the user says \"rebuild\", \"redo it\", \"make it rotatable\", \"where is it?\", or otherwise asks you to revise a prior widget, you MUST call this tool again with the updated bundle — do not just describe the changes in prose. DO NOT use this for media playback or playlists — for audio, video, podcast lists, YouTube embeds, image carousels, or any \"play these items\" request, use the inline gen-ui ```gen-ui block with the built-in `MediaPlayer`, `Playlist`, or `Carousel` components instead (they are native, accessible, and savable to projects). Reserve `fauna_emit_widget` for genuinely interactive controls that have no gen-ui equivalent.",
+      "required": [
+        "bundle",
+        "tools"
+      ],
+      "parameters": [
+        "title",
+        "bundle",
+        "tools"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_feature_request_create",
+      "source": "self",
+      "category": "other",
+      "description": "Append a feature request or backlog item to the active project backlog (Kanban board). Use when the user describes wanting something new, when reflection surfaces a gap, or when debate produces a follow-up. Returns the created item id. Optional fields let you drop it straight into a column or assign it.",
+      "required": [
+        "title"
+      ],
+      "parameters": [
+        "title",
+        "body",
+        "tags",
+        "rice",
+        "column",
+        "assignee",
+        "priority",
+        "acceptance",
+        "projectId"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_file_search",
+      "source": "self",
+      "category": "file",
+      "description": "Find files by glob pattern. Faster than `find`/`ls` via fauna_shell_exec because it returns structured results and skips heavy directories (node_modules, .git, dist, build). Use this when you know the filename pattern but not the location. Examples: \"**/*.test.js\", \"src/**/auth-*.ts\", \"*.md\".",
+      "required": [
+        "pattern"
+      ],
+      "parameters": [
+        "pattern",
+        "cwd",
+        "maxResults"
+      ],
+      "sideEffects": [
+        "file-access"
+      ]
+    },
+    {
+      "name": "fauna_forget",
+      "source": "self",
+      "category": "memory",
+      "description": "Forget a specific fact by its ID. Use when the user asks you to forget something or a fact is no longer accurate.",
+      "required": [
+        "id"
+      ],
+      "parameters": [
+        "id"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_get_agent_instructions",
+      "source": "self",
+      "category": "other",
+      "description": "Load the FULL instructions for the currently active agent. If an agent is active (the system prompt will say \"Active Agent: <name>\"), you MUST call this once at the start of every turn before doing any other work — the system prompt only contains the agent's name and short description, and the full instructions (tool-use rules, output format, workflows) live in this tool's return value. If NO agent is active, do NOT call this tool — it is a no-op in that case and you already have your full default tool set. Pass `section` to fetch only one `## Heading` block from the body when you know which part you need (saves context on large agents).",
+      "required": [],
+      "parameters": [
+        "name",
+        "section"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_get_reference",
+      "source": "self",
+      "category": "other",
+      "description": "Load one reference document by name. Optionally pass a `section` to fetch only one `## Heading` block.",
+      "required": [
+        "name"
+      ],
+      "parameters": [
+        "name",
+        "section"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_get_settings",
+      "source": "self",
+      "category": "assistant",
+      "description": "Get current app settings: active model, thinking budget, max context turns, Figma MCP status.",
+      "required": [],
+      "parameters": [],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_get_skill",
+      "source": "self",
+      "category": "other",
+      "description": "Load one skill body (SKILL.md) by name. Optionally pass a `section` to fetch only one `## Heading` block. Skills are progressively disclosed — only call this once you know from fauna_list_skills which skill you need.",
+      "required": [
+        "name"
+      ],
+      "parameters": [
+        "name",
+        "section",
+        "agent"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_grep",
+      "source": "self",
+      "category": "file",
+      "description": "Search file contents for a pattern (literal or regex) with line numbers. Faster and safer than running `grep -r` via fauna_shell_exec — skips binary files and node_modules, returns structured hits. Use for \"find all calls to X\" or \"where is Y defined\". For multiple potential words, use a regex with alternation (e.g. \"foo|bar|baz\") in a single call rather than separate calls.",
+      "required": [
+        "query"
+      ],
+      "parameters": [
+        "query",
+        "isRegex",
+        "caseInsensitive",
+        "include",
+        "cwd",
+        "maxResults"
+      ],
+      "sideEffects": [
+        "file-access"
+      ]
+    },
+    {
+      "name": "fauna_image_edit",
+      "source": "self",
+      "category": "media",
+      "description": "Edit / inpaint an EXISTING image with a text prompt using OpenAI GPT Image. Provide the path to a source PNG/JPG and a prompt describing the change. Optionally provide a mask PNG (transparent areas = regions to edit). Returns {ok, results:[{path, url}]}. Requires an OpenAI key.",
+      "required": [
+        "imagePath",
+        "prompt"
+      ],
+      "parameters": [
+        "imagePath",
+        "prompt",
+        "maskPath",
+        "size",
+        "quality",
+        "destDir"
+      ],
+      "sideEffects": [
+        "mutates-state",
+        "network-capable"
+      ]
+    },
+    {
+      "name": "fauna_image_gen_status",
+      "source": "self",
+      "category": "media",
+      "description": "Check whether AI image generation is available (i.e. whether the user has configured an OpenAI key).",
+      "required": [],
+      "parameters": [],
+      "sideEffects": [
+        "network-capable"
+      ]
+    },
+    {
+      "name": "fauna_image_generate",
+      "source": "self",
+      "category": "media",
+      "description": "Generate ORIGINAL images from a text prompt using OpenAI GPT Image (gpt-image-1). Use this when the user wants a custom/illustrated/logo/concept image that stock photos cannot provide (prefer fauna_stock_image_search for real photographs). Writes PNG(s) to disk and returns {ok, results:[{path, url, revisedPrompt}]} where url is a /api/serve-media link you can embed directly in chat markdown as ![alt](url). Requires an OpenAI key (Settings → Authentication → API Keys). For low-quality fast drafts use quality \"low\"; use \"high\" for final assets, dense text, or detailed scenes. Set background \"transparent\" for logos/icons/cutouts.",
+      "required": [
+        "prompt"
+      ],
+      "parameters": [
+        "prompt",
+        "size",
+        "quality",
+        "background",
+        "count",
+        "destDir"
+      ],
+      "sideEffects": [
+        "mutates-state",
+        "network-capable"
+      ]
+    },
+    {
+      "name": "fauna_keyboard",
+      "source": "self",
+      "category": "project",
+      "description": "Type text or press a key combo on the user's machine. action=\"type\" types literal text (Unicode-safe). action=\"key\" presses a combo like \"cmd+c\", \"shift+tab\", \"ctrl+alt+delete\". Modifier names: cmd/command/meta, shift, alt/option, ctrl/control, fn. Key names: a-z, 0-9, return/enter, tab, space, escape/esc, delete/backspace, up/down/left/right, home/end, pageup/pagedown, f1-f12. REQUIRES Accessibility permission for Fauna on macOS.",
+      "required": [
+        "action"
+      ],
+      "parameters": [
+        "action",
+        "text",
+        "combo"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_layout_pcb",
+      "source": "self",
+      "category": "circuit",
+      "description": "Turn a circuit DSL into a physical board model: places footprints, assigns nets to copper pads, sizes the board, and (by default) auto-routes copper traces (etchings) on two layers with vias, leaving unroutable nets as airwires. Returns the board model. Use this BEFORE fauna_render_pcb / fauna_check_board / fauna_build_guide.",
+      "required": [
+        "doc"
+      ],
+      "parameters": [
+        "doc",
+        "route",
+        "variants",
+        "placements",
+        "board"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_lesson_create",
+      "source": "self",
+      "category": "media",
+      "description": "Generate an interactive whiteboard lesson and mount it INLINE in chat as a sandboxed runtime widget — NOT a video file. The widget shows a 1280×720 whiteboard that animates props (text, LaTeX equations, shapes, arrows, function plots, number lines, code, molecules, embedded svg/circuits) in sync with per-scene Kokoro narration. Use this whenever the user wants to be TAUGHT something visually — \"explain\", \"teach me\", \"walk me through\", \"interactive lesson on\", \"show me how X works\", anything where a moving illustration would help more than prose. You can also ground the lesson in a specific document by passing `source` (a local file path to a .pptx / .docx / .pdf / .md / .txt / .html, or a URL) — the slide deck or article text is extracted and fed to the script generator so the lesson follows that material. CRITICAL: when the user attaches/shares a .pptx (or .ppt/.key/.odp) deck and asks for a lesson or video, you MUST pass its absolute path as `source`. The attachment fence header includes \"(path: /abs/path/to/file.pptx)\" — use that exact path. With a pptx source, the lesson auto-switches to STRICT SLIDE MODE: each original slide is rasterized to PNG and used as the backdrop, narration is generated per slide, and no generic whiteboard scenes are drawn. Skipping `source` will produce a generic invented whiteboard that ignores the deck. Returns immediately after audio synthesis; the widget then plays scene-by-scene on user gesture. Do NOT also produce a separate fauna_speak / fauna_video_create call for the same topic.",
+      "required": [],
+      "parameters": [
+        "topic",
+        "source",
+        "durationMin",
+        "voice"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_lesson_get",
+      "source": "self",
+      "category": "media",
+      "description": "Load a previously generated lesson document by id. Returns the full DSL JSON including scene narration, actions, and audio URLs. Useful for inspection or re-mounting.",
+      "required": [
+        "id"
+      ],
+      "parameters": [
+        "id"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_list_circuit_symbols",
+      "source": "self",
+      "category": "circuit",
+      "description": "List the component types supported by fauna_render_circuit/fauna_validate_circuit, with their pin names and directions. Call this FIRST when the user asks for a circuit/schematic so you know the available symbols.",
+      "required": [],
+      "parameters": [],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_list_footprints",
+      "source": "self",
+      "category": "circuit",
+      "description": "List the physical PCB footprints (land patterns) available for each circuit component type, with variants (tht/smd). Call this when the user wants a PCB / board layout so you know which parts have footprints.",
+      "required": [],
+      "parameters": [],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_list_lesson_kinds",
+      "source": "self",
+      "category": "media",
+      "description": "Return the catalog of prop kinds and action verbs available to lesson DSLs. Call this before drafting a lesson manually if you need a reference; otherwise fauna_lesson_create handles DSL generation internally.",
+      "required": [],
+      "parameters": [],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_list_models",
+      "source": "self",
+      "category": "assistant",
+      "description": "List all available AI models. Returns model IDs, names, and vendors.",
+      "required": [],
+      "parameters": [],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_list_playbook",
+      "source": "dynamic-widget",
+      "category": "other",
+      "description": "List saved playbook widgets the user can re-launch. Returns metadata only (no bundle source).",
+      "required": [],
+      "parameters": [
+        "query",
+        "tag"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_list_projects",
+      "source": "self",
+      "category": "project",
+      "description": "List all projects. Returns project names, IDs, and root paths.",
+      "required": [],
+      "parameters": [],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_list_references",
+      "source": "self",
+      "category": "other",
+      "description": "List all available reference documents (server maps, schemas, glossaries, architecture notes). Cheap — returns no bodies. References answer \"what is this?\" questions; for \"how do I do this?\" workflows, use fauna_list_skills instead.",
+      "required": [],
+      "parameters": [],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_list_skills",
+      "source": "self",
+      "category": "other",
+      "description": "List all available skills (name + one-line description) for the active agent and globally. Cheap — returns no skill bodies. Use this to decide which skill to load with fauna_get_skill.",
+      "required": [],
+      "parameters": [
+        "agent"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_list_windows",
+      "source": "self",
+      "category": "desktop",
+      "description": "List the apps the user currently has visible on their desktop, including each window's title, position (x,y) and size (w,h), plus which app is frontmost and the main screen bounds. Use this whenever the user asks \"what apps are open\", \"which window is focused\", \"tile / arrange / move my windows\", or you need spatial context before calling fauna_arrange_windows. Works on macOS (requires Accessibility permission for Fauna) and Windows (uses User32).",
+      "required": [],
+      "parameters": [],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_load_widget_from_playbook",
+      "source": "dynamic-widget",
+      "category": "other",
+      "description": "Re-mount a previously saved widget from the playbook. This calls fauna_emit_widget internally with the saved bundle and tool manifest — the widget will be live for the rest of this conversation.",
+      "required": [
+        "idOrName"
+      ],
+      "parameters": [
+        "idOrName"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_mouse",
+      "source": "self",
+      "category": "desktop",
+      "description": "Control the user's mouse cursor: move, click, double-click, right-click, drag, or scroll. Uses macOS Quartz (built-in Swift) on darwin and PowerShell on Windows — no extra binaries required. REQUIRES Accessibility permission for Fauna on macOS. Coordinates are in screen pixels (origin top-left). Use fauna_list_windows first if you need the screen size, or fauna_ui_tree to find clickable elements symbolically. Actions: \"move\" (just move), \"click\" (move + left click), \"double_click\", \"right_click\", \"drag\" (press at x,y then release at toX,toY), \"scroll\" (wheel scroll dy lines at current position; positive=down).",
+      "required": [
+        "action"
+      ],
+      "parameters": [
+        "action",
+        "x",
+        "y",
+        "toX",
+        "toY",
+        "dy",
+        "silent"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_mouse_position",
+      "source": "self",
+      "category": "desktop",
+      "description": "Read the current mouse cursor position (x, y in screen pixels, top-left origin). Use to verify moves or capture where the user is pointing. REQUIRES Accessibility permission for Fauna on macOS.",
+      "required": [],
+      "parameters": [],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_plan",
+      "source": "self",
+      "category": "assistant",
+      "description": "Maintain a structured TODO list for the current task. Use a plan when: the task is non-trivial and spans multiple actions; there are logical phases or dependencies where sequencing matters; the user asked for more than one thing in a single prompt; you generate additional steps mid-flight. Invariants: exactly ONE item in_progress at a time; mark items completed individually (no batch completions); set an item to in_progress BEFORE working it (never jump pending → completed); finish with all items completed or explicitly canceled before ending the turn. MANDATORY: every plan MUST end with a verification/testing item that actually checks the work (e.g. \"Verify build succeeds and tests pass\", \"Run app and confirm output matches spec\", \"Lint + execute end-to-end smoke test\"). Do NOT mark the verify item completed unless you actually ran the check (shell, test runner, build, manual probe) and observed the expected result — claiming \"done\" without proof is a failure. If verification fails, add a fix item and re-run verify. High-quality plan example: [{\"id\":1,\"title\":\"Add CLI entry with file args\",\"status\":\"completed\"},{\"id\":2,\"title\":\"Parse Markdown via CommonMark\",\"status\":\"in-progress\"},{\"id\":3,\"title\":\"Apply semantic HTML template\",\"status\":\"not-started\"},{\"id\":4,\"title\":\"Handle code blocks, images, links\",\"status\":\"not-started\"},{\"id\":5,\"title\":\"Add error handling for invalid files\",\"status\":\"not-started\"},{\"id\":6,\"title\":\"Verify: run on sample.md and diff against expected.html\",\"status\":\"not-started\"}]. Low-quality plan (avoid — too vague AND missing verify): [{\"title\":\"Create CLI tool\"},{\"title\":\"Add Markdown parser\"},{\"title\":\"Convert to HTML\"}]. Pass the FULL list every call (both existing and new items).",
+      "required": [
+        "items"
+      ],
+      "parameters": [
+        "items",
+        "explanation"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_podcast",
+      "source": "self",
+      "category": "media",
+      "description": "Generate a multi-voice podcast / dialogue from an ordered list of speaker turns and return ONE audio URL (plus an absolute filesystem path) covering all turns concatenated with natural pauses between speakers. Use this when the user asks for a \"podcast\", \"dialogue\", \"conversation\", \"interview\", \"two-host\", or \"multi-voice\" reading — including \"make a podcast from this article\" (you script the back-and-forth first, then call this). After calling it, emit a gen-ui block with a MediaPlayer (type:\"audio\", src: returned url, title:<show title>). Do NOT set autoplay — the user clicks Play when ready. Returns {ok, url, path, durationSec, segmentCount} — `path` is a real .mp3 on disk usable as an ffmpeg input.",
+      "required": [
+        "segments"
+      ],
+      "parameters": [
+        "segments",
+        "gapSec",
+        "title"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_project_audit",
+      "source": "self",
+      "category": "project",
+      "description": "Audit the active project (or a named project) and propose ≤ N concrete work items based on its architecture. Walks rootPath, summarises the file tree + key config files (package.json, README, etc.), then prompts the model for high-value feature/refactor/test/docs/ci suggestions. New items land in the project backlog with source=\"reflection\" and column=\"backlog\" for human review. Dedup is by normalised title hash. Returns {added:[{id,title,priority}], skipped:[titles], summary:{...}}. Use when the user asks \"what should we work on next?\", \"audit this project\", or after you finish a major feature and want to surface follow-ups. Be selective — quality over quantity.",
+      "required": [],
+      "parameters": [
+        "projectId",
+        "maxProposals"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_read_file",
+      "source": "self",
+      "category": "file",
+      "description": "Read a UTF-8 text file from disk and get the contents back in the SAME assistant turn. PREFER this over running cat/head/tail via fauna_shell_exec — it returns structured data and is the canonical way to VERIFY edits before claiming a task is done.",
+      "required": [
+        "path"
+      ],
+      "parameters": [
+        "path",
+        "cwd",
+        "startLine",
+        "endLine",
+        "maxBytes"
+      ],
+      "sideEffects": [
+        "file-access"
+      ]
+    },
+    {
+      "name": "fauna_recall",
+      "source": "self",
+      "category": "memory",
+      "description": "Search your memory for facts about the user. Returns matching facts scored by relevance and recency. Call with empty keywords for the most recent facts. Scope defaults to the active project (with global facts included).",
+      "required": [],
+      "parameters": [
+        "keywords",
+        "scope"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_remember",
+      "source": "self",
+      "category": "memory",
+      "description": "Remember a fact about the user. Use when the user shares preferences, makes decisions, or gives context you should recall later. Facts are scoped to the active project by default; pass scope=\"global\" for facts that should apply across all projects. Use kind=\"temporal\" with expiresAt for time-bound facts (\"exam tomorrow\").",
+      "required": [
+        "text"
+      ],
+      "parameters": [
+        "text",
+        "category",
+        "scope",
+        "kind",
+        "expiresAt",
+        "supersedes"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_render_circuit",
+      "source": "self",
+      "category": "circuit",
+      "description": "Render a circuit schematic from a JSON DSL. Returns SVG markup the caller can embed in a gen-ui SVG block or an artifact. Component coords are in grid units (default 10 px). Wires reference \"compId.pinName\". Use fauna_list_circuit_symbols first to learn pin names.",
+      "required": [
+        "doc"
+      ],
+      "parameters": [
+        "doc"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_render_pcb",
+      "source": "self",
+      "category": "circuit",
+      "description": "Render a board model (from fauna_layout_pcb) as an SVG top view: FR-4 substrate, copper traces/etchings (top=red, bottom=blue), tinned solder pads + plated drill holes, silkscreen refdes, vias, and ratsnest airwires. Returns SVG markup to embed in a gen-ui SVG block. Pass the board returned by fauna_layout_pcb.",
+      "required": [],
+      "parameters": [
+        "doc",
+        "board",
+        "layers",
+        "pxmm"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_replace_string",
+      "source": "self",
+      "category": "file",
+      "description": "Replace one exact string in a file. Use only when a single localized change is clearer than a patch. For anything beyond one small substitution — multi-line edits, multiple hunks, or multi-file changes — PREFER fauna_apply_patch. The old_string must be unique; include 3–5 lines of surrounding context to disambiguate.",
+      "required": [
+        "path",
+        "old_string",
+        "new_string"
+      ],
+      "parameters": [
+        "path",
+        "cwd",
+        "old_string",
+        "new_string"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_retrieve_output",
+      "source": "self",
+      "category": "assistant",
+      "description": "Retrieve the FULL original output of an earlier tool call that was compressed/offloaded. When a tool result ends with a marker like `retrieve with fauna_retrieve_output(\"<hash>\")`, call this with that hash to get back the complete uncompressed content (e.g. the dropped rows of a large array or the elided middle of a long log). Only call this when you genuinely need the dropped detail — the compressed view usually suffices. PREFER fauna_write_offloaded when the goal is just to land the bytes on disk — it bypasses your context entirely.",
+      "required": [
+        "hash"
+      ],
+      "parameters": [
+        "hash"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_save_instruction",
+      "source": "self",
+      "category": "other",
+      "description": "Save a learned instruction to the Playbook. Use when you discover a successful strategy or pattern the user would want to reuse. The instruction persists across conversations.",
+      "required": [
+        "title",
+        "body"
+      ],
+      "parameters": [
+        "title",
+        "body",
+        "tags"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_save_widget_to_playbook",
+      "source": "dynamic-widget",
+      "category": "other",
+      "description": "Save the most recently emitted widget (by widgetId) into the playbook under a memorable name so the user can re-launch it on future tasks. Optionally add a description and tags.",
+      "required": [
+        "widgetId",
+        "name"
+      ],
+      "parameters": [
+        "widgetId",
+        "name",
+        "description",
+        "tags"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_screen_context",
+      "source": "self",
+      "category": "desktop",
+      "description": "ONE-CALL snapshot of what the user is currently looking at on their computer. Returns: frontmost app (name, bundleId, pid), focused window (title + screen bounds), display list, and a FLATTENED list of clickable/named Accessibility nodes (role, title, x/y/w/h, plus precomputed cx/cy center coords ready for fauna_mouse). Prefer this over chaining fauna_list_windows + fauna_ui_tree when starting a task in companion/Clippy mode — it gives the model immediate situational awareness in a single round-trip. Pass maxNodes (default 40) and depth (default 8) to control verbosity. macOS requires Accessibility permission.",
+      "required": [],
+      "parameters": [
+        "maxNodes",
+        "depth"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_send_notification",
+      "source": "self",
+      "category": "other",
+      "description": "Send a native OS notification to the user. Use for important alerts, completed background tasks, or urgent information that needs attention even if the user is not looking at the app.",
+      "required": [
+        "title",
+        "body"
+      ],
+      "parameters": [
+        "title",
+        "body"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_set_thinking_budget",
+      "source": "self",
+      "category": "other",
+      "description": "Set the extended thinking budget for reasoning models. The change takes effect on the next message. Use \"auto\" to let Fauna scale the budget to each question (low for simple Q&A, high for complex/agentic work).",
+      "required": [
+        "budget"
+      ],
+      "parameters": [
+        "budget"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_shell_exec",
+      "source": "self",
+      "category": "shell",
+      "description": "Run a shell command server-side and get the result back in the SAME assistant turn (no client round-trip). PREFER this over markdown ```bash blocks whenever tools are available — it keeps the agent loop running so you can chain steps without asking the user to continue. Output is captured and returned. SAFE commands (ls, cat, grep, git status, npm test, etc.) execute immediately. UNSAFE/destructive commands (rm -rf, sudo, dd, mkfs, curl|sh, etc.) are refused and you must fall back to a ```bash markdown block so the user can review and approve.",
+      "required": [
+        "command"
+      ],
+      "parameters": [
+        "command",
+        "cwd",
+        "timeoutMs",
+        "maxOutputBytes",
+        "reason"
+      ],
+      "sideEffects": [
+        "mutates-state",
+        "executes-process"
+      ]
+    },
+    {
+      "name": "fauna_simulate_circuit",
+      "source": "self",
+      "category": "circuit",
+      "description": "Compile the circuit DSL to a SPICE netlist and run ngspice to compute real behaviour (operating-point voltages/currents, transient waveforms, AC sweeps, DC sweeps). Requires `ngspice` on PATH; if missing, returns the netlist and an install hint. Use this for questions like \"does it oscillate\", \"what is V_out\", \"what current flows\".",
+      "required": [
+        "doc"
+      ],
+      "parameters": [
+        "doc",
+        "analysis"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_speak",
+      "source": "self",
+      "category": "media",
+      "description": "Synthesize text into an audio file with the bundled Kokoro neural TTS, returning a URL the renderer can play AND an absolute filesystem path you can hand to ffmpeg / shell tools. Use this when the user asks to \"read aloud\", \"read me this article\", \"say this\", \"narrate\", or otherwise wants spoken audio for a single chunk of text. After calling it, emit a gen-ui block with a MediaPlayer (type:\"audio\", src: returned url, title: <short label>) so the audio appears inline. Do NOT set autoplay — the user clicks Play when ready. Do NOT use this for multi-speaker podcasts — use fauna_podcast for that. Returns {ok, url, path, durationSec, voice} — `path` is a real .mp3 on disk usable as an ffmpeg input (e.g. `ffmpeg -i <path> -i video.mp4 -c:v copy -shortest out.mp4`).",
+      "required": [
+        "text"
+      ],
+      "parameters": [
+        "text",
+        "voice"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_stock_image_download",
+      "source": "self",
+      "category": "media",
+      "description": "Download stock images (typically the results of fauna_stock_image_search) to a local folder so they can be referenced from generated HTML, slide decks, PDFs, etc. Returns the same items with an added `path` field per image. Always credit the photographer (returned in the search results) in any produced artefact.",
+      "required": [
+        "items",
+        "destDir"
+      ],
+      "parameters": [
+        "items",
+        "destDir",
+        "prefix"
+      ],
+      "sideEffects": [
+        "network-capable"
+      ]
+    },
+    {
+      "name": "fauna_stock_image_providers",
+      "source": "self",
+      "category": "media",
+      "description": "List which stock-image providers the user has configured keys for (Pexels / Unsplash / Pixabay).",
+      "required": [],
+      "parameters": [],
+      "sideEffects": [
+        "network-capable"
+      ]
+    },
+    {
+      "name": "fauna_stock_image_search",
+      "source": "self",
+      "category": "media",
+      "description": "Search Pexels / Unsplash / Pixabay for photographs and return remote URLs + credit info. Auto-uses whichever provider key the user has configured (fallback in that order). Returns {ok, results:[{url, thumb, width, height, photographer, sourceUrl, source}]}. Use BEFORE generating websites, slide decks, blog posts, or anything that benefits from real imagery. To embed straight away use the returned url; to bundle into a project folder follow up with fauna_stock_image_download.",
+      "required": [
+        "query"
+      ],
+      "parameters": [
+        "query",
+        "aspect",
+        "count",
+        "providers",
+        "mode"
+      ],
+      "sideEffects": [
+        "network-capable"
+      ]
+    },
+    {
+      "name": "fauna_substep",
+      "source": "self",
+      "category": "assistant",
+      "description": "Stream a tiny \"what I am doing right now\" line that appears NESTED under the current in-progress plan step. Use this INSTEAD of long narrative prose between actions. Each call replaces the previous live substep for that step (the user only sees the latest). When the parent plan item flips to completed, all its substeps collapse into a click-to-expand history. Keep messages SHORT (3-8 words, action verbs): \"Reading vite.config.ts\", \"Wiring API route\", \"Creating migration 0001_init\". Call this BEFORE each tool action or whenever you would otherwise write a status sentence.",
+      "required": [
+        "message"
+      ],
+      "parameters": [
+        "stepId",
+        "message"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_switch_model",
+      "source": "self",
+      "category": "assistant",
+      "description": "Switch the active AI model. The change takes effect on the next message (not the current one).",
+      "required": [
+        "model"
+      ],
+      "parameters": [
+        "model"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_ui_tree",
+      "source": "self",
+      "category": "desktop",
+      "description": "Get the Accessibility tree of the user's focused window — every button, link, text field, menu item, etc. with role, title, screen bounds (x,y,w,h), and tree path. Use this BEFORE fauna_mouse to click elements symbolically (read coordinates from the tree) instead of guessing pixels. Pass clickableOnly=true to filter to interactive elements only. macOS uses AXUIElement; Windows uses UI Automation. REQUIRES Accessibility permission for Fauna on macOS.",
+      "required": [],
+      "parameters": [
+        "maxDepth",
+        "clickableOnly"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_validate_circuit",
+      "source": "self",
+      "category": "circuit",
+      "description": "Structural lint of a circuit DSL (no simulation). Detects power shorts, dangling pins, floating islands, duplicate drivers, reversed polarized components, and missing decoupling. ALWAYS call this after fauna_render_circuit and surface errors/warnings to the user.",
+      "required": [
+        "doc"
+      ],
+      "parameters": [
+        "doc"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_verify_build",
+      "source": "self",
+      "category": "other",
+      "description": "Verify a scaffolded app actually builds. Runs `npm run build` (or the script you specify) in the project root, returns exit code + last 80 lines of output. MANDATORY before marking a build/scaffold plan complete — do NOT claim success without calling this and seeing exitCode:0.",
+      "required": [],
+      "parameters": [
+        "projectId",
+        "cwd",
+        "script",
+        "timeoutMs"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_video_create",
+      "source": "self",
+      "category": "media",
+      "description": "Create a short-form video generation job and emit the Video Studio preview widget. The pipeline (script → terms → audio → subtitle → footage → render) starts automatically and streams progress; the widget shows live updates. Use whenever the user asks to make / generate / produce a video, short, Reel, TikTok, or Shorts. Do NOT also call fauna_video_run_all — it's already running. Set autorun:false only if the user wants to edit the params before kicking off render. AFTER calling this tool, keep your chat reply to ONE short sentence (e.g. \"On it — Video Studio is below.\"). The widget already shows the subject, duration, aspect, voice, progress chips, and iteration buttons — do NOT re-list any of that in chat, and do NOT suggest next actions like \"you can edit the script\" / \"switch to 16:9\" since those buttons are visible in the widget itself.",
+      "required": [
+        "subject"
+      ],
+      "parameters": [
+        "subject",
+        "durationSec",
+        "aspect",
+        "voice",
+        "language",
+        "localFolder",
+        "autorun"
+      ],
+      "sideEffects": [
+        "mutates-state",
+        "network-capable"
+      ]
+    },
+    {
+      "name": "fauna_video_get",
+      "source": "self",
+      "category": "media",
+      "description": "Return current job state — params, artifacts, steps completed, error info, and asset paths (final.mp4, audio.mp3, subtitles.srt).",
+      "required": [
+        "jobId"
+      ],
+      "parameters": [
+        "jobId"
+      ],
+      "sideEffects": [
+        "network-capable"
+      ]
+    },
+    {
+      "name": "fauna_video_list",
+      "source": "self",
+      "category": "media",
+      "description": "List all video jobs (most recent first). Returns id, subject, state, and timestamps.",
+      "required": [],
+      "parameters": [],
+      "sideEffects": [
+        "network-capable"
+      ]
+    },
+    {
+      "name": "fauna_video_patch",
+      "source": "self",
+      "category": "file",
+      "description": "Edit a job between steps. Set any of {subject, durationSec, aspect, voice, language, script, terms, bgmFile}. Patching script auto-invalidates audio/subtitle/render so they re-run; changing voice invalidates audio onward; aspect invalidates materials+render.",
+      "required": [
+        "jobId"
+      ],
+      "parameters": [
+        "jobId",
+        "subject",
+        "durationSec",
+        "aspect",
+        "voice",
+        "language",
+        "script",
+        "terms",
+        "bgmFile"
+      ],
+      "sideEffects": [
+        "mutates-state",
+        "network-capable"
+      ]
+    },
+    {
+      "name": "fauna_video_run_all",
+      "source": "self",
+      "category": "media",
+      "description": "Run the entire pipeline for a job end-to-end (script → render). Idempotent — already-completed steps are skipped. Streams progress as tool_call events.",
+      "required": [
+        "jobId"
+      ],
+      "parameters": [
+        "jobId"
+      ],
+      "sideEffects": [
+        "mutates-state",
+        "network-capable"
+      ]
+    },
+    {
+      "name": "fauna_video_step",
+      "source": "self",
+      "category": "media",
+      "description": "Run a single pipeline step. Use to re-run a specific step after editing (e.g. step=\"render\" after the user tweaks the script).",
+      "required": [
+        "jobId",
+        "step"
+      ],
+      "parameters": [
+        "jobId",
+        "step"
+      ],
+      "sideEffects": [
+        "network-capable"
+      ]
+    },
+    {
+      "name": "fauna_workitem_claim",
+      "source": "self",
+      "category": "project",
+      "description": "Mark that you are taking ownership of a work item. Sets claimedBy=\"ai:<agent>\" so other AI agents skip it and humans can see who is on the card. Call this right before you start the work, typically alongside a move to in_progress.",
+      "required": [
+        "itemId"
+      ],
+      "parameters": [
+        "itemId",
+        "projectId"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_workitem_comment",
+      "source": "self",
+      "category": "project",
+      "description": "Post a comment on a work item — status update, question for the user, blocker, link to relevant code. Comments appear in the card modal and are visible to humans. Use this to leave breadcrumbs when handing the card off or pausing for input.",
+      "required": [
+        "itemId",
+        "body"
+      ],
+      "parameters": [
+        "itemId",
+        "body",
+        "projectId"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_workitem_move",
+      "source": "self",
+      "category": "project",
+      "description": "Move a work item between Kanban columns. Use this when you finish a phase of work (move \"in_progress\" → \"review\", then \"review\" → \"done\"). The AI may only move cards forward (todo → in_progress → review → done → archived). Returns the updated item.",
+      "required": [
+        "itemId",
+        "column"
+      ],
+      "parameters": [
+        "itemId",
+        "column",
+        "claim",
+        "projectId"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_workitem_update",
+      "source": "self",
+      "category": "project",
+      "description": "Edit a work item's title, body, acceptance criteria, priority, tags, assignee, or verifyCommand. Use this when you refine a card after research or when you discover the original scope was wrong. Set `verifyCommand` to a shell command (e.g. \"npx vitest run tests/my-feature.test.js\") so the autopilot can prove the work is done before allowing a move to \"done\". Does NOT move columns — use fauna_workitem_move for that.",
+      "required": [
+        "itemId"
+      ],
+      "parameters": [
+        "itemId",
+        "title",
+        "body",
+        "acceptance",
+        "priority",
+        "tags",
+        "assignee",
+        "verifyCommand",
+        "projectId"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_workitem_verify",
+      "source": "self",
+      "category": "project",
+      "description": "Run the verifier for a Kanban work item and record the result on the card. Resolution order for the command: 1) the card's `verifyCommand` (per-card override, settable via fauna_workitem_update), 2) the project's `qa.command`, 3) none → skipped pass. Runs the shell command with cwd=project.rootPath, captures stdout/stderr (clipped to 8 KB), times out at 5 min. On exit-code 0 the card is marked verified=true and you may move it to \"done\"; non-zero blocks the done move. MUST be called before fauna_workitem_move to column=\"done\" on any project that has a verifier — otherwise the move is rejected. The result is also appended as a comment.",
+      "required": [
+        "itemId"
+      ],
+      "parameters": [
+        "itemId",
+        "projectId",
+        "timeoutMs"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_write_file",
+      "source": "self",
+      "category": "file",
+      "description": "Write a brand-new file or fully replace one. PREFER fauna_apply_patch for edits to existing files — only reach for fauna_write_file when the file does not exist yet or you are replacing it wholesale. Writes server-side with temp+rename and returns path/bytes/sha256 without rendering file bytes in chat.",
+      "required": [
+        "path",
+        "content"
+      ],
+      "parameters": [
+        "path",
+        "cwd",
+        "content",
+        "append",
+        "overwrite",
+        "minBytes",
+        "minLines",
+        "sha256",
+        "backup"
+      ],
+      "sideEffects": [
+        "mutates-state",
+        "file-access"
+      ]
+    },
+    {
+      "name": "fauna_write_files",
+      "source": "self",
+      "category": "file",
+      "description": "Fast VS Code-style bulk file write. Prefer this for projects and multi-file changes instead of file-plan markdown. Preflights all files, writes server-side with temp+rename, and returns compact results.",
+      "required": [
+        "files"
+      ],
+      "parameters": [
+        "cwd",
+        "expected_file_count",
+        "files",
+        "backup"
+      ],
+      "sideEffects": [
+        "mutates-state",
+        "file-access"
+      ]
+    },
+    {
+      "name": "fauna_write_offloaded",
+      "source": "self",
+      "category": "file",
+      "description": "Write the FULL original of an offloaded tool result directly to disk WITHOUT loading the bytes through your context. Use this whenever you see an offload marker like `[fauna] ⚠️ OUTPUT TRUNCATED ... hash \"<hash>\"` and your goal is to save that content (CSV, JSON dump, log) to a file. This is dramatically cheaper than fauna_retrieve_output + fauna_write_file because the bytes never pass through the model. Returns {ok, path, bytes, sha256, op}. Set append:true to append to an existing file (use this for batched dumps).",
+      "required": [
+        "hash",
+        "path"
+      ],
+      "parameters": [
+        "hash",
+        "path",
+        "append",
+        "backup"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    }
+  ]
+}

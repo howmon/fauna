@@ -24,6 +24,7 @@ import os from 'os';
 import crypto from 'crypto';
 import { chunkText } from './chunker.js';
 import { embedTexts, DEFAULT_EMBED_MODEL, prepareQuery, scoreStored, hasEmbedding, prepareForStorage } from './embeddings.js';
+import { appendIngestionDiagnostics } from './ingestion-diagnostics.js';
 
 const CONFIG_DIR  = path.join(os.homedir(), '.config', 'fauna');
 const CHUNKS_FILE = path.join(CONFIG_DIR, 'context-chunks.json');
@@ -81,7 +82,7 @@ function _docIdFor(sourceId, sourcePath) {
  */
 export async function ingestDocument(input, opts = {}) {
   if (!input || !input.text || !String(input.text).trim()) {
-    return { ok: false, error: 'text is required' };
+    return appendIngestionDiagnostics({ ok: false, error: 'text is required' }, input || {});
   }
   const containerTag = input.containerTag || GLOBAL_TAG;
   const sourceId    = input.sourceId    || input.sourcePath || _uid('src');
@@ -92,13 +93,13 @@ export async function ingestDocument(input, opts = {}) {
   const model       = opts.model || DEFAULT_EMBED_MODEL;
 
   const pieces = chunkText(input.text, input.chunkOpts || {});
-  if (!pieces.length) return { ok: false, error: 'empty after chunking' };
+  if (!pieces.length) return appendIngestionDiagnostics({ ok: false, error: 'empty after chunking' }, input);
 
   let vectors;
   try {
     vectors = await embedTexts(pieces.map(p => p.text), { model, embedder: opts.embedder });
   } catch (e) {
-    return { ok: false, error: `embedding failed: ${e.message}` };
+    return appendIngestionDiagnostics({ ok: false, error: `embedding failed: ${e.message}` }, input);
   }
 
   const now = Date.now();
@@ -130,7 +131,7 @@ export async function ingestDocument(input, opts = {}) {
     _chunks.splice(0, _chunks.length - MAX_CHUNKS);
   }
   _save();
-  return { ok: true, docId, added: newChunks.length, replaced };
+  return appendIngestionDiagnostics({ ok: true, docId, added: newChunks.length, replaced }, input);
 }
 
 /**

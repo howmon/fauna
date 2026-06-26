@@ -9,6 +9,7 @@
 //
 // Deps (server.js owns top-level state, this module is stateless):
 //   - figma                   : figma bridge (listFiles/getMcpTools/executeToolDef/callMcpTool/log)
+//   - customMcp               : custom MCP bridge (getStatus/getTools/callTool)
 //   - agentsDir               : ~/.config/fauna/agents
 //   - browserBuildContext     : BROWSER_BUILD_CONTEXT system-prompt block
 //   - buildBrowserExtContext  : () => string  (extension context, dynamic)
@@ -52,8 +53,31 @@ import { summarizeHistory } from '../lib/summarize-history.js';
 import { withTimeout } from '../lib/async-utils.js';
 import { loadAgentManifest } from '../lib/agent-manifest.js';
 
+function buildCustomMcpContext(status) {
+  const servers = Array.isArray(status?.servers) ? status.servers : [];
+  if (!servers.length) return '';
+
+  const lines = servers.slice(0, 20).map((server) => {
+    const flags = [];
+    flags.push(server.enabled ? 'enabled' : 'disabled');
+    flags.push(server.running ? 'running' : 'stopped');
+    if (server.auth?.requiresAuth) flags.push(server.auth.authorized ? 'auth ok' : 'auth required');
+    const toolNames = Array.isArray(server.tools) && server.tools.length
+      ? `; tools: ${server.tools.slice(0, 12).join(', ')}${server.tools.length > 12 ? ', ...' : ''}`
+      : '';
+    const error = server.lifecycle?.lastError ? `; last error: ${String(server.lifecycle.lastError).slice(0, 180)}` : '';
+    const url = server.url ? `; url: ${server.url}` : '';
+    return `- ${server.name || server.id} (${server.transport || 'unknown'}, ${flags.join(', ')}${url}${toolNames}${error})`;
+  }).join('\n');
+
+  return '\n## Enabled MCP Servers\n' +
+    'Fauna custom MCP servers are part of this chat context. Enabled HTTP MCP servers are auto-connected for chat when possible; running servers expose their tools as callable function tools. Stdio custom MCP servers are listed for awareness, but only HTTP custom MCP tools are currently callable from chat.\n' +
+    lines;
+}
+
 export function registerChatRoute(app, {
   figma,
+  customMcp = null,
   agentsDir,
   browserBuildContext = '',
   buildBrowserExtContext = () => '',
@@ -354,6 +378,28 @@ export function registerChatRoute(app, {
           figmaFilesCtx += `\n\n## User-selected Figma Targets\nPrefer these files for write actions in this turn:\n${selectedEntries}\nWhen calling figma_execute without fileKey:\n- If exactly one selected file exists, use it.\n- If multiple selected files exist, prefer the most recently active selected file.`;
         }
       }
+      let mcpTools;
+      const customMcpToolNames = new Set();
+      let customMcpCtx = '';
+      if (!isCLI && !noTools && customMcp?.getTools) {
+        try {
+          const customTools = await customMcp.getTools({ autoStartEnabled: true });
+          if (Array.isArray(customTools) && customTools.length) {
+            mcpTools = [...(mcpTools || []), ...customTools];
+            for (const tool of customTools) {
+              const name = tool?.function?.name || tool?.name;
+              if (name) customMcpToolNames.add(name);
+            }
+          }
+        } catch (e) {
+          console.warn('[chat] custom MCP tool discovery failed:', e?.message || e);
+        }
+        try {
+          if (customMcp?.getStatus) customMcpCtx = buildCustomMcpContext(await customMcp.getStatus({ includeTools: true }));
+        } catch (e) {
+          console.warn('[chat] custom MCP status failed:', e?.message || e);
+        }
+      }
       const cliHint = isCLI ? `\n\n## Output Format\nYou are running in a terminal CLI. Respond in plain, readable text. Do NOT use markdown headers (###), horizontal rules (---), or emojis. Use plain bullet points (- or *) only when a list genuinely helps. Be concise and direct. Never emit browser-action or browser-ext-action code blocks — those do not work in the terminal.` : '';
       // Sub-agents (isDelegation=true) need to know about the same browser /
       // browser-ext / gen-UI tooling the orchestrator has, otherwise they
@@ -497,6 +543,7 @@ export function registerChatRoute(app, {
         activePlanCtx,
         shellExecReminder,
         figmaFilesCtx,
+        customMcpCtx,
       ].filter(Boolean).join('\n');
       if (fullSystem) allMessages.push({ role: 'system', content: fullSystem });
 
@@ -732,11 +779,11 @@ export function registerChatRoute(app, {
       }
 
       // Fetch Figma MCP tools and inject layout knowledge if requested
-      let mcpTools;
       if (useFigmaMCP) {
-        try { mcpTools = await figma.getMcpTools(); } catch (_) {
+        let figmaMcpTools;
+        try { figmaMcpTools = await figma.getMcpTools(); } catch (_) {
           // Fallback: always expose figma_execute even when port-3845 is unavailable
-          mcpTools = [];
+          figmaMcpTools = [];
         }
         // figma_execute (plugin bridge) is independent of the Dev Mode MCP
         // server on port 3845 — it talks to the Figma plugin directly via the
@@ -744,10 +791,15 @@ export function registerChatRoute(app, {
         // the model receives Dev Mode tools (which need the file focused in
         // Figma desktop) but cannot script the plugin, leading to the
         // "I don't have a figma_execute tool" failure mode.
-        if (!Array.isArray(mcpTools)) mcpTools = [];
-        if (!mcpTools.some(t => t && t.function && t.function.name === 'figma_execute')) {
-          mcpTools.push(figma.executeToolDef);
+        if (!Array.isArray(figmaMcpTools)) figmaMcpTools = [];
+        if (!figmaMcpTools.some(t => t && t.function && t.function.name === 'figma_execute')) {
+          figmaMcpTools.push(figma.executeToolDef);
         }
+        for (const tool of figmaMcpTools) {
+          const name = tool?.function?.name || tool?.name;
+          if (name) customMcpToolNames.delete(name);
+        }
+        mcpTools = [...figmaMcpTools, ...(mcpTools || [])];
       }
 
       // Load agent tools if an agent is active
@@ -1745,6 +1797,14 @@ export function registerChatRoute(app, {
                   }).catch(err => ({ ok: false, error: err.message }));
                   result = typeof rpcResult === 'string' ? rpcResult : JSON.stringify(rpcResult);
                 }
+              }
+              // Route to custom MCP servers discovered from Settings -> Custom Servers.
+              else if (customMcpToolNames.has(toolName) && customMcp?.callTool) {
+                result = await withTimeout(
+                  customMcp.callTool(toolName, args),
+                  30000,
+                  'custom MCP tool "' + toolName + '"'
+                );
               }
               // Route to self-tools (memory, models, settings, etc.)
               else if (isSelfTool(toolName)) {
