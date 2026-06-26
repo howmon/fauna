@@ -1186,6 +1186,7 @@ export function registerChatRoute(app, {
       let widgetClaimNudges = 0;
       const MAX_WIDGET_CLAIM_NUDGES = 1;
       let forceEmitWidgetNext = false; // set when re-prompting; consumed by params builder
+      let noOutputStreamRetries = 0;
       // Hand-authored-circuit verifier state. If the model emits an <svg> for a
       // circuit request that lacks the engine provenance marker (data-fauna-*),
       // the SVG was invented rather than produced by fauna_render_circuit — we
@@ -2057,8 +2058,26 @@ export function registerChatRoute(app, {
           allMessages.push({ role: 'user', content: 'Your previous response was cut off mid-output. Continue EXACTLY where you left off — do NOT repeat anything already written. Do NOT narrate or explain, just output the remaining content.' });
           // keep continueLoop = true
         } else {
+          if (!assistantText.trim() && pendingCalls.length === 0 && !streamUsage && !finishReason) {
+            if (noOutputStreamRetries < 1) {
+              noOutputStreamRetries++;
+              effectiveThinkingBudget = 'off';
+              console.log('[chat] empty no-finish stream — retrying once with thinking disabled');
+              allMessages.push({ role: 'user', content: '[System: The previous model stream ended with no text, no tool call, no finish reason, and no usage. Retry this turn now with no extended thinking. If the user just confirmed a previously offered action, perform that action with the appropriate tool call instead of thinking silently.]' });
+              // keep continueLoop = true
+            } else {
+              console.log('[chat] empty no-finish stream repeated — surfacing error');
+              send({
+                type: 'error',
+                error: 'The model returned an empty response without a finish reason, so Fauna could not act. Please try again or lower the thinking budget.'
+              });
+              send({ type: 'done', finish_reason: 'empty_response', usage: null,
+                reasoning: sawReasoning ? { durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
+              });
+              continueLoop = false;
+            }
           // If tools were called but no text was produced, prompt a summary so the user sees something
-          if (toolCallCount > 0 && !assistantText.trim() && continueCount < MAX_CONTINUES) {
+          } else if (toolCallCount > 0 && !assistantText.trim() && continueCount < MAX_CONTINUES) {
             continueCount++;
             console.log('[chat] tool calls completed but no text output — prompting summary');
             allMessages.push({ role: 'assistant', content: '' });
