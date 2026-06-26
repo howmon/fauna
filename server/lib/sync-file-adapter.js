@@ -60,6 +60,11 @@ const MAX_FILE_BYTES = Number(process.env.FAUNA_SYNC_FILE_MAX_BYTES) || (20 * 10
 // Periodic local-edit scan cadence.
 const SCAN_INTERVAL_MS = Number(process.env.FAUNA_SYNC_FILE_SCAN_MS) || 10_000;
 const RECENT_TTL_MS = 5000;
+// Folder sync can be expensive on startup because it walks project roots.
+// Default to active-project scanning; set FAUNA_SYNC_FILE_MODE=all to restore
+// the legacy behavior of scanning/backfilling every project folder.
+const FILE_SYNC_MODE = String(process.env.FAUNA_SYNC_FILE_MODE || 'active').toLowerCase();
+const ACTIVE_TTL_MS = Number(process.env.FAUNA_SYNC_FILE_ACTIVE_TTL_MS) || (4 * 60 * 60 * 1000);
 
 // ── State ─────────────────────────────────────────────────────────────────
 // LWW version map fed by the engine's getLastSeenVersion / setLastSeenVersion
@@ -73,6 +78,7 @@ const _localHashes = new Map();
 const _recentlyWritten = new Map(); // id → { hash, ts }
 let _scanTimer = null;
 let _scanning = false;
+const _activeProjects = new Map(); // projectId -> expiresAt
 // Per-project flag: have we completed at least one full scan for this
 // project since the process started? The very first scan after launch
 // seeds `_localHashes` from disk — there's nothing in memory to compare
@@ -82,6 +88,13 @@ let _scanning = false;
 const _seededProjects = new Set();
 let _installed = false;
 let _projectManagerRef = null;
+
+export function activateProjectFileSync(projectId, opts = {}) {
+  if (!projectId) return false;
+  const ttlMs = Number(opts.ttlMs) || ACTIVE_TTL_MS;
+  _activeProjects.set(String(projectId), Date.now() + Math.max(1000, ttlMs));
+  return true;
+}
 
 // Composite id format is `${projectId}:b64:${base64url(relPath)}` so the
 // resulting URL segment (after encodeURIComponent) contains no '/' chars.
@@ -362,7 +375,7 @@ export function installFileAdapter({ projectManager, onApplied } = {}) {
     // the renderer instead of going dark for the entire walk.
     async listAllIds(opts = {}) {
       const out = [];
-      const projects = _listProjects();
+      const projects = _listFileSyncProjects();
       const YIELD_EVERY = 50;
       const onTick = (typeof opts.onTick === 'function') ? opts.onTick : null;
       let counter = 0;
@@ -411,6 +424,26 @@ function _listProjects() {
   return [];
 }
 
+function _fileSyncModeIsAll() {
+  return FILE_SYNC_MODE === 'all' || FILE_SYNC_MODE === 'true' || FILE_SYNC_MODE === '1';
+}
+
+function _isProjectFileSyncActive(project) {
+  if (!project || !project.id) return false;
+  if (_fileSyncModeIsAll()) return true;
+  if (project.fileSyncEnabled === true) return true;
+  const id = String(project.id);
+  const expiresAt = _activeProjects.get(id) || 0;
+  if (expiresAt > Date.now()) return true;
+  if (expiresAt) _activeProjects.delete(id);
+  const lastActiveAt = Date.parse(project.lastActiveAt || '');
+  return Number.isFinite(lastActiveAt) && (Date.now() - lastActiveAt) <= ACTIVE_TTL_MS;
+}
+
+function _listFileSyncProjects() {
+  return _listProjects().filter(_isProjectFileSyncActive);
+}
+
 // path.resolve + containment check. Returns null if the target escapes
 // the root (defense against `..` in payload.relPath).
 function _safeJoin(root, relPath) {
@@ -435,7 +468,7 @@ export async function _scanOnce() {
   if (_scanning) return;
   _scanning = true;
   try {
-    const projects = _listProjects();
+    const projects = _listFileSyncProjects();
     for (const p of projects) {
       if (!p || !p.id || !p.rootPath) continue;
       const root = p.rootPath;
@@ -499,12 +532,14 @@ export function _resetForTests() {
   _localHashes.clear();
   _recentlyWritten.clear();
   _seededProjects.clear();
+  _activeProjects.clear();
   _installed = false;
   _projectManagerRef = null;
 }
 
 export const _internals = {
   IGNORE_DIRS, IGNORE_FILES, MAX_FILE_BYTES, SCAN_INTERVAL_MS,
-  _localHashes, _recentlyWritten, _versions,
+  FILE_SYNC_MODE, ACTIVE_TTL_MS,
+  _localHashes, _recentlyWritten, _versions, _activeProjects,
   _compositeId, _splitId, _sha1, _isIgnoredPath, _safeJoin,
 };

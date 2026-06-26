@@ -20,6 +20,14 @@ export function registerProjectRoutes(app, deps) {
     } catch (_) { /* engine optional */ }
   }
 
+  let _syncFileAdapter = null;
+  async function _activateProjectFiles(id) {
+    try {
+      if (!_syncFileAdapter) _syncFileAdapter = await import('../lib/sync-file-adapter.js');
+      _syncFileAdapter.activateProjectFileSync(id);
+    } catch (_) { /* file sync optional */ }
+  }
+
   const {
     fs,
     createProject,
@@ -128,6 +136,7 @@ export function registerProjectRoutes(app, deps) {
 
   app.post('/api/projects/:id/touch', (req, res) => {
     touchProject(req.params.id);
+    _activateProjectFiles(req.params.id);
     res.json({ ok: true });
   });
 

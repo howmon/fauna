@@ -39,10 +39,14 @@ beforeEach(async () => {
   originalEnv = {
     FAUNA_SYNC_DIR: process.env.FAUNA_SYNC_DIR,
     FAUNA_SYNC_FILE_SCAN_MS: process.env.FAUNA_SYNC_FILE_SCAN_MS,
+    FAUNA_SYNC_FILE_MODE: process.env.FAUNA_SYNC_FILE_MODE,
+    FAUNA_SYNC_FILE_ACTIVE_TTL_MS: process.env.FAUNA_SYNC_FILE_ACTIVE_TTL_MS,
   };
   process.env.FAUNA_SYNC_DIR = syncDir;
   // Make the scan loop effectively dormant — tests call _scanOnce() directly.
   process.env.FAUNA_SYNC_FILE_SCAN_MS = '3600000';
+  delete process.env.FAUNA_SYNC_FILE_MODE;
+  delete process.env.FAUNA_SYNC_FILE_ACTIVE_TTL_MS;
   vi.resetModules();
 });
 
@@ -247,7 +251,17 @@ describe('file adapter load/save/delete', () => {
 });
 
 describe('listAllIds bootstrap', () => {
-  it('returns every eligible file across every project', async () => {
+  it('skips dormant projects by default', async () => {
+    await fsp.writeFile(path.join(rootA, 'a.txt'), '1');
+    const projects = [
+      { id: 'pa', name: 'A', rootPath: rootA },
+    ];
+    const { engine } = await boot({ projects });
+    const a = engine.getAdapter('project_file');
+    expect(await a.listAllIds()).toEqual([]);
+  });
+
+  it('returns every eligible file across every active project', async () => {
     await fsp.writeFile(path.join(rootA, 'a.txt'), '1');
     await fsp.writeFile(path.join(rootB, 'b.txt'), '2');
     await fsp.mkdir(path.join(rootB, 'src'), { recursive: true });
@@ -256,7 +270,9 @@ describe('listAllIds bootstrap', () => {
       { id: 'pa', name: 'A', rootPath: rootA },
       { id: 'pb', name: 'B', rootPath: rootB },
     ];
-    const { engine } = await boot({ projects });
+    const { engine, adapter } = await boot({ projects });
+    adapter.activateProjectFileSync('pa');
+    adapter.activateProjectFileSync('pb');
     const a = engine.getAdapter('project_file');
     const ids = (await a.listAllIds()).map(r => r.id).sort();
     // Composite ids are emitted in the base64url form so the URL segment
@@ -278,6 +294,7 @@ describe('_scanOnce anti-loop', () => {
   it('does not re-enqueue a file the adapter just wrote', async () => {
     const projA = { id: 'proj_a', name: 'A', rootPath: rootA };
     const { engine, adapter } = await boot({ projects: [projA] });
+    adapter.activateProjectFileSync('proj_a');
     const a = engine.getAdapter('project_file');
     const enqueueSpy = vi.spyOn(engine, 'enqueueChange');
     const content = Buffer.from('payload from B').toString('base64');
@@ -293,6 +310,7 @@ describe('_scanOnce anti-loop', () => {
     const projA = { id: 'proj_a', name: 'A', rootPath: rootA };
     await fsp.writeFile(path.join(rootA, 'edit.txt'), 'v1');
     const { engine, adapter } = await boot({ projects: [projA] });
+    adapter.activateProjectFileSync('proj_a');
     // First scan: seeds the hash cache (treats every existing file as new).
     const enqueueSpy = vi.spyOn(engine, 'enqueueChange');
     await adapter._scanOnce();
@@ -310,6 +328,7 @@ describe('_scanOnce anti-loop', () => {
     const projA = { id: 'proj_a', name: 'A', rootPath: rootA };
     await fsp.writeFile(path.join(rootA, 'doomed.txt'), 'x');
     const { engine, adapter } = await boot({ projects: [projA] });
+    adapter.activateProjectFileSync('proj_a');
     await adapter._scanOnce(); // seed cache
     const enqueueSpy = vi.spyOn(engine, 'enqueueChange');
     await fsp.unlink(path.join(rootA, 'doomed.txt'));
