@@ -1,3 +1,6 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createFaunaBrowserManager } from '../server/browser/browser-manager.js';
 import { buildIngestionDiagnostics, detectIngestionFormat } from '../server/lib/ingestion-diagnostics.js';
@@ -68,6 +71,95 @@ describe('gstack learnings foundation', () => {
     expect(closed.closedTabId).toBe(2);
     expect(closed.tabs.map(t => t.id)).toEqual([1]);
     expect(closed.activeTabId).toBe(1);
+  });
+
+  it('aborts browser navigation before continuing long action chains', async () => {
+    const manager = createFaunaBrowserManager();
+    const controller = new AbortController();
+    const navigations = [];
+    const page = {
+      goto: async (targetUrl) => {
+        navigations.push(targetUrl);
+        controller.abort();
+      },
+    };
+
+    await expect(manager.navigateWithWarmup(page, 'https://example.test/path', controller.signal)).rejects.toMatchObject({
+      name: 'AbortError',
+      code: 'ABORT_ERR',
+    });
+    expect(navigations).toEqual(['https://example.test']);
+  });
+
+  it('persists compact browser history without transient logs', () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fauna-browser-state-'));
+    const manager = createFaunaBrowserManager({ stateDir });
+    manager.consoleLog.push({ text: 'debug noise' });
+    manager.networkLog.push({ url: 'https://asset.example/noisy.js' });
+
+    manager.recordActionHistory({ action: 'navigate', url: 'https://example.test', title: 'Example', tabId: 3 });
+
+    const state = JSON.parse(fs.readFileSync(path.join(stateDir, 'state.json'), 'utf8'));
+    expect(state.schemaVersion).toBe(1);
+    expect(state.history).toEqual([
+      expect.objectContaining({ action: 'navigate', url: 'https://example.test', title: 'Example', tabId: 3, ok: true }),
+    ]);
+    expect(state).not.toHaveProperty('consoleLog');
+    expect(state).not.toHaveProperty('networkLog');
+    expect(state).not.toHaveProperty('dialogLog');
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it('honors abort signals before starting browser fetch fallback', async () => {
+    const manager = createFaunaBrowserManager();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(manager.fetchUrlFallback('https://example.test', 100, controller.signal)).rejects.toMatchObject({
+      name: 'AbortError',
+      code: 'ABORT_ERR',
+    });
+  });
+
+  it('routes browser click and type actions through interactive element indexes', async () => {
+    const manager = createFaunaBrowserManager();
+    const page = {
+      url: () => 'https://example.test/form',
+      content: async () => '<button>Submit</button>',
+      waitForLoadState: async () => {},
+    };
+    const actions = [];
+    manager.getPage = async () => page;
+    manager.waitThroughChallenge = async () => {};
+    manager.getBrowserState = async () => manager.normalizeBrowserState({ tabId: 1, url: page.url(), interactiveElements: [] });
+    manager.clickElementByIndex = async (_page, elementIndex) => actions.push(['click', elementIndex]);
+    manager.fillElementByIndex = async (_page, elementIndex, value) => actions.push(['type', elementIndex, value]);
+
+    await manager.handleAction({ action: 'click', elementIndex: 4 });
+    await manager.handleAction({ action: 'type', elementIndex: 2, text: 'hello' });
+
+    expect(actions).toEqual([
+      ['click', 4],
+      ['type', 2, 'hello'],
+    ]);
+  });
+
+  it('returns capped sanitized browser diagnostics snapshots', () => {
+    const manager = createFaunaBrowserManager();
+    manager.tabs.set(1, { id: 1, url: 'https://example.test', active: true, updatedAt: 't1' });
+    manager.recordActionHistory({ action: 'navigate', url: 'https://example.test', title: 'Example' });
+    manager.consoleLog.push({ ts: 't2', type: 'error', text: 'x'.repeat(1200) });
+    manager.networkLog.push({ ts: 't3', method: 'GET', url: 'https://example.test/' + 'y'.repeat(1200) });
+
+    const diagnostics = manager.getDiagnostics({ limit: 1 });
+
+    expect(diagnostics.schemaVersion).toBe(1);
+    expect(diagnostics.tabs).toHaveLength(1);
+    expect(diagnostics.recentHistory).toHaveLength(1);
+    expect(diagnostics.recentLogs.console).toHaveLength(1);
+    expect(diagnostics.recentLogs.console[0].text).toHaveLength(1000);
+    expect(diagnostics.recentLogs.network[0].url).toHaveLength(1000);
+    expect(diagnostics.diagnostics.consoleErrorCount).toBe(1);
   });
 
   it('generates capability catalog from actual tool metadata', () => {

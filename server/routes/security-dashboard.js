@@ -13,8 +13,10 @@ export function registerSecurityDashboardRoutes(app, {
   getGhToken,
   getSystemPreferences,
   getBrowseStatus,
+  getBrowseDiagnostics,
   getFigmaStatus,
   getCustomMcpStatus,
+  getCustomMcpDiagnostics,
   getPlaywrightMcpStatus,
 } = {}) {
   app.get('/api/security/status', async (req, res) => {
@@ -29,11 +31,17 @@ export function registerSecurityDashboardRoutes(app, {
     let browser = null;
     try { browser = getBrowseStatus ? getBrowseStatus() : null; } catch (e) { browser = { ok: false, error: e.message }; }
 
+    let browserDiagnostics = null;
+    try { browserDiagnostics = getBrowseDiagnostics ? getBrowseDiagnostics() : null; } catch (e) { browserDiagnostics = { ok: false, error: e.message }; }
+
     let figma = null;
     try { figma = getFigmaStatus ? getFigmaStatus() : null; } catch (e) { figma = { ok: false, error: e.message }; }
 
     let customMcp = null;
     try { customMcp = getCustomMcpStatus ? getCustomMcpStatus() : null; } catch (e) { customMcp = { ok: false, error: e.message }; }
+
+    let customMcpDiagnostics = null;
+    try { customMcpDiagnostics = getCustomMcpDiagnostics ? await getCustomMcpDiagnostics() : null; } catch (e) { customMcpDiagnostics = { ok: false, error: e.message }; }
 
     let playwrightMcp = null;
     try { playwrightMcp = getPlaywrightMcpStatus ? await getPlaywrightMcpStatus() : null; } catch (e) { playwrightMcp = { ok: false, error: e.message }; }
@@ -44,8 +52,10 @@ export function registerSecurityDashboardRoutes(app, {
       surfaces: {
         localServer: { enabled: true, port: Number(process.env.PORT || 3737), uiNonce: !!process.env.FAUNA_UI_NONCE },
         browser,
+        browserDiagnostics,
         figma,
         customMcp,
+        customMcpDiagnostics,
         playwrightMcp,
         teams: { enabled: !!process.env.FAUNA_TEAMS_SECRET },
         mobileTunnel: { packageAvailable: true, active: false, note: 'active tunnel state is owned by mobile routes' },

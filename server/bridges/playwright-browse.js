@@ -221,20 +221,32 @@ export function registerBrowseRoutes(app, { require: nodeRequire } = {}) {
     res.json(browserManager.getStatus());
   });
 
+  app.get('/api/browse/diagnostics', (req, res) => {
+    res.json(browserManager.getDiagnostics({ limit: req.query.limit }));
+  });
+
   app.post('/api/browse', async (req, res) => {
-    const { url, action = 'extract', selector, text, waitFor, maxChars = 12000, tabId = null, index = null } = req.body;
+    const { url, action = 'extract', selector, text, waitFor, maxChars = 12000, tabId = null, index = null, elementIndex = null } = req.body;
     if (!url && action === 'navigate') return res.status(400).json({ error: 'url required' });
+    const abortController = new AbortController();
+    const abort = () => abortController.abort();
+    req.on('aborted', abort);
+    res.on('close', abort);
 
     try {
-      res.json(await browserManager.handleAction({ url, action, selector, text, waitFor, maxChars, tabId, index }));
+      res.json(await browserManager.handleAction({ url, action, selector, text, waitFor, maxChars, tabId, index, elementIndex, signal: abortController.signal }));
     } catch (err) {
+      if (abortController.signal.aborted || err.name === 'AbortError' || err.code === 'ABORT_ERR') return;
       if ((action === 'extract' || action === 'navigate') && _playwrightAvailable !== false) {
         try {
-          const fallback = await browserManager.fetchUrlFallback(url, maxChars);
+          const fallback = await browserManager.fetchUrlFallback(url, maxChars, abortController.signal);
           return res.json(fallback);
         } catch { /* fall through to error */ }
       }
       res.status(500).json({ error: err.message });
+    } finally {
+      req.off?.('aborted', abort);
+      res.off?.('close', abort);
     }
   });
 

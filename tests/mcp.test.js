@@ -172,6 +172,47 @@ describe('MCP server', () => {
 });
 
 describe('custom MCP bridge', () => {
+  it('summarizes MCP lifecycle diagnostics without exposing credentials', async () => {
+    const configDir = '/tmp/fauna-test';
+    const configPath = configDir + '/custom-mcp-servers.json';
+    globalThis.__memFs.set(configPath, JSON.stringify([{
+      id: 'hits',
+      name: 'HITS',
+      transport: 'http',
+      url: 'https://mcp.hits-uat.microsoft.com',
+      enabled: true,
+      running: false,
+      authHeader: 'Authorization: Bearer secret-token',
+      auth: { requiresAuth: true, authorized: false, credentialId: 'cred-secret' },
+      lifecycle: {
+        state: 'needs_auth',
+        lastError: '401 unauthorized ' + 'x'.repeat(1200),
+        lastErrorAt: '2026-06-25T00:00:00.000Z',
+        authDiscovery: {
+          deviceAuthorizationEndpoint: 'https://login.example/devicecode',
+          scopesSupported: ['scope-a', 'scope-b'],
+        },
+      },
+    }]));
+
+    const bridge = createCustomMcpBridge({
+      faunaConfigDir: configDir,
+      extBridge: { broadcastStatus: vi.fn(), setRelayBrowsers: vi.fn() },
+    });
+    const diagnostics = await bridge.getDiagnostics();
+
+    expect(diagnostics.schemaVersion).toBe(1);
+    expect(diagnostics.counts.needsAuth).toBe(1);
+    expect(diagnostics.servers[0]).toMatchObject({
+      id: 'hits',
+      state: 'needs_auth',
+      auth: { requiresAuth: true, authorized: false, hasCredential: false, hasDiscovery: true, deviceAuthAvailable: true },
+    });
+    expect(diagnostics.servers[0].lastError).toHaveLength(1000);
+    expect(JSON.stringify(diagnostics)).not.toContain('secret-token');
+    expect(JSON.stringify(diagnostics)).not.toContain('cred-secret');
+  });
+
   it('auto-connects enabled HTTP servers during chat tool discovery', async () => {
     const configDir = '/tmp/fauna-test';
     const configPath = configDir + '/custom-mcp-servers.json';

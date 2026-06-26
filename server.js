@@ -562,8 +562,10 @@ registerSecurityDashboardRoutes(app, {
   getGhToken,
   getSystemPreferences: () => systemPreferences,
   getBrowseStatus: () => browseRoutes?.getStatus?.(),
+  getBrowseDiagnostics: () => browseRoutes?.manager?.getDiagnostics?.(),
   getFigmaStatus: () => ({ connected: figma.isConnected?.() === true }),
   getCustomMcpStatus: () => customMcp.getRelayState?.(),
+  getCustomMcpDiagnostics: () => customMcp.getDiagnostics?.(),
   getPlaywrightMcpStatus: () => playwrightMcp.status?.(),
 });
 // ── Memory / Preferences / Facts ──────────────────────────────────────────

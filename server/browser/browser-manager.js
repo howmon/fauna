@@ -21,6 +21,13 @@ function htmlToMarkdownFallback(html) {
   return String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s{2,}/g, ' ').trim();
 }
 
+function makeAbortError() {
+  const err = new Error('browser action aborted');
+  err.name = 'AbortError';
+  err.code = 'ABORT_ERR';
+  return err;
+}
+
 const BROWSER_STATE_SCHEMA_VERSION = 1;
 
 export class FaunaBrowserManager {
@@ -42,6 +49,7 @@ export class FaunaBrowserManager {
     this.nextTabId = 2;
     this.tabs = new Map();
     this.tabPages = new Map();
+    this.actionHistory = [];
     this.consoleLog = [];
     this.networkLog = [];
     this.dialogLog = [];
@@ -69,11 +77,44 @@ export class FaunaBrowserManager {
         tabCount: this.tabs.size,
         activeTabId: this.activeTabId,
         playwrightAvailable: this.playwrightAvailable,
+        historyCount: this.actionHistory.length,
+        recentHistory: this.actionHistory.slice(-10).reverse(),
       },
       logs: {
         console: this.consoleLog.length,
         network: this.networkLog.length,
         dialog: this.dialogLog.length,
+      },
+    };
+  }
+
+  getDiagnostics({ limit = 25 } = {}) {
+    const cappedLimit = Math.max(1, Math.min(Number(limit) || 25, 100));
+    const sanitizeLog = (entry = {}) => ({
+      ...entry,
+      text: entry.text ? String(entry.text).slice(0, 1000) : undefined,
+      message: entry.message ? String(entry.message).slice(0, 1000) : undefined,
+      url: entry.url ? String(entry.url).slice(0, 1000) : undefined,
+    });
+    return {
+      ok: true,
+      schemaVersion: 1,
+      status: this.getStatus(),
+      tabs: this.listTabs(),
+      recentHistory: this.actionHistory.slice(-cappedLimit).reverse(),
+      recentLogs: {
+        console: this.consoleLog.slice(-cappedLimit).reverse().map(sanitizeLog),
+        network: this.networkLog.slice(-cappedLimit).reverse().map(sanitizeLog),
+        dialog: this.dialogLog.slice(-cappedLimit).reverse().map(sanitizeLog),
+      },
+      diagnostics: {
+        connected: this.isConnected(),
+        activeTabId: this.activeTabId,
+        tabCount: this.tabs.size,
+        historyCount: this.actionHistory.length,
+        consoleErrorCount: this.consoleLog.filter(x => /error/i.test(x.type || '')).length,
+        networkRequestCount: this.networkLog.length,
+        lastError: this.lastError,
       },
     };
   }
@@ -104,12 +145,31 @@ export class FaunaBrowserManager {
     };
   }
 
-  async handleAction({ url, action = 'extract', selector, text, waitFor, maxChars = 12000, tabId = null, index = null } = {}) {
+  throwIfAborted(signal) {
+    if (signal?.aborted) throw makeAbortError();
+  }
+
+  abortable(promise, signal) {
+    if (!signal) return promise;
+    this.throwIfAborted(signal);
+    return new Promise((resolve, reject) => {
+      const onAbort = () => reject(makeAbortError());
+      signal.addEventListener('abort', onAbort, { once: true });
+      Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+    });
+  }
+
+  async delay(ms, signal) {
+    await this.abortable(new Promise(resolve => setTimeout(resolve, ms)), signal);
+  }
+
+  async handleAction({ url, action = 'extract', selector, text, waitFor, maxChars = 12000, tabId = null, index = null, elementIndex = null, signal = null } = {}) {
     const normalizedAction = String(action || 'extract');
+    this.throwIfAborted(signal);
     if (normalizedAction === 'list-tabs') return { ok: true, tabs: this.listTabs(), activeTabId: this.activeTabId };
     if (normalizedAction === 'switch-tab') return this.switchTab({ tabId, index });
     if (normalizedAction === 'close-tab') return this.closeTab({ tabId, index });
-    if (normalizedAction === 'new-tab') return this.newTab({ url, maxChars });
+    if (normalizedAction === 'new-tab') return this.newTab({ url, maxChars, signal });
     if (!url && normalizedAction === 'navigate') throw new Error('url required');
 
     const page = await this.getPage(tabId ? Number(tabId) : null);
@@ -117,44 +177,49 @@ export class FaunaBrowserManager {
     this.writeState();
 
     try {
-      if (url) await this.navigateWithWarmup(page, url);
-      await this.waitThroughChallenge(page);
-      try { await page.waitForLoadState?.('networkidle', { timeout: 8000 }); } catch (_) {}
+      if (url) await this.navigateWithWarmup(page, url, signal);
+      await this.waitThroughChallenge(page, signal);
+      try { await this.abortable(page.waitForLoadState?.('networkidle', { timeout: 8000 }), signal); } catch (_) {}
 
       if (waitFor) {
-        try { await page.waitForSelector(waitFor, { timeout: 8000 }); } catch (_) {}
+        try { await this.abortable(page.waitForSelector(waitFor, { timeout: 8000 }), signal); } catch (_) {}
       }
 
       let result;
       if (normalizedAction === 'extract' || normalizedAction === 'navigate') {
-        const title = await page.title();
+        this.throwIfAborted(signal);
+        const title = await this.abortable(page.title(), signal);
         const pageUrl = page.url();
-        const html = await page.content();
+        const html = await this.abortable(page.content(), signal);
         const md = this.htmlToMarkdown(html, pageUrl);
-        const browserState = await this.getBrowserState(page, { maxChars });
+        const browserState = await this.abortable(this.getBrowserState(page, { maxChars }), signal);
         result = { url: pageUrl, title, content: md.slice(0, maxChars), chars: md.length, browserState };
         if (browserState.diagnostics.blocked) result.blocked = true;
       } else if (normalizedAction === 'screenshot') {
-        const buf = await page.screenshot({ type: 'jpeg', quality: 70 });
-        result = { url: page.url(), screenshot: buf.toString('base64'), mime: 'image/jpeg', browserState: await this.getBrowserState(page, { maxChars: 2000 }) };
+        const buf = await this.abortable(page.screenshot({ type: 'jpeg', quality: 70 }), signal);
+        result = { url: page.url(), screenshot: buf.toString('base64'), mime: 'image/jpeg', browserState: await this.abortable(this.getBrowserState(page, { maxChars: 2000 }), signal) };
       } else if (normalizedAction === 'click') {
-        await page.click(selector || text, { timeout: 5000 });
-        const html = await page.content();
-        result = { url: page.url(), content: this.htmlToMarkdown(html, page.url()).slice(0, maxChars), browserState: await this.getBrowserState(page, { maxChars }) };
+        if (elementIndex != null && elementIndex !== '') await this.abortable(this.clickElementByIndex(page, Number(elementIndex)), signal);
+        else await this.abortable(page.click(selector || text, { timeout: 5000 }), signal);
+        const html = await this.abortable(page.content(), signal);
+        result = { url: page.url(), content: this.htmlToMarkdown(html, page.url()).slice(0, maxChars), browserState: await this.abortable(this.getBrowserState(page, { maxChars }), signal) };
       } else if (normalizedAction === 'type') {
-        await page.fill(selector, text);
-        result = { ok: true, url: page.url(), browserState: await this.getBrowserState(page, { maxChars: 4000 }) };
+        if (elementIndex != null && elementIndex !== '') await this.abortable(this.fillElementByIndex(page, Number(elementIndex), text), signal);
+        else await this.abortable(page.fill(selector, text), signal);
+        result = { ok: true, url: page.url(), browserState: await this.abortable(this.getBrowserState(page, { maxChars: 4000 }), signal) };
       } else if (normalizedAction === 'eval') {
-        const evalResult = await page.evaluate(text);
-        result = { result: JSON.stringify(evalResult), url: page.url(), browserState: await this.getBrowserState(page, { maxChars: 4000 }) };
+        const evalResult = await this.abortable(page.evaluate(text), signal);
+        result = { result: JSON.stringify(evalResult), url: page.url(), browserState: await this.abortable(this.getBrowserState(page, { maxChars: 4000 }), signal) };
       } else {
         throw new Error('unknown browser action: ' + action);
       }
 
       this.rememberPage(page);
+      this.recordActionHistory({ action: normalizedAction, url: result.url || url || page.url?.(), title: result.title, tabId: this.activeTabId, ok: true });
       return result;
     } catch (e) {
       this.lastError = e.message;
+      this.recordActionHistory({ action: normalizedAction, url, tabId: this.activeTabId, ok: false, error: e.message });
       this.writeState();
       throw e;
     }
@@ -203,7 +268,7 @@ export class FaunaBrowserManager {
     return { ok: true, closedTabId: id, activeTabId: this.activeTabId, tabs: this.listTabs() };
   }
 
-  async newTab({ url = null, maxChars = 12000 } = {}) {
+  async newTab({ url = null, maxChars = 12000, signal = null } = {}) {
     const id = this.nextTabId++;
     this.activeTabId = id;
     const page = await this.createPage();
@@ -211,7 +276,7 @@ export class FaunaBrowserManager {
     this.tabPages.set(id, page);
     this.rememberPage(page, id);
     if (!url) return { ok: true, tabId: id, activeTabId: this.activeTabId, tabs: this.listTabs() };
-    const result = await this.handleAction({ url, action: 'navigate', tabId: id, maxChars });
+    const result = await this.handleAction({ url, action: 'navigate', tabId: id, maxChars, signal });
     return { ...result, ok: true, tabId: id, activeTabId: this.activeTabId, tabs: this.listTabs() };
   }
 
@@ -464,16 +529,16 @@ export class FaunaBrowserManager {
     };
   }
 
-  async navigateWithWarmup(page, url) {
+  async navigateWithWarmup(page, url, signal = null) {
     const parsed = new URL(url);
     const origin = parsed.origin;
     const isHomepage = parsed.pathname === '/' || parsed.pathname === '';
     if (!isHomepage && !this.warmedDomains.has(origin)) {
-      await page.goto(origin, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      await this.abortable(page.goto(origin, { waitUntil: 'domcontentloaded', timeout: 20000 }), signal).catch(() => {});
+      await this.delay(1500, signal);
       this.warmedDomains.add(origin);
     }
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await this.abortable(page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }), signal);
     this.warmedDomains.add(origin);
   }
 
@@ -483,16 +548,52 @@ export class FaunaBrowserManager {
     return title === '' || /access denied|just a moment|checking your browser|powered and protected|enable javascript/i.test(title + ' ' + body);
   }
 
-  async waitThroughChallenge(page) {
+  async waitThroughChallenge(page, signal = null) {
     if (!(await this.isChallenge(page))) return;
-    await page.waitForFunction(
+    await this.abortable(page.waitForFunction(
       () => {
         const t = document.title;
         if (!t) return false;
         return !/access denied|just a moment|checking your browser|powered and protected/i.test(t);
       },
       { timeout: 25000 },
-    ).catch(() => {});
+    ), signal).catch(() => {});
+  }
+
+  interactiveElementQuery() {
+    return 'a[href],button,input,textarea,select,[role="button"],[role="link"],[contenteditable="true"],[tabindex]:not([tabindex="-1"])';
+  }
+
+  async clickElementByIndex(page, elementIndex) {
+    await page.evaluate((idx, query) => {
+      const nodes = Array.from(document.querySelectorAll(query)).filter((el) => {
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+      });
+      const el = nodes[idx];
+      if (!el) throw new Error('interactive element index not found: ' + idx);
+      el.scrollIntoView?.({ block: 'center', inline: 'center' });
+      el.click();
+    }, Number(elementIndex), this.interactiveElementQuery());
+  }
+
+  async fillElementByIndex(page, elementIndex, value) {
+    await page.evaluate((idx, query, nextValue) => {
+      const nodes = Array.from(document.querySelectorAll(query)).filter((el) => {
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+      });
+      const el = nodes[idx];
+      if (!el) throw new Error('interactive element index not found: ' + idx);
+      el.scrollIntoView?.({ block: 'center', inline: 'center' });
+      el.focus?.();
+      if ('value' in el) el.value = nextValue == null ? '' : String(nextValue);
+      else el.textContent = nextValue == null ? '' : String(nextValue);
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: nextValue == null ? '' : String(nextValue) }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }, Number(elementIndex), this.interactiveElementQuery(), value);
   }
 
   htmlToMarkdown(html, baseUrl) {
@@ -512,15 +613,22 @@ export class FaunaBrowserManager {
     }
   }
 
-  fetchUrlFallback(url, maxChars = 12000) {
+  fetchUrlFallback(url, maxChars = 12000, signal = null) {
     return new Promise((resolve, reject) => {
-      _execFile('curl', ['-sL', '--max-time', '15', '-A', this.userAgent, '--', url], { maxBuffer: 5 * 1024 * 1024 }, (err, stdout) => {
+      if (signal?.aborted) return reject(makeAbortError());
+      const child = _execFile('curl', ['-sL', '--max-time', '15', '-A', this.userAgent, '--', url], { maxBuffer: 5 * 1024 * 1024 }, (err, stdout) => {
+        signal?.removeEventListener?.('abort', onAbort);
         if (err) return reject(err);
         const html = stdout || '';
         const title = (html.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1] || '';
         const content = this.htmlToMarkdown(html, url);
         resolve({ url, title, content: content.slice(0, maxChars), chars: content.length, fallback: true });
       });
+      const onAbort = () => {
+        try { child.kill('SIGTERM'); } catch (_) {}
+        reject(makeAbortError());
+      };
+      signal?.addEventListener?.('abort', onAbort, { once: true });
     });
   }
 
@@ -545,10 +653,24 @@ export class FaunaBrowserManager {
     this.writeState();
   }
 
+  recordActionHistory({ action, url, title = '', tabId = this.activeTabId, ok = true, error = '' } = {}) {
+    boundedPush(this.actionHistory, {
+      ts: nowIso(),
+      action: String(action || 'extract'),
+      tabId: Number(tabId || this.activeTabId),
+      url: String(url || '').slice(0, 1000),
+      title: String(title || '').slice(0, 300),
+      ok: !!ok,
+      error: String(error || '').slice(0, 300),
+    }, 200);
+    this.writeState();
+  }
+
   writeState() {
     try {
       fs.mkdirSync(this.stateDir, { recursive: true });
       const state = {
+        schemaVersion: 1,
         mode: this.mode,
         startedAt: this.startedAt,
         lastActionAt: this.lastActionAt,
@@ -556,6 +678,7 @@ export class FaunaBrowserManager {
         browserPath: this.browserPath,
         activeTabId: this.activeTabId,
         tabs: [...this.tabs.values()],
+        history: this.actionHistory.slice(-200),
       };
       const tmp = this.stateFile + '.tmp';
       fs.writeFileSync(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });

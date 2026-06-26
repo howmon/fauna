@@ -664,6 +664,48 @@ export function createCustomMcpBridge({
     };
   }
 
+  async function getDiagnostics({ includeTools = false } = {}) {
+    const status = await getStatus({ includeTools });
+    const servers = status.servers.map(server => ({
+      id: server.id,
+      name: server.name,
+      transport: server.transport,
+      enabled: server.enabled,
+      running: server.running,
+      url: server.url,
+      state: server.lifecycle?.state || (server.running ? 'running' : 'stopped'),
+      lastStartedAt: server.lifecycle?.lastStartedAt || null,
+      lastErrorAt: server.lifecycle?.lastErrorAt || null,
+      lastError: server.lifecycle?.lastError ? String(server.lifecycle.lastError).slice(0, 1000) : null,
+      auth: {
+        requiresAuth: !!server.auth?.requiresAuth,
+        authorized: !!server.auth?.authorized,
+        hasCredential: !!server.auth?.hasCredential,
+        hasDiscovery: !!server.lifecycle?.authDiscovery,
+        deviceAuthAvailable: !!server.lifecycle?.authDiscovery?.deviceAuthorizationEndpoint,
+        scopesSupported: Array.isArray(server.lifecycle?.authDiscovery?.scopesSupported)
+          ? server.lifecycle.authDiscovery.scopesSupported.slice(0, 10)
+          : [],
+      },
+      tools: includeTools ? server.tools : undefined,
+      toolCount: includeTools ? server.tools.length : undefined,
+    }));
+    return {
+      ok: true,
+      schemaVersion: 1,
+      relay: status.relay,
+      counts: {
+        total: servers.length,
+        enabled: status.enabledCount,
+        running: status.runningCount,
+        needsAuth: servers.filter(s => s.auth.requiresAuth && !s.auth.authorized).length,
+        errored: servers.filter(s => !!s.lastError).length,
+        tools: status.toolCount,
+      },
+      servers,
+    };
+  }
+
   async function callTool(toolName, args) {
     const servers = readCustomMcpServers().filter(s => s.running && s.transport === 'http');
     for (const server of servers) {
@@ -690,6 +732,14 @@ export function createCustomMcpBridge({
         },
       }));
       res.json(servers);
+    });
+
+    app.get('/api/custom-mcp-servers/diagnostics', async (req, res) => {
+      try {
+        res.json(await getDiagnostics({ includeTools: req.query.includeTools === 'true' }));
+      } catch (e) {
+        res.status(500).json({ error: e.message });
+      }
     });
 
     app.post('/api/custom-mcp-servers', (req, res) => {
@@ -995,6 +1045,7 @@ export function createCustomMcpBridge({
     cleanup,
     getRelayState: () => ({ connected: faunaMcpBrowserConnected, connectedAt: faunaMcpConnectedAt }),
     getStatus,
+    getDiagnostics,
     getTools,
     callTool,
   };
