@@ -1,3 +1,4 @@
+import { EventEmitter } from 'events';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 globalThis.__memFs = globalThis.__memFs || new Map();
@@ -9,6 +10,8 @@ vi.mock('fs', async () => {
     readFileSync: vi.fn((p) => { if (memFs.has(p)) return memFs.get(p); throw enoent(); }),
     writeFileSync: vi.fn((p, d) => { memFs.set(p, d); }),
     mkdirSync: vi.fn(),
+    renameSync: vi.fn((from, to) => { if (!memFs.has(from)) throw enoent(); memFs.set(to, memFs.get(from)); memFs.delete(from); }),
+    chmodSync: vi.fn(),
     existsSync: vi.fn((p) => memFs.has(p)),
     unlinkSync: vi.fn((p) => { memFs.delete(p); }),
   };
@@ -21,6 +24,7 @@ const { _resetCache: resetEmbed } = await import('../server/lib/embeddings.js');
 const { invalidateStaticCache } = await import('../server/lib/profile.js');
 const { handleMcpRequest, _internals } = await import('../server/routes/mcp.js');
 const { createCustomMcpBridge } = await import('../server/bridges/custom-mcp.js');
+const { _resetCache: resetCreds } = await import('../credentials-store.js');
 
 const VOCAB = ['postgres', 'react', 'typescript'];
 const stubEmbed = (texts) => texts.map(t => VOCAB.map(v => String(t).toLowerCase().includes(v) ? 1 : 0));
@@ -30,6 +34,7 @@ beforeEach(() => {
   resetFacts();
   resetCtx();
   resetEmbed();
+  resetCreds();
   invalidateStaticCache();
   vi.clearAllMocks();
 });
@@ -337,6 +342,84 @@ describe('custom MCP bridge', () => {
       expect(saved[0].lifecycle.authDiscovery.scopesSupported).toEqual(['api://7c79089e-8804-4043-b16c-4672754e66cb/.default']);
     } finally {
       globalThis.fetch = previousFetch;
+    }
+  });
+
+  it('auth-stream completes Microsoft device-code auth and stores the token', async () => {
+    const configDir = '/tmp/fauna-test-device-auth';
+    const configPath = configDir + '/custom-mcp-servers.json';
+    process.env.FAUNA_CREDENTIALS_FILE = configDir + '/credentials.json';
+    globalThis.__memFs.set(configPath, JSON.stringify([{
+      id: 'mcp-hits',
+      name: 'HITS',
+      transport: 'http',
+      url: 'https://mcp.hits-uat.microsoft.com',
+      enabled: true,
+      running: false,
+      auth: { authorized: false },
+      lifecycle: {
+        state: 'needs_auth',
+        authDiscovery: {
+          deviceAuthorizationEndpoint: 'https://login.example.test/devicecode',
+          tokenEndpoint: 'https://login.example.test/token',
+          scopesSupported: ['api://hits/.default'],
+        },
+      },
+    }]));
+
+    const fetchMock = vi.fn(async (url) => {
+      if (String(url) === 'https://login.example.test/devicecode') {
+        return new Response(JSON.stringify({
+          device_code: 'device-123',
+          user_code: 'ABCD-EFGH',
+          verification_uri: 'https://microsoft.com/devicelogin',
+          interval: 1,
+          expires_in: 60,
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (String(url) === 'https://login.example.test/token') {
+        return new Response(JSON.stringify({ access_token: 'hits-access-token' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      throw new Error('unexpected request ' + url);
+    });
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      const routes = { get: new Map(), post: new Map() };
+      const app = {
+        get: (path, handler) => routes.get.set(path, handler),
+        post: (path, handler) => routes.post.set(path, handler),
+        put: vi.fn(),
+        delete: vi.fn(),
+      };
+      const bridge = createCustomMcpBridge({
+        faunaConfigDir: configDir,
+        extBridge: { broadcastStatus: vi.fn(), setRelayBrowsers: vi.fn() },
+      });
+      bridge.register(app);
+
+      const chunks = [];
+      const req = Object.assign(new EventEmitter(), { params: { id: 'mcp-hits' } });
+      const res = {
+        writeHead: vi.fn(),
+        write: vi.fn(chunk => chunks.push(chunk)),
+        end: vi.fn(),
+      };
+      await routes.get.get('/api/custom-mcp-servers/:id/auth-stream')(req, res);
+
+      expect(chunks.join('')).toContain('deviceCode');
+      expect(chunks.join('')).toContain('ABCD-EFGH');
+      expect(chunks.join('')).toContain('"exit","data":0');
+      const saved = JSON.parse(globalThis.__memFs.get(configPath));
+      expect(saved[0].auth.authorized).toBe(true);
+      expect(saved[0].lifecycle.state).toBe('authorized');
+    } finally {
+      globalThis.fetch = previousFetch;
+      delete process.env.FAUNA_CREDENTIALS_FILE;
+      resetCreds();
     }
   });
 });

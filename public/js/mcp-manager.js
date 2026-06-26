@@ -157,16 +157,21 @@ var mcpMgr = (function () {
       if (s.transport === 'http') {
         var oauthSt = _oauthStatus[s.id];
         var discoveredAuthUrl = oauthSt && oauthSt.authDiscovery && oauthSt.authDiscovery.authorizationEndpoint;
+        var canDeviceSignIn = oauthSt && oauthSt.authDiscovery && oauthSt.authDiscovery.deviceAuthorizationEndpoint;
         var signInUrl = s.oauthAuthUrl || discoveredAuthUrl || '';
         oauthBadge = oauthSt && oauthSt.authorized
           ? '<span class="mcp-oauth-badge authorized" title="Authorized">✓ Auth</span>'
-          : (signInUrl
+          : (canDeviceSignIn
+            ? '<span class="mcp-oauth-badge unauthorized" title="Not authorized — click to sign in" ' +
+              'onclick="mcpMgr.openAuthModal(\'' + s.id + '\')" ' +
+              'style="cursor:pointer">Sign in</span>'
+            : (signInUrl
               ? '<span class="mcp-oauth-badge unauthorized" title="Not authorized — click to sign in" ' +
                   'onclick="mcpMgr.oauthSignIn(\'' + s.id + '\', \'' + _attr(signInUrl) + '\')" ' +
                   'style="cursor:pointer">Sign in</span>'
               : (lifecycleState === 'needs_auth'
                   ? '<span class="mcp-oauth-badge unauthorized" title="Authentication required, but no authorization URL was discovered">Needs auth</span>'
-                  : ''));
+              : '')));
       }
       return (
         '<div class="mcp-server-row" data-id="' + s.id + '">' +
@@ -446,7 +451,7 @@ var mcpMgr = (function () {
           '<div class="mcp-auth-modal-title"><i class="ti ti-login-2"></i> Authenticate — ' + _esc(server.name) + '</div>' +
           '<button class="mcp-auth-modal-close" onclick="mcpMgr.closeAuthModal()"><i class="ti ti-x"></i></button>' +
         '</div>' +
-        '<div class="mcp-auth-modal-hint">Waiting for the server to print a login URL&hellip;</div>' +
+        '<div class="mcp-auth-modal-hint">Preparing Microsoft sign-in&hellip;</div>' +
         '<div id="mcp-auth-log" class="mcp-auth-log"></div>' +
         '<div class="mcp-auth-modal-footer">' +
           '<button class="mcp-auth-cancel-btn" onclick="mcpMgr.closeAuthModal()">Close</button>' +
@@ -664,6 +669,10 @@ var mcpMgr = (function () {
     } catch (e) {
       await loadServers();
       if (e.authRequired) {
+        if (e.authDiscovery && e.authDiscovery.deviceAuthorizationEndpoint) {
+          openAuthModal(id);
+          return;
+        }
         var authUrl = (e.authDiscovery && e.authDiscovery.authorizationEndpoint) || '';
         if (authUrl) {
           oauthSignIn(id, authUrl);

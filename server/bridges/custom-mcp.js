@@ -311,6 +311,7 @@ export function createCustomMcpBridge({
         const found = await fetchMetadata(url);
         if (!found) continue;
         let { json, authServers } = found;
+        const resource = json.resource || null;
         if (Array.isArray(json.scopes_supported)) resourceScopes = json.scopes_supported;
         if (!json.authorization_endpoint && authServers.length) {
           for (const authServer of authServers) {
@@ -333,9 +334,11 @@ export function createCustomMcpBridge({
         if (json.authorization_endpoint || json.token_endpoint || json.registration_endpoint || json.issuer || authServers.length) {
           return {
             discoveryUrl: url,
+            resource,
             issuer: json.issuer || null,
             authorizationEndpoint: json.authorization_endpoint || authServers[0] || null,
             tokenEndpoint: json.token_endpoint || null,
+              deviceAuthorizationEndpoint: json.device_authorization_endpoint || null,
             registrationEndpoint: json.registration_endpoint || null,
             authorizationServers: authServers,
             scopesSupported: resourceScopes,
@@ -344,6 +347,117 @@ export function createCustomMcpBridge({
       } catch (_) {}
     }
     return { discoveryUrl: null, attempted, wwwAuthenticate: header || null };
+  }
+
+  function _microsoftPublicClientId() {
+    return process.env.FAUNA_MCP_MICROSOFT_CLIENT_ID || 'aebc6443-996d-45c2-90f0-388ff96faa56';
+  }
+
+  function _authScope(server) {
+    const scopes = server?.lifecycle?.authDiscovery?.scopesSupported;
+    if (Array.isArray(scopes) && scopes.length) return scopes.join(' ');
+    const resource = server?.lifecycle?.authDiscovery?.resource;
+    if (resource) return String(resource).replace(/\/$/, '') + '/.default';
+    return 'openid profile offline_access';
+  }
+
+  function _saveOAuthToken(server, servers, tokenData = {}) {
+    const accessToken = String(tokenData.access_token || tokenData.accessToken || '').trim();
+    if (!accessToken) throw new Error('OAuth token response did not include an access token');
+    const name = _oauthCredentialName(server.id);
+    const existingId = server?.auth?.credentialId || server?.oauthCredentialId || _findCredentialIdByName(name);
+    let credId = existingId;
+    const data = {
+      accessToken,
+      refreshToken: tokenData.refresh_token || tokenData.refreshToken || undefined,
+      clientId: tokenData.client_id || tokenData.clientId || _microsoftPublicClientId(),
+      tokenUrl: server?.lifecycle?.authDiscovery?.tokenEndpoint || undefined,
+    };
+
+    if (existingId) {
+      updateCredential(existingId, { type: 'oauth2', data });
+    } else {
+      const created = createCredential({ name, type: 'oauth2', data });
+      credId = created.id;
+    }
+
+    server.auth = {
+      ...(server.auth || {}),
+      credentialId: credId,
+      authorized: true,
+      lastResolvedAt: new Date().toISOString(),
+    };
+    server.lifecycle = { ...(server.lifecycle || {}), state: 'authorized', lastError: null, wwwAuthenticate: null };
+    server.oauthCredentialId = credId;
+    server.running = false;
+    if (customMcpClients.has(server.id)) {
+      customMcpClients.get(server.id).reset();
+      customMcpClients.delete(server.id);
+    }
+    writeCustomMcpServers(servers);
+    return credId;
+  }
+
+  function _writeSse(res, type, data) {
+    res.write(`data: ${JSON.stringify({ type, data })}\n\n`);
+  }
+
+  async function _runDeviceCodeAuth(server, servers, req, res) {
+    const discovery = server?.lifecycle?.authDiscovery || {};
+    if (!discovery.deviceAuthorizationEndpoint || !discovery.tokenEndpoint) {
+      throw new Error('OAuth device-code metadata is not available yet. Start the server once to discover authentication metadata.');
+    }
+    const clientId = _microsoftPublicClientId();
+    const scope = _authScope(server);
+    _writeSse(res, 'start', `Requesting Microsoft device code for ${server.name}...`);
+
+    const deviceResp = await fetch(discovery.deviceAuthorizationEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+      body: new URLSearchParams({ client_id: clientId, scope }).toString(),
+    });
+    const deviceText = await deviceResp.text();
+    let deviceJson = {};
+    try { deviceJson = JSON.parse(deviceText || '{}'); } catch (_) {}
+    if (!deviceResp.ok) throw new Error(deviceJson.error_description || deviceJson.error || deviceText || 'Device-code request failed');
+
+    const verificationUrl = deviceJson.verification_uri || deviceJson.verification_url || deviceJson.verification_uri_complete;
+    const userCode = deviceJson.user_code;
+    if (!verificationUrl || !userCode || !deviceJson.device_code) throw new Error('Device-code response was incomplete');
+    _writeSse(res, 'deviceCode', { url: verificationUrl, code: userCode });
+
+    const expiresAt = Date.now() + Math.max(1, Number(deviceJson.expires_in || 900)) * 1000;
+    const intervalMs = Math.max(1, Number(deviceJson.interval || 5)) * 1000;
+    let closed = false;
+    req.on('close', () => { closed = true; });
+
+    while (!closed && Date.now() < expiresAt) {
+      await new Promise(resolve => setTimeout(resolve, intervalMs));
+      if (closed) return;
+      const tokenResp = await fetch(discovery.tokenEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+        body: new URLSearchParams({
+          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+          client_id: clientId,
+          device_code: deviceJson.device_code,
+        }).toString(),
+      });
+      const tokenText = await tokenResp.text();
+      let tokenJson = {};
+      try { tokenJson = JSON.parse(tokenText || '{}'); } catch (_) {}
+      if (tokenResp.ok && tokenJson.access_token) {
+        _saveOAuthToken(server, servers, { ...tokenJson, client_id: clientId });
+        _writeSse(res, 'exit', 0);
+        return;
+      }
+      if (tokenJson.error === 'authorization_pending') continue;
+      if (tokenJson.error === 'slow_down') continue;
+      if (tokenJson.error === 'authorization_declined') throw new Error('Sign-in was declined.');
+      if (tokenJson.error === 'expired_token') throw new Error('Device code expired. Start sign-in again.');
+      throw new Error(tokenJson.error_description || tokenJson.error || tokenText || 'Token polling failed');
+    }
+    if (!closed) throw new Error('Device-code sign-in timed out.');
   }
 
   async function ensureHttpClient(server, servers) {
@@ -739,6 +853,41 @@ export function createCustomMcpBridge({
       res.json({ logs: proc?.logs || [] });
     });
 
+    app.get('/api/custom-mcp-servers/:id/auth-stream', async (req, res) => {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+      });
+
+      const servers = readCustomMcpServers();
+      const server = servers.find(s => s.id === req.params.id);
+      if (!server) {
+        _writeSse(res, 'error', 'Server not found');
+        _writeSse(res, 'exit', 1);
+        res.end();
+        return;
+      }
+      if (server.transport !== 'http') {
+        _writeSse(res, 'error', 'Interactive OAuth sign-in is currently supported for HTTP MCP servers only.');
+        _writeSse(res, 'exit', 1);
+        res.end();
+        return;
+      }
+
+      try {
+        if (!server.lifecycle?.authDiscovery?.deviceAuthorizationEndpoint) {
+          try { await ensureHttpClient(server, servers); } catch (_) {}
+        }
+        await _runDeviceCodeAuth(server, servers, req, res);
+      } catch (e) {
+        _writeSse(res, 'error', e.message || String(e));
+        _writeSse(res, 'exit', 1);
+      } finally {
+        res.end();
+      }
+    });
+
     app.get('/api/custom-mcp-servers/:id/oauth/status', (req, res) => {
       const server = readCustomMcpServers().find(s => s.id === req.params.id);
       if (!server) return res.status(404).json({ error: 'Server not found' });
@@ -763,34 +912,7 @@ export function createCustomMcpBridge({
       if (server.transport !== 'http') return res.status(400).json({ error: 'OAuth token is only supported for HTTP servers' });
 
       try {
-        const name = _oauthCredentialName(server.id);
-        const existingId = server?.auth?.credentialId || server?.oauthCredentialId || _findCredentialIdByName(name);
-        let credId = existingId;
-
-        if (existingId) {
-          updateCredential(existingId, { type: 'oauth2', data: { accessToken } });
-        } else {
-          const created = createCredential({ name, type: 'oauth2', data: { accessToken } });
-          credId = created.id;
-        }
-
-        server.auth = {
-          ...(server.auth || {}),
-          credentialId: credId,
-          authorized: true,
-          lastResolvedAt: new Date().toISOString(),
-        };
-        server.lifecycle = { ...(server.lifecycle || {}), state: 'authorized', lastError: null, wwwAuthenticate: null };
-        server.oauthCredentialId = credId;
-        writeCustomMcpServers(servers);
-
-        if (customMcpClients.has(server.id)) {
-          customMcpClients.get(server.id).reset();
-          customMcpClients.delete(server.id);
-          server.running = false;
-          writeCustomMcpServers(servers);
-        }
-
+        _saveOAuthToken(server, servers, { accessToken });
         res.json({ ok: true, authorized: true });
       } catch (e) {
         res.status(500).json({ error: e.message });
