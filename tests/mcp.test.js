@@ -278,4 +278,65 @@ describe('custom MCP bridge', () => {
       globalThis.fetch = previousFetch;
     }
   });
+
+  it('follows Microsoft issuer-style authorization server metadata', async () => {
+    const configDir = '/tmp/fauna-test-ms-auth';
+    const configPath = configDir + '/custom-mcp-servers.json';
+    globalThis.__memFs.set(configPath, JSON.stringify([{
+      id: 'mcp-hits',
+      name: 'HITS',
+      transport: 'http',
+      url: 'https://mcp.hits-uat.microsoft.com',
+      enabled: true,
+      running: false,
+      auth: { authorized: false },
+    }]));
+
+    const fetchMock = vi.fn(async (url, options = {}) => {
+      const requestUrl = String(url);
+      if (requestUrl === 'https://mcp.hits-uat.microsoft.com/.well-known/oauth-protected-resource/') {
+        return new Response(JSON.stringify({
+          resource: 'https://mcp.hits-uat.microsoft.com/',
+          authorization_servers: ['https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/v2.0'],
+          scopes_supported: ['api://7c79089e-8804-4043-b16c-4672754e66cb/.default'],
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (requestUrl === 'https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/v2.0/.well-known/openid-configuration') {
+        return new Response(JSON.stringify({
+          issuer: 'https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/v2.0',
+          authorization_endpoint: 'https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/oauth2/v2.0/authorize',
+          token_endpoint: 'https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/oauth2/v2.0/token',
+          device_authorization_endpoint: 'https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/oauth2/v2.0/devicecode',
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (requestUrl.includes('/.well-known/')) {
+        return new Response('not found', { status: 404 });
+      }
+      const body = JSON.parse(options.body || '{}');
+      if (body.method === 'initialize') {
+        return new Response('', {
+          status: 401,
+          headers: { 'www-authenticate': 'Bearer resource_metadata="https://mcp.hits-uat.microsoft.com/.well-known/oauth-protected-resource/"' },
+        });
+      }
+      throw new Error('unexpected request ' + requestUrl);
+    });
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      const bridge = createCustomMcpBridge({
+        faunaConfigDir: configDir,
+        extBridge: { broadcastStatus: vi.fn(), setRelayBrowsers: vi.fn() },
+      });
+      await expect(bridge.getTools({ autoStartEnabled: true })).resolves.toEqual([]);
+
+      const saved = JSON.parse(globalThis.__memFs.get(configPath));
+      expect(saved[0].lifecycle.state).toBe('needs_auth');
+      expect(saved[0].lifecycle.authDiscovery.authorizationEndpoint).toBe('https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/oauth2/v2.0/authorize');
+      expect(saved[0].lifecycle.authDiscovery.tokenEndpoint).toBe('https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/oauth2/v2.0/token');
+      expect(saved[0].lifecycle.authDiscovery.scopesSupported).toEqual(['api://7c79089e-8804-4043-b16c-4672754e66cb/.default']);
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
 });

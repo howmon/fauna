@@ -284,6 +284,7 @@ export function createCustomMcpBridge({
     const header = String(err?.wwwAuthenticate || '');
     const resourceMatch = header.match(/(?:resource_metadata|authorization_uri|as_uri|issuer)="?([^",\s]+)"?/i);
     const candidates = [];
+    let resourceScopes = [];
     if (resourceMatch) candidates.push(resourceMatch[1]);
     try {
       const base = new URL(server.url);
@@ -310,13 +311,15 @@ export function createCustomMcpBridge({
         const found = await fetchMetadata(url);
         if (!found) continue;
         let { json, authServers } = found;
+        if (Array.isArray(json.scopes_supported)) resourceScopes = json.scopes_supported;
         if (!json.authorization_endpoint && authServers.length) {
           for (const authServer of authServers) {
             try {
               const authBase = new URL(authServer);
               const authOrigin = authBase.origin;
               const authPath = authBase.pathname === '/' ? '' : authBase.pathname;
-              const nested = await fetchMetadata(new URL('/.well-known/oauth-authorization-server' + authPath, authOrigin).toString())
+              const nested = await fetchMetadata(new URL(authPath + '/.well-known/openid-configuration', authOrigin).toString())
+                || await fetchMetadata(new URL('/.well-known/oauth-authorization-server' + authPath, authOrigin).toString())
                 || await fetchMetadata(new URL('/.well-known/openid-configuration' + authPath, authOrigin).toString())
                 || await fetchMetadata(authServer);
               if (nested?.json?.authorization_endpoint) {
@@ -335,6 +338,7 @@ export function createCustomMcpBridge({
             tokenEndpoint: json.token_endpoint || null,
             registrationEndpoint: json.registration_endpoint || null,
             authorizationServers: authServers,
+            scopesSupported: resourceScopes,
           };
         }
       } catch (_) {}
