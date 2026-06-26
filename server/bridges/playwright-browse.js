@@ -222,11 +222,11 @@ export function registerBrowseRoutes(app, { require: nodeRequire } = {}) {
   });
 
   app.post('/api/browse', async (req, res) => {
-    const { url, action = 'extract', selector, text, waitFor, maxChars = 12000 } = req.body;
-    if (!url) return res.status(400).json({ error: 'url required' });
+    const { url, action = 'extract', selector, text, waitFor, maxChars = 12000, tabId = null, index = null } = req.body;
+    if (!url && action === 'navigate') return res.status(400).json({ error: 'url required' });
 
     try {
-      res.json(await browserManager.handleAction({ url, action, selector, text, waitFor, maxChars }));
+      res.json(await browserManager.handleAction({ url, action, selector, text, waitFor, maxChars, tabId, index }));
     } catch (err) {
       if ((action === 'extract' || action === 'navigate') && _playwrightAvailable !== false) {
         try {

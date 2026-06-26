@@ -25,6 +25,7 @@ import path from 'path';
 
 import { getCopilotClient } from '../copilot/auth.js';
 import { getLLMClient } from '../llm/registry.js';
+import { applyModelRequestCompatibility, resolveModelCapabilities } from '../llm/model-capabilities.js';
 import { FALLBACK_MODELS, CHAT_COMPLETIONS_UNSUPPORTED_RE } from '../copilot/models.js';
 import { GEN_UI_CATALOG_PROMPT, GEN_UI_SHORT_HINT } from '../prompts/gen-ui-catalog.js';
 import { FAUNA_CORE_GUIDELINES, FAUNA_FRONTEND_QUALITY } from '../prompts/core-guidelines.js';
@@ -309,6 +310,7 @@ export function registerChatRoute(app, {
       const client = _llm.client;
       const llmSupports = _llm.supports || { tools: true, vision: true, streaming: true, usageEvents: true };
       const llmProviderId = _llm.providerId;
+      const llmCapabilities = resolveModelCapabilities({ providerId: llmProviderId, model, supports: llmSupports });
       const allMessages = [];
 
       // Build project context from active project (name, root, sources, pinned/enabled contexts)
@@ -1542,6 +1544,7 @@ export function registerChatRoute(app, {
             return Object.assign({}, m, { content: stripped });
           });
         }
+        applyModelRequestCompatibility(params, llmCapabilities);
 
         let stream;
         try {

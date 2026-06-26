@@ -21,6 +21,8 @@ function htmlToMarkdownFallback(html) {
   return String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s{2,}/g, ' ').trim();
 }
 
+const BROWSER_STATE_SCHEMA_VERSION = 1;
+
 export class FaunaBrowserManager {
   constructor({ require: nodeRequire, stateDir, logger } = {}) {
     this._require = nodeRequire || null;
@@ -39,6 +41,7 @@ export class FaunaBrowserManager {
     this.activeTabId = 1;
     this.nextTabId = 2;
     this.tabs = new Map();
+    this.tabPages = new Map();
     this.consoleLog = [];
     this.networkLog = [];
     this.dialogLog = [];
@@ -101,14 +104,20 @@ export class FaunaBrowserManager {
     };
   }
 
-  async handleAction({ url, action = 'extract', selector, text, waitFor, maxChars = 12000 } = {}) {
-    if (!url) throw new Error('url required');
-    const page = await this.getPage();
+  async handleAction({ url, action = 'extract', selector, text, waitFor, maxChars = 12000, tabId = null, index = null } = {}) {
+    const normalizedAction = String(action || 'extract');
+    if (normalizedAction === 'list-tabs') return { ok: true, tabs: this.listTabs(), activeTabId: this.activeTabId };
+    if (normalizedAction === 'switch-tab') return this.switchTab({ tabId, index });
+    if (normalizedAction === 'close-tab') return this.closeTab({ tabId, index });
+    if (normalizedAction === 'new-tab') return this.newTab({ url, maxChars });
+    if (!url && normalizedAction === 'navigate') throw new Error('url required');
+
+    const page = await this.getPage(tabId ? Number(tabId) : null);
     this.lastActionAt = nowIso();
     this.writeState();
 
     try {
-      await this.navigateWithWarmup(page, url);
+      if (url) await this.navigateWithWarmup(page, url);
       await this.waitThroughChallenge(page);
       try { await page.waitForLoadState?.('networkidle', { timeout: 8000 }); } catch (_) {}
 
@@ -117,26 +126,27 @@ export class FaunaBrowserManager {
       }
 
       let result;
-      if (action === 'extract' || action === 'navigate') {
+      if (normalizedAction === 'extract' || normalizedAction === 'navigate') {
         const title = await page.title();
         const pageUrl = page.url();
         const html = await page.content();
         const md = this.htmlToMarkdown(html, pageUrl);
-        result = { url: pageUrl, title, content: md.slice(0, maxChars), chars: md.length };
-        if (await this.isChallenge(page)) result.blocked = true;
-      } else if (action === 'screenshot') {
+        const browserState = await this.getBrowserState(page, { maxChars });
+        result = { url: pageUrl, title, content: md.slice(0, maxChars), chars: md.length, browserState };
+        if (browserState.diagnostics.blocked) result.blocked = true;
+      } else if (normalizedAction === 'screenshot') {
         const buf = await page.screenshot({ type: 'jpeg', quality: 70 });
-        result = { url: page.url(), screenshot: buf.toString('base64'), mime: 'image/jpeg' };
-      } else if (action === 'click') {
+        result = { url: page.url(), screenshot: buf.toString('base64'), mime: 'image/jpeg', browserState: await this.getBrowserState(page, { maxChars: 2000 }) };
+      } else if (normalizedAction === 'click') {
         await page.click(selector || text, { timeout: 5000 });
         const html = await page.content();
-        result = { url: page.url(), content: this.htmlToMarkdown(html, page.url()).slice(0, maxChars) };
-      } else if (action === 'type') {
+        result = { url: page.url(), content: this.htmlToMarkdown(html, page.url()).slice(0, maxChars), browserState: await this.getBrowserState(page, { maxChars }) };
+      } else if (normalizedAction === 'type') {
         await page.fill(selector, text);
-        result = { ok: true, url: page.url() };
-      } else if (action === 'eval') {
+        result = { ok: true, url: page.url(), browserState: await this.getBrowserState(page, { maxChars: 4000 }) };
+      } else if (normalizedAction === 'eval') {
         const evalResult = await page.evaluate(text);
-        result = { result: JSON.stringify(evalResult), url: page.url() };
+        result = { result: JSON.stringify(evalResult), url: page.url(), browserState: await this.getBrowserState(page, { maxChars: 4000 }) };
       } else {
         throw new Error('unknown browser action: ' + action);
       }
@@ -150,22 +160,219 @@ export class FaunaBrowserManager {
     }
   }
 
-  async getPage() {
-    if (this.page) {
+  listTabs() {
+    return [...this.tabs.values()].map((tab, index) => ({ ...tab, index, active: tab.id === this.activeTabId }));
+  }
+
+  resolveTabId({ tabId = null, index = null } = {}) {
+    if (tabId != null && tabId !== '') {
+      const id = Number(tabId);
+      if (this.tabs.has(id) || this.tabPages.has(id) || id === this.activeTabId) return id;
+      throw new Error('Unknown tabId: ' + tabId);
+    }
+    if (index != null && index !== '') {
+      const tabs = this.listTabs();
+      const tab = tabs[Number(index)];
+      if (!tab) throw new Error('Unknown tab index: ' + index);
+      return tab.id;
+    }
+    return this.activeTabId;
+  }
+
+  switchTab({ tabId = null, index = null } = {}) {
+    const id = this.resolveTabId({ tabId, index });
+    this.activeTabId = id;
+    this.page = this.tabPages.get(id) || this.page;
+    for (const tab of this.tabs.values()) tab.active = tab.id === id;
+    this.rememberPage(this.page, id);
+    return { ok: true, tabId: id, activeTabId: this.activeTabId, tabs: this.listTabs() };
+  }
+
+  async closeTab({ tabId = null, index = null } = {}) {
+    const id = this.resolveTabId({ tabId, index });
+    const page = this.tabPages.get(id);
+    if (page) await page.close?.().catch?.(() => {});
+    this.tabPages.delete(id);
+    this.tabs.delete(id);
+    if (this.activeTabId === id) {
+      const next = this.listTabs()[0];
+      this.activeTabId = next?.id || 1;
+      this.page = this.tabPages.get(this.activeTabId) || null;
+    }
+    this.writeState();
+    return { ok: true, closedTabId: id, activeTabId: this.activeTabId, tabs: this.listTabs() };
+  }
+
+  async newTab({ url = null, maxChars = 12000 } = {}) {
+    const id = this.nextTabId++;
+    this.activeTabId = id;
+    const page = await this.createPage();
+    this.page = page;
+    this.tabPages.set(id, page);
+    this.rememberPage(page, id);
+    if (!url) return { ok: true, tabId: id, activeTabId: this.activeTabId, tabs: this.listTabs() };
+    const result = await this.handleAction({ url, action: 'navigate', tabId: id, maxChars });
+    return { ...result, ok: true, tabId: id, activeTabId: this.activeTabId, tabs: this.listTabs() };
+  }
+
+  normalizeBrowserState(raw = {}) {
+    const now = nowIso();
+    const scroll = raw.scroll || {};
+    const viewport = raw.viewport || {};
+    const interactiveElements = Array.isArray(raw.interactiveElements)
+      ? raw.interactiveElements.map((el, index) => ({
+          index: Number.isInteger(el.index) ? el.index : index,
+          tag: String(el.tag || '').toLowerCase(),
+          role: el.role ? String(el.role) : null,
+          text: String(el.text || '').replace(/\s+/g, ' ').trim().slice(0, 180),
+          selector: el.selector ? String(el.selector) : null,
+          href: el.href ? String(el.href) : null,
+          inputType: el.inputType ? String(el.inputType) : null,
+          disabled: !!el.disabled,
+          visible: el.visible !== false,
+        }))
+      : [];
+
+    const pagesAbove = Number.isFinite(scroll.y) && Number.isFinite(viewport.height) && viewport.height > 0
+      ? scroll.y / viewport.height
+      : 0;
+    const pixelsBelow = Math.max(0, Number(scroll.totalHeight || 0) - Number(scroll.y || 0) - Number(viewport.height || 0));
+    const pagesBelow = Number.isFinite(viewport.height) && viewport.height > 0 ? pixelsBelow / viewport.height : 0;
+    const blocked = !!raw.blocked;
+    const blockedReason = raw.blockedReason || (blocked ? 'challenge_or_access_denied' : null);
+    const url = String(raw.url || '');
+    const title = String(raw.title || '');
+    const visibleText = String(raw.visibleText || '').replace(/\s{3,}/g, ' ').trim();
+
+    return {
+      schemaVersion: BROWSER_STATE_SCHEMA_VERSION,
+      source: 'fauna-browser-manager',
+      sessionId: 'managed-browser',
+      windowId: 'managed-window',
+      tabId: raw.tabId || this.activeTabId,
+      active: raw.active !== false,
+      url,
+      title,
+      viewport: {
+        width: Number(viewport.width || 0),
+        height: Number(viewport.height || 0),
+        deviceScaleFactor: Number(viewport.deviceScaleFactor || 1),
+      },
+      scroll: {
+        x: Number(scroll.x || 0),
+        y: Number(scroll.y || 0),
+        totalWidth: Number(scroll.totalWidth || 0),
+        totalHeight: Number(scroll.totalHeight || 0),
+        pagesAbove: Number(pagesAbove.toFixed(2)),
+        pagesBelow: Number(pagesBelow.toFixed(2)),
+        pixelsBelow,
+      },
+      header: `Current Page: [${title || 'Untitled'}](${url || 'about:blank'})\nViewport: ${Number(viewport.width || 0)}x${Number(viewport.height || 0)}, scroll ${Number(scroll.y || 0)}px (${pagesAbove.toFixed(1)} pages above)`,
+      content: interactiveElements.map(el => `[${el.index}]<${el.tag || 'element'}${el.role ? ` role="${el.role}"` : ''}>${el.text}</${el.tag || 'element'}>`).join('\n'),
+      footer: pixelsBelow > 4 ? `... ${pixelsBelow} pixels below (${pagesBelow.toFixed(1)} pages) - scroll to see more ...` : '[End of page]',
+      interactiveElements,
+      visibleText,
+      diagnostics: {
+        updatedAt: raw.updatedAt || now,
+        readable: !blocked && (!!visibleText || interactiveElements.length > 0),
+        blocked,
+        blockedReason,
+        interactiveCount: interactiveElements.length,
+        consoleErrorsRecent: this.consoleLog.filter(x => /error/i.test(x.type || '')).slice(-5).length,
+        networkRequestsRecent: this.networkLog.length,
+      },
+    };
+  }
+
+  async getBrowserState(page = this.page, { maxChars = 12000 } = {}) {
+    if (!page) return this.normalizeBrowserState({ blocked: true, blockedReason: 'no_page' });
+    const [url, title, blocked, domState] = await Promise.all([
+      Promise.resolve(page.url?.() || '').catch(() => ''),
+      Promise.resolve(page.title?.() || '').catch(() => ''),
+      this.isChallenge(page).catch(() => false),
+      page.evaluate(() => {
+        const isVisible = (el) => {
+          const style = window.getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+        };
+        const labelFor = (el) => (
+          el.getAttribute('aria-label') ||
+          el.getAttribute('title') ||
+          el.getAttribute('placeholder') ||
+          el.innerText ||
+          el.value ||
+          el.textContent ||
+          ''
+        );
+        const selectorFor = (el) => {
+          if (el.id) return `#${CSS.escape(el.id)}`;
+          const attr = el.getAttribute('name') || el.getAttribute('aria-label') || el.getAttribute('href');
+          if (attr) return `${el.tagName.toLowerCase()}[${el.getAttribute('name') ? 'name' : el.getAttribute('aria-label') ? 'aria-label' : 'href'}="${CSS.escape(attr)}"]`;
+          return el.tagName.toLowerCase();
+        };
+        const nodes = Array.from(document.querySelectorAll('a[href],button,input,textarea,select,[role="button"],[role="link"],[contenteditable="true"],[tabindex]:not([tabindex="-1"])'));
+        return {
+          viewport: { width: window.innerWidth, height: window.innerHeight, deviceScaleFactor: window.devicePixelRatio || 1 },
+          scroll: { x: window.scrollX, y: window.scrollY, totalWidth: document.documentElement.scrollWidth, totalHeight: document.documentElement.scrollHeight },
+          visibleText: (document.body?.innerText || '').slice(0, 20000),
+          interactiveElements: nodes.filter(isVisible).slice(0, 100).map((el, index) => ({
+            index,
+            tag: el.tagName.toLowerCase(),
+            role: el.getAttribute('role'),
+            text: labelFor(el),
+            selector: selectorFor(el),
+            href: el.href || null,
+            inputType: el.getAttribute('type'),
+            disabled: !!el.disabled,
+            visible: true,
+          })),
+        };
+      }).catch(() => ({})),
+    ]);
+
+    return this.normalizeBrowserState({
+      ...domState,
+      url,
+      title,
+      tabId: this.activeTabId,
+      blocked,
+      visibleText: String(domState.visibleText || '').slice(0, maxChars),
+    });
+  }
+
+  async getPage(tabId = null) {
+    const requestedTabId = tabId ? Number(tabId) : this.activeTabId;
+    const existing = this.tabPages.get(requestedTabId) || (requestedTabId === this.activeTabId ? this.page : null);
+    if (existing) {
       try {
-        await this.page.evaluate(() => true);
-        return this.page;
+        await existing.evaluate(() => true);
+        this.activeTabId = requestedTabId;
+        this.page = existing;
+        this.rememberPage(existing, requestedTabId);
+        return existing;
       } catch (_) {
-        this.page = null;
+        this.tabPages.delete(requestedTabId);
+        if (requestedTabId === this.activeTabId) this.page = null;
       }
     }
 
+    const page = await this.createPage();
+    this.activeTabId = requestedTabId;
+    this.page = page;
+    this.tabPages.set(requestedTabId, page);
+    this.rememberPage(page, requestedTabId);
+    return page;
+  }
+
+  async createPage() {
     const browser = await this.getBrowser();
+    let page;
     if (browser._isPuppeteer) {
-      this.page = await browser.newPage();
-      await this.page.setUserAgent(this.userAgent);
-      await this.page.setViewport({ width: 1280, height: 900 });
-      await this.page.setExtraHTTPHeaders(this.extraHeaders());
+      page = await browser.newPage();
+      await page.setUserAgent(this.userAgent);
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.setExtraHTTPHeaders(this.extraHeaders());
     } else {
       if (!this.context) {
         this.context = await browser.newContext({
@@ -179,12 +386,11 @@ export class FaunaBrowserManager {
           Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
         });
       }
-      this.page = await this.context.newPage();
+      page = await this.context.newPage();
     }
 
-    this.attachPageLogs(this.page);
-    this.rememberPage(this.page);
-    return this.page;
+    this.attachPageLogs(page);
+    return page;
   }
 
   async getBrowser() {
@@ -192,6 +398,7 @@ export class FaunaBrowserManager {
     this.browser = null;
     this.context = null;
     this.page = null;
+    this.tabPages.clear();
 
     if (this.playwrightAvailable === false) throw new Error('playwright-core not available in this environment');
 
@@ -330,9 +537,11 @@ export class FaunaBrowserManager {
     } catch (_) {}
   }
 
-  rememberPage(page) {
+  rememberPage(page, tabId = this.activeTabId) {
     if (!page) return;
-    this.tabs.set(this.activeTabId, { id: this.activeTabId, url: page.url?.() || '', active: true, updatedAt: nowIso() });
+    const id = Number(tabId || this.activeTabId);
+    this.tabs.set(id, { id, url: page.url?.() || '', active: id === this.activeTabId, updatedAt: nowIso() });
+    for (const tab of this.tabs.values()) tab.active = tab.id === this.activeTabId;
     this.writeState();
   }
 
