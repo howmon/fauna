@@ -2402,7 +2402,7 @@ body.is-resizing webview { pointer-events: none !important; }
   transition: none;
   z-index: auto;
 }
-#app-page-body > #settings-panel #settings-nav-col { padding-top: 16px; }
+#app-page-body > #settings-panel #settings-nav-col { padding-top: 48px; }
 #app-page-body > #settings-panel #settings-back-btn { display: none; }
 .settings-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0; }
 .settings-section {
@@ -2705,7 +2705,7 @@ body.is-resizing webview { pointer-events: none !important; }
   box-shadow: 0 6px 18px rgba(15, 23, 42, .08);
 }
 body.app-page-open #topbar {
-  padding-left: 92px;
+  display: none;
 }
 body.app-page-open #toggle-sidebar {
   display: none;
@@ -2896,7 +2896,7 @@ body { animation: none; }
   transition: none;
   z-index: auto;
 }
-#app-page-body > #tasks-panel #auto-nav-col { padding-top: 16px; }
+#app-page-body > #tasks-panel #auto-nav-col { padding-top: 48px; }
 #app-page-body > #tasks-panel #auto-back-btn { display: none; }
 
 #auto-panel-title {
@@ -8572,19 +8572,25 @@ mark.find-hit.find-hit-active {
   background: var(--fau-bg);
 }
 #settings-content-col .settings-scroll {
-  padding: 32px 40px;
+  padding: 48px 40px 32px;
   max-width: 720px;
+  width: 100%;
+  box-sizing: border-box;
 }
 #settings-content-col.plugins-active .settings-scroll {
   max-width: none;
   width: 100%;
   box-sizing: border-box;
-  padding: 24px 32px;
+  padding: 48px 32px 32px;
 }
 
 /* Settings pages (only .active is shown) */
 .settings-page { display: none; }
-.settings-page.active { display: block; }
+.settings-page.active {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
 
 .settings-page-plugins.active {
   display: flex;
@@ -8598,21 +8604,56 @@ mark.find-hit.find-hit-active {
 }
 
 .settings-page-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
   font-size: 16px;
   font-weight: 600;
   color: var(--fau-text);
-  margin-bottom: 18px;
+  margin-bottom: 0;
   letter-spacing: 0;
 }
+.settings-page-title .settings-row-btn { margin-left: auto; }
 
 .settings-page .settings-section {
   border: 1px solid var(--fau-border);
   border-radius: 10px;
   padding: 16px 20px;
-  margin-bottom: 14px;
+  margin-bottom: 0;
   background: var(--fau-sidebar);
 }
-.settings-page .settings-section:last-child { margin-bottom: 0; }
+.settings-page .settings-section[style*="padding:0"] {
+  overflow: hidden;
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+}
+.settings-row + .settings-row { margin-top: 10px; }
+.settings-row label:first-child {
+  color: var(--fau-text-dim);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.settings-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-input-row + .settings-input-row,
+.settings-label + .settings-input-row,
+.settings-status + .settings-input-row,
+.settings-status + div[style*="display:flex"] {
+  margin-top: 8px;
+}
+#cloud-sync-mount,
+#help-settings-mount {
+  min-height: 120px;
+}
 
 
 /* Active project strip in sidebar */
@@ -10312,7 +10353,7 @@ mark.find-hit.find-hit-active {
   transition: none;
   z-index: auto;
 }
-#app-page-body > #board-panel #board-panel-header { padding-top: 14px; }
+#app-page-body > #board-panel #board-panel-header { padding-top: 48px; }
 #app-page-body > #board-panel #board-panel-back { display: none; }
 
 #board-panel-header {
