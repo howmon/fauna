@@ -1844,20 +1844,40 @@ function _promptStarterDefaults() {
 function _promptStarterRecentProjects(limit) {
   var convs = (state && state.conversations) || [];
   return ((state && state.projects) || []).slice().map(function(p) {
-    var projectConvs = convs.filter(function(c) { return c.projectId === p.id; });
+    var projectConvs = convs.filter(function(c) { return c.projectId === p.id; }).sort(function(a, b) {
+      return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
+    });
     return {
       project: p,
+      latestConv: projectConvs[0] || null,
       count: projectConvs.length,
       score: (p.lastActiveAt || p.updatedAt || p.createdAt || 0) + projectConvs.length * 86400000
     };
-  }).sort(function(a, b) { return b.score - a.score; }).slice(0, limit).map(function(item) {
+  }).sort(function(a, b) { return b.score - a.score; }).slice(0, limit).reduce(function(cards, item, idx) {
     var name = item.project.name || 'this project';
-    return {
-      title: 'Continue ' + name,
-      sub: item.count ? item.count + ' chats in this project' : 'Pick up this project',
-      prompt: 'Help me continue work on the project "' + name + '". Review the current context, recent conversations, and likely next tasks, then suggest the best next step.'
-    };
-  });
+    var latest = item.latestConv;
+    cards.push({
+      title: latest ? 'Continue ' + name : 'Start ' + name,
+      sub: latest ? 'Resume "' + latest.title + '"' : 'Open this project in a new chat',
+      prompt: latest
+        ? 'Help me continue work on the project "' + name + '" from the conversation "' + latest.title + '". Use the project context and this thread to identify the most useful next step.'
+        : 'Help me start useful work in the project "' + name + '". Review the project context and suggest the best next task.',
+      projectId: item.project.id,
+      convId: latest ? latest.id : '',
+      mode: latest ? 'continue' : 'new'
+    });
+    if (latest && idx < 2) {
+      cards.push({
+        title: 'New task in ' + name,
+        sub: 'Start fresh with this project context',
+        prompt: 'Start a new task in the project "' + name + '". Use the project context, then ask me the sharpest next question or suggest a concrete first step.',
+        projectId: item.project.id,
+        convId: '',
+        mode: 'new'
+      });
+    }
+    return cards;
+  }, []).slice(0, limit);
 }
 
 function _promptStarterRecentTasks(limit) {
@@ -1867,10 +1887,15 @@ function _promptStarterRecentTasks(limit) {
   }).sort(function(a, b) {
     return (b.updatedAt || b.createdAt || b.nextRunAt || 0) - (a.updatedAt || a.createdAt || a.nextRunAt || 0);
   }).slice(0, limit).map(function(t) {
+    var project = t.projectId && state && state.projects ? state.projects.find(function(p) { return p.id === t.projectId; }) : null;
+    var convId = t.targetConvId || t.convId || t.conversationId || '';
     return {
       title: 'Work on ' + t.title,
-      sub: t.status ? 'Automation is ' + t.status : 'Automation follow-up',
-      prompt: 'Help me review and continue the automation task "' + t.title + '". Check what it is supposed to do, what state it is in, and recommend the next action.'
+      sub: (project ? project.name + ' · ' : '') + (t.status ? 'Automation is ' + t.status : 'Automation follow-up'),
+      prompt: 'Help me review and continue the automation task "' + t.title + '". Check what it is supposed to do, what state it is in, and recommend the next action.',
+      projectId: t.projectId || '',
+      convId: convId,
+      mode: convId ? 'continue' : (t.projectId ? 'new' : '')
     };
   });
 }
@@ -1888,10 +1913,14 @@ function _promptStarterRecentConversationPatterns(limit) {
     seen[key] = true;
     return true;
   }).slice(0, limit).map(function(c) {
+    var project = c.projectId && state && state.projects ? state.projects.find(function(p) { return p.id === c.projectId; }) : null;
     return {
       title: 'Revisit ' + c.title,
-      sub: c.projectId ? 'Recent project conversation' : 'Recent quick chat',
-      prompt: 'Start from the thread "' + c.title + '" and help me continue with the most useful next step.'
+      sub: project ? 'Recent thread in ' + project.name : 'Recent quick chat',
+      prompt: 'Start from the thread "' + c.title + '" and help me continue with the most useful next step.',
+      projectId: c.projectId || '',
+      convId: c.id,
+      mode: 'continue'
     };
   });
 }
@@ -1917,19 +1946,29 @@ function renderPromptStarters() {
     _promptStarterDefaults()
   )).slice(0, 8);
   grid.innerHTML = items.map(function(item) {
-    return '<div class="empty-card" onclick="usePrompt(this)" data-prompt="' + escHtml(item.prompt) + '"><strong>' + escHtml(item.title) + '</strong>' + escHtml(item.sub || '') + '</div>';
+    return '<div class="empty-card" onclick="usePrompt(this)" data-prompt="' + escHtml(item.prompt) + '" data-project-id="' + escHtml(item.projectId || '') + '" data-conv-id="' + escHtml(item.convId || '') + '" data-mode="' + escHtml(item.mode || '') + '"><strong>' + escHtml(item.title) + '</strong>' + escHtml(item.sub || '') + '</div>';
   }).join('');
 }
 
-function usePrompt(card) {
+async function usePrompt(card) {
   var title = card.querySelector('strong').textContent;
   var text  = card.dataset.prompt || promptMap[title] || '';
+  var projectId = card.dataset.projectId || '';
+  var convId = card.dataset.convId || '';
+  var mode = card.dataset.mode || '';
+  if (convId && typeof loadConversation === 'function' && (typeof getConv !== 'function' || getConv(convId))) {
+    loadConversation(convId);
+  } else if (projectId) {
+    if (typeof setActiveProject === 'function') await setActiveProject(projectId, { navigate: false });
+    if (mode === 'new' && typeof newConversation === 'function') newConversation();
+  } else if (!state.currentId && typeof newConversation === 'function') {
+    newConversation();
+  }
   var input = document.getElementById('msg-input');
   input.value = text;
   resizeTextarea(input);
   input.focus();
   input.setSelectionRange(input.value.length, input.value.length);
-  if (!state.currentId) newConversation();
   showMessages();
 }
 

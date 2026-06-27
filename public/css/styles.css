@@ -317,6 +317,7 @@ button .ti, label .ti { pointer-events: none; }
   align-items: center;
   gap: 10px;
   width: 100%;
+  margin-top: 32px;
 }
 .app-rail-btn,
 .app-rail-avatar {
@@ -2619,12 +2620,11 @@ body.is-resizing webview { pointer-events: none !important; }
 /* ── macOS native window chrome ────────────────────────────────────── */
 /* Traffic light clearance + draggable areas */
 #app-rail {
-  top: 34px;
   height: auto;
   padding-top: 10px;
 }
 #sidebar-header {
-  padding-top: 42px !important;
+  padding-top: 48px !important;
   -webkit-app-region: drag;
   user-select: none;
 }
@@ -6333,6 +6333,21 @@ textarea.builder-find-active {
   border: none; border-radius: 6px; background: transparent; color: var(--fau-text-dim); cursor: pointer;
 }
 .artifact-view-toggle button:hover, .artifact-view-toggle button.active { background: var(--fau-surface2); color: var(--fau-text); }
+.artifact-library-filters {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 0 24px 14px;
+  border-bottom: 1px solid var(--fau-border);
+}
+.artifact-library-filters label {
+  display: inline-flex; align-items: center; gap: 7px;
+  color: var(--fau-text-muted); font-size: 11px; font-weight: 700;
+}
+.artifact-library-filters select {
+  min-width: 180px; max-width: 280px;
+  background: var(--fau-surface1); color: var(--fau-text);
+  border: 1px solid var(--fau-border); border-radius: 7px;
+  padding: 6px 28px 6px 10px; font: inherit; font-size: 12px;
+}
 .artifact-library {
   flex: 1; min-height: 0; overflow-y: auto; padding: 18px 24px 28px;
 }
@@ -6347,7 +6362,10 @@ textarea.builder-find-active {
 }
 .artifact-library-card-top { display: flex; align-items: center; gap: 8px; color: var(--fau-text-muted); font-size: 12px; font-weight: 700; }
 .artifact-library-card-top .ti { color: var(--accent); font-size: 17px; }
-.artifact-library-card h3 { margin: 0; font-size: 15px; line-height: 1.3; letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-library-card h3 {
+  margin: 0; font-size: 15px; line-height: 1.3; letter-spacing: 0;
+  overflow: hidden; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
 .artifact-library-card p { margin: 0; color: var(--fau-text-muted); font-size: 12px; line-height: 1.4; min-height: 34px; }
 .artifact-library-card-meta { color: var(--fau-text-dim); font-size: 11px; margin-top: auto; }
 .artifact-library-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -6364,7 +6382,7 @@ textarea.builder-find-active {
 .artifact-library-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .artifact-library-name .ti { color: var(--accent); font-size: 17px; flex-shrink: 0; }
 .artifact-library-name span { min-width: 0; }
-.artifact-library-name strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-library-name strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: normal; line-height: 1.25; }
 .artifact-library-name small { display: block; color: var(--fau-text-muted); font-size: 11px; margin-top: 2px; }
 .artifact-library-muted { color: var(--fau-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-library-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }

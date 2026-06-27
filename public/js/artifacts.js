@@ -536,12 +536,36 @@ function updateArtifactLibraryFilter(value) {
   renderAllArtifactsPage();
 }
 
+function updateArtifactLibraryProject(value) {
+  var page = _getAppPageBody('artifacts') || document.getElementById('all-artifacts-page');
+  if (!page) return;
+  page._projectFilter = value || '';
+  page._conversationFilter = '';
+  renderAllArtifactsPage();
+}
+
+function updateArtifactLibraryConversation(value) {
+  var page = _getAppPageBody('artifacts') || document.getElementById('all-artifacts-page');
+  if (!page) return;
+  page._conversationFilter = value || '';
+  renderAllArtifactsPage();
+}
+
 function renderAllArtifactsPage() {
   var page = _getAppPageBody('artifacts') || document.getElementById('all-artifacts-page');
   if (!page) return;
   var filter = (page._filter || '').toLowerCase();
+  var projectFilter = page._projectFilter || '';
+  var conversationFilter = page._conversationFilter || '';
   var view = page._view || 'grid';
-  var artifacts = getAllSavedArtifacts();
+  var allArtifacts = getAllSavedArtifacts();
+  var artifacts = allArtifacts;
+  if (projectFilter) {
+    artifacts = artifacts.filter(function(a) {
+      return projectFilter === '__quick' ? !a.projectId : (a.projectId || '') === projectFilter;
+    });
+  }
+  if (conversationFilter) artifacts = artifacts.filter(function(a) { return a.convId === conversationFilter; });
   if (filter) {
     artifacts = artifacts.filter(function(a) {
       return String(a.title || '').toLowerCase().includes(filter) ||
@@ -550,6 +574,8 @@ function renderAllArtifactsPage() {
         String(a.projectName || '').toLowerCase().includes(filter);
     });
   }
+  var projectOptions = _artifactProjectFilterOptions(allArtifacts, projectFilter);
+  var conversationOptions = _artifactConversationFilterOptions(allArtifacts, projectFilter, conversationFilter);
   page.innerHTML =
     '<div class="all-agents-page-inner">' +
       '<div class="all-agents-header">' +
@@ -557,8 +583,38 @@ function renderAllArtifactsPage() {
         '<div class="all-agents-search-wrap"><i class="ti ti-search"></i><input class="all-agents-search" id="all-artifacts-search" placeholder="Search artifacts…" value="' + escHtml(page._filter || '') + '" oninput="updateArtifactLibraryFilter(this.value)"></div>' +
         '<div class="artifact-view-toggle"><button class="' + (view === 'grid' ? 'active' : '') + '" onclick="setArtifactLibraryView(\'grid\')" title="Grid view"><i class="ti ti-layout-grid"></i></button><button class="' + (view === 'list' ? 'active' : '') + '" onclick="setArtifactLibraryView(\'list\')" title="List view"><i class="ti ti-list"></i></button></div>' +
       '</div>' +
+      '<div class="artifact-library-filters">' +
+        '<label><span>Project</span><select onchange="updateArtifactLibraryProject(this.value)">' + projectOptions + '</select></label>' +
+        '<label><span>Conversation</span><select onchange="updateArtifactLibraryConversation(this.value)">' + conversationOptions + '</select></label>' +
+        ((projectFilter || conversationFilter || filter) ? '<button class="proj-action-btn" onclick="updateArtifactLibraryFilter(\'\');updateArtifactLibraryProject(\'\')"><i class="ti ti-x"></i> Clear</button>' : '') +
+      '</div>' +
       '<div class="artifact-library ' + (view === 'list' ? 'list' : 'grid') + '">' + _renderArtifactLibraryItems(artifacts, view) + '</div>' +
     '</div>';
+}
+
+function _artifactProjectFilterOptions(artifacts, selected) {
+  var counts = Object.create(null);
+  artifacts.forEach(function(a) { counts[a.projectId || ''] = (counts[a.projectId || ''] || 0) + 1; });
+  var projects = (state.projects || []).filter(function(p) { return counts[p.id]; }).sort(function(a, b) { return String(a.name || '').localeCompare(String(b.name || '')); });
+  var html = '<option value="">All projects (' + artifacts.length + ')</option>';
+  if (counts['']) html += '<option value="__quick"' + (selected === '__quick' ? ' selected' : '') + '>Quick chats (' + counts[''] + ')</option>';
+  html += projects.map(function(p) {
+    return '<option value="' + escHtml(p.id) + '"' + (selected === p.id ? ' selected' : '') + '>' + escHtml(p.name || 'Untitled project') + ' (' + counts[p.id] + ')</option>';
+  }).join('');
+  return html;
+}
+
+function _artifactConversationFilterOptions(artifacts, projectId, selected) {
+  var relevant = projectId ? artifacts.filter(function(a) { return projectId === '__quick' ? !a.projectId : (a.projectId || '') === projectId; }) : artifacts;
+  var byConv = Object.create(null);
+  relevant.forEach(function(a) {
+    if (!byConv[a.convId]) byConv[a.convId] = { id: a.convId, title: a.conversationTitle || 'Conversation', count: 0 };
+    byConv[a.convId].count += 1;
+  });
+  var convs = Object.keys(byConv).map(function(id) { return byConv[id]; }).sort(function(a, b) { return a.title.localeCompare(b.title); });
+  return '<option value="">All conversations (' + relevant.length + ')</option>' + convs.map(function(c) {
+    return '<option value="' + escHtml(c.id) + '"' + (selected === c.id ? ' selected' : '') + '>' + escHtml(c.title) + ' (' + c.count + ')</option>';
+  }).join('');
 }
 
 function _renderArtifactLibraryItems(artifacts, view) {
