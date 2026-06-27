@@ -339,12 +339,16 @@ button .ti, label .ti { pointer-events: none; }
   background: var(--fau-surface2);
   color: var(--fau-text);
 }
-.app-rail-home {
+.app-rail-btn.active,
+.app-rail-avatar.active,
+.app-rail-home.active {
   background: var(--accent);
   color: #fff;
   box-shadow: 0 8px 22px color-mix(in oklab, var(--accent) 30%, transparent);
 }
-.app-rail-home:hover { color: #fff; filter: brightness(1.05); }
+.app-rail-btn.active:hover,
+.app-rail-avatar.active:hover,
+.app-rail-home.active:hover { color: #fff; filter: brightness(1.05); }
 .app-rail-btn .ti { font-size: 17px; }
 .app-rail-avatar {
   background: color-mix(in oklab, var(--accent) 18%, var(--fau-surface2));
@@ -361,6 +365,21 @@ button .ti, label .ti { pointer-events: none; }
   border-radius: 50%;
   background: #ef4444;
   display: none;
+}
+.app-rail-notif-wrap {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  -webkit-app-region: no-drag;
+}
+.app-rail-notif-wrap > .app-rail-btn { position: relative; }
+.app-rail-notif-wrap .store-notif-panel {
+  position: absolute;
+  left: 44px;
+  right: auto;
+  bottom: -2px;
+  top: auto;
+  z-index: 13000;
 }
 
 /* ── Sidebar ───────────────────────────────────────────────────────── */
@@ -2159,7 +2178,7 @@ body.is-resizing webview { pointer-events: none !important; }
 }
 #tb-agent-menu .tb-am-desc {
   font-size: 10.5px; color: var(--fau-text-muted); margin-top: 2px;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden;
 }
 #tb-agent-menu .tb-am-check {
@@ -2308,12 +2327,23 @@ body.is-resizing webview { pointer-events: none !important; }
 
 /* ── Settings panel (PAT + preferences) ───────────────────────────── */
 #settings-panel {
-  position: fixed; top: 0; right: 0; bottom: 0; left: 0;
+  position: fixed; top: 0; right: 0; bottom: 0; left: 52px;
   background: var(--fau-sidebar);
   display: flex; flex-direction: row; transform: translateX(100%);
   transition: transform .22s cubic-bezier(.4,0,.2,1); z-index: 100;
 }
 #settings-panel.open { transform: translateX(0); }
+#app-page-body > #settings-panel {
+  position: static;
+  inset: auto;
+  width: 100%;
+  height: 100%;
+  transform: none;
+  transition: none;
+  z-index: auto;
+}
+#app-page-body > #settings-panel #settings-nav-col { padding-top: 16px; }
+#app-page-body > #settings-panel #settings-back-btn { display: none; }
 .settings-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0; }
 .settings-section {
   padding: 16px; border-bottom: 1px solid var(--fau-border);
@@ -2589,10 +2619,12 @@ body.is-resizing webview { pointer-events: none !important; }
 /* ── macOS native window chrome ────────────────────────────────────── */
 /* Traffic light clearance + draggable areas */
 #app-rail {
-  padding-top: 44px;
+  top: 34px;
+  height: auto;
+  padding-top: 10px;
 }
 #sidebar-header {
-  padding-top: 14px !important;
+  padding-top: 42px !important;
   -webkit-app-region: drag;
   user-select: none;
 }
@@ -2600,10 +2632,12 @@ body.is-resizing webview { pointer-events: none !important; }
   -webkit-app-region: drag;
   user-select: none;
 }
-/* When the sidebar collapses the app rail still protects the traffic-light area,
-   so the topbar only needs its normal compact clearance. */
+/* When the sidebar collapses, the topbar becomes the first content beside the
+   rail. Keep its menu button clear of the native macOS traffic lights instead
+   of leaving it in the awkward rail/chrome gap. */
 #sidebar.collapsed + #main #topbar {
-  padding-top: 10px;
+  padding-left: 46px;
+  padding-top: 8px;
 }
 
 /* ── Windows custom title-bar controls ─────────────────────────────── */
@@ -2626,6 +2660,8 @@ body.is-resizing webview { pointer-events: none !important; }
 .win-ctrl:hover { background: var(--fau-surface3); color: var(--fau-text); }
 .win-ctrl.close:hover { background: #e81123; color: #fff; }
 body.win-platform #app-rail {
+  top: 0;
+  height: 100vh;
   padding-top: 18px;
 }
 body.win-platform #sidebar-header {
@@ -2774,6 +2810,17 @@ body { animation: none; }
   transition: transform .22s cubic-bezier(.4,0,.2,1);
 }
 #tasks-panel.open { transform: translateX(0); }
+#app-page-body > #tasks-panel {
+  position: static;
+  inset: auto;
+  width: 100%;
+  height: 100%;
+  transform: none;
+  transition: none;
+  z-index: auto;
+}
+#app-page-body > #tasks-panel #auto-nav-col { padding-top: 16px; }
+#app-page-body > #tasks-panel #auto-back-btn { display: none; }
 
 /* Left nav column — mirrors #settings-nav-col */
 #auto-nav-col {
@@ -10153,6 +10200,17 @@ mark.find-hit.find-hit-active {
   transition: transform .22s cubic-bezier(.4,0,.2,1);
 }
 #board-panel.open { transform: translateX(0); }
+#app-page-body > #board-panel {
+  position: static;
+  inset: auto;
+  width: 100%;
+  height: 100%;
+  transform: none;
+  transition: none;
+  z-index: auto;
+}
+#app-page-body > #board-panel #board-panel-header { padding-top: 14px; }
+#app-page-body > #board-panel #board-panel-back { display: none; }
 
 #board-panel-header {
   display: flex; align-items: center; gap: 14px;

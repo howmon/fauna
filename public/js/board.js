@@ -1056,25 +1056,36 @@
     var panel = document.getElementById('board-panel');
     var body  = document.getElementById('board-panel-body');
     if (!panel || !body) return;
-    _boardPanelOpen = !_boardPanelOpen;
-    panel.classList.toggle('open', _boardPanelOpen);
     if (_boardPanelOpen) {
+      closeBoardPanelPage();
+      if (typeof closeAppPage === 'function') closeAppPage();
+    } else {
       // Close the automations panel if it was also open so we don't stack.
-      var t = document.getElementById('tasks-panel');
-      if (t && t.classList.contains('open') && typeof window.toggleTasksPanel === 'function') {
-        try { window.toggleTasksPanel(); } catch (_) {}
+      if (typeof closeTasksPanelPage === 'function') closeTasksPanelPage();
+      _boardPanelOpen = true;
+      var pageBody = typeof _openAppPage === 'function' ? _openAppPage('board', 'Board') : null;
+      if (pageBody) {
+        pageBody.innerHTML = '';
+        pageBody.appendChild(panel);
       }
+      panel.classList.add('open');
       try { renderKanbanBoard({ scope: 'global' }, body); }
       catch (e) {
         body.innerHTML = '<div style="padding:20px;color:var(--fau-text-dim)">Board failed to load: ' +
           (e && e.message ? e.message : 'unknown error') + '</div>';
       }
-    } else {
-      // Tear down SSE + clear DOM
-      var s = window._kbState;
-      if (s && s.sse) { try { s.sse.close(); } catch (_) {} s.sse = null; }
-      body.innerHTML = '';
     }
   }
+  function closeBoardPanelPage() {
+    if (!_boardPanelOpen) return;
+    _boardPanelOpen = false;
+    var panel = document.getElementById('board-panel');
+    var body  = document.getElementById('board-panel-body');
+    if (panel) panel.classList.remove('open');
+    var s = window._kbState;
+    if (s && s.sse) { try { s.sse.close(); } catch (_) {} s.sse = null; }
+    if (body) body.innerHTML = '';
+  }
   window.toggleBoardPanel = toggleBoardPanel;
+  window.closeBoardPanelPage = closeBoardPanelPage;
 })();

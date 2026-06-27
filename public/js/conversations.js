@@ -446,6 +446,7 @@ function newConversation(opts) {
     fetch('/api/projects/' + projectId + '/conversations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ convId: id }) }).catch(function(){});
   }
   loadConversation(id);
+  if (!conv.messages.length && typeof showEmpty === 'function') showEmpty();
   // Clear agents — only pinned agents auto-populate in new chats
   if (typeof resetAgentChipsToPinned === 'function') resetAgentChipsToPinned();
   // Reset the live context-window ring — fresh conv has no usage yet
@@ -653,7 +654,8 @@ function loadConversation(id) {
     });
   }
 
-  if (conv.messages.length) showMessages();
+  var hasVisibleMessages = !!(convInner && convInner.querySelector('.msg'));
+  if (hasVisibleMessages) showMessages();
   else showEmpty();
 
   ensureStreamingPlaceholder(conv);

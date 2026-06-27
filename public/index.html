@@ -72,18 +72,21 @@
   <!-- ── App rail ─────────────────────────────────────────────────── -->
   <nav id="app-rail" aria-label="Primary navigation">
     <div class="app-rail-top">
-      <button class="app-rail-btn app-rail-home" onclick="openHomePage()" title="Home" aria-label="Home"><i class="ti ti-home"></i></button>
-      <button class="app-rail-btn" onclick="newConversation()" title="New chat" aria-label="New chat"><i class="ti ti-plus"></i></button>
-      <button class="app-rail-btn" onclick="openAllConversations()" title="Search chats" aria-label="Search chats"><i class="ti ti-search"></i></button>
-      <button class="app-rail-btn" onclick="openAllArtifactsPage()" title="Artifacts" aria-label="Artifacts"><i class="ti ti-layout-grid"></i></button>
-      <button class="app-rail-btn" onclick="openAllProjects()" title="Projects" aria-label="Projects"><i class="ti ti-folder"></i></button>
-      <button class="app-rail-btn" onclick="toggleTasksPanel()" title="Automations" aria-label="Automations"><i class="ti ti-bolt"></i></button>
-      <button class="app-rail-btn" onclick="toggleBoardPanel()" title="Board" aria-label="Board"><i class="ti ti-layout-kanban"></i></button>
+      <button class="app-rail-btn app-rail-home" data-rail-page="home" onclick="openHomePage()" title="Home" aria-label="Home"><i class="ti ti-home"></i></button>
+      <button class="app-rail-btn" data-rail-page="conversations" onclick="openConversationsRail()" title="Conversations" aria-label="Conversations"><i class="ti ti-message-circle"></i></button>
+      <button class="app-rail-btn" data-rail-page="artifacts" onclick="openAllArtifactsPage()" title="Artifacts" aria-label="Artifacts"><i class="ti ti-layout-grid"></i></button>
+      <button class="app-rail-btn" data-rail-page="projects" onclick="openAllProjects()" title="Projects" aria-label="Projects"><i class="ti ti-folder"></i></button>
+      <button class="app-rail-btn" data-rail-page="automations" onclick="toggleTasksPanel()" title="Automations" aria-label="Automations"><i class="ti ti-bolt"></i></button>
+      <button class="app-rail-btn" data-rail-page="board" onclick="toggleBoardPanel()" title="Board" aria-label="Board"><i class="ti ti-layout-kanban"></i></button>
+      <button class="app-rail-btn" data-rail-page="plugins" onclick="openPluginsPage()" title="Plugins" aria-label="Plugins"><i class="ti ti-puzzle"></i></button>
     </div>
     <div class="app-rail-bottom">
-      <button class="app-rail-btn" onclick="openUserSettings()" title="Settings" aria-label="Settings"><i class="ti ti-settings"></i></button>
-      <button class="app-rail-btn" onclick="toggleNotificationPanel()" title="Notifications" aria-label="Notifications"><i class="ti ti-bell"></i><span id="app-rail-notif-dot"></span></button>
-      <button class="app-rail-avatar" onclick="openUserSettings()" title="Account" aria-label="Account">S</button>
+      <button class="app-rail-btn" data-rail-page="settings" onclick="openUserSettings()" title="Settings" aria-label="Settings"><i class="ti ti-settings"></i></button>
+      <div id="app-rail-notif-wrap" class="app-rail-notif-wrap">
+        <button id="app-rail-notif-btn" class="app-rail-btn" onclick="toggleNotificationPanel()" title="Notifications" aria-label="Notifications"><i class="ti ti-bell"></i><span id="app-rail-notif-dot"></span></button>
+        <div id="topbar-notif-panel"></div>
+      </div>
+      <button class="app-rail-avatar" data-rail-page="settings" onclick="openUserSettings()" title="Account" aria-label="Account">S</button>
     </div>
   </nav>
 
@@ -108,16 +111,6 @@
         Search
       </button>
     </div>
-
-    <!-- Primary nav -->
-    <nav id="sidebar-nav">
-      <button class="sidebar-nav-item" onclick="toggleTasksPanel()">
-        <i class="ti ti-bolt"></i><span>Automations</span>
-      </button>
-      <button class="sidebar-nav-item" onclick="toggleBoardPanel()">
-        <i class="ti ti-layout-kanban"></i><span>Board</span>
-      </button>
-    </nav>
 
     <!-- Active project strip removed: projects now live as collapsible folders
          in the sidebar tree below, so there is no separate enter/exit state. -->
@@ -271,13 +264,6 @@
         <i class="ti ti-user-circle" id="topbar-account-icon"></i>
         <span id="topbar-account-label" style="display:none"></span>
       </button>
-      <div id="topbar-notif-wrap" class="topbar-notif-wrap">
-        <button class="topbar-icon-btn topbar-notif-btn" id="topbar-notif-btn" onclick="toggleNotificationPanel()" title="Notifications">
-          <i class="ti ti-bell"></i>
-          <span id="topbar-notif-badge" class="store-notif-badge" style="display:none"></span>
-        </button>
-        <div id="topbar-notif-panel"></div>
-      </div>
       <!-- Overflow menu -->
       <div id="topbar-overflow" class="topbar-overflow">
         <button class="topbar-btn" id="topbar-overflow-btn" onclick="toggleTopbarMenu(event)" title="More options"><i class="ti ti-dots"></i></button>
@@ -1685,6 +1671,12 @@ Examples:
 
   function openSettingsPage(page) {
     var panel = document.getElementById('settings-panel');
+    var pageId = page === 'plugins' ? 'plugins' : 'settings';
+    var body = typeof _openAppPage === 'function' ? _openAppPage(pageId, page === 'plugins' ? 'Plugins' : 'Settings') : null;
+    if (body && panel) {
+      body.innerHTML = '';
+      body.appendChild(panel);
+    }
     if (panel && !panel.classList.contains('open')) {
       settingsOpen = true;
       panel.classList.add('open');
@@ -1695,6 +1687,16 @@ Examples:
   }
 
   function switchSettingsPage(page, btn) {
+    if (typeof setAppRailActive === 'function') setAppRailActive(page === 'plugins' ? 'plugins' : 'settings');
+    var shellPage = document.getElementById('app-page');
+    if (shellPage && shellPage.style.display !== 'none' && (shellPage.dataset.page === 'settings' || shellPage.dataset.page === 'plugins')) {
+      shellPage.dataset.page = page === 'plugins' ? 'plugins' : 'settings';
+      var titleEl = document.getElementById('topbar-title');
+      if (titleEl) {
+        titleEl.textContent = page === 'plugins' ? 'Plugins' : 'Settings';
+        titleEl.title = titleEl.textContent;
+      }
+    }
     document.querySelectorAll('#settings-panel .settings-page').forEach(function(p) {
       p.classList.toggle('active', p.dataset.page === page);
     });

@@ -336,7 +336,11 @@ function _closeGlobalPages(exceptId) {
 }
 
 function _openAppPage(pageId, title) {
+  _closeReusableAppPages(pageId);
+  _parkReusableAppPanels();
   _closeGlobalPages('');
+  setAppRailActive(pageId);
+  if (typeof setConversationRailVisible === 'function') setConversationRailVisible(false);
   var page = document.getElementById('app-page');
   var body = document.getElementById('app-page-body');
   if (!page || !body) return null;
@@ -358,9 +362,28 @@ function _openAppPage(pageId, title) {
   return body;
 }
 
+function _closeReusableAppPages(nextPageId) {
+  if (nextPageId !== 'automations' && typeof closeTasksPanelPage === 'function') closeTasksPanelPage();
+  if (nextPageId !== 'board' && typeof closeBoardPanelPage === 'function') closeBoardPanelPage();
+  if (nextPageId !== 'settings' && nextPageId !== 'plugins' && typeof closeSettingsPanelPage === 'function') closeSettingsPanelPage();
+}
+
+function _parkReusableAppPanels() {
+  ['tasks-panel', 'board-panel', 'settings-panel'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el && el.parentElement && el.parentElement.id === 'app-page-body') {
+      document.body.appendChild(el);
+    }
+  });
+}
+
 function closeAppPage() {
+  _closeReusableAppPages('');
+  setAppRailActive('conversations');
+  if (typeof setConversationRailVisible === 'function') setConversationRailVisible(true);
   var page = document.getElementById('app-page');
   var body = document.getElementById('app-page-body');
+  _parkReusableAppPanels();
   if (page) {
     page.style.display = 'none';
     page.dataset.page = '';
@@ -369,6 +392,22 @@ function closeAppPage() {
   var input = document.getElementById('input-area');
   if (input) input.style.display = '';
   if (typeof renderProjectContextBar === 'function') renderProjectContextBar();
+}
+
+function openPluginsPage() {
+  if (typeof openSettingsPage === 'function') openSettingsPage('plugins');
+}
+
+function openConversationsRail() {
+  closeAppPage();
+  if (typeof setConversationRailVisible === 'function') setConversationRailVisible(true);
+  setAppRailActive('conversations');
+}
+
+function setAppRailActive(pageId) {
+  document.querySelectorAll('#app-rail [data-rail-page]').forEach(function(btn) {
+    btn.classList.toggle('active', !!pageId && btn.dataset.railPage === pageId);
+  });
 }
 
 function _getAppPageBody(pageId) {

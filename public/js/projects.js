@@ -344,6 +344,8 @@ function renderProjectSidebarList() {
 function openAllProjects() {
   var page = document.getElementById('all-projects-page');
   if (!page) return;
+  if (typeof closeAppPage === 'function') closeAppPage();
+  if (typeof setAppRailActive === 'function') setAppRailActive('projects');
   page._filter = '';
   page.style.display = 'flex';
   _renderAllProjectsPage();
@@ -352,6 +354,7 @@ function openAllProjects() {
 function closeAllProjects() {
   var page = document.getElementById('all-projects-page');
   if (page) page.style.display = 'none';
+  if (typeof setAppRailActive === 'function') setAppRailActive('');
 }
 
 async function _dedupeAllProjects() {

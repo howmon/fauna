@@ -464,10 +464,22 @@ function onModelChange(id) {
 var settingsOpen = false;
 
 function toggleSettings() {
-  settingsOpen = !settingsOpen;
-  document.getElementById('settings-panel').classList.toggle('open', settingsOpen);
-  if (settingsOpen) loadSettingsState();
+  if (settingsOpen) {
+    if (typeof closeSettingsPanelPage === 'function') closeSettingsPanelPage();
+    if (typeof closeAppPage === 'function') closeAppPage();
+    return;
+  }
+  if (typeof openSettingsPage === 'function') openSettingsPage('general');
 }
+
+function closeSettingsPanelPage() {
+  if (!settingsOpen) return;
+  settingsOpen = false;
+  var panel = document.getElementById('settings-panel');
+  if (panel) panel.classList.remove('open');
+}
+
+window.closeSettingsPanelPage = closeSettingsPanelPage;
 
 // ── More overflow menu ────────────────────────────────────────────────────
 function toggleMoreMenu(e) {
@@ -1141,13 +1153,24 @@ function reconcileBusyState() {
 
 function showMessages() {
   if (typeof closeAppPage === 'function') closeAppPage();
-  document.getElementById('empty-state').classList.add('hidden');
+  if (typeof setAppRailActive === 'function') setAppRailActive('conversations');
+  var empty = document.getElementById('empty-state');
+  if (empty) {
+    empty.classList.add('hidden');
+    empty.style.display = 'none';
+  }
   document.getElementById('messages').style.display = 'block';
 }
 
 function showEmpty() {
   if (typeof closeAppPage === 'function') closeAppPage();
-  document.getElementById('empty-state').classList.remove('hidden');
+  if (typeof setAppRailActive === 'function') setAppRailActive('conversations');
+  if (typeof renderPromptStarters === 'function') renderPromptStarters();
+  var empty = document.getElementById('empty-state');
+  if (empty) {
+    empty.classList.remove('hidden');
+    empty.style.display = 'flex';
+  }
   document.getElementById('messages').style.display = 'none';
 }
 
@@ -1715,9 +1738,28 @@ function updateSysScopeHint() {
 // ── Sidebar ───────────────────────────────────────────────────────────────
 
 var sidebarVisible = true;
-function toggleSidebar() {
-  sidebarVisible = !sidebarVisible;
+function setConversationRailVisible(visible) {
   var sb = document.getElementById('sidebar');
+  if (!sb) return;
+  if (visible) {
+    sb.style.display = 'flex';
+    sidebarVisible = true;
+    sb.classList.remove('collapsed');
+    if (sb.dataset.savedWidth) sb.style.width = sb.dataset.savedWidth;
+    if (sb.dataset.savedMinWidth) sb.style.minWidth = sb.dataset.savedMinWidth;
+  } else {
+    sb.style.display = 'none';
+  }
+}
+
+function toggleSidebar() {
+  var sb = document.getElementById('sidebar');
+  if (sb && sb.style.display === 'none') {
+    if (typeof openConversationsRail === 'function') openConversationsRail();
+    else setConversationRailVisible(true);
+    return;
+  }
+  sidebarVisible = !sidebarVisible;
   if (!sidebarVisible) {
     // Store current inline width so we can restore it
     sb.dataset.savedWidth = sb.style.width || '';
@@ -1786,9 +1828,102 @@ var promptMap = {
   'Run a Harness team':      '@21-code-reviewer-orchestrator review the following code across style, security, performance, and architecture. Delegate to each specialist in parallel, then synthesize a unified verdict.\n\n```\n// Paste code here\n```',
 };
 
+function _promptStarterDefaults() {
+  return [
+    { title: 'What\'s using my disk?', sub: 'Find large files and free up space', prompt: promptMap['What\'s using my disk?'] },
+    { title: 'Show Q1 metrics', sub: 'Revenue, NPS and CSAT as a live dashboard card', prompt: promptMap['Show Q1 metrics'] },
+    { title: 'Design a circuit', sub: 'Schematic + SPICE simulation', prompt: promptMap['Design a circuit'] },
+    { title: 'Build a dashboard', sub: 'Generate an interactive HTML artifact', prompt: promptMap['Build a dashboard'] },
+    { title: 'Explain code', sub: 'Paste code and get a clear explanation', prompt: promptMap['Explain code'] },
+    { title: 'Teach me something', sub: 'Interactive whiteboard lesson with narration', prompt: promptMap['Teach me something'] },
+    { title: 'Make a podcast', sub: 'Multi-voice dialogue from an article or topic', prompt: promptMap['Make a podcast'] },
+    { title: 'Run a Harness team', sub: 'Multi-agent code review', prompt: promptMap['Run a Harness team'] }
+  ];
+}
+
+function _promptStarterRecentProjects(limit) {
+  var convs = (state && state.conversations) || [];
+  return ((state && state.projects) || []).slice().map(function(p) {
+    var projectConvs = convs.filter(function(c) { return c.projectId === p.id; });
+    return {
+      project: p,
+      count: projectConvs.length,
+      score: (p.lastActiveAt || p.updatedAt || p.createdAt || 0) + projectConvs.length * 86400000
+    };
+  }).sort(function(a, b) { return b.score - a.score; }).slice(0, limit).map(function(item) {
+    var name = item.project.name || 'this project';
+    return {
+      title: 'Continue ' + name,
+      sub: item.count ? item.count + ' chats in this project' : 'Pick up this project',
+      prompt: 'Help me continue work on the project "' + name + '". Review the current context, recent conversations, and likely next tasks, then suggest the best next step.'
+    };
+  });
+}
+
+function _promptStarterRecentTasks(limit) {
+  var tasks = (typeof _tasksCache !== 'undefined' && Array.isArray(_tasksCache)) ? _tasksCache : [];
+  return tasks.slice().filter(function(t) {
+    return t && t.title && t.status !== 'completed' && t.status !== 'failed';
+  }).sort(function(a, b) {
+    return (b.updatedAt || b.createdAt || b.nextRunAt || 0) - (a.updatedAt || a.createdAt || a.nextRunAt || 0);
+  }).slice(0, limit).map(function(t) {
+    return {
+      title: 'Work on ' + t.title,
+      sub: t.status ? 'Automation is ' + t.status : 'Automation follow-up',
+      prompt: 'Help me review and continue the automation task "' + t.title + '". Check what it is supposed to do, what state it is in, and recommend the next action.'
+    };
+  });
+}
+
+function _promptStarterRecentConversationPatterns(limit) {
+  var seen = Object.create(null);
+  var skip = /^(new conversation|new chat|conversation|untitled)$/i;
+  return ((state && state.conversations) || []).slice().sort(function(a, b) {
+    return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
+  }).filter(function(c) {
+    var title = (c && c.title || '').trim();
+    if (!title || skip.test(title)) return false;
+    var key = title.toLowerCase().replace(/\s+/g, ' ').slice(0, 40);
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  }).slice(0, limit).map(function(c) {
+    return {
+      title: 'Revisit ' + c.title,
+      sub: c.projectId ? 'Recent project conversation' : 'Recent quick chat',
+      prompt: 'Start from the thread "' + c.title + '" and help me continue with the most useful next step.'
+    };
+  });
+}
+
+function _dedupePromptStarters(items) {
+  var seen = Object.create(null);
+  return items.filter(function(item) {
+    if (!item || !item.title || !item.prompt) return false;
+    var key = item.title.toLowerCase();
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
+}
+
+function renderPromptStarters() {
+  var grid = document.querySelector('#empty-state .empty-grid');
+  if (!grid) return;
+  var items = _dedupePromptStarters([].concat(
+    _promptStarterRecentProjects(3),
+    _promptStarterRecentTasks(2),
+    _promptStarterRecentConversationPatterns(2),
+    _promptStarterDefaults()
+  )).slice(0, 8);
+  grid.innerHTML = items.map(function(item) {
+    return '<div class="empty-card" onclick="usePrompt(this)" data-prompt="' + escHtml(item.prompt) + '"><strong>' + escHtml(item.title) + '</strong>' + escHtml(item.sub || '') + '</div>';
+  }).join('');
+}
+
 function usePrompt(card) {
   var title = card.querySelector('strong').textContent;
-  var text  = promptMap[title] || '';
+  var text  = card.dataset.prompt || promptMap[title] || '';
   var input = document.getElementById('msg-input');
   input.value = text;
   resizeTextarea(input);

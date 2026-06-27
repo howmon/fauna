@@ -77,6 +77,7 @@ function openAgentStore() {
     panel.style.display = 'flex';
     panel.classList.add('open');
   }
+  renderStorePanel();
   loadStoreCategories();
   searchStoreAgents();
   loadUnreadCount();
@@ -1371,8 +1372,10 @@ function hasFaunaUpdateNotification() {
 function syncTopbarNotificationButton() {
   var btn = document.getElementById('topbar-notif-btn');
   var badge = document.getElementById('topbar-notif-badge');
+  var railBtn = document.getElementById('app-rail-notif-btn');
   var railDot = document.getElementById('app-rail-notif-dot');
   var hasUpdate = hasFaunaUpdateNotification();
+  if (railBtn) railBtn.classList.toggle('active', !!storeState.notifOpen);
   if (railDot) railDot.style.display = (storeState.unreadCount > 0 || hasUpdate) ? 'block' : 'none';
   if (!btn || !badge) return;
   btn.classList.toggle('active', !!storeState.notifOpen);

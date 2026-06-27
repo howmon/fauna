@@ -226,22 +226,41 @@ function _isConvEligible(convId) {
 // ── Panel open/close ─────────────────────────────────────────────────────
 
 function toggleTasksPanel() {
-  tasksPanelOpen = !tasksPanelOpen;
-  document.getElementById('tasks-panel').classList.toggle('open', tasksPanelOpen);
+  var panel = document.getElementById('tasks-panel');
+  if (!panel) return;
   if (tasksPanelOpen) {
+    closeTasksPanelPage();
+    if (typeof closeAppPage === 'function') closeAppPage();
+  } else {
+    if (typeof closeBoardPanelPage === 'function') closeBoardPanelPage();
+    tasksPanelOpen = true;
+    var body = typeof _openAppPage === 'function' ? _openAppPage('automations', 'Automations') : null;
+    if (body) {
+      body.innerHTML = '';
+      body.appendChild(panel);
+    }
+    panel.classList.add('open');
     _initAutoResizeHandle();
     fetchTasks();
     _startTaskPolling();
     _connectTaskSSE();
     _startHeartbeatBridge();
-  } else {
-    _stopTaskPolling();
-    _disconnectTaskSSE();
-    _stopHeartbeatBridge();
-    _draft = null;
-    _renderDetail();
   }
 }
+
+function closeTasksPanelPage() {
+  if (!tasksPanelOpen) return;
+  tasksPanelOpen = false;
+  var panel = document.getElementById('tasks-panel');
+  if (panel) panel.classList.remove('open');
+  _stopTaskPolling();
+  _disconnectTaskSSE();
+  _stopHeartbeatBridge();
+  _draft = null;
+  _renderDetail();
+}
+
+window.closeTasksPanelPage = closeTasksPanelPage;
 
 var _autoResizeHandleInited = false;
 function _initAutoResizeHandle() {
