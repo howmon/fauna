@@ -596,9 +596,6 @@
       <button class="settings-nav-item" data-page="voice" onclick="switchSettingsPage('voice',this)">
         <i class="ti ti-microphone"></i> Voice
       </button>
-      <button class="settings-nav-item" data-page="plugins" onclick="openAgentStore()">
-        <i class="ti ti-puzzle"></i> Plugins
-      </button>
       <button class="settings-nav-item" data-page="playbook" onclick="switchSettingsPage('playbook',this)">
         <i class="ti ti-notebook"></i> Playbook
       </button>
@@ -1669,6 +1666,16 @@ Examples:
     else parent.appendChild(page);
   }
 
+  function _parkPluginsPage() {
+    var panel = document.getElementById('agent-store-panel');
+    if (!panel || !panel._pluginsHome) return;
+    var parent = panel._pluginsHome.parent || document.querySelector('.settings-plugin-shell');
+    if (!parent) return;
+    panel.classList.remove('plugins-app-panel');
+    if (panel._pluginsHome.next && panel._pluginsHome.next.parentNode === parent) parent.insertBefore(panel, panel._pluginsHome.next);
+    else parent.appendChild(panel);
+  }
+
   function openMcpServersPage() {
     var body = typeof _openAppPage === 'function' ? _openAppPage('mcp', 'MCP Servers') : null;
     var page = document.getElementById('settings-page-mcp');
@@ -1696,6 +1703,7 @@ Examples:
 
   function openSettingsPage(page) {
     if (page === 'mcp') { openMcpServersPage(); return; }
+    if (page === 'plugins') { openPluginsPage(); return; }
     var panel = document.getElementById('settings-panel');
     if (panel && !panel._settingsPersistGuard) {
       panel._settingsPersistGuard = true;

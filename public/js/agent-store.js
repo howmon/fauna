@@ -71,7 +71,7 @@ function openAgentStore() {
   storeState.open = true;
   storeState.view = 'browse';
   storeState.browseTab = 'myagents';
-  if (typeof openSettingsPage === 'function') openSettingsPage('plugins');
+  if (typeof openPluginsPage === 'function') openPluginsPage();
   var panel = document.getElementById('agent-store-panel');
   if (panel) {
     panel.style.display = 'flex';

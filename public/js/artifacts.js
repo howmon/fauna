@@ -366,7 +366,7 @@ function _openAppPage(pageId, title) {
 function _closeReusableAppPages(nextPageId) {
   if (nextPageId !== 'automations' && typeof closeTasksPanelPage === 'function') closeTasksPanelPage();
   if (nextPageId !== 'board' && typeof closeBoardPanelPage === 'function') closeBoardPanelPage();
-  if (nextPageId !== 'settings' && nextPageId !== 'plugins' && typeof closeSettingsPanelPage === 'function') closeSettingsPanelPage();
+  if (nextPageId !== 'settings' && typeof closeSettingsPanelPage === 'function') closeSettingsPanelPage();
   if (nextPageId !== 'mcp' && window._mcpBuiltinInterval) { clearInterval(window._mcpBuiltinInterval); window._mcpBuiltinInterval = null; }
 }
 
@@ -378,6 +378,7 @@ function _parkReusableAppPanels() {
     }
   });
   if (typeof _parkMcpServersPage === 'function') _parkMcpServersPage();
+  if (typeof _parkPluginsPage === 'function') _parkPluginsPage();
 }
 
 function closeAppPage(opts) {
@@ -404,13 +405,36 @@ function closeAppPage(opts) {
 }
 
 function openPluginsPage() {
-  if (typeof openSettingsPage === 'function') openSettingsPage('plugins');
+  var body = typeof _openAppPage === 'function' ? _openAppPage('plugins', 'Plugins') : null;
+  var panel = document.getElementById('agent-store-panel');
+  if (!body || !panel) return null;
+  if (!panel._pluginsHome) panel._pluginsHome = { parent: panel.parentNode, next: panel.nextSibling };
+  body.innerHTML =
+    '<div class="plugins-page-shell">' +
+      '<div class="plugins-page-header">' +
+        '<div>' +
+          '<div class="home-kicker"><span></span>Extensions</div>' +
+          '<h1>Plugins</h1>' +
+          '<p>Browse, install, publish, and manage Fauna agents and plugin integrations.</p>' +
+        '</div>' +
+      '</div>' +
+      '<div id="plugins-page-mount"></div>' +
+    '</div>';
+  var mount = document.getElementById('plugins-page-mount');
+  if (mount) mount.appendChild(panel);
+  panel.style.display = 'flex';
+  panel.classList.add('open', 'plugins-app-panel');
+  if (typeof setAppRailActive === 'function') setAppRailActive('plugins');
+  return panel;
 }
 
 function openConversationsRail() {
   closeAppPage();
   if (typeof setConversationRailVisible === 'function') setConversationRailVisible(true);
   setAppRailActive('conversations');
+  var conv = state.currentId && typeof getConv === 'function' ? getConv(state.currentId) : null;
+  if (conv && typeof loadConversation === 'function') loadConversation(state.currentId);
+  else if (typeof showEmpty === 'function') showEmpty();
 }
 
 function setAppRailActive(pageId) {
