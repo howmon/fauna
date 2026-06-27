@@ -1782,8 +1782,8 @@ function toggleSidebar() {
 
   function applySidebarWidth(w) {
     var sb = document.getElementById('sidebar');
-    if (!sb) return;
     document.documentElement.style.setProperty('--fau-sidebar-w', w + 'px');
+    if (!sb) return;
     sb.style.width = w + 'px';
     sb.style.minWidth = w + 'px';
   }
@@ -1813,6 +1813,28 @@ function toggleSidebar() {
       applySidebarWidth(SIDEBAR_DEFAULT);
       localStorage.removeItem(STORAGE_KEY);
     });
+
+    var settingsHandle = document.getElementById('settings-resize-handle');
+    var settingsNav = document.getElementById('settings-nav-col');
+    var settingsPanel = document.getElementById('settings-panel');
+    if (settingsHandle && settingsNav && settingsPanel) {
+      window.installPaneResize({
+        handle: settingsHandle,
+        classTarget: settingsPanel,
+        getStartWidth: function () { return settingsNav.getBoundingClientRect().width; },
+        onMove: function (dx, startW) {
+          var w = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startW + dx));
+          applySidebarWidth(w);
+        },
+        onEnd: function () {
+          localStorage.setItem(STORAGE_KEY, Math.round(settingsNav.getBoundingClientRect().width));
+        },
+        onDoubleClick: function () {
+          applySidebarWidth(SIDEBAR_DEFAULT);
+          localStorage.removeItem(STORAGE_KEY);
+        },
+      });
+    }
   });
 }());
 

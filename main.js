@@ -216,7 +216,7 @@ async function createWindow({ convId, projectId, bounds, blank, restored } = {})
     minHeight: 520,
     // macOS: hiddenInset gives the traffic-light buttons; Windows: use 'hidden' for frameless
     titleBarStyle: IS_WIN ? 'hidden' : 'hiddenInset',
-    ...(IS_WIN ? {} : { trafficLightPosition: { x: 24, y: 20 } }),
+    ...(IS_WIN ? {} : { trafficLightPosition: { x: 14, y: 16 } }),
     backgroundColor:   '#0d0d1a',
     // vibrancy + visualEffectState are macOS-only
     ...(IS_WIN ? {} : { vibrancy: 'under-window', visualEffectState: 'active' }),

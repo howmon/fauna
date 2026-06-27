@@ -290,14 +290,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Re-hydrate when window regains focus (picks up mobile/CLI conversations)
   window.addEventListener('focus', function() { _hydrateServerConvs(); });
 
-  // Load last conversation or show empty state
+  // Open an explicit conversation deep link; otherwise land on Home by default.
   if (launch.convId && getConv(launch.convId)) {
     loadConversation(launch.convId);
-  } else if (launch.blank) {
-    // New window opened explicitly blank — do not auto-load the most recent conv
-    showEmpty();
-  } else if (state.conversations.length) {
-    loadConversation(state.conversations[0].id);
+  } else if (typeof openHomePage === 'function') {
+    openHomePage();
   } else {
     showEmpty();
   }

@@ -2680,7 +2680,7 @@ body.is-resizing webview { pointer-events: none !important; }
 /* Traffic light clearance + draggable areas */
 #app-rail {
   height: auto;
-  padding-top: 10px;
+  padding-top: 14px;
 }
 #sidebar-header {
   padding-top: 48px !important;
@@ -8491,8 +8491,8 @@ mark.find-hit.find-hit-active {
 
 /* Left nav column */
 #settings-nav-col {
-  width: 210px;
-  min-width: 210px;
+  width: var(--fau-sidebar-w, 230px);
+  min-width: var(--fau-sidebar-w, 230px);
   border-right: 1px solid var(--fau-border);
   display: flex;
   flex-direction: column;
@@ -8503,6 +8503,34 @@ mark.find-hit.find-hit-active {
   -webkit-app-region: drag;
 }
 #settings-nav-col > * { -webkit-app-region: no-drag; }
+
+#settings-resize-handle {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  transition: background .15s;
+}
+#settings-resize-handle::after {
+  content: '';
+  width: 3px;
+  height: 32px;
+  background: var(--fau-border);
+  border-radius: 2px;
+  opacity: 0;
+  transition: opacity .15s, background .15s;
+}
+#settings-resize-handle:hover::after,
+#settings-panel.resizing #settings-resize-handle::after {
+  opacity: 1;
+  background: var(--accent);
+}
+#settings-panel.resizing { cursor: col-resize; user-select: none; }
+#settings-panel.resizing #settings-content-col { pointer-events: none; }
 
 #settings-back-btn {
   display: flex;
