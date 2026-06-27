@@ -49,6 +49,7 @@ import { registerProjectRunRoutes } from './server/routes/project-runs.js';
 import { registerProjectRoutes } from './server/routes/projects.js';
 import { registerGenUiShareRoutes } from './server/routes/genui-share.js';
 import { registerSyncRoutes } from './server/routes/sync.js';
+import { registerServerlessSyncRoutes } from './server/routes/serverless-sync.js';
 import { createConversationStore } from './server/lib/conversation-store.js';
 import { registerGitHubRoutes } from './server/routes/github.js';
 import {
@@ -325,6 +326,11 @@ registerSyncRoutes(app, {
   projectManager: {
     getProject, getAllProjects, createProject, updateProject, deleteProject, _adoptProject,
   },
+});
+registerServerlessSyncRoutes(app, {
+  conversationStore: _sharedConversationStore,
+  projectManager: { getProject, getAllProjects, updateProject, deleteProject, _adoptProject, writeSourceFileBytes, deleteSourceEntry },
+  port: PORT,
 });
 
 // ── Store routes moved → server/routes/store.js (registered after AGENTS_DIR is declared) ──

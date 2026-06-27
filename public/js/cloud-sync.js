@@ -47,6 +47,260 @@
     } catch (_) { return iso; }
   }
 
+  function _renderServerlessPeerSync() {
+    return [
+      '<div class="settings-section" style="padding:14px;border-radius:8px;background:var(--color-subtleSurface);border:1px solid var(--color-border);color:var(--color-text);margin-top:14px">',
+      '  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">',
+      '    <div style="display:flex;align-items:center;gap:8px;font-weight:600;color:var(--color-text)"><i class="ti ti-qrcode"></i> Serverless device sync</div>',
+      '    <span class="muted" style="font-size:11px;color:var(--color-muted)">No Fauna account</span>',
+      '  </div>',
+      '  <div style="display:grid;grid-template-columns:minmax(0,1fr);gap:12px">',
+      '    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">',
+      '      <button class="settings-row-btn primary" id="sls-share-btn"><i class="ti ti-qrcode"></i> Create QR link</button>',
+      '      <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--color-muted)"><input type="checkbox" id="sls-relay" checked> Encrypted relay</label>',
+      '      <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--color-muted)"><input type="checkbox" id="sls-files"> Project files</label>',
+      '    </div>',
+      '    <div id="sls-share-card" style="display:none;padding:12px;border:1px solid var(--color-border);border-radius:8px;background:var(--color-background)"></div>',
+      '    <div style="display:grid;gap:8px">',
+      '      <label style="font-size:12px;color:var(--color-muted)">Pairing link</label>',
+      '      <textarea id="sls-pair-url" class="settings-input" rows="3" placeholder="fauna://serverless-sync?..." style="resize:vertical;min-height:72px"></textarea>',
+      '      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">',
+      '        <button class="settings-row-btn" id="sls-import-btn"><i class="ti ti-download"></i> Import from device</button>',
+      '        <span id="sls-status" class="muted" style="font-size:12px;color:var(--color-muted)"></span>',
+      '      </div>',
+      '    </div>',
+      '    <div id="sls-peers" style="min-height:24px"></div>',
+      '  </div>',
+      '</div>'
+    ].join('\n');
+  }
+
+  function _renderServerlessPeers() {
+    var host = document.getElementById('sls-peers');
+    if (!host) return;
+    _api('/api/serverless-sync/peers').then(function (r) {
+      if (!r.ok || !r.body || !r.body.ok) {
+        host.innerHTML = '<div class="muted" style="font-size:12px;color:var(--color-danger)">Could not load paired devices</div>';
+        return;
+      }
+      var peers = r.body.peers || [];
+      var shares = r.body.shares || [];
+      var conflicts = r.body.conflicts || [];
+      var peerRows = peers.map(function (p) {
+        var lastStats = p.lastStats || {};
+        var stats = lastStats.pulled || lastStats;
+        var pushed = lastStats.pushed || null;
+        var convs = stats.conversations && stats.conversations.imported ? stats.conversations.imported : 0;
+        var projects = stats.projects && stats.projects.imported ? stats.projects.imported : 0;
+        var deletedConvs = stats.conversationDeletes && stats.conversationDeletes.applied ? stats.conversationDeletes.applied : 0;
+        var deletedProjects = stats.projectDeletes && stats.projectDeletes.applied ? stats.projectDeletes.applied : 0;
+        var deletedFiles = stats.fileDeletes && stats.fileDeletes.applied ? stats.fileDeletes.applied : 0;
+        var pushedConvs = pushed && pushed.conversations && pushed.conversations.imported ? pushed.conversations.imported : 0;
+        var conflictText = p.conflictCount ? ' · ' + p.conflictCount + ' conflict' + (p.conflictCount === 1 ? '' : 's') : '';
+        return [
+          '<div class="sls-peer-row" data-peer-id="' + _esc(p.id) + '" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid var(--color-border)">',
+          '  <div style="min-width:0">',
+          '    <div style="font-weight:600;color:var(--color-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + _esc(p.name || 'Fauna device') + '</div>',
+          '    <div class="muted" style="font-size:11px;color:var(--color-muted)">Last sync ' + _esc(_fmtTime(p.lastSyncAt)) + (projects || convs ? ' · pulled ' + projects + ' projects, ' + convs + ' conversations' : '') + (deletedProjects || deletedConvs || deletedFiles ? ' · deleted ' + deletedProjects + ' projects, ' + deletedConvs + ' conversations, ' + deletedFiles + ' files' : '') + (pushedConvs ? ' · pushed ' + pushedConvs + ' conversations' : '') + conflictText + '</div>',
+          '  </div>',
+          '  <div style="display:flex;gap:6px;flex-shrink:0">',
+          '    <button class="settings-row-btn sls-peer-sync" title="Sync now" style="padding:5px 8px"><i class="ti ti-refresh"></i></button>',
+          '    <button class="settings-row-btn sls-peer-forget" title="Forget device" style="padding:5px 8px"><i class="ti ti-trash"></i></button>',
+          '  </div>',
+          '</div>'
+        ].join('\n');
+      }).join('');
+      var conflictRows = conflicts.map(function (c) {
+        return [
+          '<div class="sls-conflict-row" data-conflict-id="' + _esc(c.id) + '" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid var(--color-border)">',
+          '  <div style="min-width:0">',
+          '    <div style="font-weight:600;color:var(--color-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + _esc(c.namespace || 'item') + ' conflict</div>',
+          '    <div class="muted" style="font-size:11px;color:var(--color-muted)">' + _esc(c.objectId || '') + ' · kept local edit · ' + _esc(_fmtTime(c.detectedAt)) + '</div>',
+          '  </div>',
+          '  <button class="settings-row-btn sls-conflict-dismiss" style="padding:5px 8px"><i class="ti ti-check"></i> Dismiss</button>',
+          '</div>'
+        ].join('\n');
+      }).join('');
+      var shareRows = shares.map(function (s) {
+        return [
+          '<div class="sls-share-row" data-share-id="' + _esc(s.id) + '" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid var(--color-border)">',
+          '  <div style="min-width:0">',
+          '    <div style="font-weight:600;color:var(--color-text)">This device is shareable</div>',
+          '    <div class="muted" style="font-size:11px;color:var(--color-muted)">' + (s.uses || 0) + ' pull' + ((s.uses || 0) === 1 ? '' : 's') + (s.includeFiles ? ' · files enabled' : '') + '</div>',
+          '  </div>',
+          '  <button class="settings-row-btn sls-share-revoke" style="padding:5px 8px"><i class="ti ti-ban"></i> Revoke</button>',
+          '</div>'
+        ].join('\n');
+      }).join('');
+      host.innerHTML = [
+        peers.length ? '<div style="font-weight:600;color:var(--color-text);margin-top:4px">Paired devices</div>' : '',
+        peerRows || '<div class="muted" style="font-size:12px;color:var(--color-muted)">No paired devices yet.</div>',
+        conflicts.length ? '<div style="font-weight:600;color:var(--color-text);margin-top:10px">Conflicts</div>' : '',
+        conflictRows,
+        shares.length ? '<div style="font-weight:600;color:var(--color-text);margin-top:10px">Share access</div>' : '',
+        shareRows
+      ].join('\n');
+      _bindServerlessPeerRows(host);
+    }).catch(function (e) {
+      host.innerHTML = '<div class="muted" style="font-size:12px;color:var(--color-danger)">' + _esc(e.message || 'Could not load paired devices') + '</div>';
+    });
+  }
+
+  function _bindServerlessPeerRows(host) {
+    Array.prototype.forEach.call(host.querySelectorAll('.sls-peer-row'), function (row) {
+      var id = row.getAttribute('data-peer-id');
+      var syncBtn = row.querySelector('.sls-peer-sync');
+      var forgetBtn = row.querySelector('.sls-peer-forget');
+      if (syncBtn && !syncBtn._slsBound) {
+        syncBtn._slsBound = true;
+        syncBtn.onclick = function () {
+          var includeFiles = !!(document.getElementById('sls-files') || {}).checked;
+          syncBtn.disabled = true;
+          _api('/api/serverless-sync/peers/' + encodeURIComponent(id) + '/sync', {
+            method: 'POST',
+            body: JSON.stringify({ includeFiles: includeFiles }),
+          }).then(function (r) {
+            syncBtn.disabled = false;
+            if (!r.ok || !r.body || !r.body.ok) throw new Error((r.body && r.body.error) || 'Sync failed');
+            var status = document.getElementById('sls-status');
+            var pulled = r.body.stats || {};
+            var pushed = r.body.pushed || {};
+            var pulledConvs = pulled.conversations && pulled.conversations.imported ? pulled.conversations.imported : 0;
+            var deletedConvs = pulled.conversationDeletes && pulled.conversationDeletes.applied ? pulled.conversationDeletes.applied : 0;
+            var deletedProjects = pulled.projectDeletes && pulled.projectDeletes.applied ? pulled.projectDeletes.applied : 0;
+            var deletedFiles = pulled.fileDeletes && pulled.fileDeletes.applied ? pulled.fileDeletes.applied : 0;
+            var pushedConvs = pushed.conversations && pushed.conversations.imported ? pushed.conversations.imported : 0;
+            var conflicts = pulled.conflicts && pulled.conflicts.detected ? pulled.conflicts.detected : 0;
+            if (status) { status.textContent = 'Delta synced. Pulled ' + pulledConvs + ' conversations, deleted ' + deletedProjects + ' projects, ' + deletedConvs + ' conversations, ' + deletedFiles + ' files, pushed ' + pushedConvs + (conflicts ? ', kept ' + conflicts + ' local conflict' + (conflicts === 1 ? '' : 's') : '') + '.'; status.style.color = conflicts ? 'var(--color-warning, #b7791f)' : 'var(--color-muted)'; }
+            _renderServerlessPeers();
+            try { if (typeof loadConversations === 'function') loadConversations(); } catch (_) {}
+          }).catch(function (e) {
+            syncBtn.disabled = false;
+            var status = document.getElementById('sls-status');
+            if (status) { status.textContent = e.message || 'Sync failed'; status.style.color = 'var(--color-danger)'; }
+          });
+        };
+      }
+      if (forgetBtn && !forgetBtn._slsBound) {
+        forgetBtn._slsBound = true;
+        forgetBtn.onclick = function () {
+          _api('/api/serverless-sync/peers/' + encodeURIComponent(id), { method: 'DELETE' }).then(function () { _renderServerlessPeers(); });
+        };
+      }
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('.sls-share-row'), function (row) {
+      var id = row.getAttribute('data-share-id');
+      var btn = row.querySelector('.sls-share-revoke');
+      if (btn && !btn._slsBound) {
+        btn._slsBound = true;
+        btn.onclick = function () {
+          _api('/api/serverless-sync/shares/' + encodeURIComponent(id) + '/revoke', { method: 'POST' }).then(function () { _renderServerlessPeers(); });
+        };
+      }
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('.sls-conflict-row'), function (row) {
+      var id = row.getAttribute('data-conflict-id');
+      var btn = row.querySelector('.sls-conflict-dismiss');
+      if (btn && !btn._slsBound) {
+        btn._slsBound = true;
+        btn.onclick = function () {
+          _api('/api/serverless-sync/conflicts/' + encodeURIComponent(id) + '/resolve', {
+            method: 'POST',
+            body: JSON.stringify({ resolution: 'dismissed' }),
+          }).then(function () { _renderServerlessPeers(); });
+        };
+      }
+    });
+  }
+
+  function _bindServerlessPeerSync() {
+    var shareBtn = document.getElementById('sls-share-btn');
+    var importBtn = document.getElementById('sls-import-btn');
+    var status = document.getElementById('sls-status');
+    var shareCard = document.getElementById('sls-share-card');
+    var pairInput = document.getElementById('sls-pair-url');
+    function setStatus(text, isError) {
+      if (!status) return;
+      status.textContent = text || '';
+      status.style.color = isError ? 'var(--color-danger)' : 'var(--color-muted)';
+    }
+    if (shareBtn && !shareBtn._slsBound) {
+      shareBtn._slsBound = true;
+      shareBtn.onclick = function () {
+        var relay = !!(document.getElementById('sls-relay') || {}).checked;
+        var includeFiles = !!(document.getElementById('sls-files') || {}).checked;
+        shareBtn.disabled = true;
+        setStatus('Creating link…', false);
+        _api('/api/serverless-sync/share', {
+          method: 'POST',
+          body: JSON.stringify({ relay: relay, includeFiles: includeFiles }),
+        }).then(function (r) {
+          shareBtn.disabled = false;
+          if (!r.ok || !r.body || !r.body.ok) {
+            setStatus((r.body && r.body.error) || 'Could not create link', true);
+            return;
+          }
+          var body = r.body;
+          if (pairInput) pairInput.value = body.pairingUrl || '';
+          if (shareCard) {
+            shareCard.style.display = '';
+            shareCard.innerHTML = [
+              '<div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">',
+              body.qrImage ? '<img src="' + _esc(body.qrImage) + '" alt="Serverless sync QR" style="width:160px;height:160px;border-radius:8px;border:1px solid var(--color-border);background:#fff;padding:6px">' : '',
+              '<div style="min-width:220px;flex:1">',
+              '  <div style="font-weight:600;color:var(--color-text);margin-bottom:4px">Ready to scan</div>',
+              '  <div class="muted" style="font-size:12px;color:var(--color-muted);margin-bottom:8px">' + (body.expiresAt ? 'Expires ' + _esc(_fmtTime(body.expiresAt)) : 'Reusable until revoked') + ' · ' + _esc(body.mode || 'lan') + '</div>',
+              body.warning ? '<div style="font-size:12px;color:var(--color-warning, #b7791f);margin-bottom:8px">' + _esc(body.warning) + '</div>' : '',
+              '  <button class="settings-row-btn" id="sls-copy-link"><i class="ti ti-copy"></i> Copy link</button>',
+              '</div>',
+              '</div>'
+            ].join('\n');
+            var copy = document.getElementById('sls-copy-link');
+            if (copy) copy.onclick = function () {
+              try { navigator.clipboard.writeText(body.pairingUrl || ''); setStatus('Link copied.', false); }
+              catch (_) { setStatus('Copy failed.', true); }
+            };
+          }
+          setStatus('Link created.', false);
+          _renderServerlessPeers();
+        }).catch(function (e) {
+          shareBtn.disabled = false;
+          setStatus(e.message || 'Network error', true);
+        });
+      };
+    }
+    if (importBtn && !importBtn._slsBound) {
+      importBtn._slsBound = true;
+      importBtn.onclick = function () {
+        var pairUrl = (pairInput && pairInput.value || '').trim();
+        if (!pairUrl) { setStatus('Paste a pairing link first.', true); return; }
+        importBtn.disabled = true;
+        setStatus('Importing…', false);
+        _api('/api/serverless-sync/import', {
+          method: 'POST',
+          body: JSON.stringify({ pairUrl: pairUrl }),
+        }).then(function (r) {
+          importBtn.disabled = false;
+          if (!r.ok || !r.body || !r.body.ok) {
+            setStatus((r.body && r.body.error) || 'Import failed', true);
+            return;
+          }
+          var stats = r.body.stats || {};
+          var pc = stats.projects || {};
+          var cc = stats.conversations || {};
+          var fc = stats.files || {};
+          setStatus('Imported ' + (pc.imported || 0) + ' projects, ' + (cc.imported || 0) + ' conversations, and ' + (fc.imported || 0) + ' files.', false);
+          try { if (typeof loadConversations === 'function') loadConversations(); } catch (_) {}
+          _renderServerlessPeers();
+        }).catch(function (e) {
+          importBtn.disabled = false;
+          setStatus(e.message || 'Network error', true);
+        });
+      };
+    }
+    _renderServerlessPeers();
+  }
+
   // ── Status pill in the settings nav ───────────────────────────────────
   function _updatePill(status) {
     var pill = document.getElementById('cloud-sync-pill');
@@ -81,15 +335,15 @@
                      (typeof window.openAgentStore === 'function');
     mount.innerHTML = [
       '<div style="max-width:520px">',
-      '  <h3 style="margin-top:0">Enable Fauna Cloud sync</h3>',
-      '  <p class="muted">Sync your conversations and projects across Mac and Windows. Files stay on your machines — only metadata and chat history move through the cloud.</p>',
+      '  <h3 style="margin-top:0">Fauna account sync</h3>',
+      '  <p class="muted">Optional account sync for conversations and projects across Mac and Windows.</p>',
       '  <div id="cs-error" class="muted" style="color:var(--color-danger);min-height:1.2em;margin:8px 0"></div>',
       (hasStoreUi
         ? '<button class="settings-row-btn primary" id="cs-store-signin-btn">' +
           '  <i class="ti ti-user"></i> Sign in with your Fauna account' +
           '</button>' +
           '<p class="muted" style="font-size:12px;margin:8px 0 16px">' +
-          '  Opens the same sign-in used by the Agent Store. After signing in, sync starts automatically.' +
+          '  Opens the same sign-in used by the Agent Store. After signing in, account sync starts automatically.' +
           '</p>'
         : ''),
       '  <details style="margin:8px 0">',
@@ -110,7 +364,8 @@
       '      <i class="ti ti-cloud-upload"></i> Sign in &amp; enable sync',
       '    </button>',
       '  </details>',
-      '</div>'
+      '</div>',
+      _renderServerlessPeerSync()
     ].join('\n');
 
     var storeBtn = document.getElementById('cs-store-signin-btn');
@@ -119,6 +374,7 @@
     if (btn) btn.onclick = _handleLogin;
     var pw = document.getElementById('cs-password');
     if (pw) pw.addEventListener('keydown', function (e) { if (e.key === 'Enter') _handleLogin(); });
+    _bindServerlessPeerSync();
   }
 
   // ── Render: locked (E2E password prompt) ──────────────────────────────
@@ -358,6 +614,7 @@
       lastErrorRow,
       progressBlock,
       '  </div>',
+      _renderServerlessPeerSync(),
       // Per-project section: rendered async after the initial paint so the
       // first frame doesn't block on /api/sync/projects.
       '  <div id="cs-projects" style="margin-bottom:14px"></div>',
@@ -391,6 +648,7 @@
     bind('cs-logout-btn',  _handleLogout);
     bind('cs-backfill-btn', _handleBackfill);
     bind('cs-change-pw-btn', _handleChangePassword);
+    _bindServerlessPeerSync();
     // Only do the full Projects re-render once per signed-in mount; the
     // poll handler updates per-project bars in place to avoid flicker
     // and unnecessary /api/sync/projects refetches.
