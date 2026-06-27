@@ -3,6 +3,7 @@
 var _codePreviewRegistry = {}; // id → rawText for Preview buttons on code blocks
 
 var ARTIFACT_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+var ARTIFACT_THUMB_IMAGE_BASE64_MAX = 160000;
 
 // Prune artifacts older than 30 days from a conversation's persisted list
 function pruneStaleArtifacts(conv) {
@@ -13,9 +14,63 @@ function pruneStaleArtifacts(conv) {
   });
 }
 
+function _artifactDataUrlFromSvg(svg) {
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+}
+
+function _artifactExcerptText(a) {
+  var raw = '';
+  if (a && typeof a.content === 'string') raw = a.content;
+  else if (a && a.path) raw = a.path;
+  else if (a && a.url) raw = a.url;
+  raw = String(raw || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[#*_`>|{}\[\]]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return raw.slice(0, 180);
+}
+
+function _buildArtifactThumbnail(a) {
+  if (!a || a.thumbnail) return a && a.thumbnail;
+  if (a.type === 'image' && a.base64 && a.base64.length < ARTIFACT_THUMB_IMAGE_BASE64_MAX) return 'data:' + (a.mime || 'image/png') + ';base64,' + a.base64;
+  if ((a.type === 'svg' || a.type === 'image') && typeof a.content === 'string' && /<svg[\s>]/i.test(a.content)) {
+    var svgText = a.content.trim();
+    if (svgText.length < 180000) return _artifactDataUrlFromSvg(svgText);
+  }
+  var type = _artifactTypeLabel(a.type || 'artifact');
+  var title = escHtml(a.title || 'Artifact');
+  var excerpt = escHtml(_artifactExcerptText(a) || type + ' artifact');
+  var icon = artifactTypeIcon(a.type || '').replace(/^ti-/, '');
+  var accent = a.type === 'html' || a.type === 'web' ? '#22c55e' : (a.type === 'markdown' ? '#3b82f6' : (a.type === 'json' || a.type === 'code' ? '#8b5cf6' : '#64748b'));
+  var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">' +
+    '<defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#ffffff"/><stop offset="1" stop-color="#f3f7fb"/></linearGradient></defs>' +
+    '<rect width="640" height="400" rx="24" fill="url(#g)"/>' +
+    '<rect x="34" y="34" width="572" height="332" rx="20" fill="#fff" stroke="#dbe4ee" stroke-width="2"/>' +
+    '<circle cx="68" cy="70" r="8" fill="#ef4444"/><circle cx="94" cy="70" r="8" fill="#f59e0b"/><circle cx="120" cy="70" r="8" fill="#22c55e"/>' +
+    '<rect x="34" y="104" width="572" height="2" fill="#eef2f7"/>' +
+    '<rect x="62" y="136" width="92" height="92" rx="18" fill="' + accent + '" fill-opacity="0.14"/>' +
+    '<text x="108" y="193" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="700" fill="' + accent + '">' + escHtml(icon.slice(0, 2).toUpperCase()) + '</text>' +
+    '<text x="180" y="156" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="700" fill="#0f172a">' + title + '</text>' +
+    '<text x="180" y="184" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="700" fill="' + accent + '">' + escHtml(type.toUpperCase()) + '</text>' +
+    '<foreignObject x="180" y="210" width="390" height="96"><div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.45;color:#475569;overflow:hidden;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;">' + excerpt + '</div></foreignObject>' +
+    '<rect x="62" y="286" width="450" height="10" rx="5" fill="#e5edf5"/><rect x="62" y="310" width="390" height="10" rx="5" fill="#eef3f8"/><rect x="62" y="334" width="280" height="10" rx="5" fill="#eef3f8"/>' +
+  '</svg>';
+  return _artifactDataUrlFromSvg(svg);
+}
+
+function _artifactThumbnailMarkup(a, className) {
+  var thumb = (a && a.thumbnail) || _buildArtifactThumbnail(a);
+  if (!thumb) return '<div class="' + className + ' artifact-thumb-fallback"><i class="ti ' + artifactTypeIcon(a && a.type) + '"></i></div>';
+  return '<div class="' + className + '"><img src="' + escHtml(thumb) + '" alt="" loading="lazy"></div>';
+}
+
 function addArtifact(spec) {
   var id = 'art-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
   var artifact = Object.assign({ id: id, createdAt: Date.now() }, spec);
+  artifact.thumbnail = _buildArtifactThumbnail(artifact);
   state.artifacts.push(artifact);
   if (state.artifacts.length > 20) state.artifacts.shift();
   renderArtifactTabs();
@@ -74,6 +129,7 @@ function injectArtifactCard(id, containerEl) {
   var card  = document.createElement('div');
   card.className = 'artifact-card';
   card.innerHTML =
+    _artifactThumbnailMarkup(a, 'artifact-card-thumb') +
     '<div class="artifact-card-icon"><i class="ti ' + icon + '"></i></div>' +
     '<div class="artifact-card-info">' +
       '<div class="artifact-card-title">' + escHtml(a.title || 'Artifact') + '</div>' +
@@ -486,9 +542,9 @@ function renderHomePage() {
       '<span class="home-project-analytics">' + analytics + '</span>' +
     '</button>';
   }).join('') || '<div class="home-empty-row">No projects yet</div>';
-  var artifactRows = artifacts.slice(0, 4).map(function(a) {
-    return '<button class="home-artifact-row" onclick="viewArtifactFromLibrary(\'' + escHtml(a.convId) + '\',\'' + escHtml(a.id) + '\')">' +
-      '<i class="ti ' + artifactTypeIcon(a.type) + '"></i>' +
+  var artifactRows = artifacts.slice(0, 6).map(function(a) {
+    return '<button class="home-artifact-tile" onclick="viewArtifactFromLibrary(\'' + escHtml(a.convId) + '\',\'' + escHtml(a.id) + '\')">' +
+      _artifactThumbnailMarkup(a, 'home-artifact-thumb') +
       '<span><strong>' + escHtml(a.title || 'Artifact') + '</strong><small>' + escHtml(_artifactTypeLabel(a.type)) + ' · ' + escHtml(a.conversationTitle) + '</small></span>' +
     '</button>';
   }).join('') || '<div class="home-empty-row">No saved artifacts yet</div>';
@@ -510,7 +566,7 @@ function renderHomePage() {
         '<div class="home-grid">' +
           '<section class="home-panel"><div class="home-section-title"><i class="ti ti-clock"></i> Recent conversations</div>' + recentRows + '</section>' +
           '<section class="home-panel"><div class="home-section-title"><i class="ti ti-star"></i> Projects</div>' + projectCards + '</section>' +
-          '<section class="home-panel"><div class="home-section-title"><i class="ti ti-sparkles"></i> Artifacts</div>' + artifactRows + '<button class="home-link-row" onclick="closeHomePage();openAllArtifactsPage()">View artifact library <i class="ti ti-arrow-right"></i></button></section>' +
+          '<section class="home-panel"><div class="home-section-title"><i class="ti ti-sparkles"></i> Artifacts</div><div class="home-artifact-grid">' + artifactRows + '</div><button class="home-link-row" onclick="closeHomePage();openAllArtifactsPage()">View artifact library <i class="ti ti-arrow-right"></i></button></section>' +
         '</div>' +
       '</main>' +
     '</div>';
@@ -662,7 +718,7 @@ function _renderArtifactLibraryItems(artifacts, view) {
     var header = '<div class="artifact-library-row artifact-library-head"><span>Artifact</span><span>Project</span><span>Conversation</span><span>Updated</span><span></span></div>';
     return header + artifacts.map(function(a) {
       return '<div class="artifact-library-row">' +
-        '<span class="artifact-library-name"><i class="ti ' + artifactTypeIcon(a.type) + '"></i><span><strong>' + escHtml(a.title || 'Artifact') + '</strong><small>' + escHtml(_artifactTypeLabel(a.type)) + '</small></span></span>' +
+        '<span class="artifact-library-name">' + _artifactThumbnailMarkup(a, 'artifact-library-row-thumb') + '<span><strong>' + escHtml(a.title || 'Artifact') + '</strong><small>' + escHtml(_artifactTypeLabel(a.type)) + '</small></span></span>' +
         '<span>' + (a.projectName ? '<span class="proj-dot proj-color-' + escHtml(a.projectColor || 'blue') + '"></span>' + escHtml(a.projectName) : '<span class="all-proj-dim">—</span>') + '</span>' +
         '<span class="artifact-library-muted">' + escHtml(a.conversationTitle || 'Conversation') + '</span>' +
         '<span class="artifact-library-muted">' + escHtml(_artifactRelativeTime(a.createdAt)) + '</span>' +
@@ -672,6 +728,7 @@ function _renderArtifactLibraryItems(artifacts, view) {
   }
   return artifacts.map(function(a) {
     return '<article class="artifact-library-card">' +
+      _artifactThumbnailMarkup(a, 'artifact-library-thumb') +
       '<div class="artifact-library-card-top"><i class="ti ' + artifactTypeIcon(a.type) + '"></i><span>' + escHtml(_artifactTypeLabel(a.type)) + '</span></div>' +
       '<h3 title="' + escHtml(a.title || 'Artifact') + '">' + escHtml(a.title || 'Artifact') + '</h3>' +
       '<p>' + (a.projectName ? escHtml(a.projectName) + ' · ' : '') + escHtml(a.conversationTitle || 'Conversation') + '</p>' +
@@ -961,7 +1018,16 @@ async function fetchArtifactImage(id, path) {
     if (!r.ok) return;
     var d = await r.json();
     var a = state.artifacts.find(function(x) { return x.id === id; });
-    if (a) { a.base64 = d.base64; a.mime = d.mime; }
+    if (a) {
+      a.base64 = d.base64;
+      a.mime = d.mime;
+      a.thumbnail = _buildArtifactThumbnail(Object.assign({}, a, { thumbnail: '' }));
+      var conv = getConv(state.currentId);
+      if (conv && Array.isArray(conv.artifacts)) {
+        var stored = conv.artifacts.find(function(x) { return x.id === id; });
+        if (stored) { stored.mime = d.mime; stored.thumbnail = a.thumbnail; saveConversations(); }
+      }
+    }
     // Update DOM if currently displayed
     var el = document.getElementById('artimg-' + id);
     if (el) {
