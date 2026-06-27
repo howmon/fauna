@@ -6566,8 +6566,8 @@ textarea.builder-find-active {
 .home-highlights small, .home-project-row small, .home-artifact-row small, .home-conv-row small {
   display: block; margin-top: 2px; color: var(--fau-text-muted); font-size: 12px; font-weight: 500;
 }
-.home-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
-.home-wide { grid-column: 1 / -1; }
+.home-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.home-wide { grid-column: auto; }
 .home-project-main, .home-artifact-row span, .home-conv-row span { flex: 1; min-width: 0; }
 .home-project-main > span, .home-artifact-row strong, .home-conv-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .home-project-analytics { flex-shrink: 0; }

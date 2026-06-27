@@ -502,9 +502,9 @@ function renderHomePage() {
           '<button onclick="closeHomePage();openAllConversations()"><i class="ti ti-messages"></i><span><strong>' + running.length + ' active conversations</strong><small>' + (running.length ? 'Agents are still working' : 'No agents are currently running') + '</small></span><i class="ti ti-chevron-right"></i></button>' +
         '</section>' +
         '<div class="home-grid">' +
+          '<section class="home-panel"><div class="home-section-title"><i class="ti ti-clock"></i> Recent conversations</div>' + recentRows + '</section>' +
           '<section class="home-panel"><div class="home-section-title"><i class="ti ti-star"></i> Projects</div>' + projectCards + '</section>' +
           '<section class="home-panel"><div class="home-section-title"><i class="ti ti-sparkles"></i> Artifacts</div>' + artifactRows + '<button class="home-link-row" onclick="closeHomePage();openAllArtifactsPage()">View artifact library <i class="ti ti-arrow-right"></i></button></section>' +
-          '<section class="home-panel home-wide"><div class="home-section-title"><i class="ti ti-clock"></i> Recent conversations</div>' + recentRows + '</section>' +
         '</div>' +
       '</main>' +
     '</div>';

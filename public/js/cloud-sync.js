@@ -20,6 +20,7 @@
   // doesn't show a stale "98%").
   var _projHwm = Object.create(null);
   var _slsBusy = 0;
+  var _slsLastShare = null;
 
   function _consumeEvent(e) {
     if (!e) return;
@@ -37,6 +38,42 @@
     if (!section) return false;
     var active = document.activeElement;
     return !!(active && section.contains(active));
+  }
+
+  function _renderServerlessShareCard(body) {
+    var shareCard = document.getElementById('sls-share-card');
+    if (!shareCard || !body || !body.pairingUrl) return;
+    var pairInput = document.getElementById('sls-pair-url');
+    if (pairInput) pairInput.value = body.pairingUrl || '';
+    shareCard.style.display = '';
+    shareCard.innerHTML = [
+      '<div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">',
+      body.qrImage ? '<img src="' + _esc(body.qrImage) + '" alt="Serverless sync QR" style="width:160px;height:160px;border-radius:8px;border:1px solid var(--color-border);background:#fff;padding:6px">' : '',
+      '<div style="min-width:220px;flex:1">',
+      '  <div style="font-weight:600;color:var(--color-text);margin-bottom:4px">Ready to scan</div>',
+      '  <div class="muted" style="font-size:12px;color:var(--color-muted);margin-bottom:8px">' + (body.expiresAt ? 'Expires ' + _esc(_fmtTime(body.expiresAt)) : 'Reusable until revoked') + ' · ' + _esc(body.mode || 'lan') + '</div>',
+      body.warning ? '<div style="font-size:12px;color:var(--color-warning, #b7791f);margin-bottom:8px">' + _esc(body.warning) + '</div>' : '',
+      '  <button class="settings-row-btn" id="sls-copy-link"><i class="ti ti-copy"></i> Copy link</button>',
+      '</div>',
+      '</div>'
+    ].join('\n');
+    var copy = document.getElementById('sls-copy-link');
+    if (copy) copy.onclick = function (e) {
+      _consumeEvent(e);
+      var status = document.getElementById('sls-status');
+      try {
+        navigator.clipboard.writeText(body.pairingUrl || '');
+        if (status) { status.textContent = 'Link copied.'; status.style.color = 'var(--color-muted)'; }
+      } catch (_) {
+        if (status) { status.textContent = 'Copy failed.'; status.style.color = 'var(--color-danger)'; }
+      }
+    };
+  }
+
+  function _restoreServerlessShareCard() {
+    if (_slsLastShare && document.getElementById('sls-share-card')) {
+      _renderServerlessShareCard(_slsLastShare);
+    }
   }
 
   function _api(path, opts) {
@@ -375,27 +412,15 @@
             return;
           }
           var body = r.body;
-          if (pairInput) pairInput.value = body.pairingUrl || '';
-          if (shareCard) {
-            shareCard.style.display = '';
-            shareCard.innerHTML = [
-              '<div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">',
-              body.qrImage ? '<img src="' + _esc(body.qrImage) + '" alt="Serverless sync QR" style="width:160px;height:160px;border-radius:8px;border:1px solid var(--color-border);background:#fff;padding:6px">' : '',
-              '<div style="min-width:220px;flex:1">',
-              '  <div style="font-weight:600;color:var(--color-text);margin-bottom:4px">Ready to scan</div>',
-              '  <div class="muted" style="font-size:12px;color:var(--color-muted);margin-bottom:8px">' + (body.expiresAt ? 'Expires ' + _esc(_fmtTime(body.expiresAt)) : 'Reusable until revoked') + ' · ' + _esc(body.mode || 'lan') + '</div>',
-              body.warning ? '<div style="font-size:12px;color:var(--color-warning, #b7791f);margin-bottom:8px">' + _esc(body.warning) + '</div>' : '',
-              '  <button class="settings-row-btn" id="sls-copy-link"><i class="ti ti-copy"></i> Copy link</button>',
-              '</div>',
-              '</div>'
-            ].join('\n');
-            var copy = document.getElementById('sls-copy-link');
-            if (copy) copy.onclick = function (e) {
-              _consumeEvent(e);
-              try { navigator.clipboard.writeText(body.pairingUrl || ''); setStatus('Link copied.', false); }
-              catch (_) { setStatus('Copy failed.', true); }
-            };
-          }
+          _slsLastShare = {
+            id: body.id || body.shareId || body.tokenId || null,
+            pairingUrl: body.pairingUrl || '',
+            qrImage: body.qrImage || '',
+            expiresAt: body.expiresAt || null,
+            mode: body.mode || 'lan',
+            warning: body.warning || ''
+          };
+          _renderServerlessShareCard(_slsLastShare);
           setStatus('Link created.', false);
           _renderServerlessPeers();
         }).catch(function (e) {
@@ -566,6 +591,7 @@
     var pw = document.getElementById('cs-password');
     if (pw) pw.addEventListener('keydown', function (e) { if (e.key === 'Enter') _handleLogin(); });
     _bindServerlessPeerSync();
+    _restoreServerlessShareCard();
   }
 
   // ── Render: locked (E2E password prompt) ──────────────────────────────
@@ -840,6 +866,7 @@
     bind('cs-backfill-btn', _handleBackfill);
     bind('cs-change-pw-btn', _handleChangePassword);
     _bindServerlessPeerSync();
+    _restoreServerlessShareCard();
     // Only do the full Projects re-render once per signed-in mount; the
     // poll handler updates per-project bars in place to avoid flicker
     // and unnecessary /api/sync/projects refetches.
