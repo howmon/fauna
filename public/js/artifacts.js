@@ -335,21 +335,61 @@ function _closeGlobalPages(exceptId) {
   });
 }
 
+function _openAppPage(pageId, title) {
+  _closeGlobalPages('');
+  var page = document.getElementById('app-page');
+  var body = document.getElementById('app-page-body');
+  if (!page || !body) return null;
+  page.dataset.page = pageId;
+  page.style.display = 'block';
+  ['empty-state', 'messages', 'input-area', 'project-context-bar'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  var titleEl = document.getElementById('topbar-title');
+  if (titleEl && title) {
+    titleEl.textContent = title;
+    titleEl.title = title;
+  }
+  var projectCrumb = document.getElementById('topbar-project-crumb');
+  var crumbSep = document.getElementById('topbar-crumb-sep');
+  if (projectCrumb) projectCrumb.style.display = 'none';
+  if (crumbSep) crumbSep.style.display = 'none';
+  return body;
+}
+
+function closeAppPage() {
+  var page = document.getElementById('app-page');
+  var body = document.getElementById('app-page-body');
+  if (page) {
+    page.style.display = 'none';
+    page.dataset.page = '';
+  }
+  if (body) body.innerHTML = '';
+  var input = document.getElementById('input-area');
+  if (input) input.style.display = '';
+  if (typeof renderProjectContextBar === 'function') renderProjectContextBar();
+}
+
+function _getAppPageBody(pageId) {
+  var page = document.getElementById('app-page');
+  if (page && page.style.display !== 'none' && (!pageId || page.dataset.page === pageId)) {
+    return document.getElementById('app-page-body');
+  }
+  return null;
+}
+
 function openHomePage() {
-  var page = document.getElementById('home-page');
-  if (!page) return;
-  _closeGlobalPages('home-page');
-  page.style.display = 'flex';
+  if (!_openAppPage('home', 'Home')) return;
   renderHomePage();
 }
 
 function closeHomePage() {
-  var page = document.getElementById('home-page');
-  if (page) page.style.display = 'none';
+  closeAppPage();
 }
 
 function renderHomePage() {
-  var page = document.getElementById('home-page');
+  var page = _getAppPageBody('home') || document.getElementById('home-page');
   if (!page) return;
   var projects = (state.projects || []).slice().sort(function(a, b) { return (b.lastActiveAt || b.updatedAt || 0) - (a.lastActiveAt || a.updatedAt || 0); });
   var convs = (state.conversations || []).slice().sort(function(a, b) { return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0); });
@@ -399,22 +439,19 @@ function renderHomePage() {
 }
 
 function openAllArtifactsPage() {
-  var page = document.getElementById('all-artifacts-page');
+  var page = _openAppPage('artifacts', 'Artifacts');
   if (!page) return;
-  _closeGlobalPages('all-artifacts-page');
   page._filter = page._filter || '';
   page._view = page._view || localStorage.getItem('fauna-artifact-library-view') || 'grid';
-  page.style.display = 'flex';
   renderAllArtifactsPage();
 }
 
 function closeAllArtifactsPage() {
-  var page = document.getElementById('all-artifacts-page');
-  if (page) page.style.display = 'none';
+  closeAppPage();
 }
 
 function setArtifactLibraryView(view) {
-  var page = document.getElementById('all-artifacts-page');
+  var page = _getAppPageBody('artifacts') || document.getElementById('all-artifacts-page');
   if (!page) return;
   page._view = view === 'list' ? 'list' : 'grid';
   localStorage.setItem('fauna-artifact-library-view', page._view);
@@ -453,8 +490,15 @@ function goToArtifactConversation(convId) {
   if (typeof loadConversation === 'function') loadConversation(convId);
 }
 
+function updateArtifactLibraryFilter(value) {
+  var page = _getAppPageBody('artifacts') || document.getElementById('all-artifacts-page');
+  if (!page) return;
+  page._filter = value || '';
+  renderAllArtifactsPage();
+}
+
 function renderAllArtifactsPage() {
-  var page = document.getElementById('all-artifacts-page');
+  var page = _getAppPageBody('artifacts') || document.getElementById('all-artifacts-page');
   if (!page) return;
   var filter = (page._filter || '').toLowerCase();
   var view = page._view || 'grid';
@@ -471,9 +515,8 @@ function renderAllArtifactsPage() {
     '<div class="all-agents-page-inner">' +
       '<div class="all-agents-header">' +
         '<div class="all-agents-title"><i class="ti ti-layout-grid"></i> Artifacts</div>' +
-        '<div class="all-agents-search-wrap"><i class="ti ti-search"></i><input class="all-agents-search" id="all-artifacts-search" placeholder="Search artifacts…" value="' + escHtml(page._filter || '') + '" oninput="document.getElementById(\'all-artifacts-page\')._filter=this.value;renderAllArtifactsPage()"></div>' +
+        '<div class="all-agents-search-wrap"><i class="ti ti-search"></i><input class="all-agents-search" id="all-artifacts-search" placeholder="Search artifacts…" value="' + escHtml(page._filter || '') + '" oninput="updateArtifactLibraryFilter(this.value)"></div>' +
         '<div class="artifact-view-toggle"><button class="' + (view === 'grid' ? 'active' : '') + '" onclick="setArtifactLibraryView(\'grid\')" title="Grid view"><i class="ti ti-layout-grid"></i></button><button class="' + (view === 'list' ? 'active' : '') + '" onclick="setArtifactLibraryView(\'list\')" title="List view"><i class="ti ti-list"></i></button></div>' +
-        '<button class="all-agents-close" onclick="closeAllArtifactsPage()"><i class="ti ti-x"></i></button>' +
       '</div>' +
       '<div class="artifact-library ' + (view === 'list' ? 'list' : 'grid') + '">' + _renderArtifactLibraryItems(artifacts, view) + '</div>' +
     '</div>';

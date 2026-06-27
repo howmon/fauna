@@ -1140,11 +1140,13 @@ function reconcileBusyState() {
 }
 
 function showMessages() {
+  if (typeof closeAppPage === 'function') closeAppPage();
   document.getElementById('empty-state').classList.add('hidden');
   document.getElementById('messages').style.display = 'block';
 }
 
 function showEmpty() {
+  if (typeof closeAppPage === 'function') closeAppPage();
   document.getElementById('empty-state').classList.remove('hidden');
   document.getElementById('messages').style.display = 'none';
 }

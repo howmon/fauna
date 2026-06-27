@@ -624,6 +624,18 @@ body.is-resizing webview { pointer-events: none !important; }
 /* ── Main ──────────────────────────────────────────────────────────── */
 #main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 320px; }
 
+#app-page {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--fau-bg);
+}
+#app-page-body {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 /* ── Top bar ───────────────────────────────────────────────────────── */
 #topbar {
   display: flex;
@@ -6189,7 +6201,7 @@ textarea.builder-find-active {
   width: 100%; height: 100%; min-height: 0;
 }
 .home-main {
-  overflow-y: auto; min-width: 0; padding: 44px clamp(22px, 5vw, 72px) 44px;
+  overflow-y: auto; min-width: 0; padding: 32px clamp(22px, 5vw, 72px) 44px;
   max-width: 1080px; width: 100%; box-sizing: border-box;
 }
 .home-header {
