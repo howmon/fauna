@@ -75,6 +75,7 @@ var FAUNA_PRESETS = [
   { id: 'violet',  name: 'Violet',  hint: 'Royal purple',              swatch: 'oklch(0.740 0.160 295)' }
 ];
 var FAUNA_DEFAULT_PRESET = 'cyber';
+var FAUNA_BACKGROUND_MODE_DEFAULT = 'themed';
 
 function getPreferredPreset() {
   var stored = localStorage.getItem('fauna-preset');
@@ -94,6 +95,35 @@ function applyPreset(preset) {
     requestAnimationFrame(function () { applyChroma(getPreferredChroma()); });
   } else {
     applyChroma(getPreferredChroma());
+  }
+}
+
+function getPreferredBackgroundMode() {
+  var stored = localStorage.getItem('fauna-background-mode');
+  return stored === 'stable' ? 'stable' : FAUNA_BACKGROUND_MODE_DEFAULT;
+}
+
+function applyBackgroundMode(mode) {
+  mode = mode === 'stable' ? 'stable' : FAUNA_BACKGROUND_MODE_DEFAULT;
+  document.documentElement.setAttribute('data-background-mode', mode);
+  localStorage.setItem('fauna-background-mode', mode);
+  renderBackgroundModeToggle();
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(function () { applyChroma(getPreferredChroma()); });
+  } else {
+    applyChroma(getPreferredChroma());
+  }
+}
+
+function renderBackgroundModeToggle() {
+  var input = document.getElementById('background-mode-stable');
+  if (!input) return;
+  input.checked = getPreferredBackgroundMode() === 'stable';
+  if (!input._backgroundModeBound) {
+    input.addEventListener('change', function (ev) {
+      applyBackgroundMode(ev.target.checked ? 'stable' : 'themed');
+    });
+    input._backgroundModeBound = true;
   }
 }
 
@@ -178,6 +208,11 @@ var FAUNA_CHROMA_BASELINE = 0.16; // reference chroma the presets are tuned arou
 var FAUNA_CHROMA_MIN      = 0.04;
 var FAUNA_CHROMA_MAX      = 0.24;
 var FAUNA_CHROMA_DEFAULT  = 0.04;
+var FAUNA_STABLE_BACKGROUND_TOKENS = [
+  '--color-background', '--color-pageBackground', '--color-surface',
+  '--color-border', '--color-borderStrong', '--color-subtleSurface',
+  '--color-inputSurface'
+];
 
 function getPreferredChroma() {
   var stored = parseFloat(localStorage.getItem('fauna-chroma'));
@@ -224,6 +259,7 @@ function applyChroma(value) {
 
   var root  = document.documentElement;
   var scale = v / FAUNA_CHROMA_BASELINE;
+  var stableBackgrounds = getPreferredBackgroundMode() === 'stable';
 
   // First clear any prior inline overrides so getComputedStyle reflects the
   // raw preset values, not our previous scaling.
@@ -237,6 +273,7 @@ function applyChroma(value) {
   var styles = getComputedStyle(root);
   for (var j = 0; j < FAUNA_CHROMA_TOKENS.length; j++) {
     var name = FAUNA_CHROMA_TOKENS[j];
+    if (stableBackgrounds && FAUNA_STABLE_BACKGROUND_TOKENS.indexOf(name) !== -1) continue;
     var raw  = styles.getPropertyValue(name).trim();
     if (!raw) continue;
     var p = _parseOklch(raw);
@@ -310,6 +347,7 @@ function toggleTheme() {
 // Apply theme + color preset on load
 applyTheme(getPreferredTheme());
 applyPreset(getPreferredPreset());
+applyBackgroundMode(getPreferredBackgroundMode());
 applyFont(getPreferredFont());
 applyChroma(getPreferredChroma());
 

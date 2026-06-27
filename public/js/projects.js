@@ -519,6 +519,7 @@ function updateProjectIndicator() {
   // ── Breadcrumb ────────────────────────────────────────────────
   var crumb    = document.getElementById('topbar-project-crumb');
   var crumbSep = document.getElementById('topbar-crumb-sep');
+  var settingsBtn = document.getElementById('topbar-project-settings-btn');
   var crumbName = document.getElementById('topbar-project-name'); // shared id
 
   if (crumb) {
@@ -526,9 +527,11 @@ function updateProjectIndicator() {
       if (crumbName) crumbName.textContent = proj.name;
       crumb.style.display = '';
       if (crumbSep) crumbSep.style.display = '';
+      if (settingsBtn) settingsBtn.style.display = '';
     } else {
       crumb.style.display = 'none';
       if (crumbSep) crumbSep.style.display = 'none';
+      if (settingsBtn) settingsBtn.style.display = 'none';
     }
   }
 

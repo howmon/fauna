@@ -281,11 +281,16 @@ function _firstNameFromText(text) {
   return text.split(/\s+/).filter(Boolean)[0] || '';
 }
 
-function getFaunaHomeUserName() {
+function getFaunaUserDisplayName() {
   var saved = localStorage.getItem('fauna-user-display-name') || '';
+  if (saved.trim()) return saved.trim();
   var account = _getCachedStoreAccount();
   var accountName = account && (account.name || account.displayName || account.email);
-  return _firstNameFromText(accountName) || _firstNameFromText(saved);
+  return String(accountName || '').trim();
+}
+
+function getFaunaHomeUserName() {
+  return _firstNameFromText(getFaunaUserDisplayName());
 }
 
 function saveFaunaHomeUserName() {
@@ -294,6 +299,7 @@ function saveFaunaHomeUserName() {
   var value = input.value.trim();
   if (!value) return;
   localStorage.setItem('fauna-user-display-name', value);
+  if (typeof updateTopbarAccount === 'function') updateTopbarAccount();
   renderHomePage();
 }
 

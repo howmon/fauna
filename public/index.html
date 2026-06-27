@@ -252,6 +252,9 @@
         <button type="button" id="topbar-crumb-sep" class="topbar-crumb-sep-btn" style="display:none" onclick="event.stopPropagation();toggleBreadcrumbChevronMenu(event)" title="Browse chats in this project">
           <i class="ti ti-chevron-right"></i>
         </button>
+        <button type="button" id="topbar-project-settings-btn" class="topbar-project-settings-btn" style="display:none" onclick="event.stopPropagation();openProjectHub('settings')" title="Project settings">
+          <i class="ti ti-settings"></i>
+        </button>
         <span id="topbar-title" class="topbar-crumb-conv">New conversation</span>
       </div>
       <!-- hidden compat stubs for existing JS -->
@@ -736,6 +739,14 @@
       <div class="settings-section-title">Color theme</div>
       <div id="preset-grid" class="preset-grid"></div>
       <div class="settings-hint">Pick an accent palette. Applies instantly and is remembered. Default is <strong>Cyber</strong>.</div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-title">Backgrounds</div>
+      <label class="settings-check-row">
+        <input id="background-mode-stable" type="checkbox">
+        <span>Keep app backgrounds neutral</span>
+      </label>
+      <div class="settings-hint">Use the selected theme for accents while keeping the shell, panels, and chat backgrounds from shifting hue.</div>
     </div>
     <div class="settings-section">
       <div class="settings-section-title">Font</div>
@@ -1772,6 +1783,7 @@ Examples:
     }
     if (page === 'appearance') {
       if (typeof renderPresetPicker === 'function') renderPresetPicker();
+      if (typeof renderBackgroundModeToggle === 'function') renderBackgroundModeToggle();
       if (typeof renderFontPicker === 'function') renderFontPicker();
       if (typeof renderChromaSlider === 'function') renderChromaSlider();
     }

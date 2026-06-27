@@ -1501,6 +1501,11 @@ async function streamResponse(conv) {
     var memoryCtx      = getMemoryContext(userText);
     var repoInstructionsCtx = typeof getRepositoryInstructionsPrompt === 'function' ? getRepositoryInstructionsPrompt() : '';
     var workspaceCtx   = typeof getWorkspaceContextPrompt === 'function' ? getWorkspaceContextPrompt() : '';
+    var userProfileName = typeof getFaunaUserDisplayName === 'function' ? getFaunaUserDisplayName() : '';
+    userProfileName = String(userProfileName || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 80);
+    var userProfileCtx = userProfileName
+      ? '## User Profile\nThe user\'s preferred display name is ' + userProfileName + '. Address them by this name when it is natural, but do not overuse it.'
+      : '';
 
     // Concise chat directive: terse in conversation, verbose only when writing output
     var conciseDirective = '## Communication Style\n' +
@@ -1538,9 +1543,9 @@ async function streamResponse(conv) {
     var systemPrompt;
     if (agentSysCtx) {
       // Agent active → agent prompt LAST so it wins recency bias.
-      systemPrompt = [playbookCtx, memoryCtx, repoInstructionsCtx, workspaceCtx, figmaCtx, conciseDirective, urlRoutingDirective, userSysPrompt, agentSysCtx + '\n\n' + getAgentMetaContext(), agentToolDirective].filter(Boolean).join('\n\n');
+      systemPrompt = [userProfileCtx, playbookCtx, memoryCtx, repoInstructionsCtx, workspaceCtx, figmaCtx, conciseDirective, urlRoutingDirective, userSysPrompt, agentSysCtx + '\n\n' + getAgentMetaContext(), agentToolDirective].filter(Boolean).join('\n\n');
     } else {
-      systemPrompt = [capsCtx + agentCtx, playbookCtx, memoryCtx, repoInstructionsCtx, workspaceCtx, figmaCtx, conciseDirective, urlRoutingDirective, userSysPrompt].filter(Boolean).join('\n\n');
+      systemPrompt = [capsCtx + agentCtx, userProfileCtx, playbookCtx, memoryCtx, repoInstructionsCtx, workspaceCtx, figmaCtx, conciseDirective, urlRoutingDirective, userSysPrompt].filter(Boolean).join('\n\n');
     }
 
     dbg('► fetch /api/chat model=' + state.model + ' msgs=' + messages.length + ' sysPrompt=' + systemPrompt.length + 'ch', 'cmd');
