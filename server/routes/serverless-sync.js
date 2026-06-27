@@ -28,9 +28,10 @@ function _readPeerState() {
       peers: Array.isArray(data?.peers) ? data.peers : [],
       shares: Array.isArray(data?.shares) ? data.shares : [],
       conflicts: Array.isArray(data?.conflicts) ? data.conflicts : [],
+      settings: data?.settings && typeof data.settings === 'object' ? data.settings : {},
     };
   } catch (_) {
-    return { peers: [], shares: [], conflicts: [] };
+    return { peers: [], shares: [], conflicts: [], settings: {} };
   }
 }
 
@@ -38,9 +39,19 @@ function _writePeerState(state) {
   const file = _stateFile();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-  fs.writeFileSync(tmp, JSON.stringify({ peers: state.peers || [], shares: state.shares || [], conflicts: state.conflicts || [] }, null, 2), { mode: 0o600 });
+  fs.writeFileSync(tmp, JSON.stringify({ peers: state.peers || [], shares: state.shares || [], conflicts: state.conflicts || [], settings: state.settings || {} }, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, file);
   try { fs.chmodSync(file, 0o600); } catch (_) {}
+}
+
+function _syncSettings(raw = {}) {
+  const intervalMs = Math.max(60_000, Math.min(24 * 60 * 60_000, Number(raw.intervalMs) || 15 * 60_000));
+  return {
+    autoSync: raw.autoSync === true,
+    intervalMs,
+    includeFiles: raw.includeFiles === true,
+    push: raw.push !== false,
+  };
 }
 
 function _b64url(buf) {
@@ -387,10 +398,13 @@ export function registerServerlessSyncRoutes(app, deps = {}) {
   const sessions = new Map();
   let relay = null;
   let relayUrl = null;
+  let autoSyncTimer = null;
+  let autoSyncRunning = false;
 
   for (const share of _readPeerState().shares) {
     if (share && share.token && !share.revoked) sessions.set(share.token, share);
   }
+  updateAutoSyncTimer();
 
   function saveShare(session) {
     const state = _readPeerState();
@@ -434,8 +448,87 @@ export function registerServerlessSyncRoutes(app, deps = {}) {
       createdAt: peer.createdAt,
       lastSyncAt: peer.lastSyncAt,
       lastStats: peer.lastStats || null,
+      lastError: peer.lastError || null,
       conflictCount,
     };
+  }
+
+  function publicSettings() {
+    return _syncSettings(_readPeerState().settings || {});
+  }
+
+  function markPeerError(peerId, error) {
+    const state = _readPeerState();
+    const peer = state.peers.find((p) => p.id === peerId);
+    if (peer) {
+      peer.lastError = { message: error?.message || String(error || 'sync failed'), at: new Date().toISOString() };
+      _writePeerState(state);
+    }
+  }
+
+  async function syncPeer(peer, opts = {}) {
+    const includeFiles = opts.includeFiles === true;
+    const localManifest = await buildManifest({ includeFiles });
+    const deltaRequest = _encryptSnapshot({ version: 1, manifest: localManifest, includeFiles }, peer.key, peer.token);
+    const deltaEnvelope = await _postJson(_deltaUrlFromSnapshotUrl(peer.url), peer.token, { envelope: deltaRequest });
+    const deltaResponse = _decryptSnapshot(deltaEnvelope, peer.key, peer.token);
+    const snapshot = deltaResponse.snapshot;
+    const previousSyncAt = peer.lastSyncAt || peer.createdAt || null;
+    const stats = await applySnapshot(snapshot, { peerId: peer.id, since: previousSyncAt });
+    let pushed = null;
+    if (opts.push !== false) {
+      const localSnapshot = await buildDelta(deltaResponse.manifest || {}, { includeFiles, previousManifest: peer.localManifest || null });
+      const pushEnvelope = _encryptSnapshot(localSnapshot, peer.key, peer.token);
+      pushed = await _postJson(_pushUrlFromSnapshotUrl(peer.url), peer.token, { envelope: pushEnvelope });
+    }
+    const latestState = _readPeerState();
+    const latestPeer = latestState.peers.find((p) => p.id === peer.id) || peer;
+    latestPeer.name = latestPeer.name || snapshot.device?.name || 'Fauna device';
+    latestPeer.lastSyncAt = new Date().toISOString();
+    if (opts.auto) latestPeer.lastAutoSyncAt = latestPeer.lastSyncAt;
+    latestPeer.lastStats = { pulled: stats, pushed: pushed?.stats || null };
+    latestPeer.lastError = null;
+    latestPeer.localManifest = await buildManifest({ includeFiles });
+    latestPeer.remoteManifest = deltaResponse.manifest || null;
+    if (!latestState.peers.find((p) => p.id === latestPeer.id)) latestState.peers.push(latestPeer);
+    _writePeerState(latestState);
+    return { peer: latestPeer, source: snapshot.device || null, stats, pushed: pushed?.stats || null };
+  }
+
+  async function runAutoSyncOnce(force = false) {
+    if (autoSyncRunning) return { ok: true, skipped: true, reason: 'already running', results: [] };
+    autoSyncRunning = true;
+    const results = [];
+    try {
+      const state = _readPeerState();
+      const settings = _syncSettings(state.settings || {});
+      const nowMs = Date.now();
+      for (const peer of state.peers || []) {
+        const last = _ts(peer.lastAutoSyncAt || peer.lastSyncAt || peer.createdAt);
+        if (!force && last && nowMs - last < settings.intervalMs) continue;
+        try {
+          const result = await syncPeer(peer, { includeFiles: settings.includeFiles, push: settings.push, auto: true });
+          results.push({ peerId: peer.id, ok: true, stats: result.stats, pushed: result.pushed });
+        } catch (e) {
+          markPeerError(peer.id, e);
+          results.push({ peerId: peer.id, ok: false, error: e.message || 'sync failed' });
+        }
+      }
+      return { ok: true, results };
+    } finally {
+      autoSyncRunning = false;
+    }
+  }
+
+  function updateAutoSyncTimer() {
+    if (autoSyncTimer) clearInterval(autoSyncTimer);
+    autoSyncTimer = null;
+    const settings = publicSettings();
+    if (!settings.autoSync) return;
+    autoSyncTimer = setInterval(() => {
+      runAutoSyncOnce(false).catch((err) => console.warn('[serverless-sync auto] failed:', err?.message || err));
+    }, Math.min(settings.intervalMs, 5 * 60_000));
+    autoSyncTimer.unref?.();
   }
 
   function recordConflict({ peerId, namespace, objectId, local, remote }) {
@@ -455,11 +548,45 @@ export function registerServerlessSyncRoutes(app, deps = {}) {
       remoteUpdatedAt: remote?.updatedAt || remote?.createdAt || null,
       localHash,
       remoteHash,
+      local: structuredClone(local),
+      remote: structuredClone(remote),
     };
     if (existing) Object.assign(existing, row, { detectedAt: existing.detectedAt || row.detectedAt });
     else state.conflicts.push(row);
     _writePeerState(state);
     return row;
+  }
+
+  async function applyRemoteConflict(conflict) {
+    const remote = conflict?.remote;
+    if (!conflict || !remote) throw new Error('conflict has no remote payload');
+    if (conflict.namespace === 'project') {
+      if (remote.deleted) {
+        if (typeof projectManager.deleteProject !== 'function') throw new Error('project delete is unavailable');
+        projectManager.deleteProject(conflict.objectId);
+        return;
+      }
+      projectManager._adoptProject?.(pathPortability.deserializeFromWire(remote, ['rootPath', 'clonePath']));
+      return;
+    }
+    if (conflict.namespace === 'conversation') {
+      if (remote.deleted) {
+        if (typeof conversationStore.del !== 'function') throw new Error('conversation delete is unavailable');
+        await conversationStore.del(conflict.objectId);
+        return;
+      }
+      await conversationStore.put(conflict.objectId, remote);
+      return;
+    }
+    if (conflict.namespace === 'project_file') {
+      if (!remote.deleted) throw new Error('file conflict cannot be auto-applied');
+      if (typeof projectManager.deleteSourceEntry !== 'function') throw new Error('file delete is unavailable');
+      const relPath = _safeRel(remote.relPath);
+      if (!relPath) throw new Error('invalid file path');
+      projectManager.deleteSourceEntry(remote.projectId, '__rootpath__', relPath);
+      return;
+    }
+    throw new Error('unsupported conflict namespace');
   }
 
   async function ensureRelay() {
@@ -646,6 +773,7 @@ export function registerServerlessSyncRoutes(app, deps = {}) {
       relayUrl,
       activeShares: state.shares.filter(_fresh).length,
       peers: state.peers.length,
+      settings: _syncSettings(state.settings || {}),
       bindHost: process.env.FAUNA_BIND_HOST || '127.0.0.1',
       lanIps: _lanIps(),
     });
@@ -653,7 +781,24 @@ export function registerServerlessSyncRoutes(app, deps = {}) {
 
   app.get('/api/serverless-sync/peers', (_req, res) => {
     const state = _readPeerState();
-    res.json({ ok: true, peers: state.peers.map(publicPeer), shares: state.shares.filter((s) => !s.revoked).map((s) => ({ id: s.id, shareUrl: s.shareUrl, createdAt: s.createdAt, uses: s.uses || 0, includeFiles: !!s.includeFiles })), conflicts: state.conflicts.filter((c) => c.status !== 'resolved') });
+    res.json({ ok: true, settings: _syncSettings(state.settings || {}), peers: state.peers.map(publicPeer), shares: state.shares.filter(_fresh).map((s) => ({ id: s.id, shareUrl: s.shareUrl, createdAt: s.createdAt, expiresAt: s.expiresAt || null, persistent: !!s.persistent, uses: s.uses || 0, includeFiles: !!s.includeFiles })), conflicts: state.conflicts.filter((c) => c.status !== 'resolved') });
+  });
+
+  app.post('/api/serverless-sync/auto-sync', (req, res) => {
+    const state = _readPeerState();
+    state.settings = _syncSettings({ ...(state.settings || {}), ...(req.body || {}) });
+    _writePeerState(state);
+    updateAutoSyncTimer();
+    res.json({ ok: true, settings: state.settings });
+  });
+
+  app.post('/api/serverless-sync/auto-sync/run', async (req, res) => {
+    try {
+      const result = await runAutoSyncOnce(req.body?.force === true);
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'auto sync failed' });
+    }
   });
 
   app.get('/api/serverless-sync/conflicts', (_req, res) => {
@@ -661,15 +806,24 @@ export function registerServerlessSyncRoutes(app, deps = {}) {
     res.json({ ok: true, conflicts: state.conflicts.filter((c) => c.status !== 'resolved') });
   });
 
-  app.post('/api/serverless-sync/conflicts/:id/resolve', (req, res) => {
-    const state = _readPeerState();
-    const conflict = state.conflicts.find((c) => c.id === req.params.id);
-    if (!conflict) return res.status(404).json({ ok: false, error: 'conflict not found' });
-    conflict.status = 'resolved';
-    conflict.resolvedAt = new Date().toISOString();
-    conflict.resolution = req.body?.resolution || 'dismissed';
-    _writePeerState(state);
-    res.json({ ok: true });
+  app.post('/api/serverless-sync/conflicts/:id/resolve', async (req, res) => {
+    try {
+      const state = _readPeerState();
+      const conflict = state.conflicts.find((c) => c.id === req.params.id);
+      if (!conflict) return res.status(404).json({ ok: false, error: 'conflict not found' });
+      const resolution = req.body?.resolution || 'keep_local';
+      if (resolution === 'use_remote') await applyRemoteConflict(conflict);
+      if (resolution !== 'keep_local' && resolution !== 'dismissed' && resolution !== 'use_remote') {
+        return res.status(400).json({ ok: false, error: 'unsupported resolution' });
+      }
+      conflict.status = 'resolved';
+      conflict.resolvedAt = new Date().toISOString();
+      conflict.resolution = resolution;
+      _writePeerState(state);
+      res.json({ ok: true, resolution });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'conflict resolve failed' });
+    }
   });
 
   app.post('/api/serverless-sync/relay/start', async (_req, res) => {
@@ -829,31 +983,10 @@ export function registerServerlessSyncRoutes(app, deps = {}) {
       const state = _readPeerState();
       const peer = state.peers.find((p) => p.id === req.params.id);
       if (!peer) return res.status(404).json({ ok: false, error: 'peer not found' });
-      const includeFiles = req.body?.includeFiles === true;
-      const localManifest = await buildManifest({ includeFiles });
-      const deltaRequest = _encryptSnapshot({ version: 1, manifest: localManifest, includeFiles }, peer.key, peer.token);
-      const deltaEnvelope = await _postJson(_deltaUrlFromSnapshotUrl(peer.url), peer.token, { envelope: deltaRequest });
-      const deltaResponse = _decryptSnapshot(deltaEnvelope, peer.key, peer.token);
-      const snapshot = deltaResponse.snapshot;
-      const previousSyncAt = peer.lastSyncAt || peer.createdAt || null;
-      const stats = await applySnapshot(snapshot, { peerId: peer.id, since: previousSyncAt });
-      let pushed = null;
-      if (req.body?.push !== false) {
-        const localSnapshot = await buildDelta(deltaResponse.manifest || {}, { includeFiles, previousManifest: peer.localManifest || null });
-        const pushEnvelope = _encryptSnapshot(localSnapshot, peer.key, peer.token);
-        pushed = await _postJson(_pushUrlFromSnapshotUrl(peer.url), peer.token, { envelope: pushEnvelope });
-      }
-      const latestState = _readPeerState();
-      const latestPeer = latestState.peers.find((p) => p.id === peer.id) || peer;
-      latestPeer.name = latestPeer.name || snapshot.device?.name || 'Fauna device';
-      latestPeer.lastSyncAt = new Date().toISOString();
-      latestPeer.lastStats = { pulled: stats, pushed: pushed?.stats || null };
-      latestPeer.localManifest = await buildManifest({ includeFiles });
-      latestPeer.remoteManifest = deltaResponse.manifest || null;
-      if (!latestState.peers.find((p) => p.id === latestPeer.id)) latestState.peers.push(latestPeer);
-      _writePeerState(latestState);
-      res.json({ ok: true, peer: publicPeer(latestPeer), source: snapshot.device || null, stats, pushed: pushed?.stats || null });
+      const result = await syncPeer(peer, { includeFiles: req.body?.includeFiles === true, push: req.body?.push !== false });
+      res.json({ ok: true, peer: publicPeer(result.peer), source: result.source, stats: result.stats, pushed: result.pushed });
     } catch (e) {
+      markPeerError(req.params.id, e);
       res.status(500).json({ ok: false, error: e.message || 'sync failed' });
     }
   });

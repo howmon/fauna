@@ -58,6 +58,7 @@
       '    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">',
       '      <button class="settings-row-btn primary" id="sls-share-btn"><i class="ti ti-qrcode"></i> Create QR link</button>',
       '      <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--color-muted)"><input type="checkbox" id="sls-relay" checked> Encrypted relay</label>',
+      '      <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--color-muted)"><input type="checkbox" id="sls-persistent" checked> Reusable</label>',
       '      <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--color-muted)"><input type="checkbox" id="sls-files"> Project files</label>',
       '    </div>',
       '    <div id="sls-share-card" style="display:none;padding:12px;border:1px solid var(--color-border);border-radius:8px;background:var(--color-background)"></div>',
@@ -66,9 +67,11 @@
       '      <textarea id="sls-pair-url" class="settings-input" rows="3" placeholder="fauna://serverless-sync?..." style="resize:vertical;min-height:72px"></textarea>',
       '      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">',
       '        <button class="settings-row-btn" id="sls-import-btn"><i class="ti ti-download"></i> Import from device</button>',
+      '        <button class="settings-row-btn" id="sls-scan-btn"><i class="ti ti-scan"></i> Scan QR</button>',
       '        <span id="sls-status" class="muted" style="font-size:12px;color:var(--color-muted)"></span>',
       '      </div>',
       '    </div>',
+      '    <div id="sls-scan-card" style="display:none;padding:12px;border:1px solid var(--color-border);border-radius:8px;background:var(--color-background)"></div>',
       '    <div id="sls-peers" style="min-height:24px"></div>',
       '  </div>',
       '</div>'
@@ -86,6 +89,24 @@
       var peers = r.body.peers || [];
       var shares = r.body.shares || [];
       var conflicts = r.body.conflicts || [];
+      var settings = r.body.settings || {};
+      var autoSync = settings.autoSync === true;
+      var intervalMin = Math.max(1, Math.round((settings.intervalMs || 900000) / 60000));
+      var autoControls = [
+        '<div class="sls-auto-row" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid var(--color-border)">',
+        '  <div style="min-width:0">',
+        '    <div style="font-weight:600;color:var(--color-text)">Local auto-sync</div>',
+        '    <div class="muted" style="font-size:11px;color:var(--color-muted)">Runs on this device only; no Fauna server storage.</div>',
+        '  </div>',
+        '  <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end">',
+        '    <label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--color-muted)"><input type="checkbox" id="sls-auto-enabled"' + (autoSync ? ' checked' : '') + '> On</label>',
+        '    <input id="sls-auto-min" class="settings-input" type="number" min="1" max="1440" value="' + _esc(intervalMin) + '" style="width:72px;height:30px;padding:4px 7px">',
+        '    <span class="muted" style="font-size:11px;color:var(--color-muted)">min</span>',
+        '    <button class="settings-row-btn" id="sls-auto-save" style="padding:5px 8px"><i class="ti ti-device-floppy"></i></button>',
+        '    <button class="settings-row-btn" id="sls-auto-run" style="padding:5px 8px"><i class="ti ti-player-play"></i> Run</button>',
+        '  </div>',
+        '</div>'
+      ].join('\n');
       var peerRows = peers.map(function (p) {
         var lastStats = p.lastStats || {};
         var stats = lastStats.pulled || lastStats;
@@ -97,11 +118,12 @@
         var deletedFiles = stats.fileDeletes && stats.fileDeletes.applied ? stats.fileDeletes.applied : 0;
         var pushedConvs = pushed && pushed.conversations && pushed.conversations.imported ? pushed.conversations.imported : 0;
         var conflictText = p.conflictCount ? ' · ' + p.conflictCount + ' conflict' + (p.conflictCount === 1 ? '' : 's') : '';
+        var errorText = p.lastError && p.lastError.message ? ' · last error ' + p.lastError.message : '';
         return [
           '<div class="sls-peer-row" data-peer-id="' + _esc(p.id) + '" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid var(--color-border)">',
           '  <div style="min-width:0">',
           '    <div style="font-weight:600;color:var(--color-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + _esc(p.name || 'Fauna device') + '</div>',
-          '    <div class="muted" style="font-size:11px;color:var(--color-muted)">Last sync ' + _esc(_fmtTime(p.lastSyncAt)) + (projects || convs ? ' · pulled ' + projects + ' projects, ' + convs + ' conversations' : '') + (deletedProjects || deletedConvs || deletedFiles ? ' · deleted ' + deletedProjects + ' projects, ' + deletedConvs + ' conversations, ' + deletedFiles + ' files' : '') + (pushedConvs ? ' · pushed ' + pushedConvs + ' conversations' : '') + conflictText + '</div>',
+          '    <div class="muted" style="font-size:11px;color:' + (p.lastError ? 'var(--color-danger)' : 'var(--color-muted)') + '">Last sync ' + _esc(_fmtTime(p.lastSyncAt)) + (projects || convs ? ' · pulled ' + projects + ' projects, ' + convs + ' conversations' : '') + (deletedProjects || deletedConvs || deletedFiles ? ' · deleted ' + deletedProjects + ' projects, ' + deletedConvs + ' conversations, ' + deletedFiles + ' files' : '') + (pushedConvs ? ' · pushed ' + pushedConvs + ' conversations' : '') + conflictText + _esc(errorText) + '</div>',
           '  </div>',
           '  <div style="display:flex;gap:6px;flex-shrink:0">',
           '    <button class="settings-row-btn sls-peer-sync" title="Sync now" style="padding:5px 8px"><i class="ti ti-refresh"></i></button>',
@@ -117,7 +139,10 @@
           '    <div style="font-weight:600;color:var(--color-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + _esc(c.namespace || 'item') + ' conflict</div>',
           '    <div class="muted" style="font-size:11px;color:var(--color-muted)">' + _esc(c.objectId || '') + ' · kept local edit · ' + _esc(_fmtTime(c.detectedAt)) + '</div>',
           '  </div>',
-          '  <button class="settings-row-btn sls-conflict-dismiss" style="padding:5px 8px"><i class="ti ti-check"></i> Dismiss</button>',
+          '  <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">',
+          '    <button class="settings-row-btn sls-conflict-keep" style="padding:5px 8px"><i class="ti ti-shield-check"></i> Keep mine</button>',
+          '    <button class="settings-row-btn sls-conflict-remote" style="padding:5px 8px"><i class="ti ti-cloud-download"></i> Use remote</button>',
+          '  </div>',
           '</div>'
         ].join('\n');
       }).join('');
@@ -133,6 +158,7 @@
         ].join('\n');
       }).join('');
       host.innerHTML = [
+        autoControls,
         peers.length ? '<div style="font-weight:600;color:var(--color-text);margin-top:4px">Paired devices</div>' : '',
         peerRows || '<div class="muted" style="font-size:12px;color:var(--color-muted)">No paired devices yet.</div>',
         conflicts.length ? '<div style="font-weight:600;color:var(--color-text);margin-top:10px">Conflicts</div>' : '',
@@ -147,6 +173,53 @@
   }
 
   function _bindServerlessPeerRows(host) {
+    var autoSave = host.querySelector('#sls-auto-save');
+    var autoRun = host.querySelector('#sls-auto-run');
+    if (autoSave && !autoSave._slsBound) {
+      autoSave._slsBound = true;
+      autoSave.onclick = function () {
+        var enabled = !!(host.querySelector('#sls-auto-enabled') || {}).checked;
+        var mins = Number((host.querySelector('#sls-auto-min') || {}).value || 15);
+        var includeFiles = !!(document.getElementById('sls-files') || {}).checked;
+        autoSave.disabled = true;
+        _api('/api/serverless-sync/auto-sync', {
+          method: 'POST',
+          body: JSON.stringify({ autoSync: enabled, intervalMs: Math.max(1, mins) * 60000, includeFiles: includeFiles, push: true }),
+        }).then(function (r) {
+          autoSave.disabled = false;
+          if (!r.ok || !r.body || !r.body.ok) throw new Error((r.body && r.body.error) || 'Auto-sync update failed');
+          var status = document.getElementById('sls-status');
+          if (status) { status.textContent = enabled ? 'Auto-sync enabled.' : 'Auto-sync disabled.'; status.style.color = 'var(--color-muted)'; }
+          _renderServerlessPeers();
+        }).catch(function (e) {
+          autoSave.disabled = false;
+          var status = document.getElementById('sls-status');
+          if (status) { status.textContent = e.message || 'Auto-sync update failed'; status.style.color = 'var(--color-danger)'; }
+        });
+      };
+    }
+    if (autoRun && !autoRun._slsBound) {
+      autoRun._slsBound = true;
+      autoRun.onclick = function () {
+        autoRun.disabled = true;
+        _api('/api/serverless-sync/auto-sync/run', {
+          method: 'POST',
+          body: JSON.stringify({ force: true }),
+        }).then(function (r) {
+          autoRun.disabled = false;
+          if (!r.ok || !r.body || !r.body.ok) throw new Error((r.body && r.body.error) || 'Auto-sync run failed');
+          var count = (r.body.results || []).filter(function (item) { return item.ok; }).length;
+          var status = document.getElementById('sls-status');
+          if (status) { status.textContent = 'Auto-sync ran for ' + count + ' peers.'; status.style.color = 'var(--color-muted)'; }
+          _renderServerlessPeers();
+          try { if (typeof loadConversations === 'function') loadConversations(); } catch (_) {}
+        }).catch(function (e) {
+          autoRun.disabled = false;
+          var status = document.getElementById('sls-status');
+          if (status) { status.textContent = e.message || 'Auto-sync run failed'; status.style.color = 'var(--color-danger)'; }
+        });
+      };
+    }
     Array.prototype.forEach.call(host.querySelectorAll('.sls-peer-row'), function (row) {
       var id = row.getAttribute('data-peer-id');
       var syncBtn = row.querySelector('.sls-peer-sync');
@@ -200,15 +273,36 @@
     });
     Array.prototype.forEach.call(host.querySelectorAll('.sls-conflict-row'), function (row) {
       var id = row.getAttribute('data-conflict-id');
-      var btn = row.querySelector('.sls-conflict-dismiss');
-      if (btn && !btn._slsBound) {
-        btn._slsBound = true;
-        btn.onclick = function () {
+      function resolveConflict(resolution) {
+        var buttons = row.querySelectorAll('button');
+        Array.prototype.forEach.call(buttons, function (button) { button.disabled = true; });
+        _api('/api/serverless-sync/conflicts/' + encodeURIComponent(id) + '/resolve', {
+          method: 'POST',
+          body: JSON.stringify({ resolution: resolution }),
+        }).then(function (r) {
+          if (!r.ok || !r.body || !r.body.ok) throw new Error((r.body && r.body.error) || 'Resolve failed');
+          _renderServerlessPeers();
+          try { if (typeof loadConversations === 'function') loadConversations(); } catch (_) {}
+        }).catch(function (e) {
+          Array.prototype.forEach.call(buttons, function (button) { button.disabled = false; });
+          var status = document.getElementById('sls-status');
+          if (status) { status.textContent = e.message || 'Resolve failed'; status.style.color = 'var(--color-danger)'; }
+        });
+      }
+      var keep = row.querySelector('.sls-conflict-keep');
+      var remote = row.querySelector('.sls-conflict-remote');
+      if (keep && !keep._slsBound) {
+        keep._slsBound = true;
+        keep.onclick = function () {
           _api('/api/serverless-sync/conflicts/' + encodeURIComponent(id) + '/resolve', {
             method: 'POST',
-            body: JSON.stringify({ resolution: 'dismissed' }),
+            body: JSON.stringify({ resolution: 'keep_local' }),
           }).then(function () { _renderServerlessPeers(); });
         };
+      }
+      if (remote && !remote._slsBound) {
+        remote._slsBound = true;
+        remote.onclick = function () { resolveConflict('use_remote'); };
       }
     });
   }
@@ -216,8 +310,10 @@
   function _bindServerlessPeerSync() {
     var shareBtn = document.getElementById('sls-share-btn');
     var importBtn = document.getElementById('sls-import-btn');
+    var scanBtn = document.getElementById('sls-scan-btn');
     var status = document.getElementById('sls-status');
     var shareCard = document.getElementById('sls-share-card');
+    var scanCard = document.getElementById('sls-scan-card');
     var pairInput = document.getElementById('sls-pair-url');
     function setStatus(text, isError) {
       if (!status) return;
@@ -228,12 +324,13 @@
       shareBtn._slsBound = true;
       shareBtn.onclick = function () {
         var relay = !!(document.getElementById('sls-relay') || {}).checked;
+        var persistent = !!(document.getElementById('sls-persistent') || {}).checked;
         var includeFiles = !!(document.getElementById('sls-files') || {}).checked;
         shareBtn.disabled = true;
         setStatus('Creating link…', false);
         _api('/api/serverless-sync/share', {
           method: 'POST',
-          body: JSON.stringify({ relay: relay, includeFiles: includeFiles }),
+          body: JSON.stringify({ relay: relay, persistent: persistent, includeFiles: includeFiles }),
         }).then(function (r) {
           shareBtn.disabled = false;
           if (!r.ok || !r.body || !r.body.ok) {
@@ -295,6 +392,56 @@
         }).catch(function (e) {
           importBtn.disabled = false;
           setStatus(e.message || 'Network error', true);
+        });
+      };
+    }
+    if (scanBtn && !scanBtn._slsBound) {
+      scanBtn._slsBound = true;
+      scanBtn.onclick = function () {
+        if (!scanCard) return;
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof window.BarcodeDetector !== 'function') {
+          setStatus('Camera QR scanning is not available in this runtime. Paste the pairing link instead.', true);
+          return;
+        }
+        scanCard.style.display = '';
+        scanCard.innerHTML = [
+          '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">',
+          '  <div style="font-weight:600;color:var(--color-text)">Scan pairing QR</div>',
+          '  <button class="settings-row-btn" id="sls-scan-stop" style="padding:5px 8px"><i class="ti ti-x"></i></button>',
+          '</div>',
+          '<video id="sls-scan-video" autoplay muted playsinline style="width:100%;max-height:260px;border-radius:8px;background:#000;object-fit:cover"></video>'
+        ].join('\n');
+        var video = document.getElementById('sls-scan-video');
+        var stopBtn = document.getElementById('sls-scan-stop');
+        var stopped = false;
+        var stream = null;
+        function stopScan() {
+          stopped = true;
+          try { if (stream) stream.getTracks().forEach(function (track) { track.stop(); }); } catch (_) {}
+          if (scanCard) { scanCard.style.display = 'none'; scanCard.innerHTML = ''; }
+        }
+        if (stopBtn) stopBtn.onclick = stopScan;
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false }).then(function (s) {
+          stream = s;
+          video.srcObject = stream;
+          var detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+          function tick() {
+            if (stopped) return;
+            detector.detect(video).then(function (codes) {
+              var code = codes && codes[0] && (codes[0].rawValue || codes[0].rawText);
+              if (code && /^fauna:\/\/serverless-sync\?/.test(code)) {
+                if (pairInput) pairInput.value = code;
+                setStatus('QR scanned. Import when ready.', false);
+                stopScan();
+                return;
+              }
+              window.requestAnimationFrame(tick);
+            }).catch(function () { window.requestAnimationFrame(tick); });
+          }
+          tick();
+        }).catch(function (e) {
+          stopScan();
+          setStatus(e.message || 'Camera unavailable', true);
         });
       };
     }

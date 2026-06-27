@@ -237,6 +237,18 @@ describe('serverless sync routes', () => {
     const peers = await peersRes.json();
     expect(peers.peers[0].conflictCount).toBe(1);
     expect(peers.conflicts[0].namespace).toBe('conversation');
+
+    const resolveRes = await fetch(`http://127.0.0.1:${dest.port}/api/serverless-sync/conflicts/${peers.conflicts[0].id}/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resolution: 'use_remote' }),
+    });
+    expect(resolveRes.ok).toBe(true);
+    expect(destStore.rows.get('c1').title).toBe('Source edit');
+
+    const afterResolveRes = await fetch(`http://127.0.0.1:${dest.port}/api/serverless-sync/peers`);
+    const afterResolve = await afterResolveRes.json();
+    expect(afterResolve.conflicts).toHaveLength(0);
   });
 
   it('propagates unchanged project file deletes with file deltas', async () => {
@@ -342,5 +354,87 @@ describe('serverless sync routes', () => {
     expect(synced.stats.projectDeletes.applied).toBe(1);
     expect(destStore.rows.has('c1')).toBe(false);
     expect(destProjects.rows.has('p1')).toBe(false);
+  });
+
+  it('rejects revoked shares and malformed encrypted payloads', async () => {
+    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'fauna-serverless-sync-'));
+    process.env.FAUNA_SERVERLESS_PEERS_FILE = path.join(tmpDir, 'peers.json');
+    const sourceStore = makeConversationStore([
+      { id: 'c1', title: 'Secure', messages: [], updatedAt: 1000 },
+    ]);
+    const source = await makeApp({ conversationStore: sourceStore, projectManager: makeProjectManager() });
+
+    const shareRes = await fetch(`http://127.0.0.1:${source.port}/api/serverless-sync/share`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ relay: false }),
+    });
+    const share = await shareRes.json();
+    const pair = new URL(share.pairingUrl);
+    const token = pair.searchParams.get('token');
+
+    const badPushRes = await fetch(`http://127.0.0.1:${source.port}/api/serverless-sync/push?token=${encodeURIComponent(token)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serverlessSync: 1, alg: 'A256GCM', n: 'bad', c: 'bad' }),
+    });
+    expect(badPushRes.ok).toBe(false);
+
+    const revokeRes = await fetch(`http://127.0.0.1:${source.port}/api/serverless-sync/shares/${share.shareUrl.match(/token=([^&]+)/)[1]}/revoke`, {
+      method: 'POST',
+    });
+    expect(revokeRes.ok).toBe(true);
+
+    const snapshotRes = await fetch(`http://127.0.0.1:${source.port}/api/serverless-sync/snapshot?token=${encodeURIComponent(token)}`, { headers: { 'X-Fauna-Serverless-Token': token } });
+    expect(snapshotRes.status).toBe(401);
+  });
+
+  it('runs local auto-sync for saved peers without server storage', async () => {
+    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'fauna-serverless-sync-'));
+    process.env.FAUNA_SERVERLESS_PEERS_FILE = path.join(tmpDir, 'peers.json');
+    const sourceStore = makeConversationStore([
+      { id: 'c1', title: 'Before auto', messages: [], updatedAt: 1000 },
+    ]);
+    const destStore = makeConversationStore();
+    const source = await makeApp({ conversationStore: sourceStore, projectManager: makeProjectManager() });
+    const dest = await makeApp({ conversationStore: destStore, projectManager: makeProjectManager() });
+
+    const shareRes = await fetch(`http://127.0.0.1:${source.port}/api/serverless-sync/share`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ relay: false }),
+    });
+    const share = await shareRes.json();
+    const pair = new URL(share.pairingUrl);
+    const token = pair.searchParams.get('token');
+    const key = pair.searchParams.get('key');
+    const url = `http://127.0.0.1:${source.port}/api/serverless-sync/snapshot?token=${encodeURIComponent(token)}`;
+
+    const importRes = await fetch(`http://127.0.0.1:${dest.port}/api/serverless-sync/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, token, key, name: 'Source device' }),
+    });
+    const imported = await importRes.json();
+    expect(imported.ok).toBe(true);
+
+    const configRes = await fetch(`http://127.0.0.1:${dest.port}/api/serverless-sync/auto-sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ autoSync: true, intervalMs: 60_000, push: true }),
+    });
+    const config = await configRes.json();
+    expect(config.settings.autoSync).toBe(true);
+
+    await sourceStore.put('c1', { id: 'c1', title: 'After auto', messages: [], updatedAt: 2000 });
+    const runRes = await fetch(`http://127.0.0.1:${dest.port}/api/serverless-sync/auto-sync/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: true }),
+    });
+    const run = await runRes.json();
+    expect(run.ok).toBe(true);
+    expect(run.results[0].ok).toBe(true);
+    expect(destStore.rows.get('c1').title).toBe('After auto');
   });
 });
