@@ -19,6 +19,8 @@ function addArtifact(spec) {
   state.artifacts.push(artifact);
   if (state.artifacts.length > 20) state.artifacts.shift();
   renderArtifactTabs();
+  if (document.getElementById('all-artifacts-page')?.style.display !== 'none' && typeof renderAllArtifactsPage === 'function') renderAllArtifactsPage();
+  if (document.getElementById('home-page')?.style.display !== 'none' && typeof renderHomePage === 'function') renderHomePage();
   // If the pane is already open with nothing selected, auto-show this artifact so
   // it doesn't appear empty when a fresh artifact streams in.
   var pane = document.getElementById('artifact-pane');
@@ -239,6 +241,267 @@ function artifactTypeIcon(type) {
             csv:'ti-table', text:'ti-file-text', files:'ti-folder-open', web:'ti-world', pdf:'ti-file-type-pdf', docx:'ti-file-word',
             code:'ti-code', svg:'ti-vector', summary:'ti-align-left', design:'ti-layout-2' };
   return m[type] || 'ti-file';
+}
+
+function _artifactTypeLabel(type) {
+  var m = { html:'HTML', image:'Image', markdown:'Markdown', json:'JSON', csv:'CSV', text:'Text', files:'Files', web:'Web', pdf:'PDF', docx:'DOCX', code:'Code', svg:'SVG', summary:'Summary', design:'Design' };
+  return m[type] || (type || 'Artifact');
+}
+
+function _artifactRelativeTime(ts) {
+  if (!ts) return 'Unknown';
+  var diff = Date.now() - ts;
+  var mins = Math.max(1, Math.floor(diff / 60000));
+  if (mins < 60) return mins + 'm ago';
+  var hours = Math.floor(mins / 60);
+  if (hours < 24) return hours + 'h ago';
+  var days = Math.floor(hours / 24);
+  if (days < 30) return days + 'd ago';
+  var months = Math.floor(days / 30);
+  return months + 'mo ago';
+}
+
+function _projectForConversation(conv) {
+  if (!conv || !conv.projectId) return null;
+  return (state.projects || []).find(function(p) { return p.id === conv.projectId; }) || null;
+}
+
+function _getCachedStoreAccount() {
+  if (typeof storeState !== 'undefined' && storeState.account) return storeState.account;
+  try {
+    var cached = localStorage.getItem('store-account');
+    return cached ? JSON.parse(cached) : null;
+  } catch (_) { return null; }
+}
+
+function _firstNameFromText(text) {
+  text = String(text || '').trim();
+  if (!text) return '';
+  if (text.indexOf('@') !== -1) text = text.split('@')[0].replace(/[._-]+/g, ' ');
+  return text.split(/\s+/).filter(Boolean)[0] || '';
+}
+
+function getFaunaHomeUserName() {
+  var saved = localStorage.getItem('fauna-user-display-name') || '';
+  var account = _getCachedStoreAccount();
+  var accountName = account && (account.name || account.displayName || account.email);
+  return _firstNameFromText(accountName) || _firstNameFromText(saved);
+}
+
+function saveFaunaHomeUserName() {
+  var input = document.getElementById('home-name-input');
+  if (!input) return;
+  var value = input.value.trim();
+  if (!value) return;
+  localStorage.setItem('fauna-user-display-name', value);
+  renderHomePage();
+}
+
+function renderHomeNamePrompt() {
+  return '<div class="home-name-prompt">' +
+    '<label for="home-name-input">What should Fauna call you?</label>' +
+    '<div><input id="home-name-input" type="text" placeholder="First name" onkeydown="if(event.key===\'Enter\')saveFaunaHomeUserName()"><button class="proj-action-btn" onclick="saveFaunaHomeUserName()"><i class="ti ti-check"></i> Save</button></div>' +
+  '</div>';
+}
+
+function getAllSavedArtifacts() {
+  var items = [];
+  var seen = Object.create(null);
+  (state.conversations || []).forEach(function(conv) {
+    if (!conv || !Array.isArray(conv.artifacts)) return;
+    var project = _projectForConversation(conv);
+    conv.artifacts.forEach(function(artifact) {
+      if (!artifact || !artifact.id) return;
+      var key = conv.id + ':' + artifact.id;
+      if (seen[key]) return;
+      seen[key] = true;
+      items.push(Object.assign({}, artifact, {
+        convId: conv.id,
+        conversationTitle: conv.title || 'Conversation',
+        projectId: conv.projectId || null,
+        projectName: project ? project.name : '',
+        projectColor: project ? project.color : '',
+      }));
+    });
+  });
+  return items.sort(function(a, b) { return (b.createdAt || 0) - (a.createdAt || 0); });
+}
+
+function _closeGlobalPages(exceptId) {
+  ['home-page', 'all-artifacts-page', 'all-convs-page', 'all-projects-page', 'all-agents-page', 'agent-actions-page'].forEach(function(id) {
+    if (id === exceptId) return;
+    var el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+}
+
+function openHomePage() {
+  var page = document.getElementById('home-page');
+  if (!page) return;
+  _closeGlobalPages('home-page');
+  page.style.display = 'flex';
+  renderHomePage();
+}
+
+function closeHomePage() {
+  var page = document.getElementById('home-page');
+  if (page) page.style.display = 'none';
+}
+
+function renderHomePage() {
+  var page = document.getElementById('home-page');
+  if (!page) return;
+  var projects = (state.projects || []).slice().sort(function(a, b) { return (b.lastActiveAt || b.updatedAt || 0) - (a.lastActiveAt || a.updatedAt || 0); });
+  var convs = (state.conversations || []).slice().sort(function(a, b) { return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0); });
+  var artifacts = getAllSavedArtifacts();
+  var running = convs.filter(function(c) { return c._streaming; });
+  var firstName = getFaunaHomeUserName();
+  var greeting = firstName ? ('Hi ' + firstName + ',') : 'Welcome,';
+  var namePrompt = firstName ? '' : renderHomeNamePrompt();
+  var projectCards = projects.slice(0, 5).map(function(p) {
+    var convCount = convs.filter(function(c) { return c.projectId === p.id; }).length;
+    var artifactCount = artifacts.filter(function(a) { return a.projectId === p.id; }).length;
+    var analytics = typeof getProjectTaskAnalyticsInlineHtml === 'function' ? getProjectTaskAnalyticsInlineHtml(p.id, { compact: true }) : '';
+    return '<button class="home-project-row" onclick="setActiveProject(\'' + escHtml(p.id) + '\');closeHomePage()">' +
+      '<span class="proj-dot proj-color-' + escHtml(p.color || 'blue') + '"></span>' +
+      '<span class="home-project-main"><span>' + escHtml(p.name || 'Untitled project') + '</span><small>' + convCount + ' chats · ' + artifactCount + ' artifacts</small></span>' +
+      '<span class="home-project-analytics">' + analytics + '</span>' +
+    '</button>';
+  }).join('') || '<div class="home-empty-row">No projects yet</div>';
+  var artifactRows = artifacts.slice(0, 4).map(function(a) {
+    return '<button class="home-artifact-row" onclick="viewArtifactFromLibrary(\'' + escHtml(a.convId) + '\',\'' + escHtml(a.id) + '\')">' +
+      '<i class="ti ' + artifactTypeIcon(a.type) + '"></i>' +
+      '<span><strong>' + escHtml(a.title || 'Artifact') + '</strong><small>' + escHtml(_artifactTypeLabel(a.type)) + ' · ' + escHtml(a.conversationTitle) + '</small></span>' +
+    '</button>';
+  }).join('') || '<div class="home-empty-row">No saved artifacts yet</div>';
+  var recentRows = convs.slice(0, 5).map(function(c) {
+    var p = _projectForConversation(c);
+    return '<button class="home-conv-row" onclick="closeHomePage();loadConversation(\'' + escHtml(c.id) + '\')">' +
+      (c._streaming ? '<i class="ti ti-loader-2 conv-streaming-icon"></i>' : '<i class="ti ti-message"></i>') +
+      '<span><strong>' + escHtml(c.title || 'Conversation') + '</strong><small>' + (p ? escHtml(p.name) + ' · ' : '') + escHtml(_artifactRelativeTime(c.updatedAt || c.createdAt)) + '</small></span>' +
+    '</button>';
+  }).join('') || '<div class="home-empty-row">No conversations yet</div>';
+  page.innerHTML =
+    '<div class="home-shell">' +
+      '<main class="home-main">' +
+        '<div class="home-header"><div><div class="home-kicker"><span></span>Updated ' + escHtml(_artifactRelativeTime(Date.now())) + '</div><h1>' + escHtml(greeting) + '</h1><p>You have ' + convs.length + ' conversations, ' + projects.length + ' projects, and ' + artifacts.length + ' saved artifacts across Fauna.</p>' + namePrompt + '</div><button class="proj-action-btn" onclick="closeHomePage();newConversation()"><i class="ti ti-plus"></i> New task</button></div>' +
+        '<section class="home-panel home-highlights"><div class="home-section-title"><i class="ti ti-info-circle"></i> Important highlights</div>' +
+          '<button onclick="closeHomePage();openAllArtifactsPage()"><i class="ti ti-layout-grid"></i><span><strong>' + artifacts.length + ' saved artifacts</strong><small>Browse previews across every project and chat</small></span><i class="ti ti-chevron-right"></i></button>' +
+          '<button onclick="closeHomePage();openAllConversations()"><i class="ti ti-messages"></i><span><strong>' + running.length + ' active conversations</strong><small>' + (running.length ? 'Agents are still working' : 'No agents are currently running') + '</small></span><i class="ti ti-chevron-right"></i></button>' +
+        '</section>' +
+        '<div class="home-grid">' +
+          '<section class="home-panel"><div class="home-section-title"><i class="ti ti-star"></i> Projects</div>' + projectCards + '</section>' +
+          '<section class="home-panel"><div class="home-section-title"><i class="ti ti-sparkles"></i> Artifacts</div>' + artifactRows + '<button class="home-link-row" onclick="closeHomePage();openAllArtifactsPage()">View artifact library <i class="ti ti-arrow-right"></i></button></section>' +
+          '<section class="home-panel home-wide"><div class="home-section-title"><i class="ti ti-clock"></i> Recent conversations</div>' + recentRows + '</section>' +
+        '</div>' +
+      '</main>' +
+    '</div>';
+}
+
+function openAllArtifactsPage() {
+  var page = document.getElementById('all-artifacts-page');
+  if (!page) return;
+  _closeGlobalPages('all-artifacts-page');
+  page._filter = page._filter || '';
+  page._view = page._view || localStorage.getItem('fauna-artifact-library-view') || 'grid';
+  page.style.display = 'flex';
+  renderAllArtifactsPage();
+}
+
+function closeAllArtifactsPage() {
+  var page = document.getElementById('all-artifacts-page');
+  if (page) page.style.display = 'none';
+}
+
+function setArtifactLibraryView(view) {
+  var page = document.getElementById('all-artifacts-page');
+  if (!page) return;
+  page._view = view === 'list' ? 'list' : 'grid';
+  localStorage.setItem('fauna-artifact-library-view', page._view);
+  renderAllArtifactsPage();
+}
+
+function _findLibraryArtifact(convId, artifactId) {
+  var conv = getConv(convId);
+  if (!conv || !Array.isArray(conv.artifacts)) return null;
+  var artifact = conv.artifacts.find(function(a) { return a.id === artifactId; });
+  if (!artifact) return null;
+  var project = _projectForConversation(conv);
+  return Object.assign({}, artifact, {
+    convId: conv.id,
+    conversationTitle: conv.title || 'Conversation',
+    projectId: conv.projectId || null,
+    projectName: project ? project.name : '',
+    projectColor: project ? project.color : '',
+    _libraryPreview: true,
+  });
+}
+
+function viewArtifactFromLibrary(convId, artifactId) {
+  var artifact = _findLibraryArtifact(convId, artifactId);
+  if (!artifact) return;
+  var existing = state.artifacts.find(function(a) { return a.id === artifact.id; });
+  if (!existing) {
+    state.artifacts.push(artifact);
+    if (artifact.type === 'image' && artifact.path && !artifact.base64) fetchArtifactImage(artifact.id, artifact.path);
+  }
+  openArtifact(artifact.id);
+}
+
+function goToArtifactConversation(convId) {
+  closeAllArtifactsPage();
+  if (typeof loadConversation === 'function') loadConversation(convId);
+}
+
+function renderAllArtifactsPage() {
+  var page = document.getElementById('all-artifacts-page');
+  if (!page) return;
+  var filter = (page._filter || '').toLowerCase();
+  var view = page._view || 'grid';
+  var artifacts = getAllSavedArtifacts();
+  if (filter) {
+    artifacts = artifacts.filter(function(a) {
+      return String(a.title || '').toLowerCase().includes(filter) ||
+        String(a.type || '').toLowerCase().includes(filter) ||
+        String(a.conversationTitle || '').toLowerCase().includes(filter) ||
+        String(a.projectName || '').toLowerCase().includes(filter);
+    });
+  }
+  page.innerHTML =
+    '<div class="all-agents-page-inner">' +
+      '<div class="all-agents-header">' +
+        '<div class="all-agents-title"><i class="ti ti-layout-grid"></i> Artifacts</div>' +
+        '<div class="all-agents-search-wrap"><i class="ti ti-search"></i><input class="all-agents-search" id="all-artifacts-search" placeholder="Search artifacts…" value="' + escHtml(page._filter || '') + '" oninput="document.getElementById(\'all-artifacts-page\')._filter=this.value;renderAllArtifactsPage()"></div>' +
+        '<div class="artifact-view-toggle"><button class="' + (view === 'grid' ? 'active' : '') + '" onclick="setArtifactLibraryView(\'grid\')" title="Grid view"><i class="ti ti-layout-grid"></i></button><button class="' + (view === 'list' ? 'active' : '') + '" onclick="setArtifactLibraryView(\'list\')" title="List view"><i class="ti ti-list"></i></button></div>' +
+        '<button class="all-agents-close" onclick="closeAllArtifactsPage()"><i class="ti ti-x"></i></button>' +
+      '</div>' +
+      '<div class="artifact-library ' + (view === 'list' ? 'list' : 'grid') + '">' + _renderArtifactLibraryItems(artifacts, view) + '</div>' +
+    '</div>';
+}
+
+function _renderArtifactLibraryItems(artifacts, view) {
+  if (!artifacts.length) return '<div class="proj-hub-empty" style="padding:40px"><i class="ti ti-layout-grid" style="font-size:28px;opacity:.3"></i><div>No artifacts found</div></div>';
+  if (view === 'list') {
+    var header = '<div class="artifact-library-row artifact-library-head"><span>Artifact</span><span>Project</span><span>Conversation</span><span>Updated</span><span></span></div>';
+    return header + artifacts.map(function(a) {
+      return '<div class="artifact-library-row">' +
+        '<span class="artifact-library-name"><i class="ti ' + artifactTypeIcon(a.type) + '"></i><span><strong>' + escHtml(a.title || 'Artifact') + '</strong><small>' + escHtml(_artifactTypeLabel(a.type)) + '</small></span></span>' +
+        '<span>' + (a.projectName ? '<span class="proj-dot proj-color-' + escHtml(a.projectColor || 'blue') + '"></span>' + escHtml(a.projectName) : '<span class="all-proj-dim">—</span>') + '</span>' +
+        '<span class="artifact-library-muted">' + escHtml(a.conversationTitle || 'Conversation') + '</span>' +
+        '<span class="artifact-library-muted">' + escHtml(_artifactRelativeTime(a.createdAt)) + '</span>' +
+        '<span class="artifact-library-actions"><button class="proj-action-btn" onclick="viewArtifactFromLibrary(\'' + escHtml(a.convId) + '\',\'' + escHtml(a.id) + '\')"><i class="ti ti-eye"></i> View only</button><button class="proj-icon-btn" onclick="goToArtifactConversation(\'' + escHtml(a.convId) + '\')" title="Open conversation"><i class="ti ti-message-forward"></i></button></span>' +
+      '</div>';
+    }).join('');
+  }
+  return artifacts.map(function(a) {
+    return '<article class="artifact-library-card">' +
+      '<div class="artifact-library-card-top"><i class="ti ' + artifactTypeIcon(a.type) + '"></i><span>' + escHtml(_artifactTypeLabel(a.type)) + '</span></div>' +
+      '<h3 title="' + escHtml(a.title || 'Artifact') + '">' + escHtml(a.title || 'Artifact') + '</h3>' +
+      '<p>' + (a.projectName ? escHtml(a.projectName) + ' · ' : '') + escHtml(a.conversationTitle || 'Conversation') + '</p>' +
+      '<div class="artifact-library-card-meta"><span>' + escHtml(_artifactRelativeTime(a.createdAt)) + '</span></div>' +
+      '<div class="artifact-library-card-actions"><button class="proj-action-btn" onclick="viewArtifactFromLibrary(\'' + escHtml(a.convId) + '\',\'' + escHtml(a.id) + '\')"><i class="ti ti-eye"></i> View only</button><button class="proj-action-btn" onclick="goToArtifactConversation(\'' + escHtml(a.convId) + '\')"><i class="ti ti-message-forward"></i> Conversation</button></div>' +
+    '</article>';
+  }).join('');
 }
 
 // Per-artifact frame setting: null = no frame, 'browser-chrome' | 'iphone-15-pro' | 'android-pixel' | 'macbook'

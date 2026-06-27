@@ -69,6 +69,24 @@
 </div>
 <div id="app">
 
+  <!-- ── App rail ─────────────────────────────────────────────────── -->
+  <nav id="app-rail" aria-label="Primary navigation">
+    <div class="app-rail-top">
+      <button class="app-rail-btn app-rail-home" onclick="openHomePage()" title="Home" aria-label="Home"><i class="ti ti-home"></i></button>
+      <button class="app-rail-btn" onclick="newConversation()" title="New chat" aria-label="New chat"><i class="ti ti-plus"></i></button>
+      <button class="app-rail-btn" onclick="openAllConversations()" title="Search chats" aria-label="Search chats"><i class="ti ti-search"></i></button>
+      <button class="app-rail-btn" onclick="openAllArtifactsPage()" title="Artifacts" aria-label="Artifacts"><i class="ti ti-layout-grid"></i></button>
+      <button class="app-rail-btn" onclick="openAllProjects()" title="Projects" aria-label="Projects"><i class="ti ti-folder"></i></button>
+      <button class="app-rail-btn" onclick="toggleTasksPanel()" title="Automations" aria-label="Automations"><i class="ti ti-bolt"></i></button>
+      <button class="app-rail-btn" onclick="toggleBoardPanel()" title="Board" aria-label="Board"><i class="ti ti-layout-kanban"></i></button>
+    </div>
+    <div class="app-rail-bottom">
+      <button class="app-rail-btn" onclick="openUserSettings()" title="Settings" aria-label="Settings"><i class="ti ti-settings"></i></button>
+      <button class="app-rail-btn" onclick="toggleNotificationPanel()" title="Notifications" aria-label="Notifications"><i class="ti ti-bell"></i><span id="app-rail-notif-dot"></span></button>
+      <button class="app-rail-avatar" onclick="openUserSettings()" title="Account" aria-label="Account">S</button>
+    </div>
+  </nav>
+
   <!-- ── Sidebar ──────────────────────────────────────────────────── -->
   <div id="sidebar">
     <div id="sidebar-header">
@@ -2965,8 +2983,12 @@ Examples:
 
 <!-- ── Onboarding overlay (kept for first-run; now redirects to Settings > Permissions) ── -->
 <div id="onboarding-overlay" style="display:none"></div>
+<!-- ── Home Page (full overlay) ──────────────────────────────── -->
+<div id="home-page" style="display:none"></div>
 <!-- ── All Conversations Page (full overlay) ──────────────────── -->
 <div id="all-convs-page" style="display:none"></div>
+<!-- ── All Artifacts Page (full overlay) ─────────────────────── -->
+<div id="all-artifacts-page" style="display:none"></div>
 <!-- ── All Agents Page (full overlay) ──────────────────────────── -->
 <div id="all-agents-page" style="display:none"></div>
 <!-- ── All Projects Page (full overlay) ─────────────────────────── -->

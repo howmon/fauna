@@ -1371,8 +1371,10 @@ function hasFaunaUpdateNotification() {
 function syncTopbarNotificationButton() {
   var btn = document.getElementById('topbar-notif-btn');
   var badge = document.getElementById('topbar-notif-badge');
-  if (!btn || !badge) return;
+  var railDot = document.getElementById('app-rail-notif-dot');
   var hasUpdate = hasFaunaUpdateNotification();
+  if (railDot) railDot.style.display = (storeState.unreadCount > 0 || hasUpdate) ? 'block' : 'none';
+  if (!btn || !badge) return;
   btn.classList.toggle('active', !!storeState.notifOpen);
   if (storeState.unreadCount > 0) {
     badge.style.display = 'flex';
@@ -1582,6 +1584,13 @@ function openStoreAccount() {
 
 function updateTopbarAccount() {
   var btn = document.getElementById('topbar-account-btn');
+  var railAvatar = document.querySelector('.app-rail-avatar');
+  var displayName = typeof getFaunaHomeUserName === 'function' ? getFaunaHomeUserName() : '';
+  if (railAvatar) {
+    railAvatar.textContent = displayName ? displayName.charAt(0).toUpperCase() : 'U';
+    railAvatar.title = displayName ? (displayName + ' — account') : 'Account';
+  }
+  if (document.getElementById('home-page')?.style.display !== 'none' && typeof renderHomePage === 'function') renderHomePage();
   if (!btn) return;
   if (storeState.account) {
     btn.classList.add('logged-in');
