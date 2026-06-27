@@ -165,6 +165,43 @@
   --theme-font: 'Space Grotesk', 'Segoe UI Variable', 'Segoe UI', -apple-system, system-ui, sans-serif;
 }
 
+/* ── Clean · neutral with restrained blue accents — DARK ─────────────── */
+[data-theme="dark"][data-preset="clean"] {
+  --color-background:     oklch(0.170 0.004 255);
+  --color-pageBackground: oklch(0.205 0.004 255);
+  --color-surface:        oklch(0.245 0.004 255);
+  --color-text:           oklch(0.950 0.004 255);
+  --color-muted:          oklch(0.720 0.006 255);
+  --color-primary:        oklch(0.760 0.020 255);
+  --color-border:         oklch(0.340 0.006 255);
+  --color-borderStrong:   oklch(0.610 0.008 255);
+  --color-subtleSurface:  oklch(0.285 0.005 255);
+  --color-inputSurface:   oklch(0.230 0.004 255);
+  --color-success:        oklch(0.650 0.150 145);
+  --color-warning:        oklch(0.700 0.150 78);
+  --color-danger:         oklch(0.660 0.170 24);
+  --viz-1:                oklch(0.600 0.170 255);
+  --theme-font: 'Inter', 'Segoe UI Variable', 'Segoe UI', -apple-system, system-ui, sans-serif;
+}
+/* ── Clean — LIGHT ───────────────────────────────────────────────────── */
+[data-theme="light"][data-preset="clean"] {
+  --color-background:     oklch(0.985 0.002 255);
+  --color-pageBackground: oklch(0.972 0.003 255);
+  --color-surface:        oklch(0.948 0.004 255);
+  --color-text:           oklch(0.245 0.010 255);
+  --color-muted:          oklch(0.470 0.010 255);
+  --color-primary:        oklch(0.420 0.030 255);
+  --color-border:         oklch(0.865 0.006 255);
+  --color-borderStrong:   oklch(0.560 0.010 255);
+  --color-subtleSurface:  oklch(0.960 0.003 255);
+  --color-inputSurface:   oklch(0.996 0.001 255);
+  --color-success:        oklch(0.520 0.150 145);
+  --color-warning:        oklch(0.560 0.150 78);
+  --color-danger:         oklch(0.540 0.170 24);
+  --viz-1:                oklch(0.560 0.175 255);
+  --theme-font: 'Inter', 'Segoe UI Variable', 'Segoe UI', -apple-system, system-ui, sans-serif;
+}
+
 /* ══ SHARED ALIASES ════════════════════════════════════════════════════
    Preset-agnostic: maps Fauna's --fau-* / --accent vars from the active
    preset's --color-* + --viz-1. Uses color-mix so tints/translucency track
@@ -254,6 +291,25 @@
   --proj-pink:   oklch(0.560 0.160 350);
   color-scheme: light;
 }
+[data-preset="clean"] {
+  --accent-dim:      color-mix(in oklab, var(--viz-1) 8%, transparent);
+  --accent-glow:     color-mix(in oklab, var(--viz-1) 12%, transparent);
+  --fau-user-bg:     var(--fau-surface);
+  --fau-ai-bg:       var(--fau-bg);
+}
+[data-theme="light"][data-preset="clean"] {
+  --fau-sidebar:     oklch(0.955 0.003 255);
+  --fau-surface:     #fff;
+  --fau-surface2:    oklch(0.955 0.003 255);
+  --fau-surface3:    oklch(0.930 0.004 255);
+  --fau-border2:     rgba(15, 23, 42, .045);
+}
+[data-theme="dark"][data-preset="clean"] {
+  --fau-sidebar:     var(--color-pageBackground);
+  --fau-surface:     var(--color-surface);
+  --fau-surface2:    var(--color-subtleSurface);
+  --fau-surface3:    oklch(0.330 0.006 255);
+}
 html, body { height: 100%; background: var(--fau-bg); color: var(--fau-text); font-family: var(--font); font-size: 14px; line-height: 1.6; overflow: hidden; }
 
 /* Subtle warm ambient backdrop for light mode — adds depth without
@@ -268,6 +324,7 @@ html, body { height: 100%; background: var(--fau-bg); color: var(--fau-text); fo
     radial-gradient(900px 600px at 0% 0%,   color-mix(in oklab, var(--viz-1) 6%, transparent), transparent 60%),
     radial-gradient(1200px 800px at 100% 100%, color-mix(in oklab, var(--viz-1) 5%, transparent),  transparent 65%);
 }
+  [data-theme="light"][data-preset="clean"] body::before { display: none; }
 [data-theme="light"] #app { position: relative; z-index: 1; }
 
 /* ── Transition for theme changes ──────────────────────────────────── */
@@ -2653,6 +2710,9 @@ body.app-page-open #topbar {
 body.app-page-open #toggle-sidebar {
   display: none;
 }
+body.app-page-open #topbar-breadcrumb {
+  visibility: hidden;
+}
 
 /* ── Windows custom title-bar controls ─────────────────────────────── */
 #win-controls {
@@ -2838,6 +2898,11 @@ body { animation: none; }
 }
 #app-page-body > #tasks-panel #auto-nav-col { padding-top: 16px; }
 #app-page-body > #tasks-panel #auto-back-btn { display: none; }
+
+#auto-panel-title {
+  padding: 0 10px 12px;
+  margin-bottom: 2px;
+}
 
 /* Left nav column — mirrors #settings-nav-col */
 #auto-nav-col {
@@ -8533,11 +8598,11 @@ mark.find-hit.find-hit-active {
 }
 
 .settings-page-title {
-  font-size: 22px;
-  font-weight: 700;
+  font-size: 16px;
+  font-weight: 600;
   color: var(--fau-text);
-  margin-bottom: 24px;
-  letter-spacing: -.01em;
+  margin-bottom: 18px;
+  letter-spacing: 0;
 }
 
 .settings-page .settings-section {
@@ -10271,7 +10336,7 @@ mark.find-hit.find-hit-active {
 
 #board-panel-title {
   display: flex; align-items: center; gap: 8px;
-  color: var(--fau-text); font-size: 14px; font-weight: 600;
+  color: var(--fau-text); font-size: 16px; font-weight: 600;
 }
 #board-panel-title i { color: var(--accent); font-size: 16px; }
 

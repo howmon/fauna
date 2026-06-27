@@ -69,6 +69,7 @@ function getPreferredTheme() {
 // Available color presets (must match the [data-preset] blocks in styles.css).
 var FAUNA_PRESETS = [
   { id: 'cyber',   name: 'Cyber',   hint: 'Emerald · JetBrains Mono', swatch: 'oklch(0.720 0.160 155)' },
+  { id: 'clean',   name: 'Clean',   hint: 'Neutral · color only on actions', swatch: 'oklch(0.560 0.175 255)' },
   { id: 'minimal', name: 'Minimal', hint: 'Blue-gray · Space Grotesk', swatch: 'oklch(0.720 0.160 258)' },
   { id: 'ember',   name: 'Ember',   hint: 'Warm amber',                swatch: 'oklch(0.760 0.150 55)'  },
   { id: 'violet',  name: 'Violet',  hint: 'Royal purple',              swatch: 'oklch(0.740 0.160 295)' }
