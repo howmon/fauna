@@ -68,6 +68,16 @@ async function apiDelete<T = any>(path: string): Promise<T> {
   return res.json();
 }
 
+async function apiPatch<T = any>(path: string, body?: any): Promise<T> {
+  const res = await fetch(`${_baseUrl}${path}`, {
+    method: 'PATCH',
+    headers: headers(),
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
 // ── System ────────────────────────────────────────────────────────────────
 
 export async function getSystemContext() {
@@ -99,7 +109,7 @@ export interface ChatEvent {
 
 export function streamChat(
   messages: Array<{ role: string; content: string | any[] }>,
-  options: { model?: string; agentName?: string; systemPrompt?: string } = {},
+  options: { model?: string; agentName?: string; systemPrompt?: string; instruction?: string; projectId?: string | null; conversationId?: string } = {},
   onEvent: (evt: ChatEvent) => void,
 ): AbortController {
   const controller = new AbortController();
@@ -359,6 +369,153 @@ export async function linkConversationToProject(projectId: string, convId: strin
 
 export async function touchProject(id: string): Promise<void> {
   return apiPost(`/api/projects/${id}/touch`);
+}
+
+// ── Project boards / work items ─────────────────────────────────────────
+
+export interface WorkItem {
+  id: string;
+  title: string;
+  body?: string;
+  column?: string;
+  assignee?: string;
+  priority?: string;
+  tags?: string[];
+  comments?: Array<{ id?: string; author?: string; body: string; createdAt?: string }>;
+  updatedAt?: string;
+}
+
+export interface ProjectBoard {
+  projectId?: string;
+  columns?: Array<{ id: string; title?: string; name?: string; items?: WorkItem[] }>;
+  items?: WorkItem[];
+  idle?: any;
+}
+
+export async function getProjectBoard(projectId: string): Promise<ProjectBoard> {
+  return apiGet<ProjectBoard>(`/api/projects/${projectId}/board`);
+}
+
+export async function createWorkItem(projectId: string, item: Partial<WorkItem>): Promise<WorkItem> {
+  return apiPost<WorkItem>(`/api/projects/${projectId}/workitems`, item);
+}
+
+export async function updateWorkItem(projectId: string, itemId: string, patch: Partial<WorkItem>): Promise<WorkItem> {
+  return apiPatch<WorkItem>(`/api/projects/${projectId}/workitems/${itemId}`, patch);
+}
+
+export async function moveWorkItem(projectId: string, itemId: string, patch: { column?: string; assignee?: string; claimedBy?: string | null }): Promise<WorkItem> {
+  return apiPost<WorkItem>(`/api/projects/${projectId}/workitems/${itemId}/move`, patch);
+}
+
+export async function sendWorkItemInstruction(projectId: string, itemId: string, body: string): Promise<any> {
+  return apiPost(`/api/projects/${projectId}/workitems/${itemId}/comments`, { author: 'human', body });
+}
+
+export async function prioritizeProject(projectId: string, method: 'rice' | 'moscow' = 'rice'): Promise<any> {
+  return apiPost(`/api/projects/${projectId}/prioritize`, { method });
+}
+
+export async function auditProject(projectId: string, opts: { maxProposals?: number; dryRun?: boolean } = {}): Promise<any> {
+  return apiPost(`/api/projects/${projectId}/audit`, opts);
+}
+
+// ── Automations / workflows ─────────────────────────────────────────────
+
+export interface WorkflowAutomation {
+  id: string;
+  name?: string;
+  title?: string;
+  description?: string;
+  enabled?: boolean;
+  schedule?: string;
+  status?: string;
+  lastRunAt?: string;
+  nextRunAt?: string;
+}
+
+export async function getWorkflows(): Promise<WorkflowAutomation[]> {
+  return apiGet<WorkflowAutomation[]>('/api/workflows');
+}
+
+export async function getWorkflow(id: string): Promise<WorkflowAutomation> {
+  return apiGet<WorkflowAutomation>(`/api/workflows/${id}`);
+}
+
+export async function createWorkflow(workflow: Partial<WorkflowAutomation>): Promise<WorkflowAutomation> {
+  return apiPost<WorkflowAutomation>('/api/workflows', workflow);
+}
+
+export async function updateWorkflow(id: string, patch: Partial<WorkflowAutomation>): Promise<WorkflowAutomation> {
+  return apiPut<WorkflowAutomation>(`/api/workflows/${id}`, patch);
+}
+
+export async function deleteWorkflow(id: string): Promise<void> {
+  return apiDelete(`/api/workflows/${id}`);
+}
+
+export async function runWorkflowNow(id: string): Promise<any> {
+  return apiPost(`/api/workflows/${id}/run-now`);
+}
+
+export async function getWorkflowHistory(id: string): Promise<any[]> {
+  return apiGet<any[]>(`/api/workflows/${id}/history`);
+}
+
+export async function parseWorkflowSchedule(text: string): Promise<any> {
+  return apiPost('/api/workflows/parse-schedule', { text });
+}
+
+// ── Accountless serverless sync controls ────────────────────────────────
+
+export interface ServerlessPeer {
+  id: string;
+  name?: string;
+  url?: string;
+  createdAt?: string;
+  lastSyncAt?: string;
+  lastAutoSyncAt?: string;
+  lastError?: { message?: string; at?: string } | null;
+  lastStats?: any;
+}
+
+export interface ServerlessSyncSettings {
+  autoSync: boolean;
+  intervalMs: number;
+  includeFiles: boolean;
+  push: boolean;
+}
+
+export function parseServerlessPairingUrl(raw: string): { url: string; token: string; key: string; name?: string } {
+  const parsed = new URL(raw);
+  if (parsed.protocol !== 'fauna:' || parsed.hostname !== 'serverless-sync') throw new Error('Not a Fauna serverless sync QR code');
+  const url = parsed.searchParams.get('url') || '';
+  const token = parsed.searchParams.get('token') || '';
+  const key = parsed.searchParams.get('key') || '';
+  const name = parsed.searchParams.get('device') || parsed.searchParams.get('name') || undefined;
+  if (!url || !token || !key) throw new Error('Incomplete serverless sync QR data');
+  return { url, token, key, name };
+}
+
+export async function getServerlessPeers(): Promise<{ ok: boolean; settings: ServerlessSyncSettings; peers: ServerlessPeer[]; shares: any[]; conflicts: any[] }> {
+  return apiGet('/api/serverless-sync/peers');
+}
+
+export async function importServerlessPeer(pairingUrl: string, name?: string): Promise<any> {
+  const parsed = parseServerlessPairingUrl(pairingUrl);
+  return apiPost('/api/serverless-sync/import', { ...parsed, name: name || parsed.name });
+}
+
+export async function syncServerlessPeer(peerId: string, opts: { includeFiles?: boolean; push?: boolean } = {}): Promise<any> {
+  return apiPost(`/api/serverless-sync/peers/${peerId}/sync`, opts);
+}
+
+export async function updateServerlessAutoSync(settings: Partial<ServerlessSyncSettings>): Promise<any> {
+  return apiPost('/api/serverless-sync/auto-sync', settings);
+}
+
+export async function runServerlessAutoSync(force = true): Promise<any> {
+  return apiPost('/api/serverless-sync/auto-sync/run', { force });
 }
 
 // ── Conversation title generation ────────────────────────────────────────

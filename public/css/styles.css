@@ -2434,6 +2434,59 @@ body.is-resizing webview { pointer-events: none !important; }
 }
 .settings-hint a { color: var(--accent2); }
 
+/* Cloud Sync page spacing */
+#cloud-sync-mount { padding: 24px !important; }
+#cloud-sync-mount .cs-page-shell {
+  max-width: 680px !important;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+#cloud-sync-mount .sync-card {
+  padding: 16px !important;
+  margin: 0 !important;
+  border-radius: 8px !important;
+  gap: 14px;
+}
+#serverless-sync-section .sls-card-header {
+  margin-bottom: 0 !important;
+}
+#serverless-sync-section .sls-card-body {
+  gap: 14px !important;
+}
+#serverless-sync-section .sls-toolbar,
+#serverless-sync-section .sls-action-row,
+#serverless-sync-section .sls-auto-actions {
+  gap: 8px !important;
+}
+#serverless-sync-section .sls-field {
+  gap: 8px !important;
+}
+#serverless-sync-section .sls-subcard {
+  padding: 14px !important;
+  border-radius: 8px !important;
+}
+#serverless-sync-section #sls-peers {
+  min-height: 0 !important;
+}
+#serverless-sync-section .sls-auto-row,
+#serverless-sync-section .sls-peer-row,
+#serverless-sync-section .sls-conflict-row,
+#serverless-sync-section .sls-share-row {
+  padding: 12px 0 !important;
+  gap: 12px !important;
+}
+#serverless-sync-section .sls-section-heading {
+  margin-top: 12px !important;
+}
+#serverless-sync-section .settings-row-btn {
+  padding: 7px 10px !important;
+}
+#serverless-sync-section #sls-auto-min {
+  height: 34px !important;
+  padding: 7px 10px !important;
+}
+
 /* ── Appearance: color-preset picker ───────────────────────────────── */
 .preset-grid {
   display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));

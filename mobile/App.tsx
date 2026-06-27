@@ -42,6 +42,7 @@ import TaskCreateScreen from './src/screens/TaskCreateScreen';
 import ProjectsScreen from './src/screens/ProjectsScreen';
 import ProjectDetailScreen from './src/screens/ProjectDetailScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
+import AutomationsScreen from './src/screens/AutomationsScreen';
 
 type TasksStackParams = {
   TasksList: undefined;
@@ -209,6 +210,11 @@ function MainTabs({ onDisconnect }: { onDisconnect: () => void }) {
         name="Projects"
         component={ProjectsStackNav}
         options={{ headerShown: false, tabBarIcon: ({ color }) => <TabIcon label="◈" color={color} /> }}
+      />
+      <Tab.Screen
+        name="Automations"
+        component={AutomationsScreen}
+        options={{ tabBarIcon: ({ color }) => <TabIcon label="⟳" color={color} /> }}
       />
       <Tab.Screen
         name="Settings"

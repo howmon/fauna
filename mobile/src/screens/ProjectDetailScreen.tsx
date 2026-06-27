@@ -3,7 +3,7 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, Alert,
-  useColorScheme, ActivityIndicator,
+  useColorScheme, ActivityIndicator, ScrollView, TextInput,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { dark, light, spacing, radius } from '../lib/theme';
@@ -43,6 +43,9 @@ export default function ProjectDetailScreen({ project, onLoadConversation, onNew
   const t = scheme === 'light' ? light : dark;
   const accentColor = projectColor(project.color);
   const [convs, setConvs] = useState<ConvSummary[]>([]);
+  const [board, setBoard] = useState<api.ProjectBoard | null>(null);
+  const [instructionByItem, setInstructionByItem] = useState<Record<string, string>>({});
+  const [sendingItemId, setSendingItemId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useFocusEffect(
@@ -52,6 +55,7 @@ export default function ProjectDetailScreen({ project, onLoadConversation, onNew
 
       // Fetch the fresh project to get current conversationIds, then load each conv summary
       api.getProjectById(project.id).then(async (p) => {
+        api.getProjectBoard(project.id).then((b) => { if (!cancelled) setBoard(b); }).catch(() => { if (!cancelled) setBoard(null); });
         const ids = p.conversationIds || [];
         if (ids.length === 0) {
           if (!cancelled) { setConvs([]); setLoading(false); }
@@ -107,6 +111,41 @@ export default function ProjectDetailScreen({ project, onLoadConversation, onNew
     ]);
   }
 
+  function boardColumns(): Array<{ id: string; title: string; items: api.WorkItem[] }> {
+    if (!board) return [];
+    if (Array.isArray(board.columns) && board.columns.length) {
+      return board.columns.map((col: any) => ({
+        id: col.id || col.name || col.title || 'column',
+        title: col.title || col.name || col.id || 'Column',
+        items: Array.isArray(col.items) ? col.items : [],
+      }));
+    }
+    const items = Array.isArray(board.items) ? board.items : [];
+    const grouped = items.reduce<Record<string, api.WorkItem[]>>((acc, item) => {
+      const key = item.column || 'todo';
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(item);
+      return acc;
+    }, {});
+    return Object.keys(grouped).map((id) => ({ id, title: id.replace(/_/g, ' '), items: grouped[id] }));
+  }
+
+  async function sendInstruction(item: api.WorkItem) {
+    const text = (instructionByItem[item.id] || '').trim();
+    if (!text) return;
+    setSendingItemId(item.id);
+    try {
+      await api.sendWorkItemInstruction(project.id, item.id, text);
+      setInstructionByItem(prev => ({ ...prev, [item.id]: '' }));
+      const next = await api.getProjectBoard(project.id);
+      setBoard(next);
+    } catch (e: any) {
+      Alert.alert('Instruction failed', e.message || 'Could not send instruction');
+    } finally {
+      setSendingItemId(null);
+    }
+  }
+
   function renderConv({ item }: { item: ConvSummary }) {
     const date = item.createdAt ? new Date(item.createdAt).toLocaleDateString() : '';
     return (
@@ -147,9 +186,50 @@ export default function ProjectDetailScreen({ project, onLoadConversation, onNew
       </TouchableOpacity>
 
       {/* Conversations */}
-      <Text style={[s.sectionTitle, { color: t.textMuted }]}>
-        CONVERSATIONS
-      </Text>
+      <ScrollView contentContainerStyle={s.scrollContent}>
+      <Text style={[s.sectionTitle, { color: t.textMuted }]}>BOARD</Text>
+
+      {boardColumns().length === 0 ? (
+        <View style={[s.emptyPanel, { borderColor: t.border }]}>
+          <Text style={[s.emptyText, { color: t.textMuted }]}>No board items yet.</Text>
+        </View>
+      ) : (
+        boardColumns().map((col) => (
+          <View key={col.id} style={s.boardColumn}>
+            <Text style={[s.columnTitle, { color: t.text }]}>{col.title.toUpperCase()} · {col.items.length}</Text>
+            {col.items.slice(0, 6).map((item) => (
+              <View key={item.id} style={[s.workItem, { backgroundColor: t.surface, borderColor: t.border }]}>
+                <Text style={[s.workTitle, { color: t.text }]} numberOfLines={2}>{item.title}</Text>
+                {!!item.body && <Text style={[s.workBody, { color: t.textDim }]} numberOfLines={2}>{item.body}</Text>}
+                <View style={s.workMetaRow}>
+                  {!!item.priority && <Text style={[s.workMeta, { color: t.textMuted }]}>{item.priority}</Text>}
+                  {!!item.assignee && <Text style={[s.workMeta, { color: t.textMuted }]}>Assigned {item.assignee}</Text>}
+                </View>
+                <View style={s.instructionRow}>
+                  <TextInput
+                    style={[s.instructionInput, { color: t.text, borderColor: t.border, backgroundColor: t.surface2 }]}
+                    placeholder="Send instruction"
+                    placeholderTextColor={t.textMuted}
+                    value={instructionByItem[item.id] || ''}
+                    onChangeText={(value) => setInstructionByItem(prev => ({ ...prev, [item.id]: value }))}
+                    returnKeyType="send"
+                    onSubmitEditing={() => sendInstruction(item)}
+                  />
+                  <TouchableOpacity
+                    style={[s.sendInstruction, { backgroundColor: accentColor, opacity: sendingItemId === item.id ? 0.5 : 1 }]}
+                    onPress={() => sendInstruction(item)}
+                    disabled={sendingItemId === item.id}
+                  >
+                    <Text style={s.sendInstructionText}>Send</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))}
+          </View>
+        ))
+      )}
+
+      <Text style={[s.sectionTitle, { color: t.textMuted }]}>CONVERSATIONS</Text>
 
       {loading ? (
         <View style={s.centered}>
@@ -169,6 +249,7 @@ export default function ProjectDetailScreen({ project, onLoadConversation, onNew
           contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}
         />
       )}
+      </ScrollView>
     </View>
   );
 }
@@ -205,6 +286,19 @@ const s = StyleSheet.create({
     marginHorizontal: spacing.lg,
     marginBottom: spacing.xs,
   },
+  scrollContent: { paddingBottom: spacing.xl },
+  emptyPanel: { borderWidth: 1, borderRadius: radius.md, marginHorizontal: spacing.md, marginBottom: spacing.md, padding: spacing.lg, alignItems: 'center' },
+  boardColumn: { marginBottom: spacing.md },
+  columnTitle: { fontSize: 12, fontWeight: '700', marginHorizontal: spacing.lg, marginBottom: spacing.xs },
+  workItem: { borderWidth: 1, borderRadius: radius.md, marginHorizontal: spacing.md, marginBottom: spacing.sm, padding: spacing.md, gap: spacing.xs },
+  workTitle: { fontSize: 15, fontWeight: '700' },
+  workBody: { fontSize: 13, lineHeight: 18 },
+  workMetaRow: { flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap' },
+  workMeta: { fontSize: 11, fontWeight: '600' },
+  instructionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.xs },
+  instructionInput: { flex: 1, borderWidth: 1, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, fontSize: 13 },
+  sendInstruction: { borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
+  sendInstructionText: { color: '#fff', fontSize: 13, fontWeight: '700' },
   convItem: {
     borderRadius: radius.md,
     borderWidth: 1,

@@ -19,6 +19,25 @@
   // current value when the queue clears (so a fresh wave of edits
   // doesn't show a stale "98%").
   var _projHwm = Object.create(null);
+  var _slsBusy = 0;
+
+  function _consumeEvent(e) {
+    if (!e) return;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    if (typeof e.stopPropagation === 'function') e.stopPropagation();
+  }
+
+  function _setServerlessBusy(active) {
+    _slsBusy = Math.max(0, _slsBusy + (active ? 1 : -1));
+  }
+
+  function _serverlessIsActive() {
+    var section = document.getElementById('serverless-sync-section');
+    if (_slsBusy > 0) return true;
+    if (!section) return false;
+    var active = document.activeElement;
+    return !!(active && section.contains(active));
+  }
 
   function _api(path, opts) {
     return fetch(SYNC_BASE + path, Object.assign({
@@ -49,29 +68,29 @@
 
   function _renderServerlessPeerSync() {
     return [
-      '<div class="settings-section" style="padding:14px;border-radius:8px;background:var(--color-subtleSurface);border:1px solid var(--color-border);color:var(--color-text);margin-top:14px">',
-      '  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">',
+      '<div id="serverless-sync-section" class="settings-section sync-card" style="padding:14px;border-radius:8px;background:var(--color-subtleSurface);border:1px solid var(--color-border);color:var(--color-text);margin-top:14px">',
+      '  <div class="sls-card-header" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">',
       '    <div style="display:flex;align-items:center;gap:8px;font-weight:600;color:var(--color-text)"><i class="ti ti-qrcode"></i> Serverless device sync</div>',
       '    <span class="muted" style="font-size:11px;color:var(--color-muted)">No Fauna account</span>',
       '  </div>',
-      '  <div style="display:grid;grid-template-columns:minmax(0,1fr);gap:12px">',
-      '    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">',
-      '      <button class="settings-row-btn primary" id="sls-share-btn"><i class="ti ti-qrcode"></i> Create QR link</button>',
+      '  <div class="sls-card-body" style="display:grid;grid-template-columns:minmax(0,1fr);gap:12px">',
+      '    <div class="sls-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">',
+      '      <button type="button" class="settings-row-btn primary" id="sls-share-btn"><i class="ti ti-qrcode"></i> Create QR link</button>',
       '      <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--color-muted)"><input type="checkbox" id="sls-relay" checked> Encrypted relay</label>',
       '      <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--color-muted)"><input type="checkbox" id="sls-persistent" checked> Reusable</label>',
       '      <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--color-muted)"><input type="checkbox" id="sls-files"> Project files</label>',
       '    </div>',
-      '    <div id="sls-share-card" style="display:none;padding:12px;border:1px solid var(--color-border);border-radius:8px;background:var(--color-background)"></div>',
-      '    <div style="display:grid;gap:8px">',
+      '    <div id="sls-share-card" class="sls-subcard" style="display:none;padding:12px;border:1px solid var(--color-border);border-radius:8px;background:var(--color-background)"></div>',
+      '    <div class="sls-field" style="display:grid;gap:8px">',
       '      <label style="font-size:12px;color:var(--color-muted)">Pairing link</label>',
       '      <textarea id="sls-pair-url" class="settings-input" rows="3" placeholder="fauna://serverless-sync?..." style="resize:vertical;min-height:72px"></textarea>',
-      '      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">',
-      '        <button class="settings-row-btn" id="sls-import-btn"><i class="ti ti-download"></i> Import from device</button>',
-      '        <button class="settings-row-btn" id="sls-scan-btn"><i class="ti ti-scan"></i> Scan QR</button>',
+      '      <div class="sls-action-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">',
+      '        <button type="button" class="settings-row-btn" id="sls-import-btn"><i class="ti ti-download"></i> Import from device</button>',
+      '        <button type="button" class="settings-row-btn" id="sls-scan-btn"><i class="ti ti-scan"></i> Scan QR</button>',
       '        <span id="sls-status" class="muted" style="font-size:12px;color:var(--color-muted)"></span>',
       '      </div>',
       '    </div>',
-      '    <div id="sls-scan-card" style="display:none;padding:12px;border:1px solid var(--color-border);border-radius:8px;background:var(--color-background)"></div>',
+      '    <div id="sls-scan-card" class="sls-subcard" style="display:none;padding:12px;border:1px solid var(--color-border);border-radius:8px;background:var(--color-background)"></div>',
       '    <div id="sls-peers" style="min-height:24px"></div>',
       '  </div>',
       '</div>'
@@ -98,12 +117,12 @@
         '    <div style="font-weight:600;color:var(--color-text)">Local auto-sync</div>',
         '    <div class="muted" style="font-size:11px;color:var(--color-muted)">Runs on this device only; no Fauna server storage.</div>',
         '  </div>',
-        '  <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end">',
+        '  <div class="sls-auto-actions" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end">',
         '    <label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--color-muted)"><input type="checkbox" id="sls-auto-enabled"' + (autoSync ? ' checked' : '') + '> On</label>',
         '    <input id="sls-auto-min" class="settings-input" type="number" min="1" max="1440" value="' + _esc(intervalMin) + '" style="width:72px;height:30px;padding:4px 7px">',
         '    <span class="muted" style="font-size:11px;color:var(--color-muted)">min</span>',
-        '    <button class="settings-row-btn" id="sls-auto-save" style="padding:5px 8px"><i class="ti ti-device-floppy"></i></button>',
-        '    <button class="settings-row-btn" id="sls-auto-run" style="padding:5px 8px"><i class="ti ti-player-play"></i> Run</button>',
+        '    <button type="button" class="settings-row-btn" id="sls-auto-save" style="padding:5px 8px"><i class="ti ti-device-floppy"></i></button>',
+        '    <button type="button" class="settings-row-btn" id="sls-auto-run" style="padding:5px 8px"><i class="ti ti-player-play"></i> Run</button>',
         '  </div>',
         '</div>'
       ].join('\n');
@@ -126,8 +145,8 @@
           '    <div class="muted" style="font-size:11px;color:' + (p.lastError ? 'var(--color-danger)' : 'var(--color-muted)') + '">Last sync ' + _esc(_fmtTime(p.lastSyncAt)) + (projects || convs ? ' · pulled ' + projects + ' projects, ' + convs + ' conversations' : '') + (deletedProjects || deletedConvs || deletedFiles ? ' · deleted ' + deletedProjects + ' projects, ' + deletedConvs + ' conversations, ' + deletedFiles + ' files' : '') + (pushedConvs ? ' · pushed ' + pushedConvs + ' conversations' : '') + conflictText + _esc(errorText) + '</div>',
           '  </div>',
           '  <div style="display:flex;gap:6px;flex-shrink:0">',
-          '    <button class="settings-row-btn sls-peer-sync" title="Sync now" style="padding:5px 8px"><i class="ti ti-refresh"></i></button>',
-          '    <button class="settings-row-btn sls-peer-forget" title="Forget device" style="padding:5px 8px"><i class="ti ti-trash"></i></button>',
+          '    <button type="button" class="settings-row-btn sls-peer-sync" title="Sync now" style="padding:5px 8px"><i class="ti ti-refresh"></i></button>',
+          '    <button type="button" class="settings-row-btn sls-peer-forget" title="Forget device" style="padding:5px 8px"><i class="ti ti-trash"></i></button>',
           '  </div>',
           '</div>'
         ].join('\n');
@@ -140,8 +159,8 @@
           '    <div class="muted" style="font-size:11px;color:var(--color-muted)">' + _esc(c.objectId || '') + ' · kept local edit · ' + _esc(_fmtTime(c.detectedAt)) + '</div>',
           '  </div>',
           '  <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">',
-          '    <button class="settings-row-btn sls-conflict-keep" style="padding:5px 8px"><i class="ti ti-shield-check"></i> Keep mine</button>',
-          '    <button class="settings-row-btn sls-conflict-remote" style="padding:5px 8px"><i class="ti ti-cloud-download"></i> Use remote</button>',
+          '    <button type="button" class="settings-row-btn sls-conflict-keep" style="padding:5px 8px"><i class="ti ti-shield-check"></i> Keep mine</button>',
+          '    <button type="button" class="settings-row-btn sls-conflict-remote" style="padding:5px 8px"><i class="ti ti-cloud-download"></i> Use remote</button>',
           '  </div>',
           '</div>'
         ].join('\n');
@@ -153,17 +172,17 @@
           '    <div style="font-weight:600;color:var(--color-text)">This device is shareable</div>',
           '    <div class="muted" style="font-size:11px;color:var(--color-muted)">' + (s.uses || 0) + ' pull' + ((s.uses || 0) === 1 ? '' : 's') + (s.includeFiles ? ' · files enabled' : '') + '</div>',
           '  </div>',
-          '  <button class="settings-row-btn sls-share-revoke" style="padding:5px 8px"><i class="ti ti-ban"></i> Revoke</button>',
+          '  <button type="button" class="settings-row-btn sls-share-revoke" style="padding:5px 8px"><i class="ti ti-ban"></i> Revoke</button>',
           '</div>'
         ].join('\n');
       }).join('');
       host.innerHTML = [
         autoControls,
-        peers.length ? '<div style="font-weight:600;color:var(--color-text);margin-top:4px">Paired devices</div>' : '',
+        peers.length ? '<div class="sls-section-heading" style="font-weight:600;color:var(--color-text);margin-top:4px">Paired devices</div>' : '',
         peerRows || '<div class="muted" style="font-size:12px;color:var(--color-muted)">No paired devices yet.</div>',
-        conflicts.length ? '<div style="font-weight:600;color:var(--color-text);margin-top:10px">Conflicts</div>' : '',
+        conflicts.length ? '<div class="sls-section-heading" style="font-weight:600;color:var(--color-text);margin-top:10px">Conflicts</div>' : '',
         conflictRows,
-        shares.length ? '<div style="font-weight:600;color:var(--color-text);margin-top:10px">Share access</div>' : '',
+        shares.length ? '<div class="sls-section-heading" style="font-weight:600;color:var(--color-text);margin-top:10px">Share access</div>' : '',
         shareRows
       ].join('\n');
       _bindServerlessPeerRows(host);
@@ -177,22 +196,26 @@
     var autoRun = host.querySelector('#sls-auto-run');
     if (autoSave && !autoSave._slsBound) {
       autoSave._slsBound = true;
-      autoSave.onclick = function () {
+      autoSave.onclick = function (e) {
+        _consumeEvent(e);
         var enabled = !!(host.querySelector('#sls-auto-enabled') || {}).checked;
         var mins = Number((host.querySelector('#sls-auto-min') || {}).value || 15);
         var includeFiles = !!(document.getElementById('sls-files') || {}).checked;
         autoSave.disabled = true;
+        _setServerlessBusy(true);
         _api('/api/serverless-sync/auto-sync', {
           method: 'POST',
           body: JSON.stringify({ autoSync: enabled, intervalMs: Math.max(1, mins) * 60000, includeFiles: includeFiles, push: true }),
         }).then(function (r) {
           autoSave.disabled = false;
+          _setServerlessBusy(false);
           if (!r.ok || !r.body || !r.body.ok) throw new Error((r.body && r.body.error) || 'Auto-sync update failed');
           var status = document.getElementById('sls-status');
           if (status) { status.textContent = enabled ? 'Auto-sync enabled.' : 'Auto-sync disabled.'; status.style.color = 'var(--color-muted)'; }
           _renderServerlessPeers();
         }).catch(function (e) {
           autoSave.disabled = false;
+          _setServerlessBusy(false);
           var status = document.getElementById('sls-status');
           if (status) { status.textContent = e.message || 'Auto-sync update failed'; status.style.color = 'var(--color-danger)'; }
         });
@@ -200,13 +223,16 @@
     }
     if (autoRun && !autoRun._slsBound) {
       autoRun._slsBound = true;
-      autoRun.onclick = function () {
+      autoRun.onclick = function (e) {
+        _consumeEvent(e);
         autoRun.disabled = true;
+        _setServerlessBusy(true);
         _api('/api/serverless-sync/auto-sync/run', {
           method: 'POST',
           body: JSON.stringify({ force: true }),
         }).then(function (r) {
           autoRun.disabled = false;
+          _setServerlessBusy(false);
           if (!r.ok || !r.body || !r.body.ok) throw new Error((r.body && r.body.error) || 'Auto-sync run failed');
           var count = (r.body.results || []).filter(function (item) { return item.ok; }).length;
           var status = document.getElementById('sls-status');
@@ -215,6 +241,7 @@
           try { if (typeof loadConversations === 'function') loadConversations(); } catch (_) {}
         }).catch(function (e) {
           autoRun.disabled = false;
+          _setServerlessBusy(false);
           var status = document.getElementById('sls-status');
           if (status) { status.textContent = e.message || 'Auto-sync run failed'; status.style.color = 'var(--color-danger)'; }
         });
@@ -226,14 +253,17 @@
       var forgetBtn = row.querySelector('.sls-peer-forget');
       if (syncBtn && !syncBtn._slsBound) {
         syncBtn._slsBound = true;
-        syncBtn.onclick = function () {
+        syncBtn.onclick = function (e) {
+          _consumeEvent(e);
           var includeFiles = !!(document.getElementById('sls-files') || {}).checked;
           syncBtn.disabled = true;
+          _setServerlessBusy(true);
           _api('/api/serverless-sync/peers/' + encodeURIComponent(id) + '/sync', {
             method: 'POST',
             body: JSON.stringify({ includeFiles: includeFiles }),
           }).then(function (r) {
             syncBtn.disabled = false;
+            _setServerlessBusy(false);
             if (!r.ok || !r.body || !r.body.ok) throw new Error((r.body && r.body.error) || 'Sync failed');
             var status = document.getElementById('sls-status');
             var pulled = r.body.stats || {};
@@ -249,6 +279,7 @@
             try { if (typeof loadConversations === 'function') loadConversations(); } catch (_) {}
           }).catch(function (e) {
             syncBtn.disabled = false;
+            _setServerlessBusy(false);
             var status = document.getElementById('sls-status');
             if (status) { status.textContent = e.message || 'Sync failed'; status.style.color = 'var(--color-danger)'; }
           });
@@ -256,7 +287,8 @@
       }
       if (forgetBtn && !forgetBtn._slsBound) {
         forgetBtn._slsBound = true;
-        forgetBtn.onclick = function () {
+        forgetBtn.onclick = function (e) {
+          _consumeEvent(e);
           _api('/api/serverless-sync/peers/' + encodeURIComponent(id), { method: 'DELETE' }).then(function () { _renderServerlessPeers(); });
         };
       }
@@ -266,7 +298,8 @@
       var btn = row.querySelector('.sls-share-revoke');
       if (btn && !btn._slsBound) {
         btn._slsBound = true;
-        btn.onclick = function () {
+        btn.onclick = function (e) {
+          _consumeEvent(e);
           _api('/api/serverless-sync/shares/' + encodeURIComponent(id) + '/revoke', { method: 'POST' }).then(function () { _renderServerlessPeers(); });
         };
       }
@@ -293,7 +326,8 @@
       var remote = row.querySelector('.sls-conflict-remote');
       if (keep && !keep._slsBound) {
         keep._slsBound = true;
-        keep.onclick = function () {
+        keep.onclick = function (e) {
+          _consumeEvent(e);
           _api('/api/serverless-sync/conflicts/' + encodeURIComponent(id) + '/resolve', {
             method: 'POST',
             body: JSON.stringify({ resolution: 'keep_local' }),
@@ -302,7 +336,7 @@
       }
       if (remote && !remote._slsBound) {
         remote._slsBound = true;
-        remote.onclick = function () { resolveConflict('use_remote'); };
+        remote.onclick = function (e) { _consumeEvent(e); resolveConflict('use_remote'); };
       }
     });
   }
@@ -322,17 +356,20 @@
     }
     if (shareBtn && !shareBtn._slsBound) {
       shareBtn._slsBound = true;
-      shareBtn.onclick = function () {
+      shareBtn.onclick = function (e) {
+        _consumeEvent(e);
         var relay = !!(document.getElementById('sls-relay') || {}).checked;
         var persistent = !!(document.getElementById('sls-persistent') || {}).checked;
         var includeFiles = !!(document.getElementById('sls-files') || {}).checked;
         shareBtn.disabled = true;
+        _setServerlessBusy(true);
         setStatus('Creating link…', false);
         _api('/api/serverless-sync/share', {
           method: 'POST',
           body: JSON.stringify({ relay: relay, persistent: persistent, includeFiles: includeFiles }),
         }).then(function (r) {
           shareBtn.disabled = false;
+          _setServerlessBusy(false);
           if (!r.ok || !r.body || !r.body.ok) {
             setStatus((r.body && r.body.error) || 'Could not create link', true);
             return;
@@ -353,7 +390,8 @@
               '</div>'
             ].join('\n');
             var copy = document.getElementById('sls-copy-link');
-            if (copy) copy.onclick = function () {
+            if (copy) copy.onclick = function (e) {
+              _consumeEvent(e);
               try { navigator.clipboard.writeText(body.pairingUrl || ''); setStatus('Link copied.', false); }
               catch (_) { setStatus('Copy failed.', true); }
             };
@@ -362,22 +400,26 @@
           _renderServerlessPeers();
         }).catch(function (e) {
           shareBtn.disabled = false;
+          _setServerlessBusy(false);
           setStatus(e.message || 'Network error', true);
         });
       };
     }
     if (importBtn && !importBtn._slsBound) {
       importBtn._slsBound = true;
-      importBtn.onclick = function () {
+      importBtn.onclick = function (e) {
+        _consumeEvent(e);
         var pairUrl = (pairInput && pairInput.value || '').trim();
         if (!pairUrl) { setStatus('Paste a pairing link first.', true); return; }
         importBtn.disabled = true;
+        _setServerlessBusy(true);
         setStatus('Importing…', false);
         _api('/api/serverless-sync/import', {
           method: 'POST',
           body: JSON.stringify({ pairUrl: pairUrl }),
         }).then(function (r) {
           importBtn.disabled = false;
+          _setServerlessBusy(false);
           if (!r.ok || !r.body || !r.body.ok) {
             setStatus((r.body && r.body.error) || 'Import failed', true);
             return;
@@ -391,13 +433,15 @@
           _renderServerlessPeers();
         }).catch(function (e) {
           importBtn.disabled = false;
+          _setServerlessBusy(false);
           setStatus(e.message || 'Network error', true);
         });
       };
     }
     if (scanBtn && !scanBtn._slsBound) {
       scanBtn._slsBound = true;
-      scanBtn.onclick = function () {
+      scanBtn.onclick = function (e) {
+        _consumeEvent(e);
         if (!scanCard) return;
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof window.BarcodeDetector !== 'function') {
           setStatus('Camera QR scanning is not available in this runtime. Paste the pairing link instead.', true);
@@ -724,7 +768,7 @@
       : null;
 
     mount.innerHTML = [
-      '<div style="max-width:560px">',
+      '<div class="cs-page-shell" style="max-width:560px">',
       '  <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">',
       '    <div style="width:40px;height:40px;border-radius:50%;background:var(--color-subtleSurface);border:1px solid var(--color-border);display:flex;align-items:center;justify-content:center">',
       '      <i class="ti ti-user" style="font-size:22px;color:var(--color-primary)"></i>',
@@ -735,7 +779,7 @@
       '      ' + e2eBadge,
       '    </div>',
       '  </div>',
-      '  <div class="settings-section" style="padding:12px;border-radius:8px;background:var(--color-subtleSurface);border:1px solid var(--color-border);color:var(--color-text);margin-bottom:14px">',
+      '  <div class="settings-section sync-card" style="padding:12px;border-radius:8px;background:var(--color-subtleSurface);border:1px solid var(--color-border);color:var(--color-text);margin-bottom:14px">',
       '    <div style="display:flex;justify-content:space-between;padding:4px 0">',
       '      <span class="muted" style="color:var(--color-muted)">Status</span>',
       '      <span><span style="color:' + (status.running ? 'var(--color-success)' : 'var(--color-danger)') + '">●</span> ' +
@@ -1246,9 +1290,10 @@
           var session = (s && s.body) || {};
           _updatePill(Object.assign({ loggedIn: session.loggedIn }, status));
           // Re-render the page only if it's currently visible to avoid
-          // wiping a typed-but-unsubmitted email/password.
+          // wiping a typed-but-unsubmitted email/password or clobbering
+          // the serverless device-sync controls while a peer sync is in flight.
           var visible = document.querySelector('.settings-page[data-page="cloud-sync"]');
-          if (visible && visible.classList.contains('active') && session.loggedIn) {
+          if (visible && visible.classList.contains('active') && session.loggedIn && !_serverlessIsActive()) {
             _renderSignedIn(session, status);
           }
           // Fast-poll while a sync is in flight; slow-poll when idle.
