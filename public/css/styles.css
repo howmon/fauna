@@ -669,9 +669,11 @@ body.is-resizing webview { pointer-events: none !important; }
   transition: padding .2s;
 }
 #toggle-sidebar {
-  background: none; border: none; color: var(--fau-text-dim); cursor: pointer;
-  font-size: 17px; padding: 4px 6px; border-radius: 6px;
-  transition: background .12s, color .12s;
+  width: 30px; height: 30px;
+  background: transparent; border: 1px solid transparent; color: var(--fau-text-dim); cursor: pointer;
+  font-size: 17px; padding: 0; border-radius: 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background .12s, color .12s, border-color .12s, box-shadow .12s;
   flex-shrink: 0;
 }
 #toggle-sidebar:hover { color: var(--fau-text); background: var(--fau-surface2); }
@@ -2636,8 +2638,20 @@ body.is-resizing webview { pointer-events: none !important; }
    rail. Keep its menu button clear of the native macOS traffic lights instead
    of leaving it in the awkward rail/chrome gap. */
 #sidebar.collapsed + #main #topbar {
-  padding-left: 46px;
+  padding-left: 76px;
   padding-top: 8px;
+}
+#sidebar.collapsed + #main #toggle-sidebar {
+  background: color-mix(in oklab, var(--fau-surface1) 88%, transparent);
+  border-color: color-mix(in oklab, var(--fau-border) 55%, transparent);
+  color: var(--fau-text);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, .08);
+}
+body.app-page-open #topbar {
+  padding-left: 92px;
+}
+body.app-page-open #toggle-sidebar {
+  display: none;
 }
 
 /* ── Windows custom title-bar controls ─────────────────────────────── */
@@ -2674,6 +2688,9 @@ body.win-platform #topbar {
 body.win-platform #sidebar.collapsed + #main #topbar {
   padding-left: 12px;
   padding-top: 8px;
+}
+body.win-platform.app-page-open #topbar {
+  padding-left: 12px;
 }
 /* Everything interactive must opt out of drag */
 button, input, textarea, select, a, label,
@@ -6335,8 +6352,7 @@ textarea.builder-find-active {
 .artifact-view-toggle button:hover, .artifact-view-toggle button.active { background: var(--fau-surface2); color: var(--fau-text); }
 .artifact-library-filters {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  padding: 0 24px 14px;
-  border-bottom: 1px solid var(--fau-border);
+  padding: 0 24px 18px;
 }
 .artifact-library-filters label {
   display: inline-flex; align-items: center; gap: 7px;
@@ -6345,21 +6361,23 @@ textarea.builder-find-active {
 .artifact-library-filters select {
   min-width: 180px; max-width: 280px;
   background: var(--fau-surface1); color: var(--fau-text);
-  border: 1px solid var(--fau-border); border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--fau-border) 55%, transparent); border-radius: 7px;
   padding: 6px 28px 6px 10px; font: inherit; font-size: 12px;
 }
 .artifact-library {
-  flex: 1; min-height: 0; overflow-y: auto; padding: 18px 24px 28px;
+  flex: 1; min-height: 0; overflow-y: auto; padding: 18px 24px 32px;
 }
 .artifact-library.grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  align-content: start; gap: 14px;
+  align-content: start; gap: 20px;
 }
 .artifact-library-card {
   display: flex; flex-direction: column; gap: 10px; min-height: 178px;
-  border: 1px solid var(--fau-border); border-radius: 8px; background: var(--fau-surface1);
+  border: none; border-radius: 10px; background: color-mix(in srgb, var(--fau-surface1) 86%, transparent);
   padding: 14px; color: var(--fau-text);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, .045);
 }
+.artifact-library-card:hover { background: var(--fau-surface1); box-shadow: 0 10px 26px rgba(15, 23, 42, .07); }
 .artifact-library-card-top { display: flex; align-items: center; gap: 8px; color: var(--fau-text-muted); font-size: 12px; font-weight: 700; }
 .artifact-library-card-top .ti { color: var(--accent); font-size: 17px; }
 .artifact-library-card h3 {
@@ -6372,9 +6390,11 @@ textarea.builder-find-active {
 .artifact-library.list { display: flex; flex-direction: column; gap: 0; padding-top: 0; }
 .artifact-library-row {
   display: grid; grid-template-columns: minmax(180px, 1.6fr) minmax(120px, 1fr) minmax(150px, 1.2fr) 88px minmax(160px, auto);
-  gap: 12px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--fau-border);
+  gap: 12px; align-items: center; padding: 12px 14px; border-bottom: none;
   color: var(--fau-text); font-size: 13px;
 }
+.artifact-library-row:not(.artifact-library-head) { border-radius: 8px; }
+.artifact-library-row:not(.artifact-library-head):hover { background: var(--fau-surface1); }
 .artifact-library-head {
   position: sticky; top: 0; z-index: 1; background: var(--fau-bg);
   color: var(--fau-text-dim); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
@@ -6457,7 +6477,7 @@ textarea.builder-find-active {
 .all-conv-row.active .all-conv-col-actions { opacity: 1; }
 .all-agents-header, .agent-actions-header {
   display: flex; align-items: center; gap: 12px;
-  padding: 16px 24px; padding-top: 48px; border-bottom: 1px solid var(--fau-border);
+  padding: 16px 24px; padding-top: 48px; border-bottom: none;
   flex-shrink: 0; -webkit-app-region: drag;
 }
 .all-agents-header > *, .agent-actions-header > * { -webkit-app-region: no-drag; }
@@ -6486,7 +6506,7 @@ body.win-platform #agent-builder-panel { padding-top: 0; }
 .all-conv-filter-chip-clear:hover { color: var(--fau-text); background: var(--fau-surface2); }
 .all-agents-search-wrap {
   flex: 1; display: flex; align-items: center; gap: 8px;
-  background: var(--fau-surface1); border: 1px solid var(--fau-border);
+  background: var(--fau-surface1); border: 1px solid color-mix(in srgb, var(--fau-border) 50%, transparent);
   border-radius: 8px; padding: 6px 12px; margin-left: 16px;
 }
 .all-agents-search-wrap .ti { color: var(--fau-text-muted); font-size: 14px; }

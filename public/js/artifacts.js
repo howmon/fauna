@@ -344,6 +344,7 @@ function _openAppPage(pageId, title) {
   var page = document.getElementById('app-page');
   var body = document.getElementById('app-page-body');
   if (!page || !body) return null;
+  document.body.classList.add('app-page-open');
   page.dataset.page = pageId;
   page.style.display = 'block';
   ['empty-state', 'messages', 'input-area', 'project-context-bar'].forEach(function(id) {
@@ -388,6 +389,7 @@ function closeAppPage() {
     page.style.display = 'none';
     page.dataset.page = '';
   }
+  document.body.classList.remove('app-page-open');
   if (body) body.innerHTML = '';
   var input = document.getElementById('input-area');
   if (input) input.style.display = '';
