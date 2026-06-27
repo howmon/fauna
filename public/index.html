@@ -79,14 +79,15 @@
       <button class="app-rail-btn" data-rail-page="automations" onclick="toggleTasksPanel()" title="Automations" aria-label="Automations"><i class="ti ti-bolt"></i></button>
       <button class="app-rail-btn" data-rail-page="board" onclick="toggleBoardPanel()" title="Board" aria-label="Board"><i class="ti ti-layout-kanban"></i></button>
       <button class="app-rail-btn" data-rail-page="plugins" onclick="openPluginsPage()" title="Plugins" aria-label="Plugins"><i class="ti ti-puzzle"></i></button>
+      <button class="app-rail-btn" data-rail-page="mcp" onclick="openMcpServersPage()" title="MCP Servers" aria-label="MCP Servers"><i class="ti ti-plug"></i></button>
     </div>
     <div class="app-rail-bottom">
-      <button class="app-rail-btn" data-rail-page="settings" onclick="openUserSettings()" title="Settings" aria-label="Settings"><i class="ti ti-settings"></i></button>
+      <button class="app-rail-btn" data-rail-page="settings" onclick="openSettingsPage('general')" title="Settings" aria-label="Settings"><i class="ti ti-settings"></i></button>
       <div id="app-rail-notif-wrap" class="app-rail-notif-wrap">
         <button id="app-rail-notif-btn" class="app-rail-btn" onclick="toggleNotificationPanel()" title="Notifications" aria-label="Notifications"><i class="ti ti-bell"></i><span id="app-rail-notif-dot"></span></button>
         <div id="topbar-notif-panel"></div>
       </div>
-      <button class="app-rail-avatar" data-rail-page="settings" onclick="openUserSettings()" title="Account" aria-label="Account">S</button>
+      <button class="app-rail-avatar" data-rail-page="account" onclick="openAccountPage()" title="Account" aria-label="Account">S</button>
     </div>
   </nav>
 
@@ -260,7 +261,7 @@
       <button class="topbar-update-btn" id="topbar-update-btn" type="button" style="display:none" onclick="_installFaunaUpdate()" title="Install app update"><i class="ti ti-download"></i> <span>Update</span></button>
       <!-- Right side: voice + notifications + overflow (account gear moved into Settings panel) -->
       <button class="topbar-btn voice-mic-btn" id="voice-mic-btn" data-voice-state="off" title="Voice control — click to toggle, say wake word to activate"><i class="ti ti-microphone-off"></i></button>
-      <button class="topbar-icon-btn" id="topbar-account-btn" onclick="openUserSettings()" title="Account &amp; settings" style="display:none">
+      <button class="topbar-icon-btn" id="topbar-account-btn" onclick="openAccountPage()" title="Account" style="display:none">
         <i class="ti ti-user-circle" id="topbar-account-icon"></i>
         <span id="topbar-account-label" style="display:none"></span>
       </button>
@@ -589,9 +590,6 @@
       <button class="settings-nav-item" data-page="media-keys" onclick="switchSettingsPage('media-keys',this)">
         <i class="ti ti-photo"></i> Media Keys
       </button>
-      <button class="settings-nav-item" data-page="account" onclick="switchSettingsPage('account',this)">
-        <i class="ti ti-user-circle"></i> Account
-      </button>
       <button class="settings-nav-item" data-page="cloud-sync" onclick="switchSettingsPage('cloud-sync',this);window.renderCloudSyncPage&amp;&amp;window.renderCloudSyncPage()">
         <i class="ti ti-refresh"></i> Sync <span id="cloud-sync-pill" class="topbar-menu-badge" style="display:none;margin-left:auto"></span>
       </button>
@@ -603,9 +601,6 @@
       </button>
       <button class="settings-nav-item" data-page="playbook" onclick="switchSettingsPage('playbook',this)">
         <i class="ti ti-notebook"></i> Playbook
-      </button>
-      <button class="settings-nav-item" data-page="mcp" onclick="switchSettingsPage('mcp',this)">
-        <i class="ti ti-plug"></i> MCP Servers
       </button>
       <button class="settings-nav-item" data-page="browser" onclick="switchSettingsPage('browser',this)">
         <i class="ti ti-world-www"></i> Browser use
@@ -948,14 +943,6 @@
         <button class="settings-row-btn" style="flex:1;background:var(--accent);border-color:var(--accent);color:#fff" onclick="saveProviderKey('unsplash')">Save</button>
         <button class="settings-row-btn danger" onclick="clearProviderKey('unsplash')" id="provider-unsplash-clear" style="display:none">Remove</button>
       </div>
-    </div>
-  </div>
-
-  <!-- ── Account ────────────────────────────────────────────────── -->
-  <div class="settings-page" data-page="account">
-    <div class="settings-page-title">Account</div>
-    <div class="settings-section store-account-settings">
-      <div id="agent-account-panel"></div>
     </div>
   </div>
 
@@ -1668,11 +1655,57 @@ Examples:
 
   <script>
   function openUserSettings() {
-    openSettingsPage('account');
+    if (typeof openAccountPage === 'function') openAccountPage();
+    else openSettingsPage('general');
+  }
+
+  function _parkMcpServersPage() {
+    var page = document.getElementById('settings-page-mcp');
+    if (!page || !page._mcpHome) return;
+    page.classList.remove('active', 'mcp-app-page-content');
+    var parent = page._mcpHome.parent || document.querySelector('#settings-content-col .settings-scroll');
+    if (!parent) return;
+    if (page._mcpHome.next && page._mcpHome.next.parentNode === parent) parent.insertBefore(page, page._mcpHome.next);
+    else parent.appendChild(page);
+  }
+
+  function openMcpServersPage() {
+    var body = typeof _openAppPage === 'function' ? _openAppPage('mcp', 'MCP Servers') : null;
+    var page = document.getElementById('settings-page-mcp');
+    if (!body || !page) return;
+    if (!page._mcpHome) page._mcpHome = { parent: page.parentNode, next: page.nextSibling };
+    body.innerHTML =
+      '<div class="mcp-page-shell">' +
+        '<div class="mcp-page-header">' +
+          '<div>' +
+            '<div class="home-kicker"><span></span>Tool protocol</div>' +
+            '<h1>MCP Servers</h1>' +
+            '<p>Manage built-in and custom Model Context Protocol servers available to Fauna.</p>' +
+          '</div>' +
+          '<button class="proj-action-btn" onclick="mcpMgr&&mcpMgr.showForm(null)"><i class="ti ti-plus"></i> Add server</button>' +
+        '</div>' +
+        '<div id="mcp-page-mount"></div>' +
+      '</div>';
+    var mount = document.getElementById('mcp-page-mount');
+    if (mount) mount.appendChild(page);
+    page.classList.add('active', 'mcp-app-page-content');
+    if (typeof setAppRailActive === 'function') setAppRailActive('mcp');
+    if (typeof mcpMgr !== 'undefined') mcpMgr.load();
+    if (typeof mcpBuiltinInit === 'function') mcpBuiltinInit();
   }
 
   function openSettingsPage(page) {
+    if (page === 'mcp') { openMcpServersPage(); return; }
     var panel = document.getElementById('settings-panel');
+    if (panel && !panel._settingsPersistGuard) {
+      panel._settingsPersistGuard = true;
+      panel.addEventListener('click', function () {
+        window.__faunaSettingsInteractionUntil = Date.now() + 1200;
+      }, true);
+      panel.addEventListener('input', function () {
+        window.__faunaSettingsInteractionUntil = Date.now() + 1200;
+      }, true);
+    }
     var pageId = page === 'plugins' ? 'plugins' : 'settings';
     var body = typeof _openAppPage === 'function' ? _openAppPage(pageId, page === 'plugins' ? 'Plugins' : 'Settings') : null;
     if (body && panel) {
@@ -1708,13 +1741,6 @@ Examples:
       b.classList.remove('active');
     });
     if (btn) btn.classList.add('active');
-    if (page === 'mcp') {
-      if (typeof mcpMgr !== 'undefined') mcpMgr.load();
-      mcpBuiltinInit();
-    } else {
-      // Stop polling when navigating away from the MCP page
-      if (window._mcpBuiltinInterval) { clearInterval(window._mcpBuiltinInterval); window._mcpBuiltinInterval = null; }
-    }
     if (page === 'account') {
       if (typeof renderStoreAccountSettings === 'function') renderStoreAccountSettings();
       if (typeof refreshStoreAccount === 'function') refreshStoreAccount().then(function() {
@@ -3210,7 +3236,7 @@ Examples:
       <p>Two integration modes are available:</p>
       <dl class="help-dl">
         <dt>Figma MCP (recommended)</dt>
-        <dd>Connects via the Model Context Protocol. The AI gets live read and write access to your Figma file — components, layers, variables, and more. Enable it from <strong>Settings → MCP Servers</strong> by clicking the <strong>Figma MCP</strong> row (or from the top-bar + menu).</dd>
+        <dd>Connects via the Model Context Protocol. The AI gets live read and write access to your Figma file — components, layers, variables, and more. Enable it from the <strong>MCP Servers</strong> rail page by clicking the <strong>Figma MCP</strong> row (or from the top-bar + menu).</dd>
         <dt>FaunaMCP Plugin</dt>
         <dd>A Figma plugin bundled with this app that runs a local relay. The AI writes <code>figma-exec</code> blocks containing Figma Plugin API JavaScript; the plugin executes them inside Figma. Use <strong>Figma Plugin Setup</strong> (plug icon in sidebar) to install it.</dd>
       </dl>

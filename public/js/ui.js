@@ -467,7 +467,7 @@ var settingsOpen = false;
 function toggleSettings() {
   if (settingsOpen) {
     if (typeof closeSettingsPanelPage === 'function') closeSettingsPanelPage();
-    if (typeof closeAppPage === 'function') closeAppPage();
+    if (typeof closeAppPage === 'function') closeAppPage({ force: true });
     return;
   }
   if (typeof openSettingsPage === 'function') openSettingsPage('general');

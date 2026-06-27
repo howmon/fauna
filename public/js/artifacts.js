@@ -367,6 +367,7 @@ function _closeReusableAppPages(nextPageId) {
   if (nextPageId !== 'automations' && typeof closeTasksPanelPage === 'function') closeTasksPanelPage();
   if (nextPageId !== 'board' && typeof closeBoardPanelPage === 'function') closeBoardPanelPage();
   if (nextPageId !== 'settings' && nextPageId !== 'plugins' && typeof closeSettingsPanelPage === 'function') closeSettingsPanelPage();
+  if (nextPageId !== 'mcp' && window._mcpBuiltinInterval) { clearInterval(window._mcpBuiltinInterval); window._mcpBuiltinInterval = null; }
 }
 
 function _parkReusableAppPanels() {
@@ -376,13 +377,19 @@ function _parkReusableAppPanels() {
       document.body.appendChild(el);
     }
   });
+  if (typeof _parkMcpServersPage === 'function') _parkMcpServersPage();
 }
 
-function closeAppPage() {
+function closeAppPage(opts) {
+  opts = opts || {};
+  var page = document.getElementById('app-page');
+  if (!opts.force && page && (page.dataset.page === 'settings' || page.dataset.page === 'plugins')) {
+    var holdUntil = Number(window.__faunaSettingsInteractionUntil || 0);
+    if (holdUntil && Date.now() < holdUntil) return;
+  }
   _closeReusableAppPages('');
   setAppRailActive('conversations');
   if (typeof setConversationRailVisible === 'function') setConversationRailVisible(true);
-  var page = document.getElementById('app-page');
   var body = document.getElementById('app-page-body');
   _parkReusableAppPanels();
   if (page) {

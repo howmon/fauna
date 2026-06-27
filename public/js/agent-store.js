@@ -95,13 +95,9 @@ function closeAgentStore() {
       setTimeout(function() { panel.style.display = 'none'; }, 250);
     }
   }
-  // When the store is shown inside the Settings (Plugins) panel, callers that
-  // close the store are navigating away (Use, Edit) — close Settings too so
-  // the activated agent / builder is visible underneath.
-  if (embeddedInSettings && typeof toggleSettings === 'function') {
-    var settingsPanel = document.getElementById('settings-panel');
-    if (settingsPanel && settingsPanel.classList.contains('open')) toggleSettings();
-  }
+  // When the store is embedded in Settings, keep Settings mounted. Actions
+  // inside Settings should not bounce the user back to the previous app page;
+  // the explicit Back button owns that transition.
 }
 
 // ── Store panel renderer ─────────────────────────────────────────────────
@@ -405,9 +401,37 @@ function renderStorePublish() {
 
 // ── Account view ─────────────────────────────────────────────────────────
 
+function renderAccountProfileFields() {
+  var saved = '';
+  try { saved = localStorage.getItem('fauna-user-display-name') || ''; } catch (_) {}
+  var current = saved || (typeof getFaunaHomeUserName === 'function' ? getFaunaHomeUserName() : '');
+  return '<div class="account-profile-card">' +
+    '<div class="account-profile-avatar">' + escHtml((current || 'U').charAt(0).toUpperCase()) + '</div>' +
+    '<div class="account-profile-main">' +
+      '<label for="account-display-name-input">Display name</label>' +
+      '<div class="account-profile-row">' +
+        '<input id="account-display-name-input" class="builder-input" value="' + escHtml(current) + '" placeholder="What should Fauna call you?" onkeydown="if(event.key===\'Enter\')saveAccountDisplayName()">' +
+        '<button class="builder-btn secondary" onclick="saveAccountDisplayName()"><i class="ti ti-check"></i> Save</button>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+function saveAccountDisplayName() {
+  var input = document.getElementById('account-display-name-input');
+  if (!input) return;
+  var value = input.value.trim();
+  if (!value) return;
+  try { localStorage.setItem('fauna-user-display-name', value); } catch (_) {}
+  updateTopbarAccount();
+  renderStoreAccountSettings();
+  if (typeof showToast === 'function') showToast('Profile name saved');
+}
+
 function renderStoreAccount() {
   if (storeState.account) {
     return '<div class="store-account">' +
+      renderAccountProfileFields() +
       '<div class="store-account-card">' +
         '<i class="ti ti-user-circle" style="font-size:36px;color:var(--accent)"></i>' +
         '<div class="store-account-info">' +
@@ -421,6 +445,7 @@ function renderStoreAccount() {
   }
 
   return '<div class="store-account">' +
+    renderAccountProfileFields() +
     '<div class="store-account-tabs">' +
       '<button class="store-tab-btn active" id="store-login-tab" onclick="storeShowTab(\'login\')">Sign In</button>' +
       '<button class="store-tab-btn" id="store-register-tab" onclick="storeShowTab(\'register\')">Register</button>' +
@@ -446,6 +471,30 @@ function renderStoreAccountSettings() {
   var panel = document.getElementById('agent-account-panel');
   if (!panel) return;
   panel.innerHTML = renderStoreAccount();
+}
+
+function openAccountPage() {
+  var body = typeof _openAppPage === 'function' ? _openAppPage('account', 'Account') : null;
+  if (body) {
+    body.innerHTML =
+      '<div class="account-page-shell">' +
+        '<div class="account-page-header">' +
+          '<div>' +
+            '<div class="home-kicker"><span></span>Fauna profile</div>' +
+            '<h1>Account</h1>' +
+            '<p>Manage your Fauna identity, developer verification, and sign-in state.</p>' +
+          '</div>' +
+          '<button class="proj-action-btn" onclick="openSettingsPage(\'general\')"><i class="ti ti-settings"></i> Settings</button>' +
+        '</div>' +
+        '<section class="account-page-card">' +
+          '<div id="agent-account-panel"></div>' +
+        '</section>' +
+      '</div>';
+  }
+  renderStoreAccountSettings();
+  if (typeof refreshStoreAccount === 'function') {
+    refreshStoreAccount().then(function() { renderStoreAccountSettings(); });
+  }
 }
 
 function storeShowTab(tab) {
@@ -1580,9 +1629,7 @@ function showAdminReasonInput(placeholder, onSubmit) {
 // ── Init ─────────────────────────────────────────────────────────────────
 
 function openStoreAccount() {
-  if (typeof openSettingsPage === 'function') openSettingsPage('account');
-  // Always refresh to pick up latest verified status
-  refreshStoreAccount().then(function() { renderStoreAccountSettings(); });
+  openAccountPage();
 }
 
 function updateTopbarAccount() {
@@ -1597,10 +1644,10 @@ function updateTopbarAccount() {
   if (!btn) return;
   if (storeState.account) {
     btn.classList.add('logged-in');
-    btn.title = (storeState.account.name || 'Account') + ' — click to open settings';
+    btn.title = (storeState.account.name || 'Account') + ' — click to open account';
   } else {
     btn.classList.remove('logged-in');
-    btn.title = 'Account & settings';
+    btn.title = 'Account';
   }
 }
 
