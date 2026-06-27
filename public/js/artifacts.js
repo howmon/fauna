@@ -466,7 +466,8 @@ function closeAppPage(opts) {
   if (typeof renderProjectContextBar === 'function') renderProjectContextBar();
 }
 
-function openPluginsPage() {
+function openPluginsPage(opts) {
+  opts = opts || {};
   var body = typeof _openAppPage === 'function' ? _openAppPage('plugins', 'Plugins') : null;
   var panel = document.getElementById('agent-store-panel');
   if (!body || !panel) return null;
@@ -487,6 +488,18 @@ function openPluginsPage() {
   panel.style.display = 'flex';
   panel.classList.add('open', 'plugins-app-panel');
   if (typeof setAppRailActive === 'function') setAppRailActive('plugins');
+  if (!opts.skipStoreRender && typeof renderStorePanel === 'function') {
+    if (typeof storeState !== 'undefined') {
+      storeState.open = true;
+      storeState.view = storeState.view || 'browse';
+      storeState.browseTab = storeState.browseTab || 'myagents';
+    }
+    renderStorePanel();
+    if (typeof loadStoreCategories === 'function') loadStoreCategories();
+    if (typeof searchStoreAgents === 'function') searchStoreAgents();
+    if (typeof loadUnreadCount === 'function') loadUnreadCount();
+    if (typeof refreshStoreAccount === 'function') refreshStoreAccount();
+  }
   return panel;
 }
 
