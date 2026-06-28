@@ -6269,6 +6269,125 @@ textarea.builder-find-active {
   min-height: 520px;
   display: flex;
 }
+.health-page-shell {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 28px 24px 48px;
+  height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.health-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  flex-shrink: 0;
+}
+.health-page-header h1 { margin: 4px 0 8px; font-size: 30px; }
+.health-page-header p { margin: 0; color: var(--fau-text-dim); max-width: 620px; }
+.health-page-content { display: flex; flex-direction: column; gap: 14px; }
+.health-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.health-summary-card {
+  border: 1px solid var(--fau-border);
+  background: var(--fau-surface1);
+  border-radius: 8px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.health-summary-card span { color: var(--fau-text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+.health-summary-card strong { color: var(--fau-text); font-size: 26px; line-height: 1; }
+.health-summary-card.status-ok strong { color: var(--success); }
+.health-summary-card.status-warn strong { color: var(--warning); }
+.health-summary-card.status-fail strong { color: var(--error); }
+.health-summary-card.status-off strong { color: var(--fau-text-muted); }
+.health-meta { color: var(--fau-text-muted); font-size: 12px; }
+.health-check-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.health-check-card {
+  border: 1px solid var(--fau-border);
+  background: var(--fau-surface1);
+  border-radius: 8px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.health-check-top { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.health-status-dot { width: 9px; height: 9px; border-radius: 999px; background: var(--fau-text-muted); flex: 0 0 auto; }
+.health-check-card.status-ok .health-status-dot { background: var(--success); }
+.health-check-card.status-warn .health-status-dot { background: var(--warning); }
+.health-check-card.status-fail .health-status-dot { background: var(--error); }
+.health-check-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.health-check-title strong { color: var(--fau-text); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.health-check-title span { color: var(--fau-text-muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.health-status-label {
+  color: var(--fau-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+.health-check-card p { margin: 0; color: var(--fau-text-dim); font-size: 12px; line-height: 1.45; }
+.health-backends { display: flex; flex-wrap: wrap; gap: 6px; }
+.health-backend {
+  border: 1px solid var(--fau-border);
+  background: var(--fau-surface2);
+  color: var(--fau-text-dim);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.health-backend.active { color: var(--accent2); border-color: color-mix(in srgb, var(--accent) 40%, var(--fau-border)); }
+.health-backend.muted { color: var(--fau-text-muted); }
+.health-fix {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border-top: 1px solid var(--fau-border);
+  padding-top: 10px;
+  color: var(--fau-text-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.health-fix .ti { color: var(--warning); font-size: 14px; margin-top: 1px; }
+.health-loading,
+.health-empty {
+  min-height: 220px;
+  border: 1px dashed var(--fau-border);
+  border-radius: 8px;
+  color: var(--fau-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  text-align: center;
+}
+.health-loading .ti { animation: spin 1s linear infinite; }
+.health-empty strong { color: var(--fau-text); }
+.health-fail .ti { color: var(--error); }
+@media (max-width: 860px) {
+  .health-summary-grid,
+  .health-check-grid { grid-template-columns: 1fr; }
+  .health-page-header { flex-direction: column; }
+}
 
 /* ── Phase 8: Polish & Hardening ───────────────────────────── */
 

@@ -66,11 +66,11 @@ async function _hydrateServerConvs() {
       if (state.currentId && getConv(state.currentId)) {
         var activeConv = getConv(state.currentId);
         if (activeConv && activeConv._streaming) {
-          if (typeof showMessages === 'function') showMessages();
+          if (typeof showMessages === 'function') showMessages({ preserveAppPage: true });
           if (typeof setBusy === 'function') setBusy(true);
         } else {
           purgeConvDom(state.currentId);
-          loadConversation(state.currentId);
+          loadConversation(state.currentId, { preserveAppPage: true });
         }
       }
     }

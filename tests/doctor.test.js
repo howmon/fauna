@@ -10,15 +10,18 @@ describe('doctor', () => {
 
     for (const c of report.checks) {
       expect(typeof c.name).toBe('string');
-      expect(['ok', 'warn', 'fail']).toContain(c.status);
+      expect(typeof c.channel).toBe('string');
+      expect(Array.isArray(c.backends)).toBe(true);
+      expect(c).toHaveProperty('activeBackend');
+      expect(['ok', 'warn', 'fail', 'off']).toContain(c.status);
       expect(typeof c.message).toBe('string');
     }
   });
 
   it('counts add up to the total number of checks', async () => {
     const report = await runDoctor();
-    const { ok, warn, fail } = report.counts;
-    expect(ok + warn + fail).toBe(report.total);
+    const { ok, warn, fail, off } = report.counts;
+    expect(ok + warn + fail + off).toBe(report.total);
   });
 
   it('always reports the always-on capabilities as ok', async () => {

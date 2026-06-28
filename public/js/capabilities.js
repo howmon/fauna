@@ -9,6 +9,10 @@ async function loadSysCtx() {
     sysCtx = d;
     lastPermState = d.permissions || {};
   } catch (_) {}
+
+  fetch('/api/doctor').then(function(r) { return r.ok ? r.json() : null; }).then(function(d) {
+    if (d && d.ok) sysCtx.doctor = d;
+  }).catch(function() {});
 }
 
 // Build the AI capabilities system prompt dynamically from granted permissions
@@ -42,6 +46,14 @@ function getCapabilitiesContext() {
   var autoRun = state.autoRunShell;
 
   var figmaSection = '';
+
+  var doctorLines = [];
+  try {
+    var checks = (sysCtx.doctor && sysCtx.doctor.checks) || [];
+    doctorLines = checks.slice(0, 10).map(function(c) {
+      return '- ' + (c.channel || c.name) + ': ' + c.status + '; backend=' + (c.activeBackend || 'none') + '; ' + c.message;
+    });
+  } catch (_) {}
 
   return [
     '## Role',
@@ -88,6 +100,7 @@ function getCapabilitiesContext() {
     isWin
       ? '- No macOS-specific permissions apply on Windows'
       : '- macOS permissions granted: ' + permLine,
+    doctorLines.length ? '\n## Live Capability Health\n' + doctorLines.join('\n') + '\n- If a task fails because a capability is missing, call fauna_doctor before guessing a workaround.' : '',
     '',
     '## Shell Execution Rules (CRITICAL — read this twice)',
     '',

@@ -512,7 +512,8 @@ function ensureStreamingPlaceholder(conv) {
   convInner.appendChild(msgEl);
 }
 
-function loadConversation(id) {
+function loadConversation(id, opts) {
+  opts = opts || {};
   // Save outgoing conversation's agent state before switching
   if (state.currentId && state.currentId !== id) {
     var outgoing = getConv(state.currentId);
@@ -553,8 +554,10 @@ function loadConversation(id) {
   document.getElementById('sys-prompt-input').value = conv.systemPrompt || '';
   updateSysScopeHint();
   var topbarTitle = document.getElementById('topbar-title');
-  topbarTitle.textContent = conv.title;
-  topbarTitle.title = conv.title;
+  if (!opts.preserveAppPage) {
+    topbarTitle.textContent = conv.title;
+    topbarTitle.title = conv.title;
+  }
   // Reflect conversation in window title so the tray menu can list it
   try { document.title = conv.title ? ('Fauna — ' + conv.title) : 'Fauna'; } catch (_) {}
   // Tell the main process which conv this window is on (for next-launch restore)
@@ -655,11 +658,11 @@ function loadConversation(id) {
   }
 
   var hasVisibleMessages = !!(convInner && convInner.querySelector('.msg'));
-  if (hasVisibleMessages) showMessages();
-  else showEmpty();
+  if (hasVisibleMessages) showMessages({ preserveAppPage: opts.preserveAppPage });
+  else showEmpty({ preserveAppPage: opts.preserveAppPage });
 
   ensureStreamingPlaceholder(conv);
-  if (conv._streaming) showMessages();
+  if (conv._streaming) showMessages({ preserveAppPage: opts.preserveAppPage });
 
   // Reflect this conversation's streaming state in UI
   setBusy(!!conv._streaming);

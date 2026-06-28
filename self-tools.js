@@ -2436,7 +2436,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_doctor',
-      description: 'Run a self-diagnostic that probes Fauna\'s optional integrations (headless browser, LibreOffice slide rendering, AI image-gen, stock-photo providers, local LLM, memory and context stores) and returns a structured health report. Call this when a capability seems missing or a task fails for environmental reasons (e.g. "slide render failed", "image-gen unavailable", "can\'t open this page") so you can see what is configured and what the fix is — instead of guessing. Returns {ok, checks:[{name, status:"ok"|"warn"|"fail", message, fix?}], counts, total}.',
+      description: 'Run a self-diagnostic that probes Fauna\'s capability channels and optional integrations (browser automation, LibreOffice slide rendering, image generation, stock photos, local/GitHub LLM, memory, context, GitHub CLI, media tools). Call this when a capability seems missing or a task fails for environmental reasons so you can see the active backend and fix instead of guessing. Returns {ok, checks:[{name, channel, tier, backends, activeBackend, status:"ok"|"warn"|"fail"|"off", message, fix?}], counts, total}.',
       parameters: { type: 'object', properties: {} },
     },
   },

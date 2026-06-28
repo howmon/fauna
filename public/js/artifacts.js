@@ -638,6 +638,91 @@ function openPluginsPage(opts) {
   return panel;
 }
 
+function openHealthPage() {
+  var body = typeof _openAppPage === 'function' ? _openAppPage('health', 'Health') : null;
+  if (!body) return null;
+  body.innerHTML =
+    '<div class="health-page-shell">' +
+      '<div class="health-page-header">' +
+        '<div>' +
+          '<div class="home-kicker"><span></span>Diagnostics</div>' +
+          '<h1>Health</h1>' +
+          '<p>Live capability checks for Fauna integrations, backends, and local tools.</p>' +
+        '</div>' +
+        '<button class="settings-row-btn" type="button" onclick="renderHealthPage()"><i class="ti ti-refresh"></i> Refresh</button>' +
+      '</div>' +
+      '<div id="health-page-content" class="health-page-content">' +
+        '<div class="health-loading"><i class="ti ti-loader-2"></i> Checking capabilities...</div>' +
+      '</div>' +
+    '</div>';
+  renderHealthPage();
+  return body;
+}
+
+async function renderHealthPage() {
+  var content = document.getElementById('health-page-content');
+  if (!content) return;
+  content.innerHTML = '<div class="health-loading"><i class="ti ti-loader-2"></i> Checking capabilities...</div>';
+  try {
+    var r = await fetch('/api/doctor');
+    var d = await r.json();
+    if (!r.ok || !d || d.ok === false) throw new Error((d && d.error) || ('HTTP ' + r.status));
+    content.innerHTML = _healthReportMarkup(d);
+  } catch (e) {
+    content.innerHTML =
+      '<div class="health-empty health-fail">' +
+        '<i class="ti ti-alert-triangle"></i>' +
+        '<strong>Doctor check failed</strong>' +
+        '<span>' + escHtml(e && e.message ? e.message : 'Unknown error') + '</span>' +
+      '</div>';
+  }
+}
+
+function _healthReportMarkup(report) {
+  var counts = report.counts || {};
+  var checks = Array.isArray(report.checks) ? report.checks : [];
+  var order = { fail: 0, warn: 1, off: 2, ok: 3 };
+  checks = checks.slice().sort(function(a, b) {
+    return (order[a.status] || 9) - (order[b.status] || 9) || String(a.name || '').localeCompare(String(b.name || ''));
+  });
+  var summary = [
+    { key: 'ok', label: 'Healthy', value: counts.ok || 0 },
+    { key: 'warn', label: 'Needs setup', value: counts.warn || 0 },
+    { key: 'fail', label: 'Failing', value: counts.fail || 0 },
+    { key: 'off', label: 'Off', value: counts.off || 0 },
+  ].map(function(item) {
+    return '<div class="health-summary-card status-' + item.key + '">' +
+      '<span>' + escHtml(item.label) + '</span>' +
+      '<strong>' + item.value + '</strong>' +
+    '</div>';
+  }).join('');
+  var cards = checks.map(_healthCheckCardMarkup).join('') ||
+    '<div class="health-empty"><i class="ti ti-stethoscope"></i><strong>No checks returned</strong><span>Run refresh to try again.</span></div>';
+  var timestamp = report.ts ? new Date(report.ts).toLocaleString() : '';
+  return '<div class="health-summary-grid">' + summary + '</div>' +
+    '<div class="health-meta">' + escHtml(report.total || 0) + ' checks' + (timestamp ? ' updated ' + escHtml(timestamp) : '') + '</div>' +
+    '<div class="health-check-grid">' + cards + '</div>';
+}
+
+function _healthCheckCardMarkup(c) {
+  var status = c.status || 'off';
+  var backends = Array.isArray(c.backends) ? c.backends : [];
+  var backendHtml = backends.length ? backends.map(function(b) {
+    var active = c.activeBackend && String(c.activeBackend) === String(b);
+    return '<span class="health-backend' + (active ? ' active' : '') + '">' + escHtml(b) + '</span>';
+  }).join('') : '<span class="health-backend muted">none</span>';
+  return '<section class="health-check-card status-' + escHtml(status) + '">' +
+    '<div class="health-check-top">' +
+      '<span class="health-status-dot"></span>' +
+      '<div class="health-check-title"><strong>' + escHtml(c.name || c.channel || 'Capability') + '</strong><span>' + escHtml(c.channel || '') + '</span></div>' +
+      '<span class="health-status-label">' + escHtml(status) + '</span>' +
+    '</div>' +
+    '<p>' + escHtml(c.message || '') + '</p>' +
+    '<div class="health-backends">' + backendHtml + '</div>' +
+    (c.fix && status !== 'ok' ? '<div class="health-fix"><i class="ti ti-tool"></i><span>' + escHtml(c.fix) + '</span></div>' : '') +
+  '</section>';
+}
+
 function openConversationsRail() {
   closeAppPage();
   if (typeof setConversationRailVisible === 'function') setConversationRailVisible(true);

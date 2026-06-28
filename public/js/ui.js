@@ -1190,9 +1190,10 @@ function reconcileBusyState() {
   _applyBusyState(_hasActiveConversationWork());
 }
 
-function showMessages() {
-  if (typeof closeAppPage === 'function') closeAppPage();
-  if (typeof setAppRailActive === 'function') setAppRailActive('conversations');
+function showMessages(opts) {
+  opts = opts || {};
+  if (!opts.preserveAppPage && typeof closeAppPage === 'function') closeAppPage();
+  if (!opts.preserveAppPage && typeof setAppRailActive === 'function') setAppRailActive('conversations');
   var empty = document.getElementById('empty-state');
   if (empty) {
     empty.classList.add('hidden');
@@ -1201,9 +1202,10 @@ function showMessages() {
   document.getElementById('messages').style.display = 'block';
 }
 
-function showEmpty() {
-  if (typeof closeAppPage === 'function') closeAppPage();
-  if (typeof setAppRailActive === 'function') setAppRailActive('conversations');
+function showEmpty(opts) {
+  opts = opts || {};
+  if (!opts.preserveAppPage && typeof closeAppPage === 'function') closeAppPage();
+  if (!opts.preserveAppPage && typeof setAppRailActive === 'function') setAppRailActive('conversations');
   if (typeof renderPromptStarters === 'function') renderPromptStarters();
   var empty = document.getElementById('empty-state');
   if (empty) {
