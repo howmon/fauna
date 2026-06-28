@@ -693,6 +693,17 @@ function _finalizeRunSuccess(projectId, cardId, ev) {
         claimedBy: null,
         runEntry: { taskId: ent && ent.taskId, finishedAt: Date.now(), ok: true, verified: verifyResult && verifyResult.ok },
       }, { actor: 'ai' });
+    } else if (verifyResult && verifyResult.infrastructureFailure === true) {
+      addWorkItemComment(projectId, cardId, { author: 'ai',
+        body: 'Autopilot verification hit a tooling/environment issue, not a confirmed code failure. The card was returned to Todo so it can retry after the verifier environment is fixed. Command: `' + (verifyResult.command || 'verify command') + '`',
+      });
+      moveWorkItem(projectId, cardId, {
+        column: 'todo',
+        assignee: 'ai',
+        claimedBy: null,
+        runEntry: { taskId: ent && ent.taskId, finishedAt: Date.now(), ok: true, verified: false, infrastructureFailure: true },
+      }, { actor: 'human' });
+      pokeNow();
     } else if (verifyResult && verifyResult.ok === false) {
       // Verifier ran and failed → leave in review for a human, do not advance.
       moveWorkItem(projectId, cardId, {

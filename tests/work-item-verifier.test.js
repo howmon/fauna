@@ -22,7 +22,7 @@ vi.mock('../project-manager.js', () => ({
   }),
 }));
 
-const { runVerifyCommand, verifyWorkItem, resolveVerifyCommand } =
+const { runVerifyCommand, verifyWorkItem, resolveVerifyCommand, __test } =
   await import('../lib/work-item-verifier.js');
 
 beforeEach(() => {
@@ -47,6 +47,13 @@ describe('resolveVerifyCommand', () => {
 });
 
 describe('runVerifyCommand', () => {
+  it('builds a developer PATH for packaged app shells', () => {
+    const env = __test.buildVerifyEnv({ PATH: '/custom/bin' });
+    expect(env.PATH.split(':')).toContain('/custom/bin');
+    expect(env.PATH.split(':')).toContain('/usr/local/bin');
+    expect(env.PATH.split(':')).toContain('/opt/homebrew/bin');
+  });
+
   it('passes for exit-code 0', async () => {
     const r = await runVerifyCommand('true');
     expect(r.ok).toBe(true);
@@ -57,6 +64,13 @@ describe('runVerifyCommand', () => {
     const r = await runVerifyCommand('false');
     expect(r.ok).toBe(false);
     expect(r.exitCode).not.toBe(0);
+  });
+
+  it('marks command-not-found as infrastructure failure', async () => {
+    const r = await runVerifyCommand('definitely-not-a-real-fauna-command-xyz');
+    expect(r.ok).toBe(false);
+    expect(r.exitCode).toBe(127);
+    expect(r.infrastructureFailure).toBe(true);
   });
 
   it('captures stdout and stderr', async () => {

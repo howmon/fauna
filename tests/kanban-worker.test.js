@@ -431,6 +431,20 @@ describe('_finalizeRunSuccess', () => {
     expect(lastRun.verified).toBe(false);
   });
 
+  it('returns to todo when verifier fails from infrastructure/tooling', async () => {
+    _verify.nextResult = { ok: false, skipped: false, exitCode: 127, infrastructureFailure: true, command: 'npm test' };
+    _db.projects.push({ id: 'p1', name: 'P', kanban: {}, qa: { command: 'npm test' } });
+    _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'in_progress', claimedBy: 'ai:o', assignee: 'ai' }));
+    __test.inFlight.set('c1', { taskId: 'task-1', projectId: 'p1', unsubscribe: () => {} });
+    __test.finalizeRunSuccess('p1', 'c1', { event: 'completed' });
+    await flushAsync();
+    expect(_db.items[0].column).toBe('todo');
+    expect(_db.items[0].assignee).toBe('ai');
+    expect(_db.items[0].claimedBy).toBe(null);
+    expect(_db.items[0].comments.at(-1).body).toMatch(/tooling\/environment/);
+    expect(_db.items[0].runs.at(-1).infrastructureFailure).toBe(true);
+  });
+
   it('auto-advances a card the AI moved to review onward to done when verifier passes (or no verifier)', async () => {
     // Previously the worker treated "AI moved to review" as terminal and left
     // the card sitting there forever — also keeping it counted against the
