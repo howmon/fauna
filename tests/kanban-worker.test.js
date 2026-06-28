@@ -261,6 +261,12 @@ describe('_pickNext', () => {
     _db.items.push(_mkItem({ id: 'c1',   projectId: 'p1', column: 'todo' }));
     expect(__test.pickNext(_db.projects[0])).toBe(null);
   });
+  it('does not count review cards against concurrency', () => {
+    _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true, concurrency: 1 } });
+    _db.items.push(_mkItem({ id: 'reviewed', projectId: 'p1', column: 'review', assignee: 'ai', claimedBy: 'ai:x' }));
+    _db.items.push(_mkItem({ id: 'next', projectId: 'p1', column: 'todo', assignee: 'ai' }));
+    expect(__test.pickNext(_db.projects[0]).id).toBe('next');
+  });
   it('respects daily quota', () => {
     _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true, concurrency: 5, dailyAiQuota: 2 } });
     _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'todo' }));

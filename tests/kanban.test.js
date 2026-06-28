@@ -125,6 +125,13 @@ describe('moveWorkItem', () => {
     addBacklogItem('proj-1', { title: 'card', column: 'todo', assignee: 'ai' });
   });
 
+  it('allows strict AI promotion from backlog to todo', () => {
+    const backlogCard = addBacklogItem('proj-1', { title: 'backlog card', column: 'backlog', assignee: 'ai' });
+    const r = moveWorkItem('proj-1', backlogCard.id, { column: 'todo', assignee: 'ai', claimedBy: null }, { actor: 'ai', strict: true });
+    expect(r.ok).toBe(true);
+    expect(r.item.column).toBe('todo');
+  });
+
   it('moves a card forward and keeps status mirrored', () => {
     const id = listBacklog('proj-1')[0].id;
     const r = moveWorkItem('proj-1', id, { column: 'in_progress' }, { actor: 'human' });

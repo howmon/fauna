@@ -1295,7 +1295,7 @@ export function updateBacklogItem(projectId, itemId, patch = {}) {
 
 // ── Kanban: column move, claim, comment, lock, global list ───────────────
 
-const _AI_FORWARD_PATH = ['todo', 'in_progress', 'review', 'done', 'archived'];
+const _AI_FORWARD_PATH = ['backlog', 'todo', 'in_progress', 'review', 'done', 'archived'];
 
 /**
  * Move a work item between Kanban columns.
@@ -1306,7 +1306,7 @@ const _AI_FORWARD_PATH = ['todo', 'in_progress', 'review', 'done', 'archived'];
  * @param opts     { actor: 'human' | 'ai', strict?: bool }
  *
  * `strict: true` (used by the worker) restricts moves to the canonical AI
- * forward path: todo → in_progress → review → done → archived. Backward
+ * forward path: backlog → todo → in_progress → review → done → archived. Backward
  * moves are rejected unless actor is 'human'.
  */
 export function moveWorkItem(projectId, itemId, patch = {}, opts = {}) {

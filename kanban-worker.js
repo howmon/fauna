@@ -168,11 +168,13 @@ function _isBlocked(card, board) {
   return false;
 }
 
-// In-flight count for a project = cards currently column='in_progress' or
-// 'review' that we've claimed.
+// In-flight count for a project = cards currently column='in_progress' that
+// we've claimed. Review is a waiting-for-human/verification state, not an
+// active worker slot; counting it here makes Parallel=1 boards stall after
+// the first finished card lands in Review.
 function _aiInFlight(board) {
   let n = 0;
-  for (const col of ['in_progress', 'review']) {
+  for (const col of ['in_progress']) {
     for (const it of board.columns[col] || []) {
       if (it.claimedBy && it.claimedBy.startsWith('ai:')) n++;
     }
@@ -688,12 +690,14 @@ function _finalizeRunSuccess(projectId, cardId, ev) {
       // The AI tools already moved it somewhere terminal (done/archived/todo).
       // Just record the run.
       moveWorkItem(projectId, cardId, {
+        claimedBy: null,
         runEntry: { taskId: ent && ent.taskId, finishedAt: Date.now(), ok: true, verified: verifyResult && verifyResult.ok },
       }, { actor: 'ai' });
     } else if (verifyResult && verifyResult.ok === false) {
       // Verifier ran and failed → leave in review for a human, do not advance.
       moveWorkItem(projectId, cardId, {
         column: 'review',
+        claimedBy: null,
         runEntry: { taskId: ent && ent.taskId, finishedAt: Date.now(), ok: true, verified: false },
       }, { actor: 'ai', strict: true });
     } else {
@@ -703,6 +707,7 @@ function _finalizeRunSuccess(projectId, cardId, ev) {
       // the old behaviour.
       moveWorkItem(projectId, cardId, {
         column: 'done',
+        claimedBy: null,
         runEntry: { taskId: ent && ent.taskId, finishedAt: Date.now(), ok: true, verified: verifyResult && verifyResult.ok === true },
       }, { actor: 'ai', strict: true });
     }
