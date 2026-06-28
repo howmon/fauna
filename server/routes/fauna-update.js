@@ -3,14 +3,15 @@
 // Three endpoints:
 //   GET  /api/fauna/update-status  — returns the current update job state
 //   POST /api/fauna/check-update   — compares local git SHA / build-info.sha
-//                                    against the GitHub HEAD commit
-//   POST /api/fauna/install-update — `git fetch && git reset --hard && npm i`
-//                                    in dev/git checkout; opens GitHub
-//                                    releases in browser for packaged builds.
+//                                    against the GitHub main branch commit
+//   POST /api/fauna/install-update — updates from origin/main in dev/git
+//                                    checkouts; packaged builds rebuild from
+//                                    the main branch source zip.
 
 import fs from 'fs';
 import path from 'path';
 import { execSync, exec as _exec } from 'child_process';
+import { createSelfUpdater } from '../../lib/self-updater.js';
 
 const FAUNA_REPO_OWNER = 'howmon';
 const FAUNA_REPO_NAME  = 'fauna';
@@ -22,6 +23,7 @@ export function registerFaunaUpdateRoutes(app, {
   getElectronShell,
 }) {
   let _faunaUpdateJob = null;
+  let _sourceUpdater = null;
 
   function _faunaAppVersion() {
     try {
@@ -47,6 +49,35 @@ export function registerFaunaUpdateRoutes(app, {
     return !!(_electronApp && _electronApp.isPackaged);
   }
 
+  function _faunaJobFromSourceState(state) {
+    return {
+      phase: state?.phase || 'idle',
+      checking: !!state?.checking,
+      running: !!state?.running,
+      updateAvailable: !!state?.updateAvailable,
+      currentSha: state?.currentSha || null,
+      latestSha: state?.latestSha || null,
+      error: state?.error || null,
+      message: state?.message || null,
+      logs: Array.isArray(state?.logs) ? state.logs : [],
+    };
+  }
+
+  function _faunaSourceUpdater() {
+    const _electronApp = getElectronApp();
+    if (!_electronApp) return null;
+    if (_sourceUpdater) return _sourceUpdater;
+    const packageJson = JSON.parse(fs.readFileSync(path.join(appDir, 'package.json'), 'utf8'));
+    _sourceUpdater = createSelfUpdater({
+      app: _electronApp,
+      packageJson,
+      appName: packageJson?.build?.productName || 'Fauna',
+      onStateChange: (state) => { _faunaUpdateJob = _faunaJobFromSourceState(state); },
+      log: (...args) => console.log('[fauna-update]', ...args),
+    });
+    return _sourceUpdater;
+  }
+
   function _faunaGitSha() {
     // 1. Try live git (works in dev / git-clone installs)
     try {
@@ -64,7 +95,7 @@ export function registerFaunaUpdateRoutes(app, {
     // Use GitHub API — no auth needed for public repos
     const https = await import('https');
     return new Promise((resolve, reject) => {
-      const url = `https://api.github.com/repos/${FAUNA_REPO_OWNER}/${FAUNA_REPO_NAME}/commits/HEAD`;
+      const url = `https://api.github.com/repos/${FAUNA_REPO_OWNER}/${FAUNA_REPO_NAME}/commits/main`;
       const opts = { headers: { 'User-Agent': 'Fauna-App/1.0', 'Accept': 'application/vnd.github.sha' } };
       https.get(url, opts, r => {
         let body = '';
@@ -78,10 +109,29 @@ export function registerFaunaUpdateRoutes(app, {
   }
 
   app.get('/api/fauna/update-status', (_req, res) => {
+    if (_faunaIsPackaged()) {
+      try {
+        const updater = _faunaSourceUpdater();
+        if (updater) _faunaUpdateJob = _faunaJobFromSourceState(updater.getState());
+      } catch (e) {
+        _faunaUpdateJob = { phase: 'error', updateAvailable: false, error: e.message, logs: [{ message: e.message, ts: Date.now() }] };
+      }
+    }
     res.json({ job: _faunaUpdateJob || { phase: 'idle', updateAvailable: false }, version: _faunaAppVersion() });
   });
 
   app.post('/api/fauna/check-update', async (_req, res) => {
+    if (_faunaIsPackaged()) {
+      try {
+        const updater = _faunaSourceUpdater();
+        if (!updater) throw new Error('Source updater unavailable');
+        _faunaUpdateJob = _faunaJobFromSourceState(await updater.checkForUpdates(true));
+      } catch (err) {
+        _faunaUpdateJob = { phase: 'error', checking: false, running: false, updateAvailable: false, error: err.message, logs: [{ message: err.message, ts: Date.now() }] };
+      }
+      return res.json({ job: _faunaUpdateJob, version: _faunaAppVersion() });
+    }
+
     _faunaUpdateJob = { phase: 'checking', checking: true, running: false, logs: [] };
     _faunaLog('Reading local git SHA…');
     try {
@@ -118,37 +168,32 @@ export function registerFaunaUpdateRoutes(app, {
     console.log('[fauna-update] Install triggered. App dir:', appDir);
     console.log('[fauna-update] Is packaged:', _faunaIsPackaged());
 
+    if (_faunaIsPackaged()) {
+      try {
+        const updater = _faunaSourceUpdater();
+        if (!updater) throw new Error('Source updater unavailable');
+        const installPromise = updater.installUpdate();
+        _faunaUpdateJob = _faunaJobFromSourceState(updater.getState());
+        res.json({ job: _faunaUpdateJob, version: _faunaAppVersion() });
+        installPromise.catch(err => {
+          _faunaUpdateJob = { phase: 'error', running: false, updateAvailable: false, error: err.message, logs: [{ message: err.message, ts: Date.now() }] };
+        });
+        return;
+      } catch (err) {
+        _faunaUpdateJob = { phase: 'error', running: false, updateAvailable: false, error: err.message, logs: [{ message: err.message, ts: Date.now() }] };
+        return res.status(400).json({ job: _faunaUpdateJob, error: err.message });
+      }
+    }
+
     // Check if we can do git-based updates (requires .git folder)
     const hasGitRepo = fs.existsSync(path.join(appDir, '.git'));
     console.log('[fauna-update] .git exists in app dir:', hasGitRepo);
-
-    // In a packaged app without git repo, open the releases page instead
-    if (_faunaIsPackaged() && !hasGitRepo) {
-      const releasesUrl = `https://github.com/${FAUNA_REPO_OWNER}/${FAUNA_REPO_NAME}/releases`;
-      console.log('[fauna-update] Opening releases page:', releasesUrl);
-      const _electronShell = getElectronShell();
-      console.log('[fauna-update] _electronShell available:', !!_electronShell);
-
-      if (_electronShell) {
-        _electronShell.openExternal(releasesUrl);
-        console.log('[fauna-update] openExternal called');
-      } else {
-        console.log('[fauna-update] WARNING: _electronShell not available, cannot open browser');
-      }
-
-      _faunaUpdateJob = {
-        phase: 'complete', running: false, updateAvailable: false,
-        message: 'Opened GitHub releases page in browser — download and install the new version.',
-        logs: [{ message: `Opened ${releasesUrl}` }],
-      };
-      return res.json({ job: _faunaUpdateJob });
-    }
 
     // If no git repo exists at all, we can't update
     if (!hasGitRepo) {
       console.log('[fauna-update] No git repo found, cannot update');
       return res.status(400).json({
-        error: 'No git repository found. Please install from GitHub releases or clone the repository.'
+        error: 'No git repository found. Clone the repository so Fauna can update from origin/main.'
       });
     }
 
@@ -168,8 +213,8 @@ export function registerFaunaUpdateRoutes(app, {
 
     (async () => {
       try {
-        await phase('download',      'git fetch origin');
-        await phase('extract',       'git reset --hard origin/HEAD');
+        await phase('download',      'git fetch origin main');
+        await phase('extract',       'git reset --hard origin/main');
         await phase('dependencies',  'npm install --prefer-offline');
         _faunaUpdateJob.phase    = 'complete';
         _faunaUpdateJob.running  = false;
