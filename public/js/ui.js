@@ -1192,6 +1192,16 @@ function reconcileBusyState() {
 
 function showMessages(opts) {
   opts = opts || {};
+  if (opts.preserveAppPage) {
+    var appPage = document.getElementById('app-page');
+    if (appPage && appPage.style.display !== 'none') {
+      var preservedEmpty = document.getElementById('empty-state');
+      var preservedMessages = document.getElementById('messages');
+      if (preservedEmpty) { preservedEmpty.classList.add('hidden'); preservedEmpty.style.display = 'none'; }
+      if (preservedMessages) preservedMessages.style.display = 'none';
+      return;
+    }
+  }
   if (!opts.preserveAppPage && typeof closeAppPage === 'function') closeAppPage();
   if (!opts.preserveAppPage && typeof setAppRailActive === 'function') setAppRailActive('conversations');
   var empty = document.getElementById('empty-state');
@@ -1204,6 +1214,16 @@ function showMessages(opts) {
 
 function showEmpty(opts) {
   opts = opts || {};
+  if (opts.preserveAppPage) {
+    var appPage = document.getElementById('app-page');
+    if (appPage && appPage.style.display !== 'none') {
+      var preservedEmpty = document.getElementById('empty-state');
+      var preservedMessages = document.getElementById('messages');
+      if (preservedEmpty) { preservedEmpty.classList.add('hidden'); preservedEmpty.style.display = 'none'; }
+      if (preservedMessages) preservedMessages.style.display = 'none';
+      return;
+    }
+  }
   if (!opts.preserveAppPage && typeof closeAppPage === 'function') closeAppPage();
   if (!opts.preserveAppPage && typeof setAppRailActive === 'function') setAppRailActive('conversations');
   if (typeof renderPromptStarters === 'function') renderPromptStarters();

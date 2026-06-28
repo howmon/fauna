@@ -7,6 +7,28 @@ var ARTIFACT_THUMB_IMAGE_BASE64_MAX = 160000;
 var ARTIFACT_SNAPSHOT_TYPES = { html:1, design:1, svg:1, markdown:1, summary:1, web:1, csv:1, json:1, text:1, code:1, files:1 };
 var _artifactSnapshotQueue = Object.create(null);
 
+document.addEventListener('error', function(ev) {
+  var img = ev && ev.target;
+  if (!img || img.tagName !== 'IMG') return;
+  var wrap = img.closest && img.closest('[data-artifact-thumb]');
+  if (!wrap) return;
+  var icon = wrap.getAttribute('data-icon') || 'ti-file';
+  wrap.classList.add('artifact-thumb-fallback');
+  wrap.innerHTML = '<i class="ti ' + icon + '"></i>';
+  var artifactId = wrap.getAttribute('data-artifact-id');
+  var convId = wrap.getAttribute('data-conv-id');
+  if (artifactId && typeof _queueArtifactSnapshotObject === 'function') {
+    var conv = convId && typeof getConv === 'function' ? getConv(convId) : null;
+    var artifact = (state.artifacts || []).find(function(x) { return x.id === artifactId; }) ||
+      (conv && Array.isArray(conv.artifacts) ? conv.artifacts.find(function(x) { return x.id === artifactId; }) : null);
+    if (artifact && ARTIFACT_SNAPSHOT_TYPES[artifact.type]) {
+      artifact.thumbnail = '';
+      artifact.thumbnailKind = '';
+      _queueArtifactSnapshotObject(artifact, convId || state.currentId);
+    }
+  }
+}, true);
+
 // Prune artifacts older than 30 days from a conversation's persisted list
 function pruneStaleArtifacts(conv) {
   if (!conv || !conv.artifacts) return;
@@ -68,8 +90,10 @@ function _artifactThumbnailMarkup(a, className) {
     _queueArtifactSnapshotObject(a, a.convId || state.currentId);
   }
   var thumb = (a && a.thumbnail) || _buildArtifactThumbnail(a);
-  if (!thumb) return '<div class="' + className + ' artifact-thumb-fallback"><i class="ti ' + artifactTypeIcon(a && a.type) + '"></i></div>';
-  return '<div class="' + className + '"><img src="' + escHtml(thumb) + '" alt="" loading="lazy"></div>';
+  var icon = artifactTypeIcon(a && a.type);
+  var attrs = ' data-artifact-thumb data-icon="' + escHtml(icon) + '" data-artifact-id="' + escHtml(a && a.id || '') + '" data-conv-id="' + escHtml(a && a.convId || '') + '"';
+  if (!thumb) return '<div class="' + className + ' artifact-thumb-fallback"' + attrs + '><i class="ti ' + icon + '"></i></div>';
+  return '<div class="' + className + '"' + attrs + '><img src="' + escHtml(thumb) + '" alt="" loading="lazy"></div>';
 }
 
 function _artifactSnapshotSource(a) {
