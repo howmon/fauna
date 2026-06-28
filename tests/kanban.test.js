@@ -117,6 +117,15 @@ describe('migration of legacy items', () => {
     });
     expect(listBacklog('proj-1')[0].column).toBe('archived');
   });
+
+  it('treats column as canonical when legacy status is stale', () => {
+    seedProject('proj-1', {
+      backlog: [{ id: 'b', title: 'todo item', column: 'todo', status: 'new' }],
+    });
+    const items = listBacklog('proj-1');
+    expect(items[0].column).toBe('todo');
+    expect(items[0].status).toBe('groomed');
+  });
 });
 
 describe('moveWorkItem', () => {
@@ -162,6 +171,20 @@ describe('moveWorkItem', () => {
     const r = moveWorkItem('proj-1', id, { column: 'todo' }, { actor: 'ai', strict: true });
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/cannot move/);
+  });
+
+  it('does not demote unrelated todo cards when another card moves to review', () => {
+    seedProject('proj-2', {
+      backlog: [
+        { id: 'waiting', title: 'waiting', column: 'todo', status: 'new', assignee: 'ai' },
+        { id: 'active', title: 'active', column: 'in_progress', status: 'in-progress', assignee: 'ai', claimedBy: 'ai:x' },
+      ],
+    });
+    const r = moveWorkItem('proj-2', 'active', { column: 'review', claimedBy: null }, { actor: 'ai', strict: true });
+    expect(r.ok).toBe(true);
+    const board = getProjectBoard('proj-2');
+    expect(board.columns.todo.map(x => x.id)).toContain('waiting');
+    expect(board.columns.backlog.map(x => x.id)).not.toContain('waiting');
   });
 
   it('humans can move backwards freely', () => {

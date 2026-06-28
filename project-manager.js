@@ -1131,10 +1131,10 @@ function _migrateWorkItem(item) {
   } else if (!WORK_ITEM_COLUMNS.includes(item.column)) {
     item.column = 'backlog';
   }
-  // Keep legacy status in sync from column if missing/inconsistent
-  if (!item.status) {
-    item.status = _COLUMN_TO_STATUS[item.column] || 'new';
-  }
+  // Keep legacy status in sync from the canonical column. Once `column`
+  // exists it wins over stale legacy `status`; otherwise old Todo cards can
+  // snap back to Backlog when any later write persists the migrated shape.
+  item.status = _COLUMN_TO_STATUS[item.column] || 'new';
   // Defaults for new Kanban fields
   if (item.assignee === undefined)        item.assignee = null;          // 'ai' | 'human' | null
   if (item.claimedBy === undefined)       item.claimedBy = null;         // 'ai:<agent>' | 'user:<id>' | null
