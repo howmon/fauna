@@ -583,6 +583,10 @@
       acceptance: (document.getElementById('kb-m-acceptance') || {}).value || '',
       model: (document.getElementById('kb-m-model') || {}).value || null,
     };
+    try {
+      var activeConv = (typeof getConv === 'function' && state.currentId) ? getConv(state.currentId) : null;
+      if (!itemId && activeConv && activeConv.projectId === projectId) body.originConvId = activeConv.id;
+    } catch (_) {}
     if (!body.title.trim()) { _toast('Title required', true); return; }
     var url = itemId
       ? '/api/projects/' + encodeURIComponent(projectId) + '/workitems/' + encodeURIComponent(itemId)
@@ -682,6 +686,14 @@
               _updateIdleBanner();
             }
             return;
+          }
+          var originConvId = evt.originConvId || (evt.item && evt.item.originConvId) || null;
+          if (evt.type === 'comment' && originConvId && typeof window.receiveKanbanFeedbackFromKanban === 'function') {
+            evt.originConvId = originConvId;
+            window.receiveKanbanFeedbackFromKanban(evt);
+          }
+          if (typeof window.refreshConversationKanbanWidget === 'function') {
+            window.refreshConversationKanbanWidget(originConvId || null);
           }
           // Any structural change (move/claim/comment/etc.) implicitly
           // clears the idle banner — the upcoming fetch will overwrite it.

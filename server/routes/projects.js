@@ -28,6 +28,61 @@ export function registerProjectRoutes(app, deps) {
     } catch (_) { /* file sync optional */ }
   }
 
+  function _pokeKanbanWorker() {
+    import('../../kanban-worker.js')
+      .then(mod => mod.pokeNow && mod.pokeNow())
+      .catch(() => {});
+  }
+
+  function _isPickableColumn(column) {
+    return column === 'todo' || column === 'in_progress';
+  }
+
+  function _kanbanItemPercent(item) {
+    const map = { backlog: 0, todo: 20, in_progress: 55, review: 85, done: 100, archived: 100 };
+    return map[item && item.column] ?? 0;
+  }
+
+  function _conversationKanbanSummary(convId) {
+    if (typeof listAllWorkItems !== 'function' || !convId) return { items: [], percent: 0, activeItem: null };
+    const items = listAllWorkItems({ limit: 2000 }).filter(it => it && it.originConvId === convId);
+    const visible = items.filter(it => it.column !== 'archived');
+    const basis = visible.length ? visible : items;
+    const percent = basis.length
+      ? Math.round(basis.reduce((sum, it) => sum + _kanbanItemPercent(it), 0) / basis.length)
+      : 0;
+    const activeItem = basis.find(it => it.column === 'in_progress')
+      || basis.find(it => it.column === 'review')
+      || basis.find(it => it.column === 'todo')
+      || basis[0]
+      || null;
+    return { items, percent, activeItem };
+  }
+
+  async function _mirrorKanbanFeedbackToConversation({ convId, projectId, item, comment }) {
+    const store = deps.conversationStore;
+    if (!store || !convId || !comment || comment.author !== 'human') return;
+    try {
+      const conv = await store.get(convId);
+      if (!conv) return;
+      const messages = Array.isArray(conv.messages) ? conv.messages.slice() : [];
+      if (messages.some(m => m && m._kanbanFeedbackId === comment.id)) return;
+      const cardTitle = item && item.title ? item.title : 'Kanban card';
+      messages.push({
+        role: 'user',
+        content: '[Kanban feedback]\nCard: ' + cardTitle + '\nComment: ' + comment.body,
+        _isKanbanFeedback: true,
+        _kanbanFeedbackId: comment.id,
+        _kanbanProjectId: projectId,
+        _kanbanItemId: item && item.id,
+        createdAt: Date.now(),
+      });
+      await store.put(convId, { ...conv, messages, updatedAt: Date.now() });
+    } catch (e) {
+      console.warn('[projects-route] mirror kanban feedback failed:', e?.message || e);
+    }
+  }
+
   const {
     fs,
     createProject,
@@ -110,6 +165,7 @@ export function registerProjectRoutes(app, deps) {
     const project = updateProject(req.params.id, req.body || {});
     if (!project) return res.status(404).json({ error: 'Project not found' });
     _enqueueProjectChange(project.id, 'upsert');
+    if (project.kanban && project.kanban.autopilot) _pokeKanbanWorker();
     res.json(project);
   });
 
@@ -117,6 +173,7 @@ export function registerProjectRoutes(app, deps) {
     const project = updateProject(req.params.id, req.body || {});
     if (!project) return res.status(404).json({ error: 'Project not found' });
     _enqueueProjectChange(project.id, 'upsert');
+    if (project.kanban && project.kanban.autopilot) _pokeKanbanWorker();
     res.json(project);
   });
 
@@ -150,6 +207,10 @@ export function registerProjectRoutes(app, deps) {
     const ok = linkTask(req.params.id, req.body?.taskId);
     if (!ok) return res.status(404).json({ error: 'Project not found' });
     res.json({ ok: true });
+  });
+
+  app.get('/api/conversations/:convId/kanban', (req, res) => {
+    res.json({ ok: true, conversationId: req.params.convId, ..._conversationKanbanSummary(req.params.convId) });
   });
 
   app.post('/api/projects/:id/sources', (req, res) => {
@@ -448,9 +509,19 @@ export function registerProjectRoutes(app, deps) {
   // acceptance?, tags?, source?, parentId?, blockedBy?, estimateMinutes?, dueAt? }
   app.post('/api/projects/:id/workitems', (req, res) => {
     if (typeof addBacklogItem !== 'function') return res.status(501).json({ error: 'kanban not wired' });
-    const item = addBacklogItem(req.params.id, req.body || {});
+    const project = typeof getProject === 'function' ? getProject(req.params.id) : null;
+    const body = Object.assign({}, req.body || {});
+    if (
+      body.assignee === undefined &&
+      _isPickableColumn(body.column) &&
+      project && project.kanban && project.kanban.autopilot
+    ) {
+      body.assignee = 'ai';
+    }
+    const item = addBacklogItem(req.params.id, body);
     if (!item) return res.status(404).json({ error: 'Project not found' });
     _emitBoardEvent({ type: 'created', projectId: req.params.id, item });
+    if (item.assignee === 'ai' && _isPickableColumn(item.column)) _pokeKanbanWorker();
     res.status(201).json(item);
   });
 
@@ -474,6 +545,9 @@ export function registerProjectRoutes(app, deps) {
     const item = updateBacklogItem(req.params.id, req.params.itemId, req.body || {});
     if (!item) return res.status(404).json({ error: 'Item not found' });
     _emitBoardEvent({ type: 'updated', projectId: req.params.id, item });
+    if (item.assignee === 'ai' && _isPickableColumn(item.column) && !item.claimedBy && !item.lockedByUser) {
+      _pokeKanbanWorker();
+    }
     res.json(item);
   });
 
@@ -524,22 +598,29 @@ export function registerProjectRoutes(app, deps) {
     if (
       actor === 'human' &&
       patch.assignee === undefined &&
-      (finalItem.column === 'todo' || finalItem.column === 'in_progress') &&
-      finalItem.assignee !== 'ai' &&
-      Array.isArray(finalItem.runs) && finalItem.runs.some(x => x && x.taskId)
+      patch.claimedBy === undefined &&
+      _isPickableColumn(finalItem.column)
     ) {
-      const rearm = moveWorkItem(
-        req.params.id, req.params.itemId,
-        { assignee: 'ai', claimedBy: null },
-        { actor: 'human' },
-      );
-      if (rearm.ok) {
-        finalItem = rearm.item;
-        if (typeof addWorkItemComment === 'function') {
-          addWorkItemComment(req.params.id, req.params.itemId, {
-            author: 'ai',
-            body: 'Re-armed by user (dragged back to ' + finalItem.column + ') — autopilot will pick this up on the next poll. Prior failure history will be included in the new run prompt.',
-          });
+      const project = typeof getProject === 'function' ? getProject(req.params.id) : null;
+      const hasPriorAiRun = Array.isArray(finalItem.runs) && finalItem.runs.some(x => x && x.taskId);
+      const shouldRearmForAi =
+        finalItem.assignee === 'ai' ||
+        hasPriorAiRun ||
+        (project && project.kanban && project.kanban.autopilot);
+      if (shouldRearmForAi) {
+        const rearm = moveWorkItem(
+          req.params.id, req.params.itemId,
+          { assignee: 'ai', claimedBy: null },
+          { actor: 'human' },
+        );
+        if (rearm.ok) {
+          finalItem = rearm.item;
+          if (typeof addWorkItemComment === 'function' && hasPriorAiRun) {
+            addWorkItemComment(req.params.id, req.params.itemId, {
+              author: 'ai',
+              body: 'Re-armed by user (dragged back to ' + finalItem.column + ') — autopilot will pick this up immediately. Prior failure history will be included in the new run prompt.',
+            });
+          }
         }
       }
     }
@@ -547,9 +628,9 @@ export function registerProjectRoutes(app, deps) {
     _emitBoardEvent({ type: 'moved', projectId: req.params.id, item: finalItem });
     // Poke the autopilot worker — if the human just dragged an AI card into
     // todo or in_progress, the next poll should happen now, not in 15 s.
-    import('../../kanban-worker.js')
-      .then(mod => mod.pokeNow && mod.pokeNow())
-      .catch(() => {});
+    if (finalItem.assignee === 'ai' && _isPickableColumn(finalItem.column) && !finalItem.claimedBy && !finalItem.lockedByUser) {
+      _pokeKanbanWorker();
+    }
     res.json(finalItem);
   });
 
@@ -584,7 +665,29 @@ export function registerProjectRoutes(app, deps) {
       body: (req.body && req.body.body) || '',
     });
     if (!comment) return res.status(404).json({ error: 'Item not found' });
-    _emitBoardEvent({ type: 'comment', projectId: req.params.id, itemId: req.params.itemId, comment });
+    let commentItem = null;
+    try {
+      const board = typeof getProjectBoard === 'function' ? getProjectBoard(req.params.id) : null;
+      if (board && board.columns) {
+        for (const col of Object.keys(board.columns)) {
+          commentItem = (board.columns[col] || []).find(it => it.id === req.params.itemId) || commentItem;
+        }
+      }
+    } catch (_) {}
+    _emitBoardEvent({
+      type: 'comment',
+      projectId: req.params.id,
+      itemId: req.params.itemId,
+      item: commentItem,
+      originConvId: commentItem && commentItem.originConvId,
+      comment,
+    });
+    _mirrorKanbanFeedbackToConversation({
+      convId: commentItem && commentItem.originConvId,
+      projectId: req.params.id,
+      item: commentItem,
+      comment,
+    });
     // If a HUMAN comment arrives while an autopilot run is in-flight for
     // this card, inject it into the live conversation so the model reads
     // it as a steering message at the top of its next step. AI-authored
@@ -603,6 +706,7 @@ export function registerProjectRoutes(app, deps) {
     const r = prioritizeBacklog(req.params.id, req.body || {});
     if (!r) return res.status(404).json({ error: 'Project not found' });
     _emitBoardEvent({ type: 'prioritized', projectId: req.params.id });
+    _pokeKanbanWorker();
     res.json(r);
   });
 

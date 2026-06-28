@@ -3360,6 +3360,7 @@ export async function executeSelfTool(toolName, args, context = {}) {
         title: args.title, body: args.body, tags: args.tags, rice: args.rice,
         column: args.column, assignee: args.assignee, priority: args.priority,
         acceptance: args.acceptance,
+        originConvId: context.convId || null,
         source: 'agent',
       });
       if (!entry) return JSON.stringify({ ok: false, error: 'project not found' });

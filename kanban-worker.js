@@ -321,6 +321,7 @@ function _spawnTaskForCard(project, card) {
     description: 'Auto-run for work item ' + card.id,
     schedule: { type: 'manual' },
     projectId: project.id,
+    convId: card.originConvId || null,
     agents: agentName ? [agentName] : [],
     context: _buildTaskContext(project, card),
     // Skill bindings consumed by task-runner._resolveTaskSkills.

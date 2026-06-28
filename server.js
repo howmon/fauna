@@ -360,6 +360,7 @@ registerProjectRoutes(app, {
   prioritizeBacklog,
   deleteWorkItem,
   emptyArchivedWorkItems,
+  conversationStore: _sharedConversationStore,
   // Project audit
   getInternalAICaller: () => internalAICaller,
 });

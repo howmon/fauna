@@ -295,7 +295,7 @@ function createTask(opts) {
     lastRunAt:   null,
     nextRunAt:   null,
     history:     [{ timestamp: Date.now(), event: 'created', detail: null }],
-    convId:      null,
+    convId:      opts.convId || null,
     projectId:   opts.projectId || null,
     projectContextIds: opts.projectContextIds || [],
     // Optional skill bindings consumed by task-runner._resolveTaskSkills.

@@ -1267,31 +1267,89 @@ async function streamResponse(conv) {
   var _streamStartedAt = Date.now();
   var _lastLiveRenderHtml = '';
   var _lastToolOutputAccum = ''; // rolling last ~1000 chars of tool_output for input context
-  var _toolOutputBlockChars = 0; // chars of live output kept in the CURRENT shell-output view block (capped)
+  var _toolOutputBlockChars = 0; // chars of live output kept in the collapsed tool activity view (capped)
   var _liveToolOutputEl = null;
+  var _liveToolOutputBody = null;
+  var _liveToolOutputLabel = null;
+  var _liveToolOutputMeta = null;
   var _liveToolOutputPre = null;
+  var _liveToolOutputEntryCount = 0;
   var _reasoning = null; // { startedAt, durationSeconds } — compact thinking status only
   var _reasoningTickTimer = null; // ticks the "Thinking… Ns" counter live until content/done
   if (typeof resetDesignArtifactState === 'function') resetDesignArtifactState();
 
-  function _ensureLiveToolOutputBlock() {
+  function _setLiveToolOutputOpen(open) {
+    if (!_liveToolOutputEl) return;
+    _liveToolOutputEl.setAttribute('data-open', open ? '1' : '0');
+  }
+
+  function _updateLiveToolOutputSummary(completed) {
+    if (!_liveToolOutputEl) return;
+    var count = _liveToolOutputEntryCount || 1;
+    if (_liveToolOutputLabel) _liveToolOutputLabel.textContent = completed ? 'Tool activity complete' : 'Tool activity';
+    if (_liveToolOutputMeta) {
+      _liveToolOutputMeta.textContent = count + ' tool' + (count === 1 ? '' : 's') + (completed ? ' · collapsed' : ' · running');
+    }
+    _liveToolOutputEl.setAttribute('data-completed', completed ? '1' : '0');
+  }
+
+  function _ensureLiveToolOutputPanel() {
     _ensureLiveMessageAttached();
     if (!_liveToolOutputEl || !_liveToolOutputEl.isConnected) {
       _liveToolOutputEl = document.createElement('div');
-      _liveToolOutputEl.className = 'shell-output-block live-tool-output-block';
-      _liveToolOutputEl.style.cssText = 'margin-top:8px;border:1px solid var(--fau-border);border-radius:6px;background:var(--fau-panel,#111);overflow:hidden;';
-      var header = document.createElement('div');
-      header.className = 'shell-output-header';
-      header.style.cssText = 'padding:6px 8px;font-size:12px;color:var(--fau-text-muted);border-bottom:1px solid var(--fau-border);';
-      header.textContent = 'Live tool output';
-      _liveToolOutputPre = document.createElement('pre');
-      _liveToolOutputPre.className = 'shell-output-pre';
-      _liveToolOutputPre.style.cssText = 'margin:0;padding:8px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.45;';
-      _liveToolOutputEl.appendChild(header);
-      _liveToolOutputEl.appendChild(_liveToolOutputPre);
+      _liveToolOutputEl.className = 'shell-output-block live-tool-output-block tool-activity-panel';
+      _liveToolOutputEl.setAttribute('data-open', '0');
+      _liveToolOutputEl.setAttribute('data-completed', '0');
+
+      var toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'tool-activity-toggle';
+      toggle.addEventListener('click', function() {
+        _setLiveToolOutputOpen(_liveToolOutputEl.getAttribute('data-open') !== '1');
+      });
+
+      var icon = document.createElement('span');
+      icon.className = 'tool-activity-icon';
+      icon.textContent = '›';
+      _liveToolOutputLabel = document.createElement('span');
+      _liveToolOutputLabel.className = 'tool-activity-label';
+      _liveToolOutputLabel.textContent = 'Tool activity';
+      _liveToolOutputMeta = document.createElement('span');
+      _liveToolOutputMeta.className = 'tool-activity-meta';
+      _liveToolOutputMeta.textContent = 'running';
+      toggle.appendChild(icon);
+      toggle.appendChild(_liveToolOutputLabel);
+      toggle.appendChild(_liveToolOutputMeta);
+
+      _liveToolOutputBody = document.createElement('div');
+      _liveToolOutputBody.className = 'tool-activity-body';
+      _liveToolOutputEl.appendChild(toggle);
+      _liveToolOutputEl.appendChild(_liveToolOutputBody);
       if (msgEl) msgEl.appendChild(_liveToolOutputEl);
     }
+    return _liveToolOutputEl;
+  }
+
+  function _beginLiveToolOutput(label) {
+    _ensureLiveToolOutputPanel();
+    if (!_liveToolOutputBody) return null;
+    _liveToolOutputEntryCount++;
+    var entry = document.createElement('div');
+    entry.className = 'tool-activity-entry';
+    var title = document.createElement('div');
+    title.className = 'tool-activity-entry-title';
+    title.textContent = label || 'Tool output';
+    _liveToolOutputPre = document.createElement('pre');
+    _liveToolOutputPre.className = 'shell-output-pre tool-activity-pre';
+    entry.appendChild(title);
+    entry.appendChild(_liveToolOutputPre);
+    _liveToolOutputBody.appendChild(entry);
+    _updateLiveToolOutputSummary(false);
     return _liveToolOutputPre;
+  }
+
+  function _ensureLiveToolOutputBlock() {
+    return _liveToolOutputPre || _beginLiveToolOutput('Tool output');
   }
 
   // ── Ephemeral tool status stack (Clawpilot-style) ──────────────────
@@ -1739,11 +1797,9 @@ async function streamResponse(conv) {
           if (evt.type === 'tool_call') {
             dbg('tool_call: ' + evt.name, 'cmd');
             _lastToolOutputAccum = ''; // reset per tool invocation
-            _toolOutputBlockChars = 0;  // reset view-cap counter per tool invocation
-            _liveToolOutputEl = null;
-            _liveToolOutputPre = null;
             // Ephemeral tool status — shown as shimmer stack, not baked into buffer
             var toolLabel = evt.label || evt.name || 'tool';
+            _beginLiveToolOutput(toolLabel);
             _addToolStatus(toolLabel);
             if (isActive()) scrollBottom();
           }
@@ -1981,6 +2037,9 @@ async function streamResponse(conv) {
           }
           if (evt.type === 'done') {
             _clearToolStatuses();
+            _updateLiveToolOutputSummary(true);
+            _setLiveToolOutputOpen(false);
+            if (typeof refreshConversationKanbanWidget === 'function') refreshConversationKanbanWidget(convId);
             _stopReasoningTicker();
             dbg('done: finish_reason=' + evt.finish_reason + ' usage=' + JSON.stringify(evt.usage), evt.finish_reason ? 'ok' : 'warn');
             if (evt.usage) _ctxUsage = evt.usage;

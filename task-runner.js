@@ -244,6 +244,11 @@ async function _autonomyLoop(task, state) {
       model: task.model || 'claude-sonnet-4.6',
       systemPrompt,
       agentName: _pickAgent(task, state.step),
+      projectId: task.projectId || null,
+      conversationId: task.convId || task.targetConvId || null,
+      autonomousMode: true,
+      acceptanceCriteria: task.acceptanceCriteria || '',
+      qa: task.qa || null,
       thinkingBudget: 'medium',
       maxContextTurns: 100,
       // Headless run — tells /api/chat to use the relaxed tool-guard caps
@@ -324,8 +329,9 @@ async function _autonomyLoop(task, state) {
       _emit(task.id, 'reasoning', { entry: reasoningEntry });
       _persistPartial(task.id, state);
 
-      if (/TASK_COMPLETE/i.test(aiResponse)) {
-        const summary = aiResponse.replace(/[\s\S]*TASK_COMPLETE:?\s*/i, '').trim() || 'Task completed successfully';
+      const completionMatch = aiResponse.match(/(?:TASK_COMPLETE|DONE)\s*:?\s*([\s\S]*)/i);
+      if (completionMatch) {
+        const summary = (completionMatch[1] || '').trim() || 'Task completed successfully';
         // Anti-rationalization gate: if the task has bound skills, force
         // the model to cite evidence against each skill's Verification
         // checklist before accepting TASK_COMPLETE. This is the single
@@ -347,8 +353,9 @@ async function _autonomyLoop(task, state) {
         continue;
       }
 
-      if (/TASK_FAILED/i.test(aiResponse)) {
-        const reason = aiResponse.replace(/[\s\S]*TASK_FAILED:?\s*/i, '').trim() || 'Task failed (no reason given)';
+      const failedMatch = aiResponse.match(/(?:TASK_FAILED|BLOCKED|NEEDS-INPUT)\s*:?\s*([\s\S]*)/i);
+      if (failedMatch) {
+        const reason = (failedMatch[1] || '').trim() || 'Task failed (no reason given)';
         failTask(task.id, reason.slice(0, 500));
         _emit(task.id, 'failed', { error: reason.slice(0, 500) });
         return;
@@ -490,7 +497,6 @@ function _accumulateSseLine(line, content) {
   try {
     const evt = JSON.parse(line.slice(6));
     if (evt.type === 'content' && evt.content) return content + evt.content;
-    if (evt.type === 'tool_output' && evt.output) return content + evt.output;
     if (evt.type === 'error') {
       console.error('[task-runner] API error in stream:', evt.error);
     }

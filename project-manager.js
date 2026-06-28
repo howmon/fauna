@@ -1139,6 +1139,7 @@ function _migrateWorkItem(item) {
   if (!Array.isArray(item.comments))      item.comments = [];
   if (!item.movedAt)                      item.movedAt = item.updatedAt || item.createdAt || now();
   if (item.researchOf === undefined)      item.researchOf = null;
+  if (item.originConvId === undefined)    item.originConvId = null;
   // ── P7 verification fields ──
   // verifyCommand: optional per-card shell command to run as a hard gate
   //   before AI may move the card to 'done'. Falls back to project.qa.command.
@@ -1195,6 +1196,7 @@ export function addBacklogItem(projectId, item = {}) {
     runs: [],
     comments: [],
     researchOf: item.researchOf || null,
+    originConvId: item.originConvId ? String(item.originConvId).slice(0, 120) : null,
     verifyCommand: item.verifyCommand ? String(item.verifyCommand).slice(0, 1000) : null,
     verified: null,
     createdAt: ts,
@@ -1262,7 +1264,7 @@ export function updateBacklogItem(projectId, itemId, patch = {}) {
     'title', 'body', 'status', 'rice', 'tags',
     'assignee', 'priority', 'estimateMinutes', 'dueAt',
     'parentId', 'blockedBy', 'acceptance', 'lockedByUser', 'researchOf',
-    'verifyCommand', 'model',
+    'verifyCommand', 'model', 'originConvId',
   ];
   for (const k of allow) if (patch[k] !== undefined) it[k] = patch[k];
   // Keep column ↔ status mirrored if status was changed externally

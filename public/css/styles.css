@@ -1497,6 +1497,137 @@ body.is-resizing webview { pointer-events: none !important; }
 }
 .reasoning-body p { margin: 0 0 6px 0; }
 .reasoning-body p:last-child { margin-bottom: 0; }
+
+/* ── Collapsed live tool activity ──────────────────────────────────────── */
+.tool-activity-panel {
+  margin-top: 8px;
+  border: 1px solid var(--fau-border);
+  border-radius: var(--radius-sm);
+  background: var(--fau-surface);
+  overflow: hidden;
+}
+.tool-activity-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--fau-text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+}
+.tool-activity-toggle:hover { background: var(--fau-surface2); color: var(--fau-text); }
+.tool-activity-icon {
+  color: var(--fau-text-muted);
+  font-size: 15px;
+  line-height: 1;
+  transition: transform .15s ease;
+}
+.tool-activity-panel[data-open="1"] .tool-activity-icon { transform: rotate(90deg); }
+.tool-activity-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tool-activity-meta {
+  flex-shrink: 0;
+  color: var(--fau-text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.tool-activity-panel[data-completed="1"] .tool-activity-toggle { color: var(--fau-text-muted); }
+.tool-activity-body {
+  display: none;
+  border-top: 1px solid var(--fau-border);
+  max-height: 300px;
+  overflow: auto;
+  background: var(--fau-panel, var(--fau-bg));
+}
+.tool-activity-panel[data-open="1"] .tool-activity-body { display: block; }
+.tool-activity-entry + .tool-activity-entry { border-top: 1px solid var(--fau-border); }
+.tool-activity-entry-title {
+  padding: 7px 10px 0;
+  color: var(--fau-text-muted);
+  font-size: 11px;
+}
+.tool-activity-pre {
+  margin: 0;
+  padding: 7px 10px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fau-text-dim);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* ── Conversation ↔ Kanban bridge ─────────────────────────────────────── */
+.conv-kanban-widget {
+  position: fixed;
+  right: 22px;
+  bottom: 86px;
+  z-index: 42;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: min(320px, calc(100vw - 44px));
+  padding: 9px 11px;
+  border: 1px solid var(--fau-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--fau-surface) 92%, transparent);
+  color: var(--fau-text);
+  box-shadow: var(--shadow-lg);
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+}
+.conv-kanban-widget:hover { border-color: var(--accent-glow); background: var(--fau-surface2); }
+.conv-kanban-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--fau-ai-bg);
+  color: var(--accent2);
+  flex-shrink: 0;
+}
+.conv-kanban-main { min-width: 0; display: grid; gap: 3px; }
+.conv-kanban-title,
+.conv-kanban-meta {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+.conv-kanban-title { font-size: 12px; font-weight: 700; }
+.conv-kanban-meta { font-size: 11px; color: var(--fau-text-muted); }
+.conv-kanban-bar {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--fau-border);
+  overflow: hidden;
+}
+.conv-kanban-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent2);
+  transition: width .2s ease;
+}
+.conv-kanban-feedback-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--fau-text-muted);
+}
+.conv-kanban-feedback-note > i { color: var(--accent2); margin-top: 1px; }
+.conv-kanban-feedback-note strong { display: block; color: var(--fau-text); font-size: 12px; margin-bottom: 2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── Condensed plan checklist (fauna_plan) ─────────────────────────── */

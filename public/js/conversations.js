@@ -296,6 +296,127 @@ function getConv(id) {
   return state.conversations.find(c => c.id === id);
 }
 
+function _kanbanFeedbackNoteHtml(msg) {
+  var body = String((msg && msg.content) || '').replace(/^\[Kanban feedback\]\s*/i, '').trim();
+  return '<div class="msg-body conv-kanban-feedback-note">' +
+    '<i class="ti ti-layout-kanban"></i>' +
+    '<div><strong>Kanban feedback</strong><span>' + escHtml(body).replace(/\n/g, '<br>') + '</span></div>' +
+  '</div>';
+}
+
+function _appendKanbanFeedbackDom(convId, msg) {
+  var inner = (typeof getConvInner === 'function') ? getConvInner(convId) : null;
+  if (!inner || inner.querySelector('[data-kanban-feedback-id="' + (msg._kanbanFeedbackId || '') + '"]')) return;
+  var note = document.createElement('div');
+  note.className = 'msg system-msg conv-kanban-feedback';
+  if (msg._kanbanFeedbackId) note.dataset.kanbanFeedbackId = msg._kanbanFeedbackId;
+  note.innerHTML = _kanbanFeedbackNoteHtml(msg);
+  inner.appendChild(note);
+  if (state.currentId === convId) forceScrollBottom();
+}
+
+function receiveKanbanFeedbackFromKanban(evt) {
+  var convId = evt && evt.originConvId;
+  var comment = evt && evt.comment;
+  if (!convId || !comment || comment.author !== 'human') return;
+  var conv = getConv(convId);
+  if (!conv) return;
+  if (!Array.isArray(conv.messages)) conv.messages = [];
+  if (conv.messages.some(function(m) { return m && m._kanbanFeedbackId === comment.id; })) return;
+  var item = evt.item || {};
+  var msg = {
+    role: 'user',
+    content: '[Kanban feedback]\nCard: ' + (item.title || evt.itemId || 'Kanban card') + '\nComment: ' + (comment.body || ''),
+    _isKanbanFeedback: true,
+    _kanbanFeedbackId: comment.id,
+    _kanbanProjectId: evt.projectId || '',
+    _kanbanItemId: evt.itemId || (item && item.id) || '',
+    createdAt: Date.now(),
+  };
+  conv.messages.push(msg);
+  conv.updatedAt = Date.now();
+  saveConversations();
+  _appendKanbanFeedbackDom(convId, msg);
+}
+
+function _openConversationKanbanLink(projectId, itemId, e) {
+  if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+  if (!projectId) return;
+  Promise.resolve(typeof openProjectTaskboard === 'function' ? openProjectTaskboard(projectId, e) : null)
+    .then(function() {
+      if (itemId && typeof openWorkItemModal === 'function') {
+        setTimeout(function() { openWorkItemModal(projectId, itemId); }, 180);
+      }
+    });
+}
+
+function _renderConversationKanbanWidget(data) {
+  var existing = document.getElementById('conv-kanban-widget');
+  var items = (data && data.items) || [];
+  if (!items.length) {
+    if (existing) existing.remove();
+    return;
+  }
+  var item = data.activeItem || items[0] || {};
+  var pct = Math.max(0, Math.min(100, Number(data.percent) || 0));
+  var projectId = item.projectId || data.projectId || (getConv(state.currentId) || {}).projectId || '';
+  var el = existing || document.createElement('button');
+  el.id = 'conv-kanban-widget';
+  el.type = 'button';
+  el.className = 'conv-kanban-widget';
+  el.onclick = function(ev) { _openConversationKanbanLink(projectId, item.id || '', ev); };
+  el.title = 'Open linked Kanban card';
+  el.innerHTML =
+    '<span class="conv-kanban-icon"><i class="ti ti-layout-kanban"></i></span>' +
+    '<span class="conv-kanban-main">' +
+      '<span class="conv-kanban-title">' + escHtml(item.title || 'Linked Kanban') + '</span>' +
+      '<span class="conv-kanban-meta">' + escHtml(item.column || 'board') + ' · ' + pct + '%</span>' +
+      '<span class="conv-kanban-bar"><span style="width:' + pct + '%"></span></span>' +
+    '</span>';
+  if (!existing) document.body.appendChild(el);
+}
+
+function refreshConversationKanbanWidget(convId) {
+  convId = convId || state.currentId;
+  if (!convId || convId !== state.currentId) return;
+  fetch('/api/conversations/' + encodeURIComponent(convId) + '/kanban')
+    .then(function(r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
+    .then(function(data) { if (state.currentId === convId) _renderConversationKanbanWidget(data); })
+    .catch(function() { _renderConversationKanbanWidget({ items: [] }); });
+}
+
+window.receiveKanbanFeedbackFromKanban = receiveKanbanFeedbackFromKanban;
+window.refreshConversationKanbanWidget = refreshConversationKanbanWidget;
+window.openConversationKanbanLink = _openConversationKanbanLink;
+
+function _startConversationKanbanRealtime() {
+  if (!window.EventSource || window._conversationKanbanEvents) return;
+  try {
+    var url = window.faunaStreamUrl ? window.faunaStreamUrl('/api/board/stream') : '/api/board/stream';
+    var source = new EventSource(url);
+    window._conversationKanbanEvents = source;
+    source.onmessage = function(ev) {
+      try {
+        var evt = JSON.parse(ev.data || '{}');
+        if (evt.type === 'hello' || evt.type === 'ping' || evt.type === 'idle') return;
+        var originConvId = evt.originConvId || (evt.item && evt.item.originConvId) || '';
+        if (evt.type === 'comment' && originConvId) {
+          evt.originConvId = originConvId;
+          receiveKanbanFeedbackFromKanban(evt);
+        }
+        if (originConvId && originConvId === state.currentId) refreshConversationKanbanWidget(originConvId);
+      } catch (_) {}
+    };
+    source.onerror = function() {
+      try { source.close(); } catch (_) {}
+      window._conversationKanbanEvents = null;
+      setTimeout(_startConversationKanbanRealtime, 2500);
+    };
+  } catch (_) {}
+}
+
+setTimeout(_startConversationKanbanRealtime, 0);
+
 function normalizeConversationTitle(title) {
   return String(title || '').replace(/\s+/g, ' ').trim().slice(0, 80) || 'Conversation';
 }
@@ -599,6 +720,10 @@ function loadConversation(id, opts) {
     if (conv.archivedMessages && conv.archivedMessages.length) {
       conv.archivedMessages.forEach(function(m) {
         if (m._compositionHandoff) return;
+        if (m._isKanbanFeedback) {
+          _appendKanbanFeedbackDom(id, m);
+          return;
+        }
         if (m._isBrowserFeed) {
           var feedNote = document.createElement('div');
           feedNote.className = 'msg system-msg';
@@ -633,6 +758,10 @@ function loadConversation(id, opts) {
 
     conv.messages.forEach(m => {
       if (m._compositionHandoff) return; // skip internal handoff messages
+      if (m._isKanbanFeedback) {
+        _appendKanbanFeedbackDom(id, m);
+        return;
+      }
       if (m._isBrowserFeed) {
         var feedNote = document.createElement('div');
         feedNote.className = 'msg system-msg';
@@ -695,6 +824,7 @@ function loadConversation(id, opts) {
     if (state.currentId === id) forceScrollBottom();
   });
   if (typeof _updateMoveToProjectBtn === 'function') _updateMoveToProjectBtn();
+  if (typeof refreshConversationKanbanWidget === 'function') refreshConversationKanbanWidget(id);
 
   // Ensure the recommended-actions bar is present for the latest assistant turn.
   // loadConversation only builds the message DOM on FIRST open (guarded by
