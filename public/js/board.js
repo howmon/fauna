@@ -678,7 +678,8 @@
     var s = window._kbState;
     if (s.sse) { try { s.sse.close(); } catch (_) {} s.sse = null; }
     try {
-      s.sse = new EventSource('/api/board/stream');
+      var url = window.faunaStreamUrl ? window.faunaStreamUrl('/api/board/stream') : '/api/board/stream';
+      s.sse = new EventSource(url);
       s.sse.onmessage = function(ev) {
         try {
           var evt = JSON.parse(ev.data);

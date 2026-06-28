@@ -750,6 +750,11 @@ export function registerProjectRoutes(app, deps) {
   // Live updates for both per-project and global boards. Reuses the same
   // SSE pattern as /api/tasks/stream so the client can subscribe once.
   app.get('/api/board/stream', (req, res) => {
+    const _o = req.headers.origin;
+    if (_o && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(_o)) {
+      res.setHeader('Access-Control-Allow-Origin', _o);
+      res.setHeader('Vary', 'Origin');
+    }
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
