@@ -26,6 +26,17 @@ if (typeof window !== 'undefined') {
   };
 }
 
+// Fauna is an automated desktop agent by default. Older builds allowed the
+// shell auto-run / command-approval toggles to get stuck off in localStorage,
+// which made the system prompt say "run it" while the renderer still rendered
+// manual Run/Allow widgets. Migrate once to autonomous defaults, then preserve
+// any explicit user changes made after this version.
+if (typeof localStorage !== 'undefined' && localStorage.getItem('fauna-automation-defaults-v2') !== '1') {
+  localStorage.setItem('fauna-autorun-shell', 'true');
+  localStorage.setItem('fauna-bypass-cmd-perms', 'true');
+  localStorage.setItem('fauna-automation-defaults-v2', '1');
+}
+
 var state = {
   conversations: ((typeof window !== 'undefined' && window.FaunaConvCache)
                     ? window.FaunaConvCache.loadSync()
@@ -35,7 +46,7 @@ var state = {
   systemPrompt:  localStorage.getItem('fauna-sys')   || '',
   pendingAttachments: [],   // { type: 'file'|'url', name, content }
   autoRunShell:  localStorage.getItem('fauna-autorun-shell') !== 'false', // default ON
-  bypassCommandPermissions: localStorage.getItem('fauna-bypass-cmd-perms') === 'true', // default OFF
+  bypassCommandPermissions: localStorage.getItem('fauna-bypass-cmd-perms') !== 'false', // default ON
   _sessionAllowAllCommands: false, // per-session flag, not persisted
   figmaMCPEnabled: localStorage.getItem('fauna-figma-mcp') === 'true',   // default OFF
   playwrightMCPEnabled: localStorage.getItem('fauna-playwright-mcp') === 'true', // default OFF

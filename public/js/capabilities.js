@@ -44,6 +44,7 @@ function getCapabilitiesContext() {
   } catch (_) {}
 
   var autoRun = state.autoRunShell;
+  var autoApproveActions = state.bypassCommandPermissions !== false;
 
   var figmaSection = '';
 
@@ -106,6 +107,9 @@ function getCapabilitiesContext() {
     '',
     '### THE ONE RULE: when `fauna_shell_exec` is in your tool list, you MUST call it. Do not emit ```bash blocks. Do not tell the user to run anything.',
     '',
+    autoApproveActions
+      ? '- ACTION APPROVAL is ON for autonomy: shell commands and action widgets are auto-approved by default. Do not ask the user to approve routine commands; only stop for real secrets, passwords, or inherently interactive prompts.'
+      : '- ACTION APPROVAL BYPASS is OFF in Settings. Prefer `fauna_shell_exec` so you still avoid manual markdown Run clicks where possible.',
     '- PREFERRED — `fauna_shell_exec` function tool: when this tool is exposed to you, it is the ONLY acceptable way to run a non-interactive command. The tool runs server-side in the SAME assistant turn, requires ZERO user clicks, and returns stdout/stderr/exit code back to you immediately so you can chain the next step.',
     '- BANNED PATTERNS — the SINGLE most common way you waste the user\'s time. Do NOT do any of them when `fauna_shell_exec` is available:',
     '  1. Emitting a ```bash block containing a command you could have just run via `fauna_shell_exec`. Every ```bash block forces the user to click Run (or wait for auto-run) and adds a round-trip. The tool returns inline. ALWAYS prefer the tool.',
