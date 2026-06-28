@@ -179,6 +179,14 @@
     }).join('');
   }
 
+  function _latestTaskId(it) {
+    var runs = Array.isArray(it && it.runs) ? it.runs : [];
+    for (var ri = runs.length - 1; ri >= 0; ri--) {
+      if (runs[ri] && runs[ri].taskId) return runs[ri].taskId;
+    }
+    return null;
+  }
+
   function _renderCard(it) {
     var s = window._kbState;
     var assigneeChip = '';
@@ -228,11 +236,7 @@
     var liveBadge = '';
     var isLive = false;
     if (it.column === 'in_progress' && it.claimedBy && it.claimedBy.indexOf('ai:') === 0) {
-      var liveTaskId = null;
-      var runs = Array.isArray(it.runs) ? it.runs : [];
-      for (var ri = runs.length - 1; ri >= 0; ri--) {
-        if (runs[ri] && runs[ri].taskId) { liveTaskId = runs[ri].taskId; break; }
-      }
+      var liveTaskId = _latestTaskId(it);
       if (liveTaskId) {
         isLive = true;
         liveBadge = '<button class="kb-live-pill" ' +
@@ -430,6 +434,7 @@
   }
 
   function _closeModal() {
+    _stopModalLive();
     var host = document.getElementById('kb-modal-host');
     if (host) host.innerHTML = '';
   }
@@ -460,6 +465,7 @@
     var host = _ensureModalHost();
     host.innerHTML = _renderModal({ mode: 'edit', projectId: projectId, item: item });
     _populateModelSelect();
+    _mountModalLive(projectId, itemId, item);
   };
 
   // Populate the model dropdown in the open work-item modal from /api/models.
@@ -499,6 +505,7 @@
   function _renderModal(opts) {
     var m = opts.item;
     var isEdit = opts.mode === 'edit';
+    var liveTaskId = isEdit ? _latestTaskId(m) : null;
     var lockIcon = m.lockedByUser ? 'ti-lock' : 'ti-lock-open';
     var lockLabel = m.lockedByUser ? 'Locked' : 'Unlocked';
     var claimedLine = m.claimedBy
@@ -557,6 +564,7 @@
             '<textarea id="kb-m-acceptance" rows="3" placeholder="One bullet per criterion the AI must satisfy before marking Done">' + _esc(m.acceptance || '') + '</textarea>' +
           '</label>' +
           claimedLine +
+          (liveTaskId ? _renderModalLiveBlock(opts.projectId, m, liveTaskId) : '') +
           (isEdit && commentsHtml ? '<div class="kb-modal-section-label">Comments</div><div class="kb-comments">' + commentsHtml + '</div>' : '') +
           (isEdit ? '<div class="kb-modal-section-label">Add comment</div>' +
             '<div class="kb-comment-row">' +
@@ -685,6 +693,149 @@
       })
       .catch(function(e) { _toast('Empty archive failed: ' + e.message, true); });
   };
+
+  // ── Modal run activity ────────────────────────────────────────────────
+  var _modalLiveState = { taskId: null, sse: null, stepIds: new Set() };
+
+  function _renderModalLiveBlock(projectId, item, taskId) {
+    return '<details class="kb-modal-live" id="kb-modal-live" data-task-id="' + _esc(taskId) + '">' +
+      '<summary class="kb-modal-live-summary">' +
+        '<span><span class="kb-live-dot"></span><i class="ti ti-activity"></i> Run activity</span>' +
+        '<span class="kb-modal-live-summary-meta" id="kb-modal-live-summary-meta">Connecting…</span>' +
+      '</summary>' +
+      '<div class="kb-modal-live-body">' +
+        '<div class="kb-modal-live-meta" id="kb-modal-live-meta"></div>' +
+        '<div class="kb-modal-live-stream" id="kb-modal-live-stream"><div class="kb-live-empty">Loading run activity…</div></div>' +
+        '<div class="kb-modal-live-actions">' +
+          '<button type="button" class="kb-btn" onclick="openLiveTaskPanel(\'' + _esc(taskId) + '\',\'' + _esc(item.id) + '\')"><i class="ti ti-layout-sidebar-right-expand"></i> Open full live view</button>' +
+        '</div>' +
+      '</div>' +
+    '</details>';
+  }
+
+  function _stopModalLive() {
+    if (_modalLiveState.sse) { try { _modalLiveState.sse.close(); } catch (_) {} }
+    _modalLiveState.sse = null;
+    _modalLiveState.taskId = null;
+    _modalLiveState.stepIds = new Set();
+  }
+
+  function _mountModalLive(projectId, itemId, item) {
+    _stopModalLive();
+    var taskId = _latestTaskId(item);
+    if (!taskId || !document.getElementById('kb-modal-live')) return;
+    _modalLiveState.taskId = taskId;
+    _modalLiveState.stepIds = new Set();
+    _modalLiveRefresh(taskId);
+    _modalLiveSubscribe(taskId);
+  }
+
+  function _modalLiveRefresh(taskId) {
+    fetch('/api/tasks/' + encodeURIComponent(taskId) + '/live')
+      .then(function(r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
+      .then(function(snap) {
+        if (!snap || snap.taskId !== _modalLiveState.taskId) return;
+        _modalLiveRenderHead(snap);
+        _modalLiveRenderStream(snap);
+      })
+      .catch(function(e) {
+        var meta = document.getElementById('kb-modal-live-summary-meta');
+        if (meta) meta.textContent = 'Unavailable';
+        var stream = document.getElementById('kb-modal-live-stream');
+        if (stream) stream.innerHTML = '<div class="kb-live-empty">Failed to load: ' + _esc(e.message) + '</div>';
+      });
+  }
+
+  function _modalLiveSubscribe(taskId) {
+    try {
+      var es = new EventSource(window.faunaStreamUrl ? window.faunaStreamUrl('/api/tasks/stream') : '/api/tasks/stream');
+      es.onmessage = function(ev) {
+        try {
+          var msg = JSON.parse(ev.data);
+          if (!msg || msg.taskId !== taskId || taskId !== _modalLiveState.taskId) return;
+          if (msg.event === 'partial' && msg.content) {
+            _modalLiveRenderPartial(msg.step, msg.content, msg.length);
+          } else if (msg.event === 'reasoning' && msg.entry) {
+            _modalLiveClearPartial();
+            _modalLiveAppendEntry(msg.entry);
+            _modalLiveRefresh(taskId);
+          } else if (msg.event === 'step' || msg.event === 'completed' || msg.event === 'failed') {
+            if (msg.event !== 'step') _modalLiveClearPartial();
+            _modalLiveRefresh(taskId);
+          }
+        } catch (_) {}
+      };
+      es.onerror = function() { /* EventSource reconnects */ };
+      _modalLiveState.sse = es;
+    } catch (_) {}
+  }
+
+  function _modalLiveRenderHead(snap) {
+    var summary = document.getElementById('kb-modal-live-summary-meta');
+    var meta = document.getElementById('kb-modal-live-meta');
+    if (!summary || !meta) return;
+    var status = snap.running ? 'Running' : (snap.status || 'finished');
+    summary.textContent = status + ' · step ' + (snap.step || 0) + ' · ' + _liveFmtElapsed(snap.elapsedMs || 0);
+    var stats = snap.stats || {};
+    meta.innerHTML =
+      '<div><i class="ti ti-cpu"></i><span>Model</span><code>' + _esc(snap.model || 'default') + '</code></div>' +
+      '<div><i class="ti ti-route"></i><span>Step</span><strong>' + (snap.step || 0) + '</strong></div>' +
+      '<div><i class="ti ti-bolt"></i><span>Actions</span><strong>' + (stats.actionsTotal || 0) + '</strong></div>';
+  }
+
+  function _modalLiveRenderStream(snap) {
+    var stream = document.getElementById('kb-modal-live-stream');
+    if (!stream) return;
+    var entries = snap.reasoning || [];
+    stream.innerHTML = '';
+    _modalLiveState.stepIds = new Set();
+    entries.forEach(_modalLiveAppendEntry);
+    if (!entries.length) {
+      stream.innerHTML = '<div class="kb-live-empty">' +
+        (snap.running ? 'Model is working. First completed step will appear here.' : 'No run activity recorded yet.') +
+      '</div>';
+    }
+  }
+
+  function _modalLiveAppendEntry(entry) {
+    var stream = document.getElementById('kb-modal-live-stream');
+    if (!stream || !entry) return;
+    var key = 'step-' + entry.step;
+    var empty = stream.querySelector('.kb-live-empty');
+    if (empty) empty.remove();
+    if (_modalLiveState.stepIds.has(key)) {
+      var existing = stream.querySelector('[data-step="' + entry.step + '"]');
+      if (existing) existing.outerHTML = _liveStepHtml(entry);
+      return;
+    }
+    _modalLiveState.stepIds.add(key);
+    stream.insertAdjacentHTML('beforeend', _liveStepHtml(entry));
+    stream.scrollTop = stream.scrollHeight;
+  }
+
+  function _modalLiveRenderPartial(step, content, length) {
+    var stream = document.getElementById('kb-modal-live-stream');
+    if (!stream) return;
+    var empty = stream.querySelector('.kb-live-empty');
+    if (empty) empty.remove();
+    var el = document.getElementById('kb-modal-live-partial');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'kb-modal-live-partial';
+      el.className = 'kb-live-step kb-live-step-partial';
+      stream.insertBefore(el, stream.firstChild);
+    }
+    var lenLabel = (typeof length === 'number' && length > String(content || '').length) ? ' · ' + length + ' chars' : '';
+    el.innerHTML = '<div class="kb-live-step-head">' +
+      '<span class="kb-live-step-no">Step ' + (step || '?') + '</span>' +
+      '<span class="kb-live-step-outcome kb-live-step-streaming"><span class="kb-live-dot"></span> streaming' + lenLabel + '</span>' +
+      '</div><pre class="kb-live-partial-body">' + _esc(String(content || '')) + '</pre>';
+  }
+
+  function _modalLiveClearPartial() {
+    var el = document.getElementById('kb-modal-live-partial');
+    if (el) el.remove();
+  }
 
   // ── SSE subscription ───────────────────────────────────────────────────
   function _subscribeSse() {

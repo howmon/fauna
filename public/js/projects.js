@@ -13,6 +13,11 @@ function _activeProject() {
 var _projectTaskMetricsCache = Object.create(null);
 var _projectTaskMetricsInflight = Object.create(null);
 
+function _projectKanbanColumnProgress(column) {
+  var map = { backlog: 0, todo: 0, in_progress: 55, review: 85, done: 100, archived: 100 };
+  return Object.prototype.hasOwnProperty.call(map, column) ? map[column] : 0;
+}
+
 function _computeProjectTaskMetrics(columns) {
   columns = columns || {};
   var counts = {
@@ -24,11 +29,19 @@ function _computeProjectTaskMetrics(columns) {
     archived: Array.isArray(columns.archived) ? columns.archived.length : 0,
   };
   var total = counts.backlog + counts.todo + counts.inProgress + counts.review + counts.done;
-  var completionPct = total ? Math.round((counts.done / total) * 100) : 0;
+  var started = counts.inProgress + counts.review + counts.done;
+  var progressPoints =
+    (counts.backlog * _projectKanbanColumnProgress('backlog')) +
+    (counts.todo * _projectKanbanColumnProgress('todo')) +
+    (counts.inProgress * _projectKanbanColumnProgress('in_progress')) +
+    (counts.review * _projectKanbanColumnProgress('review')) +
+    (counts.done * _projectKanbanColumnProgress('done'));
+  var completionPct = total ? Math.round(progressPoints / total) : 0;
   return {
     counts: counts,
     total: total,
     done: counts.done,
+    started: started,
     completionPct: completionPct,
   };
 }
@@ -63,19 +76,21 @@ function _projectTaskMetricsFromProject(project) {
 }
 
 function _getProjectTaskMetrics(projectId) {
+  if (_projectTaskMetricsCache[projectId]) return _projectTaskMetricsCache[projectId];
   var project = (state.projects || []).find(function(p) { return p.id === projectId; });
   var fromProject = _projectTaskMetricsFromProject(project);
   if (fromProject) {
     _projectTaskMetricsCache[projectId] = fromProject;
     return fromProject;
   }
-  return _projectTaskMetricsCache[projectId] || null;
+  return null;
 }
 
 function _projectTaskAnalyticsLabel(metrics) {
   if (!metrics) return 'No tasks';
   if (!metrics.total) return 'No tasks';
-  return metrics.completionPct + '% · ' + metrics.done + '/' + metrics.total;
+  var progressed = typeof metrics.started === 'number' ? metrics.started : metrics.done;
+  return metrics.completionPct + '% · ' + progressed + '/' + metrics.total;
 }
 
 async function refreshProjectTaskMetrics(projectId, opts) {
@@ -128,6 +143,28 @@ window.openProjectTaskboard = openProjectTaskboard;
 window.getProjectTaskAnalyticsInlineHtml = getProjectTaskAnalyticsInlineHtml;
 window.refreshProjectTaskMetrics = refreshProjectTaskMetrics;
 
+function _startProjectTaskMetricsRealtime() {
+  if (!window.EventSource || window._projectTaskMetricsEvents) return;
+  try {
+    var url = window.faunaStreamUrl ? window.faunaStreamUrl('/api/board/stream') : '/api/board/stream';
+    var source = new EventSource(url);
+    window._projectTaskMetricsEvents = source;
+    source.onmessage = function(ev) {
+      try {
+        var evt = JSON.parse(ev.data);
+        if (!evt || evt.type === 'ping' || evt.type === 'hello' || evt.type === 'idle') return;
+        var projectId = evt.projectId || (evt.item && evt.item.projectId) || null;
+        if (projectId) refreshProjectTaskMetrics(projectId);
+      } catch (_) {}
+    };
+    source.onerror = function() {
+      try { source.close(); } catch (_) {}
+      window._projectTaskMetricsEvents = null;
+      setTimeout(_startProjectTaskMetricsRealtime, 2500);
+    };
+  } catch (_) {}
+}
+
 // ── Load / Persist ────────────────────────────────────────────────────────
 
 async function loadProjects() {
@@ -135,6 +172,7 @@ async function loadProjects() {
     var r = await fetch('/api/projects');
     if (!r.ok) return;
     state.projects = await r.json();
+    _projectTaskMetricsCache = Object.create(null);
     // Validate stored active project still exists
     if (state.activeProjectId && !state.projects.find(function(p) { return p.id === state.activeProjectId; })) {
       state.activeProjectId = null;
@@ -147,7 +185,8 @@ async function loadProjects() {
   renderProjectSidebarList();
   renderProjectContextBar();
   updateProjectIndicator();
-  (state.projects || []).forEach(function(p) { refreshProjectTaskMetrics(p.id, { silent: true }); });
+  (state.projects || []).forEach(function(p) { refreshProjectTaskMetrics(p.id); });
+  _startProjectTaskMetricsRealtime();
 }
 
 async function _refreshProject(id) {
@@ -310,12 +349,14 @@ function renderProjectSidebarList() {
       '<i class="ti ti-chevron-right proj-folder-chevron"></i>' +
       '<span class="proj-dot proj-color-' + _projEsc(p.color) + '"></span>' +
       '<span class="proj-folder-name">' + _projEsc(p.name) + '</span>' +
-      getProjectTaskAnalyticsInlineHtml(p.id, { compact: true }) +
       (anyStreaming ? '<i class="ti ti-loader-2 conv-streaming-icon proj-folder-streaming" title="A chat in this project is running"></i>' : '') +
-      '<span class="proj-folder-actions">' +
-        '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();newConversationInProject(\'' + pid + '\', event)" title="New chat in project"><i class="ti ti-edit"></i></button>' +
-        '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();setActiveProject(\'' + pid + '\');openProjectHub()" title="Open hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>' +
-        '<button class="proj-sidebar-del-btn" onclick="event.stopPropagation();_confirmDeleteProjectFromList(\'' + pid + '\')" title="Delete project"><i class="ti ti-trash"></i></button>' +
+      '<span class="proj-folder-trailing">' +
+        '<span class="proj-folder-analytics">' + getProjectTaskAnalyticsInlineHtml(p.id, { compact: true }) + '</span>' +
+        '<span class="proj-folder-actions">' +
+          '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();newConversationInProject(\'' + pid + '\', event)" title="New chat in project"><i class="ti ti-edit"></i></button>' +
+          '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();setActiveProject(\'' + pid + '\');openProjectHub()" title="Open hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>' +
+          '<button class="proj-sidebar-del-btn" onclick="event.stopPropagation();_confirmDeleteProjectFromList(\'' + pid + '\')" title="Delete project"><i class="ti ti-trash"></i></button>' +
+        '</span>' +
       '</span>' +
     '</div>';
 

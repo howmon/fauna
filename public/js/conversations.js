@@ -360,11 +360,22 @@ function _renderConversationKanbanWidget(data) {
   var item = data.activeItem || items[0] || {};
   var pct = Math.max(0, Math.min(100, Number(data.percent) || 0));
   var projectId = item.projectId || data.projectId || (getConv(state.currentId) || {}).projectId || '';
-  var el = existing || document.createElement('button');
+  var dismissKey = state.currentId + ':' + (item.id || projectId || 'board');
+  try {
+    if (localStorage.getItem('fauna-conv-kanban-dismissed') === dismissKey) {
+      if (existing) existing.remove();
+      return;
+    }
+  } catch (_) {}
+  var el = existing || document.createElement('div');
   el.id = 'conv-kanban-widget';
-  el.type = 'button';
+  el.setAttribute('role', 'button');
+  el.tabIndex = 0;
   el.className = 'conv-kanban-widget';
   el.onclick = function(ev) { _openConversationKanbanLink(projectId, item.id || '', ev); };
+  el.onkeydown = function(ev) {
+    if (ev.key === 'Enter' || ev.key === ' ') _openConversationKanbanLink(projectId, item.id || '', ev);
+  };
   el.title = 'Open linked Kanban card';
   el.innerHTML =
     '<span class="conv-kanban-icon"><i class="ti ti-layout-kanban"></i></span>' +
@@ -372,8 +383,19 @@ function _renderConversationKanbanWidget(data) {
       '<span class="conv-kanban-title">' + escHtml(item.title || 'Linked Kanban') + '</span>' +
       '<span class="conv-kanban-meta">' + escHtml(item.column || 'board') + ' · ' + pct + '%</span>' +
       '<span class="conv-kanban-bar"><span style="width:' + pct + '%"></span></span>' +
-    '</span>';
+    '</span>' +
+    '<button type="button" class="conv-kanban-dismiss" title="Hide this widget" onclick="dismissConversationKanbanWidget(\'' + escHtml(dismissKey) + '\', event)"><i class="ti ti-x"></i></button>';
   if (!existing) document.body.appendChild(el);
+}
+
+function dismissConversationKanbanWidget(key, ev) {
+  if (ev) {
+    if (typeof ev.preventDefault === 'function') ev.preventDefault();
+    if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
+  }
+  try { localStorage.setItem('fauna-conv-kanban-dismissed', key || '1'); } catch (_) {}
+  var existing = document.getElementById('conv-kanban-widget');
+  if (existing) existing.remove();
 }
 
 function refreshConversationKanbanWidget(convId) {
@@ -388,6 +410,7 @@ function refreshConversationKanbanWidget(convId) {
 window.receiveKanbanFeedbackFromKanban = receiveKanbanFeedbackFromKanban;
 window.refreshConversationKanbanWidget = refreshConversationKanbanWidget;
 window.openConversationKanbanLink = _openConversationKanbanLink;
+window.dismissConversationKanbanWidget = dismissConversationKanbanWidget;
 
 function _startConversationKanbanRealtime() {
   if (!window.EventSource || window._conversationKanbanEvents) return;
@@ -887,14 +910,9 @@ function deleteConversation(id, e) {
 // per-project folders in the sidebar tree.
 function _convRowHtml(conv) {
   var dateStr = _convRelativeDate(conv);
-  var projMetrics = '';
-  if (conv.projectId && typeof getProjectTaskAnalyticsInlineHtml === 'function') {
-    projMetrics = getProjectTaskAnalyticsInlineHtml(conv.projectId, { compact: true });
-  }
   return '<div class="conv-item' + (conv.id === state.currentId ? ' active' : '') + '" onclick="loadConversation(\'' + conv.id + '\')">' +
     (conv._streaming ? '<i class="ti ti-loader-2 conv-streaming-icon"></i>' : '') +
     '<span class="conv-label" title="' + escHtml(conv.title) + (dateStr ? ' \u2014 ' + escHtml(dateStr) : '') + '">' + escHtml(conv.title) + '</span>' +
-    projMetrics +
     (dateStr ? '<span class="conv-date" title="' + escHtml(dateStr) + '">' + escHtml(dateStr) + '</span>' : '') +
     '<span class="conv-actions">' +
       '<button class="conv-rename" onclick="toggleConvAutonomous(\'' + conv.id + '\', event)" title="' + (conv.config && conv.config.autonomousMode ? 'Autonomous mode: on \u2014 click to disable' : 'Autonomous mode: off \u2014 click to enable') + '"><i class="ti ti-bolt"' + (conv.config && conv.config.autonomousMode ? ' style="color:#ffb800"' : '') + '></i></button>' +
@@ -1097,10 +1115,6 @@ function renderAllConvsPage() {
     // last message's timestamp).
     var dateStr = _convRelativeDate(c);
     var proj = projName(c.projectId);
-    var projAnalytics = '';
-    if (proj && typeof getProjectTaskAnalyticsInlineHtml === 'function') {
-      projAnalytics = getProjectTaskAnalyticsInlineHtml(proj.id, { compact: true });
-    }
     var cid = escHtml(c.id);
     return '<div class="all-conv-row' + (isActive ? ' active' : '') + '" onclick="closeAllConversations();loadConversation(\'' + cid + '\')">' +
       '<span class="all-conv-col-name">' +
@@ -1112,7 +1126,7 @@ function renderAllConvsPage() {
       '</span>' +
       '<span class="all-conv-col-proj">' +
         (proj
-          ? '<span class="all-conv-proj-badge"><span class="proj-dot proj-color-' + escHtml(proj.color || 'blue') + '" style="width:8px;height:8px;flex-shrink:0"></span>' + escHtml(proj.name) + '</span>' + projAnalytics
+          ? '<span class="all-conv-proj-badge"><span class="proj-dot proj-color-' + escHtml(proj.color || 'blue') + '" style="width:8px;height:8px;flex-shrink:0"></span>' + escHtml(proj.name) + '</span>'
           : '<span class="all-proj-dim">—</span>') +
       '</span>' +
       '<span class="all-conv-col-num">' + msgCount + '</span>' +
