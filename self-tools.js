@@ -85,6 +85,11 @@ import crypto from 'crypto';
 import { spawn } from 'child_process';
 import * as devServerRegistry from './server/lib/dev-server-registry.js';
 import { loadAgentManifest } from './server/lib/agent-manifest.js';
+import { resolveWorkspaceContext } from './lib/workspace-context.js';
+import { runWorkspaceDiagnostics } from './lib/diagnostics.js';
+import { workspaceSymbols, symbolDefinition, symbolReferences, renameSymbol } from './lib/language-tools.js';
+import { startTerminalSession, sendTerminalInput, getTerminalOutput, listTerminalSessions, killTerminalSession } from './lib/terminal-sessions.js';
+import { parseTestResults, runTestResults } from './lib/test-results.js';
 
 // Per-conversation active plan state. Survives across the multiple
 // /api/chat requests that the client's plan auto-continue feature fires
@@ -1244,6 +1249,106 @@ export const SELF_TOOL_DEFS = [
       name: 'fauna_list_projects',
       description: 'List all projects. Returns project names, IDs, and root paths.',
       parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_workspace_context',
+      description: 'Resolve the active Fauna workspace context. Project conversations return project root/read/write/validation scope; non-project conversations return document/global context and explicit cwd scope. Call before coding, diagnostics, tests, or terminal work when scope is unclear.',
+      parameters: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Optional project id. Defaults to the active project in context.' },
+          conversationId: { type: 'string', description: 'Optional conversation id.' },
+          cwd: { type: 'string', description: 'Optional explicit working directory for non-project or override context.' },
+          documents: { type: 'array', items: { type: 'string' }, description: 'Optional document/file paths attached to a non-project conversation.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_diagnostics',
+      description: 'VS Code Problems-style diagnostics for a Fauna workspace. Resolves the project/conversation workspace, runs an explicit or discovered validation command, and returns structured {file,line,column,severity,source,message} entries plus raw tail output.',
+      parameters: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Optional project id. Defaults to active project.' },
+          conversationId: { type: 'string', description: 'Optional conversation id.' },
+          cwd: { type: 'string', description: 'Optional working directory.' },
+          command: { type: 'string', description: 'Optional diagnostic command override, e.g. "npm run typecheck".' },
+          timeoutMs: { type: 'number', description: 'Command timeout in ms. Defaults 180000.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_symbols',
+      description: 'List JS/TS workspace symbols (classes, functions, variables, types) for the active project/cwd. Static fallback until full LSP is available.',
+      parameters: { type: 'object', properties: { cwd: { type: 'string' }, query: { type: 'string' }, maxResults: { type: 'number' } } },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_definition',
+      description: 'Find likely JS/TS definitions for a symbol in the active project/cwd. Static fallback until full LSP is available.',
+      parameters: { type: 'object', properties: { cwd: { type: 'string' }, symbol: { type: 'string' }, maxResults: { type: 'number' } }, required: ['symbol'] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_references',
+      description: 'Find JS/TS references to a symbol in the active project/cwd with line numbers. Static fallback until full LSP is available.',
+      parameters: { type: 'object', properties: { cwd: { type: 'string' }, symbol: { type: 'string' }, maxResults: { type: 'number' } }, required: ['symbol'] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_rename_symbol',
+      description: 'Conservatively rename a JS/TS identifier across the active project/cwd using word-boundary replacement. Prefer this over raw search/replace for simple identifiers; full LSP rename will supersede it later.',
+      parameters: { type: 'object', properties: { cwd: { type: 'string' }, symbol: { type: 'string' }, newName: { type: 'string' } }, required: ['symbol', 'newName'] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_terminal',
+      description: 'Persistent terminal sessions for interactive/project work. Actions: start, send, output, list, kill. Use when a command needs preserved cwd/env/session or interactive follow-up; use fauna_shell_exec for simple one-shot commands.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['start', 'send', 'output', 'list', 'kill'] },
+          id: { type: 'string', description: 'Terminal id for send/output/kill.' },
+          cwd: { type: 'string', description: 'Working directory for start.' },
+          command: { type: 'string', description: 'Optional command to run immediately after start.' },
+          input: { type: 'string', description: 'Input line for send.' },
+          maxChars: { type: 'number', description: 'Output tail cap for output.' },
+        },
+        required: ['action'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_test_results',
+      description: 'Run a test command or parse supplied test output into structured failures and summary data. Supports Vitest/Jest-like, pytest, and go test output patterns.',
+      parameters: {
+        type: 'object',
+        properties: {
+          cwd: { type: 'string' },
+          command: { type: 'string', description: 'Optional test command to run. Defaults to npm test when running.' },
+          output: { type: 'string', description: 'Existing terminal/test output to parse instead of running a command.' },
+          timeoutMs: { type: 'number' },
+        },
+      },
     },
   },
 
@@ -2922,6 +3027,59 @@ export async function executeSelfTool(toolName, args, context = {}) {
       const all = getAllProjects();
       return JSON.stringify(all.map(p => ({ id: p.id, name: p.name, rootPath: p.rootPath, description: p.description })));
     }
+
+    case 'fauna_workspace_context': {
+      const projectId = args.projectId || context.projectId || null;
+      const project = projectId ? getProject(projectId) : null;
+      return JSON.stringify(resolveWorkspaceContext({
+        project,
+        projectId,
+        conversationId: args.conversationId || context.convId || context.conversationId || null,
+        cwd: args.cwd,
+        documents: args.documents,
+      }));
+    }
+
+    case 'fauna_diagnostics': {
+      const projectId = args.projectId || context.projectId || null;
+      const project = projectId ? getProject(projectId) : null;
+      const workspace = resolveWorkspaceContext({
+        project,
+        projectId,
+        conversationId: args.conversationId || context.convId || context.conversationId || null,
+        cwd: args.cwd,
+      });
+      const result = await runWorkspaceDiagnostics({
+        workspace,
+        runShell: context.runShell,
+        command: args.command,
+        cwd: args.cwd,
+        timeoutMs: args.timeoutMs,
+      });
+      return JSON.stringify(result);
+    }
+
+    case 'fauna_symbols':
+      return JSON.stringify(workspaceSymbols({ cwd: args.cwd || context.cwd || process.cwd(), query: args.query, maxResults: args.maxResults }));
+    case 'fauna_definition':
+      return JSON.stringify(symbolDefinition({ cwd: args.cwd || context.cwd || process.cwd(), symbol: args.symbol, maxResults: args.maxResults }));
+    case 'fauna_references':
+      return JSON.stringify(symbolReferences({ cwd: args.cwd || context.cwd || process.cwd(), symbol: args.symbol, maxResults: args.maxResults }));
+    case 'fauna_rename_symbol':
+      return JSON.stringify(renameSymbol({ cwd: args.cwd || context.cwd || process.cwd(), symbol: args.symbol, newName: args.newName }));
+
+    case 'fauna_terminal': {
+      const action = String(args.action || 'list');
+      if (action === 'start') return JSON.stringify({ ok: true, ...startTerminalSession({ cwd: args.cwd, command: args.command }) });
+      if (action === 'send') return JSON.stringify(sendTerminalInput(args.id, args.input || ''));
+      if (action === 'output') return JSON.stringify(getTerminalOutput(args.id, args.maxChars));
+      if (action === 'kill') return JSON.stringify(killTerminalSession(args.id));
+      return JSON.stringify({ ok: true, sessions: listTerminalSessions() });
+    }
+
+    case 'fauna_test_results':
+      if (args.output) return JSON.stringify({ ok: true, ...parseTestResults(args.output) });
+      return JSON.stringify(await runTestResults({ cwd: args.cwd || context.cwd || process.cwd(), command: args.command, timeoutMs: args.timeoutMs, runShell: context.runShell }));
 
     case 'fauna_get_agent_instructions': {
       const name = String(args.name || context.activeAgentName || '').replace(/[^a-zA-Z0-9_-]/g, '');

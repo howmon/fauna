@@ -80,7 +80,7 @@ describe('self-tools', () => {
       // Bumped to 81 after adding fauna_write_offloaded (write the FULL
       // offloaded original directly to disk without round-tripping bytes
       // through the model context — fixes Figma CSV export thrash).
-      expect(SELF_TOOL_DEFS).toHaveLength(81);
+      expect(SELF_TOOL_DEFS).toHaveLength(89);
     });
 
     it('each tool has required OpenAI function format', () => {
@@ -140,7 +140,7 @@ describe('self-tools', () => {
   describe('Codex-style native tools', () => {
     it('registers all 5 new native tools', () => {
       const names = SELF_TOOL_DEFS.map((d) => d.function.name);
-      ['fauna_shell_exec', 'fauna_read_file', 'fauna_replace_string', 'fauna_apply_patch', 'fauna_browser'].forEach((n) => {
+      ['fauna_shell_exec', 'fauna_terminal', 'fauna_test_results', 'fauna_read_file', 'fauna_replace_string', 'fauna_apply_patch', 'fauna_browser', 'fauna_workspace_context', 'fauna_diagnostics', 'fauna_symbols', 'fauna_definition', 'fauna_references', 'fauna_rename_symbol'].forEach((n) => {
         expect(names).toContain(n);
         expect(isSelfTool(n)).toBe(true);
       });

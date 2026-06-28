@@ -22,7 +22,7 @@ const SHELL_TOOLS = new Set([
   // agent_shell_exec). Omitting them caused both to be miscategorised as
   // 'other', so the shell cap/permission branch never fired for native
   // calls and the model's mental model of remaining shell budget was wrong.
-  'fauna_shell_exec', 'agent_shell_exec',
+  'fauna_shell_exec', 'agent_shell_exec', 'fauna_terminal',
 ]);
 
 const FILE_TOOLS = new Set([

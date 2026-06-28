@@ -113,6 +113,7 @@ describe('ToolGuardContext.check — free tools', () => {
 describe('getToolCategory unchanged', () => {
   it('still classifies known tools correctly', () => {
     expect(getToolCategory('shell_exec')).toBe('shell');
+    expect(getToolCategory('fauna_terminal')).toBe('shell');
     expect(getToolCategory('agent_write_file')).toBe('file');
     expect(getToolCategory('agent_apply_patch')).toBe('file');
     expect(getToolCategory('browser_click')).toBe('browser');
