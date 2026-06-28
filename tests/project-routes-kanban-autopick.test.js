@@ -127,6 +127,25 @@ describe('project routes Kanban autopick wake-up', () => {
     expect(pokeNow).toHaveBeenCalledTimes(1);
   });
 
+  it('wakes autopilot when a Backlog card is explicitly assigned to AI', async () => {
+    const deps = makeDeps({
+      getProject: vi.fn(() => ({ id: 'p1', kanban: { autopilot: true } })),
+      addBacklogItem: vi.fn((_pid, body) => ({ id: 'w1', title: body.title, column: body.column, assignee: body.assignee, claimedBy: null })),
+    });
+    const app = makeApp();
+    registerProjectRoutes(app, deps);
+
+    const res = app.invoke('POST', '/api/projects/:id/workitems', {
+      params: { id: 'p1' },
+      body: { title: 'ship it', column: 'backlog', assignee: 'ai' },
+    });
+    await flushDynamicImport();
+
+    expect(res.statusCode).toBe(201);
+    expect(deps.addBacklogItem.mock.calls[0][1]).toMatchObject({ column: 'backlog', assignee: 'ai' });
+    expect(pokeNow).toHaveBeenCalledTimes(1);
+  });
+
   it('auto-enables project autopilot when a pickable Todo card is created', async () => {
     const deps = makeDeps({
       getProject: vi.fn(() => ({ id: 'p1', kanban: { autopilot: false, concurrency: 3 } })),

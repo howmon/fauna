@@ -166,6 +166,7 @@
     var cols = COLUMNS.filter(function(c) { return s.showArchived || c.id !== 'archived'; });
     grid.innerHTML = cols.map(function(col) {
       var items = filtered.filter(function(it) { return it.column === col.id; });
+      if (col.id === 'backlog') items.sort(_compareBacklogPriority);
       return '<div class="kb-column" data-col="' + col.id + '" ' +
         'ondragover="kbDragOver(event)" ondragleave="kbDragLeave(event)" ondrop="kbDrop(event,\'' + col.id + '\')">' +
         '<div class="kb-col-header">' +
@@ -177,6 +178,17 @@
         '</div>' +
       '</div>';
     }).join('');
+  }
+
+  function _compareBacklogPriority(a, b) {
+    var rank = { p0: 0, p1: 1, p2: 2, p3: 3 };
+    var pa = Object.prototype.hasOwnProperty.call(rank, a && a.priority) ? rank[a.priority] : rank.p2;
+    var pb = Object.prototype.hasOwnProperty.call(rank, b && b.priority) ? rank[b.priority] : rank.p2;
+    if (pa !== pb) return pa - pb;
+    var sa = typeof (a && a.score) === 'number' ? a.score : 0;
+    var sb = typeof (b && b.score) === 'number' ? b.score : 0;
+    if (sa !== sb) return sb - sa;
+    return String((a && (a.createdAt || a.id)) || '').localeCompare(String((b && (b.createdAt || b.id)) || ''));
   }
 
   function _latestTaskId(it) {

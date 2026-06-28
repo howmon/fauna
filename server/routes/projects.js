@@ -52,7 +52,9 @@ export function registerProjectRoutes(app, deps) {
   }
 
   function _shouldWakeAutopilot(item) {
-    return item && _isPickableColumn(item.column) && _isAiAssignableAssignee(item.assignee) && !item.claimedBy && !item.lockedByUser;
+    if (!item || item.claimedBy || item.lockedByUser) return false;
+    if (item.column === 'backlog') return item.assignee === 'ai';
+    return _isPickableColumn(item.column) && _isAiAssignableAssignee(item.assignee);
   }
 
   function _kanbanItemPercent(item) {

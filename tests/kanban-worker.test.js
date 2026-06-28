@@ -230,6 +230,21 @@ describe('_pickNext', () => {
     _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'in_progress', assignee: null, claimedBy: null }));
     expect(__test.pickNext(_db.projects[0]).id).toBe('c1');
   });
+  it('promotes AI-assigned backlog cards into Todo before pickup', () => {
+    _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true, concurrency: 1 } });
+    _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'backlog', assignee: 'ai', claimedBy: null }));
+
+    expect(__test.promoteBacklogToTodo(_db.projects[0])).toBe(1);
+    expect(_db.items[0].column).toBe('todo');
+    expect(__test.pickNext(_db.projects[0]).id).toBe('c1');
+  });
+  it('does not promote unassigned backlog cards', () => {
+    _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true, concurrency: 1 } });
+    _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'backlog', assignee: null, claimedBy: null }));
+
+    expect(__test.promoteBacklogToTodo(_db.projects[0])).toBe(0);
+    expect(_db.items[0].column).toBe('backlog');
+  });
   it('skips locked cards', () => {
     _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true, concurrency: 1 } });
     _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'todo', assignee: 'ai', lockedByUser: true }));

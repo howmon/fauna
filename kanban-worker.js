@@ -187,6 +187,32 @@ function _isAiAssignableCard(it) {
   return it && (it.assignee === 'ai' || it.assignee === null || it.assignee === undefined || it.assignee === '');
 }
 
+function _promoteBacklogToTodo(project) {
+  const board = getProjectBoard(project.id);
+  if (!board) return 0;
+  const pool = (board.columns.backlog || []).filter(it =>
+    it &&
+    it.assignee === 'ai' &&
+    !it.claimedBy &&
+    !it.lockedByUser
+  );
+  if (!pool.length) return 0;
+  pool.sort(_comparePickability);
+  let moved = 0;
+  for (const it of pool) {
+    const r = moveWorkItem(project.id, it.id, {
+      column: 'todo', assignee: 'ai', claimedBy: null,
+    }, { actor: 'ai', strict: true });
+    if (r && r.ok) {
+      moved++;
+      _emitBoard({ type: 'moved', projectId: project.id, item: r.item });
+    } else {
+      console.warn('[kanban-worker] backlog promotion failed for', it.id, '—', r && r.error);
+    }
+  }
+  return moved;
+}
+
 function _pickNext(project) {
   const board = getProjectBoard(project.id);
   if (!board) return null;
@@ -900,6 +926,8 @@ async function _pollTick() {
     const projects = getAllProjects();
     for (const proj of projects) {
       if (!proj || !(proj.kanban && proj.kanban.autopilot)) continue;
+      try { _promoteBacklogToTodo(proj); }
+      catch (e) { console.warn('[kanban-worker] backlog promotion error:', e?.message || e); }
       const card = _pickNext(proj);
       if (!card) {
         // Diagnostic — explain why nothing was picked when there ARE AI
@@ -1046,6 +1074,7 @@ export function stopKanbanWorker() {
 // running real intervals or task-runner.
 export const __test = {
   pickNext: _pickNext,
+  promoteBacklogToTodo: _promoteBacklogToTodo,
   isBlocked: _isBlocked,
   comparePickability: _comparePickability,
   hasUnansweredHumanComment: _hasUnansweredHumanComment,
