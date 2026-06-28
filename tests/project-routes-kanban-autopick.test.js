@@ -127,6 +127,26 @@ describe('project routes Kanban autopick wake-up', () => {
     expect(pokeNow).toHaveBeenCalledTimes(1);
   });
 
+  it('auto-enables project autopilot when a pickable Todo card is created', async () => {
+    const deps = makeDeps({
+      getProject: vi.fn(() => ({ id: 'p1', kanban: { autopilot: false, concurrency: 3 } })),
+      updateProject: vi.fn((_id, patch) => ({ id: 'p1', kanban: patch.kanban })),
+      addBacklogItem: vi.fn((_pid, body) => ({ id: 'w1', title: body.title, column: body.column, assignee: body.assignee, claimedBy: null })),
+    });
+    const app = makeApp();
+    registerProjectRoutes(app, deps);
+
+    const res = app.invoke('POST', '/api/projects/:id/workitems', {
+      params: { id: 'p1' },
+      body: { title: 'ship it', column: 'todo', assignee: null },
+    });
+    await flushDynamicImport();
+
+    expect(res.statusCode).toBe(201);
+    expect(deps.updateProject).toHaveBeenCalledWith('p1', { kanban: { autopilot: true, concurrency: 3 } });
+    expect(pokeNow).toHaveBeenCalledTimes(1);
+  });
+
   it('re-arms blank-assignee Todo edits when autopilot is on', async () => {
     const deps = makeDeps({
       getProject: vi.fn(() => ({ id: 'p1', kanban: { autopilot: true } })),
@@ -143,6 +163,26 @@ describe('project routes Kanban autopick wake-up', () => {
 
     expect(res.statusCode).toBe(200);
     expect(deps.updateBacklogItem.mock.calls[0][2]).toMatchObject({ column: 'todo', assignee: 'ai', claimedBy: null });
+    expect(pokeNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('auto-enables project autopilot when a pickable Todo card is edited', async () => {
+    const deps = makeDeps({
+      getProject: vi.fn(() => ({ id: 'p1', kanban: { autopilot: false, concurrency: 3 } })),
+      updateProject: vi.fn((_id, patch) => ({ id: 'p1', kanban: patch.kanban })),
+      updateBacklogItem: vi.fn((_pid, _id, body) => ({ id: 'w1', title: body.title, column: body.column, assignee: body.assignee, claimedBy: body.claimedBy || null })),
+    });
+    const app = makeApp();
+    registerProjectRoutes(app, deps);
+
+    const res = app.invoke('PATCH', '/api/projects/:id/workitems/:itemId', {
+      params: { id: 'p1', itemId: 'w1' },
+      body: { title: 'ship it', column: 'todo', assignee: null },
+    });
+    await flushDynamicImport();
+
+    expect(res.statusCode).toBe(200);
+    expect(deps.updateProject).toHaveBeenCalledWith('p1', { kanban: { autopilot: true, concurrency: 3 } });
     expect(pokeNow).toHaveBeenCalledTimes(1);
   });
 

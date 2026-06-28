@@ -38,6 +38,23 @@ export function registerProjectRoutes(app, deps) {
     return column === 'todo' || column === 'in_progress';
   }
 
+  function _isAiAssignableAssignee(assignee) {
+    return assignee === 'ai' || assignee === null || assignee === undefined || assignee === '';
+  }
+
+  function _ensureKanbanAutopilot(projectId, project) {
+    if (typeof updateProject !== 'function') return project || null;
+    const current = project || (typeof getProject === 'function' ? getProject(projectId) : null);
+    if (!current || (current.kanban && current.kanban.autopilot)) return current;
+    return updateProject(projectId, {
+      kanban: Object.assign({}, current.kanban || {}, { autopilot: true }),
+    }) || current;
+  }
+
+  function _shouldWakeAutopilot(item) {
+    return item && _isPickableColumn(item.column) && _isAiAssignableAssignee(item.assignee) && !item.claimedBy && !item.lockedByUser;
+  }
+
   function _kanbanItemPercent(item) {
     const map = { backlog: 0, todo: 20, in_progress: 55, review: 85, done: 100, archived: 100 };
     return map[item && item.column] ?? 0;
@@ -512,16 +529,18 @@ export function registerProjectRoutes(app, deps) {
     const project = typeof getProject === 'function' ? getProject(req.params.id) : null;
     const body = Object.assign({}, req.body || {});
     if (
-      (body.assignee === undefined || body.assignee === null || body.assignee === '') &&
-      _isPickableColumn(body.column) &&
-      project && project.kanban && project.kanban.autopilot
+      _isAiAssignableAssignee(body.assignee) &&
+      _isPickableColumn(body.column)
     ) {
       body.assignee = 'ai';
     }
     const item = addBacklogItem(req.params.id, body);
     if (!item) return res.status(404).json({ error: 'Project not found' });
     _emitBoardEvent({ type: 'created', projectId: req.params.id, item });
-    if (item.assignee === 'ai' && _isPickableColumn(item.column)) _pokeKanbanWorker();
+    if (_shouldWakeAutopilot(item)) {
+      _ensureKanbanAutopilot(req.params.id, project);
+      _pokeKanbanWorker();
+    }
     res.status(201).json(item);
   });
 
@@ -545,9 +564,8 @@ export function registerProjectRoutes(app, deps) {
     const project = typeof getProject === 'function' ? getProject(req.params.id) : null;
     const body = Object.assign({}, req.body || {});
     if (
-      (body.assignee === undefined || body.assignee === null || body.assignee === '') &&
-      _isPickableColumn(body.column) &&
-      project && project.kanban && project.kanban.autopilot
+      _isAiAssignableAssignee(body.assignee) &&
+      _isPickableColumn(body.column)
     ) {
       body.assignee = 'ai';
       body.claimedBy = null;
@@ -555,7 +573,8 @@ export function registerProjectRoutes(app, deps) {
     const item = updateBacklogItem(req.params.id, req.params.itemId, body);
     if (!item) return res.status(404).json({ error: 'Item not found' });
     _emitBoardEvent({ type: 'updated', projectId: req.params.id, item });
-    if (item.assignee === 'ai' && _isPickableColumn(item.column) && !item.claimedBy && !item.lockedByUser) {
+    if (_shouldWakeAutopilot(item)) {
+      _ensureKanbanAutopilot(req.params.id, project);
       _pokeKanbanWorker();
     }
     res.json(item);
@@ -638,7 +657,8 @@ export function registerProjectRoutes(app, deps) {
     _emitBoardEvent({ type: 'moved', projectId: req.params.id, item: finalItem });
     // Poke the autopilot worker — if the human just dragged an AI card into
     // todo or in_progress, the next poll should happen now, not in 15 s.
-    if (finalItem.assignee === 'ai' && _isPickableColumn(finalItem.column) && !finalItem.claimedBy && !finalItem.lockedByUser) {
+    if (_shouldWakeAutopilot(finalItem)) {
+      _ensureKanbanAutopilot(req.params.id);
       _pokeKanbanWorker();
     }
     res.json(finalItem);
