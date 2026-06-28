@@ -34,6 +34,8 @@
     projectsById: {},          // for global view, project metadata lookup
     mountEl: null,
     sse: null,
+    pollTimer: null,
+    refreshInFlight: false,
     dragId: null,
     dragFromCol: null,
     filterAssignee: 'all',     // 'all' | 'ai' | 'human'
@@ -115,11 +117,15 @@
 
     refreshKanbanBoard();
     _subscribeSse();
+    _startRealtimeFallback();
   }
 
-  function refreshKanbanBoard() {
+  function refreshKanbanBoard(opts) {
+    opts = opts || {};
     var s = window._kbState;
     if (!s.mountEl) return;
+    if (s.refreshInFlight) return;
+    s.refreshInFlight = true;
     var loader = s.scope === 'global' ? _fetchGlobal() : _fetchProjectBoard(s.projectId);
     loader.then(function(data) {
       if (s.scope === 'global') {
@@ -151,7 +157,9 @@
       }
       _renderGrid();
     }).catch(function(e) {
-      _toast('Board load failed: ' + e.message, true);
+      if (!opts.silent) _toast('Board load failed: ' + e.message, true);
+    }).finally(function() {
+      s.refreshInFlight = false;
     });
   }
 
@@ -858,6 +866,7 @@
       s.sse = new EventSource(url);
       s.sse.onmessage = function(ev) {
         try {
+          s.lastBoardEventAt = Date.now();
           var evt = JSON.parse(ev.data);
           if (evt.type === 'ping' || evt.type === 'hello') return;
           // For per-project view, ignore events from other projects.
@@ -890,6 +899,22 @@
       };
       s.sse.onerror = function() { /* browser auto-reconnects */ };
     } catch (_) { /* no SSE — board still works without live updates */ }
+  }
+
+  function _startRealtimeFallback() {
+    var s = window._kbState;
+    if (s.pollTimer) clearInterval(s.pollTimer);
+    s.pollTimer = setInterval(function() {
+      if (!s.mountEl) return;
+      if (document.hidden) return;
+      refreshKanbanBoard({ silent: true });
+    }, 4000);
+  }
+
+  function _stopRealtimeFallback() {
+    var s = window._kbState;
+    if (s.pollTimer) clearInterval(s.pollTimer);
+    s.pollTimer = null;
   }
 
   // ── Live task viewer ───────────────────────────────────────────────────
@@ -1284,6 +1309,7 @@
     if (panel) panel.classList.remove('open');
     var s = window._kbState;
     if (s && s.sse) { try { s.sse.close(); } catch (_) {} s.sse = null; }
+    _stopRealtimeFallback();
     if (body) body.innerHTML = '';
   }
   window.toggleBoardPanel = toggleBoardPanel;
