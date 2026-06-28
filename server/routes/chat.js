@@ -223,20 +223,22 @@ export function registerChatRoute(app, {
     };
     res.on('close', cancelUpstream);
     const { messages = [], model = 'claude-sonnet-4.6', systemPrompt = '', useFigmaMCP = false, contextSummary = '',
-            thinkingBudget = 'high', maxContextTurns = 20, agentName = null,
-            projectId = null, projectContextIds = null, isDelegation = false,
-            clientContext = 'app', noTools = false,
-          enableDynamicWidgets = false,
-          autonomousMode: bodyAutonomousMode = null,
-          acceptanceCriteria: bodyAcceptance = null,
-          qa: bodyQa = null,
-          deploy: bodyDeploy = null,
-          deployApproved: bodyDeployApproved = false,
-          headlessTask: bodyHeadlessTask = false,
-          toolLimits: bodyToolLimits = null,
-          toolPolicy: bodyToolPolicy = null,
-          selectedFigmaFileKeys = [] } = req.body;
+        thinkingBudget = 'high', maxContextTurns = 20, agentName = null,
+        projectId = null, projectContextIds = null, isDelegation = false,
+        clientContext = 'app', noTools = false,
+        isolatedContext = false,
+        enableDynamicWidgets = false,
+        autonomousMode: bodyAutonomousMode = null,
+        acceptanceCriteria: bodyAcceptance = null,
+        qa: bodyQa = null,
+        deploy: bodyDeploy = null,
+        deployApproved: bodyDeployApproved = false,
+        headlessTask: bodyHeadlessTask = false,
+        toolLimits: bodyToolLimits = null,
+        toolPolicy: bodyToolPolicy = null,
+        selectedFigmaFileKeys = [] } = req.body;
     const isCLI = clientContext === 'cli';
+    const isolateContext = isolatedContext === true || clientContext === 'automation-generator';
 
     // Effective autonomous-mode flag — explicit body value wins, then project
     // default. Per-conversation `config.autonomousMode` is forwarded by the
@@ -359,7 +361,7 @@ export function registerChatRoute(app, {
         prompt: latestUserText(),
       };
       const isLikelySessionStart = Array.isArray(messages) && messages.filter(m => m && m.role === 'user').length <= 1;
-      if (isLikelySessionStart && !isDelegation) {
+      if (!isolateContext && isLikelySessionStart && !isDelegation) {
         const sessionHooks = await runHooks(customizationRecords, 'SessionStart', baseHookPayload, { cwd: workspaceRoot });
         if (sessionHooks.systemMessages?.length) {
           for (const message of sessionHooks.systemMessages) allMessages.push({ role: 'system', content: String(message) });
@@ -370,16 +372,18 @@ export function registerChatRoute(app, {
           return;
         }
       }
-      const submitHooks = await runHooks(customizationRecords, 'UserPromptSubmit', baseHookPayload, { cwd: workspaceRoot });
-      if (submitHooks.systemMessages?.length) {
-        for (const message of submitHooks.systemMessages) allMessages.push({ role: 'system', content: String(message) });
+      if (!isolateContext) {
+        const submitHooks = await runHooks(customizationRecords, 'UserPromptSubmit', baseHookPayload, { cwd: workspaceRoot });
+        if (submitHooks.systemMessages?.length) {
+          for (const message of submitHooks.systemMessages) allMessages.push({ role: 'system', content: String(message) });
+        }
+        if (submitHooks.blocked) {
+          send({ type: 'error', error: submitHooks.stopReason || 'UserPromptSubmit hook blocked this chat turn.' });
+          send({ type: 'done', finish_reason: 'hook_blocked', hook: 'UserPromptSubmit' });
+          return;
+        }
       }
-      if (submitHooks.blocked) {
-        send({ type: 'error', error: submitHooks.stopReason || 'UserPromptSubmit hook blocked this chat turn.' });
-        send({ type: 'done', finish_reason: 'hook_blocked', hook: 'UserPromptSubmit' });
-        return;
-      }
-      if (isDelegation) {
+      if (!isolateContext && isDelegation) {
         const startHooks = await runHooks(customizationRecords, 'SubagentStart', baseHookPayload, { cwd: workspaceRoot });
         if (startHooks.systemMessages?.length) {
           for (const message of startHooks.systemMessages) allMessages.push({ role: 'system', content: String(message) });
@@ -395,7 +399,7 @@ export function registerChatRoute(app, {
 
       // Build project context from active project (name, root, sources, pinned/enabled contexts)
       let projectCtx = '';
-      if (projectId) {
+      if (!isolateContext && projectId) {
         projectCtx = projectContextIds && projectContextIds.length
           ? buildContextPayload(projectId, projectContextIds)
           : getProjectSystemContext(projectId);
@@ -409,7 +413,7 @@ export function registerChatRoute(app, {
       // just skip project-scoped facts there to keep the delegated prompt small.
       // When the project opts into embeddings, swap in the richer profile (static + dynamic + context passages).
       let factsCtx = '';
-      if (!isDelegation) {
+      if (!isolateContext && !isDelegation) {
         const _memCfg = _projectRecord?.memoryConfig || {};
         if (projectId && _memCfg.embeddingsEnabled) {
           try {
@@ -445,7 +449,7 @@ export function registerChatRoute(app, {
       // Inject connected Figma file info so AI can target the right document
       let figmaFilesCtx = '';
       const _figmaFilesList = figma.listFiles();
-      if (useFigmaMCP && _figmaFilesList.length > 0) {
+      if (!isolateContext && useFigmaMCP && _figmaFilesList.length > 0) {
         const entries = _figmaFilesList.map(f => `- "${f.fileName}" (fileKey: ${f.fileKey}, page: ${f.currentPage})`).join('\n');
         figmaFilesCtx = `\n## Connected Figma Documents\nThe following Figma documents are currently open with the plugin running:\n${entries}\nWhen using figma_execute, pass the fileKey parameter to target a specific document. If omitted, the most recently active document is used.\nIMPORTANT: Dev Mode MCP tools (get_screenshot, get_design_context, get_metadata, etc.) always operate on whichever file is currently focused in Figma — they do NOT accept a fileKey parameter. If you need to read from or screenshot a specific file, use figma_execute with the fileKey parameter instead.`;
         const selected = Array.isArray(selectedFigmaFileKeys)
@@ -463,7 +467,7 @@ export function registerChatRoute(app, {
       let mcpTools;
       const customMcpToolNames = new Set();
       let customMcpCtx = '';
-      if (!isCLI && !noTools && customMcp?.getTools) {
+      if (!isolateContext && !isCLI && !noTools && customMcp?.getTools) {
         try {
           const customTools = await customMcp.getTools({ autoStartEnabled: true });
           if (Array.isArray(customTools) && customTools.length) {
@@ -494,7 +498,7 @@ export function registerChatRoute(app, {
       // forcing it to re-derive that from the transcript.
       let activePlanCtx = '';
       try {
-        const _planConvId = req.body?.conversationId || null;
+        const _planConvId = isolateContext ? null : (req.body?.conversationId || null);
         const _activePlan = _planConvId ? getActivePlanForConv(_planConvId) : null;
         if (_activePlan && Array.isArray(_activePlan.items) && _activePlan.items.length) {
           const _statusGlyph = (s) => s === 'completed' ? '[x]'
@@ -535,7 +539,7 @@ export function registerChatRoute(app, {
           }
           return '';
         })();
-        if (_lastTxt) {
+        if (!isolateContext && _lastTxt) {
           const _emptyBashRe   = /```(?:bash|shell-exec|shell_exec|sh|zsh)[ \t]*\r?\n[\s\r\n]*```/i;
           const _askToRunRe    = /\b(paste the output|let me know (?:what|when|if).{0,40}(?:output|see|happens)|run (?:this|the (?:above|following|build|typecheck|test|command)).{0,80}(?:and (?:paste|share|tell|let)|then (?:paste|share|tell|let))|run.{0,40}from the repo root.{0,40}(?:and|so I))/i;
           const _hadEmpty = _emptyBashRe.test(_lastTxt);
@@ -584,21 +588,22 @@ export function registerChatRoute(app, {
       //   3. VOLATILE SUFFIX — project state, facts, summaries, plan: these
       //      change turn-to-turn, so they go last where a cache miss is cheap.
       const fullSystem = [
+        systemPrompt,
         // ── 1. STABLE PREFIX ───────────────────────────────────────────────
         // Core guidelines: persistence, formatting, frontend quality, search defaults.
         // Baked into every conversation (skipped for delegation sub-agents to save tokens —
         // the orchestrator already enforces these and re-stating them in delegates wastes context).
-        isDelegation ? '' : FAUNA_CORE_GUIDELINES,
+        (isolateContext || isDelegation) ? '' : FAUNA_CORE_GUIDELINES,
         // When running against a local model that doesn't support OpenAI tool
         // calling, tell it explicitly — otherwise it will hallucinate tool
         // invocations in prose. Constant per session, so it lives in the prefix.
-        (!llmSupports.tools && llmProviderId !== 'copilot')
+        (!isolateContext && !llmSupports.tools && llmProviderId !== 'copilot')
           ? '\n## Tool Availability\nYou are running on a local model that does not support tool calls in this session. Do NOT pretend to call shell, browser, file, or MCP tools — there is no execution environment. Answer the user directly in plain text or markdown. If the user asks for an action requiring tools, tell them to switch to a Copilot model.'
           : '',
         // Autonomous mode adds the DONE/BLOCKED/NEEDS-INPUT marker contract,
         // acceptance criteria, and QA gate. Constant for the whole run, so it
         // belongs in the stable prefix (acceptance criteria are fixed up-front).
-        autonomousMode
+        (!isolateContext && autonomousMode)
           ? '\n## Autonomous Completion Contract\nThis conversation is running until done. Your FINAL message MUST start with exactly one of these markers on its own line: `DONE:` (work verified complete), `BLOCKED:` (cannot proceed without external action), or `NEEDS-INPUT:` (require user info). After the marker, list which acceptance criteria you verified and how.'
             + (effectiveAcceptance ? `\n\n## Acceptance Criteria\n${effectiveAcceptance}\n\nDo not emit DONE: until every criterion above is verifiably satisfied. Cite the verification (tool output, test run, file path) for each one in your final message.` : '')
             + (qaCommand ? `\n\n## QA Gate\nBefore you emit DONE:, fauna will automatically run \`${qaCommand}\` and feed the result back as a tool message. If it fails, you must address the failure and continue — do NOT emit DONE: on a failing QA run.` : '')
@@ -611,17 +616,17 @@ export function registerChatRoute(app, {
         // Saves ~6k tokens on a typical "explain this code" turn. The sticky
         // flags make these monotonic (once on, stay on) so they sit right
         // after the stable prefix and rarely break the cache once present.
-        (isCLI || noTools) ? '' : (_ctxFlags.browser ? browserBuildContext : ''),
-        (isCLI || noTools) ? '' : (_ctxFlags.browser ? buildBrowserExtContext() : ''),
-        (isDelegation || isCLI || noTools) ? '' : (_ctxFlags.genui ? GEN_UI_CATALOG_PROMPT : GEN_UI_SHORT_HINT),
-        (isDelegation || !_ctxFlags.frontend) ? '' : FAUNA_FRONTEND_QUALITY,
+        (isolateContext || isCLI || noTools) ? '' : (_ctxFlags.browser ? browserBuildContext : ''),
+        (isolateContext || isCLI || noTools) ? '' : (_ctxFlags.browser ? buildBrowserExtContext() : ''),
+        (isolateContext || isDelegation || isCLI || noTools) ? '' : (_ctxFlags.genui ? GEN_UI_CATALOG_PROMPT : GEN_UI_SHORT_HINT),
+        (isolateContext || isDelegation || !_ctxFlags.frontend) ? '' : FAUNA_FRONTEND_QUALITY,
         // ── 3. VOLATILE SUFFIX ─────────────────────────────────────────────
         // These change turn-to-turn (project edits, fact access/scoring,
         // growing summary, plan updates), so a cache miss here is unavoidable
         // and cheap — keep them last to protect the cacheable prefix above.
-        isDelegation ? '' : projectCtx,
+        (isolateContext || isDelegation) ? '' : projectCtx,
         factsCtx,
-        contextSummary ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '',
+        (!isolateContext && contextSummary) ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '',
         activePlanCtx,
         shellExecReminder,
         figmaFilesCtx,

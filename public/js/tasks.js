@@ -316,19 +316,18 @@ function _renderList() {
   var list = document.getElementById('tasks-list');
   if (!list) return;
 
-  var tasks = _tasksCache;
-  if (typeof state !== 'undefined' && state.activeProjectId) {
-    var proj = tasks.filter(function(t) { return t.projectId === state.activeProjectId; });
-    if (proj.length) tasks = proj;
-  }
-
   // Hide Kanban-autopilot tasks from this panel — they're surfaced on the
   // Board (with their own Live viewer) and were cluttering "Active" here
   // every time the worker claimed a card. The kanban-worker stamps them
   // with title prefix "[board] ".
-  tasks = tasks.filter(function(t) {
+  var tasks = _tasksCache.filter(function(t) {
     return !(t && typeof t.title === 'string' && t.title.indexOf('[board] ') === 0);
   });
+
+  if (typeof state !== 'undefined' && state.activeProjectId) {
+    var proj = tasks.filter(function(t) { return t.projectId === state.activeProjectId; });
+    if (proj.length) tasks = proj;
+  }
 
   if (!tasks.length) {
     list.innerHTML = _suggestedTasksHtml();
@@ -1144,7 +1143,8 @@ async function _acGeneratePipeline() {
       body: JSON.stringify({
         systemPrompt: systemPrompt,
         messages: [{ role: 'user', content: desc }],
-        clientContext: 'cli',
+        clientContext: 'automation-generator',
+        isolatedContext: true,
         thinkingBudget: 'off',
         maxContextTurns: 4,
         noTools: true,
