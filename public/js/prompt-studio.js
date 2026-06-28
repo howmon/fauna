@@ -3,6 +3,7 @@ var promptStudioState = {
   selectedKey: '',
   filter: '',
   kind: 'all',
+  draft: null,
 };
 
 function openPromptStudioPage() {
@@ -14,9 +15,16 @@ function openPromptStudioPage() {
         '<div>' +
           '<div class="home-kicker"><span></span>Customizations</div>' +
           '<h1>Prompt Studio</h1>' +
-          '<p>Inspect prompt files, scoped instructions, custom agents, skills, hooks, and runtime policy.</p>' +
+          '<p>Create, inspect, test, and lint prompt files, scoped instructions, custom agents, skills, and hooks.</p>' +
         '</div>' +
-        '<button class="settings-row-btn" type="button" onclick="loadPromptStudio(true)"><i class="ti ti-refresh"></i> Refresh</button>' +
+        '<div class="prompt-studio-actions">' +
+          '<button class="settings-row-btn" type="button" onclick="newPromptStudioRecord(\'prompt\')"><i class="ti ti-plus"></i> Prompt</button>' +
+          '<button class="settings-row-btn" type="button" onclick="newPromptStudioRecord(\'instruction\')"><i class="ti ti-plus"></i> Instruction</button>' +
+          '<button class="settings-row-btn" type="button" onclick="newPromptStudioRecord(\'agent\')"><i class="ti ti-plus"></i> Agent</button>' +
+          '<button class="settings-row-btn" type="button" onclick="newPromptStudioRecord(\'skill\')"><i class="ti ti-plus"></i> Skill</button>' +
+          '<button class="settings-row-btn" type="button" onclick="newPromptStudioRecord(\'hooks\')"><i class="ti ti-plus"></i> Hook</button>' +
+          '<button class="settings-row-btn" type="button" onclick="loadPromptStudio(true)"><i class="ti ti-refresh"></i> Refresh</button>' +
+        '</div>' +
       '</div>' +
       '<div class="prompt-studio-toolbar">' +
         '<div class="prompt-studio-tabs" id="prompt-studio-tabs"></div>' +
@@ -39,7 +47,7 @@ async function loadPromptStudio(force) {
     var d = await r.json();
     if (!r.ok || !d) throw new Error((d && d.error) || ('HTTP ' + r.status));
     promptStudioState.records = d.customizations || [];
-    if (!promptStudioState.selectedKey || !promptStudioState.records.some(function(rec) { return _promptStudioKey(rec) === promptStudioState.selectedKey; })) {
+    if (!promptStudioState.draft && (!promptStudioState.selectedKey || !promptStudioState.records.some(function(rec) { return _promptStudioKey(rec) === promptStudioState.selectedKey; }))) {
       promptStudioState.selectedKey = promptStudioState.records[0] ? _promptStudioKey(promptStudioState.records[0]) : '';
     }
     renderPromptStudio();
@@ -60,10 +68,42 @@ function renderPromptStudio() {
   }).join('');
 
   var records = _promptStudioFilteredRecords();
-  list.innerHTML = records.length ? records.map(_promptStudioCard).join('') : '<div class="health-empty"><i class="ti ti-file-search"></i><strong>No customizations found</strong><span>Try another filter or add files under .github/prompts, .github/instructions, .github/agents, skills, or .github/hooks.</span></div>';
-  var selected = promptStudioState.records.find(function(r) { return _promptStudioKey(r) === promptStudioState.selectedKey; }) || records[0] || null;
+  var draftCard = promptStudioState.draft ? _promptStudioCard(promptStudioState.draft) : '';
+  list.innerHTML = draftCard + (records.length ? records.map(_promptStudioCard).join('') : '<div class="health-empty"><i class="ti ti-file-search"></i><strong>No customizations found</strong><span>Try another filter or create a customization above.</span></div>');
+  var selected = promptStudioState.draft || promptStudioState.records.find(function(r) { return _promptStudioKey(r) === promptStudioState.selectedKey; }) || records[0] || null;
   if (selected) promptStudioState.selectedKey = _promptStudioKey(selected);
-  detail.innerHTML = selected ? _promptStudioDetail(selected) : '<div class="prompt-studio-empty-detail"><i class="ti ti-braces"></i><span>Select a customization to inspect it.</span></div>';
+  detail.innerHTML = selected ? _promptStudioDetail(selected) : '<div class="prompt-studio-empty-detail"><i class="ti ti-braces"></i><span>Select or create a customization.</span></div>';
+}
+
+function newPromptStudioRecord(kind) {
+  var name = kind === 'hooks' ? 'policy' : kind === 'instruction' ? 'project-rules' : kind === 'agent' ? 'custom-agent' : kind === 'skill' ? 'workflow-skill' : 'custom-prompt';
+  var body = kind === 'hooks'
+    ? JSON.stringify({ hooks: { PreToolUse: [{ type: 'command', command: 'node .github/hooks/policy.js' }] } }, null, 2)
+    : kind === 'skill'
+      ? '# ' + name + '\n\n## Overview\nDescribe the workflow.\n\n## When to Use\n- Describe the trigger.\n\n## Process\n1. Do the first step.\n\n## Common Rationalizations\n- None.\n\n## Red Flags\n- Guessing.\n\n## Verification\n- Run or cite a concrete check.\n'
+      : kind === 'agent'
+        ? 'You are a focused custom agent. Define the workflow, tool-use rules, and final output contract here.\n'
+        : kind === 'instruction'
+          ? 'Add scoped repo guidance here.\n'
+          : 'Use this prompt with: {{input}}\n';
+  promptStudioState.draft = {
+    kind: kind,
+    name: name,
+    description: '',
+    scope: 'repo',
+    path: '',
+    frontmatter: { name: name, description: '' },
+    tools: [],
+    model: [],
+    body: body,
+    ok: true,
+    warnings: [],
+    errors: [],
+    _draft: true,
+  };
+  promptStudioState.selectedKey = _promptStudioKey(promptStudioState.draft);
+  if (promptStudioState.kind !== 'all' && promptStudioState.kind !== kind) promptStudioState.kind = kind;
+  renderPromptStudio();
 }
 
 function _promptStudioFilteredRecords() {
@@ -80,20 +120,24 @@ function _promptStudioFilteredRecords() {
 function _promptStudioCard(r) {
   var key = _promptStudioKey(r);
   var status = r.ok === false ? 'fail' : ((r.warnings && r.warnings.length) ? 'warn' : 'ok');
-  var meta = [r.scope, _promptStudioKindLabel(r.kind)].filter(Boolean).join(' · ');
-  return '<button class="prompt-studio-card ' + status + (key === promptStudioState.selectedKey ? ' active' : '') + '" onclick="promptStudioState.selectedKey=' + JSON.stringify(key).replace(/"/g, '&quot;') + ';renderPromptStudio()">' +
+  var meta = [r._draft ? 'draft' : r.scope, _promptStudioKindLabel(r.kind)].filter(Boolean).join(' · ');
+  return '<button class="prompt-studio-card ' + status + (key === promptStudioState.selectedKey ? ' active' : '') + '" onclick="selectPromptStudioRecord(' + JSON.stringify(key).replace(/"/g, '&quot;') + ')">' +
     '<span class="prompt-studio-status"></span>' +
     '<span class="prompt-studio-card-main"><strong>' + escHtml(r.name || '(unnamed)') + '</strong><small>' + escHtml(meta) + '</small></span>' +
     '<i class="ti ti-chevron-right"></i>' +
   '</button>';
 }
 
+function selectPromptStudioRecord(key) {
+  if (!promptStudioState.draft || key !== _promptStudioKey(promptStudioState.draft)) promptStudioState.draft = null;
+  promptStudioState.selectedKey = key;
+  renderPromptStudio();
+}
+
 function _promptStudioDetail(r) {
   var status = r.ok === false ? 'fail' : ((r.warnings && r.warnings.length) ? 'warn' : 'ok');
-  var tools = Array.isArray(r.tools) ? r.tools : [];
-  var model = Array.isArray(r.model) ? r.model : (r.model ? [r.model] : []);
+  var readOnly = r.kind === 'agent-instructions';
   var issues = [].concat(r.errors || [], r.warnings || []);
-  var frontmatter = r.frontmatter ? JSON.stringify(r.frontmatter, null, 2) : '{}';
   var action = r.kind === 'prompt'
     ? '<div class="prompt-studio-run"><textarea id="prompt-studio-run-input" placeholder="Prompt arguments"></textarea><button class="settings-row-btn" onclick="runPromptStudioPrompt(' + JSON.stringify(r.name).replace(/"/g, '&quot;') + ')"><i class="ti ti-player-play"></i> Render Prompt</button><button class="settings-row-btn" onclick="sendPromptStudioPrompt(' + JSON.stringify(r.name).replace(/"/g, '&quot;') + ')"><i class="ti ti-send"></i> Send</button><pre id="prompt-studio-run-output"></pre></div>'
     : '';
@@ -101,18 +145,142 @@ function _promptStudioDetail(r) {
       '<div><span class="prompt-studio-kind">' + escHtml(_promptStudioKindLabel(r.kind)) + '</span><h2>' + escHtml(r.name || '(unnamed)') + '</h2><p>' + escHtml(r.description || 'No description.') + '</p></div>' +
       '<span class="prompt-studio-pill">' + (status === 'ok' ? 'Ready' : status === 'warn' ? 'Warnings' : 'Errors') + '</span>' +
     '</div>' +
-    '<div class="prompt-studio-meta-grid">' +
-      _promptStudioMeta('Scope', r.scope || 'repo') +
-      _promptStudioMeta('Path', r.relativePath || r.path || '') +
-      _promptStudioMeta('Tools', tools.length ? tools.join(', ') : (r.kind === 'hooks' ? 'lifecycle commands' : 'default')) +
-      _promptStudioMeta('Model', model.length ? model.join(', ') : 'default') +
-    '</div>' +
     (issues.length ? '<div class="prompt-studio-issues">' + issues.map(function(i) { return '<div><i class="ti ti-alert-triangle"></i><span>' + escHtml(i) + '</span></div>'; }).join('') + '</div>' : '') +
-    action +
-    '<div class="prompt-studio-code-grid">' +
-      '<section><h3>Frontmatter</h3><pre>' + escHtml(frontmatter) + '</pre></section>' +
-      '<section><h3>Body</h3><pre>' + escHtml(r.body || (r.kind === 'hooks' ? JSON.stringify(r.hooks || {}, null, 2) : '')) + '</pre></section>' +
-    '</div>';
+    _promptStudioEditor(r, readOnly) +
+    action;
+}
+
+function _promptStudioEditor(r, readOnly) {
+  var fm = r.frontmatter || {};
+  var tools = Array.isArray(r.tools) ? r.tools.join(', ') : '';
+  var model = Array.isArray(r.model) ? r.model.join(', ') : '';
+  var applyTo = Array.isArray(r.applyTo) ? r.applyTo.join(', ') : (fm.applyTo || '');
+  var agents = Array.isArray(r.agents) ? r.agents.join(', ') : (Array.isArray(fm.agents) ? fm.agents.join(', ') : '');
+  var pathText = r.path || '';
+  var body = r.kind === 'hooks' ? (r.body || JSON.stringify(r.hooks || {}, null, 2)) : (r.body || '');
+  var disabled = readOnly ? ' disabled' : '';
+  var extra = '';
+  if (r.kind === 'prompt') {
+    extra += _promptStudioField('Agent', 'ps-agent', fm.agent || '', disabled);
+    extra += _promptStudioField('Argument Hint', 'ps-argument-hint', fm['argument-hint'] || '', disabled);
+    extra += _promptStudioField('Tools', 'ps-tools', tools, disabled, 'read, search, execute');
+    extra += _promptStudioField('Model', 'ps-model', model, disabled, 'Claude Sonnet 4.5, GPT-5');
+  } else if (r.kind === 'instruction') {
+    extra += _promptStudioField('Apply To', 'ps-apply-to', applyTo, disabled, 'server/**/*.js');
+  } else if (r.kind === 'agent') {
+    extra += _promptStudioField('Tools', 'ps-tools', tools, disabled, 'read, edit, execute');
+    extra += _promptStudioField('Model', 'ps-model', model, disabled, 'Claude Sonnet 4.5');
+    extra += _promptStudioField('Allowed Subagents', 'ps-agents', agents, disabled, 'researcher, reviewer');
+    extra += '<label class="prompt-studio-check"><input id="ps-user-invocable" type="checkbox"' + (r.userInvocable !== false ? ' checked' : '') + disabled + '> User invocable</label>';
+    extra += '<label class="prompt-studio-check"><input id="ps-disable-model-invocation" type="checkbox"' + (r.disableModelInvocation === true ? ' checked' : '') + disabled + '> Disable model invocation</label>';
+  } else if (r.kind === 'skill') {
+    extra += _promptStudioField('Argument Hint', 'ps-argument-hint', fm['argument-hint'] || '', disabled);
+    extra += '<label class="prompt-studio-check"><input id="ps-user-invocable" type="checkbox"' + (r.userInvocable !== false ? ' checked' : '') + disabled + '> User invocable</label>';
+    extra += '<label class="prompt-studio-check"><input id="ps-disable-model-invocation" type="checkbox"' + (r.disableModelInvocation === true ? ' checked' : '') + disabled + '> Disable model invocation</label>';
+  }
+  return '<div class="prompt-studio-editor">' +
+    '<div class="prompt-studio-editor-grid">' +
+      _promptStudioField('Name', 'ps-name', r.name || '', disabled) +
+      _promptStudioSelect('Scope', 'ps-scope', r.scope || 'repo', disabled) +
+      _promptStudioField('Description', 'ps-description', r.description || fm.description || '', disabled) +
+      _promptStudioField('Path', 'ps-path', pathText, disabled, 'Leave blank for canonical path') +
+      extra +
+    '</div>' +
+    '<label class="prompt-studio-body-label"><span>' + (r.kind === 'hooks' ? 'JSON' : 'Body') + '</span><textarea id="ps-body"' + disabled + '>' + escHtml(body) + '</textarea></label>' +
+    '<div class="prompt-studio-save-row">' +
+      (readOnly ? '' : '<button class="settings-row-btn" onclick="savePromptStudioRecord()"><i class="ti ti-device-floppy"></i> Save</button>') +
+      '<span id="prompt-studio-save-status"></span>' +
+    '</div>' +
+  '</div>';
+}
+
+function _promptStudioField(label, id, value, disabled, placeholder) {
+  return '<label><span>' + escHtml(label) + '</span><input id="' + id + '" value="' + escHtml(value || '') + '" placeholder="' + escHtml(placeholder || '') + '"' + disabled + '></label>';
+}
+
+function _promptStudioSelect(label, id, value, disabled) {
+  return '<label><span>' + escHtml(label) + '</span><select id="' + id + '"' + disabled + '><option value="repo"' + (value !== 'user' ? ' selected' : '') + '>Repo</option><option value="user"' + (value === 'user' ? ' selected' : '') + '>User</option></select></label>';
+}
+
+async function savePromptStudioRecord() {
+  var selected = promptStudioState.draft || promptStudioState.records.find(function(r) { return _promptStudioKey(r) === promptStudioState.selectedKey; });
+  if (!selected) return;
+  var status = document.getElementById('prompt-studio-save-status');
+  if (status) status.textContent = 'Saving...';
+  try {
+    var payload = _promptStudioPayload(selected);
+    var r = await fetch('/api/customizations/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    var d = await r.json();
+    if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    promptStudioState.draft = null;
+    promptStudioState.selectedKey = d.record ? _promptStudioKey(d.record) : '';
+    await loadPromptStudio(true);
+    if (typeof showToast === 'function') showToast('Customization saved');
+  } catch (e) {
+    if (status) status.textContent = 'Error: ' + (e.message || String(e));
+  }
+}
+
+function _promptStudioPayload(record) {
+  var kind = record.kind;
+  var name = _value('ps-name').trim().toLowerCase();
+  var scope = _value('ps-scope') || 'repo';
+  var pathValue = _value('ps-path').trim();
+  var body = _value('ps-body');
+  var frontmatter = { name: name };
+  var desc = _value('ps-description').trim();
+  if (desc) frontmatter.description = desc;
+  if (kind === 'prompt') {
+    var agent = _value('ps-agent').trim();
+    var argHint = _value('ps-argument-hint').trim();
+    var tools = _csv('ps-tools');
+    var model = _csv('ps-model');
+    if (agent) frontmatter.agent = agent;
+    if (argHint) frontmatter['argument-hint'] = argHint;
+    if (tools.length) frontmatter.tools = tools;
+    if (model.length) frontmatter.model = model;
+  } else if (kind === 'instruction') {
+    var applyTo = _csv('ps-apply-to');
+    if (applyTo.length) frontmatter.applyTo = applyTo.length === 1 ? applyTo[0] : applyTo;
+  } else if (kind === 'agent') {
+    var agentTools = _csv('ps-tools');
+    var agentModel = _csv('ps-model');
+    var agents = _csv('ps-agents');
+    if (agentTools.length) frontmatter.tools = agentTools;
+    if (agentModel.length) frontmatter.model = agentModel;
+    if (agents.length) frontmatter.agents = agents;
+    frontmatter['user-invocable'] = _checked('ps-user-invocable');
+    frontmatter['disable-model-invocation'] = _checked('ps-disable-model-invocation');
+  } else if (kind === 'skill') {
+    var skillHint = _value('ps-argument-hint').trim();
+    if (skillHint) frontmatter['argument-hint'] = skillHint;
+    frontmatter['user-invocable'] = _checked('ps-user-invocable');
+    frontmatter['disable-model-invocation'] = _checked('ps-disable-model-invocation');
+  }
+  return {
+    kind: kind,
+    name: name,
+    scope: scope,
+    path: pathValue || (record._draft ? '' : record.path || ''),
+    frontmatter: frontmatter,
+    body: body,
+  };
+}
+
+function _value(id) {
+  var el = document.getElementById(id);
+  return el ? el.value || '' : '';
+}
+function _checked(id) {
+  var el = document.getElementById(id);
+  return !!(el && el.checked);
+}
+function _csv(id) {
+  return _value(id).split(',').map(function(s) { return s.trim(); }).filter(Boolean);
 }
 
 async function runPromptStudioPrompt(name) {
@@ -147,12 +315,8 @@ async function sendPromptStudioPrompt(name) {
   if (typeof sendMessage === 'function') sendMessage();
 }
 
-function _promptStudioMeta(label, value) {
-  return '<div><span>' + escHtml(label) + '</span><strong title="' + escHtml(value || '') + '">' + escHtml(value || 'none') + '</strong></div>';
-}
-
 function _promptStudioKey(r) {
-  return [r.kind || '', r.scope || '', r.path || r.name || ''].join('|');
+  return [r._draft ? 'draft' : r.kind || '', r.scope || '', r.path || r.name || ''].join('|');
 }
 
 function _promptStudioKindLabel(kind) {

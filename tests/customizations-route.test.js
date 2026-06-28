@@ -173,6 +173,59 @@ Server rules.
     expect(res.body.ok).toBe(false);
   });
 
+  it('saves a repo prompt and returns the linted registry record', () => {
+    const res = app.invoke('POST', '/api/customizations/save', {
+      body: {
+        kind: 'prompt',
+        scope: 'repo',
+        name: 'triage-bug',
+        frontmatter: { description: 'Use when triaging bug reports.', tools: ['read', 'search'] },
+        body: 'Triage this bug:\n{{input}}\n',
+      },
+    });
+
+    const savedPath = path.join(repoDir, '.github', 'prompts', 'triage-bug.prompt.md');
+    expect(res.statusCode).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.record.kind).toBe('prompt');
+    expect(res.body.record.tools).toEqual(['read', 'search']);
+    expect(fs.readFileSync(savedPath, 'utf8')).toContain('Triage this bug:');
+  });
+
+  it('saves a user hook JSON file', () => {
+    const res = app.invoke('POST', '/api/customizations/save', {
+      body: {
+        kind: 'hooks',
+        scope: 'user',
+        name: 'policy',
+        hooks: { PreToolUse: [{ type: 'command', command: 'node policy.js' }] },
+      },
+    });
+
+    const savedPath = path.join(userDir, 'hooks', 'policy.json');
+    expect(res.statusCode).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.record.kind).toBe('hooks');
+    expect(res.body.record.hookEvents).toEqual(['PreToolUse']);
+    expect(JSON.parse(fs.readFileSync(savedPath, 'utf8')).hooks.PreToolUse[0].command).toBe('node policy.js');
+  });
+
+  it('rejects customization writes outside allowed roots', () => {
+    const outside = path.join(os.tmpdir(), 'outside.prompt.md');
+    const res = app.invoke('POST', '/api/customizations/save', {
+      body: {
+        kind: 'prompt',
+        name: 'escape-test',
+        path: outside,
+        frontmatter: { description: 'Bad path.' },
+        body: 'Nope.',
+      },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body.ok).toBe(false);
+  });
+
   it('returns agent runtime policy for .agent.md files', () => {
     write(path.join(repoDir, '.github', 'agents', 'reviewer.agent.md'), `---
 name: reviewer
