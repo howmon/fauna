@@ -48,7 +48,8 @@ async function loadPromptStudio(force) {
     var r = await fetch('/api/customizations?includeBody=1' + (force ? '&t=' + Date.now() : ''));
     var d = await r.json();
     if (!r.ok || !d) throw new Error((d && d.error) || ('HTTP ' + r.status));
-    promptStudioState.records = d.customizations || [];
+    var runtimeAgents = await _promptStudioLoadFaunaAgents();
+    promptStudioState.records = (d.customizations || []).concat(runtimeAgents);
     if (!promptStudioState.draft && (!promptStudioState.selectedKey || !promptStudioState.records.some(function(rec) { return _promptStudioKey(rec) === promptStudioState.selectedKey; }))) {
       promptStudioState.selectedKey = promptStudioState.records[0] ? _promptStudioKey(promptStudioState.records[0]) : '';
     }
@@ -63,7 +64,7 @@ function renderPromptStudio() {
   var list = document.getElementById('prompt-studio-list');
   var detail = document.getElementById('prompt-studio-detail');
   if (!tabs || !list || !detail) return;
-  var kinds = ['all', 'prompt', 'instruction', 'agent', 'skill', 'hooks', 'agent-instructions'];
+  var kinds = ['all', 'prompt', 'instruction', 'agent', 'fauna-agent', 'skill', 'hooks', 'agent-instructions'];
   tabs.innerHTML = kinds.map(function(kind) {
     var count = kind === 'all' ? promptStudioState.records.length : promptStudioState.records.filter(function(r) { return r.kind === kind; }).length;
     return '<button class="prompt-studio-tab' + (promptStudioState.kind === kind ? ' active' : '') + '" onclick="promptStudioState.kind=\'' + kind + '\';renderPromptStudio()">' + escHtml(_promptStudioKindLabel(kind)) + '<span>' + count + '</span></button>';
@@ -119,6 +120,36 @@ function _promptStudioFilteredRecords() {
   });
 }
 
+async function _promptStudioLoadFaunaAgents() {
+  try {
+    var r = await fetch('/api/agents');
+    var d = await r.json();
+    if (!r.ok || !d || !Array.isArray(d.agents)) return [];
+    return d.agents.map(function(agent) {
+      var name = agent.name || agent.displayName || 'agent';
+      return {
+        kind: 'fauna-agent',
+        name: name,
+        description: agent.description || agent.displayName || '',
+        scope: 'runtime',
+        path: agent._dir || name,
+        frontmatter: { name: name, description: agent.description || '' },
+        tools: Array.isArray(agent.tools) ? agent.tools : [],
+        model: Array.isArray(agent.model) ? agent.model : (agent.model ? [agent.model] : []),
+        agents: Array.isArray(agent.agents) ? agent.agents : [],
+        body: agent.systemPrompt || agent.prompt || '',
+        ok: true,
+        warnings: [],
+        errors: [],
+        _runtimeAgent: true,
+        _source: agent._source || 'agent',
+      };
+    });
+  } catch (_) {
+    return [];
+  }
+}
+
 function _promptStudioCard(r) {
   var key = _promptStudioKey(r);
   var status = r.ok === false ? 'fail' : ((r.warnings && r.warnings.length) ? 'warn' : 'ok');
@@ -138,7 +169,7 @@ function selectPromptStudioRecord(key) {
 
 function _promptStudioDetail(r) {
   var status = r.ok === false ? 'fail' : ((r.warnings && r.warnings.length) ? 'warn' : 'ok');
-  var readOnly = r.kind === 'agent-instructions';
+  var readOnly = r.kind === 'agent-instructions' || r.kind === 'fauna-agent';
   var issues = [].concat(r.errors || [], r.warnings || []);
   var action = r.kind === 'prompt'
     ? '<div class="prompt-studio-run"><textarea id="prompt-studio-run-input" placeholder="Prompt arguments"></textarea><button class="settings-row-btn" onclick="runPromptStudioPrompt(' + JSON.stringify(r.name).replace(/"/g, '&quot;') + ')"><i class="ti ti-player-play"></i> Render Prompt</button><button class="settings-row-btn" onclick="sendPromptStudioPrompt(' + JSON.stringify(r.name).replace(/"/g, '&quot;') + ')"><i class="ti ti-send"></i> Send</button><pre id="prompt-studio-run-output"></pre></div>'
@@ -175,6 +206,11 @@ function _promptStudioEditor(r, readOnly) {
     extra += _promptStudioField('Allowed Subagents', 'ps-agents', agents, disabled, 'researcher, reviewer');
     extra += '<label class="prompt-studio-check"><input id="ps-user-invocable" type="checkbox"' + (r.userInvocable !== false ? ' checked' : '') + disabled + '> User invocable</label>';
     extra += '<label class="prompt-studio-check"><input id="ps-disable-model-invocation" type="checkbox"' + (r.disableModelInvocation === true ? ' checked' : '') + disabled + '> Disable model invocation</label>';
+  } else if (r.kind === 'fauna-agent') {
+    extra += _promptStudioField('Source', 'ps-runtime-source', r._source || 'agent', disabled);
+    extra += _promptStudioField('Tools', 'ps-tools', tools, disabled);
+    extra += _promptStudioField('Model', 'ps-model', model, disabled);
+    extra += _promptStudioField('Subagents', 'ps-agents', agents, disabled);
   } else if (r.kind === 'skill') {
     extra += _promptStudioField('Argument Hint', 'ps-argument-hint', fm['argument-hint'] || '', disabled);
     extra += '<label class="prompt-studio-check"><input id="ps-user-invocable" type="checkbox"' + (r.userInvocable !== false ? ' checked' : '') + disabled + '> User invocable</label>';
@@ -204,7 +240,8 @@ function _promptStudioField(label, id, value, disabled, placeholder) {
 }
 
 function _promptStudioSelect(label, id, value, disabled) {
-  return '<label><span>' + escHtml(label) + '</span><select id="' + id + '"' + disabled + '><option value="repo"' + (value !== 'user' ? ' selected' : '') + '>Repo</option><option value="user"' + (value === 'user' ? ' selected' : '') + '>User</option></select></label>';
+  var runtime = value === 'runtime' ? '<option value="runtime" selected>Runtime</option>' : '';
+  return '<label><span>' + escHtml(label) + '</span><select id="' + id + '"' + disabled + '>' + runtime + '<option value="repo"' + (value !== 'user' && value !== 'runtime' ? ' selected' : '') + '>Repo</option><option value="user"' + (value === 'user' ? ' selected' : '') + '>User</option></select></label>';
 }
 
 function _promptStudioHooksField(hooks, disabled) {
@@ -389,6 +426,7 @@ function _promptStudioKindLabel(kind) {
     prompt: 'Prompts',
     instruction: 'Instructions',
     agent: 'Agents',
+    'fauna-agent': 'Fauna Agents',
     skill: 'Skills',
     hooks: 'Hooks',
     'agent-instructions': 'Legacy',
