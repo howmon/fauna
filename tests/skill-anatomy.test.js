@@ -127,6 +127,16 @@ describe('lintSkill', () => {
     expect(all).toMatch(/use when/i);
   });
 
+  it('accepts common equivalent section headings', () => {
+    const equivalent = VALID
+      .replace('## When to Use', '## Usage')
+      .replace('## Process', '## Implementation Procedure')
+      .replace('## Red Flags', '## Anti-Patterns')
+      .replace('## Verification', '## Validation Checklist');
+    const r = lintSkill(equivalent, { dirName: 'incremental-implementation' });
+    expect(r.warnings).not.toContain(expect.stringMatching(/When to Use|Process|Red Flags|Verification/));
+  });
+
   it('flags dirName/name mismatch', () => {
     const r = lintSkill(VALID, { dirName: 'something-else' });
     expect(r.ok).toBe(false);

@@ -10871,8 +10871,10 @@ mark.find-hit.find-hit-active {
 }
 .prompt-studio-search input { flex: 1; border: 0; outline: 0; background: transparent; color: var(--fau-text); font: 12.5px var(--font); min-width: 0; }
 .prompt-studio-grid {
-  min-height: min(680px, calc(100vh - 230px));
-  flex: 1;
+  height: clamp(420px, calc(100vh - 230px), 760px);
+  max-height: clamp(420px, calc(100vh - 230px), 760px);
+  min-height: 0;
+  flex: 0 0 clamp(420px, calc(100vh - 230px), 760px);
   display: grid;
   grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
   gap: 14px;
@@ -10982,7 +10984,8 @@ mark.find-hit.find-hit-active {
   .prompt-studio-actions { justify-content: flex-start; }
   .prompt-studio-toolbar { align-items: stretch; flex-direction: column; }
   .prompt-studio-search { min-width: 0; width: 100%; }
-  .prompt-studio-grid { grid-template-columns: 1fr; }
+  .prompt-studio-grid { height: auto; max-height: none; flex: 0 0 auto; grid-template-columns: 1fr; }
+  .prompt-studio-list { max-height: min(420px, 45vh); }
   .prompt-studio-editor-grid,
   .prompt-studio-meta-grid,
   .prompt-studio-code-grid,
