@@ -12,6 +12,7 @@ import os from 'os';
 import fs from 'fs';
 import crypto from 'crypto';
 import { checkFilePath, checkNetworkAccess, checkShellCommand, getSandboxedEnv, getResourceLimits, audit } from './agent-sandbox.js';
+import { applyPatchText } from './server/routes/agent-sandbox-files.js';
 
 const _require = createRequire(import.meta.url);
 const { exec: _exec, spawn: _spawn } = _require('child_process');
@@ -345,6 +346,21 @@ function getBuiltInToolDefinitions(permissions) {
         },
       },
     });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'agent_apply_patch',
+        description: 'Primary edit tool. Apply a VS Code-style apply_patch text across one or more files. Prefer this for edits to existing files; use agent_write_file only for brand-new files or whole-file rewrites. Access is restricted to: ' + permissions.fileWrite.join(', '),
+        parameters: {
+          type: 'object',
+          properties: {
+            patch: { type: 'string', description: 'Full patch text including *** Begin Patch and *** End Patch markers' },
+            cwd: { type: 'string', description: 'Optional working directory for relative paths in the patch' },
+          },
+          required: ['patch'],
+        },
+      },
+    });
   }
 
   if (permissions.browser) {
@@ -577,6 +593,16 @@ async function executeBuiltInTool(toolName, args, permissions, agentName, onOutp
         return 'Replaced in ' + abs + ' — ' + Buffer.byteLength(updated) + ' bytes written';
       } catch (e) {
         return 'Error writing file: ' + e.message;
+      }
+    }
+
+    case 'agent_apply_patch': {
+      if (!args.patch || typeof args.patch !== 'string') return 'Error: patch is required';
+      try {
+        const results = applyPatchText(args.patch, args.cwd, { agentName, permissions });
+        return 'Patch applied: ' + JSON.stringify(results);
+      } catch (e) {
+        return (e && e.blocked ? 'BLOCKED: ' : 'Error applying patch: ') + (e && e.message ? e.message : String(e));
       }
     }
 

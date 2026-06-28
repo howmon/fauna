@@ -1390,6 +1390,7 @@ export function registerChatRoute(app, {
       const MUTATING_TOOLS = new Set([
         'fauna_write_file', 'fauna_write_files', 'fauna_apply_patch',
         'fauna_replace_string', 'fauna_write_offloaded',
+        'agent_write_file', 'agent_write_files', 'agent_str_replace', 'agent_apply_patch',
         'fauna_create_agent', 'fauna_patch_agent', 'fauna_uninstall_agent',
         'fauna_emit_widget', 'fauna_save_instruction',
       ]);

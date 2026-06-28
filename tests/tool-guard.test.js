@@ -114,6 +114,7 @@ describe('getToolCategory unchanged', () => {
   it('still classifies known tools correctly', () => {
     expect(getToolCategory('shell_exec')).toBe('shell');
     expect(getToolCategory('agent_write_file')).toBe('file');
+    expect(getToolCategory('agent_apply_patch')).toBe('file');
     expect(getToolCategory('browser_click')).toBe('browser');
     expect(getToolCategory('figma_execute')).toBe('figma');
     expect(getToolCategory('mystery_tool')).toBe('other');
