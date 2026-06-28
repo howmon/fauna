@@ -731,8 +731,10 @@ function _faunaGlobToRegex(glob) {
 }
 
 // Recursive walker yielding relative file paths. Bounded by maxResults and
-// skips _FAUNA_SEARCH_SKIP_DIRS. onFile(relPath) returns false to stop early.
-function _faunaWalk(rootAbs, onFile) {
+// skips _FAUNA_SEARCH_SKIP_DIRS unless includeIgnoredFiles is set.
+// onFile(relPath) returns false to stop early.
+function _faunaWalk(rootAbs, onFile, opts = {}) {
+  const includeIgnoredFiles = opts.includeIgnoredFiles === true;
   const stack = [''];
   while (stack.length) {
     const relDir = stack.pop();
@@ -742,13 +744,13 @@ function _faunaWalk(rootAbs, onFile) {
     catch (_) { continue; }
     for (const ent of entries) {
       const name = ent.name;
-      if (name.startsWith('.') && name !== '.' && name !== '..') {
+      if (!includeIgnoredFiles && name.startsWith('.') && name !== '.' && name !== '..') {
         // Skip dotfiles/dotdirs except a few we want to keep (e.g. .env, .github)
         // Actually skip all dot-prefixed dirs for safety; users rarely grep them.
         if (ent.isDirectory()) continue;
       }
       if (ent.isDirectory()) {
-        if (_FAUNA_SEARCH_SKIP_DIRS.has(name)) continue;
+        if (!includeIgnoredFiles && _FAUNA_SEARCH_SKIP_DIRS.has(name)) continue;
         stack.push(path.join(relDir, name));
       } else if (ent.isFile()) {
         const rel = path.join(relDir, name);
@@ -1505,8 +1507,11 @@ export const SELF_TOOL_DEFS = [
         properties: {
           query: { type: 'string', description: 'Text pattern or regex to search for.' },
           isRegex: { type: 'boolean', description: 'When true, query is a regex. Defaults false (literal substring).' },
+          isRegexp: { type: 'boolean', description: 'VS Code-compatible alias for isRegex.' },
           caseInsensitive: { type: 'boolean', description: 'Defaults true.' },
           include: { type: 'string', description: 'Optional glob to restrict searched files (e.g. "**/*.js").' },
+          includePattern: { type: 'string', description: 'VS Code-compatible alias for include.' },
+          includeIgnoredFiles: { type: 'boolean', description: 'When true, also search normally skipped directories such as node_modules, build output, and dot-directories. Defaults false.' },
           cwd: { type: 'string', description: 'Optional working directory. Defaults to the repo/home root.' },
           maxResults: { type: 'number', description: 'Cap on returned matches. Defaults 200.' },
         },
@@ -2762,7 +2767,8 @@ export async function executeSelfTool(toolName, args, context = {}) {
         }
         const flags = (args.caseInsensitive === false ? '' : 'i') + 'g';
         let re;
-        if (args.isRegex) {
+        const useRegex = args.isRegex === true || args.isRegexp === true;
+        if (useRegex) {
           try { re = new RegExp(query, flags); }
           catch (rxErr) { return JSON.stringify({ ok: false, error: 'invalid regex: ' + rxErr.message }); }
         } else {
@@ -2770,7 +2776,8 @@ export async function executeSelfTool(toolName, args, context = {}) {
           const esc = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
           re = new RegExp(esc, flags);
         }
-        const includeRe = args.include ? _faunaGlobToRegex(String(args.include)) : null;
+        const includeGlob = args.includePattern || args.include;
+        const includeRe = includeGlob ? _faunaGlobToRegex(String(includeGlob)) : null;
         const cap = typeof args.maxResults === 'number' && args.maxResults > 0
           ? Math.min(args.maxResults, 1000)
           : 200;
@@ -2798,9 +2805,9 @@ export async function executeSelfTool(toolName, args, context = {}) {
               if (matches.length >= cap) return false;
             }
           }
-        });
+        }, { includeIgnoredFiles: args.includeIgnoredFiles === true });
         return JSON.stringify({
-          ok: true, root: rootAbs, query, isRegex: !!args.isRegex,
+          ok: true, root: rootAbs, query, isRegex: useRegex,
           filesScanned, count: matches.length, truncated: matches.length >= cap,
           matches,
         });

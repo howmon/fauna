@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { executeSelfTool, isSelfTool, SELF_TOOL_DEFS } from '../self-tools.js';
 
 // Mock memory-store
@@ -289,6 +292,43 @@ describe('self-tools', () => {
       }, mockContext));
       expect(r.ok).toBe(true);
       expect(r.count).toBeGreaterThan(1);
+    });
+
+    it('fauna_grep accepts VS Code-style regex option names', async () => {
+      const r = JSON.parse(await executeSelfTool('fauna_grep', {
+        query: 'PARALLEL_SAFE_TOOLS|STALE_SHRINK_EXEMPT',
+        isRegexp: true,
+        includePattern: '**/chat.js',
+        cwd: repoRoot,
+        maxResults: 20,
+      }, mockContext));
+      expect(r.ok).toBe(true);
+      expect(r.isRegex).toBe(true);
+      expect(r.count).toBeGreaterThan(1);
+      expect(r.matches.every(m => /chat\.js$/.test(m.path))).toBe(true);
+    });
+
+    it('fauna_grep can opt into normally ignored directories', async () => {
+      const dir = fs.mkdtempSync(path.join(os.homedir(), 'fauna-grep-'));
+      const ignoredDir = path.join(dir, 'node_modules');
+      fs.mkdirSync(ignoredDir, { recursive: true });
+      fs.writeFileSync(path.join(ignoredDir, 'pkg.js'), 'const token = "FAUNA_IGNORED_REGEX_SENTINEL";\n', 'utf8');
+
+      const skipped = JSON.parse(await executeSelfTool('fauna_grep', {
+        query: 'FAUNA_IGNORED_REGEX_SENTINEL',
+        cwd: dir,
+      }, mockContext));
+      expect(skipped.ok).toBe(true);
+      expect(skipped.count).toBe(0);
+
+      const included = JSON.parse(await executeSelfTool('fauna_grep', {
+        query: 'FAUNA_IGNORED_REGEX_SENTINEL',
+        cwd: dir,
+        includeIgnoredFiles: true,
+      }, mockContext));
+      expect(included.ok).toBe(true);
+      expect(included.count).toBe(1);
+      expect(included.matches[0].path).toBe(path.join('node_modules', 'pkg.js'));
     });
 
     it('fauna_grep refuses invalid regex with a clear error', async () => {
