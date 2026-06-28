@@ -108,6 +108,44 @@ describe('project routes Kanban autopick wake-up', () => {
     expect(pokeNow).toHaveBeenCalledTimes(1);
   });
 
+  it('treats blank Todo assignee as AI when autopilot is on', async () => {
+    const deps = makeDeps({
+      getProject: vi.fn(() => ({ id: 'p1', kanban: { autopilot: true } })),
+      addBacklogItem: vi.fn((_pid, body) => ({ id: 'w1', title: body.title, column: body.column, assignee: body.assignee, claimedBy: null })),
+    });
+    const app = makeApp();
+    registerProjectRoutes(app, deps);
+
+    const res = app.invoke('POST', '/api/projects/:id/workitems', {
+      params: { id: 'p1' },
+      body: { title: 'ship it', column: 'todo', assignee: null },
+    });
+    await flushDynamicImport();
+
+    expect(res.statusCode).toBe(201);
+    expect(deps.addBacklogItem.mock.calls[0][1]).toMatchObject({ column: 'todo', assignee: 'ai' });
+    expect(pokeNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-arms blank-assignee Todo edits when autopilot is on', async () => {
+    const deps = makeDeps({
+      getProject: vi.fn(() => ({ id: 'p1', kanban: { autopilot: true } })),
+      updateBacklogItem: vi.fn((_pid, _id, body) => ({ id: 'w1', title: body.title, column: body.column, assignee: body.assignee, claimedBy: body.claimedBy || null })),
+    });
+    const app = makeApp();
+    registerProjectRoutes(app, deps);
+
+    const res = app.invoke('PATCH', '/api/projects/:id/workitems/:itemId', {
+      params: { id: 'p1', itemId: 'w1' },
+      body: { title: 'ship it', column: 'todo', assignee: null },
+    });
+    await flushDynamicImport();
+
+    expect(res.statusCode).toBe(200);
+    expect(deps.updateBacklogItem.mock.calls[0][2]).toMatchObject({ column: 'todo', assignee: 'ai', claimedBy: null });
+    expect(pokeNow).toHaveBeenCalledTimes(1);
+  });
+
   it('clears stale claims when humans drag AI cards into In Progress', async () => {
     const stale = { id: 'w1', column: 'in_progress', assignee: 'ai', claimedBy: 'ai:old', runs: [] };
     const rearmed = { ...stale, claimedBy: null };

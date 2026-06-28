@@ -183,6 +183,10 @@ function _aiInFlight(board) {
 const DEFAULT_TASK_MODEL = 'claude-sonnet-4.6';
 
 // Pick the next claimable card for a project, or null.
+function _isAiAssignableCard(it) {
+  return it && (it.assignee === 'ai' || it.assignee === null || it.assignee === undefined || it.assignee === '');
+}
+
 function _pickNext(project) {
   const board = getProjectBoard(project.id);
   if (!board) return null;
@@ -203,13 +207,13 @@ function _pickNext(project) {
   // to in_progress drops — placing a card in in_progress is an explicit
   // human override that says "do this now, ignore dependencies".
   const todoPool = (board.columns.todo || []).filter(it =>
-    it.assignee === 'ai' &&
+    _isAiAssignableCard(it) &&
     !it.claimedBy &&
     !it.lockedByUser &&
     !_isBlocked(it, board)
   );
   const inProgressPool = (board.columns.in_progress || []).filter(it =>
-    it.assignee === 'ai' &&
+    _isAiAssignableCard(it) &&
     !it.claimedBy &&
     !it.lockedByUser &&
     !_inFlight.has(it.id)
@@ -525,7 +529,7 @@ async function _claimAndRun(project, card) {
 
   // Claim + transition into in_progress in a single move call.
   const r = moveWorkItem(project.id, card.id, {
-    column: 'in_progress', claimedBy: agentClaim,
+    column: 'in_progress', assignee: 'ai', claimedBy: agentClaim,
   }, { actor: 'ai', strict: true });
   if (!r.ok) {
     console.warn('[kanban-worker] claim failed for', card.id, '—', r.error);
@@ -941,7 +945,7 @@ function _computeIdleReasons(project) {
   const dailyQuota  = Math.max(0, Number(kanban.dailyAiQuota) || 0);
   const inFlight = _aiInFlight(board);
   const candidates = (board.columns.todo || []).concat(board.columns.in_progress || [])
-    .filter(it => it.assignee === 'ai');
+    .filter(_isAiAssignableCard);
   if (!candidates.length) return null;  // nothing to pick, not interesting
   const capHit  = inFlight >= concurrency;
   const used    = _quotaUsed(project.id);

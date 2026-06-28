@@ -512,7 +512,7 @@ export function registerProjectRoutes(app, deps) {
     const project = typeof getProject === 'function' ? getProject(req.params.id) : null;
     const body = Object.assign({}, req.body || {});
     if (
-      body.assignee === undefined &&
+      (body.assignee === undefined || body.assignee === null || body.assignee === '') &&
       _isPickableColumn(body.column) &&
       project && project.kanban && project.kanban.autopilot
     ) {
@@ -542,7 +542,17 @@ export function registerProjectRoutes(app, deps) {
   // Patch a work item (title, body, rice, tags, assignee, priority, etc.)
   app.patch('/api/projects/:id/workitems/:itemId', (req, res) => {
     if (typeof updateBacklogItem !== 'function') return res.status(501).json({ error: 'kanban not wired' });
-    const item = updateBacklogItem(req.params.id, req.params.itemId, req.body || {});
+    const project = typeof getProject === 'function' ? getProject(req.params.id) : null;
+    const body = Object.assign({}, req.body || {});
+    if (
+      (body.assignee === undefined || body.assignee === null || body.assignee === '') &&
+      _isPickableColumn(body.column) &&
+      project && project.kanban && project.kanban.autopilot
+    ) {
+      body.assignee = 'ai';
+      body.claimedBy = null;
+    }
+    const item = updateBacklogItem(req.params.id, req.params.itemId, body);
     if (!item) return res.status(404).json({ error: 'Item not found' });
     _emitBoardEvent({ type: 'updated', projectId: req.params.id, item });
     if (item.assignee === 'ai' && _isPickableColumn(item.column) && !item.claimedBy && !item.lockedByUser) {

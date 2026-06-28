@@ -220,6 +220,16 @@ describe('_pickNext', () => {
     _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'todo', assignee: 'human' }));
     expect(__test.pickNext(_db.projects[0])).toBe(null);
   });
+  it('picks unassigned todo cards when project autopilot is on', () => {
+    _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true, concurrency: 1 } });
+    _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'todo', assignee: null }));
+    expect(__test.pickNext(_db.projects[0]).id).toBe('c1');
+  });
+  it('picks unassigned in_progress cards when project autopilot is on', () => {
+    _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true, concurrency: 1 } });
+    _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'in_progress', assignee: null, claimedBy: null }));
+    expect(__test.pickNext(_db.projects[0]).id).toBe('c1');
+  });
   it('skips locked cards', () => {
     _db.projects.push({ id: 'p1', name: 'P', kanban: { autopilot: true, concurrency: 1 } });
     _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'todo', assignee: 'ai', lockedByUser: true }));
