@@ -621,7 +621,20 @@
         body: JSON.stringify({ author: 'human', body: body }),
       })
       .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-      .then(function() { el.value = ''; refreshKanbanBoard(); _toast('Comment added'); })
+      .then(function(out) {
+        el.value = '';
+        var s = window._kbState;
+        var updated = out && out.item;
+        var local = s.items.find(function(x) { return x.id === itemId; });
+        if (updated && local) Object.assign(local, updated);
+        else if (local && out && out.comment) {
+          local.comments = local.comments || [];
+          local.comments.push(out.comment);
+        }
+        _renderGrid();
+        openWorkItemModal(projectId, itemId);
+        _toast('Comment added');
+      })
       .catch(function(e) { _toast('Comment failed: ' + e.message, true); });
   };
 

@@ -251,6 +251,7 @@ describe('project routes Kanban autopick wake-up', () => {
     await flushDynamicImport();
 
     expect(res.statusCode).toBe(201);
+    expect(res.body).toMatchObject({ comment, item });
     expect(conversationStore.put).toHaveBeenCalledOnce();
     expect(conversationStore.put.mock.calls[0][1].messages[0]).toMatchObject({
       role: 'user',

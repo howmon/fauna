@@ -727,7 +727,7 @@ export function registerProjectRoutes(app, deps) {
         .then(mod => mod.steerCard && mod.steerCard(req.params.id, req.params.itemId, comment.body))
         .catch(e => console.warn('[projects-route] steerCard failed:', e?.message || e));
     }
-    res.status(201).json(comment);
+    res.status(201).json({ comment, item: commentItem });
   });
 
   // Prioritise + auto-promote new items into Todo. Body: { method?:'rice'|'moscow' }
