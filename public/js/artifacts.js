@@ -4,6 +4,7 @@ var _codePreviewRegistry = {}; // id → rawText for Preview buttons on code blo
 
 var ARTIFACT_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 var ARTIFACT_THUMB_IMAGE_BASE64_MAX = 160000;
+var ARTIFACT_LIBRARY_BATCH_SIZE = 60;
 var ARTIFACT_SNAPSHOT_TYPES = { html:1, design:1, svg:1, markdown:1, summary:1, web:1, csv:1, json:1, text:1, code:1, files:1 };
 var _artifactSnapshotQueue = Object.create(null);
 
@@ -15,18 +16,6 @@ document.addEventListener('error', function(ev) {
   var icon = wrap.getAttribute('data-icon') || 'ti-file';
   wrap.classList.add('artifact-thumb-fallback');
   wrap.innerHTML = '<i class="ti ' + icon + '"></i>';
-  var artifactId = wrap.getAttribute('data-artifact-id');
-  var convId = wrap.getAttribute('data-conv-id');
-  if (artifactId && typeof _queueArtifactSnapshotObject === 'function') {
-    var conv = convId && typeof getConv === 'function' ? getConv(convId) : null;
-    var artifact = (state.artifacts || []).find(function(x) { return x.id === artifactId; }) ||
-      (conv && Array.isArray(conv.artifacts) ? conv.artifacts.find(function(x) { return x.id === artifactId; }) : null);
-    if (artifact && ARTIFACT_SNAPSHOT_TYPES[artifact.type]) {
-      artifact.thumbnail = '';
-      artifact.thumbnailKind = '';
-      _queueArtifactSnapshotObject(artifact, convId || state.currentId);
-    }
-  }
 }, true);
 
 // Prune artifacts older than 30 days from a conversation's persisted list
@@ -86,12 +75,9 @@ function _buildArtifactThumbnail(a) {
 }
 
 function _artifactThumbnailMarkup(a, className) {
-  if (a && ARTIFACT_SNAPSHOT_TYPES[a.type] && a.thumbnailKind !== 'snapshot') {
-    _queueArtifactSnapshotObject(a, a.convId || state.currentId);
-  }
   var thumb = (a && a.thumbnail) || _buildArtifactThumbnail(a);
   var icon = artifactTypeIcon(a && a.type);
-  var attrs = ' data-artifact-thumb data-icon="' + escHtml(icon) + '" data-artifact-id="' + escHtml(a && a.id || '') + '" data-conv-id="' + escHtml(a && a.convId || '') + '"';
+  var attrs = ' data-artifact-thumb data-icon="' + escHtml(icon) + '"';
   if (!thumb) return '<div class="' + className + ' artifact-thumb-fallback"' + attrs + '><i class="ti ' + icon + '"></i></div>';
   return '<div class="' + className + '"' + attrs + '><img src="' + escHtml(thumb) + '" alt="" loading="lazy"></div>';
 }
@@ -911,6 +897,7 @@ function updateArtifactLibraryFilter(value) {
   var page = _getAppPageBody('artifacts') || document.getElementById('all-artifacts-page');
   if (!page) return;
   page._filter = value || '';
+  page._visibleLimit = ARTIFACT_LIBRARY_BATCH_SIZE;
   renderAllArtifactsPage();
 }
 
@@ -919,6 +906,7 @@ function updateArtifactLibraryProject(value) {
   if (!page) return;
   page._projectFilter = value || '';
   page._conversationFilter = '';
+  page._visibleLimit = ARTIFACT_LIBRARY_BATCH_SIZE;
   renderAllArtifactsPage();
 }
 
@@ -926,6 +914,14 @@ function updateArtifactLibraryConversation(value) {
   var page = _getAppPageBody('artifacts') || document.getElementById('all-artifacts-page');
   if (!page) return;
   page._conversationFilter = value || '';
+  page._visibleLimit = ARTIFACT_LIBRARY_BATCH_SIZE;
+  renderAllArtifactsPage();
+}
+
+function showMoreArtifacts() {
+  var page = _getAppPageBody('artifacts') || document.getElementById('all-artifacts-page');
+  if (!page) return;
+  page._visibleLimit = (page._visibleLimit || ARTIFACT_LIBRARY_BATCH_SIZE) + ARTIFACT_LIBRARY_BATCH_SIZE;
   renderAllArtifactsPage();
 }
 
@@ -952,6 +948,9 @@ function renderAllArtifactsPage() {
         String(a.projectName || '').toLowerCase().includes(filter);
     });
   }
+  var visibleLimit = page._visibleLimit || ARTIFACT_LIBRARY_BATCH_SIZE;
+  var visibleArtifacts = artifacts.slice(0, visibleLimit);
+  var hasMore = artifacts.length > visibleArtifacts.length;
   var projectOptions = _artifactProjectFilterOptions(allArtifacts, projectFilter);
   var conversationOptions = _artifactConversationFilterOptions(allArtifacts, projectFilter, conversationFilter);
   page.innerHTML =
@@ -966,7 +965,8 @@ function renderAllArtifactsPage() {
         '<label><span>Conversation</span><select onchange="updateArtifactLibraryConversation(this.value)">' + conversationOptions + '</select></label>' +
         ((projectFilter || conversationFilter || filter) ? '<button class="proj-action-btn" onclick="updateArtifactLibraryFilter(\'\');updateArtifactLibraryProject(\'\')"><i class="ti ti-x"></i> Clear</button>' : '') +
       '</div>' +
-      '<div class="artifact-library ' + (view === 'list' ? 'list' : 'grid') + '">' + _renderArtifactLibraryItems(artifacts, view) + '</div>' +
+      '<div class="artifact-library ' + (view === 'list' ? 'list' : 'grid') + '">' + _renderArtifactLibraryItems(visibleArtifacts, view) + '</div>' +
+      (hasMore ? '<div class="home-link-row" style="padding:0 24px 28px"><button class="proj-action-btn" onclick="showMoreArtifacts()"><i class="ti ti-chevron-down"></i> Show ' + Math.min(ARTIFACT_LIBRARY_BATCH_SIZE, artifacts.length - visibleArtifacts.length) + ' more of ' + artifacts.length + '</button></div>' : '') +
     '</div>';
 }
 

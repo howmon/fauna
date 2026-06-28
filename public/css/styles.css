@@ -6822,7 +6822,7 @@ textarea.builder-find-active {
   align-content: start; gap: 20px;
 }
 .artifact-library-card {
-  display: flex; flex-direction: column; gap: 10px; min-height: 290px;
+  display: flex; flex-direction: column; gap: 10px; min-height: 330px;
   border: none; border-radius: 10px; background: color-mix(in srgb, var(--fau-surface1) 86%, transparent);
   padding: 14px; color: var(--fau-text);
   box-shadow: 0 8px 22px rgba(15, 23, 42, .045);
@@ -6832,16 +6832,17 @@ textarea.builder-find-active {
   width: 100%; aspect-ratio: 16 / 10; border-radius: 9px; overflow: hidden;
   background: var(--fau-surface2); border: 1px solid var(--fau-border);
 }
-.artifact-library-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.artifact-library-card-top { display: flex; align-items: center; gap: 8px; color: var(--fau-text-muted); font-size: 12px; font-weight: 700; }
+.artifact-library-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; background: var(--fau-surface); }
+.artifact-library-card-top { display: flex; align-items: center; gap: 8px; color: var(--fau-text-muted); font-size: 12px; font-weight: 700; min-width: 0; }
+.artifact-library-card-top span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-library-card-top .ti { color: var(--accent); font-size: 17px; }
 .artifact-library-card h3 {
-  margin: 0; font-size: 15px; line-height: 1.3; letter-spacing: 0;
-  overflow: hidden; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  margin: 0; font-size: 15px; line-height: 1.35; letter-spacing: 0;
+  overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; line-clamp: 3; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
 }
-.artifact-library-card p { margin: 0; color: var(--fau-text-muted); font-size: 12px; line-height: 1.4; min-height: 34px; }
+.artifact-library-card p { margin: 0; color: var(--fau-text-muted); font-size: 12px; line-height: 1.4; min-height: 34px; overflow-wrap: anywhere; }
 .artifact-library-card-meta { color: var(--fau-text-dim); font-size: 11px; margin-top: auto; }
-.artifact-library-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.artifact-library-card-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .artifact-library.list { display: flex; flex-direction: column; gap: 0; padding-top: 0; }
 .artifact-library-row {
   display: grid; grid-template-columns: minmax(180px, 1.6fr) minmax(120px, 1fr) minmax(150px, 1.2fr) 88px minmax(160px, auto);
@@ -6860,9 +6861,9 @@ textarea.builder-find-active {
   width: 58px; height: 38px; border-radius: 6px; overflow: hidden; flex-shrink: 0;
   background: var(--fau-surface2); border: 1px solid var(--fau-border);
 }
-.artifact-library-row-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.artifact-library-row-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; background: var(--fau-surface); }
 .artifact-library-name span { min-width: 0; }
-.artifact-library-name strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: normal; line-height: 1.25; }
+.artifact-library-name strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: normal; line-height: 1.25; overflow-wrap: anywhere; }
 .artifact-library-name small { display: block; color: var(--fau-text-muted); font-size: 11px; margin-top: 2px; }
 .artifact-library-muted { color: var(--fau-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-library-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }

@@ -15,6 +15,8 @@ import { setDefaultScrubOpts } from './server/lib/redactor.js';
 import { buildShellEnv } from './server/lib/shell-env.js';
 import { createSelfUpdater } from './lib/self-updater.js';
 
+process.noDeprecation = true;
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT      = 3737;
 const IS_WIN    = process.platform === 'win32';

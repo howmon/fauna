@@ -72,7 +72,7 @@
     "marked": "^18.0.3",
     "multer": "^2.1.1",
     "nodejs-whisper": "^0.3.0",
-    "openai": "^4.67.0",
+    "openai": "^6.45.0",
     "pdf-to-img": "^6.1.0",
     "playwright-core": "^1.58.2",
     "qrcode": "^1.5.4",
@@ -81,7 +81,7 @@
   },
   "devDependencies": {
     "electron": "^41.0.3",
-    "electron-builder": "^26.8.1",
+    "electron-builder": "^26.15.3",
     "vitest": "^4.1.7"
   },
   "overrides": {
@@ -132,6 +132,7 @@
       "minimumSystemVersion": "12.0",
       "icon": "assets/icon.icns",
       "identity": "318580CBB9288DC0C5A72DA6F25F1DB983CFB20A",
+      "notarize": false,
       "target": [
         {
           "target": "zip",
@@ -198,7 +199,6 @@
       "fauna-bot/package.json",
       "fauna-bot/node_modules/**",
       "package.json",
-      "node_modules/**",
       "!node_modules/@xenova/transformers/**",
       "node_modules/@xenova/transformers/dist/transformers.min.js",
       "node_modules/@xenova/transformers/dist/ort-wasm-simd-threaded.wasm",
