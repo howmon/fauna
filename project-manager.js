@@ -117,6 +117,11 @@ function readProjects() {
     if (p.kanban && p.kanban.dailyAiQuota === 10) {
       p.kanban.dailyAiQuota = 0;
     }
+    if (!p.kanban || typeof p.kanban !== 'object') p.kanban = {};
+    if (p.kanban.autopilotDefaultOnV1 !== true) {
+      p.kanban.autopilot = true;
+      p.kanban.autopilotDefaultOnV1 = true;
+    }
   }
   return raw;
 }
@@ -202,13 +207,14 @@ export function createProject(opts = {}) {
     // Lightweight backlog: feature requests + grooming notes the agent can
     // append, list, and prioritize without leaving the project.
     backlog: Array.isArray(opts.backlog) ? opts.backlog : [],
-    // Kanban / autopilot config. Off by default. When `kanbanAutopilot` is
-    // true, the kanban-worker periodically claims Todo cards assigned to AI
-    // and runs them through the pipeline. See kanban-worker.js.
+    // Kanban / autopilot config. On by default: Todo/In Progress cards assigned
+    // to AI are picked up automatically by kanban-worker.js. Users can still
+    // opt out per project by turning autopilot off in the board toolbar.
     kanban: (function buildKanban() {
       const userKanban = opts.kanban || {};
       const merged = Object.assign({
-        autopilot: false,            // master switch for AI auto-claim
+        autopilot: true,             // master switch for AI auto-claim
+        autopilotDefaultOnV1: true,  // migration marker; preserves later opt-out
         concurrency: 3,              // max in-flight AI items per project
         archiveDelayMin: 10,         // auto-archive done items after N min
         maxAiRetries: 2,             // failures before card returns to human
@@ -306,7 +312,13 @@ export function updateProject(id, patch = {}) {
   // Allowed top-level fields
   const allowed = ['name', 'description', 'icon', 'color', 'rootPath', 'defaultAgent', 'permissions', 'allowFileEditing', 'design', 'autonomousMode', 'acceptanceCriteria', 'qa', 'deploy', 'backlog', 'kanban', 'memoryConfig', 'githubIntegrations', 'checkpoints'];
   for (const k of allowed) {
-    if (patch[k] !== undefined) p[k] = patch[k];
+    if (patch[k] === undefined) continue;
+    if (k === 'kanban' && patch.kanban && typeof patch.kanban === 'object') {
+      p.kanban = Object.assign({}, p.kanban || {}, patch.kanban);
+      if (p.kanban.autopilot === false) p.kanban.autopilotDefaultOnV1 = true;
+    } else {
+      p[k] = patch[k];
+    }
   }
   if (patch.color && !ACCENT_COLORS.includes(patch.color)) p.color = 'teal';
   p.updatedAt = now();

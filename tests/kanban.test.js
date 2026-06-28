@@ -39,6 +39,7 @@ vi.mock('fs', async () => {
 
 const pm = await import('../project-manager.js');
 const {
+  createProject, updateProject,
   addBacklogItem, updateBacklogItem, listBacklog, prioritizeBacklog,
   moveWorkItem, addWorkItemComment, setWorkItemLock,
   listAllWorkItems, getProjectBoard, WORK_ITEM_COLUMNS,
@@ -239,6 +240,34 @@ describe('getProjectBoard', () => {
     expect(board.kanban).toBeDefined();
     expect(board.kanban.autopilot).toBe(true);
     expect(board.kanban.concurrency).toBe(2);
+  });
+
+  it('defaults new projects to autopilot on', () => {
+    const project = createProject({ name: 'Autopilot Project' });
+    expect(project.kanban.autopilot).toBe(true);
+    expect(project.kanban.autopilotDefaultOnV1).toBe(true);
+  });
+
+  it('migrates old default-off projects to autopilot on once', () => {
+    seedProject('proj-1', { kanban: { autopilot: false, concurrency: 2 } });
+    const board = getProjectBoard('proj-1');
+    expect(board.kanban.autopilot).toBe(true);
+    expect(board.kanban.autopilotDefaultOnV1).toBe(true);
+  });
+
+  it('preserves explicit autopilot opt-out after default-on migration', () => {
+    seedProject('proj-1', { kanban: { autopilot: false, autopilotDefaultOnV1: true, concurrency: 2 } });
+    const board = getProjectBoard('proj-1');
+    expect(board.kanban.autopilot).toBe(false);
+  });
+
+  it('preserves explicit opt-out when kanban is patched partially', () => {
+    seedProject('proj-1', { kanban: { autopilot: true, autopilotDefaultOnV1: true, concurrency: 3 } });
+    const updated = updateProject('proj-1', { kanban: { autopilot: false } });
+    expect(updated.kanban.autopilot).toBe(false);
+    expect(updated.kanban.autopilotDefaultOnV1).toBe(true);
+    expect(updated.kanban.concurrency).toBe(3);
+    expect(getProjectBoard('proj-1').kanban.autopilot).toBe(false);
   });
 });
 
