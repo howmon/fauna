@@ -292,7 +292,7 @@ function getSandboxedEnv(permissions) {
     HOME: os.homedir(),
     TERM: 'xterm-256color',
     LANG: process.env.LANG || 'en_US.UTF-8',
-    SHELL: '/bin/zsh',
+    SHELL: process.platform === 'win32' ? 'powershell.exe' : '/bin/zsh',
     USER: 'agent',      // hide real username
     HOSTNAME: 'sandbox', // hide real hostname
   };
