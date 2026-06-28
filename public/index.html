@@ -252,9 +252,6 @@
         <button type="button" id="topbar-crumb-sep" class="topbar-crumb-sep-btn" style="display:none" onclick="event.stopPropagation();toggleBreadcrumbChevronMenu(event)" title="Browse chats in this project">
           <i class="ti ti-chevron-right"></i>
         </button>
-        <button type="button" id="topbar-project-settings-btn" class="topbar-project-settings-btn" style="display:none" onclick="event.stopPropagation();openProjectHub('settings')" title="Project settings">
-          <i class="ti ti-settings"></i>
-        </button>
         <span id="topbar-title" class="topbar-crumb-conv">New conversation</span>
       </div>
       <!-- hidden compat stubs for existing JS -->
@@ -263,6 +260,9 @@
       <select id="model-select" onchange="onModelChange(this.value)"></select>
       <button class="topbar-update-btn" id="topbar-update-btn" type="button" style="display:none" onclick="_installFaunaUpdate()" title="Install app update"><i class="ti ti-download"></i> <span>Update</span></button>
       <!-- Right side: voice + notifications + overflow (account gear moved into Settings panel) -->
+      <button type="button" id="topbar-project-settings-btn" class="topbar-project-settings-btn" style="display:none" onclick="event.stopPropagation();openProjectHub('settings')" title="Project settings">
+        <i class="ti ti-settings"></i>
+      </button>
       <button class="topbar-btn voice-mic-btn" id="voice-mic-btn" data-voice-state="off" title="Voice control — click to toggle, say wake word to activate"><i class="ti ti-microphone-off"></i></button>
       <button class="topbar-icon-btn" id="topbar-account-btn" onclick="openAccountPage()" title="Account" style="display:none">
         <i class="ti ti-user-circle" id="topbar-account-icon"></i>

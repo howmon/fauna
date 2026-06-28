@@ -807,13 +807,13 @@ body.is-resizing webview { pointer-events: none !important; }
 .topbar-crumb-sep-btn .ti { font-size: 12px; }
 .topbar-project-settings-btn {
   background: none; border: 1px solid transparent;
-  width: 24px; height: 24px; border-radius: var(--radius-sm); flex-shrink: 0;
+  width: 30px; height: 30px; border-radius: 9px; flex-shrink: 0;
   color: var(--fau-text-muted); cursor: pointer; line-height: 1;
   display: inline-flex; align-items: center; justify-content: center;
   transition: background .12s, color .12s, border-color .12s;
 }
 .topbar-project-settings-btn:hover { background: var(--fau-surface2); color: var(--fau-text); border-color: var(--fau-border); }
-.topbar-project-settings-btn .ti { font-size: 13px; }
+.topbar-project-settings-btn .ti { font-size: 15px; }
 
 /* ── Breadcrumb chevron popover ────────────────────────────────────── */
 .crumb-chev-menu {
@@ -6645,10 +6645,21 @@ textarea.builder-find-active {
   width: 100%; border: 1px solid color-mix(in srgb, var(--fau-border) 70%, transparent);
   border-radius: 10px; background: var(--fau-surface); color: var(--fau-text);
   display: flex; flex-direction: column; gap: 9px; padding: 8px; text-align: left;
-  font-family: var(--font); cursor: pointer; min-width: 0;
+  font-family: var(--font); cursor: pointer; min-width: 0; position: relative;
   transition: border-color .15s, box-shadow .15s, transform .15s;
 }
 .home-artifact-tile:hover { border-color: var(--accent); box-shadow: var(--shadow-4); transform: translateY(-1px); }
+.home-artifact-delete {
+  position: absolute; top: 12px; right: 12px; width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid rgba(243,110,110,.32); border-radius: 8px;
+  background: color-mix(in srgb, var(--fau-surface) 88%, transparent);
+  color: var(--error); cursor: pointer; opacity: 0; transform: translateY(-2px);
+  transition: opacity .15s, transform .15s, background .15s;
+}
+.home-artifact-tile:hover .home-artifact-delete,
+.home-artifact-delete:focus-visible { opacity: 1; transform: translateY(0); }
+.home-artifact-delete:hover { background: rgba(243,110,110,.12); }
 .home-artifact-thumb {
   width: 100%; aspect-ratio: 16 / 10; border-radius: 8px; overflow: hidden;
   background: var(--fau-surface2); border: 1px solid var(--fau-border);
