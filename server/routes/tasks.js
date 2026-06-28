@@ -91,7 +91,7 @@ export function registerTaskRoutes(app, deps) {
       // (possibly null) original task.model, so the live viewer shows
       // "claude-sonnet-4.6" instead of "default" for autopilot tasks
       // that were created with model:null.
-      model: task._resolvedModel || task.model || null,
+      model: task._resolvedModel || task.model || 'claude-sonnet-4.6',
       agents: Array.isArray(task.agents) ? task.agents : [],
       status: task.status,
       // Hint to the UI that this snapshot is from a previous interrupted run.

@@ -180,6 +180,8 @@ function _aiInFlight(board) {
   return n;
 }
 
+const DEFAULT_TASK_MODEL = 'claude-sonnet-4.6';
+
 // Pick the next claimable card for a project, or null.
 function _pickNext(project) {
   const board = getProjectBoard(project.id);
@@ -335,9 +337,9 @@ function _spawnTaskForCard(project, card) {
       browser: !!(project.permissions && project.permissions.browser),
       figma: false,
     },
-    // Per-card model override (set via the work-item modal). Falls back
-    // to null which means task-runner inherits from app settings.
-    model: card.model || null,
+    // Per-card model override (set via the work-item modal). Persist the
+    // concrete runner fallback so task/task-live UIs never show an empty model.
+    model: card.model || DEFAULT_TASK_MODEL,
     maxRetries: 0,         // we handle retry at the card level
     timeout: 30 * 60_000,
     maxSteps: 80,
@@ -457,6 +459,10 @@ export async function recoverInterruptedRuns() {
   // Release its claim immediately so the next poll re-picks it (the picker
   // now accepts unclaimed in_progress cards).
   try { _recoverOrphans({ aggressive: true }); } catch (_) {}
+  // Recovery just made stale cards pickable again. If the worker is live,
+  // claim them immediately instead of waiting for the delayed startup tick
+  // or the next 15s interval.
+  if (_running) _pollTick();
 }
 
 // ── Claim + run one card ─────────────────────────────────────────────────

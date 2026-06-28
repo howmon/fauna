@@ -447,7 +447,7 @@
     host.innerHTML = _renderModal({
       mode: 'new', projectId: pid, item: {
         title: '', body: '', column: 'backlog', assignee: null,
-        priority: 'p2', acceptance: '', tags: [], model: null,
+        priority: 'p2', acceptance: '', tags: [], model: _currentTaskModelFallback(),
       },
     });
     _populateModelSelect();
@@ -465,21 +465,33 @@
   // Populate the model dropdown in the open work-item modal from /api/models.
   // We add the options lazily so the initial render isn't blocked on a fetch,
   // and we preserve the currently-selected value (set as data-current on render).
+  function _currentTaskModelFallback() {
+    try {
+      if (typeof state !== 'undefined' && state && state.model) return state.model;
+    } catch (_) {}
+    return 'claude-sonnet-4.6';
+  }
+
   function _populateModelSelect() {
     var sel = document.getElementById('kb-m-model');
     if (!sel) return;
-    var current = sel.getAttribute('data-current') || '';
+    var current = sel.getAttribute('data-current') || _currentTaskModelFallback();
     fetch('/api/models').then(function(r) { return r.json(); }).then(function(d) {
       var models = (d && d.models) || [];
       if (!models.length) return;
-      var html = '<option value=""' + (!current ? ' selected' : '') + '>— Default —</option>';
+      var html = '<option value="">Default — ' + _esc(current) + '</option>';
+      var foundCurrent = false;
       models.forEach(function(mod) {
         var id = mod.id || mod.name;
         var label = mod.name || mod.id;
         if (!id) return;
+        if (current === id) foundCurrent = true;
         html += '<option value="' + _esc(id) + '"' +
           (current === id ? ' selected' : '') + '>' + _esc(label) + '</option>';
       });
+      if (current && !foundCurrent) {
+        html += '<option value="' + _esc(current) + '" selected>' + _esc(current) + '</option>';
+      }
       sel.innerHTML = html;
     }).catch(function() { /* leave the default-only dropdown in place */ });
   }
@@ -533,9 +545,8 @@
               '</button>' +
             '</label>' : '') +
             '<label>Model' +
-              '<select id="kb-m-model" data-current="' + _esc(m.model || '') + '">' +
-                '<option value=""' + (!m.model ? ' selected' : '') + '>— Default —</option>' +
-                (m.model ? '<option value="' + _esc(m.model) + '" selected>' + _esc(m.model) + '</option>' : '') +
+              '<select id="kb-m-model" data-current="' + _esc(m.model || _currentTaskModelFallback()) + '">' +
+                '<option value="' + _esc(m.model || _currentTaskModelFallback()) + '" selected>' + _esc(m.model || _currentTaskModelFallback()) + '</option>' +
               '</select>' +
             '</label>' +
           '</div>' +

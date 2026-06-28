@@ -111,7 +111,7 @@ describe('GET /api/tasks/:id/live', () => {
     expect(res.body.current.step).toBe(2);
   });
 
-  it('returns null model when the task has no model set (UI shows "default")', () => {
+  it('returns the runner fallback when the task has no model set', () => {
     deps.getTask.mockReturnValue({ id: 't', title: 'x', model: null, status: 'running' });
     deps.isTaskRunning.mockReturnValue(true);
     deps.getRunningTaskInfo.mockReturnValue({
@@ -120,12 +120,12 @@ describe('GET /api/tasks/:id/live', () => {
 
     const res = app.invoke('GET', '/api/tasks/:id/live', { params: { id: 't' } });
 
-    expect(res.body.model).toBeNull();
+    expect(res.body.model).toBe('claude-sonnet-4.6');
   });
 
   it('prefers _resolvedModel over the raw task.model (autopilot tasks)', () => {
-    // kanban-worker passes model:null to createTask; the runner then writes
-    // back _resolvedModel='claude-sonnet-4.6' so the UI doesn't say "default".
+    // Older autopilot tasks may still have model:null; once the runner writes
+    // back _resolvedModel, the UI should prefer what actually ran.
     deps.getTask.mockReturnValue({
       id: 't', title: 'x', model: null, status: 'running',
       _resolvedModel: 'claude-sonnet-4.6',

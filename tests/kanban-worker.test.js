@@ -837,6 +837,7 @@ describe('claim-time auto-close (pre-flight verifier)', () => {
 
     expect(card.column).toBe('in_progress');
     expect(_createdTasks.length).toBe(1);
+    expect(_createdTasks[0].model).toBe('claude-sonnet-4.6');
   });
 
   it('falls through when pre-flight verifier throws', async () => {
