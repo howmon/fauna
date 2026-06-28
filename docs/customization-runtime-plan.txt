@@ -1,0 +1,134 @@
+Fauna Customization Runtime Plan
+
+Goal: bring Fauna to VS Code/Copilot-level prompt handling by making prompts, instructions, agents, skills, hooks, and tool policy first-class runtime objects.
+
+Target capabilities
+
+Fauna should support these customization primitives:
+
+- Prompt: .github/prompts/*.prompt.md and ~/.config/fauna/prompts/*.prompt.md for reusable slash-command task templates.
+- Instruction: .github/instructions/*.instructions.md and ~/.config/fauna/instructions/*.instructions.md for scoped guidance discovered by description or applyTo.
+- Agent: .github/agents/*.agent.md and ~/.config/fauna/agents/*.agent.md for named personas with model/tool/subagent policy.
+- Skill: skills/<name>/SKILL.md, .github/skills/<name>/SKILL.md, and user skill roots for multi-step workflows with assets and references.
+- Hooks: .github/hooks/*.json, ~/.config/fauna/hooks/*.json, and inline agent hooks for deterministic lifecycle automation and policy enforcement.
+- Legacy instructions: AGENTS.md and .github/copilot-instructions.md for always-on repo/global guidance.
+
+Frontmatter contract
+
+Prompts:
+---
+name: review-api-change
+description: "Use when reviewing API route changes."
+argument-hint: "Route or diff to review"
+agent: code-reviewer
+model: [Claude Sonnet 4.5, GPT-5]
+tools: [read, search]
+---
+
+Instructions:
+---
+description: "Use when editing Express routes or middleware."
+applyTo: "server/**/*.js"
+---
+
+Agents:
+---
+name: code-reviewer
+description: "Use when reviewing code changes for bugs and regressions."
+tools: [read, search, execute]
+model: [Claude Sonnet 4.5, GPT-5]
+agents: []
+user-invocable: true
+disable-model-invocation: false
+---
+
+Skills:
+---
+name: debugging-and-error-recovery
+description: "Use when diagnosing failing tests, crashes, hangs, or regressions."
+argument-hint: "Describe the failure"
+user-invocable: true
+disable-model-invocation: false
+---
+
+Runtime architecture
+
+1. lib/customization-registry.js
+- Discovers all primitives.
+- Parses frontmatter.
+- Lints shape and policy warnings.
+- Returns normalized records for UI, chat, and task runner.
+
+2. server/routes/customizations.js
+- Exposes GET /api/customizations.
+- Supports kind, includeBody, and includeUser filters.
+- Defaults to metadata only so large prompt bodies do not flood the UI.
+
+3. Instruction resolver
+- Selects .instructions.md by applyTo file globs.
+- Falls back to semantic description matching when no file match exists.
+- Keeps legacy AGENTS.md and copilot-instructions.md as broad guidance.
+
+4. Prompt runner
+- Turns .prompt.md into slash commands.
+- Resolves argument text, selected files, model, agent, and tools.
+- Builds a request from prompt body plus relevant instruction context.
+
+5. Agent runtime
+- Loads .agent.md as executable policy objects.
+- Applies model fallback, tool restrictions, subagent restrictions, and inline hooks.
+- Adds custom agents to the UI agent picker and model-invocation catalog.
+
+6. Tool policy resolver
+- Applies priority: prompt tools > agent tools > skill tools > default scorer.
+- Supports tools: [] for conversational-only mode.
+- Rejects unknown tools with linter warnings.
+
+7. Hook runtime
+- Supports SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PreCompact, SubagentStart, SubagentStop, and Stop.
+- Accepts JSON stdin and JSON stdout.
+- Allows allow, ask, deny, and blocking post-tool decisions.
+
+8. Verification gate
+- Before autonomous completion, collects active skill verification checks and hook validators.
+- Requires evidence from commands, files, or tool output before marking work complete.
+
+Build order
+
+1. Registry foundation and API.
+2. Instruction resolver with applyTo matching.
+3. Prompt slash command catalog and runner.
+4. Agent runtime with model/tool policy.
+5. Tool policy resolver integration.
+6. Hook runtime and tool interception.
+7. Autonomous verification gate.
+8. Prompt Studio UI for authoring, linting, and testing customizations.
+
+Current status
+
+Implemented:
+- lib/customization-registry.js
+- GET /api/customizations
+- GET /api/customizations/relevant-instructions
+- POST /api/customizations/run-prompt
+- GET /api/customizations/agent-policy/:name
+- Prompt slash commands loaded dynamically from the customization registry.
+- Skill and agent slash entries loaded dynamically from the customization registry.
+- .agent.md runtime policy resolver for system prompt, model fallback, tool allowlists, subagent restrictions, and invocation flags.
+- Tool alias expansion and policy precedence helpers.
+- Live /api/chat tool catalog filtering from prompt/agent/skill tool policy.
+- Prompt slash commands pass transient tool policy into the next chat turn.
+- Tests for registry discovery/parsing/linting.
+- Tests for route metadata and opt-in body loading.
+- Tests for prompt invocation and relevant instruction resolution.
+- Tests for agent policy and prompt/agent tool policy metadata.
+- Tests for tool schema filtering by resolved tool policy.
+- Active .agent.md policies participate in /api/chat prompt assembly without requiring legacy agent.json.
+- Custom .agent.md entries are merged into the normal @agent activation catalog.
+- Hook runtime foundation for JSON stdin/stdout commands.
+- PreToolUse and PostToolUse hooks intercept live tool execution.
+- Tests for hook discovery, blocking, and system-message output.
+
+Next implementation slice:
+- Add autonomous verification gate before completion markers.
+- Add Prompt Studio UI for authoring, linting, and test-running customizations.

@@ -888,6 +888,10 @@ async function sendMessage(opts) {
       };
     })
   };
+  if (conv._pendingToolPolicy) {
+    userMsg._toolPolicy = conv._pendingToolPolicy;
+    delete conv._pendingToolPolicy;
+  }
   conv.messages.push(userMsg);
 
   bumpConvToTop(conv.id);
@@ -1621,6 +1625,13 @@ async function streamResponse(conv) {
     if (typeof isAgentActive === 'function' && isAgentActive()) {
       chatBody.agentName = getActiveAgentName();
       chatBody.agentPermissions = getActiveAgentPermissions();
+    }
+    var _latestUserWithPolicy = null;
+    for (var _tp = conv.messages.length - 1; _tp >= 0; _tp--) {
+      if (conv.messages[_tp] && conv.messages[_tp].role === 'user') { _latestUserWithPolicy = conv.messages[_tp]; break; }
+    }
+    if (_latestUserWithPolicy && _latestUserWithPolicy._toolPolicy) {
+      chatBody.toolPolicy = _latestUserWithPolicy._toolPolicy;
     }
     // Orchestrators are dispatch-only — strip tool access on their own turns
     // so a tool-capable model (Opus, GPT-5) can't shortcut the pipeline by

@@ -487,6 +487,12 @@ function isFileIndexable(filePath) {
 function handleSlashCommand(text) {
   var trimmed = text.trim();
 
+  var custom = getCustomSlashCommand(trimmed);
+  if (custom) {
+    runCustomSlashCommand(custom, trimmed);
+    return true;
+  }
+
   // /commit [--amend] [--cwd /path]
   if (/^\/commit\b/i.test(trimmed)) {
     var amend = /--amend/i.test(trimmed);
@@ -643,6 +649,102 @@ var _slashCommands = [
   { name: 'ship',   description: 'Run the final pre-merge checks (code-review-and-quality)', usage: '/ship [notes]',   icon: 'ti-rocket',       needsCwd: false },
 ];
 
+var _customSlashCommands = [];
+var _customSlashLoaded = false;
+var _customSlashLoading = false;
+
+function _slashCommandKey(c) {
+  return String(c.kind || 'builtin') + ':' + String(c.name || '').toLowerCase();
+}
+
+function getAllSlashCommands() {
+  var out = [];
+  var seen = {};
+  _slashCommands.concat(_customSlashCommands).forEach(function(c) {
+    var key = String(c.name || '').toLowerCase();
+    if (!key || seen[key]) return;
+    seen[key] = true;
+    out.push(c);
+  });
+  return out;
+}
+
+function loadCustomSlashCommands(force) {
+  if (_customSlashLoading) return;
+  if (_customSlashLoaded && !force) return;
+  _customSlashLoading = true;
+  fetch('/api/customizations?includeBody=0')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var items = (data && Array.isArray(data.customizations)) ? data.customizations : [];
+      _customSlashCommands = items.filter(function(item) {
+        if (!item || item.ok === false) return false;
+        if (item.userInvocable === false) return false;
+        return item.kind === 'prompt' || item.kind === 'skill' || item.kind === 'agent';
+      }).map(function(item) {
+        var icon = item.kind === 'prompt' ? 'ti-template'
+          : item.kind === 'skill' ? 'ti-tool'
+          : 'ti-robot';
+        var hint = item.frontmatter && item.frontmatter['argument-hint'] ? ' ' + item.frontmatter['argument-hint'] : ' [input]';
+        return {
+          name: item.name,
+          description: (item.kind.charAt(0).toUpperCase() + item.kind.slice(1)) + ': ' + (item.description || item.path || ''),
+          usage: '/' + item.name + hint,
+          icon: icon,
+          needsCwd: false,
+          kind: item.kind,
+          path: item.path
+        };
+      });
+      _customSlashLoaded = true;
+    })
+    .catch(function() { _customSlashCommands = []; })
+    .finally(function() { _customSlashLoading = false; });
+}
+
+function getCustomSlashCommand(trimmed) {
+  var m = String(trimmed || '').match(/^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/);
+  if (!m) return null;
+  var name = m[1].toLowerCase();
+  for (var i = 0; i < _customSlashCommands.length; i++) {
+    var c = _customSlashCommands[i];
+    if (String(c.name || '').toLowerCase() === name) return c;
+  }
+  return null;
+}
+
+function runCustomSlashCommand(command, trimmed) {
+  var rest = String(trimmed || '').replace(/^\/[a-zA-Z0-9_-]+\s*/i, '').trim();
+  var input = document.getElementById('msg-input');
+  if (!input) return;
+  if (command.kind === 'prompt') {
+    fetch('/api/customizations/run-prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: command.name, input: rest })
+    }).then(function(r) { return r.json(); }).then(function(data) {
+      if (!data || !data.ok) { showToast((data && data.error) || 'Prompt failed'); return; }
+      var conv = (typeof getConv === 'function' && state && state.currentId) ? getConv(state.currentId) : null;
+      if (conv && data.toolPolicy) conv._pendingToolPolicy = data.toolPolicy;
+      input.value = (data.agent ? '@' + data.agent + ' ' : '') + data.content.trim();
+      resizeTextarea(input);
+      sendMessage();
+    }).catch(function(e) { showToast('Prompt failed: ' + e.message); });
+    return;
+  }
+  if (command.kind === 'skill') {
+    input.value = 'Use the `' + command.name + '` skill (read it via fauna_get_skill before acting). ' + (rest || '(no further instructions)');
+    resizeTextarea(input);
+    sendMessage();
+    return;
+  }
+  if (command.kind === 'agent') {
+    input.value = '@' + command.name + ' ' + rest;
+    resizeTextarea(input);
+    sendMessage();
+  }
+}
+
 var slashAutocompleteOpen = false;
 
 function getSlashAtCursor(input) {
@@ -661,8 +763,9 @@ function getSlashAtCursor(input) {
 function showSlashAutocomplete(filter) {
   var dropdown = document.getElementById('slash-autocomplete');
   if (!dropdown) return;
+  loadCustomSlashCommands(false);
 
-  var cmds = _slashCommands;
+  var cmds = getAllSlashCommands();
   if (filter) {
     var f = filter.toLowerCase();
     cmds = cmds.filter(function(c) { return c.name.toLowerCase().includes(f); });

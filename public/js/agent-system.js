@@ -106,6 +106,33 @@ async function loadInstalledAgents() {
     installedAgents = (d.agents || []).map(function(a) {
       return a;
     });
+    try {
+      var cr = await fetch('/api/customizations?kind=agent&includeBody=1');
+      var cd = await cr.json();
+      var customAgents = (cd.customizations || []).filter(function(a) {
+        return a && a.ok !== false && a.userInvocable !== false;
+      }).map(function(a) {
+        return {
+          name: a.name,
+          displayName: (a.frontmatter && a.frontmatter.displayName) || a.name,
+          description: a.description || '',
+          icon: 'ti-robot',
+          category: 'customization',
+          systemPrompt: a.body || '',
+          permissions: {},
+          tools: a.tools || [],
+          model: a.model || [],
+          _customizationAgent: true,
+          _sourcePath: a.path
+        };
+      });
+      var seen = {};
+      installedAgents.forEach(function(a) { if (a && a.name) seen[String(a.name).toLowerCase()] = true; });
+      customAgents.forEach(function(a) {
+        var key = String(a.name || '').toLowerCase();
+        if (key && !seen[key]) { seen[key] = true; installedAgents.push(a); }
+      });
+    } catch (_) {}
   } catch (_) {
     installedAgents = [];
   }
@@ -278,7 +305,15 @@ function getAgentSystemPrompt() {
   // Orchestrators still need their full prompt visible because delegation
   // syntax has to be present in the same context as the sub-agent list.
   var isOrchestrator = !!(activeAgent.manifest && activeAgent.manifest.orchestrator);
-  if (isOrchestrator) {
+  if (activeAgent.manifest && activeAgent.manifest._customizationAgent) {
+    var customDesc = activeAgent.manifest.description || '';
+    if (customDesc) {
+      parts.push('**Description:** ' + customDesc);
+      parts.push('');
+    }
+    parts.push('### Custom Agent Instructions');
+    parts.push('This agent comes from a `.agent.md` customization file. The server injects its full instructions as an authoritative system message for this turn. Do not call `fauna_get_agent_instructions` for this agent.');
+  } else if (isOrchestrator) {
     // Pre-compute canonical sub-agent slug list so we can pin it at the top
     // AND repeat it after the user-authored body. The user's systemPrompt
     // often contains a stale dispatch table with slugs that no longer match

@@ -34,6 +34,7 @@ import { SELF_TOOL_DEFS, DYNAMIC_WIDGET_TOOL_DEFS, executeSelfTool, isSelfTool, 
 import { compressToolOutput } from '../lib/compress-tool-output.js';
 import { stashOutput } from '../lib/tool-output-cache.js';
 import { runShell, formatShellResultForLLM } from '../lib/shell-runner.js';
+import { runHooks } from '../lib/hooks-runtime.js';
 import { maybeRegister as registerDevServer, isDevServerCommand } from '../lib/dev-server-registry.js';
 import { spawn as _spawnDetached } from 'child_process';
 import os from 'os';
@@ -48,6 +49,7 @@ import { formatForSystemPrompt as factsForSystemPrompt, getStats as factsGetStat
 import { buildProjectProfile, formatProfileForPrompt } from '../lib/profile.js';
 import { extractFacts as extractMemoryFacts } from '../lib/memory-extractor.js';
 import { extractCorrections } from '../lib/failure-learning.js';
+import { buildAgentPolicy, discoverCustomizations, filterToolsByPolicy, resolveToolPolicy } from '../../lib/customization-registry.js';
 import { getProjectSystemContext, buildContextPayload, getProject, appendAutonomousRunLog } from '../../project-manager.js';
 import { estimateTokens, computeBudget } from '../lib/token-budget.js';
 import { summarizeHistory } from '../lib/summarize-history.js';
@@ -89,6 +91,9 @@ export function registerChatRoute(app, {
   sendNotification = (title, body) => { console.log(`[notification] ${title}: ${body}`); },
   callPlaywrightMcpTool,
   resetPlaywrightMcpClient = () => {},
+  workspaceRoot = process.cwd(),
+  userConfigDir = null,
+  userHome = null,
   // Shell exec deps for the fauna_shell_exec native tool. If absent, the tool
   // will return a runtime error and the model will fall back to ```bash blocks.
   shellBin = null,
@@ -229,6 +234,7 @@ export function registerChatRoute(app, {
           deployApproved: bodyDeployApproved = false,
           headlessTask: bodyHeadlessTask = false,
           toolLimits: bodyToolLimits = null,
+          toolPolicy: bodyToolPolicy = null,
           selectedFigmaFileKeys = [] } = req.body;
     const isCLI = clientContext === 'cli';
 
@@ -278,6 +284,26 @@ export function registerChatRoute(app, {
 
     // Track the active conversation model so heartbeat/workflows/teams use the same one
     setActiveModel(model);
+
+    let customizationRecords = [];
+    try {
+      customizationRecords = discoverCustomizations({ workspaceRoot, userConfigDir, userHome });
+    } catch (_) {
+      customizationRecords = [];
+    }
+
+    let activeCustomizationAgentPolicy = null;
+    let effectiveToolPolicy = bodyToolPolicy;
+    if (agentName) {
+      try {
+        activeCustomizationAgentPolicy = buildAgentPolicy(customizationRecords, { name: agentName });
+        if (!effectiveToolPolicy && !activeCustomizationAgentPolicy.unrestrictedTools) {
+          effectiveToolPolicy = resolveToolPolicy({ agentTools: activeCustomizationAgentPolicy.tools });
+        }
+      } catch (_) {
+        activeCustomizationAgentPolicy = null;
+      }
+    }
 
     res.writeHead(200, {
       'Content-Type':    'text/event-stream',
@@ -827,6 +853,17 @@ export function registerChatRoute(app, {
         const permissions = isDelegation
           ? (req.body.agentPermissions || manifest?.permissions || {})
           : (manifest?.permissions || req.body.agentPermissions || {});
+        if (!manifest && activeCustomizationAgentPolicy) {
+          manifest = {
+            name: activeCustomizationAgentPolicy.name,
+            displayName: activeCustomizationAgentPolicy.name,
+            description: activeCustomizationAgentPolicy.description,
+            systemPrompt: activeCustomizationAgentPolicy.systemPrompt,
+            permissions: {},
+            _customizationAgent: true,
+          };
+        }
+
         const effectiveManifest = manifest
           ? Object.assign({}, manifest, { permissions })
           : { name: safeAgentName, permissions };
@@ -1129,6 +1166,14 @@ export function registerChatRoute(app, {
         }
       }
 
+      if (Array.isArray(mcpTools) && mcpTools.length && !noTools && effectiveToolPolicy && effectiveToolPolicy.source && effectiveToolPolicy.source !== 'default') {
+        const _beforePolicyCount = mcpTools.length;
+        mcpTools = filterToolsByPolicy(mcpTools, effectiveToolPolicy);
+        if (mcpTools.length !== _beforePolicyCount) {
+          console.log(`[chat] tool-policy applied (${effectiveToolPolicy.source}): ${_beforePolicyCount}→${mcpTools.length} tools`);
+        }
+      }
+
       // Agentic loop — re-runs if model calls tools.
       // No numeric tool-call cap: the narration-repetition guard (L~1707),
       // tool-call dedup (toolCallsSeen), and the user's abort button are the
@@ -1222,10 +1267,13 @@ export function registerChatRoute(app, {
       // Autonomous mode: per-run state for the DONE/BLOCKED marker gate, the
       // QA gate, and the start-time used in the run-log JSONL entry.
       let markerNudgeFired = false;
+      let verificationNudgeFired = false;
       let qaRan = false;
       let qaResultSummary = null;
       let deployRan = false;
       let deployResultSummary = null;
+      let stopHooksRan = false;
+      let stopHookResultSummary = null;
       const autonomousStartedAt = Date.now();
       // Autonomous mode raises the safety caps so the loop runs until the
       // task is genuinely done. The narration-repeat + per-tool timeouts
@@ -1349,6 +1397,11 @@ export function registerChatRoute(app, {
         const m = String(text || '').match(MARKER_RE);
         return m ? m[1].toUpperCase() : null;
       };
+      const hasDoneEvidence = (text) => {
+        if (qaRan || deployRan || toolCallCount > 0) return true;
+        return /\b(verified|validated|ran|passed|checked|tested|built|linted|typechecked|compiled|opened|inspected)\b/i.test(String(text || ''))
+          && /\b(test|build|lint|typecheck|compile|command|tool|output|file|diff|screenshot|log|diagnostic|error)\b/i.test(String(text || ''));
+      };
 
       // ── Tool guard — pre-call checks, category limits, browser discipline ──
       const PROMPT_PERMISSION = process.env.FAUNA_PROMPT_PERMISSION === '1';
@@ -1404,7 +1457,12 @@ export function registerChatRoute(app, {
             // loadAgentManifest resolves a real agent.json OR synthesizes a
             // manifest for a dropped AGENT.md / system-prompt.md folder, so
             // instructions flow into context even without an agent.json.
-            const manifest = loadAgentManifest(agentsDir, safeAgentName);
+            const manifest = loadAgentManifest(agentsDir, safeAgentName) || (activeCustomizationAgentPolicy ? {
+              name: activeCustomizationAgentPolicy.name,
+              displayName: activeCustomizationAgentPolicy.name,
+              systemPrompt: activeCustomizationAgentPolicy.systemPrompt,
+              orchestrator: false,
+            } : null);
             if (manifest) {
               const isOrchestrator = !!(manifest && manifest.orchestrator);
               if (!isOrchestrator && manifest.systemPrompt) {
@@ -1838,6 +1896,20 @@ export function registerChatRoute(app, {
                 figma.log('✓ ' + toolName + ' done', 'ok');
               }
 
+              const postHooks = await runHooks(customizationRecords, 'PostToolUse', {
+                toolName,
+                args,
+                result: typeof result === 'string' ? result.slice(0, 20000) : result,
+                agentName: agentName || null,
+                conversationId: req.body?.conversationId || null,
+              }, { cwd: workspaceRoot });
+              for (const message of postHooks.systemMessages || []) {
+                if (message) allMessages.push({ role: 'system', content: String(message) });
+              }
+              if (postHooks.blocked) {
+                result = JSON.stringify({ ok: false, error: postHooks.stopReason || 'PostToolUse hook blocked this tool result.' });
+              }
+
               // Truncate oversized results (screenshots, large contexts).
               // Keep head + tail so errors/stack traces at the end of long
               // tool output (e.g. shell, build logs) survive the truncation
@@ -1953,6 +2025,19 @@ export function registerChatRoute(app, {
 
             // ── Pre-tool-call guard ─────────────────────────────────────────
             const args = JSON.parse(tc.function.arguments || '{}');
+            const preHooks = await runHooks(customizationRecords, 'PreToolUse', {
+              toolName,
+              args,
+              agentName: agentName || null,
+              conversationId: req.body?.conversationId || null,
+            }, { cwd: workspaceRoot });
+            for (const message of preHooks.systemMessages || []) {
+              if (message) allMessages.push({ role: 'system', content: String(message) });
+            }
+            if (preHooks.blocked || preHooks.permissionDecision === 'deny') {
+              allMessages.push({ role: 'tool', tool_call_id: tc.id, content: preHooks.stopReason || `PreToolUse hook denied ${toolName}` });
+              continue;
+            }
             const guardResult = await toolGuard.check(toolName, args);
 
             if (guardResult.action === 'deny') {
@@ -2281,12 +2366,48 @@ export function registerChatRoute(app, {
               }
             };
 
+            const tryStopHookGate = async () => {
+              if (!autonomousMode || finalMarker !== 'DONE' || stopHooksRan) {
+                return false;
+              }
+              stopHooksRan = true;
+              const stopHooks = await runHooks(customizationRecords, 'Stop', {
+                finalStatus: finalMarker,
+                finalMessage: assistantText,
+                agentName: agentName || null,
+                conversationId: req.body?.conversationId || null,
+                toolCallCount,
+                qaResult: qaResultSummary,
+                deployResult: deployResultSummary,
+              }, { cwd: workspaceRoot });
+              stopHookResultSummary = {
+                ok: !!stopHooks.ok,
+                count: stopHooks.count,
+                blocked: !!stopHooks.blocked,
+                stopReason: stopHooks.stopReason || '',
+              };
+              if (stopHooks.systemMessages?.length) {
+                for (const message of stopHooks.systemMessages) {
+                  if (message) allMessages.push({ role: 'system', content: String(message) });
+                }
+              }
+              if (!stopHooks.blocked) return false;
+              allMessages.push({ role: 'assistant', content: assistantText });
+              allMessages.push({ role: 'user', content: '[System: A Stop hook blocked DONE:. Reason:\n\n' + (stopHooks.stopReason || 'Stop hook blocked completion.').slice(0, 4000) + '\n\nAddress this, then re-run verification. Do NOT emit DONE: until the Stop hook passes, or use BLOCKED: with a precise reason if it cannot be satisfied.]' });
+              return true;
+            };
+
             if (autonomousMode && assistantText.trim() && !finalMarker && !markerNudgeFired) {
               markerNudgeFired = true;
               console.log('[chat] autonomous: missing terminal marker — nudging once');
               allMessages.push({ role: 'assistant', content: assistantText });
               allMessages.push({ role: 'user', content: '[System: Autonomous mode requires your FINAL message to begin with one of `DONE:`, `BLOCKED:`, or `NEEDS-INPUT:` on its own line. Re-emit your final summary with the correct marker. If the work is verifiably complete (including any acceptance criteria), use DONE:.]' });
               // keep continueLoop = true
+            } else if (autonomousMode && finalMarker === 'DONE' && !verificationNudgeFired && !hasDoneEvidence(assistantText)) {
+              verificationNudgeFired = true;
+              console.log('[chat] autonomous: DONE without verification evidence — nudging once');
+              allMessages.push({ role: 'assistant', content: assistantText });
+              allMessages.push({ role: 'user', content: '[System: You emitted DONE: without citing verification evidence from a command, file, diagnostic, tool output, screenshot, or log. Do not mark autonomous work complete from assertion alone. Perform or cite concrete verification, then re-emit DONE: with the evidence. If verification is impossible, use BLOCKED: with the precise reason.]' });
             } else if (autonomousMode && finalMarker === 'DONE' && qaCommand && !qaRan) {
               qaRan = true;
               console.log('[chat] autonomous QA gate: running `' + qaCommand + '`');
@@ -2311,6 +2432,8 @@ export function registerChatRoute(app, {
                   // QA passed — try deploy gate, then finalize.
                   const deployFailed = await tryDeployGate();
                   if (deployFailed) {
+                    // keep continueLoop = true
+                  } else if (await tryStopHookGate()) {
                     // keep continueLoop = true
                   } else {
                     send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
@@ -2337,12 +2460,16 @@ export function registerChatRoute(app, {
               const deployFailed = await tryDeployGate();
               if (deployFailed) {
                 // keep continueLoop = true
+              } else if (await tryStopHookGate()) {
+                // keep continueLoop = true
               } else {
                 send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
                   reasoning: sawReasoning ? { durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
                 });
                 continueLoop = false;
               }
+            } else if (autonomousMode && finalMarker === 'DONE' && await tryStopHookGate()) {
+              // keep continueLoop = true
             } else {
               send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
                 reasoning: sawReasoning ? { durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
@@ -2364,6 +2491,7 @@ export function registerChatRoute(app, {
                   finalStatus,
                   qaResult: qaResultSummary,
                   deployResult: deployResultSummary,
+                  stopHookResult: stopHookResultSummary,
                   durationMs: Date.now() - autonomousStartedAt,
                   startedAt: autonomousStartedAt,
                 });
