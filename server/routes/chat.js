@@ -1303,6 +1303,12 @@ export function registerChatRoute(app, {
       const MAX_WIDGET_CLAIM_NUDGES = 1;
       let forceEmitWidgetNext = false; // set when re-prompting; consumed by params builder
       let noOutputStreamRetries = 0;
+      let mutatingToolUsed = false;
+      let validationToolUsed = false;
+      let inspectionOnlyNudges = 0;
+      const MAX_INSPECTION_ONLY_NUDGES = autonomousMode ? 3 : 1;
+      let validationRequiredNudges = 0;
+      const MAX_VALIDATION_REQUIRED_NUDGES = autonomousMode ? 2 : 1;
       // Hand-authored-circuit verifier state. If the model emits an <svg> for a
       // circuit request that lacks the engine provenance marker (data-fauna-*),
       // the SVG was invented rather than produced by fauna_render_circuit — we
@@ -1380,6 +1386,27 @@ export function registerChatRoute(app, {
         }
         return '';
       })();
+      const _writeIntentTurn = /\b(?:fix|fixes|fixed|implement|resolve|repair|patch|update|change|modify|edit|write|create|add|replace|refactor|migrate|install|build\s+out|make\s+(?:all|the|this)|proceed)\b/i.test(_lastUserQuery || '');
+      const MUTATING_TOOLS = new Set([
+        'fauna_write_file', 'fauna_write_files', 'fauna_apply_patch',
+        'fauna_replace_string', 'fauna_write_offloaded',
+        'fauna_create_agent', 'fauna_patch_agent', 'fauna_uninstall_agent',
+        'fauna_emit_widget', 'fauna_save_instruction',
+      ]);
+      const VALIDATION_TOOLS = new Set([
+        'fauna_doctor', 'fauna_verify_build', 'fauna_project_audit',
+      ]);
+      const _isReadOnlyShellCommand = (command) => {
+        const text = String(command || '').trim();
+        if (!text) return true;
+        if (/\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|lint|typecheck|check|build)\b/i.test(text)) return true;
+        if (/\b(?:tsc|eslint|vitest|jest|pytest|cargo\s+test|go\s+test|mvn\s+test|gradle\s+test)\b/i.test(text)) return true;
+        if (/\b(?:npm|pnpm|yarn|bun)\s+(?:install|add|remove|update|upgrade|ci)\b/i.test(text)) return false;
+        if (/\b(?:touch|mkdir|rm|rmdir|mv|cp|install|tee|sed\s+-i|perl\s+-pi|python\d*\s+-c|node\s+-e|prisma\s+(?:migrate|db\s+push|generate|db\s+seed))\b/i.test(text)) return false;
+        if (/(?:^|\s)(?:>|>>|1>|2>|&>)\s*[^\s]+/.test(text)) return false;
+        return true;
+      };
+      const _isValidationShellCommand = (command) => /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|lint|typecheck|check|build)\b|\b(?:tsc|eslint|vitest|jest|pytest|cargo\s+test|go\s+test|mvn\s+test|gradle\s+test)\b/i.test(String(command || ''));
       // Tools whose results must never be stale-shrunk — typically tools that
       // inject persistent instructions/rules that the model needs to keep
       // referring to throughout the turn.
@@ -1905,6 +1932,12 @@ export function registerChatRoute(app, {
             // Send human-readable tool status to the client
             const toolLabel = formatToolLabel(toolName, args);
             send({ type: 'tool_call', name: toolName, label: toolLabel });
+            if (MUTATING_TOOLS.has(toolName)) mutatingToolUsed = true;
+            if (VALIDATION_TOOLS.has(toolName)) validationToolUsed = true;
+            if (toolName === 'fauna_shell_exec') {
+              if (!_isReadOnlyShellCommand(args?.command)) mutatingToolUsed = true;
+              if (_isValidationShellCommand(args?.command)) validationToolUsed = true;
+            }
 
             try {
               let result;
@@ -2232,6 +2265,23 @@ export function registerChatRoute(app, {
               });
               continueLoop = false;
             }
+          // If this was an implementation request, read/search/audit tools are
+          // not enough to terminate the turn. VS Code's agent loop keeps the
+          // host in control until an edit/command mutation lands or the model
+          // gives a real blocker; do the same here instead of accepting an
+          // investigation-only final answer.
+          } else if (_writeIntentTurn && toolCallCount > 0 && !mutatingToolUsed && inspectionOnlyNudges < MAX_INSPECTION_ONLY_NUDGES) {
+            inspectionOnlyNudges++;
+            console.log('[chat] write-intent inspection-only stop detected — forcing first concrete edit (' + inspectionOnlyNudges + '/' + MAX_INSPECTION_ONLY_NUDGES + ')');
+            allMessages.push({ role: 'assistant', content: assistantText || '' });
+            allMessages.push({ role: 'user', content: '[System: The user asked for implementation/fixes, but this turn only inspected/read/audited files and made no concrete mutation. Do NOT summarize or ask to continue. Make the smallest safe edit NOW using `fauna_apply_patch`, `fauna_replace_string`, `fauna_write_file`, or another real mutation tool. After the first edit, run a focused validation. If no edit is possible, respond with BLOCKED: and the exact blocker.]' });
+            // keep continueLoop = true
+          } else if (_writeIntentTurn && mutatingToolUsed && !validationToolUsed && validationRequiredNudges < MAX_VALIDATION_REQUIRED_NUDGES && !/^\s*(?:BLOCKED|NEEDS-INPUT)\s*:/i.test(assistantText || '')) {
+            validationRequiredNudges++;
+            console.log('[chat] write-intent mutation without validation detected — forcing focused validation (' + validationRequiredNudges + '/' + MAX_VALIDATION_REQUIRED_NUDGES + ')');
+            allMessages.push({ role: 'assistant', content: assistantText || '' });
+            allMessages.push({ role: 'user', content: '[System: You made a concrete change, but you have not validated it. Run the cheapest relevant validation NOW (for example `npm run build`, a focused test, lint/typecheck, or another project-specific check). Do not give the final summary until validation has run. If validation cannot run, respond with BLOCKED: and the exact reason.]' });
+            // keep continueLoop = true
           // If tools were called but no text was produced, prompt a summary so the user sees something
           } else if (toolCallCount > 0 && !assistantText.trim() && continueCount < MAX_CONTINUES) {
             continueCount++;

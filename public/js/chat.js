@@ -1268,9 +1268,31 @@ async function streamResponse(conv) {
   var _lastLiveRenderHtml = '';
   var _lastToolOutputAccum = ''; // rolling last ~1000 chars of tool_output for input context
   var _toolOutputBlockChars = 0; // chars of live output kept in the CURRENT shell-output view block (capped)
+  var _liveToolOutputEl = null;
+  var _liveToolOutputPre = null;
   var _reasoning = null; // { startedAt, durationSeconds } — compact thinking status only
   var _reasoningTickTimer = null; // ticks the "Thinking… Ns" counter live until content/done
   if (typeof resetDesignArtifactState === 'function') resetDesignArtifactState();
+
+  function _ensureLiveToolOutputBlock() {
+    _ensureLiveMessageAttached();
+    if (!_liveToolOutputEl || !_liveToolOutputEl.isConnected) {
+      _liveToolOutputEl = document.createElement('div');
+      _liveToolOutputEl.className = 'shell-output-block live-tool-output-block';
+      _liveToolOutputEl.style.cssText = 'margin-top:8px;border:1px solid var(--fau-border);border-radius:6px;background:var(--fau-panel,#111);overflow:hidden;';
+      var header = document.createElement('div');
+      header.className = 'shell-output-header';
+      header.style.cssText = 'padding:6px 8px;font-size:12px;color:var(--fau-text-muted);border-bottom:1px solid var(--fau-border);';
+      header.textContent = 'Live tool output';
+      _liveToolOutputPre = document.createElement('pre');
+      _liveToolOutputPre.className = 'shell-output-pre';
+      _liveToolOutputPre.style.cssText = 'margin:0;padding:8px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.45;';
+      _liveToolOutputEl.appendChild(header);
+      _liveToolOutputEl.appendChild(_liveToolOutputPre);
+      if (msgEl) msgEl.appendChild(_liveToolOutputEl);
+    }
+    return _liveToolOutputPre;
+  }
 
   // ── Ephemeral tool status stack (Clawpilot-style) ──────────────────
   // Track total count + first-tool-ts across the burst so the user sees
@@ -1718,6 +1740,8 @@ async function streamResponse(conv) {
             dbg('tool_call: ' + evt.name, 'cmd');
             _lastToolOutputAccum = ''; // reset per tool invocation
             _toolOutputBlockChars = 0;  // reset view-cap counter per tool invocation
+            _liveToolOutputEl = null;
+            _liveToolOutputPre = null;
             // Ephemeral tool status — shown as shimmer stack, not baked into buffer
             var toolLabel = evt.label || evt.name || 'tool';
             _addToolStatus(toolLabel);
@@ -1924,20 +1948,10 @@ async function streamResponse(conv) {
             }
           }
           if (evt.type === 'tool_output') {
-            // Live shell output — append to a collapsible output block
-            // Also accumulate for use in the waiting-for-input context
+            // Live shell/tool output is an observation, not assistant prose.
+            // Keep it in a side DOM block so transcripts and saved messages do
+            // not treat stdout/stderr as model-authored markdown.
             _lastToolOutputAccum = ((_lastToolOutputAccum || '') + evt.output).slice(-1000);
-            if (!buffer.includes('```shell-output\n')) {
-              buffer += '```shell-output\n';
-              _toolOutputBlockChars = 0;
-            }
-            // Cap how much live output we keep in the RENDER buffer. A runaway
-            // command (find /, ls -R, cat of a huge file) can otherwise stream
-            // megabytes into the markdown buffer, and re-rendering that on every
-            // chunk freezes the UI (observed: ~15MB buffer, 175ms/render). The
-            // FULL result is still sent to the model server-side (capped
-            // separately in runShell), so trimming the on-screen copy never
-            // starves the model.
             var TOOL_OUTPUT_VIEW_CAP = 200000;
             if (_toolOutputBlockChars < TOOL_OUTPUT_VIEW_CAP) {
               var _piece = evt.output || '';
@@ -1946,14 +1960,12 @@ async function streamResponse(conv) {
                   '\n…[live output truncated in view — full result was sent to the model]\n';
               }
               _toolOutputBlockChars += _piece.length;
-              // Insert before the closing ``` if present, otherwise just append
-              var closingIdx = buffer.lastIndexOf('\n```\n');
-              if (closingIdx > buffer.lastIndexOf('```shell-output\n')) {
-                buffer = buffer.slice(0, closingIdx) + _piece + buffer.slice(closingIdx);
-              } else {
-                buffer += _piece;
+              var outPre = _ensureLiveToolOutputBlock();
+              if (outPre) {
+                outPre.textContent += _piece;
+                outPre.scrollTop = outPre.scrollHeight;
               }
-              scheduleRender();
+              if (isActive()) scrollBottom();
             }
           }
           if (evt.type === 'tool_waiting_for_input') {
@@ -1961,7 +1973,7 @@ async function streamResponse(conv) {
             if (typeof _showShellInput === 'function') {
               // Create a unique exec ID and show the input widget below the current AI message
               var stdinId = 'agent-stdin-' + Date.now();
-              var resultEl = bodyEl.querySelector('.shell-output-block') || bodyEl;
+              var resultEl = (msgEl && msgEl.querySelector('.shell-output-block')) || bodyEl;
               // Use server-side context if available, otherwise fall back to locally accumulated tool output
               var inputContext = (evt.context && evt.context.trim()) ? evt.context : (_lastToolOutputAccum || '');
               _showShellInput(stdinId, evt.killId, evt.hint || 'Waiting for input…', resultEl, inputContext);

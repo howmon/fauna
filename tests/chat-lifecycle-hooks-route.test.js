@@ -5,13 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { registerChatRoute } from '../server/routes/chat.js';
 
-const llm = vi.hoisted(() => ({ create: vi.fn() }));
+const llm = vi.hoisted(() => ({ create: vi.fn(), supportsTools: false }));
 
 vi.mock('../server/llm/registry.js', () => ({
   getLLMClient: vi.fn(() => ({
     client: { chat: { completions: { create: llm.create } } },
     providerId: 'test',
-    supports: { tools: false, vision: false, streaming: true, usageEvents: false },
+    supports: { tools: llm.supportsTools, vision: false, streaming: true, usageEvents: false },
   })),
 }));
 
@@ -87,6 +87,20 @@ function mockTextStream(text = 'ok') {
   })());
 }
 
+function mockToolCallStream(name, args) {
+  return (async function* () {
+    yield { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_read_1', type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, finish_reason: null }] };
+    yield { choices: [{ delta: {}, finish_reason: 'tool_calls' }] };
+  })();
+}
+
+function mockStopStream(text) {
+  return (async function* () {
+    yield { choices: [{ delta: { content: text }, finish_reason: null }] };
+    yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+  })();
+}
+
 describe('POST /api/chat lifecycle hooks', () => {
   let workspaceRoot;
   let app;
@@ -95,6 +109,7 @@ describe('POST /api/chat lifecycle hooks', () => {
     workspaceRoot = makeTmpDir();
     app = makeFakeApp();
     llm.create.mockReset();
+    llm.supportsTools = false;
     registerChatRoute(app, makeDeps(workspaceRoot));
   });
 
@@ -178,5 +193,45 @@ describe('POST /api/chat lifecycle hooks', () => {
 
     expect(llm.create.mock.calls.length, JSON.stringify(parseSse(res.chunks))).toBe(1);
     expect(fs.readFileSync(path.join(workspaceRoot, 'subagent-stop-ran.txt'), 'utf8')).toBe('ok');
+  });
+
+  it('continues implementation requests after inspection-only tool use', async () => {
+    llm.supportsTools = true;
+    write(path.join(workspaceRoot, 'target.js'), 'export const value = 1;\n');
+    llm.create
+      .mockResolvedValueOnce(mockToolCallStream('fauna_read_file', { path: path.join(workspaceRoot, 'target.js') }))
+      .mockResolvedValueOnce(mockStopStream('I confirmed the file and will fix it next.'))
+      .mockResolvedValueOnce(mockStopStream('BLOCKED: no safe edit was possible.'));
+
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'fix all issues in this project' }], clientContext: 'test' },
+    });
+
+    expect(llm.create.mock.calls.length, JSON.stringify(parseSse(res.chunks))).toBe(3);
+    const thirdCallMessages = llm.create.mock.calls[2][0].messages;
+    expect(thirdCallMessages.some(message => message.role === 'user' && /only inspected\/read\/audited files/.test(message.content))).toBe(true);
+    const events = parseSse(res.chunks);
+    expect(events.some(event => event.type === 'tool_call' && event.name === 'fauna_read_file')).toBe(true);
+    expect(events.some(event => event.type === 'content' && /BLOCKED:/.test(event.content))).toBe(true);
+  });
+
+  it('continues implementation requests after mutation without validation', async () => {
+    llm.supportsTools = true;
+    llm.create
+      .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: 'touch changed.txt', cwd: workspaceRoot }))
+      .mockResolvedValueOnce(mockStopStream('Implemented the change.'))
+      .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: 'npm run build', cwd: workspaceRoot }))
+      .mockResolvedValueOnce(mockStopStream('Done after validation.'));
+
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'implement all fixes' }], clientContext: 'test' },
+    });
+
+    expect(llm.create.mock.calls.length, JSON.stringify(parseSse(res.chunks))).toBe(4);
+    const thirdCallMessages = llm.create.mock.calls[2][0].messages;
+    expect(thirdCallMessages.some(message => message.role === 'user' && /made a concrete change, but you have not validated it/.test(message.content))).toBe(true);
+    const events = parseSse(res.chunks);
+    expect(events.filter(event => event.type === 'tool_call' && event.name === 'fauna_shell_exec').length).toBe(2);
+    expect(events.some(event => event.type === 'content' && event.content === 'Done after validation.')).toBe(true);
   });
 });
