@@ -63,7 +63,7 @@ function openPipelineBuilder(taskId) {
     overlay = document.createElement('div');
     overlay.id = 'pipeline-builder-overlay';
     overlay.style.cssText = [
-      'position:fixed;inset:0;z-index:9000;display:flex;flex-direction:column;',
+      'position:fixed;top:0;right:0;bottom:0;left:52px;z-index:9000;display:flex;flex-direction:column;',
       'background:var(--fau-bg,#0e0e14);padding-top:36px;',
     ].join('');
     document.body.appendChild(overlay);
