@@ -314,6 +314,16 @@ export function registerChatRoute(app, {
     });
 
     const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    const latestUserText = () => {
+      const lastUser = [...messages].reverse().find(m => m && m.role === 'user');
+      if (typeof lastUser?.content === 'string') return lastUser.content;
+      if (Array.isArray(lastUser?.content)) {
+        return lastUser.content.filter(c => c && c.type === 'text').map(c => c.text || '').join('\n');
+      }
+      return '';
+    };
+    let subagentStarted = false;
+    let subagentStopPayload = null;
 
     // SSE keep-alive: when a long tool call (or upstream silence) leaves the
     // socket without data for several seconds, Electron Chromium kills the
@@ -338,6 +348,50 @@ export function registerChatRoute(app, {
       const llmProviderId = _llm.providerId;
       const llmCapabilities = resolveModelCapabilities({ providerId: llmProviderId, model, supports: llmSupports });
       const allMessages = [];
+
+      const baseHookPayload = {
+        agentName: agentName || null,
+        conversationId: req.body?.conversationId || null,
+        projectId: projectId || null,
+        model,
+        isDelegation: !!isDelegation,
+        clientContext,
+        prompt: latestUserText(),
+      };
+      const isLikelySessionStart = Array.isArray(messages) && messages.filter(m => m && m.role === 'user').length <= 1;
+      if (isLikelySessionStart && !isDelegation) {
+        const sessionHooks = await runHooks(customizationRecords, 'SessionStart', baseHookPayload, { cwd: workspaceRoot });
+        if (sessionHooks.systemMessages?.length) {
+          for (const message of sessionHooks.systemMessages) allMessages.push({ role: 'system', content: String(message) });
+        }
+        if (sessionHooks.blocked) {
+          send({ type: 'error', error: sessionHooks.stopReason || 'SessionStart hook blocked this chat turn.' });
+          send({ type: 'done', finish_reason: 'hook_blocked', hook: 'SessionStart' });
+          return;
+        }
+      }
+      const submitHooks = await runHooks(customizationRecords, 'UserPromptSubmit', baseHookPayload, { cwd: workspaceRoot });
+      if (submitHooks.systemMessages?.length) {
+        for (const message of submitHooks.systemMessages) allMessages.push({ role: 'system', content: String(message) });
+      }
+      if (submitHooks.blocked) {
+        send({ type: 'error', error: submitHooks.stopReason || 'UserPromptSubmit hook blocked this chat turn.' });
+        send({ type: 'done', finish_reason: 'hook_blocked', hook: 'UserPromptSubmit' });
+        return;
+      }
+      if (isDelegation) {
+        const startHooks = await runHooks(customizationRecords, 'SubagentStart', baseHookPayload, { cwd: workspaceRoot });
+        if (startHooks.systemMessages?.length) {
+          for (const message of startHooks.systemMessages) allMessages.push({ role: 'system', content: String(message) });
+        }
+        if (startHooks.blocked) {
+          send({ type: 'error', error: startHooks.stopReason || 'SubagentStart hook blocked this delegation.' });
+          send({ type: 'done', finish_reason: 'hook_blocked', hook: 'SubagentStart' });
+          return;
+        }
+        subagentStarted = true;
+        subagentStopPayload = { ...baseHookPayload, startHookCount: startHooks.count };
+      }
 
       // Build project context from active project (name, root, sources, pinned/enabled contexts)
       let projectCtx = '';
@@ -627,6 +681,7 @@ export function registerChatRoute(app, {
       const KEEP_TAIL = 4;
       const totalBodyTokens = stripped.reduce((acc, m) => acc + estimateTokens(m), 0);
       let compactedInfo = null;
+      const compactHookSystemMessages = [];
       const _overBudget = totalBodyTokens > budget.bodyTokenLimit;
       if (autoCompactEnabled && _overBudget && rest.length > KEEP_TAIL + 4) {
         const middle = rest.slice(0, -KEEP_TAIL);
@@ -641,6 +696,19 @@ export function registerChatRoute(app, {
           const _onMainAbort = () => { try { _compactAbort.abort(); } catch (_) {} };
           upstreamAbort.signal.addEventListener('abort', _onMainAbort, { once: true });
           try {
+            const compactHooks = await runHooks(customizationRecords, 'PreCompact', {
+              ...baseHookPayload,
+              messageCount: middle.length,
+              totalBodyTokens,
+              bodyTokenLimit: budget.bodyTokenLimit,
+            }, { cwd: workspaceRoot });
+            if (compactHooks.systemMessages?.length) {
+              for (const message of compactHooks.systemMessages) compactHookSystemMessages.push(String(message));
+            }
+            if (compactHooks.blocked) {
+              console.log('[chat] PreCompact hook blocked auto-compaction:', compactHooks.stopReason || 'blocked');
+              throw new Error('__FAUNA_PRECOMPACT_BLOCKED__');
+            }
             send({ type: 'context_compacting', count: middle.length });
             const summary = await Promise.race([
               summarizeHistory(middle, {
@@ -677,7 +745,9 @@ export function registerChatRoute(app, {
               console.log('[chat] auto-compact produced empty summary; falling back to plain trim');
             }
           } catch (e) {
-            console.warn('[chat] auto-compaction failed, continuing with plain trim:', e?.message || e);
+            if (e?.message !== '__FAUNA_PRECOMPACT_BLOCKED__') {
+              console.warn('[chat] auto-compaction failed, continuing with plain trim:', e?.message || e);
+            }
           } finally {
             clearTimeout(_compactTimeout);
             upstreamAbort.signal.removeEventListener('abort', _onMainAbort);
@@ -695,6 +765,7 @@ export function registerChatRoute(app, {
         bodyTokens += t;
       }
       const trimmed = first ? [first, ...recent] : recent;
+      for (const message of compactHookSystemMessages) allMessages.push({ role: 'system', content: message });
       allMessages.push(...trimmed);
 
       // Set true when the latest user message reads as a circuit/schematic
@@ -2599,6 +2670,21 @@ export function registerChatRoute(app, {
         try { send({ type: 'error', error: err.message }); } catch (_) {}
       }
     } finally {
+      if (subagentStarted && subagentStopPayload) {
+        try {
+          const stopHooks = await runHooks(customizationRecords, 'SubagentStop', {
+            ...subagentStopPayload,
+            streamStalled,
+            thinkingDeadlineHit,
+            aborted: !!upstreamAbort.signal.aborted,
+          }, { cwd: workspaceRoot });
+          if (stopHooks.blocked && !res.writableEnded) {
+            send({ type: 'error', error: stopHooks.stopReason || 'SubagentStop hook blocked this delegation result.' });
+          }
+        } catch (hookErr) {
+          console.warn('[chat] SubagentStop hook failed:', hookErr?.message || hookErr);
+        }
+      }
       try { res.off('close', cancelUpstream); } catch (_) {}
       clearInterval(_sseHeartbeat);
     }

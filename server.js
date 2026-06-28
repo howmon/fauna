@@ -144,6 +144,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app    = express();
 const PORT   = 3737;
 const IS_WIN = process.platform === 'win32';
+const SERVER_ONLY_MODE = process.argv.includes('--server') || process.argv.includes('-s');
+const EAGER_MCP_STARTUP = process.env.FAUNA_EAGER_MCP_STARTUP === '1'
+  || (!SERVER_ONLY_MODE && process.env.FAUNA_EAGER_MCP_STARTUP !== '0');
+const MEMORY_WARN_RSS_MB = Number(process.env.FAUNA_MEMORY_WARN_MB || (SERVER_ONLY_MODE ? 1024 : 2048));
+const MEMORY_MONITOR_MS = Number(process.env.FAUNA_MEMORY_MONITOR_MS || 60000);
 const PATH_SEP = IS_WIN ? ';' : ':';
 const FAUNA_CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
 
@@ -156,6 +161,62 @@ const _sharedConversationStore = createConversationStore({ configDir: FAUNA_CONF
 let internalAICaller = async () => '';
 // Track the model currently in use for conversations so features inherit it
 let _activeModel = 'gpt-4.1';
+let _memoryHighWater = { rss: 0, heapUsed: 0, external: 0, at: new Date().toISOString() };
+let _memoryMonitorTimer = null;
+let _memoryLastLogRssMb = 0;
+
+function _mb(bytes) {
+  return Math.round((Number(bytes || 0) / 1024 / 1024) * 10) / 10;
+}
+
+function getProcessDiagnostics() {
+  const usage = process.memoryUsage();
+  if (usage.rss > _memoryHighWater.rss) {
+    _memoryHighWater = {
+      rss: usage.rss,
+      heapUsed: usage.heapUsed,
+      external: usage.external,
+      at: new Date().toISOString(),
+    };
+  }
+  const rssMb = _mb(usage.rss);
+  return {
+    pid: process.pid,
+    uptimeSec: Math.round(process.uptime()),
+    serverOnly: SERVER_ONLY_MODE,
+    eagerMcpStartup: EAGER_MCP_STARTUP,
+    warnThresholdMb: MEMORY_WARN_RSS_MB,
+    overThreshold: Number.isFinite(MEMORY_WARN_RSS_MB) && MEMORY_WARN_RSS_MB > 0 && rssMb >= MEMORY_WARN_RSS_MB,
+    memory: {
+      rssMb,
+      heapUsedMb: _mb(usage.heapUsed),
+      heapTotalMb: _mb(usage.heapTotal),
+      externalMb: _mb(usage.external),
+      arrayBuffersMb: _mb(usage.arrayBuffers),
+    },
+    highWater: {
+      rssMb: _mb(_memoryHighWater.rss),
+      heapUsedMb: _mb(_memoryHighWater.heapUsed),
+      externalMb: _mb(_memoryHighWater.external),
+      at: _memoryHighWater.at,
+    },
+  };
+}
+
+function startMemoryMonitor() {
+  if (_memoryMonitorTimer || !Number.isFinite(MEMORY_MONITOR_MS) || MEMORY_MONITOR_MS <= 0) return;
+  _memoryMonitorTimer = setInterval(() => {
+    const diag = getProcessDiagnostics();
+    const rssMb = diag.memory.rssMb;
+    const shouldLog = diag.overThreshold || rssMb >= _memoryLastLogRssMb + 128;
+    if (shouldLog) {
+      _memoryLastLogRssMb = rssMb;
+      const level = diag.overThreshold ? 'warn' : 'log';
+      console[level](`[memory] rss=${rssMb}MB heap=${diag.memory.heapUsedMb}/${diag.memory.heapTotalMb}MB external=${diag.memory.externalMb}MB threshold=${diag.warnThresholdMb}MB`);
+    }
+  }, MEMORY_MONITOR_MS);
+  _memoryMonitorTimer.unref?.();
+}
 
 // killId → ChildProcess (for user-initiated shell-exec cancel)
 const _shellProcs = new Map();
@@ -398,11 +459,15 @@ const browseRoutes = registerBrowseRoutes(app, { require: _require });
 setTimeout(() => {
   figma.start();
   // Start custom MCP auto-detection
-  customMcp.startAutoDetect();
-  // Pre-warm Playwright MCP if available so it shows READY immediately
-  playwrightMcp.prewarm().then(() => {
-    console.log('[playwright-mcp] pre-warmed on startup');
-  }).catch(() => {});
+  customMcp.startAutoDetect({ spawnFallback: EAGER_MCP_STARTUP });
+  if (EAGER_MCP_STARTUP) {
+    // Pre-warm Playwright MCP if available so it shows READY immediately.
+    playwrightMcp.prewarm().then(() => {
+      console.log('[playwright-mcp] pre-warmed on startup');
+    }).catch(() => {});
+  } else {
+    console.log('[playwright-mcp] startup prewarm skipped in server-only mode (lazy start via /api/playwright-mcp/start)');
+  }
 }, 500);  // slight delay so the main server is fully up first
 // ── Figma plugin/status/rules routes moved → server/bridges/figma.js ──
 
@@ -577,6 +642,7 @@ registerSecurityDashboardRoutes(app, {
   getCustomMcpStatus: () => customMcp.getRelayState?.(),
   getCustomMcpDiagnostics: () => customMcp.getDiagnostics?.(),
   getPlaywrightMcpStatus: () => playwrightMcp.status?.(),
+  getProcessDiagnostics,
 });
 // ── Memory / Preferences / Facts ──────────────────────────────────────────
 const { loadPrefs } = registerMemoryPrefsFactsRoutes(app, { configDir: CONFIG_DIR });
@@ -666,6 +732,7 @@ export function startServer(port) {
     primeTokenizer().then(loaded => {
       if (loaded) console.log('[tokens] tiktoken (cl100k_base) primed for exact counts');
     }).catch(() => {});
+    startMemoryMonitor();
     extBridge.attach(server);
     teamsBundle.attachRelay(server);
     startScheduler(task => {
@@ -758,6 +825,10 @@ export function startServer(port) {
       customMcp.cleanup();
       // Kill MCP child
       stopScheduler();
+      if (_memoryMonitorTimer) {
+        clearInterval(_memoryMonitorTimer);
+        _memoryMonitorTimer = null;
+      }
     }
     process.on('exit',    () => fullCleanup());
     process.on('SIGTERM', () => { fullCleanup(); process.exit(0); });

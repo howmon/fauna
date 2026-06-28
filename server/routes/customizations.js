@@ -89,11 +89,41 @@ function _frontmatterValue(value) {
   return text;
 }
 
+function _frontmatterLines(key, value, indent = 0) {
+  const pad = ' '.repeat(indent);
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const lines = [`${pad}${key}:`];
+    for (const [childKey, childValue] of Object.entries(value)) {
+      if (childValue === undefined || childValue === null || childValue === '') continue;
+      lines.push(..._frontmatterLines(childKey, childValue, indent + 2));
+    }
+    return lines;
+  }
+  if (Array.isArray(value) && value.some(item => item && typeof item === 'object')) {
+    const lines = [`${pad}${key}:`];
+    for (const item of value) {
+      if (item && typeof item === 'object' && !Array.isArray(item)) {
+        const entries = Object.entries(item).filter(([, v]) => v !== undefined && v !== null && v !== '');
+        if (!entries.length) continue;
+        const [firstKey, firstValue] = entries[0];
+        lines.push(`${' '.repeat(indent + 2)}- ${firstKey}: ${_frontmatterValue(firstValue)}`);
+        for (const [childKey, childValue] of entries.slice(1)) {
+          lines.push(..._frontmatterLines(childKey, childValue, indent + 4));
+        }
+      } else {
+        lines.push(`${' '.repeat(indent + 2)}- ${_frontmatterValue(item)}`);
+      }
+    }
+    return lines;
+  }
+  return [`${pad}${key}: ${_frontmatterValue(value)}`];
+}
+
 function _markdownSource(frontmatter, body) {
   const fm = frontmatter && typeof frontmatter === 'object' && !Array.isArray(frontmatter) ? frontmatter : {};
   const lines = Object.entries(fm)
     .filter(([, value]) => value !== undefined && value !== null && value !== '')
-    .map(([key, value]) => `${key}: ${_frontmatterValue(value)}`);
+    .flatMap(([key, value]) => _frontmatterLines(key, value));
   return ['---', ...lines, '---', String(body || '').trimStart()].join('\n').replace(/\s*$/, '\n');
 }
 

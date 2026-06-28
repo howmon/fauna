@@ -192,6 +192,30 @@ Server rules.
     expect(fs.readFileSync(savedPath, 'utf8')).toContain('Triage this bug:');
   });
 
+  it('saves nested inline hooks in markdown frontmatter', () => {
+    const res = app.invoke('POST', '/api/customizations/save', {
+      body: {
+        kind: 'agent',
+        scope: 'repo',
+        name: 'guarded-agent',
+        frontmatter: {
+          description: 'Use when checking lifecycle hooks.',
+          hooks: {
+            UserPromptSubmit: [{ type: 'command', command: 'node .github/hooks/prompt.js', timeout: 2500 }],
+          },
+        },
+        body: 'Guard the prompt.',
+      },
+    });
+
+    const savedPath = path.join(repoDir, '.github', 'agents', 'guarded-agent.agent.md');
+    const saved = fs.readFileSync(savedPath, 'utf8');
+    expect(res.statusCode).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.record.hooks.UserPromptSubmit[0].command).toBe('node .github/hooks/prompt.js');
+    expect(saved).toContain('hooks:\n  UserPromptSubmit:\n    - type: command\n      command: node .github/hooks/prompt.js\n      timeout: 2500');
+  });
+
   it('saves a user hook JSON file', () => {
     const res = app.invoke('POST', '/api/customizations/save', {
       body: {

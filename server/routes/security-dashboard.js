@@ -18,6 +18,7 @@ export function registerSecurityDashboardRoutes(app, {
   getCustomMcpStatus,
   getCustomMcpDiagnostics,
   getPlaywrightMcpStatus,
+  getProcessDiagnostics,
 } = {}) {
   app.get('/api/security/status', async (req, res) => {
     const capabilitiesPath = path.join(appDir || process.cwd(), 'server', 'generated', 'capabilities.json');
@@ -46,6 +47,9 @@ export function registerSecurityDashboardRoutes(app, {
     let playwrightMcp = null;
     try { playwrightMcp = getPlaywrightMcpStatus ? await getPlaywrightMcpStatus() : null; } catch (e) { playwrightMcp = { ok: false, error: e.message }; }
 
+    let processDiagnostics = null;
+    try { processDiagnostics = getProcessDiagnostics ? getProcessDiagnostics() : null; } catch (e) { processDiagnostics = { ok: false, error: e.message }; }
+
     res.json({
       ok: true,
       generatedAt: new Date().toISOString(),
@@ -57,6 +61,7 @@ export function registerSecurityDashboardRoutes(app, {
         customMcp,
         customMcpDiagnostics,
         playwrightMcp,
+        process: processDiagnostics,
         teams: { enabled: !!process.env.FAUNA_TEAMS_SECRET },
         mobileTunnel: { packageAvailable: true, active: false, note: 'active tunnel state is owned by mobile routes' },
       },

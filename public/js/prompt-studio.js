@@ -6,6 +6,8 @@ var promptStudioState = {
   draft: null,
 };
 
+var PROMPT_STUDIO_HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PreCompact', 'SubagentStart', 'SubagentStop', 'Stop'];
+
 function openPromptStudioPage() {
   var body = typeof _openAppPage === 'function' ? _openAppPage('prompt-studio', 'Prompt Studio') : null;
   if (!body) return null;
@@ -178,6 +180,9 @@ function _promptStudioEditor(r, readOnly) {
     extra += '<label class="prompt-studio-check"><input id="ps-user-invocable" type="checkbox"' + (r.userInvocable !== false ? ' checked' : '') + disabled + '> User invocable</label>';
     extra += '<label class="prompt-studio-check"><input id="ps-disable-model-invocation" type="checkbox"' + (r.disableModelInvocation === true ? ' checked' : '') + disabled + '> Disable model invocation</label>';
   }
+  if (r.kind !== 'hooks' && r.kind !== 'agent-instructions') {
+    extra += _promptStudioHooksField(fm.hooks || r.hooks || {}, disabled);
+  }
   return '<div class="prompt-studio-editor">' +
     '<div class="prompt-studio-editor-grid">' +
       _promptStudioField('Name', 'ps-name', r.name || '', disabled) +
@@ -200,6 +205,52 @@ function _promptStudioField(label, id, value, disabled, placeholder) {
 
 function _promptStudioSelect(label, id, value, disabled) {
   return '<label><span>' + escHtml(label) + '</span><select id="' + id + '"' + disabled + '><option value="repo"' + (value !== 'user' ? ' selected' : '') + '>Repo</option><option value="user"' + (value === 'user' ? ' selected' : '') + '>User</option></select></label>';
+}
+
+function _promptStudioHooksField(hooks, disabled) {
+  var value = hooks && Object.keys(hooks || {}).length ? JSON.stringify(hooks, null, 2) : '';
+  var eventOptions = PROMPT_STUDIO_HOOK_EVENTS.map(function(eventName) {
+    return '<option value="' + escHtml(eventName) + '">' + escHtml(eventName) + '</option>';
+  }).join('');
+  return '<div class="prompt-studio-inline-hooks">' +
+    '<label class="prompt-studio-body-label"><span>Inline Hooks JSON</span><textarea id="ps-inline-hooks"' + disabled + ' placeholder="{ &quot;UserPromptSubmit&quot;: [{ &quot;type&quot;: &quot;command&quot;, &quot;command&quot;: &quot;node .github/hooks/policy.js&quot; }] }">' + escHtml(value) + '</textarea></label>' +
+    '<div class="prompt-studio-hook-builder">' +
+      '<select id="ps-hook-event"' + disabled + '>' + eventOptions + '</select>' +
+      '<input id="ps-hook-command"' + disabled + ' placeholder="node .github/hooks/policy.js">' +
+      '<button class="settings-row-btn" type="button" onclick="promptStudioAddInlineHook()"' + disabled + '><i class="ti ti-plus"></i> Add hook</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function promptStudioAddInlineHook() {
+  var textarea = document.getElementById('ps-inline-hooks');
+  var eventEl = document.getElementById('ps-hook-event');
+  var commandEl = document.getElementById('ps-hook-command');
+  var status = document.getElementById('prompt-studio-save-status');
+  if (!textarea || !eventEl || !commandEl) return;
+  var command = String(commandEl.value || '').trim();
+  if (!command) {
+    if (status) status.textContent = 'Enter a hook command first.';
+    commandEl.focus();
+    return;
+  }
+  var hooks = {};
+  var raw = String(textarea.value || '').trim();
+  if (raw) {
+    try {
+      hooks = JSON.parse(raw);
+      if (!hooks || typeof hooks !== 'object' || Array.isArray(hooks)) throw new Error('Expected an object');
+    } catch (e) {
+      if (status) status.textContent = 'Fix Inline Hooks JSON before adding: ' + (e.message || String(e));
+      return;
+    }
+  }
+  var eventName = eventEl.value || 'UserPromptSubmit';
+  if (!Array.isArray(hooks[eventName])) hooks[eventName] = [];
+  hooks[eventName].push({ type: 'command', command: command });
+  textarea.value = JSON.stringify(hooks, null, 2);
+  commandEl.value = '';
+  if (status) status.textContent = 'Hook added. Save to write it.';
 }
 
 async function savePromptStudioRecord() {
@@ -261,6 +312,8 @@ function _promptStudioPayload(record) {
     frontmatter['user-invocable'] = _checked('ps-user-invocable');
     frontmatter['disable-model-invocation'] = _checked('ps-disable-model-invocation');
   }
+  var inlineHooks = _jsonObject('ps-inline-hooks');
+  if (inlineHooks && Object.keys(inlineHooks).length) frontmatter.hooks = inlineHooks;
   return {
     kind: kind,
     name: name,
@@ -281,6 +334,17 @@ function _checked(id) {
 }
 function _csv(id) {
   return _value(id).split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+}
+function _jsonObject(id) {
+  var raw = _value(id).trim();
+  if (!raw) return null;
+  try {
+    var parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Expected an object');
+    return parsed;
+  } catch (e) {
+    throw new Error('Invalid Inline Hooks JSON: ' + (e.message || String(e)));
+  }
 }
 
 async function runPromptStudioPrompt(name) {

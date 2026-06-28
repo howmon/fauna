@@ -452,12 +452,27 @@ function parseDelegations(buffer) {
     var task = match[2].trim();
     if (!name || !task) continue;
     var resolved = findAgent(name) || findSubAgent(name);
+    var allowed = _isDelegationAllowed(name, resolved);
     // Surface unresolved names as sentinel entries instead of silently dropping —
     // executeDelegations renders them as errors so the user sees the failure
     // rather than a stalled turn.
-    delegations.push({ agentName: name, task: task, _unresolved: !resolved });
+    delegations.push({ agentName: name, task: task, _unresolved: !resolved, _disallowed: !allowed });
   }
   return delegations;
+}
+
+function _isDelegationAllowed(name, resolved) {
+  if (!activeAgent || !activeAgent.manifest) return true;
+  var allowed = activeAgent.manifest.agents || activeAgent.manifest.allowedSubagents || null;
+  if (!Array.isArray(allowed) || !allowed.length) return true;
+  var candidates = [name];
+  if (resolved && resolved.name) candidates.push(resolved.name);
+  return allowed.some(function(item) {
+    var normalized = String(item || '').replace(/^agents\//, '').toLowerCase();
+    return candidates.some(function(candidate) {
+      return String(candidate || '').replace(/^agents\//, '').toLowerCase() === normalized;
+    });
+  });
 }
 
 /**
@@ -674,7 +689,7 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
   function runOne(del, idx, priorResultsText) {
     if (cancelled) return Promise.resolve({ agentName: del.agentName, response: 'Cancelled', duration: 0, cancelled: true });
     var agent = resolveAgent(del.agentName);
-    if (!agent || del._unresolved) {
+    if (!agent || del._unresolved || del._disallowed) {
       var row0 = document.getElementById('deleg-row-' + idx + '-' + uid);
       if (row0) {
         row0.classList.remove('pending', 'working');
@@ -682,7 +697,10 @@ async function executeDelegations(delegations, conv, originalMessage, preferredM
         var st0 = row0.querySelector('.delegation-agent-status');
         if (st0) st0.innerHTML = '<i class="ti ti-alert-triangle" style="font-size:11px;color:#e06c75"></i>';
       }
-      return Promise.resolve({ agentName: del.agentName, displayName: del.agentName, icon: 'ti-alert-triangle', task: del.task, response: 'Unknown sub-agent `' + del.agentName + '` — orchestrator emitted a name that is not in its sub-agent list. [TASK_FAILED: unknown agent]', duration: 0, error: true, status: 'failed' });
+      var reason = del._disallowed
+        ? 'Disallowed sub-agent `' + del.agentName + '` — this agent policy only permits: ' + ((activeAgent.manifest.agents || activeAgent.manifest.allowedSubagents || []).join(', ') || 'none') + '. [TASK_FAILED: disallowed agent]'
+        : 'Unknown sub-agent `' + del.agentName + '` — orchestrator emitted a name that is not in its sub-agent list. [TASK_FAILED: unknown agent]';
+      return Promise.resolve({ agentName: del.agentName, displayName: del.agentName, icon: 'ti-alert-triangle', task: del.task, response: reason, duration: 0, error: true, status: 'failed' });
     }
     var row = document.getElementById('deleg-row-' + idx + '-' + uid);
     var timeEl = document.getElementById('deleg-time-' + idx + '-' + uid);

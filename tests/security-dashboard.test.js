@@ -13,6 +13,7 @@ describe('security dashboard diagnostics', () => {
       getBrowseDiagnostics: () => ({ ok: true, schemaVersion: 1, diagnostics: { tabCount: 0 } }),
       getCustomMcpStatus: () => ({ connected: false }),
       getCustomMcpDiagnostics: async () => ({ ok: true, schemaVersion: 1, counts: { total: 1, needsAuth: 1 } }),
+      getProcessDiagnostics: () => ({ pid: 123, memory: { rssMb: 250 }, highWater: { rssMb: 250 } }),
     });
 
     let payload = null;
@@ -22,5 +23,6 @@ describe('security dashboard diagnostics', () => {
     expect(payload.surfaces.browserDiagnostics).toMatchObject({ ok: true, schemaVersion: 1 });
     expect(payload.surfaces.customMcpDiagnostics).toMatchObject({ ok: true, schemaVersion: 1 });
     expect(payload.surfaces.customMcpDiagnostics.counts.needsAuth).toBe(1);
+    expect(payload.surfaces.process).toMatchObject({ pid: 123, memory: { rssMb: 250 } });
   });
 });

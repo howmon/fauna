@@ -42,6 +42,25 @@ Body
     expect(parsed.frontmatter['disable-model-invocation']).toBe(true);
     expect(parsed.body).toBe('Body\n');
   });
+
+  it('parses nested hook arrays in frontmatter', () => {
+    const parsed = parseCustomizationFrontmatter(`---
+name: guarded-agent
+hooks:
+  UserPromptSubmit:
+    - type: command
+      command: ./scripts/check-prompt.js
+      timeout: 2500
+  SubagentStart:
+    - type: command
+      osx: ./scripts/subagent-start.sh
+---
+Body
+`);
+
+    expect(parsed.frontmatter.hooks.UserPromptSubmit).toEqual([{ type: 'command', command: './scripts/check-prompt.js', timeout: 2500 }]);
+    expect(parsed.frontmatter.hooks.SubagentStart).toEqual([{ type: 'command', osx: './scripts/subagent-start.sh' }]);
+  });
 });
 
 describe('discoverCustomizations', () => {
@@ -83,6 +102,10 @@ name: code-reviewer
 description: "Use when reviewing code changes."
 tools: [read, search]
 user-invocable: false
+hooks:
+  UserPromptSubmit:
+    - type: command
+      command: ./scripts/prompt-policy.sh
 ---
 You review code.
 `);
@@ -128,6 +151,7 @@ Write a standup.
     expect(grouped[CUSTOMIZATION_KINDS.INSTRUCTION][0].applyTo).toEqual(['server/**/*.js']);
     expect(grouped[CUSTOMIZATION_KINDS.AGENT][0].tools).toEqual(['read', 'search']);
     expect(grouped[CUSTOMIZATION_KINDS.AGENT][0].userInvocable).toBe(false);
+    expect(grouped[CUSTOMIZATION_KINDS.AGENT][0].hooks.UserPromptSubmit[0].command).toBe('./scripts/prompt-policy.sh');
     expect(grouped[CUSTOMIZATION_KINDS.HOOKS][0].hooks.PreToolUse[0].command).toBe('./scripts/policy.sh');
     expect(grouped[CUSTOMIZATION_KINDS.SKILL][0].ok).toBe(true);
     expect(records.every(r => r.enabled)).toBe(true);

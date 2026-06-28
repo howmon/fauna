@@ -49,4 +49,21 @@ describe('hooks runtime', () => {
     expect(result.ok).toBe(true);
     expect(result.systemMessages).toEqual(['audit note']);
   });
+
+  it('passes lifecycle event names and payloads to hooks', async () => {
+    const records = [{
+      relativePath: '.github/hooks/lifecycle.json',
+      hooks: {
+        UserPromptSubmit: [{
+          type: 'command',
+          command: `node -e "process.stdin.resume();process.stdin.on('data',d=>{const p=JSON.parse(d);process.stdout.write(JSON.stringify({systemMessage:p.hookEventName+':'+p.prompt}))})"`,
+        }],
+      },
+    }];
+
+    const result = await runHooks(records, 'UserPromptSubmit', { prompt: 'proceed' }, { timeoutMs: 5000 });
+    expect(result.ok).toBe(true);
+    expect(result.event).toBe('UserPromptSubmit');
+    expect(result.systemMessages).toEqual(['UserPromptSubmit:proceed']);
+  });
 });

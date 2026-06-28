@@ -892,6 +892,10 @@ async function sendMessage(opts) {
     userMsg._toolPolicy = conv._pendingToolPolicy;
     delete conv._pendingToolPolicy;
   }
+  if (conv._pendingModelPolicy) {
+    userMsg._modelPolicy = conv._pendingModelPolicy;
+    delete conv._pendingModelPolicy;
+  }
   conv.messages.push(userMsg);
 
   bumpConvToTop(conv.id);
@@ -1600,7 +1604,8 @@ async function streamResponse(conv) {
     // narrating a markdown spec instead of rendering in Figma.
     var _agentNeedsFigma = (typeof activeAgent !== 'undefined' && activeAgent && activeAgent.permissions && activeAgent.permissions.figma) === true;
     var _agentNeedsBrowser = (typeof activeAgent !== 'undefined' && activeAgent && activeAgent.permissions && activeAgent.permissions.browser) === true;
-    var chatBody = { messages, model: state.model, systemPrompt, useFigmaMCP: !!state.figmaMCPEnabled || _hasFigmaAttachment || _agentNeedsFigma || _userHasFigmaUrl, usePlaywrightMCP: !!state.playwrightMCPEnabled || _hasBrowserAttachment || _agentNeedsBrowser || _userHasUrl, selectedFigmaFileKeys: _selectedFigmaKeys, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false, conversationId: (conv && conv.id) || null };
+    var _effectiveModel = state.model;
+    var chatBody = { messages, model: _effectiveModel, systemPrompt, useFigmaMCP: !!state.figmaMCPEnabled || _hasFigmaAttachment || _agentNeedsFigma || _userHasFigmaUrl, usePlaywrightMCP: !!state.playwrightMCPEnabled || _hasBrowserAttachment || _agentNeedsBrowser || _userHasUrl, selectedFigmaFileKeys: _selectedFigmaKeys, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false, conversationId: (conv && conv.id) || null };
     // Autonomous-mode (run-until-done) flag. Per-conversation override wins;
     // otherwise the server falls back to the active project's setting.
     // `false` is forwarded explicitly so a conversation can opt OUT of a
@@ -1625,6 +1630,13 @@ async function streamResponse(conv) {
     if (typeof isAgentActive === 'function' && isAgentActive()) {
       chatBody.agentName = getActiveAgentName();
       chatBody.agentPermissions = getActiveAgentPermissions();
+      if (typeof getActiveAgentModelPolicy === 'function') {
+        var _agentModelPolicy = getActiveAgentModelPolicy();
+        if (_agentModelPolicy && _agentModelPolicy.model) {
+          chatBody.model = _agentModelPolicy.model;
+          chatBody.modelPolicy = _agentModelPolicy;
+        }
+      }
     }
     var _latestUserWithPolicy = null;
     for (var _tp = conv.messages.length - 1; _tp >= 0; _tp--) {
@@ -1632,6 +1644,10 @@ async function streamResponse(conv) {
     }
     if (_latestUserWithPolicy && _latestUserWithPolicy._toolPolicy) {
       chatBody.toolPolicy = _latestUserWithPolicy._toolPolicy;
+    }
+    if (_latestUserWithPolicy && _latestUserWithPolicy._modelPolicy && _latestUserWithPolicy._modelPolicy.model) {
+      chatBody.model = _latestUserWithPolicy._modelPolicy.model;
+      chatBody.modelPolicy = _latestUserWithPolicy._modelPolicy;
     }
     // Orchestrators are dispatch-only — strip tool access on their own turns
     // so a tool-capable model (Opus, GPT-5) can't shortcut the pipeline by

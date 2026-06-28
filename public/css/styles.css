@@ -10955,6 +10955,10 @@ mark.find-hit.find-hit-active {
 .prompt-studio-editor textarea:focus { border-color: color-mix(in oklab, var(--accent) 50%, var(--fau-border)); }
 .prompt-studio-check { display: flex !important; grid-template-columns: none !important; align-items: center; gap: 8px !important; min-height: 36px; padding: 8px 10px; border: 1px solid var(--fau-border); border-radius: 7px; background: var(--fau-bg); }
 .prompt-studio-check input { width: auto; }
+.prompt-studio-inline-hooks { grid-column: 1 / -1; display: grid; gap: 8px; }
+.prompt-studio-inline-hooks textarea { min-height: 120px; font-family: var(--mono); line-height: 1.45; }
+.prompt-studio-hook-builder { display: grid; grid-template-columns: minmax(160px, .55fr) minmax(220px, 1fr) auto; gap: 8px; align-items: center; }
+.prompt-studio-hook-builder .settings-row-btn { min-height: 36px; white-space: nowrap; }
 .prompt-studio-body-label textarea { min-height: 260px; resize: vertical; font-family: var(--mono); line-height: 1.45; }
 .prompt-studio-save-row { display: flex; align-items: center; gap: 10px; min-height: 34px; }
 #prompt-studio-save-status { color: var(--fau-text-dim); font-size: 12px; }
@@ -10977,6 +10981,7 @@ mark.find-hit.find-hit-active {
   .prompt-studio-grid { grid-template-columns: 1fr; }
   .prompt-studio-editor-grid,
   .prompt-studio-meta-grid,
-  .prompt-studio-code-grid { grid-template-columns: 1fr; }
+  .prompt-studio-code-grid,
+  .prompt-studio-hook-builder { grid-template-columns: 1fr; }
 }
 

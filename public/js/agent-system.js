@@ -122,6 +122,7 @@ async function loadInstalledAgents() {
           permissions: {},
           tools: a.tools || [],
           model: a.model || [],
+          agents: a.agents || [],
           _customizationAgent: true,
           _sourcePath: a.path
         };
@@ -221,6 +222,7 @@ async function activateAgent(agentName, conv, isInline) {
     manifest: agent,
     systemPrompt: agent.systemPrompt || '',
     permissions: agent.permissions || {},
+    model: agent.model || [],
     contextSummary: summary
   };
 
@@ -313,6 +315,9 @@ function getAgentSystemPrompt() {
     }
     parts.push('### Custom Agent Instructions');
     parts.push('This agent comes from a `.agent.md` customization file. The server injects its full instructions as an authoritative system message for this turn. Do not call `fauna_get_agent_instructions` for this agent.');
+    if (activeAgent.manifest && activeAgent.manifest.agents && activeAgent.manifest.agents.length) {
+      parts.push('Allowed sub-agents: ' + activeAgent.manifest.agents.join(', '));
+    }
   } else if (isOrchestrator) {
     // Pre-compute canonical sub-agent slug list so we can pin it at the top
     // AND repeat it after the user-authored body. The user's systemPrompt
@@ -1919,6 +1924,13 @@ function getActiveAgentName() {
 
 function getActiveAgentPermissions() {
   return activeAgent ? activeAgent.permissions : null;
+}
+
+function getActiveAgentModelPolicy() {
+  if (!activeAgent) return null;
+  var model = activeAgent.model || (activeAgent.manifest && activeAgent.manifest.model) || [];
+  if (!Array.isArray(model)) model = model ? [model] : [];
+  return model.length ? { source: 'agent', model: model[0], models: model } : null;
 }
 
 /**

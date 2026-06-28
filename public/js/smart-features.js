@@ -726,6 +726,7 @@ function runCustomSlashCommand(command, trimmed) {
       if (!data || !data.ok) { showToast((data && data.error) || 'Prompt failed'); return; }
       var conv = (typeof getConv === 'function' && state && state.currentId) ? getConv(state.currentId) : null;
       if (conv && data.toolPolicy) conv._pendingToolPolicy = data.toolPolicy;
+      if (conv && data.model && data.model.length) conv._pendingModelPolicy = { source: 'prompt', model: data.model[0], models: data.model };
       input.value = (data.agent ? '@' + data.agent + ' ' : '') + data.content.trim();
       resizeTextarea(input);
       sendMessage();

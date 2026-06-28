@@ -502,7 +502,8 @@ export function createCustomMcpBridge({
     }
   }
 
-  async function autoDetectBrowserMcp() {
+  async function autoDetectBrowserMcp(opts = {}) {
+    const spawnFallback = opts.spawnFallback !== false;
     const servers = readCustomMcpServers();
 
     // Legacy cleanup: this server used to be auto-created on startup.
@@ -534,7 +535,7 @@ export function createCustomMcpBridge({
 
     if (!available) {
       extBridge.setRelayBrowsers([]);
-      if (!bundledBrowserServerProc && bundledBrowserServerPath && fs.existsSync(bundledBrowserServerPath)) {
+      if (spawnFallback && !bundledBrowserServerProc && bundledBrowserServerPath && fs.existsSync(bundledBrowserServerPath)) {
         // Race guard: re-probe :3341 immediately before spawning. The 10s
         // poll interval can miss a FaunaMCP launch that happened seconds
         // ago; without this second check Fauna's bundled child would call
@@ -580,10 +581,10 @@ export function createCustomMcpBridge({
     } catch (_) {}
   }
 
-  function startAutoDetect() {
-    autoDetectBrowserMcp().catch(() => {});
+  function startAutoDetect(opts = {}) {
+    autoDetectBrowserMcp(opts).catch(() => {});
     autoDetectPollTimer = setInterval(() => {
-      autoDetectBrowserMcp().catch(() => {});
+      autoDetectBrowserMcp(opts).catch(() => {});
     }, 10000);
   }
 

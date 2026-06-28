@@ -127,8 +127,29 @@ Implemented:
 - Custom .agent.md entries are merged into the normal @agent activation catalog.
 - Hook runtime foundation for JSON stdin/stdout commands.
 - PreToolUse and PostToolUse hooks intercept live tool execution.
+- Stop hooks validate autonomous DONE completion.
+- Autonomous DONE claims get a verification-evidence nudge when no command, file, diagnostic, tool output, screenshot, or log evidence is cited.
+- Prompt Studio UI supports creating and editing prompts, instructions, agents, skills, and hook files.
+- POST /api/customizations/save writes scoped customization files to repo/user roots and returns linted registry records.
+- Prompt and agent model policy is applied to live chat requests.
+- .agent.md allowed subagent policy is enforced in live renderer delegation.
+- SessionStart and UserPromptSubmit hooks intercept live chat request startup.
+- PreCompact hooks can block auto-compaction or add system context before summarization.
+- SubagentStart and SubagentStop hooks wrap delegated /api/chat requests.
+- Structured frontmatter parsing supports nested inline hook objects in .prompt.md, .instructions.md, .agent.md, and SKILL.md files.
+- Prompt Studio exposes inline hook JSON editing for markdown customizations and saves it as nested frontmatter.
+- Prompt Studio includes inline hook authoring controls for event + command entry.
+- Browser smoke verified Prompt Studio agent authoring, inline hook addition, save, registry reload, and nested frontmatter output.
 - Tests for hook discovery, blocking, and system-message output.
+- Tests for lifecycle hook payload dispatch.
+- Tests for /api/chat lifecycle hook blocking, system-message injection, and SubagentStop execution.
+- Tests for nested hook frontmatter parsing and discovery.
+- Tests for saving nested inline hook frontmatter through the customization API.
+- Tests for customization save authoring routes.
+- Server-only startup no longer eagerly prewarms Playwright MCP or spawns the bundled browser MCP fallback; browser automation starts lazily unless FAUNA_EAGER_MCP_STARTUP=1 is set.
+- Security diagnostics now include process memory RSS/heap/high-water data, and server startup logs RSS growth or threshold breaches for live OOM triage.
+- Live serve diagnostics smoke showed startup RSS around 203 MB and diagnostics-burst high-water around 369 MB with Playwright MCP still stopped and no threshold breach.
+- Regression tests cover custom MCP autodetect lazy mode so server-only startup cannot accidentally spawn the bundled browser fallback.
 
 Next implementation slice:
-- Add autonomous verification gate before completion markers.
-- Add Prompt Studio UI for authoring, linting, and test-running customizations.
+- Continue longer live-session monitoring if exit-137 recurs under real workloads.
