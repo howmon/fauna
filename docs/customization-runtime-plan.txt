@@ -150,6 +150,7 @@ Implemented:
 - Security diagnostics now include process memory RSS/heap/high-water data, and server startup logs RSS growth or threshold breaches for live OOM triage.
 - Live serve diagnostics smoke showed startup RSS around 203 MB and diagnostics-burst high-water around 369 MB with Playwright MCP still stopped and no threshold breach.
 - Regression tests cover custom MCP autodetect lazy mode so server-only startup cannot accidentally spawn the bundled browser fallback.
+- Built-in repo skill packs are included in the Electron build via skills/** and verified inside app.asar.
 
 Next implementation slice:
 - Continue longer live-session monitoring if exit-137 recurs under real workloads.

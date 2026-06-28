@@ -190,6 +190,7 @@
       "*.cjs",
       "server/**",
       "lib/**",
+      "skills/**",
       "public/**",
       "assets/**",
       "fauna-bot/server/**",
