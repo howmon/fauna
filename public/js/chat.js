@@ -513,7 +513,7 @@ function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
 
 // Render a recommended-actions bar for the given items below the latest
 // assistant message. Shared by the explicit-block and model-generated paths.
-function _renderSuggestionBar(items, msgEl, isFallback) {
+function _renderSuggestionBar(items, msgEl, isFallback, turnKey) {
   if (!Array.isArray(items) || !items.length || !msgEl) return;
   if (msgEl.classList && msgEl.classList.contains('chain-msg')) return;
 
@@ -544,6 +544,7 @@ function _renderSuggestionBar(items, msgEl, isFallback) {
   bar.className = 'suggestion-bar' + (isFallback ? ' suggestion-bar-fallback' : '');
   bar.setAttribute('aria-label', 'Recommended actions');
   bar.dataset.sugSig = newSig;
+  if (turnKey) bar.dataset.sugTurnKey = turnKey;
 
   items.slice(0, 4).forEach(function(label) {
     var btn = document.createElement('button');
@@ -588,6 +589,29 @@ function _renderSuggestionBar(items, msgEl, isFallback) {
 // live streaming both result in a single API call targeting the FINAL
 // assistant message of the conversation.
 var _sugGenTimers = {};
+var _sugInFlight = {};
+
+function _suggestionHash(text) {
+  text = String(text || '');
+  var hash = 2166136261;
+  for (var i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function _suggestionTurnKey(msgs, lastAssistant) {
+  var lastUser = null;
+  for (var i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i] === lastAssistant) continue;
+    if (msgs[i] && msgs[i].role === 'user') { lastUser = msgs[i]; break; }
+  }
+  var userText = lastUser && typeof lastUser.content === 'string' ? lastUser.content : '';
+  var assistantText = lastAssistant && typeof lastAssistant.content === 'string' ? lastAssistant.content : '';
+  return _suggestionHash(userText.slice(-2000) + '\n---assistant---\n' + assistantText.slice(-4000));
+}
+
 function _generateContextualSuggestions(msgEl) {
   var convId = (typeof state !== 'undefined' && state) ? state.currentId : null;
   if (!convId) return;
@@ -609,6 +633,7 @@ function _doGenerateContextualSuggestions(convId) {
     if (msgs[i] && msgs[i].role === 'assistant') { lastAssistant = msgs[i]; break; }
   }
   if (!lastAssistant) return;
+  var turnKey = _suggestionTurnKey(msgs, lastAssistant);
 
   // Locate the latest assistant message element in the active conversation's
   // container. The per-conversation container is the `[data-conv-messages]`
@@ -622,13 +647,17 @@ function _doGenerateContextualSuggestions(convId) {
     || Array.from(convInner.querySelectorAll('.msg.assistant')).pop();
   if (!msgEl) return;
 
+  var existingBar = convInner.querySelector('.suggestion-bar');
+  if (existingBar && existingBar.dataset && existingBar.dataset.sugTurnKey === turnKey) return;
+  if (_sugInFlight[convId] === turnKey) return;
+
   // Cache (in-memory only; `_`-prefixed keys are stripped before storage) so we
   // don't re-call the model when the same turn is re-rendered within a session.
   // Only a NON-EMPTY cache short-circuits — a stale/empty array (e.g. a prior
   // transient failure) must fall through and regenerate, otherwise the bar
   // would stay hidden for that turn forever.
-  if (Array.isArray(lastAssistant._suggestions) && lastAssistant._suggestions.length) {
-    _renderSuggestionBar(lastAssistant._suggestions, msgEl, false);
+  if (lastAssistant._suggestionsKey === turnKey && Array.isArray(lastAssistant._suggestions) && lastAssistant._suggestions.length) {
+    _renderSuggestionBar(lastAssistant._suggestions, msgEl, false, turnKey);
     return;
   }
 
@@ -642,6 +671,7 @@ function _doGenerateContextualSuggestions(convId) {
   if (!recent.length) return;
 
   var reqId = (conv._sugReqId = (conv._sugReqId || 0) + 1);
+  _sugInFlight[convId] = turnKey;
   fetch('/api/conversation-suggestions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -652,7 +682,11 @@ function _doGenerateContextualSuggestions(convId) {
     // rate-limit) would permanently suppress the recommended-actions bar for
     // this turn, since the cache short-circuits before re-fetching. Leaving it
     // uncached lets the setBusy retry (and any later re-render) try again.
-    if (items.length) lastAssistant._suggestions = items;
+    if (items.length) {
+      lastAssistant._suggestions = items;
+      lastAssistant._suggestionsKey = turnKey;
+    }
+    if (_sugInFlight[convId] === turnKey) delete _sugInFlight[convId];
     // Stale guards: a newer turn started, conv switched, or streaming resumed.
     if (conv._sugReqId !== reqId) return;
     if (typeof state !== 'undefined' && state && state.currentId !== convId) return;
@@ -663,9 +697,13 @@ function _doGenerateContextualSuggestions(convId) {
     var ci = (typeof getConvInner === 'function')
       ? getConvInner(convId)
       : document.querySelector('[data-conv-messages="' + convId + '"]');
+    var existing = ci && ci.querySelector('.suggestion-bar');
+    if (existing && existing.dataset && existing.dataset.sugTurnKey === turnKey) return;
     var el = ci && (ci.querySelector('.msg.assistant:last-of-type') || Array.from(ci.querySelectorAll('.msg.assistant')).pop());
-    if (el) _renderSuggestionBar(items, el, false);
-  }).catch(function() { /* network error — leave no bar */ });
+    if (el) _renderSuggestionBar(items, el, false, turnKey);
+  }).catch(function() {
+    if (_sugInFlight[convId] === turnKey) delete _sugInFlight[convId];
+  });
 }
 
 
