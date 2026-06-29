@@ -664,8 +664,8 @@ function _doGenerateContextualSuggestions(convId) {
     ? getConvInner(convId)
     : document.querySelector('[data-conv-messages="' + convId + '"]');
   if (!convInner) return;
-  var msgEl = convInner.querySelector('.msg.assistant:last-of-type')
-    || Array.from(convInner.querySelectorAll('.msg.assistant')).pop();
+  var msgEl = convInner.querySelector('.msg.ai:last-of-type, .msg.assistant:last-of-type')
+    || Array.from(convInner.querySelectorAll('.msg.ai, .msg.assistant')).pop();
   if (!msgEl) return;
 
   var existingBar = convInner.querySelector('.suggestion-bar');
@@ -720,7 +720,7 @@ function _doGenerateContextualSuggestions(convId) {
       : document.querySelector('[data-conv-messages="' + convId + '"]');
     var existing = ci && ci.querySelector('.suggestion-bar');
     if (existing && existing.dataset && existing.dataset.sugTurnKey === turnKey) return;
-    var el = ci && (ci.querySelector('.msg.assistant:last-of-type') || Array.from(ci.querySelectorAll('.msg.assistant')).pop());
+    var el = ci && (ci.querySelector('.msg.ai:last-of-type, .msg.assistant:last-of-type') || Array.from(ci.querySelectorAll('.msg.ai, .msg.assistant')).pop());
     if (el) _renderSuggestionBar(items, el, false, turnKey);
   }).catch(function() {
     if (_sugInFlight[convId] === turnKey) delete _sugInFlight[convId];

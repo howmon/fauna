@@ -1149,8 +1149,8 @@ function setBusy(busy) {
           ? getConvInner(state.currentId)
           : document.querySelector('[data-conv-messages]');
         var lastMsg = convInner && (
-          convInner.querySelector('.msg.assistant:last-of-type') ||
-          Array.from(convInner.querySelectorAll('.msg.assistant')).pop()
+          convInner.querySelector('.msg.ai:last-of-type, .msg.assistant:last-of-type') ||
+          Array.from(convInner.querySelectorAll('.msg.ai, .msg.assistant')).pop()
         );
         if (conv && lastMsg && typeof extractAndRenderSuggestions === 'function') {
           var lastAssistant = (conv.messages || []).slice().reverse().find(function(m) {
