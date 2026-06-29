@@ -498,7 +498,7 @@ function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
     var items = null;
     try { items = JSON.parse(match[1].trim()); } catch (_) { items = null; }
     if (Array.isArray(items) && items.length) {
-      _renderSuggestionBar(items, msgEl, false);
+      _renderSuggestionBar(items, msgEl, false, _suggestionTurnKeyForBuffer(buffer));
       return;
     }
     // else: fall through to contextual generation below.
@@ -530,11 +530,18 @@ function _renderSuggestionBar(items, msgEl, isFallback, turnKey) {
   var newLabels = items.slice(0, 4).map(function(s) { return String(s); });
   var newSig = (isFallback ? 'fb|' : 'ai|') + newLabels.join('\u0000');
   for (var _i = 0; _i < existingBars.length; _i++) {
-    if (existingBars[_i].dataset && existingBars[_i].dataset.sugSig === newSig) {
-      // Drop the duplicates (keep the matching one in place).
+    if (turnKey && existingBars[_i].dataset && existingBars[_i].dataset.sugTurnKey === turnKey) {
       for (var _j = 0; _j < existingBars.length; _j++) {
         if (_j !== _i) existingBars[_j].remove();
       }
+      return;
+    }
+    if (existingBars[_i].dataset && existingBars[_i].dataset.sugSig === newSig) {
+      // Drop the duplicates (keep the matching one in place).
+      for (var _k = 0; _k < existingBars.length; _k++) {
+        if (_k !== _i) existingBars[_k].remove();
+      }
+      if (turnKey && existingBars[_i].dataset) existingBars[_i].dataset.sugTurnKey = turnKey;
       return;
     }
   }
@@ -610,6 +617,20 @@ function _suggestionTurnKey(msgs, lastAssistant) {
   var userText = lastUser && typeof lastUser.content === 'string' ? lastUser.content : '';
   var assistantText = lastAssistant && typeof lastAssistant.content === 'string' ? lastAssistant.content : '';
   return _suggestionHash(userText.slice(-2000) + '\n---assistant---\n' + assistantText.slice(-4000));
+}
+
+function _suggestionTurnKeyForBuffer(buffer) {
+  try {
+    var convId = (typeof state !== 'undefined' && state) ? state.currentId : null;
+    var conv = (typeof getConv === 'function' && convId) ? getConv(convId) : null;
+    var msgs = conv && Array.isArray(conv.messages) ? conv.messages : [];
+    var lastAssistant = null;
+    for (var i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i] && msgs[i].role === 'assistant') { lastAssistant = msgs[i]; break; }
+    }
+    if (lastAssistant && typeof lastAssistant.content === 'string') return _suggestionTurnKey(msgs, lastAssistant);
+  } catch (_) {}
+  return _suggestionHash('\n---assistant---\n' + String(buffer || '').slice(-4000));
 }
 
 function _generateContextualSuggestions(msgEl) {
