@@ -41,7 +41,7 @@
     "serve": "node cli.js --server",
     "dev": "electron . --inspect",
     "prebuild": "npm run prepare:relay && npm run build:whisper",
-    "build": "electron-builder --mac --dir",
+    "build": "node -e \"const fs=require('fs');for(const d of ['dist/mac','dist/mac-arm64'])fs.rmSync(d,{recursive:true,force:true})\" && electron-builder --mac --dir -c.mac.identity=null",
     "predist": "npm run prepare:relay && npm run build:whisper",
     "dist": "electron-builder --mac",
     "predist:mac": "npm run prepare:relay && npm run build:whisper",
