@@ -1138,7 +1138,7 @@ function setBusy(busy) {
   if (!busy) {
     _busyClearTimer = setTimeout(function() {
       _busyClearTimer = null;
-      if (_hasActiveConversationWork()) return;
+      var stillWorking = _hasActiveConversationWork();
       _applyBusyState(false);
       // Now that the stop button is no longer red, retry rendering suggestions
       // on the latest assistant message — they were suppressed earlier while
@@ -1156,7 +1156,7 @@ function setBusy(busy) {
           var lastAssistant = (conv.messages || []).slice().reverse().find(function(m) {
             return m && m.role === 'assistant' && typeof m.content === 'string';
           });
-          if (lastAssistant) extractAndRenderSuggestions(lastAssistant.content, lastMsg, true);
+          if (lastAssistant) extractAndRenderSuggestions(lastAssistant.content, lastMsg, stillWorking ? 'force' : true);
         }
       } catch (_) {}
     }, 650);

@@ -458,6 +458,7 @@ function ensureAssistantBubbleNotEmpty(msgEl) {
 }
 
 function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
+  var forceFinal = allowFallback === 'force';
   // Don't show CTAs while the conversation is mid-task: if a shell command is
   // still running / pending auto-run, or the stream is still in flight, the
   // assistant is about to continue speaking and the suggestion bar would be
@@ -474,8 +475,8 @@ function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
     // Don't show CTAs while the stop button is red — any background work
     // (auto-feed chains, shell verification, delegations) means the assistant
     // is about to keep talking.
-    if (typeof _hasActiveConversationWork === 'function' && _hasActiveConversationWork()) return;
-    if (msgEl) {
+    if (!forceFinal && typeof _hasActiveConversationWork === 'function' && _hasActiveConversationWork()) return;
+    if (!forceFinal && msgEl) {
       var _localWidgets = msgEl.querySelectorAll('.shell-exec-block');
       for (var _i = 0; _i < _localWidgets.length; _i++) {
         var _w = _localWidgets[_i];
@@ -508,6 +509,12 @@ function extractAndRenderSuggestions(buffer, msgEl, allowFallback) {
   // model (via the existing Copilot connection — no separate AI key). The
   // caller can opt out by passing allowFallback === false (e.g. mid-chain).
   if (allowFallback === false) return;
+  if (forceFinal) {
+    var fallbackText = _summaryTextForSuggestions(msgEl) || buffer;
+    var fallbackItems = _fallbackSuggestionsFromMessage(fallbackText);
+    if (fallbackItems.length) _renderSuggestionBar(fallbackItems, msgEl, true, _suggestionTurnKeyForBuffer(buffer));
+    return;
+  }
   _generateContextualSuggestions(msgEl);
 }
 
@@ -518,7 +525,7 @@ function _renderSuggestionBar(items, msgEl, isFallback, turnKey) {
   if (msgEl.classList && msgEl.classList.contains('chain-msg')) return;
 
   // Suggestions are conversation-level CTAs: keep only the latest bar visible.
-  var scope = msgEl.closest('[data-conv-messages]') || msgEl.parentElement || document;
+  var scope = msgEl.closest('[data-conv-messages]') || msgEl;
   var existingBars = Array.from(scope.querySelectorAll('.suggestion-bar'));
 
   // Idempotent re-render: if a bar with the same items + fallback flag is
