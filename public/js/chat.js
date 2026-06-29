@@ -633,6 +633,19 @@ function _suggestionTurnKeyForBuffer(buffer) {
   return _suggestionHash('\n---assistant---\n' + String(buffer || '').slice(-4000));
 }
 
+function _renderFallbackSuggestionsForTurn(convId, turnKey, lastAssistant) {
+  var ci = (typeof getConvInner === 'function')
+    ? getConvInner(convId)
+    : document.querySelector('[data-conv-messages="' + convId + '"]');
+  var el = ci && (ci.querySelector('.msg.ai:last-of-type, .msg.assistant:last-of-type') || Array.from(ci.querySelectorAll('.msg.ai, .msg.assistant')).pop());
+  if (!el) return;
+  var existing = ci && ci.querySelector('.suggestion-bar');
+  if (existing && existing.dataset && existing.dataset.sugTurnKey === turnKey) return;
+  var text = _summaryTextForSuggestions(el) || (lastAssistant && typeof lastAssistant.content === 'string' ? lastAssistant.content : '');
+  var fallback = _fallbackSuggestionsFromMessage(text);
+  if (fallback.length) _renderSuggestionBar(fallback, el, true, turnKey);
+}
+
 function _generateContextualSuggestions(msgEl) {
   var convId = (typeof state !== 'undefined' && state) ? state.currentId : null;
   if (!convId) return;
@@ -713,7 +726,10 @@ function _doGenerateContextualSuggestions(convId) {
     if (typeof state !== 'undefined' && state && state.currentId !== convId) return;
     if (conv._streaming) return;
     if (typeof _hasActiveConversationWork === 'function' && _hasActiveConversationWork()) return;
-    if (!items.length) return;
+    if (!items.length) {
+      _renderFallbackSuggestionsForTurn(convId, turnKey, lastAssistant);
+      return;
+    }
     // Re-locate the message element in case the DOM changed.
     var ci = (typeof getConvInner === 'function')
       ? getConvInner(convId)
@@ -724,6 +740,7 @@ function _doGenerateContextualSuggestions(convId) {
     if (el) _renderSuggestionBar(items, el, false, turnKey);
   }).catch(function() {
     if (_sugInFlight[convId] === turnKey) delete _sugInFlight[convId];
+    _renderFallbackSuggestionsForTurn(convId, turnKey, lastAssistant);
   });
 }
 
