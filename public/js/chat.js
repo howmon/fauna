@@ -577,19 +577,10 @@ function _renderSuggestionBar(items, msgEl, isFallback, turnKey) {
   };
   bar.appendChild(otherBtn);
 
-  // Always render the recommended-actions bar AFTER the latest assistant
-  // message in the conversation. Keep it as a direct child of the conversation
-  // container (the per-conversation `[data-conv-messages]` div, NOT nested
-  // inside a message) so subsequent message bubbles, tool cards, or streaming
-  // prose always render ABOVE it. Otherwise, when the model emits
-  // ```suggestions early and the long summary arrives in a later message
-  // bubble, the bar gets stuck above the summary.
-  var convInner = msgEl.closest('[data-conv-messages]');
-  if (convInner) {
-    convInner.appendChild(bar);
-  } else {
-    msgEl.appendChild(bar);
-  }
+  // Keep the bar owned by the assistant bubble. Conversation-level siblings
+  // are routinely reordered/cleaned by stream, artifact, and placeholder code;
+  // nesting the bar after the message body keeps it stable once rendered.
+  msgEl.appendChild(bar);
 }
 
 // Debounced trigger so history-load (which calls this once per message) and
@@ -1307,7 +1298,7 @@ async function streamResponse(conv) {
     // (incomplete) turn and would now appear ABOVE the just-attached summary.
     // The current message's `done` handler will regenerate a fresh, contextual
     // bar at the proper position.
-    Array.from(inner.querySelectorAll(':scope > .suggestion-bar')).forEach(function(b) { b.remove(); });
+    Array.from(inner.querySelectorAll('.suggestion-bar')).forEach(function(b) { b.remove(); });
     if (isActive()) { showMessages(); forceScrollBottom(); }
   }
   function _streamingStatusHtml(label) {
