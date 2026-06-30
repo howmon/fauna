@@ -11,7 +11,7 @@
 
 (function () {
   // Journey state. journey = [{ title, prompt, spec }], idx = current node.
-  var EX = { journey: [], idx: -1, reqId: 0, web: false };
+  var EX = { journey: [], idx: -1, reqId: 0, web: false, model: '' };
   window._faunaExplorer = EX;
 
   // ── Page open / close ────────────────────────────────────────────────────
@@ -134,7 +134,7 @@
         prompt: node.prompt,
         path: path,
         context: tieContext(),
-        model: (typeof state !== 'undefined' && state.model) ? state.model : undefined,
+        model: currentModelId() || undefined,
         web: !!EX.web,
         agentName: agent ? agent.name : undefined,
         agentPrompt: agent ? agent.systemPrompt : undefined,
@@ -143,7 +143,12 @@
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (myReq !== EX.reqId) return; // superseded by a newer navigation
-        if (!d || !d.ok || !d.spec) { renderError(content, (d && d.error) || 'Could not generate this view.'); return; }
+        if (!d || !d.ok || !d.spec) {
+          var msg = (d && d.error) || 'Could not generate this view.';
+          if (d && d.detail) msg += ' (' + String(d.detail).slice(0, 160) + ')';
+          renderError(content, msg);
+          return;
+        }
         node.spec = d.spec;
         if (d.title) node.title = d.title;
         renderBreadcrumb();
@@ -281,11 +286,17 @@
       var sel = (a.name === activeName) ? ' selected' : '';
       return '<option value="' + escHtml(a.name) + '"' + sel + '>' + escHtml(a.displayName || a.name) + '</option>';
     }).join('');
+    var modelId = currentModelId();
+    var modelOpts = buildModelOptions(modelId);
     host.innerHTML =
       '<label class="explorer-web-toggle' + (EX.web ? ' on' : '') + '" title="Ground views in live web search (Playwright)">' +
         '<input type="checkbox" ' + (EX.web ? 'checked' : '') + ' onchange="_explorerToggleWeb(this.checked)">' +
         '<i class="ti ti-world-search"></i><span>Live web</span>' +
       '</label>' +
+      '<div class="explorer-agent-pick" title="Preferred AI model">' +
+        '<i class="ti ti-cpu"></i>' +
+        '<select class="explorer-agent-select" onchange="_explorerSetModel(this.value)">' + modelOpts + '</select>' +
+      '</div>' +
       '<div class="explorer-agent-pick">' +
         '<i class="ti ti-robot"></i>' +
         '<select class="explorer-agent-select" onchange="_explorerSetAgent(this.value)">' + opts + '</select>' +
@@ -300,6 +311,46 @@
       hint.textContent = 'Sends to the full chat using the ' + (activeAgent.displayName || activeAgent.name) + ' agent.';
     }
   }
+
+  // Resolve the model the Explore page should use (its own override or the
+  // global chat model).
+  function currentModelId() {
+    if (EX.model) return EX.model;
+    return (typeof state !== 'undefined' && state.model) ? state.model : '';
+  }
+
+  // Build <optgroup>-grouped <option>s from the global allModels list.
+  function buildModelOptions(selectedId) {
+    var models = (typeof allModels !== 'undefined' && Array.isArray(allModels)) ? allModels : [];
+    if (!models.length) {
+      return '<option value="' + escHtml(selectedId || '') + '" selected>' + escHtml(selectedId || 'Default model') + '</option>';
+    }
+    var order = ['Anthropic', 'OpenAI', 'Google', 'xAI', 'Minimax', 'Custom'];
+    var byVendor = {};
+    models.forEach(function (m) {
+      var v = m.vendor || 'Other';
+      (byVendor[v] = byVendor[v] || []).push(m);
+    });
+    var vendors = Object.keys(byVendor).sort(function (a, b) {
+      var ai = order.indexOf(a), bi = order.indexOf(b);
+      if (ai === -1 && bi === -1) return a.localeCompare(b);
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+    return vendors.map(function (v) {
+      var inner = byVendor[v].map(function (m) {
+        var sel = (m.id === selectedId) ? ' selected' : '';
+        return '<option value="' + escHtml(m.id) + '"' + sel + '>' + escHtml(m.name) + '</option>';
+      }).join('');
+      return '<optgroup label="' + escHtml(v) + '">' + inner + '</optgroup>';
+    }).join('');
+  }
+
+  window._explorerSetModel = function (id) {
+    EX.model = id || '';
+    renderExplorerControls();
+  };
 
   window._explorerToggleWeb = function (on) {
     EX.web = !!on;

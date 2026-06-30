@@ -166,18 +166,44 @@ export function registerGenUiExploreRoutes(app, { getBrowseManager } = {}) {
 
     try {
       const client = getCopilotClient();
-      const response = await client.chat.completions.create({
-        model,
-        max_tokens: 3200,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: userContent },
-        ],
-      });
-      const rawOut = response.choices?.[0]?.message?.content || '';
-      const spec = extractSpecJson(rawOut);
-      if (!spec || !spec.root || !spec.elements) {
-        return res.status(502).json({ ok: false, error: 'Model did not return a valid gen-ui spec' });
+      // Try the requested model, then a known-reliable JSON fallback, until one
+      // returns a parseable gen-ui spec.
+      const fallback = 'gpt-4.1';
+      const chain = [model];
+      if (fallback !== model) chain.push(fallback);
+
+      let spec = null;
+      let lastRaw = '';
+      let lastErr = '';
+      for (const m of chain) {
+        let response;
+        try {
+          response = await client.chat.completions.create({
+            model: m,
+            max_tokens: 8000,
+            messages: [
+              { role: 'system', content: system },
+              { role: 'user', content: userContent },
+            ],
+          });
+        } catch (e) {
+          lastErr = (e && e.message) || 'request failed';
+          console.warn('[genui-explore] model', m, 'request error:', lastErr);
+          continue;
+        }
+        const rawOut = response.choices?.[0]?.message?.content || '';
+        lastRaw = rawOut;
+        const parsed = extractSpecJson(rawOut);
+        if (parsed && parsed.root && parsed.elements) { spec = parsed; break; }
+        console.warn('[genui-explore] model', m, 'returned unparseable spec (', rawOut.length, 'chars):', rawOut.slice(0, 200).replace(/\s+/g, ' '));
+      }
+
+      if (!spec) {
+        return res.status(502).json({
+          ok: false,
+          error: 'Model did not return a valid gen-ui spec',
+          detail: lastErr || (lastRaw ? lastRaw.slice(0, 300) : 'empty response'),
+        });
       }
       // Derive a title: root props.title → first Heading → root type.
       let title = '';
@@ -192,6 +218,7 @@ export function registerGenUiExploreRoutes(app, { getBrowseManager } = {}) {
       if (!title) title = prompt.slice(0, 60);
       res.json({ ok: true, title, spec, grounded: !!grounding });
     } catch (e) {
+      console.warn('[genui-explore] generation failed:', e && e.message);
       res.status(500).json({ ok: false, error: e.message || 'generation failed' });
     }
   });
