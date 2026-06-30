@@ -63,6 +63,10 @@ hardware, brands, media, art, UI. When they do, you MUST include images:
   found" list and the \`![alt](src)\` markdown in the LIVE WEB DATA below. NEVER
   invent, guess, or placeholder an image URL. If no real image URL is available
   for an item, omit the image for that item rather than fabricating one.
+- Do NOT construct plausible-looking URLs from memory (e.g. \`upload.wikimedia.org/...\`,
+  blog \`/images/...\` paths, CDN guesses). If a URL does not appear VERBATIM in the
+  data below, you may not use it. A view with fewer real images is better than one
+  with broken links.
 - When live web data is present and contains images, include at least 2–4 of
   them, matched to the most relevant cards/items.
 
@@ -152,6 +156,9 @@ function collectImages(md, baseUrl, max) {
     try { src = new URL(src, baseUrl || 'https://duckduckgo.com').href; } catch (_) { continue; }
     if (!/^https?:\/\//i.test(src)) continue;
     if (/sprite|\bicon\b|favicon|logo|\.svg(\?|$)|data:|1x1|pixel|spacer/i.test(src)) continue;
+    // DuckDuckGo's proxy/redirect image URLs (external-content / //duckduckgo.com/i/)
+    // and other tracking beacons routinely 404 through our fetch proxy — skip them.
+    if (/duckduckgo\.com\/(i|iu)\b|external-content\.duckduckgo|\/(track|beacon|analytics|pixel)\b/i.test(src)) continue;
     if (seen.has(src)) continue;
     seen.add(src);
     out.push(src);

@@ -338,6 +338,22 @@ function _guiResolveImageUrl(rawUrl) {
   return src;
 }
 
+// Hide images whose URL is dead (proxy 404/415/timeout) so broken-image icons
+// don't litter the layout. Collapses the element (and a wrapper that held only it).
+function _guiAttachImageFallback(img) {
+  if (!img) return;
+  img.addEventListener('error', function () {
+    img.style.display = 'none';
+    img.setAttribute('data-gui-broken', '1');
+    var p = img.parentElement;
+    if (p && p.children.length === 1 &&
+        /^(FIGURE|PICTURE|SPAN|DIV)$/.test(p.tagName) &&
+        (p.className || '').indexOf('gui-') !== -1) {
+      p.style.display = 'none';
+    }
+  }, { once: true });
+}
+
 function _guiExtractYouTubeId(url) {
   if (!url) return null;
   var raw = String(url).trim();
@@ -627,6 +643,7 @@ function _guiBuildMediaEl(src, type, opts) {
   } else if (type === 'image') {
     var img = document.createElement('img');
     img.className = 'gui-player-image';
+    _guiAttachImageFallback(img);
     img.src = _guiResolveImageUrl(src || '');
     img.alt = opts.alt || '';
     img.style.maxWidth = '100%';
@@ -971,7 +988,10 @@ var _genUiComponents = {
     var img = document.createElement('img');
     img.className = 'gui-image';
     img.alt = props.alt || '';
-    if (props.src && /^https?:\/\/|^data:image\//.test(props.src)) img.src = _guiResolveImageUrl(props.src);
+    if (props.src && /^https?:\/\/|^data:image\//.test(props.src)) {
+      _guiAttachImageFallback(img);
+      img.src = _guiResolveImageUrl(props.src);
+    }
     if (props.width) img.style.width = typeof props.width === 'number' ? props.width + 'px' : props.width;
     if (props.height) img.style.height = typeof props.height === 'number' ? props.height + 'px' : props.height;
     img.style.maxWidth = '100%';

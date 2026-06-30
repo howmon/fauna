@@ -175,14 +175,34 @@ export function registerUtilityRoutes(app, deps) {
     }, 12000);
 
     try {
-      const upstream = await fetch(parsed.toString(), {
+      const baseHeaders = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Fauna/2.0 Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,video/*,*/*;q=0.8',
+      };
+      // Many hosts block hotlinking by Referer/Origin. Present the image's own
+      // site as the referer so it looks like a same-site load.
+      const refHeaders = Object.assign({}, baseHeaders, {
+        'Referer': parsed.origin + '/',
+        'Origin': parsed.origin,
+      });
+
+      let upstream = await fetch(parsed.toString(), {
         signal: ctrl.signal,
         redirect: 'follow',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Fauna/2.0 Safari/537.36',
-          'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,video/*,*/*;q=0.8',
-        },
+        headers: refHeaders,
       });
+
+      // If hotlink protection still bites (401/403), retry once with no referer.
+      if ((upstream.status === 401 || upstream.status === 403)) {
+        try {
+          const retry = await fetch(parsed.toString(), {
+            signal: ctrl.signal,
+            redirect: 'follow',
+            headers: baseHeaders,
+          });
+          if (retry.ok) upstream = retry;
+        } catch (_) {}
+      }
 
       if (!upstream.ok) {
         return res.status(upstream.status || 502).json({ error: 'upstream fetch failed' });

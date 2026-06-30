@@ -13,7 +13,7 @@
   // Tree state. nodes = [{ id, parentId, title, prompt, spec }], currentId =
   // the node currently shown (null = front door). Branching is preserved:
   // exploring from a node adds a child without dropping its siblings.
-  var EX = { nodes: [], currentId: null, reqId: 0, web: false, model: '', agentName: '', sessionId: '', convId: '', open: false };
+  var EX = { nodes: [], currentId: null, reqId: 0, web: true, model: '', agentName: '', sessionId: '', convId: '', open: false };
   window._faunaExplorer = EX;
 
   var EX_SESSIONS_KEY = 'fauna-explore-sessions';
@@ -498,7 +498,8 @@
       EX.nodes = mig.nodes;
       EX.currentId = mig.currentId;
     }
-    if (typeof s.web === 'boolean') EX.web = s.web;
+    // Live web grounding is always on now — ignore any stored web flag.
+    EX.web = true;
     if (typeof s.model === 'string') EX.model = s.model;
     if (typeof s.agentName === 'string') EX.agentName = s.agentName;
     EX.convId = (typeof s.convId === 'string') ? s.convId : '';
@@ -607,10 +608,6 @@
     var modelId = currentModelId();
     var modelOpts = buildModelOptions(modelId);
     host.innerHTML =
-      '<label class="explorer-web-toggle' + (EX.web ? ' on' : '') + '" title="Ground views in live web search (Playwright)">' +
-        '<input type="checkbox" ' + (EX.web ? 'checked' : '') + ' onchange="_explorerToggleWeb(this.checked)">' +
-        '<i class="ti ti-world-search"></i><span>Live web</span>' +
-      '</label>' +
       '<div class="explorer-agent-pick" title="Preferred AI model">' +
         '<i class="ti ti-cpu"></i>' +
         '<select class="explorer-agent-select" onchange="_explorerSetModel(this.value)">' + modelOpts + '</select>' +
@@ -643,7 +640,26 @@
   // global chat model).
   function currentModelId() {
     if (EX.model) return EX.model;
+    var pref = exPreferredModel();
+    if (pref) return pref;
     return (typeof state !== 'undefined' && state.model) ? state.model : '';
+  }
+
+  // Explore prefers a recent GPT (5.5, then 5.4) when one is available, since it
+  // does the best with the gen-ui JSON contract. Falls back to the chat default.
+  function exPreferredModel() {
+    var models = (typeof allModels !== 'undefined' && Array.isArray(allModels)) ? allModels : [];
+    if (!models.length) return '';
+    var prefer = ['gpt-5.5', 'gpt-5.4'];
+    for (var i = 0; i < prefer.length; i++) {
+      var want = prefer[i];
+      // Prefer an exact id match, else the closest variant (e.g. gpt-5.5, gpt-5.5-mini).
+      var exact = models.find(function (m) { return m.id === want; });
+      if (exact) return exact.id;
+      var loose = models.find(function (m) { return typeof m.id === 'string' && m.id.indexOf(want) === 0; });
+      if (loose) return loose.id;
+    }
+    return '';
   }
 
   // Build <optgroup>-grouped <option>s from the global allModels list.
@@ -680,8 +696,8 @@
   };
 
   window._explorerToggleWeb = function (on) {
-    EX.web = !!on;
-    renderExplorerControls();
+    // Retained for backward-compat; live web grounding is always on.
+    EX.web = true;
   };
 
   window._explorerSetAgent = function (name) {
