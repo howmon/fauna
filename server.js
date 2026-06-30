@@ -75,6 +75,7 @@ import { createFigmaBridge } from './server/bridges/figma.js';
 import { registerWorkspaceRoutes } from './server/routes/workspace.js';
 import { registerStoreRoutes } from './server/routes/store.js';
 import { registerChatMiscRoutes } from './server/routes/chat-misc.js';
+import { registerGenUiExploreRoutes } from './server/routes/genui-explore.js';
 import { registerChatRoute } from './server/routes/chat.js';
 import { primeTokenizer } from './server/lib/token-budget.js';
 import { registerGitRoutes } from './server/routes/git.js';
@@ -420,6 +421,9 @@ registerLLMRoutes(app);
 
 // Wire smaller chat routes (debug-prompt / chat-summary / composition planner).
 registerChatMiscRoutes(app, { browserBuildContext: BROWSER_BUILD_CONTEXT });
+
+// Wire the Explore page's gen-ui generator (POST /api/genui-explore).
+registerGenUiExploreRoutes(app);
 
 // ── Browser Extension context moved → server/prompts/browser-context.js ──
 

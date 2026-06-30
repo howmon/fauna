@@ -747,6 +747,7 @@ body.is-resizing webview { pointer-events: none !important; }
   min-height: 0;
   overflow: hidden;
   background: var(--fau-bg);
+  position: relative;
 }
 #app-page-body {
   height: 100%;
@@ -11201,4 +11202,320 @@ mark.find-hit.find-hit-active {
   .prompt-studio-code-grid,
   .prompt-studio-hook-builder { grid-template-columns: 1fr; }
 }
+
+/* ── Explore page ─────────────────────────────────────────────────────────
+   GenUI-first front door: conversational hero → interactive gen-ui views with
+   a breadcrumb journey, skeleton loading, and a floating chat escape hatch. */
+.explorer-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.explorer-topbar {
+  flex: 0 0 auto;
+  padding: 14px 24px 10px;
+  border-bottom: 1px solid var(--fau-border);
+  background: var(--fau-bg);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.explorer-breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 13px;
+}
+.explorer-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fau-text-dim);
+  padding: 4px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.2;
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.explorer-crumb:hover { background: var(--accent-dim); color: var(--accent2); }
+.explorer-crumb.active {
+  background: var(--accent-dim);
+  color: var(--accent2);
+  border-color: color-mix(in oklab, var(--accent) 40%, transparent);
+  font-weight: 600;
+}
+.explorer-crumb-home .ti { font-size: 15px; }
+.explorer-crumb-sep { color: var(--fau-text-muted); font-size: 14px; opacity: .6; }
+.explorer-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 22px 24px 96px;
+}
+
+/* Hero / front door */
+.explorer-hero {
+  max-width: 720px;
+  margin: 6vh auto 0;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.explorer-hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--accent2);
+  background: var(--accent-dim);
+  border: 1px solid color-mix(in oklab, var(--accent) 28%, transparent);
+  padding: 5px 12px;
+  border-radius: 999px;
+}
+.explorer-hero-title {
+  font-size: 30px;
+  font-weight: 700;
+  margin: 18px 0 8px;
+  color: var(--fau-text);
+}
+.explorer-hero-sub {
+  font-size: 14px;
+  color: var(--fau-text-dim);
+  max-width: 560px;
+  margin: 0 0 22px;
+  line-height: 1.5;
+}
+.explorer-hero-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  width: 100%;
+  max-width: 620px;
+  background: var(--fau-surface);
+  border: 1px solid var(--fau-border);
+  border-radius: 16px;
+  padding: 10px 10px 10px 16px;
+  box-shadow: 0 8px 30px color-mix(in oklab, var(--accent) 8%, transparent);
+}
+.explorer-hero-input {
+  flex: 1 1 auto;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--fau-text);
+  font-size: 15px;
+  line-height: 1.4;
+  font-family: inherit;
+  max-height: 200px;
+  padding: 6px 0;
+}
+.explorer-hero-go {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  transition: filter .15s, transform .1s;
+}
+.explorer-hero-go:hover { filter: brightness(1.08); }
+.explorer-hero-go:active { transform: scale(.95); }
+.explorer-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 18px;
+}
+.explorer-chip {
+  background: var(--fau-surface2);
+  border: 1px solid var(--fau-border);
+  color: var(--fau-text-dim);
+  padding: 7px 13px;
+  border-radius: 999px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.explorer-chip:hover {
+  background: var(--accent-dim);
+  color: var(--accent2);
+  border-color: color-mix(in oklab, var(--accent) 30%, transparent);
+}
+.explorer-tie {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 22px;
+  font-size: 12px;
+  color: var(--fau-text-muted);
+}
+.explorer-tie .ti { font-size: 14px; }
+
+/* Rendered gen-ui view fills the page width */
+.explorer-gui { max-width: 1100px; margin: 0 auto; }
+
+/* Skeleton */
+.explorer-skeleton {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.explorer-skel-line,
+.explorer-skel-card,
+.explorer-skel-pill {
+  background: linear-gradient(100deg,
+    var(--fau-surface2) 30%,
+    color-mix(in oklab, var(--fau-surface2) 60%, var(--fau-border) 40%) 50%,
+    var(--fau-surface2) 70%);
+  background-size: 200% 100%;
+  animation: explorerShimmer 1.3s ease-in-out infinite;
+  border-radius: var(--radius);
+}
+.explorer-skel-line { height: 14px; width: 100%; }
+.explorer-skel-title { height: 26px; width: 45%; }
+.explorer-skel-sub { height: 14px; width: 70%; margin-bottom: 6px; }
+.explorer-skel-short { width: 60%; }
+.explorer-skel-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin: 6px 0;
+}
+.explorer-skel-card { height: 120px; }
+.explorer-skel-chips { display: flex; gap: 10px; margin-top: 10px; }
+.explorer-skel-pill { height: 34px; width: 130px; border-radius: 999px; }
+@keyframes explorerShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@media (max-width: 720px) {
+  .explorer-skel-grid { grid-template-columns: 1fr; }
+}
+
+/* Error */
+.explorer-error {
+  max-width: 520px;
+  margin: 8vh auto 0;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--fau-text-dim);
+}
+.explorer-error .ti-alert-triangle { font-size: 32px; color: var(--color-warning, #e0a93b); }
+.explorer-error strong { color: var(--fau-text); font-size: 16px; }
+.explorer-error-actions { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; justify-content: center; }
+.explorer-error-retry { width: auto; padding: 8px 16px; border-radius: 10px; gap: 6px; font-size: 14px; }
+
+/* Floating chat control */
+.explorer-fab {
+  position: absolute;
+  right: 26px;
+  bottom: 26px;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 22px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 10px 28px color-mix(in oklab, var(--accent) 38%, transparent);
+  z-index: 30;
+  transition: transform .12s, filter .15s;
+}
+.explorer-fab:hover { filter: brightness(1.08); transform: translateY(-2px); }
+.explorer-fab:active { transform: scale(.94); }
+.explorer-chat-panel {
+  position: absolute;
+  right: 26px;
+  bottom: 90px;
+  width: min(360px, calc(100vw - 52px));
+  background: var(--fau-surface);
+  border: 1px solid var(--fau-border);
+  border-radius: 16px;
+  box-shadow: 0 18px 50px rgba(0,0,0,.32);
+  padding: 14px;
+  z-index: 31;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.explorer-chat-panel[hidden] { display: none; }
+.explorer-chat-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--fau-text);
+}
+.explorer-chat-head .ti-message-2 { color: var(--accent2); }
+.explorer-chat-x {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--fau-text-dim);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px;
+  border-radius: 6px;
+}
+.explorer-chat-x:hover { background: var(--fau-surface2); color: var(--fau-text); }
+.explorer-chat-hint { font-size: 12px; color: var(--fau-text-dim); margin: 0; line-height: 1.4; }
+.explorer-chat-input {
+  width: 100%;
+  resize: none;
+  border: 1px solid var(--fau-border);
+  border-radius: 10px;
+  background: var(--fau-bg);
+  color: var(--fau-text);
+  font-family: inherit;
+  font-size: 14px;
+  padding: 9px 11px;
+  outline: none;
+}
+.explorer-chat-input:focus { border-color: var(--accent); }
+.explorer-chat-send {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: 8px 14px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: filter .15s;
+}
+.explorer-chat-send:hover { filter: brightness(1.08); }
 

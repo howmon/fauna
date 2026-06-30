@@ -263,6 +263,14 @@ function _genUiDispatch(action, params, store, rootEl) {
       }
       break;
     }
+    case 'explore_into': {
+      // Drill deeper on the Explore page — push a new gen-ui journey node.
+      // Handled by public/js/explorer.js; no-op elsewhere.
+      if (typeof window.faunaExploreInto === 'function') {
+        try { window.faunaExploreInto(params || {}); } catch (_) {}
+      }
+      break;
+    }
     default: break;
   }
 }
