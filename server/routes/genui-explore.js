@@ -37,8 +37,20 @@ Hard requirements:
   possible journeys. (For pure task/data-collection prompts — see below — a form
   may replace the journey map.)
 - You MAY also use \`send_prompt\` (actionParams.text) for a Button that hands the
-  topic back to the main chat, and \`open_url\` (actionParams.url) for external
-  references.
+  topic back to the main chat.
+
+## Stay inside Explore — web is for GROUNDING, not redirecting
+
+Live web data (when present) is here to make your view ACCURATE and RICH with
+real facts and images. It is NOT a reason to send the user out to websites.
+- Keep the user INSIDE Explore. The primary way forward is always \`explore_into\`
+  (drill into a sub-topic) or a form/\`send_prompt\` for actions.
+- Do NOT add an \`open_url\` button for every source, and do NOT make sources,
+  titles, or list items into \`open_url\` links. Present the web facts as content
+  (Text, Stat, List, Table, Cards, Images) — synthesized, not as a link farm.
+- \`open_url\` is allowed ONLY sparingly: at most ONE small "View source" / "Open
+  official site" affordance for the whole view, and only when genuinely useful.
+  When in doubt, omit it and offer an \`explore_into\` instead.
 
 ## Use real images (IMPORTANT — don't ship text-only layouts)
 
@@ -233,7 +245,7 @@ export function registerGenUiExploreRoutes(app, { getBrowseManager } = {}) {
     let userContent = `Explore this for me and return one interactive gen-ui spec:\n\n${prompt}${trail}${ctx}`;
     if (grounding) {
       userContent += `\n\n## LIVE WEB DATA (fetched just now — current)\n${grounding}\n` +
-        'Build the view from this live data. Use ONLY URLs that appear above for Image `src`, links, and `open_url` buttons — never invent URLs. Add an `open_url` Button to each source you cite, and prefer real images found in the data.';
+        'Use this live data to GROUND the view with real facts and images — synthesize it into rich content (Text, Stat, List, Table, Cards, Images). Use ONLY URLs that appear above for Image `src` — never invent URLs. Do NOT turn the view into outbound links: keep the user inside Explore via `explore_into` buttons. Add an `open_url` button only sparingly (at most one "View source" affordance), not one per source.';
     }
 
     try {

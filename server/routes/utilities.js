@@ -180,7 +180,7 @@ export function registerUtilityRoutes(app, deps) {
         redirect: 'follow',
         headers: {
           'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Fauna/2.0 Safari/537.36',
-          'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+          'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,video/*,*/*;q=0.8',
         },
       });
 
@@ -188,20 +188,81 @@ export function registerUtilityRoutes(app, deps) {
         return res.status(upstream.status || 502).json({ error: 'upstream fetch failed' });
       }
 
-      const contentType = String(upstream.headers.get('content-type') || '').toLowerCase();
-      if (!contentType.startsWith('image/')) {
-        return res.status(415).json({ error: 'url did not return an image' });
+      const contentType = String(upstream.headers.get('content-type') || '').toLowerCase().split(';')[0].trim();
+      const pathLower = String(parsed.pathname || '').toLowerCase();
+
+      // Map common file extensions → MIME so we can still serve media when the
+      // upstream sends a generic content-type (octet-stream / missing / wrong).
+      const EXT_MIME = {
+        '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+        '.jfif': 'image/jpeg', '.pjpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
+        '.avif': 'image/avif', '.apng': 'image/apng', '.bmp': 'image/bmp', '.ico': 'image/x-icon',
+        '.cur': 'image/x-icon', '.tif': 'image/tiff', '.tiff': 'image/tiff', '.heic': 'image/heic',
+        '.heif': 'image/heif', '.jxl': 'image/jxl',
+        '.mp4': 'video/mp4', '.m4v': 'video/x-m4v', '.webm': 'video/webm', '.ogv': 'video/ogg',
+        '.ogg': 'video/ogg', '.mov': 'video/quicktime', '.mkv': 'video/x-matroska',
+        '.avi': 'video/x-msvideo', '.mpeg': 'video/mpeg', '.mpg': 'video/mpeg', '.m4s': 'video/iso.segment',
+      };
+      const extMime = (function () {
+        for (const ext in EXT_MIME) { if (pathLower.endsWith(ext)) return EXT_MIME[ext]; }
+        return '';
+      })();
+
+      const isImage = contentType.startsWith('image/');
+      const isVideo = contentType.startsWith('video/');
+      // SVGs are frequently served as text/xml, application/xml or octet-stream.
+      const isSvg = contentType.includes('svg') ||
+        ((contentType.includes('xml') || contentType.startsWith('text/') || contentType === 'application/octet-stream' || !contentType) && pathLower.endsWith('.svg'));
+
+      let mediaType;
+      if (isSvg) {
+        mediaType = 'image/svg+xml';
+      } else if (isImage || isVideo) {
+        mediaType = contentType;
+      } else if (extMime) {
+        // Generic / wrong content-type but the URL extension tells us what it is.
+        mediaType = extMime;
+      } else {
+        return res.status(415).json({ error: 'url did not return an image or video' });
       }
 
-      const maxBytes = 10 * 1024 * 1024;
+      const isVideoOut = mediaType.startsWith('video/');
+      // Videos can be large; allow more headroom than for stills and stream them
+      // through instead of buffering the whole file in memory.
+      const maxBytes = isVideoOut ? 200 * 1024 * 1024 : 25 * 1024 * 1024;
+
+      const declaredLen = Number(upstream.headers.get('content-length') || 0);
+      if (declaredLen && declaredLen > maxBytes) {
+        return res.status(413).json({ error: 'media too large' });
+      }
+
+      res.setHeader('Content-Type', mediaType);
+      res.setHeader('Cache-Control', 'public, max-age=600');
+      res.setHeader('Accept-Ranges', 'bytes');
+
+      if (isVideoOut && upstream.body) {
+        // Stream video to avoid holding hundreds of MB in memory.
+        const { Readable } = await import('node:stream');
+        if (declaredLen) res.setHeader('Content-Length', String(declaredLen));
+        const nodeStream = Readable.fromWeb(upstream.body);
+        let streamed = 0;
+        nodeStream.on('data', function (chunk) {
+          streamed += chunk.length;
+          if (streamed > maxBytes) {
+            try { nodeStream.destroy(); } catch (_) {}
+            try { res.destroy(); } catch (_) {}
+          }
+        });
+        nodeStream.on('error', function () { try { res.destroy(); } catch (_) {} });
+        return nodeStream.pipe(res);
+      }
+
       const ab = await upstream.arrayBuffer();
       const buf = Buffer.from(ab);
       if (buf.length > maxBytes) {
-        return res.status(413).json({ error: 'image too large' });
+        return res.status(413).json({ error: 'media too large' });
       }
 
-      res.setHeader('Content-Type', contentType || 'image/jpeg');
-      res.setHeader('Cache-Control', 'public, max-age=600');
       res.setHeader('Content-Length', String(buf.length));
       return res.status(200).send(buf);
     } catch (e) {
