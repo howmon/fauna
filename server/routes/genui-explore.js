@@ -28,16 +28,62 @@ Hard requirements:
 - Make it **visual and scannable**: lead with a Card or Heading, then use a mix
   of Grid, Stat, Badge, List, Table, KeyValue, Rating, Stepper, Progress, Alert,
   Text, Divider and Icon to present the topic richly. Aim for 8–28 elements.
-- ALWAYS include a "journey map": 3–6 \`Button\` elements that let the user dive
-  deeper into sub-topics. Each such Button MUST use:
+- Include a "journey map": 3–6 \`Button\` elements that let the user dive deeper
+  into sub-topics. Each such Button MUST use:
     "action": "explore_into",
     "actionParams": { "prompt": "<a self-contained instruction to explore this sub-topic>", "title": "<short crumb label, 1-3 words>" }
   Give them descriptive labels and \`icon\` names (Tabler glyph suffix). Group
   them under a Heading like "Go deeper" or inside a Grid so they read as a map of
-  possible journeys.
+  possible journeys. (For pure task/data-collection prompts — see below — a form
+  may replace the journey map.)
 - You MAY also use \`send_prompt\` (actionParams.text) for a Button that hands the
   topic back to the main chat, and \`open_url\` (actionParams.url) for external
-  references. Never invent other actions.
+  references.
+
+## Use real images (IMPORTANT — don't ship text-only layouts)
+
+Most topics have a visual dimension — products, places, people, animals, food,
+hardware, brands, media, art, UI. When they do, you MUST include images:
+- Use \`Image\` (\`src\`, \`alt\`) inside Cards/Grids to lead product/place/person
+  entries with a thumbnail; use a \`Carousel\` of \`Image\` children or a \`Playlist\`
+  with \`type:"image"\` items for galleries.
+- **Only use real, absolute http(s) image URLs.** Take them from the "Images
+  found" list and the \`![alt](src)\` markdown in the LIVE WEB DATA below. NEVER
+  invent, guess, or placeholder an image URL. If no real image URL is available
+  for an item, omit the image for that item rather than fabricating one.
+- When live web data is present and contains images, include at least 2–4 of
+  them, matched to the most relevant cards/items.
+
+## Collecting information from the user (forms)
+
+When the prompt is a TASK that needs details from the user — e.g. "register me
+on <site>", "open an account", "sign me up", "fill this application", "book X",
+"create a profile" — render an interactive FORM instead of (or in addition to)
+the journey map:
+- Use \`Input\`, \`Textarea\`, \`Select\`, \`RadioGroup\`, and \`Checkbox\` elements. Bind
+  each to state with \`"value": { "$bindState": "/fieldName" }\` so typed values
+  are captured live.
+- **Prefill what you already know.** Use the "Relevant context" and any user
+  preferences provided to pre-populate fields: seed them in the top-level
+  \`"state"\` object (e.g. \`"state": { "fullName": "...", "email": "...", "country": "..." }\`)
+  and bind the same paths. Only leave fields blank when you genuinely lack the
+  value. Mark clearly which fields you prefilled (e.g. a \`hint: "from your profile"\`).
+- Group related fields in a \`Card\`; use \`Heading\`/\`Text\` to explain what's being
+  collected and why. Add validation \`hint\`/\`error\` text where useful.
+- Add a primary "Continue" / "Submit" \`Button\` that hands the collected values to
+  the main chat so an agent (with browser/tools) can actually act on them. Build
+  its text with a \`$template\` so the live field values are interpolated at click
+  time:
+    "action": "send_prompt",
+    "actionParams": { "text": { "$template": "Register me on example.com with name \${/fullName}, email \${/email}, country \${/country}. Use these details to complete the signup." } }
+  You may instead use \`explore_into\` (with a \`$template\` prompt) to advance to a
+  confirmation/next-step view inside Explore.
+- Never invent credentials, card numbers, or secrets. Ask the user for sensitive
+  values via fields (e.g. \`type: "password"\`) — do NOT prefill them.
+
+## Other rules
+- Never invent actions beyond: explore_into, send_prompt, prefill_chat, open_url,
+  setState, toggle_visible, copy_text.
 - Do NOT use 3D widgets, artifact blocks, or shell here — only the flat gen-ui spec.
 - Keep all strings valid JSON (escape quotes/newlines). Do not emit trailing text.
 `;
@@ -81,6 +127,26 @@ function pickResultUrls(md, max) {
   return urls;
 }
 
+// Collect real, absolute image URLs from markdown image syntax `![alt](src)`.
+// Turndown keeps img tags but does NOT absolutize their src, so resolve each
+// against the page URL and drop icons/sprites/svg/data URIs.
+function collectImages(md, baseUrl, max) {
+  const out = [];
+  const seen = new Set();
+  const re = /!\[[^\]]*\]\(([^)\s]+)\)/g;
+  let m;
+  while ((m = re.exec(md)) && out.length < max) {
+    let src = m[1];
+    try { src = new URL(src, baseUrl || 'https://duckduckgo.com').href; } catch (_) { continue; }
+    if (!/^https?:\/\//i.test(src)) continue;
+    if (/sprite|\bicon\b|favicon|logo|\.svg(\?|$)|data:|1x1|pixel|spacer/i.test(src)) continue;
+    if (seen.has(src)) continue;
+    seen.add(src);
+    out.push(src);
+  }
+  return out;
+}
+
 // Run a live web search + top-result fetch and return a grounding string the
 // model can build a gen-ui view from (real titles, snippets, links, images).
 async function gatherWebGrounding(manager, prompt) {
@@ -91,12 +157,18 @@ async function gatherWebGrounding(manager, prompt) {
   const search = await browseExtract(manager, searchUrl, 5000);
   if (!search || !search.content) return '';
   let grounding = `### Search results for "${query}"\n${String(search.content).slice(0, 5000)}\n`;
+  const images = collectImages(String(search.content), searchUrl, 8);
   const urls = pickResultUrls(String(search.content), 2);
   for (const u of urls) {
     const page = await browseExtract(manager, u, 5000);
     if (page && page.content) {
       grounding += `\n### Source: ${u}\n${page.title ? page.title + '\n' : ''}${String(page.content).slice(0, 5000)}\n`;
+      collectImages(String(page.content), u, 6).forEach((src) => { if (!images.includes(src)) images.push(src); });
     }
+  }
+  if (images.length) {
+    grounding += `\n### Images found (real, absolute URLs — use these for Image \`src\`)\n` +
+      images.slice(0, 12).map((u) => `- ${u}`).join('\n') + '\n';
   }
   return grounding;
 }

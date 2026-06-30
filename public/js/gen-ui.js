@@ -233,6 +233,11 @@ function _genUiDispatch(action, params, store, rootEl) {
     case 'prefill_chat': {
       // Drop a suggested prompt into the composer without sending.
       // Lets a gen-ui Button seed a follow-up the user can edit before hitting send.
+      // Inside the Explore page, route to Explore's own (project-less) conversation.
+      if (window._faunaExplorer && window._faunaExplorer.open && typeof window._explorerHandoff === 'function') {
+        if (params && typeof params.text === 'string') window._explorerHandoff(params.text, { send: false });
+        break;
+      }
       var inputEl = document.getElementById('msg-input');
       if (inputEl && params && typeof params.text === 'string') {
         inputEl.value = params.text;
@@ -244,6 +249,11 @@ function _genUiDispatch(action, params, store, rootEl) {
     }
     case 'send_prompt': {
       // Prefill the composer AND auto-submit. One-tap follow-up.
+      // Inside the Explore page, route to Explore's own (project-less) conversation.
+      if (window._faunaExplorer && window._faunaExplorer.open && typeof window._explorerHandoff === 'function') {
+        if (params && typeof params.text === 'string') window._explorerHandoff(params.text, { send: true });
+        break;
+      }
       var inputEl2 = document.getElementById('msg-input');
       if (inputEl2 && params && typeof params.text === 'string') {
         inputEl2.value = params.text;

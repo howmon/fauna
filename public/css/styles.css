@@ -11278,14 +11278,22 @@ mark.find-hit.find-hit-active {
 .explorer-breadcrumb {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px;
   font-size: 13px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
+.explorer-breadcrumb::-webkit-scrollbar { height: 0; display: none; }
 .explorer-crumb {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  flex: 0 0 auto;
   background: transparent;
   border: 1px solid transparent;
   color: var(--fau-text-dim);
@@ -11294,12 +11302,20 @@ mark.find-hit.find-hit-active {
   cursor: pointer;
   font-size: 13px;
   line-height: 1.2;
-  max-width: 220px;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   transition: background .15s, color .15s, border-color .15s;
 }
+.explorer-crumb-label {
+  display: inline-block;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.explorer-crumb.active .explorer-crumb-label { max-width: 220px; }
+.explorer-crumb-fork { font-size: 13px; color: var(--accent2); flex: 0 0 auto; }
+.explorer-crumb-ellipsis { font-weight: 700; letter-spacing: 1px; padding: 4px 8px; }
 .explorer-crumb:hover { background: var(--accent-dim); color: var(--accent2); }
 .explorer-crumb.active {
   background: var(--accent-dim);
@@ -11572,4 +11588,212 @@ mark.find-hit.find-hit-active {
   transition: filter .15s;
 }
 .explorer-chat-send:hover { filter: brightness(1.08); }
+
+/* Floating-chat action row + open-in-chat secondary button */
+.explorer-chat-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.explorer-chat-tochat {
+  background: transparent;
+  border: 1px solid var(--fau-border);
+  color: var(--fau-text-dim);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.explorer-chat-tochat:hover { border-color: var(--accent); color: var(--fau-text); }
+
+/* Hamburger (sessions) button in the topbar */
+.explorer-menu-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-right: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--fau-text-dim);
+  cursor: pointer;
+  font-size: 18px;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.explorer-menu-btn:hover { background: var(--fau-surface); color: var(--fau-text); border-color: var(--fau-border); }
+
+/* Sessions drawer */
+.explorer-sessions-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 18;
+}
+.explorer-sessions-backdrop[hidden],
+.explorer-sessions[hidden],
+.explorer-map-panel[hidden] { display: none !important; }
+.explorer-sessions {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 300px;
+  max-width: 80%;
+  background: var(--fau-surface);
+  border-right: 1px solid var(--fau-border);
+  box-shadow: 2px 0 24px rgba(0, 0, 0, 0.25);
+  z-index: 19;
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+  gap: 12px;
+}
+.explorer-sessions-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fau-text);
+}
+.explorer-sessions-head span { display: inline-flex; align-items: center; gap: 8px; }
+.explorer-sessions-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  justify-content: center;
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: filter .15s;
+}
+.explorer-sessions-new:hover { filter: brightness(1.06); }
+.explorer-sessions-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.explorer-sessions-empty {
+  color: var(--fau-text-muted);
+  font-size: 13px;
+  padding: 12px 4px;
+  line-height: 1.5;
+}
+.explorer-session {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.explorer-session:hover { background: var(--fau-surface2); }
+.explorer-session.active { border-color: var(--accent); background: var(--accent-dim); }
+.explorer-session-main { flex: 1 1 auto; min-width: 0; }
+.explorer-session-title {
+  font-size: 13px;
+  color: var(--fau-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.explorer-session-meta { font-size: 11px; color: var(--fau-text-muted); margin-top: 2px; }
+.explorer-session-del {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: var(--fau-text-muted);
+  cursor: pointer;
+  font-size: 15px;
+  opacity: 0;
+  transition: opacity .15s, color .15s;
+}
+.explorer-session:hover .explorer-session-del { opacity: 1; }
+.explorer-session-del:hover { color: var(--color-warning, #e5484d); }
+
+/* Branch-map button in the topbar */
+.explorer-map-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 10px;
+  margin-right: 8px;
+  background: var(--fau-surface);
+  border: 1px solid var(--fau-border);
+  border-radius: 999px;
+  color: var(--fau-text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.explorer-map-btn:hover { color: var(--fau-text); border-color: var(--accent); }
+.explorer-map-btn.has-branches { color: var(--accent2); border-color: var(--accent); }
+.explorer-map-btn[hidden] { display: none !important; }
+.explorer-map-count { font-variant-numeric: tabular-nums; }
+
+/* Branch-map drawer (right side) */
+.explorer-map-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 320px;
+  max-width: 85%;
+  background: var(--fau-surface);
+  border-left: 1px solid var(--fau-border);
+  box-shadow: -2px 0 24px rgba(0, 0, 0, 0.25);
+  z-index: 19;
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+  gap: 10px;
+}
+.explorer-map-hint { font-size: 12px; color: var(--fau-text-muted); line-height: 1.5; margin: 0; }
+.explorer-map-tree {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.explorer-map-node {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--fau-text-dim);
+  transition: background .15s, color .15s, border-color .15s;
+}
+.explorer-map-node:hover { background: var(--fau-surface2); color: var(--fau-text); }
+.explorer-map-node.active { background: var(--accent-dim); color: var(--accent2); border-color: var(--accent); }
+.explorer-map-twig { font-size: 14px; color: var(--fau-text-muted); flex: 0 0 auto; }
+.explorer-map-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.explorer-map-badge {
+  flex: 0 0 auto;
+  font-size: 11px;
+  background: var(--accent-dim);
+  color: var(--accent2);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
 
