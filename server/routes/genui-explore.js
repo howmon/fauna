@@ -67,6 +67,10 @@ hardware, brands, media, art, UI. When they do, you MUST include images:
   blog \`/images/...\` paths, CDN guesses). If a URL does not appear VERBATIM in the
   data below, you may not use it. A view with fewer real images is better than one
   with broken links.
+- NEVER emit an \`Image\` with an empty/missing \`src\`, a "placeholder"/"example"/"sample"
+  value, or a placeholder service (via.placeholder, dummyimage, placehold.co, picsum,
+  loremflickr). An \`Image\` element must carry a real URL from the data, or you must
+  leave it out entirely — empty image slots render as ugly broken boxes.
 - When live web data is present and contains images, include at least 2–4 of
   them, matched to the most relevant cards/items.
 

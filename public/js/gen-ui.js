@@ -844,14 +844,34 @@ var _genUiComponents = {
     var btn = document.createElement('button');
     var variant = props.variant || 'default';
     btn.className = 'gui-btn gui-btn-' + variant;
-    if (props.disabled || props.loading) btn.disabled = true;
-    if (props.loading) {
-      btn.innerHTML = '<i class="ti ti-loader-2 gui-spin"></i> ' + escHtml(props.label || '');
-    } else if (props.icon) {
-      btn.innerHTML = '<i class="ti ' + escHtml(props.icon) + '"></i> ' + escHtml(props.label || '');
-    } else {
-      btn.textContent = props.label || props.text || 'Button';
+
+    // Paint disabled/loading/label from a resolved props snapshot.
+    var paint = function(p) {
+      btn.disabled = !!(p.disabled || p.loading);
+      if (p.loading) {
+        btn.innerHTML = '<i class="ti ti-loader-2 gui-spin"></i> ' + escHtml(p.label || '');
+      } else if (p.icon) {
+        btn.innerHTML = '<i class="ti ' + escHtml(p.icon) + '"></i> ' + escHtml(p.label || '');
+      } else {
+        btn.textContent = p.label || p.text || 'Button';
+      }
+    };
+    paint(props);
+
+    // Keep disabled/label/loading reactive to state. The tree renders once, so
+    // a Button whose `disabled` is bound to state (e.g. a quiz "Check answer"
+    // button that should enable once a RadioGroup writes the selected option)
+    // would otherwise stay frozen at its render-time value. Re-resolve on every
+    // state change when any of these props is a dynamic expression.
+    var rawProps = (el && el.props) || {};
+    var dynamicKeys = ['disabled', 'loading', 'label', 'text', 'icon'];
+    var hasDynamic = dynamicKeys.some(function(k) {
+      return rawProps[k] && typeof rawProps[k] === 'object';
+    });
+    if (hasDynamic) {
+      store.subscribe(function() { paint(_genUiProps(rawProps, store)); });
     }
+
     if (props.action) {
       btn.addEventListener('click', function() {
         // Re-resolve actionParams from the RAW spec at click time, not the
@@ -985,13 +1005,22 @@ var _genUiComponents = {
   },
 
   Image: function(el, props, children, store) {
+    var src = props.src ? String(props.src).trim() : '';
+    var usable = src &&
+      /^https?:\/\/|^data:image\//i.test(src) &&
+      !_guiIsPlaceholderMediaValue(src) &&
+      !/(^|\/\/)(via\.placeholder|placehold|placekitten|placeimg|dummyimage|loremflickr|picsum\.photos\/id\/0)/i.test(src);
+    if (!usable) {
+      // No real image — render nothing rather than a broken grey placeholder box.
+      var empty = document.createElement('span');
+      empty.style.display = 'none';
+      return empty;
+    }
     var img = document.createElement('img');
     img.className = 'gui-image';
     img.alt = props.alt || '';
-    if (props.src && /^https?:\/\/|^data:image\//.test(props.src)) {
-      _guiAttachImageFallback(img);
-      img.src = _guiResolveImageUrl(props.src);
-    }
+    _guiAttachImageFallback(img);
+    img.src = _guiResolveImageUrl(src);
     if (props.width) img.style.width = typeof props.width === 'number' ? props.width + 'px' : props.width;
     if (props.height) img.style.height = typeof props.height === 'number' ? props.height + 'px' : props.height;
     img.style.maxWidth = '100%';
@@ -1392,6 +1421,93 @@ var _genUiComponents = {
     return wrap;
   },
 
+  // ── Accordion ── collapsible sections; children map in order to titles ──
+  Accordion: function(el, props, children, store) {
+    var wrap = document.createElement('div');
+    wrap.className = 'gui-accordion';
+    var titles = props.titles || props.sections || props.items || [];
+    var multiple = !!props.multiple;
+    var open = {};
+    children.forEach(function(_, i) {
+      var t = titles[i];
+      var def = (t && typeof t === 'object' && t.open) ||
+                props.defaultOpen === i ||
+                (Array.isArray(props.defaultOpen) && props.defaultOpen.indexOf(i) >= 0);
+      if (def) open[i] = true;
+    });
+    var rows = [];
+    children.forEach(function(child, i) {
+      var t = titles[i];
+      var title = typeof t === 'string' ? t : (t && (t.title || t.label)) || ('Section ' + (i + 1));
+      var icon = t && typeof t === 'object' ? t.icon : '';
+      var item = document.createElement('div');
+      item.className = 'gui-accordion-item';
+      var head = document.createElement('button');
+      head.type = 'button';
+      head.className = 'gui-accordion-head';
+      head.innerHTML =
+        (icon ? '<i class="ti ti-' + escHtml(icon) + ' gui-accordion-lead"></i>' : '') +
+        '<span class="gui-accordion-title">' + escHtml(title) + '</span>' +
+        '<i class="ti ti-chevron-down gui-accordion-chevron"></i>';
+      var body = document.createElement('div');
+      body.className = 'gui-accordion-body';
+      var inner = document.createElement('div');
+      inner.className = 'gui-accordion-inner';
+      inner.appendChild(child);
+      body.appendChild(inner);
+      item.appendChild(head);
+      item.appendChild(body);
+      wrap.appendChild(item);
+      rows.push({ item: item, head: head });
+      head.addEventListener('click', function() {
+        var wasOpen = !!open[i];
+        if (!multiple) open = {};
+        if (wasOpen) delete open[i]; else open[i] = true;
+        sync();
+      });
+    });
+    function sync() {
+      rows.forEach(function(r, i) {
+        var isOpen = !!open[i];
+        r.item.classList.toggle('open', isOpen);
+        r.head.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      });
+    }
+    sync();
+    return wrap;
+  },
+
+  // ── Disclosure ── single block revealed by one button (e.g. "Show answer") ──
+  Disclosure: function(el, props, children, store) {
+    var wrap = document.createElement('div');
+    wrap.className = 'gui-disclosure';
+    var open = !!props.open;
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'gui-disclosure-btn';
+    var body = document.createElement('div');
+    body.className = 'gui-disclosure-body';
+    var inner = document.createElement('div');
+    inner.className = 'gui-disclosure-inner';
+    children.forEach(function(c) { inner.appendChild(c); });
+    body.appendChild(inner);
+    function label() {
+      return open
+        ? (props.hideLabel || props.openLabel || 'Hide')
+        : (props.label || props.showLabel || 'Show');
+    }
+    function sync() {
+      wrap.classList.toggle('open', open);
+      btn.innerHTML = '<i class="ti ti-chevron-' + (open ? 'down' : 'right') + '"></i>' +
+        '<span>' + escHtml(label()) + '</span>';
+    }
+    btn.addEventListener('click', function() { open = !open; sync(); });
+    sync();
+    wrap.appendChild(btn);
+    wrap.appendChild(body);
+    return wrap;
+  },
+
   // ── Carousel ── cycle through any child elements ──────────────────────
   Carousel: function(el, props, children, store) {
     if (!children.length) return document.createTextNode('');
@@ -1698,8 +1814,199 @@ var _genUiComponents = {
     wrap.appendChild(body);
     wrap.appendChild(controlsEl);
     return wrap;
-  }
+  },
+
+  // ── Charts (self-contained, no external libs) ─────────────────────────
+  BarChart:    function(el, props) { return _guiBarChart(props); },
+  LineChart:   function(el, props) { return _guiLineChart(props, false); },
+  AreaChart:   function(el, props) { return _guiLineChart(props, true); },
+  PieChart:    function(el, props) { return _guiPieChart(props, false); },
+  DonutChart:  function(el, props) { return _guiPieChart(props, true); },
+  RadialChart: function(el, props) { return _guiRadialChart(props); },
+  Gauge:       function(el, props) { return _guiRadialChart(props); }
 };
+
+// ── Chart helpers ─────────────────────────────────────────────────────────
+var _GUI_CHART_PALETTE = ['#6366f1', '#22c55e', '#3b82f6', '#f59e0b', '#ef4444', '#a855f7', '#14b8a6', '#ec4899'];
+
+function _guiChartData(props) {
+  var d = props.data || props.points || props.values || props.series || props.items;
+  if (!Array.isArray(d)) return [];
+  return d.map(function(item, i) {
+    if (typeof item === 'number') return { label: String(i + 1), value: item };
+    if (item && typeof item === 'object') {
+      var v = item.value != null ? item.value : (item.y != null ? item.y : item.count);
+      return { label: item.label != null ? String(item.label) : (item.name != null ? String(item.name) : String(i + 1)),
+               value: Number(v) || 0, color: item.color };
+    }
+    return { label: String(i + 1), value: Number(item) || 0 };
+  });
+}
+
+function _guiFmtNum(n) {
+  n = Number(n);
+  if (!isFinite(n)) return '';
+  var a = Math.abs(n);
+  if (a >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+  if (a >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (a >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return String(Math.round(n * 100) / 100);
+}
+
+function _guiChartShell(props, extraClass) {
+  var wrap = document.createElement('div');
+  wrap.className = 'gui-chart ' + extraClass;
+  if (props.title) {
+    var t = document.createElement('div');
+    t.className = 'gui-chart-title';
+    t.textContent = props.title;
+    wrap.appendChild(t);
+  }
+  return wrap;
+}
+
+function _guiChartEmpty(wrap) {
+  var e = document.createElement('div');
+  e.className = 'gui-chart-empty';
+  e.textContent = 'No data';
+  wrap.appendChild(e);
+  return wrap;
+}
+
+function _guiBarChart(props) {
+  var wrap = _guiChartShell(props, 'gui-barchart');
+  var data = _guiChartData(props);
+  if (!data.length) return _guiChartEmpty(wrap);
+  var max = props.max != null ? Number(props.max) : Math.max.apply(null, data.map(function(d) { return d.value; }).concat([0]));
+  if (!(max > 0)) max = 1;
+  var horizontal = !!props.horizontal;
+  var plot = document.createElement('div');
+  plot.className = 'gui-bars' + (horizontal ? ' horizontal' : '');
+  data.forEach(function(d, i) {
+    var color = d.color || _GUI_CHART_PALETTE[i % _GUI_CHART_PALETTE.length];
+    var pct = Math.max(0, Math.min(100, (d.value / max) * 100));
+    var item = document.createElement('div');
+    item.className = 'gui-bar-item';
+    item.innerHTML =
+      '<div class="gui-bar-value">' + escHtml(_guiFmtNum(d.value)) + '</div>' +
+      '<div class="gui-bar-track"><div class="gui-bar-fill" style="' +
+        (horizontal ? 'width' : 'height') + ':' + pct.toFixed(1) + '%;background:' + color + '"></div></div>' +
+      '<div class="gui-bar-label" title="' + escHtml(d.label) + '">' + escHtml(d.label) + '</div>';
+    plot.appendChild(item);
+  });
+  wrap.appendChild(plot);
+  return wrap;
+}
+
+function _guiLineChart(props, area) {
+  var wrap = _guiChartShell(props, area ? 'gui-areachart' : 'gui-linechart');
+  var data = _guiChartData(props);
+  if (data.length < 2) return _guiChartEmpty(wrap);
+  var vals = data.map(function(d) { return d.value; });
+  var min = props.min != null ? Number(props.min) : Math.min.apply(null, vals);
+  var max = props.max != null ? Number(props.max) : Math.max.apply(null, vals);
+  if (min === max) max = min + 1;
+  var W = 320, H = 140, pad = 16;
+  var n = data.length;
+  var X = function(i) { return pad + (W - pad * 2) * (i / (n - 1)); };
+  var Y = function(v) { return pad + (H - pad * 2) * (1 - (v - min) / (max - min)); };
+  var pts = data.map(function(d, i) { return X(i).toFixed(1) + ',' + Y(d.value).toFixed(1); }).join(' ');
+  var color = props.color || _GUI_CHART_PALETTE[0];
+  var svg = '<svg class="gui-chart-svg" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true">';
+  if (area) {
+    svg += '<polygon fill="' + color + '" opacity="0.15" points="' +
+      pad + ',' + (H - pad) + ' ' + pts + ' ' + (W - pad) + ',' + (H - pad) + '"/>';
+  }
+  svg += '<polyline fill="none" stroke="' + color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" points="' + pts + '"/>';
+  data.forEach(function(d, i) {
+    svg += '<circle cx="' + X(i).toFixed(1) + '" cy="' + Y(d.value).toFixed(1) + '" r="2.5" fill="' + color + '"/>';
+  });
+  svg += '</svg>';
+  var body = document.createElement('div');
+  body.className = 'gui-chart-body';
+  body.innerHTML = svg;
+  wrap.appendChild(body);
+  var labels = document.createElement('div');
+  labels.className = 'gui-chart-xlabels';
+  labels.innerHTML = '<span>' + escHtml(data[0].label) + '</span><span>' + escHtml(data[n - 1].label) + '</span>';
+  wrap.appendChild(labels);
+  return wrap;
+}
+
+function _guiArcPath(cx, cy, r, inner, a0, a1, color) {
+  var large = (a1 - a0) > Math.PI ? 1 : 0;
+  var x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0);
+  var x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
+  if (inner > 0) {
+    var xi0 = cx + inner * Math.cos(a0), yi0 = cy + inner * Math.sin(a0);
+    var xi1 = cx + inner * Math.cos(a1), yi1 = cy + inner * Math.sin(a1);
+    return '<path d="M' + x0.toFixed(2) + ' ' + y0.toFixed(2) + ' A' + r + ' ' + r + ' 0 ' + large + ' 1 ' +
+      x1.toFixed(2) + ' ' + y1.toFixed(2) + ' L' + xi1.toFixed(2) + ' ' + yi1.toFixed(2) + ' A' + inner + ' ' + inner +
+      ' 0 ' + large + ' 0 ' + xi0.toFixed(2) + ' ' + yi0.toFixed(2) + ' Z" fill="' + color + '"/>';
+  }
+  return '<path d="M' + cx + ' ' + cy + ' L' + x0.toFixed(2) + ' ' + y0.toFixed(2) + ' A' + r + ' ' + r + ' 0 ' +
+    large + ' 1 ' + x1.toFixed(2) + ' ' + y1.toFixed(2) + ' Z" fill="' + color + '"/>';
+}
+
+function _guiPieChart(props, donut) {
+  var wrap = _guiChartShell(props, donut ? 'gui-donutchart' : 'gui-piechart');
+  var data = _guiChartData(props).filter(function(d) { return d.value > 0; });
+  if (!data.length) return _guiChartEmpty(wrap);
+  var total = data.reduce(function(a, d) { return a + d.value; }, 0) || 1;
+  var cx = 70, cy = 70, r = 62, inner = donut ? 36 : 0;
+  var ang = -Math.PI / 2;
+  var svg = '<svg class="gui-pie-svg" viewBox="0 0 140 140" aria-hidden="true">';
+  if (data.length === 1) {
+    var c0 = data[0].color || _GUI_CHART_PALETTE[0];
+    svg += '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="' + c0 + '"/>';
+    if (inner > 0) svg += '<circle cx="' + cx + '" cy="' + cy + '" r="' + inner + '" fill="var(--fau-surface, #1a1a1a)"/>';
+  } else {
+    data.forEach(function(d, i) {
+      var frac = d.value / total;
+      var a2 = ang + frac * 2 * Math.PI;
+      var color = d.color || _GUI_CHART_PALETTE[i % _GUI_CHART_PALETTE.length];
+      svg += _guiArcPath(cx, cy, r, inner, ang, a2, color);
+      ang = a2;
+    });
+  }
+  svg += '</svg>';
+  var body = document.createElement('div');
+  body.className = 'gui-pie-body';
+  var legend = data.map(function(d, i) {
+    var color = d.color || _GUI_CHART_PALETTE[i % _GUI_CHART_PALETTE.length];
+    var pct = Math.round((d.value / total) * 100);
+    return '<div class="gui-pie-legend-row"><span class="gui-pie-dot" style="background:' + color + '"></span>' +
+      '<span class="gui-pie-legend-label">' + escHtml(d.label) + '</span>' +
+      '<span class="gui-pie-legend-val">' + pct + '%</span></div>';
+  }).join('');
+  body.innerHTML = svg + '<div class="gui-pie-legend">' + legend + '</div>';
+  wrap.appendChild(body);
+  return wrap;
+}
+
+function _guiRadialChart(props) {
+  var wrap = _guiChartShell(props, 'gui-radialchart');
+  var value = Number(props.value != null ? props.value : 0);
+  var max = props.max != null ? Number(props.max) : 100;
+  var pct = max ? Math.max(0, Math.min(1, value / max)) : 0;
+  var color = props.color || _GUI_CHART_PALETTE[0];
+  var cx = 70, cy = 70, r = 54;
+  var circ = 2 * Math.PI * r;
+  var dash = (pct * circ).toFixed(1) + ' ' + circ.toFixed(1);
+  var center = props.centerLabel != null ? String(props.centerLabel)
+    : (props.max != null ? _guiFmtNum(value) : Math.round(pct * 100) + '%');
+  var svg = '<svg class="gui-radial-svg" viewBox="0 0 140 140" aria-hidden="true">' +
+    '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="none" stroke="var(--fau-border, #333)" stroke-width="12"/>' +
+    '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="none" stroke="' + color + '" stroke-width="12" ' +
+      'stroke-linecap="round" stroke-dasharray="' + dash + '" transform="rotate(-90 ' + cx + ' ' + cy + ')"/>' +
+    '<text x="70" y="74" text-anchor="middle" class="gui-radial-text">' + escHtml(center) + '</text>' +
+    '</svg>';
+  var body = document.createElement('div');
+  body.className = 'gui-radial-body';
+  body.innerHTML = svg + (props.label ? '<div class="gui-radial-label">' + escHtml(props.label) + '</div>' : '');
+  wrap.appendChild(body);
+  return wrap;
+}
 
 // ── Tree renderer ─────────────────────────────────────────────────────────
 
@@ -1747,7 +2054,56 @@ function _genUiRenderElement(id, elements, store, depth) {
     var rsp = parseInt(props.rowSpan, 10);
     if (isFinite(rsp) && rsp > 1) rendered.style.gridRow = 'span ' + rsp;
   }
+
+  // Generic display reactivity: the tree renders once, so a display element
+  // whose props are bound to state (e.g. a Stat/Text/Progress/chart reading
+  // {$state}/{$template}/{$cond}) would freeze at its initial value. For the
+  // whitelisted *display* types (no focusable inputs to clobber), re-resolve
+  // and repaint in place whenever state changes. Inputs manage their own
+  // two-way ($bindState) binding and are intentionally excluded.
+  if (rendered && _GENUI_REACTIVE_TYPES[el.type] && _genUiHasDynamic(el.props)) {
+    var holder = rendered;
+    store.subscribe(function() {
+      if (!holder || !holder.parentNode) return;
+      var p2 = _genUiProps(el.props, store);
+      var kids2 = (el.children || []).map(function(cid) {
+        return _genUiRenderElement(cid, elements, store, depth + 1);
+      });
+      var fresh;
+      try { fresh = renderer(el, p2, kids2, store); } catch (_) { return; }
+      if (!fresh) return;
+      if (fresh.style) {
+        var s2 = parseInt(p2.span, 10);
+        if (isFinite(s2) && s2 > 1) fresh.style.gridColumn = 'span ' + s2;
+        var r2 = parseInt(p2.rowSpan, 10);
+        if (isFinite(r2) && r2 > 1) fresh.style.gridRow = 'span ' + r2;
+      }
+      holder.parentNode.replaceChild(fresh, holder);
+      holder = fresh;
+    });
+  }
   return rendered;
+}
+
+// Display components that are safe to re-render in place on state change
+// (no focusable form inputs inside that would lose focus/caret).
+var _GENUI_REACTIVE_TYPES = {
+  Text: 1, Heading: 1, Badge: 1, Stat: 1, Progress: 1, KeyValue: 1, Alert: 1,
+  Code: 1, Icon: 1, Table: 1, List: 1, Image: 1, Divider: 1, Rating: 1,
+  BarChart: 1, LineChart: 1, AreaChart: 1, PieChart: 1, DonutChart: 1,
+  RadialChart: 1, Gauge: 1,
+};
+
+// Deep-scan raw props for a dynamic expression sentinel. $bindState is excluded
+// because it denotes a two-way input binding, not a display-only dependency.
+function _genUiHasDynamic(obj) {
+  if (!obj || typeof obj !== 'object') return false;
+  if (obj.$bindState !== undefined) return false;
+  if (obj.$state !== undefined || obj.$template !== undefined || obj.$cond !== undefined) return true;
+  for (var k in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, k) && _genUiHasDynamic(obj[k])) return true;
+  }
+  return false;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────
@@ -2179,6 +2535,8 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 | \`Select\` | \`label\`, \`options\`, \`value\` | Dropdown |
 | \`Input\` | \`label\`, \`placeholder\`, \`type\`, \`value\` | Text input |
 | \`Tabs\` | \`tabs\` (array of \`{id,label}\`), \`statePath\` | Tabbed layout |
+| \`Accordion\` | \`titles\` (array of strings or \`{title,icon,open}\`), \`multiple\`, \`defaultOpen\` | Collapsible sections — children map in order to titles. Use for FAQs, step-by-step reveals, "show the answer" sections |
+| \`Disclosure\` | \`label\`/\`showLabel\`, \`hideLabel\`, \`open\` | Single block hidden behind one button (e.g. "Show answer"). Children are the revealed content |
 | \`Carousel\` | \`loop\`, \`statePath\` | Cycle through any children — slides |
 | \`MediaPlayer\` | \`src\`, \`title\`, \`type\` ("youtube"/"video"/"audio"/"image"), \`poster\`, \`autoplay\` | Embed YouTube / play local video, audio, or image |
 | \`Playlist\` | \`title\`, \`items\` (array of \`{src,title,type,description,duration,thumbnail}\`), \`layout\` ("stack"/"side"/"grid"), \`autoplay\`, \`statePath\` | Browsable playlist with inline player. Use \`layout:"grid"\` for search results / YouTube playlists (3 tiles per row). |

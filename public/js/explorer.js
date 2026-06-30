@@ -210,21 +210,36 @@
         escHtml(node.title || 'Step') + '</span></button>';
     };
     var sep = '<i class="ti ti-chevron-right explorer-crumb-sep"></i>';
-
-    var html = '<button class="explorer-crumb explorer-crumb-home' + (homeActive ? ' active' : '') +
+    var homeBtn = '<button class="explorer-crumb explorer-crumb-home' + (homeActive ? ' active' : '') +
       '" onclick="_explorerHome()"><i class="ti ti-compass"></i><span class="explorer-crumb-label">Explore</span></button>';
+    var ellipsisBtn = '<button class="explorer-crumb explorer-crumb-ellipsis" title="Show full trail" ' +
+      'onclick="_explorerToggleTrail(event)"><i class="ti ti-dots"></i></button>';
 
     var path = EX.currentId ? exPathTo(EX.currentId) : [];
-    // Collapse the middle when the path is long: home › first › … › last two.
-    if (path.length > 4) {
-      html += sep + crumbHtml(path[0], false);
-      html += sep + '<button class="explorer-crumb explorer-crumb-ellipsis" title="Show full path / branch map" onclick="toggleExplorerMap(true)">…</button>';
-      var tail = path.slice(-2);
-      tail.forEach(function (n) { html += sep + crumbHtml(n, n.id === EX.currentId); });
-    } else {
-      path.forEach(function (n) { html += sep + crumbHtml(n, n.id === EX.currentId); });
+
+    // Build the full breadcrumb, then collapse the middle progressively until it
+    // fits the available width (long single labels overflow even at depth 2).
+    var buildFull = function () {
+      return homeBtn + path.map(function (n) { return sep + crumbHtml(n, n.id === EX.currentId); }).join('');
+    };
+    // keepTail = how many trailing crumbs to show beside the ellipsis.
+    var buildCollapsed = function (keepTail) {
+      var tail = path.slice(-keepTail);
+      var lead = homeBtn;
+      // Keep the first crumb if it isn't part of the tail, so origin stays visible.
+      if (path.length - keepTail >= 1) lead += sep + crumbHtml(path[0], false);
+      lead += sep + ellipsisBtn;
+      tail.forEach(function (n) { lead += sep + crumbHtml(n, n.id === EX.currentId); });
+      return lead;
+    };
+
+    bc.innerHTML = buildFull();
+    var overflowing = function () { return bc.scrollWidth > bc.clientWidth + 2; };
+    if (path.length > 1 && overflowing()) {
+      // Try keeping the last 2, then just the current, collapsing the rest.
+      bc.innerHTML = buildCollapsed(2);
+      if (overflowing()) bc.innerHTML = buildCollapsed(1);
     }
-    bc.innerHTML = html;
 
     // Show the branch-map button whenever there is more than one node or any
     // branching has occurred.
@@ -237,6 +252,67 @@
       mapBtn.classList.toggle('has-branches', forks > 0);
     }
   }
+
+  // ── Inline trail popover (the ellipsis dropdown) ─────────────────────────
+  // A compact tree showing the full path from Explore → current, plus any
+  // branch siblings along the way, so you can jump anywhere without leaving.
+  window._explorerToggleTrail = function (arg) {
+    var pop = document.getElementById('explorer-trail-pop');
+    var back = document.getElementById('explorer-trail-backdrop');
+    if (!pop) return;
+    var force = (typeof arg === 'boolean') ? arg : undefined;
+    var open = (force !== undefined) ? force : pop.hasAttribute('hidden');
+    if (open) {
+      renderTrailList();
+      pop.removeAttribute('hidden');
+      if (back) back.removeAttribute('hidden');
+      // Anchor under the ellipsis button (fall back to breadcrumb start).
+      var anchor = document.querySelector('.explorer-crumb-ellipsis') ||
+        document.getElementById('explorer-breadcrumb');
+      if (anchor && arg && arg.stopPropagation) arg.stopPropagation();
+      if (anchor) {
+        var r = anchor.getBoundingClientRect();
+        pop.style.top = (r.bottom + 6) + 'px';
+        pop.style.left = Math.max(8, r.left) + 'px';
+      }
+    } else {
+      pop.setAttribute('hidden', '');
+      if (back) back.setAttribute('hidden', '');
+    }
+  };
+
+  function renderTrailList() {
+    var host = document.getElementById('explorer-trail-list');
+    if (!host) return;
+    var path = EX.currentId ? exPathTo(EX.currentId) : [];
+    var out = [];
+    out.push('<button class="explorer-trail-row' + (!EX.currentId ? ' active' : '') + '" ' +
+      'style="padding-left:8px" onclick="_explorerTrailGo(\'\')">' +
+      '<i class="ti ti-compass explorer-trail-ico"></i>' +
+      '<span class="explorer-trail-label">Explore</span></button>');
+    path.forEach(function (n, i) {
+      var active = n.id === EX.currentId ? ' active' : '';
+      out.push('<button class="explorer-trail-row' + active + '" style="padding-left:' + (i * 16 + 8) + 'px" ' +
+        'onclick="_explorerTrailGo(\'' + n.id + '\')">' +
+        '<i class="ti ' + (i ? 'ti-corner-down-right' : 'ti-point') + ' explorer-trail-ico"></i>' +
+        '<span class="explorer-trail-label">' + escHtml(n.title || 'Step') + '</span></button>');
+      // Branch siblings: alternate paths that diverge at this node.
+      var sibs = exSiblings(n).filter(function (s) { return s.id !== n.id; });
+      sibs.forEach(function (s) {
+        out.push('<button class="explorer-trail-row explorer-trail-branch" style="padding-left:' + (i * 16 + 24) + 'px" ' +
+          'onclick="_explorerTrailGo(\'' + s.id + '\')">' +
+          '<i class="ti ti-git-branch explorer-trail-ico"></i>' +
+          '<span class="explorer-trail-label">' + escHtml(s.title || 'Branch') + '</span></button>');
+      });
+    });
+    host.innerHTML = out.join('');
+  }
+
+  window._explorerTrailGo = function (id) {
+    window._explorerToggleTrail(false);
+    if (!id) { _explorerHome(); return; }
+    if (exNode(id)) loadNode(id);
+  };
 
   // ── Branch map (full exploration tree) ───────────────────────────────────
 
@@ -557,6 +633,11 @@
           '<div id="explorer-controls" class="explorer-controls"></div>' +
         '</div>' +
         '<div id="explorer-content" class="explorer-content"></div>' +
+      '</div>' +
+      '<div class="explorer-trail-backdrop" id="explorer-trail-backdrop" hidden onclick="_explorerToggleTrail(false)"></div>' +
+      '<div class="explorer-trail-pop" id="explorer-trail-pop" hidden>' +
+        '<div class="explorer-trail-head"><i class="ti ti-route"></i><span>Your trail</span></div>' +
+        '<div class="explorer-trail-list" id="explorer-trail-list"></div>' +
       '</div>' +
       '<div class="explorer-sessions-backdrop" id="explorer-sessions-backdrop" hidden onclick="toggleExplorerSessions(false)"></div>' +
       '<aside class="explorer-sessions" id="explorer-sessions-panel" hidden>' +

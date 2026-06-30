@@ -114,6 +114,10 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 | \`Table\` | \`columns\` (strings or \`{header,width,align}\`), \`rows\` (2-D array) | Data table |
 | \`List\` | \`items\` (strings or \`{label,description}\`), \`ordered\` | Bullet/numbered list |
 | \`Progress\` | \`value\` (0–100), \`label\`, \`variant\` | Progress bar |
+| \`BarChart\` | \`data\` ([{label,value,color?}] or [n,n,...]), \`title\`, \`max\`, \`horizontal\` (bool) | Bar chart. Use for comparing categories (sales by region, votes per option, specs across products). Set \`horizontal:true\` for long labels. |
+| \`LineChart\` / \`AreaChart\` | \`data\` ([{label,value}] or [n,n,...]), \`title\`, \`color\`, \`min\`, \`max\` | Trend over an ordered sequence (price history, growth, time series). \`AreaChart\` adds a filled area. Needs ≥2 points. |
+| \`PieChart\` / \`DonutChart\` | \`data\` ([{label,value,color?}]), \`title\` | Part-to-whole breakdown (market share, budget split, composition). \`DonutChart\` leaves a hole. Auto % legend. |
+| \`RadialChart\` / \`Gauge\` | \`value\`, \`max\` (default 100), \`label\`, \`color\`, \`centerLabel\` | Single progress/score ring (score, completion %, rating out of max, KPI vs target). |
 | \`Code\` | \`code\`, \`language\` | Syntax-highlighted snippet |
 | \`Image\` | \`src\`, \`alt\`, \`width\`, \`height\` | Image from a URL or data URI |
 | \`SVG\` | \`markup\` (raw SVG string), \`width\`, \`height\`, \`viewBox\` | Inline SVG — pass the full \`<svg>…</svg>\` as \`markup\`. Use this to render icons, logos, diagrams, or any vector graphic the AI generates. Scripts and event handlers are sanitized automatically. |
@@ -124,6 +128,8 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 | \`Checkbox\` | \`label\`, \`value\`, \`hint\` | Single boolean. \`value: {"$bindState":"/path"}\` for two-way bind. |
 | \`Slider\` | \`label\`, \`min\`, \`max\`, \`step\`, \`value\`, \`showValue\`, \`hint\` | Numeric range. Bind \`value\` to write back as a number. |
 | \`Tabs\` | \`tabs\` ([{id,label}]), \`statePath\` | Tabbed view. Children render conditionally based on selected tab. |
+| \`Accordion\` | \`titles\` ([string or {title,icon,open}]), \`multiple\`, \`defaultOpen\` | Collapsible sections — children map in order to titles. Use for FAQs, step-by-step guides, or "reveal the answer/solution" sections. \`multiple:true\` lets several stay open. |
+| \`Disclosure\` | \`label\`/\`showLabel\`, \`hideLabel\`, \`open\` | Single block hidden behind one toggle button (e.g. "Show answer", "Show hint"). Children are the revealed content. |
 | \`Carousel\` | \`statePath\` | Cycles through child elements with prev/next controls. |
 | \`MediaPlayer\` | \`src\` (URL), \`type\` ("youtube"/"video"/"audio"/"image" — auto-detected), \`title\`, \`poster\`, \`autoplay\` | Single embedded player. YouTube URLs auto-embed. |
 | \`Playlist\` | \`title\`, \`items\` ([{src,title,type?,poster?,stats?,facts?}]), \`autoplay\`, \`showStats\`, \`showFacts\`, \`statePath\` | Browsable media list with prev/next + active player. **USE THIS for any "play these videos/songs/podcasts" or YouTube/audio/image-carousel request — never emit a Table of media links.** |
