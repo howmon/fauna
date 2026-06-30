@@ -1424,6 +1424,23 @@ async function streamResponse(conv) {
     _toolStatusEl.innerHTML = html;
   }
 
+  function _showInlineNotice(message) {
+    if (!message || !bodyEl) return;
+    _ensureLiveMessageAttached();
+    var notice = bodyEl.querySelector('.stream-inline-notice');
+    if (!notice) {
+      notice = document.createElement('div');
+      notice.className = 'stream-inline-notice';
+      notice.innerHTML = '<i class="ti ti-info-circle"></i><span></span><button type="button" class="stream-inline-notice-close" aria-label="Dismiss notice"><i class="ti ti-x"></i></button>';
+      var close = notice.querySelector('.stream-inline-notice-close');
+      if (close) close.onclick = function() { notice.remove(); };
+      bodyEl.appendChild(notice);
+    }
+    var text = notice.querySelector('span');
+    if (text) text.textContent = message;
+    scrollBottom();
+  }
+
   function scheduleRender() {
     _ensureLiveMessageAttached();
     if (!isActive() || !bodyEl) return;
@@ -1787,7 +1804,7 @@ async function streamResponse(conv) {
 
           if (evt.type === 'content')   { _stopReasoningTicker(); _clearToolStatuses(); buffer += evt.content; tokenCount++; if (tokenCount === 1) dbg('first token received', 'ok'); if (tokenCount % 25 === 0) dbg('stream chunk: tokens=' + tokenCount + ' buffer=' + buffer.length + 'ch elapsed=' + (Date.now() - _streamStartedAt) + 'ms lastChunk=' + (evt.content || '').length + 'ch', 'info'); if (typeof processDesignStreamChunk === 'function') processDesignStreamChunk(evt.content, buffer); scheduleRender(); }
           if (evt.type === 'error')     { _stopReasoningTicker(); _clearToolStatuses(); dbg('SSE error: ' + evt.error, 'err'); buffer += '\n\nError: ' + evt.error; scheduleRender(); }
-          if (evt.type === 'notice')    { dbg('notice: ' + (evt.message || ''), 'warn'); if (evt.message && typeof showToast === 'function') showToast(evt.message); }
+          if (evt.type === 'notice')    { dbg('notice: ' + (evt.message || ''), 'warn'); _showInlineNotice(evt.message || ''); }
           if (evt.type === 'reasoning') {
             if (!_reasoning) _reasoning = { startedAt: Date.now() };
             _updateReasoningPanel(null, false);

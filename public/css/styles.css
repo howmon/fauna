@@ -1158,6 +1158,18 @@ body.is-resizing webview { pointer-events: none !important; }
 .tool-status-line .tool-status-icon { font-size: 11px; opacity: .7; }
 .file-write-stream-status { margin-top: 2px; }
 .file-write-stream-status .tool-status-icon { color: var(--accent2); }
+.stream-inline-notice {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 8px;
+  margin-top: 8px; padding: 9px 10px; border: 1px solid rgba(95, 198, 137, .28);
+  border-radius: 8px; background: rgba(95, 198, 137, .10); color: var(--fau-text);
+  font-size: 12px; line-height: 1.45;
+}
+.stream-inline-notice > .ti { color: var(--success); margin-top: 1px; }
+.stream-inline-notice-close {
+  border: 0; background: transparent; color: var(--fau-text-muted); cursor: pointer;
+  border-radius: 5px; padding: 1px 3px; line-height: 1;
+}
+.stream-inline-notice-close:hover { background: var(--fau-hover); color: var(--fau-text); }
 .tool-status-shimmer {
   background: linear-gradient(90deg, var(--fau-text-muted), var(--accent2, #a78bfa), var(--fau-text-muted));
   background-size: 200% auto; background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
