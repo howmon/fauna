@@ -11220,7 +11220,61 @@ mark.find-hit.find-hit-active {
   position: sticky;
   top: 0;
   z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
+.explorer-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+.explorer-web-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--fau-border);
+  background: var(--fau-surface);
+  color: var(--fau-text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.explorer-web-toggle input { display: none; }
+.explorer-web-toggle i { font-size: 15px; }
+.explorer-web-toggle.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim);
+  box-shadow: 0 0 0 1px var(--accent-glow, transparent) inset;
+}
+.explorer-agent-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--fau-border);
+  background: var(--fau-surface);
+  color: var(--fau-text-dim);
+  font-size: 12px;
+}
+.explorer-agent-pick i { font-size: 15px; }
+.explorer-agent-select {
+  background: transparent;
+  border: none;
+  color: var(--fau-text);
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+  max-width: 160px;
+}
+.explorer-agent-select option { color: initial; }
 .explorer-breadcrumb {
   display: flex;
   align-items: center;

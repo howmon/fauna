@@ -42,6 +42,65 @@ Hard requirements:
 - Keep all strings valid JSON (escape quotes/newlines). Do not emit trailing text.
 `;
 
+// Extract page/search content via the Playwright browse manager, with a curl
+// fallback. Returns { url, title, content } or null.
+async function browseExtract(manager, url, maxChars) {
+  try {
+    if (manager && typeof manager.handleAction === 'function') {
+      return await manager.handleAction({ action: 'extract', url, maxChars });
+    }
+  } catch (_) {}
+  try {
+    if (manager && typeof manager.fetchUrlFallback === 'function') {
+      return await manager.fetchUrlFallback(url, maxChars);
+    }
+  } catch (_) {}
+  return null;
+}
+
+// Pick a few real external result URLs out of DuckDuckGo HTML markdown. DDG
+// wraps results in /l/?uddg=<encoded-target> redirect links; decode those
+// first, then fall back to any absolute non-DDG link in the markdown.
+function pickResultUrls(md, max) {
+  const urls = [];
+  const seen = new Set();
+  const push = (u) => {
+    if (!u || seen.has(u) || !/^https?:\/\//.test(u)) return;
+    if (/duckduckgo\.com/.test(u)) return;
+    seen.add(u); urls.push(u);
+  };
+  let m;
+  const reUddg = /uddg=([^&)"'\s]+)/g;
+  while ((m = reUddg.exec(md)) && urls.length < max) {
+    try { push(decodeURIComponent(m[1])); } catch (_) {}
+  }
+  if (urls.length < max) {
+    const reAbs = /\((https?:\/\/[^)\s]+)\)/g;
+    while ((m = reAbs.exec(md)) && urls.length < max) push(m[1]);
+  }
+  return urls;
+}
+
+// Run a live web search + top-result fetch and return a grounding string the
+// model can build a gen-ui view from (real titles, snippets, links, images).
+async function gatherWebGrounding(manager, prompt) {
+  if (!manager) return '';
+  const query = prompt.replace(/\s+/g, ' ').trim().slice(0, 256);
+  if (!query) return '';
+  const searchUrl = 'https://duckduckgo.com/html/?q=' + encodeURIComponent(query);
+  const search = await browseExtract(manager, searchUrl, 5000);
+  if (!search || !search.content) return '';
+  let grounding = `### Search results for "${query}"\n${String(search.content).slice(0, 5000)}\n`;
+  const urls = pickResultUrls(String(search.content), 2);
+  for (const u of urls) {
+    const page = await browseExtract(manager, u, 5000);
+    if (page && page.content) {
+      grounding += `\n### Source: ${u}\n${page.title ? page.title + '\n' : ''}${String(page.content).slice(0, 5000)}\n`;
+    }
+  }
+  return grounding;
+}
+
 // Pull a JSON object out of a model response that may include stray fences or
 // prose despite instructions. Mirrors the recovery the client does, server-side.
 function extractSpecJson(raw) {
@@ -72,27 +131,47 @@ function extractSpecJson(raw) {
   return null;
 }
 
-export function registerGenUiExploreRoutes(app) {
+export function registerGenUiExploreRoutes(app, { getBrowseManager } = {}) {
   app.post('/api/genui-explore', async (req, res) => {
     const body = req.body || {};
     const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
     const path = Array.isArray(body.path) ? body.path.filter(p => typeof p === 'string') : [];
     const context = typeof body.context === 'string' ? body.context.slice(0, 4000) : '';
     const model = typeof body.model === 'string' && body.model ? body.model : 'claude-sonnet-4.6';
+    const useWeb = body.web === true;
+    const agentPrompt = typeof body.agentPrompt === 'string' ? body.agentPrompt.slice(0, 6000) : '';
+    const agentName = typeof body.agentName === 'string' ? body.agentName.slice(0, 80) : '';
 
     if (!prompt) return res.status(400).json({ ok: false, error: 'prompt required' });
 
     const trail = path.length ? `\n\n## Journey so far (breadcrumb)\n${path.join(' → ')}` : '';
     const ctx = context ? `\n\n## Relevant context\n${context}` : '';
 
+    // Optional live-web grounding via the Playwright browse manager.
+    let grounding = '';
+    if (useWeb && typeof getBrowseManager === 'function') {
+      try { grounding = await gatherWebGrounding(getBrowseManager(), prompt); } catch (_) {}
+    }
+
+    let system = GEN_UI_CATALOG_PROMPT + '\n' + EXPLORE_RULES;
+    if (agentPrompt) {
+      system = `## Active agent persona\nYou are acting as the "${agentName || 'custom'}" agent. Adopt its expertise, focus, and voice when building the view:\n${agentPrompt}\n\n` + system;
+    }
+
+    let userContent = `Explore this for me and return one interactive gen-ui spec:\n\n${prompt}${trail}${ctx}`;
+    if (grounding) {
+      userContent += `\n\n## LIVE WEB DATA (fetched just now — current)\n${grounding}\n` +
+        'Build the view from this live data. Use ONLY URLs that appear above for Image `src`, links, and `open_url` buttons — never invent URLs. Add an `open_url` Button to each source you cite, and prefer real images found in the data.';
+    }
+
     try {
       const client = getCopilotClient();
       const response = await client.chat.completions.create({
         model,
-        max_tokens: 3000,
+        max_tokens: 3200,
         messages: [
-          { role: 'system', content: GEN_UI_CATALOG_PROMPT + '\n' + EXPLORE_RULES },
-          { role: 'user', content: `Explore this for me and return one interactive gen-ui spec:\n\n${prompt}${trail}${ctx}` },
+          { role: 'system', content: system },
+          { role: 'user', content: userContent },
         ],
       });
       const rawOut = response.choices?.[0]?.message?.content || '';
@@ -111,7 +190,7 @@ export function registerGenUiExploreRoutes(app) {
         }
       }
       if (!title) title = prompt.slice(0, 60);
-      res.json({ ok: true, title, spec });
+      res.json({ ok: true, title, spec, grounded: !!grounding });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'generation failed' });
     }

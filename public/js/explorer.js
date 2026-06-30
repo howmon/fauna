@@ -11,7 +11,7 @@
 
 (function () {
   // Journey state. journey = [{ title, prompt, spec }], idx = current node.
-  var EX = { journey: [], idx: -1, reqId: 0 };
+  var EX = { journey: [], idx: -1, reqId: 0, web: false };
   window._faunaExplorer = EX;
 
   // ── Page open / close ────────────────────────────────────────────────────
@@ -31,25 +31,6 @@
   window.closeExplorerPage = closeExplorerPage;
 
   // ── Shell ──────────────────────────────────────────────────────────────
-
-  function renderExplorerShell(body) {
-    body.innerHTML =
-      '<div class="explorer-shell">' +
-        '<div class="explorer-topbar">' +
-          '<div id="explorer-breadcrumb" class="explorer-breadcrumb"></div>' +
-        '</div>' +
-        '<div id="explorer-content" class="explorer-content"></div>' +
-      '</div>' +
-      '<button class="explorer-fab" onclick="toggleExplorerChat()" title="Ask in chat" aria-label="Ask in chat"><i class="ti ti-message-2"></i></button>' +
-      '<div class="explorer-chat-panel" id="explorer-chat-panel" hidden>' +
-        '<div class="explorer-chat-head"><i class="ti ti-message-2"></i><span>Ask in chat</span>' +
-          '<button class="explorer-chat-x" onclick="toggleExplorerChat(false)" aria-label="Close"><i class="ti ti-x"></i></button>' +
-        '</div>' +
-        '<p class="explorer-chat-hint">CTA not cutting it? Describe what you actually need and Fauna will pick it up in the full chat.</p>' +
-        '<textarea id="explorer-chat-input" class="explorer-chat-input" rows="3" placeholder="What do you need to do?"></textarea>' +
-        '<button class="explorer-chat-send" onclick="explorerChatSend()">Send to chat <i class="ti ti-arrow-right"></i></button>' +
-      '</div>';
-  }
 
   // ── Front door (conversational start) ────────────────────────────────────
 
@@ -145,6 +126,7 @@
     content.innerHTML = skeletonHtml();
     var myReq = ++EX.reqId;
     var path = EX.journey.slice(0, i).map(function (n) { return n.title; });
+    var agent = (typeof activeAgent !== 'undefined' && activeAgent) ? activeAgent : null;
     fetch('/api/genui-explore', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -153,6 +135,9 @@
         path: path,
         context: tieContext(),
         model: (typeof state !== 'undefined' && state.model) ? state.model : undefined,
+        web: !!EX.web,
+        agentName: agent ? agent.name : undefined,
+        agentPrompt: agent ? agent.systemPrompt : undefined,
       }),
     })
       .then(function (r) { return r.json(); })
@@ -263,6 +248,75 @@
     else label = 'Standalone session';
     return '<div class="explorer-tie"><i class="ti ti-link"></i> ' + label + '</div>';
   }
+
+  function renderExplorerShell(body) {
+    body.innerHTML =
+      '<div class="explorer-shell">' +
+        '<div class="explorer-topbar">' +
+          '<div id="explorer-breadcrumb" class="explorer-breadcrumb"></div>' +
+          '<div id="explorer-controls" class="explorer-controls"></div>' +
+        '</div>' +
+        '<div id="explorer-content" class="explorer-content"></div>' +
+      '</div>' +
+      '<button class="explorer-fab" onclick="toggleExplorerChat()" title="Ask in chat" aria-label="Ask in chat"><i class="ti ti-message-2"></i></button>' +
+      '<div class="explorer-chat-panel" id="explorer-chat-panel" hidden>' +
+        '<div class="explorer-chat-head"><i class="ti ti-message-2"></i><span>Ask in chat</span>' +
+          '<button class="explorer-chat-x" onclick="toggleExplorerChat(false)" aria-label="Close"><i class="ti ti-x"></i></button>' +
+        '</div>' +
+        '<p class="explorer-chat-hint" id="explorer-chat-hint">CTA not cutting it? Describe what you actually need and Fauna will pick it up in the full chat.</p>' +
+        '<textarea id="explorer-chat-input" class="explorer-chat-input" rows="3" placeholder="What do you need to do?"></textarea>' +
+        '<button class="explorer-chat-send" onclick="explorerChatSend()">Send to chat <i class="ti ti-arrow-right"></i></button>' +
+      '</div>';
+    renderExplorerControls();
+  }
+
+  // ── Controls: agent picker + live-web toggle ─────────────────────────────
+
+  function renderExplorerControls() {
+    var host = document.getElementById('explorer-controls');
+    if (!host) return;
+    var agents = (typeof getAllAgents === 'function') ? getAllAgents() : [];
+    var activeName = (typeof activeAgent !== 'undefined' && activeAgent) ? activeAgent.name : '';
+    var opts = '<option value="">Default agent</option>' + agents.map(function (a) {
+      var sel = (a.name === activeName) ? ' selected' : '';
+      return '<option value="' + escHtml(a.name) + '"' + sel + '>' + escHtml(a.displayName || a.name) + '</option>';
+    }).join('');
+    host.innerHTML =
+      '<label class="explorer-web-toggle' + (EX.web ? ' on' : '') + '" title="Ground views in live web search (Playwright)">' +
+        '<input type="checkbox" ' + (EX.web ? 'checked' : '') + ' onchange="_explorerToggleWeb(this.checked)">' +
+        '<i class="ti ti-world-search"></i><span>Live web</span>' +
+      '</label>' +
+      '<div class="explorer-agent-pick">' +
+        '<i class="ti ti-robot"></i>' +
+        '<select class="explorer-agent-select" onchange="_explorerSetAgent(this.value)">' + opts + '</select>' +
+      '</div>';
+    // Lazy-load the agent list the first time if it's empty.
+    if (!agents.length && typeof loadInstalledAgents === 'function' && !EX._agentsRequested) {
+      EX._agentsRequested = true;
+      Promise.resolve(loadInstalledAgents()).then(function () { renderExplorerControls(); }).catch(function () {});
+    }
+    var hint = document.getElementById('explorer-chat-hint');
+    if (hint && typeof activeAgent !== 'undefined' && activeAgent) {
+      hint.textContent = 'Sends to the full chat using the ' + (activeAgent.displayName || activeAgent.name) + ' agent.';
+    }
+  }
+
+  window._explorerToggleWeb = function (on) {
+    EX.web = !!on;
+    renderExplorerControls();
+  };
+
+  window._explorerSetAgent = function (name) {
+    var conv = (typeof state !== 'undefined' && state.currentId && typeof getConv === 'function') ? getConv(state.currentId) : null;
+    if (!name) {
+      if (typeof deactivateAgent === 'function') deactivateAgent(conv);
+      renderExplorerControls();
+      return;
+    }
+    if (typeof activateAgent === 'function') {
+      Promise.resolve(activateAgent(name, conv, false)).then(function () { renderExplorerControls(); }).catch(function () {});
+    }
+  };
 
   // ── Skeleton + error ─────────────────────────────────────────────────────
 

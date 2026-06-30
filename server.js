@@ -422,9 +422,6 @@ registerLLMRoutes(app);
 // Wire smaller chat routes (debug-prompt / chat-summary / composition planner).
 registerChatMiscRoutes(app, { browserBuildContext: BROWSER_BUILD_CONTEXT });
 
-// Wire the Explore page's gen-ui generator (POST /api/genui-explore).
-registerGenUiExploreRoutes(app);
-
 // ── Browser Extension context moved → server/prompts/browser-context.js ──
 
 // ── /api/summarize moved → server/routes/summarize.js ──
@@ -456,6 +453,10 @@ registerLessonRoutes(app, { getElectronBrowserWindow: () => _ElectronBrowserWind
 
 // ── Browser (Playwright) routes moved → server/bridges/playwright-browse.js ──
 const browseRoutes = registerBrowseRoutes(app, { require: _require });
+
+// Wire the Explore page's gen-ui generator (POST /api/genui-explore). Passes the
+// Playwright browse manager so Explore can ground views in live web data.
+registerGenUiExploreRoutes(app, { getBrowseManager: () => browseRoutes?.manager });
 
 // ── Figma bridge moved → server/bridges/figma.js ──
 // ── Custom MCP routes/state moved → server/bridges/custom-mcp.js ──
