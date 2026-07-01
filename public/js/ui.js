@@ -1138,7 +1138,7 @@ function setBusy(busy) {
   if (!busy) {
     _busyClearTimer = setTimeout(function() {
       _busyClearTimer = null;
-      if (_hasActiveConversationWork()) return;
+      var stillWorking = _hasActiveConversationWork();
       _applyBusyState(false);
       // Now that the stop button is no longer red, retry rendering suggestions
       // on the latest assistant message — they were suppressed earlier while
@@ -1149,14 +1149,14 @@ function setBusy(busy) {
           ? getConvInner(state.currentId)
           : document.querySelector('[data-conv-messages]');
         var lastMsg = convInner && (
-          convInner.querySelector('.msg.assistant:last-of-type') ||
-          Array.from(convInner.querySelectorAll('.msg.assistant')).pop()
+          convInner.querySelector('.msg.ai:last-of-type, .msg.assistant:last-of-type') ||
+          Array.from(convInner.querySelectorAll('.msg.ai, .msg.assistant')).pop()
         );
         if (conv && lastMsg && typeof extractAndRenderSuggestions === 'function') {
           var lastAssistant = (conv.messages || []).slice().reverse().find(function(m) {
             return m && m.role === 'assistant' && typeof m.content === 'string';
           });
-          if (lastAssistant) extractAndRenderSuggestions(lastAssistant.content, lastMsg, true);
+          if (lastAssistant) extractAndRenderSuggestions(lastAssistant.content, lastMsg, stillWorking ? 'force' : true);
         }
       } catch (_) {}
     }, 650);

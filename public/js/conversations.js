@@ -634,16 +634,17 @@ function ensureStreamingPlaceholder(conv) {
   if (!conv || !conv._streaming) return;
   var convInner = getConvInner(conv.id);
   if (!convInner) return;
-  // A new assistant turn is starting — strip any stale recommended-actions
-  // bar from a previous bubble so it can't sit between two assistant messages.
-  Array.from(convInner.querySelectorAll('.suggestion-bar')).forEach(function(old) { old.remove(); });
   var liveMessages = Array.from(convInner.querySelectorAll('.msg.ai[data-streaming-live="1"]'));
   if (liveMessages.length) {
+    // A live assistant turn owns the bottom slot; drop stale recommendations
+    // from the previous completed turn so they do not sit under streaming text.
+    Array.from(convInner.querySelectorAll('.suggestion-bar')).forEach(function(old) { old.remove(); });
     liveMessages.slice(1).forEach(function(el) { el.remove(); });
     return;
   }
   var hasLiveAssistant = convInner.querySelector('.msg.ai .reasoning-panel, .msg.ai .streaming-status');
   if (hasLiveAssistant) return;
+  Array.from(convInner.querySelectorAll('.suggestion-bar')).forEach(function(old) { old.remove(); });
   var msgEl = createMessageEl('ai', null);
   msgEl.dataset.streamingLive = '1';
   var body = msgEl.querySelector('.msg-body');
@@ -864,8 +865,8 @@ function loadConversation(id, opts) {
       if (typeof _hasActiveConversationWork === 'function' && _hasActiveConversationWork()) return;
       var ci = (typeof getConvInner === 'function') ? getConvInner(id) : null;
       if (!ci || ci.querySelector('.suggestion-bar')) return; // already shown
-      var lastEl = ci.querySelector('.msg.assistant:last-of-type')
-        || Array.from(ci.querySelectorAll('.msg.assistant')).pop();
+      var lastEl = ci.querySelector('.msg.ai:last-of-type, .msg.assistant:last-of-type')
+        || Array.from(ci.querySelectorAll('.msg.ai, .msg.assistant')).pop();
       if (lastEl) _generateContextualSuggestions(lastEl);
     }, 150);
   }
