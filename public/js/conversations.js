@@ -715,6 +715,9 @@ function loadConversation(id, opts) {
   // Switch browser pane to this conversation's tabs
   _showConvBrowserTabs(id);
 
+  // Re-scope dev-server pills so only this conversation's pills are visible.
+  if (typeof syncDevServerPills === 'function') syncDevServerPills();
+
   // Sync the ctx-meter ring to this conv's last recorded token_usage (if any).
   // Without this the meter would still show counts from the previous conv.
   try {

@@ -1175,12 +1175,26 @@ function showDevServerPill(regId, code, convId) {
   pill.className = 'dev-server-pill';
   pill.id = pillId;
   pill.dataset.convId = convId || (typeof state !== 'undefined' ? (state.currentId || '') : '');
-  pill.title = 'Dev server running — click to manage in Settings';
+  pill.dataset.regId = regId || '';
+  pill.title = 'Dev server running — click to open in the browser pane';
   pill.innerHTML =
     '<i class="ti ti-server-bolt"></i>' +
     '<span class="pill-label">' + escHtml(label) + '</span>' +
     '<i class="ti ti-external-link" style="opacity:.65;font-size:11px"></i>';
   pill.onclick = function() {
+    openDevServerPill(regId);
+  };
+  container.appendChild(pill);
+  syncDevServerPills();
+}
+
+// Click handler for a dev-server pill. The port is sniffed asynchronously by
+// the server registry, so it may not be known at pill-creation time — we look
+// it up live from /api/dev-servers and open the URL in the in-app browser
+// pane. If no port is known yet (server still booting) we fall back to the
+// Settings → Dev Servers manager.
+function openDevServerPill(regId) {
+  var openManager = function() {
     try {
       if (typeof switchPage === 'function') switchPage('settings');
       setTimeout(function() {
@@ -1189,8 +1203,24 @@ function showDevServerPill(regId, code, convId) {
       }, 50);
     } catch (_) {}
   };
-  container.appendChild(pill);
-  syncDevServerPills();
+  if (!regId) { openManager(); return; }
+  fetch('/api/dev-servers')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var servers = (d && d.servers) || [];
+      var entry = null;
+      for (var i = 0; i < servers.length; i++) {
+        if (servers[i] && String(servers[i].id) === String(regId)) { entry = servers[i]; break; }
+      }
+      if (entry && entry.port) {
+        var url = 'http://localhost:' + entry.port;
+        if (typeof openRunInBrowser === 'function') openRunInBrowser(url);
+        else window.open(url, '_blank');
+      } else {
+        openManager();
+      }
+    })
+    .catch(function() { openManager(); });
 }
 
 function syncDevServerPills() {
