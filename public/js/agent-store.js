@@ -107,6 +107,10 @@ function renderStorePanel() {
   if (!panel) return;
 
   var embeddedInSettings = !!panel.closest('#settings-panel');
+  // The Plugins page is a full app page with its own title strip + rail, so the
+  // floating close button is redundant there (and looks out of place).
+  var inPluginsPage = panel.classList.contains('plugins-app-panel') || !!panel.closest('#plugins-page-mount');
+  var hideClose = embeddedInSettings || inPluginsPage;
   var isReviewer = storeState.account && ['superadmin','admin','reviewer'].indexOf(storeState.account.role) !== -1;
 
   var headerHtml =
@@ -117,7 +121,7 @@ function renderStorePanel() {
         (isReviewer ? '<button class="store-nav-btn' + (storeState.view === 'review' ? ' active' : '') + '" onclick="storeNavigate(\'review\')"><i class="ti ti-shield-check"></i> Review</button>' : '') +
         '<button class="store-nav-btn' + (storeState.view === 'publish' ? ' active' : '') + '" onclick="storeNavigate(\'publish\')"><i class="ti ti-upload"></i> Publish</button>' +
       '</div>' +
-      (embeddedInSettings ? '' : '<button class="store-close-btn" onclick="closeAgentStore()" title="Close"><i class="ti ti-x"></i></button>') +
+      (hideClose ? '' : '<button class="store-close-btn" onclick="closeAgentStore()" title="Close"><i class="ti ti-x"></i></button>') +
     '</div>';
 
   var bodyHtml = '';
@@ -861,14 +865,17 @@ function renderStoreMyAgents() {
 
   var html = '<div class="store-myagents">';
 
-  // ── Header row: count + analytics toggle ──
+  // ── Header row: count + add + analytics toggle ──
   html += '<div class="myagents-header-row">' +
     '<span class="myagents-total">' + agents.length + ' agent' + (agents.length !== 1 ? 's' : '') + '</span>' +
-    '<label class="myagents-analytics-toggle" title="Usage analytics">' +
-      '<input type="checkbox"' + (analyticsOn ? ' checked' : '') + ' onchange="toggleAnalytics(this.checked)">' +
-      '<span class="myagents-analytics-track"></span>' +
-      '<span class="myagents-analytics-label">Analytics</span>' +
-    '</label>' +
+    '<div class="myagents-header-actions">' +
+      '<button class="ma-btn primary" onclick="closeAppPage();openAgentActionsPage()" title="Create or import an agent (folder, .zip, or store)"><i class="ti ti-plus"></i> Add Agent</button>' +
+      '<label class="myagents-analytics-toggle" title="Usage analytics">' +
+        '<input type="checkbox"' + (analyticsOn ? ' checked' : '') + ' onchange="toggleAnalytics(this.checked)">' +
+        '<span class="myagents-analytics-track"></span>' +
+        '<span class="myagents-analytics-label">Analytics</span>' +
+      '</label>' +
+    '</div>' +
   '</div>';
 
   function agentRow(a, isStore) {

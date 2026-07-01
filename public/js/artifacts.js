@@ -790,7 +790,119 @@ function setAppRailActive(pageId) {
   document.querySelectorAll('#app-rail [data-rail-page]').forEach(function(btn) {
     btn.classList.toggle('active', !!pageId && btn.dataset.railPage === pageId);
   });
+  if (typeof layoutAppRail === 'function') layoutAppRail();
 }
+
+// ── Rail overflow menu ─────────────────────────────────────────────
+// When the window is too short to show every top-nav icon, the ones that
+// don't fit collapse into an ellipsis button that opens a popover menu.
+function layoutAppRail() {
+  var top = document.querySelector('.app-rail-top');
+  var ell = document.getElementById('app-rail-overflow-btn');
+  if (!top || !ell) return;
+  var btns = Array.prototype.slice.call(top.querySelectorAll('.app-rail-btn:not(.app-rail-overflow-btn)'));
+  // Reset to measure the natural (fully expanded) height.
+  btns.forEach(function(b) { b.classList.remove('rail-hidden'); });
+  ell.style.display = 'none';
+  var avail = top.clientHeight;
+  if (top.scrollHeight <= avail + 1) { _closeAppRailOverflow(); return; }
+  // Overflow: reserve room for the ellipsis, then keep as many as fit.
+  ell.style.display = '';
+  var gap = 10;
+  var ellH = ell.offsetHeight || 34;
+  var brand = top.querySelector('.app-rail-brand');
+  var used = brand ? (brand.offsetHeight + gap) : 0;
+  var limit = avail - (ellH + gap);
+  var hidden = [];
+  btns.forEach(function(b) {
+    var h = b.offsetHeight || 34;
+    if (used + h <= limit) {
+      used += h + gap;
+    } else {
+      b.classList.add('rail-hidden');
+      hidden.push(b);
+    }
+  });
+  _buildAppRailOverflowMenu(hidden);
+}
+
+function _buildAppRailOverflowMenu(hidden) {
+  var menu = document.getElementById('app-rail-overflow-menu');
+  if (!menu) return;
+  menu.innerHTML = '';
+  hidden.forEach(function(src) {
+    var item = document.createElement('button');
+    item.className = 'app-rail-overflow-item' + (src.classList.contains('active') ? ' active' : '');
+    item.setAttribute('role', 'menuitem');
+    var icon = src.querySelector('.ti');
+    var label = src.getAttribute('title') || src.getAttribute('aria-label') || '';
+    var iEl = document.createElement('i');
+    iEl.className = icon ? icon.className : 'ti';
+    var span = document.createElement('span');
+    span.textContent = label;
+    item.appendChild(iEl);
+    item.appendChild(span);
+    item.addEventListener('click', function(e) {
+      e.stopPropagation();
+      _closeAppRailOverflow();
+      src.click();
+    });
+    menu.appendChild(item);
+  });
+}
+
+function toggleAppRailOverflow(e) {
+  if (e) e.stopPropagation();
+  var menu = document.getElementById('app-rail-overflow-menu');
+  var ell = document.getElementById('app-rail-overflow-btn');
+  if (!menu || !ell) return;
+  if (menu.classList.contains('open')) { _closeAppRailOverflow(); return; }
+  var r = ell.getBoundingClientRect();
+  menu.style.left = (r.right + 8) + 'px';
+  var top = Math.min(r.top, window.innerHeight - menu.offsetHeight - 8);
+  menu.style.top = Math.max(8, top) + 'px';
+  menu.classList.add('open');
+  ell.classList.add('active');
+  // Re-clamp now that the menu has measurable height.
+  var h = menu.offsetHeight;
+  menu.style.top = Math.max(8, Math.min(r.top, window.innerHeight - h - 8)) + 'px';
+  setTimeout(function() { document.addEventListener('mousedown', _railOverflowOutside); }, 0);
+}
+
+function _closeAppRailOverflow() {
+  var menu = document.getElementById('app-rail-overflow-menu');
+  var ell = document.getElementById('app-rail-overflow-btn');
+  if (menu) menu.classList.remove('open');
+  if (ell) ell.classList.remove('active');
+  document.removeEventListener('mousedown', _railOverflowOutside);
+}
+
+function _railOverflowOutside(e) {
+  var menu = document.getElementById('app-rail-overflow-menu');
+  var ell = document.getElementById('app-rail-overflow-btn');
+  if (menu && menu.contains(e.target)) return;
+  if (ell && ell.contains(e.target)) return;
+  _closeAppRailOverflow();
+}
+
+(function _initAppRailOverflow() {
+  var pending = null;
+  function relayout() {
+    if (pending) cancelAnimationFrame(pending);
+    pending = requestAnimationFrame(function() { pending = null; layoutAppRail(); });
+  }
+  function boot() {
+    layoutAppRail();
+    window.addEventListener('resize', relayout);
+    var top = document.querySelector('.app-rail-top');
+    if (top && typeof ResizeObserver !== 'undefined') {
+      try { new ResizeObserver(relayout).observe(top); } catch (_) {}
+    }
+    window.addEventListener('keydown', function(e) { if (e.key === 'Escape') _closeAppRailOverflow(); });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+})();
 
 function _getAppPageBody(pageId) {
   var page = document.getElementById('app-page');
