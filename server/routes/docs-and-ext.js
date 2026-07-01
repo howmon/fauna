@@ -5,7 +5,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { execSync, spawnSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import { createRequire } from 'module';
 import { buildShellEnv } from '../lib/shell-env.js';
 import { faunaTmpFile } from '../lib/fauna-tmp.js';
@@ -182,13 +182,45 @@ export function registerDocsAndExtRoutes(app, { faunaConfigDir, appDir }) {
     '    print(json.dumps({"ok": False, "error": str(e)})); sys.exit(0)',
   ].join('\n');
 
+  // Async (non-blocking) python runner. Using spawnSync here would freeze the
+  // whole Electron process (the server runs in-process), and the first
+  // python-pptx import — which pulls in lxml/PIL — can take several seconds
+  // cold, so a sync call reads as an app-wide "hang". spawn keeps the event
+  // loop free so the UI spinner animates and other requests still resolve.
   function _runDeckPython(scriptSource, args, input) {
-    return spawnSync('python3', ['-c', scriptSource, ...args], {
-      input: input === undefined ? undefined : input,
-      encoding: 'utf8',
-      env: _EXEC_ENV,
-      timeout: 20000,
-      maxBuffer: 32 * 1024 * 1024,
+    return new Promise((resolve) => {
+      let child;
+      try {
+        child = spawn('python3', ['-c', scriptSource, ...args], { env: _EXEC_ENV });
+      } catch (error) {
+        resolve({ error, stdout: '', stderr: '' });
+        return;
+      }
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+      const MAX_BUFFER = 32 * 1024 * 1024;
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      };
+      const timer = setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch (_) {}
+        finish({ error: new Error('python timed out'), stdout, stderr });
+      }, 20000);
+      child.stdout.on('data', (d) => {
+        stdout += d;
+        if (stdout.length > MAX_BUFFER) { try { child.kill('SIGKILL'); } catch (_) {} finish({ error: new Error('maxBuffer exceeded'), stdout, stderr }); }
+      });
+      child.stderr.on('data', (d) => { stderr += d; });
+      child.on('error', (error) => finish({ error, stdout, stderr }));
+      child.on('close', () => finish({ error: null, stdout, stderr }));
+      if (input !== undefined) {
+        try { child.stdin.write(input); } catch (_) {}
+      }
+      try { child.stdin.end(); } catch (_) {}
     });
   }
 
@@ -197,7 +229,7 @@ export function registerDocsAndExtRoutes(app, { faunaConfigDir, appDir }) {
   }
 
   // POST { path } → { ok, content, path, slideCount, editable }
-  app.post('/api/deck-extract', (req, res) => {
+  app.post('/api/deck-extract', async (req, res) => {
     const { path: deckPath } = req.body || {};
     if (!deckPath) return res.status(400).json({ ok: false, error: 'path required' });
     const abs = _resolveDeckAbs(deckPath);
@@ -205,7 +237,7 @@ export function registerDocsAndExtRoutes(app, { faunaConfigDir, appDir }) {
     if (path.extname(abs).toLowerCase() !== '.pptx') {
       return res.json({ ok: false, error: 'Only .pptx text editing is supported' });
     }
-    const r = _runDeckPython(_DECK_EXTRACT_PY, [abs]);
+    const r = await _runDeckPython(_DECK_EXTRACT_PY, [abs]);
     if (r.error) return res.status(500).json({ ok: false, error: 'python3 not available: ' + r.error.message });
     let parsed = null;
     try { parsed = JSON.parse((r.stdout || '').trim()); } catch (_) {}
@@ -215,7 +247,7 @@ export function registerDocsAndExtRoutes(app, { faunaConfigDir, appDir }) {
   });
 
   // POST { path, content } → { ok, path }
-  app.post('/api/deck-write', (req, res) => {
+  app.post('/api/deck-write', async (req, res) => {
     const { path: deckPath, content } = req.body || {};
     if (!deckPath || content === undefined) return res.status(400).json({ ok: false, error: 'path and content required' });
     const abs = _resolveDeckAbs(deckPath);
@@ -223,7 +255,7 @@ export function registerDocsAndExtRoutes(app, { faunaConfigDir, appDir }) {
     if (path.extname(abs).toLowerCase() !== '.pptx') {
       return res.json({ ok: false, error: 'Only .pptx text editing is supported' });
     }
-    const r = _runDeckPython(_DECK_WRITE_PY, [abs], String(content));
+    const r = await _runDeckPython(_DECK_WRITE_PY, [abs], String(content));
     if (r.error) return res.status(500).json({ ok: false, error: 'python3 not available: ' + r.error.message });
     let parsed = null;
     try { parsed = JSON.parse((r.stdout || '').trim()); } catch (_) {}

@@ -19,6 +19,22 @@ function _faunaLaunchParams() {
   }
 }
 
+// Cheap signature of a conversation's rendered transcript. Changes only when
+// the visible message list changes (a message added/removed, or the last
+// message's content grows/shrinks — e.g. a truncated local copy being
+// backfilled). Metadata-only bumps (title, updatedAt, usage, background
+// summary) leave it unchanged, so we can skip a costly DOM rebuild.
+function _convTranscriptSig(conv) {
+  var m = (conv && conv.messages) || [];
+  var last = m[m.length - 1];
+  var lastLen = 0;
+  if (last) {
+    if (typeof last.content === 'string') lastLen = last.content.length;
+    else if (Array.isArray(last.content)) lastLen = last.content.length;
+  }
+  return m.length + '|' + lastLen + '|' + ((last && last.role) || '');
+}
+
 // Hydrate: merge server-side conversations into localStorage
 async function _hydrateServerConvs() {
   try {
@@ -28,6 +44,11 @@ async function _hydrateServerConvs() {
     if (!serverConvs.length) return;
     var localIds = new Set(state.conversations.map(function(c) { return c.id; }));
     var merged = false;
+    // Snapshot the active conversation's transcript signature BEFORE merging so
+    // we can tell whether the incoming sync actually changed what's on screen.
+    var activeId = state.currentId;
+    var activeSigBefore = _convTranscriptSig(getConv(activeId));
+    var activeTruncated = false;
     // True when the local copy contains content that was trimmed for the
     // local quota cache — that text needs to be re-pulled from the server.
     function _isLocallyTruncated(conv) {
@@ -54,6 +75,7 @@ async function _hydrateServerConvs() {
         // keeps showing the "…[truncated for local cache]" placeholder.
         var localTruncated = _isLocallyTruncated(local);
         if (local && (serverNewer || serverHasMore || localTruncated)) {
+          if (sc.id === activeId && localTruncated) activeTruncated = true;
           Object.assign(local, sc);
           merged = true;
         }
@@ -63,14 +85,22 @@ async function _hydrateServerConvs() {
       state.conversations.sort(function(a, b) { return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0); });
       saveConversations();
       renderConvList();
-      if (state.currentId && getConv(state.currentId)) {
-        var activeConv = getConv(state.currentId);
+      if (activeId && getConv(activeId)) {
+        var activeConv = getConv(activeId);
         if (activeConv && activeConv._streaming) {
           if (typeof showMessages === 'function') showMessages({ preserveAppPage: true });
           if (typeof setBusy === 'function') setBusy(true);
+        } else if (activeTruncated || _convTranscriptSig(activeConv) !== activeSigBefore) {
+          // The visible transcript genuinely changed (new messages from another
+          // device, or a truncated copy backfilled) — rebuild the rendered DOM.
+          purgeConvDom(activeId);
+          loadConversation(activeId, { preserveAppPage: true });
         } else {
-          purgeConvDom(state.currentId);
-          loadConversation(state.currentId, { preserveAppPage: true });
+          // Metadata-only bump (title / updatedAt / usage / background summary).
+          // Leave the rendered transcript — and its recommended-actions bar —
+          // untouched so it doesn't flicker; just refresh the topbar title.
+          var _tt = document.getElementById('topbar-title');
+          if (_tt && activeConv.title) { _tt.textContent = activeConv.title; _tt.title = activeConv.title; }
         }
       }
     }

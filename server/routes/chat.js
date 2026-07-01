@@ -1848,10 +1848,13 @@ export function registerChatRoute(app, {
             if (!firstContentWarned && thinkingFor > FIRST_CONTENT_WARN_MS) {
               firstContentWarned = true;
               try {
+                const _budgetHint = thinkingBudget === 'auto'
+                  ? 'Auto picked a large thinking budget for this request; set Settings → Thinking Budget to Low to speed up simple questions.'
+                  : 'The model is using a large thinking budget; set Settings → Thinking Budget to Auto or a lower level to speed up simple questions.';
                 send({
                   type: 'notice',
                   level: 'info',
-                  message: 'Still thinking — no output yet after ' + Math.round(thinkingFor / 1000) + 's. The model is using a large thinking budget; set Settings → Thinking Budget to Auto or a lower level to speed up simple questions.'
+                  message: 'Still thinking — no output yet after ' + Math.round(thinkingFor / 1000) + 's. ' + _budgetHint
                 });
               } catch (_) {}
             }
@@ -2802,7 +2805,9 @@ export function registerChatRoute(app, {
         try {
           send({
             type: 'error',
-            error: 'The model spent too long thinking without producing any answer. This usually means the thinking budget is too high for the request — set Settings → Thinking Budget to Auto (or a lower level) and try again.'
+            error: thinkingBudget === 'auto'
+              ? 'The model spent too long thinking without producing any answer. Auto picked too high a thinking budget for this request — set Settings → Thinking Budget to Low and try again.'
+              : 'The model spent too long thinking without producing any answer. This usually means the thinking budget is too high for the request — set Settings → Thinking Budget to Auto (or a lower level) and try again.'
           });
         } catch (_) {}
       } else if (upstreamAbort.signal.aborted) {

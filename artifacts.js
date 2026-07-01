@@ -1792,22 +1792,11 @@ function _loadDeckText(a) {
   if (!a || a._deckLoading) return;
   a._deckLoading = true;
   a._deckError = null;
-  // Guard against a request that never settles (e.g. a wedged python child on
-  // the server) so the spinner can't spin forever. Abort + surface an
-  // actionable error after 30s.
-  var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-  var timedOut = false;
-  var timer = setTimeout(function() {
-    timedOut = true;
-    if (ctrl) { try { ctrl.abort(); } catch (_e) {} }
-  }, 30000);
   fetch('/api/deck-extract', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: a.path }),
-    signal: ctrl ? ctrl.signal : undefined
+    body: JSON.stringify({ path: a.path })
   }).then(function(r) { return r.json(); }).then(function(d) {
-    clearTimeout(timer);
     a._deckLoading = false;
     if (!d || !d.ok) {
       a._deckError = (d && d.error) || 'Could not read slide text.';
@@ -1817,11 +1806,8 @@ function _loadDeckText(a) {
     }
     if (state.activeArtifact === a.id) renderArtifactContent();
   }).catch(function(e) {
-    clearTimeout(timer);
     a._deckLoading = false;
-    a._deckError = timedOut
-      ? 'Timed out reading slide text. Try "Open" to edit in PowerPoint.'
-      : (e.message || 'Could not read slide text.');
+    a._deckError = e.message || 'Could not read slide text.';
     if (state.activeArtifact === a.id) renderArtifactContent();
   });
 }
