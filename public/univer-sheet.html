@@ -3,18 +3,18 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://unpkg.com; worker-src 'self' blob:; connect-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: blob: https://unpkg.com; font-src 'self' data: https://unpkg.com;" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; worker-src 'self' blob:; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:;" />
   <title>Spreadsheet editor</title>
 
-  <!-- Univer preset (UMD), pinned. React/RxJS/echarts are Univer's runtime deps. -->
-  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/rxjs@7.8.1/dist/bundles/rxjs.umd.min.js"></script>
-  <script src="https://unpkg.com/echarts@5.6.0/dist/echarts.min.js"></script>
-  <script src="https://unpkg.com/@univerjs/presets@0.25.1/lib/umd/index.js"></script>
-  <script src="https://unpkg.com/@univerjs/preset-sheets-core@0.25.1/lib/umd/index.js"></script>
-  <script src="https://unpkg.com/@univerjs/preset-sheets-core@0.25.1/lib/umd/locales/en-US.js"></script>
-  <link rel="stylesheet" href="https://unpkg.com/@univerjs/preset-sheets-core@0.25.1/lib/index.css" />
+  <!-- Univer preset (UMD) 0.25.1 + runtime deps, vendored locally in /public/vendor/univer (offline, no CDN). -->
+  <script src="/vendor/univer/react.production.min.js"></script>
+  <script src="/vendor/univer/react-dom.production.min.js"></script>
+  <script src="/vendor/univer/rxjs.umd.min.js"></script>
+  <script src="/vendor/univer/echarts.min.js"></script>
+  <script src="/vendor/univer/presets.index.js"></script>
+  <script src="/vendor/univer/preset-sheets-core.index.js"></script>
+  <script src="/vendor/univer/preset-sheets-core.en-US.js"></script>
+  <link rel="stylesheet" href="/vendor/univer/preset-sheets-core.index.css" />
 
   <style>
     html, body { padding: 0; margin: 0; height: 100%; background: #1e1e1e; font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
@@ -132,7 +132,7 @@
 
       function bootUniver(model) {
         if (typeof UniverPresets === 'undefined' || typeof UniverPresetSheetsCore === 'undefined') {
-          showError('Univer failed to load from CDN (no network?). Close and use "Open" to edit in the native app.');
+          showError('Univer assets failed to load. Close and use "Open" to edit in the native app.');
           return;
         }
         try {
