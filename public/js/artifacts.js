@@ -1189,8 +1189,8 @@ function renderAllArtifactsPage() {
   var visibleLimit = page._visibleLimit || ARTIFACT_LIBRARY_BATCH_SIZE;
   var visibleArtifacts = artifacts.slice(0, visibleLimit);
   var hasMore = artifacts.length > visibleArtifacts.length;
-  var projectOptions = _artifactProjectFilterOptions(allArtifacts, projectFilter);
-  var conversationOptions = _artifactConversationFilterOptions(allArtifacts, projectFilter, conversationFilter);
+  var projectOptions = _artifactProjectFilterData(allArtifacts);
+  var conversationOptions = _artifactConversationFilterData(allArtifacts, projectFilter);
   page.innerHTML =
     '<div class="all-agents-page-inner">' +
       '<div class="all-agents-header">' +
@@ -1199,8 +1199,8 @@ function renderAllArtifactsPage() {
         '<div class="artifact-view-toggle"><button class="' + (view === 'grid' ? 'active' : '') + '" onclick="setArtifactLibraryView(\'grid\')" title="Grid view"><i class="ti ti-layout-grid"></i></button><button class="' + (view === 'list' ? 'active' : '') + '" onclick="setArtifactLibraryView(\'list\')" title="List view"><i class="ti ti-list"></i></button></div>' +
       '</div>' +
       '<div class="artifact-library-filters">' +
-        '<label><span>Project</span><select onchange="updateArtifactLibraryProject(this.value)">' + projectOptions + '</select></label>' +
-        '<label><span>Conversation</span><select onchange="updateArtifactLibraryConversation(this.value)">' + conversationOptions + '</select></label>' +
+        '<label><span>Project</span>' + _faunaComboHtml({ options: projectOptions, selected: projectFilter, placeholder: 'All projects', onSelect: 'updateArtifactLibraryProject' }) + '</label>' +
+        '<label><span>Conversation</span>' + _faunaComboHtml({ options: conversationOptions, selected: conversationFilter, placeholder: 'All conversations', onSelect: 'updateArtifactLibraryConversation' }) + '</label>' +
         ((projectFilter || conversationFilter || filter) ? '<button class="proj-action-btn" onclick="updateArtifactLibraryFilter(\'\');updateArtifactLibraryProject(\'\')"><i class="ti ti-x"></i> Clear</button>' : '') +
       '</div>' +
       '<div class="artifact-library ' + (view === 'list' ? 'list' : 'grid') + '">' + _renderArtifactLibraryItems(visibleArtifacts, view) + '</div>' +
@@ -1208,19 +1208,17 @@ function renderAllArtifactsPage() {
     '</div>';
 }
 
-function _artifactProjectFilterOptions(artifacts, selected) {
+function _artifactProjectFilterData(artifacts) {
   var counts = Object.create(null);
   artifacts.forEach(function(a) { counts[a.projectId || ''] = (counts[a.projectId || ''] || 0) + 1; });
   var projects = (state.projects || []).filter(function(p) { return counts[p.id]; }).sort(function(a, b) { return String(a.name || '').localeCompare(String(b.name || '')); });
-  var html = '<option value="">All projects (' + artifacts.length + ')</option>';
-  if (counts['']) html += '<option value="__quick"' + (selected === '__quick' ? ' selected' : '') + '>Quick chats (' + counts[''] + ')</option>';
-  html += projects.map(function(p) {
-    return '<option value="' + escHtml(p.id) + '"' + (selected === p.id ? ' selected' : '') + '>' + escHtml(p.name || 'Untitled project') + ' (' + counts[p.id] + ')</option>';
-  }).join('');
-  return html;
+  var out = [{ value: '', label: 'All projects (' + artifacts.length + ')' }];
+  if (counts['']) out.push({ value: '__quick', label: 'Quick chats (' + counts[''] + ')' });
+  projects.forEach(function(p) { out.push({ value: p.id, label: (p.name || 'Untitled project') + ' (' + counts[p.id] + ')' }); });
+  return out;
 }
 
-function _artifactConversationFilterOptions(artifacts, projectId, selected) {
+function _artifactConversationFilterData(artifacts, projectId) {
   var relevant = projectId ? artifacts.filter(function(a) { return projectId === '__quick' ? !a.projectId : (a.projectId || '') === projectId; }) : artifacts;
   var byConv = Object.create(null);
   relevant.forEach(function(a) {
@@ -1228,9 +1226,105 @@ function _artifactConversationFilterOptions(artifacts, projectId, selected) {
     byConv[a.convId].count += 1;
   });
   var convs = Object.keys(byConv).map(function(id) { return byConv[id]; }).sort(function(a, b) { return a.title.localeCompare(b.title); });
-  return '<option value="">All conversations (' + relevant.length + ')</option>' + convs.map(function(c) {
-    return '<option value="' + escHtml(c.id) + '"' + (selected === c.id ? ' selected' : '') + '>' + escHtml(c.title) + ' (' + c.count + ')</option>';
+  var out = [{ value: '', label: 'All conversations (' + relevant.length + ')' }];
+  convs.forEach(function(c) { out.push({ value: c.id, label: c.title + ' (' + c.count + ')' }); });
+  return out;
+}
+
+// Reusable filterable autocomplete combobox. Typing filters the option list
+// locally (no page re-render); the onSelect callback fires only when an option
+// is chosen, which then re-renders the page with the new filter applied.
+function _faunaComboHtml(opts) {
+  var options = opts.options || [];
+  var selected = opts.selected || '';
+  var sel = null;
+  for (var i = 0; i < options.length; i++) { if (options[i].value === selected) { sel = options[i]; break; } }
+  var selLabel = sel ? sel.label : (options[0] ? options[0].label : '');
+  var menu = options.map(function(o) {
+    var isSel = o.value === selected;
+    return '<button type="button" class="fau-combo-opt' + (isSel ? ' selected' : '') + '" role="option"' +
+      ' data-value="' + escHtml(o.value) + '" data-label="' + escHtml(String(o.label).toLowerCase()) + '"' +
+      ' onmousedown="event.preventDefault()" onclick="faunaComboPick(this)">' +
+      '<span>' + escHtml(o.label) + '</span>' + (isSel ? '<i class="ti ti-check"></i>' : '') + '</button>';
   }).join('');
+  return '<div class="fau-combo" data-onselect="' + escHtml(opts.onSelect || '') + '" data-selected-label="' + escHtml(selLabel) + '">' +
+    '<input class="fau-combo-input" type="text" autocomplete="off" spellcheck="false"' +
+    ' placeholder="' + escHtml(opts.placeholder || 'Search…') + '" value="' + escHtml(selLabel) + '"' +
+    ' onfocus="faunaComboFocus(this)" oninput="faunaComboFilter(this)" onkeydown="faunaComboKey(event,this)" onblur="faunaComboBlur(this)">' +
+    '<i class="ti ti-selector fau-combo-caret" onmousedown="event.preventDefault();this.parentElement.querySelector(\'.fau-combo-input\').focus()"></i>' +
+    '<div class="fau-combo-menu" role="listbox">' + menu + '</div>' +
+  '</div>';
+}
+
+function _faunaComboFilterMenu(combo, q) {
+  var opts = combo.querySelectorAll('.fau-combo-opt');
+  var firstVisible = null;
+  for (var i = 0; i < opts.length; i++) {
+    var match = !q || (opts[i].getAttribute('data-label') || '').indexOf(q) !== -1;
+    opts[i].style.display = match ? '' : 'none';
+    opts[i].classList.remove('active');
+    if (match && !firstVisible) firstVisible = opts[i];
+  }
+  if (firstVisible) firstVisible.classList.add('active');
+}
+
+function faunaComboFocus(input) {
+  var combo = input.closest('.fau-combo');
+  if (!combo) return;
+  combo.classList.add('open');
+  input.select();
+  _faunaComboFilterMenu(combo, '');
+}
+
+function faunaComboFilter(input) {
+  var combo = input.closest('.fau-combo');
+  if (!combo) return;
+  combo.classList.add('open');
+  _faunaComboFilterMenu(combo, (input.value || '').trim().toLowerCase());
+}
+
+function faunaComboKey(e, input) {
+  var combo = input.closest('.fau-combo');
+  if (!combo) return;
+  if (e.key === 'Escape') { combo.classList.remove('open'); input.value = combo.getAttribute('data-selected-label') || ''; input.blur(); return; }
+  var visible = Array.prototype.filter.call(combo.querySelectorAll('.fau-combo-opt'), function(o) { return o.style.display !== 'none'; });
+  if (!visible.length) return;
+  var idx = -1;
+  for (var i = 0; i < visible.length; i++) { if (visible[i].classList.contains('active')) { idx = i; break; } }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (idx >= 0) visible[idx].classList.remove('active');
+    var n = visible[Math.min(visible.length - 1, idx + 1)] || visible[0];
+    n.classList.add('active'); n.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (idx >= 0) visible[idx].classList.remove('active');
+    var p = visible[Math.max(0, idx - 1)] || visible[0];
+    p.classList.add('active'); p.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    var target = idx >= 0 ? visible[idx] : visible[0];
+    if (target) faunaComboPick(target);
+  }
+}
+
+function faunaComboBlur(input) {
+  var combo = input.closest('.fau-combo');
+  if (!combo) return;
+  setTimeout(function() {
+    if (!combo.isConnected) return;
+    input.value = combo.getAttribute('data-selected-label') || '';
+    combo.classList.remove('open');
+  }, 120);
+}
+
+function faunaComboPick(opt) {
+  var combo = opt.closest('.fau-combo');
+  if (!combo) return;
+  var value = opt.getAttribute('data-value') || '';
+  var fn = combo.getAttribute('data-onselect');
+  combo.classList.remove('open');
+  if (fn && typeof window[fn] === 'function') window[fn](value);
 }
 
 function _renderArtifactLibraryItems(artifacts, view) {
