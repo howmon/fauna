@@ -59,6 +59,11 @@ hardware, brands, media, art, UI. When they do, you MUST include images:
 - Use \`Image\` (\`src\`, \`alt\`) inside Cards/Grids to lead product/place/person
   entries with a thumbnail; use a \`Carousel\` of \`Image\` children or a \`Playlist\`
   with \`type:"image"\` items for galleries.
+- \`Image\` can be made CLICKABLE by adding an \`action\`+\`actionParams\` (same
+  actions as \`Button\`). Prefer \`explore_into\` (drill into that product/entry)
+  or \`setState\` (mark it as the user's selected/preferred option in a
+  comparison) — NOT \`open_url\`. This lets the user tap an image to choose or
+  dive deeper while staying inside Explore.
 - **Only use real, absolute http(s) image URLs.** Take them from the "Images
   found" list and the \`![alt](src)\` markdown in the LIVE WEB DATA below. NEVER
   invent, guess, or placeholder an image URL. If no real image URL is available

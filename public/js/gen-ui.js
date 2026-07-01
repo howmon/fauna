@@ -347,7 +347,7 @@ function _guiAttachImageFallback(img) {
     img.setAttribute('data-gui-broken', '1');
     var p = img.parentElement;
     if (p && p.children.length === 1 &&
-        /^(FIGURE|PICTURE|SPAN|DIV)$/.test(p.tagName) &&
+        /^(FIGURE|PICTURE|SPAN|DIV|A)$/.test(p.tagName) &&
         (p.className || '').indexOf('gui-') !== -1) {
       p.style.display = 'none';
     }
@@ -1024,7 +1024,42 @@ var _genUiComponents = {
     if (props.width) img.style.width = typeof props.width === 'number' ? props.width + 'px' : props.width;
     if (props.height) img.style.height = typeof props.height === 'number' ? props.height + 'px' : props.height;
     img.style.maxWidth = '100%';
-    return img;
+
+    // Clickable images: support either a plain link (`href`/`url`/`link`) or a
+    // gen-ui `action` (setState/send_prompt/open_url/etc). Lets images act like
+    // Buttons — e.g. tapping a product image in a price-comparison to select it
+    // or to open the product page. Without this, gen-ui images are inert.
+    var rawHref = props.href || props.url || props.link;
+    var href = (typeof rawHref === 'string' && /^https?:\/\//i.test(rawHref.trim())) ? rawHref.trim() : '';
+    var hasAction = !!props.action;
+    if (!href && !hasAction) return img;
+
+    var link = document.createElement('a');
+    link.className = 'gui-image-link';
+    img.classList.add('gui-image-clickable');
+    if (href && !hasAction) {
+      link.href = href;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+    } else {
+      link.href = '#';
+    }
+    link.appendChild(img);
+    link.addEventListener('click', function(e) {
+      // Re-resolve actionParams from the RAW spec at click time (like Button),
+      // so an image can read current form/selection state via $bindState.
+      if (hasAction) {
+        e.preventDefault();
+        var rawParams = (el && el.props && el.props.actionParams) || {};
+        var freshParams = _genUiResolve(rawParams, store) || {};
+        _genUiDispatch(props.action, freshParams, store, null);
+      } else if (href) {
+        // Route through window.open for consistent Electron new-window behavior.
+        e.preventDefault();
+        window.open(href, '_blank', 'noopener');
+      }
+    });
+    return link;
   },
 
   SVG: function(el, props, children, store) {

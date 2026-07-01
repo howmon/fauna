@@ -5028,6 +5028,11 @@ webview {
 
 /* Image */
 .gui-image { border-radius: var(--radius-sm); display: block; margin: 4px 0; max-width: 100%; max-height: 420px; }
+.gui-image-link { display: inline-block; line-height: 0; border-radius: var(--radius-sm); text-decoration: none; }
+.gui-image-clickable { cursor: pointer; transition: transform .12s ease, box-shadow .12s ease, outline-color .12s ease; outline: 2px solid transparent; outline-offset: 2px; }
+.gui-image-link:hover .gui-image-clickable { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,.28); }
+.gui-image-link:focus-visible { outline: none; }
+.gui-image-link:focus-visible .gui-image-clickable { outline-color: var(--accent); }
 
 /* Select & Input */
 .gui-select-wrap, .gui-input-wrap { display: flex; flex-direction: column; gap: 4px; }
