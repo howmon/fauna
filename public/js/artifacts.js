@@ -1212,7 +1212,7 @@ function _artifactProjectFilterData(artifacts) {
   var counts = Object.create(null);
   artifacts.forEach(function(a) { counts[a.projectId || ''] = (counts[a.projectId || ''] || 0) + 1; });
   var projects = (state.projects || []).filter(function(p) { return counts[p.id]; }).sort(function(a, b) { return String(a.name || '').localeCompare(String(b.name || '')); });
-  var out = [{ value: '', label: 'All projects (' + artifacts.length + ')' }];
+  var out = [{ value: '', label: 'All projects (' + projects.length + ')' }];
   if (counts['']) out.push({ value: '__quick', label: 'Quick chats (' + counts[''] + ')' });
   projects.forEach(function(p) { out.push({ value: p.id, label: (p.name || 'Untitled project') + ' (' + counts[p.id] + ')' }); });
   return out;
@@ -1348,7 +1348,7 @@ function _renderArtifactLibraryItems(artifacts, view) {
       '<h3 title="' + escHtml(a.title || 'Artifact') + '">' + escHtml(a.title || 'Artifact') + '</h3>' +
       '<p>' + (a.projectName ? escHtml(a.projectName) + ' · ' : '') + escHtml(a.conversationTitle || 'Conversation') + '</p>' +
       '<div class="artifact-library-card-meta"><span>' + escHtml(_artifactRelativeTime(a.createdAt)) + '</span></div>' +
-      '<div class="artifact-library-card-actions"><button class="proj-action-btn" onclick="viewArtifactFromLibrary(\'' + escHtml(a.convId) + '\',\'' + escHtml(a.id) + '\')"><i class="ti ti-eye"></i> View only</button><button class="proj-action-btn" onclick="goToArtifactConversation(\'' + escHtml(a.convId) + '\')"><i class="ti ti-message-forward"></i> Conversation</button><button class="proj-action-btn proj-danger-btn" onclick="deleteArtifactFromLibrary(\'' + escHtml(a.convId) + '\',\'' + escHtml(a.id) + '\',event)"><i class="ti ti-trash"></i> Delete</button></div>' +
+      '<div class="artifact-library-card-actions"><button class="proj-action-btn" onclick="viewArtifactFromLibrary(\'' + escHtml(a.convId) + '\',\'' + escHtml(a.id) + '\')"><i class="ti ti-eye"></i> View only</button><button class="proj-action-btn" onclick="goToArtifactConversation(\'' + escHtml(a.convId) + '\')"><i class="ti ti-message-forward"></i> Conversation</button><button class="proj-icon-btn proj-danger-btn" onclick="deleteArtifactFromLibrary(\'' + escHtml(a.convId) + '\',\'' + escHtml(a.id) + '\',event)" title="Delete artifact"><i class="ti ti-trash"></i></button></div>' +
     '</article>';
   }).join('');
 }
