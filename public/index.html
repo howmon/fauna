@@ -2575,6 +2575,17 @@ Examples:
     }
     var hasDetails = !!(isError || running || (job && job.logs && job.logs.length) || (data && data.sourceDir));
     var barClass = running ? ' running' : isError ? ' error' : meta.label === 'Complete' || meta.label === 'Up to date' ? ' complete' : '';
+    // Preserve the details log scroll position across the 1.5s poll re-renders.
+    // Rebuilding innerHTML replaces the <pre>, which would otherwise snap the
+    // user back to the top every cycle. Keep it pinned to the bottom when the
+    // user is already following the tail; otherwise restore their exact offset.
+    var prevLog = el.querySelector('.fauna-update-log');
+    var hadLog = false, prevScrollTop = 0, prevAtBottom = true;
+    if (prevLog) {
+      hadLog = true;
+      prevScrollTop = prevLog.scrollTop;
+      prevAtBottom = (prevLog.scrollHeight - prevLog.scrollTop - prevLog.clientHeight) < 6;
+    }
     el.innerHTML =
       '<div class="fauna-update-card' + (isError ? ' error' : '') + '">' +
         '<div class="fauna-update-head">' +
@@ -2584,6 +2595,10 @@ Examples:
         (showBar ? '<div class="fauna-update-progress"><div class="fauna-update-progress-bar' + barClass + '" style="width:' + pct + '%"></div></div>' : '') +
         (_faunaUpdateDetailsOpen && hasDetails ? _faunaUpdateDetailsHtml(data, job) : '') +
       '</div>';
+    var newLog = el.querySelector('.fauna-update-log');
+    if (newLog && hadLog) {
+      newLog.scrollTop = prevAtBottom ? newLog.scrollHeight : prevScrollTop;
+    }
   }
 
   function _refreshFaunaUpdateStatus() {
