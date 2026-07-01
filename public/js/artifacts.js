@@ -542,6 +542,13 @@ function _closeGlobalPages(exceptId) {
   });
 }
 
+// Toggle the side drawer from the uniform window title strip. Defaults to the
+// main app sidebar; explorer-style pages render their own strip + drawer.
+window.faunaTitlebarDrawer = function (ev) {
+  if (ev && ev.stopPropagation) ev.stopPropagation();
+  if (typeof toggleSidebar === 'function') toggleSidebar();
+};
+
 function _openAppPage(pageId, title) {
   _closeReusableAppPages(pageId);
   _parkReusableAppPanels();
@@ -554,6 +561,20 @@ function _openAppPage(pageId, title) {
   document.body.classList.add('app-page-open');
   page.dataset.page = pageId;
   page.style.display = 'block';
+  // Uniform window title strip: decide how this page presents its top chrome.
+  //  - 'titlebar' → uses the shared full-width #app-titlebar (Teams-style).
+  //  - 'self'     → the page renders its OWN full-width fixed top bar (Explore),
+  //                 so we still reserve the top band and drop the rail below it.
+  var FAUNA_SELF_BAR_PAGES = { explorer: 1 };
+  var strip = FAUNA_SELF_BAR_PAGES[pageId] ? 'self' : 'titlebar';
+  document.body.dataset.pageStrip = strip;
+  // Full app pages have no real side drawer, so never show the titlebar
+  // hamburger here — it previously just navigated back to chat, which was
+  // confusing. Navigation lives in the app rail (and its Fauna logo) instead.
+  document.body.classList.remove('has-drawer');
+  window.__faunaCurrentPage = pageId;
+  var titlebarTitle = document.getElementById('titlebar-title');
+  if (titlebarTitle) titlebarTitle.textContent = title || 'Fauna';
   ['empty-state', 'messages', 'input-area', 'project-context-bar'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) el.style.display = 'none';
@@ -605,11 +626,34 @@ function closeAppPage(opts) {
     page.dataset.page = '';
   }
   document.body.classList.remove('app-page-open');
+  document.body.classList.remove('has-drawer');
+  document.body.dataset.pageStrip = '';
+  window.__faunaCurrentPage = '';
   if (body) body.innerHTML = '';
   var input = document.getElementById('input-area');
   if (input) input.style.display = '';
   if (typeof renderProjectContextBar === 'function') renderProjectContextBar();
 }
+
+// Standalone full-screen overlays (All Projects / All Agents / All
+// Conversations / Agent Actions) render into their own fixed element rather
+// than #app-page, but they still adopt the uniform full-width title strip so
+// the rail drops below it (Teams-style), matching every other full page.
+function _openOverlayStrip(title) {
+  document.body.classList.add('app-page-open');
+  document.body.dataset.pageStrip = 'titlebar';
+  document.body.classList.remove('has-drawer');
+  window.__faunaCurrentPage = '';
+  var t = document.getElementById('titlebar-title');
+  if (t) t.textContent = title || 'Fauna';
+}
+function _closeOverlayStrip() {
+  document.body.classList.remove('app-page-open');
+  document.body.classList.remove('has-drawer');
+  document.body.dataset.pageStrip = '';
+}
+window._openOverlayStrip = _openOverlayStrip;
+window._closeOverlayStrip = _closeOverlayStrip;
 
 function openPluginsPage(opts) {
   opts = opts || {};
@@ -785,12 +829,11 @@ function renderHomePage() {
       '<span class="home-project-analytics">' + analytics + '</span>' +
     '</button>';
   }).join('') || '<div class="home-empty-row">No projects yet</div>';
-  var artifactRows = artifacts.slice(0, 6).map(function(a) {
-    return '<article class="home-artifact-tile" onclick="viewArtifactFromLibrary(\'' + escHtml(a.convId) + '\',\'' + escHtml(a.id) + '\')">' +
-      '<button class="home-artifact-delete" onclick="deleteArtifactFromLibrary(\'' + escHtml(a.convId) + '\',\'' + escHtml(a.id) + '\',event)" title="Delete artifact"><i class="ti ti-trash"></i></button>' +
-      _artifactThumbnailMarkup(a, 'home-artifact-thumb') +
+  var artifactRows = artifacts.slice(0, 5).map(function(a) {
+    return '<button class="home-artifact-row" onclick="viewArtifactFromLibrary(\'' + escHtml(a.convId) + '\',\'' + escHtml(a.id) + '\')">' +
+      _artifactThumbnailMarkup(a, 'home-artifact-row-thumb') +
       '<span><strong>' + escHtml(a.title || 'Artifact') + '</strong><small>' + escHtml(_artifactTypeLabel(a.type)) + ' · ' + escHtml(a.conversationTitle) + '</small></span>' +
-    '</article>';
+    '</button>';
   }).join('') || '<div class="home-empty-row">No saved artifacts yet</div>';
   var recentRows = convs.slice(0, 5).map(function(c) {
     var p = _projectForConversation(c);
@@ -799,21 +842,99 @@ function renderHomePage() {
       '<span><strong>' + escHtml(c.title || 'Conversation') + '</strong><small>' + (p ? escHtml(p.name) + ' · ' : '') + escHtml(_artifactRelativeTime(c.updatedAt || c.createdAt)) + '</small></span>' +
     '</button>';
   }).join('') || '<div class="home-empty-row">No conversations yet</div>';
+  var activeLabel = running.length ? (running.length + ' active') : 'Conversations';
+  var activeSub = running.length ? 'Agents working now' : 'Browse all chats';
   page.innerHTML =
     '<div class="home-shell">' +
       '<main class="home-main">' +
-        '<div class="home-header"><div><div class="home-kicker"><span></span>Updated ' + escHtml(_artifactRelativeTime(Date.now())) + '</div><h1>' + escHtml(greeting) + '</h1><p>You have ' + convs.length + ' conversations, ' + projects.length + ' projects, and ' + artifacts.length + ' saved artifacts across Fauna.</p>' + namePrompt + '</div><button class="proj-action-btn" onclick="closeHomePage();newConversation()"><i class="ti ti-plus"></i> New task</button></div>' +
-        '<section class="home-panel home-highlights"><div class="home-section-title"><i class="ti ti-info-circle"></i> Important highlights</div>' +
-          '<button onclick="closeHomePage();openAllArtifactsPage()"><i class="ti ti-layout-grid"></i><span><strong>' + artifacts.length + ' saved artifacts</strong><small>Browse previews across every project and chat</small></span><i class="ti ti-chevron-right"></i></button>' +
-          '<button onclick="closeHomePage();openAllConversations()"><i class="ti ti-messages"></i><span><strong>' + running.length + ' active conversations</strong><small>' + (running.length ? 'Agents are still working' : 'No agents are currently running') + '</small></span><i class="ti ti-chevron-right"></i></button>' +
-        '</section>' +
+        '<header class="home-top">' +
+          '<div class="home-top-text">' +
+            '<div class="home-kicker"><span></span>Updated ' + escHtml(_artifactRelativeTime(Date.now())) + '</div>' +
+            '<h1>' + escHtml(greeting) + '</h1>' +
+            '<div class="home-stats">' +
+              '<span><strong>' + convs.length + '</strong> conversations</span>' +
+              '<span class="home-stats-dot"></span>' +
+              '<span><strong>' + projects.length + '</strong> projects</span>' +
+              '<span class="home-stats-dot"></span>' +
+              '<span><strong>' + artifacts.length + '</strong> artifacts</span>' +
+            '</div>' +
+            namePrompt +
+          '</div>' +
+          '<div class="home-split" id="home-new-split">' +
+            '<button class="home-split-main" onclick="_homeNew(\'conversation\')"><i class="ti ti-plus"></i> New conversation</button>' +
+            '<button class="home-split-toggle" onclick="_toggleHomeNewMenu(event)" aria-haspopup="true" aria-label="More create options"><i class="ti ti-chevron-down"></i></button>' +
+            '<div class="home-new-menu" id="home-new-menu" hidden>' +
+              '<button onclick="_homeNew(\'conversation\')"><i class="ti ti-message-plus"></i> New conversation</button>' +
+              '<button onclick="_homeNew(\'explore\')"><i class="ti ti-compass"></i> New explore</button>' +
+              '<button onclick="_homeNew(\'automation\')"><i class="ti ti-bolt"></i> New automation</button>' +
+              '<button onclick="_homeNew(\'project\')"><i class="ti ti-folder-plus"></i> New project</button>' +
+              '<button onclick="_homeNew(\'board\')"><i class="ti ti-layout-kanban"></i> New board task</button>' +
+              '<button onclick="_homeNew(\'agent\')"><i class="ti ti-robot"></i> New agent</button>' +
+            '</div>' +
+          '</div>' +
+        '</header>' +
+        '<div class="home-quick">' +
+          '<button class="home-quick-tile is-primary" onclick="closeHomePage();openExplorerPage()"><i class="ti ti-compass"></i><span><strong>Explore</strong><small>Branch ideas, grounded in live web</small></span><i class="ti ti-arrow-up-right home-quick-go"></i></button>' +
+          '<button class="home-quick-tile" onclick="closeHomePage();openAllArtifactsPage()"><i class="ti ti-layout-grid"></i><span><strong>' + artifacts.length + ' artifacts</strong><small>Browse every preview</small></span><i class="ti ti-arrow-up-right home-quick-go"></i></button>' +
+          '<button class="home-quick-tile" onclick="closeHomePage();openAllConversations()"><i class="ti ti-messages"></i><span><strong>' + escHtml(activeLabel) + '</strong><small>' + escHtml(activeSub) + '</small></span><i class="ti ti-arrow-up-right home-quick-go"></i></button>' +
+        '</div>' +
         '<div class="home-grid">' +
           '<section class="home-panel"><div class="home-section-title"><i class="ti ti-clock"></i> Recent conversations</div>' + recentRows + '</section>' +
           '<section class="home-panel"><div class="home-section-title"><i class="ti ti-star"></i> Projects</div>' + projectCards + '</section>' +
-          '<section class="home-panel"><div class="home-section-title"><i class="ti ti-sparkles"></i> Artifacts</div><div class="home-artifact-grid">' + artifactRows + '</div><button class="home-link-row" onclick="closeHomePage();openAllArtifactsPage()">View artifact library <i class="ti ti-arrow-right"></i></button></section>' +
+          '<section class="home-panel"><div class="home-section-title"><i class="ti ti-sparkles"></i> Artifacts</div>' + artifactRows + '<button class="home-link-row" onclick="closeHomePage();openAllArtifactsPage()">Artifact library <i class="ti ti-arrow-right"></i></button></section>' +
         '</div>' +
       '</main>' +
     '</div>';
+}
+
+// Home "New …" split-button dispatcher + menu.
+function _homeNew(kind) {
+  _closeHomeNewMenu();
+  if (typeof closeHomePage === 'function') closeHomePage();
+  switch (kind) {
+    case 'explore':
+      if (typeof openExplorerPage === 'function') openExplorerPage();
+      break;
+    case 'automation':
+      if (typeof openNewAutomation === 'function') openNewAutomation(null);
+      break;
+    case 'project':
+      if (typeof openCreateProjectDialog === 'function') openCreateProjectDialog();
+      break;
+    case 'board':
+      if (typeof toggleBoardPanel === 'function') {
+        toggleBoardPanel();
+        setTimeout(function() {
+          if (typeof openNewWorkItemModal === 'function') openNewWorkItemModal();
+        }, 80);
+      }
+      break;
+    case 'agent':
+      if (typeof openAgentBuilder === 'function') openAgentBuilder();
+      break;
+    case 'conversation':
+    default:
+      if (typeof newConversation === 'function') newConversation();
+      break;
+  }
+}
+
+function _toggleHomeNewMenu(ev) {
+  if (ev && ev.stopPropagation) ev.stopPropagation();
+  var menu = document.getElementById('home-new-menu');
+  if (!menu) return;
+  if (menu.hasAttribute('hidden')) {
+    menu.removeAttribute('hidden');
+    setTimeout(function() { document.addEventListener('click', _closeHomeNewMenu); }, 0);
+  } else {
+    _closeHomeNewMenu();
+  }
+}
+
+function _closeHomeNewMenu() {
+  var menu = document.getElementById('home-new-menu');
+  if (menu) menu.setAttribute('hidden', '');
+  document.removeEventListener('click', _closeHomeNewMenu);
 }
 
 function openAllArtifactsPage() {

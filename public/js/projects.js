@@ -390,11 +390,13 @@ function openAllProjects() {
   page._filter = '';
   page.style.display = 'flex';
   _renderAllProjectsPage();
+  if (typeof _openOverlayStrip === 'function') _openOverlayStrip('All Projects');
 }
 
 function closeAllProjects() {
   var page = document.getElementById('all-projects-page');
   if (page) page.style.display = 'none';
+  if (typeof _closeOverlayStrip === 'function') _closeOverlayStrip();
   if (typeof setAppRailActive === 'function') setAppRailActive('');
 }
 

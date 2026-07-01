@@ -18,10 +18,14 @@
 
   var EX_SESSIONS_KEY = 'fauna-explore-sessions';
 
+  // Collapsed branch-map nodes (ephemeral, keyed by node id).
+  var exMapCollapsed = {};
+
   // ── Tree helpers ─────────────────────────────────────────────────────────
   function exNewId() { return 'n-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6); }
   function exNode(id) { for (var i = 0; i < EX.nodes.length; i++) { if (EX.nodes[i].id === id) return EX.nodes[i]; } return null; }
   function exChildren(id) { return EX.nodes.filter(function (n) { return n.parentId === id; }); }
+  function exDescendantCount(id) { var c = 0; exChildren(id).forEach(function (k) { c += 1 + exDescendantCount(k.id); }); return c; }
   function exSiblings(node) { return node ? exChildren(node.parentId) : []; }
   function exPathTo(id) {
     var path = [], guard = 0, n = exNode(id);
@@ -154,6 +158,7 @@
         prompt: node.prompt,
         path: path,
         context: tieContext(),
+        projects: exProjectsForGrounding(),
         model: currentModelId() || undefined,
         web: !!EX.web,
         agentName: agent ? agent.name : undefined,
@@ -342,23 +347,373 @@
     var out = [];
     var walk = function (node, depth) {
       var kids = exChildren(node.id);
+      var hasKids = kids.length > 0;
+      var collapsed = !!exMapCollapsed[node.id];
       var active = node.id === EX.currentId ? ' active' : '';
-      out.push('<div class="explorer-map-node' + active + '" style="padding-left:' + (depth * 18 + 8) + 'px" ' +
+      var caret = hasKids
+        ? '<button class="explorer-map-caret" title="' + (collapsed ? 'Expand' : 'Collapse') + '" ' +
+            'onclick="event.stopPropagation();_explorerMapToggle(\'' + node.id + '\',event)">' +
+            '<i class="ti ti-chevron-' + (collapsed ? 'right' : 'down') + '"></i></button>'
+        : '<span class="explorer-map-caret is-leaf"></span>';
+      var showBadge = hasKids && (collapsed || kids.length > 1);
+      var badgeNum = collapsed ? exDescendantCount(node.id) : kids.length;
+      out.push('<div class="explorer-map-node' + active + '" style="padding-left:' + (depth * 18 + 6) + 'px" ' +
         'onclick="_explorerMapGo(\'' + node.id + '\')">' +
+        caret +
         (depth ? '<i class="ti ti-corner-down-right explorer-map-twig"></i>' : '<i class="ti ti-point explorer-map-twig"></i>') +
         '<span class="explorer-map-label">' + escHtml(node.title || 'Step') + '</span>' +
-        (kids.length > 1 ? '<span class="explorer-map-badge">' + kids.length + '</span>' : '') +
+        (showBadge ? '<span class="explorer-map-badge">' + badgeNum + '</span>' : '') +
+        '<button class="explorer-map-rename" title="Rename" aria-label="Rename" ' +
+          'onclick="event.stopPropagation();_explorerMapRename(\'' + node.id + '\',event)"><i class="ti ti-pencil"></i></button>' +
+        '<button class="explorer-map-del" title="Delete this branch" aria-label="Delete branch" ' +
+          'onclick="event.stopPropagation();_explorerMapDelete(\'' + node.id + '\',event)"><i class="ti ti-trash"></i></button>' +
         '</div>');
-      kids.forEach(function (k) { walk(k, depth + 1); });
+      if (!collapsed) kids.forEach(function (k) { walk(k, depth + 1); });
     };
     roots.forEach(function (r) { walk(r, 0); });
     host.innerHTML = out.join('');
   }
 
+  // Collapse / expand a branch-map node (ephemeral).
+  window._explorerMapToggle = function (id, ev) {
+    if (ev && ev.stopPropagation) ev.stopPropagation();
+    exMapCollapsed[id] = !exMapCollapsed[id];
+    renderMapTree();
+  };
+
   window._explorerMapGo = function (id) {
     if (!exNode(id)) return;
     window.toggleExplorerMap(false);
     loadNode(id);
+  };
+
+  // Delete a node and all of its descendants from the exploration tree.
+  window._explorerMapDelete = function (id, ev) {
+    if (ev && ev.stopPropagation) ev.stopPropagation();
+    var target = exNode(id);
+    if (!target) return;
+    // Gather the node + every descendant.
+    var doomed = {};
+    (function collect(nid) {
+      doomed[nid] = true;
+      exChildren(nid).forEach(function (k) { collect(k.id); });
+    })(id);
+    var count = Object.keys(doomed).length;
+    var label = target.title || 'this step';
+    var msg = count > 1
+      ? 'Delete "' + label + '" and its ' + (count - 1) + ' sub-branch' + (count - 1 === 1 ? '' : 'es') + '?'
+      : 'Delete "' + label + '"?';
+    if (typeof window.confirm === 'function' && !window.confirm(msg)) return;
+
+    var parentId = target.parentId;
+    EX.nodes = EX.nodes.filter(function (n) { return !doomed[n.id]; });
+
+    // If the node we were viewing got removed, fall back to its parent,
+    // then any remaining root, then the front door.
+    if (doomed[EX.currentId]) {
+      if (parentId && exNode(parentId)) EX.currentId = parentId;
+      else { var firstRoot = EX.nodes.find(function (n) { return !n.parentId; }); EX.currentId = firstRoot ? firstRoot.id : null; }
+    }
+
+    if (!EX.nodes.length) {
+      // Whole exploration emptied — drop the saved session and reset.
+      exDeleteSessionRecord(EX.sessionId);
+      EX.currentId = null;
+      EX.sessionId = '';
+      EX.convId = '';
+      window.toggleExplorerMap(false);
+      renderFrontDoor();
+      return;
+    }
+
+    exPersistCurrent();
+    renderMapTree();
+    if (EX.currentId && exNode(EX.currentId)) loadNode(EX.currentId);
+    else { window.toggleExplorerMap(false); renderFrontDoor(); }
+  };
+
+  // Rename a node's title (also reflected in breadcrumb + exports).
+  window._explorerMapRename = function (id, ev) {
+    if (ev && ev.stopPropagation) ev.stopPropagation();
+    var node = exNode(id);
+    if (!node) return;
+    var next = (typeof window.prompt === 'function')
+      ? window.prompt('Rename this step', node.title || '')
+      : null;
+    if (next === null) return; // cancelled
+    next = String(next).trim();
+    if (!next || next === node.title) return;
+    node.title = next.slice(0, 120);
+    exPersistCurrent();
+    renderMapTree();
+    if (id === EX.currentId) renderBreadcrumb();
+  };
+
+  // ── Export the whole session map as a self-contained interactive file ────
+
+  // Remove the "go deeper" journey section (explore_into buttons + the
+  // heading/container that introduces them) from a spec, returning a clone.
+  function exStripGoDeeper(spec) {
+    if (!spec || !spec.elements) return spec;
+    var clone;
+    try { clone = JSON.parse(JSON.stringify(spec)); } catch (_) { return spec; }
+    var els = clone.elements || {};
+    var remove = {};
+    // 1) explore_into buttons. The journey action may live on the element
+    //    top level (e.action) or inside props (e.props.action) depending on
+    //    how the spec was authored, so check both.
+    Object.keys(els).forEach(function (k) {
+      var e = els[k];
+      if (!e) return;
+      var act = (e.props && e.props.action) || e.action;
+      if (act === 'explore_into') remove[k] = true;
+    });
+    // 2) headings that introduce the journey ("go deeper", "continue exploring"…).
+    var headRe = /(go deeper|dig deeper|continue exploring|explore (more|further|next)|where to (next|go)|keep exploring|branch (out|from here)|next steps?)/i;
+    Object.keys(els).forEach(function (k) {
+      var e = els[k];
+      if (!e) return;
+      if ((e.type === 'Heading' || e.type === 'Text') && e.props) {
+        var t = e.props.text || e.props.title || '';
+        if (t && headRe.test(String(t))) remove[k] = true;
+      }
+    });
+    // Detach removed ids from every children array.
+    Object.keys(els).forEach(function (k) {
+      var e = els[k];
+      if (e && Array.isArray(e.children)) {
+        e.children = e.children.filter(function (c) { return !remove[c]; });
+      }
+    });
+    // Prune containers that became empty (no children, no own content props).
+    var changed = true, guard = 0;
+    var contentProps = ['text', 'title', 'src', 'label', 'value', 'items', 'data', 'rows', 'options', 'tabs', 'series'];
+    function hasContent(e) {
+      if (!e || !e.props) return false;
+      return contentProps.some(function (p) {
+        var v = e.props[p];
+        return v != null && v !== '' && !(Array.isArray(v) && v.length === 0);
+      });
+    }
+    var containerTypes = { Card: 1, Stack: 1, Grid: 1, Section: 1, Tabs: 1, Carousel: 1, Accordion: 1 };
+    while (changed && guard++ < 20) {
+      changed = false;
+      Object.keys(els).forEach(function (k) {
+        if (remove[k] || k === clone.root) return;
+        var e = els[k];
+        if (!e) return;
+        if (containerTypes[e.type] && (!e.children || !e.children.length) && !hasContent(e)) {
+          remove[k] = true;
+          changed = true;
+          Object.keys(els).forEach(function (pk) {
+            var pe = els[pk];
+            if (pe && Array.isArray(pe.children)) pe.children = pe.children.filter(function (c) { return c !== k; });
+          });
+        }
+      });
+    }
+    Object.keys(remove).forEach(function (k) { delete els[k]; });
+    return clone;
+  }
+
+  // Render a spec to a static HTML string (icons stripped to avoid missing
+  // webfont glyphs in the exported file).
+  function exSpecToHtml(spec) {
+    if (!spec || typeof renderGenUI !== 'function') return '<p class="ex-empty">No content captured for this step.</p>';
+    var holder = document.createElement('div');
+    holder.className = 'gui-root explorer-gui';
+    holder.style.position = 'absolute';
+    holder.style.left = '-99999px';
+    holder.style.width = '820px';
+    document.body.appendChild(holder);
+    var html = '';
+    try {
+      renderGenUI(spec, holder);
+      holder.querySelectorAll('i.ti, .ti').forEach(function (n) {
+        if (n.tagName === 'I') n.remove();
+      });
+      // Un-proxy image URLs: the live renderer routes http(s) images through the
+      // app's local /api/fetch-image proxy, which doesn't exist in a standalone
+      // exported file. Restore the original absolute URL so images load anywhere.
+      holder.querySelectorAll('img').forEach(function (img) {
+        var s = img.getAttribute('src') || '';
+        var m = s.match(/[?&]url=([^&]+)/);
+        if (/^\/api\/fetch-image/.test(s) && m) {
+          try { img.setAttribute('src', decodeURIComponent(m[1])); } catch (_) {}
+        }
+        img.removeAttribute('data-gui-broken');
+        if (img.style && img.style.display === 'none') img.style.display = '';
+        img.setAttribute('loading', 'lazy');
+        img.setAttribute('referrerpolicy', 'no-referrer');
+      });
+      html = holder.innerHTML;
+    } catch (e) {
+      html = '<p class="ex-empty">Could not render this step.</p>';
+    } finally {
+      holder.remove();
+    }
+    return html;
+  }
+
+  // Pull the gui-* component CSS + the theme variables actually in use so the
+  // export looks right without shipping the entire app stylesheet.
+  function exCollectGuiCss() {
+    var out = [];
+    for (var s = 0; s < document.styleSheets.length; s++) {
+      var rules;
+      try { rules = document.styleSheets[s].cssRules; } catch (_) { continue; }
+      if (!rules) continue;
+      for (var i = 0; i < rules.length; i++) {
+        var r = rules[i];
+        var sel = r.selectorText || '';
+        if (!sel) continue;
+        if (/\.gui[-\w]*/.test(sel) || /\.explorer-gui/.test(sel)) out.push(r.cssText);
+      }
+    }
+    return out.join('\n');
+  }
+
+  function exThemeVarBlock() {
+    var names = ['--fau-bg', '--fau-surface', '--fau-surface1', '--fau-surface2', '--fau-surface3',
+      '--fau-border', '--fau-text', '--fau-text-dim', '--fau-text-muted',
+      '--accent', '--accent2', '--accent-dim', '--accent-glow', '--accent-contrast', '--gui-accent',
+      '--success', '--error', '--warn', '--color-warning',
+      '--radius', '--radius-sm', '--shadow-4', '--font'];
+    var cs = getComputedStyle(document.documentElement);
+    var lines = names.map(function (n) {
+      var v = cs.getPropertyValue(n);
+      return v && v.trim() ? '  ' + n + ': ' + v.trim() + ';' : '';
+    }).filter(Boolean);
+    return ':root {\n' + lines.join('\n') + '\n}';
+  }
+
+  function exExportShellCss() {
+    return [
+      '*{box-sizing:border-box}',
+      'html,body{margin:0;height:100%}',
+      'body{background:var(--fau-bg,#0e0f13);color:var(--fau-text,#e8e8ea);font-family:var(--font,system-ui,-apple-system,Segoe UI,Roboto,sans-serif);font-size:14px}',
+      '.ex-export{display:grid;grid-template-columns:300px minmax(0,1fr);height:100vh}',
+      '.ex-tree{border-right:1px solid var(--fau-border,#262830);overflow-y:auto;padding:14px;background:var(--fau-surface,#15171c)}',
+      '.ex-tree-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}',
+      '.ex-tree-title{font-size:13px;font-weight:700;color:var(--fau-text,#eee);display:flex;align-items:center;gap:7px}',
+      '.ex-print-btn{border:1px solid var(--fau-border,#333);background:var(--fau-surface2,#1d2027);color:var(--fau-text-dim,#bbb);border-radius:8px;padding:6px 10px;font:inherit;font-size:12px;cursor:pointer}',
+      '.ex-print-btn:hover{color:var(--fau-text,#fff);border-color:var(--accent,#5b8cff)}',
+      '.ex-node{display:flex;align-items:center;gap:6px;border-radius:8px;border:1px solid transparent;padding:7px 8px;cursor:pointer;color:var(--fau-text-dim,#bbb);font-size:13px}',
+      '.ex-node:hover{background:var(--fau-surface2,#1d2027);color:var(--fau-text,#fff)}',
+      '.ex-node.active{background:var(--accent-dim,rgba(91,140,255,.16));color:var(--accent2,#9db8ff);border-color:var(--accent,#5b8cff)}',
+      '.ex-node-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.ex-node-rename{opacity:0;border:none;background:transparent;color:inherit;cursor:pointer;font-size:13px;padding:2px}',
+      '.ex-node:hover .ex-node-rename{opacity:.8}',
+      '.ex-node-rename:hover{opacity:1}',
+      '.ex-main{overflow-y:auto;padding:22px clamp(18px,4vw,48px) 60px}',
+      '.ex-breadcrumb{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:13px;color:var(--fau-text-muted,#888);margin-bottom:18px}',
+      '.ex-breadcrumb button{border:none;background:none;color:var(--fau-text-dim,#bbb);cursor:pointer;font:inherit;padding:2px 4px;border-radius:6px}',
+      '.ex-breadcrumb button:hover{color:var(--accent2,#9db8ff)}',
+      '.ex-breadcrumb .ex-crumb-cur{color:var(--fau-text,#fff);font-weight:600}',
+      '.ex-breadcrumb .ex-crumb-sep{opacity:.5}',
+      '.ex-content{max-width:920px}',
+      '.ex-empty{color:var(--fau-text-muted,#888);font-style:italic}',
+      '.ex-print-only{display:none}',
+      '@media print{',
+      '  .ex-tree,.ex-breadcrumb,.ex-print-btn{display:none!important}',
+      '  .ex-export{display:block;height:auto}',
+      '  .ex-main{display:none}',
+      '  .ex-print-only{display:block;padding:0 12px}',
+      '  .ex-print-node{break-inside:avoid;page-break-inside:avoid;margin:0 0 26px}',
+      '  .ex-print-path{font-size:12px;color:#666;margin-bottom:4px}',
+      '  .ex-print-title{font-size:18px;font-weight:700;margin:0 0 10px}',
+      '}',
+    ].join('\n');
+  }
+
+  // Build the full self-contained HTML document for the current session.
+  function exBuildExportHtml() {
+    var nodes = EX.nodes.map(function (n) {
+      return {
+        id: n.id,
+        parentId: n.parentId || null,
+        title: n.title || 'Step',
+        html: n.spec ? exSpecToHtml(exStripGoDeeper(n.spec)) : '',
+      };
+    });
+    var root = EX.nodes.find(function (n) { return !n.parentId; });
+    var sessionTitle = (root && root.title) || 'Exploration';
+    var css = exThemeVarBlock() + '\n' + exExportShellCss() + '\n' + exCollectGuiCss();
+    var data = JSON.stringify({ title: sessionTitle, nodes: nodes, rootId: root ? root.id : (nodes[0] && nodes[0].id) });
+
+    var script = [
+      '(function(){',
+      'var D=window.__EX_DATA__;var CUR=D.rootId;',
+      'var byId={};D.nodes.forEach(function(n){byId[n.id]=n});',
+      'function kids(id){return D.nodes.filter(function(n){return n.parentId===id})}',
+      'function pathTo(id){var p=[],n=byId[id],g=0;while(n&&g++<200){p.unshift(n);n=n.parentId?byId[n.parentId]:null}return p}',
+      'function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c]})}',
+      'function renderTree(){var roots=D.nodes.filter(function(n){return !n.parentId});var out=[];' +
+        'function walk(n,d){out.push(' +
+        '\'<div class="ex-node\'+(n.id===CUR?" active":"")+\'" style="padding-left:\'+(d*16+8)+\'px" onclick="EXGO(\\\'\'+n.id+\'\\\')">\'+' +
+        '\'<span class="ex-node-label">\'+esc(n.title)+\'</span>\'+' +
+        '\'<button class="ex-node-rename" title="Rename" onclick="event.stopPropagation();EXREN(\\\'\'+n.id+\'\\\')">\\u270e</button>\'+' +
+        '\'</div>\');kids(n.id).forEach(function(k){walk(k,d+1)})}' +
+        'roots.forEach(function(r){walk(r,0)});document.getElementById("ex-tree-list").innerHTML=out.join("")}',
+      'function renderCrumb(){var p=pathTo(CUR),h=[];p.forEach(function(n,i){var last=i===p.length-1;' +
+        'if(i)h.push(\'<span class="ex-crumb-sep">/</span>\');' +
+        'h.push(last?\'<span class="ex-crumb-cur">\'+esc(n.title)+\'</span>\':\'<button onclick="EXGO(\\\'\'+n.id+\'\\\')">\'+esc(n.title)+\'</button>\')});' +
+        'document.getElementById("ex-breadcrumb").innerHTML=h.join("")}',
+      'function renderContent(){var n=byId[CUR];document.getElementById("ex-content").innerHTML=n&&n.html?n.html:\'<p class="ex-empty">No content captured for this step.</p>\'}',
+      'function renderPrint(){var out=[];D.nodes.forEach(function(n){var p=pathTo(n.id).map(function(x){return x.title});' +
+        'out.push(\'<section class="ex-print-node"><div class="ex-print-path">\'+esc(p.join(" / "))+\'</div><h2 class="ex-print-title">\'+esc(n.title)+\'</h2><div class="gui-root explorer-gui">\'+(n.html||"")+\'</div></section>\')});' +
+        'document.getElementById("ex-print").innerHTML=out.join("")}',
+      'window.EXGO=function(id){CUR=id;renderTree();renderCrumb();renderContent();var m=document.querySelector(".ex-main");if(m)m.scrollTop=0};',
+      'window.EXREN=function(id){var n=byId[id];if(!n)return;var v=prompt("Rename this step",n.title||"");if(v===null)return;v=String(v).trim();if(!v)return;n.title=v.slice(0,120);renderTree();renderCrumb();renderPrint()};',
+      'window.EXPRINT=function(){window.print()};',
+      'renderTree();renderCrumb();renderContent();renderPrint();',
+      '})();',
+    ].join('\n');
+
+    var html = '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n' +
+      '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
+      '<title>' + escHtml(sessionTitle) + ' — Explore map</title>\n' +
+      '<style>\n' + css + '\n</style>\n</head>\n<body>\n' +
+      '<div class="ex-export">\n' +
+        '<aside class="ex-tree">\n' +
+          '<div class="ex-tree-head"><div class="ex-tree-title">\u2318 ' + escHtml(sessionTitle) + '</div>' +
+            '<button class="ex-print-btn" onclick="EXPRINT()">Save as PDF</button></div>\n' +
+          '<div id="ex-tree-list"></div>\n' +
+        '</aside>\n' +
+        '<main class="ex-main">\n' +
+          '<div class="ex-breadcrumb" id="ex-breadcrumb"></div>\n' +
+          '<div class="ex-content gui-root explorer-gui" id="ex-content"></div>\n' +
+        '</main>\n' +
+        '<div class="ex-print-only" id="ex-print"></div>\n' +
+      '</div>\n' +
+      '<script>window.__EX_DATA__=' + data.replace(/<\//g, '<\\/') + ';<\/script>\n' +
+      '<script>\n' + script + '\n<\/script>\n' +
+      '</body>\n</html>';
+    return { html: html, title: sessionTitle };
+  }
+
+  window._explorerExportMap = function () {
+    if (!EX.nodes || !EX.nodes.length) {
+      if (typeof showToast === 'function') showToast('Nothing to export yet');
+      return;
+    }
+    var built;
+    try { built = exBuildExportHtml(); }
+    catch (e) {
+      if (typeof showToast === 'function') showToast('Export failed: ' + (e && e.message || 'error'));
+      return;
+    }
+    var slug = (built.title || 'exploration').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'exploration';
+    var blob = new Blob([built.html], { type: 'text/html' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'explore-' + slug + '.html';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    if (typeof showToast === 'function') showToast('Exported map · open the file, then “Save as PDF” to print');
   };
 
   // ── Floating chat (escape hatch) ─────────────────────────────────────────
@@ -500,13 +855,15 @@
       var forks = nodes.filter(function (n) {
         return nodes.filter(function (m) { return m.parentId === n.parentId; }).length > 1 && n.parentId;
       }).length;
-      var branchTag = forks > 0 ? ' · <i class="ti ti-git-branch"></i> branched' : '';
-      return '<div class="explorer-session' + active + '" onclick="_exOpenSession(\'' + s.id + '\')">' +
-          '<div class="explorer-session-main">' +
-            '<div class="explorer-session-title">' + escHtml(s.title || 'Exploration') + '</div>' +
-            '<div class="explorer-session-meta">' + steps + ' step' + (steps === 1 ? '' : 's') + branchTag + ' · ' + exTimeAgo(s.updatedAt) + '</div>' +
-          '</div>' +
-          '<button class="explorer-session-del" onclick="event.stopPropagation();_exDeleteSession(\'' + s.id + '\')" title="Delete" aria-label="Delete"><i class="ti ti-trash"></i></button>' +
+      var title = s.title || 'Exploration';
+      var meta = steps + ' step' + (steps === 1 ? '' : 's') + (forks > 0 ? ' · branched' : '') + ' · ' + exTimeAgo(s.updatedAt);
+      return '<div class="explorer-session' + active + '" onclick="_exOpenSession(\'' + s.id + '\')" title="' + escHtml(title) + ' \u2014 ' + escHtml(meta) + '">' +
+          '<span class="explorer-session-label">' + escHtml(title) + '</span>' +
+          '<span class="explorer-session-date">' + escHtml(exTimeAgo(s.updatedAt)) + '</span>' +
+          '<span class="explorer-session-actions">' +
+            '<button class="explorer-session-act" onclick="event.stopPropagation();_exRenameSession(\'' + s.id + '\',event)" title="Rename"><i class="ti ti-pencil"></i></button>' +
+            '<button class="explorer-session-act explorer-session-act-del" onclick="event.stopPropagation();_exDeleteSession(\'' + s.id + '\')" title="Delete"><i class="ti ti-trash"></i></button>' +
+          '</span>' +
         '</div>';
     }).join('');
   }
@@ -592,6 +949,35 @@
     renderSessionsList();
   };
 
+  window._exRenameSession = function (id, ev) {
+    if (ev && ev.stopPropagation) ev.stopPropagation();
+    var list = exLoadSessions();
+    var s = null;
+    for (var i = 0; i < list.length; i++) { if (list[i].id === id) { s = list[i]; break; } }
+    if (!s) return;
+    var name = window.prompt('Rename exploration', s.title || 'Exploration');
+    if (name == null) return;
+    name = String(name).trim().slice(0, 120);
+    if (!name) return;
+    s.title = name;
+    exSaveSessions(list);
+    // Keep the live session's root node + breadcrumb in sync.
+    if (EX.sessionId === id) {
+      var root = EX.nodes.find(function (n) { return !n.parentId; });
+      if (root) root.title = name;
+      if (typeof renderBreadcrumb === 'function') renderBreadcrumb();
+    }
+    renderSessionsList();
+  };
+
+  // Remove a saved session record without touching the live EX state/UI.
+  function exDeleteSessionRecord(id) {
+    if (!id) return;
+    var list = exLoadSessions().filter(function (s) { return s.id !== id; });
+    exSaveSessions(list);
+    renderSessionsList();
+  }
+
   // ── Conversation / project tie-in ────────────────────────────────────────
 
   function activeProject() {
@@ -609,6 +995,22 @@
     var proj = activeProject();
     if (proj && proj.name) bits.push('Active project: ' + proj.name);
     return bits.join('\n');
+  }
+
+  // A compact list of the user's real projects, sent to the Explore route so
+  // status/data prompts ground on a chosen project instead of hallucinating a
+  // dashboard from invented numbers.
+  function exProjectsForGrounding() {
+    try {
+      if (typeof state === 'undefined' || !Array.isArray(state.projects)) return [];
+      return state.projects.slice(0, 30).map(function (p) {
+        var desc = p && (p.description || p.goal || p.summary || p.brief) ? String(p.description || p.goal || p.summary || p.brief) : '';
+        return {
+          name: p && p.name ? String(p.name).slice(0, 120) : '',
+          description: desc.slice(0, 200),
+        };
+      }).filter(function (p) { return p.name; });
+    } catch (_) { return []; }
   }
 
   function tieHtml() {
@@ -641,20 +1043,26 @@
       '</div>' +
       '<div class="explorer-sessions-backdrop" id="explorer-sessions-backdrop" hidden onclick="toggleExplorerSessions(false)"></div>' +
       '<aside class="explorer-sessions" id="explorer-sessions-panel" hidden>' +
-        '<div class="explorer-sessions-head">' +
-          '<span><i class="ti ti-compass"></i> Explore sessions</span>' +
+        '<div class="explorer-sessions-top">' +
+          '<span class="explorer-sessions-brand"><i class="ti ti-compass"></i> Explore</span>' +
           '<button class="explorer-chat-x" onclick="toggleExplorerSessions(false)" aria-label="Close"><i class="ti ti-x"></i></button>' +
         '</div>' +
-        '<button class="explorer-sessions-new" onclick="_exNewSession()"><i class="ti ti-plus"></i> New exploration</button>' +
+        '<div class="explorer-sessions-actions">' +
+          '<button class="explorer-sessions-act" onclick="_exNewSession()"><i class="ti ti-edit"></i> New exploration</button>' +
+        '</div>' +
+        '<div class="explorer-sessions-secthead"><i class="ti ti-chevron-down"></i><span>Recent explorations</span></div>' +
         '<div class="explorer-sessions-list" id="explorer-sessions-list"></div>' +
       '</aside>' +
       '<div class="explorer-sessions-backdrop" id="explorer-map-backdrop" hidden onclick="toggleExplorerMap(false)"></div>' +
       '<aside class="explorer-map-panel" id="explorer-map-panel" hidden>' +
         '<div class="explorer-sessions-head">' +
           '<span><i class="ti ti-sitemap"></i> Branch map</span>' +
-          '<button class="explorer-chat-x" onclick="toggleExplorerMap(false)" aria-label="Close"><i class="ti ti-x"></i></button>' +
+          '<div class="explorer-map-head-actions">' +
+            '<button class="explorer-map-export" onclick="_explorerExportMap()" title="Export this map as an interactive HTML / PDF"><i class="ti ti-download"></i> Export</button>' +
+            '<button class="explorer-chat-x" onclick="toggleExplorerMap(false)" aria-label="Close"><i class="ti ti-x"></i></button>' +
+          '</div>' +
         '</div>' +
-        '<p class="explorer-map-hint">Every view you opened. Click any node to jump back to it — branches are kept.</p>' +
+        '<p class="explorer-map-hint">Every view you opened. Click any node to jump back to it, the pencil to rename, or the trash to remove a branch.</p>' +
         '<div class="explorer-map-tree" id="explorer-map-tree"></div>' +
       '</aside>' +
       '<button class="explorer-fab" onclick="toggleExplorerChat()" title="Continue exploring" aria-label="Continue exploring"><i class="ti ti-message-2"></i></button>' +

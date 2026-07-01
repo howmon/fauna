@@ -1014,6 +1014,7 @@ function openAllConversations(projectId) {
   page.innerHTML = '';
   page.style.display = 'flex';
   renderAllConvsPage();
+  if (typeof _openOverlayStrip === 'function') _openOverlayStrip('All Conversations');
 }
 
 // Clear the active project filter on the All Conversations page (exposed for
@@ -1029,6 +1030,7 @@ function clearAllConvsProjectFilter() {
 function closeAllConversations() {
   var page = document.getElementById('all-convs-page');
   if (page) page.style.display = 'none';
+  if (typeof _closeOverlayStrip === 'function') _closeOverlayStrip();
 }
 
 function renderAllConvsPage() {

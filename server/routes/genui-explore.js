@@ -101,6 +101,44 @@ the journey map:
 - Never invent credentials, card numbers, or secrets. Ask the user for sensitive
   values via fields (e.g. \`type: "password"\`) — do NOT prefill them.
 
+## GROUNDING-FIRST — never fabricate private, live, or project-specific data (CRITICAL)
+
+You do NOT have access to the user's real project data, task lists, metrics,
+analytics, files, calendars, accounts, or any private/live numbers UNLESS they
+appear VERBATIM in the "Relevant context", "Available Fauna projects", or LIVE
+WEB DATA sections below. When a prompt asks about such data — e.g. "project
+status", "my/our project", "progress", "team metrics", "open risks", "what's
+left to do", "sprint/board status", "how is X going", roadmap, burndown, account
+balances, inbox, or calendar — you MUST NOT invent it.
+
+NEVER fabricate Stats, KPIs, percentages, sparkline/chart data, gauges, task or
+risk counts, timelines, statuses ("On Track"), highlights, or list entries to
+fill such a view. A plausible-looking dashboard built from made-up numbers is a
+HALLUCINATION and is strictly forbidden — even if it looks polished.
+
+Instead, when the real data is missing, render a GROUNDING view that asks for
+the right source before showing anything:
+- Lead with a Heading + short Text that honestly says you need to know which
+  source to pull real data from (do NOT pretend you already have it).
+- Offer the user's real projects as choices: render ONE \`explore_into\` Button
+  per entry in "Available Fauna projects", each with an \`actionParams.prompt\`
+  that names the chosen project and asks to GROUND on it, e.g.
+    { "action": "explore_into", "actionParams": { "prompt": "Show the status of the Fauna project \\"<name>\\". Use its real tasks, progress, and notes as grounding — do not invent data; if something is missing, say so and ask to connect it.", "title": "<name>" } }
+  If no projects are listed, skip this and go straight to the form below.
+- Add an "Other / external project" path: a small form (\`Input\`/\`Textarea\` bound
+  to state) for the user to name or paste a link/details of another project, with
+  a \`send_prompt\` or \`explore_into\` Button whose \`$template\` text forwards what
+  they typed so an agent/tool can fetch the real context.
+- If public web data could help (open-source repos, public docs/sites), offer an
+  \`explore_into\` that re-frames the prompt as a web search to ground on.
+- Keep this grounding view focused. Do NOT pad it with invented metrics to look
+  richer — a short, honest "pick a source" view is the correct output here.
+
+Render a populated, metric-rich dashboard ONLY when the underlying numbers are
+actually present in the provided context/web data. If you have SOME real data
+but not all, show only what's grounded and clearly mark the rest as "not
+connected yet" with an action to provide it — never backfill gaps with guesses.
+
 ## Other rules
 - Never invent actions beyond: explore_into, send_prompt, prefill_chat, open_url,
   setState, toggle_visible, copy_text.
@@ -196,6 +234,37 @@ async function gatherWebGrounding(manager, prompt) {
   return grounding;
 }
 
+// Decide whether a prompt actually warrants a live web lookup. Explore is
+// contextual by default: prompts about the user's OWN projects, tasks, status,
+// progress, or other private/local data must NOT hit the internet (there is
+// nothing to find and it just adds latency + risks link-farm views), while
+// general-knowledge, comparison, or current-events topics genuinely benefit
+// from web grounding. This keeps "project health" fast and grounded on local
+// context instead of scraping the web. Returns true when web grounding helps.
+function promptNeedsWeb(prompt, projects) {
+  const p = String(prompt || '').toLowerCase().trim();
+  if (!p) return false;
+
+  // Prompt names one of the user's real projects → it's about local data.
+  if (Array.isArray(projects)) {
+    for (const proj of projects) {
+      const name = proj && proj.name ? String(proj.name).toLowerCase().trim() : '';
+      if (name.length >= 3 && p.includes(name)) return false;
+    }
+  }
+
+  // "my/our/this/the <project|task|board|sprint|repo|codebase|team>" — local.
+  const OWNED = /\b(my|our|this|the)\b[^.?!]{0,40}\b(project|projects|task|tasks|to-?dos?|board|sprint|backlog|roadmap|burndown|milestone|team|repo|repository|codebase|workspace)\b/;
+  // Status / health / progress language — about the user's own work.
+  const STATUS = /\b(project\s+health|health\s+of|status\s+of|at\s+a\s+glance|what'?s\s+left|whats\s+left|open\s+risks?|blockers?|what\s+should\s+i\s+work\s+on|how'?s?\s+(it|things|the\s+\w+|my|our)\b[^?]*\b(going|doing|coming|progressing)|(my|our)\s+progress)\b/;
+  // Personal/private surfaces that live inside Fauna, never on the open web.
+  const PERSONAL = /\b(my|our)\b[^.?!]{0,40}\b(metrics|kpis?|analytics|calendar|inbox|emails?|schedule|files?|notes?|account|dashboard|activity|standup|stand-up)\b/;
+  if (OWNED.test(p) || STATUS.test(p) || PERSONAL.test(p)) return false;
+
+  // Everything else is treated as a general topic where web grounding helps.
+  return true;
+}
+
 // Pull a JSON object out of a model response that may include stray fences or
 // prose despite instructions. Mirrors the recovery the client does, server-side.
 function extractSpecJson(raw) {
@@ -233,16 +302,42 @@ export function registerGenUiExploreRoutes(app, { getBrowseManager } = {}) {
     const path = Array.isArray(body.path) ? body.path.filter(p => typeof p === 'string') : [];
     const context = typeof body.context === 'string' ? body.context.slice(0, 4000) : '';
     const model = typeof body.model === 'string' && body.model ? body.model : 'claude-sonnet-4.6';
-    const useWeb = body.web === true;
+    // `body.web` means "web grounding is allowed". Whether we actually fetch is
+    // decided contextually below (promptNeedsWeb) once we know the projects, so
+    // local/status prompts like "project health" never hit the internet.
+    const webAllowed = body.web === true;
     const agentPrompt = typeof body.agentPrompt === 'string' ? body.agentPrompt.slice(0, 6000) : '';
     const agentName = typeof body.agentName === 'string' ? body.agentName.slice(0, 80) : '';
+
+    // The user's real Fauna projects, offered to the model as grounding choices
+    // so status/data prompts ask which project to pull from instead of inventing
+    // a dashboard.
+    const projects = Array.isArray(body.projects)
+      ? body.projects
+          .map((p) => {
+            if (!p || typeof p !== 'object') return null;
+            const name = typeof p.name === 'string' ? p.name.slice(0, 120).trim() : '';
+            if (!name) return null;
+            const description = typeof p.description === 'string' ? p.description.slice(0, 200).trim() : '';
+            return { name, description };
+          })
+          .filter(Boolean)
+          .slice(0, 30)
+      : [];
 
     if (!prompt) return res.status(400).json({ ok: false, error: 'prompt required' });
 
     const trail = path.length ? `\n\n## Journey so far (breadcrumb)\n${path.join(' → ')}` : '';
     const ctx = context ? `\n\n## Relevant context\n${context}` : '';
+    const projectsBlock = projects.length
+      ? `\n\n## Available Fauna projects (the user's REAL projects — offer these as grounding choices for status/data prompts)\n` +
+        projects.map((p) => `- ${p.name}${p.description ? ' — ' + p.description : ''}`).join('\n')
+      : `\n\n## Available Fauna projects\n(none found — for status/data prompts, ask the user to name, link, or describe the project/source instead of inventing data)`;
 
-    // Optional live-web grounding via the Playwright browse manager.
+    // Optional live-web grounding via the Playwright browse manager. Only fetch
+    // when web is allowed AND the prompt actually calls for external data —
+    // status/progress/project prompts stay grounded on local context instead.
+    const useWeb = webAllowed && promptNeedsWeb(prompt, projects);
     let grounding = '';
     if (useWeb && typeof getBrowseManager === 'function') {
       try { grounding = await gatherWebGrounding(getBrowseManager(), prompt); } catch (_) {}
@@ -253,7 +348,7 @@ export function registerGenUiExploreRoutes(app, { getBrowseManager } = {}) {
       system = `## Active agent persona\nYou are acting as the "${agentName || 'custom'}" agent. Adopt its expertise, focus, and voice when building the view:\n${agentPrompt}\n\n` + system;
     }
 
-    let userContent = `Explore this for me and return one interactive gen-ui spec:\n\n${prompt}${trail}${ctx}`;
+    let userContent = `Explore this for me and return one interactive gen-ui spec:\n\n${prompt}${trail}${ctx}${projectsBlock}`;
     if (grounding) {
       userContent += `\n\n## LIVE WEB DATA (fetched just now — current)\n${grounding}\n` +
         'Use this live data to GROUND the view with real facts and images — synthesize it into rich content (Text, Stat, List, Table, Cards, Images). Use ONLY URLs that appear above for Image `src` — never invent URLs. Do NOT turn the view into outbound links: keep the user inside Explore via `explore_into` buttons. Add an `open_url` button only sparingly (at most one "View source" affordance), not one per source.';

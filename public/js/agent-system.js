@@ -2052,11 +2052,13 @@ function openAllAgentsPage() {
   if (!page) return;
   page.style.display = 'flex';
   renderAllAgentsPage();
+  if (typeof _openOverlayStrip === 'function') _openOverlayStrip('All Agents');
 }
 
 function closeAllAgentsPage() {
   var page = document.getElementById('all-agents-page');
   if (page) page.style.display = 'none';
+  if (typeof _closeOverlayStrip === 'function') _closeOverlayStrip();
 }
 
 function renderAllAgentsPage() {
@@ -2147,11 +2149,13 @@ function openAgentActionsPage() {
   if (!page) return;
   page.style.display = 'flex';
   renderAgentActionsPage();
+  if (typeof _openOverlayStrip === 'function') _openOverlayStrip('Add Agent');
 }
 
 function closeAgentActionsPage() {
   var page = document.getElementById('agent-actions-page');
   if (page) page.style.display = 'none';
+  if (typeof _closeOverlayStrip === 'function') _closeOverlayStrip();
 }
 
 function renderAgentActionsPage() {

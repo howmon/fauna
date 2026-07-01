@@ -1916,11 +1916,7 @@ function _promptStarterDefaults() {
     { title: 'What\'s using my disk?', sub: 'Find large files and free up space', prompt: promptMap['What\'s using my disk?'] },
     { title: 'Show Q1 metrics', sub: 'Revenue, NPS and CSAT as a live dashboard card', prompt: promptMap['Show Q1 metrics'] },
     { title: 'Design a circuit', sub: 'Schematic + SPICE simulation', prompt: promptMap['Design a circuit'] },
-    { title: 'Build a dashboard', sub: 'Generate an interactive HTML artifact', prompt: promptMap['Build a dashboard'] },
-    { title: 'Explain code', sub: 'Paste code and get a clear explanation', prompt: promptMap['Explain code'] },
-    { title: 'Teach me something', sub: 'Interactive whiteboard lesson with narration', prompt: promptMap['Teach me something'] },
-    { title: 'Make a podcast', sub: 'Multi-voice dialogue from an article or topic', prompt: promptMap['Make a podcast'] },
-    { title: 'Run a Harness team', sub: 'Multi-agent code review', prompt: promptMap['Run a Harness team'] }
+    { title: 'Build a dashboard', sub: 'Generate an interactive HTML artifact', prompt: promptMap['Build a dashboard'] }
   ];
 }
 
@@ -2023,11 +2019,11 @@ function renderPromptStarters() {
   var grid = document.querySelector('#empty-state .empty-grid');
   if (!grid) return;
   var items = _dedupePromptStarters([].concat(
-    _promptStarterRecentProjects(3),
-    _promptStarterRecentTasks(2),
-    _promptStarterRecentConversationPatterns(2),
+    _promptStarterRecentProjects(2),
+    _promptStarterRecentTasks(1),
+    _promptStarterRecentConversationPatterns(1),
     _promptStarterDefaults()
-  )).slice(0, 8);
+  )).slice(0, 4);
   grid.innerHTML = items.map(function(item) {
     return '<div class="empty-card" onclick="usePrompt(this)" data-prompt="' + escHtml(item.prompt) + '" data-project-id="' + escHtml(item.projectId || '') + '" data-conv-id="' + escHtml(item.convId || '') + '" data-mode="' + escHtml(item.mode || '') + '"><strong>' + escHtml(item.title) + '</strong>' + escHtml(item.sub || '') + '</div>';
   }).join('');
