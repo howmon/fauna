@@ -9,6 +9,7 @@ import { execSync, spawnSync } from 'child_process';
 import { createRequire } from 'module';
 import { buildShellEnv } from '../lib/shell-env.js';
 import { faunaTmpFile } from '../lib/fauna-tmp.js';
+import { renderOfficeToPdf, isOfficeRenderable } from '../lib/office-render.js';
 
 const _require = createRequire(import.meta.url);
 const { augmentedPath: _AUGMENTED_PATH } = buildShellEnv(process.platform === 'win32');
@@ -228,6 +229,37 @@ export function registerDocsAndExtRoutes(app, { faunaConfigDir, appDir }) {
     try { parsed = JSON.parse((r.stdout || '').trim()); } catch (_) {}
     if (!parsed) return res.status(500).json({ ok: false, error: (r.stderr || 'write failed').slice(0, 400) });
     res.json(parsed.ok ? { ok: true, path: abs } : parsed);
+  });
+
+  // GET ?path=<file> → render any office document (docx/pptx/xlsx/…) to a
+  // cached PDF via LibreOffice and stream it inline for the artifact pane's
+  // PDF viewer. HEAD is used by the client to probe availability cheaply.
+  app.head('/api/office-render', (req, res) => {
+    const p = req.query.path;
+    if (!p) return res.status(400).end();
+    const abs = _resolveDeckAbs(String(p));
+    if (!fs.existsSync(abs) || !isOfficeRenderable(abs)) return res.status(404).end();
+    res.setHeader('Content-Type', 'application/pdf');
+    res.status(200).end();
+  });
+
+  app.get('/api/office-render', async (req, res) => {
+    const p = req.query.path;
+    if (!p) return res.status(400).json({ ok: false, error: 'path required' });
+    const abs = _resolveDeckAbs(String(p));
+    if (!fs.existsSync(abs)) return res.status(404).json({ ok: false, error: 'File not found' });
+    if (!isOfficeRenderable(abs)) return res.status(415).json({ ok: false, error: 'unsupported format: ' + path.extname(abs) });
+    try {
+      const out = await renderOfficeToPdf({ srcPath: abs });
+      if (!out.ok) {
+        return res.status(out.needsInstall ? 501 : 500).json({ ok: false, error: out.error, needsInstall: !!out.needsInstall, hint: out.hint || null });
+      }
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.sendFile(out.pdfPath);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
   });
 
   // POST { name, mime, base64 } → extract text from a base64-encoded attachment

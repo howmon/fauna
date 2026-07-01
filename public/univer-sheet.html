@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://unpkg.com; worker-src 'self' blob:; connect-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: blob: https://unpkg.com; font-src 'self' data: https://unpkg.com;" />
+  <title>Spreadsheet editor</title>
+
+  <!-- Univer preset (UMD), pinned. React/RxJS/echarts are Univer's runtime deps. -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/rxjs@7.8.1/dist/bundles/rxjs.umd.min.js"></script>
+  <script src="https://unpkg.com/echarts@5.6.0/dist/echarts.min.js"></script>
+  <script src="https://unpkg.com/@univerjs/presets@0.25.1/lib/umd/index.js"></script>
+  <script src="https://unpkg.com/@univerjs/preset-sheets-core@0.25.1/lib/umd/index.js"></script>
+  <script src="https://unpkg.com/@univerjs/preset-sheets-core@0.25.1/lib/umd/locales/en-US.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/@univerjs/preset-sheets-core@0.25.1/lib/index.css" />
+
+  <style>
+    html, body { padding: 0; margin: 0; height: 100%; background: #1e1e1e; font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    #wrap { display: flex; flex-direction: column; height: 100%; }
+    #bar {
+      display: flex; align-items: center; gap: 10px; padding: 6px 10px;
+      background: #2a2a2a; color: #e6e6e6; border-bottom: 1px solid #3a3a3a; flex: 0 0 auto;
+    }
+    #bar button {
+      font: inherit; padding: 5px 12px; border-radius: 6px; cursor: pointer;
+      background: #3b82f6; color: #fff; border: none;
+    }
+    #bar button:disabled { opacity: .55; cursor: default; }
+    #status { color: #9aa0a6; font-size: 12px; }
+    #app { flex: 1 1 auto; min-height: 0; position: relative; }
+    #err {
+      position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+      flex-direction: column; gap: 10px; color: #e6e6e6; padding: 24px; text-align: center;
+    }
+    #err code { color: #f28b82; font-size: 12px; white-space: pre-wrap; word-break: break-word; max-width: 640px; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="bar">
+      <button id="save" disabled>Save</button>
+      <span id="status">Loading…</span>
+    </div>
+    <div id="app">
+      <div id="err"><div><b>Couldn't load the spreadsheet editor.</b></div><code id="errmsg"></code></div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var qs = new URLSearchParams(location.search);
+      var FILE_PATH = qs.get('path') || '';
+      var statusEl = document.getElementById('status');
+      var saveBtn = document.getElementById('save');
+      var errBox = document.getElementById('err');
+      var errMsg = document.getElementById('errmsg');
+      var univerAPI = null;
+
+      function setStatus(t) { statusEl.textContent = t; }
+      function showError(msg) {
+        errBox.style.display = 'flex';
+        errMsg.textContent = String(msg || 'Unknown error');
+        setStatus('Error');
+      }
+
+      // ── model (server JSON) → Univer IWorkbookData snapshot ──
+      function toWorkbookData(model) {
+        var sheetOrder = [];
+        var sheets = {};
+        (model.sheets || []).forEach(function (s, idx) {
+          var sid = 'sheet-' + idx;
+          sheetOrder.push(sid);
+          var cellData = {};
+          var colCount = 26;
+          var rows = (s && s.rows) || [];
+          rows.forEach(function (cells, r) {
+            if (!cells || !cells.length) return;
+            colCount = Math.max(colCount, cells.length);
+            var rowObj = {};
+            cells.forEach(function (v, c) {
+              if (v === null || v === undefined || v === '') return;
+              if (typeof v === 'string' && v.charAt(0) === '=') rowObj[c] = { f: v };
+              else rowObj[c] = { v: v };
+            });
+            if (Object.keys(rowObj).length) cellData[r] = rowObj;
+          });
+          sheets[sid] = {
+            id: sid,
+            name: (s && s.name) || ('Sheet' + (idx + 1)),
+            rowCount: Math.max(rows.length + 20, 100),
+            columnCount: Math.max(colCount, 26),
+            cellData: cellData
+          };
+        });
+        if (!sheetOrder.length) {
+          sheets['sheet-0'] = { id: 'sheet-0', name: 'Sheet1', rowCount: 100, columnCount: 26, cellData: {} };
+          sheetOrder.push('sheet-0');
+        }
+        return { id: 'fauna-wb', name: model.name || 'Workbook', sheetOrder: sheetOrder, sheets: sheets };
+      }
+
+      // ── Univer snapshot → server JSON model ──
+      function fromSnapshot(snap) {
+        var out = [];
+        (snap.sheetOrder || []).forEach(function (sid) {
+          var s = snap.sheets[sid];
+          if (!s) return;
+          var cd = s.cellData || {};
+          var maxRow = -1, maxCol = -1;
+          Object.keys(cd).forEach(function (r) {
+            maxRow = Math.max(maxRow, parseInt(r, 10));
+            Object.keys(cd[r]).forEach(function (c) { maxCol = Math.max(maxCol, parseInt(c, 10)); });
+          });
+          var rows = [];
+          for (var r = 0; r <= maxRow; r++) {
+            var rowObj = cd[r] || {};
+            var cells = [];
+            for (var c = 0; c <= maxCol; c++) {
+              var cell = rowObj[c];
+              if (!cell) { cells.push(null); continue; }
+              if (cell.f) cells.push(cell.f);
+              else cells.push(cell.v !== undefined ? cell.v : null);
+            }
+            rows.push(cells);
+          }
+          out.push({ name: s.name || sid, rows: rows });
+        });
+        return out;
+      }
+
+      function bootUniver(model) {
+        if (typeof UniverPresets === 'undefined' || typeof UniverPresetSheetsCore === 'undefined') {
+          showError('Univer failed to load from CDN (no network?). Close and use "Open" to edit in the native app.');
+          return;
+        }
+        try {
+          var createUniver = UniverPresets.createUniver;
+          var LocaleType = UniverCore.LocaleType;
+          var mergeLocales = UniverCore.mergeLocales;
+          var UniverSheetsCorePreset = UniverPresetSheetsCore.UniverSheetsCorePreset;
+
+          var created = createUniver({
+            locale: LocaleType.EN_US,
+            locales: { 'enUS': mergeLocales(UniverPresetSheetsCoreEnUS) },
+            presets: [UniverSheetsCorePreset({ container: 'app' })]
+          });
+          univerAPI = created.univerAPI;
+          univerAPI.createWorkbook(toWorkbookData(model));
+          saveBtn.disabled = false;
+          setStatus(model.name || 'Ready');
+        } catch (e) {
+          showError((e && e.stack) || e);
+        }
+      }
+
+      function save() {
+        if (!univerAPI) return;
+        saveBtn.disabled = true;
+        setStatus('Saving…');
+        var snapshot;
+        try {
+          var wb = univerAPI.getActiveWorkbook();
+          snapshot = wb.save ? wb.save() : (wb.getSnapshot ? wb.getSnapshot() : null);
+        } catch (e) { showError(e); saveBtn.disabled = false; return; }
+        if (!snapshot) { showError('Could not read workbook snapshot.'); saveBtn.disabled = false; return; }
+        fetch('/api/sheet-write', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: FILE_PATH, sheets: fromSnapshot(snapshot) })
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          if (!d || !d.ok) throw new Error((d && d.error) || 'Save failed');
+          setStatus('Saved ' + new Date().toLocaleTimeString());
+          try { parent.postMessage({ type: 'fauna-sheet-saved', path: FILE_PATH }, '*'); } catch (_) {}
+        }).catch(function (e) {
+          setStatus('Save failed');
+          showError(e.message || e);
+        }).then(function () { saveBtn.disabled = false; });
+      }
+
+      saveBtn.addEventListener('click', save);
+
+      if (!FILE_PATH) { showError('No file path supplied.'); return; }
+      setStatus('Reading spreadsheet…');
+      fetch('/api/sheet-data?path=' + encodeURIComponent(FILE_PATH))
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          if (!res.ok || !res.j || !res.j.ok) throw new Error((res.j && res.j.error) || 'Could not read spreadsheet');
+          bootUniver(res.j);
+        })
+        .catch(function (e) { showError(e.message || e); });
+    })();
+  </script>
+</body>
+</html>

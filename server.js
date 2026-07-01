@@ -102,6 +102,7 @@ import { registerVideoRoutes } from './server/routes/video.js';
 import { registerPlaywrightMcpRoutes } from './server/routes/playwright-mcp.js';
 import { createTeamsBundle } from './server/routes/teams.js';
 import { registerDocsAndExtRoutes } from './server/routes/docs-and-ext.js';
+import { registerSheetRoutes } from './server/routes/sheets.js';
 import { startFaunaTmpJanitor } from './server/lib/fauna-tmp.js';
 import { registerSchedulingAndGuardRoutes } from './server/routes/scheduling-and-guard.js';
 import { registerRegionAndStdinRoutes } from './server/routes/region-and-stdin.js';
@@ -702,6 +703,8 @@ registerWhisperRoutes(app, { express, faunaConfigDir: FAUNA_CONFIG_DIR, augmente
 registerVideoRoutes(app, { getCopilotClient });
 // ── Document/attachment + browser-ext routes moved → server/routes/docs-and-ext.js ──
 registerDocsAndExtRoutes(app, { faunaConfigDir: FAUNA_CONFIG_DIR, appDir: __dirname });
+// ── Spreadsheet data bridge for the in-panel Univer editor ──
+registerSheetRoutes(app);
 // Sweep ~/Documents/Fauna/tmp on boot and once per day, removing anything
 // older than 30 days. Whisper audio, pandoc input, and base64 attachments
 // stage their work there so a failed operation leaves a recoverable copy.
