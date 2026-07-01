@@ -565,6 +565,19 @@ function _extractCreatedFileCandidates(command, cwd) {
   var cpMv = String(command || '').match(/^(?:cp|mv)\s+(?:-[^\s]+\s+)*(?:"[^"]+"|'[^']+'|[^\s]+)\s+(?:"([^"]+)"|'([^']+)'|([^\s|;&]+))\s*$/m);
   if (cpMv) pushMatch(cpMv[1] || cpMv[2] || cpMv[3]);
 
+  // Files written from INSIDE an inline program never appear as a shell
+  // redirect — e.g. python-pptx `prs.save("deck.pptx")`, openpyxl
+  // `wb.save('report.xlsx')`, python-docx `doc.save("memo.docx")`, or a PDF
+  // export. Scan for quoted string literals ending in an office/document
+  // extension so these generated artifacts still surface as a card. Scoped to
+  // formats that are almost always OUTPUTS (not read inputs) to avoid false
+  // positives on plain text/data files the program merely reads.
+  var OUTPUT_DOC_EXT = /\.(pptx|ppt|key|odp|docx|doc|rtf|odt|xlsx|xls|ods|numbers|pdf)$/i;
+  String(command || '').replace(/["']([^"'\n]{1,300}?\.[A-Za-z0-9]{1,6})["']/g, function(_, path) {
+    if (OUTPUT_DOC_EXT.test(path)) pushMatch(path);
+    return _;
+  });
+
   return paths;
 }
 
@@ -590,6 +603,29 @@ async function _createArtifactForFilePath(filePath) {
   }
   if (ext === 'pdf') {
     return addArtifact({ type: 'pdf', title: title, path: filePath });
+  }
+  // Binary office formats — never send through /api/read-file (it would return
+  // garbage/base64). Deck & spreadsheet open in their native app; DOCX gets its
+  // text extracted for the inline editor.
+  if (['ppt','pptx','key','odp'].includes(ext)) {
+    return addArtifact({ type: 'deck', title: title, path: filePath });
+  }
+  if (['xls','xlsx','ods','numbers'].includes(ext)) {
+    return addArtifact({ type: 'xlsx', title: title, path: filePath });
+  }
+  if (['doc','docx','rtf','odt','pages'].includes(ext)) {
+    try {
+      var docRes = await fetch('/api/extract-document', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath })
+      });
+      var docData = await docRes.json().catch(function() { return null; });
+      if (docData && docData.ok) {
+        return addArtifact({ type: 'docx', title: title, path: docData.path || filePath, content: docData.content || '', editable: docData.editable !== false });
+      }
+    } catch (_) {}
+    return addArtifact({ type: 'docx', title: title, path: filePath, editable: false });
   }
 
   var readRes;

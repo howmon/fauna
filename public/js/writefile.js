@@ -13,6 +13,8 @@ function _wfArtifactType(filePath) {
   if (ext === 'svg') return 'svg';
   if (ext === 'pdf') return 'pdf';
   if (['doc', 'docx', 'rtf', 'odt', 'pages'].includes(ext)) return 'docx';
+  if (['ppt', 'pptx', 'key', 'odp'].includes(ext)) return 'deck';
+  if (['xls', 'xlsx', 'ods', 'numbers'].includes(ext)) return 'xlsx';
   if (['js','mjs','cjs','ts','tsx','jsx','py','rb','go','rs','java','cs','php','sh','zsh','bash','css','xml','yaml','yml'].includes(ext)) return 'code';
   return 'text';
 }

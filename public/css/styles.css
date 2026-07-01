@@ -2849,8 +2849,20 @@ body.is-resizing webview { pointer-events: none !important; }
 }
 .fauna-update-details-btn:hover { color: var(--fau-text); background: var(--fau-surface3); border-color: var(--fau-border); }
 .fauna-update-progress { height: 5px; margin-top: 9px; overflow: hidden; border-radius: 99px; background: var(--fau-border); }
-.fauna-update-progress-bar { height: 100%; border-radius: 99px; background: var(--accent); transition: width .35s ease; }
+.fauna-update-progress-bar { position: relative; height: 100%; overflow: hidden; border-radius: 99px; background: var(--accent); transition: width .35s ease; }
 .fauna-update-progress-bar.running { box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 45%, transparent); }
+.fauna-update-progress-bar.running::after {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  left: -45%;
+  width: 45%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.45), transparent);
+  animation: faunaUpdateProgressSweep 1.2s ease-in-out infinite;
+}
+.fauna-update-progress-bar.error::after,
+.fauna-update-progress-bar.complete::after { content: none; }
+@keyframes faunaUpdateProgressSweep { to { transform: translateX(320%); } }
 .fauna-update-progress-bar.complete { background: var(--success); }
 .fauna-update-progress-bar.error { background: var(--error); }
 .fauna-update-log {
@@ -4688,6 +4700,41 @@ webview {
   transition: all .12s; flex-shrink: 0; white-space: nowrap;
 }
 .artifact-card-open:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+.artifact-card-menu-wrap { position: relative; flex-shrink: 0; }
+.artifact-card-more {
+  background: transparent; border: 1px solid transparent; color: var(--fau-text-muted);
+  border-radius: 5px; padding: 4px 6px; cursor: pointer; font-size: 14px;
+  display: flex; align-items: center; justify-content: center; line-height: 1;
+  transition: all .12s;
+}
+.artifact-card-more:hover { background: var(--fau-surface3); color: var(--fau-text); border-color: var(--fau-border); }
+.artifact-card-menu {
+  display: none; position: absolute; top: calc(100% + 4px); right: 0; z-index: 40;
+  min-width: 190px; padding: 4px;
+  background: var(--fau-surface); border: 1px solid var(--fau-border);
+  border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.32);
+}
+.artifact-card-menu-wrap.open .artifact-card-menu { display: block; }
+.artifact-card-menu button {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: transparent; border: none; border-radius: 5px;
+  padding: 7px 9px; font-size: 12px; color: var(--fau-text);
+  font-family: var(--font); cursor: pointer; text-align: left; white-space: nowrap;
+}
+.artifact-card-menu button:hover { background: var(--fau-surface2); }
+.artifact-card-menu button i { font-size: 14px; color: var(--fau-text-muted); }
+.artifact-binary-open {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; text-align: center; height: 100%; min-height: 260px; padding: 24px;
+}
+.artifact-binary-icon {
+  width: 64px; height: 64px; border-radius: 14px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent-dim); color: var(--accent2); font-size: 30px;
+}
+.artifact-binary-title { font-size: 14px; font-weight: 600; color: var(--fau-text); word-break: break-word; }
+.artifact-binary-hint { font-size: 12px; color: var(--fau-text-muted); max-width: 360px; line-height: 1.5; }
+.artifact-binary-actions { display: flex; gap: 8px; margin-top: 4px; }
 
 /* ── Generative UI components ───────────────────────────────────────── */
 .gui-root { width: 100%; }

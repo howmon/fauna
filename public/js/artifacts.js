@@ -250,14 +250,26 @@ function injectArtifactCard(id, containerEl) {
   if (!a) return;
   var icons = { html:'ti-brand-html5', image:'ti-photo', markdown:'ti-markdown', json:'ti-braces',
                 csv:'ti-table', text:'ti-file-text', files:'ti-folder-open', web:'ti-world', pdf:'ti-file-type-pdf', docx:'ti-file-word',
+                deck:'ti-presentation', xlsx:'ti-file-spreadsheet',
                 code:'ti-code', svg:'ti-vector', summary:'ti-align-left' };
   var labels = { html:'HTML', image:'Image', markdown:'Markdown', json:'JSON',
                  csv:'CSV', text:'Text', files:'Files', web:'Web', pdf:'PDF', docx:'DOCX', code:'Code',
+                 deck:'Deck', xlsx:'Sheet',
                  svg:'SVG', summary:'Summary' };
   var icon  = icons[a.type]  || 'ti-file';
   var label = labels[a.type] || a.type;
   var card  = document.createElement('div');
   card.className = 'artifact-card';
+  // Ellipsis menu — only for artifacts backed by a real file on disk, since
+  // "open location" / "open with app" only make sense for those.
+  var menuHtml = a.path ?
+    '<div class="artifact-card-menu-wrap">' +
+      '<button class="artifact-card-more" title="More" onclick="toggleArtifactCardMenu(event, this)"><i class="ti ti-dots"></i></button>' +
+      '<div class="artifact-card-menu">' +
+        '<button type="button" onclick="artifactCardOpenLocation(\'' + id + '\')"><i class="ti ti-folder"></i> Open file location</button>' +
+        '<button type="button" onclick="artifactCardOpenWith(\'' + id + '\')"><i class="ti ti-external-link"></i> Open with default app</button>' +
+      '</div>' +
+    '</div>' : '';
   card.innerHTML =
     _artifactThumbnailMarkup(a, 'artifact-card-thumb') +
     '<div class="artifact-card-icon"><i class="ti ' + icon + '"></i></div>' +
@@ -267,8 +279,43 @@ function injectArtifactCard(id, containerEl) {
     '</div>' +
     '<button class="artifact-card-open" onclick="openArtifact(\'' + id + '\')">' +
       '<i class="ti ti-arrow-right"></i> Open' +
-    '</button>';
+    '</button>' +
+    menuHtml;
   containerEl.appendChild(card);
+}
+
+// Toggle the per-card "more" menu; closes on outside click and on any other
+// card menu opening. Called from the ellipsis button in injectArtifactCard.
+function toggleArtifactCardMenu(ev, btn) {
+  if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+  var wrap = btn.closest('.artifact-card-menu-wrap');
+  if (!wrap) return;
+  var willOpen = !wrap.classList.contains('open');
+  document.querySelectorAll('.artifact-card-menu-wrap.open').forEach(function(w) { w.classList.remove('open'); });
+  if (willOpen) {
+    wrap.classList.add('open');
+    setTimeout(function() {
+      document.addEventListener('click', function closer(e) {
+        if (!wrap.contains(e.target)) { wrap.classList.remove('open'); document.removeEventListener('click', closer); }
+      });
+    }, 0);
+  }
+}
+
+function _artifactCardCloseMenus() {
+  document.querySelectorAll('.artifact-card-menu-wrap.open').forEach(function(w) { w.classList.remove('open'); });
+}
+
+function artifactCardOpenLocation(id) {
+  var a = state.artifacts.find(function(x) { return x.id === id; });
+  if (a && a.path && typeof openFileInFinder === 'function') openFileInFinder(a.path);
+  _artifactCardCloseMenus();
+}
+
+function artifactCardOpenWith(id) {
+  var a = state.artifacts.find(function(x) { return x.id === id; });
+  if (a && a.path && typeof openFilePath === 'function') openFilePath(a.path);
+  _artifactCardCloseMenus();
 }
 
 function removeArtifact(id) {
@@ -1423,6 +1470,24 @@ function renderArtifactContent() {
       '</div>' +
     '</div>';
 
+  } else if ((a.type === 'deck' || a.type === 'xlsx') && a.path) {
+    // Binary office formats have no faithful inline editor — the native app is
+    // the real editor. Show the file identity + one-tap open/reveal.
+    var _deckIcon = a.type === 'deck' ? 'ti-presentation' : 'ti-file-spreadsheet';
+    var _deckKind = a.type === 'deck' ? 'presentation' : 'spreadsheet';
+    var _deckPath = escHtml(a.path);
+    content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
+      '<div class="artifact-binary-open">' +
+        '<div class="artifact-binary-icon"><i class="ti ' + _deckIcon + '"></i></div>' +
+        '<div class="artifact-binary-title">' + escHtml(a.title || 'Document') + '</div>' +
+        '<div class="artifact-binary-hint">Preview isn\'t available for this ' + _deckKind + ' format. Open it in its associated app to view and edit.</div>' +
+        '<div class="artifact-binary-actions">' +
+          '<button class="artifact-card-open" onclick="openFilePath(\'' + _deckPath + '\')"><i class="ti ti-external-link"></i> Open with app</button>' +
+          '<button class="artifact-card-open" style="background:var(--fau-surface2);color:var(--fau-text);border-color:var(--fau-border)" onclick="openFileInFinder(\'' + _deckPath + '\')"><i class="ti ti-folder"></i> Reveal</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
   } else if (a.type === 'markdown' || a.type === 'summary' || a.type === 'web') {
     content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
       '<div class="artifact-prose msg-body" id="artifact-md-' + a.id + '">' + renderMarkdown(a.content || '') + '</div>' +
@@ -1512,6 +1577,10 @@ function makeArtifactToolbar(a) {
   }
   if (a.type === 'pdf' && a.path) {
     btns += '<button class="artifact-tbtn" onclick="openFilePath(\'' + a.path + '\')" title="Open file"><i class="ti ti-external-link"></i><span class="artifact-tbtn-label"> Open</span></button>';
+    btns += '<button class="artifact-tbtn" onclick="openFileInFinder(\'' + a.path + '\')" title="Reveal in Finder"><i class="ti ti-folder"></i><span class="artifact-tbtn-label"> Reveal</span></button>';
+  }
+  if ((a.type === 'deck' || a.type === 'xlsx') && a.path) {
+    btns += '<button class="artifact-tbtn" onclick="openFilePath(\'' + a.path + '\')" title="Open with associated app"><i class="ti ti-external-link"></i><span class="artifact-tbtn-label"> Open</span></button>';
     btns += '<button class="artifact-tbtn" onclick="openFileInFinder(\'' + a.path + '\')" title="Reveal in Finder"><i class="ti ti-folder"></i><span class="artifact-tbtn-label"> Reveal</span></button>';
   }
   if (a.type === 'docx' && a.path) {
@@ -1734,6 +1803,14 @@ async function previewFilePath(filePath) {
       if (!docRes.ok || !docData.ok) throw new Error((docData && docData.error) || 'Failed to preview document');
       openArtifact(addArtifact({ type: 'docx', title: filePath.split('/').pop(), path: docData.path || filePath, content: docData.content || '', editable: docData.editable !== false }));
     } catch (_) {}
+    return;
+  }
+  if (['ppt','pptx','key','odp'].includes(ext)) {
+    openArtifact(addArtifact({ type: 'deck', title: filePath.split('/').pop(), path: filePath }));
+    return;
+  }
+  if (['xls','xlsx','ods','numbers'].includes(ext)) {
+    openArtifact(addArtifact({ type: 'xlsx', title: filePath.split('/').pop(), path: filePath }));
     return;
   }
   try {
