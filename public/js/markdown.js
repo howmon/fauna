@@ -47,6 +47,15 @@ marked.use({
         var readyPlanId = planParts[0];
         return '<pre data-special-lang="file-plan"><code class="language-file-plan" data-wf-id="' + escHtml(readyPlanId) + '" data-wf-path="(file plan)"></code></pre>';
       }
+      // artifact-ref: reference to a file created by a write/shell function tool.
+      // Rendered as an empty placeholder; extractAndRenderArtifactRefs replaces
+      // it with an entity card. Performs NO write — the file already exists.
+      if (fullLang.startsWith('artifact-ref:')) {
+        var arParts = fullLang.slice('artifact-ref:'.length).split(':');
+        var arType = arParts[0] || 'text';
+        var arPath = arParts.slice(1).join(':');
+        return '<pre data-special-lang="artifact-ref"><code class="language-artifact-ref" data-art-type="' + escHtml(arType) + '" data-art-path="' + escHtml(arPath) + '"></code></pre>';
+      }
       if (lang === 'file-plan' || lang === 'workspace-edit' || lang === 'bulk-edit') {
         var planId = 'wf-' + Date.now() + '-' + Math.random().toString(36).slice(2);
         _wfContentStore[planId] = { path: '(file plan)', content: rawText, mode: 'file-plan' };

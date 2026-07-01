@@ -56,6 +56,65 @@ import { summarizeHistory } from '../lib/summarize-history.js';
 import { withTimeout } from '../lib/async-utils.js';
 import { loadAgentManifest } from '../lib/agent-manifest.js';
 
+// ── Created-file artifact detection ──────────────────────────────────────
+// Files created via the fauna_write_file / fauna_write_files / fauna_shell_exec
+// function tools bypass the client-side ```write-file / ```shell-exec render
+// path, so no entity card gets injected and the model just prints a raw path.
+// We detect the created path server-side and stream an `artifact_created`
+// event so the client can inject an entity card that opens the artifact pane.
+const _ARTIFACT_EXT_TYPE = {
+  md: 'markdown', markdown: 'markdown', json: 'json', csv: 'csv',
+  html: 'html', htm: 'html', svg: 'svg', pdf: 'pdf',
+  doc: 'docx', docx: 'docx', rtf: 'docx', odt: 'docx', pages: 'docx',
+  ppt: 'deck', pptx: 'deck', key: 'deck', odp: 'deck',
+  xls: 'xlsx', xlsx: 'xlsx', ods: 'xlsx', numbers: 'xlsx',
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image',
+};
+const _ARTIFACT_CODE_EXT = new Set([
+  'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'rb', 'go', 'rs', 'java',
+  'cs', 'php', 'sh', 'zsh', 'bash', 'css', 'xml', 'yaml', 'yml', 'txt',
+]);
+function artifactTypeForPath(p) {
+  const ext = (String(p || '').split('.').pop() || '').toLowerCase();
+  if (_ARTIFACT_EXT_TYPE[ext]) return _ARTIFACT_EXT_TYPE[ext];
+  if (_ARTIFACT_CODE_EXT.has(ext)) return 'code';
+  return 'text';
+}
+// Extensions worth surfacing as a card from a shell command. Kept tight so
+// intermediate .log / .tmp redirects don't spam the conversation with cards.
+const _SHELL_PRESENTABLE_EXT = /\.(pptx|ppt|key|odp|docx|doc|rtf|odt|pages|xlsx|xls|ods|numbers|pdf|html|htm|csv|md|markdown|json|svg|png|jpe?g|gif|webp)$/i;
+function _resolveArtifactPath(p, cwd) {
+  let raw = String(p || '').trim().replace(/^['"]|['"]$/g, '');
+  if (!raw) return '';
+  if (raw.startsWith('~/')) raw = path.join(os.homedir(), raw.slice(2));
+  else if (!path.isAbsolute(raw)) raw = path.resolve(cwd || os.homedir(), raw);
+  return raw;
+}
+// Scan a shell command for presentable output files it created (python-pptx
+// prs.save("deck.pptx"), openpyxl wb.save('report.xlsx'), redirects, -o flags).
+// Only returns paths that actually exist on disk as regular files.
+function detectShellArtifacts(command, cwd) {
+  const out = [];
+  const seen = new Set();
+  const push = (p) => {
+    if (!p || /[*?$`]/.test(p) || /^-/.test(p)) return;
+    const resolved = _resolveArtifactPath(p, cwd);
+    if (!resolved || seen.has(resolved) || !_SHELL_PRESENTABLE_EXT.test(resolved)) return;
+    try { if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) return; } catch (_) { return; }
+    seen.add(resolved);
+    out.push({ path: resolved, type: artifactTypeForPath(resolved) });
+  };
+  const cmd = String(command || '');
+  // Quoted string literals ending in a file extension — catches files saved
+  // from inside python/node scripts run via -c / -e or a heredoc.
+  cmd.replace(/["']([^"'\n]{1,300}?\.[A-Za-z0-9]{1,6})["']/g, (m, p) => { push(p); return m; });
+  // Redirects and tee targets.
+  cmd.replace(/(?:>>?|\btee\b)\s+([^\s;|&]+)/g, (m, p) => { push(p); return m; });
+  // -o / --output / --out targets.
+  cmd.replace(/(?:-o|--output|--out)[=\s]+([^\s;|&]+)/g, (m, p) => { push(p); return m; });
+  return out;
+}
+
 function buildCustomMcpContext(status) {
   const servers = Array.isArray(status?.servers) ? status.servers : [];
   if (!servers.length) return '';
@@ -1127,6 +1186,15 @@ export function registerChatRoute(app, {
               try { registerDevServer(child, { command, cwd: effectiveCwd }); } catch (_) {}
             },
           });
+          // Surface any presentable files this command created as entity cards.
+          // Only on a clean exit so we don't card partial/failed output.
+          if (result && result.exitCode === 0 && !result.killed && !result.timedOut) {
+            try {
+              for (const art of detectShellArtifacts(command, result.cwd || effectiveCwd)) {
+                send({ type: 'artifact_created', path: art.path, artType: art.type });
+              }
+            } catch (_) { /* non-fatal */ }
+          }
           return formatShellResultForLLM(result);
         },
 
@@ -2073,6 +2141,23 @@ export function registerChatRoute(app, {
               }
               allMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolContent });
               toolNameByCallId.set(tc.id, toolName);
+              // Entity-card artifacts for files created via the write tools —
+              // the client-side ```write-file render path never runs for a
+              // function-tool write, so emit the card signal directly.
+              if (toolName === 'fauna_write_file' || toolName === 'fauna_write_files') {
+                try {
+                  const parsedWrite = JSON.parse(toolContent);
+                  if (parsedWrite && parsedWrite.ok !== false) {
+                    const createdRecords = [];
+                    if (parsedWrite.result && parsedWrite.result.path) createdRecords.push(parsedWrite.result);
+                    if (Array.isArray(parsedWrite.results)) createdRecords.push(...parsedWrite.results);
+                    for (const rec of createdRecords) {
+                      if (!rec || !rec.path || rec.op === 'skip' || rec.op === 'delete') continue;
+                      send({ type: 'artifact_created', path: rec.path, artType: artifactTypeForPath(rec.path) });
+                    }
+                  }
+                } catch (_) { /* non-fatal */ }
+              }
               // Verifier bookkeeping: record that the model actually emitted
               // a widget this turn so the post-stream check doesn't false-flag
               // a legitimate "Here is the widget" message.

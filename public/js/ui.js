@@ -1069,6 +1069,7 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
     extractAndRenderBrowserActions(content, el, true);
     if (typeof extractAndRenderBrowserExtActions === 'function') extractAndRenderBrowserExtActions(content, el, true);
     extractAndRenderWriteFile(el, true);
+    if (typeof extractAndRenderArtifactRefs === 'function') extractAndRenderArtifactRefs(el, null);
     extractAndRenderSaveInstruction(content, el, true);
     extractArtifactsFromBuffer(content, el, false);
     if (typeof extractAndRenderGenUI === 'function') extractAndRenderGenUI(content, el, true);

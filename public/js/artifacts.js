@@ -318,6 +318,44 @@ function artifactCardOpenWith(id) {
   _artifactCardCloseMenus();
 }
 
+// Render entity cards for ```artifact-ref fences. These mark files that were
+// created via the write/shell function tools (server emits `artifact_created`,
+// chat.js bakes the fences into the saved message). Unlike write-file blocks,
+// this performs NO disk write — the file already exists — it only injects the
+// clickable card. Placeholders are removed after processing so re-invocation
+// (history reload, background re-render) is idempotent.
+function extractAndRenderArtifactRefs(messageEl, convId) {
+  if (!messageEl || !messageEl.querySelector) return;
+  var body = messageEl.querySelector('.msg-body');
+  if (!body) return;
+  var codes = body.querySelectorAll('code.language-artifact-ref');
+  if (!codes.length) return;
+  var container = body.querySelector(':scope > .wf-created-artifacts');
+  if (!container) {
+    container = document.createElement('div');
+    container.className = 'wf-created-artifacts';
+    body.appendChild(container);
+  } else {
+    body.appendChild(container);
+  }
+  Array.from(codes).forEach(function(code) {
+    var path = code.dataset ? code.dataset.artPath : '';
+    var type = (code.dataset ? code.dataset.artType : '') || 'text';
+    var pre = code.closest ? code.closest('pre') : code.parentNode;
+    if (pre && pre.parentNode) pre.parentNode.removeChild(pre);
+    if (!path) return;
+    // Reuse an existing artifact for this path instead of creating a duplicate.
+    var existing = state.artifacts.find(function(a) { return a.path === path; });
+    var id = existing ? existing.id : addArtifact({
+      type: type,
+      title: path.split('/').pop() || path,
+      path: path,
+      convId: convId || state.currentId
+    });
+    injectArtifactCard(id, container);
+  });
+}
+
 function removeArtifact(id) {
   var idx = state.artifacts.findIndex(function(a) { return a.id === id; });
   var artifact = idx !== -1 ? state.artifacts[idx] : null;

@@ -1287,6 +1287,11 @@ async function streamResponse(conv) {
   // Track widgets emitted during this assistant turn so they can be persisted
   // on the message and remounted after a reload.
   var _streamWidgets = [];
+  // Track files created via the write/shell function tools this turn. The
+  // server emits `artifact_created` events for them; we buffer here and append
+  // ```artifact-ref fences to the message at stream end so entity cards render
+  // (and persist across reload) even though no ```write-file block was emitted.
+  var _streamArtifacts = [];
   // Track the most recent plan emitted by fauna_plan so it persists on the
   // message and can be remounted after a reload.
   var _currentPlan = null;
@@ -1894,6 +1899,15 @@ async function streamResponse(conv) {
             _addToolStatus(toolLabel);
             if (isActive()) scrollBottom();
           }
+          if (evt.type === 'artifact_created' && evt.path) {
+            // A file created via a write/shell function tool — buffer it so a
+            // ```artifact-ref fence is appended at stream end (dedupe by path).
+            var _artPath = String(evt.path);
+            if (!_streamArtifacts.some(function(a) { return a.path === _artPath; })) {
+              _streamArtifacts.push({ path: _artPath, type: evt.artType || 'text' });
+              dbg('artifact_created: ' + (evt.artType || 'text') + ' ' + _artPath, 'ok');
+            }
+          }
           if (evt.type === 'plan_update') {
             // Preserve existing substeps by id when the model resends the full plan.
             var prevSubs = {};
@@ -2180,6 +2194,17 @@ async function streamResponse(conv) {
     var _meterFn = typeof updateContextMeterGranular === 'function' ? updateContextMeterGranular : updateContextMeter;
     _meterFn({ sysChars: _ctxSysChars, msgChars: _ctxMsgChars, usage: _ctxUsage, outputTokens: tokenCount, model: state.model, sysParts: _ctxSysParts, gates: _ctxGates });
 
+    // Append ```artifact-ref fences for any files the write/shell tools created
+    // this turn. Doing it here (not mid-stream) keeps the cards after the
+    // model's prose, and baking them into the saved content makes them
+    // re-render as entity cards on reload — no separate persistence needed.
+    if (_streamArtifacts.length) {
+      _streamArtifacts.forEach(function(a) {
+        if (!a || !a.path) return;
+        buffer += '\n\n```artifact-ref:' + (a.type || 'text') + ':' + a.path + '\n```';
+      });
+    }
+
     // Always save the AI message regardless of which conv is active
     var aiMsg = { role: 'assistant', content: buffer };
     if (_currentAgentInfo) aiMsg.agentInfo = _currentAgentInfo;
@@ -2316,6 +2341,7 @@ async function streamResponse(conv) {
 
         var writeResults = await extractAndRenderWriteFile(msgEl, false, convId);
         var writeFailed = Array.isArray(writeResults) && writeResults.some(function(r) { return r.status === 'rejected'; });
+        if (typeof extractAndRenderArtifactRefs === 'function') extractAndRenderArtifactRefs(msgEl, convId);
         extractAndRenderFigmaExec(buffer, msgEl, true);
         var suppressShellAutoRun = !!(conv._suppressShellAutoRunOnce || conv._writeRepairMode || writeFailed);
         extractAndRenderShellExec(buffer, msgEl, suppressShellAutoRun, convId);
@@ -2426,6 +2452,7 @@ async function streamResponse(conv) {
       if (typeof initMermaidInContainer === 'function') initMermaidInContainer(bodyEl);
       var bgWriteResults = await extractAndRenderWriteFile(msgEl, false, convId);
       var bgWriteFailed = Array.isArray(bgWriteResults) && bgWriteResults.some(function(r) { return r.status === 'rejected'; });
+      if (typeof extractAndRenderArtifactRefs === 'function') extractAndRenderArtifactRefs(msgEl, convId);
       extractAndRenderFigmaExec(buffer, msgEl, true);
       var suppressShellAutoRunFinal = !!(conv._suppressShellAutoRunOnce || conv._writeRepairMode || bgWriteFailed);
       extractAndRenderShellExec(buffer, msgEl, suppressShellAutoRunFinal, convId);  // auto-run continues in background unless explicitly suppressed
