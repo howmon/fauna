@@ -4431,7 +4431,7 @@ body { animation: none; }
   flex-shrink: 1;
   position: relative;
 }
-#artifact-pane.open { min-width: 280px; max-width: min(900px, max(360px, calc(100vw - 800px))); border-left: 1px solid var(--fau-border); }
+#artifact-pane.open { min-width: 280px; max-width: min(900px, calc(100vw - 360px)); border-left: 1px solid var(--fau-border); }
 #artifact-pane.resizing { transition: none; user-select: none; }
 #artifact-resize-handle {
   position: absolute; left: 0; top: 0; bottom: 0; width: 5px;
@@ -7064,6 +7064,7 @@ textarea.builder-find-active {
 .home-shell {
   display: grid; grid-template-columns: minmax(0, 1fr);
   width: 100%; height: 100%; min-height: 0;
+  container: home / inline-size;
 }
 .home-main {
   overflow-y: auto; min-width: 0; padding: 24px clamp(20px, 4vw, 56px) 36px;
@@ -7323,16 +7324,19 @@ textarea.builder-find-active {
 .artifact-library-muted { color: var(--fau-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-library-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 
-@media (max-width: 1080px) {
+/* Home reflows on its own available width (container), not the viewport, so it
+   stays readable when the artifact pane is open and the page is narrow. */
+@container home (max-width: 1080px) {
   .home-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .home-quick { grid-template-columns: 1fr; }
 }
-@media (max-width: 820px) {
-  .home-shell { grid-template-columns: 1fr; }
+@container home (max-width: 820px) {
   .home-main { padding: 20px 14px 28px; }
   .home-top { flex-direction: column; }
   .home-grid { grid-template-columns: 1fr; }
   .home-artifact-grid { grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); }
+}
+@media (max-width: 820px) {
   .artifact-library.grid { grid-template-columns: 1fr; padding: 14px; }
   .artifact-library-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
   .artifact-library-head { display: none; }
