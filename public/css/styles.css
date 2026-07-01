@@ -422,7 +422,7 @@ button .ti, label .ti { pointer-events: none; }
 .app-rail-top {
   flex: 1 1 auto;
   min-height: 0;
-  margin-top: 32px;
+  margin-top: 6px;
   overflow: hidden;
 }
 .app-rail-bottom {
