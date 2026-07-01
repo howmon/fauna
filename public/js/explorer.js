@@ -880,16 +880,13 @@
 
   window.toggleExplorerSessions = function (force) {
     var panel = document.getElementById('explorer-sessions-panel');
-    var back = document.getElementById('explorer-sessions-backdrop');
     if (!panel) return;
     var open = (force !== undefined) ? !!force : panel.hasAttribute('hidden');
     if (open) {
       renderSessionsList();
       panel.removeAttribute('hidden');
-      if (back) back.removeAttribute('hidden');
     } else {
       panel.setAttribute('hidden', '');
-      if (back) back.setAttribute('hidden', '');
     }
   };
 
@@ -1025,34 +1022,35 @@
 
   function renderExplorerShell(body) {
     body.innerHTML =
-      '<div class="explorer-shell">' +
-        '<div class="explorer-topbar">' +
-          '<button class="explorer-menu-btn" onclick="toggleExplorerSessions()" title="Sessions" aria-label="Sessions"><i class="ti ti-menu-2"></i></button>' +
-          '<div id="explorer-breadcrumb" class="explorer-breadcrumb"></div>' +
-          '<button class="explorer-map-btn" id="explorer-map-btn" hidden onclick="toggleExplorerMap()" title="Branch map">' +
-            '<i class="ti ti-sitemap"></i><span class="explorer-map-count">0</span>' +
-          '</button>' +
-          '<div id="explorer-controls" class="explorer-controls"></div>' +
+      '<div class="explorer-page-flex">' +
+        '<aside class="explorer-sessions" id="explorer-sessions-panel">' +
+          '<div class="explorer-sessions-top">' +
+            '<span class="explorer-sessions-brand"><i class="ti ti-compass"></i> Explore</span>' +
+            '<button class="explorer-chat-x" onclick="toggleExplorerSessions(false)" aria-label="Close"><i class="ti ti-x"></i></button>' +
+          '</div>' +
+          '<div class="explorer-sessions-actions">' +
+            '<button class="explorer-sessions-act" onclick="_exNewSession()"><i class="ti ti-edit"></i> New exploration</button>' +
+          '</div>' +
+          '<div class="explorer-sessions-secthead"><i class="ti ti-chevron-down"></i><span>Recent explorations</span></div>' +
+          '<div class="explorer-sessions-list" id="explorer-sessions-list"></div>' +
+        '</aside>' +
+        '<div class="explorer-shell">' +
+          '<div class="explorer-topbar">' +
+            '<button class="explorer-menu-btn" onclick="toggleExplorerSessions()" title="Sessions" aria-label="Sessions"><i class="ti ti-menu-2"></i></button>' +
+            '<div id="explorer-breadcrumb" class="explorer-breadcrumb"></div>' +
+            '<button class="explorer-map-btn" id="explorer-map-btn" hidden onclick="toggleExplorerMap()" title="Branch map">' +
+              '<i class="ti ti-sitemap"></i><span class="explorer-map-count">0</span>' +
+            '</button>' +
+            '<div id="explorer-controls" class="explorer-controls"></div>' +
+          '</div>' +
+          '<div id="explorer-content" class="explorer-content"></div>' +
         '</div>' +
-        '<div id="explorer-content" class="explorer-content"></div>' +
       '</div>' +
       '<div class="explorer-trail-backdrop" id="explorer-trail-backdrop" hidden onclick="_explorerToggleTrail(false)"></div>' +
       '<div class="explorer-trail-pop" id="explorer-trail-pop" hidden>' +
         '<div class="explorer-trail-head"><i class="ti ti-route"></i><span>Your trail</span></div>' +
         '<div class="explorer-trail-list" id="explorer-trail-list"></div>' +
       '</div>' +
-      '<div class="explorer-sessions-backdrop" id="explorer-sessions-backdrop" hidden onclick="toggleExplorerSessions(false)"></div>' +
-      '<aside class="explorer-sessions" id="explorer-sessions-panel" hidden>' +
-        '<div class="explorer-sessions-top">' +
-          '<span class="explorer-sessions-brand"><i class="ti ti-compass"></i> Explore</span>' +
-          '<button class="explorer-chat-x" onclick="toggleExplorerSessions(false)" aria-label="Close"><i class="ti ti-x"></i></button>' +
-        '</div>' +
-        '<div class="explorer-sessions-actions">' +
-          '<button class="explorer-sessions-act" onclick="_exNewSession()"><i class="ti ti-edit"></i> New exploration</button>' +
-        '</div>' +
-        '<div class="explorer-sessions-secthead"><i class="ti ti-chevron-down"></i><span>Recent explorations</span></div>' +
-        '<div class="explorer-sessions-list" id="explorer-sessions-list"></div>' +
-      '</aside>' +
       '<div class="explorer-sessions-backdrop" id="explorer-map-backdrop" hidden onclick="toggleExplorerMap(false)"></div>' +
       '<aside class="explorer-map-panel" id="explorer-map-panel" hidden>' +
         '<div class="explorer-sessions-head">' +

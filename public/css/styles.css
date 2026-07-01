@@ -7242,7 +7242,7 @@ textarea.builder-find-active {
 .home-artifact-tile span { min-width: 0; }
 .home-artifact-tile strong { display: block; font-size: 12.5px; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .home-artifact-tile small { display: block; margin-top: 2px; color: var(--fau-text-muted); font-size: 11px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.home-link-row { justify-content: center; color: var(--accent); font-weight: 700; }
+.home-link-row { justify-content: flex-start; color: var(--accent); font-weight: 700; }
 .home-empty-row { padding: 14px 10px; color: var(--fau-text-muted); font-size: 13px; }
 
 /* ── Artifact Library Page ─────────────────────────────────────────────── */
@@ -11517,6 +11517,13 @@ mark.find-hit.find-hit-active {
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.explorer-page-flex {
+  display: flex;
+  height: 100%;
+  min-height: 0;
 }
 .explorer-topbar {
   position: fixed;
@@ -12014,16 +12021,14 @@ mark.find-hit.find-hit-active {
 .explorer-sessions[hidden],
 .explorer-map-panel[hidden] { display: none !important; }
 .explorer-sessions {
-  position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  width: 290px;
+  position: relative;
+  flex: 0 0 var(--fau-sidebar-w, 230px);
+  width: var(--fau-sidebar-w, 230px);
   max-width: 82%;
-  background: var(--fau-bg);
+  height: 100%;
+  background: var(--fau-sidebar);
   border-right: 1px solid var(--fau-border);
-  box-shadow: 2px 0 24px rgba(0, 0, 0, 0.25);
-  z-index: 19;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   padding: 0;

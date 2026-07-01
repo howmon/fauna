@@ -618,6 +618,8 @@ function closeAppPage(opts) {
     if (holdUntil && Date.now() < holdUntil) return;
   }
   if (typeof closeProjectHub === 'function') closeProjectHub();
+  _closeGlobalPages('');
+  _closeOverlayStrip();
   _closeReusableAppPages('');
   setAppRailActive('conversations');
   if (typeof setConversationRailVisible === 'function') setConversationRailVisible(true);
