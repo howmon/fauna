@@ -4431,7 +4431,7 @@ body { animation: none; }
   flex-shrink: 1;
   position: relative;
 }
-#artifact-pane.open { min-width: 280px; max-width: min(900px, calc(100vw - 360px)); border-left: 1px solid var(--fau-border); }
+#artifact-pane.open { min-width: 280px; max-width: min(900px, max(360px, calc(100vw - 800px))); border-left: 1px solid var(--fau-border); }
 #artifact-pane.resizing { transition: none; user-select: none; }
 #artifact-resize-handle {
   position: absolute; left: 0; top: 0; bottom: 0; width: 5px;
