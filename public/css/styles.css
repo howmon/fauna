@@ -3037,7 +3037,7 @@ body.is-resizing webview { pointer-events: none !important; }
   align-items: center;
   gap: 8px;
   height: 44px;
-  padding: 0 14px 0 76px;   /* left pad clears the native macOS traffic lights */
+  padding: 0 14px 0 92px;   /* left pad clears the native macOS traffic lights + breathing room before the title */
   background: var(--fau-surface);
   border-bottom: 1px solid var(--fau-border);
   -webkit-app-region: drag;
@@ -3069,7 +3069,7 @@ body:not(.app-page-open) #sidebar-header { padding-top: 12px !important; }
 body:not(.app-page-open) #agent-builder-panel { top: 44px; height: calc(100vh - 44px); }
 body:not(.app-page-open) #topbar {
   position: fixed; top: 0; left: 0; right: 0; z-index: 12001;
-  height: 44px; padding: 0 12px 0 76px; box-sizing: border-box;
+  height: 44px; padding: 0 12px 0 92px; box-sizing: border-box;
   background: var(--fau-surface); border-bottom: 1px solid var(--fau-border);
 }
 #titlebar-drawer-btn {
@@ -7821,7 +7821,7 @@ body.win-platform #agent-builder-panel { padding-top: 0; }
   position: fixed;
   inset: 0;
   background: #1e1e1e;
-  z-index: 1100;
+  z-index: 13100; /* above the fixed window title strip (#app-titlebar / #topbar) */
   display: flex;
   flex-direction: column;
   font-family: var(--font-sans, system-ui, sans-serif);
@@ -7995,7 +7995,7 @@ body.win-platform .acv-header {
 
 /* ── Project Hub Panel ─────────────────────────────────────────────────── */
 .project-hub-panel {
-  position: fixed; top: 0; right: 0; bottom: 0; width: var(--hub-w, 720px);
+  position: fixed; top: 44px; right: 0; bottom: 0; width: var(--hub-w, 720px);
   background: var(--fau-surface); border-left: 1px solid var(--fau-border);
   display: none; flex-direction: column; z-index: 500;
   box-shadow: -12px 0 40px rgba(0,0,0,.45);

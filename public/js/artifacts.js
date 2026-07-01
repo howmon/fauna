@@ -550,6 +550,7 @@ window.faunaTitlebarDrawer = function (ev) {
 };
 
 function _openAppPage(pageId, title) {
+  if (typeof closeProjectHub === 'function') closeProjectHub();
   _closeReusableAppPages(pageId);
   _parkReusableAppPanels();
   _closeGlobalPages('');
@@ -616,6 +617,7 @@ function closeAppPage(opts) {
     var holdUntil = Number(window.__faunaSettingsInteractionUntil || 0);
     if (holdUntil && Date.now() < holdUntil) return;
   }
+  if (typeof closeProjectHub === 'function') closeProjectHub();
   _closeReusableAppPages('');
   setAppRailActive('conversations');
   if (typeof setConversationRailVisible === 'function') setConversationRailVisible(true);
@@ -640,6 +642,7 @@ function closeAppPage(opts) {
 // than #app-page, but they still adopt the uniform full-width title strip so
 // the rail drops below it (Teams-style), matching every other full page.
 function _openOverlayStrip(title) {
+  if (typeof closeProjectHub === 'function') closeProjectHub();
   document.body.classList.add('app-page-open');
   document.body.dataset.pageStrip = 'titlebar';
   document.body.classList.remove('has-drawer');
@@ -991,9 +994,9 @@ function renderHomePage() {
           '<button class="home-quick-tile" onclick="closeHomePage();openAllConversations()"><i class="ti ti-messages"></i><span><strong>' + escHtml(activeLabel) + '</strong><small>' + escHtml(activeSub) + '</small></span><i class="ti ti-arrow-up-right home-quick-go"></i></button>' +
         '</div>' +
         '<div class="home-grid">' +
-          '<section class="home-panel"><div class="home-section-title"><i class="ti ti-clock"></i> Recent conversations</div>' + recentRows + '</section>' +
-          '<section class="home-panel"><div class="home-section-title"><i class="ti ti-star"></i> Projects</div>' + projectCards + '</section>' +
-          '<section class="home-panel"><div class="home-section-title"><i class="ti ti-sparkles"></i> Artifacts</div>' + artifactRows + '<button class="home-link-row" onclick="closeHomePage();openAllArtifactsPage()">Artifact library <i class="ti ti-arrow-right"></i></button></section>' +
+          '<section class="home-panel"><div class="home-section-title"><i class="ti ti-message-circle"></i> Recent conversations</div>' + recentRows + (convs.length > 5 ? '<button class="home-link-row" onclick="closeHomePage();openAllConversations()">View all <i class="ti ti-arrow-right"></i></button>' : '') + '</section>' +
+          '<section class="home-panel"><div class="home-section-title"><i class="ti ti-folder"></i> Projects</div>' + projectCards + (projects.length > 5 ? '<button class="home-link-row" onclick="closeHomePage();openAllProjects()">View all <i class="ti ti-arrow-right"></i></button>' : '') + '</section>' +
+          '<section class="home-panel"><div class="home-section-title"><i class="ti ti-layout-grid"></i> Artifacts</div>' + artifactRows + (artifacts.length > 5 ? '<button class="home-link-row" onclick="closeHomePage();openAllArtifactsPage()">View all <i class="ti ti-arrow-right"></i></button>' : '') + '</section>' +
         '</div>' +
       '</main>' +
     '</div>';
