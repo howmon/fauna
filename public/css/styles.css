@@ -7330,7 +7330,9 @@ textarea.builder-find-active {
 }
 .artifact-library-card p { margin: 0; color: var(--fau-text-muted); font-size: 12px; line-height: 1.4; min-height: 34px; overflow-wrap: anywhere; }
 .artifact-library-card-meta { color: var(--fau-text-dim); font-size: 11px; margin-top: auto; }
-.artifact-library-card-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.artifact-library-card-actions { display: flex; gap: 8px; flex-wrap: nowrap; align-items: center; }
+.artifact-library-card-actions .proj-action-btn { min-width: 0; white-space: nowrap; }
+.artifact-library-card-actions .proj-icon-btn { margin-left: auto; flex-shrink: 0; }
 .artifact-library.list { display: flex; flex-direction: column; gap: 0; padding-top: 0; }
 .artifact-library-row {
   display: grid; grid-template-columns: minmax(180px, 1.6fr) minmax(120px, 1fr) minmax(150px, 1.2fr) 88px minmax(160px, auto);

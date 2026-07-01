@@ -1122,8 +1122,10 @@ function deleteArtifactFromLibrary(convId, artifactId, event) {
     else closeArtifactPane();
   }
   renderArtifactTabs();
-  if (document.getElementById('home-page')?.style.display !== 'none' && typeof renderHomePage === 'function') renderHomePage();
-  if (document.getElementById('all-artifacts-page')?.style.display !== 'none' && typeof renderAllArtifactsPage === 'function') renderAllArtifactsPage();
+  var homeHost = _getAppPageBody('home') || (document.getElementById('home-page') && document.getElementById('home-page').style.display !== 'none' ? document.getElementById('home-page') : null);
+  if (homeHost && typeof renderHomePage === 'function') renderHomePage();
+  var artifactsHost = _getAppPageBody('artifacts') || (document.getElementById('all-artifacts-page') && document.getElementById('all-artifacts-page').style.display !== 'none' ? document.getElementById('all-artifacts-page') : null);
+  if (artifactsHost && typeof renderAllArtifactsPage === 'function') renderAllArtifactsPage();
 }
 
 function goToArtifactConversation(convId) {
