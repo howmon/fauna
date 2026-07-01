@@ -366,11 +366,72 @@ export function registerGenUiExploreRoutes(app, { getBrowseManager } = {}) {
         'Use this live data to GROUND the view with real facts and images — synthesize it into rich content (Text, Stat, List, Table, Cards, Images). Use ONLY URLs that appear above for Image `src` — never invent URLs. Do NOT turn the view into outbound links: keep the user inside Explore via `explore_into` buttons. Add an `open_url` button only sparingly (at most one "View source" affordance), not one per source.';
     }
 
+    // Derive a title: root props.title → first Heading → prompt slice.
+    const deriveTitle = (s) => {
+      let t = '';
+      const rootEl = s.elements[s.root];
+      if (rootEl && rootEl.props && rootEl.props.title) t = String(rootEl.props.title);
+      if (!t) {
+        for (const k of Object.keys(s.elements)) {
+          const el = s.elements[k];
+          if (el && el.type === 'Heading' && el.props && el.props.text) { t = String(el.props.text); break; }
+        }
+      }
+      return t || prompt.slice(0, 60);
+    };
+
     try {
       const client = getCopilotClient();
-      // Try the requested model, then a known-reliable JSON fallback, until one
-      // returns a parseable gen-ui spec.
+      // Try the requested model, then a known-reliable JSON fallback.
       const fallback = 'gpt-4.1';
+      const messagesFor = () => ([
+        { role: 'system', content: system },
+        { role: 'user', content: userContent },
+      ]);
+
+      // ── Streaming path (SSE) ──────────────────────────────────────────────
+      // Paint the Explore view progressively as the spec JSON arrives, instead
+      // of blocking on the whole completion. The client parses the accumulated
+      // partial JSON, closes open structures, and re-renders as it grows.
+      if (body.stream === true) {
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
+        res.setHeader('Connection', 'keep-alive');
+        if (typeof res.flushHeaders === 'function') res.flushHeaders();
+        const sse = (obj) => { try { res.write('data: ' + JSON.stringify(obj) + '\n\n'); } catch (_) {} };
+        let raw = '';
+        try {
+          const stream = await client.chat.completions.create({
+            model, max_tokens: 8000, stream: true, messages: messagesFor(),
+          });
+          for await (const chunk of stream) {
+            const piece = chunk?.choices?.[0]?.delta?.content || '';
+            if (piece) { raw += piece; sse({ type: 'delta', text: piece }); }
+          }
+        } catch (e) {
+          console.warn('[genui-explore] stream error:', (e && e.message) || e);
+        }
+        let spec = extractSpecJson(raw);
+        // Fall back to a reliable JSON model if the streamed output didn't parse.
+        if (!(spec && spec.root && spec.elements) && fallback !== model) {
+          try {
+            const resp = await client.chat.completions.create({
+              model: fallback, max_tokens: 8000, messages: messagesFor(),
+            });
+            const rawOut = resp?.choices?.[0]?.message?.content || '';
+            const parsed = extractSpecJson(rawOut);
+            if (parsed && parsed.root && parsed.elements) spec = parsed;
+          } catch (_) {}
+        }
+        if (!(spec && spec.root && spec.elements)) {
+          sse({ type: 'error', error: 'Model did not return a valid gen-ui spec' });
+          return res.end();
+        }
+        sse({ type: 'done', ok: true, title: deriveTitle(spec), spec, grounded: !!grounding });
+        return res.end();
+      }
+
+      // ── Non-streaming path ────────────────────────────────────────────────
       const chain = [model];
       if (fallback !== model) chain.push(fallback);
 
@@ -383,10 +444,7 @@ export function registerGenUiExploreRoutes(app, { getBrowseManager } = {}) {
           response = await client.chat.completions.create({
             model: m,
             max_tokens: 8000,
-            messages: [
-              { role: 'system', content: system },
-              { role: 'user', content: userContent },
-            ],
+            messages: messagesFor(),
           });
         } catch (e) {
           lastErr = (e && e.message) || 'request failed';
@@ -407,21 +465,15 @@ export function registerGenUiExploreRoutes(app, { getBrowseManager } = {}) {
           detail: lastErr || (lastRaw ? lastRaw.slice(0, 300) : 'empty response'),
         });
       }
-      // Derive a title: root props.title → first Heading → root type.
-      let title = '';
-      const rootEl = spec.elements[spec.root];
-      if (rootEl && rootEl.props && rootEl.props.title) title = String(rootEl.props.title);
-      if (!title) {
-        for (const k of Object.keys(spec.elements)) {
-          const el = spec.elements[k];
-          if (el && el.type === 'Heading' && el.props && el.props.text) { title = String(el.props.text); break; }
-        }
-      }
-      if (!title) title = prompt.slice(0, 60);
-      res.json({ ok: true, title, spec, grounded: !!grounding });
+      res.json({ ok: true, title: deriveTitle(spec), spec, grounded: !!grounding });
     } catch (e) {
       console.warn('[genui-explore] generation failed:', e && e.message);
-      res.status(500).json({ ok: false, error: e.message || 'generation failed' });
+      if (res.headersSent) {
+        try { res.write('data: ' + JSON.stringify({ type: 'error', error: e.message || 'generation failed' }) + '\n\n'); } catch (_) {}
+        try { res.end(); } catch (_) {}
+      } else {
+        res.status(500).json({ ok: false, error: e.message || 'generation failed' });
+      }
     }
   });
 }

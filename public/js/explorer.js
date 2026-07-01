@@ -138,6 +138,71 @@
     else renderFrontDoor();
   };
 
+  // ── Partial-spec parsing (streaming) ───────────────────────────────────
+  // While the gen-ui JSON streams in token-by-token, we repeatedly try to
+  // parse the incomplete text into a renderable spec so the view can grow
+  // progressively instead of blocking on the full completion. The tail is
+  // usually a truncated string / object; we close open structures and trim
+  // the last few chars until it parses.
+
+  function _exIsRenderableSpec(spec) {
+    return !!(spec && spec.root && spec.elements && spec.elements[spec.root]);
+  }
+
+  function _exCloseOpenStructures(s) {
+    var stack = [];
+    var inStr = false, esc = false;
+    for (var i = 0; i < s.length; i++) {
+      var ch = s.charAt(i);
+      if (inStr) {
+        if (esc) { esc = false; }
+        else if (ch === '\\') { esc = true; }
+        else if (ch === '"') { inStr = false; }
+        continue;
+      }
+      if (ch === '"') { inStr = true; }
+      else if (ch === '{' || ch === '[') { stack.push(ch); }
+      else if (ch === '}' || ch === ']') { stack.pop(); }
+    }
+    var out = s;
+    if (inStr) out += '"';
+    out = out.replace(/[\s,]+$/, '');
+    if (/:$/.test(out)) out += 'null';
+    for (var j = stack.length - 1; j >= 0; j--) {
+      out += (stack[j] === '{') ? '}' : ']';
+    }
+    return out;
+  }
+
+  function _exCompleteTruncatedJson(body) {
+    var MAX_TRIM = 40;
+    for (var trim = 0; trim <= MAX_TRIM && trim < body.length; trim++) {
+      var candidate = trim ? body.slice(0, body.length - trim) : body;
+      try { return JSON.parse(_exCloseOpenStructures(candidate)); } catch (e) {}
+    }
+    return null;
+  }
+
+  function _exBestPartialSpec(raw) {
+    if (!raw) return null;
+    var start = raw.indexOf('{');
+    if (start < 0) return null;
+    var body = raw.slice(start);
+    // Common case: the tail is only a little truncated.
+    var obj = _exCompleteTruncatedJson(body);
+    if (_exIsRenderableSpec(obj)) return obj;
+    // Otherwise step back through the tail to the last renderable prefix.
+    var WINDOW = 6000, STEP = 24;
+    var floor = Math.max(0, body.length - WINDOW);
+    for (var end = body.length - STEP; end > floor; end -= STEP) {
+      try {
+        var o = JSON.parse(_exCloseOpenStructures(body.slice(0, end)));
+        if (_exIsRenderableSpec(o)) return o;
+      } catch (e) {}
+    }
+    return null;
+  }
+
   function loadNode(id) {
     EX.currentId = id;
     var node = exNode(id);
@@ -151,6 +216,39 @@
     var myReq = ++EX.reqId;
     var path = exPathTo(id).slice(0, -1).map(function (n) { return n.title; });
     var agent = EX.agentName ? findExploreAgent(EX.agentName) : null;
+
+    var acc = '';           // accumulated raw model text
+    var lastRenderAt = 0;   // throttle progressive repaints
+    var painted = false;    // have we drawn at least one partial/final spec?
+    var RENDER_MS = 140;
+
+    var paintPartial = function (force) {
+      if (myReq !== EX.reqId) return;
+      var now = Date.now();
+      if (!force && (now - lastRenderAt) < RENDER_MS) return;
+      var partial = _exBestPartialSpec(acc);
+      if (partial) {
+        lastRenderAt = now;
+        renderSpecInto(content, partial);
+        painted = true;
+      }
+    };
+
+    var applyFinal = function (spec, title) {
+      if (myReq !== EX.reqId) return;
+      node.spec = spec;
+      if (title) node.title = title;
+      renderBreadcrumb();
+      renderSpecInto(content, spec);
+      painted = true;
+      exPersistCurrent();
+    };
+
+    var fail = function (msg) {
+      if (myReq !== EX.reqId) return;
+      if (!painted) renderError(content, msg || 'Could not generate this view.');
+    };
+
     fetch('/api/genui-explore', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -163,26 +261,69 @@
         web: !!EX.web,
         agentName: agent ? agent.name : undefined,
         agentPrompt: agent ? agent.systemPrompt : undefined,
+        stream: true,
       }),
     })
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (myReq !== EX.reqId) return; // superseded by a newer navigation
-        if (!d || !d.ok || !d.spec) {
-          var msg = (d && d.error) || 'Could not generate this view.';
-          if (d && d.detail) msg += ' (' + String(d.detail).slice(0, 160) + ')';
-          renderError(content, msg);
-          return;
+      .then(function (resp) {
+        // Fallback to plain JSON if streaming isn't available.
+        if (!resp.ok || !resp.body || typeof resp.body.getReader !== 'function') {
+          return resp.json().then(function (d) {
+            if (myReq !== EX.reqId) return;
+            if (!d || !d.ok || !d.spec) {
+              var msg = (d && d.error) || 'Could not generate this view.';
+              if (d && d.detail) msg += ' (' + String(d.detail).slice(0, 160) + ')';
+              fail(msg);
+              return;
+            }
+            applyFinal(d.spec, d.title);
+          });
         }
-        node.spec = d.spec;
-        if (d.title) node.title = d.title;
-        renderBreadcrumb();
-        renderSpecInto(content, d.spec);
-        exPersistCurrent();
+
+        var reader = resp.body.getReader();
+        var decoder = new TextDecoder();
+        var sseBuf = '';
+        var doneApplied = false;
+
+        var handleEvent = function (obj) {
+          if (!obj || !obj.type) return;
+          if (obj.type === 'delta') {
+            acc += (obj.text || '');
+            paintPartial(false);
+          } else if (obj.type === 'done') {
+            doneApplied = true;
+            if (obj.spec) applyFinal(obj.spec, obj.title);
+            else fail('Could not generate this view.');
+          } else if (obj.type === 'error') {
+            fail(obj.error || 'Could not generate this view.');
+          }
+        };
+
+        var pump = function () {
+          return reader.read().then(function (res) {
+            if (myReq !== EX.reqId) { try { reader.cancel(); } catch (_) {} return; }
+            if (res.done) {
+              if (!doneApplied) { paintPartial(true); if (!painted) fail('Stream ended unexpectedly.'); }
+              return;
+            }
+            sseBuf += decoder.decode(res.value, { stream: true });
+            var idx;
+            while ((idx = sseBuf.indexOf('\n\n')) >= 0) {
+              var frame = sseBuf.slice(0, idx);
+              sseBuf = sseBuf.slice(idx + 2);
+              var line = frame.replace(/^data:\s?/, '').trim();
+              if (!line) continue;
+              var evt = null;
+              try { evt = JSON.parse(line); } catch (_) {}
+              if (evt) handleEvent(evt);
+            }
+            return pump();
+          });
+        };
+        return pump();
       })
       .catch(function (e) {
         if (myReq !== EX.reqId) return;
-        renderError(content, (e && e.message) || 'Network error');
+        if (!painted) renderError(content, (e && e.message) || 'Network error');
       });
   }
 
