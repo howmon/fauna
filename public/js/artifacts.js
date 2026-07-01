@@ -1508,6 +1508,40 @@ function renderArtifactContent() {
       '</div>' +
     '</div>';
 
+  } else if (a.type === 'deck' && a.path && /\.pptx$/i.test(a.path)) {
+    // .pptx text editor — python-pptx round-trips slide text (no layout
+    // fidelity). There is no linkable renderer inside PowerPoint.app, so full-
+    // fidelity viewing/editing stays "Open in PowerPoint".
+    var _deckPathA = escHtml(a.path);
+    if (a._deckText === undefined && !a._deckLoading && !a._deckError) { _loadDeckText(a); }
+    if (a._deckLoading) {
+      content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
+        '<div class="artifact-binary-open">' +
+          '<div class="artifact-binary-icon"><i class="ti ti-loader"></i></div>' +
+          '<div class="artifact-binary-title">Reading slide text…</div>' +
+        '</div>' +
+      '</div>';
+    } else if (a._deckError) {
+      content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
+        '<div class="artifact-binary-open">' +
+          '<div class="artifact-binary-icon"><i class="ti ti-presentation"></i></div>' +
+          '<div class="artifact-binary-title">' + escHtml(a.title || 'Presentation') + '</div>' +
+          '<div class="artifact-binary-hint">' + escHtml(a._deckError) + ' Open it in PowerPoint to view and edit.</div>' +
+          '<div class="artifact-binary-actions">' +
+            '<button class="artifact-card-open" onclick="openFilePath(\'' + _deckPathA + '\')"><i class="ti ti-external-link"></i> Open in PowerPoint</button>' +
+            '<button class="artifact-card-open" style="background:var(--fau-surface2);color:var(--fau-text);border-color:var(--fau-border)" onclick="openFileInFinder(\'' + _deckPathA + '\')"><i class="ti ti-folder"></i> Reveal</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    } else {
+      content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
+        '<div style="padding:12px;display:flex;flex-direction:column;gap:10px;height:100%;box-sizing:border-box">' +
+          '<div style="font-size:12px;color:var(--fau-text-muted)">Editing slide <b>text</b> only — layout, fonts and images are preserved in the file but not shown here. Markers like <code>[[S1:0]]</code> tag each slide/shape; keep them intact. Save writes back to the .pptx.</div>' +
+          '<textarea id="artifact-deck-editor-' + a.id + '" spellcheck="true" style="flex:1;min-height:280px;resize:none;background:var(--fau-surface2);color:var(--fau-text);border:1px solid var(--fau-border);border-radius:8px;padding:12px;font:13px/1.5 var(--mono);outline:none">' + escHtml(a._deckText || '') + '</textarea>' +
+        '</div>' +
+      '</div>';
+    }
+
   } else if ((a.type === 'deck' || a.type === 'xlsx') && a.path) {
     // Binary office formats have no faithful inline editor — the native app is
     // the real editor. Show the file identity + one-tap open/reveal.
@@ -1618,6 +1652,9 @@ function makeArtifactToolbar(a) {
     btns += '<button class="artifact-tbtn" onclick="openFileInFinder(\'' + a.path + '\')" title="Reveal in Finder"><i class="ti ti-folder"></i><span class="artifact-tbtn-label"> Reveal</span></button>';
   }
   if ((a.type === 'deck' || a.type === 'xlsx') && a.path) {
+    if (a.type === 'deck' && /\.pptx$/i.test(a.path) && a._deckText !== undefined && !a._deckError) {
+      btns += '<button class="artifact-tbtn" id="artifact-deck-save-' + a.id + '" onclick="saveDeckArtifact(\'' + a.id + '\')" title="Save slide text back to the .pptx"><i class="ti ti-device-floppy"></i><span class="artifact-tbtn-label"> Save</span></button>';
+    }
     btns += '<button class="artifact-tbtn" onclick="openFilePath(\'' + a.path + '\')" title="Open with associated app"><i class="ti ti-external-link"></i><span class="artifact-tbtn-label"> Open</span></button>';
     btns += '<button class="artifact-tbtn" onclick="openFileInFinder(\'' + a.path + '\')" title="Reveal in Finder"><i class="ti ti-folder"></i><span class="artifact-tbtn-label"> Reveal</span></button>';
   }
@@ -1734,6 +1771,58 @@ async function saveDocxArtifact(id) {
     showToast('Document saved');
   } catch (e) {
     showToast('Save failed: ' + e.message);
+  }
+}
+
+// Lazily pull editable slide text for a .pptx deck artifact via python-pptx.
+// Stored on a._deckText (not persisted to the conversation — re-extracted on
+// open) so localStorage stays small. Re-renders when the active artifact loads.
+function _loadDeckText(a) {
+  if (!a || a._deckLoading) return;
+  a._deckLoading = true;
+  a._deckError = null;
+  fetch('/api/deck-extract', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: a.path })
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    a._deckLoading = false;
+    if (!d || !d.ok) {
+      a._deckError = (d && d.error) || 'Could not read slide text.';
+    } else {
+      a._deckText = d.content || '';
+      a._deckSlideCount = d.slideCount || 0;
+    }
+    if (state.activeArtifact === a.id) renderArtifactContent();
+  }).catch(function(e) {
+    a._deckLoading = false;
+    a._deckError = e.message || 'Could not read slide text.';
+    if (state.activeArtifact === a.id) renderArtifactContent();
+  });
+}
+
+async function saveDeckArtifact(id) {
+  var a = state.artifacts.find(function(x) { return x.id === id; });
+  if (!a || !a.path) return;
+  var editor = document.getElementById('artifact-deck-editor-' + id);
+  if (!editor) return;
+  var nextText = editor.value;
+  var btn = document.getElementById('artifact-deck-save-' + id);
+  if (btn) btn.disabled = true;
+  try {
+    var r = await fetch('/api/deck-write', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: a.path, content: nextText })
+    });
+    var d = await r.json();
+    if (!r.ok || !d.ok) throw new Error((d && d.error) || 'Failed to save slides');
+    a._deckText = nextText;
+    showToast('Slides saved');
+  } catch (e) {
+    showToast('Save failed: ' + e.message);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 

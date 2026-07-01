@@ -5,7 +5,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 import { createRequire } from 'module';
 import { buildShellEnv } from '../lib/shell-env.js';
 import { faunaTmpFile } from '../lib/fauna-tmp.js';
@@ -94,6 +94,140 @@ export function registerDocsAndExtRoutes(app, { faunaConfigDir, appDir }) {
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
+  });
+
+  // ── Deck (.pptx) text extraction / write via python-pptx ────────────────
+  // There is no linkable renderer inside Microsoft PowerPoint.app (its engine
+  // lives in the app's private, code-signed frameworks; the only bundled
+  // plug-in is a Notification-Center widget, and PowerPoint ships no QuickLook
+  // generator). So for lightweight, install-free in-pane editing we round-trip
+  // the slide TEXT through python-pptx: extract per-shape text, let the user
+  // edit it, write it back to the same shapes. No layout fidelity — full-
+  // fidelity editing is "Open in PowerPoint".
+  const _DECK_EXTRACT_PY = [
+    'import sys, json',
+    'try:',
+    '    from pptx import Presentation',
+    'except Exception as e:',
+    '    print(json.dumps({"ok": False, "error": "python-pptx not available: " + str(e)})); sys.exit(0)',
+    'try:',
+    '    prs = Presentation(sys.argv[1])',
+    '    out = []; n = 0',
+    '    for si, slide in enumerate(prs.slides, start=1):',
+    '        n += 1',
+    '        out.append("=== Slide %d ===" % si)',
+    '        for shi, shape in enumerate(slide.shapes):',
+    '            try:',
+    '                if not shape.has_text_frame: continue',
+    '            except Exception:',
+    '                continue',
+    '            out.append("[[S%d:%d]]" % (si, shi))',
+    '            out.append(shape.text_frame.text)',
+    '        try:',
+    '            if slide.has_notes_slide:',
+    '                notes = slide.notes_slide.notes_text_frame.text',
+    '                if notes and notes.strip():',
+    '                    out.append("[[N%d]]" % si); out.append(notes)',
+    '        except Exception:',
+    '            pass',
+    '    print(json.dumps({"ok": True, "content": "\\n".join(out), "slideCount": n}))',
+    'except Exception as e:',
+    '    print(json.dumps({"ok": False, "error": str(e)})); sys.exit(0)',
+  ].join('\n');
+
+  const _DECK_WRITE_PY = [
+    'import sys, json, re',
+    'try:',
+    '    from pptx import Presentation',
+    'except Exception as e:',
+    '    print(json.dumps({"ok": False, "error": "python-pptx not available: " + str(e)})); sys.exit(0)',
+    'try:',
+    '    p = sys.argv[1]',
+    '    content = sys.stdin.read()',
+    '    prs = Presentation(p)',
+    '    slides = list(prs.slides)',
+    '    blocks = []; cur = None; buf = []',
+    '    def flush():',
+    '        if cur is not None: blocks.append((cur, "\\n".join(buf)))',
+    '    for line in content.split("\\n"):',
+    '        m = re.match(r"^\\[\\[([SN]\\d+(?::\\d+)?)\\]\\]\\s*$", line)',
+    '        if m:',
+    '            flush(); cur = m.group(1); buf = []',
+    '        elif re.match(r"^=== Slide \\d+ ===\\s*$", line):',
+    '            continue',
+    '        else:',
+    '            if cur is not None: buf.append(line)',
+    '    flush()',
+    '    for key, text in blocks:',
+    '        text = text.strip("\\n")',
+    '        if key.startswith("S"):',
+    '            s_str, sh_str = key[1:].split(":")',
+    '            si = int(s_str) - 1; shi = int(sh_str)',
+    '            if 0 <= si < len(slides):',
+    '                shapes = list(slides[si].shapes)',
+    '                if 0 <= shi < len(shapes) and shapes[shi].has_text_frame:',
+    '                    tf = shapes[shi].text_frame',
+    '                    paras = text.split("\\n")',
+    '                    tf.text = paras[0] if paras else ""',
+    '                    for extra in paras[1:]:',
+    '                        para = tf.add_paragraph(); para.text = extra',
+    '        elif key.startswith("N"):',
+    '            si = int(key[1:]) - 1',
+    '            if 0 <= si < len(slides):',
+    '                slides[si].notes_slide.notes_text_frame.text = text',
+    '    prs.save(p)',
+    '    print(json.dumps({"ok": True}))',
+    'except Exception as e:',
+    '    print(json.dumps({"ok": False, "error": str(e)})); sys.exit(0)',
+  ].join('\n');
+
+  function _runDeckPython(scriptSource, args, input) {
+    return spawnSync('python3', ['-c', scriptSource, ...args], {
+      input: input === undefined ? undefined : input,
+      encoding: 'utf8',
+      env: _EXEC_ENV,
+      timeout: 20000,
+      maxBuffer: 32 * 1024 * 1024,
+    });
+  }
+
+  function _resolveDeckAbs(deckPath) {
+    return path.isAbsolute(deckPath) ? deckPath : path.join(os.homedir(), deckPath);
+  }
+
+  // POST { path } → { ok, content, path, slideCount, editable }
+  app.post('/api/deck-extract', (req, res) => {
+    const { path: deckPath } = req.body || {};
+    if (!deckPath) return res.status(400).json({ ok: false, error: 'path required' });
+    const abs = _resolveDeckAbs(deckPath);
+    if (!fs.existsSync(abs)) return res.status(404).json({ ok: false, error: 'File not found' });
+    if (path.extname(abs).toLowerCase() !== '.pptx') {
+      return res.json({ ok: false, error: 'Only .pptx text editing is supported' });
+    }
+    const r = _runDeckPython(_DECK_EXTRACT_PY, [abs]);
+    if (r.error) return res.status(500).json({ ok: false, error: 'python3 not available: ' + r.error.message });
+    let parsed = null;
+    try { parsed = JSON.parse((r.stdout || '').trim()); } catch (_) {}
+    if (!parsed) return res.status(500).json({ ok: false, error: (r.stderr || 'extract failed').slice(0, 400) });
+    if (!parsed.ok) return res.json(parsed);
+    res.json({ ok: true, content: parsed.content || '', path: abs, slideCount: parsed.slideCount || 0, editable: true });
+  });
+
+  // POST { path, content } → { ok, path }
+  app.post('/api/deck-write', (req, res) => {
+    const { path: deckPath, content } = req.body || {};
+    if (!deckPath || content === undefined) return res.status(400).json({ ok: false, error: 'path and content required' });
+    const abs = _resolveDeckAbs(deckPath);
+    if (!fs.existsSync(abs)) return res.status(404).json({ ok: false, error: 'File not found' });
+    if (path.extname(abs).toLowerCase() !== '.pptx') {
+      return res.json({ ok: false, error: 'Only .pptx text editing is supported' });
+    }
+    const r = _runDeckPython(_DECK_WRITE_PY, [abs], String(content));
+    if (r.error) return res.status(500).json({ ok: false, error: 'python3 not available: ' + r.error.message });
+    let parsed = null;
+    try { parsed = JSON.parse((r.stdout || '').trim()); } catch (_) {}
+    if (!parsed) return res.status(500).json({ ok: false, error: (r.stderr || 'write failed').slice(0, 400) });
+    res.json(parsed.ok ? { ok: true, path: abs } : parsed);
   });
 
   // POST { name, mime, base64 } → extract text from a base64-encoded attachment
