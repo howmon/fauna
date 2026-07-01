@@ -206,6 +206,13 @@ function collectImages(md, baseUrl, max) {
     // DuckDuckGo's proxy/redirect image URLs (external-content / //duckduckgo.com/i/)
     // and other tracking beacons routinely 404 through our fetch proxy — skip them.
     if (/duckduckgo\.com\/(i|iu)\b|external-content\.duckduckgo|\/(track|beacon|analytics|pixel)\b/i.test(src)) continue;
+    // Ephemeral / signed / dynamic URLs that expire or 502 through the proxy:
+    //  - GitHub signed user-content (private-user-images / camo) carry short-lived JWTs → 404 in minutes.
+    //  - Any URL bearing a signature/expiry query token (S3 X-Amz-*, jwt, sig, token, expires).
+    //  - Dynamic Open-Graph image endpoints (opengraph-image / og-image / /api/og) frequently 502.
+    if (/private-user-images\.githubusercontent|camo\.githubusercontent/i.test(src)) continue;
+    if (/[?&](jwt|x-amz-signature|x-amz-credential|signature|sig|token|expires)=/i.test(src)) continue;
+    if (/\b(opengraph-image|og-image)\b|\/api\/og(\/|\?|$)/i.test(src)) continue;
     if (seen.has(src)) continue;
     seen.add(src);
     out.push(src);

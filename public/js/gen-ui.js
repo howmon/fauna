@@ -309,7 +309,20 @@ function _guiIsValidYouTubeId(id) {
   return /^[A-Za-z0-9_-]{11}$/.test(id || '') && !_guiIsPlaceholderMediaValue(id);
 }
 
-function _guiSafeThumbnailUrl(url) {
+// Reject URLs that are inherently short-lived or 502-prone through our image
+// proxy, so we never even request them (avoids broken tiles + console noise):
+//  - GitHub signed user-content (private-user-images / camo) — JWTs expire in minutes → 404.
+//  - Any URL carrying a signature/expiry query token (S3 X-Amz-*, jwt, sig, token, expires).
+//  - Dynamic Open-Graph image endpoints (opengraph-image / og-image / /api/og) — frequently 502.
+function _guiIsEphemeralImageUrl(value) {
+  var raw = String(value || '').trim();
+  if (!raw) return false;
+  if (/^data:|^blob:/i.test(raw)) return false;
+  if (/private-user-images\.githubusercontent|camo\.githubusercontent/i.test(raw)) return true;
+  if (/[?&](jwt|x-amz-signature|x-amz-credential|signature|sig|token|expires)=/i.test(raw)) return true;
+  if (/\b(opengraph-image|og-image)\b|\/api\/og(\/|\?|$)/i.test(raw)) return true;
+  return false;
+}function _guiSafeThumbnailUrl(url) {
   if (!url || _guiIsPlaceholderMediaValue(url)) return '';
   var raw = String(url).trim();
   try {
@@ -1009,6 +1022,7 @@ var _genUiComponents = {
     var usable = src &&
       /^https?:\/\/|^data:image\//i.test(src) &&
       !_guiIsPlaceholderMediaValue(src) &&
+      !_guiIsEphemeralImageUrl(src) &&
       !/(^|\/\/)(via\.placeholder|placehold|placekitten|placeimg|dummyimage|loremflickr|picsum\.photos\/id\/0)/i.test(src);
     if (!usable) {
       // No real image — render nothing rather than a broken grey placeholder box.
