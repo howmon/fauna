@@ -56,10 +56,10 @@
   // ── Front door (conversational start) ────────────────────────────────────
 
   var SUGGESTIONS = [
-    'Compare the top 5 electric SUVs',
-    'Break down how a transformer model works',
-    'Plan a 3-day trip to Lisbon',
-    'Show the state of my project at a glance',
+    'Take me on a tour of the solar system',
+    'Explore how to make the perfect ramen',
+    "Explain today's top news stories",
+    'Build a skill tree for learning jazz piano',
   ];
 
   function renderFrontDoor() {
@@ -76,7 +76,7 @@
         '<h1 class="explorer-hero-title">What do you want to explore?</h1>' +
         '<p class="explorer-hero-sub">Start a conversation. Fauna turns it into an interactive view you can keep clicking deeper — your path shows up as a breadcrumb so you can branch off or step back anytime.</p>' +
         '<div class="explorer-hero-input-row">' +
-          '<textarea id="explorer-prompt" class="explorer-hero-input" rows="1" placeholder="e.g. Compare the top 5 electric SUVs"></textarea>' +
+          '<textarea id="explorer-prompt" class="explorer-hero-input" rows="1" placeholder="e.g. Take me on a tour of the solar system"></textarea>' +
           '<button class="explorer-hero-go" onclick="_explorerSubmitFrontDoor()" aria-label="Explore"><i class="ti ti-arrow-right"></i></button>' +
         '</div>' +
         '<div class="explorer-chips">' + chips + '</div>' +
