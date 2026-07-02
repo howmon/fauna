@@ -4447,8 +4447,10 @@ body { animation: none; }
 #artifact-pane.resizing { transition: none; user-select: none; }
 /* Full-screen takeover: overlay the whole Fauna window */
 #artifact-pane.fullscreen.open {
-  position: fixed; inset: 0; z-index: 4000;
-  width: 100vw !important; min-width: 100vw !important; max-width: 100vw !important;
+  position: fixed; top: 44px; right: 0; bottom: 0; left: 52px; z-index: 4000;
+  width: calc(100vw - 52px) !important;
+  min-width: calc(100vw - 52px) !important;
+  max-width: calc(100vw - 52px) !important;
   border-left: none;
 }
 #artifact-pane.fullscreen #artifact-resize-handle { display: none; }
