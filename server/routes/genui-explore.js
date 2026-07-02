@@ -36,8 +36,22 @@ Hard requirements:
   them under a Heading like "Go deeper" or inside a Grid so they read as a map of
   possible journeys. (For pure task/data-collection prompts — see below — a form
   may replace the journey map.)
-- You MAY also use \`send_prompt\` (actionParams.text) for a Button that hands the
-  topic back to the main chat.
+- **Make the whole view actionable — not just the "Go deeper" section.** Beyond
+  the journey map, most cards, sections, list rows, and feature items should
+  carry their OWN contextual CTA \`Button\` (or clickable Image/Card) that does
+  something useful right there. Aim for a few inline CTAs across the view, placed
+  next to the content they act on — a view where the ONLY interactive elements
+  are the Go deeper buttons is TOO BARE. Good inline CTAs use these in-app actions:
+    - \`send_prompt\` (actionParams.text) — hand a specific task/question to the main
+      chat, e.g. "Draft a 2-week meal plan for this recipe", "Explain this in simpler terms".
+    - \`prefill_chat\` (actionParams.text) — drop a ready-to-edit prompt into the chat box.
+    - \`copy_text\` (actionParams.text) — copy a snippet, recipe, command, or summary.
+    - \`setState\` — let the user pick/compare/select an option in-place (e.g. mark a
+      favorite, toggle a tab), paired with \`toggle_visible\` to reveal detail.
+    - \`explore_into\` — a focused drill-down attached to a specific card/item.
+  Give each CTA a clear label + \`icon\`. Match the CTA to the content: a recipe card
+  gets "Copy ingredients" / "Make a shopping list"; a product gets "Compare" /
+  "See alternatives"; a concept gets "Explain simply" / "Quiz me".
 
 ## Stay inside Explore — web is for GROUNDING, not redirecting
 
