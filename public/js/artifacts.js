@@ -400,6 +400,22 @@ function openArtifactPane() {
 
 function closeArtifactPane() {
   document.getElementById('artifact-pane').classList.remove('open');
+  toggleArtifactFullscreen(false);
+}
+
+// Expand the artifact pane to take over the whole Fauna window (or collapse
+// back to the docked side pane). The width-override style is ignored while the
+// pane is full screen because the CSS forces width:100%.
+function toggleArtifactFullscreen(force) {
+  var pane = document.getElementById('artifact-pane');
+  if (!pane) return;
+  var on = (typeof force === 'boolean') ? force : !pane.classList.contains('fullscreen');
+  pane.classList.toggle('fullscreen', on);
+  var btn = document.getElementById('artifact-fullscreen');
+  if (btn) {
+    btn.title = on ? 'Exit full screen' : 'Expand to full screen';
+    btn.innerHTML = on ? '<i class="ti ti-arrows-minimize"></i>' : '<i class="ti ti-arrows-maximize"></i>';
+  }
 }
 
 // ── Artifact pane resize ──────────────────────────────────────────────────
@@ -1561,9 +1577,24 @@ function renderArtifactContent() {
     }
 
   } else if (a.type === 'markdown' || a.type === 'summary' || a.type === 'web') {
-    content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
-      '<div class="artifact-prose msg-body" id="artifact-md-' + a.id + '">' + renderMarkdown(a.content || '') + '</div>' +
-    '</div>';
+    var mdMode = a._mdMode || 'preview';
+    if (mdMode === 'edit') {
+      var mdVal = a.content || '';
+      content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
+        '<div class="md-editor">' +
+          makeMarkdownFormatBar(a.id) +
+          '<div class="md-editor-split">' +
+            '<textarea id="artifact-md-editor-' + a.id + '" class="md-editor-src" spellcheck="true" ' +
+              'oninput="_mdLivePreview(\'' + a.id + '\')" placeholder="Write Markdown…">' + escHtml(mdVal) + '</textarea>' +
+            '<div class="md-editor-preview artifact-prose msg-body" id="artifact-md-preview-' + a.id + '">' + renderMarkdown(mdVal) + '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    } else {
+      content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
+        '<div class="artifact-prose msg-body" id="artifact-md-' + a.id + '">' + renderMarkdown(a.content || '') + '</div>' +
+      '</div>';
+    }
 
   } else if (a.type === 'json') {
     var pretty = a.content;
@@ -1593,7 +1624,7 @@ function renderArtifactContent() {
   
   // Initialize mermaid diagrams if this is a markdown artifact
   if ((a.type === 'markdown' || a.type === 'summary' || a.type === 'web') && typeof initMermaidInContainer === 'function') {
-    var mdContainer = document.getElementById('artifact-md-' + a.id);
+    var mdContainer = document.getElementById('artifact-md-' + a.id) || document.getElementById('artifact-md-preview-' + a.id);
     if (mdContainer) {
       setTimeout(function() { initMermaidInContainer(mdContainer); }, 100);
     }
@@ -1628,6 +1659,16 @@ function makeArtifactToolbar(a) {
     });
     // PDF print button
     btns += '<button class="artifact-tbtn" onclick="printDesignArtifact(\'' + a.id + '\')" title="Print / Save as PDF"><i class="ti ti-printer"></i><span class="artifact-tbtn-label"> PDF</span></button>';
+  }
+
+  // Markdown / summary / web: Preview ⇆ Edit (split live-preview) + Save
+  if (a.type === 'markdown' || a.type === 'summary' || a.type === 'web') {
+    var _mdMode = a._mdMode || 'preview';
+    btns += '<button class="artifact-tbtn artifact-tbtn-view' + (_mdMode === 'preview' ? ' active' : '') + '" onclick="setMarkdownMode(\'' + a.id + '\',\'preview\')" title="Rendered preview"><i class="ti ti-eye"></i><span class="artifact-tbtn-label"> Preview</span></button>';
+    btns += '<button class="artifact-tbtn artifact-tbtn-view' + (_mdMode === 'edit' ? ' active' : '') + '" onclick="setMarkdownMode(\'' + a.id + '\',\'edit\')" title="Edit Markdown"><i class="ti ti-edit"></i><span class="artifact-tbtn-label"> Edit</span></button>';
+    if (_mdMode === 'edit') {
+      btns += '<button class="artifact-tbtn" onclick="saveMarkdownArtifact(\'' + a.id + '\')" title="Save changes"><i class="ti ti-device-floppy"></i><span class="artifact-tbtn-label"> Save</span></button>';
+    }
   }
 
   // Copy source code
@@ -1942,6 +1983,143 @@ async function saveDeckArtifact(id) {
     showToast('Save failed: ' + e.message);
   } finally {
     if (btn) btn.disabled = false;
+  }
+}
+
+// ── Markdown artifact editing (split live-preview, cherry-markdown style) ──
+// Preview ⇆ Edit toggle. Edit shows the Markdown source next to a live
+// preview and a formatting toolbar that wraps/inserts syntax at the cursor.
+
+function setMarkdownMode(id, mode) {
+  var a = state.artifacts.find(function(x) { return x.id === id; });
+  if (!a) return;
+  a._mdMode = mode;
+  if (state.activeArtifact === id) renderArtifactContent();
+}
+
+// Compact formatting toolbar shown above the source editor.
+function makeMarkdownFormatBar(id) {
+  var b = function (kind, icon, title) {
+    return '<button type="button" class="md-fmt-btn" title="' + title + '" ' +
+      'onclick="_mdApply(\'' + id + '\',\'' + kind + '\')"><i class="ti ' + icon + '"></i></button>';
+  };
+  var sep = '<span class="md-fmt-sep"></span>';
+  return '<div class="md-fmt-bar">' +
+    b('h1', 'ti-h-1', 'Heading 1') + b('h2', 'ti-h-2', 'Heading 2') + b('h3', 'ti-h-3', 'Heading 3') + sep +
+    b('bold', 'ti-bold', 'Bold') + b('italic', 'ti-italic', 'Italic') +
+    b('strike', 'ti-strikethrough', 'Strikethrough') + b('code', 'ti-code', 'Inline code') + sep +
+    b('ul', 'ti-list', 'Bullet list') + b('ol', 'ti-list-numbers', 'Numbered list') +
+    b('task', 'ti-checkbox', 'Task list') + b('quote', 'ti-quote', 'Quote') + sep +
+    b('link', 'ti-link', 'Link') + b('image', 'ti-photo', 'Image') +
+    b('table', 'ti-table', 'Table') + b('codeblock', 'ti-code-dots', 'Code block') +
+    b('hr', 'ti-separator-horizontal', 'Divider') +
+  '</div>';
+}
+
+// Apply a formatting action to the Markdown source textarea at the caret.
+function _mdApply(id, kind) {
+  var ta = document.getElementById('artifact-md-editor-' + id);
+  if (!ta) return;
+  ta.focus();
+  var s = ta.selectionStart, e = ta.selectionEnd, val = ta.value;
+  var sel = val.slice(s, e);
+
+  var wrap = function (bef, aft, ph) {
+    var text = sel || ph;
+    ta.value = val.slice(0, s) + bef + text + aft + val.slice(e);
+    var ns = s + bef.length;
+    ta.setSelectionRange(ns, ns + text.length);
+  };
+  var linePref = function (pref) {
+    var ls = val.lastIndexOf('\n', s - 1) + 1;
+    var le = val.indexOf('\n', e); if (le < 0) le = val.length;
+    var block = val.slice(ls, le);
+    var lines;
+    if (pref === '1. ') {
+      var i = 0;
+      lines = block.split('\n').map(function (ln) { i++; return i + '. ' + ln; });
+    } else {
+      lines = block.split('\n').map(function (ln) { return pref + ln; });
+    }
+    var joined = lines.join('\n');
+    ta.value = val.slice(0, ls) + joined + val.slice(le);
+    ta.setSelectionRange(ls, ls + joined.length);
+  };
+  var insert = function (txt, selStart, selLen) {
+    ta.value = val.slice(0, s) + txt + val.slice(e);
+    var caret = s + (selStart != null ? selStart : txt.length);
+    ta.setSelectionRange(caret, caret + (selLen || 0));
+  };
+
+  switch (kind) {
+    case 'bold': wrap('**', '**', 'bold text'); break;
+    case 'italic': wrap('*', '*', 'italic text'); break;
+    case 'strike': wrap('~~', '~~', 'strikethrough'); break;
+    case 'code': wrap('`', '`', 'code'); break;
+    case 'h1': linePref('# '); break;
+    case 'h2': linePref('## '); break;
+    case 'h3': linePref('### '); break;
+    case 'quote': linePref('> '); break;
+    case 'ul': linePref('- '); break;
+    case 'ol': linePref('1. '); break;
+    case 'task': linePref('- [ ] '); break;
+    case 'link': {
+      var lt = sel || 'link text';
+      insert('[' + lt + '](url)', 1 + lt.length + 2, 3);
+      break;
+    }
+    case 'image': {
+      var alt = sel || 'alt';
+      insert('![' + alt + '](url)', 2 + alt.length + 2, 3);
+      break;
+    }
+    case 'codeblock': wrap('\n```\n', '\n```\n', 'code'); break;
+    case 'table': insert('\n| Column A | Column B |\n| --- | --- |\n| Cell 1 | Cell 2 |\n'); break;
+    case 'hr': insert('\n\n---\n\n'); break;
+    default: break;
+  }
+  _mdLivePreview(id);
+}
+
+// Debounced live preview: re-render the source into the preview pane.
+var _mdPreviewTimers = {};
+function _mdLivePreview(id) {
+  clearTimeout(_mdPreviewTimers[id]);
+  _mdPreviewTimers[id] = setTimeout(function () {
+    var ta = document.getElementById('artifact-md-editor-' + id);
+    var pv = document.getElementById('artifact-md-preview-' + id);
+    if (!ta || !pv) return;
+    pv.innerHTML = typeof renderMarkdown === 'function'
+      ? renderMarkdown(ta.value)
+      : escHtml(ta.value).replace(/\n/g, '<br>');
+    if (typeof initMermaidInContainer === 'function') {
+      try { initMermaidInContainer(pv); } catch (_) {}
+    }
+  }, 180);
+}
+
+// Persist edited Markdown: update the in-memory artifact + conversation store,
+// and write through to the source file when the artifact is backed by a path.
+function saveMarkdownArtifact(id) {
+  var a = state.artifacts.find(function(x) { return x.id === id; });
+  if (!a) return;
+  var ta = document.getElementById('artifact-md-editor-' + id);
+  if (!ta) return;
+  var next = ta.value;
+  a.content = next;
+  if (typeof saveConversations === 'function') saveConversations();
+  if (a.path) {
+    fetch('/api/write-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: a.path, content: next })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      showToast(d && d.ok ? 'Saved' : ('Save failed: ' + ((d && d.error) || 'error')));
+    }).catch(function () {
+      showToast('Saved locally (file write failed)');
+    });
+  } else {
+    showToast('Saved');
   }
 }
 
