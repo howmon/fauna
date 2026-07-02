@@ -12376,6 +12376,19 @@ mark.find-hit.find-hit-active {
 }
 .explorer-map-node:hover .explorer-map-rename { opacity: 1; }
 .explorer-map-rename:hover { color: var(--accent2); background: var(--fau-surface); }
+.explorer-map-panel .explorer-sessions-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.explorer-map-panel .explorer-sessions-head > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--fau-text);
+}
 .explorer-map-head-actions { display: inline-flex; align-items: center; gap: 6px; }
 .explorer-map-export {
   display: inline-flex; align-items: center; gap: 5px;
