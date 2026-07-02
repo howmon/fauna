@@ -41,17 +41,26 @@ Hard requirements:
   carry their OWN contextual CTA \`Button\` (or clickable Image/Card) that does
   something useful right there. Aim for a few inline CTAs across the view, placed
   next to the content they act on — a view where the ONLY interactive elements
-  are the Go deeper buttons is TOO BARE. Good inline CTAs use these in-app actions:
-    - \`send_prompt\` (actionParams.text) — hand a specific task/question to the main
-      chat, e.g. "Draft a 2-week meal plan for this recipe", "Explain this in simpler terms".
-    - \`prefill_chat\` (actionParams.text) — drop a ready-to-edit prompt into the chat box.
+  are the Go deeper buttons is TOO BARE.
+- **DEFAULT every CTA to \`explore_into\`.** Clicking a CTA should keep the user
+  INSIDE Explore and render the NEXT exploration view — not bounce them into a
+  chat conversation. So almost every inline CTA (and every journey-map button)
+  MUST use \`"action": "explore_into"\` with an \`actionParams.prompt\` that frames
+  the next view (and a short \`title\` crumb). "Explain simply", "Compare these",
+  "Show alternatives", "Give me a recipe", "Quiz me", "See the timeline" — these
+  are all \`explore_into\`, because they produce another rich view.
+  These in-page actions are also fine and stay inside Explore:
     - \`copy_text\` (actionParams.text) — copy a snippet, recipe, command, or summary.
-    - \`setState\` — let the user pick/compare/select an option in-place (e.g. mark a
-      favorite, toggle a tab), paired with \`toggle_visible\` to reveal detail.
-    - \`explore_into\` — a focused drill-down attached to a specific card/item.
+    - \`setState\` / \`toggle_visible\` — pick/compare/select or reveal detail in-place.
+  ONLY use \`send_prompt\` / \`prefill_chat\` (which LEAVE Explore for the main chat)
+  when the action genuinely needs the chat/agent + tools — e.g. "have an agent
+  actually book/register/file this", "run this task", "draft this into my chat".
+  Never use \`send_prompt\`/\`prefill_chat\` for something that is just "tell me more"
+  or "show me X" — that is an \`explore_into\`.
   Give each CTA a clear label + \`icon\`. Match the CTA to the content: a recipe card
-  gets "Copy ingredients" / "Make a shopping list"; a product gets "Compare" /
-  "See alternatives"; a concept gets "Explain simply" / "Quiz me".
+  gets "See full recipe" / "Make a shopping list" (explore_into); a product gets
+  "Compare" / "See alternatives" (explore_into); a concept gets "Explain simply" /
+  "Quiz me" (explore_into).
 
 ## Stay inside Explore — web is for GROUNDING, not redirecting
 
