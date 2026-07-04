@@ -69,6 +69,11 @@ function fillForm(s) {
   // the model list arrives.
   _pendingWhisperModel = s.whisperModel || 'base.en';
   refreshWhisperModels();
+  // STT engine + Parakeet model
+  $('sttEngine').value = s.sttEngine || 'whisper';
+  _pendingParakeetModel = s.parakeetModel || 'parakeet-tdt-0.6b-v2';
+  refreshParakeetModels();
+  applyEngineVisibility();
   $('redactEmail').checked      = !!s.redactEmail;
   $('redactPhone').checked      = !!s.redactPhone;
   $('redactCreditCard').checked = !!s.redactCreditCard;
@@ -112,6 +117,8 @@ function readForm() {
     whisperModel:     $('whisperModel').value || undefined,
     whisperLanguage:  $('whisperLanguage').value || undefined,
     whisperHotWords:  $('whisperHotWords').value,
+    sttEngine:        $('sttEngine').value || undefined,
+    parakeetModel:    $('parakeetModel').value || undefined,
     redactEmail:      $('redactEmail').checked,
     redactPhone:      $('redactPhone').checked,
     redactCreditCard: $('redactCreditCard').checked,
@@ -400,5 +407,155 @@ $('whisperModel').addEventListener('change', () => {
   // We don't keep the full catalogue around, so just clear; refresh on save.
   hint.textContent = '';
 });
+
+// ── STT engine selector ───────────────────────────────────────────────
+// Toggles which model section is visible and describes the active engine.
+function applyEngineVisibility() {
+  const engine = $('sttEngine') ? $('sttEngine').value : 'whisper';
+  const wsec = $('whisperSection');
+  const psec = $('parakeetSection');
+  if (wsec) wsec.style.display = engine === 'whisper' ? '' : 'none';
+  if (psec) psec.style.display = engine === 'parakeet' ? '' : 'none';
+  const hint = $('sttEngineHint');
+  if (hint) {
+    hint.textContent = engine === 'parakeet'
+      ? 'Parakeet transcribes in-process with near-zero latency. Works the same on macOS, Windows, and Linux.'
+      : 'Whisper runs the bundled whisper.cpp binary. Broad language coverage; slightly higher latency.';
+  }
+}
+
+if ($('sttEngine')) {
+  $('sttEngine').addEventListener('change', applyEngineVisibility);
+}
+
+// ── Parakeet model picker ─────────────────────────────────────────────
+// Mirrors the Whisper picker against /api/parakeet-model-status. Each model
+// is four files, so progress/state comes from the whole-folder install check.
+let _pendingParakeetModel = null;
+
+async function refreshParakeetModels() {
+  const dropdown = $('parakeetModel');
+  const list     = $('parakeetModelList');
+  const hint     = $('parakeetModelHint');
+  if (!dropdown || !list) return;
+  let data;
+  try {
+    const r = await fetch('/api/parakeet-model-status');
+    data = await r.json();
+  } catch (e) {
+    list.innerHTML = '<p class="hint" style="color:var(--err)">Failed to load model list: ' + e.message + '</p>';
+    return;
+  }
+  const models = Array.isArray(data.models) ? data.models : [];
+
+  while (dropdown.options.length) dropdown.remove(0);
+  const installed = models.filter(m => m.installed);
+  for (const m of installed) {
+    const opt = document.createElement('option');
+    opt.value = m.alias;
+    opt.textContent = m.label;
+    dropdown.appendChild(opt);
+  }
+  if (!installed.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '(no models installed — download one below)';
+    dropdown.appendChild(opt);
+  }
+
+  const wantedRaw = _pendingParakeetModel || data.model;
+  const wanted = wantedRaw && installed.some(m => m.alias === wantedRaw) ? wantedRaw
+               : (installed[0] && installed[0].alias) || '';
+  if (wanted) dropdown.value = wanted;
+  _pendingParakeetModel = null;
+
+  if (hint) {
+    const sel = installed.find(m => m.alias === dropdown.value);
+    hint.textContent = sel ? (sel.langs + ' — ' + sel.speed + ' — ~' + sel.sizeMB + ' MB') : '';
+  }
+
+  list.innerHTML = '';
+  const header = document.createElement('p');
+  header.className = 'hint';
+  header.style.marginBottom = '8px';
+  header.textContent = 'Available models:';
+  list.appendChild(header);
+
+  for (const m of models) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid var(--border)';
+    const label = document.createElement('div');
+    label.style.cssText = 'flex:1;min-width:0';
+    label.innerHTML = '<div><strong>' + m.label + '</strong></div>' +
+      '<div class="hint">' + m.langs + ' — ~' + m.sizeMB + ' MB — ' + m.speed +
+      (m.installed ? ' — <span style="color:var(--ok)">installed</span>' : '') +
+      '</div>';
+    row.appendChild(label);
+    if (m.installed) {
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'ghost';
+      del.textContent = 'Delete';
+      del.addEventListener('click', () => deleteParakeetModel(m.alias));
+      row.appendChild(del);
+    } else {
+      const dl = document.createElement('button');
+      dl.type = 'button';
+      dl.textContent = 'Download';
+      dl.addEventListener('click', () => downloadParakeetModel(m.alias, dl));
+      row.appendChild(dl);
+    }
+    list.appendChild(row);
+  }
+}
+
+async function deleteParakeetModel(alias) {
+  if (!confirm('Delete the ' + alias + ' model (all four files)?')) return;
+  try {
+    const r = await fetch('/api/parakeet-model-delete', {
+      method:  'POST',
+      headers: { 'content-type': 'application/json' },
+      body:    JSON.stringify({ model: alias }),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      setStatus('Deleted ' + alias);
+      refreshParakeetModels();
+    } else {
+      setStatus('Delete failed: ' + (j.error || 'unknown'), false);
+    }
+  } catch (e) {
+    setStatus('Delete failed: ' + e.message, false);
+  }
+}
+
+function downloadParakeetModel(alias, btn) {
+  const origLabel = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '0%'; }
+  const es = new EventSource('/api/parakeet-model-download?model=' + encodeURIComponent(alias));
+  es.onmessage = (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      if (data.error) {
+        if (btn) { btn.disabled = false; btn.textContent = origLabel || 'Download'; }
+        setStatus('Download failed: ' + data.error, false);
+        es.close();
+        return;
+      }
+      if (typeof data.pct === 'number' && btn) btn.textContent = data.pct + '%';
+      if (data.ready) {
+        es.close();
+        if (btn) { btn.disabled = false; btn.textContent = 'Installed'; }
+        setStatus(alias + ' installed ✓');
+        refreshParakeetModels();
+      }
+    } catch (_) { /* ignore parse errors */ }
+  };
+  es.onerror = () => {
+    es.close();
+    if (btn) { btn.disabled = false; btn.textContent = origLabel || 'Download'; }
+    setStatus('Download stream interrupted', false);
+  };
+}
 
 load();

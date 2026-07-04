@@ -33,6 +33,17 @@ export const WHISPER_MODELS = Object.freeze([
   'large-v3-turbo',
 ]);
 
+// Speech-to-text engines the voice pipeline can route to (see stt-provider.js).
+export const STT_ENGINES = Object.freeze(['whisper', 'parakeet']);
+
+// Whitelisted Parakeet (sherpa-onnx) aliases. Kept in sync with
+// parakeet-models.js MODEL_INFO; defined here too so settings sanitisation
+// stays free of any native/onnx dependency.
+export const PARAKEET_MODELS = Object.freeze([
+  'parakeet-tdt-0.6b-v2',
+  'parakeet-tdt-0.6b-v3',
+]);
+
 export const DEFAULTS = Object.freeze({
   // Wake words
   wakeWords:        ['fauna', 'hey fauna', 'ok fauna', 'okay fauna'],
@@ -50,6 +61,10 @@ export const DEFAULTS = Object.freeze({
     : DEFAULT_DICTATION_ACCEL_OTHER,
   dictationPasteOnFinish: false, // future: actually inject paste keystroke
   dictationDeviceId:      '',    // browser MediaDeviceInfo.deviceId; '' = default mic
+
+  // Speech-to-text engine selection
+  sttEngine:     'whisper',      // 'whisper' (whisper.cpp) | 'parakeet' (sherpa-onnx, cross-platform low-latency)
+  parakeetModel: 'parakeet-tdt-0.6b-v2', // active Parakeet alias when sttEngine === 'parakeet'
 
   // Whisper STT
   whisperModel:    'base.en',    // one of: tiny, tiny.en, base, base.en, small, small.en, medium, medium.en, large-v3-turbo
@@ -119,6 +134,16 @@ function _sanitise(cfg) {
   out.dictationDeviceId = typeof out.dictationDeviceId === 'string'
     ? out.dictationDeviceId.replace(/[^A-Za-z0-9_=+/-]/g, '').slice(0, 256)
     : '';
+
+  // STT engine — whitelist so callers can trust the value for routing.
+  out.sttEngine = STT_ENGINES.includes(String(out.sttEngine))
+    ? String(out.sttEngine)
+    : DEFAULTS.sttEngine;
+  // Parakeet model — restrict to known aliases so we never build a recognizer
+  // against an attacker-controlled path.
+  out.parakeetModel = PARAKEET_MODELS.includes(String(out.parakeetModel))
+    ? String(out.parakeetModel)
+    : DEFAULTS.parakeetModel;
 
   // Whisper STT — restrict to a known whitelist so we never spawn whisper-cli
   // against an attacker-controlled filename.

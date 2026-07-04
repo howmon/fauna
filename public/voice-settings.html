@@ -105,6 +105,17 @@
   </section>
 
   <section>
+    <h2>Speech-to-text engine</h2>
+    <p class="desc">Choose which engine transcribes your voice. <strong>Whisper</strong> (whisper.cpp) is the default. <strong>Parakeet</strong> (sherpa-onnx) runs in-process with much lower latency and works on macOS, Windows, and Linux.</p>
+    <label for="sttEngine">Engine</label>
+    <select id="sttEngine">
+      <option value="whisper">Whisper (whisper.cpp) — default</option>
+      <option value="parakeet">Parakeet (sherpa-onnx) — low latency</option>
+    </select>
+    <p class="hint" id="sttEngineHint">&nbsp;</p>
+  </section>
+
+  <section id="whisperSection">
     <h2>Whisper speech-to-text model</h2>
     <p class="desc">Larger models are more accurate but slower and use more disk. Models download from Hugging Face on first use.</p>
     <div class="row">
@@ -139,6 +150,17 @@
     <label for="whisperHotWords" style="margin-top:18px">Custom vocabulary (hot-words)</label>
     <textarea id="whisperHotWords" rows="3" placeholder="Fauna, Kokoro, MCP, afterPack, ggml, whisper.cpp, electron-builder"></textarea>
     <p class="hint">Comma-separated names, acronyms, and jargon Whisper should bias toward. Improves accuracy on project-specific terms. Sent as <span class="kbd">--prompt</span> to whisper-cli on every transcription. Max ~800 chars.</p>
+  </section>
+
+  <section id="parakeetSection">
+    <h2>Parakeet speech-to-text model</h2>
+    <p class="desc">NVIDIA Parakeet (NeMo transducer) via sherpa-onnx. Near-instant streaming transcription that runs in-process on macOS, Windows, and Linux. Each model is ~660 MB and downloads from Hugging Face on first use.</p>
+    <div>
+      <label for="parakeetModel">Active model</label>
+      <select id="parakeetModel"></select>
+      <p class="hint" id="parakeetModelHint">&nbsp;</p>
+    </div>
+    <div id="parakeetModelList" style="margin-top:14px"></div>
   </section>
 
   <section>

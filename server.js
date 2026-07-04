@@ -98,6 +98,7 @@ import { registerVoiceSettingsRoutes } from './server/routes/voice-settings.js';
 import { registerKokoroTtsRoutes } from './server/routes/kokoro-tts.js';
 import { registerLessonRoutes } from './server/routes/lesson.js';
 import { registerWhisperRoutes } from './server/routes/whisper.js';
+import { registerParakeetRoutes } from './server/routes/parakeet.js';
 import { registerVideoRoutes } from './server/routes/video.js';
 import { registerPlaywrightMcpRoutes } from './server/routes/playwright-mcp.js';
 import { createTeamsBundle } from './server/routes/teams.js';
@@ -699,6 +700,7 @@ app.post('/api/permissions/request-accessibility', (req, res) => {
 registerRegionAndStdinRoutes(app, { require: _require, appDir: __dirname, getElectronBrowserWindow: () => _ElectronBrowserWindow, getDesktopCapturer: () => desktopCapturer, shellProcs: _shellProcs });
 // ── Whisper voice transcription moved → server/routes/whisper.js ──
 registerWhisperRoutes(app, { express, faunaConfigDir: FAUNA_CONFIG_DIR, augmentedPath: AUGMENTED_PATH, appDir: __dirname });
+registerParakeetRoutes(app, { express });
 // ── Video Studio pipeline routes ──
 registerVideoRoutes(app, { getCopilotClient });
 // ── Document/attachment + browser-ext routes moved → server/routes/docs-and-ext.js ──

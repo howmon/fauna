@@ -20,7 +20,7 @@
 // don't fire on the user's dictated speech.
 
 import { EventEmitter } from 'node:events';
-import { transcribePcm, isWhisperReady } from './transcribe-pcm.js';
+import { transcribePcm, isSttReady } from './stt-provider.js';
 
 export const SAMPLE_RATE = 16000;
 export const MAX_SECONDS = 120;
@@ -51,8 +51,8 @@ export class Dictation extends EventEmitter {
 
   start() {
     if (this._state !== 'idle') return false;
-    if (!isWhisperReady()) {
-      this.emit('error', new Error('Whisper not ready — model or binary missing'));
+    if (!isSttReady()) {
+      this.emit('error', new Error('Speech-to-text not ready — model or engine missing'));
       return false;
     }
     if (typeof this._windowFactory !== 'function') {

@@ -18,7 +18,7 @@
 
 import { EventEmitter } from 'events';
 
-import { transcribePcm, isWhisperReady } from './transcribe-pcm.js';
+import { transcribePcm, isSttReady } from './stt-provider.js';
 import { matchWake, DEFAULT_WAKE_WORDS } from './wake-word.js';
 import { ruleBasedJudge } from './intent-judge.js';
 
@@ -95,7 +95,7 @@ class UtterancePipeline extends EventEmitter {
   }
 
   async _processOne({ ts, durationMs, pcm, sampleRate }) {
-    if (!isWhisperReady()) {
+    if (!isSttReady()) {
       // Model not downloaded yet — emit a one-time hint then drop silently.
       this.emit('error', new Error('whisper model not ready'));
       return;
