@@ -1,16 +1,16 @@
 {
-  "generatedAt": "2026-06-26T01:34:54.490Z",
+  "generatedAt": "2026-07-04T23:35:15.285Z",
   "source": [
     "self-tools.js:SELF_TOOL_DEFS",
     "self-tools.js:DYNAMIC_WIDGET_TOOL_DEFS"
   ],
-  "count": 85,
+  "count": 100,
   "byCategory": {
     "file": 9,
     "desktop": 6,
+    "other": 31,
     "project": 13,
     "browser": 1,
-    "other": 16,
     "assistant": 8,
     "memory": 7,
     "shell": 2,
@@ -47,6 +47,21 @@
       ],
       "sideEffects": [
         "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_audit_prompt",
+      "source": "self",
+      "category": "other",
+      "description": "Audit a system-prompt / instruction string against curated behavioural patterns (tool-discipline, verification, persistence, scope, honesty, safety, output-format). Returns which patterns are present, which are missing, and remediation hints. Use to review or improve agent instructions and skills.",
+      "required": [
+        "prompt"
+      ],
+      "parameters": [
+        "prompt"
+      ],
+      "sideEffects": [
+        "read-only"
       ]
     },
     {
@@ -250,6 +265,26 @@
       ]
     },
     {
+      "name": "fauna_create_seed",
+      "source": "self",
+      "category": "other",
+      "description": "Freeze an immutable Seed spec (goal + acceptance criteria + constraints + ontology) that later evaluation checks against. Blocked automatically if the ambiguity score exceeds the gate (pass force:true to override). Do this once the task is clear, before autonomous execution.",
+      "required": [
+        "goal"
+      ],
+      "parameters": [
+        "goal",
+        "acceptanceCriteria",
+        "constraints",
+        "ontology",
+        "projectId",
+        "force"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ]
+    },
+    {
       "name": "fauna_db_migration",
       "source": "self",
       "category": "other",
@@ -272,6 +307,23 @@
       ]
     },
     {
+      "name": "fauna_definition",
+      "source": "self",
+      "category": "other",
+      "description": "Find likely JS/TS definitions for a symbol in the active project/cwd. Static fallback until full LSP is available.",
+      "required": [
+        "symbol"
+      ],
+      "parameters": [
+        "cwd",
+        "symbol",
+        "maxResults"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
       "name": "fauna_dev_servers",
       "source": "self",
       "category": "shell",
@@ -288,10 +340,27 @@
       ]
     },
     {
+      "name": "fauna_diagnostics",
+      "source": "self",
+      "category": "other",
+      "description": "VS Code Problems-style diagnostics for a Fauna workspace. Resolves the project/conversation workspace, runs an explicit or discovered validation command, and returns structured {file,line,column,severity,source,message} entries plus raw tail output.",
+      "required": [],
+      "parameters": [
+        "projectId",
+        "conversationId",
+        "cwd",
+        "command",
+        "timeoutMs"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
       "name": "fauna_doctor",
       "source": "self",
       "category": "assistant",
-      "description": "Run a self-diagnostic that probes Fauna's optional integrations (headless browser, LibreOffice slide rendering, AI image-gen, stock-photo providers, local LLM, memory and context stores) and returns a structured health report. Call this when a capability seems missing or a task fails for environmental reasons (e.g. \"slide render failed\", \"image-gen unavailable\", \"can't open this page\") so you can see what is configured and what the fix is — instead of guessing. Returns {ok, checks:[{name, status:\"ok\"|\"warn\"|\"fail\", message, fix?}], counts, total}.",
+      "description": "Run a self-diagnostic that probes Fauna's capability channels and optional integrations (browser automation, LibreOffice slide rendering, image generation, stock photos, local/GitHub LLM, memory, context, GitHub CLI, media tools). Call this when a capability seems missing or a task fails for environmental reasons so you can see the active backend and fix instead of guessing. Returns {ok, checks:[{name, channel, tier, backends, activeBackend, status:\"ok\"|\"warn\"|\"fail\"|\"off\", message, fix?}], counts, total}.",
       "required": [],
       "parameters": [],
       "sideEffects": [
@@ -402,6 +471,21 @@
       ]
     },
     {
+      "name": "fauna_get_seed",
+      "source": "self",
+      "category": "other",
+      "description": "Load one immutable Seed spec by id — the contract to check work against.",
+      "required": [
+        "id"
+      ],
+      "parameters": [
+        "id"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
       "name": "fauna_get_settings",
       "source": "self",
       "category": "assistant",
@@ -440,8 +524,11 @@
       "parameters": [
         "query",
         "isRegex",
+        "isRegexp",
         "caseInsensitive",
         "include",
+        "includePattern",
+        "includeIgnoredFiles",
         "cwd",
         "maxResults"
       ],
@@ -501,6 +588,24 @@
       "sideEffects": [
         "mutates-state",
         "network-capable"
+      ]
+    },
+    {
+      "name": "fauna_interview",
+      "source": "self",
+      "category": "other",
+      "description": "Score how ambiguous a task/spec is (0 = crystal clear, 1 = vague) and get Socratic clarifying questions to ask the user. Use BEFORE starting autonomous work: if the score is above the gate (default 0.2), ask the returned questions instead of guessing. Deterministic — no model tokens.",
+      "required": [
+        "goal"
+      ],
+      "parameters": [
+        "goal",
+        "acceptanceCriteria",
+        "constraints",
+        "openQuestions"
+      ],
+      "sideEffects": [
+        "read-only"
       ]
     },
     {
@@ -644,6 +749,17 @@
       "source": "self",
       "category": "other",
       "description": "List all available reference documents (server maps, schemas, glossaries, architecture notes). Cheap — returns no bodies. References answer \"what is this?\" questions; for \"how do I do this?\" workflows, use fauna_list_skills instead.",
+      "required": [],
+      "parameters": [],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_list_seeds",
+      "source": "self",
+      "category": "other",
+      "description": "List frozen Seed specs (newest first) with their goal and ambiguity score. Use fauna_get_seed to load one in full.",
       "required": [],
       "parameters": [],
       "sideEffects": [
@@ -802,6 +918,23 @@
       ]
     },
     {
+      "name": "fauna_references",
+      "source": "self",
+      "category": "other",
+      "description": "Find JS/TS references to a symbol in the active project/cwd with line numbers. Static fallback until full LSP is available.",
+      "required": [
+        "symbol"
+      ],
+      "parameters": [
+        "cwd",
+        "symbol",
+        "maxResults"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
       "name": "fauna_remember",
       "source": "self",
       "category": "memory",
@@ -816,6 +949,24 @@
         "kind",
         "expiresAt",
         "supersedes"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_rename_symbol",
+      "source": "self",
+      "category": "other",
+      "description": "Conservatively rename a JS/TS identifier across the active project/cwd using word-boundary replacement. Prefer this over raw search/replace for simple identifiers; full LSP rename will supersede it later.",
+      "required": [
+        "symbol",
+        "newName"
+      ],
+      "parameters": [
+        "cwd",
+        "symbol",
+        "newName"
       ],
       "sideEffects": [
         "read-only"
@@ -882,6 +1033,23 @@
       ],
       "parameters": [
         "hash"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_route_skill",
+      "source": "self",
+      "category": "other",
+      "description": "Semantically route a task to the best skill(s). Given a natural-language description of what you are about to do, returns a ranked list of skills with a confidence score, the evidence that matched, and — when the match is uncertain — a clarifying question to ask the user. Prefer this over guessing from fauna_list_skills when the task domain is ambiguous. Load the winning skill with fauna_get_skill.",
+      "required": [
+        "query"
+      ],
+      "parameters": [
+        "query",
+        "agent",
+        "activeSkill"
       ],
       "sideEffects": [
         "read-only"
@@ -1102,6 +1270,57 @@
       ]
     },
     {
+      "name": "fauna_symbols",
+      "source": "self",
+      "category": "other",
+      "description": "List JS/TS workspace symbols (classes, functions, variables, types) for the active project/cwd. Static fallback until full LSP is available.",
+      "required": [],
+      "parameters": [
+        "cwd",
+        "query",
+        "maxResults"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_terminal",
+      "source": "self",
+      "category": "other",
+      "description": "Persistent terminal sessions for interactive/project work. Actions: start, send, output, list, kill. Use when a command needs preserved cwd/env/session or interactive follow-up; use fauna_shell_exec for simple one-shot commands.",
+      "required": [
+        "action"
+      ],
+      "parameters": [
+        "action",
+        "id",
+        "cwd",
+        "command",
+        "input",
+        "maxChars"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_test_results",
+      "source": "self",
+      "category": "other",
+      "description": "Run a test command or parse supplied test output into structured failures and summary data. Supports Vitest/Jest-like, pytest, and go test output patterns.",
+      "required": [],
+      "parameters": [
+        "cwd",
+        "command",
+        "output",
+        "timeoutMs"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
       "name": "fauna_ui_tree",
       "source": "self",
       "category": "desktop",
@@ -1110,6 +1329,20 @@
       "parameters": [
         "maxDepth",
         "clickableOnly"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_unstuck",
+      "source": "self",
+      "category": "other",
+      "description": "When the loop is stalled (repeating the same failed approach), get an ordered rotation of lateral-thinking personas (contrarian, simplifier, researcher, hacker, architect) to reframe the problem. Take one divergent pass per persona until one yields a concrete new next action.",
+      "required": [],
+      "parameters": [
+        "context",
+        "count"
       ],
       "sideEffects": [
         "read-only"
@@ -1339,6 +1572,22 @@
         "itemId",
         "projectId",
         "timeoutMs"
+      ],
+      "sideEffects": [
+        "read-only"
+      ]
+    },
+    {
+      "name": "fauna_workspace_context",
+      "source": "self",
+      "category": "other",
+      "description": "Resolve the active Fauna workspace context. Project conversations return project root/read/write/validation scope; non-project conversations return document/global context and explicit cwd scope. Call before coding, diagnostics, tests, or terminal work when scope is unclear.",
+      "required": [],
+      "parameters": [
+        "projectId",
+        "conversationId",
+        "cwd",
+        "documents"
       ],
       "sideEffects": [
         "read-only"

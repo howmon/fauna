@@ -80,7 +80,11 @@ describe('self-tools', () => {
       // Bumped to 81 after adding fauna_write_offloaded (write the FULL
       // offloaded original directly to disk without round-tripping bytes
       // through the model context — fixes Figma CSV export thrash).
-      expect(SELF_TOOL_DEFS).toHaveLength(89);
+      // Bumped to 96 after adding the super-intelligence toolset:
+      // fauna_route_skill (semantic skill router), fauna_interview,
+      // fauna_create_seed, fauna_list_seeds, fauna_get_seed (spec-first loop),
+      // fauna_unstuck (lateral personas), fauna_audit_prompt (prompt patterns).
+      expect(SELF_TOOL_DEFS).toHaveLength(96);
     });
 
     it('each tool has required OpenAI function format', () => {

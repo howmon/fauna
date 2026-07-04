@@ -9,6 +9,9 @@ import { getActionNode } from './server/lib/action-nodes.js';
 import { resolveCredential as _resolveCredential } from './credentials-store.js';
 import { toItems as _toItems, toItem as _toItem, isItemArray as _isItemArray, brandItems as _brandItems, displayOutput as _displayOutput } from './server/lib/items.js';
 import { findSection as _skillFindSection, parseFrontmatter as _skillParseFrontmatter } from './lib/skill-anatomy.js';
+import { buildCatalog as _buildSkillCatalog, routeSkill as _routeSkill } from './lib/skill-catalog.js';
+import { EVENT_TYPES as _LEDGER, appendEvent as _ledgerAppend } from './lib/run-ledger.js';
+import { unstuck as _unstuckPersonas } from './lib/personas.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -212,6 +215,22 @@ async function _autonomyLoop(task, state) {
   const MAX_CONSECUTIVE_NOT_FOUND = 3;
   const NOT_FOUND_RE = /no such file|not found|no results|0 results|directory is empty|zero files|no files found|no matches|does not exist|cannot find/i;
 
+  // Consecutive stalls (text-only responses with neither actions nor a
+  // completion marker). After a couple of these the loop is spinning, so we
+  // inject lateral-thinking personas (Feature B5 "unstuck") to break the rut.
+  let consecutiveStallCount = 0;
+  const MAX_STALL_BEFORE_UNSTUCK = 2;
+
+  // Replayable run ledger (Feature B5). Best-effort — never blocks the run.
+  const ledger = _ledgerPath(task.id);
+  _ledgerAppend(ledger, { type: _LEDGER.RUN_START, runId: task.id, seedId: task.seedId || null });
+
+  // Surface the semantically-routed skill (Feature A) when one was adopted.
+  const autoSkill = _autoRouteSkill(task);
+  if (autoSkill && !(Array.isArray(task.skills) && task.skills.length)) {
+    _emit(task.id, 'reasoning', { entry: { step: 0, intent: `Auto-routed skill: ${autoSkill}`, actions: [], outcome: 'skill-routed' } });
+  }
+
   for (let step = 0; step < maxSteps; step++) {
     state.step = step + 1;
     _emit(task.id, 'step', { step: state.step });
@@ -291,6 +310,8 @@ async function _autonomyLoop(task, state) {
     const actionResults = await _executeResponseActions(aiResponse, task, state.abortController.signal);
 
     if (actionResults && actionResults.length) {
+      consecutiveStallCount = 0;
+      _ledgerAppend(ledger, { type: _LEDGER.ACTION, step: state.step, count: actionResults.length });
       // Track stats and reasoning
       for (const r of actionResults) {
         state.stats.actionsTotal++;
@@ -343,6 +364,8 @@ async function _autonomyLoop(task, state) {
           signal: state.abortController.signal,
         });
         if (verified.ok) {
+          _ledgerAppend(ledger, { type: _LEDGER.STAGE, stage: 'skill-verification', ok: true });
+          _ledgerAppend(ledger, { type: _LEDGER.RUN_END, status: 'completed' });
           completeTask(task.id, { summary: summary.slice(0, 500), verification: verified.evidence });
           _emit(task.id, 'completed', { summary: summary.slice(0, 500), verification: verified.evidence });
           return;
@@ -350,20 +373,33 @@ async function _autonomyLoop(task, state) {
         // Rejected — push the gate's rebuttal back into the conversation
         // and continue looping. The verifier already added the assistant
         // turn (the evidence response) and a user follow-up.
+        _ledgerAppend(ledger, { type: _LEDGER.STAGE, stage: 'skill-verification', ok: false });
         continue;
       }
 
       const failedMatch = aiResponse.match(/(?:TASK_FAILED|BLOCKED|NEEDS-INPUT)\s*:?\s*([\s\S]*)/i);
       if (failedMatch) {
         const reason = (failedMatch[1] || '').trim() || 'Task failed (no reason given)';
+        _ledgerAppend(ledger, { type: _LEDGER.RUN_END, status: 'failed', reason: reason.slice(0, 200) });
         failTask(task.id, reason.slice(0, 500));
         _emit(task.id, 'failed', { error: reason.slice(0, 500) });
         return;
       }
 
-      // No actions and no completion marker — the AI might be explaining or stuck
-      // Give it one more nudge
-      messages.push({ role: 'user', content: 'Continue executing. Use ```browser-ext-action blocks (one action per block) to take action. Say TASK_COMPLETE when done.' });
+      // No actions and no completion marker — the AI might be explaining or
+      // stuck. After repeated stalls, inject lateral-thinking personas to break
+      // the rut instead of the same generic nudge (Feature B5 "unstuck").
+      consecutiveStallCount++;
+      if (consecutiveStallCount >= MAX_STALL_BEFORE_UNSTUCK) {
+        consecutiveStallCount = 0;
+        _ledgerAppend(ledger, { type: _LEDGER.UNSTUCK, step: state.step });
+        const u = _unstuckPersonas(intent || task.title, { count: 3 });
+        const personaLines = u.personas.map((p) => `- ${p.role}: ${p.prompt}`).join('\n');
+        messages.push({ role: 'user', content: `You appear stuck — repeating without taking action. ${u.instruction}\n\n${personaLines}\n\nPick the most promising angle, then emit a concrete action block (shell-exec / browser-ext-action). Say TASK_COMPLETE when done.` });
+        _emit(task.id, 'reasoning', { entry: { step: state.step, intent: 'unstuck: lateral personas injected', actions: [], outcome: 'unstuck' } });
+      } else {
+        messages.push({ role: 'user', content: 'Continue executing. Use ```browser-ext-action blocks (one action per block) to take action. Say TASK_COMPLETE when done.' });
+      }
     }
   }
 
@@ -537,6 +573,73 @@ function _resolveTaskSkills(task) {
   return out;
 }
 
+// The roots we scan for installed SKILL.md files (same set as
+// _locateSkillFile). Returns [{ name, path, description, body }].
+function _scanSkillFiles() {
+  const home = os.homedir();
+  const cwd = process.cwd();
+  const roots = [
+    path.join(cwd, 'skills'),
+    path.join(home, '.config', 'fauna', 'skills'),
+    path.join(home, '.config', 'fauna', 'agents', '_skills'),
+    path.join(cwd, 'agentstore', '_skills'),
+  ];
+  const out = [];
+  const seen = new Set();
+  for (const root of roots) {
+    let entries;
+    try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch (_) { continue; }
+    for (const ent of entries) {
+      let file = null;
+      let name = ent.name;
+      if (ent.isDirectory()) {
+        const cand = path.join(root, ent.name, 'SKILL.md');
+        if (fs.existsSync(cand)) file = cand;
+      } else if (ent.isFile() && ent.name.toLowerCase().endsWith('.md')) {
+        file = path.join(root, ent.name);
+        name = ent.name.replace(/\.md$/i, '');
+      }
+      if (!file || seen.has(name)) continue;
+      seen.add(name);
+      let body = '';
+      try { body = fs.readFileSync(file, 'utf8'); } catch (_) {}
+      let description = '';
+      try { description = (_skillParseFrontmatter(body).frontmatter.description || ''); } catch (_) {}
+      out.push({ name, path: file, description, body });
+    }
+  }
+  return out;
+}
+
+// Semantically route a task with no bound skills to the best-matching skill.
+// Returns a slug (when confident) or null. Computed once per task and cached.
+// Uses the deterministic lexical router (no embeddings) so the loop stays fast.
+function _autoRouteSkill(task) {
+  if (!task) return null;
+  if (task.__autoRoutedSkill !== undefined) return task.__autoRoutedSkill;
+  let slug = null;
+  try {
+    const query = [task.title, task.description, task.context].filter(Boolean).join('\n');
+    const skills = _scanSkillFiles();
+    if (query.trim() && skills.length) {
+      const routed = _routeSkill(query, _buildSkillCatalog(skills));
+      // Only adopt a routed skill when the router is reasonably confident, so
+      // an off-topic task doesn't get a spurious skill forced on it.
+      if (routed && routed.ok && routed.top && routed.confidence >= 0.45) {
+        slug = routed.top;
+      }
+    }
+  } catch (_) { slug = null; }
+  try { Object.defineProperty(task, '__autoRoutedSkill', { value: slug, enumerable: false, configurable: true }); } catch (_) { task.__autoRoutedSkill = slug; }
+  return slug;
+}
+
+// Append-only run ledger path for a task (Feature B5 — replayable EventStore).
+function _ledgerPath(taskId) {
+  return path.join(os.homedir(), '.config', 'fauna', 'autonomous-runs', String(taskId).replace(/[^a-zA-Z0-9_.-]/g, '') + '.ledger.jsonl');
+}
+
+
 // Locate a SKILL.md across the same search roots as self-tools._findSkill.
 // Kept inline to avoid pulling self-tools into the runner.
 function _locateSkillFile(skillName) {
@@ -581,9 +684,16 @@ function _coreOperatingBehaviors() {
 // fauna_get_skill if it needs the full workflow.
 function _skillSystemPromptLines(task) {
   const slugs = _resolveTaskSkills(task);
-  if (!slugs.length) return [];
+  // When no skills are explicitly bound, semantically route to the best match
+  // (Feature A) and surface it as advisory guidance. Auto-routed skills guide
+  // the model but are NOT enforced by the evidence gate (which stays opt-in via
+  // explicit binding), so a routed skill never blocks TASK_COMPLETE.
+  const auto = slugs.length ? null : _autoRouteSkill(task);
+  const explicit = slugs.length > 0;
+  const effective = slugs.length ? slugs : (auto ? [auto] : []);
+  if (!effective.length) return [];
   const summaries = [];
-  for (const slug of slugs) {
+  for (const slug of effective) {
     const file = _locateSkillFile(slug);
     if (!file) { summaries.push(`- ${slug} (not installed)`); continue; }
     try {
@@ -593,11 +703,13 @@ function _skillSystemPromptLines(task) {
       summaries.push(`- ${slug}: ${desc}`);
     } catch (_) { summaries.push(`- ${slug}`); }
   }
-  return [
-    'ACTIVE SKILLS for this task (call fauna_get_skill(name) to load the full workflow, or fauna_get_skill(name, "Verification") for just the exit criteria):',
-    ...summaries,
-    'You MUST follow each skill\'s Process and pass its Verification before claiming TASK_COMPLETE.',
-  ];
+  const header = explicit
+    ? 'ACTIVE SKILLS for this task (call fauna_get_skill(name) to load the full workflow, or fauna_get_skill(name, "Verification") for just the exit criteria):'
+    : 'SUGGESTED SKILL for this task (auto-matched — call fauna_get_skill(name) to load the full workflow if it fits):';
+  const footer = explicit
+    ? 'You MUST follow each skill\'s Process and pass its Verification before claiming TASK_COMPLETE.'
+    : 'Follow this skill\'s Process where it applies before claiming TASK_COMPLETE.';
+  return [header, ...summaries, footer];
 }
 
 // When the model emits TASK_COMPLETE, require it to cite evidence against
@@ -1417,4 +1529,13 @@ export {
   runTask, pauseTask, stopTask, steerTask,
   isTaskRunning, getRunningTaskInfo, getRunningTasks,
   subscribe,
+};
+
+// Internal helpers exposed for unit testing only.
+export const _testables = {
+  scanSkillFiles: _scanSkillFiles,
+  autoRouteSkill: _autoRouteSkill,
+  resolveTaskSkills: _resolveTaskSkills,
+  skillSystemPromptLines: _skillSystemPromptLines,
+  ledgerPath: _ledgerPath,
 };

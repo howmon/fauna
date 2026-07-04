@@ -273,6 +273,7 @@ describe('agent and tool policy', () => {
       'fauna_context_search',
       'fauna_list_references',
       'fauna_list_skills',
+      'fauna_route_skill',
       'custom_tool',
     ]);
   });

@@ -35,6 +35,10 @@ import { renderBoard } from './lib/circuit-board-renderer.js';
 import { checkBoard } from './lib/circuit-pcb-drc.js';
 import { buildGuide } from './lib/circuit-guide.js';
 import { packWidgetResult } from './lib/dynamic-widgets.js';
+import { buildCatalog, routeSkill, attachEmbeddings } from './lib/skill-catalog.js';
+import { scoreAmbiguity, interviewQuestions, createSeed as seedCreate, getSeed as seedGet, listSeeds as seedList } from './lib/seed-store.js';
+import { unstuck as personasUnstuck } from './lib/personas.js';
+import { auditPrompt } from './lib/prompt-audit.js';
 import {
   createJob as videoCreateJob,
   getJob as videoGetJob,
@@ -1404,6 +1408,111 @@ export const SELF_TOOL_DEFS = [
           agent: { type: 'string', description: 'Optional agent slug to scope to. Defaults to the active agent.' },
         },
         required: ['name'],
+      },
+    },
+  },
+
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_route_skill',
+      description: 'Semantically route a task to the best skill(s). Given a natural-language description of what you are about to do, returns a ranked list of skills with a confidence score, the evidence that matched, and — when the match is uncertain — a clarifying question to ask the user. Prefer this over guessing from fauna_list_skills when the task domain is ambiguous. Load the winning skill with fauna_get_skill.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Natural-language description of the task you are about to perform.' },
+          agent: { type: 'string', description: 'Optional agent slug to scope to. Defaults to the active agent.' },
+          activeSkill: { type: 'string', description: 'Optional slug of the skill already in use, to bias toward related skills.' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+
+  // ── Spec-first loop: interview, seed, unstuck (ouroboros-inspired) ──
+  // Gate autonomous/Kanban work on a clear spec. Interactive chat is unaffected.
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_interview',
+      description: 'Score how ambiguous a task/spec is (0 = crystal clear, 1 = vague) and get Socratic clarifying questions to ask the user. Use BEFORE starting autonomous work: if the score is above the gate (default 0.2), ask the returned questions instead of guessing. Deterministic — no model tokens.',
+      parameters: {
+        type: 'object',
+        properties: {
+          goal: { type: 'string', description: 'The task goal in one sentence.' },
+          acceptanceCriteria: { type: 'array', items: { type: 'string' }, description: 'Known success conditions, if any.' },
+          constraints: { type: 'array', items: { type: 'string' }, description: 'Known constraints / out-of-scope items.' },
+          openQuestions: { type: 'array', items: { type: 'string' }, description: 'Still-unanswered questions, if any.' },
+        },
+        required: ['goal'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_create_seed',
+      description: 'Freeze an immutable Seed spec (goal + acceptance criteria + constraints + ontology) that later evaluation checks against. Blocked automatically if the ambiguity score exceeds the gate (pass force:true to override). Do this once the task is clear, before autonomous execution.',
+      parameters: {
+        type: 'object',
+        properties: {
+          goal: { type: 'string', description: 'The goal in one concrete sentence.' },
+          acceptanceCriteria: { type: 'array', items: { type: 'string' }, description: 'Observable success conditions.' },
+          constraints: { type: 'array', items: { type: 'string' }, description: 'Out-of-scope items / constraints.' },
+          ontology: { type: 'array', items: { type: 'string' }, description: 'Key domain terms/entities.' },
+          projectId: { type: 'string', description: 'Optional project this seed belongs to.' },
+          force: { type: 'boolean', description: 'Create even if the ambiguity gate is not cleared.' },
+        },
+        required: ['goal'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_list_seeds',
+      description: 'List frozen Seed specs (newest first) with their goal and ambiguity score. Use fauna_get_seed to load one in full.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_get_seed',
+      description: 'Load one immutable Seed spec by id — the contract to check work against.',
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'string', description: 'Seed id from fauna_list_seeds.' } },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_unstuck',
+      description: 'When the loop is stalled (repeating the same failed approach), get an ordered rotation of lateral-thinking personas (contrarian, simplifier, researcher, hacker, architect) to reframe the problem. Take one divergent pass per persona until one yields a concrete new next action.',
+      parameters: {
+        type: 'object',
+        properties: {
+          context: { type: 'string', description: 'Brief description of what is stuck.' },
+          count: { type: 'number', description: 'How many personas to return (1–5, default 5).' },
+        },
+      },
+    },
+  },
+
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_audit_prompt',
+      description: 'Audit a system-prompt / instruction string against curated behavioural patterns (tool-discipline, verification, persistence, scope, honesty, safety, output-format). Returns which patterns are present, which are missing, and remediation hints. Use to review or improve agent instructions and skills.',
+      parameters: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string', description: 'The prompt / instruction text to audit.' },
+        },
+        required: ['prompt'],
       },
     },
   },
@@ -3170,6 +3279,94 @@ export async function executeSelfTool(toolName, args, context = {}) {
         availableSections: _listMarkdownSections(found.body),
         body,
       });
+    }
+
+    case 'fauna_route_skill': {
+      const query = String(args.query || '').trim();
+      if (!query) return JSON.stringify({ ok: false, error: 'query required' });
+      const agentName = String(args.agent || context.activeAgentName || '').replace(/[^a-zA-Z0-9_-]/g, '') || null;
+      const agentsDir = context.agentsDir;
+      const skills = _listSkillsOnDisk(agentsDir, agentName, context);
+      if (!skills.length) {
+        return JSON.stringify({ ok: false, error: 'No skills installed to route to.', plan: [] });
+      }
+      const catalog = buildCatalog(skills);
+      // Best-effort semantic boost; silently degrades to lexical-only when the
+      // optional embedding model is unavailable (offline / not downloaded).
+      let semantic = false;
+      let queryVector = null;
+      try {
+        semantic = await attachEmbeddings(catalog);
+        if (semantic) {
+          const mod = await import('./lib/skill-catalog.js');
+          queryVector = await mod.embedText(query);
+        }
+      } catch (_) { semantic = false; queryVector = null; }
+      const routed = routeSkill(query, catalog, {
+        activeSkill: args.activeSkill ? String(args.activeSkill).replace(/[^a-zA-Z0-9_-]/g, '') : null,
+        queryVector,
+      });
+      return JSON.stringify({
+        ...routed,
+        semantic,
+        _note: routed.clarify
+          ? 'Confidence is low — consider asking the user the clarify question before loading a skill.'
+          : (routed.top ? `Load the winning skill with fauna_get_skill(name: "${routed.top}").` : undefined),
+      });
+    }
+
+    case 'fauna_interview': {
+      const goal = String(args.goal || '').trim();
+      if (!goal) return JSON.stringify({ ok: false, error: 'goal required' });
+      const spec = {
+        goal,
+        acceptanceCriteria: Array.isArray(args.acceptanceCriteria) ? args.acceptanceCriteria : [],
+        constraints: Array.isArray(args.constraints) ? args.constraints : [],
+        openQuestions: Array.isArray(args.openQuestions) ? args.openQuestions : [],
+      };
+      const ambiguityScore = scoreAmbiguity(spec);
+      const threshold = 0.2;
+      return JSON.stringify({
+        ok: true,
+        ambiguityScore,
+        threshold,
+        clear: ambiguityScore <= threshold,
+        questions: interviewQuestions(spec),
+        _note: ambiguityScore <= threshold
+          ? 'Spec is clear enough — you may freeze it with fauna_create_seed and begin.'
+          : 'Too ambiguous — ask the user these questions before starting autonomous work.',
+      });
+    }
+
+    case 'fauna_create_seed': {
+      const goal = String(args.goal || '').trim();
+      if (!goal) return JSON.stringify({ ok: false, error: 'goal required' });
+      const r = seedCreate({
+        goal,
+        acceptanceCriteria: Array.isArray(args.acceptanceCriteria) ? args.acceptanceCriteria : [],
+        constraints: Array.isArray(args.constraints) ? args.constraints : [],
+        ontology: Array.isArray(args.ontology) ? args.ontology : [],
+        projectId: args.projectId || context.activeProjectId || null,
+      }, { force: !!args.force });
+      return JSON.stringify(r);
+    }
+
+    case 'fauna_list_seeds':
+      return JSON.stringify({ ok: true, seeds: seedList() });
+
+    case 'fauna_get_seed': {
+      const seed = seedGet(String(args.id || ''));
+      return seed ? JSON.stringify({ ok: true, seed }) : JSON.stringify({ ok: false, error: 'seed not found' });
+    }
+
+    case 'fauna_unstuck':
+      return JSON.stringify({ ok: true, ...personasUnstuck(args.context, { count: args.count }) });
+
+    case 'fauna_audit_prompt': {
+      const prompt = String(args.prompt || '');
+      if (!prompt.trim()) return JSON.stringify({ ok: false, error: 'prompt required' });
+      const audit = auditPrompt(prompt);
+      return JSON.stringify({ ok: true, ...audit });
     }
 
     case 'fauna_list_references': {

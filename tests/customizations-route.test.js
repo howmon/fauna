@@ -272,7 +272,7 @@ You review code with high signal.
     expect(res.body.policy.name).toBe('reviewer');
     expect(res.body.policy.systemPrompt).toBe('You review code with high signal.');
     expect(res.body.policy.tools).toEqual(['read', 'search']);
-    expect(res.body.policy.expandedTools).toContain('fauna_search_files');
+    expect(res.body.policy.expandedTools).toContain('fauna_file_search');
     expect(res.body.policy.allowedSubagents).toEqual([]);
     expect(res.body.policy.userInvocable).toBe(false);
     expect(res.body.policy.disableModelInvocation).toBe(true);
