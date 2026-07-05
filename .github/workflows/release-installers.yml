@@ -39,9 +39,6 @@ jobs:
       - name: Prepare relay dependencies
         run: npm run prepare:relay
 
-      - name: Build whisper binary
-        run: npm run build:whisper
-
       - name: Build macOS arm64 DMG
         env:
           CSC_LINK: ${{ secrets.APPLE_CERT_P12_BASE64 }}
@@ -168,9 +165,6 @@ jobs:
       - name: Prepare relay dependencies
         run: npm run prepare:relay
 
-      - name: Build whisper binary
-        run: npm run build:whisper
-
       - name: Build macOS x64 DMG
         env:
           CSC_LINK: ${{ secrets.APPLE_CERT_P12_BASE64 }}
@@ -296,9 +290,6 @@ jobs:
 
       - name: Prepare relay dependencies
         run: npm run prepare:relay
-
-      - name: Build whisper binary
-        run: npm run build:whisper
 
       - name: Build Windows x64 NSIS installer
         run: npx electron-builder --win nsis --x64 --publish never

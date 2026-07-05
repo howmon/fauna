@@ -18,24 +18,6 @@ const CONFIG_FILE = path.join(CONFIG_DIR, 'voice-settings.json');
 export const DEFAULT_DICTATION_ACCEL_MAC   = 'Cmd+Alt+D';
 export const DEFAULT_DICTATION_ACCEL_OTHER = 'Ctrl+Alt+D';
 
-// Whitelisted Whisper.cpp model aliases. These match the filenames hosted at
-// https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-<alias>.bin
-// Order is meaningful: settings UI renders in this order.
-export const WHISPER_MODELS = Object.freeze([
-  'tiny',
-  'tiny.en',
-  'base',
-  'base.en',
-  'small',
-  'small.en',
-  'medium',
-  'medium.en',
-  'large-v3-turbo',
-]);
-
-// Speech-to-text engines the voice pipeline can route to (see stt-provider.js).
-export const STT_ENGINES = Object.freeze(['whisper', 'parakeet']);
-
 // Whitelisted Parakeet (sherpa-onnx) aliases. Kept in sync with
 // parakeet-models.js MODEL_INFO; defined here too so settings sanitisation
 // stays free of any native/onnx dependency.
@@ -62,15 +44,8 @@ export const DEFAULTS = Object.freeze({
   dictationPasteOnFinish: false, // future: actually inject paste keystroke
   dictationDeviceId:      '',    // browser MediaDeviceInfo.deviceId; '' = default mic
 
-  // Speech-to-text engine selection
-  sttEngine:     'whisper',      // 'whisper' (whisper.cpp) | 'parakeet' (sherpa-onnx, cross-platform low-latency)
-  parakeetModel: 'parakeet-tdt-0.6b-v2', // active Parakeet alias when sttEngine === 'parakeet'
-
-  // Whisper STT
-  whisperModel:    'base.en',    // one of: tiny, tiny.en, base, base.en, small, small.en, medium, medium.en, large-v3-turbo
-  whisperLanguage: 'auto',       // 'auto' = detect; or BCP-47 code: 'en', 'es', 'fr', ...
-  whisperHotWords: '',           // free-form initial-prompt text fed to whisper-cli --prompt to bias decoding
-                                 // toward project names, acronyms, jargon (e.g. "Fauna, Kokoro, MCP, afterPack").
+  // Speech-to-text (Parakeet / sherpa-onnx — cross-platform, in-process)
+  parakeetModel: 'parakeet-tdt-0.6b-v2', // active Parakeet alias
 
   // Redaction (memory + playbook persist path)
   redactEmail:      false,
@@ -135,39 +110,11 @@ function _sanitise(cfg) {
     ? out.dictationDeviceId.replace(/[^A-Za-z0-9_=+/-]/g, '').slice(0, 256)
     : '';
 
-  // STT engine — whitelist so callers can trust the value for routing.
-  out.sttEngine = STT_ENGINES.includes(String(out.sttEngine))
-    ? String(out.sttEngine)
-    : DEFAULTS.sttEngine;
   // Parakeet model — restrict to known aliases so we never build a recognizer
   // against an attacker-controlled path.
   out.parakeetModel = PARAKEET_MODELS.includes(String(out.parakeetModel))
     ? String(out.parakeetModel)
     : DEFAULTS.parakeetModel;
-
-  // Whisper STT — restrict to a known whitelist so we never spawn whisper-cli
-  // against an attacker-controlled filename.
-  out.whisperModel = WHISPER_MODELS.includes(String(out.whisperModel))
-    ? String(out.whisperModel)
-    : DEFAULTS.whisperModel;
-  // Language: 'auto' or a 2–5 char alpha code. Whisper accepts 'en', 'zh',
-  // 'es', etc. We don't validate against a full BCP-47 set, just shape.
-  out.whisperLanguage = (() => {
-    const v = String(out.whisperLanguage || '').trim().toLowerCase();
-    if (!v || v === 'auto') return 'auto';
-    if (/^[a-z]{2,5}(?:-[a-z0-9]{2,8})?$/i.test(v)) return v;
-    return DEFAULTS.whisperLanguage;
-  })();
-  // Hot-words / initial prompt. Whisper.cpp caps the prompt at ~224 tokens
-  // (~900 chars in practice); cap conservatively. Strip control chars so an
-  // accidental newline/NUL can't break the spawn args.
-  out.whisperHotWords = (() => {
-    let v = String(out.whisperHotWords || '');
-    // eslint-disable-next-line no-control-regex
-    v = v.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
-    if (v.length > 800) v = v.slice(0, 800);
-    return v;
-  })();
 
   out.redactEmail      = !!out.redactEmail;
   out.redactPhone      = !!out.redactPhone;

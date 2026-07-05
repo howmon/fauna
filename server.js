@@ -97,7 +97,6 @@ import { registerMcpRoutes } from './server/routes/mcp.js';
 import { registerVoiceSettingsRoutes } from './server/routes/voice-settings.js';
 import { registerKokoroTtsRoutes } from './server/routes/kokoro-tts.js';
 import { registerLessonRoutes } from './server/routes/lesson.js';
-import { registerWhisperRoutes } from './server/routes/whisper.js';
 import { registerParakeetRoutes } from './server/routes/parakeet.js';
 import { registerVideoRoutes } from './server/routes/video.js';
 import { registerPlaywrightMcpRoutes } from './server/routes/playwright-mcp.js';
@@ -698,9 +697,8 @@ app.post('/api/permissions/request-accessibility', (req, res) => {
 
 // ── Region capture + Shell stdin routes moved → server/routes/region-and-stdin.js ──
 registerRegionAndStdinRoutes(app, { require: _require, appDir: __dirname, getElectronBrowserWindow: () => _ElectronBrowserWindow, getDesktopCapturer: () => desktopCapturer, shellProcs: _shellProcs });
-// ── Whisper voice transcription moved → server/routes/whisper.js ──
-registerWhisperRoutes(app, { express, faunaConfigDir: FAUNA_CONFIG_DIR, augmentedPath: AUGMENTED_PATH, appDir: __dirname });
-registerParakeetRoutes(app, { express });
+// ── Voice STT (Parakeet/sherpa-onnx) + transcription routes → server/routes/parakeet.js ──
+registerParakeetRoutes(app, { express, appDir: __dirname, augmentedPath: AUGMENTED_PATH });
 // ── Video Studio pipeline routes ──
 registerVideoRoutes(app, { getCopilotClient });
 // ── Document/attachment + browser-ext routes moved → server/routes/docs-and-ext.js ──

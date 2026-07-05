@@ -24,7 +24,7 @@ Streaming AI with real shell, browser, Figma, file editing, voice, video, and a 
 
 **Figma** — Dev Mode MCP (port 3845) + Plugin API via `figma_execute`. Full A11y design-spec generation against design-system components.
 
-**Voice** — Wake-word, push-to-talk dictation, full voice chat. Whisper transcription, Kokoro TTS, resident always-listening mode. Settings → Voice.
+**Voice** — Wake-word, push-to-talk dictation, full voice chat. Parakeet (sherpa-onnx) transcription, Kokoro TTS, resident always-listening mode. Settings → Voice.
 
 **Whiteboard lessons** — `fauna_lesson_create` generates a multi-scene interactive whiteboard with synced narration, KaTeX, pen-drawn diagrams. Source a `.pptx`, `.docx`, `.pdf`, `.md`, `.html`, or URL — speaker notes included. Download as **MP4** or as a **portable HTML+audio zip** for any web host.
 
@@ -106,7 +106,7 @@ User → AI streams response with native function tool calls
   ├── /api/lesson-*                whiteboard lessons + MP4 / HTML export
   ├── /api/video/jobs/:id[/events] storyteller pipeline, SSE per job
   ├── /api/kokoro-tts /-podcast    Kokoro voice synth + 2-host podcasts
-  ├── /api/whisper-model-*         Whisper download / status / delete
+  ├── /api/parakeet-model-*        Parakeet STT download / status / delete
   └── /api/transcribe              speech-to-text
 
   Automation · Sync · Devices

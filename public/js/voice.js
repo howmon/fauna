@@ -770,15 +770,15 @@ function _routeVoiceCommand(transcript) {
   }
 }
 
-// ── Whisper via server-side whisper.cpp ──────────────────────────────────
-// No ONNX worker needed — audio blob is POSTed to /api/transcribe which runs
-// whisper.cpp natively (4-8× faster than WASM, Metal-accelerated on Apple Silicon).
+// ── Parakeet (sherpa-onnx) via server-side /api/transcribe ───────────────
+// Audio blob is POSTed to /api/transcribe, decoded to PCM with ffmpeg and run
+// through the in-process Parakeet engine (cross-platform, low latency).
 
 var _whisperModelReady = false;
 
 async function _checkWhisperModel() {
   try {
-    var resp = await fetch('/api/whisper-model-status');
+    var resp = await fetch('/api/parakeet-model-status');
     var data = await resp.json();
     return data.ready;
   } catch (_) { return false; }
@@ -786,7 +786,7 @@ async function _checkWhisperModel() {
 
 async function _downloadWhisperModel() {
   return new Promise(function(resolve, reject) {
-    if (typeof showToast === 'function') showToast('Downloading voice model (~465 MB)…', 'info', 0);
+    if (typeof showToast === 'function') showToast('Downloading voice model (~660 MB)…', 'info', 0);
 
     // Show a progress bar in the toast area
     var bar = document.getElementById('whisper-download-bar');
@@ -806,7 +806,7 @@ async function _downloadWhisperModel() {
 
     var label = document.getElementById('whisper-dl-label');
     var fill  = document.getElementById('whisper-dl-fill');
-    var es = new EventSource('/api/whisper-model-download');
+    var es = new EventSource('/api/parakeet-model-download');
 
     es.onmessage = function(ev) {
       try {
