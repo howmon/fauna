@@ -1975,9 +1975,18 @@ async function streamResponse(conv) {
             (function(ev) {
               dbg('client_tool_pending: ' + ev.name + ' callId=' + ev.callId, 'cmd');
               var doneCalled = false;
+              // Server drops the pending callId after 60s. If the machine slept
+              // mid-call, the tool may resolve long after that window — posting
+              // the result would just 404. Abort locally instead.
+              var startedAt = Date.now();
+              var CLIENT_TOOL_TTL_MS = 60000;
               function reply(payload) {
                 if (doneCalled) return;
                 doneCalled = true;
+                if (Date.now() - startedAt > CLIENT_TOOL_TTL_MS) {
+                  dbg('client_tool ' + ev.name + ' callId=' + ev.callId + ' expired locally (suspended?) — skipping result post', 'cmd');
+                  return;
+                }
                 fetch('/api/client-tool-result', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },

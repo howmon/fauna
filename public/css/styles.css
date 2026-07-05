@@ -11082,7 +11082,7 @@ mark.find-hit.find-hit-active {
 }
 .kb-live-head {
   display: flex; align-items: flex-start; gap: 10px;
-  padding: 12px 14px; border-bottom: 1px solid var(--fau-border);
+  padding: 12px 14px; border-bottom: 1px solid var(--fau-border); margin-top: 44px;
 }
 .kb-live-head-main { flex: 1; min-width: 0; }
 .kb-live-title {
@@ -11334,7 +11334,7 @@ mark.find-hit.find-hit-active {
 .kb-modal-live {
   background: color-mix(in srgb, var(--accent, #6ea8fe) 4%, var(--fau-surface2));
   border: 1px solid color-mix(in srgb, var(--accent, #6ea8fe) 24%, var(--fau-border));
-  border-radius: 8px; overflow: hidden;
+  border-radius: 8px; overflow: auto; min-height: 250px;
 }
 .kb-modal-live-summary {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;

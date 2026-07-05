@@ -1,12 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
 import { workspaceSymbols, symbolDefinition, symbolReferences, renameSymbol } from '../lib/language-tools.js';
 
+const _created = [];
 function fixture() {
-  const dir = fs.mkdtempSync(path.join(os.homedir(), 'fauna-lang-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fauna-lang-'));
+  _created.push(dir);
   fs.writeFileSync(path.join(dir, 'app.ts'), [
     'export function greet(name) {',
     '  return helper(name);',
@@ -16,6 +18,12 @@ function fixture() {
   ].join('\n'), 'utf8');
   return dir;
 }
+
+afterEach(() => {
+  while (_created.length) {
+    try { fs.rmSync(_created.pop(), { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+});
 
 describe('language tools', () => {
   it('lists workspace symbols', () => {

@@ -182,7 +182,10 @@ export function registerChatRoute(app, {
     const { callId, result, error } = req.body || {};
     const pending = clientToolPendingCalls.get(callId);
     if (!pending) {
-      return res.status(404).json({ ok: false, error: 'Unknown or expired callId' });
+      // Orphaned result — the pending call already timed out (e.g. the machine
+      // slept mid-call). Ack with 200 so the renderer doesn't log a network
+      // error; there's simply nothing left to resolve.
+      return res.json({ ok: false, reason: 'expired' });
     }
     clientToolPendingCalls.delete(callId);
     clearTimeout(pending.timer);
@@ -195,7 +198,9 @@ export function registerChatRoute(app, {
     const { callId, result, error } = req.body || {};
     const pending = widgetPendingCalls.get(callId);
     if (!pending) {
-      return res.status(404).json({ ok: false, error: 'Unknown or expired callId' });
+      // Orphaned result (see /api/client-tool-result) — ack with 200 instead
+      // of 404 so a stale post after wake doesn't spam the console.
+      return res.json({ ok: false, reason: 'expired' });
     }
     widgetPendingCalls.delete(callId);
     clearTimeout(pending.timer);

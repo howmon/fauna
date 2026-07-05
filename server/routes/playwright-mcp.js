@@ -145,7 +145,10 @@ export function registerPlaywrightMcpRoutes(app, {
           console.log('[playwright-mcp] connection lost, retrying…');
           continue;
         }
-        return res.status(500).json({ ok: false, error: _formatPlaywrightMcpError(e) });
+        // Application-level failure (often a transient disconnect after the
+        // machine slept). Return 200 with ok:false — the caller already
+        // handles the ok flag, and this avoids a red 500 in the console.
+        return res.json({ ok: false, error: _formatPlaywrightMcpError(e) });
       }
     }
   });

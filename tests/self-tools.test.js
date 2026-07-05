@@ -313,26 +313,32 @@ describe('self-tools', () => {
     });
 
     it('fauna_grep can opt into normally ignored directories', async () => {
-      const dir = fs.mkdtempSync(path.join(os.homedir(), 'fauna-grep-'));
-      const ignoredDir = path.join(dir, 'node_modules');
-      fs.mkdirSync(ignoredDir, { recursive: true });
-      fs.writeFileSync(path.join(ignoredDir, 'pkg.js'), 'const token = "FAUNA_IGNORED_REGEX_SENTINEL";\n', 'utf8');
+      // fauna_grep only allows cwd under HOME or /tmp; macOS os.tmpdir() is
+      // /var/folders/... which the guard rejects, so use /tmp explicitly.
+      const dir = fs.mkdtempSync('/tmp/fauna-grep-');
+      try {
+        const ignoredDir = path.join(dir, 'node_modules');
+        fs.mkdirSync(ignoredDir, { recursive: true });
+        fs.writeFileSync(path.join(ignoredDir, 'pkg.js'), 'const token = "FAUNA_IGNORED_REGEX_SENTINEL";\n', 'utf8');
 
-      const skipped = JSON.parse(await executeSelfTool('fauna_grep', {
-        query: 'FAUNA_IGNORED_REGEX_SENTINEL',
-        cwd: dir,
-      }, mockContext));
-      expect(skipped.ok).toBe(true);
-      expect(skipped.count).toBe(0);
+        const skipped = JSON.parse(await executeSelfTool('fauna_grep', {
+          query: 'FAUNA_IGNORED_REGEX_SENTINEL',
+          cwd: dir,
+        }, mockContext));
+        expect(skipped.ok).toBe(true);
+        expect(skipped.count).toBe(0);
 
-      const included = JSON.parse(await executeSelfTool('fauna_grep', {
-        query: 'FAUNA_IGNORED_REGEX_SENTINEL',
-        cwd: dir,
-        includeIgnoredFiles: true,
-      }, mockContext));
-      expect(included.ok).toBe(true);
-      expect(included.count).toBe(1);
-      expect(included.matches[0].path).toBe(path.join('node_modules', 'pkg.js'));
+        const included = JSON.parse(await executeSelfTool('fauna_grep', {
+          query: 'FAUNA_IGNORED_REGEX_SENTINEL',
+          cwd: dir,
+          includeIgnoredFiles: true,
+        }, mockContext));
+        expect(included.ok).toBe(true);
+        expect(included.count).toBe(1);
+        expect(included.matches[0].path).toBe(path.join('node_modules', 'pkg.js'));
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it('fauna_grep refuses invalid regex with a clear error', async () => {
