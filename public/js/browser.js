@@ -1822,6 +1822,23 @@ function extractAndRenderBrowserExtActions(html, messageEl, isHistoryLoad, convI
   _runExtActionSequence(widgets, convId);
 }
 
+// True when a later action in the same block produces a definitive result the
+// model actually wants (page text, form fields, screenshot, or eval output).
+// Intermediate steps (tab:new, navigate, wait, click, scroll…) must SKIP their
+// own auto-extract feed in that case — otherwise the intermediate feed starts a
+// new AI stream and the real result (snapshot-full/eval) gets dropped because
+// browserFeedAI/sendDirectMessage bail out while a stream is already running.
+function _hasDefinitiveFollowUp(widgets, i) {
+  for (var k = i + 1; k < widgets.length; k++) {
+    var a = widgets[k] && widgets[k].action && widgets[k].action.action;
+    if (a === 'extract' || a === 'extract-forms' ||
+        a === 'snapshot' || a === 'snapshot-full' || a === 'eval') {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function _runExtActionSequence(widgets, convId) {
   var conv = getConv(convId || state.currentId);
   var i = 0;
@@ -1865,7 +1882,7 @@ async function _runExtActionSequence(widgets, convId) {
       }
 
       if (w.action.action === 'navigate') {
-        var hasFollowExt = widgets.slice(i + 1).some(function(fw) { return fw.action.action === 'extract'; });
+        var hasFollowExt = _hasDefinitiveFollowUp(widgets, i);
         if (!hasFollowExt) {
           try {
             var navRes = await executeExtAction({ action: 'extract' });
@@ -1878,9 +1895,7 @@ async function _runExtActionSequence(widgets, convId) {
       }
 
       if (w.action.action === 'click') {
-        var hasFollowClick = widgets.slice(i + 1).some(function(fw) {
-          return fw.action.action === 'extract' || fw.action.action === 'snapshot';
-        });
+        var hasFollowClick = _hasDefinitiveFollowUp(widgets, i);
         if (!hasFollowClick) {
           try {
             // Wait for the page to settle before checking — SPA routes and full-page
@@ -1899,9 +1914,7 @@ async function _runExtActionSequence(widgets, convId) {
       }
 
       if (w.action.action === 'scroll' || w.action.action === 'hover' || w.action.action === 'select' || w.action.action === 'keyboard' || w.action.action === 'drag' || w.action.action === 'type') {
-        var hasFollowScroll = widgets.slice(i + 1).some(function(fw) {
-          return fw.action.action === 'extract' || fw.action.action === 'snapshot';
-        });
+        var hasFollowScroll = _hasDefinitiveFollowUp(widgets, i);
         if (!hasFollowScroll) {
           try {
             var feedDelay = (w.action.action === 'type') ? 1000 : 500;
@@ -1991,13 +2004,18 @@ async function _runExtActionSequence(widgets, convId) {
       }
 
       if (w.action.action === 'tab:switch' || w.action.action === 'tab:new') {
-        try {
-          var swRes = await executeExtAction({ action: 'extract' });
-          var swFeed = (w.action.action === 'tab:switch' ? 'Switched to tab (ext)' : 'Opened new tab (ext)') +
-            ':\n\n**Title:** ' + (swRes.title||'') + '\n**URL:** ' + (swRes.url||'') + '\n\n' + (swRes.text||'').slice(0, 12000) +
-            '';
-          await browserFeedAI(swFeed, convId);
-        } catch(_) {}
+        // Skip the auto-extract feed when a later action (snapshot/eval/extract)
+        // in the same block will produce the real result. Otherwise this
+        // intermediate feed starts a stream and the later result is dropped.
+        if (!_hasDefinitiveFollowUp(widgets, i)) {
+          try {
+            var swRes = await executeExtAction({ action: 'extract' });
+            var swFeed = (w.action.action === 'tab:switch' ? 'Switched to tab (ext)' : 'Opened new tab (ext)') +
+              ':\n\n**Title:** ' + (swRes.title||'') + '\n**URL:** ' + (swRes.url||'') + '\n\n' + (swRes.text||'').slice(0, 12000) +
+              '';
+            await browserFeedAI(swFeed, convId);
+          } catch(_) {}
+        }
       }
 
       if (w.action.action === 'tab:close') {
@@ -2007,9 +2025,7 @@ async function _runExtActionSequence(widgets, convId) {
       }
 
       if (w.action.action === 'wait') {
-        var hasFollowWait = widgets.slice(i + 1).some(function(fw) {
-          return fw.action.action === 'extract' || fw.action.action === 'snapshot';
-        });
+        var hasFollowWait = _hasDefinitiveFollowUp(widgets, i);
         if (!hasFollowWait) {
           try {
             var waitRes = await executeExtAction({ action: 'extract' });

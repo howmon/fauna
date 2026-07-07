@@ -82,6 +82,7 @@ import {
   getScreenBounds as macGetScreenBounds,
 } from './server/lib/window-context.js';
 import { scaffoldTemplate, listTemplates } from './server/app-templates.js';
+import { buildShellEnv } from './server/lib/shell-env.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -3466,7 +3467,16 @@ export async function executeSelfTool(toolName, args, context = {}) {
       const timeoutMs = Math.max(10000, Math.min(900000, Number(args.timeoutMs) || 180000));
       return new Promise((resolve) => {
         const started = Date.now();
-        const child = spawn('npm', ['run', script], { cwd: root, env: process.env });
+        // Electron's process.env.PATH is reduced and often lacks /usr/local/bin
+        // and /opt/homebrew/bin, so `spawn('npm', …)` fails with ENOENT even
+        // though npm is installed. Run through the augmented shell PATH.
+        const _isWin = process.platform === 'win32';
+        const { augmentedPath } = buildShellEnv(_isWin);
+        const child = spawn('npm', ['run', script], {
+          cwd: root,
+          env: { ...process.env, PATH: augmentedPath },
+          shell: _isWin,
+        });
         let out = '';
         let timedOut = false;
         const timer = setTimeout(() => {

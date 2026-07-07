@@ -64,11 +64,75 @@ const DEV_CMD_PATTERNS = [
   /\bdocker-compose\s+up\b/i,
 ];
 
+// One-shot / read-only utilities that are NEVER long-running dev servers, even
+// when their arguments happen to mention "dev", "serve", "vite", etc. (e.g.
+// `grep "npm run dev"`, `curl http://localhost:5173`, `find . -name server.ts`).
+// Matching the whole command string against the dev patterns used to flag all
+// of these as dev servers and detach them, so the tool returned immediately
+// with no output. Guarding on the leading command token fixes that.
+const ONE_SHOT_COMMANDS = new Set([
+  'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'ripgrep',
+  'find', 'fd', 'fdfind', 'locate', 'which', 'whereis', 'type',
+  'ls', 'll', 'la', 'tree', 'stat', 'file', 'du', 'df', 'wc',
+  'cat', 'bat', 'head', 'tail', 'less', 'more', 'nl', 'tac',
+  'echo', 'printf', 'print', 'date', 'whoami', 'hostname', 'uname', 'pwd',
+  'curl', 'wget', 'http', 'https', 'ping', 'dig', 'nslookup', 'host',
+  'cp', 'mv', 'rm', 'mkdir', 'rmdir', 'touch', 'ln', 'chmod', 'chown',
+  'git', 'gh', 'diff', 'patch', 'sort', 'uniq', 'cut', 'tr', 'sed', 'awk',
+  'jq', 'yq', 'xargs', 'tee', 'test', 'true', 'false', 'sleep', 'kill',
+  'pkill', 'killall', 'ps', 'lsof', 'env', 'export', 'source', 'open',
+  'tar', 'zip', 'unzip', 'gzip', 'gunzip', 'cksum', 'md5', 'md5sum',
+  'shasum', 'sha256sum', 'basename', 'dirname', 'realpath', 'readlink',
+]);
+
+// A build / test / lint / typecheck / install invocation is one-shot even when
+// it runs through a dev-tool binary — `vite build`, `next build`,
+// `npx vite build`, `tsc`, `npm run build`, `npm test`, `npm ci`, `eslint …`.
+const ONE_SHOT_SUBCOMMAND_RE = /\b(?:build|test|tsc|typecheck|type-check|lint|eslint|prettier|format|check|install|ci|prune|audit|version|--version|-v|--help)\b/i;
+const DEV_KEYWORD_RE = /\b(?:dev|serve|preview|watch|start|runserver|http\.server)\b/i;
+
 export function isDevServerCommand(command) {
   if (!command || typeof command !== 'string') return false;
   const trimmed = command.trim();
   if (!trimmed) return false;
-  return DEV_CMD_PATTERNS.some((re) => re.test(trimmed));
+
+  // Never inspect quoted argument text — a search pattern like
+  // `grep "npm run dev" .` must not be read as launching a dev server.
+  const unquoted = trimmed
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+    .replace(/'[^']*'/g, "''");
+
+  // Test each pipeline/chain segment on its own so a one-shot reader spliced
+  // into the mix (`… | grep foo`, `curl … | head`, `pkill vite; npm run dev`)
+  // is judged by the actual command it invokes, not its neighbours.
+  const segments = unquoted
+    .split(/\s*(?:\|\||&&|;|\||&)\s*/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  return segments.some((seg) => _segmentIsDevServer(seg));
+}
+
+function _segmentIsDevServer(seg) {
+  // Strip leading boilerplate the model chains ahead of the real command:
+  // env assignments, `cd <path>`, `sleep N`, `pkill …`, `clear`.
+  let s = seg
+    .replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=(?:""|''|\S+)\s+)+/, '')
+    .replace(/^\s*pkill\s+[^;&|]*/i, '')
+    .replace(/^\s*killall\s+[^;&|]*/i, '')
+    .replace(/^\s*sleep\s+[\d.]+\s*/i, '')
+    .replace(/^\s*clear\s*/i, '')
+    .replace(/^\s*(?:cd|pushd)\s+(?:""|''|\S+)\s*/i, '')
+    .trim();
+  if (!s) return false;
+
+  const first = (s.split(/\s+/)[0] || '').replace(/.*\//, '');
+  if (ONE_SHOT_COMMANDS.has(first)) return false;
+
+  // Build/test/lint/install → one-shot, unless it also names a dev subcommand.
+  if (ONE_SHOT_SUBCOMMAND_RE.test(s) && !DEV_KEYWORD_RE.test(s)) return false;
+
+  return DEV_CMD_PATTERNS.some((re) => re.test(s));
 }
 
 // Try to extract a port from a chunk of stdout/stderr text.
