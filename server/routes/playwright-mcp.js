@@ -80,9 +80,20 @@ export function registerPlaywrightMcpRoutes(app, {
     const run = async () => {
       const client = await _getPlaywrightMcpClient();
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 90000);
+      // Fail fast (45s) rather than hanging on the MCP SDK's silent 60s default
+      // request timeout. A stuck Playwright navigate (locked profile, headless
+      // launch wedged, machine slept) should surface quickly so callers fall
+      // back to the browser extension / internal webview instead of blocking
+      // the whole agent turn for a minute-plus. Pass the same value as the SDK
+      // `timeout` so both fire together and the error is deterministic.
+      const CALL_TIMEOUT_MS = 45000;
+      const timeout = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
       try {
-        return await client.callTool({ name: tool, arguments: args }, undefined, { signal: controller.signal });
+        return await client.callTool(
+          { name: tool, arguments: args },
+          undefined,
+          { signal: controller.signal, timeout: CALL_TIMEOUT_MS },
+        );
       } finally {
         clearTimeout(timeout);
       }
