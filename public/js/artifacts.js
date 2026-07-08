@@ -530,12 +530,94 @@ function renderArtifactTabs() {
   tabs.innerHTML = state.artifacts.map(function(a) {
     var icon = artifactTypeIcon(a.type);
     var active = a.id === state.activeArtifact ? ' active' : '';
-    return '<div class="artifact-tab' + active + '" onclick="switchArtifactTab(\'' + a.id + '\')" title="' + escHtml(a.title || '') + '">' +
+    return '<div class="artifact-tab' + active + '" onclick="switchArtifactTab(\'' + a.id + '\')" oncontextmenu="showArtifactTabMenu(event,\'' + a.id + '\')" title="' + escHtml(a.title || '') + '">' +
       '<i class="ti ' + icon + '" style="font-size:11px;flex-shrink:0"></i>' +
       '<span class="artifact-tab-text">' + escHtml(a.title || 'Artifact') + '</span>' +
       '<button class="artifact-tab-close" onclick="confirmRemoveArtifact(\'' + a.id + '\',event)" title="Delete artifact">×</button>' +
     '</div>';
   }).join('');
+}
+
+// Right-click menu on an artifact tab: close this tab, close others, close all.
+var _artifactTabCtxMenu = null;
+
+function showArtifactTabMenu(ev, id) {
+  if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+  _dismissArtifactTabMenu();
+  var multiple = state.artifacts.length > 1;
+  var items = [
+    { label: 'Close tab',        icon: 'ti-x',            handler: function() { closeArtifactTab(id); } },
+    { label: 'Close other tabs', icon: 'ti-layout-sidebar-right-collapse', disabled: !multiple, handler: function() { closeOtherArtifactTabs(id); } },
+    { label: 'Close all tabs',   icon: 'ti-trash', danger: true, handler: function() { closeAllArtifactTabs(); } },
+  ];
+  var menu = document.createElement('div');
+  menu.className = 'proj-ctx-menu';
+  menu.setAttribute('role', 'menu');
+  var html = '';
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    html += '<div class="proj-ctx-item' + (it.danger ? ' proj-ctx-item-danger' : '') + (it.disabled ? ' proj-ctx-item-disabled' : '') + '" data-idx="' + i + '">' +
+      '<i class="ti ' + (it.icon || 'ti-point') + '"></i><span>' + escHtml(it.label) + '</span></div>';
+  }
+  menu.innerHTML = html;
+  document.body.appendChild(menu);
+
+  var vw = window.innerWidth, vh = window.innerHeight;
+  menu.style.visibility = 'hidden';
+  menu.style.left = '0px'; menu.style.top = '0px';
+  var r = menu.getBoundingClientRect();
+  var px = ev ? ev.clientX : 0, py = ev ? ev.clientY : 0;
+  if (px + r.width  > vw - 4) px = Math.max(4, vw - r.width  - 4);
+  if (py + r.height > vh - 4) py = Math.max(4, vh - r.height - 4);
+  menu.style.left = px + 'px';
+  menu.style.top  = py + 'px';
+  menu.style.visibility = '';
+
+  menu.addEventListener('click', function(e) {
+    var row = e.target.closest && e.target.closest('.proj-ctx-item');
+    if (!row || row.classList.contains('proj-ctx-item-disabled')) return;
+    var idx = parseInt(row.getAttribute('data-idx'), 10);
+    var it = items[idx];
+    _dismissArtifactTabMenu();
+    if (it && typeof it.handler === 'function') it.handler();
+  });
+  _artifactTabCtxMenu = menu;
+  setTimeout(function() {
+    document.addEventListener('mousedown', _artifactTabMenuOutside, true);
+    document.addEventListener('keydown', _artifactTabMenuKey, true);
+    window.addEventListener('blur', _dismissArtifactTabMenu);
+    window.addEventListener('resize', _dismissArtifactTabMenu);
+  }, 0);
+}
+
+function _artifactTabMenuOutside(e) {
+  if (_artifactTabCtxMenu && !_artifactTabCtxMenu.contains(e.target)) _dismissArtifactTabMenu();
+}
+function _artifactTabMenuKey(e) {
+  if (e.key === 'Escape') _dismissArtifactTabMenu();
+}
+function _dismissArtifactTabMenu() {
+  if (!_artifactTabCtxMenu) return;
+  _artifactTabCtxMenu.remove();
+  _artifactTabCtxMenu = null;
+  document.removeEventListener('mousedown', _artifactTabMenuOutside, true);
+  document.removeEventListener('keydown', _artifactTabMenuKey, true);
+  window.removeEventListener('blur', _dismissArtifactTabMenu);
+  window.removeEventListener('resize', _dismissArtifactTabMenu);
+}
+
+function closeArtifactTab(id) {
+  removeArtifact(id);
+}
+
+function closeOtherArtifactTabs(id) {
+  var ids = state.artifacts.map(function(a) { return a.id; }).filter(function(x) { return x !== id; });
+  ids.forEach(function(x) { removeArtifact(x); });
+}
+
+function closeAllArtifactTabs() {
+  var ids = state.artifacts.map(function(a) { return a.id; });
+  ids.forEach(function(x) { removeArtifact(x); });
 }
 
 function artifactTypeIcon(type) {
