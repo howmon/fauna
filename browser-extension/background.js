@@ -1336,7 +1336,14 @@ let _rec = { active: false };
 async function cmdRecordStart({ name } = {}) {
   _rec = { active: true, startedAt: Date.now(), seq: 0, steps: [], lastShotAt: 0, name: name || '' };
   const tabs = await chrome.tabs.query({});
-  for (const t of tabs) { chrome.tabs.sendMessage(t.id, { action: 'recorder:on' }).catch(() => {}); }
+  for (const t of tabs) {
+    if (!t.id || !/^https?:|^file:/.test(t.url || '')) continue;
+    // Content scripts only auto-inject into pages loaded AFTER the extension
+    // started, so tabs already open (e.g. the user's Figma tabs) have no
+    // recorder. Inject it now (idempotent) so every tab is actually armed.
+    try { await chrome.scripting.executeScript({ target: { tabId: t.id, allFrames: false }, files: ['content.js'] }); } catch (_) {}
+    chrome.tabs.sendMessage(t.id, { action: 'recorder:on' }).catch(() => {});
+  }
   const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (active) _recorderOnStep({ type: 'navigate', url: active.url, title: active.title }, { tab: active });
   pushEvent('recording:started', { name: _rec.name, startedAt: _rec.startedAt });

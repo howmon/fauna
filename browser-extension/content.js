@@ -82,6 +82,9 @@
     document.addEventListener('copy', _recClipboard, true);
     document.addEventListener('cut', _recClipboard, true);
     document.addEventListener('paste', _recClipboard, true);
+    window.addEventListener('copy', _recClipboard, true);
+    window.addEventListener('cut', _recClipboard, true);
+    window.addEventListener('paste', _recClipboard, true);
     return { ok: true };
   }
   function recorderStop() {
@@ -97,6 +100,9 @@
     document.removeEventListener('copy', _recClipboard, true);
     document.removeEventListener('cut', _recClipboard, true);
     document.removeEventListener('paste', _recClipboard, true);
+    window.removeEventListener('copy', _recClipboard, true);
+    window.removeEventListener('cut', _recClipboard, true);
+    window.removeEventListener('paste', _recClipboard, true);
     return { ok: true };
   }
   function _recSend(step) {
@@ -154,6 +160,11 @@
   // the user copies / cuts / pastes — the most robust way to record ⌘C/⌘V/⌘X.
   function _recClipboard(e) {
     var type = e.type; // 'copy' | 'cut' | 'paste'
+    // Both window+document capture listeners fire for one physical event —
+    // dedupe within a short window.
+    var now = Date.now();
+    if (_rec.lastClipType === type && now - (_rec.lastClipAt || 0) < 80) return;
+    _rec.lastClipAt = now; _rec.lastClipType = type;
     var text = '';
     try {
       if (type === 'paste' && e.clipboardData) {

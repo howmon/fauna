@@ -129,6 +129,33 @@ function _recRefreshList() {
   }).catch(function () {});
 }
 
+// After Stop, the extension ships the recording to the app over the socket and
+// the app broadcasts ext:recording-saved. If that SSE is missed, poll the list
+// a few times and open the newest recording so we never get stuck on "saving…".
+function _recSaveFallback(attempt) {
+  if (_recState.selectedId !== '__live__') return; // already resolved (SSE won)
+  var known = (_recState.list || []).map(function (r) { return r.id; });
+  _recRefreshList().then(function () {
+    if (_recState.selectedId !== '__live__') return;
+    var fresh = (_recState.list || []).find(function (r) { return known.indexOf(r.id) === -1; });
+    if (fresh) { selectRecording(fresh.id); return; }
+    if (attempt < 4) { setTimeout(function () { _recSaveFallback(attempt + 1); }, 500 + attempt * 400); return; }
+    // Extension's save never materialised — persist the renderer's own live
+    // copy (includes streamed screenshots) so the recording is not lost.
+    var steps = _recState.live || [];
+    if (steps.length) {
+      var dur = steps[steps.length - 1].t || 0;
+      _recApi('/api/recordings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Recording — ' + new Date().toLocaleString(), startedAt: Date.now() - dur, endedAt: Date.now(), durationMs: dur, steps: steps }),
+      }).then(function (d) {
+        if (d && d.ok && d.recording) { _recRefreshList().then(function () { selectRecording(d.recording.id); }); }
+        else { _recState.selectedId = null; renderRecordingsPage(); }
+      });
+    } else { _recState.selectedId = null; renderRecordingsPage(); }
+  });
+}
+
 function toggleRecording() {
   if (typeof executeExtAction !== 'function') {
     alert('Connect the Fauna browser extension first.');
@@ -138,8 +165,13 @@ function toggleRecording() {
     // Optimistic: stop flashing immediately, then tell the extension.
     _recState.recording = false;
     renderRecordingsPage();
-    executeExtAction({ action: 'record:stop' }).catch(function (e) {
+    executeExtAction({ action: 'record:stop' }).then(function () {
+      // Fallback in case the saved-SSE is missed: refresh the list a couple of
+      // times and select the newest recording if still showing the live view.
+      _recSaveFallback(0);
+    }).catch(function (e) {
       if (typeof showToast === 'function') showToast('Stop failed: ' + e.message, true);
+      _recSaveFallback(0);
     });
   } else {
     _recState.live = [];
@@ -157,7 +189,14 @@ function toggleRecording() {
 
 // SSE hook — called from browser.js _handleExtEvent for recording:* events.
 function _onRecordingEvent(msg) {
-  if (!msg || !msg.event) return;
+  var page0 = document.getElementById('rec-page');
+  if (msg.event === 'ext:recording-error') {
+    _recState.recording = false;
+    if (typeof showToast === 'function') showToast('Recording save failed: ' + ((msg.data && msg.data.error) || ''), true);
+    if (_recState.selectedId === '__live__') { _recState.selectedId = null; }
+    if (page0) renderRecordingsPage();
+    return;
+  }
   var page = document.getElementById('rec-page');
   if (msg.event === 'recording:started') {
     _recState.recording = true; _recState.live = []; _recState.selectedId = '__live__';
