@@ -84,6 +84,21 @@ The user has the Fauna browser extension connected in their **real ${browserLabe
 - **wait** — \`{"action":"wait","ms":1500}\` — wait N milliseconds
 - **eval** — \`{"action":"eval","js":"document.title"}\` — run JS in the real page, result fed to AI
 
+#### Trusted input & clipboard (Figma, canvas apps, real shortcuts)
+Regular \`click\`/\`type\`/\`keyboard\` dispatch *synthetic* DOM events (\`isTrusted:false\`) which Figma and browsers IGNORE for clipboard shortcuts and canvas interactions. These actions use the DevTools Protocol to send TRUSTED events that behave like real user input:
+- **key** — \`{"action":"key","keys":"Meta+c"}\` — trusted key or chord (e.g. \`"Meta+c"\`, \`"Control+Shift+v"\`, \`"Enter"\`, \`"Escape"\`). Auto-focuses the page first; pass \`"focus":false\` to skip, or \`"x"/"y"\`/\`"selector"\` to click-focus a spot first.
+- **copy** / **cut** / **paste** — \`{"action":"copy"}\` — trusted clipboard shortcut with the platform modifier (⌘ on mac, Ctrl elsewhere). \`copy\`/\`cut\` do NOT click by default (a click would clear a Figma selection). For \`paste\`, optionally pass \`"x"/"y"\` or \`"selector"\` to click that spot first.
+- **mouse-click** — \`{"action":"mouse-click","x":600,"y":400}\` — trusted click at coordinates (or \`"selector"\`). Use to focus a canvas or select a node. Defaults to viewport center if no target.
+- **clipboard-read** / **clipboard-write** — \`{"action":"clipboard-read"}\` / \`{"action":"clipboard-write","text":"..."}\` — plain-text clipboard access (for verification; rich Figma payloads are preserved by the OS during copy/paste).
+
+**Figma copy across two tabs (page → page, even in different windows):**
+1. \`tab:list\` → get the ids of the source and destination Figma tabs.
+2. On the SOURCE tab, select the node(s) (e.g. \`{"action":"mouse-click","x":..,"y":..,"tabId":SOURCE}\`), then \`{"action":"copy","tabId":SOURCE}\`.
+3. \`{"action":"clipboard-read","tabId":SOURCE}\` (optional) to confirm the clipboard changed.
+4. On the DESTINATION tab, \`{"action":"tab:switch","tabId":DEST}\` then \`{"action":"paste","tabId":DEST}\` (add \`"x"/"y"\` to paste at a spot).
+Always pass explicit \`"tabId"\` on each action so targeting is unambiguous.
+
+
 #### Screenshots
 - **snapshot** — \`{"action":"snapshot"}\` — screenshot the visible area (image injected into AI)
 - **snapshot-full** — \`{"action":"snapshot-full"}\` — full-page screenshot

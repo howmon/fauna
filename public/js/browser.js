@@ -547,7 +547,8 @@ function _mapBrowserActionToExtAction(action) {
     'switch-tab': 'tab:switch',
     'close-tab': 'tab:close',
     'list-tabs': 'tab:list',
-    'screenshot': 'snapshot'
+    'screenshot': 'snapshot',
+    'press': 'key'
   };
   mapped.action = actionMap[mapped.action] || mapped.action;
   return mapped;
@@ -712,7 +713,8 @@ async function _executeBrowserActionViaExtension(action) {
   if (!mapped) return null;
   var supported = new Set([
     'navigate', 'extract', 'extract-forms', 'fill', 'click', 'type', 'drag', 'scroll', 'hover', 'select',
-    'keyboard', 'wait', 'eval', 'snapshot', 'snapshot-full', 'tab:list', 'tab:new', 'tab:switch', 'tab:close', 'tab:info'
+    'keyboard', 'wait', 'eval', 'snapshot', 'snapshot-full', 'tab:list', 'tab:new', 'tab:switch', 'tab:close', 'tab:info',
+    'key', 'copy', 'cut', 'paste', 'mouse-click', 'clipboard-read', 'clipboard-write'
   ]);
   if (!supported.has(mapped.action)) return null;
   var result = await executeExtAction(mapped);

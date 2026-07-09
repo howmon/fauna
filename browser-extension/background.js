@@ -282,15 +282,15 @@ async function dispatchCommand(msg) {
   const { action, params = {}, tabId: targetTabId } = msg;
 
   try {
-    // Resolve which tab to operate on
-    let tab = null;
-    if (targetTabId) {
-      tab = await chrome.tabs.get(targetTabId).catch(() => null);
-    }
-    if (!tab) {
-      const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
-      tab = active || null;
-    }
+    // Resolve which tab to operate on. Priority:
+    //   1. explicit per-command tabId (server can target any tab directly)
+    //   2. the sticky "working tab" set by the last tab:switch / tab:new
+    //   3. the browser's active tab (hardened fallback)
+    // The sticky tab is what fixes cross-tab copy/paste: once the agent
+    // switches to a tab, every follow-up command keeps targeting it even if
+    // OS window focus never actually moves to Chrome (an MV3 service worker
+    // cannot rely on {active,currentWindow} to reflect the intended tab).
+    const tab = await resolveOperatingTab(targetTabId);
 
     switch (action) {
       case 'tab:list':     return await cmdTabList();
@@ -320,6 +320,14 @@ async function dispatchCommand(msg) {
       case 'keyboard':     return await cmdKeyboard(params, tab);
       case 'type':         return await cmdType(params, tab);
       case 'drag':         return await cmdDrag(params, tab);
+      // Trusted input (CDP) — required for Figma / canvas clipboard & shortcuts.
+      case 'key':          return await cmdKey(params, tab);
+      case 'copy':         return await cmdClipboardShortcut('copy', params, tab);
+      case 'cut':          return await cmdClipboardShortcut('cut', params, tab);
+      case 'paste':        return await cmdClipboardShortcut('paste', params, tab);
+      case 'mouse-click':  return await cmdMouseClick(params, tab);
+      case 'clipboard-read':  return await cmdClipboardRead(params, tab);
+      case 'clipboard-write': return await cmdClipboardWrite(params, tab);
       default:
         return { ok: false, error: 'Unknown action: ' + action };
     }
@@ -329,6 +337,29 @@ async function dispatchCommand(msg) {
 }
 
 // ── Tab commands ──────────────────────────────────────────────────────────
+
+// The "working tab" Fauna targets by default. Set by tab:switch / tab:new and
+// by manual tab activation, cleared when that tab closes. Decouples Fauna's
+// operating tab from unreliable OS window focus so cross-tab flows (e.g. copy
+// from one tab, switch, paste into another) resolve against the intended tab.
+let _targetTabId = null;
+
+// Resolve the tab a command should act on (see dispatchCommand for priority).
+async function resolveOperatingTab(explicitId) {
+  if (explicitId != null) {
+    const t = await chrome.tabs.get(explicitId).catch(() => null);
+    if (t) return t;
+  }
+  if (_targetTabId != null) {
+    const t = await chrome.tabs.get(_targetTabId).catch(() => null);
+    if (t) return t;
+    _targetTabId = null; // sticky tab was closed — drop it
+  }
+  let [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!active) [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!active) [active] = await chrome.tabs.query({ active: true });
+  return active || null;
+}
 
 async function cmdTabList() {
   const tabs = await chrome.tabs.query({});
@@ -341,6 +372,7 @@ async function cmdTabList() {
 async function cmdTabNew({ url } = {}) {
   const tab = await chrome.tabs.create({ url: url || 'about:blank', active: true });
   if (url) await waitForTabLoad(tab.id);
+  _targetTabId = tab.id; // newly opened tab becomes the working tab
   return { ok: true, tabId: tab.id, url: tab.url };
 }
 
@@ -355,6 +387,7 @@ async function cmdTabSwitch({ tabId, index } = {}) {
   if (!tab) return { ok: false, error: 'Tab not found' };
   await chrome.tabs.update(tab.id, { active: true });
   await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+  _targetTabId = tab.id; // make the switched-to tab sticky for follow-up commands
   return { ok: true, tabId: tab.id, url: tab.url, title: tab.title };
 }
 
@@ -847,6 +880,12 @@ async function cmdSelect({ selector, value, label } = {}, tab) {
 
 async function cmdKeyboard({ key, selector } = {}, tab) {
   if (!tab) return { ok: false, error: 'No active tab' };
+  // A chord (contains a modifier, e.g. "Meta+c") needs a TRUSTED event to work
+  // in Figma / the browser — route it through the CDP path instead of the
+  // synthetic content-script dispatch, which apps ignore for shortcuts.
+  if (typeof key === 'string' && key.includes('+')) {
+    return await cmdKey({ keys: key, selector }, tab);
+  }
   const result = await msgTab(tab, { action: 'keyboard', key, selector });
   return { ok: true, ...result };
 }
@@ -901,6 +940,210 @@ async function cmdEval({ js } = {}, tab) {
 async function cmdWait({ ms = 1000 } = {}) {
   await new Promise(r => setTimeout(r, Math.min(ms, 15000)));
   return { ok: true };
+}
+
+// ── Trusted input via CDP (Input domain) ──────────────────────────────────
+// Synthetic DOM events dispatched from a content script are isTrusted:false,
+// so the browser and apps like Figma IGNORE them for clipboard shortcuts
+// (⌘C/⌘V), drag, and many canvas interactions. CDP Input.dispatchKeyEvent /
+// dispatchMouseEvent produce TRUSTED events that behave exactly like real
+// user input — this is what makes cross-tab Figma copy/paste actually work.
+
+// CDP modifier bitmask — Alt=1, Ctrl=2, Meta=4, Shift=8.
+const _CDP_MODS = { alt: 1, control: 2, ctrl: 2, meta: 4, cmd: 4, command: 4, shift: 8 };
+const _CDP_MOD_KEYS = {
+  alt:     { key: 'Alt',     code: 'AltLeft',     keyCode: 18 },
+  control: { key: 'Control', code: 'ControlLeft', keyCode: 17 },
+  ctrl:    { key: 'Control', code: 'ControlLeft', keyCode: 17 },
+  meta:    { key: 'Meta',    code: 'MetaLeft',    keyCode: 91 },
+  cmd:     { key: 'Meta',    code: 'MetaLeft',    keyCode: 91 },
+  command: { key: 'Meta',    code: 'MetaLeft',    keyCode: 91 },
+  shift:   { key: 'Shift',   code: 'ShiftLeft',   keyCode: 16 },
+};
+const _CDP_NAMED = {
+  enter: { key: 'Enter', code: 'Enter', keyCode: 13 },
+  tab: { key: 'Tab', code: 'Tab', keyCode: 9 },
+  escape: { key: 'Escape', code: 'Escape', keyCode: 27 },
+  esc: { key: 'Escape', code: 'Escape', keyCode: 27 },
+  backspace: { key: 'Backspace', code: 'Backspace', keyCode: 8 },
+  delete: { key: 'Delete', code: 'Delete', keyCode: 46 },
+  space: { key: ' ', code: 'Space', keyCode: 32 },
+  arrowup: { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
+  arrowdown: { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
+  arrowleft: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
+  arrowright: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
+  home: { key: 'Home', code: 'Home', keyCode: 36 },
+  end: { key: 'End', code: 'End', keyCode: 35 },
+};
+
+function _isMac() { return /mac|iphone|ipad/i.test(navigator.userAgent || ''); }
+function _primaryMod() { return _isMac() ? 'meta' : 'control'; }
+
+function _cdpKeyDef(token) {
+  const t = String(token).toLowerCase();
+  if (_CDP_NAMED[t]) return _CDP_NAMED[t];
+  if (String(token).length === 1) {
+    const upper = t.toUpperCase();
+    if (t >= 'a' && t <= 'z') return { key: token, code: 'Key' + upper, keyCode: upper.charCodeAt(0) };
+    if (t >= '0' && t <= '9') return { key: token, code: 'Digit' + t, keyCode: t.charCodeAt(0) };
+    return { key: token, code: '', keyCode: t.toUpperCase().charCodeAt(0) };
+  }
+  return { key: token, code: '', keyCode: 0 };
+}
+
+// Dispatch a trusted key chord like "Meta+c", "Control+Shift+v", "Enter".
+async function _cdpKeyChord(target, spec) {
+  const parts = String(spec).split('+').map(s => s.trim()).filter(Boolean);
+  const mods = [], mains = [];
+  for (const p of parts) {
+    if (_CDP_MODS[p.toLowerCase()] != null) mods.push(p.toLowerCase());
+    else mains.push(p);
+  }
+  let active = 0;
+  for (const m of mods) {
+    active |= _CDP_MODS[m];
+    const d = _CDP_MOD_KEYS[m];
+    await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+      type: 'rawKeyDown', modifiers: active, key: d.key, code: d.code,
+      windowsVirtualKeyCode: d.keyCode, nativeVirtualKeyCode: d.keyCode,
+    });
+  }
+  const main = mains[0] ? _cdpKeyDef(mains[0]) : null;
+  if (main) {
+    await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+      type: 'keyDown', modifiers: active, key: main.key, code: main.code,
+      windowsVirtualKeyCode: main.keyCode, nativeVirtualKeyCode: main.keyCode,
+    });
+    await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+      type: 'keyUp', modifiers: active, key: main.key, code: main.code,
+      windowsVirtualKeyCode: main.keyCode, nativeVirtualKeyCode: main.keyCode,
+    });
+  }
+  for (const m of mods.reverse()) {
+    active &= ~_CDP_MODS[m];
+    const d = _CDP_MOD_KEYS[m];
+    await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+      type: 'keyUp', modifiers: active, key: d.key, code: d.code,
+      windowsVirtualKeyCode: d.keyCode, nativeVirtualKeyCode: d.keyCode,
+    });
+  }
+}
+
+// Trusted left click at viewport coordinates (focuses canvas, places cursor).
+async function _cdpClickXY(target, x, y, clickCount = 1) {
+  await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0 });
+  await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount });
+  await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount });
+}
+
+// Resolve click coordinates from a CSS selector (center of its bounding box).
+async function _cdpCoordsForSelector(target, selector) {
+  const r = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+    expression: `(function(){var e=document.querySelector(${JSON.stringify(selector)});if(!e)return null;var b=e.getBoundingClientRect();return JSON.stringify({x:b.left+b.width/2,y:b.top+b.height/2});})()`,
+    returnByValue: true,
+  }).catch(() => null);
+  try { return JSON.parse(r?.result?.value || 'null'); } catch (_) { return null; }
+}
+
+async function _cdpViewportCenter(target) {
+  const r = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+    expression: `JSON.stringify({x:Math.round(innerWidth/2),y:Math.round(innerHeight/2)})`,
+    returnByValue: true,
+  }).catch(() => null);
+  try { return JSON.parse(r?.result?.value || '{"x":400,"y":300}'); } catch (_) { return { x: 400, y: 300 }; }
+}
+
+// Bring the page's document into focus so keyboard shortcuts land on the
+// canvas and not a stale element. CDP key events target the focused frame,
+// so this maximises reliability without a click.
+async function _cdpFocusPage(target) {
+  await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+    expression: `(function(){try{window.focus();var el=document.querySelector('canvas');if(el&&el.focus)el.focus();}catch(_){}return true;})()`,
+    returnByValue: true, userGesture: true,
+  }).catch(() => {});
+}
+
+// key — dispatch a trusted key or chord (optionally focusing first).
+// params: { keys | combo | key, selector?, x?, y?, focus? }
+async function cmdKey({ keys, combo, key, selector, x, y, focus } = {}, tab) {
+  if (!tab) return { ok: false, error: 'No active tab' };
+  const spec = keys || combo || key;
+  if (!spec) return { ok: false, error: 'keys required (e.g. "Meta+c" or "Enter")' };
+  return await _debuggerSession(tab.id, async (target) => {
+    if (focus !== false) {
+      if (x != null && y != null) { await _cdpClickXY(target, Number(x), Number(y)); await new Promise(r => setTimeout(r, 60)); }
+      else if (selector) { const c = await _cdpCoordsForSelector(target, selector); if (c) { await _cdpClickXY(target, c.x, c.y); await new Promise(r => setTimeout(r, 60)); } }
+      else await _cdpFocusPage(target);
+    }
+    await _cdpKeyChord(target, spec);
+    return { ok: true, dispatched: spec, url: tab.url, title: tab.title };
+  });
+}
+
+// copy / cut / paste — trusted clipboard shortcuts (platform-aware modifier).
+// COPY/CUT do NOT click by default (a click would clear Figma's selection);
+// pass x/y or selector to place the cursor for PASTE.
+async function cmdClipboardShortcut(kind, params = {}, tab) {
+  if (!tab) return { ok: false, error: 'No active tab' };
+  const letter = kind === 'copy' ? 'c' : kind === 'cut' ? 'x' : 'v';
+  const spec = _primaryMod() + '+' + letter;
+  const wantsClick = params.x != null || params.selector;
+  return await _debuggerSession(tab.id, async (target) => {
+    if (wantsClick) {
+      if (params.x != null && params.y != null) { await _cdpClickXY(target, Number(params.x), Number(params.y)); await new Promise(r => setTimeout(r, 80)); }
+      else if (params.selector) { const c = await _cdpCoordsForSelector(target, params.selector); if (c) { await _cdpClickXY(target, c.x, c.y); await new Promise(r => setTimeout(r, 80)); } }
+    } else {
+      await _cdpFocusPage(target);
+    }
+    await _cdpKeyChord(target, spec);
+    return { ok: true, action: kind, dispatched: spec, url: tab.url, title: tab.title };
+  });
+}
+
+// mouse-click — trusted click at coordinates or a selector's center.
+async function cmdMouseClick({ x, y, selector, clickCount = 1 } = {}, tab) {
+  if (!tab) return { ok: false, error: 'No active tab' };
+  return await _debuggerSession(tab.id, async (target) => {
+    let cx = x, cy = y;
+    if ((cx == null || cy == null) && selector) {
+      const c = await _cdpCoordsForSelector(target, selector);
+      if (!c) return { ok: false, error: 'Selector not found: ' + selector };
+      cx = c.x; cy = c.y;
+    }
+    if (cx == null || cy == null) { const c = await _cdpViewportCenter(target); cx = c.x; cy = c.y; }
+    await _cdpClickXY(target, Number(cx), Number(cy), Number(clickCount) || 1);
+    return { ok: true, x: cx, y: cy, url: tab.url };
+  });
+}
+
+// clipboard-read / clipboard-write — plain-text clipboard access for
+// verification (rich Figma payloads are handled by the OS during copy/paste).
+async function cmdClipboardRead({} = {}, tab) {
+  if (!tab) return { ok: false, error: 'No active tab' };
+  return await _debuggerSession(tab.id, async (target) => {
+    await _cdpFocusPage(target);
+    const r = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+      expression: `navigator.clipboard.readText().then(t=>t).catch(e=>'ERR:'+e.message)`,
+      returnByValue: true, awaitPromise: true, userGesture: true,
+    });
+    const text = r?.result?.value ?? '';
+    if (typeof text === 'string' && text.startsWith('ERR:')) return { ok: false, error: text.slice(4) };
+    return { ok: true, text, length: (text || '').length };
+  });
+}
+
+async function cmdClipboardWrite({ text = '' } = {}, tab) {
+  if (!tab) return { ok: false, error: 'No active tab' };
+  return await _debuggerSession(tab.id, async (target) => {
+    await _cdpFocusPage(target);
+    const r = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+      expression: `navigator.clipboard.writeText(${JSON.stringify(String(text))}).then(()=>'ok').catch(e=>'ERR:'+e.message)`,
+      returnByValue: true, awaitPromise: true, userGesture: true,
+    });
+    const v = r?.result?.value || '';
+    if (v.startsWith('ERR:')) return { ok: false, error: v.slice(4) };
+    return { ok: true, written: String(text).length };
+  });
 }
 
 // ── Screenshots ───────────────────────────────────────────────────────────
@@ -1209,10 +1452,17 @@ function pushEvent(eventType, data) {
 }
 
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  // Follow manual tab switches so Fauna's working tab tracks what the user is
+  // looking at (until the agent explicitly switches via tab:switch).
+  _targetTabId = tabId;
   if (!connected) return;
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab) return;
   pushEvent('tab:activated', { tabId, url: tab.url, title: tab.title });
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (_targetTabId === tabId) _targetTabId = null;
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
