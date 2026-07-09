@@ -79,7 +79,7 @@ function _recTypeIcon(t) {
     navigate: 'ti-world', tabswitch: 'ti-arrows-exchange', click: 'ti-click',
     input: 'ti-keyboard', select: 'ti-select', toggle: 'ti-toggle-left',
     submit: 'ti-send', key: 'ti-command', selection: 'ti-text-caret',
-    scroll: 'ti-arrows-vertical',
+    scroll: 'ti-arrows-vertical', copy: 'ti-copy', cut: 'ti-scissors', paste: 'ti-clipboard',
   })[t] || 'ti-point';
 }
 
@@ -93,6 +93,9 @@ function _recStepPrimary(s) {
     case 'toggle': return 'Toggle ' + (s.label || s.selector || '');
     case 'submit': return 'Submit form';
     case 'key': return 'Press ' + (s.keys || '');
+    case 'copy': return 'Copy' + (s.text ? ' “' + s.text.slice(0, 40) + '”' : '');
+    case 'cut': return 'Cut' + (s.text ? ' “' + s.text.slice(0, 40) + '”' : '');
+    case 'paste': return 'Paste' + (s.text ? ' “' + s.text.slice(0, 40) + '”' : '');
     case 'selection': return 'Select text';
     case 'scroll': return 'Scroll';
     default: return s.type;
@@ -132,18 +135,23 @@ function toggleRecording() {
     return;
   }
   if (_recState.recording) {
-    executeExtAction({ action: 'record:stop' }).then(function () {
-      _recState.recording = false;
-      renderRecordingsPage();
-    }).catch(function (e) { alert('Stop failed: ' + e.message); });
+    // Optimistic: stop flashing immediately, then tell the extension.
+    _recState.recording = false;
+    renderRecordingsPage();
+    executeExtAction({ action: 'record:stop' }).catch(function (e) {
+      if (typeof showToast === 'function') showToast('Stop failed: ' + e.message, true);
+    });
   } else {
     _recState.live = [];
     _recState.selectedId = '__live__';
-    executeExtAction({ action: 'record:start' }).then(function () {
-      _recState.recording = true;
-      _recState.current = null;
+    _recState.recording = true;
+    _recState.current = null;
+    renderRecordingsPage();
+    executeExtAction({ action: 'record:start' }).catch(function (e) {
+      _recState.recording = false;
       renderRecordingsPage();
-    }).catch(function (e) { alert('Start failed — is the extension connected? ' + e.message); });
+      alert('Start failed — is the extension connected? ' + e.message);
+    });
   }
 }
 
@@ -206,8 +214,11 @@ function renderRecordingsPage() {
 
 function _recDetailHtml() {
   if (_recState.selectedId === '__live__') {
-    return '<div class="rec-detail-head"><div class="rec-detail-title"><span class="rec-dot"></span> Live recording</div>' +
-      '<div class="rec-detail-sub">' + _recState.live.length + ' steps — perform actions in your browser</div></div>' +
+    var flashing = _recState.recording;
+    var head = flashing ? '<span class="rec-dot"></span> Live recording' : '<i class="ti ti-player-record"></i> Recording finished';
+    var sub = flashing ? 'perform actions in your browser' : 'saving…';
+    return '<div class="rec-detail-head"><div class="rec-detail-title">' + head + '</div>' +
+      '<div class="rec-detail-sub">' + _recState.live.length + ' steps — ' + sub + '</div></div>' +
       '<div class="rec-map" id="rec-live-map">' + _recMapHtml(_recState.live) + '</div>';
   }
   var rec = _recState.current;

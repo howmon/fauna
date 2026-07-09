@@ -209,6 +209,12 @@ function _stepToAction(s) {
       return { action: 'key', keys: 'Enter', selector: s.selector, tabId };
     case 'key':
       return { action: 'key', keys: s.keys, tabId };
+    case 'copy':
+      return { action: 'copy', tabId };
+    case 'cut':
+      return { action: 'cut', tabId };
+    case 'paste':
+      return { action: 'paste', tabId };
     case 'scroll':
       return { action: 'scroll', tabId };
     case 'selection':
@@ -241,6 +247,9 @@ export function describeRecording(id) {
     else if (s.type === 'toggle') d = 'toggle ' + (s.label || s.selector || '');
     else if (s.type === 'submit') d = 'submit form';
     else if (s.type === 'key') d = 'press ' + s.keys;
+    else if (s.type === 'copy') d = 'copy' + (s.text ? ' “' + String(s.text).slice(0, 40) + '”' : '');
+    else if (s.type === 'cut') d = 'cut' + (s.text ? ' “' + String(s.text).slice(0, 40) + '”' : '');
+    else if (s.type === 'paste') d = 'paste' + (s.text ? ' “' + String(s.text).slice(0, 40) + '”' : '');
     else if (s.type === 'selection') d = 'select text: "' + (s.text || '').slice(0, 60) + '"';
     else if (s.type === 'scroll') d = 'scroll';
     return `${i + 1}. [${at}] ${d}`;

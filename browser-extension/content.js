@@ -79,6 +79,9 @@
     document.addEventListener('submit', _recSubmit, true);
     document.addEventListener('scroll', _recScroll, true);
     document.addEventListener('mouseup', _recSelection, true);
+    document.addEventListener('copy', _recClipboard, true);
+    document.addEventListener('cut', _recClipboard, true);
+    document.addEventListener('paste', _recClipboard, true);
     return { ok: true };
   }
   function recorderStop() {
@@ -91,6 +94,9 @@
     document.removeEventListener('submit', _recSubmit, true);
     document.removeEventListener('scroll', _recScroll, true);
     document.removeEventListener('mouseup', _recSelection, true);
+    document.removeEventListener('copy', _recClipboard, true);
+    document.removeEventListener('cut', _recClipboard, true);
+    document.removeEventListener('paste', _recClipboard, true);
     return { ok: true };
   }
   function _recSend(step) {
@@ -132,6 +138,10 @@
     var mod = e.metaKey || e.ctrlKey || e.altKey;
     // Only meaningful keys — shortcuts and navigation — not every keystroke.
     if (!mod && e.key !== 'Enter' && e.key !== 'Escape' && e.key !== 'Tab') return;
+    var k = (e.key || '').toLowerCase();
+    // copy / cut / paste are recorded via the dedicated clipboard events below,
+    // so skip the raw chord here to avoid duplicate steps.
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (k === 'c' || k === 'v' || k === 'x')) return;
     var combo = [];
     if (e.metaKey) combo.push('Meta');
     if (e.ctrlKey) combo.push('Control');
@@ -139,6 +149,21 @@
     if (e.shiftKey) combo.push('Shift');
     combo.push(e.key.length === 1 ? e.key.toLowerCase() : e.key);
     _recSend({ type: 'key', keys: combo.join('+') });
+  }
+  // Clipboard events fire reliably (incl. in canvas apps like Figma) whenever
+  // the user copies / cuts / pastes — the most robust way to record ⌘C/⌘V/⌘X.
+  function _recClipboard(e) {
+    var type = e.type; // 'copy' | 'cut' | 'paste'
+    var text = '';
+    try {
+      if (type === 'paste' && e.clipboardData) {
+        text = (e.clipboardData.getData('text/plain') || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+      } else {
+        var sel = window.getSelection && window.getSelection();
+        text = sel ? String(sel).replace(/\s+/g, ' ').trim().slice(0, 200) : '';
+      }
+    } catch (_) {}
+    _recSend({ type: type, text: text });
   }
   function _recSubmit(e) {
     _recSend({ type: 'submit', selector: _recSelector(e.target) });
