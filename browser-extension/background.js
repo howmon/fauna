@@ -1334,7 +1334,7 @@ function cmdWaitNavigation({ timeoutMs = 15000 } = {}, tab) {
 let _rec = { active: false };
 
 async function cmdRecordStart({ name } = {}) {
-  _rec = { active: true, startedAt: Date.now(), seq: 0, steps: [], lastShotAt: 0, name: name || '' };
+  _rec = { active: true, startedAt: Date.now(), seq: 0, steps: [], lastShotAt: 0, name: name || '', sessionId: 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8) };
   const tabs = await chrome.tabs.query({});
   for (const t of tabs) {
     if (!t.id || !/^https?:|^file:/.test(t.url || '')) continue;
@@ -1346,7 +1346,7 @@ async function cmdRecordStart({ name } = {}) {
   }
   const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (active) _recorderOnStep({ type: 'navigate', url: active.url, title: active.title }, { tab: active });
-  pushEvent('recording:started', { name: _rec.name, startedAt: _rec.startedAt });
+  pushEvent('recording:started', { name: _rec.name, startedAt: _rec.startedAt, sessionId: _rec.sessionId });
   return { ok: true, recording: true };
 }
 
@@ -1357,6 +1357,7 @@ async function cmdRecordStop() {
   for (const t of tabs) { chrome.tabs.sendMessage(t.id, { action: 'recorder:off' }).catch(() => {}); }
   const recording = {
     name: _rec.name || ('Recording — ' + new Date().toLocaleString()),
+    sessionId: _rec.sessionId || null,
     startedAt: _rec.startedAt,
     endedAt: Date.now(),
     durationMs: Date.now() - _rec.startedAt,

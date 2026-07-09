@@ -123,6 +123,40 @@ function _recRefreshStatus() {
   }).catch(function () {});
 }
 
+// Save the renderer's own captured steps (incl. streamed screenshots) right
+// away, deduped with the extension's copy via sessionId. This is the primary,
+// reliable save path so a recording never gets stuck on “saving…”.
+function _recSaveLiveNow(retries) {
+  var steps = _recState.live || [];
+  if (!steps.length) {
+    // Nothing streamed to us (e.g. app opened mid-recording) — lean on the
+    // extension’s socket save + a short list poll.
+    if ((retries || 0) < 4) { setTimeout(function () { _recSaveFallback(0); }, 400); }
+    return;
+  }
+  var dur = steps[steps.length - 1].t || 0;
+  _recApi('/api/recordings', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sessionId: _recState.sessionId || null,
+      name: 'Recording — ' + new Date().toLocaleString(),
+      startedAt: Date.now() - dur, endedAt: Date.now(), durationMs: dur, steps: steps,
+    }),
+  }).then(function (d) {
+    if (d && d.ok && d.recording) {
+      _recRefreshList().then(function () {
+        if (_recState.selectedId === '__live__') selectRecording(d.recording.id);
+      });
+    } else if ((retries || 0) < 2) {
+      setTimeout(function () { _recSaveLiveNow((retries || 0) + 1); }, 600);
+    } else if (typeof showToast === 'function') {
+      showToast('Could not save recording', true);
+    }
+  }).catch(function () {
+    if ((retries || 0) < 2) setTimeout(function () { _recSaveLiveNow((retries || 0) + 1); }, 600);
+  });
+}
+
 function _recRefreshList() {
   return _recApi('/api/recordings').then(function (d) {
     if (d && d.ok) _recState.list = d.recordings || [];
@@ -162,17 +196,14 @@ function toggleRecording() {
     return;
   }
   if (_recState.recording) {
-    // Optimistic: stop flashing immediately, then tell the extension.
+    // Optimistic: stop flashing immediately. Tell the extension to stop, and
+    // ALSO save our own live copy right away (with screenshots) so persistence
+    // never depends on the extension→socket→save round-trip. Both saves dedupe
+    // to one entry via sessionId.
     _recState.recording = false;
     renderRecordingsPage();
-    executeExtAction({ action: 'record:stop' }).then(function () {
-      // Fallback in case the saved-SSE is missed: refresh the list a couple of
-      // times and select the newest recording if still showing the live view.
-      _recSaveFallback(0);
-    }).catch(function (e) {
-      if (typeof showToast === 'function') showToast('Stop failed: ' + e.message, true);
-      _recSaveFallback(0);
-    });
+    executeExtAction({ action: 'record:stop' }).catch(function () {});
+    _recSaveLiveNow();
   } else {
     _recState.live = [];
     _recState.selectedId = '__live__';
@@ -200,6 +231,7 @@ function _onRecordingEvent(msg) {
   var page = document.getElementById('rec-page');
   if (msg.event === 'recording:started') {
     _recState.recording = true; _recState.live = []; _recState.selectedId = '__live__';
+    _recState.sessionId = (msg.data && msg.data.sessionId) || null;
     if (page) renderRecordingsPage();
   } else if (msg.event === 'recording:step') {
     _recState.live.push(msg.data || {});

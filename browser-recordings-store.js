@@ -99,23 +99,29 @@ function _sanitizeStep(s, i) {
 
 // ── Public API ──────────────────────────────────────────────────────────
 
-/** Create a new recording (or update by id if provided). */
+/** Create a new recording (or update by id / sessionId if it already exists). */
 export function saveRecording(input = {}) {
   const list = _load();
   let steps = Array.isArray(input.steps) ? input.steps.slice(0, MAX_STEPS).map(_sanitizeStep) : [];
 
   let entry;
   if (input.id) entry = list.find((r) => r.id === input.id);
+  if (!entry && input.sessionId) entry = list.find((r) => r.sessionId && r.sessionId === input.sessionId);
 
   if (entry) {
     if (input.name != null) entry.name = String(input.name).slice(0, 200);
     if (input.description != null) entry.description = String(input.description).slice(0, 2000);
     if (Array.isArray(input.tags)) entry.tags = input.tags.map((t) => String(t).slice(0, 40)).slice(0, 20);
-    if (Array.isArray(input.steps)) { entry.steps = steps; entry.stepCount = steps.length; }
+    // Keep the fuller step list (the extension's authoritative buffer may arrive
+    // after the renderer's quick save with the same sessionId).
+    if (Array.isArray(input.steps) && steps.length >= (entry.steps || []).length) { entry.steps = steps; entry.stepCount = steps.length; }
+    if (input.durationMs) entry.durationMs = Number(input.durationMs);
+    if (input.sessionId) entry.sessionId = input.sessionId;
     entry.updatedAt = _now();
   } else {
     entry = {
       id: input.id || _uid(),
+      sessionId: input.sessionId || null,
       name: String(input.name || ('Recording — ' + new Date().toLocaleString())).slice(0, 200),
       description: String(input.description || '').slice(0, 2000),
       tags: Array.isArray(input.tags) ? input.tags.map((t) => String(t).slice(0, 40)).slice(0, 20) : [],
@@ -133,7 +139,20 @@ export function saveRecording(input = {}) {
     if (list.length > MAX_ENTRIES) list.length = MAX_ENTRIES;
   }
   _save();
+  _exportToDocuments(entry);
   return entry;
+}
+
+// Also write a standalone copy to ~/Documents/Fauna/recordings so recordings
+// are visible/portable and never depend solely on the config-dir index.
+function _exportToDocuments(entry) {
+  try {
+    const dir = process.env.FAUNA_RECORDINGS_DOCS_DIR ||
+      path.join(os.homedir(), 'Documents', 'Fauna', 'recordings');
+    fs.mkdirSync(dir, { recursive: true });
+    const safe = String(entry.name || 'recording').replace(/[^\w.\-]+/g, '_').slice(0, 60) || 'recording';
+    fs.writeFileSync(path.join(dir, safe + '-' + entry.id + '.json'), JSON.stringify(entry, null, 2));
+  } catch (_) { /* best-effort */ }
 }
 
 /** List recordings (summaries only), newest first, optional text filter. */
