@@ -144,17 +144,30 @@ function _recSaveLiveNow(retries) {
     }),
   }).then(function (d) {
     if (d && d.ok && d.recording) {
+      _recState.saveError = false;
       _recRefreshList().then(function () {
         if (_recState.selectedId === '__live__') selectRecording(d.recording.id);
       });
     } else if ((retries || 0) < 2) {
       setTimeout(function () { _recSaveLiveNow((retries || 0) + 1); }, 600);
-    } else if (typeof showToast === 'function') {
-      showToast('Could not save recording', true);
+    } else {
+      _recState.saveError = true;
+      renderRecordingsPage();
+      if (typeof showToast === 'function') showToast('Could not save recording — click Retry save', true);
     }
-  }).catch(function () {
-    if ((retries || 0) < 2) setTimeout(function () { _recSaveLiveNow((retries || 0) + 1); }, 600);
+  }).catch(function (err) {
+    if ((retries || 0) < 2) { setTimeout(function () { _recSaveLiveNow((retries || 0) + 1); }, 600); return; }
+    _recState.saveError = true;
+    renderRecordingsPage();
+    if (typeof showToast === 'function') showToast('Save error: ' + ((err && err.message) || err), true);
   });
+}
+
+// Manual retry from the "Save failed" state.
+function _recRetrySave() {
+  _recState.saveError = false;
+  renderRecordingsPage();
+  _recSaveLiveNow(0);
 }
 
 function _recRefreshList() {
@@ -209,11 +222,17 @@ function toggleRecording() {
     _recState.selectedId = '__live__';
     _recState.recording = true;
     _recState.current = null;
+    _recState.saveError = false;
     renderRecordingsPage();
     executeExtAction({ action: 'record:start' }).catch(function (e) {
       _recState.recording = false;
       renderRecordingsPage();
-      alert('Start failed — is the extension connected? ' + e.message);
+      var m = String((e && e.message) || e);
+      if (/unknown action/i.test(m)) {
+        alert('Your Fauna Browser Bridge extension is out of date.\n\nOpen chrome://extensions → enable Developer mode → click Reload on "Fauna Browser Bridge" (loaded from the repo\'s browser-extension/ folder). Remove the older "FaunaBrowserMCP" extension if it is also installed.\n\nNote: rebuilding the desktop app does NOT update the browser extension — reload it separately.');
+      } else {
+        alert('Start failed — is the browser extension connected? ' + m);
+      }
     });
   }
 }
@@ -230,7 +249,7 @@ function _onRecordingEvent(msg) {
   }
   var page = document.getElementById('rec-page');
   if (msg.event === 'recording:started') {
-    _recState.recording = true; _recState.live = []; _recState.selectedId = '__live__';
+    _recState.recording = true; _recState.live = []; _recState.selectedId = '__live__'; _recState.saveError = false;
     _recState.sessionId = (msg.data && msg.data.sessionId) || null;
     if (page) renderRecordingsPage();
   } else if (msg.event === 'recording:step') {
@@ -286,10 +305,19 @@ function renderRecordingsPage() {
 function _recDetailHtml() {
   if (_recState.selectedId === '__live__') {
     var flashing = _recState.recording;
-    var head = flashing ? '<span class="rec-dot"></span> Live recording' : '<i class="ti ti-player-record"></i> Recording finished';
-    var sub = flashing ? 'perform actions in your browser' : 'saving…';
-    return '<div class="rec-detail-head"><div class="rec-detail-title">' + head + '</div>' +
-      '<div class="rec-detail-sub">' + _recState.live.length + ' steps — ' + sub + '</div></div>' +
+    var head, sub;
+    if (flashing) {
+      head = '<span class="rec-dot"></span> Live recording';
+      sub = _recState.live.length + ' steps — perform actions in your browser';
+    } else if (_recState.saveError) {
+      head = '<i class="ti ti-alert-triangle" style="color:var(--error)"></i> Save failed';
+      sub = _recState.live.length + ' steps — <button class="rec-abtn" onclick="_recRetrySave()"><i class="ti ti-refresh"></i> Retry save</button>';
+    } else {
+      head = '<i class="ti ti-player-record"></i> Recording finished';
+      sub = _recState.live.length + ' steps — saving…';
+    }
+    return '<div class="rec-detail-head"><div class="rec-detail-title">' + head + '</div></div>' +
+      '<div class="rec-detail-sub">' + sub + '</div>' +
       '<div class="rec-map" id="rec-live-map">' + _recMapHtml(_recState.live) + '</div>';
   }
   var rec = _recState.current;
