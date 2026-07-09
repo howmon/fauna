@@ -61,6 +61,15 @@ function _recEnsureStyles() {
     '.rec-node:hover .rec-step-del{opacity:1}.rec-step-del:hover{color:var(--error)}',
     '.rec-connector{width:2px;height:16px;background:var(--fau-border);margin:2px 0 2px 22px}',
     '.rec-gap{font-size:10px;color:var(--fau-text-muted);margin:2px 0 2px 44px}',
+    '.rec-node-caret{font-size:13px;margin-right:2px;color:var(--fau-text-muted)}',
+    '.rec-node.editing{background:var(--fau-surface2);border-radius:10px;padding:8px;margin-left:-8px}',
+    '.rec-editor{margin-top:10px;display:flex;flex-direction:column;gap:8px;max-width:460px}',
+    '.rec-editor-type{font-size:11px;color:var(--fau-text-dim)}',
+    '.rec-field{display:flex;flex-direction:column;gap:3px}',
+    '.rec-field>span{font-size:11px;color:var(--fau-text-muted)}',
+    '.rec-field-input{border:1px solid var(--fau-border);border-radius:6px;background:var(--fau-surface);color:var(--fau-text);font:inherit;font-size:12px;padding:6px 8px}',
+    '.rec-field-input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}',
+    '.rec-editor-actions{display:flex;gap:6px;margin-top:4px}',
   ].join('');
   var st = document.createElement('style');
   st.id = 'rec-styles';
@@ -111,8 +120,17 @@ function _recFmtDur(ms) {
 }
 
 function _recApi(path, opts) {
-  var url = (window.faunaStreamUrl ? window.faunaStreamUrl(path) : path);
-  return fetch(url, opts).then(function (r) { return r.json(); });
+  // NOTE: plain same-origin path — do NOT use faunaStreamUrl here (that rewrites
+  // to the alternate loopback host for SSE streams and would make these regular
+  // API calls cross-origin → CORS-blocked).
+  return fetch(path, opts).then(function (r) {
+    if (typeof console !== 'undefined') console.log('[recorder] ' + ((opts && opts.method) || 'GET') + ' ' + path + ' → ' + r.status);
+    if (!r.ok) return r.text().then(function (t) { console.warn('[recorder] ' + path + ' body:', String(t).slice(0, 300)); return { ok: false, error: 'HTTP ' + r.status }; });
+    return r.json();
+  }).catch(function (e) {
+    if (typeof console !== 'undefined') console.error('[recorder] ' + path + ' fetch error:', e && e.message);
+    throw e;
+  });
 }
 
 function _recRefreshStatus() {
@@ -126,41 +144,68 @@ function _recRefreshStatus() {
 // Save the renderer's own captured steps (incl. streamed screenshots) right
 // away, deduped with the extension's copy via sessionId. This is the primary,
 // reliable save path so a recording never gets stuck on “saving…”.
-function _recSaveLiveNow(retries) {
+//   - First try WITH screenshots.
+//   - If that fails/hangs, retry WITHOUT screenshots (a tiny, fast payload) so
+//     the recording ALWAYS saves; the extension's socket copy (recording:complete)
+//     upserts the screenshots back in by sessionId when it arrives.
+function _recPostJson(path, obj, timeoutMs) {
+  // Same-origin only (see _recApi note about faunaStreamUrl / CORS).
+  var body = JSON.stringify(obj);
+  if (typeof console !== 'undefined') console.log('[recorder] POST ' + path + ' (' + body.length + ' bytes, ' + (obj.steps ? obj.steps.length : 0) + ' steps)');
+  var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  var to = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (_) {} }, timeoutMs || 15000) : null;
+  return fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body, signal: ctrl ? ctrl.signal : undefined })
+    .then(function (r) {
+      if (to) clearTimeout(to);
+      if (typeof console !== 'undefined') console.log('[recorder] POST ' + path + ' → ' + r.status);
+      if (!r.ok) return r.text().then(function (t) { console.warn('[recorder] POST body:', String(t).slice(0, 300)); return { ok: false, error: 'HTTP ' + r.status }; });
+      return r.json();
+    })
+    .catch(function (e) {
+      if (to) clearTimeout(to);
+      if (typeof console !== 'undefined') console.error('[recorder] POST ' + path + ' error:', (e && e.name) + ' ' + (e && e.message));
+      throw e;
+    });
+}
+
+function _recSaveLiveNow(retries, lite) {
   var steps = _recState.live || [];
   if (!steps.length) {
-    // Nothing streamed to us (e.g. app opened mid-recording) — lean on the
-    // extension’s socket save + a short list poll.
     if ((retries || 0) < 4) { setTimeout(function () { _recSaveFallback(0); }, 400); }
     return;
   }
   var dur = steps[steps.length - 1].t || 0;
-  _recApi('/api/recordings', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      sessionId: _recState.sessionId || null,
-      name: 'Recording — ' + new Date().toLocaleString(),
-      startedAt: Date.now() - dur, endedAt: Date.now(), durationMs: dur, steps: steps,
-    }),
-  }).then(function (d) {
+  var payloadSteps = lite
+    ? steps.map(function (s) { var o = {}; for (var k in s) { if (k !== 'shot') o[k] = s[k]; } return o; })
+    : steps;
+  if (typeof dbg === 'function') dbg('recorder: saving ' + payloadSteps.length + ' steps' + (lite ? ' (no screenshots)' : ''), 'info');
+  _recPostJson('/api/recordings', {
+    sessionId: _recState.sessionId || null,
+    name: 'Recording — ' + new Date().toLocaleString(),
+    startedAt: Date.now() - dur, endedAt: Date.now(), durationMs: dur, steps: payloadSteps,
+  }, 15000).then(function (d) {
     if (d && d.ok && d.recording) {
       _recState.saveError = false;
+      if (typeof dbg === 'function') dbg('recorder: saved ' + d.recording.id, 'ok');
       _recRefreshList().then(function () {
         if (_recState.selectedId === '__live__') selectRecording(d.recording.id);
       });
-    } else if ((retries || 0) < 2) {
-      setTimeout(function () { _recSaveLiveNow((retries || 0) + 1); }, 600);
     } else {
-      _recState.saveError = true;
-      renderRecordingsPage();
-      if (typeof showToast === 'function') showToast('Could not save recording — click Retry save', true);
+      _recSaveRetry(retries, lite, 'bad-response');
     }
   }).catch(function (err) {
-    if ((retries || 0) < 2) { setTimeout(function () { _recSaveLiveNow((retries || 0) + 1); }, 600); return; }
-    _recState.saveError = true;
-    renderRecordingsPage();
-    if (typeof showToast === 'function') showToast('Save error: ' + ((err && err.message) || err), true);
+    _recSaveRetry(retries, lite, (err && err.name === 'AbortError') ? 'timeout' : ((err && err.message) || 'error'));
   });
+}
+
+function _recSaveRetry(retries, lite, why) {
+  retries = retries || 0;
+  if (typeof dbg === 'function') dbg('recorder: save failed (' + why + ')' + (lite ? '' : ' — retrying without screenshots'), 'warn');
+  if (!lite) { setTimeout(function () { _recSaveLiveNow(retries, true); }, 300); return; }
+  if (retries < 2) { setTimeout(function () { _recSaveLiveNow(retries + 1, true); }, 700); return; }
+  _recState.saveError = true;
+  renderRecordingsPage();
+  if (typeof showToast === 'function') showToast('Could not save recording (' + why + ') — click Retry save', true);
 }
 
 // Manual retry from the "Save failed" state.
@@ -336,6 +381,7 @@ function _recDetailHtml() {
 }
 
 // The visual map: a timeline of step nodes with connectors + thumbnails.
+// For saved recordings (recId set), clicking a node expands an editable panel.
 function _recMapHtml(steps, recId) {
   if (!steps || !steps.length) return '<div class="rec-empty-sm">No steps.</div>';
   return steps.map(function (s, i) {
@@ -343,17 +389,83 @@ function _recMapHtml(steps, recId) {
     var gap = prev ? '<div class="rec-gap">+' + _recFmtDur((s.t || 0) - (prev.t || 0)) + '</div>' : '';
     var shot = s.shot ? '<img class="rec-shot" src="' + _recEsc(s.shot) + '" loading="lazy">' : '';
     var sub = s.url ? _recEsc(String(s.url).replace(/^https?:\/\//, '').slice(0, 60)) : _recEsc(s.selector || '');
-    var del = recId ? '<button class="rec-step-del" title="Delete step" onclick="_recDeleteStep(\'' + recId + '\',\'' + s.id + '\')">×</button>' : '';
+    var editable = !!recId;
+    var open = editable && _recState.editingStep === s.id;
+    var del = editable ? '<button class="rec-step-del" title="Delete step" onclick="event.stopPropagation();_recDeleteStep(\'' + recId + '\',\'' + s.id + '\')">×</button>' : '';
+    var caret = editable ? '<i class="ti ti-' + (open ? 'chevron-down' : 'chevron-right') + ' rec-node-caret"></i>' : '';
+    var click = editable ? ' onclick="_recToggleStepEdit(\'' + s.id + '\')" style="cursor:pointer"' : '';
     return gap +
-      '<div class="rec-node">' +
+      '<div class="rec-node' + (open ? ' editing' : '') + '"' + click + '>' +
         '<div class="rec-node-icon"><i class="ti ' + _recTypeIcon(s.type) + '"></i></div>' +
         '<div class="rec-node-body">' +
-          '<div class="rec-node-title">' + (i + 1) + '. ' + _recEsc(_recStepPrimary(s)) + del + '</div>' +
+          '<div class="rec-node-title">' + caret + (i + 1) + '. ' + _recEsc(_recStepPrimary(s)) + del + '</div>' +
           (sub ? '<div class="rec-node-sub">' + sub + '</div>' : '') +
           shot +
+          (open ? _recStepEditorHtml(recId, s) : '') +
         '</div>' +
       '</div>';
   }).join('<div class="rec-connector"></div>');
+}
+
+// Editable fields per step type. Renders a small form; edits are saved on click.
+function _recStepFields(type) {
+  switch (type) {
+    case 'navigate': case 'tabswitch': return [['url', 'URL'], ['title', 'Title']];
+    case 'click': return [['selector', 'Selector'], ['label', 'Label'], ['x', 'X'], ['y', 'Y']];
+    case 'input': return [['selector', 'Selector'], ['label', 'Label'], ['value', 'Value']];
+    case 'select': return [['selector', 'Selector'], ['value', 'Value'], ['label', 'Label']];
+    case 'toggle': case 'submit': return [['selector', 'Selector']];
+    case 'key': return [['keys', 'Keys (e.g. Meta+c)']];
+    case 'copy': case 'cut': case 'paste': case 'selection': return [['text', 'Text']];
+    default: return [['selector', 'Selector']];
+  }
+}
+
+function _recStepEditorHtml(recId, s) {
+  var rows = _recStepFields(s.type).map(function (f) {
+    var key = f[0], label = f[1];
+    var val = s[key] != null ? s[key] : '';
+    return '<label class="rec-field"><span>' + label + '</span>' +
+      '<input class="rec-field-input" data-field="' + key + '" value="' + _recEsc(val) + '"></label>';
+  }).join('');
+  rows += '<label class="rec-field"><span>Note</span>' +
+    '<input class="rec-field-input" data-field="note" value="' + _recEsc(s.note || '') + '" placeholder="Optional note"></label>';
+  return '<div class="rec-editor" id="rec-editor-' + s.id + '" onclick="event.stopPropagation()">' +
+    '<div class="rec-editor-type">Type: <b>' + _recEsc(s.type) + '</b> · <span class="muted">+' + _recFmtDur(s.t || 0) + '</span></div>' +
+    rows +
+    '<div class="rec-editor-actions">' +
+      '<button class="rec-abtn" onclick="_recSaveStep(\'' + recId + '\',\'' + s.id + '\')"><i class="ti ti-check"></i> Save step</button>' +
+      '<button class="rec-abtn" onclick="_recToggleStepEdit(\'' + s.id + '\')">Cancel</button>' +
+      '<button class="rec-abtn danger" onclick="_recDeleteStep(\'' + recId + '\',\'' + s.id + '\')"><i class="ti ti-trash"></i> Delete</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function _recToggleStepEdit(stepId) {
+  _recState.editingStep = (_recState.editingStep === stepId) ? null : stepId;
+  renderRecordingsPage();
+}
+
+function _recSaveStep(recId, stepId) {
+  if (!_recState.current) return;
+  var box = document.getElementById('rec-editor-' + stepId);
+  if (!box) return;
+  var patch = {};
+  box.querySelectorAll('[data-field]').forEach(function (inp) { patch[inp.getAttribute('data-field')] = inp.value; });
+  var steps = (_recState.current.steps || []).map(function (st) {
+    if (st.id !== stepId) return st;
+    var n = Object.assign({}, st);
+    for (var k in patch) {
+      if (k === 'x' || k === 'y') n[k] = Number(patch[k]) || 0;
+      else if (patch[k] === '') delete n[k];
+      else n[k] = patch[k];
+    }
+    return n;
+  });
+  _recApi('/api/recordings/' + recId, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ steps: steps }) })
+    .then(function (d) {
+      if (d && d.ok) { _recState.current = d.recording; _recState.editingStep = null; renderRecordingsPage(); if (typeof showToast === 'function') showToast('Step updated'); }
+    });
 }
 
 function _recRenderLiveIncremental() {
@@ -368,9 +480,11 @@ function _recRenderLiveIncremental() {
 function selectRecording(id) {
   _recState.selectedId = id;
   if (id === '__live__') { _recState.current = null; renderRecordingsPage(); return; }
+  // Repaint right away (leave any "saving…" state); fill in details when loaded.
+  _recState.current = (_recState.list || []).find(function (r) { return r.id === id; }) || null;
+  renderRecordingsPage();
   _recApi('/api/recordings/' + id).then(function (d) {
-    if (d && d.ok) _recState.current = d.recording;
-    renderRecordingsPage();
+    if (d && d.ok) { _recState.current = d.recording; renderRecordingsPage(); }
   });
 }
 
@@ -417,8 +531,13 @@ function _recReplaySeq(actions, i) {
 function recreateRecording(id) {
   _recApi('/api/recordings/' + id + '/describe').then(function (d) {
     if (!d || !d.ok) { alert('Describe failed'); return; }
-    var prompt = 'I recorded this browser flow. Recreate it (or adapt it as I describe) using browser-ext-action steps:\n\n' +
-      '**' + d.name + '**' + (d.description ? ' — ' + d.description : '') + '\n\n' + d.outline;
+    var prompt = 'I recorded this browser flow. Recreate it (or adapt it as I describe) in my real browser.\n\n' +
+      '**' + d.name + '**' + (d.description ? ' — ' + d.description : '') + '\n\n' + d.outline + '\n\n' +
+      'How to run it:\n' +
+      '1. First emit a `browser-ext-action` block with `{"action":"tab:list"}` to get the real numeric tab ids.\n' +
+      '2. Then emit executable `browser-ext-action` blocks using those REAL numeric tabIds — never placeholders like SOURCE_TAB_ID or <TAB_ID>.\n' +
+      '3. One JSON object per line, no prose inside the code block.\n' +
+      '4. For Figma/canvas use `mouse-click`, `key`, `copy`, `paste` (not plain click/keyboard).';
     if (typeof closeAppPage === 'function') closeAppPage();
     if (!window.state || !state.currentId) { if (typeof newConversation === 'function') newConversation(); }
     var input = document.getElementById('msg-input');
@@ -427,5 +546,30 @@ function recreateRecording(id) {
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.focus();
     }
+    _recAttachShots(id);
   });
+}
+
+// Attach the recording's step screenshots as image attachments so the AI can
+// SEE the flow (vision context), not just the text outline.
+function _recAttachShots(id) {
+  var rec = (_recState.current && _recState.current.id === id) ? _recState.current : null;
+  if (rec) { _recAttachShotList((rec.steps || []).filter(function (s) { return s.shot; })); return; }
+  _recApi('/api/recordings/' + id).then(function (d) {
+    if (d && d.ok && d.recording) _recAttachShotList((d.recording.steps || []).filter(function (s) { return s.shot; }));
+  });
+}
+
+function _recAttachShotList(withShots) {
+  if (typeof addAttachment !== 'function' || !withShots || !withShots.length) return;
+  // Cap to a handful so we don't blow the attachment limit / context window.
+  var pick = withShots.slice(0, 6);
+  var n = 0;
+  pick.forEach(function (s, i) {
+    var m = String(s.shot || '').match(/^data:([^;]+);base64,(.+)$/);
+    if (!m) return;
+    addAttachment({ type: 'image', extSource: 'recording', name: 'Step ' + (i + 1) + ' — ' + (s.type || 'action'), base64: m[2], mime: m[1] });
+    n++;
+  });
+  if (n && typeof showToast === 'function') showToast(n + ' screenshot' + (n > 1 ? 's' : '') + ' attached to chat');
 }

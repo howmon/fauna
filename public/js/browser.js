@@ -1692,6 +1692,32 @@ function _parseBrowserExtActionJson(raw) {
   }
 }
 
+// Detect an illustrative browser-ext-action block that contains placeholders
+// rather than a runnable command (so we don't execute it or nag the model with
+// a parse error). Matches unquoted ALL_CAPS tokens, <angle> or {{mustache}}
+// placeholders in a value position, plus a few well-known names.
+function _isBrowserExtTemplate(raw) {
+  var s = String(raw || '');
+  if (/\b(SOURCE_TAB_ID|DEST_TAB_ID|TAB_ID|SOURCE_TAB|DEST_TAB|PLACEHOLDER|YOUR_[A-Z_]+)\b/.test(s)) return true;
+  if (/:\s*(?:<[^>]+>|\{\{[^}]+\}\})/.test(s)) return true;
+  if (/:\s*[A-Z][A-Z0-9_]{2,}\s*[,}\n]/.test(s)) return true;
+  return false;
+}
+
+// Render a placeholder template block as a passive, non-executed example.
+function _renderBrowserExtTemplate(pre) {
+  if (!pre || !pre.parentNode) return;
+  var badge = document.createElement('div');
+  badge.className = 'ba-block ba-ext ba-template';
+  badge.innerHTML =
+    '<div class="ba-header">' +
+      '<i class="ti ti-template"></i>' +
+      '<span class="ba-label">Example (not run)</span>' +
+      '<span class="ba-desc">Template with placeholders — fill in real tab ids to run</span>' +
+    '</div>';
+  pre.parentNode.insertBefore(badge, pre); // keep the code block visible below the badge
+}
+
 function _renderBrowserExtParseError(pre, msg) {
   if (!pre || !pre.parentNode) return;
   var el = document.createElement('div');
@@ -1789,6 +1815,15 @@ function extractAndRenderBrowserExtActions(html, messageEl, isHistoryLoad, convI
         }
       } else {
         var e = parsedSingle.error;
+        // Illustrative template with placeholders (e.g. tabId:SOURCE_TAB_ID,
+        // <TAB_ID>, {{id}}) — NOT a real command. Render it as a passive example
+        // and do NOT auto-execute or feed a parse error back (that caused a
+        // re-emit loop when the model showed a "reusable flow" template).
+        if (_isBrowserExtTemplate(raw)) {
+          dbg('browser-ext-action: template/example block (placeholders) — not executed', 'info');
+          _renderBrowserExtTemplate(pre);
+          return;
+        }
         dbg('browser-ext-action parse error: ' + e.message, 'err');
         _renderBrowserExtParseError(pre, e.message || 'Invalid JSON payload');
         if (!isHistoryLoad) _feedBrowserExtParseError(raw, e, convId);
