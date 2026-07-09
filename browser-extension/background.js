@@ -328,6 +328,14 @@ async function dispatchCommand(msg) {
       case 'mouse-click':  return await cmdMouseClick(params, tab);
       case 'clipboard-read':  return await cmdClipboardRead(params, tab);
       case 'clipboard-write': return await cmdClipboardWrite(params, tab);
+      // Downloads
+      case 'download':      return await cmdDownload(params);
+      case 'download:list': return await cmdDownloadList(params);
+      // Tab groups
+      case 'tab:group':    return await cmdTabGroup(params);
+      case 'tab:ungroup':  return await cmdTabUngroup(params);
+      // Navigation lifecycle
+      case 'wait-navigation': return await cmdWaitNavigation(params, tab);
       default:
         return { ok: false, error: 'Unknown action: ' + action };
     }
@@ -589,20 +597,78 @@ async function cmdExtractAssets({} = {}, tab) {
 
 // ── DevTools helpers — all use chrome.debugger CDP ────────────────────────
 
-async function _debuggerSession(tabId, fn, timeoutMs = 15000) {
-  const target = { tabId };
-  let attached = false;
+// CDP attachment manager. Keeps ONE persistent debugger attachment per tab,
+// reused across commands and auto-detached after a short idle period, with
+// per-tab serialization. This eliminates the attach/detach races that produced
+// "Detached while handling command" and "Debugger is not attached" when the
+// agent ran a batch of CDP actions (the old per-command fire-and-forget detach
+// tore down the next command's freshly-attached session). On attach we also
+// enable focus emulation so clipboard (copy/paste) and canvas apps like Figma
+// work even when Chrome is not the OS-focused window.
+const _cdpAttached = new Map();    // tabId → true
+const _cdpIdleTimers = new Map();  // tabId → timeout id
+const _cdpQueues = new Map();      // tabId → tail Promise (serialization)
+const _CDP_IDLE_MS = 6000;
+
+async function _cdpEnsureAttached(tabId) {
+  if (_cdpAttached.get(tabId)) return;
   try {
-    try { await chrome.debugger.attach(target, '1.3'); attached = true; }
-    catch (e) { if (!String(e.message).includes('already')) throw e; attached = true; }
-    return await Promise.race([
-      fn(target),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('DevTools session timed out')), timeoutMs)),
-    ]);
-  } finally {
-    if (attached) chrome.debugger.detach(target).catch(() => {});
+    await chrome.debugger.attach({ tabId }, '1.3');
+  } catch (e) {
+    if (!/already attached/i.test(String(e && e.message))) throw e;
   }
+  _cdpAttached.set(tabId, true);
+  // Make the page believe it is focused & active so clipboard read/write and
+  // canvas focus work without Chrome being the OS-focused window.
+  try { await chrome.debugger.sendCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', { enabled: true }); } catch (_) {}
 }
+
+function _cdpScheduleIdleDetach(tabId) {
+  clearTimeout(_cdpIdleTimers.get(tabId));
+  _cdpIdleTimers.set(tabId, setTimeout(async () => {
+    _cdpIdleTimers.delete(tabId);
+    if (!_cdpAttached.get(tabId)) return;
+    _cdpAttached.delete(tabId);
+    try { await chrome.debugger.sendCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', { enabled: false }); } catch (_) {}
+    try { await chrome.debugger.detach({ tabId }); } catch (_) {}
+  }, _CDP_IDLE_MS));
+}
+
+// Run CDP work on a tab through the shared attachment, serialized per tab and
+// bounded by a timeout. The attachment is kept alive and detached only after an
+// idle gap, so consecutive commands in a batch reuse it instead of thrashing.
+function _cdpRun(tabId, fn, timeoutMs = 15000) {
+  const prev = _cdpQueues.get(tabId) || Promise.resolve();
+  const run = prev.catch(() => {}).then(async () => {
+    clearTimeout(_cdpIdleTimers.get(tabId)); // cancel pending idle-detach while in use
+    await _cdpEnsureAttached(tabId);
+    try {
+      return await Promise.race([
+        fn({ tabId }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('DevTools session timed out')), timeoutMs)),
+      ]);
+    } finally {
+      _cdpScheduleIdleDetach(tabId);
+    }
+  });
+  _cdpQueues.set(tabId, run.catch(() => {}));
+  return run;
+}
+
+// Backwards-compatible wrapper — all existing CDP commands route through here.
+function _debuggerSession(tabId, fn, timeoutMs = 15000) {
+  return _cdpRun(tabId, fn, timeoutMs);
+}
+
+// Keep tracked state correct if the debugger detaches for any reason
+// (tab closed, DevTools opened, target crash, "Cancel" on the CDP banner).
+chrome.debugger.onDetach.addListener((source) => {
+  if (source && source.tabId != null) {
+    _cdpAttached.delete(source.tabId);
+    clearTimeout(_cdpIdleTimers.get(source.tabId));
+    _cdpIdleTimers.delete(source.tabId);
+  }
+});
 
 // Capture console messages by injecting a shim that hooks console.*,
 // window.onerror, and unhandledrejection — plus subscribing to CDP
@@ -906,34 +972,27 @@ async function cmdEval({ js } = {}, tab) {
   if (!tab) return { ok: false, error: 'No active tab' };
   if (!js) return { ok: false, error: 'js required' };
   // Use DevTools Protocol Runtime.evaluate — bypasses both the page's CSP and
-  // the extension's own MV3 CSP that blocks new Function() / eval in content scripts.
-  const target = { tabId: tab.id };
-  let attached = false;
+  // the extension's own MV3 CSP that blocks new Function() / eval in content
+  // scripts. Routes through the shared attachment manager so it never races
+  // with other CDP commands (input, snapshots, devtools) on the same tab.
   try {
-    try {
-      await chrome.debugger.attach(target, '1.3');
-      attached = true;
-    } catch (e) {
-      if (!String(e.message).includes('already')) throw e;
-      attached = true;
-    }
-    const evalResult = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
-      expression: js,
-      returnByValue: true,
-      awaitPromise: true,
-      userGesture: true,
+    return await _debuggerSession(tab.id, async (target) => {
+      const evalResult = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+        expression: js,
+        returnByValue: true,
+        awaitPromise: true,
+        userGesture: true,
+      });
+      if (evalResult.exceptionDetails) {
+        const desc = evalResult.exceptionDetails.exception?.description ||
+                     evalResult.exceptionDetails.text || 'JS exception';
+        return { ok: true, result: 'ERROR: ' + desc };
+      }
+      const val = evalResult.result?.value;
+      return { ok: true, result: val === undefined ? '(undefined)' : String(val) };
     });
-    if (evalResult.exceptionDetails) {
-      const desc = evalResult.exceptionDetails.exception?.description ||
-                   evalResult.exceptionDetails.text || 'JS exception';
-      return { ok: true, result: 'ERROR: ' + desc };
-    }
-    const val = evalResult.result?.value;
-    return { ok: true, result: val === undefined ? '(undefined)' : String(val) };
   } catch (err) {
     return { ok: false, error: err.message };
-  } finally {
-    if (attached) chrome.debugger.detach(target).catch(() => {});
   }
 }
 
@@ -1096,6 +1155,9 @@ async function cmdClipboardShortcut(kind, params = {}, tab) {
       await _cdpFocusPage(target);
     }
     await _cdpKeyChord(target, spec);
+    // Let the async clipboard write/read settle before the next action (e.g. a
+    // tab switch) can interrupt it.
+    await new Promise(r => setTimeout(r, 150));
     return { ok: true, action: kind, dispatched: spec, url: tab.url, title: tab.title };
   });
 }
@@ -1117,9 +1179,15 @@ async function cmdMouseClick({ x, y, selector, clickCount = 1 } = {}, tab) {
 }
 
 // clipboard-read / clipboard-write — plain-text clipboard access for
-// verification (rich Figma payloads are handled by the OS during copy/paste).
+// verification. Prefers the offscreen document (no tab focus required); falls
+// back to CDP on the tab. (Rich Figma payloads are handled by the OS during
+// copy/paste — this text path is for verification / plain-text transfer.)
 async function cmdClipboardRead({} = {}, tab) {
-  if (!tab) return { ok: false, error: 'No active tab' };
+  try {
+    const r = await _offscreenClipboard('read');
+    if (r && r.ok) return { ok: true, text: r.text || '', length: (r.text || '').length, via: 'offscreen' };
+  } catch (_) {}
+  if (!tab) return { ok: false, error: 'No active tab (offscreen clipboard unavailable)' };
   return await _debuggerSession(tab.id, async (target) => {
     await _cdpFocusPage(target);
     const r = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
@@ -1128,12 +1196,16 @@ async function cmdClipboardRead({} = {}, tab) {
     });
     const text = r?.result?.value ?? '';
     if (typeof text === 'string' && text.startsWith('ERR:')) return { ok: false, error: text.slice(4) };
-    return { ok: true, text, length: (text || '').length };
+    return { ok: true, text, length: (text || '').length, via: 'cdp' };
   });
 }
 
 async function cmdClipboardWrite({ text = '' } = {}, tab) {
-  if (!tab) return { ok: false, error: 'No active tab' };
+  try {
+    const r = await _offscreenClipboard('write', String(text));
+    if (r && r.ok) return { ok: true, written: String(text).length, via: 'offscreen' };
+  } catch (_) {}
+  if (!tab) return { ok: false, error: 'No active tab (offscreen clipboard unavailable)' };
   return await _debuggerSession(tab.id, async (target) => {
     await _cdpFocusPage(target);
     const r = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
@@ -1142,7 +1214,111 @@ async function cmdClipboardWrite({ text = '' } = {}, tab) {
     });
     const v = r?.result?.value || '';
     if (v.startsWith('ERR:')) return { ok: false, error: v.slice(4) };
-    return { ok: true, written: String(text).length };
+    return { ok: true, written: String(text).length, via: 'cdp' };
+  });
+}
+
+// ── Offscreen document (clipboard without tab focus) ──────────────────────
+let _offscreenReady = null;
+async function _ensureOffscreen() {
+  if (!chrome.offscreen) throw new Error('offscreen API unavailable');
+  if (_offscreenReady) return _offscreenReady;
+  _offscreenReady = (async () => {
+    try {
+      const has = chrome.offscreen.hasDocument ? await chrome.offscreen.hasDocument() : false;
+      if (has) return;
+      await chrome.offscreen.createDocument({
+        url: 'offscreen.html',
+        reasons: ['CLIPBOARD'],
+        justification: 'Read/write the system clipboard for copy/paste actions.',
+      });
+    } catch (e) {
+      if (!/single offscreen|already/i.test(String(e && e.message))) { _offscreenReady = null; throw e; }
+    }
+  })();
+  return _offscreenReady;
+}
+async function _offscreenClipboard(op, text) {
+  await _ensureOffscreen();
+  return await chrome.runtime.sendMessage({ target: 'offscreen-clipboard', op, text });
+}
+
+// ── Downloads ─────────────────────────────────────────────────────────────
+async function cmdDownload({ url, filename, saveAs } = {}) {
+  if (!url) return { ok: false, error: 'url required' };
+  let id;
+  try {
+    id = await chrome.downloads.download({ url, filename: filename || undefined, saveAs: !!saveAs, conflictAction: 'uniquify' });
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+  const item = await _waitDownload(id, 60000);
+  return {
+    ok: !item || item.state !== 'interrupted',
+    downloadId: id,
+    state: item?.state || 'in_progress',
+    path: item?.filename || null,
+    bytes: item?.totalBytes,
+    url,
+    error: item?.error || null,
+  };
+}
+function _waitDownload(id, timeoutMs) {
+  return new Promise((resolve) => {
+    const finish = () => { cleanup(); chrome.downloads.search({ id }).then(items => resolve(items && items[0])).catch(() => resolve(null)); };
+    const onChanged = (delta) => {
+      if (delta.id !== id) return;
+      if (delta.state && (delta.state.current === 'complete' || delta.state.current === 'interrupted')) finish();
+    };
+    const to = setTimeout(finish, timeoutMs);
+    function cleanup() { clearTimeout(to); chrome.downloads.onChanged.removeListener(onChanged); }
+    chrome.downloads.onChanged.addListener(onChanged);
+  });
+}
+async function cmdDownloadList({ limit = 20 } = {}) {
+  const items = await chrome.downloads.search({ limit: Math.min(Number(limit) || 20, 100), orderBy: ['-startTime'] });
+  return { ok: true, downloads: items.map(d => ({ id: d.id, url: d.url, filename: d.filename, state: d.state, bytes: d.totalBytes, mime: d.mime })) };
+}
+
+// ── Tab groups ────────────────────────────────────────────────────────────
+async function cmdTabGroup({ tabIds, tabId, title, color, collapsed } = {}) {
+  let ids = Array.isArray(tabIds) ? tabIds.slice() : [];
+  if (!ids.length && tabId != null) ids = [tabId];
+  if (!ids.length) return { ok: false, error: 'tabIds required' };
+  const groupId = await chrome.tabs.group({ tabIds: ids });
+  const upd = {};
+  if (title != null) upd.title = String(title);
+  if (color) upd.color = color; // grey|blue|red|yellow|green|pink|purple|cyan|orange
+  if (collapsed != null) upd.collapsed = !!collapsed;
+  if (Object.keys(upd).length && chrome.tabGroups) { try { await chrome.tabGroups.update(groupId, upd); } catch (_) {} }
+  return { ok: true, groupId, tabIds: ids, title: title || null, color: color || null };
+}
+async function cmdTabUngroup({ tabIds, tabId } = {}) {
+  let ids = Array.isArray(tabIds) ? tabIds.slice() : [];
+  if (!ids.length && tabId != null) ids = [tabId];
+  if (!ids.length) return { ok: false, error: 'tabIds required' };
+  await chrome.tabs.ungroup(ids);
+  return { ok: true, ungrouped: ids };
+}
+
+// ── Navigation lifecycle (webNavigation) ──────────────────────────────────
+// Resolve when the tab's top frame finishes its next navigation — more reliable
+// than polling for SPA route changes / redirects than tabs.onUpdated.
+function cmdWaitNavigation({ timeoutMs = 15000 } = {}, tab) {
+  if (!tab) return Promise.resolve({ ok: false, error: 'No active tab' });
+  const tabId = tab.id;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (data) => { if (settled) return; settled = true; cleanup(); resolve(data); };
+    const onCompleted = (details) => {
+      if (details.tabId === tabId && details.frameId === 0) {
+        chrome.tabs.get(tabId).then(t => finish({ ok: true, url: t.url, title: t.title }))
+          .catch(() => finish({ ok: true, url: details.url }));
+      }
+    };
+    const to = setTimeout(() => finish({ ok: false, error: 'wait-navigation timed out', timedOut: true }), Math.min(Number(timeoutMs) || 15000, 60000));
+    function cleanup() { clearTimeout(to); chrome.webNavigation.onCompleted.removeListener(onCompleted); }
+    chrome.webNavigation.onCompleted.addListener(onCompleted);
   });
 }
 
@@ -1157,42 +1333,31 @@ async function cmdClipboardWrite({ text = '' } = {}, tab) {
 // specific viewport (e.g. 1440×900 desktop or 375×812 mobile) without
 // resorting to html2canvas via eval.
 async function captureViaDebugger(tabId, timeoutMs = 3000, viewport = null) {
-  const target = { tabId };
-  let attached = false;
-  let metricsOverridden = false;
-  try {
-    await Promise.race([
-      chrome.debugger.attach(target, '1.3').then(() => { attached = true; }),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('debugger attach timed out')), timeoutMs))
-    ]);
-  } catch (attachErr) {
-    // Already attached by another caller — proceed anyway
-    if (!String(attachErr.message).includes('already')) throw attachErr;
-    attached = true;
-  }
-  try {
-    if (viewport && viewport.width && viewport.height) {
-      await chrome.debugger.sendCommand(target, 'Emulation.setDeviceMetricsOverride', {
-        width: Math.floor(viewport.width),
-        height: Math.floor(viewport.height),
-        deviceScaleFactor: viewport.deviceScaleFactor || 1,
-        mobile: !!viewport.mobile
-      });
-      metricsOverridden = true;
-      // Give the page a tick to relayout at the new viewport.
-      await new Promise(r => setTimeout(r, 250));
+  return _cdpRun(tabId, async (target) => {
+    let metricsOverridden = false;
+    try {
+      if (viewport && viewport.width && viewport.height) {
+        await chrome.debugger.sendCommand(target, 'Emulation.setDeviceMetricsOverride', {
+          width: Math.floor(viewport.width),
+          height: Math.floor(viewport.height),
+          deviceScaleFactor: viewport.deviceScaleFactor || 1,
+          mobile: !!viewport.mobile
+        });
+        metricsOverridden = true;
+        // Give the page a tick to relayout at the new viewport.
+        await new Promise(r => setTimeout(r, 250));
+      }
+      const result = await Promise.race([
+        chrome.debugger.sendCommand(target, 'Page.captureScreenshot', { format: 'jpeg', quality: 75 }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('debugger captureScreenshot timed out')), timeoutMs))
+      ]);
+      return result.data; // base64 JPEG
+    } finally {
+      if (metricsOverridden) {
+        try { await chrome.debugger.sendCommand(target, 'Emulation.clearDeviceMetricsOverride', {}); } catch (_) {}
+      }
     }
-    const result = await Promise.race([
-      chrome.debugger.sendCommand(target, 'Page.captureScreenshot', { format: 'jpeg', quality: 75 }),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('debugger captureScreenshot timed out')), timeoutMs))
-    ]);
-    return result.data; // base64 JPEG
-  } finally {
-    if (metricsOverridden) {
-      try { await chrome.debugger.sendCommand(target, 'Emulation.clearDeviceMetricsOverride', {}); } catch (_) {}
-    }
-    if (attached) chrome.debugger.detach(target).catch(() => {});
-  }
+  }, Math.max(timeoutMs + 3000, 15000));
 }
 
 async function cmdSnapshot(params = {}, tab) {
@@ -1299,29 +1464,26 @@ async function cmdSnapshotFull(params = {}, tab) {
   // need scroll-stitch at a forced viewport — far more reliable than
   // html2canvas via eval.
   if (viewport && viewport.width && viewport.height) {
-    const target = { tabId: tab.id };
-    let attached = false;
     try {
-      await chrome.debugger.attach(target, '1.3');
-      attached = true;
-      await chrome.debugger.sendCommand(target, 'Emulation.setDeviceMetricsOverride', {
-        width: Math.floor(viewport.width),
-        height: Math.floor(viewport.height),
-        deviceScaleFactor: viewport.deviceScaleFactor || 1,
-        mobile: !!viewport.mobile
+      return await _cdpRun(tab.id, async (target) => {
+        try {
+          await chrome.debugger.sendCommand(target, 'Emulation.setDeviceMetricsOverride', {
+            width: Math.floor(viewport.width),
+            height: Math.floor(viewport.height),
+            deviceScaleFactor: viewport.deviceScaleFactor || 1,
+            mobile: !!viewport.mobile
+          });
+          await new Promise(r => setTimeout(r, 350)); // let the page relayout
+          const result = await chrome.debugger.sendCommand(target, 'Page.captureScreenshot', {
+            format: 'jpeg', quality: 80, captureBeyondViewport: true
+          });
+          return { ok: true, base64: result.data, mime: 'image/jpeg', type: 'full-page', viewport };
+        } finally {
+          try { await chrome.debugger.sendCommand(target, 'Emulation.clearDeviceMetricsOverride', {}); } catch (_) {}
+        }
       });
-      await new Promise(r => setTimeout(r, 350)); // let the page relayout
-      const result = await chrome.debugger.sendCommand(target, 'Page.captureScreenshot', {
-        format: 'jpeg', quality: 80, captureBeyondViewport: true
-      });
-      return { ok: true, base64: result.data, mime: 'image/jpeg', type: 'full-page', viewport };
     } catch (e) {
       return { ok: false, error: 'Viewport full-snapshot failed: ' + (e.message || e) };
-    } finally {
-      if (attached) {
-        try { await chrome.debugger.sendCommand(target, 'Emulation.clearDeviceMetricsOverride', {}); } catch (_) {}
-        chrome.debugger.detach(target).catch(() => {});
-      }
     }
   }
 

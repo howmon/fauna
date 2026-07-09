@@ -714,7 +714,8 @@ async function _executeBrowserActionViaExtension(action) {
   var supported = new Set([
     'navigate', 'extract', 'extract-forms', 'fill', 'click', 'type', 'drag', 'scroll', 'hover', 'select',
     'keyboard', 'wait', 'eval', 'snapshot', 'snapshot-full', 'tab:list', 'tab:new', 'tab:switch', 'tab:close', 'tab:info',
-    'key', 'copy', 'cut', 'paste', 'mouse-click', 'clipboard-read', 'clipboard-write'
+    'key', 'copy', 'cut', 'paste', 'mouse-click', 'clipboard-read', 'clipboard-write',
+    'download', 'download:list', 'tab:group', 'tab:ungroup', 'wait-navigation'
   ]);
   if (!supported.has(mapped.action)) return null;
   var result = await executeExtAction(mapped);

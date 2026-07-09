@@ -116,6 +116,13 @@ Always pass explicit \`"tabId"\` on each action so targeting is unambiguous.
 - **tab:switch** — \`{"action":"tab:switch","tabId":123}\` — switch to a tab by id (use tab:list first)
 - **tab:close** — \`{"action":"tab:close","tabId":123}\` — close a tab
 - **tab:info** — \`{"action":"tab:info"}\` — get info (url, title) of the active tab
+- **tab:group** — \`{"action":"tab:group","tabIds":[1,2],"title":"Research","color":"blue"}\` — group tabs (color: grey|blue|red|yellow|green|pink|purple|cyan|orange)
+- **tab:ungroup** — \`{"action":"tab:ungroup","tabIds":[1,2]}\` — remove tabs from their group
+
+#### Downloads & navigation
+- **download** — \`{"action":"download","url":"https://…/file.pdf","filename":"sub/dir/file.pdf"}\` — download a file; waits for completion and returns the saved \`path\`. \`saveAs:true\` prompts for a location.
+- **download:list** — \`{"action":"download:list","limit":20}\` — list recent downloads (id, url, filename, state).
+- **wait-navigation** — \`{"action":"wait-navigation","tabId":123,"timeoutMs":15000}\` — resolve when the tab's top frame finishes its next navigation (more reliable than a fixed wait for SPA route changes / redirects).
 
 ### Rules for browser-ext-action:
 - **ZERO NARRATION before action blocks** — emit the block immediately with no preamble.

@@ -17,7 +17,11 @@
     "alarms",
     "sidePanel",
     "debugger",
-    "notifications"
+    "notifications",
+    "downloads",
+    "tabGroups",
+    "webNavigation",
+    "offscreen"
   ],
   "commands": {
     "toggle-sidebar": {
