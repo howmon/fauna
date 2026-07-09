@@ -50,6 +50,8 @@
           case 'stitch-strips': result = await doStitchStrips(msg); break;
           case 'picker:start':  result = startPicker(); break;
           case 'picker:stop':   result = stopPicker();  break;
+          case 'recorder:on':   result = recorderStart(); break;
+          case 'recorder:off':  result = recorderStop();  break;
           default:              result = { error: 'Unknown action: ' + msg.action };
         }
         safeReply(result);
@@ -59,6 +61,99 @@
     })().catch((err) => safeReply({ error: err.message || String(err) }));
     return true; // keep channel open for async
   });
+
+  // ── Action recorder ─────────────────────────────────────────────────────
+  // When ON, captures the user's interactions on this page and streams each as
+  // a lightweight step to the background worker (which timestamps it, tags tab
+  // context, optionally grabs a screenshot, and forwards it to Fauna). Uses
+  // capture-phase listeners so it sees events before the page can stop them.
+  var _rec = { on: false, scrollAt: 0, inputTimer: null };
+
+  function recorderStart() {
+    if (_rec.on) return { ok: true, already: true };
+    _rec.on = true;
+    document.addEventListener('click', _recClick, true);
+    document.addEventListener('input', _recInput, true);
+    document.addEventListener('change', _recChange, true);
+    document.addEventListener('keydown', _recKeydown, true);
+    document.addEventListener('submit', _recSubmit, true);
+    document.addEventListener('scroll', _recScroll, true);
+    document.addEventListener('mouseup', _recSelection, true);
+    return { ok: true };
+  }
+  function recorderStop() {
+    _rec.on = false;
+    clearTimeout(_rec.inputTimer);
+    document.removeEventListener('click', _recClick, true);
+    document.removeEventListener('input', _recInput, true);
+    document.removeEventListener('change', _recChange, true);
+    document.removeEventListener('keydown', _recKeydown, true);
+    document.removeEventListener('submit', _recSubmit, true);
+    document.removeEventListener('scroll', _recScroll, true);
+    document.removeEventListener('mouseup', _recSelection, true);
+    return { ok: true };
+  }
+  function _recSend(step) {
+    try { chrome.runtime.sendMessage({ type: 'fauna:record-step', step: step }); } catch (_) {}
+  }
+  function _recSelector(el) {
+    try { return typeof uniqueSelector === 'function' ? uniqueSelector(el) : (el.tagName || '').toLowerCase(); }
+    catch (_) { return (el && el.tagName ? el.tagName.toLowerCase() : ''); }
+  }
+  function _recLabel(el) {
+    if (!el) return '';
+    var v = el.innerText || el.value || (el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder'))) || el.alt || '';
+    return String(v).replace(/\s+/g, ' ').trim().slice(0, 80);
+  }
+  function _recClick(e) {
+    var el = e.target; if (!el || !el.tagName) return;
+    _recSend({ type: 'click', selector: _recSelector(el), label: _recLabel(el), tag: el.tagName.toLowerCase(), x: Math.round(e.clientX), y: Math.round(e.clientY) });
+  }
+  function _recInput(e) {
+    var el = e.target; if (!el) return;
+    clearTimeout(_rec.inputTimer);
+    _rec.inputTimer = setTimeout(function () {
+      if (!_rec.on) return;
+      var masked = el.type === 'password';
+      var val = masked ? '' : (el.value != null ? String(el.value).slice(0, 500) : '');
+      _recSend({ type: 'input', selector: _recSelector(el), label: _recLabel(el), value: val, masked: masked });
+    }, 600);
+  }
+  function _recChange(e) {
+    var el = e.target; if (!el || !el.tagName) return;
+    if (el.tagName === 'SELECT') {
+      var opt = el.options && el.options[el.selectedIndex];
+      _recSend({ type: 'select', selector: _recSelector(el), value: el.value, label: opt ? opt.text : '' });
+    } else if (el.type === 'checkbox' || el.type === 'radio') {
+      _recSend({ type: 'toggle', selector: _recSelector(el), value: !!el.checked, label: _recLabel(el) });
+    }
+  }
+  function _recKeydown(e) {
+    var mod = e.metaKey || e.ctrlKey || e.altKey;
+    // Only meaningful keys — shortcuts and navigation — not every keystroke.
+    if (!mod && e.key !== 'Enter' && e.key !== 'Escape' && e.key !== 'Tab') return;
+    var combo = [];
+    if (e.metaKey) combo.push('Meta');
+    if (e.ctrlKey) combo.push('Control');
+    if (e.altKey) combo.push('Alt');
+    if (e.shiftKey) combo.push('Shift');
+    combo.push(e.key.length === 1 ? e.key.toLowerCase() : e.key);
+    _recSend({ type: 'key', keys: combo.join('+') });
+  }
+  function _recSubmit(e) {
+    _recSend({ type: 'submit', selector: _recSelector(e.target) });
+  }
+  function _recScroll() {
+    var now = Date.now();
+    if (now - _rec.scrollAt < 600) return;
+    _rec.scrollAt = now;
+    _recSend({ type: 'scroll', x: Math.round(window.scrollX), y: Math.round(window.scrollY) });
+  }
+  function _recSelection() {
+    var sel = window.getSelection && window.getSelection();
+    var text = sel ? String(sel).replace(/\s+/g, ' ').trim() : '';
+    if (text && text.length > 1) _recSend({ type: 'selection', text: text.slice(0, 500) });
+  }
 
   // ── Extract ─────────────────────────────────────────────────────────────
 

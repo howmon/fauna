@@ -95,6 +95,7 @@ import { registerCredentialRoutes } from './server/routes/credentials.js';
 import { registerActionNodeRoutes } from './server/routes/action-nodes.js';
 import { registerMcpRoutes } from './server/routes/mcp.js';
 import { registerVoiceSettingsRoutes } from './server/routes/voice-settings.js';
+import { registerRecordingsRoutes } from './server/routes/recordings.js';
 import { registerKokoroTtsRoutes } from './server/routes/kokoro-tts.js';
 import { registerLessonRoutes } from './server/routes/lesson.js';
 import { registerParakeetRoutes } from './server/routes/parakeet.js';
@@ -449,6 +450,7 @@ registerFileFilterRoutes(app);
 // ── /api/fetch-url moved → server/routes/fetch-url.js ──
 registerFetchUrlRoutes(app);
 registerVoiceSettingsRoutes(app);
+registerRecordingsRoutes(app);
 registerKokoroTtsRoutes(app);
 registerLessonRoutes(app, { getElectronBrowserWindow: () => _ElectronBrowserWindow });
 

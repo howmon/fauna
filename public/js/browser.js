@@ -2143,6 +2143,12 @@ var _extConnectedBrowsers = []; // [{id, browser, version, connectedAt}]
     var d = msg.data || {};
     var bName = msg.browser || 'Browser';
 
+    // Action recorder events → forward to the Recordings page if it's listening.
+    if (msg.event && (msg.event.indexOf('recording:') === 0 || msg.event.indexOf('ext:recording-') === 0)) {
+      if (typeof _onRecordingEvent === 'function') { try { _onRecordingEvent(msg); } catch (_) {} }
+      return;
+    }
+
     // Server pushes status-changed when a browser connects/disconnects
     if (msg.event === 'ext:status-changed') {
       _pollExtStatus();

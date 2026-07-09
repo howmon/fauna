@@ -336,6 +336,10 @@ async function dispatchCommand(msg) {
       case 'tab:ungroup':  return await cmdTabUngroup(params);
       // Navigation lifecycle
       case 'wait-navigation': return await cmdWaitNavigation(params, tab);
+      // Action recorder
+      case 'record:start':  return await cmdRecordStart(params);
+      case 'record:stop':   return await cmdRecordStop(params);
+      case 'record:status': return cmdRecordStatus();
       default:
         return { ok: false, error: 'Unknown action: ' + action };
     }
@@ -1322,6 +1326,78 @@ function cmdWaitNavigation({ timeoutMs = 15000 } = {}, tab) {
   });
 }
 
+// ── Action recorder ───────────────────────────────────────────────────────
+// Records the user's interactions ACROSS tabs into a session: DOM events
+// (relayed from content.js), navigations, tab switches, selections, plus
+// throttled screenshots. Streams each step to Fauna live (pushEvent) and on
+// stop sends the complete recording over the socket for the app to persist.
+let _rec = { active: false };
+
+async function cmdRecordStart({ name } = {}) {
+  _rec = { active: true, startedAt: Date.now(), seq: 0, steps: [], lastShotAt: 0, name: name || '' };
+  const tabs = await chrome.tabs.query({});
+  for (const t of tabs) { chrome.tabs.sendMessage(t.id, { action: 'recorder:on' }).catch(() => {}); }
+  const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (active) _recorderOnStep({ type: 'navigate', url: active.url, title: active.title }, { tab: active });
+  pushEvent('recording:started', { name: _rec.name, startedAt: _rec.startedAt });
+  return { ok: true, recording: true };
+}
+
+async function cmdRecordStop() {
+  if (!_rec.active) return { ok: true, recording: false, stepCount: 0 };
+  _rec.active = false;
+  const tabs = await chrome.tabs.query({});
+  for (const t of tabs) { chrome.tabs.sendMessage(t.id, { action: 'recorder:off' }).catch(() => {}); }
+  const recording = {
+    name: _rec.name || ('Recording — ' + new Date().toLocaleString()),
+    startedAt: _rec.startedAt,
+    endedAt: Date.now(),
+    durationMs: Date.now() - _rec.startedAt,
+    steps: _rec.steps,
+    stepCount: _rec.steps.length,
+  };
+  send({ type: 'recording:complete', recording }); // app persists it
+  pushEvent('recording:stopped', { stepCount: recording.stepCount, durationMs: recording.durationMs });
+  return { ok: true, recording: false, stepCount: recording.stepCount };
+}
+
+function cmdRecordStatus() {
+  return { ok: true, recording: !!_rec.active, stepCount: _rec.active ? _rec.steps.length : 0, name: _rec.active ? _rec.name : null };
+}
+
+// Enrich a raw step (from content.js or from tab events) with timing + tab
+// context, buffer it, stream it live, and grab a throttled screenshot.
+function _recorderOnStep(step, sender) {
+  if (!_rec.active) return;
+  const tab = sender && sender.tab;
+  const enriched = Object.assign({}, step, {
+    id: 'st_' + (_rec.seq++),
+    t: Date.now() - _rec.startedAt,
+    tabId: tab ? tab.id : (step.tabId ?? null),
+    url: tab ? tab.url : (step.url ?? null),
+    title: tab ? tab.title : (step.title ?? null),
+  });
+  _rec.steps.push(enriched);
+  pushEvent('recording:step', enriched);
+  if (tab) _recMaybeShot(tab, enriched);
+}
+
+// Grab a small JPEG of the active tab (no debugger — captureVisibleTab), at
+// most every ~1.6s, and attach/stream it for the step's map thumbnail.
+function _recMaybeShot(tab, step) {
+  const now = Date.now();
+  if (now - _rec.lastShotAt < 1600) return;
+  _rec.lastShotAt = now;
+  try {
+    chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 40 }, (dataUrl) => {
+      if (chrome.runtime.lastError || !dataUrl || dataUrl.length > 500000) return;
+      const s = _rec.active && _rec.steps.find((x) => x.id === step.id);
+      if (s) s.shot = dataUrl;
+      pushEvent('recording:step-shot', { id: step.id, shot: dataUrl });
+    });
+  } catch (_) {}
+}
+
 // ── Screenshots ───────────────────────────────────────────────────────────
 
 // ── chrome.debugger screenshot (focus-independent) ──────────────────────
@@ -1621,6 +1697,7 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab) return;
   pushEvent('tab:activated', { tabId, url: tab.url, title: tab.title });
+  if (_rec.active) _recorderOnStep({ type: 'tabswitch', url: tab.url, title: tab.title }, { tab });
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -1631,6 +1708,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!connected) return;
   if (changeInfo.status === 'complete') {
     pushEvent('page:loaded', { tabId, url: tab.url, title: tab.title });
+    if (_rec.active) {
+      _recorderOnStep({ type: 'navigate', url: tab.url, title: tab.title }, { tab });
+      chrome.tabs.sendMessage(tabId, { action: 'recorder:on' }).catch(() => {}); // arm newly-loaded tabs
+    }
   }
 });
 
@@ -1675,6 +1756,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 if (chrome.runtime && chrome.runtime.onMessage && typeof chrome.runtime.onMessage.addListener === 'function') {
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+  if (msg.type === 'fauna:record-step') { _recorderOnStep(msg.step, _sender); return; }
   if (msg.type === 'get-status') {
     reply({ connected, mcpConnected });
     return true;

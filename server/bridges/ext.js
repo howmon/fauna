@@ -13,6 +13,7 @@
 // server.js for now since it touches figmaState + customMcpClients — it will
 // move with the custom-mcp bridge in a later slice.
 import { WebSocketServer } from 'ws';
+import { saveRecording } from '../../browser-recordings-store.js';
 
 export function createExtBridge({ getFaunaMcpState }) {
   let extWss = null;
@@ -123,6 +124,17 @@ export function createExtBridge({ getFaunaMcpState }) {
       extPendingCommands.delete(msg.id);
       clearTimeout(pending.timeoutId);
       pending.resolve(msg);
+      return;
+    }
+
+    // Extension finished a browser action recording — persist it and tell the UI.
+    if (msg.type === 'recording:complete' && msg.recording) {
+      try {
+        const saved = saveRecording(msg.recording);
+        sendSse('message', { event: 'ext:recording-saved', data: { id: saved.id, name: saved.name, stepCount: saved.stepCount }, browser: client.browser, id: client.id });
+      } catch (e) {
+        sendSse('message', { event: 'ext:recording-error', data: { error: e.message }, browser: client.browser, id: client.id });
+      }
       return;
     }
 
