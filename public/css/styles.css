@@ -12467,6 +12467,13 @@ mark.find-hit.find-hit-active {
 .rec-sysbuild-full { width: 100%; }
 .rec-sysbuild-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .rec-sysbuild-hint { font-size: 11px; color: var(--fau-text-muted); }
+.rec-capsys {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; color: var(--fau-text-dim); cursor: pointer; user-select: none;
+  padding: 0 8px;
+}
+.rec-capsys input { accent-color: var(--accent); cursor: pointer; }
+.rec-capsys .ti { font-size: 14px; }
 
 
 

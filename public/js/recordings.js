@@ -4,6 +4,17 @@
 // recreate a similar flow. Live steps stream in over SSE while recording.
 
 var _recState = { recording: false, paused: false, live: [], selectedId: null, current: null, list: [] };
+try { _recState.captureSystem = localStorage.getItem('fauna-rec-capture-system') === '1'; } catch (_) { _recState.captureSystem = false; }
+function _recToggleCaptureSystem(on) {
+  _recState.captureSystem = !!on;
+  try { localStorage.setItem('fauna-rec-capture-system', on ? '1' : '0'); } catch (_) {}
+}
+// Merge two step lists by their relative timestamp `t`, preserving order.
+function _recMergeSteps(browserSteps, systemSteps) {
+  var all = (browserSteps || []).concat(systemSteps || []);
+  all.sort(function (a, b) { return (a.t || 0) - (b.t || 0); });
+  return all;
+}
 
 function openRecordingsPage() {
   _recEnsureStyles();
@@ -292,7 +303,18 @@ function toggleRecording() {
     _recState.paused = false;
     renderRecordingsPage();
     executeExtAction({ action: 'record:stop' }).catch(function () {});
-    _recSaveLiveNow();
+    // Stop host system-input capture (if it was running) and merge the captured
+    // desktop events into the live steps by timestamp BEFORE saving.
+    if (_recState.captureSystem) {
+      _recApi('/api/recordings/capture/stop', { method: 'POST' }).then(function (d) {
+        if (d && d.ok && d.steps && d.steps.length) {
+          _recState.live = _recMergeSteps(_recState.live, d.steps);
+          _recRenderLiveIncremental();
+        }
+      }).catch(function () {}).then(function () { _recSaveLiveNow(); });
+    } else {
+      _recSaveLiveNow();
+    }
   } else {
     _recState.live = [];
     _recState.selectedId = '__live__';
@@ -301,6 +323,14 @@ function toggleRecording() {
     _recState.current = null;
     _recState.saveError = false;
     renderRecordingsPage();
+    // Start host system-input capture in parallel with the browser recorder.
+    if (_recState.captureSystem) {
+      _recApi('/api/recordings/capture/start', { method: 'POST' }).then(function (d) {
+        if (d && d.ok === false && d.needsPermission === 'accessibility') {
+          if (typeof showToast === 'function') showToast('Grant Accessibility permission to capture system input', true);
+        }
+      }).catch(function () {});
+    }
     executeExtAction({ action: 'record:start' }).catch(function (e) {
       _recState.recording = false;
       renderRecordingsPage();
@@ -379,7 +409,10 @@ function renderRecordingsPage() {
       (_recState.paused
         ? '<button class="rec-btn rec-resume" onclick="pauseResumeRecording()"><i class="ti ti-player-play-filled"></i> Resume</button>'
         : '<button class="rec-btn rec-pause" onclick="pauseResumeRecording()"><i class="ti ti-player-pause-filled"></i> Pause</button>')
-    : '<button class="rec-btn rec-start" onclick="toggleRecording()"><i class="ti ti-player-record-filled"></i> Record</button>';
+    : '<button class="rec-btn rec-start" onclick="toggleRecording()"><i class="ti ti-player-record-filled"></i> Record</button>' +
+      '<label class="rec-capsys" title="Also capture desktop mouse clicks, scrolls, keyboard shortcuts and app switches (macOS — needs Accessibility permission)">' +
+        '<input type="checkbox" ' + (_recState.captureSystem ? 'checked' : '') + ' onchange="_recToggleCaptureSystem(this.checked)"> ' +
+        '<i class="ti ti-cpu"></i> System input</label>';
 
   var list = _recState.list.map(function (r) {
     var active = _recState.selectedId === r.id ? ' active' : '';

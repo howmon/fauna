@@ -11,6 +11,7 @@ import {
   appendSystemStep,
 } from '../../browser-recordings-store.js';
 import { executeSelfTool } from '../../self-tools.js';
+import { startSystemCapture, stopSystemCapture, systemCaptureStatus } from '../../self-tools.js';
 import { execFile } from 'node:child_process';
 
 // Run a host command (osascript / PowerShell) and resolve trimmed stdout.
@@ -142,8 +143,7 @@ export function registerRecordingsRoutes(app, opts = {}) {
   });
 
   // Insert a system-automation step (osascript / native input) into a recording.
-  app.post('/api/recordings/:id/system-step', (req, res) => {
-    try {
+  app.post('/api/recordings/:id/system-step', (req, res) => {    try {
       const rec = appendSystemStep(req.params.id, req.body || {});
       if (!rec) return res.status(404).json({ ok: false, error: 'Not found' });
       res.json({ ok: true, recording: rec });
@@ -166,6 +166,31 @@ export function registerRecordingsRoutes(app, opts = {}) {
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }
+  });
+
+  // ── Global system-input capture (recorder) ────────────────────────────────
+  // Start streaming global mouse/scroll/key-combo/app-activation events on the
+  // host. Gated behind the Accessibility permission on macOS.
+  app.post('/api/recordings/capture/start', async (req, res) => {
+    if (!_accessibilityOk(getSystemPreferences)) {
+      return res.status(403).json({
+        ok: false, needsPermission: 'accessibility',
+        error: 'Accessibility permission required to capture system input. Grant Fauna in System Settings → Privacy & Security → Accessibility, then relaunch.',
+      });
+    }
+    try { res.json(await startSystemCapture()); }
+    catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+  });
+
+  // Stop capture and return the buffered events as recorder `system` steps.
+  app.post('/api/recordings/capture/stop', (req, res) => {
+    try { res.json(stopSystemCapture()); }
+    catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+  });
+
+  app.get('/api/recordings/capture/status', (req, res) => {
+    try { res.json(systemCaptureStatus()); }
+    catch (e) { res.status(500).json({ ok: false, error: e.message }); }
   });
 
   // Delete

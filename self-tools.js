@@ -361,6 +361,69 @@ func frontmostApp() -> String {
   return out
 }
 
+// ── Global input capture (listen) ───────────────────────────────────────
+// Installs a listen-only CGEventTap + NSWorkspace observer and streams one
+// JSON object per line for mouse clicks, scrolls, modifier key-combos and app
+// activations until the process is killed. Requires Accessibility permission.
+let kVKName: [CGKeyCode: String] = {
+  var m = [CGKeyCode: String]()
+  for (k, v) in kVK { if m[v] == nil { m[v] = k } }
+  return m
+}()
+func comboFromEvent(_ flags: CGEventFlags, _ key: CGKeyCode) -> String {
+  var parts: [String] = []
+  if flags.contains(.maskControl) { parts.append("ctrl") }
+  if flags.contains(.maskAlternate) { parts.append("alt") }
+  if flags.contains(.maskShift) { parts.append("shift") }
+  if flags.contains(.maskCommand) { parts.append("cmd") }
+  parts.append(kVKName[key] ?? "key\\(key)")
+  return parts.joined(separator: "+")
+}
+func emitLine(_ json: String) {
+  FileHandle.standardOutput.write((json + "\\n").data(using: .utf8)!)
+}
+let tapCallback: CGEventTapCallBack = { proxy, type, event, refcon in
+  let now = Int(Date().timeIntervalSince1970 * 1000)
+  switch type {
+    case .leftMouseDown, .rightMouseDown:
+      let loc = event.location
+      let right = (type == .rightMouseDown)
+      let clicks = event.getIntegerValueField(.mouseEventClickState)
+      emitLine("{\\"type\\":\\"mouse-click\\",\\"x\\":\\(Int(loc.x)),\\"y\\":\\(Int(loc.y)),\\"button\\":\\"" + (right ? "right" : "left") + "\\",\\"double\\":" + (clicks >= 2 ? "true" : "false") + ",\\"t\\":\\(now)}")
+    case .scrollWheel:
+      let dy = event.getIntegerValueField(.scrollWheelEventDeltaAxis1)
+      emitLine("{\\"type\\":\\"scroll\\",\\"dy\\":\\(-dy),\\"t\\":\\(now)}")
+    case .keyDown:
+      let flags = event.flags
+      let hasMod = flags.contains(.maskCommand) || flags.contains(.maskControl) || flags.contains(.maskAlternate)
+      if hasMod {
+        let keycode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+        emitLine("{\\"type\\":\\"key\\",\\"combo\\":" + jsonStr(comboFromEvent(flags, keycode)) + ",\\"t\\":\\(now)}")
+      }
+    default: break
+  }
+  return Unmanaged.passUnretained(event)
+}
+func runListen() {
+  let nc = NSWorkspace.shared.notificationCenter
+  nc.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: nil) { note in
+    if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+      let now = Int(Date().timeIntervalSince1970 * 1000)
+      emitLine("{\\"type\\":\\"activate-app\\",\\"app\\":" + jsonStr(app.localizedName ?? "") + ",\\"t\\":\\(now)}")
+    }
+  }
+  let mask: CGEventMask = (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.rightMouseDown.rawValue) | (1 << CGEventType.scrollWheel.rawValue) | (1 << CGEventType.keyDown.rawValue)
+  guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly, eventsOfInterest: mask, callback: tapCallback, userInfo: nil) else {
+    FileHandle.standardError.write("event tap failed (Accessibility permission?)\\n".data(using: .utf8)!)
+    exit(4)
+  }
+  let src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+  CFRunLoopAddSource(CFRunLoopGetCurrent(), src, .commonModes)
+  CGEvent.tapEnable(tap: tap, enable: true)
+  emitLine("{\\"type\\":\\"listening\\",\\"t\\":\\(Int(Date().timeIntervalSince1970 * 1000))}")
+  CFRunLoopRun()
+}
+
 switch cmd {
   case "mouse_move":     mouseMove(d(2), d(3))
   case "mouse_click":    mouseClick(d(2), d(3))
@@ -382,13 +445,15 @@ switch cmd {
   case "frontmost_app":
     print(frontmostApp())
     exit(0)
+  case "listen":
+    runListen()
   default:
     FileHandle.standardError.write("unknown cmd: \\(cmd)\\n".data(using: .utf8)!); exit(2)
 }
 print("ok")
 `;
 
-const FAUNA_HELPER_VERSION = 'v3'; // bump to force rebuild
+const FAUNA_HELPER_VERSION = 'v4'; // bump to force rebuild
 let _faunaHelperPath = null;
 
 async function _getFaunaHelper() {
@@ -524,6 +589,69 @@ async function _faunaMousePosition() {
     try { return { ok: true, ...JSON.parse(r.stdout.trim()) }; } catch (e) { return { ok: false, error: 'bad output' }; }
   }
   return { ok: false, error: 'unsupported platform: ' + plat };
+}
+
+// ── Global system-input capture (recorder integration) ─────────────────────
+// Spawns the fauna-helper `listen` mode (macOS CGEventTap) and buffers global
+// mouse-click / scroll / key-combo / app-activation events with wall-clock
+// timestamps. The recorder merges these into a recording as `system` steps so
+// desktop automation is captured alongside in-browser DOM events.
+let _sysCapture = null; // { proc, startedAt, events, buf }
+
+export async function startSystemCapture() {
+  if (process.platform !== 'darwin') return { ok: false, error: 'System input capture is macOS-only' };
+  if (_sysCapture) return { ok: true, already: true, startedAt: _sysCapture.startedAt };
+  const helper = await _getFaunaHelper();
+  const proc = spawn(helper, ['listen'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const cap = { proc, startedAt: Date.now(), events: [], buf: '', error: null };
+  proc.stdout.on('data', (chunk) => {
+    cap.buf += chunk.toString();
+    let idx;
+    while ((idx = cap.buf.indexOf('\n')) !== -1) {
+      const line = cap.buf.slice(0, idx).trim();
+      cap.buf = cap.buf.slice(idx + 1);
+      if (!line) continue;
+      try {
+        const ev = JSON.parse(line);
+        if (ev && ev.type && ev.type !== 'listening') cap.events.push(ev);
+      } catch (_) {}
+    }
+  });
+  proc.stderr.on('data', (d) => { cap.error = (cap.error || '') + d.toString(); });
+  proc.on('error', (e) => { cap.error = (cap.error || '') + (e && e.message || ''); });
+  _sysCapture = cap;
+  // Give the tap a beat to arm and surface an early permission failure.
+  await new Promise((r) => setTimeout(r, 250));
+  if (cap.error && /permission|not trusted|event tap failed/i.test(cap.error)) {
+    try { cap.proc.kill('SIGTERM'); } catch (_) {}
+    _sysCapture = null;
+    return { ok: false, needsPermission: 'accessibility', error: 'Accessibility permission required to capture system input.' };
+  }
+  return { ok: true, startedAt: cap.startedAt };
+}
+
+// Stop capture and return the buffered events as recorder `system` steps, each
+// with a `t` relative to capture start (ms) for merging into the timeline.
+export function stopSystemCapture() {
+  if (!_sysCapture) return { ok: true, steps: [] };
+  const cap = _sysCapture;
+  _sysCapture = null;
+  try { cap.proc.kill('SIGTERM'); } catch (_) {}
+  const steps = [];
+  let i = 0;
+  for (const ev of cap.events) {
+    const t = Math.max(0, (ev.t || Date.now()) - cap.startedAt);
+    const base = { type: 'system', id: 'st_sys_' + (i++), t };
+    if (ev.type === 'mouse-click') steps.push({ ...base, sysAction: 'mouse-click', x: ev.x, y: ev.y, button: ev.button || 'left', double: !!ev.double });
+    else if (ev.type === 'scroll') steps.push({ ...base, sysAction: 'scroll', dy: ev.dy });
+    else if (ev.type === 'key') steps.push({ ...base, sysAction: 'key', combo: ev.combo });
+    else if (ev.type === 'activate-app') steps.push({ ...base, sysAction: 'activate-app', app: ev.app });
+  }
+  return { ok: true, steps, startedAt: cap.startedAt };
+}
+
+export function systemCaptureStatus() {
+  return { ok: true, capturing: !!_sysCapture, count: _sysCapture ? _sysCapture.events.length : 0 };
 }
 
 async function _faunaKeyboard(args) {
