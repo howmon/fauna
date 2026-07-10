@@ -87,15 +87,16 @@ The user has the Fauna browser extension connected in their **real ${browserLabe
 #### Trusted input & clipboard (Figma, canvas apps, real shortcuts)
 Regular \`click\`/\`type\`/\`keyboard\` dispatch *synthetic* DOM events (\`isTrusted:false\`) which Figma and browsers IGNORE for clipboard shortcuts and canvas interactions. These actions use the DevTools Protocol to send TRUSTED events that behave like real user input:
 - **key** — \`{"action":"key","keys":"Meta+c"}\` — trusted key or chord (e.g. \`"Meta+c"\`, \`"Control+Shift+v"\`, \`"Enter"\`, \`"Escape"\`). Auto-focuses the page first; pass \`"focus":false\` to skip, or \`"x"/"y"\`/\`"selector"\` to click-focus a spot first.
-- **copy** / **cut** / **paste** — \`{"action":"copy"}\` — trusted clipboard shortcut with the platform modifier (⌘ on mac, Ctrl elsewhere). \`copy\`/\`cut\` do NOT click by default (a click would clear a Figma selection). For \`paste\`, optionally pass \`"x"/"y"\` or \`"selector"\` to click that spot first.
+- **copy** / **cut** / **paste** — \`{"action":"copy"}\` — trusted clipboard shortcut with the platform modifier (⌘ on mac, Ctrl elsewhere). \`copy\`/\`cut\` do NOT click by default (a click would clear a Figma selection) and RETURN \`{"copied":true/false,"hasFigma":true/false}\` so you can confirm a canvas copy actually landed on the clipboard. \`paste\` clicks the canvas center first (to give the app keyboard focus) unless you pass explicit \`"x"/"y"\` or \`"selector"\`.
 - **mouse-click** — \`{"action":"mouse-click","x":600,"y":400}\` — trusted click at coordinates (or \`"selector"\`). Use to focus a canvas or select a node. Defaults to viewport center if no target.
-- **clipboard-read** / **clipboard-write** — \`{"action":"clipboard-read"}\` / \`{"action":"clipboard-write","text":"..."}\` — plain-text clipboard access (for verification; rich Figma payloads are preserved by the OS during copy/paste).
+- **clipboard-read** / **clipboard-write** — \`{"action":"clipboard-read"}\` / \`{"action":"clipboard-write","text":"..."}\` — clipboard access. For Figma, plain \`text\` is empty but \`clipboard-read\` also returns \`"hasFigma":true\` when a rich Figma payload is present — use this to VERIFY a copy before switching tabs to paste.
 
 **Figma copy across two tabs (page → page, even in different windows):**
 1. \`tab:list\` → get the ids of the source and destination Figma tabs.
-2. On the SOURCE tab, select the node(s) (e.g. \`{"action":"mouse-click","x":..,"y":..,"tabId":SOURCE}\`), then \`{"action":"copy","tabId":SOURCE}\`.
-3. \`{"action":"clipboard-read","tabId":SOURCE}\` (optional) to confirm the clipboard changed.
-4. On the DESTINATION tab, \`{"action":"tab:switch","tabId":DEST}\` then \`{"action":"paste","tabId":DEST}\` (add \`"x"/"y"\` to paste at a spot).
+2. On the SOURCE tab, select the node(s) FIRST — click the layer in the left Layers panel or the frame on the canvas (e.g. \`{"action":"mouse-click","x":..,"y":..,"tabId":SOURCE}\`). \`copy\` copies the *current selection*, so nothing selected = nothing copied.
+3. \`{"action":"copy","tabId":SOURCE}\` → check the result: \`"hasFigma":true\` (or \`"copied":true\`) means the copy worked. If false, the selection was empty — reselect and retry, do NOT proceed to paste.
+4. On the DESTINATION tab, \`{"action":"tab:switch","tabId":DEST}\` then \`{"action":"paste","tabId":DEST}\` (paste auto-focuses the canvas; add \`"x"/"y"\` to paste at a spot).
+5. VERIFY with \`snapshot\` (a screenshot) — \`extract\` only reads the DOM sidebar and cannot see the WebGL canvas.
 Always pass explicit \`"tabId"\` on each action so targeting is unambiguous.
 
 

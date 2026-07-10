@@ -557,8 +557,10 @@ function recreateRecording(id) {
       '3. Use those REAL numeric tabIds in every action — never placeholders like SOURCE_TAB_ID.\n' +
       '4. One JSON object per line, no prose inside the code block.\n' +
       '5. For Figma/canvas use `mouse-click`, `key`, `copy`, `paste` (not plain click/keyboard).\n' +
-      '6. Do it SAFELY (don\'t refuse — just do it the safe way): click into the CANVAS and select the actual frame/content before copy, click the destination CANVAS before paste. Do NOT select-all/copy/paste while the Pages panel or a page row is focused (that deletes/overwrites pages). After each paste, `extract` and verify nothing shows "Page deleted".\n' +
-      '7. Continue through ALL the requested items one by one — don\'t stop after one to explain.';
+      '6. Do it SAFELY (don\'t refuse — just do it the safe way): click into the CANVAS and select the actual frame/content before copy, click the destination CANVAS before paste. Do NOT select-all/copy/paste while the Pages panel or a page row is focused (that deletes/overwrites pages).\n' +
+      '7. VERIFY with `snapshot` (a screenshot), NOT `extract` — for Figma/canvas apps `extract` only reads the DOM sidebar text and does NOT reflect canvas changes, so it will look unchanged even when a paste worked. Take a snapshot after each paste to actually see the result.\n' +
+      '8. Continue through ALL the requested items one by one — don\'t stop after one to explain.\n' +
+      'If Figma has an MCP/plugin available, prefer `figma_execute` (cloning nodes via the plugin API is far more reliable than pixel-clicking the canvas).';
     if (typeof closeAppPage === 'function') closeAppPage();
     if (!window.state || !state.currentId) { if (typeof newConversation === 'function') newConversation(); }
     var input = document.getElementById('msg-input');

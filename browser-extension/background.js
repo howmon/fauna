@@ -1117,6 +1117,29 @@ async function _cdpViewportCenter(target) {
   try { return JSON.parse(r?.result?.value || '{"x":400,"y":300}'); } catch (_) { return { x: 400, y: 300 }; }
 }
 
+// Center of the largest <canvas> element (Figma/WebGL apps). Falls back to the
+// viewport center. Used to place a trusted click on the drawing surface so the
+// app takes keyboard focus (panels/.focus() do not reliably focus the canvas).
+async function _cdpCanvasCenter(target) {
+  const r = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+    expression: `(function(){try{var best=null,area=0;var cs=document.querySelectorAll('canvas');for(var i=0;i<cs.length;i++){var b=cs[i].getBoundingClientRect();var a=b.width*b.height;if(a>area&&b.width>50&&b.height>50){area=a;best=b;}}if(best)return JSON.stringify({x:Math.round(best.left+best.width/2),y:Math.round(best.top+best.height/2)});return JSON.stringify({x:Math.round(innerWidth/2),y:Math.round(innerHeight/2)});}catch(_){return JSON.stringify({x:Math.round(innerWidth/2),y:Math.round(innerHeight/2)});}})()`,
+    returnByValue: true,
+  }).catch(() => null);
+  try { return JSON.parse(r?.result?.value || '{"x":400,"y":300}'); } catch (_) { return { x: 400, y: 300 }; }
+}
+
+// Read the clipboard's text/html payload (if any) via CDP. Figma writes an HTML
+// blob containing a base64 `figmeta`/`figma` marker when nodes are copied, so
+// this lets us VERIFY a Figma copy succeeded even though the plain-text path is
+// empty. Returns the HTML string, or '' / 'ERR:...' on failure.
+async function _cdpClipboardHtml(target) {
+  const r = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+    expression: `(async function(){try{var items=await navigator.clipboard.read();for(var i=0;i<items.length;i++){if(items[i].types.indexOf('text/html')>=0){var b=await items[i].getType('text/html');return await b.text();}}return '';}catch(e){return 'ERR:'+e.message;}})()`,
+    returnByValue: true, awaitPromise: true, userGesture: true,
+  }).catch(() => null);
+  return r?.result?.value || '';
+}
+
 // Bring the page's document into focus so keyboard shortcuts land on the
 // canvas and not a stale element. CDP key events target the focused frame,
 // so this maximises reliability without a click.
@@ -1156,14 +1179,35 @@ async function cmdClipboardShortcut(kind, params = {}, tab) {
     if (wantsClick) {
       if (params.x != null && params.y != null) { await _cdpClickXY(target, Number(params.x), Number(params.y)); await new Promise(r => setTimeout(r, 80)); }
       else if (params.selector) { const c = await _cdpCoordsForSelector(target, params.selector); if (c) { await _cdpClickXY(target, c.x, c.y); await new Promise(r => setTimeout(r, 80)); } }
+    } else if (kind === 'paste') {
+      // PASTE needs the drawing surface focused. Panels or a stale .focus()
+      // swallow ⌘V, so place a trusted click on the canvas center first. This
+      // may deselect, which is fine for pasting into the page.
+      const c = await _cdpCanvasCenter(target);
+      await _cdpClickXY(target, c.x, c.y);
+      await new Promise(r => setTimeout(r, 80));
     } else {
+      // COPY/CUT must not click (that would clear the current selection).
       await _cdpFocusPage(target);
     }
     await _cdpKeyChord(target, spec);
     // Let the async clipboard write/read settle before the next action (e.g. a
     // tab switch) can interrupt it.
     await new Promise(r => setTimeout(r, 150));
-    return { ok: true, action: kind, dispatched: spec, url: tab.url, title: tab.title };
+    const out = { ok: true, action: kind, dispatched: spec, url: tab.url, title: tab.title };
+    // Verify a copy/cut actually landed on the clipboard. Figma exposes a
+    // `figmeta` marker in the HTML payload; report it so callers can confirm.
+    if (kind === 'copy' || kind === 'cut') {
+      try {
+        const html = await _cdpClipboardHtml(target);
+        if (html && !html.startsWith('ERR:')) {
+          out.clipboardHtmlLength = html.length;
+          out.hasFigma = /figmeta|<!--\(figma/i.test(html);
+          out.copied = html.length > 0;
+        }
+      } catch (_) {}
+    }
+    return out;
   });
 }
 
@@ -1190,7 +1234,10 @@ async function cmdMouseClick({ x, y, selector, clickCount = 1 } = {}, tab) {
 async function cmdClipboardRead({} = {}, tab) {
   try {
     const r = await _offscreenClipboard('read');
-    if (r && r.ok) return { ok: true, text: r.text || '', length: (r.text || '').length, via: 'offscreen' };
+    // Only trust the offscreen result when it has plain text. An empty result is
+    // exactly the Figma case (rich payload, no text) — fall through to CDP so we
+    // can inspect the HTML payload and report `hasFigma`.
+    if (r && r.ok && (r.text || '').length > 0) return { ok: true, text: r.text, length: r.text.length, via: 'offscreen' };
   } catch (_) {}
   if (!tab) return { ok: false, error: 'No active tab (offscreen clipboard unavailable)' };
   return await _debuggerSession(tab.id, async (target) => {
@@ -1201,7 +1248,14 @@ async function cmdClipboardRead({} = {}, tab) {
     });
     const text = r?.result?.value ?? '';
     if (typeof text === 'string' && text.startsWith('ERR:')) return { ok: false, error: text.slice(4) };
-    return { ok: true, text, length: (text || '').length, via: 'cdp' };
+    // Also surface whether a rich Figma payload is present (plain text is empty
+    // for Figma copies), so the agent can verify a canvas copy really worked.
+    let hasFigma = false, htmlLength = 0;
+    try {
+      const html = await _cdpClipboardHtml(target);
+      if (html && !html.startsWith('ERR:')) { htmlLength = html.length; hasFigma = /figmeta|<!--\(figma/i.test(html); }
+    } catch (_) {}
+    return { ok: true, text, length: (text || '').length, hasFigma, htmlLength, via: 'cdp' };
   });
 }
 
