@@ -34,7 +34,7 @@
   --color-success:        oklch(0.780 0.160 150);
   --color-warning:        oklch(0.760 0.180 85);
   --color-danger:         oklch(0.720 0.190 20);
-  --viz-1:                oklch(0.720 0.160 155);
+  --viz-1:                oklch(0.530 0.160 155);
   --theme-font: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
 }
 /* ── Cyber — LIGHT ───────────────────────────────────────────────────── */
@@ -71,7 +71,7 @@
   --color-success:        oklch(0.780 0.160 150);
   --color-warning:        oklch(0.760 0.180 85);
   --color-danger:         oklch(0.720 0.190 20);
-  --viz-1:                oklch(0.720 0.160 258);
+  --viz-1:                oklch(0.550 0.160 258);
   --theme-font: 'Space Grotesk', 'Segoe UI Variable', 'Segoe UI', -apple-system, system-ui, sans-serif;
 }
 /* ── Minimal — LIGHT ─────────────────────────────────────────────────── */
@@ -107,7 +107,7 @@
   --color-success:        oklch(0.780 0.160 150);
   --color-warning:        oklch(0.760 0.180 85);
   --color-danger:         oklch(0.720 0.190 20);
-  --viz-1:                oklch(0.760 0.150 55);
+  --viz-1:                oklch(0.570 0.150 55);
   --theme-font: 'Space Grotesk', 'Segoe UI Variable', 'Segoe UI', -apple-system, system-ui, sans-serif;
 }
 /* ── Ember — LIGHT ───────────────────────────────────────────────────── */
@@ -143,7 +143,7 @@
   --color-success:        oklch(0.780 0.160 150);
   --color-warning:        oklch(0.760 0.180 85);
   --color-danger:         oklch(0.720 0.190 20);
-  --viz-1:                oklch(0.740 0.160 295);
+  --viz-1:                oklch(0.570 0.160 295);
   --theme-font: 'Space Grotesk', 'Segoe UI Variable', 'Segoe UI', -apple-system, system-ui, sans-serif;
 }
 /* ── Violet — LIGHT ──────────────────────────────────────────────────── */
@@ -180,7 +180,7 @@
   --color-success:        oklch(0.650 0.150 145);
   --color-warning:        oklch(0.700 0.150 78);
   --color-danger:         oklch(0.660 0.170 24);
-  --viz-1:                oklch(0.600 0.170 255);
+  --viz-1:                oklch(0.560 0.170 255);
   --theme-font: 'Inter', 'Segoe UI Variable', 'Segoe UI', -apple-system, system-ui, sans-serif;
 }
 /* ── Clean — LIGHT ───────────────────────────────────────────────────── */
