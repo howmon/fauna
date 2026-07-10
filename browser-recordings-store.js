@@ -96,6 +96,18 @@ function _sanitizeStep(s, i) {
   if (s.y != null) out.y = Math.round(Number(s.y));
   if (typeof s.shot === 'string' && s.shot.startsWith('data:image') && s.shot.length < 500000) out.shot = s.shot;
   if (typeof s.value === 'boolean') out.value = s.value;
+  // ── System-automation step fields (osascript / native input) ──────────────
+  if (s.type === 'system' || s.sysAction) {
+    if (s.sysAction != null) out.sysAction = String(s.sysAction).slice(0, 40);
+    for (const k of ['app', 'combo', 'windowTitle', 'button']) {
+      if (s[k] != null && s[k] !== '') out[k] = String(s[k]).slice(0, 300);
+    }
+    for (const k of ['toX', 'toY', 'dy', 'w', 'h', 'windowIndex']) {
+      if (s[k] != null && Number.isFinite(Number(s[k]))) out[k] = Math.round(Number(s[k]));
+    }
+    if (typeof s.double === 'boolean') out.double = s.double;
+    if (s.script != null && s.script !== '') out.script = String(s.script).slice(0, 4000);
+  }
   return out;
 }
 
@@ -209,10 +221,53 @@ export function deleteRecording(id) {
   return true;
 }
 
+/**
+ * Append (or insert) a system-automation step into a recording. `spec` carries
+ * { sysAction, app, x, y, toX, toY, dy, combo, text, button, double, script,
+ *   windowTitle, windowIndex, w, h, note, index? }. When `index` is provided the
+ * step is inserted at that position, otherwise appended to the end.
+ * Returns the updated recording, or null if not found.
+ */
+export function appendSystemStep(id, spec = {}) {
+  const rec = _load().find((r) => r.id === id);
+  if (!rec) return null;
+  const steps = rec.steps || (rec.steps = []);
+  const lastT = steps.length ? (steps[steps.length - 1].t || 0) : 0;
+  const step = _sanitizeStep(Object.assign({}, spec, {
+    type: 'system',
+    id: 'st_sys_' + crypto.randomBytes(4).toString('hex'),
+    t: Number.isFinite(Number(spec.t)) ? Number(spec.t) : lastT + 500,
+  }), steps.length);
+  const idx = Number.isInteger(spec.index) ? Math.max(0, Math.min(steps.length, spec.index)) : steps.length;
+  steps.splice(idx, 0, step);
+  rec.stepCount = steps.length;
+  rec.updatedAt = _now();
+  _save();
+  return rec;
+}
+
+// Human-readable summary of a system-automation step.
+function _describeSystemStep(s) {
+  const a = String(s.sysAction || 'run');
+  switch (a) {
+    case 'activate-app': return 'activate app “' + (s.app || '?') + '”';
+    case 'focus-window':
+    case 'arrange-window': return 'arrange window of “' + (s.app || '?') + '”';
+    case 'mouse-move': return 'move mouse to (' + s.x + ',' + s.y + ')';
+    case 'mouse-click': return (s.button === 'right' ? 'right-click' : (s.double ? 'double-click' : 'click')) + ' at (' + s.x + ',' + s.y + ')';
+    case 'mouse-drag': return 'drag (' + s.x + ',' + s.y + ') → (' + s.toX + ',' + s.toY + ')';
+    case 'scroll': return 'scroll ' + (s.dy > 0 ? 'down' : 'up');
+    case 'key': return 'press ' + (s.combo || '');
+    case 'type': return 'type “' + String(s.text || '').slice(0, 40) + '”';
+    case 'osascript':
+    case 'run': return 'run AppleScript' + (s.script ? ': ' + String(s.script).slice(0, 50) : '');
+    default: return a;
+  }
+}
+
 // Map a recorded step to a replayable browser-ext-action command. Returns null
 // for steps that aren't independently replayable (e.g. scroll noise).
-function _stepToAction(s) {
-  const tabId = s.tabId != null ? s.tabId : undefined;
+function _stepToAction(s) {  const tabId = s.tabId != null ? s.tabId : undefined;
   switch (s.type) {
     case 'navigate':
       return s.url ? { action: 'navigate', url: s.url, tabId } : null;
@@ -244,6 +299,17 @@ function _stepToAction(s) {
       return { action: 'scroll', tabId };
     case 'selection':
       return null; // selection is context, not a replayable action
+    case 'system':
+      // Runs on the HOST (osascript / native input), not the browser extension.
+      // `host: true` tells the replay engine to route this to the system runner.
+      return {
+        action: 'system', host: true,
+        sysAction: s.sysAction || 'run',
+        app: s.app, x: s.x, y: s.y, toX: s.toX, toY: s.toY, dy: s.dy,
+        combo: s.combo, text: s.text, button: s.button, double: s.double,
+        windowTitle: s.windowTitle, windowIndex: s.windowIndex, w: s.w, h: s.h,
+        script: s.script,
+      };
     default:
       return null;
   }
@@ -292,6 +358,7 @@ export function describeRecording(id) {
     else if (s.type === 'paste') d = 'paste' + (s.text ? ' “' + String(s.text).slice(0, 40) + '”' : '');
     else if (s.type === 'selection') d = 'select text: "' + (s.text || '').slice(0, 60) + '"';
     else if (s.type === 'scroll') d = 'scroll';
+    else if (s.type === 'system') d = 'system: ' + _describeSystemStep(s);
     return `${i + 1}. [${at}] ${d}`;
   });
   return {

@@ -597,6 +597,9 @@
       <button class="settings-nav-item" data-page="appearance" onclick="switchSettingsPage('appearance',this)">
         <i class="ti ti-palette"></i> Appearance
       </button>
+      <button class="settings-nav-item" data-page="features" onclick="switchSettingsPage('features',this)">
+        <i class="ti ti-layout-sidebar"></i> Features
+      </button>
       <button class="settings-nav-item" data-page="auth" onclick="switchSettingsPage('auth',this)">
         <i class="ti ti-key"></i> Authentication
       </button>
@@ -779,6 +782,25 @@
         <button class="settings-row-btn" style="flex:1" onclick="toggleTheme()"><i class="ti ti-rotate"></i> Toggle</button>
       </div>
       <div class="settings-hint">Switch between dark and light mode. Each color theme has both.</div>
+    </div>
+  </div>
+
+  <!-- ── Features (rail navigation) ─────────────────────────────── -->
+  <div class="settings-page" data-page="features">
+    <div class="settings-page-title">Features</div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">Navigation rail</div>
+      <div class="settings-hint" style="margin-bottom:12px">
+        Choose which features appear in the left navigation rail and the order they show in.
+        Toggle a feature off to remove it from the rail. Drag the
+        <i class="ti ti-grip-vertical" style="vertical-align:-2px"></i> handle to reorder — or
+        <strong>long-press and drag</strong> an icon directly in the rail. <strong>Home</strong> is always pinned to the top.
+      </div>
+      <div id="rail-features-list" class="rail-feat-list"></div>
+      <div style="margin-top:14px">
+        <button class="settings-row-btn" onclick="resetRailConfig()"><i class="ti ti-rotate"></i> Reset to defaults</button>
+      </div>
     </div>
   </div>
 
@@ -1787,6 +1809,9 @@ Examples:
     }
     if (page === 'about') {
       _refreshFaunaUpdateStatus();
+    }
+    if (page === 'features') {
+      if (typeof renderRailFeaturesPage === 'function') renderRailFeaturesPage();
     }
     if (page === 'permissions') {
       if (typeof refreshPermissions === 'function') refreshPermissions();
@@ -2877,6 +2902,7 @@ Examples:
 <script src="js/board.js"></script>
 <script src="js/design.js"></script>
 <script src="js/selection-menu.js"></script>
+<script src="js/rail-config.js"></script>
 <script src="js/app.js"></script>
 
 <!-- ── Tasks / Automations panel ───────────────────────────────── -->

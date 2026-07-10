@@ -988,7 +988,8 @@ function layoutAppRail() {
   var top = document.querySelector('.app-rail-top');
   var ell = document.getElementById('app-rail-overflow-btn');
   if (!top || !ell) return;
-  var btns = Array.prototype.slice.call(top.querySelectorAll('.app-rail-btn:not(.app-rail-overflow-btn)'));
+  var btns = Array.prototype.slice.call(top.querySelectorAll('.app-rail-btn:not(.app-rail-overflow-btn)'))
+    .filter(function(b) { return !b.classList.contains('rail-user-hidden'); });
   // Reset to measure the natural (fully expanded) height.
   btns.forEach(function(b) { b.classList.remove('rail-hidden'); });
   ell.style.display = 'none';

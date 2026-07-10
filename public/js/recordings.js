@@ -100,6 +100,7 @@ function _recTypeIcon(t) {
     input: 'ti-keyboard', select: 'ti-select', toggle: 'ti-toggle-left',
     submit: 'ti-send', key: 'ti-command', selection: 'ti-text-caret',
     scroll: 'ti-arrows-vertical', copy: 'ti-copy', cut: 'ti-scissors', paste: 'ti-clipboard',
+    system: 'ti-cpu',
   })[t] || 'ti-point';
 }
 
@@ -118,7 +119,24 @@ function _recStepPrimary(s) {
     case 'paste': return 'Paste' + (s.text ? ' “' + s.text.slice(0, 40) + '”' : '');
     case 'selection': return 'Select text';
     case 'scroll': return 'Scroll';
+    case 'system': return 'System · ' + _recSysStepLabel(s);
     default: return s.type;
+  }
+}
+
+// Short label for a system-automation step in the map/timeline.
+function _recSysStepLabel(s) {
+  switch (String(s.sysAction || 'run')) {
+    case 'activate-app': return 'Activate “' + (s.app || '?') + '”';
+    case 'focus-window': case 'arrange-window': return 'Window “' + (s.app || '?') + '”';
+    case 'mouse-move': return 'Move → (' + s.x + ',' + s.y + ')';
+    case 'mouse-click': return (s.button === 'right' ? 'Right-click' : (s.double ? 'Double-click' : 'Click')) + ' (' + s.x + ',' + s.y + ')';
+    case 'mouse-drag': return 'Drag → (' + s.toX + ',' + s.toY + ')';
+    case 'scroll': return 'Scroll ' + ((s.dy || 0) > 0 ? 'down' : 'up');
+    case 'key': return 'Press ' + (s.combo || '');
+    case 'type': return 'Type “' + String(s.text || '').slice(0, 30) + '”';
+    case 'osascript': case 'run': return 'AppleScript';
+    default: return String(s.sysAction || 'run');
   }
 }
 
@@ -413,10 +431,12 @@ function _recDetailHtml() {
       '<div class="rec-detail-actions">' +
         '<button class="rec-abtn" onclick="replayRecording(\'' + rec.id + '\')"><i class="ti ti-player-play"></i> Replay</button>' +
         '<button class="rec-abtn" onclick="recreateRecording(\'' + rec.id + '\')"><i class="ti ti-sparkles"></i> Ask Fauna</button>' +
+        '<button class="rec-abtn" onclick="_recToggleSystemBuilder()"><i class="ti ti-cpu"></i> System step</button>' +
         '<button class="rec-abtn danger" onclick="deleteRecording(\'' + rec.id + '\')"><i class="ti ti-trash"></i></button>' +
       '</div>' +
     '</div>' +
     '<div class="rec-detail-sub">' + rec.stepCount + ' steps · ' + _recFmtDur(rec.durationMs) + ' · used ' + (rec.useCount || 0) + '×</div>' +
+    (_recState.addingSystem ? _recSystemBuilderHtml(rec.id) : '') +
     '<textarea class="rec-desc" placeholder="Describe what this flow does…" onchange="_recSaveDesc(\'' + rec.id + '\', this.value)">' + _recEsc(rec.description || '') + '</textarea>' +
     '<div class="rec-ask-wrap">' +
       '<label class="rec-ask-label"><i class="ti ti-wand"></i> Instructions for Fauna (run this, or adapt it)</label>' +
@@ -548,6 +568,111 @@ function _recDeleteStep(id, stepId) {
   _recApi('/api/recordings/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ steps: steps }) })
     .then(function (d) { if (d && d.ok) { _recState.current = d.recording; renderRecordingsPage(); } });
 }
+
+// ── System-automation step builder ──────────────────────────────────────────
+// Lets the user insert osascript / native-input steps (activate app, mouse
+// move/click, key, type, arrange window, AppleScript) that replay in sequence
+// with the browser steps. Runs on the host, gated by Accessibility permission.
+function _recToggleSystemBuilder() {
+  _recState.addingSystem = !_recState.addingSystem;
+  renderRecordingsPage();
+  if (_recState.addingSystem) setTimeout(_recSysFieldsToggle, 0);
+}
+
+function _recSystemBuilderHtml(recId) {
+  var opts = [
+    ['activate-app', 'Activate app'],
+    ['mouse-move', 'Move mouse'],
+    ['mouse-click', 'Mouse click'],
+    ['mouse-drag', 'Mouse drag'],
+    ['scroll', 'Scroll'],
+    ['key', 'Key combo'],
+    ['type', 'Type text'],
+    ['arrange-window', 'Move / resize window'],
+    ['osascript', 'AppleScript'],
+  ].map(function (o) { return '<option value="' + o[0] + '">' + o[1] + '</option>'; }).join('');
+  return '<div class="rec-sysbuild">' +
+    '<div class="rec-sysbuild-row">' +
+      '<label>Action<select id="rec-sys-action" onchange="_recSysFieldsToggle()">' + opts + '</select></label>' +
+      '<label>App<input id="rec-sys-app" placeholder="e.g. Figma" ></label>' +
+    '</div>' +
+    '<div class="rec-sysbuild-row">' +
+      '<label>X<input id="rec-sys-x" type="number"></label>' +
+      '<label>Y<input id="rec-sys-y" type="number"></label>' +
+      '<label>To X<input id="rec-sys-tox" type="number"></label>' +
+      '<label>To Y<input id="rec-sys-toy" type="number"></label>' +
+    '</div>' +
+    '<div class="rec-sysbuild-row">' +
+      '<label>Scroll dy<input id="rec-sys-dy" type="number" placeholder="+down / -up"></label>' +
+      '<label>Button<select id="rec-sys-button"><option value="left">Left</option><option value="right">Right</option></select></label>' +
+      '<label class="rec-sys-check"><input id="rec-sys-double" type="checkbox"> Double-click</label>' +
+    '</div>' +
+    '<div class="rec-sysbuild-row">' +
+      '<label>Key combo<input id="rec-sys-combo" placeholder="e.g. cmd+c"></label>' +
+      '<label>W<input id="rec-sys-w" type="number"></label>' +
+      '<label>H<input id="rec-sys-h" type="number"></label>' +
+    '</div>' +
+    '<label class="rec-sysbuild-full">Text / AppleScript<textarea id="rec-sys-text" placeholder="Text to type, or AppleScript source"></textarea></label>' +
+    '<div class="rec-sysbuild-actions">' +
+      '<button class="rec-abtn primary" onclick="_recAddSystemStep(\'' + recId + '\')"><i class="ti ti-plus"></i> Add step</button>' +
+      '<button class="rec-abtn" onclick="_recToggleSystemBuilder()">Cancel</button>' +
+      '<span class="rec-sysbuild-hint">Runs on your Mac via osascript / native input — needs Accessibility permission.</span>' +
+    '</div>' +
+  '</div>';
+}
+
+// Show only the fields relevant to the chosen action (best-effort dimming).
+function _recSysFieldsToggle() {
+  var a = (document.getElementById('rec-sys-action') || {}).value;
+  var show = {
+    'activate-app': ['app'],
+    'mouse-move': ['x', 'y'],
+    'mouse-click': ['x', 'y', 'button', 'double'],
+    'mouse-drag': ['x', 'y', 'tox', 'toy'],
+    'scroll': ['dy'],
+    'key': ['combo'],
+    'type': ['text'],
+    'arrange-window': ['app', 'x', 'y', 'w', 'h'],
+    'osascript': ['text'],
+  }[a] || [];
+  ['app', 'x', 'y', 'tox', 'toy', 'dy', 'button', 'double', 'combo', 'w', 'h', 'text'].forEach(function (f) {
+    var el = document.getElementById('rec-sys-' + f);
+    if (!el) return;
+    var wrap = el.closest('label');
+    if (wrap) wrap.style.opacity = show.indexOf(f) === -1 ? '.35' : '1';
+  });
+}
+
+function _recAddSystemStep(recId) {
+  function num(id) { var v = (document.getElementById(id) || {}).value; return v === '' || v == null ? undefined : Number(v); }
+  function str(id) { var v = (document.getElementById(id) || {}).value; return v ? v.trim() : undefined; }
+  var sysAction = str('rec-sys-action') || 'activate-app';
+  var text = str('rec-sys-text');
+  var spec = {
+    sysAction: sysAction,
+    app: str('rec-sys-app'),
+    x: num('rec-sys-x'), y: num('rec-sys-y'),
+    toX: num('rec-sys-tox'), toY: num('rec-sys-toy'),
+    dy: num('rec-sys-dy'), w: num('rec-sys-w'), h: num('rec-sys-h'),
+    combo: str('rec-sys-combo'),
+    button: (document.getElementById('rec-sys-button') || {}).value,
+    double: !!(document.getElementById('rec-sys-double') || {}).checked,
+    text: sysAction === 'type' ? text : undefined,
+    script: sysAction === 'osascript' ? text : undefined,
+  };
+  _recApi('/api/recordings/' + recId + '/system-step', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(spec),
+  }).then(function (d) {
+    if (d && d.ok) {
+      _recState.current = d.recording;
+      _recState.addingSystem = false;
+      renderRecordingsPage();
+      if (typeof showToast === 'function') showToast('System step added');
+    } else {
+      alert('Failed to add step' + (d && d.error ? ': ' + d.error : ''));
+    }
+  });
+}
 function deleteRecording(id) {
   if (!confirm('Delete this recording?')) return;
   _recApi('/api/recordings/' + id, { method: 'DELETE' }).then(function () {
@@ -558,18 +683,36 @@ function deleteRecording(id) {
 
 // Replay: compile to browser-ext-action commands and run them sequentially.
 function replayRecording(id) {
-  if (typeof executeExtAction !== 'function') { alert('Connect the browser extension first.'); return; }
   _recApi('/api/recordings/' + id + '/compile').then(function (d) {
     if (!d || !d.ok) { alert('Compile failed'); return; }
     var actions = d.actions || [];
     if (!actions.length) { alert('Nothing replayable in this recording.'); return; }
+    var needsExt = actions.some(function (a) { return !(a && (a.host || a.action === 'system')); });
+    if (needsExt && typeof executeExtAction !== 'function') { alert('Connect the browser extension first.'); return; }
     _recApi('/api/recordings/' + id + '/touch', { method: 'POST' });
     _recReplaySeq(actions, 0);
   });
 }
 function _recReplaySeq(actions, i) {
   if (i >= actions.length) { if (typeof showToast === 'function') showToast('Replay complete'); return; }
-  executeExtAction(actions[i]).catch(function () {}).then(function () {
+  var a = actions[i];
+  var run;
+  if (a && (a.host || a.action === 'system')) {
+    // System-automation step → run on the host (osascript / native input).
+    run = _recApi('/api/recordings/system-run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ step: a }),
+    }).then(function (r) {
+      if (r && r.ok === false && r.needsPermission === 'accessibility') {
+        if (typeof showToast === 'function') showToast('Grant Accessibility permission to replay system steps');
+      }
+      return r;
+    });
+  } else {
+    run = executeExtAction(a);
+  }
+  Promise.resolve(run).catch(function () {}).then(function () {
     setTimeout(function () { _recReplaySeq(actions, i + 1); }, 450);
   });
 }

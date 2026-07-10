@@ -450,7 +450,7 @@ registerFileFilterRoutes(app);
 // ── /api/fetch-url moved → server/routes/fetch-url.js ──
 registerFetchUrlRoutes(app);
 registerVoiceSettingsRoutes(app);
-registerRecordingsRoutes(app);
+registerRecordingsRoutes(app, { getSystemPreferences: () => systemPreferences });
 registerKokoroTtsRoutes(app);
 registerLessonRoutes(app, { getElectronBrowserWindow: () => _ElectronBrowserWindow });
 

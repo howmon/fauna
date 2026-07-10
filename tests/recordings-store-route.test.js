@@ -141,6 +141,26 @@ describe('browser-recordings-store', () => {
     expect(d.outline.split('\n').length).toBe(11);
   });
 
+  it('appends a system-automation step and compiles it as a host action', () => {
+    const rec = store.saveRecording(sampleRecording());
+    const updated = store.appendSystemStep(rec.id, { sysAction: 'activate-app', app: 'Figma' });
+    expect(updated.stepCount).toBe(12);
+    const sysStep = updated.steps[updated.steps.length - 1];
+    expect(sysStep.type).toBe('system');
+    expect(sysStep.sysAction).toBe('activate-app');
+    expect(sysStep.app).toBe('Figma');
+
+    const { actions } = store.compileRecording(rec.id);
+    const sysAction = actions.find((a) => a.action === 'system');
+    expect(sysAction).toBeTruthy();
+    expect(sysAction.host).toBe(true);
+    expect(sysAction.sysAction).toBe('activate-app');
+    expect(sysAction.app).toBe('Figma');
+
+    const d = store.describeRecording(rec.id);
+    expect(d.outline).toMatch(/system: activate app/i);
+  });
+
   it('deletes a recording', () => {
     const rec = store.saveRecording(sampleRecording());
     expect(store.deleteRecording(rec.id)).toBe(true);
