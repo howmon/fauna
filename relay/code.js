@@ -945,6 +945,36 @@ figma.ui.onmessage = async function(msg) {
         '  if (!node || node.type !== "INSTANCE") return null;',
         '  try { return await node.getMainComponentAsync(); } catch(e) { console.warn("safeGetMainComponent error: " + e.message); return null; }',
         '}',
+        // safeRemovePage: deletes a page safely — Figma blocks removing figma.currentPage
+        // ("Removing this node is not allowed") and the last remaining page. Switches the
+        // active page to a survivor first and refuses to delete the only page.
+        'async function safeRemovePage(page) {',
+        '  if (!page || page.type !== "PAGE") { console.warn("safeRemovePage: not a page node"); return false; }',
+        '  var all = figma.root.children;',
+        '  if (all.length <= 1) { console.warn("safeRemovePage: cannot delete the only page in the file"); return false; }',
+        '  if (figma.currentPage && figma.currentPage.id === page.id) {',
+        '    var alt = null;',
+        '    for (var i = 0; i < all.length; i++) { if (all[i].id !== page.id) { alt = all[i]; break; } }',
+        '    if (alt) await figma.setCurrentPageAsync(alt);',
+        '  }',
+        '  try { page.remove(); return true; } catch(e) { console.warn("safeRemovePage error: " + e.message); return false; }',
+        '}',
+        // deletePagesWhere: bulk-delete every page matching predicate(page). Loads all pages
+        // (dynamic-page docs), moves off any doomed current page, and refuses to delete all pages.
+        'async function deletePagesWhere(predicate) {',
+        '  try { if (figma.loadAllPagesAsync) await figma.loadAllPagesAsync(); } catch(e) {}',
+        '  var pages = figma.root.children.slice();',
+        '  var targets = pages.filter(function(p){ try { return !!predicate(p); } catch(e){ return false; } });',
+        '  var survivors = pages.filter(function(p){ return targets.indexOf(p) === -1; });',
+        '  if (survivors.length === 0) { console.warn("deletePagesWhere: refusing to delete every page"); return { deleted: [], skipped: targets.map(function(p){ return p.name; }) }; }',
+        '  if (targets.indexOf(figma.currentPage) !== -1) { await figma.setCurrentPageAsync(survivors[0]); }',
+        '  var deleted = [];',
+        '  for (var i = 0; i < targets.length; i++) {',
+        '    var nm = targets[i].name;',
+        '    try { targets[i].remove(); deleted.push(nm); } catch(e) { console.warn("deletePagesWhere: failed to remove " + nm + " - " + e.message); }',
+        '  }',
+        '  return { deleted: deleted };',
+        '}',
       ].join('\n');
       // Auto-fix: rewrite synchronous .mainComponent to async getMainComponentAsync()
       // This prevents "Cannot call with documentAccess: dynamic-page" errors

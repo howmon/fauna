@@ -39,7 +39,8 @@ function getCapabilitiesContext() {
     if (!state.figmaMCPEnabled && figmaStatus && figmaStatus.figmaConnected) {
       figmaLine = '\n- Figma Plugin API active: use a ```figma-exec fenced block to run JS directly inside Figma.' +
         '\n- ⚠️ Instance sublayer IDs become stale after setProperties() or variant changes. ALWAYS re-query nodes (findAll/findOne) after modifying an instance — never cache node references across mutations.' +
-        '\n- Two safe helpers are pre-injected: safeGetNode(id) returns node or null (never throws), safeFindAll(parent, predicate) skips stale nodes.';
+        '\n- Two safe helpers are pre-injected: safeGetNode(id) returns node or null (never throws), safeFindAll(parent, predicate) skips stale nodes.' +
+        '\n- To delete pages, never call page.remove() directly (Figma blocks removing the current or last page). Use deletePagesWhere(predicate) e.g. deletePagesWhere(p => p.name.endsWith("DoNotUse")), or safeRemovePage(page).';
     }
   } catch (_) {}
 
