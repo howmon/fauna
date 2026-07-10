@@ -70,6 +70,13 @@ function _recEnsureStyles() {
     '.rec-field-input{border:1px solid var(--fau-border);border-radius:6px;background:var(--fau-surface);color:var(--fau-text);font:inherit;font-size:12px;padding:6px 8px}',
     '.rec-field-input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}',
     '.rec-editor-actions{display:flex;gap:6px;margin-top:4px}',
+    '.rec-ask-wrap{margin:2px 0 18px;padding:12px;border:1px solid var(--fau-border);border-radius:10px;background:var(--fau-surface2)}',
+    '.rec-ask-label{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--fau-text);margin-bottom:7px}',
+    '.rec-ask-label .ti{color:var(--accent2)}',
+    '.rec-ask{width:100%;min-height:46px;resize:vertical;border:1px solid var(--fau-border);border-radius:8px;background:var(--fau-surface);color:var(--fau-text);font:inherit;font-size:13px;padding:8px 10px;margin-bottom:8px}',
+    '.rec-ask:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}',
+    '.rec-abtn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}',
+    '.rec-abtn.primary:hover{filter:brightness(1.07);background:var(--accent)}',
   ].join('');
   var st = document.createElement('style');
   st.id = 'rec-styles';
@@ -377,6 +384,11 @@ function _recDetailHtml() {
     '</div>' +
     '<div class="rec-detail-sub">' + rec.stepCount + ' steps · ' + _recFmtDur(rec.durationMs) + ' · used ' + (rec.useCount || 0) + '×</div>' +
     '<textarea class="rec-desc" placeholder="Describe what this flow does…" onchange="_recSaveDesc(\'' + rec.id + '\', this.value)">' + _recEsc(rec.description || '') + '</textarea>' +
+    '<div class="rec-ask-wrap">' +
+      '<label class="rec-ask-label"><i class="ti ti-wand"></i> Instructions for Fauna (run this, or adapt it)</label>' +
+      '<textarea class="rec-ask" id="rec-ask-input" placeholder="Optional — tell Fauna how to adapt this flow. e.g. “Do the same but on the Artifact panel page.” or “Use the Marketing file as the destination.” Leave blank to just recreate it as recorded.">' + _recEsc(_recState.askText || '') + '</textarea>' +
+      '<button class="rec-abtn primary" onclick="recreateRecording(\'' + rec.id + '\')"><i class="ti ti-sparkles"></i> Ask Fauna to run / adapt</button>' +
+    '</div>' +
     '<div class="rec-map">' + _recMapHtml(rec.steps || [], rec.id) + '</div>';
 }
 
@@ -529,15 +541,21 @@ function _recReplaySeq(actions, i) {
 
 // Ask Fauna to recreate / adapt this flow — drop an outline into the composer.
 function recreateRecording(id) {
+  var adaptEl = document.getElementById('rec-ask-input');
+  var adapt = adaptEl ? adaptEl.value.trim() : '';
   _recApi('/api/recordings/' + id + '/describe').then(function (d) {
     if (!d || !d.ok) { alert('Describe failed'); return; }
-    var prompt = 'I recorded this browser flow. Recreate it (or adapt it as I describe) in my real browser.\n\n' +
+    var intro = adapt
+      ? 'Adapt this recorded browser flow as follows: ' + adapt + '\n\nOriginal flow:\n'
+      : 'Recreate this recorded browser flow in my real browser.\n\n';
+    var prompt = intro +
       '**' + d.name + '**' + (d.description ? ' — ' + d.description : '') + '\n\n' + d.outline + '\n\n' +
       'How to run it:\n' +
       '1. First emit a `browser-ext-action` block with `{"action":"tab:list"}` to get the real numeric tab ids.\n' +
       '2. Then emit executable `browser-ext-action` blocks using those REAL numeric tabIds — never placeholders like SOURCE_TAB_ID or <TAB_ID>.\n' +
       '3. One JSON object per line, no prose inside the code block.\n' +
-      '4. For Figma/canvas use `mouse-click`, `key`, `copy`, `paste` (not plain click/keyboard).';
+      '4. For Figma/canvas use `mouse-click`, `key`, `copy`, `paste` (not plain click/keyboard).\n' +
+      '5. ⚠️ SAFETY (Figma): do NOT run select-all (`Meta+a`) + copy/paste while the Pages panel / a page row is focused — that operates on whole PAGES and can DELETE or overwrite pages. Click into the CANVAS and select the actual frame/content before copy, and click into the destination CANVAS before paste. After each paste, `extract` and verify nothing shows "Page deleted".';
     if (typeof closeAppPage === 'function') closeAppPage();
     if (!window.state || !state.currentId) { if (typeof newConversation === 'function') newConversation(); }
     var input = document.getElementById('msg-input');

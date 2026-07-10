@@ -930,9 +930,10 @@ async function cmdClick({ selector, text, x, y } = {}, tab) {
   return { ok: true, ...result };
 }
 
-async function cmdScroll({ direction = 'down', px, selector, behavior = 'smooth' } = {}, tab) {
+async function cmdScroll({ direction = 'down', px, amount, selector, behavior = 'smooth' } = {}, tab) {
   if (!tab) return { ok: false, error: 'No active tab' };
-  const result = await msgTab(tab, { action: 'scroll', direction, px, selector, behavior });
+  // The prompt documents `amount`; the content script reads `px`. Accept both.
+  const result = await msgTab(tab, { action: 'scroll', direction, px: px != null ? px : amount, selector, behavior });
   return { ok: true, ...result };
 }
 
