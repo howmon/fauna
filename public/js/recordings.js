@@ -3,7 +3,7 @@
 // view them as a visual map/timeline, edit them, replay them, and ask Fauna to
 // recreate a similar flow. Live steps stream in over SSE while recording.
 
-var _recState = { recording: false, live: [], selectedId: null, current: null, list: [] };
+var _recState = { recording: false, paused: false, live: [], selectedId: null, current: null, list: [] };
 
 function openRecordingsPage() {
   _recEnsureStyles();
@@ -25,6 +25,10 @@ function _recEnsureStyles() {
     '.rec-btn{width:100%;display:flex;align-items:center;justify-content:center;gap:8px;padding:10px;border-radius:var(--radius);border:1px solid var(--fau-border);background:var(--fau-surface);color:var(--fau-text);font:inherit;font-weight:600;cursor:pointer;transition:all .12s}',
     '.rec-btn.rec-start:hover{border-color:var(--error);color:var(--error)}',
     '.rec-btn.rec-stop{background:color-mix(in oklab,var(--error) 16%,transparent);border-color:var(--error);color:var(--error)}',
+    '.rec-btn.rec-pause{margin-top:8px}',
+    '.rec-btn.rec-resume{margin-top:8px;background:color-mix(in oklab,var(--accent,#4c8bf5) 16%,transparent);border-color:var(--accent,#4c8bf5)}',
+    '.rec-shots-opt{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--fau-text-muted);margin:2px 0 2px;cursor:pointer}',
+    '.rec-paused-badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:var(--fau-text-muted)}',
     '.rec-dot{width:9px;height:9px;border-radius:50%;background:var(--error);display:inline-block;animation:recBlink 1.1s infinite}',
     '@keyframes recBlink{0%,100%{opacity:1}50%{opacity:.3}}',
     '.rec-hint{padding:0 14px 10px;font-size:11px;color:var(--fau-text-muted);line-height:1.4}',
@@ -144,6 +148,7 @@ function _recRefreshStatus() {
   if (typeof executeExtAction !== 'function') return Promise.resolve();
   return executeExtAction({ action: 'record:status' }).then(function (r) {
     _recState.recording = !!(r && r.recording);
+    _recState.paused = !!(r && r.paused);
     renderRecordingsPage();
   }).catch(function () {});
 }
@@ -266,6 +271,7 @@ function toggleRecording() {
     // never depends on the extension→socket→save round-trip. Both saves dedupe
     // to one entry via sessionId.
     _recState.recording = false;
+    _recState.paused = false;
     renderRecordingsPage();
     executeExtAction({ action: 'record:stop' }).catch(function () {});
     _recSaveLiveNow();
@@ -273,6 +279,7 @@ function toggleRecording() {
     _recState.live = [];
     _recState.selectedId = '__live__';
     _recState.recording = true;
+    _recState.paused = false;
     _recState.current = null;
     _recState.saveError = false;
     renderRecordingsPage();
@@ -289,6 +296,22 @@ function toggleRecording() {
   }
 }
 
+// Pause / resume — keep the session open but stop (or restart) capturing.
+function pauseResumeRecording() {
+  if (typeof executeExtAction !== 'function' || !_recState.recording) return;
+  var resume = _recState.paused;
+  _recState.paused = !resume; // optimistic
+  renderRecordingsPage();
+  executeExtAction({ action: resume ? 'record:resume' : 'record:pause' }).catch(function (e) {
+    _recState.paused = resume; // revert on failure
+    renderRecordingsPage();
+    var m = String((e && e.message) || e);
+    if (/unknown action/i.test(m)) {
+      alert('Your Fauna Browser Bridge extension is out of date — reload it in chrome://extensions to enable pause/resume.');
+    }
+  });
+}
+
 // SSE hook — called from browser.js _handleExtEvent for recording:* events.
 function _onRecordingEvent(msg) {
   var page0 = document.getElementById('rec-page');
@@ -302,7 +325,14 @@ function _onRecordingEvent(msg) {
   var page = document.getElementById('rec-page');
   if (msg.event === 'recording:started') {
     _recState.recording = true; _recState.live = []; _recState.selectedId = '__live__'; _recState.saveError = false;
+    _recState.paused = false;
     _recState.sessionId = (msg.data && msg.data.sessionId) || null;
+    if (page) renderRecordingsPage();
+  } else if (msg.event === 'recording:paused') {
+    _recState.paused = true;
+    if (page) renderRecordingsPage();
+  } else if (msg.event === 'recording:resumed') {
+    _recState.paused = false;
     if (page) renderRecordingsPage();
   } else if (msg.event === 'recording:step') {
     _recState.live.push(msg.data || {});
@@ -312,6 +342,7 @@ function _onRecordingEvent(msg) {
     if (st) { st.shot = msg.data.shot; if (page && _recState.selectedId === '__live__') _recRenderLiveIncremental(); }
   } else if (msg.event === 'recording:stopped') {
     _recState.recording = false;
+    _recState.paused = false;
     if (page) renderRecordingsPage();
   } else if (msg.event === 'ext:recording-saved') {
     _recState.recording = false;
@@ -326,7 +357,10 @@ function renderRecordingsPage() {
   var el = document.getElementById('rec-page');
   if (!el) return;
   var recBtn = _recState.recording
-    ? '<button class="rec-btn rec-stop" onclick="toggleRecording()"><span class="rec-dot"></span> Stop recording</button>'
+    ? '<button class="rec-btn rec-stop" onclick="toggleRecording()"><span class="rec-dot"></span> Stop recording</button>' +
+      (_recState.paused
+        ? '<button class="rec-btn rec-resume" onclick="pauseResumeRecording()"><i class="ti ti-player-play-filled"></i> Resume</button>'
+        : '<button class="rec-btn rec-pause" onclick="pauseResumeRecording()"><i class="ti ti-player-pause-filled"></i> Pause</button>')
     : '<button class="rec-btn rec-start" onclick="toggleRecording()"><i class="ti ti-player-record-filled"></i> Record</button>';
 
   var list = _recState.list.map(function (r) {
@@ -339,7 +373,7 @@ function renderRecordingsPage() {
 
   var liveItem = _recState.recording
     ? '<div class="rec-list-item rec-live' + (_recState.selectedId === '__live__' ? ' active' : '') + '" onclick="selectRecording(\'__live__\')">' +
-        '<div class="rec-list-title"><span class="rec-dot"></span> Recording…</div>' +
+        '<div class="rec-list-title">' + (_recState.paused ? '<i class="ti ti-player-pause-filled"></i> Paused' : '<span class="rec-dot"></span> Recording…') + '</div>' +
         '<div class="rec-list-meta">' + _recState.live.length + ' steps captured</div></div>'
     : '';
 
@@ -359,8 +393,8 @@ function _recDetailHtml() {
     var flashing = _recState.recording;
     var head, sub;
     if (flashing) {
-      head = '<span class="rec-dot"></span> Live recording';
-      sub = _recState.live.length + ' steps — perform actions in your browser';
+      head = _recState.paused ? '<i class="ti ti-player-pause-filled"></i> Paused' : '<span class="rec-dot"></span> Live recording';
+      sub = _recState.live.length + (_recState.paused ? ' steps — resume to keep capturing' : ' steps — perform actions in your browser');
     } else if (_recState.saveError) {
       head = '<i class="ti ti-alert-triangle" style="color:var(--error)"></i> Save failed';
       sub = _recState.live.length + ' steps — <button class="rec-abtn" onclick="_recRetrySave()"><i class="ti ti-refresh"></i> Retry save</button>';
@@ -387,6 +421,7 @@ function _recDetailHtml() {
     '<div class="rec-ask-wrap">' +
       '<label class="rec-ask-label"><i class="ti ti-wand"></i> Instructions for Fauna (run this, or adapt it)</label>' +
       '<textarea class="rec-ask" id="rec-ask-input" placeholder="Optional — tell Fauna how to adapt this flow. e.g. “Do the same but on the Artifact panel page.” or “Use the Marketing file as the destination.” Leave blank to just recreate it as recorded.">' + _recEsc(_recState.askText || '') + '</textarea>' +
+      '<label class="rec-shots-opt"><input type="checkbox" id="rec-include-shots"> Include step screenshots as context (uses more tokens)</label>' +
       '<button class="rec-abtn primary" onclick="recreateRecording(\'' + rec.id + '\')"><i class="ti ti-sparkles"></i> Ask Fauna to run / adapt</button>' +
     '</div>' +
     '<div class="rec-map">' + _recMapHtml(rec.steps || [], rec.id) + '</div>';
@@ -543,6 +578,8 @@ function _recReplaySeq(actions, i) {
 function recreateRecording(id) {
   var adaptEl = document.getElementById('rec-ask-input');
   var adapt = adaptEl ? adaptEl.value.trim() : '';
+  var shotsEl = document.getElementById('rec-include-shots');
+  var includeShots = !!(shotsEl && shotsEl.checked);
   _recApi('/api/recordings/' + id + '/describe').then(function (d) {
     if (!d || !d.ok) { alert('Describe failed'); return; }
     var intro = adapt
@@ -569,7 +606,9 @@ function recreateRecording(id) {
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.focus();
     }
-    _recAttachShots(id);
+    // Screenshots are saved with the recording (visible in the map) but are NOT
+    // sent to the model by default — only attach them if the user opts in.
+    if (includeShots) _recAttachShots(id);
   });
 }
 

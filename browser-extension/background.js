@@ -339,6 +339,8 @@ async function dispatchCommand(msg) {
       // Action recorder
       case 'record:start':  return await cmdRecordStart(params);
       case 'record:stop':   return await cmdRecordStop(params);
+      case 'record:pause':  return await cmdRecordPause(params);
+      case 'record:resume': return await cmdRecordResume(params);
       case 'record:status': return cmdRecordStatus();
       default:
         return { ok: false, error: 'Unknown action: ' + action };
@@ -1389,7 +1391,7 @@ function cmdWaitNavigation({ timeoutMs = 15000 } = {}, tab) {
 let _rec = { active: false };
 
 async function cmdRecordStart({ name } = {}) {
-  _rec = { active: true, startedAt: Date.now(), seq: 0, steps: [], lastShotAt: 0, name: name || '', sessionId: 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8) };
+  _rec = { active: true, paused: false, pausedMs: 0, pauseStartedAt: 0, startedAt: Date.now(), seq: 0, steps: [], lastShotAt: 0, name: name || '', sessionId: 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8) };
   const tabs = await chrome.tabs.query({});
   for (const t of tabs) {
     if (!t.id || !/^https?:|^file:/.test(t.url || '')) continue;
@@ -1407,7 +1409,9 @@ async function cmdRecordStart({ name } = {}) {
 
 async function cmdRecordStop() {
   if (!_rec.active) return { ok: true, recording: false, stepCount: 0 };
+  if (_rec.paused && _rec.pauseStartedAt) { _rec.pausedMs += Date.now() - _rec.pauseStartedAt; _rec.pauseStartedAt = 0; }
   _rec.active = false;
+  _rec.paused = false;
   const tabs = await chrome.tabs.query({});
   for (const t of tabs) { chrome.tabs.sendMessage(t.id, { action: 'recorder:off' }).catch(() => {}); }
   const recording = {
@@ -1415,7 +1419,7 @@ async function cmdRecordStop() {
     sessionId: _rec.sessionId || null,
     startedAt: _rec.startedAt,
     endedAt: Date.now(),
-    durationMs: Date.now() - _rec.startedAt,
+    durationMs: Math.max(0, (Date.now() - _rec.startedAt) - (_rec.pausedMs || 0)),
     steps: _rec.steps,
     stepCount: _rec.steps.length,
   };
@@ -1424,18 +1428,47 @@ async function cmdRecordStop() {
   return { ok: true, recording: false, stepCount: recording.stepCount };
 }
 
+// Pause — stop buffering steps but keep the session open. Disarms content
+// scripts and starts accumulating paused time so the timeline stays accurate.
+async function cmdRecordPause() {
+  if (!_rec.active) return { ok: false, error: 'Not recording' };
+  if (_rec.paused) return { ok: true, recording: true, paused: true, stepCount: _rec.steps.length };
+  _rec.paused = true;
+  _rec.pauseStartedAt = Date.now();
+  const tabs = await chrome.tabs.query({});
+  for (const t of tabs) { chrome.tabs.sendMessage(t.id, { action: 'recorder:off' }).catch(() => {}); }
+  pushEvent('recording:paused', { stepCount: _rec.steps.length });
+  return { ok: true, recording: true, paused: true, stepCount: _rec.steps.length };
+}
+
+// Resume — re-arm content scripts and stop counting paused time.
+async function cmdRecordResume() {
+  if (!_rec.active) return { ok: false, error: 'Not recording' };
+  if (!_rec.paused) return { ok: true, recording: true, paused: false, stepCount: _rec.steps.length };
+  if (_rec.pauseStartedAt) { _rec.pausedMs += Date.now() - _rec.pauseStartedAt; _rec.pauseStartedAt = 0; }
+  _rec.paused = false;
+  const tabs = await chrome.tabs.query({});
+  for (const t of tabs) {
+    if (!t.id || !/^https?:|^file:/.test(t.url || '')) continue;
+    try { await chrome.scripting.executeScript({ target: { tabId: t.id, allFrames: false }, files: ['content.js'] }); } catch (_) {}
+    chrome.tabs.sendMessage(t.id, { action: 'recorder:on' }).catch(() => {});
+  }
+  pushEvent('recording:resumed', { stepCount: _rec.steps.length });
+  return { ok: true, recording: true, paused: false, stepCount: _rec.steps.length };
+}
+
 function cmdRecordStatus() {
-  return { ok: true, recording: !!_rec.active, stepCount: _rec.active ? _rec.steps.length : 0, name: _rec.active ? _rec.name : null };
+  return { ok: true, recording: !!_rec.active, paused: !!(_rec.active && _rec.paused), stepCount: _rec.active ? _rec.steps.length : 0, name: _rec.active ? _rec.name : null };
 }
 
 // Enrich a raw step (from content.js or from tab events) with timing + tab
 // context, buffer it, stream it live, and grab a throttled screenshot.
 function _recorderOnStep(step, sender) {
-  if (!_rec.active) return;
+  if (!_rec.active || _rec.paused) return;
   const tab = sender && sender.tab;
   const enriched = Object.assign({}, step, {
     id: 'st_' + (_rec.seq++),
-    t: Date.now() - _rec.startedAt,
+    t: Math.max(0, (Date.now() - _rec.startedAt) - (_rec.pausedMs || 0)),
     tabId: tab ? tab.id : (step.tabId ?? null),
     url: tab ? tab.url : (step.url ?? null),
     title: tab ? tab.title : (step.title ?? null),
@@ -1771,7 +1804,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!connected) return;
   if (changeInfo.status === 'complete') {
     pushEvent('page:loaded', { tabId, url: tab.url, title: tab.title });
-    if (_rec.active) {
+    if (_rec.active && !_rec.paused) {
       _recorderOnStep({ type: 'navigate', url: tab.url, title: tab.title }, { tab });
       chrome.tabs.sendMessage(tabId, { action: 'recorder:on' }).catch(() => {}); // arm newly-loaded tabs
     }
