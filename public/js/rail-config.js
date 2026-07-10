@@ -20,9 +20,10 @@
   // "home" is pinned to the very top of the rail.
   var PINNED_TOP = 'home';
 
-  // Default visible set (besides Home): chat + taskboard only. Everything else
-  // ships hidden and can be re-enabled from Settings ▸ Features.
-  var DEFAULT_VISIBLE = ['conversations', 'board'];
+  // By default every managed feature is visible. Users can hide/reorder them
+  // from Settings ▸ Features or from the rail context menu.
+  var DEFAULT_VISIBLE = null;
+  var OLD_DEFAULT_VISIBLE = ['conversations', 'board'];
 
   // Ordered list of manageable rail item ids as they appear in the markup.
   // Derived from the DOM so it stays in sync with index.html.
@@ -59,16 +60,28 @@
     return null;
   }
 
+  function sameItems(a, b) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every(function (id) { return b.indexOf(id) !== -1; });
+  }
+
   // Returns a normalized config: { order, hidden } covering exactly the rail
   // items currently present in the DOM. New items are appended; the default
-  // (no saved config) hides everything except DEFAULT_VISIBLE.
+  // (no saved config) keeps every managed feature visible.
   function getRailConfig() {
     var ids = railItemIds();
     var raw = loadRaw();
 
     if (!raw) {
-      var hiddenDefault = ids.filter(function (id) { return DEFAULT_VISIBLE.indexOf(id) === -1; });
+      var hiddenDefault = DEFAULT_VISIBLE
+        ? ids.filter(function (id) { return DEFAULT_VISIBLE.indexOf(id) === -1; })
+        : [];
       return { order: ids.slice(), hidden: hiddenDefault };
+    }
+
+    var oldHiddenDefault = ids.filter(function (id) { return OLD_DEFAULT_VISIBLE.indexOf(id) === -1; });
+    if (DEFAULT_VISIBLE === null && sameItems(raw.hidden, oldHiddenDefault)) {
+      raw.hidden = [];
     }
 
     // Keep saved order for known ids, then append any brand-new items (visible).
@@ -86,6 +99,13 @@
   function isHidden(id, cfg) {
     cfg = cfg || getRailConfig();
     return cfg.hidden.indexOf(id) !== -1;
+  }
+
+  function featureListOrder(cfg) {
+    cfg = cfg || getRailConfig();
+    var hidden = cfg.hidden || [];
+    return cfg.order.filter(function (id) { return hidden.indexOf(id) === -1; })
+      .concat(cfg.order.filter(function (id) { return hidden.indexOf(id) !== -1; }));
   }
 
   // ── Apply config to the live rail ────────────────────────────────────────
@@ -127,6 +147,7 @@
     var i = cfg.hidden.indexOf(id);
     if (hidden && i === -1) cfg.hidden.push(id);
     else if (!hidden && i !== -1) cfg.hidden.splice(i, 1);
+    cfg.order = featureListOrder(cfg);
     saveRailConfig(cfg);
     applyRailConfig(cfg);
     renderRailFeaturesPage();
@@ -136,11 +157,30 @@
   // items). Home is never part of this list.
   function moveItem(id, toIndex) {
     var cfg = getRailConfig();
-    var from = cfg.order.indexOf(id);
+    var order = featureListOrder(cfg);
+    var from = order.indexOf(id);
     if (from === -1) return;
-    cfg.order.splice(from, 1);
-    toIndex = Math.max(0, Math.min(cfg.order.length, toIndex));
-    cfg.order.splice(toIndex, 0, id);
+    order.splice(from, 1);
+    toIndex = Math.max(0, Math.min(order.length, toIndex));
+    order.splice(toIndex, 0, id);
+    cfg.order = order;
+    saveRailConfig(cfg);
+    applyRailConfig(cfg);
+    renderRailFeaturesPage();
+  }
+
+  function moveVisibleItem(id, delta) {
+    var cfg = getRailConfig();
+    if (cfg.hidden.indexOf(id) !== -1) return;
+    var visible = cfg.order.filter(function (item) { return cfg.hidden.indexOf(item) === -1; });
+    var hidden = cfg.order.filter(function (item) { return cfg.hidden.indexOf(item) !== -1; });
+    var from = visible.indexOf(id);
+    if (from === -1) return;
+    var to = Math.max(0, Math.min(visible.length - 1, from + delta));
+    if (to === from) return;
+    visible.splice(from, 1);
+    visible.splice(to, 0, id);
+    cfg.order = visible.concat(hidden);
     saveRailConfig(cfg);
     applyRailConfig(cfg);
     renderRailFeaturesPage();
@@ -169,7 +209,7 @@
       '<span class="rail-feat-pinned-tag">Pinned</span>';
     mount.appendChild(homeRow);
 
-    cfg.order.forEach(function (id) {
+    featureListOrder(cfg).forEach(function (id) {
       var hidden = cfg.hidden.indexOf(id) !== -1;
       var row = document.createElement('div');
       row.className = 'rail-feat-row';
@@ -219,12 +259,21 @@
       var r = row.getBoundingClientRect();
       var after = (e.clientY - r.top) > r.height / 2;
       var cfg = getRailConfig();
-      var targetIdx = cfg.order.indexOf(row.dataset.railItem);
+      var dragHidden = cfg.hidden.indexOf(_dragRow.dataset.railItem) !== -1;
+      var targetHidden = cfg.hidden.indexOf(row.dataset.railItem) !== -1;
+      if (dragHidden !== targetHidden) return;
+      var order = featureListOrder(cfg);
+      var targetIdx = order.indexOf(row.dataset.railItem);
       if (after) targetIdx += 1;
       // Account for removal of the dragged item shifting indices.
-      var fromIdx = cfg.order.indexOf(_dragRow.dataset.railItem);
+      var fromIdx = order.indexOf(_dragRow.dataset.railItem);
       if (fromIdx < targetIdx) targetIdx -= 1;
-      moveItem(_dragRow.dataset.railItem, targetIdx);
+      order.splice(fromIdx, 1);
+      order.splice(targetIdx, 0, _dragRow.dataset.railItem);
+      cfg.order = order;
+      saveRailConfig(cfg);
+      applyRailConfig(cfg);
+      renderRailFeaturesPage();
     });
   }
 
@@ -338,10 +387,93 @@
     rail.addEventListener('pointerdown', _onRailPointerDown);
   }
 
+  // ── Rail right-click menu ────────────────────────────────────────────────
+  var _ctxMenu = null;
+
+  function _visibleIds(cfg) {
+    cfg = cfg || getRailConfig();
+    return cfg.order.filter(function (id) { return cfg.hidden.indexOf(id) === -1; });
+  }
+
+  function _closeRailContextMenu() {
+    if (_ctxMenu && _ctxMenu.parentNode) _ctxMenu.parentNode.removeChild(_ctxMenu);
+    _ctxMenu = null;
+    document.removeEventListener('mousedown', _onRailContextOutside);
+    document.removeEventListener('contextmenu', _onRailContextOutside);
+    document.removeEventListener('keydown', _onRailContextKeydown);
+  }
+
+  function _onRailContextOutside(e) {
+    if (_ctxMenu && _ctxMenu.contains(e.target)) return;
+    _closeRailContextMenu();
+  }
+
+  function _onRailContextKeydown(e) {
+    if (e.key === 'Escape') _closeRailContextMenu();
+  }
+
+  function _railContextItem(icon, label, disabled, action) {
+    var item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'app-rail-context-item' + (disabled ? ' disabled' : '');
+    item.disabled = !!disabled;
+    item.innerHTML = '<i class="ti ' + icon + '"></i><span>' + label + '</span>';
+    if (!disabled) {
+      item.addEventListener('click', function (e) {
+        e.stopPropagation();
+        _closeRailContextMenu();
+        action();
+      });
+    }
+    return item;
+  }
+
+  function _showRailContextMenu(id, x, y) {
+    var cfg = getRailConfig();
+    var visible = _visibleIds(cfg);
+    var idx = visible.indexOf(id);
+    if (idx === -1) return;
+    _closeRailContextMenu();
+    var menu = document.createElement('div');
+    menu.className = 'app-rail-context-menu';
+    menu.setAttribute('role', 'menu');
+    menu.appendChild(_railContextItem('ti-eye-off', 'Hide from rail', false, function () { setItemHidden(id, true); }));
+    menu.appendChild(_railContextItem('ti-arrow-up', 'Move up', idx <= 0, function () { moveVisibleItem(id, -1); }));
+    menu.appendChild(_railContextItem('ti-arrow-down', 'Move down', idx >= visible.length - 1, function () { moveVisibleItem(id, 1); }));
+    document.body.appendChild(menu);
+    _ctxMenu = menu;
+    menu.style.left = x + 'px';
+    menu.style.top = y + 'px';
+    var r = menu.getBoundingClientRect();
+    menu.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
+    menu.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
+    setTimeout(function () {
+      document.addEventListener('mousedown', _onRailContextOutside);
+      document.addEventListener('contextmenu', _onRailContextOutside);
+      document.addEventListener('keydown', _onRailContextKeydown);
+    }, 0);
+  }
+
+  function _initRailContextMenu() {
+    var rail = document.querySelector('.app-rail-top');
+    if (!rail) return;
+    rail.addEventListener('contextmenu', function (e) {
+      var btn = e.target.closest('.app-rail-btn[data-rail-page]');
+      if (!btn) return;
+      var id = btn.dataset.railPage;
+      if (!id || id === PINNED_TOP || btn.classList.contains('app-rail-overflow-btn')) return;
+      if (isHidden(id)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      _showRailContextMenu(id, e.clientX, e.clientY);
+    });
+  }
+
   // ── Boot ─────────────────────────────────────────────────────────────────
   function boot() {
     applyRailConfig();
     _initRailDrag();
+    _initRailContextMenu();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
