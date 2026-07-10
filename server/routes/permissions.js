@@ -7,6 +7,46 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+const PERMISSION_STATE_FILE = process.env.FAUNA_PERMISSION_STATE_FILE
+  || path.join(os.homedir(), '.config', 'fauna', 'permission-state.json');
+
+function readPermissionState() {
+  try {
+    return JSON.parse(fs.readFileSync(PERMISSION_STATE_FILE, 'utf8')) || {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function writePermissionState(state) {
+  try {
+    fs.mkdirSync(path.dirname(PERMISSION_STATE_FILE), { recursive: true });
+    fs.writeFileSync(PERMISSION_STATE_FILE, JSON.stringify(state, null, 2));
+  } catch (_) {}
+}
+
+function withLastKnownGrants(result) {
+  const state = readPermissionState();
+  const lastGranted = state.lastGranted && typeof state.lastGranted === 'object'
+    ? state.lastGranted
+    : {};
+  let changed = false;
+
+  for (const key of ['fullDiskAccess', 'screenRecording', 'accessibility', 'automation']) {
+    if (result[key] === 'granted') {
+      if (!lastGranted[key]) {
+        lastGranted[key] = new Date().toISOString();
+        changed = true;
+      }
+    } else if (lastGranted[key] && (result[key] === 'denied' || result[key] === 'not-determined' || result[key] === 'unknown')) {
+      result[key] = 'previously-granted';
+    }
+  }
+
+  if (changed) writePermissionState({ ...state, lastGranted });
+  return result;
+}
+
 export function checkFullDiskAccess(isWin) {
   if (isWin) return 'not-applicable';
   const probes = [
@@ -43,7 +83,7 @@ export function computePermissions({ isWin, getGhToken, systemPreferences }) {
     result.fullDiskAccess = checkFullDiskAccess(isWin);
     result.automation = 'auto-prompted';
   }
-  return result;
+  return withLastKnownGrants(result);
 }
 
 export function registerPermissionsRoutes(app, {

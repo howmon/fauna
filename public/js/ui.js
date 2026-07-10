@@ -2724,6 +2724,8 @@ function renderPermissions(perms) {
     var statusKey, statusLabel;
     if (raw === 'granted') {
       statusKey = 'ok'; statusLabel = '<i class="ti ti-check"></i> Granted';
+    } else if (raw === 'previously-granted') {
+      statusKey = 'warn'; statusLabel = '<i class="ti ti-alert-triangle"></i> Previously granted';
     } else if (raw === 'denied' || raw === 'not-determined') {
       statusKey = 'err'; statusLabel = '<i class="ti ti-x"></i> Not granted';
     } else if (raw === 'auto-prompted') {
@@ -2732,7 +2734,7 @@ function renderPermissions(perms) {
       statusKey = 'warn'; statusLabel = '? Unknown';
     }
 
-    var rowClass = raw === 'granted' ? 'granted' : (raw === 'denied' || raw === 'not-determined') ? 'denied' : '';
+    var rowClass = raw === 'granted' ? 'granted' : (raw === 'previously-granted') ? 'warn' : (raw === 'denied' || raw === 'not-determined') ? 'denied' : '';
     var badgeClass = p.required ? 'req' : 'opt';
     var badgeLabel = p.required ? 'Required' : 'Optional';
 

@@ -4416,6 +4416,7 @@ body { animation: none; }
 }
 .perm-row.granted { border-color: rgba(74,222,128,.25); background: rgba(74,222,128,.05); }
 .perm-row.denied  { border-color: rgba(248,113,113,.22); background: rgba(248,113,113,.04); }
+.perm-row.warn    { border-color: rgba(250,204,21,.24); background: rgba(250,204,21,.045); }
 .perm-icon { font-size: 22px; flex-shrink: 0; width: 32px; text-align: center; }
 .perm-info { flex: 1; min-width: 0; }
 .perm-name {
