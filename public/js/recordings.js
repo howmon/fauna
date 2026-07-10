@@ -550,12 +550,15 @@ function recreateRecording(id) {
       : 'Recreate this recorded browser flow in my real browser.\n\n';
     var prompt = intro +
       '**' + d.name + '**' + (d.description ? ' — ' + d.description : '') + '\n\n' + d.outline + '\n\n' +
-      'How to run it:\n' +
-      '1. First emit a `browser-ext-action` block with `{"action":"tab:list"}` to get the real numeric tab ids.\n' +
-      '2. Then emit executable `browser-ext-action` blocks using those REAL numeric tabIds — never placeholders like SOURCE_TAB_ID or <TAB_ID>.\n' +
-      '3. One JSON object per line, no prose inside the code block.\n' +
-      '4. For Figma/canvas use `mouse-click`, `key`, `copy`, `paste` (not plain click/keyboard).\n' +
-      '5. ⚠️ SAFETY (Figma): do NOT run select-all (`Meta+a`) + copy/paste while the Pages panel / a page row is focused — that operates on whole PAGES and can DELETE or overwrite pages. Click into the CANVAS and select the actual frame/content before copy, and click into the destination CANVAS before paste. After each paste, `extract` and verify nothing shows "Page deleted".';
+      'EXECUTE this now — actually run the steps in my real browser via `browser-ext-action`. Do NOT just describe the plan; do the work.\n\n' +
+      'Rules:\n' +
+      '1. First emit a `browser-ext-action` block `{"action":"tab:list"}` to get the real numeric tab ids, then keep going.\n' +
+      '2. Use the REAL browser extension via `browser-ext-action` ONLY. Do NOT call the `fauna_browser` tool — that drives the in-app webview which cannot see my real Chrome tabs and will be blank.\n' +
+      '3. Use those REAL numeric tabIds in every action — never placeholders like SOURCE_TAB_ID.\n' +
+      '4. One JSON object per line, no prose inside the code block.\n' +
+      '5. For Figma/canvas use `mouse-click`, `key`, `copy`, `paste` (not plain click/keyboard).\n' +
+      '6. Do it SAFELY (don\'t refuse — just do it the safe way): click into the CANVAS and select the actual frame/content before copy, click the destination CANVAS before paste. Do NOT select-all/copy/paste while the Pages panel or a page row is focused (that deletes/overwrites pages). After each paste, `extract` and verify nothing shows "Page deleted".\n' +
+      '7. Continue through ALL the requested items one by one — don\'t stop after one to explain.';
     if (typeof closeAppPage === 'function') closeAppPage();
     if (!window.state || !state.currentId) { if (typeof newConversation === 'function') newConversation(); }
     var input = document.getElementById('msg-input');
