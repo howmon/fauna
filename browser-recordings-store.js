@@ -23,6 +23,7 @@ function _file() {
 /**
  * @typedef {{
  *   id: string, t: number, type: string, tabId?: number|null,
+ *   windowId?: number|null,
  *   url?: string|null, title?: string|null,
  *   selector?: string, label?: string, value?: string, text?: string,
  *   keys?: string, x?: number, y?: number, shot?: string, note?: string
@@ -87,6 +88,7 @@ function _sanitizeStep(s, i) {
   };
   if (s == null) return out;
   if (s.tabId != null) out.tabId = s.tabId;
+  if (s.windowId != null) out.windowId = s.windowId;
   for (const k of ['url', 'title', 'selector', 'label', 'value', 'text', 'keys', 'note']) {
     if (s[k] != null && s[k] !== '') out[k] = String(s[k]).slice(0, 2000);
   }
@@ -215,7 +217,11 @@ function _stepToAction(s) {
     case 'navigate':
       return s.url ? { action: 'navigate', url: s.url, tabId } : null;
     case 'tabswitch':
-      return tabId != null ? { action: 'tab:switch', tabId } : null;
+      // Reuse an already-open tab (by URL) rather than a stale numeric tabId.
+      // The recorded tabId is passed as a hint but URL is the reliable matcher.
+      return (s.url || tabId != null)
+        ? { action: 'tab:ensure', url: s.url || undefined, tabId }
+        : null;
     case 'click':
       return { action: 'click', selector: s.selector, text: s.label || undefined, tabId };
     case 'input':
@@ -247,7 +253,22 @@ function _stepToAction(s) {
 export function compileRecording(id) {
   const rec = getRecording(id);
   if (!rec) return null;
-  const actions = (rec.steps || []).map(_stepToAction).filter(Boolean);
+  const actions = [];
+  let anchored = false;
+  for (const s of (rec.steps || [])) {
+    // The first navigation marks the tab the user started on. Emit a tab:ensure
+    // so replay reuses an already-open tab at that URL (or opens one) instead of
+    // grabbing whatever tab happens to be active — keeps replay in-browser and
+    // avoids duplicate tabs. Later in-tab navigations stay plain 'navigate'.
+    if (!anchored && s.type === 'navigate' && s.url) {
+      actions.push({ action: 'tab:ensure', url: s.url, tabId: s.tabId != null ? s.tabId : undefined });
+      anchored = true;
+      continue;
+    }
+    if (s.type === 'navigate' || s.type === 'tabswitch') anchored = true;
+    const a = _stepToAction(s);
+    if (a) actions.push(a);
+  }
   return { id: rec.id, name: rec.name, actions };
 }
 

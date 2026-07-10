@@ -112,12 +112,20 @@ describe('browser-recordings-store', () => {
     const rec = store.saveRecording(sampleRecording());
     const { actions } = store.compileRecording(rec.id);
     const types = actions.map((a) => a.action);
-    expect(types).toContain('navigate');
     expect(types).toContain('click');
     expect(types).toContain('key');
     expect(types).toContain('copy');
     expect(types).toContain('paste');
-    expect(types).toContain('tab:switch');
+    // The first navigation is anchored to a tab:ensure so replay reuses an
+    // already-open tab at that URL instead of a stale numeric tabId.
+    expect(actions[0]).toEqual({ action: 'tab:ensure', url: 'https://figma.com/a', tabId: 1 });
+    // The cross-tab switch also compiles to tab:ensure, carrying the URL so it
+    // can reuse the destination tab when available.
+    const ensures = actions.filter((a) => a.action === 'tab:ensure');
+    expect(ensures.length).toBe(2);
+    expect(ensures[1]).toMatchObject({ action: 'tab:ensure', url: 'https://figma.com/b', tabId: 2 });
+    // no stale tab:switch is emitted anymore
+    expect(types).not.toContain('tab:switch');
     // selection is context, not replayable
     expect(actions.find((a) => a.action === 'selection')).toBeUndefined();
     // copy/paste carry their tabId

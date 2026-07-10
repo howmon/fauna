@@ -115,6 +115,7 @@ Always pass explicit \`"tabId"\` on each action so targeting is unambiguous.
 - **tab:list** — \`{"action":"tab:list"}\` — list all open tabs (id, title, url, active)
 - **tab:new** — \`{"action":"tab:new","url":"..."}\` — open a new tab
 - **tab:switch** — \`{"action":"tab:switch","tabId":123}\` — switch to a tab by id (use tab:list first)
+- **tab:ensure** — \`{"action":"tab:ensure","url":"https://…","tabId":123}\` — resolve to the intended tab, REUSING an already-open tab when available instead of a stale id: tries \`tabId\` first, then an open tab whose URL matches, else opens a new tab. Prefer this over tab:switch when replaying recorded flows or when a tabId may no longer be valid.
 - **tab:close** — \`{"action":"tab:close","tabId":123}\` — close a tab
 - **tab:info** — \`{"action":"tab:info"}\` — get info (url, title) of the active tab
 - **tab:group** — \`{"action":"tab:group","tabIds":[1,2],"title":"Research","color":"blue"}\` — group tabs (color: grey|blue|red|yellow|green|pink|purple|cyan|orange)

@@ -296,6 +296,7 @@ async function dispatchCommand(msg) {
       case 'tab:list':     return await cmdTabList();
       case 'tab:new':      return await cmdTabNew(params);
       case 'tab:switch':   return await cmdTabSwitch(params);
+      case 'tab:ensure':   return await cmdTabEnsure(params);
       case 'tab:close':    return await cmdTabClose(params, tab);
       case 'tab:info':     return await cmdTabInfo(tab);
       case 'navigate':     return await cmdNavigate(params, tab);
@@ -403,6 +404,60 @@ async function cmdTabSwitch({ tabId, index } = {}) {
   await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
   _targetTabId = tab.id; // make the switched-to tab sticky for follow-up commands
   return { ok: true, tabId: tab.id, url: tab.url, title: tab.title };
+}
+
+// Loosely normalize a URL for matching: origin + pathname, ignoring query/hash
+// and any trailing slash. Lets replay reuse the "same" tab across sessions even
+// when volatile params differ (e.g. Figma &t=... session tokens).
+function _normUrl(u) {
+  try { const x = new URL(u); return (x.origin + x.pathname).replace(/\/+$/, ''); }
+  catch (_) { return String(u || '').split(/[?#]/)[0].replace(/\/+$/, ''); }
+}
+
+// Find an already-open tab matching url: first by origin+path, then by origin.
+async function findTabByUrl(url) {
+  if (!url) return null;
+  const target = _normUrl(url);
+  const tabs = await chrome.tabs.query({});
+  let hit = tabs.find(t => t.url && _normUrl(t.url) === target);
+  if (hit) return hit;
+  try {
+    const origin = new URL(url).origin;
+    hit = tabs.find(t => { try { return new URL(t.url).origin === origin; } catch (_) { return false; } });
+  } catch (_) {}
+  return hit || null;
+}
+
+// tab:ensure — resolve to the intended tab, REUSING an existing one when available
+// instead of trusting a stale numeric tabId. Priority:
+//   1. the recorded tabId, if that exact tab still exists (same session replay)
+//   2. an open tab whose URL matches (cross-session / "same browser tabs" reuse)
+//   3. open a new tab at url
+// This keeps replay inside the current browser and avoids spawning duplicates.
+async function cmdTabEnsure({ url, tabId } = {}) {
+  if (tabId != null) {
+    const t = await chrome.tabs.get(tabId).catch(() => null);
+    if (t) {
+      await chrome.tabs.update(t.id, { active: true });
+      await chrome.windows.update(t.windowId, { focused: true }).catch(() => {});
+      _targetTabId = t.id;
+      return { ok: true, tabId: t.id, url: t.url, reused: true, by: 'tabId' };
+    }
+  }
+  const match = await findTabByUrl(url);
+  if (match) {
+    await chrome.tabs.update(match.id, { active: true });
+    await chrome.windows.update(match.windowId, { focused: true }).catch(() => {});
+    _targetTabId = match.id;
+    return { ok: true, tabId: match.id, url: match.url, reused: true, by: 'url' };
+  }
+  if (url) {
+    const tab = await chrome.tabs.create({ url, active: true });
+    await waitForTabLoad(tab.id);
+    _targetTabId = tab.id;
+    return { ok: true, tabId: tab.id, url: tab.url, reused: false, by: 'new' };
+  }
+  return { ok: false, error: 'tab:ensure requires a url or a valid tabId' };
 }
 
 async function cmdTabClose({ tabId } = {}, activeTab) {
@@ -1470,6 +1525,7 @@ function _recorderOnStep(step, sender) {
     id: 'st_' + (_rec.seq++),
     t: Math.max(0, (Date.now() - _rec.startedAt) - (_rec.pausedMs || 0)),
     tabId: tab ? tab.id : (step.tabId ?? null),
+    windowId: tab ? tab.windowId : (step.windowId ?? null),
     url: tab ? tab.url : (step.url ?? null),
     title: tab ? tab.title : (step.title ?? null),
   });
