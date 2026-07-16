@@ -1,0 +1,173 @@
+# Browser Parity Plan
+
+This plan defines how to bring Fauna's in-app browser experience to parity with the browser automation surface exposed by the browser tools in VS Code/Copilot-style environments, while documenting what Fauna already supports today.
+
+## Goal
+
+Make `fauna_browser` feel like the VS Code browser tools from an agent's point of view:
+
+- one clear browser API, regardless of whether the backend is Electron webview, Playwright/Puppeteer, or the real-browser extension;
+- same-turn tool results for navigation, snapshots, clicks, typing, screenshots, console, network, storage, tabs, and verification;
+- predictable tab/session behavior that preserves state and does not accidentally target the wrong browser;
+- generated capability documentation that cannot drift from registered tool schemas.
+
+## Current Browser Surfaces
+
+Fauna currently has three separate browser paths. They overlap, but they are not equivalent.
+
+| Surface | Primary files | What it is good at today | Main limitation |
+| --- | --- | --- | --- |
+| In-app Electron webview panel | [public/js/browser.js](../public/js/browser.js), [public/frames/browser-chrome.html](../public/frames/browser-chrome.html) | User-visible multi-tab browsing per conversation, manual navigation, screenshots, page extraction, basic click/type/eval/wait/tab actions, console capture | Only works inside Electron with `webviewTag`; action coverage is partial and uses injected DOM events |
+| Server browser manager | [server/browser/browser-manager.js](../server/browser/browser-manager.js), [server/bridges/playwright-browse.js](../server/bridges/playwright-browse.js) | Persistent Playwright/Puppeteer browser, stealth launch, `/api/browse`, diagnostics, tabs, extract, screenshot, click, type, eval | Does not expose the full VS Code browser tool family; `evaluate`/`eval`, `scroll`, and `wait` naming are inconsistent |
+| Real-browser extension bridge | [browser-extension/background.js](../browser-extension/background.js), [browser-extension/content.js](../browser-extension/content.js), [server/prompts/browser-context.js](../server/prompts/browser-context.js) | Controls existing Chrome/Edge tabs, logged-in sessions, trusted CDP input, clipboard, downloads, tab groups, full screenshots, recordings | Separate `browser-ext-action` path; not the same API as `fauna_browser` |
+
+## Target Capability Contract
+
+The target contract should be a Fauna-owned browser capability layer, not three unrelated APIs. The public model-facing tool should accept stable action names and route each action to the best available backend.
+
+Canonical action groups:
+
+| Group | Canonical actions | VS Code-style equivalent | Current Fauna status |
+| --- | --- | --- | --- |
+| Lifecycle | `status`, `check`, `diagnostics` | `browser_status`, tool availability | Partial: `/api/browse/status`, `/api/browse/diagnostics`, extension status |
+| Navigation | `navigate`, `back`, `forward`, `reload`, `wait-for-navigation` | `browser_navigate`, `browser_navigate_back`, `browser_navigate_forward`, `browser_reload` | Partial: webview has back/forward/refresh UI; manager lacks action branches for back/forward/reload |
+| Content | `snapshot`, `extract`, `accessibility-snapshot` | `browser_snapshot`, page content tools | Partial: text extraction exists; accessibility snapshot is missing in `fauna_browser` |
+| Screenshots | `screenshot`, `screenshot-full`, `pdf-save` | `browser_take_screenshot`, `browser_pdf_save` | Partial: webview screenshot and extension full snapshot exist; manager full-page/PDF missing |
+| Interaction | `click`, `type`, `press-key`, `hover`, `drag`, `select`, `check`, `uncheck`, `file-upload`, `mouse-*` | `browser_click`, `browser_type`, `browser_press_key`, `browser_hover`, `browser_drag`, `browser_select_option`, etc. | Partial: click/type/eval in webview and manager; richer interactions mostly extension/MCP only |
+| Wait and verify | `wait-for`, `verify-text`, `verify-element`, `verify-value`, `verify-list` | `browser_wait_for`, `browser_verify_*` | Missing from `fauna_browser` |
+| JavaScript | `evaluate` with `eval` alias | `browser_evaluate`, `browser_eval` | Partial: implementation uses `eval`; schemas advertise `evaluate` |
+| Console | `console-messages`, `console-clear` | `browser_console_messages`, `browser_console_clear` | Partial: webview console capture; manager stores logs but no canonical action branch |
+| Network | `network-requests`, `network-clear`, `route`, `unroute`, `route-list` | `browser_network_requests`, route tools | Mostly missing from `fauna_browser`; extension/MCP has stronger coverage |
+| Cookies/storage | `cookie-*`, `localstorage-*`, `sessionstorage-*`, `storage-state` | browser cookie/storage tools | Missing from `fauna_browser` |
+| Tabs | `tab-list`, `tab-new`, `tab-switch`, `tab-close`, `tab-ensure`, `tab-group`, `tab-ungroup` | tab tools plus extension tab groups | Partial: webview/manager have list/new/switch/close; extension has ensure/grouping |
+| Browser state | `get-storage`, `get-security`, `get-assets`, `get-forms`, `generate-locator` | inspection helpers | Mostly missing or extension-only |
+| Recorder/debug | tracing, video, action recording, replay | Playwright tracing/video plus Fauna recordings | Partial: Fauna has workflow recordings, not browser trace/video parity |
+
+## Product Decisions
+
+1. Keep `fauna_browser` as the primary model-facing tool.
+2. Treat `browser-action` fenced blocks as a compatibility transport only.
+3. Keep `browser-ext-action` for explicit real-browser control, but let the capability layer reuse the extension backend when the user asks for their real tabs or when trusted input is required.
+4. Do not make `/api/browse` a public scripting surface for agents. It remains internal plumbing behind the native tool.
+5. Use one canonical action vocabulary and support aliases only at the boundary.
+
+## Architecture Plan
+
+### Phase 1: Normalize Schemas And Docs
+
+- Create a single browser action registry, for example `server/browser/browser-actions.js`, with action names, aliases, JSON schema, backend support, permission level, and result shape.
+- Generate these outputs from that registry:
+  - `fauna_browser` function schema in [self-tools.js](../self-tools.js);
+  - browser prompt context in [server/prompts/browser-context.js](../server/prompts/browser-context.js);
+  - renderer supported-action sets in [public/js/browser.js](../public/js/browser.js);
+  - user docs in README or a generated `docs/browser-capabilities.md`.
+- Fix naming drift immediately:
+  - accept `evaluate` and `eval` everywhere;
+  - accept `waitMs`, `ms`, and `timeoutMs` at the boundary, normalize internally;
+  - use `tab-list`/`tab-new` canonical names with aliases for existing `list-tabs`/`new-tab`.
+
+### Phase 2: Add A Backend Router
+
+Create a browser backend router that receives canonical actions and chooses a backend:
+
+| Request condition | Preferred backend | Reason |
+| --- | --- | --- |
+| User-visible in-app browsing | Electron webview | Keeps the page visible in Fauna |
+| Logged-in real tabs, existing tab references, trusted input, clipboard, downloads, tab groups | Extension bridge | Shares the user's real browser session |
+| Accessibility snapshots, verification, network routing, storage state, tracing/video | Playwright/Puppeteer manager or Playwright MCP-compatible backend | Matches VS Code-style tool semantics |
+| Simple read-only URL content | Fetch/headless HTTP before browser | Lower risk and lower overhead |
+
+The router should return a consistent result envelope:
+
+```json
+{
+  "ok": true,
+  "action": "snapshot",
+  "backend": "webview|manager|extension|playwright-mcp",
+  "tabId": "...",
+  "url": "...",
+  "title": "...",
+  "content": [],
+  "text": "...",
+  "image": { "mime": "image/png", "base64": "..." },
+  "logs": [],
+  "diagnostics": {}
+}
+```
+
+### Phase 3: Fill High-Value Parity Gaps
+
+Implement these first because they change day-to-day reliability most:
+
+1. `evaluate` alias and `scroll`/`wait` support in [server/browser/browser-manager.js](../server/browser/browser-manager.js).
+2. `back`, `forward`, `reload`, and `wait-for-navigation` in the manager and webview executor.
+3. `accessibility-snapshot` using Playwright's accessibility snapshot or a DOM-derived fallback.
+4. `console-messages`, `console-clear`, `network-requests`, and `network-clear` action branches that expose the logs already captured by the manager.
+5. `hover`, `select`, `press-key`, `check`, `uncheck`, and coordinate mouse actions.
+6. `verify-text`, `verify-element`, and `verify-value` for agentic web app validation.
+7. `cookie-*`, `localstorage-*`, `sessionstorage-*`, and `storage-state` for reproducible login/session debugging.
+
+### Phase 4: Deep Parity Features
+
+Add the features that make Fauna comparable to the full VS Code/Playwright browser tool family:
+
+- full-page screenshot and PDF save;
+- file upload and dialog handling;
+- locator generation;
+- network route mocking and route listing;
+- trace and video capture;
+- security snapshot, assets listing, forms listing;
+- tab grouping and `tab-ensure` outside the extension path;
+- browser state import/export between manager and extension where possible.
+
+### Phase 5: UX Parity
+
+- Add a Browser Diagnostics panel that shows active backend, active tab, URL, console errors, network failures, storage profile, and last action.
+- Show when an action is routed to real Chrome/Edge vs the in-app webview.
+- Show a clear warning when the app is opened outside Electron and `<webview>` is unavailable.
+- Add a compact capability browser in Settings so users can see which browser backends are installed and which actions are enabled.
+
+## Test Plan
+
+Add focused tests instead of one huge browser suite:
+
+1. Registry tests: every action has schema, prompt text, aliases, result contract, and at least one backend.
+2. Schema drift test: generated `fauna_browser` tool schema and prompt docs match the registry.
+3. Manager unit tests with mocked pages for action normalization, tab routing, console/network log output, and storage actions.
+4. Renderer tests for legacy `browser-action` parsing, duplicate suppression, action alias normalization, and no-Electron fallback.
+5. Extension bridge tests for real-tab targeting, trusted input routing, downloads, tab groups, and `tab-ensure` reuse.
+6. Smoke tests against a local fixture page covering navigate, snapshot, click, type, select, key, wait, verify, console, network, screenshot, storage, and tabs.
+
+Suggested smoke fixture pages:
+
+- static page with links/buttons/forms;
+- SPA route-change page;
+- console/network error page;
+- storage/cookie page;
+- file upload/dialog page.
+
+## Documentation Deliverables
+
+- `docs/browser-capabilities.md`: generated user-facing capability catalog.
+- `docs/browser-backends.md`: when to use webview, manager, extension, and Playwright MCP.
+- `docs/browser-action-contract.md`: canonical action schemas and result envelopes.
+- README browser section update after the generated docs exist.
+- Agent prompt context generated from the same registry rather than manually maintained strings.
+
+## Acceptance Criteria
+
+- `fauna_browser` supports every action documented in its own schema, or returns a structured `unsupported` result naming the missing backend.
+- A VS Code-style task using navigation, snapshot, click, type, verify, console, network, storage, and screenshot can run in one Fauna turn without fenced-block round trips.
+- The same action names work through native tool calls and legacy `browser-action` blocks.
+- Existing real-browser extension workflows continue to work, including explicit tab targeting, trusted clipboard/input, downloads, and recordings.
+- Browser capability docs are generated or checked in CI so prompt docs cannot claim unsupported actions.
+- A local fixture smoke test proves parity on macOS in Electron and in server-only mode.
+
+## Immediate Next Patch
+
+The smallest useful implementation patch is:
+
+1. Add `evaluate`, `scroll`, `wait`, `back`, `forward`, and `reload` branches to [server/browser/browser-manager.js](../server/browser/browser-manager.js).
+2. Normalize these aliases in [public/js/browser.js](../public/js/browser.js): `evaluate -> eval`, `press-key -> key/keyboard`, `tab-list -> list-tabs`, `tab-new -> new-tab`, `tab-switch -> switch-tab`, `tab-close -> close-tab`.
+3. Update [server/prompts/browser-context.js](../server/prompts/browser-context.js) so the documented actions exactly match the implementation.
+4. Add a focused manager test with a mocked page that fails if any advertised action is missing.
