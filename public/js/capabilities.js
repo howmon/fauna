@@ -294,6 +294,7 @@ function getCapabilitiesContext() {
     '',
     '## Interactive Browser Panel (IMPORTANT for registrations, logins, forms, blocked sites)',
     '- The UI has a live browser panel (right side pane) where users can see and interact with real web pages.',
+    '- **Routing:** When Playwright MCP is enabled (it is in this session when `playwrightMCPEnabled` is true), `browser-action` blocks route to Playwright first, not the internal panel. When Playwright is disabled or fails, the internal webview panel is used. The feed message will tell you which backend actually ran ("via Playwright MCP" vs "from browser panel").',
     '- Use `browser-action` fenced blocks to control it. Blocks auto-execute sequentially.',
     '- Syntax: ```browser-action',
     '  {"action":"navigate","url":"https://example.com"}',

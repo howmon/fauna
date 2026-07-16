@@ -1342,9 +1342,11 @@ async function _runBrowserActionSequence(widgets, convId, initialBrowserTabIds) 
               }
             }
 
+            var navSrc  = navExtract && navExtract._browserActionSource;
+            var navFrom = navSrc === 'playwright' ? 'Playwright MCP' : navSrc === 'extension' ? 'real browser tab' : 'browser panel';
             var navFeed = (navExtract.text
-              ? 'Navigated and extracted page from browser panel:\n\n**Title:** ' + navExtract.title + '\n**URL:** ' + navExtract.url + '\n\n' + navExtract.text
-              : 'Navigated to page in browser panel (no text content):\n**Title:** ' + navExtract.title + '\n**URL:** ' + navExtract.url);
+              ? 'Navigated and extracted page via ' + navFrom + ':\n\n**Title:** ' + navExtract.title + '\n**URL:** ' + navExtract.url + '\n\n' + navExtract.text
+              : 'Navigated to page via ' + navFrom + ' (no text content):\n**Title:** ' + navExtract.title + '\n**URL:** ' + navExtract.url);
             // For localhost URLs, wait for console errors/warnings to accumulate then include them
             var navUrl = (w.action.url || '').toLowerCase();
             if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(navUrl)) {
@@ -1392,8 +1394,13 @@ async function _runBrowserActionSequence(widgets, convId, initialBrowserTabIds) 
           }
         }
         var fromExt = result && result._browserActionSource === 'extension';
-        var feedPrefix = fromExt ? 'Extracted page from real browser tab:' : 'Extracted page from browser panel:';
-        var emptyPrefix = fromExt ? 'Page loaded in real browser tab (no text content):' : 'Page loaded in browser panel (no text content):';
+        var fromPw  = result && result._browserActionSource === 'playwright';
+        var feedPrefix  = fromExt ? 'Extracted page from real browser tab:'
+                        : fromPw  ? 'Extracted page via Playwright MCP:'
+                        :           'Extracted page from browser panel:';
+        var emptyPrefix = fromExt ? 'Page loaded in real browser tab (no text content):'
+                        : fromPw  ? 'Page loaded via Playwright MCP (no text content):'
+                        :           'Page loaded in browser panel (no text content):';
         var feedContent = (result.text
           ? feedPrefix + '\n\n**Title:** ' + result.title + '\n**URL:** ' + result.url + '\n\n' + result.text
           : emptyPrefix + '\n**Title:** ' + result.title + '\n**URL:** ' + result.url)
@@ -1401,7 +1408,7 @@ async function _runBrowserActionSequence(widgets, convId, initialBrowserTabIds) 
         await browserFeedAI(feedContent, convId);
       }
       if (w.action.action === 'extract-forms') {
-        var formsFeed = 'Form fields extracted from ' + ((result && result._browserActionSource === 'extension') ? 'real browser tab' : 'browser panel') + ' (' + (((result && result.fields) || []).length) + ' fields):\n\n```json\n' +
+        var formsFeed = 'Form fields extracted from ' + ((result && result._browserActionSource === 'extension') ? 'real browser tab' : (result && result._browserActionSource === 'playwright') ? 'Playwright MCP' : 'browser panel') + ' (' + (((result && result.fields) || []).length) + ' fields):\n\n```json\n' +
           JSON.stringify(result.forms || result, null, 2).slice(0, 10000) + '\n```' +
           '\n\nUse the selector values above for the next browser-action blocks.';
         await browserFeedAI(formsFeed, convId);
@@ -1414,7 +1421,7 @@ async function _runBrowserActionSequence(widgets, convId, initialBrowserTabIds) 
       }
       // If it was an eval, feed result back too
       if (w.action.action === 'eval') {
-        var evalFeed = 'Eval result from browser panel:\n```\n' + (result.result || '(empty)').slice(0, 8000) + '\n```';
+        var evalFeed = 'Eval result from ' + ((result && result._browserActionSource === 'playwright') ? 'Playwright MCP' : 'browser panel') + ':\n```\n' + (result.result || '(empty)').slice(0, 8000) + '\n```';
         await browserFeedAI(evalFeed, convId);
       }
       // If it was a click or wait and this is the last action (or no following extract),
@@ -1424,9 +1431,11 @@ async function _runBrowserActionSequence(widgets, convId, initialBrowserTabIds) 
         if (!hasLaterExtract) {
           try {
             var clickExtract = await executeBrowserAction({ action: 'extract' });
+            var clickSrc  = clickExtract && clickExtract._browserActionSource;
+            var clickFrom = clickSrc === 'playwright' ? 'Playwright MCP' : 'browser panel';
             var clickFeed = (clickExtract.text
-              ? 'Page after ' + w.action.action + ' in browser panel:\n\n**Title:** ' + clickExtract.title + '\n**URL:** ' + clickExtract.url + '\n\n' + clickExtract.text
-              : 'Page after ' + w.action.action + ' in browser panel (no text content):\n**URL:** ' + clickExtract.url);
+              ? 'Page after ' + w.action.action + ' in ' + clickFrom + ':\n\n**Title:** ' + clickExtract.title + '\n**URL:** ' + clickExtract.url + '\n\n' + clickExtract.text
+              : 'Page after ' + w.action.action + ' in ' + clickFrom + ' (no text content):\n**URL:** ' + clickExtract.url);
             await browserFeedAI(clickFeed, convId);
           } catch(_) {}
         }
