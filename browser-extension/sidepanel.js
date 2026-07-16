@@ -67,6 +67,7 @@ const EVENT_ICONS = {
   'user:selection':   '[ ]',
   'user:send-page':   '→',
   'user:snapshot':    '□',
+  'agent:activity':   '◆',
 };
 
 function addLogEntry(eventType, data) {

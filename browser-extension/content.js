@@ -15,6 +15,17 @@
   if (window.__faunaContentInjected) return;
   window.__faunaContentInjected = true;
 
+  // ── Custom tool registry ────────────────────────────────────────────────
+  // Pages can call window.__faunaRegisterTool__(name, schema, fn) to expose
+  // domain-specific tools (e.g. add_to_cart, search_kb) that the Fauna agent
+  // can discover via 'tools:list' and invoke via 'tools:call', blending DOM
+  // automation with direct API calls in one agentic loop.
+  window.__faunaTools__ = window.__faunaTools__ || {};
+  window.__faunaRegisterTool__ = function (name, schema, fn) {
+    if (!name || typeof fn !== 'function') return;
+    window.__faunaTools__[name] = { schema: schema || {}, fn: fn };
+  };
+
   // ── Message dispatcher ──────────────────────────────────────────────────
 
   chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
@@ -52,6 +63,11 @@
           case 'picker:stop':   result = stopPicker();  break;
           case 'recorder:on':   result = recorderStart(); break;
           case 'recorder:off':  result = recorderStop();  break;
+          // Dehydrated interactive DOM — text-only inventory, no screenshot needed
+          case 'extract-interactive': result = doExtractInteractive(); break;
+          // Page-side custom tools registered by the host page
+          case 'tools:list':   result = doListTools(); break;
+          case 'tools:call':   result = await doCallTool(msg); break;
           default:              result = { error: 'Unknown action: ' + msg.action };
         }
         safeReply(result);
@@ -917,6 +933,105 @@
     _pickerMoveFn = _pickerClickFn = _pickerKeyFn = null;
     document.documentElement.style.cursor = '';
     return { ok: true };
+  }
+
+  // ── Dehydrated interactive DOM ────────────────────────────────────────────
+  // Returns a compact text inventory of all interactable elements suitable for
+  // the LLM to reason about without requiring a screenshot. Works on pages
+  // where CDP attach fails (chrome:// URLs, strict CSP). Inspired by
+  // page-agent's "high-intensity dehydration" approach.
+
+  function doExtractInteractive() {
+    const url   = location.href;
+    const title = document.title;
+    const items = [];
+
+    // Inputs and textareas
+    document.querySelectorAll(
+      'input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]),textarea'
+    ).forEach(function (el) {
+      if (!el.offsetParent && el.type !== 'checkbox' && el.type !== 'radio') return;
+      const type  = el.tagName === 'TEXTAREA' ? 'textarea' : (el.type || 'text');
+      const label = resolveLabel(el);
+      let val;
+      if (el.type === 'password') {
+        val = el.value ? '(filled)' : '(empty)';
+      } else if (el.value) {
+        val = JSON.stringify(el.value.slice(0, 80));
+      } else if (el.placeholder) {
+        val = 'placeholder=' + JSON.stringify(el.placeholder.slice(0, 40));
+      } else {
+        val = '(empty)';
+      }
+      items.push('[INPUT ' + type + (label ? ' ' + JSON.stringify(label) : '') + '] ' + val +
+        ' -> ' + uniqueSelector(el));
+    });
+
+    // Selects
+    document.querySelectorAll('select').forEach(function (el) {
+      if (!el.offsetParent) return;
+      const label  = resolveLabel(el);
+      const selOpt = el.options[el.selectedIndex];
+      const cur    = selOpt ? selOpt.text : '(none)';
+      const opts   = Array.from(el.options).slice(0, 8).map(function (o) { return o.text; }).join(', ');
+      const more   = el.options.length > 8 ? ' (+' + (el.options.length - 8) + ' more)' : '';
+      items.push('[SELECT ' + (label ? JSON.stringify(label) + ' ' : '') + '"' + cur + '"] [' +
+        opts + more + '] -> ' + uniqueSelector(el));
+    });
+
+    // Buttons (de-duplicate by visible text)
+    var seenBtns = new Set();
+    document.querySelectorAll(
+      'button,[role=button],input[type=submit],input[type=button],input[type=reset]'
+    ).forEach(function (el) {
+      if (!el.offsetParent) return;
+      const text = (el.innerText || el.value || el.getAttribute('aria-label') || '')
+        .trim().replace(/\s+/g, ' ').slice(0, 80);
+      if (!text || seenBtns.has(text)) return;
+      seenBtns.add(text);
+      items.push('[BUTTON] "' + text + '" -> ' + uniqueSelector(el));
+    });
+
+    // Links (top 30 visible)
+    var linkCount = 0;
+    document.querySelectorAll('a[href]').forEach(function (el) {
+      if (linkCount >= 30 || !el.offsetParent) return;
+      if (!el.href || el.href.startsWith('javascript') || el.href.startsWith('data:')) return;
+      const text = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+      if (!text) return;
+      linkCount++;
+      const href = el.href.length > 120 ? el.href.slice(0, 120) + '...' : el.href;
+      items.push('[LINK] "' + text + '" -> ' + href);
+    });
+
+    return { url, title, interactive: items.join('\n'), itemCount: items.length, method: 'text' };
+  }
+
+  // ── Page-side custom tools ────────────────────────────────────────────────
+
+  function doListTools() {
+    const tools = window.__faunaTools__ || {};
+    const list = Object.keys(tools).map(function (name) {
+      return { name: name, schema: tools[name].schema || {} };
+    });
+    return { tools: list, count: list.length };
+  }
+
+  async function doCallTool({ name, args = {} } = {}) {
+    const tools = window.__faunaTools__ || {};
+    const tool  = tools[name];
+    if (!tool) return { ok: false, error: 'Tool not registered: ' + name };
+    try {
+      const result = await tool.fn(args);
+      return {
+        ok: true,
+        result: result === undefined
+          ? '(undefined)'
+          : typeof result === 'string' ? result : JSON.stringify(result)
+      };
+    } catch (e) {
+      return { ok: false, error: e.message || String(e) };
+    }
   }
 
 })();

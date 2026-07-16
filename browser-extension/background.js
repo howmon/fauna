@@ -35,6 +35,12 @@ let mcpPingTimer      = null;
 let mcpConnected      = false;
 let contextMenusReady = Promise.resolve();
 
+// ── Task scope ──────────────────────────────────────────────────────────────────────
+// Set by task:begin; cleared by task:end. Controls which actions are permitted
+// and which tabs are visible for the duration of a task.
+let _taskDisabledActions = new Set();  // actions to block, e.g. Set(['eval','snapshot'])
+let _taskScopedTabIds    = null;       // null = all tabs; Set<number> = restrict to these
+
 // ── WebSocket lifecycle ───────────────────────────────────────────────────
 
 function connect() {
@@ -292,6 +298,11 @@ async function dispatchCommand(msg) {
     // cannot rely on {active,currentWindow} to reflect the intended tab).
     const tab = await resolveOperatingTab(targetTabId);
 
+    // Reject actions disabled for the current task scope (e.g. 'eval', 'snapshot')
+    if (_taskDisabledActions.size > 0 && _taskDisabledActions.has(action)) {
+      return { ok: false, error: 'Action "' + action + '" is disabled for this task.' };
+    }
+
     switch (action) {
       case 'tab:list':     return await cmdTabList();
       case 'tab:new':      return await cmdTabNew(params);
@@ -343,6 +354,14 @@ async function dispatchCommand(msg) {
       case 'record:pause':  return await cmdRecordPause(params);
       case 'record:resume': return await cmdRecordResume(params);
       case 'record:status': return cmdRecordStatus();
+      // Task scope — declare disabled actions + tab restrictions for a task run
+      case 'task:begin':            return cmdTaskBegin(params);
+      case 'task:end':              return cmdTaskEnd();
+      // Text-mode dehydrated DOM (no screenshot required)
+      case 'extract-interactive':   return await cmdExtractInteractive(params, tab);
+      // Page-side custom tools registered by the host page
+      case 'custom-tools:list':     return await cmdCustomToolsList(params, tab);
+      case 'custom-tools:call':     return await cmdCustomToolsCall(params, tab);
       default:
         return { ok: false, error: 'Unknown action: ' + action };
     }
@@ -378,10 +397,13 @@ async function resolveOperatingTab(explicitId) {
 
 async function cmdTabList() {
   const tabs = await chrome.tabs.query({});
-  return {
-    ok: true,
-    tabs: tabs.map(t => ({ id: t.id, index: t.index, url: t.url, title: t.title, active: t.active, windowId: t.windowId }))
-  };
+  let list = tabs.map(t => ({ id: t.id, index: t.index, url: t.url, title: t.title, active: t.active, windowId: t.windowId }));
+  // Respect task scope: only expose tabs that are in scope so the LLM cannot
+  // inadvertently read or switch to unrelated tabs.
+  if (_taskScopedTabIds) {
+    list = list.filter(t => _taskScopedTabIds.has(t.id));
+  }
+  return { ok: true, tabs: list };
 }
 
 async function cmdTabNew({ url } = {}) {
@@ -400,6 +422,10 @@ async function cmdTabSwitch({ tabId, index } = {}) {
     tab = tabs[index] || null;
   }
   if (!tab) return { ok: false, error: 'Tab not found' };
+  // Enforce task scope: block switching to out-of-scope tabs.
+  if (_taskScopedTabIds && !_taskScopedTabIds.has(tab.id)) {
+    return { ok: false, error: 'Tab ' + tab.id + ' is outside the current task scope.' };
+  }
   await chrome.tabs.update(tab.id, { active: true });
   await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
   _targetTabId = tab.id; // make the switched-to tab sticky for follow-up commands
@@ -476,6 +502,7 @@ async function cmdTabInfo(tab) {
 
 async function cmdNavigate({ url } = {}, tab) {
   if (!url) return { ok: false, error: 'url required' };
+  pushActivity('navigate', { to: url, tabId: tab && tab.id });
   if (!tab) {
     const t = await chrome.tabs.create({ url, active: true });
     await waitForTabLoad(t.id);
@@ -580,14 +607,42 @@ async function msgTab(tab, msg) {
 
 // ── Extract ───────────────────────────────────────────────────────────────
 
-async function cmdExtract({ maxChars = 12000 } = {}, tab) {
+// Apply regex-based PII redaction to extracted page text before it reaches the
+// LLM. Enabled per-command via maskPii:true. Covers emails, US phone numbers,
+// credit/debit card numbers, and US Social Security Numbers.
+function _applyPiiMask(text) {
+  if (!text) return text;
+  // Email: first char + *** + @domain
+  text = text.replace(
+    /\b([a-zA-Z0-9._%+\-])[^\s@]*@([a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})\b/g,
+    '$1***@$2'
+  );
+  // US phone: (555) 123-4567 / 555-123-4567 / +1 555 123 4567
+  text = text.replace(
+    /\b(\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]\d{4}\b/g,
+    '(***) ***-****'
+  );
+  // Credit/debit card: 16-19 digit groups with optional separators
+  text = text.replace(
+    /\b(\d{4})[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?(\d{2,4})\b/g,
+    '$1-****-****-$2'
+  );
+  // SSN: 123-45-6789 (keep last 4)
+  text = text.replace(/\b\d{3}-\d{2}-(\d{4})\b/g, '***-**-$1');
+  return text;
+}
+
+async function cmdExtract({ maxChars = 12000, maskPii = false } = {}, tab) {
   if (!tab) return { ok: false, error: 'No active tab' };
   try {
     var data = await msgTab(tab, { action: 'extract', maxChars });
+    if (maskPii && data && data.text) data = { ...data, text: _applyPiiMask(data.text) };
     return { ok: true, ...data };
   } catch (err1) {
     try {
-      return await _extractViaDebugger(tab, maxChars);
+      var debugData = await _extractViaDebugger(tab, maxChars);
+      if (maskPii && debugData && debugData.text) debugData = { ...debugData, text: _applyPiiMask(debugData.text) };
+      return debugData;
     } catch (err2) {
       if (_isHostAccessError(err1) || _isHostAccessError(err2)) {
         return { ok: false, error: 'Cannot access this page. Grant site access to the extension for this site and try again.' };
@@ -654,6 +709,69 @@ async function cmdExtractAssets({} = {}, tab) {
     }
     throw err;
   }
+}
+
+// Text-mode dehydrated DOM — relays to content.js doExtractInteractive().
+// Returns a compact text inventory of interactable elements without requiring
+// a screenshot. Works on pages where CDP attach fails (chrome:// URLs, CSP).
+async function cmdExtractInteractive(params = {}, tab) {
+  if (!tab) return { ok: false, error: 'No active tab' };
+  try {
+    const data = await msgTab(tab, { action: 'extract-interactive' });
+    return { ok: true, ...data };
+  } catch (err) {
+    if (_isHostAccessError(err)) {
+      return { ok: false, error: 'Cannot access this page. Grant site access to the extension for this site and try again.' };
+    }
+    return { ok: false, error: err.message || 'Interactive extraction failed' };
+  }
+}
+
+// List custom tools registered on the page via window.__faunaRegisterTool__().
+async function cmdCustomToolsList(params = {}, tab) {
+  if (!tab) return { ok: false, error: 'No active tab' };
+  try {
+    const data = await msgTab(tab, { action: 'tools:list' });
+    return { ok: true, ...data };
+  } catch (err) {
+    return { ok: false, error: err.message || 'tools:list failed', tools: [] };
+  }
+}
+
+// Invoke a named custom tool on the page. params: { name, args? }
+async function cmdCustomToolsCall({ name, args = {} } = {}, tab) {
+  if (!tab) return { ok: false, error: 'No active tab' };
+  if (!name) return { ok: false, error: 'name required' };
+  try {
+    const data = await msgTab(tab, { action: 'tools:call', name, args });
+    return { ok: true, ...data };
+  } catch (err) {
+    return { ok: false, error: err.message || 'tools:call failed' };
+  }
+}
+
+// ── Task scope commands ───────────────────────────────────────────────────
+// task:begin declares per-task constraints before the agent starts acting:
+//   - disableActions: string[]  — block these action names entirely
+//   - scopedTabIds: number[]    — only expose / allow switching to these tabs
+// task:end clears all constraints.
+
+function cmdTaskBegin({ disableActions = [], scopedTabIds = null } = {}) {
+  _taskDisabledActions = new Set(Array.isArray(disableActions) ? disableActions : []);
+  _taskScopedTabIds    = Array.isArray(scopedTabIds)
+    ? new Set(scopedTabIds.map(Number))
+    : null;
+  return {
+    ok: true,
+    disabledActions: [..._taskDisabledActions],
+    scopedTabIds: scopedTabIds || null
+  };
+}
+
+function cmdTaskEnd() {
+  _taskDisabledActions = new Set();
+  _taskScopedTabIds    = null;
+  return { ok: true };
 }
 
 // ── DevTools helpers — all use chrome.debugger CDP ────────────────────────
@@ -977,12 +1095,14 @@ async function cmdFill({ fields = [], selector, value } = {}, tab) {
   // Support single-field shorthand { selector, value } or batch { fields: [...] }
   const batch = fields.length ? fields : (selector ? [{ selector, value }] : []);
   if (!batch.length) return { ok: false, error: 'fields or selector+value required' };
+  pushActivity('fill', { fieldCount: batch.length, tabId: tab.id, url: tab.url });
   const result = await msgTab(tab, { action: 'fill', fields: batch });
   return { ok: true, ...result };
 }
 
 async function cmdClick({ selector, text, x, y } = {}, tab) {
   if (!tab) return { ok: false, error: 'No active tab' };
+  pushActivity('click', { selector: selector || text, tabId: tab.id, url: tab.url });
   const result = await msgTab(tab, { action: 'click', selector, text, x, y });
   return { ok: true, ...result };
 }
@@ -1590,6 +1710,7 @@ async function captureViaDebugger(tabId, timeoutMs = 3000, viewport = null) {
 
 async function cmdSnapshot(params = {}, tab) {
   if (!tab) return { ok: false, error: 'No active tab' };
+  pushActivity('snapshot', { tabId: tab.id, url: tab.url });
   const errors = [];
   const viewport = (params && (params.width || params.height))
     ? { width: params.width, height: params.height, deviceScaleFactor: params.deviceScaleFactor, mobile: params.mobile }
@@ -1839,6 +1960,14 @@ function pushEvent(eventType, data) {
   send({ type: 'event', event: eventType, data });
   // Broadcast a LIGHTWEIGHT copy to the sidebar — never the base64/HTML blobs.
   chrome.runtime.sendMessage({ type: 'fauna:event', event: eventType, data: _liteForSidebar(data) }).catch(() => {});
+}
+
+// Emit a lightweight activity event for real-time progress visibility in the
+// sidepanel and on the Fauna server. Mirrors page-agent's onActivity callback.
+// Called at the start of key commands so the user sees what the agent is doing
+// (e.g. "navigate", "click", "extract") as it happens.
+function pushActivity(action, detail) {
+  pushEvent('agent:activity', Object.assign({ action: action, ts: Date.now() }, detail || {}));
 }
 
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {

@@ -181,7 +181,7 @@ async function _autonomyLoop(task, state) {
     toolGuidance.push('You CANNOT use shell commands for this task — shell access is disabled.');
   }
   if (perms.browser) {
-    toolGuidance.push('You CAN use ```browser-ext-action blocks to interact with web pages via the browser extension. ALWAYS use ```browser-ext-action (not ```browser-action). Prefer existing/shared tabs first: start with tab:list or extract when the user refers to an open page. Open a new tab only when no relevant shared tab exists or the task gives a new URL. Put ONE action per block. After navigate, use ```browser-ext-action\n{"action":"wait","ms":2000}\n``` before taking a snapshot.');
+    toolGuidance.push('You CAN use ```browser-ext-action blocks to interact with web pages via the browser extension. ALWAYS use ```browser-ext-action (not ```browser-action). Prefer existing/shared tabs first: start with tab:list or extract when the user refers to an open page. Open a new tab only when no relevant shared tab exists or the task gives a new URL. Put ONE action per block. After navigate, use ```browser-ext-action\n{"action":"wait","ms":2000}\n``` before taking a snapshot.\n\nAdditional browser actions available:\n- {"action":"extract-interactive"} — faster text-only inventory of all interactable elements (inputs/buttons/links/selects) without a screenshot. Use instead of snapshot when you only need to find/interact with UI elements.\n- {"action":"extract","maskPii":true} — like extract but redacts emails, phone numbers, card numbers, and SSNs before the content reaches the model. Use when extracting pages with user PII.\n- {"action":"custom-tools:list"} — discover tools registered by the current page (e.g. add_to_cart, search_kb). Check this on unfamiliar SaaS pages.\n- {"action":"custom-tools:call","name":"<tool>","args":{...}} — invoke a page-registered tool directly instead of clicking through the UI.\n- {"action":"task:begin","params":{"disableActions":["eval"],"scopedTabIds":[<id>]}} — declare task scope: block risky actions and limit tab visibility. Call at the start of sensitive tasks.\n- {"action":"task:end"} — clear task scope when done.');
   } else {
     toolGuidance.push('You CANNOT use browser actions — browser access is disabled for this task.');
   }
@@ -947,6 +947,23 @@ function _summarizeActionResult(action, result) {
       const txt = typeof forms === 'string' ? forms : JSON.stringify(forms, null, 0);
       return 'extract-forms → ok\n' + txt.slice(0, 3000);
     }
+    case 'extract-interactive': {
+      const inv = result.interactive || result.content || JSON.stringify(result).slice(0, 3000);
+      return 'extract-interactive → ok (' + (result.itemCount || 0) + ' elements)\n' + String(inv).slice(0, 3000);
+    }
+    case 'custom-tools:list': {
+      const tools = result.tools || [];
+      return 'custom-tools:list → ok (' + tools.length + ' tools)\n' +
+        tools.map(t => '- ' + t.name + (t.schema && t.schema.description ? ': ' + t.schema.description : '')).join('\n').slice(0, 1000);
+    }
+    case 'custom-tools:call': {
+      const out = result.result !== undefined ? String(result.result) : JSON.stringify(result);
+      return 'custom-tools:call → ok\n' + out.slice(0, 2000);
+    }
+    case 'task:begin':
+      return 'task:begin → ok (scope set)';
+    case 'task:end':
+      return 'task:end → ok (scope cleared)';
     case 'tab:list': {
       const tabs = result.tabs || [];
       return 'tab:list → ok (' + tabs.length + ' tabs)\n' +
