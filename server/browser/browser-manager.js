@@ -163,8 +163,23 @@ export class FaunaBrowserManager {
     await this.abortable(new Promise(resolve => setTimeout(resolve, ms)), signal);
   }
 
+  normalizeAction(action) {
+    const raw = String(action || 'extract');
+    const aliases = {
+      evaluate: 'eval',
+      'tab-list': 'list-tabs',
+      'tab-new': 'new-tab',
+      'tab-switch': 'switch-tab',
+      'tab-close': 'close-tab',
+      'navigate-back': 'back',
+      'navigate-forward': 'forward',
+      refresh: 'reload',
+    };
+    return aliases[raw] || raw;
+  }
+
   async handleAction({ url, action = 'extract', selector, text, waitFor, maxChars = 12000, tabId = null, index = null, elementIndex = null, signal = null } = {}) {
-    const normalizedAction = String(action || 'extract');
+    const normalizedAction = this.normalizeAction(action);
     this.throwIfAborted(signal);
     if (normalizedAction === 'list-tabs') return { ok: true, tabs: this.listTabs(), activeTabId: this.activeTabId };
     if (normalizedAction === 'switch-tab') return this.switchTab({ tabId, index });
@@ -208,8 +223,28 @@ export class FaunaBrowserManager {
         else await this.abortable(page.fill(selector, text), signal);
         result = { ok: true, url: page.url(), browserState: await this.abortable(this.getBrowserState(page, { maxChars: 4000 }), signal) };
       } else if (normalizedAction === 'eval') {
-        const evalResult = await this.abortable(page.evaluate(text), signal);
+        const evalResult = await this.abortable(page.evaluate(text || ''), signal);
         result = { result: JSON.stringify(evalResult), url: page.url(), browserState: await this.abortable(this.getBrowserState(page, { maxChars: 4000 }), signal) };
+      } else if (normalizedAction === 'wait') {
+        const waitMs = Math.max(0, Math.min(Number(text || waitFor || 1500) || 1500, 60000));
+        await this.delay(waitMs, signal);
+        result = { ok: true, waitedMs: waitMs, url: page.url(), browserState: await this.abortable(this.getBrowserState(page, { maxChars: 4000 }), signal) };
+      } else if (normalizedAction === 'scroll') {
+        const amount = Number(text || 0) || 600;
+        await this.abortable(page.evaluate((dy) => {
+          window.scrollBy({ top: dy, left: 0, behavior: 'instant' });
+          return { x: window.scrollX, y: window.scrollY };
+        }, amount), signal);
+        result = { ok: true, url: page.url(), browserState: await this.abortable(this.getBrowserState(page, { maxChars: 4000 }), signal) };
+      } else if (normalizedAction === 'back') {
+        await this.abortable(page.goBack?.({ waitUntil: 'domcontentloaded', timeout: 15000 }), signal).catch(() => {});
+        result = { ok: true, url: page.url(), browserState: await this.abortable(this.getBrowserState(page, { maxChars: 4000 }), signal) };
+      } else if (normalizedAction === 'forward') {
+        await this.abortable(page.goForward?.({ waitUntil: 'domcontentloaded', timeout: 15000 }), signal).catch(() => {});
+        result = { ok: true, url: page.url(), browserState: await this.abortable(this.getBrowserState(page, { maxChars: 4000 }), signal) };
+      } else if (normalizedAction === 'reload') {
+        await this.abortable(page.reload?.({ waitUntil: 'domcontentloaded', timeout: 15000 }), signal).catch(() => {});
+        result = { ok: true, url: page.url(), browserState: await this.abortable(this.getBrowserState(page, { maxChars: 4000 }), signal) };
       } else {
         throw new Error('unknown browser action: ' + action);
       }

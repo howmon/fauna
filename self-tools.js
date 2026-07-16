@@ -1910,7 +1910,7 @@ export const SELF_TOOL_DEFS = [
         properties: {
           action: {
             type: 'string',
-            description: 'One of: navigate, click, type, extract, evaluate, screenshot, scroll, wait, new-tab, switch-tab, close-tab, list-tabs.',
+            description: 'One of: navigate, back, forward, reload, click, type, extract, evaluate, screenshot, scroll, wait, new-tab, switch-tab, close-tab, list-tabs. Compatibility aliases accepted: eval, tab-new, tab-switch, tab-close, tab-list.',
           },
           url: { type: 'string', description: 'URL for navigate / new-tab.' },
           selector: { type: 'string', description: 'CSS selector for click / type / extract / scroll.' },

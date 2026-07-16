@@ -2436,32 +2436,11 @@ function extractArtifactsFromBuffer(buffer, msgEl, injectCards) {
   }
 }
 
-// Auto-detect artifacts from shell stdout (file listings, JSON output, etc.)
+// Auto-promote only resource-like shell results. Operational command output
+// (lists, search dumps, raw JSON blobs) stays in the conversation stream.
 function detectShellArtifacts(command, stdout, containerEl) {
-  if (!stdout || stdout.trim().length < 100) return;
-  var cmd = command.trim();
-
-  // Only explicit file-listing commands with meaningful output
-  if (/^find\s+\S+.*-(?:type\s+f|name\b)/i.test(cmd) || /^ls\s+-[la]{2,}/i.test(cmd)) {
-    var lines = stdout.trim().split('\n').filter(Boolean);
-    if (lines.length >= 6) {
-      var id = addArtifact({ type: 'files', title: 'Files', content: stdout.trim() });
-      if (id && containerEl) injectArtifactCard(id, containerEl);
-    }
-    return;
-  }
-
-  // JSON: only rich nested objects
-  var trimmed = stdout.trim();
-  if (trimmed.length > 300 && (trimmed.startsWith('{') || trimmed.startsWith('['))) {
-    try {
-      var parsed = JSON.parse(trimmed);
-      var depth = JSON.stringify(parsed).split('{').length - 1 + JSON.stringify(parsed).split('[').length - 1;
-      if (depth >= 4) {
-        var id = addArtifact({ type: 'json', title: 'JSON Output', content: trimmed });
-        if (id && containerEl) injectArtifactCard(id, containerEl);
-      }
-    } catch (_) {}
-  }
+  void command;
+  void stdout;
+  void containerEl;
 }
 

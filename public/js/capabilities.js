@@ -362,7 +362,7 @@ function getCapabilitiesContext() {
     '- Use artifact:files to show a list of file paths (one per line).',
     '- Use artifact:summary for concise executive summaries.',
     '- Screenshots taken with screencapture auto-appear as image artifacts.',
-    '- Shell commands like `find`, `ls`, and JSON/CSV outputs auto-appear as artifacts too.',
+    '- Shell command logs stay in conversation by default; only explicit artifact blocks, screenshots, and concrete created files become artifacts.',
     '',
     '## Suggested Next Steps (MANDATORY)',
     '- ALWAYS end your response with a ```suggestions block when you finish a task, answer a question, or reach a stopping point.',

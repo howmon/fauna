@@ -10,7 +10,7 @@
 export const BROWSER_BUILD_CONTEXT = `
 ## Built-in Browser Panel
 
-You have a built-in browser panel that runs inside the app. Drive it with the native \`fauna_browser\` tool (action: navigate, click, type, extract, evaluate, screenshot, scroll, wait, new-tab, switch-tab, close-tab, list-tabs). The tool returns the result in the same turn so you can chain steps without waiting on the user.
+You have a built-in browser panel that runs inside the app. Drive it with the native \`fauna_browser\` tool (action: navigate, back, forward, reload, click, type, extract, evaluate, screenshot, scroll, wait, new-tab, switch-tab, close-tab, list-tabs). The tool returns the result in the same turn so you can chain steps without waiting on the user. Compatibility aliases are accepted for older flows (\`eval\` for \`evaluate\`, \`tab-new\` for \`new-tab\`, \`tab-switch\` for \`switch-tab\`, \`tab-close\` for \`close-tab\`, \`tab-list\` for \`list-tabs\`).
 
 ### When NOT to use \`fauna_browser\` (read this first)
 \`fauna_browser\` ONLY controls a web webview inside Fauna. It cannot see, click, or interact with anything outside that webview. Do NOT call it for:

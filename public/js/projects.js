@@ -354,7 +354,7 @@ function renderProjectSidebarList() {
         '<span class="proj-folder-analytics">' + getProjectTaskAnalyticsInlineHtml(p.id, { compact: true }) + '</span>' +
         '<span class="proj-folder-actions">' +
           '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();newConversationInProject(\'' + pid + '\', event)" title="New chat in project"><i class="ti ti-edit"></i></button>' +
-          '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();setActiveProject(\'' + pid + '\');openProjectHub()" title="Open hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>' +
+          '<button class="proj-sidebar-hub-btn" onclick="event.stopPropagation();setActiveProject(\'' + pid + '\', { navigate: false });openProjectHub()" title="Open hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>' +
           '<button class="proj-sidebar-del-btn" onclick="event.stopPropagation();_confirmDeleteProjectFromList(\'' + pid + '\')" title="Delete project"><i class="ti ti-trash"></i></button>' +
         '</span>' +
       '</span>' +
@@ -4943,7 +4943,7 @@ async function submitCreateProject() {
     state.projects.push(proj);
     var overlay = document.getElementById('proj-create-overlay');
     if (overlay) overlay.remove();
-    await setActiveProject(proj.id);
+    await setActiveProject(proj.id, { navigate: false });
     renderProjectSidebarList();
     _renderAllProjectsPage();
     openProjectHub(type === 'design' ? 'design' : 'files');

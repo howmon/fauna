@@ -144,6 +144,42 @@ describe('gstack learnings foundation', () => {
     ]);
   });
 
+  it('supports documented browser action aliases without launching Chromium', async () => {
+    const manager = createFaunaBrowserManager();
+    const actions = [];
+    const page = {
+      url: () => 'https://example.test/page',
+      waitForLoadState: async () => {},
+      evaluate: async (code, arg) => {
+        actions.push(['evaluate', typeof code, arg]);
+        return typeof code === 'string' ? 'eval-result' : { x: 0, y: arg };
+      },
+      goBack: async (opts) => actions.push(['back', opts.waitUntil]),
+      goForward: async (opts) => actions.push(['forward', opts.waitUntil]),
+      reload: async (opts) => actions.push(['reload', opts.waitUntil]),
+    };
+    manager.getPage = async () => page;
+    manager.waitThroughChallenge = async () => {};
+    manager.getBrowserState = async () => manager.normalizeBrowserState({ tabId: 1, url: page.url(), interactiveElements: [] });
+    manager.delay = async (ms) => actions.push(['wait', ms]);
+
+    await expect(manager.handleAction({ action: 'evaluate', text: 'document.title' })).resolves.toMatchObject({ result: '"eval-result"' });
+    await expect(manager.handleAction({ action: 'scroll', text: '250' })).resolves.toMatchObject({ ok: true });
+    await expect(manager.handleAction({ action: 'wait', text: '25' })).resolves.toMatchObject({ waitedMs: 25 });
+    await expect(manager.handleAction({ action: 'back' })).resolves.toMatchObject({ ok: true });
+    await expect(manager.handleAction({ action: 'forward' })).resolves.toMatchObject({ ok: true });
+    await expect(manager.handleAction({ action: 'reload' })).resolves.toMatchObject({ ok: true });
+
+    expect(actions).toEqual([
+      ['evaluate', 'string', undefined],
+      ['evaluate', 'function', 250],
+      ['wait', 25],
+      ['back', 'domcontentloaded'],
+      ['forward', 'domcontentloaded'],
+      ['reload', 'domcontentloaded'],
+    ]);
+  });
+
   it('returns capped sanitized browser diagnostics snapshots', () => {
     const manager = createFaunaBrowserManager();
     manager.tabs.set(1, { id: 1, url: 'https://example.test', active: true, updatedAt: 't1' });

@@ -539,9 +539,32 @@ async function wvExec(wv, js, retries) {
   }
 }
 
+function _normalizeBrowserAction(action) {
+  if (!action || typeof action.action !== 'string') return action;
+  var normalized = Object.assign({}, action);
+  var actionMap = {
+    'evaluate': 'eval',
+    'press-key': 'keyboard',
+    'press': 'keyboard',
+    'key': 'keyboard',
+    'tab-list': 'list-tabs',
+    'tab-new': 'new-tab',
+    'tab-switch': 'switch-tab',
+    'tab-close': 'close-tab',
+    'navigate-back': 'back',
+    'navigate-forward': 'forward',
+    'refresh': 'reload'
+  };
+  normalized.action = actionMap[normalized.action] || normalized.action;
+  if (normalized.js && !normalized.text) normalized.text = normalized.js;
+  if (normalized.waitMs != null && normalized.ms == null) normalized.ms = normalized.waitMs;
+  if (normalized.timeoutMs != null && normalized.ms == null) normalized.ms = normalized.timeoutMs;
+  return normalized;
+}
+
 function _mapBrowserActionToExtAction(action) {
   if (!action || typeof action.action !== 'string') return null;
-  var mapped = Object.assign({}, action);
+  var mapped = _normalizeBrowserAction(action);
   var actionMap = {
     'new-tab': 'tab:new',
     'switch-tab': 'tab:switch',
@@ -562,6 +585,21 @@ async function _executeBrowserActionViaPlaywright(action) {
     case 'navigate':
       tool = 'browser_navigate';
       args = { url: action.url };
+      break;
+
+    case 'back':
+      tool = 'browser_navigate_back';
+      args = {};
+      break;
+
+    case 'forward':
+      tool = 'browser_navigate_forward';
+      args = {};
+      break;
+
+    case 'reload':
+      tool = 'browser_reload';
+      args = {};
       break;
 
     case 'click':
@@ -724,6 +762,7 @@ async function _executeBrowserActionViaExtension(action) {
 }
 
 async function executeBrowserAction(action) {
+  action = _normalizeBrowserAction(action);
   // Routing order mirrors VS Code/Copilot's lower-risk web flow:
   // 1. Built-in browser webview for normal browser-action blocks.
   // 2. Playwright MCP only when explicitly enabled, or as a final fallback for
@@ -781,6 +820,18 @@ async function executeBrowserAction(action) {
       if (fallbackPwResult) return fallbackPwResult;
     }
     throw new Error('Browser pane not open and no browser extension tab is available — send a navigate action first');
+
+  } else if (action.action === 'back') {
+    if (wv.canGoBack && wv.canGoBack()) await wv.goBack().catch(function() {});
+    return { ok: true, url: wv.getURL ? wv.getURL() : '' };
+
+  } else if (action.action === 'forward') {
+    if (wv.canGoForward && wv.canGoForward()) await wv.goForward().catch(function() {});
+    return { ok: true, url: wv.getURL ? wv.getURL() : '' };
+
+  } else if (action.action === 'reload') {
+    if (wv.reload) wv.reload();
+    return { ok: true, url: wv.getURL ? wv.getURL() : '' };
 
   } else if (action.action === 'type') {
     var js =
@@ -867,6 +918,14 @@ async function executeBrowserAction(action) {
   } else if (action.action === 'wait') {
     await new Promise(function(r) { setTimeout(r, action.ms || 1500); });
     return { ok: true };
+
+  } else if (action.action === 'scroll') {
+    var dy = Number(action.amount || action.deltaY || action.y || 0) || 600;
+    if ((action.direction || '').toLowerCase() === 'up') dy = -Math.abs(dy);
+    var scrollResult = await wvExec(wv,
+      '(function(){window.scrollBy({top:' + JSON.stringify(dy) + ',left:0,behavior:"instant"});return JSON.stringify({x:window.scrollX,y:window.scrollY});})()'
+    );
+    return { ok: true, result: scrollResult, url: wv.getURL ? wv.getURL() : '' };
 
   } else if (action.action === 'extract') {
     // Poll from our side using bare executeJavaScript (NOT wvExec).
