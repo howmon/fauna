@@ -5214,28 +5214,140 @@ function _fileIcon(ext) {
 // is open. Topbar overflow no longer hosts this UI.
 
 var _portsPollingInterval = null;
+// Tracks server ids that have already triggered a "ready" notification so we
+// don't re-notify on every snapshot after a server is first seen as running.
+var _notifiedServerIds = new Set();
+var _devServerSSE = null;
 
 function _startPortsPolling() {
   if (_portsPollingInterval) return;
   _portsPollingInterval = setInterval(_pollPorts, 5000);
   _pollPorts();
+  _connectDevServerSSE();
+}
+
+// Connect to the server-push SSE stream for instant “Port ready” notifications.
+// Mirrors VS Code’s Ports panel balloon: fires the moment stdout shows a
+// listening port, not on the next 5-second poll tick.
+function _connectDevServerSSE() {
+  if (_devServerSSE) return;
+  try {
+    var es = new EventSource('/api/dev-servers/events');
+    _devServerSSE = es;
+
+    es.addEventListener('snapshot', function(e) {
+      try {
+        var d = JSON.parse(e.data);
+        _applyDevServerSnapshot(d.servers || []);
+      } catch(_) {}
+    });
+
+    es.addEventListener('server-ready', function(e) {
+      try {
+        var d = JSON.parse(e.data);
+        if (!_notifiedServerIds.has(d.id)) {
+          _notifiedServerIds.add(d.id);
+          _showServerReadyNotification(d);
+        }
+      } catch(_) {}
+    });
+
+    es.addEventListener('server-exited', function(e) {
+      try {
+        var d = JSON.parse(e.data);
+        _notifiedServerIds.delete(d.id);
+        _dismissServerNotification(d.id);
+      } catch(_) {}
+    });
+
+    es.onerror = function() {
+      try { es.close(); } catch(_) {}
+      _devServerSSE = null;
+      // Reconnect after backoff
+      setTimeout(_connectDevServerSSE, 8000);
+    };
+  } catch(_) {}
+}
+
+function _applyDevServerSnapshot(servers) {
+  var active = servers.filter(function(s) { return s.status === 'running' || s.status === 'starting'; });
+  var btn   = document.getElementById('topbar-servers-btn');
+  var count = document.getElementById('topbar-servers-count');
+  if (btn)   btn.style.display   = active.length ? '' : 'none';
+  if (count) count.textContent   = active.length || '';
+  // Update settings badge
+  var settingsCnt = document.getElementById('settings-dev-servers-count');
+  if (settingsCnt) {
+    settingsCnt.textContent = active.length;
+    settingsCnt.style.display = active.length ? '' : 'none';
+  }
+  // Re-render dev-servers page if open
+  var pageEl = document.querySelector('#settings-panel .settings-page[data-page="dev-servers"]');
+  if (pageEl && pageEl.classList.contains('active')) _renderDevServersList(servers);
+}
+
+// “Port 3000 — Open in Browser” balloon — VS Code’s Ports panel equivalent.
+// Stacks vertically so multiple servers can each show a notification.
+function _showServerReadyNotification(server) {
+  var container = document.getElementById('dev-server-notif-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'dev-server-notif-container';
+    Object.assign(container.style, {
+      position: 'fixed', bottom: '16px', right: '16px',
+      display: 'flex', flexDirection: 'column', gap: '8px',
+      zIndex: '9999', pointerEvents: 'none',
+    });
+    document.body.appendChild(container);
+  }
+  var name  = server.name || server.cmd || 'Dev server';
+  var port  = server.port;
+  var url   = port ? 'http://localhost:' + port : null;
+  var notif = document.createElement('div');
+  notif.className = 'dev-server-notif';
+  notif.dataset.serverId = server.id;
+  Object.assign(notif.style, { pointerEvents: 'auto' });
+  notif.innerHTML =
+    '<div class="dsn-icon"><i class="ti ti-server"></i></div>' +
+    '<div class="dsn-body">' +
+      '<div class="dsn-title">' + (port ? 'Port ' + port + ' — ' : '') + escHtml(name) + '</div>' +
+      '<div class="dsn-cmd">' + escHtml((server.cmd || '').slice(0, 60)) + '</div>' +
+    '</div>' +
+    (url ? '<button class="dsn-open" onclick="openRunInBrowser(\'' + url + '\')">' +
+      '<i class="ti ti-external-link"></i> Open' +
+    '</button>' : '') +
+    '<button class="dsn-close" onclick="_dismissServerNotification(\'' + server.id + '\')">' +
+      '<i class="ti ti-x"></i>' +
+    '</button>';
+  container.appendChild(notif);
+  // Auto-dismiss after 12s
+  notif._timeout = setTimeout(function() { _dismissServerNotification(server.id); }, 12000);
+  // Animate in
+  requestAnimationFrame(function() { notif.classList.add('dsn-visible'); });
+}
+
+function _dismissServerNotification(serverId) {
+  var notif = document.querySelector('.dev-server-notif[data-server-id="' + serverId + '"]');
+  if (!notif) return;
+  clearTimeout(notif._timeout);
+  notif.classList.remove('dsn-visible');
+  setTimeout(function() { notif.remove(); }, 250);
+}
+
+function _openDevServersQuick() {
+  var btn = document.querySelector('#settings-panel .settings-nav-item[data-page="dev-servers"]');
+  switchSettingsPage('dev-servers', btn);
+  if (typeof toggleSettings === 'function') {
+    var panel = document.getElementById('settings-panel');
+    if (panel && panel.style.display === 'none') toggleSettings();
+  }
 }
 
 async function _pollPorts() {
   try {
     var r = await fetch('/api/runs');
     var runs = await r.json();
-    var active = runs.filter(function(r) { return r.status === 'running' || r.status === 'starting'; });
-    var settingsCnt = document.getElementById('settings-dev-servers-count');
-    if (settingsCnt) {
-      settingsCnt.textContent = active.length;
-      settingsCnt.style.display = active.length ? '' : 'none';
-    }
-    // Re-render the page if it's currently visible.
-    var pageEl = document.querySelector('#settings-panel .settings-page[data-page="dev-servers"]');
-    if (pageEl && pageEl.classList.contains('active')) {
-      _renderDevServersList(runs);
-    }
+    _applyDevServerSnapshot(runs);
   } catch(_) {}
 }
 

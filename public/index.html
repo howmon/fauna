@@ -273,6 +273,11 @@
       <span id="agent-badge" style="display:none !important" onclick="deactivateAgent(getConv(state.currentId))"></span>
       <select id="model-select" onchange="onModelChange(this.value)"></select>
       <button class="topbar-update-btn" id="topbar-update-btn" type="button" style="display:none" onclick="_installFaunaUpdate()" title="Install app update"><i class="ti ti-download"></i> <span>Update</span></button>
+      <!-- Running dev-servers indicator (VS Code Ports panel equivalent) -->
+      <button id="topbar-servers-btn" class="topbar-btn" style="display:none" onclick="_openDevServersQuick()" title="Running dev servers">
+        <i class="ti ti-server"></i>
+        <span id="topbar-servers-count" style="font-size:10px;font-weight:700;margin-left:2px"></span>
+      </button>
       <!-- Right side: voice + notifications + overflow (account gear moved into Settings panel) -->
       <button type="button" id="topbar-project-settings-btn" class="topbar-project-settings-btn" style="display:none" onclick="event.stopPropagation();openProjectHub('settings')" title="Project settings">
         <i class="ti ti-settings"></i>

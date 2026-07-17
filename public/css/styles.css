@@ -4618,6 +4618,42 @@ body { animation: none; }
 
 /* Area-screenshot active state */
 #bp-area-shot.active { background: rgba(139,92,246,.25); border-color: #a78bfa; color: #a78bfa; }
+
+/* ── Dev-server “Port ready” notification (VS Code Ports panel equivalent) ────── */
+.dev-server-notif {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  background: var(--fau-surface);
+  border: 1px solid var(--fau-border);
+  border-left: 3px solid #10b981;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.4);
+  font-size: 12px; color: var(--fau-text);
+  min-width: 260px; max-width: 360px;
+  opacity: 0; transform: translateY(8px);
+  transition: opacity .2s ease, transform .2s ease;
+}
+.dev-server-notif.dsn-visible { opacity: 1; transform: translateY(0); }
+.dsn-icon { font-size: 18px; color: #10b981; flex-shrink: 0; }
+.dsn-body { flex: 1; min-width: 0; }
+.dsn-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsn-cmd   { font-size: 10.5px; color: var(--fau-text-muted); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+.dsn-open  {
+  flex-shrink: 0;
+  background: rgba(16,185,129,.15); border: 1px solid rgba(16,185,129,.4);
+  color: #34d399; border-radius: 5px;
+  padding: 3px 9px; font-size: 11px; cursor: pointer; font-family: var(--font);
+  display: flex; align-items: center; gap: 4px; white-space: nowrap;
+  transition: background .12s;
+}
+.dsn-open:hover { background: rgba(16,185,129,.28); }
+.dsn-close {
+  flex-shrink: 0; background: none; border: none;
+  color: var(--fau-text-muted); cursor: pointer; border-radius: 4px;
+  padding: 2px 4px; font-size: 13px; line-height: 1;
+  transition: color .12s;
+}
+.dsn-close:hover { color: var(--fau-text); }
 #browser-pane.resizing webview,
 #browser-pane.resizing iframe,
 #browser-pane.resizing #browser-webview-wrap { pointer-events: none; }
