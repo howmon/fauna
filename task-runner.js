@@ -181,7 +181,25 @@ async function _autonomyLoop(task, state) {
     toolGuidance.push('You CANNOT use shell commands for this task — shell access is disabled.');
   }
   if (perms.browser) {
-    toolGuidance.push('You CAN use ```browser-ext-action blocks to interact with web pages via the browser extension. ALWAYS use ```browser-ext-action (not ```browser-action). Prefer existing/shared tabs first: start with tab:list or extract when the user refers to an open page. Open a new tab only when no relevant shared tab exists or the task gives a new URL. Put ONE action per block. After navigate, use ```browser-ext-action\n{"action":"wait","ms":2000}\n``` before taking a snapshot.\n\nAdditional browser actions available:\n- {"action":"extract-interactive"} — faster text-only inventory of all interactable elements (inputs/buttons/links/selects) without a screenshot. Use instead of snapshot when you only need to find/interact with UI elements.\n- {"action":"extract","maskPii":true} — like extract but redacts emails, phone numbers, card numbers, and SSNs before the content reaches the model. Use when extracting pages with user PII.\n- {"action":"custom-tools:list"} — discover tools registered by the current page (e.g. add_to_cart, search_kb). Check this on unfamiliar SaaS pages.\n- {"action":"custom-tools:call","name":"<tool>","args":{...}} — invoke a page-registered tool directly instead of clicking through the UI.\n- {"action":"task:begin","params":{"disableActions":["eval"],"scopedTabIds":[<id>]}} — declare task scope: block risky actions and limit tab visibility. Call at the start of sensitive tasks.\n- {"action":"task:end"} — clear task scope when done.\n- {"action":"crawl","url":"http://localhost:3000","maxPages":20} — UI AUDIT: spider a site from the given URL, discover all same-origin routes via link extraction, visit each page, capture console errors/warnings, network failures and page titles. Returns a structured per-page report. Use to check for runtime JS errors across all routes, verify navigation, or audit a dev server after building. Add {"screenshots":true} to also capture a screenshot of each page. Skips logout/delete/api paths automatically.');
+    toolGuidance.push('You have TWO browser paths — use the right one:\n\n' +
+      '**1. Internal browser panel** (`browser-action` blocks) — for LOCAL dev servers (localhost / 127.0.0.1 / file://). Opens visibly in the Fauna UI so the user can watch. No extension required. Use this for:\n' +
+      '   - Debugging and auditing a dev server you just built or started\n' +
+      '   - Crawling all routes of a local app\n' +
+      '   - Taking screenshots of localhost pages\n' +
+      '   Syntax: ```browser-action\n{"action":"navigate","url":"http://localhost:3000"}\n```\n\n' +
+      '**2. Real browser extension** (`browser-ext-action` blocks) — for pages already open in the user\'s real Chrome/Edge, or for external URLs requiring real login sessions. Use this for:\n' +
+      '   - Tabs the user already has open\n' +
+      '   - Sites requiring real browser auth/cookies\n' +
+      '   - Cross-tab workflows\n' +
+      '   Syntax: ```browser-ext-action\n{"action":"extract"}\n```\n\n' +
+      'ROUTING RULE: If the URL is localhost or 127.0.0.1 — ALWAYS use `browser-action` (internal panel). For everything else, prefer `browser-ext-action` if a real tab is available.\n\n' +
+      'After navigate (either path), use a wait block before snapshot:\n```browser-action\n{"action":"wait","ms":2000}\n```\n\n' +
+      'Additional actions (work on both paths):\n' +
+      '- {"action":"crawl","url":"http://localhost:3000","maxPages":20} — UI AUDIT: spider a site, visit every discovered route, capture console errors/warnings, network failures and page titles. Returns a structured per-page report. BEST for checking a dev server after building. Add {"screenshots":true} for visual capture. Skips logout/delete/api paths automatically.\n' +
+      '- {"action":"extract-interactive"} — text-only inventory of inputs/buttons/links/selects. Faster than snapshot.\n' +
+      '- {"action":"extract","maskPii":true} — extract with PII redacted before reaching the model.\n' +
+      '- {"action":"custom-tools:list"} / {"action":"custom-tools:call","name":"<tool>","args":{}} — discover and invoke tools registered by the page.\n' +
+      '- {"action":"task:begin","params":{"disableActions":["eval"]}} / {"action":"task:end"} — scope risky tasks.');
   } else {
     toolGuidance.push('You CANNOT use browser actions — browser access is disabled for this task.');
   }

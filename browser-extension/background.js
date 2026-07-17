@@ -362,6 +362,8 @@ async function dispatchCommand(msg) {
       // Page-side custom tools registered by the host page
       case 'custom-tools:list':     return await cmdCustomToolsList(params, tab);
       case 'custom-tools:call':     return await cmdCustomToolsCall(params, tab);
+      // Site crawler — visits all same-origin routes, captures errors per page
+      case 'crawl':                 return await cmdCrawl(params);
       default:
         return { ok: false, error: 'Unknown action: ' + action };
     }
@@ -772,6 +774,137 @@ function cmdTaskEnd() {
   _taskDisabledActions = new Set();
   _taskScopedTabIds    = null;
   return { ok: true };
+}
+
+// ── Site crawler (extension path) ─────────────────────────────────────────
+// Opens a background tab, spiders same-origin links from `url`, visits each
+// discovered route, and collects console errors + page titles via CDP.
+// Mirrors the internal-browser crawl in browser.js but runs in the user's
+// real Chrome so it respects real cookies, auth, and service workers.
+
+async function cmdCrawl({ url, maxPages = 20, screenshots = false } = {}) {
+  if (!url) return { ok: false, error: 'url required for crawl' };
+
+  const maxP = Math.min(Number(maxPages) || 20, 50);
+  let startOrigin;
+  try { startOrigin = new URL(url).origin; }
+  catch (_) { return { ok: false, error: 'Invalid URL: ' + url }; }
+
+  const SKIP_RE = /\/(logout|log-out|sign-out|signout|delete|destroy|api\/)(\/?(\?.*)?)?$/i;
+
+  function norm(u) {
+    try {
+      const p = new URL(u);
+      return (p.origin + p.pathname.replace(/\/+$/, '') + (p.search || '')) || '/';
+    } catch (_) { return u; }
+  }
+
+  const visited = new Set();
+  const queue   = [norm(url)];
+  const results = [];
+
+  // Open a dedicated background tab for crawling
+  let crawlTab;
+  try {
+    crawlTab = await chrome.tabs.create({ url: queue[0], active: false });
+    visited.add(queue.shift());
+    await waitForTabLoad(crawlTab.id);
+  } catch (e) {
+    return { ok: false, error: 'Could not open crawl tab: ' + (e.message || e) };
+  }
+
+  // CDP expression injected on each page:
+  // 1. Sets up console.error/warn hooks + window.onerror
+  // 2. Returns { title, url, links, errors } after a brief settle
+  const CRAWL_JS = `(async function(){
+    if(!window.__faunaCrawl){window.__faunaCrawl={errs:[],warns:[]};['error','warn'].forEach(function(l){var o=console[l];console[l]=function(){window.__faunaCrawl[l==='error'?'errs':'warns'].push(Array.from(arguments).map(String).join(' ').slice(0,300));if(o)o.apply(console,arguments);};});window.addEventListener('error',function(e){window.__faunaCrawl.errs.push(((e.error&&(e.error.stack||e.error.message))||e.message||'Error').slice(0,300));},true);window.addEventListener('unhandledrejection',function(e){var r=e.reason;window.__faunaCrawl.errs.push(((r&&(r.stack||r.message))||(typeof r==='string'?r:JSON.stringify(r))||'Rejection').slice(0,300));},true);}
+    await new Promise(function(r){setTimeout(r,400);});
+    var links=Array.from(document.querySelectorAll('a[href]')).map(function(a){return a.href;}).filter(function(h){return h&&!h.startsWith('javascript')&&!h.startsWith('mailto')&&!h.startsWith('tel');}).slice(0,120);
+    return JSON.stringify({title:document.title,url:location.href,links:links,errors:window.__faunaCrawl.errs.slice(0,10),warnings:window.__faunaCrawl.warns.slice(0,5)});
+  })()`;
+
+  const _crawlEval = async (tabId) => {
+    return await _cdpRun(tabId, async (target) => {
+      await chrome.debugger.sendCommand(target, 'Runtime.enable', {});
+      const r = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+        expression: CRAWL_JS,
+        returnByValue: true,
+        awaitPromise: true,
+        userGesture: true,
+      });
+      if (r && r.result && r.result.value) return JSON.parse(r.result.value);
+      return {};
+    });
+  };
+
+  // First page — already loaded
+  try {
+    const pd = await _crawlEval(crawlTab.id);
+    const pageUrl = crawlTab.url || url;
+    (pd.links || []).forEach(href => {
+      try {
+        if (new URL(href).origin !== startOrigin) return;
+        const n = norm(href.split('#')[0]);
+        if (n && !visited.has(n) && !queue.includes(n) && !SKIP_RE.test(n)) queue.push(n);
+      } catch (_) {}
+    });
+    let screenshot;
+    if (screenshots) { try { screenshot = await captureViaDebugger(crawlTab.id, 2000); } catch (_) {} }
+    results.push({ url: pageUrl, title: pd.title || '', errors: pd.errors || [], warnings: pd.warnings || [], links: (pd.links || []).length, screenshot: screenshot || undefined });
+  } catch (e) {
+    results.push({ url: crawlTab.url || url, title: '', errors: ['Initial page eval failed: ' + e.message], warnings: [], links: 0 });
+  }
+
+  while (queue.length && results.length < maxP) {
+    const current = queue.shift();
+    if (visited.has(current)) continue;
+    visited.add(current);
+
+    try {
+      await chrome.tabs.update(crawlTab.id, { url: current });
+      await waitForTabLoad(crawlTab.id);
+    } catch (navErr) {
+      results.push({ url: current, title: '', errors: ['Navigation failed: ' + navErr.message], warnings: [], links: 0 });
+      continue;
+    }
+
+    try {
+      const pd = await _crawlEval(crawlTab.id);
+      const t = await chrome.tabs.get(crawlTab.id).catch(() => null);
+      const pageUrl = (t && t.url) || current;
+      (pd.links || []).forEach(href => {
+        try {
+          if (new URL(href).origin !== startOrigin) return;
+          const n = norm(href.split('#')[0]);
+          if (n && !visited.has(n) && !queue.includes(n) && !SKIP_RE.test(n)) queue.push(n);
+        } catch (_) {}
+      });
+      let screenshot;
+      if (screenshots) { try { screenshot = await captureViaDebugger(crawlTab.id, 2000); } catch (_) {} }
+      results.push({ url: pageUrl, title: pd.title || '', errors: pd.errors || [], warnings: pd.warnings || [], links: (pd.links || []).length, screenshot: screenshot || undefined });
+    } catch (e) {
+      results.push({ url: current, title: '', errors: ['Page eval failed: ' + e.message], warnings: [], links: 0 });
+    }
+  }
+
+  try { await chrome.tabs.remove(crawlTab.id); } catch (_) {}
+
+  const totErr  = results.reduce((n, r) => n + r.errors.length, 0);
+  const totWarn = results.reduce((n, r) => n + r.warnings.length, 0);
+
+  return {
+    ok:           true,
+    baseUrl:      url,
+    pagesVisited: results.length,
+    pagesQueued:  queue.length,
+    summary: {
+      totalErrors:     totErr,
+      totalWarnings:   totWarn,
+      pagesWithErrors: results.filter(r => r.errors.length > 0).length,
+      clean:           totErr === 0
+    },
+    results
+  };
 }
 
 // ── DevTools helpers — all use chrome.debugger CDP ────────────────────────
