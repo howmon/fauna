@@ -15,10 +15,15 @@ var _browserUA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/53
 // to defuse navigate/back/forward/refresh.
 var _isElectronRenderer = (function() {
   try {
-    return !!(typeof window !== 'undefined' &&
-              window.process &&
-              window.process.versions &&
-              window.process.versions.electron);
+    // window.process.versions.electron is NOT accessible with context isolation
+    // (Electron default since v12). Check faunaApp (contextBridge) first, then
+    // fall back to the user-agent string which always contains "Electron/".
+    if (typeof window !== 'undefined') {
+      if (window.faunaApp) return true; // preload bridge only exists in Electron
+      if (typeof navigator !== 'undefined' && /Electron\//.test(navigator.userAgent)) return true;
+      if (window.process && window.process.versions && window.process.versions.electron) return true;
+    }
+    return false;
   } catch (_) { return false; }
 })();
 
