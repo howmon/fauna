@@ -181,7 +181,7 @@ async function _autonomyLoop(task, state) {
     toolGuidance.push('You CANNOT use shell commands for this task — shell access is disabled.');
   }
   if (perms.browser) {
-    toolGuidance.push('You CAN use ```browser-ext-action blocks to interact with web pages via the browser extension. ALWAYS use ```browser-ext-action (not ```browser-action). Prefer existing/shared tabs first: start with tab:list or extract when the user refers to an open page. Open a new tab only when no relevant shared tab exists or the task gives a new URL. Put ONE action per block. After navigate, use ```browser-ext-action\n{"action":"wait","ms":2000}\n``` before taking a snapshot.\n\nAdditional browser actions available:\n- {"action":"extract-interactive"} — faster text-only inventory of all interactable elements (inputs/buttons/links/selects) without a screenshot. Use instead of snapshot when you only need to find/interact with UI elements.\n- {"action":"extract","maskPii":true} — like extract but redacts emails, phone numbers, card numbers, and SSNs before the content reaches the model. Use when extracting pages with user PII.\n- {"action":"custom-tools:list"} — discover tools registered by the current page (e.g. add_to_cart, search_kb). Check this on unfamiliar SaaS pages.\n- {"action":"custom-tools:call","name":"<tool>","args":{...}} — invoke a page-registered tool directly instead of clicking through the UI.\n- {"action":"task:begin","params":{"disableActions":["eval"],"scopedTabIds":[<id>]}} — declare task scope: block risky actions and limit tab visibility. Call at the start of sensitive tasks.\n- {"action":"task:end"} — clear task scope when done.');
+    toolGuidance.push('You CAN use ```browser-ext-action blocks to interact with web pages via the browser extension. ALWAYS use ```browser-ext-action (not ```browser-action). Prefer existing/shared tabs first: start with tab:list or extract when the user refers to an open page. Open a new tab only when no relevant shared tab exists or the task gives a new URL. Put ONE action per block. After navigate, use ```browser-ext-action\n{"action":"wait","ms":2000}\n``` before taking a snapshot.\n\nAdditional browser actions available:\n- {"action":"extract-interactive"} — faster text-only inventory of all interactable elements (inputs/buttons/links/selects) without a screenshot. Use instead of snapshot when you only need to find/interact with UI elements.\n- {"action":"extract","maskPii":true} — like extract but redacts emails, phone numbers, card numbers, and SSNs before the content reaches the model. Use when extracting pages with user PII.\n- {"action":"custom-tools:list"} — discover tools registered by the current page (e.g. add_to_cart, search_kb). Check this on unfamiliar SaaS pages.\n- {"action":"custom-tools:call","name":"<tool>","args":{...}} — invoke a page-registered tool directly instead of clicking through the UI.\n- {"action":"task:begin","params":{"disableActions":["eval"],"scopedTabIds":[<id>]}} — declare task scope: block risky actions and limit tab visibility. Call at the start of sensitive tasks.\n- {"action":"task:end"} — clear task scope when done.\n- {"action":"crawl","url":"http://localhost:3000","maxPages":20} — UI AUDIT: spider a site from the given URL, discover all same-origin routes via link extraction, visit each page, capture console errors/warnings, network failures and page titles. Returns a structured per-page report. Use to check for runtime JS errors across all routes, verify navigation, or audit a dev server after building. Add {"screenshots":true} to also capture a screenshot of each page. Skips logout/delete/api paths automatically.');
   } else {
     toolGuidance.push('You CANNOT use browser actions — browser access is disabled for this task.');
   }
@@ -964,6 +964,23 @@ function _summarizeActionResult(action, result) {
       return 'task:begin → ok (scope set)';
     case 'task:end':
       return 'task:end → ok (scope cleared)';
+    case 'crawl': {
+      if (!result.ok) return 'crawl → failed: ' + (result.error || 'unknown');
+      var s = result.summary || {};
+      var header = 'crawl → ' + result.pagesVisited + ' pages visited' +
+        (result.pagesQueued ? ' (+' + result.pagesQueued + ' more in queue, hit maxPages limit)' : '') + '\n' +
+        'Errors: ' + (s.totalErrors || 0) + '  Warnings: ' + (s.totalWarnings || 0) + '  ' +
+        (s.clean ? '\u2705 All pages clean' : '\u26a0\ufe0f ' + (s.pagesWithErrors || 0) + ' page(s) with errors') + '\n\n';
+      var rows = (result.results || []).map(function(r) {
+        var icon = r.errors.length ? '\u274c' : '\u2705';
+        var line = icon + ' [' + r.url + '] ' + (r.title || '(no title)');
+        if (r.errors.length)   line += '\n   Errors: '   + r.errors.slice(0,3).join(' | ');
+        if (r.warnings.length) line += '\n   Warnings: ' + r.warnings.slice(0,2).join(' | ');
+        if (r.networkErrors && r.networkErrors.length) line += '\n   Net: ' + r.networkErrors.slice(0,2).map(function(e){return e.url+' ('+e.type+')';}).join(' | ');
+        return line;
+      });
+      return (header + rows.join('\n')).slice(0, 4000);
+    }
     case 'tab:list': {
       const tabs = result.tabs || [];
       return 'tab:list → ok (' + tabs.length + ' tabs)\n' +

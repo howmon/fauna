@@ -1402,9 +1402,152 @@ async function executeBrowserAction(action) {
     if (!pngDataUrl || !pngDataUrl.includes(',')) throw new Error('capturePage returned empty image');
     var b64 = pngDataUrl.split(',')[1];
     return { ok: true, screenshot: b64, mime: 'image/png', url: wv.getURL ? wv.getURL() : '' };
+
+  } else if (action.action === 'crawl') {
+    if (!wv) {
+      openBrowserPane();
+      wv = getActiveWebview();
+      if (!wv) throw new Error('Browser pane not available — could not open for crawl');
+    }
+    return await _crawlSite(wv, action);
   }
 
   throw new Error('Unknown action: ' + action.action);
+}
+
+// ── Site crawler ───────────────────────────────────────────────────────────
+// Spiders a site starting from `url`, discovers same-origin routes via link
+// extraction, visits each page, captures console errors/warnings + titles,
+// and returns a structured report the AI can summarise or act on.
+
+async function _crawlSite(wv, opts) {
+  var startUrl = opts.url;
+  if (!startUrl) return { ok: false, error: 'url required for crawl' };
+
+  var maxPages     = Math.min(Number(opts.maxPages)  || 20, 50);
+  var doScreenshots = !!(opts.screenshots || opts.screenshot);
+  var statusEl     = document.getElementById('browser-status');
+
+  var startOrigin;
+  try { startOrigin = new URL(startUrl).origin; }
+  catch(_) { return { ok: false, error: 'Invalid URL: ' + startUrl }; }
+
+  function _norm(u) {
+    try {
+      var p = new URL(u);
+      // drop hash + trailing slash, keep query (important for some apps)
+      return (p.origin + p.pathname.replace(/\/+$/, '') + (p.search || '')) || '/';
+    } catch(_) { return u; }
+  }
+
+  // Skip paths likely to trigger side effects or irrelevant noise
+  var SKIP_RE = /\/(logout|log-out|sign-out|signout|delete|destroy|api\/)(\/?(\?.*)?)?$/i;
+
+  var visited = new Set();
+  var queue   = [_norm(startUrl)];
+  var results = [];
+
+  while (queue.length && results.length < maxPages) {
+    var current = queue.shift();
+    if (visited.has(current)) continue;
+    visited.add(current);
+
+    if (statusEl) statusEl.textContent = 'Crawling ' + (results.length + 1) + '/' + maxPages + '\u2026';
+
+    // Clear tab console buffer so we only capture logs for this page
+    var convTabs = _getConvTabs();
+    var tab = convTabs.find(function(t) { return t.id === _getConvActiveTabId(); });
+    if (tab) tab.consoleLogs = [];
+
+    // Navigate + wait for load
+    var navOk = false;
+    try {
+      browserNavigateTo(current);
+      await new Promise(function(resolve) {
+        var deadline = setTimeout(resolve, 12000);
+        wv.addEventListener('did-stop-loading', function onDone() {
+          wv.removeEventListener('did-stop-loading', onDone);
+          clearTimeout(deadline);
+          setTimeout(resolve, 800); // SPA hydration settle
+        });
+      });
+      navOk = true;
+    } catch(navErr) {
+      results.push({ url: current, title: '', errors: ['Navigation failed: ' + navErr.message], warnings: [], networkErrors: [], links: 0 });
+      continue;
+    }
+
+    if (!navOk) continue;
+    await new Promise(function(r) { setTimeout(r, 300); }); // let onerror shim flush
+
+    var pageTitle = '', pageUrl = current, linkCount = 0, netErrors = [];
+
+    try {
+      var raw = await wvExec(wv, '(function(){\n' +
+        'var links=Array.from(document.querySelectorAll("a[href]")).map(function(a){return a.href;})\n' +
+        '  .filter(function(h){return h&&!h.startsWith("javascript")&&!h.startsWith("mailto")&&!h.startsWith("tel");});\n' +
+        'var ne=[];\n' +
+        'try{performance.getEntriesByType("resource").forEach(function(e){\n' +
+        '  if(e.transferSize===0&&e.decodedBodySize===0&&e.duration>200&&e.initiatorType!=="beacon")ne.push({url:e.name,type:e.initiatorType});\n' +
+        '});}catch(_){}\n' +
+        'return JSON.stringify({title:document.title,url:location.href,links:links.slice(0,120),ne:ne.slice(0,15)});\n' +
+        '})()');
+      var pd = JSON.parse(raw || '{}');
+      pageTitle  = pd.title || '';
+      pageUrl    = pd.url   || current;
+      netErrors  = pd.ne    || [];
+      linkCount  = (pd.links || []).length;
+
+      // Enqueue newly discovered same-origin links
+      (pd.links || []).forEach(function(href) {
+        try {
+          if (!href || new URL(href).origin !== startOrigin) return;
+          var norm = _norm(href.split('#')[0]);
+          if (norm && !visited.has(norm) && !queue.includes(norm) && !SKIP_RE.test(norm)) {
+            queue.push(norm);
+          }
+        } catch(_) {}
+      });
+    } catch(_) {}
+
+    var logs     = (tab && tab.consoleLogs) || [];
+    var errors   = logs.filter(function(e) { return e.level === 'error'; }).map(function(e) { return e.text.slice(0, 200); }).slice(0, 10);
+    var warnings = logs.filter(function(e) { return e.level === 'warn';  }).map(function(e) { return e.text.slice(0, 200); }).slice(0, 5);
+
+    var screenshot = null;
+    if (doScreenshots) {
+      try { var ni = await wv.capturePage(); screenshot = ni.toDataURL(); } catch(_) {}
+    }
+
+    results.push({
+      url:          pageUrl,
+      title:        pageTitle,
+      errors:       errors,
+      warnings:     warnings,
+      networkErrors: netErrors,
+      links:        linkCount,
+      screenshot:   screenshot || undefined
+    });
+  }
+
+  if (statusEl) statusEl.textContent = '';
+
+  var totErr  = results.reduce(function(n, r) { return n + r.errors.length; }, 0);
+  var totWarn = results.reduce(function(n, r) { return n + r.warnings.length; }, 0);
+
+  return {
+    ok:            true,
+    baseUrl:       startUrl,
+    pagesVisited:  results.length,
+    pagesQueued:   queue.length,   // still in queue when maxPages hit
+    summary: {
+      totalErrors:    totErr,
+      totalWarnings:  totWarn,
+      pagesWithErrors: results.filter(function(r) { return r.errors.length > 0; }).length,
+      clean:           totErr === 0
+    },
+    results: results
+  };
 }
 
 // ── browser-action rendering (like shell-exec but for webview) ─────────────
