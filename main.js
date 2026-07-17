@@ -1390,6 +1390,11 @@ if (!gotLock) {
   });
 }
 
+// Open a URL in the user's default system browser (from internal browser panel toolbar).
+ipcMain.on('browser:open-external', (_event, url) => {
+  if (url && /^https?:\/\//i.test(url)) shell.openExternal(url);
+});
+
 // Renderer-driven request to open another window (multi-window support).
 ipcMain.on('fauna:open-window', (_event, payload) => {
   const { convId, projectId, blank } = payload || {};

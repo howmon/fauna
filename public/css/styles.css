@@ -4597,6 +4597,24 @@ body { animation: none; }
   overflow: visible; /* let webview layer paint outside stacking context */
 }
 #browser-pane.resizing { transition: none; user-select: none; }
+/* Focus indicator — 2px accent strip at the top of the pane when the webview
+   has keyboard focus. Mirrors VS Code Simple Browser's yellow focus band and
+   tells the user that keystrokes go to the browser, not the Fauna UI. */
+#browser-pane.webview-focused {
+  border-left-color: var(--accent);
+}
+#browser-pane.webview-focused::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0; height: 2px;
+  background: var(--accent);
+  z-index: 20;
+  pointer-events: none;
+  border-radius: 0;
+}
+#browser-pane.webview-focused #browser-pane-header {
+  background: rgba(var(--accent-rgb, 99,102,241), .06);
+}
 #browser-pane.resizing webview,
 #browser-pane.resizing iframe,
 #browser-pane.resizing #browser-webview-wrap { pointer-events: none; }
@@ -4707,6 +4725,93 @@ webview {
   display: flex;         /* Electron needs display:flex for flex:1 to work on webview */
   will-change: transform; /* own compositing layer — prevents black/blank rendering */
 }
+
+/* ── Inspector active state on toolbar buttons ── */
+.bpnav.active {
+  background: var(--accent-dim);
+  color: var(--accent2);
+}
+
+/* ── Element Inspector panel ── */
+#browser-inspector-panel {
+  flex-direction: column;
+  flex-shrink: 0;
+  border-top: 1px solid var(--fau-border);
+  background: var(--fau-surface);
+  max-height: 220px;
+  overflow: hidden;
+}
+#browser-inspector-header {
+  display: flex; align-items: center; gap: 5px;
+  padding: 5px 8px; border-bottom: 1px solid var(--fau-border);
+  background: var(--fau-surface2); flex-shrink: 0;
+}
+#browser-inspector-body {
+  overflow-y: auto; flex: 1;
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 0; padding: 4px 0;
+}
+#browser-inspector-body::-webkit-scrollbar { width: 4px; }
+#browser-inspector-body::-webkit-scrollbar-thumb { background: var(--fau-border); border-radius: 2px; }
+.bi-row {
+  display: contents;
+}
+.bi-key, .bi-val {
+  padding: 2px 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  border-bottom: 1px solid rgba(255,255,255,.03);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  align-self: start;
+}
+.bi-key {
+  color: var(--fau-text-muted);
+  background: rgba(0,0,0,.12);
+}
+.bi-val {
+  color: var(--fau-text);
+  padding-left: 8px;
+}
+
+/* ── Console panel ── */
+#browser-console-panel {
+  flex-direction: column;
+  flex-shrink: 0;
+  border-top: 1px solid var(--fau-border);
+  background: var(--fau-surface);
+  max-height: 180px;
+  overflow: hidden;
+}
+#browser-console-header {
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 8px; border-bottom: 1px solid var(--fau-border);
+  background: var(--fau-surface2); flex-shrink: 0;
+}
+#browser-console-body {
+  overflow-y: auto; flex: 1;
+  font-size: 11px; font-family: var(--font-mono);
+}
+#browser-console-body::-webkit-scrollbar { width: 4px; }
+#browser-console-body::-webkit-scrollbar-thumb { background: var(--fau-border); border-radius: 2px; }
+.bc-entry {
+  display: flex; align-items: baseline; gap: 6px;
+  padding: 2px 10px; border-bottom: 1px solid rgba(255,255,255,.03);
+  min-height: 20px;
+}
+.bc-entry:hover { background: var(--fau-surface2); }
+.bc-lvl {
+  flex-shrink: 0; width: 28px; text-align: right;
+  font-size: 9px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .04em; opacity: .7;
+}
+.bc-msg { flex: 1; word-break: break-all; white-space: pre-wrap; color: var(--fau-text); }
+.bc-line { flex-shrink: 0; font-size: 9.5px; color: var(--fau-text-muted); }
+.bc-error .bc-lvl, .bc-error .bc-msg { color: var(--error, #f87171); }
+.bc-error { background: rgba(248,113,113,.05); }
+.bc-warn  .bc-lvl, .bc-warn  .bc-msg { color: #fbbf24; }
+.bc-warn  { background: rgba(251,191,36,.04); }
+.bc-info  .bc-lvl { color: #60a5fa; }
+.bc-debug .bc-lvl { color: var(--fau-text-muted); opacity: .5; }
 
 /* ── Artifact inline card ───────────────────────────────────────────── */
 .artifact-card {

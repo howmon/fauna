@@ -100,6 +100,14 @@ function _initWebviewEvents(wv, tabId, convId) {
   wv.addEventListener('dom-ready', function() {
     _domReadyWebviews.add(wv);
   });
+  // Visual focus indicator — accent strip at top of pane when webview has keyboard focus.
+  wv.addEventListener('focus', function() {
+    if (_getConvActiveTabId(convId) === tabId && state.currentId === convId)
+      document.getElementById('browser-pane').classList.add('webview-focused');
+  });
+  wv.addEventListener('blur', function() {
+    document.getElementById('browser-pane').classList.remove('webview-focused');
+  });
   wv.addEventListener('did-start-loading', function() {
     _domReadyWebviews.delete(wv);
     if (_getConvActiveTabId() !== tabId || state.currentId !== convId) return;
@@ -170,6 +178,7 @@ function browserAddTab(url, convId) {
     var entry = { level: levelMap[e.level]||'log', text: (e.message||'').slice(0, 2000), line: e.line, source: e.sourceId||'' };
     tab.consoleLogs.push(entry);
     if (tab.consoleLogs.length > 150) tab.consoleLogs.shift();
+    _updateConsolePanel();
   });
   // Inject a window.onerror + unhandledrejection shim on every navigation so
   // uncaught native exceptions (which DON'T flow through console-message)
@@ -425,7 +434,7 @@ async function browserScreenshot() {
   var wv = getActiveWebview();
   if (!wv) return;
   var statusEl = document.getElementById('browser-status');
-  statusEl.textContent = 'Screenshotting…';
+  statusEl.textContent = 'Screenshotting\u2026';
   try {
     var url = wv.getURL ? wv.getURL() : '';
     // Use Electron webview capturePage — works cross-platform, captures just the webview content
@@ -440,6 +449,279 @@ async function browserScreenshot() {
     statusEl.textContent = 'Failed';
     dbg('browserScreenshot error: ' + e.message, 'err');
   }
+}
+
+// ── Element Inspector ─────────────────────────────────────────────────────
+// Injects a hover-highlight overlay into the webview (like DevTools).
+// Click any element to capture its selector, computed styles, attributes and
+// text; the result is shown in the inspector panel and can be sent to the AI.
+
+var _inspectorActive  = false;
+var _inspectedData    = null;
+var _consolePanelOpen = false;
+
+// Self-contained function serialised with .toString() and eval'd inside the
+// webview. Must not reference any outer-scope variables.
+var _wvInspectorFn = function _faunaInspector() {
+  if (window.__faunaInsp) { window.__faunaInsp.cancel(); }
+
+  var ov = document.createElement('div');
+  Object.assign(ov.style, {
+    position: 'fixed', pointerEvents: 'none', zIndex: '2147483646',
+    outline: '2px solid #6366f1', background: 'rgba(99,102,241,.1)',
+    boxSizing: 'border-box', borderRadius: '2px', display: 'none', transition: 'none'
+  });
+  var tip = document.createElement('div');
+  Object.assign(tip.style, {
+    position: 'fixed', pointerEvents: 'none', zIndex: '2147483647',
+    background: '#1e1e2e', color: '#a6e3a1', font: '11px/1.5 ui-monospace,Menlo,monospace',
+    padding: '3px 8px', borderRadius: '4px', whiteSpace: 'nowrap', display: 'none',
+    boxShadow: '0 2px 8px rgba(0,0,0,.5)', maxWidth: '340px',
+    overflow: 'hidden', textOverflow: 'ellipsis'
+  });
+  document.documentElement.appendChild(ov);
+  document.documentElement.appendChild(tip);
+
+  function uniqueSel(el) {
+    if (el.id) return '#' + CSS.escape(el.id);
+    var parts = [], node = el;
+    while (node && node !== document.body && node !== document.documentElement) {
+      var tag = node.tagName.toLowerCase();
+      if (node.className && typeof node.className === 'string') {
+        var cls = Array.from(node.classList).slice(0, 2)
+          .map(function(c) { return '.' + CSS.escape(c); }).join('');
+        tag += cls;
+      }
+      var sibs = node.parentNode
+        ? Array.from(node.parentNode.children).filter(function(s) { return s.tagName === node.tagName; })
+        : [];
+      if (sibs.length > 1) tag += ':nth-of-type(' + (sibs.indexOf(node) + 1) + ')';
+      parts.unshift(tag);
+      node = node.parentNode;
+    }
+    return parts.join(' > ');
+  }
+
+  function cleanup() {
+    ov.remove(); tip.remove();
+    document.removeEventListener('mousemove', onMove, true);
+    document.removeEventListener('click', onClick, true);
+    document.removeEventListener('keydown', onKey, true);
+    document.documentElement.style.cursor = '';
+    window.__faunaInsp = null;
+  }
+
+  function onMove(e) {
+    var el = document.elementFromPoint(e.clientX, e.clientY);
+    if (!el || el === ov || el === tip) return;
+    var r = el.getBoundingClientRect();
+    Object.assign(ov.style, {
+      display: 'block', left: r.left + 'px', top: r.top + 'px',
+      width: r.width + 'px', height: r.height + 'px'
+    });
+    var label = el.tagName.toLowerCase();
+    if (el.id) label += '#' + el.id;
+    if (el.classList.length) label += '.' + Array.from(el.classList).slice(0, 2).join('.');
+    label += ' \u2014 ' + Math.round(r.width) + '\u00d7' + Math.round(r.height);
+    tip.textContent = label;
+    var tx = Math.min(e.clientX + 6, window.innerWidth - 340);
+    var ty = r.top > 28 ? r.top - 24 : r.bottom + 4;
+    Object.assign(tip.style, { display: 'block', left: tx + 'px', top: ty + 'px' });
+  }
+
+  return new Promise(function(resolve) {
+    var tid = setTimeout(function() { cleanup(); resolve(null); }, 60000);
+    window.__faunaInsp = { cancel: function() { clearTimeout(tid); cleanup(); resolve(null); } };
+
+    function onClick(e) {
+      var el = document.elementFromPoint(e.clientX, e.clientY);
+      if (!el || el === ov || el === tip) return;
+      e.preventDefault();
+      e.stopPropagation();
+      clearTimeout(tid);
+      var r = el.getBoundingClientRect();
+      var cs = window.getComputedStyle(el);
+      var attrs = {};
+      Array.from(el.attributes).forEach(function(a) { attrs[a.name] = a.value.slice(0, 200); });
+      var data = {
+        tag: el.tagName.toLowerCase(),
+        id: el.id || null,
+        classes: Array.from(el.classList).join(' '),
+        selector: uniqueSel(el),
+        text: (el.innerText || el.textContent || '').trim().slice(0, 400),
+        html: el.outerHTML.slice(0, 2000),
+        attributes: attrs,
+        rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
+        styles: {
+          display: cs.display, position: cs.position,
+          color: cs.color, background: cs.backgroundColor,
+          fontSize: cs.fontSize, fontFamily: cs.fontFamily,
+          margin: cs.margin, padding: cs.padding,
+          width: cs.width, height: cs.height,
+          opacity: cs.opacity, cursor: cs.cursor
+        }
+      };
+      cleanup();
+      resolve(data);
+    }
+    function onKey(e) { if (e.key === 'Escape') { clearTimeout(tid); cleanup(); resolve(null); } }
+    document.addEventListener('mousemove', onMove, true);
+    document.addEventListener('click', onClick, true);
+    document.addEventListener('keydown', onKey, true);
+    document.documentElement.style.cursor = 'crosshair';
+  });
+};
+
+async function browserToggleInspect() {
+  if (_inspectorActive) { _stopWebviewInspector(); return; }
+  var wv = getActiveWebview();
+  if (!wv) return;
+  _inspectorActive = true;
+  var btn = document.getElementById('bp-inspect');
+  if (btn) btn.classList.add('active');
+  try {
+    var data = await wv.executeJavaScript('(' + _wvInspectorFn.toString() + ')()');
+    _inspectorActive = false;
+    if (btn) btn.classList.remove('active');
+    if (data) _showInspectorPanel(data);
+    else browserCloseInspector();
+  } catch(e) {
+    _inspectorActive = false;
+    if (btn) btn.classList.remove('active');
+  }
+}
+
+function _stopWebviewInspector() {
+  _inspectorActive = false;
+  var btn = document.getElementById('bp-inspect');
+  if (btn) btn.classList.remove('active');
+  var wv = getActiveWebview();
+  if (wv) wv.executeJavaScript('window.__faunaInsp&&window.__faunaInsp.cancel()').catch(function() {});
+}
+
+function _showInspectorPanel(data) {
+  _inspectedData = data;
+  var panel = document.getElementById('browser-inspector-panel');
+  var body  = document.getElementById('browser-inspector-body');
+  if (!panel || !body) return;
+  panel.style.display = 'flex';
+
+  var tagStr = '<' + data.tag + (data.id ? '#' + data.id : '') +
+    (data.classes ? '.' + data.classes.trim().split(/\s+/).slice(0, 2).join('.') : '') + '>';
+  var tagEl = document.getElementById('browser-insp-tag');
+  var selEl = document.getElementById('browser-insp-sel');
+  if (tagEl) tagEl.textContent = tagStr;
+  if (selEl) selEl.textContent = data.selector;
+
+  var rows = [];
+  rows.push(['size', data.rect.w + 'px \u00d7 ' + data.rect.h + 'px']);
+  rows.push(['position', data.rect.x + ', ' + data.rect.y]);
+  if (data.styles.display && data.styles.display !== 'block') rows.push(['display', data.styles.display]);
+  if (data.styles.position && data.styles.position !== 'static') rows.push(['position', data.styles.position]);
+  if (data.styles.color) rows.push(['color', data.styles.color]);
+  if (data.styles.background && data.styles.background !== 'rgba(0, 0, 0, 0)') rows.push(['background', data.styles.background]);
+  if (data.styles.fontSize) rows.push(['font-size', data.styles.fontSize]);
+  if (data.styles.fontFamily) rows.push(['font', data.styles.fontFamily.split(',')[0].replace(/['"]/g, '').trim()]);
+  if (data.styles.opacity && data.styles.opacity !== '1') rows.push(['opacity', data.styles.opacity]);
+  if (data.styles.cursor && data.styles.cursor !== 'auto') rows.push(['cursor', data.styles.cursor]);
+  Object.keys(data.attributes).filter(function(k) {
+    return k !== 'class' && k !== 'id' && k !== 'style';
+  }).slice(0, 6).forEach(function(k) { rows.push([k, data.attributes[k].slice(0, 100)]); });
+  if (data.text) rows.push(['text', data.text.slice(0, 120)]);
+
+  body.innerHTML = rows.map(function(r) {
+    return '<div class="bi-row"><span class="bi-key">' + escHtml(r[0]) + '</span>' +
+           '<span class="bi-val">' + escHtml(r[1]) + '</span></div>';
+  }).join('');
+}
+
+function browserCloseInspector() {
+  _inspectedData = null;
+  var panel = document.getElementById('browser-inspector-panel');
+  if (panel) panel.style.display = 'none';
+  _stopWebviewInspector();
+}
+
+function browserShareElementWithAI() {
+  if (!_inspectedData) return;
+  var d = _inspectedData;
+  var stylesText = Object.entries(d.styles)
+    .filter(function(kv) { return kv[1]; })
+    .map(function(kv) { return kv[0] + ': ' + kv[1]; }).join('\n');
+  var msg = 'Inspected element from browser panel:\n\n' +
+    '**Tag:** `' + d.tag + (d.id ? '#' + d.id : '') + (d.classes ? '.' + d.classes.split(' ').slice(0,2).join('.') : '') + '`\n' +
+    '**Selector:** `' + d.selector + '`\n' +
+    '**Dimensions:** ' + d.rect.w + '\u00d7' + d.rect.h + 'px at (' + d.rect.x + ', ' + d.rect.y + ')\n' +
+    (d.text ? '**Text:** ' + d.text.slice(0, 200) + '\n' : '') +
+    '\n**Computed styles:**\n```\n' + stylesText + '\n```\n\n' +
+    '**HTML:**\n```html\n' + d.html.slice(0, 1200) + '\n```';
+  sendDirectMessage(msg, { fromAutoFeed: false });
+}
+
+// ── DevTools toggle ───────────────────────────────────────────────────────
+
+function browserToggleDevTools() {
+  var wv = getActiveWebview();
+  if (!wv) return;
+  if (wv.isDevToolsOpened && wv.isDevToolsOpened()) {
+    wv.closeDevTools();
+  } else if (wv.openDevTools) {
+    wv.openDevTools();
+  }
+}
+
+// ── Open in system browser ────────────────────────────────────────────────
+
+function browserOpenExternal() {
+  var wv  = getActiveWebview();
+  var url = (wv && wv.getURL) ? wv.getURL() : '';
+  if (!url) url = (document.getElementById('browser-url-input') || {}).value || '';
+  if (!url || url === 'about:blank') return;
+  if (window.faunaApp && window.faunaApp.openExternal) {
+    window.faunaApp.openExternal(url);
+  }
+}
+
+// ── Console panel ─────────────────────────────────────────────────────────
+
+function browserToggleConsole() {
+  _consolePanelOpen = !_consolePanelOpen;
+  var panel = document.getElementById('browser-console-panel');
+  var btn   = document.getElementById('bp-console');
+  if (panel) panel.style.display = _consolePanelOpen ? 'flex' : 'none';
+  if (btn)   btn.classList.toggle('active', _consolePanelOpen);
+  if (_consolePanelOpen) _updateConsolePanel();
+}
+
+function _updateConsolePanel() {
+  if (!_consolePanelOpen) return;
+  var body = document.getElementById('browser-console-body');
+  if (!body) return;
+  var tabs = _getConvTabs();
+  var tab  = tabs.find(function(t) { return t.id === _getConvActiveTabId(); });
+  var logs = (tab && tab.consoleLogs) || [];
+  var countEl = document.getElementById('browser-console-count');
+  if (countEl) countEl.textContent = logs.length ? '(' + logs.length + ')' : '';
+  if (!logs.length) {
+    body.innerHTML = '<div style="padding:7px 12px;color:var(--fau-text-muted);font-size:11px">No console output</div>';
+    return;
+  }
+  var atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 20;
+  body.innerHTML = logs.slice(-150).map(function(e) {
+    var lvl = e.level || 'log';
+    var line = e.line ? '<span class="bc-line">:' + e.line + '</span>' : '';
+    return '<div class="bc-entry bc-' + lvl + '">' +
+      '<span class="bc-lvl">' + lvl.slice(0, 4).toUpperCase() + '</span>' +
+      '<span class="bc-msg">' + escHtml((e.text || '').slice(0, 500)) + '</span>' + line + '</div>';
+  }).join('');
+  if (atBottom) body.scrollTop = body.scrollHeight;
+}
+
+function browserConsoleClear() {
+  var tabs = _getConvTabs();
+  var tab  = tabs.find(function(t) { return t.id === _getConvActiveTabId(); });
+  if (tab) tab.consoleLogs = [];
+  _updateConsolePanel();
 }
 
 // Resize — same pattern as artifact pane

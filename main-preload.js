@@ -5,6 +5,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('faunaApp', {
+  openExternal: (url) => ipcRenderer.send('browser:open-external', url),
   /**
    * Per-process nonce required by privileged UI-only routes
    * (e.g. /api/agent-builder/*). Read from process.env in the main
