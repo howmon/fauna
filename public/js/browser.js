@@ -1050,7 +1050,11 @@ async function executeBrowserAction(action) {
   // 2. Playwright MCP only when explicitly enabled, or as a final fallback for
   //    actions the webview cannot perform. Shared real-browser tabs are handled
   //    through browser-ext-action, not by hijacking browser-action.
-  var preferPlaywright = !!(typeof state !== 'undefined' && state.playwrightMCPEnabled);
+  //    EXCEPTION: localhost / 127.0.0.1 URLs always use the internal webview —
+  //    routing a local dev server through Playwright opens an external Chrome
+  //    window instead of the visible panel, which is wrong for dev debugging.
+  var isLocalUrl = action.url && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?/i.test(action.url);
+  var preferPlaywright = !isLocalUrl && !!(typeof state !== 'undefined' && state.playwrightMCPEnabled);
   if (preferPlaywright) {
     var preferredPwResult = await _executeBrowserActionViaPlaywright(action);
     if (preferredPwResult) return preferredPwResult;
