@@ -99,6 +99,8 @@ function _renderTabBar() {
 function _initWebviewEvents(wv, tabId, convId) {
   wv.addEventListener('dom-ready', function() {
     _domReadyWebviews.add(wv);
+    // Re-apply zoom when the webview navigates to a new page
+    if (_webviewZoom !== 1.0 && wv.setZoomFactor) wv.setZoomFactor(_webviewZoom);
   });
   // Visual focus indicator — accent strip at top of pane when webview has keyboard focus.
   wv.addEventListener('focus', function() {
@@ -668,6 +670,138 @@ function browserToggleDevTools() {
   } else if (wv.openDevTools) {
     wv.openDevTools();
   }
+}
+
+// ── Zoom ──────────────────────────────────────────────────────────────────
+// Scales the webview content via Electron's setZoomFactor. Works like
+// Ctrl+/- in a real browser but scoped to the Fauna browser panel only
+// (unlike VS Code's workbench.action.zoomIn which scales the whole UI).
+
+var _webviewZoom = 1.0;
+var ZOOM_STEPS   = [0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
+
+function _applyZoom(factor) {
+  _webviewZoom = factor;
+  var wv = getActiveWebview();
+  if (wv && wv.setZoomFactor) wv.setZoomFactor(factor);
+  var btn = document.getElementById('bp-zoom-reset');
+  if (btn) btn.textContent = Math.round(factor * 100) + '%';
+}
+function browserZoomIn() {
+  var next = ZOOM_STEPS.find(function(z) { return z > _webviewZoom + 0.01; }) || ZOOM_STEPS[ZOOM_STEPS.length - 1];
+  _applyZoom(next);
+}
+function browserZoomOut() {
+  var steps = ZOOM_STEPS.slice().reverse();
+  var next = steps.find(function(z) { return z < _webviewZoom - 0.01; }) || ZOOM_STEPS[0];
+  _applyZoom(next);
+}
+function browserZoomReset() { _applyZoom(1.0); }
+
+// ── Area screenshot ───────────────────────────────────────────────────────
+// Injects a drag-select overlay into the webview. The user draws a rectangle;
+// the overlay returns the rect, then wv.capturePage(rect) captures just that
+// region and sends it to the AI. Mirrors VS Code's "Add Area Screenshot to
+// Chat" toolbar action.
+
+var _areaShotFn = function _faunaAreaShot() {
+  if (window.__faunaAreaShot) { window.__faunaAreaShot.cancel(); }
+
+  var overlay = document.createElement('div');
+  Object.assign(overlay.style, {
+    position: 'fixed', inset: '0', zIndex: '2147483647',
+    cursor: 'crosshair', background: 'rgba(0,0,0,.25)'
+  });
+  var sel = document.createElement('div');
+  Object.assign(sel.style, {
+    position: 'fixed', border: '2px solid #6366f1',
+    background: 'rgba(99,102,241,.15)', display: 'none', pointerEvents: 'none'
+  });
+  var tip = document.createElement('div');
+  Object.assign(tip.style, {
+    position: 'fixed', background: '#1e1e2e', color: '#cdd6f4',
+    font: '11px/1.5 ui-monospace,monospace', padding: '2px 7px',
+    borderRadius: '4px', display: 'none', pointerEvents: 'none', zIndex: '2147483647'
+  });
+  document.body.appendChild(overlay);
+  document.body.appendChild(sel);
+  document.body.appendChild(tip);
+
+  var startX = 0, startY = 0, dragging = false;
+
+  function update(x, y) {
+    var x1 = Math.min(startX, x), y1 = Math.min(startY, y);
+    var w  = Math.abs(x - startX),  h  = Math.abs(y - startY);
+    Object.assign(sel.style, { left: x1+'px', top: y1+'px', width: w+'px', height: h+'px', display: 'block' });
+    tip.textContent = w + ' \u00d7 ' + h;
+    Object.assign(tip.style, { left: (x+8)+'px', top: (y+8)+'px', display: 'block' });
+  }
+  function cleanup() {
+    overlay.remove(); sel.remove(); tip.remove();
+    document.removeEventListener('keydown', onKey, true);
+    window.__faunaAreaShot = null;
+  }
+
+  return new Promise(function(resolve) {
+    window.__faunaAreaShot = { cancel: function() { cleanup(); resolve(null); } };
+
+    overlay.addEventListener('mousedown', function(e) {
+      startX = e.clientX; startY = e.clientY; dragging = true;
+      e.preventDefault();
+    });
+    overlay.addEventListener('mousemove', function(e) {
+      if (!dragging) return;
+      update(e.clientX, e.clientY);
+    });
+    overlay.addEventListener('mouseup', function(e) {
+      if (!dragging) return;
+      dragging = false;
+      var x1 = Math.min(startX, e.clientX), y1 = Math.min(startY, e.clientY);
+      var w  = Math.abs(e.clientX - startX),  h  = Math.abs(e.clientY - startY);
+      cleanup();
+      if (w < 5 || h < 5) { resolve(null); return; }
+      resolve({ x: Math.round(x1), y: Math.round(y1), width: Math.round(w), height: Math.round(h) });
+    });
+    function onKey(e) { if (e.key === 'Escape') { cleanup(); resolve(null); } }
+    document.addEventListener('keydown', onKey, true);
+  });
+};
+
+async function browserAreaScreenshot() {
+  var wv = getActiveWebview();
+  if (!wv) return;
+  var btn = document.getElementById('bp-area-shot');
+  if (btn) btn.classList.add('active');
+  document.getElementById('browser-status').textContent = 'Drag to select area\u2026';
+  try {
+    var rect = await wv.executeJavaScript('(' + _areaShotFn.toString() + ')()');
+    if (!rect) { document.getElementById('browser-status').textContent = ''; if (btn) btn.classList.remove('active'); return; }
+    var nativeImg = await wv.capturePage(rect);
+    var dataUrl   = nativeImg.toDataURL();
+    if (!dataUrl || !dataUrl.includes(',')) throw new Error('empty capture');
+    sendDirectMessage('[Area screenshot from browser (' + rect.width + '\u00d7' + rect.height + 'px)]', { image: dataUrl });
+    document.getElementById('browser-status').textContent = '';
+  } catch(e) {
+    document.getElementById('browser-status').textContent = 'Area screenshot failed';
+    dbg('browserAreaScreenshot error: ' + e.message, 'err');
+  }
+  if (btn) btn.classList.remove('active');
+}
+
+// ── Console logs → AI chat ────────────────────────────────────────────────
+
+function browserConsoleSendToAI() {
+  var tabs = _getConvTabs();
+  var tab  = tabs.find(function(t) { return t.id === _getConvActiveTabId(); });
+  var logs = (tab && tab.consoleLogs) || [];
+  if (!logs.length) { sendDirectMessage('No console output captured for the current browser tab.', { fromAutoFeed: false }); return; }
+  var wv  = getActiveWebview();
+  var url = wv && wv.getURL ? wv.getURL() : '';
+  var lines = logs.slice(-100).map(function(e) {
+    return '[' + (e.level || 'log').toUpperCase().padEnd(5) + '] ' + (e.text || '');
+  });
+  var msg = 'Console output from browser' + (url ? ' (' + url + ')' : '') + ':\n\n```\n' + lines.join('\n').slice(0, 8000) + '\n```';
+  sendDirectMessage(msg, { fromAutoFeed: false });
 }
 
 // ── Open in system browser ────────────────────────────────────────────────

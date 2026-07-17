@@ -4615,6 +4615,9 @@ body { animation: none; }
 #browser-pane.webview-focused #browser-pane-header {
   background: rgba(var(--accent-rgb, 99,102,241), .06);
 }
+
+/* Area-screenshot active state */
+#bp-area-shot.active { background: rgba(139,92,246,.25); border-color: #a78bfa; color: #a78bfa; }
 #browser-pane.resizing webview,
 #browser-pane.resizing iframe,
 #browser-pane.resizing #browser-webview-wrap { pointer-events: none; }

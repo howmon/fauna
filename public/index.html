@@ -547,6 +547,10 @@
       <input id="browser-url-input" type="url" placeholder="Enter URL and press Enter…"
              onkeydown="if(event.key==='Enter'){event.preventDefault();browserGo()}" spellcheck="false">
       <button class="bpnav" onclick="browserGo()" title="Go" style="color:var(--accent)"><i class="ti ti-arrow-right-circle"></i></button>
+      <div style="width:1px;height:16px;background:var(--fau-border);flex-shrink:0;margin:0 2px"></div>
+      <button class="bpnav" id="bp-zoom-out" onclick="browserZoomOut()" title="Zoom out"><i class="ti ti-zoom-out"></i></button>
+      <button class="bpnav" id="bp-zoom-reset" onclick="browserZoomReset()" title="Reset zoom" style="font-size:10px;font-family:var(--font-mono);min-width:36px;padding:0 3px" id="bp-zoom-level">100%</button>
+      <button class="bpnav" id="bp-zoom-in"  onclick="browserZoomIn()"  title="Zoom in"><i class="ti ti-zoom-in"></i></button>
     </div>
     <div id="browser-loading-bar"></div>
     <div id="antibot-banner">
@@ -564,6 +568,11 @@
       <button class="code-run" onclick="browserScreenshot()" title="Take screenshot and send to AI"
         style="background:rgba(99,102,241,.12);border-color:rgba(99,102,241,.35);color:#818cf8">
         <i class="ti ti-camera"></i> Screenshot
+      </button>
+      <button class="code-run" onclick="browserAreaScreenshot()" title="Drag to select an area, send screenshot to AI"
+        id="bp-area-shot"
+        style="background:rgba(139,92,246,.12);border-color:rgba(139,92,246,.35);color:#a78bfa">
+        <i class="ti ti-crop"></i> Area
       </button>
       <button class="bpnav" id="bp-open-ext" onclick="browserOpenExternal()" title="Open in system browser"><i class="ti ti-external-link"></i></button>
       <div style="width:1px;height:16px;background:var(--fau-border);flex-shrink:0;margin:0 2px"></div>
@@ -604,6 +613,7 @@
         <span style="font-size:11px;font-weight:600;color:var(--fau-text-dim)">Console</span>
         <span id="browser-console-count" style="font-size:10px;color:var(--fau-text-muted);margin-left:4px"></span>
         <span style="flex:1"></span>
+        <button class="bpnav" onclick="browserConsoleSendToAI()" title="Send console logs to AI chat" style="font-size:11px"><i class="ti ti-robot"></i></button>
         <button class="bpnav" onclick="browserConsoleClear()" title="Clear console" style="font-size:11px"><i class="ti ti-eraser"></i></button>
         <button class="bpnav" onclick="browserToggleConsole()" title="Close console"><i class="ti ti-x"></i></button>
       </div>
