@@ -984,6 +984,25 @@ export function getProjectSystemContext(projectId) {
       out += `\n#### ${ctx.name}\n${ctx.content || '(empty)'}\n`;
     }
   }
+  // Inject the project's design spec so every conversation starts with the
+  // brand context — no per-turn re-prompting required.
+  if (p.design && typeof p.design === 'object') {
+    const d = p.design;
+    const dLines = [];
+    if (d.lane)     dLines.push(`Surface lane: ${d.lane}`);
+    if (d.audience) dLines.push(`Audience: ${d.audience}`);
+    if (d.voice)    dLines.push(`Voice/tone: ${d.voice}`);
+    if (d.colors)   dLines.push(`Brand colors: ${JSON.stringify(d.colors)}`);
+    if (d.fonts)    dLines.push(`Fonts: ${JSON.stringify(d.fonts)}`);
+    if (d.doNotUse?.length)      dLines.push(`Do NOT use in generated UI: ${d.doNotUse.join(', ')}`);
+    if (d.antiReferences?.length) dLines.push(`Design anti-references (don't imitate): ${d.antiReferences.join(', ')}`);
+    if (d.notes)    dLines.push(`Design notes: ${d.notes}`);
+    if (dLines.length) {
+      out += '\n### Design Specification\n';
+      out += 'Apply this design spec to all generated UI, widgets, and artifacts:\n';
+      out += dLines.map(l => `- ${l}`).join('\n') + '\n';
+    }
+  }
   return out;
 }
 

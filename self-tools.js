@@ -102,6 +102,7 @@ import {
   documentIssues,
   documentMerge,
 } from './server/lib/office-tools.js';
+import { detectDesignIssues, formatFindings } from './lib/design-detector.js';
 
 // Per-conversation active plan state. Survives across the multiple
 // /api/chat requests that the client's plan auto-continue feature fires
@@ -2572,6 +2573,119 @@ export const SELF_TOOL_DEFS = [
       },
     },
   },
+
+  // ── Design tools (Impeccable-inspired) ───────────────────────────────────
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_init_design',
+      description:
+        'Save the project\'s design specification so all future UI generation is on-brand. ' +
+        'Call this AFTER interviewing the user about their design preferences (lane, audience, colors, fonts, voice, anti-references). ' +
+        'The saved spec is injected into every future conversation context for this project — no re-prompting needed. ' +
+        'Returns the saved design spec path.',
+      parameters: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Project ID to attach the design spec to. Defaults to the active project.' },
+          lane: { type: 'string', enum: ['brand', 'product', 'internal', 'other'], description: 'Surface type: brand (marketing/landing/portfolio) or product (app UI/dashboard/tool).' },
+          audience: { type: 'string', description: 'Primary audience, e.g. "enterprise developers", "consumers 25-35", "B2B SaaS customers".' },
+          voice: { type: 'string', description: 'Design voice / personality, e.g. "minimal, precise, technical" or "warm, approachable, playful".' },
+          colors: {
+            type: 'object',
+            description: 'Brand colors. Keys: accent (primary action color), background, surface, text.',
+            properties: {
+              accent: { type: 'string', description: 'Primary accent / CTA color (hex).' },
+              background: { type: 'string', description: 'Page background color (hex).' },
+              surface: { type: 'string', description: 'Card / panel surface color (hex).' },
+              text: { type: 'string', description: 'Body text color (hex).' },
+            },
+          },
+          fonts: {
+            type: 'object',
+            description: 'Typography choices.',
+            properties: {
+              heading: { type: 'string', description: 'Heading font family string.' },
+              body: { type: 'string', description: 'Body text font family string.' },
+              mono: { type: 'string', description: 'Code / mono font family string.' },
+            },
+          },
+          antiReferences: {
+            type: 'array', items: { type: 'string' },
+            description: 'Design references to NOT imitate, e.g. ["default Bootstrap", "Material Design", "Linear.app dark"]. These are injected as explicit don\'t-do-this guidance.',
+          },
+          doNotUse: {
+            type: 'array', items: { type: 'string' },
+            description: 'Specific patterns to avoid in generated UI, e.g. ["Inter font", "purple gradients", "nested cards", "bounce easing"].',
+          },
+          notes: { type: 'string', description: 'Any additional brand / design notes (copy rules, component preferences, dark mode behavior, etc.).' },
+        },
+        required: ['lane'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_design_audit',
+      description:
+        'Run a technical design quality check on a file or inline source. ' +
+        'Combines deterministic detector rules (a11y, spacing, color, AI slop patterns) with an LLM critique pass. ' +
+        'Returns a structured findings list with rule id, severity, message, and snippet. ' +
+        'Use this BEFORE delivering any UI artifact to the user — it catches Inter font, purple gradients, nested cards, missing alt text, skipped headings, etc.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute or ~/ path to an HTML/CSS/JS/TSX/Svelte file to audit.' },
+          source: { type: 'string', description: 'Inline source to audit (alternative to path).' },
+          filename: { type: 'string', description: 'Filename hint for inline source (e.g. "app.html") — enables file-type-specific rules.' },
+          llmCritique: { type: 'boolean', description: 'Also request an LLM-based design critique (hierarchy, visual rhythm, emotional resonance). Default false — deterministic rules only.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_design_polish',
+      description:
+        'Final design pass on a UI file or artifact: design system alignment, spacing normalisation, typographic hierarchy, and shipping readiness. ' +
+        'Reads the file, runs the design detector, then generates an LLM-driven improvement plan with specific before/after diffs. ' +
+        'Returns a list of recommended changes the agent can apply immediately.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute or ~/ path to the file to polish.' },
+          source: { type: 'string', description: 'Inline source (alternative to path).' },
+          filename: { type: 'string', description: 'Filename hint for inline source.' },
+          focus: { type: 'string', description: 'Optional area to focus on, e.g. "header" or "color system".' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_design_harden',
+      description:
+        'Add robustness to a UI: error states, empty states, loading states, i18n text overflow, edge cases, and accessibility improvements. ' +
+        'Reads the file, identifies missing states (e.g. empty list, network error, long label truncation), and returns a concrete change list. ' +
+        'Run this after fauna_design_polish as the last step before shipping.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute or ~/ path to the file to harden.' },
+          source: { type: 'string', description: 'Inline source (alternative to path).' },
+          filename: { type: 'string', description: 'Filename hint for inline source.' },
+          checks: {
+            type: 'array', items: { type: 'string' },
+            description: 'Which hardening checks to run. Omit for all. Options: "empty-states", "error-states", "loading-states", "i18n-overflow", "touch-targets", "focus-management".',
+          },
+        },
+      },
+    },
+  },
+
   // ── Video Studio (MoneyPrinterTurbo-style short-form video generator) ────
   // Pipeline: script → terms → audio → subtitle → footage → render
   // Each step is idempotent + resumable. Tool calls stream progress as
@@ -3774,7 +3888,22 @@ export async function executeSelfTool(toolName, args, context = {}) {
       try {
         const started = Date.now();
         const result = _writeFastFile(args || {});
-        return JSON.stringify({ ok: true, ms: Date.now() - started, result });
+        // Run design detector on UI file writes — surfaces findings in tool
+        // result so the agent can self-correct in the same turn.
+        const _UI_EXTS = new Set(['.html', '.htm', '.css', '.tsx', '.jsx', '.svelte', '.vue']);
+        const _writtenExt = path.extname(result.path || '').toLowerCase();
+        let designFindings = null;
+        if (_UI_EXTS.has(_writtenExt) && typeof args.content === 'string' && args.content.length > 0) {
+          try {
+            const { findings, summary } = detectDesignIssues(args.content, { filename: path.basename(result.path || '') });
+            if (findings.length) {
+              designFindings = { summary, findings: findings.slice(0, 10) };
+            }
+          } catch (_) { /* detector must never crash the write */ }
+        }
+        const out = { ok: true, ms: Date.now() - started, result };
+        if (designFindings) out.designFindings = designFindings;
+        return JSON.stringify(out);
       } catch (e) {
         return JSON.stringify({ ok: false, error: e.message });
       }
@@ -4362,6 +4491,142 @@ export async function executeSelfTool(toolName, args, context = {}) {
       })();
     }
 
+    // ── Design tools (Impeccable-inspired) ───────────────────────────────
+    case 'fauna_init_design': {
+      return (async () => {
+        try {
+          const projectId = args.projectId || context.activeProjectId || context.projectId || null;
+          const spec = {
+            lane:           args.lane || 'product',
+            audience:       args.audience || null,
+            voice:          args.voice   || null,
+            colors:         args.colors  || null,
+            fonts:          args.fonts   || null,
+            antiReferences: args.antiReferences || [],
+            doNotUse:       args.doNotUse       || [],
+            notes:          args.notes  || null,
+            updatedAt:      new Date().toISOString(),
+          };
+          // Persist to project record if we have one
+          if (projectId) {
+            const { updateProject } = await import('./project-manager.js');
+            updateProject(projectId, { design: spec });
+          }
+          // Also write to ~/.config/fauna/design.json as a global fallback
+          const globalPath = path.join(os.homedir(), '.config', 'fauna', 'design.json');
+          try {
+            fs.mkdirSync(path.dirname(globalPath), { recursive: true });
+            fs.writeFileSync(globalPath, JSON.stringify(spec, null, 2), 'utf8');
+          } catch (_) {}
+          return JSON.stringify({
+            ok: true,
+            spec,
+            savedTo: projectId ? 'project record' : globalPath,
+            note: 'Design spec saved. It will be injected into the system context for all future conversations' + (projectId ? ' in this project.' : '.'),
+          });
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: e.message });
+        }
+      })();
+    }
+
+    case 'fauna_design_audit': {
+      return (async () => {
+        try {
+          let source = args.source || '';
+          let filename = args.filename || '';
+          if (args.path) {
+            const abs = path.isAbsolute(args.path) ? args.path : path.join(os.homedir(), args.path.replace(/^~\//, ''));
+            if (fs.existsSync(abs)) {
+              source = fs.readFileSync(abs, 'utf8');
+              filename = filename || path.basename(abs);
+            } else {
+              return JSON.stringify({ ok: false, error: 'File not found: ' + abs });
+            }
+          }
+          if (!source) return JSON.stringify({ ok: false, error: 'path or source required' });
+          const { findings, summary } = detectDesignIssues(source, { filename });
+          const formatted = formatFindings(findings, filename);
+          let llmCritique = null;
+          if (args.llmCritique && typeof context.callLLM === 'function') {
+            const trimmedSrc = source.slice(0, 6000);
+            llmCritique = await context.callLLM({
+              system: 'You are an expert UI/UX designer reviewing AI-generated frontend code. Be concise and specific. Identify the 3 most important design problems: visual hierarchy, spacing/rhythm, and emotional resonance. Output as a bulleted list, each item max 2 sentences.',
+              user: `Review this UI file (${filename || 'unknown'}):\n\n\`\`\`\n${trimmedSrc}\n\`\`\``,
+              maxTokens: 400,
+              temperature: 0.3,
+            });
+          }
+          return JSON.stringify({ ok: true, filename, summary, findings, formatted, llmCritique });
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: e.message });
+        }
+      })();
+    }
+
+    case 'fauna_design_polish': {
+      return (async () => {
+        try {
+          let source = args.source || '';
+          let filename = args.filename || '';
+          if (args.path) {
+            const abs = path.isAbsolute(args.path) ? args.path : path.join(os.homedir(), args.path.replace(/^~\//, ''));
+            if (fs.existsSync(abs)) { source = fs.readFileSync(abs, 'utf8'); filename = filename || path.basename(abs); }
+            else return JSON.stringify({ ok: false, error: 'File not found: ' + abs });
+          }
+          if (!source) return JSON.stringify({ ok: false, error: 'path or source required' });
+          const { findings, summary } = detectDesignIssues(source, { filename });
+          const detectorNote = findings.length ? formatFindings(findings, filename) + '\n\n' : '';
+          if (typeof context.callLLM !== 'function') {
+            return JSON.stringify({ ok: true, filename, detectorSummary: summary, findings, recommendation: 'callLLM not available — fix detector findings above manually.' });
+          }
+          const focusNote = args.focus ? `Focus on: ${args.focus}.\n` : '';
+          const trimmedSrc = source.slice(0, 8000);
+          const recommendation = await context.callLLM({
+            system: 'You are a senior UI/UX engineer doing a final polish pass. Output ONLY a numbered list of concrete, actionable changes (no prose intro). Each item: what to change, why, and the specific before→after diff or new value. Max 8 items.',
+            user: `${focusNote}Polish this UI file (${filename || 'unknown'}).\n${detectorNote}Source:\n\`\`\`\n${trimmedSrc}\n\`\`\``,
+            maxTokens: 700,
+            temperature: 0.2,
+          });
+          return JSON.stringify({ ok: true, filename, detectorSummary: summary, findings, recommendation });
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: e.message });
+        }
+      })();
+    }
+
+    case 'fauna_design_harden': {
+      return (async () => {
+        try {
+          let source = args.source || '';
+          let filename = args.filename || '';
+          if (args.path) {
+            const abs = path.isAbsolute(args.path) ? args.path : path.join(os.homedir(), args.path.replace(/^~\//, ''));
+            if (fs.existsSync(abs)) { source = fs.readFileSync(abs, 'utf8'); filename = filename || path.basename(abs); }
+            else return JSON.stringify({ ok: false, error: 'File not found: ' + abs });
+          }
+          if (!source) return JSON.stringify({ ok: false, error: 'path or source required' });
+          const checks = Array.isArray(args.checks) && args.checks.length
+            ? args.checks
+            : ['empty-states', 'error-states', 'loading-states', 'i18n-overflow', 'touch-targets', 'focus-management'];
+          if (typeof context.callLLM !== 'function') {
+            return JSON.stringify({ ok: false, error: 'callLLM not available in this context' });
+          }
+          const trimmedSrc = source.slice(0, 8000);
+          const checkList = checks.map(c => `- ${c}`).join('\n');
+          const recommendation = await context.callLLM({
+            system: 'You are a senior frontend engineer adding robustness to a UI. Output ONLY a numbered list of concrete additions: what to add, where, and the exact JSX/HTML/CSS to insert. Focus on missing states and edge cases. Max 8 items.',
+            user: `Harden this UI file (${filename || 'unknown'}) for these checks:\n${checkList}\n\nSource:\n\`\`\`\n${trimmedSrc}\n\`\`\``,
+            maxTokens: 700,
+            temperature: 0.2,
+          });
+          return JSON.stringify({ ok: true, filename, checks, recommendation });
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: e.message });
+        }
+      })();
+    }
+
     // ── Video Studio ─────────────────────────────────────────────────────
     case 'fauna_video_create': {
       try {
@@ -4784,6 +5049,35 @@ function _emitWidget(args, context) {
     // Pack a tool_result the model can see. We strip the bundle from the
     // model-visible payload — the model doesn't need to re-read its own code,
     // and including it would balloon the context window.
+    // Append the active project's design spec as a reminder so the agent
+    // always generates on-brand widgets without re-prompting.
+    let _designNote = '';
+    try {
+      const _projId = context.activeProjectId || context.projectId || null;
+      let _designSpec = null;
+      if (_projId) {
+        const _proj = getProject(_projId);
+        if (_proj && _proj.design) _designSpec = _proj.design;
+      }
+      if (!_designSpec) {
+        const _globalDesign = path.join(os.homedir(), '.config', 'fauna', 'design.json');
+        if (fs.existsSync(_globalDesign)) {
+          try { _designSpec = JSON.parse(fs.readFileSync(_globalDesign, 'utf8')); } catch (_) {}
+        }
+      }
+      if (_designSpec) {
+        const _lines = [];
+        if (_designSpec.lane)     _lines.push(`Lane: ${_designSpec.lane}`);
+        if (_designSpec.audience) _lines.push(`Audience: ${_designSpec.audience}`);
+        if (_designSpec.voice)    _lines.push(`Voice: ${_designSpec.voice}`);
+        if (_designSpec.colors)   _lines.push(`Colors: ${JSON.stringify(_designSpec.colors)}`);
+        if (_designSpec.fonts)    _lines.push(`Fonts: ${JSON.stringify(_designSpec.fonts)}`);
+        if (_designSpec.doNotUse?.length) _lines.push(`Do NOT use: ${_designSpec.doNotUse.join(', ')}`);
+        if (_designSpec.antiReferences?.length) _lines.push(`Anti-references: ${_designSpec.antiReferences.join(', ')}`);
+        if (_designSpec.notes)    _lines.push(`Notes: ${_designSpec.notes}`);
+        if (_lines.length) _designNote = '\n\nProject design spec (apply to this widget):\n' + _lines.join('\n');
+      }
+    } catch (_) { /* design injection is best-effort */ }
     return packWidgetResult(
       {
         ok: true,
@@ -4792,7 +5086,7 @@ function _emitWidget(args, context) {
         exposed: tools.map(t => `w_${widgetId.replace(/[^a-z0-9]/gi,'').slice(0,24)}__${t.name}`),
         savedPath,
         note: 'Widget is now live. Call the exposed tool names to interact with it.' +
-          (savedPath ? ` Files mirrored to ${savedPath}` : ''),
+          (savedPath ? ` Files mirrored to ${savedPath}` : '') + _designNote,
       },
       { widgetId, tools },
     );
