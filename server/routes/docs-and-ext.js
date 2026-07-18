@@ -10,6 +10,13 @@ import { createRequire } from 'module';
 import { buildShellEnv } from '../lib/shell-env.js';
 import { faunaTmpFile } from '../lib/fauna-tmp.js';
 import { renderOfficeToPdf, isOfficeRenderable } from '../lib/office-render.js';
+import {
+  renderDocumentToPngs,
+  documentGet,
+  documentSet,
+  documentIssues,
+  documentMerge,
+} from '../lib/office-tools.js';
 
 const _require = createRequire(import.meta.url);
 const { augmentedPath: _AUGMENTED_PATH } = buildShellEnv(process.platform === 'win32');
@@ -413,6 +420,58 @@ export function registerDocsAndExtRoutes(app, { faunaConfigDir, appDir }) {
     // Intentionally do NOT unlink `tmp` — the janitor in server/lib/fauna-tmp.js
     // sweeps files older than 30 days. Keeping the staged attachment around
     // means a failed extraction is still recoverable from ~/Documents/Fauna/tmp.
+  });
+
+  // ── Office document tools (render-to-PNG, path-based get/set, issues, merge) ──
+  // GET /api/office-screenshots?path=<file>&pages=1,2&dpi=150
+  //   Render document pages to PNG (via LibreOffice + pdftoppm).
+  //   Returns { ok, pngs: ["/absolute/path/to/page-1.png", ...] }
+  app.get('/api/office-screenshots', async (req, res) => {
+    const p   = req.query.path;
+    const dpi = Math.min(Math.max(parseInt(req.query.dpi || '150', 10), 72), 300);
+    if (!p) return res.status(400).json({ ok: false, error: 'path required' });
+    const pagesRaw = req.query.pages;
+    const pages = pagesRaw ? pagesRaw.split(',').map(Number).filter(Boolean) : 'all';
+    const result = await renderDocumentToPngs(p, { pages, dpi });
+    if (!result.ok) return res.status(result.needsInstall ? 501 : 500).json(result);
+    res.json(result);
+  });
+
+  // POST /api/office-get { path, docPath }
+  //   Get element at a path. Returns structured JSON.
+  app.post('/api/office-get', async (req, res) => {
+    const { path: filePath, docPath = '/' } = req.body || {};
+    if (!filePath) return res.status(400).json({ ok: false, error: 'path required' });
+    const result = await documentGet(filePath, docPath);
+    res.status(result.ok ? 200 : (result.code === 'file_not_found' ? 404 : 400)).json(result);
+  });
+
+  // POST /api/office-set { path, docPath, props }
+  //   Set element properties at a path. Writes in-place.
+  app.post('/api/office-set', async (req, res) => {
+    const { path: filePath, docPath, props } = req.body || {};
+    if (!filePath || !docPath) return res.status(400).json({ ok: false, error: 'path and docPath required' });
+    const result = await documentSet(filePath, docPath, props || {});
+    res.status(result.ok ? 200 : 400).json(result);
+  });
+
+  // POST /api/office-issues { path }
+  //   Scan document for quality issues.
+  app.post('/api/office-issues', async (req, res) => {
+    const { path: filePath } = req.body || {};
+    if (!filePath) return res.status(400).json({ ok: false, error: 'path required' });
+    const result = await documentIssues(filePath);
+    res.status(result.ok ? 200 : 500).json(result);
+  });
+
+  // POST /api/office-merge { src, dest, data }
+  //   Merge {{key}} placeholders in src → dest using data.
+  app.post('/api/office-merge', async (req, res) => {
+    const { src, dest, data } = req.body || {};
+    if (!src || !dest) return res.status(400).json({ ok: false, error: 'src and dest required' });
+    if (!data || typeof data !== 'object') return res.status(400).json({ ok: false, error: 'data object required' });
+    const result = await documentMerge(src, dest, data);
+    res.status(result.ok ? 200 : 400).json(result);
   });
 
   // ── Browser extension install / download ────────────────────────────────

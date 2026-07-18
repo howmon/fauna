@@ -95,6 +95,13 @@ import { runWorkspaceDiagnostics } from './lib/diagnostics.js';
 import { workspaceSymbols, symbolDefinition, symbolReferences, renameSymbol } from './lib/language-tools.js';
 import { startTerminalSession, sendTerminalInput, getTerminalOutput, listTerminalSessions, killTerminalSession } from './lib/terminal-sessions.js';
 import { parseTestResults, runTestResults } from './lib/test-results.js';
+import {
+  renderDocumentToPngs,
+  documentGet,
+  documentSet,
+  documentIssues,
+  documentMerge,
+} from './server/lib/office-tools.js';
 
 // Per-conversation active plan state. Survives across the multiple
 // /api/chat requests that the client's plan auto-continue feature fires
@@ -2455,6 +2462,116 @@ export const SELF_TOOL_DEFS = [
       },
     },
   },
+  // ── Office document tools (render, get, set, issues, merge) ─────────────
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_document_screenshot',
+      description:
+        'Render a Word (.docx), PowerPoint (.pptx), Excel (.xlsx), or any other office document to PNG screenshots (one per page/slide) so you can SEE the visual output and verify layout, overflow, and styling before declaring a task done. ' +
+        'Returns { ok, pngs: ["/absolute/path/..."] }. You can then reference those paths in your reply as markdown images (![slide 1](path)) to show them to the user. ' +
+        'ALWAYS call this after generating or editing an office document — it closes the "flying blind" loop. ' +
+        'Requires LibreOffice (soffice) + pdftoppm (poppler) to be installed; returns needsInstall hint if missing.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute or ~/ path to the document to render.' },
+          pages: {
+            description: 'Which pages/slides to render. "all" (default), a single number (e.g. 1), or an array of numbers (e.g. [1,2,3]).',
+            oneOf: [
+              { type: 'string', enum: ['all'] },
+              { type: 'number' },
+              { type: 'array', items: { type: 'number' } },
+            ],
+          },
+          dpi: { type: 'number', description: 'Resolution in DPI (72-300). Default 150. Use 100 for quick previews, 200+ for detail checks.' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_document_get',
+      description:
+        'Get structured data about an element in a Word, PowerPoint, or Excel document using a path. ' +
+        'PPTX paths: "/" (slide list), "/slide[N]" (shapes on slide N), "/slide[N]/shape[M]" (shape detail), "/slide[N]/shape[@name=Title]" (shape by name). ' +
+        'DOCX paths: "/" (stats), "/body" (element list), "/body/p[N]" (paragraph N), "/body/tbl[N]" (table N). ' +
+        'XLSX paths: "/" (sheet list), "/SheetName" (sheet stats), "/SheetName/A1" (cell), "/SheetName/row[N]" (row). ' +
+        'Returns typed, structured JSON with error codes and suggestions on failure (e.g. code "not_found" + valid range).',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute or ~/ path to the document.' },
+          docPath: { type: 'string', description: 'Element path inside the document, e.g. "/slide[1]/shape[2]". Defaults to "/" (root).' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_document_set',
+      description:
+        'Set properties on an element inside a Word, PowerPoint, or Excel document at a given path. Writes back in-place. ' +
+        'PPTX: path="/slide[N]/shape[M]", props can include text, bold, italic, font_size (number, points), color (hex e.g. "FF0000"). ' +
+        'DOCX: path="/body/p[N]", props can include text, bold, style (style name). ' +
+        'XLSX: path="/SheetName/A1", props can include value (any scalar) or formula (string starting with "="). ' +
+        'Returns { ok, path, changed: [...propNames] }.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path:    { type: 'string', description: 'Absolute or ~/ path to the document.' },
+          docPath: { type: 'string', description: 'Element path, e.g. "/slide[1]/shape[2]" or "/body/p[3]" or "/Sheet1/B2".' },
+          props:   { type: 'object', description: 'Properties to set. Keys depend on format — see description.' },
+        },
+        required: ['path', 'docPath', 'props'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_document_issues',
+      description:
+        'Scan a Word, PowerPoint, or Excel document for common quality issues: ' +
+        'PPTX — empty slides, empty shapes, long text that may overflow, shapes outside slide boundary, images without alt text. ' +
+        'DOCX — very long paragraphs, excessive empty paragraphs. ' +
+        'XLSX — cells containing formula errors (#VALUE!, #REF!, #N/A, etc.). ' +
+        'Returns { ok, issue_count, issues: [{type, slide?, paragraph?, cell?, message}] }. ' +
+        'Call this before delivering a document to the user.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute or ~/ path to the document to check.' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_document_merge',
+      description:
+        'Template merge: replace {{key}} placeholders in a Word (.docx), PowerPoint (.pptx), or Excel (.xlsx) document with values from a data object. ' +
+        'Useful for filling report templates, invoice templates, slide decks, etc. without re-generating from scratch. ' +
+        'The agent designs the layout once (the template); downstream code fills placeholders N times — deterministic, zero token cost per fill. ' +
+        'src and dest may be the same path for in-place replacement. ' +
+        'Returns { ok, src, dest, replacements: N }.',
+      parameters: {
+        type: 'object',
+        properties: {
+          src:  { type: 'string', description: 'Absolute or ~/ path to the source template document.' },
+          dest: { type: 'string', description: 'Absolute or ~/ path to write the filled document (may equal src for in-place).' },
+          data: { type: 'object', description: 'Key-value pairs where each key matches a {{key}} placeholder in the document.' },
+        },
+        required: ['src', 'dest', 'data'],
+      },
+    },
+  },
   // ── Video Studio (MoneyPrinterTurbo-style short-form video generator) ────
   // Pipeline: script → terms → audio → subtitle → footage → render
   // Each step is idempotent + resumable. Tool calls stream progress as
@@ -4188,6 +4305,60 @@ export async function executeSelfTool(toolName, args, context = {}) {
           critiques: round2,
           recommendation: judge,
         });
+      })();
+    }
+
+    // ── Office document tools ─────────────────────────────────────────────
+    case 'fauna_document_screenshot': {
+      return (async () => {
+        try {
+          const pages = args.pages === undefined ? 'all' : args.pages;
+          const dpi   = args.dpi   || 150;
+          const result = await renderDocumentToPngs(String(args.path || ''), { pages, dpi });
+          return JSON.stringify(result);
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: e.message });
+        }
+      })();
+    }
+    case 'fauna_document_get': {
+      return (async () => {
+        try {
+          const result = await documentGet(String(args.path || ''), String(args.docPath || '/'));
+          return JSON.stringify(result);
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: e.message });
+        }
+      })();
+    }
+    case 'fauna_document_set': {
+      return (async () => {
+        try {
+          const result = await documentSet(String(args.path || ''), String(args.docPath || '/'), args.props || {});
+          return JSON.stringify(result);
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: e.message });
+        }
+      })();
+    }
+    case 'fauna_document_issues': {
+      return (async () => {
+        try {
+          const result = await documentIssues(String(args.path || ''));
+          return JSON.stringify(result);
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: e.message });
+        }
+      })();
+    }
+    case 'fauna_document_merge': {
+      return (async () => {
+        try {
+          const result = await documentMerge(String(args.src || ''), String(args.dest || ''), args.data || {});
+          return JSON.stringify(result);
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: e.message });
+        }
       })();
     }
 
