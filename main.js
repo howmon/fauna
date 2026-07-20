@@ -289,16 +289,18 @@ async function createWindow({ convId, projectId, bounds, blank, restored } = {})
   // Fallback: if ready-to-show is delayed (common on Windows), show after 4 s
   setTimeout(() => { if (!win.isDestroyed() && !win.isVisible()) win.show(); }, 4000);
 
-  // Open external links in the default browser, not in Electron
+  // Open external links in the default browser, not in Electron.
+  // Guard against about:blank / data: / empty URLs — those must never reach
+  // shell.openExternal() or they open a blank system browser window.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    if (url && /^https?:\/\//i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
 
   win.webContents.on('will-navigate', (e, url) => {
     if (!url.startsWith(`http://localhost:${PORT}`)) {
       e.preventDefault();
-      shell.openExternal(url);
+      if (/^https?:\/\//i.test(url)) shell.openExternal(url);
     }
   });
 
@@ -336,6 +338,13 @@ async function createWindow({ convId, projectId, bounds, blank, restored } = {})
     if (!wc) return;
     applyBrowserColorScheme(wc);
     wc.on('did-finish-load', () => applyBrowserColorScheme(wc));
+    // Intercept popup windows opened by pages inside the in-app browser
+    // webview (e.g. window.open / target=_blank links). Without this handler
+    // the popup escapes as a real OS BrowserWindow or an about:blank window.
+    wc.setWindowOpenHandler(({ url }) => {
+      if (url && /^https?:\/\//i.test(url)) shell.openExternal(url);
+      return { action: 'deny' };
+    });
   });
 
   return win;
