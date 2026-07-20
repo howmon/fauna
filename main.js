@@ -1205,6 +1205,13 @@ app.whenReady().then(async () => {
 
   await startServer(PORT).catch(err => {
     console.error('[Electron] Server failed to start:', err.message);
+    const isPortConflict = err.code === 'EADDRINUSE';
+    dialog.showErrorBox(
+      'Fauna failed to start',
+      isPortConflict
+        ? `Port ${PORT} is already in use.\n\nAnother instance of Fauna (or a dev server) may already be running. Close it and try again.`
+        : `Server error: ${err.message}`
+    );
     app.quit();
     throw err;
   });
