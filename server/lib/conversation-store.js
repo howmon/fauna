@@ -96,6 +96,29 @@ async function atomicWriteJson(filePath, value) {
   await fsp.rename(tmp, filePath);
 }
 
+// ── Orphaned temp file cleanup ────────────────────────────────────────────
+// When the process is killed between writeFile and rename (e.g. force-quit)
+// the .tmp-<pid>-<ts> file is never cleaned up. Purge any orphan older than
+// 5 minutes that doesn't belong to the current PID (in-flight writes use
+// different ts-suffixed names so they are never matched by pattern alone).
+export async function cleanupOrphanedTempFiles(dir) {
+  const STALE_MS = 5 * 60 * 1000; // 5 minutes
+  const now = Date.now();
+  let entries;
+  try { entries = await fsp.readdir(dir); } catch (_) { return; }
+  const orphans = entries.filter(name => {
+    if (!name.match(/^conversations\.json\.tmp-\d+-\d+$/)) return false;
+    const parts = name.split('-');
+    const pid = parseInt(parts[parts.length - 2], 10);
+    const ts  = parseInt(parts[parts.length - 1], 10);
+    // Keep files belonging to this PID (active write) or younger than 5 min.
+    return pid !== process.pid && (now - ts) > STALE_MS;
+  });
+  for (const name of orphans) {
+    try { await fsp.unlink(path.join(dir, name)); } catch (_) {}
+  }
+}
+
 // ── Legacy backend (single conversations.json) ────────────────────────────
 function createLegacyBackend({ configDir }) {
   const file = path.join(configDir, 'conversations.json');

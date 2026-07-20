@@ -50,7 +50,7 @@ import { registerProjectRoutes } from './server/routes/projects.js';
 import { registerGenUiShareRoutes } from './server/routes/genui-share.js';
 import { registerSyncRoutes } from './server/routes/sync.js';
 import { registerServerlessSyncRoutes } from './server/routes/serverless-sync.js';
-import { createConversationStore } from './server/lib/conversation-store.js';
+import { createConversationStore, cleanupOrphanedTempFiles } from './server/lib/conversation-store.js';
 import { registerGitHubRoutes } from './server/routes/github.js';
 import {
   listGitHubAccounts,
@@ -159,6 +159,9 @@ const FAUNA_CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
 // and the sync adapter — two stores would mean two independent per-id
 // mutexes and a race on simultaneous local-edit + remote-pull writes.
 const _sharedConversationStore = createConversationStore({ configDir: FAUNA_CONFIG_DIR });
+
+// Clean up any orphaned .tmp files left by prior crashes (best-effort, async).
+cleanupOrphanedTempFiles(FAUNA_CONFIG_DIR).catch(() => {});
 
 // Module-level AI caller — set during startServer(), used by permission guard etc.
 let internalAICaller = async () => '';

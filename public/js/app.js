@@ -305,6 +305,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     handleAgentAutocompleteKey(e);
   });
 
+  // Open an explicit conversation deep link; otherwise land on Home by default.
+  // Done BEFORE hydration so the page is never blank while the 24 MB server
+  // sync is in flight. _hydrateServerConvs() re-renders the conversation list
+  // and home page itself once the merge is complete.
+  if (launch.convId && getConv(launch.convId)) {
+    loadConversation(launch.convId);
+  } else if (typeof openHomePage === 'function') {
+    openHomePage();
+  } else {
+    showEmpty();
+  }
+
   // Hydrate conversations: merge server-side conversations with localStorage
   // This ensures conversations from CLI/mobile are visible, and standalone app
   // doesn't lose conversations when Electron's localStorage resets (new build, etc.)
@@ -319,15 +331,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Re-hydrate when window regains focus (picks up mobile/CLI conversations)
   window.addEventListener('focus', function() { _hydrateServerConvs(); });
-
-  // Open an explicit conversation deep link; otherwise land on Home by default.
-  if (launch.convId && getConv(launch.convId)) {
-    loadConversation(launch.convId);
-  } else if (typeof openHomePage === 'function') {
-    openHomePage();
-  } else {
-    showEmpty();
-  }
 
   // One-time migration: sync localStorage conversations to server for CLI/mobile access
   if (!localStorage.getItem('fauna-convs-synced') && state.conversations.length) {

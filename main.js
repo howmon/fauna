@@ -276,6 +276,13 @@ async function createWindow({ convId, projectId, bounds, blank, restored } = {})
     win.show();
     win.focus();
   });
+  // Capture renderer console messages to main-process stdout for debugging.
+  win.webContents.on('console-message', (_e, level, message, line, source) => {
+    if (level >= 2) { // 2=warn, 3=error
+      const tag = level === 3 ? '[renderer:error]' : '[renderer:warn]';
+      console.log(tag, message, source ? `(${source}:${line})` : '');
+    }
+  });
   // Once the renderer has fully loaded, deliver any files that were opened via
   // a file association / dock drop / command line while no window was ready.
   win.webContents.once('did-finish-load', () => flushOpenFiles());

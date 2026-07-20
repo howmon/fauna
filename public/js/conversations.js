@@ -743,36 +743,64 @@ function loadConversation(id, opts) {
 
   // Only populate DOM if it's empty (first load); don't re-render if already built
   if (!convInner.hasChildNodes()) {
-    // Render archived messages first (history preserved from previous compressions)
+    // Render archived messages lazily behind a toggle so large histories don't
+    // block the JS thread on load.  The container is inserted immediately;
+    // messages are rendered only when the user clicks "Show history".
     if (conv.archivedMessages && conv.archivedMessages.length) {
-      conv.archivedMessages.forEach(function(m) {
-        if (m._compositionHandoff) return;
-        if (m._isKanbanFeedback) {
-          _appendKanbanFeedbackDom(id, m);
-          return;
-        }
-        if (m._isBrowserFeed) {
-          var feedNote = document.createElement('div');
-          feedNote.className = 'msg system-msg';
-          feedNote.innerHTML = '<div class="msg-body" style="display:flex;align-items:center;gap:5px;font-size:11px">' +
-            '<i class="ti ti-world-www" style="font-size:12px;opacity:.5"></i>' +
-            '<span>Browser page fed to AI</span>' +
-          '</div>';
-          convInner.appendChild(feedNote);
-          return;
-        }
-        if (m._isAutoFeed) {
-          var autoNote = document.createElement('div');
-          autoNote.className = 'msg system-msg';
-          autoNote.innerHTML = '<div class="msg-body" style="display:flex;align-items:center;gap:5px;font-size:11px">' +
-            '<i class="ti ti-terminal-2" style="font-size:12px;opacity:.5"></i>' +
-            '<span>Shell output fed to AI</span>' +
-          '</div>';
-          convInner.appendChild(autoNote);
-          return;
-        }
-        appendMessageDOM(m.role, m.content, m.attachments, false, m.agentInfo || null, m._isHTML || false, m.reasoning || null, m.widgets || null, m.plan || null);
-      });
+      var archCount = conv.archivedMessages.length;
+      var archContainer = document.createElement('div');
+      archContainer.className = 'conv-archive-collapsed';
+      archContainer.dataset.convId = id;
+
+      var archToggle = document.createElement('button');
+      archToggle.className = 'conv-archive-toggle';
+      archToggle.innerHTML =
+        '<i class="ti ti-history"></i> Show ' + archCount + ' archived message' + (archCount === 1 ? '' : 's');
+      archToggle.onclick = function() {
+        // Render archived messages now (deferred until user requests them).
+        // appendMessageDOM always appends to convInner; we immediately move
+        // each new child into archContainer (before the toggle) so the order
+        // is preserved: archive → divider → active messages.
+        archToggle.disabled = true;
+        archToggle.innerHTML = '<i class="ti ti-loader-2" style="animation:spin 1s linear infinite"></i> Loading…';
+        var archMsgs = conv.archivedMessages;
+        var convInnerEl = getConvInner(id);
+        // Yield one frame so the button-update paints before the heavy render.
+        setTimeout(function() {
+          archMsgs.forEach(function(m) {
+            if (m._compositionHandoff) return;
+            if (m._isKanbanFeedback) {
+              _appendKanbanFeedbackDom(id, m);
+              // Move the freshly appended element into the archive container.
+              if (convInnerEl.lastChild && convInnerEl.lastChild !== archContainer) {
+                archContainer.insertBefore(convInnerEl.lastChild, archToggle);
+              }
+              return;
+            }
+            var sysNote = null;
+            if (m._isBrowserFeed) {
+              sysNote = '<i class="ti ti-world-www" style="font-size:12px;opacity:.5"></i><span>Browser page fed to AI</span>';
+            } else if (m._isAutoFeed) {
+              sysNote = '<i class="ti ti-terminal-2" style="font-size:12px;opacity:.5"></i><span>Shell output fed to AI</span>';
+            }
+            if (sysNote) {
+              var note = document.createElement('div');
+              note.className = 'msg system-msg';
+              note.innerHTML = '<div class="msg-body" style="display:flex;align-items:center;gap:5px;font-size:11px">' + sysNote + '</div>';
+              archContainer.insertBefore(note, archToggle);
+            } else {
+              appendMessageDOM(m.role, m.content, m.attachments, false, m.agentInfo || null, m._isHTML || false, m.reasoning || null, m.widgets || null, m.plan || null);
+              // Move the freshly appended element from convInner into archContainer.
+              if (convInnerEl.lastChild && convInnerEl.lastChild !== archContainer) {
+                archContainer.insertBefore(convInnerEl.lastChild, archToggle);
+              }
+            }
+          });
+          archToggle.remove();
+        }, 0);
+      };
+      archContainer.appendChild(archToggle);
+      convInner.appendChild(archContainer);
 
       // Divider showing where archive ends and active context begins
       var divider = document.createElement('div');
