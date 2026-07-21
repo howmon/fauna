@@ -1391,6 +1391,9 @@ async function streamResponse(conv) {
         if (!pre.textContent) pre.textContent = 'Completed without preview output.';
       });
     }
+    if (_liveToolOutputBody && typeof applyActivityStepLimit === 'function') {
+      applyActivityStepLimit(_liveToolOutputBody, !!completed);
+    }
     _liveToolOutputEl.setAttribute('data-completed', completed ? '1' : '0');
   }
 

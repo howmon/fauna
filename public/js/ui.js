@@ -1171,9 +1171,39 @@ function createActivityStep(label, kind, detailText, open) {
   return step;
 }
 
+function shouldShowCollapsedActivityStep(index, count) {
+  return count <= 5 || index === 0 || index >= count - 4;
+}
+
+function applyActivityStepLimit(body, completed) {
+  if (!body) return;
+  var entries = Array.from(body.querySelectorAll('.tool-activity-entry'));
+  var existingMore = body.querySelector('.tool-activity-show-more');
+  var expanded = body.dataset.stepsExpanded === '1';
+  entries.forEach(function(entry, index) {
+    entry.hidden = !expanded && !shouldShowCollapsedActivityStep(index, entries.length);
+  });
+  if (existingMore) existingMore.remove();
+  if (!completed || entries.length <= 5) return;
+
+  var hiddenCount = entries.length - 5;
+  var showMore = document.createElement('button');
+  showMore.type = 'button';
+  showMore.className = 'tool-activity-show-more';
+  showMore.textContent = expanded
+    ? 'Show less'
+    : 'Show ' + hiddenCount + ' more step' + (hiddenCount === 1 ? '' : 's');
+  showMore.addEventListener('click', function() {
+    body.dataset.stepsExpanded = expanded ? '0' : '1';
+    applyActivityStepLimit(body, true);
+  });
+  body.appendChild(showMore);
+}
+
 window.createActivityStep = createActivityStep;
 window.updateActivityStepDetail = updateActivityStepDetail;
 window.setActivityStepDetailAvailability = setActivityStepDetailAvailability;
+window.applyActivityStepLimit = applyActivityStepLimit;
 window.activityStepKind = _activityStepKind;
 window.formatActivityDescriptorDetail = formatActivityDescriptorDetail;
 
@@ -1262,6 +1292,7 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
       var toolStep = createActivityStep(itemLabel, itemKind, itemDetail || 'Completed without preview output.', false);
       activityBody.appendChild(toolStep.entry);
     });
+    applyActivityStepLimit(activityBody, true);
     activityPanel.querySelector('.tool-activity-toggle').addEventListener('click', function() {
       var open = activityPanel.dataset.open !== '1';
       activityPanel.dataset.open = open ? '1' : '0';

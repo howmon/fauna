@@ -107,6 +107,53 @@ describe('assistant activity timeline', () => {
     expect(stylesSource).toContain('.tool-activity-entry[data-open="1"] .tool-activity-step-detail');
   });
 
+  it('caps expanded step details and scrolls long output inside the step', () => {
+    const detailRule = stylesSource.slice(
+      stylesSource.indexOf('.tool-activity-step-detail {'),
+      stylesSource.indexOf('.tool-activity-entry[data-open="1"] .tool-activity-step-detail'),
+    );
+    expect(detailRule).toContain('max-height: min(300px, 38vh)');
+    expect(detailRule).toContain('overflow: auto');
+    expect(detailRule).toContain('overscroll-behavior: contain');
+  });
+
+  it('caps activity to the first and latest four steps until completed steps are expanded', () => {
+    const start = uiSource.indexOf('function shouldShowCollapsedActivityStep');
+    const end = uiSource.indexOf('window.createActivityStep');
+    const entries = Array.from({ length: 9 }, (_, index) => ({ hidden: false, textContent: `Step ${index + 1}` }));
+    let showMore = null;
+    const body = {
+      dataset: {},
+      querySelectorAll: () => entries,
+      querySelector: () => showMore,
+      appendChild: (button) => { showMore = button; },
+    };
+    const context = {
+      document: {
+        createElement: () => ({
+          addEventListener(type, handler) { this[type] = handler; },
+          click() { this.click(); },
+          remove() { showMore = null; },
+        }),
+      },
+    };
+    vm.runInNewContext(uiSource.slice(start, end), context);
+    context.applyActivityStepLimit(body, true);
+    expect(entries.filter(entry => !entry.hidden).map(entry => entry.textContent))
+      .toEqual(['Step 1', 'Step 6', 'Step 7', 'Step 8', 'Step 9']);
+    expect(showMore.textContent).toBe('Show 4 more steps');
+    showMore.click();
+    expect(entries.every(entry => !entry.hidden)).toBe(true);
+    expect(showMore.textContent).toBe('Show less');
+    showMore.click();
+    expect(entries.filter(entry => !entry.hidden).map(entry => entry.textContent))
+      .toEqual(['Step 1', 'Step 6', 'Step 7', 'Step 8', 'Step 9']);
+    expect(showMore.textContent).toBe('Show 4 more steps');
+    expect(chatSource).toContain('applyActivityStepLimit(_liveToolOutputBody, !!completed)');
+    expect(uiSource).toContain('applyActivityStepLimit(activityBody, true)');
+    expect(stylesSource).toContain('.tool-activity-entry[hidden]');
+  });
+
   it('renders remote, data, and local image previews in expanded step details', () => {
     expect(uiSource).toContain("fetch('/api/read-image?path=' + encodeURIComponent(src))");
     expect(uiSource).toContain("img.className = 'tool-activity-step-image'");

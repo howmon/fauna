@@ -1698,6 +1698,25 @@ body.is-resizing webview { pointer-events: none !important; }
   background: var(--fau-border);
 }
 .tool-activity-entry:last-child::before { display: none; }
+.tool-activity-entry[hidden] { display: none; }
+.tool-activity-show-more {
+  display: block;
+  margin: 2px 0 4px 30px;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.tool-activity-show-more:hover,
+.tool-activity-show-more:focus-visible { text-decoration: underline; }
+.tool-activity-show-more:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
 .tool-activity-step-toggle {
   display: flex;
   align-items: center;
@@ -1753,6 +1772,10 @@ body.is-resizing webview { pointer-events: none !important; }
 .tool-activity-entry[data-open="1"] .tool-activity-step-chevron { transform: rotate(90deg); }
 .tool-activity-step-detail {
   display: none;
+  max-height: min(300px, 38vh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   padding: 2px 0 12px 30px;
 }
 .tool-activity-entry[data-open="1"] .tool-activity-step-detail { display: block; }
