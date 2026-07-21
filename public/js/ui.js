@@ -1200,6 +1200,14 @@ function applyActivityStepLimit(body, completed) {
   body.appendChild(showMore);
 }
 
+function formatActivityElapsedSeconds(value) {
+  var seconds = Math.max(0, Math.floor(Number(value) || 0));
+  if (seconds < 60) return seconds + 's';
+  var minutes = Math.floor(seconds / 60);
+  var remainder = seconds % 60;
+  return remainder ? minutes + 'm ' + remainder + 's' : minutes + 'm';
+}
+
 window.createActivityStep = createActivityStep;
 window.updateActivityStepDetail = updateActivityStepDetail;
 window.setActivityStepDetailAvailability = setActivityStepDetailAvailability;
@@ -1207,7 +1215,7 @@ window.applyActivityStepLimit = applyActivityStepLimit;
 window.activityStepKind = _activityStepKind;
 window.formatActivityDescriptorDetail = formatActivityDescriptorDetail;
 
-function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML, reasoning, widgets, plan, activity) {
+function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML, reasoning, widgets, plan, activity, processDurationSeconds) {
   var el     = createMessageEl(role, agentInfo);
   var body   = el.querySelector('.msg-body');
   if (!animate) el.style.animation = 'none';
@@ -1271,11 +1279,12 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
     activityPanel.dataset.open = '0';
     activityPanel.dataset.completed = '1';
     var activityCount = (reasoning ? 1 : 0) + (activity ? activity.length : 0);
+    var processDurationMeta = processDurationSeconds != null ? ' · ' + formatActivityElapsedSeconds(processDurationSeconds) : '';
     activityPanel.innerHTML =
       '<button class="tool-activity-toggle" type="button" aria-expanded="false">' +
         '<span class="tool-activity-icon">›</span>' +
         '<span class="tool-activity-label">Activity</span>' +
-        '<span class="tool-activity-meta">' + activityCount + ' step' + (activityCount === 1 ? '' : 's') + ' · complete</span>' +
+        '<span class="tool-activity-meta">' + activityCount + ' step' + (activityCount === 1 ? '' : 's') + processDurationMeta + ' · complete</span>' +
       '</button>' +
       '<div class="tool-activity-body"></div>';
     var activityBody = activityPanel.querySelector('.tool-activity-body');

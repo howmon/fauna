@@ -1369,6 +1369,8 @@ async function streamResponse(conv) {
   var _reasoningSummary = '';
   var _publicReasoningSummary = '';
   var _reasoningTickTimer = null; // ticks the "Thinking… Ns" counter live until content/done
+  var _activityTickTimer = null;
+  var _processDurationSeconds = null;
   if (typeof resetDesignArtifactState === 'function') resetDesignArtifactState();
 
   function _setLiveToolOutputOpen(open) {
@@ -1384,7 +1386,10 @@ async function streamResponse(conv) {
     if (_liveToolOutputLabel) _liveToolOutputLabel.textContent = 'Activity';
     if (_liveToolOutputMeta) {
       var steps = Math.max(1, count + (_reasoning ? 1 : 0));
-      _liveToolOutputMeta.textContent = steps + ' step' + (steps === 1 ? '' : 's') + (completed ? ' · complete' : ' · running');
+      var elapsedSeconds = _processDurationSeconds != null
+        ? _processDurationSeconds
+        : Math.max(0, Math.floor((Date.now() - _streamStartedAt) / 1000));
+      _liveToolOutputMeta.textContent = steps + ' step' + (steps === 1 ? '' : 's') + ' · ' + _formatElapsed(elapsedSeconds * 1000) + (completed ? ' · complete' : ' · running');
     }
     if (completed && _liveToolOutputBody) {
       Array.from(_liveToolOutputBody.querySelectorAll('.tool-activity-pre')).forEach(function(pre) {
@@ -1395,6 +1400,20 @@ async function streamResponse(conv) {
       applyActivityStepLimit(_liveToolOutputBody, !!completed);
     }
     _liveToolOutputEl.setAttribute('data-completed', completed ? '1' : '0');
+  }
+
+  function _startActivityTicker() {
+    if (_activityTickTimer) return;
+    _activityTickTimer = setInterval(function() {
+      _updateLiveToolOutputSummary(false);
+    }, 1000);
+  }
+
+  function _stopActivityTicker() {
+    if (_activityTickTimer) {
+      clearInterval(_activityTickTimer);
+      _activityTickTimer = null;
+    }
   }
 
   function _ensureLiveToolOutputPanel() {
@@ -1430,6 +1449,7 @@ async function streamResponse(conv) {
       _liveToolOutputBody.className = 'tool-activity-body';
       _liveToolOutputEl.appendChild(toggle);
       _liveToolOutputEl.appendChild(_liveToolOutputBody);
+      _startActivityTicker();
       if (bodyEl && bodyEl.querySelector('.streaming-status') && !buffer) bodyEl.innerHTML = '';
       if (msgEl && bodyEl) msgEl.insertBefore(_liveToolOutputEl, bodyEl);
       else if (msgEl) msgEl.appendChild(_liveToolOutputEl);
@@ -2275,6 +2295,8 @@ async function streamResponse(conv) {
           if (evt.type === 'done') {
             _syncPublicReasoningSummary();
             _clearToolStatuses();
+            _processDurationSeconds = Math.max(0, Math.round((Date.now() - _streamStartedAt) / 1000));
+            _stopActivityTicker();
             _updateLiveToolOutputSummary(true);
             _setLiveToolOutputOpen(false);
             if (typeof refreshConversationKanbanWidget === 'function') refreshConversationKanbanWidget(convId);
@@ -2283,7 +2305,9 @@ async function streamResponse(conv) {
             if (evt.usage) _ctxUsage = evt.usage;
             // Finalize reasoning panel (collapse, freeze duration)
             if (evt.reasoning || _reasoning) {
-              var doneReasoning = evt.reasoning || (_reasoning ? { durationSeconds: Math.round((Date.now() - _reasoning.startedAt) / 1000) } : null);
+              var doneReasoning = (_reasoning && _reasoning.durationSeconds != null)
+                ? _reasoning
+                : (evt.reasoning || (_reasoning ? { durationSeconds: Math.round((Date.now() - _reasoning.startedAt) / 1000) } : null));
               if (doneReasoning) {
                 _reasoning = doneReasoning;
                 _updateReasoningPanel(doneReasoning.durationSeconds, true);
@@ -2310,6 +2334,9 @@ async function streamResponse(conv) {
   } finally {
     _clearToolStatuses();
     _stopReasoningTicker();
+    _processDurationSeconds = Math.max(0, Math.round((Date.now() - _streamStartedAt) / 1000));
+    _stopActivityTicker();
+    _updateLiveToolOutputSummary(true);
     if (renderTimer) {
       // renderTimer may be either a setTimeout id (fallback) or a rAF handle.
       // Cancel both — the wrong one is a harmless no-op.
@@ -2348,6 +2375,7 @@ async function streamResponse(conv) {
 
     // Always save the AI message regardless of which conv is active
     var aiMsg = { role: 'assistant', content: buffer, timestamp: Date.now() };
+    aiMsg.processDurationSeconds = _processDurationSeconds;
     if (_currentAgentInfo) aiMsg.agentInfo = _currentAgentInfo;
     if (_reasoning) aiMsg.reasoning = {
       durationSeconds: _reasoning.durationSeconds != null ? _reasoning.durationSeconds : (_reasoning.startedAt ? Math.round((Date.now() - _reasoning.startedAt) / 1000) : null),

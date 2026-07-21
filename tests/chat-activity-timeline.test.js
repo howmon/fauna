@@ -99,6 +99,20 @@ describe('assistant activity timeline', () => {
     expect(chatSource).toContain('_updateLiveToolOutputSummary(!!completed && !keepActivityRunning)');
   });
 
+  it('keeps reasoning time separate from the persisted end-to-end process time', () => {
+    const formatterStart = uiSource.indexOf('function formatActivityElapsedSeconds');
+    const formatterEnd = uiSource.indexOf('window.createActivityStep');
+    const formatterContext = {};
+    vm.runInNewContext(uiSource.slice(formatterStart, formatterEnd), formatterContext);
+    expect(chatSource).toContain('var doneReasoning = (_reasoning && _reasoning.durationSeconds != null)');
+    expect(chatSource).toContain('aiMsg.processDurationSeconds = _processDurationSeconds');
+    expect(chatSource).toContain("' · ' + _formatElapsed(elapsedSeconds * 1000)");
+    expect(conversationsSource).toContain('m.processDurationSeconds');
+    expect(uiSource).toContain('formatActivityElapsedSeconds(processDurationSeconds)');
+    expect(uiSource).toContain('+ processDurationMeta +');
+    expect(formatterContext.formatActivityElapsedSeconds(65)).toBe('1m 5s');
+  });
+
   it('makes each chain-of-thought step independently collapsible from its rail icon', () => {
     expect(uiSource).toContain("toggle.className = 'tool-activity-step-toggle'");
     expect(uiSource).toContain("entry.dataset.open = nextOpen ? '1' : '0'");
