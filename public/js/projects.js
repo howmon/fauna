@@ -4030,9 +4030,9 @@ function _renderSettingsTab(proj) {
       '<label class="proj-toggle-label">' +
         '<input type="checkbox" id="proj-set-allow-edit" class="proj-toggle-input"' + (proj.allowFileEditing ? ' checked' : '') + ' onchange="_toggleProjSetting(\'allowFileEditing\', this)">' +
         '<span class="proj-toggle-track"><span class="proj-toggle-thumb"></span></span>' +
-        '<span class="proj-toggle-text">Allow editing source files</span>' +
+        '<span class="proj-toggle-text">Allow editing attached source files</span>' +
       '</label>' +
-      '<div class="proj-settings-hint">When on, you and agents can modify files in this project\'s sources directly from the file viewer.</div>' +
+      '<div class="proj-settings-hint">Controls attached sources and agent edits. You can always manage files in the project\'s working folder from Project Hub.</div>' +
     '</div>' +
     '<div class="proj-settings-row" id="proj-set-github-row">' +
       '<label>GitHub</label>' +

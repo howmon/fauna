@@ -1,6 +1,8 @@
 import express from 'express';
 
 export function registerProjectRoutes(app, deps) {
+  const canEditEntry = (project, sourceId) => sourceId === '__rootpath__' || !!project?.allowFileEditing;
+
   // Project-level checkpoints — sidecar restore for uncommitted work.
   // Imported lazily so the route file stays self-contained.
   let _projCp = null;
@@ -299,7 +301,7 @@ export function registerProjectRoutes(app, deps) {
     try {
       const project = getProject(req.params.id);
       if (!project) return res.status(404).json({ error: 'Project not found' });
-      if (!project.allowFileEditing) return res.status(403).json({ error: 'File editing is disabled for this project' });
+      if (!canEditEntry(project, req.params.srcId)) return res.status(403).json({ error: 'File editing is disabled for this project' });
       const { fullPath } = resolveSourceFilePath(req.params.id, req.params.srcId, req.query.path || '');
       fs.writeFileSync(fullPath, req.body?.content ?? '', 'utf8');
       res.json({ ok: true });
@@ -314,7 +316,7 @@ export function registerProjectRoutes(app, deps) {
     try {
       const project = getProject(req.params.id);
       if (!project) return res.status(404).json({ error: 'Project not found' });
-      if (!project.allowFileEditing) return res.status(403).json({ error: 'File editing is disabled for this project' });
+      if (!canEditEntry(project, req.params.srcId)) return res.status(403).json({ error: 'File editing is disabled for this project' });
       const { path: relPath, type } = req.body || {};
       const entry = createSourceEntry(req.params.id, req.params.srcId, relPath, type);
       res.status(201).json(entry);
@@ -335,7 +337,7 @@ export function registerProjectRoutes(app, deps) {
       try {
         const project = getProject(req.params.id);
         if (!project) return res.status(404).json({ error: 'Project not found' });
-        if (!project.allowFileEditing) return res.status(403).json({ error: 'File editing is disabled for this project' });
+        if (!canEditEntry(project, req.params.srcId)) return res.status(403).json({ error: 'File editing is disabled for this project' });
         if (typeof writeSourceFileBytes !== 'function') {
           return res.status(501).json({ error: 'upload not wired on this server' });
         }
@@ -365,7 +367,7 @@ export function registerProjectRoutes(app, deps) {
     try {
       const project = getProject(req.params.id);
       if (!project) return res.status(404).json({ error: 'Project not found' });
-      if (!project.allowFileEditing) return res.status(403).json({ error: 'File editing is disabled for this project' });
+      if (!canEditEntry(project, req.params.srcId)) return res.status(403).json({ error: 'File editing is disabled for this project' });
       if (typeof renameSourceEntry !== 'function') {
         return res.status(501).json({ error: 'rename not wired on this server' });
       }
@@ -389,7 +391,7 @@ export function registerProjectRoutes(app, deps) {
     try {
       const project = getProject(req.params.id);
       if (!project) return res.status(404).json({ error: 'Project not found' });
-      if (!project.allowFileEditing) return res.status(403).json({ error: 'File editing is disabled for this project' });
+      if (!canEditEntry(project, req.params.srcId)) return res.status(403).json({ error: 'File editing is disabled for this project' });
       if (typeof deleteSourceEntry !== 'function') {
         return res.status(501).json({ error: 'delete not wired on this server' });
       }

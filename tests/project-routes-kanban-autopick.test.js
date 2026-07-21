@@ -15,7 +15,7 @@ function makeApp() {
     put: add('PUT'),
     patch: add('PATCH'),
     delete: add('DELETE'),
-    invoke(method, path, { params = {}, body = {}, headers = {} } = {}) {
+    invoke(method, path, { params = {}, body = {}, query = {}, headers = {} } = {}) {
       const handler = routes.get(method + ' ' + path);
       if (!handler) throw new Error('missing route ' + method + ' ' + path);
       const res = {
@@ -27,7 +27,7 @@ function makeApp() {
       const req = {
         params,
         body,
-        query: {},
+        query,
         get(name) { return headers[String(name).toLowerCase()] || headers[name] || ''; },
       };
       handler(req, res);
@@ -153,6 +153,24 @@ describe('project routes find and replace', () => {
     expect(deps.writeSourceFileBytes).not.toHaveBeenCalled();
     expect(deps.renameSourceEntry).not.toHaveBeenCalled();
     expect(deps.deleteSourceEntry).not.toHaveBeenCalled();
+  });
+
+  it('allows deleting from the working folder when source editing is disabled', () => {
+    const deps = makeDeps({
+      getProject: vi.fn(() => ({ id: 'p1', allowFileEditing: false })),
+      deleteSourceEntry: vi.fn(() => ({ path: 'obsolete.txt', type: 'file' })),
+    });
+    const app = makeApp();
+    registerProjectRoutes(app, deps);
+
+    const res = app.invoke('DELETE', '/api/projects/:id/sources/:srcId/entry', {
+      params: { id: 'p1', srcId: '__rootpath__' },
+      query: { path: 'obsolete.txt' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ path: 'obsolete.txt', type: 'file' });
+    expect(deps.deleteSourceEntry).toHaveBeenCalledWith('p1', '__rootpath__', 'obsolete.txt');
   });
 });
 
