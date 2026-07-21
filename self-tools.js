@@ -94,6 +94,7 @@ import { resolveWorkspaceContext } from './lib/workspace-context.js';
 import { runWorkspaceDiagnostics } from './lib/diagnostics.js';
 import { workspaceSymbols, symbolDefinition, symbolReferences, renameSymbol } from './lib/language-tools.js';
 import { getWorkspaceIndex, invalidateWorkspaceIndex, readIndexedFile, searchWorkspace } from './lib/workspace-index.js';
+import { semanticDiagnostics } from './lib/typescript-language-service.js';
 import { startTerminalSession, sendTerminalInput, getTerminalOutput, listTerminalSessions, killTerminalSession } from './lib/terminal-sessions.js';
 import { parseTestResults, runTestResults } from './lib/test-results.js';
 import {
@@ -1430,6 +1431,21 @@ export const SELF_TOOL_DEFS = [
   {
     type: 'function',
     function: {
+      name: 'fauna_language_diagnostics',
+      description: 'Get fast in-process TypeScript/JavaScript syntactic, semantic, and suggestion diagnostics with precise file/line/column metadata. Use for focused editor-style diagnostics; use fauna_diagnostics for full project build/lint commands.',
+      parameters: {
+        type: 'object',
+        properties: {
+          cwd: { type: 'string', description: 'Workspace root.' },
+          path: { type: 'string', description: 'Optional JS/TS file path relative to cwd. Omit to check the indexed JS/TS workspace.' },
+          maxResults: { type: 'number', description: 'Maximum diagnostics. Defaults 500; hard cap 2000.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'fauna_symbols',
       description: 'List indexed workspace declarations (classes, functions, variables, and types) across common source languages. Results identify the workspace-index heuristic engine; use language-service results when a future LSP adapter is available.',
       parameters: { type: 'object', properties: { cwd: { type: 'string' }, query: { type: 'string' }, maxResults: { type: 'number' } } },
@@ -1440,7 +1456,7 @@ export const SELF_TOOL_DEFS = [
     function: {
       name: 'fauna_definition',
       description: 'Find likely indexed definitions for a source symbol across common languages. This is a fast text-aware heuristic fallback, not scope-sensitive LSP resolution.',
-      parameters: { type: 'object', properties: { cwd: { type: 'string' }, symbol: { type: 'string' }, maxResults: { type: 'number' } }, required: ['symbol'] },
+      parameters: { type: 'object', properties: { cwd: { type: 'string' }, symbol: { type: 'string' }, path: { type: 'string', description: 'Optional JS/TS anchor file for scope-aware language-service resolution.' }, line: { type: 'number', description: '1-based anchor line.' }, column: { type: 'number', description: '1-based anchor column. If omitted, Fauna finds symbol on the anchor line.' }, maxResults: { type: 'number' } }, required: ['symbol'] },
     },
   },
   {
@@ -1448,7 +1464,7 @@ export const SELF_TOOL_DEFS = [
     function: {
       name: 'fauna_references',
       description: 'Find indexed source references to a symbol with file paths and line numbers. This is a fast word-boundary fallback and may include same-name identifiers from other scopes.',
-      parameters: { type: 'object', properties: { cwd: { type: 'string' }, symbol: { type: 'string' }, maxResults: { type: 'number' } }, required: ['symbol'] },
+      parameters: { type: 'object', properties: { cwd: { type: 'string' }, symbol: { type: 'string' }, path: { type: 'string', description: 'Optional JS/TS anchor file for scope-aware language-service references.' }, line: { type: 'number', description: '1-based anchor line.' }, column: { type: 'number', description: '1-based anchor column.' }, maxResults: { type: 'number' } }, required: ['symbol'] },
     },
   },
   {
@@ -1456,7 +1472,7 @@ export const SELF_TOOL_DEFS = [
     function: {
       name: 'fauna_rename_symbol',
       description: 'Rename a simple identifier across indexed source files using word-boundary replacement. Use only when workspace-wide textual rename is intended; this is not scope-sensitive LSP rename.',
-      parameters: { type: 'object', properties: { cwd: { type: 'string' }, symbol: { type: 'string' }, newName: { type: 'string' } }, required: ['symbol', 'newName'] },
+      parameters: { type: 'object', properties: { cwd: { type: 'string' }, symbol: { type: 'string' }, newName: { type: 'string' }, path: { type: 'string', description: 'Optional JS/TS anchor file. Anchored rename is scope-aware and previews by default.' }, line: { type: 'number', description: '1-based anchor line.' }, column: { type: 'number', description: '1-based anchor column.' }, apply: { type: 'boolean', description: 'For anchored semantic rename, set true to apply. Defaults false and returns a workspace-edit preview.' } }, required: ['symbol', 'newName'] },
     },
   },
   {
@@ -3553,14 +3569,17 @@ export async function executeSelfTool(toolName, args, context = {}) {
       return JSON.stringify(result);
     }
 
+    case 'fauna_language_diagnostics':
+      return JSON.stringify(semanticDiagnostics({ cwd: args.cwd || context.cwd || process.cwd(), path: args.path, maxResults: args.maxResults }));
+
     case 'fauna_symbols':
       return JSON.stringify(workspaceSymbols({ cwd: args.cwd || context.cwd || process.cwd(), query: args.query, maxResults: args.maxResults }));
     case 'fauna_definition':
-      return JSON.stringify(symbolDefinition({ cwd: args.cwd || context.cwd || process.cwd(), symbol: args.symbol, maxResults: args.maxResults }));
+      return JSON.stringify(symbolDefinition({ cwd: args.cwd || context.cwd || process.cwd(), symbol: args.symbol, path: args.path, line: args.line, column: args.column, maxResults: args.maxResults }));
     case 'fauna_references':
-      return JSON.stringify(symbolReferences({ cwd: args.cwd || context.cwd || process.cwd(), symbol: args.symbol, maxResults: args.maxResults }));
+      return JSON.stringify(symbolReferences({ cwd: args.cwd || context.cwd || process.cwd(), symbol: args.symbol, path: args.path, line: args.line, column: args.column, maxResults: args.maxResults }));
     case 'fauna_rename_symbol':
-      return JSON.stringify(renameSymbol({ cwd: args.cwd || context.cwd || process.cwd(), symbol: args.symbol, newName: args.newName }));
+      return JSON.stringify(renameSymbol({ cwd: args.cwd || context.cwd || process.cwd(), symbol: args.symbol, newName: args.newName, path: args.path, line: args.line, column: args.column, apply: args.apply }));
 
     case 'fauna_terminal': {
       const action = String(args.action || 'list');

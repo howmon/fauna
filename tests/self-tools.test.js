@@ -84,7 +84,7 @@ describe('self-tools', () => {
       // fauna_route_skill (semantic skill router), fauna_interview,
       // fauna_create_seed, fauna_list_seeds, fauna_get_seed (spec-first loop),
       // fauna_unstuck (lateral personas), fauna_audit_prompt (prompt patterns).
-      expect(SELF_TOOL_DEFS).toHaveLength(106);
+      expect(SELF_TOOL_DEFS).toHaveLength(107);
     });
 
     it('each tool has required OpenAI function format', () => {
@@ -296,6 +296,30 @@ describe('self-tools', () => {
       expect(r.engine).toBe('workspace-index-ranked');
       expect(r.results.length).toBeGreaterThan(0);
       expect(r.results[0]).toMatchObject({ path: expect.any(String), line: expect.any(Number), score: expect.any(Number) });
+    });
+
+    it('executes anchored definitions and language diagnostics through public tools', async () => {
+      const dir = fs.mkdtempSync('/tmp/fauna-semantic-tools-');
+      try {
+        fs.writeFileSync(path.join(dir, 'app.ts'), [
+          'const amount: number = 1;',
+          'console.log(amount);',
+          'const broken: number = "text";',
+        ].join('\n'), 'utf8');
+        const definition = JSON.parse(await executeSelfTool('fauna_definition', {
+          cwd: dir, path: 'app.ts', line: 2, column: 13, symbol: 'amount',
+        }, mockContext));
+        expect(definition.engine).toBe('typescript-language-service');
+        expect(definition.definitions[0]).toMatchObject({ path: 'app.ts', line: 1 });
+
+        const diagnostics = JSON.parse(await executeSelfTool('fauna_language_diagnostics', {
+          cwd: dir, path: 'app.ts',
+        }, mockContext));
+        expect(diagnostics.engine).toBe('typescript-language-service');
+        expect(diagnostics.diagnostics.some(item => item.code === 2322)).toBe(true);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it('fauna_grep supports regex with alternation', async () => {

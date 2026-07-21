@@ -74,6 +74,7 @@ const FREE_TOOLS = new Set([
   // Read-only file / code search — "research" that should not eat the
   // write budget. fauna_read_file is read-only and idempotent.
   'fauna_read_file',
+    'fauna_language_diagnostics',
   'fauna_grep',
   'fauna_file_search',
   'fauna_workspace_search',

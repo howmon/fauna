@@ -66,7 +66,16 @@ Acceptance:
 
 ## Phase 3: Language Service Adapters
 
-Status: **Planned**
+Status: **Implemented for JavaScript/TypeScript; planned for additional language servers**
+
+Implemented:
+
+- TypeScript 5.9 language service, loaded lazily and cached per workspace.
+- JS/TS navigation-tree workspace symbols, including methods and nested declarations.
+- Anchor-aware, scope-sensitive definitions and references using `{path,line,column}`.
+- Semantic rename previews by default; `apply:true` is required to write anchored renames.
+- Structured syntactic, semantic, and suggestion diagnostics without spawning a build command.
+- Indexed heuristic fallback for unanchored calls and unsupported languages, with the engine identified in every result.
 
 Add an adapter contract for language-aware engines:
 
@@ -80,12 +89,11 @@ diagnostics(files)
 dispose()
 ```
 
-Priority adapters:
+Remaining adapters:
 
-1. TypeScript language service for JavaScript and TypeScript.
-2. Pyright for Python.
-3. Existing language servers discovered from project configuration or `PATH` for Rust, Go, Java, C/C++, and C#.
-4. Static indexed fallback when no server is available.
+1. Pyright for Python.
+2. Existing language servers discovered from project configuration or `PATH` for Rust, Go, Java, C/C++, and C#.
+3. Static indexed fallback when no server is available.
 
 Every result must identify its engine as `lsp`, `language-service`, or `workspace-index`. Rename defaults to preview and must return a workspace edit before applying changes.
 

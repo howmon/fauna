@@ -93,4 +93,10 @@ describe('structured chat tool activity descriptors', () => {
       kind: 'diagnostics', label: 'Checked diagnostics', command: 'npm run typecheck', scope: '/repo',
     });
   });
+
+  it('summarizes in-process language diagnostics', () => {
+    expect(buildToolActivityResult('fauna_language_diagnostics', {}, {
+      ok: true, count: 3, engine: 'typescript-language-service', diagnostics: [],
+    })).toEqual({ status: 'completed', summary: '3 language diagnostics · typescript-language-service' });
+  });
 });

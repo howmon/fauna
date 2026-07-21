@@ -265,6 +265,7 @@ describe('agent and tool policy', () => {
   it('expands VS Code-style tool aliases deterministically', () => {
     expect(expandToolAliases(['read', 'search', 'custom_tool'])).toEqual([
       'fauna_read_file',
+        'fauna_language_diagnostics',
       'fauna_get_reference',
       'fauna_get_skill',
       'fauna_get_agent_instructions',

@@ -29,6 +29,7 @@ describe('isFreeTool', () => {
   it('marks read-only research + introspection tools as free', () => {
     expect(isFreeTool('fauna_grep')).toBe(true);
     expect(isFreeTool('fauna_workspace_search')).toBe(true);
+      expect(isFreeTool('fauna_language_diagnostics')).toBe(true);
     expect(isFreeTool('fauna_file_search')).toBe(true);
     expect(isFreeTool('fauna_semantic_search')).toBe(true);
     expect(isFreeTool('fauna_context_search')).toBe(true);

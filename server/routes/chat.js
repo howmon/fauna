@@ -198,7 +198,7 @@ export function buildToolActivityDescriptor(toolName, args = {}) {
     });
     return { ...descriptor, kind: 'edit', label: `Wrote ${files.length} files`, files };
   }
-  if (toolName === 'fauna_diagnostics') {
+  if (toolName === 'fauna_diagnostics' || toolName === 'fauna_language_diagnostics') {
     return {
       ...descriptor,
       kind: 'diagnostics',
@@ -234,6 +234,9 @@ export function buildToolActivityResult(toolName, args = {}, result) {
   }
   if (toolName === 'fauna_workspace_search' && parsed) {
     return { status: 'completed', summary: `${Number(parsed.count) || 0} ranked results${parsed.cache?.hit ? ' · index cache hit' : ''}` };
+  }
+  if (toolName === 'fauna_language_diagnostics' && parsed) {
+    return { status: 'completed', summary: `${Number(parsed.count) || 0} language diagnostics · ${parsed.engine || 'language service'}` };
   }
   if (toolName === 'fauna_file_search' && parsed) {
     return { status: 'completed', summary: `${Number(parsed.count) || 0} files found${parsed.truncated ? ' · truncated' : ''}` };
@@ -1799,6 +1802,7 @@ export function registerChatRoute(app, {
         'fauna_backlog_list', 'fauna_retrieve_output', 'fauna_doctor',
         'fauna_list_voices', 'fauna_video_list', 'fauna_lesson_list',
         'fauna_grep', 'fauna_file_search', 'fauna_workspace_search', 'fauna_semantic_search',
+        'fauna_diagnostics', 'fauna_language_diagnostics', 'fauna_workspace_context', 'fauna_symbols',
         // Figma read-only introspection (no DOM mutation)
         'figma_status', 'figma_list_connected_files', 'figma_list_pages',
         'figma_list_design_systems', 'figma_get_console_logs',
