@@ -4161,11 +4161,11 @@ body { animation: none; }
   background: rgba(30,200,130,.035);
 }
 .wf-created-artifacts {
-  margin: 12px 0 0;
-  padding: 10px;
-  border: 1px solid var(--fau-border);
-  border-radius: var(--radius-sm);
-  background: var(--fau-surface);
+  margin: 8px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 .wf-created-artifacts .artifact-card {
   margin: 0;
@@ -4175,7 +4175,7 @@ body { animation: none; }
 .wf-created-artifacts .artifact-card + .wf-created-file-action,
 .wf-created-artifacts .wf-created-file-action + .artifact-card,
 .wf-created-artifacts .wf-created-file-action + .wf-created-file-action {
-  margin-top: 8px;
+  margin-top: 2px;
 }
 .wf-created-file-action {
   display: flex;

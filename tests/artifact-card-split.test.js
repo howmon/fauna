@@ -18,6 +18,9 @@ describe('artifact entity card split action', () => {
 
   it('removes border chrome and keeps the file type icon', () => {
     expect(css).toMatch(/\.artifact-card\s*\{[\s\S]*border:\s*0/);
+    expect(css).toMatch(/\.wf-created-artifacts\s*\{[\s\S]*padding:\s*0/);
+    expect(css).toMatch(/\.wf-created-artifacts\s*\{[\s\S]*border:\s*0/);
+    expect(css).toMatch(/\.wf-created-artifacts\s*\{[\s\S]*background:\s*transparent/);
     expect(css).toMatch(/\.artifact-card-primary\s*\{[\s\S]*gap:\s*2px/);
     expect(css).toMatch(/\.artifact-card-primary\s*\{[\s\S]*flex:\s*1/);
     expect(css).toMatch(/\.artifact-card-title\s*\{[\s\S]*flex:\s*0 1 auto/);
