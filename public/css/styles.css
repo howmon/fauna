@@ -9397,8 +9397,11 @@ body.proj-run-resizing { cursor: col-resize !important; user-select: none; }
 }
 
 /* ── Save to Project button ────────────────────────────────────────────── */
-.proj-save-btn { color: var(--accent) !important; font-weight: 600; }
+.proj-save-btn { font-weight: 600; }
+.proj-save-btn.dirty { color: var(--accent) !important; }
+.proj-save-btn:disabled { color: var(--fau-text-muted) !important; opacity: .42; cursor: default; }
 .proj-save-btn:hover { background: var(--accent-dim) !important; }
+.proj-save-btn:disabled:hover { background: transparent !important; }
 
 /* ── Find in conversation (Cmd/Ctrl+F overlay) ───────────────────────── */
 /* Anchored to the viewport (not #messages) so it stays put when content

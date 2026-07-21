@@ -74,4 +74,17 @@ describe('Project Hub Files find and replace UI', () => {
     expect(styles).toContain('.proj-agent-search-task {');
     expect(styles).toContain('.proj-agent-search-output {');
   });
+
+  it('keeps file save disabled until editor content differs from its baseline', () => {
+    const source = read('public/js/projects.js');
+    const styles = read('public/css/styles.css');
+
+    expect(source).toContain('var _projMonacoBaseline');
+    expect(source).toContain('var _explorerMonacoBaseline');
+    expect(source).toContain('title="Save file" disabled');
+    expect(source).toContain("_setProjectSaveDirty('hub', _projMonacoEditor.getValue() !== _projMonacoBaseline)");
+    expect(source).toContain("_setProjectSaveDirty('explorer', _explorerMonaco.getValue() !== _explorerMonacoBaseline)");
+    expect(source).toContain('if (content === baseline)');
+    expect(styles).toContain('.proj-save-btn:disabled');
+  });
 });

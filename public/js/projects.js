@@ -2078,6 +2078,18 @@ async function newProjectEntry(stId, parentPath, type) {
 var _projMonacoEditor  = null;
 var _projMonacoLoaded  = false;
 var _projMonacoSrcId   = null;   // srcId of file currently shown
+var _projMonacoBaseline = '';
+var _explorerMonacoBaseline = '';
+
+function _setProjectSaveDirty(scope, dirty) {
+  var selector = scope === 'explorer'
+    ? '#proj-exp-viewer .proj-save-btn'
+    : '#proj-file-viewer-header .proj-save-btn';
+  var button = document.querySelector(selector);
+  if (!button) return;
+  button.disabled = !dirty;
+  button.classList.toggle('dirty', !!dirty);
+}
 
 // Map file extension → Monaco language id
 var _MONO_LANG = {
@@ -2152,7 +2164,7 @@ async function openProjectFile(srcId, filePath) {
       if (data.type === 'text') {
         var canEdit = _activeProject() && _activeProject().allowFileEditing;
         headerBtns =
-          (canEdit ? '<button class="proj-icon-btn proj-save-btn" onclick="saveProjectFile()" title="Save file"><i class="ti ti-device-floppy"></i> Save</button>' : '') +
+          (canEdit ? '<button class="proj-icon-btn proj-save-btn" onclick="saveProjectFile()" title="Save file" disabled><i class="ti ti-device-floppy"></i> Save</button>' : '') +
           (canEdit ? '<button class="proj-icon-btn" onclick="projUndoFile()" title="Undo"><i class="ti ti-arrow-back-up"></i></button>' : '') +
           (canEdit ? '<button class="proj-icon-btn" onclick="projRedoFile()" title="Redo"><i class="ti ti-arrow-forward-up"></i></button>' : '') +
           '<button class="proj-icon-btn" onclick="saveFileAsContext(\'' + _projEsc(srcId) + '\',\'' + _projEsc(filePath) + '\')" title="Save as context"><i class="ti ti-folder-plus"></i> Save to Project</button>' +
@@ -2250,6 +2262,8 @@ async function openProjectFile(srcId, filePath) {
 function _mountProjectMonaco(content, lang) {
   var container = document.getElementById('proj-monaco-container');
   if (!container) return;
+  _projMonacoBaseline = content;
+  _setProjectSaveDirty('hub', false);
 
   // If editor already exists, just swap content and language
   if (_projMonacoEditor) {
@@ -2293,6 +2307,9 @@ function _mountProjectMonaco(content, lang) {
     _projMonacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function() {
       if (typeof saveProjectFile === 'function') saveProjectFile();
     });
+    _projMonacoEditor.onDidChangeModelContent(function() {
+      _setProjectSaveDirty('hub', _projMonacoEditor.getValue() !== _projMonacoBaseline);
+    });
   });
 }
 
@@ -2334,12 +2351,19 @@ async function saveProjectFile() {
               : _projMonacoEditor ? _projMonacoEditor.getValue()
               : null;
   if (content === null) { _showToast('Nothing to save', true); return; }
+  var scope = _explorerMonaco ? 'explorer' : 'hub';
+  var baseline = scope === 'explorer' ? _explorerMonacoBaseline : _projMonacoBaseline;
+  if (content === baseline) { _setProjectSaveDirty(scope, false); return; }
   try {
     var r = await fetch('/api/projects/' + state.activeProjectId + '/sources/' + encodeURIComponent(srcId) + '/file?path=' + encodeURIComponent(filePath), {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content })
     });
     if (!r.ok) throw new Error((await r.json()).error);
+    if (scope === 'explorer') _explorerMonacoBaseline = content;
+    else _projMonacoBaseline = content;
+    window._lastProjectFileContent = content;
+    _setProjectSaveDirty(scope, false);
     _showToast('Saved \u2713 ' + filePath.split('/').pop());
   } catch(e) { _showToast('Save failed: ' + e.message, true); }
 }
@@ -2424,7 +2448,7 @@ async function explorerOpenFile(srcId, filePath) {
     var rawUrl = '/api/projects/' + state.activeProjectId + '/sources/' + encodeURIComponent(srcId) + '/raw?path=' + encodeURIComponent(filePath);
     var canEdit2 = _activeProject() && _activeProject().allowFileEditing;
     var headerBtns = data.type === 'text'
-      ? (canEdit2 ? '<button class="proj-icon-btn proj-save-btn" onclick="saveProjectFile()" title="Save file"><i class="ti ti-device-floppy"></i> Save</button>' : '') +
+      ? (canEdit2 ? '<button class="proj-icon-btn proj-save-btn" onclick="saveProjectFile()" title="Save file" disabled><i class="ti ti-device-floppy"></i> Save</button>' : '') +
         (canEdit2 ? '<button class="proj-icon-btn" onclick="projUndoFile()" title="Undo"><i class="ti ti-arrow-back-up"></i></button>' : '') +
         (canEdit2 ? '<button class="proj-icon-btn" onclick="projRedoFile()" title="Redo"><i class="ti ti-arrow-forward-up"></i></button>' : '') +
         '<button class="proj-icon-btn" onclick="saveFileAsContext(\'' + _projEsc(srcId) + '\',\'' + _projEsc(filePath) + '\')" title="Save as context"><i class="ti ti-folder-plus"></i> Save to Project</button>' +
@@ -2500,6 +2524,8 @@ async function explorerOpenFile(srcId, filePath) {
 function _mountExplorerMonaco(content, lang) {
   var container = document.getElementById('proj-exp-monaco');
   if (!container) return;
+  _explorerMonacoBaseline = content;
+  _setProjectSaveDirty('explorer', false);
   if (typeof require === 'undefined') {
     container.innerHTML = '<pre class="proj-file-code"><code>' + _projEsc(content) + '</code></pre>';
     return;
@@ -2521,6 +2547,9 @@ function _mountExplorerMonaco(content, lang) {
     // Cmd+S (macOS) / Ctrl+S (Windows/Linux) saves the file from inside Monaco.
     _explorerMonaco.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function() {
       if (typeof saveProjectFile === 'function') saveProjectFile();
+    });
+    _explorerMonaco.onDidChangeModelContent(function() {
+      _setProjectSaveDirty('explorer', _explorerMonaco.getValue() !== _explorerMonacoBaseline);
     });
   });
 }
