@@ -134,6 +134,26 @@ describe('project routes find and replace', () => {
     expect(res.statusCode).toBe(403);
     expect(deps.resolveSourceFilePath).not.toHaveBeenCalled();
   });
+
+  it('blocks create, upload, rename, and delete when editing is disabled', () => {
+    const deps = makeDeps({ getProject: vi.fn(() => ({ id: 'p1', allowFileEditing: false })) });
+    const app = makeApp();
+    registerProjectRoutes(app, deps);
+    const params = { id: 'p1', srcId: 'src1' };
+
+    const responses = [
+      app.invoke('POST', '/api/projects/:id/sources/:srcId/entry', { params, body: { path: 'new.txt', type: 'file' } }),
+      app.invoke('POST', '/api/projects/:id/sources/:srcId/upload', { params, body: Buffer.from('data') }),
+      app.invoke('PATCH', '/api/projects/:id/sources/:srcId/entry', { params, body: { oldPath: 'a', newPath: 'b' } }),
+      app.invoke('DELETE', '/api/projects/:id/sources/:srcId/entry', { params }),
+    ];
+
+    expect(responses.map(response => response.statusCode)).toEqual([403, 403, 403, 403]);
+    expect(deps.createSourceEntry).not.toHaveBeenCalled();
+    expect(deps.writeSourceFileBytes).not.toHaveBeenCalled();
+    expect(deps.renameSourceEntry).not.toHaveBeenCalled();
+    expect(deps.deleteSourceEntry).not.toHaveBeenCalled();
+  });
 });
 
 describe('project routes Kanban autopick wake-up', () => {

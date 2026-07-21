@@ -271,6 +271,25 @@ function getBuiltInToolDefinitions(permissions) {
     tools.push({
       type: 'function',
       function: {
+        name: 'agent_search_files',
+        description: 'Search files recursively without modifying them. Access is restricted to the agent\'s allowed read paths.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Directory or file to search' },
+            query: { type: 'string', description: 'Text or regular expression to find. Leave empty to list files.' },
+            caseSensitive: { type: 'boolean', description: 'Use case-sensitive matching' },
+            include: { type: 'string', description: 'Optional comma-separated path substrings or extensions to include' },
+            exclude: { type: 'string', description: 'Optional comma-separated path substrings to exclude' },
+            maxResults: { type: 'number', description: 'Maximum matches (default 200, maximum 1000)' },
+          },
+          required: ['path'],
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
         name: 'agent_read_file',
         description: 'Read the contents of a file. Access is restricted to the agent\'s allowed read paths: ' + permissions.fileRead.join(', '),
         parameters: {
@@ -477,6 +496,75 @@ async function executeBuiltInTool(toolName, args, permissions, agentName, onOutp
           resolve('Error: ' + err.message + '\n\n[exit code: 1]');
         });
       });
+    }
+
+    case 'agent_search_files': {
+      const root = path.resolve((args.path || '').replace(/^~/, HOME));
+      const rootCheck = checkFilePath(root, 'read', permissions, agentName);
+      if (!rootCheck.allowed) return 'BLOCKED: ' + rootCheck.reason;
+      const maxResults = Math.max(1, Math.min(Number(args.maxResults) || 200, 1000));
+      const include = String(args.include || '').split(',').map(s => s.trim()).filter(Boolean);
+      const exclude = String(args.exclude || '').split(',').map(s => s.trim()).filter(Boolean);
+      const query = String(args.query || '');
+      if (query.length > 200) return 'Error: search query is limited to 200 characters';
+      if (args.regex) return 'Error: agent_search_files supports literal text only';
+      let matcher = null;
+      try {
+        if (query) matcher = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), args.caseSensitive ? 'g' : 'gi');
+      } catch (e) {
+        return 'Error: invalid regular expression: ' + e.message;
+      }
+      const results = [];
+      let filesScanned = 0;
+      let entriesVisited = 0;
+      const skippedDirs = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage']);
+      function accepted(relativePath) {
+        const normalized = relativePath.split(path.sep).join('/');
+        if (include.length && !include.some(token => normalized.includes(token) || normalized.endsWith(token.replace(/^\*/, '')))) return false;
+        return !exclude.some(token => normalized.includes(token) || normalized.endsWith(token.replace(/^\*/, '')));
+      }
+      function visit(target) {
+        if (results.length >= maxResults || entriesVisited >= 10000) return;
+        entriesVisited++;
+        let stat;
+        try { stat = fs.lstatSync(target); } catch (_) { return; }
+        if (stat.isSymbolicLink()) return;
+        if (stat.isDirectory()) {
+          let entries = [];
+          try { entries = fs.readdirSync(target, { withFileTypes: true }); } catch (_) { return; }
+          for (const entry of entries) {
+            if (results.length >= maxResults || entriesVisited >= 10000) break;
+            if (entry.isDirectory() && skippedDirs.has(entry.name)) continue;
+            visit(path.join(target, entry.name));
+          }
+          return;
+        }
+        if (!stat.isFile() || stat.size > 1024 * 1024) return;
+        const fileCheck = checkFilePath(target, 'read', permissions, agentName);
+        if (!fileCheck.allowed) return;
+        const relativePath = path.relative(root, target) || path.basename(target);
+        if (!accepted(relativePath)) return;
+        filesScanned++;
+        if (!matcher) {
+          results.push({ path: target, relativePath });
+          return;
+        }
+        let content;
+        try { content = fs.readFileSync(target, 'utf8'); } catch (_) { return; }
+        if (content.includes('\u0000')) return;
+        const lines = content.split(/\r?\n/);
+        for (let lineIndex = 0; lineIndex < lines.length && results.length < maxResults; lineIndex++) {
+          if (lines[lineIndex].length > 10000) continue;
+          matcher.lastIndex = 0;
+          let match;
+          while ((match = matcher.exec(lines[lineIndex])) && results.length < maxResults) {
+            results.push({ path: target, relativePath, line: lineIndex + 1, column: match.index + 1, preview: lines[lineIndex].slice(0, 500) });
+            if (!match[0]) matcher.lastIndex++;
+          }
+        }
+      }
+      visit(root);
+      return JSON.stringify({ results, matchCount: results.length, filesScanned, entriesVisited, truncated: results.length >= maxResults || entriesVisited >= 10000 }, null, 2);
     }
 
     case 'agent_read_file': {
@@ -721,14 +809,14 @@ function stopAgentMCPServers(agentName) {
  * - Custom tools (from agent's tools/ directory)
  * Returns { definitions: toolDef[], handlers: Map<name, executeFn> }
  */
-function getAgentTools(agentDir, manifest, agentName) {
+function getAgentTools(agentDir, manifest, agentName, options = {}) {
   const permissions = manifest.permissions || {};
 
   // Collect built-in tool definitions
   const builtInDefs = getBuiltInToolDefinitions(permissions);
 
   // Load custom tools
-  const customTools = agentDir ? loadCustomTools(agentDir, manifest) : [];
+  const customTools = agentDir && !options.builtInsOnly ? loadCustomTools(agentDir, manifest) : [];
 
   // Merge all definitions
   const definitions = [

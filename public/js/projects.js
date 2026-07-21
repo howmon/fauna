@@ -599,6 +599,7 @@ function updateProjectIndicator() {
 async function setActiveProject(id, opts) {
   opts = opts || {};
   var navigate = opts.navigate !== false;
+  if (_projFileSearchState.agentRunning && state.activeProjectId !== id) cancelProjectAgentSearch();
   state.activeProjectId = id;
   if (id) {
     localStorage.setItem('fauna-active-project', id);
@@ -980,6 +981,7 @@ function _renderFilesTab(proj) {
 
 var _projFileSearchState = {
   visible: false,
+  mode: 'text',
   replaceVisible: false,
   query: '',
   replacement: '',
@@ -993,12 +995,28 @@ var _projFileSearchState = {
   error: '',
   timer: null,
   requestSeq: 0,
+  agentName: '',
+  agentTask: '',
+  agentApply: false,
+  agentRunning: false,
+  agentOutput: '',
+  agentError: '',
+  agentAbortController: null,
 };
 
 function _renderProjectFileSearch(proj) {
   var s = _projFileSearchState;
   var canEdit = !!(proj && proj.allowFileEditing);
+  var modeBar = '<div class="proj-search-modebar" role="tablist" aria-label="Search mode">' +
+    '<button class="proj-search-mode' + (s.mode === 'text' ? ' active' : '') + '" role="tab" aria-selected="' + (s.mode === 'text') + '" onclick="setProjectSearchMode(\'text\')"><i class="ti ti-search"></i> Find</button>' +
+    '<button class="proj-search-mode' + (s.mode === 'agent' ? ' active' : '') + '" role="tab" aria-selected="' + (s.mode === 'agent') + '" onclick="setProjectSearchMode(\'agent\')"><i class="ti ti-sparkles"></i> Agent</button>' +
+  '</div>';
+  if (s.mode === 'agent') {
+    return '<section id="proj-file-search" class="proj-file-search' + (s.visible ? '' : ' hidden') + '" aria-label="Agent search">' +
+      modeBar + _renderProjectAgentSearch(proj, canEdit) + '</section>';
+  }
   return '<section id="proj-file-search" class="proj-file-search' + (s.visible ? '' : ' hidden') + '" aria-label="Find in files">' +
+    modeBar +
     '<div class="proj-search-row">' +
       '<button class="proj-search-disclosure" onclick="toggleProjectReplace()" title="Toggle Replace"><i class="ti ' + (s.replaceVisible ? 'ti-chevron-down' : 'ti-chevron-right') + '"></i></button>' +
       '<div class="proj-search-input-wrap"><i class="ti ti-search"></i>' +
@@ -1024,6 +1042,191 @@ function _renderProjectFileSearch(proj) {
     (!canEdit && s.replaceVisible ? '<div class="proj-search-readonly"><i class="ti ti-lock"></i> Enable source file editing in Project Settings to replace matches.</div>' : '') +
     '<div id="proj-search-results" class="proj-search-results">' + _renderProjectSearchResults() + '</div>' +
   '</section>';
+}
+
+function _projectSearchAgents() {
+  return typeof getAllAgents === 'function' ? getAllAgents().filter(function(agent) {
+    return agent && agent.name && !agent.orchestrator;
+  }) : [];
+}
+
+function _renderProjectAgentSearch(proj, canEdit) {
+  var s = _projFileSearchState;
+  var agents = _projectSearchAgents();
+  var activeName = typeof getActiveAgentName === 'function' ? getActiveAgentName() : '';
+  if (!s.agentName || !agents.some(function(agent) { return agent.name === s.agentName; })) {
+    s.agentName = activeName && agents.some(function(agent) { return agent.name === activeName; }) ? activeName : (agents[0] && agents[0].name) || '';
+  }
+  var options = agents.map(function(agent) {
+    return '<option value="' + _projEsc(agent.name) + '"' + (agent.name === s.agentName ? ' selected' : '') + '>' + _projEsc(agent.displayName || agent.name) + '</option>';
+  }).join('');
+  var output = s.agentError
+    ? '<div class="proj-agent-search-status error"><i class="ti ti-alert-circle"></i>' + _projEsc(s.agentError) + '</div>'
+    : s.agentOutput
+      ? '<pre class="proj-agent-search-output">' + _projEsc(s.agentOutput) + '</pre>'
+      : '<div class="proj-agent-search-status"><i class="ti ti-sparkles"></i>Ask an agent to trace behavior, find patterns, or refactor this source.</div>';
+  return '<div class="proj-agent-search-toolbar">' +
+      '<select id="proj-agent-search-agent" class="proj-agent-search-select" onchange="_projFileSearchState.agentName=this.value" aria-label="Search agent"' + (s.agentRunning ? ' disabled' : '') + '>' + (options || '<option value="">No agents installed</option>') + '</select>' +
+      '<button class="proj-agent-apply-toggle' + (s.agentApply ? ' active' : '') + '" onclick="toggleProjectAgentApply()" title="Allow the selected agent to edit files"' + (!canEdit || s.agentRunning ? ' disabled' : '') + '><i class="ti ti-wand"></i> Apply changes</button>' +
+      '<button class="proj-icon-btn proj-agent-search-run" onclick="' + (s.agentRunning ? 'cancelProjectAgentSearch()' : 'runProjectAgentSearch()') + '" title="' + (s.agentRunning ? 'Stop agent' : 'Run agent (Cmd/Ctrl+Enter)') + '"' + (!agents.length ? ' disabled' : '') + '><i class="ti ' + (s.agentRunning ? 'ti-square' : 'ti-player-play') + '"></i></button>' +
+      '<button class="proj-icon-btn" onclick="toggleProjectFileSearch(false)" title="Close search"><i class="ti ti-x"></i></button>' +
+    '</div>' +
+    '<textarea id="proj-agent-search-task" class="proj-agent-search-task" rows="3" placeholder="Find the authentication flow and refactor duplicated token validation…" oninput="_projFileSearchState.agentTask=this.value" onkeydown="if((event.metaKey||event.ctrlKey)&&event.key===\'Enter\'){event.preventDefault();runProjectAgentSearch()}"' + (s.agentRunning ? ' disabled' : '') + '>' + _projEsc(s.agentTask) + '</textarea>' +
+    (!canEdit ? '<div class="proj-search-readonly"><i class="ti ti-lock"></i>Analysis is read-only. Enable source file editing in Project Settings to apply refactors.</div>' :
+      (!s.agentApply ? '<div class="proj-agent-search-safety"><i class="ti ti-shield-check"></i>Analysis mode cannot run shell commands or modify files.</div>' : '')) +
+    '<div id="proj-agent-search-results" class="proj-agent-search-results">' + (s.agentRunning && !s.agentOutput ? '<div class="proj-agent-search-status"><i class="ti ti-loader-2 spin"></i>Agent is searching…</div>' : output) + '</div>';
+}
+
+function setProjectSearchMode(mode) {
+  if (mode !== 'text' && mode !== 'agent') return;
+  if (_projFileSearchState.agentRunning) return;
+  _captureProjectSearchInputs();
+  _projFileSearchState.mode = mode;
+  var proj = _activeProject();
+  if (proj) _renderProjectHubBody(proj);
+  setTimeout(function() {
+    var input = document.getElementById(mode === 'agent' ? 'proj-agent-search-task' : 'proj-search-query');
+    if (input) input.focus();
+  }, 0);
+}
+
+function toggleProjectAgentApply() {
+  if (_projFileSearchState.agentRunning) return;
+  var proj = _activeProject();
+  if (!proj || !proj.allowFileEditing) return;
+  _projFileSearchState.agentApply = !_projFileSearchState.agentApply;
+  _renderProjectHubBody(proj);
+}
+
+function _projectAgentSourcePath(proj) {
+  if (!proj) return '';
+  if (_hubTreeState.srcId === '__rootpath__') return proj.rootPath || '';
+  var source = (proj.sources || []).find(function(item) { return item.id === _hubTreeState.srcId; });
+  return source && source.type === 'local' ? source.path || '' : '';
+}
+
+function _updateProjectAgentSearchResults() {
+  var el = document.getElementById('proj-agent-search-results');
+  if (!el) return;
+  var s = _projFileSearchState;
+  if (s.agentError) el.innerHTML = '<div class="proj-agent-search-status error"><i class="ti ti-alert-circle"></i>' + _projEsc(s.agentError) + '</div>';
+  else if (s.agentOutput) el.innerHTML = '<pre class="proj-agent-search-output">' + _projEsc(s.agentOutput) + '</pre>';
+  else if (s.agentRunning) el.innerHTML = '<div class="proj-agent-search-status"><i class="ti ti-loader-2 spin"></i>Agent is searching…</div>';
+}
+
+function cancelProjectAgentSearch() {
+  var s = _projFileSearchState;
+  if (s.agentAbortController) s.agentAbortController.abort();
+}
+
+async function _readProjectAgentSearchStream(response, signal, onContent) {
+  var reader = response.body.getReader();
+  var decoder = new TextDecoder();
+  var partial = '';
+  var text = '';
+  while (true) {
+    if (signal && signal.aborted) {
+      try { await reader.cancel(); } catch (_) {}
+      throw new DOMException('Agent run stopped', 'AbortError');
+    }
+    var chunk = await reader.read();
+    if (chunk.done) break;
+    partial += decoder.decode(chunk.value, { stream: true });
+    var lines = partial.split('\n');
+    partial = lines.pop();
+    for (var lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+      var line = lines[lineIndex];
+      if (line.indexOf('data: ') !== 0) continue;
+      var event;
+      try {
+        event = JSON.parse(line.slice(6));
+      } catch (_) { continue; }
+      if (event.type === 'error') throw new Error(event.error || 'Agent search failed');
+      if (event.type === 'content' && typeof event.content === 'string') {
+        text += event.content;
+        onContent(event.content);
+      }
+    }
+  }
+  return text;
+}
+
+async function runProjectAgentSearch() {
+  var s = _projFileSearchState;
+  if (s.agentRunning) return;
+  var taskInput = document.getElementById('proj-agent-search-task');
+  if (taskInput) s.agentTask = taskInput.value;
+  var task = (s.agentTask || '').trim();
+  var proj = _activeProject();
+  var agent = typeof findAgent === 'function' ? findAgent(s.agentName) : null;
+  if (!task || !proj || !agent || !_hubTreeState.srcId) return;
+  if (s.agentApply) {
+    if (!proj.allowFileEditing) { s.agentApply = false; _renderProjectHubBody(proj); return; }
+    if (!await _projConfirm('Allow ' + (agent.displayName || agent.name) + ' to search and modify files in this project source?')) return;
+  }
+  var sourcePath = _projectAgentSourcePath(proj);
+  if (!sourcePath) {
+    s.agentError = 'Agent search requires a local project source.';
+    _updateProjectAgentSearchResults();
+    return;
+  }
+  var permissions = {
+    fileRead: [sourcePath],
+    fileWrite: s.agentApply ? [sourcePath] : [],
+    shell: false,
+    browser: false,
+    figma: false,
+    network: { blockAll: true },
+  };
+  var modeInstruction = s.agentApply
+    ? 'Inspect the repository, make only the requested changes, re-read changed files to verify them, and summarize changed files. Shell access is unavailable.'
+    : 'This is read-only analysis. Use agent_search_files and agent_read_file. Do not modify files and do not claim changes were made.';
+  var systemPrompt = '## Project Hub Agent Search\n\n' + (agent.systemPrompt || '') + '\n\n' + modeInstruction +
+    '\nActive project: ' + (proj.name || proj.id) + '\nActive source path: ' + sourcePath;
+  s.agentRunning = true;
+  s.agentOutput = '';
+  s.agentError = '';
+  s.agentAbortController = new AbortController();
+  var runProjectId = state.activeProjectId;
+  var runSourceId = _hubTreeState.srcId;
+  var applyRequested = !!s.agentApply;
+  _renderProjectHubBody(proj);
+  try {
+    var response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: s.agentAbortController.signal,
+      body: JSON.stringify({
+        messages: [{ role: 'user', content: task }],
+        model: (Array.isArray(agent.model) ? agent.model[0] : agent.model) || state.model,
+        projectId: runProjectId,
+        clientContext: 'project-search',
+        sourceId: runSourceId,
+        projectSearchApply: applyRequested,
+        agentName: agent.name,
+        agentPermissions: permissions,
+        isolatedContext: true,
+        thinkingBudget: state.thinkingBudget || 'high',
+        systemPrompt: systemPrompt,
+      }),
+    });
+    if (!response.ok || !response.body) throw new Error('Agent request failed (HTTP ' + response.status + ')');
+    await _readProjectAgentSearchStream(response, s.agentAbortController.signal, function(delta) {
+      s.agentOutput += delta;
+      _updateProjectAgentSearchResults();
+    });
+    if (!s.agentOutput) s.agentOutput = 'Agent completed without a written summary.';
+    if (applyRequested && state.activeProjectId === runProjectId && _hubTreeState.srcId === runSourceId) {
+      await loadProjectFileTree(runSourceId, '');
+    }
+  } catch (error) {
+    if (error && error.name === 'AbortError') s.agentOutput = s.agentOutput || 'Agent run stopped.';
+    else s.agentError = (error && error.message) || String(error);
+  } finally {
+    s.agentRunning = false;
+    s.agentAbortController = null;
+    if (state.activeProjectId === runProjectId) _renderProjectHubBody(_activeProject() || proj);
+  }
 }
 
 function _captureProjectSearchInputs() {
@@ -1798,6 +2001,9 @@ async function _treeInit(st, srcId) {
 }
 
 async function loadProjectFileTree(srcId /*, subPath ignored — tree always starts at root */) {
+  if (_projFileSearchState.agentRunning && _hubTreeState.srcId && _hubTreeState.srcId !== srcId) {
+    cancelProjectAgentSearch();
+  }
   _projFileSearchState.requestSeq++;
   state._projectFileSrcId = srcId;
   await _treeInit(_hubTreeState, srcId);

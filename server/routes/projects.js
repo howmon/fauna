@@ -312,6 +312,9 @@ export function registerProjectRoutes(app, deps) {
   // { path: "foo/bar.txt", type: "file" | "dir" }.
   app.post('/api/projects/:id/sources/:srcId/entry', (req, res) => {
     try {
+      const project = getProject(req.params.id);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      if (!project.allowFileEditing) return res.status(403).json({ error: 'File editing is disabled for this project' });
       const { path: relPath, type } = req.body || {};
       const entry = createSourceEntry(req.params.id, req.params.srcId, relPath, type);
       res.status(201).json(entry);
@@ -330,6 +333,9 @@ export function registerProjectRoutes(app, deps) {
     express.raw({ type: '*/*', limit: '50mb' }),
     (req, res) => {
       try {
+        const project = getProject(req.params.id);
+        if (!project) return res.status(404).json({ error: 'Project not found' });
+        if (!project.allowFileEditing) return res.status(403).json({ error: 'File editing is disabled for this project' });
         if (typeof writeSourceFileBytes !== 'function') {
           return res.status(501).json({ error: 'upload not wired on this server' });
         }
@@ -357,6 +363,9 @@ export function registerProjectRoutes(app, deps) {
   // { oldPath, newPath }. Both paths are source-relative.
   app.patch('/api/projects/:id/sources/:srcId/entry', (req, res) => {
     try {
+      const project = getProject(req.params.id);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      if (!project.allowFileEditing) return res.status(403).json({ error: 'File editing is disabled for this project' });
       if (typeof renameSourceEntry !== 'function') {
         return res.status(501).json({ error: 'rename not wired on this server' });
       }
@@ -378,6 +387,9 @@ export function registerProjectRoutes(app, deps) {
   // ?path=foo/bar (URL-encoded). Directories are removed recursively.
   app.delete('/api/projects/:id/sources/:srcId/entry', (req, res) => {
     try {
+      const project = getProject(req.params.id);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      if (!project.allowFileEditing) return res.status(403).json({ error: 'File editing is disabled for this project' });
       if (typeof deleteSourceEntry !== 'function') {
         return res.status(501).json({ error: 'delete not wired on this server' });
       }

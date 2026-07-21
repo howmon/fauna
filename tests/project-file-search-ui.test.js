@@ -35,6 +35,34 @@ describe('Project Hub Files find and replace UI', () => {
     expect(source).toContain("await _projConfirm('Replace '");
   });
 
+  it('supports guarded agentic search and refactoring in the active project', () => {
+    const source = read('public/js/projects.js');
+    const chatRoute = read('server/routes/chat.js');
+
+    expect(source).toContain('setProjectSearchMode');
+    expect(source).toContain("s.mode === 'agent'");
+    expect(source).toContain('id="proj-agent-search-task"');
+    expect(source).toContain('runProjectAgentSearch');
+    expect(source).toContain('cancelProjectAgentSearch');
+    expect(source).toContain('projectId: runProjectId');
+    expect(source).toContain("clientContext: 'project-search'");
+    expect(source).toContain('agentPermissions: permissions');
+    expect(source).toContain('Agent search requires a local project source.');
+    expect(source).toContain('fileWrite: s.agentApply ? [sourcePath] : []');
+    expect(source).toContain('shell: false');
+    expect(source).toContain('Use agent_search_files and agent_read_file');
+    expect(source).toContain("await _projConfirm('Allow '");
+    expect(source).toContain('await loadProjectFileTree(runSourceId');
+    expect(source).toContain('_hubTreeState.srcId !== srcId');
+    expect(source).toContain('_projFileSearchState.agentRunning && state.activeProjectId !== id');
+    expect(chatRoute).toContain("const isProjectSearch = clientContext === 'project-search'");
+    expect(chatRoute).toContain('resolveProjectSourceRoot(projectId, sourceId, { localOnly: true })');
+    expect(chatRoute).toContain('fileWrite: projectSearchApply ? [projectSearchScope.root] : []');
+    expect(chatRoute).toContain('isProjectSearch ? [] : (mcpTools || [])');
+    expect(chatRoute).toContain('!noTools && !isProjectSearch');
+    expect(chatRoute).toContain('{ builtInsOnly: isProjectSearch }');
+  });
+
   it('provides stable drawer and result layout styles', () => {
     const styles = read('public/css/styles.css');
 
@@ -42,5 +70,8 @@ describe('Project Hub Files find and replace UI', () => {
     expect(styles).toContain('.proj-search-option.active');
     expect(styles).toContain('.proj-search-results');
     expect(styles).toContain('.proj-search-match {');
+    expect(styles).toContain('.proj-search-mode.active');
+    expect(styles).toContain('.proj-agent-search-task {');
+    expect(styles).toContain('.proj-agent-search-output {');
   });
 });

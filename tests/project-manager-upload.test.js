@@ -66,6 +66,15 @@ afterEach(() => {
 });
 
 describe('writeSourceFileBytes', () => {
+  it('blocks writes through a symlinked directory outside the source', () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'fauna-upload-outside-'));
+    fs.symlinkSync(outside, path.join(_tmpRoot, 'escape'));
+    expect(() => writeSourceFileBytes('p1', 'src1', 'escape/file.txt', Buffer.from('x')))
+      .toThrow(/symbolic link/i);
+    expect(fs.existsSync(path.join(outside, 'file.txt'))).toBe(false);
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+
   it('writes a binary file at the source root', () => {
     const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
     const r = writeSourceFileBytes('p1', 'src1', 'logo.png', bytes);

@@ -707,6 +707,21 @@ function _sourceSearchRoot(projectId, srcId) {
   return { project: p, root: path.resolve(root) };
 }
 
+export function resolveProjectSourceRoot(projectId, srcId, { localOnly = false } = {}) {
+  const p = getProject(projectId);
+  if (!p) throw new Error('Project not found');
+  if (srcId === '__rootpath__') {
+    if (!p.rootPath) throw new Error('No root folder set for this project');
+    return { project: p, root: path.resolve(p.rootPath), source: null };
+  }
+  const source = (p.sources || []).find(item => item.id === srcId);
+  if (!source) throw new Error('Source not found');
+  if (localOnly && source.type !== 'local') throw new Error('Agent search requires a local project source');
+  const root = source.type === 'local' ? source.path : _sourceCloneDir(projectId, srcId);
+  if (!root || !fs.existsSync(root)) throw new Error('Source directory not available');
+  return { project: p, root: path.resolve(root), source };
+}
+
 function _walkSearchFiles(root, includePatterns, excludePatterns) {
   const files = [];
   const stack = [root];
@@ -841,6 +856,21 @@ export function replaceSourceMatches(projectId, srcId, opts = {}) {
 // 'file' or 'dir'. Parent directories are created automatically. Refuses
 // to overwrite an existing entry. Returns { path, type } of the created
 // entry (path is relative to the source root, forward-slash separated).
+function _assertCanonicalSourcePath(root, candidate) {
+  const canonicalRoot = fs.realpathSync(root);
+  let existing = candidate;
+  while (!fs.existsSync(existing)) {
+    const parent = path.dirname(existing);
+    if (parent === existing) break;
+    existing = parent;
+  }
+  let canonicalExisting;
+  try { canonicalExisting = fs.realpathSync(existing); } catch (_) { canonicalExisting = path.resolve(existing); }
+  if (canonicalExisting !== canonicalRoot && !canonicalExisting.startsWith(canonicalRoot + path.sep)) {
+    throw new Error('Path escapes source through a symbolic link');
+  }
+}
+
 export function createSourceEntry(projectId, srcId, relPath, type) {
   const p = getProject(projectId);
   if (!p) throw new Error('Project not found');
@@ -875,6 +905,7 @@ export function createSourceEntry(projectId, srcId, relPath, type) {
   if (!full.startsWith(resolvedRoot + path.sep) && full !== resolvedRoot) {
     throw new Error('Path traversal not allowed');
   }
+  _assertCanonicalSourcePath(resolvedRoot, full);
   if (fs.existsSync(full)) throw new Error('A file or folder with that name already exists');
 
   if (type === 'dir') {
@@ -923,6 +954,7 @@ export function writeSourceFileBytes(projectId, srcId, relPath, buffer, opts = {
   if (!full.startsWith(resolvedRoot + path.sep) && full !== resolvedRoot) {
     throw new Error('Path traversal not allowed');
   }
+  _assertCanonicalSourcePath(resolvedRoot, full);
   if (fs.existsSync(full)) {
     if (!opts.overwrite) throw new Error('A file or folder with that name already exists');
     const stat = fs.statSync(full);
@@ -966,6 +998,7 @@ function _resolveSourceEntryPath(projectId, srcId, relPath, { mustExist = true }
   if (!full.startsWith(resolvedRoot + path.sep) && full !== resolvedRoot) {
     throw new Error('Path traversal not allowed');
   }
+  _assertCanonicalSourcePath(resolvedRoot, full);
   if (mustExist && !fs.existsSync(full)) throw new Error('File not found');
   const type = (mustExist && fs.statSync(full).isDirectory()) ? 'dir' : 'file';
   return { fullPath: full, root: resolvedRoot, rel, type };
@@ -1027,6 +1060,7 @@ export function resolveSourceFilePath(projectId, srcId, filePath) {
   const resolvedRoot = path.resolve(root);
 
   if (!full.startsWith(resolvedRoot + path.sep)) throw new Error('Path traversal not allowed');
+  _assertCanonicalSourcePath(resolvedRoot, full);
   if (!fs.existsSync(full)) throw new Error('File not found');
   const stat = fs.statSync(full);
   if (!stat.isFile()) throw new Error('Not a file');

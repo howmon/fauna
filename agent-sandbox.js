@@ -5,6 +5,7 @@
 
 import path from 'path';
 import os   from 'os';
+import fs   from 'fs';
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -106,6 +107,21 @@ function normalisePath(p) {
   return path.resolve(expandHome(p));
 }
 
+function canonicalPath(p) {
+  const resolved = normalisePath(p);
+  let existing = resolved;
+  const missing = [];
+  while (!fs.existsSync(existing)) {
+    const parent = path.dirname(existing);
+    if (parent === existing) break;
+    missing.unshift(path.basename(existing));
+    existing = parent;
+  }
+  let canonical = existing;
+  try { canonical = fs.realpathSync(existing); } catch (_) {}
+  return path.join(canonical, ...missing);
+}
+
 // ── Filesystem sandbox ───────────────────────────────────────────────────
 
 /**
@@ -117,7 +133,7 @@ function normalisePath(p) {
  * @returns {{ allowed: boolean, reason?: string }}
  */
 function checkFilePath(absPath, mode, permissions, agentName) {
-  const resolved = path.resolve(absPath);
+  const resolved = canonicalPath(absPath);
 
   // 1. Always block sensitive paths
   for (const blocked of BLOCKED_PATHS) {
@@ -144,7 +160,7 @@ function checkFilePath(absPath, mode, permissions, agentName) {
 
   // Check each allowed path
   for (const p of allowedPaths) {
-    const allowed = normalisePath(p);
+    const allowed = canonicalPath(p);
     if (resolved === allowed || resolved.startsWith(allowed + path.sep)) {
       audit(agentName, 'file-' + mode, resolved, true);
       return { allowed: true };

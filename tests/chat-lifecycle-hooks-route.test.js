@@ -125,6 +125,22 @@ describe('POST /api/chat lifecycle hooks', () => {
     fs.rmSync(workspaceRoot, { recursive: true, force: true });
   });
 
+  it('rejects Project Search before model execution when project scope is missing', async () => {
+    const res = await app.invoke('POST', '/api/chat', {
+      body: {
+        messages: [{ role: 'user', content: 'find the auth flow' }],
+        clientContext: 'project-search',
+        agentName: 'repository-agent',
+      },
+    });
+
+    expect(llm.create).not.toHaveBeenCalled();
+    expect(parseSse(res.chunks)).toEqual([
+      { type: 'error', error: 'Project Search requires projectId and sourceId' },
+      { type: 'done', finish_reason: 'project_search_rejected' },
+    ]);
+  });
+
   it('blocks a new chat turn when SessionStart denies it', async () => {
     write(path.join(workspaceRoot, '.github', 'hooks', 'policy.json'), JSON.stringify({
       hooks: { SessionStart: [{ type: 'command', command: `node -e "process.stdout.write(JSON.stringify({continue:false,stopReason:'session blocked'}))"` }] },

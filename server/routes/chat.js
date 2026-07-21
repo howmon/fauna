@@ -50,7 +50,7 @@ import { buildProjectProfile, formatProfileForPrompt } from '../lib/profile.js';
 import { extractFacts as extractMemoryFacts } from '../lib/memory-extractor.js';
 import { extractCorrections } from '../lib/failure-learning.js';
 import { buildAgentPolicy, discoverCustomizations, filterToolsByPolicy, resolveToolPolicy } from '../../lib/customization-registry.js';
-import { getProjectSystemContext, buildContextPayload, getProject, appendAutonomousRunLog } from '../../project-manager.js';
+import { getProjectSystemContext, buildContextPayload, getProject, appendAutonomousRunLog, resolveProjectSourceRoot } from '../../project-manager.js';
 import { estimateTokens, computeBudget } from '../lib/token-budget.js';
 import { summarizeHistory } from '../lib/summarize-history.js';
 import { withTimeout } from '../lib/async-utils.js';
@@ -291,6 +291,7 @@ export function registerChatRoute(app, {
     const { messages = [], model = 'claude-sonnet-4.6', systemPrompt = '', useFigmaMCP = false, contextSummary = '',
         thinkingBudget = 'high', maxContextTurns = 20, agentName = null,
         projectId = null, projectContextIds = null, isDelegation = false,
+        sourceId = null, projectSearchApply = false,
         clientContext = 'app', noTools = false,
         isolatedContext = false,
         enableDynamicWidgets = false,
@@ -305,6 +306,7 @@ export function registerChatRoute(app, {
         selectedFigmaFileKeys = [] } = req.body;
     const isCLI = clientContext === 'cli';
     const isolateContext = isolatedContext === true || clientContext === 'automation-generator';
+    const isProjectSearch = clientContext === 'project-search';
 
     // Effective autonomous-mode flag — explicit body value wins, then project
     // default. Per-conversation `config.autonomousMode` is forwarded by the
@@ -315,6 +317,33 @@ export function registerChatRoute(app, {
     if (projectId) {
       try { _projectRecord = getProject(projectId) || null; } catch (_) {}
       _projectAutonomous = !!_projectRecord?.autonomousMode;
+    }
+    let projectSearchScope = null;
+    if (isProjectSearch) {
+      const rejectProjectSearch = (error) => {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        });
+        res.write(`data: ${JSON.stringify({ type: 'error', error })}\n\n`);
+        res.write(`data: ${JSON.stringify({ type: 'done', finish_reason: 'project_search_rejected' })}\n\n`);
+        res.end();
+      };
+      if (!projectId || !sourceId) {
+        rejectProjectSearch('Project Search requires projectId and sourceId');
+        return;
+      }
+      try {
+        projectSearchScope = resolveProjectSourceRoot(projectId, sourceId, { localOnly: true });
+      } catch (error) {
+        rejectProjectSearch(error?.message || String(error));
+        return;
+      }
+      if (projectSearchApply && !projectSearchScope.project.allowFileEditing) {
+        rejectProjectSearch('File editing is disabled for this project');
+        return;
+      }
     }
     const autonomousMode = (bodyAutonomousMode === true || bodyAutonomousMode === false)
       ? bodyAutonomousMode
@@ -992,7 +1021,16 @@ export function registerChatRoute(app, {
         // into req.body.agentPermissions client-side — those represent what
         // the user actually approved, so they win over the sub-agent's
         // (often empty) stored manifest.
-        const permissions = isDelegation
+        const permissions = isProjectSearch
+          ? {
+              fileRead: [projectSearchScope.root],
+              fileWrite: projectSearchApply ? [projectSearchScope.root] : [],
+              shell: false,
+              browser: false,
+              figma: false,
+              network: { blockAll: true },
+            }
+          : isDelegation
           ? (req.body.agentPermissions || manifest?.permissions || {})
           : (manifest?.permissions || req.body.agentPermissions || {});
         if (!manifest && activeCustomizationAgentPolicy) {
@@ -1013,7 +1051,8 @@ export function registerChatRoute(app, {
         const { definitions: agentToolDefs, handlers } = getAgentTools(
           fs.existsSync(agentDir) ? agentDir : null,
           effectiveManifest,
-          safeAgentName
+          safeAgentName,
+          { builtInsOnly: isProjectSearch }
         );
         agentToolHandlers = handlers;
 
@@ -1062,7 +1101,7 @@ export function registerChatRoute(app, {
         }
 
         // Merge agent tools with MCP tools
-        const allTools = [...(mcpTools || []), ...filteredAgentToolDefs];
+        const allTools = [...(isProjectSearch ? [] : (mcpTools || [])), ...filteredAgentToolDefs];
         if (allTools.length) mcpTools = allTools;
 
         // Start any MCP servers the agent requires
@@ -1256,7 +1295,7 @@ export function registerChatRoute(app, {
           }
         },
       };
-      if (!isCLI && !noTools) {
+      if (!isCLI && !noTools && !isProjectSearch) {
         mcpTools = [...(mcpTools || []), ...SELF_TOOL_DEFS];
         if (enableDynamicWidgets) mcpTools = [...mcpTools, ...DYNAMIC_WIDGET_TOOL_DEFS];
         // When no agent is active, strip `fauna_get_agent_instructions` — its
@@ -2029,6 +2068,7 @@ export function registerChatRoute(app, {
           // happens synchronously after the awaited work resolves, which JS's
           // single-threaded event loop serializes for us.
           const _executeOneCall = async (tc, args, toolName, callKey) => {
+            if (upstreamAbort.signal.aborted) throw new Error('Cancelled by user');
             // Send human-readable tool status to the client
             const toolLabel = formatToolLabel(toolName, args);
             send({ type: 'tool_call', name: toolName, label: toolLabel });
@@ -2229,6 +2269,7 @@ export function registerChatRoute(app, {
           // Dispatcher: classify each call, run parallel-safe ones via the
           // queue and sequential ones inline (flushing the queue first).
           for (const tc of calls) {
+            if (upstreamAbort.signal.aborted) break;
             const toolName = tc.function.name;
             const callKey  = toolName + '|' + tc.function.arguments;
             toolCallCount++;
@@ -2252,6 +2293,7 @@ export function registerChatRoute(app, {
               agentName: agentName || null,
               conversationId: req.body?.conversationId || null,
             }, { cwd: workspaceRoot });
+            if (upstreamAbort.signal.aborted) break;
             for (const message of preHooks.systemMessages || []) {
               if (message) allMessages.push({ role: 'system', content: String(message) });
             }
