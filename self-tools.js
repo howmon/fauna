@@ -1958,7 +1958,7 @@ export const SELF_TOOL_DEFS = [
           js: { type: 'string', description: 'JavaScript to run for the evaluate action.' },
           tabId: { type: 'string', description: 'Tab id for switch-tab / close-tab.' },
           waitMs: { type: 'number', description: 'Milliseconds to wait for the wait action.' },
-          forceInternal: { type: 'boolean', description: 'Use the in-app webview even when this turn is anchored to a shared browser-extension tab. Defaults false.' },
+          forceInternal: { type: 'boolean', description: 'Use the in-app webview even when this turn is anchored to a shared browser-extension tab. Native fauna_browser calls are internal by default; this is an explicit routing override for compatibility.' },
         },
         required: ['action'],
       },

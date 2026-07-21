@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const source = fs.readFileSync(path.join(process.cwd(), 'public/js/browser.js'), 'utf8');
+const chatSource = fs.readFileSync(path.join(process.cwd(), 'public/js/chat.js'), 'utf8');
 
 describe('browser backend routing', () => {
   it('gives extension blocks precedence over internal legacy blocks', () => {
@@ -14,5 +15,10 @@ describe('browser backend routing', () => {
     expect(extensionGuard).toBeGreaterThan(functionStart);
     expect(extensionGuard).toBeLessThan(internalRun);
     expect(source.slice(extensionGuard, internalRun)).toContain('return;');
+  });
+
+  it('keeps native fauna_browser calls internal before backend arbitration', () => {
+    expect(chatSource).toContain("Object.assign({}, ev.args || {}, { forceInternal: true })");
+    expect(source).toContain("var preferPlaywright = !action.forceInternal && !isLocalUrl");
   });
 });

@@ -2134,7 +2134,11 @@ async function streamResponse(conv) {
               }
               try {
                 if (ev.name === 'browser' && typeof executeBrowserAction === 'function') {
-                  executeBrowserAction(ev.args || {})
+                  // fauna_browser is explicitly the in-app browser tool. Mark
+                  // the route before dispatch so Playwright cannot create an
+                  // external about:blank page for URL-less actions such as
+                  // screenshot/extract and then fall back to this webview.
+                  executeBrowserAction(Object.assign({}, ev.args || {}, { forceInternal: true }))
                     .then(function(r) { reply({ result: r }); })
                     .catch(function(e) { reply({ error: e && e.message ? e.message : String(e) }); });
                 } else {
