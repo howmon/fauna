@@ -252,35 +252,23 @@ function injectArtifactCard(id, containerEl) {
                 csv:'ti-table', text:'ti-file-text', files:'ti-folder-open', web:'ti-world', pdf:'ti-file-type-pdf', docx:'ti-file-word',
                 deck:'ti-presentation', xlsx:'ti-file-spreadsheet',
                 code:'ti-code', svg:'ti-vector', summary:'ti-align-left' };
-  var labels = { html:'HTML', image:'Image', markdown:'Markdown', json:'JSON',
-                 csv:'CSV', text:'Text', files:'Files', web:'Web', pdf:'PDF', docx:'DOCX', code:'Code',
-                 deck:'Deck', xlsx:'Sheet',
-                 svg:'SVG', summary:'Summary' };
   var icon  = icons[a.type]  || 'ti-file';
-  var label = labels[a.type] || a.type;
   var card  = document.createElement('div');
   card.className = 'artifact-card';
-  // Ellipsis menu — only for artifacts backed by a real file on disk, since
-  // "open location" / "open with app" only make sense for those.
-  var menuHtml = a.path ?
-    '<div class="artifact-card-menu-wrap">' +
-      '<button class="artifact-card-more" title="More" onclick="toggleArtifactCardMenu(event, this)"><i class="ti ti-dots"></i></button>' +
-      '<div class="artifact-card-menu">' +
-        '<button type="button" onclick="artifactCardOpenLocation(\'' + id + '\')"><i class="ti ti-folder"></i> Open file location</button>' +
-        '<button type="button" onclick="artifactCardOpenWith(\'' + id + '\')"><i class="ti ti-external-link"></i> Open with default app</button>' +
-      '</div>' +
-    '</div>' : '';
   card.innerHTML =
-    _artifactThumbnailMarkup(a, 'artifact-card-thumb') +
-    '<div class="artifact-card-icon"><i class="ti ' + icon + '"></i></div>' +
-    '<div class="artifact-card-info">' +
-      '<div class="artifact-card-title">' + escHtml(a.title || 'Artifact') + '</div>' +
-      '<span class="artifact-card-type">' + escHtml(label) + '</span>' +
-    '</div>' +
-    '<button class="artifact-card-open" onclick="openArtifact(\'' + id + '\')">' +
-      '<i class="ti ti-arrow-right"></i> Open' +
+    '<button class="artifact-card-primary" type="button" title="Open artifact" aria-label="Open ' + escHtml(a.title || 'artifact') + '" onclick="openArtifact(\'' + id + '\')">' +
+      '<span class="artifact-card-icon"><i class="ti ' + icon + '"></i></span>' +
+      '<span class="artifact-card-title">' + escHtml(a.title || 'Artifact') + '</span>' +
+      '<i class="ti ti-external-link artifact-card-expand-indicator" aria-hidden="true"></i>' +
     '</button>' +
-    menuHtml;
+    (a.path ?
+      '<div class="artifact-card-menu-wrap">' +
+        '<button class="artifact-card-more" type="button" title="File actions" aria-label="File actions" aria-haspopup="menu" onclick="toggleArtifactCardMenu(event, this)"><i class="ti ti-dots"></i></button>' +
+        '<div class="artifact-card-menu" role="menu">' +
+          '<button type="button" role="menuitem" onclick="artifactCardOpenLocation(\'' + id + '\')"><i class="ti ti-folder"></i> Open file location</button>' +
+          '<button type="button" role="menuitem" onclick="artifactCardOpenWith(\'' + id + '\')"><i class="ti ti-external-link"></i> Open with default app</button>' +
+        '</div>' +
+      '</div>' : '');
   containerEl.appendChild(card);
 }
 
@@ -623,12 +611,12 @@ function closeAllArtifactTabs() {
 function artifactTypeIcon(type) {
   var m = { html:'ti-brand-html5', image:'ti-photo', markdown:'ti-markdown', json:'ti-braces',
             csv:'ti-table', text:'ti-file-text', files:'ti-folder-open', web:'ti-world', pdf:'ti-file-type-pdf', docx:'ti-file-word',
-            code:'ti-code', svg:'ti-vector', summary:'ti-align-left', design:'ti-layout-2' };
+            deck:'ti-presentation', xlsx:'ti-file-spreadsheet', code:'ti-code', svg:'ti-vector', summary:'ti-align-left', design:'ti-layout-2' };
   return m[type] || 'ti-file';
 }
 
 function _artifactTypeLabel(type) {
-  var m = { html:'HTML', image:'Image', markdown:'Markdown', json:'JSON', csv:'CSV', text:'Text', files:'Files', web:'Web', pdf:'PDF', docx:'DOCX', code:'Code', svg:'SVG', summary:'Summary', design:'Design' };
+  var m = { html:'HTML', image:'Image', markdown:'Markdown', json:'JSON', csv:'CSV', text:'Text', files:'Files', web:'Web', pdf:'PDF', docx:'DOCX', deck:'Presentation', xlsx:'Spreadsheet', code:'Code', svg:'SVG', summary:'Summary', design:'Design' };
   return m[type] || (type || 'Artifact');
 }
 

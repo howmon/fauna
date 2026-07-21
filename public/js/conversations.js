@@ -1266,6 +1266,30 @@ function _extractToolBlocksFromContent(content) {
 
 function _buildConversationExport(conv) {
   var messages = Array.isArray(conv.messages) ? conv.messages : [];
+  var exportedMessages = messages.reduce(function(acc, m, sourceIndex) {
+    if (m.role === 'user' && _isSystemControlMessage(m.content)) return acc;
+    var rawContent = m.content == null ? '' : m.content;
+    var entry = {
+      index: acc.length,
+      sourceIndex: sourceIndex,
+      role: m.role,
+      content: _sanitizeExportContent(m.role, rawContent),
+    };
+    if (m.timestamp) entry.timestamp = m.timestamp;
+    if (m.agentInfo) entry.agentInfo = m.agentInfo;
+    if (m.reasoning) entry.reasoning = m.reasoning;
+    if (m.widgets) entry.widgets = m.widgets;
+    if (m.plan) entry.plan = m.plan;
+    if (m.attachments) entry.attachments = m.attachments;
+    if (m.role === 'assistant') {
+      var tools = _extractToolBlocksFromContent(rawContent);
+      if (tools.length) entry.tools = tools;
+    }
+    acc.push(entry);
+    return acc;
+  }, []);
+  var messageTimestamps = exportedMessages.map(function(m) { return Number(m.timestamp) || 0; }).filter(Boolean);
+  var lastActivityAt = messageTimestamps.length ? Math.max.apply(Math, messageTimestamps) : (conv.updatedAt || null);
   var exported = {
     formatVersion: 1,
     format: 'fauna.transcript.v1',
@@ -1284,11 +1308,12 @@ function _buildConversationExport(conv) {
       projectId: conv.projectId || null,
       agentName: conv.agentName || (conv._activeAgent && conv._activeAgent.name) || null,
       createdAt: conv.createdAt || null,
-      updatedAt: conv.updatedAt || null,
+      updatedAt: lastActivityAt,
       systemPrompt: conv.systemPrompt || null,
+      effectiveRequest: conv.lastRequestSnapshot || null,
       contextSummary: conv.contextSummary || null,
       config: conv.config || null,
-      messageCount: messages.length,
+      messageCount: exportedMessages.length,
     },
     settings: (typeof state !== 'undefined' && state) ? {
       model: state.model,
@@ -1299,36 +1324,11 @@ function _buildConversationExport(conv) {
       enableDynamicWidgets: !!state.enableDynamicWidgets,
       autoCompact: state.autoCompact !== false,
     } : null,
-    messages: messages.reduce(function(acc, m, i) {
-      // Drop auto-injected system control nudges that get persisted with
-      // role:'user'. These are never the user's words — they're things
-      // like "[System: the plan is not yet complete. Next step: …]" or
-      // continuation pokes from the runtime. They make exports look like
-      // the user said weird system-y things they never said.
-      if (m.role === 'user' && _isSystemControlMessage(m.content)) return acc;
-      var rawContent = m.content == null ? '' : m.content;
-      var entry = {
-        index: i,
-        role: m.role,
-        content: _sanitizeExportContent(m.role, rawContent),
-      };
-      if (m.timestamp) entry.timestamp = m.timestamp;
-      if (m.agentInfo) entry.agentInfo = m.agentInfo;
-      if (m.reasoning) entry.reasoning = m.reasoning;
-      if (m.widgets) entry.widgets = m.widgets;
-      if (m.plan) entry.plan = m.plan;
-      if (m.attachments) entry.attachments = m.attachments;
-      if (m.role === 'assistant') {
-        // Extract from RAW content — sanitize strips shell-output / tool-output
-        // fences out of `content` (they're huge dumps that bury the prose), and
-        // we want them captured here in structured form.
-        var tools = _extractToolBlocksFromContent(rawContent);
-        if (tools.length) entry.tools = tools;
-      }
-      acc.push(entry);
-      return acc;
-    }, []),
-    clientDebugLog: (typeof _debugLogs !== 'undefined' && Array.isArray(_debugLogs)) ? _debugLogs.slice(-2000) : [],
+    messages: exportedMessages,
+    diagnostics: {
+      clientDebugLogIncluded: false,
+      reason: 'Client debug logs are process-global and may contain unrelated conversation data or sensitive tool output.',
+    },
   };
   return exported;
 }

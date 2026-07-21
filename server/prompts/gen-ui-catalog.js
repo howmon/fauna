@@ -95,6 +95,7 @@ When you finish a tool-driven or agent workflow, write the concise factual summa
 - no more than 8 logical items.
 
 Do not add a completion card to casual conversation, short factual answers, hidden context-compaction summaries, or when the user explicitly requests plain text. Do not claim success in the card unless validation actually passed. \`DONE:\` / \`BLOCKED:\` / \`NEEDS-INPUT:\` markers, when required, remain in the prose before the card.
+If a plan is active, a success badge is allowed only when every plan item is completed or cancelled and required validation passed. Discovery, evidence collection, extraction, or partial implementation must use an info or warning badge and must name the remaining work. Runtime facts and completed artifacts outrank optimistic model wording.
 
 ---
 

@@ -74,7 +74,7 @@ const _ARTIFACT_CODE_EXT = new Set([
   'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'rb', 'go', 'rs', 'java',
   'cs', 'php', 'sh', 'zsh', 'bash', 'css', 'xml', 'yaml', 'yml', 'txt',
 ]);
-function artifactTypeForPath(p) {
+export function artifactTypeForPath(p) {
   const ext = (String(p || '').split('.').pop() || '').toLowerCase();
   if (_ARTIFACT_EXT_TYPE[ext]) return _ARTIFACT_EXT_TYPE[ext];
   if (_ARTIFACT_CODE_EXT.has(ext)) return 'code';
@@ -93,7 +93,7 @@ function _resolveArtifactPath(p, cwd) {
 // Scan a shell command for presentable output files it created (python-pptx
 // prs.save("deck.pptx"), openpyxl wb.save('report.xlsx'), redirects, -o flags).
 // Only returns paths that actually exist on disk as regular files.
-function detectShellArtifacts(command, cwd) {
+export function detectShellArtifacts(command, cwd) {
   const out = [];
   const seen = new Set();
   const push = (p) => {
@@ -105,9 +105,11 @@ function detectShellArtifacts(command, cwd) {
     out.push({ path: resolved, type: artifactTypeForPath(resolved) });
   };
   const cmd = String(command || '');
-  // Quoted string literals ending in a file extension — catches files saved
-  // from inside python/node scripts run via -c / -e or a heredoc.
-  cmd.replace(/["']([^"'\n]{1,300}?\.[A-Za-z0-9]{1,6})["']/g, (m, p) => { push(p); return m; });
+  // Explicit save/write calls. Do not treat every quoted existing path as an
+  // output: commands often quote input evidence such as package.json.
+  cmd.replace(/\b(?:save|writeFileSync|writeFile|toFile|export)\s*\(\s*["']([^"'\n]{1,300}?\.[A-Za-z0-9]{1,6})["']/g, (m, p) => { push(p); return m; });
+  // Python-style open(path, 'w'|'a'|'x') output handles.
+  cmd.replace(/\bopen\s*\(\s*["']([^"'\n]{1,300}?\.[A-Za-z0-9]{1,6})["']\s*,\s*["'][wax][^"']*["']/g, (m, p) => { push(p); return m; });
   // Redirects and tee targets.
   cmd.replace(/(?:>>?|\btee\b)\s+([^\s;|&]+)/g, (m, p) => { push(p); return m; });
   // -o / --output / --out targets.
@@ -1334,8 +1336,10 @@ export function registerChatRoute(app, {
       let continueCount = 0; // track auto-continue on length finish
       let halfStopNudgeCount = 0; // Codex-style: re-prompt model if it asks the user to continue mid-task
       let prevPreamble = '';       // narration emitted on the previous tool-call iteration
+      let needsContentBoundary = false; // separate narrated tool rounds in the persisted assistant turn
       let narrationRepeats = 0;    // consecutive iterations with near-identical preamble
       let narrationNudgeFired = false; // only inject the coaching nudge once per request
+      let toolsLockedForFinalResponse = false;
       // Template-signature repeat detector — runs alongside narrationRepeats and
       // catches the failure mode where preambles share an obvious canned shape
       // (e.g. "I've now confirmed … The hypothesis I'm testing … The specific
@@ -1742,6 +1746,10 @@ export function registerChatRoute(app, {
             params.tools = [...(params.tools || []), ...ephemeral];
           }
         }
+        if (toolsLockedForFinalResponse) {
+          delete params.tools;
+          delete params.tool_choice;
+        }
         // Widget-claim verifier: if a prior iteration detected the model
         // promising a widget without calling `fauna_emit_widget`, force the
         // next response to invoke that tool. Consumed once.
@@ -1808,6 +1816,16 @@ export function registerChatRoute(app, {
 
         let sawReasoning = false;
         let reasoningStart = null;
+        let emittedTextThisIteration = false;
+        const sendContent = (text) => {
+          if (!text) return;
+          if (!emittedTextThisIteration && needsContentBoundary) {
+            send({ type: 'content', content: '\n\n' });
+            needsContentBoundary = false;
+          }
+          emittedTextThisIteration = true;
+          send({ type: 'content', content: text });
+        };
 
         // Surface "Thinking…" the instant the stream opens — don't wait for the
         // first thinking delta. With a large budget Claude can spend minutes in
@@ -1890,7 +1908,7 @@ export function registerChatRoute(app, {
               } else if (block.type === 'text' && block.text) {
                 assistantText += block.text;
                 sawVisibleOutput = true;
-                send({ type: 'content', content: block.text });
+                sendContent(block.text);
               }
             }
           }
@@ -1899,7 +1917,7 @@ export function registerChatRoute(app, {
           if (typeof delta.content === 'string' && delta.content) {
             assistantText += delta.content;
             sawVisibleOutput = true;
-            send({ type: 'content', content: delta.content });
+            sendContent(delta.content);
           }
 
           // ── o-series reasoning summary delta ──────────────────────────────
@@ -1956,6 +1974,7 @@ export function registerChatRoute(app, {
           // same explanation ("the built-in browser is getting blocked, let me
           // try X instead") every loop without making progress.
           const preambleForCtx = (typeof assistantText === 'string' ? assistantText : '').trim();
+          if (preambleForCtx) needsContentBoundary = true;
           allMessages.push({ role: 'assistant', content: preambleForCtx || null, tool_calls: calls });
 
           // Narration-repetition guard: if the preamble is very similar to the
@@ -2301,6 +2320,7 @@ export function registerChatRoute(app, {
           if (continueLoop && silentBursts >= 7) {
             console.log('[chat] silent-burst guard tripped at ' + silentBursts + ' silent iterations — stopping loop');
             allMessages.push({ role: 'user', content: '[System: You have run ' + (silentBursts + 1) + ' tool-call rounds in a row without producing any visible response. Stop calling tools NOW. Give the user a brief honest prose summary of what you investigated, what you found, what (if anything) you fixed, and the next concrete step. If the gen-ui catalog is loaded, finish with one compact completion card reflecting the same verified status. Do not make more tool calls.]' });
+            toolsLockedForFinalResponse = true;
           } else if (continueLoop && !silentBurstNudgeFired && silentBursts >= 4) {
             silentBurstNudgeFired = true;
             console.log('[chat] silent-burst guard — injecting status-update nudge at ' + silentBursts + ' silent iterations');
@@ -2318,6 +2338,7 @@ export function registerChatRoute(app, {
           if (continueLoop && narrationRepeats >= 4) {
             console.log('[chat] narration-repetition guard tripped — stopping loop');
             allMessages.push({ role: 'user', content: '[System: You have repeated the same explanation ' + (narrationRepeats + 1) + ' times without making progress. Stop calling tools. Give the user a brief honest summary of what you tried, what failed, and one concrete alternative they could try (e.g., a manual step, a different site, or supplying credentials).]' });
+            toolsLockedForFinalResponse = true;
             // Let the next iteration produce a final answer, but no more tools.
             // We do that by appending and continuing — the model will see the
             // directive and (typically) emit text only.
@@ -2330,6 +2351,7 @@ export function registerChatRoute(app, {
             // templated preambles we know the user is about to get spammed.
             console.log('[chat] template-repetition guard tripped at ' + templateRepeats + ' templated preambles — stopping loop');
             allMessages.push({ role: 'user', content: '[System: You have produced the same canned three-part status update on ' + (templateRepeats + 1) + ' consecutive turns without delivering an artifact. Stop. Skip the "I have confirmed / hypothesis / next action" prose entirely and either (a) call the tool that produces the actual deliverable the user asked for, or (b) emit the final answer/file/summary in this turn. No more status updates.]' });
+            toolsLockedForFinalResponse = true;
           } else if (continueLoop && !templateNudgeFired && templateRepeats >= 2) {
             templateNudgeFired = true;
             console.log('[chat] template-repetition guard — injecting break-template nudge at ' + templateRepeats + ' templated preambles');

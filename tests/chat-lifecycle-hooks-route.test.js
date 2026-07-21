@@ -94,6 +94,14 @@ function mockToolCallStream(name, args) {
   })();
 }
 
+function mockNarratedToolCallStream(text, name, args) {
+  return (async function* () {
+    yield { choices: [{ delta: { content: text }, finish_reason: null }] };
+    yield { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_narrated_1', type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, finish_reason: null }] };
+    yield { choices: [{ delta: {}, finish_reason: 'tool_calls' }] };
+  })();
+}
+
 function mockStopStream(text) {
   return (async function* () {
     yield { choices: [{ delta: { content: text }, finish_reason: null }] };
@@ -213,6 +221,42 @@ describe('POST /api/chat lifecycle hooks', () => {
     const events = parseSse(res.chunks);
     expect(events.some(event => event.type === 'tool_call' && event.name === 'fauna_read_file')).toBe(true);
     expect(events.some(event => event.type === 'content' && /BLOCKED:/.test(event.content))).toBe(true);
+  });
+
+  it('separates narrated tool rounds from the next model response', async () => {
+    llm.supportsTools = true;
+    write(path.join(workspaceRoot, 'target.js'), 'export const value = 1;\n');
+    llm.create
+      .mockResolvedValueOnce(mockNarratedToolCallStream('I am checking the target.', 'fauna_read_file', { path: path.join(workspaceRoot, 'target.js') }))
+      .mockResolvedValueOnce(mockStopStream('The target is valid.'))
+      .mockResolvedValueOnce(mockStopStream('BLOCKED: no mutation was requested.'));
+
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'analyze this project' }], clientContext: 'test' },
+    });
+
+    const content = parseSse(res.chunks).filter(event => event.type === 'content').map(event => event.content).join('');
+    expect(content).toContain('I am checking the target.\n\nThe target is valid.');
+  });
+
+  it('removes tools from the final response after repeated narration trips the hard stop', async () => {
+    llm.supportsTools = true;
+    for (let index = 0; index < 5; index++) {
+      write(path.join(workspaceRoot, `target-${index}.js`), `export const value = ${index};\n`);
+      llm.create.mockResolvedValueOnce(mockNarratedToolCallStream(
+        'I have confirmed the same investigation details and I am checking the next target now.',
+        'fauna_read_file',
+        { path: path.join(workspaceRoot, `target-${index}.js`) },
+      ));
+    }
+    llm.create.mockResolvedValueOnce(mockStopStream('I stopped the repeated investigation.'));
+
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'inspect these files' }], clientContext: 'test' },
+    });
+
+    expect(parseSse(res.chunks).some(event => event.type === 'content' && /stopped the repeated/.test(event.content))).toBe(true);
+    expect(llm.create.mock.calls.at(-1)[0].tools).toBeUndefined();
   });
 
   it('continues implementation requests after mutation without validation', async () => {

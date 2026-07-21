@@ -4863,13 +4863,11 @@ webview {
 
 /* ── Artifact inline card ───────────────────────────────────────────── */
 .artifact-card {
-  display: inline-flex; align-items: center; gap: 10px;
-  padding: 9px 12px; border-radius: var(--radius-sm);
-  background: var(--fau-surface); border: 1px solid var(--fau-border);
-  margin: 6px 0; max-width: 460px; width: 100%;
-  transition: border-color .15s, background .15s;
+  display: inline-flex; align-items: center; gap: 0;
+  margin: 4px 0; max-width: 460px; width: 100%; min-width: 0;
+  background: transparent; border: 0; border-radius: 5px;
 }
-.artifact-card:hover { border-color: var(--accent); background: var(--fau-surface2); }
+.artifact-card:hover { background: var(--fau-surface2); }
 .artifact-card-thumb {
   width: 72px; height: 46px; border-radius: 7px; overflow: hidden; flex-shrink: 0;
   background: var(--fau-surface2); border: 1px solid var(--fau-border);
@@ -4877,13 +4875,13 @@ webview {
 .artifact-card-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .artifact-thumb-fallback { display: flex; align-items: center; justify-content: center; color: var(--accent); }
 .artifact-card-icon {
-  width: 30px; height: 30px; border-radius: 6px; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
-  background: var(--accent-dim); color: var(--accent2); font-size: 14px;
+  width: 15px; height: 30px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--fau-text-muted); font-size: 14px; line-height: 1;
 }
-.artifact-card-info { flex: 1; min-width: 0; }
 .artifact-card-title {
-  font-size: 12.5px; font-weight: 600; color: var(--fau-text);
+  min-width: 0; flex: 0 1 auto; font-size: 12px; font-weight: 500; color: var(--fau-text-muted);
+  line-height: 30px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .artifact-card-type {
@@ -4899,14 +4897,33 @@ webview {
   transition: all .12s; flex-shrink: 0; white-space: nowrap;
 }
 .artifact-card-open:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
-.artifact-card-menu-wrap { position: relative; flex-shrink: 0; }
+.artifact-card-primary,
 .artifact-card-more {
-  background: transparent; border: 1px solid transparent; color: var(--fau-text-muted);
-  border-radius: 5px; padding: 4px 6px; cursor: pointer; font-size: 14px;
-  display: flex; align-items: center; justify-content: center; line-height: 1;
-  transition: all .12s;
+  height: 30px; border: 0; background: transparent;
+  cursor: pointer; font-family: var(--font); line-height: 1;
+  transition: background .12s, color .12s;
 }
-.artifact-card-more:hover { background: var(--fau-surface3); color: var(--fau-text); border-color: var(--fau-border); }
+.artifact-card-primary {
+  display: inline-flex; align-items: center; gap: 2px;
+  flex: 1; min-width: 0; padding: 0 4px; border-radius: 5px 0 0 5px;
+  text-align: left; vertical-align: middle;
+}
+.artifact-card-primary:only-child { border-radius: 5px; }
+.artifact-card-primary:hover { background: var(--fau-surface3); }
+.artifact-card-expand-indicator {
+  width: 14px; height: 30px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--fau-text-muted); font-size: 11px; line-height: 1;
+}
+.artifact-card-primary:hover .artifact-card-title,
+.artifact-card-primary:hover .artifact-card-expand-indicator { color: var(--fau-text); }
+.artifact-card-menu-wrap { position: relative; display: flex; flex-shrink: 0; }
+.artifact-card-more {
+  width: 28px; min-width: 28px; height: 30px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 0 5px 5px 0; color: var(--fau-text-muted); font-size: 14px; line-height: 1;
+}
+.artifact-card-more:hover { background: var(--fau-surface3); color: var(--fau-text); }
 .artifact-card-menu {
   display: none; position: absolute; top: calc(100% + 4px); right: 0; z-index: 40;
   min-width: 190px; padding: 4px;

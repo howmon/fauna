@@ -762,7 +762,7 @@ async function sendDirectMessage(content, opts) {
   var displayText = typeof content === 'string' ? content
     : (content.find(function(c){ return c.type === 'text'; }) || {}).text || '';
 
-  var userMsg = { role: 'user', content: content };
+  var userMsg = { role: 'user', content: content, timestamp: Date.now() };
   if (opts.isBrowserFeed) userMsg._isBrowserFeed = true;
   if (opts.isAutoFeed || opts.fromAutoFeed) userMsg._isAutoFeed = true;
   if (opts.isWriteFileFeed) userMsg._isWriteFileFeed = true;
@@ -1035,7 +1035,7 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
   if (liveBrowserCtx) content += liveBrowserCtx;
 
   // Show the user message in chat
-  var userMsg = { role: 'user', content: content, images: pendingImages.length ? pendingImages : undefined };
+  var userMsg = { role: 'user', content: content, images: pendingImages.length ? pendingImages : undefined, timestamp: Date.now() };
   conv.messages.push(userMsg);
 
   saveConversations();
@@ -1292,9 +1292,15 @@ async function streamResponse(conv) {
   // ```artifact-ref fences to the message at stream end so entity cards render
   // (and persist across reload) even though no ```write-file block was emitted.
   var _streamArtifacts = [];
-  // Track the most recent plan emitted by fauna_plan so it persists on the
-  // message and can be remounted after a reload.
-  var _currentPlan = null;
+  // Chained turns inherit the latest persisted plan even when the server
+  // suppresses an unchanged plan_update event.
+  var _isChainContinuation = !!conv._chainMode;
+  var _latestPlannedMessage = _isChainContinuation
+    ? (conv.messages || []).slice().reverse().find(function(message) {
+        return message && message.role === 'assistant' && message.plan && Array.isArray(message.plan.items);
+      })
+    : null;
+  var _currentPlan = _latestPlannedMessage ? _latestPlannedMessage.plan : null;
   function _ensureLiveMessageAttached() {
     if (!conv._streaming) return;
     if (!msgEl) return;
@@ -1814,6 +1820,19 @@ async function streamResponse(conv) {
         }
       }
     }
+    conv.lastRequestSnapshot = {
+      capturedAt: Date.now(),
+      model: chatBody.model,
+      agentName: chatBody.agentName || null,
+      thinkingBudget: chatBody.thinkingBudget,
+      maxContextTurns: chatBody.maxContextTurns,
+      autonomousMode: typeof chatBody.autonomousMode === 'boolean' ? chatBody.autonomousMode : null,
+      useFigmaMCP: !!chatBody.useFigmaMCP,
+      usePlaywrightMCP: !!chatBody.usePlaywrightMCP,
+      enableDynamicWidgets: !!chatBody.enableDynamicWidgets,
+      autoCompact: chatBody.autoCompact !== false,
+      systemPromptChars: typeof systemPrompt === 'string' ? systemPrompt.length : 0,
+    };
     var _latestUserWithPolicy = null;
     for (var _tp = conv.messages.length - 1; _tp >= 0; _tp--) {
       if (conv.messages[_tp] && conv.messages[_tp].role === 'user') { _latestUserWithPolicy = conv.messages[_tp]; break; }
@@ -2203,6 +2222,14 @@ async function streamResponse(conv) {
     var _meterFn = typeof updateContextMeterGranular === 'function' ? updateContextMeterGranular : updateContextMeter;
     _meterFn({ sysChars: _ctxSysChars, msgChars: _ctxMsgChars, usage: _ctxUsage, outputTokens: tokenCount, model: state.model, sysParts: _ctxSysParts, gates: _ctxGates });
 
+    var _planStillIncompleteAtLimit = _currentPlan && Array.isArray(_currentPlan.items)
+      && _currentPlan.items.some(function(item) { return item && item.status !== 'completed' && item.status !== 'cancelled'; })
+      && (conv._autoFeedDepth || 0) >= 12;
+    if (_planStillIncompleteAtLimit && !conv._depthLimitNotified) {
+      buffer += (buffer ? '\n\n' : '') + '**Paused:** the automatic continuation limit was reached while the plan still has incomplete steps. Send “continue” to resume from the saved plan.';
+      conv._depthLimitNotified = true;
+    }
+
     // Append ```artifact-ref fences for any files the write/shell tools created
     // this turn. Doing it here (not mid-stream) keeps the cards after the
     // model's prose, and baking them into the saved content makes them
@@ -2215,12 +2242,13 @@ async function streamResponse(conv) {
     }
 
     // Always save the AI message regardless of which conv is active
-    var aiMsg = { role: 'assistant', content: buffer };
+    var aiMsg = { role: 'assistant', content: buffer, timestamp: Date.now() };
     if (_currentAgentInfo) aiMsg.agentInfo = _currentAgentInfo;
     if (_reasoning) aiMsg.reasoning = { durationSeconds: _reasoning.durationSeconds != null ? _reasoning.durationSeconds : (_reasoning.startedAt ? Math.round((Date.now() - _reasoning.startedAt) / 1000) : null) };
     if (_streamWidgets.length) aiMsg.widgets = _streamWidgets;
     if (_currentPlan && _currentPlan.items && _currentPlan.items.length) aiMsg.plan = _currentPlan;
     conv.messages.push(aiMsg);
+    conv.updatedAt = aiMsg.timestamp;
     conv._streaming = false;
     conv._abortController = null;
     saveConversations();
