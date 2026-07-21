@@ -2669,12 +2669,17 @@ async function _runExtActionSequence(widgets, convId) {
       }
 
       if (w.action.action === 'tab:list') {
-        var tlLines = (result.tabs||[]).map(function(t) {
-          return '  [id:' + t.id + '] ' + (t.active ? '→ ' : '  ') + t.title + ' — ' + t.url;
-        });
-        var tlFeed = 'Browser tabs in real browser (' + (result.tabs||[]).length + '):\n' + tlLines.join('\n') +
-          '';
-        await browserFeedAI(tlFeed, convId);
+        // A later extract/eval/snapshot is the result the model needs. Feeding
+        // the tab list here starts a second model turn in the middle of this
+        // sequence and can strand the remaining actions for minutes.
+        if (!_hasDefinitiveFollowUp(widgets, i)) {
+          var tlLines = (result.tabs||[]).map(function(t) {
+            return '  [id:' + t.id + '] ' + (t.active ? '→ ' : '  ') + t.title + ' — ' + t.url;
+          });
+          var tlFeed = 'Browser tabs in real browser (' + (result.tabs||[]).length + '):\n' + tlLines.join('\n') +
+            '';
+          await browserFeedAI(tlFeed, convId);
+        }
       }
 
       if (w.action.action === 'tab:switch' || w.action.action === 'tab:new') {

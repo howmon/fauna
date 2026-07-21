@@ -10,8 +10,20 @@ import os from 'os';
 import { spawn } from 'child_process';
 import { isCommandSafe } from '../../permission-guard.js';
 
-const DEFAULT_TIMEOUT_MS = 300000;
+const DEFAULT_TIMEOUT_MS = 180000;
+const SEARCH_TIMEOUT_MS = 30000;
 const DEFAULT_MAX_OUTPUT_CHARS = 200000; // hard cap per stream
+
+export function isUnboundedRecursiveSearch(command) {
+  return /(?:^|[;&|]\s*)(?:grep\s+(?:-[^\s]*[rR][^\s]*\s+|--recursive\b)|find\s+\S+)/i.test(String(command || ''));
+}
+
+export function effectiveShellTimeout(command, requestedTimeoutMs) {
+  const requested = Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
+    ? requestedTimeoutMs
+    : DEFAULT_TIMEOUT_MS;
+  return isUnboundedRecursiveSearch(command) ? Math.min(requested, SEARCH_TIMEOUT_MS) : requested;
+}
 
 export function runShell({
   command,
@@ -27,6 +39,8 @@ export function runShell({
   signal = null,         // AbortSignal — kills the child if aborted mid-run
 } = {}) {
   if (!command) return Promise.reject(new Error('command required'));
+
+  timeoutMs = effectiveShellTimeout(command, timeoutMs);
 
   const workDir = cwd || os.homedir();
   const env = {

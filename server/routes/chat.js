@@ -33,7 +33,7 @@ import { computeContextFlags, computeToolFlags, filterToolSchemas } from '../pro
 import { SELF_TOOL_DEFS, DYNAMIC_WIDGET_TOOL_DEFS, executeSelfTool, isSelfTool, getActivePlanForConv } from '../../self-tools.js';
 import { compressToolOutput } from '../lib/compress-tool-output.js';
 import { stashOutput } from '../lib/tool-output-cache.js';
-import { runShell, formatShellResultForLLM } from '../lib/shell-runner.js';
+import { runShell, formatShellResultForLLM, isUnboundedRecursiveSearch } from '../lib/shell-runner.js';
 import { runHooks } from '../lib/hooks-runtime.js';
 import {
   maybeRegister as registerDevServer,
@@ -1370,11 +1370,21 @@ export function registerChatRoute(app, {
         // fauna_shell_exec adapter — runs server-side, refuses unsafe commands
         // so the user keeps the markdown ```bash review path for risky ops.
         runShell: async ({ command, cwd, timeoutMs, maxOutputBytes, reason } = {}) => {
-          if (!shellBin) {
-            return JSON.stringify({ ok: false, error: 'shell exec not configured in this server' });
-          }
           if (!command || typeof command !== 'string') {
             return JSON.stringify({ ok: false, error: 'command (string) required' });
+          }
+          if (isUnboundedRecursiveSearch(command)) {
+            return JSON.stringify({
+              ok: false,
+              code: 'USE_INDEXED_SEARCH',
+              error: 'Unbounded recursive shell search was skipped to keep this turn responsive.',
+              next: /\bfind\b/i.test(command)
+                ? 'Call fauna_file_search with a glob pattern, then read the most relevant file.'
+                : 'Call fauna_grep with the search terms and an include pattern, then read the most relevant hit.',
+            });
+          }
+          if (!shellBin) {
+            return JSON.stringify({ ok: false, error: 'shell exec not configured in this server' });
           }
           // When the model doesn't pin a cwd, default to the ACTIVE PROJECT's
           // root rather than $HOME. Otherwise commands run from the home dir,

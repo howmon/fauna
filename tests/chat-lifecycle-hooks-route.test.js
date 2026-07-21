@@ -255,6 +255,30 @@ describe('POST /api/chat lifecycle hooks', () => {
     expect(content).toContain('I am checking the target.\n\nThe target is valid.');
   });
 
+  it('redirects recursive shell discovery to indexed search without running it', async () => {
+    llm.supportsTools = true;
+    llm.create
+      .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', {
+        command: 'grep -r "sfe-shell" . --include="*.tsx"',
+        cwd: workspaceRoot,
+      }))
+      .mockResolvedValueOnce(mockStopStream('The recursive scan was skipped; I will use indexed search.'));
+
+    const startedAt = Date.now();
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'find the sidebar implementation' }], clientContext: 'test' },
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(2000);
+    expect(llm.create).toHaveBeenCalledTimes(2);
+    const secondCallMessages = llm.create.mock.calls[1][0].messages;
+    expect(
+      secondCallMessages.some(message => message.role === 'tool' && /USE_INDEXED_SEARCH/.test(message.content)),
+      JSON.stringify(secondCallMessages),
+    ).toBe(true);
+    expect(parseSse(res.chunks).some(event => event.type === 'content' && /indexed search/.test(event.content))).toBe(true);
+  });
+
   it('removes tools from the final response after repeated narration trips the hard stop', async () => {
     llm.supportsTools = true;
     for (let index = 0; index < 5; index++) {

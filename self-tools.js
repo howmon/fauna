@@ -1799,7 +1799,7 @@ export const SELF_TOOL_DEFS = [
         properties: {
           command: { type: 'string', description: 'The shell command to run (single line or && / ; chained).' },
           cwd: { type: 'string', description: 'Optional working directory. Defaults to the user home.' },
-          timeoutMs: { type: 'number', description: 'Optional timeout in ms. Default 300000 (5 min). Hard cap.' },
+          timeoutMs: { type: 'number', description: 'Optional timeout in ms. Default 180000 (3 min); recursive grep/find discovery is capped at 30000 (30 sec). Hard cap.' },
           maxOutputBytes: { type: 'number', description: 'Optional per-stream cap on captured stdout/stderr. Default 100000 chars per stream; hard cap 500000. Use a SMALL value (e.g. 4000) for commands that may dump tons of data you only need a head/tail of — it keeps context lean.' },
           reason: { type: 'string', description: 'Optional one-line reason this command is being run. Helps with audit and debugging.' },
         },

@@ -1,10 +1,31 @@
 import { describe, it, expect, vi } from 'vitest';
-import { runShell, formatShellResultForLLM, isCommandSafe } from '../server/lib/shell-runner.js';
+import { runShell, formatShellResultForLLM, isCommandSafe, effectiveShellTimeout, isUnboundedRecursiveSearch } from '../server/lib/shell-runner.js';
 
 const SHELL_BIN = process.platform === 'win32' ? 'powershell.exe' : '/bin/zsh';
 const IS_WIN = process.platform === 'win32';
 
 describe('shell-runner', () => {
+  describe('effectiveShellTimeout()', () => {
+    it('caps recursive discovery commands at 30 seconds', () => {
+      expect(effectiveShellTimeout('grep -r "rail" .', 300000)).toBe(30000);
+      expect(effectiveShellTimeout('find . -name "*.tsx"', undefined)).toBe(30000);
+    });
+
+    it('preserves longer timeouts for builds and focused commands', () => {
+      expect(effectiveShellTimeout('npm run build', 300000)).toBe(300000);
+      expect(effectiveShellTimeout('rg "rail" src', undefined)).toBe(180000);
+    });
+  });
+
+  describe('isUnboundedRecursiveSearch()', () => {
+    it('detects broad grep and find discovery without blocking focused tools', () => {
+      expect(isUnboundedRecursiveSearch('grep -r "rail" src')).toBe(true);
+      expect(isUnboundedRecursiveSearch('find src -name "*.tsx"')).toBe(true);
+      expect(isUnboundedRecursiveSearch('rg "rail" src')).toBe(false);
+      expect(isUnboundedRecursiveSearch('git grep "rail"')).toBe(false);
+    });
+  });
+
   describe('runShell()', () => {
     it('captures stdout from a simple command', async () => {
       const result = await runShell({
