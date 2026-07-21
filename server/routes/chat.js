@@ -2116,7 +2116,13 @@ export function registerChatRoute(app, {
             if (upstreamAbort.signal.aborted) throw new Error('Cancelled by user');
             // Send human-readable tool status to the client
             const toolLabel = formatToolLabel(toolName, args);
-            send({ type: 'tool_call', callId: tc.id, name: toolName, label: toolLabel });
+            send({
+              type: 'tool_call',
+              callId: tc.id,
+              name: toolName,
+              label: toolLabel,
+              command: toolName === 'fauna_shell_exec' ? String(args?.command || '') : undefined,
+            });
             const toolStartedAt = Date.now();
             let toolFailed = false;
             const toolProgressTimer = setInterval(() => {

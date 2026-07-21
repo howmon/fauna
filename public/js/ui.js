@@ -1222,7 +1222,8 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
     }
     (activity || []).forEach(function(item) {
       var itemLabel = item.label || 'Tool output';
-      var toolStep = createActivityStep(itemLabel, _activityStepKind(itemLabel, 'tool'), item.output || 'Completed without preview output.', false);
+      var itemDetail = [item.command ? '$ ' + item.command : '', item.output || ''].filter(Boolean).join('\n\n');
+      var toolStep = createActivityStep(itemLabel, _activityStepKind(itemLabel, 'tool'), itemDetail || 'Completed without preview output.', false);
       activityBody.appendChild(toolStep.entry);
     });
     activityPanel.querySelector('.tool-activity-toggle').addEventListener('click', function() {

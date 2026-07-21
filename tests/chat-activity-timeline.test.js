@@ -33,8 +33,17 @@ describe('assistant activity timeline', () => {
     expect(conversationsSource).toContain('m.activity || null');
     expect(conversationsSource).toContain('if (m.activity) entry.activity = m.activity;');
     expect(uiSource).toContain('el.insertBefore(activityPanel, body)');
-    expect(uiSource).toContain("item.output || 'Completed without preview output.'");
-    expect(chatSource).toContain('updateActivityStepDetail(_currentActivityEntry.step, _currentActivityEntry.output)');
+    expect(uiSource).toContain("itemDetail || 'Completed without preview output.'");
+    expect(chatSource).toContain('updateActivityStepDetail(_currentActivityEntry.step, _activityEntryDetail(_currentActivityEntry))');
+  });
+
+  it('shows the exact shell command in live and historical Activity details', () => {
+    expect(chatRouteSource).toContain("command: toolName === 'fauna_shell_exec' ? String(args?.command || '') : undefined");
+    expect(chatSource).toContain("entry.command ? '$ ' + entry.command : ''");
+    expect(chatSource).toContain('_beginLiveToolOutput(toolLabel, evt.callId, evt.command)');
+    expect(chatSource).toContain("command: entry.command || ''");
+    expect(uiSource).toContain("item.command ? '$ ' + item.command : ''");
+    expect(chatSource).toContain('updateActivityStepDetail(_currentActivityEntry.step, _activityEntryDetail(_currentActivityEntry))');
   });
 
   it('shows and persists provider-exposed reasoning summaries', () => {
@@ -61,6 +70,14 @@ describe('assistant activity timeline', () => {
     expect(chatSource).toContain('setActivityStepDetailAvailability(_liveActivityThinkingStep, !!displaySummary)');
     expect(stylesSource).toContain('.tool-activity-entry[data-has-detail="0"] .tool-activity-step-chevron');
     expect(uiSource).not.toContain('This model did not provide a displayable reasoning summary.');
+  });
+
+  it('finalizes Thinking when visible writing or tool execution begins', () => {
+    expect(chatSource).toContain('if (_hasVisibleAssistantStreamContent()) _finalizeReasoningPhase()');
+    expect(chatSource).toContain("if (evt.type === 'tool_call') {\n            _finalizeReasoningPhase();");
+    expect(chatSource).toContain('_reasoning.durationSeconds = _reasoning.startedAt');
+    expect(chatSource).toContain('_updateReasoningPanel(_reasoning.durationSeconds, true, true)');
+    expect(chatSource).toContain('_updateLiveToolOutputSummary(!!completed && !keepActivityRunning)');
   });
 
   it('makes each chain-of-thought step independently collapsible from its rail icon', () => {
