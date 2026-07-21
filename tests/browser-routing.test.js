@@ -4,6 +4,7 @@ import path from 'node:path';
 
 const source = fs.readFileSync(path.join(process.cwd(), 'public/js/browser.js'), 'utf8');
 const chatSource = fs.readFileSync(path.join(process.cwd(), 'public/js/chat.js'), 'utf8');
+const shellSource = fs.readFileSync(path.join(process.cwd(), 'public/js/shell.js'), 'utf8');
 
 describe('browser backend routing', () => {
   it('gives extension blocks precedence over internal legacy blocks', () => {
@@ -20,5 +21,14 @@ describe('browser backend routing', () => {
   it('keeps native fauna_browser calls internal before backend arbitration', () => {
     expect(chatSource).toContain("Object.assign({}, ev.args || {}, { forceInternal: true })");
     expect(source).toContain("var preferPlaywright = !action.forceInternal && !isLocalUrl");
+  });
+
+  it('defers mixed browser actions until shell results settle', () => {
+    expect(chatSource).toContain('var deferBrowserActions = shellBlocks > 0;');
+    expect(chatSource).toContain('extractAndRenderBrowserActions(buffer, msgEl, false, convId, deferBrowserActions)');
+    expect(source).toContain('function runDeferredBrowserActionsForMessage(messageEl)');
+    expect(source).toContain("statusEl.textContent = 'Waiting for shell…'");
+    expect(shellSource).toContain('resumedBrowserActions = runDeferredBrowserActionsForMessage');
+    expect(shellSource).toContain('if (opts.autoFeed && !resumedBrowserActions)');
   });
 });

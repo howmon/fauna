@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,9 +11,20 @@ import {
   electronDevServerTarget,
   isDevServerCommand,
   isTcpPortListening,
+  maybeRegister,
   requestedDevServerPort,
   sameServerCwd,
+  waitForStartup,
 } from '../server/lib/dev-server-registry.js';
+
+function fakeChild() {
+  const child = new EventEmitter();
+  child.pid = 1234;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.kill = () => {};
+  return child;
+}
 
 // Regression coverage for the transcript where grep/find/curl/`vite build`
 // were repeatedly misclassified as dev servers and detached, so the shell
@@ -130,5 +143,35 @@ describe('isDevServerCommand()', () => {
     expect(await isTcpPortListening(address.port)).toBe(true);
     await new Promise((resolve) => server.close(resolve));
     expect(await isTcpPortListening(address.port)).toBe(false);
+  });
+});
+
+describe('waitForStartup()', () => {
+  it('reports running only after the registry observes a listening URL', async () => {
+    const child = fakeChild();
+    const id = maybeRegister(child, { command: 'npm run dev', cwd: '/tmp/app' });
+    const pending = waitForStartup(id, { timeoutMs: 200 });
+
+    child.stdout.write('Local: http://localhost:5173/\n');
+
+    await expect(pending).resolves.toMatchObject({ status: 'running', port: 5173 });
+  });
+
+  it('reports an early process exit instead of startup success', async () => {
+    const child = fakeChild();
+    const id = maybeRegister(child, { command: 'npm run dev', cwd: '/tmp/app' });
+    const pending = waitForStartup(id, { timeoutMs: 200 });
+
+    child.emit('exit', 1, null);
+
+    await expect(pending).resolves.toMatchObject({ status: 'exited', exitCode: 1 });
+  });
+
+  it('leaves readiness explicitly unverified when startup times out', async () => {
+    const child = fakeChild();
+    const id = maybeRegister(child, { command: 'npm run dev', cwd: '/tmp/app' });
+
+    await expect(waitForStartup(id, { timeoutMs: 5 })).resolves.toMatchObject({ status: 'starting' });
+    child.emit('exit', 0, null);
   });
 });

@@ -19,7 +19,11 @@ import os from 'os';
 import { exec as _exec, spawn } from 'child_process';
 
 import { addAutoAllow } from '../../permission-guard.js';
-import { maybeRegister as registerDevServer, isDevServerCommand } from '../lib/dev-server-registry.js';
+import {
+  maybeRegister as registerDevServer,
+  isDevServerCommand,
+  waitForStartup,
+} from '../lib/dev-server-registry.js';
 
 export function registerShellExecRoutes(app, {
   shellProcs,
@@ -90,6 +94,16 @@ export function registerShellExecRoutes(app, {
       // Dev Servers. Pipe a tiny note back so the widget records a result.
       if (isDev) {
         if (killId) shellProcs.delete(killId);
+        const startup = _regId
+          ? await waitForStartup(_regId, { timeoutMs: 8000 })
+          : { status: 'missing', exitCode: null, port: null, tail: [] };
+        const verified = startup.status === 'running';
+        const failed = startup.status === 'exited' || startup.status === 'stopped' || startup.status === 'missing';
+        const message = verified
+          ? `Dev server is running${startup.port ? ` on port ${startup.port}` : ''}. Manage it from Settings → Dev Servers.`
+          : failed
+            ? `Dev server failed during startup${startup.tail.length ? `: ${startup.tail.at(-1)}` : '.'}`
+            : 'Dev server launched in the background, but readiness is not yet verified. Check Settings → Dev Servers.';
         // IMPORTANT: do NOT call removeAllListeners('data') on stdout/stderr
         // here — the registry already attached its own listeners to sniff the
         // port and stream tail buffer. Stripping them would (a) blind the
@@ -100,9 +114,16 @@ export function registerShellExecRoutes(app, {
           id: _regId,
           command,
           cwd: workDir,
-          message: 'Dev server started in background. Manage it from Settings → Dev Servers.',
+          status: startup.status,
+          verified,
+          port: startup.port,
+          message,
         })}\n\n`);
-        res.write(`data: ${JSON.stringify({ type: 'exit', exitCode: 0, detached: true })}\n\n`);
+        res.write(`data: ${JSON.stringify({
+          type: 'exit',
+          exitCode: verified ? 0 : failed ? (startup.exitCode ?? 1) : null,
+          detached: true,
+        })}\n\n`);
         res.end();
         return;
       }

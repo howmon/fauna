@@ -5735,6 +5735,7 @@ function _connectDevServerSSE() {
 
 function _applyDevServerSnapshot(servers) {
   var active = servers.filter(function(s) { return s.status === 'running' || s.status === 'starting'; });
+  if (typeof reconcileDevServerPills === 'function') reconcileDevServerPills(servers);
   var btn   = document.getElementById('topbar-servers-btn');
   var count = document.getElementById('topbar-servers-count');
   if (btn)   btn.style.display   = active.length ? '' : 'none';

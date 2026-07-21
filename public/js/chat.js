@@ -2525,8 +2525,9 @@ async function streamResponse(conv) {
         extractAndRenderFigmaExec(buffer, msgEl, true);
         var suppressShellAutoRun = !!(conv._suppressShellAutoRunOnce || conv._writeRepairMode || writeFailed);
         extractAndRenderShellExec(buffer, msgEl, suppressShellAutoRun, convId);
-        extractAndRenderBrowserActions(buffer, msgEl, false, convId);
-        if (typeof extractAndRenderBrowserExtActions === 'function') extractAndRenderBrowserExtActions(buffer, msgEl, false, convId);
+        var deferBrowserActions = shellBlocks > 0;
+        extractAndRenderBrowserActions(buffer, msgEl, false, convId, deferBrowserActions);
+        if (typeof extractAndRenderBrowserExtActions === 'function') extractAndRenderBrowserExtActions(buffer, msgEl, false, convId, deferBrowserActions);
         extractAndRenderSaveInstruction(buffer, msgEl, false);
         extractArtifactsFromBuffer(buffer, msgEl);
         if (typeof postProcessDesignMessage === 'function') postProcessDesignMessage(bodyEl);

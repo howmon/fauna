@@ -342,6 +342,42 @@ export function subscribe(fn) {
   return () => _listeners.delete(fn);
 }
 
+export function waitForStartup(id, { timeoutMs = 8000 } = {}) {
+  const entryId = String(id);
+  const snapshot = () => {
+    const entry = _entries.get(entryId);
+    if (!entry) return { id: entryId, status: 'missing', exitCode: null, port: null, tail: [] };
+    return {
+      id: entry.id,
+      status: entry.status,
+      exitCode: entry.exitCode,
+      port: entry.port,
+      tail: entry.tail.slice(),
+    };
+  };
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let unsubscribe = () => {};
+    let timer;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(result);
+    };
+    const check = () => {
+      const current = snapshot();
+      if (current.status !== 'starting') finish(current);
+    };
+
+    unsubscribe = subscribe(check);
+    timer = setTimeout(() => finish(snapshot()), Math.max(0, Number(timeoutMs) || 0));
+    check();
+  });
+}
+
 // Register an already-spawned child. Returns the entry id, or null if the
 // command isn't recognised as a dev server. Safe to call on every spawn.
 export function maybeRegister(child, { command, cwd, killId } = {}) {

@@ -1695,7 +1695,7 @@ async function _crawlSite(wv, opts) {
 
 // ── browser-action rendering (like shell-exec but for webview) ─────────────
 
-function extractAndRenderBrowserActions(html, messageEl, isHistoryLoad, convId) {
+function extractAndRenderBrowserActions(html, messageEl, isHistoryLoad, convId, deferRun) {
   var container = messageEl.querySelector('.prose') || messageEl;
   var codeBlocks = container.querySelectorAll('code.language-browser-action, code.language-browser_action');
   if (!codeBlocks.length) return;
@@ -1828,8 +1828,45 @@ function extractAndRenderBrowserActions(html, messageEl, isHistoryLoad, convId) 
     messageEl.classList.add('chain-ba-only');
   }
 
-  // Run all actions sequentially
+  if (deferRun) {
+    widgets.forEach(function(widget) {
+      var statusEl = document.getElementById(widget.id + '-status');
+      if (statusEl) statusEl.textContent = 'Waiting for shell…';
+    });
+    messageEl._deferredBrowserRuns = messageEl._deferredBrowserRuns || [];
+    messageEl._deferredBrowserRuns.push(function() {
+      _runBrowserActionSequence(widgets, convId, initialBrowserTabIds);
+    });
+    return;
+  }
+
   _runBrowserActionSequence(widgets, convId, initialBrowserTabIds);
+}
+
+function runDeferredBrowserActionsForMessage(messageEl) {
+  if (!messageEl || !Array.isArray(messageEl._deferredBrowserRuns) || !messageEl._deferredBrowserRuns.length) return false;
+  var shellWidgets = Array.from(messageEl.querySelectorAll('.shell-exec-block'));
+  if (!shellWidgets.length || shellWidgets.some(function(widget) { return !widget.dataset.result; })) return false;
+
+  var shellFailed = shellWidgets.some(function(widget) {
+    try {
+      var result = JSON.parse(widget.dataset.result);
+      return !(result.devServerStatus === 'starting' && result.exitCode == null) && result.exitCode !== 0;
+    }
+    catch (_) { return true; }
+  });
+  var runs = messageEl._deferredBrowserRuns.splice(0);
+  if (shellFailed) {
+    messageEl.querySelectorAll('.ba-status').forEach(function(statusEl) {
+      if (!statusEl.classList.contains('ok')) {
+        statusEl.className = 'ba-status err';
+        statusEl.textContent = 'Skipped after shell failure';
+      }
+    });
+    return false;
+  }
+  runs.forEach(function(run) { run(); });
+  return true;
 }
 
 function _markRemainingCancelled(widgets, fromIndex) {
@@ -2387,7 +2424,7 @@ function _feedBrowserExtParseError(raw, err, convId) {
   browserFeedAI(feedback, convId).catch(function(){});
 }
 
-function extractAndRenderBrowserExtActions(html, messageEl, isHistoryLoad, convId) {
+function extractAndRenderBrowserExtActions(html, messageEl, isHistoryLoad, convId, deferRun) {
   var container = messageEl.querySelector('.prose') || messageEl;
   var codeBlocks = container.querySelectorAll('code.language-browser-ext-action, code.language-browser_ext_action');
   if (!codeBlocks.length) return;
@@ -2500,6 +2537,16 @@ function extractAndRenderBrowserExtActions(html, messageEl, isHistoryLoad, convI
       }
     });
     messageEl.classList.add('chain-ba-only');
+  }
+
+  if (deferRun) {
+    widgets.forEach(function(widget) {
+      var statusEl = document.getElementById(widget.id + '-status');
+      if (statusEl) statusEl.textContent = 'Waiting for shell…';
+    });
+    messageEl._deferredBrowserRuns = messageEl._deferredBrowserRuns || [];
+    messageEl._deferredBrowserRuns.push(function() { _runExtActionSequence(widgets, convId); });
+    return;
   }
 
   _runExtActionSequence(widgets, convId);

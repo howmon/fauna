@@ -2567,6 +2567,15 @@ body.is-resizing webview { pointer-events: none !important; }
 .dev-server-pill:hover { background: rgba(34,197,94,.18); border-color: rgba(34,197,94,.5); }
 .dev-server-pill .pill-label { overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
 .dev-server-pill i { font-size: 11px; flex-shrink: 0; }
+.dev-server-pill.stopping { opacity: .6; }
+.dev-server-stop {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; margin: -1px -5px -1px 1px; padding: 0;
+  border: 0; border-radius: 50%; background: transparent; color: currentColor;
+  cursor: pointer; opacity: .72; transition: opacity .12s, color .12s, background .12s;
+}
+.dev-server-stop:hover { opacity: 1; color: var(--error); background: rgba(239,68,68,.16); }
+.dev-server-stop:disabled { cursor: wait; }
 #stop-btn {
   width: 30px; height: 30px; border-radius: 8px; background: transparent;
   border: none; color: var(--error); cursor: pointer;

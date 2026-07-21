@@ -1151,6 +1151,13 @@ function hideShellRunningPill(execId) {
 // Non-blocking pill for dev servers. Lives in a separate container so it
 // doesn't count toward `hasActiveShellWorkForCurrentConversation` and the
 // send button stays enabled. Clicking it opens Settings → Dev Servers.
+function _devServerPillKey(code, convId) {
+  return (convId || '') + '|' + String(code || '')
+    .replace(/\bPATH=(?:"[^"]*"|'[^']*'|\S+)\s+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function showDevServerPill(regId, code, convId) {
   var container = document.getElementById('dev-server-pills');
   if (!container) {
@@ -1161,7 +1168,22 @@ function showDevServerPill(regId, code, convId) {
     container.className = 'dev-server-pills';
     anchor.parentNode.insertBefore(container, anchor.nextSibling);
   }
-  // De-dupe by registry id when present
+  var targetConvId = convId || (typeof state !== 'undefined' ? (state.currentId || '') : '');
+  var serverKey = _devServerPillKey(code, targetConvId);
+  var matchingPill = Array.from(container.children).find(function(candidate) {
+    return candidate.dataset.serverKey === serverKey;
+  });
+  if (matchingPill) {
+    var matchingIds;
+    try { matchingIds = JSON.parse(matchingPill.dataset.regIds || '[]'); } catch (_) { matchingIds = []; }
+    if (regId && matchingIds.indexOf(String(regId)) < 0) matchingIds.push(String(regId));
+    matchingPill.dataset.regIds = JSON.stringify(matchingIds);
+    matchingPill.dataset.regId = regId || matchingPill.dataset.regId || '';
+    matchingPill.onclick = function() { openDevServerPill(matchingPill.dataset.regId); };
+    syncDevServerPills();
+    return;
+  }
+
   var pillId = 'devpill-' + (regId || ('x-' + Date.now()));
   if (document.getElementById(pillId)) { syncDevServerPills(); return; }
   var label = (function() {
@@ -1174,17 +1196,81 @@ function showDevServerPill(regId, code, convId) {
   var pill = document.createElement('span');
   pill.className = 'dev-server-pill';
   pill.id = pillId;
-  pill.dataset.convId = convId || (typeof state !== 'undefined' ? (state.currentId || '') : '');
+  pill.dataset.convId = targetConvId;
   pill.dataset.regId = regId || '';
+  pill.dataset.regIds = JSON.stringify(regId ? [String(regId)] : []);
+  pill.dataset.serverKey = serverKey;
   pill.title = 'Dev server running — click to open in the browser pane';
   pill.innerHTML =
     '<i class="ti ti-server-bolt"></i>' +
     '<span class="pill-label">' + escHtml(label) + '</span>' +
-    '<i class="ti ti-external-link" style="opacity:.65;font-size:11px"></i>';
+    '<i class="ti ti-external-link" style="opacity:.65;font-size:11px"></i>' +
+    '<button class="dev-server-stop" type="button" title="Stop dev server" aria-label="Stop ' + escHtml(label) + '" ' +
+      'onclick="stopDevServerPill(event,this.closest(\'.dev-server-pill\'))">' +
+      '<i class="ti ti-player-stop-filled"></i>' +
+    '</button>';
   pill.onclick = function() {
     openDevServerPill(regId);
   };
   container.appendChild(pill);
+  syncDevServerPills();
+}
+
+async function stopDevServerPill(event, pill) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  if (!pill || pill.dataset.stopping === '1') return;
+  var ids;
+  try { ids = JSON.parse(pill.dataset.regIds || '[]'); } catch (_) { ids = []; }
+  if (!ids.length && pill.dataset.regId) ids = [pill.dataset.regId];
+  ids = Array.from(new Set(ids.map(String).filter(Boolean)));
+  if (!ids.length) return;
+
+  pill.dataset.stopping = '1';
+  pill.classList.add('stopping');
+  var button = pill.querySelector('.dev-server-stop');
+  if (button) button.disabled = true;
+  try {
+    var results = await Promise.all(ids.map(async function(id) {
+      var response = await fetch('/api/dev-servers/' + encodeURIComponent(id) + '/kill', { method: 'POST' });
+      var result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || 'stop failed');
+      return result;
+    }));
+    if (results.length) {
+      pill.remove();
+      syncDevServerPills();
+      if (typeof _showToast === 'function') _showToast(results.length > 1 ? 'Stopped dev servers' : 'Stopped dev server');
+    }
+  } catch (error) {
+    pill.dataset.stopping = '0';
+    pill.classList.remove('stopping');
+    if (button) button.disabled = false;
+    if (typeof _showToast === 'function') _showToast('Stop failed: ' + error.message, true);
+  }
+}
+
+function reconcileDevServerPills(servers) {
+  var container = document.getElementById('dev-server-pills');
+  if (!container) return;
+  var activeIds = new Set((servers || []).filter(function(server) {
+    return server && (server.status === 'running' || server.status === 'starting');
+  }).map(function(server) { return String(server.id); }));
+
+  Array.from(container.children).forEach(function(pill) {
+    var ids;
+    try { ids = JSON.parse(pill.dataset.regIds || '[]'); } catch (_) { ids = []; }
+    ids = ids.filter(function(id) { return activeIds.has(String(id)); });
+    if (!ids.length) {
+      pill.remove();
+      return;
+    }
+    pill.dataset.regIds = JSON.stringify(ids);
+    pill.dataset.regId = ids[ids.length - 1];
+    pill.onclick = function() { openDevServerPill(pill.dataset.regId); };
+  });
   syncDevServerPills();
 }
 
@@ -1383,13 +1469,15 @@ async function runShellExec(execId, opts) {
     // ── Streaming mode: parse SSE events ──
     var stdoutBuf = '';
     var stderrBuf = '';
-    var exitCode = 0;
+    var exitCode = null;
     var errMsg = '';
+    var devServerStatus = null;
+    var devServerVerified = false;
 
     if (jsonCompleted) {
       stdoutBuf = jsonCompleted.stdout || '';
       stderrBuf = jsonCompleted.stderr || '';
-      exitCode = jsonCompleted.exitCode || 0;
+      exitCode = jsonCompleted.exitCode != null ? jsonCompleted.exitCode : (jsonCompleted.ok ? 0 : 1);
       errMsg = jsonCompleted.error || '';
     } else {
       var reader = r.body.getReader();
@@ -1423,7 +1511,7 @@ async function runShellExec(execId, opts) {
           } else if (sseEvt.type === 'waiting_for_input') {
             _showShellInput(execId, killId, sseEvt.hint, resultEl);
           } else if (sseEvt.type === 'exit') {
-            exitCode = sseEvt.exitCode || 0;
+            exitCode = sseEvt.exitCode == null ? null : sseEvt.exitCode;
             if (sseEvt.detached) {
               // Dev server was registered and the stream was closed. Keep the
               // widget in a "started" state without leaving it pinned to the
@@ -1437,7 +1525,10 @@ async function runShellExec(execId, opts) {
           } else if (sseEvt.type === 'dev_server_detached') {
             widget.dataset.devServer = '1';
             widget.dataset.devServerId = sseEvt.id || '';
-            stdoutBuf = (stdoutBuf ? stdoutBuf + '\n' : '') + (sseEvt.message || 'Dev server started in background.');
+            widget.dataset.devServerStatus = sseEvt.status || 'starting';
+            devServerStatus = sseEvt.status || 'starting';
+            devServerVerified = sseEvt.verified === true;
+            stdoutBuf = (stdoutBuf ? stdoutBuf + '\n' : '') + (sseEvt.message || 'Dev server readiness is unverified.');
             resultEl.textContent = stdoutBuf;
             // Stop the running spinner UI immediately and free the input bar.
             clearInterval(timerInterval);
@@ -1463,7 +1554,9 @@ async function runShellExec(execId, opts) {
       stderr: stderrBuf,
       error: errMsg || undefined,
       command: code,
-      cwd: bodyObj.cwd || ''
+      cwd: bodyObj.cwd || '',
+      devServerStatus: devServerStatus,
+      devServerVerified: devServerVerified
     };
 
     clearInterval(timerInterval);
@@ -1489,7 +1582,9 @@ async function runShellExec(execId, opts) {
     if (d.error) {
       parts.push('<span class="se-err">' + escHtml(d.error) + '</span>');
     }
-    if (!d.stdout && !d.stderr && !d.error) {
+    if (d.devServerStatus && d.exitCode == null) {
+      parts.push('<span class="se-meta">status ' + escHtml(d.devServerStatus) + ' (readiness unverified)</span>');
+    } else if (!d.stdout && !d.stderr && !d.error) {
       parts.push('<span class="se-meta">(no output — exit ' + exitCode + (exitCode === 0 ? ' <i class="ti ti-check"></i>' : ' <i class="ti ti-x"></i>') + ')</span>');
     } else {
       parts.push('<span class="se-meta">exit ' + exitCode + (exitCode !== 0 ? ' <i class="ti ti-x"></i>' : ' <i class="ti ti-check"></i>') + '</span>');
@@ -1546,10 +1641,14 @@ async function runShellExec(execId, opts) {
     // Only when the user has auto-exec on AND this block actually succeeded —
     // a failed step shouldn't silently barrel into the next destructive one.
     _maybeChainNextShellAutoRun(widget, exitCode);
+    var resumedBrowserActions = false;
+    if (typeof runDeferredBrowserActionsForMessage === 'function') {
+      resumedBrowserActions = runDeferredBrowserActionsForMessage(widget.closest('.msg'));
+    }
 
     // Auto-feed output back to AI always when autoFeed is set —
     // the AI needs to know about empty results and failures, not just successes
-    if (opts.autoFeed) {
+    if (opts.autoFeed && !resumedBrowserActions) {
       // Exception: a fire-and-forget GUI launcher that succeeded with no output
       // has nothing useful to verify. Feeding its empty result back only invites
       // the model to retry endless `open`/`code` variants (tool storm). End the
@@ -1614,7 +1713,11 @@ async function feedShellResultToAI(execId, opts) {
   if (!_hasOutput && d._screenshot) lines.push('(no stdout — screenshot captured)');
   if (!_hasOutput && !d._screenshot && d.exitCode !== 0) lines.push('(no output — command not found or path does not exist)');
   if (!_hasOutput && !d._screenshot && d.exitCode === 0) lines.push('(no output — cannot confirm whether command had any effect)');
-  lines.push('exit ' + d.exitCode);
+  if (d.devServerStatus && d.exitCode == null) {
+    lines.push('status ' + d.devServerStatus + ' (readiness unverified)');
+  } else {
+    lines.push('exit ' + d.exitCode);
+  }
   lines.push('```');
   if (d._troubleshoot) {
     lines.push('**Automatic troubleshoot:**');
