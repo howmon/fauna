@@ -2,6 +2,14 @@
 
 Independent, portable services extracted from Fauna's feature set. Each service is a self-contained Node.js package that can be embedded in any tool, IDE extension, CLI, web app, or Electron app.
 
+## Product Portfolio
+
+See [70 Product Ideas Built from Fauna Services](PRODUCT-IDEAS.md) for cross-service product concepts, target users, business models, and recommended product families.
+
+See [Market-Driven Product Ideas — July 20, 2026](MARKET-IDEAS-2026-07-20.md) for 20 additional concepts derived from same-day investment, infrastructure, security, and product signals.
+
+See [Commercial Ranking of 90 Fauna Product Ideas](PRODUCT-RANKING.md) for weighted market-demand, MRR, speed, defensibility, risk, and portfolio-sequencing analysis.
+
 ## Architecture Principles
 
 - **Standalone HTTP/WebSocket server** — each service runs on its own port with a clean REST or SSE API
