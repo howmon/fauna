@@ -117,6 +117,8 @@ export function registerProjectRoutes(app, deps) {
     syncSource,
     listFiles,
     readSourceFile,
+    searchSourceFiles,
+    replaceSourceMatches,
     resolveSourceFilePath,
     createSourceEntry,
     writeSourceFileBytes,
@@ -270,8 +272,34 @@ export function registerProjectRoutes(app, deps) {
     }
   });
 
+  app.post('/api/projects/:id/sources/:srcId/search', (req, res) => {
+    try {
+      if (typeof searchSourceFiles !== 'function') {
+        return res.status(501).json({ error: 'project search not wired on this server' });
+      }
+      res.json(searchSourceFiles(req.params.id, req.params.srcId, req.body || {}));
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/projects/:id/sources/:srcId/replace', (req, res) => {
+    try {
+      if (typeof replaceSourceMatches !== 'function') {
+        return res.status(501).json({ error: 'project replacement not wired on this server' });
+      }
+      res.json(replaceSourceMatches(req.params.id, req.params.srcId, req.body || {}));
+    } catch (e) {
+      const message = e?.message || String(e);
+      res.status(/editing is disabled/i.test(message) ? 403 : 400).json({ error: message });
+    }
+  });
+
   app.put('/api/projects/:id/sources/:srcId/file', (req, res) => {
     try {
+      const project = getProject(req.params.id);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      if (!project.allowFileEditing) return res.status(403).json({ error: 'File editing is disabled for this project' });
       const { fullPath } = resolveSourceFilePath(req.params.id, req.params.srcId, req.query.path || '');
       fs.writeFileSync(fullPath, req.body?.content ?? '', 'utf8');
       res.json({ ok: true });

@@ -2172,10 +2172,6 @@ function renderAgentActionsPage() {
   if (!page) return;
 
   page.innerHTML =
-    '<div class="agent-actions-header">' +
-      '<div class="all-agents-title"><i class="ti ti-plus"></i> Add Agent</div>' +
-      '<button class="all-agents-close" onclick="closeAgentActionsPage()"><i class="ti ti-x"></i></button>' +
-    '</div>' +
     '<div class="agent-actions-body">' +
       '<div class="agent-action-card" onclick="closeAgentActionsPage();openAgentBuilder()">' +
         '<div class="agent-action-icon"><i class="ti ti-wand"></i></div>' +

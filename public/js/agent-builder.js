@@ -260,7 +260,7 @@ function closeAgentBuilder() {
   panel.innerHTML =
     '<div class="builder-rail-resize" id="builder-rail-resize" title="Drag to resize"></div>' +
     '<div class="builder-rail-strip" id="builder-rail-strip">' +
-      '<button class="builder-rail-toggle" onclick="openAgentBuilder()" title="Open builder"><i class="ti ti-chevron-left"></i></button>' +
+      '<button class="builder-rail-toggle" onclick="openAgentActionsPage()" title="Add or import an agent"><i class="ti ti-chevron-left"></i></button>' +
       '<div class="builder-rail-label">Builder</div>' +
       '<div class="builder-rail-status" id="builder-rail-status">' +
         '<div class="builder-rail-status-dot" title="No active automation"></div>' +

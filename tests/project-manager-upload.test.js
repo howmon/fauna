@@ -40,6 +40,8 @@ const {
   renameSourceEntry,
   deleteSourceEntry,
   getSourceEntryAbsolutePath,
+  searchSourceFiles,
+  replaceSourceMatches,
 } = pm;
 
 // Anchor test files under HOME so the path-traversal sanity check (which
@@ -134,6 +136,59 @@ describe('createSourceEntry (regression — used by the same route module)', () 
   it('creates an empty directory', () => {
     createSourceEntry('p1', 'src1', 'newdir', 'dir');
     expect(fs.statSync(path.join(_tmpRoot, 'newdir')).isDirectory()).toBe(true);
+  });
+});
+
+describe('project source find and replace', () => {
+  beforeEach(() => {
+    _diskProjects[0].allowFileEditing = true;
+    fs.mkdirSync(path.join(_tmpRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(_tmpRoot, 'src', 'alpha.js'), 'const Alpha = "cat";\n// cat catalog\n', 'utf8');
+    fs.writeFileSync(path.join(_tmpRoot, 'src', 'beta.ts'), 'export const cat = "CAT";\n', 'utf8');
+    fs.writeFileSync(path.join(_tmpRoot, 'root.js'), 'cat\n', 'utf8');
+    fs.mkdirSync(path.join(_tmpRoot, 'node_modules', 'ignored'), { recursive: true });
+    fs.writeFileSync(path.join(_tmpRoot, 'node_modules', 'ignored', 'x.js'), 'cat', 'utf8');
+    fs.writeFileSync(path.join(_tmpRoot, 'binary.bin'), Buffer.from([0, 99, 97, 116]));
+  });
+
+  it('finds literal text with line, column, and preview while skipping ignored and binary files', () => {
+    const out = searchSourceFiles('p1', 'src1', { query: 'cat' });
+    expect(out.fileCount).toBe(3);
+    expect(out.matchCount).toBe(6);
+    expect(out.files.map(f => f.path)).not.toContain('node_modules/ignored/x.js');
+    expect(out.files[0].matches[0]).toEqual(expect.objectContaining({ line: expect.any(Number), column: expect.any(Number), preview: expect.any(String) }));
+  });
+
+  it('supports case, whole-word, regex, include, and exclude filters', () => {
+    expect(searchSourceFiles('p1', 'src1', { query: 'CAT', caseSensitive: true }).matchCount).toBe(1);
+    expect(searchSourceFiles('p1', 'src1', { query: 'cat', wholeWord: true }).matchCount).toBe(5);
+    expect(searchSourceFiles('p1', 'src1', { query: 'c.t', regex: true, include: '**/*.ts' }).fileCount).toBe(1);
+    expect(searchSourceFiles('p1', 'src1', { query: 'cat', include: '**/*.js' }).fileCount).toBe(2);
+    expect(searchSourceFiles('p1', 'src1', { query: 'cat', exclude: '**/*.ts' }).fileCount).toBe(2);
+  });
+
+  it('replaces all matches or only requested files and supports regex groups', () => {
+    fs.chmodSync(path.join(_tmpRoot, 'src', 'alpha.js'), 0o755);
+    const one = replaceSourceMatches('p1', 'src1', { query: 'cat', replacement: 'dog', paths: ['src/alpha.js'] });
+    expect(one).toEqual(expect.objectContaining({ fileCount: 1, replacementCount: 3 }));
+    expect(fs.readFileSync(path.join(_tmpRoot, 'src', 'alpha.js'), 'utf8')).toContain('dog dogalog');
+    expect(fs.statSync(path.join(_tmpRoot, 'src', 'alpha.js')).mode & 0o777).toBe(0o755);
+    expect(fs.readFileSync(path.join(_tmpRoot, 'src', 'beta.ts'), 'utf8')).toContain('cat');
+
+    const grouped = replaceSourceMatches('p1', 'src1', { query: '(c)(at)', replacement: '$2-$1', regex: true });
+    expect(grouped.replacementCount).toBe(3);
+    expect(fs.readFileSync(path.join(_tmpRoot, 'src', 'beta.ts'), 'utf8')).toContain('at-c');
+  });
+
+  it('blocks replacement when project file editing is disabled', () => {
+    _diskProjects[0].allowFileEditing = false;
+    expect(() => replaceSourceMatches('p1', 'src1', { query: 'cat', replacement: 'dog' }))
+      .toThrow(/editing is disabled/i);
+  });
+
+  it('rejects invalid regular expressions', () => {
+    expect(() => searchSourceFiles('p1', 'src1', { query: '[', regex: true }))
+      .toThrow(/invalid regular expression/i);
   });
 });
 

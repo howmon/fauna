@@ -641,6 +641,202 @@ export function readSourceFile(projectId, srcId, filePath) {
   return { type, size: stat.size, mime, ext, path: rel };
 }
 
+const SEARCH_SKIP_DIRS = new Set([
+  '.git', '.hg', '.svn', 'node_modules', 'dist', 'build', 'coverage',
+  '.next', '.nuxt', '.cache', '.turbo', 'vendor', 'Pods',
+]);
+const SEARCH_MAX_FILE_BYTES = 2 * 1024 * 1024;
+const SEARCH_MAX_FILES = 10000;
+const SEARCH_MAX_RESULTS = 2000;
+
+function _escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function _globRegex(pattern) {
+  let source = '';
+  const input = String(pattern || '').trim().replace(/\\/g, '/');
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (ch === '*') {
+      if (input[i + 1] === '*' && input[i + 2] === '/') { source += '(?:.*/)?'; i += 2; }
+      else if (input[i + 1] === '*') { source += '.*'; i++; }
+      else source += '[^/]*';
+    } else if (ch === '?') source += '[^/]';
+    else source += _escapeRegex(ch);
+  }
+  return new RegExp('^' + source + '$', 'i');
+}
+
+function _parseGlobList(value) {
+  const values = Array.isArray(value) ? value : String(value || '').split(',');
+  return values.map(v => String(v).trim()).filter(Boolean).map(_globRegex);
+}
+
+function _matchesAny(pathname, patterns) {
+  if (!patterns.length) return false;
+  const normalized = pathname.replace(/\\/g, '/');
+  const basename = path.posix.basename(normalized);
+  return patterns.some(re => re.test(normalized) || re.test(basename));
+}
+
+function _buildSearchRegex(query, opts = {}) {
+  if (!query) throw new Error('Search query is required');
+  let source = opts.regex ? String(query) : _escapeRegex(query);
+  if (opts.wholeWord) source = '\\b(?:' + source + ')\\b';
+  try {
+    return new RegExp(source, opts.caseSensitive ? 'g' : 'gi');
+  } catch (e) {
+    throw new Error('Invalid regular expression: ' + e.message);
+  }
+}
+
+function _sourceSearchRoot(projectId, srcId) {
+  const p = getProject(projectId);
+  if (!p) throw new Error('Project not found');
+  let root;
+  if (srcId === '__rootpath__') {
+    if (!p.rootPath) throw new Error('No root folder set for this project');
+    root = p.rootPath;
+  } else {
+    const src = p.sources.find(s => s.id === srcId);
+    if (!src) throw new Error('Source not found');
+    root = src.type === 'local' ? src.path : _sourceCloneDir(projectId, srcId);
+  }
+  if (!root || !fs.existsSync(root)) throw new Error('Source directory not available');
+  return { project: p, root: path.resolve(root) };
+}
+
+function _walkSearchFiles(root, includePatterns, excludePatterns) {
+  const files = [];
+  const stack = [root];
+  while (stack.length && files.length < SEARCH_MAX_FILES) {
+    const dir = stack.pop();
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { continue; }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      const fullPath = path.join(dir, entry.name);
+      const relPath = path.relative(root, fullPath).replace(/\\/g, '/');
+      if (entry.isDirectory()) {
+        if (SEARCH_SKIP_DIRS.has(entry.name) || _matchesAny(relPath, excludePatterns)) continue;
+        stack.push(fullPath);
+        continue;
+      }
+      if (!entry.isFile() || _matchesAny(relPath, excludePatterns)) continue;
+      if (includePatterns.length && !_matchesAny(relPath, includePatterns)) continue;
+      let stat;
+      try { stat = fs.statSync(fullPath); } catch (_) { continue; }
+      if (stat.size > SEARCH_MAX_FILE_BYTES) continue;
+      files.push({ fullPath, relPath, size: stat.size });
+      if (files.length >= SEARCH_MAX_FILES) break;
+    }
+  }
+  return files;
+}
+
+function _readSearchText(file) {
+  let buffer;
+  try { buffer = fs.readFileSync(file.fullPath); } catch (_) { return null; }
+  const sample = buffer.subarray(0, Math.min(buffer.length, 8192));
+  if (sample.includes(0)) return null;
+  return buffer.toString('utf8');
+}
+
+export function searchSourceFiles(projectId, srcId, opts = {}) {
+  const query = String(opts.query || '');
+  const searchRe = _buildSearchRegex(query, opts);
+  const includePatterns = _parseGlobList(opts.include);
+  const excludePatterns = _parseGlobList(opts.exclude);
+  const { root } = _sourceSearchRoot(projectId, srcId);
+  const candidates = _walkSearchFiles(root, includePatterns, excludePatterns);
+  const results = [];
+  let matchCount = 0;
+  let truncated = candidates.length >= SEARCH_MAX_FILES;
+
+  for (const file of candidates) {
+    const content = _readSearchText(file);
+    if (content === null) continue;
+    const matches = [];
+    const lineStarts = [0];
+    for (let i = 0; i < content.length; i++) if (content.charCodeAt(i) === 10) lineStarts.push(i + 1);
+    searchRe.lastIndex = 0;
+    let match;
+    while ((match = searchRe.exec(content)) !== null) {
+      let low = 0, high = lineStarts.length;
+      while (low < high) {
+        const mid = (low + high) >> 1;
+        if (lineStarts[mid] <= match.index) low = mid + 1; else high = mid;
+      }
+      const lineIndex = Math.max(0, low - 1);
+      const lineStart = lineStarts[lineIndex];
+      const lineEndRaw = content.indexOf('\n', lineStart);
+      const lineEnd = lineEndRaw === -1 ? content.length : lineEndRaw;
+      matches.push({
+        line: lineIndex + 1,
+        column: match.index - lineStart + 1,
+        preview: content.slice(lineStart, lineEnd).replace(/\r$/, '').slice(0, 500),
+        match: match[0],
+      });
+      matchCount++;
+      if (matchCount >= SEARCH_MAX_RESULTS) { truncated = true; break; }
+      if (match[0] === '') searchRe.lastIndex++;
+    }
+    if (matches.length) results.push({ path: file.relPath, matches });
+    if (matchCount >= SEARCH_MAX_RESULTS) break;
+  }
+  return { query, files: results, fileCount: results.length, matchCount, scannedFiles: candidates.length, truncated };
+}
+
+export function replaceSourceMatches(projectId, srcId, opts = {}) {
+  const { project, root } = _sourceSearchRoot(projectId, srcId);
+  if (!project.allowFileEditing) throw new Error('File editing is disabled for this project');
+  const query = String(opts.query || '');
+  const searchRe = _buildSearchRegex(query, opts);
+  const replacement = String(opts.replacement ?? '');
+  const includePatterns = _parseGlobList(opts.include);
+  const excludePatterns = _parseGlobList(opts.exclude);
+  const requested = Array.isArray(opts.paths) && opts.paths.length
+    ? new Set(opts.paths.map(p => String(p).replace(/\\/g, '/')))
+    : null;
+  const candidates = _walkSearchFiles(root, includePatterns, excludePatterns)
+    .filter(file => !requested || requested.has(file.relPath));
+  let replacementCount = 0;
+  const changedFiles = [];
+
+  for (const file of candidates) {
+    const content = _readSearchText(file);
+    if (content === null) continue;
+    searchRe.lastIndex = 0;
+    let localCount = 0;
+    let next;
+    if (opts.regex) {
+      let match;
+      while ((match = searchRe.exec(content)) !== null) {
+        localCount++;
+        if (match[0] === '') searchRe.lastIndex++;
+      }
+      searchRe.lastIndex = 0;
+      next = content.replace(searchRe, replacement);
+    } else {
+      next = content.replace(searchRe, () => { localCount++; return replacement; });
+    }
+    if (!localCount || next === content) continue;
+    const tmpPath = file.fullPath + '.fauna-replace-' + process.pid + '-' + Date.now();
+    const mode = fs.statSync(file.fullPath).mode;
+    try {
+      fs.writeFileSync(tmpPath, next, { encoding: 'utf8', mode });
+      fs.renameSync(tmpPath, file.fullPath);
+    } catch (e) {
+      try { fs.rmSync(tmpPath, { force: true }); } catch (_) {}
+      throw e;
+    }
+    replacementCount += localCount;
+    changedFiles.push({ path: file.relPath, replacements: localCount });
+  }
+  return { ok: true, replacementCount, fileCount: changedFiles.length, files: changedFiles };
+}
+
 // Create a new empty file or directory within a source. `type` must be
 // 'file' or 'dir'. Parent directories are created automatically. Refuses
 // to overwrite an existing entry. Returns { path, type } of the created

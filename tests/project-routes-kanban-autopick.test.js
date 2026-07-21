@@ -52,6 +52,8 @@ function makeDeps(overrides = {}) {
     syncSource: vi.fn(),
     listFiles: vi.fn(),
     readSourceFile: vi.fn(),
+    searchSourceFiles: vi.fn(),
+    replaceSourceMatches: vi.fn(),
     resolveSourceFilePath: vi.fn(),
     createSourceEntry: vi.fn(),
     writeSourceFileBytes: vi.fn(),
@@ -87,6 +89,52 @@ async function flushDynamicImport() {
   for (let i = 0; i < 3; i++) await Promise.resolve();
   await new Promise(resolve => setTimeout(resolve, 0));
 }
+
+describe('project routes find and replace', () => {
+  it('passes search options to the scoped source search engine', () => {
+    const searchResult = { files: [], matchCount: 0, fileCount: 0 };
+    const deps = makeDeps({ searchSourceFiles: vi.fn(() => searchResult) });
+    const app = makeApp();
+    registerProjectRoutes(app, deps);
+
+    const body = { query: 'needle', caseSensitive: true, include: '**/*.js' };
+    const res = app.invoke('POST', '/api/projects/:id/sources/:srcId/search', {
+      params: { id: 'p1', srcId: 'src1' }, body,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe(searchResult);
+    expect(deps.searchSourceFiles).toHaveBeenCalledWith('p1', 'src1', body);
+  });
+
+  it('returns 403 when the replacement engine reports editing is disabled', () => {
+    const deps = makeDeps({
+      replaceSourceMatches: vi.fn(() => { throw new Error('File editing is disabled for this project'); }),
+    });
+    const app = makeApp();
+    registerProjectRoutes(app, deps);
+
+    const res = app.invoke('POST', '/api/projects/:id/sources/:srcId/replace', {
+      params: { id: 'p1', srcId: 'src1' }, body: { query: 'a', replacement: 'b' },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body.error).toMatch(/editing is disabled/i);
+  });
+
+  it('blocks ordinary file saves when editing is disabled', () => {
+    const deps = makeDeps({ getProject: vi.fn(() => ({ id: 'p1', allowFileEditing: false })) });
+    const app = makeApp();
+    registerProjectRoutes(app, deps);
+
+    const res = app.invoke('PUT', '/api/projects/:id/sources/:srcId/file', {
+      params: { id: 'p1', srcId: 'src1' }, body: { content: 'changed' },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(deps.resolveSourceFilePath).not.toHaveBeenCalled();
+  });
+});
 
 describe('project routes Kanban autopick wake-up', () => {
   it('creates Todo cards as AI-assigned when project autopilot is on', async () => {

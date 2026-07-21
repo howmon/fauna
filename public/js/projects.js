@@ -956,13 +956,14 @@ function _renderFilesTab(proj) {
   var srcOptions = '';
   if (rootPath && !rootAlreadySrc) {
     var rootBasename = rootPath.split('/').filter(Boolean).pop() || rootPath;
-    srcOptions += '<option value="__rootpath__">' + _projEsc(rootBasename) + ' (working folder)</option>';
+    srcOptions += '<option value="__rootpath__"' + (state._projectFileSrcId === '__rootpath__' ? ' selected' : '') + '>' + _projEsc(rootBasename) + ' (working folder)</option>';
   }
   srcOptions += (proj.sources || []).map(function(s) {
-    return '<option value="' + _projEsc(s.id) + '">' + _projEsc(s.name) + '</option>';
+    return '<option value="' + _projEsc(s.id) + '"' + (state._projectFileSrcId === s.id ? ' selected' : '') + '>' + _projEsc(s.name) + '</option>';
   }).join('');
   return '<div class="proj-files-toolbar">' +
     '<select class="proj-src-select" onchange="loadProjectFileTree(this.value, \'\')">' + srcOptions + '</select>' +
+    '<button class="proj-icon-btn' + (_projFileSearchState.visible ? ' active' : '') + '" onclick="toggleProjectFileSearch()" title="Find in files (Cmd/Ctrl+Shift+F)"><i class="ti ti-search"></i></button>' +
     '<button class="proj-icon-btn" onclick="newProjectEntry(\'hub\', \'\', \'file\')" title="New file"><i class="ti ti-file-plus"></i></button>' +
     '<button class="proj-icon-btn" onclick="newProjectEntry(\'hub\', \'\', \'dir\')" title="New folder"><i class="ti ti-folder-plus"></i></button>' +
     '<button class="proj-icon-btn" onclick="_triggerProjectUpload(\'hub\', \'\')" title="Upload files"><i class="ti ti-upload"></i></button>' +
@@ -970,10 +971,236 @@ function _renderFilesTab(proj) {
     '<button class="proj-icon-btn" onclick="loadProjectFileTree(document.querySelector(\'.proj-src-select\').value, \'\')" title="Refresh"><i class="ti ti-refresh"></i></button>' +
     '<input id="proj-hub-upload-input" type="file" multiple style="display:none" onchange="_handleProjectUploadPick(\'hub\', this)"/>' +
   '</div>' +
+  _renderProjectFileSearch(proj) +
   '<div class="proj-files-layout">' +
     '<div id="proj-file-tree-root" class="proj-file-tree proj-files-tree-col"></div>' +
     '<div id="proj-file-viewer" class="proj-file-viewer proj-files-viewer-col" style="display:none"></div>' +
   '</div>';
+}
+
+var _projFileSearchState = {
+  visible: false,
+  replaceVisible: false,
+  query: '',
+  replacement: '',
+  caseSensitive: false,
+  wholeWord: false,
+  regex: false,
+  include: '',
+  exclude: '',
+  result: null,
+  loading: false,
+  error: '',
+  timer: null,
+  requestSeq: 0,
+};
+
+function _renderProjectFileSearch(proj) {
+  var s = _projFileSearchState;
+  var canEdit = !!(proj && proj.allowFileEditing);
+  return '<section id="proj-file-search" class="proj-file-search' + (s.visible ? '' : ' hidden') + '" aria-label="Find in files">' +
+    '<div class="proj-search-row">' +
+      '<button class="proj-search-disclosure" onclick="toggleProjectReplace()" title="Toggle Replace"><i class="ti ' + (s.replaceVisible ? 'ti-chevron-down' : 'ti-chevron-right') + '"></i></button>' +
+      '<div class="proj-search-input-wrap"><i class="ti ti-search"></i>' +
+        '<input id="proj-search-query" class="proj-search-input" value="' + _projEsc(s.query) + '" placeholder="Search" autocomplete="off" oninput="queueProjectFileSearch()" onkeydown="if(event.key===\'Enter\'){event.preventDefault();runProjectFileSearch()}">' +
+        '<button class="proj-search-option' + (s.caseSensitive ? ' active' : '') + '" onclick="toggleProjectSearchOption(\'caseSensitive\')" title="Match Case">Aa</button>' +
+        '<button class="proj-search-option' + (s.wholeWord ? ' active' : '') + '" onclick="toggleProjectSearchOption(\'wholeWord\')" title="Match Whole Word">ab</button>' +
+        '<button class="proj-search-option' + (s.regex ? ' active' : '') + '" onclick="toggleProjectSearchOption(\'regex\')" title="Use Regular Expression">.*</button>' +
+      '</div>' +
+      '<button class="proj-icon-btn" onclick="runProjectFileSearch()" title="Refresh search"><i class="ti ti-refresh"></i></button>' +
+      '<button class="proj-icon-btn" onclick="toggleProjectFileSearch(false)" title="Close search"><i class="ti ti-x"></i></button>' +
+    '</div>' +
+    '<div class="proj-search-row proj-replace-row' + (s.replaceVisible ? '' : ' hidden') + '">' +
+      '<span class="proj-search-indent"></span>' +
+      '<div class="proj-search-input-wrap"><i class="ti ti-replace"></i>' +
+        '<input id="proj-search-replacement" class="proj-search-input" value="' + _projEsc(s.replacement) + '" placeholder="Replace" autocomplete="off"' + (canEdit ? '' : ' disabled') + ' oninput="_projFileSearchState.replacement=this.value" onkeydown="if(event.key===\'Enter\'&&event.metaKey){event.preventDefault();replaceAllProjectMatches()}">' +
+      '</div>' +
+      '<button class="proj-icon-btn" onclick="replaceAllProjectMatches()" title="Replace All"' + (canEdit ? '' : ' disabled') + '><i class="ti ti-replace"></i></button>' +
+    '</div>' +
+    '<div class="proj-search-filters">' +
+      '<label>files to include <input id="proj-search-include" value="' + _projEsc(s.include) + '" placeholder="e.g. src/**/*.js" oninput="queueProjectFileSearch()"></label>' +
+      '<label>files to exclude <input id="proj-search-exclude" value="' + _projEsc(s.exclude) + '" placeholder="e.g. **/*.test.js" oninput="queueProjectFileSearch()"></label>' +
+    '</div>' +
+    (!canEdit && s.replaceVisible ? '<div class="proj-search-readonly"><i class="ti ti-lock"></i> Enable source file editing in Project Settings to replace matches.</div>' : '') +
+    '<div id="proj-search-results" class="proj-search-results">' + _renderProjectSearchResults() + '</div>' +
+  '</section>';
+}
+
+function _captureProjectSearchInputs() {
+  var query = document.getElementById('proj-search-query');
+  var replacement = document.getElementById('proj-search-replacement');
+  var include = document.getElementById('proj-search-include');
+  var exclude = document.getElementById('proj-search-exclude');
+  if (query) _projFileSearchState.query = query.value;
+  if (replacement) _projFileSearchState.replacement = replacement.value;
+  if (include) _projFileSearchState.include = include.value;
+  if (exclude) _projFileSearchState.exclude = exclude.value;
+}
+
+function toggleProjectFileSearch(force) {
+  var next = typeof force === 'boolean' ? force : !_projFileSearchState.visible;
+  _projFileSearchState.visible = next;
+  var proj = _activeProject();
+  if (proj && state.projectHubOpen && state.projectHubTab === 'files') _renderProjectHubBody(proj);
+  if (next) {
+    setTimeout(function() {
+      var input = document.getElementById('proj-search-query');
+      if (input) { input.focus(); input.select(); }
+    }, 0);
+  }
+}
+
+function toggleProjectReplace() {
+  _captureProjectSearchInputs();
+  _projFileSearchState.replaceVisible = !_projFileSearchState.replaceVisible;
+  var proj = _activeProject();
+  if (proj) _renderProjectHubBody(proj);
+}
+
+function toggleProjectSearchOption(key) {
+  _captureProjectSearchInputs();
+  _projFileSearchState[key] = !_projFileSearchState[key];
+  var proj = _activeProject();
+  if (proj) _renderProjectHubBody(proj);
+  if (_projFileSearchState.query) runProjectFileSearch();
+}
+
+function queueProjectFileSearch() {
+  _captureProjectSearchInputs();
+  clearTimeout(_projFileSearchState.timer);
+  _projFileSearchState.timer = setTimeout(runProjectFileSearch, 250);
+}
+
+function _projectSearchPayload(extra) {
+  _captureProjectSearchInputs();
+  var s = _projFileSearchState;
+  return Object.assign({
+    query: s.query,
+    replacement: s.replacement,
+    caseSensitive: s.caseSensitive,
+    wholeWord: s.wholeWord,
+    regex: s.regex,
+    include: s.include,
+    exclude: s.exclude,
+  }, extra || {});
+}
+
+async function runProjectFileSearch() {
+  var s = _projFileSearchState;
+  var payload = _projectSearchPayload();
+  if (!payload.query || !state.activeProjectId || !_hubTreeState.srcId) {
+    s.requestSeq++;
+    s.result = null; s.error = ''; s.loading = false; _updateProjectSearchResults(); return;
+  }
+  var requestId = ++s.requestSeq;
+  s.loading = true; s.error = ''; _updateProjectSearchResults();
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(state.activeProjectId) +
+      '/sources/' + encodeURIComponent(_hubTreeState.srcId) + '/search', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+    var data = await r.json();
+    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+    if (requestId !== s.requestSeq) return;
+    s.result = data;
+  } catch (e) {
+    if (requestId !== s.requestSeq) return;
+    s.result = null; s.error = e.message;
+  } finally {
+    if (requestId === s.requestSeq) { s.loading = false; _updateProjectSearchResults(); }
+  }
+}
+
+function _renderProjectSearchResults() {
+  var s = _projFileSearchState;
+  if (s.loading) return '<div class="proj-search-status"><i class="ti ti-loader-2 spin"></i> Searching…</div>';
+  if (s.error) return '<div class="proj-search-status error"><i class="ti ti-alert-circle"></i> ' + _projEsc(s.error) + '</div>';
+  if (!s.query) return '<div class="proj-search-status">Search across the selected source.</div>';
+  if (!s.result) return '';
+  if (!s.result.matchCount) return '<div class="proj-search-status">No results found.</div>';
+  var canEdit = !!(_activeProject() && _activeProject().allowFileEditing);
+  var summary = '<div class="proj-search-summary"><strong>' + s.result.matchCount + '</strong> result' + (s.result.matchCount === 1 ? '' : 's') +
+    ' in <strong>' + s.result.fileCount + '</strong> file' + (s.result.fileCount === 1 ? '' : 's') +
+    (s.result.truncated ? '<span class="proj-search-truncated">Results limited</span>' : '') + '</div>';
+  var groups = (s.result.files || []).map(function(file) {
+    var rows = (file.matches || []).map(function(match) {
+      return '<button class="proj-search-match" data-path="' + _projEsc(file.path) + '" data-line="' + match.line + '" data-column="' + match.column + '" onclick="openProjectSearchMatch(this)">' +
+        '<span class="proj-search-location">' + match.line + ':' + match.column + '</span>' +
+        '<span class="proj-search-preview">' + _projEsc(match.preview) + '</span>' +
+      '</button>';
+    }).join('');
+    return '<div class="proj-search-file">' +
+      '<div class="proj-search-file-head"><i class="ti ' + _fileIcon((file.path.split('.').pop() || '').toLowerCase()) + '"></i>' +
+        '<span title="' + _projEsc(file.path) + '">' + _projEsc(file.path) + '</span>' +
+        '<span class="proj-search-file-count">' + file.matches.length + '</span>' +
+        (canEdit && s.replaceVisible ? '<button class="proj-search-file-replace" data-path="' + _projEsc(file.path) + '" onclick="event.stopPropagation();replaceProjectSearchFile(this)" title="Replace all in this file"><i class="ti ti-replace"></i></button>' : '') +
+      '</div>' + rows +
+    '</div>';
+  }).join('');
+  return summary + groups;
+}
+
+function _updateProjectSearchResults() {
+  var el = document.getElementById('proj-search-results');
+  if (el) el.innerHTML = _renderProjectSearchResults();
+}
+
+async function openProjectSearchMatch(button) {
+  var filePath = button && button.dataset.path;
+  if (!filePath || !_hubTreeState.srcId) return;
+  var line = Number(button.dataset.line || 1);
+  var column = Number(button.dataset.column || 1);
+  await openProjectFile(_hubTreeState.srcId, filePath);
+  var attempts = 0;
+  (function reveal() {
+    if (_projMonacoEditor) {
+      _projMonacoEditor.setPosition({ lineNumber: line, column: column });
+      _projMonacoEditor.revealLineInCenter(line);
+      _projMonacoEditor.focus();
+      return;
+    }
+    if (attempts++ < 20) setTimeout(reveal, 50);
+  })();
+}
+
+async function _replaceProjectMatches(paths) {
+  var payload = _projectSearchPayload(paths ? { paths: paths } : {});
+  if (!payload.query || !state.activeProjectId || !_hubTreeState.srcId) return;
+  try {
+    var r = await fetch('/api/projects/' + encodeURIComponent(state.activeProjectId) +
+      '/sources/' + encodeURIComponent(_hubTreeState.srcId) + '/replace', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+    var data = await r.json();
+    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+    _showToast('Replaced ' + data.replacementCount + ' match' + (data.replacementCount === 1 ? '' : 'es') + ' in ' + data.fileCount + ' file' + (data.fileCount === 1 ? '' : 's'));
+    await runProjectFileSearch();
+    if (window._lastProjectFilePath && data.files && data.files.some(function(f) { return f.path === window._lastProjectFilePath; })) {
+      await openProjectFile(_hubTreeState.srcId, window._lastProjectFilePath);
+    }
+  } catch (e) { _showToast('Replace failed: ' + e.message, true); }
+}
+
+async function replaceProjectSearchFile(button) {
+  var filePath = button && button.dataset.path;
+  if (filePath) await _replaceProjectMatches([filePath]);
+}
+
+async function replaceAllProjectMatches() {
+  _captureProjectSearchInputs();
+  var result = _projFileSearchState.result;
+  if (!result || !result.matchCount) return;
+  if (!await _projConfirm('Replace ' + result.matchCount + ' match' + (result.matchCount === 1 ? '' : 'es') + ' across ' + result.fileCount + ' file' + (result.fileCount === 1 ? '' : 's') + '?')) return;
+  await _replaceProjectMatches(null);
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('keydown', function(event) {
+    if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.key.toLowerCase() !== 'f') return;
+    if (!state.projectHubOpen || state.projectHubTab !== 'files') return;
+    event.preventDefault();
+    toggleProjectFileSearch(true);
+  });
 }
 
 // ── Unified expand-in-place tree ─────────────────────────────────────────
@@ -1571,8 +1798,10 @@ async function _treeInit(st, srcId) {
 }
 
 async function loadProjectFileTree(srcId /*, subPath ignored — tree always starts at root */) {
+  _projFileSearchState.requestSeq++;
   state._projectFileSrcId = srcId;
   await _treeInit(_hubTreeState, srcId);
+  if (_projFileSearchState.visible && _projFileSearchState.query) runProjectFileSearch();
 }
 
 // Prompt the user for a name then create a new file or directory inside
