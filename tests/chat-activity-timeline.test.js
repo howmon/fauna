@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -9,6 +10,7 @@ const uiSource = fs.readFileSync(path.join(root, 'public/js/ui.js'), 'utf8');
 const conversationsSource = fs.readFileSync(path.join(root, 'public/js/conversations.js'), 'utf8');
 const chatRouteSource = fs.readFileSync(path.join(root, 'server/routes/chat.js'), 'utf8');
 const stylesSource = fs.readFileSync(path.join(root, 'public/css/styles.css'), 'utf8');
+const markdownSource = fs.readFileSync(path.join(root, 'public/js/markdown.js'), 'utf8');
 
 describe('assistant activity timeline', () => {
   it('places the live activity panel before streamed assistant prose', () => {
@@ -38,8 +40,27 @@ describe('assistant activity timeline', () => {
   it('shows and persists provider-exposed reasoning summaries', () => {
     expect(chatRouteSource).toContain("send({ type: 'reasoning', summary: String(delta.reasoning_content) })");
     expect(chatSource).toContain("if (evt.summary) _reasoningSummary += String(evt.summary)");
-    expect(chatSource).toContain('summary: _reasoningSummary || undefined');
-    expect(uiSource).toContain("reasoning.summary || 'This model did not provide a displayable reasoning summary.'");
+    expect(chatSource).toContain('summary: _reasoningSummary || _publicReasoningSummary || undefined');
+    expect(uiSource).toContain("reasoning.summary || '', false");
+  });
+
+  it('extracts public approach summaries and strips them from assistant prose', () => {
+    const start = markdownSource.indexOf('function extractPublicReasoningSummary');
+    const end = markdownSource.indexOf('function renderMarkdown');
+    const context = {};
+    vm.runInNewContext(markdownSource.slice(start, end), context);
+    const sample = '```reasoning-summary\n- Check constraints\n- Answer directly\n```\n\nVisible answer';
+    expect(context.extractPublicReasoningSummary(sample)).toBe('- Check constraints\n- Answer directly');
+    expect(context.stripPublicReasoningSummaryBlocks(sample).trim()).toBe('Visible answer');
+    expect(chatSource).toContain('## Public Approach Summary');
+    expect(chatSource).toContain('_syncPublicReasoningSummary();');
+  });
+
+  it('does not expose an empty disclosure when no public summary exists', () => {
+    expect(uiSource).toContain('setActivityStepDetailAvailability(step, !!String(detailText || \'\').trim())');
+    expect(chatSource).toContain('setActivityStepDetailAvailability(_liveActivityThinkingStep, !!displaySummary)');
+    expect(stylesSource).toContain('.tool-activity-entry[data-has-detail="0"] .tool-activity-step-chevron');
+    expect(uiSource).not.toContain('This model did not provide a displayable reasoning summary.');
   });
 
   it('makes each chain-of-thought step independently collapsible from its rail icon', () => {

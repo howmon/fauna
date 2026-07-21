@@ -1088,6 +1088,16 @@ function updateActivityStepDetail(step, text, emptyText) {
   sources.forEach(function(src) { _appendActivityStepImage(step, src); });
 }
 
+function setActivityStepDetailAvailability(step, available) {
+  if (!step || !step.entry || !step.toggle) return;
+  step.entry.dataset.hasDetail = available ? '1' : '0';
+  step.toggle.disabled = !available;
+  if (!available) {
+    step.entry.dataset.open = '0';
+    step.toggle.setAttribute('aria-expanded', 'false');
+  }
+}
+
 function createActivityStep(label, kind, detailText, open) {
   var entry = document.createElement('div');
   entry.className = 'tool-activity-entry tool-activity-' + (kind || 'tool') + '-entry';
@@ -1124,11 +1134,13 @@ function createActivityStep(label, kind, detailText, open) {
   });
   var step = { entry: entry, toggle: toggle, title: title, detail: detail, text: text, media: media };
   updateActivityStepDetail(step, detailText, 'No details available.');
+  setActivityStepDetailAvailability(step, !!String(detailText || '').trim());
   return step;
 }
 
 window.createActivityStep = createActivityStep;
 window.updateActivityStepDetail = updateActivityStepDetail;
+window.setActivityStepDetailAvailability = setActivityStepDetailAvailability;
 window.activityStepKind = _activityStepKind;
 
 function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML, reasoning, widgets, plan, activity) {
@@ -1205,7 +1217,7 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
     var activityBody = activityPanel.querySelector('.tool-activity-body');
     if (reasoning) {
       var reasoningLabel = reasoning.durationSeconds != null ? 'Thought for ' + reasoning.durationSeconds + 's' : 'Thought briefly';
-      var thinkingStep = createActivityStep(reasoningLabel, 'thinking', reasoning.summary || 'This model did not provide a displayable reasoning summary.', false);
+      var thinkingStep = createActivityStep(reasoningLabel, 'thinking', reasoning.summary || '', false);
       activityBody.appendChild(thinkingStep.entry);
     }
     (activity || []).forEach(function(item) {

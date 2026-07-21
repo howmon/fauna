@@ -172,6 +172,38 @@ marked.use({
   }
 });
 
+// Extract concise, user-facing approach notes emitted by the model. These are
+// explicitly not private chain-of-thought; they are public summaries intended
+// for the Activity timeline and are removed from normal assistant prose.
+function extractPublicReasoningSummary(text) {
+  var source = String(text || '');
+  var summaries = [];
+  var complete = /`{3,4}\s*reasoning-summary[ \t]*\r?\n([\s\S]*?)`{3,4}/gi;
+  var match;
+  while ((match = complete.exec(source))) {
+    if (match[1] && match[1].trim()) summaries.push(match[1].trim());
+  }
+  var lastOpen = source.toLowerCase().lastIndexOf('```reasoning-summary');
+  if (lastOpen >= 0) {
+    var afterOpen = source.slice(lastOpen).replace(/^`{3,4}\s*reasoning-summary[ \t]*\r?\n?/i, '');
+    if (!/`{3,4}/.test(afterOpen) && afterOpen.trim()) summaries.push(afterOpen.trim());
+  }
+  var seen = Object.create(null);
+  return summaries.join('\n').split('\n').filter(function(line) {
+    var key = line.trim().toLowerCase();
+    if (!key || seen[key]) return false;
+    seen[key] = true;
+    return true;
+  }).join('\n').trim();
+}
+
+function stripPublicReasoningSummaryBlocks(text) {
+  return String(text || '')
+    .replace(/`{3,4}\s*reasoning-summary[ \t]*\r?\n[\s\S]*?`{3,4}\n?/gi, '')
+    .replace(/`{3,4}\s*reasoning-summary[ \t]*\r?\n[\s\S]*$/gi, '')
+    .replace(/\n{3,}/g, '\n\n');
+}
+
 function renderMarkdown(text) {
   // Strip artifact fenced blocks before rendering — they're shown as entity cards, not code fences.
   // Line-based balanced scanner: when the outer artifact fence is 3 backticks
@@ -203,7 +235,7 @@ function renderMarkdown(text) {
     }
     i = closed ? j + 1 : srcLines.length;
   }
-  var cleaned = keep.join('\n');
+  var cleaned = stripPublicReasoningSummaryBlocks(keep.join('\n'));
   // Strip suggestion blocks — rendered as clickable CTA buttons, not code
   cleaned = cleaned.replace(/`{3,4}\s*suggestions[ \t]*\r?\n[\s\S]*?`{3,4}\n?/gi, '');
   // Collapse runs of 3+ newlines left by stripped blocks so they don't render
@@ -447,6 +479,7 @@ function groupLabel(items, isLive) {
 
 // Used during streaming: prose renders normally, consecutive code blocks become one activity pill.
 function renderStreamingActivity(buffer) {
+  buffer = stripPublicReasoningSummaryBlocks(buffer);
   var segments = parseBufferSegments(buffer);
   var grouped  = groupCodeSegments(segments);
   var result   = '';

@@ -1713,6 +1713,10 @@ body.is-resizing webview { pointer-events: none !important; }
 }
 .tool-activity-step-toggle:hover,
 .tool-activity-step-toggle:focus-visible { color: var(--fau-text); }
+.tool-activity-step-toggle:disabled {
+  cursor: default;
+  color: var(--fau-text-muted);
+}
 .tool-activity-step-toggle:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: 2px;
@@ -1744,6 +1748,8 @@ body.is-resizing webview { pointer-events: none !important; }
 .tool-activity-step-toggle:hover .tool-activity-step-chevron,
 .tool-activity-step-toggle:focus-visible .tool-activity-step-chevron,
 .tool-activity-entry[data-open="1"] .tool-activity-step-chevron { opacity: 1; }
+.tool-activity-entry[data-has-detail="0"] .tool-activity-step-chevron { display: none; }
+.tool-activity-entry[data-has-detail="0"] .tool-activity-kind-icon { opacity: 1; }
 .tool-activity-entry[data-open="1"] .tool-activity-step-chevron { transform: rotate(90deg); }
 .tool-activity-step-detail {
   display: none;

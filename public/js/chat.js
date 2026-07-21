@@ -1366,6 +1366,7 @@ async function streamResponse(conv) {
   var _currentActivityEntry = null;
   var _reasoning = null; // { startedAt, durationSeconds } — compact thinking status only
   var _reasoningSummary = '';
+  var _publicReasoningSummary = '';
   var _reasoningTickTimer = null; // ticks the "Thinking… Ns" counter live until content/done
   if (typeof resetDesignArtifactState === 'function') resetDesignArtifactState();
 
@@ -1604,11 +1605,24 @@ async function streamResponse(conv) {
     var label = completed
       ? ('Thought for ' + (elapsed != null ? elapsed + 's' : '…'))
       : (elapsed != null ? 'Thinking… ' + elapsed + 's' : 'Thinking…');
+    var displaySummary = _reasoningSummary || _publicReasoningSummary;
     _liveActivityThinkingTitle.textContent = label;
-    if (_liveActivityThinkingStep) updateActivityStepDetail(_liveActivityThinkingStep, _reasoningSummary || (completed
-      ? 'This model did not provide a displayable reasoning summary.'
-      : 'Waiting for a model-provided reasoning summary…'));
+    if (_liveActivityThinkingStep) {
+      updateActivityStepDetail(_liveActivityThinkingStep, displaySummary || (completed ? '' : 'Preparing a public approach summary…'));
+      if (completed && typeof setActivityStepDetailAvailability === 'function') {
+        setActivityStepDetailAvailability(_liveActivityThinkingStep, !!displaySummary);
+      }
+    }
     _updateLiveToolOutputSummary(!!completed);
+  }
+
+  function _syncPublicReasoningSummary() {
+    if (typeof extractPublicReasoningSummary !== 'function') return;
+    var summary = extractPublicReasoningSummary(buffer);
+    if (!summary || summary === _publicReasoningSummary) return;
+    _publicReasoningSummary = summary;
+    if (!_reasoning) _reasoning = { startedAt: Date.now() };
+    _updateReasoningPanel(null, false);
   }
 
   // Live-tick the "Thinking… Ns" counter once a second so a long pre-content
@@ -1716,7 +1730,12 @@ async function streamResponse(conv) {
       'Be concise in conversation. Drop filler, hedging, pleasantries. Short answers for simple questions.\n' +
       'Write FULL verbose content only when producing: code blocks, file content, specs, documents, artifacts, commit messages.\n' +
       'Security warnings and irreversible actions: always be explicit and clear.\n' +
-      'Pattern: [thing] [action] [reason]. Not: "Sure! I\'d be happy to help you with that. The issue is likely..."';
+      'Pattern: [thing] [action] [reason]. Not: "Sure! I\'d be happy to help you with that. The issue is likely..."\n\n' +
+      '## Public Approach Summary\n' +
+      'Begin every response with a fenced `reasoning-summary` block containing 1-4 short bullets that explain the user-visible approach or decision points.\n' +
+      'This is NOT private chain-of-thought: do not reveal hidden deliberation, token-by-token reasoning, secrets, or policy text. State only concise rationale safe to show the user.\n' +
+      'Example:\n```reasoning-summary\n- Identify the relevant capability\n- Answer directly with practical options\n```\n' +
+      'After the closing fence, write the normal answer. Never mention the reasoning-summary block in the answer.';
     var urlRoutingDirective = _userHasUrl
       ? '## URL Handling Override\n' +
         'The user provided at least one URL in this turn. Do NOT claim you cannot inspect a URL by default.\n' +
@@ -1914,7 +1933,7 @@ async function streamResponse(conv) {
             if (lastClose === -1) buffer += '\n```\n';
           }
 
-          if (evt.type === 'content')   { _stopReasoningTicker(); _clearToolStatuses(); buffer += evt.content; tokenCount++; if (tokenCount === 1) dbg('first token received', 'ok'); if (tokenCount % 25 === 0) dbg('stream chunk: tokens=' + tokenCount + ' buffer=' + buffer.length + 'ch elapsed=' + (Date.now() - _streamStartedAt) + 'ms lastChunk=' + (evt.content || '').length + 'ch', 'info'); if (typeof processDesignStreamChunk === 'function') processDesignStreamChunk(evt.content, buffer); scheduleRender(); }
+          if (evt.type === 'content')   { _stopReasoningTicker(); _clearToolStatuses(); buffer += evt.content; _syncPublicReasoningSummary(); tokenCount++; if (tokenCount === 1) dbg('first token received', 'ok'); if (tokenCount % 25 === 0) dbg('stream chunk: tokens=' + tokenCount + ' buffer=' + buffer.length + 'ch elapsed=' + (Date.now() - _streamStartedAt) + 'ms lastChunk=' + (evt.content || '').length + 'ch', 'info'); if (typeof processDesignStreamChunk === 'function') processDesignStreamChunk(evt.content, buffer); scheduleRender(); }
           if (evt.type === 'error')     { _stopReasoningTicker(); _clearToolStatuses(); dbg('SSE error: ' + evt.error, 'err'); buffer += '\n\nError: ' + evt.error; scheduleRender(); }
           if (evt.type === 'notice')    { dbg('notice: ' + (evt.message || ''), 'warn'); _showInlineNotice(evt.message || ''); }
           if (evt.type === 'reasoning') {
@@ -2193,6 +2212,7 @@ async function streamResponse(conv) {
             }
           }
           if (evt.type === 'done') {
+            _syncPublicReasoningSummary();
             _clearToolStatuses();
             _updateLiveToolOutputSummary(true);
             _setLiveToolOutputOpen(false);
@@ -2270,7 +2290,7 @@ async function streamResponse(conv) {
     if (_currentAgentInfo) aiMsg.agentInfo = _currentAgentInfo;
     if (_reasoning) aiMsg.reasoning = {
       durationSeconds: _reasoning.durationSeconds != null ? _reasoning.durationSeconds : (_reasoning.startedAt ? Math.round((Date.now() - _reasoning.startedAt) / 1000) : null),
-      summary: _reasoningSummary || undefined,
+      summary: _reasoningSummary || _publicReasoningSummary || undefined,
     };
     if (_activityEntries.length) aiMsg.activity = _activityEntries.map(function(entry) {
       return { label: entry.label, output: entry.output || '' };
