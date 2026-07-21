@@ -107,7 +107,7 @@ function renderStorePanel() {
   if (!panel) return;
 
   var embeddedInSettings = !!panel.closest('#settings-panel');
-  // The Plugins page is a full app page with its own title strip + rail, so the
+  // The Agents page is a full app page with its own title strip + rail, so the
   // floating close button is redundant there (and looks out of place).
   var inPluginsPage = panel.classList.contains('plugins-app-panel') || !!panel.closest('#plugins-page-mount');
   var hideClose = embeddedInSettings || inPluginsPage;
@@ -207,7 +207,7 @@ function renderStoreBrowse() {
           ? '<span class="store-type-badge mcp" title="Uses ' + (a.mcpCount || '') + ' MCP server' + (a.mcpCount > 1 ? 's' : '') + '"><i class="ti ti-plug"></i> MCP</span>'
           : '<span class="store-type-badge agent"><i class="ti ti-robot"></i> Agent</span>';
         var installBtn = installed ?
-          '<button class="store-card-btn installed" onclick="event.stopPropagation();uninstallStoreAgent(\'' + escHtml(a.slug) + '\')"><i class="ti ti-circle-check"></i> Installed</button>' :
+          '<button class="store-card-btn installed" onclick="event.stopPropagation();startAgentConversation(\'' + escHtml(a.slug) + '\')"><i class="ti ti-player-play"></i> Use</button>' :
           '<button class="store-card-btn" onclick="event.stopPropagation();installStoreAgent(\'' + escHtml(a.slug) + '\')">Install</button>';
 
         return '<div class="store-card" onclick="viewStoreAgent(\'' + escHtml(a.slug) + '\')">' +
@@ -347,6 +347,7 @@ function renderStoreDetail() {
       '<div class="store-detail-actions">' +
         (canEdit ? '<button class="builder-btn secondary" onclick="editPublishedAgent(\'' + escHtml(a.slug) + '\')"><i class="ti ti-pencil"></i> Edit</button>' : '') +
         (installed ?
+          '<button class="builder-btn primary" onclick="startAgentConversation(\'' + escHtml(a.slug) + '\')"><i class="ti ti-player-play"></i> Use</button>' +
           '<button class="builder-btn secondary" onclick="uninstallStoreAgent(\'' + escHtml(a.slug) + '\')"><i class="ti ti-trash"></i> Uninstall</button>' :
           '<button class="builder-btn primary" onclick="installStoreAgent(\'' + escHtml(a.slug) + '\')"><i class="ti ti-download"></i> Install</button>') +
       '</div>' +
@@ -901,7 +902,7 @@ function renderStoreMyAgents() {
       '</div>' +
       callsLabel +
       '<div class="myagent-actions">' +
-        '<button class="ma-btn primary" onclick="quickActivateAgent(\'' + escHtml(a.name) + '\');closeAgentStore()" title="Use"><i class="ti ti-player-play"></i> Use</button>' +
+        '<button class="ma-btn primary" onclick="startAgentConversation(\'' + escHtml(a.name) + '\')" title="Use"><i class="ti ti-player-play"></i> Use</button>' +
         (canEdit ? '<button class="ma-btn" onclick="closeAgentStore();openAgentBuilder(\'' + escHtml(a.name) + '\')" title="Edit"><i class="ti ti-pencil"></i></button>' : '') +
         (!isStore && !isPublished && storeState.account ? '<button class="ma-btn" onclick="publishAgent(\'' + escHtml(a.name) + '\')" title="Publish"><i class="ti ti-upload"></i></button>' : '') +
       '</div>' +

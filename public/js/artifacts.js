@@ -845,7 +845,7 @@ window._closeOverlayStrip = _closeOverlayStrip;
 
 function openPluginsPage(opts) {
   opts = opts || {};
-  var body = typeof _openAppPage === 'function' ? _openAppPage('plugins', 'Plugins') : null;
+  var body = typeof _openAppPage === 'function' ? _openAppPage('plugins', 'Agents') : null;
   var panel = document.getElementById('agent-store-panel');
   if (!body || !panel) return null;
   if (!panel._pluginsHome) panel._pluginsHome = { parent: panel.parentNode, next: panel.nextSibling };
@@ -853,9 +853,9 @@ function openPluginsPage(opts) {
     '<div class="plugins-page-shell">' +
       '<div class="plugins-page-header">' +
         '<div>' +
-          '<div class="home-kicker"><span></span>Extensions</div>' +
-          '<h1>Plugins</h1>' +
-          '<p>Browse, install, publish, and manage Fauna agents and plugin integrations.</p>' +
+          '<div class="home-kicker"><span></span>Agent workspace</div>' +
+          '<h1>Agents</h1>' +
+          '<p>Browse, install, publish, and manage Fauna agents.</p>' +
         '</div>' +
       '</div>' +
       '<div id="plugins-page-mount"></div>' +

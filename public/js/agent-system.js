@@ -1245,6 +1245,19 @@ document.addEventListener('click', function() { closeAgentMenu(); });
 
 var _loadingAgents = {}; // { agentName: true } — agents currently activating
 
+function startAgentConversation(name) {
+  if (!findAgent(name)) {
+    showToast('Agent "' + name + '" not found');
+    return;
+  }
+  if (typeof closeAgentStore === 'function') closeAgentStore();
+  if (typeof closeAppPage === 'function') closeAppPage({ force: true });
+  if (typeof newConversation === 'function') newConversation({ quick: true });
+  showAgentChip(name);
+  var input = document.getElementById('msg-input');
+  if (input) input.focus();
+}
+
 function quickActivateAgent(name) {
   if (activeAgent && activeAgent.name === name) {
     var conv = state.currentId ? getConv(state.currentId) : null;

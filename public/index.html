@@ -80,7 +80,7 @@
       <button class="app-rail-btn" data-rail-page="projects" onclick="openAllProjects()" title="Projects" aria-label="Projects"><i class="ti ti-folder"></i></button>
       <button class="app-rail-btn" data-rail-page="automations" onclick="toggleTasksPanel()" title="Automations" aria-label="Automations"><i class="ti ti-bolt"></i></button>
       <button class="app-rail-btn" data-rail-page="board" onclick="toggleBoardPanel()" title="Board" aria-label="Board"><i class="ti ti-layout-kanban"></i></button>
-      <button class="app-rail-btn" data-rail-page="plugins" onclick="openPluginsPage()" title="Plugins" aria-label="Plugins"><i class="ti ti-puzzle"></i></button>
+      <button class="app-rail-btn" data-rail-page="plugins" onclick="openPluginsPage()" title="Agents" aria-label="Agents"><i class="ti ti-robot"></i></button>
       <button class="app-rail-btn" data-rail-page="prompt-studio" onclick="openPromptStudioPage()" title="Prompt Studio" aria-label="Prompt Studio"><i class="ti ti-braces"></i></button>
       <button class="app-rail-btn" data-rail-page="mcp" onclick="openMcpServersPage()" title="MCP Servers" aria-label="MCP Servers"><i class="ti ti-plug"></i></button>
       <button class="app-rail-btn" data-rail-page="health" onclick="openHealthPage()" title="Health" aria-label="Health"><i class="ti ti-activity-heartbeat"></i></button>
@@ -1195,7 +1195,7 @@
 
   <!-- ── Plugins ──────────────────────────────────────────────── -->
   <div class="settings-page settings-page-plugins" data-page="plugins">
-    <div class="settings-page-title">Plugins</div>
+    <div class="settings-page-title">Agents</div>
     <div class="settings-plugin-shell">
       <div id="agent-store-panel" class="settings-agent-store" style="display:none"></div>
     </div>
@@ -1806,7 +1806,7 @@ Examples:
       }, true);
     }
     var pageId = page === 'plugins' ? 'plugins' : 'settings';
-    var body = typeof _openAppPage === 'function' ? _openAppPage(pageId, page === 'plugins' ? 'Plugins' : 'Settings') : null;
+    var body = typeof _openAppPage === 'function' ? _openAppPage(pageId, page === 'plugins' ? 'Agents' : 'Settings') : null;
     if (body && panel) {
       body.innerHTML = '';
       body.appendChild(panel);
@@ -1827,7 +1827,7 @@ Examples:
       shellPage.dataset.page = page === 'plugins' ? 'plugins' : 'settings';
       var titleEl = document.getElementById('topbar-title');
       if (titleEl) {
-        titleEl.textContent = page === 'plugins' ? 'Plugins' : 'Settings';
+        titleEl.textContent = page === 'plugins' ? 'Agents' : 'Settings';
         titleEl.title = titleEl.textContent;
       }
     }
