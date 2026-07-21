@@ -1764,6 +1764,7 @@ export function registerChatRoute(app, {
         }
         return '';
       })();
+      const _hasSharedBrowserTabContext = /\[(?:Resolved live browser tab context|Same browser tab\(s\) as the previous turn|Browser-extension tab attached)/i.test(_lastUserQuery);
       const _writeIntentTurn = /\b(?:fix|fixes|fixed|implement|resolve|repair|patch|update|change|modify|edit|write|create|add|replace|refactor|migrate|install|build\s+out|make\s+(?:all|the|this)|proceed)\b/i.test(_lastUserQuery || '');
       const MUTATING_TOOLS = new Set([
         'fauna_write_file', 'fauna_write_files', 'fauna_apply_patch',
@@ -2397,6 +2398,18 @@ export function registerChatRoute(app, {
               }
               // Route to self-tools (memory, models, settings, etc.)
               else if (isSelfTool(toolName)) {
+                if (toolName === 'fauna_browser' && _hasSharedBrowserTabContext && !args?.forceInternal) {
+                  const browserUrl = String(args?.url || '');
+                  const requiresInternalBrowser = /^(?:https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)|file:\/\/)/i.test(browserUrl);
+                  if (!requiresInternalBrowser) {
+                    result = JSON.stringify({
+                      ok: false,
+                      code: 'USE_BROWSER_EXTENSION',
+                      error: 'The internal Fauna browser was not opened because this turn is anchored to a shared real-browser tab.',
+                      next: 'Use browser-ext-action for the shared tab, or set forceInternal:true only when the user explicitly wants the in-app browser.',
+                    });
+                  }
+                }
                 const selfToolCallContext = {
                   ...selfToolContext,
                   onToolProgress: (progress) => {
@@ -2413,7 +2426,7 @@ export function registerChatRoute(app, {
                     });
                   },
                 };
-                result = await executeSelfTool(toolName, args, selfToolCallContext);
+                if (result === undefined) result = await executeSelfTool(toolName, args, selfToolCallContext);
               }
               // Route to agent tool handler if available, otherwise Figma MCP
               else if (agentToolHandlers?.has(toolName)) {

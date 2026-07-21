@@ -1699,6 +1699,15 @@ function extractAndRenderBrowserActions(html, messageEl, isHistoryLoad, convId) 
   var container = messageEl.querySelector('.prose') || messageEl;
   var codeBlocks = container.querySelectorAll('code.language-browser-action, code.language-browser_action');
   if (!codeBlocks.length) return;
+  var extensionBlocks = container.querySelectorAll('code.language-browser-ext-action, code.language-browser_ext_action');
+  if (extensionBlocks.length) {
+    codeBlocks.forEach(function(code) {
+      var pre = code.parentElement;
+      if (pre) pre.remove();
+    });
+    dbg('browser-action: skipped internal actions because this response also targets the browser extension', 'info');
+    return;
+  }
   dbg('extractAndRenderBrowserActions: ' + codeBlocks.length + ' block(s)', 'info');
 
   var actions = [];

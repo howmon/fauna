@@ -279,6 +279,28 @@ describe('POST /api/chat lifecycle hooks', () => {
     expect(parseSse(res.chunks).some(event => event.type === 'content' && /indexed search/.test(event.content))).toBe(true);
   });
 
+  it('does not open the internal browser for a shared extension-tab turn', async () => {
+    llm.supportsTools = true;
+    llm.create
+      .mockResolvedValueOnce(mockToolCallStream('fauna_browser', { action: 'extract' }))
+      .mockResolvedValueOnce(mockStopStream('The request is routed through the shared browser extension.'));
+
+    const res = await app.invoke('POST', '/api/chat', {
+      body: {
+        messages: [{
+          role: 'user',
+          content: '[Resolved live browser tab context — already extracted from the user shared browser tab via the extension.] remove the sidebar',
+        }],
+        clientContext: 'test',
+      },
+    });
+
+    expect(llm.create).toHaveBeenCalledTimes(2);
+    const secondCallMessages = llm.create.mock.calls[1][0].messages;
+    expect(secondCallMessages.some(message => message.role === 'tool' && /USE_BROWSER_EXTENSION/.test(message.content))).toBe(true);
+    expect(parseSse(res.chunks).some(event => event.type === 'content' && /shared browser extension/.test(event.content))).toBe(true);
+  });
+
   it('removes tools from the final response after repeated narration trips the hard stop', async () => {
     llm.supportsTools = true;
     for (let index = 0; index < 5; index++) {
