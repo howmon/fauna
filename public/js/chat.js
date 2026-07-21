@@ -1360,9 +1360,12 @@ async function streamResponse(conv) {
   var _liveToolOutputPre = null;
   var _liveToolOutputEntryCount = 0;
   var _liveActivityThinkingTitle = null;
+  var _liveActivityThinkingPreview = null;
+  var _liveActivityThinkingStep = null;
   var _activityEntries = [];
   var _currentActivityEntry = null;
   var _reasoning = null; // { startedAt, durationSeconds } — compact thinking status only
+  var _reasoningSummary = '';
   var _reasoningTickTimer = null; // ticks the "Thinking… Ns" counter live until content/done
   if (typeof resetDesignArtifactState === 'function') resetDesignArtifactState();
 
@@ -1394,13 +1397,13 @@ async function streamResponse(conv) {
     if (!_liveToolOutputEl || !_liveToolOutputEl.isConnected) {
       _liveToolOutputEl = document.createElement('div');
       _liveToolOutputEl.className = 'shell-output-block live-tool-output-block tool-activity-panel';
-      _liveToolOutputEl.setAttribute('data-open', '0');
+      _liveToolOutputEl.setAttribute('data-open', '1');
       _liveToolOutputEl.setAttribute('data-completed', '0');
 
       var toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = 'tool-activity-toggle';
-      toggle.setAttribute('aria-expanded', 'false');
+      toggle.setAttribute('aria-expanded', 'true');
       toggle.addEventListener('click', function() {
         _setLiveToolOutputOpen(_liveToolOutputEl.getAttribute('data-open') !== '1');
       });
@@ -1435,16 +1438,16 @@ async function streamResponse(conv) {
     _liveToolOutputEntryCount++;
     _currentActivityEntry = { label: label || 'Tool output', output: '' };
     _activityEntries.push(_currentActivityEntry);
-    var entry = document.createElement('div');
-    entry.className = 'tool-activity-entry tool-activity-tool-entry';
-    var title = document.createElement('div');
-    title.className = 'tool-activity-entry-title';
-    title.textContent = label || 'Tool output';
-    _liveToolOutputPre = document.createElement('pre');
-    _liveToolOutputPre.className = 'shell-output-pre tool-activity-pre';
-    entry.appendChild(title);
-    entry.appendChild(_liveToolOutputPre);
-    _liveToolOutputBody.appendChild(entry);
+    Array.from(_liveToolOutputBody.querySelectorAll('.tool-activity-entry[data-open="1"]')).forEach(function(existing) {
+      existing.dataset.open = '0';
+      var existingToggle = existing.querySelector('.tool-activity-step-toggle');
+      if (existingToggle) existingToggle.setAttribute('aria-expanded', 'false');
+    });
+    var toolKind = typeof activityStepKind === 'function' ? activityStepKind(label, 'tool') : 'tool';
+    var step = createActivityStep(label || 'Tool output', toolKind, '', true);
+    _liveToolOutputPre = step.text;
+    _currentActivityEntry.step = step;
+    _liveToolOutputBody.appendChild(step.entry);
     _updateLiveToolOutputSummary(false);
     return _liveToolOutputPre;
   }
@@ -1591,25 +1594,20 @@ async function streamResponse(conv) {
     _ensureLiveToolOutputPanel();
     if (!_liveToolOutputBody) return;
     if (!_liveActivityThinkingTitle) {
-      var entry = document.createElement('div');
-      entry.className = 'tool-activity-entry tool-activity-thinking-entry';
-      _liveActivityThinkingTitle = document.createElement('div');
-      _liveActivityThinkingTitle.className = 'tool-activity-entry-title';
-      var preview = document.createElement('div');
-      preview.className = 'tool-activity-entry-preview';
-      preview.textContent = 'Model reasoning phase. Internal reasoning is not exposed.';
-      entry.appendChild(_liveActivityThinkingTitle);
-      entry.appendChild(preview);
-      _liveToolOutputBody.insertBefore(entry, _liveToolOutputBody.firstChild);
+      _liveActivityThinkingStep = createActivityStep('Thinking…', 'thinking', 'Waiting for a model-provided reasoning summary…', true);
+      _liveActivityThinkingTitle = _liveActivityThinkingStep.title;
+      _liveActivityThinkingPreview = _liveActivityThinkingStep.text;
+      _liveToolOutputBody.insertBefore(_liveActivityThinkingStep.entry, _liveToolOutputBody.firstChild);
     }
     var elapsed = durationSeconds != null ? durationSeconds
                 : (_reasoning && _reasoning.startedAt) ? Math.round((Date.now() - _reasoning.startedAt) / 1000) : null;
     var label = completed
       ? ('Thought for ' + (elapsed != null ? elapsed + 's' : '…'))
       : (elapsed != null ? 'Thinking… ' + elapsed + 's' : 'Thinking…');
-    _liveActivityThinkingTitle.innerHTML =
-      '<i class="ti ' + (completed ? 'ti-brain' : 'ti-loader-2') + '" ' + (completed ? '' : 'style="animation:spin .8s linear infinite"') + '></i>' +
-      '<span>' + label + '</span>';
+    _liveActivityThinkingTitle.textContent = label;
+    if (_liveActivityThinkingStep) updateActivityStepDetail(_liveActivityThinkingStep, _reasoningSummary || (completed
+      ? 'This model did not provide a displayable reasoning summary.'
+      : 'Waiting for a model-provided reasoning summary…'));
     _updateLiveToolOutputSummary(!!completed);
   }
 
@@ -1921,6 +1919,7 @@ async function streamResponse(conv) {
           if (evt.type === 'notice')    { dbg('notice: ' + (evt.message || ''), 'warn'); _showInlineNotice(evt.message || ''); }
           if (evt.type === 'reasoning') {
             if (!_reasoning) _reasoning = { startedAt: Date.now() };
+            if (evt.summary) _reasoningSummary += String(evt.summary);
             _updateReasoningPanel(null, false);
             _startReasoningTicker();
             scrollBottom();
@@ -1940,6 +1939,12 @@ async function streamResponse(conv) {
             if (!_streamArtifacts.some(function(a) { return a.path === _artPath; })) {
               _streamArtifacts.push({ path: _artPath, type: evt.artType || 'text' });
               dbg('artifact_created: ' + (evt.artType || 'text') + ' ' + _artPath, 'ok');
+            }
+            if ((evt.artType === 'image' || /\.(?:png|jpe?g|gif|webp)$/i.test(_artPath)) && _currentActivityEntry) {
+              if (!_currentActivityEntry.output.includes(_artPath)) {
+                _currentActivityEntry.output += (_currentActivityEntry.output ? '\n' : '') + _artPath;
+              }
+              if (_currentActivityEntry.step) updateActivityStepDetail(_currentActivityEntry.step, _currentActivityEntry.output);
             }
           }
           if (evt.type === 'plan_update') {
@@ -2171,6 +2176,7 @@ async function streamResponse(conv) {
               }
               if (_currentActivityEntry && _piece) {
                 _currentActivityEntry.output = (_currentActivityEntry.output + _piece).slice(0, 20000);
+                if (_currentActivityEntry.step) updateActivityStepDetail(_currentActivityEntry.step, _currentActivityEntry.output);
               }
               if (isActive()) scrollBottom();
             }
@@ -2262,7 +2268,10 @@ async function streamResponse(conv) {
     // Always save the AI message regardless of which conv is active
     var aiMsg = { role: 'assistant', content: buffer, timestamp: Date.now() };
     if (_currentAgentInfo) aiMsg.agentInfo = _currentAgentInfo;
-    if (_reasoning) aiMsg.reasoning = { durationSeconds: _reasoning.durationSeconds != null ? _reasoning.durationSeconds : (_reasoning.startedAt ? Math.round((Date.now() - _reasoning.startedAt) / 1000) : null) };
+    if (_reasoning) aiMsg.reasoning = {
+      durationSeconds: _reasoning.durationSeconds != null ? _reasoning.durationSeconds : (_reasoning.startedAt ? Math.round((Date.now() - _reasoning.startedAt) / 1000) : null),
+      summary: _reasoningSummary || undefined,
+    };
     if (_activityEntries.length) aiMsg.activity = _activityEntries.map(function(entry) {
       return { label: entry.label, output: entry.output || '' };
     });

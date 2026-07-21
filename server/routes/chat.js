@@ -1966,6 +1966,10 @@ export function registerChatRoute(app, {
               sawReasoning = true;
               send({ type: 'reasoning' });
             }
+            // Some OpenAI-compatible providers expose a displayable reasoning
+            // summary here. Forward that summary, but keep Claude's private
+            // extended-thinking blocks above as timing-only signals.
+            send({ type: 'reasoning', summary: String(delta.reasoning_content) });
           }
 
           // ── Tool call accumulation ─────────────────────────────────────────

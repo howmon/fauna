@@ -1023,6 +1023,114 @@ window.renderPlanPanel = function renderPlanPanel(msgEl, plan, isLive) {
   panel.dataset.live = isLive ? '1' : '0';
 };
 
+function _activityStepIcon(kind) {
+  if (kind === 'thinking') return 'ti-brain';
+  if (kind === 'shell') return 'ti-terminal-2';
+  if (kind === 'browser') return 'ti-world-search';
+  if (kind === 'file') return 'ti-file-code';
+  return 'ti-tool';
+}
+
+function _activityStepKind(label, fallback) {
+  var text = String(label || '').toLowerCase();
+  if (/shell|terminal|command|exec/.test(text)) return 'shell';
+  if (/browser|fetch|navigate|screenshot|page/.test(text)) return 'browser';
+  if (/file|write|read|patch|artifact/.test(text)) return 'file';
+  return fallback || 'tool';
+}
+
+function _activityImageSources(text) {
+  var value = String(text || '');
+  var matches = value.match(/(?:data:image\/(?:png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+|https?:\/\/[^\s<>'"]+?\.(?:png|jpe?g|gif|webp)(?:\?[^\s<>'"]*)?)/gi) || [];
+  var localPaths = value.match(/(?:~\/|\/)[^\n'"<>]+?\.(?:png|jpe?g|gif|webp)\b/gi) || [];
+  matches = matches.concat(localPaths.map(function(src) { return src.trim(); }));
+  return matches.filter(function(src, index) { return matches.indexOf(src) === index; }).slice(0, 4);
+}
+
+function _appendActivityStepImage(step, src) {
+  function append(imageSrc) {
+    if (!step.media || step.media.dataset.signature !== step.mediaSignature) return;
+    var img = document.createElement('img');
+    img.className = 'tool-activity-step-image';
+    img.src = imageSrc;
+    img.alt = 'Activity preview';
+    img.loading = 'lazy';
+    img.addEventListener('click', function(event) {
+      event.stopPropagation();
+      if (typeof openImageLightbox === 'function') openImageLightbox(imageSrc, 'Activity preview');
+    });
+    step.media.appendChild(img);
+  }
+  if (/^(?:data:image\/|https?:\/\/)/i.test(src)) {
+    append(src);
+    return;
+  }
+  fetch('/api/read-image?path=' + encodeURIComponent(src))
+    .then(function(response) { return response.ok ? response.json() : null; })
+    .then(function(data) {
+      if (data && data.base64) append('data:' + (data.mime || 'image/png') + ';base64,' + data.base64);
+    })
+    .catch(function() {});
+}
+
+function updateActivityStepDetail(step, text, emptyText) {
+  if (!step || !step.detail || !step.text) return;
+  var value = String(text || '');
+  var displayValue = value.replace(/data:image\/(?:png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+/gi, '[Image preview]');
+  step.text.textContent = displayValue || emptyText || '';
+  if (!step.media) return;
+  var sources = _activityImageSources(value);
+  var signature = sources.join('\n');
+  if (step.mediaSignature === signature) return;
+  step.mediaSignature = signature;
+  step.media.dataset.signature = signature;
+  step.media.innerHTML = '';
+  sources.forEach(function(src) { _appendActivityStepImage(step, src); });
+}
+
+function createActivityStep(label, kind, detailText, open) {
+  var entry = document.createElement('div');
+  entry.className = 'tool-activity-entry tool-activity-' + (kind || 'tool') + '-entry';
+  entry.dataset.open = open ? '1' : '0';
+
+  var toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'tool-activity-step-toggle';
+  toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  var marker = document.createElement('span');
+  marker.className = 'tool-activity-step-marker';
+  marker.innerHTML = '<i class="ti ' + _activityStepIcon(kind) + ' tool-activity-kind-icon"></i><i class="ti ti-chevron-right tool-activity-step-chevron"></i>';
+  var title = document.createElement('span');
+  title.className = 'tool-activity-entry-title';
+  title.textContent = label || 'Activity';
+  toggle.appendChild(marker);
+  toggle.appendChild(title);
+
+  var detail = document.createElement('div');
+  detail.className = 'tool-activity-step-detail';
+  var text = document.createElement(kind === 'thinking' ? 'div' : 'pre');
+  text.className = kind === 'thinking' ? 'tool-activity-entry-preview' : 'shell-output-pre tool-activity-pre';
+  var media = document.createElement('div');
+  media.className = 'tool-activity-step-media';
+  detail.appendChild(text);
+  detail.appendChild(media);
+  entry.appendChild(toggle);
+  entry.appendChild(detail);
+
+  toggle.addEventListener('click', function() {
+    var nextOpen = entry.dataset.open !== '1';
+    entry.dataset.open = nextOpen ? '1' : '0';
+    toggle.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+  });
+  var step = { entry: entry, toggle: toggle, title: title, detail: detail, text: text, media: media };
+  updateActivityStepDetail(step, detailText, 'No details available.');
+  return step;
+}
+
+window.createActivityStep = createActivityStep;
+window.updateActivityStepDetail = updateActivityStepDetail;
+window.activityStepKind = _activityStepKind;
+
 function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML, reasoning, widgets, plan, activity) {
   var el     = createMessageEl(role, agentInfo);
   var body   = el.querySelector('.msg-body');
@@ -1096,26 +1204,14 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
       '<div class="tool-activity-body"></div>';
     var activityBody = activityPanel.querySelector('.tool-activity-body');
     if (reasoning) {
-      var thinkingEntry = document.createElement('div');
-      thinkingEntry.className = 'tool-activity-entry tool-activity-thinking-entry';
       var reasoningLabel = reasoning.durationSeconds != null ? 'Thought for ' + reasoning.durationSeconds + 's' : 'Thought briefly';
-      thinkingEntry.innerHTML =
-        '<div class="tool-activity-entry-title"><i class="ti ti-brain"></i><span>' + escHtml(reasoningLabel) + '</span></div>' +
-        '<div class="tool-activity-entry-preview">Model reasoning phase. Internal reasoning is not exposed.</div>';
-      activityBody.appendChild(thinkingEntry);
+      var thinkingStep = createActivityStep(reasoningLabel, 'thinking', reasoning.summary || 'This model did not provide a displayable reasoning summary.', false);
+      activityBody.appendChild(thinkingStep.entry);
     }
     (activity || []).forEach(function(item) {
-      var toolEntry = document.createElement('div');
-      toolEntry.className = 'tool-activity-entry tool-activity-tool-entry';
-      var toolTitle = document.createElement('div');
-      toolTitle.className = 'tool-activity-entry-title';
-      toolTitle.textContent = item.label || 'Tool output';
-      var toolOutput = document.createElement('pre');
-      toolOutput.className = 'shell-output-pre tool-activity-pre';
-      toolOutput.textContent = item.output || 'Completed without preview output.';
-      toolEntry.appendChild(toolTitle);
-      toolEntry.appendChild(toolOutput);
-      activityBody.appendChild(toolEntry);
+      var itemLabel = item.label || 'Tool output';
+      var toolStep = createActivityStep(itemLabel, _activityStepKind(itemLabel, 'tool'), item.output || 'Completed without preview output.', false);
+      activityBody.appendChild(toolStep.entry);
     });
     activityPanel.querySelector('.tool-activity-toggle').addEventListener('click', function() {
       var open = activityPanel.dataset.open !== '1';
