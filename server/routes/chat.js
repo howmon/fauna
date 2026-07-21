@@ -1694,6 +1694,9 @@ export function registerChatRoute(app, {
       const MAX_INSPECTION_ONLY_NUDGES = 3;
       let validationRequiredNudges = 0;
       const MAX_VALIDATION_REQUIRED_NUDGES = 2;
+      let runtimeVerificationUsed = false;
+      let runtimeVerificationNudges = 0;
+      const MAX_RUNTIME_VERIFICATION_NUDGES = 2;
       // Hand-authored-circuit verifier state. If the model emits an <svg> for a
       // circuit request that lacks the engine provenance marker (data-fauna-*),
       // the SVG was invented rather than produced by fauna_render_circuit — we
@@ -1795,6 +1798,16 @@ export function registerChatRoute(app, {
         return true;
       };
       const _isValidationShellCommand = (command) => /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|lint|typecheck|check|build)\b|\b(?:tsc|eslint|vitest|jest|pytest|cargo\s+test|go\s+test|mvn\s+test|gradle\s+test)\b/i.test(String(command || ''));
+      const _isRuntimeVerificationTool = (toolName, args) => {
+        if (toolName === 'fauna_browser') {
+          return /^(?:extract|evaluate|eval|screenshot)$/i.test(String(args?.action || ''));
+        }
+        return /^browser_(?:snapshot|take_screenshot|screenshot|evaluate|eval|get_content|get_console|console_messages|verify)/i.test(String(toolName || ''));
+      };
+      const _claimsVerifiedBrowserOutcome = (text) => {
+        const value = String(text || '');
+        return /\b(?:hmr\s+should|should\s+now\s+(?:show|display|render|appear|be\s+gone|work)|(?:page|storybook|site|app|server)\s+is\s+(?:now\s+)?live|(?:catalog|catalogue|page|ui|sidebar|component(?:s)?)\s+(?:now\s+)?(?:shows?|renders?|displays?|contains?|is\s+gone|are\s+visible)|open\s+https?:\/\/[^\s]+[^.!?\n]{0,80}\b(?:confirm|verify|see)\b)/i.test(value);
+      };
       // Tools whose results must never be stale-shrunk — typically tools that
       // inject persistent instructions/rules that the model needs to keep
       // referring to throughout the turn.
@@ -2521,12 +2534,19 @@ export function registerChatRoute(app, {
               const activityResult = buildToolActivityResult(toolName, args, toolContent);
               if (activityResult.status === 'failed') toolFailed = true;
               if (!toolFailed) {
-                if (MUTATING_TOOLS.has(toolName)) mutatingToolUsed = true;
+                if (MUTATING_TOOLS.has(toolName)) {
+                  mutatingToolUsed = true;
+                  runtimeVerificationUsed = false;
+                }
                 if (VALIDATION_TOOLS.has(toolName)) validationToolUsed = true;
                 if (toolName === 'fauna_shell_exec') {
-                  if (!_isReadOnlyShellCommand(args?.command)) mutatingToolUsed = true;
+                  if (!_isReadOnlyShellCommand(args?.command)) {
+                    mutatingToolUsed = true;
+                    runtimeVerificationUsed = false;
+                  }
                   if (_isValidationShellCommand(args?.command)) validationToolUsed = true;
                 }
+                if (_isRuntimeVerificationTool(toolName, args)) runtimeVerificationUsed = true;
               }
               send({ type: 'tool_activity_result', callId: tc.id, name: toolName, ...activityResult });
               allMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolContent });
@@ -2791,6 +2811,12 @@ export function registerChatRoute(app, {
             console.log('[chat] write-intent mutation without validation detected — forcing focused validation (' + validationRequiredNudges + '/' + MAX_VALIDATION_REQUIRED_NUDGES + ')');
             allMessages.push({ role: 'assistant', content: assistantText || '' });
             allMessages.push({ role: 'user', content: '[System: You made a concrete change, but you have not validated it. Run the cheapest relevant validation NOW (for example `npm run build`, a focused test, lint/typecheck, or another project-specific check). Do not give the final summary until validation has run. If validation cannot run, respond with BLOCKED: and the exact reason.]' });
+            // keep continueLoop = true
+          } else if (_writeIntentTurn && mutatingToolUsed && _claimsVerifiedBrowserOutcome(assistantText) && !runtimeVerificationUsed && runtimeVerificationNudges < MAX_RUNTIME_VERIFICATION_NUDGES && !/^\s*(?:BLOCKED|NEEDS-INPUT)\s*:/i.test(assistantText || '')) {
+            runtimeVerificationNudges++;
+            console.log('[chat] visible-runtime claim without post-edit browser evidence — forcing verification (' + runtimeVerificationNudges + '/' + MAX_RUNTIME_VERIFICATION_NUDGES + ')');
+            allMessages.push({ role: 'assistant', content: assistantText || '' });
+            allMessages.push({ role: 'user', content: '[System: You claimed a visible browser/UI outcome without any successful browser inspection after the last mutation. A build, running process, open port, stale dev server, or HMR assumption does NOT prove the rendered behavior. Inspect the actual post-edit page now using a browser snapshot/DOM evaluation/screenshot and check relevant console output. Verify the specific DOM state or measured count the user asked about. If browser verification is unavailable, report the implementation as UNVERIFIED with the precise reason; do not say it "should now" work and do not ask the user to confirm it for you.]' });
             // keep continueLoop = true
           // If tools were called but no text was produced, prompt a summary so the user sees something
           } else if (toolCallCount > 0 && !assistantText.trim() && continueCount < MAX_CONTINUES) {

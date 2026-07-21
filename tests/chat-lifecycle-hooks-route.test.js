@@ -191,6 +191,23 @@ describe('POST /api/chat lifecycle hooks', () => {
     expect(parseSse(res.chunks).some(event => event.type === 'content' && event.content === 'accepted')).toBe(true);
   });
 
+  it('injects ownership, canonical-source, runtime, and measured-count rules', async () => {
+    mockTextStream('acknowledged');
+
+    await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'fix the catalog' }], noTools: true, clientContext: 'test' },
+    });
+
+    const systemText = llm.create.mock.calls[0][0].messages
+      .filter(message => message.role === 'system')
+      .map(message => message.content)
+      .join('\n');
+    expect(systemText).toContain('code path the running product actually consumes');
+    expect(systemText).toContain('one canonical implementation path');
+    expect(systemText).toContain('A passing build proves compilation, not that a UI changed');
+    expect(systemText).toContain('Report measured quantities precisely');
+  });
+
   it('blocks delegated subagent runs when SubagentStart denies them', async () => {
     write(path.join(workspaceRoot, '.github', 'hooks', 'policy.json'), JSON.stringify({
       hooks: { SubagentStart: [{ type: 'command', command: `node -e "process.stdout.write(JSON.stringify({continue:false,stopReason:'delegate blocked'}))"` }] },
@@ -415,5 +432,100 @@ describe('POST /api/chat lifecycle hooks', () => {
     expect(llm.create.mock.calls[2][0].messages.some(message =>
       message.role === 'user' && /made a concrete change, but you have not validated it/.test(message.content)
     )).toBe(true);
+  });
+
+  it('rejects visible UI success claims without post-edit browser evidence', async () => {
+    llm.supportsTools = true;
+    write(path.join(workspaceRoot, 'package.json'), JSON.stringify({ scripts: { build: 'node --check catalog.js' } }));
+    write(path.join(workspaceRoot, 'catalog.js'), 'export const count = 9;\n');
+    llm.create
+      .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: "printf 'export const count = 52;\\n' > catalog.js", cwd: workspaceRoot }))
+      .mockResolvedValueOnce(mockStopStream('The catalog update is implemented.'))
+      .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: 'npm run build', cwd: workspaceRoot }))
+      .mockResolvedValueOnce(mockStopStream('Storybook is live. HMR should now show 52 components. Open http://127.0.0.1:6006 to confirm.'))
+      .mockResolvedValueOnce(mockStopStream('BLOCKED: browser runtime verification is unavailable in this test.'));
+
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'fix the incomplete Storybook component catalog' }], clientContext: 'test' },
+    });
+
+    expect(llm.create).toHaveBeenCalledTimes(5);
+    const finalCallMessages = llm.create.mock.calls[4][0].messages;
+    expect(finalCallMessages.some(message =>
+      message.role === 'user' && /visible browser\/UI outcome/.test(message.content)
+    )).toBe(true);
+    expect(parseSse(res.chunks).some(event =>
+      event.type === 'content' && /BLOCKED: browser runtime verification/.test(event.content)
+    )).toBe(true);
+  });
+
+  it('does not count a failed browser inspection as runtime evidence', async () => {
+    llm.supportsTools = true;
+    write(path.join(workspaceRoot, 'package.json'), JSON.stringify({ scripts: { build: 'node --check catalog.js' } }));
+    write(path.join(workspaceRoot, 'catalog.js'), 'export const count = 9;\n');
+    const customMcp = {
+      getTools: vi.fn(async () => [{
+        type: 'function',
+        function: { name: 'browser_snapshot', description: 'Inspect the browser', parameters: { type: 'object', properties: {} } },
+      }]),
+      getStatus: vi.fn(async () => []),
+      callTool: vi.fn(async () => ({ ok: false, error: 'No matching browser tab' })),
+    };
+    app = makeFakeApp();
+    registerChatRoute(app, { ...makeDeps(workspaceRoot), customMcp });
+    llm.create
+      .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: "printf 'export const count = 52;\\n' > catalog.js", cwd: workspaceRoot }))
+      .mockResolvedValueOnce(mockStopStream('The catalog update is implemented.'))
+      .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: 'npm run build', cwd: workspaceRoot }))
+      .mockResolvedValueOnce(mockToolCallStream('browser_snapshot', {}))
+      .mockResolvedValueOnce(mockStopStream('The catalog now shows 52 components.'))
+      .mockResolvedValueOnce(mockStopStream('BLOCKED: the browser tab could not be inspected.'));
+
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'fix and verify the Storybook UI catalog in the browser' }], clientContext: 'test' },
+    });
+
+    expect(llm.create).toHaveBeenCalledTimes(6);
+    expect(customMcp.callTool).toHaveBeenCalledWith('browser_snapshot', {});
+    expect(parseSse(res.chunks).some(event =>
+      event.type === 'tool_activity_result' && event.name === 'browser_snapshot' && event.status === 'failed'
+    )).toBe(true);
+    expect(llm.create.mock.calls[5][0].messages.some(message =>
+      message.role === 'user' && /visible browser\/UI outcome/.test(message.content)
+    )).toBe(true);
+  });
+
+  it('accepts a visible UI claim after successful post-edit browser evidence', async () => {
+    llm.supportsTools = true;
+    write(path.join(workspaceRoot, 'package.json'), JSON.stringify({ scripts: { build: 'node --check catalog.js' } }));
+    write(path.join(workspaceRoot, 'catalog.js'), 'export const count = 9;\n');
+    const customMcp = {
+      getTools: vi.fn(async () => [{
+        type: 'function',
+        function: { name: 'browser_snapshot', description: 'Inspect the browser', parameters: { type: 'object', properties: {} } },
+      }]),
+      getStatus: vi.fn(async () => []),
+      callTool: vi.fn(async () => ({ ok: true, text: 'Catalog heading; 52 unique component cards' })),
+    };
+    app = makeFakeApp();
+    registerChatRoute(app, { ...makeDeps(workspaceRoot), customMcp });
+    llm.create
+      .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: "printf 'export const count = 52;\\n' > catalog.js", cwd: workspaceRoot }))
+      .mockResolvedValueOnce(mockStopStream('The catalog update is implemented.'))
+      .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: 'npm run build', cwd: workspaceRoot }))
+      .mockResolvedValueOnce(mockToolCallStream('browser_snapshot', {}))
+      .mockResolvedValueOnce(mockStopStream('The catalog now shows 52 unique component cards.'));
+
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'fix and verify the Storybook UI catalog in the browser' }], clientContext: 'test' },
+    });
+
+    expect(llm.create).toHaveBeenCalledTimes(5);
+    expect(parseSse(res.chunks).some(event =>
+      event.type === 'content' && /52 unique component cards/.test(event.content)
+    )).toBe(true);
+    expect(llm.create.mock.calls.some(call => call[0].messages.some(message =>
+      message.role === 'user' && /visible browser\/UI outcome/.test(message.content)
+    ))).toBe(false);
   });
 });
