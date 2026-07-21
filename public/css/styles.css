@@ -9160,7 +9160,7 @@ body.win-platform .acv-header {
 .proj-folder-header:focus-within .proj-folder-actions { opacity: 1; pointer-events: auto; }
 .proj-folder-body {
   display: flex; flex-direction: column; gap: 2px;
-  margin: 2px 0 4px 12px; padding-left: 8px;
+  margin: 2px 0 4px 16px; padding-left: 8px;
   border-left: 1px solid var(--fau-border);
 }
 .proj-folder-body .conv-item { font-size: 11.5px; padding: 5px 8px; }
