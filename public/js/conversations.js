@@ -789,7 +789,7 @@ function loadConversation(id, opts) {
               note.innerHTML = '<div class="msg-body" style="display:flex;align-items:center;gap:5px;font-size:11px">' + sysNote + '</div>';
               archContainer.insertBefore(note, archToggle);
             } else {
-              appendMessageDOM(m.role, m.content, m.attachments, false, m.agentInfo || null, m._isHTML || false, m.reasoning || null, m.widgets || null, m.plan || null);
+              appendMessageDOM(m.role, m.content, m.attachments, false, m.agentInfo || null, m._isHTML || false, m.reasoning || null, m.widgets || null, m.plan || null, m.activity || null);
               // Move the freshly appended element from convInner into archContainer.
               if (convInnerEl.lastChild && convInnerEl.lastChild !== archContainer) {
                 archContainer.insertBefore(convInnerEl.lastChild, archToggle);
@@ -837,7 +837,7 @@ function loadConversation(id, opts) {
         convInner.appendChild(autoNote);
         return;
       }
-      appendMessageDOM(m.role, m.content, m.attachments, false, m.agentInfo || null, m._isHTML || false, m.reasoning || null, m.widgets || null, m.plan || null);
+      appendMessageDOM(m.role, m.content, m.attachments, false, m.agentInfo || null, m._isHTML || false, m.reasoning || null, m.widgets || null, m.plan || null, m.activity || null);
     });
   }
 
@@ -1278,6 +1278,7 @@ function _buildConversationExport(conv) {
     if (m.timestamp) entry.timestamp = m.timestamp;
     if (m.agentInfo) entry.agentInfo = m.agentInfo;
     if (m.reasoning) entry.reasoning = m.reasoning;
+    if (m.activity) entry.activity = m.activity;
     if (m.widgets) entry.widgets = m.widgets;
     if (m.plan) entry.plan = m.plan;
     if (m.attachments) entry.attachments = m.attachments;

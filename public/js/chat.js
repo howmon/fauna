@@ -1359,6 +1359,9 @@ async function streamResponse(conv) {
   var _liveToolOutputMeta = null;
   var _liveToolOutputPre = null;
   var _liveToolOutputEntryCount = 0;
+  var _liveActivityThinkingTitle = null;
+  var _activityEntries = [];
+  var _currentActivityEntry = null;
   var _reasoning = null; // { startedAt, durationSeconds } — compact thinking status only
   var _reasoningTickTimer = null; // ticks the "Thinking… Ns" counter live until content/done
   if (typeof resetDesignArtifactState === 'function') resetDesignArtifactState();
@@ -1366,14 +1369,22 @@ async function streamResponse(conv) {
   function _setLiveToolOutputOpen(open) {
     if (!_liveToolOutputEl) return;
     _liveToolOutputEl.setAttribute('data-open', open ? '1' : '0');
+    var toggle = _liveToolOutputEl.querySelector('.tool-activity-toggle');
+    if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
 
   function _updateLiveToolOutputSummary(completed) {
     if (!_liveToolOutputEl) return;
-    var count = _liveToolOutputEntryCount || 1;
-    if (_liveToolOutputLabel) _liveToolOutputLabel.textContent = completed ? 'Tool activity complete' : 'Tool activity';
+    var count = _liveToolOutputEntryCount;
+    if (_liveToolOutputLabel) _liveToolOutputLabel.textContent = 'Activity';
     if (_liveToolOutputMeta) {
-      _liveToolOutputMeta.textContent = count + ' tool' + (count === 1 ? '' : 's') + (completed ? ' · collapsed' : ' · running');
+      var steps = Math.max(1, count + (_reasoning ? 1 : 0));
+      _liveToolOutputMeta.textContent = steps + ' step' + (steps === 1 ? '' : 's') + (completed ? ' · complete' : ' · running');
+    }
+    if (completed && _liveToolOutputBody) {
+      Array.from(_liveToolOutputBody.querySelectorAll('.tool-activity-pre')).forEach(function(pre) {
+        if (!pre.textContent) pre.textContent = 'Completed without preview output.';
+      });
     }
     _liveToolOutputEl.setAttribute('data-completed', completed ? '1' : '0');
   }
@@ -1389,6 +1400,7 @@ async function streamResponse(conv) {
       var toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = 'tool-activity-toggle';
+      toggle.setAttribute('aria-expanded', 'false');
       toggle.addEventListener('click', function() {
         _setLiveToolOutputOpen(_liveToolOutputEl.getAttribute('data-open') !== '1');
       });
@@ -1398,7 +1410,7 @@ async function streamResponse(conv) {
       icon.textContent = '›';
       _liveToolOutputLabel = document.createElement('span');
       _liveToolOutputLabel.className = 'tool-activity-label';
-      _liveToolOutputLabel.textContent = 'Tool activity';
+      _liveToolOutputLabel.textContent = 'Activity';
       _liveToolOutputMeta = document.createElement('span');
       _liveToolOutputMeta.className = 'tool-activity-meta';
       _liveToolOutputMeta.textContent = 'running';
@@ -1410,7 +1422,9 @@ async function streamResponse(conv) {
       _liveToolOutputBody.className = 'tool-activity-body';
       _liveToolOutputEl.appendChild(toggle);
       _liveToolOutputEl.appendChild(_liveToolOutputBody);
-      if (msgEl) msgEl.appendChild(_liveToolOutputEl);
+      if (bodyEl && bodyEl.querySelector('.streaming-status') && !buffer) bodyEl.innerHTML = '';
+      if (msgEl && bodyEl) msgEl.insertBefore(_liveToolOutputEl, bodyEl);
+      else if (msgEl) msgEl.appendChild(_liveToolOutputEl);
     }
     return _liveToolOutputEl;
   }
@@ -1419,8 +1433,10 @@ async function streamResponse(conv) {
     _ensureLiveToolOutputPanel();
     if (!_liveToolOutputBody) return null;
     _liveToolOutputEntryCount++;
+    _currentActivityEntry = { label: label || 'Tool output', output: '' };
+    _activityEntries.push(_currentActivityEntry);
     var entry = document.createElement('div');
-    entry.className = 'tool-activity-entry';
+    entry.className = 'tool-activity-entry tool-activity-tool-entry';
     var title = document.createElement('div');
     title.className = 'tool-activity-entry-title';
     title.textContent = label || 'Tool output';
@@ -1571,30 +1587,30 @@ async function streamResponse(conv) {
   function _updateReasoningPanel(durationSeconds, completed) {
     _ensureLiveMessageAttached();
     if (!isActive() || !msgEl) return;
-    var panel = msgEl.querySelector('.reasoning-panel');
-    if (completed && !_reasoning) {
-      if (panel) panel.remove();
-      return;
-    }
-    if (!panel) {
-      panel = document.createElement('div');
-      panel.className = 'reasoning-panel';
-      msgEl.insertBefore(panel, msgEl.querySelector('.msg-body'));
+    if (completed && !_reasoning) return;
+    _ensureLiveToolOutputPanel();
+    if (!_liveToolOutputBody) return;
+    if (!_liveActivityThinkingTitle) {
+      var entry = document.createElement('div');
+      entry.className = 'tool-activity-entry tool-activity-thinking-entry';
+      _liveActivityThinkingTitle = document.createElement('div');
+      _liveActivityThinkingTitle.className = 'tool-activity-entry-title';
+      var preview = document.createElement('div');
+      preview.className = 'tool-activity-entry-preview';
+      preview.textContent = 'Model reasoning phase. Internal reasoning is not exposed.';
+      entry.appendChild(_liveActivityThinkingTitle);
+      entry.appendChild(preview);
+      _liveToolOutputBody.insertBefore(entry, _liveToolOutputBody.firstChild);
     }
     var elapsed = durationSeconds != null ? durationSeconds
                 : (_reasoning && _reasoning.startedAt) ? Math.round((Date.now() - _reasoning.startedAt) / 1000) : null;
     var label = completed
       ? ('Thought for ' + (elapsed != null ? elapsed + 's' : '…'))
       : (elapsed != null ? 'Thinking… ' + elapsed + 's' : 'Thinking…');
-    var open = false;
-    panel.dataset.completed = completed ? '1' : '';
-    panel.dataset.open = panel.dataset.open === '0' ? '0' : (open ? '1' : '0');
-    var isOpen = panel.dataset.open !== '0';
-    panel.innerHTML =
-      '<button class="reasoning-toggle" type="button">' +
-        '<i class="ti ' + (completed ? 'ti-brain' : 'ti-loader-2') + '" ' + (completed ? '' : 'style="animation:spin .8s linear infinite"') + '></i>' +
-        '<span class="reasoning-label">' + label + '</span>' +
-      '</button>';
+    _liveActivityThinkingTitle.innerHTML =
+      '<i class="ti ' + (completed ? 'ti-brain' : 'ti-loader-2') + '" ' + (completed ? '' : 'style="animation:spin .8s linear infinite"') + '></i>' +
+      '<span>' + label + '</span>';
+    _updateLiveToolOutputSummary(!!completed);
   }
 
   // Live-tick the "Thinking… Ns" counter once a second so a long pre-content
@@ -1915,7 +1931,6 @@ async function streamResponse(conv) {
             // Ephemeral tool status — shown as shimmer stack, not baked into buffer
             var toolLabel = evt.label || evt.name || 'tool';
             _beginLiveToolOutput(toolLabel);
-            _addToolStatus(toolLabel);
             if (isActive()) scrollBottom();
           }
           if (evt.type === 'artifact_created' && evt.path) {
@@ -2154,6 +2169,9 @@ async function streamResponse(conv) {
                 outPre.textContent += _piece;
                 outPre.scrollTop = outPre.scrollHeight;
               }
+              if (_currentActivityEntry && _piece) {
+                _currentActivityEntry.output = (_currentActivityEntry.output + _piece).slice(0, 20000);
+              }
               if (isActive()) scrollBottom();
             }
           }
@@ -2245,6 +2263,9 @@ async function streamResponse(conv) {
     var aiMsg = { role: 'assistant', content: buffer, timestamp: Date.now() };
     if (_currentAgentInfo) aiMsg.agentInfo = _currentAgentInfo;
     if (_reasoning) aiMsg.reasoning = { durationSeconds: _reasoning.durationSeconds != null ? _reasoning.durationSeconds : (_reasoning.startedAt ? Math.round((Date.now() - _reasoning.startedAt) / 1000) : null) };
+    if (_activityEntries.length) aiMsg.activity = _activityEntries.map(function(entry) {
+      return { label: entry.label, output: entry.output || '' };
+    });
     if (_streamWidgets.length) aiMsg.widgets = _streamWidgets;
     if (_currentPlan && _currentPlan.items && _currentPlan.items.length) aiMsg.plan = _currentPlan;
     conv.messages.push(aiMsg);

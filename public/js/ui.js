@@ -1023,7 +1023,7 @@ window.renderPlanPanel = function renderPlanPanel(msgEl, plan, isLive) {
   panel.dataset.live = isLive ? '1' : '0';
 };
 
-function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML, reasoning, widgets, plan) {
+function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML, reasoning, widgets, plan, activity) {
   var el     = createMessageEl(role, agentInfo);
   var body   = el.querySelector('.msg-body');
   if (!animate) el.style.animation = 'none';
@@ -1080,19 +1080,49 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
     if (typeof ensureAssistantBubbleNotEmpty === 'function') ensureAssistantBubbleNotEmpty(el);
   }
 
-  // Inject committed compact thinking status for historical AI messages.
-  if (role === 'assistant' && reasoning) {
-    var rPanel = document.createElement('div');
-    rPanel.className = 'reasoning-panel';
-    rPanel.dataset.completed = '1';
-    rPanel.dataset.open = '0';
-    var rLabel = reasoning.durationSeconds != null ? 'Thought for ' + reasoning.durationSeconds + 's' : 'Thought briefly';
-    rPanel.innerHTML =
-      '<button class="reasoning-toggle" type="button">' +
-        '<i class="ti ti-brain"></i>' +
-        '<span class="reasoning-label">' + escHtml(rLabel) + '</span>' +
-      '</button>';
-    el.insertBefore(rPanel, body);
+  // Rehydrate the same ordered activity timeline used during live streaming.
+  if (role === 'assistant' && (reasoning || (activity && activity.length))) {
+    var activityPanel = document.createElement('div');
+    activityPanel.className = 'shell-output-block tool-activity-panel';
+    activityPanel.dataset.open = '0';
+    activityPanel.dataset.completed = '1';
+    var activityCount = (reasoning ? 1 : 0) + (activity ? activity.length : 0);
+    activityPanel.innerHTML =
+      '<button class="tool-activity-toggle" type="button" aria-expanded="false">' +
+        '<span class="tool-activity-icon">›</span>' +
+        '<span class="tool-activity-label">Activity</span>' +
+        '<span class="tool-activity-meta">' + activityCount + ' step' + (activityCount === 1 ? '' : 's') + ' · complete</span>' +
+      '</button>' +
+      '<div class="tool-activity-body"></div>';
+    var activityBody = activityPanel.querySelector('.tool-activity-body');
+    if (reasoning) {
+      var thinkingEntry = document.createElement('div');
+      thinkingEntry.className = 'tool-activity-entry tool-activity-thinking-entry';
+      var reasoningLabel = reasoning.durationSeconds != null ? 'Thought for ' + reasoning.durationSeconds + 's' : 'Thought briefly';
+      thinkingEntry.innerHTML =
+        '<div class="tool-activity-entry-title"><i class="ti ti-brain"></i><span>' + escHtml(reasoningLabel) + '</span></div>' +
+        '<div class="tool-activity-entry-preview">Model reasoning phase. Internal reasoning is not exposed.</div>';
+      activityBody.appendChild(thinkingEntry);
+    }
+    (activity || []).forEach(function(item) {
+      var toolEntry = document.createElement('div');
+      toolEntry.className = 'tool-activity-entry tool-activity-tool-entry';
+      var toolTitle = document.createElement('div');
+      toolTitle.className = 'tool-activity-entry-title';
+      toolTitle.textContent = item.label || 'Tool output';
+      var toolOutput = document.createElement('pre');
+      toolOutput.className = 'shell-output-pre tool-activity-pre';
+      toolOutput.textContent = item.output || 'Completed without preview output.';
+      toolEntry.appendChild(toolTitle);
+      toolEntry.appendChild(toolOutput);
+      activityBody.appendChild(toolEntry);
+    });
+    activityPanel.querySelector('.tool-activity-toggle').addEventListener('click', function() {
+      var open = activityPanel.dataset.open !== '1';
+      activityPanel.dataset.open = open ? '1' : '0';
+      this.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    el.insertBefore(activityPanel, body);
   }
 
   getConvInner(state.currentId).appendChild(el);
