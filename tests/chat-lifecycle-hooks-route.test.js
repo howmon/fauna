@@ -73,6 +73,8 @@ function makeDeps(workspaceRoot) {
     userHome: workspaceRoot,
     callPlaywrightMcpTool: vi.fn(),
     setActiveModel: vi.fn(),
+    shellBin: '/bin/zsh',
+    augmentedPath: process.env.PATH,
   };
 }
 
@@ -239,6 +241,28 @@ describe('POST /api/chat lifecycle hooks', () => {
     expect(events.some(event => event.type === 'content' && /BLOCKED:/.test(event.content))).toBe(true);
   });
 
+  it('treats a remove request as implementation instead of accepting a proposal', async () => {
+    llm.supportsTools = true;
+    write(path.join(workspaceRoot, 'sidebar.css'), '.sidebar { display: block; }\n');
+    llm.create
+      .mockResolvedValueOnce(mockToolCallStream('fauna_read_file', { path: path.join(workspaceRoot, 'sidebar.css') }))
+      .mockResolvedValueOnce(mockStopStream('Want me to hide the sidebar now?'))
+      .mockResolvedValueOnce(mockStopStream('The proper next step is to add an override.'))
+      .mockResolvedValueOnce(mockStopStream('BLOCKED: no safe edit was possible.'));
+
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'remove the sidebar that is taking up space' }], clientContext: 'test' },
+    });
+
+    expect(llm.create.mock.calls.length, JSON.stringify(parseSse(res.chunks))).toBe(4);
+    expect(llm.create.mock.calls[2][0].messages.some(message =>
+      message.role === 'user' && /Make the smallest safe edit NOW/.test(message.content)
+    )).toBe(true);
+    expect(llm.create.mock.calls[3][0].messages.filter(message =>
+      message.role === 'user' && /Make the smallest safe edit NOW/.test(message.content)
+    )).toHaveLength(2);
+  });
+
   it('separates narrated tool rounds from the next model response', async () => {
     llm.supportsTools = true;
     write(path.join(workspaceRoot, 'target.js'), 'export const value = 1;\n');
@@ -283,7 +307,8 @@ describe('POST /api/chat lifecycle hooks', () => {
     llm.supportsTools = true;
     llm.create
       .mockResolvedValueOnce(mockToolCallStream('fauna_browser', { action: 'extract' }))
-      .mockResolvedValueOnce(mockStopStream('The request is routed through the shared browser extension.'));
+      .mockResolvedValueOnce(mockStopStream('The request is routed through the shared browser extension.'))
+      .mockResolvedValueOnce(mockStopStream('BLOCKED: the shared extension action was unavailable in this test.'));
 
     const res = await app.invoke('POST', '/api/chat', {
       body: {
@@ -295,10 +320,12 @@ describe('POST /api/chat lifecycle hooks', () => {
       },
     });
 
-    expect(llm.create).toHaveBeenCalledTimes(2);
+    expect(llm.create).toHaveBeenCalledTimes(3);
     const secondCallMessages = llm.create.mock.calls[1][0].messages;
     expect(secondCallMessages.some(message => message.role === 'tool' && /USE_BROWSER_EXTENSION/.test(message.content))).toBe(true);
-    expect(parseSse(res.chunks).some(event => event.type === 'content' && /shared browser extension/.test(event.content))).toBe(true);
+    expect(llm.create.mock.calls[2][0].messages.some(message =>
+      message.role === 'user' && /Make the smallest safe edit NOW/.test(message.content)
+    )).toBe(true);
   });
 
   it('removes tools from the final response after repeated narration trips the hard stop', async () => {
@@ -323,8 +350,10 @@ describe('POST /api/chat lifecycle hooks', () => {
 
   it('continues implementation requests after mutation without validation', async () => {
     llm.supportsTools = true;
+    write(path.join(workspaceRoot, 'package.json'), JSON.stringify({ scripts: { build: 'node --check changed.js' } }));
+    write(path.join(workspaceRoot, 'changed.js'), 'const changed = true;\n');
     llm.create
-      .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: 'touch changed.txt', cwd: workspaceRoot }))
+      .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: 'touch changed.js', cwd: workspaceRoot }))
       .mockResolvedValueOnce(mockStopStream('Implemented the change.'))
       .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: 'npm run build', cwd: workspaceRoot }))
       .mockResolvedValueOnce(mockStopStream('Done after validation.'));
@@ -339,5 +368,52 @@ describe('POST /api/chat lifecycle hooks', () => {
     const events = parseSse(res.chunks);
     expect(events.filter(event => event.type === 'tool_call' && event.name === 'fauna_shell_exec').length).toBe(2);
     expect(events.some(event => event.type === 'content' && event.content === 'Done after validation.')).toBe(true);
+  });
+
+  it('does not count a failed mutation command as an actual fix', async () => {
+    llm.supportsTools = true;
+    llm.create
+      .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: 'touch /missing-fauna-parent/changed.txt', cwd: workspaceRoot }))
+      .mockResolvedValueOnce(mockStopStream('Implemented the change.'))
+      .mockResolvedValueOnce(mockStopStream('BLOCKED: the mutation command failed.'));
+
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'fix the sidebar' }], clientContext: 'test' },
+    });
+
+    expect(llm.create).toHaveBeenCalledTimes(3);
+    const thirdCallMessages = llm.create.mock.calls[2][0].messages;
+    expect(thirdCallMessages.some(message =>
+      message.role === 'user' && /Make the smallest safe edit NOW/.test(message.content)
+    )).toBe(true);
+    expect(thirdCallMessages.some(message =>
+      message.role === 'user' && /you have not validated it/.test(message.content)
+    )).toBe(false);
+    expect(parseSse(res.chunks).some(event =>
+      event.type === 'tool_activity_result' && event.name === 'fauna_shell_exec' && event.status === 'failed'
+    )).toBe(true);
+  });
+
+  it('requires validation after a heredoc script may have rewritten files', async () => {
+    llm.supportsTools = true;
+    write(path.join(workspaceRoot, 'package.json'), JSON.stringify({ scripts: { build: 'node --check changed.js' } }));
+    write(path.join(workspaceRoot, 'changed.js'), 'const changed = true;\n');
+    llm.create
+      .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', {
+        command: "python3 - <<'EOF'\nprint('rewrite')\nEOF",
+        cwd: workspaceRoot,
+      }))
+      .mockResolvedValueOnce(mockStopStream('The patch landed.'))
+      .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: 'npm run build', cwd: workspaceRoot }))
+      .mockResolvedValueOnce(mockStopStream('Done after validation.'));
+
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'apply the proper fix' }], clientContext: 'test' },
+    });
+
+    expect(llm.create.mock.calls.length, JSON.stringify(parseSse(res.chunks))).toBe(4);
+    expect(llm.create.mock.calls[2][0].messages.some(message =>
+      message.role === 'user' && /made a concrete change, but you have not validated it/.test(message.content)
+    )).toBe(true);
   });
 });

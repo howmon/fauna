@@ -255,6 +255,13 @@ export function buildToolActivityResult(toolName, args = {}, result) {
   if (toolName === 'fauna_shell_exec' && parsed && parsed.exitCode != null) {
     return { status: Number(parsed.exitCode) === 0 ? 'completed' : 'failed', summary: `Exited with code ${parsed.exitCode}` };
   }
+  if (toolName === 'fauna_shell_exec') {
+    const formattedExit = String(result || '').match(/^exit=(-?\d+)\b/);
+    if (formattedExit) {
+      const exitCode = Number(formattedExit[1]);
+      return { status: exitCode === 0 ? 'completed' : 'failed', summary: `Exited with code ${exitCode}` };
+    }
+  }
   return { status: 'completed', summary: '' };
 }
 
@@ -1684,9 +1691,9 @@ export function registerChatRoute(app, {
       let mutatingToolUsed = false;
       let validationToolUsed = false;
       let inspectionOnlyNudges = 0;
-      const MAX_INSPECTION_ONLY_NUDGES = autonomousMode ? 3 : 1;
+      const MAX_INSPECTION_ONLY_NUDGES = 3;
       let validationRequiredNudges = 0;
-      const MAX_VALIDATION_REQUIRED_NUDGES = autonomousMode ? 2 : 1;
+      const MAX_VALIDATION_REQUIRED_NUDGES = 2;
       // Hand-authored-circuit verifier state. If the model emits an <svg> for a
       // circuit request that lacks the engine provenance marker (data-fauna-*),
       // the SVG was invented rather than produced by fauna_render_circuit — we
@@ -1765,7 +1772,7 @@ export function registerChatRoute(app, {
         return '';
       })();
       const _hasSharedBrowserTabContext = /\[(?:Resolved live browser tab context|Same browser tab\(s\) as the previous turn|Browser-extension tab attached)/i.test(_lastUserQuery);
-      const _writeIntentTurn = /\b(?:fix|fixes|fixed|implement|resolve|repair|patch|update|change|modify|edit|write|create|add|replace|refactor|migrate|install|build\s+out|make\s+(?:all|the|this)|proceed)\b/i.test(_lastUserQuery || '');
+      const _writeIntentTurn = /\b(?:fix|fixes|fixed|implement|resolve|repair|patch|update|change|modify|edit|write|create|add|remove|delete|hide|replace|refactor|migrate|install|build\s+out|make\s+(?:all|the|this)|proceed)\b/i.test(_lastUserQuery || '');
       const MUTATING_TOOLS = new Set([
         'fauna_write_file', 'fauna_write_files', 'fauna_apply_patch',
         'fauna_replace_string', 'fauna_write_offloaded',
@@ -1782,6 +1789,7 @@ export function registerChatRoute(app, {
         if (/\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|lint|typecheck|check|build)\b/i.test(text)) return true;
         if (/\b(?:tsc|eslint|vitest|jest|pytest|cargo\s+test|go\s+test|mvn\s+test|gradle\s+test)\b/i.test(text)) return true;
         if (/\b(?:npm|pnpm|yarn|bun)\s+(?:install|add|remove|update|upgrade|ci)\b/i.test(text)) return false;
+        if (/\b(?:python\d*|node)\s+-?\s*<</i.test(text)) return false;
         if (/\b(?:touch|mkdir|rm|rmdir|mv|cp|install|tee|sed\s+-i|perl\s+-pi|python\d*\s+-c|node\s+-e|prisma\s+(?:migrate|db\s+push|generate|db\s+seed))\b/i.test(text)) return false;
         if (/(?:^|\s)(?:>|>>|1>|2>|&>)\s*[^\s]+/.test(text)) return false;
         return true;
@@ -2356,13 +2364,6 @@ export function registerChatRoute(app, {
                 elapsedSeconds,
               });
             }, 1000);
-            if (MUTATING_TOOLS.has(toolName)) mutatingToolUsed = true;
-            if (VALIDATION_TOOLS.has(toolName)) validationToolUsed = true;
-            if (toolName === 'fauna_shell_exec') {
-              if (!_isReadOnlyShellCommand(args?.command)) mutatingToolUsed = true;
-              if (_isValidationShellCommand(args?.command)) validationToolUsed = true;
-            }
-
             try {
               let result;
 
@@ -2519,6 +2520,14 @@ export function registerChatRoute(app, {
               }
               const activityResult = buildToolActivityResult(toolName, args, toolContent);
               if (activityResult.status === 'failed') toolFailed = true;
+              if (!toolFailed) {
+                if (MUTATING_TOOLS.has(toolName)) mutatingToolUsed = true;
+                if (VALIDATION_TOOLS.has(toolName)) validationToolUsed = true;
+                if (toolName === 'fauna_shell_exec') {
+                  if (!_isReadOnlyShellCommand(args?.command)) mutatingToolUsed = true;
+                  if (_isValidationShellCommand(args?.command)) validationToolUsed = true;
+                }
+              }
               send({ type: 'tool_activity_result', callId: tc.id, name: toolName, ...activityResult });
               allMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolContent });
               toolNameByCallId.set(tc.id, toolName);
@@ -2771,7 +2780,7 @@ export function registerChatRoute(app, {
           // host in control until an edit/command mutation lands or the model
           // gives a real blocker; do the same here instead of accepting an
           // investigation-only final answer.
-          } else if (_writeIntentTurn && toolCallCount > 0 && !mutatingToolUsed && inspectionOnlyNudges < MAX_INSPECTION_ONLY_NUDGES) {
+          } else if (_writeIntentTurn && toolCallCount > 0 && !mutatingToolUsed && inspectionOnlyNudges < MAX_INSPECTION_ONLY_NUDGES && !/^\s*(?:BLOCKED|NEEDS-INPUT)\s*:/i.test(assistantText || '')) {
             inspectionOnlyNudges++;
             console.log('[chat] write-intent inspection-only stop detected — forcing first concrete edit (' + inspectionOnlyNudges + '/' + MAX_INSPECTION_ONLY_NUDGES + ')');
             allMessages.push({ role: 'assistant', content: assistantText || '' });
