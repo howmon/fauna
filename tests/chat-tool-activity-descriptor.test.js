@@ -23,6 +23,18 @@ describe('structured chat tool activity descriptors', () => {
     expect(activity).not.toHaveProperty('secret');
   });
 
+  it('describes ranked workspace searches and summarizes cache reuse', () => {
+    expect(buildToolActivityDescriptor('fauna_workspace_search', {
+      query: 'activity duration lifecycle', cwd: '/tmp/project',
+    })).toMatchObject({
+      kind: 'search', label: 'Searched workspace concepts',
+      query: 'activity duration lifecycle', queryType: 'semantic', scope: '/tmp/project',
+    });
+    expect(buildToolActivityResult('fauna_workspace_search', {}, {
+      ok: true, count: 4, cache: { hit: true },
+    })).toEqual({ status: 'completed', summary: '4 ranked results · index cache hit' });
+  });
+
   it('summarizes multi-file patches with additions, deletions, and hunks', () => {
     const patch = `*** Begin Patch
 *** Update File: /repo/a.js

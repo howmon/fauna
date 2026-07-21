@@ -93,6 +93,7 @@ import { loadAgentManifest } from './server/lib/agent-manifest.js';
 import { resolveWorkspaceContext } from './lib/workspace-context.js';
 import { runWorkspaceDiagnostics } from './lib/diagnostics.js';
 import { workspaceSymbols, symbolDefinition, symbolReferences, renameSymbol } from './lib/language-tools.js';
+import { getWorkspaceIndex, invalidateWorkspaceIndex, readIndexedFile, searchWorkspace } from './lib/workspace-index.js';
 import { startTerminalSession, sendTerminalInput, getTerminalOutput, listTerminalSessions, killTerminalSession } from './lib/terminal-sessions.js';
 import { parseTestResults, runTestResults } from './lib/test-results.js';
 import {
@@ -926,6 +927,7 @@ function _atomicFastWrite(abs, buffer) {
   try {
     fs.writeFileSync(tmp, buffer);
     fs.renameSync(tmp, abs);
+    invalidateWorkspaceIndex(abs);
   } catch (e) {
     try { fs.unlinkSync(tmp); } catch (_) {}
     throw e;
@@ -1429,7 +1431,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_symbols',
-      description: 'List JS/TS workspace symbols (classes, functions, variables, types) for the active project/cwd. Static fallback until full LSP is available.',
+      description: 'List indexed workspace declarations (classes, functions, variables, and types) across common source languages. Results identify the workspace-index heuristic engine; use language-service results when a future LSP adapter is available.',
       parameters: { type: 'object', properties: { cwd: { type: 'string' }, query: { type: 'string' }, maxResults: { type: 'number' } } },
     },
   },
@@ -1437,7 +1439,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_definition',
-      description: 'Find likely JS/TS definitions for a symbol in the active project/cwd. Static fallback until full LSP is available.',
+      description: 'Find likely indexed definitions for a source symbol across common languages. This is a fast text-aware heuristic fallback, not scope-sensitive LSP resolution.',
       parameters: { type: 'object', properties: { cwd: { type: 'string' }, symbol: { type: 'string' }, maxResults: { type: 'number' } }, required: ['symbol'] },
     },
   },
@@ -1445,7 +1447,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_references',
-      description: 'Find JS/TS references to a symbol in the active project/cwd with line numbers. Static fallback until full LSP is available.',
+      description: 'Find indexed source references to a symbol with file paths and line numbers. This is a fast word-boundary fallback and may include same-name identifiers from other scopes.',
       parameters: { type: 'object', properties: { cwd: { type: 'string' }, symbol: { type: 'string' }, maxResults: { type: 'number' } }, required: ['symbol'] },
     },
   },
@@ -1453,7 +1455,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_rename_symbol',
-      description: 'Conservatively rename a JS/TS identifier across the active project/cwd using word-boundary replacement. Prefer this over raw search/replace for simple identifiers; full LSP rename will supersede it later.',
+      description: 'Rename a simple identifier across indexed source files using word-boundary replacement. Use only when workspace-wide textual rename is intended; this is not scope-sensitive LSP rename.',
       parameters: { type: 'object', properties: { cwd: { type: 'string' }, symbol: { type: 'string' }, newName: { type: 'string' } }, required: ['symbol', 'newName'] },
     },
   },
@@ -1846,6 +1848,22 @@ export const SELF_TOOL_DEFS = [
   },
 
   // ── Grep search (text) ──
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_workspace_search',
+      description: 'Ranked natural-language search over indexed workspace source and text files. Use when you know the behavior or concept but not the exact identifier or filename. Returns the best file/line snippets with relevance scores. For exact strings or regex, use fauna_grep; for known identifiers, use fauna_definition or fauna_references.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Natural-language behavior, concept, or implementation surface to locate.' },
+          cwd: { type: 'string', description: 'Optional workspace root. Defaults to the active process workspace.' },
+          maxResults: { type: 'number', description: 'Maximum ranked snippets. Defaults 20; hard cap 100.' },
+        },
+        required: ['query'],
+      },
+    },
+  },
   {
     type: 'function',
     function: {
@@ -3266,20 +3284,22 @@ export async function executeSelfTool(toolName, args, context = {}) {
         const st = fs.statSync(abs);
         if (st.isDirectory()) return JSON.stringify({ ok: false, error: 'Path is a directory: ' + abs });
         const maxBytes = typeof args.maxBytes === 'number' && args.maxBytes > 0 ? Math.min(args.maxBytes, 1_000_000) : 200_000;
-        let content = fs.readFileSync(abs, 'utf8');
-        const totalLines = content.length ? content.split('\n').length : 0;
+        const indexed = readIndexedFile(abs);
+        if (!indexed.ok) return JSON.stringify({ ok: false, error: indexed.error });
+        const lines = indexed.entry.lines;
+        const totalLines = lines.length;
+        const startLine = Math.max(1, Number(args.startLine) || 1);
+        const endLine = Math.min(totalLines, Number(args.endLine) || totalLines);
+        let content = lines.slice(startLine - 1, endLine).join('\n');
         let truncated = false;
-        if (args.startLine || args.endLine) {
-          const lines = content.split('\n');
-          const start = Math.max(1, Number(args.startLine) || 1);
-          const end = Math.min(lines.length, Number(args.endLine) || lines.length);
-          content = lines.slice(start - 1, end).join('\n');
-        }
         if (content.length > maxBytes) {
           content = content.slice(0, maxBytes);
           truncated = true;
         }
-        return JSON.stringify({ ok: true, path: abs, bytes: st.size, totalLines, content, truncated });
+        return JSON.stringify({
+          ok: true, path: abs, bytes: st.size, totalLines, startLine, endLine,
+          content, truncated, engine: 'workspace-index', cache: indexed.cache,
+        });
       } catch (e) {
         return JSON.stringify({ ok: false, error: e.message });
       }
@@ -3322,6 +3342,20 @@ export async function executeSelfTool(toolName, args, context = {}) {
     }
 
     // ── Grep search (text in files) ──
+    case 'fauna_workspace_search': {
+      try {
+        const rootAbs = args.cwd
+          ? (String(args.cwd).startsWith('/') ? path.resolve(String(args.cwd)) : _resolveFaunaWritePath(args.cwd, null))
+          : (process.cwd() && process.cwd() !== '/' ? process.cwd() : HOME);
+        if (!rootAbs.startsWith(HOME) && !rootAbs.startsWith('/tmp')) {
+          return JSON.stringify({ ok: false, error: 'cwd outside allowed directories: ' + rootAbs });
+        }
+        return JSON.stringify(searchWorkspace({ cwd: rootAbs, query: args.query, maxResults: args.maxResults }));
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+
     case 'fauna_grep': {
       try {
         const query = String(args.query || '');
@@ -3355,33 +3389,26 @@ export async function executeSelfTool(toolName, args, context = {}) {
           : 200;
         const matches = [];
         let filesScanned = 0;
-        _faunaWalk(rootAbs, (rel) => {
-          if (includeRe && !includeRe.test(rel)) return;
-          const abs = path.join(rootAbs, rel);
-          try {
-            const st = fs.statSync(abs);
-            // Skip files >2MB — likely generated, hex dumps, or assets
-            if (st.size > 2_000_000) return;
-          } catch (_) { return; }
-          if (_faunaIsBinary(abs)) return;
-          let text;
-          try { text = fs.readFileSync(abs, 'utf8'); } catch (_) { return; }
+        const index = getWorkspaceIndex({ cwd: rootAbs, includeIgnoredFiles: args.includeIgnoredFiles === true });
+        for (const file of index.entries) {
+          if (includeRe && !includeRe.test(file.path)) continue;
           filesScanned++;
-          const lines = text.split('\n');
+          const lines = file.lines;
           for (let i = 0; i < lines.length; i++) {
             re.lastIndex = 0;
             if (re.test(lines[i])) {
               // Truncate single-line hits to keep responses small
               const line = lines[i].length > 240 ? lines[i].slice(0, 240) + '…' : lines[i];
-              matches.push({ path: rel, line: i + 1, text: line });
-              if (matches.length >= cap) return false;
+              matches.push({ path: file.path, line: i + 1, text: line });
+              if (matches.length >= cap) break;
             }
           }
-        }, { includeIgnoredFiles: args.includeIgnoredFiles === true });
+          if (matches.length >= cap) break;
+        }
         return JSON.stringify({
           ok: true, root: rootAbs, query, isRegex: useRegex,
           filesScanned, count: matches.length, truncated: matches.length >= cap,
-          matches,
+          matches, engine: 'workspace-index', cache: index.cache,
         });
       } catch (e) {
         return JSON.stringify({ ok: false, error: e.message });

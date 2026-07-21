@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 
 import { workspaceSymbols, symbolDefinition, symbolReferences, renameSymbol } from '../lib/language-tools.js';
+import { clearWorkspaceIndexes, getWorkspaceIndex, searchWorkspace } from '../lib/workspace-index.js';
 
 const _created = [];
 function fixture() {
@@ -20,6 +21,7 @@ function fixture() {
 }
 
 afterEach(() => {
+  clearWorkspaceIndexes();
   while (_created.length) {
     try { fs.rmSync(_created.pop(), { recursive: true, force: true }); } catch { /* ignore */ }
   }
@@ -48,5 +50,26 @@ describe('language tools', () => {
     expect(r.changed[0]).toMatchObject({ path: 'app.ts', replacements: 2 });
     expect(fs.readFileSync(path.join(dir, 'app.ts'), 'utf8')).toContain('function welcome');
     expect(fs.readFileSync(path.join(dir, 'app.ts'), 'utf8')).toContain('welcome("Ada")');
+  });
+
+  it('indexes symbols across languages and reuses cached files', () => {
+    const dir = fixture();
+    fs.writeFileSync(path.join(dir, 'worker.py'), 'def process_document(value):\n    return value\n', 'utf8');
+    const first = workspaceSymbols({ cwd: dir, query: 'process_document' });
+    const second = workspaceSymbols({ cwd: dir, query: 'process_document' });
+    expect(first.symbols[0]).toMatchObject({ name: 'process_document', kind: 'function', path: 'worker.py', line: 1 });
+    expect(first.cache.hit).toBe(false);
+    expect(second.cache.hit).toBe(true);
+  });
+
+  it('refreshes only changed files and ranks natural-language workspace results', () => {
+    const dir = fixture();
+    getWorkspaceIndex({ cwd: dir });
+    fs.writeFileSync(path.join(dir, 'reader.ts'), 'export function parseScriptureReference() { return true; }\n', 'utf8');
+    const refreshed = getWorkspaceIndex({ cwd: dir, force: true });
+    expect(refreshed.cache.filesRead).toBe(1);
+    expect(refreshed.cache.filesReused).toBe(1);
+    const found = searchWorkspace({ cwd: dir, query: 'parse scripture reference' });
+    expect(found.results[0]).toMatchObject({ path: 'reader.ts', line: 1 });
   });
 });

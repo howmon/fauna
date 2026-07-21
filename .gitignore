@@ -55,6 +55,7 @@ app.asar.bak
 !CONTRIBUTING.md
 !SECURITY.md
 !.github/**/*.md
+!docs/code-intelligence-parity-plan.md
 services/*
 PROJECTS_PLAN.html
 workiq-integration.example.js

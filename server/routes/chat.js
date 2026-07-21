@@ -152,6 +152,16 @@ export function buildToolActivityDescriptor(toolName, args = {}) {
       scope: String(args.cwd || ''),
     };
   }
+  if (toolName === 'fauna_workspace_search') {
+    return {
+      ...descriptor,
+      kind: 'search',
+      label: 'Searched workspace concepts',
+      query: String(args.query || ''),
+      queryType: 'semantic',
+      scope: String(args.cwd || ''),
+    };
+  }
   if (toolName === 'fauna_replace_string') {
     const file = _activityDisplayPath(args.path);
     const oldLines = String(args.old_string || '').split('\n').length;
@@ -221,6 +231,9 @@ export function buildToolActivityResult(toolName, args = {}, result) {
   }
   if (toolName === 'fauna_grep' && parsed) {
     return { status: 'completed', summary: `${Number(parsed.count) || 0} results · ${Number(parsed.filesScanned) || 0} files scanned` };
+  }
+  if (toolName === 'fauna_workspace_search' && parsed) {
+    return { status: 'completed', summary: `${Number(parsed.count) || 0} ranked results${parsed.cache?.hit ? ' · index cache hit' : ''}` };
   }
   if (toolName === 'fauna_file_search' && parsed) {
     return { status: 'completed', summary: `${Number(parsed.count) || 0} files found${parsed.truncated ? ' · truncated' : ''}` };
@@ -1785,7 +1798,7 @@ export function registerChatRoute(app, {
         'fauna_list_playbook', 'fauna_load_widget_from_playbook',
         'fauna_backlog_list', 'fauna_retrieve_output', 'fauna_doctor',
         'fauna_list_voices', 'fauna_video_list', 'fauna_lesson_list',
-        'fauna_grep', 'fauna_file_search', 'fauna_semantic_search',
+        'fauna_grep', 'fauna_file_search', 'fauna_workspace_search', 'fauna_semantic_search',
         // Figma read-only introspection (no DOM mutation)
         'figma_status', 'figma_list_connected_files', 'figma_list_pages',
         'figma_list_design_systems', 'figma_get_console_logs',

@@ -76,6 +76,7 @@ const FREE_TOOLS = new Set([
   'fauna_read_file',
   'fauna_grep',
   'fauna_file_search',
+  'fauna_workspace_search',
   'fauna_semantic_search',
   'fauna_context_search',
   // Environment introspection (no side effects)

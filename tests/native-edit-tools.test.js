@@ -52,6 +52,19 @@ describe('native edit tools — fs round-trip', () => {
       const r = JSON.parse(await executeSelfTool('fauna_read_file', { path: tmpFile, startLine: 2, endLine: 4 }, mockContext));
       expect(r.ok).toBe(true);
       expect(r.content).toBe('b\nc\nd');
+      expect(r).toMatchObject({ startLine: 2, endLine: 4, engine: 'workspace-index' });
+      const cached = JSON.parse(await executeSelfTool('fauna_read_file', { path: tmpFile, startLine: 3, endLine: 3 }, mockContext));
+      expect(cached.content).toBe('c');
+      expect(cached.cache.hit).toBe(true);
+    });
+
+    it('invalidates a cached read after a native write', async () => {
+      fs.writeFileSync(tmpFile, 'before\n');
+      await executeSelfTool('fauna_read_file', { path: tmpFile }, mockContext);
+      await executeSelfTool('fauna_replace_string', { path: tmpFile, old_string: 'before', new_string: 'after' }, mockContext);
+      const reread = JSON.parse(await executeSelfTool('fauna_read_file', { path: tmpFile }, mockContext));
+      expect(reread.content).toBe('after\n');
+      expect(reread.cache.hit).toBe(false);
     });
 
     it('truncates at maxBytes', async () => {

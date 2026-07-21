@@ -270,6 +270,7 @@ describe('agent and tool policy', () => {
       'fauna_get_agent_instructions',
       'fauna_file_search',
       'fauna_grep',
+      'fauna_workspace_search',
       'fauna_context_search',
       'fauna_list_references',
       'fauna_list_skills',

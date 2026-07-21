@@ -84,7 +84,7 @@ describe('self-tools', () => {
       // fauna_route_skill (semantic skill router), fauna_interview,
       // fauna_create_seed, fauna_list_seeds, fauna_get_seed (spec-first loop),
       // fauna_unstuck (lateral personas), fauna_audit_prompt (prompt patterns).
-      expect(SELF_TOOL_DEFS).toHaveLength(105);
+      expect(SELF_TOOL_DEFS).toHaveLength(106);
     });
 
     it('each tool has required OpenAI function format', () => {
@@ -284,6 +284,18 @@ describe('self-tools', () => {
       expect(first.path).toMatch(/chat\.js$/);
       expect(typeof first.line).toBe('number');
       expect(first.text).toContain('PARALLEL_SAFE_TOOLS');
+    });
+
+    it('fauna_workspace_search ranks conceptual implementation snippets', async () => {
+      const r = JSON.parse(await executeSelfTool('fauna_workspace_search', {
+        query: 'workspace symbols definitions references',
+        cwd: repoRoot,
+        maxResults: 5,
+      }, mockContext));
+      expect(r.ok).toBe(true);
+      expect(r.engine).toBe('workspace-index-ranked');
+      expect(r.results.length).toBeGreaterThan(0);
+      expect(r.results[0]).toMatchObject({ path: expect.any(String), line: expect.any(Number), score: expect.any(Number) });
     });
 
     it('fauna_grep supports regex with alternation', async () => {
