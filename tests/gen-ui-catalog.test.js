@@ -116,6 +116,16 @@ describe('gen-ui catalog prompt — worked examples', () => {
   });
 });
 
+describe('gen-ui catalog prompt — completion summaries', () => {
+  it('requires a compact card after tool-driven workflow summaries', () => {
+    expect(GEN_UI_CATALOG_PROMPT).toMatch(/Completion summary rule/);
+    expect(GEN_UI_CATALOG_PROMPT).toMatch(/tool-driven or agent workflow/);
+    expect(GEN_UI_CATALOG_PROMPT).toMatch(/one compact .*gen-ui.* completion card/i);
+    expect(GEN_UI_CATALOG_PROMPT).toMatch(/hidden context-compaction summaries/);
+    expect(GEN_UI_CATALOG_PROMPT).toMatch(/validation actually passed/);
+  });
+});
+
 describe('gen-ui short hint — degraded mode', () => {
   it('still forbids emitting a gen-ui block when catalog is not loaded', () => {
     // Critical guardrail: without this, the model hallucinates the schema.

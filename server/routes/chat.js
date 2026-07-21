@@ -1615,11 +1615,10 @@ export function registerChatRoute(app, {
       });
 
       // ── Inject agent instructions as an AUTHORITATIVE second system message.
-      // The slim agent system prompt directs the model to call
-      // `fauna_get_agent_instructions` first, but Claude sometimes skips it.
-      // A tool-result pre-seed is also too weak — the model treats it as
-      // reference data. Pushing the full manifest.systemPrompt as a second
-      // system-role message ensures the rules are followed verbatim.
+      // The client sends only the active-agent identity and a short execution
+      // directive. Pushing the full manifest.systemPrompt as a second
+      // system-role message loads the workflow automatically and ensures the
+      // rules are followed verbatim without a redundant first tool call.
       // Guarded so duplicate injection across iterations cannot happen
       // (the marker line is unique and idempotent-checked).
       if (agentName) {
@@ -2301,7 +2300,7 @@ export function registerChatRoute(app, {
           }
           if (continueLoop && silentBursts >= 7) {
             console.log('[chat] silent-burst guard tripped at ' + silentBursts + ' silent iterations — stopping loop');
-            allMessages.push({ role: 'user', content: '[System: You have run ' + (silentBursts + 1) + ' tool-call rounds in a row without producing any visible response. Stop calling tools NOW. Give the user a brief honest summary of what you investigated, what you found, what (if anything) you fixed, and what the next concrete step would be — in plain prose, no more tool calls.]' });
+            allMessages.push({ role: 'user', content: '[System: You have run ' + (silentBursts + 1) + ' tool-call rounds in a row without producing any visible response. Stop calling tools NOW. Give the user a brief honest prose summary of what you investigated, what you found, what (if anything) you fixed, and the next concrete step. If the gen-ui catalog is loaded, finish with one compact completion card reflecting the same verified status. Do not make more tool calls.]' });
           } else if (continueLoop && !silentBurstNudgeFired && silentBursts >= 4) {
             silentBurstNudgeFired = true;
             console.log('[chat] silent-burst guard — injecting status-update nudge at ' + silentBursts + ' silent iterations');

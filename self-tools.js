@@ -1493,17 +1493,15 @@ export const SELF_TOOL_DEFS = [
     },
   },
 
-  // ── Agent instruction lookup (lazy-load pattern, mirrors Clawpilot m_get_skill) ──
-  // The system prompt only carries the agent's name + 1-line description; the
-  // full body (often 30KB+ of detailed tool-use instructions) is fetched via
-  // this tool. Landing the body as a tool result puts it in the high-attention
-  // recency window where the model actually follows it, instead of burying it
-  // in a system prompt block that loses to later directives.
+  // ── Agent instruction lookup ────────────────────────────────────────────
+  // The server injects the full body automatically. This tool remains useful
+  // for targeted section reloads and diagnostics without making every turn
+  // pay for a duplicate full-body tool call.
   {
     type: 'function',
     function: {
       name: 'fauna_get_agent_instructions',
-      description: 'Load the FULL instructions for the currently active agent. If an agent is active (the system prompt will say "Active Agent: <name>"), you MUST call this once at the start of every turn before doing any other work — the system prompt only contains the agent\'s name and short description, and the full instructions (tool-use rules, output format, workflows) live in this tool\'s return value. If NO agent is active, do NOT call this tool — it is a no-op in that case and you already have your full default tool set. Pass `section` to fetch only one `## Heading` block from the body when you know which part you need (saves context on large agents).',
+      description: 'Reload instructions for the currently active agent when a specific section is missing from context or when diagnosing an agent configuration. Active-agent instructions are injected automatically, so do not call this routinely at the start of a turn. Pass `section` to fetch only one `## Heading` block and save context.',
       parameters: {
         type: 'object',
         properties: {

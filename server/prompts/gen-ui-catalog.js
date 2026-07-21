@@ -87,6 +87,15 @@ If you claim "I rebuilt it", "Here is the …", "I attached the 3D viewer", "I m
 ### Placement rule
 **Always put \`gen-ui\` and \`artifact:*\` blocks at the END of your message**, after any prose, analysis, derivations, or results lists. The user reads the explanation first and uses the rendered card as a visual summary underneath. Never interleave a gen-ui block between two prose sections of the same answer.
 
+### Completion summary rule
+When you finish a tool-driven or agent workflow, write the concise factual summary first, then emit **one compact \`gen-ui\` completion card as the final block**. The card should make the result scannable with:
+- a \`Card\` title describing the completed task,
+- a success, warning, or error \`Badge\`,
+- a short \`List\` or \`KeyValue\` set for changes, validation, and any blocker or next action,
+- no more than 8 logical items.
+
+Do not add a completion card to casual conversation, short factual answers, hidden context-compaction summaries, or when the user explicitly requests plain text. Do not claim success in the card unless validation actually passed. \`DONE:\` / \`BLOCKED:\` / \`NEEDS-INPUT:\` markers, when required, remain in the prose before the card.
+
 ---
 
 ## Generative UI (gen-ui inline blocks)

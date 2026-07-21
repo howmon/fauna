@@ -296,13 +296,9 @@ function getAgentSystemPrompt() {
   parts.push('');
 
   // For non-orchestrator agents, do NOT dump the full systemPrompt body here.
-  // Instead, ship a SHORT description + a hard directive telling the model to
-  // fetch the full instructions via the `fauna_get_agent_instructions` tool
-  // on its first action. Rationale: agent bodies routinely exceed 30KB and,
-  // when injected as a system-prompt block, get out-attended by the user
-  // message and the generic conciseDirective — producing the "agent ignores
-  // its own instructions" failure mode. Tool results land in the recency
-  // window where the model actually follows them.
+  // The server injects it as a separate authoritative system message. Keep
+  // this client-side block short and tell the model to begin the workflow
+  // immediately instead of redundantly fetching the same instructions.
   //
   // Orchestrators still need their full prompt visible because delegation
   // syntax has to be present in the same context as the sub-agent list.
@@ -373,16 +369,16 @@ function getAgentSystemPrompt() {
       parts.push('**Description:** ' + desc);
       parts.push('');
     }
-    parts.push('### MANDATORY FIRST STEP');
-    parts.push('Your full operating instructions (workflows, tool-use rules, output format, helper code) are NOT in this system prompt. You MUST call the `fauna_get_agent_instructions` tool as your very first action on every turn before doing anything else.');
+    parts.push('### Agent Instructions Are Already Loaded');
+    parts.push('The server has injected this agent\'s full operating instructions as an authoritative system message for this turn. Begin executing the user\'s request immediately.');
     parts.push('');
-    parts.push('- Do not try to satisfy the request from the description above — it exists only so you know which agent is active.');
+    parts.push('- Do not call `fauna_get_agent_instructions` unless you need to reload a specific section that is missing from context.');
     parts.push('- Do not write a markdown summary, table, or written description in place of executing the agent\'s actual workflow.');
-    parts.push('- The instructions returned by the tool override any conflicting guidance elsewhere in this prompt (including the Communication Style section).');
-    parts.push('- After loading the instructions, follow them exactly — especially the parts about which tools to call to produce the final deliverable.');
+    parts.push('- Follow the injected instructions exactly, especially the required tools, workflow, validation, and final deliverable.');
+    parts.push('- When the request is actionable and sufficiently specified, start the required tool workflow without asking the user to repeat the instructions or tell you to proceed.');
     parts.push('');
     parts.push('### Skills (Progressive Disclosure)');
-    parts.push('This agent may have one or more **skills** — reusable workflow guides loaded only when needed. After loading your instructions, if a task touches a domain that might have a skill (file formats, integrations, multi-step processes), call `fauna_list_skills` (cheap, returns names + descriptions only) and then `fauna_get_skill(name)` for any relevant body. Skills override generic guidance for their domain.');
+    parts.push('This agent may have one or more **skills** — reusable workflow guides loaded only when needed. If a task touches a domain that might have a skill (file formats, integrations, multi-step processes), call `fauna_list_skills` (cheap, returns names + descriptions only) and then `fauna_get_skill(name)` for any relevant body. Skills override generic guidance for their domain.');
   }
 
   // Permission summary
