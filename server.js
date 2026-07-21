@@ -74,6 +74,7 @@ import { createExtBridge } from './server/bridges/ext.js';
 import { createCustomMcpBridge } from './server/bridges/custom-mcp.js';
 import { createFigmaBridge } from './server/bridges/figma.js';
 import { registerWorkspaceRoutes } from './server/routes/workspace.js';
+import { registerTestRoutes } from './server/routes/tests.js';
 import { registerStoreRoutes } from './server/routes/store.js';
 import { registerChatMiscRoutes } from './server/routes/chat-misc.js';
 import { registerGenUiExploreRoutes } from './server/routes/genui-explore.js';
@@ -495,6 +496,12 @@ registerWorkspaceRoutes(app, {
   shellBin: SHELL_BIN,
   loadInstructionFiles,
   configDir: CONFIG_DIR,
+});
+registerTestRoutes(app, {
+  getProject,
+  augmentedPath: AUGMENTED_PATH,
+  shellBin: SHELL_BIN,
+  isWin: IS_WIN,
 });
 
 // ── Git routes moved → server/routes/git.js ──
