@@ -53,12 +53,13 @@ function _cachePath(id) {
  * Splits long text into sentence-sized chunks so the streamed synthesis
  * stays under the model's natural utterance length.
  */
-async function _synthSingle({ text, voice }) {
+async function _synthSingle({ text, voice, onProgress }) {
   _ensureCache();
   const voiceId = _resolveVoice(voice);
   const id = _cacheKey({ kind: 'single', voice: voiceId, text });
   const outMp3 = _cachePath(id);
   if (fs.existsSync(outMp3) && fs.statSync(outMp3).size > 0) {
+    if (onProgress) onProgress({ phase: 'cached', fraction: 1 });
     return { id, file: outMp3, voice: voiceId };
   }
   const segments = splitIntoCues(text);
@@ -66,13 +67,15 @@ async function _synthSingle({ text, voice }) {
   const segDir = outMp3 + '.segs';
   try {
     fs.mkdirSync(segDir, { recursive: true });
-    const segs = await synthesizeKokoroSegments({ segments, outDir: segDir, voice: voiceId });
+    const segs = await synthesizeKokoroSegments({ segments, outDir: segDir, voice: voiceId, onProgress });
     const listFile = path.join(segDir, 'concat.txt');
     fs.writeFileSync(listFile, segs.map(s => `file '${s.wavFile.replace(/'/g, "'\\''")}'`).join('\n'), 'utf8');
+    if (onProgress) onProgress({ phase: 'encode', fraction: 0 });
     await _run(FFMPEG_PATH, [
       '-y', '-f', 'concat', '-safe', '0', '-i', listFile,
       '-codec:a', 'libmp3lame', '-b:a', '192k', '-ar', '44100', outMp3,
     ]);
+    if (onProgress) onProgress({ phase: 'encode', fraction: 1 });
     return { id, file: outMp3, voice: voiceId };
   } finally {
     try { fs.rmSync(segDir, { recursive: true, force: true }); } catch (_) {}

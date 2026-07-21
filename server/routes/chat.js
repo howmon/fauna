@@ -80,6 +80,47 @@ export function artifactTypeForPath(p) {
   if (_ARTIFACT_CODE_EXT.has(ext)) return 'code';
   return 'text';
 }
+
+export function formatToolProgress(toolName, args = {}, elapsedSeconds = 0, state = 'running') {
+  const elapsed = Math.max(0, Math.floor(Number(elapsedSeconds) || 0));
+  const suffix = elapsed > 0 ? ` · ${elapsed}s` : '';
+  if (toolName === 'fauna_speak') {
+    const chars = String(args.text || '').length;
+    if (state === 'completed') return `Audio ready${suffix}`;
+    if (state === 'failed') return `Audio generation failed${suffix}`;
+    return `Synthesizing ${chars.toLocaleString()} characters of audio${suffix}`;
+  }
+  if (toolName === 'fauna_podcast') {
+    const segments = Array.isArray(args.segments) ? args.segments.length : 0;
+    if (state === 'completed') return `Podcast ready${suffix}`;
+    if (state === 'failed') return `Podcast generation failed${suffix}`;
+    return `Synthesizing ${segments} podcast segment${segments === 1 ? '' : 's'}${suffix}`;
+  }
+  if (state === 'completed') return `Completed${suffix}`;
+  if (state === 'failed') return `Failed${suffix}`;
+  return `Still running${suffix}`;
+}
+
+export function formatToolPhaseProgress(toolName, progress = {}, elapsedSeconds = 0) {
+  const elapsed = Math.max(0, Math.floor(Number(elapsedSeconds) || 0));
+  const suffix = elapsed > 0 ? ` · ${elapsed}s` : '';
+  if (toolName !== 'fauna_speak' && toolName !== 'fauna_podcast') {
+    return formatToolProgress(toolName, {}, elapsed, 'running');
+  }
+  if (progress.phase === 'cached') return `Using cached audio${suffix}`;
+  if (progress.phase === 'load-model') {
+    const percent = Number.isFinite(progress.fraction) ? Math.round(progress.fraction * 100) : 0;
+    return `Loading speech model${percent > 0 ? ` · ${percent}%` : ''}${suffix}`;
+  }
+  if (progress.phase === 'synthesize') {
+    const total = Math.max(0, Number(progress.total) || 0);
+    const index = Math.max(0, Number(progress.index) || 0);
+    if (total && index >= total) return `Speech synthesis complete${suffix}`;
+    return total ? `Synthesizing audio segment ${Math.min(index + 1, total)} of ${total}${suffix}` : `Synthesizing audio${suffix}`;
+  }
+  if (progress.phase === 'encode') return progress.fraction >= 1 ? `Audio encoding complete${suffix}` : `Encoding MP3${suffix}`;
+  return `Generating audio${suffix}`;
+}
 // Extensions worth surfacing as a card from a shell command. Kept tight so
 // intermediate .log / .tmp redirects don't spam the conversation with cards.
 const _SHELL_PRESENTABLE_EXT = /\.(pptx|ppt|key|odp|docx|doc|rtf|odt|pages|xlsx|xls|ods|numbers|pdf|html|htm|csv|md|markdown|json|svg|png|jpe?g|gif|webp)$/i;
@@ -2075,7 +2116,20 @@ export function registerChatRoute(app, {
             if (upstreamAbort.signal.aborted) throw new Error('Cancelled by user');
             // Send human-readable tool status to the client
             const toolLabel = formatToolLabel(toolName, args);
-            send({ type: 'tool_call', name: toolName, label: toolLabel });
+            send({ type: 'tool_call', callId: tc.id, name: toolName, label: toolLabel });
+            const toolStartedAt = Date.now();
+            let toolFailed = false;
+            const toolProgressTimer = setInterval(() => {
+              if (res.writableEnded || upstreamAbort.signal.aborted) return;
+              const elapsedSeconds = Math.max(1, Math.floor((Date.now() - toolStartedAt) / 1000));
+              send({
+                type: 'tool_progress',
+                callId: tc.id,
+                name: toolName,
+                message: formatToolProgress(toolName, args, elapsedSeconds, 'running'),
+                elapsedSeconds,
+              });
+            }, 1000);
             if (MUTATING_TOOLS.has(toolName)) mutatingToolUsed = true;
             if (VALIDATION_TOOLS.has(toolName)) validationToolUsed = true;
             if (toolName === 'fauna_shell_exec') {
@@ -2118,7 +2172,23 @@ export function registerChatRoute(app, {
               }
               // Route to self-tools (memory, models, settings, etc.)
               else if (isSelfTool(toolName)) {
-                result = await executeSelfTool(toolName, args, selfToolContext);
+                const selfToolCallContext = {
+                  ...selfToolContext,
+                  onToolProgress: (progress) => {
+                    if (res.writableEnded || upstreamAbort.signal.aborted) return;
+                    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - toolStartedAt) / 1000));
+                    send({
+                      type: 'tool_progress',
+                      callId: tc.id,
+                      name: toolName,
+                      message: formatToolPhaseProgress(toolName, progress, elapsedSeconds),
+                      elapsedSeconds,
+                      phase: progress?.phase || null,
+                      fraction: Number.isFinite(progress?.fraction) ? progress.fraction : null,
+                    });
+                  },
+                };
+                result = await executeSelfTool(toolName, args, selfToolCallContext);
               }
               // Route to agent tool handler if available, otherwise Figma MCP
               else if (agentToolHandlers?.has(toolName)) {
@@ -2265,8 +2335,23 @@ export function registerChatRoute(app, {
                 }
               }
             } catch (e) {
+              toolFailed = true;
               allMessages.push({ role: 'tool', tool_call_id: tc.id, content: `Error: ${e.message}` });
               figma.log('✗ ' + toolName + ': ' + e.message, 'err');
+            } finally {
+              clearInterval(toolProgressTimer);
+              const elapsedSeconds = Math.max(0, Math.round((Date.now() - toolStartedAt) / 1000));
+              if (!res.writableEnded) {
+                send({
+                  type: 'tool_progress',
+                  callId: tc.id,
+                  name: toolName,
+                  message: formatToolProgress(toolName, args, elapsedSeconds, toolFailed ? 'failed' : 'completed'),
+                  elapsedSeconds,
+                  completed: true,
+                  failed: toolFailed,
+                });
+              }
             }
           }; // end _executeOneCall
 

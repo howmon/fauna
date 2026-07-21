@@ -4734,7 +4734,7 @@ export async function executeSelfTool(toolName, args, context = {}) {
           const text = String(args.text || '').trim();
           if (!text) return JSON.stringify({ ok: false, error: 'text required' });
           if (text.length > 20000) return JSON.stringify({ ok: false, error: 'text too long (>20000 chars)' });
-          const { id, file, voice } = await synthSingleKokoro({ text, voice: args.voice });
+          const { id, file, voice } = await synthSingleKokoro({ text, voice: args.voice, onProgress: context.onToolProgress });
           const durationSec = await probeKokoroDuration(file);
           return JSON.stringify({
             ok: true,
