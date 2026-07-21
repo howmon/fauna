@@ -38,12 +38,31 @@ describe('assistant activity timeline', () => {
   });
 
   it('shows the exact shell command in live and historical Activity details', () => {
-    expect(chatRouteSource).toContain("command: toolName === 'fauna_shell_exec' ? String(args?.command || '') : undefined");
+    expect(chatRouteSource).toContain('command: activity.command');
     expect(chatSource).toContain("entry.command ? '$ ' + entry.command : ''");
-    expect(chatSource).toContain('_beginLiveToolOutput(toolLabel, evt.callId, evt.command)');
+    expect(chatSource).toContain('_beginLiveToolOutput(toolLabel, evt.callId, evt.command, evt.activity)');
     expect(chatSource).toContain("command: entry.command || ''");
     expect(uiSource).toContain("item.command ? '$ ' + item.command : ''");
     expect(chatSource).toContain('updateActivityStepDetail(_currentActivityEntry.step, _activityEntryDetail(_currentActivityEntry))');
+  });
+
+  it('renders and persists structured read, search, and edit descriptors', () => {
+    expect(chatRouteSource).toContain('const activity = buildToolActivityDescriptor(toolName, args)');
+    expect(chatRouteSource).toContain('activity,');
+    expect(chatSource).toContain('_beginLiveToolOutput(toolLabel, evt.callId, evt.command, evt.activity)');
+    expect(chatSource).toContain('activity: entry.activity || null');
+    expect(chatRouteSource).toContain("type: 'tool_activity_result'");
+    expect(chatRouteSource).toContain("if (activityResult.status === 'failed') toolFailed = true");
+    expect(chatRouteSource).toContain("summary: scrubSecrets(String(e.message || 'Tool failed')).text.slice(0, 500)");
+    expect(chatRouteSource).toContain("output: scrubSecrets(text).text");
+    expect(chatSource).toContain("if (evt.type === 'tool_activity_result')");
+    expect(chatSource).toContain("resultSummary: entry.resultSummary || ''");
+    expect(uiSource).toContain('function formatActivityDescriptorDetail(activity)');
+    expect(uiSource).toContain("if (kind === 'read') return 'ti-book-2'");
+    expect(uiSource).toContain("if (kind === 'search') return 'ti-search'");
+    expect(uiSource).toContain("if (kind === 'edit') return 'ti-pencil'");
+    expect(uiSource).toContain("activity.queryType === 'regex' ? 'Regex: '");
+    expect(uiSource).toContain("stats.push('+' + Number(file.additions))");
   });
 
   it('shows and persists provider-exposed reasoning summaries', () => {

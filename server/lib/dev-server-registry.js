@@ -19,7 +19,10 @@
 // Detached from any specific Express app — server.js wires the routes.
 
 import { spawn } from 'child_process';
+import fs from 'fs';
+import net from 'net';
 import os from 'os';
+import path from 'path';
 
 const _entries = new Map(); // id -> entry
 let _seq = 0;
@@ -116,6 +119,92 @@ export function isDevServerCommand(command) {
     .filter(Boolean);
 
   return segments.some((seg) => _segmentIsDevServer(seg));
+}
+
+export function requestedDevServerPort(command) {
+  const text = String(command || '');
+  const patterns = [
+    /(?:^|\s)PORT=(\d{2,5})(?:\s|$)/i,
+    /(?:^|\s)--port(?:=|\s+)(\d{2,5})(?:\s|$)/i,
+    /(?:^|\s)-p\s+(\d{2,5})(?:\s|$)/i,
+    /(?:^|\s)-S\s+(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):(\d{2,5})(?:\s|$)/i,
+    /\bwait-on\s+(?:tcp:|https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):)(\d{2,5})\b/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match) continue;
+    const port = Number(match[1]);
+    if (port > 0 && port < 65536) return port;
+  }
+  return null;
+}
+
+export function commandWithPackageScript(command, cwd) {
+  const source = String(command || '');
+  const match = source.match(/\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?([A-Za-z0-9:_-]+)\b/i);
+  if (!match || !cwd) return source;
+  try {
+    const packagePath = path.join(path.resolve(String(cwd)), 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+    const script = pkg?.scripts?.[match[1]];
+    return typeof script === 'string' && script.trim() ? `${source}\n${script}` : source;
+  } catch (_) {
+    return source;
+  }
+}
+
+export function commandWorkingDirectory(command, fallbackCwd) {
+  const source = String(command || '');
+  const match = source.match(/(?:^|[;&|]\s*)(?:cd|pushd)\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/i);
+  const declared = match && (match[1] || match[2] || match[3]);
+  if (!declared) return path.resolve(String(fallbackCwd || os.homedir()));
+  if (declared === '~') return os.homedir();
+  if (declared.startsWith('~/')) return path.resolve(os.homedir(), declared.slice(2));
+  return path.resolve(String(fallbackCwd || os.homedir()), declared);
+}
+
+export function electronDevServerTarget(command) {
+  const match = String(command || '').match(/\bVITE_DEV_SERVER_URL=(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/i);
+  const value = match && (match[1] || match[2] || match[3]);
+  if (!value || !/\b(?:npx\s+)?electron(?:\s|$)/i.test(String(command || ''))) return null;
+  try {
+    const url = new URL(value);
+    const local = /^(?:localhost|127\.0\.0\.1|::1)$/.test(url.hostname);
+    const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
+    return local && port > 0 && port < 65536 ? { url: url.href.replace(/\/$/, ''), port } : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+export function findRunningServerByPort(port) {
+  const target = Number(port);
+  if (!target) return null;
+  return Array.from(_entries.values()).find((entry) =>
+    entry.port === target && (entry.status === 'running' || entry.status === 'starting')
+  ) || null;
+}
+
+export function sameServerCwd(left, right) {
+  if (!left || !right) return false;
+  return path.resolve(String(left)) === path.resolve(String(right));
+}
+
+export function isTcpPortListening(port, host = '127.0.0.1') {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ port: Number(port), host });
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(value);
+    };
+    socket.setTimeout(350);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+  });
 }
 
 function _segmentIsDevServer(seg) {

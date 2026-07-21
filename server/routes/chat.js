@@ -35,7 +35,17 @@ import { compressToolOutput } from '../lib/compress-tool-output.js';
 import { stashOutput } from '../lib/tool-output-cache.js';
 import { runShell, formatShellResultForLLM } from '../lib/shell-runner.js';
 import { runHooks } from '../lib/hooks-runtime.js';
-import { maybeRegister as registerDevServer, isDevServerCommand } from '../lib/dev-server-registry.js';
+import {
+  maybeRegister as registerDevServer,
+  isDevServerCommand,
+  requestedDevServerPort,
+  commandWithPackageScript,
+  commandWorkingDirectory,
+  electronDevServerTarget,
+  findRunningServerByPort,
+  sameServerCwd,
+  isTcpPortListening,
+} from '../lib/dev-server-registry.js';
 import { spawn as _spawnDetached } from 'child_process';
 import os from 'os';
 import { applyPatchText } from './agent-sandbox-files.js';
@@ -55,6 +65,7 @@ import { estimateTokens, computeBudget } from '../lib/token-budget.js';
 import { summarizeHistory } from '../lib/summarize-history.js';
 import { withTimeout } from '../lib/async-utils.js';
 import { loadAgentManifest } from '../lib/agent-manifest.js';
+import { scrubSecrets } from '../lib/redactor.js';
 
 // ── Created-file artifact detection ──────────────────────────────────────
 // Files created via the fauna_write_file / fauna_write_files / fauna_shell_exec
@@ -79,6 +90,156 @@ export function artifactTypeForPath(p) {
   if (_ARTIFACT_EXT_TYPE[ext]) return _ARTIFACT_EXT_TYPE[ext];
   if (_ARTIFACT_CODE_EXT.has(ext)) return 'code';
   return 'text';
+}
+
+function _activityDisplayPath(value) {
+  const fullPath = String(value || '').trim();
+  return { path: fullPath, name: fullPath ? path.basename(fullPath) : 'file' };
+}
+
+function _patchActivityFiles(patchText) {
+  const source = String(patchText || '');
+  if (!/^\s*\*\*\* Begin Patch\s*$/m.test(source) || !/^\s*\*\*\* End Patch\s*$/m.test(source)) return [];
+  const files = [];
+  let current = null;
+  for (const line of source.split('\n')) {
+    const header = line.match(/^\*\*\* (Add|Update|Delete) File:\s*(.+)$/);
+    if (header) {
+      const file = _activityDisplayPath(header[2]);
+      current = { ...file, operation: header[1].toLowerCase(), additions: 0, deletions: 0, hunks: 0 };
+      files.push(current);
+      continue;
+    }
+    if (!current) continue;
+    if (line.startsWith('@@')) current.hunks++;
+    else if (line.startsWith('+') && !line.startsWith('+++')) current.additions++;
+    else if (line.startsWith('-') && !line.startsWith('---')) current.deletions++;
+  }
+  return files;
+}
+
+export function buildToolActivityDescriptor(toolName, args = {}) {
+  const descriptor = { kind: 'tool', label: formatToolLabel(toolName, args), toolName };
+  if (toolName === 'fauna_shell_exec') {
+    return { ...descriptor, kind: 'shell', label: 'Ran shell command', command: scrubSecrets(String(args.command || '')).text, cwd: String(args.cwd || '') };
+  }
+  if (toolName === 'fauna_read_file') {
+    const file = _activityDisplayPath(args.path);
+    const startLine = Math.max(1, Number(args.startLine) || 1);
+    const endLine = Number(args.endLine) > 0 ? Number(args.endLine) : null;
+    const rangeLabel = endLine ? `, lines ${startLine} to ${endLine}` : (args.startLine ? `, from line ${startLine}` : '');
+    return { ...descriptor, kind: 'read', label: `Read ${file.name}${rangeLabel}`, ...file, startLine, endLine };
+  }
+  if (toolName === 'fauna_file_search') {
+    return {
+      ...descriptor,
+      kind: 'search',
+      label: 'Searched for files',
+      query: String(args.pattern || ''),
+      queryType: 'glob',
+      scope: String(args.cwd || ''),
+    };
+  }
+  if (toolName === 'fauna_grep') {
+    const isRegex = args.isRegex === true || args.isRegexp === true;
+    return {
+      ...descriptor,
+      kind: 'search',
+      label: isRegex ? 'Searched for regex' : 'Searched for text',
+      query: String(args.query || ''),
+      queryType: isRegex ? 'regex' : 'text',
+      include: String(args.includePattern || args.include || ''),
+      scope: String(args.cwd || ''),
+    };
+  }
+  if (toolName === 'fauna_replace_string') {
+    const file = _activityDisplayPath(args.path);
+    const oldLines = String(args.old_string || '').split('\n').length;
+    const newLines = String(args.new_string || '').split('\n').length;
+    return {
+      ...descriptor,
+      kind: 'edit',
+      label: `Edited ${file.name}`,
+      files: [{ ...file, operation: 'update', additions: newLines, deletions: oldLines, hunks: 1 }],
+    };
+  }
+  if (toolName === 'fauna_apply_patch') {
+    const files = _patchActivityFiles(args.patch);
+    return {
+      ...descriptor,
+      kind: 'edit',
+      label: files.length === 1 ? `Edited ${files[0].name}` : (files.length ? `Edited ${files.length} files` : 'Applying patch'),
+      files,
+    };
+  }
+  if (toolName === 'fauna_write_file') {
+    const file = _activityDisplayPath(args.path);
+    return {
+      ...descriptor,
+      kind: 'edit',
+      label: `${args.append ? 'Updated' : 'Wrote'} ${file.name}`,
+      files: [{ ...file, operation: args.append ? 'append' : 'write', additions: String(args.content || '').split('\n').length, deletions: 0, hunks: 0 }],
+    };
+  }
+  if (toolName === 'fauna_write_files') {
+    const files = (Array.isArray(args.files) ? args.files : []).map((item) => {
+      const file = _activityDisplayPath(item?.path);
+      return { ...file, operation: item?.append ? 'append' : 'write', additions: String(item?.content || '').split('\n').length, deletions: 0, hunks: 0 };
+    });
+    return { ...descriptor, kind: 'edit', label: `Wrote ${files.length} files`, files };
+  }
+  if (toolName === 'fauna_diagnostics') {
+    return {
+      ...descriptor,
+      kind: 'diagnostics',
+      label: 'Checked diagnostics',
+      command: scrubSecrets(String(args.command || '')).text,
+      scope: String(args.cwd || ''),
+    };
+  }
+  return descriptor;
+}
+
+export function buildToolActivityResult(toolName, args = {}, result) {
+  let parsed = result;
+  if (typeof result === 'string') {
+    try { parsed = JSON.parse(result); } catch (_) { parsed = null; }
+  }
+  if (parsed && parsed.ok === false) {
+    return { status: 'failed', summary: String(parsed.error || 'Tool failed').slice(0, 500) };
+  }
+  if (toolName === 'fauna_read_file' && parsed) {
+    const start = Math.max(1, Number(args.startLine) || 1);
+    const totalLines = Math.max(0, Number(parsed.totalLines) || 0);
+    const requestedEnd = Number(args.endLine) > 0 ? Number(args.endLine) : totalLines;
+    const end = Math.min(requestedEnd, totalLines);
+    const selectedLines = totalLines && start <= end ? end - start + 1 : 0;
+    return {
+      status: 'completed',
+      summary: [selectedLines ? `${selectedLines} lines` : '', Number(parsed.bytes) >= 0 ? `${Number(parsed.bytes).toLocaleString()} bytes` : '', parsed.truncated ? 'truncated' : ''].filter(Boolean).join(' · '),
+    };
+  }
+  if (toolName === 'fauna_grep' && parsed) {
+    return { status: 'completed', summary: `${Number(parsed.count) || 0} results · ${Number(parsed.filesScanned) || 0} files scanned` };
+  }
+  if (toolName === 'fauna_file_search' && parsed) {
+    return { status: 'completed', summary: `${Number(parsed.count) || 0} files found${parsed.truncated ? ' · truncated' : ''}` };
+  }
+  if (toolName === 'fauna_apply_patch') {
+    if (!parsed || !Array.isArray(parsed.results)) return { status: 'failed', summary: 'Patch result was not confirmed' };
+    const count = parsed.results.length;
+    return { status: 'completed', summary: `${count} file${count === 1 ? '' : 's'} patched` };
+  }
+  if (toolName === 'fauna_replace_string') return { status: 'completed', summary: 'Replacement applied' };
+  if (toolName === 'fauna_write_file') return { status: 'completed', summary: 'File written' };
+  if (toolName === 'fauna_write_files') {
+    const count = Array.isArray(parsed?.results) ? parsed.results.length : (Array.isArray(args.files) ? args.files.length : 0);
+    return { status: 'completed', summary: `${count} file${count === 1 ? '' : 's'} written` };
+  }
+  if (toolName === 'fauna_shell_exec' && parsed && parsed.exitCode != null) {
+    return { status: Number(parsed.exitCode) === 0 ? 'completed' : 'failed', summary: `Exited with code ${parsed.exitCode}` };
+  }
+  return { status: 'completed', summary: '' };
 }
 
 export function formatToolProgress(toolName, args = {}, elapsedSeconds = 0, state = 'running') {
@@ -1213,6 +1374,22 @@ export function registerChatRoute(app, {
               if (fs.existsSync(_projectRecord.rootPath)) effectiveCwd = _projectRecord.rootPath;
             } catch (_) { /* ignore — fall back below */ }
           }
+          const shellWorkDir = effectiveCwd || os.homedir();
+          const launchProjectDir = commandWorkingDirectory(command, shellWorkDir);
+          const inspectedCommand = commandWithPackageScript(command, launchProjectDir);
+          const electronTarget = electronDevServerTarget(inspectedCommand);
+          if (electronTarget) {
+            const registeredServer = findRunningServerByPort(electronTarget.port);
+            if (!registeredServer || !sameServerCwd(registeredServer.cwd, launchProjectDir)) {
+              return JSON.stringify({
+                ok: false,
+                error: `Refusing to launch Electron against ${electronTarget.url}: port ${electronTarget.port} is not owned by a Fauna dev server from this working directory. Start or verify the project dev server first.`,
+                code: 'DEV_SERVER_OWNERSHIP_MISMATCH',
+                port: electronTarget.port,
+                cwd: launchProjectDir,
+              });
+            }
+          }
           // (No safe-list gate. The agent runs whatever command the model asks for.)
           // Dev/preview servers (npm run dev, vite, next dev, php -S, …)
           // would block the AI turn forever waiting for stdout to close.
@@ -1220,7 +1397,17 @@ export function registerChatRoute(app, {
           // return immediately so the AI can move on. The user manages the
           // process from Settings → Dev Servers.
           if (isDevServerCommand(command)) {
-            const workDir = effectiveCwd || os.homedir();
+            const requestedPort = requestedDevServerPort(inspectedCommand);
+            if (requestedPort && await isTcpPortListening(requestedPort)) {
+              const existingServer = findRunningServerByPort(requestedPort);
+              return JSON.stringify({
+                ok: false,
+                error: `Port ${requestedPort} is already in use${existingServer ? ` by ${existingServer.label || 'a tracked dev server'} in ${existingServer.cwd || 'an unknown directory'}` : ' by an untracked process'}. Refusing to launch or reuse it for this project.`,
+                code: 'DEV_SERVER_PORT_IN_USE',
+                port: requestedPort,
+                cwd: launchProjectDir,
+              });
+            }
             const env = {
               ...process.env,
               ...(augmentedPath ? { PATH: augmentedPath } : {}),
@@ -1231,17 +1418,20 @@ export function registerChatRoute(app, {
             const child = _spawnDetached(
               shellBin,
               isWin ? ['-Command', command] : ['-c', command],
-              { cwd: workDir, env, stdio: ['pipe', 'pipe', 'pipe'] },
+              { cwd: shellWorkDir, env, stdio: ['pipe', 'pipe', 'pipe'] },
             );
-            try { registerDevServer(child, { command, cwd: workDir }); } catch (_) {}
+            let devServerId = null;
+            try { devServerId = registerDevServer(child, { command, cwd: launchProjectDir }); } catch (_) {}
             // Surface a tool_call note in the UI without waiting.
-            try { send({ type: 'tool_output', output: 'Dev server started in background — manage from Settings → Dev Servers.\n', stream: 'stdout' }); } catch (_) {}
+            try { send({ type: 'tool_output', output: 'Dev server launch requested in background — verify its running status in Settings → Dev Servers.\n', stream: 'stdout' }); } catch (_) {}
             return JSON.stringify({
               ok: true,
               backgrounded: true,
+              status: 'starting',
+              devServerId,
               command,
-              cwd: workDir,
-              note: 'Dev server started in the background and tracked in the Dev Servers registry. The user can stop/restart it from Settings → Dev Servers. Do NOT wait for it to exit; continue with the next plan step.',
+              cwd: launchProjectDir,
+              note: 'Dev server launch requested and registered with status "starting". Verify it reaches "running" before launching a desktop client or claiming success.',
             });
           }
           // (No tool_call SSE emit here — the outer dispatcher in chat.js
@@ -1262,7 +1452,7 @@ export function registerChatRoute(app, {
               // Forward live stdout/stderr to the client via the existing
               // tool_output SSE channel — it renders into a ```shell-output
               // collapsible block inside the assistant message.
-              try { send({ type: 'tool_output', output: text, stream: kind }); } catch (_) {}
+              try { send({ type: 'tool_output', output: scrubSecrets(text).text, stream: kind }); } catch (_) {}
             },
             registerChild: shellProcs ? (child) => {
               const id = 'tool_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
@@ -2115,13 +2305,15 @@ export function registerChatRoute(app, {
           const _executeOneCall = async (tc, args, toolName, callKey) => {
             if (upstreamAbort.signal.aborted) throw new Error('Cancelled by user');
             // Send human-readable tool status to the client
-            const toolLabel = formatToolLabel(toolName, args);
+            const activity = buildToolActivityDescriptor(toolName, args);
+            const toolLabel = activity.label;
             send({
               type: 'tool_call',
               callId: tc.id,
               name: toolName,
               label: toolLabel,
-              command: toolName === 'fauna_shell_exec' ? String(args?.command || '') : undefined,
+              command: activity.command,
+              activity,
             });
             const toolStartedAt = Date.now();
             let toolFailed = false;
@@ -2285,6 +2477,9 @@ export function registerChatRoute(app, {
                   toolContent = JSON.stringify({ ok: false, error: 'tool result not serializable: ' + serErr.message });
                 }
               }
+              const activityResult = buildToolActivityResult(toolName, args, toolContent);
+              if (activityResult.status === 'failed') toolFailed = true;
+              send({ type: 'tool_activity_result', callId: tc.id, name: toolName, ...activityResult });
               allMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolContent });
               toolNameByCallId.set(tc.id, toolName);
               // Entity-card artifacts for files created via the write tools —
@@ -2342,6 +2537,15 @@ export function registerChatRoute(app, {
               }
             } catch (e) {
               toolFailed = true;
+              if (!res.writableEnded) {
+                send({
+                  type: 'tool_activity_result',
+                  callId: tc.id,
+                  name: toolName,
+                  status: 'failed',
+                  summary: scrubSecrets(String(e.message || 'Tool failed')).text.slice(0, 500),
+                });
+              }
               allMessages.push({ role: 'tool', tool_call_id: tc.id, content: `Error: ${e.message}` });
               figma.log('✗ ' + toolName + ': ' + e.message, 'err');
             } finally {

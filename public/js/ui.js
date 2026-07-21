@@ -1026,6 +1026,10 @@ window.renderPlanPanel = function renderPlanPanel(msgEl, plan, isLive) {
 function _activityStepIcon(kind) {
   if (kind === 'thinking') return 'ti-brain';
   if (kind === 'shell') return 'ti-terminal-2';
+  if (kind === 'read') return 'ti-book-2';
+  if (kind === 'search') return 'ti-search';
+  if (kind === 'edit') return 'ti-pencil';
+  if (kind === 'diagnostics') return 'ti-stethoscope';
   if (kind === 'browser') return 'ti-world-search';
   if (kind === 'file') return 'ti-file-code';
   return 'ti-tool';
@@ -1037,6 +1041,35 @@ function _activityStepKind(label, fallback) {
   if (/browser|fetch|navigate|screenshot|page/.test(text)) return 'browser';
   if (/file|write|read|patch|artifact/.test(text)) return 'file';
   return fallback || 'tool';
+}
+
+function formatActivityDescriptorDetail(activity) {
+  if (!activity || typeof activity !== 'object') return '';
+  var lines = [];
+  if (activity.kind === 'shell') {
+    if (activity.command) lines.push('$ ' + activity.command);
+    if (activity.cwd) lines.push('Working directory: ' + activity.cwd);
+  } else if (activity.kind === 'read') {
+    if (activity.path) lines.push(activity.path);
+    if (activity.endLine) lines.push('Lines ' + activity.startLine + '–' + activity.endLine);
+    else if (activity.startLine > 1) lines.push('From line ' + activity.startLine);
+  } else if (activity.kind === 'search') {
+    if (activity.query) lines.push((activity.queryType === 'glob' ? 'Glob: ' : activity.queryType === 'regex' ? 'Regex: ' : 'Text: ') + activity.query);
+    if (activity.include) lines.push('Files: ' + activity.include);
+    if (activity.scope) lines.push('Scope: ' + activity.scope);
+  } else if (activity.kind === 'edit' && Array.isArray(activity.files)) {
+    activity.files.forEach(function(file) {
+      var stats = [];
+      if (Number(file.additions)) stats.push('+' + Number(file.additions));
+      if (Number(file.deletions)) stats.push('−' + Number(file.deletions));
+      if (Number(file.hunks) > 1) stats.push(Number(file.hunks) + ' hunks');
+      lines.push((file.path || file.name || 'file') + (stats.length ? '  ' + stats.join(' ') : ''));
+    });
+  } else if (activity.kind === 'diagnostics') {
+    if (activity.command) lines.push('$ ' + activity.command);
+    if (activity.scope) lines.push('Scope: ' + activity.scope);
+  }
+  return lines.join('\n');
 }
 
 function _activityImageSources(text) {
@@ -1142,6 +1175,7 @@ window.createActivityStep = createActivityStep;
 window.updateActivityStepDetail = updateActivityStepDetail;
 window.setActivityStepDetailAvailability = setActivityStepDetailAvailability;
 window.activityStepKind = _activityStepKind;
+window.formatActivityDescriptorDetail = formatActivityDescriptorDetail;
 
 function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML, reasoning, widgets, plan, activity) {
   var el     = createMessageEl(role, agentInfo);
@@ -1222,8 +1256,10 @@ function appendMessageDOM(role, content, attachments, animate, agentInfo, isHTML
     }
     (activity || []).forEach(function(item) {
       var itemLabel = item.label || 'Tool output';
-      var itemDetail = [item.command ? '$ ' + item.command : '', item.output || ''].filter(Boolean).join('\n\n');
-      var toolStep = createActivityStep(itemLabel, _activityStepKind(itemLabel, 'tool'), itemDetail || 'Completed without preview output.', false);
+      var descriptorDetail = formatActivityDescriptorDetail(item.activity);
+      var itemDetail = [descriptorDetail || (item.command ? '$ ' + item.command : ''), item.resultSummary || '', item.output || ''].filter(Boolean).join('\n\n');
+      var itemKind = item.activity && item.activity.kind ? item.activity.kind : _activityStepKind(itemLabel, 'tool');
+      var toolStep = createActivityStep(itemLabel, itemKind, itemDetail || 'Completed without preview output.', false);
       activityBody.appendChild(toolStep.entry);
     });
     activityPanel.querySelector('.tool-activity-toggle').addEventListener('click', function() {

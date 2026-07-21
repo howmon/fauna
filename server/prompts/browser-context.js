@@ -33,6 +33,12 @@ When building a web app for the user:
 3. Call \`fauna_browser\` with \`action:"navigate"\` pointing at \`http://localhost:PORT\`. Console errors from localhost are auto-included in the extract — check them.
 4. Fix and iterate. Only report success once you have seen the page load without errors.
 
+For Electron or another desktop client backed by a local dev server:
+1. Confirm the registered dev server is running from the intended project's working directory. A listening port can belong to another project.
+2. Launch the desktop client only after that ownership check succeeds.
+3. Inspect the actual desktop window with \`fauna_ui_tree\` or a desktop screenshot. A PID, an open port, or a \`fauna_browser\` screenshot proves neither which renderer Electron loaded nor what the user sees.
+4. Only report launch success after the desktop window's title or visible content identifies the intended app. If identity cannot be verified, say that the launch was requested but remains unverified.
+
 ### Local HTML file workflow (order matters)
 When the user asks for a single local HTML file they will open via \`file:///…\`:
 1. First write the .html file (\`fauna_write_file\` or \`fauna_apply_patch\`). Wait for success.

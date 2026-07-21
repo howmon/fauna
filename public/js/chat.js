@@ -1436,14 +1436,17 @@ async function streamResponse(conv) {
 
   function _activityEntryDetail(entry) {
     if (!entry) return '';
-    return [entry.command ? '$ ' + entry.command : '', entry.progress || '', entry.output || ''].filter(Boolean).join('\n\n');
+    var descriptorDetail = typeof formatActivityDescriptorDetail === 'function'
+      ? formatActivityDescriptorDetail(entry.activity)
+      : '';
+    return [descriptorDetail || (entry.command ? '$ ' + entry.command : ''), entry.resultSummary || entry.progress || '', entry.output || ''].filter(Boolean).join('\n\n');
   }
 
-  function _beginLiveToolOutput(label, callId, command) {
+  function _beginLiveToolOutput(label, callId, command, activity) {
     _ensureLiveToolOutputPanel();
     if (!_liveToolOutputBody) return null;
     _liveToolOutputEntryCount++;
-    _currentActivityEntry = { callId: callId || '', label: label || 'Tool output', command: String(command || ''), output: '', progress: 'Starting…' };
+    _currentActivityEntry = { callId: callId || '', label: label || 'Tool output', command: String(command || ''), activity: activity || null, output: '', progress: 'Starting…' };
     _activityEntries.push(_currentActivityEntry);
     if (callId) _activityEntryByCallId[callId] = _currentActivityEntry;
     Array.from(_liveToolOutputBody.querySelectorAll('.tool-activity-entry[data-open="1"]')).forEach(function(existing) {
@@ -1451,7 +1454,9 @@ async function streamResponse(conv) {
       var existingToggle = existing.querySelector('.tool-activity-step-toggle');
       if (existingToggle) existingToggle.setAttribute('aria-expanded', 'false');
     });
-    var toolKind = typeof activityStepKind === 'function' ? activityStepKind(label, 'tool') : 'tool';
+    var toolKind = activity && activity.kind
+      ? activity.kind
+      : (typeof activityStepKind === 'function' ? activityStepKind(label, 'tool') : 'tool');
     var step = createActivityStep(label || 'Tool output', toolKind, _activityEntryDetail(_currentActivityEntry), true);
     _liveToolOutputPre = step.text;
     _currentActivityEntry.step = step;
@@ -1463,11 +1468,21 @@ async function streamResponse(conv) {
   function _updateLiveToolProgress(evt) {
     var entry = (evt.callId && _activityEntryByCallId[evt.callId]) || _currentActivityEntry;
     if (!entry || !entry.step) return;
-    entry.progress = String(evt.message || 'Still running…');
+    entry.progress = evt.completed && entry.resultSummary ? '' : String(evt.message || 'Still running…');
     if (typeof setActivityStepDetailAvailability === 'function') setActivityStepDetailAvailability(entry.step, true);
     updateActivityStepDetail(entry.step, _activityEntryDetail(entry));
     entry.step.entry.dataset.completed = evt.completed ? '1' : '0';
     entry.step.entry.dataset.failed = evt.failed ? '1' : '0';
+  }
+
+  function _updateLiveToolActivityResult(evt) {
+    var entry = evt.callId && _activityEntryByCallId[evt.callId];
+    if (!entry || !entry.step) return;
+    entry.resultSummary = String(evt.summary || '');
+    entry.progress = '';
+    updateActivityStepDetail(entry.step, _activityEntryDetail(entry));
+    entry.step.entry.dataset.completed = '1';
+    entry.step.entry.dataset.failed = evt.status === 'failed' ? '1' : '0';
   }
 
   function _ensureLiveToolOutputBlock() {
@@ -1983,11 +1998,15 @@ async function streamResponse(conv) {
             _lastToolOutputAccum = ''; // reset per tool invocation
             // Ephemeral tool status — shown as shimmer stack, not baked into buffer
             var toolLabel = evt.label || evt.name || 'tool';
-            _beginLiveToolOutput(toolLabel, evt.callId, evt.command);
+            _beginLiveToolOutput(toolLabel, evt.callId, evt.command, evt.activity);
             if (isActive()) scrollBottom();
           }
           if (evt.type === 'tool_progress') {
             _updateLiveToolProgress(evt);
+            if (isActive()) scrollBottom();
+          }
+          if (evt.type === 'tool_activity_result') {
+            _updateLiveToolActivityResult(evt);
             if (isActive()) scrollBottom();
           }
           if (evt.type === 'artifact_created' && evt.path) {
@@ -2332,7 +2351,7 @@ async function streamResponse(conv) {
       summary: _reasoningSummary || _publicReasoningSummary || undefined,
     };
     if (_activityEntries.length) aiMsg.activity = _activityEntries.map(function(entry) {
-      return { label: entry.label, command: entry.command || '', output: entry.output || entry.progress || '' };
+      return { label: entry.label, command: entry.command || '', activity: entry.activity || null, resultSummary: entry.resultSummary || '', output: entry.output || entry.progress || '' };
     });
     if (_streamWidgets.length) aiMsg.widgets = _streamWidgets;
     if (_currentPlan && _currentPlan.items && _currentPlan.items.length) aiMsg.plan = _currentPlan;
