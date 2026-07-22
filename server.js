@@ -566,6 +566,7 @@ const playwrightMcp = registerPlaywrightMcpRoutes(app, {
   express,
   require: _require,
   isWin: IS_WIN,
+  runtimeDir: FAUNA_CONFIG_DIR,
 });
 registerChatRoute(app, {
   figma,

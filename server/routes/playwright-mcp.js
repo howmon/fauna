@@ -11,6 +11,7 @@ export function registerPlaywrightMcpRoutes(app, {
   express,
   require: _require,
   isWin,
+  runtimeDir,
 }) {
   let _playwrightMcpClient = null;
   let _playwrightMcpClientPromise = null;
@@ -40,13 +41,15 @@ export function registerPlaywrightMcpRoutes(app, {
     if (process.versions?.electron && nodeBin === process.execPath) {
       spawnEnv.ELECTRON_RUN_AS_NODE = '1';
     }
+    const playwrightMcpCwd = path.join(runtimeDir, 'playwright-mcp');
+    fs.mkdirSync(playwrightMcpCwd, { recursive: true });
     _playwrightMcpLastStderr = '';
-    _playwrightMcpLastLaunch = { nodeBin, cliPath, cwd: path.dirname(cliPath) };
+    _playwrightMcpLastLaunch = { nodeBin, cliPath, cwd: playwrightMcpCwd };
     const transport = new StdioClientTransport({
       command: nodeBin,
       args: [cliPath],
       env: spawnEnv,
-      cwd: path.dirname(cliPath),
+      cwd: playwrightMcpCwd,
       stderr: 'pipe',
     });
     transport.stderr?.on('data', chunk => {

@@ -550,8 +550,10 @@ export function createCustomMcpBridge({
         try {
           const nodeBin = findNodeBinary() || process.execPath;
           if (nodeBin) {
+            const browserServerCwd = path.join(faunaConfigDir, 'browser-server');
+            fs.mkdirSync(browserServerCwd, { recursive: true });
             bundledBrowserServerProc = spawn(nodeBin, [bundledBrowserServerPath], {
-              cwd: path.dirname(bundledBrowserServerPath),
+              cwd: browserServerCwd,
               stdio: 'ignore',
               detached: false,
               env: { ...process.env }
