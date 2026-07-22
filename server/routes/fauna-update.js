@@ -93,19 +93,11 @@ export function registerFaunaUpdateRoutes(app, {
 
   async function _faunaFetchRemoteSha() {
     // Use GitHub API — no auth needed for public repos
-    const https = await import('https');
-    return new Promise((resolve, reject) => {
-      const url = `https://api.github.com/repos/${FAUNA_REPO_OWNER}/${FAUNA_REPO_NAME}/commits/main`;
-      const opts = { headers: { 'User-Agent': 'Fauna-App/1.0', 'Accept': 'application/vnd.github.sha' } };
-      https.get(url, opts, r => {
-        let body = '';
-        r.on('data', c => body += c);
-        r.on('end', () => {
-          if (r.statusCode === 200) resolve(body.trim());
-          else reject(new Error(`GitHub API ${r.statusCode}: ${body.slice(0, 120)}`));
-        });
-      }).on('error', reject);
-    });
+    const url = `https://api.github.com/repos/${FAUNA_REPO_OWNER}/${FAUNA_REPO_NAME}/commits/main`;
+    const response = await fetch(url, { headers: { 'User-Agent': 'Fauna-App/1.0', 'Accept': 'application/vnd.github.sha' } });
+    const body = await response.text();
+    if (!response.ok) throw new Error(`GitHub API ${response.status}: ${body.slice(0, 120)}`);
+    return body.trim();
   }
 
   app.get('/api/fauna/update-status', (_req, res) => {

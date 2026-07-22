@@ -8,6 +8,16 @@ describe('native HTTP fetch transport', () => {
 
   beforeAll(async () => {
     server = http.createServer((request, response) => {
+      if (request.url === '/redirect') {
+        response.writeHead(302, { Location: '/binary' });
+        response.end();
+        return;
+      }
+      if (request.url === '/binary') {
+        response.setHeader('Content-Type', 'application/octet-stream');
+        response.end(Buffer.from([0, 127, 128, 255]));
+        return;
+      }
       let body = '';
       request.setEncoding('utf8');
       request.on('data', chunk => { body += chunk; });
@@ -36,5 +46,13 @@ describe('native HTTP fetch transport', () => {
       method: 'POST',
       body: JSON.stringify({ model: 'claude-opus-4.8' }),
     });
+  });
+
+  it('follows redirects and preserves streamed binary data', async () => {
+    const response = await nativeHttpsFetch(`${baseUrl}/redirect`);
+
+    expect(response.ok).toBe(true);
+    expect(response.headers.get('content-type')).toBe('application/octet-stream');
+    expect([...new Uint8Array(await response.arrayBuffer())]).toEqual([0, 127, 128, 255]);
   });
 });

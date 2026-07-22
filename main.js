@@ -15,6 +15,7 @@ import { setDefaultScrubOpts } from './server/lib/redactor.js';
 import { buildShellEnv } from './server/lib/shell-env.js';
 import { createSelfUpdater } from './lib/self-updater.js';
 import { buildV8SafetyRelaunchArgs, V8_SAFETY_MARKER, V8_SAFETY_MODE } from './lib/v8-runtime-guard.js';
+import { nativeHttpsFetch } from './server/copilot/native-https-fetch.js';
 
 process.noDeprecation = true;
 
@@ -25,6 +26,7 @@ if (v8SafetyRelaunchArgs) {
 }
 if (process.argv.includes(V8_SAFETY_MARKER)) {
   app.commandLine.removeSwitch('js-flags');
+  globalThis.fetch = nativeHttpsFetch;
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

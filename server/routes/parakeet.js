@@ -12,8 +12,8 @@
 
 import fs from 'fs';
 import path from 'path';
-import https from 'https';
 import { spawn } from 'child_process';
+import { Readable } from 'stream';
 import { createRequire } from 'module';
 
 import {
@@ -34,32 +34,25 @@ const _require = createRequire(import.meta.url);
 
 // Download one URL to a destination path, following redirects, reporting
 // byte progress. Resolves on success, rejects on error.
-function downloadFile(url, dest, onProgress, signal) {
+async function downloadFile(url, dest, onProgress, signal) {
+  const response = await fetch(url, { headers: { 'User-Agent': 'fauna' }, redirect: 'follow', signal });
+  if (!response.ok) throw new Error('HTTP ' + response.status + ' for ' + url);
+  const total = parseInt(response.headers.get('content-length') || '0', 10);
   return new Promise((resolve, reject) => {
-    const req = https.get(url, { headers: { 'User-Agent': 'fauna' } }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume();
-        downloadFile(res.headers.location, dest, onProgress, signal).then(resolve, reject);
-        return;
-      }
-      if (res.statusCode !== 200) {
-        res.resume();
-        reject(new Error('HTTP ' + res.statusCode + ' for ' + url));
-        return;
-      }
-      const total = parseInt(res.headers['content-length'] || '0', 10);
-      let received = 0;
-      const out = fs.createWriteStream(dest);
-      res.on('data', (chunk) => {
-        received += chunk.length;
-        if (onProgress) onProgress(received, total);
-      });
-      res.pipe(out);
-      out.on('finish', () => out.close(() => resolve()));
-      out.on('error', reject);
+    let received = 0;
+    const source = Readable.fromWeb(response.body);
+    const out = fs.createWriteStream(dest);
+    source.on('data', chunk => {
+      received += chunk.length;
+      if (onProgress) onProgress(received, total);
     });
-    req.on('error', reject);
-    if (signal) signal.addEventListener('abort', () => { try { req.destroy(); } catch (_) {} });
+    source.on('error', error => {
+      out.destroy();
+      reject(error);
+    });
+    source.pipe(out);
+    out.on('finish', () => out.close(() => resolve()));
+    out.on('error', reject);
   });
 }
 
