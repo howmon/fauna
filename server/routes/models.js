@@ -9,6 +9,7 @@
 // endpoint".
 
 import { FALLBACK_MODELS } from '../copilot/models.js';
+import { runtimeFetch } from '../copilot/native-https-fetch.js';
 
 export function registerModelsRoutes(app, { readSavedConfig, getGhToken }) {
   app.get('/api/models', async (req, res) => {
@@ -16,7 +17,7 @@ export function registerModelsRoutes(app, { readSavedConfig, getGhToken }) {
       const cfg     = readSavedConfig();
       const hasPat  = !!(cfg.pat && cfg.pat.trim());
       const token   = getGhToken();
-      const r = await fetch('https://api.githubcopilot.com/models', {
+      const r = await runtimeFetch('https://api.githubcopilot.com/models', {
         headers: {
           Authorization:            `Bearer ${token}`,
           'Editor-Version':         'vscode/1.85.0',

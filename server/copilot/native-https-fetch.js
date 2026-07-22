@@ -1,11 +1,13 @@
+import http from 'node:http';
 import https from 'node:https';
 import { Readable } from 'node:stream';
 
 export function nativeHttpsFetch(input, init = {}) {
   const source = typeof input === 'string' || input instanceof URL ? null : input;
   const url = new URL(source ? source.url : input);
-  if (url.protocol !== 'https:') {
-    return Promise.reject(new TypeError(`nativeHttpsFetch only supports HTTPS URLs, received ${url.protocol}`));
+  const transport = url.protocol === 'https:' ? https : url.protocol === 'http:' ? http : null;
+  if (!transport) {
+    return Promise.reject(new TypeError(`nativeHttpsFetch does not support ${url.protocol}`));
   }
 
   const headers = new Headers(source?.headers || undefined);
@@ -13,7 +15,7 @@ export function nativeHttpsFetch(input, init = {}) {
   const body = init.body ?? source?.body ?? null;
 
   return new Promise((resolve, reject) => {
-    const request = https.request(url, {
+    const request = transport.request(url, {
       method: init.method || source?.method || 'GET',
       headers: Object.fromEntries(headers.entries()),
       signal: init.signal,
@@ -34,4 +36,10 @@ export function nativeHttpsFetch(input, init = {}) {
       request.destroy();
     }
   });
+}
+
+export function runtimeFetch(input, init) {
+  return typeof WebAssembly === 'undefined'
+    ? nativeHttpsFetch(input, init)
+    : globalThis.fetch(input, init);
 }
