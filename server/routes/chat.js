@@ -1846,7 +1846,7 @@ export function registerChatRoute(app, {
         return '';
       })();
       const _hasSharedBrowserTabContext = /\[(?:Resolved live browser tab context|Same browser tab\(s\) as the previous turn|Browser-extension tab attached)/i.test(_lastUserQuery);
-      const _writeIntentTurn = /\b(?:fix|fixes|fixed|implement|resolve|repair|patch|update|change|modify|edit|write|create|add|remove|delete|hide|replace|refactor|migrate|install|build\s+out|make\s+(?:all|the|this)|proceed)\b/i.test(_lastUserQuery || '');
+      const _writeIntentTurn = /\b(?:fix|fixes|fixed|implement|resolve|repair|patch|update|change|modify|edit|write|create|add|remove|delete|hide|replace|refactor|migrate|install|extract|port|integrate|copy|move|bring|build\s+out|make\s+(?:all|the|this)|proceed)\b/i.test(_lastUserQuery || '');
       const MUTATING_TOOLS = new Set([
         'fauna_write_file', 'fauna_write_files', 'fauna_apply_patch',
         'fauna_replace_string', 'fauna_write_offloaded',
@@ -1947,7 +1947,7 @@ export function registerChatRoute(app, {
       // memory-context case-study transcript where the model said "The specific
       // next action is to read …" five turns in a row and the original regex
       // missed every one because it only matched first-person phrasings.
-      const FORWARD_PROMISE_DEFER_RE = /\b(the\s+(?:specific\s+)?next\s+(?:action|step|move)\s+is\s+to|the\s+next\s+concrete\s+(?:action|step)\s+(?:is|would\s+be)|next\s+up\s+(?:is|will\s+be)\s+to|my\s+next\s+(?:action|step)\s+(?:is|will\s+be)\s+to|then\s+i(?:'ll| will)\s+(?:read|create|run|call|invoke|write|edit|build|test|verify|fetch|search))\b/i;
+      const FORWARD_PROMISE_DEFER_RE = /\b(the\s+(?:specific\s+)?next\s+(?:action|step|move)\s+is\s+to|the\s+next\s+concrete\s+(?:action|step)\s*(?::|(?:is|would\s+be))|next\s+up\s+(?:is|will\s+be)\s+to|my\s+next\s+(?:action|step)\s+(?:is|will\s+be)\s+to|then\s+i(?:'ll| will)\s+(?:read|create|run|call|invoke|write|edit|build|test|verify|fetch|search))\b/i;
       const endsWithForwardPromise = (text) => {
         const trimmed = String(text || '').trim();
         if (!trimmed) return false;
@@ -1968,6 +1968,33 @@ export function registerChatRoute(app, {
       const finalStatusFromText = (text) => {
         const m = String(text || '').match(MARKER_RE);
         return m ? m[1].toUpperCase() : null;
+      };
+      const requiredInputActionFromText = (text) => {
+        if (finalStatusFromText(text) !== 'NEEDS-INPUT') return null;
+        const prompt = String(text || '')
+          .replace(MARKER_RE, '')
+          .replace(/```(?:gen-ui|suggestions)[\s\S]*?```/gi, '')
+          .trim();
+        return {
+          kind: 'model-input',
+          title: 'Fauna needs your input',
+          prompt: prompt || 'Provide the missing information so Fauna can continue.',
+          options: [
+            {
+              id: 'provide-details',
+              label: 'Provide details',
+              description: 'Answer the question and continue the current task.',
+              response: '',
+              recommended: true,
+              custom: true,
+            },
+            {
+              id: 'cancel',
+              label: 'Cancel task',
+              response: 'Cancel this task and do not continue.',
+            },
+          ],
+        };
       };
       const hasDoneEvidence = (text) => {
         if (qaRan || deployRan || toolCallCount > 0) return true;
@@ -3078,7 +3105,13 @@ export function registerChatRoute(app, {
             //    run it once and re-loop if it fails.
             // Only engage when the model produced terminal text and we have
             // not been re-prompting for half-stops or narration.
-            const finalMarker = autonomousMode ? finalStatusFromText(assistantText) : null;
+            const detectedFinalMarker = finalStatusFromText(assistantText);
+            const finalMarker = autonomousMode ? detectedFinalMarker : null;
+            const modelRequiredInput = requiredInputActionFromText(assistantText);
+            if (modelRequiredInput && !requiresUserActionThisTurn) {
+              requiresUserActionThisTurn = modelRequiredInput;
+              send({ type: 'requires_user_action', action: modelRequiredInput });
+            }
 
             // Helper: run the deploy gate (if configured + approved + not yet
             // run) before emitting 'done'. Returns true when the deploy

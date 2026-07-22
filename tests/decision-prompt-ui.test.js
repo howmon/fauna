@@ -25,6 +25,8 @@ describe('decision prompt composer replacement', () => {
 
   it('supports custom responses and resumes through a real user message', () => {
     expect(componentSource).toContain("selected.value === '__custom__'");
+    expect(componentSource).toContain('(option && option.custom)');
+    expect(componentSource).toContain('customInput.hidden = !(selectedOption && selectedOption.custom);');
     expect(componentSource).toContain("customInput.scrollIntoView({ block: 'nearest', inline: 'nearest' });");
     expect(componentSource).toContain('if (overlap >= 0) form.scrollTop += overlap + 8;');
     expect(componentSource).toContain('input.value = response;');

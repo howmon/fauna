@@ -78,6 +78,7 @@ function renderDecisionPrompt(action, conv) {
   options.setAttribute('aria-label', decision.prompt || decision.title);
   var recommended = decision.options.find(function(option) { return option && option.recommended; });
   var selectedId = recommended ? recommended.id : (decision.options[0] && decision.options[0].id);
+  var selectedOption = decision.options.find(function(option) { return option && option.id === selectedId; });
 
   decision.options.forEach(function(option) {
     if (!option || !option.id || !option.label) return;
@@ -117,7 +118,7 @@ function renderDecisionPrompt(action, conv) {
     customInput.rows = 2;
     customInput.placeholder = decision.customPlaceholder;
     customInput.setAttribute('aria-label', decision.customPlaceholder);
-    customInput.hidden = true;
+    customInput.hidden = !(selectedOption && selectedOption.custom);
     options.appendChild(customInput);
     customRadio.addEventListener('change', function() {
       customInput.hidden = false;
@@ -164,21 +165,25 @@ function renderDecisionPrompt(action, conv) {
     }
   });
   form.addEventListener('change', function(event) {
-    if (event.target && event.target.name === 'decision-option' && event.target.value !== '__custom__' && customInput) customInput.hidden = true;
+    if (event.target && event.target.name === 'decision-option' && customInput) {
+      var option = decision.options.find(function(item) { return item.id === event.target.value; });
+      customInput.hidden = event.target.value !== '__custom__' && !(option && option.custom);
+      if (!customInput.hidden) customInput.focus();
+    }
   });
   form.addEventListener('submit', function(event) {
     event.preventDefault();
     var selected = form.querySelector('input[name="decision-option"]:checked');
     if (!selected) return;
     var response = '';
-    if (selected.value === '__custom__') {
+    var option = decision.options.find(function(item) { return item.id === selected.value; });
+    if (selected.value === '__custom__' || (option && option.custom)) {
       response = customInput ? customInput.value.trim() : '';
       if (!response) {
         if (customInput) customInput.focus();
         return;
       }
     } else {
-      var option = decision.options.find(function(item) { return item.id === selected.value; });
       response = option && (option.response || option.label);
     }
     if (!response) return;

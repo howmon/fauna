@@ -280,6 +280,49 @@ describe('POST /api/chat lifecycle hooks', () => {
     )).toHaveLength(2);
   });
 
+  it('continues extraction requests after a discovery-only summary', async () => {
+    llm.supportsTools = true;
+    write(path.join(workspaceRoot, 'builder.tsx'), 'export function Builder() { return null; }\n');
+    llm.create
+      .mockResolvedValueOnce(mockToolCallStream('fauna_read_file', { path: path.join(workspaceRoot, 'builder.tsx') }))
+      .mockResolvedValueOnce(mockStopStream('No files were modified. Next concrete step: locate the live builder page source module.'))
+      .mockResolvedValueOnce(mockStopStream('BLOCKED: the builder source is not present in the selected workspace.'));
+
+    const res = await app.invoke('POST', '/api/chat', {
+      body: {
+        messages: [{
+          role: 'user',
+          content: 'Extract the inspector panel, CSS, images, and subcomponents and bring them to the builder page',
+        }],
+        clientContext: 'test',
+      },
+    });
+
+    expect(llm.create.mock.calls.length, JSON.stringify(parseSse(res.chunks))).toBe(3);
+    expect(llm.create.mock.calls[2][0].messages.some(message =>
+      message.role === 'user' && /Make the smallest safe edit NOW/.test(message.content)
+    )).toBe(true);
+    expect(parseSse(res.chunks).some(event => event.type === 'content' && /BLOCKED:/.test(event.content))).toBe(true);
+  });
+
+  it('routes explicit model input requests through the Decision Prompt', async () => {
+    mockTextStream('NEEDS-INPUT: Which builder page should receive the inspector?');
+
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'continue the integration' }], noTools: true, clientContext: 'test' },
+    });
+
+    const event = parseSse(res.chunks).find(item => item.type === 'requires_user_action');
+    expect(event?.action).toMatchObject({
+      kind: 'model-input',
+      title: 'Fauna needs your input',
+      prompt: 'Which builder page should receive the inspector?',
+      options: expect.arrayContaining([
+        expect.objectContaining({ id: 'provide-details', recommended: true, custom: true }),
+      ]),
+    });
+  });
+
   it('separates narrated tool rounds from the next model response', async () => {
     llm.supportsTools = true;
     write(path.join(workspaceRoot, 'target.js'), 'export const value = 1;\n');
