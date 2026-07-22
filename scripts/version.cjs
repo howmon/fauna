@@ -8,14 +8,13 @@
  *   node scripts/version.js minor                 — bump minor across all components
  *   node scripts/version.js major                 — bump major across all components
  *   node scripts/version.js set 1.2.3             — set exact version across all components
- *   node scripts/version.js patch --only figma    — bump only FaunaFigmaMCP
- *   node scripts/version.js patch --only browser  — bump only FaunaBrowserMCP
+ *   node scripts/version.js patch --only mcp      — bump only FaunaMCP
  *   node scripts/version.js patch --only app      — bump only main Fauna app
  *   node scripts/version.js patch --only relay    — bump only relay
  *   node scripts/version.js patch --only mobile   — bump only mobile
  *   node scripts/version.js patch --only ext      — bump only browser-extension
  *
- * Component tags: app, figma, browser, relay, mobile, ext
+ * Component tags: app, mcp, relay, mobile, ext
  */
 
 const fs   = require('fs');
@@ -28,10 +27,8 @@ const ROOT = path.resolve(__dirname, '..');
 //   field: 'version' for package.json / manifest.json (string path to key)
 const ARTIFACTS = [
   { tag: 'app',     label: 'Fauna (main app)',           file: 'package.json',                            field: 'version' },
-  { tag: 'figma',   label: 'FaunaFigmaMCP',              file: 'faunafigmamcp/package.json',              field: 'version' },
-  { tag: 'browser', label: 'FaunaBrowserMCP',            file: 'faunabrowsermcp/package.json',            field: 'version' },
-  { tag: 'ext',     label: 'FaunaBrowserMCP extension',  file: 'faunabrowsermcp/extension/manifest.json', field: 'version' },
-  { tag: 'bext',    label: 'Browser extension (legacy)', file: 'browser-extension/manifest.json',         field: 'version' },
+  { tag: 'mcp',     label: 'FaunaMCP',                   file: 'faunaMCP-main/package.json',               field: 'version' },
+  { tag: 'ext',     label: 'Browser extension',          file: 'browser-extension/manifest.json',         field: 'version' },
   { tag: 'relay',   label: 'Relay server',               file: 'relay/package.json',                      field: 'version' },
   { tag: 'mobile',  label: 'Mobile (Expo)',               file: 'mobile/package.json',                     field: 'version' },
 ];

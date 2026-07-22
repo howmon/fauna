@@ -54,6 +54,7 @@ app.asar.bak
 !CODE_OF_CONDUCT.md
 !CONTRIBUTING.md
 !SECURITY.md
+!RELEASING.md
 !.github/**/*.md
 !docs/code-intelligence-parity-plan.md
 services/*

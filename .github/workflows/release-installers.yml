@@ -19,13 +19,31 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  release-contract:
+    name: Validate release contract
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout release
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Validate tag and packaged versions
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: node scripts/validate-release.cjs
+
   build-mac-arm64:
     name: Build macOS DMG (arm64) - Fauna + FaunaMCP
     runs-on: macos-14
+    needs: release-contract
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - name: Setup Node
         uses: actions/setup-node@v5
@@ -148,10 +166,13 @@ jobs:
   build-mac-x64:
     name: Build macOS DMG (x64) - Fauna + FaunaMCP
     runs-on: macos-14
+    needs: release-contract
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - name: Setup Node
         uses: actions/setup-node@v5
@@ -274,10 +295,13 @@ jobs:
   build-win-x64:
     name: Build Windows EXE (x64) - Fauna + FaunaMCP
     runs-on: windows-2025
+    needs: release-contract
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - name: Setup Node
         uses: actions/setup-node@v5
@@ -350,7 +374,7 @@ jobs:
           TAG="${{ steps.tag.outputs.value }}"
 
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes "Automated installer artifacts"
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Fauna ${TAG#v}" --generate-notes
           fi
 
           shopt -s globstar nullglob

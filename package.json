@@ -1,6 +1,6 @@
 {
   "name": "@eichho/fauna",
-  "version": "2.0.0",
+  "version": "2.0.4",
   "description": "Fauna — AI assistant CLI. Chat with LLMs, run autonomous tasks, and control your desktop from the terminal.",
   "author": {
     "name": "Solomon Abey",
@@ -56,6 +56,7 @@
     "version:minor": "node scripts/version.cjs minor",
     "version:major": "node scripts/version.cjs major",
     "version:set": "node scripts/version.cjs set",
+    "release:check": "node scripts/validate-release.cjs",
     "gen:capabilities": "node scripts/gen-capabilities.cjs"
   },
   "dependencies": {
