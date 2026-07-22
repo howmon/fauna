@@ -28,4 +28,16 @@ describe('packaged macOS runtime safety', () => {
     expect(customMcpBridge).toContain("path.join(faunaConfigDir, 'browser-server')");
     expect(customMcpBridge).not.toContain('cwd: path.dirname(bundledBrowserServerPath)');
   });
+
+  it('does not composite the hidden voice overlay', () => {
+    const styles = read('public/css/styles.css');
+    const hiddenSelectors = ['#vl-outer', '#vl-mid', '#vl-inner', '#vl-center', '.vw-bar'];
+
+    expect(styles).toMatch(/#voice-overlay\s*\{[^}]*visibility:\s*hidden/s);
+    for (const selector of hiddenSelectors) {
+      const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      expect(styles.match(new RegExp(`${escapedSelector}\\s*\\{[^}]*\\}`, 's'))?.[0]).not.toContain('animation:');
+      expect(styles).toContain(`#voice-overlay.visible ${selector}`);
+    }
+  });
 });
