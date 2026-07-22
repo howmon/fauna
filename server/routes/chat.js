@@ -66,6 +66,25 @@ import { summarizeHistory } from '../lib/summarize-history.js';
 import { withTimeout } from '../lib/async-utils.js';
 import { loadAgentManifest } from '../lib/agent-manifest.js';
 import { scrubSecrets } from '../lib/redactor.js';
+import { normalizeInteractiveAuthCommand } from '../lib/interactive-auth.js';
+
+export function detectRequiredUserAction(toolName, args = {}, result = '') {
+  const output = String(result || '');
+  const command = String(args?.command || args?.input || '');
+  const deviceUrlPattern = /https?:\/\/(?:login\.microsoft(?:online)?\.com|microsoft\.com)\/(?:device|devicelogin)\b/i;
+  const hasDeviceUrl = deviceUrlPattern.test(output);
+  const hasDeviceInstruction = /(?:enter|use)\s+(?:the\s+)?code\b|device[- ]code|to sign in,?\s+use a web browser/i.test(output);
+  const isDeviceLoginCommand = /\bauth\s+login\b.*\bdevice[- ]code\b/i.test(command);
+  if (!hasDeviceUrl || (!hasDeviceInstruction && !isDeviceLoginCommand)) return null;
+
+  const codeMatch = output.match(/\b(?:enter|code(?:\s+is)?[:\s]+)\s*([A-Z0-9]{6,12})\b/i);
+  return {
+    kind: 'device-code-auth',
+    toolName: String(toolName || ''),
+    url: (output.match(deviceUrlPattern) || [])[0] || null,
+    code: codeMatch ? codeMatch[1].toUpperCase() : null,
+  };
+}
 
 // ── Created-file artifact detection ──────────────────────────────────────
 // Files created via the fauna_write_file / fauna_write_files / fauna_shell_exec
@@ -1851,6 +1870,7 @@ export function registerChatRoute(app, {
       const STALE_KEEP_PER_TOOL = 2;
       const toolNameByCallId = new Map(); // call_id -> tool name (for stale shrink)
       const toolCallsSeen = new Map(); // deduplicate identical calls
+      let requiresUserActionThisTurn = null;
       if (autonomousMode) {
         console.log('[chat] autonomousMode=on (projectId=' + (projectId || 'none') + ') caps: tools=unlimited continues=' + MAX_CONTINUES + ' halfStop=' + MAX_HALF_STOP_NUDGES);
       }
@@ -2531,6 +2551,11 @@ export function registerChatRoute(app, {
                   toolContent = JSON.stringify({ ok: false, error: 'tool result not serializable: ' + serErr.message });
                 }
               }
+              const requiredAction = detectRequiredUserAction(toolName, args, toolContent);
+              if (requiredAction && !requiresUserActionThisTurn) {
+                requiresUserActionThisTurn = requiredAction;
+                send({ type: 'requires_user_action', action: requiredAction });
+              }
               const activityResult = buildToolActivityResult(toolName, args, toolContent);
               if (activityResult.status === 'failed') toolFailed = true;
               if (!toolFailed) {
@@ -2639,8 +2664,19 @@ export function registerChatRoute(app, {
           for (const tc of calls) {
             if (upstreamAbort.signal.aborted) break;
             const toolName = tc.function.name;
-            const callKey  = toolName + '|' + tc.function.arguments;
             toolCallCount++;
+
+            if (requiresUserActionThisTurn) {
+              allMessages.push({
+                role: 'tool',
+                tool_call_id: tc.id,
+                content: 'Skipped: the previous tool produced an interactive sign-in prompt that requires the user to act. Do not start another login or call more tools until the user sends a new message.',
+              });
+              continue;
+            }
+
+            const args = normalizeInteractiveAuthCommand(toolName, JSON.parse(tc.function.arguments || '{}'));
+            const callKey = toolName + '|' + JSON.stringify(args);
 
             // No numeric tool-call cap. Runaway loops are caught by the
             // narration-repetition guard below + the dedup map; the user can
@@ -2654,7 +2690,6 @@ export function registerChatRoute(app, {
             }
 
             // ── Pre-tool-call guard ─────────────────────────────────────────
-            const args = JSON.parse(tc.function.arguments || '{}');
             const preHooks = await runHooks(customizationRecords, 'PreToolUse', {
               toolName,
               args,
@@ -2716,6 +2751,13 @@ export function registerChatRoute(app, {
           }
           // Drain any remaining parallel-safe calls before moving on.
           await _flushParallel();
+          if (requiresUserActionThisTurn) {
+            toolsLockedForFinalResponse = true;
+            allMessages.push({
+              role: 'user',
+              content: '[System: A tool produced an interactive browser sign-in prompt. Stop all tools and authentication retries now. Tell the user to complete the browser sign-in started by `cowork auth login`, explain that you are waiting for them, and end the response. Never suggest or retry `cowork auth login --device-code`. Do not poll, restart login, create another terminal, or claim you will continue automatically. The next real user message will resume the workflow.]',
+            });
+          }
           // Silent-burst tally: this iteration ended in tool_calls. If the
           // model emitted no prose at all, count it. Reset the counter on
           // any non-empty preamble so an occasional silent round doesn't

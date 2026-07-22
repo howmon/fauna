@@ -24,6 +24,7 @@ import {
   isDevServerCommand,
   waitForStartup,
 } from '../lib/dev-server-registry.js';
+import { normalizeInteractiveAuthCommand } from '../lib/interactive-auth.js';
 
 export function registerShellExecRoutes(app, {
   shellProcs,
@@ -44,7 +45,8 @@ export function registerShellExecRoutes(app, {
   });
 
   app.post('/api/shell-exec', async (req, res) => {
-    const { command, cwd, killId, stream } = req.body;
+    const { command: requestedCommand, cwd, killId, stream } = req.body;
+    const command = normalizeInteractiveAuthCommand('fauna_shell_exec', { command: requestedCommand }).command;
     if (!command) return res.status(400).json({ error: 'command required' });
 
     // (No permission gate. The user explicitly chose autonomy — anything the

@@ -752,6 +752,10 @@ async function sendDirectMessage(content, opts) {
   var conv = getConv(targetId);
   if (!conv) return;
   if (conv._cancelled) return;
+  if (opts.fromAutoFeed && conv._waitingForUserAction) {
+    dbg('auto-feed paused — conversation is waiting for user action', 'info');
+    return;
+  }
   if (conv._streaming) return;
   if (!opts.fromAutoFeed && !opts.isBrowserFeed) conv._autoFeedDepth = 0;
   if (!opts.fromAutoFeed && !opts.isBrowserFeed) conv._depthLimitNotified = false;
@@ -806,7 +810,11 @@ async function sendMessage(opts) {
   if (!opts.fromAutoFeed) conv._autoFeedDepth = 0; // user-initiated → reset chain
   if (!opts.fromAutoFeed) conv._depthLimitNotified = false;
   if (!opts.fromAutoFeed) conv._chainMode = false; // user msg → not a chain continuation
-  if (!opts.fromAutoFeed) { delete conv._writeRepairMode; delete conv._suppressShellAutoRunOnce; } // new user turn clears prior write-repair gate
+  if (!opts.fromAutoFeed) {
+    delete conv._writeRepairMode;
+    delete conv._suppressShellAutoRunOnce;
+    delete conv._waitingForUserAction;
+  } // new user turn clears prior execution gates
   if (conv._streaming) {
     // Safety: if streaming flag is stale (>90s), force reset
     if (Date.now() - (conv._streamingStart || 0) > 90000) {
@@ -2296,6 +2304,11 @@ async function streamResponse(conv) {
               _showShellInput(stdinId, evt.killId, evt.hint || 'Waiting for input…', resultEl, inputContext);
             }
           }
+          if (evt.type === 'requires_user_action') {
+            conv._waitingForUserAction = evt.action || { kind: 'interactive' };
+            conv._autoFeedDepth = 0;
+            dbg('conversation waiting for user action: ' + (conv._waitingForUserAction.kind || 'interactive'), 'info');
+          }
           if (evt.type === 'done') {
             _syncPublicReasoningSummary();
             _clearToolStatuses();
@@ -2358,7 +2371,7 @@ async function streamResponse(conv) {
     var _meterFn = typeof updateContextMeterGranular === 'function' ? updateContextMeterGranular : updateContextMeter;
     _meterFn({ sysChars: _ctxSysChars, msgChars: _ctxMsgChars, usage: _ctxUsage, outputTokens: tokenCount, model: state.model, sysParts: _ctxSysParts, gates: _ctxGates });
 
-    var _planStillIncompleteAtLimit = _currentPlan && Array.isArray(_currentPlan.items)
+    var _planStillIncompleteAtLimit = !conv._waitingForUserAction && _currentPlan && Array.isArray(_currentPlan.items)
       && _currentPlan.items.some(function(item) { return item && item.status !== 'completed' && item.status !== 'cancelled'; })
       && (conv._autoFeedDepth || 0) >= 12;
     if (_planStillIncompleteAtLimit && !conv._depthLimitNotified) {
@@ -2565,6 +2578,7 @@ async function streamResponse(conv) {
           var _stalled = _stallRe.test(buffer || '');
           var _shouldContinue = !conv._cancelled
             && !conv._streaming
+            && !conv._waitingForUserAction
             && !writeFailed
             && _depth < _MAX_PLAN_CHAIN
             && (_remaining.length > 0 || _stalled);
