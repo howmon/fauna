@@ -5,13 +5,82 @@
 // mocking https + child_process + fs at three different layers.
 
 import { describe, it, expect } from 'vitest';
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import {
   parseGithubRepo,
   findAppBundlePath,
+  compareVersions,
+  selectReleaseAsset,
+  selectLatestRelease,
+  createSelfUpdater,
   nextUpdateState,
   INITIAL_STATE,
 } from '../lib/self-updater.js';
+
+describe('update channels', () => {
+  it('defaults to stable, persists beta, and shares one updater per app', () => {
+    const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'fauna-updater-'));
+    const app = {
+      getPath: name => name === 'userData' ? userData : userData,
+      getVersion: () => '2.0.6',
+      getAppPath: () => '/Applications/Fauna.app/Contents/Resources/app.asar',
+    };
+    const packageJson = {
+      version: '2.0.6',
+      repository: { url: 'https://github.com/howmon/fauna.git' },
+      build: { productName: 'Fauna', appId: 'com.fauna.app' },
+    };
+
+    try {
+      const first = createSelfUpdater({ app, packageJson });
+      expect(first.getChannel()).toBe('stable');
+      first.setChannel('beta');
+      expect(first.getChannel()).toBe('beta');
+
+      const second = createSelfUpdater({ app, packageJson });
+      expect(second).toBe(first);
+      expect(JSON.parse(fs.readFileSync(path.join(userData, 'self-update', 'preferences.json'), 'utf8')).channel).toBe('beta');
+    } finally {
+      fs.rmSync(userData, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('stable release selection', () => {
+  const assets = [
+    { name: 'Fauna-2.0.6-arm64.dmg' },
+    { name: 'Fauna-2.0.6.dmg' },
+    { name: 'Fauna.Setup.2.0.6.exe' },
+    { name: 'FaunaMCP-2.0.6-arm64.dmg' },
+  ];
+
+  it('compares release versions numerically', () => {
+    expect(compareVersions('2.0.10', '2.0.9')).toBe(1);
+    expect(compareVersions('v2.0.6', '2.0.6')).toBe(0);
+    expect(compareVersions('2.0.5', '2.0.6')).toBe(-1);
+  });
+
+  it('selects the Fauna artifact for the current mac architecture', () => {
+    expect(selectReleaseAsset(assets, { platform: 'darwin', arch: 'arm64' })?.name).toBe('Fauna-2.0.6-arm64.dmg');
+    expect(selectReleaseAsset(assets, { platform: 'darwin', arch: 'x64' })?.name).toBe('Fauna-2.0.6.dmg');
+  });
+
+  it('does not select a FaunaMCP artifact', () => {
+    expect(selectReleaseAsset([assets[3]], { platform: 'darwin', arch: 'arm64' })).toBeNull();
+  });
+
+  it('selects the highest compatible stable release instead of trusting API order', () => {
+    const releases = [
+      { tag_name: 'v2.0.5', draft: false, prerelease: false, assets },
+      { tag_name: 'v2.1.0-beta.1', draft: false, prerelease: true, assets },
+      { tag_name: 'v2.0.7', draft: true, prerelease: false, assets },
+      { tag_name: 'v2.0.6', draft: false, prerelease: false, assets },
+    ];
+    expect(selectLatestRelease(releases, { platform: 'darwin', arch: 'arm64' })?.tag_name).toBe('v2.0.6');
+  });
+});
 
 describe('parseGithubRepo', () => {
   it('parses git+https URLs', () => {

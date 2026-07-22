@@ -1701,13 +1701,23 @@ Examples:
     </div>
     <div class="settings-section">
       <div class="settings-section-title">App Updates</div>
+      <div class="settings-row" style="margin-bottom:10px">
+        <div>
+          <label for="fauna-update-beta">Beta updates</label>
+          <div class="settings-hint" style="margin-top:2px;font-size:10.5px">Track GitHub main and build updates locally. Stable installs published releases automatically.</div>
+        </div>
+        <label class="settings-toggle">
+          <input type="checkbox" id="fauna-update-beta" onchange="_setFaunaUpdateChannel(this.checked ? 'beta' : 'stable')">
+          <span class="settings-toggle-slider"></span>
+        </label>
+      </div>
       <div id="fauna-update-status" class="settings-hint fauna-update-status">Checking update status…</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button type="button" class="settings-row-btn" style="flex:1;min-width:140px" onclick="_checkFaunaUpdate()"><i class="ti ti-refresh"></i> Check Update</button>
         <button type="button" id="fauna-update-install-btn" class="settings-row-btn" style="flex:1;min-width:140px" onclick="_installFaunaUpdate()"><i class="ti ti-download"></i> Install</button>
         <button type="button" class="settings-row-btn" style="flex:1;min-width:140px" onclick="window.open('https://github.com/howmon/fauna','_blank')"><i class="ti ti-brand-github"></i> Repository</button>
       </div>
-      <div class="settings-hint" style="margin-top:6px;font-size:10.5px">Build &amp; Install downloads Fauna main, compiles the platform package, then launches the installer/relauncher when supported.</div>
+      <div id="fauna-update-channel-hint" class="settings-hint" style="margin-top:6px;font-size:10.5px">Stable channel · published GitHub releases install automatically.</div>
     </div>
   </div>
 
@@ -2587,6 +2597,9 @@ Examples:
     if (job && job.message) parts.push('Latest: ' + job.message);
     if (job && job.currentSha) parts.push('Current: ' + String(job.currentSha).slice(0, 12));
     if (job && job.latestSha) parts.push('Latest SHA: ' + String(job.latestSha).slice(0, 12));
+    if (job && job.currentVersion) parts.push('Current version: ' + job.currentVersion);
+    if (job && job.latestVersion) parts.push('Latest version: ' + job.latestVersion);
+    if (job && job.channel) parts.push('Channel: ' + job.channel);
     if (data && data.sourceDir) parts.push('Source: ' + data.sourceDir);
     var detailText = parts.concat(logs).join('\n');
     if (!detailText) detailText = 'No update details yet.';
@@ -2625,6 +2638,13 @@ Examples:
     }
     var el = document.getElementById('fauna-update-status');
     var btn = document.getElementById('fauna-update-install-btn');
+    var betaToggle = document.getElementById('fauna-update-beta');
+    var channelHint = document.getElementById('fauna-update-channel-hint');
+    var channel = data && data.channel || data && data.job && data.job.channel || 'stable';
+    if (betaToggle) betaToggle.checked = channel === 'beta';
+    if (channelHint) channelHint.textContent = channel === 'beta'
+      ? 'Beta channel · GitHub main updates require a local Node.js build.'
+      : 'Stable channel · published GitHub releases install automatically.';
     if (!el) return;
     var job = data && data.job;
     var running = job && (job.running || job.checking);
@@ -2640,7 +2660,7 @@ Examples:
     } else if (job && job.error) {
       statusText = 'Update failed';
     } else if (job && job.updateAvailable) {
-      statusText = 'Update available' + (job.latestSha ? ' @ ' + String(job.latestSha).slice(0, 7) : '');
+      statusText = 'Update available' + (job.latestVersion ? ' · v' + job.latestVersion : job.latestSha ? ' @ ' + String(job.latestSha).slice(0, 7) : '');
     } else if (job && job.phase === 'current') {
       statusText = 'Fauna is up to date' + (job.latestSha ? ' @ ' + job.latestSha.slice(0, 7) : '');
     } else if (job && job.phase === 'complete') {
@@ -2687,6 +2707,24 @@ Examples:
   function _checkFaunaUpdate() {
     fetch('/api/fauna/check-update', { method: 'POST' }).then(function(r){ return r.json(); }).then(_renderFaunaUpdateStatus).catch(function(e){
       _renderFaunaUpdateStatus({ job: { phase: 'error', error: 'Update check failed: ' + e.message, logs: [{ message: e.message }] } });
+    });
+  }
+
+  function _setFaunaUpdateChannel(channel) {
+    fetch('/api/fauna/update-channel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel: channel })
+    }).then(function(r) {
+      return r.json().then(function(data) {
+        if (!r.ok) throw new Error(data.error || 'Could not change update channel');
+        return data;
+      });
+    }).then(function(data) {
+      _renderFaunaUpdateStatus(data);
+      _checkFaunaUpdate();
+    }).catch(function(error) {
+      _renderFaunaUpdateStatus({ job: { phase: 'error', error: error.message }, channel: channel === 'beta' ? 'stable' : 'beta' });
     });
   }
 

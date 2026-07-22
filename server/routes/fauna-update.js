@@ -1,9 +1,10 @@
 // Fauna self-update routes.
 //
-// Three endpoints:
+// Update endpoints:
 //   GET  /api/fauna/update-status  — returns the current update job state
+//   POST /api/fauna/update-channel — persists stable (default) or beta
 //   POST /api/fauna/check-update   — compares local git SHA / build-info.sha
-//                                    against the GitHub main branch commit
+//                                    against the selected channel
 //   POST /api/fauna/install-update — updates from origin/main in dev/git
 //                                    checkouts; packaged builds rebuild from
 //                                    the main branch source zip.
@@ -57,6 +58,9 @@ export function registerFaunaUpdateRoutes(app, {
       updateAvailable: !!state?.updateAvailable,
       currentSha: state?.currentSha || null,
       latestSha: state?.latestSha || null,
+      currentVersion: state?.currentVersion || null,
+      latestVersion: state?.latestVersion || null,
+      channel: state?.channel === 'beta' ? 'beta' : 'stable',
       error: state?.error || null,
       message: state?.message || null,
       logs: Array.isArray(state?.logs) ? state.logs : [],
@@ -109,7 +113,20 @@ export function registerFaunaUpdateRoutes(app, {
         _faunaUpdateJob = { phase: 'error', updateAvailable: false, error: e.message, logs: [{ message: e.message, ts: Date.now() }] };
       }
     }
-    res.json({ job: _faunaUpdateJob || { phase: 'idle', updateAvailable: false }, version: _faunaAppVersion() });
+    const channel = _faunaIsPackaged() ? (_faunaSourceUpdater()?.getChannel() || 'stable') : 'beta';
+    res.json({ job: _faunaUpdateJob || { phase: 'idle', updateAvailable: false, channel }, version: _faunaAppVersion(), channel });
+  });
+
+  app.post('/api/fauna/update-channel', express.json(), (req, res) => {
+    if (!_faunaIsPackaged()) return res.status(400).json({ error: 'Update channels apply to packaged Fauna builds' });
+    try {
+      const updater = _faunaSourceUpdater();
+      const state = updater.setChannel(req.body?.channel);
+      _faunaUpdateJob = _faunaJobFromSourceState(state);
+      res.json({ job: _faunaUpdateJob, version: _faunaAppVersion(), channel: state.channel });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
   });
 
   app.post('/api/fauna/check-update', async (_req, res) => {
@@ -121,7 +138,7 @@ export function registerFaunaUpdateRoutes(app, {
       } catch (err) {
         _faunaUpdateJob = { phase: 'error', checking: false, running: false, updateAvailable: false, error: err.message, logs: [{ message: err.message, ts: Date.now() }] };
       }
-      return res.json({ job: _faunaUpdateJob, version: _faunaAppVersion() });
+      return res.json({ job: _faunaUpdateJob, version: _faunaAppVersion(), channel: _faunaUpdateJob.channel || 'stable' });
     }
 
     _faunaUpdateJob = { phase: 'checking', checking: true, running: false, logs: [] };
@@ -166,7 +183,7 @@ export function registerFaunaUpdateRoutes(app, {
         if (!updater) throw new Error('Source updater unavailable');
         const installPromise = updater.installUpdate();
         _faunaUpdateJob = _faunaJobFromSourceState(updater.getState());
-        res.json({ job: _faunaUpdateJob, version: _faunaAppVersion() });
+        res.json({ job: _faunaUpdateJob, version: _faunaAppVersion(), channel: _faunaUpdateJob.channel || 'stable' });
         installPromise.catch(err => {
           _faunaUpdateJob = { phase: 'error', running: false, updateAvailable: false, error: err.message, logs: [{ message: err.message, ts: Date.now() }] };
         });

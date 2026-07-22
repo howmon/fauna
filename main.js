@@ -920,14 +920,13 @@ function _buildTrayMenu() {
   const voiceEnabled = !!residentAudio?.isEnabled();
   const ttsSpeaking  = !!tts?.isSpeaking();
   const upd = _selfUpdater?.getState();
-  // Mode labels reflect a tiny state machine: running ⇒ "Updating…"
-  // (disabled), updateAvailable ⇒ "Install Update", else ⇒ "Check for
-  // Updates". Keeping all three on the menu (rather than auto-collapsing)
-  // lets the user see the latest commit short-SHA at a glance.
+  const updTarget = upd?.channel === 'beta'
+    ? (upd?.latestSha || '').slice(0, 7)
+    : (upd?.latestVersion ? `v${upd.latestVersion}` : '');
   const updLabel = upd?.running    ? `Updating… (${upd.phase})`
-               : upd?.updateAvailable ? `Install Update (${(upd.latestSha || '').slice(0, 7)})`
+               : upd?.updateAvailable ? `Install Update${updTarget ? ` (${updTarget})` : ''}`
                : upd?.checking    ? 'Checking for Updates…'
-               : 'Check for Updates';
+               : `Check for Updates (${upd?.channel === 'beta' ? 'Beta' : 'Stable'})`;
   const updEnabled = !!upd && !!upd.hasRepo && !upd.running && !upd.checking;
   return Menu.buildFromTemplate([
     { label: 'Windows', enabled: false },
@@ -1332,11 +1331,8 @@ app.whenReady().then(async () => {
   // Create tray icon and task widget
   createTray();
 
-  // Self-updater: tracks the `main` branch on GitHub and rebuilds the .app
-  // from source on demand. Works regardless of how the user got the binary
-  // (local `npm run dist`, zip from a colleague, GH release) because we
-  // always rebuild from source. Only runs when packaged — in dev (`npm
-  // start`) the user is already working from a git checkout.
+  // Stable installs published GitHub release artifacts automatically. Beta is
+  // explicit opt-in and retains the main-branch source rebuild workflow.
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
     _selfUpdater = createSelfUpdater({
@@ -1353,11 +1349,17 @@ app.whenReady().then(async () => {
     ipcMain.handle('self-updater:state',  () => _selfUpdater.getState());
     ipcMain.handle('self-updater:check',  () => _selfUpdater.checkForUpdates(true));
     ipcMain.handle('self-updater:install', () => _selfUpdater.installUpdate());
+    ipcMain.handle('self-updater:set-channel', (_event, channel) => _selfUpdater.setChannel(channel));
     // Background check on startup — only when packaged. 5 s delay so the
     // first paint and IPC handlers are wired before we hit GitHub.
     if (app.isPackaged) {
-      setTimeout(() => {
-        _selfUpdater.checkForUpdates(false).catch(e => console.warn('[self-updater] startup check:', e?.message || e));
+      setTimeout(async () => {
+        try {
+          const updateState = await _selfUpdater.checkForUpdates(false);
+          if (updateState.channel === 'stable' && updateState.updateAvailable) await _selfUpdater.installUpdate();
+        } catch (e) {
+          console.warn('[self-updater] startup check:', e?.message || e);
+        }
       }, 5000);
     }
   } catch (e) {
