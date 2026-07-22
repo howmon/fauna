@@ -620,6 +620,9 @@ function showConvDom(id) {
   Array.from(inner.children).forEach(function(c) { c.style.display = 'none'; });
   var target = getConvInner(id);
   target.style.display = 'contents';
+  if (window.faunaDynamicWidgets && typeof window.faunaDynamicWidgets.syncVisibility === 'function') {
+    window.faunaDynamicWidgets.syncVisibility();
+  }
   return target;
 }
 

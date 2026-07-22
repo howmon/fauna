@@ -200,6 +200,10 @@
       // Widget API setup — synchronous classic <script> so window.widget is
       // ready before any deferred <script type="module"> bundle runs.
       '<script>(function(){' +
+        'var hostVisible=true,nativeRaf=window.requestAnimationFrame.bind(window),nativeCancel=window.cancelAnimationFrame.bind(window),rafSeq=0,rafJobs=new Map();' +
+        'window.requestAnimationFrame=function(cb){var id=++rafSeq;function run(ts){var job=rafJobs.get(id);if(!job)return;if(!hostVisible){job.nativeId=0;return;}rafJobs.delete(id);cb(ts);}var job={nativeId:0,run:run};rafJobs.set(id,job);if(hostVisible)job.nativeId=nativeRaf(run);return id;};' +
+        'window.cancelAnimationFrame=function(id){var job=rafJobs.get(id);if(!job)return;if(job.nativeId)nativeCancel(job.nativeId);rafJobs.delete(id);};' +
+        'function setHostVisible(next){hostVisible=!!next;if(!hostVisible)return;rafJobs.forEach(function(job){if(!job.nativeId)job.nativeId=nativeRaf(job.run);});}' +
         'var handlers={};' +
         'var widget={id:' + JSON.stringify(widgetId) + ',' +
           'on:function(n,f){handlers[n]=f;},' +
@@ -208,6 +212,7 @@
         'window.addEventListener("message",async function(e){' +
           'var m=e.data||{};' +
           'if(m.source!=="fauna-host"||m.widgetId!==widget.id)return;' +
+          'if(m.type==="visibility"){setHostVisible(m.visible!==false);return;}' +
           'if(m.type==="tool_call"){' +
             'var fn=handlers[m.name];' +
             'var reply={source:"fauna-widget",widgetId:widget.id,type:"tool_result",callId:m.callId};' +
@@ -281,6 +286,7 @@
     mount.appendChild(wrap);
 
     window._faunaDynamicWidgets.mounted.set(widgetId, { iframe, wrap, tools: evt.tools || [], bundle: evt.bundle, title: titleText });
+    syncVisibility();
 
     // Wire "Save to playbook" — sends a chat message asking the agent to save.
     var saveBtn = header.querySelector('.fauna-widget-save');
@@ -444,6 +450,7 @@
     if (m.source !== 'fauna-widget') return;
     var mounted = window._faunaDynamicWidgets.mounted.get(m.widgetId);
     if (!mounted) return;
+    if (m.type === 'ready') syncVisibility();
     if (m.type === 'event' && m.event === 'resize' && m.data && typeof m.data.height === 'number') {
       var h = Math.max(240, Math.min(1600, m.data.height));
       // Only write when it actually changes — re-setting the same height still
@@ -473,10 +480,30 @@
     }
   });
 
+  function syncVisibility() {
+    window._faunaDynamicWidgets.mounted.forEach(function (mounted, widgetId) {
+      if (!mounted || !mounted.wrap || !mounted.iframe || !mounted.wrap.isConnected || !mounted.iframe.isConnected) {
+        window._faunaDynamicWidgets.mounted.delete(widgetId);
+        return;
+      }
+      var conversation = mounted.wrap.closest('[data-conv-messages]');
+      var visible = !conversation || conversation.style.display !== 'none';
+      try {
+        mounted.iframe.contentWindow.postMessage({
+          source: 'fauna-host',
+          widgetId: widgetId,
+          type: 'visibility',
+          visible: visible,
+        }, '*');
+      } catch (_) {}
+    });
+  }
+
   // Public API used by public/js/chat.js when it sees the SSE events.
   window.faunaDynamicWidgets = {
     mountWidget: mountWidget,
     handleToolPending: handleToolPending,
+    syncVisibility: syncVisibility,
     isMounted: function (id) { return window._faunaDynamicWidgets.mounted.has(id); },
   };
 })();

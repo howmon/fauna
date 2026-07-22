@@ -6,6 +6,11 @@ import {
   extractWidgetRegistrations, buildEphemeralToolDefs,
   isWidgetTool, parseWidgetToolName, buildWidgetSrcdoc,
 } from '../lib/dynamic-widgets.js';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const rendererSource = fs.readFileSync(path.join(process.cwd(), 'public/js/dynamic-widgets.js'), 'utf8');
+const conversationsSource = fs.readFileSync(path.join(process.cwd(), 'public/js/conversations.js'), 'utf8');
 
 describe('dynamic-widgets / pack-unpack', () => {
   it('round-trips a widget registration', () => {
@@ -125,5 +130,19 @@ describe('dynamic-widgets / buildWidgetSrcdoc', () => {
     expect(html).toContain('"w42"');
     expect(html).toContain('widget.on("a"');
     expect(html).toContain('<p>hi</p>');
+  });
+});
+
+describe('dynamic-widgets / hidden conversation lifecycle', () => {
+  it('gates widget animation frames on host visibility', () => {
+    expect(rendererSource).toContain('function setHostVisible(next)');
+    expect(rendererSource).toContain('if(m.type==="visibility")');
+    expect(rendererSource).toContain('window.requestAnimationFrame=function(cb)');
+  });
+
+  it('synchronizes mounted widgets when the active conversation changes', () => {
+    expect(rendererSource).toContain('syncVisibility: syncVisibility');
+    expect(rendererSource).toContain("if (m.type === 'ready') syncVisibility();");
+    expect(conversationsSource).toContain('window.faunaDynamicWidgets.syncVisibility();');
   });
 });
