@@ -46,6 +46,9 @@ export function nativeHttpsFetch(input, init = {}) {
 
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-4000); });
+    child.stdin.on('error', error => {
+      if (error.code !== 'EPIPE' && error.code !== 'ERR_STREAM_DESTROYED') fail(error);
+    });
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', chunk => {
       output += chunk;
@@ -81,13 +84,16 @@ export function nativeHttpsFetch(input, init = {}) {
       if (code && !settled) fail(new Error(`Native fetch worker exited with code ${code}${stderr ? `: ${stderr}` : ''}`));
       else if (!settled) fail(new Error('Native fetch worker exited before returning headers'));
     });
-    child.stdin.end(JSON.stringify({
+    const requestPayload = JSON.stringify({
       url: url.toString(),
       method: init.method || source?.method || 'GET',
       headers: Object.fromEntries(headers.entries()),
       body: body == null ? null : Buffer.from(body).toString('base64'),
       redirect: init.redirect || source?.redirect || 'follow',
-    }));
+    });
+    child.stdin.end(requestPayload, error => {
+      if (error && error.code !== 'EPIPE' && error.code !== 'ERR_STREAM_DESTROYED') fail(error);
+    });
   });
 }
 

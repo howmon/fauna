@@ -55,4 +55,23 @@ describe('native HTTP fetch transport', () => {
     expect(response.headers.get('content-type')).toBe('application/octet-stream');
     expect([...new Uint8Array(await response.arrayBuffer())]).toEqual([0, 127, 128, 255]);
   });
+
+  it('does not emit an uncaught EPIPE when aborted during worker startup', async () => {
+    const errors = [];
+    const onUncaughtException = error => errors.push(error);
+    process.on('uncaughtException', onUncaughtException);
+
+    try {
+      for (let index = 0; index < 20; index++) {
+        const controller = new AbortController();
+        const request = nativeHttpsFetch(`${baseUrl}/models`, { signal: controller.signal });
+        controller.abort();
+        await expect(request).rejects.toMatchObject({ name: 'AbortError' });
+      }
+      await new Promise(resolve => setImmediate(resolve));
+      expect(errors).toEqual([]);
+    } finally {
+      process.off('uncaughtException', onUncaughtException);
+    }
+  });
 });

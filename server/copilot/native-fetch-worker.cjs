@@ -1,6 +1,11 @@
 const http = require('node:http');
 const https = require('node:https');
 
+process.stdout.on('error', error => {
+  if (error.code === 'EPIPE' || error.code === 'ERR_STREAM_DESTROYED') process.exit(0);
+  throw error;
+});
+
 let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => { input += chunk; });
