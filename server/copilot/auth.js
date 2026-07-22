@@ -10,6 +10,7 @@ import os from 'os';
 import path from 'path';
 import { execSync } from 'child_process';
 import OpenAI from 'openai';
+import { nativeHttpsFetch } from './native-https-fetch.js';
 
 const IS_WIN = process.platform === 'win32';
 const PATH_SEP = IS_WIN ? ';' : ':';
@@ -109,6 +110,7 @@ export function getCopilotClient() {
   return new OpenAI({
     baseURL: 'https://api.githubcopilot.com',
     apiKey:  token,
+    fetch: typeof WebAssembly === 'undefined' ? nativeHttpsFetch : undefined,
     defaultHeaders: {
       'Editor-Version':        'vscode/1.85.0',
       'Copilot-Integration-Id': 'vscode-chat'
