@@ -81,7 +81,7 @@
     "ws": "^8.19.0"
   },
   "devDependencies": {
-    "electron": "^41.0.3",
+    "electron": "41.10.2",
     "electron-builder": "^26.15.3",
     "vitest": "^4.1.7"
   },
@@ -209,7 +209,7 @@
       "node_modules/@xenova/transformers/dist/ort-wasm.wasm",
       "node_modules/@xenova/transformers/dist/ort-wasm-threaded.wasm"
     ],
-    "electronVersion": "41.0.3",
+    "electronVersion": "41.10.2",
     "extraResources": [
       {
         "from": "assets/figma-plugin",

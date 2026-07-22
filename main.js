@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, shell, nativeImage, nativeTheme, Notification, dialog, screen, clipboard, powerMonitor } from 'electron';
+import { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, shell, nativeImage, nativeTheme, Notification, dialog, screen, clipboard, powerMonitor, crashReporter } from 'electron';
 import path     from 'path';
 import fs       from 'fs';
 import os       from 'os';
@@ -22,6 +22,50 @@ const PORT      = 3737;
 const IS_WIN    = process.platform === 'win32';
 const IS_MAC    = process.platform === 'darwin';
 const FAUNAMCP_REPO_URL = 'https://github.com/howmon/faunaMCP';
+const RUNTIME_DIAGNOSTICS_FILE = path.join(os.homedir(), '.config', 'fauna', 'runtime-diagnostics.jsonl');
+
+function writeRuntimeDiagnostic(event, details = {}) {
+  try {
+    fs.mkdirSync(path.dirname(RUNTIME_DIAGNOSTICS_FILE), { recursive: true });
+    fs.appendFileSync(RUNTIME_DIAGNOSTICS_FILE, `${JSON.stringify({
+      at: new Date().toISOString(),
+      event,
+      appVersion: app.getVersion(),
+      electronVersion: process.versions.electron,
+      chromeVersion: process.versions.chrome,
+      nodeVersion: process.versions.node,
+      platform: process.platform,
+      arch: process.arch,
+      memory: process.memoryUsage(),
+      ...details,
+    })}\n`);
+  } catch (_) {}
+}
+
+crashReporter.start({
+  uploadToServer: false,
+  compress: true,
+  extra: {
+    appVersion: app.getVersion(),
+    electronVersion: process.versions.electron,
+  },
+});
+
+writeRuntimeDiagnostic('startup', { crashDumpsPath: app.getPath('crashDumps') });
+process.on('uncaughtExceptionMonitor', (error, origin) => {
+  writeRuntimeDiagnostic('uncaught-exception', {
+    origin,
+    name: error?.name,
+    message: error?.message,
+    stack: error?.stack,
+  });
+});
+app.on('render-process-gone', (_event, _webContents, details) => {
+  writeRuntimeDiagnostic('render-process-gone', details);
+});
+app.on('child-process-gone', (_event, details) => {
+  writeRuntimeDiagnostic('child-process-gone', details);
+});
 
 // Capture the user's REAL OS color-scheme preference BEFORE we force the app
 // into dark mode. Fauna's own chrome is always dark, but embedded <webview>
