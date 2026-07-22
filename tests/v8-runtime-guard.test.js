@@ -3,6 +3,7 @@ import {
   buildV8SafetyRelaunchArgs,
   V8_SAFETY_FLAGS,
   V8_SAFETY_MARKER,
+  V8_SAFETY_MODE,
 } from '../lib/v8-runtime-guard.js';
 
 describe('V8 runtime guard', () => {
@@ -18,6 +19,8 @@ describe('V8 runtime guard', () => {
       `--js-flags=--trace-gc ${V8_SAFETY_FLAGS}`,
       V8_SAFETY_MARKER,
     ]);
+    expect(V8_SAFETY_MODE).toBe('jitless');
+    expect(V8_SAFETY_FLAGS).toContain('--jitless');
     expect(V8_SAFETY_FLAGS).toContain('--disable-optimizing-compilers');
     expect(V8_SAFETY_FLAGS).toContain('--no-concurrent-recompilation');
   });

@@ -14,7 +14,7 @@ import { getSettings, onSettingsChange, DEFAULT_DICTATION_ACCEL_MAC, DEFAULT_DIC
 import { setDefaultScrubOpts } from './server/lib/redactor.js';
 import { buildShellEnv } from './server/lib/shell-env.js';
 import { createSelfUpdater } from './lib/self-updater.js';
-import { buildV8SafetyRelaunchArgs, V8_SAFETY_MARKER } from './lib/v8-runtime-guard.js';
+import { buildV8SafetyRelaunchArgs, V8_SAFETY_MARKER, V8_SAFETY_MODE } from './lib/v8-runtime-guard.js';
 
 process.noDeprecation = true;
 
@@ -22,6 +22,9 @@ const v8SafetyRelaunchArgs = app.isPackaged ? buildV8SafetyRelaunchArgs() : null
 if (v8SafetyRelaunchArgs) {
   app.relaunch({ args: v8SafetyRelaunchArgs });
   app.exit(0);
+}
+if (process.argv.includes(V8_SAFETY_MARKER)) {
+  app.commandLine.removeSwitch('js-flags');
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -61,6 +64,7 @@ crashReporter.start({
 writeRuntimeDiagnostic('startup', {
   crashDumpsPath: app.getPath('crashDumps'),
   v8SafetyMode: process.argv.includes(V8_SAFETY_MARKER),
+  v8SafetyStrategy: process.argv.includes(V8_SAFETY_MARKER) ? V8_SAFETY_MODE : null,
 });
 process.on('uncaughtExceptionMonitor', (error, origin) => {
   writeRuntimeDiagnostic('uncaught-exception', {
