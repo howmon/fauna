@@ -850,6 +850,7 @@ function loadConversation(id, opts) {
 
   // Reflect this conversation's streaming state in UI
   setBusy(!!conv._streaming);
+  if (typeof syncDecisionPromptForCurrentConversation === 'function') syncDecisionPromptForCurrentConversation();
 
   // Restore agent chips for this conversation (or fall back to pinned)
   if (typeof resetAgentChipsToPinned === 'function') {

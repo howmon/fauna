@@ -2319,7 +2319,183 @@ body.is-resizing webview { pointer-events: none !important; }
   border: 1px solid var(--fau-border);
   transition: border-color .15s;
 }
+#input-wrap[hidden] { display: none; }
 #input-wrap:focus-within { border-color: color-mix(in srgb, var(--accent) 50%, var(--fau-border)); }
+
+/* ── Decision prompt — replaces the composer while user input is required ── */
+#decision-prompt-host {
+  max-width: 820px;
+  margin: 0 auto;
+}
+#decision-prompt-host[hidden] { display: none; }
+.decision-prompt {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  background: var(--fau-surface);
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--fau-border));
+  border-radius: 8px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .16);
+  animation: decisionPromptIn 160ms ease-out;
+}
+.decision-prompt-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.decision-prompt-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--fau-text);
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+.decision-prompt-dismiss {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fau-text-muted);
+  cursor: pointer;
+}
+.decision-prompt-dismiss:hover { background: var(--fau-surface2); color: var(--fau-text); }
+.decision-prompt-copy {
+  margin: 0;
+  color: var(--fau-text-dim);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.decision-prompt-options {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.decision-prompt-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--fau-border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--fau-surface2) 65%, transparent);
+  color: var(--fau-text);
+  cursor: pointer;
+  transition: border-color .12s, background .12s;
+}
+.decision-prompt-option:hover { background: var(--fau-surface2); }
+.decision-prompt-option:has(input:checked) {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--fau-border));
+  background: color-mix(in srgb, var(--accent) 9%, var(--fau-surface2));
+}
+.decision-prompt-option input {
+  width: 15px;
+  height: 15px;
+  margin: 2px 0 0;
+  flex: 0 0 15px;
+  accent-color: var(--accent);
+}
+.decision-prompt-option-content { display: grid; gap: 3px; min-width: 0; }
+.decision-prompt-option-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  font-weight: 550;
+  line-height: 1.35;
+}
+.decision-prompt-option-description {
+  color: var(--fau-text-dim);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.decision-prompt-recommended {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+.decision-prompt-impact { color: var(--fau-text-muted); font-size: 10.5px; line-height: 1.35; }
+.decision-prompt-impact.risk-medium { color: var(--warn); }
+.decision-prompt-impact.risk-high,
+.decision-prompt-impact.risk-critical { color: var(--error); }
+.decision-prompt-custom-input {
+  width: 100%;
+  min-height: 56px;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--fau-border);
+  border-radius: 7px;
+  outline: none;
+  background: var(--fau-bg);
+  color: var(--fau-text);
+  font: 12.5px/1.4 var(--font);
+}
+.decision-prompt-custom-input:focus { border-color: var(--accent); }
+.decision-prompt-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 2px;
+}
+.decision-prompt-hint { color: var(--fau-text-muted); font-size: 10.5px; }
+.decision-prompt-actions { display: flex; gap: 7px; margin-left: auto; }
+.decision-prompt-button {
+  min-height: 30px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--fau-border);
+  font: 600 11.5px var(--font);
+  cursor: pointer;
+}
+.decision-prompt-button.secondary { background: transparent; color: var(--fau-text-dim); }
+.decision-prompt-button.secondary:hover { background: var(--fau-surface2); color: var(--fau-text); }
+.decision-prompt-button.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+.decision-prompt-button.primary:hover:not(:disabled) { background: var(--accent2); }
+.decision-prompt-button:disabled { opacity: .45; cursor: wait; }
+@keyframes decisionPromptIn {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (max-width: 600px) {
+  .decision-prompt {
+    max-height: min(340px, calc(100vh - 120px));
+    overflow-y: auto;
+    padding: 12px;
+  }
+  .decision-prompt-footer {
+    position: sticky;
+    bottom: -12px;
+    z-index: 2;
+    align-items: stretch;
+    flex-direction: column;
+    margin: 0 -12px -12px;
+    padding: 8px 12px 12px;
+    border-top: 1px solid var(--fau-border);
+    background: var(--fau-surface);
+  }
+  .decision-prompt-actions { width: 100%; margin-left: 0; }
+  .decision-prompt-button { flex: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .decision-prompt { animation: none; }
+}
 
 /* ── Generating border — rotating conic gradient ─────────────────────
    Same visual language as `.kb-card-live` on the Kanban board. Active

@@ -71,19 +71,71 @@ import { normalizeInteractiveAuthCommand } from '../lib/interactive-auth.js';
 export function detectRequiredUserAction(toolName, args = {}, result = '') {
   const output = String(result || '');
   const command = String(args?.command || args?.input || '');
+  const browserUrlPattern = /https?:\/\/[^\s<>'"]+/i;
   const deviceUrlPattern = /https?:\/\/(?:login\.microsoft(?:online)?\.com|microsoft\.com)\/(?:device|devicelogin)\b/i;
   const hasDeviceUrl = deviceUrlPattern.test(output);
   const hasDeviceInstruction = /(?:enter|use)\s+(?:the\s+)?code\b|device[- ]code|to sign in,?\s+use a web browser/i.test(output);
   const isDeviceLoginCommand = /\bauth\s+login\b.*\bdevice[- ]code\b/i.test(command);
-  if (!hasDeviceUrl || (!hasDeviceInstruction && !isDeviceLoginCommand)) return null;
+  const isCoworkLoginCommand = /\bcowork\s+auth\s+login\b/i.test(command);
+  const browserPrompt = /open(?:ing|ed)?\s+(?:your\s+)?(?:default\s+)?browser|complete\s+(?:the\s+)?sign[ -]?in|continue\s+in\s+(?:your\s+)?browser|waiting\s+for\s+(?:browser\s+)?auth/i.test(output);
+  const authCompleted = /successfully\s+(?:authenticated|signed\s+in)|authentication\s+(?:is\s+)?complete|logged\s+in\s+successfully/i.test(output);
 
-  const codeMatch = output.match(/\b(?:enter|code(?:\s+is)?[:\s]+)\s*([A-Z0-9]{6,12})\b/i);
-  return {
-    kind: 'device-code-auth',
-    toolName: String(toolName || ''),
-    url: (output.match(deviceUrlPattern) || [])[0] || null,
-    code: codeMatch ? codeMatch[1].toUpperCase() : null,
-  };
+  if (hasDeviceUrl && (hasDeviceInstruction || isDeviceLoginCommand)) {
+    const codeMatch = output.match(/\b(?:enter|code(?:\s+is)?[:\s]+)\s*([A-Z0-9]{6,12})\b/i);
+    return {
+      id: 'cowork-browser-auth',
+      kind: 'device-code-auth',
+      toolName: String(toolName || ''),
+      title: 'Sign in to Cowork',
+      prompt: 'The device-code flow is not supported. Choose the recommended browser sign-in to continue.',
+      allowCustom: true,
+      options: [
+        {
+          id: 'retry-browser',
+          label: 'Retry with browser sign-in',
+          description: 'Run the supported Cowork login once and wait for the browser flow.',
+          recommended: true,
+          response: 'Retry Cowork authentication once using cowork auth login without the device-code option, then wait for me.',
+        },
+        {
+          id: 'cancel-auth',
+          label: 'Stop authentication',
+          response: 'Stop the Cowork authentication attempt and do not retry it.',
+        },
+      ],
+      url: (output.match(deviceUrlPattern) || [])[0] || null,
+      code: codeMatch ? codeMatch[1].toUpperCase() : null,
+    };
+  }
+
+  if (isCoworkLoginCommand && browserPrompt && !authCompleted) {
+    return {
+      id: 'cowork-browser-auth',
+      kind: 'browser-auth',
+      toolName: String(toolName || ''),
+      title: 'Complete Cowork sign-in',
+      prompt: 'Cowork opened a browser sign-in and Fauna is paused until you finish it.',
+      allowCustom: true,
+      options: [
+        {
+          id: 'completed',
+          label: 'I completed sign-in',
+          description: 'Verify authentication once, then continue the current task.',
+          recommended: true,
+          response: 'I completed the Cowork browser sign-in. Verify authentication once and continue the task.',
+        },
+        {
+          id: 'cancel-auth',
+          label: 'Stop authentication',
+          response: 'Stop the Cowork authentication attempt and do not retry it.',
+        },
+      ],
+      url: (output.match(browserUrlPattern) || [])[0] || null,
+      code: null,
+    };
+  }
+
+  return null;
 }
 
 // ── Created-file artifact detection ──────────────────────────────────────
@@ -2755,7 +2807,7 @@ export function registerChatRoute(app, {
             toolsLockedForFinalResponse = true;
             allMessages.push({
               role: 'user',
-              content: '[System: A tool produced an interactive browser sign-in prompt. Stop all tools and authentication retries now. Tell the user to complete the browser sign-in started by `cowork auth login`, explain that you are waiting for them, and end the response. Never suggest or retry `cowork auth login --device-code`. Do not poll, restart login, create another terminal, or claim you will continue automatically. The next real user message will resume the workflow.]',
+              content: '[System: A tool produced an interactive authentication prompt. Stop all tools and authentication retries now. Briefly tell the user Fauna is paused for their decision in the composer and end the response. Never suggest or retry `cowork auth login --device-code`. Do not poll, restart login, create another terminal, or claim you will continue automatically. The next real user response will resume the workflow.]',
             });
           }
           // Silent-burst tally: this iteration ended in tool_calls. If the

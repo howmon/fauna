@@ -49,6 +49,7 @@ describe('detectRequiredUserAction()', () => {
       kind: 'device-code-auth',
       url: 'https://login.microsoft.com/device',
       code: 'B5A7FAKHH',
+      options: expect.arrayContaining([expect.objectContaining({ id: 'retry-browser', recommended: true })]),
     });
   });
 
@@ -77,6 +78,26 @@ describe('detectRequiredUserAction()', () => {
       'fauna_shell_exec',
       { command: 'cowork auth whoami' },
       'Status: EXPIRED\nNot authenticated. Run: cowork auth login',
+    )).toBeNull();
+  });
+
+  it('returns a recommended completion step for plain browser login', () => {
+    expect(detectRequiredUserAction(
+      'fauna_shell_exec',
+      { command: 'cowork auth login' },
+      'Opening your browser. Complete sign-in to continue.',
+    )).toMatchObject({
+      kind: 'browser-auth',
+      title: 'Complete Cowork sign-in',
+      options: expect.arrayContaining([expect.objectContaining({ id: 'completed', recommended: true })]),
+    });
+  });
+
+  it('does not pause after browser authentication completes', () => {
+    expect(detectRequiredUserAction(
+      'fauna_shell_exec',
+      { command: 'cowork auth login' },
+      'Opening your browser. Successfully authenticated.',
     )).toBeNull();
   });
 });

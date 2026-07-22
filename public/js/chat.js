@@ -813,7 +813,6 @@ async function sendMessage(opts) {
   if (!opts.fromAutoFeed) {
     delete conv._writeRepairMode;
     delete conv._suppressShellAutoRunOnce;
-    delete conv._waitingForUserAction;
   } // new user turn clears prior execution gates
   if (conv._streaming) {
     // Safety: if streaming flag is stale (>90s), force reset
@@ -830,6 +829,11 @@ async function sendMessage(opts) {
   var input = document.getElementById('msg-input');
   var text  = input.value.trim();
   if (!text && !state.pendingAttachments.length) { dbg('sendMessage: empty input', 'warn'); return; }
+  if (!opts.fromAutoFeed) {
+    delete conv._waitingForUserAction;
+    delete conv._decisionPromptDismissed;
+    if (typeof hideDecisionPrompt === 'function') hideDecisionPrompt();
+  }
   dbg('sendMessage: ' + text.slice(0,80), 'info');
 
   // ── Slash commands ───────────────────────────────────────────────────
@@ -2306,7 +2310,10 @@ async function streamResponse(conv) {
           }
           if (evt.type === 'requires_user_action') {
             conv._waitingForUserAction = evt.action || { kind: 'interactive' };
+            delete conv._decisionPromptDismissed;
             conv._autoFeedDepth = 0;
+            if (isActive() && typeof renderDecisionPrompt === 'function') renderDecisionPrompt(conv._waitingForUserAction, conv);
+            if (typeof saveConversations === 'function') saveConversations();
             dbg('conversation waiting for user action: ' + (conv._waitingForUserAction.kind || 'interactive'), 'info');
           }
           if (evt.type === 'done') {
@@ -2562,6 +2569,7 @@ async function streamResponse(conv) {
         if (typeof _wfMoveCreatedArtifactsToEnd === 'function') _wfMoveCreatedArtifactsToEnd(msgEl);
         scrollBottom();
         setBusy(false);
+        if (typeof syncDecisionPromptForCurrentConversation === 'function') syncDecisionPromptForCurrentConversation();
 
         // ── Auto-continue when the plan isn't done ────────────────────────
         // If a fauna_plan is in flight and still has incomplete items (or the
