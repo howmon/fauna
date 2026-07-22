@@ -102,7 +102,7 @@ export function registerShellExecRoutes(app, {
         const verified = startup.status === 'running';
         const failed = startup.status === 'exited' || startup.status === 'stopped' || startup.status === 'missing';
         const message = verified
-          ? `Dev server is running${startup.port ? ` on port ${startup.port}` : ''}. Manage it from Settings → Dev Servers.`
+          ? `Dev server is running${startup.port ? ` on port ${startup.port}` : ''}. Manage it from the Running dev servers indicator.`
           : failed
             ? `Dev server failed during startup${startup.tail.length ? `: ${startup.tail.at(-1)}` : '.'}`
             : 'Dev server launched in the background, but readiness is not yet verified. Check Settings → Dev Servers.';

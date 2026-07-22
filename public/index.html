@@ -275,7 +275,7 @@
       <select id="model-select" onchange="onModelChange(this.value)"></select>
       <button class="topbar-update-btn" id="topbar-update-btn" type="button" style="display:none" onclick="_installFaunaUpdate()" title="Install app update"><i class="ti ti-download"></i> <span>Update</span></button>
       <!-- Running dev-servers indicator (VS Code Ports panel equivalent) -->
-      <button id="topbar-servers-btn" class="topbar-btn" style="display:none" onclick="_openDevServersQuick()" title="Running dev servers">
+      <button id="topbar-servers-btn" class="topbar-btn" style="display:none" onclick="_openDevServersQuick(event)" title="Running dev servers" aria-haspopup="dialog" aria-controls="dev-servers-widget">
         <i class="ti ti-server"></i>
         <span id="topbar-servers-count" style="font-size:10px;font-weight:700;margin-left:2px"></span>
       </button>

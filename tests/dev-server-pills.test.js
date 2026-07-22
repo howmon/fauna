@@ -25,4 +25,17 @@ describe('dev-server input pills', () => {
     expect(shellSource).toContain("fetch('/api/dev-servers/' + encodeURIComponent(id) + '/kill', { method: 'POST' })");
     expect(shellSource).toContain('await Promise.all(ids.map');
   });
+
+  it('opens a dismissible dev-server widget instead of hidden settings', () => {
+    expect(projectsSource).toContain("widget.id = 'dev-servers-widget'");
+    expect(projectsSource).toContain("widget.setAttribute('role', 'dialog')");
+    expect(projectsSource).toContain('function _closeDevServersWidget()');
+    expect(projectsSource).toContain("if (keyEvent.key === 'Escape') _closeDevServersWidget()");
+    const quickHandler = projectsSource.slice(
+      projectsSource.indexOf('function _openDevServersQuick(event)'),
+      projectsSource.indexOf('async function _pollPorts()'),
+    );
+    expect(quickHandler).not.toContain('switchSettingsPage');
+    expect(quickHandler).not.toContain('toggleSettings');
+  });
 });

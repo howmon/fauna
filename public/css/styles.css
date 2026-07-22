@@ -5057,6 +5057,71 @@ body { animation: none; }
   transition: color .12s;
 }
 .dsn-close:hover { color: var(--fau-text); }
+
+/* Topbar dev-server manager. Fixed to the viewport so project page panels and
+   split layouts cannot obscure it the way the Settings surface can. */
+.dev-servers-widget {
+  position: fixed;
+  top: 76px;
+  right: 16px;
+  z-index: 12050;
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(560px, calc(100vh - 96px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--fau-surface);
+  border: 1px solid var(--fau-border);
+  border-radius: 8px;
+  box-shadow: 0 18px 48px rgba(0,0,0,.48);
+  color: var(--fau-text);
+  animation: dev-servers-widget-in .14s ease-out;
+}
+@keyframes dev-servers-widget-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.dev-servers-widget-head {
+  min-height: 44px;
+  padding: 0 10px 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--fau-border);
+  flex-shrink: 0;
+}
+.dev-servers-widget-title {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 650;
+}
+.dev-servers-widget-title i { color: #34d399; font-size: 15px; }
+.dev-servers-widget-actions { display: flex; align-items: center; gap: 2px; }
+.dev-servers-widget-actions .topbar-btn { width: 28px; height: 28px; }
+.dev-servers-widget-list { overflow: auto; min-height: 100px; padding: 8px; }
+.dev-servers-widget-list .proj-ports-table { width: 100%; }
+.dev-servers-widget-loading {
+  min-height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: var(--fau-text-muted);
+  font-size: 12px;
+}
+@media (max-width: 680px) {
+  .dev-servers-widget { top: 68px; right: 8px; width: calc(100vw - 16px); }
+  .dev-servers-widget .proj-ports-col-folder,
+  .dev-servers-widget .proj-ports-col-command,
+  .dev-servers-widget th:nth-child(2),
+  .dev-servers-widget td:nth-child(2),
+  .dev-servers-widget th:nth-child(4),
+  .dev-servers-widget td:nth-child(4) { display: none; }
+}
 #browser-pane.resizing webview,
 #browser-pane.resizing iframe,
 #browser-pane.resizing #browser-webview-wrap { pointer-events: none; }

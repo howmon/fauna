@@ -1150,7 +1150,7 @@ function hideShellRunningPill(execId) {
 
 // Non-blocking pill for dev servers. Lives in a separate container so it
 // doesn't count toward `hasActiveShellWorkForCurrentConversation` and the
-// send button stays enabled. Clicking it opens Settings → Dev Servers.
+// send button stays enabled. Clicking it opens the topbar dev-server widget.
 function _devServerPillKey(code, convId) {
   return (convId || '') + '|' + String(code || '')
     .replace(/\bPATH=(?:"[^"]*"|'[^']*'|\S+)\s+/g, '')
@@ -1278,7 +1278,7 @@ function reconcileDevServerPills(servers) {
 // the server registry, so it may not be known at pill-creation time — we look
 // it up live from /api/dev-servers and open the URL in the in-app browser
 // pane. If no port is known yet (server still booting) we fall back to the
-// Settings → Dev Servers manager.
+// topbar dev-server manager.
 function openDevServerPill(regId) {
   var openManager = function() {
     try {
@@ -1518,7 +1518,7 @@ async function runShellExec(execId, opts) {
               // input bar as a blocking running pill.
               widget.dataset.devServer = '1';
               if (!stdoutBuf && !stderrBuf) {
-                stdoutBuf = 'Dev server started in background. Manage it from Settings → Dev Servers.';
+                stdoutBuf = 'Dev server started in background. Manage it from the Running dev servers indicator.';
               }
             }
             _removeShellInput(execId);

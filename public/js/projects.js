@@ -5749,6 +5749,8 @@ function _applyDevServerSnapshot(servers) {
   // Re-render dev-servers page if open
   var pageEl = document.querySelector('#settings-panel .settings-page[data-page="dev-servers"]');
   if (pageEl && pageEl.classList.contains('active')) _renderDevServersList(servers);
+  var widgetList = document.getElementById('dev-servers-widget-list');
+  if (widgetList) _renderDevServersList(servers, widgetList);
 }
 
 // “Port 3000 — Open in Browser” balloon — VS Code’s Ports panel equivalent.
@@ -5799,13 +5801,79 @@ function _dismissServerNotification(serverId) {
   setTimeout(function() { notif.remove(); }, 250);
 }
 
-function _openDevServersQuick() {
-  var btn = document.querySelector('#settings-panel .settings-nav-item[data-page="dev-servers"]');
-  switchSettingsPage('dev-servers', btn);
-  if (typeof toggleSettings === 'function') {
-    var panel = document.getElementById('settings-panel');
-    if (panel && panel.style.display === 'none') toggleSettings();
+var _devServersWidgetOutsideHandler = null;
+var _devServersWidgetKeyHandler = null;
+
+function _closeDevServersWidget() {
+  var widget = document.getElementById('dev-servers-widget');
+  if (widget) widget.remove();
+  if (_devServersWidgetOutsideHandler) {
+    document.removeEventListener('pointerdown', _devServersWidgetOutsideHandler);
+    _devServersWidgetOutsideHandler = null;
   }
+  if (_devServersWidgetKeyHandler) {
+    document.removeEventListener('keydown', _devServersWidgetKeyHandler);
+    _devServersWidgetKeyHandler = null;
+  }
+  var trigger = document.getElementById('topbar-servers-btn');
+  if (trigger) trigger.setAttribute('aria-expanded', 'false');
+}
+
+function _refreshDevServersWidget() {
+  var host = document.getElementById('dev-servers-widget-list');
+  if (!host) return;
+  host.innerHTML = '<div class="dev-servers-widget-loading"><i class="ti ti-loader-2 ti-spin"></i> Refreshing</div>';
+  fetch('/api/runs')
+    .then(function(r) { return r.json(); })
+    .then(function(runs) { _renderDevServersList(runs, host); })
+    .catch(function() {
+      host.innerHTML = '<div class="dev-servers-widget-loading">Unable to load dev servers.</div>';
+    });
+}
+
+function _openDevServersQuick(event) {
+  if (event) event.stopPropagation();
+  if (document.getElementById('dev-servers-widget')) {
+    _closeDevServersWidget();
+    return;
+  }
+
+  var widget = document.createElement('section');
+  widget.id = 'dev-servers-widget';
+  widget.className = 'dev-servers-widget';
+  widget.setAttribute('role', 'dialog');
+  widget.setAttribute('aria-modal', 'false');
+  widget.setAttribute('aria-labelledby', 'dev-servers-widget-title');
+  widget.innerHTML =
+    '<div class="dev-servers-widget-head">' +
+      '<div class="dev-servers-widget-title" id="dev-servers-widget-title">' +
+        '<i class="ti ti-server"></i><span>Running dev servers</span>' +
+      '</div>' +
+      '<div class="dev-servers-widget-actions">' +
+        '<button type="button" class="topbar-btn" onclick="_refreshDevServersWidget()" title="Refresh dev servers" aria-label="Refresh dev servers"><i class="ti ti-refresh"></i></button>' +
+        '<button type="button" class="topbar-btn" onclick="_closeDevServersWidget()" title="Close" aria-label="Close dev servers"><i class="ti ti-x"></i></button>' +
+      '</div>' +
+    '</div>' +
+    '<div id="dev-servers-widget-list" class="dev-servers-widget-list"></div>';
+  document.body.appendChild(widget);
+
+  var trigger = document.getElementById('topbar-servers-btn');
+  if (trigger) trigger.setAttribute('aria-expanded', 'true');
+  _refreshDevServersWidget();
+
+  setTimeout(function() {
+    _devServersWidgetOutsideHandler = function(pointerEvent) {
+      var current = document.getElementById('dev-servers-widget');
+      if (current && !current.contains(pointerEvent.target) && pointerEvent.target !== trigger) {
+        _closeDevServersWidget();
+      }
+    };
+    document.addEventListener('pointerdown', _devServersWidgetOutsideHandler);
+  }, 0);
+  _devServersWidgetKeyHandler = function(keyEvent) {
+    if (keyEvent.key === 'Escape') _closeDevServersWidget();
+  };
+  document.addEventListener('keydown', _devServersWidgetKeyHandler);
 }
 
 async function _pollPorts() {
@@ -5823,8 +5891,8 @@ function renderDevServersPage() {
     .catch(function() {});
 }
 
-function _renderDevServersList(runs) {
-  var host = document.getElementById('dev-servers-list');
+function _renderDevServersList(runs, hostOverride) {
+  var host = hostOverride || document.getElementById('dev-servers-list');
   if (!host) return;
   if (!runs.length) {
     host.innerHTML =
