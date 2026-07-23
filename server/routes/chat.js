@@ -540,15 +540,13 @@ export function registerChatRoute(app, {
     // guarded by `!res.writableEnded` — only true when the client genuinely disconnected
     // before we finished writing the SSE stream.
     const upstreamAbort = new AbortController();
-    // Set true when the idle watchdog aborts a genuinely-stalled upstream
-    // stream (no chunks at all for STREAM_IDLE_MS). Distinguishes a stall from
-    // a user-initiated Stop so the catch can surface a recoverable error.
-    let streamStalled = false;
-    // Set true when the first-content watchdog aborts a turn that spent too
-    // long in pure thinking (chunks arriving, but no visible text/tool call)
-    // — the idle watchdog above can't catch this because thinking deltas keep
-    // resetting its timer.
-    let thinkingDeadlineHit = false;
+    // v2.0.11: no application-level stream-idle watchdog. Cancellation flows
+    // exclusively through `res.on('close') → upstreamAbort.abort()` (user hits
+    // Stop) and natural HTTP/socket-layer errors. Matches VS Code Copilot
+    // Chat's SSE reader model, which also has no per-chunk deadline — the
+    // scaled STREAM_IDLE_MS + thinking-deadline caps that used to live here
+    // punished legitimate long reasoning passes (repro: msg 17 of the
+    // Stalled-Docx-Generation-Attempts v2.0.10 transcript).
     // Track callIds opened by THIS request so a client disconnect rejects
     // only its own pending widget / client-tool round-trips (the Maps are
     // shared across all concurrent /api/chat requests).
@@ -1768,14 +1766,6 @@ export function registerChatRoute(app, {
       // Stalled-DOCX-Rewrite-Attempts v2.0.9 transcript, where the declared-work
       // guard's nudge fired but the model still didn't write.
       let forceToolChoice = null;
-      // Stream-idle recovery for force-pinned turns. When the upstream stalls
-      // for >STREAM_IDLE_MS while the model is generating a monster tool-call
-      // arg (repro: same v2.0.9 transcript — 30-page docx write-file with Opus
-      // + thinking), we abort. Without recovery the user just sees the
-      // "stopped responding" error and manually retries. With recovery we
-      // retry ONCE with thinking disabled and a chunking coach so the retry
-      // finishes fast. Consumed by the streamStalled handler.
-      let stallRecoveryFired = false;
       let noOutputStreamRetries = 0;
       // Empty-final-response guard: fires when the stream finished normally
       // (finish_reason=stop or usage present) but the model emitted no text
@@ -2236,10 +2226,8 @@ export function registerChatRoute(app, {
         // when the named tool actually exists in the current tool set — a
         // missing name silently degrades to no constraint rather than a hard
         // 400 from the upstream provider.
-        let lastIterationPinnedTool = null;
         if (forceToolChoice && !params.tool_choice && Array.isArray(params.tools) && params.tools.some(t => t?.function?.name === forceToolChoice)) {
           params.tool_choice = { type: 'function', function: { name: forceToolChoice } };
-          lastIterationPinnedTool = forceToolChoice;
           console.log('[chat] tool_choice pinned to ' + forceToolChoice + ' for this iteration');
         }
         // Always consume the pin so it never leaks into a follow-up turn.
@@ -2325,59 +2313,22 @@ export function registerChatRoute(app, {
           send({ type: 'reasoning' });
         }
 
-        // Idle watchdog. Claude streams thinking + text + tool-argument deltas
-        // continuously, so a *total* absence of chunks for STREAM_IDLE_MS means
-        // the upstream genuinely stalled (not merely "thinking"). The SSE
-        // keep-alive above only protects the client socket; it does nothing for
-        // an upstream that goes silent mid-generation, which otherwise hangs the
-        // `for await` forever. Aborting converts that into a recoverable error.
-        //
-        // First-content deadline. The idle watchdog can't catch a turn that
-        // streams thinking deltas steadily but never produces visible text or a
-        // tool call (every delta resets `lastChunkAt`). We separately track
-        // whether any *visible output* has appeared; if not, warn the user at
-        // FIRST_CONTENT_WARN_MS and hard-abort at FIRST_CONTENT_ABORT_MS so a
-        // runaway thinking pass can't hang the turn indefinitely.
-        let lastChunkAt = Date.now();
-        const streamStartAt = Date.now();
-        let sawVisibleOutput = false;
-        let firstContentWarned = false;
-        const STREAM_IDLE_MS = 120000;
-        const FIRST_CONTENT_WARN_MS = 90000;
-        const FIRST_CONTENT_ABORT_MS = effectiveThinkingBudget === 'max' ? 360000 : 180000;
-        const _idleWatch = setInterval(() => {
-          if (res.writableEnded) return;
-          if (Date.now() - lastChunkAt > STREAM_IDLE_MS) {
-            streamStalled = true;
-            try { upstreamAbort.abort(); } catch (_) {}
-            return;
-          }
-          if (!sawVisibleOutput) {
-            const thinkingFor = Date.now() - streamStartAt;
-            if (!firstContentWarned && thinkingFor > FIRST_CONTENT_WARN_MS) {
-              firstContentWarned = true;
-              try {
-                const _budgetHint = thinkingBudget === 'auto'
-                  ? 'Auto picked a large thinking budget for this request; set Settings → Thinking Budget to Low to speed up simple questions.'
-                  : 'The model is using a large thinking budget; set Settings → Thinking Budget to Auto or a lower level to speed up simple questions.';
-                send({
-                  type: 'notice',
-                  level: 'info',
-                  message: 'Still thinking — no output yet after ' + Math.round(thinkingFor / 1000) + 's. ' + _budgetHint
-                });
-              } catch (_) {}
-            }
-            if (thinkingFor > FIRST_CONTENT_ABORT_MS) {
-              thinkingDeadlineHit = true;
-              try { upstreamAbort.abort(); } catch (_) {}
-            }
-          }
-        }, 5000);
-
-        let _streamThrew = null;
-        try {
+        // No application-level stream-idle / thinking-deadline watchdog.
+        // v2.0.10 shipped a scaled STREAM_IDLE_MS cap (120s → 15 min depending
+        // on model + thinking budget) that still punished legitimate long
+        // generations on Opus + auto thinking (repro: msg 17 of the
+        // Stalled-Docx-Generation-Attempts v2.0.10 transcript — 30-page docx
+        // aborted at 120s despite the cap ostensibly being higher because the
+        // budget was 'auto'). v2.0.11 matches VS Code Copilot Chat's approach:
+        // the SSE `for await` runs until the upstream naturally closes the
+        // stream, errors at the socket layer, or the user hits Stop (which
+        // triggers `res.on('close') → upstreamAbort.abort()` above). This is
+        // what actually works for reasoning models that go silent for minutes
+        // during a heavy thinking pass. Verified in
+        // /Applications/Visual Studio Code.app/Contents/Resources/app/extensions/copilot/dist/extension.js
+        // — the reader loop there is a bare `for(;;){await reader.read()}`
+        // with no timeout wrapper.
         for await (const chunk of stream) {
-          lastChunkAt = Date.now();
           if (res.writableEnded) { continueLoop = false; break; }
           if (chunk.usage) streamUsage = chunk.usage;
           const delta = chunk.choices?.[0]?.delta;
@@ -2395,7 +2346,6 @@ export function registerChatRoute(app, {
                 }
               } else if (block.type === 'text' && block.text) {
                 assistantText += block.text;
-                sawVisibleOutput = true;
                 sendContent(block.text);
               }
             }
@@ -2404,7 +2354,6 @@ export function registerChatRoute(app, {
           // ── Standard text delta ────────────────────────────────────────────
           if (typeof delta.content === 'string' && delta.content) {
             assistantText += delta.content;
-            sawVisibleOutput = true;
             sendContent(delta.content);
           }
 
@@ -2423,7 +2372,6 @@ export function registerChatRoute(app, {
 
           // ── Tool call accumulation ─────────────────────────────────────────
           if (delta?.tool_calls) {
-            sawVisibleOutput = true;
             for (const tc of delta.tool_calls) {
               const i = tc.index ?? 0;
               if (!pendingCalls[i]) pendingCalls[i] = { id: '', type: 'function', function: { name: '', arguments: '' } };
@@ -2433,53 +2381,11 @@ export function registerChatRoute(app, {
             }
           }
         }
-        } catch (streamErr) {
-          // Capture the stream error for the recovery block below to decide
-          // whether to swallow it (stream-stall retry) or rethrow (real error).
-          _streamThrew = streamErr;
-        } finally {
-          clearInterval(_idleWatch);
-        }
 
-        // Stream-idle recovery: when the upstream stalled (watchdog aborted
-        // for >120s of silence) AND this iteration had a tool_choice pin AND
-        // recovery hasn't already fired AND thinking was on, retry the SAME
-        // iteration once with thinking disabled + explicit chunking guidance.
-        // Repro: msg 15 of the Stalled-DOCX-Rewrite-Attempts v2.0.9 transcript
-        // where the declared-work guard force-pinned fauna_write_file, then
-        // Opus 4.7 with auto-thinking went silent generating a monster 30-page
-        // docx script and the server aborted after 2 minutes.
-        //
-        // NOTE: streamStalled was set by the watchdog inside the for-await try
-        // above; when true the for-await threw (via upstreamAbort) and dropped
-        // through the finally. We check it here rather than in a catch so the
-        // outer catch still handles genuine upstream errors (5xx, auth, etc.)
-        // that weren't stall-driven.
-        if (streamStalled && lastIterationPinnedTool && !stallRecoveryFired && effectiveThinkingBudget !== 'off') {
-          const originalBudget = effectiveThinkingBudget;
-          stallRecoveryFired = true;
-          streamStalled = false; // consumed — allow outer catch to detect a fresh stall on retry
-          _streamThrew = null;   // swallow the abort — we're recovering
-          effectiveThinkingBudget = 'off';
-          forceToolChoice = lastIterationPinnedTool; // re-pin for the retry iteration
-          console.log(`[chat] stream stalled with pinned tool '${lastIterationPinnedTool}' — recovering: thinking ${originalBudget}→off, re-pinning ${lastIterationPinnedTool}`);
-          try {
-            send({ type: 'notice', level: 'warning', message: 'Upstream stalled generating a large tool call — retrying with thinking disabled and a chunked approach.' });
-          } catch (_) {}
-          allMessages.push({ role: 'user', content: '[System: The upstream provider stalled for over 2 minutes while you were composing a tool call — the tool-call arguments were too large for a single stream. Retry NOW with a chunked approach: emit a small (<80 line) generator script via `fauna_write_file` that constructs the artifact programmatically, then run it with `fauna_shell_exec`. Do NOT try to pack the entire payload into a single tool-call argument. If the previous request was for a long document, .docx/.xlsx/.pdf, or any binary/generated file, this chunking pattern is required.]' });
-          // Reset iteration-local accumulators so the finalize logic sees clean
-          // state on the retry — the stalled partial text/tool-calls would
-          // otherwise poison guard decisions and repeat tool dispatch.
-          assistantText = '';
-          pendingCalls.length = 0;
-          finishReason = null;
-          continueLoop = true;
-          continue; // jump to top of while — retry this iteration
-        }
-        // Not recoverable: rethrow the original stream error (or synthesize one
-        // for a pure watchdog-driven stall) so the outer catch reports it.
-        if (_streamThrew) throw _streamThrew;
-        if (streamStalled) throw new Error('stream_idle_abort');
+        // No stream-idle recovery block. The stream either completes normally
+        // (falls through here) or throws — a thrown error propagates up to the
+        // outer catch which reports it. See the "no application-level watchdog"
+        // comment above the for-await.
 
         // Codex-parity: accumulate + broadcast token usage after each model
         // iteration so the UI can render a live context-window indicator.
@@ -3131,14 +3037,15 @@ export function registerChatRoute(app, {
             // Coach the model toward the "generator script → shell exec" pattern
             // for large artifacts. A monolithic fauna_write_file call for a
             // 30-page docx serialises 15–25k tokens of tool-call arguments in a
-            // single upstream stream, which routinely exceeds STREAM_IDLE_MS
-            // (120s) with Opus + reasoning enabled and aborts with the
-            // "stopped responding" error the user hits. Repro: msg 15 of the
-            // Stalled-DOCX-Rewrite-Attempts transcript. In msg 5 of the SAME
-            // conversation the model naturally used this chunking pattern
-            // (build_report.py written, then python3 build_report.py) and it
-            // succeeded in a few seconds — this nudge just reminds it to reuse
-            // that pattern when the guard forces mutation.
+            // single upstream stream, which routinely exceeds *upstream provider*
+            // timeouts (not ours — v2.0.11 rip'd our local cap; see the
+            // "no application-level watchdog" comment above the for-await) and
+            // aborts. Repro: msg 15 of the Stalled-DOCX-Rewrite-Attempts
+            // transcript. In msg 5 of the SAME conversation the model naturally
+            // used this chunking pattern (build_report.py written, then
+            // python3 build_report.py) and it succeeded in a few seconds — this
+            // nudge just reminds it to reuse that pattern when the guard
+            // forces mutation.
             allMessages.push({ role: 'user', content: '[System: Your response said you would build/write/create/rewrite an artifact ("I\'ll build …", "Building it now", "the next action is to write …"), but this turn ended without ANY file-write tool call. Words are not work. Call a mutation tool NOW. For LARGE artifacts (long documents, generated files, multi-page reports, binary formats like .docx/.xlsx/.pdf), do NOT try to pack the whole payload into one tool-call argument — split it into: (1) `fauna_write_file` with a small generator script (Python, Node, etc.) that emits the artifact, then (2) `fauna_shell_exec` to run that script and produce the file. This chunks tool-call args into two small calls and avoids stream-idle timeouts on monolithic writes. For SMALL artifacts, call `fauna_write_file` or `fauna_apply_patch` directly with the exact path and content. Either way — no more inspection, no more version checks, no more "reading the source" preamble. Produce the artifact.]' });
             // keep continueLoop = true
           } else if (
@@ -3539,25 +3446,7 @@ export function registerChatRoute(app, {
       // Only treat as abort if we actually aborted the controller — checking the
       // error message text alone is too loose and swallows real upstream errors
       // whose messages happen to mention "abort".
-      if (streamStalled) {
-        console.log('[chat] upstream stream stalled (no chunks for >120s) — aborting turn');
-        try {
-          send({
-            type: 'error',
-            error: 'The model stopped responding (no data for over 2 minutes). This can happen on very large generations. Please try again — and if it recurs, lower the thinking budget or simplify the request.'
-          });
-        } catch (_) {}
-      } else if (thinkingDeadlineHit) {
-        console.log('[chat] first-content deadline hit — model never produced output, aborting turn');
-        try {
-          send({
-            type: 'error',
-            error: thinkingBudget === 'auto'
-              ? 'The model spent too long thinking without producing any answer. Auto picked too high a thinking budget for this request — set Settings → Thinking Budget to Low and try again.'
-              : 'The model spent too long thinking without producing any answer. This usually means the thinking budget is too high for the request — set Settings → Thinking Budget to Auto (or a lower level) and try again.'
-          });
-        } catch (_) {}
-      } else if (upstreamAbort.signal.aborted) {
+      if (upstreamAbort.signal.aborted) {
         console.log('[chat] upstream aborted by client');
       } else {
         try { send({ type: 'error', error: err.message }); } catch (_) {}
@@ -3567,8 +3456,6 @@ export function registerChatRoute(app, {
         try {
           const stopHooks = await runHooks(customizationRecords, 'SubagentStop', {
             ...subagentStopPayload,
-            streamStalled,
-            thinkingDeadlineHit,
             aborted: !!upstreamAbort.signal.aborted,
           }, { cwd: workspaceRoot });
           if (stopHooks.blocked && !res.writableEnded) {

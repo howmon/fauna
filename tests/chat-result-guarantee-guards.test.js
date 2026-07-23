@@ -201,38 +201,42 @@ describe('chat.js result-guarantee guards', () => {
     expect(declaredWindow).toMatch(/chunk(?:ed|ing|s)|split/i);
   });
 
-  it('stream-idle recovery retries once with thinking off and re-pinned tool', () => {
-    // The recovery flag is turn-scoped (one recovery per turn).
-    expect(chatSource).toMatch(/let\s+stallRecoveryFired\s*=\s*false/);
-    // The recovery block sits right after the for-await finally and gates on
-    // (streamStalled && lastIterationPinnedTool && !stallRecoveryFired &&
-    //  effectiveThinkingBudget !== 'off').
-    const recoveryIdx = chatSource.indexOf('stream stalled with pinned tool');
-    expect(recoveryIdx, 'stream-idle recovery log line not found').toBeGreaterThan(-1);
-    const recoveryWindow = chatSource.slice(Math.max(0, recoveryIdx - 800), recoveryIdx + 1600);
-    expect(recoveryWindow).toMatch(/streamStalled\s*&&\s*lastIterationPinnedTool\s*&&\s*!stallRecoveryFired\s*&&\s*effectiveThinkingBudget\s*!==\s*'off'/);
-    // Must flip the one-shot flag, disable thinking, re-pin the tool, and
-    // reset iteration-local accumulators so the retry sees clean state.
-    expect(recoveryWindow).toContain('stallRecoveryFired = true');
-    expect(recoveryWindow).toMatch(/effectiveThinkingBudget\s*=\s*'off'/);
-    expect(recoveryWindow).toMatch(/forceToolChoice\s*=\s*lastIterationPinnedTool/);
-    expect(recoveryWindow).toMatch(/assistantText\s*=\s*''/);
-    expect(recoveryWindow).toMatch(/pendingCalls\.length\s*=\s*0/);
-    expect(recoveryWindow).toContain('continue;');
-    // The recovery nudge sent to the model must prescribe the same chunking
-    // pattern as the declared-work nudge.
-    expect(recoveryWindow).toContain('fauna_shell_exec');
-    expect(recoveryWindow).toContain('fauna_write_file');
-  });
+  // ── v2.0.11: no application-level stream-idle watchdog ────────────────
+  // The v2.0.10 scaled STREAM_IDLE_MS cap + stream-idle recovery block
+  // still punished legitimate long reasoning passes on Opus + auto/max
+  // thinking (repro: msg 17 of the Stalled-Docx-Generation-Attempts v2.0.10
+  // transcript — 30-page docx aborted at 120s because the "auto" budget
+  // wasn't recognized by the scaling table). v2.0.11 rips the fuse entirely
+  // to match VS Code Copilot Chat's SSE reader, which awaits `reader.read()`
+  // with no timeout wrapper (verified in
+  // /Applications/Visual Studio Code.app/Contents/Resources/app/extensions/copilot/dist/extension.js).
+  // Cancellation flows exclusively through the user Stop button
+  // (res.on('close') → upstreamAbort.abort()) and natural HTTP/socket errors.
 
-  it('tracks lastIterationPinnedTool inside the params builder for recovery decisions', () => {
-    // Without this, the stream-idle recovery block can't tell whether the
-    // stall happened on a pinned iteration (recoverable) vs. an unpinned one
-    // (not recoverable — probably a genuine upstream error).
-    const consumerIdx = chatSource.indexOf("[chat] tool_choice pinned to ' + forceToolChoice");
-    expect(consumerIdx).toBeGreaterThan(-1);
-    const consumerWindow = chatSource.slice(Math.max(0, consumerIdx - 800), consumerIdx + 300);
-    expect(consumerWindow).toMatch(/let\s+lastIterationPinnedTool\s*=\s*null/);
-    expect(consumerWindow).toMatch(/lastIterationPinnedTool\s*=\s*forceToolChoice/);
+  it('has no application-level stream-idle or thinking-deadline watchdog', () => {
+    // These identifiers powered the v2.0.10 fuse and MUST NOT reappear as
+    // active code. Historical mentions inside `//` comments are allowed —
+    // strip line comments before asserting.
+    const stripped = chatSource
+      .replace(/\/\*[\s\S]*?\*\//g, '')            // block comments
+      .replace(/^[ \t]*\/\/.*$/gm, '')             // full-line comments
+      .replace(/(^|[^:'"`\/])\/\/.*$/gm, '$1');    // trailing comments (best-effort)
+    const banned = [
+      'STREAM_IDLE_MS',
+      'FIRST_CONTENT_WARN_MS',
+      'FIRST_CONTENT_ABORT_MS',
+      'streamStalled',
+      'thinkingDeadlineHit',
+      'stallRecoveryFired',
+      'lastStreamIdleCapMs',
+      'lastIterationPinnedTool',
+      '_idleWatch',
+    ];
+    for (const name of banned) {
+      expect(stripped, `banned identifier "${name}" still present in active code`).not.toContain(name);
+    }
+    // The user-Stop path stays — it's the only cancellation channel now.
+    expect(chatSource).toMatch(/const\s+upstreamAbort\s*=\s*new\s+AbortController/);
+    expect(chatSource).toMatch(/res\.on\(['"]close['"]/);
   });
 });
