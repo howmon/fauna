@@ -68,6 +68,53 @@ import { loadAgentManifest } from '../lib/agent-manifest.js';
 import { scrubSecrets } from '../lib/redactor.js';
 import { normalizeInteractiveAuthCommand } from '../lib/interactive-auth.js';
 
+// ── Tool-driven Decision Prompt bridge ────────────────────────────────────
+// Any tool (self-tool, agent tool, MCP tool) can pause the agent and
+// surface the Decision Prompt UI by returning a JSON payload shaped:
+//   { ok, paused: true, code: 'AWAITING_USER_DECISION', action: { ... } }
+// The canonical producer is the fauna_ask_user_decision self-tool, but the
+// contract is intentionally generic so plugins, MCP servers, and agent
+// tools can raise their own gates without hard-coding domain logic here.
+//
+// Returns a well-formed action object, or null if the tool result does
+// not carry one.
+export function extractEmbeddedUserAction(rawResult, toolName) {
+  if (!rawResult || typeof rawResult !== 'string') return null;
+  let parsed;
+  try { parsed = JSON.parse(rawResult); }
+  catch (_) { return null; }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const isPaused = parsed.paused === true || parsed.code === 'AWAITING_USER_DECISION';
+  const action = parsed.action;
+  if (!isPaused || !action || typeof action !== 'object') return null;
+  const options = Array.isArray(action.options) ? action.options.filter(o =>
+    o && typeof o === 'object' && o.id && o.label && o.response) : [];
+  if (options.length < 2) return null;
+  const normalized = {
+    id: String(action.id || ('agent-decision-' + Date.now())),
+    kind: String(action.kind || 'agent-decision'),
+    toolName: String(action.toolName || toolName || ''),
+    title: String(action.title || 'Your input is required'),
+    prompt: String(action.prompt || 'The agent is waiting for you before it can continue.'),
+    options: options.map(o => {
+      const opt = {
+        id: String(o.id),
+        label: String(o.label),
+        response: String(o.response),
+      };
+      if (o.description) opt.description = String(o.description);
+      if (o.recommended) opt.recommended = true;
+      return opt;
+    }),
+    allowCustom: action.allowCustom !== false,
+  };
+  if (action.customLabel) normalized.customLabel = String(action.customLabel);
+  if (action.customPlaceholder) normalized.customPlaceholder = String(action.customPlaceholder);
+  if (action.url) normalized.url = String(action.url);
+  if (action.code) normalized.code = String(action.code);
+  return normalized;
+}
+
 export function detectRequiredUserAction(toolName, args = {}, result = '') {
   const output = String(result || '');
   const command = String(args?.command || args?.input || '');
@@ -79,6 +126,15 @@ export function detectRequiredUserAction(toolName, args = {}, result = '') {
   const isCoworkLoginCommand = /\bcowork\s+auth\s+login\b/i.test(command);
   const browserPrompt = /open(?:ing|ed)?\s+(?:your\s+)?(?:default\s+)?browser|complete\s+(?:the\s+)?sign[ -]?in|continue\s+in\s+(?:your\s+)?browser|waiting\s+for\s+(?:browser\s+)?auth/i.test(output);
   const authCompleted = /successfully\s+(?:authenticated|signed\s+in)|authentication\s+(?:is\s+)?complete|logged\s+in\s+successfully/i.test(output);
+
+  // Generic tool-driven pause: any tool (self-tool, agent tool, MCP tool)
+  // can request the Decision Prompt by returning a JSON payload shaped
+  // like { paused: true, action: {...} } or { code: 'AWAITING_USER_DECISION', action: {...} }.
+  // fauna_ask_user_decision is the canonical producer of this shape.
+  if (output && (output.includes('"action"') || output.includes('"paused"'))) {
+    const embedded = extractEmbeddedUserAction(output, toolName);
+    if (embedded) return embedded;
+  }
 
   if (hasDeviceUrl && (hasDeviceInstruction || isDeviceLoginCommand)) {
     const codeMatch = output.match(/\b(?:enter|code(?:\s+is)?[:\s]+)\s*([A-Z0-9]{6,12})\b/i);

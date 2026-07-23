@@ -1732,6 +1732,42 @@ export const SELF_TOOL_DEFS = [
     },
   },
 
+  // ── User decision prompt ──
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_ask_user_decision',
+      description: 'Ask the user to pick between concrete options before continuing. Use whenever you would otherwise silently make a non-trivial decision on the user\'s behalf — creating a new file/page/branch, choosing between destructive alternatives, picking a framework, overwriting existing work, running a slow/expensive operation, or committing to an irreversible action. Renders the Decision Prompt UI, pauses the agent, and resumes on the next user turn with their answer. Do NOT use for trivial UI questions the user can inspect visually; do NOT use to fish for missing context you can look up yourself.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Short modal title, e.g. "Create a new Figma page?"' },
+          prompt: { type: 'string', description: 'One or two sentences explaining what you are about to do and why the user should choose.' },
+          options: {
+            type: 'array',
+            description: 'Ordered list of choices. Mark the safest / least destructive one with recommended:true.',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'Stable option id (kebab-case).' },
+                label: { type: 'string', description: 'Short button label.' },
+                description: { type: 'string', description: 'Optional secondary text under the label.' },
+                recommended: { type: 'boolean', description: 'True for the default/recommended choice (max one).' },
+                response: { type: 'string', description: 'Exact message that will be sent back to you as if the user typed it. Write it in the user\'s voice, imperative, and specific.' },
+              },
+              required: ['id', 'label', 'response'],
+            },
+            minItems: 2,
+          },
+          allowCustom: { type: 'boolean', description: 'Allow the user to type a freeform answer. Default true.' },
+          customLabel: { type: 'string', description: 'Optional label for the freeform row (e.g. "Use a different name…").' },
+          customPlaceholder: { type: 'string', description: 'Placeholder text inside the freeform input.' },
+        },
+        required: ['title', 'prompt', 'options'],
+      },
+    },
+  },
+
   // ── Fast file tools ──
   {
     type: 'function',
@@ -3926,6 +3962,67 @@ export async function executeSelfTool(toolName, args, context = {}) {
     case 'fauna_send_notification': {
       context.sendNotification?.(args.title, args.body);
       return JSON.stringify({ ok: true, title: args.title });
+    }
+
+    // ── User decision prompt ──
+    // Agent-driven pause: the model calls this whenever it needs the user
+    // to pick between concrete options. We return a payload with
+    // `paused: true` and an embedded `action`; the /api/chat SSE loop
+    // (detectRequiredUserAction) recognises the shape, emits
+    // `requires_user_action`, and locks tools for the rest of the turn.
+    case 'fauna_ask_user_decision': {
+      const title = String(args?.title || '').trim();
+      const prompt = String(args?.prompt || '').trim();
+      const rawOptions = Array.isArray(args?.options) ? args.options : [];
+      if (!title || !prompt || rawOptions.length < 2) {
+        return JSON.stringify({
+          ok: false,
+          error: 'fauna_ask_user_decision requires title, prompt, and at least 2 options.',
+        });
+      }
+      const options = [];
+      const seenIds = new Set();
+      let recommendedCount = 0;
+      for (const raw of rawOptions) {
+        if (!raw || typeof raw !== 'object') continue;
+        const id = String(raw.id || '').trim();
+        const label = String(raw.label || '').trim();
+        const response = String(raw.response || '').trim();
+        if (!id || !label || !response) continue;
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+        const opt = { id, label, response };
+        if (raw.description) opt.description = String(raw.description);
+        if (raw.recommended && recommendedCount === 0) {
+          opt.recommended = true;
+          recommendedCount++;
+        }
+        options.push(opt);
+      }
+      if (options.length < 2) {
+        return JSON.stringify({
+          ok: false,
+          error: 'At least two valid options (id, label, response) are required.',
+        });
+      }
+      const action = {
+        id: 'agent-decision-' + Date.now(),
+        kind: 'agent-decision',
+        toolName: 'fauna_ask_user_decision',
+        title,
+        prompt,
+        options,
+        allowCustom: args?.allowCustom !== false,
+      };
+      if (args?.customLabel) action.customLabel = String(args.customLabel);
+      if (args?.customPlaceholder) action.customPlaceholder = String(args.customPlaceholder);
+      return JSON.stringify({
+        ok: true,
+        paused: true,
+        code: 'AWAITING_USER_DECISION',
+        action,
+        hint: 'The Decision Prompt is now visible to the user. Do not call any more tools this turn; wait for the user\'s reply.',
+      });
     }
 
     // ── Fast file writes ──
