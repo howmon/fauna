@@ -1759,6 +1759,21 @@ export function registerChatRoute(app, {
       const MAX_WIDGET_CLAIM_NUDGES = 1;
       let forceEmitWidgetNext = false; // set when re-prompting; consumed by params builder
       let noOutputStreamRetries = 0;
+      // Empty-final-response guard: fires when the stream finished normally
+      // (finish_reason=stop or usage present) but the model emitted no text
+      // and made no tool calls. Without this the UI shows a silent blank
+      // assistant turn (repro: transcript index 3 in the
+      // fauna-30-Page-Strategy-Report-Rewrite transcript \u2014 48s of thinking,
+      // zero content). One retry only, with thinking disabled to force text.
+      let emptyFinalNudgeFired = false;
+      // Declared-work-without-mutation guard: fires when the assistant text
+      // says it will build/write/create/rewrite an artifact (\"I'll build \u2026\",
+      // \"Building it now\", \"the next action is to write \u2026\") but the turn ended
+      // without any mutating tool call. Prevents the pattern where the model
+      // acknowledges a stall and then re-inspects instead of actually writing
+      // (same 30-page docx transcript, indices 9 and 11). One retry only, with
+      // tool_choice pinned to force a real mutation.
+      let declaredWorkNudgeFired = false;
       let mutatingToolUsed = false;
       let validationToolUsed = false;
       let inspectionOnlyNudges = 0;
@@ -1846,7 +1861,11 @@ export function registerChatRoute(app, {
         return '';
       })();
       const _hasSharedBrowserTabContext = /\[(?:Resolved live browser tab context|Same browser tab\(s\) as the previous turn|Browser-extension tab attached)/i.test(_lastUserQuery);
-      const _writeIntentTurn = /\b(?:fix|fixes|fixed|implement|resolve|repair|patch|update|change|modify|edit|write|create|add|remove|delete|hide|replace|refactor|migrate|install|extract|port|integrate|copy|move|bring|build\s+out|make\s+(?:all|the|this)|proceed)\b/i.test(_lastUserQuery || '');
+      // Write-intent detection. Includes rewrite/rebuild/regenerate/generate/scaffold/produce/draft
+      // so the inspection-only and declared-work-without-mutation guards catch build-artifact
+      // requests like "rewrite as a 30-page docx" that used to slip past the original verb list
+      // (transcript: fauna-30-Page-Strategy-Report-Rewrite).
+      const _writeIntentTurn = /\b(?:fix|fixes|fixed|implement|resolve|repair|patch|update|change|modify|edit|write|create|add|remove|delete|hide|replace|refactor|migrate|install|extract|port|integrate|copy|move|bring|build\s+out|make\s+(?:all|the|this)|proceed|rewrite|rebuild|regenerate|generate|scaffold|produce|draft|assemble|compose|render(?:\s+out)?)\b/i.test(_lastUserQuery || '');
       const MUTATING_TOOLS = new Set([
         'fauna_write_file', 'fauna_write_files', 'fauna_apply_patch',
         'fauna_replace_string', 'fauna_write_offloaded',
@@ -1948,6 +1967,12 @@ export function registerChatRoute(app, {
       // next action is to read …" five turns in a row and the original regex
       // missed every one because it only matched first-person phrasings.
       const FORWARD_PROMISE_DEFER_RE = /\b(the\s+(?:specific\s+)?next\s+(?:action|step|move)\s+is\s+to|the\s+next\s+concrete\s+(?:action|step)\s*(?::|(?:is|would\s+be))|next\s+up\s+(?:is|will\s+be)\s+to|my\s+next\s+(?:action|step)\s+(?:is|will\s+be)\s+to|then\s+i(?:'ll| will)\s+(?:read|create|run|call|invoke|write|edit|build|test|verify|fetch|search))\b/i;
+      // Gerund-form deferrals — "Building it now", "Writing the file", "Creating the report".
+      // The model uses these to signal imminent work without any first-person "I'll …" or
+      // third-person "the next action is …" — so both regexes above miss them. Repro: the
+      // 30-page-docx transcript where the model ended its recovery turn with
+      // "Honest status: … Building it now" and then never called a write tool.
+      const FORWARD_PROMISE_GERUND_RE = /^\s*(?:building|writing|creating|generating|producing|scaffolding|drafting|rendering|assembling|composing|rewriting|rebuilding|regenerating|preparing|starting)\s+(?:it|this|that|these|those|now|the|a|an|out|up|on)\b/i;
       const endsWithForwardPromise = (text) => {
         const trimmed = String(text || '').trim();
         if (!trimmed) return false;
@@ -1955,6 +1980,7 @@ export function registerChatRoute(app, {
         const parts = trimmed.split(/(?<=[.!?\n])\s+/).map(s => s.trim()).filter(Boolean);
         const last = parts[parts.length - 1] || trimmed;
         if (FORWARD_PROMISE_RE.test(last)) return true;
+        if (FORWARD_PROMISE_GERUND_RE.test(last)) return true;
         // Deferred-action phrasings can appear anywhere in the last 2 sentences —
         // the model often writes a long summary and tacks "the next action is …"
         // at the end without the explicit first-person verb.
@@ -2916,6 +2942,28 @@ export function registerChatRoute(app, {
               });
               continueLoop = false;
             }
+          } else if (
+            !assistantText.trim() &&
+            pendingCalls.length === 0 &&
+            toolCallCount === 0 &&
+            !emptyFinalNudgeFired &&
+            !isOrchestratorTurn
+          ) {
+            // Empty-final-response guard: the model streamed thinking blocks but
+            // produced no text and no tool call, yet the stream did report a
+            // finish_reason (usually 'stop') and/or usage. The empty-no-finish
+            // retry above only fires without a finish_reason, so this case used
+            // to persist as a silent blank assistant turn — a hard "no result"
+            // failure that the user can't recover from without retrying manually.
+            // Repro: fauna-30-Page-Strategy-Report-Rewrite transcript, message
+            // index 3 (48s reasoning, empty content, finishReason=stop). Retry
+            // once with thinking disabled so the model has to output prose or
+            // call a tool.
+            emptyFinalNudgeFired = true;
+            effectiveThinkingBudget = 'off';
+            console.log('[chat] empty final response (finish_reason=' + (finishReason || 'unset') + ') — retrying once with thinking disabled');
+            allMessages.push({ role: 'user', content: '[System: Your previous turn produced no visible text and no tool call. Do not sit silent. Either (a) call the appropriate tool to make progress on the user\'s request, or (b) produce a brief textual answer. If the user just confirmed a previously offered action, execute that action now with the correct tool. If you truly cannot proceed, respond with one sentence starting `BLOCKED:` and the exact reason.]' });
+            // keep continueLoop = true
           // If this was an implementation request, read/search/audit tools are
           // not enough to terminate the turn. VS Code's agent loop keeps the
           // host in control until an edit/command mutation lands or the model
@@ -2962,6 +3010,34 @@ export function registerChatRoute(app, {
             console.log('[chat] forward-promise stop detected — injecting execute nudge (' + halfStopNudgeCount + '/' + MAX_HALF_STOP_NUDGES + ')');
             allMessages.push({ role: 'assistant', content: assistantText });
             allMessages.push({ role: 'user', content: '[System: You just stated an intended next action ("I\'ll …" / "Let me …") but did not execute it. Do that step NOW with the appropriate tool call. Do not narrate intent without acting on it.]' });
+            // keep continueLoop = true
+          } else if (
+            !declaredWorkNudgeFired &&
+            !mutatingToolUsed &&
+            assistantText.trim() &&
+            !/^\s*(?:BLOCKED|NEEDS-INPUT)\s*:/i.test(assistantText) &&
+            // Look ANYWHERE in the assistant text for a stated intent to build/write
+            // an artifact. Combines first-person ("I'll build/write/create/rewrite …"),
+            // gerund ("Building it now", "Writing the file"), and third-person
+            // deferral ("the next action is to write …") phrasings. This catches the
+            // stall pattern where the model narrates imminent work — often mid-message
+            // rather than at the very end — and then finishes the turn without any
+            // mutation. Repro: fauna-30-Page-Strategy-Report-Rewrite transcript
+            // indices 9 and 11 (model said "I'll build a fully rewritten 30-page
+            // docx" and "Building it now" but only issued read/inspection tools).
+            /(?:\bi(?:'?ll|\s+will|\s+am\s+going\s+to|'?m\s+going\s+to)\s+(?:build|write|create|generate|produce|rewrite|rebuild|regenerate|scaffold|draft|assemble|compose|render|add|save|export|output)\b|\b(?:building|writing|creating|generating|producing|rewriting|rebuilding|regenerating|scaffolding|drafting|assembling|composing|rendering)\s+(?:it|this|that|the|a|an|now)\b|\bthe\s+(?:specific\s+)?next\s+(?:action|step|move)\s+is\s+to\s+(?:build|write|create|generate|produce|rewrite|rebuild|regenerate|scaffold|draft|save|export|output)\b|\bbuilding\s+it\s+now\b|\bwriting\s+it\s+now\b|\bcreating\s+it\s+now\b|\bgenerating\s+it\s+now\b|\brewriting\s+it\s+now\b)/i.test(assistantText)
+          ) {
+            // Declared-work-without-mutation guard: the assistant stated it would
+            // build/write/create/rewrite an artifact but the turn ended with zero
+            // mutating tool calls. Orthogonal to `_writeIntentTurn` (which only
+            // checks the CURRENT user message) so it still fires on follow-up
+            // turns like "where are we?" where the intent lives in the model's
+            // own recovery message. Force a real mutation next iteration.
+            declaredWorkNudgeFired = true;
+            forceToolChoice = 'fauna_write_file';
+            console.log('[chat] declared-work-without-mutation detected — forcing real mutation next iteration');
+            allMessages.push({ role: 'assistant', content: assistantText });
+            allMessages.push({ role: 'user', content: '[System: Your response said you would build/write/create/rewrite an artifact ("I\'ll build …", "Building it now", "the next action is to write …"), but this turn ended without ANY file-write tool call. Words are not work. Call `fauna_write_file` or `fauna_apply_patch` NOW with the exact path and full content — no more inspection, no more version checks, no more "reading the source" preamble. Produce the artifact.]' });
             // keep continueLoop = true
           } else if (
             enableDynamicWidgets &&
