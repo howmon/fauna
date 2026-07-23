@@ -139,4 +139,100 @@ describe('chat.js result-guarantee guards', () => {
     expect(declaredWindow.indexOf('declaredWorkNudgeFired = true;'))
       .toBeLessThan(declaredWindow.indexOf("allMessages.push({ role: 'user'"));
   });
+
+  // ── Follow-up fixes cut in v2.0.10 ─────────────────────────────────────
+  // Root cause of the Stalled-DOCX-Rewrite-Attempts v2.0.9 transcript stall:
+  //   (a) `forceToolChoice` was assigned in four guards but never declared or
+  //       consumed — every "force fauna_write_file" nudge was a text-only
+  //       no-op with no actual tool_choice constraint on the API call.
+  //   (b) The (soft) forward-promise branch fired BEFORE the (hard)
+  //       declared-work branch for gerund stalls like "Building it now",
+  //       burning a halfStopNudgeCount slot on a text-only nudge and letting
+  //       the model re-narrate the stall on the retry.
+  //   (c) The declared-work nudge told the model to write "with the exact
+  //       path and full content" — for a 30-page docx that's a 20k-token
+  //       tool-call arg, which trips the 2-minute STREAM_IDLE_MS abort with
+  //       Opus + reasoning enabled.
+  //   (d) No fallback on stream-idle abort — the user just saw "The model
+  //       stopped responding" and had to manually retry.
+
+  it('forceToolChoice is declared at turn scope AND consumed by the params builder', () => {
+    // Guard the historical dead-write bug — must have BOTH a declaration and
+    // a consumer that assigns params.tool_choice from it.
+    expect(chatSource).toMatch(/let\s+forceToolChoice\s*=\s*null/);
+    // Consumer sets params.tool_choice when the pin matches a tool in
+    // params.tools and clears the pin. Locate by the exact log-line template.
+    const consumerIdx = chatSource.indexOf("[chat] tool_choice pinned to ' + forceToolChoice");
+    expect(consumerIdx, 'forceToolChoice consumer log line not found').toBeGreaterThan(-1);
+    const consumerWindow = chatSource.slice(Math.max(0, consumerIdx - 800), consumerIdx + 300);
+    expect(consumerWindow).toMatch(/if\s*\(\s*forceToolChoice\b[\s\S]*params\.tool_choice\s*=\s*\{\s*type:\s*'function'\s*,\s*function:\s*\{\s*name:\s*forceToolChoice\s*\}\s*\}/);
+    // Always clears the pin so it doesn't leak into a follow-up turn.
+    expect(consumerWindow).toMatch(/forceToolChoice\s*=\s*null/);
+  });
+
+  it('forward-promise branch defers to declared-work for mutation-artifact declarations', () => {
+    // Extract the DECLARED_WORK_RE regex so we can assert the guard is a real
+    // regex (not a stale copy left in the forward-promise gate).
+    const m = chatSource.match(/const\s+DECLARED_WORK_RE\s*=\s*(\/[^\n]+\/i)/);
+    expect(m, 'DECLARED_WORK_RE not found').toBeTruthy();
+    // The forward-promise branch condition must include a
+    // `!DECLARED_WORK_RE.test(assistantText)` gate so it skips when a
+    // mutation-artifact declaration is present.
+    const forwardIdx = chatSource.indexOf('[chat] forward-promise stop detected');
+    expect(forwardIdx).toBeGreaterThan(-1);
+    // Search 1200 chars BEFORE the log for the else-if condition + gate.
+    const forwardWindow = chatSource.slice(Math.max(0, forwardIdx - 1200), forwardIdx);
+    expect(forwardWindow).toMatch(/endsWithForwardPromise\([^)]*\)[\s\S]{0,300}DECLARED_WORK_RE\.test/);
+  });
+
+  it('declared-work nudge coaches the generator-script + shell-exec chunking pattern', () => {
+    // The nudge must explicitly warn against monolithic large tool-call args
+    // and prescribe the two-step (write script + exec) recovery. Repro: msg 15
+    // of the v2.0.9 stall transcript.
+    const declaredIdx = chatSource.indexOf('declared-work-without-mutation detected');
+    expect(declaredIdx).toBeGreaterThan(-1);
+    const declaredWindow = chatSource.slice(declaredIdx, declaredIdx + 2500);
+    expect(declaredWindow).toContain('generator script');
+    expect(declaredWindow).toContain('fauna_shell_exec');
+    expect(declaredWindow).toContain('fauna_write_file');
+    // Must call out the risk explicitly so the model doesn't just paraphrase
+    // the old "full content" instruction.
+    expect(declaredWindow).toMatch(/large|LARGE/);
+    expect(declaredWindow).toMatch(/chunk(?:ed|ing|s)|split/i);
+  });
+
+  it('stream-idle recovery retries once with thinking off and re-pinned tool', () => {
+    // The recovery flag is turn-scoped (one recovery per turn).
+    expect(chatSource).toMatch(/let\s+stallRecoveryFired\s*=\s*false/);
+    // The recovery block sits right after the for-await finally and gates on
+    // (streamStalled && lastIterationPinnedTool && !stallRecoveryFired &&
+    //  effectiveThinkingBudget !== 'off').
+    const recoveryIdx = chatSource.indexOf('stream stalled with pinned tool');
+    expect(recoveryIdx, 'stream-idle recovery log line not found').toBeGreaterThan(-1);
+    const recoveryWindow = chatSource.slice(Math.max(0, recoveryIdx - 800), recoveryIdx + 1600);
+    expect(recoveryWindow).toMatch(/streamStalled\s*&&\s*lastIterationPinnedTool\s*&&\s*!stallRecoveryFired\s*&&\s*effectiveThinkingBudget\s*!==\s*'off'/);
+    // Must flip the one-shot flag, disable thinking, re-pin the tool, and
+    // reset iteration-local accumulators so the retry sees clean state.
+    expect(recoveryWindow).toContain('stallRecoveryFired = true');
+    expect(recoveryWindow).toMatch(/effectiveThinkingBudget\s*=\s*'off'/);
+    expect(recoveryWindow).toMatch(/forceToolChoice\s*=\s*lastIterationPinnedTool/);
+    expect(recoveryWindow).toMatch(/assistantText\s*=\s*''/);
+    expect(recoveryWindow).toMatch(/pendingCalls\.length\s*=\s*0/);
+    expect(recoveryWindow).toContain('continue;');
+    // The recovery nudge sent to the model must prescribe the same chunking
+    // pattern as the declared-work nudge.
+    expect(recoveryWindow).toContain('fauna_shell_exec');
+    expect(recoveryWindow).toContain('fauna_write_file');
+  });
+
+  it('tracks lastIterationPinnedTool inside the params builder for recovery decisions', () => {
+    // Without this, the stream-idle recovery block can't tell whether the
+    // stall happened on a pinned iteration (recoverable) vs. an unpinned one
+    // (not recoverable — probably a genuine upstream error).
+    const consumerIdx = chatSource.indexOf("[chat] tool_choice pinned to ' + forceToolChoice");
+    expect(consumerIdx).toBeGreaterThan(-1);
+    const consumerWindow = chatSource.slice(Math.max(0, consumerIdx - 800), consumerIdx + 300);
+    expect(consumerWindow).toMatch(/let\s+lastIterationPinnedTool\s*=\s*null/);
+    expect(consumerWindow).toMatch(/lastIterationPinnedTool\s*=\s*forceToolChoice/);
+  });
 });

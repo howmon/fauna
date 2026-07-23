@@ -1758,6 +1758,24 @@ export function registerChatRoute(app, {
       let widgetClaimNudges = 0;
       const MAX_WIDGET_CLAIM_NUDGES = 1;
       let forceEmitWidgetNext = false; // set when re-prompting; consumed by params builder
+      // Generic tool-choice pin used by the declared-work, fake-save, and other
+      // guards below. Assign a tool name (e.g. 'fauna_write_file') to force the
+      // next iteration to invoke that specific tool. Consumed once by the params
+      // builder. Historical bug: this variable was set in four different guards
+      // for months but never declared or read, so every "force fauna_write_file"
+      // nudge was silently a no-op — the model just re-received a text prompt
+      // with no actual tool-choice constraint. Repro: msg 15 of the
+      // Stalled-DOCX-Rewrite-Attempts v2.0.9 transcript, where the declared-work
+      // guard's nudge fired but the model still didn't write.
+      let forceToolChoice = null;
+      // Stream-idle recovery for force-pinned turns. When the upstream stalls
+      // for >STREAM_IDLE_MS while the model is generating a monster tool-call
+      // arg (repro: same v2.0.9 transcript — 30-page docx write-file with Opus
+      // + thinking), we abort. Without recovery the user just sees the
+      // "stopped responding" error and manually retries. With recovery we
+      // retry ONCE with thinking disabled and a chunking coach so the retry
+      // finishes fast. Consumed by the streamStalled handler.
+      let stallRecoveryFired = false;
       let noOutputStreamRetries = 0;
       // Empty-final-response guard: fires when the stream finished normally
       // (finish_reason=stop or usage present) but the model emitted no text
@@ -1973,6 +1991,17 @@ export function registerChatRoute(app, {
       // 30-page-docx transcript where the model ended its recovery turn with
       // "Honest status: … Building it now" and then never called a write tool.
       const FORWARD_PROMISE_GERUND_RE = /^\s*(?:building|writing|creating|generating|producing|scaffolding|drafting|rendering|assembling|composing|rewriting|rebuilding|regenerating|preparing|starting)\s+(?:it|this|that|these|those|now|the|a|an|out|up|on)\b/i;
+      // Shared with the declared-work-without-mutation guard below so the
+      // (softer) forward-promise branch can defer to the (harder) declared-work
+      // branch whenever the model's text is a mutation-artifact declaration.
+      // Without this deference the forward-promise branch would consume a
+      // halfStopNudgeCount slot on a plain text nudge — the model then retries
+      // with the SAME "Building it now" narration and no mutation, wasting an
+      // iteration before the tool-choice pin finally lands. Repro:
+      // Stalled-DOCX-Rewrite-Attempts transcript, msg 13 shows concatenated
+      // "Building it now" text from two iterations because the first iteration
+      // hit forward-promise instead of declared-work.
+      const DECLARED_WORK_RE = /(?:\bi(?:'?ll|\s+will|\s+am\s+going\s+to|'?m\s+going\s+to)\s+(?:build|write|create|generate|produce|rewrite|rebuild|regenerate|scaffold|draft|assemble|compose|render|add|save|export|output)\b|\b(?:building|writing|creating|generating|producing|rewriting|rebuilding|regenerating|scaffolding|drafting|assembling|composing|rendering)\s+(?:it|this|that|the|a|an|now)\b|\bthe\s+(?:specific\s+)?next\s+(?:action|step|move)\s+is\s+to\s+(?:build|write|create|generate|produce|rewrite|rebuild|regenerate|scaffold|draft|save|export|output)\b|\bbuilding\s+it\s+now\b|\bwriting\s+it\s+now\b|\bcreating\s+it\s+now\b|\bgenerating\s+it\s+now\b|\brewriting\s+it\s+now\b)/i;
       const endsWithForwardPromise = (text) => {
         const trimmed = String(text || '').trim();
         if (!trimmed) return false;
@@ -2201,6 +2230,20 @@ export function registerChatRoute(app, {
           params.tool_choice = { type: 'function', function: { name: 'fauna_emit_widget' } };
           forceEmitWidgetNext = false;
         }
+        // Generic tool-choice pin: consumed once per iteration. Set by the
+        // declared-work-without-mutation guard, the fake-save-execution guard,
+        // and the widget-claim guard's downstream escalations. Only applied
+        // when the named tool actually exists in the current tool set — a
+        // missing name silently degrades to no constraint rather than a hard
+        // 400 from the upstream provider.
+        let lastIterationPinnedTool = null;
+        if (forceToolChoice && !params.tool_choice && Array.isArray(params.tools) && params.tools.some(t => t?.function?.name === forceToolChoice)) {
+          params.tool_choice = { type: 'function', function: { name: forceToolChoice } };
+          lastIterationPinnedTool = forceToolChoice;
+          console.log('[chat] tool_choice pinned to ' + forceToolChoice + ' for this iteration');
+        }
+        // Always consume the pin so it never leaks into a follow-up turn.
+        forceToolChoice = null;
         // Capability gating for non-Copilot providers. Most local
         // OpenAI-compatible endpoints either reject `tools` outright or
         // silently ignore them — strip them when supports.tools=false. The
@@ -2331,6 +2374,7 @@ export function registerChatRoute(app, {
           }
         }, 5000);
 
+        let _streamThrew = null;
         try {
         for await (const chunk of stream) {
           lastChunkAt = Date.now();
@@ -2389,9 +2433,53 @@ export function registerChatRoute(app, {
             }
           }
         }
+        } catch (streamErr) {
+          // Capture the stream error for the recovery block below to decide
+          // whether to swallow it (stream-stall retry) or rethrow (real error).
+          _streamThrew = streamErr;
         } finally {
           clearInterval(_idleWatch);
         }
+
+        // Stream-idle recovery: when the upstream stalled (watchdog aborted
+        // for >120s of silence) AND this iteration had a tool_choice pin AND
+        // recovery hasn't already fired AND thinking was on, retry the SAME
+        // iteration once with thinking disabled + explicit chunking guidance.
+        // Repro: msg 15 of the Stalled-DOCX-Rewrite-Attempts v2.0.9 transcript
+        // where the declared-work guard force-pinned fauna_write_file, then
+        // Opus 4.7 with auto-thinking went silent generating a monster 30-page
+        // docx script and the server aborted after 2 minutes.
+        //
+        // NOTE: streamStalled was set by the watchdog inside the for-await try
+        // above; when true the for-await threw (via upstreamAbort) and dropped
+        // through the finally. We check it here rather than in a catch so the
+        // outer catch still handles genuine upstream errors (5xx, auth, etc.)
+        // that weren't stall-driven.
+        if (streamStalled && lastIterationPinnedTool && !stallRecoveryFired && effectiveThinkingBudget !== 'off') {
+          const originalBudget = effectiveThinkingBudget;
+          stallRecoveryFired = true;
+          streamStalled = false; // consumed — allow outer catch to detect a fresh stall on retry
+          _streamThrew = null;   // swallow the abort — we're recovering
+          effectiveThinkingBudget = 'off';
+          forceToolChoice = lastIterationPinnedTool; // re-pin for the retry iteration
+          console.log(`[chat] stream stalled with pinned tool '${lastIterationPinnedTool}' — recovering: thinking ${originalBudget}→off, re-pinning ${lastIterationPinnedTool}`);
+          try {
+            send({ type: 'notice', level: 'warning', message: 'Upstream stalled generating a large tool call — retrying with thinking disabled and a chunked approach.' });
+          } catch (_) {}
+          allMessages.push({ role: 'user', content: '[System: The upstream provider stalled for over 2 minutes while you were composing a tool call — the tool-call arguments were too large for a single stream. Retry NOW with a chunked approach: emit a small (<80 line) generator script via `fauna_write_file` that constructs the artifact programmatically, then run it with `fauna_shell_exec`. Do NOT try to pack the entire payload into a single tool-call argument. If the previous request was for a long document, .docx/.xlsx/.pdf, or any binary/generated file, this chunking pattern is required.]' });
+          // Reset iteration-local accumulators so the finalize logic sees clean
+          // state on the retry — the stalled partial text/tool-calls would
+          // otherwise poison guard decisions and repeat tool dispatch.
+          assistantText = '';
+          pendingCalls.length = 0;
+          finishReason = null;
+          continueLoop = true;
+          continue; // jump to top of while — retry this iteration
+        }
+        // Not recoverable: rethrow the original stream error (or synthesize one
+        // for a pure watchdog-driven stall) so the outer catch reports it.
+        if (_streamThrew) throw _streamThrew;
+        if (streamStalled) throw new Error('stream_idle_abort');
 
         // Codex-parity: accumulate + broadcast token usage after each model
         // iteration so the UI can render a live context-window indicator.
@@ -3003,9 +3091,12 @@ export function registerChatRoute(app, {
             allMessages.push({ role: 'assistant', content: assistantText });
             allMessages.push({ role: 'user', content: '[System: Do not ask whether to continue. Proceed with the next concrete step toward completing the original request, using tools as needed. Only stop when the task is fully resolved and verified — at which point give a final summary without any "want me to continue?" question.]' });
             // keep continueLoop = true
-          } else if (toolCallCount > 0 && assistantText.trim() && halfStopNudgeCount < MAX_HALF_STOP_NUDGES && endsWithForwardPromise(assistantText)) {
+          } else if (toolCallCount > 0 && assistantText.trim() && halfStopNudgeCount < MAX_HALF_STOP_NUDGES && endsWithForwardPromise(assistantText) && !(!mutatingToolUsed && DECLARED_WORK_RE.test(assistantText))) {
             // Forward-promise stop: model said "I'll do X" / "Let me try Y" but never
             // actually called the tool. Nudge it to execute that promised step now.
+            // Skip when the text is a mutation-artifact declaration AND no mutation
+            // landed — the (harder) declared-work branch below will fire instead with
+            // a tool-choice pin, so we don't burn a soft-nudge slot on the same stall.
             halfStopNudgeCount++;
             console.log('[chat] forward-promise stop detected — injecting execute nudge (' + halfStopNudgeCount + '/' + MAX_HALF_STOP_NUDGES + ')');
             allMessages.push({ role: 'assistant', content: assistantText });
@@ -3025,7 +3116,7 @@ export function registerChatRoute(app, {
             // mutation. Repro: fauna-30-Page-Strategy-Report-Rewrite transcript
             // indices 9 and 11 (model said "I'll build a fully rewritten 30-page
             // docx" and "Building it now" but only issued read/inspection tools).
-            /(?:\bi(?:'?ll|\s+will|\s+am\s+going\s+to|'?m\s+going\s+to)\s+(?:build|write|create|generate|produce|rewrite|rebuild|regenerate|scaffold|draft|assemble|compose|render|add|save|export|output)\b|\b(?:building|writing|creating|generating|producing|rewriting|rebuilding|regenerating|scaffolding|drafting|assembling|composing|rendering)\s+(?:it|this|that|the|a|an|now)\b|\bthe\s+(?:specific\s+)?next\s+(?:action|step|move)\s+is\s+to\s+(?:build|write|create|generate|produce|rewrite|rebuild|regenerate|scaffold|draft|save|export|output)\b|\bbuilding\s+it\s+now\b|\bwriting\s+it\s+now\b|\bcreating\s+it\s+now\b|\bgenerating\s+it\s+now\b|\brewriting\s+it\s+now\b)/i.test(assistantText)
+            DECLARED_WORK_RE.test(assistantText)
           ) {
             // Declared-work-without-mutation guard: the assistant stated it would
             // build/write/create/rewrite an artifact but the turn ended with zero
@@ -3037,7 +3128,18 @@ export function registerChatRoute(app, {
             forceToolChoice = 'fauna_write_file';
             console.log('[chat] declared-work-without-mutation detected — forcing real mutation next iteration');
             allMessages.push({ role: 'assistant', content: assistantText });
-            allMessages.push({ role: 'user', content: '[System: Your response said you would build/write/create/rewrite an artifact ("I\'ll build …", "Building it now", "the next action is to write …"), but this turn ended without ANY file-write tool call. Words are not work. Call `fauna_write_file` or `fauna_apply_patch` NOW with the exact path and full content — no more inspection, no more version checks, no more "reading the source" preamble. Produce the artifact.]' });
+            // Coach the model toward the "generator script → shell exec" pattern
+            // for large artifacts. A monolithic fauna_write_file call for a
+            // 30-page docx serialises 15–25k tokens of tool-call arguments in a
+            // single upstream stream, which routinely exceeds STREAM_IDLE_MS
+            // (120s) with Opus + reasoning enabled and aborts with the
+            // "stopped responding" error the user hits. Repro: msg 15 of the
+            // Stalled-DOCX-Rewrite-Attempts transcript. In msg 5 of the SAME
+            // conversation the model naturally used this chunking pattern
+            // (build_report.py written, then python3 build_report.py) and it
+            // succeeded in a few seconds — this nudge just reminds it to reuse
+            // that pattern when the guard forces mutation.
+            allMessages.push({ role: 'user', content: '[System: Your response said you would build/write/create/rewrite an artifact ("I\'ll build …", "Building it now", "the next action is to write …"), but this turn ended without ANY file-write tool call. Words are not work. Call a mutation tool NOW. For LARGE artifacts (long documents, generated files, multi-page reports, binary formats like .docx/.xlsx/.pdf), do NOT try to pack the whole payload into one tool-call argument — split it into: (1) `fauna_write_file` with a small generator script (Python, Node, etc.) that emits the artifact, then (2) `fauna_shell_exec` to run that script and produce the file. This chunks tool-call args into two small calls and avoids stream-idle timeouts on monolithic writes. For SMALL artifacts, call `fauna_write_file` or `fauna_apply_patch` directly with the exact path and content. Either way — no more inspection, no more version checks, no more "reading the source" preamble. Produce the artifact.]' });
             // keep continueLoop = true
           } else if (
             enableDynamicWidgets &&
