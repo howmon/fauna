@@ -52,7 +52,7 @@ afterEach(() => {
 
 // ── walkProjectTree ──────────────────────────────────────────────────────
 describe('walkProjectTree', () => {
-  it('walks files and dirs, skipping junk', () => {
+  it('walks files and dirs, skipping junk', async () => {
     const root = _seedScratch({
       'src/index.js': 'export default 1',
       'src/util.js': 'export function f(){}',
@@ -62,7 +62,7 @@ describe('walkProjectTree', () => {
       'dist/bundle.js': 'noise',
       'README.md': '# hi',
     });
-    const r = walkProjectTree(root);
+    const r = await walkProjectTree(root);
     const all = r.files.join('|');
     expect(r.files.length).toBeGreaterThanOrEqual(3);
     expect(all).toContain('src/index.js');
@@ -73,13 +73,13 @@ describe('walkProjectTree', () => {
     expect(all).not.toContain('dist');
   });
 
-  it('respects maxDepth', () => {
+  it('respects maxDepth', async () => {
     const root = _seedScratch({
       'a.js': '1',
       'b/c.js': '2',
       'b/c/d/deep.js': '3',
     });
-    const r = walkProjectTree(root, { maxDepth: 1 });
+    const r = await walkProjectTree(root, { maxDepth: 1 });
     const all = r.files.join('|');
     expect(all).toContain('a.js');
     // path.sep aware
@@ -87,22 +87,22 @@ describe('walkProjectTree', () => {
     expect(all).not.toContain('deep.js');
   });
 
-  it('respects maxFiles', () => {
+  it('respects maxFiles', async () => {
     const layout = {};
     for (let i = 0; i < 50; i++) layout['f' + i + '.js'] = String(i);
     const root = _seedScratch(layout);
-    const r = walkProjectTree(root, { maxFiles: 10 });
+    const r = await walkProjectTree(root, { maxFiles: 10 });
     expect(r.files.length).toBe(10);
   });
 });
 
 // ── summariseProjectArchitecture ─────────────────────────────────────────
 describe('summariseProjectArchitecture', () => {
-  it('errors when project has no rootPath', () => {
-    const r = summariseProjectArchitecture({ id: 'p1', name: 'P' });
+  it('errors when project has no rootPath', async () => {
+    const r = await summariseProjectArchitecture({ id: 'p1', name: 'P' });
     expect(r.ok).toBe(false);
   });
-  it('returns a summary with hint files', () => {
+  it('returns a summary with hint files', async () => {
     const root = _seedScratch({
       'package.json': '{"name":"my-pkg","scripts":{"test":"vitest"}}',
       'README.md': '# Project\n\nThis project does things.',
@@ -110,7 +110,7 @@ describe('summariseProjectArchitecture', () => {
       'src/lib/util.js': 'export const x = 1;',
       'src/lib/api.js': 'export const y = 2;',
     });
-    const r = summariseProjectArchitecture({ id: 'p1', name: 'P', rootPath: root });
+    const r = await summariseProjectArchitecture({ id: 'p1', name: 'P', rootPath: root });
     expect(r.ok).toBe(true);
     expect(r.fileCount).toBeGreaterThan(0);
     expect(Object.keys(r.hintBlobs)).toEqual(expect.arrayContaining(['package.json', 'README.md']));
