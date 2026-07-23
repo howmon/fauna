@@ -8,6 +8,16 @@ describe('native HTTP fetch transport', () => {
 
   beforeAll(async () => {
     server = http.createServer((request, response) => {
+      if (request.url === '/slow-stream') {
+        response.setHeader('Content-Type', 'application/octet-stream');
+        response.writeHead(200);
+        response.write(Buffer.from('head'));
+        setTimeout(() => {
+          response.write(Buffer.from('tail'));
+          response.end();
+        }, 100);
+        return;
+      }
       if (request.url === '/redirect') {
         response.writeHead(302, { Location: '/binary' });
         response.end();
@@ -68,6 +78,24 @@ describe('native HTTP fetch transport', () => {
         controller.abort();
         await expect(request).rejects.toMatchObject({ name: 'AbortError' });
       }
+      await new Promise(resolve => setImmediate(resolve));
+      expect(errors).toEqual([]);
+    } finally {
+      process.off('uncaughtException', onUncaughtException);
+    }
+  });
+
+  it('does not crash when abort happens after headers are received', async () => {
+    const errors = [];
+    const onUncaughtException = error => errors.push(error);
+    process.on('uncaughtException', onUncaughtException);
+
+    try {
+      const controller = new AbortController();
+      const response = await nativeHttpsFetch(`${baseUrl}/slow-stream`, { signal: controller.signal });
+      controller.abort();
+
+      await expect(response.arrayBuffer()).rejects.toMatchObject({ name: 'AbortError' });
       await new Promise(resolve => setImmediate(resolve));
       expect(errors).toEqual([]);
     } finally {

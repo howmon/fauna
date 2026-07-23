@@ -29,17 +29,27 @@ export function nativeHttpsFetch(input, init = {}) {
     let output = '';
     let stderr = '';
 
+    // Avoid process-level crashes if the response stream is destroyed after
+    // resolution and no consumer has attached an error handler yet.
+    responseBody.on('error', () => {});
+
     const fail = error => {
       if (!settled) {
         settled = true;
         reject(error);
       } else {
-        responseBody.destroy(error);
+        responseBody.destroy();
       }
     };
     const abort = () => {
       child.kill('SIGTERM');
-      fail(new DOMException('The operation was aborted', 'AbortError'));
+      if (!settled) {
+        fail(new DOMException('The operation was aborted', 'AbortError'));
+        return;
+      }
+      // If headers were already delivered, fail() should not re-emit AbortError
+      // on a Node stream because that can become an uncaught exception.
+      try { responseBody.destroy(); } catch (_) {}
     };
     if (init.signal?.aborted) return abort();
     init.signal?.addEventListener('abort', abort, { once: true });
