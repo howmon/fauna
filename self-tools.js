@@ -1432,7 +1432,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_language_diagnostics',
-      description: 'Get fast in-process TypeScript/JavaScript syntactic, semantic, and suggestion diagnostics with precise file/line/column metadata. Use for focused editor-style diagnostics; use fauna_diagnostics for full project build/lint commands.',
+      description: 'PREFERRED error-checking tool for JS/TS. Get in-process TypeScript/JavaScript syntactic, semantic, and suggestion diagnostics with precise file/line/column metadata — use this BEFORE attempting to manually reason about type or import errors. Check errors after every code change to catch regressions immediately. Use fauna_diagnostics for full project build/lint commands that go beyond the TS compiler.',
       parameters: {
         type: 'object',
         properties: {
@@ -1463,7 +1463,8 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_references',
-      description: 'Find indexed source references to a symbol with file paths and line numbers. This is a fast word-boundary fallback and may include same-name identifiers from other scopes.',
+      description: 'PREFERRED tool for finding all usages of a symbol — analogous to VS Code \'Find All References\'. Provide an anchor path+line+column for scope-aware language-service results; falls back to fast word-boundary index when no anchor is given. Always use this instead of fauna_grep when you need to locate every call-site, import, or reference to a known identifier — it is faster, scope-aware, and returns structured results.',
+
       parameters: { type: 'object', properties: { cwd: { type: 'string' }, symbol: { type: 'string' }, path: { type: 'string', description: 'Optional JS/TS anchor file for scope-aware language-service references.' }, line: { type: 'number', description: '1-based anchor line.' }, column: { type: 'number', description: '1-based anchor column.' }, maxResults: { type: 'number' } }, required: ['symbol'] },
     },
   },
@@ -1471,7 +1472,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_rename_symbol',
-      description: 'Rename a simple identifier across indexed source files using word-boundary replacement. Use only when workspace-wide textual rename is intended; this is not scope-sensitive LSP rename.',
+      description: 'PREFERRED tool for renaming a symbol — analogous to VS Code \'Rename Symbol\'. Provide an anchor path+line+column for scope-aware language-service rename that updates every reference atomically without touching same-name identifiers in other scopes. ALWAYS prefer this over manual fauna_grep + fauna_replace_string chains when renaming a function, class, variable, or type — it is safer, faster, and correct. Pass apply:true to write changes; omit or pass apply:false to preview the workspace edit first.',
       parameters: { type: 'object', properties: { cwd: { type: 'string' }, symbol: { type: 'string' }, newName: { type: 'string' }, path: { type: 'string', description: 'Optional JS/TS anchor file. Anchored rename is scope-aware and previews by default.' }, line: { type: 'number', description: '1-based anchor line.' }, column: { type: 'number', description: '1-based anchor column.' }, apply: { type: 'boolean', description: 'For anchored semantic rename, set true to apply. Defaults false and returns a workspace-edit preview.' } }, required: ['symbol', 'newName'] },
     },
   },
@@ -1944,13 +1945,13 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_replace_string',
-      description: 'Replace one exact string in a file. Use only when a single localized change is clearer than a patch. For anything beyond one small substitution — multi-line edits, multiple hunks, or multi-file changes — PREFER fauna_apply_patch. The old_string must be unique; include 3–5 lines of surrounding context to disambiguate.',
+      description: 'Replace one exact string in a file. Use only when a single localized change is clearer than a patch. For anything beyond one small substitution — multi-line edits, multiple hunks, or multi-file changes — PREFER fauna_apply_patch. HARD REQUIREMENT: old_string MUST include at least 3 non-blank lines of surrounding context (before + after the lines you are actually changing). The tool enforces this — it will reject edits where old_string has fewer than 3 non-blank context lines. This prevents targeting the wrong location when similar code appears elsewhere.',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string', description: 'Absolute path, ~/path, or path relative to cwd.' },
           cwd: { type: 'string', description: 'Optional working directory for relative paths.' },
-          old_string: { type: 'string', description: 'Exact literal text to replace (must match a single occurrence including whitespace/indentation).' },
+          old_string: { type: 'string', description: 'Exact literal text to replace including ≥3 non-blank lines of unchanged context before and after the changed lines. Must match exactly one occurrence.' },
           new_string: { type: 'string', description: 'Replacement text. Pass empty string to delete.' },
         },
         required: ['path', 'old_string', 'new_string'],
@@ -3476,7 +3477,29 @@ export async function executeSelfTool(toolName, args, context = {}) {
         const oldStr = String(args.old_string ?? '');
         const newStr = String(args.new_string ?? '');
         if (!oldStr) return JSON.stringify({ ok: false, error: 'old_string must not be empty' });
+
+        // Context-line guard — same requirement as VS Code's replace_string_in_file:
+        // old_string must contain ≥3 non-blank lines of surrounding context so the
+        // match cannot silently land on the wrong occurrence.  We only enforce this
+        // when the file is large enough that a short old_string could plausibly
+        // match in the wrong location; tiny files (≤15 non-blank lines) are exempt.
+        const MIN_CONTEXT_LINES = 3;
+        const nonBlankCount = oldStr.split('\n').filter(l => l.trim().length > 0).length;
         const original = fs.readFileSync(abs, 'utf8');
+        const fileNonBlankLines = original.split('\n').filter(l => l.trim().length > 0).length;
+        if (fileNonBlankLines > 15 && nonBlankCount < MIN_CONTEXT_LINES) {
+          return JSON.stringify({
+            ok: false,
+            code: 'INSUFFICIENT_CONTEXT',
+            error: `old_string has only ${nonBlankCount} non-blank line(s); at least ${MIN_CONTEXT_LINES} are required for files with >15 non-blank lines. ` +
+              'Expand old_string to include ≥3 non-blank lines of unchanged surrounding context ' +
+              '(before and after the lines you are actually changing) so the match is unambiguous.',
+            nonBlankCount,
+            required: MIN_CONTEXT_LINES,
+            path: abs,
+          });
+        }
+
         const firstIdx = original.indexOf(oldStr);
         if (firstIdx === -1) {
           return JSON.stringify({ ok: false, error: 'old_string not found in file', code: 'OLD_STRING_NOT_FOUND', path: abs });
