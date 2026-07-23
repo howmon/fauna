@@ -1875,11 +1875,45 @@ export function registerChatRoute(app, {
       // (transcript: fauna-30-Page-Strategy-Report-Rewrite).
       const _writeIntentTurn = /\b(?:fix|fixes|fixed|implement|resolve|repair|patch|update|change|modify|edit|write|create|add|remove|delete|hide|replace|refactor|migrate|install|extract|port|integrate|copy|move|bring|build\s+out|make\s+(?:all|the|this)|proceed|rewrite|rebuild|regenerate|generate|scaffold|produce|draft|assemble|compose|render(?:\s+out)?)\b/i.test(_lastUserQuery || '');
       const MUTATING_TOOLS = new Set([
+        // File / patch mutations
         'fauna_write_file', 'fauna_write_files', 'fauna_apply_patch',
         'fauna_replace_string', 'fauna_write_offloaded',
         'agent_write_file', 'agent_write_files', 'agent_str_replace', 'agent_apply_patch',
+        // Agent / instruction / widget authoring
         'fauna_create_agent', 'fauna_patch_agent', 'fauna_uninstall_agent',
         'fauna_emit_widget', 'fauna_save_instruction',
+        'fauna_save_widget_to_playbook', 'fauna_load_widget_from_playbook',
+        // External-system mutations. Historically missing (v2.0.11 and earlier):
+        // if a whole session of `figma_execute` calls rendered a full spec,
+        // the declared-work-without-mutation guard still fired because no
+        // file was written, forcing the model to invent more work until it
+        // output "BLOCKED:". Repro: fauna-Figma-Spec-for-Approval-Card
+        // v2.0.11 transcript — 13 figma_execute calls, then
+        // "'deletePagesWhere' is not defined", then "BLOCKED: The system
+        // nudge is firing on an already-finished task".
+        'figma_execute',
+        // Notifications & communications (side effects on the user's system)
+        'fauna_send_notification',
+        // Media / artifact generation
+        'fauna_image_generate', 'fauna_image_edit', 'fauna_stock_image_download',
+        'fauna_video_create', 'fauna_video_run_all', 'fauna_video_step', 'fauna_video_patch',
+        'fauna_speak', 'fauna_podcast',
+        'fauna_lesson_create',
+        'fauna_document_screenshot', 'fauna_document_set', 'fauna_document_merge',
+        // Circuit / PCB artifact renders
+        'fauna_render_circuit', 'fauna_render_pcb', 'fauna_layout_pcb', 'fauna_build_guide',
+        // Project / workitem / backlog mutations
+        'fauna_create_project', 'fauna_db_migration',
+        'fauna_feature_request_create',
+        'fauna_workitem_move', 'fauna_workitem_claim', 'fauna_workitem_comment', 'fauna_workitem_update',
+        'fauna_backlog_prioritize',
+        // Refactor / symbol mutations
+        'fauna_rename_symbol',
+        // OS-input control
+        'fauna_mouse', 'fauna_keyboard', 'fauna_arrange_windows',
+        // Memory / context mutations
+        'fauna_remember', 'fauna_forget',
+        'fauna_context_ingest', 'fauna_context_delete',
       ]);
       const VALIDATION_TOOLS = new Set([
         'fauna_doctor', 'fauna_verify_build', 'fauna_project_audit',
@@ -1901,6 +1935,20 @@ export function registerChatRoute(app, {
           return /^(?:extract|evaluate|eval|screenshot)$/i.test(String(args?.action || ''));
         }
         return /^browser_(?:snapshot|take_screenshot|screenshot|evaluate|eval|get_content|get_console|console_messages|verify)/i.test(String(toolName || ''));
+      };
+      // Browser action classifier for mutation tracking. Read-only browser
+      // actions (extract/screenshot/get_content/snapshot/console_messages)
+      // stay classified as inspection; anything that navigates, clicks,
+      // types, or otherwise changes page state counts as a mutation so the
+      // declared-work guard doesn't fire after real browser work.
+      const _isMutatingBrowserAction = (toolName, args) => {
+        if (toolName === 'fauna_browser') {
+          const action = String(args?.action || '').toLowerCase();
+          if (!action) return false;
+          return /^(?:navigate|goto|open|click|dblclick|hover|type|fill|press|key|scroll|drag|select|upload|reload|back|forward|new_tab|close|wait_for|wait|submit|focus|blur|set_(?:value|state)|record|start_recording|stop_recording)$/.test(action);
+        }
+        // Playwright MCP-style browser tools
+        return /^browser_(?:navigate|goto|click|dblclick|hover|type|fill|press|key(?:_press)?|scroll|drag|select|upload|reload|back|forward|new_tab|close|wait|wait_for|submit|focus|record|start_recording|stop_recording)/i.test(String(toolName || ''));
       };
       const _claimsVerifiedBrowserOutcome = (text) => {
         const value = String(text || '');
@@ -2670,6 +2718,10 @@ export function registerChatRoute(app, {
                   }
                   if (_isValidationShellCommand(args?.command)) validationToolUsed = true;
                 }
+                if (_isMutatingBrowserAction(toolName, args)) {
+                  mutatingToolUsed = true;
+                  runtimeVerificationUsed = false;
+                }
                 if (_isRuntimeVerificationTool(toolName, args)) runtimeVerificationUsed = true;
               }
               send({ type: 'tool_activity_result', callId: tc.id, name: toolName, ...activityResult });
@@ -2988,21 +3040,24 @@ export function registerChatRoute(app, {
             allMessages.push({ role: 'assistant', content: '' });
             allMessages.push({ role: 'user', content: '[System: Your tool calls completed but you produced no visible response. Briefly summarize what you did for the user.]' });
             // keep continueLoop = true
-          } else if (toolCallCount > 0 && assistantText.trim() && halfStopNudgeCount < MAX_HALF_STOP_NUDGES && HALF_STOP_RE.test(assistantText)) {
+          } else if (toolCallCount > 0 && assistantText.trim() && halfStopNudgeCount < MAX_HALF_STOP_NUDGES && HALF_STOP_RE.test(assistantText) && !/^\s*(?:BLOCKED|NEEDS-INPUT)\s*:/i.test(assistantText)) {
             // Codex-style persistence: the model used tools and then ended its turn by
             // asking the user whether to continue. Inject a synthetic nudge and re-loop
             // so the model finishes the task without bouncing back to the user.
+            // Skip when the model has explicitly declared BLOCKED / NEEDS-INPUT —
+            // that's a valid terminal state, not a stall to recover from.
             halfStopNudgeCount++;
             console.log('[chat] half-stop detected — injecting persistence nudge (' + halfStopNudgeCount + '/' + MAX_HALF_STOP_NUDGES + ')');
             allMessages.push({ role: 'assistant', content: assistantText });
             allMessages.push({ role: 'user', content: '[System: Do not ask whether to continue. Proceed with the next concrete step toward completing the original request, using tools as needed. Only stop when the task is fully resolved and verified — at which point give a final summary without any "want me to continue?" question.]' });
             // keep continueLoop = true
-          } else if (toolCallCount > 0 && assistantText.trim() && halfStopNudgeCount < MAX_HALF_STOP_NUDGES && endsWithForwardPromise(assistantText) && !(!mutatingToolUsed && DECLARED_WORK_RE.test(assistantText))) {
+          } else if (toolCallCount > 0 && assistantText.trim() && halfStopNudgeCount < MAX_HALF_STOP_NUDGES && endsWithForwardPromise(assistantText) && !(!mutatingToolUsed && DECLARED_WORK_RE.test(assistantText)) && !/^\s*(?:BLOCKED|NEEDS-INPUT)\s*:/i.test(assistantText)) {
             // Forward-promise stop: model said "I'll do X" / "Let me try Y" but never
             // actually called the tool. Nudge it to execute that promised step now.
             // Skip when the text is a mutation-artifact declaration AND no mutation
             // landed — the (harder) declared-work branch below will fire instead with
             // a tool-choice pin, so we don't burn a soft-nudge slot on the same stall.
+            // Also skip on BLOCKED / NEEDS-INPUT — model has declared a terminal state.
             halfStopNudgeCount++;
             console.log('[chat] forward-promise stop detected — injecting execute nudge (' + halfStopNudgeCount + '/' + MAX_HALF_STOP_NUDGES + ')');
             allMessages.push({ role: 'assistant', content: assistantText });
@@ -3053,6 +3108,7 @@ export function registerChatRoute(app, {
             !widgetEmittedThisTurn &&
             widgetClaimNudges < MAX_WIDGET_CLAIM_NUDGES &&
             assistantText.trim() &&
+            !/^\s*(?:BLOCKED|NEEDS-INPUT)\s*:/i.test(assistantText) &&
             /\b(?:i\s+(?:rebuilt|made|created|attached|built|added|wired up|put together)\s+(?:it|the|a|an|this|that)?[^.\n]{0,60}(?:widget|viewer|3d|interactive|rotatable|scene|model|dashboard|playground|simulator)|here(?:'s|\s+is)\s+(?:the|your|a|an)?[^.\n]{0,40}(?:widget|3d\b|viewer|interactive|rotatable|scene)|i(?:'ve| have)\s+(?:rebuilt|attached|emitted|rendered|added|created)\s+(?:it|the|a|an)?[^.\n]{0,40}(?:widget|viewer|3d|scene|interactive))/i.test(assistantText)
           ) {
             // Widget-claim verifier: assistant text says it produced/rebuilt

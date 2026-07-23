@@ -239,4 +239,84 @@ describe('chat.js result-guarantee guards', () => {
     expect(chatSource).toMatch(/const\s+upstreamAbort\s*=\s*new\s+AbortController/);
     expect(chatSource).toMatch(/res\.on\(['"]close['"]/);
   });
+
+  // ── v2.0.12: MUTATING_TOOLS coverage + BLOCKED-sentinel respect ────────
+  // Repro: fauna-Figma-Spec-for-Approval-Card v2.0.11 transcript. Assistant
+  // rendered a full Figma design spec via 13 successful `figma_execute`
+  // calls, but the declared-work-without-mutation guard still fired because
+  // `figma_execute` wasn't in MUTATING_TOOLS. The guard force-pinned
+  // `fauna_write_file` (a tool not in the Figma agent's toolset), the pin
+  // silently degraded, the model manufactured more work until it output
+  // "BLOCKED: The system nudge is firing on an already-finished task."
+  // Then half-stop / forward-promise / widget-claim guards \u2014 which did
+  // NOT respect the BLOCKED sentinel \u2014 fired on subsequent iterations.
+
+  it('MUTATING_TOOLS includes external-system mutations (figma, notifications, media, ...)', () => {
+    const m = chatSource.match(/const\s+MUTATING_TOOLS\s*=\s*new\s+Set\(\[([\s\S]*?)\]\);/);
+    expect(m, 'MUTATING_TOOLS declaration not found').toBeTruthy();
+    const setBody = m[1];
+    // Pin the exact tools whose absence caused the Figma-spec hang and
+    // adjacent classes of tools that would exhibit the same failure mode
+    // (send-notification, media generation, workitem mutations, etc.).
+    const required = [
+      // The direct repro fix.
+      'figma_execute',
+      // Notifications
+      'fauna_send_notification',
+      // Media / artifact generation
+      'fauna_image_generate', 'fauna_image_edit', 'fauna_stock_image_download',
+      'fauna_video_create', 'fauna_video_run_all', 'fauna_video_step', 'fauna_video_patch',
+      'fauna_speak', 'fauna_podcast',
+      'fauna_lesson_create',
+      'fauna_document_set', 'fauna_document_merge', 'fauna_document_screenshot',
+      // Circuit / PCB artifact renders
+      'fauna_render_circuit', 'fauna_render_pcb', 'fauna_layout_pcb', 'fauna_build_guide',
+      // Project / workitem mutations
+      'fauna_create_project', 'fauna_db_migration',
+      'fauna_feature_request_create',
+      'fauna_workitem_move', 'fauna_workitem_claim', 'fauna_workitem_comment', 'fauna_workitem_update',
+      'fauna_backlog_prioritize',
+      // Refactor
+      'fauna_rename_symbol',
+      // OS-input / windows
+      'fauna_mouse', 'fauna_keyboard', 'fauna_arrange_windows',
+      // Memory / context mutations
+      'fauna_remember', 'fauna_forget',
+      'fauna_context_ingest', 'fauna_context_delete',
+      // Widget-playbook writes
+      'fauna_save_widget_to_playbook', 'fauna_load_widget_from_playbook',
+    ];
+    for (const name of required) {
+      expect(setBody, `MUTATING_TOOLS is missing "${name}"`).toContain(`'${name}'`);
+    }
+  });
+
+  it('classifies mutating browser actions (click/navigate/type/etc.) as mutation', () => {
+    const m = chatSource.match(/const\s+_isMutatingBrowserAction\s*=\s*\(toolName,\s*args\)\s*=>\s*\{[\s\S]*?\n      \};/);
+    expect(m, '_isMutatingBrowserAction helper not found').toBeTruthy();
+    // Wire the helper into the tool-result mutation tracker so figma-only
+    // sessions no longer misfire, and browser sessions get proper mutation
+    // credit for click/navigate/type.
+    expect(chatSource).toMatch(/if\s*\(\s*_isMutatingBrowserAction\(\s*toolName\s*,\s*args\s*\)\s*\)\s*\{\s*mutatingToolUsed\s*=\s*true/);
+  });
+
+  it('half-stop / forward-promise / widget-claim guards respect BLOCKED / NEEDS-INPUT sentinel', () => {
+    // The three nudges must ALL check the sentinel so a model declaring
+    // "BLOCKED: task complete" isn't forced back into another mutation loop.
+    // Anchor on each guard's log line and require the sentinel gate above it.
+    const anchors = [
+      '[chat] half-stop detected',
+      '[chat] forward-promise stop detected',
+      '[chat] widget-claim without emit detected',
+    ];
+    for (const anchor of anchors) {
+      const idx = chatSource.indexOf(anchor);
+      expect(idx, `guard log line "${anchor}" not found`).toBeGreaterThan(-1);
+      const window = chatSource.slice(Math.max(0, idx - 1200), idx);
+      expect(
+        window,
+        `guard "${anchor}" is missing the BLOCKED/NEEDS-INPUT sentinel gate`
+      ).toMatch(/!\/\^\\?s\*\(\?:BLOCKED\|NEEDS-INPUT\)\\?s\*:\/i\.test\(assistantText\)/);
+    }
+  });
 });
