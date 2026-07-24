@@ -81,6 +81,36 @@ process.on('uncaughtExceptionMonitor', (error, origin) => {
     stack: error?.stack,
   });
 });
+
+// Suppress a known benign race in Node.js's WHATWG stream adapter:
+// when the OpenAI SDK's for-await loop closes a ReadableStream controller
+// but the underlying PassThrough/TCP buffer still has chunks in flight,
+// Node fires ERR_INVALID_STATE from ReadableStreamDefaultController.enqueue
+// via the PassThrough.onData adapter. This is a stream-lifecycle race inside
+// the SDK (or the Node/Electron WHATWG adapter), not user code. It does not
+// affect request correctness — the stream was already fully consumed before
+// the controller closed. Without this guard the error propagates as an
+// Uncaught Exception and shows Electron's crash dialog.
+process.on('uncaughtException', (error) => {
+  if (error?.code === 'ERR_INVALID_STATE' &&
+      error?.stack?.includes('ReadableStreamDefaultController.enqueue') &&
+      error?.stack?.includes('PassThrough.onData')) {
+    // Benign stream-adapter race — log and suppress.
+    writeRuntimeDiagnostic('stream-adapter-race-suppressed', {
+      message: error.message,
+      stack: error.stack,
+    });
+    return; // suppress — do NOT crash
+  }
+  // For all other uncaught exceptions, write the diagnostic and let
+  // Electron's default handler show the error dialog.
+  writeRuntimeDiagnostic('uncaught-exception-fatal', {
+    name: error?.name,
+    message: error?.message,
+    stack: error?.stack,
+  });
+  throw error;
+});
 app.on('render-process-gone', (_event, _webContents, details) => {
   writeRuntimeDiagnostic('render-process-gone', details);
 });
