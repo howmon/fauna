@@ -93,7 +93,7 @@ import { loadAgentManifest } from './server/lib/agent-manifest.js';
 import { resolveWorkspaceContext } from './lib/workspace-context.js';
 import { runWorkspaceDiagnostics } from './lib/diagnostics.js';
 import { workspaceSymbols, symbolDefinition, symbolReferences, renameSymbol } from './lib/language-tools.js';
-import { getWorkspaceIndex, invalidateWorkspaceIndex, readIndexedFile, searchWorkspace, getFileContentAsync } from './lib/workspace-index.js';
+import { getWorkspaceIndex, getWorkspaceIndexAsync, invalidateWorkspaceIndex, readIndexedFile, searchWorkspace, getFileContentAsync } from './lib/workspace-index.js';
 import { semanticDiagnostics } from './lib/typescript-language-service.js';
 import { startTerminalSession, sendTerminalInput, getTerminalOutput, listTerminalSessions, killTerminalSession } from './lib/terminal-sessions.js';
 import { parseTestResults, runTestResults } from './lib/test-results.js';
@@ -3443,7 +3443,7 @@ export async function executeSelfTool(toolName, args, context = {}) {
           : 200;
         const matches = [];
         let filesScanned = 0;
-        const index = getWorkspaceIndex({ cwd: rootAbs, includeIgnoredFiles: args.includeIgnoredFiles === true });
+        const index = await getWorkspaceIndexAsync({ cwd: rootAbs, includeIgnoredFiles: args.includeIgnoredFiles === true });
         const GREP_BATCH = 32;
         for (let _bi = 0; _bi < index.entries.length && matches.length < cap; _bi += GREP_BATCH) {
           await Promise.all(index.entries.slice(_bi, _bi + GREP_BATCH).map(async (file) => {
