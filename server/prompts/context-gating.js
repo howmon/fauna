@@ -136,7 +136,7 @@ const TOOL_CLUSTERS = {
 };
 
 const TOOL_KW = {
-  code:       /\b(code|file|read|write|edit|patch|fix|bug|refactor|implement|function|class|test|lint|build|server|shell|exec|run|script|commit|repo|module|import|export)\b|\.(js|ts|tsx|jsx|py|rb|go|rs|java|kt|swift|c|cc|cpp|h|hpp|cs|php|sh|zsh|bash|css|scss|html|md|json|yaml|yml|toml|sql|env)\b/i,
+  code:       /\b(code|file|read|write|edit|patch|fix|bug|refactor|implement|function|class|test|lint|build|server|shell|exec|run|script|commit|repo|module|import|export|update|change|modify|add|remove|delete|rename|move|save|replace|insert|append|revert|format|snippet|variable|component|config|endpoint|handler|middleware|deploy|install)\b|\.(js|ts|tsx|jsx|py|rb|go|rs|java|kt|swift|c|cc|cpp|h|hpp|cs|php|sh|zsh|bash|css|scss|html|md|json|yaml|yml|toml|sql|env)\b/i,
   planning:   /\b(plan|scaffold|create.{0,15}(app|site|project|saas|tool|prototype|mvp)|build.{0,15}(app|site|project|saas|tool|prototype|mvp)|new project|migration|database|schema|sqlite|postgres|mysql)\b/i,
   browser:    /\b(browse|browser|tab|navigate|website|web ?page|web ?site|url|http|https|click|form|login|sign[- ]?up|register|extract|screenshot|playwright|scrape|fetch ?url|crawl|google|youtube|reddit|github\.com|gmail)\b/i,
   circuit:    /\b(circuit|schematic|netlist|spice|simulat|op[- ]?amp|transistor|resistor|capacitor|inductor|voltage|current|amp(ere|s)?|ohm|wiring|breadboard|kicad|eagle)\b/i,
