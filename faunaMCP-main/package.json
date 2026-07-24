@@ -1,6 +1,6 @@
 {
   "name": "faunamcp",
-  "version": "2.0.12",
+  "version": "2.0.13",
   "author": "Solomon Abey",
   "description": "FaunaMCP — Unified MCP relay tray utility. Bridges the Fauna browser extension and Figma plugin to any MCP-capable AI tool.",
   "main": "main.js",
@@ -32,27 +32,83 @@
       "popup.js"
     ],
     "extraResources": [
-      { "from": "assets/icon.png",  "to": "icon.png"  },
-      { "from": "assets/icon.icns", "to": "icon.icns" },
-      { "from": "browser-server",             "to": "browser-server",             "filter": ["**/*", "!node_modules/**"] },
-      { "from": "browser-server/node_modules","to": "browser-server/node_modules","filter": ["**/*"] },
-      { "from": "extension",                  "to": "extension",                  "filter": ["**/*"] },
-      { "from": "figma-server",               "to": "figma-server",               "filter": ["**/*", "!node_modules/**"] },
-      { "from": "figma-server/node_modules",  "to": "figma-server/node_modules",  "filter": ["**/*"] },
-      { "from": "figma-plugin",               "to": "figma-plugin",               "filter": ["**/*"] }
+      {
+        "from": "assets/icon.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "assets/icon.icns",
+        "to": "icon.icns"
+      },
+      {
+        "from": "browser-server",
+        "to": "browser-server",
+        "filter": [
+          "**/*",
+          "!node_modules/**"
+        ]
+      },
+      {
+        "from": "browser-server/node_modules",
+        "to": "browser-server/node_modules",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "extension",
+        "to": "extension",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "figma-server",
+        "to": "figma-server",
+        "filter": [
+          "**/*",
+          "!node_modules/**"
+        ]
+      },
+      {
+        "from": "figma-server/node_modules",
+        "to": "figma-server/node_modules",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "figma-plugin",
+        "to": "figma-plugin",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "assets/icon.icns",
       "identity": "Solomon Abey (8E66MTW257)",
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ]
     },
     "win": {
       "icon": "assets/icon.ico",
       "target": [
-        { "target": "nsis", "arch": ["x64", "arm64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ]
     },
     "nsis": {
@@ -63,8 +119,16 @@
     "dmg": {
       "title": "FaunaMCP",
       "contents": [
-        { "x": 130, "y": 220 },
-        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
       ]
     },
     "electronVersion": "41.0.3"
