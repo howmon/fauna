@@ -18,6 +18,11 @@ import { buildV8SafetyRelaunchArgs, V8_SAFETY_MARKER, V8_SAFETY_MODE } from './l
 import { nativeHttpsFetch } from './server/copilot/native-https-fetch.js';
 
 process.noDeprecation = true;
+// Raise the libuv thread pool before first use. The default of 4 threads is
+// exhausted quickly when macOS DLP (dlpuser_helper) deadlocks on file opens —
+// each stuck thread permanently blocks a pool slot. 32 gives ~30 more open
+// requests before the pool saturates and async FS grinds to a halt.
+if (!process.env.UV_THREADPOOL_SIZE) process.env.UV_THREADPOOL_SIZE = '32';
 
 const v8SafetyRelaunchArgs = app.isPackaged ? buildV8SafetyRelaunchArgs() : null;
 if (v8SafetyRelaunchArgs) {
