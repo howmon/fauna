@@ -69,7 +69,7 @@ describe('language tools', () => {
     const refreshed = getWorkspaceIndex({ cwd: dir, force: true });
     expect(refreshed.cache.filesRead).toBe(1);
     expect(refreshed.cache.filesReused).toBe(1);
-    const found = searchWorkspace({ cwd: dir, query: 'parse scripture reference' });
+    const found = await searchWorkspace({ cwd: dir, query: 'parse scripture reference' });
     expect(found.results[0]).toMatchObject({ path: 'reader.ts', line: 1 });
   });
 });

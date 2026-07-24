@@ -93,7 +93,7 @@ import { loadAgentManifest } from './server/lib/agent-manifest.js';
 import { resolveWorkspaceContext } from './lib/workspace-context.js';
 import { runWorkspaceDiagnostics } from './lib/diagnostics.js';
 import { workspaceSymbols, symbolDefinition, symbolReferences, renameSymbol } from './lib/language-tools.js';
-import { getWorkspaceIndex, invalidateWorkspaceIndex, readIndexedFile, searchWorkspace } from './lib/workspace-index.js';
+import { getWorkspaceIndex, invalidateWorkspaceIndex, readIndexedFile, searchWorkspace, getFileContentAsync } from './lib/workspace-index.js';
 import { semanticDiagnostics } from './lib/typescript-language-service.js';
 import { startTerminalSession, sendTerminalInput, getTerminalOutput, listTerminalSessions, killTerminalSession } from './lib/terminal-sessions.js';
 import { parseTestResults, runTestResults } from './lib/test-results.js';
@@ -3404,7 +3404,7 @@ export async function executeSelfTool(toolName, args, context = {}) {
         if (!rootAbs.startsWith(HOME) && !rootAbs.startsWith('/tmp')) {
           return JSON.stringify({ ok: false, error: 'cwd outside allowed directories: ' + rootAbs });
         }
-        return JSON.stringify(searchWorkspace({ cwd: rootAbs, query: args.query, maxResults: args.maxResults }));
+        return JSON.stringify(await searchWorkspace({ cwd: rootAbs, query: args.query, maxResults: args.maxResults }));
       } catch (e) {
         return JSON.stringify({ ok: false, error: e.message });
       }
@@ -3444,20 +3444,25 @@ export async function executeSelfTool(toolName, args, context = {}) {
         const matches = [];
         let filesScanned = 0;
         const index = getWorkspaceIndex({ cwd: rootAbs, includeIgnoredFiles: args.includeIgnoredFiles === true });
-        for (const file of index.entries) {
-          if (includeRe && !includeRe.test(file.path)) continue;
-          filesScanned++;
-          const lines = file.lines;
-          for (let i = 0; i < lines.length; i++) {
-            re.lastIndex = 0;
-            if (re.test(lines[i])) {
-              // Truncate single-line hits to keep responses small
-              const line = lines[i].length > 240 ? lines[i].slice(0, 240) + '…' : lines[i];
-              matches.push({ path: file.path, line: i + 1, text: line });
-              if (matches.length >= cap) break;
+        const GREP_BATCH = 32;
+        for (let _bi = 0; _bi < index.entries.length && matches.length < cap; _bi += GREP_BATCH) {
+          await Promise.all(index.entries.slice(_bi, _bi + GREP_BATCH).map(async (file) => {
+            if (matches.length >= cap) return;
+            if (includeRe && !includeRe.test(file.path)) return;
+            const content = await getFileContentAsync(file);
+            if (!content) return;
+            filesScanned++;
+            const lines = content.lines;
+            for (let i = 0; i < lines.length; i++) {
+              re.lastIndex = 0;
+              if (re.test(lines[i])) {
+                // Truncate single-line hits to keep responses small
+                const line = lines[i].length > 240 ? lines[i].slice(0, 240) + '…' : lines[i];
+                matches.push({ path: file.path, line: i + 1, text: line });
+                if (matches.length >= cap) break;
+              }
             }
-          }
-          if (matches.length >= cap) break;
+          }));
         }
         return JSON.stringify({
           ok: true, root: rootAbs, query, isRegex: useRegex,
