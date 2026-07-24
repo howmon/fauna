@@ -2272,6 +2272,23 @@ async function streamResponse(conv) {
               dbg('context_compacted handler failed: ' + (_ccErr && _ccErr.message), 'warn');
             }
           }
+          if (evt.type === 'context_summary_updated') {
+            // VS Code-like proactive summary: server sends a fresh summary after every
+            // turn. Store it silently on the conv — no archive divider, no user-visible
+            // indicator. Next turn, chat.js sends it back as contextSummary so the server
+            // injects it into the system prompt unconditionally.
+            try {
+              var _csConvId = (typeof state !== 'undefined' && state) ? state.currentId : null;
+              var _csConv = (typeof getConv === 'function' && _csConvId) ? getConv(_csConvId) : null;
+              if (_csConv && evt.summary && typeof evt.summary === 'string') {
+                _csConv.contextSummary = evt.summary;
+                if (typeof saveConversations === 'function') saveConversations();
+                dbg('proactive summary updated (' + evt.summary.length + ' chars)', 'ok');
+              }
+            } catch (_csErr) {
+              dbg('context_summary_updated handler failed: ' + (_csErr && _csErr.message), 'warn');
+            }
+          }
           if (evt.type === 'tool_output') {
             // Live shell/tool output is an observation, not assistant prose.
             // Keep it in a side DOM block so transcripts and saved messages do

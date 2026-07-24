@@ -1135,8 +1135,12 @@ export function registerChatRoute(app, {
       const _overBudget = totalBodyTokens > budget.bodyTokenLimit;
       if (autoCompactEnabled && _overBudget && rest.length > KEEP_TAIL + 4) {
         const middle = rest.slice(0, -KEEP_TAIL);
-        const alreadyHasSummary = middle.some(m => m && m.name === 'context_summary');
-        console.log(`[chat] auto-compact: bodyTokens=${totalBodyTokens} > limit=${budget.bodyTokenLimit}, summarizing ${middle.length} msgs (skip=${alreadyHasSummary})`);
+        // Allow re-compaction: if a prior summary exists, compact only the
+        // non-summary portion so the summary + recent tail fit in the window.
+        const priorSummaryIdx = middle.findLastIndex(m => m && m.name === 'context_summary');
+        const compactSlice = priorSummaryIdx >= 0 ? middle.slice(priorSummaryIdx + 1) : middle;
+        const alreadyHasSummary = compactSlice.length === 0; // nothing new to compact
+        console.log(`[chat] auto-compact: bodyTokens=${totalBodyTokens} > limit=${budget.bodyTokenLimit}, summarizing ${compactSlice.length} msgs (skip=${alreadyHasSummary})`);
         if (!alreadyHasSummary) {
           // Bound the summarizer call so it can't stall the main turn.
           const _compactTimeout = setTimeout(() => {
@@ -1148,7 +1152,7 @@ export function registerChatRoute(app, {
           try {
             const compactHooks = await runHooks(customizationRecords, 'PreCompact', {
               ...baseHookPayload,
-              messageCount: middle.length,
+              messageCount: compactSlice.length,
               totalBodyTokens,
               bodyTokenLimit: budget.bodyTokenLimit,
             }, { cwd: workspaceRoot });
@@ -1159,9 +1163,9 @@ export function registerChatRoute(app, {
               console.log('[chat] PreCompact hook blocked auto-compaction:', compactHooks.stopReason || 'blocked');
               throw new Error('__FAUNA_PRECOMPACT_BLOCKED__');
             }
-            send({ type: 'context_compacting', count: middle.length });
+            send({ type: 'context_compacting', count: compactSlice.length });
             const summary = await Promise.race([
-              summarizeHistory(middle, {
+              summarizeHistory(compactSlice, {
                 client,
                 model: 'gpt-4o-mini',
                 signal: _compactAbort.signal,
@@ -1173,7 +1177,7 @@ export function registerChatRoute(app, {
                 role: 'system',
                 name: 'context_summary',
                 content:
-                  `## Conversation Summary (compacted ${middle.length} earlier messages)\n` +
+                  `## Conversation Summary (compacted ${compactSlice.length} earlier messages)\n` +
                   summary +
                   '\n\n---\n' +
                   'IMPORTANT: This summary is a compressed view of earlier turns. ' +
@@ -1181,16 +1185,18 @@ export function registerChatRoute(app, {
                   'If items appear under "OPEN / UNVERIFIED", treat them as still pending. ' +
                   'Before reporting success, re-verify by reading current file state or running the relevant commands again.',
               };
-              stripped.splice(1, middle.length, synthetic);
+              // Replace the compactSlice range (after first msg, possibly after prior summary)
+              const spliceStart = 1 + (priorSummaryIdx >= 0 ? priorSummaryIdx + 1 : 0);
+              stripped.splice(spliceStart, compactSlice.length, synthetic);
               rest.length = 0;
               for (let i = 1; i < stripped.length; i++) rest.push(stripped[i]);
               compactedInfo = {
-                before: middle.length,
+                before: compactSlice.length,
                 after: 1,
                 summaryTokens: estimateTokens(synthetic),
                 summary,
               };
-              console.log(`[chat] auto-compacted ${middle.length} msgs → 1 summary (${compactedInfo.summaryTokens}t)`);
+              console.log(`[chat] auto-compacted ${compactSlice.length} msgs → 1 summary (${compactedInfo.summaryTokens}t)`);
             } else {
               console.log('[chat] auto-compact produced empty summary; falling back to plain trim');
             }
@@ -2367,6 +2373,16 @@ export function registerChatRoute(app, {
           });
         }
         applyModelRequestCompatibility(params, llmCapabilities);
+
+        // VS Code-like strategy: for Claude models, delegate context truncation to
+        // Anthropic's server-side context_management. The Copilot proxy forwards
+        // this field to the Anthropic Messages API, which handles truncation before
+        // the model even sees the history — no client-side summary needed for that path.
+        // compact_threshold matches our client-side compactAt (0.70) so both paths
+        // agree on when the context is "full".
+        if (llmCapabilities.serverContextManagement) {
+          params.context_management = { type: 'enabled', compact_threshold: 0.70 };
+        }
 
         let stream;
         try {
@@ -3549,6 +3565,39 @@ export function registerChatRoute(app, {
                   } catch (e) { console.warn('[chat] memory-extractor failed:', e?.message || e); }
                 })();
               }
+            }
+
+            // VS Code-like proactive summary: after every successful turn, fire a
+            // background summarization of the recent tail and push the result to the
+            // client. The client stores it as conv.contextSummary and sends it back
+            // next turn, so the next turn's system prompt always contains a fresh
+            // compressed view of what happened — regardless of whether compaction
+            // triggered. This mirrors VS Code Copilot's strategy of maintaining a
+            // separate "conversation summary" that's re-injected independent of the
+            // message history.
+            //
+            // Only run when: not a delegation (sub-agents manage their own context),
+            // not CLI (no persistent conv), at least 6 messages exist (enough to summarize),
+            // and the turn completed normally (not aborted).
+            if (!isDelegation && !isCLI && !upstreamAbort.signal.aborted &&
+                client && Array.isArray(allMessages) && allMessages.length >= 6) {
+              const _summarizeSnap = allMessages
+                .filter(m => m.role !== 'system')
+                .slice(-24); // cap at last 24 non-system msgs (cheap window)
+              (async () => {
+                try {
+                  const summary = await Promise.race([
+                    summarizeHistory(_summarizeSnap, { client, model: 'gpt-4o-mini' }),
+                    new Promise(resolve => setTimeout(() => resolve(''), 20_000)),
+                  ]);
+                  if (summary && summary.length > 50) {
+                    send({ type: 'context_summary_updated', summary });
+                    console.log(`[chat] proactive summary updated (${_summarizeSnap.length} msgs → ${summary.length} chars)`);
+                  }
+                } catch (e) {
+                  console.warn('[chat] proactive summary failed:', e?.message || e);
+                }
+              })();
             }
           }
         }

@@ -11,6 +11,10 @@ export function resolveModelCapabilities({ providerId = 'copilot', model = '', s
     usageEvents: true,
     reasoningEffort: true,
     claudeThinking: false,
+    // When true, inject context_management into the API request so Anthropic's
+    // server handles truncation rather than relying solely on client-side compaction.
+    // Mirrors the strategy used by VS Code Copilot for Claude models.
+    serverContextManagement: false,
     parallelToolCalls: true,
     temperature: true,
     maxTokensField: /^(o[1-9]|gpt-5)/i.test(String(model || '')) ? 'max_completion_tokens' : 'max_tokens',
@@ -21,6 +25,7 @@ export function resolveModelCapabilities({ providerId = 'copilot', model = '', s
   if (/claude/.test(normalized)) {
     caps.claudeThinking = true;
     caps.reasoningEffort = false;
+    caps.serverContextManagement = true;
   }
 
   if (/chat-latest/.test(normalized)) {
