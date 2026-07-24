@@ -61,6 +61,7 @@ jobs:
         env:
           CSC_LINK: ${{ secrets.APPLE_CERT_P12_BASE64 }}
           CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          SKIP_NOTARIZE: '1'
         run: npx electron-builder --mac dmg --arm64 --publish never
 
       - name: Notarize and staple Fauna macOS arm64 DMG
@@ -190,6 +191,7 @@ jobs:
         env:
           CSC_LINK: ${{ secrets.APPLE_CERT_P12_BASE64 }}
           CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          SKIP_NOTARIZE: '1'
         run: npx electron-builder --mac dmg --x64 --publish never
 
       - name: Notarize and staple Fauna macOS x64 DMG
