@@ -2374,16 +2374,6 @@ export function registerChatRoute(app, {
         }
         applyModelRequestCompatibility(params, llmCapabilities);
 
-        // VS Code-like strategy: for Claude models, delegate context truncation to
-        // Anthropic's server-side context_management. The Copilot proxy forwards
-        // this field to the Anthropic Messages API, which handles truncation before
-        // the model even sees the history — no client-side summary needed for that path.
-        // compact_threshold matches our client-side compactAt (0.70) so both paths
-        // agree on when the context is "full".
-        if (llmCapabilities.serverContextManagement) {
-          params.context_management = { type: 'enabled', compact_threshold: 0.70 };
-        }
-
         let stream;
         try {
           stream = await client.chat.completions.create(params, { signal: upstreamAbort.signal });
@@ -3591,8 +3581,15 @@ export function registerChatRoute(app, {
                     new Promise(resolve => setTimeout(() => resolve(''), 20_000)),
                   ]);
                   if (summary && summary.length > 50) {
-                    send({ type: 'context_summary_updated', summary });
-                    console.log(`[chat] proactive summary updated (${_summarizeSnap.length} msgs → ${summary.length} chars)`);
+                    // Guard against writing to an already-closed SSE response.
+                    // res.write() on a finished stream throws ERR_INVALID_STATE
+                    // from the stream adapter — outside try/catch, causing a
+                    // main-process crash. Skip the send; summary is still useful
+                    // server-side if we persist it (future: store in conv record).
+                    if (!res.writableEnded) {
+                      send({ type: 'context_summary_updated', summary });
+                    }
+                    console.log(`[chat] proactive summary updated (${_summarizeSnap.length} msgs → ${summary.length} chars, sent=${!res.writableEnded})`);
                   }
                 } catch (e) {
                   console.warn('[chat] proactive summary failed:', e?.message || e);
