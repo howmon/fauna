@@ -3605,9 +3605,12 @@ export function registerChatRoute(app, {
             // message history.
             //
             // Only run when: not a delegation (sub-agents manage their own context),
-            // not CLI (no persistent conv), at least 6 messages exist (enough to summarize),
-            // and the turn completed normally (not aborted).
+            // not CLI (no persistent conv), a persistent conversationId exists (the
+            // client has somewhere to store the summary — no point burning tokens on
+            // anonymous/one-shot requests, including test harnesses), at least 6
+            // messages exist (enough to summarize), and the turn completed normally.
             if (!isDelegation && !isCLI && !upstreamAbort.signal.aborted &&
+                req.body?.conversationId &&
                 client && Array.isArray(allMessages) && allMessages.length >= 6) {
               const _summarizeSnap = allMessages
                 .filter(m => m.role !== 'system')

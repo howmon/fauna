@@ -134,6 +134,23 @@ export function getActivePlanForConv(convId) {
 
 const HOME = os.homedir();
 
+// Extra allowed prefixes beyond HOME. On macOS os.tmpdir() returns
+// /var/folders/<hash>/T (not /tmp), and its realpath is prefixed with
+// /private. All three shapes are legitimate scratch space, so allow each
+// as a prefix for read/write path resolution.
+const _TMP_PREFIXES = (() => {
+  const set = new Set(['/tmp', '/private/tmp']);
+  try {
+    const t = os.tmpdir();
+    if (t) {
+      set.add(t);
+      // macOS: /var/folders/... realpath is /private/var/folders/...
+      if (t.startsWith('/var/')) set.add('/private' + t);
+    }
+  } catch (_) {}
+  return Array.from(set);
+})();
+
 function _runCmd(cmd, argv, input) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, argv);
@@ -837,7 +854,9 @@ function _resolveFaunaWritePath(filePath, cwd) {
   else if (cwd) resolved = path.join(String(cwd).replace(/^~/, HOME), String(filePath));
   else resolved = path.join(HOME, String(filePath));
   resolved = path.resolve(resolved);
-  if (!resolved.startsWith(HOME) && !resolved.startsWith('/tmp')) throw new Error('Path outside allowed directories: ' + resolved);
+  if (!resolved.startsWith(HOME) && !_TMP_PREFIXES.some(p => resolved.startsWith(p))) {
+    throw new Error('Path outside allowed directories: ' + resolved);
+  }
   return resolved;
 }
 
@@ -3495,8 +3514,13 @@ export async function executeSelfTool(toolName, args, context = {}) {
         }
         return JSON.stringify({
           ok: true, root: rootAbs, query, isRegex: useRegex,
-          filesScanned, count: matches.length, truncated: matches.length >= cap,
-          matches, engine: 'workspace-index', cache: index.cache,
+          // Parallel batch workers can overshoot the cap between the loop's
+          // guard check and their next push — enforce it here as ground truth.
+          filesScanned,
+          count: Math.min(matches.length, cap),
+          truncated: matches.length >= cap,
+          matches: matches.slice(0, cap),
+          engine: 'workspace-index', cache: index.cache,
         });
       } catch (e) {
         return JSON.stringify({ ok: false, error: e.message });

@@ -62,7 +62,7 @@ describe('language tools', () => {
     expect(second.cache.hit).toBe(true);
   });
 
-  it('refreshes only changed files and ranks natural-language workspace results', () => {
+  it('refreshes only changed files and ranks natural-language workspace results', async () => {
     const dir = fixture();
     getWorkspaceIndex({ cwd: dir });
     fs.writeFileSync(path.join(dir, 'reader.ts'), 'export function parseScriptureReference() { return true; }\n', 'utf8');
