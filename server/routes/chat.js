@@ -30,7 +30,7 @@ import { FALLBACK_MODELS, CHAT_COMPLETIONS_UNSUPPORTED_RE } from '../copilot/mod
 import { GEN_UI_CATALOG_PROMPT, GEN_UI_SHORT_HINT } from '../prompts/gen-ui-catalog.js';
 import { FAUNA_CORE_GUIDELINES, FAUNA_FRONTEND_QUALITY } from '../prompts/core-guidelines.js';
 import { computeContextFlags, computeToolFlags, filterToolSchemas } from '../prompts/context-gating.js';
-import { SELF_TOOL_DEFS, DYNAMIC_WIDGET_TOOL_DEFS, executeSelfTool, isSelfTool, getActivePlanForConv } from '../../self-tools.js';
+import { SELF_TOOL_DEFS, DYNAMIC_WIDGET_TOOL_DEFS, executeSelfTool, isSelfTool, getActivePlanForConv, listSkillsOnDisk } from '../../self-tools.js';
 import { compressToolOutput } from '../lib/compress-tool-output.js';
 import { stashOutput } from '../lib/tool-output-cache.js';
 import { runShell, formatShellResultForLLM, isUnboundedRecursiveSearch } from '../lib/shell-runner.js';
@@ -489,6 +489,39 @@ function buildCustomMcpContext(status) {
   return '\n## Enabled MCP Servers\n' +
     'Fauna custom MCP servers are part of this chat context. Enabled HTTP MCP servers are auto-connected for chat when possible; running servers expose their tools as callable function tools. Stdio custom MCP servers are listed for awareness, but only HTTP custom MCP tools are currently callable from chat.\n' +
     lines;
+}
+
+// ── Skills manifest (VS Code Copilot-style) ──────────────────────────────
+// Inject only the name + one-line description + file path of every
+// installed skill on every turn. Bodies are loaded lazily via
+// fauna_read_file when the model decides a description matches — same
+// pattern VS Code Copilot uses. Cheap (~50–100 tokens/skill) and lets
+// the model discover skills without a round-trip through
+// fauna_list_skills.
+//
+// Discovery order (first-match-wins in listSkillsOnDisk):
+//   1. <agentsDir>/<agent>/skills/<name>/SKILL.md   (agent-scoped)
+//   2. <agentsDir>/_skills/<name>/SKILL.md          (global)
+//   3. <workspaceRoot>/skills/<name>/SKILL.md       (repo pack)
+//   4. ~/.config/fauna/skills/<name>/SKILL.md       (user pack)
+export function buildSkillsManifestContext(agentsDir, agentName, workspaceRoot) {
+  let skills;
+  try { skills = listSkillsOnDisk(agentsDir, agentName, { workspaceRoot }); }
+  catch (_) { return ''; }
+  if (!skills || !skills.length) return '';
+  const MAX_SKILLS = 60;                    // safety cap — beyond this switch to grouped/routed exposure
+  const MAX_DESC_LEN = 400;                 // per-skill; long enough for good "WHEN…" descriptions
+  const chosen = skills.slice(0, MAX_SKILLS);
+  const lines = chosen.map(s => {
+    const desc = String(s.description || '').replace(/\s+/g, ' ').trim();
+    const truncated = desc.length > MAX_DESC_LEN ? desc.slice(0, MAX_DESC_LEN - 1) + '…' : desc;
+    const scope = s.scope ? ` [${s.scope}]` : '';
+    return `- ${s.name}${scope} — ${s.path}\n    ${truncated || '(no description)'}`;
+  }).join('\n');
+  const overflow = skills.length > MAX_SKILLS ? `\n\n(+${skills.length - MAX_SKILLS} more skill(s) not shown — call fauna_list_skills to enumerate.)` : '';
+  return '\n## Available skills\n' +
+    'The following skills are installed and available. Each is a self-contained playbook stored in a SKILL.md file. When a task matches a skill\'s description, load the full body with `fauna_read_file` (path is listed below) before proceeding — do NOT guess the workflow from the description alone.\n\n' +
+    lines + overflow;
 }
 
 export function registerChatRoute(app, {
@@ -1039,6 +1072,11 @@ export function registerChatRoute(app, {
         // Baked into every conversation (skipped for delegation sub-agents to save tokens —
         // the orchestrator already enforces these and re-stating them in delegates wastes context).
         (isolateContext || isDelegation) ? '' : FAUNA_CORE_GUIDELINES,
+        // Skills manifest (VS Code Copilot-style): name + description + file
+        // path for every installed SKILL.md. Model reads bodies lazily via
+        // fauna_read_file when a description matches. Skipped in isolated /
+        // delegation contexts where the orchestrator drives skill selection.
+        (isolateContext || isDelegation) ? '' : buildSkillsManifestContext(agentsDir, agentName, workspaceRoot),
         // When running against a local model that doesn't support OpenAI tool
         // calling, tell it explicitly — otherwise it will hallucinate tool
         // invocations in prose. Constant per session, so it lives in the prefix.

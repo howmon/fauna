@@ -88,6 +88,7 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
 import * as devServerRegistry from './server/lib/dev-server-registry.js';
 import { loadAgentManifest } from './server/lib/agent-manifest.js';
 import { resolveWorkspaceContext } from './lib/workspace-context.js';
@@ -1009,7 +1010,17 @@ function _listMarkdownSections(body) {
 //   <agentsDir>/_skills/<skill>/SKILL.md          (global skills shared across agents)
 //   <workspaceRoot>/skills/<skill>/SKILL.md       (repo-level pack, addyosmani layout)
 //   ~/.config/fauna/skills/<skill>/SKILL.md       (user pack installed via /api/skills/import)
+//   <fauna-install>/skills/<skill>/SKILL.md       (bundled — ships with the app)
 // Returns { path, scope, body } or null.
+
+// Bundled skills ship inside app.asar. self-tools.js sits at the app root,
+// so resolving relative to import.meta.url works in dev AND packaged builds
+// (Electron reads through asar transparently for fs.readFileSync/existsSync).
+const _BUNDLED_SKILLS_ROOT = (() => {
+  try { return path.join(path.dirname(fileURLToPath(import.meta.url)), 'skills'); }
+  catch (_) { return null; }
+})();
+
 function _extraSkillRoots(context) {
   const roots = [];
   try {
@@ -1020,6 +1031,9 @@ function _extraSkillRoots(context) {
     const home = process.env.HOME || process.env.USERPROFILE;
     if (home) roots.push({ root: path.join(home, '.config', 'fauna', 'skills'), scope: 'user' });
   } catch (_) {}
+  // Bundled skills go LAST so any user/repo/agent skill of the same name
+  // wins. Shipped as first-class defaults every install gets for free.
+  if (_BUNDLED_SKILLS_ROOT) roots.push({ root: _BUNDLED_SKILLS_ROOT, scope: 'bundled' });
   return roots;
 }
 
@@ -1054,22 +1068,30 @@ function _findSkill(agentsDir, agentName, skillName, context) {
 function _listSkillsOnDisk(agentsDir, agentName, context) {
   const found = [];
   const seen = new Set();
+  // Names to skip at the top of any skills root — these are repo docs,
+  // not skills. Without this filter, a README.md sitting next to real
+  // skill directories gets registered as a skill named "README".
+  const SKIP_NAMES = new Set(['readme', 'contributing', 'license', 'changelog', 'notes', 'todo']);
   const scan = (dir, scope) => {
     if (!fs.existsSync(dir)) return;
     let entries;
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
     for (const ent of entries) {
+      // Skip dotfiles and underscore-prefixed entries (reserved for meta).
+      if (ent.name.startsWith('.') || ent.name.startsWith('_')) continue;
       let skillFile = null;
       let name = ent.name;
       if (ent.isDirectory()) {
         const candidate = path.join(dir, ent.name, 'SKILL.md');
         if (fs.existsSync(candidate)) skillFile = candidate;
       } else if (ent.isFile() && ent.name.toLowerCase().endsWith('.md')) {
+        const baseName = ent.name.replace(/\.md$/i, '');
+        if (SKIP_NAMES.has(baseName.toLowerCase())) continue;
         skillFile = path.join(dir, ent.name);
-        name = ent.name.replace(/\.md$/i, '');
+        name = baseName;
       }
       if (!skillFile) continue;
-      // First-match-wins across scopes — agent overrides global overrides repo overrides user.
+      // First-match-wins across scopes — agent overrides global overrides repo overrides user overrides bundled.
       if (seen.has(name)) continue;
       seen.add(name);
       let desc = '';
@@ -1100,6 +1122,13 @@ function _listSkillsOnDisk(agentsDir, agentName, context) {
   if (agentsDir) scan(path.join(agentsDir, '_skills'), 'global');
   for (const r of _extraSkillRoots(context || {})) scan(r.root, r.scope);
   return found;
+}
+
+// Public wrapper so /api/chat can build the system-prompt skills manifest
+// (VS Code-style manifest-only exposure — the model reads bodies via
+// fauna_read_file when a description matches).
+export function listSkillsOnDisk(agentsDir, agentName, context) {
+  return _listSkillsOnDisk(agentsDir, agentName, context);
 }
 
 // ── References (read-only knowledge — server maps, schemas, glossaries) ──
