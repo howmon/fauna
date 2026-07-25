@@ -84,8 +84,6 @@ describe('self-tools', () => {
       // fauna_route_skill (semantic skill router), fauna_interview,
       // fauna_create_seed, fauna_list_seeds, fauna_get_seed (spec-first loop),
       // fauna_unstuck (lateral personas), fauna_audit_prompt (prompt patterns).
-      // Bumped to 108 after adding fauna_ask_user_decision (agent-driven
-      // Decision Prompt UI — replaces hardcoded per-tool user gates).
       expect(SELF_TOOL_DEFS).toHaveLength(108);
     });
 
