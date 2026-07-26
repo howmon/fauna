@@ -1399,7 +1399,7 @@ body.is-resizing webview { pointer-events: none !important; }
 @keyframes toolShimmer { to { background-position: 200% center; } }
 
 /* ── Archive divider ──────────────────────────────────────────────── */
-.conv-archive-collapsed { display: flex; justify-content: center; padding: 10px 0 4px; }
+.conv-archive-collapsed { display: flex; justify-content: center; padding: 10px 0 4px; flex-direction: column; }
 .conv-archive-toggle {
   display: flex; align-items: center; gap: 6px;
   background: none; border: 1px dashed var(--fau-border); border-radius: 20px;
