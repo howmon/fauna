@@ -1,7 +1,7 @@
 // GitHub auth + PAT management HTTP routes.
 // Token discovery itself lives in server/copilot/auth.js — these routes are
 // just the thin HTTP surface on top.
-import { getGhToken, readSavedConfig, writeSavedConfig } from '../copilot/auth.js';
+import { getGhToken, readSavedConfig, writeSavedConfig, invalidateCopilotClient } from '../copilot/auth.js';
 
 export function registerAuthRoutes(app) {
   app.get('/api/auth', (req, res) => {
@@ -29,6 +29,7 @@ export function registerAuthRoutes(app) {
     const cfg = readSavedConfig();
     cfg.pat = trimmed;
     writeSavedConfig(cfg);
+    invalidateCopilotClient();
     res.json({ ok: true, preview: trimmed.slice(0, 4) + '…' + trimmed.slice(-4) });
   });
 
@@ -36,6 +37,7 @@ export function registerAuthRoutes(app) {
     const cfg = readSavedConfig();
     delete cfg.pat;
     writeSavedConfig(cfg);
+    invalidateCopilotClient();
     res.json({ ok: true });
   });
 

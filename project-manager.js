@@ -6,6 +6,7 @@ import fs   from 'fs';
 import path from 'path';
 import os   from 'os';
 import { execSync, spawn as _spawn } from 'child_process';
+import { saveJsonAtomic } from './server/lib/json-store.js';
 
 const CONFIG_DIR   = path.join(os.homedir(), '.config', 'fauna');
 const PROJECTS_FILE = path.join(CONFIG_DIR, 'projects.json');
@@ -127,8 +128,7 @@ function readProjects() {
 }
 
 function writeProjects(projects) {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(PROJECTS_FILE, JSON.stringify(projects, null, 2));
+  saveJsonAtomic(PROJECTS_FILE, projects);
 }
 
 function now() { return new Date().toISOString(); }

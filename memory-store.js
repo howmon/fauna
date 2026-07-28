@@ -10,6 +10,7 @@ import path from 'path';
 import os from 'os';
 import { scrubSecrets } from './server/lib/redactor.js';
 import { prepareQuery, scoreStored, hasEmbedding, prepareForStorage } from './server/lib/embeddings.js';
+import { saveJsonAtomic } from './server/lib/json-store.js';
 
 const CONFIG_DIR  = path.join(os.homedir(), '.config', 'fauna');
 const FACTS_FILE  = path.join(CONFIG_DIR, 'facts.json');
@@ -57,8 +58,7 @@ function _load() {
 }
 
 function _save() {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(FACTS_FILE, JSON.stringify(_facts, null, 2));
+  saveJsonAtomic(FACTS_FILE, _facts);
 }
 
 function _uid() {

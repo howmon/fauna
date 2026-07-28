@@ -105,9 +105,17 @@ export function getGhToken() {
   throw new Error('GitHub token not found. Run: gh auth login');
 }
 
+// Singleton cache so every chat turn doesn't construct a new OpenAI instance.
+// Invalidated when the user updates their PAT (call invalidateCopilotClient()).
+let _clientCache = null;
+let _clientCacheToken = null;
+
 export function getCopilotClient() {
   const token = getGhToken();
-  return new OpenAI({
+  // Return cached client when the token hasn't changed.
+  if (_clientCache && _clientCacheToken === token) return _clientCache;
+  _clientCacheToken = token;
+  _clientCache = new OpenAI({
     baseURL: 'https://api.githubcopilot.com',
     apiKey:  token,
     fetch: runtimeFetch,
@@ -116,4 +124,11 @@ export function getCopilotClient() {
       'Copilot-Integration-Id': 'vscode-chat'
     }
   });
+  return _clientCache;
+}
+
+/** Call after the user saves a new PAT so the next request picks it up. */
+export function invalidateCopilotClient() {
+  _clientCache = null;
+  _clientCacheToken = null;
 }

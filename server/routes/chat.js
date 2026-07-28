@@ -67,6 +67,7 @@ import { withTimeout } from '../lib/async-utils.js';
 import { loadAgentManifest } from '../lib/agent-manifest.js';
 import { scrubSecrets } from '../lib/redactor.js';
 import { normalizeInteractiveAuthCommand } from '../lib/interactive-auth.js';
+import { ChatTracer } from '../../lib/run-ledger.js';
 
 // ── Tool-driven Decision Prompt bridge ────────────────────────────────────
 // Any tool (self-tool, agent tool, MCP tool) can pause the agent and
@@ -1806,6 +1807,48 @@ export function registerChatRoute(app, {
       let continueLoop = true;
       let toolCallCount = 0; // kept for telemetry / debug logs only
       let continueCount = 0; // track auto-continue on length finish
+
+      // ── ChatTracer — structured trace event ledger (Gap 4) ─────────────
+      // Writes typed events to autonomous-runs/<id>.jsonl so runs are
+      // replayable and observable without reading raw console logs.
+      const _traceRunId = crypto.randomBytes(6).toString('hex');
+      const _traceLedgerFile = projectId
+        ? path.join(os.homedir(), '.config', 'fauna', 'autonomous-runs', `${projectId}-${_traceRunId}.jsonl`)
+        : null;
+      const tracer = new ChatTracer(_traceLedgerFile || '/dev/null');
+      if (_traceLedgerFile) {
+        tracer.start(_traceRunId, {
+          model, projectId: projectId || null, agentName: agentName || null,
+          autonomousMode: !!autonomousMode,
+        });
+      }
+      // Helpers used inside the loop below.
+      const _traceModelSend = (turnIndex, allMsgs, toolDefs) => {
+        if (!_traceLedgerFile) return;
+        tracer.modelSend({ turnIndex, messageCount: allMsgs.length, toolCount: (toolDefs || []).length });
+      };
+      const _traceModelResponse = (turnIndex, finishReason, usage) => {
+        if (!_traceLedgerFile) return;
+        tracer.modelResponse({
+          turnIndex, finishReason,
+          promptTokens: usage?.prompt_tokens || 0,
+          completionTokens: usage?.completion_tokens || 0,
+        });
+      };
+      const _traceToolStarted = (toolName, args) => {
+        if (!_traceLedgerFile) return;
+        tracer.toolStarted({ toolName, argsKeys: Object.keys(args || {}) });
+      };
+      const _traceToolCompleted = (toolName, resultSize, ok, durationMs) => {
+        if (!_traceLedgerFile) return;
+        tracer.toolCompleted({ toolName, resultSize, ok: !!ok, durationMs });
+      };
+      const _traceToolDenied = (toolName, reason) => {
+        if (!_traceLedgerFile) return;
+        tracer.toolDenied({ toolName, reason: String(reason || '') });
+      };
+
+
       let halfStopNudgeCount = 0; // Codex-style: re-prompt model if it asks the user to continue mid-task
       let prevPreamble = '';       // narration emitted on the previous tool-call iteration
       let needsContentBoundary = false; // separate narrated tool rounds in the persisted assistant turn
@@ -2412,6 +2455,9 @@ export function registerChatRoute(app, {
         }
         applyModelRequestCompatibility(params, llmCapabilities);
 
+        // ── Trace: model about to be called ─────────────────────────────
+        _traceModelSend(turnUsage.iterations, allMessages, params.tools);
+
         let stream;
         try {
           stream = await client.chat.completions.create(params, { signal: upstreamAbort.signal });
@@ -2555,6 +2601,9 @@ export function registerChatRoute(app, {
           emitTokenUsage();
         }
 
+        // ── Trace: model response received ──────────────────────────────
+        _traceModelResponse(turnUsage.iterations, finishReason, streamUsage);
+
         if (finishReason === 'tool_calls' && pendingCalls.length > 0) {
           const calls = pendingCalls.filter(tc => tc && tc.function?.name);
           if (!calls.length) { send({ type: 'done', finish_reason: finishReason }); continueLoop = false; break; }
@@ -2631,6 +2680,8 @@ export function registerChatRoute(app, {
               command: activity.command,
               activity,
             });
+            // ── Trace: tool execution starting ────────────────────────
+            _traceToolStarted(toolName, args);
             const toolStartedAt = Date.now();
             let toolFailed = false;
             const toolProgressTimer = setInterval(() => {
@@ -2895,7 +2946,10 @@ export function registerChatRoute(app, {
               figma.log('✗ ' + toolName + ': ' + e.message, 'err');
             } finally {
               clearInterval(toolProgressTimer);
-              const elapsedSeconds = Math.max(0, Math.round((Date.now() - toolStartedAt) / 1000));
+              const elapsedMs = Math.max(0, Date.now() - toolStartedAt);
+              const elapsedSeconds = Math.round(elapsedMs / 1000);
+              // ── Trace: tool execution completed ─────────────────────
+              _traceToolCompleted(toolName, typeof result === 'string' ? result.length : 0, !toolFailed, elapsedMs);
               if (!res.writableEnded) {
                 send({
                   type: 'tool_progress',
@@ -2952,12 +3006,14 @@ export function registerChatRoute(app, {
               if (message) allMessages.push({ role: 'system', content: String(message) });
             }
             if (preHooks.blocked || preHooks.permissionDecision === 'deny') {
+              _traceToolDenied(toolName, preHooks.stopReason || 'PreToolUse hook denied');
               allMessages.push({ role: 'tool', tool_call_id: tc.id, content: preHooks.stopReason || `PreToolUse hook denied ${toolName}` });
               continue;
             }
             const guardResult = await toolGuard.check(toolName, args);
 
             if (guardResult.action === 'deny') {
+              _traceToolDenied(toolName, guardResult.reason);
               allMessages.push({ role: 'tool', tool_call_id: tc.id, content: guardResult.reason });
               continue;
             }
@@ -3640,15 +3696,18 @@ export function registerChatRoute(app, {
           }
         }
       }
+      // ── Trace: loop completed normally ───────────────────────────────
+      if (_traceLedgerFile) tracer.done({ totalTurns: turnUsage.iterations, totalTools: toolCallCount, durationMs: Date.now() - autonomousStartedAt });
     } catch (err) {
-      // Suppress noise from intentional aborts (Stop button / client disconnect).
-      // Only treat as abort if we actually aborted the controller — checking the
+      // Suppress noise from intentional aborts (Stop button / client disconnect).      // Only treat as abort if we actually aborted the controller — checking the
       // error message text alone is too loose and swallows real upstream errors
       // whose messages happen to mention "abort".
       if (upstreamAbort.signal.aborted) {
         console.log('[chat] upstream aborted by client');
+        if (_traceLedgerFile) tracer.done({ aborted: true, totalTools: toolCallCount, durationMs: Date.now() - autonomousStartedAt });
       } else {
         try { send({ type: 'error', error: err.message }); } catch (_) {}
+        if (_traceLedgerFile) tracer.error({ message: err.message, totalTools: toolCallCount, durationMs: Date.now() - autonomousStartedAt });
       }
     } finally {
       if (subagentStarted && subagentStopPayload) {
