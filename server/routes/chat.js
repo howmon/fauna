@@ -33,7 +33,7 @@ import { computeContextFlags, computeToolFlags, filterToolSchemas } from '../pro
 import { SELF_TOOL_DEFS, DYNAMIC_WIDGET_TOOL_DEFS, executeSelfTool, isSelfTool, getActivePlanForConv, listSkillsOnDisk } from '../../self-tools.js';
 import { compressToolOutput } from '../lib/compress-tool-output.js';
 import { stashOutput } from '../lib/tool-output-cache.js';
-import { runShell, formatShellResultForLLM, isUnboundedRecursiveSearch } from '../lib/shell-runner.js';
+import { runShell, formatShellResultForLLM, isUnboundedRecursiveSearch, annotateRegistryBlock } from '../lib/shell-runner.js';
 import { runHooks } from '../lib/hooks-runtime.js';
 import {
   maybeRegister as registerDevServer,
@@ -546,6 +546,7 @@ export function registerChatRoute(app, {
   shellBin = null,
   isWin = false,
   augmentedPath = null,
+  npmEnv = {},
   shellProcs = null,
 }) {
   // ── Dynamic Widget RPC bridge ────────────────────────────────────────
@@ -1640,32 +1641,36 @@ export function registerChatRoute(app, {
           // (No tool_call SSE emit here — the outer dispatcher in chat.js
           // already sends one event per call. Emitting again here caused a
           // visible duplicate in the client status panel.)
-          const result = await runShell({
+          const result = annotateRegistryBlock(
+            await runShell({
+              command,
+              cwd: effectiveCwd,
+              shellBin,
+              isWin,
+              augmentedPath,
+              env: npmEnv,
+              timeoutMs: typeof timeoutMs === 'number' ? Math.min(timeoutMs, 600000) : undefined,
+              maxOutputChars: typeof maxOutputBytes === 'number' && maxOutputBytes > 0
+                ? Math.min(maxOutputBytes, 500_000)
+                : undefined,
+              signal: upstreamAbort.signal,
+              onChunk: (kind, text) => {
+                // Forward live stdout/stderr to the client via the existing
+                // tool_output SSE channel — it renders into a ```shell-output
+                // collapsible block inside the assistant message.
+                try { send({ type: 'tool_output', output: scrubSecrets(text).text, stream: kind }); } catch (_) {}
+              },
+              registerChild: shellProcs ? (child) => {
+                const id = 'tool_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+                shellProcs.set(id, child);
+                child.on('exit', () => shellProcs.delete(id));
+                try { registerDevServer(child, { command, cwd: effectiveCwd, killId: id }); } catch (_) {}
+              } : (child) => {
+                try { registerDevServer(child, { command, cwd: effectiveCwd }); } catch (_) {}
+              },
+            }),
             command,
-            cwd: effectiveCwd,
-            shellBin,
-            isWin,
-            augmentedPath,
-            timeoutMs: typeof timeoutMs === 'number' ? Math.min(timeoutMs, 600000) : undefined,
-            maxOutputChars: typeof maxOutputBytes === 'number' && maxOutputBytes > 0
-              ? Math.min(maxOutputBytes, 500_000)
-              : undefined,
-            signal: upstreamAbort.signal,
-            onChunk: (kind, text) => {
-              // Forward live stdout/stderr to the client via the existing
-              // tool_output SSE channel — it renders into a ```shell-output
-              // collapsible block inside the assistant message.
-              try { send({ type: 'tool_output', output: scrubSecrets(text).text, stream: kind }); } catch (_) {}
-            },
-            registerChild: shellProcs ? (child) => {
-              const id = 'tool_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
-              shellProcs.set(id, child);
-              child.on('exit', () => shellProcs.delete(id));
-              try { registerDevServer(child, { command, cwd: effectiveCwd, killId: id }); } catch (_) {}
-            } : (child) => {
-              try { registerDevServer(child, { command, cwd: effectiveCwd }); } catch (_) {}
-            },
-          });
+          );
           // Surface any presentable files this command created as entity cards.
           // Only on a clean exit so we don't card partial/failed output.
           if (result && result.exitCode === 0 && !result.killed && !result.timedOut) {
@@ -1811,7 +1816,7 @@ export function registerChatRoute(app, {
       // ── ChatTracer — structured trace event ledger (Gap 4) ─────────────
       // Writes typed events to autonomous-runs/<id>.jsonl so runs are
       // replayable and observable without reading raw console logs.
-      const _traceRunId = crypto.randomBytes(6).toString('hex');
+      const _traceRunId = Math.random().toString(36).slice(2, 8) + Math.random().toString(36).slice(2, 8);
       const _traceLedgerFile = projectId
         ? path.join(os.homedir(), '.config', 'fauna', 'autonomous-runs', `${projectId}-${_traceRunId}.jsonl`)
         : null;

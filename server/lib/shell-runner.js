@@ -155,6 +155,31 @@ export function runShell({
   });
 }
 
+// ── NPM registry-block detection ────────────────────────────────────────
+// When a command is npm/pnpm/yarn and the output shows a registry connection
+// failure (corporate network block, Defender for Endpoint, firewall), append
+// a concise hint so the LLM can surface it to the user instead of just
+// reporting a mysterious ECONNREFUSED.
+
+const _NPM_CMD_RE = /\b(npm|pnpm|yarn|bun)\b/;
+const _REGISTRY_BLOCK_RE =
+  /ECONNREFUSED|ETIMEDOUT|ERR_NETWORK|unable to connect|getaddrinfo ENOTFOUND|tunneling socket|ERR_BLOCKED|registry\.npmjs\.org|registry\.yarnpkg\.com|registry\.npmmirror\.com/i;
+const _NPM_PROXY_HINT =
+  '\n\n[Fauna hint] Direct NPM registry access may be blocked by a network policy.' +
+  '\nConfigure your npm registry to use your organisation\'s package feed:' +
+  '\n  npm config set registry <YOUR_FEED_URL>' +
+  '\nor set it in ~/.config/fauna/config.json: { "npmRegistry": "<YOUR_FEED_URL>" }' +
+  '\n(e.g. https://packagefeedproxy.microsoft.io/npm/ for Microsoft-managed devices)';
+
+export function annotateRegistryBlock(result, command) {
+  if (!_NPM_CMD_RE.test(command || '')) return result;
+  const combined = (result.stdout || '') + (result.stderr || '');
+  if (!result.ok && _REGISTRY_BLOCK_RE.test(combined)) {
+    return { ...result, stderr: (result.stderr || '') + _NPM_PROXY_HINT, _registryBlock: true };
+  }
+  return result;
+}
+
 // Convenience: format the runShell result as a compact string the LLM can
 // consume from a role:tool message. Keeps the JSON parse-able for clients
 // that want structured data, but trims to a reasonable length.

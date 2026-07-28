@@ -488,7 +488,7 @@ setTimeout(() => {
 // ── Figma plugin/status/rules routes moved → server/bridges/figma.js ──
 
 // ── Shell execution environment moved → server/lib/shell-env.js ──
-const { augmentedPath: AUGMENTED_PATH, shellBin: SHELL_BIN } = buildShellEnv(IS_WIN);
+const { augmentedPath: AUGMENTED_PATH, shellBin: SHELL_BIN, npmEnv: NPM_ENV } = buildShellEnv(IS_WIN);
 
 // ── Workspace discovery routes moved → server/routes/workspace.js ──
 registerWorkspaceRoutes(app, {
@@ -605,6 +605,7 @@ registerChatRoute(app, {
   shellBin: SHELL_BIN,
   isWin: IS_WIN,
   augmentedPath: AUGMENTED_PATH,
+  npmEnv: NPM_ENV,
   shellProcs: _shellProcs,
 });
 // Legacy agents dir: ~/.config/copilot-chat/agents (kept for backward compatibility)
