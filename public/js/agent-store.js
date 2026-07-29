@@ -1697,18 +1697,21 @@ function renderStoreMySkills() {
     var scopeColor = s.scope === 'user' ? 'rgba(139,92,246,0.15)' : 'rgba(59,130,246,0.12)';
     var scopeText  = s.scope === 'user' ? '#a78bfa' : '#60a5fa';
     var badge = '<span class="myagent-badge" style="background:' + scopeColor + ';color:' + scopeText + '">' + escHtml(s.scope) + '</span>';
-    return '<div class="myagent-row">' +
+    var editBtn = canDelete
+      ? '<button class="ma-btn" onclick="editSkill(\'' + escHtml(s.name) + '\')" title="Edit SKILL.md"><i class="ti ti-pencil"></i></button>'
+      : '';
+    var deleteBtn = canDelete
+      ? '<button class="ma-btn" style="color:#ef4444" onclick="deleteSkill(\'' + escHtml(s.name) + '\')" title="Delete skill"><i class="ti ti-trash"></i></button>'
+      : '';
+    return '<div class="myagent-row" id="skill-row-' + escHtml(s.name) + '">' +
       '<div class="myagent-icon"><i class="ti ti-puzzle"></i></div>' +
       '<div class="myagent-info">' +
         '<div class="myagent-name">' + escHtml(s.name) + badge + '</div>' +
         (desc ? '<div class="myagent-desc">' + desc + '</div>' : '') +
       '</div>' +
-      '<div class="myagent-actions">' +
-        (canDelete
-          ? '<button class="ma-btn" style="color:#ef4444" onclick="deleteSkill(\'' + escHtml(s.name) + '\')" title="Delete skill"><i class="ti ti-trash"></i></button>'
-          : '') +
-      '</div>' +
-    '</div>';
+      '<div class="myagent-actions">' + editBtn + deleteBtn + '</div>' +
+    '</div>' +
+    '<div id="skill-editor-' + escHtml(s.name) + '" style="display:none"></div>';
   }
 
   var html = '<div class="store-myagents">';
@@ -1772,6 +1775,55 @@ async function deleteSkill(name) {
     loadMySkills();
   } catch (e) {
     alert('Error: ' + e.message);
+  }
+}
+
+async function editSkill(name) {
+  var editorEl = document.getElementById('skill-editor-' + name);
+  if (!editorEl) return;
+  // Toggle off if already open
+  if (editorEl.style.display !== 'none') { editorEl.style.display = 'none'; return; }
+  editorEl.style.display = 'block';
+  editorEl.innerHTML = '<div style="padding:8px 0;color:var(--fau-text-muted);font-size:12px"><i class="ti ti-loader"></i> Loading\u2026</div>';
+  try {
+    var r = await fetch('/api/skills/' + encodeURIComponent(name) + '/content');
+    var data = await r.json();
+    if (!r.ok) { editorEl.innerHTML = '<div style="color:#ef4444;padding:8px 0;font-size:12px">' + escHtml((data && data.error) || 'Load failed') + '</div>'; return; }
+    editorEl.innerHTML =
+      '<div style="margin:8px 0 4px;font-size:12px;color:var(--fau-text-muted)">Editing SKILL.md — <code style="background:var(--fau-surface2);padding:1px 5px;border-radius:3px">' + escHtml(name) + '</code></div>' +
+      '<textarea id="skill-editor-ta-' + escHtml(name) + '" spellcheck="false" style="width:100%;height:320px;font-family:monospace;font-size:12px;padding:8px;border:1px solid var(--fau-border);border-radius:6px;background:var(--fau-surface2);color:var(--fau-text);resize:vertical;box-sizing:border-box">' + escHtml(data.content) + '</textarea>' +
+      '<div style="display:flex;gap:8px;margin-top:8px;align-items:center">' +
+        '<button class="ma-btn primary" onclick="saveSkill(\'' + escHtml(name) + '\')"><i class="ti ti-device-floppy"></i> Save</button>' +
+        '<button class="ma-btn" onclick="document.getElementById(\'skill-editor-' + escHtml(name) + '\').style.display=\'none\'"><i class="ti ti-x"></i> Cancel</button>' +
+        '<span id="skill-save-status-' + escHtml(name) + '" style="font-size:12px;color:var(--fau-text-muted)"></span>' +
+      '</div>';
+  } catch (e) {
+    editorEl.innerHTML = '<div style="color:#ef4444;padding:8px 0;font-size:12px">' + escHtml(e.message) + '</div>';
+  }
+}
+
+async function saveSkill(name) {
+  var ta = document.getElementById('skill-editor-ta-' + name);
+  var statusEl = document.getElementById('skill-save-status-' + name);
+  if (!ta) return;
+  var content = ta.value;
+  if (statusEl) statusEl.innerHTML = '<i class="ti ti-loader"></i> Saving\u2026';
+  try {
+    var r = await fetch('/api/skills/' + encodeURIComponent(name), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: content }),
+    });
+    var data = await r.json();
+    if (!r.ok) {
+      if (statusEl) statusEl.innerHTML = '<span style="color:#ef4444">' + escHtml((data && data.error) || 'Save failed') + '</span>';
+      return;
+    }
+    if (statusEl) statusEl.innerHTML = '<span style="color:#22c55e"><i class="ti ti-check"></i> Saved</span>';
+    // Invalidate skills cache so next chat turn picks up the new content
+    storeState.skillsLoaded = false;
+  } catch (e) {
+    if (statusEl) statusEl.innerHTML = '<span style="color:#ef4444">' + escHtml(e.message) + '</span>';
   }
 }
 

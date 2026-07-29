@@ -16,6 +16,27 @@ import { lintSkillsTree } from '../../lib/skill-anatomy.js';
 
 const USER_SKILLS_DIR = path.join(os.homedir(), '.config', 'fauna', 'skills');
 
+// Parse a GitHub tree URL into { cloneUrl, subpath }.
+// https://github.com/owner/repo/tree/branch/some/path  → clone the repo, use some/path as root
+// https://github.com/owner/repo (no /tree/)            → clone whole repo, subpath = ''
+// Returns null for non-GitHub URLs (handled by the generic git-clone path).
+function _parseGithubUrl(url) {
+  // Strip trailing slashes / .git suffix for matching
+  const clean = url.replace(/\.git$/, '').replace(/\/+$/, '');
+  const treeMatch = clean.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/tree\/[^/]+(?:\/(.+))?$/);
+  if (treeMatch) {
+    return {
+      cloneUrl: `https://github.com/${treeMatch[1]}.git`,
+      subpath:  treeMatch[2] ? treeMatch[2].replace(/\/+$/, '') : '',
+    };
+  }
+  const baseMatch = clean.match(/^https:\/\/github\.com\/[^/]+\/[^/]+$/);
+  if (baseMatch) {
+    return { cloneUrl: clean + '.git', subpath: '' };
+  }
+  return null;
+}
+
 function _safeSlug(name) {
   return String(name || '')
     .toLowerCase()
@@ -78,9 +99,15 @@ export function registerSkillRoutes(app, { express } = {}) {
     }
   });
 
-  // Import a skill pack from a git URL or a tarball URL. Lands under
+  // Import a skill pack from a git URL or a GitHub tree URL. Lands under
   // ~/.config/fauna/skills/<slug>/. Refuses to overwrite an existing pack
   // unless { force: true } is passed.
+  //
+  // Accepted URL forms:
+  //   https://github.com/owner/repo              → clone whole repo
+  //   https://github.com/owner/repo.git          → clone whole repo
+  //   https://github.com/owner/repo/tree/main/skills → sparse-checkout skills/
+  //   git@github.com:owner/repo.git              → clone whole repo (SSH)
   app.post('/api/skills/import', express ? express.json({ limit: '1mb' }) : (_q, _r, n) => n(), async (req, res) => {
     const body = req.body || {};
     const url = String(body.url || '').trim();
@@ -93,7 +120,7 @@ export function registerSkillRoutes(app, { express } = {}) {
       return res.status(400).json({ ok: false, error: 'url must use https://, git@, or ssh:// transport' });
     }
 
-    const slugBase = _safeSlug(body.name || url.replace(/.*\//, '').replace(/\.git$/, '')) || 'imported-skill-pack';
+    const slugBase = _safeSlug(body.name || url.replace(/.*\//, '').replace(/\.git$/, '').replace(/\?.*$/, '')) || 'imported-skill-pack';
     const target = path.join(USER_SKILLS_DIR, slugBase);
     if (fs.existsSync(target) && !force) {
       return res.status(409).json({ ok: false, error: `${slugBase} already installed. Pass force:true to overwrite.` });
@@ -102,16 +129,43 @@ export function registerSkillRoutes(app, { express } = {}) {
     try {
       fs.mkdirSync(USER_SKILLS_DIR, { recursive: true });
       if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
-      // git clone — let git handle ssh/https. Shallow clone keeps it cheap.
-      execSync(`git clone --depth=1 ${JSON.stringify(url)} ${JSON.stringify(target)}`, {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: 60_000,
-      });
-      // Strip the .git directory so the pack is just plain markdown.
-      try { fs.rmSync(path.join(target, '.git'), { recursive: true, force: true }); } catch (_) {}
+
+      const ghParsed = _parseGithubUrl(url);
+      if (ghParsed && ghParsed.subpath) {
+        // GitHub tree URL with a subfolder — use sparse checkout to avoid
+        // cloning the entire repo when only one directory is needed.
+        const tmpClone = target + '-sparse-' + Date.now();
+        try {
+          execSync(
+            `git clone --depth=1 --filter=blob:none --sparse ${JSON.stringify(ghParsed.cloneUrl)} ${JSON.stringify(tmpClone)}`,
+            { stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 },
+          );
+          execSync(
+            `git -C ${JSON.stringify(tmpClone)} sparse-checkout set ${JSON.stringify(ghParsed.subpath)}`,
+            { stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000 },
+          );
+          const srcDir = path.join(tmpClone, ghParsed.subpath);
+          if (!fs.existsSync(srcDir)) throw new Error(`Subfolder "${ghParsed.subpath}" not found in repo`);
+          // Move the subdirectory to target; strip .git if somehow present.
+          fs.cpSync(srcDir, target, { recursive: true });
+        } finally {
+          try { fs.rmSync(target + '-sparse-' + Date.now().toString().slice(0, -3) + '*', { recursive: true, force: true }); } catch (_) {}
+          // Best-effort cleanup of the temp clone dir
+          try { fs.rmSync(tmpClone, { recursive: true, force: true }); } catch (_) {}
+        }
+      } else {
+        // Plain git URL or whole-repo GitHub URL — shallow clone directly.
+        const cloneUrl = ghParsed ? ghParsed.cloneUrl : url;
+        execSync(`git clone --depth=1 ${JSON.stringify(cloneUrl)} ${JSON.stringify(target)}`, {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: 60_000,
+        });
+        // Strip the .git directory so the pack is just plain markdown.
+        try { fs.rmSync(path.join(target, '.git'), { recursive: true, force: true }); } catch (_) {}
+      }
     } catch (e) {
       try { if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true }); } catch (_) {}
-      return res.status(502).json({ ok: false, error: 'git clone failed: ' + e.message });
+      return res.status(502).json({ ok: false, error: 'import failed: ' + e.message });
     }
 
     // Lint after install — if no valid SKILL.md, roll back.
@@ -133,6 +187,40 @@ export function registerSkillRoutes(app, { express } = {}) {
         ? 'Pack installed but some skills failed lint — fix them or remove the offending files.'
         : 'Pack installed and all skills passed lint.',
     });
+  });
+
+  // Get the raw content of a user skill's SKILL.md for editing.
+  app.get('/api/skills/:name/content', (req, res) => {
+    const name = String(req.params.name || '').trim();
+    if (!name || /[/\\]/.test(name)) return res.status(400).json({ ok: false, error: 'Invalid name' });
+    const skillFile = path.join(USER_SKILLS_DIR, name, 'SKILL.md');
+    if (!fs.existsSync(skillFile)) return res.status(404).json({ ok: false, error: 'Skill not found or not user-scoped' });
+    try {
+      const content = fs.readFileSync(skillFile, 'utf8');
+      res.json({ ok: true, name, content });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // Update the raw content of a user skill's SKILL.md.
+  app.put('/api/skills/:name', express ? express.json({ limit: '2mb' }) : (_q, _r, n) => n(), (req, res) => {
+    const name = String(req.params.name || '').trim();
+    if (!name || /[/\\]/.test(name)) return res.status(400).json({ ok: false, error: 'Invalid name' });
+    const skillFile = path.join(USER_SKILLS_DIR, name, 'SKILL.md');
+    // Safety: only edit files inside USER_SKILLS_DIR
+    if (!path.resolve(skillFile).startsWith(path.resolve(USER_SKILLS_DIR) + path.sep)) {
+      return res.status(403).json({ ok: false, error: 'Cannot edit bundled or repo skills' });
+    }
+    if (!fs.existsSync(skillFile)) return res.status(404).json({ ok: false, error: 'Skill not found or not user-scoped' });
+    const content = String((req.body && req.body.content) || '');
+    if (!content.trim()) return res.status(400).json({ ok: false, error: 'content required' });
+    try {
+      fs.writeFileSync(skillFile, content, 'utf8');
+      res.json({ ok: true, name });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
   });
 
   // Delete a user-scoped skill pack. Refuses to delete repo/bundled skills.
