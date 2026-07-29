@@ -24,6 +24,14 @@ function _safeSlug(name) {
     .slice(0, 64);
 }
 
+function _readDesc(skillFile) {
+  try {
+    const src = fs.readFileSync(skillFile, 'utf8').slice(0, 1024);
+    const m = src.match(/^description:\s*(.+)/m);
+    return m ? m[1].trim().replace(/^['"]|['"]$/g, '').slice(0, 200) : '';
+  } catch (_) { return ''; }
+}
+
 function _listInstalled() {
   const out = [];
   // Repo-level pack
@@ -34,7 +42,7 @@ function _listInstalled() {
       for (const ent of fs.readdirSync(repoRoot, { withFileTypes: true })) {
         if (!ent.isDirectory()) continue;
         const skillFile = path.join(repoRoot, ent.name, 'SKILL.md');
-        if (fs.existsSync(skillFile)) out.push({ name: ent.name, scope: 'repo', path: skillFile });
+        if (fs.existsSync(skillFile)) out.push({ name: ent.name, scope: 'repo', path: skillFile, description: _readDesc(skillFile) });
       }
     }
   } catch (_) {}
@@ -44,7 +52,7 @@ function _listInstalled() {
       for (const ent of fs.readdirSync(USER_SKILLS_DIR, { withFileTypes: true })) {
         if (!ent.isDirectory()) continue;
         const skillFile = path.join(USER_SKILLS_DIR, ent.name, 'SKILL.md');
-        if (fs.existsSync(skillFile)) out.push({ name: ent.name, scope: 'user', path: skillFile });
+        if (fs.existsSync(skillFile)) out.push({ name: ent.name, scope: 'user', path: skillFile, description: _readDesc(skillFile) });
       }
     }
   } catch (_) {}
@@ -125,5 +133,24 @@ export function registerSkillRoutes(app, { express } = {}) {
         ? 'Pack installed but some skills failed lint — fix them or remove the offending files.'
         : 'Pack installed and all skills passed lint.',
     });
+  });
+
+  // Delete a user-scoped skill pack. Refuses to delete repo/bundled skills.
+  app.delete('/api/skills/:name', (req, res) => {
+    const name = String(req.params.name || '').trim();
+    if (!name || /[/\\]/.test(name)) return res.status(400).json({ ok: false, error: 'Invalid name' });
+    const target = path.join(USER_SKILLS_DIR, name);
+    // Safety: only delete if it is actually inside USER_SKILLS_DIR
+    const resolved = path.resolve(target);
+    if (!resolved.startsWith(path.resolve(USER_SKILLS_DIR) + path.sep)) {
+      return res.status(403).json({ ok: false, error: 'Cannot delete bundled or repo skills' });
+    }
+    if (!fs.existsSync(resolved)) return res.status(404).json({ ok: false, error: 'Skill not found' });
+    try {
+      fs.rmSync(resolved, { recursive: true, force: true });
+      res.json({ ok: true, deleted: name });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
   });
 }

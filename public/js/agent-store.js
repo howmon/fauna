@@ -15,7 +15,9 @@ var storeState = {
   loading: false,
   publishStatus: null,   // null | 'uploading' | 'submitted' | 'error'
   account: null,          // { email, name, verified, role } or null
-  browseTab: 'store',     // 'store' | 'myagents'
+  browseTab: 'store',     // 'store' | 'myagents' | 'myskills'
+  skills: [],
+  skillsLoaded: false,
   unreadCount: 0,         // notification badge count
   notifications: [],      // notification list
   notifOpen: false,        // notification panel open
@@ -172,10 +174,15 @@ function renderStoreBrowse() {
         '<i class="ti ti-grid-dots"></i> Agent Store</button>' +
       '<button class="browse-tab' + (storeState.browseTab === 'myagents' ? ' active' : '') + '" onclick="switchBrowseTab(\'myagents\')">' +
         '<i class="ti ti-apps"></i> My Agents</button>' +
+      '<button class="browse-tab' + (storeState.browseTab === 'myskills' ? ' active' : '') + '" onclick="switchBrowseTab(\'myskills\')">' +
+        '<i class="ti ti-puzzle"></i> My Skills</button>' +
     '</div>';
 
   if (storeState.browseTab === 'myagents') {
     return tabBar + renderStoreMyAgents();
+  }
+  if (storeState.browseTab === 'myskills') {
+    return tabBar + renderStoreMySkills();
   }
 
   var catOptions = '<option value="">All Categories</option>' +
@@ -1672,4 +1679,139 @@ function initAgentStore() {
   // Update topbar account label
   updateTopbarAccount();
   syncTopbarNotificationButton();
+}
+
+// ── My Skills tab ────────────────────────────────────────────────────────
+
+function renderStoreMySkills() {
+  if (!storeState.skillsLoaded) {
+    loadMySkills();
+    return '<div class="store-loading"><div class="builder-loading"><i class="ti ti-loader"></i> Loading skills\u2026</div></div>';
+  }
+  var skills = storeState.skills || [];
+  var repoSkills  = skills.filter(function(s) { return s.scope === 'repo'; });
+  var userSkills  = skills.filter(function(s) { return s.scope === 'user'; });
+
+  function skillRow(s, canDelete) {
+    var desc = escHtml((s.description || '').substring(0, 90));
+    var scopeColor = s.scope === 'user' ? 'rgba(139,92,246,0.15)' : 'rgba(59,130,246,0.12)';
+    var scopeText  = s.scope === 'user' ? '#a78bfa' : '#60a5fa';
+    var badge = '<span class="myagent-badge" style="background:' + scopeColor + ';color:' + scopeText + '">' + escHtml(s.scope) + '</span>';
+    return '<div class="myagent-row">' +
+      '<div class="myagent-icon"><i class="ti ti-puzzle"></i></div>' +
+      '<div class="myagent-info">' +
+        '<div class="myagent-name">' + escHtml(s.name) + badge + '</div>' +
+        (desc ? '<div class="myagent-desc">' + desc + '</div>' : '') +
+      '</div>' +
+      '<div class="myagent-actions">' +
+        (canDelete
+          ? '<button class="ma-btn" style="color:#ef4444" onclick="deleteSkill(\'' + escHtml(s.name) + '\')" title="Delete skill"><i class="ti ti-trash"></i></button>'
+          : '') +
+      '</div>' +
+    '</div>';
+  }
+
+  var html = '<div class="store-myagents">';
+
+  // Header
+  html += '<div class="myagents-header-row">' +
+    '<span class="myagents-total">' + skills.length + ' skill' + (skills.length !== 1 ? 's' : '') + '</span>' +
+    '<div class="myagents-header-actions">' +
+      '<button class="ma-btn" onclick="storeState.skillsLoaded=false;renderStorePanel()" title="Refresh list"><i class="ti ti-refresh"></i></button>' +
+      '<button class="ma-btn primary" onclick="showSkillImportForm()" title="Import skill pack from a git URL"><i class="ti ti-plus"></i> Import</button>' +
+    '</div>' +
+  '</div>';
+
+  // Bundled / repo skills
+  if (repoSkills.length) {
+    html += '<div class="myagents-group-label">Bundled <span style="font-weight:400;opacity:.6">(' + repoSkills.length + ')</span></div>';
+    html += '<div class="myagents-list">';
+    for (var i = 0; i < repoSkills.length; i++) html += skillRow(repoSkills[i], false);
+    html += '</div>';
+  }
+
+  // User-installed skills
+  if (userSkills.length) {
+    html += '<div class="myagents-group-label">Installed <span style="font-weight:400;opacity:.6">(' + userSkills.length + ')</span></div>';
+    html += '<div class="myagents-list">';
+    for (var j = 0; j < userSkills.length; j++) html += skillRow(userSkills[j], true);
+    html += '</div>';
+  }
+
+  if (!skills.length) {
+    html += '<div class="store-empty"><i class="ti ti-puzzle-off"></i>' +
+      '<p>No skills installed yet.</p>' +
+      '<p style="font-size:12px;margin-top:6px">Run <code style="background:var(--fau-surface2);padding:2px 6px;border-radius:4px">npm run skills:import</code> to install the ECC library, or use Import to add a pack from a URL.</p>' +
+    '</div>';
+  }
+
+  html += '<div id="skill-import-form" style="display:none;margin-top:12px"></div>';
+  html += '</div>';
+  return html;
+}
+
+async function loadMySkills() {
+  try {
+    var r = await fetch('/api/skills');
+    var data = await r.json();
+    storeState.skills = (data && data.skills) || [];
+  } catch (_) {
+    storeState.skills = [];
+  }
+  storeState.skillsLoaded = true;
+  if (storeState.browseTab === 'myskills') renderStorePanel();
+}
+
+async function deleteSkill(name) {
+  if (!confirm('Delete skill \u201c' + name + '\u201d? This removes it from your local config (~/.config/fauna/skills).')) return;
+  try {
+    var r = await fetch('/api/skills/' + encodeURIComponent(name), { method: 'DELETE' });
+    var data = await r.json();
+    if (!r.ok) { alert('Error: ' + ((data && data.error) || 'Delete failed')); return; }
+    storeState.skillsLoaded = false;
+    loadMySkills();
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+function showSkillImportForm() {
+  var el = document.getElementById('skill-import-form');
+  if (!el) return;
+  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.innerHTML =
+    '<div class="myagents-group-label" style="margin-top:4px">Import skill pack from URL</div>' +
+    '<div style="display:flex;gap:8px;margin-top:8px;align-items:center">' +
+      '<input id="skill-import-url" class="store-search-input" style="flex:1" placeholder="https://github.com/org/skill-pack.git" />' +
+      '<button class="ma-btn primary" onclick="importSkillFromUrl()"><i class="ti ti-download"></i> Install</button>' +
+      '<button class="ma-btn" onclick="document.getElementById(\'skill-import-form\').style.display=\'none\'"><i class="ti ti-x"></i></button>' +
+    '</div>' +
+    '<div id="skill-import-status" style="margin-top:8px;font-size:12px;color:var(--fau-text-muted)"></div>';
+  setTimeout(function() { var el2 = document.getElementById('skill-import-url'); if (el2) el2.focus(); }, 50);
+}
+
+async function importSkillFromUrl() {
+  var urlEl = document.getElementById('skill-import-url');
+  var statusEl = document.getElementById('skill-import-status');
+  var url = urlEl ? urlEl.value.trim() : '';
+  if (!url) { if (statusEl) statusEl.textContent = 'Enter a URL first.'; return; }
+  if (statusEl) statusEl.innerHTML = '<i class="ti ti-loader"></i> Installing\u2026';
+  try {
+    var r = await fetch('/api/skills/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url }),
+    });
+    var data = await r.json();
+    if (!r.ok) {
+      if (statusEl) statusEl.innerHTML = '<span style="color:#ef4444"><i class="ti ti-circle-x"></i> ' + escHtml((data && data.error) || 'Import failed') + '</span>';
+      return;
+    }
+    if (statusEl) statusEl.innerHTML = '<span style="color:#22c55e"><i class="ti ti-circle-check"></i> Installed <strong>' + escHtml(data.installed) + '</strong> &mdash; ' + (data.count || 0) + ' skill' + (data.count !== 1 ? 's' : '') + '</span>';
+    storeState.skillsLoaded = false;
+    loadMySkills();
+  } catch (e) {
+    if (statusEl) statusEl.innerHTML = '<span style="color:#ef4444"><i class="ti ti-circle-x"></i> ' + escHtml(e.message) + '</span>';
+  }
 }
