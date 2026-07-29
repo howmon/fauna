@@ -286,9 +286,13 @@ function createSplitBackend({ configDir, legacyDualWrite = null }) {
 // mode falls through this precedence:
 //   1. explicit `mode` argument
 //   2. process.env.FAUNA_CONV_STORAGE
-//   3. 'single' (no behavior change for existing installs)
+//   3. 'split-only' — default since v2.2.  Reads/writes one file per
+//      conversation so saves are constant-time regardless of history size.
+//      The 28 MB conversations.json monolith caused 400–800 ms event-loop
+//      stalls on every message save once history grew large.
+//      Set FAUNA_CONV_STORAGE=single to revert to the old behavior.
 export function createConversationStore({ configDir, mode } = {}) {
-  const resolved = (mode || process.env.FAUNA_CONV_STORAGE || 'single').toLowerCase();
+  const resolved = (mode || process.env.FAUNA_CONV_STORAGE || 'split-only').toLowerCase();
   if (resolved === 'split-only') {
     return createSplitBackend({ configDir, legacyDualWrite: null });
   }
@@ -296,7 +300,7 @@ export function createConversationStore({ configDir, mode } = {}) {
     const legacy = createLegacyBackend({ configDir });
     return createSplitBackend({ configDir, legacyDualWrite: legacy });
   }
-  // Default and 'single' → legacy single-file behavior.
+  // 'single' → legacy single-file behavior (compatibility/downgrade path).
   return createLegacyBackend({ configDir });
 }
 

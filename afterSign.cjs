@@ -48,10 +48,18 @@ module.exports = async function afterSign(context) {
       { stdio: 'inherit' },
     );
 
-    // Staple the notarization ticket so the app works offline
+    // Staple the notarization ticket so the app works offline.
+    // Guard the existence check: when building multiple architectures electron-builder
+    // may have cleaned/moved the arm64 output dir while we were waiting for the
+    // notarization response (1–3 min).  The ticket is already submitted and accepted;
+    // skipping the staple just means Gatekeeper does a live check on first launch.
     console.log('[afterSign] Stapling notarization ticket…');
-    execFileSync('xcrun', ['stapler', 'staple', appPath], { stdio: 'inherit' });
-    console.log('[afterSign] ✓ Notarization and stapling complete');
+    if (!fs.existsSync(appPath)) {
+      console.warn(`[afterSign] ⚠ ${appPath} was moved/cleaned during notarization wait — staple skipped (notarization still accepted).`);
+    } else {
+      execFileSync('xcrun', ['stapler', 'staple', appPath], { stdio: 'inherit' });
+      console.log('[afterSign] ✓ Notarization and stapling complete');
+    }
   } finally {
     try { fs.unlinkSync(tmpZip); } catch (_) {}
   }
