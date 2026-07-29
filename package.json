@@ -57,7 +57,9 @@
     "version:major": "node scripts/version.cjs major",
     "version:set": "node scripts/version.cjs set",
     "release:check": "node scripts/validate-release.cjs",
-    "gen:capabilities": "node scripts/gen-capabilities.cjs"
+    "gen:capabilities": "node scripts/gen-capabilities.cjs",
+    "skills:import": "node scripts/import-ecc.js",
+    "skills:update": "node scripts/import-ecc.js --force"
   },
   "dependencies": {
     "@azure/msal-node": "^5.1.5",

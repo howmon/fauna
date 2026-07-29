@@ -181,6 +181,15 @@ node scripts/quantize-embeddings.cjs # migrate existing vectors in place
 
 Drop a skill pack into [skills/](skills) or import from disk (Settings → Skills → Import) or a URL. Each skill follows the documented anatomy in [docs/skill-anatomy.md](docs/skill-anatomy.md): `SKILL.md`, optional `tools/`, `prompts/`, `tests/`. Lint with `POST /api/skills/lint` before shipping.
 
+To install the full ECC community skill library (~280 skills, ~60 agents) into your local config:
+
+```sh
+npm run skills:import        # first-time install (skips existing)
+npm run skills:update        # re-run to pick up upstream ECC changes
+```
+
+Skills land in `~/.config/fauna/skills/` and are auto-discovered on the next chat — no restart needed. Only the matching skill's body is loaded per turn; the rest cost zero context tokens.
+
 ### Mobile companion
 
 In the app: Settings → Mobile → Generate pairing code. In the Expo app ([mobile/](mobile)): scan or paste the code; pairing uses `/api/mobile/pair`. Same network or via `/api/tunnel/start` for remote.
