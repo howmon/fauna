@@ -84,6 +84,7 @@ import {
 import { scaffoldTemplate, listTemplates } from './server/app-templates.js';
 import { buildShellEnv } from './server/lib/shell-env.js';
 import fs from 'fs';
+import fsp from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
@@ -872,8 +873,10 @@ const _FAUNA_SEARCH_SKIP_DIRS = new Set([
   'Library', '.Trash', '.npm', '.yarn', '.bun',
 ]);
 
-// Convert a simple glob (*, **, ?) into a RegExp. Anchored on both ends so
-// "**/*.js" matches "src/foo/bar.js" but not "src/foo/bar.js.map".
+// Convert a simple glob (*, **, ?, {a,b}) into a RegExp. Anchored on both
+// ends so "**/*.js" matches "src/foo/bar.js" but not "src/foo/bar.js.map".
+// Supports brace expansion: {ts,tsx} → (ts|tsx). Without this, patterns like
+// "**/*.{ts,tsx}" match 0 files because { and } would be escaped as literals.
 function _faunaGlobToRegex(glob) {
   if (!glob) return null;
   let re = '';
@@ -889,6 +892,17 @@ function _faunaGlobToRegex(glob) {
       re += '[^/]*';
     } else if (c === '?') {
       re += '[^/]';
+    } else if (c === '{') {
+      // Brace expansion: {ts,tsx} → (ts|tsx). Find matching close brace.
+      const close = glob.indexOf('}', i + 1);
+      if (close === -1) {
+        re += '\\{'; // unmatched — treat as literal
+      } else {
+        const alts = glob.slice(i + 1, close).split(',')
+          .map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+        re += '(' + alts.join('|') + ')';
+        i = close; // skip past the closing brace
+      }
     } else if ('.+^$()|{}[]\\'.includes(c)) {
       re += '\\' + c;
     } else {
@@ -1084,12 +1098,109 @@ function _findSkill(agentsDir, agentName, skillName, context) {
 
 // Scan disk for available skills (returns name + 1-line description from
 // SKILL.md frontmatter or the first non-heading line).
-function _listSkillsOnDisk(agentsDir, agentName, context) {
+// ── Skills-on-disk TTL cache ──────────────────────────────────────────────
+// _listSkillsOnDisk is called on EVERY chat request (via buildSkillsManifest-
+// Context) to populate the system-prompt skills catalog. It uses readdirSync
+// which calls opendir() on the main V8 thread. When a DLP/AV EndpointSecurity
+// subscriber (e.g. dlpuser_helper / Microsoft Defender) deadlocks, EVERY open()
+// call blocks in mac_vnode_check_open forever — freezing the main thread for
+// hundreds of seconds (confirmed by crash log C7596185-69BE-4C89-8623-E26205DBD41E,
+// 584s hang, 2026-07-28). The fix: serve from an in-memory cache; refresh
+// asynchronously in the background so the main thread never holds a readdirSync
+// lock after the first warm scan.
+const _skillsDiskCache = new Map(); // cacheKey → { at:number, result:Array }
+const _skillsRefreshing = new Set(); // cacheKey → refresh in-flight
+const SKILLS_CACHE_TTL_MS = 30_000; // 30 s
+
+function _skillsCacheKey(agentsDir, agentName, context) {
+  return [agentsDir || '', agentName || '', (context && context.workspaceRoot) || ''].join('\0');
+}
+
+// Fire-and-forget async refresh — reads dirs with fs.promises so it goes
+// through libuv's thread pool and cannot block the main event-loop thread.
+function _refreshSkillsCache(key, agentsDir, agentName, context) {
+  if (_skillsRefreshing.has(key)) return; // already in flight
+  _skillsRefreshing.add(key);
+  setImmediate(async () => {
+    try {
+      const result = await _listSkillsOnDiskAsync(agentsDir, agentName, context);
+      _skillsDiskCache.set(key, { at: Date.now(), result });
+    } catch (_) {
+      // Keep serving stale cache on error — don't overwrite with nothing
+    } finally {
+      _skillsRefreshing.delete(key);
+    }
+  });
+}
+
+// Async variant of the inner scan — uses fs.promises.readdir so readdirSync
+// is never called on the main thread during a background refresh.
+async function _listSkillsOnDiskAsync(agentsDir, agentName, context) {
   const found = [];
   const seen = new Set();
-  // Names to skip at the top of any skills root — these are repo docs,
-  // not skills. Without this filter, a README.md sitting next to real
-  // skill directories gets registered as a skill named "README".
+  const SKIP_NAMES = new Set(['readme', 'contributing', 'license', 'changelog', 'notes', 'todo']);
+  const scan = async (dir, scope) => {
+    let entries;
+    try { entries = await fsp.readdir(dir, { withFileTypes: true }); }
+    catch (_) { return; }
+    for (const ent of entries) {
+      if (ent.name.startsWith('.') || ent.name.startsWith('_')) continue;
+      let skillFile = null;
+      let name = ent.name;
+      if (ent.isDirectory()) {
+        const candidate = path.join(dir, ent.name, 'SKILL.md');
+        try { await fsp.access(candidate); skillFile = candidate; } catch (_) {}
+      } else if (ent.isFile() && ent.name.toLowerCase().endsWith('.md')) {
+        const baseName = ent.name.replace(/\.md$/i, '');
+        if (SKIP_NAMES.has(baseName.toLowerCase())) continue;
+        skillFile = path.join(dir, ent.name);
+        name = baseName;
+      }
+      if (!skillFile || seen.has(name)) continue;
+      seen.add(name);
+      let desc = '';
+      try {
+        const body = await fsp.readFile(skillFile, 'utf8');
+        const fmMatch = body.match(/^---\s*\n([\s\S]*?)\n---/);
+        if (fmMatch) {
+          const dm = fmMatch[1].match(/^description:\s*(.+)$/m);
+          if (dm) desc = dm[1].trim().replace(/^["']|["']$/g, '');
+        }
+        if (!desc) {
+          const lines = body.replace(/^---\s*\n[\s\S]*?\n---\s*\n/, '').split('\n');
+          for (const ln of lines) {
+            const t = ln.trim();
+            if (!t || t.startsWith('#')) continue;
+            desc = t.slice(0, 200);
+            break;
+          }
+        }
+      } catch (_) {}
+      found.push({ name, scope, description: desc, path: skillFile });
+    }
+  };
+  if (agentsDir && agentName) {
+    const safeAgent = String(agentName).replace(/[^a-zA-Z0-9_-]/g, '');
+    await scan(path.join(agentsDir, safeAgent, 'skills'), 'agent');
+  }
+  if (agentsDir) await scan(path.join(agentsDir, '_skills'), 'global');
+  for (const r of _extraSkillRoots(context || {})) await scan(r.root, r.scope);
+  return found;
+}
+
+function _listSkillsOnDisk(agentsDir, agentName, context) {
+  const key = _skillsCacheKey(agentsDir, agentName, context);
+  const cached = _skillsDiskCache.get(key);
+  const now = Date.now();
+  if (cached) {
+    // Serve from cache immediately (never blocks main thread after first scan).
+    // Trigger a background refresh if the cache is getting stale.
+    if (now - cached.at >= SKILLS_CACHE_TTL_MS) _refreshSkillsCache(key, agentsDir, agentName, context);
+    return cached.result;
+  }
+  // Cold start: do the synchronous scan once, then keep it warm via async refreshes.
+  const found = [];
+  const seen = new Set();
   const SKIP_NAMES = new Set(['readme', 'contributing', 'license', 'changelog', 'notes', 'todo']);
   const scan = (dir, scope) => {
     if (!fs.existsSync(dir)) return;
@@ -1140,6 +1251,10 @@ function _listSkillsOnDisk(agentsDir, agentName, context) {
   }
   if (agentsDir) scan(path.join(agentsDir, '_skills'), 'global');
   for (const r of _extraSkillRoots(context || {})) scan(r.root, r.scope);
+  // Populate cache so all future calls within the TTL skip readdirSync entirely.
+  _skillsDiskCache.set(key, { at: now, result: found });
+  // Schedule next refresh asynchronously so the TTL expiry never hits cold.
+  setTimeout(() => _refreshSkillsCache(key, agentsDir, agentName, context), SKILLS_CACHE_TTL_MS - 1000);
   return found;
 }
 
