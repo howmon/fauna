@@ -620,8 +620,15 @@ export function registerChatRoute(app, {
 
   app.post('/api/chat', async (req, res) => {
     psAcquire();
-    res.on('finish', psRelease);
-    res.on('close',  psRelease);
+    // Guard against the common Node.js pattern where both 'finish' (write-side
+    // closed) and 'close' (socket closed) fire for every HTTP response.
+    // Without this, psRelease() is called twice per request, under-decrementing
+    // the shared refcount and stopping the power-save blocker while concurrent
+    // requests are still in flight.
+    let _psReleased = false;
+    const _psRelease = () => { if (_psReleased) return; _psReleased = true; psRelease(); };
+    res.on('finish', _psRelease);
+    res.on('close',  _psRelease);
 
     // Phase 7: cancel upstream model stream when the client disconnects (Stop button).
     // IMPORTANT: do NOT listen on `req.on('close')` — that event fires as soon as the

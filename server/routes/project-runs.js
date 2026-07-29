@@ -112,12 +112,16 @@ export function registerProjectRunRoutes(app, deps) {
       record.status = code === 0 ? 'stopped' : 'exited';
       record.child = null;
       emit('', record.status);
+      // Auto-evict after 30 min so logBuf (~500 KB) doesn't accumulate
+      // indefinitely when the UI never calls DELETE.
+      setTimeout(() => projectRuns.delete(id), 30 * 60 * 1000);
     });
 
     child.on('error', err => {
       record.status = 'error';
       record.child = null;
       emit('[Error: ' + err.message + ']', 'error');
+      setTimeout(() => projectRuns.delete(id), 30 * 60 * 1000);
     });
 
     res.json({ ok: true, runId: id });

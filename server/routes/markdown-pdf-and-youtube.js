@@ -99,6 +99,7 @@ const YOUTUBE_THUMB_FALLBACK_SVG = Buffer.from(`
 </svg>
 `.trim());
 const youtubeThumbnailCache = new Map();
+const YOUTUBE_CACHE_MAX = 500; // ~50–100 MB ceiling; evict oldest on overflow
 
 function _isPlaceholderYouTubeId(id) {
   const raw = String(id || '').trim().toLowerCase();
@@ -164,6 +165,9 @@ export function registerMarkdownPdfAndYoutubeRoutes(app, { express, getElectronB
       if (!upstream.ok || !/^image\//i.test(contentType)) return _sendYoutubeFallbackThumbnail(res);
       const body = Buffer.from(await upstream.arrayBuffer());
       if (body.length < 2048) return _sendYoutubeFallbackThumbnail(res);
+      if (youtubeThumbnailCache.size >= YOUTUBE_CACHE_MAX) {
+        youtubeThumbnailCache.delete(youtubeThumbnailCache.keys().next().value);
+      }
       youtubeThumbnailCache.set(id, { contentType, body });
       res.setHeader('Content-Type', contentType);
       res.setHeader('Cache-Control', 'public, max-age=86400');
