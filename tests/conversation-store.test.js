@@ -185,12 +185,12 @@ describe('conversation-store: split backend', () => {
 });
 
 describe('conversation-store: backend selection', () => {
-  it('defaults to legacy when no mode and no env', async () => {
+  it('defaults to split-only when no mode and no env', async () => {
     const prev = process.env.FAUNA_CONV_STORAGE;
     delete process.env.FAUNA_CONV_STORAGE;
     try {
       const store = createConversationStore({ configDir: tmpDir });
-      expect(store.name).toBe('legacy');
+      expect(store.name).toBe('split');
     } finally {
       if (prev) process.env.FAUNA_CONV_STORAGE = prev;
     }
