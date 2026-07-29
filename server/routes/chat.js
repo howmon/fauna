@@ -45,6 +45,7 @@ import {
   findRunningServerByPort,
   sameServerCwd,
   isTcpPortListening,
+  waitForStartup,
 } from '../lib/dev-server-registry.js';
 import { spawn as _spawnDetached } from 'child_process';
 import os from 'os';
@@ -1633,16 +1634,29 @@ export function registerChatRoute(app, {
             );
             let devServerId = null;
             try { devServerId = registerDevServer(child, { command, cwd: launchProjectDir }); } catch (_) {}
-            // Surface a tool_call note in the UI without waiting.
-            try { send({ type: 'tool_output', output: 'Dev server launch requested in background — verify its running status in Settings → Dev Servers.\n', stream: 'stdout' }); } catch (_) {}
+            // Wait up to 30 s for the server to report a port so the model
+            // gets a definitive running/failed result in THIS tool call and
+            // never needs to poll fauna_dev_servers in a loop.
+            const startup = devServerId
+              ? await waitForStartup(devServerId, { timeoutMs: 30000 })
+              : { status: 'starting', port: null, tail: [] };
+            const verified = startup.status === 'running';
+            const failed   = startup.status === 'exited' || startup.status === 'stopped';
+            const note = verified
+              ? `Dev server is running${startup.port ? ` on port ${startup.port}` : ''}. Manage it from Settings → Dev Servers.`
+              : failed
+                ? `Dev server failed to start${startup.tail?.length ? ': ' + startup.tail.at(-1) : '.'}`
+                : 'Dev server launched but readiness not confirmed within 30 s — check Settings → Dev Servers for live status.';
+            try { send({ type: 'tool_output', output: note + '\n', stream: 'stdout' }); } catch (_) {}
             return JSON.stringify({
-              ok: true,
+              ok: !failed,
               backgrounded: true,
-              status: 'starting',
+              status: startup.status,
+              port: startup.port || null,
               devServerId,
               command,
               cwd: launchProjectDir,
-              note: 'Dev server launch requested and registered with status "starting". Verify it reaches "running" before launching a desktop client or claiming success.',
+              note,
             });
           }
           // (No tool_call SSE emit here — the outer dispatcher in chat.js
@@ -2534,7 +2548,16 @@ export function registerChatRoute(app, {
         // /Applications/Visual Studio Code.app/Contents/Resources/app/extensions/copilot/dist/extension.js
         // — the reader loop there is a bare `for(;;){await reader.read()}`
         // with no timeout wrapper.
+        // Yield to the event loop every 50 chunks so the TCP buffer flush
+        // doesn't starve libuv I/O (new HTTP connections, doctor probes, etc).
+        // When a large response arrives in one TCP segment the async iterator
+        // resolves every promise immediately, turning the for-await into a
+        // microtask chain that monopolises the event loop until the buffer is
+        // drained.  A setImmediate break every 50 iterations re-enters the
+        // libuv poll phase and keeps the server responsive.
+        let _chunkCount = 0;
         for await (const chunk of stream) {
+          if (++_chunkCount % 50 === 0) await new Promise(r => setImmediate(r));
           if (res.writableEnded) { continueLoop = false; break; }
           if (chunk.usage) streamUsage = chunk.usage;
           const delta = chunk.choices?.[0]?.delta;
