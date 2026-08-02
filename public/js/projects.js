@@ -227,6 +227,19 @@ function toggleProjectFolder(id, e) {
   renderProjectSidebarList();
 }
 
+// Enter the project inner sidebar panel (click on project name/header)
+function enterProjectSidebar(id, e) {
+  if (e) e.stopPropagation();
+  // Expand the folder so it stays visible when returning from the panel
+  _expandedProjects[id] = true;
+  _saveExpandedProjects();
+  if (state.activeProjectId !== id) {
+    setActiveProject(id, { navigate: false });
+  }
+  openProjSidebarPanel();
+}
+window.enterProjectSidebar = enterProjectSidebar;
+
 // Open a new chat inside a project without leaving the current view chrome.
 function newConversationInProject(id, e) {
   if (e) e.stopPropagation();
@@ -345,8 +358,8 @@ function renderProjectSidebarList() {
     var projConvs = allConvs.filter(function(c) { return c.projectId === p.id; });
     var anyStreaming = projConvs.some(function(c) { return c._streaming; });
 
-    var header = '<div class="proj-folder-header' + (isActive ? ' active' : '') + '" onclick="toggleProjectFolder(\'' + pid + '\', event)">' +
-      '<i class="ti ti-chevron-right proj-folder-chevron"></i>' +
+    var header = '<div class="proj-folder-header' + (isActive ? ' active' : '') + '" onclick="enterProjectSidebar(\'' + pid + '\', event)">' +
+      '<i class="ti ti-chevron-right proj-folder-chevron" onclick="event.stopPropagation();toggleProjectFolder(\'' + pid + '\', event)" title="Expand/collapse"></i>' +
       '<span class="proj-dot proj-color-' + _projEsc(p.color) + '"></span>' +
       '<span class="proj-folder-name">' + _projEsc(p.name) + '</span>' +
       (anyStreaming ? '<i class="ti ti-loader-2 conv-streaming-icon proj-folder-streaming" title="A chat in this project is running"></i>' : '') +
@@ -638,6 +651,20 @@ async function setActiveProject(id, opts) {
       closeProjectHub();
     }
   }
+  // If the sidebar panel is open, sync it to the new project (or close if exited)
+  if (state.projSidebarPanelOpen) {
+    var _spProj = _activeProject();
+    if (_spProj) {
+      var _spNameEl = document.getElementById('proj-sp-name');
+      var _spDotEl = document.getElementById('proj-sp-dot');
+      if (_spNameEl) _spNameEl.textContent = _spProj.name;
+      if (_spDotEl) _spDotEl.className = 'proj-dot proj-color-' + (_spProj.color || 'teal');
+      _projSpRenderConvs(_spProj);
+      _projSpLoadTree(_spProj);
+    } else {
+      closeProjSidebarPanel();
+    }
+  }
   // Refresh the All Projects page so the Active badge / button states update
   var _allProjPage = document.getElementById('all-projects-page');
   if (_allProjPage && _allProjPage.style.display !== 'none') {
@@ -746,6 +773,126 @@ function closeProjectHub() {
   var hub = document.getElementById('project-hub');
   if (hub) hub.style.display = 'none';
 }
+
+// ── Project Sidebar Panel (second-level file-explorer sidebar) ────────────
+
+function openProjSidebarPanel() {
+  var proj = _activeProject();
+  if (!proj) return;
+  var panel = document.getElementById('proj-sidebar-panel');
+  var actions = document.getElementById('sidebar-actions');
+  var scroll = document.getElementById('sidebar-scroll');
+  if (!panel) return;
+  // Update project identity
+  var nameEl = document.getElementById('proj-sp-name');
+  var dotEl = document.getElementById('proj-sp-dot');
+  if (nameEl) nameEl.textContent = proj.name;
+  if (dotEl) dotEl.className = 'proj-dot proj-color-' + (proj.color || 'teal');
+  // Show panel, hide normal sidebar content
+  panel.style.display = 'flex';
+  if (actions) actions.style.display = 'none';
+  if (scroll) scroll.style.display = 'none';
+  state.projSidebarPanelOpen = true;
+  // Render compact conversation list
+  _projSpRenderConvs(proj);
+  // Load file tree
+  _projSpLoadTree(proj);
+  // Persist preference
+  try { localStorage.setItem('fauna-proj-sp-open', proj.id); } catch (_) {}
+}
+
+function closeProjSidebarPanel() {
+  var panel = document.getElementById('proj-sidebar-panel');
+  var actions = document.getElementById('sidebar-actions');
+  var scroll = document.getElementById('sidebar-scroll');
+  if (panel) panel.style.display = 'none';
+  if (actions) actions.style.display = '';
+  if (scroll) scroll.style.display = '';
+  state.projSidebarPanelOpen = false;
+  // Reset sidebar tree state
+  _projSidebarTreeState.srcId = null;
+  _projSidebarTreeState.dirCache = {};
+  _projSidebarTreeState.expanded = {};
+  _projSidebarTreeState.openedFiles = {};
+  _projSidebarTreeState.dirHasOpened = {};
+  try { localStorage.removeItem('fauna-proj-sp-open'); } catch (_) {}
+}
+
+function _projSpRenderConvs(proj) {
+  var el = document.getElementById('proj-sp-conv-list');
+  if (!el || !proj) return;
+  var convs = (state.conversations || [])
+    .filter(function(c) { return c.projectId === proj.id; })
+    .sort(function(a, b) { return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0); });
+  var MAX = 6;
+  var pid = _projEsc(proj.id);
+  el.innerHTML = convs.slice(0, MAX).map(function(c) {
+    var isActive = c.id === state.currentId;
+    return '<button class="proj-sp-conv-item' + (isActive ? ' active' : '') + '" onclick="loadConversation(\'' + escHtml(c.id) + '\')">' +
+      (c._streaming ? '<i class="ti ti-loader-2 conv-streaming-icon"></i>' : '<i class="ti ti-message"></i>') +
+      '<span class="proj-sp-conv-title">' + escHtml(c.title || 'Untitled') + '</span>' +
+    '</button>';
+  }).join('') +
+  (convs.length > MAX ? '<button class="proj-sp-conv-item" onclick="openAllConversations(\'' + pid + '\')">' +
+    '<i class="ti ti-list"></i><span class="proj-sp-conv-title">All chats (' + convs.length + ')</span>' +
+  '</button>' : '') +
+  '<button class="proj-sp-new-chat-btn" onclick="newConversationInProject(\'' + pid + '\')">' +
+    '<i class="ti ti-edit"></i> New chat' +
+  '</button>';
+}
+
+async function _projSpLoadTree(proj) {
+  var treeEl = document.getElementById('proj-sp-tree');
+  var srcRowEl = document.getElementById('proj-sp-src-row');
+  if (!proj) return;
+  var rootPath = proj.rootPath && proj.rootPath.trim();
+  var sources = (proj.sources || []).filter(function(s) { return s.type === 'local'; });
+  // Build source options: rootPath (if any) + explicit local sources
+  var opts = [];
+  if (rootPath) {
+    var alreadySrc = sources.some(function(s) { return s.path === rootPath; });
+    if (!alreadySrc) {
+      var basename = rootPath.split('/').filter(Boolean).pop() || rootPath;
+      opts.push({ id: '__rootpath__', label: basename + ' (working folder)' });
+    }
+  }
+  sources.forEach(function(s) { opts.push({ id: s.id, label: s.name || s.path || s.id }); });
+
+  if (!opts.length) {
+    if (treeEl) treeEl.innerHTML = '<div class="proj-hub-empty" style="padding:12px 8px;font-size:11px;opacity:.6">No folder configured.<br>Add a source in the project hub.</div>';
+    if (srcRowEl) srcRowEl.style.display = 'none';
+    return;
+  }
+  // Show source selector only when there are multiple options
+  if (srcRowEl) {
+    if (opts.length > 1) {
+      srcRowEl.style.display = '';
+      var sel = srcRowEl.querySelector('select');
+      if (sel) {
+        var curSrc = _projSidebarTreeState.srcId;
+        sel.innerHTML = opts.map(function(o) {
+          return '<option value="' + _projEsc(o.id) + '"' + (curSrc === o.id ? ' selected' : '') + '>' + _projEsc(o.label) + '</option>';
+        }).join('');
+      }
+    } else {
+      srcRowEl.style.display = 'none';
+    }
+  }
+  var srcId = (_projSidebarTreeState.srcId && opts.find(function(o) { return o.id === _projSidebarTreeState.srcId; }))
+    ? _projSidebarTreeState.srcId
+    : opts[0].id;
+  _projSidebarTreeState.srcId = null; // force reset
+  await _treeInit(_projSidebarTreeState, srcId);
+}
+
+// Called by the source <select> in the sidebar panel
+async function projSpLoadSrc(srcId) {
+  _projSidebarTreeState.srcId = null;
+  await _treeInit(_projSidebarTreeState, srcId);
+}
+window.projSpLoadSrc = projSpLoadSrc;
+window.openProjSidebarPanel = openProjSidebarPanel;
+window.closeProjSidebarPanel = closeProjSidebarPanel;
 
 function _renderProjectHub(proj) {
   var nameEl = document.getElementById('project-hub-name');
@@ -1409,6 +1556,18 @@ if (typeof document !== 'undefined') {
 // ── Unified expand-in-place tree ─────────────────────────────────────────
 var _hubTreeState = { _id:'hub', srcId:null, dirCache:{}, expanded:{}, openedFiles:{}, dirHasOpened:{} };
 var _explorerTreeState = { _id:'explorer', srcId:null, dirCache:{}, expanded:{}, openedFiles:{}, dirHasOpened:{} };
+var _projSidebarTreeState = { _id:'sidebar', srcId:null, dirCache:{}, expanded:{}, openedFiles:{}, dirHasOpened:{} };
+
+function _treeGetEl(st) {
+  if (st._id === 'hub') return document.getElementById('proj-file-tree-root');
+  if (st._id === 'sidebar') return document.getElementById('proj-sp-tree');
+  return document.getElementById('proj-exp-tree');
+}
+function _treeGetStById(stId) {
+  if (stId === 'hub') return _hubTreeState;
+  if (stId === 'sidebar') return _projSidebarTreeState;
+  return _explorerTreeState;
+}
 
 function _treeMarkOpened(st, filePath) {
   st.openedFiles[filePath] = true;
@@ -1419,8 +1578,7 @@ function _treeMarkOpened(st, filePath) {
 }
 
 function _treeRender(st) {
-  var elId = st._id === 'hub' ? 'proj-file-tree-root' : 'proj-exp-tree';
-  var el = document.getElementById(elId);
+  var el = _treeGetEl(st);
   if (!el) return;
   var html = _treeRenderLevel(st, '', 0);
   el.innerHTML = html || '<div class="proj-hub-empty">Empty directory</div>';
@@ -1464,7 +1622,7 @@ function _treeRenderLevel(st, path, depth) {
 }
 
 async function _treeToggleDir(stId, path) {
-  var st = stId === 'hub' ? _hubTreeState : _explorerTreeState;
+  var st = _treeGetStById(stId);
   if (st.expanded[path]) {
     delete st.expanded[path];
     _treeRender(st);
@@ -1482,10 +1640,11 @@ async function _treeToggleDir(stId, path) {
 }
 
 function _treeOpenFile(stId, filePath) {
-  var st = stId === 'hub' ? _hubTreeState : _explorerTreeState;
+  var st = _treeGetStById(stId);
   _treeMarkOpened(st, filePath);
   _treeRender(st);
   if (stId === 'hub') openProjectFile(st.srcId, filePath);
+  else if (stId === 'sidebar') { openProjectHub('files'); setTimeout(function() { openProjectFile(st.srcId, filePath); }, 120); }
   else explorerOpenFile(st.srcId, filePath);
 }
 
@@ -1499,8 +1658,7 @@ function _treeOpenFile(stId, filePath) {
 // surface as "skipped". `webkitGetAsEntry` is preferred so dropped folders
 // recurse; we fall back to `event.dataTransfer.files` (flat) otherwise.
 function _treeBindDnd(st) {
-  var rootId = st._id === 'hub' ? 'proj-file-tree-root' : 'proj-exp-tree';
-  var el = document.getElementById(rootId);
+  var el = _treeGetEl(st);
   if (!el) return;
   if (el.dataset.dndBound === '1') return;
   el.dataset.dndBound = '1';
@@ -1572,13 +1730,13 @@ function _treeBindDnd(st) {
 // used for both DnD and manual uploads. `_pendingUploadDir` lets a folder
 // row's context-menu "Upload Files Here…" target a sub-directory.
 
-var _pendingUploadDir = { hub: '', explorer: '' };
+var _pendingUploadDir = { hub: '', explorer: '', sidebar: '' };
 
 function _triggerProjectUpload(stId, dirPath) {
-  var st = stId === 'hub' ? _hubTreeState : _explorerTreeState;
+  var st = _treeGetStById(stId);
   if (!st.srcId) { _showToast('Open a source first', true); return; }
   _pendingUploadDir[stId] = dirPath || '';
-  var inputId = stId === 'hub' ? 'proj-hub-upload-input' : 'proj-explorer-upload-input';
+  var inputId = stId === 'hub' ? 'proj-hub-upload-input' : stId === 'sidebar' ? 'proj-sp-upload-input' : 'proj-explorer-upload-input';
   var input = document.getElementById(inputId);
   if (!input) { _showToast('Upload control missing', true); return; }
   // Reset value so picking the same file twice still fires `change`.
@@ -1587,7 +1745,7 @@ function _triggerProjectUpload(stId, dirPath) {
 }
 
 async function _handleProjectUploadPick(stId, inputEl) {
-  var st = stId === 'hub' ? _hubTreeState : _explorerTreeState;
+  var st = _treeGetStById(stId);
   var files = Array.from((inputEl && inputEl.files) || []);
   var baseDir = _pendingUploadDir[stId] || '';
   if (!files.length) return;
@@ -1604,8 +1762,7 @@ async function _handleProjectUploadPick(stId, inputEl) {
 var _activeProjCtxMenu = null;
 
 function _treeBindContextMenu(st) {
-  var rootId = st._id === 'hub' ? 'proj-file-tree-root' : 'proj-exp-tree';
-  var el = document.getElementById(rootId);
+  var el = _treeGetEl(st);
   if (!el) return;
   if (el.dataset.ctxBound === '1') return;
   el.dataset.ctxBound = '1';
@@ -1987,7 +2144,7 @@ async function _treeInit(st, srcId) {
   st.srcId = srcId;
   st.dirCache = {};
   st.expanded = {};
-  var el = document.getElementById(st._id === 'hub' ? 'proj-file-tree-root' : 'proj-exp-tree');
+  var el = _treeGetEl(st);
   if (el) el.innerHTML = '<div class="proj-loading"><i class="ti ti-loader-2 spin"></i> Loading…</div>';
   try {
     var r = await fetch('/api/projects/' + state.activeProjectId + '/sources/' + srcId + '/files?path=');
@@ -2015,7 +2172,7 @@ async function loadProjectFileTree(srcId /*, subPath ignored — tree always sta
 // success the parent dir's cache is invalidated, the parent is expanded,
 // the tree is re-rendered, and (for files) the new file is opened.
 async function newProjectEntry(stId, parentPath, type) {
-  var st = stId === 'hub' ? _hubTreeState : _explorerTreeState;
+  var st = _treeGetStById(stId);
   if (!st.srcId) { _showToast('Open a source first', true); return; }
   if (!state.activeProjectId) return;
   var label = type === 'dir' ? 'New folder name' : 'New file name';

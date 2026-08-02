@@ -123,6 +123,33 @@
     <!-- Active project strip removed: projects now live as collapsible folders
          in the sidebar tree below, so there is no separate enter/exit state. -->
 
+    <!-- ── Project second-level panel (file-explorer sidebar) ─────── -->
+    <div id="proj-sidebar-panel" style="display:none">
+      <div class="proj-sp-nav">
+        <button class="proj-sp-back-btn" onclick="closeProjSidebarPanel()" title="Back to all conversations">
+          <i class="ti ti-chevron-left"></i>
+          All conversations
+        </button>
+      </div>
+      <div class="proj-sp-title-row">
+        <span id="proj-sp-dot" class="proj-dot proj-color-teal"></span>
+        <span id="proj-sp-name" class="proj-sp-name"></span>
+        <button class="proj-sp-icon-btn" onclick="openProjectHub()" title="Open project hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>
+      </div>
+      <div id="proj-sp-conv-list" class="proj-sp-conv-list"></div>
+      <div class="proj-sp-section-label">
+        <span>FILES</span>
+        <span style="flex:1"></span>
+        <button class="proj-sp-icon-btn" onclick="newProjectEntry('sidebar','','file')" title="New file"><i class="ti ti-file-plus"></i></button>
+        <button class="proj-sp-icon-btn" onclick="newProjectEntry('sidebar','','dir')" title="New folder"><i class="ti ti-folder-plus"></i></button>
+      </div>
+      <div id="proj-sp-src-row" class="proj-sp-src-row" style="display:none">
+        <select class="proj-src-select proj-sp-src-select" onchange="projSpLoadSrc(this.value)"></select>
+      </div>
+      <div id="proj-sp-tree" class="proj-sp-tree proj-file-tree"></div>
+      <input id="proj-sp-upload-input" type="file" multiple style="display:none" onchange="_handleProjectUploadPick('sidebar', this)"/>
+    </div>
+
     <!-- ── Scrollable middle area ──────────────────────────────── -->
     <div id="sidebar-scroll">
 

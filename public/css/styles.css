@@ -9541,6 +9541,8 @@ body.win-platform .acv-header {
 .proj-folder-header:focus-within .proj-folder-analytics { opacity: 0; pointer-events: none; }
 .proj-folder-header:hover .proj-folder-actions,
 .proj-folder-header:focus-within .proj-folder-actions { opacity: 1; pointer-events: auto; }
+/* Active project always shows its action buttons */
+.proj-folder.active > .proj-folder-header .proj-folder-actions { opacity: 1; pointer-events: auto; }
 .proj-folder-body {
   display: flex; flex-direction: column; gap: 2px;
   margin: 2px 0 4px 16px; padding-left: 8px;
@@ -10520,6 +10522,102 @@ mark.find-hit.find-hit-active {
 }
 #sidebar-active-project-hub:hover { color: var(--fau-text); background: var(--fau-surface3); }
 #sidebar-active-project-clear:hover { color: var(--error); background: var(--fau-surface3); }
+
+/* ── Project Sidebar Panel (second-level explorer view) ─────────────────── */
+#proj-sidebar-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: projSpSlideIn .15s ease;
+}
+@keyframes projSpSlideIn {
+  from { opacity: 0; transform: translateX(-10px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.proj-sp-nav {
+  flex-shrink: 0;
+  padding: 4px 8px 2px;
+}
+.proj-sp-back-btn {
+  display: flex; align-items: center; gap: 4px;
+  width: 100%; background: none; border: none;
+  color: var(--fau-text-muted); font-size: 11px; font-weight: 500;
+  padding: 5px 6px; border-radius: 6px; cursor: pointer;
+  transition: background .12s, color .12s;
+  text-align: left; letter-spacing: .01em;
+}
+.proj-sp-back-btn:hover { background: var(--fau-surface2); color: var(--fau-text); }
+.proj-sp-back-btn .ti { font-size: 13px; }
+.proj-sp-title-row {
+  flex-shrink: 0;
+  display: flex; align-items: center; gap: 7px;
+  padding: 6px 12px 6px 10px;
+  border-bottom: 1px solid var(--fau-border);
+}
+.proj-sp-name {
+  flex: 1; min-width: 0;
+  font-size: 12px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: var(--fau-text);
+}
+.proj-sp-icon-btn {
+  flex-shrink: 0; background: none; border: none;
+  color: var(--fau-text-muted); font-size: 14px;
+  padding: 3px 4px; border-radius: 4px; cursor: pointer;
+  line-height: 1; transition: color .12s, background .12s;
+}
+.proj-sp-icon-btn:hover { color: var(--fau-text); background: var(--fau-surface2); }
+.proj-sp-conv-list {
+  flex-shrink: 0;
+  padding: 4px 6px 2px;
+  display: flex; flex-direction: column; gap: 1px;
+}
+.proj-sp-conv-item {
+  display: flex; align-items: center; gap: 7px;
+  background: none; border: none; width: 100%;
+  padding: 5px 8px; border-radius: 6px; cursor: pointer;
+  color: var(--fau-text-muted); font-size: 12px; text-align: left;
+  transition: background .1s, color .1s;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.proj-sp-conv-item:hover { background: var(--fau-surface2); color: var(--fau-text); }
+.proj-sp-conv-item.active { background: var(--fau-accent-dim); color: var(--accent); font-weight: 500; }
+.proj-sp-conv-item .ti { font-size: 12px; flex-shrink: 0; }
+.proj-sp-conv-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.proj-sp-new-chat-btn {
+  display: flex; align-items: center; gap: 6px;
+  background: none; border: none; width: 100%;
+  padding: 4px 8px; border-radius: 6px; cursor: pointer;
+  color: var(--fau-text-muted); font-size: 11px; text-align: left;
+  transition: background .1s, color .1s; margin-top: 2px;
+}
+.proj-sp-new-chat-btn:hover { background: var(--fau-surface2); color: var(--accent); }
+.proj-sp-new-chat-btn .ti { font-size: 12px; }
+.proj-sp-section-label {
+  flex-shrink: 0;
+  display: flex; align-items: center; gap: 4px;
+  padding: 8px 10px 4px 12px;
+  font-size: 10px; font-weight: 600; letter-spacing: .08em;
+  color: var(--fau-text-dim); text-transform: uppercase;
+  border-top: 1px solid var(--fau-border);
+}
+.proj-sp-src-row {
+  flex-shrink: 0;
+  padding: 2px 8px 4px;
+}
+.proj-sp-src-select {
+  width: 100%; font-size: 11px;
+}
+.proj-sp-tree {
+  flex: 1; min-height: 0;
+  overflow-y: auto; overflow-x: hidden;
+}
+/* The sidebar tree reuses .proj-file-row — just shrink the font a touch */
+#proj-sp-tree .proj-file-row {
+  font-size: 12px;
+}
 
 /* ── Custom MCP Manager ──────────────────────────────────────────────────── */
 .mcp-servers-list {

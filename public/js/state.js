@@ -64,6 +64,7 @@ var state = {
   activeProjectId:  localStorage.getItem('fauna-active-project') || null,
   projectHubOpen:   false,
   projectHubTab:    'tasks',    // 'tasks' (Board) | 'files' | 'contexts' | 'run' | 'convs' | 'settings'
+  projSidebarPanelOpen: false,  // second-level file-explorer sidebar
   projectFilePath:  null,       // currently viewed file path in file tree
   projectFileContent: null,     // content of viewed file
   projectContextEnabled: {},    // { ctxId: bool } — which contexts are active for chat

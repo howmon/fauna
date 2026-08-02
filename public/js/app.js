@@ -283,6 +283,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (typeof loadProjects === 'function') await loadProjects();
   if (typeof renderProjectSwitcher === 'function') renderProjectSwitcher();
   if (typeof renderProjectSidebarList === 'function') renderProjectSidebarList();
+  // Restore project sidebar panel if it was open for the active project
+  try {
+    var _savedSpProj = localStorage.getItem('fauna-proj-sp-open');
+    if (_savedSpProj && _savedSpProj === state.activeProjectId && typeof openProjSidebarPanel === 'function') {
+      openProjSidebarPanel();
+    }
+  } catch (_) {}
   // Start global port polling (shows active processes count in topbar)
   if (typeof _startPortsPolling === 'function') _startPortsPolling();
   checkAuth();
