@@ -747,6 +747,7 @@ registerProjectRunRoutes(app, {
   shellBin: SHELL_BIN,
   isWin: IS_WIN,
   augmentedPath: AUGMENTED_PATH,
+  devServerRegistry: _devServerRegistry,
 });
 
 // ── Teams Relay WebSocket moved → server/routes/teams.js ──

@@ -682,6 +682,13 @@ function loadConversation(id, opts) {
   if (ownerProj !== (state.activeProjectId || null) && typeof setActiveProject === 'function') {
     setActiveProject(ownerProj, { navigate: false });
   }
+  // If this is a project conversation, switch the sidebar to the inner panel.
+  // If it's a quick chat, close the panel and show the normal sidebar.
+  if (ownerProj) {
+    if (typeof openProjSidebarPanel === 'function') openProjSidebarPanel();
+  } else {
+    if (typeof closeProjSidebarPanel === 'function' && state.projSidebarPanelOpen) closeProjSidebarPanel();
+  }
 
   // Keep the sidebar tidy: show the section the open chat lives in, collapse
   // the other. Quick chat → collapse Projects; project chat → collapse Quick chats.
@@ -884,6 +891,8 @@ function loadConversation(id, opts) {
   });
   if (typeof _updateMoveToProjectBtn === 'function') _updateMoveToProjectBtn();
   if (typeof refreshConversationKanbanWidget === 'function') refreshConversationKanbanWidget(id);
+  // Restore the persistent todo bar for this conversation
+  if (typeof restoreTodoBar === 'function') restoreTodoBar(conv);
 
   // Ensure the recommended-actions bar is present for the latest assistant turn.
   // loadConversation only builds the message DOM on FIRST open (guarded by
@@ -928,14 +937,23 @@ function deleteConversation(id, e) {
   e.stopPropagation();
   _destroyConvBrowserTabs(id);
   if (typeof clearShellRunningPillsForConversation === 'function') clearShellRunningPillsForConversation(id);
+  // Capture project ownership before filtering so we can prefer same-project next conv
+  var _deletedConv = state.conversations.find(function(c) { return c.id === id; });
+  var _owningProjId = _deletedConv ? (_deletedConv.projectId || null) : null;
   state.conversations = state.conversations.filter(c => c.id !== id);
   saveConversations();
   if (window.FaunaConvCache) window.FaunaConvCache.removeOne(id);
   fetch('/api/conversations/' + id, { method: 'DELETE' }).catch(function() {});
   if (state.currentId === id) {
     purgeConvDom(id);
-    if (state.conversations.length) loadConversation(state.conversations[0].id);
-    else { state.currentId = null; showEmpty(); document.getElementById('messages-inner').innerHTML = ''; closeBrowserPane(); }
+    if (state.conversations.length) {
+      // Prefer a conversation in the same project so the sidebar panel stays open
+      var _nextConv = (_owningProjId && state.conversations.find(function(c) { return c.projectId === _owningProjId; }))
+                    || state.conversations[0];
+      loadConversation(_nextConv.id);
+    } else {
+      state.currentId = null; showEmpty(); document.getElementById('messages-inner').innerHTML = ''; closeBrowserPane();
+    }
   } else {
     purgeConvDom(id);
   }
@@ -1016,6 +1034,11 @@ function renderConvList() {
   if (showAll) showAll.style.display = convs.length > MAX_VISIBLE ? '' : 'none';
   // Keep the project folder tree in sync with the latest conversation data.
   if (typeof renderProjectSidebarList === 'function') renderProjectSidebarList();
+  // Keep the project sidebar panel conv list in sync.
+  if (typeof _projSpRenderConvs === 'function' && state.projSidebarPanelOpen) {
+    var _spProj = state.projects && state.projects.find(function(p) { return p.id === state.activeProjectId; });
+    if (_spProj) _projSpRenderConvs(_spProj);
+  }
   _updateSectionStreamingIndicators();
 }
 

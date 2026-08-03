@@ -123,6 +123,41 @@
     <!-- Active project strip removed: projects now live as collapsible folders
          in the sidebar tree below, so there is no separate enter/exit state. -->
 
+    <!-- ── Project second-level panel (file-explorer sidebar) ─────── -->
+    <div id="proj-sidebar-panel" style="display:none">
+      <div class="proj-sp-nav">
+        <button class="proj-sp-back-btn" onclick="closeProjSidebarPanel()" title="Back to all conversations">
+          <i class="ti ti-chevron-left"></i>
+          All conversations
+        </button>
+      </div>
+      <div class="proj-sp-title-row" onclick="toggleProjSpConvs()" title="Collapse conversations">
+        <span id="proj-sp-dot" class="proj-dot proj-color-teal"></span>
+        <span id="proj-sp-name" class="proj-sp-name"></span>
+        <i class="ti ti-chevron-down proj-sp-chevron" id="proj-sp-convs-chevron"></i>
+      </div>
+      <div id="proj-sp-conv-list" class="proj-sp-conv-list"></div>
+      <div class="proj-sp-section-label proj-sp-collapsible" id="proj-sp-files-label" onclick="toggleProjSpSection('files')">
+        <i class="ti ti-chevron-down proj-sp-chevron" id="proj-sp-files-chevron"></i>
+        <span>FILES</span>
+        <span style="flex:1"></span>
+        <button class="proj-sp-icon-btn" onclick="event.stopPropagation();newProjectEntry('sidebar','','file')" title="New file"><i class="ti ti-file-plus"></i></button>
+        <button class="proj-sp-icon-btn" onclick="event.stopPropagation();newProjectEntry('sidebar','','dir')" title="New folder"><i class="ti ti-folder-plus"></i></button>
+      </div>
+      <div id="proj-sp-files-body" class="proj-sp-section-body">
+        <div id="proj-sp-src-row" class="proj-sp-src-row" style="display:none">
+          <select class="proj-src-select proj-sp-src-select" onchange="projSpLoadSrc(this.value)"></select>
+        </div>
+        <div id="proj-sp-tree" class="proj-sp-tree proj-file-tree"></div>
+      </div>
+      <div class="proj-sp-section-label proj-sp-collapsible" id="proj-sp-project-label" onclick="toggleProjSpSection('project')">
+        <i class="ti ti-chevron-down proj-sp-chevron" id="proj-sp-project-chevron"></i>
+        <span>PROJECT</span>
+      </div>
+      <div id="proj-sp-project-body" class="proj-sp-section-body proj-sp-project-body"></div>
+      <input id="proj-sp-upload-input" type="file" multiple style="display:none" onchange="_handleProjectUploadPick('sidebar', this)"/>
+    </div>
+
     <!-- ── Scrollable middle area ──────────────────────────────── -->
     <div id="sidebar-scroll">
 
@@ -437,6 +472,18 @@
           <span>Figma MCP active — AI will read and write your Figma file</span>
           <button id="figma-mode-disable-btn" onclick="toggleFigmaMCP()" title="Disable Figma MCP"><i class="ti ti-x"></i> Disable</button>
         </div>
+        <!-- Todo / plan bar (shown when AI has an active plan) -->
+        <div id="todo-bar" style="display:none">
+          <button class="todo-bar-toggle" onclick="toggleTodoBar()" type="button">
+            <i class="ti ti-list-check todo-bar-icon"></i>
+            <span class="todo-bar-label">Todos</span>
+            <span class="todo-bar-summary"></span>
+            <i class="ti ti-chevron-down todo-bar-chevron"></i>
+          </button>
+          <ul class="todo-bar-list"></ul>
+        </div>
+        <!-- File edits Keep/Undo bar (shown after Fauna writes project files) -->
+        <div id="file-edits-bar" style="display:none" role="status"></div>
       </div>
       <div id="decision-prompt-host" hidden></div>
       <div id="input-wrap">
@@ -2823,6 +2870,22 @@ Examples:
   </script>
 </div>
 
+<!-- ── File edits diff modal ────────────────────────────────────── -->
+<div id="file-edits-diff-modal" style="display:none" onclick="if(event.target===this)closeFileEditsDiffModal()">
+  <div id="file-edits-diff-box">
+    <div id="file-edits-diff-header">
+      <span><i class="ti ti-git-diff"></i> File changes</span>
+      <button class="file-edits-diff-close" onclick="closeFileEditsDiffModal()" title="Close"><i class="ti ti-x"></i></button>
+    </div>
+    <div id="file-edits-diff-tabs"></div>
+    <div id="file-edits-diff-content"></div>
+    <div id="file-edits-diff-footer">
+      <button class="panel-btn secondary" onclick="closeFileEditsDiffModal()">Close</button>
+      <button class="panel-btn danger" onclick="_fileEditsUndo();closeFileEditsDiffModal()"><i class="ti ti-rotate-left"></i> Undo all changes</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── URL modal ───────────────────────────────────────────────── -->
 <div id="url-modal" onclick="closeUrlModal(event)">
   <div id="url-modal-box">
@@ -2988,6 +3051,7 @@ Examples:
 <script src="js/github-accounts.js"></script>
 <script src="js/cloud-sync.js"></script>
 <script src="js/projects.js"></script>
+<script src="js/file-edits-bar.js"></script>
 <script src="js/tests.js"></script>
 <script src="js/board.js"></script>
 <script src="js/design.js"></script>
@@ -3206,6 +3270,8 @@ Examples:
   <div class="project-hub-tabs" id="project-hub-tabs"></div>
   <div class="project-hub-body" id="project-hub-body"></div>
 </div>
+<!-- Drag handle for inline hub ↔ chat split -->
+<div id="proj-sp-split-handle"></div>
 
 <!-- ── Help Panel ────────────────────────────────────────────────── -->
 <div id="help-panel">

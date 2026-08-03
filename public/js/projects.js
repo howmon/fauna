@@ -227,6 +227,19 @@ function toggleProjectFolder(id, e) {
   renderProjectSidebarList();
 }
 
+// Enter the project inner sidebar panel (click on project name/header)
+function enterProjectSidebar(id, e) {
+  if (e) e.stopPropagation();
+  // Expand the folder so it stays visible when returning from the panel
+  _expandedProjects[id] = true;
+  _saveExpandedProjects();
+  if (state.activeProjectId !== id) {
+    setActiveProject(id, { navigate: false });
+  }
+  openProjSidebarPanel();
+}
+window.enterProjectSidebar = enterProjectSidebar;
+
 // Open a new chat inside a project without leaving the current view chrome.
 function newConversationInProject(id, e) {
   if (e) e.stopPropagation();
@@ -345,8 +358,8 @@ function renderProjectSidebarList() {
     var projConvs = allConvs.filter(function(c) { return c.projectId === p.id; });
     var anyStreaming = projConvs.some(function(c) { return c._streaming; });
 
-    var header = '<div class="proj-folder-header' + (isActive ? ' active' : '') + '" onclick="toggleProjectFolder(\'' + pid + '\', event)">' +
-      '<i class="ti ti-chevron-right proj-folder-chevron"></i>' +
+    var header = '<div class="proj-folder-header' + (isActive ? ' active' : '') + '" onclick="enterProjectSidebar(\'' + pid + '\', event)">' +
+      '<i class="ti ti-chevron-right proj-folder-chevron" onclick="event.stopPropagation();toggleProjectFolder(\'' + pid + '\', event)" title="Expand/collapse"></i>' +
       '<span class="proj-dot proj-color-' + _projEsc(p.color) + '"></span>' +
       '<span class="proj-folder-name">' + _projEsc(p.name) + '</span>' +
       (anyStreaming ? '<i class="ti ti-loader-2 conv-streaming-icon proj-folder-streaming" title="A chat in this project is running"></i>' : '') +
@@ -638,6 +651,20 @@ async function setActiveProject(id, opts) {
       closeProjectHub();
     }
   }
+  // If the sidebar panel is open, sync it to the new project (or close if exited)
+  if (state.projSidebarPanelOpen) {
+    var _spProj = _activeProject();
+    if (_spProj) {
+      var _spNameEl = document.getElementById('proj-sp-name');
+      var _spDotEl = document.getElementById('proj-sp-dot');
+      if (_spNameEl) _spNameEl.textContent = _spProj.name;
+      if (_spDotEl) _spDotEl.className = 'proj-dot proj-color-' + (_spProj.color || 'teal');
+      _projSpRenderConvs(_spProj);
+      _projSpLoadTree(_spProj);
+    } else {
+      closeProjSidebarPanel();
+    }
+  }
   // Refresh the All Projects page so the Active badge / button states update
   var _allProjPage = document.getElementById('all-projects-page');
   if (_allProjPage && _allProjPage.style.display !== 'none') {
@@ -743,9 +770,238 @@ function closeProjectHub() {
   if (_projMonacoEditor) { _projMonacoEditor.dispose(); _projMonacoEditor = null; }
   // Kill all terminal sessions
   _termDestroyAll();
+  // Exit inline hub mode
+  document.body.classList.remove('proj-sp-hub-open');
   var hub = document.getElementById('project-hub');
   if (hub) hub.style.display = 'none';
 }
+
+// ── Project Sidebar Panel (second-level file-explorer sidebar) ────────────
+
+function openProjSidebarPanel() {
+  var proj = _activeProject();
+  if (!proj) return;
+  var panel = document.getElementById('proj-sidebar-panel');
+  var actions = document.getElementById('sidebar-actions');
+  var scroll = document.getElementById('sidebar-scroll');
+  if (!panel) return;
+  // Update project identity
+  var nameEl = document.getElementById('proj-sp-name');
+  var dotEl = document.getElementById('proj-sp-dot');
+  if (nameEl) nameEl.textContent = proj.name;
+  if (dotEl) dotEl.className = 'proj-dot proj-color-' + (proj.color || 'teal');
+  // Show panel, hide normal sidebar content
+  panel.style.display = 'flex';
+  if (actions) actions.style.display = 'none';
+  if (scroll) scroll.style.display = 'none';
+  state.projSidebarPanelOpen = true;
+  document.body.classList.add('proj-sp-panel-open');
+  // Restore collapsible section states
+  _projSpApplySectionState('files');
+  _projSpApplySectionState('project');
+  // Render compact conversation list
+  _projSpRenderConvs(proj);
+  // Render project section
+  _projSpRenderProjectSection(proj);
+  // Load file tree
+  _projSpLoadTree(proj);
+  // Persist preference
+  try { localStorage.setItem('fauna-proj-sp-open', proj.id); } catch (_) {}
+}
+
+function closeProjSidebarPanel() {
+  var panel = document.getElementById('proj-sidebar-panel');
+  var actions = document.getElementById('sidebar-actions');
+  var scroll = document.getElementById('sidebar-scroll');
+  if (panel) panel.style.display = 'none';
+  if (actions) actions.style.display = '';
+  if (scroll) scroll.style.display = '';
+  state.projSidebarPanelOpen = false;
+  document.body.classList.remove('proj-sp-panel-open');
+  // Close inline hub if open
+  if (state.projectHubOpen) closeProjectHub();
+  // Reset sidebar tree state
+  _projSidebarTreeState.srcId = null;
+  _projSidebarTreeState.dirCache = {};
+  _projSidebarTreeState.expanded = {};
+  _projSidebarTreeState.openedFiles = {};
+  _projSidebarTreeState.dirHasOpened = {};
+  try { localStorage.removeItem('fauna-proj-sp-open'); } catch (_) {}
+}
+
+function _projSpRenderConvs(proj) {
+  var el = document.getElementById('proj-sp-conv-list');
+  if (!el || !proj) return;
+  var convs = (state.conversations || [])
+    .filter(function(c) { return c.projectId === proj.id; })
+    .sort(function(a, b) { return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0); });
+  var pid = _projEsc(proj.id);
+  el.innerHTML =
+  '<div class="conv-item" onclick="newConversationInProject(\'' + pid + '\')">' +
+    '<i class="ti ti-edit"></i><span class="conv-label">New chat</span>' +
+  '</div>' +
+  convs.map(function(c) { return _convRowHtml(c); }).join('');
+  // Restore collapsed state
+  var isCollapsed = localStorage.getItem('fauna-proj-sp-convs-open') === 'false';
+  el.classList.toggle('collapsed', isCollapsed);
+  var chev = document.getElementById('proj-sp-convs-chevron');
+  if (chev) chev.classList.toggle('collapsed', isCollapsed);
+}
+
+function toggleProjSpConvs() {
+  var el = document.getElementById('proj-sp-conv-list');
+  var chev = document.getElementById('proj-sp-convs-chevron');
+  if (!el) return;
+  var isNowCollapsed = !el.classList.contains('collapsed');
+  el.classList.toggle('collapsed', isNowCollapsed);
+  if (chev) chev.classList.toggle('collapsed', isNowCollapsed);
+  localStorage.setItem('fauna-proj-sp-convs-open', isNowCollapsed ? 'false' : 'true');
+}
+window.toggleProjSpConvs = toggleProjSpConvs;
+
+async function _projSpLoadTree(proj) {
+  var srcRowEl = document.getElementById('proj-sp-src-row');
+  if (!proj) return;
+  var rootPath = proj.rootPath && proj.rootPath.trim();
+  var sources = (proj.sources || []).filter(function(s) { return s.type === 'local'; });
+  // Build source options: rootPath (if any) + explicit local sources
+  var opts = [];
+  if (rootPath) {
+    var alreadySrc = sources.some(function(s) { return s.path === rootPath; });
+    if (!alreadySrc) {
+      var basename = rootPath.split('/').filter(Boolean).pop() || rootPath;
+      opts.push({ id: '__rootpath__', label: basename + ' (working folder)' });
+    }
+  }
+  sources.forEach(function(s) { opts.push({ id: s.id, label: s.name || s.path || s.id }); });
+
+  if (!opts.length) {
+    if (treeEl) treeEl.innerHTML = '<div class="proj-hub-empty" style="padding:12px 8px;font-size:11px;opacity:.6">No folder configured.<br>Add a source in the project hub.</div>';
+    if (srcRowEl) srcRowEl.style.display = 'none';
+    return;
+  }
+  // Show source selector only when there are multiple options
+  if (srcRowEl) {
+    if (opts.length > 1) {
+      srcRowEl.style.display = '';
+      var sel = srcRowEl.querySelector('select');
+      if (sel) {
+        var curSrc = _projSidebarTreeState.srcId;
+        sel.innerHTML = opts.map(function(o) {
+          return '<option value="' + _projEsc(o.id) + '"' + (curSrc === o.id ? ' selected' : '') + '>' + _projEsc(o.label) + '</option>';
+        }).join('');
+      }
+    } else {
+      srcRowEl.style.display = 'none';
+    }
+  }
+  var srcId = (_projSidebarTreeState.srcId && opts.find(function(o) { return o.id === _projSidebarTreeState.srcId; }))
+    ? _projSidebarTreeState.srcId
+    : opts[0].id;
+  _projSidebarTreeState.srcId = null; // force reset
+  await _treeInit(_projSidebarTreeState, srcId);
+}
+
+// Called by the source <select> in the sidebar panel
+async function projSpLoadSrc(srcId) {
+  _projSidebarTreeState.srcId = null;
+  await _treeInit(_projSidebarTreeState, srcId);
+}
+window.projSpLoadSrc = projSpLoadSrc;
+window.openProjSidebarPanel = openProjSidebarPanel;
+window.closeProjSidebarPanel = closeProjSidebarPanel;
+
+// ── Collapsible section helpers ────────────────────────────────────────────
+
+function _projSpApplySectionState(which) {
+  var open = localStorage.getItem('fauna-proj-sp-' + which + '-open');
+  // default open (null = open)
+  var isOpen = open !== 'false';
+  var body = document.getElementById('proj-sp-' + which + '-body');
+  var chevron = document.getElementById('proj-sp-' + which + '-chevron');
+  if (!body) return;
+  body.classList.toggle('collapsed', !isOpen);
+  if (chevron) chevron.classList.toggle('collapsed', !isOpen);
+}
+
+function toggleProjSpSection(which) {
+  var body = document.getElementById('proj-sp-' + which + '-body');
+  var chevron = document.getElementById('proj-sp-' + which + '-chevron');
+  if (!body) return;
+  var isNowCollapsed = !body.classList.contains('collapsed');
+  body.classList.toggle('collapsed', isNowCollapsed);
+  if (chevron) chevron.classList.toggle('collapsed', isNowCollapsed);
+  localStorage.setItem('fauna-proj-sp-' + which + '-open', isNowCollapsed ? 'false' : 'true');
+}
+window.toggleProjSpSection = toggleProjSpSection;
+
+// ── Project section in sidebar panel ──────────────────────────────────────
+
+function _projSpRenderProjectSection(proj) {
+  var body = document.getElementById('proj-sp-project-body');
+  if (!body) return;
+  var ITEMS = [
+    { id: 'tasks',    icon: 'ti-layout-kanban', label: 'Board' },
+    { id: 'contexts', icon: 'ti-file-text',     label: 'Contexts' },
+    { id: 'run',      icon: 'ti-player-play',   label: 'Run' },
+    { id: 'convs',    icon: 'ti-messages',      label: 'Conversations' },
+    { id: 'settings', icon: 'ti-settings',      label: 'Settings' },
+  ];
+  body.innerHTML = ITEMS.map(function(it) {
+    return '<button class="proj-sp-project-item" onclick="openProjHubInline(\'' + it.id + '\')">' +
+      '<i class="ti ' + it.icon + '"></i>' + it.label + '</button>';
+  }).join('');
+}
+
+// ── Inline hub (side-by-side with chat) ───────────────────────────────────
+
+var _PROJ_SP_CHAT_MIN = 240;
+var _PROJ_SP_CHAT_MAX = 720;
+var _PROJ_SP_CHAT_STORAGE = 'fauna-proj-sp-chat-w';
+
+function _projSpSetChatWidth(w) {
+  document.documentElement.style.setProperty('--proj-sp-chat-w', w + 'px');
+}
+
+function _installProjSpSplitResize() {
+  var handle = document.getElementById('proj-sp-split-handle');
+  if (!handle || handle._splitResizeInstalled) return;
+  handle._splitResizeInstalled = true;
+  // Restore saved width
+  var saved = parseInt(localStorage.getItem(_PROJ_SP_CHAT_STORAGE), 10);
+  if (saved && saved >= _PROJ_SP_CHAT_MIN && saved <= _PROJ_SP_CHAT_MAX) {
+    _projSpSetChatWidth(saved);
+  }
+  window.installPaneResize({
+    handle: handle,
+    getStartWidth: function() {
+      var cur = getComputedStyle(document.documentElement).getPropertyValue('--proj-sp-chat-w');
+      return parseInt(cur, 10) || 360;
+    },
+    onMove: function(dx, startW) {
+      // Drag RIGHT → chat narrows; drag LEFT → chat widens
+      var w = Math.min(_PROJ_SP_CHAT_MAX, Math.max(_PROJ_SP_CHAT_MIN, startW - dx));
+      _projSpSetChatWidth(w);
+    },
+    onEnd: function() {
+      var cur = getComputedStyle(document.documentElement).getPropertyValue('--proj-sp-chat-w');
+      localStorage.setItem(_PROJ_SP_CHAT_STORAGE, parseInt(cur, 10));
+    },
+    onDoubleClick: function() {
+      _projSpSetChatWidth(360);
+      localStorage.removeItem(_PROJ_SP_CHAT_STORAGE);
+    }
+  });
+}
+
+function openProjHubInline(tab) {
+  var proj = _activeProject();
+  if (!proj) return;
+  document.body.classList.add('proj-sp-hub-open');
+  _installProjSpSplitResize();
+  openProjectHub(tab);
+}
+window.openProjHubInline = openProjHubInline;
 
 function _renderProjectHub(proj) {
   var nameEl = document.getElementById('project-hub-name');
@@ -1409,6 +1665,18 @@ if (typeof document !== 'undefined') {
 // ── Unified expand-in-place tree ─────────────────────────────────────────
 var _hubTreeState = { _id:'hub', srcId:null, dirCache:{}, expanded:{}, openedFiles:{}, dirHasOpened:{} };
 var _explorerTreeState = { _id:'explorer', srcId:null, dirCache:{}, expanded:{}, openedFiles:{}, dirHasOpened:{} };
+var _projSidebarTreeState = { _id:'sidebar', srcId:null, dirCache:{}, expanded:{}, openedFiles:{}, dirHasOpened:{} };
+
+function _treeGetEl(st) {
+  if (st._id === 'hub') return document.getElementById('proj-file-tree-root');
+  if (st._id === 'sidebar') return document.getElementById('proj-sp-tree');
+  return document.getElementById('proj-exp-tree');
+}
+function _treeGetStById(stId) {
+  if (stId === 'hub') return _hubTreeState;
+  if (stId === 'sidebar') return _projSidebarTreeState;
+  return _explorerTreeState;
+}
 
 function _treeMarkOpened(st, filePath) {
   st.openedFiles[filePath] = true;
@@ -1419,8 +1687,7 @@ function _treeMarkOpened(st, filePath) {
 }
 
 function _treeRender(st) {
-  var elId = st._id === 'hub' ? 'proj-file-tree-root' : 'proj-exp-tree';
-  var el = document.getElementById(elId);
+  var el = _treeGetEl(st);
   if (!el) return;
   var html = _treeRenderLevel(st, '', 0);
   el.innerHTML = html || '<div class="proj-hub-empty">Empty directory</div>';
@@ -1464,7 +1731,7 @@ function _treeRenderLevel(st, path, depth) {
 }
 
 async function _treeToggleDir(stId, path) {
-  var st = stId === 'hub' ? _hubTreeState : _explorerTreeState;
+  var st = _treeGetStById(stId);
   if (st.expanded[path]) {
     delete st.expanded[path];
     _treeRender(st);
@@ -1482,10 +1749,11 @@ async function _treeToggleDir(stId, path) {
 }
 
 function _treeOpenFile(stId, filePath) {
-  var st = stId === 'hub' ? _hubTreeState : _explorerTreeState;
+  var st = _treeGetStById(stId);
   _treeMarkOpened(st, filePath);
   _treeRender(st);
   if (stId === 'hub') openProjectFile(st.srcId, filePath);
+  else if (stId === 'sidebar') { openProjHubInline('files'); setTimeout(function() { openProjectFile(st.srcId, filePath); }, 120); }
   else explorerOpenFile(st.srcId, filePath);
 }
 
@@ -1499,8 +1767,7 @@ function _treeOpenFile(stId, filePath) {
 // surface as "skipped". `webkitGetAsEntry` is preferred so dropped folders
 // recurse; we fall back to `event.dataTransfer.files` (flat) otherwise.
 function _treeBindDnd(st) {
-  var rootId = st._id === 'hub' ? 'proj-file-tree-root' : 'proj-exp-tree';
-  var el = document.getElementById(rootId);
+  var el = _treeGetEl(st);
   if (!el) return;
   if (el.dataset.dndBound === '1') return;
   el.dataset.dndBound = '1';
@@ -1572,13 +1839,13 @@ function _treeBindDnd(st) {
 // used for both DnD and manual uploads. `_pendingUploadDir` lets a folder
 // row's context-menu "Upload Files Here…" target a sub-directory.
 
-var _pendingUploadDir = { hub: '', explorer: '' };
+var _pendingUploadDir = { hub: '', explorer: '', sidebar: '' };
 
 function _triggerProjectUpload(stId, dirPath) {
-  var st = stId === 'hub' ? _hubTreeState : _explorerTreeState;
+  var st = _treeGetStById(stId);
   if (!st.srcId) { _showToast('Open a source first', true); return; }
   _pendingUploadDir[stId] = dirPath || '';
-  var inputId = stId === 'hub' ? 'proj-hub-upload-input' : 'proj-explorer-upload-input';
+  var inputId = stId === 'hub' ? 'proj-hub-upload-input' : stId === 'sidebar' ? 'proj-sp-upload-input' : 'proj-explorer-upload-input';
   var input = document.getElementById(inputId);
   if (!input) { _showToast('Upload control missing', true); return; }
   // Reset value so picking the same file twice still fires `change`.
@@ -1587,7 +1854,7 @@ function _triggerProjectUpload(stId, dirPath) {
 }
 
 async function _handleProjectUploadPick(stId, inputEl) {
-  var st = stId === 'hub' ? _hubTreeState : _explorerTreeState;
+  var st = _treeGetStById(stId);
   var files = Array.from((inputEl && inputEl.files) || []);
   var baseDir = _pendingUploadDir[stId] || '';
   if (!files.length) return;
@@ -1604,8 +1871,7 @@ async function _handleProjectUploadPick(stId, inputEl) {
 var _activeProjCtxMenu = null;
 
 function _treeBindContextMenu(st) {
-  var rootId = st._id === 'hub' ? 'proj-file-tree-root' : 'proj-exp-tree';
-  var el = document.getElementById(rootId);
+  var el = _treeGetEl(st);
   if (!el) return;
   if (el.dataset.ctxBound === '1') return;
   el.dataset.ctxBound = '1';
@@ -1635,6 +1901,8 @@ function _showProjCtxMenu(st, x, y, isDir, targetPath) {
     items.push({ label: 'Upload Files Here…', icon: 'ti-upload',      handler: function() { _triggerProjectUpload(st._id, targetPath); } });
     if (targetPath) {
       items.push({ sep: true });
+      items.push({ label: 'Add to Chat Context', icon: 'ti-message-plus',  handler: function() { _treeAddToContext(st, targetPath, true); } });
+      items.push({ sep: true });
       items.push({ label: 'Reveal in Finder',    icon: 'ti-folder-open',  handler: function() { _treeRevealInFinder(st, targetPath); } });
       items.push({ label: 'Copy Path',           icon: 'ti-clipboard',     handler: function() { _treeCopyAbsPath(st, targetPath); } });
       items.push({ label: 'Copy Relative Path',  icon: 'ti-clipboard-text', handler: function() { _treeCopyRelPath(targetPath); } });
@@ -1644,6 +1912,7 @@ function _showProjCtxMenu(st, x, y, isDir, targetPath) {
     }
   } else {
     items.push({ label: 'Open',                  icon: 'ti-file',         handler: function() { _treeOpenFile(st._id, targetPath); } });
+    items.push({ label: 'Add to Chat Context',   icon: 'ti-message-plus',  handler: function() { _treeAddToContext(st, targetPath, false); } });
     items.push({ sep: true });
     items.push({ label: 'Reveal in Finder',      icon: 'ti-folder-open',  handler: function() { _treeRevealInFinder(st, targetPath); } });
     items.push({ label: 'Copy Path',             icon: 'ti-clipboard',     handler: function() { _treeCopyAbsPath(st, targetPath); } });
@@ -1731,6 +2000,25 @@ async function _treeRevealInFinder(st, relPath) {
     if (!r.ok) { _showToast('Reveal failed: ' + (j.error || ('HTTP ' + r.status)), true); return; }
     if (j.ok === false) _showToast(j.error || 'Reveal unavailable in this context', true);
   } catch (e) { _showToast('Reveal failed: ' + e.message, true); }
+}
+
+async function _treeAddToContext(st, relPath, isDir) {
+  if (!st.srcId) return;
+  try {
+    var url = '/api/projects/' + encodeURIComponent(state.activeProjectId) +
+      '/sources/' + encodeURIComponent(st.srcId) +
+      '/abspath?path=' + encodeURIComponent(relPath);
+    var r = await fetch(url);
+    var j = await r.json().catch(function() { return {}; });
+    if (!r.ok || !j.fullPath) { _showToast('Failed: ' + (j.error || ('HTTP ' + r.status)), true); return; }
+    var absPath = j.fullPath;
+    var name = relPath.split('/').filter(Boolean).pop() || absPath;
+    if (isDir) name = name + '/';
+    if (typeof addAttachment === 'function') {
+      addAttachment({ type: 'file', name: name, sourceUri: absPath, content: '' });
+      _showToast('Added to chat context');
+    }
+  } catch (e) { _showToast('Failed: ' + e.message, true); }
 }
 
 async function _treeCopyAbsPath(st, relPath) {
@@ -1987,7 +2275,7 @@ async function _treeInit(st, srcId) {
   st.srcId = srcId;
   st.dirCache = {};
   st.expanded = {};
-  var el = document.getElementById(st._id === 'hub' ? 'proj-file-tree-root' : 'proj-exp-tree');
+  var el = _treeGetEl(st);
   if (el) el.innerHTML = '<div class="proj-loading"><i class="ti ti-loader-2 spin"></i> Loading…</div>';
   try {
     var r = await fetch('/api/projects/' + state.activeProjectId + '/sources/' + srcId + '/files?path=');
@@ -2015,7 +2303,7 @@ async function loadProjectFileTree(srcId /*, subPath ignored — tree always sta
 // success the parent dir's cache is invalidated, the parent is expanded,
 // the tree is re-rendered, and (for files) the new file is opened.
 async function newProjectEntry(stId, parentPath, type) {
-  var st = stId === 'hub' ? _hubTreeState : _explorerTreeState;
+  var st = _treeGetStById(stId);
   if (!st.srcId) { _showToast('Open a source first', true); return; }
   if (!state.activeProjectId) return;
   var label = type === 'dir' ? 'New folder name' : 'New file name';
@@ -2081,14 +2369,95 @@ var _projMonacoSrcId   = null;   // srcId of file currently shown
 var _projMonacoBaseline = '';
 var _explorerMonacoBaseline = '';
 
+// ── Multi-file tab state ───────────────────────────────────────────────────
+var _openFileTabs = [];        // [{srcId, filePath, modified}]
+var _activeFileTabKey = null;  // "filePath::srcId"
+
+function _fileTabKey(srcId, filePath) { return filePath + '::' + srcId; }
+
+function _renderFileTabsBar() {
+  var viewerEl = document.getElementById('proj-file-viewer');
+  if (!viewerEl) return;
+  var bar = document.getElementById('proj-file-tabs-bar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'proj-file-tabs-bar';
+    bar.className = 'proj-file-tabs-bar';
+    viewerEl.insertBefore(bar, viewerEl.firstChild);
+  }
+  bar.innerHTML = _openFileTabs.map(function(tab, i) {
+    var key = _fileTabKey(tab.srcId, tab.filePath);
+    var isActive = key === _activeFileTabKey;
+    var label = tab.filePath.split('/').pop();
+    return '<div class="proj-file-tab' + (isActive ? ' active' : '') +
+      '" onclick="switchFileTab(\'' + _projEsc(key) + '\')">' +
+      '<span class="proj-tab-dot' + (tab.modified ? ' dirty' : '') + '">&#9679;</span>' +
+      '<span class="proj-tab-label" title="' + _projEsc(tab.filePath) + '">' + _projEsc(label) + '</span>' +
+      '<button class="proj-tab-close" onclick="closeFileTab(' + i + ',event)" title="Close tab">\u00d7</button>' +
+    '</div>';
+  }).join('');
+}
+
+function _openFileTabEntry(srcId, filePath) {
+  var key = _fileTabKey(srcId, filePath);
+  var existing = _openFileTabs.find(function(t) { return _fileTabKey(t.srcId, t.filePath) === key; });
+  if (!existing) {
+    // New tab — starts as modified (opened = dirty until saved)
+    _openFileTabs.push({ srcId: srcId, filePath: filePath, modified: true });
+  }
+  _activeFileTabKey = key;
+}
+
+function switchFileTab(key) {
+  if (key === _activeFileTabKey) return;
+  var tab = _openFileTabs.find(function(t) { return _fileTabKey(t.srcId, t.filePath) === key; });
+  if (!tab) return;
+  openProjectFile(tab.srcId, tab.filePath);
+}
+window.switchFileTab = switchFileTab;
+
+function closeFileTab(idx, e) {
+  if (e) { e.stopPropagation(); e.preventDefault(); }
+  if (idx < 0 || idx >= _openFileTabs.length) return;
+  var closedKey = _fileTabKey(_openFileTabs[idx].srcId, _openFileTabs[idx].filePath);
+  _openFileTabs.splice(idx, 1);
+  if (_openFileTabs.length === 0) {
+    // No more tabs — hide viewer
+    _activeFileTabKey = null;
+    var viewer = document.getElementById('proj-file-viewer');
+    if (viewer) viewer.style.display = 'none';
+    if (_projMonacoEditor) { _projMonacoEditor.dispose(); _projMonacoEditor = null; }
+    _renderFileTabsBar();
+    return;
+  }
+  if (closedKey === _activeFileTabKey) {
+    // Switch to adjacent tab
+    var newIdx = Math.min(idx, _openFileTabs.length - 1);
+    var t = _openFileTabs[newIdx];
+    openProjectFile(t.srcId, t.filePath);
+  } else {
+    _renderFileTabsBar();
+  }
+}
+window.closeFileTab = closeFileTab;
+
 function _setProjectSaveDirty(scope, dirty) {
   var selector = scope === 'explorer'
     ? '#proj-exp-viewer .proj-save-btn'
     : '#proj-file-viewer-header .proj-save-btn';
   var button = document.querySelector(selector);
-  if (!button) return;
-  button.disabled = !dirty;
-  button.classList.toggle('dirty', !!dirty);
+  if (button) {
+    button.disabled = !dirty;
+    button.classList.toggle('dirty', !!dirty);
+  }
+  // Sync the active hub tab's modified dot
+  if (scope === 'hub' && _activeFileTabKey) {
+    var _dTab = _openFileTabs.find(function(t) { return _fileTabKey(t.srcId, t.filePath) === _activeFileTabKey; });
+    if (_dTab && _dTab.modified !== !!dirty) {
+      _dTab.modified = !!dirty;
+      _renderFileTabsBar();
+    }
+  }
 }
 
 // Map file extension → Monaco language id
@@ -2129,16 +2498,20 @@ var _MONO_LANG = {
 
 async function openProjectFile(srcId, filePath) {
   if (!state.activeProjectId) return;
+  // Track in multi-tab state
+  _openFileTabEntry(srcId, filePath);
   var viewerEl = document.getElementById('proj-file-viewer');
   if (!viewerEl) return;
   viewerEl.style.display = '';
 
-  // Initialize structure if not already present
+  // Initialize viewer structure if not already present
   if (!document.getElementById('proj-file-viewer-body')) {
     viewerEl.innerHTML =
       '<div class="proj-file-viewer-header" id="proj-file-viewer-header"></div>' +
       '<div id="proj-file-viewer-body" class="proj-file-viewer-body"></div>';
   }
+  // Render / update the tab bar (self-initialising, inserts before first child)
+  _renderFileTabsBar();
 
   var headerEl = document.getElementById('proj-file-viewer-header');
   if (headerEl) headerEl.innerHTML = '<span class="proj-loading"><i class="ti ti-loader-2 spin"></i> Loading…</span>';
@@ -2319,13 +2692,17 @@ function _projMonacoFallback(container, content) {
 }
 
 function closeProjectFileViewer() {
+  // Close the currently-active tab (or all if none tracked)
+  if (_activeFileTabKey) {
+    var idx = _openFileTabs.findIndex(function(t) {
+      return _fileTabKey(t.srcId, t.filePath) === _activeFileTabKey;
+    });
+    if (idx !== -1) { closeFileTab(idx, null); return; }
+  }
+  // Fallback: hard-hide viewer
   var viewerEl = document.getElementById('proj-file-viewer');
   if (viewerEl) viewerEl.style.display = 'none';
-  // Dispose editor so it doesn't hold memory when switching tabs
-  if (_projMonacoEditor) {
-    _projMonacoEditor.dispose();
-    _projMonacoEditor = null;
-  }
+  if (_projMonacoEditor) { _projMonacoEditor.dispose(); _projMonacoEditor = null; }
 }
 
 function copyFileContent() {
@@ -3612,8 +3989,14 @@ async function startProjectRun(srcId) {
 }
 
 async function stopProjectRun(runId, projectId) {
-  var pid = projectId || (state.activeProjectId);
-  // Dev-server registry entries (no project) live at /api/runs/:id (DELETE).
+  // Dev-server registry entries have runId starting with 'dev_' and are
+  // passed with projectId === null from the dev servers page. Route them
+  // to /api/runs/:id instead of the project runs endpoint, and do NOT
+  // fall back to state.activeProjectId (that would be the wrong project).
+  if (projectId === null || projectId === undefined || String(runId).startsWith('dev_')) {
+    return stopDevServerRun(runId);
+  }
+  var pid = projectId || state.activeProjectId;
   if (!pid) return stopDevServerRun(runId);
   try {
     var r = await fetch('/api/projects/' + pid + '/runs/' + runId, { method: 'DELETE' });
@@ -3643,6 +4026,10 @@ async function restartDevServerRun(runId) {
 }
 
 async function dismissProjectRun(runId, projectId) {
+  // Dev server entries should be stopped via the registry, not the project endpoint
+  if (projectId === null || projectId === undefined || String(runId).startsWith('dev_')) {
+    return stopDevServerRun(runId);
+  }
   var pid = projectId || (state.activeProjectId);
   try {
     await fetch('/api/projects/' + pid + '/runs/' + runId, { method: 'DELETE' });

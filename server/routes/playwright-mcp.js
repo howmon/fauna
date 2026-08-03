@@ -47,7 +47,7 @@ export function registerPlaywrightMcpRoutes(app, {
     _playwrightMcpLastLaunch = { nodeBin, cliPath, cwd: playwrightMcpCwd };
     const transport = new StdioClientTransport({
       command: nodeBin,
-      args: [cliPath],
+      args: [cliPath, '--headless'],
       env: spawnEnv,
       cwd: playwrightMcpCwd,
       stderr: 'pipe',

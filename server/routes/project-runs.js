@@ -9,6 +9,7 @@ export function registerProjectRunRoutes(app, deps) {
     shellBin,
     isWin,
     augmentedPath,
+    devServerRegistry,
   } = deps;
 
   const projectRuns = new Map();
@@ -34,6 +35,34 @@ export function registerProjectRunRoutes(app, deps) {
           srcName: run.srcName,
           status: run.status,
         });
+      }
+    }
+    // Also include dev servers whose CWD falls under this project's root/sources
+    if (devServerRegistry) {
+      const project = getProject(req.params.id);
+      const projectPaths = [];
+      if (project?.rootPath) projectPaths.push(project.rootPath);
+      for (const src of project?.sources || []) {
+        if (src.path) projectPaths.push(src.path);
+      }
+      if (projectPaths.length) {
+        for (const e of devServerRegistry.list()) {
+          if (!e.cwd) continue;
+          const matches = projectPaths.some(p => e.cwd === p || e.cwd.startsWith(p + path.sep));
+          if (!matches) continue;
+          const st = e.status === 'starting' ? 'starting'
+                   : e.status === 'running'  ? 'running'
+                   : e.status === 'stopping' ? 'running' : 'stopped';
+          list.push({
+            runId: e.id,
+            name: e.label || e.command,
+            cmd: e.command,
+            port: e.port,
+            srcName: e.cwdShort || '',
+            status: st,
+            isDevServer: true,
+          });
+        }
       }
     }
     res.json(list);

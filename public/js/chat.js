@@ -945,6 +945,16 @@ async function sendMessage(opts) {
   var sysContext = await gatherSystemContext(text);
   var apiContent = sysContext ? content + sysContext : content;
 
+  // Inject uncompleted todos so the AI can continue where it left off
+  if (typeof getUncompletedTodos === 'function') {
+    var _pendingTodos = getUncompletedTodos();
+    if (_pendingTodos.length) {
+      apiContent += '\n\n[Remaining todos from the active plan:\n' +
+        _pendingTodos.map(function(t, i) { return (i + 1) + '. ' + t; }).join('\n') +
+        '\nContinue working through these unless the user asks for something different.]';
+    }
+  }
+
   // Inject current date/time — gives the AI authoritative "today" context on every turn
   apiContent += '\n\n[Current date and time: ' + new Intl.DateTimeFormat('en', { dateStyle: 'full', timeStyle: 'short', hour12: false }).format(new Date()) + ']';
 
@@ -2332,6 +2342,10 @@ async function streamResponse(conv) {
             if (isActive() && typeof renderDecisionPrompt === 'function') renderDecisionPrompt(conv._waitingForUserAction, conv);
             if (typeof saveConversations === 'function') saveConversations();
             dbg('conversation waiting for user action: ' + (conv._waitingForUserAction.kind || 'interactive'), 'info');
+          }
+          if (evt.type === 'file_edits_summary' && Array.isArray(evt.files) && evt.files.length > 0) {
+            // Show the Keep / Undo / View all edits bar above the composer
+            if (typeof showFileEditsBar === 'function') showFileEditsBar(evt.files, convId);
           }
           if (evt.type === 'done') {
             _syncPublicReasoningSummary();
