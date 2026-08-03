@@ -1218,10 +1218,23 @@ export function registerChatRoute(app, {
       const stripped = messages.map((m, i) => {
         let content = m.content;
 
+        // Promote client-side image attachments (m.images) into image_url content parts.
+        // The client sends images as { base64, mime, name }[] on the message object;
+        // they must become an array of content parts before the LLM can see them.
+        const isLatest = i === messages.length - 1;
+        if (m.role === 'user' && Array.isArray(m.images) && m.images.length && isLatest) {
+          const textPart = { type: 'text', text: typeof content === 'string' ? content : String(content || '') };
+          const imageParts = m.images.map(img => ({
+            type: 'image_url',
+            image_url: { url: `data:${img.mime || 'image/jpeg'};base64,${img.base64}` },
+          }));
+          content = [textPart, ...imageParts];
+        }
+
         // Strip image bytes from non-latest vision messages
         if (Array.isArray(content) && i < messages.length - 1) {
           const textOnly = content.filter(c => c.type === 'text').map(c => c.text).join('\n');
-          content = textOnly + '\n[screenshot attached earlier — not repeated]';
+          content = textOnly + '\n[image attached earlier — not repeated]';
         }
 
         // Cap any single message at MAX_MSG_TOKENS (shell outputs can be huge).

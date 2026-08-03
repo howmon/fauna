@@ -2601,6 +2601,8 @@ async function streamResponse(conv) {
         scrollBottom();
         setBusy(false);
         if (typeof syncDecisionPromptForCurrentConversation === 'function') syncDecisionPromptForCurrentConversation();
+        // Signal stream end so the todo bar can auto-dismiss if all items are done
+        if (_currentPlan && typeof window.updateTodoBar === 'function') window.updateTodoBar(_currentPlan, false);
 
         // ── Auto-continue when the plan isn't done ────────────────────────
         // If a fauna_plan is in flight and still has incomplete items (or the
