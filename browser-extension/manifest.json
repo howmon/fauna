@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Fauna Browser Bridge",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Connects your browser to the Fauna AI desktop app — lets Fauna read pages, fill forms, take snapshots and act on any tab.",
   "icons": {
     "16": "icons/icon16.png",
