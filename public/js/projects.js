@@ -2298,6 +2298,19 @@ async function loadProjectFileTree(srcId /*, subPath ignored — tree always sta
   if (_projFileSearchState.visible && _projFileSearchState.query) runProjectFileSearch();
 }
 
+// Throttled refresh — called by AI write events so the tree stays live while the agent works.
+var _fileTreeRefreshTimer = null;
+window.refreshProjectFileTree = function refreshProjectFileTree() {
+  var srcId = _hubTreeState.srcId || state._projectFileSrcId;
+  if (!srcId) return;
+  if (_fileTreeRefreshTimer) return; // already queued
+  _fileTreeRefreshTimer = setTimeout(function() {
+    _fileTreeRefreshTimer = null;
+    _hubTreeState.dirCache = {};
+    loadProjectFileTree(srcId).catch(function() {});
+  }, 400);
+};
+
 // Prompt the user for a name then create a new file or directory inside
 // the source rooted under `parentPath` (empty string = source root). On
 // success the parent dir's cache is invalidated, the parent is expanded,
@@ -2422,12 +2435,12 @@ function closeFileTab(idx, e) {
   var closedKey = _fileTabKey(_openFileTabs[idx].srcId, _openFileTabs[idx].filePath);
   _openFileTabs.splice(idx, 1);
   if (_openFileTabs.length === 0) {
-    // No more tabs — hide viewer
     _activeFileTabKey = null;
     var viewer = document.getElementById('proj-file-viewer');
     if (viewer) viewer.style.display = 'none';
     if (_projMonacoEditor) { _projMonacoEditor.dispose(); _projMonacoEditor = null; }
     _renderFileTabsBar();
+    closeProjectHub();
     return;
   }
   if (closedKey === _activeFileTabKey) {
@@ -5797,7 +5810,12 @@ async function submitCreateProject() {
     await setActiveProject(proj.id, { navigate: false });
     renderProjectSidebarList();
     _renderAllProjectsPage();
-    openProjectHub(type === 'design' ? 'design' : 'files');
+    if (type === 'design') {
+      openProjectHub('design');
+    } else {
+      closeProjectHub();
+      if (typeof newConversation === 'function') newConversation();
+    }
     _showToast('Project created');
 
     // Handle pending gen-ui spec save (from _createProjectAndSaveGenUI)

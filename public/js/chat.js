@@ -2346,6 +2346,7 @@ async function streamResponse(conv) {
           if (evt.type === 'file_edits_summary' && Array.isArray(evt.files) && evt.files.length > 0) {
             // Show the Keep / Undo / View all edits bar above the composer
             if (typeof showFileEditsBar === 'function') showFileEditsBar(evt.files, convId);
+            if (typeof window.refreshProjectFileTree === 'function') window.refreshProjectFileTree();
           }
           if (evt.type === 'done') {
             _syncPublicReasoningSummary();
