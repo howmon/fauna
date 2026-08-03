@@ -131,22 +131,30 @@
           All conversations
         </button>
       </div>
-      <div class="proj-sp-title-row">
+      <div class="proj-sp-title-row" onclick="toggleProjSpConvs()" title="Collapse conversations">
         <span id="proj-sp-dot" class="proj-dot proj-color-teal"></span>
         <span id="proj-sp-name" class="proj-sp-name"></span>
-        <button class="proj-sp-icon-btn" onclick="openProjectHub()" title="Open project hub"><i class="ti ti-layout-sidebar-right-expand"></i></button>
+        <i class="ti ti-chevron-down proj-sp-chevron" id="proj-sp-convs-chevron"></i>
       </div>
       <div id="proj-sp-conv-list" class="proj-sp-conv-list"></div>
-      <div class="proj-sp-section-label">
+      <div class="proj-sp-section-label proj-sp-collapsible" id="proj-sp-files-label" onclick="toggleProjSpSection('files')">
+        <i class="ti ti-chevron-down proj-sp-chevron" id="proj-sp-files-chevron"></i>
         <span>FILES</span>
         <span style="flex:1"></span>
-        <button class="proj-sp-icon-btn" onclick="newProjectEntry('sidebar','','file')" title="New file"><i class="ti ti-file-plus"></i></button>
-        <button class="proj-sp-icon-btn" onclick="newProjectEntry('sidebar','','dir')" title="New folder"><i class="ti ti-folder-plus"></i></button>
+        <button class="proj-sp-icon-btn" onclick="event.stopPropagation();newProjectEntry('sidebar','','file')" title="New file"><i class="ti ti-file-plus"></i></button>
+        <button class="proj-sp-icon-btn" onclick="event.stopPropagation();newProjectEntry('sidebar','','dir')" title="New folder"><i class="ti ti-folder-plus"></i></button>
       </div>
-      <div id="proj-sp-src-row" class="proj-sp-src-row" style="display:none">
-        <select class="proj-src-select proj-sp-src-select" onchange="projSpLoadSrc(this.value)"></select>
+      <div id="proj-sp-files-body" class="proj-sp-section-body">
+        <div id="proj-sp-src-row" class="proj-sp-src-row" style="display:none">
+          <select class="proj-src-select proj-sp-src-select" onchange="projSpLoadSrc(this.value)"></select>
+        </div>
+        <div id="proj-sp-tree" class="proj-sp-tree proj-file-tree"></div>
       </div>
-      <div id="proj-sp-tree" class="proj-sp-tree proj-file-tree"></div>
+      <div class="proj-sp-section-label proj-sp-collapsible" id="proj-sp-project-label" onclick="toggleProjSpSection('project')">
+        <i class="ti ti-chevron-down proj-sp-chevron" id="proj-sp-project-chevron"></i>
+        <span>PROJECT</span>
+      </div>
+      <div id="proj-sp-project-body" class="proj-sp-section-body proj-sp-project-body"></div>
       <input id="proj-sp-upload-input" type="file" multiple style="display:none" onchange="_handleProjectUploadPick('sidebar', this)"/>
     </div>
 
@@ -3233,6 +3241,8 @@ Examples:
   <div class="project-hub-tabs" id="project-hub-tabs"></div>
   <div class="project-hub-body" id="project-hub-body"></div>
 </div>
+<!-- Drag handle for inline hub ↔ chat split -->
+<div id="proj-sp-split-handle"></div>
 
 <!-- ── Help Panel ────────────────────────────────────────────────── -->
 <div id="help-panel">

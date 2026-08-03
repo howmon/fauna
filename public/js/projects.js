@@ -770,6 +770,8 @@ function closeProjectHub() {
   if (_projMonacoEditor) { _projMonacoEditor.dispose(); _projMonacoEditor = null; }
   // Kill all terminal sessions
   _termDestroyAll();
+  // Exit inline hub mode
+  document.body.classList.remove('proj-sp-hub-open');
   var hub = document.getElementById('project-hub');
   if (hub) hub.style.display = 'none';
 }
@@ -793,8 +795,14 @@ function openProjSidebarPanel() {
   if (actions) actions.style.display = 'none';
   if (scroll) scroll.style.display = 'none';
   state.projSidebarPanelOpen = true;
+  document.body.classList.add('proj-sp-panel-open');
+  // Restore collapsible section states
+  _projSpApplySectionState('files');
+  _projSpApplySectionState('project');
   // Render compact conversation list
   _projSpRenderConvs(proj);
+  // Render project section
+  _projSpRenderProjectSection(proj);
   // Load file tree
   _projSpLoadTree(proj);
   // Persist preference
@@ -809,6 +817,9 @@ function closeProjSidebarPanel() {
   if (actions) actions.style.display = '';
   if (scroll) scroll.style.display = '';
   state.projSidebarPanelOpen = false;
+  document.body.classList.remove('proj-sp-panel-open');
+  // Close inline hub if open
+  if (state.projectHubOpen) closeProjectHub();
   // Reset sidebar tree state
   _projSidebarTreeState.srcId = null;
   _projSidebarTreeState.dirCache = {};
@@ -824,25 +835,31 @@ function _projSpRenderConvs(proj) {
   var convs = (state.conversations || [])
     .filter(function(c) { return c.projectId === proj.id; })
     .sort(function(a, b) { return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0); });
-  var MAX = 6;
   var pid = _projEsc(proj.id);
-  el.innerHTML = convs.slice(0, MAX).map(function(c) {
-    var isActive = c.id === state.currentId;
-    return '<button class="proj-sp-conv-item' + (isActive ? ' active' : '') + '" onclick="loadConversation(\'' + escHtml(c.id) + '\')">' +
-      (c._streaming ? '<i class="ti ti-loader-2 conv-streaming-icon"></i>' : '<i class="ti ti-message"></i>') +
-      '<span class="proj-sp-conv-title">' + escHtml(c.title || 'Untitled') + '</span>' +
-    '</button>';
-  }).join('') +
-  (convs.length > MAX ? '<button class="proj-sp-conv-item" onclick="openAllConversations(\'' + pid + '\')">' +
-    '<i class="ti ti-list"></i><span class="proj-sp-conv-title">All chats (' + convs.length + ')</span>' +
-  '</button>' : '') +
-  '<button class="proj-sp-new-chat-btn" onclick="newConversationInProject(\'' + pid + '\')">' +
-    '<i class="ti ti-edit"></i> New chat' +
-  '</button>';
+  el.innerHTML =
+  '<div class="conv-item" onclick="newConversationInProject(\'' + pid + '\')">' +
+    '<i class="ti ti-edit"></i><span class="conv-label">New chat</span>' +
+  '</div>' +
+  convs.map(function(c) { return _convRowHtml(c); }).join('');
+  // Restore collapsed state
+  var isCollapsed = localStorage.getItem('fauna-proj-sp-convs-open') === 'false';
+  el.classList.toggle('collapsed', isCollapsed);
+  var chev = document.getElementById('proj-sp-convs-chevron');
+  if (chev) chev.classList.toggle('collapsed', isCollapsed);
 }
 
+function toggleProjSpConvs() {
+  var el = document.getElementById('proj-sp-conv-list');
+  var chev = document.getElementById('proj-sp-convs-chevron');
+  if (!el) return;
+  var isNowCollapsed = !el.classList.contains('collapsed');
+  el.classList.toggle('collapsed', isNowCollapsed);
+  if (chev) chev.classList.toggle('collapsed', isNowCollapsed);
+  localStorage.setItem('fauna-proj-sp-convs-open', isNowCollapsed ? 'false' : 'true');
+}
+window.toggleProjSpConvs = toggleProjSpConvs;
+
 async function _projSpLoadTree(proj) {
-  var treeEl = document.getElementById('proj-sp-tree');
   var srcRowEl = document.getElementById('proj-sp-src-row');
   if (!proj) return;
   var rootPath = proj.rootPath && proj.rootPath.trim();
@@ -893,6 +910,98 @@ async function projSpLoadSrc(srcId) {
 window.projSpLoadSrc = projSpLoadSrc;
 window.openProjSidebarPanel = openProjSidebarPanel;
 window.closeProjSidebarPanel = closeProjSidebarPanel;
+
+// ── Collapsible section helpers ────────────────────────────────────────────
+
+function _projSpApplySectionState(which) {
+  var open = localStorage.getItem('fauna-proj-sp-' + which + '-open');
+  // default open (null = open)
+  var isOpen = open !== 'false';
+  var body = document.getElementById('proj-sp-' + which + '-body');
+  var chevron = document.getElementById('proj-sp-' + which + '-chevron');
+  if (!body) return;
+  body.classList.toggle('collapsed', !isOpen);
+  if (chevron) chevron.classList.toggle('collapsed', !isOpen);
+}
+
+function toggleProjSpSection(which) {
+  var body = document.getElementById('proj-sp-' + which + '-body');
+  var chevron = document.getElementById('proj-sp-' + which + '-chevron');
+  if (!body) return;
+  var isNowCollapsed = !body.classList.contains('collapsed');
+  body.classList.toggle('collapsed', isNowCollapsed);
+  if (chevron) chevron.classList.toggle('collapsed', isNowCollapsed);
+  localStorage.setItem('fauna-proj-sp-' + which + '-open', isNowCollapsed ? 'false' : 'true');
+}
+window.toggleProjSpSection = toggleProjSpSection;
+
+// ── Project section in sidebar panel ──────────────────────────────────────
+
+function _projSpRenderProjectSection(proj) {
+  var body = document.getElementById('proj-sp-project-body');
+  if (!body) return;
+  var ITEMS = [
+    { id: 'tasks',    icon: 'ti-layout-kanban', label: 'Board' },
+    { id: 'contexts', icon: 'ti-file-text',     label: 'Contexts' },
+    { id: 'run',      icon: 'ti-player-play',   label: 'Run' },
+    { id: 'convs',    icon: 'ti-messages',      label: 'Conversations' },
+    { id: 'settings', icon: 'ti-settings',      label: 'Settings' },
+  ];
+  body.innerHTML = ITEMS.map(function(it) {
+    return '<button class="proj-sp-project-item" onclick="openProjHubInline(\'' + it.id + '\')">' +
+      '<i class="ti ' + it.icon + '"></i>' + it.label + '</button>';
+  }).join('');
+}
+
+// ── Inline hub (side-by-side with chat) ───────────────────────────────────
+
+var _PROJ_SP_CHAT_MIN = 240;
+var _PROJ_SP_CHAT_MAX = 720;
+var _PROJ_SP_CHAT_STORAGE = 'fauna-proj-sp-chat-w';
+
+function _projSpSetChatWidth(w) {
+  document.documentElement.style.setProperty('--proj-sp-chat-w', w + 'px');
+}
+
+function _installProjSpSplitResize() {
+  var handle = document.getElementById('proj-sp-split-handle');
+  if (!handle || handle._splitResizeInstalled) return;
+  handle._splitResizeInstalled = true;
+  // Restore saved width
+  var saved = parseInt(localStorage.getItem(_PROJ_SP_CHAT_STORAGE), 10);
+  if (saved && saved >= _PROJ_SP_CHAT_MIN && saved <= _PROJ_SP_CHAT_MAX) {
+    _projSpSetChatWidth(saved);
+  }
+  window.installPaneResize({
+    handle: handle,
+    getStartWidth: function() {
+      var cur = getComputedStyle(document.documentElement).getPropertyValue('--proj-sp-chat-w');
+      return parseInt(cur, 10) || 360;
+    },
+    onMove: function(dx, startW) {
+      // Drag RIGHT → chat narrows; drag LEFT → chat widens
+      var w = Math.min(_PROJ_SP_CHAT_MAX, Math.max(_PROJ_SP_CHAT_MIN, startW - dx));
+      _projSpSetChatWidth(w);
+    },
+    onEnd: function() {
+      var cur = getComputedStyle(document.documentElement).getPropertyValue('--proj-sp-chat-w');
+      localStorage.setItem(_PROJ_SP_CHAT_STORAGE, parseInt(cur, 10));
+    },
+    onDoubleClick: function() {
+      _projSpSetChatWidth(360);
+      localStorage.removeItem(_PROJ_SP_CHAT_STORAGE);
+    }
+  });
+}
+
+function openProjHubInline(tab) {
+  var proj = _activeProject();
+  if (!proj) return;
+  document.body.classList.add('proj-sp-hub-open');
+  _installProjSpSplitResize();
+  openProjectHub(tab);
+}
+window.openProjHubInline = openProjHubInline;
 
 function _renderProjectHub(proj) {
   var nameEl = document.getElementById('project-hub-name');
@@ -1644,7 +1753,7 @@ function _treeOpenFile(stId, filePath) {
   _treeMarkOpened(st, filePath);
   _treeRender(st);
   if (stId === 'hub') openProjectFile(st.srcId, filePath);
-  else if (stId === 'sidebar') { openProjectHub('files'); setTimeout(function() { openProjectFile(st.srcId, filePath); }, 120); }
+  else if (stId === 'sidebar') { openProjHubInline('files'); setTimeout(function() { openProjectFile(st.srcId, filePath); }, 120); }
   else explorerOpenFile(st.srcId, filePath);
 }
 
@@ -2238,14 +2347,95 @@ var _projMonacoSrcId   = null;   // srcId of file currently shown
 var _projMonacoBaseline = '';
 var _explorerMonacoBaseline = '';
 
+// ── Multi-file tab state ───────────────────────────────────────────────────
+var _openFileTabs = [];        // [{srcId, filePath, modified}]
+var _activeFileTabKey = null;  // "filePath::srcId"
+
+function _fileTabKey(srcId, filePath) { return filePath + '::' + srcId; }
+
+function _renderFileTabsBar() {
+  var viewerEl = document.getElementById('proj-file-viewer');
+  if (!viewerEl) return;
+  var bar = document.getElementById('proj-file-tabs-bar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'proj-file-tabs-bar';
+    bar.className = 'proj-file-tabs-bar';
+    viewerEl.insertBefore(bar, viewerEl.firstChild);
+  }
+  bar.innerHTML = _openFileTabs.map(function(tab, i) {
+    var key = _fileTabKey(tab.srcId, tab.filePath);
+    var isActive = key === _activeFileTabKey;
+    var label = tab.filePath.split('/').pop();
+    return '<div class="proj-file-tab' + (isActive ? ' active' : '') +
+      '" onclick="switchFileTab(\'' + _projEsc(key) + '\')">' +
+      '<span class="proj-tab-dot' + (tab.modified ? ' dirty' : '') + '">&#9679;</span>' +
+      '<span class="proj-tab-label" title="' + _projEsc(tab.filePath) + '">' + _projEsc(label) + '</span>' +
+      '<button class="proj-tab-close" onclick="closeFileTab(' + i + ',event)" title="Close tab">\u00d7</button>' +
+    '</div>';
+  }).join('');
+}
+
+function _openFileTabEntry(srcId, filePath) {
+  var key = _fileTabKey(srcId, filePath);
+  var existing = _openFileTabs.find(function(t) { return _fileTabKey(t.srcId, t.filePath) === key; });
+  if (!existing) {
+    // New tab — starts as modified (opened = dirty until saved)
+    _openFileTabs.push({ srcId: srcId, filePath: filePath, modified: true });
+  }
+  _activeFileTabKey = key;
+}
+
+function switchFileTab(key) {
+  if (key === _activeFileTabKey) return;
+  var tab = _openFileTabs.find(function(t) { return _fileTabKey(t.srcId, t.filePath) === key; });
+  if (!tab) return;
+  openProjectFile(tab.srcId, tab.filePath);
+}
+window.switchFileTab = switchFileTab;
+
+function closeFileTab(idx, e) {
+  if (e) { e.stopPropagation(); e.preventDefault(); }
+  if (idx < 0 || idx >= _openFileTabs.length) return;
+  var closedKey = _fileTabKey(_openFileTabs[idx].srcId, _openFileTabs[idx].filePath);
+  _openFileTabs.splice(idx, 1);
+  if (_openFileTabs.length === 0) {
+    // No more tabs — hide viewer
+    _activeFileTabKey = null;
+    var viewer = document.getElementById('proj-file-viewer');
+    if (viewer) viewer.style.display = 'none';
+    if (_projMonacoEditor) { _projMonacoEditor.dispose(); _projMonacoEditor = null; }
+    _renderFileTabsBar();
+    return;
+  }
+  if (closedKey === _activeFileTabKey) {
+    // Switch to adjacent tab
+    var newIdx = Math.min(idx, _openFileTabs.length - 1);
+    var t = _openFileTabs[newIdx];
+    openProjectFile(t.srcId, t.filePath);
+  } else {
+    _renderFileTabsBar();
+  }
+}
+window.closeFileTab = closeFileTab;
+
 function _setProjectSaveDirty(scope, dirty) {
   var selector = scope === 'explorer'
     ? '#proj-exp-viewer .proj-save-btn'
     : '#proj-file-viewer-header .proj-save-btn';
   var button = document.querySelector(selector);
-  if (!button) return;
-  button.disabled = !dirty;
-  button.classList.toggle('dirty', !!dirty);
+  if (button) {
+    button.disabled = !dirty;
+    button.classList.toggle('dirty', !!dirty);
+  }
+  // Sync the active hub tab's modified dot
+  if (scope === 'hub' && _activeFileTabKey) {
+    var _dTab = _openFileTabs.find(function(t) { return _fileTabKey(t.srcId, t.filePath) === _activeFileTabKey; });
+    if (_dTab && _dTab.modified !== !!dirty) {
+      _dTab.modified = !!dirty;
+      _renderFileTabsBar();
+    }
+  }
 }
 
 // Map file extension → Monaco language id
@@ -2286,16 +2476,20 @@ var _MONO_LANG = {
 
 async function openProjectFile(srcId, filePath) {
   if (!state.activeProjectId) return;
+  // Track in multi-tab state
+  _openFileTabEntry(srcId, filePath);
   var viewerEl = document.getElementById('proj-file-viewer');
   if (!viewerEl) return;
   viewerEl.style.display = '';
 
-  // Initialize structure if not already present
+  // Initialize viewer structure if not already present
   if (!document.getElementById('proj-file-viewer-body')) {
     viewerEl.innerHTML =
       '<div class="proj-file-viewer-header" id="proj-file-viewer-header"></div>' +
       '<div id="proj-file-viewer-body" class="proj-file-viewer-body"></div>';
   }
+  // Render / update the tab bar (self-initialising, inserts before first child)
+  _renderFileTabsBar();
 
   var headerEl = document.getElementById('proj-file-viewer-header');
   if (headerEl) headerEl.innerHTML = '<span class="proj-loading"><i class="ti ti-loader-2 spin"></i> Loading…</span>';
@@ -2476,13 +2670,17 @@ function _projMonacoFallback(container, content) {
 }
 
 function closeProjectFileViewer() {
+  // Close the currently-active tab (or all if none tracked)
+  if (_activeFileTabKey) {
+    var idx = _openFileTabs.findIndex(function(t) {
+      return _fileTabKey(t.srcId, t.filePath) === _activeFileTabKey;
+    });
+    if (idx !== -1) { closeFileTab(idx, null); return; }
+  }
+  // Fallback: hard-hide viewer
   var viewerEl = document.getElementById('proj-file-viewer');
   if (viewerEl) viewerEl.style.display = 'none';
-  // Dispose editor so it doesn't hold memory when switching tabs
-  if (_projMonacoEditor) {
-    _projMonacoEditor.dispose();
-    _projMonacoEditor = null;
-  }
+  if (_projMonacoEditor) { _projMonacoEditor.dispose(); _projMonacoEditor = null; }
 }
 
 function copyFileContent() {

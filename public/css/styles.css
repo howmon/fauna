@@ -725,15 +725,14 @@ body.is-resizing webview { pointer-events: none !important; }
   .tests-debug-grid > section:first-child { border-right: 0; border-bottom: 1px solid var(--fau-border); }
 }
 #sidebar-header {
-  padding: 14px 12px 10px;
-  /* border-bottom: 1px solid var(--fau-border); */
+  padding: 4px 12px 4px;
   display: flex;
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
 }
 #sidebar-logo { font-size: 18px; }
-#sidebar-title { font-weight: 700; font-size: 13px; flex: 1; letter-spacing: -.3px; }
+#sidebar-title { display: none; }
 #new-chat-btn {
   width: 100%; margin: 10px 0 4px; padding: 0 12px;
   display: flex;
@@ -9111,6 +9110,42 @@ body.win-platform .acv-header {
   border: 1px solid var(--fau-border); border-radius: 8px; overflow: hidden;
   display: flex; flex-direction: column; min-height: 0;
 }
+/* ── Multi-file tab bar ──────────────────────────────────────────────────── */
+.proj-file-tabs-bar {
+  display: flex; flex-direction: row; overflow-x: auto; overflow-y: hidden;
+  background: var(--fau-surface); border-bottom: 1px solid var(--fau-border);
+  min-height: 33px; flex-shrink: 0; align-items: stretch;
+  scrollbar-width: none;
+}
+.proj-file-tabs-bar::-webkit-scrollbar { display: none; }
+.proj-file-tab {
+  display: flex; align-items: center; gap: 4px;
+  padding: 0 4px 0 10px; cursor: pointer; flex-shrink: 0;
+  border-right: 1px solid var(--fau-border);
+  font-size: 12px; color: var(--fau-text-muted);
+  white-space: nowrap; max-width: 180px; min-width: 80px;
+  transition: background .1s, color .1s;
+}
+.proj-file-tab:hover { background: var(--fau-surface2); color: var(--fau-text); }
+.proj-file-tab.active {
+  background: var(--fau-bg); color: var(--fau-text);
+  border-bottom: 2px solid var(--accent);
+}
+.proj-tab-dot { font-size: 7px; flex-shrink: 0; opacity: 0; color: var(--accent); }
+.proj-tab-dot.dirty { opacity: 1; }
+.proj-tab-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.proj-tab-close {
+  display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; flex-shrink: 0;
+  background: none; border: none; cursor: pointer; border-radius: 3px;
+  color: var(--fau-text-dim); font-size: 14px; line-height: 1;
+  opacity: 0; transition: opacity .1s, background .1s, color .1s;
+  padding: 0; margin-left: 2px;
+}
+.proj-file-tab:hover .proj-tab-close,
+.proj-file-tab.active .proj-tab-close { opacity: 0.7; }
+.proj-tab-close:hover { background: rgba(255,255,255,.1); color: var(--fau-text); opacity: 1 !important; }
+
 .proj-file-viewer-header {
   display: flex; align-items: center; gap: 6px; padding: 6px 10px;
   background: var(--fau-surface2); border-bottom: 1px solid var(--fau-border); flex-wrap: wrap;
@@ -10538,13 +10573,13 @@ mark.find-hit.find-hit-active {
 }
 .proj-sp-nav {
   flex-shrink: 0;
-  padding: 4px 8px 2px;
+  padding: 2px 8px 2px;
 }
 .proj-sp-back-btn {
-  display: flex; align-items: center; gap: 4px;
+  display: flex; align-items: center; gap: 6px;
   width: 100%; background: none; border: none;
-  color: var(--fau-text-muted); font-size: 11px; font-weight: 500;
-  padding: 5px 6px; border-radius: 6px; cursor: pointer;
+  color: var(--fau-text-muted); font-size: 12px; font-weight: 500;
+  padding: 7px 10px; border-radius: 6px; cursor: pointer;
   transition: background .12s, color .12s;
   text-align: left; letter-spacing: .01em;
 }
@@ -10554,8 +10589,10 @@ mark.find-hit.find-hit-active {
   flex-shrink: 0;
   display: flex; align-items: center; gap: 7px;
   padding: 6px 12px 6px 10px;
-  border-bottom: 1px solid var(--fau-border);
+  cursor: pointer; user-select: none;
+  transition: background .1s;
 }
+.proj-sp-title-row:hover { background: var(--fau-surface2); }
 .proj-sp-name {
   flex: 1; min-width: 0;
   font-size: 12px; font-weight: 600;
@@ -10571,9 +10608,12 @@ mark.find-hit.find-hit-active {
 .proj-sp-icon-btn:hover { color: var(--fau-text); background: var(--fau-surface2); }
 .proj-sp-conv-list {
   flex-shrink: 0;
-  padding: 4px 6px 2px;
-  display: flex; flex-direction: column; gap: 1px;
+  padding: 4px 8px;
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: 280px; overflow-y: auto; overflow-x: hidden;
+  scrollbar-width: thin;
 }
+.proj-sp-conv-list.collapsed { display: none; }
 .proj-sp-conv-item {
   display: flex; align-items: center; gap: 7px;
   background: none; border: none; width: 100%;
@@ -10618,6 +10658,93 @@ mark.find-hit.find-hit-active {
 #proj-sp-tree .proj-file-row {
   font-size: 12px;
 }
+
+/* ── Collapsible sections in project sidebar panel ───────────────────────── */
+.proj-sp-collapsible { cursor: pointer; user-select: none; }
+.proj-sp-collapsible:hover { background: var(--fau-surface2); border-radius: 4px; }
+.proj-sp-chevron {
+  font-size: 11px; flex-shrink: 0; color: var(--fau-text-dim);
+  transition: transform .15s;
+}
+.proj-sp-chevron.collapsed { transform: rotate(-90deg); }
+.proj-sp-section-body {
+  display: flex; flex-direction: column; overflow: hidden; min-height: 0;
+}
+#proj-sp-files-body { flex: 1; min-height: 0; }
+.proj-sp-section-body.collapsed { display: none; }
+
+/* ── PROJECT section items ───────────────────────────────────────────────── */
+.proj-sp-project-body { padding: 2px 6px 6px; gap: 1px; }
+.proj-sp-project-item {
+  display: flex; align-items: center; gap: 8px;
+  background: none; border: none; width: 100%;
+  padding: 6px 8px; border-radius: 6px; cursor: pointer;
+  color: var(--fau-text-muted); font-size: 12px; text-align: left;
+  transition: background .1s, color .1s;
+}
+.proj-sp-project-item:hover { background: var(--fau-surface2); color: var(--fau-text); }
+.proj-sp-project-item .ti { font-size: 13px; flex-shrink: 0; width: 16px; }
+
+/* ── Hub in inline mode: side-by-side with chat ─────────────────────────── */
+body.proj-sp-hub-open .project-hub-panel {
+  /* 52px = fixed app-rail width; sidebar-w = the sidebar panel itself */
+  left: calc(52px + var(--fau-sidebar-w, 230px));
+  right: var(--proj-sp-chat-w, 360px);
+  width: auto !important;
+  box-shadow: none;
+  border-left: none;
+  border-right: 1px solid var(--fau-border);
+}
+/* Built-in left-resize handle is irrelevant in side-by-side mode */
+body.proj-sp-hub-open .project-hub-resize-handle { display: none; }
+/* Tab bar is already in the sidebar PROJECT section — hide the duplicate */
+body.proj-sp-hub-open .project-hub-tabs { display: none; }
+/* Sidebar resize handle stays accessible above the hub */
+body.proj-sp-hub-open #sidebar-resize-handle { z-index: 505; }
+/* Chat becomes a fixed right column */
+body.proj-sp-hub-open #main {
+  position: fixed;
+  top: 44px; bottom: 0; right: 0;
+  width: var(--proj-sp-chat-w, 360px);
+  z-index: 500;
+  background: var(--fau-bg, #1e1e1e);
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+/* Drag handle sitting on the hub↔chat boundary */
+#proj-sp-split-handle {
+  display: none;
+  position: fixed;
+  top: 44px; bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 502;
+  /* Center the 8px handle on the exact boundary */
+  right: calc(var(--proj-sp-chat-w, 360px) - 4px);
+  background: transparent;
+  /* Always-visible 1px hint line */
+  border-right: 1px solid var(--fau-border);
+  transition: background .15s, border-color .15s;
+}
+#proj-sp-split-handle:hover,
+body.is-resizing #proj-sp-split-handle {
+  background: var(--accent, #7c6fcd);
+  opacity: 0.45;
+  border-right-color: transparent;
+}
+body.proj-sp-hub-open #proj-sp-split-handle { display: block; }
+
+/* Inline mode: sidebar already has the file tree + toolbar — hide duplicates in hub */
+body.proj-sp-hub-open .proj-files-tree-col { display: none; }
+body.proj-sp-hub-open .proj-files-toolbar { display: none; }
+body.proj-sp-hub-open .proj-files-viewer-col { display: flex !important; flex: 1 !important; }
+/* Hide the hub header bar — project name is already in sidebar, X is unneeded */
+body.proj-sp-hub-open .project-hub-header { display: none; }
+/* Make hub body start from the very top when header is hidden */
+body.proj-sp-hub-open .project-hub-body { border-top: none; }
 
 /* ── Custom MCP Manager ──────────────────────────────────────────────────── */
 .mcp-servers-list {
