@@ -945,7 +945,7 @@ function _projSpRenderProjectSection(proj) {
     { id: 'contexts', icon: 'ti-file-text',     label: 'Contexts' },
     { id: 'run',      icon: 'ti-player-play',   label: 'Run' },
     { id: 'convs',    icon: 'ti-messages',      label: 'Conversations' },
-    { id: 'settings', icon: 'ti-settings',      label: 'Settings' },
+    { id: 'settings', icon: 'ti-adjustments-horizontal', label: 'Project Configuration' },
   ];
   body.innerHTML = ITEMS.map(function(it) {
     return '<button class="proj-sp-project-item" onclick="openProjHubInline(\'' + it.id + '\')">' +
@@ -1018,7 +1018,7 @@ function _renderProjectHub(proj) {
     { id: 'contexts', icon: 'ti-file-text',     label: 'Contexts' },
     { id: 'run',      icon: 'ti-player-play',   label: 'Run' },
     { id: 'convs',    icon: 'ti-messages',      label: 'Conversations' },
-    { id: 'settings', icon: 'ti-settings',      label: 'Settings' },
+    { id: 'settings', icon: 'ti-adjustments-horizontal', label: 'Project Configuration' },
   ];
   // Add Design tab for design projects
   if (proj.design && proj.design.projectType === 'design') {
