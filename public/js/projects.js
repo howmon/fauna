@@ -3989,8 +3989,14 @@ async function startProjectRun(srcId) {
 }
 
 async function stopProjectRun(runId, projectId) {
-  var pid = projectId || (state.activeProjectId);
-  // Dev-server registry entries (no project) live at /api/runs/:id (DELETE).
+  // Dev-server registry entries have runId starting with 'dev_' and are
+  // passed with projectId === null from the dev servers page. Route them
+  // to /api/runs/:id instead of the project runs endpoint, and do NOT
+  // fall back to state.activeProjectId (that would be the wrong project).
+  if (projectId === null || projectId === undefined || String(runId).startsWith('dev_')) {
+    return stopDevServerRun(runId);
+  }
+  var pid = projectId || state.activeProjectId;
   if (!pid) return stopDevServerRun(runId);
   try {
     var r = await fetch('/api/projects/' + pid + '/runs/' + runId, { method: 'DELETE' });
@@ -4020,6 +4026,10 @@ async function restartDevServerRun(runId) {
 }
 
 async function dismissProjectRun(runId, projectId) {
+  // Dev server entries should be stopped via the registry, not the project endpoint
+  if (projectId === null || projectId === undefined || String(runId).startsWith('dev_')) {
+    return stopDevServerRun(runId);
+  }
   var pid = projectId || (state.activeProjectId);
   try {
     await fetch('/api/projects/' + pid + '/runs/' + runId, { method: 'DELETE' });

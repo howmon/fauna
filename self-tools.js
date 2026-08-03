@@ -4233,9 +4233,8 @@ export async function executeSelfTool(toolName, args, context = {}) {
         if (typeof context.recordFileEdit === 'function' && !args.append) {
           try {
             const _wfAbs = _resolveFaunaWritePath(args.path, args.cwd);
-            if (fs.existsSync(_wfAbs)) {
-              context.recordFileEdit(_wfAbs, fs.readFileSync(_wfAbs, 'utf8'));
-            }
+            const _wfExisted = fs.existsSync(_wfAbs);
+            context.recordFileEdit(_wfAbs, _wfExisted ? fs.readFileSync(_wfAbs, 'utf8') : null);
           } catch (_) {}
         }
         const result = _writeFastFile(args || {});
@@ -4378,9 +4377,8 @@ export async function executeSelfTool(toolName, args, context = {}) {
             if (!file.append) {
               try {
                 const _wfAbs = _resolveFaunaWritePath(file.path, args.cwd || file.cwd);
-                if (fs.existsSync(_wfAbs)) {
-                  context.recordFileEdit(_wfAbs, fs.readFileSync(_wfAbs, 'utf8'));
-                }
+                const _wfExisted = fs.existsSync(_wfAbs);
+                context.recordFileEdit(_wfAbs, _wfExisted ? fs.readFileSync(_wfAbs, 'utf8') : null);
               } catch (_) {}
             }
           }

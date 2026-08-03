@@ -130,29 +130,72 @@ var _febFiles  = [];
 var _febDiffData = null;
 var _febDiffTabIdx = 0;
 
+var _langIcons = {
+  '.js': 'ti-brand-javascript', '.mjs': 'ti-brand-javascript', '.cjs': 'ti-brand-javascript',
+  '.ts': 'ti-brand-typescript', '.jsx': 'ti-brand-react', '.tsx': 'ti-brand-react',
+  '.py': 'ti-brand-python', '.html': 'ti-brand-html5', '.htm': 'ti-brand-html5',
+  '.css': 'ti-brand-css3', '.scss': 'ti-brand-css3', '.json': 'ti-braces',
+  '.md': 'ti-markdown', '.sh': 'ti-terminal-2', '.rs': 'ti-brand-rust',
+  '.go': 'ti-brand-golang', '.rb': 'ti-brand-ruby', '.php': 'ti-brand-php',
+  '.vue': 'ti-brand-vue', '.svelte': 'ti-brand-svelte',
+};
+function _fileIcon(name) {
+  var m = name.match(/\.[^.]+$/);
+  return (_langIcons[m ? m[0].toLowerCase() : '']) || 'ti-file-code';
+}
+function _fileDir(fullPath, name) {
+  if (!fullPath) return '';
+  var dir = fullPath.slice(0, fullPath.length - name.length - 1).replace(/\\/g, '/');
+  var parts = dir.split('/');
+  return parts.slice(-2).join('/');
+}
 function showFileEditsBar(files, convId) {
   _febConvId = convId;
   _febFiles  = Array.isArray(files) ? files : [];
-  _febDiffData = null; // invalidate cached diff
+  _febDiffData = null;
 
   var bar = document.getElementById('file-edits-bar');
   if (!bar) return;
 
-  var names = _febFiles.slice(0, 5).map(function(f) {
-    return '<span class="feb-file-chip" title="' + escHtml(f.path || f.name) + '">' +
-      '<i class="ti ti-file-code"></i> ' + escHtml(f.name) + '</span>';
-  });
-  var extra = _febFiles.length > 5 ? ' <span style="color:var(--fau-text-muted);font-size:11px">+' + (_febFiles.length - 5) + ' more</span>' : '';
+  var totalAdded   = _febFiles.reduce(function(s, f) { return s + (f.added || 0); }, 0);
+  var totalRemoved = _febFiles.reduce(function(s, f) { return s + (f.removed || 0); }, 0);
+  var cnt = _febFiles.length;
 
+  var headerStats = '';
+  if (totalAdded)   headerStats += ' <span class="feb-added">+' + totalAdded + '</span>';
+  if (totalRemoved) headerStats += ' <span style="color:var(--fau-text-muted)">·</span> <span class="feb-removed">-' + totalRemoved + '</span>';
+
+  var fileRows = _febFiles.map(function(f) {
+    var icon = _fileIcon(f.name);
+    var dir  = _fileDir(f.path, f.name);
+    var fstats = '';
+    if (f.added)   fstats += '<span class="feb-added">+' + f.added + '</span>';
+    if (f.removed) fstats += ' <span class="feb-removed">-' + f.removed + '</span>';
+    return '<li class="feb-file-row">' +
+      '<i class="ti ' + icon + ' feb-lang-icon"></i>' +
+      '<span class="feb-fname">' + escHtml(f.name) + '</span>' +
+      (dir ? '<span class="feb-fdir">' + escHtml(dir) + '</span>' : '') +
+      (fstats ? '<span class="feb-fstats">' + fstats + '</span>' : '') +
+    '</li>';
+  }).join('');
+
+  var isOpen = bar.dataset.open !== '0';
   bar.innerHTML =
-    '<i class="ti ti-pencil-check feb-icon"></i>' +
-    '<span class="feb-label">Fauna edited <span class="feb-files">' + names.join('') + extra + '</span></span>' +
-    '<span class="feb-actions">' +
-      '<button class="feb-btn feb-view" onclick="openFileEditsDiffModal()" title="View a diff of every change"><i class="ti ti-git-diff"></i> View all edits</button>' +
-      '<button class="feb-btn feb-undo" onclick="_fileEditsUndo()" title="Revert all changes from this turn"><i class="ti ti-rotate-left"></i> Undo</button>' +
-      '<button class="feb-btn feb-keep" onclick="hideFileEditsBar()" title="Keep changes and dismiss"><i class="ti ti-check"></i> Keep</button>' +
-    '</span>';
+    '<div class="feb-header">' +
+      '<button class="feb-toggle" onclick="toggleFileEditsBar()" type="button">' +
+        '<i class="ti ti-chevron-down feb-chevron"></i>' +
+        '<span class="feb-count">' + cnt + ' file' + (cnt === 1 ? '' : 's') + ' changed</span>' +
+        headerStats +
+      '</button>' +
+      '<div class="feb-actions">' +
+        '<button class="feb-btn feb-keep" onclick="hideFileEditsBar()" title="Keep changes"><i class="ti ti-check"></i> Keep</button>' +
+        '<button class="feb-btn feb-undo" onclick="_fileEditsUndo()" title="Revert all"><i class="ti ti-rotate-left"></i> Undo</button>' +
+        '<button class="feb-btn feb-view" onclick="openFileEditsDiffModal()" title="View diff"><i class="ti ti-git-diff"></i></button>' +
+      '</div>' +
+    '</div>' +
+    '<ul class="feb-file-list">' + fileRows + '</ul>';
 
+  bar.dataset.open = isOpen ? '1' : '0';
   bar.classList.add('visible');
 }
 window.showFileEditsBar = showFileEditsBar;
@@ -162,6 +205,13 @@ function hideFileEditsBar() {
   if (bar) bar.classList.remove('visible');
 }
 window.hideFileEditsBar = hideFileEditsBar;
+
+function toggleFileEditsBar() {
+  var bar = document.getElementById('file-edits-bar');
+  if (!bar) return;
+  bar.dataset.open = bar.dataset.open === '0' ? '1' : '0';
+}
+window.toggleFileEditsBar = toggleFileEditsBar;
 
 async function _fileEditsUndo() {
   if (!_febConvId) return;

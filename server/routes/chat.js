@@ -564,9 +564,9 @@ export function registerChatRoute(app, {
     const entry = _editLedger.get(cid);
     if (!entry) return res.json({ ok: false, error: 'No edit record for this conversation' });
     const files = entry.files.map(f => {
-      let after = f.before;
+      let after = f.before ?? '';
       try { after = fs.readFileSync(f.path, 'utf8'); } catch (_) {}
-      return { path: f.path, name: f.name, before: f.before, after };
+      return { path: f.path, name: f.name, before: f.before ?? '', after };
     });
     res.json({ ok: true, files });
   });
@@ -579,8 +579,13 @@ export function registerChatRoute(app, {
     const errors = [];
     for (const f of entry.files) {
       try {
-        fs.mkdirSync(path.dirname(f.path), { recursive: true });
-        atomicWriteFile(f.path, f.before, 'utf8');
+        if (f.before === null) {
+          // New file created this turn — delete it on undo
+          try { fs.unlinkSync(f.path); } catch (_) {}
+        } else {
+          fs.mkdirSync(path.dirname(f.path), { recursive: true });
+          atomicWriteFile(f.path, f.before, 'utf8');
+        }
         restored.push(f.name);
       } catch (e) { errors.push({ name: f.name, error: e.message }); }
     }
@@ -845,9 +850,30 @@ export function registerChatRoute(app, {
     const _turnEdits = [];
     const _reqConvId = req.body?.conversationId || null;
     const _rawSend = (obj) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(obj)}\n\n`); };
+    // Compute per-file added/removed line counts via two-row LCS DP
+    const _lineDiffStats = (before, after) => {
+      if (before === null) return { added: (after || '').split('\n').length, removed: 0 };
+      const a = (before || '').split('\n').slice(0, 3000);
+      const b = (after  || '').split('\n').slice(0, 3000);
+      const m = a.length, n = b.length;
+      let prev = new Array(n+1).fill(0), curr = new Array(n+1).fill(0);
+      for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++)
+          curr[j] = a[i-1] === b[j-1] ? prev[j-1]+1 : Math.max(prev[j], curr[j-1]);
+        [prev, curr] = [curr, prev]; curr.fill(0);
+      }
+      const lcs = prev[n];
+      return { added: n - lcs, removed: m - lcs };
+    };
     const send = (obj) => {
       if (obj && obj.type === 'done' && _turnEdits.length > 0 && _reqConvId) {
-        _rawSend({ type: 'file_edits_summary', files: _turnEdits.map(e => ({ path: e.path, name: e.name })) });
+        const files = _turnEdits.map(e => {
+          let after = '';
+          try { after = fs.readFileSync(e.path, 'utf8'); } catch (_) {}
+          const stats = _lineDiffStats(e.before, after);
+          return { path: e.path, name: e.name, added: stats.added, removed: stats.removed };
+        });
+        _rawSend({ type: 'file_edits_summary', files });
         _editLedger.set(_reqConvId, { ts: Date.now(), files: _turnEdits.slice() });
         // Prune stale entries
         for (const [k, v] of _editLedger) {
@@ -1583,12 +1609,13 @@ export function registerChatRoute(app, {
         convId: req.body?.conversationId || null,
         activeAgentName: agentName || null,
         recordFileEdit: (absPath, oldContent) => {
-          if (!absPath || typeof oldContent !== 'string') return;
+          if (!absPath) return;
+          if (oldContent !== null && typeof oldContent !== 'string') return;
           if (_turnEdits.some(e => e.path === absPath)) return; // first-state only
           _turnEdits.push({
             path: absPath,
             name: path.basename(absPath),
-            before: oldContent.slice(0, _EDIT_LEDGER_MAX_FILE_BYTES),
+            before: oldContent !== null ? oldContent.slice(0, _EDIT_LEDGER_MAX_FILE_BYTES) : null,
           });
         },
         agentsDir,
