@@ -2,13 +2,128 @@
 // Shown above the composer after any chat turn that writes project files.
 // Three actions: Keep (dismiss), Undo (revert all changes), View (diff modal).
 //
-// Public API used by chat.js:
-//   showFileEditsBar(files, convId)
-//   hideFileEditsBar()
-//
-// Public API used by diff modal footer button in HTML:
-//   _fileEditsUndo()
-//   closeFileEditsDiffModal()
+// Also houses the persistent Todo / plan bar that replaces in-message plan
+// panels. Updated by overriding window.renderPlanPanel after load.
+
+// ── Todo bar ─────────────────────────────────────────────────────────────
+
+var _todoPersistKey = 'fauna-todo-bar-open'; // collapsed state localStorage key
+
+var _todoDismissTimer = null;
+var _currentPlan = null;
+
+// Returns uncompleted todo titles for the active plan, or empty array.
+function getUncompletedTodos() {
+  if (!_currentPlan || !Array.isArray(_currentPlan.items)) return [];
+  return _currentPlan.items
+    .filter(function(x) { return x.status !== 'completed' && x.status !== 'cancelled'; })
+    .map(function(x) { return x.title || ''; })
+    .filter(Boolean);
+}
+window.getUncompletedTodos = getUncompletedTodos;
+
+function updateTodoBar(plan, isLive) {
+  if (!plan || !Array.isArray(plan.items) || !plan.items.length) { clearTodoBar(); return; }
+  _currentPlan = plan;
+  var bar = document.getElementById('todo-bar');
+  if (!bar) return;
+
+  var items = plan.items;
+  var done  = items.filter(function(x) { return x.status === 'completed'; }).length;
+  var total = items.filter(function(x) { return x.status !== 'cancelled'; }).length;
+  var allDone = done >= total && !isLive;
+
+  // Auto-dismiss when every non-cancelled item is completed (after a short pause)
+  if (allDone) {
+    if (!_todoDismissTimer) {
+      _todoDismissTimer = setTimeout(function() {
+        _todoDismissTimer = null;
+        clearTodoBar();
+      }, 2000);
+    }
+    // Still render the final state so the user sees 100% briefly
+  } else {
+    // Cancel any pending dismiss if new/incomplete items appeared
+    if (_todoDismissTimer) { clearTimeout(_todoDismissTimer); _todoDismissTimer = null; }
+  }
+
+  // Preserve open/closed state; default open
+  if (!bar.dataset.open) bar.dataset.open = localStorage.getItem(_todoPersistKey) === '0' ? '0' : '1';
+
+  var summaryEl = bar.querySelector('.todo-bar-summary');
+  if (summaryEl) summaryEl.textContent = done + '/' + total;
+
+  var listEl = bar.querySelector('.todo-bar-list');
+  if (listEl) {
+    listEl.innerHTML = items.map(function(it) {
+      var st = it.status || 'not-started';
+      var icon = st === 'completed'   ? '<i class="ti ti-circle-check-filled"></i>'
+               : st === 'in-progress' ? '<i class="ti ti-loader-2 plan-spin"></i>'
+               : st === 'cancelled'   ? '<i class="ti ti-circle-x"></i>'
+               :                        '<i class="ti ti-circle"></i>';
+      return '<li class="todo-bar-item" data-status="' + st + '">' +
+        '<span class="todo-bar-item-icon">' + icon + '</span>' +
+        '<span>' + escHtml(it.title || '') + '</span>' +
+      '</li>';
+    }).join('');
+  }
+
+  // Re-show bar if it was previously hidden (new todo was added)
+  bar.style.display = '';
+  document.body.classList.add('todo-bar-open');
+}
+window.updateTodoBar = updateTodoBar;
+
+function clearTodoBar() {
+  if (_todoDismissTimer) { clearTimeout(_todoDismissTimer); _todoDismissTimer = null; }
+  _currentPlan = null;
+  var bar = document.getElementById('todo-bar');
+  if (bar) bar.style.display = 'none';
+  document.body.classList.remove('todo-bar-open');
+}
+window.clearTodoBar = clearTodoBar;
+
+function toggleTodoBar() {
+  var bar = document.getElementById('todo-bar');
+  if (!bar) return;
+  var next = bar.dataset.open === '1' ? '0' : '1';
+  bar.dataset.open = next;
+  try { localStorage.setItem(_todoPersistKey, next); } catch (_) {}
+}
+window.toggleTodoBar = toggleTodoBar;
+
+// Restore todo bar from the latest plan in a conversation
+function restoreTodoBar(conv) {
+  if (!conv || !Array.isArray(conv.messages)) { clearTodoBar(); return; }
+  var lastPlan = null;
+  for (var i = conv.messages.length - 1; i >= 0; i--) {
+    var m = conv.messages[i];
+    if (m && m.role === 'assistant' && m.plan && Array.isArray(m.plan.items) && m.plan.items.length) {
+      lastPlan = m.plan;
+      break;
+    }
+  }
+  if (lastPlan) updateTodoBar(lastPlan, false);
+  else clearTodoBar();
+}
+window.restoreTodoBar = restoreTodoBar;
+
+// Override window.renderPlanPanel to also update the persistent bar.
+// The original lives in ui.js and is set synchronously; we patch it here
+// after both files have loaded (file-edits-bar.js loads after ui.js).
+(function() {
+  var _origRenderPlanPanel = window.renderPlanPanel;
+  window.renderPlanPanel = function renderPlanPanel(msgEl, plan, isLive) {
+    // Update the persistent bar above the input
+    if (plan && Array.isArray(plan.items)) updateTodoBar(plan, isLive);
+    // Do NOT call the original (suppresses in-message panel)
+    // _origRenderPlanPanel is still available if history rendering is needed
+  };
+  // Keep original accessible for explicit history rendering
+  window._origRenderPlanPanel = _origRenderPlanPanel;
+})();
+
+// ── File-edits Keep / Undo / View-all-edits bar ──────────────────────────
 
 var _febConvId = null;
 var _febFiles  = [];

@@ -1429,6 +1429,8 @@ function showMessages(opts) {
 }
 
 function showEmpty(opts) {
+  if (typeof clearTodoBar === 'function') clearTodoBar();
+  if (typeof hideFileEditsBar === 'function') hideFileEditsBar();
   opts = opts || {};
   if (opts.preserveAppPage) {
     var appPage = document.getElementById('app-page');

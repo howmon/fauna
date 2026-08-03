@@ -891,6 +891,8 @@ function loadConversation(id, opts) {
   });
   if (typeof _updateMoveToProjectBtn === 'function') _updateMoveToProjectBtn();
   if (typeof refreshConversationKanbanWidget === 'function') refreshConversationKanbanWidget(id);
+  // Restore the persistent todo bar for this conversation
+  if (typeof restoreTodoBar === 'function') restoreTodoBar(conv);
 
   // Ensure the recommended-actions bar is present for the latest assistant turn.
   // loadConversation only builds the message DOM on FIRST open (guarded by
