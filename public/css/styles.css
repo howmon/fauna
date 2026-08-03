@@ -13699,5 +13699,39 @@ body.proj-sp-hub-open .project-hub-body { border-top: none; }
 .rec-capsys input { accent-color: var(--accent); cursor: pointer; }
 .rec-capsys .ti { font-size: 14px; }
 
+/* ── Code chip hover menu ───────────────────────────────────────────── */
+#chip-hover-menu {
+  position: fixed; z-index: 9990;
+  background: var(--fau-surface2); border: 1px solid var(--fau-border);
+  border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,.3);
+  padding: 4px; min-width: 148px;
+  opacity: 0; pointer-events: none;
+  transition: opacity .1s, transform .1s;
+  transform: translateY(-2px);
+}
+#chip-hover-menu.chip-menu-visible {
+  opacity: 1; pointer-events: auto; transform: translateY(0);
+}
+#chip-hover-menu .chip-menu-label {
+  font-size: 10px; color: var(--fau-text-muted); font-family: var(--mono);
+  padding: 3px 8px 4px; border-bottom: 1px solid var(--fau-border);
+  margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 190px;
+}
+#chip-hover-menu button {
+  display: flex; align-items: center; gap: 7px;
+  width: 100%; padding: 5px 9px; border: none;
+  background: transparent; color: var(--fau-text); font-size: 12px;
+  border-radius: 5px; cursor: pointer; white-space: nowrap; text-align: left;
+}
+#chip-hover-menu button:hover { background: var(--fau-hover); }
+#chip-hover-menu button .ti { color: var(--fau-text-dim); font-size: 13px; width: 14px; }
+#chip-hover-menu .chip-menu-result {
+  font-size: 10.5px; font-family: var(--mono); color: var(--fau-text-dim);
+  padding: 5px 9px; border-top: 1px solid var(--fau-border); margin-top: 2px;
+  white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow-y: auto;
+  max-width: 280px;
+}
+
 
 

@@ -3091,6 +3091,146 @@ document.addEventListener('DOMContentLoaded', function() {
 // main.js → renderer dispatch. Starts a fresh conversation pre-loaded
 // with the user's text and (optionally) instructs the agent to call
 // fauna_screen_context first.
+// ── Code chip hover menu ─────────────────────────────────────────────────
+(function() {
+  var _menu = null;
+  var _hideTimer = null;
+  var FILE_EXT_RE = /\.(tsx?|jsx?|css|scss|less|html?|py|rb|go|rs|java|kt|swift|c|cpp|h|md|json|ya?ml|sh|env|toml|lock|svg|png|jpg)$/i;
+
+  function _shellEsc(s) { return "'" + s.replace(/'/g, "'\\''" ) + "'"; }
+
+  function _classify(text) {
+    if (/[/\\]/.test(text) || FILE_EXT_RE.test(text)) return 'file';
+    if (/^[A-Z][a-zA-Z0-9]*$/.test(text) || /^[a-z][a-zA-Z0-9]*[A-Z]/.test(text) || text.endsWith('()')) return 'symbol';
+    return 'generic';
+  }
+
+  function _show(codeEl) {
+    var text = codeEl.textContent.trim();
+    if (!text || text.length > 100) return;
+    var type = _classify(text);
+    var label = text.length > 26 ? text.slice(0, 24) + '\u2026' : text;
+    var esc = function(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
+    var j = JSON.stringify;  // safe for onclick attr values
+    var html = '<div class="chip-menu-label">' + esc(label) + '</div>';
+    html += '<button onclick="navigator.clipboard.writeText(' + esc(j(text)) + ')"><i class="ti ti-copy"></i>Copy</button>';
+    html += '<button onclick="chipMenuInsert(' + esc(j(text)) + ')"><i class="ti ti-cursor-text"></i>Insert into chat</button>';
+    if (type === 'file') {
+      html += '<button onclick="chipMenuFindFile(' + esc(j(text)) + ')"><i class="ti ti-file-search"></i>Find file</button>';
+      html += '<button onclick="chipMenuOpenInEditor(' + esc(j(text)) + ')"><i class="ti ti-folder-open"></i>Open in editor</button>';
+    } else {
+      html += '<button onclick="chipMenuGrepSymbol(' + esc(j(text)) + ')"><i class="ti ti-search"></i>Search in project</button>';
+    }
+    _menu.innerHTML = html;
+    _menu.classList.add('chip-menu-visible');
+    var rect = codeEl.getBoundingClientRect();
+    var top = rect.bottom + 5;
+    if (top + 160 > window.innerHeight) top = rect.top - 165;
+    var left = Math.max(6, Math.min(rect.left, window.innerWidth - 160));
+    _menu.style.top = top + 'px';
+    _menu.style.left = left + 'px';
+  }
+
+  function _hide() {
+    _hideTimer = setTimeout(function() { _menu.classList.remove('chip-menu-visible'); }, 160);
+  }
+
+  function _showResult(text) {
+    var existing = _menu.querySelector('.chip-menu-result');
+    if (existing) existing.remove();
+    var d = document.createElement('div');
+    d.className = 'chip-menu-result';
+    d.textContent = text || '(no output)';
+    _menu.appendChild(d);
+    _menu.classList.add('chip-menu-visible');
+  }
+
+  function _projectRoot() {
+    var proj = typeof getActiveProject === 'function' ? getActiveProject() : null;
+    return (proj && proj.rootPath) || null;
+  }
+
+  window.chipMenuInsert = function(text) {
+    var input = document.getElementById('msg-input');
+    if (!input) return;
+    var pos = input.selectionStart != null ? input.selectionStart : input.value.length;
+    var before = input.value.slice(0, pos);
+    var after  = input.value.slice(pos);
+    var ins = (before && !before.endsWith(' ') ? ' ' : '') + text + (after && !after.startsWith(' ') ? ' ' : '');
+    input.value = before + ins + after;
+    input.focus();
+    input.setSelectionRange(pos + ins.length, pos + ins.length);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+
+  window.chipMenuFindFile = function(filename) {
+    var root = _projectRoot() || process && process.cwd && process.cwd() || '.';
+    var cmd = 'find ' + _shellEsc(root) + ' -name ' + _shellEsc(filename) +
+      " -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null | head -10";
+    fetch('/api/shell-exec', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: cmd }),
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      var out = ((d.stdout || '') + (d.stderr || '')).trim();
+      _showResult(out || 'No file named \"' + filename + '\" found' + (!_projectRoot() ? ' (set a project root to search)' : ''));
+    }).catch(function() { _showResult('Search failed'); });
+  };
+
+  window.chipMenuOpenInEditor = function(filename) {
+    var root = _projectRoot() || '.';
+    var cmd = 'find ' + _shellEsc(root) +
+      ' -name ' + _shellEsc(filename) +
+      " -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null | head -1 |" +
+      " xargs -I{} sh -c 'code \"{}\" 2>/dev/null || open \"{}\"'";
+    fetch('/api/shell-exec', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: cmd }),
+    }).catch(function() {});
+  };
+
+  window.chipMenuGrepSymbol = function(symbol) {
+    var root = _projectRoot() || '.';
+    var cmd = 'grep -rn --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" --include="*.py" ' +
+      _shellEsc(symbol) + ' ' + _shellEsc(root) +
+      " 2>/dev/null | grep -v '/node_modules/' | head -12";
+    fetch('/api/shell-exec', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: cmd }),
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      var out = ((d.stdout || '') + (d.stderr || '')).trim();
+      _showResult(out || 'No matches for \"' + symbol + '\"' + (!_projectRoot() ? ' (set a project root to search)' : ''));
+    }).catch(function() { _showResult('Search failed'); });
+  };
+
+  document.addEventListener('DOMContentLoaded', function() {
+    _menu = document.createElement('div');
+    _menu.id = 'chip-hover-menu';
+    document.body.appendChild(_menu);
+    _menu.addEventListener('mouseenter', function() { clearTimeout(_hideTimer); });
+    _menu.addEventListener('mouseleave', _hide);
+
+    var messages = document.getElementById('messages');
+    if (!messages) return;
+    messages.addEventListener('mouseover', function(e) {
+      var el = e.target;
+      if (el.nodeType !== 1) el = el.parentElement;
+      if (!el) return;
+      var code = el.tagName === 'CODE' ? el : el.closest('code');
+      if (!code || code.closest('pre') || !code.closest('.msg-body')) return;
+      clearTimeout(_hideTimer);
+      _show(code);
+    });
+    messages.addEventListener('mouseout', function(e) {
+      var el = e.target;
+      if (el.nodeType !== 1) el = el.parentElement;
+      if (!el) return;
+      var code = el.tagName === 'CODE' ? el : el.closest('code');
+      if (!code || code.closest('pre') || !code.closest('.msg-body')) return;
+      _hide();
+    });
+  });
+})();
+
 window.addEventListener('fauna:ask-prompt', function (e) {
   try {
     const text = String(e?.detail?.text || '').trim();
