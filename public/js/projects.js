@@ -1901,6 +1901,8 @@ function _showProjCtxMenu(st, x, y, isDir, targetPath) {
     items.push({ label: 'Upload Files Here…', icon: 'ti-upload',      handler: function() { _triggerProjectUpload(st._id, targetPath); } });
     if (targetPath) {
       items.push({ sep: true });
+      items.push({ label: 'Add to Chat Context', icon: 'ti-message-plus',  handler: function() { _treeAddToContext(st, targetPath, true); } });
+      items.push({ sep: true });
       items.push({ label: 'Reveal in Finder',    icon: 'ti-folder-open',  handler: function() { _treeRevealInFinder(st, targetPath); } });
       items.push({ label: 'Copy Path',           icon: 'ti-clipboard',     handler: function() { _treeCopyAbsPath(st, targetPath); } });
       items.push({ label: 'Copy Relative Path',  icon: 'ti-clipboard-text', handler: function() { _treeCopyRelPath(targetPath); } });
@@ -1910,6 +1912,7 @@ function _showProjCtxMenu(st, x, y, isDir, targetPath) {
     }
   } else {
     items.push({ label: 'Open',                  icon: 'ti-file',         handler: function() { _treeOpenFile(st._id, targetPath); } });
+    items.push({ label: 'Add to Chat Context',   icon: 'ti-message-plus',  handler: function() { _treeAddToContext(st, targetPath, false); } });
     items.push({ sep: true });
     items.push({ label: 'Reveal in Finder',      icon: 'ti-folder-open',  handler: function() { _treeRevealInFinder(st, targetPath); } });
     items.push({ label: 'Copy Path',             icon: 'ti-clipboard',     handler: function() { _treeCopyAbsPath(st, targetPath); } });
@@ -1997,6 +2000,25 @@ async function _treeRevealInFinder(st, relPath) {
     if (!r.ok) { _showToast('Reveal failed: ' + (j.error || ('HTTP ' + r.status)), true); return; }
     if (j.ok === false) _showToast(j.error || 'Reveal unavailable in this context', true);
   } catch (e) { _showToast('Reveal failed: ' + e.message, true); }
+}
+
+async function _treeAddToContext(st, relPath, isDir) {
+  if (!st.srcId) return;
+  try {
+    var url = '/api/projects/' + encodeURIComponent(state.activeProjectId) +
+      '/sources/' + encodeURIComponent(st.srcId) +
+      '/abspath?path=' + encodeURIComponent(relPath);
+    var r = await fetch(url);
+    var j = await r.json().catch(function() { return {}; });
+    if (!r.ok || !j.fullPath) { _showToast('Failed: ' + (j.error || ('HTTP ' + r.status)), true); return; }
+    var absPath = j.fullPath;
+    var name = relPath.split('/').filter(Boolean).pop() || absPath;
+    if (isDir) name = name + '/';
+    if (typeof addAttachment === 'function') {
+      addAttachment({ type: 'file', name: name, sourceUri: absPath, content: '' });
+      _showToast('Added to chat context');
+    }
+  } catch (e) { _showToast('Failed: ' + e.message, true); }
 }
 
 async function _treeCopyAbsPath(st, relPath) {

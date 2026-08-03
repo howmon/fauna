@@ -3683,6 +3683,10 @@ export async function executeSelfTool(toolName, args, context = {}) {
         }
         const updated = original.slice(0, firstIdx) + newStr + original.slice(firstIdx + oldStr.length);
         const buf = Buffer.from(updated, 'utf8');
+        // Capture old content for undo ledger before writing
+        if (typeof context.recordFileEdit === 'function') {
+          try { context.recordFileEdit(abs, original); } catch (_) {}
+        }
         _atomicFastWrite(abs, buf);
         return JSON.stringify({ ok: true, path: abs, bytes: buf.length, lines: updated.split('\n').length });
       } catch (e) {
@@ -4225,6 +4229,15 @@ export async function executeSelfTool(toolName, args, context = {}) {
     case 'fauna_write_file': {
       try {
         const started = Date.now();
+        // Capture old content before overwriting (enables Keep/Undo bar)
+        if (typeof context.recordFileEdit === 'function' && !args.append) {
+          try {
+            const _wfAbs = _resolveFaunaWritePath(args.path, args.cwd);
+            if (fs.existsSync(_wfAbs)) {
+              context.recordFileEdit(_wfAbs, fs.readFileSync(_wfAbs, 'utf8'));
+            }
+          } catch (_) {}
+        }
         const result = _writeFastFile(args || {});
         // Run design detector on UI file writes — surfaces findings in tool
         // result so the agent can self-correct in the same turn.
@@ -4358,6 +4371,19 @@ export async function executeSelfTool(toolName, args, context = {}) {
           if (seen.has(abs)) throw new Error('Duplicate write target: ' + abs);
           seen.add(abs);
           if (file.content === undefined) throw new Error('Missing content for ' + file.path);
+        }
+        // Capture old content for each existing file before batch-writing
+        if (typeof context.recordFileEdit === 'function') {
+          for (const file of files) {
+            if (!file.append) {
+              try {
+                const _wfAbs = _resolveFaunaWritePath(file.path, args.cwd || file.cwd);
+                if (fs.existsSync(_wfAbs)) {
+                  context.recordFileEdit(_wfAbs, fs.readFileSync(_wfAbs, 'utf8'));
+                }
+              } catch (_) {}
+            }
+          }
         }
         const results = files.map(file => _writeFastFile({ ...file, cwd: args.cwd, backup: args.backup || file.backup }));
         return JSON.stringify({ ok: true, ms: Date.now() - started, results });

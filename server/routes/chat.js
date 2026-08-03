@@ -56,6 +56,7 @@ import {
 } from '../../lib/dynamic-widgets.js';
 import { ToolGuardContext, formatToolLabel } from '../../tool-guard.js';
 import { getAgentTools, startAgentMCPServers } from '../../agent-tools.js';
+import { atomicWriteFile } from '../lib/write-helpers.js';
 import { formatForSystemPrompt as factsForSystemPrompt, getStats as factsGetStats, remember as factsRemember, projectContainerTag } from '../../memory-store.js';
 import { buildProjectProfile, formatProfileForPrompt } from '../lib/profile.js';
 import { extractFacts as extractMemoryFacts } from '../lib/memory-extractor.js';
@@ -550,6 +551,43 @@ export function registerChatRoute(app, {
   npmEnv = {},
   shellProcs = null,
 }) {
+  // ── File-edit undo ledger ─────────────────────────────────────────────
+  // Stores old file contents from the most recent AI turn per conversation
+  // so the client can offer Keep / Undo / View all edits.
+  // Map<convId, { ts, files: [{path, name, before}] }>
+  const _editLedger = new Map();
+  const _EDIT_LEDGER_TTL_MS = 30 * 60 * 1000;        // 30 min expiry
+  const _EDIT_LEDGER_MAX_FILE_BYTES = 512 * 1024;     // 512 KB per file
+
+  app.get('/api/undo-edits/diff', (req, res) => {
+    const cid = String(req.query.convId || '');
+    const entry = _editLedger.get(cid);
+    if (!entry) return res.json({ ok: false, error: 'No edit record for this conversation' });
+    const files = entry.files.map(f => {
+      let after = f.before;
+      try { after = fs.readFileSync(f.path, 'utf8'); } catch (_) {}
+      return { path: f.path, name: f.name, before: f.before, after };
+    });
+    res.json({ ok: true, files });
+  });
+
+  app.post('/api/undo-edits', (req, res) => {
+    const cid = String((req.body || {}).convId || '');
+    const entry = _editLedger.get(cid);
+    if (!entry) return res.status(404).json({ ok: false, error: 'No edit record for this conversation' });
+    const restored = [];
+    const errors = [];
+    for (const f of entry.files) {
+      try {
+        fs.mkdirSync(path.dirname(f.path), { recursive: true });
+        atomicWriteFile(f.path, f.before, 'utf8');
+        restored.push(f.name);
+      } catch (e) { errors.push({ name: f.name, error: e.message }); }
+    }
+    _editLedger.delete(cid);
+    res.json({ ok: true, restored, errors });
+  });
+
   // ── Dynamic Widget RPC bridge ────────────────────────────────────────
   // When the model calls a widget tool, chat.js opens a pending call here
   // and emits SSE to the frontend. The frontend forwards to the iframe and
@@ -803,7 +841,21 @@ export function registerChatRoute(app, {
       'Access-Control-Allow-Origin': 'http://localhost:3737'
     });
 
-    const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    // Per-request file-edit tracking for Keep/Undo bar
+    const _turnEdits = [];
+    const _reqConvId = req.body?.conversationId || null;
+    const _rawSend = (obj) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(obj)}\n\n`); };
+    const send = (obj) => {
+      if (obj && obj.type === 'done' && _turnEdits.length > 0 && _reqConvId) {
+        _rawSend({ type: 'file_edits_summary', files: _turnEdits.map(e => ({ path: e.path, name: e.name })) });
+        _editLedger.set(_reqConvId, { ts: Date.now(), files: _turnEdits.slice() });
+        // Prune stale entries
+        for (const [k, v] of _editLedger) {
+          if (Date.now() - v.ts > _EDIT_LEDGER_TTL_MS) _editLedger.delete(k);
+        }
+      }
+      _rawSend(obj);
+    };
     const latestUserText = () => {
       const lastUser = [...messages].reverse().find(m => m && m.role === 'user');
       if (typeof lastUser?.content === 'string') return lastUser.content;
@@ -1530,6 +1582,15 @@ export function registerChatRoute(app, {
         activeProjectId: projectId || null,
         convId: req.body?.conversationId || null,
         activeAgentName: agentName || null,
+        recordFileEdit: (absPath, oldContent) => {
+          if (!absPath || typeof oldContent !== 'string') return;
+          if (_turnEdits.some(e => e.path === absPath)) return; // first-state only
+          _turnEdits.push({
+            path: absPath,
+            name: path.basename(absPath),
+            before: oldContent.slice(0, _EDIT_LEDGER_MAX_FILE_BYTES),
+          });
+        },
         agentsDir,
         getSettings: () => ({
           model,
@@ -1707,6 +1768,19 @@ export function registerChatRoute(app, {
         // fauna_apply_patch adapter — synchronous, throws on failure
         applyPatch: ({ patch, cwd } = {}) => {
           if (!patch) throw new Error('patch (string) required');
+          // Capture old content for Update/Delete targets before the patch mutates them
+          for (const line of String(patch).split('\n')) {
+            const m = line.trim().match(/^\*\*\* (?:Update|Delete) File:\s*(.+)$/);
+            if (m) {
+              try {
+                const ap = path.resolve(cwd || process.cwd(), m[1].trim());
+                if (fs.existsSync(ap) && !_turnEdits.some(e => e.path === ap)) {
+                  const before = fs.readFileSync(ap, 'utf8');
+                  _turnEdits.push({ path: ap, name: path.basename(ap), before: before.slice(0, _EDIT_LEDGER_MAX_FILE_BYTES) });
+                }
+              } catch (_) {}
+            }
+          }
           return applyPatchText(patch, cwd, null);
         },
 

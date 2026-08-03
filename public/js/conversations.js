@@ -935,14 +935,23 @@ function deleteConversation(id, e) {
   e.stopPropagation();
   _destroyConvBrowserTabs(id);
   if (typeof clearShellRunningPillsForConversation === 'function') clearShellRunningPillsForConversation(id);
+  // Capture project ownership before filtering so we can prefer same-project next conv
+  var _deletedConv = state.conversations.find(function(c) { return c.id === id; });
+  var _owningProjId = _deletedConv ? (_deletedConv.projectId || null) : null;
   state.conversations = state.conversations.filter(c => c.id !== id);
   saveConversations();
   if (window.FaunaConvCache) window.FaunaConvCache.removeOne(id);
   fetch('/api/conversations/' + id, { method: 'DELETE' }).catch(function() {});
   if (state.currentId === id) {
     purgeConvDom(id);
-    if (state.conversations.length) loadConversation(state.conversations[0].id);
-    else { state.currentId = null; showEmpty(); document.getElementById('messages-inner').innerHTML = ''; closeBrowserPane(); }
+    if (state.conversations.length) {
+      // Prefer a conversation in the same project so the sidebar panel stays open
+      var _nextConv = (_owningProjId && state.conversations.find(function(c) { return c.projectId === _owningProjId; }))
+                    || state.conversations[0];
+      loadConversation(_nextConv.id);
+    } else {
+      state.currentId = null; showEmpty(); document.getElementById('messages-inner').innerHTML = ''; closeBrowserPane();
+    }
   } else {
     purgeConvDom(id);
   }

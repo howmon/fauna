@@ -472,6 +472,8 @@
           <span>Figma MCP active — AI will read and write your Figma file</span>
           <button id="figma-mode-disable-btn" onclick="toggleFigmaMCP()" title="Disable Figma MCP"><i class="ti ti-x"></i> Disable</button>
         </div>
+        <!-- File edits Keep/Undo bar (shown after Fauna writes project files) -->
+        <div id="file-edits-bar" style="display:none" role="status"></div>
       </div>
       <div id="decision-prompt-host" hidden></div>
       <div id="input-wrap">
@@ -2858,6 +2860,22 @@ Examples:
   </script>
 </div>
 
+<!-- ── File edits diff modal ────────────────────────────────────── -->
+<div id="file-edits-diff-modal" style="display:none" onclick="if(event.target===this)closeFileEditsDiffModal()">
+  <div id="file-edits-diff-box">
+    <div id="file-edits-diff-header">
+      <span><i class="ti ti-git-diff"></i> File changes</span>
+      <button class="file-edits-diff-close" onclick="closeFileEditsDiffModal()" title="Close"><i class="ti ti-x"></i></button>
+    </div>
+    <div id="file-edits-diff-tabs"></div>
+    <div id="file-edits-diff-content"></div>
+    <div id="file-edits-diff-footer">
+      <button class="panel-btn secondary" onclick="closeFileEditsDiffModal()">Close</button>
+      <button class="panel-btn danger" onclick="_fileEditsUndo();closeFileEditsDiffModal()"><i class="ti ti-rotate-left"></i> Undo all changes</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── URL modal ───────────────────────────────────────────────── -->
 <div id="url-modal" onclick="closeUrlModal(event)">
   <div id="url-modal-box">
@@ -3023,6 +3041,7 @@ Examples:
 <script src="js/github-accounts.js"></script>
 <script src="js/cloud-sync.js"></script>
 <script src="js/projects.js"></script>
+<script src="js/file-edits-bar.js"></script>
 <script src="js/tests.js"></script>
 <script src="js/board.js"></script>
 <script src="js/design.js"></script>

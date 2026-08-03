@@ -2333,6 +2333,10 @@ async function streamResponse(conv) {
             if (typeof saveConversations === 'function') saveConversations();
             dbg('conversation waiting for user action: ' + (conv._waitingForUserAction.kind || 'interactive'), 'info');
           }
+          if (evt.type === 'file_edits_summary' && Array.isArray(evt.files) && evt.files.length > 0) {
+            // Show the Keep / Undo / View all edits bar above the composer
+            if (typeof showFileEditsBar === 'function') showFileEditsBar(evt.files, convId);
+          }
           if (evt.type === 'done') {
             _syncPublicReasoningSummary();
             _clearToolStatuses();
