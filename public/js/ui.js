@@ -3098,6 +3098,8 @@ document.addEventListener('DOMContentLoaded', function() {
   var FILE_EXT_RE = /\.(tsx?|jsx?|css|scss|less|html?|py|rb|go|rs|java|kt|swift|c|cpp|h|md|json|ya?ml|sh|env|toml|lock|svg|png|jpg)$/i;
 
   function _shellEsc(s) { return "'" + s.replace(/'/g, "'\\''" ) + "'"; }
+  // Returns true if text is a usable absolute path (starts with / or ~)
+  function _isAbsPath(text) { return /^[~/]/.test(text) && /[/]/.test(text); }
 
   function _classify(text) {
     if (/[/\\]/.test(text) || FILE_EXT_RE.test(text)) return 'file';
@@ -3116,7 +3118,8 @@ document.addEventListener('DOMContentLoaded', function() {
     html += '<button onclick="navigator.clipboard.writeText(' + esc(j(text)) + ')"><i class="ti ti-copy"></i>Copy</button>';
     html += '<button onclick="chipMenuInsert(' + esc(j(text)) + ')"><i class="ti ti-cursor-text"></i>Insert into chat</button>';
     if (type === 'file') {
-      html += '<button onclick="chipMenuFindFile(' + esc(j(text)) + ')"><i class="ti ti-file-search"></i>Find file</button>';
+      html += '<button onclick="chipMenuViewFile(' + esc(j(text)) + ')"><i class="ti ti-eye"></i>View file</button>';
+      if (!_isAbsPath(text)) html += '<button onclick="chipMenuFindFile(' + esc(j(text)) + ')"><i class="ti ti-file-search"></i>Find file</button>';
       html += '<button onclick="chipMenuOpenInEditor(' + esc(j(text)) + ')"><i class="ti ti-folder-open"></i>Open in editor</button>';
     } else {
       html += '<button onclick="chipMenuGrepSymbol(' + esc(j(text)) + ')"><i class="ti ti-search"></i>Search in project</button>';
@@ -3176,12 +3179,43 @@ document.addEventListener('DOMContentLoaded', function() {
     }).catch(function() { _showResult('Search failed'); });
   };
 
-  window.chipMenuOpenInEditor = function(filename) {
-    var root = _projectRoot() || '.';
-    var cmd = 'find ' + _shellEsc(root) +
-      ' -name ' + _shellEsc(filename) +
-      " -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null | head -1 |" +
-      " xargs -I{} sh -c 'code \"{}\" 2>/dev/null || open \"{}\"'";
+  window.chipMenuViewFile = function(filepath) {
+    var cmd;
+    if (_isAbsPath(filepath)) {
+      cmd = 'cat ' + _shellEsc(filepath);
+    } else {
+      var root = _projectRoot() || '.';
+      cmd = 'find ' + _shellEsc(root) + ' -name ' + _shellEsc(filepath) +
+        " -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null | head -1 | xargs cat 2>/dev/null";
+    }
+    _showResult('Loading\u2026');
+    fetch('/api/shell-exec', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: cmd }),
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      var out = ((d.stdout || '') + (d.stderr || '')).trim();
+      var result = _menu.querySelector('.chip-menu-result');
+      if (!result) return;
+      var isMd = /\.md$/i.test(filepath);
+      if (isMd && typeof renderMarkdown === 'function' && out) {
+        result.innerHTML = renderMarkdown(out);
+        result.classList.add('chip-menu-result-md');
+      } else {
+        result.textContent = out || '(empty file)';
+      }
+    }).catch(function() { _showResult('Could not read file'); });
+  };
+
+  window.chipMenuOpenInEditor = function(filepath) {
+    var cmd;
+    if (_isAbsPath(filepath)) {
+      cmd = 'code ' + _shellEsc(filepath) + ' 2>/dev/null || open ' + _shellEsc(filepath);
+    } else {
+      var root = _projectRoot() || '.';
+      cmd = 'find ' + _shellEsc(root) + ' -name ' + _shellEsc(filepath) +
+        " -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null | head -1 |" +
+        " xargs -I{} sh -c 'code \"{}\" 2>/dev/null || open \"{}\"'";
+    }
     fetch('/api/shell-exec', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ command: cmd }),
