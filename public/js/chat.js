@@ -1372,6 +1372,10 @@ async function streamResponse(conv) {
   var tokenCount   = 0;
   var _lastRenderTraceAt = 0;
   var _streamStartedAt = Date.now();
+  var _lastStreamActivityAt = _streamStartedAt;
+  var _stallWarnTimer = null;
+  var _stallAbortTimer = null;
+  var _stalledByWatchdog = false;
   var _lastLiveRenderHtml = '';
   var _lastToolOutputAccum = ''; // rolling last ~1000 chars of tool_output for input context
   var _toolOutputBlockChars = 0; // chars of live output kept in the collapsed tool activity view (capped)
@@ -1394,6 +1398,35 @@ async function streamResponse(conv) {
   var _activityTickTimer = null;
   var _processDurationSeconds = null;
   if (typeof resetDesignArtifactState === 'function') resetDesignArtifactState();
+
+  function _clearStreamWatchdog() {
+    if (_stallWarnTimer) { clearTimeout(_stallWarnTimer); _stallWarnTimer = null; }
+    if (_stallAbortTimer) { clearTimeout(_stallAbortTimer); _stallAbortTimer = null; }
+  }
+
+  function _armStreamWatchdog() {
+    _clearStreamWatchdog();
+    // Soft hint first, then force-abort if no stream bytes/events arrive.
+    _stallWarnTimer = setTimeout(function() {
+      if (!conv._streaming || conv._cancelled || _stalledByWatchdog) return;
+      var idleMs = Date.now() - _lastStreamActivityAt;
+      if (idleMs < 45000) { _armStreamWatchdog(); return; }
+      _showInlineNotice('No stream activity yet. Still waiting on the model/tool output...');
+      _ensureStreamingStatus('Fauna is still working...');
+    }, 45000);
+    _stallAbortTimer = setTimeout(function() {
+      if (!conv._streaming || conv._cancelled || _stalledByWatchdog) return;
+      var idleMs = Date.now() - _lastStreamActivityAt;
+      if (idleMs < 180000) { _armStreamWatchdog(); return; }
+      _stalledByWatchdog = true;
+      try { conv._abortController && conv._abortController.abort(); } catch (_) {}
+    }, 180000);
+  }
+
+  function _touchStreamActivity() {
+    _lastStreamActivityAt = Date.now();
+    _armStreamWatchdog();
+  }
 
   function _setLiveToolOutputOpen(open) {
     if (!_liveToolOutputEl) return;
@@ -1988,6 +2021,7 @@ async function streamResponse(conv) {
       if (enabledCtxIds.length) chatBody.projectContextIds = enabledCtxIds;
     }
 
+    _armStreamWatchdog();
     var response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2008,6 +2042,8 @@ async function streamResponse(conv) {
       done_val = readResult.done; value_val = readResult.value;
       if (done_val) break;
 
+      _touchStreamActivity();
+
       partial += decoder.decode(value_val, { stream: true });
       var lines = partial.split('\n');
       partial   = lines.pop();
@@ -2019,6 +2055,7 @@ async function streamResponse(conv) {
         if (raw === '[DONE]') continue;
         try {
           var evt = JSON.parse(raw);
+          _touchStreamActivity();
 
           // Close any open shell-output fence before non-output events
           if (evt.type !== 'tool_output' && buffer.includes('```shell-output\n')) {
@@ -2381,13 +2418,17 @@ async function streamResponse(conv) {
     // Treat it as a soft failure with a user-friendly hint instead of
     // pasting the raw "network error" message into the AI bubble.
     if (err.name === 'AbortError') {
-      // user pressed Stop — nothing to do
+      if (_stalledByWatchdog) {
+        buffer += (buffer ? '\n\n' : '') + '_⚠ Stream stalled for 3 minutes with no activity. I stopped waiting and will auto-resume from the current state._';
+      }
+      // user pressed Stop — nothing else to do
     } else if (/network error|Failed to fetch/i.test(err.message || '')) {
       buffer += (buffer ? '\n\n' : '') + '_⚠ Connection to the model stream was interrupted before the response finished. The partial output above is what was received; press Send again to retry._';
     } else {
       buffer += (buffer ? '\n\n' : '') + err.message;
     }
   } finally {
+    _clearStreamWatchdog();
     _clearToolStatuses();
     _stopReasoningTicker();
     _processDurationSeconds = Math.max(0, Math.round((Date.now() - _streamStartedAt) / 1000));
@@ -2446,6 +2487,22 @@ async function streamResponse(conv) {
     conv.updatedAt = aiMsg.timestamp;
     conv._streaming = false;
     conv._abortController = null;
+    if (_stalledByWatchdog) {
+      var _stallRetries = Number(conv._stallAutoResumeCount || 0);
+      var _MAX_STALL_RETRIES = 2;
+      if (!conv._waitingForUserAction && !conv._cancelled && _stallRetries < _MAX_STALL_RETRIES) {
+        conv._stallAutoResumeCount = _stallRetries + 1;
+        conv._chainMode = true;
+        var _resumeMsg = '[System: The previous stream stalled with no activity. Resume immediately from the exact current state. Do not restart from scratch, do not ask the user anything, and continue executing the next concrete step now.]';
+        setTimeout(function() {
+          try {
+            sendDirectMessage(_resumeMsg, { fromAutoFeed: true, isAutoFeed: true, targetConvId: convId });
+          } catch (_) {}
+        }, 120);
+      }
+    } else {
+      conv._stallAutoResumeCount = 0;
+    }
     saveConversations();
     renderConvList(); // remove streaming spinner from sidebar
     if (typeof maybeUpdateConversationTitle === 'function') maybeUpdateConversationTitle(conv);
