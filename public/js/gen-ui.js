@@ -114,6 +114,184 @@ function _extractLeadingJsonValue(raw) {
   return '';
 }
 
+function _normalizeFenceAndQuotes(raw) {
+  var s = String(raw || '').trim();
+  s = s
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u2018\u2019]/g, "'");
+  s = s.replace(/^```(?:gen-ui|gen_ui|json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
+  return s;
+}
+
+function _stripJsonCommentsAndTrailingCommas(raw) {
+  var s = String(raw || '');
+  var out = '';
+  var inStr = false;
+  var esc = false;
+  var inLine = false;
+  var inBlock = false;
+  for (var i = 0; i < s.length; i++) {
+    var ch = s.charAt(i);
+    var nx = s.charAt(i + 1);
+
+    if (inLine) {
+      if (ch === '\n' || ch === '\r') { inLine = false; out += ch; }
+      continue;
+    }
+    if (inBlock) {
+      if (ch === '*' && nx === '/') { inBlock = false; i++; }
+      continue;
+    }
+
+    if (inStr) {
+      out += ch;
+      if (esc) { esc = false; continue; }
+      if (ch === '\\') { esc = true; continue; }
+      if (ch === '"') inStr = false;
+      continue;
+    }
+
+    if (ch === '"') { inStr = true; out += ch; continue; }
+    if (ch === '/' && nx === '/') { inLine = true; i++; continue; }
+    if (ch === '/' && nx === '*') { inBlock = true; i++; continue; }
+    out += ch;
+  }
+
+  var cleaned = '';
+  inStr = false;
+  esc = false;
+  for (var j = 0; j < out.length; j++) {
+    var c = out.charAt(j);
+    if (inStr) {
+      cleaned += c;
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { esc = true; continue; }
+      if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; cleaned += c; continue; }
+    if (c === ',') {
+      var k = j + 1;
+      while (k < out.length && /\s/.test(out.charAt(k))) k++;
+      var tail = out.charAt(k);
+      if (tail === '}' || tail === ']') continue;
+    }
+    cleaned += c;
+  }
+  return cleaned;
+}
+
+function _quoteUnquotedJsonKeys(raw) {
+  return String(raw || '').replace(/([\{,]\s*)([A-Za-z_$][\w$-]*)(\s*:)/g, '$1"$2"$3');
+}
+
+function _convertSingleQuotedStrings(raw) {
+  var s = String(raw || '');
+  var out = '';
+  var inDouble = false;
+  var inSingle = false;
+  var esc = false;
+  for (var i = 0; i < s.length; i++) {
+    var ch = s.charAt(i);
+    if (inSingle) {
+      if (esc) {
+        out += ch;
+        esc = false;
+        continue;
+      }
+      if (ch === '\\') {
+        out += '\\';
+        esc = true;
+        continue;
+      }
+      if (ch === '"') {
+        out += '\\"';
+        continue;
+      }
+      if (ch === "'") {
+        out += '"';
+        inSingle = false;
+        continue;
+      }
+      out += ch;
+      continue;
+    }
+    if (inDouble) {
+      out += ch;
+      if (esc) {
+        esc = false;
+      } else if (ch === '\\') {
+        esc = true;
+      } else if (ch === '"') {
+        inDouble = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      out += ch;
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      out += '"';
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function _normalizeJsLikeLiterals(raw) {
+  return String(raw || '')
+    .replace(/\bundefined\b/g, 'null')
+    .replace(/\bNone\b/g, 'null')
+    .replace(/\bTrue\b/g, 'true')
+    .replace(/\bFalse\b/g, 'false');
+}
+
+function _parseGenUiSpecLoose(raw) {
+  var base = _normalizeFenceAndQuotes(String(raw || '').trim());
+  var leading = _extractLeadingJsonValue(base);
+  var seeds = [base];
+  if (leading) seeds.push(leading);
+  var tries = [];
+  var seen = Object.create(null);
+  function push(v) {
+    var key = String(v || '').trim();
+    if (!key || seen[key]) return;
+    seen[key] = true;
+    tries.push(key);
+  }
+  for (var i = 0; i < seeds.length; i++) {
+    var s = seeds[i];
+    var t0 = _normalizeFenceAndQuotes(s);
+    var t1 = _sanitizeJsonControlChars(t0);
+    var t2 = _stripJsonCommentsAndTrailingCommas(t0);
+    var t3 = _quoteUnquotedJsonKeys(t2);
+    var t4 = _convertSingleQuotedStrings(t3);
+    var t5 = _normalizeJsLikeLiterals(t4);
+    var t6 = _escapeStrayQuotes(_sanitizeJsonControlChars(t5));
+    push(t0);
+    push(t1);
+    push(_escapeStrayQuotes(t1));
+    push(t2);
+    push(t3);
+    push(t4);
+    push(t5);
+    push(t6);
+  }
+  var firstErr = null;
+  for (var j = 0; j < tries.length; j++) {
+    try {
+      return { spec: JSON.parse(tries[j]), specJson: tries[j], error: null };
+    } catch (err) {
+      if (!firstErr) firstErr = err;
+    }
+  }
+  return { spec: null, specJson: base, error: firstErr || new Error('Failed to parse gen-ui block') };
+}
+
 // ── State store (per-spec instance) ──────────────────────────────────────
 
 function _genUiCreateState(initialState) {
@@ -2240,49 +2418,16 @@ function extractAndRenderGenUI(buffer, msgEl, isHistoryLoad) {
   blocks.forEach(function(pre) {
     var code = pre.querySelector('code');
     var raw = code ? code.textContent : pre.textContent;
-    var spec;
-    var specJson = raw.trim();
-    try {
-      spec = JSON.parse(specJson);
-    } catch (e) {
-      // Recovery: LLMs frequently embed literal newlines/tabs inside string
-      // values (e.g. multi-line SVG markup). JSON disallows raw control chars
-      // in strings — escape them and retry. If that still fails, try once
-      // more with stray-quote escaping (handles \`"text": "She said "hi""\`).
-      try {
-        specJson = _sanitizeJsonControlChars(specJson);
-        spec = JSON.parse(specJson);
-      } catch (e2) {
-        try {
-          specJson = _escapeStrayQuotes(_sanitizeJsonControlChars(raw.trim()));
-          spec = JSON.parse(specJson);
-        } catch (e3) {
-          // Final recovery: parse only the first complete JSON value when
-          // trailing non-JSON text was appended after the object.
-          var leading = _extractLeadingJsonValue(raw.trim());
-          if (leading) {
-            var leadCandidates = [
-              leading,
-              _sanitizeJsonControlChars(leading),
-              _escapeStrayQuotes(_sanitizeJsonControlChars(leading))
-            ];
-            for (var li = 0; li < leadCandidates.length; li++) {
-              try {
-                specJson = leadCandidates[li];
-                spec = JSON.parse(specJson);
-                break;
-              } catch (_) {}
-            }
-          }
-          if (!spec) {
-            var errEl = document.createElement('div');
-            errEl.className = 'gui-parse-error';
-            errEl.innerHTML = '<i class="ti ti-alert-circle"></i> <strong>gen-ui:</strong> JSON parse error — ' + escHtml(e.message);
-            pre.replaceWith(errEl);
-            return;
-          }
-        }
-      }
+    var parsed = _parseGenUiSpecLoose(raw);
+    var spec = parsed.spec;
+    var specJson = parsed.specJson;
+    if (!spec) {
+      var errEl = document.createElement('div');
+      errEl.className = 'gui-parse-error';
+      var _m = (typeof state !== 'undefined' && state && state.model) ? String(state.model) : 'current model';
+      errEl.innerHTML = '<i class="ti ti-alert-circle"></i> <strong>gen-ui:</strong> JSON parse error — ' + escHtml((parsed.error && parsed.error.message) || 'invalid JSON') + '<br><span style="opacity:.78">Model used: ' + escHtml(_m) + '. Try GPT-5.5 or Claude Sonnet, or ask for artifact:html fallback.</span>';
+      pre.replaceWith(errEl);
+      return;
     }
     if (!spec || !spec.root || !spec.elements) {
       // Tolerate a bare component shorthand: { type, props, children }
