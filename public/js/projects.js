@@ -805,6 +805,8 @@ function openProjSidebarPanel() {
   _projSpRenderProjectSection(proj);
   // Load file tree
   _projSpLoadTree(proj);
+  // Auto-refresh the file tree every 30 s while the panel is open
+  _projSpStartAutoRefresh();
   // Persist preference
   try { localStorage.setItem('fauna-proj-sp-open', proj.id); } catch (_) {}
 }
@@ -826,7 +828,20 @@ function closeProjSidebarPanel() {
   _projSidebarTreeState.expanded = {};
   _projSidebarTreeState.openedFiles = {};
   _projSidebarTreeState.dirHasOpened = {};
+  _projSpStopAutoRefresh();
   try { localStorage.removeItem('fauna-proj-sp-open'); } catch (_) {}
+}
+
+var _projSpAutoRefreshTimer = null;
+function _projSpStartAutoRefresh() {
+  _projSpStopAutoRefresh();
+  _projSpAutoRefreshTimer = setInterval(function() {
+    var body = document.getElementById('proj-sp-files-body');
+    if (body && !body.classList.contains('collapsed')) reloadProjSidebarTree();
+  }, 30000);
+}
+function _projSpStopAutoRefresh() {
+  if (_projSpAutoRefreshTimer) { clearInterval(_projSpAutoRefreshTimer); _projSpAutoRefreshTimer = null; }
 }
 
 function _projSpRenderConvs(proj) {
@@ -932,8 +947,16 @@ function toggleProjSpSection(which) {
   body.classList.toggle('collapsed', isNowCollapsed);
   if (chevron) chevron.classList.toggle('collapsed', isNowCollapsed);
   localStorage.setItem('fauna-proj-sp-' + which + '-open', isNowCollapsed ? 'false' : 'true');
+  // Refresh file tree whenever the FILES section is expanded
+  if (which === 'files' && !isNowCollapsed) reloadProjSidebarTree();
 }
 window.toggleProjSpSection = toggleProjSpSection;
+
+function reloadProjSidebarTree() {
+  var proj = _activeProject();
+  if (proj) _projSpLoadTree(proj);
+}
+window.reloadProjSidebarTree = reloadProjSidebarTree;
 
 // ── Project section in sidebar panel ──────────────────────────────────────
 
