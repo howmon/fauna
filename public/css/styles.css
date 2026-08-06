@@ -10917,10 +10917,10 @@ body.proj-sp-hub-open #proj-sp-split-handle { display: block; }
 body.proj-sp-hub-open .proj-files-tree-col { display: none; }
 body.proj-sp-hub-open .proj-files-toolbar { display: none; }
 body.proj-sp-hub-open .proj-files-viewer-col { display: flex !important; flex: 1 !important; }
-/* Hide the hub header bar — project name is already in sidebar, X is unneeded */
-body.proj-sp-hub-open .project-hub-header { display: none; }
-/* Make hub body start from the very top when header is hidden */
-body.proj-sp-hub-open .project-hub-body { border-top: none; }
+/* In inline mode keep only the close button; hide name & strip padding */
+body.proj-sp-hub-open .project-hub-header { padding: 4px 6px; border-bottom: none; justify-content: flex-end; }
+body.proj-sp-hub-open .project-hub-title,
+body.proj-sp-hub-open .project-hub-header > span[style] { display: none; }
 
 /* ── Custom MCP Manager ──────────────────────────────────────────────────── */
 .mcp-servers-list {
