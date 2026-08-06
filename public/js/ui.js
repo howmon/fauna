@@ -971,7 +971,8 @@ window.renderPlanPanel = function renderPlanPanel(msgEl, plan, isLive) {
     if (it.status === 'completed') {
       iconHtml = '<i class="ti ti-circle-check-filled"></i>';
     } else if (it.status === 'in-progress') {
-      iconHtml = '<i class="ti ti-loader-2 plan-spin"></i>';
+      // no spinner in history — task is no longer running
+      iconHtml = isLive ? '<i class="ti ti-loader-2 plan-spin"></i>' : '<i class="ti ti-circle-dashed"></i>';
     } else if (it.status === 'cancelled') {
       iconHtml = '<i class="ti ti-circle-x"></i>';
     } else {
@@ -1002,7 +1003,7 @@ window.renderPlanPanel = function renderPlanPanel(msgEl, plan, isLive) {
         subsEl.dataset.signature = signature;
         subsEl.innerHTML = toShow.map(function(s, i) {
           var isLast = i === toShow.length - 1;
-          var dot = (isLast && it.status === 'in-progress')
+          var dot = (isLast && it.status === 'in-progress' && isLive)
             ? '<i class="ti ti-loader-2 plan-spin plan-substep-dot"></i>'
             : '<i class="ti ti-point-filled plan-substep-dot"></i>';
           return '<li class="plan-substep">' + dot + '<span>' + escHtml(s) + '</span></li>';
