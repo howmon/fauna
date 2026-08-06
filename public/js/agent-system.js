@@ -2173,6 +2173,9 @@ function renderAgentActionsPage() {
 
   page.innerHTML =
     '<div class="agent-actions-body">' +
+      '<div class="agent-actions-header">' +
+        '<button class="agent-actions-close-btn" onclick="closeAgentActionsPage()" title="Close"><i class="ti ti-x"></i></button>' +
+      '</div>' +
       '<div class="agent-action-card" onclick="closeAgentActionsPage();openAgentBuilder()">' +
         '<div class="agent-action-icon"><i class="ti ti-wand"></i></div>' +
         '<div class="agent-action-info">' +
