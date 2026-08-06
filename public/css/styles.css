@@ -8445,6 +8445,12 @@ body.win-platform #agent-builder-panel { padding-top: 0; }
   display: flex; flex-direction: column; gap: 12px;
   max-width: 520px; margin: 0 auto; width: 100%;
 }
+.agent-actions-header { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+.agent-actions-close-btn {
+  background: none; border: none; color: var(--fau-text-muted); cursor: pointer;
+  padding: 4px 8px; border-radius: 6px; font-size: 16px;
+}
+.agent-actions-close-btn:hover { color: var(--fau-text); background: var(--fau-surface2); }
 .agent-action-card {
   display: flex; align-items: center; gap: 16px;
   background: var(--fau-surface1); border: 1px solid var(--fau-border);
