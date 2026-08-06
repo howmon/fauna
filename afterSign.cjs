@@ -25,6 +25,12 @@ module.exports = async function afterSign(context) {
     console.log('[afterSign] SKIP_NOTARIZE=1 — skipping notarization');
     return;
   }
+  // Skip notarization when signing identity is null (unsigned/local build)
+  const signingIdentity = packager.platformSpecificBuildOptions?.identity;
+  if (signingIdentity === null || signingIdentity === 'null') {
+    console.log('[afterSign] identity=null — skipping notarization for unsigned build');
+    return;
+  }
 
   const appName = packager.appInfo.productFilename;
   const appPath = path.join(appOutDir, `${appName}.app`);
