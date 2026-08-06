@@ -99,6 +99,7 @@ import { getWorkspaceIndex, getWorkspaceIndexAsync, invalidateWorkspaceIndex, re
 import { semanticDiagnostics } from './lib/typescript-language-service.js';
 import { startTerminalSession, sendTerminalInput, getTerminalOutput, listTerminalSessions, killTerminalSession } from './lib/terminal-sessions.js';
 import { parseTestResults, runTestResults } from './lib/test-results.js';
+import { loadNotebook, executeNotebook, isJupyterAvailable, summarizeNotebook } from './server/lib/notebook-runner.js';
 import {
   renderDocumentToPngs,
   documentGet,
@@ -3344,6 +3345,33 @@ export const DYNAMIC_WIDGET_TOOL_DEFS = [
       },
     },
   },
+  // ── Jupyter Notebooks ─────────────────────────────────────────────────
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_run_notebook',
+      description:
+        'Load or execute a Jupyter notebook (.ipynb) file. Set execute:true to run it via `jupyter nbconvert` and return outputs. Without execute, returns the saved cell source and existing outputs. Use this to inspect, run, or summarize any .ipynb notebook the user has.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Absolute or ~-relative path to the .ipynb file.',
+          },
+          execute: {
+            type: 'boolean',
+            description: 'If true, run all cells via jupyter nbconvert --execute. Requires jupyter to be installed. Defaults to false (read-only load).',
+          },
+          timeoutSec: {
+            type: 'number',
+            description: 'Per-cell execution timeout in seconds (default 120). Only used when execute:true.',
+          },
+        },
+        required: ['path'],
+      },
+    },
+  },
 ];
 
 // ── Tool executor ───────────────────────────────────────────────────────
@@ -5324,6 +5352,49 @@ export async function executeSelfTool(toolName, args, context = {}) {
     case 'fauna_doctor': {
       const report = await runDoctor();
       return JSON.stringify({ ok: true, ...report });
+    }
+
+    // ── Jupyter Notebooks ─────────────────────────────────────────────────
+    case 'fauna_run_notebook': {
+      return (async () => {
+        try {
+          const nbPath = String(args.path || '').trim();
+          if (!nbPath) return JSON.stringify({ ok: false, error: 'path required' });
+          if (args.execute) {
+            if (!isJupyterAvailable()) {
+              return JSON.stringify({
+                ok: false,
+                error: 'Jupyter is not installed. Run `pip install jupyter` or `conda install jupyter` to enable notebook execution.',
+                jupyterAvailable: false,
+              });
+            }
+            const result = await executeNotebook(nbPath, { timeoutSec: args.timeoutSec || 120 });
+            const summary = summarizeNotebook(result.cells);
+            return JSON.stringify({
+              ok: true,
+              executed: true,
+              path: result.path,
+              cellCount: result.cells.length,
+              kernelspec: result.metadata?.kernelspec?.display_name || null,
+              summary,
+            });
+          } else {
+            const nb = loadNotebook(nbPath);
+            const summary = summarizeNotebook(nb.cells);
+            return JSON.stringify({
+              ok: true,
+              executed: false,
+              path: nb.path,
+              cellCount: nb.cells.length,
+              kernelspec: nb.kernelspec?.display_name || null,
+              language: nb.languageInfo?.name || null,
+              summary,
+            });
+          }
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: e.message });
+        }
+      })();
     }
 
     default:

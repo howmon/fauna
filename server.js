@@ -118,6 +118,7 @@ import { registerMarkdownPdfAndYoutubeRoutes } from './server/routes/markdown-pd
 import { registerFaunaUpdateRoutes } from './server/routes/fauna-update.js';
 import { createAgentDirIterator } from './server/lib/agents-iter.js';
 import { buildShellEnv } from './server/lib/shell-env.js';
+import { registerNotebookRoutes } from './server/routes/notebook.js';
 import { createInternalAICaller } from './server/lib/ai-caller.js';
 import { createPowerSaveGuard, attachTaskPowerSaveBlocker } from './server/lib/power-save.js';
 import {
@@ -421,6 +422,7 @@ registerServerlessSyncRoutes(app, {
 // ── Provider / mobile / enterprise / workiq routes moved → server/routes/{providers,mobile,enterprise}.js ──
 // ── Fauna self-update routes moved → server/routes/fauna-update.js ──
 registerFaunaUpdateRoutes(app, { express, appDir: __dirname, getElectronApp: () => _electronApp, getElectronShell: () => _electronShell });
+registerNotebookRoutes(app);
 // ── Markdown→PDF + YouTube thumbnail routes moved → server/routes/markdown-pdf-and-youtube.js ──
 registerMarkdownPdfAndYoutubeRoutes(app, { express, getElectronBrowserWindow: () => _ElectronBrowserWindow });
 // ── Auth / token resolution + model list moved to server/copilot/{auth,models}.js ──

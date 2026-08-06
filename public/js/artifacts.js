@@ -1647,6 +1647,47 @@ function renderArtifactContent() {
       content = _renderOfficeVisual(a);
     }
 
+  } else if (a.type === 'notebook') {
+    if (a._nbLoading) {
+      content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
+        '<div class="artifact-binary-open">' +
+          '<div class="artifact-binary-icon"><i class="ti ti-loader plan-spin"></i></div>' +
+          '<div class="artifact-binary-title">Loading notebook…</div>' +
+        '</div>' +
+      '</div>';
+    } else if (a._nbExecuting) {
+      content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
+        '<div class="artifact-binary-open">' +
+          '<div class="artifact-binary-icon"><i class="ti ti-loader plan-spin"></i></div>' +
+          '<div class="artifact-binary-title">Executing notebook…</div>' +
+          '<div class="artifact-binary-hint">Running cells via jupyter nbconvert</div>' +
+        '</div>' +
+      '</div>';
+    } else if (a._nbError && !a._nbData) {
+      content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
+        '<div class="artifact-binary-open">' +
+          '<div class="artifact-binary-icon"><i class="ti ti-notebook"></i></div>' +
+          '<div class="artifact-binary-title">' + escHtml(a.title || 'Notebook') + '</div>' +
+          '<div class="artifact-binary-hint" style="color:var(--fau-danger,#e55)">' + escHtml(a._nbError) + '</div>' +
+        '</div>' +
+      '</div>';
+    } else if (a._nbData) {
+      var _nbErrBanner = a._nbError
+        ? '<div class="nb-exec-error"><i class="ti ti-alert-circle"></i> ' + escHtml(a._nbError) + '</div>'
+        : '';
+      content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
+        _nbErrBanner + renderNotebookHtml(a._nbData) +
+      '</div>';
+    } else {
+      if (a.path) _loadNotebookData(a.id, a.path);
+      content = '<div class="artifact-scroll" style="height:calc(100% - 35px)">' +
+        '<div class="artifact-binary-open">' +
+          '<div class="artifact-binary-icon"><i class="ti ti-notebook"></i></div>' +
+          '<div class="artifact-binary-title">Loading…</div>' +
+        '</div>' +
+      '</div>';
+    }
+
   } else if (a.type === 'markdown' || a.type === 'summary' || a.type === 'web') {
     var mdMode = a._mdMode || 'preview';
     if (mdMode === 'edit') {
@@ -1786,6 +1827,12 @@ function makeArtifactToolbar(a) {
       btns += '<button class="artifact-tbtn" onclick="saveDocxArtifact(\'' + a.id + '\')" title="Save changes back to document"><i class="ti ti-device-floppy"></i><span class="artifact-tbtn-label"> Save</span></button>';
     }
     btns += '<button class="artifact-tbtn" onclick="openFilePath(\'' + a.path + '\')" title="Open file"><i class="ti ti-external-link"></i><span class="artifact-tbtn-label"> Open</span></button>';
+    btns += '<button class="artifact-tbtn" onclick="openFileInFinder(\'' + a.path + '\')" title="Reveal in Finder"><i class="ti ti-folder"></i><span class="artifact-tbtn-label"> Reveal</span></button>';
+  }
+  if (a.type === 'notebook' && a.path) {
+    var _nbBusy = a._nbLoading || a._nbExecuting;
+    btns += '<button class="artifact-tbtn' + (_nbBusy ? ' disabled' : '') + '" onclick="executeNotebookArtifact(\'' + a.id + '\')" title="Run all cells via jupyter nbconvert"' + (_nbBusy ? ' disabled' : '') + '><i class="ti ti-player-play"></i><span class="artifact-tbtn-label"> Run</span></button>';
+    btns += '<button class="artifact-tbtn" onclick="openFilePath(\'' + a.path + '\')" title="Open in Jupyter"><i class="ti ti-external-link"></i><span class="artifact-tbtn-label"> Open</span></button>';
     btns += '<button class="artifact-tbtn" onclick="openFileInFinder(\'' + a.path + '\')" title="Reveal in Finder"><i class="ti ti-folder"></i><span class="artifact-tbtn-label"> Reveal</span></button>';
   }
   if (a.url && /^https?:\/\//i.test(a.url)) {
@@ -2272,7 +2319,8 @@ function fileIcon(name) {
             py:'ti-brand-python', html:'ti-brand-html5', css:'ti-palette', json:'ti-braces',
             md:'ti-markdown', txt:'ti-file-text', png:'ti-photo', jpg:'ti-photo',
             jpeg:'ti-photo', gif:'ti-photo', svg:'ti-vector', pdf:'ti-file-type-pdf',
-            sh:'ti-terminal', csv:'ti-table', xml:'ti-code', yaml:'ti-file', yml:'ti-file' };
+            sh:'ti-terminal', csv:'ti-table', xml:'ti-code', yaml:'ti-file', yml:'ti-file',
+            ipynb:'ti-notebook' };
   return m[ext] || 'ti-file';
 }
 
@@ -2306,6 +2354,10 @@ async function previewFilePath(filePath) {
   }
   if (['xls','xlsx','ods','numbers'].includes(ext)) {
     openArtifact(addArtifact({ type: 'xlsx', title: filePath.split('/').pop(), path: filePath }));
+    return;
+  }
+  if (ext === 'ipynb') {
+    openNotebookArtifact(filePath);
     return;
   }
   try {
