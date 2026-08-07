@@ -954,7 +954,38 @@ window.toggleProjSpSection = toggleProjSpSection;
 
 function reloadProjSidebarTree() {
   var proj = _activeProject();
-  if (proj) _projSpLoadTree(proj);
+  if (!proj) return;
+  var st = _projSidebarTreeState;
+  if (!st.srcId) { _projSpLoadTree(proj); return; }
+  // Soft refresh: keep expanded/openedFiles state, only re-fetch listings
+  var openPaths = Object.keys(st.expanded).filter(function(p) { return st.expanded[p]; });
+  st.dirCache = {};
+  var el = _treeGetEl(st);
+  if (el) el.innerHTML = '<div class="proj-loading"><i class="ti ti-loader-2 spin"></i> Loading…</div>';
+  fetch('/api/projects/' + state.activeProjectId + '/sources/' + st.srcId + '/files?path=')
+    .then(function(r) { return r.json().then(function(files) { return { ok: r.ok, files: files }; }); })
+    .then(function(res) {
+      if (!res.ok) {
+        if (el) el.innerHTML = '<div class="proj-hub-error">' + _projEsc(res.files.error) + '</div>';
+        return;
+      }
+      st.dirCache[''] = res.files;
+      // Re-fetch all previously open dirs in parallel then re-render once
+      return Promise.all(openPaths.map(function(p) {
+        return fetch('/api/projects/' + state.activeProjectId + '/sources/' + st.srcId + '/files?path=' + encodeURIComponent(p))
+          .then(function(r) { return r.json().then(function(f) { return { ok: r.ok, path: p, files: f }; }); })
+          .then(function(res) { st.dirCache[res.path] = res.ok ? res.files : []; })
+          .catch(function() { st.dirCache[p] = []; });
+      }));
+    })
+    .then(function() {
+      _treeRender(st);
+      _treeBindDnd(st);
+      _treeBindContextMenu(st);
+    })
+    .catch(function(e) {
+      if (el) el.innerHTML = '<div class="proj-hub-error">' + _projEsc(e.message) + '</div>';
+    });
 }
 window.reloadProjSidebarTree = reloadProjSidebarTree;
 
