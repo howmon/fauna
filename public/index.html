@@ -459,17 +459,6 @@
     <!-- Input area -->
     <div id="input-area">
       <div id="composer-context-rail">
-
-        <!-- Todo / plan bar (shown when AI has an active plan) -->
-        <div id="todo-bar" style="display:none">
-          <button class="todo-bar-toggle" onclick="toggleTodoBar()" type="button">
-            <i class="ti ti-list-check todo-bar-icon"></i>
-            <span class="todo-bar-label">Todos</span>
-            <span class="todo-bar-summary"></span>
-            <i class="ti ti-chevron-down todo-bar-chevron"></i>
-          </button>
-          <ul class="todo-bar-list"></ul>
-        </div>
         <div id="chattoolbar">
           <!-- Agent chip bar floats above the input wrap -->
             <div id="agent-chip-bar" style="display:none"></div>
@@ -483,6 +472,16 @@
             </div>
             <!-- File edits Keep/Undo bar (shown after Fauna writes project files) -->
             <div id="file-edits-bar" style="display:none" role="status"></div>
+        </div>
+        <!-- Todo / plan bar (shown when AI has an active plan) -->
+        <div id="todo-bar" style="display:none">
+          <button class="todo-bar-toggle" onclick="toggleTodoBar()" type="button">
+            <i class="ti ti-list-check todo-bar-icon"></i>
+            <span class="todo-bar-label">Todos</span>
+            <span class="todo-bar-summary"></span>
+            <i class="ti ti-chevron-down todo-bar-chevron"></i>
+          </button>
+          <ul class="todo-bar-list"></ul>
         </div>
       </div>
       <div id="decision-prompt-host" hidden></div>
