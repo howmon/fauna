@@ -459,16 +459,7 @@
     <!-- Input area -->
     <div id="input-area">
       <div id="composer-context-rail">
-        <!-- Agent chip bar floats above the input wrap -->
-        <div id="agent-chip-bar" style="display:none"></div>
-        <!-- Pending attachments inline above wrap -->
-        <div id="attach-bar"></div>
-        <!-- Figma active banner (above wrap) -->
-        <div id="figma-mode-banner" style="display:none" role="status" aria-live="polite">
-          <i class="ti ti-vector-triangle"></i>
-          <span>Figma MCP active — AI will read and write your Figma file</span>
-          <button id="figma-mode-disable-btn" onclick="toggleFigmaMCP()" title="Disable Figma MCP"><i class="ti ti-x"></i> Disable</button>
-        </div>
+
         <!-- Todo / plan bar (shown when AI has an active plan) -->
         <div id="todo-bar" style="display:none">
           <button class="todo-bar-toggle" onclick="toggleTodoBar()" type="button">
@@ -479,8 +470,20 @@
           </button>
           <ul class="todo-bar-list"></ul>
         </div>
-        <!-- File edits Keep/Undo bar (shown after Fauna writes project files) -->
-        <div id="file-edits-bar" style="display:none" role="status"></div>
+        <div id="chattoolbar">
+          <!-- Agent chip bar floats above the input wrap -->
+            <div id="agent-chip-bar" style="display:none"></div>
+            <!-- Pending attachments inline above wrap -->
+            <div id="attach-bar"></div>
+            <!-- Figma active banner (above wrap) -->
+            <div id="figma-mode-banner" style="display:none" role="status" aria-live="polite">
+              <i class="ti ti-vector-triangle"></i>
+              <span>Figma MCP active</span>
+              <button id="figma-mode-disable-btn" onclick="toggleFigmaMCP()" title="Disable Figma MCP"><i class="ti ti-x"></i> Disable</button>
+            </div>
+            <!-- File edits Keep/Undo bar (shown after Fauna writes project files) -->
+            <div id="file-edits-bar" style="display:none" role="status"></div>
+        </div>
       </div>
       <div id="decision-prompt-host" hidden></div>
       <div id="input-wrap">

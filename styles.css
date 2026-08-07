@@ -1993,6 +1993,12 @@ body.is-resizing webview { pointer-events: none !important; }
   gap: 4px;
 }
 /* Agent chip bar — floats above input-wrap */
+#chattoolbar {
+  display: flex; align-items: center;
+  max-width: none; margin: 0;
+  gap: 6px; flex-wrap: wrap;
+}
+/* Agent chip bar — floats above input-wrap */
 #agent-chip-bar {
   display: flex; align-items: center;
   max-width: none; margin: 0;
