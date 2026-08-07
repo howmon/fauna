@@ -832,17 +832,8 @@ function closeProjSidebarPanel() {
   try { localStorage.removeItem('fauna-proj-sp-open'); } catch (_) {}
 }
 
-var _projSpAutoRefreshTimer = null;
-function _projSpStartAutoRefresh() {
-  _projSpStopAutoRefresh();
-  _projSpAutoRefreshTimer = setInterval(function() {
-    var body = document.getElementById('proj-sp-files-body');
-    if (body && !body.classList.contains('collapsed')) reloadProjSidebarTree();
-  }, 30000);
-}
-function _projSpStopAutoRefresh() {
-  if (_projSpAutoRefreshTimer) { clearInterval(_projSpAutoRefreshTimer); _projSpAutoRefreshTimer = null; }
-}
+function _projSpStartAutoRefresh() {}
+function _projSpStopAutoRefresh() {}
 
 function _projSpRenderConvs(proj) {
   var el = document.getElementById('proj-sp-conv-list');
@@ -947,8 +938,6 @@ function toggleProjSpSection(which) {
   body.classList.toggle('collapsed', isNowCollapsed);
   if (chevron) chevron.classList.toggle('collapsed', isNowCollapsed);
   localStorage.setItem('fauna-proj-sp-' + which + '-open', isNowCollapsed ? 'false' : 'true');
-  // Refresh file tree whenever the FILES section is expanded
-  if (which === 'files' && !isNowCollapsed) reloadProjSidebarTree();
 }
 window.toggleProjSpSection = toggleProjSpSection;
 
