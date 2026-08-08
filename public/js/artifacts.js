@@ -1918,8 +1918,16 @@ function openFileInFinder(path) {
 }
 
 function openFilePath(path) {
+  var editor = (typeof state !== 'undefined' && state.externalEditor) || 'vscode';
+  var cmds = {
+    vscode:  'open -a "Visual Studio Code" ' + JSON.stringify(path) + ' 2>/dev/null || code ' + JSON.stringify(path),
+    cursor:  'open -a "Cursor" '              + JSON.stringify(path) + ' 2>/dev/null || cursor ' + JSON.stringify(path),
+    zed:     'open -a "Zed" '                + JSON.stringify(path) + ' 2>/dev/null || zed ' + JSON.stringify(path),
+    system:  'open ' + JSON.stringify(path),
+  };
+  var cmd = cmds[editor] || cmds.system;
   fetch('/api/shell-exec', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ command: 'open ' + JSON.stringify(path) }) }).catch(function(){});
+    body: JSON.stringify({ command: cmd }) }).catch(function(){});
 }
 
 async function saveDocxArtifact(id) {

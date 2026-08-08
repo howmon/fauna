@@ -243,6 +243,8 @@ const _shellProcs = new Map();
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ limit: '25mb', extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
+// Serve Monaco editor from local node_modules (avoids CDN latency on every open)
+app.use('/vendor/monaco-editor', express.static(path.join(__dirname, 'node_modules/monaco-editor'), { maxAge: '7d' }));
 
 // ── Browser extension bridge moved → server/bridges/ext.js ──
 const extBridge = createExtBridge({

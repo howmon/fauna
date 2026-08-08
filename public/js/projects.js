@@ -2710,7 +2710,7 @@ function _mountProjectMonaco(content, lang) {
     return;
   }
 
-  require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs' } });
+  require.config({ paths: { vs: '/vendor/monaco-editor/min/vs' } });
   require(['vs/editor/editor.main'], function() {
     _projMonacoLoaded = true;
     // Clear any fallback content
@@ -2963,7 +2963,7 @@ function _mountExplorerMonaco(content, lang) {
     container.innerHTML = '<pre class="proj-file-code"><code>' + _projEsc(content) + '</code></pre>';
     return;
   }
-  require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs' } });
+  require.config({ paths: { vs: '/vendor/monaco-editor/min/vs' } });
   require(['vs/editor/editor.main'], function() {
     container.innerHTML = '';
     _explorerMonaco = monaco.editor.create(container, {

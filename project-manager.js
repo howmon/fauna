@@ -583,7 +583,7 @@ export function listFiles(projectId, srcId, subPath) {
 }
 
 // Read a single file within a source — returns {content, size, mime}
-export function readSourceFile(projectId, srcId, filePath) {
+export async function readSourceFile(projectId, srcId, filePath) {
   const p = getProject(projectId);
   if (!p) throw new Error('Project not found');
 
@@ -596,33 +596,34 @@ export function readSourceFile(projectId, srcId, filePath) {
     if (!src) throw new Error('Source not found');
     root = src.type === 'local' ? src.path : _sourceCloneDir(projectId, srcId);
   }
-  if (!root || !fs.existsSync(root)) throw new Error('Source not available');
+
+  try { await fs.promises.access(root); } catch { throw new Error('Source not available'); }
 
   const rel  = (filePath || '').replace(/^\/+/, '');
   const full = path.resolve(path.join(root, rel));
   const resolvedRoot = path.resolve(root);
 
   if (!full.startsWith(resolvedRoot + path.sep)) throw new Error('Path traversal not allowed');
-  if (!fs.existsSync(full)) throw new Error('File not found');
-  const stat = fs.statSync(full);
+
+  let stat;
+  try { stat = await fs.promises.stat(full); } catch { throw new Error('File not found'); }
   if (!stat.isFile()) throw new Error('Not a file');
 
-  const ext  = path.extname(full).slice(1).toLowerCase();
+  const ext      = path.extname(full).slice(1).toLowerCase();
   const basename = path.basename(full);
-  const mime = MIME_MAP[ext] || 'application/octet-stream';
+  const mime     = MIME_MAP[ext] || 'application/octet-stream';
   let type = _fileType(ext, basename);
 
-  // For unknown types, try to detect text by reading a small sample
+  // For unknown types, detect text by sampling the first 8 KB asynchronously
   if (type === 'unknown') {
     if (stat.size === 0) {
-      type = 'text'; // empty files are safe to show as text
-    } else if (stat.size <= 2 * 1024 * 1024) { // up to 2 MB
+      type = 'text';
+    } else if (stat.size <= 2 * 1024 * 1024) {
       try {
-        const fd = fs.openSync(full, 'r');
+        const fh     = await fs.promises.open(full, 'r');
         const sample = Buffer.alloc(Math.min(8192, stat.size));
-        fs.readSync(fd, sample, 0, sample.length, 0);
-        fs.closeSync(fd);
-        // If no null bytes in the sample, treat as text
+        await fh.read(sample, 0, sample.length, 0);
+        await fh.close();
         type = sample.includes(0) ? 'binary' : 'text';
       } catch (_) {
         type = 'binary';
@@ -633,12 +634,12 @@ export function readSourceFile(projectId, srcId, filePath) {
   }
 
   if (type === 'text') {
-    const content = fs.readFileSync(full, 'utf8');
-    return { type: 'text', content, size: stat.size, mime: 'text/plain', ext: ext || basename.toLowerCase(), path: rel };
+    const content = await fs.promises.readFile(full, 'utf8');
+    return { type: 'text', content, size: stat.size, mtime: stat.mtimeMs, mime: 'text/plain', ext: ext || basename.toLowerCase(), path: rel };
   }
 
   // Non-text: return metadata only — bytes served by the /raw endpoint
-  return { type, size: stat.size, mime, ext, path: rel };
+  return { type, size: stat.size, mtime: stat.mtimeMs, mime, ext, path: rel };
 }
 
 const SEARCH_SKIP_DIRS = new Set([

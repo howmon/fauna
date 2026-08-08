@@ -1966,7 +1966,7 @@ function openAgentCodeView() {
     return;
   }
 
-  require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs' } });
+  require.config({ paths: { vs: '/vendor/monaco-editor/min/vs' } });
   require(['vs/editor/editor.main'], function() {
     _acvMonacoLoaded = true;
     var el = document.getElementById('acv-editor');

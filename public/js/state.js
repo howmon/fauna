@@ -56,6 +56,7 @@ var state = {
   thinkingBudget: localStorage.getItem('fauna-thinking-budget') || 'auto',
   maxContextTurns: parseInt(localStorage.getItem('fauna-max-turns') || '20', 10),
   defaultSavePath: localStorage.getItem('fauna-default-save-path') || null, // user-specified default directory for file saves
+  externalEditor: localStorage.getItem('fauna-external-editor') || 'vscode', // default to VS Code
   // streaming/abortController/_autoFeedDepth are per-conversation (conv._streaming etc.)
   artifacts:      [],  // active conv's artifacts { id, type, title, content, base64, mime, path, url }
   activeArtifact: null,

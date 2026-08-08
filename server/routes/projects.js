@@ -1,4 +1,14 @@
 import express from 'express';
+import path from 'path';
+
+// Per-path write queue — prevents concurrent writes corrupting the same file
+const _writeQueue = new Map();
+function _queueWrite(fullPath, fn) {
+  const prior = _writeQueue.get(fullPath) ?? Promise.resolve();
+  const next = prior.then(fn).finally(() => { if (_writeQueue.get(fullPath) === next) _writeQueue.delete(fullPath); });
+  _writeQueue.set(fullPath, next);
+  return next;
+}
 
 export function registerProjectRoutes(app, deps) {
   const canEditEntry = (project, sourceId) => sourceId === '__rootpath__' || !!project?.allowFileEditing;
@@ -265,9 +275,9 @@ export function registerProjectRoutes(app, deps) {
     }
   });
 
-  app.get('/api/projects/:id/sources/:srcId/file', (req, res) => {
+  app.get('/api/projects/:id/sources/:srcId/file', async (req, res) => {
     try {
-      const result = readSourceFile(req.params.id, req.params.srcId, req.query.path || '');
+      const result = await readSourceFile(req.params.id, req.params.srcId, req.query.path || '');
       res.json(result);
     } catch (e) {
       res.status(400).json({ error: e.message });
@@ -297,16 +307,37 @@ export function registerProjectRoutes(app, deps) {
     }
   });
 
-  app.put('/api/projects/:id/sources/:srcId/file', (req, res) => {
+  app.put('/api/projects/:id/sources/:srcId/file', async (req, res) => {
     try {
       const project = getProject(req.params.id);
       if (!project) return res.status(404).json({ error: 'Project not found' });
       if (!canEditEntry(project, req.params.srcId)) return res.status(403).json({ error: 'File editing is disabled for this project' });
       const { fullPath } = resolveSourceFilePath(req.params.id, req.params.srcId, req.query.path || '');
-      fs.writeFileSync(fullPath, req.body?.content ?? '', 'utf8');
-      res.json({ ok: true });
+      const clientMtime = req.query.mtime ? Number(req.query.mtime) : null;
+      await _queueWrite(fullPath, async () => {
+        // Conflict guard: reject if disk file was modified since the client opened it
+        if (clientMtime !== null) {
+          try {
+            const { mtimeMs } = await fs.promises.stat(fullPath);
+            if (Math.round(mtimeMs) !== Math.round(clientMtime)) {
+              return res.status(409).json({ error: 'File was modified externally', mtime: mtimeMs });
+            }
+          } catch { /* file may not exist yet — allow create */ }
+        }
+        // Atomic write: temp file → rename so a crash never leaves a partial file
+        const tmp = fullPath + '.fauna-save-' + process.pid + '-' + Date.now();
+        try {
+          await fs.promises.writeFile(tmp, req.body?.content ?? '', 'utf8');
+          await fs.promises.rename(tmp, fullPath);
+        } catch (e) {
+          try { await fs.promises.unlink(tmp); } catch { /* ignore */ }
+          throw e;
+        }
+        const { mtimeMs } = await fs.promises.stat(fullPath);
+        res.json({ ok: true, mtime: mtimeMs });
+      });
     } catch (e) {
-      res.status(400).json({ error: e.message });
+      if (!res.headersSent) res.status(400).json({ error: e.message });
     }
   });
 

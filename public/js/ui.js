@@ -644,6 +644,10 @@ async function loadSettingsState() {
   if (ceCb) ceCb.checked = !!state.enableConvExport;
   if (typeof _applyConvExportVisibility === 'function') _applyConvExportVisibility();
 
+  // Sync external editor select
+  var eeSel = document.getElementById('external-editor-select');
+  if (eeSel) eeSel.value = state.externalEditor || 'vscode';
+
   // Sync auto-compact checkbox
   var acCb = document.getElementById('auto-compact-toggle');
   if (acCb) acCb.checked = !!state.autoCompact;
@@ -2733,6 +2737,12 @@ async function feedCodeResult(a) {
 }
 
 // Toggle auto-run from Settings (called by settings checkbox)
+function setExternalEditor(val) {
+  state.externalEditor = val;
+  localStorage.setItem('fauna-external-editor', val);
+}
+window.setExternalEditor = setExternalEditor;
+
 function setAutoRunShell(val) {
   state.autoRunShell = val;
   localStorage.setItem('fauna-autorun-shell', val ? 'true' : 'false');
@@ -3208,14 +3218,23 @@ document.addEventListener('DOMContentLoaded', function() {
   };
 
   window.chipMenuOpenInEditor = function(filepath) {
+    var editor = (typeof state !== 'undefined' && state.externalEditor) || 'vscode';
+    var editorCmds = {
+      vscode: function(p) { return 'open -a "Visual Studio Code" ' + p + ' 2>/dev/null || code ' + p; },
+      cursor: function(p) { return 'open -a "Cursor" ' + p + ' 2>/dev/null || cursor ' + p; },
+      zed:    function(p) { return 'open -a "Zed" ' + p + ' 2>/dev/null || zed ' + p; },
+      system: function(p) { return 'open ' + p; },
+    };
+    var mkCmd = editorCmds[editor] || editorCmds.system;
     var cmd;
     if (_isAbsPath(filepath)) {
-      cmd = 'code ' + _shellEsc(filepath) + ' 2>/dev/null || open ' + _shellEsc(filepath);
+      cmd = mkCmd(_shellEsc(filepath));
     } else {
       var root = _projectRoot() || '.';
+      var openPart = mkCmd('"$f"').replace(/\\/g, '\\\\');
       cmd = 'find ' + _shellEsc(root) + ' -name ' + _shellEsc(filepath) +
         " -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null | head -1 |" +
-        " xargs -I{} sh -c 'code \"{}\" 2>/dev/null || open \"{}\"'";
+        " xargs -I{} sh -c 'f=\"{}\"; " + openPart.replace(/'/g, "'\\''") + "'";
     }
     fetch('/api/shell-exec', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
