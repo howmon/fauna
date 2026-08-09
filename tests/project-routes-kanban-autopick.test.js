@@ -33,6 +33,23 @@ function makeApp() {
       handler(req, res);
       return res;
     },
+    async invokeAsync(method, path, opts = {}) {
+      const { params = {}, body = {}, query = {}, headers = {} } = opts;
+      const handler = routes.get(method + ' ' + path);
+      if (!handler) throw new Error('missing route ' + method + ' ' + path);
+      const res = {
+        statusCode: 200,
+        body: null,
+        status(code) { this.statusCode = code; return this; },
+        json(payload) { this.body = payload; return this; },
+      };
+      const req = {
+        params, body, query,
+        get(name) { return headers[String(name).toLowerCase()] || headers[name] || ''; },
+      };
+      await handler(req, res);
+      return res;
+    },
   };
 }
 
@@ -91,14 +108,14 @@ async function flushDynamicImport() {
 }
 
 describe('project routes find and replace', () => {
-  it('passes search options to the scoped source search engine', () => {
+  it('passes search options to the scoped source search engine', async () => {
     const searchResult = { files: [], matchCount: 0, fileCount: 0 };
     const deps = makeDeps({ searchSourceFiles: vi.fn(() => searchResult) });
     const app = makeApp();
     registerProjectRoutes(app, deps);
 
     const body = { query: 'needle', caseSensitive: true, include: '**/*.js' };
-    const res = app.invoke('POST', '/api/projects/:id/sources/:srcId/search', {
+    const res = await app.invokeAsync('POST', '/api/projects/:id/sources/:srcId/search', {
       params: { id: 'p1', srcId: 'src1' }, body,
     });
 

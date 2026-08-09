@@ -284,23 +284,23 @@ export function registerProjectRoutes(app, deps) {
     }
   });
 
-  app.post('/api/projects/:id/sources/:srcId/search', (req, res) => {
+  app.post('/api/projects/:id/sources/:srcId/search', async (req, res) => {
     try {
       if (typeof searchSourceFiles !== 'function') {
         return res.status(501).json({ error: 'project search not wired on this server' });
       }
-      res.json(searchSourceFiles(req.params.id, req.params.srcId, req.body || {}));
+      res.json(await searchSourceFiles(req.params.id, req.params.srcId, req.body || {}));
     } catch (e) {
       res.status(400).json({ error: e.message });
     }
   });
 
-  app.post('/api/projects/:id/sources/:srcId/replace', (req, res) => {
+  app.post('/api/projects/:id/sources/:srcId/replace', async (req, res) => {
     try {
       if (typeof replaceSourceMatches !== 'function') {
         return res.status(501).json({ error: 'project replacement not wired on this server' });
       }
-      res.json(replaceSourceMatches(req.params.id, req.params.srcId, req.body || {}));
+      res.json(await replaceSourceMatches(req.params.id, req.params.srcId, req.body || {}));
     } catch (e) {
       const message = e?.message || String(e);
       res.status(/editing is disabled/i.test(message) ? 403 : 400).json({ error: message });
@@ -343,13 +343,13 @@ export function registerProjectRoutes(app, deps) {
 
   // Create a new empty file or directory inside a source. Body:
   // { path: "foo/bar.txt", type: "file" | "dir" }.
-  app.post('/api/projects/:id/sources/:srcId/entry', (req, res) => {
+  app.post('/api/projects/:id/sources/:srcId/entry', async (req, res) => {
     try {
       const project = getProject(req.params.id);
       if (!project) return res.status(404).json({ error: 'Project not found' });
       if (!canEditEntry(project, req.params.srcId)) return res.status(403).json({ error: 'File editing is disabled for this project' });
       const { path: relPath, type } = req.body || {};
-      const entry = createSourceEntry(req.params.id, req.params.srcId, relPath, type);
+      const entry = await createSourceEntry(req.params.id, req.params.srcId, relPath, type);
       res.status(201).json(entry);
     } catch (e) {
       res.status(400).json({ error: e.message });
@@ -364,7 +364,7 @@ export function registerProjectRoutes(app, deps) {
   app.post(
     '/api/projects/:id/sources/:srcId/upload',
     express.raw({ type: '*/*', limit: '50mb' }),
-    (req, res) => {
+    async (req, res) => {
       try {
         const project = getProject(req.params.id);
         if (!project) return res.status(404).json({ error: 'Project not found' });
@@ -378,7 +378,7 @@ export function registerProjectRoutes(app, deps) {
         const buf = Buffer.isBuffer(req.body)
           ? req.body
           : Buffer.from(req.body || '');
-        const entry = writeSourceFileBytes(
+        const entry = await writeSourceFileBytes(
           req.params.id, req.params.srcId, relPath, buf, { overwrite },
         );
         res.status(201).json(entry);

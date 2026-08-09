@@ -751,15 +751,15 @@ function _walkSearchFiles(root, includePatterns, excludePatterns) {
   return files;
 }
 
-function _readSearchText(file) {
+async function _readSearchText(file) {
   let buffer;
-  try { buffer = fs.readFileSync(file.fullPath); } catch (_) { return null; }
+  try { buffer = await fs.promises.readFile(file.fullPath); } catch (_) { return null; }
   const sample = buffer.subarray(0, Math.min(buffer.length, 8192));
   if (sample.includes(0)) return null;
   return buffer.toString('utf8');
 }
 
-export function searchSourceFiles(projectId, srcId, opts = {}) {
+export async function searchSourceFiles(projectId, srcId, opts = {}) {
   const query = String(opts.query || '');
   const searchRe = _buildSearchRegex(query, opts);
   const includePatterns = _parseGlobList(opts.include);
@@ -771,7 +771,7 @@ export function searchSourceFiles(projectId, srcId, opts = {}) {
   let truncated = candidates.length >= SEARCH_MAX_FILES;
 
   for (const file of candidates) {
-    const content = _readSearchText(file);
+    const content = await _readSearchText(file);
     if (content === null) continue;
     const matches = [];
     const lineStarts = [0];
@@ -804,7 +804,7 @@ export function searchSourceFiles(projectId, srcId, opts = {}) {
   return { query, files: results, fileCount: results.length, matchCount, scannedFiles: candidates.length, truncated };
 }
 
-export function replaceSourceMatches(projectId, srcId, opts = {}) {
+export async function replaceSourceMatches(projectId, srcId, opts = {}) {
   const { project, root } = _sourceSearchRoot(projectId, srcId);
   if (!project.allowFileEditing) throw new Error('File editing is disabled for this project');
   const query = String(opts.query || '');
@@ -821,7 +821,7 @@ export function replaceSourceMatches(projectId, srcId, opts = {}) {
   const changedFiles = [];
 
   for (const file of candidates) {
-    const content = _readSearchText(file);
+    const content = await _readSearchText(file);
     if (content === null) continue;
     searchRe.lastIndex = 0;
     let localCount = 0;
@@ -839,12 +839,13 @@ export function replaceSourceMatches(projectId, srcId, opts = {}) {
     }
     if (!localCount || next === content) continue;
     const tmpPath = file.fullPath + '.fauna-replace-' + process.pid + '-' + Date.now();
-    const mode = fs.statSync(file.fullPath).mode;
+    const { mode } = await fs.promises.stat(file.fullPath);
+    const tmp = tmpPath;
     try {
-      fs.writeFileSync(tmpPath, next, { encoding: 'utf8', mode });
-      fs.renameSync(tmpPath, file.fullPath);
+      await fs.promises.writeFile(tmp, next, { encoding: 'utf8', mode });
+      await fs.promises.rename(tmp, file.fullPath);
     } catch (e) {
-      try { fs.rmSync(tmpPath, { force: true }); } catch (_) {}
+      try { await fs.promises.unlink(tmp); } catch (_) {}
       throw e;
     }
     replacementCount += localCount;
@@ -872,7 +873,7 @@ function _assertCanonicalSourcePath(root, candidate) {
   }
 }
 
-export function createSourceEntry(projectId, srcId, relPath, type) {
+export async function createSourceEntry(projectId, srcId, relPath, type) {
   const p = getProject(projectId);
   if (!p) throw new Error('Project not found');
   if (type !== 'file' && type !== 'dir') throw new Error('Invalid type — expected "file" or "dir"');
@@ -910,10 +911,10 @@ export function createSourceEntry(projectId, srcId, relPath, type) {
   if (fs.existsSync(full)) throw new Error('A file or folder with that name already exists');
 
   if (type === 'dir') {
-    fs.mkdirSync(full, { recursive: true });
+    await fs.promises.mkdir(full, { recursive: true });
   } else {
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.writeFileSync(full, '', 'utf8');
+    await fs.promises.mkdir(path.dirname(full), { recursive: true });
+    await fs.promises.writeFile(full, '', 'utf8');
   }
 
   return { path: rel, type };
@@ -924,7 +925,7 @@ export function createSourceEntry(projectId, srcId, relPath, type) {
 // escapes the source root. When { overwrite: true } an existing file is
 // replaced; otherwise the call throws. Parent dirs are created on demand.
 // Used by the drag-and-drop upload endpoint. Returns { path, type, size }.
-export function writeSourceFileBytes(projectId, srcId, relPath, buffer, opts = {}) {
+export async function writeSourceFileBytes(projectId, srcId, relPath, buffer, opts = {}) {
   const p = getProject(projectId);
   if (!p) throw new Error('Project not found');
   if (!Buffer.isBuffer(buffer)) throw new Error('writeSourceFileBytes requires a Buffer');
@@ -962,8 +963,8 @@ export function writeSourceFileBytes(projectId, srcId, relPath, buffer, opts = {
     if (stat.isDirectory()) throw new Error('Cannot overwrite a directory with a file');
   }
 
-  fs.mkdirSync(path.dirname(full), { recursive: true });
-  fs.writeFileSync(full, buffer);
+  await fs.promises.mkdir(path.dirname(full), { recursive: true });
+  await fs.promises.writeFile(full, buffer);
   return { path: rel, type: 'file', size: buffer.length };
 }
 

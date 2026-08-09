@@ -730,7 +730,7 @@ export function registerServerlessSyncRoutes(app, deps = {}) {
       try { buf = Buffer.from(String(file.content || ''), 'base64'); } catch (_) { stats.files.skipped++; continue; }
       if (buf.length > MAX_FILE_BYTES) { stats.files.skipped++; continue; }
       try {
-        projectManager.writeSourceFileBytes(file.projectId, '__rootpath__', relPath, buf, { overwrite: true });
+        await projectManager.writeSourceFileBytes(file.projectId, '__rootpath__', relPath, buf, { overwrite: true });
         stats.files.imported++;
       } catch (_) {
         stats.files.skipped++;
