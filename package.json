@@ -253,6 +253,13 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "node_modules/monaco-editor/min",
+        "to": "monaco-editor/min",
+        "filter": [
+          "**/*"
+        ]
       }
     ]
   }
