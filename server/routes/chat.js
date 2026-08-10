@@ -27,7 +27,7 @@ import { getCopilotClient } from '../copilot/auth.js';
 import { getLLMClient } from '../llm/registry.js';
 import { applyModelRequestCompatibility, resolveModelCapabilities } from '../llm/model-capabilities.js';
 import { FALLBACK_MODELS, CHAT_COMPLETIONS_UNSUPPORTED_RE } from '../copilot/models.js';
-import { GEN_UI_CATALOG_PROMPT, GEN_UI_SHORT_HINT } from '../prompts/gen-ui-catalog.js';
+import { GEN_UI_CATALOG_PROMPT, GEN_UI_COMPACT_CATALOG, GEN_UI_SHORT_HINT } from '../prompts/gen-ui-catalog.js';
 import { FAUNA_CORE_GUIDELINES, FAUNA_FRONTEND_QUALITY } from '../prompts/core-guidelines.js';
 import { computeContextFlags, computeToolFlags, filterToolSchemas } from '../prompts/context-gating.js';
 import { SELF_TOOL_DEFS, DYNAMIC_WIDGET_TOOL_DEFS, executeSelfTool, isSelfTool, getActivePlanForConv, listSkillsOnDisk } from '../../self-tools.js';
@@ -1135,14 +1135,18 @@ export function registerChatRoute(app, {
       })();
 
       // When the user has explicitly enabled Dynamic Widgets in Settings,
-      // they want fauna_emit_widget available across the whole conversation
-      // — not gated on keyword matches in the latest user turn. Force the
-      // genui catalog on so the model sees the bundle.html / Three.js rules
-      // and knows it CAN call fauna_emit_widget; otherwise the short-hint
-      // path actively forbids `gen-ui` blocks and the model degrades to
-      // plain text. Skip for delegation / CLI surfaces (no rendering target).
+      // they want fauna_emit_widget available across the whole conversation.
+      // We use a compact ~13 KB catalog on turns with no explicit widget /
+      // chart / 3D / TTS / lesson keyword, and only load the full 40 KB
+      // catalog on turns where _ctxFlags.genui is already true (keyword
+      // matched or sticky from a prior gen-ui block). This avoids burning
+      // ~27 KB of context every single turn, which was causing autoCompact
+      // to trigger far too early and erase hard-won conversation history.
+      // Skip for delegation / CLI surfaces (no rendering target).
       if (enableDynamicWidgets && !isDelegation && !isCLI && !noTools) {
-        _ctxFlags.genui = true;
+        _ctxFlags.dynamicWidgets = true;
+        // If the keyword/sticky check already fired _ctxFlags.genui, keep it.
+        // Otherwise leave genui as-is — the compact catalog will be injected below.
       }
 
       // Cache-stable layout (headroom CacheAligner idea): the provider's
@@ -1189,7 +1193,9 @@ export function registerChatRoute(app, {
         // after the stable prefix and rarely break the cache once present.
         (isolateContext || isCLI || noTools) ? '' : (_ctxFlags.browser ? browserBuildContext : ''),
         (isolateContext || isCLI || noTools) ? '' : (_ctxFlags.browser ? buildBrowserExtContext() : ''),
-        (isolateContext || isDelegation || isCLI || noTools) ? '' : (_ctxFlags.genui ? GEN_UI_CATALOG_PROMPT : GEN_UI_SHORT_HINT),
+        (isolateContext || isDelegation || isCLI || noTools) ? '' :
+          (_ctxFlags.genui ? GEN_UI_CATALOG_PROMPT :
+            (_ctxFlags.dynamicWidgets ? GEN_UI_COMPACT_CATALOG : GEN_UI_SHORT_HINT)),
         (isolateContext || isDelegation || !_ctxFlags.frontend) ? '' : FAUNA_FRONTEND_QUALITY,
         // ── 3. VOLATILE SUFFIX ─────────────────────────────────────────────
         // These change turn-to-turn (project edits, fact access/scoring,

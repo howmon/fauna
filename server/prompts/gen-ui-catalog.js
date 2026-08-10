@@ -570,3 +570,41 @@ When building a web app for the user, follow this workflow:
 - The browser keeps login sessions across pages (cookies persist). No need to re-authenticate.
 - Each conversation has its own browser tabs — they don't interfere with other conversations.
 `;
+
+/**
+ * Compact gen-ui catalog (~13 KB vs the full 40 KB).
+ *
+ * Used when `enableDynamicWidgets` is on but the current turn contains no
+ * explicit widget / chart / 3D / TTS / lesson keywords.  Omits:
+ *   – The Three.js / 3D objects spec   (~4 KB)
+ *   – The podcast / TTS section        (~1.4 KB)
+ *   – The interactive lessons section  (~1.6 KB)
+ *   – All worked examples              (~19 KB)
+ *
+ * This saves ~27 KB of context every turn where the user is doing something
+ * other than building a visual widget, preventing autoCompact from erasing
+ * conversation history prematurely.
+ *
+ * The full catalog still loads automatically on the next turn that contains a
+ * widget/chart/3D/TTS/lesson keyword (via computeContextFlags → _ctxFlags.genui).
+ */
+export const GEN_UI_COMPACT_CATALOG = (() => {
+  const c = GEN_UI_CATALOG_PROMPT;
+  // Section boundary markers (robust to minor whitespace tweaks)
+  const threeJsStart    = c.indexOf('\n### 3D objects');
+  const afterThreeJs    = c.indexOf('\n### CRITICAL: Never lie');
+  const podcastStart    = c.indexOf('\n### "Read this aloud"');
+  const actionStart     = c.indexOf('\n### Action reference');
+  const bigExamples     = c.indexOf('\n\n### Example — dashboard card');
+
+  return [
+    // 1. Decision table (~1.6 KB)
+    c.slice(0, threeJsStart),
+    // 2. Critical rules + component specs + media rules (~9.1 KB)
+    c.slice(afterThreeJs, podcastStart),
+    // 3. Action reference + make-recommendations + dynamic props (~2.3 KB)
+    c.slice(actionStart, bigExamples),
+    // Brief note so the model knows full examples are available
+    '\n\n> **Compact catalog loaded** — Three.js/3D spec, TTS, lessons, and worked examples are omitted here to preserve context. They auto-load next turn if you ask for a 3D widget, podcast, lesson, or include "show me an example".',
+  ].join('\n');
+})();
