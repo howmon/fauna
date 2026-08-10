@@ -23,6 +23,17 @@ This app CAN render: \`\`\`gen-ui widgets (dashboards, stats, tables, playlists,
 When the user asks for a visual/interactive output and you don't see the catalog: either (a) use a \`\`\`artifact:html block with plain HTML+CSS (no framework imports), or (b) ask the user a follow-up like "want me to render that as a dashboard widget?" — the next turn will load the catalog automatically.
 `.trim();
 
+// ~350-char notice injected when enableDynamicWidgets=true but no widget keyword matched.
+// Does NOT include the component schema — that auto-loads via full catalog on keyword turns.
+// Permits gen-ui blocks (unlike GEN_UI_SHORT_HINT which hard-forbids them), but warns the
+// model not to attempt one without the schema.
+export const GEN_UI_DYNAMIC_ENABLED_HINT = `
+## Dynamic Widgets enabled (schema not loaded this turn)
+Widgets, charts, dashboards, and other gen-ui blocks ARE available. The full component catalog loads automatically next turn when the request matches a visual keyword (dashboard, chart, widget, etc.).
+
+DO NOT emit a \`\`\`gen-ui block now — the JSON schema is absent and any attempt will produce an invalid widget. Use \`\`\`artifact:html for immediate visual output, or ask a clarifying question and the catalog will be present next turn.
+`.trim();
+
 export const GEN_UI_CATALOG_PROMPT = `
 ## Output format decision — artifact pane vs inline gen-ui vs plain text
 

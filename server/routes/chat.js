@@ -27,7 +27,7 @@ import { getCopilotClient } from '../copilot/auth.js';
 import { getLLMClient } from '../llm/registry.js';
 import { applyModelRequestCompatibility, resolveModelCapabilities } from '../llm/model-capabilities.js';
 import { FALLBACK_MODELS, CHAT_COMPLETIONS_UNSUPPORTED_RE } from '../copilot/models.js';
-import { GEN_UI_CATALOG_PROMPT, GEN_UI_COMPACT_CATALOG, GEN_UI_SHORT_HINT } from '../prompts/gen-ui-catalog.js';
+import { GEN_UI_CATALOG_PROMPT, GEN_UI_DYNAMIC_ENABLED_HINT, GEN_UI_SHORT_HINT } from '../prompts/gen-ui-catalog.js';
 import { FAUNA_CORE_GUIDELINES, FAUNA_FRONTEND_QUALITY } from '../prompts/core-guidelines.js';
 import { computeContextFlags, computeToolFlags, filterToolSchemas } from '../prompts/context-gating.js';
 import { SELF_TOOL_DEFS, DYNAMIC_WIDGET_TOOL_DEFS, executeSelfTool, isSelfTool, getActivePlanForConv, listSkillsOnDisk } from '../../self-tools.js';
@@ -1195,7 +1195,7 @@ export function registerChatRoute(app, {
         (isolateContext || isCLI || noTools) ? '' : (_ctxFlags.browser ? buildBrowserExtContext() : ''),
         (isolateContext || isDelegation || isCLI || noTools) ? '' :
           (_ctxFlags.genui ? GEN_UI_CATALOG_PROMPT :
-            (_ctxFlags.dynamicWidgets ? GEN_UI_COMPACT_CATALOG : GEN_UI_SHORT_HINT)),
+            (_ctxFlags.dynamicWidgets ? GEN_UI_DYNAMIC_ENABLED_HINT : GEN_UI_SHORT_HINT)),
         (isolateContext || isDelegation || !_ctxFlags.frontend) ? '' : FAUNA_FRONTEND_QUALITY,
         // ── 3. VOLATILE SUFFIX ─────────────────────────────────────────────
         // These change turn-to-turn (project edits, fact access/scoring,
