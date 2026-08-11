@@ -818,6 +818,20 @@
     </div>
 
     <div class="settings-section">
+      <div class="settings-section-title">External Editor</div>
+      <label class="settings-label">
+        <span>Open files with</span>
+        <select id="external-editor-select" class="settings-input" onchange="setExternalEditor(this.value)" style="cursor:pointer">
+          <option value="vscode">Visual Studio Code</option>
+          <option value="cursor">Cursor</option>
+          <option value="zed">Zed</option>
+          <option value="system">System default (macOS)</option>
+        </select>
+      </label>
+      <div class="settings-hint" style="margin-top:4px">App used when opening files from artifacts and file chips.</div>
+    </div>
+
+    <div class="settings-section">
       <div class="settings-section-title">Experimental</div>
       <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none">
         <input type="checkbox" id="dynamic-widgets-toggle"
@@ -3581,7 +3595,7 @@ Examples:
   </div><!-- /help-body -->
 </div><!-- /help-panel -->
 
-<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/loader.js"></script>
+<script src="/vendor/monaco-editor/min/vs/loader.js"></script>
 <!-- Private integrations loader — no-op if file absent -->
 <script>
 (function(){

@@ -23,6 +23,17 @@ This app CAN render: \`\`\`gen-ui widgets (dashboards, stats, tables, playlists,
 When the user asks for a visual/interactive output and you don't see the catalog: either (a) use a \`\`\`artifact:html block with plain HTML+CSS (no framework imports), or (b) ask the user a follow-up like "want me to render that as a dashboard widget?" — the next turn will load the catalog automatically.
 `.trim();
 
+// ~350-char notice injected when enableDynamicWidgets=true but no widget keyword matched.
+// Does NOT include the component schema — that auto-loads via full catalog on keyword turns.
+// Permits gen-ui blocks (unlike GEN_UI_SHORT_HINT which hard-forbids them), but warns the
+// model not to attempt one without the schema.
+export const GEN_UI_DYNAMIC_ENABLED_HINT = `
+## Dynamic Widgets enabled (schema not loaded this turn)
+Widgets, charts, dashboards, and other gen-ui blocks ARE available. The full component catalog loads automatically next turn when the request matches a visual keyword (dashboard, chart, widget, etc.).
+
+DO NOT emit a \`\`\`gen-ui block now — the JSON schema is absent and any attempt will produce an invalid widget. Use \`\`\`artifact:html for immediate visual output, or ask a clarifying question and the catalog will be present next turn.
+`.trim();
+
 export const GEN_UI_CATALOG_PROMPT = `
 ## Output format decision — artifact pane vs inline gen-ui vs plain text
 
@@ -570,3 +581,41 @@ When building a web app for the user, follow this workflow:
 - The browser keeps login sessions across pages (cookies persist). No need to re-authenticate.
 - Each conversation has its own browser tabs — they don't interfere with other conversations.
 `;
+
+/**
+ * Compact gen-ui catalog (~13 KB vs the full 40 KB).
+ *
+ * Used when `enableDynamicWidgets` is on but the current turn contains no
+ * explicit widget / chart / 3D / TTS / lesson keywords.  Omits:
+ *   – The Three.js / 3D objects spec   (~4 KB)
+ *   – The podcast / TTS section        (~1.4 KB)
+ *   – The interactive lessons section  (~1.6 KB)
+ *   – All worked examples              (~19 KB)
+ *
+ * This saves ~27 KB of context every turn where the user is doing something
+ * other than building a visual widget, preventing autoCompact from erasing
+ * conversation history prematurely.
+ *
+ * The full catalog still loads automatically on the next turn that contains a
+ * widget/chart/3D/TTS/lesson keyword (via computeContextFlags → _ctxFlags.genui).
+ */
+export const GEN_UI_COMPACT_CATALOG = (() => {
+  const c = GEN_UI_CATALOG_PROMPT;
+  // Section boundary markers (robust to minor whitespace tweaks)
+  const threeJsStart    = c.indexOf('\n### 3D objects');
+  const afterThreeJs    = c.indexOf('\n### CRITICAL: Never lie');
+  const podcastStart    = c.indexOf('\n### "Read this aloud"');
+  const actionStart     = c.indexOf('\n### Action reference');
+  const bigExamples     = c.indexOf('\n\n### Example — dashboard card');
+
+  return [
+    // 1. Decision table (~1.6 KB)
+    c.slice(0, threeJsStart),
+    // 2. Critical rules + component specs + media rules (~9.1 KB)
+    c.slice(afterThreeJs, podcastStart),
+    // 3. Action reference + make-recommendations + dynamic props (~2.3 KB)
+    c.slice(actionStart, bigExamples),
+    // Brief note so the model knows full examples are available
+    '\n\n> **Compact catalog loaded** — Three.js/3D spec, TTS, lessons, and worked examples are omitted here to preserve context. They auto-load next turn if you ask for a 3D widget, podcast, lesson, or include "show me an example".',
+  ].join('\n');
+})();

@@ -1,6 +1,6 @@
 {
   "name": "@eichho/fauna",
-  "version": "2.2.3",
+  "version": "2.2.4",
   "description": "Fauna — AI assistant CLI. Chat with LLMs, run autonomous tasks, and control your desktop from the terminal.",
   "author": {
     "name": "Solomon Abey",
@@ -87,6 +87,7 @@
   "devDependencies": {
     "electron": "41.10.2",
     "electron-builder": "^26.15.3",
+    "monaco-editor": "^0.56.0",
     "vitest": "^4.1.7"
   },
   "overrides": {
@@ -249,6 +250,13 @@
       {
         "from": "browser-extension",
         "to": "browser-extension",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "node_modules/monaco-editor/min",
+        "to": "monaco-editor/min",
         "filter": [
           "**/*"
         ]

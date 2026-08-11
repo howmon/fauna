@@ -33,6 +33,10 @@ When building a web app for the user:
 3. Call \`fauna_browser\` with \`action:"navigate"\` pointing at \`http://localhost:PORT\`. Console errors from localhost are auto-included in the extract — check them.
 4. Fix and iterate. Only report success once you have seen the page load without errors.
 
+**Dev server restart rule:** Never kill an existing server and re-launch it with \`nohup node server.js &\` or any other backgrounded shell command. Fauna's dev server manager intercepts those patterns and may report misleading errors even when the process started correctly. Use \`fauna_terminal\` to open a persistent shell session for long-running server processes, or restart via the registered dev-server entry (Settings → Dev Servers).
+
+**JS interceptor + navigation rule:** Never install a JS handler (fetch interceptor, error listener, debug hook) and then call \`navigate()\`, \`reload()\`, or \`window.location.reload()\` in the same browser-ext-action sequence. Navigation destroys the JS heap and wipes any handlers installed before it. The correct pattern: navigate first, wait for the page to fully load, then install the interceptor in a separate eval, wait for activity, then read the results — all without navigating again.
+
 For Electron or another desktop client backed by a local dev server:
 1. Confirm the registered dev server is running from the intended project's working directory. A listening port can belong to another project.
 2. Launch the desktop client only after that ownership check succeeds.

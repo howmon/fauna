@@ -583,7 +583,7 @@ export function listFiles(projectId, srcId, subPath) {
 }
 
 // Read a single file within a source — returns {content, size, mime}
-export function readSourceFile(projectId, srcId, filePath) {
+export async function readSourceFile(projectId, srcId, filePath) {
   const p = getProject(projectId);
   if (!p) throw new Error('Project not found');
 
@@ -596,33 +596,34 @@ export function readSourceFile(projectId, srcId, filePath) {
     if (!src) throw new Error('Source not found');
     root = src.type === 'local' ? src.path : _sourceCloneDir(projectId, srcId);
   }
-  if (!root || !fs.existsSync(root)) throw new Error('Source not available');
+
+  try { await fs.promises.access(root); } catch { throw new Error('Source not available'); }
 
   const rel  = (filePath || '').replace(/^\/+/, '');
   const full = path.resolve(path.join(root, rel));
   const resolvedRoot = path.resolve(root);
 
   if (!full.startsWith(resolvedRoot + path.sep)) throw new Error('Path traversal not allowed');
-  if (!fs.existsSync(full)) throw new Error('File not found');
-  const stat = fs.statSync(full);
+
+  let stat;
+  try { stat = await fs.promises.stat(full); } catch { throw new Error('File not found'); }
   if (!stat.isFile()) throw new Error('Not a file');
 
-  const ext  = path.extname(full).slice(1).toLowerCase();
+  const ext      = path.extname(full).slice(1).toLowerCase();
   const basename = path.basename(full);
-  const mime = MIME_MAP[ext] || 'application/octet-stream';
+  const mime     = MIME_MAP[ext] || 'application/octet-stream';
   let type = _fileType(ext, basename);
 
-  // For unknown types, try to detect text by reading a small sample
+  // For unknown types, detect text by sampling the first 8 KB asynchronously
   if (type === 'unknown') {
     if (stat.size === 0) {
-      type = 'text'; // empty files are safe to show as text
-    } else if (stat.size <= 2 * 1024 * 1024) { // up to 2 MB
+      type = 'text';
+    } else if (stat.size <= 2 * 1024 * 1024) {
       try {
-        const fd = fs.openSync(full, 'r');
+        const fh     = await fs.promises.open(full, 'r');
         const sample = Buffer.alloc(Math.min(8192, stat.size));
-        fs.readSync(fd, sample, 0, sample.length, 0);
-        fs.closeSync(fd);
-        // If no null bytes in the sample, treat as text
+        await fh.read(sample, 0, sample.length, 0);
+        await fh.close();
         type = sample.includes(0) ? 'binary' : 'text';
       } catch (_) {
         type = 'binary';
@@ -633,12 +634,12 @@ export function readSourceFile(projectId, srcId, filePath) {
   }
 
   if (type === 'text') {
-    const content = fs.readFileSync(full, 'utf8');
-    return { type: 'text', content, size: stat.size, mime: 'text/plain', ext: ext || basename.toLowerCase(), path: rel };
+    const content = await fs.promises.readFile(full, 'utf8');
+    return { type: 'text', content, size: stat.size, mtime: stat.mtimeMs, mime: 'text/plain', ext: ext || basename.toLowerCase(), path: rel };
   }
 
   // Non-text: return metadata only — bytes served by the /raw endpoint
-  return { type, size: stat.size, mime, ext, path: rel };
+  return { type, size: stat.size, mtime: stat.mtimeMs, mime, ext, path: rel };
 }
 
 const SEARCH_SKIP_DIRS = new Set([
@@ -750,15 +751,15 @@ function _walkSearchFiles(root, includePatterns, excludePatterns) {
   return files;
 }
 
-function _readSearchText(file) {
+async function _readSearchText(file) {
   let buffer;
-  try { buffer = fs.readFileSync(file.fullPath); } catch (_) { return null; }
+  try { buffer = await fs.promises.readFile(file.fullPath); } catch (_) { return null; }
   const sample = buffer.subarray(0, Math.min(buffer.length, 8192));
   if (sample.includes(0)) return null;
   return buffer.toString('utf8');
 }
 
-export function searchSourceFiles(projectId, srcId, opts = {}) {
+export async function searchSourceFiles(projectId, srcId, opts = {}) {
   const query = String(opts.query || '');
   const searchRe = _buildSearchRegex(query, opts);
   const includePatterns = _parseGlobList(opts.include);
@@ -770,7 +771,7 @@ export function searchSourceFiles(projectId, srcId, opts = {}) {
   let truncated = candidates.length >= SEARCH_MAX_FILES;
 
   for (const file of candidates) {
-    const content = _readSearchText(file);
+    const content = await _readSearchText(file);
     if (content === null) continue;
     const matches = [];
     const lineStarts = [0];
@@ -803,7 +804,7 @@ export function searchSourceFiles(projectId, srcId, opts = {}) {
   return { query, files: results, fileCount: results.length, matchCount, scannedFiles: candidates.length, truncated };
 }
 
-export function replaceSourceMatches(projectId, srcId, opts = {}) {
+export async function replaceSourceMatches(projectId, srcId, opts = {}) {
   const { project, root } = _sourceSearchRoot(projectId, srcId);
   if (!project.allowFileEditing) throw new Error('File editing is disabled for this project');
   const query = String(opts.query || '');
@@ -820,7 +821,7 @@ export function replaceSourceMatches(projectId, srcId, opts = {}) {
   const changedFiles = [];
 
   for (const file of candidates) {
-    const content = _readSearchText(file);
+    const content = await _readSearchText(file);
     if (content === null) continue;
     searchRe.lastIndex = 0;
     let localCount = 0;
@@ -838,12 +839,13 @@ export function replaceSourceMatches(projectId, srcId, opts = {}) {
     }
     if (!localCount || next === content) continue;
     const tmpPath = file.fullPath + '.fauna-replace-' + process.pid + '-' + Date.now();
-    const mode = fs.statSync(file.fullPath).mode;
+    const { mode } = await fs.promises.stat(file.fullPath);
+    const tmp = tmpPath;
     try {
-      fs.writeFileSync(tmpPath, next, { encoding: 'utf8', mode });
-      fs.renameSync(tmpPath, file.fullPath);
+      await fs.promises.writeFile(tmp, next, { encoding: 'utf8', mode });
+      await fs.promises.rename(tmp, file.fullPath);
     } catch (e) {
-      try { fs.rmSync(tmpPath, { force: true }); } catch (_) {}
+      try { await fs.promises.unlink(tmp); } catch (_) {}
       throw e;
     }
     replacementCount += localCount;
@@ -871,7 +873,7 @@ function _assertCanonicalSourcePath(root, candidate) {
   }
 }
 
-export function createSourceEntry(projectId, srcId, relPath, type) {
+export async function createSourceEntry(projectId, srcId, relPath, type) {
   const p = getProject(projectId);
   if (!p) throw new Error('Project not found');
   if (type !== 'file' && type !== 'dir') throw new Error('Invalid type — expected "file" or "dir"');
@@ -909,10 +911,10 @@ export function createSourceEntry(projectId, srcId, relPath, type) {
   if (fs.existsSync(full)) throw new Error('A file or folder with that name already exists');
 
   if (type === 'dir') {
-    fs.mkdirSync(full, { recursive: true });
+    await fs.promises.mkdir(full, { recursive: true });
   } else {
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.writeFileSync(full, '', 'utf8');
+    await fs.promises.mkdir(path.dirname(full), { recursive: true });
+    await fs.promises.writeFile(full, '', 'utf8');
   }
 
   return { path: rel, type };
@@ -923,7 +925,7 @@ export function createSourceEntry(projectId, srcId, relPath, type) {
 // escapes the source root. When { overwrite: true } an existing file is
 // replaced; otherwise the call throws. Parent dirs are created on demand.
 // Used by the drag-and-drop upload endpoint. Returns { path, type, size }.
-export function writeSourceFileBytes(projectId, srcId, relPath, buffer, opts = {}) {
+export async function writeSourceFileBytes(projectId, srcId, relPath, buffer, opts = {}) {
   const p = getProject(projectId);
   if (!p) throw new Error('Project not found');
   if (!Buffer.isBuffer(buffer)) throw new Error('writeSourceFileBytes requires a Buffer');
@@ -961,8 +963,8 @@ export function writeSourceFileBytes(projectId, srcId, relPath, buffer, opts = {
     if (stat.isDirectory()) throw new Error('Cannot overwrite a directory with a file');
   }
 
-  fs.mkdirSync(path.dirname(full), { recursive: true });
-  fs.writeFileSync(full, buffer);
+  await fs.promises.mkdir(path.dirname(full), { recursive: true });
+  await fs.promises.writeFile(full, buffer);
   return { path: rel, type: 'file', size: buffer.length };
 }
 

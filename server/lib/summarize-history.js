@@ -28,22 +28,28 @@ export function normalizeMessage(m) {
   if (!text) return null;
   // Cap each msg before feeding to the summarizer so a single huge shell dump
   // doesn't blow the summarizer's own context.
-  return { role, content: text.slice(0, 3000) };
+  return { role, content: text.slice(0, 4000) };
 }
 
 const SYSTEM_PROMPT =
   'You are a factual task-state summarizer for an in-progress coding/agent session. ' +
   'Your summary will be re-injected into the next AI turn, so accuracy and neutrality matter more than brevity.\n\n' +
-  'Produce a compact summary (max 400 words) with these labeled sections:\n' +
+  'Produce a compact summary (max 600 words) with these labeled sections:\n' +
   '1. ORIGINAL TASK: the user\'s stated goal, verbatim if short.\n' +
-  '2. ACTIONS TAKEN: concrete steps performed — files created/edited (with paths), commands run (with key flags), tools invoked. Past tense, specific.\n' +
-  '3. OBSERVED RESULTS: exit codes, error messages, file contents found, test output. Quote exact strings where useful. Do NOT paraphrase success/failure — report only what was literally observed.\n' +
-  '4. OPEN / UNVERIFIED: anything that was attempted but NOT yet confirmed working, tests not yet run, files not yet read end-to-end, claims the assistant made that lack evidence.\n' +
-  '5. NEXT STEPS: only steps that were explicitly planned or are clearly required to finish the original task. If unsure, write "unclear — needs user confirmation".\n\n' +
+  '2. KEY TECHNICAL FACTS: exact values discovered during the session that the AI MUST remember. ' +
+  'Include: API endpoint URLs, exact response shapes (e.g. "POST /api/foo returns plain array, NOT {data:[]}"), ' +
+  'file paths of files read/edited, config values, port numbers, exact error messages, tool call results, ' +
+  'and any concrete datum that was discovered rather than assumed. Quote strings exactly. ' +
+  'If nothing was discovered, write "none yet".\n' +
+  '3. ACTIONS TAKEN: concrete steps performed — files created/edited (with paths), commands run (with key flags), tools invoked. Past tense, specific.\n' +
+  '4. OBSERVED RESULTS: exit codes, error messages, file contents found, test output. Quote exact strings where useful. Do NOT paraphrase success/failure — report only what was literally observed.\n' +
+  '5. OPEN / UNVERIFIED: anything that was attempted but NOT yet confirmed working, tests not yet run, files not yet read end-to-end, claims the assistant made that lack evidence.\n' +
+  '6. NEXT STEPS: only steps that were explicitly planned or are clearly required to finish the original task. If unsure, write "unclear — needs user confirmation".\n\n' +
   'CRITICAL RULES:\n' +
   '- NEVER write "the goal has been achieved", "task complete", "successfully finished", or any phrasing that asserts completion unless the conversation contains explicit verification (passing tests, exit 0 with expected output, user confirmation).\n' +
   '- NEVER infer success from the absence of errors. If a step ran but was not verified, list it under OPEN / UNVERIFIED.\n' +
   '- NEVER add steps, conclusions, or recommendations not present in the conversation.\n' +
+  '- KEY TECHNICAL FACTS must be machine-readable: prefer JSON shapes, exact strings, and numbers over prose descriptions.\n' +
   '- Prefer "ran X, exit Y, stdout contained Z" over "X worked".\n' +
   '- Omit greetings, filler, and decorative markdown. Plain text labeled sections only.';
 
@@ -54,11 +60,11 @@ const SYSTEM_PROMPT =
  * @param {object} opts
  * @param {object} opts.client          Copilot client (chat.completions.create)
  * @param {string} [opts.model]         Model id — defaults to 'gpt-4o-mini' (cheap, fast)
- * @param {number} [opts.maxTokens=600] Summary length cap
+ * @param {number} [opts.maxTokens=1500] Summary length cap
  * @param {AbortSignal} [opts.signal]   Optional abort signal
  * @returns {Promise<string>}           Summary text, or '' on failure
  */
-export async function summarizeHistory(messages, { client, model = 'gpt-4o-mini', maxTokens = 600, signal } = {}) {
+export async function summarizeHistory(messages, { client, model = 'gpt-4o-mini', maxTokens = 1500, signal } = {}) {
   if (!Array.isArray(messages) || messages.length === 0) return '';
 
   const normalized = messages.map(normalizeMessage).filter(Boolean);

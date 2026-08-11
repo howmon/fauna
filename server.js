@@ -243,6 +243,12 @@ const _shellProcs = new Map();
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ limit: '25mb', extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
+// Serve Monaco editor — prefer local node_modules (dev), fall back to extraResources (packaged app)
+const monacoDevPath = path.join(__dirname, 'node_modules/monaco-editor');
+const monacoBasePath = fs.existsSync(monacoDevPath)
+  ? monacoDevPath
+  : path.join(process.resourcesPath || '', 'monaco-editor');
+app.use('/vendor/monaco-editor', express.static(monacoBasePath, { maxAge: '7d' }));
 
 // ── Browser extension bridge moved → server/bridges/ext.js ──
 const extBridge = createExtBridge({
