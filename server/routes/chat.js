@@ -1372,6 +1372,8 @@ export function registerChatRoute(app, {
       // Set true when the latest user message reads as a circuit/schematic
       // request — consumed by the post-stream hand-authored-SVG verifier.
       let circuitRequested = false;
+      let diagramRequested = false;
+      let watermarksRequested = false;
       // New-project scaffolding guard: when the user asks to create/scaffold a
       // new project but no project is active, force a fresh cwd so commands
       // do not bleed into unrelated existing repos.
@@ -1439,6 +1441,40 @@ export function registerChatRoute(app, {
               '5. Write the prose answer FIRST (component values, expected behaviour, key formulas, SPICE netlist if relevant).\n' +
               '6. Then, at the END of the message, emit ONE gen-ui block whose root contains an SVG element: { "type":"SVG", "props":{ "markup":"<svg …>…</svg>" } } using the markup returned by fauna_render_circuit verbatim. The schematic should be the LAST thing in the message, not the first.\n' +
               'Forbidden: hand-authoring or hand-positioning your own <svg> markup instead of using fauna_render_circuit\'s output (this is slow and renders warped); pasting the raw <svg> into a plaintext/html/markdown code fence; describing the schematic without calling fauna_render_circuit; computing analytically only; placing the gen-ui SVG block above the analysis.'
+          });
+        }
+
+        // ── Editorial diagram nudge ────────────────────────────────────────
+        // Intercepts requests for architecture/flowchart/sequence/ER/state/etc.
+        // and forces fauna_render_diagram so the model uses the design-system-
+        // aligned wrapper instead of hand-authoring raw SVG.
+        const DIAGRAM_RE = /\b(architecture diagram|system diagram|component diagram|flowchart|flow chart|flow diagram|process flow|sequence diagram|ER diagram|entity[- ]relation(?:ship)?|state machine|state diagram|state chart|timeline|swimlane|swim lane|org chart|organizational chart|layer stack|layer diagram|venn diagram|pyramid|funnel diagram|quadrant (chart|diagram)|radar chart|spider chart|scatter plot|gantt (chart|diagram)|bar chart|line chart|data flow(?: diagram)?|data pipeline|medallion architecture|IT landscape|network diagram|dependency graph|class diagram|deployment diagram|use case diagram|mind map)\b/i;
+        if (lastText && DIAGRAM_RE.test(lastText) && !isCLI && !noTools && !CIRCUIT_RE.test(lastText) && !PCB_RE.test(lastText)) {
+          diagramRequested = true;
+          allMessages.push({
+            role: 'system',
+            content:
+              '[Editorial diagram request detected] Use the diagram tools. Required sequence:\n' +
+              '1. Compose the inline SVG following the diagram-design skill constraints (4px grid, orthogonal connectors only, accessible SVG with role="img"/aria-labelledby/title/desc, provenance marker data-fauna-diagram="v1" on <svg>).\n' +
+              '2. Call fauna_check_diagram({ html: "<svg ...>...</svg>" }) to validate. Fix any errors before continuing.\n' +
+              '3. Call fauna_render_diagram({ diagramType, title, svg, variant, preset, ... }) — returns { html }.\n' +
+              '4. Write the prose explanation FIRST, then emit ONE gen-ui block at the END: { "type":"HTML", "props":{ "markup":"<html>...</html>" } } using the html returned by fauna_render_diagram verbatim.\n' +
+              'Forbidden: pasting raw <svg> or <html> into a code fence; hand-authoring the design-system wrapper; diagonal connectors; coordinates not divisible by 4; omitting accessibility attributes; placing the diagram above the analysis.'
+          });
+        }
+
+        // ── Watermarks / provenance hygiene nudge ────────────────────────
+        const WATERMARKS_RE = /\b(watermark|ai[- ]mark|ai[- ]watermark|provenance mark|invisible unicode|zwsp|zero[- ]width|bidi char(?:acter)?|tag char(?:acter)?|variation selector|space homoglyph|c2pa|content credentials|synthid|exif|xmp metadata|strip metadata|remove metadata|clean metadata|ai signature|llm fingerprint|claude mark|gemini mark|openai mark|layer[- ]?a|unicode carrier|text hygiene|ownership mark)\b/i;
+        if (lastText && WATERMARKS_RE.test(lastText) && !isCLI && !noTools) {
+          watermarksRequested = true;
+          allMessages.push({
+            role: 'system',
+            content:
+              '[AI watermark / provenance-hygiene request detected] Use the watermark tools. Sequence:\n' +
+              '1. fauna_inspect_watermarks({ text | filePath }) — identify Layer A invisible Unicode carriers, file metadata (C2PA, EXIF, XMP, SVG <metadata>, HTML AI meta, Markdown AI frontmatter keys). Summarise findings with confidence levels.\n' +
+              '2. fauna_clean_watermarks({ text | filePath, outputPath? }) — strip Layer A carriers and file metadata. Report removed/replaced counts and any limitations.\n' +
+              '3. For Layer B (statistical token-sampling watermarks): do NOT call a tool. Instead, explain the best-effort rewrite approach and, if the user asks, produce a rewritten version using natural paraphrase — varying sentence structure, connectors, word choice. Use a non-origin model preference (avoid re-stamping).\n' +
+              'Forbidden: claiming statistical marks are removed without a rewrite; over-claiming the effectiveness of Layer B; calling exiftool or c2patool yourself via shell — use fauna_inspect/clean_watermarks which handle those integrations.'
           });
         }
 
@@ -2191,6 +2227,8 @@ export function registerChatRoute(app, {
         'fauna_document_screenshot', 'fauna_document_set', 'fauna_document_merge',
         // Circuit / PCB artifact renders
         'fauna_render_circuit', 'fauna_render_pcb', 'fauna_layout_pcb', 'fauna_build_guide',
+        // General diagram render
+        'fauna_render_diagram',
         // Project / workitem / backlog mutations
         'fauna_create_project', 'fauna_db_migration',
         'fauna_feature_request_create',
@@ -3487,6 +3525,19 @@ export function registerChatRoute(app, {
             console.log('[chat] hand-authored circuit SVG detected (no engine provenance marker) — forcing real render (' + circuitHandauthNudges + '/' + MAX_CIRCUIT_HANDAUTH_NUDGES + ')');
             allMessages.push({ role: 'assistant', content: assistantText });
             allMessages.push({ role: 'user', content: '[System: The schematic in your reply is hand-authored SVG, not output from fauna_render_circuit — it lacks the engine provenance marker. Hand-drawn schematics are forbidden: they render warped and are unverified. Call fauna_render_circuit({ doc }) NOW, then emit ONE gen-ui SVG block using its returned `svg` markup VERBATIM (do not redraw, reposition, or edit it). Keep the schematic as the LAST thing in the message.]' });
+            // keep continueLoop = true
+          } else if (
+            diagramRequested &&
+            assistantText.trim() &&
+            /<svg\b/i.test(assistantText) &&
+            !/data-fauna-diagram="v1"/.test(assistantText)
+          ) {
+            // Hand-authored editorial diagram verifier: the model drew its own SVG
+            // instead of calling fauna_render_diagram. Nudge once.
+            diagramRequested = false; // only one nudge
+            console.log('[chat] hand-authored editorial SVG detected (no data-fauna-diagram marker) — forcing fauna_render_diagram');
+            allMessages.push({ role: 'assistant', content: assistantText });
+            allMessages.push({ role: 'user', content: '[System: The diagram in your reply is hand-authored SVG — it is missing the required data-fauna-diagram="v1" provenance marker. Hand-drawn SVGs bypass the fauna design system and will render inconsistently. You MUST: (1) build the diagram SVG following the 4px-grid and orthogonal-connector rules, adding data-fauna-diagram="v1" to the <svg> element, role="img", aria-labelledby, <title id="…">, and <desc id="…">; (2) call fauna_check_diagram to validate; (3) call fauna_render_diagram to wrap it in the design-system HTML; (4) emit the returned html as a gen-ui HTML block at the END of your message. Do not paste raw SVG into a code fence.]' });
             // keep continueLoop = true
           } else if (
             toolCallCount === 0 &&

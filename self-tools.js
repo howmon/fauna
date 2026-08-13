@@ -34,6 +34,7 @@ import { layoutPcb, routePcb } from './lib/circuit-pcb.js';
 import { renderBoard } from './lib/circuit-board-renderer.js';
 import { checkBoard } from './lib/circuit-pcb-drc.js';
 import { buildGuide } from './lib/circuit-guide.js';
+import { inspectText as wmInspectText, cleanText as wmCleanText, inspectFile as wmInspectFile, cleanFile as wmCleanFile } from './lib/watermarks.js';
 import { packWidgetResult } from './lib/dynamic-widgets.js';
 import { buildCatalog, routeSkill, attachEmbeddings } from './lib/skill-catalog.js';
 import { scoreAmbiguity, interviewQuestions, createSeed as seedCreate, getSeed as seedGet, listSeeds as seedList } from './lib/seed-store.js';
@@ -2162,6 +2163,93 @@ export const SELF_TOOL_DEFS = [
           forceInternal: { type: 'boolean', description: 'Use the in-app webview even when this turn is anchored to a shared browser-extension tab. Native fauna_browser calls are internal by default; this is an explicit routing override for compatibility.' },
         },
         required: ['action'],
+      },
+    },
+  },
+
+  // ── General-purpose editorial diagrams ──
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_render_diagram',
+      description: 'Render an editorial diagram as a self-contained HTML artifact with inline SVG. Enforces the fauna design system (4px grid, Geist/Instrument Serif typography, semantic color tokens, accessible SVG contract, orthogonal connectors). Use for architecture, flowchart, sequence, ER, timeline, swimlane, org chart, layer stack, quadrant, radar, loop, nested, tree, venn, pyramid, bar, line, Gantt, scatter, state machine, high-level, process, medallion, data flow, DP integration, DP security matrix, and IT current-state diagrams. Returns { html, type } — embed html in an artifact. Always run fauna_check_diagram afterwards.',
+      parameters: {
+        type: 'object',
+        required: ['diagramType', 'title', 'svg'],
+        properties: {
+          diagramType: {
+            type: 'string',
+            enum: ['architecture','flowchart','sequence','er','state','timeline','swimlane','quadrant','radar','loop','nested','tree','org-chart','layers','venn','pyramid','bar','line','gantt','scatter','high-level','process','medallion','data-flow','dp-integration','dp-security-matrix','it-state'],
+            description: 'Visual type. Load the matching references/type-*.md before drawing.',
+          },
+          title: { type: 'string', description: 'Diagram title (H1). Shown above the SVG.' },
+          eyebrow: { type: 'string', description: 'Optional eyebrow label shown above the title in Geist Mono uppercase.' },
+          subtitle: { type: 'string', description: 'Optional subtitle shown below the title.' },
+          svg: { type: 'string', description: 'The inline SVG string (without HTML wrapper). Must carry data-fauna-diagram="v1" on the root <svg> element. Must include role="img", aria-labelledby, <title>, and <desc> per the accessible SVG contract.' },
+          variant: { type: 'string', enum: ['light','dark','full-editorial'], description: 'Output variant. Default: light.' },
+          size: { type: 'string', enum: ['doc-inline','doc-wide','slide-16x9','slide-4x3','social-og','social-square'], description: 'Viewport preset. Default: doc-inline.' },
+          preset: { type: 'string', enum: ['cyber','minimal','ember','violet'], description: 'Fauna color preset. Omit to inherit the active preset.' },
+          summaryCards: {
+            type: 'array',
+            description: 'Optional summary cards for full-editorial variant. 2–3 entries.',
+            items: {
+              type: 'object',
+              properties: {
+                eyebrow: { type: 'string' },
+                title: { type: 'string' },
+                items: { type: 'array', items: { type: 'string' } },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_check_diagram',
+      description: 'Structural quality check on a fauna_render_diagram HTML output. Verifies: accessible SVG contract (role, aria-labelledby, title/desc), provenance marker, 4px grid compliance on sampled coordinates, no diagonal connectors, arrow labels have mask rects, legend placement. Returns { ok, errors, warnings }. Always call after fauna_render_diagram.',
+      parameters: {
+        type: 'object',
+        required: ['html'],
+        properties: {
+          html: { type: 'string', description: 'HTML string returned by fauna_render_diagram.' },
+        },
+      },
+    },
+  },
+
+  // ── AI watermark removal ──
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_inspect_watermarks',
+      description: 'Inspect text or a file for AI provenance marks. Layer A: invisible Unicode carriers (ZWSP, bidi, tag chars, variation selectors, space homoglyphs). File formats: plain text, Markdown, SVG, HTML, PNG (C2PA chunks), JPEG/PDF (via exiftool when available), DOCX/ODT. Returns a structured findings list with confidence levels (confirmed/probable/informational). Statistical text watermarks (Layer B) are best-effort and require an LLM rewrite pass — this tool covers deterministic Layer A only.',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'Raw text to inspect for Layer A invisible Unicode carriers.' },
+          filePath: { type: 'string', description: 'Absolute path to a file to inspect. Supports .txt, .md, .svg, .html, .png, .jpg, .pdf, .docx, .odt.' },
+          aggressive: { type: 'boolean', description: 'Also flag Cyrillic/fullwidth Latin confusables (false-positive risk; off by default).' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_clean_watermarks',
+      description: 'Strip AI provenance marks from text or a file. Layer A removes invisible Unicode carriers deterministically. File metadata (C2PA chunks, EXIF/XMP, SVG <metadata>, HTML AI meta, Markdown frontmatter AI keys) is stripped natively. JPEG/PDF metadata strip requires exiftool on PATH. Returns cleaned text inline or writes a cleaned file and returns its path + stats. Layer B (statistical rewrite to attack token-sampling watermarks) is intentionally NOT done here — ask the agent to rephrase in natural language instead.',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'Raw text to clean. Returns cleaned text inline.' },
+          filePath: { type: 'string', description: 'Absolute path to file to clean.' },
+          outputPath: { type: 'string', description: 'Output file path. If omitted, writes to <name>.cleaned.<ext>.' },
+          aggressive: { type: 'boolean', description: 'Map Cyrillic/fullwidth Latin confusables to ASCII (off by default).' },
+          nfkc: { type: 'boolean', description: 'Apply Unicode NFKC normalization after strip.' },
+        },
       },
     },
   },
@@ -4302,10 +4390,155 @@ export async function executeSelfTool(toolName, args, context = {}) {
     }
     case 'fauna_render_circuit': {
       try {
-        const result = renderCircuit(args.doc);
+        const result = renderCircuit(args.doc, {
+          preset: args.doc?.preset,
+          light:  args.doc?.light,
+          theme:  args.doc?.theme,
+        });
         return JSON.stringify({ ok: true, ...result });
       } catch (e) {
         return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+    case 'fauna_inspect_watermarks': {
+      try {
+        if (args.filePath) {
+          const result = await wmInspectFile(args.filePath);
+          return JSON.stringify(result);
+        } else if (typeof args.text === 'string') {
+          const result = wmInspectText(args.text, { aggressive: !!args.aggressive });
+          return JSON.stringify({ ok: true, ...result });
+        }
+        return JSON.stringify({ ok: false, error: 'Provide text or filePath.' });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+    case 'fauna_clean_watermarks': {
+      try {
+        if (args.filePath) {
+          const result = await wmCleanFile(args.filePath, args.outputPath, {
+            aggressive: !!args.aggressive,
+            nfkc: !!args.nfkc,
+          });
+          return JSON.stringify(result);
+        } else if (typeof args.text === 'string') {
+          const { cleaned, stats } = wmCleanText(args.text, {
+            aggressive: !!args.aggressive,
+            nfkc: !!args.nfkc,
+          });
+          return JSON.stringify({ ok: true, cleanedText: cleaned, stats });
+        }
+        return JSON.stringify({ ok: false, error: 'Provide text or filePath.' });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+    case 'fauna_render_diagram': {
+      try {
+        const { diagramType, title, eyebrow, subtitle, svg, variant = 'light', size = 'doc-inline', preset, summaryCards } = args;
+        if (!svg || typeof svg !== 'string') return JSON.stringify({ ok: false, error: 'svg (string) required' });
+
+        // Resolve theme tokens for the requested preset (or cyber default).
+        const PRESETS = {
+          cyber:   { paper: '#0a0f1a', 'paper-2': '#111827', ink: '#e2e8f0', muted: '#64748b', accent: '#00ff87', link: '#38bdf8', font: "'Geist','Geist Variable',system-ui,sans-serif" },
+          minimal: { paper: '#0f0f13', 'paper-2': '#18181f', ink: '#e8e8f0', muted: '#6b6b80', accent: '#a78bfa', link: '#60a5fa', font: "'Geist','Geist Variable',system-ui,sans-serif" },
+          ember:   { paper: '#130e09', 'paper-2': '#1c1510', ink: '#f5e6d0', muted: '#7a6b5a', accent: '#f59e0b', link: '#fb923c', font: "'Geist','Geist Variable',system-ui,sans-serif" },
+          violet:  { paper: '#0d0912', 'paper-2': '#160d1e', ink: '#ede8f5', muted: '#7c6b9a', accent: '#c084fc', link: '#a78bfa', font: "'Geist','Geist Variable',system-ui,sans-serif" },
+        };
+        const t = PRESETS[preset] || PRESETS.cyber;
+
+        // Size → viewBox width hint for the wrapper max-width.
+        const SIZE_WIDTH = { 'doc-inline': '680px', 'doc-wide': '960px', 'slide-16x9': '960px', 'slide-4x3': '800px', 'social-og': '1200px', 'social-square': '800px' };
+        const maxW = SIZE_WIDTH[size] || '680px';
+
+        const eyebrowHtml = eyebrow ? `<p class="eyebrow">${eyebrow.toUpperCase()}</p>` : '';
+        const subtitleHtml = subtitle ? `<p class="subtitle">${subtitle}</p>` : '';
+
+        // Summary cards (full-editorial variant only).
+        let cardsHtml = '';
+        if (variant === 'full-editorial' && Array.isArray(summaryCards) && summaryCards.length) {
+          const cols = summaryCards.map(card => `
+            <div class="card">
+              ${card.eyebrow ? `<p class="card-eyebrow">${card.eyebrow.toUpperCase()}</p>` : ''}
+              <h3>${card.title || ''}</h3>
+              <ul>${(card.items || []).map(it => `<li>${it}</li>`).join('')}</ul>
+            </div>`).join('');
+          cardsHtml = `<div class="cards">${cols}</div>`;
+        }
+
+        const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${(title || 'Diagram').replace(/</g, '&lt;')}</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:${t.paper};color:${t.ink};font-family:${t.font};padding:2rem;min-height:100vh}
+.eyebrow{font-family:'Geist Mono',monospace;font-size:.6875rem;letter-spacing:.14em;text-transform:uppercase;color:${t.muted};margin-bottom:.5rem}
+h1{font-family:'Instrument Serif',serif;font-size:1.75rem;font-weight:400;color:${t.ink};margin-bottom:.375rem;line-height:1.2}
+.subtitle{font-size:.875rem;color:${t.muted};margin-bottom:1.5rem}
+.diagram-wrap{overflow-x:auto;max-width:${maxW};margin:0 auto}
+.diagram-wrap svg{display:block;max-width:100%;height:auto}
+.cards{display:grid;grid-template-columns:1.1fr 1fr .9fr;gap:1rem;margin-top:2rem;max-width:${maxW};margin-left:auto;margin-right:auto}
+.card{background:${t['paper-2']};border:1px solid rgba(${variant==='light'?'15,23,42':'226,232,240'},.12);border-radius:6px;padding:1.25rem}
+.card-eyebrow{font-family:'Geist Mono',monospace;font-size:.625rem;letter-spacing:.12em;text-transform:uppercase;color:${t.muted};margin-bottom:.5rem}
+.card h3{font-size:.9375rem;font-weight:600;color:${t.ink};margin-bottom:.75rem}
+.card ul{list-style:none;display:flex;flex-direction:column;gap:.375rem}
+.card li{font-size:.8125rem;color:${t.muted};padding-left:1rem;position:relative}
+.card li::before{content:'';position:absolute;left:0;top:.45em;width:5px;height:5px;border-radius:50%;background:${t.accent}}
+</style>
+</head>
+<body>
+${eyebrowHtml}
+<h1>${(title || '').replace(/</g, '&lt;')}</h1>
+${subtitleHtml}
+<div class="diagram-wrap">${svg}</div>
+${cardsHtml}
+</body>
+</html>`;
+        return JSON.stringify({ ok: true, html, type: 'html', diagramType, variant, size });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message });
+      }
+    }
+    case 'fauna_check_diagram': {
+      try {
+        const html = String(args.html || '');
+        const errors = [];
+        const warnings = [];
+        // Accessible SVG contract checks
+        if (!/data-fauna-diagram="v1"/.test(html)) errors.push('Missing provenance marker: data-fauna-diagram="v1" not found on <svg>.');
+        if (!/ role="img"/.test(html)) errors.push('Missing accessible role: <svg> must have role="img".');
+        if (!/ aria-labelledby="/.test(html)) errors.push('Missing aria-labelledby on <svg>.');
+        if (!/<title\s+id="/.test(html)) errors.push('Missing <title id="..."> (must be first child of <svg>, before <defs>).');
+        if (!/<desc\s+id="/.test(html)) errors.push('Missing <desc id="...">.');
+        // Connector quality checks
+        const diagLines = html.match(/<line\b[^>]+>/g) || [];
+        for (const line of diagLines) {
+          const x1 = parseFloat((line.match(/x1="([^"]+)"/) || [])[1]);
+          const y1 = parseFloat((line.match(/y1="([^"]+)"/) || [])[1]);
+          const x2 = parseFloat((line.match(/x2="([^"]+)"/) || [])[1]);
+          const y2 = parseFloat((line.match(/y2="([^"]+)"/) || [])[1]);
+          if (!isNaN(x1+y1+x2+y2) && x1 !== x2 && y1 !== y2) {
+            errors.push(`Diagonal <line> detected: (${x1},${y1})→(${x2},${y2}). Use orthogonal elbow paths instead.`);
+          }
+        }
+        // 4px grid spot-check on coordinates
+        const coordMatches = html.match(/(?:x1|y1|x2|y2|cx|cy|x=|y=)"(\d+)"/g) || [];
+        let gridViolations = 0;
+        for (const m of coordMatches.slice(0, 40)) {
+          const v = parseFloat(m.match(/"(\d+)"/)[1]);
+          if (v % 4 !== 0) gridViolations++;
+        }
+        if (gridViolations > 3) warnings.push(`${gridViolations} coordinate(s) not divisible by 4 (sampled first 40). All coords should be multiples of 4.`);
+        // Legend placement
+        if (/legend/i.test(html) && !/<text[^>]+>LEGEND/.test(html)) warnings.push('Legend appears to be missing the required horizontal strip at the bottom of the SVG.');
+        const ok = errors.length === 0;
+        return JSON.stringify({ ok, errors, warnings });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e.message, errors: [e.message], warnings: [] });
       }
     }
     case 'fauna_validate_circuit': {
