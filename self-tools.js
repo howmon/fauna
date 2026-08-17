@@ -2052,12 +2052,13 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_file_search',
-      description: 'Find files by glob pattern. Faster than `find`/`ls` via fauna_shell_exec because it returns structured results and skips heavy directories (node_modules, .git, dist, build). Use this when you know the filename pattern but not the location. Examples: "**/*.test.js", "src/**/auth-*.ts", "*.md".',
+      description: 'Find files by glob pattern. Faster than `find`/`ls` via fauna_shell_exec because it returns structured results and skips heavy directories (node_modules, .git, dist, build). Use this when you know the filename pattern but not the location. Examples: "**/*.test.js", "src/**/auth-*.ts", "*.md". ALWAYS pass cwd/scope to a specific sub-directory when you know the project location — omitting it searches from the home root, which is slow.',
       parameters: {
         type: 'object',
         properties: {
           pattern: { type: 'string', description: 'Glob pattern. Supports * (single segment) and ** (any depth).' },
-          cwd: { type: 'string', description: 'Optional working directory. Defaults to the repo/home root.' },
+          cwd: { type: 'string', description: 'Working directory / search root (absolute path). Alias: scope. REQUIRED when the workspace has multiple projects — omitting it searches from the home root and is very slow.' },
+          scope: { type: 'string', description: 'Alias for cwd.' },
           maxResults: { type: 'number', description: 'Cap on returned file paths. Defaults 100.' },
         },
         required: ['pattern'],
@@ -2086,7 +2087,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_grep',
-      description: 'Search file contents for a pattern (literal or regex) with line numbers. Faster and safer than running `grep -r` via fauna_shell_exec — skips binary files and node_modules, returns structured hits. Use for "find all calls to X" or "where is Y defined". For multiple potential words, use a regex with alternation (e.g. "foo|bar|baz") in a single call rather than separate calls.',
+      description: 'Search file contents for a pattern (literal or regex) with line numbers. Faster and safer than running `grep -r` via fauna_shell_exec — skips binary files and node_modules, returns structured hits. Use for "find all calls to X" or "where is Y defined". For multiple potential words, use a regex with alternation (e.g. "foo|bar|baz") in a single call rather than separate calls. ALWAYS pass cwd/scope to a specific sub-directory when you know the project location — omitting it searches from the home root across tens of thousands of files, which is extremely slow. When cwd is broad or omitted, you MUST also pass an include glob (e.g. "**/*.ts") to limit scope.',
       parameters: {
         type: 'object',
         properties: {
@@ -2094,10 +2095,11 @@ export const SELF_TOOL_DEFS = [
           isRegex: { type: 'boolean', description: 'When true, query is a regex. Defaults false (literal substring).' },
           isRegexp: { type: 'boolean', description: 'VS Code-compatible alias for isRegex.' },
           caseInsensitive: { type: 'boolean', description: 'Defaults true.' },
-          include: { type: 'string', description: 'Optional glob to restrict searched files (e.g. "**/*.js").' },
+          include: { type: 'string', description: 'Glob to restrict searched files (e.g. "**/*.ts"). REQUIRED when cwd/scope is omitted or broad.' },
           includePattern: { type: 'string', description: 'VS Code-compatible alias for include.' },
           includeIgnoredFiles: { type: 'boolean', description: 'When true, also search normally skipped directories such as node_modules, build output, and dot-directories. Defaults false.' },
-          cwd: { type: 'string', description: 'Optional working directory. Defaults to the repo/home root.' },
+          cwd: { type: 'string', description: 'Working directory / search root (absolute path). Alias: scope. REQUIRED when the workspace has multiple projects — omitting it searches from the home root and is very slow.' },
+          scope: { type: 'string', description: 'Alias for cwd.' },
           maxResults: { type: 'number', description: 'Cap on returned matches. Defaults 200.' },
         },
         required: ['query'],
@@ -3647,10 +3649,11 @@ export async function executeSelfTool(toolName, args, context = {}) {
         // root we infer from process.cwd() (Fauna may be launched there) and
         // fall back to HOME.
         let rootAbs;
-        if (args.cwd) {
-          rootAbs = String(args.cwd).startsWith('/')
-            ? path.resolve(String(args.cwd))
-            : _resolveFaunaWritePath(args.cwd, null);
+        const cwdArg = args.cwd || args.scope; // accept scope as alias
+        if (cwdArg) {
+          rootAbs = String(cwdArg).startsWith('/')
+            ? path.resolve(String(cwdArg))
+            : _resolveFaunaWritePath(cwdArg, null);
         } else {
           rootAbs = process.cwd() && process.cwd() !== '/' ? process.cwd() : HOME;
         }
@@ -3694,10 +3697,11 @@ export async function executeSelfTool(toolName, args, context = {}) {
         const query = String(args.query || '');
         if (!query) return JSON.stringify({ ok: false, error: 'query required' });
         let rootAbs;
-        if (args.cwd) {
-          rootAbs = String(args.cwd).startsWith('/')
-            ? path.resolve(String(args.cwd))
-            : _resolveFaunaWritePath(args.cwd, null);
+        const cwdArg = args.cwd || args.scope; // accept scope as alias
+        if (cwdArg) {
+          rootAbs = String(cwdArg).startsWith('/')
+            ? path.resolve(String(cwdArg))
+            : _resolveFaunaWritePath(cwdArg, null);
         } else {
           rootAbs = process.cwd() && process.cwd() !== '/' ? process.cwd() : HOME;
         }
@@ -3723,8 +3727,34 @@ export async function executeSelfTool(toolName, args, context = {}) {
         const matches = [];
         let filesScanned = 0;
         const index = await getWorkspaceIndexAsync({ cwd: rootAbs, includeIgnoredFiles: args.includeIgnoredFiles === true });
+
+        // Guard: refuse broad searches over very large workspaces without an include filter.
+        const LARGE_WORKSPACE = 5000;
+        if (!includeRe && index.entries.length > LARGE_WORKSPACE) {
+          return JSON.stringify({
+            ok: false,
+            code: 'SEARCH_TOO_BROAD',
+            error: `fauna_grep would scan ${index.entries.length} files from root "${rootAbs}" with no include filter. This would be very slow and likely hang the app.`,
+            hint: 'Narrow the search by passing a tighter cwd/scope (e.g. the specific package directory) AND an include glob (e.g. "**/*.ts"). Example: { cwd: "/path/to/package", include: "**/*.ts", query: "..." }',
+            root: rootAbs,
+            totalFiles: index.entries.length,
+          });
+        }
+
+        const GREP_DEADLINE_MS = 15000;
+        const grepDeadline = Date.now() + GREP_DEADLINE_MS;
         const GREP_BATCH = 32;
         for (let _bi = 0; _bi < index.entries.length && matches.length < cap; _bi += GREP_BATCH) {
+          if (Date.now() > grepDeadline) {
+            // Return partial results rather than hanging indefinitely.
+            return JSON.stringify({
+              ok: true, root: rootAbs, query, isRegex: useRegex,
+              filesScanned, count: matches.length, truncated: true, timedOut: true,
+              matches: matches.slice(0, cap),
+              engine: 'workspace-index', cache: index.cache,
+              hint: 'Search timed out after 15 s with partial results. Narrow cwd/scope or add an include glob to speed it up.',
+            });
+          }
           await Promise.all(index.entries.slice(_bi, _bi + GREP_BATCH).map(async (file) => {
             if (matches.length >= cap) return;
             if (includeRe && !includeRe.test(file.path)) return;
