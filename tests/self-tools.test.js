@@ -178,6 +178,31 @@ describe('self-tools', () => {
       expect(applyPatch).toHaveBeenCalled();
       expect(result.ok).toBe(true);
     });
+
+    it('fauna_design_audit can critique rendered pixels with a vision model', async () => {
+      const callClientTool = vi.fn(async (_name, args) => {
+        if (args.action === 'navigate') return { ok: true };
+        if (args.action === 'eval') {
+          return { result: JSON.stringify({ viewport: { width: 1280, height: 900 }, clippedTextCount: 0 }) };
+        }
+        return { screenshot: 'cG5n', mime: 'image/png' };
+      });
+      const callLLM = vi.fn(async () => '1. Increase title contrast.');
+      const result = JSON.parse(await executeSelfTool('fauna_design_audit', {
+        source: '<!doctype html><html><body><h1>Report</h1></body></html>',
+        filename: 'report.html',
+        visual: true,
+        brief: 'A clear executive report',
+      }, { ...mockContext, supportsVision: true, callClientTool, callLLM }));
+
+      expect(result.ok).toBe(true);
+      expect(result.visualMetrics.clippedTextCount).toBe(0);
+      expect(result.visualCritique).toContain('Increase title contrast');
+      expect(callClientTool).toHaveBeenCalledTimes(3);
+      expect(callLLM).toHaveBeenCalledWith(expect.objectContaining({
+        images: [{ base64: 'cG5n', mime: 'image/png' }],
+      }));
+    });
   });
 
   describe('PCB / board tools', () => {

@@ -70,6 +70,7 @@ import { loadAgentManifest } from '../lib/agent-manifest.js';
 import { scrubSecrets } from '../lib/redactor.js';
 import { normalizeInteractiveAuthCommand } from '../lib/interactive-auth.js';
 import { ChatTracer } from '../../lib/run-ledger.js';
+import { buildDesignTaskContext } from '../../design-prompts.js';
 
 // ── Tool-driven Decision Prompt bridge ────────────────────────────────────
 // Any tool (self-tool, agent tool, MCP tool) can pause the agent and
@@ -514,7 +515,18 @@ export function buildSkillsManifestContext(agentsDir, agentName, workspaceRoot) 
   if (!skills || !skills.length) return '';
   const MAX_SKILLS = 60;                    // safety cap — beyond this switch to grouped/routed exposure
   const MAX_DESC_LEN = 400;                 // per-skill; long enough for good "WHEN…" descriptions
-  const chosen = skills.slice(0, MAX_SKILLS);
+  // Large user packs can exceed the cap before bundled defaults are reached.
+  // Reserve room for every non-overridden bundled skill so built-in workflows
+  // remain available; first-match discovery has already removed overridden
+  // bundled entries from `skills`.
+  const bundled = skills.filter(skill => skill.scope === 'bundled');
+  const externalLimit = Math.max(0, MAX_SKILLS - Math.min(bundled.length, MAX_SKILLS));
+  const chosen = skills.length <= MAX_SKILLS
+    ? skills
+    : [
+        ...skills.filter(skill => skill.scope !== 'bundled').slice(0, externalLimit),
+        ...bundled.slice(0, MAX_SKILLS),
+      ].slice(0, MAX_SKILLS);
   const lines = chosen.map(s => {
     const desc = String(s.description || '').replace(/\s+/g, ' ').trim();
     const truncated = desc.length > MAX_DESC_LEN ? desc.slice(0, MAX_DESC_LEN - 1) + '…' : desc;
@@ -970,6 +982,20 @@ export function registerChatRoute(app, {
           ? buildContextPayload(projectId, projectContextIds)
           : getProjectSystemContext(projectId);
       }
+      const designConversationText = messages
+        .filter(message => message?.role === 'user')
+        .map(message => {
+          if (typeof message.content === 'string') return message.content;
+          if (!Array.isArray(message.content)) return '';
+          return message.content
+            .filter(part => part?.type === 'text')
+            .map(part => part.text || '')
+            .join(' ');
+        })
+        .join('\n');
+      const designCtx = (!isolateContext && !isDelegation)
+        ? buildDesignTaskContext(_projectRecord, designConversationText)
+        : '';
 
       // Build system prompt — append project context, facts memory, context summary and browser context.
       // Facts are scoped to the active project (with global facts always included);
@@ -1201,6 +1227,7 @@ export function registerChatRoute(app, {
         // These change turn-to-turn (project edits, fact access/scoring,
         // growing summary, plan updates), so a cache miss here is unavoidable
         // and cheap — keep them last to protect the cacheable prefix above.
+        designCtx,
         (isolateContext || isDelegation) ? '' : projectCtx,
         factsCtx,
         (!isolateContext && contextSummary) ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '',
@@ -1660,6 +1687,7 @@ export function registerChatRoute(app, {
 
       const selfToolContext = {
         getModels: () => FALLBACK_MODELS,
+        supportsVision: !!llmSupports.vision,
         activeProjectId: projectId || null,
         convId: req.body?.conversationId || null,
         activeAgentName: agentName || null,
@@ -1893,11 +1921,23 @@ export function registerChatRoute(app, {
 
         // Non-streaming LLM call for self-tools (e.g. fauna_consult_debate).
         // Reuses the same client/model as the active turn. No tools, no stream.
-        callLLM: async ({ system, user, model: m, maxTokens = 1024, temperature = 0.4 } = {}) => {
+        callLLM: async ({ system, user, images = [], model: m, maxTokens = 1024, temperature = 0.4 } = {}) => {
           try {
             const messages = [];
             if (system) messages.push({ role: 'system', content: String(system) });
-            messages.push({ role: 'user', content: String(user || '') });
+            const validImages = llmSupports.vision && Array.isArray(images)
+              ? images.filter(image => image?.base64)
+              : [];
+            const userContent = validImages.length
+              ? [
+                  { type: 'text', text: String(user || '') },
+                  ...validImages.map(image => ({
+                    type: 'image_url',
+                    image_url: { url: `data:${image.mime || 'image/png'};base64,${image.base64}` },
+                  })),
+                ]
+              : String(user || '');
+            messages.push({ role: 'user', content: userContent });
             const resp = await client.chat.completions.create({
               model: m || model,
               messages,

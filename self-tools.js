@@ -90,7 +90,7 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import * as devServerRegistry from './server/lib/dev-server-registry.js';
 import { loadAgentManifest } from './server/lib/agent-manifest.js';
 import { resolveWorkspaceContext } from './lib/workspace-context.js';
@@ -2954,9 +2954,9 @@ export const SELF_TOOL_DEFS = [
       name: 'fauna_design_audit',
       description:
         'Run a technical design quality check on a file or inline source. ' +
-        'Combines deterministic detector rules (a11y, spacing, color, AI slop patterns) with an LLM critique pass. ' +
+        'Combines deterministic detector rules (a11y, spacing, color, AI slop patterns) with optional source and rendered-screenshot critique passes. ' +
         'Returns a structured findings list with rule id, severity, message, and snippet. ' +
-        'Use this BEFORE delivering any UI artifact to the user — it catches Inter font, purple gradients, nested cards, missing alt text, skipped headings, etc.',
+        'For high-fidelity HTML, set visual=true before delivery so hierarchy, clipping, density, and composition are judged from pixels rather than inferred from source.',
       parameters: {
         type: 'object',
         properties: {
@@ -2964,6 +2964,8 @@ export const SELF_TOOL_DEFS = [
           source: { type: 'string', description: 'Inline source to audit (alternative to path).' },
           filename: { type: 'string', description: 'Filename hint for inline source (e.g. "app.html") — enables file-type-specific rules.' },
           llmCritique: { type: 'boolean', description: 'Also request an LLM-based design critique (hierarchy, visual rhythm, emotional resonance). Default false — deterministic rules only.' },
+          visual: { type: 'boolean', description: 'Render the HTML in Fauna\'s browser, collect layout metrics, and ask the active vision model to critique the screenshot.' },
+          brief: { type: 'string', description: 'Original design brief or required visual direction used to judge screenshot fidelity.' },
         },
       },
     },
@@ -5185,14 +5187,17 @@ ${cardsHtml}
 
     case 'fauna_design_audit': {
       return (async () => {
+        let temporaryPath = '';
         try {
           let source = args.source || '';
           let filename = args.filename || '';
+          let absolutePath = '';
           if (args.path) {
             const abs = path.isAbsolute(args.path) ? args.path : path.join(os.homedir(), args.path.replace(/^~\//, ''));
             if (fs.existsSync(abs)) {
               source = fs.readFileSync(abs, 'utf8');
               filename = filename || path.basename(abs);
+              absolutePath = abs;
             } else {
               return JSON.stringify({ ok: false, error: 'File not found: ' + abs });
             }
@@ -5210,9 +5215,96 @@ ${cardsHtml}
               temperature: 0.3,
             });
           }
-          return JSON.stringify({ ok: true, filename, summary, findings, formatted, llmCritique });
+
+          let visualMetrics = null;
+          let visualCritique = null;
+          let visualError = null;
+          if (args.visual) {
+            if (!context.callClientTool) {
+              visualError = 'Rendered audit is unavailable without the in-app browser.';
+            } else if (!context.callLLM || context.supportsVision === false) {
+              visualError = 'The active model does not support screenshot critique.';
+            } else {
+              if (!absolutePath) {
+                temporaryPath = path.join(os.tmpdir(), `fauna-design-audit-${crypto.randomUUID()}.html`);
+                fs.writeFileSync(temporaryPath, source, 'utf8');
+                absolutePath = temporaryPath;
+              }
+              await context.callClientTool('browser', {
+                action: 'navigate',
+                url: pathToFileURL(absolutePath).href,
+              }, { timeoutMs: 60000 });
+
+              const metricResult = await context.callClientTool('browser', {
+                action: 'eval',
+                js: `return JSON.stringify((function () {
+                  var viewport = { width: window.innerWidth, height: window.innerHeight };
+                  var nodes = Array.from(document.body.querySelectorAll('*'));
+                  var visible = nodes.filter(function (el) {
+                    var style = getComputedStyle(el);
+                    var rect = el.getBoundingClientRect();
+                    return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+                  });
+                  var outside = visible.filter(function (el) {
+                    var r = el.getBoundingClientRect();
+                    return r.right > viewport.width + 1 || r.bottom > viewport.height + 1 || r.left < -1 || r.top < -1;
+                  });
+                  var clippedText = visible.filter(function (el) {
+                    return (el.childElementCount === 0 && (el.textContent || '').trim()) &&
+                      (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1);
+                  });
+                  function describe(el) {
+                    return { tag: el.tagName.toLowerCase(), id: el.id || '', classes: String(el.className || '').slice(0, 120), text: (el.textContent || '').trim().slice(0, 100) };
+                  }
+                  return {
+                    viewport: viewport,
+                    document: { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight },
+                    visibleElementCount: visible.length,
+                    outsideViewportCount: outside.length,
+                    clippedTextCount: clippedText.length,
+                    outsideViewport: outside.slice(0, 12).map(describe),
+                    clippedText: clippedText.slice(0, 12).map(describe)
+                  };
+                })())`,
+              }, { timeoutMs: 60000 });
+              const metricPayload = typeof metricResult === 'string'
+                ? (() => { try { return JSON.parse(metricResult); } catch (_) { return metricResult; } })()
+                : metricResult;
+              const metricText = metricPayload?.result ?? metricPayload;
+              visualMetrics = typeof metricText === 'string'
+                ? (() => { try { return JSON.parse(metricText); } catch (_) { return { raw: metricText }; } })()
+                : metricText;
+
+              const screenshotResult = await context.callClientTool('browser', {
+                action: 'screenshot',
+              }, { timeoutMs: 60000 });
+              const screenshotPayload = typeof screenshotResult === 'string'
+                ? (() => { try { return JSON.parse(screenshotResult); } catch (_) { return null; } })()
+                : screenshotResult;
+              if (!screenshotPayload?.screenshot) {
+                visualError = 'Browser returned no screenshot data.';
+              } else {
+                visualCritique = await context.callLLM({
+                  system: 'You are a rigorous visual design reviewer. Judge only what is visible in the screenshot. Return a concise numbered list of at most 6 findings, ordered by impact. Cover hierarchy, composition, alignment, typography, color, density, clipping, and specificity to the brief. Give an exact corrective action for every finding. Do not praise the design or infer invisible behavior.',
+                  user: `Design brief:\n${String(args.brief || 'No separate brief supplied. Judge visual craft and usability.')}` +
+                    `\n\nMeasured layout diagnostics:\n${JSON.stringify(visualMetrics)}`,
+                  images: [{
+                    base64: screenshotPayload.screenshot,
+                    mime: screenshotPayload.mime || 'image/png',
+                  }],
+                  maxTokens: 900,
+                  temperature: 0.2,
+                });
+              }
+            }
+          }
+          return JSON.stringify({ ok: true, filename, summary, findings, formatted, llmCritique, visualMetrics, visualCritique, visualError });
         } catch (e) {
           return JSON.stringify({ ok: false, error: e.message });
+        } finally {
+          if (temporaryPath) {
+            try { fs.unlinkSync(temporaryPath); } catch (_) {}
+          }
         }
       })();
     }

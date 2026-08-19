@@ -1419,6 +1419,7 @@ export function registerChatRoute(app, {
 
       const selfToolContext = {
         getModels: () => FALLBACK_MODELS,
+        supportsVision: !!llmSupports.vision,
         activeProjectId: projectId || null,
         convId: req.body?.conversationId || null,
         activeAgentName: agentName || null,
@@ -1612,11 +1613,23 @@ export function registerChatRoute(app, {
 
         // Non-streaming LLM call for self-tools (e.g. fauna_consult_debate).
         // Reuses the same client/model as the active turn. No tools, no stream.
-        callLLM: async ({ system, user, model: m, maxTokens = 1024, temperature = 0.4 } = {}) => {
+        callLLM: async ({ system, user, images = [], model: m, maxTokens = 1024, temperature = 0.4 } = {}) => {
           try {
             const messages = [];
             if (system) messages.push({ role: 'system', content: String(system) });
-            messages.push({ role: 'user', content: String(user || '') });
+            const validImages = llmSupports.vision && Array.isArray(images)
+              ? images.filter(image => image?.base64)
+              : [];
+            const userContent = validImages.length
+              ? [
+                  { type: 'text', text: String(user || '') },
+                  ...validImages.map(image => ({
+                    type: 'image_url',
+                    image_url: { url: `data:${image.mime || 'image/png'};base64,${image.base64}` },
+                  })),
+                ]
+              : String(user || '');
+            messages.push({ role: 'user', content: userContent });
             const resp = await client.chat.completions.create({
               model: m || model,
               messages,

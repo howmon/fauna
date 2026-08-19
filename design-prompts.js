@@ -51,8 +51,8 @@ const VISUAL_DIRECTIONS = [
 const DISCOVERY_DIRECTIVES = `
 ## Discovery Protocol
 
-**RULE: Turn 1 must always be a question form.**
-On the very first user message of a design task, emit ONLY a \`<question-form id="discovery">\` XML block and nothing else. No preamble, no narration, no HTML. Wait for the form to be submitted before emitting any design output.
+**RULE: Use discovery only when the brief is materially incomplete.**
+On the first user message of a design task, emit a \`<question-form id="discovery">\` only when essential information is missing and cannot be inferred safely. Skip discovery and begin implementation when the user supplied a visual reference, an existing product to modify, or a sufficiently specific deliverable and constraints. Never ask again for details the user already provided.
 
 Example structure (customize fields for the active skill):
 \`\`\`xml
@@ -169,6 +169,11 @@ function readFileSafe(filePath) {
   try { return fs.readFileSync(filePath, 'utf8'); } catch (_) { return ''; }
 }
 
+function normalizeCatalogId(value) {
+  const id = typeof value === 'string' ? value.trim() : '';
+  return /^[a-z0-9][a-z0-9_-]*$/i.test(id) ? id : '';
+}
+
 // ── Parse YAML frontmatter from SKILL.md ─────────────────────────────────
 function parseFrontmatter(raw) {
   const match = raw.match(/^---\s*\n([\s\S]*?)\n---/);
@@ -210,8 +215,9 @@ function composeDesignPrompt(opts = {}) {
 
   // Normalise skillIds — accept array or legacy single string
   const skillIds = Array.isArray(opts.skillIds)
-    ? opts.skillIds.filter(Boolean)
-    : opts.skillId ? [opts.skillId] : [];
+    ? opts.skillIds.map(normalizeCatalogId).filter(Boolean)
+    : normalizeCatalogId(opts.skillId) ? [normalizeCatalogId(opts.skillId)] : [];
+  const safeSystemId = normalizeCatalogId(systemId);
 
   const layers = [];
 
@@ -222,11 +228,11 @@ function composeDesignPrompt(opts = {}) {
   layers.push(IDENTITY_CHARTER);
 
   // ── Layer 3: Design system
-  if (systemId) {
-    const dsPath = path.join(SYSTEMS_DIR, systemId, 'DESIGN.md');
+  if (safeSystemId) {
+    const dsPath = path.join(SYSTEMS_DIR, safeSystemId, 'DESIGN.md');
     const dsContent = readFileSafe(dsPath);
     if (dsContent) {
-      layers.push(`## Active Design System: ${systemId}\n\nApply the tokens, type scale, spacing, and component patterns from this system to all output.\n\n${dsContent}`);
+      layers.push(`## Active Design System: ${safeSystemId}\n\nApply the tokens, type scale, spacing, and component patterns from this system to all output.\n\n${dsContent}`);
     }
   }
 
@@ -247,7 +253,7 @@ function composeDesignPrompt(opts = {}) {
   const meta = [];
   if (projectName)        meta.push(`Project: ${projectName}`);
   if (skillIds.length)    meta.push(`Skills: ${skillIds.join(', ')}`);
-  if (systemId)           meta.push(`Design system: ${systemId}`);
+  if (safeSystemId)       meta.push(`Design system: ${safeSystemId}`);
   if (platform)           meta.push(`Platform: ${platform}`);
   if (fidelity)           meta.push(`Fidelity: ${fidelity === 'lo' ? 'low (wireframe — no visual polish)' : 'high (pixel-ready)'}`);
   if (animations === false) meta.push('Animations: disabled — use static states only');
@@ -287,7 +293,57 @@ All design output MUST be wrapped in a single \`<artifact>\` tag:
 - Do NOT emit any text outside the \`<artifact>\` block after starting design output (after the discovery/planning phase is complete)
 `);
 
+  layers.push(`## Rendered Visual QA
+
+For high-fidelity design work, inspect the rendered pixels before delivery:
+1. Save the complete HTML artifact to a local file.
+2. Call \`fauna_design_audit\` with that path, \`visual: true\`, and the user's brief.
+3. Fix the highest-impact deterministic and visual findings, then audit once more.
+4. Stop after at most two visual audit passes. Deliver the strongest verified version instead of looping indefinitely.
+
+Never claim visual quality from source inspection alone. A rendered screenshot is the evidence for layout, hierarchy, clipping, density, and composition.`);
+
   return layers.join('\n\n---\n\n');
 }
 
-export { composeDesignPrompt, VISUAL_DIRECTIONS, parseFrontmatter };
+function buildProjectDesignContext(project) {
+  const design = project?.design;
+  if (!design || typeof design !== 'object') return '';
+
+  const explicitlyConfigured = [
+    design.skillId,
+    design.systemId,
+    design.directionId,
+    design.fidelity,
+    design.platform,
+  ].some(value => typeof value === 'string' && value.trim());
+  if (!explicitlyConfigured) return '';
+
+  return composeDesignPrompt({
+    skillId: design.skillId,
+    systemId: design.systemId,
+    directionId: design.directionId,
+    fidelity: design.fidelity,
+    platform: design.platform,
+    speakerNotes: design.speakerNotes,
+    animations: design.animations,
+    projectName: project.name,
+  });
+}
+
+function isConcreteDesignTask(text) {
+  const value = typeof text === 'string' ? text : '';
+  if (!value.trim()) return false;
+  const action = /\b(?:build|create|design|redesign|make|implement|prototype|mock\s*up|restyle|re-style|lay\s*out|turn\s+.+\s+into)\b/i;
+  const surface = /\b(?:dashboard|infographic|poster|presentation|slide(?:\s+deck)?|deck|landing\s+page|web(?:site|\s+page|\s+app)|mobile\s+app|app\s+(?:ui|screen|interface)|user\s+interface|ui\s+(?:design|screen|flow)|report|data\s+visuali[sz]ation)\b/i;
+  return action.test(value) && surface.test(value);
+}
+
+function buildDesignTaskContext(project, conversationText = '') {
+  const configuredContext = buildProjectDesignContext(project);
+  if (configuredContext) return configuredContext;
+  if (!isConcreteDesignTask(conversationText)) return '';
+  return composeDesignPrompt({ projectName: project?.name });
+}
+
+export { buildDesignTaskContext, buildProjectDesignContext, composeDesignPrompt, isConcreteDesignTask, VISUAL_DIRECTIONS, parseFrontmatter };

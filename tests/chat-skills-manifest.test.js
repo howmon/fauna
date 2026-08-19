@@ -50,6 +50,23 @@ describe('buildSkillsManifestContext()', () => {
     }
   });
 
+  it('reserves manifest capacity for bundled defaults when external packs exceed the cap', () => {
+    const crowdedAgentsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fauna-crowded-skills-'));
+    try {
+      for (let index = 0; index < 65; index++) {
+        writeSkill(path.join(crowdedAgentsDir, '_skills'), `external-${String(index).padStart(2, '0')}`, {
+          name: `external-${index}`,
+          description: `"External skill ${index}."`,
+        });
+      }
+      const ctx = buildSkillsManifestContext(crowdedAgentsDir, null, workspaceRoot);
+      expect(ctx).toContain('- pr-writer [bundled]');
+      expect((ctx.match(/^-/gm) || [])).toHaveLength(60);
+    } finally {
+      fs.rmSync(crowdedAgentsDir, { recursive: true, force: true });
+    }
+  });
+
   it('renders one manifest line per installed skill with path + description', () => {
     const ctx = buildSkillsManifestContext(agentsDir, null, workspaceRoot);
     expect(ctx).toContain('## Available skills');
