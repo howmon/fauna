@@ -298,8 +298,10 @@ All design output MUST be wrapped in a single \`<artifact>\` tag:
 For high-fidelity design work, inspect the rendered pixels before delivery:
 1. Save the complete HTML artifact to a local file.
 2. Call \`fauna_design_audit\` with that path, \`visual: true\`, and the user's brief.
-3. Fix the highest-impact deterministic and visual findings, then audit once more.
-4. Stop after at most two visual audit passes. Deliver the strongest verified version instead of looping indefinitely.
+3. For a personal poster or other exact uploaded photo, pass \`assetRole: "main"\`.
+4. A visual audit is successful only when both \`ok\` is \`true\` and \`visualVerdict\` is exactly \`pass\`. Any \`ok: false\`, clipping count, overflow count, \`visualError\`, or failed asset check is blocking. Never reinterpret a failed verdict, source-only \`summary\`, or prose critique as success.
+5. Fix the highest-impact deterministic and visual findings, then audit once more.
+6. Stop after at most two visual audit passes. If the second verdict still fails, report the remaining failure honestly instead of claiming completion.
 
 Never claim visual quality from source inspection alone. A rendered screenshot is the evidence for layout, hierarchy, clipping, density, and composition.`);
 

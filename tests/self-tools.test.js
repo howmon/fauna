@@ -187,21 +187,143 @@ describe('self-tools', () => {
         }
         return { screenshot: 'cG5n', mime: 'image/png' };
       });
-      const callLLM = vi.fn(async () => '1. Increase title contrast.');
+      const auditRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fauna-visual-audit-'));
+      const htmlPath = path.join(auditRoot, 'report.html');
+      fs.writeFileSync(htmlPath, '<!doctype html><html><body><h1>Report</h1></body></html>');
+      const callLLM = vi.fn(async () => JSON.stringify({
+        verdict: 'pass',
+        score: 88,
+        findings: [],
+        assetAssessment: 'No required asset.',
+      }));
       const result = JSON.parse(await executeSelfTool('fauna_design_audit', {
-        source: '<!doctype html><html><body><h1>Report</h1></body></html>',
-        filename: 'report.html',
+        path: htmlPath,
         visual: true,
         brief: 'A clear executive report',
       }, { ...mockContext, supportsVision: true, callClientTool, callLLM }));
 
       expect(result.ok).toBe(true);
       expect(result.visualMetrics.clippedTextCount).toBe(0);
-      expect(result.visualCritique).toContain('Increase title contrast');
+      expect(result.visualVerdict).toBe('pass');
+      expect(result.visualScore).toBe(88);
+      expect(fs.existsSync(result.screenshotPath)).toBe(true);
       expect(callClientTool).toHaveBeenCalledTimes(3);
       expect(callLLM).toHaveBeenCalledWith(expect.objectContaining({
         images: [{ base64: 'cG5n', mime: 'image/png' }],
       }));
+      fs.rmSync(auditRoot, { recursive: true, force: true });
+    });
+
+    it('fauna_design_audit fails when a required main portrait is missing', async () => {
+      const auditRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fauna-missing-portrait-'));
+      const htmlPath = path.join(auditRoot, 'poster.html');
+      const assetPath = path.join(auditRoot, 'portrait.png');
+      fs.writeFileSync(htmlPath, '<!doctype html><html><body><main class="poster">Poster</main></body></html>');
+      fs.writeFileSync(assetPath, 'portrait');
+      const callClientTool = vi.fn(async (_name, args) => {
+        if (args.action === 'navigate') return { ok: true };
+        if (args.action === 'eval') return { result: JSON.stringify({ outsideViewportCount: 0, clippedTextCount: 0, images: [] }) };
+        return { screenshot: 'cG5n', mime: 'image/png' };
+      });
+      const callLLM = vi.fn(async () => JSON.stringify({ verdict: 'pass', score: 95, findings: [], assetAssessment: 'Looks good.' }));
+
+      const result = JSON.parse(await executeSelfTool('fauna_design_audit', {
+        path: htmlPath,
+        visual: true,
+        assetRole: 'main',
+      }, {
+        ...mockContext,
+        supportsVision: true,
+        imageAssets: [{ name: 'portrait.png', absolutePath: assetPath, mime: 'image/png' }],
+        callClientTool,
+        callLLM,
+      }));
+
+      expect(result.visualVerdict).toBe('fail');
+      expect(result.ok).toBe(false);
+      expect(result.requiredAction).toBe('revise-and-rerun-visual-audit');
+      expect(result.assetChecks[0].pass).toBe(false);
+      expect(result.visualCritique.deterministicFailures).toContain('required image asset failed geometry or presence checks');
+      fs.rmSync(auditRoot, { recursive: true, force: true });
+    });
+
+    it('fauna_design_audit fails when a loaded main portrait is crushed into a strip', async () => {
+      const auditRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fauna-crushed-portrait-'));
+      const htmlPath = path.join(auditRoot, 'poster.html');
+      const assetPath = path.join(auditRoot, 'portrait.png');
+      fs.writeFileSync(htmlPath, '<!doctype html><html><body><main class="poster"><img src="portrait.png"></main></body></html>');
+      fs.writeFileSync(assetPath, 'portrait');
+      const callClientTool = vi.fn(async (_name, args) => {
+        if (args.action === 'navigate') return { ok: true };
+        if (args.action === 'eval') {
+          return { result: JSON.stringify({
+            outsideViewportCount: 0,
+            clippedTextCount: 0,
+            images: [{
+              src: `file://${assetPath}`,
+              loaded: true,
+              posterCoverage: 0.04,
+              rect: { x: 0, y: 0, width: 42, height: 900 },
+            }],
+          }) };
+        }
+        return { screenshot: 'cG5n', mime: 'image/png' };
+      });
+      const callLLM = vi.fn(async () => JSON.stringify({ verdict: 'pass', score: 99, findings: [], assetAssessment: 'Portrait is present.' }));
+
+      const result = JSON.parse(await executeSelfTool('fauna_design_audit', {
+        path: htmlPath,
+        visual: true,
+        assetRole: 'main',
+      }, {
+        ...mockContext,
+        supportsVision: true,
+        imageAssets: [{ name: 'portrait.png', absolutePath: assetPath, mime: 'image/png' }],
+        callClientTool,
+        callLLM,
+      }));
+
+      expect(result.visualVerdict).toBe('fail');
+      expect(result.ok).toBe(false);
+      expect(result.assetChecks[0]).toMatchObject({ found: true, loaded: true, pass: false });
+      expect(result.assetChecks[0].reasons.join(' ')).toMatch(/covers only|rect is only/);
+      fs.rmSync(auditRoot, { recursive: true, force: true });
+    });
+
+    it('fauna_design_audit hard-fails content clipped by the poster bounds', async () => {
+      const auditRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fauna-clipped-poster-'));
+      const htmlPath = path.join(auditRoot, 'poster.html');
+      fs.writeFileSync(htmlPath, '<!doctype html><html><body><main class="poster">Poster</main></body></html>');
+      const callClientTool = vi.fn(async (_name, args) => {
+        if (args.action === 'navigate') return { ok: true };
+        if (args.action === 'eval') {
+          return { result: JSON.stringify({
+            outsideViewportCount: 0,
+            clippedTextCount: 0,
+            outsideArtifactCount: 2,
+            clippedByAncestorCount: 2,
+            outsideArtifact: [{ tag: 'h2', text: 'Solomon Abey' }],
+            clippedByAncestor: [{ tag: 'h2', text: 'Solomon Abey' }],
+            images: [],
+          }) };
+        }
+        return { screenshot: 'cG5n', mime: 'image/png' };
+      });
+      const callLLM = vi.fn(async () => JSON.stringify({ verdict: 'pass', score: 98, findings: [], assetAssessment: 'No asset.' }));
+
+      const result = JSON.parse(await executeSelfTool('fauna_design_audit', {
+        path: htmlPath,
+        visual: true,
+      }, { ...mockContext, supportsVision: true, callClientTool, callLLM }));
+
+      expect(result.ok).toBe(false);
+      expect(result.visualVerdict).toBe('fail');
+      expect(result.error).toContain('Do not claim this artifact is validated');
+      expect(result.visualCritique.deterministicFailures).toEqual(expect.arrayContaining([
+        'content extends outside the artifact bounds',
+        'content is hidden by an overflow-clipping ancestor',
+      ]));
+      fs.rmSync(auditRoot, { recursive: true, force: true });
     });
   });
 

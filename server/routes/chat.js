@@ -71,6 +71,7 @@ import { scrubSecrets } from '../lib/redactor.js';
 import { normalizeInteractiveAuthCommand } from '../lib/interactive-auth.js';
 import { ChatTracer } from '../../lib/run-ledger.js';
 import { buildDesignTaskContext } from '../../design-prompts.js';
+import { formatImageAssetContext, persistConversationImageAssets } from '../lib/attachment-assets.js';
 
 // ── Tool-driven Decision Prompt bridge ────────────────────────────────────
 // Any tool (self-tool, agent tool, MCP tool) can pause the agent and
@@ -996,6 +997,19 @@ export function registerChatRoute(app, {
       const designCtx = (!isolateContext && !isDelegation)
         ? buildDesignTaskContext(_projectRecord, designConversationText)
         : '';
+      let imageAssetCtx = '';
+      let activeImageAssets = [];
+      if (!isolateContext && !isDelegation) {
+        try {
+          activeImageAssets = persistConversationImageAssets(messages, {
+            projectRoot: _projectRecord?.rootPath || null,
+            conversationId: req.body?.conversationId || null,
+          });
+          imageAssetCtx = formatImageAssetContext(activeImageAssets);
+        } catch (error) {
+          console.warn('[chat] image asset persistence failed:', error?.message || error);
+        }
+      }
 
       // Build system prompt — append project context, facts memory, context summary and browser context.
       // Facts are scoped to the active project (with global facts always included);
@@ -1228,6 +1242,7 @@ export function registerChatRoute(app, {
         // growing summary, plan updates), so a cache miss here is unavoidable
         // and cheap — keep them last to protect the cacheable prefix above.
         designCtx,
+        imageAssetCtx,
         (isolateContext || isDelegation) ? '' : projectCtx,
         factsCtx,
         (!isolateContext && contextSummary) ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '',
@@ -1688,6 +1703,7 @@ export function registerChatRoute(app, {
       const selfToolContext = {
         getModels: () => FALLBACK_MODELS,
         supportsVision: !!llmSupports.vision,
+        imageAssets: activeImageAssets,
         activeProjectId: projectId || null,
         convId: req.body?.conversationId || null,
         activeAgentName: agentName || null,

@@ -905,7 +905,13 @@ async function sendMessage(opts) {
   if (state.pendingAttachments.length) {
     state.pendingAttachments.forEach(att => {
       if (att.type === 'image') {
-        pendingImages.push({ base64: att.base64, mime: att.mime, name: att.name });
+        pendingImages.push({
+          base64: att.base64,
+          mime: att.mime,
+          name: att.name,
+          path: att.path,
+          sourceUri: att.sourceUri
+        });
       } else {
         var label = att.extSource === 'page'      ? 'Browser page: '      + att.name
                   : att.extSource === 'selection' ? 'Browser selection from ' + (att.sourceUri || att.name)
@@ -967,6 +973,7 @@ async function sendMessage(opts) {
       return {
         type: a.type,
         name: a.name,
+        path: a.path,
         content: a.type === 'image' || _isBrowserTabReferenceAttachment(a) || _isFigmaFileReferenceAttachment(a) ? undefined : a.content,
         sourceUri: a.sourceUri,
         extSource: a.extSource,
@@ -1021,7 +1028,13 @@ async function runMultiChipComposition(agentNames, userMessage, conv, attachment
   var pendingImages = [];
   attachments.forEach(function(att) {
     if (att.type === 'image') {
-      pendingImages.push({ base64: att.base64, mime: att.mime, name: att.name });
+      pendingImages.push({
+        base64: att.base64,
+        mime: att.mime,
+        name: att.name,
+        path: att.path,
+        sourceUri: att.sourceUri
+      });
     } else {
       var label = att.extSource === 'page'      ? 'Browser page: '      + att.name
                 : att.extSource === 'selection' ? 'Browser selection from ' + (att.sourceUri || att.name)

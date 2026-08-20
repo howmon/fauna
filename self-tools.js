@@ -2956,7 +2956,8 @@ export const SELF_TOOL_DEFS = [
         'Run a technical design quality check on a file or inline source. ' +
         'Combines deterministic detector rules (a11y, spacing, color, AI slop patterns) with optional source and rendered-screenshot critique passes. ' +
         'Returns a structured findings list with rule id, severity, message, and snippet. ' +
-        'For high-fidelity HTML, set visual=true before delivery so hierarchy, clipping, density, and composition are judged from pixels rather than inferred from source.',
+        'For high-fidelity HTML, set visual=true before delivery so hierarchy, clipping, density, and composition are judged from pixels rather than inferred from source. ' +
+        'A rendered failure returns ok=false and is blocking: revise the artifact and rerun the audit before claiming validation.',
       parameters: {
         type: 'object',
         properties: {
@@ -2966,6 +2967,7 @@ export const SELF_TOOL_DEFS = [
           llmCritique: { type: 'boolean', description: 'Also request an LLM-based design critique (hierarchy, visual rhythm, emotional resonance). Default false — deterministic rules only.' },
           visual: { type: 'boolean', description: 'Render the HTML in Fauna\'s browser, collect layout metrics, and ask the active vision model to critique the screenshot.' },
           brief: { type: 'string', description: 'Original design brief or required visual direction used to judge screenshot fidelity.' },
+          assetRole: { type: 'string', enum: ['main', 'supporting', 'reference'], description: 'How attached images must be used. Personal poster photos default to main; reference images are compared for direction but need not appear literally.' },
         },
       },
     },
@@ -5219,6 +5221,10 @@ ${cardsHtml}
           let visualMetrics = null;
           let visualCritique = null;
           let visualError = null;
+          let visualVerdict = args.visual ? 'fail' : 'not-run';
+          let visualScore = null;
+          let screenshotPath = null;
+          let assetChecks = [];
           if (args.visual) {
             if (!context.callClientTool) {
               visualError = 'Rendered audit is unavailable without the in-app browser.';
@@ -5239,6 +5245,8 @@ ${cardsHtml}
                 action: 'eval',
                 js: `return JSON.stringify((function () {
                   var viewport = { width: window.innerWidth, height: window.innerHeight };
+                  var poster = document.querySelector('.poster, .artboard, main, [role="img"]') || document.body;
+                  var posterRect = poster.getBoundingClientRect();
                   var nodes = Array.from(document.body.querySelectorAll('*'));
                   var visible = nodes.filter(function (el) {
                     var style = getComputedStyle(el);
@@ -5253,17 +5261,70 @@ ${cardsHtml}
                     return (el.childElementCount === 0 && (el.textContent || '').trim()) &&
                       (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1);
                   });
-                  function describe(el) {
-                    return { tag: el.tagName.toLowerCase(), id: el.id || '', classes: String(el.className || '').slice(0, 120), text: (el.textContent || '').trim().slice(0, 100) };
+                  function exceeds(inner, outer, axis) {
+                    if (axis === 'x') return inner.left < outer.left - 1 || inner.right > outer.right + 1;
+                    if (axis === 'y') return inner.top < outer.top - 1 || inner.bottom > outer.bottom + 1;
+                    return inner.left < outer.left - 1 || inner.right > outer.right + 1 ||
+                      inner.top < outer.top - 1 || inner.bottom > outer.bottom + 1;
                   }
+                  var outsideArtifact = visible.filter(function (el) {
+                    return el !== poster && poster.contains(el) && exceeds(el.getBoundingClientRect(), posterRect);
+                  });
+                  var clippedByAncestor = visible.filter(function (el) {
+                    var rect = el.getBoundingClientRect();
+                    var ancestor = el.parentElement;
+                    while (ancestor && ancestor !== document.documentElement) {
+                      var style = getComputedStyle(ancestor);
+                      var ancestorRect = ancestor.getBoundingClientRect();
+                      var clipsX = /^(hidden|clip|scroll|auto)$/.test(style.overflowX);
+                      var clipsY = /^(hidden|clip|scroll|auto)$/.test(style.overflowY);
+                      if ((clipsX && exceeds(rect, ancestorRect, 'x')) || (clipsY && exceeds(rect, ancestorRect, 'y'))) return true;
+                      ancestor = ancestor.parentElement;
+                    }
+                    return false;
+                  });
+                  function describe(el) {
+                    var rect = el.getBoundingClientRect();
+                    return {
+                      tag: el.tagName.toLowerCase(),
+                      id: el.id || '',
+                      classes: String(el.className || '').slice(0, 120),
+                      text: (el.textContent || '').trim().slice(0, 100),
+                      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+                    };
+                  }
+                  var images = Array.from(document.images).map(function (img) {
+                    var rect = img.getBoundingClientRect();
+                    var style = getComputedStyle(img);
+                    var area = Math.max(0, rect.width) * Math.max(0, rect.height);
+                    var posterArea = Math.max(1, posterRect.width * posterRect.height);
+                    return {
+                      src: img.currentSrc || img.src || '',
+                      alt: img.alt || '',
+                      loaded: !!img.complete && img.naturalWidth > 0 && img.naturalHeight > 0,
+                      naturalWidth: img.naturalWidth || 0,
+                      naturalHeight: img.naturalHeight || 0,
+                      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+                      posterCoverage: Number((area / posterArea).toFixed(4)),
+                      objectFit: style.objectFit || '',
+                      objectPosition: style.objectPosition || '',
+                      opacity: Number(style.opacity || 1)
+                    };
+                  });
                   return {
                     viewport: viewport,
                     document: { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight },
+                    poster: { x: posterRect.x, y: posterRect.y, width: posterRect.width, height: posterRect.height },
                     visibleElementCount: visible.length,
                     outsideViewportCount: outside.length,
                     clippedTextCount: clippedText.length,
+                    outsideArtifactCount: outsideArtifact.length,
+                    clippedByAncestorCount: clippedByAncestor.length,
                     outsideViewport: outside.slice(0, 12).map(describe),
-                    clippedText: clippedText.slice(0, 12).map(describe)
+                    clippedText: clippedText.slice(0, 12).map(describe),
+                    outsideArtifact: outsideArtifact.slice(0, 12).map(describe),
+                    clippedByAncestor: clippedByAncestor.slice(0, 12).map(describe),
+                    images: images
                   };
                 })())`,
               }, { timeoutMs: 60000 });
@@ -5284,21 +5345,107 @@ ${cardsHtml}
               if (!screenshotPayload?.screenshot) {
                 visualError = 'Browser returned no screenshot data.';
               } else {
-                visualCritique = await context.callLLM({
-                  system: 'You are a rigorous visual design reviewer. Judge only what is visible in the screenshot. Return a concise numbered list of at most 6 findings, ordered by impact. Cover hierarchy, composition, alignment, typography, color, density, clipping, and specificity to the brief. Give an exact corrective action for every finding. Do not praise the design or infer invisible behavior.',
+                const screenshotBytes = Buffer.from(screenshotPayload.screenshot, 'base64');
+                const auditRoot = path.join(path.dirname(absolutePath), '.fauna', 'audits');
+                fs.mkdirSync(auditRoot, { recursive: true });
+                const auditHash = crypto.createHash('sha256').update(source).digest('hex').slice(0, 12);
+                screenshotPath = path.join(auditRoot, `${path.parse(filename || 'design').name}-${auditHash}.png`);
+                fs.writeFileSync(screenshotPath, screenshotBytes);
+
+                const requiredAssets = Array.isArray(context.imageAssets) ? context.imageAssets : [];
+                const renderedImages = Array.isArray(visualMetrics?.images) ? visualMetrics.images : [];
+                const assetRole = args.assetRole || (requiredAssets.length ? 'main' : 'reference');
+                assetChecks = requiredAssets.map(asset => {
+                  const normalizedAsset = path.resolve(asset.absolutePath);
+                  const match = renderedImages.find(image => {
+                    try {
+                      const parsed = new URL(image.src);
+                      return parsed.protocol === 'file:' && path.resolve(fileURLToPath(parsed)) === normalizedAsset;
+                    } catch (_) {
+                      return decodeURIComponent(String(image.src || '')).includes(path.basename(normalizedAsset));
+                    }
+                  });
+                  const minimumCoverage = assetRole === 'main' ? 0.25 : 0.02;
+                  const reasons = [];
+                  if (!match) reasons.push('asset is not used by any rendered <img>');
+                  if (match && !match.loaded) reasons.push('image failed to load');
+                  if (match && match.posterCoverage < minimumCoverage) reasons.push(`image covers only ${(match.posterCoverage * 100).toFixed(1)}% of the poster`);
+                  if (match && (match.rect?.width < 120 || match.rect?.height < 120)) reasons.push(`image rect is only ${Math.round(match.rect?.width || 0)}x${Math.round(match.rect?.height || 0)}px`);
+                  return {
+                    name: asset.name,
+                    path: asset.absolutePath,
+                    role: assetRole,
+                    found: !!match,
+                    loaded: !!match?.loaded,
+                    posterCoverage: match?.posterCoverage ?? 0,
+                    rect: match?.rect || null,
+                    pass: reasons.length === 0,
+                    reasons,
+                  };
+                });
+
+                const judgeImages = [{
+                  base64: screenshotPayload.screenshot,
+                  mime: screenshotPayload.mime || 'image/png',
+                }];
+                for (const asset of requiredAssets.slice(0, 3)) {
+                  try {
+                    judgeImages.push({
+                      base64: fs.readFileSync(asset.absolutePath).toString('base64'),
+                      mime: asset.mime || 'image/png',
+                    });
+                  } catch (_) {}
+                }
+                const rawCritique = await context.callLLM({
+                  system: 'You are a strict visual design gate. Image 1 is the rendered artifact. Any following images are required user assets. Judge only visible evidence. Return valid JSON only with this shape: {"verdict":"pass"|"fail","score":0-100,"findings":[{"severity":"critical"|"major"|"minor","problem":"...","fix":"..."}],"assetAssessment":"..."}. Fail for a missing, crushed, excessively cropped, obscured, or identity-altered required portrait; clipped text; incoherent overlap; unreadable contrast; or a composition that contradicts the brief. Do not praise, use markdown, or claim an issue is fixed without visible proof.',
                   user: `Design brief:\n${String(args.brief || 'No separate brief supplied. Judge visual craft and usability.')}` +
-                    `\n\nMeasured layout diagnostics:\n${JSON.stringify(visualMetrics)}`,
-                  images: [{
-                    base64: screenshotPayload.screenshot,
-                    mime: screenshotPayload.mime || 'image/png',
-                  }],
+                    `\n\nMeasured layout diagnostics:\n${JSON.stringify(visualMetrics)}` +
+                    `\n\nRequired asset checks:\n${JSON.stringify(assetChecks)}`,
+                  images: judgeImages,
                   maxTokens: 900,
                   temperature: 0.2,
                 });
+                const critiqueText = String(rawCritique || '').replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+                try {
+                  visualCritique = JSON.parse(critiqueText);
+                } catch (_) {
+                  visualCritique = { verdict: 'fail', score: 0, findings: [{ severity: 'critical', problem: 'Visual judge returned an invalid verdict.', fix: 'Run the rendered audit again.' }], raw: critiqueText };
+                }
+
+                const deterministicFailures = [];
+                if ((visualMetrics?.outsideViewportCount || 0) > 0) deterministicFailures.push('elements extend outside the viewport');
+                if ((visualMetrics?.clippedTextCount || 0) > 0) deterministicFailures.push('text is clipped');
+                if ((visualMetrics?.outsideArtifactCount || 0) > 0) deterministicFailures.push('content extends outside the artifact bounds');
+                if ((visualMetrics?.clippedByAncestorCount || 0) > 0) deterministicFailures.push('content is hidden by an overflow-clipping ancestor');
+                if (assetChecks.some(check => !check.pass)) deterministicFailures.push('required image asset failed geometry or presence checks');
+                visualScore = Number.isFinite(Number(visualCritique?.score)) ? Number(visualCritique.score) : 0;
+                visualVerdict = deterministicFailures.length === 0 && visualCritique?.verdict === 'pass'
+                  ? 'pass'
+                  : 'fail';
+                if (deterministicFailures.length) {
+                  visualCritique.deterministicFailures = deterministicFailures;
+                }
               }
             }
           }
-          return JSON.stringify({ ok: true, filename, summary, findings, formatted, llmCritique, visualMetrics, visualCritique, visualError });
+          const visualPassed = !args.visual || visualVerdict === 'pass';
+          return JSON.stringify({
+            ok: visualPassed,
+            error: visualPassed ? null : `RENDERED DESIGN AUDIT FAILED. Do not claim this artifact is validated or complete. Revise ${filename || 'the artifact'} using visualCritique and visualMetrics, then rerun fauna_design_audit with visual=true.`,
+            requiredAction: visualPassed ? null : 'revise-and-rerun-visual-audit',
+            filename,
+            summary,
+            findings,
+            formatted,
+            llmCritique,
+            visualMetrics,
+            visualCritique,
+            visualError,
+            visualVerdict,
+            visualScore,
+            screenshotPath,
+            assetChecks,
+          });
         } catch (e) {
           return JSON.stringify({ ok: false, error: e.message });
         } finally {
