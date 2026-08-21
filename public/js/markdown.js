@@ -204,6 +204,13 @@ function stripPublicReasoningSummaryBlocks(text) {
     .replace(/\n{3,}/g, '\n\n');
 }
 
+function repairOrphanedGenUiFences(text) {
+  return String(text || '').replace(
+    /(^|\n)([ \t]*)(gen[-_]ui)[ \t]*\r?\n(?=[ \t]*\{[\s\S]*?\}[ \t]*\r?\n[ \t]*`{3,}[ \t]*(?=\n|$))/gi,
+    '$1$2```gen-ui\n'
+  );
+}
+
 function renderMarkdown(text) {
   // Strip artifact fenced blocks before rendering — they're shown as entity cards, not code fences.
   // Line-based balanced scanner: when the outer artifact fence is 3 backticks
@@ -235,7 +242,7 @@ function renderMarkdown(text) {
     }
     i = closed ? j + 1 : srcLines.length;
   }
-  var cleaned = stripPublicReasoningSummaryBlocks(keep.join('\n'));
+  var cleaned = repairOrphanedGenUiFences(stripPublicReasoningSummaryBlocks(keep.join('\n')));
   // Strip suggestion blocks — rendered as clickable CTA buttons, not code
   cleaned = cleaned.replace(/`{3,4}\s*suggestions[ \t]*\r?\n[\s\S]*?`{3,4}\n?/gi, '');
   // Collapse runs of 3+ newlines left by stripped blocks so they don't render
