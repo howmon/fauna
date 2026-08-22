@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const store = new Map();
 const events = [];
+const settleRoutingOutcomes = vi.fn();
 
 vi.mock('../task-manager.js', () => ({
   getTask: vi.fn((id) => store.get(id) || null),
@@ -22,6 +23,10 @@ vi.mock('../task-manager.js', () => ({
   }),
 }));
 
+vi.mock('../lib/routing-evidence.js', () => ({
+  recordRoutingOutcomesForRun: settleRoutingOutcomes,
+}));
+
 const runner = await import('../task-runner.js');
 
 function sse(eventsList) {
@@ -33,6 +38,7 @@ let originalFetch;
 beforeEach(() => {
   store.clear();
   events.length = 0;
+  settleRoutingOutcomes.mockClear();
   originalFetch = globalThis.fetch;
 });
 
@@ -57,9 +63,15 @@ describe('task-runner chat parity', () => {
 
     expect(body).toMatchObject({
       projectId: 'proj-1',
+      runId: 't1',
       autonomousMode: true,
       headlessTask: true,
     });
+    expect(settleRoutingOutcomes).toHaveBeenCalledWith('t1', expect.objectContaining({
+      projectId: 'proj-1',
+      verified: undefined,
+      verifier: 'autonomous-task-completion',
+    }));
     expect(store.get('t1').status).toBe('completed');
     expect(store.get('t1').result.summary).toBe('shipped and verified');
   });
@@ -78,5 +90,24 @@ describe('task-runner chat parity', () => {
 
     expect(store.get('t2').status).toBe('completed');
     expect(store.get('t2').result.summary).toBe('final summary only');
+  });
+
+  it('settles routed decisions as failed when the autonomous task fails', async () => {
+    store.set('t3', {
+      id: 't3', title: 'Failing work', kind: 'cron', projectId: 'proj-2',
+      permissions: { shell: true }, maxSteps: 3, timeout: 30000,
+    });
+    globalThis.fetch = vi.fn(async () => new Response(sse([
+      { type: 'content', content: 'TASK_FAILED: verifier rejected the result' },
+    ])));
+
+    await runner.runTask('t3');
+
+    expect(store.get('t3').status).toBe('failed');
+    expect(settleRoutingOutcomes).toHaveBeenCalledWith('t3', expect.objectContaining({
+      projectId: 'proj-2',
+      verified: false,
+      verifier: 'autonomous-task-failure',
+    }));
   });
 });

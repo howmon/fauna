@@ -5,6 +5,11 @@ const { pathToFileURL } = require('url');
 
 const ROOT = path.resolve(__dirname, '..');
 const OUT = path.join(ROOT, 'server', 'generated', 'capabilities.json');
+const GOVERNANCE = path.join(ROOT, 'skills', 'governance.json');
+
+function relative(file) {
+  return path.relative(ROOT, file).split(path.sep).join('/');
+}
 
 function categoryFor(name) {
   if (/browser/.test(name)) return 'browser';
@@ -31,19 +36,61 @@ function sideEffectsFor(name) {
 function normalizeTool(def, source) {
   const fn = def && def.function ? def.function : {};
   const name = fn.name || '';
+  const sideEffects = sideEffectsFor(name);
   return {
     name,
     source,
+    owner: source === 'self' ? 'self-tools.js' : 'lib/dynamic-widgets.js',
     category: categoryFor(name),
     description: String(fn.description || '').replace(/\s+/g, ' ').trim(),
     required: Array.isArray(fn.parameters?.required) ? fn.parameters.required : [],
     parameters: Object.keys(fn.parameters?.properties || {}),
-    sideEffects: sideEffectsFor(name),
+    sideEffects,
+    permissions: sideEffects.includes('read-only') ? [] : sideEffects,
+  };
+}
+
+function normalizeCustomization(record, governanceByName, governanceDefaults) {
+  const policy = record.frontmatter || {};
+  const governance = governanceByName.get(record.name);
+  const maturity = policy.maturity || (governance ? 'promoted' : 'experimental');
+  const promotionEvidence = governance?.promotionEvidence || governanceDefaults.promotionEvidence;
+  const rollback = governance?.rollback || governanceDefaults.rollback;
+  const evidence = [];
+  if (record.kind === 'skill') {
+    evidence.push(...(promotionEvidence?.files || []));
+  } else if (record.kind === 'hooks') {
+    evidence.push('tests/customization-registry.test.js');
+  } else if (record.kind === 'agent') {
+    evidence.push('tests/customization-registry.test.js');
+  }
+  return {
+    name: record.name,
+    kind: record.kind,
+    source: record.relativePath,
+    owner: promotionEvidence?.owner || record.relativePath,
+    description: record.description,
+    permissions: Array.isArray(policy.tools) ? policy.tools : [],
+    maturity,
+    availability: { default: record.enabled !== false, conditions: [] },
+    evidence,
+    ...(record.kind === 'skill' && promotionEvidence ? {
+      evidenceReviewWindowDays: promotionEvidence.reviewWindowDays,
+      rollback,
+    } : {}),
+    validation: {
+      ok: record.ok,
+      errors: record.errors,
+      warnings: record.warnings,
+    },
   };
 }
 
 async function main() {
   const mod = await import(pathToFileURL(path.join(ROOT, 'self-tools.js')).href);
+  const registry = await import(pathToFileURL(path.join(ROOT, 'lib', 'customization-registry.js')).href);
+  const governance = JSON.parse(fs.readFileSync(GOVERNANCE, 'utf8'));
+  const governanceByName = new Map((governance.skills || []).map(entry => [entry.name, entry]));
   const selfTools = Array.isArray(mod.SELF_TOOL_DEFS) ? mod.SELF_TOOL_DEFS : [];
   const widgetTools = Array.isArray(mod.DYNAMIC_WIDGET_TOOL_DEFS) ? mod.DYNAMIC_WIDGET_TOOL_DEFS : [];
   const tools = [
@@ -55,18 +102,40 @@ async function main() {
     acc[tool.category] = (acc[tool.category] || 0) + 1;
     return acc;
   }, {});
+  const customizations = registry.discoverCustomizations({ workspaceRoot: ROOT, includeUser: false })
+    .filter(record => ['agent', 'hooks', 'skill'].includes(record.kind))
+    .map(record => normalizeCustomization(record, governanceByName, governance.defaults || {}));
+  const byKind = customizations.reduce((acc, item) => {
+    acc[item.kind] = (acc[item.kind] || 0) + 1;
+    return acc;
+  }, {});
 
   const catalog = {
-    generatedAt: new Date().toISOString(),
-    source: ['self-tools.js:SELF_TOOL_DEFS', 'self-tools.js:DYNAMIC_WIDGET_TOOL_DEFS'],
+    schemaVersion: 2,
+    defaults: {
+      tool: {
+        maturity: 'stable',
+        availability: { default: true, conditions: [] },
+        evidence: ['tests/self-tools.test.js'],
+      },
+    },
+    source: [
+      'self-tools.js:SELF_TOOL_DEFS',
+      'self-tools.js:DYNAMIC_WIDGET_TOOL_DEFS',
+      'lib/customization-registry.js:discoverCustomizations',
+      'skills/governance.json',
+    ],
     count: tools.length,
+    totalCount: tools.length + customizations.length,
     byCategory,
+    byKind: { tool: tools.length, ...byKind },
     tools,
+    customizations,
   };
 
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   fs.writeFileSync(OUT, JSON.stringify(catalog, null, 2) + '\n');
-  console.log(`wrote ${path.relative(ROOT, OUT)} (${tools.length} tools)`);
+  console.log(`wrote ${relative(OUT)} (${tools.length} tools, ${customizations.length} customizations)`);
 }
 
 main().catch(err => {

@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterAll, describe, it, expect, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { executeSelfTool, isSelfTool, SELF_TOOL_DEFS } from '../self-tools.js';
+import { readEvents } from '../lib/run-ledger.js';
 
 // Mock memory-store
 vi.mock('../memory-store.js', () => ({
@@ -18,12 +19,19 @@ vi.mock('../project-manager.js', () => ({
 }));
 
 describe('self-tools', () => {
+  const routingEvidenceFile = path.join(os.tmpdir(), `fauna-self-tools-routing-${process.pid}.jsonl`);
   const mockContext = {
     getModels: () => [{ id: 'gpt-4.1', name: 'GPT-4.1' }],
     getSettings: () => ({ model: 'gpt-4.1', thinkingBudget: 'medium' }),
     sendToRenderer: vi.fn(),
     sendNotification: vi.fn(),
+    runId: 'self-tools-test-run',
+    routingEvidenceFile,
   };
+
+  afterAll(() => {
+    try { fs.rmSync(routingEvidenceFile, { force: true }); } catch (_) {}
+  });
 
   describe('isSelfTool()', () => {
     it('recognizes valid self-tool names', () => {
@@ -92,7 +100,7 @@ describe('self-tools', () => {
       // Bumped to 116 after adding feedback-loop diagnosis recording.
       // Bumped to 117 after adding repository engineering-contract setup.
       // Bumped to 118 after adding worktree-parallel evaluation.
-      expect(SELF_TOOL_DEFS).toHaveLength(118);
+      expect(SELF_TOOL_DEFS).toHaveLength(119);
     });
 
     it('each tool has required OpenAI function format', () => {
@@ -116,6 +124,10 @@ describe('self-tools', () => {
       expect(result.phase.id).toBe('diagnose');
       expect(result.phase.skills).toContain('diagnosing-bugs');
       expect(result.contextRecommendation).toMatchObject({ action: 'none', triggered: false });
+      expect(readEvents(routingEvidenceFile).at(-1)).toMatchObject({
+        type: 'routing.decision',
+        runId: 'self-tools-test-run',
+      });
     });
 
     it('fauna_route_engineering_flow uses live budget and task state at phase boundaries', async () => {

@@ -119,6 +119,29 @@ function seedLocalCheckpoint(projectId, number, opts = {}) {
 }
 
 describe('sync-checkpoint-adapter: change-listener wiring', () => {
+  it('creates checkpoint metadata with a compatible execution envelope', async () => {
+    const { checkpoints } = await boot();
+    const rootPath = path.join(tmpDir, 'workspace');
+    fs.mkdirSync(rootPath, { recursive: true });
+    fs.writeFileSync(path.join(rootPath, 'note.txt'), 'checkpoint me');
+
+    const meta = checkpoints.createCheckpoint({ id: 'projA', rootPath }, { trigger: 'manual' });
+    expect(meta).toMatchObject({
+      schemaVersion: 1,
+      type: 'checkpoint.created',
+      source: 'project-checkpoints',
+      projectId: 'projA',
+      outcome: 'created',
+      checkpointNumber: 1,
+      number: 1,
+      trigger: 'manual',
+    });
+    expect(meta.eventId).toEqual(expect.any(String));
+    expect(meta.timestamp).toBe(Date.parse(meta.createdAt));
+    expect(meta.ts).toBe(meta.timestamp);
+    expect(checkpoints.readCheckpointMeta('projA', 1)).toEqual(meta);
+  });
+
   it('enqueues an upsert tagged with projectId when a checkpoint is deleted', async () => {
     const { engine, checkpoints } = await boot();
     seedLocalCheckpoint('projA', 1);

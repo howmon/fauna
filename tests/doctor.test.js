@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { runDoctor, formatDoctorReport } from '../server/lib/doctor.js';
+import { buildReadinessSummary, runDoctor, formatDoctorReport } from '../server/lib/doctor.js';
 
 describe('doctor', () => {
   it('runDoctor returns a structured report with per-check status', async () => {
@@ -49,8 +49,30 @@ describe('doctor', () => {
     const text = formatDoctorReport(report);
     expect(text).toContain('Fauna Doctor');
     expect(text).toMatch(/healthy/);
+    expect(text).toMatch(/Operational readiness: (ready|degraded|blocked)/);
     for (const c of report.checks) {
       expect(text).toContain(c.name);
     }
+  });
+
+  it('blocks readiness when required runtime truth is missing', () => {
+    const readiness = buildReadinessSummary({
+      checks: [{ name: 'Memory', tier: 'core', status: 'fail' }],
+    }, {
+      capabilities: { schemaVersion: 1, count: 0, customizations: [{ validation: { ok: false } }] },
+      packageManifest: { version: 'dev' },
+    });
+    expect(readiness.status).toBe('blocked');
+    expect(readiness.counts.fail).toBe(4);
+  });
+
+  it('reports a ready source tree when required checks and manifests are valid', () => {
+    const readiness = buildReadinessSummary({
+      checks: [{ name: 'Memory', tier: 'core', status: 'ok' }],
+    }, {
+      capabilities: { schemaVersion: 2, count: 124, customizations: [{ validation: { ok: true } }] },
+      packageManifest: { version: '2.2.4' },
+    });
+    expect(readiness).toMatchObject({ status: 'ready', counts: { fail: 0, warn: 0 } });
   });
 });

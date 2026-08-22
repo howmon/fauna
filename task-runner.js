@@ -12,12 +12,24 @@ import { findSection as _skillFindSection, parseFrontmatter as _skillParseFrontm
 import { buildCatalog as _buildSkillCatalog, routeSkill as _routeSkill } from './lib/skill-catalog.js';
 import { EVENT_TYPES as _LEDGER, appendEvent as _ledgerAppend } from './lib/run-ledger.js';
 import { unstuck as _unstuckPersonas } from './lib/personas.js';
+import { recordRoutingOutcomesForRun } from './lib/routing-evidence.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
 const PORT = 3737;
 const _runningTasks = new Map(); // taskId → { abortController, step, startedAt }
+
+function _settleRouting(task, state, verified, verifier) {
+  try {
+    recordRoutingOutcomesForRun(task.id, {
+      projectId: task.projectId || null,
+      verified,
+      verifier,
+      durationMs: Math.max(0, Date.now() - state.startedAt),
+    });
+  } catch (_) { /* evidence must never change task outcome */ }
+}
 
 // Optional hooks injected by server.js so pipeline nodes can fire native OS
 // notifications and push to the widget alert hub without importing electron
@@ -255,6 +267,7 @@ async function _autonomyLoop(task, state) {
 
     // Check timeout
     if (Date.now() > deadline) {
+      _settleRouting(task, state, false, 'autonomous-task-timeout');
       failTask(task.id, 'Timeout after ' + Math.round(timeoutMs / 1000) + 's');
       _emit(task.id, 'failed', { error: 'timeout' });
       return;
@@ -282,6 +295,7 @@ async function _autonomyLoop(task, state) {
       systemPrompt,
       agentName: _pickAgent(task, state.step),
       projectId: task.projectId || null,
+      runId: task.id,
       conversationId: task.convId || task.targetConvId || null,
       autonomousMode: true,
       acceptanceCriteria: task.acceptanceCriteria || '',
@@ -303,6 +317,7 @@ async function _autonomyLoop(task, state) {
 
     _throwIfAborted(state.abortController.signal);
     if (!aiResponse) {
+      _settleRouting(task, state, false, 'autonomous-task-no-response');
       failTask(task.id, 'No response from AI');
       _emit(task.id, 'failed', { error: 'no response' });
       return;
@@ -352,6 +367,7 @@ async function _autonomyLoop(task, state) {
       if (allNotFound) {
         consecutiveNotFoundCount++;
         if (consecutiveNotFoundCount >= MAX_CONSECUTIVE_NOT_FOUND) {
+          _settleRouting(task, state, false, 'autonomous-task-resource-failure');
           failTask(task.id, 'Stopped after ' + consecutiveNotFoundCount + ' consecutive not-found results. The requested files or resources do not exist at the searched locations. Please clarify the correct path or provide the missing files.');
           _emit(task.id, 'failed', { error: 'consecutive not-found: resources do not exist' });
           return;
@@ -384,6 +400,7 @@ async function _autonomyLoop(task, state) {
         if (verified.ok) {
           _ledgerAppend(ledger, { type: _LEDGER.STAGE, stage: 'skill-verification', ok: true });
           _ledgerAppend(ledger, { type: _LEDGER.RUN_END, status: 'completed' });
+          _settleRouting(task, state, undefined, 'autonomous-task-completion');
           completeTask(task.id, { summary: summary.slice(0, 500), verification: verified.evidence });
           _emit(task.id, 'completed', { summary: summary.slice(0, 500), verification: verified.evidence });
           return;
@@ -399,6 +416,7 @@ async function _autonomyLoop(task, state) {
       if (failedMatch) {
         const reason = (failedMatch[1] || '').trim() || 'Task failed (no reason given)';
         _ledgerAppend(ledger, { type: _LEDGER.RUN_END, status: 'failed', reason: reason.slice(0, 200) });
+        _settleRouting(task, state, false, 'autonomous-task-failure');
         failTask(task.id, reason.slice(0, 500));
         _emit(task.id, 'failed', { error: reason.slice(0, 500) });
         return;
@@ -422,6 +440,7 @@ async function _autonomyLoop(task, state) {
   }
 
   // Max steps exceeded
+  _settleRouting(task, state, false, 'autonomous-task-max-steps');
   failTask(task.id, 'Max steps (' + maxSteps + ') exceeded');
   _emit(task.id, 'failed', { error: 'max steps exceeded' });
 }
@@ -782,6 +801,8 @@ async function _verifyAgainstSkills({ task, state, messages, summary, systemProm
     model: task.model || 'claude-sonnet-4.6',
     systemPrompt,
     agentName: _pickAgent(task, state.step),
+    projectId: task.projectId || null,
+    runId: task.id,
     thinkingBudget: 'low',
     maxContextTurns: 100,
     headlessTask: true,

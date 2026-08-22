@@ -7,6 +7,7 @@ import path   from 'path';
 import os     from 'os';
 import crypto from 'crypto';
 import { saveJsonAtomic } from './server/lib/json-store.js';
+import { createExecutionEvent } from './lib/execution-event.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
 const TASKS_FILE = path.join(CONFIG_DIR, 'tasks.json');
@@ -450,11 +451,14 @@ function updateTask(id, updates) {
   tasks[idx].updatedAt = new Date().toISOString();
 
   if (updates._historyEvent) {
-    tasks[idx].history.push({
+    tasks[idx].history.push(createExecutionEvent({
+      type: `task.${updates._historyEvent}`,
+      source: 'task-manager',
+      taskId: id,
       timestamp: Date.now(),
       event: updates._historyEvent,
       detail: updates._historyDetail || null,
-    });
+    }));
   }
 
   writeTasks(tasks);

@@ -1,16 +1,19 @@
+import { createExecutionEvent } from '../../lib/execution-event.js';
+
 const MAX_EVENTS = 500;
 const _events = [];
 
 export function recordSecurityEvent(event = {}) {
-  const entry = {
+  const entry = createExecutionEvent({
     id: 'sec-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
     ts: Date.now(),
     type: event.type || 'security-event',
+    source: 'security-events',
     severity: event.severity || 'info',
     surface: event.surface || 'unknown',
     message: event.message || '',
     details: event.details || {},
-  };
+  });
   _events.push(entry);
   if (_events.length > MAX_EVENTS) _events.splice(0, _events.length - MAX_EVENTS);
   return entry;

@@ -3,7 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  EXECUTION_EVENT_SCHEMA_VERSION,
   EVENT_TYPES,
+  createExecutionEvent,
   appendEvent,
   readEvents,
   replay,
@@ -26,8 +28,60 @@ describe('run-ledger append + read + replay', () => {
     appendEvent(file, { type: EVENT_TYPES.ACTION, tool: 'edit' });
     const events = readEvents(file);
     expect(events.length).toBe(2);
+    expect(events[0]).toMatchObject({
+      schemaVersion: EXECUTION_EVENT_SCHEMA_VERSION,
+      source: 'run-ledger',
+      runId: 'r1',
+      correlationId: 'r1',
+    });
+    expect(events[0].eventId).toBeTypeOf('string');
+    expect(events[0].timestamp).toBe(events[0].ts);
     expect(events[0].runId).toBe('r1');
     expect(events[0].ts).toBeTypeOf('number');
+  });
+
+  it('preserves caller metadata in the versioned envelope', () => {
+    const event = createExecutionEvent({
+      type: 'verification.completed',
+      runId: 'run-1',
+      taskId: 'task-1',
+      correlationId: 'corr-1',
+      causationId: 'cause-1',
+      outcome: 'passed',
+      payload: { verifier: 'npm test' },
+    }, { source: 'verifier', timestamp: 123 });
+
+    expect(event).toMatchObject({
+      schemaVersion: EXECUTION_EVENT_SCHEMA_VERSION,
+      timestamp: 123,
+      ts: 123,
+      source: 'verifier',
+      runId: 'run-1',
+      taskId: 'task-1',
+      correlationId: 'corr-1',
+      causationId: 'cause-1',
+      outcome: 'passed',
+      payload: { verifier: 'npm test' },
+    });
+  });
+
+  it('does not let legacy fields override authoritative envelope metadata', () => {
+    const event = createExecutionEvent({
+      schemaVersion: 99,
+      eventId: 'caller-event',
+      timestamp: 'not-a-timestamp',
+      ts: 456,
+      source: '',
+      type: 'legacy.event',
+    }, { source: 'legacy-adapter' });
+    expect(event).toMatchObject({
+      schemaVersion: EXECUTION_EVENT_SCHEMA_VERSION,
+      eventId: 'caller-event',
+      timestamp: 456,
+      ts: 456,
+      source: 'legacy-adapter',
+      type: 'legacy.event',
+    });
   });
 
   it('replays events into folded state', () => {

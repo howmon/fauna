@@ -11,6 +11,7 @@ import {
   filterToolsByPolicy,
   matchesApplyTo,
   groupCustomizations,
+  lintCustomization,
   parseCustomizationFrontmatter,
   resolveToolPolicy,
   selectRelevantInstructions,
@@ -297,7 +298,14 @@ describe('agent and tool policy', () => {
         name: 'code-reviewer',
         tools: ['read', 'search'],
         model: ['Claude Sonnet 4.5', 'GPT-5'],
-        agents: [],
+        agents: ['test-verifier'],
+        artifacts: ['review-report'],
+        'handoff-to': ['test-verifier'],
+        'max-tool-calls': 20,
+        'max-duration-ms': 300000,
+        'max-cost': 2.5,
+        'escalate-on': ['blocked', 'permission-denied'],
+        'independent-verifier': 'test-verifier',
         'user-invocable': false,
         'disable-model-invocation': true,
       },
@@ -314,9 +322,42 @@ describe('agent and tool policy', () => {
     expect(policy.model).toEqual(['Claude Sonnet 4.5', 'GPT-5']);
     expect(policy.tools).toEqual(['read', 'search']);
     expect(policy.expandedTools).toContain('fauna_read_file');
-    expect(policy.allowedSubagents).toEqual([]);
+    expect(policy.allowedSubagents).toEqual(['test-verifier']);
+    expect(policy.contract).toEqual({
+      artifacts: ['review-report'],
+      handoffTargets: ['test-verifier'],
+      budget: { maxToolCalls: 20, maxDurationMs: 300000, maxCost: 2.5 },
+      escalateOn: ['blocked', 'permission-denied'],
+      independentVerifier: 'test-verifier',
+    });
     expect(policy.userInvocable).toBe(false);
     expect(policy.disableModelInvocation).toBe(true);
+  });
+
+  it('rejects unsafe or invalid optional agent contracts', () => {
+    const record = {
+      kind: CUSTOMIZATION_KINDS.AGENT,
+      name: 'code-reviewer',
+      description: 'Review code.',
+      hasFrontmatter: true,
+      frontmatter: {
+        name: 'code-reviewer',
+        agents: ['test-verifier'],
+        'handoff-to': ['code-reviewer'],
+        'max-tool-calls': 0,
+        'max-duration-ms': -1,
+        'max-cost': -2,
+        'independent-verifier': 'code-reviewer',
+      },
+      source: 'Review code.',
+      path: '/repo/.github/agents/code-reviewer.agent.md',
+    };
+    const lint = lintCustomization(record);
+    expect(lint.ok).toBe(false);
+    expect(lint.errors.join('\n')).toMatch(/positive integer/);
+    expect(lint.errors.join('\n')).toMatch(/non-negative number/);
+    expect(lint.errors.join('\n')).toMatch(/handoff-to.*itself/);
+    expect(lint.errors.join('\n')).toMatch(/independent-verifier.*different agent/);
   });
 
   it('resolves tool policy precedence prompt over agent over skill', () => {

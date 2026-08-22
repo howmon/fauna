@@ -739,7 +739,7 @@ export function registerChatRoute(app, {
     res.on('close', cancelUpstream);
     const { messages = [], model = 'claude-sonnet-4.6', systemPrompt = '', useFigmaMCP = false, contextSummary = '',
         thinkingBudget = 'high', maxContextTurns = 20, agentName = null,
-        projectId = null, projectContextIds = null, isDelegation = false,
+        projectId = null, projectContextIds = null, runId = null, isDelegation = false,
         sourceId = null, projectSearchApply = false,
         clientContext = 'app', noTools = false,
         isolatedContext = false,
@@ -1711,6 +1711,7 @@ export function registerChatRoute(app, {
         },
         imageAssets: activeImageAssets,
         activeProjectId: projectId || null,
+        runId: runId || null,
         convId: req.body?.conversationId || null,
         activeAgentName: agentName || null,
         recordFileEdit: (absPath, oldContent) => {

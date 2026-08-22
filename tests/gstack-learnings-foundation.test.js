@@ -199,9 +199,25 @@ describe('gstack learnings foundation', () => {
   });
 
   it('generates capability catalog from actual tool metadata', () => {
+    expect(capabilities.schemaVersion).toBe(2);
     expect(capabilities.count).toBeGreaterThan(50);
     expect(capabilities.tools.some(t => t.name === 'fauna_browser')).toBe(true);
     expect(capabilities.byCategory.browser).toBeGreaterThan(0);
+    expect(capabilities.defaults.tool).toMatchObject({
+      maturity: 'stable',
+      availability: { default: true },
+    });
+    expect(capabilities.tools.every(t => t.owner && Array.isArray(t.permissions))).toBe(true);
+    expect(capabilities.customizations.some(item => item.kind === 'skill' && item.name === 'using-fauna-skills')).toBe(true);
+    expect(capabilities.customizations.every(item => item.owner && item.maturity && item.availability && item.validation)).toBe(true);
+    const promotedSkill = capabilities.customizations.find(item => item.kind === 'skill' && item.name === 'using-fauna-skills');
+    expect(promotedSkill).toMatchObject({
+      owner: 'fauna-engineering',
+      evidenceReviewWindowDays: 90,
+      rollback: { action: 'demote-to-in-progress' },
+    });
+    expect(promotedSkill.evidence).toContain('tests/skill-governance.test.js');
+    expect(capabilities.totalCount).toBe(capabilities.tools.length + capabilities.customizations.length);
   });
 
   it('detects ingestion formats and warns on empty extraction', () => {
@@ -222,5 +238,14 @@ describe('gstack learnings foundation', () => {
     expect(events).toHaveLength(2);
     expect(events[0].message).toBe('second');
     expect(events[1].message).toBe('first');
+    expect(events[0]).toMatchObject({
+      schemaVersion: 1,
+      type: 'permission-denied',
+      source: 'security-events',
+      surface: 'browser',
+    });
+    expect(events[0].id).toMatch(/^sec-/);
+    expect(events[0].eventId).toEqual(expect.any(String));
+    expect(events[0].timestamp).toBe(events[0].ts);
   });
 });

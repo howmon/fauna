@@ -65,5 +65,13 @@ describe('hooks runtime', () => {
     expect(result.ok).toBe(true);
     expect(result.event).toBe('UserPromptSubmit');
     expect(result.systemMessages).toEqual(['UserPromptSubmit:proceed']);
+    expect(result).toMatchObject({
+      schemaVersion: 1,
+      type: 'hook.lifecycle',
+      source: 'hooks-runtime',
+      outcome: 'completed',
+    });
+    expect(result.eventId).toEqual(expect.any(String));
+    expect(result.timestamp).toBe(result.ts);
   });
 });

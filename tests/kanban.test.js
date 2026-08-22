@@ -37,6 +37,12 @@ vi.mock('fs', async () => {
   };
 });
 
+vi.mock('../server/lib/json-store.js', () => ({
+  saveJsonAtomic: vi.fn((_path, data) => {
+    _diskProjects = JSON.parse(JSON.stringify(data));
+  }),
+}));
+
 const pm = await import('../project-manager.js');
 const {
   createProject, updateProject,
@@ -462,6 +468,16 @@ describe('setWorkItemVerification', () => {
     expect(r.verified.runId).toBe('t1');
     expect(r.verified.source).toBe('shell');
     expect(typeof r.verified.ts).toBe('number');
+    expect(r.verified).toMatchObject({
+      schemaVersion: 1,
+      type: 'work-item.verification',
+      projectId: 'proj-1',
+      workItemId: it.id,
+      outcome: 'passed',
+      correlationId: 't1',
+    });
+    expect(r.verified.eventId).toEqual(expect.any(String));
+    expect(r.verified.timestamp).toBe(r.verified.ts);
   });
 
   it('null clears the verification', () => {

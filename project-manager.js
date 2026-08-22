@@ -7,6 +7,7 @@ import path from 'path';
 import os   from 'os';
 import { execSync, spawn as _spawn } from 'child_process';
 import { saveJsonAtomic } from './server/lib/json-store.js';
+import { createExecutionEvent } from './lib/execution-event.js';
 
 const CONFIG_DIR   = path.join(os.homedir(), '.config', 'fauna');
 const PROJECTS_FILE = path.join(CONFIG_DIR, 'projects.json');
@@ -1726,7 +1727,11 @@ export function setWorkItemVerification(projectId, itemId, verification) {
   if (!verification || typeof verification !== 'object') {
     it.verified = null;
   } else {
-    it.verified = {
+    it.verified = createExecutionEvent({
+      type:       'work-item.verification',
+      projectId,
+      workItemId: itemId,
+      outcome:    verification.ok === true ? 'passed' : 'failed',
       ok:        verification.ok === true,
       exitCode:  Number.isFinite(verification.exitCode) ? verification.exitCode : null,
       output:    String(verification.output || '').slice(0, 8000),
@@ -1734,7 +1739,7 @@ export function setWorkItemVerification(projectId, itemId, verification) {
       runId:     verification.runId || null,
       command:   String(verification.command || '').slice(0, 1000),
       source:    verification.source === 'judge' ? 'judge' : 'shell',
-    };
+    });
   }
   it.updatedAt = now();
   p.updatedAt = now();
@@ -1792,7 +1797,12 @@ export function appendAutonomousRunLog(projectId, runData = {}) {
     fs.mkdirSync(AUTONOMOUS_RUNS_DIR, { recursive: true });
     const day = new Date().toISOString().slice(0, 10);
     const file = path.join(AUTONOMOUS_RUNS_DIR, `${projectId || 'global'}-${day}.jsonl`);
-    fs.appendFileSync(file, JSON.stringify({ ts: Date.now(), ...runData }) + '\n');
+    const event = createExecutionEvent({
+      ...runData,
+      type: runData.type || 'autonomous.run',
+      projectId: runData.projectId || projectId || null,
+    }, { source: 'project-manager' });
+    fs.appendFileSync(file, JSON.stringify(event) + '\n');
     return file;
   } catch (e) {
     console.warn('[autonomous-runs] failed to append log:', e?.message || e);

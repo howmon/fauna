@@ -38,6 +38,7 @@ import { inspectText as wmInspectText, cleanText as wmCleanText, inspectFile as 
 import { packWidgetResult } from './lib/dynamic-widgets.js';
 import { buildCatalog, routeSkill, attachEmbeddings } from './lib/skill-catalog.js';
 import { routeEngineeringFlow } from './lib/engineering-flow.js';
+import { recordRoutingDecision, recordRoutingOutcome } from './lib/routing-evidence.js';
 import { validateTicketPlan } from './lib/ticket-plan.js';
 import { validateCodeReviewReport } from './lib/code-review-report.js';
 import { validateDiagnosisReport } from './lib/diagnosis-report.js';
@@ -1792,6 +1793,27 @@ export const SELF_TOOL_DEFS = [
           activeSkill: { type: 'string', description: 'Optional slug of the skill already in use, to bias toward related skills.' },
         },
         required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_record_routing_outcome',
+      description: 'Record verifier or human-correction evidence for a routing episode returned by fauna_route_skill or fauna_route_engineering_flow. This appends offline evaluation evidence and never changes routing behavior.',
+      parameters: {
+        type: 'object',
+        properties: {
+          episodeId: { type: 'string', description: 'Routing episode id returned by a routing tool.' },
+          verified: { type: 'boolean', description: 'Whether the selected route produced a verified successful outcome.' },
+          verifier: { type: 'string', description: 'Verifier command or evidence label.' },
+          correctedSelection: { type: 'string', description: 'Correct route when the original selection was wrong.' },
+          retries: { type: 'number', description: 'Retries required after routing.' },
+          durationMs: { type: 'number', description: 'Observed execution duration in milliseconds.' },
+          cost: { type: 'number', description: 'Optional normalized token or monetary cost.' },
+          humanCorrection: { type: 'boolean', description: 'Whether a human corrected the route.' },
+        },
+        required: ['episodeId'],
       },
     },
   },
@@ -3639,7 +3661,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_doctor',
-      description: 'Run a self-diagnostic that probes Fauna\'s capability channels and optional integrations (browser automation, LibreOffice slide rendering, image generation, stock photos, local/GitHub LLM, memory, context, GitHub CLI, media tools). Call this when a capability seems missing or a task fails for environmental reasons so you can see the active backend and fix instead of guessing. Returns {ok, checks:[{name, channel, tier, backends, activeBackend, status:"ok"|"warn"|"fail"|"off", message, fix?}], counts, total}.',
+      description: 'Run Fauna\'s consolidated operational readiness report. Probes capability channels and optional integrations, then evaluates core health, the generated capability manifest, bundled customization validation, and release metadata. Call this when a capability seems missing, before packaging, or when a task fails for environmental reasons. Returns the existing checks/counts plus readiness:{status:"ready"|"degraded"|"blocked",checks,counts}.',
       parameters: { type: 'object', properties: {} },
     },
   },
@@ -4373,7 +4395,7 @@ export async function executeSelfTool(toolName, args, context = {}) {
       const flow = String(args.flow || '').trim();
       const phase = String(args.phase || '').trim();
       if (!situation && !flow) return JSON.stringify({ ok: false, error: 'situation or flow required' });
-      return JSON.stringify(routeEngineeringFlow({
+      const routed = routeEngineeringFlow({
         situation,
         flow: flow || null,
         phase: phase || null,
@@ -4384,7 +4406,19 @@ export async function executeSelfTool(toolName, args, context = {}) {
           unattended: args.unattended === true,
           contextBudget: context.contextBudget || {},
         },
-      }));
+      });
+      const routingEpisodeId = recordRoutingDecision({
+        router: 'engineering-flow',
+        query: situation || `${flow}/${phase || ''}`,
+        selection: routed.flow?.id || null,
+        confidence: routed.confidence,
+        alternatives: (routed.candidates || routed.whyNot || []).map(item => item.id || item.flow).filter(Boolean),
+        projectId: context.activeProjectId || context.projectId || null,
+        runId: context.runId || null,
+        model: context.model || context.modelId || null,
+        agent: context.activeAgentName || null,
+      }, { file: context.routingEvidenceFile });
+      return JSON.stringify({ ...routed, routingEpisodeId });
     }
 
     case 'fauna_route_skill': {
@@ -4412,14 +4446,40 @@ export async function executeSelfTool(toolName, args, context = {}) {
         activeSkill: args.activeSkill ? String(args.activeSkill).replace(/[^a-zA-Z0-9_-]/g, '') : null,
         queryVector,
       });
+      const routingEpisodeId = recordRoutingDecision({
+        router: 'skill',
+        query,
+        selection: routed.top || null,
+        confidence: routed.confidence,
+        alternatives: (routed.ranked || []).map(item => item.name).filter(Boolean),
+        projectId: context.activeProjectId || context.projectId || null,
+        runId: context.runId || null,
+        model: context.model || context.modelId || null,
+        agent: agentName,
+      }, { file: context.routingEvidenceFile });
       return JSON.stringify({
         ...routed,
         semantic,
+        routingEpisodeId,
         _note: routed.clarify
           ? 'Confidence is low — consider asking the user the clarify question before loading a skill.'
           : (routed.top ? `Load the winning skill with fauna_get_skill(name: "${routed.top}").` : undefined),
       });
     }
+
+    case 'fauna_record_routing_outcome':
+      return JSON.stringify(recordRoutingOutcome({
+        episodeId: String(args.episodeId || '').trim(),
+        verified: typeof args.verified === 'boolean' ? args.verified : undefined,
+        verifier: args.verifier ? String(args.verifier).slice(0, 500) : null,
+        correctedSelection: args.correctedSelection ? String(args.correctedSelection).slice(0, 120) : null,
+        retries: Number.isFinite(args.retries) ? args.retries : null,
+        durationMs: Number.isFinite(args.durationMs) ? args.durationMs : null,
+        cost: Number.isFinite(args.cost) ? args.cost : null,
+        humanCorrection: args.humanCorrection === true,
+        projectId: context.activeProjectId || context.projectId || null,
+        runId: context.runId || null,
+      }, { file: context.routingEvidenceFile }));
 
     case 'fauna_interview': {
       const goal = String(args.goal || '').trim();

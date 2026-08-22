@@ -1,26 +1,46 @@
 {
-  "generatedAt": "2026-07-14T21:32:51.730Z",
+  "schemaVersion": 2,
+  "defaults": {
+    "tool": {
+      "maturity": "stable",
+      "availability": {
+        "default": true,
+        "conditions": []
+      },
+      "evidence": [
+        "tests/self-tools.test.js"
+      ]
+    }
+  },
   "source": [
     "self-tools.js:SELF_TOOL_DEFS",
-    "self-tools.js:DYNAMIC_WIDGET_TOOL_DEFS"
+    "self-tools.js:DYNAMIC_WIDGET_TOOL_DEFS",
+    "lib/customization-registry.js:discoverCustomizations",
+    "skills/governance.json"
   ],
-  "count": 100,
+  "count": 124,
+  "totalCount": 142,
   "byCategory": {
     "file": 9,
-    "desktop": 6,
-    "other": 31,
-    "project": 13,
+    "desktop": 7,
+    "other": 51,
+    "project": 15,
     "browser": 1,
-    "assistant": 8,
+    "assistant": 9,
     "memory": 7,
     "shell": 2,
     "media": 16,
     "circuit": 7
   },
+  "byKind": {
+    "tool": 124,
+    "skill": 18
+  },
   "tools": [
     {
       "name": "fauna_apply_patch",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "file",
       "description": "PRIMARY edit tool. Apply a freeform patch across one or more files in a single transaction — use for any edit to an existing file, including small one-hunk changes. Faster and cheaper than fauna_write_file (no full-file re-render) and safer than fauna_replace_string for anything more than one substitution. Do NOT re-read the file after a successful apply — the tool already confirms. Patch DSL: *** Begin Patch / *** Update File: <path> / @@ context / -removed / +added / *** End Patch.",
       "required": [
@@ -32,11 +52,15 @@
       ],
       "sideEffects": [
         "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
     },
     {
       "name": "fauna_arrange_windows",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "desktop",
       "description": "Move and/or resize specific app windows. Pass an array of moves; each move targets one app and sets {x,y,w,h} in screen coordinates. Use fauna_list_windows first to get exact app names and the screen size — then compute coords (e.g. half-screen split, quadrants). windowIndex defaults to 1 (frontmost window of that app); use windowTitle for exact-match targeting. Works on macOS (requires Accessibility permission) and Windows (uses User32 SetWindowPos).",
       "required": [
@@ -47,11 +71,39 @@
       ],
       "sideEffects": [
         "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
+    },
+    {
+      "name": "fauna_ask_user_decision",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "other",
+      "description": "Ask the user to pick between concrete options before continuing. Use whenever you would otherwise silently make a non-trivial decision on the user's behalf — creating a new file/page/branch, choosing between destructive alternatives, picking a framework, overwriting existing work, running a slow/expensive operation, or committing to an irreversible action. Renders the Decision Prompt UI, pauses the agent, and resumes on the next user turn with their answer. Do NOT use for trivial UI questions the user can inspect visually; do NOT use to fish for missing context you can look up yourself.",
+      "required": [
+        "title",
+        "prompt",
+        "options"
+      ],
+      "parameters": [
+        "title",
+        "prompt",
+        "options",
+        "allowCustom",
+        "customLabel",
+        "customPlaceholder"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_audit_prompt",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "Audit a system-prompt / instruction string against curated behavioural patterns (tool-discipline, verification, persistence, scope, honesty, safety, output-format). Returns which patterns are present, which are missing, and remediation hints. Use to review or improve agent instructions and skills.",
       "required": [
@@ -62,11 +114,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_backlog_list",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "project",
       "description": "List backlog items for a project, ordered by score when prioritized. Useful before triage or planning.",
       "required": [],
@@ -78,11 +132,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_backlog_prioritize",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "project",
       "description": "Score and rank backlog items. method=\"rice\" (default) computes RICE = reach*impact*confidence/effort. method=\"moscow\" buckets by must/should/could/wont tags. Also promotes new items into the Todo column so the autopilot can pick them up.",
       "required": [],
@@ -92,11 +148,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_board_scan",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "project",
       "description": "List Kanban work items. Scope=\"project\" (default) returns the active project board; scope=\"global\" aggregates across every project. Use this to (a) find your next card to claim, (b) check if a similar card already exists before creating a duplicate, or (c) summarise board status for the user. Returns items with column, assignee, priority, claimedBy, lockedByUser and counts of comments/runs.",
       "required": [],
@@ -109,11 +167,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_browser",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "browser",
       "description": "Drive the in-app WEB browser webview (navigate to http(s):// or file:// URLs, click/type DOM selectors, extract HTML, evaluate JS, take page screenshot, etc.). ONLY use this for actual web pages or local HTML files. DO NOT use this for desktop apps (Figma desktop, Slack desktop, VS Code, Finder, native macOS/Windows UIs) — those require fauna_mouse / fauna_keyboard / fauna_ui_tree / fauna_arrange_windows instead. DO NOT call this just to \"take a screenshot\" of the user's screen — there is no screen capture here, only the current webview page. DO NOT open it speculatively at the start of a task; only call it once you have decided you need a web URL. PREFER this over markdown ```browser-action fenced blocks when web automation is genuinely needed.",
       "required": [
@@ -126,9 +186,14 @@
         "text",
         "js",
         "tabId",
-        "waitMs"
+        "waitMs",
+        "forceInternal"
       ],
       "sideEffects": [
+        "mutates-state",
+        "network-capable"
+      ],
+      "permissions": [
         "mutates-state",
         "network-capable"
       ]
@@ -136,6 +201,7 @@
     {
       "name": "fauna_build_guide",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "Generate a complete build guide for a circuit: bill of materials, assembly order (low-profile parts first), polarity/pin-1 callouts, soldering steps, and a simulation-backed \"test & verify\" section with expected node voltages. Returns a structured guide + Markdown. Uses ngspice for expected readings when available; degrades gracefully otherwise.",
       "required": [
@@ -147,11 +213,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_check_board",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "project",
       "description": "Design-rule check (DRC) of a routed board: copper clearance (pad↔pad, trace↔trace, trace↔pad), drill spacing, board-edge clearance, and unrouted nets. Returns { ok, errors, warnings, stats }. ALWAYS run after fauna_layout_pcb and surface violations.",
       "required": [],
@@ -162,11 +230,49 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
+    },
+    {
+      "name": "fauna_check_diagram",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "other",
+      "description": "Structural quality check on a fauna_render_diagram HTML output. Verifies: accessible SVG contract (role, aria-labelledby, title/desc), provenance marker, 4px grid compliance on sampled coordinates, no diagonal connectors, arrow labels have mask rects, legend placement. Returns { ok, errors, warnings }. Always call after fauna_render_diagram.",
+      "required": [
+        "html"
+      ],
+      "parameters": [
+        "html"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
+    },
+    {
+      "name": "fauna_clean_watermarks",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "other",
+      "description": "Strip AI provenance marks from text or a file. Layer A removes invisible Unicode carriers deterministically. File metadata (C2PA chunks, EXIF/XMP, SVG <metadata>, HTML AI meta, Markdown frontmatter AI keys) is stripped natively. JPEG/PDF metadata strip requires exiftool on PATH. Returns cleaned text inline or writes a cleaned file and returns its path + stats. Layer B (statistical rewrite to attack token-sampling watermarks) is intentionally NOT done here — ask the agent to rephrase in natural language instead.",
+      "required": [],
+      "parameters": [
+        "text",
+        "filePath",
+        "outputPath",
+        "aggressive",
+        "nfkc"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_consult_debate",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "assistant",
       "description": "Run a structured chain-of-debate over a hard decision. Invokes N independent perspectives in parallel (no tools), cross-presents them for critique, then a judge synthesizes a recommendation. Use BEFORE committing to an ambiguous architectural choice or when the user explicitly asks for multiple opinions.",
       "required": [
@@ -179,11 +285,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_context_delete",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "memory",
       "description": "Delete an ingested context document by docId (from fauna_context_list).",
       "required": [
@@ -194,11 +302,15 @@
       ],
       "sideEffects": [
         "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
     },
     {
       "name": "fauna_context_ingest",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "memory",
       "description": "Ingest a document into the context store. The text is chunked and embedded for later semantic search. Re-ingesting the same sourceId replaces the prior chunks.",
       "required": [
@@ -214,11 +326,15 @@
       ],
       "sideEffects": [
         "file-access"
+      ],
+      "permissions": [
+        "file-access"
       ]
     },
     {
       "name": "fauna_context_list",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "memory",
       "description": "List ingested context documents (without their text) so you can confirm what is available before searching or delete stale entries.",
       "required": [],
@@ -227,11 +343,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_context_search",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "memory",
       "description": "Semantic + keyword search over ingested context documents (READMEs, design docs, source files, notes). Use to ground answers in project-specific material the user has added. Returns the top matching passages with source info.",
       "required": [
@@ -244,11 +362,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_create_project",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "project",
       "description": "Create a new project in Fauna. Returns the project object with its ID. When the user wants to build an app/site/tool, set `template` to scaffold a working starter (e.g. vite-react-ts, vite-react-ts-sqlite). Defaults to no template (empty project record only).",
       "required": [
@@ -262,11 +382,15 @@
       ],
       "sideEffects": [
         "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
     },
     {
       "name": "fauna_create_seed",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "Freeze an immutable Seed spec (goal + acceptance criteria + constraints + ontology) that later evaluation checks against. Blocked automatically if the ambiguity score exceeds the gate (pass force:true to override). Do this once the task is clear, before autonomous execution.",
       "required": [
@@ -282,11 +406,37 @@
       ],
       "sideEffects": [
         "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
+      ]
+    },
+    {
+      "name": "fauna_create_ticket_plan",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "assistant",
+      "description": "Validate a dependency-aware implementation ticket plan and, only after explicit user approval, publish it to the project Kanban board. Call first with approved=false to preview validation, cycle errors, and the ready frontier. Set approved=true only after the user approves the ticket granularity and blocker edges.",
+      "required": [
+        "tickets",
+        "approved"
+      ],
+      "parameters": [
+        "projectId",
+        "approved",
+        "tickets"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
     },
     {
       "name": "fauna_db_migration",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "Create a new SQL migration file with a mandatory markdown summary header. Used when building apps with SQLite. Stamps the file as `migrations/NNNN_<slug>.sql` in the active project root. The header documents purpose, tables changed, indexes added, and rollback notes — required for every schema change. Validates that the SQL parses (basic syntax check). Use this every time you add or alter a table; do NOT hand-write migration files.",
       "required": [
@@ -304,28 +454,92 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_definition",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
-      "description": "Find likely JS/TS definitions for a symbol in the active project/cwd. Static fallback until full LSP is available.",
+      "description": "Find likely indexed definitions for a source symbol across common languages. This is a fast text-aware heuristic fallback, not scope-sensitive LSP resolution.",
       "required": [
         "symbol"
       ],
       "parameters": [
         "cwd",
         "symbol",
+        "path",
+        "line",
+        "column",
         "maxResults"
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
+    },
+    {
+      "name": "fauna_design_audit",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "other",
+      "description": "Run a technical design quality check on a file or inline source. Combines deterministic detector rules (a11y, spacing, color, AI slop patterns) with optional source and rendered-screenshot critique passes. Returns a structured findings list with rule id, severity, message, and snippet. For high-fidelity HTML, set visual=true before delivery so hierarchy, clipping, density, and composition are judged from pixels rather than inferred from source. A rendered failure returns ok=false and is blocking: revise the artifact and rerun the audit before claiming validation.",
+      "required": [],
+      "parameters": [
+        "path",
+        "source",
+        "filename",
+        "llmCritique",
+        "visual",
+        "brief",
+        "assetRole"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
+    },
+    {
+      "name": "fauna_design_harden",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "other",
+      "description": "Add robustness to a UI: error states, empty states, loading states, i18n text overflow, edge cases, and accessibility improvements. Reads the file, identifies missing states (e.g. empty list, network error, long label truncation), and returns a concrete change list. Run this after fauna_design_polish as the last step before shipping.",
+      "required": [],
+      "parameters": [
+        "path",
+        "source",
+        "filename",
+        "checks"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
+    },
+    {
+      "name": "fauna_design_polish",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "other",
+      "description": "Final design pass on a UI file or artifact: design system alignment, spacing normalisation, typographic hierarchy, and shipping readiness. Reads the file, runs the design detector, then generates an LLM-driven improvement plan with specific before/after diffs. Returns a list of recommended changes the agent can apply immediately.",
+      "required": [],
+      "parameters": [
+        "path",
+        "source",
+        "filename",
+        "focus"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_dev_servers",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "shell",
       "description": "List, stop, or restart background dev servers (npm run dev, vite, next dev, php -S, uvicorn, …) that were started earlier in this or any other conversation. When a dev-server command is launched via fauna_shell_exec or a ```bash block, the server is detached and registered here — it does NOT come back via shell output. Use this tool to check status, restart after a code change, or stop a port when the user is done. Action `list` returns every tracked server with id, label, cwd, port (if detected), status, command, and startedAt. Action `stop` SIGTERMs by id. Action `restart` kills and respawns the same command in the same cwd.",
       "required": [
@@ -337,11 +551,15 @@
       ],
       "sideEffects": [
         "executes-process"
+      ],
+      "permissions": [
+        "executes-process"
       ]
     },
     {
       "name": "fauna_diagnostics",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "VS Code Problems-style diagnostics for a Fauna workspace. Resolves the project/conversation workspace, runs an explicit or discovered validation command, and returns structured {file,line,column,severity,source,message} entries plus raw tail output.",
       "required": [],
@@ -354,22 +572,122 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_doctor",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "assistant",
-      "description": "Run a self-diagnostic that probes Fauna's capability channels and optional integrations (browser automation, LibreOffice slide rendering, image generation, stock photos, local/GitHub LLM, memory, context, GitHub CLI, media tools). Call this when a capability seems missing or a task fails for environmental reasons so you can see the active backend and fix instead of guessing. Returns {ok, checks:[{name, channel, tier, backends, activeBackend, status:\"ok\"|\"warn\"|\"fail\"|\"off\", message, fix?}], counts, total}.",
+      "description": "Run Fauna's consolidated operational readiness report. Probes capability channels and optional integrations, then evaluates core health, the generated capability manifest, bundled customization validation, and release metadata. Call this when a capability seems missing, before packaging, or when a task fails for environmental reasons. Returns the existing checks/counts plus readiness:{status:\"ready\"|\"degraded\"|\"blocked\",checks,counts}.",
       "required": [],
       "parameters": [],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
+    },
+    {
+      "name": "fauna_document_get",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "other",
+      "description": "Get structured data about an element in a Word, PowerPoint, or Excel document using a path. PPTX paths: \"/\" (slide list), \"/slide[N]\" (shapes on slide N), \"/slide[N]/shape[M]\" (shape detail), \"/slide[N]/shape[@name=Title]\" (shape by name). DOCX paths: \"/\" (stats), \"/body\" (element list), \"/body/p[N]\" (paragraph N), \"/body/tbl[N]\" (table N). XLSX paths: \"/\" (sheet list), \"/SheetName\" (sheet stats), \"/SheetName/A1\" (cell), \"/SheetName/row[N]\" (row). Returns typed, structured JSON with error codes and suggestions on failure (e.g. code \"not_found\" + valid range).",
+      "required": [
+        "path"
+      ],
+      "parameters": [
+        "path",
+        "docPath"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
+    },
+    {
+      "name": "fauna_document_issues",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "other",
+      "description": "Scan a Word, PowerPoint, or Excel document for common quality issues: PPTX — empty slides, empty shapes, long text that may overflow, shapes outside slide boundary, images without alt text. DOCX — very long paragraphs, excessive empty paragraphs. XLSX — cells containing formula errors (#VALUE!, #REF!, #N/A, etc.). Returns { ok, issue_count, issues: [{type, slide?, paragraph?, cell?, message}] }. Call this before delivering a document to the user.",
+      "required": [
+        "path"
+      ],
+      "parameters": [
+        "path"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
+    },
+    {
+      "name": "fauna_document_merge",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "other",
+      "description": "Template merge: replace {{key}} placeholders in a Word (.docx), PowerPoint (.pptx), or Excel (.xlsx) document with values from a data object. Useful for filling report templates, invoice templates, slide decks, etc. without re-generating from scratch. The agent designs the layout once (the template); downstream code fills placeholders N times — deterministic, zero token cost per fill. src and dest may be the same path for in-place replacement. Returns { ok, src, dest, replacements: N }.",
+      "required": [
+        "src",
+        "dest",
+        "data"
+      ],
+      "parameters": [
+        "src",
+        "dest",
+        "data"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
+    },
+    {
+      "name": "fauna_document_screenshot",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "desktop",
+      "description": "Render a Word (.docx), PowerPoint (.pptx), Excel (.xlsx), or any other office document to PNG screenshots (one per page/slide) so you can SEE the visual output and verify layout, overflow, and styling before declaring a task done. Returns { ok, pngs: [\"/absolute/path/...\"] }. You can then reference those paths in your reply as markdown images (![slide 1](path)) to show them to the user. ALWAYS call this after generating or editing an office document — it closes the \"flying blind\" loop. Requires LibreOffice (soffice) + pdftoppm (poppler) to be installed; returns needsInstall hint if missing.",
+      "required": [
+        "path"
+      ],
+      "parameters": [
+        "path",
+        "pages",
+        "dpi"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
+    },
+    {
+      "name": "fauna_document_set",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "other",
+      "description": "Set properties on an element inside a Word, PowerPoint, or Excel document at a given path. Writes back in-place. PPTX: path=\"/slide[N]/shape[M]\", props can include text, bold, italic, font_size (number, points), color (hex e.g. \"FF0000\"). DOCX: path=\"/body/p[N]\", props can include text, bold, style (style name). XLSX: path=\"/SheetName/A1\", props can include value (any scalar) or formula (string starting with \"=\"). Returns { ok, path, changed: [...propNames] }.",
+      "required": [
+        "path",
+        "docPath",
+        "props"
+      ],
+      "parameters": [
+        "path",
+        "docPath",
+        "props"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_emit_widget",
       "source": "dynamic-widget",
+      "owner": "lib/dynamic-widgets.js",
       "category": "other",
       "description": "Render an interactive, sandboxed HTML/JS widget in the chat and register its actions as ephemeral tools for the rest of this conversation. Use this whenever the user wants something interactive (3D viewer, kanban, sliders, custom dashboard) — the widget defines the buttons/controls and YOU call them via the registered tool names (w_<id>__<name>). Bundle.html is the inner DOM, bundle.js is the widget script which calls `widget.on(\"toolName\", async (args) => result)` to wire each tool, and `widget.emit(event, data)` to push state. No network access inside the widget. CRITICAL: If you say \"I rebuilt it\", \"Here is the widget\", \"I attached the 3D viewer\", \"I made it rotatable\", or anything implying a widget is visible in this turn, you MUST call this tool in the same turn. When the user says \"rebuild\", \"redo it\", \"make it rotatable\", \"where is it?\", or otherwise asks you to revise a prior widget, you MUST call this tool again with the updated bundle — do not just describe the changes in prose. DO NOT use this for media playback or playlists — for audio, video, podcast lists, YouTube embeds, image carousels, or any \"play these items\" request, use the inline gen-ui ```gen-ui block with the built-in `MediaPlayer`, `Playlist`, or `Carousel` components instead (they are native, accessible, and savable to projects). Reserve `fauna_emit_widget` for genuinely interactive controls that have no gen-ui equivalent.",
       "required": [
@@ -383,11 +701,37 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
+    },
+    {
+      "name": "fauna_evaluate_worktree_parallelism",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "other",
+      "description": "Evaluate, but never execute, worktree-isolated parallelism. Requires explicit approval, clean Git state, a resolved base commit, disjoint card file scopes, independent verifiers, and completed blockers. Separately reports whether empirical conflict, verifier, rework, and cleanup metrics justify a controlled rollout.",
+      "required": [
+        "approved",
+        "candidates",
+        "repository"
+      ],
+      "parameters": [
+        "approved",
+        "candidates",
+        "completedIds",
+        "repository",
+        "runs",
+        "thresholds"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_feature_request_create",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "Append a feature request or backlog item to the active project backlog (Kanban board). Use when the user describes wanting something new, when reflection surfaces a gap, or when debate produces a follow-up. Returns the created item id. Optional fields let you drop it straight into a column or assign it.",
       "required": [
@@ -406,28 +750,37 @@
       ],
       "sideEffects": [
         "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
     },
     {
       "name": "fauna_file_search",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "file",
-      "description": "Find files by glob pattern. Faster than `find`/`ls` via fauna_shell_exec because it returns structured results and skips heavy directories (node_modules, .git, dist, build). Use this when you know the filename pattern but not the location. Examples: \"**/*.test.js\", \"src/**/auth-*.ts\", \"*.md\".",
+      "description": "Find files by glob pattern. Faster than `find`/`ls` via fauna_shell_exec because it returns structured results and skips heavy directories (node_modules, .git, dist, build). Use this when you know the filename pattern but not the location. Examples: \"**/*.test.js\", \"src/**/auth-*.ts\", \"*.md\". ALWAYS pass cwd/scope to a specific sub-directory when you know the project location — omitting it searches from the home root, which is slow.",
       "required": [
         "pattern"
       ],
       "parameters": [
         "pattern",
         "cwd",
+        "scope",
         "maxResults"
       ],
       "sideEffects": [
+        "file-access"
+      ],
+      "permissions": [
         "file-access"
       ]
     },
     {
       "name": "fauna_forget",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "memory",
       "description": "Forget a specific fact by its ID. Use when the user asks you to forget something or a fact is no longer accurate.",
       "required": [
@@ -438,13 +791,17 @@
       ],
       "sideEffects": [
         "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
     },
     {
       "name": "fauna_get_agent_instructions",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
-      "description": "Load the FULL instructions for the currently active agent. If an agent is active (the system prompt will say \"Active Agent: <name>\"), you MUST call this once at the start of every turn before doing any other work — the system prompt only contains the agent's name and short description, and the full instructions (tool-use rules, output format, workflows) live in this tool's return value. If NO agent is active, do NOT call this tool — it is a no-op in that case and you already have your full default tool set. Pass `section` to fetch only one `## Heading` block from the body when you know which part you need (saves context on large agents).",
+      "description": "Reload instructions for the currently active agent when a specific section is missing from context or when diagnosing an agent configuration. Active-agent instructions are injected automatically, so do not call this routinely at the start of a turn. Pass `section` to fetch only one `## Heading` block and save context.",
       "required": [],
       "parameters": [
         "name",
@@ -452,11 +809,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_get_reference",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "Load one reference document by name. Optionally pass a `section` to fetch only one `## Heading` block.",
       "required": [
@@ -468,11 +827,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_get_seed",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "Load one immutable Seed spec by id — the contract to check work against.",
       "required": [
@@ -483,22 +844,26 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_get_settings",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "assistant",
       "description": "Get current app settings: active model, thinking budget, max context turns, Figma MCP status.",
       "required": [],
       "parameters": [],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_get_skill",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "Load one skill body (SKILL.md) by name. Optionally pass a `section` to fetch only one `## Heading` block. Skills are progressively disclosed — only call this once you know from fauna_list_skills which skill you need.",
       "required": [
@@ -511,13 +876,15 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_grep",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "file",
-      "description": "Search file contents for a pattern (literal or regex) with line numbers. Faster and safer than running `grep -r` via fauna_shell_exec — skips binary files and node_modules, returns structured hits. Use for \"find all calls to X\" or \"where is Y defined\". For multiple potential words, use a regex with alternation (e.g. \"foo|bar|baz\") in a single call rather than separate calls.",
+      "description": "Search file contents for a pattern (literal or regex) with line numbers. Faster and safer than running `grep -r` via fauna_shell_exec — skips binary files and node_modules, returns structured hits. Use for \"find all calls to X\" or \"where is Y defined\". For multiple potential words, use a regex with alternation (e.g. \"foo|bar|baz\") in a single call rather than separate calls. ALWAYS pass cwd/scope to a specific sub-directory when you know the project location — omitting it searches from the home root across tens of thousands of files, which is extremely slow. When cwd is broad or omitted, you MUST also pass an include glob (e.g. \"**/*.ts\") to limit scope.",
       "required": [
         "query"
       ],
@@ -530,15 +897,20 @@
         "includePattern",
         "includeIgnoredFiles",
         "cwd",
+        "scope",
         "maxResults"
       ],
       "sideEffects": [
+        "file-access"
+      ],
+      "permissions": [
         "file-access"
       ]
     },
     {
       "name": "fauna_image_edit",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "media",
       "description": "Edit / inpaint an EXISTING image with a text prompt using OpenAI GPT Image. Provide the path to a source PNG/JPG and a prompt describing the change. Optionally provide a mask PNG (transparent areas = regions to edit). Returns {ok, results:[{path, url}]}. Requires an OpenAI key.",
       "required": [
@@ -556,22 +928,31 @@
       "sideEffects": [
         "mutates-state",
         "network-capable"
+      ],
+      "permissions": [
+        "mutates-state",
+        "network-capable"
       ]
     },
     {
       "name": "fauna_image_gen_status",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "media",
       "description": "Check whether AI image generation is available (i.e. whether the user has configured an OpenAI key).",
       "required": [],
       "parameters": [],
       "sideEffects": [
         "network-capable"
+      ],
+      "permissions": [
+        "network-capable"
       ]
     },
     {
       "name": "fauna_image_generate",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "media",
       "description": "Generate ORIGINAL images from a text prompt using OpenAI GPT Image (gpt-image-1). Use this when the user wants a custom/illustrated/logo/concept image that stock photos cannot provide (prefer fauna_stock_image_search for real photographs). Writes PNG(s) to disk and returns {ok, results:[{path, url, revisedPrompt}]} where url is a /api/serve-media link you can embed directly in chat markdown as ![alt](url). Requires an OpenAI key (Settings → Authentication → API Keys). For low-quality fast drafts use quality \"low\"; use \"high\" for final assets, dense text, or detailed scenes. Set background \"transparent\" for logos/icons/cutouts.",
       "required": [
@@ -588,11 +969,58 @@
       "sideEffects": [
         "mutates-state",
         "network-capable"
+      ],
+      "permissions": [
+        "mutates-state",
+        "network-capable"
       ]
+    },
+    {
+      "name": "fauna_init_design",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "other",
+      "description": "Save the project's design specification so all future UI generation is on-brand. Call this AFTER interviewing the user about their design preferences (lane, audience, colors, fonts, voice, anti-references). The saved spec is injected into every future conversation context for this project — no re-prompting needed. Returns the saved design spec path.",
+      "required": [
+        "lane"
+      ],
+      "parameters": [
+        "projectId",
+        "lane",
+        "audience",
+        "voice",
+        "colors",
+        "fonts",
+        "antiReferences",
+        "doNotUse",
+        "notes"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
+    },
+    {
+      "name": "fauna_inspect_watermarks",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "other",
+      "description": "Inspect text or a file for AI provenance marks. Layer A: invisible Unicode carriers (ZWSP, bidi, tag chars, variation selectors, space homoglyphs). File formats: plain text, Markdown, SVG, HTML, PNG (C2PA chunks), JPEG/PDF (via exiftool when available), DOCX/ODT. Returns a structured findings list with confidence levels (confirmed/probable/informational). Statistical text watermarks (Layer B) are best-effort and require an LLM rewrite pass — this tool covers deterministic Layer A only.",
+      "required": [],
+      "parameters": [
+        "text",
+        "filePath",
+        "aggressive"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_interview",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "Score how ambiguous a task/spec is (0 = crystal clear, 1 = vague) and get Socratic clarifying questions to ask the user. Use BEFORE starting autonomous work: if the score is above the gate (default 0.2), ask the returned questions instead of guessing. Deterministic — no model tokens.",
       "required": [
@@ -606,11 +1034,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_keyboard",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "project",
       "description": "Type text or press a key combo on the user's machine. action=\"type\" types literal text (Unicode-safe). action=\"key\" presses a combo like \"cmd+c\", \"shift+tab\", \"ctrl+alt+delete\". Modifier names: cmd/command/meta, shift, alt/option, ctrl/control, fn. Key names: a-z, 0-9, return/enter, tab, space, escape/esc, delete/backspace, up/down/left/right, home/end, pageup/pagedown, f1-f12. REQUIRES Accessibility permission for Fauna on macOS.",
       "required": [
@@ -623,11 +1053,32 @@
       ],
       "sideEffects": [
         "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
+    },
+    {
+      "name": "fauna_language_diagnostics",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "other",
+      "description": "PREFERRED error-checking tool for JS/TS. Get in-process TypeScript/JavaScript syntactic, semantic, and suggestion diagnostics with precise file/line/column metadata — use this BEFORE attempting to manually reason about type or import errors. Check errors after every code change to catch regressions immediately. Use fauna_diagnostics for full project build/lint commands that go beyond the TS compiler.",
+      "required": [],
+      "parameters": [
+        "cwd",
+        "path",
+        "maxResults"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_layout_pcb",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "circuit",
       "description": "Turn a circuit DSL into a physical board model: places footprints, assigns nets to copper pads, sizes the board, and (by default) auto-routes copper traces (etchings) on two layers with vias, leaving unroutable nets as airwires. Returns the board model. Use this BEFORE fauna_render_pcb / fauna_check_board / fauna_build_guide.",
       "required": [
@@ -642,11 +1093,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_lesson_create",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "media",
       "description": "Generate an interactive whiteboard lesson and mount it INLINE in chat as a sandboxed runtime widget — NOT a video file. The widget shows a 1280×720 whiteboard that animates props (text, LaTeX equations, shapes, arrows, function plots, number lines, code, molecules, embedded svg/circuits) in sync with per-scene Kokoro narration. Use this whenever the user wants to be TAUGHT something visually — \"explain\", \"teach me\", \"walk me through\", \"interactive lesson on\", \"show me how X works\", anything where a moving illustration would help more than prose. You can also ground the lesson in a specific document by passing `source` (a local file path to a .pptx / .docx / .pdf / .md / .txt / .html, or a URL) — the slide deck or article text is extracted and fed to the script generator so the lesson follows that material. CRITICAL: when the user attaches/shares a .pptx (or .ppt/.key/.odp) deck and asks for a lesson or video, you MUST pass its absolute path as `source`. The attachment fence header includes \"(path: /abs/path/to/file.pptx)\" — use that exact path. With a pptx source, the lesson auto-switches to STRICT SLIDE MODE: each original slide is rasterized to PNG and used as the backdrop, narration is generated per slide, and no generic whiteboard scenes are drawn. Skipping `source` will produce a generic invented whiteboard that ignores the deck. Returns immediately after audio synthesis; the widget then plays scene-by-scene on user gesture. Do NOT also produce a separate fauna_speak / fauna_video_create call for the same topic.",
       "required": [],
@@ -658,11 +1111,15 @@
       ],
       "sideEffects": [
         "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
     },
     {
       "name": "fauna_lesson_get",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "media",
       "description": "Load a previously generated lesson document by id. Returns the full DSL JSON including scene narration, actions, and audio URLs. Useful for inspection or re-mounting.",
       "required": [
@@ -673,55 +1130,65 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_list_circuit_symbols",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "circuit",
       "description": "List the component types supported by fauna_render_circuit/fauna_validate_circuit, with their pin names and directions. Call this FIRST when the user asks for a circuit/schematic so you know the available symbols.",
       "required": [],
       "parameters": [],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_list_footprints",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "circuit",
       "description": "List the physical PCB footprints (land patterns) available for each circuit component type, with variants (tht/smd). Call this when the user wants a PCB / board layout so you know which parts have footprints.",
       "required": [],
       "parameters": [],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_list_lesson_kinds",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "media",
       "description": "Return the catalog of prop kinds and action verbs available to lesson DSLs. Call this before drafting a lesson manually if you need a reference; otherwise fauna_lesson_create handles DSL generation internally.",
       "required": [],
       "parameters": [],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_list_models",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "assistant",
       "description": "List all available AI models. Returns model IDs, names, and vendors.",
       "required": [],
       "parameters": [],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_list_playbook",
       "source": "dynamic-widget",
+      "owner": "lib/dynamic-widgets.js",
       "category": "other",
       "description": "List saved playbook widgets the user can re-launch. Returns metadata only (no bundle source).",
       "required": [],
@@ -731,44 +1198,52 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_list_projects",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "project",
       "description": "List all projects. Returns project names, IDs, and root paths.",
       "required": [],
       "parameters": [],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_list_references",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "List all available reference documents (server maps, schemas, glossaries, architecture notes). Cheap — returns no bodies. References answer \"what is this?\" questions; for \"how do I do this?\" workflows, use fauna_list_skills instead.",
       "required": [],
       "parameters": [],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_list_seeds",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "List frozen Seed specs (newest first) with their goal and ambiguity score. Use fauna_get_seed to load one in full.",
       "required": [],
       "parameters": [],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_list_skills",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "List all available skills (name + one-line description) for the active agent and globally. Cheap — returns no skill bodies. Use this to decide which skill to load with fauna_get_skill.",
       "required": [],
@@ -777,22 +1252,26 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_list_windows",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "desktop",
       "description": "List the apps the user currently has visible on their desktop, including each window's title, position (x,y) and size (w,h), plus which app is frontmost and the main screen bounds. Use this whenever the user asks \"what apps are open\", \"which window is focused\", \"tile / arrange / move my windows\", or you need spatial context before calling fauna_arrange_windows. Works on macOS (requires Accessibility permission for Fauna) and Windows (uses User32).",
       "required": [],
       "parameters": [],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_load_widget_from_playbook",
       "source": "dynamic-widget",
+      "owner": "lib/dynamic-widgets.js",
       "category": "other",
       "description": "Re-mount a previously saved widget from the playbook. This calls fauna_emit_widget internally with the saved bundle and tool manifest — the widget will be live for the rest of this conversation.",
       "required": [
@@ -803,11 +1282,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_mouse",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "desktop",
       "description": "Control the user's mouse cursor: move, click, double-click, right-click, drag, or scroll. Uses macOS Quartz (built-in Swift) on darwin and PowerShell on Windows — no extra binaries required. REQUIRES Accessibility permission for Fauna on macOS. Coordinates are in screen pixels (origin top-left). Use fauna_list_windows first if you need the screen size, or fauna_ui_tree to find clickable elements symbolically. Actions: \"move\" (just move), \"click\" (move + left click), \"double_click\", \"right_click\", \"drag\" (press at x,y then release at toX,toY), \"scroll\" (wheel scroll dy lines at current position; positive=down).",
       "required": [
@@ -824,22 +1305,30 @@
       ],
       "sideEffects": [
         "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
     },
     {
       "name": "fauna_mouse_position",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "desktop",
       "description": "Read the current mouse cursor position (x, y in screen pixels, top-left origin). Use to verify moves or capture where the user is pointing. REQUIRES Accessibility permission for Fauna on macOS.",
       "required": [],
       "parameters": [],
       "sideEffects": [
         "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
     },
     {
       "name": "fauna_plan",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "assistant",
       "description": "Maintain a structured TODO list for the current task. Use a plan when: the task is non-trivial and spans multiple actions; there are logical phases or dependencies where sequencing matters; the user asked for more than one thing in a single prompt; you generate additional steps mid-flight. Invariants: exactly ONE item in_progress at a time; mark items completed individually (no batch completions); set an item to in_progress BEFORE working it (never jump pending → completed); finish with all items completed or explicitly canceled before ending the turn. MANDATORY: every plan MUST end with a verification/testing item that actually checks the work (e.g. \"Verify build succeeds and tests pass\", \"Run app and confirm output matches spec\", \"Lint + execute end-to-end smoke test\"). Do NOT mark the verify item completed unless you actually ran the check (shell, test runner, build, manual probe) and observed the expected result — claiming \"done\" without proof is a failure. If verification fails, add a fix item and re-run verify. High-quality plan example: [{\"id\":1,\"title\":\"Add CLI entry with file args\",\"status\":\"completed\"},{\"id\":2,\"title\":\"Parse Markdown via CommonMark\",\"status\":\"in-progress\"},{\"id\":3,\"title\":\"Apply semantic HTML template\",\"status\":\"not-started\"},{\"id\":4,\"title\":\"Handle code blocks, images, links\",\"status\":\"not-started\"},{\"id\":5,\"title\":\"Add error handling for invalid files\",\"status\":\"not-started\"},{\"id\":6,\"title\":\"Verify: run on sample.md and diff against expected.html\",\"status\":\"not-started\"}]. Low-quality plan (avoid — too vague AND missing verify): [{\"title\":\"Create CLI tool\"},{\"title\":\"Add Markdown parser\"},{\"title\":\"Convert to HTML\"}]. Pass the FULL list every call (both existing and new items).",
       "required": [
@@ -851,11 +1340,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_podcast",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "media",
       "description": "Generate a multi-voice podcast / dialogue from an ordered list of speaker turns and return ONE audio URL (plus an absolute filesystem path) covering all turns concatenated with natural pauses between speakers. Use this when the user asks for a \"podcast\", \"dialogue\", \"conversation\", \"interview\", \"two-host\", or \"multi-voice\" reading — including \"make a podcast from this article\" (you script the back-and-forth first, then call this). After calling it, emit a gen-ui block with a MediaPlayer (type:\"audio\", src: returned url, title:<show title>). Do NOT set autoplay — the user clicks Play when ready. Returns {ok, url, path, durationSec, segmentCount} — `path` is a real .mp3 on disk usable as an ffmpeg input.",
       "required": [
@@ -868,11 +1359,15 @@
       ],
       "sideEffects": [
         "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
     },
     {
       "name": "fauna_project_audit",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "project",
       "description": "Audit the active project (or a named project) and propose ≤ N concrete work items based on its architecture. Walks rootPath, summarises the file tree + key config files (package.json, README, etc.), then prompts the model for high-value feature/refactor/test/docs/ci suggestions. New items land in the project backlog with source=\"reflection\" and column=\"backlog\" for human review. Dedup is by normalised title hash. Returns {added:[{id,title,priority}], skipped:[titles], summary:{...}}. Use when the user asks \"what should we work on next?\", \"audit this project\", or after you finish a major feature and want to surface follow-ups. Be selective — quality over quantity.",
       "required": [],
@@ -882,11 +1377,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_read_file",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "file",
       "description": "Read a UTF-8 text file from disk and get the contents back in the SAME assistant turn. PREFER this over running cat/head/tail via fauna_shell_exec — it returns structured data and is the canonical way to VERIFY edits before claiming a task is done.",
       "required": [
@@ -901,11 +1398,15 @@
       ],
       "sideEffects": [
         "file-access"
+      ],
+      "permissions": [
+        "file-access"
       ]
     },
     {
       "name": "fauna_recall",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "memory",
       "description": "Search your memory for facts about the user. Returns matching facts scored by relevance and recency. Call with empty keywords for the most recent facts. Scope defaults to the active project (with global facts included).",
       "required": [],
@@ -915,28 +1416,59 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
+    },
+    {
+      "name": "fauna_record_routing_outcome",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "other",
+      "description": "Record verifier or human-correction evidence for a routing episode returned by fauna_route_skill or fauna_route_engineering_flow. This appends offline evaluation evidence and never changes routing behavior.",
+      "required": [
+        "episodeId"
+      ],
+      "parameters": [
+        "episodeId",
+        "verified",
+        "verifier",
+        "correctedSelection",
+        "retries",
+        "durationMs",
+        "cost",
+        "humanCorrection"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_references",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
-      "description": "Find JS/TS references to a symbol in the active project/cwd with line numbers. Static fallback until full LSP is available.",
+      "description": "PREFERRED tool for finding all usages of a symbol — analogous to VS Code 'Find All References'. Provide an anchor path+line+column for scope-aware language-service results; falls back to fast word-boundary index when no anchor is given. Always use this instead of fauna_grep when you need to locate every call-site, import, or reference to a known identifier — it is faster, scope-aware, and returns structured results.",
       "required": [
         "symbol"
       ],
       "parameters": [
         "cwd",
         "symbol",
+        "path",
+        "line",
+        "column",
         "maxResults"
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_remember",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "memory",
       "description": "Remember a fact about the user. Use when the user shares preferences, makes decisions, or gives context you should recall later. Facts are scoped to the active project by default; pass scope=\"global\" for facts that should apply across all projects. Use kind=\"temporal\" with expiresAt for time-bound facts (\"exam tomorrow\").",
       "required": [
@@ -952,13 +1484,15 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_rename_symbol",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
-      "description": "Conservatively rename a JS/TS identifier across the active project/cwd using word-boundary replacement. Prefer this over raw search/replace for simple identifiers; full LSP rename will supersede it later.",
+      "description": "PREFERRED tool for renaming a symbol — analogous to VS Code 'Rename Symbol'. Provide an anchor path+line+column for scope-aware language-service rename that updates every reference atomically without touching same-name identifiers in other scopes. ALWAYS prefer this over manual fauna_grep + fauna_replace_string chains when renaming a function, class, variable, or type — it is safer, faster, and correct. Pass apply:true to write changes; omit or pass apply:false to preview the workspace edit first.",
       "required": [
         "symbol",
         "newName"
@@ -966,15 +1500,21 @@
       "parameters": [
         "cwd",
         "symbol",
-        "newName"
+        "newName",
+        "path",
+        "line",
+        "column",
+        "apply"
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_render_circuit",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "circuit",
       "description": "Render a circuit schematic from a JSON DSL. Returns SVG markup the caller can embed in a gen-ui SVG block or an artifact. Component coords are in grid units (default 10 px). Wires reference \"compId.pinName\". Use fauna_list_circuit_symbols first to learn pin names.",
       "required": [
@@ -985,11 +1525,40 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
+    },
+    {
+      "name": "fauna_render_diagram",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "other",
+      "description": "Render an editorial diagram as a self-contained HTML artifact with inline SVG. Enforces the fauna design system (4px grid, Geist/Instrument Serif typography, semantic color tokens, accessible SVG contract, orthogonal connectors). Use for architecture, flowchart, sequence, ER, timeline, swimlane, org chart, layer stack, quadrant, radar, loop, nested, tree, venn, pyramid, bar, line, Gantt, scatter, state machine, high-level, process, medallion, data flow, DP integration, DP security matrix, and IT current-state diagrams. Returns { html, type } — embed html in an artifact. Always run fauna_check_diagram afterwards.",
+      "required": [
+        "diagramType",
+        "title",
+        "svg"
+      ],
+      "parameters": [
+        "diagramType",
+        "title",
+        "eyebrow",
+        "subtitle",
+        "svg",
+        "variant",
+        "size",
+        "preset",
+        "summaryCards"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_render_pcb",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "circuit",
       "description": "Render a board model (from fauna_layout_pcb) as an SVG top view: FR-4 substrate, copper traces/etchings (top=red, bottom=blue), tinned solder pads + plated drill holes, silkscreen refdes, vias, and ratsnest airwires. Returns SVG markup to embed in a gen-ui SVG block. Pass the board returned by fauna_layout_pcb.",
       "required": [],
@@ -1001,13 +1570,15 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_replace_string",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "file",
-      "description": "Replace one exact string in a file. Use only when a single localized change is clearer than a patch. For anything beyond one small substitution — multi-line edits, multiple hunks, or multi-file changes — PREFER fauna_apply_patch. The old_string must be unique; include 3–5 lines of surrounding context to disambiguate.",
+      "description": "Replace one exact string in a file. Use only when a single localized change is clearer than a patch. For anything beyond one small substitution — multi-line edits, multiple hunks, or multi-file changes — PREFER fauna_apply_patch. HARD REQUIREMENT: old_string MUST include at least 3 non-blank lines of surrounding context (before + after the lines you are actually changing). The tool enforces this — it will reject edits where old_string has fewer than 3 non-blank context lines. This prevents targeting the wrong location when similar code appears elsewhere.",
       "required": [
         "path",
         "old_string",
@@ -1021,11 +1592,15 @@
       ],
       "sideEffects": [
         "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
     },
     {
       "name": "fauna_retrieve_output",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "assistant",
       "description": "Retrieve the FULL original output of an earlier tool call that was compressed/offloaded. When a tool result ends with a marker like `retrieve with fauna_retrieve_output(\"<hash>\")`, call this with that hash to get back the complete uncompressed content (e.g. the dropped rows of a large array or the elided middle of a long log). Only call this when you genuinely need the dropped detail — the compressed view usually suffices. PREFER fauna_write_offloaded when the goal is just to land the bytes on disk — it bypasses your context entirely.",
       "required": [
@@ -1036,11 +1611,34 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
+    },
+    {
+      "name": "fauna_route_engineering_flow",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "other",
+      "description": "Route an engineering situation through Fauna's validated lifecycle graph. Returns the current flow/phase, next action, required and produced artifacts, active skills, and neighboring routes. When task state is supplied, also recommends continue, clear, handoff, subagent, or compact using the live context budget.",
+      "required": [],
+      "parameters": [
+        "situation",
+        "flow",
+        "phase",
+        "taskState",
+        "destination",
+        "nextNeedsCurrentContext",
+        "unattended"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_route_skill",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "Semantically route a task to the best skill(s). Given a natural-language description of what you are about to do, returns a ranked list of skills with a confidence score, the evidence that matched, and — when the match is uncertain — a clarifying question to ask the user. Prefer this over guessing from fauna_list_skills when the task domain is ambiguous. Load the winning skill with fauna_get_skill.",
       "required": [
@@ -1053,11 +1651,34 @@
       ],
       "sideEffects": [
         "read-only"
+      ],
+      "permissions": []
+    },
+    {
+      "name": "fauna_run_notebook",
+      "source": "dynamic-widget",
+      "owner": "lib/dynamic-widgets.js",
+      "category": "other",
+      "description": "Load or execute a Jupyter notebook (.ipynb) file. Set execute:true to run it via `jupyter nbconvert` and return outputs. Without execute, returns the saved cell source and existing outputs. Use this to inspect, run, or summarize any .ipynb notebook the user has.",
+      "required": [
+        "path"
+      ],
+      "parameters": [
+        "path",
+        "execute",
+        "timeoutSec"
+      ],
+      "sideEffects": [
+        "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
     },
     {
       "name": "fauna_save_instruction",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "Save a learned instruction to the Playbook. Use when you discover a successful strategy or pattern the user would want to reuse. The instruction persists across conversations.",
       "required": [
@@ -1071,11 +1692,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_save_widget_to_playbook",
       "source": "dynamic-widget",
+      "owner": "lib/dynamic-widgets.js",
       "category": "other",
       "description": "Save the most recently emitted widget (by widgetId) into the playbook under a memorable name so the user can re-launch it on future tasks. Optionally add a description and tags.",
       "required": [
@@ -1090,11 +1713,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_screen_context",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "desktop",
       "description": "ONE-CALL snapshot of what the user is currently looking at on their computer. Returns: frontmost app (name, bundleId, pid), focused window (title + screen bounds), display list, and a FLATTENED list of clickable/named Accessibility nodes (role, title, x/y/w/h, plus precomputed cx/cy center coords ready for fauna_mouse). Prefer this over chaining fauna_list_windows + fauna_ui_tree when starting a task in companion/Clippy mode — it gives the model immediate situational awareness in a single round-trip. Pass maxNodes (default 40) and depth (default 8) to control verbosity. macOS requires Accessibility permission.",
       "required": [],
@@ -1104,11 +1729,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_send_notification",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "Send a native OS notification to the user. Use for important alerts, completed background tasks, or urgent information that needs attention even if the user is not looking at the app.",
       "required": [
@@ -1121,11 +1748,15 @@
       ],
       "sideEffects": [
         "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
     },
     {
       "name": "fauna_set_thinking_budget",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "Set the extended thinking budget for reasoning models. The change takes effect on the next message. Use \"auto\" to let Fauna scale the budget to each question (low for simple Q&A, high for complex/agentic work).",
       "required": [
@@ -1136,11 +1767,39 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
+    },
+    {
+      "name": "fauna_setup_engineering",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "other",
+      "description": "Preview or create a repository-owned engineering contract for the active project. Generates CONTEXT.md, provider-neutral tracker operations, triage role mappings, domain language, and ADR guidance. Existing files are always preserved. Call with approved=false first and set true only after user approval.",
+      "required": [
+        "approved",
+        "tracker",
+        "triageRoles",
+        "domain",
+        "context"
+      ],
+      "parameters": [
+        "projectId",
+        "approved",
+        "tracker",
+        "triageRoles",
+        "domain",
+        "context"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_shell_exec",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "shell",
       "description": "Run a shell command server-side and get the result back in the SAME assistant turn (no client round-trip). PREFER this over markdown ```bash blocks whenever tools are available — it keeps the agent loop running so you can chain steps without asking the user to continue. Output is captured and returned. SAFE commands (ls, cat, grep, git status, npm test, etc.) execute immediately. UNSAFE/destructive commands (rm -rf, sudo, dd, mkfs, curl|sh, etc.) are refused and you must fall back to a ```bash markdown block so the user can review and approve.",
       "required": [
@@ -1156,11 +1815,16 @@
       "sideEffects": [
         "mutates-state",
         "executes-process"
+      ],
+      "permissions": [
+        "mutates-state",
+        "executes-process"
       ]
     },
     {
       "name": "fauna_simulate_circuit",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "circuit",
       "description": "Compile the circuit DSL to a SPICE netlist and run ngspice to compute real behaviour (operating-point voltages/currents, transient waveforms, AC sweeps, DC sweeps). Requires `ngspice` on PATH; if missing, returns the netlist and an install hint. Use this for questions like \"does it oscillate\", \"what is V_out\", \"what current flows\".",
       "required": [
@@ -1172,11 +1836,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_speak",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "media",
       "description": "Synthesize text into an audio file with the bundled Kokoro neural TTS, returning a URL the renderer can play AND an absolute filesystem path you can hand to ffmpeg / shell tools. Use this when the user asks to \"read aloud\", \"read me this article\", \"say this\", \"narrate\", or otherwise wants spoken audio for a single chunk of text. After calling it, emit a gen-ui block with a MediaPlayer (type:\"audio\", src: returned url, title: <short label>) so the audio appears inline. Do NOT set autoplay — the user clicks Play when ready. Do NOT use this for multi-speaker podcasts — use fauna_podcast for that. Returns {ok, url, path, durationSec, voice} — `path` is a real .mp3 on disk usable as an ffmpeg input (e.g. `ffmpeg -i <path> -i video.mp4 -c:v copy -shortest out.mp4`).",
       "required": [
@@ -1188,11 +1854,15 @@
       ],
       "sideEffects": [
         "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
     },
     {
       "name": "fauna_stock_image_download",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "media",
       "description": "Download stock images (typically the results of fauna_stock_image_search) to a local folder so they can be referenced from generated HTML, slide decks, PDFs, etc. Returns the same items with an added `path` field per image. Always credit the photographer (returned in the search results) in any produced artefact.",
       "required": [
@@ -1206,22 +1876,30 @@
       ],
       "sideEffects": [
         "network-capable"
+      ],
+      "permissions": [
+        "network-capable"
       ]
     },
     {
       "name": "fauna_stock_image_providers",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "media",
       "description": "List which stock-image providers the user has configured keys for (Pexels / Unsplash / Pixabay).",
       "required": [],
       "parameters": [],
       "sideEffects": [
         "network-capable"
+      ],
+      "permissions": [
+        "network-capable"
       ]
     },
     {
       "name": "fauna_stock_image_search",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "media",
       "description": "Search Pexels / Unsplash / Pixabay for photographs and return remote URLs + credit info. Auto-uses whichever provider key the user has configured (fallback in that order). Returns {ok, results:[{url, thumb, width, height, photographer, sourceUrl, source}]}. Use BEFORE generating websites, slide decks, blog posts, or anything that benefits from real imagery. To embed straight away use the returned url; to bundle into a project folder follow up with fauna_stock_image_download.",
       "required": [
@@ -1236,11 +1914,15 @@
       ],
       "sideEffects": [
         "network-capable"
+      ],
+      "permissions": [
+        "network-capable"
       ]
     },
     {
       "name": "fauna_substep",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "assistant",
       "description": "Stream a tiny \"what I am doing right now\" line that appears NESTED under the current in-progress plan step. Use this INSTEAD of long narrative prose between actions. Each call replaces the previous live substep for that step (the user only sees the latest). When the parent plan item flips to completed, all its substeps collapse into a click-to-expand history. Keep messages SHORT (3-8 words, action verbs): \"Reading vite.config.ts\", \"Wiring API route\", \"Creating migration 0001_init\". Call this BEFORE each tool action or whenever you would otherwise write a status sentence.",
       "required": [
@@ -1252,11 +1934,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_switch_model",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "assistant",
       "description": "Switch the active AI model. The change takes effect on the next message (not the current one).",
       "required": [
@@ -1267,13 +1951,15 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_symbols",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
-      "description": "List JS/TS workspace symbols (classes, functions, variables, types) for the active project/cwd. Static fallback until full LSP is available.",
+      "description": "List indexed workspace declarations (classes, functions, variables, and types) across common source languages. Results identify the workspace-index heuristic engine; use language-service results when a future LSP adapter is available.",
       "required": [],
       "parameters": [
         "cwd",
@@ -1282,11 +1968,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_terminal",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "Persistent terminal sessions for interactive/project work. Actions: start, send, output, list, kill. Use when a command needs preserved cwd/env/session or interactive follow-up; use fauna_shell_exec for simple one-shot commands.",
       "required": [
@@ -1302,11 +1990,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_test_results",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "Run a test command or parse supplied test output into structured failures and summary data. Supports Vitest/Jest-like, pytest, and go test output patterns.",
       "required": [],
@@ -1318,11 +2008,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_ui_tree",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "desktop",
       "description": "Get the Accessibility tree of the user's focused window — every button, link, text field, menu item, etc. with role, title, screen bounds (x,y,w,h), and tree path. Use this BEFORE fauna_mouse to click elements symbolically (read coordinates from the tree) instead of guessing pixels. Pass clickableOnly=true to filter to interactive elements only. macOS uses AXUIElement; Windows uses UI Automation. REQUIRES Accessibility permission for Fauna on macOS.",
       "required": [],
@@ -1332,11 +2024,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_unstuck",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "When the loop is stalled (repeating the same failed approach), get an ordered rotation of lateral-thinking personas (contrarian, simplifier, researcher, hacker, architect) to reframe the problem. Take one divergent pass per persona until one yields a concrete new next action.",
       "required": [],
@@ -1346,11 +2040,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_validate_circuit",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "circuit",
       "description": "Structural lint of a circuit DSL (no simulation). Detects power shorts, dangling pins, floating islands, duplicate drivers, reversed polarized components, and missing decoupling. ALWAYS call this after fauna_render_circuit and surface errors/warnings to the user.",
       "required": [
@@ -1361,11 +2057,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_verify_build",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "Verify a scaffolded app actually builds. Runs `npm run build` (or the script you specify) in the project root, returns exit code + last 80 lines of output. MANDATORY before marking a build/scaffold plan complete — do NOT claim success without calling this and seeing exitCode:0.",
       "required": [],
@@ -1377,11 +2075,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_video_create",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "media",
       "description": "Create a short-form video generation job and emit the Video Studio preview widget. The pipeline (script → terms → audio → subtitle → footage → render) starts automatically and streams progress; the widget shows live updates. Use whenever the user asks to make / generate / produce a video, short, Reel, TikTok, or Shorts. Do NOT also call fauna_video_run_all — it's already running. Set autorun:false only if the user wants to edit the params before kicking off render. AFTER calling this tool, keep your chat reply to ONE short sentence (e.g. \"On it — Video Studio is below.\"). The widget already shows the subject, duration, aspect, voice, progress chips, and iteration buttons — do NOT re-list any of that in chat, and do NOT suggest next actions like \"you can edit the script\" / \"switch to 16:9\" since those buttons are visible in the widget itself.",
       "required": [
@@ -1399,11 +2099,16 @@
       "sideEffects": [
         "mutates-state",
         "network-capable"
+      ],
+      "permissions": [
+        "mutates-state",
+        "network-capable"
       ]
     },
     {
       "name": "fauna_video_get",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "media",
       "description": "Return current job state — params, artifacts, steps completed, error info, and asset paths (final.mp4, audio.mp3, subtitles.srt).",
       "required": [
@@ -1414,22 +2119,30 @@
       ],
       "sideEffects": [
         "network-capable"
+      ],
+      "permissions": [
+        "network-capable"
       ]
     },
     {
       "name": "fauna_video_list",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "media",
       "description": "List all video jobs (most recent first). Returns id, subject, state, and timestamps.",
       "required": [],
       "parameters": [],
       "sideEffects": [
         "network-capable"
+      ],
+      "permissions": [
+        "network-capable"
       ]
     },
     {
       "name": "fauna_video_patch",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "file",
       "description": "Edit a job between steps. Set any of {subject, durationSec, aspect, voice, language, script, terms, bgmFile}. Patching script auto-invalidates audio/subtitle/render so they re-run; changing voice invalidates audio onward; aspect invalidates materials+render.",
       "required": [
@@ -1449,11 +2162,16 @@
       "sideEffects": [
         "mutates-state",
         "network-capable"
+      ],
+      "permissions": [
+        "mutates-state",
+        "network-capable"
       ]
     },
     {
       "name": "fauna_video_run_all",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "media",
       "description": "Run the entire pipeline for a job end-to-end (script → render). Idempotent — already-completed steps are skipped. Streams progress as tool_call events.",
       "required": [
@@ -1465,11 +2183,16 @@
       "sideEffects": [
         "mutates-state",
         "network-capable"
+      ],
+      "permissions": [
+        "mutates-state",
+        "network-capable"
       ]
     },
     {
       "name": "fauna_video_step",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "media",
       "description": "Run a single pipeline step. Use to re-run a specific step after editing (e.g. step=\"render\" after the user tweaks the script).",
       "required": [
@@ -1482,11 +2205,15 @@
       ],
       "sideEffects": [
         "network-capable"
+      ],
+      "permissions": [
+        "network-capable"
       ]
     },
     {
       "name": "fauna_workitem_claim",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "project",
       "description": "Mark that you are taking ownership of a work item. Sets claimedBy=\"ai:<agent>\" so other AI agents skip it and humans can see who is on the card. Call this right before you start the work, typically alongside a move to in_progress.",
       "required": [
@@ -1498,11 +2225,15 @@
       ],
       "sideEffects": [
         "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
     },
     {
       "name": "fauna_workitem_comment",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "project",
       "description": "Post a comment on a work item — status update, question for the user, blocker, link to relevant code. Comments appear in the card modal and are visible to humans. Use this to leave breadcrumbs when handing the card off or pausing for input.",
       "required": [
@@ -1516,11 +2247,15 @@
       ],
       "sideEffects": [
         "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
     },
     {
       "name": "fauna_workitem_move",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "project",
       "description": "Move a work item between Kanban columns. Use this when you finish a phase of work (move \"in_progress\" → \"review\", then \"review\" → \"done\"). The AI may only move cards forward (todo → in_progress → review → done → archived). Returns the updated item.",
       "required": [
@@ -1535,13 +2270,71 @@
       ],
       "sideEffects": [
         "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
+    },
+    {
+      "name": "fauna_workitem_record_diagnosis",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "project",
+      "description": "Validate and attach feedback-loop-first bug diagnosis evidence to a Kanban work-item run. Requires one command that failed before and passed after the fix, multiple ranked falsifiable hypotheses, a regression test with red/green evidence, and confirmation that temporary instrumentation was removed.",
+      "required": [
+        "itemId",
+        "reproduction",
+        "hypotheses",
+        "regressionTest",
+        "instrumentationRemoved"
+      ],
+      "parameters": [
+        "itemId",
+        "projectId",
+        "reproduction",
+        "hypotheses",
+        "regressionTest",
+        "instrumentationRemoved"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
+    },
+    {
+      "name": "fauna_workitem_record_review",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "project",
+      "description": "Validate and attach isolated Standards and Spec review reports to a Kanban work-item run. Requires a resolved non-empty three-dot diff, explicit spec provenance or no-spec status, distinct reviewer context ids, file/line evidence for every finding, and verifier results.",
+      "required": [
+        "itemId",
+        "diff",
+        "spec",
+        "standards",
+        "specReview",
+        "verification"
+      ],
+      "parameters": [
+        "itemId",
+        "projectId",
+        "diff",
+        "spec",
+        "standards",
+        "specReview",
+        "verification"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_workitem_update",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "project",
-      "description": "Edit a work item's title, body, acceptance criteria, priority, tags, assignee, or verifyCommand. Use this when you refine a card after research or when you discover the original scope was wrong. Set `verifyCommand` to a shell command (e.g. \"npx vitest run tests/my-feature.test.js\") so the autopilot can prove the work is done before allowing a move to \"done\". Does NOT move columns — use fauna_workitem_move for that.",
+      "description": "Edit a work item's title, body, acceptance criteria, priority, tags, assignee, verifyCommand, or fileScope. Use this when you refine a card after research or when you discover the original scope was wrong. Set `verifyCommand` to a shell command (e.g. \"npx vitest run tests/my-feature.test.js\") so the autopilot can prove the work is done before allowing a move to \"done\". `fileScope` is advisory unless the card enters a worktree-parallel evaluation. Does NOT move columns — use fauna_workitem_move for that.",
       "required": [
         "itemId"
       ],
@@ -1554,15 +2347,20 @@
         "tags",
         "assignee",
         "verifyCommand",
+        "fileScope",
         "projectId"
       ],
       "sideEffects": [
+        "mutates-state"
+      ],
+      "permissions": [
         "mutates-state"
       ]
     },
     {
       "name": "fauna_workitem_verify",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "project",
       "description": "Run the verifier for a Kanban work item and record the result on the card. Resolution order for the command: 1) the card's `verifyCommand` (per-card override, settable via fauna_workitem_update), 2) the project's `qa.command`, 3) none → skipped pass. Runs the shell command with cwd=project.rootPath, captures stdout/stderr (clipped to 8 KB), times out at 5 min. On exit-code 0 the card is marked verified=true and you may move it to \"done\"; non-zero blocks the done move. MUST be called before fauna_workitem_move to column=\"done\" on any project that has a verifier — otherwise the move is rejected. The result is also appended as a comment.",
       "required": [
@@ -1575,11 +2373,13 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_workspace_context",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "other",
       "description": "Resolve the active Fauna workspace context. Project conversations return project root/read/write/validation scope; non-project conversations return document/global context and explicit cwd scope. Call before coding, diagnostics, tests, or terminal work when scope is unclear.",
       "required": [],
@@ -1591,11 +2391,32 @@
       ],
       "sideEffects": [
         "read-only"
-      ]
+      ],
+      "permissions": []
+    },
+    {
+      "name": "fauna_workspace_search",
+      "source": "self",
+      "owner": "self-tools.js",
+      "category": "other",
+      "description": "Ranked natural-language search over indexed workspace source and text files. Use when you know the behavior or concept but not the exact identifier or filename. Returns the best file/line snippets with relevance scores. For exact strings or regex, use fauna_grep; for known identifiers, use fauna_definition or fauna_references.",
+      "required": [
+        "query"
+      ],
+      "parameters": [
+        "query",
+        "cwd",
+        "maxResults"
+      ],
+      "sideEffects": [
+        "read-only"
+      ],
+      "permissions": []
     },
     {
       "name": "fauna_write_file",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "file",
       "description": "Write a brand-new file or fully replace one. PREFER fauna_apply_patch for edits to existing files — only reach for fauna_write_file when the file does not exist yet or you are replacing it wholesale. Writes server-side with temp+rename and returns path/bytes/sha256 without rendering file bytes in chat.",
       "required": [
@@ -1616,11 +2437,16 @@
       "sideEffects": [
         "mutates-state",
         "file-access"
+      ],
+      "permissions": [
+        "mutates-state",
+        "file-access"
       ]
     },
     {
       "name": "fauna_write_files",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "file",
       "description": "Fast VS Code-style bulk file write. Prefer this for projects and multi-file changes instead of file-plan markdown. Preflights all files, writes server-side with temp+rename, and returns compact results.",
       "required": [
@@ -1635,11 +2461,16 @@
       "sideEffects": [
         "mutates-state",
         "file-access"
+      ],
+      "permissions": [
+        "mutates-state",
+        "file-access"
       ]
     },
     {
       "name": "fauna_write_offloaded",
       "source": "self",
+      "owner": "self-tools.js",
       "category": "file",
       "description": "Write the FULL original of an offloaded tool result directly to disk WITHOUT loading the bytes through your context. Use this whenever you see an offload marker like `[fauna] ⚠️ OUTPUT TRUNCATED ... hash \"<hash>\"` and your goal is to save that content (CSV, JSON dump, log) to a file. This is dramatically cheaper than fauna_retrieve_output + fauna_write_file because the bytes never pass through the model. Returns {ok, path, bytes, sha256, op}. Set append:true to append to an existing file (use this for batched dumps).",
       "required": [
@@ -1654,7 +2485,516 @@
       ],
       "sideEffects": [
         "mutates-state"
+      ],
+      "permissions": [
+        "mutates-state"
       ]
+    }
+  ],
+  "customizations": [
+    {
+      "name": "ask-fauna",
+      "kind": "skill",
+      "source": "skills/ask-fauna/SKILL.md",
+      "owner": "fauna-engineering",
+      "description": "Find the right Fauna engineering flow and next skill for the situation you are in.",
+      "permissions": [],
+      "maturity": "promoted",
+      "availability": {
+        "default": true,
+        "conditions": []
+      },
+      "evidence": [
+        "tests/skill-governance.test.js",
+        "tests/skill-catalog.test.js",
+        "skills/governance.json"
+      ],
+      "evidenceReviewWindowDays": 90,
+      "rollback": {
+        "condition": "Any golden route, behavioral evaluation, compatibility check, or blocking security scan regresses.",
+        "action": "demote-to-in-progress"
+      },
+      "validation": {
+        "ok": true,
+        "errors": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "code-review-and-quality",
+      "kind": "skill",
+      "source": "skills/code-review-and-quality/SKILL.md",
+      "owner": "fauna-engineering",
+      "description": "Performs isolated Standards and Spec code-review passes before merge, then records evidence on the work-item run. Use when a Kanban card enters review, when evaluating code another agent produced, or before merging a change.",
+      "permissions": [],
+      "maturity": "promoted",
+      "availability": {
+        "default": true,
+        "conditions": []
+      },
+      "evidence": [
+        "tests/skill-governance.test.js",
+        "tests/skill-catalog.test.js",
+        "skills/governance.json"
+      ],
+      "evidenceReviewWindowDays": 90,
+      "rollback": {
+        "condition": "Any golden route, behavioral evaluation, compatibility check, or blocking security scan regresses.",
+        "action": "demote-to-in-progress"
+      },
+      "validation": {
+        "ok": true,
+        "errors": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "codebase-design",
+      "kind": "skill",
+      "source": "skills/codebase-design/SKILL.md",
+      "owner": "fauna-engineering",
+      "description": "Provides shared vocabulary and decision rules for module boundaries, public interfaces, ownership, dependencies, and migration structure. Use when a change crosses modules, introduces an abstraction, moves responsibilities, changes dependency direction, or requires an architectural tradeoff.",
+      "permissions": [],
+      "maturity": "promoted",
+      "availability": {
+        "default": true,
+        "conditions": []
+      },
+      "evidence": [
+        "tests/skill-governance.test.js",
+        "tests/skill-catalog.test.js",
+        "skills/governance.json"
+      ],
+      "evidenceReviewWindowDays": 90,
+      "rollback": {
+        "condition": "Any golden route, behavioral evaluation, compatibility check, or blocking security scan regresses.",
+        "action": "demote-to-in-progress"
+      },
+      "validation": {
+        "ok": true,
+        "errors": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "debugging-and-error-recovery",
+      "kind": "skill",
+      "source": "skills/debugging-and-error-recovery/SKILL.md",
+      "owner": "fauna-engineering",
+      "description": "Deprecated compatibility workflow. Use when migrating an explicit debugging-and-error-recovery reference to the promoted diagnosing-bugs skill.",
+      "permissions": [],
+      "maturity": "deprecated",
+      "availability": {
+        "default": true,
+        "conditions": []
+      },
+      "evidence": [
+        "tests/skill-governance.test.js",
+        "tests/skill-catalog.test.js",
+        "skills/governance.json"
+      ],
+      "evidenceReviewWindowDays": 90,
+      "rollback": {
+        "condition": "Any golden route, behavioral evaluation, compatibility check, or blocking security scan regresses.",
+        "action": "demote-to-in-progress"
+      },
+      "validation": {
+        "ok": true,
+        "errors": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "diagnosing-bugs",
+      "kind": "skill",
+      "source": "skills/diagnosing-bugs/SKILL.md",
+      "owner": "fauna-engineering",
+      "description": "Build a red-capable feedback loop before diagnosing and fixing broken behavior. Use when debugging a confirmed bug, regression, crash, flaky failure, or incorrect output that needs root-cause evidence and a regression test.",
+      "permissions": [],
+      "maturity": "promoted",
+      "availability": {
+        "default": true,
+        "conditions": []
+      },
+      "evidence": [
+        "tests/skill-governance.test.js",
+        "tests/skill-catalog.test.js",
+        "skills/governance.json"
+      ],
+      "evidenceReviewWindowDays": 90,
+      "rollback": {
+        "condition": "Any golden route, behavioral evaluation, compatibility check, or blocking security scan regresses.",
+        "action": "demote-to-in-progress"
+      },
+      "validation": {
+        "ok": true,
+        "errors": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "diagram-design",
+      "kind": "skill",
+      "source": "skills/diagram-design/SKILL.md",
+      "owner": "fauna-engineering",
+      "description": "Create editorial architecture, flowchart, sequence, ER, state machine, timeline, swimlane, quadrant, radar, loop, nested, tree, org chart, layer stack, Venn, pyramid, bar, line, Gantt, scatter, high-level, process, medallion, data flow, IT current-state, DP integration, and DP security matrix diagrams. Use when producing standalone HTML/SVG visuals, fauna-native circuits or PCB views, or redrawing draw.io and Mermaid sources.",
+      "permissions": [],
+      "maturity": "promoted",
+      "availability": {
+        "default": true,
+        "conditions": []
+      },
+      "evidence": [
+        "tests/skill-governance.test.js",
+        "tests/skill-catalog.test.js",
+        "skills/governance.json"
+      ],
+      "evidenceReviewWindowDays": 90,
+      "rollback": {
+        "condition": "Any golden route, behavioral evaluation, compatibility check, or blocking security scan regresses.",
+        "action": "demote-to-in-progress"
+      },
+      "validation": {
+        "ok": true,
+        "errors": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "domain-modeling",
+      "kind": "skill",
+      "source": "skills/domain-modeling/SKILL.md",
+      "owner": "fauna-engineering",
+      "description": "Establishes precise domain language, concepts, invariants, and context boundaries before specifications or implementation choices harden. Use when requirements use ambiguous business terms, multiple names describe the same concept, one term has conflicting meanings, or behavior depends on domain rules.",
+      "permissions": [],
+      "maturity": "promoted",
+      "availability": {
+        "default": true,
+        "conditions": []
+      },
+      "evidence": [
+        "tests/skill-governance.test.js",
+        "tests/skill-catalog.test.js",
+        "skills/governance.json"
+      ],
+      "evidenceReviewWindowDays": 90,
+      "rollback": {
+        "condition": "Any golden route, behavioral evaluation, compatibility check, or blocking security scan regresses.",
+        "action": "demote-to-in-progress"
+      },
+      "validation": {
+        "ok": true,
+        "errors": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "figma-design",
+      "kind": "skill",
+      "source": "skills/figma-design/SKILL.md",
+      "owner": "fauna-engineering",
+      "description": "Design work in Figma via the figma_execute tool. Use whenever the user asks to design, mock up, style, lay out, restyle, prototype, or wireframe anything in Figma — dashboards, landing pages, marketing pages, cards, components, icon sets, spec pages, or design-system pieces. Also use for auto-layout audits, palette suggestions, and visual QA on an existing frame.",
+      "permissions": [],
+      "maturity": "promoted",
+      "availability": {
+        "default": true,
+        "conditions": []
+      },
+      "evidence": [
+        "tests/skill-governance.test.js",
+        "tests/skill-catalog.test.js",
+        "skills/governance.json"
+      ],
+      "evidenceReviewWindowDays": 90,
+      "rollback": {
+        "condition": "Any golden route, behavioral evaluation, compatibility check, or blocking security scan regresses.",
+        "action": "demote-to-in-progress"
+      },
+      "validation": {
+        "ok": true,
+        "errors": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "incremental-implementation",
+      "kind": "skill",
+      "source": "skills/incremental-implementation/SKILL.md",
+      "owner": "fauna-engineering",
+      "description": "Implements features in thin, verifiable vertical slices instead of one large change. Use when implementing any change that touches more than one file, when adding a new feature, or any time the work could be split into multiple commits.",
+      "permissions": [],
+      "maturity": "promoted",
+      "availability": {
+        "default": true,
+        "conditions": []
+      },
+      "evidence": [
+        "tests/skill-governance.test.js",
+        "tests/skill-catalog.test.js",
+        "skills/governance.json"
+      ],
+      "evidenceReviewWindowDays": 90,
+      "rollback": {
+        "condition": "Any golden route, behavioral evaluation, compatibility check, or blocking security scan regresses.",
+        "action": "demote-to-in-progress"
+      },
+      "validation": {
+        "ok": true,
+        "errors": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "pptx",
+      "kind": "skill",
+      "source": "skills/pptx/SKILL.md",
+      "owner": "fauna-engineering",
+      "description": "Use when a .pptx or .potx file is involved in any way — as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx or .potx file (even if the extracted content will be used elsewhere, like in an email or summary); editing, modifying, or updating existing presentations; combining or splitting slide files; working with templates (.potx), layouts, speaker notes, or comments. Trigger whenever the user mentions \\\"deck,\\\" \\\"slides,\\\" \\\"presentation,\\\" or references a .pptx or .potx filename, regardless of what they plan to do with the content afterward. If a .pptx or .potx file needs to be opened, created, or touched, use this skill.",
+      "permissions": [],
+      "maturity": "promoted",
+      "availability": {
+        "default": true,
+        "conditions": []
+      },
+      "evidence": [
+        "tests/skill-governance.test.js",
+        "tests/skill-catalog.test.js",
+        "skills/governance.json"
+      ],
+      "evidenceReviewWindowDays": 90,
+      "rollback": {
+        "condition": "Any golden route, behavioral evaluation, compatibility check, or blocking security scan regresses.",
+        "action": "demote-to-in-progress"
+      },
+      "validation": {
+        "ok": true,
+        "errors": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "pr-writer",
+      "kind": "skill",
+      "source": "skills/pr-writer/SKILL.md",
+      "owner": "fauna-engineering",
+      "description": "Write a pull request description or commit message. Use whenever the user asks to draft, improve, summarize, or review a PR description, PR body, merge request text, commit message, or changelog entry. Also use when the user says \\\"open a PR\\\", \\\"write the PR\\\", \\\"summarize these commits\\\", or references a diff / patch that needs a human-readable summary.",
+      "permissions": [],
+      "maturity": "promoted",
+      "availability": {
+        "default": true,
+        "conditions": []
+      },
+      "evidence": [
+        "tests/skill-governance.test.js",
+        "tests/skill-catalog.test.js",
+        "skills/governance.json"
+      ],
+      "evidenceReviewWindowDays": 90,
+      "rollback": {
+        "condition": "Any golden route, behavioral evaluation, compatibility check, or blocking security scan regresses.",
+        "action": "demote-to-in-progress"
+      },
+      "validation": {
+        "ok": true,
+        "errors": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "setup-fauna-engineering",
+      "kind": "skill",
+      "source": "skills/setup-fauna-engineering/SKILL.md",
+      "owner": "fauna-engineering",
+      "description": "Establish a repository-owned engineering contract for Fauna. Use when onboarding a project that lacks durable context, provider-neutral issue-tracker operations, triage role mappings, domain language, or ADR guidance.",
+      "permissions": [],
+      "maturity": "promoted",
+      "availability": {
+        "default": true,
+        "conditions": []
+      },
+      "evidence": [
+        "tests/skill-governance.test.js",
+        "tests/skill-catalog.test.js",
+        "skills/governance.json"
+      ],
+      "evidenceReviewWindowDays": 90,
+      "rollback": {
+        "condition": "Any golden route, behavioral evaluation, compatibility check, or blocking security scan regresses.",
+        "action": "demote-to-in-progress"
+      },
+      "validation": {
+        "ok": true,
+        "errors": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "simple-english",
+      "kind": "skill",
+      "source": "skills/simple-english/SKILL.md",
+      "owner": "fauna-engineering",
+      "description": "|",
+      "permissions": [],
+      "maturity": "promoted",
+      "availability": {
+        "default": true,
+        "conditions": []
+      },
+      "evidence": [
+        "tests/skill-governance.test.js",
+        "tests/skill-catalog.test.js",
+        "skills/governance.json"
+      ],
+      "evidenceReviewWindowDays": 90,
+      "rollback": {
+        "condition": "Any golden route, behavioral evaluation, compatibility check, or blocking security scan regresses.",
+        "action": "demote-to-in-progress"
+      },
+      "validation": {
+        "ok": true,
+        "errors": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "spec-driven-development",
+      "kind": "skill",
+      "source": "skills/spec-driven-development/SKILL.md",
+      "owner": "fauna-engineering",
+      "description": "Defines what is being built before any code is written. Use when a Kanban card enters the backlog without acceptance criteria, when starting a new feature or significant change, or when the requirements are ambiguous enough that two engineers could implement the task differently.",
+      "permissions": [],
+      "maturity": "promoted",
+      "availability": {
+        "default": true,
+        "conditions": []
+      },
+      "evidence": [
+        "tests/skill-governance.test.js",
+        "tests/skill-catalog.test.js",
+        "skills/governance.json"
+      ],
+      "evidenceReviewWindowDays": 90,
+      "rollback": {
+        "condition": "Any golden route, behavioral evaluation, compatibility check, or blocking security scan regresses.",
+        "action": "demote-to-in-progress"
+      },
+      "validation": {
+        "ok": true,
+        "errors": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "test-driven-development",
+      "kind": "skill",
+      "source": "skills/test-driven-development/SKILL.md",
+      "owner": "fauna-engineering",
+      "description": "Drives development with tests written before the code. Use when implementing any logic, fixing any bug, or changing any behavior. Use when you need to prove that code works rather than asserting that it \"looks right\".",
+      "permissions": [],
+      "maturity": "promoted",
+      "availability": {
+        "default": true,
+        "conditions": []
+      },
+      "evidence": [
+        "tests/skill-governance.test.js",
+        "tests/skill-catalog.test.js",
+        "skills/governance.json"
+      ],
+      "evidenceReviewWindowDays": 90,
+      "rollback": {
+        "condition": "Any golden route, behavioral evaluation, compatibility check, or blocking security scan regresses.",
+        "action": "demote-to-in-progress"
+      },
+      "validation": {
+        "ok": true,
+        "errors": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "to-tickets",
+      "kind": "skill",
+      "source": "skills/to-tickets/SKILL.md",
+      "owner": "fauna-engineering",
+      "description": "Convert an accepted specification into narrow, independently verifiable Kanban tickets with explicit dependency edges. Use for multi-session work after scope and acceptance criteria are agreed. Preview the graph and obtain user approval before publishing cards.",
+      "permissions": [],
+      "maturity": "promoted",
+      "availability": {
+        "default": true,
+        "conditions": []
+      },
+      "evidence": [
+        "tests/skill-governance.test.js",
+        "tests/skill-catalog.test.js",
+        "skills/governance.json"
+      ],
+      "evidenceReviewWindowDays": 90,
+      "rollback": {
+        "condition": "Any golden route, behavioral evaluation, compatibility check, or blocking security scan regresses.",
+        "action": "demote-to-in-progress"
+      },
+      "validation": {
+        "ok": true,
+        "errors": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "using-fauna-skills",
+      "kind": "skill",
+      "source": "skills/using-fauna-skills/SKILL.md",
+      "owner": "fauna-engineering",
+      "description": "Discovers and invokes Fauna skills. Use when starting a session or deciding which skill applies to the current task. This is the meta-skill that governs how all other skills are loaded via fauna_list_skills / fauna_get_skill.",
+      "permissions": [],
+      "maturity": "promoted",
+      "availability": {
+        "default": true,
+        "conditions": []
+      },
+      "evidence": [
+        "tests/skill-governance.test.js",
+        "tests/skill-catalog.test.js",
+        "skills/governance.json"
+      ],
+      "evidenceReviewWindowDays": 90,
+      "rollback": {
+        "condition": "Any golden route, behavioral evaluation, compatibility check, or blocking security scan regresses.",
+        "action": "demote-to-in-progress"
+      },
+      "validation": {
+        "ok": true,
+        "errors": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "watermarks",
+      "kind": "skill",
+      "source": "skills/watermarks/SKILL.md",
+      "owner": "fauna-engineering",
+      "description": "Remove AI provenance marks and document watermarks from content you own. Use when stripping invisible Unicode, C2PA metadata, vendor provenance, or visible watermark layers from text and files.",
+      "permissions": [],
+      "maturity": "promoted",
+      "availability": {
+        "default": true,
+        "conditions": []
+      },
+      "evidence": [
+        "tests/skill-governance.test.js",
+        "tests/skill-catalog.test.js",
+        "skills/governance.json"
+      ],
+      "evidenceReviewWindowDays": 90,
+      "rollback": {
+        "condition": "Any golden route, behavioral evaluation, compatibility check, or blocking security scan regresses.",
+        "action": "demote-to-in-progress"
+      },
+      "validation": {
+        "ok": true,
+        "errors": [],
+        "warnings": []
+      }
     }
   ]
 }

@@ -101,7 +101,16 @@ describe('PR4.2 startScheduler orphan-task recovery sweep', () => {
     stopScheduler();
     const t = readTasks().find(x => x.id === 't1');
     expect(t.status).toBe('scheduled');
-    expect(t.history.some(h => h.event === 'recovered')).toBe(true);
+    const recovered = t.history.find(h => h.event === 'recovered');
+    expect(recovered).toMatchObject({
+      schemaVersion: 1,
+      type: 'task.recovered',
+      source: 'task-manager',
+      taskId: 't1',
+      event: 'recovered',
+    });
+    expect(recovered.eventId).toEqual(expect.any(String));
+    expect(recovered.timestamp).toBe(recovered.ts);
   });
 
   it('fails a stuck one-time task instead of rescheduling', () => {

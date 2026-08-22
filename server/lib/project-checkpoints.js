@@ -25,6 +25,7 @@ import crypto from 'crypto';
 import { execFileSync, spawnSync } from 'child_process';
 
 import { RECOVERY_DIR } from '../copilot/auth.js';
+import { createExecutionEvent } from '../../lib/execution-event.js';
 
 const ROOT_DIR = path.join(RECOVERY_DIR, 'projects');
 
@@ -233,10 +234,17 @@ export function createCheckpoint(project, opts = {}) {
     fs.writeFileSync(path.join(cpDir, 'notes.md'), String(opts.note), 'utf8');
   }
 
-  const meta = {
+  const createdAt = new Date().toISOString();
+  const meta = createExecutionEvent({
+    type: 'checkpoint.created',
+    source: 'project-checkpoints',
+    projectId,
+    outcome: 'created',
+    checkpointNumber: number,
     number,
     title: String(opts.title || _autoTitle(opts.trigger, files.length)).slice(0, 200),
-    createdAt: new Date().toISOString(),
+    createdAt,
+    timestamp: Date.parse(createdAt),
     trigger: opts.trigger || 'manual',
     rootPath,
     isGitRepo,
@@ -245,7 +253,7 @@ export function createCheckpoint(project, opts = {}) {
     fileCount: files.length,
     totalBytes,
     files,
-  };
+  });
   fs.writeFileSync(path.join(cpDir, 'meta.json'), JSON.stringify(meta, null, 2), 'utf8');
 
   // 3) Update index, run GC

@@ -58,6 +58,8 @@
     "version:set": "node scripts/version.cjs set",
     "release:check": "node scripts/validate-release.cjs",
     "gen:capabilities": "node scripts/gen-capabilities.cjs",
+    "bench:core": "node scripts/benchmark-core.mjs",
+    "routing:report": "node scripts/report-routing-evidence.mjs",
     "skills:import": "node scripts/import-ecc.js",
     "skills:update": "node scripts/import-ecc.js --force",
     "skills:check": "node scripts/validate-skills.js"

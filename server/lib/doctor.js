@@ -18,14 +18,77 @@
 import { createRequire } from 'module';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const _require = createRequire(import.meta.url);
 const execFileAsync = promisify(execFile);
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 const OK = 'ok';
 const WARN = 'warn';
 const FAIL = 'fail';
 const OFF = 'off';
+
+function _readJson(file, fallback) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return fallback; }
+}
+
+export function buildReadinessSummary(report, inputs = {}) {
+  const checks = Array.isArray(report?.checks) ? report.checks : [];
+  const capabilities = inputs.capabilities || {};
+  const packageManifest = inputs.packageManifest || {};
+  const customizations = Array.isArray(capabilities.customizations) ? capabilities.customizations : [];
+  const invalidCustomizations = customizations.filter(item => item.validation?.ok === false);
+  const coreFailures = checks.filter(check => check.tier === 'core' && check.status !== OK);
+  const optionalIssues = checks.filter(check => check.tier !== 'core' && (check.status === WARN || check.status === FAIL));
+  const versionValid = /^\d+\.\d+\.\d+$/.test(String(packageManifest.version || ''));
+
+  const readinessChecks = [
+    {
+      name: 'Core capability health',
+      status: coreFailures.length ? FAIL : OK,
+      message: coreFailures.length ? `${coreFailures.length} required capability check(s) are not healthy.` : 'All required capability checks are healthy.',
+    },
+    {
+      name: 'Capability manifest',
+      status: capabilities.schemaVersion === 2 && Number(capabilities.count) > 0 ? OK : FAIL,
+      message: capabilities.schemaVersion === 2 && Number(capabilities.count) > 0
+        ? `${capabilities.count} tools and ${customizations.length} customizations are inventoried.`
+        : 'Generated capability manifest is missing, empty, or incompatible.',
+    },
+    {
+      name: 'Customization validation',
+      status: invalidCustomizations.length ? FAIL : OK,
+      message: invalidCustomizations.length
+        ? `${invalidCustomizations.length} bundled customization(s) have validation errors.`
+        : `${customizations.length} bundled customization(s) are valid.`,
+    },
+    {
+      name: 'Release metadata',
+      status: versionValid ? OK : FAIL,
+      message: versionValid ? `Package version ${packageManifest.version}.` : 'Package version is missing or not semantic versioning.',
+    },
+    {
+      name: 'Optional integrations',
+      status: optionalIssues.length ? WARN : OK,
+      message: optionalIssues.length ? `${optionalIssues.length} optional integration(s) are degraded or unavailable.` : 'All optional integration checks are healthy.',
+    },
+  ];
+  const blocked = readinessChecks.some(check => check.status === FAIL);
+  const degraded = readinessChecks.some(check => check.status === WARN);
+  return {
+    schemaVersion: 1,
+    status: blocked ? 'blocked' : degraded ? 'degraded' : 'ready',
+    checks: readinessChecks,
+    counts: {
+      ok: readinessChecks.filter(check => check.status === OK).length,
+      warn: readinessChecks.filter(check => check.status === WARN).length,
+      fail: readinessChecks.filter(check => check.status === FAIL).length,
+    },
+  };
+}
 
 function _canResolve(mod) {
   try { _require.resolve(mod); return true; }
@@ -278,7 +341,12 @@ export async function runDoctor() {
   const checks = await Promise.all(CHECKS.map(c => _safe(c)));
   const counts = { ok: 0, warn: 0, fail: 0, off: 0 };
   for (const c of checks) counts[c.status] = (counts[c.status] || 0) + 1;
-  return { checks, counts, total: checks.length, ts: Date.now() };
+  const report = { checks, counts, total: checks.length, ts: Date.now() };
+  report.readiness = buildReadinessSummary(report, {
+    capabilities: _readJson(path.join(ROOT, 'server', 'generated', 'capabilities.json'), {}),
+    packageManifest: _readJson(path.join(ROOT, 'package.json'), {}),
+  });
+  return report;
 }
 
 // ── Public: human-readable text report (for the CLI) ──────────────────────
@@ -294,6 +362,7 @@ export function formatDoctorReport(report) {
   lines.push('');
   const { ok, warn, fail, off } = report.counts;
   lines.push(`${ok}/${report.total} healthy` + (warn ? `, ${warn} optional` : '') + (off ? `, ${off} off` : '') + (fail ? `, ${fail} failing` : '') + '.');
+  if (report.readiness) lines.push(`Operational readiness: ${report.readiness.status}.`);
   return lines.join('\n');
 }
 

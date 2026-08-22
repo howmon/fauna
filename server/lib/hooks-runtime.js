@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createExecutionEvent } from '../../lib/execution-event.js';
 
 function _platformCommand(entry) {
   if (!entry || typeof entry !== 'object') return '';
@@ -115,7 +116,13 @@ export async function runHooks(records, eventName, payload = {}, opts = {}) {
     }
   }
 
-  return {
+  return createExecutionEvent({
+    type: 'hook.lifecycle',
+    source: 'hooks-runtime',
+    runId: opts.runId || payload.runId || null,
+    projectId: opts.projectId || payload.projectId || null,
+    taskId: opts.taskId || payload.taskId || null,
+    outcome: blocked ? 'blocked' : 'completed',
     ok: !blocked,
     event: eventName,
     count: entries.length,
@@ -124,5 +131,5 @@ export async function runHooks(records, eventName, payload = {}, opts = {}) {
     systemMessages,
     permissionDecision,
     results,
-  };
+  });
 }

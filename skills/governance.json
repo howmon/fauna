@@ -2,7 +2,20 @@
   "version": 1,
   "defaults": {
     "compatibility": ["fauna"],
-    "minimumFaunaVersion": "2.2.4"
+    "minimumFaunaVersion": "2.2.4",
+    "promotionEvidence": {
+      "owner": "fauna-engineering",
+      "files": [
+        "tests/skill-governance.test.js",
+        "tests/skill-catalog.test.js",
+        "skills/governance.json"
+      ],
+      "reviewWindowDays": 90
+    },
+    "rollback": {
+      "condition": "Any golden route, behavioral evaluation, compatibility check, or blocking security scan regresses.",
+      "action": "demote-to-in-progress"
+    }
   },
   "skills": [
     {

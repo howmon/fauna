@@ -34,6 +34,7 @@ import {
 } from './project-manager.js';
 import { createTask, getTask, getAllTasks } from './task-manager.js';
 import { taskPowerSave } from './server/lib/power-save.js';
+import { recordRoutingOutcomesForRun } from './lib/routing-evidence.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
 const QUOTA_FILE    = path.join(CONFIG_DIR, 'autonomous-runs', 'board-quota.json');
@@ -668,6 +669,18 @@ function _finalizeRunSuccess(projectId, cardId, ev) {
         body: 'Verification step crashed: ' + (e?.message || String(e)) + ' — leaving in review for a human.',
       });
     }
+
+    try {
+      const definitive = verifyResult
+        && verifyResult.skipped !== true
+        && verifyResult.infrastructureFailure !== true
+        && typeof verifyResult.ok === 'boolean';
+      recordRoutingOutcomesForRun(ent && ent.taskId, {
+        projectId,
+        verified: definitive ? verifyResult.ok : undefined,
+        verifier: verifyResult?.command || (verifyResult?.skipped ? 'kanban-no-verifier' : 'kanban-verifier'),
+      });
+    } catch (_) { /* evidence must never block board finalization */ }
 
     const stillInProgress = (() => {
       const b = getProjectBoard(projectId);

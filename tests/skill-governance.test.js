@@ -6,6 +6,16 @@ import { loadAndValidateSkillGovernance, scanSkillSecurity, validateSkillGoverna
 
 const ROOT = process.cwd();
 
+function governanceInputs(registry) {
+  return {
+    rootDir: path.join(ROOT, 'skills'),
+    registry,
+    packageManifest: JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')),
+    readme: fs.readFileSync(path.join(ROOT, 'skills', 'README.md'), 'utf8'),
+    changelog: fs.readFileSync(path.join(ROOT, 'skills', 'CHANGELOG.md'), 'utf8'),
+  };
+}
+
 describe('skill governance', () => {
   it('validates the bundled governance registry', () => {
     const result = loadAndValidateSkillGovernance(ROOT);
@@ -47,6 +57,24 @@ describe('skill governance', () => {
     expect(result.ok).toBe(false);
     expect(result.errors).toContain('package build.files must include skills/**');
     expect(result.errors.some(error => error.includes('missing from governance registry'))).toBe(true);
+  });
+
+  it('fails closed when promotion evidence is missing or outside the repository', () => {
+    const registry = JSON.parse(fs.readFileSync(path.join(ROOT, 'skills', 'governance.json'), 'utf8'));
+    registry.defaults.promotionEvidence.files = ['tests/does-not-exist.test.js', '../outside.json'];
+    const result = validateSkillGovernance(governanceInputs(registry));
+    expect(result.ok).toBe(false);
+    expect(result.errors.some(error => error.includes('promotion evidence file does not exist'))).toBe(true);
+    expect(result.errors.some(error => error.includes('must stay inside the repository'))).toBe(true);
+  });
+
+  it('fails closed when rollback policy cannot demote or deprecate', () => {
+    const registry = JSON.parse(fs.readFileSync(path.join(ROOT, 'skills', 'governance.json'), 'utf8'));
+    registry.defaults.rollback = { condition: '', action: 'ignore' };
+    const result = validateSkillGovernance(governanceInputs(registry));
+    expect(result.ok).toBe(false);
+    expect(result.errors.some(error => error.includes('rollback.condition is required'))).toBe(true);
+    expect(result.errors.some(error => error.includes('rollback.action must be one of'))).toBe(true);
   });
 
   it('reports high-severity executable security findings', async () => {

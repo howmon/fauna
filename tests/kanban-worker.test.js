@@ -101,6 +101,11 @@ vi.mock('../lib/work-item-verifier.js', () => ({
   resolveVerifyCommand: vi.fn(() => _verify.nextResolved),
 }));
 
+const _settleRoutingOutcomes = vi.fn();
+vi.mock('../lib/routing-evidence.js', () => ({
+  recordRoutingOutcomesForRun: _settleRoutingOutcomes,
+}));
+
 // Tiny helper to let the worker's fire-and-forget verifier chain settle.
 async function flushAsync(turns = 5) {
   for (let i = 0; i < turns; i++) await Promise.resolve();
@@ -157,6 +162,7 @@ beforeEach(() => {
   __test.inFlight.clear();
   _verify.nextResult = { ok: true, skipped: true };
   _verify.nextResolved = null;
+  _settleRoutingOutcomes.mockClear();
   _steerCalls.length = 0;
 });
 
@@ -405,6 +411,11 @@ describe('_finalizeRunSuccess', () => {
     await flushAsync();
     expect(_db.items[0].column).toBe('done');
     expect(_db.items[0].comments.length).toBeGreaterThanOrEqual(1);
+    expect(_settleRoutingOutcomes).toHaveBeenCalledWith('task-1', expect.objectContaining({
+      projectId: 'p1',
+      verified: undefined,
+      verifier: 'kanban-no-verifier',
+    }));
   });
 
   it('moves to done when verifier passes', async () => {
@@ -417,6 +428,10 @@ describe('_finalizeRunSuccess', () => {
     expect(_db.items[0].column).toBe('done');
     const lastRun = _db.items[0].runs.at(-1);
     expect(lastRun.verified).toBe(true);
+    expect(_settleRoutingOutcomes).toHaveBeenCalledWith('task-1', expect.objectContaining({
+      verified: true,
+      verifier: 'npm test',
+    }));
   });
 
   it('moves to REVIEW when verifier fails', async () => {
@@ -429,6 +444,10 @@ describe('_finalizeRunSuccess', () => {
     expect(_db.items[0].column).toBe('review');
     const lastRun = _db.items[0].runs.at(-1);
     expect(lastRun.verified).toBe(false);
+    expect(_settleRoutingOutcomes).toHaveBeenCalledWith('task-1', expect.objectContaining({
+      verified: false,
+      verifier: 'kanban-verifier',
+    }));
   });
 
   it('returns to todo when verifier fails from infrastructure/tooling', async () => {
