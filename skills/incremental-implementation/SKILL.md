@@ -1,5 +1,6 @@
 ---
 name: incremental-implementation
+maturity: promoted
 description: Implements features in thin, verifiable vertical slices instead of one large change. Use when implementing any change that touches more than one file, when adding a new feature, or any time the work could be split into multiple commits.
 ---
 
@@ -22,6 +23,9 @@ regression bugs, and rollback nightmares.
 **When NOT to use:** Single-file typo fixes, dependency bumps, config-only changes.
 
 ## Process
+
+When the change crosses modules, changes ownership, or introduces an
+abstraction, load the `codebase-design` reference before choosing slices.
 
 1. **Identify the smallest end-to-end slice.** Not the smallest file change —
    the smallest *user-visible* slice. "Add a button that calls a stub

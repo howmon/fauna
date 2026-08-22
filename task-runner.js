@@ -632,13 +632,13 @@ function _scanSkillFiles() {
 // Semantically route a task with no bound skills to the best-matching skill.
 // Returns a slug (when confident) or null. Computed once per task and cached.
 // Uses the deterministic lexical router (no embeddings) so the loop stays fast.
-function _autoRouteSkill(task) {
+function _autoRouteSkill(task, skillOverride = null) {
   if (!task) return null;
   if (task.__autoRoutedSkill !== undefined) return task.__autoRoutedSkill;
   let slug = null;
   try {
     const query = [task.title, task.description, task.context].filter(Boolean).join('\n');
-    const skills = _scanSkillFiles();
+    const skills = Array.isArray(skillOverride) ? skillOverride : _scanSkillFiles();
     if (query.trim() && skills.length) {
       const routed = _routeSkill(query, _buildSkillCatalog(skills));
       // Only adopt a routed skill when the router is reasonably confident, so
@@ -700,13 +700,13 @@ function _coreOperatingBehaviors() {
 // Returns prompt lines describing the active skills for this task, with a
 // terse description so the model knows which skill bodies to load with
 // fauna_get_skill if it needs the full workflow.
-function _skillSystemPromptLines(task) {
+function _skillSystemPromptLines(task, autoRouteSkills = null) {
   const slugs = _resolveTaskSkills(task);
   // When no skills are explicitly bound, semantically route to the best match
   // (Feature A) and surface it as advisory guidance. Auto-routed skills guide
   // the model but are NOT enforced by the evidence gate (which stays opt-in via
   // explicit binding), so a routed skill never blocks TASK_COMPLETE.
-  const auto = slugs.length ? null : _autoRouteSkill(task);
+  const auto = slugs.length ? null : _autoRouteSkill(task, autoRouteSkills);
   const explicit = slugs.length > 0;
   const effective = slugs.length ? slugs : (auto ? [auto] : []);
   if (!effective.length) return [];

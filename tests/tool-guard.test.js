@@ -11,6 +11,8 @@ describe('isFreeTool', () => {
     expect(isFreeTool('fauna_workitem_claim')).toBe(true);
     expect(isFreeTool('fauna_workitem_comment')).toBe(true);
     expect(isFreeTool('fauna_workitem_update')).toBe(true);
+    expect(isFreeTool('fauna_workitem_record_review')).toBe(true);
+    expect(isFreeTool('fauna_workitem_record_diagnosis')).toBe(true);
     expect(isFreeTool('fauna_workitem_verify')).toBe(true);
     expect(isFreeTool('fauna_board_scan')).toBe(true);
     expect(isFreeTool('fauna_project_audit')).toBe(true);
@@ -34,6 +36,8 @@ describe('isFreeTool', () => {
     expect(isFreeTool('fauna_semantic_search')).toBe(true);
     expect(isFreeTool('fauna_context_search')).toBe(true);
     expect(isFreeTool('fauna_read_file')).toBe(true);
+    expect(isFreeTool('fauna_route_engineering_flow')).toBe(true);
+    expect(isFreeTool('fauna_evaluate_worktree_parallelism')).toBe(true);
     expect(isFreeTool('fauna_list_windows')).toBe(true);
     expect(isFreeTool('fauna_screen_context')).toBe(true);
     expect(isFreeTool('figma_status')).toBe(true);

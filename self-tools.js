@@ -20,7 +20,7 @@ import {
 import { retrieveOutput } from './server/lib/tool-output-cache.js';
 import { runDoctor } from './server/lib/doctor.js';
 import {
-  createProject, getAllProjects, getProject,
+  createProject, getAllProjects, getProject, updateProject,
   addBacklogItem, listBacklog, prioritizeBacklog,
   updateBacklogItem, moveWorkItem, addWorkItemComment,
   setWorkItemLock, listAllWorkItems, getProjectBoard,
@@ -37,6 +37,12 @@ import { buildGuide } from './lib/circuit-guide.js';
 import { inspectText as wmInspectText, cleanText as wmCleanText, inspectFile as wmInspectFile, cleanFile as wmCleanFile } from './lib/watermarks.js';
 import { packWidgetResult } from './lib/dynamic-widgets.js';
 import { buildCatalog, routeSkill, attachEmbeddings } from './lib/skill-catalog.js';
+import { routeEngineeringFlow } from './lib/engineering-flow.js';
+import { validateTicketPlan } from './lib/ticket-plan.js';
+import { validateCodeReviewReport } from './lib/code-review-report.js';
+import { validateDiagnosisReport } from './lib/diagnosis-report.js';
+import { buildEngineeringContract } from './lib/engineering-contract.js';
+import { evaluateParallelCandidates, evaluateWorktreeRollout } from './lib/worktree-evaluation.js';
 import { scoreAmbiguity, interviewQuestions, createSeed as seedCreate, getSeed as seedGet, listSeeds as seedList } from './lib/seed-store.js';
 import { unstuck as personasUnstuck } from './lib/personas.js';
 import { auditPrompt } from './lib/prompt-audit.js';
@@ -1332,6 +1338,29 @@ function _findReference(refName, context) {
   return null;
 }
 
+const REVIEW_AXIS_SCHEMA = {
+  type: 'object',
+  properties: {
+    contextId: { type: 'string', description: 'Unique id for the isolated reviewer context.' },
+    verdict: { type: 'string', enum: ['pass', 'changes-required', 'not-reviewed'] },
+    summary: { type: 'string' },
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          severity: { type: 'string', enum: ['critical', 'required', 'nit', 'optional', 'fyi'] },
+          message: { type: 'string' },
+          file: { type: 'string' },
+          line: { type: 'number' },
+        },
+        required: ['severity', 'message', 'file', 'line'],
+      },
+    },
+  },
+  required: ['contextId', 'verdict', 'summary', 'findings'],
+};
+
 export const SELF_TOOL_DEFS = [
   // ── Memory tools ──
   {
@@ -1731,6 +1760,25 @@ export const SELF_TOOL_DEFS = [
     },
   },
 
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_route_engineering_flow',
+      description: 'Route an engineering situation through Fauna\'s validated lifecycle graph. Returns the current flow/phase, next action, required and produced artifacts, active skills, and neighboring routes. When task state is supplied, also recommends continue, clear, handoff, subagent, or compact using the live context budget.',
+      parameters: {
+        type: 'object',
+        properties: {
+          situation: { type: 'string', description: 'Natural-language description of the engineering situation. Required unless flow is supplied.' },
+          flow: { type: 'string', description: 'Optional known flow id, such as feature-delivery, bug-recovery, or incoming-work.' },
+          phase: { type: 'string', description: 'Optional phase id within the named flow. Omit to return its entry phase.' },
+          taskState: { type: 'string', enum: ['active', 'phase-complete', 'blocked'], description: 'Current execution state. Supply phase-complete at a transition or blocked when progress needs a decision.' },
+          destination: { type: 'string', enum: ['same-session', 'new-ticket', 'new-workspace', 'new-harness', 'new-owner', 'side-task'], description: 'Where the next work will run. Defaults to same-session.' },
+          nextNeedsCurrentContext: { type: 'boolean', description: 'Whether the next work needs this conversation as a primary source. Omit to use graph guidance.' },
+          unattended: { type: 'boolean', description: 'For a side-task destination, whether it is tightly scoped and can run unattended.' },
+        },
+      },
+    },
+  },
   {
     type: 'function',
     function: {
@@ -2548,6 +2596,148 @@ export const SELF_TOOL_DEFS = [
   {
     type: 'function',
     function: {
+      name: 'fauna_setup_engineering',
+      description: 'Preview or create a repository-owned engineering contract for the active project. Generates CONTEXT.md, provider-neutral tracker operations, triage role mappings, domain language, and ADR guidance. Existing files are always preserved. Call with approved=false first and set true only after user approval.',
+      parameters: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Project id. Defaults to the active project.' },
+          approved: { type: 'boolean' },
+          tracker: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              url: { type: 'string' },
+              operations: {
+                type: 'object',
+                properties: {
+                  search: { type: 'string' }, create: { type: 'string' }, update: { type: 'string' },
+                  comment: { type: 'string' }, close: { type: 'string' },
+                },
+                required: ['search', 'create', 'update', 'comment', 'close'],
+              },
+            },
+            required: ['name', 'operations'],
+          },
+          triageRoles: {
+            type: 'array', minItems: 1,
+            items: { type: 'object', properties: { role: { type: 'string' }, when: { type: 'string' }, trackerValue: { type: 'string' } }, required: ['role', 'when', 'trackerValue'] },
+          },
+          domain: {
+            type: 'object',
+            properties: {
+              summary: { type: 'string' },
+              terms: { type: 'array', minItems: 1, items: { type: 'object', properties: { term: { type: 'string' }, meaning: { type: 'string' } }, required: ['term', 'meaning'] } },
+            },
+            required: ['summary', 'terms'],
+          },
+          context: {
+            type: 'object',
+            properties: {
+              overview: { type: 'string' },
+              entryPoints: { type: 'array', minItems: 1, items: { type: 'object', properties: { path: { type: 'string' }, purpose: { type: 'string' } }, required: ['path', 'purpose'] } },
+              commands: { type: 'array', minItems: 1, items: { type: 'object', properties: { purpose: { type: 'string' }, command: { type: 'string' } }, required: ['purpose', 'command'] } },
+              boundaries: { type: 'array', minItems: 1, items: { type: 'string' } },
+            },
+            required: ['overview', 'entryPoints', 'commands', 'boundaries'],
+          },
+        },
+        required: ['approved', 'tracker', 'triageRoles', 'domain', 'context'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_create_ticket_plan',
+      description: 'Validate a dependency-aware implementation ticket plan and, only after explicit user approval, publish it to the project Kanban board. Call first with approved=false to preview validation, cycle errors, and the ready frontier. Set approved=true only after the user approves the ticket granularity and blocker edges.',
+      parameters: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Project id. Defaults to the active project.' },
+          approved: { type: 'boolean', description: 'Must remain false for preview. Set true only after explicit user approval.' },
+          tickets: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 50,
+            items: {
+              type: 'object',
+              properties: {
+                key: { type: 'string', description: 'Stable plan-local key, such as auth-api.' },
+                title: { type: 'string', description: 'Narrow vertical-slice title.' },
+                body: { type: 'string', description: 'Implementation scope and relevant context.' },
+                acceptanceCriteria: { type: 'array', items: { type: 'string' }, description: 'Observable acceptance criteria.' },
+                verifyCommand: { type: 'string', description: 'Command that independently verifies this ticket.' },
+                blockedBy: { type: 'array', items: { type: 'string' }, description: 'Plan-local ticket keys or existing work-item ids.' },
+                fileScope: { type: 'array', items: { type: 'string' }, description: 'Optional repository-relative files or directories this ticket owns. Required only for worktree-parallel evaluation.' },
+                priority: { type: 'string', enum: ['p0', 'p1', 'p2', 'p3'] },
+                estimateMinutes: { type: 'number' },
+              },
+              required: ['key', 'title', 'acceptanceCriteria', 'verifyCommand'],
+            },
+          },
+        },
+        required: ['tickets', 'approved'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_evaluate_worktree_parallelism',
+      description: 'Evaluate, but never execute, worktree-isolated parallelism. Requires explicit approval, clean Git state, a resolved base commit, disjoint card file scopes, independent verifiers, and completed blockers. Separately reports whether empirical conflict, verifier, rework, and cleanup metrics justify a controlled rollout.',
+      parameters: {
+        type: 'object',
+        properties: {
+          approved: { type: 'boolean', description: 'True only after explicit user approval of the candidate set and file scopes.' },
+          candidates: {
+            type: 'array',
+            minItems: 2,
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                verifyCommand: { type: 'string' },
+                blockedBy: { type: 'array', items: { type: 'string' } },
+                fileScope: { type: 'array', items: { type: 'string' } },
+              },
+              required: ['id', 'verifyCommand', 'fileScope'],
+            },
+          },
+          completedIds: { type: 'array', items: { type: 'string' }, description: 'Completed blocker card ids.' },
+          repository: {
+            type: 'object',
+            properties: {
+              isGit: { type: 'boolean' },
+              clean: { type: 'boolean' },
+              supportsWorktrees: { type: 'boolean' },
+              baseCommit: { type: 'string' },
+            },
+            required: ['isGit', 'clean', 'supportsWorktrees', 'baseCommit'],
+          },
+          runs: {
+            type: 'array',
+            description: 'Completed controlled-trial outcomes. Empty until trials have been run by an external harness.',
+            items: {
+              type: 'object',
+              properties: {
+                mergeConflict: { type: 'boolean' },
+                verifierPassed: { type: 'boolean' },
+                humanRework: { type: 'boolean' },
+                cleanupSucceeded: { type: 'boolean' },
+              },
+              required: ['mergeConflict', 'verifierPassed', 'humanRework', 'cleanupSucceeded'],
+            },
+          },
+          thresholds: { type: 'object', description: 'Optional rollout thresholds; defaults require 10 runs, <=5% conflicts, >=90% verifier passes, <=10% rework, and 100% cleanup.' },
+        },
+        required: ['approved', 'candidates', 'repository'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'fauna_feature_request_create',
       description: 'Append a feature request or backlog item to the active project backlog (Kanban board). Use when the user describes wanting something new, when reflection surfaces a gap, or when debate produces a follow-up. Returns the created item id. Optional fields let you drop it straight into a column or assign it.',
       parameters: {
@@ -2656,8 +2846,113 @@ export const SELF_TOOL_DEFS = [
   {
     type: 'function',
     function: {
+      name: 'fauna_workitem_record_diagnosis',
+      description: 'Validate and attach feedback-loop-first bug diagnosis evidence to a Kanban work-item run. Requires one command that failed before and passed after the fix, multiple ranked falsifiable hypotheses, a regression test with red/green evidence, and confirmation that temporary instrumentation was removed.',
+      parameters: {
+        type: 'object',
+        properties: {
+          itemId: { type: 'string' },
+          projectId: { type: 'string', description: 'Project id. Defaults to the active project.' },
+          reproduction: {
+            type: 'object',
+            properties: {
+              command: { type: 'string', description: 'Exact command used both before and after the fix.' },
+              symptom: { type: 'string', description: 'The user-visible failure this command reproduces.' },
+              before: { type: 'object', properties: { ok: { type: 'boolean' }, exitCode: { type: 'number' }, summary: { type: 'string' } }, required: ['ok', 'summary'] },
+              after: { type: 'object', properties: { ok: { type: 'boolean' }, exitCode: { type: 'number' }, summary: { type: 'string' } }, required: ['ok', 'summary'] },
+            },
+            required: ['command', 'symptom', 'before', 'after'],
+          },
+          hypotheses: {
+            type: 'array',
+            minItems: 2,
+            items: {
+              type: 'object',
+              properties: {
+                rank: { type: 'number' },
+                claim: { type: 'string' },
+                prediction: { type: 'string' },
+                evidence: { type: 'string' },
+                status: { type: 'string', enum: ['supported', 'rejected'] },
+              },
+              required: ['rank', 'claim', 'prediction', 'evidence', 'status'],
+            },
+          },
+          regressionTest: {
+            type: 'object',
+            properties: {
+              file: { type: 'string' },
+              name: { type: 'string' },
+              failedBefore: { type: 'boolean' },
+              passedAfter: { type: 'boolean' },
+            },
+            required: ['file', 'name', 'failedBefore', 'passedAfter'],
+          },
+          instrumentationRemoved: { type: 'boolean' },
+        },
+        required: ['itemId', 'reproduction', 'hypotheses', 'regressionTest', 'instrumentationRemoved'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fauna_workitem_record_review',
+      description: 'Validate and attach isolated Standards and Spec review reports to a Kanban work-item run. Requires a resolved non-empty three-dot diff, explicit spec provenance or no-spec status, distinct reviewer context ids, file/line evidence for every finding, and verifier results.',
+      parameters: {
+        type: 'object',
+        properties: {
+          itemId: { type: 'string' },
+          projectId: { type: 'string', description: 'Project id. Defaults to the active project.' },
+          diff: {
+            type: 'object',
+            properties: {
+              baseRef: { type: 'string', description: 'Resolved base commit id, not a moving branch name.' },
+              headRef: { type: 'string', description: 'Resolved head commit id, not a moving branch name.' },
+              mergeBase: { type: 'string', description: 'Resolved merge-base commit id for the three-dot diff.' },
+              files: { type: 'array', items: { type: 'string' } },
+            },
+            required: ['baseRef', 'headRef', 'mergeBase', 'files'],
+          },
+          spec: {
+            type: 'object',
+            properties: {
+              status: { type: 'string', enum: ['available', 'unavailable'] },
+              reference: { type: 'string' },
+              reason: { type: 'string' },
+            },
+            required: ['status'],
+          },
+          standards: REVIEW_AXIS_SCHEMA,
+          specReview: REVIEW_AXIS_SCHEMA,
+          verification: {
+            type: 'object',
+            properties: {
+              commands: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    command: { type: 'string' },
+                    ok: { type: 'boolean' },
+                    summary: { type: 'string' },
+                  },
+                  required: ['command', 'ok', 'summary'],
+                },
+              },
+            },
+            required: ['commands'],
+          },
+        },
+        required: ['itemId', 'diff', 'spec', 'standards', 'specReview', 'verification'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'fauna_workitem_update',
-      description: 'Edit a work item\'s title, body, acceptance criteria, priority, tags, assignee, or verifyCommand. Use this when you refine a card after research or when you discover the original scope was wrong. Set `verifyCommand` to a shell command (e.g. "npx vitest run tests/my-feature.test.js") so the autopilot can prove the work is done before allowing a move to "done". Does NOT move columns — use fauna_workitem_move for that.',
+      description: 'Edit a work item\'s title, body, acceptance criteria, priority, tags, assignee, verifyCommand, or fileScope. Use this when you refine a card after research or when you discover the original scope was wrong. Set `verifyCommand` to a shell command (e.g. "npx vitest run tests/my-feature.test.js") so the autopilot can prove the work is done before allowing a move to "done". `fileScope` is advisory unless the card enters a worktree-parallel evaluation. Does NOT move columns — use fauna_workitem_move for that.',
       parameters: {
         type: 'object',
         properties: {
@@ -2669,6 +2964,7 @@ export const SELF_TOOL_DEFS = [
           tags:          { type: 'array', items: { type: 'string' } },
           assignee:      { type: 'string', enum: ['ai', 'human'] },
           verifyCommand: { type: 'string', description: 'Per-card shell verifier (e.g. "npx vitest run tests/x.test.js"). Overrides project qa.command. Pass empty string to clear.' },
+          fileScope:     { type: 'array', items: { type: 'string' }, description: 'Repository-relative files or directories owned by this card for worktree-parallel evaluation.' },
           projectId:     { type: 'string', description: 'Project id. Defaults to the active project.' },
         },
         required: ['itemId'],
@@ -4072,6 +4368,25 @@ export async function executeSelfTool(toolName, args, context = {}) {
       });
     }
 
+    case 'fauna_route_engineering_flow': {
+      const situation = String(args.situation || '').trim();
+      const flow = String(args.flow || '').trim();
+      const phase = String(args.phase || '').trim();
+      if (!situation && !flow) return JSON.stringify({ ok: false, error: 'situation or flow required' });
+      return JSON.stringify(routeEngineeringFlow({
+        situation,
+        flow: flow || null,
+        phase: phase || null,
+        boundary: {
+          taskState: String(args.taskState || 'active'),
+          destination: String(args.destination || 'same-session'),
+          nextNeedsCurrentContext: typeof args.nextNeedsCurrentContext === 'boolean' ? args.nextNeedsCurrentContext : undefined,
+          unattended: args.unattended === true,
+          contextBudget: context.contextBudget || {},
+        },
+      }));
+    }
+
     case 'fauna_route_skill': {
       const query = String(args.query || '').trim();
       if (!query) return JSON.stringify({ ok: false, error: 'query required' });
@@ -4756,6 +5071,144 @@ ${cardsHtml}
     }
 
     // ── Backlog ──
+    case 'fauna_setup_engineering': {
+      const pid = args.projectId || context.activeProjectId;
+      if (!pid) return JSON.stringify({ ok: false, error: 'projectId required (no active project)' });
+      const project = getProject(pid);
+      if (!project) return JSON.stringify({ ok: false, error: 'project not found' });
+      if (!project.rootPath) return JSON.stringify({ ok: false, error: 'project rootPath is required' });
+      const contract = buildEngineeringContract({
+        projectName: project.name,
+        tracker: args.tracker,
+        triageRoles: args.triageRoles,
+        domain: args.domain,
+        context: args.context,
+      });
+      if (!contract.ok) return JSON.stringify({ ...contract, applied: false });
+
+      let root;
+      try {
+        root = fs.realpathSync(project.rootPath);
+      } catch (error) {
+        return JSON.stringify({ ok: false, error: `cannot resolve project root: ${error.message}` });
+      }
+      const plan = contract.files.map(file => {
+        const absolutePath = path.resolve(root, file.path);
+        const insideRoot = absolutePath.startsWith(root + path.sep);
+        return { ...file, absolutePath, status: insideRoot && fs.existsSync(absolutePath) ? 'preserve' : 'create', insideRoot };
+      });
+      if (plan.some(file => !file.insideRoot)) return JSON.stringify({ ok: false, error: 'contract path escapes project root' });
+      const preview = plan.map(({ path: filePath, status, content }) => ({ path: filePath, status, content }));
+      if (args.approved !== true) {
+        return JSON.stringify({ ok: true, applied: false, requiresApproval: true, version: contract.version, files: preview });
+      }
+
+      const created = [];
+      try {
+        for (const file of plan) {
+          if (file.status === 'preserve') continue;
+          fs.mkdirSync(path.dirname(file.absolutePath), { recursive: true });
+          const realParent = fs.realpathSync(path.dirname(file.absolutePath));
+          if (realParent !== root && !realParent.startsWith(root + path.sep)) throw new Error(`contract parent escapes project root: ${file.path}`);
+          fs.writeFileSync(file.absolutePath, file.content, { encoding: 'utf8', flag: 'wx' });
+          created.push(file.absolutePath);
+        }
+      } catch (error) {
+        for (const file of created.reverse()) {
+          try { fs.unlinkSync(file); } catch (_) {}
+        }
+        return JSON.stringify({ ok: false, applied: false, error: error.message });
+      }
+      const relativePaths = contract.files.map(file => file.path);
+      let cacheUpdated = false;
+      let cacheWarning = null;
+      try {
+        cacheUpdated = !!updateProject(pid, {
+          engineeringContract: {
+            version: contract.version,
+            paths: relativePaths,
+            contextPath: 'CONTEXT.md',
+            adrDirectory: 'docs/adr',
+            updatedAt: new Date().toISOString(),
+          },
+        });
+        if (!cacheUpdated) cacheWarning = 'Repository contract created, but project metadata cache was not updated.';
+      } catch (error) {
+        cacheWarning = `Repository contract created, but project metadata cache failed: ${error.message}`;
+      }
+      return JSON.stringify({
+        ok: true,
+        applied: true,
+        projectId: pid,
+        created: plan.filter(file => file.status === 'create').map(file => file.path),
+        preserved: plan.filter(file => file.status === 'preserve').map(file => file.path),
+        sourceOfTruth: relativePaths,
+        cacheUpdated,
+        cacheWarning,
+      });
+    }
+    case 'fauna_create_ticket_plan': {
+      const pid = args.projectId || context.activeProjectId;
+      if (!pid) return JSON.stringify({ ok: false, error: 'projectId required (no active project)' });
+      if (!getProject(pid)) return JSON.stringify({ ok: false, error: 'project not found' });
+      const validation = validateTicketPlan({ tickets: args.tickets, existingItems: listBacklog(pid) });
+      if (!validation.ok) return JSON.stringify({ ...validation, published: false });
+      if (args.approved !== true) {
+        return JSON.stringify({
+          ...validation,
+          published: false,
+          requiresApproval: true,
+          _note: 'Present the validated ticket granularity, blocker edges, and ready frontier to the user. Publish only after explicit approval.',
+        });
+      }
+
+      const idsByKey = new Map();
+      const created = [];
+      for (const ticket of validation.tickets) {
+        const entry = addBacklogItem(pid, {
+          title: ticket.title,
+          body: ticket.body,
+          column: 'todo',
+          assignee: 'ai',
+          priority: ticket.priority,
+          acceptance: ticket.acceptanceCriteria.map(item => `- ${item}`).join('\n'),
+          verifyCommand: ticket.verifyCommand,
+          blockedBy: ticket.blockedBy.map(dependency => idsByKey.get(dependency) || dependency),
+          fileScope: ticket.fileScope,
+          estimateMinutes: ticket.estimateMinutes,
+          originConvId: context.convId || null,
+          source: 'agent',
+        });
+        if (!entry) {
+          return JSON.stringify({ ok: false, error: `failed to create ticket "${ticket.key}"`, published: false, created });
+        }
+        idsByKey.set(ticket.key, entry.id);
+        created.push({ key: ticket.key, ...entry });
+        _emitBoardEventSafe({ type: 'created', projectId: pid, item: entry });
+      }
+      const readyFrontier = validation.readyFrontier.map(key => idsByKey.get(key));
+      return JSON.stringify({ ok: true, published: true, projectId: pid, created, readyFrontier });
+    }
+    case 'fauna_evaluate_worktree_parallelism': {
+      const candidateEvaluation = evaluateParallelCandidates({
+        candidates: args.candidates,
+        completedIds: args.completedIds,
+        repository: args.repository,
+        approved: args.approved === true,
+      });
+      const rolloutEvaluation = evaluateWorktreeRollout({ runs: args.runs, thresholds: args.thresholds });
+      const rolloutRecommendation = candidateEvaluation.eligible && rolloutEvaluation.rolloutReady
+        ? 'eligible-for-controlled-rollout'
+        : 'keep-disabled';
+      return JSON.stringify({
+        ok: candidateEvaluation.ok && rolloutEvaluation.ok,
+        executed: false,
+        candidateEvaluation,
+        rolloutEvaluation,
+        rolloutRecommendation,
+        _note: 'This tool evaluates evidence only. It never creates worktrees, starts tasks, merges branches, or enables rollout.',
+      });
+    }
     case 'fauna_feature_request_create': {
       const pid = args.projectId || context.activeProjectId;
       if (!pid) return JSON.stringify({ ok: false, error: 'projectId required (no active project)' });
@@ -4825,13 +5278,35 @@ ${cardsHtml}
       if (!pid)        return JSON.stringify({ ok: false, error: 'projectId required (no active project)' });
       if (!args.itemId) return JSON.stringify({ ok: false, error: 'itemId required' });
       const patch = {};
-      ['title', 'body', 'acceptance', 'priority', 'tags', 'assignee', 'verifyCommand'].forEach(k => {
+      ['title', 'body', 'acceptance', 'priority', 'tags', 'assignee', 'verifyCommand', 'fileScope'].forEach(k => {
         if (args[k] !== undefined) patch[k] = args[k];
       });
       const item = updateBacklogItem(pid, args.itemId, patch);
       if (!item) return JSON.stringify({ ok: false, error: 'item not found' });
       _emitBoardEventSafe({ type: 'updated', projectId: pid, item });
       return JSON.stringify({ ok: true, item });
+    }
+    case 'fauna_workitem_record_review': {
+      const pid = args.projectId || context.activeProjectId;
+      if (!pid) return JSON.stringify({ ok: false, error: 'projectId required (no active project)' });
+      if (!args.itemId) return JSON.stringify({ ok: false, error: 'itemId required' });
+      const validation = validateCodeReviewReport(args);
+      if (!validation.ok) return JSON.stringify(validation);
+      const result = moveWorkItem(pid, args.itemId, { runEntry: validation.report }, { actor: 'ai' });
+      if (!result.ok) return JSON.stringify(result);
+      _emitBoardEventSafe({ type: 'reviewed', projectId: pid, item: result.item, review: validation.report });
+      return JSON.stringify({ ok: true, projectId: pid, itemId: args.itemId, review: validation.report });
+    }
+    case 'fauna_workitem_record_diagnosis': {
+      const pid = args.projectId || context.activeProjectId;
+      if (!pid) return JSON.stringify({ ok: false, error: 'projectId required (no active project)' });
+      if (!args.itemId) return JSON.stringify({ ok: false, error: 'itemId required' });
+      const validation = validateDiagnosisReport(args);
+      if (!validation.ok) return JSON.stringify(validation);
+      const result = moveWorkItem(pid, args.itemId, { runEntry: validation.report }, { actor: 'ai' });
+      if (!result.ok) return JSON.stringify(result);
+      _emitBoardEventSafe({ type: 'diagnosed', projectId: pid, item: result.item, diagnosis: validation.report });
+      return JSON.stringify({ ok: true, projectId: pid, itemId: args.itemId, diagnosis: validation.report });
     }
     case 'fauna_board_scan': {
       const scope = args.scope === 'global' ? 'global' : 'project';

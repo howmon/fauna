@@ -1,12 +1,41 @@
 ---
 name: pptx
-description: "Use this skill any time a .pptx or .potx file is involved in any way — as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx or .potx file (even if the extracted content will be used elsewhere, like in an email or summary); editing, modifying, or updating existing presentations; combining or splitting slide files; working with templates (.potx), layouts, speaker notes, or comments. Trigger whenever the user mentions \"deck,\" \"slides,\" \"presentation,\" or references a .pptx or .potx filename, regardless of what they plan to do with the content afterward. If a .pptx or .potx file needs to be opened, created, or touched, use this skill."
+maturity: promoted
+description: "Use when a .pptx or .potx file is involved in any way — as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx or .potx file (even if the extracted content will be used elsewhere, like in an email or summary); editing, modifying, or updating existing presentations; combining or splitting slide files; working with templates (.potx), layouts, speaker notes, or comments. Trigger whenever the user mentions \"deck,\" \"slides,\" \"presentation,\" or references a .pptx or .potx filename, regardless of what they plan to do with the content afterward. If a .pptx or .potx file needs to be opened, created, or touched, use this skill."
 license: Proprietary. LICENSE.txt has complete terms
 ---
 
 # PPTX creation, editing, and analysis
 
 A `.pptx` is a ZIP archive of XML files. Choose your approach by task:
+
+## Overview
+
+Create, inspect, or edit PowerPoint files while preserving template intent and
+validating rendered slides rather than trusting object geometry alone.
+
+## When to Use
+
+Use whenever a `.pptx` or `.potx` file is an input or output. Do not use this
+workflow for a document or web artifact that does not involve PowerPoint.
+
+## Process
+
+Inspect source decks and templates, choose the correct editing or generation
+path, build the slides, render them, and complete the required visual QA.
+
+## Common Rationalizations
+
+| Rationalization | Reality |
+|---|---|
+| "The library created the file successfully" | A valid package can still contain clipped or overlapping content. |
+| "One rendered slide proves the deck" | Inspect every slide and the montage. |
+
+## Red Flags
+
+- Text overflow, overlap, or content outside slide bounds
+- Template layouts replaced without user intent
+- Delivery without rendering and visual inspection
 
 | Task | Approach |
 |---|---|

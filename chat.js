@@ -1420,6 +1420,12 @@ export function registerChatRoute(app, {
       const selfToolContext = {
         getModels: () => FALLBACK_MODELS,
         supportsVision: !!llmSupports.vision,
+        contextBudget: {
+          model: budget.matched,
+          usedTokens: bodyTokens,
+          bodyTokenLimit: budget.bodyTokenLimit,
+          hardBodyCeiling: budget.hardBodyCeiling,
+        },
         activeProjectId: projectId || null,
         convId: req.body?.conversationId || null,
         activeAgentName: agentName || null,

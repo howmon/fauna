@@ -59,7 +59,8 @@
     "release:check": "node scripts/validate-release.cjs",
     "gen:capabilities": "node scripts/gen-capabilities.cjs",
     "skills:import": "node scripts/import-ecc.js",
-    "skills:update": "node scripts/import-ecc.js --force"
+    "skills:update": "node scripts/import-ecc.js --force",
+    "skills:check": "node scripts/validate-skills.js"
   },
   "dependencies": {
     "@azure/msal-node": "^5.1.5",

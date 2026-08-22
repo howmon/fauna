@@ -114,6 +114,7 @@ describe('indexSkill', () => {
     expect(doc.terms.has('fail')).toBe(true);
     // "When to Use" tokens are indexed.
     expect(doc.terms.has('regression')).toBe(true);
+    expect(doc.policy).toMatchObject({ invocation: 'both', maturity: 'unclassified', autoRoutable: true });
   });
 });
 
@@ -177,5 +178,63 @@ describe('routeSkill — graph proximity', () => {
     const r = routeSkill('slice this large feature into steps', catalog, { activeSkill: 'spec-driven-development' });
     expect(r.ok).toBe(true);
     expect(r.top).toBe('incremental-implementation');
+  });
+});
+
+describe('routeSkill — invocation and maturity policy', () => {
+  const policySkill = (name, metadata) => ({
+    name,
+    scope: 'repo',
+    description: `Use when ${name.replaceAll('-', ' ')} is explicitly requested.`,
+    body: [
+      '---',
+      `name: ${name}`,
+      `description: Use when ${name.replaceAll('-', ' ')} is explicitly requested.`,
+      ...metadata,
+      '---',
+      '## When to Use',
+      `${name.replaceAll('-', ' ')} workflow.`,
+    ].join('\n'),
+  });
+
+  it('excludes user-only skills from model routing but allows explicit user routing', () => {
+    const catalog = buildCatalog([
+      policySkill('private-release-workflow', ['disable-model-invocation: true', 'maturity: promoted']),
+    ]);
+
+    const automatic = routeSkill('private release workflow', catalog);
+    expect(automatic.top).toBeNull();
+    expect(automatic.excluded).toContainEqual({ name: 'private-release-workflow', reason: 'user-only' });
+
+    const explicit = routeSkill('private release workflow', catalog, { invocation: 'user' });
+    expect(explicit.top).toBe('private-release-workflow');
+  });
+
+  it('requires opt-in for in-progress skills', () => {
+    const catalog = buildCatalog([
+      policySkill('experimental-refactor', ['maturity: in-progress']),
+    ]);
+
+    expect(routeSkill('experimental refactor', catalog).top).toBeNull();
+    expect(routeSkill('experimental refactor', catalog, { includeInProgress: true }).top).toBe('experimental-refactor');
+  });
+
+  it('never routes deprecated skills unless explicitly included', () => {
+    const catalog = buildCatalog([
+      policySkill('legacy-deployment', ['maturity: deprecated']),
+    ]);
+
+    expect(routeSkill('legacy deployment', catalog).top).toBeNull();
+    expect(routeSkill('legacy deployment', catalog, { invocation: 'user', includeDeprecated: true }).top).toBe('legacy-deployment');
+  });
+
+  it('bounds exclusion details for large imported packs', () => {
+    const skills = Array.from({ length: 30 }, (_, index) =>
+      policySkill(`private-workflow-${index}`, ['disable-model-invocation: true', 'maturity: promoted'])
+    );
+    const result = routeSkill('private workflow', buildCatalog(skills));
+    expect(result.excluded).toHaveLength(20);
+    expect(result.excludedCount).toBe(30);
+    expect(result.excludedByReason).toEqual({ 'user-only': 30 });
   });
 });

@@ -1,5 +1,6 @@
 ---
 name: figma-design
+maturity: promoted
 description: "Design work in Figma via the figma_execute tool. Use whenever the user asks to design, mock up, style, lay out, restyle, prototype, or wireframe anything in Figma — dashboards, landing pages, marketing pages, cards, components, icon sets, spec pages, or design-system pieces. Also use for auto-layout audits, palette suggestions, and visual QA on an existing frame."
 ---
 
@@ -11,6 +12,28 @@ For plugin-runtime rules (async APIs, dynamic-page loads, HUG-first frame
 ordering, page-creation confirmation), read
 `server/agentinstruction.md` from the workspace first — it's authoritative
 on the mechanics. This file adds the *design* layer on top.
+
+## Overview
+
+Create or revise Figma layouts through the connected Figma toolchain while
+preserving the file's design system and validating the rendered result.
+
+## When to Use
+
+Use for Figma creation, restyling, components, prototypes, layout audits,
+palette work, or visual QA. Do not use for an unrelated HTML-only deliverable.
+
+## Process
+
+Inspect the file and available components, choose the visual direction, build
+with auto layout and reusable tokens, then run the required QA loop.
+
+## Common Rationalizations
+
+| Rationalization | Reality |
+|---|---|
+| "The frame exists, so it is done" | Validate hierarchy, spacing, overflow, and component consistency. |
+| "A custom shape is faster" | Reuse the connected design system when an appropriate component exists. |
 
 ## Before you touch the file
 

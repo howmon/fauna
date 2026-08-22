@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const root = path.resolve(__dirname, '..');
 const releaseTag = process.env.RELEASE_TAG || process.argv[2];
@@ -32,5 +33,15 @@ if (mismatches.length > 0) {
   for (const mismatch of mismatches) console.error(`  - ${mismatch}`);
   process.exit(1);
 }
+
+const skillValidation = spawnSync(process.execPath, [path.join(root, 'scripts/validate-skills.js')], {
+  cwd: root,
+  stdio: 'inherit',
+});
+if (skillValidation.error) {
+  console.error(`Unable to run skill governance validation: ${skillValidation.error.message}`);
+  process.exit(1);
+}
+if (skillValidation.status !== 0) process.exit(skillValidation.status || 1);
 
 console.log(`Release contract valid: ${releaseTag} matches Fauna and FaunaMCP.`);

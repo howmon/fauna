@@ -1,5 +1,6 @@
 ---
 name: spec-driven-development
+maturity: promoted
 description: Defines what is being built before any code is written. Use when a Kanban card enters the backlog without acceptance criteria, when starting a new feature or significant change, or when the requirements are ambiguous enough that two engineers could implement the task differently.
 ---
 
@@ -22,6 +23,11 @@ on the wrong spec is expensive to revise.
 **When NOT to use:** Bug fixes with a clear reproduction. Typo fixes. Dependency bumps.
 
 ## Process
+
+Before drafting, load `domain-modeling` when important product terms or rules
+are ambiguous. Load `codebase-design` when the change crosses ownership or
+module boundaries. Use only the relevant sections; these are reference
+primitives, not separate phases.
 
 Write a spec with these sections (keep it to one screen — this is a contract,
 not a design doc):

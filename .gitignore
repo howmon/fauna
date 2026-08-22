@@ -57,6 +57,7 @@ app.asar.bak
 !RELEASING.md
 !.github/**/*.md
 !docs/code-intelligence-parity-plan.md
+!docs/engineering/mattpocock-skills-analysis.md
 !skills/**/*.md
 services/*
 PROJECTS_PLAN.html

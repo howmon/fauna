@@ -310,7 +310,7 @@ export function updateProject(id, patch = {}) {
   if (idx === -1) return null;
   const p = projects[idx];
   // Allowed top-level fields
-  const allowed = ['name', 'description', 'icon', 'color', 'rootPath', 'defaultAgent', 'permissions', 'allowFileEditing', 'design', 'autonomousMode', 'acceptanceCriteria', 'qa', 'deploy', 'backlog', 'kanban', 'memoryConfig', 'githubIntegrations', 'checkpoints'];
+  const allowed = ['name', 'description', 'icon', 'color', 'rootPath', 'defaultAgent', 'permissions', 'allowFileEditing', 'design', 'autonomousMode', 'acceptanceCriteria', 'qa', 'deploy', 'backlog', 'kanban', 'memoryConfig', 'githubIntegrations', 'checkpoints', 'engineeringContract'];
   for (const k of allowed) {
     if (patch[k] === undefined) continue;
     if (k === 'kanban' && patch.kanban && typeof patch.kanban === 'object') {
@@ -1395,6 +1395,7 @@ function _migrateWorkItem(item) {
   if (item.dueAt === undefined)           item.dueAt = null;
   if (item.parentId === undefined)        item.parentId = null;
   if (!Array.isArray(item.blockedBy))     item.blockedBy = [];
+  if (!Array.isArray(item.fileScope))     item.fileScope = [];
   if (item.acceptance === undefined)      item.acceptance = '';
   // Optional model override for AI runs. null = inherit from settings.
   if (item.model === undefined)           item.model = null;
@@ -1454,6 +1455,7 @@ export function addBacklogItem(projectId, item = {}) {
     dueAt: item.dueAt || null,
     parentId: item.parentId || null,
     blockedBy: Array.isArray(item.blockedBy) ? item.blockedBy.slice(0, 20).map(String) : [],
+    fileScope: Array.isArray(item.fileScope) ? item.fileScope.slice(0, 50).map(String) : [],
     acceptance: String(item.acceptance || '').slice(0, 4000),
     model: item.model ? String(item.model).slice(0, 100) : null,
     runs: [],
@@ -1527,7 +1529,7 @@ export function updateBacklogItem(projectId, itemId, patch = {}) {
     'title', 'body', 'status', 'rice', 'tags',
     'assignee', 'priority', 'estimateMinutes', 'dueAt',
     'parentId', 'blockedBy', 'acceptance', 'lockedByUser', 'researchOf',
-    'verifyCommand', 'model', 'originConvId',
+    'verifyCommand', 'fileScope', 'model', 'originConvId',
   ];
   for (const k of allow) if (patch[k] !== undefined) it[k] = patch[k];
   // Keep column ↔ status mirrored if status was changed externally

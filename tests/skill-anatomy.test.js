@@ -8,6 +8,7 @@ import {
   extractSection,
   findSection,
   lintSkill,
+  normalizeSkillPolicy,
 } from '../lib/skill-anatomy.js';
 
 const VALID = `---
@@ -52,6 +53,33 @@ describe('parseFrontmatter', () => {
     const r = parseFrontmatter('# No frontmatter here\n');
     expect(r.hasFrontmatter).toBe(false);
     expect(r.frontmatter).toEqual({});
+  });
+});
+
+describe('normalizeSkillPolicy', () => {
+  it('keeps legacy skills model- and user-invokable', () => {
+    expect(normalizeSkillPolicy({})).toEqual({
+      invocation: 'both',
+      maturity: 'unclassified',
+      userInvocable: true,
+      modelInvocable: true,
+      autoRoutable: true,
+    });
+  });
+
+  it('maps standard Agent Skills metadata to user-only policy', () => {
+    expect(normalizeSkillPolicy({ 'disable-model-invocation': 'true' })).toMatchObject({
+      invocation: 'user-only',
+      userInvocable: true,
+      modelInvocable: false,
+      autoRoutable: false,
+    });
+  });
+
+  it('keeps in-progress and deprecated skills out of automatic routing', () => {
+    expect(normalizeSkillPolicy({ maturity: 'in-progress' }).autoRoutable).toBe(false);
+    expect(normalizeSkillPolicy({ maturity: 'deprecated' }).autoRoutable).toBe(false);
+    expect(normalizeSkillPolicy({ maturity: 'promoted' }).autoRoutable).toBe(true);
   });
 });
 
@@ -141,5 +169,23 @@ describe('lintSkill', () => {
     const r = lintSkill(VALID, { dirName: 'something-else' });
     expect(r.ok).toBe(false);
     expect(r.errors.join(' ')).toMatch(/match|dirName|directory/i);
+  });
+
+  it('validates explicit invocation and maturity values', () => {
+    const bad = VALID.replace(
+      'description: Implements features in thin slices. Use when implementing any change touching multiple files.',
+      'description: Implements features in thin slices. Use when implementing any change touching multiple files.\ninvocation: sometimes\nmaturity: ancient',
+    );
+    const r = lintSkill(bad);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join(' ')).toMatch(/invocation/);
+    expect(r.errors.join(' ')).toMatch(/maturity/);
+  });
+
+  it('does not require routing trigger prose for user-only skills', () => {
+    const userOnly = VALID
+      .replace('description: Implements features in thin slices. Use when implementing any change touching multiple files.', 'description: Build an approved implementation ticket.\ndisable-model-invocation: true');
+    const r = lintSkill(userOnly);
+    expect(r.warnings.join(' ')).not.toMatch(/use when/i);
   });
 });

@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "defaults": {
+    "compatibility": ["fauna"],
+    "minimumFaunaVersion": "2.2.4"
+  },
+  "skills": [
+    {
+      "name": "ask-fauna",
+      "goldenRoutes": [{ "query": "invoke ask-fauna to tell me which engineering flow fits", "expect": "ask-fauna" }],
+      "negativeRoutes": [{ "query": "debug this production crash now", "reject": "ask-fauna" }],
+      "behavioralEvaluations": [{ "situation": "A user asks what to do next", "expectedSignals": ["names one flow and phase", "does not start the workflow"] }]
+    },
+    {
+      "name": "code-review-and-quality",
+      "goldenRoutes": [{ "query": "perform isolated Standards and Spec review of this implementation against acceptance criteria", "expect": "code-review-and-quality" }],
+      "negativeRoutes": [{ "query": "write a failing test for a parser", "reject": "code-review-and-quality" }],
+      "behavioralEvaluations": [{ "situation": "A change enters review", "expectedSignals": ["isolated Standards pass", "isolated Spec pass", "records verifier evidence"] }]
+    },
+    {
+      "name": "codebase-design",
+      "goldenRoutes": [{ "query": "refactor module boundaries ownership and dependency direction around a public interface", "expect": "codebase-design" }],
+      "negativeRoutes": [{ "query": "define business terms and domain invariants for a product specification", "reject": "codebase-design" }],
+      "behavioralEvaluations": [{ "situation": "A change moves responsibilities across modules", "expectedSignals": ["identifies one behavior owner", "checks public boundaries and dependency direction", "requires evidence before adding abstractions"] }]
+    },
+    {
+      "name": "debugging-and-error-recovery",
+      "replacement": "diagnosing-bugs",
+      "migration": "Use diagnosing-bugs for all new bug diagnosis work."
+    },
+    {
+      "name": "diagnosing-bugs",
+      "goldenRoutes": [{ "query": "the production app crashes with an intermittent regression", "expect": "diagnosing-bugs" }],
+      "negativeRoutes": [{ "query": "design a new feature specification", "reject": "diagnosing-bugs" }],
+      "behavioralEvaluations": [{ "situation": "A confirmed regression needs a fix", "expectedSignals": ["red-capable reproduction command", "ranked hypotheses", "regression test fails before and passes after"] }]
+    },
+    {
+      "name": "domain-modeling",
+      "goldenRoutes": [{ "query": "define ubiquitous domain language entities value objects and business invariants", "expect": "domain-modeling" }],
+      "negativeRoutes": [{ "query": "refactor module boundaries and dependency direction", "reject": "domain-modeling" }],
+      "behavioralEvaluations": [{ "situation": "Requirements use disputed business terminology", "expectedSignals": ["grounds terms in repository or user evidence", "states testable invariants", "identifies context-specific meanings"] }]
+    },
+    {
+      "name": "diagram-design",
+      "goldenRoutes": [{ "query": "create an architecture data flow diagram", "expect": "diagram-design" }],
+      "negativeRoutes": [{ "query": "rewrite this paragraph in simple English", "reject": "diagram-design" }],
+      "behavioralEvaluations": [{ "situation": "A user requests an architecture diagram", "expectedSignals": ["selects a fitting diagram type", "produces a self-contained visual artifact"] }]
+    },
+    {
+      "name": "figma-design",
+      "goldenRoutes": [{ "query": "build this dashboard layout in Figma", "expect": "figma-design" }],
+      "negativeRoutes": [{ "query": "create a PowerPoint presentation", "reject": "figma-design" }],
+      "behavioralEvaluations": [{ "situation": "A Figma layout is requested", "expectedSignals": ["uses the connected Figma tools", "validates layout and typography"] }]
+    },
+    {
+      "name": "incremental-implementation",
+      "goldenRoutes": [{ "query": "slice this large feature into independently verifiable implementation steps", "expect": "incremental-implementation" }],
+      "negativeRoutes": [{ "query": "triage a production exception", "reject": "incremental-implementation" }],
+      "behavioralEvaluations": [{ "situation": "A multi-file feature is ready to build", "expectedSignals": ["implements one vertical slice", "validates before widening scope"] }]
+    },
+    {
+      "name": "pptx",
+      "goldenRoutes": [{ "query": "create and edit a PowerPoint pptx presentation", "expect": "pptx" }],
+      "negativeRoutes": [{ "query": "draw an application architecture diagram", "reject": "pptx" }],
+      "behavioralEvaluations": [{ "situation": "A presentation deck is requested", "expectedSignals": ["creates or edits a pptx", "performs visual validation"] }]
+    },
+    {
+      "name": "pr-writer",
+      "goldenRoutes": [{ "query": "write a pull request description and changelog entry", "expect": "pr-writer" }],
+      "negativeRoutes": [{ "query": "perform isolated Standards and Spec review of implementation correctness", "reject": "pr-writer" }],
+      "behavioralEvaluations": [{ "situation": "A completed diff needs a PR body", "expectedSignals": ["summarizes behavior and verification", "does not invent changes"] }]
+    },
+    {
+      "name": "setup-fauna-engineering",
+      "goldenRoutes": [{ "query": "invoke setup-fauna-engineering to onboard this repository", "expect": "setup-fauna-engineering" }],
+      "negativeRoutes": [{ "query": "implement the next accepted ticket", "reject": "setup-fauna-engineering" }],
+      "behavioralEvaluations": [{ "situation": "A repository lacks durable engineering context", "expectedSignals": ["previews contract files", "requires approval", "preserves existing files"] }]
+    },
+    {
+      "name": "simple-english",
+      "goldenRoutes": [{ "query": "rewrite this dense technical paragraph in simple English", "expect": "simple-english" }],
+      "negativeRoutes": [{ "query": "debug a crashing Node process", "reject": "simple-english" }],
+      "behavioralEvaluations": [{ "situation": "Dense prose needs simplification", "expectedSignals": ["preserves meaning", "uses direct accessible language"] }]
+    },
+    {
+      "name": "spec-driven-development",
+      "goldenRoutes": [{ "query": "requirements are ambiguous help define acceptance criteria", "expect": "spec-driven-development" }],
+      "negativeRoutes": [{ "query": "the accepted spec is ready for implementation", "reject": "spec-driven-development" }],
+      "behavioralEvaluations": [{ "situation": "A feature request is ambiguous", "expectedSignals": ["clarifies behavior", "produces testable acceptance criteria"] }]
+    },
+    {
+      "name": "test-driven-development",
+      "goldenRoutes": [{ "query": "write a failing unit test before implementing this behavior", "expect": "test-driven-development" }],
+      "negativeRoutes": [{ "query": "draft a pull request description", "reject": "test-driven-development" }],
+      "behavioralEvaluations": [{ "situation": "New behavior needs test-first proof", "expectedSignals": ["demonstrates red", "implements minimal green", "refactors while green"] }]
+    },
+    {
+      "name": "to-tickets",
+      "goldenRoutes": [{ "query": "invoke to-tickets for this accepted multi-session specification", "expect": "to-tickets" }],
+      "negativeRoutes": [{ "query": "clarify an ambiguous feature request", "reject": "to-tickets" }],
+      "behavioralEvaluations": [{ "situation": "An accepted specification needs a work graph", "expectedSignals": ["previews dependency edges", "requires approval", "publishes independently verifiable tickets"] }]
+    },
+    {
+      "name": "using-fauna-skills",
+      "goldenRoutes": [{ "query": "which Fauna skill should be loaded for this lifecycle phase", "expect": "using-fauna-skills" }],
+      "negativeRoutes": [{ "query": "remove metadata watermarks from my document", "reject": "using-fauna-skills" }],
+      "behavioralEvaluations": [
+        { "situation": "An agent must select workflow guidance", "expectedSignals": ["routes the lifecycle first", "loads only relevant skill sections"] },
+        { "situation": "A phase completes or context approaches its model-specific threshold", "expectedSignals": ["uses live token budget and task state", "chooses one boundary action", "returns none during ordinary in-phase work"] }
+      ]
+    },
+    {
+      "name": "watermarks",
+      "goldenRoutes": [{ "query": "inspect and remove AI watermark metadata from my file", "expect": "watermarks" }],
+      "negativeRoutes": [{ "query": "build a Figma component library", "reject": "watermarks" }],
+      "behavioralEvaluations": [{ "situation": "Owned content needs watermark inspection", "expectedSignals": ["inspects before mutation", "reports removed provenance data"] }]
+    }
+  ]
+}

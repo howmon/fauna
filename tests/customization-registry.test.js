@@ -262,6 +262,10 @@ describe('prompt invocation', () => {
 });
 
 describe('agent and tool policy', () => {
+  it('includes ticket-plan authoring in the todo alias', () => {
+    expect(expandToolAliases(['todo'])).toContain('fauna_create_ticket_plan');
+  });
+
   it('expands VS Code-style tool aliases deterministically', () => {
     expect(expandToolAliases(['read', 'search', 'custom_tool'])).toEqual([
       'fauna_read_file',
@@ -275,6 +279,7 @@ describe('agent and tool policy', () => {
       'fauna_context_search',
       'fauna_list_references',
       'fauna_list_skills',
+      'fauna_route_engineering_flow',
       'fauna_route_skill',
       'custom_tool',
     ]);

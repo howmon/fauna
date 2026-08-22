@@ -1,5 +1,6 @@
 ---
 name: simple-english
+maturity: promoted
 version: 1.0.0
 description: |
   Write or rewrite any text — technical docs, articles, emails, conversations,
@@ -22,6 +23,40 @@ metadata:
 Write technical text with the rules of ASD-STE100 Simplified Technical English. STE is the controlled language that aerospace and defense manufacturers use for maintenance documentation. The rules exist so that a tired reader who is not a native English speaker cannot misread an instruction. They remove the usual signs of AI-generated text as a side effect: long sentences, synonym rotation, hedges, filler, and decorative clauses.
 
 Write for that tired reader. Each sentence must survive one read.
+
+## Overview
+
+Rewrite dense material in direct, accessible language while preserving its
+technical meaning, obligations, and important distinctions.
+
+## When to Use
+
+Use for simplification, controlled-language editing, or accessibility rewrites.
+Do not simplify code, identifiers, quotations, or legally significant wording
+without explicit permission.
+
+## Process
+
+Classify the text, choose the appropriate mode, apply the rule catalog, protect
+untouchable content, and complete the self-check before delivery.
+
+## Common Rationalizations
+
+| Rationalization | Reality |
+|---|---|
+| "Shorter always means simpler" | Preserve necessary meaning and relationships. |
+| "Technical nouns should be replaced" | Keep precise domain terms and explain them where needed. |
+
+## Red Flags
+
+- Changed requirements, numbers, warnings, or causal meaning
+- Simplified code, commands, identifiers, or quotations
+- Added claims that were not present in the source
+
+## Verification
+
+Use the Self-Check Before You Deliver section and compare the rewrite against
+the source for meaning, scope, numbers, and protected text.
 
 ## Your Task
 

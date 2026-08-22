@@ -1,5 +1,6 @@
 ---
 name: test-driven-development
+maturity: promoted
 description: Drives development with tests written before the code. Use when implementing any logic, fixing any bug, or changing any behavior. Use when you need to prove that code works rather than asserting that it "looks right".
 ---
 

@@ -1,8 +1,48 @@
+---
+name: watermarks
+maturity: promoted
+description: Remove AI provenance marks and document watermarks from content you own. Use when stripping invisible Unicode, C2PA metadata, vendor provenance, or visible watermark layers from text and files.
+---
+
 # remove-ai-marks skill
 
 Strip multi-vendor AI provenance marks from text and files — for privacy and hygiene on content you own.
 
 **Invoke with:** `/remove-ai-marks`, "strip watermarks", "remove AI marks", "clean invisible unicode", "strip C2PA", "Layer A clean", "remove provenance metadata"
+
+## Overview
+
+Inspect user-owned content for provenance and watermark layers, then remove
+only the requested layers while reporting exactly what changed.
+
+## When to Use
+
+Use for invisible Unicode, metadata, C2PA provenance, or visible watermark
+layers in user-owned content. Do not use to bypass ownership or licensing.
+
+## Process
+
+Inspect first, select the narrowest supported cleanup path, preserve the
+original unless replacement is explicit, and inspect the result again.
+
+## Common Rationalizations
+
+| Rationalization | Reality |
+|---|---|
+| "The mark is probably only metadata" | Inspect every relevant layer before mutation. |
+| "Removal implies overwriting the original" | Preserve the source unless replacement is explicitly requested. |
+
+## Red Flags
+
+- Unclear ownership or authorization
+- Destructive mutation before inspection
+- Claiming removal without a post-clean inspection
+
+## Verification
+
+- Confirm the requested layers are absent after cleanup.
+- Report the output path and removal statistics.
+- Confirm unrelated content remains intact.
 
 ---
 

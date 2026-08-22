@@ -1,11 +1,46 @@
 ---
 name: pr-writer
+maturity: promoted
 description: "Write a pull request description or commit message. Use whenever the user asks to draft, improve, summarize, or review a PR description, PR body, merge request text, commit message, or changelog entry. Also use when the user says \"open a PR\", \"write the PR\", \"summarize these commits\", or references a diff / patch that needs a human-readable summary."
 ---
 
 # PR & commit message writer
 
 Fast, honest, reviewer-first. Optimize for the reviewer who has 90 seconds.
+
+## Overview
+
+Turn an inspected diff and verification evidence into accurate PR, commit, or
+changelog text without inventing intent or results.
+
+## When to Use
+
+Use when the user requests PR copy, a commit message, release notes, or a
+human-readable change summary. Do not use this skill to review code quality.
+
+## Process
+
+Inspect the actual diff and linked work, identify user-visible behavior and
+verification, then choose a structure proportional to the change.
+
+## Common Rationalizations
+
+| Rationalization | Reality |
+|---|---|
+| "The ticket title is enough context" | The final diff and verification are the evidence source. |
+| "A long template looks more complete" | Match the description size to the change. |
+
+## Red Flags
+
+- Claims not supported by the diff
+- Tests or screenshots listed without evidence they ran
+- Review findings presented as implemented behavior
+
+## Verification
+
+- Confirm every claim against the diff or linked work item.
+- Include the actual verification performed.
+- Remove empty headings and boilerplate.
 
 ## Structure (adjust to size)
 

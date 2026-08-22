@@ -86,7 +86,13 @@ describe('self-tools', () => {
       // fauna_unstuck (lateral personas), fauna_audit_prompt (prompt patterns).
       // Bumped to 112: +fauna_render_diagram, +fauna_check_diagram (editorial SVG wrapper),
       // +fauna_inspect_watermarks, +fauna_clean_watermarks (AI watermark removal).
-      expect(SELF_TOOL_DEFS).toHaveLength(112);
+      // Bumped to 113 after adding deterministic engineering lifecycle routing.
+      // Bumped to 114 after adding approval-gated ticket-plan authoring.
+      // Bumped to 115 after adding structured two-axis review recording.
+      // Bumped to 116 after adding feedback-loop diagnosis recording.
+      // Bumped to 117 after adding repository engineering-contract setup.
+      // Bumped to 118 after adding worktree-parallel evaluation.
+      expect(SELF_TOOL_DEFS).toHaveLength(118);
     });
 
     it('each tool has required OpenAI function format', () => {
@@ -99,6 +105,40 @@ describe('self-tools', () => {
   });
 
   describe('executeSelfTool()', () => {
+    it('fauna_route_engineering_flow returns an actionable lifecycle phase', async () => {
+      const result = JSON.parse(await executeSelfTool(
+        'fauna_route_engineering_flow',
+        { situation: 'The production app crashes intermittently with a regression' },
+        mockContext,
+      ));
+      expect(result.ok).toBe(true);
+      expect(result.flow.id).toBe('bug-recovery');
+      expect(result.phase.id).toBe('diagnose');
+      expect(result.phase.skills).toContain('diagnosing-bugs');
+      expect(result.contextRecommendation).toMatchObject({ action: 'none', triggered: false });
+    });
+
+    it('fauna_route_engineering_flow uses live budget and task state at phase boundaries', async () => {
+      const result = JSON.parse(await executeSelfTool(
+        'fauna_route_engineering_flow',
+        { flow: 'feature-delivery', phase: 'clarify', taskState: 'phase-complete' },
+        {
+          ...mockContext,
+          contextBudget: { model: 'gpt-5', usedTokens: 90_000, bodyTokenLimit: 100_000 },
+        },
+      ));
+      expect(result.contextRecommendation).toMatchObject({
+        action: 'compact',
+        triggered: true,
+        contextPressure: { approachingLimit: true, ratio: 0.9 },
+      });
+    });
+
+    it('fauna_route_engineering_flow requires a situation or named flow', async () => {
+      const result = JSON.parse(await executeSelfTool('fauna_route_engineering_flow', {}, mockContext));
+      expect(result).toEqual({ ok: false, error: 'situation or flow required' });
+    });
+
     it('fauna_remember stores a fact', async () => {
       const result = JSON.parse(await executeSelfTool('fauna_remember', { text: 'Test fact' }, mockContext));
       expect(result.ok).toBe(true);

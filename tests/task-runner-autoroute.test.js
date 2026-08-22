@@ -10,20 +10,31 @@ const { _testables } = await import('../task-runner.js');
 let tmp;
 let origCwd;
 
-function writeSkill(dir, name, description, extra = '') {
+function workspaceSkills() {
+  return _testables.scanSkillFiles().filter((skill) => skill.path.startsWith(tmp + path.sep));
+}
+
+function writeSkill(dir, name, description, extra = '', metadata = []) {
   const skillDir = path.join(dir, 'skills', name);
   fs.mkdirSync(skillDir, { recursive: true });
   fs.writeFileSync(
     path.join(skillDir, 'SKILL.md'),
-    `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n\n${extra}\n`,
+    `---\nname: ${name}\ndescription: ${description}\n${metadata.join('\n')}${metadata.length ? '\n' : ''}---\n\n# ${name}\n\n${extra}\n`,
   );
 }
 
 beforeAll(() => {
   origCwd = process.cwd();
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fauna-autoroute-'));
+  tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fauna-autoroute-')));
   writeSkill(tmp, 'debugging-and-error-recovery', 'Systematically debug failing tests, crashes, and unexpected exceptions by forming and testing hypotheses.');
   writeSkill(tmp, 'test-driven-development', 'Write a failing test first, then implement the minimal code to make it pass, then refactor.');
+  writeSkill(
+    tmp,
+    'guided-crash-recovery',
+    'Use when guided crash recovery is explicitly requested for an unexpected exception.',
+    '',
+    ['disable-model-invocation: true', 'maturity: promoted'],
+  );
   process.chdir(tmp);
 });
 
@@ -44,11 +55,20 @@ describe('task-runner auto skill routing', () => {
 
   it('routes a debugging task to the debugging skill and caches the result', () => {
     const task = { id: 'a1', title: 'The test suite crashes with an unexpected exception', description: 'Figure out why it fails and fix it.' };
-    const slug = _testables.autoRouteSkill(task);
+    const slug = _testables.autoRouteSkill(task, workspaceSkills());
     expect(slug).toBe('debugging-and-error-recovery');
     // Cached (non-enumerable) so a second call is stable and cheap.
     expect(task.__autoRoutedSkill).toBe('debugging-and-error-recovery');
-    expect(_testables.autoRouteSkill(task)).toBe('debugging-and-error-recovery');
+    expect(_testables.autoRouteSkill(task, workspaceSkills())).toBe('debugging-and-error-recovery');
+  });
+
+  it('does not auto-route to a user-only skill even when its name is the strongest match', () => {
+    const task = {
+      id: 'a-user-only',
+      title: 'Guided crash recovery for an unexpected exception',
+      description: 'Debug the crash and recover safely.',
+    };
+    expect(_testables.autoRouteSkill(task, workspaceSkills())).toBe('debugging-and-error-recovery');
   });
 
   it('never adds auto-routed skills to the evidence-gate skill list', () => {
@@ -60,7 +80,7 @@ describe('task-runner auto skill routing', () => {
 
   it('surfaces an auto-routed skill as SUGGESTED (advisory) in the system prompt', () => {
     const task = { id: 'a3', title: 'The test suite crashes with an unexpected exception' };
-    const lines = _testables.skillSystemPromptLines(task);
+    const lines = _testables.skillSystemPromptLines(task, workspaceSkills());
     expect(lines.length).toBeGreaterThan(0);
     expect(lines[0]).toMatch(/SUGGESTED SKILL/);
     expect(lines.join('\n')).toMatch(/debugging-and-error-recovery/);
@@ -71,6 +91,13 @@ describe('task-runner auto skill routing', () => {
     const lines = _testables.skillSystemPromptLines(task);
     expect(lines[0]).toMatch(/ACTIVE SKILLS/);
     expect(lines.join('\n')).toMatch(/MUST follow/);
+  });
+
+  it('allows a user-only skill when it is explicitly bound', () => {
+    const task = { id: 'a5', title: 'Anything', skills: ['guided-crash-recovery'] };
+    const lines = _testables.skillSystemPromptLines(task);
+    expect(lines[0]).toMatch(/ACTIVE SKILLS/);
+    expect(lines.join('\n')).toMatch(/guided-crash-recovery/);
   });
 
   it('produces a per-task ledger path under the fauna config dir', () => {

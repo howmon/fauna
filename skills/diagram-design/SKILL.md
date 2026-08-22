@@ -1,11 +1,40 @@
 ---
 name: diagram-design
-description: Create editorial architecture, flowchart, sequence, ER, state machine, timeline, swimlane, quadrant, radar, loop, nested, tree, org chart, layer stack, Venn, pyramid, bar, line, Gantt, scatter, high-level, process, medallion, data flow, IT current-state, DP integration, and DP security matrix diagrams — plus fauna-native circuit schematics and PCB board views — as standalone self-contained HTML/SVG artifacts. Inherits fauna's active theme preset. Redraw draw.io / Mermaid sources; add brand tokens from a website.
+maturity: promoted
+description: Create editorial architecture, flowchart, sequence, ER, state machine, timeline, swimlane, quadrant, radar, loop, nested, tree, org chart, layer stack, Venn, pyramid, bar, line, Gantt, scatter, high-level, process, medallion, data flow, IT current-state, DP integration, and DP security matrix diagrams. Use when producing standalone HTML/SVG visuals, fauna-native circuits or PCB views, or redrawing draw.io and Mermaid sources.
 ---
 
 # Diagram Design
 
 Editorial diagrams that inherit fauna's active theme. No Mermaid slop, no generic rounded boxes, no shadows.
+
+## Overview
+
+Choose the visual form from the information structure, then produce a legible,
+self-contained artifact using Fauna's active design tokens.
+
+## Process
+
+Select the semantic pattern, apply the matching layout and design system,
+render the artifact, and complete the taste gate before delivery.
+
+## Common Rationalizations
+
+| Rationalization | Reality |
+|---|---|
+| "A generic flowchart is close enough" | The information pattern determines the diagram type. |
+| "The source rendered, so visual QA is optional" | Rendering does not prove legibility, spacing, or connector quality. |
+
+## Red Flags
+
+- Choosing a diagram type before understanding the relationships
+- Crossing labels, clipped text, or ambiguous connector direction
+- Delivering without the pre-output checklist
+
+## Verification
+
+Use the Pre-Output Checklist below and confirm the rendered artifact is
+legible, correctly framed, and faithful to the supplied information.
 
 ---
 

@@ -1,9 +1,14 @@
 ---
 name: debugging-and-error-recovery
-description: Five-step triage for tests failing, builds breaking, or behavior going unexpected. Use when a task has failed, when a previous step's actions returned errors, or when the autonomous loop has produced output that doesn't match expectations.
+maturity: deprecated
+description: Deprecated compatibility workflow. Use when migrating an explicit debugging-and-error-recovery reference to the promoted diagnosing-bugs skill.
 ---
 
 # Debugging and Error Recovery
+
+> Deprecated: use `diagnosing-bugs`. It adds an executable completion gate for
+> red/green reproduction evidence, falsifiable hypotheses, regression coverage,
+> and instrumentation cleanup.
 
 ## Overview
 

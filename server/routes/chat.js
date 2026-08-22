@@ -1703,6 +1703,12 @@ export function registerChatRoute(app, {
       const selfToolContext = {
         getModels: () => FALLBACK_MODELS,
         supportsVision: !!llmSupports.vision,
+        contextBudget: {
+          model: budget.matched,
+          usedTokens: bodyTokens,
+          bodyTokenLimit: budget.bodyTokenLimit,
+          hardBodyCeiling: budget.hardBodyCeiling,
+        },
         imageAssets: activeImageAssets,
         activeProjectId: projectId || null,
         convId: req.body?.conversationId || null,

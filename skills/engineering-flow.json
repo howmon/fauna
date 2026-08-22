@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "id": "fauna-engineering",
+  "flows": [
+    {
+      "id": "feature-delivery",
+      "label": "Feature delivery",
+      "reason": "Turn an idea or requested change into verified, review-ready behavior.",
+      "notWhen": "Use bug recovery when existing behavior is broken, or incoming work when sorting a queue of reports and requests.",
+      "entryPhase": "clarify",
+      "signals": {
+        "phrases": ["new feature", "build a feature", "add support", "acceptance criteria", "requirements are unclear"],
+        "terms": ["feature", "build", "implement", "idea", "requirements", "ambiguous", "change"]
+      },
+      "phases": [
+        {
+          "id": "clarify",
+          "label": "Clarify behavior",
+          "nextAction": "Define the behavior and acceptance criteria before implementation.",
+          "humanDecision": true,
+          "skills": ["spec-driven-development"],
+          "requires": [],
+          "produces": ["accepted specification", "acceptance criteria"],
+          "next": "implement",
+          "context": "continue"
+        },
+        {
+          "id": "implement",
+          "label": "Implement vertical slices",
+          "nextAction": "Build one independently verifiable behavior slice at a time.",
+          "humanDecision": false,
+          "skills": ["incremental-implementation", "test-driven-development"],
+          "requires": ["accepted specification"],
+          "produces": ["tested implementation"],
+          "next": "review",
+          "context": "continue-or-fresh-ticket"
+        },
+        {
+          "id": "review",
+          "label": "Review against standards and intent",
+          "nextAction": "Review the completed diff before merging or release.",
+          "humanDecision": false,
+          "skills": ["code-review-and-quality"],
+          "requires": ["tested implementation"],
+          "produces": ["review findings", "verification evidence"],
+          "next": null,
+          "context": "subagent-or-continue"
+        }
+      ]
+    },
+    {
+      "id": "bug-recovery",
+      "label": "Hard bug recovery",
+      "reason": "Build a reproducible feedback loop, isolate the cause, and lock the fix down with evidence.",
+      "notWhen": "Use feature delivery for new behavior; use incoming work when the task is to sort or qualify reports rather than fix one.",
+      "entryPhase": "diagnose",
+      "signals": {
+        "phrases": ["something is broken", "test suite fails", "performance regression", "intermittent failure", "production crash"],
+        "terms": ["bug", "broken", "crash", "error", "failing", "failure", "regression", "flaky", "slow", "debug"]
+      },
+      "phases": [
+        {
+          "id": "diagnose",
+          "label": "Build the feedback loop",
+          "nextAction": "Reproduce the exact symptom and isolate a falsifiable cause before changing production code.",
+          "humanDecision": false,
+          "skills": ["diagnosing-bugs"],
+          "requires": [],
+          "produces": ["reproduction command", "root-cause evidence"],
+          "next": "regression-test",
+          "context": "continue"
+        },
+        {
+          "id": "regression-test",
+          "label": "Lock down the fix",
+          "nextAction": "Turn the minimized reproduction into a failing test, then apply the smallest fix.",
+          "humanDecision": false,
+          "skills": ["test-driven-development"],
+          "requires": ["reproduction command", "root-cause evidence"],
+          "produces": ["regression test", "verified fix"],
+          "next": "review",
+          "context": "continue"
+        },
+        {
+          "id": "review",
+          "label": "Review the fix",
+          "nextAction": "Review the diff and confirm the original reproduction stays green.",
+          "humanDecision": false,
+          "skills": ["code-review-and-quality"],
+          "requires": ["regression test", "verified fix"],
+          "produces": ["review findings", "verification evidence"],
+          "next": null,
+          "context": "subagent-or-continue"
+        }
+      ]
+    },
+    {
+      "id": "incoming-work",
+      "label": "Incoming work qualification",
+      "reason": "Turn a queue of raw reports or requests into explicit, implementable work.",
+      "notWhen": "Use bug recovery when fixing one confirmed failure now; use feature delivery when the requested change is already selected.",
+      "entryPhase": "qualify",
+      "signals": {
+        "phrases": ["triage issues", "incoming requests", "bug reports", "issue queue", "backlog pile", "needs triage"],
+        "terms": ["triage", "queue", "reports", "requests", "backlog", "issues", "reporter", "qualify"]
+      },
+      "phases": [
+        {
+          "id": "qualify",
+          "label": "Qualify the request",
+          "nextAction": "Verify the claim, clarify missing behavior, and write acceptance criteria before assigning implementation.",
+          "humanDecision": true,
+          "skills": ["spec-driven-development"],
+          "requires": [],
+          "produces": ["qualified request", "acceptance criteria"],
+          "next": "implement",
+          "context": "continue-or-handoff"
+        },
+        {
+          "id": "implement",
+          "label": "Implement qualified work",
+          "nextAction": "Implement the accepted request as independently verifiable slices.",
+          "humanDecision": false,
+          "skills": ["incremental-implementation", "test-driven-development"],
+          "requires": ["qualified request", "acceptance criteria"],
+          "produces": ["tested implementation"],
+          "next": "review",
+          "context": "fresh-ticket"
+        },
+        {
+          "id": "review",
+          "label": "Review qualified work",
+          "nextAction": "Review the implementation against the qualified request.",
+          "humanDecision": false,
+          "skills": ["code-review-and-quality"],
+          "requires": ["tested implementation"],
+          "produces": ["review findings", "verification evidence"],
+          "next": null,
+          "context": "subagent-or-continue"
+        }
+      ]
+    }
+  ]
+}
