@@ -133,6 +133,21 @@ describe('writeSourceFileBytes', () => {
     const names = entries.map(e => e.name);
     expect(names).toContain('img.png');
   });
+
+  it('lists files inside .config without exposing unrelated dotfiles', () => {
+    fs.mkdirSync(path.join(_tmpRoot, '.config'));
+    fs.writeFileSync(path.join(_tmpRoot, '.config', 'settings.json'), '{}\n');
+    fs.mkdirSync(path.join(_tmpRoot, '.git'));
+
+    const rootEntries = listFiles('p1', 'src1', '');
+    expect(rootEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: '.config', path: '.config', type: 'dir' }),
+    ]));
+    expect(rootEntries.map(entry => entry.name)).not.toContain('.git');
+    expect(listFiles('p1', 'src1', '.config')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'settings.json', path: path.join('.config', 'settings.json'), type: 'file' }),
+    ]));
+  });
 });
 
 describe('createSourceEntry (regression — used by the same route module)', () => {

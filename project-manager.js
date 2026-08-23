@@ -559,7 +559,7 @@ export function listFiles(projectId, srcId, subPath) {
 
   const entries = fs.readdirSync(resolvedTarget, { withFileTypes: true });
   return entries
-    .filter(e => !e.name.startsWith('.') || e.name === '.env')  // hide dotfiles except .env preview
+    .filter(e => !e.name.startsWith('.') || e.name === '.env' || e.name === '.config')
     .map(e => {
       const fullPath = path.join(resolvedTarget, e.name);
       const relPath  = path.relative(resolvedRoot, fullPath);
