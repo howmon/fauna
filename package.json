@@ -216,6 +216,7 @@
       "fauna-bot/package.json",
       "fauna-bot/node_modules/**",
       "package.json",
+      "node_modules/typescript/**",
       "!node_modules/@xenova/transformers/**",
       "node_modules/@xenova/transformers/dist/transformers.min.js",
       "node_modules/@xenova/transformers/dist/ort-wasm-simd-threaded.wasm",
