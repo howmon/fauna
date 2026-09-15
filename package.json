@@ -95,7 +95,7 @@
   },
   "overrides": {
     "localtunnel": {
-      "axios": "^1.12.2"
+      "axios": "^1.20.0"
     }
   },
   "build": {
