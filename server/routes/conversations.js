@@ -192,6 +192,45 @@ export function registerConversationRoutes(app, deps) {
     }
   });
 
+  app.post('/api/conversations/:id/fork', async (req, res) => {
+    try {
+      const source = await store.get(req.params.id);
+      if (!source) return res.status(404).json({ error: 'Conversation not found' });
+      const messages = Array.isArray(source.messages) ? source.messages : [];
+      let messageIndex = Number.isInteger(req.body?.messageIndex) ? req.body.messageIndex : messages.length - 1;
+      if (req.body?.messageId) {
+        messageIndex = messages.findIndex(message => message && message.id === req.body.messageId);
+        if (messageIndex < 0) return res.status(404).json({ error: 'Message not found' });
+      }
+      if (messageIndex < -1 || messageIndex >= messages.length) {
+        return res.status(400).json({ error: 'Invalid messageIndex' });
+      }
+      const now = Date.now();
+      const forkId = String(req.body?.id || `c${now}-${Math.random().toString(36).slice(2, 8)}`);
+      if (!/^[a-zA-Z0-9_.-]+$/.test(forkId)) return res.status(400).json({ error: 'Invalid conversation id' });
+      if (await store.get(forkId)) return res.status(409).json({ error: 'Conversation already exists' });
+      const selectedMessage = messages[messageIndex] || null;
+      const fork = await store.put(forkId, {
+        ...source,
+        id: forkId,
+        title: String(req.body?.title || `${source.title || 'Conversation'} (branch)`).slice(0, 500),
+        messages: JSON.parse(JSON.stringify(messages.slice(0, messageIndex + 1))),
+        parentConversationId: source.id,
+        forkedFromMessageId: selectedMessage?.id || null,
+        forkedFromMessageIndex: messageIndex,
+        branchDepth: (Number(source.branchDepth) || 0) + 1,
+        createdAt: now,
+        updatedAt: now,
+      });
+      sendConversationEvent('upsert', { conversation: fork });
+      try { syncEngine.enqueueChange('conversation', fork.id, 'upsert', { projectId: fork.projectId }); } catch (_) {}
+      res.status(201).json({ ok: true, conversation: fork });
+    } catch (error) {
+      if (error instanceof PayloadTooLargeError) return res.status(413).json({ error: error.message, detail: error.detail });
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.delete('/api/conversations/:id', async (req, res) => {
     try {
       const deleted = await store.del(req.params.id);

@@ -642,11 +642,18 @@ function createWidget() {
     const old = readWidgetPrefs();
     writeWidgetPrefs({ ...old, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
   };
-  widgetWindow.on('moved', savePos);
-  widgetWindow.on('resized', savePos);
+  let savePosTimer = null;
+  const scheduleSavePos = () => {
+    clearTimeout(savePosTimer);
+    savePosTimer = setTimeout(savePos, 200);
+  };
+  widgetWindow.on('moved', scheduleSavePos);
+  widgetWindow.on('resized', scheduleSavePos);
 
   // Hide instead of close (so it can be toggled quickly)
   widgetWindow.on('close', (e) => {
+    clearTimeout(savePosTimer);
+    savePos();
     if (!app.isQuitting) {
       e.preventDefault();
       widgetWindow.hide();

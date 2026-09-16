@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fauna</title>
+<link rel="icon" type="image/png" href="img/logo-24.png">
 <script>
   // Auto-attach the per-process UI nonce on same-origin fetch / XHR so the
   // server can distinguish in-app UI calls from other localhost browsers,
@@ -85,6 +86,7 @@
       <button class="app-rail-btn" data-rail-page="prompt-studio" onclick="openPromptStudioPage()" title="Prompt Studio" aria-label="Prompt Studio"><i class="ti ti-braces"></i></button>
       <button class="app-rail-btn" data-rail-page="mcp" onclick="openMcpServersPage()" title="MCP Servers" aria-label="MCP Servers"><i class="ti ti-plug"></i></button>
       <button class="app-rail-btn" data-rail-page="health" onclick="openHealthPage()" title="Health" aria-label="Health"><i class="ti ti-activity-heartbeat"></i></button>
+      <button class="app-rail-btn" data-rail-page="runs" onclick="openRunsPage()" title="Runs" aria-label="Runs"><i class="ti ti-timeline-event"></i></button>
       <button class="app-rail-btn" data-rail-page="recordings" onclick="openRecordingsPage()" title="Recordings" aria-label="Recordings"><i class="ti ti-player-record"></i></button>
       <button class="app-rail-btn app-rail-overflow-btn" id="app-rail-overflow-btn" onclick="toggleAppRailOverflow(event)" title="More" aria-label="More" aria-haspopup="true" style="display:none"><i class="ti ti-dots"></i></button>
     </div>
@@ -3031,6 +3033,7 @@ Examples:
 <script src="js/local-llm.js"></script>
 <script src="js/markdown.js"></script>
 <script src="js/artifacts.js"></script>
+<script src="js/runs.js"></script>
 <script src="js/notebook.js"></script>
 <script src="js/capabilities.js"></script>
 <script src="js/conversations.js"></script>

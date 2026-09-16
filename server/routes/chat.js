@@ -72,6 +72,7 @@ import { normalizeInteractiveAuthCommand } from '../lib/interactive-auth.js';
 import { ChatTracer } from '../../lib/run-ledger.js';
 import { buildDesignTaskContext } from '../../design-prompts.js';
 import { formatImageAssetContext, persistConversationImageAssets } from '../lib/attachment-assets.js';
+import { projectCapabilities } from '../lib/capability-projection.js';
 
 // ── Tool-driven Decision Prompt bridge ────────────────────────────────────
 // Any tool (self-tool, agent tool, MCP tool) can pause the agent and
@@ -563,6 +564,7 @@ export function registerChatRoute(app, {
   augmentedPath = null,
   npmEnv = {},
   shellProcs = null,
+  runStore = null,
 }) {
   // ── File-edit undo ledger ─────────────────────────────────────────────
   // Stores old file contents from the most recent AI turn per conversation
@@ -659,9 +661,9 @@ export function registerChatRoute(app, {
   // When enabled, the chat loop sends `tool_permission_request` with a
   // callId and awaits a POST here with { callId, decision: 'allow'|'deny' }.
   // Falls back to deny on timeout so an absent UI cannot silently approve.
-  /** @type {Map<string,{resolve:(v:string)=>void,timer:NodeJS.Timeout}>} */
+  /** @type {Map<string,{resolve:(v:string)=>void,timer:NodeJS.Timeout,runId?:string}>} */
   const permissionPendingCalls = new Map();
-  const PERMISSION_TIMEOUT_MS = 30000;
+  const PERMISSION_TIMEOUT_MS = 10 * 60 * 1000;
 
   app.post('/api/tool-permission-result', (req, res) => {
     const { callId, decision } = req.body || {};
@@ -671,7 +673,11 @@ export function registerChatRoute(app, {
     }
     permissionPendingCalls.delete(callId);
     clearTimeout(pending.timer);
-    pending.resolve(decision === 'allow' ? 'allow' : 'deny');
+    const resolvedDecision = decision === 'allow' ? 'allow' : 'deny';
+    if (pending.runId && runStore) {
+      try { runStore.resolvePause(pending.runId, callId, { decision: resolvedDecision }); } catch (_) {}
+    }
+    pending.resolve(resolvedDecision);
     res.json({ ok: true });
   });
 
@@ -708,9 +714,10 @@ export function registerChatRoute(app, {
     const ownedWidgetCallIds = new Set();
     const ownedClientToolCallIds = new Set();
     const ownedPermissionCallIds = new Set();
-    const cancelUpstream = () => {
+    let clientConnected = true;
+    const detachClient = () => {
       if (res.writableEnded) return; // normal completion, not a real client abort
-      try { upstreamAbort.abort(); } catch (_) {}
+      clientConnected = false;
       for (const callId of ownedWidgetCallIds) {
         const pending = widgetPendingCalls.get(callId);
         if (!pending) continue;
@@ -727,16 +734,8 @@ export function registerChatRoute(app, {
         clientToolPendingCalls.delete(callId);
       }
       ownedClientToolCallIds.clear();
-      for (const callId of ownedPermissionCallIds) {
-        const pending = permissionPendingCalls.get(callId);
-        if (!pending) continue;
-        try { clearTimeout(pending.timer); } catch (_) {}
-        try { pending.resolve('deny'); } catch (_) {}
-        permissionPendingCalls.delete(callId);
-      }
-      ownedPermissionCallIds.clear();
     };
-    res.on('close', cancelUpstream);
+    res.on('close', detachClient);
     const { messages = [], model = 'claude-sonnet-4.6', systemPrompt = '', useFigmaMCP = false, contextSummary = '',
         thinkingBudget = 'high', maxContextTurns = 20, agentName = null,
         projectId = null, projectContextIds = null, runId = null, isDelegation = false,
@@ -752,7 +751,7 @@ export function registerChatRoute(app, {
         headlessTask: bodyHeadlessTask = false,
         toolLimits: bodyToolLimits = null,
         toolPolicy: bodyToolPolicy = null,
-        selectedFigmaFileKeys = [] } = req.body;
+        selectedFigmaFileKeys = [], runId: requestedRunId = null } = req.body;
     const isCLI = clientContext === 'cli';
     const isolateContext = isolatedContext === true || clientContext === 'automation-generator';
     const isProjectSearch = clientContext === 'project-search';
@@ -856,13 +855,66 @@ export function registerChatRoute(app, {
       'Cache-Control':   'no-cache',
       'Connection':      'keep-alive',
       'X-Accel-Buffering': 'no',
-      'Access-Control-Allow-Origin': 'http://localhost:3737'
+      'Access-Control-Allow-Origin': 'http://localhost:3737',
+      ...(requestedRunId ? { 'X-Fauna-Run-Id': String(requestedRunId) } : {}),
     });
 
     // Per-request file-edit tracking for Keep/Undo bar
     const _turnEdits = [];
     const _reqConvId = req.body?.conversationId || null;
-    const _rawSend = (obj) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(obj)}\n\n`); };
+    let durableRun = null;
+    if (runStore) {
+      try {
+        durableRun = runStore.create({
+          id: requestedRunId || undefined,
+          kind: isDelegation ? 'subagent' : (bodyHeadlessTask ? 'task' : 'chat'),
+          conversationId: _reqConvId,
+          projectId,
+          agentName,
+          parentRunId: req.body?.parentRunId || null,
+          model,
+        });
+      } catch (error) {
+        durableRun = requestedRunId ? runStore.get(String(requestedRunId)) : null;
+        if (!durableRun) console.warn('[chat] unable to create durable run:', error?.message || error);
+      }
+    }
+    const durableRunId = durableRun?.id || null;
+    const _rawSend = (obj) => {
+      let event = null;
+      if (durableRunId) {
+        try { event = runStore.append(durableRunId, obj?.type || 'stream.event', obj || {}); } catch (_) {}
+      }
+      if (clientConnected && !res.writableEnded) {
+        const prefix = event ? `id: ${event.id}\n` : '';
+        res.write(`${prefix}data: ${JSON.stringify({ ...(obj || {}), runId: durableRunId || undefined })}\n\n`);
+      }
+    };
+    let unsubscribeRunControls = () => {};
+    let activeModelIterator = null;
+    let interruptRequested = false;
+    if (durableRunId) {
+      unsubscribeRunControls = runStore.subscribe(durableRunId, event => {
+        if (event.type === 'run.control.queued' && event.data?.control?.action === 'cancel') {
+          try { upstreamAbort.abort(); } catch (_) {}
+        }
+        if (event.type === 'run.control.queued' && event.data?.control?.action === 'interrupt') {
+          interruptRequested = true;
+          try { Promise.resolve(activeModelIterator?.return?.()).catch(() => {}); } catch (_) {}
+        }
+        if (event.type === 'run.resumed') {
+          const pending = permissionPendingCalls.get(event.data?.pauseId);
+          const decision = event.data?.resolution?.decision;
+          if (pending && (decision === 'allow' || decision === 'deny')) {
+            clearTimeout(pending.timer);
+            permissionPendingCalls.delete(event.data.pauseId);
+            ownedPermissionCallIds.delete(event.data.pauseId);
+            pending.resolve(decision);
+          }
+        }
+      });
+      _rawSend({ type: 'run_started', runId: durableRunId });
+    }
     // Compute per-file added/removed line counts via two-row LCS DP
     const _lineDiffStats = (before, after) => {
       if (before === null) return { added: (after || '').split('\n').length, removed: 0 };
@@ -2043,6 +2095,28 @@ export function registerChatRoute(app, {
         }
       }
 
+      if (durableRunId && runStore) {
+        const capabilitySnapshot = projectCapabilities({
+          model: llmCapabilities,
+          projectPermissions: _projectRecord?.permissions || {},
+          agentPermissions: req.body?.agentPermissions || {},
+          requested: {
+            noTools,
+            browser: !!req.body?.usePlaywrightMCP,
+            figma: !!useFigmaMCP,
+            mcp: customMcp !== null,
+          },
+          runtime: {
+            browser: typeof callPlaywrightMcpTool === 'function',
+            figma: !!figma,
+            mcp: customMcp !== null,
+          },
+          tools: mcpTools,
+        });
+        runStore.update(durableRunId, { capabilitySnapshot });
+        runStore.append(durableRunId, 'capabilities.projected', capabilitySnapshot);
+      }
+
       // Agentic loop — re-runs if model calls tools.
       // No numeric tool-call cap: the narration-repetition guard (L~1707),
       // tool-call dedup (toolCallsSeen), and the user's abort button are the
@@ -2513,10 +2587,24 @@ export function registerChatRoute(app, {
             const timer = setTimeout(() => {
               permissionPendingCalls.delete(callId);
               ownedPermissionCallIds.delete(callId);
+              if (durableRunId && runStore) {
+                try { runStore.resolvePause(durableRunId, callId, { decision: 'deny', reason: 'expired' }); } catch (_) {}
+              }
               resolve('deny');
             }, PERMISSION_TIMEOUT_MS);
-            permissionPendingCalls.set(callId, { resolve, timer });
+            permissionPendingCalls.set(callId, { resolve, timer, runId: durableRunId || undefined });
             ownedPermissionCallIds.add(callId);
+            if (durableRunId && runStore) {
+              try {
+                runStore.pause(durableRunId, {
+                  id: callId,
+                  type: 'approval',
+                  prompt: info.label || toolName,
+                  payload: { toolName, args, category: info.category },
+                  expiresAt: Date.now() + PERMISSION_TIMEOUT_MS,
+                });
+              } catch (_) {}
+            }
             send({ type: 'tool_permission_request', callId, name: toolName, args, label: info.label, category: info.category });
           });
         },
@@ -2614,7 +2702,14 @@ export function registerChatRoute(app, {
       }
 
       while (continueLoop) {
-        if (res.writableEnded) break;
+        if (upstreamAbort.signal.aborted) break;
+        if (durableRunId && runStore) {
+          const controls = runStore.takeControls(durableRunId, ['steer', 'queue', 'interrupt']);
+          for (const control of controls) {
+            const text = String(control.payload?.text || control.payload?.message || '').trim();
+            if (text) allMessages.push({ role: 'user', content: `[Run ${control.action}] ${text}` });
+          }
+        }
 
         // o-series and gpt-5+ models require max_completion_tokens instead of max_tokens
         const useCompletionTokens = /^(o[1-9]|gpt-5)/.test(model);
@@ -2780,7 +2875,10 @@ export function registerChatRoute(app, {
         // drained.  A setImmediate break every 50 iterations re-enters the
         // libuv poll phase and keeps the server responsive.
         let _chunkCount = 0;
-        for await (const chunk of stream) {
+        const streamIterator = stream[Symbol.asyncIterator]();
+        activeModelIterator = streamIterator;
+        if (interruptRequested) await streamIterator.return?.();
+        for await (const chunk of { [Symbol.asyncIterator]: () => streamIterator }) {
           if (++_chunkCount % 50 === 0) await new Promise(r => setImmediate(r));
           if (res.writableEnded) { continueLoop = false; break; }
           if (chunk.usage) streamUsage = chunk.usage;
@@ -2833,6 +2931,19 @@ export function registerChatRoute(app, {
               if (tc.function?.arguments) pendingCalls[i].function.arguments += tc.function.arguments;
             }
           }
+        }
+        activeModelIterator = null;
+
+        if (interruptRequested) {
+          if (assistantText.trim()) allMessages.push({ role: 'assistant', content: assistantText });
+          const interrupts = runStore.takeControls(durableRunId, ['interrupt']);
+          for (const control of interrupts) {
+            const text = String(control.payload?.text || control.payload?.message || '').trim();
+            if (text) allMessages.push({ role: 'user', content: `[Run interrupt] ${text}` });
+          }
+          interruptRequested = false;
+          send({ type: 'run_interrupted' });
+          continue;
         }
 
         // No stream-idle recovery block. The stream either completes normally
@@ -3110,8 +3221,11 @@ export function registerChatRoute(app, {
               }
               const requiredAction = detectRequiredUserAction(toolName, args, toolContent);
               if (requiredAction && !requiresUserActionThisTurn) {
-                requiresUserActionThisTurn = requiredAction;
-                send({ type: 'requires_user_action', action: requiredAction });
+                const pause = durableRunId && runStore
+                  ? runStore.pause(durableRunId, { type: 'user_action', prompt: requiredAction.prompt || requiredAction.title, payload: requiredAction })
+                  : null;
+                requiresUserActionThisTurn = pause ? { ...requiredAction, pauseId: pause.id } : requiredAction;
+                send({ type: 'requires_user_action', action: requiresUserActionThisTurn });
               }
               const activityResult = buildToolActivityResult(toolName, args, toolContent);
               if (activityResult.status === 'failed') toolFailed = true;
@@ -3687,8 +3801,11 @@ export function registerChatRoute(app, {
             const finalMarker = autonomousMode ? detectedFinalMarker : null;
             const modelRequiredInput = requiredInputActionFromText(assistantText);
             if (modelRequiredInput && !requiresUserActionThisTurn) {
-              requiresUserActionThisTurn = modelRequiredInput;
-              send({ type: 'requires_user_action', action: modelRequiredInput });
+              const pause = durableRunId && runStore
+                ? runStore.pause(durableRunId, { type: 'user_action', prompt: modelRequiredInput.prompt || modelRequiredInput.title, payload: modelRequiredInput })
+                : null;
+              requiresUserActionThisTurn = pause ? { ...modelRequiredInput, pauseId: pause.id } : modelRequiredInput;
+              send({ type: 'requires_user_action', action: requiresUserActionThisTurn });
             }
 
             // Helper: run the deploy gate (if configured + approved + not yet
@@ -3979,6 +4096,7 @@ export function registerChatRoute(app, {
       }
       // ── Trace: loop completed normally ───────────────────────────────
       if (_traceLedgerFile) tracer.done({ totalTurns: turnUsage.iterations, totalTools: toolCallCount, durationMs: Date.now() - autonomousStartedAt });
+      if (durableRunId && runStore && !requiresUserActionThisTurn) runStore.setStatus(durableRunId, 'completed', { totalTurns: turnUsage.iterations, totalTools: toolCallCount });
     } catch (err) {
       // Suppress noise from intentional aborts (Stop button / client disconnect).      // Only treat as abort if we actually aborted the controller — checking the
       // error message text alone is too loose and swallows real upstream errors
@@ -3986,9 +4104,11 @@ export function registerChatRoute(app, {
       if (upstreamAbort.signal.aborted) {
         console.log('[chat] upstream aborted by client');
         if (_traceLedgerFile) tracer.done({ aborted: true, totalTools: toolCallCount, durationMs: Date.now() - autonomousStartedAt });
+        if (durableRunId && runStore) runStore.setStatus(durableRunId, 'cancelled', { totalTools: toolCallCount });
       } else {
         try { send({ type: 'error', error: err.message }); } catch (_) {}
         if (_traceLedgerFile) tracer.error({ message: err.message, totalTools: toolCallCount, durationMs: Date.now() - autonomousStartedAt });
+        if (durableRunId && runStore) runStore.setStatus(durableRunId, 'failed', { error: err.message, totalTools: toolCallCount });
       }
     } finally {
       if (subagentStarted && subagentStopPayload) {
@@ -4004,7 +4124,8 @@ export function registerChatRoute(app, {
           console.warn('[chat] SubagentStop hook failed:', hookErr?.message || hookErr);
         }
       }
-      try { res.off('close', cancelUpstream); } catch (_) {}
+      try { res.off('close', detachClient); } catch (_) {}
+      try { unsubscribeRunControls(); } catch (_) {}
       clearInterval(_sseHeartbeat);
     }
 

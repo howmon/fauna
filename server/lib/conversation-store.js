@@ -146,6 +146,9 @@ function createLegacyBackend({ configDir }) {
       if (full) return all;
       return all.map(c => ({
         id: c.id, title: c.title, model: c.model, projectId: c.projectId,
+        parentConversationId: c.parentConversationId || null,
+        forkedFromMessageId: c.forkedFromMessageId || null,
+        branchDepth: Number(c.branchDepth) || 0,
         createdAt: c.createdAt, updatedAt: c.updatedAt,
         messageCount: Array.isArray(c.messages) ? c.messages.length : 0,
       }));
@@ -219,6 +222,9 @@ function createSplitBackend({ configDir, legacyDualWrite = null }) {
       title: conv.title,
       model: conv.model,
       projectId: conv.projectId || null,
+      parentConversationId: conv.parentConversationId || null,
+      forkedFromMessageId: conv.forkedFromMessageId || null,
+      branchDepth: Number(conv.branchDepth) || 0,
       createdAt: conv.createdAt,
       updatedAt: conv.updatedAt,
       messageCount: Array.isArray(conv.messages) ? conv.messages.length : 0,
@@ -365,6 +371,9 @@ export async function migrateLegacyToSplit({ configDir, force = false } = {}) {
         title: conv.title || '',
         model: conv.model || null,
         projectId: conv.projectId || null,
+        parentConversationId: conv.parentConversationId || null,
+        forkedFromMessageId: conv.forkedFromMessageId || null,
+        branchDepth: Number(conv.branchDepth) || 0,
         createdAt: conv.createdAt || Date.now(),
         updatedAt: conv.updatedAt || conv.createdAt || Date.now(),
         messageCount: Array.isArray(conv.messages) ? conv.messages.length : 0,

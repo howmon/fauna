@@ -28,6 +28,12 @@ vi.mock('../lib/routing-evidence.js', () => ({
 }));
 
 const runner = await import('../task-runner.js');
+const runStore = {
+  create: vi.fn(() => ({ id: 'run-parent' })),
+  append: vi.fn(),
+  setStatus: vi.fn(),
+  takeControls: vi.fn(() => []),
+};
 
 function sse(eventsList) {
   return eventsList.map((event) => 'data: ' + JSON.stringify(event) + '\n\n').join('');
@@ -40,10 +46,12 @@ beforeEach(() => {
   events.length = 0;
   settleRoutingOutcomes.mockClear();
   originalFetch = globalThis.fetch;
+  runner.setRunStore(runStore);
 });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  runner.setRunStore(null);
   vi.restoreAllMocks();
 });
 
@@ -72,6 +80,7 @@ describe('task-runner chat parity', () => {
       verified: undefined,
       verifier: 'autonomous-task-completion',
     }));
+    expect(body.parentRunId).toBe('run-parent');
     expect(store.get('t1').status).toBe('completed');
     expect(store.get('t1').result.summary).toBe('shipped and verified');
   });

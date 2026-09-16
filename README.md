@@ -48,6 +48,8 @@ Streaming AI with real shell, browser, Figma, file editing, voice, video, and a 
 
 **Kanban / Autopilot** — Project board where cards drive AI runs end-to-end with retries, comments, and work-item verification. Native + widget-panel alerts on completion / failure / out-of-retries. Live SSE stream at `/api/board/stream`.
 
+**Durable runs** — Chat, task, workflow, Kanban, and sub-agent execution share persisted run metadata and append-only event traces. Streams can replay from a cursor after disconnects; runs support cancellation, steering, queued follow-ups, persisted approvals/user pauses, parent-child linkage, analytics, and JSON or OTLP export from the Runs workspace.
+
 **Skills** — First-class skill packs (spec-driven development, TDD, debugging-and-error-recovery, incremental implementation, code review, …) installable, lintable, and authored to a documented anatomy. See [docs/skill-anatomy.md](docs/skill-anatomy.md) and [skills/](skills).
 
 **Connectors & RAG** — Ingest documents, folders, or GitHub repos as RAG sources outside projects. Memory facts have decay, recall, stats, import/export, and reviewer proposals.
@@ -76,6 +78,7 @@ User → AI streams response with native function tool calls
 [Fauna — port 3737 · ~420 routes · Electron + preload IPC]
   Core agent loop
   ├── /api/chat                    streaming AI + agentic tool loop
+  ├── /api/agent-runs              durable runs, analytics, controls, replay + trace export
   ├── /api/conversations[/stream]  CRUD + SSE
   ├── /api/shell-exec /-stdin      bash / PowerShell with cancel
   ├── /api/browse                  stealth headless browser
@@ -236,8 +239,8 @@ Slash commands: `/store`, `/store install <slug>`, `/projects`, `/board`, `/skil
 - [x] Kanban autopilot with native + widget alerts
 - [x] Project Git UI (commit / push / pull / rebase / stash)
 - [ ] Linux builds (AppImage / Snap)
-- [ ] Agent analytics — usage, token costs, success rates (basic telemetry exists at `/api/internal-ai/telemetry`)
-- [ ] Conversation branching
+- [x] Agent analytics — durable run traces, usage totals, status, and OTLP export
+- [x] Conversation branching
 - [ ] MCP server marketplace
 
 ---

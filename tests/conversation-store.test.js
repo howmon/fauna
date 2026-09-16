@@ -66,6 +66,16 @@ describe('conversation-store: legacy backend', () => {
     expect(full[0].messages).toBeDefined();
   });
 
+  it('keeps branch ancestry in slim metadata', async () => {
+    const store = makeStore();
+    await store.put('branch', sampleConv('branch', {
+      parentConversationId: 'root', forkedFromMessageId: 'm1', branchDepth: 2,
+    }));
+    expect((await store.list())[0]).toMatchObject({
+      parentConversationId: 'root', forkedFromMessageId: 'm1', branchDepth: 2,
+    });
+  });
+
   it('delete removes the conv', async () => {
     const store = makeStore();
     await store.put('a', sampleConv('a'));

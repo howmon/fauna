@@ -36,9 +36,11 @@ function _settleRouting(task, state, verified, verifier) {
 // or alert-hub directly from the runner.
 let _osNotifier = null;       // function(title, body)
 let _alertSinkPub = null;     // function({ id, timestamp, source, summary, action })
+let _runStore = null;
 
 export function setOsNotifier(fn) { _osNotifier = typeof fn === 'function' ? fn : null; }
 export function setAlertSink(fn)  { _alertSinkPub = typeof fn === 'function' ? fn : null; }
+export function setRunStore(store) { _runStore = store || null; }
 // Per-pipeline expression context, keyed by the run's nodeOutputs object so
 // concurrent pipelines never collide. Updated synchronously at each node.
 const _exprCtxByOutputs = new WeakMap();
@@ -51,6 +53,22 @@ function _abortError() {
 
 function _throwIfAborted(signal) {
   if (signal?.aborted) throw _abortError();
+}
+
+function _drainRunControls(state) {
+  if (!_runStore || !state?.runId) return;
+  let controls = [];
+  try { controls = _runStore.takeControls(state.runId); } catch (_) { return; }
+  for (const control of controls) {
+    if (control.action === 'cancel') {
+      state.abortController.abort();
+      continue;
+    }
+    if (control.action === 'steer' || control.action === 'queue' || control.action === 'interrupt') {
+      const message = String(control.payload?.text || control.payload?.message || '').trim();
+      if (message) state.steerQueue.push(message);
+    }
+  }
 }
 
 function _abortableDelay(ms, signal) {
@@ -88,7 +106,20 @@ async function runTask(taskId, opts = {}) {
     stats: { actionsTotal: 0, actionsOk: 0, actionsFailed: 0 },
     nodeResults: [], // pipeline per-node results: { id, label, type, status, output, error }
     triggerPayload: opts.triggerPayload != null ? opts.triggerPayload : null, // inbound webhook body
+    runId: null,
   };
+  if (_runStore) {
+    try {
+      state.runId = _runStore.create({
+        kind: task.kind === 'pipeline' ? 'workflow' : 'task',
+        conversationId: task.convId || task.targetConvId || null,
+        projectId: task.projectId || null,
+        agentName: Array.isArray(task.agents) ? task.agents[0] || null : null,
+        model: task.model || 'claude-sonnet-4.6',
+        ownerId: task.id,
+      }).id;
+    } catch (_) {}
+  }
   _runningTasks.set(taskId, state);
 
   // Ensure task is marked running — clear previous result on re-run.
@@ -305,6 +336,7 @@ async function _autonomyLoop(task, state) {
       // Headless run — tells /api/chat to use the relaxed tool-guard caps
       // and auto-allow shell permission prompts (no UI to confirm against).
       headlessTask: true,
+      parentRunId: state.runId,
     }, state.abortController.signal, (partial) => {
       // Throttled inside _callChat; surface only the tail so we don't ship
       // megabytes of growing strings through SSE every 500ms.
@@ -315,6 +347,7 @@ async function _autonomyLoop(task, state) {
       });
     });
 
+    _drainRunControls(state);
     _throwIfAborted(state.abortController.signal);
     if (!aiResponse) {
       _settleRouting(task, state, false, 'autonomous-task-no-response');
@@ -806,6 +839,7 @@ async function _verifyAgainstSkills({ task, state, messages, summary, systemProm
     thinkingBudget: 'low',
     maxContextTurns: 100,
     headlessTask: true,
+    parentRunId: state.runId,
   }, signal, (partial) => {
     _emit(task.id, 'partial', {
       step: state.step,
@@ -1064,6 +1098,18 @@ function _persistPartial(taskId, state) {
 }
 
 function _emit(taskId, event, data) {
+  const state = _runningTasks.get(taskId);
+  if (_runStore && state?.runId) {
+    try {
+      _runStore.append(state.runId, `task.${event}`, { taskId, ...data });
+      if (event === 'completed') _runStore.setStatus(state.runId, 'completed', { taskId });
+      else if (event === 'paused') _runStore.setStatus(state.runId, 'paused', { taskId });
+      else if (event === 'failed') {
+        const stopped = /stopped by user/i.test(String(data?.error || ''));
+        _runStore.setStatus(state.runId, stopped ? 'cancelled' : 'failed', { taskId, error: data?.error || null });
+      }
+    } catch (_) {}
+  }
   const cbs = _listeners.get(taskId);
   if (cbs) cbs.forEach(cb => { try { cb({ taskId, event, ...data }); } catch (_) {} });
   // Also emit to 'all' listeners (for the task panel)
@@ -1115,6 +1161,7 @@ function getRunningTaskInfo(taskId) {
   // Last entry is the freshest "what the model is doing right now" line.
   const current = reasoning.length ? reasoning[reasoning.length - 1] : null;
   return {
+    runId: state.runId || null,
     step: state.step,
     startedAt: state.startedAt,
     elapsed: Date.now() - state.startedAt,
@@ -1173,6 +1220,7 @@ async function _runPipeline(task, state) {
   const nodeOutputs = {};
 
   for (const nid of order) {
+    _drainRunControls(state);
     _throwIfAborted(state.abortController.signal);
     if (skipped.has(nid)) {
       nodeOutputs[nid] = null;
@@ -1221,6 +1269,7 @@ async function _runPipeline(task, state) {
             model:    task.model || 'claude-sonnet-4.6',
             agentName: cfg.agentName || _pickAgent(task, state.step),
             noTools: node.type === 'prompt',
+            parentRunId: state.runId,
           }, state.abortController.signal);
           _throwIfAborted(state.abortController.signal);
           output = aiResp || '';
@@ -1234,6 +1283,7 @@ async function _runPipeline(task, state) {
             messages: [{ role: 'user', content: '```shell-exec\n' + cmd + '\n```\nReturn only the command output, no explanation.' }],
             model: task.model || 'claude-sonnet-4.6',
             systemPrompt: 'Execute shell commands. Return only the output.',
+            parentRunId: state.runId,
           }, state.abortController.signal);
           _throwIfAborted(state.abortController.signal);
           output = shellResult || '';
@@ -1247,6 +1297,7 @@ async function _runPipeline(task, state) {
             messages: [{ role: 'user', content: 'Navigate to ' + url + ' and ' + inst }],
             model: task.model || 'claude-sonnet-4.6',
             systemPrompt: 'You can use browser-ext-action blocks. Navigate and return results.',
+            parentRunId: state.runId,
           }, state.abortController.signal);
           _throwIfAborted(state.abortController.signal);
           output = browserResp || '';
@@ -1259,6 +1310,7 @@ async function _runPipeline(task, state) {
             messages: [{ role: 'user', content: inst }],
             model: task.model || 'claude-sonnet-4.6',
             systemPrompt: 'You have access to Figma MCP tools.',
+            parentRunId: state.runId,
           }, state.abortController.signal);
           _throwIfAborted(state.abortController.signal);
           output = figmaResp || '';

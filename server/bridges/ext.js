@@ -15,6 +15,14 @@
 import { WebSocketServer } from 'ws';
 import { saveRecording } from '../../browser-recordings-store.js';
 
+export function normalizeRelayCommandResult(status, data) {
+  if (status < 500) return { status, data };
+  return {
+    status: 200,
+    data: { ok: false, ...(data || {}), error: data?.error || 'Browser extension relay unavailable' },
+  };
+}
+
 export function createExtBridge({ getFaunaMcpState }) {
   let extWss = null;
   let extNextClientId = 1;
@@ -275,8 +283,9 @@ export function createExtBridge({ getFaunaMcpState }) {
 
       if (isRelayExtClientId(clientId)) {
         try {
-          const { status, data } = await forwardExtCommandToRelay({ action, params, tabId, clientId, timeout: req.body?.timeout || 30000 });
-          return res.status(status).json(data);
+          const relayResult = await forwardExtCommandToRelay({ action, params, tabId, clientId, timeout: req.body?.timeout || 30000 });
+          const normalized = normalizeRelayCommandResult(relayResult.status, relayResult.data);
+          return res.status(normalized.status).json(normalized.data);
         } catch (e) {
           return res.json({ ok: false, error: e.message || 'Browser extension not connected' });
         }
@@ -287,8 +296,9 @@ export function createExtBridge({ getFaunaMcpState }) {
       if (!clients.length) {
         if (relayConnected) {
           try {
-            const { status, data } = await forwardExtCommandToRelay({ action, params, tabId, timeout: req.body?.timeout || 30000 });
-            return res.status(status).json(data);
+            const relayResult = await forwardExtCommandToRelay({ action, params, tabId, timeout: req.body?.timeout || 30000 });
+            const normalized = normalizeRelayCommandResult(relayResult.status, relayResult.data);
+            return res.status(normalized.status).json(normalized.data);
           } catch (e) {
             return res.json({ ok: false, error: e.message || 'Browser extension not connected' });
           }

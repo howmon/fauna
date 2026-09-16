@@ -112,7 +112,8 @@ describe('required user action client boundary', () => {
   });
 
   it('locks native tools and instructs one final waiting response', () => {
-    expect(serverSource).toContain("send({ type: 'requires_user_action', action: requiredAction })");
+    expect(serverSource).toContain("send({ type: 'requires_user_action', action: requiresUserActionThisTurn })");
+    expect(serverSource).toContain("runStore.pause(durableRunId, { type: 'user_action'");
     expect(serverSource).toContain('toolsLockedForFinalResponse = true;');
     expect(serverSource).toContain('Do not start another login or call more tools');
     expect(promptSource).toContain('Interactive user gates are a valid pause');

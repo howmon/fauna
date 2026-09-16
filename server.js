@@ -14,7 +14,7 @@ import fs         from 'fs';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { createTask, getTask, getAllTasks, updateTask, deleteTask, startScheduler, stopScheduler, enableWebhook, disableWebhook, rotateWebhookToken, getTaskByWebhookToken, markWebhookFired } from './task-manager.js';
-import { runTask, pauseTask, stopTask, steerTask, isTaskRunning, subscribe, setOsNotifier as setTaskRunnerOsNotifier, setAlertSink as setTaskRunnerAlertSink, getRunningTaskInfo } from './task-runner.js';
+import { runTask, pauseTask, stopTask, steerTask, isTaskRunning, subscribe, setOsNotifier as setTaskRunnerOsNotifier, setAlertSink as setTaskRunnerAlertSink, setRunStore as setTaskRunnerRunStore, getRunningTaskInfo } from './task-runner.js';
 import { createProject, getProject, getAllProjects, updateProject, deleteProject,
   touchProject, linkConversation, linkTask,
   addSource, removeSource, syncSource, listFiles, readSourceFile, resolveSourceFilePath,
@@ -46,12 +46,14 @@ import { registerModelsRoutes } from './server/routes/models.js';
 import { registerModelsDebugRoute } from './server/routes/models-debug.js';
 import { registerFileFilterRoutes } from './server/routes/file-filter.js';
 import { registerConversationRoutes } from './server/routes/conversations.js';
+import { registerAgentRunRoutes } from './server/routes/agent-runs.js';
 import { registerProjectRunRoutes } from './server/routes/project-runs.js';
 import { registerProjectRoutes } from './server/routes/projects.js';
 import { registerGenUiShareRoutes } from './server/routes/genui-share.js';
 import { registerSyncRoutes } from './server/routes/sync.js';
 import { registerServerlessSyncRoutes } from './server/routes/serverless-sync.js';
 import { createConversationStore, cleanupOrphanedTempFiles, migrateLegacyToSplit } from './server/lib/conversation-store.js';
+import { createRunStore } from './server/lib/run-store.js';
 import { registerGitHubRoutes } from './server/routes/github.js';
 import {
   listGitHubAccounts,
@@ -162,6 +164,8 @@ const FAUNA_CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
 // and the sync adapter — two stores would mean two independent per-id
 // mutexes and a race on simultaneous local-edit + remote-pull writes.
 const _sharedConversationStore = createConversationStore({ configDir: FAUNA_CONFIG_DIR });
+const _sharedRunStore = createRunStore({ configDir: FAUNA_CONFIG_DIR });
+setTaskRunnerRunStore(_sharedRunStore);
 
 // Auto-migrate legacy conversations.json → split layout on first launch with the
 // new default backend.  Runs in the background; failures are non-fatal.
@@ -321,6 +325,8 @@ registerConversationRoutes(app, {
   getCopilotClient,
   conversationStore: _sharedConversationStore,
 });
+
+registerAgentRunRoutes(app, { runStore: _sharedRunStore });
 
 registerTaskRoutes(app, {
   createTask,
@@ -625,6 +631,7 @@ registerChatRoute(app, {
   augmentedPath: AUGMENTED_PATH,
   npmEnv: NPM_ENV,
   shellProcs: _shellProcs,
+  runStore: _sharedRunStore,
 });
 // Legacy agents dir: ~/.config/copilot-chat/agents (kept for backward compatibility)
 const LEGACY_AGENTS_DIR = path.join(CONFIG_DIR, 'agents');

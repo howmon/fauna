@@ -599,8 +599,31 @@ function newConversation(opts) {
   document.getElementById('msg-input').focus();
 }
 
+async function forkConversation(convId, event) {
+  if (event) event.stopPropagation();
+  var source = getConv(convId);
+  if (!source) return;
+  try {
+    var response = await fetch('/api/conversations/' + encodeURIComponent(convId) + '/fork', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messageIndex: Math.max(-1, (source.messages || []).length - 1) }),
+    });
+    var result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Could not branch conversation');
+    state.conversations = state.conversations.filter(function(conv) { return conv.id !== result.conversation.id; });
+    state.conversations.unshift(result.conversation);
+    loadConversation(result.conversation.id);
+    renderConvList();
+    showToast('Conversation branched');
+  } catch (error) {
+    showToast(error.message || 'Could not branch conversation');
+  }
+}
+
 // Map of convId → <div> holding that conversation's message elements (kept alive for background execution)
 var _convDomCache = {};
+var MAX_CACHED_CONVERSATION_DOMS = 8;
 
 function getConvInner(id) {
   var inner = document.getElementById('messages-inner');
@@ -620,6 +643,20 @@ function showConvDom(id) {
   Array.from(inner.children).forEach(function(c) { c.style.display = 'none'; });
   var target = getConvInner(id);
   target.style.display = 'contents';
+  target.dataset.lastShownAt = String(Date.now());
+  var cachedIds = Object.keys(_convDomCache);
+  if (cachedIds.length > MAX_CACHED_CONVERSATION_DOMS) {
+    cachedIds
+      .filter(function(cachedId) {
+        var conv = getConv(cachedId);
+        return cachedId !== id && !(conv && conv._streaming);
+      })
+      .sort(function(a, b) {
+        return Number(_convDomCache[a]?.dataset.lastShownAt || 0) - Number(_convDomCache[b]?.dataset.lastShownAt || 0);
+      })
+      .slice(0, cachedIds.length - MAX_CACHED_CONVERSATION_DOMS)
+      .forEach(purgeConvDom);
+  }
   if (window.faunaDynamicWidgets && typeof window.faunaDynamicWidgets.syncVisibility === 'function') {
     window.faunaDynamicWidgets.syncVisibility();
   }
@@ -971,6 +1008,7 @@ function _convRowHtml(conv) {
     '<span class="conv-actions">' +
       '<button class="conv-rename" onclick="toggleConvAutonomous(\'' + conv.id + '\', event)" title="' + (conv.config && conv.config.autonomousMode ? 'Autonomous mode: on \u2014 click to disable' : 'Autonomous mode: off \u2014 click to enable') + '"><i class="ti ti-bolt"' + (conv.config && conv.config.autonomousMode ? ' style="color:#ffb800"' : '') + '></i></button>' +
       '<button class="conv-rename" onclick="openConvInNewWindow(\'' + conv.id + '\', event)" title="Open in new window"><i class="ti ti-external-link"></i></button>' +
+      '<button class="conv-rename" onclick="forkConversation(\'' + conv.id + '\', event)" title="Branch conversation"><i class="ti ti-git-branch"></i></button>' +
       '<button class="conv-rename" onclick="renameConversation(\'' + conv.id + '\', event)" title="Rename"><i class="ti ti-pencil"></i></button>' +
       ((typeof state !== 'undefined' && state.enableConvExport)
         ? '<button class="conv-rename" onclick="exportConversation(\'' + conv.id + '\', event)" title="Export transcript (JSON)"><i class="ti ti-download"></i></button>'

@@ -36,11 +36,14 @@ function _convTranscriptSig(conv) {
 }
 
 // Hydrate: merge server-side conversations into localStorage
-async function _hydrateServerConvs() {
+async function _hydrateServerConvs(incomingConvs) {
   try {
-    var serverRes = await fetch('/api/conversations?full=1');
-    if (!serverRes.ok) return;
-    var serverConvs = await serverRes.json();
+    var serverConvs = incomingConvs;
+    if (!Array.isArray(serverConvs)) {
+      var serverRes = await fetch('/api/conversations?full=1');
+      if (!serverRes.ok) return;
+      serverConvs = await serverRes.json();
+    }
     if (!serverConvs.length) return;
     var localIds = new Set(state.conversations.map(function(c) { return c.id; }));
     var merged = false;
@@ -107,6 +110,31 @@ async function _hydrateServerConvs() {
   } catch (_) {}
 }
 
+var _changedHydrationInFlight = null;
+function _hydrateChangedServerConvs() {
+  if (_changedHydrationInFlight) return _changedHydrationInFlight;
+  _changedHydrationInFlight = (async function() {
+  try {
+    var response = await fetch('/api/conversations');
+    if (!response.ok) return;
+    var metadata = await response.json();
+    var changed = metadata.filter(function(remote) {
+      var local = getConv(remote.id);
+      if (!local) return true;
+      return (remote.updatedAt || remote.createdAt || 0) > (local.updatedAt || local.createdAt || 0)
+        || Number(remote.messageCount || 0) > ((local.messages || []).length);
+    });
+    var hydrated = [];
+    for (var i = 0; i < changed.length; i++) {
+      var itemResponse = await fetch('/api/conversations/' + encodeURIComponent(changed[i].id));
+      if (itemResponse.ok) hydrated.push(await itemResponse.json());
+    }
+    if (hydrated.length) await _hydrateServerConvs(hydrated);
+  } catch (_) {}
+  })().finally(function() { _changedHydrationInFlight = null; });
+  return _changedHydrationInFlight;
+}
+
 function _startConversationRealtimeSync() {
   if (!window.EventSource || window._conversationEvents) return;
   try {
@@ -119,7 +147,20 @@ function _startConversationRealtimeSync() {
         var msg = JSON.parse(evt.data || '{}');
         if (msg.type === 'ready') return;
         if (timer) clearTimeout(timer);
-        timer = setTimeout(function() { _hydrateServerConvs(); }, 120);
+        timer = setTimeout(function() {
+          if (msg.type === 'upsert' && msg.conversation) {
+            _hydrateServerConvs([msg.conversation]);
+            return;
+          }
+          if (msg.type === 'delete' && msg.id) {
+            state.conversations = state.conversations.filter(function(conv) { return conv.id !== msg.id; });
+            if (typeof purgeConvDom === 'function') purgeConvDom(msg.id);
+            saveConversations();
+            renderConvList();
+            return;
+          }
+          _hydrateServerConvs();
+        }, 120);
       } catch (_) {}
     };
     source.onerror = function() {
@@ -180,7 +221,7 @@ function _startSyncEventStream() {
       }).catch(function () {});
     }
     function _refreshConvs() {
-      if (typeof _hydrateServerConvs === 'function') _hydrateServerConvs();
+      if (typeof _hydrateChangedServerConvs === 'function') _hydrateChangedServerConvs();
     }
     source.onmessage = function (evt) {
       try {
@@ -337,7 +378,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   _startSyncEventStream();
 
   // Re-hydrate when window regains focus (picks up mobile/CLI conversations)
-  window.addEventListener('focus', function() { _hydrateServerConvs(); });
+  window.addEventListener('focus', function() { _hydrateChangedServerConvs(); });
 
   // One-time migration: sync localStorage conversations to server for CLI/mobile access
   if (!localStorage.getItem('fauna-convs-synced') && state.conversations.length) {

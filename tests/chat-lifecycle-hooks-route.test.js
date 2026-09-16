@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { registerChatRoute } from '../server/routes/chat.js';
+import { createRunStore } from '../server/lib/run-store.js';
 
 const llm = vi.hoisted(() => ({ create: vi.fn(), supportsTools: false }));
 
@@ -27,6 +28,7 @@ function write(filePath, body) {
 function makeFakeApp() {
   const routes = new Map();
   return {
+    get(pathName, ...handlers) { routes.set('GET ' + pathName, handlers); },
     post(pathName, ...handlers) { routes.set('POST ' + pathName, handlers); },
     async invoke(method, pathName, req = {}) {
       const handlers = routes.get(method.toUpperCase() + ' ' + pathName);
@@ -79,7 +81,7 @@ function makeDeps(workspaceRoot) {
 }
 
 function parseSse(chunks) {
-  return chunks.join('').split('\n\n').filter(Boolean).filter(part => part.startsWith('data: ')).map(part => JSON.parse(part.slice(6)));
+  return chunks.join('').split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
 }
 
 function mockTextStream(text = 'ok') {
@@ -157,6 +159,42 @@ describe('POST /api/chat lifecycle hooks', () => {
       { type: 'error', error: 'session blocked' },
       { type: 'done', finish_reason: 'hook_blocked', hook: 'SessionStart' },
     ]);
+  });
+
+  it('interrupts the active provider stream and continues the same durable run', async () => {
+    const runStore = createRunStore({ configDir: workspaceRoot });
+    const interruptible = {
+      pendingResolve: null,
+      next() { return new Promise(resolve => { this.pendingResolve = resolve; }); },
+      return: vi.fn(function() {
+        this.pendingResolve?.({ done: true });
+        return Promise.resolve({ done: true });
+      }),
+      [Symbol.asyncIterator]() { return this; },
+    };
+    llm.create
+      .mockResolvedValueOnce(interruptible)
+      .mockResolvedValueOnce((async function* () {
+        yield { choices: [{ delta: { content: 'redirected' }, finish_reason: null }] };
+        yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+      })());
+    const interruptApp = makeFakeApp();
+    registerChatRoute(interruptApp, { ...makeDeps(workspaceRoot), runStore });
+
+    const responsePromise = interruptApp.invoke('POST', '/api/chat', {
+      body: { runId: 'interrupt-run', messages: [{ role: 'user', content: 'start' }], noTools: true, clientContext: 'test' },
+    });
+    await vi.waitFor(() => expect(interruptible.pendingResolve).toBeTypeOf('function'));
+    runStore.enqueueControl('interrupt-run', 'interrupt', { text: 'change direction' });
+    const res = await responsePromise;
+
+    expect(interruptible.return).toHaveBeenCalledOnce();
+    expect(llm.create).toHaveBeenCalledTimes(2);
+    expect(parseSse(res.chunks)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'run_interrupted' }),
+      expect.objectContaining({ type: 'content', content: 'redirected' }),
+    ]));
+    expect(runStore.get('interrupt-run').status).toBe('completed');
   });
 
   it('blocks submitted prompts when UserPromptSubmit denies them', async () => {

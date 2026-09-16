@@ -830,6 +830,14 @@ async function sendMessage(opts) {
   var text  = input.value.trim();
   if (!text && !state.pendingAttachments.length) { dbg('sendMessage: empty input', 'warn'); return; }
   if (!opts.fromAutoFeed) {
+    var pendingUserAction = conv._waitingForUserAction;
+    if (pendingUserAction && pendingUserAction.pauseId && conv.lastRunId) {
+      fetch('/api/agent-runs/' + encodeURIComponent(conv.lastRunId) + '/pauses/' + encodeURIComponent(pendingUserAction.pauseId) + '/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision: 'responded', response: text, finalize: true }),
+      }).catch(function(error) { dbg('pause resolution failed: ' + error.message, 'warn'); });
+    }
     delete conv._waitingForUserAction;
     delete conv._decisionPromptDismissed;
     if (typeof hideDecisionPrompt === 'function') hideDecisionPrompt();
@@ -1302,6 +1310,9 @@ async function streamResponse(conv) {
   conv._streamingStart = Date.now();
   conv._cancelled = false;
   conv._abortController = new AbortController();
+  conv._activeRunId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+    ? 'run-' + crypto.randomUUID()
+    : 'run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
   if (isActive()) setBusy(true);
   renderConvList(); // show streaming spinner in sidebar
 
@@ -1384,6 +1395,8 @@ async function streamResponse(conv) {
   var lastScrolled = 0;
   var tokenCount   = 0;
   var _lastRenderTraceAt = 0;
+  var _lastLiveRenderAt = 0;
+  var _lastLiveRenderMs = 0;
   var _streamStartedAt = Date.now();
   var _lastStreamActivityAt = _streamStartedAt;
   var _stallWarnTimer = null;
@@ -1673,22 +1686,22 @@ async function streamResponse(conv) {
     _ensureLiveMessageAttached();
     if (!isActive() || !bodyEl) return;
     if (renderTimer) return;
-    // Coalesce on the next animation frame instead of a 60ms timeout so the
-    // visible text keeps pace with the token stream (~16ms at 60Hz). This is
-    // the "token-by-token feel" change — render at display rate, not at a
-    // human-perceptible debounce. rAF is dropped to setTimeout(0) when the
-    // tab is backgrounded so we don't busy-spin a hidden conversation.
-    const _schedule = (typeof requestAnimationFrame === 'function')
-      ? requestAnimationFrame
-      : (cb) => setTimeout(cb, 16);
-    renderTimer = _schedule(() => {
+    // Rendering reparses and sanitizes the full accumulated response. Increase
+    // the interval as that buffer grows so long generations do not monopolize
+    // the renderer with quadratic markdown + DOM replacement work.
+    var renderInterval = buffer.length > 64000 ? 150 : buffer.length > 12000 ? 75 : 32;
+    renderInterval = Math.max(renderInterval, Math.min(250, Math.ceil(_lastLiveRenderMs * 3)));
+    var renderDelay = Math.max(0, renderInterval - (Date.now() - _lastLiveRenderAt));
+    renderTimer = setTimeout(() => {
       renderTimer = null;
+      _lastLiveRenderAt = Date.now();
       if (buffer) {
         bodyEl.classList.add('streaming-cursor');
         var renderStart = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
         var liveBuffer = typeof redactWriteFileBlocksForStreaming === 'function' ? redactWriteFileBlocksForStreaming(buffer) : buffer;
         var rendered = (typeof renderStreamingActivity === 'function' ? renderStreamingActivity : renderStreamingCOT)(liveBuffer);
         var renderEnd = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        _lastLiveRenderMs = renderEnd - renderStart;
         var visibleChanged = rendered !== _lastLiveRenderHtml;
         if (rendered && rendered.trim()) {
           if (visibleChanged) {
@@ -1960,7 +1973,7 @@ async function streamResponse(conv) {
     var _agentNeedsFigma = (typeof activeAgent !== 'undefined' && activeAgent && activeAgent.permissions && activeAgent.permissions.figma) === true;
     var _agentNeedsBrowser = (typeof activeAgent !== 'undefined' && activeAgent && activeAgent.permissions && activeAgent.permissions.browser) === true;
     var _effectiveModel = state.model;
-    var chatBody = { messages, model: _effectiveModel, systemPrompt, useFigmaMCP: !!state.figmaMCPEnabled || _hasFigmaAttachment || _agentNeedsFigma || _userHasFigmaUrl, usePlaywrightMCP: !!state.playwrightMCPEnabled || _hasBrowserAttachment || _agentNeedsBrowser || _userHasUrl, selectedFigmaFileKeys: _selectedFigmaKeys, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false, conversationId: (conv && conv.id) || null };
+    var chatBody = { messages, model: _effectiveModel, systemPrompt, useFigmaMCP: !!state.figmaMCPEnabled || _hasFigmaAttachment || _agentNeedsFigma || _userHasFigmaUrl, usePlaywrightMCP: !!state.playwrightMCPEnabled || _hasBrowserAttachment || _agentNeedsBrowser || _userHasUrl, selectedFigmaFileKeys: _selectedFigmaKeys, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false, conversationId: (conv && conv.id) || null, runId: conv._activeRunId };
     // Autonomous-mode (run-until-done) flag. Per-conversation override wins;
     // otherwise the server falls back to the active project's setting.
     // `false` is forwarded explicitly so a conversation can opt OUT of a
@@ -2047,6 +2060,8 @@ async function streamResponse(conv) {
     var reader  = response.body.getReader();
     var decoder = new TextDecoder();
     var partial = '';
+    var pendingRunEventId = 0;
+    var lastRunEventId = 0;
 
     while (true) {
       var done_val;
@@ -2063,12 +2078,25 @@ async function streamResponse(conv) {
 
       for (var i = 0; i < lines.length; i++) {
         var line = lines[i];
+        if (line.startsWith('id:')) {
+          pendingRunEventId = Number(line.slice(3).trim()) || pendingRunEventId;
+          continue;
+        }
         if (!line.startsWith('data: ')) continue;
         var raw = line.slice(6);
         if (raw === '[DONE]') continue;
         try {
           var evt = JSON.parse(raw);
+          if (pendingRunEventId) {
+            lastRunEventId = Math.max(lastRunEventId, pendingRunEventId);
+            pendingRunEventId = 0;
+          }
           _touchStreamActivity();
+
+          if (evt.type === 'run_started' && evt.runId) {
+            conv._activeRunId = evt.runId;
+            conv.lastRunId = evt.runId;
+          }
 
           // Close any open shell-output fence before non-output events
           if (evt.type !== 'tool_output' && buffer.includes('```shell-output\n')) {
@@ -2399,6 +2427,8 @@ async function streamResponse(conv) {
             if (typeof window.refreshProjectFileTree === 'function') window.refreshProjectFileTree();
           }
           if (evt.type === 'done') {
+            conv.lastRunId = evt.runId || conv._activeRunId || conv.lastRunId;
+            conv._activeRunId = null;
             _syncPublicReasoningSummary();
             _clearToolStatuses();
             _processDurationSeconds = Math.max(0, Math.round((Date.now() - _streamStartedAt) / 1000));
@@ -2435,8 +2465,43 @@ async function streamResponse(conv) {
         buffer += (buffer ? '\n\n' : '') + '_⚠ Stream stalled for 3 minutes with no activity. I stopped waiting and will auto-resume from the current state._';
       }
       // user pressed Stop — nothing else to do
-    } else if (/network error|Failed to fetch/i.test(err.message || '')) {
-      buffer += (buffer ? '\n\n' : '') + '_⚠ Connection to the model stream was interrupted before the response finished. The partial output above is what was received; press Send again to retry._';
+    } else if (conv._activeRunId) {
+      dbg('stream disconnected; replaying durable run ' + conv._activeRunId + ' after event ' + lastRunEventId, 'warn');
+      var recovered = false;
+      var recoveryDeadline = Date.now() + 5 * 60 * 1000;
+      while (!conv._cancelled && Date.now() < recoveryDeadline) {
+        try {
+          var eventsResponse = await fetch('/api/agent-runs/' + encodeURIComponent(conv._activeRunId) + '/events?after=' + lastRunEventId);
+          if (eventsResponse.ok) {
+            var missedEvents = await eventsResponse.json();
+            for (var recoveryIndex = 0; recoveryIndex < missedEvents.length; recoveryIndex++) {
+              var envelope = missedEvents[recoveryIndex];
+              lastRunEventId = Math.max(lastRunEventId, Number(envelope.id) || 0);
+              var recoveredEvent = envelope.data || {};
+              if (recoveredEvent.type === 'content') buffer += recoveredEvent.content || '';
+              if (recoveredEvent.type === 'error') buffer += (buffer ? '\n\n' : '') + 'Error: ' + (recoveredEvent.error || 'Run failed');
+              if (recoveredEvent.type === 'requires_user_action') conv._waitingForUserAction = recoveredEvent.action || { kind: 'interactive' };
+              if (recoveredEvent.type === 'done') recovered = true;
+            }
+          }
+          var runResponse = await fetch('/api/agent-runs/' + encodeURIComponent(conv._activeRunId));
+          if (!runResponse.ok) break;
+          var runSummary = await runResponse.json();
+          var runStatus = runSummary && runSummary.run && runSummary.run.status;
+          if (recovered || ['completed', 'failed', 'cancelled', 'paused'].indexOf(runStatus) >= 0) {
+            conv.lastRunId = conv._activeRunId;
+            conv._activeRunId = null;
+            recovered = runStatus === 'completed' || (runStatus === 'paused' && !!conv._waitingForUserAction) || recovered;
+            break;
+          }
+          await new Promise(function(resolve) { setTimeout(resolve, 1000); });
+        } catch (_) {
+          await new Promise(function(resolve) { setTimeout(resolve, 1500); });
+        }
+      }
+      if (!recovered) {
+        buffer += (buffer ? '\n\n' : '') + '_Connection was interrupted. The durable run remains available in its run history._';
+      }
     } else {
       buffer += (buffer ? '\n\n' : '') + err.message;
     }
@@ -2458,7 +2523,8 @@ async function streamResponse(conv) {
     }
     dbg('■ stream done — buffer=' + buffer.length + 'ch tokens=' + tokenCount, buffer.length ? 'ok' : 'warn');
     dbg('stream timing: elapsed=' + (Date.now() - _streamStartedAt) + 'ms avgCharsPerToken=' + (tokenCount ? Math.round(buffer.length / tokenCount) : 0), 'info');
-    dbg('  raw: ' + JSON.stringify(buffer), 'info');
+    var _debugPreview = buffer.length > 2000 ? buffer.slice(0, 2000) + '…' : buffer;
+    dbg('  preview (' + buffer.length + 'ch): ' + JSON.stringify(_debugPreview), 'info');
 
     // Update context meter (granular breakdown)
     var _meterFn = typeof updateContextMeterGranular === 'function' ? updateContextMeterGranular : updateContextMeter;
@@ -2947,11 +3013,19 @@ function stopGeneration() {
     stoppedBrowser = stopActiveBrowserWorkForCurrentConversation(state.currentId) || 0;
   }
   conv._cancelled = true;
+  if (conv._activeRunId) {
+    fetch('/api/agent-runs/' + encodeURIComponent(conv._activeRunId) + '/controls', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'cancel', payload: { source: 'stop-button' } }),
+    }).catch(function() {});
+  }
   if (conv._abortController) conv._abortController.abort();
   // Also stop any active delegation
   if (typeof window._delegStop === 'function') window._delegStop();
   conv._streaming = false;
   conv._abortController = null;
+  conv._activeRunId = null;
   setBusy(false);
   renderConvList();
   var msg = 'Generation stopped';

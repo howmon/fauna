@@ -164,7 +164,6 @@ function _recApi(path, opts) {
   // to the alternate loopback host for SSE streams and would make these regular
   // API calls cross-origin → CORS-blocked).
   return fetch(path, opts).then(function (r) {
-    if (typeof console !== 'undefined') console.log('[recorder] ' + ((opts && opts.method) || 'GET') + ' ' + path + ' → ' + r.status);
     if (!r.ok) return r.text().then(function (t) { console.warn('[recorder] ' + path + ' body:', String(t).slice(0, 300)); return { ok: false, error: 'HTTP ' + r.status }; });
     return r.json();
   }).catch(function (e) {
