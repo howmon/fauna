@@ -123,4 +123,23 @@ describe('computeToolFlags — offload tools always available', () => {
     expect(names).toContain('fauna_retrieve_output');
     expect(names).not.toContain('fauna_video_create');
   });
+
+  it('drops unclassified Fauna schemas but preserves foreign MCP tools', async () => {
+    const mod = await import('../server/prompts/context-gating.js');
+    const sample = [
+      { type: 'function', function: { name: 'fauna_unknown_heavy_tool', parameters: {} } },
+      { type: 'function', function: { name: 'figma_status', parameters: {} } },
+    ];
+    const names = mod.filterToolSchemas(sample, withUserText('what is 2+2')).map(tool => tool.function.name);
+    expect(names).not.toContain('fauna_unknown_heavy_tool');
+    expect(names).toContain('figma_status');
+  });
+
+  it('keeps progressive skill discovery available on every turn', async () => {
+    const mod = await import('../server/prompts/context-gating.js');
+    const sample = ['fauna_list_skills', 'fauna_get_skill', 'fauna_route_skill'].map(name => ({
+      type: 'function', function: { name, parameters: {} },
+    }));
+    expect(mod.filterToolSchemas(sample, withUserText('what is 2+2'))).toHaveLength(3);
+  });
 });

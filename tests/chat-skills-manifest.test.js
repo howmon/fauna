@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildSkillsManifestContext } from '../server/routes/chat.js';
+import { buildRoutedSkillsContext, buildSkillsManifestContext } from '../server/routes/chat.js';
+import { estimateTokens } from '../server/lib/token-budget.js';
 import { listSkillsOnDisk } from '../self-tools.js';
 
 // Build a throwaway workspace with a couple of skills, then drive
@@ -93,6 +94,21 @@ describe('buildSkillsManifestContext()', () => {
   it('is safe when only workspaceRoot is provided', () => {
     const ctx = buildSkillsManifestContext(null, null, workspaceRoot);
     expect(ctx).toContain('- figma-design');
+  });
+});
+
+describe('buildRoutedSkillsContext()', () => {
+  it('exposes only top-ranked skills for a specific request', () => {
+    const ctx = buildRoutedSkillsContext(agentsDir, null, workspaceRoot, 'create and edit presentation.pptx');
+    expect(ctx).toContain('Preflight selected `pptx`');
+    expect(ctx).toContain(path.join(agentsDir, '_skills', 'pptx', 'SKILL.md'));
+    expect((ctx.match(/^- /gm) || []).length).toBeLessThanOrEqual(3);
+  });
+
+  it('uses substantially fewer tokens than the full manifest', () => {
+    const full = buildSkillsManifestContext(null, null, null);
+    const routed = buildRoutedSkillsContext(null, null, null, 'debug a crashing application');
+    expect(estimateTokens(routed)).toBeLessThan(estimateTokens(full) * 0.25);
   });
 });
 

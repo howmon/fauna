@@ -67,6 +67,7 @@ import { estimateTokens, computeBudget } from '../lib/token-budget.js';
 import { summarizeHistory } from '../lib/summarize-history.js';
 import { withTimeout } from '../lib/async-utils.js';
 import { loadAgentManifest } from '../lib/agent-manifest.js';
+import { buildCatalog, routeSkill } from '../../lib/skill-catalog.js';
 import { scrubSecrets } from '../lib/redactor.js';
 import { normalizeInteractiveAuthCommand } from '../lib/interactive-auth.js';
 import { ChatTracer } from '../../lib/run-ledger.js';
@@ -539,6 +540,35 @@ export function buildSkillsManifestContext(agentsDir, agentName, workspaceRoot) 
   return '\n## Available skills\n' +
     'The following skills are installed and available. Each is a self-contained playbook stored in a SKILL.md file. When a task matches a skill\'s description, load the full body with `fauna_read_file` (path is listed below) before proceeding — do NOT guess the workflow from the description alone.\n\n' +
     lines + overflow;
+}
+
+export function buildRoutedSkillsContext(agentsDir, agentName, workspaceRoot, query) {
+  let skills;
+  try { skills = listSkillsOnDisk(agentsDir, agentName, { workspaceRoot }); }
+  catch (_) { return ''; }
+  if (!skills?.length) return '';
+
+  const catalog = buildCatalog(skills);
+  const routed = routeSkill(query, catalog, { topK: 3 });
+  if (!routed.top) {
+    const names = catalog.docs.slice(0, 60).map(skill => skill.name).join(', ');
+    return '\n## Skill routing\n' +
+      'No skill matched this request confidently. Available skill names: ' + names + '.\n' +
+      'Call `fauna_route_skill` if a specialized workflow becomes relevant, then load only the winning skill with `fauna_get_skill`.';
+  }
+
+  const lines = routed.plan.map(skill => {
+    const description = String(skill.description || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+    const source = skills.find(candidate => candidate.name === skill.name);
+    return `- ${skill.name} (${skill.confidence}; ${skill.scope}) — ${source?.path || ''}\n    ${description}`;
+  }).join('\n');
+  const topDoc = catalog.docs.find(skill => skill.name === routed.top);
+  const neighbors = (topDoc?.related || []).slice(0, 5);
+  const graphHint = neighbors.length ? `\nGraph neighbors: ${neighbors.join(', ')}.` : '';
+  return '\n## Skill routing\n' +
+    `Preflight selected \`${routed.top}\` with confidence ${routed.confidence}. ` +
+    'Load the winning skill with `fauna_get_skill` before following its workflow; do not load unrelated skills.\n' +
+    lines + graphHint;
 }
 
 export function registerChatRoute(app, {
@@ -1256,11 +1286,24 @@ export function registerChatRoute(app, {
         // Baked into every conversation (skipped for delegation sub-agents to save tokens —
         // the orchestrator already enforces these and re-stating them in delegates wastes context).
         (isolateContext || isDelegation) ? '' : FAUNA_CORE_GUIDELINES,
-        // Skills manifest (VS Code Copilot-style): name + description + file
-        // path for every installed SKILL.md. Model reads bodies lazily via
-        // fauna_read_file when a description matches. Skipped in isolated /
-        // delegation contexts where the orchestrator drives skill selection.
-        (isolateContext || isDelegation) ? '' : buildSkillsManifestContext(agentsDir, agentName, workspaceRoot),
+        // Route before the model call and expose only the strongest candidates.
+        // Bodies remain progressively disclosed through fauna_get_skill.
+        (isolateContext || isDelegation) ? '' : buildRoutedSkillsContext(
+          agentsDir,
+          agentName,
+          workspaceRoot,
+          (() => {
+            for (let index = messages.length - 1; index >= 0; index--) {
+              const message = messages[index];
+              if (message?.role !== 'user') continue;
+              if (typeof message.content === 'string') return message.content;
+              if (Array.isArray(message.content)) {
+                return message.content.filter(part => part?.type === 'text').map(part => part.text || '').join(' ');
+              }
+            }
+            return '';
+          })(),
+        ),
         // When running against a local model that doesn't support OpenAI tool
         // calling, tell it explicitly — otherwise it will hallucinate tool
         // invocations in prose. Constant per session, so it lives in the prefix.
@@ -1306,11 +1349,23 @@ export function registerChatRoute(app, {
       if (fullSystem) allMessages.push({ role: 'system', content: fullSystem });
 
       // ── Context trimming (token-aware, scoped) ───────────────────────────
-      // Budget is computed per-model: window − systemTokens − reservedOutput,
-      // then scaled by the model's compactAt threshold.  Body messages must
-      // fit inside `bodyTokenLimit`; the system prompt is NOT charged.
+      // Budget is computed per-model: window − systemTokens − known tool
+      // schemas − reservedOutput, then scaled by the model's compactAt
+      // threshold. Body messages must fit inside `bodyTokenLimit`.
       const systemTokens   = estimateTokens(fullSystem);
-      const budget         = computeBudget({ model, systemTokens });
+      const _budgetToolFlags = computeToolFlags({ messages, systemPrompt, isDelegation, isCLI, noTools });
+      if (enableDynamicWidgets) _budgetToolFlags.widget = true;
+      const _anticipatedSelfTools = (!isCLI && !noTools && !isProjectSearch)
+        ? filterToolSchemas([
+            ...SELF_TOOL_DEFS,
+            ...(enableDynamicWidgets ? DYNAMIC_WIDGET_TOOL_DEFS : []),
+          ], _budgetToolFlags)
+        : [];
+      const toolTokens = estimateTokens(JSON.stringify([
+        ...(mcpTools || []),
+        ..._anticipatedSelfTools,
+      ]));
+      const budget         = computeBudget({ model, systemTokens, toolTokens });
       const MAX_MSG_TOKENS = 8_000; // cap any single message (~30KB of text)
       const TURN_LIMIT     = maxContextTurns >= 100 ? Infinity : maxContextTurns;
 
@@ -1594,7 +1649,7 @@ export function registerChatRoute(app, {
       console.log(
         `[chat] context: ${trimmed.length}/${messages.length} msgs, ` +
         `~${bodyTokens}/${budget.bodyTokenLimit} body tokens ` +
-        `(sys: ${systemTokens}t, model: ${budget.matched}, window: ${budget.window})`
+        `(sys: ${systemTokens}t, tools: ${toolTokens}t, model: ${budget.matched}, window: ${budget.window})`
       );
       if (compactedInfo) {
         send({

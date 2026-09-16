@@ -90,18 +90,26 @@ const TOOL_CLUSTERS = {
     'fauna_get_settings', 'fauna_save_instruction', 'fauna_send_notification',
     'fauna_list_models', 'fauna_switch_model', 'fauna_set_thinking_budget',
     'fauna_list_projects', 'fauna_retrieve_output', 'fauna_write_offloaded',
-    'fauna_doctor',
+    'fauna_doctor', 'fauna_list_skills', 'fauna_get_skill', 'fauna_route_skill',
+    'fauna_ask_user_decision',
   ]),
   // Code editing + shell. The most-used cluster. Triggered by almost any
   // engineering request.
   code: new Set([
     'fauna_shell_exec', 'fauna_read_file', 'fauna_write_file', 'fauna_write_files',
     'fauna_replace_string', 'fauna_apply_patch', 'fauna_dev_servers',
-    'fauna_verify_build',
+    'fauna_verify_build', 'fauna_file_search', 'fauna_workspace_search', 'fauna_grep',
+    'fauna_workspace_context', 'fauna_diagnostics', 'fauna_language_diagnostics',
+    'fauna_symbols', 'fauna_definition', 'fauna_references', 'fauna_rename_symbol',
+    'fauna_terminal', 'fauna_test_results', 'fauna_context_search',
   ]),
   // Multi-step planning. Triggered by "build" / "create app" / sticky plan.
   planning: new Set([
     'fauna_plan', 'fauna_substep', 'fauna_create_project', 'fauna_db_migration',
+    'fauna_route_engineering_flow', 'fauna_record_routing_outcome',
+    'fauna_interview', 'fauna_create_seed', 'fauna_list_seeds', 'fauna_get_seed',
+    'fauna_unstuck', 'fauna_setup_engineering', 'fauna_create_ticket_plan',
+    'fauna_evaluate_worktree_parallelism',
   ]),
   browser: new Set(['fauna_browser']),
   circuit: new Set([
@@ -133,6 +141,24 @@ const TOOL_CLUSTERS = {
     'fauna_workitem_verify',
   ]),
   debate: new Set(['fauna_consult_debate']),
+  context: new Set([
+    'fauna_context_ingest', 'fauna_context_list', 'fauna_context_delete',
+    'fauna_get_agent_instructions', 'fauna_audit_prompt',
+    'fauna_list_references', 'fauna_get_reference',
+  ]),
+  documents: new Set([
+    'fauna_document_screenshot', 'fauna_document_get', 'fauna_document_set',
+    'fauna_document_issues', 'fauna_document_merge', 'fauna_run_notebook',
+  ]),
+  design: new Set([
+    'fauna_render_diagram', 'fauna_check_diagram', 'fauna_init_design',
+    'fauna_design_audit', 'fauna_design_polish', 'fauna_design_harden',
+    'fauna_inspect_watermarks', 'fauna_clean_watermarks',
+  ]),
+  pcb: new Set([
+    'fauna_list_footprints', 'fauna_layout_pcb', 'fauna_render_pcb',
+    'fauna_check_board', 'fauna_build_guide',
+  ]),
 };
 
 const TOOL_KW = {
@@ -154,6 +180,10 @@ const TOOL_KW = {
   widget:     /(\b(widget|dashboard|chart|graph|gen[-_ ]?ui|scorecard|kpi|metric|leaderboard|playlist|carousel|tabs?|gallery|stat|interactive|kanban|slider|3d|three[-_. ]?js|webgl|babylon|aframe|model[- ]?viewer|gltf|blender|mesh|orbit ?controls|product (render|shot|viewer))\b|\.(glb|obj|stl|fbx)\b)/i,
   backlog:    /\b(backlog|task[- ]?board|board|kanban|work ?item|card|column|claim|assign|in[- ]?progress|review|done|archive|feature request|roadmap|prioriti[sz]e|ticket|issue|jira|todo list|user story|audit|architecture|tech debt|what.{1,15}next|add to .{0,15}board)\b/i,
   debate:     /\b(debate|consult|second opinion|cross[- ]?check|compare models|ask another model|deliberate|brainstorm)\b/i,
+  context:    /\b(context|knowledge base|ingest|reference document|instructions?|prompt audit|agent configuration)\b/i,
+  documents:  /\b(document|docx|word|spreadsheet|xlsx|excel|powerpoint|pptx|notebook|jupyter|pdf)\b/i,
+  design:     /\b(diagram|flowchart|architecture map|watermark|design audit|design polish|visual audit)\b/i,
+  pcb:        /\b(pcb|printed circuit|footprint|board layout|gerber|bill of materials|\bbom\b)\b/i,
 };
 
 // Sticky markers — if the assistant already used a tool, keep its schema on
@@ -232,7 +262,7 @@ export function filterToolSchemas(tools, flags) {
     const name = t?.function?.name || t?.name;
     if (!name) return true;
     const cluster = nameToCluster.get(name);
-    if (!cluster) return true; // foreign tool (figma/agent/widget runtime) — keep
+    if (!cluster) return !String(name).startsWith('fauna_'); // preserve foreign MCP tools only
     return !!flags[cluster];
   });
 }

@@ -102,11 +102,12 @@ describe('token-budget: pickBudget', () => {
 });
 
 describe('token-budget: computeBudget', () => {
-  it('subtracts system + reserved output from window before applying compactAt', () => {
-    const b = computeBudget({ model: 'gpt-5', systemTokens: 2_000, reservedOutput: 4_096 });
-    const available = 272_000 - 2_000 - 4_096;
+  it('subtracts system, tools, and reserved output from window before applying compactAt', () => {
+    const b = computeBudget({ model: 'gpt-5', systemTokens: 2_000, toolTokens: 8_000, reservedOutput: 4_096 });
+    const available = 272_000 - 2_000 - 8_000 - 4_096;
     expect(b.bodyTokenLimit).toBe(Math.floor(available * 0.75));
     expect(b.hardBodyCeiling).toBe(available);
+    expect(b.toolTokens).toBe(8_000);
   });
 
   it('floors available at 1024 even with absurd system tokens', () => {
@@ -126,9 +127,10 @@ describe('token-budget: computeBudget', () => {
     expect(b.bodyTokenLimit).toBeGreaterThan(10_000);
   });
 
-  it('clamps negative system/reserved inputs to 0', () => {
-    const b = computeBudget({ model: 'gpt-5', systemTokens: -100, reservedOutput: -50 });
+  it('clamps negative system/tool/reserved inputs to 0', () => {
+    const b = computeBudget({ model: 'gpt-5', systemTokens: -100, toolTokens: -25, reservedOutput: -50 });
     expect(b.systemTokens).toBe(0);
+    expect(b.toolTokens).toBe(0);
     expect(b.reservedOutput).toBe(0);
   });
 });

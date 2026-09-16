@@ -181,6 +181,18 @@ describe('routeSkill — graph proximity', () => {
   });
 });
 
+describe('routeSkill — explicit artifact formats', () => {
+  it('strongly prefers a skill whose id matches an explicit file extension', () => {
+    const catalog = buildCatalog([
+      { name: 'frontend-slides', description: 'Create presentations and convert PowerPoint files to HTML.', body: '' },
+      { name: 'pptx', description: 'Create and edit PowerPoint presentation files.', body: '' },
+    ]);
+    const result = routeSkill('create presentation.pptx', catalog);
+    expect(result.top).toBe('pptx');
+    expect(result.plan[0].evidence).toContain('explicit format matched: .pptx');
+  });
+});
+
 describe('routeSkill — invocation and maturity policy', () => {
   const policySkill = (name, metadata) => ({
     name,

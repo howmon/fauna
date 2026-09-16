@@ -127,19 +127,20 @@ export function pickBudget(model) {
 /**
  * Compute the chargeable-body token budget for a turn.
  *
- *   bodyTokenLimit = floor((window − systemTokens − reservedOutput) * compactAt)
+ *   bodyTokenLimit = floor((window − systemTokens − toolTokens − reservedOutput) * compactAt)
  *
  * @returns {{
  *   model: string, window: number, compactAt: number,
- *   systemTokens: number, reservedOutput: number,
+ *   systemTokens: number, toolTokens: number, reservedOutput: number,
  *   bodyTokenLimit: number, hardBodyCeiling: number
  * }}
  */
-export function computeBudget({ model, systemTokens = 0, reservedOutput = DEFAULT_RESERVED_OUTPUT_TOKENS } = {}) {
+export function computeBudget({ model, systemTokens = 0, toolTokens = 0, reservedOutput = DEFAULT_RESERVED_OUTPUT_TOKENS } = {}) {
   const b = pickBudget(model);
   const safeSys = Math.max(0, systemTokens | 0);
+  const safeTools = Math.max(0, toolTokens | 0);
   const safeOut = Math.max(0, reservedOutput | 0);
-  const available = Math.max(1024, b.window - safeSys - safeOut);
+  const available = Math.max(1024, b.window - safeSys - safeTools - safeOut);
   const bodyTokenLimit = Math.floor(available * b.compactAt);
   return {
     model: b.model,
@@ -147,6 +148,7 @@ export function computeBudget({ model, systemTokens = 0, reservedOutput = DEFAUL
     window: b.window,
     compactAt: b.compactAt,
     systemTokens: safeSys,
+    toolTokens: safeTools,
     reservedOutput: safeOut,
     bodyTokenLimit,
     hardBodyCeiling: available,
