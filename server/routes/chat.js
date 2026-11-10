@@ -26,7 +26,7 @@ import path from 'path';
 import { getCopilotClient } from '../copilot/auth.js';
 import { getLLMClient } from '../llm/registry.js';
 import { applyModelRequestCompatibility, resolveModelCapabilities } from '../llm/model-capabilities.js';
-import { FALLBACK_MODELS, CHAT_COMPLETIONS_UNSUPPORTED_RE } from '../copilot/models.js';
+import { FALLBACK_MODELS } from '../copilot/models.js';
 import { GEN_UI_CATALOG_PROMPT, GEN_UI_DYNAMIC_ENABLED_HINT, GEN_UI_SHORT_HINT } from '../prompts/gen-ui-catalog.js';
 import { FAUNA_CORE_GUIDELINES, FAUNA_FRONTEND_QUALITY } from '../prompts/core-guidelines.js';
 import { computeContextFlags, computeToolFlags, filterToolSchemas } from '../prompts/context-gating.js';
@@ -2867,11 +2867,6 @@ export function registerChatRoute(app, {
           if (apiErr.message?.includes('max_tokens') && params.max_tokens) {
             params.max_completion_tokens = params.max_tokens;
             delete params.max_tokens;
-            stream = await client.chat.completions.create(params, { signal: upstreamAbort.signal });
-          } else if (CHAT_COMPLETIONS_UNSUPPORTED_RE.test(params.model) || apiErr.message?.includes('/chat/completions endpoint')) {
-            const fallbackModel = /^gpt-5/i.test(params.model) ? 'gpt-5.4' : 'gpt-4.1';
-            console.log(`[chat] model "${params.model}" not supported via chat.completions, falling back to "${fallbackModel}"`);
-            params.model = fallbackModel;
             stream = await client.chat.completions.create(params, { signal: upstreamAbort.signal });
           } else {
             throw apiErr;

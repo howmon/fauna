@@ -12,6 +12,8 @@ Streaming AI with real shell, browser, Figma, file editing, voice, video, and a 
 
 **Models** — GitHub Copilot, OpenAI, Anthropic, Google. Plus any OpenAI-compatible `/v1` (Ollama, LM Studio, llama.cpp, vLLM, NVIDIA NIM, Groq, Together, Fireworks, DeepInfra, Mistral, DeepSeek, OpenRouter). Switch mid-conversation; per-conversation system prompts and thinking budgets.
 
+Copilot models that require the Responses API (including GPT-5.6 and GPT-6 variants) are routed automatically, preserving the selected model, streamed output, image inputs, and tool calls rather than substituting an older model.
+
 **Agent loop** — Native function tools run server-side in one HTTP response (up to 50 calls/turn) with no client round-trips and no "want me to continue?" stops. Markdown fences (```bash, etc.) are kept as a fallback for models without tool calls.
 
 **Shell** — `bash`, `python3`, `node`, `swift`, `osascript`, PowerShell. Streaming stdout/stderr, cancel via Stop, auto-attached screenshots.

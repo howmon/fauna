@@ -11,6 +11,7 @@ import path from 'path';
 import { execSync } from 'child_process';
 import OpenAI from 'openai';
 import { runtimeFetch } from './native-https-fetch.js';
+import { enableResponsesCompatibility } from './responses-compat.js';
 
 const IS_WIN = process.platform === 'win32';
 const PATH_SEP = IS_WIN ? ';' : ':';
@@ -115,7 +116,7 @@ export function getCopilotClient() {
   // Return cached client when the token hasn't changed.
   if (_clientCache && _clientCacheToken === token) return _clientCache;
   _clientCacheToken = token;
-  _clientCache = new OpenAI({
+  _clientCache = enableResponsesCompatibility(new OpenAI({
     baseURL: 'https://api.githubcopilot.com',
     apiKey:  token,
     fetch: runtimeFetch,
@@ -123,7 +124,7 @@ export function getCopilotClient() {
       'Editor-Version':        'vscode/1.85.0',
       'Copilot-Integration-Id': 'vscode-chat'
     }
-  });
+  }));
   return _clientCache;
 }
 
