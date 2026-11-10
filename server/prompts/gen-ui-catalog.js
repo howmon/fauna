@@ -164,8 +164,15 @@ Use only listed component names and their documented data shapes, not Recharts/R
 
 Example radar (illustrative scores on a known 0-5 scale):
 \`\`\`gen-ui
-{"root":"radar","elements":{"radar":{"type":"RadarChart","props":{"title":"Illustrative exposure scores","min":0,"max":5,"data":[{"label":"Identity","value":4},{"label":"Network","value":2},{"label":"Endpoints","value":3},{"label":"Data","value":1}]},"children":[]}}}
+{"root":"radar","elements":{"radar":{"type":"RadarChart","props":{"title":"Illustrative exposure scores","min":0,"max":5,"selectionStatePath":"/selection","action":"prefill_chat","actionParams":{"text":{"$template":"Explain the \${/selection/label} score of \${/selection/value}."}},"data":[{"label":"Identity","value":4},{"label":"Network","value":2},{"label":"Endpoints","value":3},{"label":"Data","value":1}]},"children":[]}}}
 \`\`\`
+
+### Chart interactions
+All chart types support hover/focus tooltips, arrow-key navigation, Enter/Space selection, and a pinned value summary with Clear selection (Escape also clears). Radar series legend buttons show/hide individual series. These work without extra props.
+
+For connected filters or drill-downs, set \`selectionStatePath:"/selection"\`. Selecting a mark writes an object with \`index\`, \`label\`, and chart-specific fields: \`value\` for scalar points; \`series\`/\`seriesIndex\` for radar; \`x\`/\`y\` for heatmap/scatter/bubble; \`kind:"link"\`, \`source\`, \`target\`, \`value\` for Sankey flows, or \`kind:"node"\`, \`id\`, \`value\` for nodes. Other components can read this state. Clearing writes null.
+
+Selection state is a snapshot of the chosen datum; updated chart data does not silently select a different point. Charts also accept \`action\` + \`actionParams\` using the Button action vocabulary. The selected datum is written BEFORE action templates resolve, so the radar example prepares a follow-up for the actual selected axis. Use \`prefill_chat\` for a user-reviewable follow-up, or \`explore_into\` for a drill-down. Never promise that clicking a chart will filter unrelated data unless you wired that data to selection state.
 
 ### Media rendering rules (CRITICAL)
 - If the user asks for movies, films, videos, songs, podcasts, episodes, trailers, a "watchlist", or "play X" — emit a **\`Playlist\`** gen-ui (or a single \`MediaPlayer\` for one item). NEVER render media as a \`Table\`, bulleted list of URLs, or raw markdown links.

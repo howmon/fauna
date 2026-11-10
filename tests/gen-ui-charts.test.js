@@ -15,6 +15,7 @@ class Element {
     this.dataset = {};
     this.innerHTML = '';
     this.textContent = '';
+    this.listeners = {};
   }
   appendChild(child) {
     child.parentNode = this;
@@ -22,6 +23,32 @@ class Element {
     return child;
   }
   setAttribute(name, value) { this.attributes[name] = String(value); }
+  getAttribute(name) { return this.attributes[name] ?? null; }
+  removeAttribute(name) { delete this.attributes[name]; }
+  addEventListener(name, callback) { (this.listeners[name] ||= []).push(callback); }
+  dispatch(name, event = {}) {
+    const e = { preventDefault() {}, ...event };
+    for (const listener of this.listeners[name] || []) listener(e);
+    return e;
+  }
+  querySelectorAll(selector) {
+    const match = selector.match(/^\[([a-z-]+)(?:="([^"]*)")?\]$/);
+    return this.children.flatMap(child => [
+      ...(match && child.attributes[match[1]] != null && (match[2] == null || child.attributes[match[1]] === match[2]) ? [child] : []),
+      ...child.querySelectorAll(selector),
+    ]);
+  }
+  contains(child) { return child === this || this.children.some(node => node.contains(child)); }
+  getBoundingClientRect() { return { left: 0, top: 0, bottom: 200, width: 400, height: 200 }; }
+  getClientRects() {
+    for (let node = this; node; node = node.parentNode) {
+      if (node.hidden || node.style.display === 'none') return [];
+    }
+    return [this.getBoundingClientRect()];
+  }
+  focus() { this.focused = true; this.dispatch('focus'); }
+  get offsetWidth() { return 100; }
+  get offsetHeight() { return 24; }
   replaceChild(next, previous) {
     const index = this.children.indexOf(previous);
     if (index < 0) throw new Error('Missing child');
@@ -33,10 +60,10 @@ class Element {
 
 function runtime() {
   const context = {
-    document: {
+    document: Object.assign(new Element('#document'), {
       createElement: tag => new Element(tag),
       createTextNode: text => Object.assign(new Element('#text'), { textContent: text }),
-    },
+    }),
     window: {},
     escHtml: escapeHtml,
   };
@@ -74,6 +101,160 @@ function render(context, type, props, store = context._genUiCreateState({})) {
   return context._genUiRenderElement('chart', { chart: { type, props } }, store, 0);
 }
 
+describe('GenUI chart interactions', () => {
+  function bar(props = {}) {
+    const context = runtime();
+    const store = context._genUiCreateState({});
+    const chart = render(context, 'BarChart', { data: radar.data, ...props }, store);
+    const parent = new Element('div');
+    parent.appendChild(chart);
+    return { context, store, chart, parent, marks: chart.querySelectorAll('[data-gui-point]') };
+  }
+
+  it('shows safe hover/focus tooltips and roving keyboard navigation', () => {
+    const { chart, marks } = bar();
+    const tooltip = chart.children.find(child => child.attributes.role === 'tooltip');
+    expect(marks.map(mark => mark.attributes.tabindex)).toEqual(['0', '-1', '-1']);
+    expect(marks.every(mark => mark.attributes.role === 'button')).toBe(true);
+    marks[0].dispatch('pointerenter', { clientX: 390, clientY: 190 });
+    expect(tooltip.hidden).toBe(false);
+    expect(tooltip.textContent).toBe('Identity: 4');
+    expect(tooltip.style.left).toBe('296px');
+    expect(marks[0].attributes['aria-describedby']).toBe(tooltip.id);
+    marks[0].dispatch('keydown', { key: 'ArrowRight' });
+    expect(marks[1].focused).toBe(true);
+    expect(marks.map(mark => mark.attributes.tabindex)).toEqual(['-1', '0', '-1']);
+    expect(tooltip.textContent).toBe('Network: 2');
+    marks[1].dispatch('keydown', { key: 'End' });
+    expect(marks[2].focused).toBe(true);
+    marks[2].dispatch('keydown', { key: 'Home' });
+    expect(marks[0].attributes.tabindex).toBe('0');
+    chart.dispatch('pointerleave');
+    expect(tooltip.hidden).toBe(true);
+  });
+
+  it.each(['click', 'Enter', ' '])('pins values using %s and clears without invoking an action', method => {
+    const { chart, marks } = bar();
+    if (method === 'click') marks[1].dispatch('click');
+    else marks[1].dispatch('keydown', { key: method });
+    const selection = chart.children.find(child => child.className === 'gui-chart-selection');
+    expect(selection.hidden).toBe(false);
+    expect(selection.children[0].textContent).toBe('Selected: Network: 2');
+    expect(marks[1].attributes['aria-pressed']).toBe('true');
+    marks[1].dispatch('keydown', { key: 'Escape' });
+    expect(selection.hidden).toBe(true);
+    expect(marks.every(mark => mark.attributes['aria-pressed'] === 'false')).toBe(true);
+    marks[0].dispatch('click');
+    selection.children[1].dispatch('click');
+    expect(selection.hidden).toBe(true);
+    expect(marks[0].focused).toBe(true);
+  });
+
+  it('dismisses hover-only tooltips with Escape even without focusing the chart', () => {
+    const { context, chart, marks } = bar();
+    const tooltip = chart.children.find(child => child.attributes.role === 'tooltip');
+    marks[0].dispatch('pointerenter', { clientX: 30, clientY: 40 });
+    expect(tooltip.hidden).toBe(false);
+    context.document.dispatch('keydown', { key: 'Escape' });
+    expect(tooltip.hidden).toBe(true);
+    expect(marks[0].attributes['aria-describedby']).toBeUndefined();
+  });
+
+  it('writes selection before resolving action templates and preserves the chart on unrelated state changes', () => {
+    const { store, chart, parent, marks } = bar({
+      selectionStatePath: '/selection',
+      action: 'setState',
+      actionParams: { statePath: '/detail', value: { $template: '${/selection/label}: ${/selection/value}' } },
+    });
+    marks[1].focus();
+    marks[1].dispatch('click');
+    expect(store.get('/selection')).toMatchObject({ index: 1, label: 'Network', value: 2 });
+    expect(store.get('/detail')).toBe('Network: 2');
+    expect(parent.children[0]).toBe(chart);
+    expect(marks[1].attributes.tabindex).toBe('0');
+    store.set('/unrelated', true);
+    expect(parent.children[0]).toBe(chart);
+    marks[1].dispatch('keydown', { key: 'Escape' });
+    expect(store.get('/selection')).toBeNull();
+    expect(store.get('/detail')).toBe('Network: 2');
+  });
+
+  it('reflects externally changed selection without replacing a static chart', () => {
+    const { store, chart, parent, marks } = bar({ selectionStatePath: '/selection' });
+    store.set('/selection', { value: 3, label: 'Data', index: 2 });
+    expect(parent.children[0]).toBe(chart);
+    expect(marks[2].attributes['aria-pressed']).toBe('true');
+    store.set('/selection', null);
+    expect(marks[2].attributes['aria-pressed']).toBe('false');
+  });
+
+  it('does not silently select a different datum when bound chart data changes', () => {
+    const context = runtime();
+    const store = context._genUiCreateState({ data: radar.data });
+    const chart = render(context, 'BarChart', {
+      data: { $state: '/data' }, selectionStatePath: '/selection',
+    }, store);
+    const parent = new Element('div');
+    parent.appendChild(chart);
+    chart.querySelectorAll('[data-gui-point]')[0].dispatch('click');
+    store.set('/data', [{ label: 'Replacement', value: 9 }]);
+    const next = parent.children[0];
+    expect(next).not.toBe(chart);
+    expect(next.querySelectorAll('[data-gui-point]')[0].attributes['aria-pressed']).toBe('false');
+    expect(next.children.find(child => child.className === 'gui-chart-selection').hidden).toBe(true);
+    expect(store.get('/selection')).toMatchObject({ label: 'Identity', value: 4 });
+  });
+
+  it('resolves a reviewable follow-up from the selected value without auto-sending', () => {
+    const { context, chart, marks } = bar({
+      selectionStatePath: '/selection',
+      action: 'prefill_chat',
+      actionParams: { text: { $template: 'Explain ${/selection/label} (${/selection/value})' } },
+    });
+    const calls = [];
+    context.window._faunaExplorer = { open: true };
+    context.window._explorerHandoff = (...args) => calls.push(args);
+    marks[2].dispatch('click');
+    expect(calls).toEqual([['Explain Data (3)', { send: false }]]);
+    expect(chart.children.find(child => child.className === 'gui-chart-hint').textContent).toContain('prepare a follow-up');
+  });
+
+  it('toggles radar series, removes hidden keyboard stops, and clears selection without dispatching', () => {
+    const context = runtime();
+    const store = context._genUiCreateState({});
+    const chart = context._guiChartShell({}, '');
+    const buttons = [];
+    const marks = [];
+    for (let i = 0; i < 2; i++) {
+      const layer = chart.appendChild(new Element('g'));
+      layer.setAttribute('data-gui-series', String(i));
+      const mark = layer.appendChild(new Element('circle'));
+      mark.setAttribute('data-gui-point', String(i));
+      context._guiChartMark(chart, { label: 'Series ' + i, value: i }, 'Series ' + i + ': ' + i);
+      marks.push(mark);
+      const button = chart.appendChild(new Element('button'));
+      button.setAttribute('data-gui-series-toggle', String(i));
+      button.setAttribute('aria-pressed', 'true');
+      buttons.push(button);
+    }
+    context._guiChartInteractions(chart, {
+      selectionStatePath: '/selection', action: 'setState', actionParams: {},
+    }, store, { statePath: '/detail', value: 'activated' });
+    marks[0].dispatch('click');
+    store.set('/detail', 'unchanged');
+    buttons[0].dispatch('click');
+    expect(buttons[0].attributes['aria-pressed']).toBe('false');
+    expect(marks[0].getClientRects()).toEqual([]);
+    expect(marks[0].attributes.tabindex).toBe('-1');
+    expect(marks[1].attributes.tabindex).toBe('0');
+    expect(store.get('/selection')).toBeNull();
+    expect(store.get('/detail')).toBe('unchanged');
+    buttons[0].dispatch('click');
+    expect(marks[0].getClientRects()).toHaveLength(1);
+    expect(marks[0].attributes.tabindex).toBe('0');
+  });
+});
+
 describe('GenUI visualizer rendering', () => {
   it.each(['BarChart', 'LineChart', 'AreaChart', 'PieChart', 'DonutChart', 'RadialChart', 'Gauge'])(
     'preserves existing %s rendering',
@@ -81,6 +262,7 @@ describe('GenUI visualizer rendering', () => {
       const chart = render(runtime(), type, { data: radar.data, value: 3, max: 5 });
       expect(chart.className).toContain('gui-chart');
       expect(content(chart)).not.toMatch(/Invalid chart data|No data|NaN|Infinity/);
+      expect(chart._guiChartPoints.length).toBeGreaterThan(0);
     },
   );
 
@@ -89,7 +271,9 @@ describe('GenUI visualizer rendering', () => {
     const chart = render(context, type, props);
     expect(chart.className).not.toBe('gui-unknown');
     expect(content(chart)).toContain(geometry);
-    expect(content(chart)).toContain('role="img"');
+    expect(content(chart)).toContain('role="group"');
+    expect(content(chart)).toContain('data-gui-point=');
+    expect(chart._guiChartPoints.length).toBeGreaterThan(0);
     expect(descendants(chart, 'summary')[0].textContent).toBe('View chart data');
     expect(descendants(chart, 'table')).toHaveLength(1);
     expect(descendants(chart, 'th').every(cell => cell.attributes.scope === 'col')).toBe(true);

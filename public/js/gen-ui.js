@@ -2046,25 +2046,202 @@ var _genUiComponents = {
   },
 
   // ── Charts (self-contained, no external libs) ─────────────────────────
-  BarChart:    function(el, props) { return _guiBarChart(props); },
-  LineChart:   function(el, props) { return _guiLineChart(props, false); },
-  AreaChart:   function(el, props) { return _guiLineChart(props, true); },
-  PieChart:    function(el, props) { return _guiPieChart(props, false); },
-  DonutChart:  function(el, props) { return _guiPieChart(props, true); },
-  RadialChart: function(el, props) { return _guiRadialChart(props); },
-  Gauge:       function(el, props) { return _guiRadialChart(props); },
-  RadarChart:  function(el, props) { return _guiRadarChart(props); },
-  SpiderChart: function(el, props) { return _guiRadarChart(props); },
-  Heatmap:     function(el, props) { return _guiHeatmap(props); },
-  HeatMap:     function(el, props) { return _guiHeatmap(props); },
-  Sankey:      function(el, props) { return _guiSankey(props); },
-  SankeyChart: function(el, props) { return _guiSankey(props); },
-  ScatterChart: function(el, props) { return _guiScatterChart(props, false); },
-  BubbleChart: function(el, props) { return _guiScatterChart(props, true); }
+  BarChart:    _guiChartRenderer(_guiBarChart),
+  LineChart:   _guiChartRenderer(_guiLineChart, false),
+  AreaChart:   _guiChartRenderer(_guiLineChart, true),
+  PieChart:    _guiChartRenderer(_guiPieChart, false),
+  DonutChart:  _guiChartRenderer(_guiPieChart, true),
+  RadialChart: _guiChartRenderer(_guiRadialChart),
+  Gauge:       _guiChartRenderer(_guiRadialChart),
+  RadarChart:  _guiChartRenderer(_guiRadarChart),
+  SpiderChart: _guiChartRenderer(_guiRadarChart),
+  Heatmap:     _guiChartRenderer(_guiHeatmap),
+  HeatMap:     _guiChartRenderer(_guiHeatmap),
+  Sankey:      _guiChartRenderer(_guiSankey),
+  SankeyChart: _guiChartRenderer(_guiSankey),
+  ScatterChart: _guiChartRenderer(_guiScatterChart, false),
+  BubbleChart: _guiChartRenderer(_guiScatterChart, true)
 };
 
 // ── Chart helpers ─────────────────────────────────────────────────────────
 var _GUI_CHART_PALETTE = ['#6366f1', '#22c55e', '#3b82f6', '#f59e0b', '#ef4444', '#a855f7', '#14b8a6', '#ec4899'];
+var _guiChartTooltipId = 0;
+var _guiChartActiveTooltip = null;
+var _guiChartEscapeBound = false;
+
+function _guiChartRenderer(render, variant) {
+  return function(el, props, children, store) {
+    return _guiChartInteractions(render(props, variant), props, store, el.props && el.props.actionParams);
+  };
+}
+
+function _guiChartMark(wrap, data, label) {
+  var index = wrap._guiChartPoints.length;
+  wrap._guiChartPoints.push({ data: Object.assign({ index: index }, data), label: label });
+  return ' data-gui-point="' + index + '"';
+}
+
+function _guiChartRenderKey(props) {
+  var display = Object.assign({}, props);
+  delete display.actionParams;
+  return JSON.stringify(display);
+}
+
+function _guiChartInteractions(wrap, props, store, rawActionParams) {
+  var marks = Array.from(wrap.querySelectorAll('[data-gui-point]'));
+  if (!marks.length) return wrap;
+  var points = wrap._guiChartPoints;
+  var selected = null;
+  var controller = { hide: hideTooltip, clear: clearSelection };
+  if (!_guiChartEscapeBound) {
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape' && _guiChartActiveTooltip) {
+        event.preventDefault();
+        _guiChartActiveTooltip.clear();
+      }
+    });
+    _guiChartEscapeBound = true;
+  }
+  var tooltip = document.createElement('div');
+  tooltip.className = 'gui-chart-tooltip';
+  tooltip.id = 'gui-chart-tooltip-' + (++_guiChartTooltipId);
+  tooltip.setAttribute('role', 'tooltip');
+  tooltip.hidden = true;
+  wrap.appendChild(tooltip);
+  var hint = document.createElement('div');
+  hint.className = 'gui-chart-hint';
+  hint.id = tooltip.id + '-hint';
+  wrap.setAttribute('role', 'group');
+  wrap.setAttribute('aria-label', props.title || 'Interactive chart');
+  wrap.setAttribute('aria-describedby', hint.id);
+  var actionHints = {
+    prefill_chat: 'Select a mark to prepare a follow-up.',
+    send_prompt: 'Select a mark to send a follow-up.',
+    open_url: 'Select a mark to open a link.',
+    explore_into: 'Select a mark to explore details.',
+    setState: 'Select a mark to update the view.',
+    toggle_visible: 'Select a mark to show or hide related content.',
+    copy_text: 'Select a mark to copy text.',
+    open_artifact: 'Select a mark to open an artifact.',
+  };
+  hint.textContent = 'Hover or focus for values; use arrow keys to move. ' +
+    (actionHints[props.action] || 'Select a mark to pin its values.');
+  wrap.appendChild(hint);
+  var selection = document.createElement('div');
+  selection.className = 'gui-chart-selection';
+  selection.hidden = true;
+  var selectionText = document.createElement('span');
+  selectionText.setAttribute('role', 'status');
+  var clear = document.createElement('button');
+  clear.type = 'button';
+  clear.textContent = 'Clear selection';
+  selection.appendChild(selectionText);
+  selection.appendChild(clear);
+  wrap.appendChild(selection);
+
+  function sync() {
+    var value = props.selectionStatePath ? store.get(props.selectionStatePath) : selected;
+    var point = value && points[value.index];
+    if (point && Object.keys(point.data).some(function(key) { return point.data[key] !== value[key]; })) point = null;
+    marks.forEach(function(mark) {
+      mark.setAttribute('aria-pressed', String(!!point && Number(mark.getAttribute('data-gui-point')) === value.index));
+    });
+    selection.hidden = !point;
+    selectionText.textContent = point ? 'Selected: ' + point.label : '';
+  }
+  function hideTooltip() {
+    tooltip.hidden = true;
+    marks.forEach(function(mark) { mark.removeAttribute('aria-describedby'); });
+    if (_guiChartActiveTooltip === controller) _guiChartActiveTooltip = null;
+  }
+  function showTooltip(mark, event) {
+    if (_guiChartActiveTooltip && _guiChartActiveTooltip !== controller) _guiChartActiveTooltip.hide();
+    _guiChartActiveTooltip = controller;
+    var point = points[Number(mark.getAttribute('data-gui-point'))];
+    tooltip.textContent = point.label;
+    tooltip.hidden = false;
+    marks.forEach(function(other) { other.removeAttribute('aria-describedby'); });
+    mark.setAttribute('aria-describedby', tooltip.id);
+    var bounds = wrap.getBoundingClientRect();
+    var markBounds = mark.getBoundingClientRect();
+    var x = event && event.clientX != null ? event.clientX : markBounds.left + markBounds.width / 2;
+    var y = event && event.clientY != null ? event.clientY : markBounds.bottom;
+    tooltip.style.left = Math.max(4, Math.min(x - bounds.left + 12, bounds.width - tooltip.offsetWidth - 4)) + 'px';
+    tooltip.style.top = Math.max(4, Math.min(y - bounds.top + 12, bounds.height - tooltip.offsetHeight - 4)) + 'px';
+  }
+  function clearSelection() {
+    selected = null;
+    if (props.selectionStatePath) store.set(props.selectionStatePath, null);
+    sync();
+    hideTooltip();
+  }
+  function activate(mark) {
+    selected = points[Number(mark.getAttribute('data-gui-point'))].data;
+    if (props.selectionStatePath) store.set(props.selectionStatePath, selected);
+    sync();
+    if (props.action) {
+      _genUiDispatch(props.action, _genUiProps(rawActionParams || {}, store), store, wrap);
+    }
+  }
+  marks.forEach(function(mark, index) {
+    var point = points[Number(mark.getAttribute('data-gui-point'))];
+    mark.setAttribute('role', 'button');
+    mark.setAttribute('tabindex', index === 0 ? '0' : '-1');
+    mark.setAttribute('aria-label', point.label);
+    mark.querySelectorAll('title').forEach(function(title) { title.remove(); });
+    mark.addEventListener('pointerenter', function(event) { showTooltip(mark, event); });
+    mark.addEventListener('pointermove', function(event) { showTooltip(mark, event); });
+    mark.addEventListener('focus', function() {
+      marks.forEach(function(other) { other.setAttribute('tabindex', other === mark ? '0' : '-1'); });
+      showTooltip(mark);
+    });
+    mark.addEventListener('click', function() { activate(mark); });
+    mark.addEventListener('keydown', function(event) {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        activate(mark);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        clearSelection();
+      } else if (['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'].indexOf(event.key) >= 0) {
+        event.preventDefault();
+        var visible = marks.filter(function(other) { return other.getClientRects().length > 0; });
+        var current = visible.indexOf(mark);
+        var next = event.key === 'Home' ? 0 : event.key === 'End' ? visible.length - 1
+          : (current + (event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1) + visible.length) % visible.length;
+        if (visible[next]) visible[next].focus();
+      }
+    });
+  });
+  clear.addEventListener('click', function() {
+    clearSelection();
+    var first = marks.find(function(mark) { return mark.getClientRects().length > 0; });
+    if (first) first.focus();
+  });
+  wrap.addEventListener('pointerleave', function() {
+    if (!wrap.contains(document.activeElement)) hideTooltip();
+  });
+  wrap.addEventListener('focusout', function(event) {
+    if (!wrap.contains(event.relatedTarget)) hideTooltip();
+  });
+  wrap.querySelectorAll('[data-gui-series-toggle]').forEach(function(button) {
+    button.addEventListener('click', function() {
+      var index = button.getAttribute('data-gui-series-toggle');
+      var visible = button.getAttribute('aria-pressed') !== 'true';
+      button.setAttribute('aria-pressed', String(visible));
+      wrap.querySelectorAll('[data-gui-series="' + index + '"]').forEach(function(layer) {
+        layer.style.display = visible ? '' : 'none';
+      });
+      var first = marks.find(function(mark) { return mark.getClientRects().length > 0; });
+      marks.forEach(function(mark) { mark.setAttribute('tabindex', mark === first ? '0' : '-1'); });
+      clearSelection();
+    });
+  });
+  wrap._guiChartSync = sync;
+  wrap._guiChartHideTooltip = hideTooltip;
+  sync();
+  return wrap;
+}
 
 function _guiChartData(props) {
   var d = props.data || props.points || props.values || props.series || props.items;
@@ -2093,6 +2270,7 @@ function _guiFmtNum(n) {
 function _guiChartShell(props, extraClass) {
   var wrap = document.createElement('div');
   wrap.className = 'gui-chart ' + extraClass;
+  wrap._guiChartPoints = [];
   if (props.title) {
     var t = document.createElement('div');
     t.className = 'gui-chart-title';
@@ -2120,10 +2298,12 @@ function _guiBarChart(props) {
   var plot = document.createElement('div');
   plot.className = 'gui-bars' + (horizontal ? ' horizontal' : '');
   data.forEach(function(d, i) {
-    var color = d.color || _GUI_CHART_PALETTE[i % _GUI_CHART_PALETTE.length];
+    var color = _guiChartColor(d.color, i);
     var pct = Math.max(0, Math.min(100, (d.value / max) * 100));
     var item = document.createElement('div');
     item.className = 'gui-bar-item';
+    item.setAttribute('data-gui-point', String(wrap._guiChartPoints.length));
+    _guiChartMark(wrap, d, d.label + ': ' + d.value);
     item.innerHTML =
       '<div class="gui-bar-value">' + escHtml(_guiFmtNum(d.value)) + '</div>' +
       '<div class="gui-bar-track"><div class="gui-bar-fill" style="' +
@@ -2148,15 +2328,17 @@ function _guiLineChart(props, area) {
   var X = function(i) { return pad + (W - pad * 2) * (i / (n - 1)); };
   var Y = function(v) { return pad + (H - pad * 2) * (1 - (v - min) / (max - min)); };
   var pts = data.map(function(d, i) { return X(i).toFixed(1) + ',' + Y(d.value).toFixed(1); }).join(' ');
-  var color = props.color || _GUI_CHART_PALETTE[0];
-  var svg = '<svg class="gui-chart-svg" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true">';
+  var color = _guiChartColor(props.color);
+  var svg = '<svg class="gui-chart-svg" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" role="group" aria-label="Trend chart">';
   if (area) {
     svg += '<polygon fill="' + color + '" opacity="0.15" points="' +
       pad + ',' + (H - pad) + ' ' + pts + ' ' + (W - pad) + ',' + (H - pad) + '"/>';
   }
   svg += '<polyline fill="none" stroke="' + color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" points="' + pts + '"/>';
   data.forEach(function(d, i) {
-    svg += '<circle cx="' + X(i).toFixed(1) + '" cy="' + Y(d.value).toFixed(1) + '" r="2.5" fill="' + color + '"/>';
+    svg += '<g' + _guiChartMark(wrap, d, d.label + ': ' + d.value) + '><circle cx="' + X(i).toFixed(1) +
+      '" cy="' + Y(d.value).toFixed(1) + '" r="3" fill="' + color + '"/><circle cx="' + X(i).toFixed(1) +
+      '" cy="' + Y(d.value).toFixed(1) + '" r="12" fill="transparent"/></g>';
   });
   svg += '</svg>';
   var body = document.createElement('div');
@@ -2170,18 +2352,18 @@ function _guiLineChart(props, area) {
   return wrap;
 }
 
-function _guiArcPath(cx, cy, r, inner, a0, a1, color) {
+function _guiArcPath(cx, cy, r, inner, a0, a1, color, attributes) {
   var large = (a1 - a0) > Math.PI ? 1 : 0;
   var x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0);
   var x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
   if (inner > 0) {
     var xi0 = cx + inner * Math.cos(a0), yi0 = cy + inner * Math.sin(a0);
     var xi1 = cx + inner * Math.cos(a1), yi1 = cy + inner * Math.sin(a1);
-    return '<path d="M' + x0.toFixed(2) + ' ' + y0.toFixed(2) + ' A' + r + ' ' + r + ' 0 ' + large + ' 1 ' +
+    return '<path' + (attributes || '') + ' d="M' + x0.toFixed(2) + ' ' + y0.toFixed(2) + ' A' + r + ' ' + r + ' 0 ' + large + ' 1 ' +
       x1.toFixed(2) + ' ' + y1.toFixed(2) + ' L' + xi1.toFixed(2) + ' ' + yi1.toFixed(2) + ' A' + inner + ' ' + inner +
       ' 0 ' + large + ' 0 ' + xi0.toFixed(2) + ' ' + yi0.toFixed(2) + ' Z" fill="' + color + '"/>';
   }
-  return '<path d="M' + cx + ' ' + cy + ' L' + x0.toFixed(2) + ' ' + y0.toFixed(2) + ' A' + r + ' ' + r + ' 0 ' +
+  return '<path' + (attributes || '') + ' d="M' + cx + ' ' + cy + ' L' + x0.toFixed(2) + ' ' + y0.toFixed(2) + ' A' + r + ' ' + r + ' 0 ' +
     large + ' 1 ' + x1.toFixed(2) + ' ' + y1.toFixed(2) + ' Z" fill="' + color + '"/>';
 }
 
@@ -2192,17 +2374,19 @@ function _guiPieChart(props, donut) {
   var total = data.reduce(function(a, d) { return a + d.value; }, 0) || 1;
   var cx = 70, cy = 70, r = 62, inner = donut ? 36 : 0;
   var ang = -Math.PI / 2;
-  var svg = '<svg class="gui-pie-svg" viewBox="0 0 140 140" aria-hidden="true">';
+  var svg = '<svg class="gui-pie-svg" viewBox="0 0 140 140" role="group" aria-label="Composition chart">';
   if (data.length === 1) {
-    var c0 = data[0].color || _GUI_CHART_PALETTE[0];
-    svg += '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="' + c0 + '"/>';
-    if (inner > 0) svg += '<circle cx="' + cx + '" cy="' + cy + '" r="' + inner + '" fill="var(--fau-surface, #1a1a1a)"/>';
+    var c0 = _guiChartColor(data[0].color);
+    svg += '<circle' + _guiChartMark(wrap, data[0], data[0].label + ': ' + data[0].value + ' (100%)') +
+      ' cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="' + c0 + '"/>';
+    if (inner > 0) svg += '<circle cx="' + cx + '" cy="' + cy + '" r="' + inner + '" fill="var(--fau-surface, #1a1a1a)" pointer-events="none"/>';
   } else {
     data.forEach(function(d, i) {
       var frac = d.value / total;
       var a2 = ang + frac * 2 * Math.PI;
-      var color = d.color || _GUI_CHART_PALETTE[i % _GUI_CHART_PALETTE.length];
-      svg += _guiArcPath(cx, cy, r, inner, ang, a2, color);
+      var color = _guiChartColor(d.color, i);
+      svg += _guiArcPath(cx, cy, r, inner, ang, a2, color,
+        _guiChartMark(wrap, d, d.label + ': ' + d.value + ' (' + Math.round(frac * 100) + '%)'));
       ang = a2;
     });
   }
@@ -2210,9 +2394,9 @@ function _guiPieChart(props, donut) {
   var body = document.createElement('div');
   body.className = 'gui-pie-body';
   var legend = data.map(function(d, i) {
-    var color = d.color || _GUI_CHART_PALETTE[i % _GUI_CHART_PALETTE.length];
+    var color = _guiChartColor(d.color, i);
     var pct = Math.round((d.value / total) * 100);
-    return '<div class="gui-pie-legend-row"><span class="gui-pie-dot" style="background:' + color + '"></span>' +
+    return '<div class="gui-pie-legend-row" data-gui-point="' + i + '"><span class="gui-pie-dot" style="background:' + color + '"></span>' +
       '<span class="gui-pie-legend-label">' + escHtml(d.label) + '</span>' +
       '<span class="gui-pie-legend-val">' + pct + '%</span></div>';
   }).join('');
@@ -2226,18 +2410,20 @@ function _guiRadialChart(props) {
   var value = Number(props.value != null ? props.value : 0);
   var max = props.max != null ? Number(props.max) : 100;
   var pct = max ? Math.max(0, Math.min(1, value / max)) : 0;
-  var color = props.color || _GUI_CHART_PALETTE[0];
+  var color = _guiChartColor(props.color);
   var cx = 70, cy = 70, r = 54;
   var circ = 2 * Math.PI * r;
   var dash = (pct * circ).toFixed(1) + ' ' + circ.toFixed(1);
   var center = props.centerLabel != null ? String(props.centerLabel)
     : (props.max != null ? _guiFmtNum(value) : Math.round(pct * 100) + '%');
-  var svg = '<svg class="gui-radial-svg" viewBox="0 0 140 140" aria-hidden="true">' +
+  var svg = '<svg class="gui-radial-svg" viewBox="0 0 140 140" role="group" aria-label="Score chart"><g' +
+    _guiChartMark(wrap, { label: props.label || 'Value', value: value, max: max },
+      (props.label || 'Value') + ': ' + value + ' / ' + max) + '>' +
     '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="none" stroke="var(--fau-border, #333)" stroke-width="12"/>' +
     '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="none" stroke="' + color + '" stroke-width="12" ' +
       'stroke-linecap="round" stroke-dasharray="' + dash + '" transform="rotate(-90 ' + cx + ' ' + cy + ')"/>' +
     '<text x="70" y="74" text-anchor="middle" class="gui-radial-text">' + escHtml(center) + '</text>' +
-    '</svg>';
+    '</g></svg>';
   var body = document.createElement('div');
   body.className = 'gui-radial-body';
   body.innerHTML = svg + (props.label ? '<div class="gui-radial-label">' + escHtml(props.label) + '</div>' : '');
@@ -2269,7 +2455,7 @@ function _guiChartFinish(wrap, props, width, height, markup, columns, rows) {
   var plot = document.createElement('div');
   plot.className = 'gui-chart-plot';
   plot.innerHTML = '<svg class="gui-data-svg" viewBox="0 0 ' + width + ' ' + height +
-    '" role="img" aria-label="' + escHtml(String(props.title || 'Data visualization')) + '">' +
+    '" role="group" aria-label="' + escHtml(String(props.title || 'Data visualization')) + '">' +
     '<title>' + escHtml(String(props.title || 'Data visualization')) + '</title>' + markup + '</svg>';
   wrap.appendChild(plot);
   var details = document.createElement('details');
@@ -2356,9 +2542,16 @@ function _guiRadarChart(props) {
     var polygon = s.values.map(function(value, i) {
       return point(i, radius * Math.max(0, Math.min(1, (Number(value) - min) / (max - min)))).join(',');
     }).join(' ');
-    svg += '<polygon class="gui-radar-series" points="' + polygon + '" fill="' + color + '" fill-opacity=".15" stroke="' +
+    svg += '<g data-gui-series="' + index + '"><polygon class="gui-radar-series" points="' + polygon + '" fill="' + color + '" fill-opacity=".15" stroke="' +
       color + '" stroke-width="2"><title>' + escHtml(name) + '</title></polygon>';
-    s.values.forEach(function(value, i) { rows.push([name, labels[i], Number(value)]); });
+    s.values.forEach(function(value, i) {
+      var pos = point(i, radius * Math.max(0, Math.min(1, (Number(value) - min) / (max - min))));
+      svg += '<g' + _guiChartMark(wrap, { label: labels[i], series: name, seriesIndex: index, value: Number(value) },
+        name + ' / ' + labels[i] + ': ' + value) + '><circle cx="' + pos[0] + '" cy="' + pos[1] +
+        '" r="3.5" fill="' + color + '"/><circle cx="' + pos[0] + '" cy="' + pos[1] + '" r="12" fill="transparent"/></g>';
+      rows.push([name, labels[i], Number(value)]);
+    });
+    svg += '</g>';
   });
   svg += '<text class="gui-chart-label" x="12" y="20">Scale: ' + _guiFmtNum(min) + ' - ' + _guiFmtNum(max) + '</text>';
   _guiChartFinish(wrap, props, 480, 350, svg, ['Series', 'Axis', 'Value'], rows);
@@ -2366,7 +2559,11 @@ function _guiRadarChart(props) {
     var legend = document.createElement('div');
     legend.className = 'gui-chart-legend';
     series.forEach(function(s, index) {
-      var item = document.createElement('span');
+      var item = document.createElement('button');
+      item.type = 'button';
+      item.setAttribute('data-gui-series-toggle', String(index));
+      item.setAttribute('aria-pressed', 'true');
+      item.setAttribute('aria-label', 'Show ' + (s.label || s.name || 'Series ' + (index + 1)));
       var dot = document.createElement('span');
       dot.className = 'gui-pie-dot';
       dot.style.backgroundColor = _guiChartColor(s.color, index);
@@ -2416,7 +2613,9 @@ function _guiHeatmap(props) {
   });
   cells.forEach(function(d) {
     var intensity = max === min ? 1 : Math.max(0, Math.min(1, (d.value - min) / (max - min)));
-    svg += '<rect class="gui-heatmap-cell" x="' + (left + d.x * size) + '" y="' + (top + d.y * size) +
+    svg += '<rect class="gui-heatmap-cell"' +
+      _guiChartMark(wrap, { label: xs[d.x] + ' / ' + ys[d.y], x: xs[d.x], y: ys[d.y], value: d.value },
+        xs[d.x] + ' / ' + ys[d.y] + ': ' + d.value) + ' x="' + (left + d.x * size) + '" y="' + (top + d.y * size) +
       '" width="38" height="38" rx="3" fill="' + color + '" fill-opacity="' + (.12 + .88 * intensity) + '">' +
       '<title>' + escHtml(xs[d.x] + ' / ' + ys[d.y] + ': ' + d.value) + '</title></rect>';
     rows.push([xs[d.x], ys[d.y], d.value]);
@@ -2498,14 +2697,17 @@ function _guiSankey(props) {
     var y1 = e.source.y + e.source.outOffset + thickness / 2;
     var y2 = e.target.y + e.target.inOffset + thickness / 2;
     e.source.outOffset += thickness; e.target.inOffset += thickness;
-    svg += '<path class="gui-sankey-link" d="M' + x1 + ',' + y1 + ' C' + mid + ',' + y1 + ' ' + mid + ',' + y2 +
+    svg += '<path class="gui-sankey-link"' + _guiChartMark(wrap,
+      { kind: 'link', label: e.source.label + ' -> ' + e.target.label, source: e.source.id, target: e.target.id, value: e.value },
+      e.source.label + ' -> ' + e.target.label + ': ' + e.value) + ' d="M' + x1 + ',' + y1 + ' C' + mid + ',' + y1 + ' ' + mid + ',' + y2 +
       ' ' + x2 + ',' + y2 + '" fill="none" stroke="' + e.source.color + '" stroke-opacity=".35" stroke-width="' + thickness + '">' +
       '<title>' + escHtml(e.source.label + ' -> ' + e.target.label + ': ' + e.value) + '</title></path>';
     rows.push([e.source.label, e.target.label, e.value]);
   });
   nodes.forEach(function(n) {
     var last = n.depth === depth;
-    svg += '<rect class="gui-sankey-node" x="' + n.x + '" y="' + n.y + '" width="' + bar + '" height="' + n.height +
+    svg += '<rect class="gui-sankey-node"' + _guiChartMark(wrap, { kind: 'node', id: n.id, label: n.label, value: n.value },
+      n.label + ': ' + n.value) + ' x="' + n.x + '" y="' + n.y + '" width="' + bar + '" height="' + n.height +
       '" fill="' + n.color + '"><title>' + escHtml(n.label + ': ' + n.value) + '</title></rect>' +
       '<text class="gui-chart-label" x="' + (last ? n.x - 6 : n.x + bar + 6) + '" y="' + (n.y + n.height / 2 + 4) +
       '" text-anchor="' + (last ? 'end' : 'start') + '"><title>' + escHtml(n.label) + '</title>' +
@@ -2545,9 +2747,13 @@ function _guiScatterChart(props, bubble) {
     var label = String(d.label ?? d.name ?? (i + 1));
     var radius = bubble ? Math.max(3, 18 * Math.sqrt(Number(d.value) / largest)) : 4;
     if (Number(d.x) >= minX && Number(d.x) <= maxX && Number(d.y) >= minY && Number(d.y) <= maxY) {
-      svg += '<circle class="gui-scatter-point" cx="' + X(Number(d.x)) + '" cy="' + Y(Number(d.y)) + '" r="' + radius +
+      svg += '<g' + _guiChartMark(wrap,
+        Object.assign({ label: label, x: Number(d.x), y: Number(d.y) }, bubble ? { value: Number(d.value) } : {}),
+        label + ': (' + d.x + ', ' + d.y + ')' + (bubble ? ', value: ' + d.value : '')) +
+        '><circle class="gui-scatter-point" cx="' + X(Number(d.x)) + '" cy="' + Y(Number(d.y)) + '" r="' + radius +
         '" fill="' + _guiChartColor(d.color || props.color) + '" fill-opacity=".7"><title>' +
-        escHtml(label + ': (' + d.x + ', ' + d.y + ')' + (bubble ? ', value: ' + d.value : '')) + '</title></circle>';
+        escHtml(label + ': (' + d.x + ', ' + d.y + ')' + (bubble ? ', value: ' + d.value : '')) + '</title></circle>' +
+        '<circle cx="' + X(Number(d.x)) + '" cy="' + Y(Number(d.y)) + '" r="' + Math.max(12, radius) + '" fill="transparent"/></g>';
     }
     rows.push(bubble ? [label, Number(d.x), Number(d.y), Number(d.value)] : [label, Number(d.x), Number(d.y)]);
   });
@@ -2609,11 +2815,20 @@ function _genUiRenderElement(id, elements, store, depth) {
   // whitelisted *display* types (no focusable inputs to clobber), re-resolve
   // and repaint in place whenever state changes. Inputs manage their own
   // two-way ($bindState) binding and are intentionally excluded.
-  if (rendered && _GENUI_REACTIVE_TYPES[el.type] && _genUiHasDynamic(el.props)) {
+  if (rendered && _GENUI_REACTIVE_TYPES[el.type] &&
+      (_genUiHasDynamic(el.props) || (rendered._guiChartPoints && props.selectionStatePath))) {
     var holder = rendered;
+    var chartKey = rendered._guiChartPoints ? _guiChartRenderKey(props) : null;
     store.subscribe(function() {
       if (!holder || !holder.parentNode) return;
       var p2 = _genUiProps(el.props, store);
+      // Action templates resolve on activation; unrelated state changes must
+      // not replace a chart and discard its keyboard focus or legend toggles.
+      if (chartKey !== null && chartKey === _guiChartRenderKey(p2)) {
+        if (holder._guiChartSync) holder._guiChartSync();
+        return;
+      }
+      if (holder._guiChartHideTooltip) holder._guiChartHideTooltip();
       var kids2 = (el.children || []).map(function(cid) {
         return _genUiRenderElement(cid, elements, store, depth + 1);
       });
@@ -2628,6 +2843,7 @@ function _genUiRenderElement(id, elements, store, depth) {
       }
       holder.parentNode.replaceChild(fresh, holder);
       holder = fresh;
+      if (chartKey !== null) chartKey = _guiChartRenderKey(p2);
     });
   }
   return rendered;
@@ -3070,8 +3286,15 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 Use only documented component names and data shapes, not React/Recharts child components. New visualizers include "View chart data" for inspecting exact values. Use source data; label demonstration data as illustrative and never fabricate measured scores.
 
 \`\`\`gen-ui
-{"root":"radar","elements":{"radar":{"type":"RadarChart","props":{"title":"Illustrative exposure scores","min":0,"max":5,"data":[{"label":"Identity","value":4},{"label":"Network","value":2},{"label":"Endpoints","value":3},{"label":"Data","value":1}]},"children":[]}}}
+{"root":"radar","elements":{"radar":{"type":"RadarChart","props":{"title":"Illustrative exposure scores","min":0,"max":5,"selectionStatePath":"/selection","action":"prefill_chat","actionParams":{"text":{"$template":"Explain the \${/selection/label} score of \${/selection/value}."}},"data":[{"label":"Identity","value":4},{"label":"Network","value":2},{"label":"Endpoints","value":3},{"label":"Data","value":1}]},"children":[]}}}
 \`\`\`
+
+### Chart interactions
+All charts have hover/focus tooltips, arrow-key navigation, Enter/Space selection, a pinned value summary, and Clear selection/Escape. Radar legend buttons toggle series visibility.
+
+Set \`selectionStatePath:"/selection"\` to write the selected datum to state (null on clear). The object includes \`index\`, \`label\`, and chart-specific \`value\`, \`series\`/\`seriesIndex\`, \`x\`/\`y\`, or Sankey \`kind\`, \`source\`/\`target\` for flows and \`id\` for nodes. Bind other components to this state for connected views.
+
+Selection state is a snapshot; updated data does not silently select a different point. Optional \`action\` + \`actionParams\` use the Button action vocabulary. Templates resolve AFTER selection is written, as shown above. Prefer \`prefill_chat\` for a user-reviewable follow-up or \`explore_into\` for drill-downs. Do not promise unwired cross-chart filtering.
 
 ### Actions (Button.action)
 \`setState\` · \`toggle_visible\` · \`copy_text\` · \`open_url\`

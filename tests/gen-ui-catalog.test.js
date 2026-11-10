@@ -11,6 +11,15 @@ import { describe, it, expect } from 'vitest';
 import { GEN_UI_CATALOG_PROMPT, GEN_UI_COMPACT_CATALOG, GEN_UI_SHORT_HINT } from '../server/prompts/gen-ui-catalog.js';
 
 describe('gen-ui catalog prompt — component coverage', () => {
+  it('teaches built-in chart interactions and state-driven actions in full and compact catalogs', () => {
+    for (const catalog of [GEN_UI_CATALOG_PROMPT, GEN_UI_COMPACT_CATALOG]) {
+      expect(catalog).toContain('Chart interactions');
+      expect(catalog).toContain('selectionStatePath');
+      expect(catalog).toContain('arrow-key navigation');
+      expect(catalog).toContain('BEFORE action templates resolve');
+    }
+  });
+
   it.each(['RadarChart', 'SpiderChart', 'Heatmap', 'HeatMap', 'Sankey', 'SankeyChart', 'ScatterChart', 'BubbleChart'])(
     'documents %s in both full and compact catalogs',
     type => {

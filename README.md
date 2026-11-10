@@ -34,7 +34,7 @@ Copilot models that require the Responses API (including GPT-5.6 and GPT-6 varia
 
 **Podcasts** — Two-host conversational podcasts from a topic or document, voiced with Kokoro.
 
-**Generative UI** — Reactive inline components, including bar, line/area, pie/donut, gauge, radar/spider, heatmap, Sankey, and scatter/bubble charts, plus dynamic widgets the model writes on the fly (circuit simulator, calculators). Radar charts support multiple series; new visualizers include expandable data tables and update with bound state. Sankey flows must be acyclic.
+**Generative UI** — Reactive inline components, including bar, line/area, pie/donut, gauge, radar/spider, heatmap, Sankey, and scatter/bubble charts, plus dynamic widgets the model writes on the fly (circuit simulator, calculators). Charts support hover/focus tooltips, keyboard navigation, selection, and optional state-driven drill-down actions. Radar charts support multiple series with legend toggles; new visualizers include expandable data tables and update with bound state. Sankey flows must be acyclic.
 
 **Agents** — Builder wizard (name, prompt, perms, tools, tests, security scan, publish), or generate one from a description. Self-modifying with user review. Learnings journal injects past wins into new sessions.
 

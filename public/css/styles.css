@@ -5740,6 +5740,7 @@ webview {
 /* Charts (self-contained SVG/CSS) */
 .gui-chart {
   display: flex; flex-direction: column; gap: 10px;
+  position: relative; min-width: 0;
   padding: 14px; border: 1px solid var(--fau-border);
   border-radius: 12px; background: var(--fau-surface);
 }
@@ -5796,7 +5797,35 @@ webview {
 .gui-chart-data th, .gui-chart-data td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--fau-border); }
 .gui-chart-data th { color: var(--fau-text); }
 .gui-chart-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 12px; color: var(--fau-text); }
-.gui-chart-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.gui-chart-legend > button {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px;
+  min-height: 28px;
+  background: var(--fau-surface); color: inherit; border: 1px solid var(--fau-border);
+  border-radius: 6px; font: inherit; cursor: pointer;
+}
+.gui-chart-legend > button[aria-pressed="false"] { opacity: .5; text-decoration: line-through; }
+.gui-radar-series { pointer-events: none; }
+.gui-sankey-link:hover, .gui-sankey-link:focus-visible,
+.gui-sankey-link[aria-pressed="true"] { stroke-opacity: .8; }
+.gui-chart [data-gui-point] { cursor: pointer; }
+.gui-chart [data-gui-point]:focus-visible,
+.gui-chart [data-gui-point][aria-pressed="true"] {
+  outline: 2px solid var(--gui-accent, var(--fau-text));
+  outline-offset: 3px;
+}
+.gui-chart-tooltip {
+  position: absolute; z-index: 4; max-width: min(260px, calc(100% - 16px));
+  padding: 8px 10px; border: 1px solid var(--fau-border); border-radius: 6px;
+  background: var(--fau-surface3); color: var(--fau-text);
+  font-size: 12px; line-height: 1.4; overflow-wrap: anywhere;
+}
+.gui-chart-hint { font-size: 11px; color: var(--fau-text-muted); }
+.gui-chart-selection { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--fau-text); }
+.gui-chart-selection[hidden], .gui-chart-tooltip[hidden] { display: none; }
+.gui-chart-selection button {
+  min-height: 28px; padding: 4px 8px; border: 1px solid var(--fau-border); border-radius: 6px;
+  background: var(--fau-surface); color: var(--fau-text); font: inherit; cursor: pointer;
+}
 
 /* Rating (Phase 3) */
 .gui-rating { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fau-text-muted); }
@@ -13862,4 +13891,3 @@ body.proj-sp-hub-open .project-hub-header > span[style] { display: none; }
   border-radius: 6px; color: #e06c75; font-size: 12px;
 }
 .nb-empty { color: var(--fau-text-muted); padding: 32px; text-align: center; font-size: 13px; }
-
