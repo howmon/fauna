@@ -92,9 +92,9 @@ describe('runGate — ordering & short-circuit', () => {
 });
 
 describe('makeMechanicalStage', () => {
-  it('treats a skipped verifier as a pass', async () => {
+  it('treats a skipped verifier as unverified', async () => {
     const stage = makeMechanicalStage(async () => ({ ok: true, skipped: true }));
-    expect((await stage()).ok).toBe(true);
+    await expect(stage()).resolves.toMatchObject({ ok: false, reason: expect.stringContaining('unverified') });
   });
   it('maps a failing verifier to a fail with output evidence', async () => {
     const stage = makeMechanicalStage(async () => ({ ok: false, output: 'Error: 1 test failed' }));

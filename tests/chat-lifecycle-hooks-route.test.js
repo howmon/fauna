@@ -361,6 +361,30 @@ describe('POST /api/chat lifecycle hooks', () => {
     });
   });
 
+  it('rejects an evidence-free autonomous BLOCKED marker once', async () => {
+    llm.create
+      .mockResolvedValueOnce(mockStopStream('BLOCKED: I am stuck.'))
+      .mockResolvedValueOnce(mockStopStream('BLOCKED: `npm test` failed with exit code 1 and stderr reported a missing module.'))
+      .mockResolvedValueOnce(mockStopStream('BLOCKED: `npm test` failed with exit code 1 and stderr reported a missing module.'));
+
+    const res = await app.invoke('POST', '/api/chat', {
+      body: {
+        messages: [{ role: 'user', content: 'finish the task' }],
+        autonomousMode: true,
+        noTools: true,
+        clientContext: 'test',
+      },
+    });
+
+    expect(llm.create).toHaveBeenCalledTimes(3);
+    expect(llm.create.mock.calls[1][0].messages.some(message =>
+      message.role === 'user' && /without concrete blocker evidence/.test(message.content)
+    )).toBe(true);
+    expect(llm.create.mock.calls[2][0].messages.some(message =>
+      message.role === 'system' && /extract durable lessons/.test(message.content)
+    )).toBe(true);
+  });
+
   it('separates narrated tool rounds from the next model response', async () => {
     llm.supportsTools = true;
     write(path.join(workspaceRoot, 'target.js'), 'export const value = 1;\n');

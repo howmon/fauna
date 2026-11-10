@@ -402,15 +402,16 @@ describe('_archiveSweep', () => {
 
 // ── finalizeRunSuccess ───────────────────────────────────────────────────
 describe('_finalizeRunSuccess', () => {
-  it('moves in_progress card to done when verifier reports skipped (no QA)', async () => {
+  it('leaves an unverified card in review when no verifier is configured', async () => {
     _verify.nextResult = { ok: true, skipped: true };
     _db.projects.push({ id: 'p1', name: 'P', kanban: {} });
     _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'in_progress', claimedBy: 'ai:o' }));
     __test.inFlight.set('c1', { taskId: 'task-1', projectId: 'p1', unsubscribe: () => {} });
     __test.finalizeRunSuccess('p1', 'c1', { event: 'completed', summary: 'done!' });
     await flushAsync();
-    expect(_db.items[0].column).toBe('done');
-    expect(_db.items[0].comments.length).toBeGreaterThanOrEqual(1);
+    expect(_db.items[0].column).toBe('review');
+    expect(_db.items[0].comments.at(-1).body).toMatch(/no verification command/i);
+    expect(_db.items[0].runs.at(-1).verificationSkipped).toBe(true);
     expect(_settleRoutingOutcomes).toHaveBeenCalledWith('task-1', expect.objectContaining({
       projectId: 'p1',
       verified: undefined,
@@ -464,7 +465,7 @@ describe('_finalizeRunSuccess', () => {
     expect(_db.items[0].runs.at(-1).infrastructureFailure).toBe(true);
   });
 
-  it('auto-advances a card the AI moved to review onward to done when verifier passes (or no verifier)', async () => {
+  it('releases an AI-owned review card without marking it done when no verifier exists', async () => {
     // Previously the worker treated "AI moved to review" as terminal and left
     // the card sitting there forever — also keeping it counted against the
     // concurrency limit. With the fix, we run the verifier (here: skipped,
@@ -474,7 +475,8 @@ describe('_finalizeRunSuccess', () => {
     __test.inFlight.set('c1', { taskId: 'task-1', projectId: 'p1', unsubscribe: () => {} });
     __test.finalizeRunSuccess('p1', 'c1', { event: 'completed' });
     await flushAsync();
-    expect(_db.items[0].column).toBe('done');
+    expect(_db.items[0].column).toBe('review');
+    expect(_db.items[0].claimedBy).toBe(null);
   });
 });
 
@@ -500,6 +502,12 @@ describe('_finalizeRunFailure', () => {
     expect(_db.items[0].column).toBe('todo');
     expect(_db.items[0].assignee).toBe('human');
     expect(_db.items[0].claimedBy).toBe(null);
+    expect(_db.items[0].runs.at(-1).diagnosis).toMatchObject({
+      kind: 'retry-exhausted',
+      attempts: 2,
+      failureClass: 'code-or-task',
+    });
+    expect(_db.items[0].comments.at(-1).body).toContain('"requiredAction"');
   });
 });
 
@@ -514,8 +522,8 @@ describe('lifecycle notifications', () => {
     worker.setAlertSink(alert => { _alertCalls.push(alert); });
   });
 
-  it('fires "Card complete" on success path landing on done', async () => {
-    _verify.nextResult = { ok: true, skipped: true };
+  it('fires "Card complete" on verified success path landing on done', async () => {
+    _verify.nextResult = { ok: true, skipped: false, command: 'npm test' };
     _db.projects.push({ id: 'p1', name: 'Proj', kanban: {} });
     _db.items.push(_mkItem({ id: 'c1', title: 'Ship widget', projectId: 'p1',
       column: 'in_progress', claimedBy: 'ai:o' }));

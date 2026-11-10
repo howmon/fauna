@@ -43,6 +43,7 @@ import { validateTicketPlan } from './lib/ticket-plan.js';
 import { validateCodeReviewReport } from './lib/code-review-report.js';
 import { validateDiagnosisReport } from './lib/diagnosis-report.js';
 import { buildEngineeringContract } from './lib/engineering-contract.js';
+import { compareImages } from './lib/image-similarity.js';
 import { evaluateParallelCandidates, evaluateWorktreeRollout } from './lib/worktree-evaluation.js';
 import { scoreAmbiguity, interviewQuestions, createSeed as seedCreate, getSeed as seedGet, listSeeds as seedList } from './lib/seed-store.js';
 import { unstuck as personasUnstuck } from './lib/personas.js';
@@ -3285,6 +3286,8 @@ export const SELF_TOOL_DEFS = [
           llmCritique: { type: 'boolean', description: 'Also request an LLM-based design critique (hierarchy, visual rhythm, emotional resonance). Default false — deterministic rules only.' },
           visual: { type: 'boolean', description: 'Render the HTML in Fauna\'s browser, collect layout metrics, and ask the active vision model to critique the screenshot.' },
           brief: { type: 'string', description: 'Original design brief or required visual direction used to judge screenshot fidelity.' },
+          referencePath: { type: 'string', description: 'Optional local reference image. When provided, the rendered screenshot must meet referenceThreshold using deterministic normalized pixel comparison.' },
+          referenceThreshold: { type: 'number', minimum: 0, maximum: 1, description: 'Minimum normalized pixel similarity required for referencePath. Defaults to 0.9.' },
           assetRole: { type: 'string', enum: ['main', 'supporting', 'reference'], description: 'How attached images must be used. Personal poster photos default to main; reference images are compared for direction but need not appear literally.' },
         },
       },
@@ -5759,6 +5762,7 @@ ${cardsHtml}
           let visualVerdict = args.visual ? 'fail' : 'not-run';
           let visualScore = null;
           let screenshotPath = null;
+          let referenceComparison = null;
           let assetChecks = [];
           if (args.visual) {
             if (!context.callClientTool) {
@@ -5887,6 +5891,24 @@ ${cardsHtml}
                 screenshotPath = path.join(auditRoot, `${path.parse(filename || 'design').name}-${auditHash}.png`);
                 fs.writeFileSync(screenshotPath, screenshotBytes);
 
+                if (args.referencePath) {
+                  const referencePath = path.resolve(String(args.referencePath).replace(/^~(?=\/)/, os.homedir()));
+                  const threshold = Number.isFinite(Number(args.referenceThreshold))
+                    ? Math.max(0, Math.min(1, Number(args.referenceThreshold)))
+                    : 0.9;
+                  if (!fs.existsSync(referencePath)) {
+                    referenceComparison = { pass: false, threshold, referencePath, error: 'Reference image not found.' };
+                  } else {
+                    const metrics = await compareImages(referencePath, screenshotBytes);
+                    referenceComparison = {
+                      ...metrics,
+                      pass: metrics.similarity >= threshold,
+                      threshold,
+                      referencePath,
+                    };
+                  }
+                }
+
                 const requiredAssets = Array.isArray(context.imageAssets) ? context.imageAssets : [];
                 const renderedImages = Array.isArray(visualMetrics?.images) ? visualMetrics.images : [];
                 const assetRole = args.assetRole || (requiredAssets.length ? 'main' : 'reference');
@@ -5953,6 +5975,7 @@ ${cardsHtml}
                 if ((visualMetrics?.outsideArtifactCount || 0) > 0) deterministicFailures.push('content extends outside the artifact bounds');
                 if ((visualMetrics?.clippedByAncestorCount || 0) > 0) deterministicFailures.push('content is hidden by an overflow-clipping ancestor');
                 if (assetChecks.some(check => !check.pass)) deterministicFailures.push('required image asset failed geometry or presence checks');
+                if (referenceComparison && !referenceComparison.pass) deterministicFailures.push(`rendered image similarity is below the reference threshold (${referenceComparison.similarity ?? 'unavailable'} < ${referenceComparison.threshold})`);
                 visualScore = Number.isFinite(Number(visualCritique?.score)) ? Number(visualCritique.score) : 0;
                 visualVerdict = deterministicFailures.length === 0 && visualCritique?.verdict === 'pass'
                   ? 'pass'
@@ -5979,6 +6002,7 @@ ${cardsHtml}
             visualVerdict,
             visualScore,
             screenshotPath,
+            referenceComparison,
             assetChecks,
           });
         } catch (e) {

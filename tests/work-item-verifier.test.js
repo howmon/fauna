@@ -108,12 +108,13 @@ describe('verifyWorkItem', () => {
     expect(r.error).toMatch(/item not found/);
   });
 
-  it('skipped pass when no verifier configured', async () => {
+  it('records an unverified result when no verifier is configured', async () => {
     _db.projects.push({ id: 'p1', backlog: [{ id: 'c1', verifyCommand: null }] });
     const r = await verifyWorkItem('p1', 'c1', { postComment: false });
-    expect(r.ok).toBe(true);
+    expect(r.ok).toBe(false);
     expect(r.skipped).toBe(true);
-    expect(_db.lastVerification.v.ok).toBe(true);
+    expect(_db.lastVerification.v.ok).toBe(false);
+    expect(_db.lastVerification.v.exitCode).toBe(null);
   });
 
   it('runs card.verifyCommand and records pass', async () => {

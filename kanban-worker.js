@@ -717,18 +717,20 @@ function _finalizeRunSuccess(projectId, cardId, ev) {
         runEntry: { taskId: ent && ent.taskId, finishedAt: Date.now(), ok: true, verified: false, infrastructureFailure: true },
       }, { actor: 'human' });
       pokeNow();
-    } else if (verifyResult && verifyResult.ok === false) {
+    } else if (verifyResult && (verifyResult.ok === false || verifyResult.skipped === true)) {
       // Verifier ran and failed → leave in review for a human, do not advance.
+      if (verifyResult.skipped === true) {
+        addWorkItemComment(projectId, cardId, { author: 'ai',
+          body: 'Autopilot finished, but this card has no verification command. It was left in Review as unverified. Configure card.verifyCommand or project.qa.command to allow automatic completion.',
+        });
+      }
       moveWorkItem(projectId, cardId, {
         column: 'review',
         claimedBy: null,
-        runEntry: { taskId: ent && ent.taskId, finishedAt: Date.now(), ok: true, verified: false },
+        runEntry: { taskId: ent && ent.taskId, finishedAt: Date.now(), ok: true, verified: false, verificationSkipped: verifyResult.skipped === true },
       }, { actor: 'ai', strict: true });
     } else {
-      // Either verifier passed, or there was no verifier (skipped). Skip
-      // 'review' and go straight to 'done' when verification actually ran;
-      // for skipped (no QA configured) we also go to done — same trust as
-      // the old behaviour.
+      // A verifier ran and passed, so the card can advance to done.
       moveWorkItem(projectId, cardId, {
         column: 'done',
         claimedBy: null,
@@ -748,12 +750,14 @@ function _finalizeRunSuccess(projectId, cardId, ev) {
     // needs their attention: 'done' (success) or 'review' (verifier
     // failed — needs a human). If the AI moved it elsewhere already, we
     // stay quiet to avoid double-firing on top of whatever moved it.
-    const verifierFailed = verifyResult && verifyResult.ok === false;
+    const verifierFailed = verifyResult && (verifyResult.ok === false || verifyResult.skipped === true);
     const cardTitle = (card.title || cardId).toString().slice(0, 120);
     if (verifierFailed) {
       _emitAlert({
         title: 'Card needs review: ' + cardTitle,
-        body: 'Autopilot finished but verification failed — left in review for you.',
+        body: verifyResult.skipped === true
+          ? 'Autopilot finished without a configured verifier — left in review for you.'
+          : 'Autopilot finished but verification failed — left in review for you.',
         projectId, projectName: proj.name, cardId, cardTitle,
         kind: 'kanban_review',
       });
@@ -785,6 +789,9 @@ function _finalizeRunFailure(projectId, cardId, ev) {
   const maxRetries = Math.max(0, Number((proj.kanban && proj.kanban.maxAiRetries)) || 2);
   const aiFails = (card.runs || []).filter(r => r.ok === false).length;
   const err = (ev.error || 'unknown error').toString().slice(0, 500);
+  const failureClass = /\b(?:ENOENT|EACCES|EPERM|ECONN|ETIMEDOUT|not found|unavailable|rate limit|quota|authentication|permission denied)\b/i.test(err)
+    ? 'infrastructure'
+    : 'code-or-task';
 
   addWorkItemComment(projectId, cardId, { author: 'ai',
     body: 'Autopilot attempt ' + (aiFails + 1) + ' failed: ' + err,
@@ -792,13 +799,26 @@ function _finalizeRunFailure(projectId, cardId, ev) {
 
   const cardTitle = (card.title || cardId).toString().slice(0, 120);
   if (aiFails + 1 >= maxRetries) {
+    const priorErrors = (card.runs || [])
+      .filter(run => run.ok === false && run.error)
+      .map(run => String(run.error).slice(0, 240));
+    const diagnosis = {
+      kind: 'retry-exhausted',
+      attempts: aiFails + 1,
+      maxRetries,
+      failureClass,
+      errors: [...priorErrors, err].slice(-maxRetries),
+      requiredAction: failureClass === 'infrastructure'
+        ? 'Restore the unavailable tool, permission, credential, or service, then reassign the card to AI.'
+        : 'Review the failed approaches and acceptance criteria, add guidance or adjust scope, then reassign the card to AI.',
+    };
     // Bounce back to Todo, hand to a human.
     moveWorkItem(projectId, cardId, {
       column: 'todo', assignee: 'human', claimedBy: null,
-      runEntry: { taskId: ent && ent.taskId, finishedAt: Date.now(), ok: false, error: err },
+      runEntry: { taskId: ent && ent.taskId, finishedAt: Date.now(), ok: false, error: err, diagnosis },
     }, { actor: 'human' });
     addWorkItemComment(projectId, cardId, { author: 'ai',
-      body: 'Out of retries — handing back to a human to unblock.',
+      body: 'Out of retries — handing back to a human with diagnosis:\n\n```json\n' + JSON.stringify(diagnosis, null, 2) + '\n```',
     });
     _emitAlert({
       title: 'Card needs you: ' + cardTitle,
@@ -821,7 +841,7 @@ function _finalizeRunFailure(projectId, cardId, ev) {
   }
 
   appendAutonomousRunLog(projectId, {
-    kind: 'kanban_fail', cardId, taskId: ent && ent.taskId, error: err,
+    kind: 'kanban_fail', cardId, taskId: ent && ent.taskId, error: err, failureClass,
   });
   _emitBoard({ type: 'moved', projectId, itemId: cardId });
 }

@@ -2344,6 +2344,7 @@ export function registerChatRoute(app, {
       // QA gate, and the start-time used in the run-log JSONL entry.
       let markerNudgeFired = false;
       let verificationNudgeFired = false;
+      let blockedEvidenceNudgeFired = false;
       let qaRan = false;
       let qaResultSummary = null;
       let deployRan = false;
@@ -2615,6 +2616,14 @@ export function registerChatRoute(app, {
         if (qaRan || deployRan || toolCallCount > 0) return true;
         return /\b(verified|validated|ran|passed|checked|tested|built|linted|typechecked|compiled|opened|inspected)\b/i.test(String(text || ''))
           && /\b(test|build|lint|typecheck|compile|command|tool|output|file|diff|screenshot|log|diagnostic|error)\b/i.test(String(text || ''));
+      };
+      const hasBlockedEvidence = (text) => {
+        const body = String(text || '').replace(MARKER_RE, '').trim();
+        if (body.length < 24) return false;
+        const namesObstacle = /\b(fail(?:ed|ure)?|error|denied|forbidden|unauthorized|unavailable|missing|not found|timed? out|unsupported|cannot|could not|requires?|waiting for|blocked by)\b/i.test(body);
+        const citesEvidence = toolCallCount > 0
+          || /(?:`[^`]+`|\b(?:exit code|status|stderr|stdout|tool output|command|diagnostic|log|response|HTTP\s+\d{3}|ENOENT|EACCES|EPERM|ECONN\w*)\b)/i.test(body);
+        return namesObstacle && citesEvidence;
       };
 
       // ── Tool guard — pre-call checks, category limits, browser discipline ──
@@ -3937,6 +3946,11 @@ export function registerChatRoute(app, {
               console.log('[chat] autonomous: DONE without verification evidence — nudging once');
               allMessages.push({ role: 'assistant', content: assistantText });
               allMessages.push({ role: 'user', content: '[System: You emitted DONE: without citing verification evidence from a command, file, diagnostic, tool output, screenshot, or log. Do not mark autonomous work complete from assertion alone. Perform or cite concrete verification, then re-emit DONE: with the evidence. If verification is impossible, use BLOCKED: with the precise reason.]' });
+            } else if (autonomousMode && finalMarker === 'BLOCKED' && !blockedEvidenceNudgeFired && !hasBlockedEvidence(assistantText)) {
+              blockedEvidenceNudgeFired = true;
+              console.log('[chat] autonomous: BLOCKED without blocker evidence — nudging once');
+              allMessages.push({ role: 'assistant', content: assistantText });
+              allMessages.push({ role: 'user', content: '[System: You emitted BLOCKED: without concrete blocker evidence. Attempt the blocked action if it is safe, then cite the failed command/tool/dependency and its observable error or status. Use NEEDS-INPUT: instead when only a user decision or missing information is required. Re-emit the appropriate terminal marker with specific evidence.]' });
             } else if (autonomousMode && finalMarker === 'DONE' && qaCommand && !qaRan) {
               qaRan = true;
               console.log('[chat] autonomous QA gate: running `' + qaCommand + '`');
