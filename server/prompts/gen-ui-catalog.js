@@ -139,6 +139,10 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 | \`LineChart\` / \`AreaChart\` | \`data\` ([{label,value}] or [n,n,...]), \`title\`, \`color\`, \`min\`, \`max\` | Trend over an ordered sequence (price history, growth, time series). \`AreaChart\` adds a filled area. Needs ≥2 points. |
 | \`PieChart\` / \`DonutChart\` | \`data\` ([{label,value,color?}]), \`title\` | Part-to-whole breakdown (market share, budget split, composition). \`DonutChart\` leaves a hole. Auto % legend. |
 | \`RadialChart\` / \`Gauge\` | \`value\`, \`max\` (default 100), \`label\`, \`color\`, \`centerLabel\` | Single progress/score ring (score, completion %, rating out of max, KPI vs target). |
+| \`RadarChart\` / \`SpiderChart\` | \`data\` ([{label,value}]), \`title\`, \`min\` (default 0 or lowest negative value), \`max\`, \`color\`; OR \`axes\` ([strings]) + \`series\` ([{label,values:[numbers],color?}]) | Multi-axis/spider comparison with at least 3 axes. Each series needs one value per axis. Use an explicit \`max\` for known scales (e.g. 5 for risk scores). NOT the single-value \`RadialChart\`. |
+| \`Heatmap\` / \`HeatMap\` | \`data\` ([{x,y,value}]), \`xLabels\` / \`yLabels\` (optional ordered category strings), \`title\`, \`min\`, \`max\`, \`color\` | Category matrix colored from faint (min) to strong (max). x/y are category labels, not numeric indices into xLabels/yLabels. Missing cells remain blank, not zero. Coordinates must be unique. |
+| \`Sankey\` / \`SankeyChart\` | \`nodes\` ([strings or {id,label?,color?}]), \`links\` ([{source,target,value}]), \`title\` | Directed, acyclic flow diagram. source/target are string node ids or numeric indices into nodes. Values must be nonnegative; width represents flow magnitude. Circular links are rejected. Also accepts \`data:{nodes,links}\`. |
+| \`ScatterChart\` / \`BubbleChart\` | \`data\` ([{x,y,label?,color?,value?}]), \`title\`, \`xLabel\`, \`yLabel\`, \`minX\`, \`maxX\`, \`minY\`, \`maxY\`, \`color\` | Numeric coordinate plot. BubbleChart also requires nonnegative \`value\` per point; bubble area represents value. Bounds default to the data range. |
 | \`Code\` | \`code\`, \`language\` | Syntax-highlighted snippet |
 | \`Image\` | \`src\`, \`alt\`, \`width\`, \`height\`, \`href\`, \`action\`, \`actionParams\` | Image from a URL or data URI. Make it clickable by adding \`href\` (opens an external URL in a new tab) OR an \`action\`+\`actionParams\` (same actions as \`Button\`, e.g. \`setState\` to select a product in a price comparison, or \`send_prompt\` to drill in). |
 | \`SVG\` | \`markup\` (raw SVG string), \`width\`, \`height\`, \`viewBox\` | Inline SVG — pass the full \`<svg>…</svg>\` as \`markup\`. Use this to render icons, logos, diagrams, or any vector graphic the AI generates. Scripts and event handlers are sanitized automatically. |
@@ -154,6 +158,14 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 | \`Carousel\` | \`statePath\` | Cycles through child elements with prev/next controls. |
 | \`MediaPlayer\` | \`src\` (URL), \`type\` ("youtube"/"video"/"audio"/"image" — auto-detected), \`title\`, \`poster\`, \`autoplay\` | Single embedded player. YouTube URLs auto-embed. |
 | \`Playlist\` | \`title\`, \`items\` ([{src,title,type?,poster?,stats?,facts?}]), \`autoplay\`, \`showStats\`, \`showFacts\`, \`statePath\` | Browsable media list with prev/next + active player. **USE THIS for any "play these videos/songs/podcasts" or YouTube/audio/image-carousel request — never emit a Table of media links.** |
+
+### Chart data rules
+Use only listed component names and their documented data shapes, not Recharts/React child components. Radar/spider, heatmap, Sankey, and scatter/bubble charts include "View chart data" for inspecting exact values. Supply real source values when available; label invented demonstration data as illustrative, never as measured results. Do not replace missing data with fabricated scores.
+
+Example radar (illustrative scores on a known 0-5 scale):
+\`\`\`gen-ui
+{"root":"radar","elements":{"radar":{"type":"RadarChart","props":{"title":"Illustrative exposure scores","min":0,"max":5,"data":[{"label":"Identity","value":4},{"label":"Network","value":2},{"label":"Endpoints","value":3},{"label":"Data","value":1}]},"children":[]}}}
+\`\`\`
 
 ### Media rendering rules (CRITICAL)
 - If the user asks for movies, films, videos, songs, podcasts, episodes, trailers, a "watchlist", or "play X" — emit a **\`Playlist\`** gen-ui (or a single \`MediaPlayer\` for one item). NEVER render media as a \`Table\`, bulleted list of URLs, or raw markdown links.
@@ -378,8 +390,7 @@ For anything that has rows of cards or mixes wide and narrow cells (chart + side
     "page":      { "type": "Stack", "props": { "direction": "vertical", "gap": 16 }, "children": ["band1","band2","band3"] },
 
     "band1":     { "type": "Grid",  "props": { "columns": [2, 1], "gap": 12 }, "children": ["chart","side"] },
-    "chart":     { "type": "Card",  "props": { "title": "Incident flow" }, "children": ["chart-desc"] },
-    "chart-desc":{ "type": "Text",  "props": { "text": "Sankey of incidents → triage → outcome.", "muted": true }, "children": [] },
+    "chart":     { "type": "Sankey", "props": { "title": "Illustrative incident flow", "nodes": ["Incidents", "Triage", "Resolved", "Escalated"], "links": [{"source":"Incidents","target":"Triage","value":100},{"source":"Triage","target":"Resolved","value":80},{"source":"Triage","target":"Escalated","value":20}] }, "children": [] },
     "side":      { "type": "Card",  "props": { "title": "Top alerts" }, "children": ["side-list"] },
     "side-list": { "type": "List",  "props": { "items": [
                      { "label": "Lateral movement via SMB", "description": "High · 12 hosts" },

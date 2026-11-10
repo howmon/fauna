@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 
-const { computeToolFlags } = await import('../server/prompts/context-gating.js');
+const { computeToolFlags, computeContextFlags } = await import('../server/prompts/context-gating.js');
 
 function withUserText(text) {
   return computeToolFlags({
@@ -15,6 +15,31 @@ function withUserText(text) {
     noTools: false,
   });
 }
+
+describe('visualizer request routing', () => {
+  it.each([
+    'Can you show a visual for the target vulnerability radar?',
+    'heatmap', 'heat map', 'Sankey', 'SpiderChart', 'spider graph',
+    'RadarChart', 'scatter plot', 'BubbleChart',
+  ])('loads the catalog and widget tools for %s', text => {
+    const options = { messages: [{ role: 'user', content: text }], systemPrompt: '' };
+    expect(computeContextFlags(options).genui).toBe(true);
+    expect(computeToolFlags(options).widget).toBe(true);
+  });
+
+  it('preserves delegation, no-tools and CLI restrictions', () => {
+    const options = { messages: [{ role: 'user', content: 'heatmap' }] };
+    expect(computeContextFlags({ ...options, isDelegation: true }).genui).toBe(false);
+    expect(computeToolFlags({ ...options, noTools: true })).toEqual({});
+    expect(computeToolFlags({ ...options, isCLI: true }).widget).toBe(false);
+  });
+
+  it('does not load visualizers for unrelated requests', () => {
+    const options = { messages: [{ role: 'user', content: 'explain this function' }] };
+    expect(computeContextFlags(options).genui).toBe(false);
+    expect(computeToolFlags(options).widget).toBeUndefined();
+  });
+});
 
 describe('computeToolFlags — backlog cluster', () => {
   it('triggers on "taskboard" (compound word)', () => {

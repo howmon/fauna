@@ -12,6 +12,8 @@
 
 const GENUI_KW = /\b(dashboard|scorecard|widget|gen[-_ ]?ui|chart|graph|stat\b|stats?\b|metric|metrics|kpi|leaderboard|table|playlist|carousel|podcast|narrat(e|ion)|read .* aloud|say this|tts|voiceover|video|movie|episode|gallery|tabs?\b|circuit|schematic|wiring|netlist|spice|op[- ]?amp|transistor|resistor|capacitor|inductor|whiteboard|lesson|teach me|walk me through|explain how|visualiz|render|display|show me .* (a |an |the )?(chart|graph|widget|dashboard|card|tile|stats?|metrics|breakdown|comparison|leaderboard|summary)|interactive|progress (bar|tracker)|status (card|overview|board)|key[- ]?value|3d|three[-_. ]?js|webgl|babylon|aframe|model[- ]?viewer|gltf|\.glb\b|\.obj\b|\.stl\b|\.fbx\b|blender|mesh|scene\b|orbit ?controls|product (render|shot|viewer))/i;
 
+const VISUALIZER_KW = /\b(?:(?:radar|spider|scatter|bubble)(?:[- ]?(?:chart|graph))?|heat[- ]?map|sankey(?:[- ]?(?:chart|diagram))?)\b/i;
+
 const BROWSER_KW = /\b(browser|navigate|tab\b|open .* url|fetch .* page|crawl|scrape|click|fill .* form|type into|screenshot|snapshot|dev[- ]?server|localhost|https?:\/\/|extension|playwright|extract page)/i;
 
 const FRONTEND_KW = /\b(ui|ux|frontend|front[- ]?end|website|landing page|hero section|component library|css|tailwind|react|next\.?js|svelte|vue|design system|figma|typography|color palette|gradient|hover state|animation|motion|micro[- ]?interaction|responsive|mobile view|landing|portfolio site|case stud)/i;
@@ -69,7 +71,7 @@ export function computeContextFlags({ messages, systemPrompt, isDelegation, isCL
   if (isDelegation) return { genui: false, browser: false, frontend: false };
   const sticky = stickyFlags(messages);
   const probe = (lastUserText(messages) + ' ' + (systemPrompt || '')).slice(0, 4000);
-  const genui    = sticky.genui    || GENUI_KW.test(probe);
+  const genui    = sticky.genui    || GENUI_KW.test(probe) || VISUALIZER_KW.test(probe);
   // Browser context only makes sense when tools are enabled and we're not in
   // a plain-text CLI surface.
   const browser  = !noTools && !isCLI && (sticky.browser || BROWSER_KW.test(probe));
@@ -232,6 +234,7 @@ export function computeToolFlags({ messages, systemPrompt, isDelegation, isCLI, 
     const kw = TOOL_KW[cluster];
     if (kw && kw.test(probe)) flags[cluster] = true;
   }
+  if (VISUALIZER_KW.test(probe)) flags.widget = true;
   // Surface-specific overrides
   if (isCLI) { flags.browser = false; flags.widget = false; flags.video = false; flags.automation = false; }
   // Delegation sub-agents inherit the orchestrator's intent; keep everything
@@ -266,4 +269,3 @@ export function filterToolSchemas(tools, flags) {
     return !!flags[cluster];
   });
 }
-

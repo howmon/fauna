@@ -8,9 +8,28 @@
 // model output without any other test catching it.
 
 import { describe, it, expect } from 'vitest';
-import { GEN_UI_CATALOG_PROMPT, GEN_UI_SHORT_HINT } from '../server/prompts/gen-ui-catalog.js';
+import { GEN_UI_CATALOG_PROMPT, GEN_UI_COMPACT_CATALOG, GEN_UI_SHORT_HINT } from '../server/prompts/gen-ui-catalog.js';
 
 describe('gen-ui catalog prompt — component coverage', () => {
+  it.each(['RadarChart', 'SpiderChart', 'Heatmap', 'HeatMap', 'Sankey', 'SankeyChart', 'ScatterChart', 'BubbleChart'])(
+    'documents %s in both full and compact catalogs',
+    type => {
+      expect(GEN_UI_CATALOG_PROMPT).toContain('`' + type + '`');
+      expect(GEN_UI_COMPACT_CATALOG).toContain('`' + type + '`');
+    },
+  );
+
+  it('teaches exact values, illustrative data, and supported flow constraints', () => {
+    expect(GEN_UI_CATALOG_PROMPT).toContain('View chart data');
+    expect(GEN_UI_CATALOG_PROMPT).toContain('never as measured results');
+    expect(GEN_UI_CATALOG_PROMPT).toContain('Circular links are rejected');
+    const specs = (GEN_UI_CATALOG_PROMPT.match(/^```gen-ui[ \t]*\r?\n[\s\S]*?^```/gm) || [])
+      .filter(block => /"type":\s*"(RadarChart|Sankey)"/.test(block))
+      .map(block => JSON.parse(block.replace(/^```gen-ui\s*|\s*```$/g, '')));
+    expect(specs.some(spec => Object.values(spec.elements).some(el => el.type === 'RadarChart'))).toBe(true);
+    expect(specs.some(spec => Object.values(spec.elements).some(el => el.type === 'Sankey'))).toBe(true);
+  });
+
   it('documents Icon, Input, Select (renderers existed without catalog rows pre-fix)', () => {
     expect(GEN_UI_CATALOG_PROMPT).toMatch(/\|\s*`Icon`\s*\|/);
     expect(GEN_UI_CATALOG_PROMPT).toMatch(/\|\s*`Input`\s*\|/);

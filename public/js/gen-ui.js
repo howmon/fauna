@@ -7,7 +7,9 @@
 //   ```
 //
 // Supported component types: Card, Stack, Heading, Text, Badge, Stat,
-// Table, List, Progress, Alert, Button, Divider, KeyValue, Grid, Code, Image, SVG
+// Table, List, Progress, Alert, Button, Divider, KeyValue, Grid, Code, Image, SVG,
+// BarChart, LineChart, AreaChart, PieChart, DonutChart, RadialChart, Gauge,
+// RadarChart/SpiderChart, Heatmap/HeatMap, Sankey/SankeyChart, ScatterChart, BubbleChart
 //
 // Actions: copy_text, open_url, toggle_visible, setState
 
@@ -2050,7 +2052,15 @@ var _genUiComponents = {
   PieChart:    function(el, props) { return _guiPieChart(props, false); },
   DonutChart:  function(el, props) { return _guiPieChart(props, true); },
   RadialChart: function(el, props) { return _guiRadialChart(props); },
-  Gauge:       function(el, props) { return _guiRadialChart(props); }
+  Gauge:       function(el, props) { return _guiRadialChart(props); },
+  RadarChart:  function(el, props) { return _guiRadarChart(props); },
+  SpiderChart: function(el, props) { return _guiRadarChart(props); },
+  Heatmap:     function(el, props) { return _guiHeatmap(props); },
+  HeatMap:     function(el, props) { return _guiHeatmap(props); },
+  Sankey:      function(el, props) { return _guiSankey(props); },
+  SankeyChart: function(el, props) { return _guiSankey(props); },
+  ScatterChart: function(el, props) { return _guiScatterChart(props, false); },
+  BubbleChart: function(el, props) { return _guiScatterChart(props, true); }
 };
 
 // ── Chart helpers ─────────────────────────────────────────────────────────
@@ -2235,6 +2245,317 @@ function _guiRadialChart(props) {
   return wrap;
 }
 
+function _guiChartNumber(value) {
+  return (typeof value === 'number' || (typeof value === 'string' && value.trim() !== ''))
+    && isFinite(Number(value));
+}
+
+function _guiChartColor(color, index) {
+  var value = String(color || '');
+  return /^(#[0-9a-f]{3,8}|[a-z]+|var\(--[a-z0-9-]+\)|(?:rgb|hsl)a?\([\d.,%+\s-]+\))$/i.test(value)
+    ? value : _GUI_CHART_PALETTE[(index || 0) % _GUI_CHART_PALETTE.length];
+}
+
+function _guiChartInvalid(wrap, message) {
+  var error = document.createElement('div');
+  error.className = 'gui-chart-empty';
+  error.setAttribute('role', 'status');
+  error.textContent = 'Invalid chart data: ' + message;
+  wrap.appendChild(error);
+  return wrap;
+}
+
+function _guiChartFinish(wrap, props, width, height, markup, columns, rows) {
+  var plot = document.createElement('div');
+  plot.className = 'gui-chart-plot';
+  plot.innerHTML = '<svg class="gui-data-svg" viewBox="0 0 ' + width + ' ' + height +
+    '" role="img" aria-label="' + escHtml(String(props.title || 'Data visualization')) + '">' +
+    '<title>' + escHtml(String(props.title || 'Data visualization')) + '</title>' + markup + '</svg>';
+  wrap.appendChild(plot);
+  var details = document.createElement('details');
+  details.className = 'gui-chart-data';
+  var summary = document.createElement('summary');
+  summary.textContent = 'View chart data';
+  details.appendChild(summary);
+  var table = document.createElement('table');
+  var caption = document.createElement('caption');
+  caption.textContent = props.title || 'Chart data';
+  table.appendChild(caption);
+  var head = document.createElement('thead');
+  var heading = document.createElement('tr');
+  columns.forEach(function(label) {
+    var cell = document.createElement('th');
+    cell.setAttribute('scope', 'col');
+    cell.textContent = label;
+    heading.appendChild(cell);
+  });
+  head.appendChild(heading);
+  table.appendChild(head);
+  var body = document.createElement('tbody');
+  rows.forEach(function(row) {
+    var tr = document.createElement('tr');
+    row.forEach(function(value) {
+      var cell = document.createElement('td');
+      cell.textContent = String(value);
+      tr.appendChild(cell);
+    });
+    body.appendChild(tr);
+  });
+  table.appendChild(body);
+  details.appendChild(table);
+  wrap.appendChild(details);
+  return wrap;
+}
+
+function _guiRadarChart(props) {
+  var wrap = _guiChartShell(props, 'gui-radarchart');
+  var data = props.data || props.points || props.values;
+  var labels = props.axes || props.labels;
+  var series = props.series;
+  if (!Array.isArray(series) || !series.length || !series[0] || !Array.isArray(series[0].values)) {
+    if (!Array.isArray(data) || !data.length) return _guiChartEmpty(wrap);
+    labels = data.map(function(d, i) {
+      return String(d && typeof d === 'object' ? (d.label ?? d.name ?? d.axis ?? (i + 1)) : (labels && labels[i]) ?? (i + 1));
+    });
+    series = [{ label: props.label || 'Value', color: props.color, values: data.map(function(d) {
+      return d && typeof d === 'object' ? (d.value ?? d.y) : d;
+    }) }];
+  }
+  if (!Array.isArray(labels) || labels.length < 3) return _guiChartInvalid(wrap, 'radar charts need at least three axes.');
+  labels = labels.map(String);
+  if (series.some(function(s) {
+    return !s || !Array.isArray(s.values) || s.values.length !== labels.length || !s.values.every(_guiChartNumber);
+  })) return _guiChartInvalid(wrap, 'each radar series needs one finite value per axis.');
+  var values = series.reduce(function(all, s) { return all.concat(s.values.map(Number)); }, []);
+  var min = props.min == null ? Math.min(0, Math.min.apply(null, values)) : Number(props.min);
+  var max = props.max == null ? Math.max.apply(null, values.concat([min + 1])) : Number(props.max);
+  if (!isFinite(min) || !isFinite(max) || !isFinite(max - min) || max <= min) return _guiChartInvalid(wrap, 'max must be greater than min with a finite range.');
+  var cx = 240, cy = 175, radius = 110;
+  var point = function(i, r) {
+    var a = i * 2 * Math.PI / labels.length - Math.PI / 2;
+    return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+  };
+  var points = function(r) {
+    return labels.map(function(_, i) { return point(i, r).join(','); }).join(' ');
+  };
+  var svg = '';
+  for (var ring = 1; ring <= 4; ring++) {
+    svg += '<polygon class="gui-chart-grid" points="' + points(radius * ring / 4) + '"/>';
+  }
+  labels.forEach(function(label, i) {
+    var end = point(i, radius), text = point(i, radius + 22);
+    var anchor = Math.abs(text[0] - cx) < 1 ? 'middle' : text[0] > cx ? 'start' : 'end';
+    svg += '<line class="gui-chart-grid" x1="' + cx + '" y1="' + cy + '" x2="' + end[0] + '" y2="' + end[1] + '"/>' +
+      '<text class="gui-chart-label" x="' + text[0] + '" y="' + (text[1] + 4) + '" text-anchor="' + anchor + '">' +
+      '<title>' + escHtml(label) + '</title>' + escHtml(label.length > 18 ? label.slice(0, 17) + '...' : label) + '</text>';
+  });
+  var rows = [];
+  series.forEach(function(s, index) {
+    var color = _guiChartColor(s.color, index);
+    var name = String(s.label || s.name || 'Series ' + (index + 1));
+    var polygon = s.values.map(function(value, i) {
+      return point(i, radius * Math.max(0, Math.min(1, (Number(value) - min) / (max - min)))).join(',');
+    }).join(' ');
+    svg += '<polygon class="gui-radar-series" points="' + polygon + '" fill="' + color + '" fill-opacity=".15" stroke="' +
+      color + '" stroke-width="2"><title>' + escHtml(name) + '</title></polygon>';
+    s.values.forEach(function(value, i) { rows.push([name, labels[i], Number(value)]); });
+  });
+  svg += '<text class="gui-chart-label" x="12" y="20">Scale: ' + _guiFmtNum(min) + ' - ' + _guiFmtNum(max) + '</text>';
+  _guiChartFinish(wrap, props, 480, 350, svg, ['Series', 'Axis', 'Value'], rows);
+  if (series.length > 1) {
+    var legend = document.createElement('div');
+    legend.className = 'gui-chart-legend';
+    series.forEach(function(s, index) {
+      var item = document.createElement('span');
+      var dot = document.createElement('span');
+      dot.className = 'gui-pie-dot';
+      dot.style.backgroundColor = _guiChartColor(s.color, index);
+      item.appendChild(dot);
+      item.appendChild(document.createTextNode(String(s.label || s.name || 'Series ' + (index + 1))));
+      legend.appendChild(item);
+    });
+    wrap.appendChild(legend);
+  }
+  return wrap;
+}
+
+function _guiHeatmap(props) {
+  var wrap = _guiChartShell(props, 'gui-heatmap');
+  var data = props.data;
+  if (!Array.isArray(data) || !data.length) return _guiChartEmpty(wrap);
+  if (data.some(function(d) { return !d || d.x == null || d.y == null || !_guiChartNumber(d.value); })) {
+    return _guiChartInvalid(wrap, 'heatmap cells need x, y, and a finite value.');
+  }
+  var xs = Array.isArray(props.xLabels) ? props.xLabels.map(String) : Array.from(new Set(data.map(function(d) { return String(d.x); })));
+  var ys = Array.isArray(props.yLabels) ? props.yLabels.map(String) : Array.from(new Set(data.map(function(d) { return String(d.y); })));
+  if (!xs.length || !ys.length || new Set(xs).size !== xs.length || new Set(ys).size !== ys.length) {
+    return _guiChartInvalid(wrap, 'heatmap axis labels must be nonempty and unique.');
+  }
+  var seen = new Set(), cells = [];
+  for (var i = 0; i < data.length; i++) {
+    var d = data[i], x = xs.indexOf(String(d.x)), y = ys.indexOf(String(d.y));
+    if (x < 0 || y < 0 || seen.has(x + ':' + y)) return _guiChartInvalid(wrap, 'heatmap coordinates must match the axes and be unique.');
+    seen.add(x + ':' + y);
+    cells.push({ x: x, y: y, value: Number(d.value) });
+  }
+  var vals = cells.map(function(d) { return d.value; });
+  var min = props.min == null ? Math.min.apply(null, vals) : Number(props.min);
+  var max = props.max == null ? Math.max.apply(null, vals) : Number(props.max);
+  if (!isFinite(min) || !isFinite(max) || !isFinite(max - min) || max < min) return _guiChartInvalid(wrap, 'max must be at least min with a finite range.');
+  var size = 40, left = 110, top = 36;
+  var width = Math.max(320, left + xs.length * size + 12), height = top + ys.length * size + 32;
+  var color = _guiChartColor(props.color);
+  var svg = '', rows = [];
+  xs.forEach(function(label, x) {
+    svg += '<text class="gui-chart-label" x="' + (left + (x + .5) * size) + '" y="22" text-anchor="middle"><title>' +
+      escHtml(label) + '</title>' + escHtml(label.length > 6 ? label.slice(0, 5) + '...' : label) + '</text>';
+  });
+  ys.forEach(function(label, y) {
+    svg += '<text class="gui-chart-label" x="' + (left - 8) + '" y="' + (top + (y + .5) * size + 4) +
+      '" text-anchor="end"><title>' + escHtml(label) + '</title>' + escHtml(label.length > 16 ? label.slice(0, 15) + '...' : label) + '</text>';
+  });
+  cells.forEach(function(d) {
+    var intensity = max === min ? 1 : Math.max(0, Math.min(1, (d.value - min) / (max - min)));
+    svg += '<rect class="gui-heatmap-cell" x="' + (left + d.x * size) + '" y="' + (top + d.y * size) +
+      '" width="38" height="38" rx="3" fill="' + color + '" fill-opacity="' + (.12 + .88 * intensity) + '">' +
+      '<title>' + escHtml(xs[d.x] + ' / ' + ys[d.y] + ': ' + d.value) + '</title></rect>';
+    rows.push([xs[d.x], ys[d.y], d.value]);
+  });
+  svg += '<text class="gui-chart-label" x="' + left + '" y="' + (height - 8) + '">' +
+    _guiFmtNum(min) + ' (faint) - ' + _guiFmtNum(max) + ' (strong)</text>';
+  return _guiChartFinish(wrap, props, width, height, svg, ['X', 'Y', 'Value'], rows);
+}
+
+function _guiSankey(props) {
+  var wrap = _guiChartShell(props, 'gui-sankey');
+  var rawNodes = props.nodes || (props.data && props.data.nodes);
+  var rawLinks = props.links || (props.data && props.data.links);
+  if (!Array.isArray(rawNodes) || !Array.isArray(rawLinks) || !rawNodes.length || !rawLinks.length) return _guiChartEmpty(wrap);
+  var nodes = [], byId = new Map(), links = [];
+  for (var i = 0; i < rawNodes.length; i++) {
+    var raw = rawNodes[i];
+    if (raw == null) return _guiChartInvalid(wrap, 'Sankey nodes need unique ids.');
+    var id = String(typeof raw === 'object' ? (raw.id ?? raw.name ?? i) : raw);
+    if (byId.has(id)) return _guiChartInvalid(wrap, 'Sankey nodes need unique ids.');
+    var node = { id: id, label: String(typeof raw === 'object' ? (raw.label ?? raw.name ?? id) : raw),
+      color: _guiChartColor(raw.color, i), incoming: 0, outgoing: 0, indegree: 0, depth: 0, edges: [] };
+    nodes.push(node);
+    byId.set(id, node);
+  }
+  var resolve = function(ref) { return typeof ref === 'number' ? nodes[ref] : byId.get(String(ref)); };
+  for (var j = 0; j < rawLinks.length; j++) {
+    var link = rawLinks[j];
+    if (!link || !_guiChartNumber(link.value) || Number(link.value) < 0) return _guiChartInvalid(wrap, 'Sankey link values must be finite and nonnegative.');
+    var source = resolve(link.source), target = resolve(link.target), value = Number(link.value);
+    if (!source || !target) return _guiChartInvalid(wrap, 'Sankey links must reference existing nodes.');
+    if (!value) continue;
+    var edge = { source: source, target: target, value: value };
+    links.push(edge);
+    source.edges.push(edge);
+    source.outgoing += value;
+    target.incoming += value;
+    target.indegree++;
+  }
+  if (!links.length) return _guiChartEmpty(wrap);
+  var queue = nodes.filter(function(n) { return !n.indegree; }), visited = 0;
+  for (var q = 0; q < queue.length; q++) {
+    var current = queue[q];
+    visited++;
+    current.edges.forEach(function(e) {
+      e.target.depth = Math.max(e.target.depth, current.depth + 1);
+      if (--e.target.indegree === 0) queue.push(e.target);
+    });
+  }
+  if (visited !== nodes.length) return _guiChartInvalid(wrap, 'Sankey flows must be acyclic; remove circular links.');
+  nodes = nodes.filter(function(n) { return n.incoming || n.outgoing; });
+  var depth = Math.max.apply(null, nodes.map(function(n) { return n.depth; }));
+  var columns = Array.from({ length: depth + 1 }, function() { return []; });
+  nodes.forEach(function(n) {
+    if (!n.edges.length) n.depth = depth;
+    n.value = Math.max(n.incoming, n.outgoing);
+    columns[n.depth].push(n);
+  });
+  var most = Math.max.apply(null, columns.map(function(c) { return c.length; }));
+  var width = Math.max(560, (depth + 1) * 150), height = Math.max(280, most * 36 + 32);
+  var pad = 16, gap = 18, bar = 14;
+  var scale = Math.min.apply(null, columns.filter(function(c) { return c.length; }).map(function(c) {
+    return (height - pad * 2 - gap * (c.length - 1)) / c.reduce(function(sum, n) { return sum + n.value; }, 0);
+  }));
+  if (!isFinite(scale) || scale <= 0) return _guiChartInvalid(wrap, 'Sankey flow totals are too large.');
+  columns.forEach(function(col, index) {
+    var total = col.reduce(function(sum, n) { return sum + n.value * scale; }, 0) + gap * Math.max(0, col.length - 1);
+    var y = (height - total) / 2;
+    col.forEach(function(n) {
+      n.x = pad + index * (width - 2 * pad - bar) / depth;
+      n.y = y; n.height = n.value * scale; n.inOffset = 0; n.outOffset = 0;
+      y += n.height + gap;
+    });
+  });
+  var svg = '', rows = [];
+  links.forEach(function(e) {
+    var thickness = e.value * scale;
+    var x1 = e.source.x + bar, x2 = e.target.x, mid = (x1 + x2) / 2;
+    var y1 = e.source.y + e.source.outOffset + thickness / 2;
+    var y2 = e.target.y + e.target.inOffset + thickness / 2;
+    e.source.outOffset += thickness; e.target.inOffset += thickness;
+    svg += '<path class="gui-sankey-link" d="M' + x1 + ',' + y1 + ' C' + mid + ',' + y1 + ' ' + mid + ',' + y2 +
+      ' ' + x2 + ',' + y2 + '" fill="none" stroke="' + e.source.color + '" stroke-opacity=".35" stroke-width="' + thickness + '">' +
+      '<title>' + escHtml(e.source.label + ' -> ' + e.target.label + ': ' + e.value) + '</title></path>';
+    rows.push([e.source.label, e.target.label, e.value]);
+  });
+  nodes.forEach(function(n) {
+    var last = n.depth === depth;
+    svg += '<rect class="gui-sankey-node" x="' + n.x + '" y="' + n.y + '" width="' + bar + '" height="' + n.height +
+      '" fill="' + n.color + '"><title>' + escHtml(n.label + ': ' + n.value) + '</title></rect>' +
+      '<text class="gui-chart-label" x="' + (last ? n.x - 6 : n.x + bar + 6) + '" y="' + (n.y + n.height / 2 + 4) +
+      '" text-anchor="' + (last ? 'end' : 'start') + '"><title>' + escHtml(n.label) + '</title>' +
+      escHtml(n.label.length > 16 ? n.label.slice(0, 15) + '...' : n.label) + '</text>';
+  });
+  return _guiChartFinish(wrap, props, width, height, svg, ['Source', 'Target', 'Value'], rows);
+}
+
+function _guiScatterChart(props, bubble) {
+  var wrap = _guiChartShell(props, bubble ? 'gui-bubblechart' : 'gui-scatterchart');
+  var data = props.data || props.points;
+  if (!Array.isArray(data) || !data.length) return _guiChartEmpty(wrap);
+  if (data.some(function(d) {
+    return !d || !_guiChartNumber(d.x) || !_guiChartNumber(d.y) || (bubble && (!_guiChartNumber(d.value) || Number(d.value) < 0));
+  })) return _guiChartInvalid(wrap, 'points need finite x/y coordinates; bubbles also need a nonnegative value.');
+  var xs = data.map(function(d) { return Number(d.x); }), ys = data.map(function(d) { return Number(d.y); });
+  var minX = props.minX == null ? Math.min.apply(null, xs) : Number(props.minX);
+  var maxX = props.maxX == null ? Math.max.apply(null, xs) : Number(props.maxX);
+  var minY = props.minY == null ? Math.min.apply(null, ys) : Number(props.minY);
+  var maxY = props.maxY == null ? Math.max.apply(null, ys) : Number(props.maxY);
+  if (![minX, maxX, minY, maxY].every(isFinite) || maxX < minX || maxY < minY) return _guiChartInvalid(wrap, 'axis bounds must be finite and ordered.');
+  if (maxX === minX) { var dx = Math.max(1, Math.abs(minX) * .05); minX -= dx; maxX += dx; }
+  if (maxY === minY) { var dy = Math.max(1, Math.abs(minY) * .05); minY -= dy; maxY += dy; }
+  if (!isFinite(maxX - minX) || !isFinite(maxY - minY)) return _guiChartInvalid(wrap, 'axis ranges must be finite.');
+  var W = 480, H = 300, left = 58, right = 28, top = 28, bottom = 52;
+  var X = function(x) { return left + (W - left - right) * (x - minX) / (maxX - minX); };
+  var Y = function(y) { return H - bottom - (H - top - bottom) * (y - minY) / (maxY - minY); };
+  var svg = '', rows = [];
+  for (var tick = 0; tick <= 4; tick++) {
+    var x = minX + (maxX - minX) * tick / 4, y = minY + (maxY - minY) * tick / 4;
+    svg += '<line class="gui-chart-grid" x1="' + left + '" y1="' + Y(y) + '" x2="' + (W - right) + '" y2="' + Y(y) + '"/>' +
+      '<text class="gui-chart-label" x="' + X(x) + '" y="' + (H - bottom + 20) + '" text-anchor="middle">' + _guiFmtNum(x) + '</text>' +
+      '<text class="gui-chart-label" x="' + (left - 8) + '" y="' + (Y(y) + 4) + '" text-anchor="end">' + _guiFmtNum(y) + '</text>';
+  }
+  var largest = bubble ? Math.max.apply(null, data.map(function(d) { return Number(d.value); }).concat([1])) : 1;
+  data.forEach(function(d, i) {
+    var label = String(d.label ?? d.name ?? (i + 1));
+    var radius = bubble ? Math.max(3, 18 * Math.sqrt(Number(d.value) / largest)) : 4;
+    if (Number(d.x) >= minX && Number(d.x) <= maxX && Number(d.y) >= minY && Number(d.y) <= maxY) {
+      svg += '<circle class="gui-scatter-point" cx="' + X(Number(d.x)) + '" cy="' + Y(Number(d.y)) + '" r="' + radius +
+        '" fill="' + _guiChartColor(d.color || props.color) + '" fill-opacity=".7"><title>' +
+        escHtml(label + ': (' + d.x + ', ' + d.y + ')' + (bubble ? ', value: ' + d.value : '')) + '</title></circle>';
+    }
+    rows.push(bubble ? [label, Number(d.x), Number(d.y), Number(d.value)] : [label, Number(d.x), Number(d.y)]);
+  });
+  if (props.xLabel) svg += '<text class="gui-chart-label" x="240" y="294" text-anchor="middle">' + escHtml(String(props.xLabel)) + '</text>';
+  if (props.yLabel) svg += '<text class="gui-chart-label" transform="translate(12 140) rotate(-90)" text-anchor="middle">' + escHtml(String(props.yLabel)) + '</text>';
+  return _guiChartFinish(wrap, props, W, H, svg, bubble ? ['Label', 'X', 'Y', 'Value'] : ['Label', 'X', 'Y'], rows);
+}
+
 // ── Tree renderer ─────────────────────────────────────────────────────────
 
 function _genUiRenderElement(id, elements, store, depth) {
@@ -2319,6 +2640,8 @@ var _GENUI_REACTIVE_TYPES = {
   Code: 1, Icon: 1, Table: 1, List: 1, Image: 1, Divider: 1, Rating: 1,
   BarChart: 1, LineChart: 1, AreaChart: 1, PieChart: 1, DonutChart: 1,
   RadialChart: 1, Gauge: 1,
+  RadarChart: 1, SpiderChart: 1, Heatmap: 1, HeatMap: 1,
+  Sankey: 1, SankeyChart: 1, ScatterChart: 1, BubbleChart: 1,
 };
 
 // Deep-scan raw props for a dynamic expression sentinel. $bindState is excluded
@@ -2708,6 +3031,14 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 ### Available components
 | Type | Key props | Notes |
 |------|-----------|-------|
+| \`BarChart\` | \`data\` ([{label,value,color?}] or [numbers]), \`title\`, \`max\`, \`horizontal\` | Compare categories. |
+| \`LineChart\` / \`AreaChart\` | \`data\` ([{label,value}] or [numbers]), \`title\`, \`color\`, \`min\`, \`max\` | Ordered trends; at least two points. |
+| \`PieChart\` / \`DonutChart\` | \`data\` ([{label,value,color?}]), \`title\` | Part-to-whole breakdown. |
+| \`RadialChart\` / \`Gauge\` | \`value\`, \`max\`, \`label\`, \`color\`, \`centerLabel\` | Single score/progress ring, NOT a radar chart. |
+| \`RadarChart\` / \`SpiderChart\` | \`data\` ([{label,value}]), \`title\`, \`min\`, \`max\`, \`color\`; OR \`axes\` ([strings]) + \`series\` ([{label,values:[numbers],color?}]) | Multi-axis/spider comparison with at least 3 axes and one value per series per axis. Set max for known scales. |
+| \`Heatmap\` / \`HeatMap\` | \`data\` ([{x,y,value}]), \`xLabels\` / \`yLabels\` (optional ordered categories), \`title\`, \`min\`, \`max\`, \`color\` | x/y are category labels; unique cells. Faint=min, strong=max, missing=blank. |
+| \`Sankey\` / \`SankeyChart\` | \`nodes\` ([strings or {id,label?,color?}]), \`links\` ([{source,target,value}]), \`title\` | Acyclic flow; references are string ids or numeric node indices, values nonnegative. Also accepts data:{nodes,links}. |
+| \`ScatterChart\` / \`BubbleChart\` | \`data\` ([{x,y,label?,color?,value?}]), \`title\`, \`xLabel\`, \`yLabel\`, \`minX\`, \`maxX\`, \`minY\`, \`maxY\`, \`color\` | Numeric coordinates; bubble area represents required nonnegative value. |
 | \`Card\` | \`title\`, \`description\` | Container with optional header |
 | \`Stack\` | \`direction\` ("vertical"/"horizontal"), \`gap\`, \`align\`, \`justify\`, \`wrap\` | Flex layout |
 | \`Grid\` | \`columns\` (number), \`gap\` | CSS grid layout |
@@ -2734,6 +3065,13 @@ Render interactive UI components inline using a \`gen-ui\` code block containing
 | \`Carousel\` | \`loop\`, \`statePath\` | Cycle through any children — slides |
 | \`MediaPlayer\` | \`src\`, \`title\`, \`type\` ("youtube"/"video"/"audio"/"image"), \`poster\`, \`autoplay\` | Embed YouTube / play local video, audio, or image |
 | \`Playlist\` | \`title\`, \`items\` (array of \`{src,title,type,description,duration,thumbnail}\`), \`layout\` ("stack"/"side"/"grid"), \`autoplay\`, \`statePath\` | Browsable playlist with inline player. Use \`layout:"grid"\` for search results / YouTube playlists (3 tiles per row). |
+
+### Chart data rules
+Use only documented component names and data shapes, not React/Recharts child components. New visualizers include "View chart data" for inspecting exact values. Use source data; label demonstration data as illustrative and never fabricate measured scores.
+
+\`\`\`gen-ui
+{"root":"radar","elements":{"radar":{"type":"RadarChart","props":{"title":"Illustrative exposure scores","min":0,"max":5,"data":[{"label":"Identity","value":4},{"label":"Network","value":2},{"label":"Endpoints","value":3},{"label":"Data","value":1}]},"children":[]}}}
+\`\`\`
 
 ### Actions (Button.action)
 \`setState\` · \`toggle_visible\` · \`copy_text\` · \`open_url\`
