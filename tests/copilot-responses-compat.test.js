@@ -116,6 +116,7 @@ describe('Copilot Responses model routing', () => {
   it.each([
     'gpt-5.5', 'gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol-fast',
     'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-terra',
+    'mai-code-1.1-flash', 'mai-code-2', 'mai-code-2-flash',
   ])('routes %s to Responses without substituting a model', async model => {
     const client = clientWith();
     const signal = new AbortController().signal;
@@ -132,6 +133,49 @@ describe('Copilot Responses model routing', () => {
       expect(client.responses.create).not.toHaveBeenCalled();
     },
   );
+
+  it.each(['mai-code-1.1-flash', 'mai-code-2', 'mai-code-2-flash'])(
+    'avoids the broken chat endpoint for %s while preserving streaming and tool options',
+    async model => {
+      const original = vi.fn().mockRejectedValue(Object.assign(
+        new Error('no model endpoints available given user constraints'), { status: 400 },
+      ));
+      const stream = eventStream([
+        { type: 'response.created', response: response({ model, output: [] }) },
+        { type: 'response.output_item.added', output_index: 0, item: functionItem },
+        { type: 'response.completed', response: response({ model, output: [functionItem] }) },
+      ]);
+      const client = enableResponsesCompatibility({
+        chat: { completions: { create: original } },
+        responses: { create: vi.fn().mockResolvedValue(stream) },
+      });
+      const signal = new AbortController().signal;
+      const chunks = await drain(await client.chat.completions.create({
+        ...request, model, stream: true, max_tokens: 16384,
+        tools: [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object', properties: {} } } }],
+        tool_choice: { type: 'function', function: { name: 'lookup' } },
+      }, { signal }));
+      expect(original).not.toHaveBeenCalled();
+      expect(client.responses.create).toHaveBeenCalledWith(expect.objectContaining({
+        model, stream: true, max_output_tokens: 16384,
+        tools: [{ type: 'function', name: 'lookup', parameters: { type: 'object', properties: {} }, strict: false }],
+        tool_choice: { type: 'function', name: 'lookup' },
+      }), { signal });
+      expect(chunks[0].model).toBe(model);
+      expect(chunks.at(-1).choices[0].finish_reason).toBe('tool_calls');
+      expect(chunks.some(chunk => chunk.choices[0].delta.tool_calls?.[0]?.id === 'call_1')).toBe(true);
+    },
+  );
+
+  it('does not treat a generic endpoint-constraints error as permission to retry other models or APIs', async () => {
+    const error = Object.assign(new Error('no model endpoints available given user constraints'), { status: 400 });
+    const client = enableResponsesCompatibility({
+      chat: { completions: { create: vi.fn().mockRejectedValue(error) } },
+      responses: { create: vi.fn() },
+    });
+    await expect(client.chat.completions.create({ ...request, model: 'gpt-4.1' })).rejects.toBe(error);
+    expect(client.responses.create).not.toHaveBeenCalled();
+  });
 
   it('discovers and remembers a newly Responses-only model from the explicit endpoint error', async () => {
     const error = Object.assign(new Error('unsupported API'), { status: 400, code: 'unsupported_api_for_model' });

@@ -1,5 +1,6 @@
-// Keep existing chat-completion callers working with Copilot's Responses-only models.
-const RESPONSES_ONLY_MODEL_RE = /^gpt-(?:5\.[56]|6(?:\.\d+)?)(?:$|[-.])/i;
+// MAI Code advertises chat completions but can reject them with endpoint constraints.
+// Prefer Responses for it as well as Copilot's Responses-only GPT models.
+const RESPONSES_MODEL_RE = /^(?:gpt-(?:5\.[56]|6(?:\.\d+)?)(?:$|[-.])|mai-code-)/i;
 
 function responseError(response) {
   const error = new Error(response.error?.message || `Responses API request ${response.status || 'failed'}.`);
@@ -222,7 +223,7 @@ export function enableResponsesCompatibility(client) {
     return toChatCompletion(result);
   };
   client.chat.completions.create = async (params, options) => {
-    if (RESPONSES_ONLY_MODEL_RE.test(params.model) || responsesModels.has(params.model)) return createResponse(params, options);
+    if (RESPONSES_MODEL_RE.test(params.model) || responsesModels.has(params.model)) return createResponse(params, options);
     try {
       return await createChat(params, options);
     } catch (error) {
