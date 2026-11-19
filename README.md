@@ -50,6 +50,8 @@ Copilot models that require the Responses API (including GPT-5.6 and GPT-6 varia
 
 **Kanban / Autopilot** — Project board where cards drive AI runs end-to-end with retries, comments, and work-item verification. Native + widget-panel alerts on completion / failure / out-of-retries. Live SSE stream at `/api/board/stream`.
 
+Board runs check the account's live model availability before starting. They use the card's selected model when available, otherwise MAI Code 2, another available MAI model, or another available tool-capable chat model. A card comment records any substitution; saved model preferences stay unchanged. If discovery fails or no suitable model is available, the card is returned to a human with an error instead of guessing from the offline model list. Set **Parallel** (1–10 simultaneous AI items per project) on a project board, or choose a project and set its limit from **All project tasks**. Lowering a limit lets existing runs finish before new ones start.
+
 **Durable runs** — Chat, task, workflow, Kanban, and sub-agent execution share persisted run metadata and append-only event traces. Streams can replay from a cursor after disconnects; runs support cancellation, steering, queued follow-ups, persisted approvals/user pauses, parent-child linkage, analytics, and JSON or OTLP export from the Runs workspace.
 
 **Skills** — First-class skill packs (spec-driven development, TDD, debugging-and-error-recovery, incremental implementation, code review, …) installable, lintable, and authored to a documented anatomy. See [docs/skill-anatomy.md](docs/skill-anatomy.md) and [skills/](skills).

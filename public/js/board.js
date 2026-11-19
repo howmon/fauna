@@ -60,9 +60,12 @@
       .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
   }
   function _fetchGlobal() {
-    var qs = window._kbState.showArchived ? '' : '';
-    return fetch('/api/board' + qs)
-      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+    return Promise.all(['/api/board', '/api/projects'].map(function(url) {
+      return fetch(url)
+        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+    })).then(function(results) {
+      return Object.assign({}, results[0], { projects: results[1] });
+    });
   }
 
   // ── Render ─────────────────────────────────────────────────────────────
@@ -90,14 +93,18 @@
             ? '<label class="kb-toggle-wrap kb-autopilot-toggle" title="When on, the AI will claim Todo cards assigned to it and run them automatically.">' +
                 '<input type="checkbox" id="kb-autopilot-cb" onchange="kbToggleAutopilot(this.checked)"> ' +
                 '<span><i class="ti ti-robot"></i> Autopilot</span>' +
-              '</label>' +
-              '<label class="kb-toggle-wrap kb-concurrency-wrap" title="Max in-flight AI cards per project. Higher = more cards run in parallel.">' +
+              '</label>'
+            : '<label class="kb-toggle-wrap">Project ' +
+                '<select id="kb-concurrency-project" aria-label="Project for parallel limit" onchange="kbSelectConcurrencyProject(this.value)"></select>' +
+              '</label>') +
+          '<label class="kb-toggle-wrap kb-concurrency-wrap" title="Maximum simultaneous AI work items for the selected project. Existing runs are not stopped when the limit is lowered.">' +
                 '<span style="font-size:11px;color:var(--fau-text-dim)">Parallel</span>' +
-                '<input type="number" id="kb-concurrency" min="1" max="10" step="1" ' +
+                '<input type="number" id="kb-concurrency" min="1" max="10" step="1" aria-label="Maximum simultaneous AI work items for this project" ' +
                   'onchange="kbSetConcurrency(this.value)" ' +
                   'style="width:48px;background:var(--fau-surface2);border:1px solid var(--fau-border);border-radius:6px;padding:3px 6px;color:var(--fau-text);font-size:12px;">' +
               '</label>' +
-              '<div id="kb-idle-banner" class="kb-idle-banner" style="display:none"></div>'
+          (s.scope === 'project'
+            ? '<div id="kb-idle-banner" class="kb-idle-banner" style="display:none"></div>'
             : '') +
         '</div>' +
         '<div class="kb-toolbar-right">' +
@@ -130,13 +137,19 @@
     loader.then(function(data) {
       if (s.scope === 'global') {
         s.items = data.items || [];
-        // Build a project lookup from cards (each has projectId/Name/Color)
         s.projectsById = {};
-        s.items.forEach(function(it) {
-          if (it.projectId && !s.projectsById[it.projectId]) {
-            s.projectsById[it.projectId] = { id: it.projectId, name: it.projectName, color: it.projectColor };
-          }
+        (data.projects || []).forEach(function(project) {
+          s.projectsById[project.id] = project;
         });
+        var select = document.getElementById('kb-concurrency-project');
+        if (select) {
+          select.innerHTML = Object.keys(s.projectsById).map(function(id) {
+            return '<option value="' + _esc(id) + '">' + _esc(s.projectsById[id].name) + '</option>';
+          }).join('');
+          if (!s.projectsById[s.concurrencyProjectId]) s.concurrencyProjectId = Object.keys(s.projectsById)[0] || null;
+          select.value = s.concurrencyProjectId || '';
+        }
+        _updateAutopilotToggle();
       } else {
         // Per-project: flatten board.columns into items[]
         s.items = [];
@@ -370,8 +383,18 @@
     var cb = document.getElementById('kb-autopilot-cb');
     if (cb) cb.checked = !!(s.kanban && s.kanban.autopilot);
     var conc = document.getElementById('kb-concurrency');
-    if (conc) conc.value = (s.kanban && Number(s.kanban.concurrency)) || 3;
+    var project = s.scope === 'global' ? s.projectsById[s.concurrencyProjectId] : null;
+    var kanban = s.scope === 'global' ? (project && project.kanban) : s.kanban;
+    if (conc) {
+      conc.value = (kanban && Number(kanban.concurrency)) || 3;
+      conc.disabled = s.scope === 'global' && !project;
+    }
   }
+
+  window.kbSelectConcurrencyProject = function(projectId) {
+    window._kbState.concurrencyProjectId = projectId;
+    _updateAutopilotToggle();
+  };
 
   // Render the autopilot idle-reason banner inline with the toolbar. The
   // server attaches a `board.idle = { reasons:[{kind,label,...}], candidates,
@@ -409,15 +432,21 @@
 
   window.kbSetConcurrency = function(value) {
     var s = window._kbState;
-    if (!s.projectId) return;
-    var n = Math.max(1, Math.min(10, parseInt(value, 10) || 1));
-    var nextKanban = Object.assign({}, s.kanban || {}, { concurrency: n });
-    fetch('/api/projects/' + encodeURIComponent(s.projectId), {
+    var projectId = s.scope === 'global' ? s.concurrencyProjectId : s.projectId;
+    if (!projectId) return;
+    var n = Number(value);
+    if (!Number.isInteger(n) || n < 1 || n > 10) {
+      _toast('Enter a whole number from 1 to 10 for parallel runs.', true);
+      _updateAutopilotToggle();
+      return;
+    }
+    return fetch('/api/projects/' + encodeURIComponent(projectId), {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kanban: nextKanban }),
+      body: JSON.stringify({ kanban: { concurrency: n } }),
     }).then(function(r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
       .then(function(proj) {
-        s.kanban = (proj && proj.kanban) || nextKanban;
+        if (s.scope === 'global') s.projectsById[projectId] = proj;
+        else if (s.projectId === projectId) s.kanban = proj.kanban;
         _updateAutopilotToggle();
         _toast('Parallel runs set to ' + n);
       })
@@ -492,10 +521,7 @@
   // We add the options lazily so the initial render isn't blocked on a fetch,
   // and we preserve the currently-selected value (set as data-current on render).
   function _currentTaskModelFallback() {
-    try {
-      if (typeof state !== 'undefined' && state && state.model) return state.model;
-    } catch (_) {}
-    return 'claude-sonnet-4.6';
+    return 'mai-code-2';
   }
 
   function _populateModelSelect() {
@@ -505,7 +531,7 @@
     fetch('/api/models').then(function(r) { return r.json(); }).then(function(d) {
       var models = (d && d.models) || [];
       if (!models.length) return;
-      var html = '<option value="">Default — ' + _esc(current) + '</option>';
+      var html = '<option value="">Default — ' + _esc(_currentTaskModelFallback()) + '</option>';
       var foundCurrent = false;
       models.forEach(function(mod) {
         var id = mod.id || mod.name;

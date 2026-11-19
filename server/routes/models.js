@@ -12,12 +12,12 @@ import { FALLBACK_MODELS } from '../copilot/models.js';
 import { runtimeFetch } from '../copilot/native-https-fetch.js';
 
 export function registerModelsRoutes(app, { readSavedConfig, getGhToken }) {
-  app.get('/api/models', async (req, res) => {
-    try {
+  async function getAvailableModels() {
       const cfg     = readSavedConfig();
       const hasPat  = !!(cfg.pat && cfg.pat.trim());
       const token   = getGhToken();
       const r = await runtimeFetch('https://api.githubcopilot.com/models', {
+        signal: AbortSignal.timeout(15_000),
         headers: {
           Authorization:            `Bearer ${token}`,
           'Editor-Version':         'vscode/1.85.0',
@@ -74,9 +74,16 @@ export function registerModelsRoutes(app, { readSavedConfig, getGhToken }) {
         (a.name   || '').localeCompare(b.name   || '')
       );
 
+      return models;
+  }
+
+  app.get('/api/models', async (req, res) => {
+    try {
+      const models = await getAvailableModels();
       res.json({ models: models.length ? models : FALLBACK_MODELS });
     } catch (e) {
       res.json({ models: FALLBACK_MODELS });
     }
   });
+  return getAvailableModels;
 }

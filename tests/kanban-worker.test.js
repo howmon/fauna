@@ -151,6 +151,10 @@ const worker = await import('../kanban-worker.js');
 const { __test } = worker;
 
 beforeEach(() => {
+  worker.setModelProvider(async () => [
+    { id: 'mai-code-2', tools: true },
+    { id: 'gpt-4.1', tools: true },
+  ]);
   _db.projects = [];
   _db.items = [];
   _createdTasks.length = 0;
@@ -909,7 +913,48 @@ describe('claim-time auto-close (pre-flight verifier)', () => {
 
     expect(card.column).toBe('in_progress');
     expect(_createdTasks.length).toBe(1);
-    expect(_createdTasks[0].model).toBe('claude-sonnet-4.6');
+    expect(_createdTasks[0].model).toBe('mai-code-2');
+  });
+
+  it('uses the saved card model instead of the board default', async () => {
+    const { proj, card } = _setup();
+    card.model = 'gpt-4.1';
+    await __test.claimAndRun(proj, card);
+    expect(_createdTasks[0].model).toBe('gpt-4.1');
+  });
+
+  it('falls back to MAI when the saved model is unavailable without changing the saved preference', async () => {
+    const { proj, card } = _setup();
+    card.model = 'claude-sonnet-4.6';
+    await __test.claimAndRun(proj, card);
+    expect(_createdTasks[0].model).toBe('mai-code-2');
+    expect(card.model).toBe('claude-sonnet-4.6');
+    expect(card.comments.some(c => c.body.includes('Using mai-code-2'))).toBe(true);
+  });
+
+  it('uses another available tool-capable model when MAI is unavailable', async () => {
+    const { proj, card } = _setup();
+    worker.setModelProvider(async () => [
+      { id: 'no-tools', tools: false },
+      { id: 'gpt-5.5', tools: true },
+      { id: 'gpt-4.1', tools: true },
+    ]);
+    await __test.claimAndRun(proj, card);
+    expect(_createdTasks[0].model).toBe('gpt-4.1');
+  });
+
+  it.each(['empty', 'error'])('hands back the card explicitly when discovery returns %s', async mode => {
+    const { proj, card } = _setup();
+    worker.setModelProvider(async () => {
+      if (mode === 'error') throw new Error('Model discovery failed');
+      return [];
+    });
+    await __test.claimAndRun(proj, card);
+    expect(_createdTasks).toHaveLength(0);
+    expect(card.assignee).toBe('human');
+    expect(card.claimedBy).toBe(null);
+    expect(card.comments.some(c => c.body.includes('Autopilot could not start:'))).toBe(true);
+    expect(__test.quota.used('p1')).toBe(0);
   });
 
   it('falls through when pre-flight verifier throws', async () => {

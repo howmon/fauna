@@ -35,6 +35,7 @@ import {
 import { createTask, getTask, getAllTasks } from './task-manager.js';
 import { taskPowerSave } from './server/lib/power-save.js';
 import { recordRoutingOutcomesForRun } from './lib/routing-evidence.js';
+import { CHAT_COMPLETIONS_UNSUPPORTED_RE } from './server/copilot/models.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'fauna');
 const QUOTA_FILE    = path.join(CONFIG_DIR, 'autonomous-runs', 'board-quota.json');
@@ -183,7 +184,26 @@ function _aiInFlight(board) {
   return n;
 }
 
-const DEFAULT_TASK_MODEL = 'claude-sonnet-4.6';
+const DEFAULT_TASK_MODEL = 'mai-code-2';
+let _modelProvider = null;
+
+export function setModelProvider(fn) {
+  _modelProvider = typeof fn === 'function' ? fn : null;
+}
+
+async function _resolveCardModel(card) {
+  if (!_modelProvider) throw new Error('Model availability provider is not configured.');
+  const models = (await _modelProvider()).filter(model =>
+    model.id && model.tools === true && !CHAT_COMPLETIONS_UNSUPPORTED_RE.test(model.id)
+  );
+  const preferred = card.model || DEFAULT_TASK_MODEL;
+  const selected = models.find(model => model.id === preferred)
+    || models.find(model => model.id === DEFAULT_TASK_MODEL)
+    || models.find(model => /^mai-/i.test(model.id))
+    || models[0];
+  if (!selected) throw new Error('No available tool-capable chat model was found for this account.');
+  return selected.id;
+}
 
 // Pick the next claimable card for a project, or null.
 function _isAiAssignableCard(it) {
@@ -342,7 +362,7 @@ function _buildTaskContext(project, card) {
   return lines.join('\n');
 }
 
-function _spawnTaskForCard(project, card) {
+function _spawnTaskForCard(project, card, model) {
   const agentName = (Array.isArray(project.defaultAgent) ? project.defaultAgent[0] : project.defaultAgent) || null;
   // Resolve column → skill bindings so task-runner can inject the
   // relevant SKILL.md anatomies into the system prompt and run the
@@ -370,9 +390,7 @@ function _spawnTaskForCard(project, card) {
       browser: !!(project.permissions && project.permissions.browser),
       figma: false,
     },
-    // Per-card model override (set via the work-item modal). Persist the
-    // concrete runner fallback so task/task-live UIs never show an empty model.
-    model: card.model || DEFAULT_TASK_MODEL,
+    model,
     maxRetries: 0,         // we handle retry at the card level
     timeout: 30 * 60_000,
     maxSteps: 80,
@@ -582,17 +600,26 @@ async function _claimAndRun(project, card) {
     console.warn('[kanban-worker] pre-flight verify error:', e?.message || e);
   }
 
-  _quotaIncrement(project.id);
-
   // Synthesise + start a task.
   let task;
-  try { task = _spawnTaskForCard(project, card); }
+  try {
+    const model = await _resolveCardModel(card);
+    const preferred = card.model || DEFAULT_TASK_MODEL;
+    if (model !== preferred) {
+      addWorkItemComment(project.id, card.id, {
+        author: 'ai',
+        body: 'Model ' + preferred + ' is unavailable for this account. Using ' + model + ' for this run instead.',
+      });
+    }
+    task = _spawnTaskForCard(project, card, model);
+  }
   catch (e) {
     console.warn('[kanban-worker] task create failed for', card.id, '—', e?.message || e);
     addWorkItemComment(project.id, card.id, { author: 'ai', body: 'Autopilot could not start: ' + e.message });
     moveWorkItem(project.id, card.id, { column: 'todo', assignee: 'human', claimedBy: null }, { actor: 'human' });
     return;
   }
+  _quotaIncrement(project.id);
 
   // Record the run on the card.
   moveWorkItem(project.id, card.id, {

@@ -441,7 +441,7 @@ registerMarkdownPdfAndYoutubeRoutes(app, { express, getElectronBrowserWindow: ()
 // Auth check ────────────────────────────────────────────────────────────────
 // ── /api/auth + /api/token routes moved → server/routes/auth.js ──
 // ── /api/models moved → server/routes/models.js ──
-registerModelsRoutes(app, { readSavedConfig, getGhToken });
+const getAvailableBoardModels = registerModelsRoutes(app, { readSavedConfig, getGhToken });
 registerModelsDebugRoute(app, { readSavedConfig, getGhToken });
 registerLLMRoutes(app);
 
@@ -793,7 +793,10 @@ export function startServer(port) {
     // Kick off the Kanban autopilot worker. It only acts on projects with
     // kanban.autopilot=true (off by default), so it's safe to always start.
     import('./kanban-worker.js')
-      .then(mod => mod.startKanbanWorker())
+      .then(mod => {
+        mod.setModelProvider(getAvailableBoardModels);
+        mod.startKanbanWorker();
+      })
       .catch(e => console.warn('[kanban-worker] failed to start:', e?.message || e));
     // Run fact memory decay on startup (prune facts not accessed in 60 days)
     try { runDecay(); } catch (_) {}
